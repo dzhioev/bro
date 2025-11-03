@@ -10,8 +10,8 @@ import logging
 def moment_parser(arg: str) -> datetime:
   try:
     return parse_moment(arg)
-  except ValueError:
-    raise argparse.ArgumentTypeError(f'invalid date format: {arg}')
+  except ValueError as e:
+    raise argparse.ArgumentTypeError(f'can\'t parse: "{arg}" exception: "{str(e)}"')
 
 
 def trigger(fn: Callable) -> Type[argparse.Action]:
@@ -41,11 +41,11 @@ class Parser(argparse.ArgumentParser):
     self.add_argument(
       '--verbose', action=trigger(enable_verbose_logging), help='enable verbose logging'
     )
-    self.add_argument(
-      '--ic', action=trigger(enable_ic), help='enable ic ouptput')
+    self.add_argument('--ic', action=trigger(enable_ic), help='enable ic ouptput')
 
-  def parse_args(self, args: Sequence[str] | None = None,
-                 namespace: None = None) -> argparse.Namespace:
+  def parse_args(
+    self, args: Sequence[str] | None = None, namespace: None = None
+  ) -> argparse.Namespace:
     ic.disable()
     ns = super().parse_args(args, namespace)
     delattr(ns, 'ic')

@@ -1,23 +1,26 @@
 #!/usr/bin/env python
 import base.args
-import datetime
+
+from icecream import ic
+
 import pytz
 import sys
-import typing
+import logging
+import datetime as dt
 
 UTC = pytz.utc
 timezone = pytz.timezone
 
 
-def parse_day(s: str) -> datetime.datetime:
-  return UTC.localize(datetime.datetime.strptime(s, '%Y-%m-%d'))
+def parse_day(s: str) -> dt.datetime:
+  return UTC.localize(dt.datetime.strptime(s, '%Y-%m-%d'))
 
 
-def parse_time(s: str) -> datetime.datetime:
-  return UTC.localize(datetime.datetime.strptime(s, '%Y-%m-%d %H:%M:%S'))
+def parse_time(s: str) -> dt.datetime:
+  return UTC.localize(datetime.strptime(s, '%Y-%m-%d %H:%M:%S'))
 
 
-def format_time(d: datetime.datetime, show_tz_info: bool = False) -> str:
+def format_time(d: dt.datetime, show_tz_info: bool = False) -> str:
   template = '%Y-%m-%d %H:%M:%S'
   if show_tz_info:
     tzname = d.tzname()
@@ -25,31 +28,38 @@ def format_time(d: datetime.datetime, show_tz_info: bool = False) -> str:
   return d.strftime(template)
 
 
-def is_naive(moment: datetime.datetime) -> bool:
+def is_naive(moment: dt.datetime) -> bool:
   return moment.tzinfo is None or moment.tzinfo.utcoffset(moment) is None
 
-def utc_now() -> datetime.datetime:
+
+def utc_now() -> dt.datetime:
   return datetime.now(tz=UTC)
 
-DAY_START_TIME = datetime.time(3, 00)
 
-def day_start(moment: datetime.datetime) -> datetime.datetime:
+DAY_START_TIME = dt.time(3, 00)
+
+
+def day_start(moment: dt.datetime) -> dt.datetime:
   if is_naive(moment):
-    raise RuntimeError('can\'t process naive datetime.datetime')
+    raise RuntimeError("can't process naive datetime.datetime")
   return datetime.combine(moment.date(), DAY_START_TIME, moment.tzinfo)
 
-def parse_moment(s: str) -> datetime.datetime:
+
+def parse_moment(s: str) -> dt.datetime:
+  logging.debug(f'> parse_moment("{s}")')
   if s == 'now':
     return utc_now()
   try:
     return parse_time(s)
-  except:
-    pass
+  except Exception as e:
+    logging.debug(f'"{s}": {e})')
+
   try:
     return parse_day(s)
-  except:
-    pass
-  raise ValueError('invalid moment format')
+  except Exception as e:
+    logging.debug(f'"{s}": {e})')
+
+  raise ValueError(f'failed to parse moment: "{s}"')
 
 
 PAST = parse_day('1988-01-01')
@@ -81,8 +91,7 @@ def main(argv):
 if __name__ == '__main__':
   sys.exit(main(sys.argv))
 
-date : typing.Type = datetime.date
-time : typing.Type = datetime.time
-timedelta : typing.Type = datetime.timedelta
-datetime : typing.Type = datetime.datetime
-
+time = dt.datetime
+date = dt.date
+datetime = dt.datetime
+timedelta = dt.timedelta
