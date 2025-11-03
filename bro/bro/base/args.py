@@ -3,7 +3,7 @@
 import argparse
 from base.time_util import parse_moment, datetime
 from icecream import ic
-from typing import Callable, Type
+from typing import Callable, Type, Sequence
 import logging
 
 
@@ -30,6 +30,10 @@ def enable_verbose_logging() -> None:
   logging.basicConfig(level=logging.DEBUG)
 
 
+def enable_ic() -> None:
+  ic.enable()
+
+
 class Parser(argparse.ArgumentParser):
   def __init__(self, *args, **kwargs):
     super().__init__(*args, **kwargs)
@@ -37,9 +41,14 @@ class Parser(argparse.ArgumentParser):
     self.add_argument(
       '--verbose', action=trigger(enable_verbose_logging), help='enable verbose logging'
     )
+    self.add_argument(
+      '--ic', action=trigger(enable_ic), help='enable ic ouptput')
 
-  def parse_args(self, args=None, namespace=None):
+  def parse_args(self, args: Sequence[str] | None = None,
+                 namespace: None = None) -> argparse.Namespace:
+    ic.disable()
     ns = super().parse_args(args, namespace)
+    delattr(ns, 'ic')
     delattr(ns, 'verbose')
     return ns
 
