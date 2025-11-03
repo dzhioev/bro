@@ -1,22 +1,23 @@
 #!/usr/bin/env python
-import pytz
-from datetime import datetime
-import sys
 import base.args
+import datetime
+import pytz
+import sys
+import typing
 
 UTC = pytz.utc
 timezone = pytz.timezone
 
 
-def parse_day(s: str) -> datetime:
-  return UTC.localize(datetime.strptime(s, '%Y-%m-%d'))
+def parse_day(s: str) -> datetime.datetime:
+  return UTC.localize(datetime.datetime.strptime(s, '%Y-%m-%d'))
 
 
-def parse_time(s: str) -> datetime:
-  return UTC.localize(datetime.strptime(s, '%Y-%m-%d %H:%M:%S'))
+def parse_time(s: str) -> datetime.datetime:
+  return UTC.localize(datetime.datetime.strptime(s, '%Y-%m-%d %H:%M:%S'))
 
 
-def format_time(d: datetime, show_tz_info: bool = False) -> str:
+def format_time(d: datetime.datetime, show_tz_info: bool = False) -> str:
   template = '%Y-%m-%d %H:%M:%S'
   if show_tz_info:
     tzname = d.tzname()
@@ -24,11 +25,20 @@ def format_time(d: datetime, show_tz_info: bool = False) -> str:
   return d.strftime(template)
 
 
-def utc_now() -> datetime:
+def is_naive(moment: datetime.datetime) -> bool:
+  return moment.tzinfo is None or moment.tzinfo.utcoffset(moment) is None
+
+def utc_now() -> datetime.datetime:
   return datetime.now(tz=UTC)
 
+DAY_START_TIME = datetime.time(3, 00)
 
-def parse_moment(s: str) -> datetime:
+def day_start(moment: datetime.datetime) -> datetime.datetime:
+  if is_naive(moment):
+    raise RuntimeError('can\'t process naive datetime.datetime')
+  return datetime.combine(moment.date(), DAY_START_TIME, moment.tzinfo)
+
+def parse_moment(s: str) -> datetime.datetime:
   if s == 'now':
     return utc_now()
   try:
@@ -70,3 +80,9 @@ def main(argv):
 
 if __name__ == '__main__':
   sys.exit(main(sys.argv))
+
+date : typing.Type = datetime.date
+time : typing.Type = datetime.time
+timedelta : typing.Type = datetime.timedelta
+datetime : typing.Type = datetime.datetime
+
