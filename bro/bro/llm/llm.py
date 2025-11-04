@@ -27,6 +27,7 @@ class EchoBro(Bro):
   async def ask(self) -> str:
     return f'Hello, world!: "{self.phrase}"!'
 
+BRO_TYPES=['echo', 'chat_gpt']
 
 def get_bro(type: str, *args, **kwargs) -> Bro:
   if type == 'echo':
@@ -52,7 +53,7 @@ async def bro_main(bro_type: str, *args, **kwargs):
 
 def main(argv) -> int | None:
   parser = base.args.Parser(description='Chat with bro')
-  parser.add_argument('bro_type', nargs='?', default='echo')
+  parser.add_argument('--bro-type', '-t', choices=BRO_TYPES, default='echo')
   kwargs = parser.parse(argv)
   return asyncio.run(bro_main(**kwargs))
 
