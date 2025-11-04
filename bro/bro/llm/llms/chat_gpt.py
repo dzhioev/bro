@@ -1,8 +1,10 @@
 import bro.bro
 import configs
+
+from openai import OpenAI
+
 import json
 import os
-from openai import OpenAI
 
 DEFAULT_CONFIG_PATH = os.path.join(configs.DEFAULT_CONFIGS_DIR, 'openai.json')
 
@@ -18,13 +20,18 @@ class ChatGPTBro(bro.bro.Bro):
     self.client = OpenAI(api_key=api_key)
 
   async def tell(self, phrase: str) -> None:
-    self.response = self.client.chat.completions.create(
+    self.response = self.client.responses.create(
       model='gpt-4-turbo',
-      messages=[
-        {'role': 'user', 'content': phrase},
+      input=[
+        {
+          'role': 'user',
+          'content': [
+            { 'type': 'input_text', 'text': phrase }
+          ]
+        }
       ],
-      max_tokens=500,
+      max_output_tokens=10000
     )
 
   async def ask(self) -> str:
-    return self.response.choices[0].message.content
+    return str(self.response.output[0].content)
