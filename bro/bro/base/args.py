@@ -27,7 +27,7 @@ def trigger(fn: Callable) -> Type[argparse.Action]:
 
 
 def enable_verbose_logging() -> None:
-  logging.basicConfig(level=logging.DEBUG)
+  logging.basicConfig(level=logging.DEBUG, force=True)
 
 
 def enable_ic() -> None:
