@@ -10,8 +10,6 @@ import base64
 
 DEFAULT_CONFIG_PATH = os.path.join(configs.DEFAULT_CONFIGS_DIR, 'openai.json')
 
-from icecream import ic
-
 def encode_file(path: str) -> str:
   with open(path, "rb") as f:
     return base64.b64encode(f.read()).decode("utf-8")
@@ -92,3 +90,4 @@ class ChatGPTBro(bro.bro.Bro):
 
   async def ask(self) -> str:
     return self.text_response
+

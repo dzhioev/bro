@@ -47,6 +47,7 @@ def get_bro(type: str, *args, **kwargs) -> Bro:
     raise ValueError(f'Unknown bro type: {type}')
   return constructor(*args, **kwargs)
 
+
 async def bro_main(request: str,
                    bro_type: str,
                    attachments: list[str],
@@ -70,3 +71,4 @@ def main(argv) -> int | None:
 
 if __name__ == '__main__':
   sys.exit(main(sys.argv))
+
