@@ -37,7 +37,6 @@ def enable_ic() -> None:
 class Parser(argparse.ArgumentParser):
   def __init__(self, *args, **kwargs):
     super().__init__(*args, **kwargs)
-
     self.add_argument(
       '--verbose', action=trigger(enable_verbose_logging), help='enable verbose logging'
     )
