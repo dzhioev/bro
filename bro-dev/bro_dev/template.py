@@ -9,8 +9,7 @@ def template() -> None:
 
 def main(argv):
   parser = Parser(description='')
-  kwargs = parser.parse(argv)
-  return template(**kwargs)
+  return template(**parser.parse(argv))
 
 
 if __name__ == '__main__':
