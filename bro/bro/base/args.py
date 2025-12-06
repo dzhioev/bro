@@ -26,8 +26,11 @@ def trigger(fn: Callable) -> Type[argparse.Action]:
   return TriggerAction
 
 
-def enable_verbose_logging() -> None:
-  logging.basicConfig(level=logging.DEBUG, force=True)
+def enable_logging(level: int) -> Callable:
+  def enable() -> None:
+    logging.basicConfig(level=level, force=True)
+
+  return enable
 
 
 def enable_ic() -> None:
@@ -38,7 +41,10 @@ class Parser(argparse.ArgumentParser):
   def __init__(self, *args, **kwargs):
     super().__init__(*args, **kwargs)
     self.add_argument(
-      '--verbose', action=trigger(enable_verbose_logging), help='enable verbose logging'
+      '--verbose', action=trigger(enable_logging(logging.DEBUG)), help='enable verbose logging'
+    )
+    self.add_argument(
+      '--info', action=trigger(enable_logging(logging.INFO)), help='enable info logging'
     )
     self.add_argument('--ic', action=trigger(enable_ic), help='enable ic ouptput')
 
@@ -48,6 +54,7 @@ class Parser(argparse.ArgumentParser):
     ic.disable()
     ns = super().parse_args(args, namespace)
     delattr(ns, 'ic')
+    delattr(ns, 'info')
     delattr(ns, 'verbose')
     return ns
 
