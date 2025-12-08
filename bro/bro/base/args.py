@@ -14,6 +14,10 @@ def moment_parser(arg: str) -> datetime:
     raise argparse.ArgumentTypeError(f'can\'t parse: "{arg}" exception: "{str(e)}"')
 
 
+def list_parser(arg: str) -> list[str]:
+  return [item.strip() for item in arg.split(',')]
+
+
 def trigger(fn: Callable) -> Type[argparse.Action]:
   class TriggerAction(argparse.Action):
     def __init__(self, option_strings, dest, **kwargs):
