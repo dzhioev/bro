@@ -1,8 +1,6 @@
 #!/usr/bin/env python
 import base.args
 
-from icecream import ic
-
 import pytz
 import sys
 import logging
@@ -11,17 +9,20 @@ import datetime as dt
 UTC = pytz.utc
 timezone = pytz.timezone
 
+DATE_FORMAT = '%Y-%m-%d'
+DATETIME_FORMAT = '%Y-%m-%dT%H:%M:%S'
 
-def parse_day(s: str) -> dt.datetime:
-  return UTC.localize(dt.datetime.strptime(s, '%Y-%m-%d'))
+
+def parse_date(s: str) -> dt.datetime:
+  return UTC.localize(dt.datetime.strptime(s, DATE_FORMAT))
 
 
-def parse_time(s: str) -> dt.datetime:
-  return UTC.localize(datetime.strptime(s, '%Y-%m-%d %H:%M:%S'))
+def parse_datetime(s: str) -> dt.datetime:
+  return UTC.localize(datetime.strptime(s, DATETIME_FORMAT))
 
 
 def format_time(d: dt.datetime, show_tz_info: bool = False) -> str:
-  template = '%Y-%m-%d %H:%M:%S'
+  template = '%Y-%m-%dT%H:%M:%S'
   if show_tz_info:
     tzname = d.tzname()
     template += f' {tzname}%z'
@@ -36,34 +37,24 @@ def utc_now() -> dt.datetime:
   return datetime.now(tz=UTC)
 
 
-DAY_START_TIME = dt.time(3, 00)
-
-
-def day_start(moment: dt.datetime) -> dt.datetime:
-  if is_naive(moment):
-    raise RuntimeError("can't process naive datetime.datetime")
-  return datetime.combine(moment.date(), DAY_START_TIME, moment.tzinfo)
-
-
 def parse_moment(s: str) -> dt.datetime:
-  logging.debug(f'> parse_moment("{s}")')
   if s == 'now':
     return utc_now()
   try:
-    return parse_time(s)
+    return parse_datetime(s)
   except Exception as e:
     logging.debug(f'"{s}": {e})')
 
   try:
-    return parse_day(s)
+    return parse_date(s)
   except Exception as e:
     logging.debug(f'"{s}": {e})')
 
   raise ValueError(f'failed to parse moment: "{s}"')
 
 
-PAST = parse_day('1988-01-01')
-FUTURE = parse_day('2188-01-01')
+PAST = parse_date('1988-01-01')
+FUTURE = parse_date('2188-01-01')
 
 
 def format_now(show_tz_info: bool, zone: str | None) -> str:
@@ -91,7 +82,6 @@ def main(argv):
 if __name__ == '__main__':
   sys.exit(main(sys.argv))
 
-time = dt.datetime
 date = dt.date
 datetime = dt.datetime
 timedelta = dt.timedelta
