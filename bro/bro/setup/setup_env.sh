@@ -109,7 +109,7 @@ install_requirements() {
     exit 1
   fi
   echo "Installing Python requirements..."
-  pip install -r "$REQUIREMENTS_FILE"
+  pip install -q -r "$REQUIREMENTS_FILE"
 }
 
 install_stow
