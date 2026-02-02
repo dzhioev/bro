@@ -5,6 +5,8 @@ import sys
 import logging
 import datetime as dt
 
+import dateutil.parser
+
 UTC = pytz.utc
 timezone = pytz.timezone
 
@@ -70,6 +72,10 @@ def parse_date(s: str) -> Moment:
 
 def parse_datetime(s: str) -> Moment:
   return Moment.from_datetime(UTC.localize(datetime.strptime(s, DATETIME_FORMAT)))
+
+
+def parse_iso_timestamp(timestamp: str) -> Moment:
+  return Moment.from_datetime(dateutil.parser.isoparse(timestamp).astimezone(UTC))
 
 
 def format_time(d: Moment, show_tz_info: bool = False) -> str:
