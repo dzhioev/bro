@@ -10,9 +10,10 @@ import base64
 
 DEFAULT_CONFIG_PATH = os.path.join(configs.DEFAULT_CONFIGS_DIR, 'openai.json')
 
+
 def encode_file(path: str) -> str:
-  with open(path, "rb") as f:
-    return base64.b64encode(f.read()).decode("utf-8")
+  with open(path, 'rb') as f:
+    return base64.b64encode(f.read()).decode('utf-8')
 
 
 def image_to_content(image_path: str) -> dict[str, str]:
@@ -20,14 +21,11 @@ def image_to_content(image_path: str) -> dict[str, str]:
     raise NotImplementedError('only PNG images supported')
   encoded_image = encode_file(image_path)
   image_url = f'data:image/png;base64,{encoded_image}'
-  return {
-    'type': 'input_image',
-    'image_url': image_url,
-    'detail': 'high'
-  }
+  return {'type': 'input_image', 'image_url': image_url, 'detail': 'high'}
+
 
 def text_to_content(text: str) -> dict[str, str]:
-  return { 'type': 'input_text', 'text': text}
+  return {'type': 'input_text', 'text': text}
 
 
 def extract_only_message(output: list[ResponseOutputItem]) -> ResponseOutputMessage:
@@ -40,7 +38,7 @@ def extract_only_message(output: list[ResponseOutputItem]) -> ResponseOutputMess
         )
       result = item
   if result is None:
-    raise RuntimeError(f'output doesn\'t contain output messages. output: {output}')
+    raise RuntimeError(f"output doesn't contain output messages. output: {output}")
   return result
 
 
@@ -67,9 +65,7 @@ class ChatGPTBro(bro.bro.Bro):
   def __init__(self, api_key: str):
     self.client = OpenAI(api_key=api_key)
 
-  async def tell(self,
-                 phrase: str,
-                 images: list[str] | None) -> None:
+  async def tell(self, phrase: str, images: list[str] | None) -> None:
     content = []
     if images is not None:
       for image_path in images:
@@ -77,17 +73,9 @@ class ChatGPTBro(bro.bro.Bro):
     content.append(text_to_content(phrase))
 
     response = self.client.responses.create(
-      model='gpt-5',
-      input=[
-        {
-          'role': 'user',
-          'content': content
-        }
-      ]
+      model='gpt-5', input=[{'role': 'user', 'content': content}]
     )
     self.text_response = parse_response(response)
 
-
   async def ask(self) -> str:
     return self.text_response
-

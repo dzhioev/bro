@@ -19,5 +19,3 @@ class EchoBro(bro.bro.Bro):
     if self.images is not None and len(self.images) > 0:
       result += f' +({len(self.images)} images)'
     return result
-
-

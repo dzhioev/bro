@@ -11,12 +11,11 @@ from typing import Callable
 
 class Bro(ABC):
   @abstractmethod
-  async def tell(self, phrase: str, images: list[str] | None) -> None:
-    ...
+  async def tell(self, phrase: str, images: list[str] | None) -> None: ...
 
   @abstractmethod
-  async def ask(self) -> str:
-    ...
+  async def ask(self) -> str: ...
+
 
 class LazyConstants:
   @cached_property
@@ -38,7 +37,7 @@ class LazyConstants:
     return list(self.BROS_BY_TYPE.keys())
 
 
-LAZY_CONSTANTS : LazyConstants = LazyConstants()
+LAZY_CONSTANTS: LazyConstants = LazyConstants()
 
 
 def get_bro(type: str, *args, **kwargs) -> Bro:
@@ -48,11 +47,7 @@ def get_bro(type: str, *args, **kwargs) -> Bro:
   return constructor(*args, **kwargs)
 
 
-async def bro_main(request: str,
-                   bro_type: str,
-                   attachments: list[str],
-                   *args,
-                   **kwargs):
+async def bro_main(request: str, bro_type: str, attachments: list[str], *args, **kwargs):
   bro = get_bro(bro_type, *args, **kwargs)
   print(f'> {request}')
   await bro.tell(request, attachments)
@@ -71,4 +66,3 @@ def main(argv) -> int | None:
 
 if __name__ == '__main__':
   sys.exit(main(sys.argv))
-
