@@ -1,4 +1,4 @@
-#!/bin/bash -e
+#!/usr/bin/env -S bash -e
 
 version_gte() {
   python -c "exit(0 if tuple(map(int, '$1'.split('.'))) >= tuple(map(int, '$2'.split('.'))) else 1)"

@@ -1,4 +1,4 @@
-#!/bin/bash -e
+#!/usr/bin/env -S bash -e
 
 STOW_VERSION="2.4.1-2"
 STOW_DEB="stow_${STOW_VERSION}_all.deb"
