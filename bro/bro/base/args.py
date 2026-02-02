@@ -1,13 +1,13 @@
 #!/usr/bin/env python
 
 import argparse
-from base.time_util import parse_moment, datetime
+from base.time_util import parse_moment, Moment
 from icecream import ic
-from typing import Callable, Type, Sequence
+from typing import Callable, Type, Sequence, TypeVar, overload
 import logging
 
 
-def moment_parser(arg: str) -> datetime:
+def moment_parser(arg: str) -> Moment:
   try:
     return parse_moment(arg)
   except ValueError as e:
@@ -41,6 +41,9 @@ def enable_ic() -> None:
   ic.enable()
 
 
+_N = TypeVar('_N')
+
+
 class Parser(argparse.ArgumentParser):
   def __init__(self, *args, **kwargs):
     super().__init__(*args, **kwargs)
@@ -52,9 +55,17 @@ class Parser(argparse.ArgumentParser):
     )
     self.add_argument('--ic', action=trigger(enable_ic), help='enable ic ouptput')
 
+  @overload
   def parse_args(
-    self, args: Sequence[str] | None = None, namespace: None = None
-  ) -> argparse.Namespace:
+    self, args: Sequence[str] | None = ..., namespace: None = ...
+  ) -> argparse.Namespace: ...
+  @overload
+  def parse_args(self, args: Sequence[str] | None, namespace: _N) -> _N: ...
+  @overload
+  def parse_args(self, *, namespace: _N) -> _N: ...
+  def parse_args(
+    self, args: Sequence[str] | None = None, namespace: _N | None = None
+  ) -> _N | argparse.Namespace:
     ic.disable()
     ns = super().parse_args(args, namespace)
     delattr(ns, 'ic')
