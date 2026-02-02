@@ -81,7 +81,9 @@ check_claude_code() {
   fi
 
   CLAUDE_PATH=$(command -v claude)
-  if [[ "$CLAUDE_PATH" == *"node_modules"* ]] || [[ "$CLAUDE_PATH" == *"npm"* ]]; then
+
+  # Check if it's a node script (npm-installed) rather than a native binary
+  if head -1 "$CLAUDE_PATH" 2>/dev/null | grep -q "node"; then
     echo "Claude Code CLI is installed via npm, but native installation is required."
     return 1
   fi
