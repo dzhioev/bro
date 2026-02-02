@@ -102,5 +102,16 @@ install_claude_code() {
   npx @anthropic-ai/claude-code install
 }
 
+install_requirements() {
+  REQUIREMENTS_FILE="$SCRIPT_DIR/../requirements.txt"
+  if [ ! -f "$REQUIREMENTS_FILE" ]; then
+    echo "requirements.txt not found at $REQUIREMENTS_FILE"
+    exit 1
+  fi
+  echo "Installing Python requirements..."
+  pip install -r "$REQUIREMENTS_FILE"
+}
+
 install_stow
 install_claude_code
+install_requirements
