@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 import datetime as dt
-import pytz
 from base.time_util import (
   Moment,
   Duration,
@@ -18,7 +17,7 @@ from base.time_util import (
 
 class TestMoment:
   def test_from_datetime(self):
-    d = dt.datetime(2024, 1, 15, 10, 30, 0, tzinfo=pytz.utc)
+    d = dt.datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC)
     m = Moment.from_datetime(d)
     assert isinstance(m, Moment)
     assert m.year == 2024
@@ -40,26 +39,26 @@ class TestMoment:
     assert m.day == 15
 
   def test_repr(self):
-    m = Moment.from_datetime(dt.datetime(2024, 1, 15, 10, 30, 0, tzinfo=pytz.utc))
+    m = Moment.from_datetime(dt.datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC))
     assert repr(m).startswith('Moment(')
     assert '2024-01-15' in repr(m)
 
   def test_sub_moment_returns_duration(self):
-    m1 = Moment.from_datetime(dt.datetime(2024, 1, 15, 10, 0, 0, tzinfo=pytz.utc))
-    m2 = Moment.from_datetime(dt.datetime(2024, 1, 15, 9, 0, 0, tzinfo=pytz.utc))
+    m1 = Moment.from_datetime(dt.datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
+    m2 = Moment.from_datetime(dt.datetime(2024, 1, 15, 9, 0, 0, tzinfo=UTC))
     result = m1 - m2
     assert isinstance(result, Duration)
     assert result.total_seconds() == 3600
 
   def test_sub_duration_returns_moment(self):
-    m = Moment.from_datetime(dt.datetime(2024, 1, 15, 10, 0, 0, tzinfo=pytz.utc))
+    m = Moment.from_datetime(dt.datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
     d = Duration(hours=1)
     result = m - d
     assert isinstance(result, Moment)
     assert result.hour == 9
 
   def test_add_duration_returns_moment(self):
-    m = Moment.from_datetime(dt.datetime(2024, 1, 15, 10, 0, 0, tzinfo=pytz.utc))
+    m = Moment.from_datetime(dt.datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
     d = Duration(hours=1)
     result = m + d
     assert isinstance(result, Moment)
@@ -150,17 +149,17 @@ class TestUtilityFunctions:
     assert m.tzinfo == UTC
 
   def test_format_time(self):
-    m = Moment.from_datetime(dt.datetime(2024, 1, 15, 10, 30, 45, tzinfo=pytz.utc))
+    m = Moment.from_datetime(dt.datetime(2024, 1, 15, 10, 30, 45, tzinfo=UTC))
     result = format_time(m)
     assert result == '2024-01-15T10:30:45'
 
   def test_format_time_with_tz(self):
-    m = Moment.from_datetime(dt.datetime(2024, 1, 15, 10, 30, 45, tzinfo=pytz.utc))
+    m = Moment.from_datetime(dt.datetime(2024, 1, 15, 10, 30, 45, tzinfo=UTC))
     result = format_time(m, show_tz_info=True)
     assert 'UTC' in result
 
   def test_is_naive_false(self):
-    m = Moment.from_datetime(dt.datetime(2024, 1, 15, 10, 30, 0, tzinfo=pytz.utc))
+    m = Moment.from_datetime(dt.datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC))
     assert not is_naive(m)
 
   def test_is_naive_true(self):

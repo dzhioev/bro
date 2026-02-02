@@ -1,14 +1,14 @@
 #!/usr/bin/env python
 from typing import overload
-import pytz
+from zoneinfo import ZoneInfo
 import sys
 import logging
 import datetime as dt
 
 import dateutil.parser
 
-UTC = pytz.utc
-timezone = pytz.timezone
+UTC = dt.timezone.utc
+timezone = ZoneInfo
 
 DATE_FORMAT = '%Y-%m-%d'
 DATETIME_FORMAT = '%Y-%m-%dT%H:%M:%S'
@@ -67,11 +67,11 @@ class Duration(dt.timedelta):
 
 
 def parse_date(s: str) -> Moment:
-  return Moment.from_datetime(UTC.localize(dt.datetime.strptime(s, DATE_FORMAT)))
+  return Moment.from_datetime(dt.datetime.strptime(s, DATE_FORMAT).replace(tzinfo=UTC))
 
 
 def parse_datetime(s: str) -> Moment:
-  return Moment.from_datetime(UTC.localize(datetime.strptime(s, DATETIME_FORMAT)))
+  return Moment.from_datetime(datetime.strptime(s, DATETIME_FORMAT).replace(tzinfo=UTC))
 
 
 def parse_iso_timestamp(timestamp: str) -> Moment:
