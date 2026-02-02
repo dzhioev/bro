@@ -47,6 +47,7 @@ _N = TypeVar('_N')
 class Parser(argparse.ArgumentParser):
   def __init__(self, *args, **kwargs):
     super().__init__(*args, **kwargs)
+    self._exclusive_groups: list[list[list[str]]] = []
     self.add_argument(
       '--verbose', action=trigger(enable_logging(logging.DEBUG)), help='enable verbose logging'
     )
@@ -54,6 +55,38 @@ class Parser(argparse.ArgumentParser):
       '--info', action=trigger(enable_logging(logging.INFO)), help='enable info logging'
     )
     self.add_argument('--ic', action=trigger(enable_ic), help='enable ic ouptput')
+
+  def add_exclusive_groups(self, *groups: list[str]) -> None:
+    self._exclusive_groups.append(list(groups))
+
+  def _format_group(self, group: list[str]) -> str:
+    args = [f'--{a.replace("_", "-")}' for a in group]
+    if len(args) == 1:
+      return args[0]
+    return '{' + ', '.join(args) + '}'
+
+  def format_help(self) -> str:
+    help_text = super().format_help()
+    if not self._exclusive_groups:
+      return help_text
+    lines = ['', 'Constraints:']
+    for groups in self._exclusive_groups:
+      formatted = ' | '.join(self._format_group(g) for g in groups)
+      lines.append(f'  {formatted}  (mutually exclusive)')
+    return help_text + '\n'.join(lines) + '\n'
+
+  def _check_exclusive_groups(self, ns: _N | argparse.Namespace) -> None:
+    for groups in self._exclusive_groups:
+      set_groups: list[list[str]] = []
+      for group in groups:
+        set_args = [arg for arg in group if getattr(ns, arg, None)]
+        if set_args:
+          set_groups.append(set_args)
+      if len(set_groups) > 1:
+        formatted = ' and '.join(
+          '/'.join(f'--{a.replace("_", "-")}' for a in g) for g in set_groups
+        )
+        self.error(f'arguments {formatted} are mutually exclusive')
 
   @overload
   def parse_args(
@@ -68,6 +101,7 @@ class Parser(argparse.ArgumentParser):
   ) -> _N | argparse.Namespace:
     ic.disable()
     ns = super().parse_args(args, namespace)
+    self._check_exclusive_groups(ns)
     delattr(ns, 'ic')
     delattr(ns, 'info')
     delattr(ns, 'verbose')
