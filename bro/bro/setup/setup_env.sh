@@ -74,4 +74,31 @@ install_stow() {
   fi
 }
 
+check_claude_code() {
+  if ! command -v claude &> /dev/null; then
+    echo "Claude Code CLI is not installed."
+    return 1
+  fi
+
+  CLAUDE_PATH=$(command -v claude)
+  if [[ "$CLAUDE_PATH" == *"node_modules"* ]] || [[ "$CLAUDE_PATH" == *"npm"* ]]; then
+    echo "Claude Code CLI is installed via npm, but native installation is required."
+    return 1
+  fi
+
+  CLAUDE_VERSION=$(claude --version 2>/dev/null | head -n1)
+  echo "Claude Code CLI: $CLAUDE_VERSION (native, $CLAUDE_PATH)"
+  return 0
+}
+
+install_claude_code() {
+  if check_claude_code; then
+    return
+  fi
+
+  echo "Installing Claude Code CLI (native) via npx..."
+  npx @anthropic-ai/claude-code install
+}
+
 install_stow
+install_claude_code
