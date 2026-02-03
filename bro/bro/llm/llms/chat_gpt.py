@@ -2,7 +2,12 @@ import bro.bro
 import configs
 
 from openai import OpenAI
-from openai.types.responses import Response, ResponseOutputItem, ResponseOutputMessage
+from openai.types.responses import (
+  Response,
+  ResponseOutputItem,
+  ResponseOutputMessage,
+  ResponseInputParam,
+)
 
 import json
 import os
@@ -16,12 +21,17 @@ def encode_file(path: str) -> str:
     return base64.b64encode(f.read()).decode('utf-8')
 
 
-def image_to_content(image_path: str) -> dict[str, str]:
+def png_to_content(data: bytes) -> dict[str, str]:
+  encoded = base64.b64encode(data).decode('utf-8')
+  image_url = f'data:image/png;base64,{encoded}'
+  return {'type': 'input_image', 'image_url': image_url, 'detail': 'high'}
+
+
+def image_file_to_content(image_path: str) -> dict[str, str]:
   if not image_path.endswith('.png'):
     raise NotImplementedError('only PNG images supported')
-  encoded_image = encode_file(image_path)
-  image_url = f'data:image/png;base64,{encoded_image}'
-  return {'type': 'input_image', 'image_url': image_url, 'detail': 'high'}
+  with open(image_path, 'rb') as f:
+    return png_to_content(f.read())
 
 
 def text_to_content(text: str) -> dict[str, str]:
@@ -69,7 +79,7 @@ class ChatGPTBro(bro.bro.Bro):
     content = []
     if images is not None:
       for image_path in images:
-        content.append(image_to_content(image_path))
+        content.append(image_file_to_content(image_path))
     content.append(text_to_content(phrase))
 
     response = self.client.responses.create(

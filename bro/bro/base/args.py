@@ -32,7 +32,12 @@ def trigger(fn: Callable) -> Type[argparse.Action]:
 
 def enable_logging(level: int) -> Callable:
   def enable() -> None:
-    logging.basicConfig(level=level, force=True)
+    logging.basicConfig(
+      level=level,
+      format='%(asctime)s %(levelname)s[%(name)s] %(message)s',
+      datefmt='%Y-%m-%dT%H:%M:%S',
+      force=True,
+    )
 
   return enable
 
