@@ -102,6 +102,51 @@ install_claude_code() {
   npx @anthropic-ai/claude-code install
 }
 
+install_docker() {
+  if [ "$PLATFORM" != "macOS" ]; then
+    return
+  fi
+
+  if command -v docker &> /dev/null && docker info &> /dev/null; then
+    echo "Docker is already installed and running"
+    return
+  fi
+
+  check_brew
+  echo "Installing Docker (via Colima)..."
+  brew install colima docker docker-buildx
+  brew services start colima
+
+  # Configure Docker to find Homebrew plugins
+  mkdir -p ~/.docker
+  if [ ! -f ~/.docker/config.json ]; then
+    echo '{}' > ~/.docker/config.json
+  fi
+  if ! grep -q cliPluginsExtraDirs ~/.docker/config.json; then
+    python3 -c "
+import json
+with open('$HOME/.docker/config.json', 'r') as f:
+    config = json.load(f)
+config['cliPluginsExtraDirs'] = ['/opt/homebrew/lib/docker/cli-plugins']
+with open('$HOME/.docker/config.json', 'w') as f:
+    json.dump(config, f, indent=2)
+"
+  fi
+}
+
+install_awscli() {
+  if command -v aws &> /dev/null; then
+    echo "AWS CLI is already installed"
+    return
+  fi
+
+  if [ "$PLATFORM" = "macOS" ]; then
+    check_brew
+    echo "Installing AWS CLI..."
+    brew install awscli
+  fi
+}
+
 install_requirements() {
   REQUIREMENTS_FILE="$SCRIPT_DIR/../requirements.txt"
   if [ ! -f "$REQUIREMENTS_FILE" ]; then
@@ -114,4 +159,6 @@ install_requirements() {
 
 install_stow
 install_claude_code
+install_docker
+install_awscli
 install_requirements
