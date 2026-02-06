@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-from typing import overload
+from typing import Self, overload
 from zoneinfo import ZoneInfo
 import sys
 import logging
@@ -36,15 +36,19 @@ class Moment(dt.datetime):
     return Moment.from_datetime(super().__add__(other))
 
   @classmethod
-  def from_datetime(cls, d: dt.datetime) -> 'Moment':
+  def from_datetime(cls, d: dt.datetime) -> Self:
     return cls(d.year, d.month, d.day, d.hour, d.minute, d.second, d.microsecond, d.tzinfo)
 
   @classmethod
-  def now(cls, tz: dt.tzinfo | None = None) -> 'Moment':
+  def fromisoformat(cls, s: str) -> Self:
+    return cls.from_datetime(dt.datetime.fromisoformat(s))
+
+  @classmethod
+  def now(cls, tz: dt.tzinfo | None = None) -> Self:
     return cls.from_datetime(dt.datetime.now(tz=tz))
 
   @classmethod
-  def parse(cls, s: str, format: str) -> 'Moment':
+  def parse(cls, s: str, format: str) -> Self:
     return cls.from_datetime(dt.datetime.strptime(s, format))
 
 
@@ -62,7 +66,7 @@ class Duration(dt.timedelta):
     return Duration.from_timedelta(super().__sub__(other))
 
   @classmethod
-  def from_timedelta(cls, td: dt.timedelta) -> 'Duration':
+  def from_timedelta(cls, td: dt.timedelta) -> Self:
     return cls(seconds=td.total_seconds())
 
 
