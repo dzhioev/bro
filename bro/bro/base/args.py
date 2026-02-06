@@ -80,7 +80,7 @@ class Parser(argparse.ArgumentParser):
       lines.append(f'  {formatted}  (mutually exclusive)')
     return help_text + '\n'.join(lines) + '\n'
 
-  def _check_exclusive_groups(self, ns: _N | argparse.Namespace) -> None:
+  def _check_exclusive_groups(self, ns: argparse.Namespace) -> None:
     for groups in self._exclusive_groups:
       set_groups: list[list[str]] = []
       for group in groups:
@@ -105,7 +105,8 @@ class Parser(argparse.ArgumentParser):
     self, args: Sequence[str] | None = None, namespace: _N | None = None
   ) -> _N | argparse.Namespace:
     ic.disable()
-    ns = super().parse_args(args, namespace)
+    ns = super().parse_args(args, namespace)  # pyright: ignore[reportArgumentType]
+    assert isinstance(ns, argparse.Namespace)
     self._check_exclusive_groups(ns)
     delattr(ns, 'ic')
     delattr(ns, 'info')

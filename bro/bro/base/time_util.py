@@ -27,10 +27,9 @@ class Moment(dt.datetime):
   @overload  # type: ignore[override]
   def __sub__(self, other: 'Duration') -> 'Moment': ...
   def __sub__(self, other: 'Moment | Duration') -> 'Moment | Duration':  # type: ignore[override]
-    result = super().__sub__(other)
-    if isinstance(result, dt.timedelta):
-      return Duration.from_timedelta(result)
-    return Moment.from_datetime(result)
+    if isinstance(other, dt.datetime):
+      return Duration.from_timedelta(dt.datetime.__sub__(self, other))
+    return Moment.from_datetime(dt.datetime.__sub__(self, other))
 
   def __add__(self, other: 'Duration') -> 'Moment':  # type: ignore[override]
     return Moment.from_datetime(super().__add__(other))
