@@ -66,6 +66,14 @@ class Json(Content):
     return text_to_content(json.dumps(self.json, indent=4, cls=self.encoder))
 
 
+@dataclass
+class JsonList(Content):
+  items: list[BaseModel]
+
+  def dump(self) -> dict[str, Any]:
+    return text_to_content(json.dumps([item.model_dump() for item in self.items], indent=2))
+
+
 def create_input(prompt: str, *args: Content) -> ResponseInputParam:
   result = []
   result.append({'role': 'system', 'content': prompt})
@@ -79,12 +87,12 @@ def create_input(prompt: str, *args: Content) -> ResponseInputParam:
 T = TypeVar('T', bound=BaseModel)
 
 
-def mu(prompt: str, result: Type[T], *args: Content) -> T:
+def mu(prompt: str, result: Type[T], *args: Content, reasoning_effort: str | None = None) -> T:
   client = ChatGPTBro.create().client
   response = client.responses.parse(
     model='gpt-5.1-2025-11-13',
     input=create_input(prompt, *args),
-    reasoning={'effort': None},
+    reasoning={'effort': reasoning_effort},
     text_format=result,
   )
   if response.output_parsed is None:
