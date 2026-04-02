@@ -3,17 +3,19 @@ import json
 
 from llm.llms import ChatGPT
 from llm.llms.chat_gpt import (
+  ResponseInputContentPart,
   png_to_content,
   image_file_to_content,
   text_to_content,
-  ResponseInputParam,
 )
+from openai.types.responses import ResponseInputParam
+from openai.types.shared.reasoning_effort import ReasoningEffort
 from dataclasses import dataclass
 from icecream import ic
 from pydantic import BaseModel
 from json import JSONEncoder
 from datetime import datetime
-from typing import Type, TypeVar, Any
+from typing import Any, Type, TypeVar
 from abc import abstractmethod, ABC
 
 
@@ -23,14 +25,14 @@ class Markdown(BaseModel):
 
 class Content(ABC):
   @abstractmethod
-  def dump(self) -> dict[str, Any]: ...
+  def dump(self) -> ResponseInputContentPart: ...
 
 
 @dataclass
 class ImageFile(Content):
   image_path: str
 
-  def dump(self) -> dict[str, Any]:
+  def dump(self) -> ResponseInputContentPart:
     return image_file_to_content(self.image_path)
 
 
@@ -38,7 +40,7 @@ class ImageFile(Content):
 class PngImage(Content):
   image: bytes
 
-  def dump(self) -> dict[str, Any]:
+  def dump(self) -> ResponseInputContentPart:
     return png_to_content(self.image)
 
 
@@ -46,7 +48,7 @@ class PngImage(Content):
 class Text(Content):
   text: str
 
-  def dump(self) -> dict[str, Any]:
+  def dump(self) -> ResponseInputContentPart:
     return text_to_content(self.text)
 
 
@@ -62,7 +64,7 @@ class Json(Content):
   json: dict[str, Any]
   encoder: Type[JSONEncoder] | None = None
 
-  def dump(self) -> dict[str, Any]:
+  def dump(self) -> ResponseInputContentPart:
     return text_to_content(json.dumps(self.json, indent=4, cls=self.encoder))
 
 
@@ -70,7 +72,7 @@ class Json(Content):
 class JsonList(Content):
   items: list[BaseModel]
 
-  def dump(self) -> dict[str, Any]:
+  def dump(self) -> ResponseInputContentPart:
     return text_to_content(json.dumps([item.model_dump() for item in self.items], indent=2))
 
 
@@ -87,7 +89,7 @@ def create_input(prompt: str, *args: Content) -> ResponseInputParam:
 T = TypeVar('T', bound=BaseModel)
 
 
-def mu(prompt: str, result: Type[T], *args: Content, reasoning_effort: str | None = None) -> T:
+def mu(prompt: str, result: Type[T], *args: Content, reasoning_effort: ReasoningEffort = None) -> T:
   client = ChatGPT.create().client
   response = client.responses.parse(
     model='gpt-5.1-2025-11-13',
