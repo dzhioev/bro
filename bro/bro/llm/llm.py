@@ -9,7 +9,7 @@ from functools import cached_property
 from typing import Callable
 
 
-class Bro(ABC):
+class LLM(ABC):
   @abstractmethod
   async def tell(self, phrase: str, images: list[str] | None) -> None: ...
 
@@ -19,49 +19,49 @@ class Bro(ABC):
 
 class LazyConstants:
   @cached_property
-  def BROS_BY_TYPE(self) -> dict[str, type[Bro]]:
-    import bro.bros
+  def LLMS_BY_TYPE(self) -> dict[str, type[LLM]]:
+    import llm.llms
 
     result = {}
 
-    def register_bro(type: str, constructor: Callable[[], Bro]) -> None:
+    def register_llm(type: str, constructor: Callable[[], LLM]) -> None:
       assert type not in result
       result[type] = constructor
 
-    register_bro('echo', bro.bros.EchoBro.create)
-    register_bro('chat_gpt', bro.bros.ChatGPTBro.create)
+    register_llm('echo', llm.llms.Echo.create)
+    register_llm('chat_gpt', llm.llms.ChatGPT.create)
     return result
 
   @cached_property
-  def BROS_TYPES(self) -> list[str]:
-    return list(self.BROS_BY_TYPE.keys())
+  def LLM_TYPES(self) -> list[str]:
+    return list(self.LLMS_BY_TYPE.keys())
 
 
 LAZY_CONSTANTS: LazyConstants = LazyConstants()
 
 
-def get_bro(type: str, *args, **kwargs) -> Bro:
-  constructor = LAZY_CONSTANTS.BROS_BY_TYPE.get(type)
+def get_llm(type: str, *args, **kwargs) -> LLM:
+  constructor = LAZY_CONSTANTS.LLMS_BY_TYPE.get(type)
   if constructor is None:
-    raise ValueError(f'Unknown bro type: {type}')
+    raise ValueError(f'unknown LLM type: {type}')
   return constructor(*args, **kwargs)
 
 
-async def bro_main(request: str, bro_type: str, attachments: list[str], *args, **kwargs):
-  bro = get_bro(bro_type, *args, **kwargs)
+async def llm_main(request: str, llm_type: str, attachments: list[str], *args, **kwargs):
+  instance = get_llm(llm_type, *args, **kwargs)
   print(f'> {request}')
-  await bro.tell(request, attachments)
+  await instance.tell(request, attachments)
   print()
-  asked = await bro.ask()
+  asked = await instance.ask()
   print(f'< {asked}')
 
 
 def main(argv) -> int | None:
-  parser = base.args.Parser(description='Chat with bro')
+  parser = base.args.Parser(description='chat with LLM')
   parser.add_argument('--attach', '-a', dest='attachments', nargs='*', default=[])
-  parser.add_argument('--bro-type', '-t', choices=LAZY_CONSTANTS.BROS_TYPES, default='echo')
+  parser.add_argument('--llm-type', '-t', choices=LAZY_CONSTANTS.LLM_TYPES, default='echo')
   parser.add_argument('request')
-  return asyncio.run(bro_main(**parser.parse(argv)))
+  return asyncio.run(llm_main(**parser.parse(argv)))
 
 
 if __name__ == '__main__':

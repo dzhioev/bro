@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 import json
 
-from bro.bros import ChatGPTBro
-from bro.bros.chat_gpt_bro import (
+from llm.llms import ChatGPT
+from llm.llms.chat_gpt import (
   png_to_content,
   image_file_to_content,
   text_to_content,
@@ -88,7 +88,7 @@ T = TypeVar('T', bound=BaseModel)
 
 
 def mu(prompt: str, result: Type[T], *args: Content, reasoning_effort: str | None = None) -> T:
-  client = ChatGPTBro.create().client
+  client = ChatGPT.create().client
   response = client.responses.parse(
     model='gpt-5.1-2025-11-13',
     input=create_input(prompt, *args),

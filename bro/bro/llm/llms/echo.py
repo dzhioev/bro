@@ -1,10 +1,10 @@
-import bro.bro
+import llm.llm
 
 
-class EchoBro(bro.bro.Bro):
+class Echo(llm.llm.LLM):
   @staticmethod
   def create():
-    return EchoBro()
+    return Echo()
 
   def __init__(self):
     self.phrase = None

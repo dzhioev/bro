@@ -1,4 +1,4 @@
-import bro.bro
+import llm.llm
 import configs
 
 from openai import OpenAI
@@ -9,9 +9,14 @@ from openai.types.responses import (
   ResponseInputParam,
 )
 
+from flow.mcp.tools import TOOLS, Tool
+
 import json
+import logging
 import os
 import base64
+
+log = logging.getLogger(__name__)
 
 DEFAULT_CONFIG_PATH = os.path.join(configs.DEFAULT_CONFIGS_DIR, 'openai.json')
 
@@ -65,12 +70,49 @@ def parse_response(response: Response) -> str:
   return ''.join(chunks)
 
 
-class ChatGPTBro(bro.bro.Bro):
+def has_tool_calls(response: Response) -> bool:
+  return any(item.type == 'function_call' for item in response.output)
+
+
+def execute_tool_calls(response: Response) -> list[dict]:
+  results = []
+  for item in response.output:
+    if item.type != 'function_call':
+      continue
+    tool = TOOLS_BY_NAME.get(item.name)
+    if tool is None:
+      output = f'unknown tool: {item.name}'
+    else:
+      kwargs = json.loads(item.arguments)
+      log.info(f'calling tool {item.name} with {kwargs}')
+      output = tool.handler(**kwargs)
+    results.append({'type': 'function_call_output', 'call_id': item.call_id, 'output': output})
+  return results
+
+
+def tools_to_openai_format(tools: list[Tool]) -> list[dict]:
+  return [
+    {
+      'type': 'function',
+      'name': tool.name,
+      'description': tool.description,
+      'parameters': tool.parameters,
+      'strict': True,
+    }
+    for tool in tools
+  ]
+
+
+TOOLS_BY_NAME = {tool.name: tool for tool in TOOLS}
+OPENAI_TOOLS = tools_to_openai_format(TOOLS)
+
+
+class ChatGPT(llm.llm.LLM):
   @staticmethod
   def create(config_path=DEFAULT_CONFIG_PATH):
     with open(config_path, 'r') as f:
       config = json.load(f)
-    return ChatGPTBro(api_key=config['api_key'])
+    return ChatGPT(api_key=config['api_key'])
 
   def __init__(self, api_key: str):
     self.client = OpenAI(api_key=api_key)
@@ -83,8 +125,20 @@ class ChatGPTBro(bro.bro.Bro):
     content.append(text_to_content(phrase))
 
     response = self.client.responses.create(
-      model='gpt-5', input=[{'role': 'user', 'content': content}]
+      model='gpt-5',
+      input=[{'role': 'user', 'content': content}],
+      tools=OPENAI_TOOLS,
     )
+
+    while has_tool_calls(response):
+      tool_results = execute_tool_calls(response)
+      response = self.client.responses.create(
+        model='gpt-5',
+        previous_response_id=response.id,
+        input=tool_results,
+        tools=OPENAI_TOOLS,
+      )
+
     self.text_response = parse_response(response)
 
   async def ask(self) -> str:
