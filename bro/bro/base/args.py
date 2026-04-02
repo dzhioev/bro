@@ -53,11 +53,9 @@ class Parser(argparse.ArgumentParser):
   def __init__(self, *args, **kwargs):
     super().__init__(*args, **kwargs)
     self._exclusive_groups: list[list[list[str]]] = []
+    enable_logging(logging.INFO)()
     self.add_argument(
       '--verbose', action=trigger(enable_logging(logging.DEBUG)), help='enable verbose logging'
-    )
-    self.add_argument(
-      '--info', action=trigger(enable_logging(logging.INFO)), help='enable info logging'
     )
     self.add_argument('--ic', action=trigger(enable_ic), help='enable ic ouptput')
 
@@ -109,7 +107,6 @@ class Parser(argparse.ArgumentParser):
     assert isinstance(ns, argparse.Namespace)
     self._check_exclusive_groups(ns)
     delattr(ns, 'ic')
-    delattr(ns, 'info')
     delattr(ns, 'verbose')
     return ns
 
