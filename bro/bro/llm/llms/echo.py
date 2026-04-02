@@ -7,15 +7,19 @@ class Echo(llm.llm.LLM):
     return Echo()
 
   def __init__(self):
-    self.phrase = None
-    self.images = None
+    self.messages = []
 
-  async def tell(self, phrase: str, images: list | None) -> None:
-    self.phrase = phrase
-    self.images = images
+  async def tell(self, messages: list[dict]) -> None:
+    self.messages = messages
 
   async def ask(self) -> str:
-    result = f'{self.phrase}'
-    if self.images is not None and len(self.images) > 0:
-      result += f' +({len(self.images)} images)'
-    return result
+    if not self.messages:
+      return ''
+    last = self.messages[-1]
+    content = last.get('content', '')
+    if isinstance(content, str):
+      return content
+    if isinstance(content, list):
+      texts = [p.get('text', '') for p in content if p.get('type') == 'text']
+      return '\n'.join(texts)
+    return str(content)

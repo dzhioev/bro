@@ -4,10 +4,18 @@ import configs
 from openai import OpenAI
 from openai.types.responses import (
   Response,
+  ResponseInputItemParam,
   ResponseOutputItem,
   ResponseOutputMessage,
-  ResponseInputParam,
+  ToolParam,
 )
+from openai.types.responses.easy_input_message_param import EasyInputMessageParam
+from openai.types.responses.function_tool_param import FunctionToolParam
+from openai.types.responses.response_input_content_param import ResponseInputContentParam
+from openai.types.responses.response_input_image_param import ResponseInputImageParam
+from openai.types.responses.response_input_text_param import ResponseInputTextParam
+
+ResponseInputContentPart = ResponseInputContentParam
 
 from flow.mcp.tools import TOOLS, Tool
 
@@ -26,21 +34,21 @@ def encode_file(path: str) -> str:
     return base64.b64encode(f.read()).decode('utf-8')
 
 
-def png_to_content(data: bytes) -> dict[str, str]:
+def png_to_content(data: bytes) -> ResponseInputImageParam:
   encoded = base64.b64encode(data).decode('utf-8')
   image_url = f'data:image/png;base64,{encoded}'
-  return {'type': 'input_image', 'image_url': image_url, 'detail': 'high'}
+  return ResponseInputImageParam(type='input_image', image_url=image_url, detail='high')
 
 
-def image_file_to_content(image_path: str) -> dict[str, str]:
+def image_file_to_content(image_path: str) -> ResponseInputImageParam:
   if not image_path.endswith('.png'):
     raise NotImplementedError('only PNG images supported')
   with open(image_path, 'rb') as f:
     return png_to_content(f.read())
 
 
-def text_to_content(text: str) -> dict[str, str]:
-  return {'type': 'input_text', 'text': text}
+def text_to_content(text: str) -> ResponseInputTextParam:
+  return ResponseInputTextParam(type='input_text', text=text)
 
 
 def extract_only_message(output: list[ResponseOutputItem]) -> ResponseOutputMessage:
@@ -74,8 +82,8 @@ def has_tool_calls(response: Response) -> bool:
   return any(item.type == 'function_call' for item in response.output)
 
 
-def execute_tool_calls(response: Response) -> list[dict]:
-  results = []
+def execute_tool_calls(response: Response) -> list[ResponseInputItemParam]:
+  results: list[ResponseInputItemParam] = []
   for item in response.output:
     if item.type != 'function_call':
       continue
@@ -90,21 +98,45 @@ def execute_tool_calls(response: Response) -> list[dict]:
   return results
 
 
-def tools_to_openai_format(tools: list[Tool]) -> list[dict]:
-  return [
-    {
-      'type': 'function',
-      'name': tool.name,
-      'description': tool.description,
-      'parameters': tool.parameters,
-      'strict': True,
-    }
-    for tool in tools
-  ]
+def tools_to_openai_format(tools: list[Tool]) -> list[ToolParam]:
+  result: list[ToolParam] = []
+  for tool in tools:
+    result.append(
+      FunctionToolParam(
+        type='function',
+        name=tool.name,
+        description=tool.description,
+        parameters=tool.parameters,
+        strict=True,
+      )
+    )
+  return result
 
 
 TOOLS_BY_NAME = {tool.name: tool for tool in TOOLS}
 OPENAI_TOOLS = tools_to_openai_format(TOOLS)
+
+
+def convert_content_part(part: dict) -> ResponseInputContentPart:
+  if part.get('type') == 'text':
+    return text_to_content(part['text'])
+  if part.get('type') == 'image_url':
+    url = part.get('image_url', {}).get('url', '')
+    if url.startswith('data:'):
+      return ResponseInputImageParam(type='input_image', image_url=url, detail='high')
+    return image_file_to_content(url)
+  return text_to_content(str(part))
+
+
+def convert_message(msg: dict) -> EasyInputMessageParam:
+  role = msg.get('role', 'user')
+  content = msg.get('content', '')
+  if isinstance(content, list):
+    converted: list[ResponseInputContentParam] = [convert_content_part(p) for p in content]
+    return EasyInputMessageParam(role=role, content=converted)
+  return EasyInputMessageParam(
+    role=role, content=content if isinstance(content, str) else str(content)
+  )
 
 
 class ChatGPT(llm.llm.LLM):
@@ -117,16 +149,12 @@ class ChatGPT(llm.llm.LLM):
   def __init__(self, api_key: str):
     self.client = OpenAI(api_key=api_key)
 
-  async def tell(self, phrase: str, images: list[str] | None) -> None:
-    content = []
-    if images is not None:
-      for image_path in images:
-        content.append(image_file_to_content(image_path))
-    content.append(text_to_content(phrase))
+  async def tell(self, messages: list[dict]) -> None:
+    api_input: list[ResponseInputItemParam] = [convert_message(msg) for msg in messages]
 
     response = self.client.responses.create(
       model='gpt-5',
-      input=[{'role': 'user', 'content': content}],
+      input=api_input,
       tools=OPENAI_TOOLS,
     )
 

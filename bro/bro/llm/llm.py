@@ -11,7 +11,7 @@ from typing import Callable
 
 class LLM(ABC):
   @abstractmethod
-  async def tell(self, phrase: str, images: list[str] | None) -> None: ...
+  async def tell(self, messages: list[dict]) -> None: ...
 
   @abstractmethod
   async def ask(self) -> str: ...
@@ -49,8 +49,12 @@ def get_llm(type: str, *args, **kwargs) -> LLM:
 
 async def llm_main(request: str, llm_type: str, attachments: list[str], *args, **kwargs):
   instance = get_llm(llm_type, *args, **kwargs)
+  content: list[dict] = [{'type': 'text', 'text': request}]
+  for path in attachments:
+    content.append({'type': 'image_url', 'image_url': {'url': path}})
+  messages: list[dict] = [{'role': 'user', 'content': content}]
   print(f'> {request}')
-  await instance.tell(request, attachments)
+  await instance.tell(messages)
   print()
   asked = await instance.ask()
   print(f'< {asked}')
