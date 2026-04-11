@@ -1,9 +1,10 @@
 import llm.llm
+from llm.mcp import MCPServer
 
 
 class Echo(llm.llm.LLM):
   @staticmethod
-  def create():
+  def create(mcp_servers: list[MCPServer] | None = None):
     return Echo()
 
   def __init__(self):

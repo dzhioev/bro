@@ -1,5 +1,6 @@
 import llm.llm
 import configs
+from llm.mcp import MCPServer, Tool
 
 from openai import OpenAI
 from openai.types.responses import (
@@ -16,8 +17,6 @@ from openai.types.responses.response_input_image_param import ResponseInputImage
 from openai.types.responses.response_input_text_param import ResponseInputTextParam
 
 ResponseInputContentPart = ResponseInputContentParam
-
-from flow.mcp.tools import TOOLS, Tool
 
 import json
 import logging
@@ -82,20 +81,14 @@ def has_tool_calls(response: Response) -> bool:
   return any(item.type == 'function_call' for item in response.output)
 
 
-def execute_tool_calls(response: Response) -> list[ResponseInputItemParam]:
-  results: list[ResponseInputItemParam] = []
-  for item in response.output:
-    if item.type != 'function_call':
-      continue
-    tool = TOOLS_BY_NAME.get(item.name)
-    if tool is None:
-      output = f'unknown tool: {item.name}'
-    else:
-      kwargs = json.loads(item.arguments)
-      log.info(f'calling tool {item.name} with {kwargs}')
-      output = tool.handler(**kwargs)
-    results.append({'type': 'function_call_output', 'call_id': item.call_id, 'output': output})
-  return results
+def _make_strict_schema(schema: dict) -> dict:
+  result = dict(schema)
+  if result.get('type') == 'object' and 'properties' in result:
+    properties = {k: _make_strict_schema(v) for k, v in result['properties'].items()}
+    result['properties'] = properties
+    result['required'] = list(properties.keys())
+    result['additionalProperties'] = False
+  return result
 
 
 def tools_to_openai_format(tools: list[Tool]) -> list[ToolParam]:
@@ -106,15 +99,11 @@ def tools_to_openai_format(tools: list[Tool]) -> list[ToolParam]:
         type='function',
         name=tool.name,
         description=tool.description,
-        parameters=tool.parameters,
+        parameters=_make_strict_schema(tool.parameters),
         strict=True,
       )
     )
   return result
-
-
-TOOLS_BY_NAME = {tool.name: tool for tool in TOOLS}
-OPENAI_TOOLS = tools_to_openai_format(TOOLS)
 
 
 def convert_content_part(part: dict) -> ResponseInputContentPart:
@@ -141,30 +130,64 @@ def convert_message(msg: dict) -> EasyInputMessageParam:
 
 class ChatGPT(llm.llm.LLM):
   @staticmethod
-  def create(config_path=DEFAULT_CONFIG_PATH):
+  def create(config_path=DEFAULT_CONFIG_PATH, mcp_servers: list[MCPServer] | None = None):
     with open(config_path, 'r') as f:
       config = json.load(f)
-    return ChatGPT(api_key=config['api_key'])
+    return ChatGPT(api_key=config['api_key'], mcp_servers=mcp_servers)
 
-  def __init__(self, api_key: str):
+  def __init__(self, api_key: str, mcp_servers: list[MCPServer] | None = None):
     self.client = OpenAI(api_key=api_key)
+    self._mcp_servers: list[MCPServer] = list(mcp_servers or [])
+    self._tools_by_name: dict[str, Tool] | None = None
+    self._openai_tools: list[ToolParam] | None = None
+
+  async def _resolve_tools(self) -> list[ToolParam]:
+    if self._openai_tools is not None:
+      assert self._tools_by_name is not None
+      return self._openai_tools
+    tools_by_name: dict[str, Tool] = {}
+    for server in self._mcp_servers:
+      for tool in await server.list_tools():
+        if tool.name in tools_by_name:
+          raise ValueError(f'duplicate tool name across MCP servers: {tool.name}')
+        tools_by_name[tool.name] = tool
+    self._tools_by_name = tools_by_name
+    self._openai_tools = tools_to_openai_format(list(tools_by_name.values()))
+    return self._openai_tools
+
+  async def _execute_tool_calls(self, response: Response) -> list[ResponseInputItemParam]:
+    assert self._tools_by_name is not None
+    results: list[ResponseInputItemParam] = []
+    for item in response.output:
+      if item.type != 'function_call':
+        continue
+      tool = self._tools_by_name.get(item.name)
+      if tool is None:
+        output = f'unknown tool: {item.name}'
+      else:
+        kwargs = json.loads(item.arguments)
+        log.info(f'calling tool {item.name} with {kwargs}')
+        output = await tool.call(kwargs)
+      results.append({'type': 'function_call_output', 'call_id': item.call_id, 'output': output})
+    return results
 
   async def tell(self, messages: list[dict]) -> None:
+    openai_tools = await self._resolve_tools()
     api_input: list[ResponseInputItemParam] = [convert_message(msg) for msg in messages]
 
     response = self.client.responses.create(
       model='gpt-5',
       input=api_input,
-      tools=OPENAI_TOOLS,
+      tools=openai_tools,
     )
 
     while has_tool_calls(response):
-      tool_results = execute_tool_calls(response)
+      tool_results = await self._execute_tool_calls(response)
       response = self.client.responses.create(
         model='gpt-5',
         previous_response_id=response.id,
         input=tool_results,
-        tools=OPENAI_TOOLS,
+        tools=openai_tools,
       )
 
     self.text_response = parse_response(response)
