@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+import os
 import subprocess
 import sys
 
@@ -39,10 +40,26 @@ class TestLogLevel:
 
 
 class TestLogFormat:
-  def test_format_contains_level_and_logger_name(self):
+  def test_scope_is_main_for_inline_script(self):
     output = run_log_script('from base import log; log.info("test123")')
-    assert 'INFO[ppp]' in output
+    assert 'INFO[main]' in output
     assert 'test123' in output
+
+  def test_scope_is_filename_for_script(self):
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix='.py', mode='w', delete=False) as f:
+      f.write('import sys; sys.path.insert(0, ".")\nfrom base import log; log.info("hello")')
+      f.flush()
+      result = subprocess.run([sys.executable, f.name], capture_output=True, text=True)
+    name = os.path.splitext(os.path.basename(f.name))[0]
+    assert f'INFO[{name}]' in result.stderr
+
+  def test_scope_is_module_name(self):
+    output = run_log_script(
+      'import base.log_test_helper'
+    )
+    assert 'INFO[base.log_test_helper]' in output
 
 
 class TestThirdPartyIsolation:
