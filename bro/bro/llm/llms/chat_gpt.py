@@ -19,11 +19,10 @@ from openai.types.responses.response_input_text_param import ResponseInputTextPa
 ResponseInputContentPart = ResponseInputContentParam
 
 import json
-import logging
 import os
 import base64
 
-log = logging.getLogger(__name__)
+from base import log
 
 DEFAULT_CONFIG_PATH = os.path.join(configs.DEFAULT_CONFIGS_DIR, 'openai.json')
 

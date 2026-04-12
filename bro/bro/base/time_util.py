@@ -2,7 +2,7 @@
 from typing import Self, overload
 from zoneinfo import ZoneInfo
 import sys
-import logging
+from base import log
 import datetime as dt
 
 import dateutil.parser
@@ -103,12 +103,12 @@ def parse_moment(s: str) -> Moment:
   try:
     return parse_datetime(s)
   except Exception as e:
-    logging.debug(f'"{s}": {e})')
+    log.debug(f'"{s}": {e})')
 
   try:
     return parse_date(s)
   except Exception as e:
-    logging.debug(f'"{s}": {e})')
+    log.debug(f'"{s}": {e})')
 
   raise ValueError(f'failed to parse moment: "{s}"')
 

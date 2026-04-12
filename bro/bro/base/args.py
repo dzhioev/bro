@@ -6,6 +6,8 @@ from icecream import ic
 from typing import Callable, Type, Sequence, TypeVar, overload
 import logging
 
+from base import log
+
 
 def moment_parser(arg: str) -> Moment:
   try:
@@ -30,14 +32,9 @@ def trigger(fn: Callable) -> Type[argparse.Action]:
   return TriggerAction
 
 
-def enable_logging(level: int) -> Callable:
+def set_log_level(level: int) -> Callable:
   def enable() -> None:
-    logging.basicConfig(
-      level=level,
-      format='%(asctime)s %(levelname)s[%(name)s] %(message)s',
-      datefmt='%Y-%m-%dT%H:%M:%S',
-      force=True,
-    )
+    log.set_level(level)
 
   return enable
 
@@ -53,9 +50,8 @@ class Parser(argparse.ArgumentParser):
   def __init__(self, *args, **kwargs):
     super().__init__(*args, **kwargs)
     self._exclusive_groups: list[list[list[str]]] = []
-    enable_logging(logging.INFO)()
     self.add_argument(
-      '--verbose', action=trigger(enable_logging(logging.DEBUG)), help='enable verbose logging'
+      '--verbose', action=trigger(set_log_level(logging.DEBUG)), help='enable verbose logging'
     )
     self.add_argument('--ic', action=trigger(enable_ic), help='enable ic ouptput')
 
