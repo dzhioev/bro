@@ -68,3 +68,30 @@ class InProcessMCPServer(MCPServer):
 
   async def list_tools(self) -> list[Tool]:
     return list(self._tools)
+
+
+class ToolRegistry:
+  def __init__(self, mcp_servers: list[MCPServer]):
+    self._mcp_servers: list[MCPServer] = list(mcp_servers)
+    self._tools_by_name: dict[str, Tool] | None = None
+
+  async def resolve(self) -> list[Tool]:
+    if self._tools_by_name is not None:
+      return list(self._tools_by_name.values())
+    tools_by_name: dict[str, Tool] = {}
+    for server in self._mcp_servers:
+      for tool in await server.list_tools():
+        if tool.name in tools_by_name:
+          raise ValueError(f'duplicate tool name across MCP servers: {tool.name}')
+        tools_by_name[tool.name] = tool
+    self._tools_by_name = tools_by_name
+    return list(tools_by_name.values())
+
+  async def call(self, name: str, arguments: dict[str, Any]) -> str:
+    if self._tools_by_name is None:
+      await self.resolve()
+    assert self._tools_by_name is not None
+    tool = self._tools_by_name.get(name)
+    if tool is None:
+      raise KeyError(f'unknown tool: {name}')
+    return await tool.call(arguments)

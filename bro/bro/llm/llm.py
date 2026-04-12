@@ -8,8 +8,13 @@ import asyncio
 from functools import cached_property
 from typing import Callable
 
+from llm.mcp import MCPServer, ToolRegistry
+
 
 class LLM(ABC):
+  def __init__(self, mcp_servers: list[MCPServer] | None = None):
+    self.tools = ToolRegistry(mcp_servers or [])
+
   @abstractmethod
   async def tell(self, messages: list[dict]) -> None: ...
 

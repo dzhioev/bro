@@ -3,7 +3,7 @@ from typing import Annotated
 
 from pydantic import Field
 
-from llm.mcp import FunctionTool, InProcessMCPServer
+from llm.mcp import FunctionTool, InProcessMCPServer, ToolRegistry
 
 
 class TestFunctionTool:
@@ -120,3 +120,79 @@ class TestInProcessMCPServer:
     tools2 = await server.list_tools()
     assert tools1 is not tools2
     assert tools1[0] is tools2[0]
+
+
+class TestToolRegistry:
+  @pytest.mark.asyncio
+  async def test_resolve_from_single_server(self):
+    def tool_a(x: Annotated[str, Field(description='input')]) -> str:
+      """tool a"""
+      return x
+
+    registry = ToolRegistry([InProcessMCPServer([FunctionTool(tool_a)])])
+    tools = await registry.resolve()
+    assert len(tools) == 1
+    assert tools[0].name == 'tool_a'
+
+  @pytest.mark.asyncio
+  async def test_resolve_from_multiple_servers(self):
+    def tool_a(x: Annotated[str, Field(description='input')]) -> str:
+      """tool a"""
+      return x
+
+    def tool_b(y: Annotated[int, Field(description='number')]) -> str:
+      """tool b"""
+      return str(y)
+
+    server_a = InProcessMCPServer([FunctionTool(tool_a)])
+    server_b = InProcessMCPServer([FunctionTool(tool_b)])
+    registry = ToolRegistry([server_a, server_b])
+    tools = await registry.resolve()
+    assert len(tools) == 2
+    names = {t.name for t in tools}
+    assert names == {'tool_a', 'tool_b'}
+
+  @pytest.mark.asyncio
+  async def test_resolve_caches(self):
+    def tool_a(x: Annotated[str, Field(description='input')]) -> str:
+      """tool a"""
+      return x
+
+    registry = ToolRegistry([InProcessMCPServer([FunctionTool(tool_a)])])
+    tools1 = await registry.resolve()
+    tools2 = await registry.resolve()
+    assert tools1[0] is tools2[0]
+
+  @pytest.mark.asyncio
+  async def test_duplicate_name_raises(self):
+    def dupe(x: Annotated[str, Field(description='input')]) -> str:
+      """duplicate"""
+      return x
+
+    server_a = InProcessMCPServer([FunctionTool(dupe)])
+    server_b = InProcessMCPServer([FunctionTool(dupe)])
+    registry = ToolRegistry([server_a, server_b])
+    with pytest.raises(ValueError, match='duplicate tool name'):
+      await registry.resolve()
+
+  @pytest.mark.asyncio
+  async def test_call_by_name(self):
+    def reverse(text: Annotated[str, Field(description='text')]) -> str:
+      """reverse text"""
+      return text[::-1]
+
+    registry = ToolRegistry([InProcessMCPServer([FunctionTool(reverse)])])
+    result = await registry.call('reverse', {'text': 'hello'})
+    assert result == 'olleh'
+
+  @pytest.mark.asyncio
+  async def test_call_unknown_raises(self):
+    registry = ToolRegistry([InProcessMCPServer([])])
+    with pytest.raises(KeyError, match='unknown tool'):
+      await registry.call('nonexistent', {})
+
+  @pytest.mark.asyncio
+  async def test_empty_registry(self):
+    registry = ToolRegistry([])
+    tools = await registry.resolve()
+    assert tools == []

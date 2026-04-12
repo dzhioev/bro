@@ -5,9 +5,10 @@ from llm.mcp import MCPServer
 class Echo(llm.llm.LLM):
   @staticmethod
   def create(mcp_servers: list[MCPServer] | None = None):
-    return Echo()
+    return Echo(mcp_servers=mcp_servers)
 
-  def __init__(self):
+  def __init__(self, mcp_servers: list[MCPServer] | None = None):
+    super().__init__(mcp_servers)
     self.messages = []
 
   async def tell(self, messages: list[dict]) -> None:

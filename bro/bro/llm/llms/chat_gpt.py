@@ -136,43 +136,33 @@ class ChatGPT(llm.llm.LLM):
     return ChatGPT(api_key=config['api_key'], mcp_servers=mcp_servers)
 
   def __init__(self, api_key: str, mcp_servers: list[MCPServer] | None = None):
+    super().__init__(mcp_servers)
     self.client = OpenAI(api_key=api_key)
-    self._mcp_servers: list[MCPServer] = list(mcp_servers or [])
-    self._tools_by_name: dict[str, Tool] | None = None
     self._openai_tools: list[ToolParam] | None = None
 
-  async def _resolve_tools(self) -> list[ToolParam]:
+  async def _resolve_openai_tools(self) -> list[ToolParam]:
     if self._openai_tools is not None:
-      assert self._tools_by_name is not None
       return self._openai_tools
-    tools_by_name: dict[str, Tool] = {}
-    for server in self._mcp_servers:
-      for tool in await server.list_tools():
-        if tool.name in tools_by_name:
-          raise ValueError(f'duplicate tool name across MCP servers: {tool.name}')
-        tools_by_name[tool.name] = tool
-    self._tools_by_name = tools_by_name
-    self._openai_tools = tools_to_openai_format(list(tools_by_name.values()))
+    tools = await self.tools.resolve()
+    self._openai_tools = tools_to_openai_format(tools)
     return self._openai_tools
 
   async def _execute_tool_calls(self, response: Response) -> list[ResponseInputItemParam]:
-    assert self._tools_by_name is not None
     results: list[ResponseInputItemParam] = []
     for item in response.output:
       if item.type != 'function_call':
         continue
-      tool = self._tools_by_name.get(item.name)
-      if tool is None:
+      kwargs = json.loads(item.arguments)
+      log.info(f'calling tool {item.name} with {kwargs}')
+      try:
+        output = await self.tools.call(item.name, kwargs)
+      except KeyError:
         output = f'unknown tool: {item.name}'
-      else:
-        kwargs = json.loads(item.arguments)
-        log.info(f'calling tool {item.name} with {kwargs}')
-        output = await tool.call(kwargs)
       results.append({'type': 'function_call_output', 'call_id': item.call_id, 'output': output})
     return results
 
   async def tell(self, messages: list[dict]) -> None:
-    openai_tools = await self._resolve_tools()
+    openai_tools = await self._resolve_openai_tools()
     api_input: list[ResponseInputItemParam] = [convert_message(msg) for msg in messages]
 
     response = self.client.responses.create(
