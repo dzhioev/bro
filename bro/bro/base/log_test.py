@@ -56,9 +56,7 @@ class TestLogFormat:
     assert f'INFO[{name}]' in result.stderr
 
   def test_scope_is_module_name(self):
-    output = run_log_script(
-      'import base.log_test_helper'
-    )
+    output = run_log_script('import base.log_test_helper')
     assert 'INFO[base.log_test_helper]' in output
 
 
