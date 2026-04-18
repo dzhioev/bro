@@ -136,12 +136,33 @@ class TestListParser:
     assert result == ['foo', 'bar', 'baz']
 
 
+import re
+
+
+def _parse_env_table(out: str) -> list[dict[str, str]]:
+  lines = [l for l in out.splitlines() if l.strip()]
+  assert lines, 'expected at least a header row'
+  header = re.split(r'\s{2,}', lines[0].strip())
+  rows = []
+  for line in lines[1:]:
+    cells = re.split(r'\s{2,}', line.strip())
+    assert len(cells) == len(header), f'row/header width mismatch: {cells!r} vs {header!r}'
+    rows.append(dict(zip(header, cells)))
+  return rows
+
+
+def _row_for(rows: list[dict[str, str]], env_name: str) -> dict[str, str]:
+  matching = [r for r in rows if r['ENV_NAME'] == env_name]
+  assert len(matching) == 1, f'expected exactly one row for {env_name}, got {matching!r}'
+  return matching[0]
+
+
 class TestParser:
   def test_parse_method(self):
     parser = Parser()
     parser.add_argument('--foo')
     args = parser.parse(['script.py', '--foo', 'bar'])
-    assert args == {'foo': 'bar'}
+    assert args == {'foo': 'bar', 'allow_env': False}
 
   def test_verbose_and_ic_removed_from_args(self):
     parser = Parser()
@@ -149,3 +170,376 @@ class TestParser:
     assert 'verbose' not in args
     assert 'ic' not in args
     assert 'info' not in args
+    assert 'print_env' not in args
+
+  def test_allow_env_kept_in_args(self):
+    parser = Parser()
+    args = parser.parse(['script.py', '--allow-env'])
+    assert args['allow_env'] is True
+    args2 = parser.parse(['script.py'])
+    assert args2['allow_env'] is False
+
+
+class TestEnvVarBasics:
+  def test_env_ignored_without_allow_env(self, monkeypatch):
+    monkeypatch.setenv('FOO', 'from_env')
+    parser = Parser()
+    parser.add_argument('--foo')
+    args = parser.parse_args([])
+    assert args.foo is None
+
+  def test_env_applied_with_allow_env(self, monkeypatch):
+    monkeypatch.setenv('FOO', 'from_env')
+    parser = Parser()
+    parser.add_argument('--foo')
+    args = parser.parse_args(['--allow-env'])
+    assert args.foo == 'from_env'
+
+  def test_cli_overrides_env(self, monkeypatch):
+    monkeypatch.setenv('FOO', 'from_env')
+    parser = Parser()
+    parser.add_argument('--foo')
+    args = parser.parse_args(['--allow-env', '--foo', 'from_cli'])
+    assert args.foo == 'from_cli'
+
+  def test_env_name_hyphen_to_underscore(self, monkeypatch):
+    monkeypatch.setenv('SERVER_URL', 'http://foo')
+    parser = Parser()
+    parser.add_argument('--server-url')
+    args = parser.parse_args(['--allow-env'])
+    assert args.server_url == 'http://foo'
+
+  def test_default_used_when_env_unset(self):
+    parser = Parser()
+    parser.add_argument('--foo', default='default')
+    args = parser.parse_args(['--allow-env'])
+    assert args.foo == 'default'
+
+
+class TestEnvTypeCoercion:
+  def test_int_type(self, monkeypatch):
+    monkeypatch.setenv('PORT', '8080')
+    parser = Parser()
+    parser.add_argument('--port', type=int)
+    args = parser.parse_args(['--allow-env'])
+    assert args.port == 8080
+
+  def test_list_parser(self, monkeypatch):
+    monkeypatch.setenv('ITEMS', 'a,b,c')
+    parser = Parser()
+    parser.add_argument('--items', type=list_parser)
+    args = parser.parse_args(['--allow-env'])
+    assert args.items == ['a', 'b', 'c']
+
+  def test_moment_parser(self, monkeypatch):
+    monkeypatch.setenv('WHEN', '2024-01-15')
+    parser = Parser()
+    parser.add_argument('--when', type=moment_parser)
+    args = parser.parse_args(['--allow-env'])
+    assert args.when.year == 2024
+    assert args.when.month == 1
+    assert args.when.day == 15
+
+  def test_bad_type_errors_cleanly(self, monkeypatch):
+    monkeypatch.setenv('PORT', 'not-a-number')
+    parser = Parser()
+    parser.add_argument('--port', type=int)
+    with pytest.raises(SystemExit):
+      parser.parse_args(['--allow-env'])
+
+
+class TestEnvBooleans:
+  def test_store_true_env_1(self, monkeypatch):
+    monkeypatch.setenv('FLAG', '1')
+    parser = Parser()
+    parser.add_argument('--flag', action='store_true')
+    args = parser.parse_args(['--allow-env'])
+    assert args.flag is True
+
+  def test_store_true_env_0(self, monkeypatch):
+    monkeypatch.setenv('FLAG', '0')
+    parser = Parser()
+    parser.add_argument('--flag', action='store_true')
+    args = parser.parse_args(['--allow-env'])
+    assert args.flag is False
+
+  def test_store_true_env_invalid(self, monkeypatch, capsys):
+    monkeypatch.setenv('FLAG', 'yes')
+    parser = Parser()
+    parser.add_argument('--flag', action='store_true')
+    with pytest.raises(SystemExit):
+      parser.parse_args(['--allow-env'])
+    err = capsys.readouterr().err
+    assert re.search(r'invalid value for env FLAG', err)
+
+  def test_store_false_env_1_yields_false(self, monkeypatch):
+    # store_false default is True; passing the flag sets to False.
+    # VAR=1 == "fire the flag" == value becomes False.
+    monkeypatch.setenv('QUIET', '1')
+    parser = Parser()
+    parser.add_argument('--quiet', action='store_false')
+    args = parser.parse_args(['--allow-env'])
+    assert args.quiet is False
+
+  def test_store_false_env_0_yields_default_true(self, monkeypatch):
+    monkeypatch.setenv('QUIET', '0')
+    parser = Parser()
+    parser.add_argument('--quiet', action='store_false')
+    args = parser.parse_args(['--allow-env'])
+    assert args.quiet is True
+
+  def test_verbose_env_triggered(self, monkeypatch):
+    import logging as _logging
+    from base import log
+
+    monkeypatch.setenv('VERBOSE', '1')
+    log.set_level(_logging.INFO)
+    parser = Parser()
+    parser.parse_args(['--allow-env'])
+    assert _logging.getLogger('ppp').level == _logging.DEBUG
+    log.set_level(_logging.INFO)
+
+  def test_allow_env_itself_not_env_backed(self, monkeypatch):
+    monkeypatch.setenv('ALLOW_ENV', '1')
+    monkeypatch.setenv('FOO', 'from_env')
+    parser = Parser()
+    parser.add_argument('--foo')
+    args = parser.parse_args([])
+    assert args.foo is None
+
+
+class TestEnvRequiredAndExclusive:
+  def test_required_satisfied_by_env(self, monkeypatch):
+    monkeypatch.setenv('TOKEN', 'secret')
+    parser = Parser()
+    parser.add_argument('--token', required=True)
+    args = parser.parse_args(['--allow-env'])
+    assert args.token == 'secret'
+
+  def test_required_still_errors_without_env_and_without_allow_env(self):
+    parser = Parser()
+    parser.add_argument('--token', required=True)
+    with pytest.raises(SystemExit):
+      parser.parse_args([])
+
+  def test_required_errors_without_env_even_with_allow_env(self):
+    parser = Parser()
+    parser.add_argument('--token', required=True)
+    with pytest.raises(SystemExit):
+      parser.parse_args(['--allow-env'])
+
+  def test_exclusive_groups_fire_on_env_values(self, monkeypatch):
+    monkeypatch.setenv('START', '2024-01-01')
+    parser = Parser()
+    parser.add_argument('--start')
+    parser.add_argument('--yesterday', action='store_true')
+    parser.add_exclusive_groups(['start'], ['yesterday'])
+    with pytest.raises(SystemExit):
+      parser.parse_args(['--allow-env', '--yesterday'])
+
+
+class TestHelpAnnotation:
+  def test_help_annotates_env_name(self):
+    parser = Parser()
+    parser.add_argument('--server-url', help='server URL')
+    help_text = parser.format_help()
+    assert '(env: SERVER_URL)' in help_text
+
+  def test_help_annotates_without_user_help(self):
+    parser = Parser()
+    parser.add_argument('--foo')
+    help_text = parser.format_help()
+    assert '(env: FOO)' in help_text
+
+  def test_no_annotation_for_env_false(self):
+    parser = Parser()
+    parser.add_argument('--token', env=False, help='token')
+    help_text = parser.format_help()
+    assert '(env: TOKEN)' not in help_text
+
+  def test_no_annotation_for_positional(self):
+    parser = Parser()
+    parser.add_argument('target', help='target id')
+    help_text = parser.format_help()
+    assert '(env: TARGET)' not in help_text
+
+  def test_no_annotation_for_allow_env_and_print_env(self):
+    parser = Parser()
+    help_text = parser.format_help()
+    assert '(env: ALLOW_ENV)' not in help_text
+    assert '(env: PRINT_ENV)' not in help_text
+
+  def test_no_annotation_for_unsupported_action(self):
+    parser = Parser()
+    parser.add_argument('--items', nargs='*', help='items')
+    help_text = parser.format_help()
+    assert '(env: ITEMS)' not in help_text
+
+
+class TestEnvOptOut:
+  def test_env_false_ignores_env(self, monkeypatch):
+    monkeypatch.setenv('TOKEN', 'from_env')
+    parser = Parser()
+    parser.add_argument('--token', env=False)
+    args = parser.parse_args(['--allow-env'])
+    assert args.token is None
+
+  def test_positional_ignores_env(self, monkeypatch):
+    monkeypatch.setenv('TARGET', 'from_env')
+    parser = Parser()
+    parser.add_argument('target')
+    with pytest.raises(SystemExit):
+      parser.parse_args(['--allow-env'])
+
+
+class TestUnsupportedActions:
+  def test_nargs_star_registers_ok(self):
+    parser = Parser()
+    parser.add_argument('--items', nargs='*', default=[])
+    args = parser.parse_args([])
+    assert args.items == []
+
+  def test_nargs_star_raises_when_env_set(self, monkeypatch):
+    monkeypatch.setenv('ITEMS', 'a,b,c')
+    parser = Parser()
+    parser.add_argument('--items', nargs='*', default=[])
+    with pytest.raises(NotImplementedError):
+      parser.parse_args(['--allow-env'])
+
+  def test_nargs_star_silent_when_allow_env_off(self, monkeypatch):
+    monkeypatch.setenv('ITEMS', 'a,b,c')
+    parser = Parser()
+    parser.add_argument('--items', nargs='*', default=[])
+    args = parser.parse_args([])
+    assert args.items == []
+
+  def test_append_raises_when_env_set(self, monkeypatch):
+    monkeypatch.setenv('TAG', 'x')
+    parser = Parser()
+    parser.add_argument('--tag', action='append')
+    with pytest.raises(NotImplementedError):
+      parser.parse_args(['--allow-env'])
+
+  def test_count_raises_when_env_set(self, monkeypatch):
+    monkeypatch.setenv('VV', '2')
+    parser = Parser()
+    parser.add_argument('--vv', action='count', default=0)
+    with pytest.raises(NotImplementedError):
+      parser.parse_args(['--allow-env'])
+
+
+class TestPrintEnv:
+  def test_print_env_exits(self):
+    parser = Parser()
+    parser.add_argument('--foo')
+    with pytest.raises(SystemExit) as exc_info:
+      parser.parse_args(['--print-env'])
+    assert exc_info.value.code == 0
+
+  def test_print_env_includes_verbose_and_ic(self, capsys):
+    parser = Parser()
+    with pytest.raises(SystemExit):
+      parser.parse_args(['--print-env'])
+    env_names = {r['ENV_NAME'] for r in _parse_env_table(capsys.readouterr().out)}
+    assert 'VERBOSE' in env_names
+    assert 'IC' in env_names
+    assert 'ALLOW_ENV' not in env_names
+    assert 'PRINT_ENV' not in env_names
+
+  def test_print_env_src_default(self, capsys):
+    parser = Parser()
+    parser.add_argument('--foo', default='x')
+    with pytest.raises(SystemExit):
+      parser.parse_args(['--print-env'])
+    row = _row_for(_parse_env_table(capsys.readouterr().out), 'FOO')
+    assert row == {'SRC': 'D', 'ENV_NAME': 'FOO', 'CURRENT VALUE': 'x', 'ENV VALUE': '(not set)'}
+
+  def test_print_env_src_argument(self, capsys):
+    parser = Parser()
+    parser.add_argument('--foo')
+    with pytest.raises(SystemExit):
+      parser.parse_args(['--foo', 'bar', '--print-env'])
+    row = _row_for(_parse_env_table(capsys.readouterr().out), 'FOO')
+    assert row == {'SRC': 'A', 'ENV_NAME': 'FOO', 'CURRENT VALUE': 'bar', 'ENV VALUE': '(not set)'}
+
+  def test_print_env_src_env(self, capsys, monkeypatch):
+    monkeypatch.setenv('FOO', 'from_env')
+    parser = Parser()
+    parser.add_argument('--foo')
+    with pytest.raises(SystemExit):
+      parser.parse_args(['--allow-env', '--print-env'])
+    row = _row_for(_parse_env_table(capsys.readouterr().out), 'FOO')
+    assert row == {
+      'SRC': 'E',
+      'ENV_NAME': 'FOO',
+      'CURRENT VALUE': 'from_env',
+      'ENV VALUE': 'from_env',
+    }
+
+  def test_print_env_shows_lurking_env_when_allow_env_off(self, capsys, monkeypatch):
+    monkeypatch.setenv('FOO', 'lurking')
+    parser = Parser()
+    parser.add_argument('--foo', default='default')
+    with pytest.raises(SystemExit):
+      parser.parse_args(['--print-env'])
+    row = _row_for(_parse_env_table(capsys.readouterr().out), 'FOO')
+    assert row == {
+      'SRC': 'D',
+      'ENV_NAME': 'FOO',
+      'CURRENT VALUE': 'default',
+      'ENV VALUE': 'lurking',
+    }
+
+  def test_print_env_masks_secret(self, capsys, monkeypatch):
+    monkeypatch.setenv('TOKEN', 'super-secret')
+    parser = Parser()
+    parser.add_argument('--token', secret=True)
+    with pytest.raises(SystemExit):
+      parser.parse_args(['--allow-env', '--print-env'])
+    out = capsys.readouterr().out
+    assert 'super-secret' not in out
+    row = _row_for(_parse_env_table(out), 'TOKEN')
+    assert row == {'SRC': 'E', 'ENV_NAME': 'TOKEN', 'CURRENT VALUE': '***', 'ENV VALUE': '***'}
+
+  def test_print_env_excludes_env_false(self, capsys):
+    parser = Parser()
+    parser.add_argument('--foo')
+    parser.add_argument('--bar', env=False)
+    with pytest.raises(SystemExit):
+      parser.parse_args(['--print-env'])
+    rows = _parse_env_table(capsys.readouterr().out)
+    env_names = {r['ENV_NAME'] for r in rows}
+    assert 'FOO' in env_names
+    assert 'BAR' not in env_names
+
+  def test_print_env_excludes_unsupported_action(self, capsys):
+    parser = Parser()
+    parser.add_argument('--foo')
+    parser.add_argument('--items', nargs='*')
+    with pytest.raises(SystemExit):
+      parser.parse_args(['--print-env'])
+    rows = _parse_env_table(capsys.readouterr().out)
+    env_names = {r['ENV_NAME'] for r in rows}
+    assert 'FOO' in env_names
+    assert 'ITEMS' not in env_names
+
+  def test_print_env_bool_formatting(self, capsys):
+    parser = Parser()
+    parser.add_argument('--flag', action='store_true')
+    with pytest.raises(SystemExit):
+      parser.parse_args(['--flag', '--print-env'])
+    row = _row_for(_parse_env_table(capsys.readouterr().out), 'FLAG')
+    assert row == {'SRC': 'A', 'ENV_NAME': 'FLAG', 'CURRENT VALUE': '1', 'ENV VALUE': '(not set)'}
+
+  def test_print_env_list_formatting(self, capsys):
+    parser = Parser()
+    parser.add_argument('--items', type=list_parser, default=['x', 'y'])
+    with pytest.raises(SystemExit):
+      parser.parse_args(['--print-env'])
+    row = _row_for(_parse_env_table(capsys.readouterr().out), 'ITEMS')
+    assert row == {
+      'SRC': 'D',
+      'ENV_NAME': 'ITEMS',
+      'CURRENT VALUE': 'x,y',
+      'ENV VALUE': '(not set)',
+    }
