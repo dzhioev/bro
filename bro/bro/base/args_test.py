@@ -336,14 +336,22 @@ class TestHelpAnnotation:
   def test_help_annotates_env_name(self):
     parser = Parser()
     parser.add_argument('--server-url', help='server URL')
+    parser.parse_args(['--allow-env'])
     help_text = parser.format_help()
     assert '(env: SERVER_URL)' in help_text
 
   def test_help_annotates_without_user_help(self):
     parser = Parser()
     parser.add_argument('--foo')
+    parser.parse_args(['--allow-env'])
     help_text = parser.format_help()
     assert '(env: FOO)' in help_text
+
+  def test_help_omits_env_name_without_allow_env(self):
+    parser = Parser()
+    parser.add_argument('--server-url', help='server URL')
+    help_text = parser.format_help()
+    assert '(env: SERVER_URL)' not in help_text
 
   def test_no_annotation_for_env_false(self):
     parser = Parser()
