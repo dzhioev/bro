@@ -72,6 +72,7 @@ class Parser(argparse.ArgumentParser):
   def __init__(self, *args, **kwargs):
     self._exclusive_groups: list[list[list[str]]] = []
     self._env_info: dict[str, dict] = {}
+    self._last_argv: list[str] | None = None
     super().__init__(*args, **kwargs)
     self._global_group = self.add_argument_group('global options')
     for action in self._actions:
@@ -115,15 +116,6 @@ class Parser(argparse.ArgumentParser):
       return action
 
     unsupported = _is_unsupported_env_action(action)
-    if not unsupported:
-      current_help = action.help
-      if current_help is argparse.SUPPRESS:
-        pass
-      elif current_help:
-        action.help = f'{current_help} (env: {env_name})'
-      else:
-        action.help = f'(env: {env_name})'
-
     self._env_info[action.dest] = {
       'env_name': env_name,
       'supported': not unsupported,
@@ -142,7 +134,24 @@ class Parser(argparse.ArgumentParser):
     return '{' + ', '.join(args) + '}'
 
   def format_help(self) -> str:
-    help_text = super().format_help()
+    argv = self._last_argv if self._last_argv is not None else sys.argv[1:]
+    show_env = '--allow-env' in argv
+    originals: dict[str, str | None] = {}
+    if show_env:
+      for dest, info in self._env_info.items():
+        if not info['supported']:
+          continue
+        action = info['action']
+        if action.help is argparse.SUPPRESS:
+          continue
+        originals[dest] = action.help
+        env_name = info['env_name']
+        action.help = f'{action.help} (env: {env_name})' if action.help else f'(env: {env_name})'
+    try:
+      help_text = super().format_help()
+    finally:
+      for dest, original in originals.items():
+        self._env_info[dest]['action'].help = original
     if not self._exclusive_groups:
       return help_text
     lines = ['', 'Constraints:']
@@ -260,6 +269,7 @@ class Parser(argparse.ArgumentParser):
   ) -> _N | argparse.Namespace:
     ic.disable()
     argv_list = list(args) if args is not None else list(sys.argv[1:])
+    self._last_argv = argv_list
     allow_env = '--allow-env' in argv_list
     print_env = '--print-env' in argv_list
     parse_argv = self._apply_env(argv_list) if allow_env else argv_list
