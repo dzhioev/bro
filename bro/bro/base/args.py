@@ -255,6 +255,7 @@ class Parser(argparse.ArgumentParser):
     delattr(ns, 'ic')
     delattr(ns, 'verbose')
     delattr(ns, 'print_env')
+    delattr(ns, 'allow_env')
     return ns
 
   def parse(self, argv):

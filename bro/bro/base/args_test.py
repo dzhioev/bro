@@ -162,22 +162,16 @@ class TestParser:
     parser = Parser()
     parser.add_argument('--foo')
     args = parser.parse(['script.py', '--foo', 'bar'])
-    assert args == {'foo': 'bar', 'allow_env': False}
+    assert args == {'foo': 'bar'}
 
-  def test_verbose_and_ic_removed_from_args(self):
+  def test_global_flags_removed_from_args(self):
     parser = Parser()
-    args = parser.parse(['script.py'])
+    args = parser.parse(['script.py', '--allow-env'])
     assert 'verbose' not in args
     assert 'ic' not in args
     assert 'info' not in args
     assert 'print_env' not in args
-
-  def test_allow_env_kept_in_args(self):
-    parser = Parser()
-    args = parser.parse(['script.py', '--allow-env'])
-    assert args['allow_env'] is True
-    args2 = parser.parse(['script.py'])
-    assert args2['allow_env'] is False
+    assert 'allow_env' not in args
 
 
 class TestEnvVarBasics:
