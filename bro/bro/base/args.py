@@ -73,14 +73,33 @@ class Parser(argparse.ArgumentParser):
     self._exclusive_groups: list[list[list[str]]] = []
     self._env_info: dict[str, dict] = {}
     super().__init__(*args, **kwargs)
-    super().add_argument(
+    self._global_group = self.add_argument_group('global options')
+    for action in self._actions:
+      if isinstance(action, argparse._HelpAction):
+        self._move_to_global(action)
+        break
+    self._global_group.add_argument(
       '--allow-env', action='store_true', help='honor env-var overrides for flags'
     )
-    super().add_argument('--print-env', action='store_true', help='print env-var summary and exit')
-    self.add_argument(
+    self._global_group.add_argument(
+      '--print-env', action='store_true', help='print env-var summary and exit'
+    )
+    self._add_global_argument(
       '--verbose', action=trigger(set_log_level(logging.DEBUG)), help='enable verbose logging'
     )
-    self.add_argument('--ic', action=trigger(enable_ic), help='enable ic ouptput')
+    self._add_global_argument('--ic', action=trigger(enable_ic), help='enable ic ouptput')
+
+  def _move_to_global(self, action: argparse.Action) -> None:
+    for group in self._action_groups:
+      if group is not self._global_group and action in group._group_actions:
+        group._group_actions.remove(action)
+    if action not in self._global_group._group_actions:
+      self._global_group._group_actions.append(action)
+
+  def _add_global_argument(self, *args, **kwargs):
+    action = self.add_argument(*args, **kwargs)
+    self._move_to_global(action)
+    return action
 
   def add_argument(self, *args, env: bool = True, secret: bool = False, **kwargs):  # type: ignore[override]
     is_flag = any(isinstance(a, str) and a.startswith('-') for a in args)
