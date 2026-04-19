@@ -76,9 +76,7 @@ class Parser(argparse.ArgumentParser):
     super().add_argument(
       '--allow-env', action='store_true', help='honor env-var overrides for flags'
     )
-    super().add_argument(
-      '--print-env', action='store_true', help='print env-var summary and exit'
-    )
+    super().add_argument('--print-env', action='store_true', help='print env-var summary and exit')
     self.add_argument(
       '--verbose', action=trigger(set_log_level(logging.DEBUG)), help='enable verbose logging'
     )
