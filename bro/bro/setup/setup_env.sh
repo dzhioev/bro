@@ -147,18 +147,36 @@ install_awscli() {
   fi
 }
 
-install_requirements() {
-  REQUIREMENTS_FILE="$SCRIPT_DIR/../requirements.txt"
-  if [ ! -f "$REQUIREMENTS_FILE" ]; then
-    echo "requirements.txt not found at $REQUIREMENTS_FILE"
-    exit 1
+install_uv() {
+  if command -v uv &> /dev/null; then
+    echo "uv is already installed: $(uv --version)"
+    return
   fi
-  echo "Installing Python requirements..."
-  pip install -q -r "$REQUIREMENTS_FILE"
+
+  echo "Installing uv..."
+  if [ "$PLATFORM" = "macOS" ]; then
+    check_brew
+    brew install uv
+  else
+    # Ubuntu: install via pipx for an isolated, easily-uninstallable install
+    # (uv is published as a PyPI wheel; pipx puts it in a managed venv)
+    if ! command -v pipx &> /dev/null; then
+      sudo apt-get update
+      sudo apt-get install -y pipx
+      pipx ensurepath
+    fi
+    pipx install uv
+  fi
+}
+
+install_requirements() {
+  echo "Installing Python requirements via uv sync..."
+  (cd "$SCRIPT_DIR/.." && uv sync --all-groups)
 }
 
 install_stow
 install_claude_code
 install_docker
 install_awscli
+install_uv
 install_requirements
