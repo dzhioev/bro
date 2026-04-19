@@ -29,6 +29,7 @@ def trigger(fn: Callable) -> Type[argparse.Action]:
       super().__init__(option_strings, dest, **kwargs)
 
     def __call__(self, parser, namespace, values, option_string=None):
+      del parser, namespace, values, option_string
       fn()
 
   return TriggerAction
@@ -68,11 +69,36 @@ def _is_nargs_zero(action: argparse.Action) -> bool:
   return action.nargs == 0
 
 
+class _Formatter(argparse.HelpFormatter):
+  _global_ids: set[int] = set()
+
+  def _format_usage(self, usage, actions, groups, prefix):  # type: ignore[override]
+    global_ids = self._global_ids
+    script = [a for a in actions if id(a) not in global_ids]
+    glob = [a for a in actions if id(a) in global_ids]
+    result = super()._format_usage(usage, script, groups, prefix)
+    if not glob:
+      return result
+    glob_str = self._format_actions_usage(glob, []).strip()  # type: ignore[attr-defined]
+    if not glob_str:
+      return result
+    body = result.rstrip('\n')
+    lines = body.split('\n')
+    if len(lines) > 1:
+      indent_len = len(lines[1]) - len(lines[1].lstrip())
+    else:
+      actual_prefix = prefix if prefix is not None else 'usage: '
+      indent_len = len(actual_prefix) + len(self._prog) + 1
+    indent = ' ' * indent_len
+    return f'{body}\n{indent}({glob_str})\n'
+
+
 class Parser(argparse.ArgumentParser):
   def __init__(self, *args, **kwargs):
     self._exclusive_groups: list[list[list[str]]] = []
     self._env_info: dict[str, dict] = {}
     self._last_argv: list[str] | None = None
+    kwargs.setdefault('formatter_class', _Formatter)
     super().__init__(*args, **kwargs)
     self._global_group = self.add_argument_group('global options')
     for action in self._actions:
@@ -132,6 +158,13 @@ class Parser(argparse.ArgumentParser):
     if len(args) == 1:
       return args[0]
     return '{' + ', '.join(args) + '}'
+
+  def _get_formatter(self):  # type: ignore[override]
+    formatter = super()._get_formatter()
+    group = getattr(self, '_global_group', None)
+    if isinstance(formatter, _Formatter) and group is not None:
+      formatter._global_ids = {id(a) for a in group._group_actions}
+    return formatter
 
   def format_help(self) -> str:
     argv = self._last_argv if self._last_argv is not None else sys.argv[1:]
