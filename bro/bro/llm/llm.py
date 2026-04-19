@@ -65,7 +65,7 @@ async def llm_main(request: str, llm_type: str, attachments: list[str], *args, *
   print(f'< {asked}')
 
 
-def main(argv) -> int | None:
+def main(argv=None) -> int | None:
   parser = base.args.Parser(description='chat with LLM')
   parser.add_argument('--attach', '-a', dest='attachments', nargs='*', default=[])
   parser.add_argument('--llm-type', '-t', choices=LAZY_CONSTANTS.LLM_TYPES, default='echo')

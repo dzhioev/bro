@@ -7,7 +7,7 @@ def template() -> None:
   pass
 
 
-def main(argv):
+def main(argv=None):
   parser = Parser(description='')
   return template(**parser.parse(argv))
 

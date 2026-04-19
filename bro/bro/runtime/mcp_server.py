@@ -43,7 +43,7 @@ async def run(mcp_server: MCPServer):
     await server.run(read_stream, write_stream, server.create_initialization_options())
 
 
-def main(argv) -> int | None:
+def main(argv=None) -> int | None:
   servers = _get_servers()
   parser = base.args.Parser(description='generic MCP stdio server')
   parser.add_argument('server', choices=list(servers.keys()))

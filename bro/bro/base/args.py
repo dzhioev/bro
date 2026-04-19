@@ -256,5 +256,7 @@ class Parser(argparse.ArgumentParser):
     delattr(ns, 'allow_env')
     return ns
 
-  def parse(self, argv):
+  def parse(self, argv=None):
+    if argv is None:
+      argv = sys.argv
     return vars(self.parse_args(argv[1:]))

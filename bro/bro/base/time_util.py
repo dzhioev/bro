@@ -131,14 +131,13 @@ def print_current_time(show_tz_info: bool, zone: str | None) -> None:
   print(current_time)
 
 
-def main(argv: list[str]) -> int:
+def main(argv: list[str] | None = None) -> int:
   import base.args
 
   parser = base.args.Parser(description='print current time')
   parser.add_argument('-z', dest='show_tz_info', help='show tz info', action='store_true')
   parser.add_argument('--zone', help='convert time to the timezone')
-  args = parser.parse_args(argv[1:])
-  print_current_time(**vars(args))
+  print_current_time(**parser.parse(argv))
   return 0
 
 
