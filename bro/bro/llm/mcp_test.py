@@ -3,14 +3,15 @@ from typing import Annotated
 
 from pydantic import Field
 
-from llm.mcp import FunctionTool, InProcessMCPServer, ToolRegistry
+from llm.mcp import FunctionTool, InProcessMCPServer, ToolRegistry, describe
 
 
 class TestFunctionTool:
   def test_sync_function(self):
     def greet(name: Annotated[str, Field(description='person name')]) -> str:
-      """say hello"""
       return f'hello {name}'
+
+    describe(greet, 'say hello')
 
     tool = FunctionTool(greet)
     assert tool.name == 'greet'
@@ -19,8 +20,9 @@ class TestFunctionTool:
 
   def test_custom_name_and_description(self):
     def greet(name: str) -> str:
-      """original docstring"""
       return f'hello {name}'
+
+    describe(greet, 'original description')
 
     tool = FunctionTool(greet, name='say_hi', description='custom desc')
     assert tool.name == 'say_hi'
@@ -39,8 +41,9 @@ class TestFunctionTool:
       a: Annotated[int, Field(description='first')],
       b: Annotated[int, Field(description='second')],
     ) -> str:
-      """add two numbers"""
       return str(a + b)
+
+    describe(add, 'add two numbers')
 
     tool = FunctionTool(add)
     result = await tool.call({'a': 3, 'b': 4})
@@ -49,8 +52,9 @@ class TestFunctionTool:
   @pytest.mark.asyncio
   async def test_call_async(self):
     async def upper(text: Annotated[str, Field(description='input text')]) -> str:
-      """uppercase text"""
       return text.upper()
+
+    describe(upper, 'uppercase text')
 
     tool = FunctionTool(upper)
     result = await tool.call({'text': 'hello'})
@@ -61,8 +65,9 @@ class TestFunctionTool:
       query: Annotated[str, Field(description='search query')],
       limit: Annotated[int | None, Field(description='max results')] = None,
     ) -> str:
-      """search for items"""
       return f'{query}:{limit}'
+
+    describe(search, 'search for items')
 
     tool = FunctionTool(search)
     props = tool.parameters.get('properties', {})
@@ -75,8 +80,9 @@ class TestFunctionTool:
       name: Annotated[str, Field(description='name')],
       greeting: Annotated[str, Field(description='greeting')] = 'hello',
     ) -> str:
-      """greet someone"""
       return f'{greeting} {name}'
+
+    describe(greet, 'greet someone')
 
     tool = FunctionTool(greet)
     result = await tool.call({'name': 'world'})
@@ -90,12 +96,14 @@ class TestInProcessMCPServer:
   @pytest.mark.asyncio
   async def test_list_tools(self):
     def tool_a(x: Annotated[str, Field(description='input')]) -> str:
-      """tool a"""
       return x
 
+    describe(tool_a, 'tool a')
+
     def tool_b(y: Annotated[int, Field(description='number')]) -> str:
-      """tool b"""
       return str(y)
+
+    describe(tool_b, 'tool b')
 
     server = InProcessMCPServer([FunctionTool(tool_a), FunctionTool(tool_b)])
     tools = await server.list_tools()
@@ -112,8 +120,9 @@ class TestInProcessMCPServer:
   @pytest.mark.asyncio
   async def test_list_tools_returns_copy(self):
     def tool_a(x: Annotated[str, Field(description='input')]) -> str:
-      """tool a"""
       return x
+
+    describe(tool_a, 'tool a')
 
     server = InProcessMCPServer([FunctionTool(tool_a)])
     tools1 = await server.list_tools()
@@ -126,8 +135,9 @@ class TestToolRegistry:
   @pytest.mark.asyncio
   async def test_resolve_from_single_server(self):
     def tool_a(x: Annotated[str, Field(description='input')]) -> str:
-      """tool a"""
       return x
+
+    describe(tool_a, 'tool a')
 
     registry = ToolRegistry([InProcessMCPServer([FunctionTool(tool_a)])])
     tools = await registry.resolve()
@@ -137,12 +147,14 @@ class TestToolRegistry:
   @pytest.mark.asyncio
   async def test_resolve_from_multiple_servers(self):
     def tool_a(x: Annotated[str, Field(description='input')]) -> str:
-      """tool a"""
       return x
 
+    describe(tool_a, 'tool a')
+
     def tool_b(y: Annotated[int, Field(description='number')]) -> str:
-      """tool b"""
       return str(y)
+
+    describe(tool_b, 'tool b')
 
     server_a = InProcessMCPServer([FunctionTool(tool_a)])
     server_b = InProcessMCPServer([FunctionTool(tool_b)])
@@ -155,8 +167,9 @@ class TestToolRegistry:
   @pytest.mark.asyncio
   async def test_resolve_caches(self):
     def tool_a(x: Annotated[str, Field(description='input')]) -> str:
-      """tool a"""
       return x
+
+    describe(tool_a, 'tool a')
 
     registry = ToolRegistry([InProcessMCPServer([FunctionTool(tool_a)])])
     tools1 = await registry.resolve()
@@ -166,8 +179,9 @@ class TestToolRegistry:
   @pytest.mark.asyncio
   async def test_duplicate_name_raises(self):
     def dupe(x: Annotated[str, Field(description='input')]) -> str:
-      """duplicate"""
       return x
+
+    describe(dupe, 'duplicate')
 
     server_a = InProcessMCPServer([FunctionTool(dupe)])
     server_b = InProcessMCPServer([FunctionTool(dupe)])
@@ -178,8 +192,9 @@ class TestToolRegistry:
   @pytest.mark.asyncio
   async def test_call_by_name(self):
     def reverse(text: Annotated[str, Field(description='text')]) -> str:
-      """reverse text"""
       return text[::-1]
+
+    describe(reverse, 'reverse text')
 
     registry = ToolRegistry([InProcessMCPServer([FunctionTool(reverse)])])
     result = await registry.call('reverse', {'text': 'hello'})

@@ -1,6 +1,10 @@
-import inspect
 from abc import ABC, abstractmethod
 from typing import Any, Awaitable, Callable, Iterable, cast
+
+
+def describe[F: Callable[..., Any]](fn: F, text: str) -> F:
+  fn.description = text  # type: ignore[attr-defined]
+  return fn
 
 
 class Tool(ABC):
@@ -35,9 +39,13 @@ class FunctionTool(Tool):
   ):
     from mcp.server.fastmcp.utilities.func_metadata import func_metadata
 
-    resolved_description = description if description is not None else inspect.getdoc(fn)
+    resolved_description = (
+      description if description is not None else getattr(fn, 'description', None)
+    )
     if not resolved_description:
-      raise ValueError(f'tool {fn.__name__!r} has no description and no docstring')
+      raise ValueError(
+        f'tool {fn.__name__!r} has no description attribute and no description argument'
+      )
     self._name = name if name is not None else fn.__name__
     self._description = resolved_description
     self.fn = fn
