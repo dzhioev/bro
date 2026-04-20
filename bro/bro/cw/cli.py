@@ -109,8 +109,6 @@ def _docker_run_argv(tag: str, name: str, worktree: Path, claude_args: list[str]
     f'{claude_dir}:/home/cw/.claude',
     '-v',
     f'{home}/.gitconfig:/home/cw/.gitconfig:ro',
-    '-v',
-    f'ppp-cw-venv-{name}:/workspace/.venv-linux',
     '-e',
     'HOME=/home/cw',
     '-w',
