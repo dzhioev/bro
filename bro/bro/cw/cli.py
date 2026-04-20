@@ -1,9 +1,13 @@
 #!/usr/bin/env python
 """create a git worktree and launch claude, optionally in an isolated docker container.
 
-with --container, mounts ~/.claude.json and ~/.claude/ rw into the container so
-claude's auth works. that gives any process inside full Claude auth; network is
-not restricted, so a compromised dep could exfiltrate.
+with --container, the worktree is bind-mounted at /workspace and claude runs
+inside. ~/.claude.json is bind-mounted rw so auth tokens work (and refresh
+writes back to host). ~/.claude/ is NOT shared: each worktree gets its own
+host-side directory at ~/.claude/cw-sessions/<name>/, seeded on first run
+from a read-only mount of the host's ~/.claude/ minus sensitive transcript
+data (sessions/projects/history.jsonl/cw-sessions). network is not restricted
+by design.
 """
 
 import argparse
@@ -88,19 +92,21 @@ def _ensure_image(tag: str) -> None:
 
 def _docker_run_argv(tag: str, name: str, worktree: Path, claude_args: list[str]) -> list[str]:
   home = Path.home()
+  claude_dir = home / '.claude' / 'cw-sessions' / name
+  claude_dir.mkdir(parents=True, exist_ok=True)
   return [
     'docker',
     'run',
     '-it',
     '--rm',
-    '--user',
-    f'{os.getuid()}:{os.getgid()}',
     '-v',
     f'{worktree}:/workspace',
     '-v',
     f'{home}/.claude.json:/home/cw/.claude.json',
     '-v',
-    f'{home}/.claude:/home/cw/.claude',
+    f'{home}/.claude:/host-claude:ro',
+    '-v',
+    f'{claude_dir}:/home/cw/.claude',
     '-v',
     f'{home}/.gitconfig:/home/cw/.gitconfig:ro',
     '-v',

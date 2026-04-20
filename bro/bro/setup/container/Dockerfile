@@ -10,8 +10,11 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 RUN npm install -g @anthropic-ai/claude-code
 
-RUN useradd -m -u 1000 -s /bin/bash cw
+RUN useradd -m -u 1000 -s /bin/bash cw \
+ && mkdir -p /home/cw/.claude \
+ && chown cw:cw /home/cw/.claude
 
+USER cw
 WORKDIR /workspace
 ENV UV_PROJECT_ENVIRONMENT=/workspace/.venv-linux \
     CW_IN_CONTAINER=1
