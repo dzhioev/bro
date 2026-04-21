@@ -1,13 +1,23 @@
 #!/usr/bin/env python
 """create a git worktree and launch claude, optionally in an isolated docker container.
 
-with --container, the worktree is bind-mounted at /workspace and claude runs
-inside. ~/.claude.json is bind-mounted rw so auth tokens work (and refresh
-writes back to host). ~/.claude/ is NOT shared: each worktree gets its own
-host-side directory at ~/.claude/cw-sessions/<name>/, seeded on first run
-from a read-only mount of the host's ~/.claude/ minus sensitive transcript
-data (sessions/projects/history.jsonl/cw-sessions). network is not restricted
-by design.
+host mode (default): creates a git worktree under .claude/worktrees/<name>/ and
+execs `claude -w <name>` from the project root.
+
+container mode (--container): /workspace is a fresh clone, not a worktree — the
+gitfile-based worktree layout doesn't survive the container boundary, and this
+keeps the container's git state genuinely isolated. layout:
+
+  - .claude/container-sessions/<name>/ on the host → /workspace rw
+    (empty on first run; entrypoint clones host repo into it)
+  - host project root → /host-repo ro
+    (clone --shared reads objects from here via alternates; also the source for
+    local submodule clones to avoid needing ssh keys in the container)
+  - ~/.claude.json rw (auth tokens; refresh writes back to host)
+  - ~/.claude → /host-claude ro (seeded once into the container-private
+    ~/.claude/cw-sessions/<name>/, minus sessions/projects/history)
+
+network is not restricted by design.
 """
 
 import argparse
@@ -27,9 +37,12 @@ def _git_out(*args: str, cwd: str | None = None) -> str:
   return subprocess.check_output(['git', *args], cwd=cwd, text=True).strip()
 
 
+def _project_root() -> Path:
+  return Path(_git_out('rev-parse', '--git-common-dir')).resolve().parent
+
+
 def _ensure_worktree(name: str) -> tuple[Path, Path]:
-  common = Path(_git_out('rev-parse', '--git-common-dir')).resolve()
-  proj = common.parent
+  proj = _project_root()
   worktree = proj / '.claude' / 'worktrees' / name
   branch = f'worktree-{name}'
   if worktree.is_dir():
@@ -44,7 +57,7 @@ def _ensure_worktree(name: str) -> tuple[Path, Path]:
   add_args = [str(worktree), branch] if has_branch else [str(worktree), '-b', branch]
   subprocess.run(['git', '-C', str(proj), 'worktree', 'add', *add_args], check=True)
   head = _git_out('-C', str(proj), 'rev-parse', 'HEAD')
-  (common / 'worktrees' / name / 'CLAUDE_BASE').write_text(head + '\n')
+  (proj / '.git' / 'worktrees' / name / 'CLAUDE_BASE').write_text(head + '\n')
   for key, val in (
     ('submodule.alternateLocation', 'superproject'),
     ('submodule.alternateErrorStrategy', 'info'),
@@ -90,7 +103,9 @@ def _ensure_image(tag: str) -> None:
   )
 
 
-def _docker_run_argv(tag: str, name: str, worktree: Path, claude_args: list[str]) -> list[str]:
+def _docker_run_argv(
+  tag: str, name: str, proj: Path, session: Path, claude_args: list[str]
+) -> list[str]:
   home = Path.home()
   claude_dir = home / '.claude' / 'cw-sessions' / name
   claude_dir.mkdir(parents=True, exist_ok=True)
@@ -100,7 +115,9 @@ def _docker_run_argv(tag: str, name: str, worktree: Path, claude_args: list[str]
     '-it',
     '--rm',
     '-v',
-    f'{worktree}:/workspace',
+    f'{session}:/workspace',
+    '-v',
+    f'{proj}:/host-repo:ro',
     '-v',
     f'{home}/.claude.json:/home/cw/.claude.json',
     '-v',
@@ -111,6 +128,8 @@ def _docker_run_argv(tag: str, name: str, worktree: Path, claude_args: list[str]
     f'{home}/.gitconfig:/home/cw/.gitconfig:ro',
     '-e',
     'HOME=/home/cw',
+    '-e',
+    f'CW_NAME={name}',
     '-w',
     '/workspace',
     tag,
@@ -126,14 +145,16 @@ def cw(name: str, container: bool, claude_args: list[str]) -> int:
     logging.info('already inside a container; falling back to host mode')
     container = False
 
-  proj, worktree = _ensure_worktree(name)
-  _run_session_hook(worktree)
-
   if container:
+    proj = _project_root()
+    session = proj / '.claude' / 'container-sessions' / name
+    session.mkdir(parents=True, exist_ok=True)
     tag = _image_tag()
     _ensure_image(tag)
-    os.execvp('docker', _docker_run_argv(tag, name, worktree, claude_args))
+    os.execvp('docker', _docker_run_argv(tag, name, proj, session, claude_args))
 
+  proj, worktree = _ensure_worktree(name)
+  _run_session_hook(worktree)
   os.chdir(proj)
   os.execvp('claude', ['claude', '-w', name, *claude_args])
 
