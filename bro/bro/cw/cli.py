@@ -109,7 +109,7 @@ def _docker_run_argv(
   ]
 
 
-def cw(name: str, container: bool, claude_args: list[str]) -> int:
+def cw(name: str, container: bool, drop: bool, claude_args: list[str]) -> int:
   if container and os.environ.get('CW_IN_CONTAINER'):
     logging.info('already inside a container; falling back to host mode')
     container = False
@@ -122,14 +122,27 @@ def cw(name: str, container: bool, claude_args: list[str]) -> int:
     _ensure_image(tag)
     os.execvp('docker', _docker_run_argv(tag, name, proj, session, claude_args))
 
-  os.chdir(_project_root())
-  os.execvp('claude', ['claude', '-w', name, *claude_args])
+  proj = _project_root()
+  os.chdir(proj)
+
+  if not drop:
+    os.execvp('claude', ['claude', '-w', name, *claude_args])
+
+  env = {**os.environ, 'CW_DROP': '1'}
+  result = subprocess.run(['claude', '-w', name, *claude_args], env=env)
+  worktree = proj / '.claude' / 'worktrees' / name
+  subprocess.run(['git', 'worktree', 'remove', '--force', str(worktree)], check=False)
+  subprocess.run(['git', 'branch', '-D', f'worktree-{name}'], check=False)
+  return result.returncode
 
 
 def main(argv=None):
   parser = Parser(description='launch claude -w in the project root, or in a container')
   parser.add_argument(
     '-c', '--container', action='store_true', help='run claude inside an isolated docker container'
+  )
+  parser.add_argument(
+    '--drop', action='store_true', help='remove the worktree on exit without prompting (host mode)'
   )
   parser.add_argument('name', help='worktree name')
   parser.add_argument('claude_args', nargs=argparse.REMAINDER, help='args forwarded to claude')
