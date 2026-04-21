@@ -78,7 +78,9 @@ class FunctionTool(Tool):
     return self._output_schema
 
   async def call(self, arguments: dict[str, Any]) -> dict[str, Any] | str:
-    result = self.fn(**arguments)
+    validated = self._metadata.arg_model.model_validate(self._metadata.pre_parse_json(arguments))
+    kwargs = validated.model_dump_one_level()
+    result = self.fn(**kwargs)
     if inspect.isawaitable(result):
       result = await result
     if self._output_schema is None:
