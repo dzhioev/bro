@@ -140,8 +140,8 @@ import re
 
 
 def _parse_env_table(out: str) -> list[dict[str, str]]:
-  lines = [l for l in out.splitlines() if l.strip()]
-  assert lines, 'expected at least a header row'
+  lines = [l for l in out.splitlines() if l.strip() != '']
+  assert len(lines) > 0, 'expected at least a header row'
   header = re.split(r'\s{2,}', lines[0].strip())
   rows = []
   for line in lines[1:]:

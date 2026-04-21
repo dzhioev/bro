@@ -13,7 +13,7 @@ from llm.mcp import MCPServer, ToolRegistry
 
 class LLM(ABC):
   def __init__(self, mcp_servers: list[MCPServer] | None = None):
-    self.tools = ToolRegistry(mcp_servers or [])
+    self.tools = ToolRegistry(mcp_servers if mcp_servers is not None else [])
 
   @abstractmethod
   async def tell(self, messages: list[dict]) -> None: ...

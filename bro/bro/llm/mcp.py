@@ -47,7 +47,7 @@ class FunctionTool(Tool):
     resolved_description = (
       description if description is not None else getattr(fn, 'description', None)
     )
-    if not resolved_description:
+    if resolved_description is None:
       raise ValueError(
         f'tool {fn.__name__!r} has no description attribute and no description argument'
       )

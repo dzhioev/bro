@@ -51,7 +51,7 @@ _N = TypeVar('_N')
 
 def _default_env_name(option_strings: Sequence[str]) -> str | None:
   long_opts = [o for o in option_strings if o.startswith('--')]
-  if not long_opts:
+  if len(long_opts) == 0:
     return None
   name = max(long_opts, key=len).lstrip('-')
   return name.replace('-', '_').upper()
@@ -77,10 +77,10 @@ class _Formatter(argparse.HelpFormatter):
     script = [a for a in actions if id(a) not in global_ids]
     glob = [a for a in actions if id(a) in global_ids]
     result = super()._format_usage(usage, script, groups, prefix)
-    if not glob:
+    if len(glob) == 0:
       return result
     glob_str = self._format_actions_usage(glob, []).strip()  # type: ignore[attr-defined]
-    if not glob_str:
+    if glob_str == '':
       return result
     body = result.rstrip('\n')
     lines = body.split('\n')
@@ -179,13 +179,16 @@ class Parser(argparse.ArgumentParser):
           continue
         originals[dest] = action.help
         env_name = info['env_name']
-        action.help = f'{action.help} (env: {env_name})' if action.help else f'(env: {env_name})'
+        if action.help is not None:
+          action.help = f'{action.help} (env: {env_name})'
+        else:
+          action.help = f'(env: {env_name})'
     try:
       help_text = super().format_help()
     finally:
       for dest, original in originals.items():
         self._env_info[dest]['action'].help = original
-    if not self._exclusive_groups:
+    if len(self._exclusive_groups) == 0:
       return help_text
     lines = ['', 'Constraints:']
     for groups in self._exclusive_groups:
@@ -197,8 +200,8 @@ class Parser(argparse.ArgumentParser):
     for groups in self._exclusive_groups:
       set_groups: list[list[str]] = []
       for group in groups:
-        set_args = [arg for arg in group if getattr(ns, arg, None)]
-        if set_args:
+        set_args = [arg for arg in group if bool(getattr(ns, arg, None))]
+        if len(set_args) > 0:
           set_groups.append(set_args)
       if len(set_groups) > 1:
         formatted = ' and '.join(

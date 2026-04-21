@@ -16,12 +16,13 @@ def _encode_cwd(cwd: str) -> str:
 
 def _find_session_jsonl() -> Path:
   projects_root = Path.home() / '.claude' / 'projects'
-  cwd = Path(os.environ.get('PWD') or os.getcwd()).resolve()
+  pwd = os.environ.get('PWD')
+  cwd = Path(pwd if pwd is not None else os.getcwd()).resolve()
   for candidate in [cwd, *cwd.parents]:
     project_dir = projects_root / _encode_cwd(str(candidate))
     if project_dir.is_dir():
       jsonls = sorted(project_dir.glob('*.jsonl'), key=lambda p: p.stat().st_mtime)
-      if jsonls:
+      if len(jsonls) > 0:
         return jsonls[-1]
   raise SystemExit(f'no Claude Code session transcript found for {cwd}')
 
@@ -47,7 +48,7 @@ def _last_usage(path: Path) -> tuple[str, int]:
 
 def _model_label(slug: str) -> str:
   m = re.match(r'^claude-(opus|sonnet|haiku)-(\d+)-(\d+)', slug)
-  if not m:
+  if m is None:
     return slug
   family, maj, minor = m.groups()
   return f'{family.title()} {maj}.{minor}'
@@ -63,7 +64,7 @@ def _format_tokens(n: int) -> str:
 
 def _version() -> str:
   execpath = os.environ.get('CLAUDE_CODE_EXECPATH')
-  return Path(execpath).name if execpath else 'unknown'
+  return Path(execpath).name if execpath is not None else 'unknown'
 
 
 def main() -> int:

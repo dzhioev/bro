@@ -15,7 +15,7 @@ class Echo(llm.llm.LLM):
     self.messages = messages
 
   async def ask(self) -> str:
-    if not self.messages:
+    if len(self.messages) == 0:
       return ''
     last = self.messages[-1]
     content = last.get('content', '')

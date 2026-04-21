@@ -42,7 +42,7 @@ async def run(mcp_server: MCPServer):
     tool = tools_by_name.get(name)
     if tool is None:
       raise ValueError(f'unknown tool: {name}')
-    result = await tool.call(arguments or {})
+    result = await tool.call(arguments if arguments is not None else {})
     if isinstance(result, dict):
       return result
     return [types.TextContent(type='text', text=result)]

@@ -85,7 +85,7 @@ def _build_scripts(entries: list[dict]) -> dict[str, str]:
   for e in entries:
     target = f'{e["module"]}:main'
     add(e['canonical'], target)
-    if e['explicit'] and e['explicit'] != e['canonical']:
+    if e['explicit'] is not None and e['explicit'] != e['canonical']:
       add(e['explicit'], target)
   return scripts
 
@@ -128,14 +128,14 @@ def _render_py_modules(modules: list[str]) -> str:
 
 def _replace_scripts(text: str, body: str) -> str:
   pat = re.compile(r'(?ms)^(\[project\.scripts\][ \t]*\n)(.*?)(?=^\[|\Z)')
-  if not pat.search(text):
+  if pat.search(text) is None:
     raise ValueError('[project.scripts] not found')
   return pat.sub(lambda m: m.group(1) + body + '\n\n', text)
 
 
 def _replace_py_modules(text: str, block: str) -> str:
   pat = re.compile(r'py-modules\s*=\s*\[[^\]]*\]')
-  if not pat.search(text):
+  if pat.search(text) is None:
     raise ValueError('py-modules not found')
   return pat.sub(block, text)
 

@@ -19,8 +19,8 @@ def _caller_scope():
   frame = sys._getframe(2)
   module = frame.f_globals.get('__name__', '')
   if module == '__main__':
-    filepath = frame.f_globals.get('__file__', '')
-    return os.path.splitext(os.path.basename(filepath))[0] if filepath else 'main'
+    filepath = frame.f_globals.get('__file__')
+    return os.path.splitext(os.path.basename(filepath))[0] if filepath is not None else 'main'
   return module
 
 

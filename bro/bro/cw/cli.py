@@ -110,7 +110,7 @@ def _docker_run_argv(
 
 
 def cw(name: str, container: bool, drop: bool, claude_args: list[str]) -> int:
-  if container and os.environ.get('CW_IN_CONTAINER'):
+  if container and os.environ.get('CW_IN_CONTAINER') is not None:
     logging.info('already inside a container; falling back to host mode')
     container = False
 
