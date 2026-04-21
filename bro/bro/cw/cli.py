@@ -1,8 +1,10 @@
 #!/usr/bin/env python
-"""create a git worktree and launch claude, optionally in an isolated docker container.
+"""launch claude, optionally in an isolated docker container.
 
-host mode (default): creates a git worktree under .claude/worktrees/<name>/ and
-execs `claude -w <name>` from the project root.
+host mode (default): execs `claude -w <name>` from the project root. Claude's
+`-w` flag owns the worktree lifecycle (create, keep/drop prompt, cleanup); our
+.claude/hooks/worktree_create.sh WorktreeCreate hook applies project-specific
+provisioning (branch naming, CLAUDE_BASE marker, submodule alternateLocation).
 
 container mode (--container): /workspace is a fresh clone, not a worktree — the
 gitfile-based worktree layout doesn't survive the container boundary, and this
@@ -39,39 +41,6 @@ def _git_out(*args: str, cwd: str | None = None) -> str:
 
 def _project_root() -> Path:
   return Path(_git_out('rev-parse', '--git-common-dir')).resolve().parent
-
-
-def _ensure_worktree(name: str) -> tuple[Path, Path]:
-  proj = _project_root()
-  worktree = proj / '.claude' / 'worktrees' / name
-  branch = f'worktree-{name}'
-  if worktree.is_dir():
-    return proj, worktree
-
-  has_branch = (
-    subprocess.run(
-      ['git', '-C', str(proj), 'show-ref', '--verify', '--quiet', f'refs/heads/{branch}']
-    ).returncode
-    == 0
-  )
-  add_args = [str(worktree), branch] if has_branch else [str(worktree), '-b', branch]
-  subprocess.run(['git', '-C', str(proj), 'worktree', 'add', *add_args], check=True)
-  head = _git_out('-C', str(proj), 'rev-parse', 'HEAD')
-  (proj / '.git' / 'worktrees' / name / 'CLAUDE_BASE').write_text(head + '\n')
-  for key, val in (
-    ('submodule.alternateLocation', 'superproject'),
-    ('submodule.alternateErrorStrategy', 'info'),
-  ):
-    subprocess.run(['git', '-C', str(worktree), 'config', key, val], check=True)
-  return proj, worktree
-
-
-def _run_session_hook(worktree: Path) -> None:
-  hook = worktree / '.claude' / 'hooks' / 'session_start.sh'
-  if not (hook.is_file() and os.access(hook, os.X_OK)):
-    return
-  env = {**os.environ, 'CLAUDE_PROJECT_DIR': str(worktree)}
-  subprocess.run([str(hook)], check=True, env=env)
 
 
 def _image_tag() -> str:
@@ -153,14 +122,12 @@ def cw(name: str, container: bool, claude_args: list[str]) -> int:
     _ensure_image(tag)
     os.execvp('docker', _docker_run_argv(tag, name, proj, session, claude_args))
 
-  proj, worktree = _ensure_worktree(name)
-  _run_session_hook(worktree)
-  os.chdir(proj)
+  os.chdir(_project_root())
   os.execvp('claude', ['claude', '-w', name, *claude_args])
 
 
 def main(argv=None):
-  parser = Parser(description='create a git worktree and launch claude')
+  parser = Parser(description='launch claude -w in the project root, or in a container')
   parser.add_argument(
     '-c', '--container', action='store_true', help='run claude inside an isolated docker container'
   )
