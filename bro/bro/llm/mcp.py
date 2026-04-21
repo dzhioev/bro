@@ -1,5 +1,6 @@
+import inspect
 from abc import ABC, abstractmethod
-from typing import Any, Awaitable, Callable, Iterable, cast
+from typing import Any, Callable, Iterable
 
 
 def describe[F: Callable[..., Any]](fn: F, text: str) -> F:
@@ -20,8 +21,12 @@ class Tool(ABC):
   @abstractmethod
   def parameters(self) -> dict[str, Any]: ...
 
+  @property
+  def output_schema(self) -> dict[str, Any] | None:
+    return None
+
   @abstractmethod
-  async def call(self, arguments: dict[str, Any]) -> str: ...
+  async def call(self, arguments: dict[str, Any]) -> dict[str, Any] | str: ...
 
 
 class MCPServer(ABC):
@@ -32,7 +37,7 @@ class MCPServer(ABC):
 class FunctionTool(Tool):
   def __init__(
     self,
-    fn: Callable[..., str | Awaitable[str]],
+    fn: Callable[..., Any],
     *,
     name: str | None = None,
     description: str | None = None,
@@ -49,7 +54,12 @@ class FunctionTool(Tool):
     self._name = name if name is not None else fn.__name__
     self._description = resolved_description
     self.fn = fn
-    self._parameters = func_metadata(fn).arg_model.model_json_schema(by_alias=True)
+
+    ret = inspect.signature(fn).return_annotation
+    structured = ret is not inspect.Signature.empty and ret is not str
+    self._metadata = func_metadata(fn, structured_output=structured)
+    self._output_schema = self._metadata.output_schema
+    self._parameters = self._metadata.arg_model.model_json_schema(by_alias=True)
 
   @property
   def name(self) -> str:
@@ -63,11 +73,24 @@ class FunctionTool(Tool):
   def parameters(self) -> dict[str, Any]:
     return self._parameters
 
-  async def call(self, arguments: dict[str, Any]) -> str:
-    result: str | Awaitable[str] = self.fn(**arguments)
-    if isinstance(result, str):
+  @property
+  def output_schema(self) -> dict[str, Any] | None:
+    return self._output_schema
+
+  async def call(self, arguments: dict[str, Any]) -> dict[str, Any] | str:
+    result = self.fn(**arguments)
+    if inspect.isawaitable(result):
+      result = await result
+    if self._output_schema is None:
+      assert isinstance(result, str), (
+        f'unstructured tool {self._name!r} must return str, got {type(result).__name__}'
+      )
       return result
-    return await cast(Awaitable[str], result)
+    assert self._metadata.output_model is not None
+    if self._metadata.wrap_output:
+      result = {'result': result}
+    validated = self._metadata.output_model.model_validate(result)
+    return validated.model_dump(mode='json', by_alias=True)
 
 
 class InProcessMCPServer(MCPServer):
@@ -95,7 +118,7 @@ class ToolRegistry:
     self._tools_by_name = tools_by_name
     return list(tools_by_name.values())
 
-  async def call(self, name: str, arguments: dict[str, Any]) -> str:
+  async def call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any] | str:
     if self._tools_by_name is None:
       await self.resolve()
     assert self._tools_by_name is not None

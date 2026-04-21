@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 import pytest
 from typing import Annotated
 
@@ -90,6 +91,39 @@ class TestFunctionTool:
 
     result = await tool.call({'name': 'world', 'greeting': 'hi'})
     assert result == 'hi world'
+
+  def test_str_return_has_no_output_schema(self):
+    def echo(text: Annotated[str, Field(description='text')]) -> str:
+      return text
+
+    describe(echo, 'echo')
+
+    tool = FunctionTool(echo)
+    assert tool.output_schema is None
+
+  @pytest.mark.asyncio
+  async def test_dataclass_return_produces_structured_output(self):
+    @dataclass
+    class Point:
+      x: int
+      y: int
+      label: str | None
+
+    def make_point(
+      x: Annotated[int, Field(description='x')],
+      y: Annotated[int, Field(description='y')],
+    ) -> Point:
+      return Point(x=x, y=y, label=None)
+
+    describe(make_point, 'make a point')
+
+    tool = FunctionTool(make_point)
+    schema = tool.output_schema
+    assert schema is not None
+    assert set(schema['properties'].keys()) == {'x', 'y', 'label'}
+
+    result = await tool.call({'x': 1, 'y': 2})
+    assert result == {'x': 1, 'y': 2, 'label': None}
 
 
 class TestInProcessMCPServer:

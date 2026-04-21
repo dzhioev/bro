@@ -28,15 +28,23 @@ async def run(mcp_server: MCPServer):
   @server.list_tools()
   async def handle_list_tools() -> list[types.Tool]:
     return [
-      types.Tool(name=t.name, description=t.description, inputSchema=t.parameters) for t in tools
+      types.Tool(
+        name=t.name,
+        description=t.description,
+        inputSchema=t.parameters,
+        outputSchema=t.output_schema,
+      )
+      for t in tools
     ]
 
   @server.call_tool()
-  async def handle_call_tool(name: str, arguments: dict | None) -> list[types.TextContent]:
+  async def handle_call_tool(name: str, arguments: dict | None) -> list[types.TextContent] | dict:
     tool = tools_by_name.get(name)
     if tool is None:
       raise ValueError(f'unknown tool: {name}')
     result = await tool.call(arguments or {})
+    if isinstance(result, dict):
+      return result
     return [types.TextContent(type='text', text=result)]
 
   async with stdio_server() as (read_stream, write_stream):
