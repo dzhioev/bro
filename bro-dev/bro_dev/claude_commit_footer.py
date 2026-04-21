@@ -71,7 +71,7 @@ def main() -> int:
   model_slug, tokens = _last_usage(path)
   print(
     f'> created with Claude Code {_version()} '
-    f'({_model_label(model_slug)}, context: {_format_tokens(tokens)})'
+    f'({_model_label(model_slug)}, context used: {_format_tokens(tokens)})'
   )
   return 0
 
