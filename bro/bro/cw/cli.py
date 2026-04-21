@@ -10,7 +10,7 @@ container mode (--container): /workspace is a fresh clone, not a worktree — th
 gitfile-based worktree layout doesn't survive the container boundary, and this
 keeps the container's git state genuinely isolated. layout:
 
-  - .claude/container-sessions/<name>/ on the host → /workspace rw
+  - var/cw/containers/<name>/ on the host → /workspace rw
     (empty on first run; entrypoint clones host repo into it)
   - host project root → /host-repo ro
     (clone --shared reads objects from here via alternates; also the source for
@@ -116,7 +116,7 @@ def cw(name: str, container: bool, drop: bool, claude_args: list[str]) -> int:
 
   if container:
     proj = _project_root()
-    session = proj / '.claude' / 'container-sessions' / name
+    session = proj / 'var' / 'cw' / 'containers' / name
     session.mkdir(parents=True, exist_ok=True)
     tag = _image_tag()
     _ensure_image(tag)
