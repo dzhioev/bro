@@ -19,7 +19,7 @@ from base.args import Parser
 
 ROOT = Path(__file__).resolve().parent
 PYPROJECT = ROOT / 'pyproject.toml'
-SKIP_DIRS = {'.venv', 'build', '.claude', 'env', '__pycache__'}
+SKIP_DIRS = {'.venv', 'build', '.claude', 'setup', '__pycache__'}
 
 
 def _iter_py_files():
