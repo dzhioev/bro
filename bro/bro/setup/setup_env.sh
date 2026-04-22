@@ -169,14 +169,8 @@ install_uv() {
   fi
 }
 
-install_requirements() {
-  echo "Installing Python requirements via uv sync..."
-  (cd "$SCRIPT_DIR/.." && uv sync --all-groups)
-}
-
 install_stow
 install_claude_code
 install_docker
 install_awscli
 install_uv
-install_requirements
