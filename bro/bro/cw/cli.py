@@ -27,13 +27,13 @@ network is not restricted by design.
 import argparse
 import hashlib
 import json
-import logging
 import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
+from base import log
 from base.args import Parser
 
 CONTAINER_DIR = Path(__file__).resolve().parent / '.claude' / 'container'
@@ -61,7 +61,7 @@ def _ensure_image(tag: str) -> None:
   inspect = subprocess.run(['docker', 'image', 'inspect', tag], capture_output=True, text=True)
   if inspect.returncode == 0:
     return
-  logging.info('building %s', tag)
+  log.info('building %s', tag)
   subprocess.run(
     [
       'docker',
@@ -276,18 +276,20 @@ def clean_workspaces() -> int:
       if not p.is_dir():
         continue
       if _is_local_active(p.name):
-        logging.info('skip %s: active session', p.name)
+        log.info('skip %s: active session', p.name)
         skipped += 1
         continue
       safe, reasons = _worktree_is_clean(p)
       if not safe:
-        logging.info('skip %s: %s', p.name, '; '.join(reasons))
+        log.info('skip %s: %s', p.name, '; '.join(reasons))
         skipped += 1
         continue
       branch = f'worktree-{p.name}'
-      subprocess.run(['git', 'worktree', 'remove', '--force', str(p)], check=False)
-      subprocess.run(['git', 'branch', '-D', branch], check=False)
-      logging.info('removed %s', p.name)
+      subprocess.run(
+        ['git', 'worktree', 'remove', '--force', str(p)], check=False, capture_output=True
+      )
+      subprocess.run(['git', 'branch', '-D', branch], check=False, capture_output=True)
+      log.info('removed %s', p.name)
       removed += 1
 
   if containers_dir.is_dir():
@@ -296,28 +298,28 @@ def clean_workspaces() -> int:
       if not p.is_dir():
         continue
       if str(p) in mounts:
-        logging.info('skip %s (container): active session', p.name)
+        log.info('skip %s (container): active session', p.name)
         skipped += 1
         continue
       safe, reasons = _worktree_is_clean(p)
       if not safe:
-        logging.info('skip %s (container): %s', p.name, '; '.join(reasons))
+        log.info('skip %s (container): %s', p.name, '; '.join(reasons))
         skipped += 1
         continue
       shutil.rmtree(p)
       session_dir = Path.home() / '.claude' / 'cw-sessions' / p.name
       if session_dir.is_dir():
         shutil.rmtree(session_dir)
-      logging.info('removed %s (container)', p.name)
+      log.info('removed %s (container)', p.name)
       removed += 1
 
-  logging.info('cleaned %d workspace(s), skipped %d', removed, skipped)
+  log.info('cleaned %d workspace(s), skipped %d', removed, skipped)
   return 0
 
 
 def cw(name: str, container: bool, drop: bool, claude_args: list[str]) -> int:
   if container and os.environ.get('CW_IN_CONTAINER') is not None:
-    logging.info('already inside a container; falling back to host mode')
+    log.info('already inside a container; falling back to host mode')
     container = False
 
   if container:
@@ -337,8 +339,10 @@ def cw(name: str, container: bool, drop: bool, claude_args: list[str]) -> int:
   env = {**os.environ, 'CW_DROP': '1'}
   result = subprocess.run(['claude', '-w', name, *claude_args], env=env)
   worktree = proj / '.claude' / 'worktrees' / name
-  subprocess.run(['git', 'worktree', 'remove', '--force', str(worktree)], check=False)
-  subprocess.run(['git', 'branch', '-D', f'worktree-{name}'], check=False)
+  subprocess.run(
+    ['git', 'worktree', 'remove', '--force', str(worktree)], check=False, capture_output=True
+  )
+  subprocess.run(['git', 'branch', '-D', f'worktree-{name}'], check=False, capture_output=True)
   return result.returncode
 
 
