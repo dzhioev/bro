@@ -183,6 +183,10 @@ def _truncate(s: str, n: int) -> str:
   return s if len(s) <= n else s[: n - 1] + '…'
 
 
+_BADGES = {'L': '[.]', 'C': '[o]', 'X': '[x]'}
+_KIND_ORDER = {'L': 0, 'C': 1, 'X': 2}
+
+
 def list_workspaces() -> int:
   proj = _project_root()
   worktrees_dir = proj / '.claude' / 'worktrees'
@@ -190,25 +194,27 @@ def list_workspaces() -> int:
 
   entries: list[tuple[str, str, str | None]] = []
   if worktrees_dir.is_dir():
-    for p in sorted(worktrees_dir.iterdir()):
+    for p in worktrees_dir.iterdir():
       if p.is_dir():
         kind = 'L' if _is_local_active(p.name) else 'X'
         entries.append((kind, p.name, _subject_for_local(p.name, proj)))
   if containers_dir.is_dir():
     mounts = _running_container_mounts()
-    for p in sorted(containers_dir.iterdir()):
+    for p in containers_dir.iterdir():
       if p.is_dir():
         kind = 'C' if str(p) in mounts else 'X'
         entries.append((kind, p.name, _subject_for_container(p.name)))
 
   if len(entries) == 0:
     return 0
+  entries.sort(key=lambda e: (_KIND_ORDER[e[0]], e[1]))
   name_w = max(len(name) for _, name, _ in entries)
   for kind, name, subject in entries:
+    badge = _BADGES[kind]
     if subject is None:
-      print(f'{kind}  {name}')
+      print(f'{badge} {name}')
     else:
-      print(f'{kind}  {name:<{name_w}}  {_truncate(subject, 80)}')
+      print(f'{badge} {name:<{name_w}}  {_truncate(subject, 80)}')
   return 0
 
 
@@ -242,7 +248,10 @@ def cw(name: str, container: bool, drop: bool, claude_args: list[str]) -> int:
 def main(argv=None):
   parser = Parser(description='launch claude -w in the project root, or in a container')
   parser.add_argument(
-    '-l', '--list', action='store_true', help='list workspaces (L=local, C=container, X=abandoned)'
+    '-l',
+    '--list',
+    action='store_true',
+    help='list workspaces ([.]=local, [o]=container, [x]=abandoned)',
   )
   parser.add_argument(
     '-c', '--container', action='store_true', help='run claude inside an isolated docker container'
