@@ -26,6 +26,7 @@ network is not restricted by design.
 
 import argparse
 import hashlib
+import json
 import logging
 import os
 import subprocess
@@ -129,24 +130,85 @@ def _running_container_mounts() -> set[str]:
   return {line for line in inspect.stdout.splitlines() if len(line) > 0}
 
 
+def _read_subject(projects_dir: Path) -> str | None:
+  if not projects_dir.is_dir():
+    return None
+  jsonls = [p for p in projects_dir.iterdir() if p.suffix == '.jsonl']
+  if len(jsonls) == 0:
+    return None
+  latest = max(jsonls, key=lambda p: p.stat().st_mtime)
+  try:
+    f = latest.open()
+  except OSError:
+    return None
+  with f:
+    for line in f:
+      try:
+        d = json.loads(line)
+      except json.JSONDecodeError:
+        continue
+      if d.get('type') != 'user' or d.get('isSidechain') is True:
+        continue
+      content = d.get('message', {}).get('content')
+      text: str | None = None
+      if isinstance(content, str):
+        text = content
+      elif isinstance(content, list):
+        for c in content:
+          if isinstance(c, dict) and c.get('type') == 'text':
+            text = c.get('text')
+            break
+      if text is None:
+        continue
+      stripped = text.lstrip()
+      if stripped.startswith('<'):
+        continue
+      first_line = stripped.split('\n', 1)[0].strip()
+      if len(first_line) > 0:
+        return first_line
+  return None
+
+
+def _subject_for_local(name: str, proj: Path) -> str | None:
+  worktree = proj / '.claude' / 'worktrees' / name
+  encoded = str(worktree).replace('/', '-').replace('.', '-')
+  return _read_subject(Path.home() / '.claude' / 'projects' / encoded)
+
+
+def _subject_for_container(name: str) -> str | None:
+  return _read_subject(Path.home() / '.claude' / 'cw-sessions' / name / 'projects' / '-workspace')
+
+
+def _truncate(s: str, n: int) -> str:
+  return s if len(s) <= n else s[: n - 1] + '…'
+
+
 def list_workspaces() -> int:
   proj = _project_root()
   worktrees_dir = proj / '.claude' / 'worktrees'
   containers_dir = proj / 'var' / 'cw' / 'containers'
 
-  entries: list[tuple[str, str]] = []
+  entries: list[tuple[str, str, str | None]] = []
   if worktrees_dir.is_dir():
     for p in sorted(worktrees_dir.iterdir()):
       if p.is_dir():
-        entries.append(('L' if _is_local_active(p.name) else 'X', p.name))
+        kind = 'L' if _is_local_active(p.name) else 'X'
+        entries.append((kind, p.name, _subject_for_local(p.name, proj)))
   if containers_dir.is_dir():
     mounts = _running_container_mounts()
     for p in sorted(containers_dir.iterdir()):
       if p.is_dir():
-        entries.append(('C' if str(p) in mounts else 'X', p.name))
+        kind = 'C' if str(p) in mounts else 'X'
+        entries.append((kind, p.name, _subject_for_container(p.name)))
 
-  for kind, name in entries:
-    print(f'{kind}  {name}')
+  if len(entries) == 0:
+    return 0
+  name_w = max(len(name) for _, name, _ in entries)
+  for kind, name, subject in entries:
+    if subject is None:
+      print(f'{kind}  {name}')
+    else:
+      print(f'{kind}  {name:<{name_w}}  {_truncate(subject, 80)}')
   return 0
 
 
