@@ -29,6 +29,7 @@ import hashlib
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -220,6 +221,100 @@ def list_workspaces() -> int:
   return 0
 
 
+def _worktree_is_clean(path: Path) -> tuple[bool, list[str]]:
+  """check whether a worktree is safe to remove.
+
+  returns (safe, reasons) where reasons lists what prevents removal.
+  """
+  reasons: list[str] = []
+  status = subprocess.run(
+    ['git', 'status', '--porcelain'], cwd=path, capture_output=True, text=True
+  )
+  if status.returncode != 0:
+    reasons.append('cannot read git status')
+    return False, reasons
+  if len(status.stdout.strip()) > 0:
+    reasons.append('uncommitted or untracked changes')
+
+  subprocess.run(['git', 'fetch', '--quiet', 'origin', 'master'], cwd=path, capture_output=True)
+  master_check = subprocess.run(
+    ['git', 'rev-parse', '--verify', 'origin/master'],
+    cwd=path,
+    capture_output=True,
+  )
+  if master_check.returncode != 0:
+    reasons.append('origin/master not found')
+  else:
+    ancestor = subprocess.run(
+      ['git', 'merge-base', '--is-ancestor', 'HEAD', 'origin/master'],
+      cwd=path,
+      capture_output=True,
+    )
+    if ancestor.returncode != 0:
+      ahead = subprocess.run(
+        ['git', 'rev-list', '--count', 'HEAD', '^origin/master'],
+        cwd=path,
+        capture_output=True,
+        text=True,
+      )
+      n = ahead.stdout.strip() if ahead.returncode == 0 else '?'
+      reasons.append(f'{n} commit(s) not on origin/master')
+
+  return len(reasons) == 0, reasons
+
+
+def clean_workspaces() -> int:
+  proj = _project_root()
+  worktrees_dir = proj / '.claude' / 'worktrees'
+  containers_dir = proj / 'var' / 'cw' / 'containers'
+
+  removed = 0
+  skipped = 0
+
+  if worktrees_dir.is_dir():
+    for p in sorted(worktrees_dir.iterdir()):
+      if not p.is_dir():
+        continue
+      if _is_local_active(p.name):
+        logging.info('skip %s: active session', p.name)
+        skipped += 1
+        continue
+      safe, reasons = _worktree_is_clean(p)
+      if not safe:
+        logging.info('skip %s: %s', p.name, '; '.join(reasons))
+        skipped += 1
+        continue
+      branch = f'worktree-{p.name}'
+      subprocess.run(['git', 'worktree', 'remove', '--force', str(p)], check=False)
+      subprocess.run(['git', 'branch', '-D', branch], check=False)
+      logging.info('removed %s', p.name)
+      removed += 1
+
+  if containers_dir.is_dir():
+    mounts = _running_container_mounts()
+    for p in sorted(containers_dir.iterdir()):
+      if not p.is_dir():
+        continue
+      if str(p) in mounts:
+        logging.info('skip %s (container): active session', p.name)
+        skipped += 1
+        continue
+      safe, reasons = _worktree_is_clean(p)
+      if not safe:
+        logging.info('skip %s (container): %s', p.name, '; '.join(reasons))
+        skipped += 1
+        continue
+      shutil.rmtree(p)
+      session_dir = Path.home() / '.claude' / 'cw-sessions' / p.name
+      if session_dir.is_dir():
+        shutil.rmtree(session_dir)
+      logging.info('removed %s (container)', p.name)
+      removed += 1
+
+  logging.info('cleaned %d workspace(s), skipped %d', removed, skipped)
+  return 0
+
+
 def cw(name: str, container: bool, drop: bool, claude_args: list[str]) -> int:
   if container and os.environ.get('CW_IN_CONTAINER') is not None:
     logging.info('already inside a container; falling back to host mode')
@@ -256,19 +351,28 @@ def main(argv=None):
     help='list workspaces ([.]=local, [o]=container, [x]=abandoned)',
   )
   parser.add_argument(
+    '--clean',
+    action='store_true',
+    help='remove stale workspaces that have no uncommitted or unpushed changes',
+  )
+  parser.add_argument(
     '-c', '--container', action='store_true', help='run claude inside an isolated docker container'
   )
   parser.add_argument(
     '--drop', action='store_true', help='remove the worktree on exit without prompting (host mode)'
   )
   parser.add_argument(
-    '--auto', action='store_true', help='let claude run autonomously, skipping most permissions (allowed only with -c)'
+    '--auto',
+    action='store_true',
+    help='let claude run autonomously, skipping most permissions (allowed only with -c)',
   )
   parser.add_argument('name', nargs='?', help='worktree name')
   parser.add_argument('claude_args', nargs=argparse.REMAINDER, help='args forwarded to claude')
   args = parser.parse(argv)
   if args.pop('list'):
     return list_workspaces()
+  if args.pop('clean'):
+    return clean_workspaces()
   if args['name'] is None:
     parser.error('name is required (or pass --list)')
   auto = args.pop('auto')
