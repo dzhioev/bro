@@ -110,6 +110,46 @@ def _docker_run_argv(
   return [*argv, tag, 'claude', *claude_args]
 
 
+def _is_local_active(name: str) -> bool:
+  result = subprocess.run(['pgrep', '-f', f'claude -w {name}'], capture_output=True)
+  return result.returncode == 0
+
+
+def _running_container_mounts() -> set[str]:
+  ids = subprocess.run(['docker', 'ps', '-q'], capture_output=True, text=True)
+  if ids.returncode != 0 or len(ids.stdout.split()) == 0:
+    return set()
+  inspect = subprocess.run(
+    ['docker', 'inspect', '--format', '{{range .Mounts}}{{.Source}}\n{{end}}', *ids.stdout.split()],
+    capture_output=True,
+    text=True,
+  )
+  if inspect.returncode != 0:
+    return set()
+  return {line for line in inspect.stdout.splitlines() if len(line) > 0}
+
+
+def list_workspaces() -> int:
+  proj = _project_root()
+  worktrees_dir = proj / '.claude' / 'worktrees'
+  containers_dir = proj / 'var' / 'cw' / 'containers'
+
+  entries: list[tuple[str, str]] = []
+  if worktrees_dir.is_dir():
+    for p in sorted(worktrees_dir.iterdir()):
+      if p.is_dir():
+        entries.append(('L' if _is_local_active(p.name) else 'X', p.name))
+  if containers_dir.is_dir():
+    mounts = _running_container_mounts()
+    for p in sorted(containers_dir.iterdir()):
+      if p.is_dir():
+        entries.append(('C' if str(p) in mounts else 'X', p.name))
+
+  for kind, name in entries:
+    print(f'{kind}  {name}')
+  return 0
+
+
 def cw(name: str, container: bool, drop: bool, claude_args: list[str]) -> int:
   if container and os.environ.get('CW_IN_CONTAINER') is not None:
     logging.info('already inside a container; falling back to host mode')
@@ -140,14 +180,22 @@ def cw(name: str, container: bool, drop: bool, claude_args: list[str]) -> int:
 def main(argv=None):
   parser = Parser(description='launch claude -w in the project root, or in a container')
   parser.add_argument(
+    '-l', '--list', action='store_true', help='list workspaces (L=local, C=container, X=abandoned)'
+  )
+  parser.add_argument(
     '-c', '--container', action='store_true', help='run claude inside an isolated docker container'
   )
   parser.add_argument(
     '--drop', action='store_true', help='remove the worktree on exit without prompting (host mode)'
   )
-  parser.add_argument('name', help='worktree name')
+  parser.add_argument('name', nargs='?', help='worktree name')
   parser.add_argument('claude_args', nargs=argparse.REMAINDER, help='args forwarded to claude')
-  return cw(**parser.parse(argv))
+  args = parser.parse(argv)
+  if args.pop('list'):
+    return list_workspaces()
+  if args['name'] is None:
+    parser.error('name is required (or pass --list)')
+  return cw(**args)
 
 
 if __name__ == '__main__':
