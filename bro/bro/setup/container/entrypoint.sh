@@ -62,6 +62,12 @@ if [ ! -d /workspace/.git ]; then
   fi
 fi
 
+# seed host git config into a writable copy (the host file is bind-mounted
+# read-only at /host-gitconfig; git config --global needs atomic rename)
+if [ -f /host-gitconfig ] && [ ! -f "$HOME/.gitconfig" ]; then
+  cp /host-gitconfig "$HOME/.gitconfig"
+fi
+
 # configure git to authenticate with a GitHub token when available
 if [ -f /run/secrets/github_token ]; then
   git config --global credential.helper \
