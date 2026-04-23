@@ -97,6 +97,8 @@ def _docker_run_argv(
     '-v',
     f'{claude_dir}:/home/cw/.claude',
     '-v',
+    f'{home}/.claude/settings.json:/home/cw/.claude/settings.json:ro',
+    '-v',
     f'{home}/.gitconfig:/host-gitconfig:ro',
     '-e',
     'HOME=/home/cw',
