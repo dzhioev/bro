@@ -18,6 +18,8 @@ keeps the container's git state genuinely isolated. layout:
   - ~/.claude.json rw (auth tokens; refresh writes back to host)
   - ~/.claude → /host-claude ro (seeded once into the container-private
     ~/.claude/cw-sessions/<name>/, minus sessions/projects/history)
+  - .configs/cw_github_token → /run/secrets/github_token ro (when present;
+    entrypoint configures git credential helper for https push)
 
 network is not restricted by design.
 """
@@ -78,7 +80,7 @@ def _docker_run_argv(
   home = Path.home()
   claude_dir = home / '.claude' / 'cw-sessions' / name
   claude_dir.mkdir(parents=True, exist_ok=True)
-  return [
+  argv = [
     'docker',
     'run',
     '-it',
@@ -101,10 +103,11 @@ def _docker_run_argv(
     f'CW_NAME={name}',
     '-w',
     '/workspace',
-    tag,
-    'claude',
-    *claude_args,
   ]
+  github_token = (proj / '.configs' / 'cw_github_token').resolve()
+  if github_token.is_file():
+    argv += ['-v', f'{github_token}:/run/secrets/github_token:ro']
+  return [*argv, tag, 'claude', *claude_args]
 
 
 def cw(name: str, container: bool, drop: bool, claude_args: list[str]) -> int:

@@ -34,6 +34,8 @@ if [ ! -d /workspace/.git ]; then
   git -c protocol.file.allow=always clone --shared /host-repo /workspace >&2
   cd /workspace
   host_origin="$(git -C /host-repo config --get remote.origin.url)"
+  # convert ssh URL to https so the container can push with a token
+  host_origin="$(echo "$host_origin" | sed 's|^git@github\.com:|https://github.com/|')"
   git remote set-url origin "$host_origin"
   git remote add host /host-repo
   branch="worktree-$CW_NAME"
@@ -59,6 +61,28 @@ if [ ! -d /workspace/.git ]; then
         done
   fi
 fi
+
+# configure git to authenticate with a GitHub token when available
+if [ -f /run/secrets/github_token ]; then
+  git config --global credential.helper \
+    '!f() { echo "username=x-access-token"; echo "password=$(cat /run/secrets/github_token)"; }; f'
+fi
+
+# block non-fast-forward pushes — the container token can't be scoped to
+# reject force push, and the repo has no branch protection
+hooks_dir="$(git -C /workspace rev-parse --git-dir)/hooks"
+mkdir -p "$hooks_dir"
+cat > "$hooks_dir/pre-push" << 'HOOK'
+#!/usr/bin/env -S bash -e
+while read -r _ local_sha remote_ref remote_sha; do
+  [ "$remote_sha" = "0000000000000000000000000000000000000000" ] && continue
+  if ! git merge-base --is-ancestor "$remote_sha" "$local_sha"; then
+    echo "error: non-fast-forward push to $remote_ref is blocked" >&2
+    exit 1
+  fi
+done
+HOOK
+chmod +x "$hooks_dir/pre-push"
 
 # pre-create the project directory so Claude Code considers /workspace trusted
 mkdir -p "$HOME/.claude/projects/-workspace"
