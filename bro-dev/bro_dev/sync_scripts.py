@@ -41,7 +41,7 @@ def _module_name(rel: Path) -> str:
 
 def _canonical(rel: Path) -> str:
   parts = list(rel.with_suffix('').parts)
-  parts[-1] = parts[-1].replace('_', '-')
+  parts = [p.replace('_', '-') for p in parts]
   return '.'.join(parts)
 
 
