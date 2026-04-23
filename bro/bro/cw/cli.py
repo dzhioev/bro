@@ -25,6 +25,7 @@ network is not restricted by design.
 """
 
 import argparse
+import datetime
 import hashlib
 import json
 import os
@@ -32,6 +33,8 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import humanize
 
 from base import log
 from base.args import Parser
@@ -133,13 +136,29 @@ def _running_container_mounts() -> set[str]:
   return {line for line in inspect.stdout.splitlines() if len(line) > 0}
 
 
-def _read_subject(projects_dir: Path) -> str | None:
+def _latest_jsonl(projects_dir: Path) -> Path | None:
   if not projects_dir.is_dir():
     return None
   jsonls = [p for p in projects_dir.iterdir() if p.suffix == '.jsonl']
   if len(jsonls) == 0:
     return None
-  latest = max(jsonls, key=lambda p: p.stat().st_mtime)
+  return max(jsonls, key=lambda p: p.stat().st_mtime)
+
+
+def _projects_dir_for_local(name: str, proj: Path) -> Path:
+  worktree = proj / '.claude' / 'worktrees' / name
+  encoded = str(worktree).replace('/', '-').replace('.', '-')
+  return Path.home() / '.claude' / 'projects' / encoded
+
+
+def _projects_dir_for_container(name: str) -> Path:
+  return Path.home() / '.claude' / 'cw-sessions' / name / 'projects' / '-workspace'
+
+
+def _read_subject(projects_dir: Path) -> str | None:
+  latest = _latest_jsonl(projects_dir)
+  if latest is None:
+    return None
   try:
     f = latest.open()
   except OSError:
@@ -172,14 +191,22 @@ def _read_subject(projects_dir: Path) -> str | None:
   return None
 
 
-def _subject_for_local(name: str, proj: Path) -> str | None:
-  worktree = proj / '.claude' / 'worktrees' / name
-  encoded = str(worktree).replace('/', '-').replace('.', '-')
-  return _read_subject(Path.home() / '.claude' / 'projects' / encoded)
+def _last_active(worktree: Path) -> float | None:
+  if not worktree.is_dir():
+    return None
+  result = subprocess.run(
+    ['find', str(worktree), '-not', '-path', '*/.git/*', '-type', 'f', '-printf', '%T@\n'],
+    capture_output=True,
+    text=True,
+  )
+  if result.returncode != 0 or len(result.stdout.strip()) == 0:
+    return None
+  return max(float(line) for line in result.stdout.splitlines() if len(line) > 0)
 
 
-def _subject_for_container(name: str) -> str | None:
-  return _read_subject(Path.home() / '.claude' / 'cw-sessions' / name / 'projects' / '-workspace')
+def _format_age(mtime: float) -> str:
+  delta = datetime.timedelta(seconds=int(datetime.datetime.now().timestamp() - mtime))
+  return humanize.naturaltime(delta)
 
 
 def _truncate(s: str, n: int) -> str:
@@ -195,29 +222,34 @@ def list_workspaces() -> int:
   worktrees_dir = proj / '.claude' / 'worktrees'
   containers_dir = proj / 'var' / 'cw' / 'containers'
 
-  entries: list[tuple[str, str, str | None]] = []
+  entries: list[tuple[str, str, str | None, float | None]] = []
   if worktrees_dir.is_dir():
     for p in worktrees_dir.iterdir():
       if p.is_dir():
         kind = 'L' if _is_local_active(p.name) else 'X'
-        entries.append((kind, p.name, _subject_for_local(p.name, proj)))
+        pdir = _projects_dir_for_local(p.name, proj)
+        entries.append((kind, p.name, _read_subject(pdir), _last_active(p)))
   if containers_dir.is_dir():
     mounts = _running_container_mounts()
     for p in containers_dir.iterdir():
       if p.is_dir():
         kind = 'C' if str(p) in mounts else 'X'
-        entries.append((kind, p.name, _subject_for_container(p.name)))
+        pdir = _projects_dir_for_container(p.name)
+        entries.append((kind, p.name, _read_subject(pdir), _last_active(p)))
 
   if len(entries) == 0:
     return 0
   entries.sort(key=lambda e: (_KIND_ORDER[e[0]], e[1]))
-  name_w = max(len(name) for _, name, _ in entries)
-  for kind, name, subject in entries:
+  name_w = max(len(name) for _, name, _, _ in entries)
+  ages = [_format_age(mtime) if mtime is not None else '' for _, _, _, mtime in entries]
+  age_w = max(len(a) for a in ages) if len(ages) > 0 else 0
+  for (kind, name, subject, _), age in zip(entries, ages):
     badge = _BADGES[kind]
+    age_col = f'  {age:<{age_w}}' if len(age) > 0 else ' ' * (age_w + 2)
     if subject is None:
-      print(f'{badge} {name}')
+      print(f'{badge} {name:<{name_w}}{age_col}')
     else:
-      print(f'{badge} {name:<{name_w}}  {_truncate(subject, 80)}')
+      print(f'{badge} {name:<{name_w}}{age_col}  {_truncate(subject, 80)}')
   return 0
 
 
@@ -269,7 +301,7 @@ def _worktree_is_clean(path: Path) -> tuple[bool, list[str]]:
   return len(reasons) == 0, reasons
 
 
-def clean_workspaces() -> int:
+def clean_workspaces(force: bool = False) -> int:
   proj = _project_root()
   worktrees_dir = proj / '.claude' / 'worktrees'
   containers_dir = proj / 'var' / 'cw' / 'containers'
@@ -287,9 +319,11 @@ def clean_workspaces() -> int:
         continue
       safe, reasons = _worktree_is_clean(p)
       if not safe:
-        log.info('skip %s: %s', p.name, '; '.join(reasons))
-        skipped += 1
-        continue
+        if not force:
+          log.info('skip %s: %s', p.name, '; '.join(reasons))
+          skipped += 1
+          continue
+        log.info('force %s: %s', p.name, '; '.join(reasons))
       branch = f'worktree-{p.name}'
       subprocess.run(
         ['git', 'worktree', 'remove', '--force', str(p)], check=False, capture_output=True
@@ -309,9 +343,11 @@ def clean_workspaces() -> int:
         continue
       safe, reasons = _worktree_is_clean(p)
       if not safe:
-        log.info('skip %s (container): %s', p.name, '; '.join(reasons))
-        skipped += 1
-        continue
+        if not force:
+          log.info('skip %s (container): %s', p.name, '; '.join(reasons))
+          skipped += 1
+          continue
+        log.info('force %s (container): %s', p.name, '; '.join(reasons))
       shutil.rmtree(p)
       session_dir = Path.home() / '.claude' / 'cw-sessions' / p.name
       if session_dir.is_dir():
@@ -366,6 +402,11 @@ def main(argv=None):
     help='remove stale workspaces that have no uncommitted or unpushed changes',
   )
   parser.add_argument(
+    '--force',
+    action='store_true',
+    help='with --clean, remove workspaces even if they have uncommitted or unpushed changes',
+  )
+  parser.add_argument(
     '-c', '--container', action='store_true', help='run claude inside an isolated docker container'
   )
   parser.add_argument(
@@ -380,9 +421,11 @@ def main(argv=None):
   parser.add_argument('claude_args', nargs=argparse.REMAINDER, help='args forwarded to claude')
   args = parser.parse(argv)
   if args.pop('list'):
+    args.pop('force')
     return list_workspaces()
+  force = args.pop('force')
   if args.pop('clean'):
-    return clean_workspaces()
+    return clean_workspaces(force=force)
   if args['name'] is None:
     parser.error('name is required (or pass --list)')
   auto = args.pop('auto')
