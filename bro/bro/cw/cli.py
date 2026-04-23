@@ -261,6 +261,9 @@ def main(argv=None):
   parser.add_argument(
     '--drop', action='store_true', help='remove the worktree on exit without prompting (host mode)'
   )
+  parser.add_argument(
+    '--auto', action='store_true', help='let claude run autonomously, skipping most permissions (allowed only with -c)'
+  )
   parser.add_argument('name', nargs='?', help='worktree name')
   parser.add_argument('claude_args', nargs=argparse.REMAINDER, help='args forwarded to claude')
   args = parser.parse(argv)
@@ -268,6 +271,11 @@ def main(argv=None):
     return list_workspaces()
   if args['name'] is None:
     parser.error('name is required (or pass --list)')
+  auto = args.pop('auto')
+  if auto:
+    if not args['container']:
+      parser.error('--auto requires --container')
+    args['claude_args'] = ['--dangerously-skip-permissions', *args['claude_args']]
   return cw(**args)
 
 
