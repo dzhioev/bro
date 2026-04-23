@@ -226,9 +226,10 @@ def _worktree_is_clean(path: Path) -> tuple[bool, list[str]]:
 
   returns (safe, reasons) where reasons lists what prevents removal.
   """
+  no_prompt_env = {**os.environ, 'GIT_TERMINAL_PROMPT': '0'}
   reasons: list[str] = []
   status = subprocess.run(
-    ['git', 'status', '--porcelain'], cwd=path, capture_output=True, text=True
+    ['git', 'status', '--porcelain'], cwd=path, capture_output=True, text=True, env=no_prompt_env
   )
   if status.returncode != 0:
     reasons.append('cannot read git status')
@@ -236,7 +237,12 @@ def _worktree_is_clean(path: Path) -> tuple[bool, list[str]]:
   if len(status.stdout.strip()) > 0:
     reasons.append('uncommitted or untracked changes')
 
-  subprocess.run(['git', 'fetch', '--quiet', 'origin', 'master'], cwd=path, capture_output=True)
+  subprocess.run(
+    ['git', 'fetch', '--quiet', 'origin', 'master'],
+    cwd=path,
+    capture_output=True,
+    env=no_prompt_env,
+  )
   master_check = subprocess.run(
     ['git', 'rev-parse', '--verify', 'origin/master'],
     cwd=path,
