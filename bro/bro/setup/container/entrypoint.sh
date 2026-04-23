@@ -93,7 +93,7 @@ chmod +x "$hooks_dir/pre-push"
 # pre-create the project directory so Claude Code considers /workspace trusted
 mkdir -p "$HOME/.claude/projects/-workspace"
 
-if [ ! -x .venv/bin/python ]; then
+if [ ! -x .venv/bin/python ] && [ "${CW_SKIP_VENV:-}" != "1" ]; then
   echo 'provisioning linux venv' >&2
   uv sync --all-groups >&2
 fi
