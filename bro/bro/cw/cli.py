@@ -108,6 +108,8 @@ def _docker_run_argv(
     'HOME=/home/cw',
     '-e',
     f'CW_NAME={name}',
+    '-e',
+    'DISABLE_AUTOUPDATER=1',
     '-w',
     '/workspace',
   ]
