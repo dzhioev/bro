@@ -8,6 +8,7 @@ may declare __cli_name__ = 'custom-name' to register an additional alias that
 maps to the same module:main.
 """
 
+import ast
 import importlib
 import inspect
 import logging
@@ -44,9 +45,14 @@ def _canonical(rel: Path) -> str:
   return '.'.join(parts)
 
 
-def _is_cli_main(mod) -> bool:
-  fn = getattr(mod, 'main', None)
-  return callable(fn) and not inspect.iscoroutinefunction(fn)
+def _has_ast_main(path: Path) -> bool:
+  try:
+    tree = ast.parse(path.read_text(), filename=str(path))
+  except SyntaxError:
+    return False
+  return any(
+    isinstance(node, ast.FunctionDef) and node.name == 'main' for node in ast.iter_child_nodes(tree)
+  )
 
 
 def _discover():
@@ -54,14 +60,17 @@ def _discover():
   top_level_modules = []
   for rel in _iter_py_files():
     mod_name = _module_name(rel)
+    if len(rel.parts) == 1:
+      top_level_modules.append(mod_name)
+    if not _has_ast_main(ROOT / rel):
+      continue
     try:
       mod = importlib.import_module(mod_name)
     except Exception as e:
       logging.warning('cannot import %s: %s', mod_name, e)
       continue
-    if len(rel.parts) == 1:
-      top_level_modules.append(mod_name)
-    if not _is_cli_main(mod):
+    fn = getattr(mod, 'main', None)
+    if fn is None or not callable(fn) or inspect.iscoroutinefunction(fn):
       continue
     entries.append(
       {
