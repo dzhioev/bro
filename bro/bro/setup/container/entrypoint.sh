@@ -1,5 +1,19 @@
 #!/usr/bin/env -S bash -e
 
+# root phase: align container user with host uid/gid, then re-exec as cw
+if [ "$(id -u)" = "0" ]; then
+  TARGET_UID="$(stat -c '%u' /workspace)"
+  TARGET_GID="$(stat -c '%g' /workspace)"
+  if [ "$(id -u cw)" != "$TARGET_UID" ] || [ "$(id -g cw)" != "$TARGET_GID" ]; then
+    groupmod -o -g "$TARGET_GID" cw
+    usermod -o -u "$TARGET_UID" -g "$TARGET_GID" cw
+    chown cw:cw /home/cw /home/cw/.claude
+  fi
+  exec gosu cw "$0" "$@"
+fi
+
+# --- running as cw from here ---
+
 # seed per-worktree ~/.claude/ from host on first run; skip sensitive transcript
 # data so prior sessions from other repos don't leak into this container
 if [ ! -f "$HOME/.claude/settings.json" ] && [ -d /host-claude ]; then
@@ -17,7 +31,7 @@ fi
 if [ ! -d /workspace/.git ]; then
   echo 'cloning host repo into /workspace' >&2
   cd /
-  git clone --shared /host-repo /workspace >&2
+  git -c protocol.file.allow=always clone --shared /host-repo /workspace >&2
   cd /workspace
   host_origin="$(git -C /host-repo config --get remote.origin.url)"
   git remote set-url origin "$host_origin"
@@ -40,10 +54,14 @@ if [ ! -d /workspace/.git ]; then
           fi
           echo "initializing submodule $name from /host-repo/$path" >&2
           git -c "submodule.$name.url=/host-repo/$path" \
+              -c protocol.file.allow=always \
               submodule update --init -- "$path" >&2
         done
   fi
 fi
+
+# pre-create the project directory so Claude Code considers /workspace trusted
+mkdir -p "$HOME/.claude/projects/-workspace"
 
 if [ ! -x "$UV_PROJECT_ENVIRONMENT/bin/python" ]; then
   echo 'provisioning linux venv' >&2

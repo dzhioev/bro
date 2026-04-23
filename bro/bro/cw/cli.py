@@ -103,8 +103,6 @@ def _docker_run_argv(
     '/workspace',
     tag,
     'claude',
-    '-w',
-    name,
     *claude_args,
   ]
 
