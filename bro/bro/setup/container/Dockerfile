@@ -15,8 +15,7 @@ RUN useradd -m -u 1000 -s /bin/bash cw \
  && chown cw:cw /home/cw/.claude
 
 WORKDIR /workspace
-ENV UV_PROJECT_ENVIRONMENT=/workspace/.venv-linux \
-    CW_IN_CONTAINER=1
+ENV CW_IN_CONTAINER=1
 
 COPY entrypoint.sh /usr/local/bin/cw-entrypoint
 ENTRYPOINT ["/usr/local/bin/cw-entrypoint"]

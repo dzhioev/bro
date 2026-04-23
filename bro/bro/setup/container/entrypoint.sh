@@ -63,7 +63,7 @@ fi
 # pre-create the project directory so Claude Code considers /workspace trusted
 mkdir -p "$HOME/.claude/projects/-workspace"
 
-if [ ! -x "$UV_PROJECT_ENVIRONMENT/bin/python" ]; then
+if [ ! -x .venv/bin/python ]; then
   echo 'provisioning linux venv' >&2
   uv sync --all-groups >&2
 fi
