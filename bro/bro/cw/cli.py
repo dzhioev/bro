@@ -255,12 +255,16 @@ def list_workspaces() -> int:
   return 0
 
 
-def _worktree_is_clean(path: Path) -> tuple[bool, list[str]]:
+def _worktree_is_clean(path: Path, alt_objects_dir: Path | None = None) -> tuple[bool, list[str]]:
   """check whether a worktree is safe to remove.
 
   returns (safe, reasons) where reasons lists what prevents removal.
+  alt_objects_dir: extra object store for container clones whose alternates
+  reference a container-only path (/host-repo).
   """
   no_prompt_env = {**os.environ, 'GIT_TERMINAL_PROMPT': '0'}
+  if alt_objects_dir is not None:
+    no_prompt_env['GIT_ALTERNATE_OBJECT_DIRECTORIES'] = str(alt_objects_dir)
   reasons: list[str] = []
   status = subprocess.run(
     ['git', 'status', '--porcelain'], cwd=path, capture_output=True, text=True, env=no_prompt_env
@@ -281,6 +285,7 @@ def _worktree_is_clean(path: Path) -> tuple[bool, list[str]]:
     ['git', 'rev-parse', '--verify', 'origin/master'],
     cwd=path,
     capture_output=True,
+    env=no_prompt_env,
   )
   if master_check.returncode != 0:
     reasons.append('origin/master not found')
@@ -289,6 +294,7 @@ def _worktree_is_clean(path: Path) -> tuple[bool, list[str]]:
       ['git', 'merge-base', '--is-ancestor', 'HEAD', 'origin/master'],
       cwd=path,
       capture_output=True,
+      env=no_prompt_env,
     )
     if ancestor.returncode != 0:
       ahead = subprocess.run(
@@ -296,6 +302,7 @@ def _worktree_is_clean(path: Path) -> tuple[bool, list[str]]:
         cwd=path,
         capture_output=True,
         text=True,
+        env=no_prompt_env,
       )
       n = ahead.stdout.strip() if ahead.returncode == 0 else '?'
       reasons.append(f'{n} commit(s) not on origin/master')
@@ -303,7 +310,7 @@ def _worktree_is_clean(path: Path) -> tuple[bool, list[str]]:
   return len(reasons) == 0, reasons
 
 
-def clean_workspaces(force: bool = False) -> int:
+def clean_workspaces(force: bool = False, dry_run: bool = False) -> int:
   proj = _project_root()
   worktrees_dir = proj / '.claude' / 'worktrees'
   containers_dir = proj / 'var' / 'cw' / 'containers'
@@ -326,12 +333,15 @@ def clean_workspaces(force: bool = False) -> int:
           skipped += 1
           continue
         log.info('force %s: %s', p.name, '; '.join(reasons))
-      branch = f'worktree-{p.name}'
-      subprocess.run(
-        ['git', 'worktree', 'remove', '--force', str(p)], check=False, capture_output=True
-      )
-      subprocess.run(['git', 'branch', '-D', branch], check=False, capture_output=True)
-      log.info('removed %s', p.name)
+      if dry_run:
+        log.info('would remove %s', p.name)
+      else:
+        branch = f'worktree-{p.name}'
+        subprocess.run(
+          ['git', 'worktree', 'remove', '--force', str(p)], check=False, capture_output=True
+        )
+        subprocess.run(['git', 'branch', '-D', branch], check=False, capture_output=True)
+        log.info('removed %s', p.name)
       removed += 1
 
   if containers_dir.is_dir():
@@ -343,18 +353,21 @@ def clean_workspaces(force: bool = False) -> int:
         log.info('skip %s (container): active session', p.name)
         skipped += 1
         continue
-      safe, reasons = _worktree_is_clean(p)
+      safe, reasons = _worktree_is_clean(p, alt_objects_dir=proj / '.git' / 'objects')
       if not safe:
         if not force:
           log.info('skip %s (container): %s', p.name, '; '.join(reasons))
           skipped += 1
           continue
         log.info('force %s (container): %s', p.name, '; '.join(reasons))
-      shutil.rmtree(p)
-      session_dir = Path.home() / '.claude' / 'cw-sessions' / p.name
-      if session_dir.is_dir():
-        shutil.rmtree(session_dir)
-      log.info('removed %s (container)', p.name)
+      if dry_run:
+        log.info('would remove %s (container)', p.name)
+      else:
+        shutil.rmtree(p)
+        session_dir = Path.home() / '.claude' / 'cw-sessions' / p.name
+        if session_dir.is_dir():
+          shutil.rmtree(session_dir)
+        log.info('removed %s (container)', p.name)
       removed += 1
 
   log.info('cleaned %d workspace(s), skipped %d', removed, skipped)
@@ -409,6 +422,11 @@ def main(argv=None):
     help='with --clean, remove workspaces even if they have uncommitted or unpushed changes',
   )
   parser.add_argument(
+    '--dry-run',
+    action='store_true',
+    help='with --clean, show what would be removed without actually removing',
+  )
+  parser.add_argument(
     '-c', '--container', action='store_true', help='run claude inside an isolated docker container'
   )
   parser.add_argument(
@@ -424,10 +442,12 @@ def main(argv=None):
   args = parser.parse(argv)
   if args.pop('list'):
     args.pop('force')
+    args.pop('dry_run')
     return list_workspaces()
   force = args.pop('force')
+  dry_run = args.pop('dry_run')
   if args.pop('clean'):
-    return clean_workspaces(force=force)
+    return clean_workspaces(force=force, dry_run=dry_run)
   if args['name'] is None:
     parser.error('name is required (or pass --list)')
   auto = args.pop('auto')
