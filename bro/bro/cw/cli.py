@@ -439,63 +439,58 @@ def cw(name: str, container: bool, drop: bool, claude_args: list[str]) -> int:
 
 
 def main(argv=None):
-  parser = Parser(description='launch claude -w in the project root, or in a container')
-  parser.add_argument(
-    '-l',
-    '--list',
-    action='store_true',
-    help='list workspaces ([.]=local, [o]=container, [x]=abandoned)',
-  )
-  parser.add_argument(
-    '--clean',
-    action='store_true',
-    help='remove stale workspaces that have no uncommitted or unpushed changes',
-  )
-  parser.add_argument(
-    '--check-clean',
-    action='store_true',
-    help='check if cwd is a clean worktree (exit 0=clean, 1=not); reasons printed to stderr',
-  )
-  parser.add_argument(
-    '--force',
-    action='store_true',
-    help='with --clean, remove workspaces even if they have uncommitted or unpushed changes',
-  )
-  parser.add_argument(
-    '--dry-run',
-    action='store_true',
-    help='with --clean, show what would be removed without actually removing',
-  )
-  parser.add_argument(
+  parser = Parser(description='launch claude with worktree management')
+  subparsers = parser.add_subparsers(dest='cmd', required=True)
+
+  ss = subparsers.add_parser('ss', help='start a claude session in a worktree')
+  ss.add_argument(
     '-c', '--container', action='store_true', help='run claude inside an isolated docker container'
   )
-  parser.add_argument(
+  ss.add_argument(
     '--drop', action='store_true', help='remove the worktree on exit without prompting (host mode)'
   )
-  parser.add_argument(
+  ss.add_argument(
     '--auto',
     action='store_true',
     help='let claude run autonomously, skipping most permissions (allowed only with -c)',
   )
-  parser.add_argument('name', nargs='?', help='worktree name')
-  parser.add_argument('claude_args', nargs=argparse.REMAINDER, help='args forwarded to claude')
+  ss.add_argument('name', help='worktree name')
+  ss.add_argument('claude_args', nargs=argparse.REMAINDER, help='args forwarded to claude')
+
+  subparsers.add_parser('list', help='list workspaces ([.]=local, [o]=container, [x]=abandoned)')
+
+  clean = subparsers.add_parser(
+    'clean', help='remove stale workspaces that have no uncommitted or unpushed changes'
+  )
+  clean.add_argument(
+    '--force',
+    action='store_true',
+    help='remove workspaces even if they have uncommitted or unpushed changes',
+  )
+  clean.add_argument(
+    '--dry-run',
+    action='store_true',
+    help='show what would be removed without actually removing',
+  )
+
+  subparsers.add_parser(
+    'check-clean',
+    help='check if cwd is a clean worktree (exit 0=clean, 1=not); reasons printed to stderr',
+  )
+
   args = parser.parse(argv)
-  if args.pop('list'):
-    args.pop('force')
-    args.pop('dry_run')
-    args.pop('check_clean')
+  cmd = args.pop('cmd')
+
+  if cmd == 'list':
     return list_workspaces()
-  force = args.pop('force')
-  dry_run = args.pop('dry_run')
-  if args.pop('check_clean'):
-    clean, reasons = _worktree_is_clean(Path.cwd())
+  if cmd == 'clean':
+    return clean_workspaces(force=args['force'], dry_run=args['dry_run'])
+  if cmd == 'check-clean':
+    clean_, reasons = _worktree_is_clean(Path.cwd())
     for r in reasons:
       print(r, file=sys.stderr)
-    return 0 if clean else 1
-  if args.pop('clean'):
-    return clean_workspaces(force=force, dry_run=dry_run)
-  if args['name'] is None:
-    parser.error('name is required (or pass --list)')
+    return 0 if clean_ else 1
+  assert cmd == 'ss'
   auto = args.pop('auto')
   if auto:
     if not args['container']:
