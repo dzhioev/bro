@@ -307,6 +307,41 @@ def _worktree_is_clean(path: Path, alt_objects_dir: Path | None = None) -> tuple
       n = ahead.stdout.strip() if ahead.returncode == 0 else '?'
       reasons.append(f'{n} commit(s) not on origin/master')
 
+  sub_status = subprocess.run(
+    ['git', 'submodule', 'status'], cwd=path, capture_output=True, text=True, env=no_prompt_env
+  )
+  if sub_status.returncode == 0:
+    for line in sub_status.stdout.strip().splitlines():
+      stripped = line.strip()
+      if stripped.startswith('-'):
+        continue
+      parts = stripped.lstrip('+').split()
+      if len(parts) < 2:
+        continue
+      sub_hash, sub_path = parts[0], parts[1]
+      sub_full = path / sub_path
+      subprocess.run(
+        ['git', 'fetch', '--quiet', 'origin'],
+        cwd=sub_full,
+        capture_output=True,
+        env=no_prompt_env,
+      )
+      sub_default = subprocess.run(
+        ['git', 'rev-parse', '--verify', 'origin/HEAD'],
+        cwd=sub_full,
+        capture_output=True,
+        env=no_prompt_env,
+      )
+      remote_ref = 'origin/HEAD' if sub_default.returncode == 0 else 'origin/master'
+      sub_ancestor = subprocess.run(
+        ['git', 'merge-base', '--is-ancestor', sub_hash, remote_ref],
+        cwd=sub_full,
+        capture_output=True,
+        env=no_prompt_env,
+      )
+      if sub_ancestor.returncode != 0:
+        reasons.append(f'submodule {sub_path}: commit {sub_hash[:8]} not pushed to remote')
+
   return len(reasons) == 0, reasons
 
 
@@ -417,6 +452,11 @@ def main(argv=None):
     help='remove stale workspaces that have no uncommitted or unpushed changes',
   )
   parser.add_argument(
+    '--check-clean',
+    action='store_true',
+    help='check if cwd is a clean worktree (exit 0=clean, 1=not); reasons printed to stderr',
+  )
+  parser.add_argument(
     '--force',
     action='store_true',
     help='with --clean, remove workspaces even if they have uncommitted or unpushed changes',
@@ -443,9 +483,15 @@ def main(argv=None):
   if args.pop('list'):
     args.pop('force')
     args.pop('dry_run')
+    args.pop('check_clean')
     return list_workspaces()
   force = args.pop('force')
   dry_run = args.pop('dry_run')
+  if args.pop('check_clean'):
+    clean, reasons = _worktree_is_clean(Path.cwd())
+    for r in reasons:
+      print(r, file=sys.stderr)
+    return 0 if clean else 1
   if args.pop('clean'):
     return clean_workspaces(force=force, dry_run=dry_run)
   if args['name'] is None:
