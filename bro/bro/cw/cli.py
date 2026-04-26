@@ -255,19 +255,25 @@ def list_workspaces() -> int:
   return 0
 
 
-def _worktree_is_clean(path: Path, alt_objects_dir: Path | None = None) -> tuple[bool, list[str]]:
+def _worktree_is_clean(path: Path, container_proj: Path | None = None) -> tuple[bool, list[str]]:
   """check whether a worktree is safe to remove.
 
   returns (safe, reasons) where reasons lists what prevents removal.
-  alt_objects_dir: extra object store for container clones whose alternates
-  reference a container-only path (/host-repo).
+  container_proj: when set, `path` is a container clone whose own remotes
+  are unreachable from the host (origin = HTTPS GitHub without creds, host
+  remote = /host-repo bind mount). Ancestry checks run in container_proj
+  (resp. container_proj/<sub_path>) instead, with the container's HEAD
+  fetched in first; container_proj/.git/objects is also exposed as an
+  alternate so basic git ops in the container clone can resolve their
+  /host-repo alternates.
   """
   no_prompt_env = {**os.environ, 'GIT_TERMINAL_PROMPT': '0'}
-  if alt_objects_dir is not None:
-    no_prompt_env['GIT_ALTERNATE_OBJECT_DIRECTORIES'] = str(alt_objects_dir)
+  local_env = dict(no_prompt_env)
+  if container_proj is not None:
+    local_env['GIT_ALTERNATE_OBJECT_DIRECTORIES'] = str(container_proj / '.git' / 'objects')
   reasons: list[str] = []
   status = subprocess.run(
-    ['git', 'status', '--porcelain'], cwd=path, capture_output=True, text=True, env=no_prompt_env
+    ['git', 'status', '--porcelain'], cwd=path, capture_output=True, text=True, env=local_env
   )
   if status.returncode != 0:
     reasons.append('cannot read git status')
@@ -275,40 +281,58 @@ def _worktree_is_clean(path: Path, alt_objects_dir: Path | None = None) -> tuple
   if len(status.stdout.strip()) > 0:
     reasons.append('uncommitted or untracked changes')
 
-  subprocess.run(
+  check_root = container_proj if container_proj is not None else path
+  fetch = subprocess.run(
     ['git', 'fetch', '--quiet', 'origin', 'master'],
-    cwd=path,
+    cwd=check_root,
     capture_output=True,
     env=no_prompt_env,
   )
-  master_check = subprocess.run(
-    ['git', 'rev-parse', '--verify', 'origin/master'],
-    cwd=path,
-    capture_output=True,
-    env=no_prompt_env,
-  )
-  if master_check.returncode != 0:
-    reasons.append('origin/master not found')
+  if fetch.returncode != 0:
+    reasons.append('could not fetch origin/master')
   else:
-    ancestor = subprocess.run(
-      ['git', 'merge-base', '--is-ancestor', 'HEAD', 'origin/master'],
-      cwd=path,
-      capture_output=True,
-      env=no_prompt_env,
-    )
-    if ancestor.returncode != 0:
-      ahead = subprocess.run(
-        ['git', 'rev-list', '--count', 'HEAD', '^origin/master'],
-        cwd=path,
+    head_ref = 'HEAD'
+    if container_proj is not None:
+      bring_in = subprocess.run(
+        ['git', 'fetch', '--quiet', str(path), 'HEAD'],
+        cwd=check_root,
         capture_output=True,
-        text=True,
         env=no_prompt_env,
       )
-      n = ahead.stdout.strip() if ahead.returncode == 0 else '?'
-      reasons.append(f'{n} commit(s) not on origin/master')
+      if bring_in.returncode != 0:
+        reasons.append("could not fetch container's HEAD")
+        head_ref = None
+      else:
+        head_ref = 'FETCH_HEAD'
+    if head_ref is not None:
+      master_check = subprocess.run(
+        ['git', 'rev-parse', '--verify', 'origin/master'],
+        cwd=check_root,
+        capture_output=True,
+        env=no_prompt_env,
+      )
+      if master_check.returncode != 0:
+        reasons.append('origin/master not found')
+      else:
+        ancestor = subprocess.run(
+          ['git', 'merge-base', '--is-ancestor', head_ref, 'origin/master'],
+          cwd=check_root,
+          capture_output=True,
+          env=no_prompt_env,
+        )
+        if ancestor.returncode != 0:
+          ahead = subprocess.run(
+            ['git', 'rev-list', '--count', head_ref, '^origin/master'],
+            cwd=check_root,
+            capture_output=True,
+            text=True,
+            env=no_prompt_env,
+          )
+          n = ahead.stdout.strip() if ahead.returncode == 0 else '?'
+          reasons.append(f'{n} commit(s) not on origin/master')
 
   sub_status = subprocess.run(
-    ['git', 'submodule', 'status'], cwd=path, capture_output=True, text=True, env=no_prompt_env
+    ['git', 'submodule', 'status'], cwd=path, capture_output=True, text=True, env=local_env
   )
   if sub_status.returncode == 0:
     for line in sub_status.stdout.strip().splitlines():
@@ -319,23 +343,38 @@ def _worktree_is_clean(path: Path, alt_objects_dir: Path | None = None) -> tuple
       if len(parts) < 2:
         continue
       sub_hash, sub_path = parts[0], parts[1]
-      sub_full = path / sub_path
-      subprocess.run(
+      sub_check_root = (
+        container_proj / sub_path if container_proj is not None else path / sub_path
+      )
+      sub_fetch = subprocess.run(
         ['git', 'fetch', '--quiet', 'origin'],
-        cwd=sub_full,
+        cwd=sub_check_root,
         capture_output=True,
         env=no_prompt_env,
       )
+      if sub_fetch.returncode != 0:
+        reasons.append(f'submodule {sub_path}: could not fetch origin')
+        continue
+      if container_proj is not None:
+        sub_bring_in = subprocess.run(
+          ['git', 'fetch', '--quiet', str(path / sub_path), 'HEAD'],
+          cwd=sub_check_root,
+          capture_output=True,
+          env=no_prompt_env,
+        )
+        if sub_bring_in.returncode != 0:
+          reasons.append(f"submodule {sub_path}: could not fetch container's HEAD")
+          continue
       sub_default = subprocess.run(
         ['git', 'rev-parse', '--verify', 'origin/HEAD'],
-        cwd=sub_full,
+        cwd=sub_check_root,
         capture_output=True,
         env=no_prompt_env,
       )
       remote_ref = 'origin/HEAD' if sub_default.returncode == 0 else 'origin/master'
       sub_ancestor = subprocess.run(
         ['git', 'merge-base', '--is-ancestor', sub_hash, remote_ref],
-        cwd=sub_full,
+        cwd=sub_check_root,
         capture_output=True,
         env=no_prompt_env,
       )
@@ -388,7 +427,7 @@ def clean_workspaces(force: bool = False, dry_run: bool = False) -> int:
         log.info('skip %s (container): active session', p.name)
         skipped += 1
         continue
-      safe, reasons = _worktree_is_clean(p, alt_objects_dir=proj / '.git' / 'objects')
+      safe, reasons = _worktree_is_clean(p, container_proj=proj)
       if not safe:
         if not force:
           log.info('skip %s (container): %s', p.name, '; '.join(reasons))
