@@ -217,6 +217,30 @@ def _truncate(s: str, n: int) -> str:
 
 _BADGES = {'L': '[.]', 'C': '[o]', 'X': '[x]'}
 _KIND_ORDER = {'L': 0, 'C': 1, 'X': 2}
+_CONTAINER_PREFIX = 'c:'
+
+
+def _format_ref(name: str, is_container: bool) -> str:
+  return f'{_CONTAINER_PREFIX}{name}' if is_container else name
+
+
+def _parse_ref(ref: str) -> tuple[str, bool]:
+  if ref.startswith(_CONTAINER_PREFIX):
+    return ref[len(_CONTAINER_PREFIX) :], True
+  return ref, False
+
+
+def _resolve_workspace(ref: str, proj: Path) -> tuple[Path, Path | None]:
+  name, is_container = _parse_ref(ref)
+  if is_container:
+    path = proj / 'var' / 'cw' / 'containers' / name
+    if not path.is_dir():
+      raise ValueError(f'container workspace not found: {ref}')
+    return path, proj
+  path = proj / '.claude' / 'worktrees' / name
+  if not path.is_dir():
+    raise ValueError(f'workspace not found: {ref}')
+  return path, None
 
 
 def list_workspaces() -> int:
@@ -224,34 +248,35 @@ def list_workspaces() -> int:
   worktrees_dir = proj / '.claude' / 'worktrees'
   containers_dir = proj / 'var' / 'cw' / 'containers'
 
-  entries: list[tuple[str, str, str | None, float | None]] = []
+  entries: list[tuple[str, bool, str, str | None, float | None]] = []
   if worktrees_dir.is_dir():
     for p in worktrees_dir.iterdir():
       if p.is_dir():
         kind = 'L' if _is_local_active(p.name) else 'X'
         pdir = _projects_dir_for_local(p.name, proj)
-        entries.append((kind, p.name, _read_subject(pdir), _last_active(p)))
+        entries.append((kind, False, p.name, _read_subject(pdir), _last_active(p)))
   if containers_dir.is_dir():
     mounts = _running_container_mounts()
     for p in containers_dir.iterdir():
       if p.is_dir():
         kind = 'C' if str(p) in mounts else 'X'
         pdir = _projects_dir_for_container(p.name)
-        entries.append((kind, p.name, _read_subject(pdir), _last_active(p)))
+        entries.append((kind, True, p.name, _read_subject(pdir), _last_active(p)))
 
   if len(entries) == 0:
     return 0
-  entries.sort(key=lambda e: (_KIND_ORDER[e[0]], e[1]))
-  name_w = max(len(name) for _, name, _, _ in entries)
-  ages = [_format_age(mtime) if mtime is not None else '' for _, _, _, mtime in entries]
+  entries.sort(key=lambda e: (_KIND_ORDER[e[0]], e[1], e[2]))
+  displays = [_format_ref(name, is_container) for _, is_container, name, _, _ in entries]
+  name_w = max(len(d) for d in displays)
+  ages = [_format_age(mtime) if mtime is not None else '' for _, _, _, _, mtime in entries]
   age_w = max(len(a) for a in ages) if len(ages) > 0 else 0
-  for (kind, name, subject, _), age in zip(entries, ages):
+  for (kind, _, _, subject, _), display, age in zip(entries, displays, ages):
     badge = _BADGES[kind]
     age_col = f'  {age:<{age_w}}' if len(age) > 0 else ' ' * (age_w + 2)
     if subject is None:
-      print(f'{badge} {name:<{name_w}}{age_col}')
+      print(f'{badge} {display:<{name_w}}{age_col}')
     else:
-      print(f'{badge} {name:<{name_w}}{age_col}  {_truncate(subject, 80)}')
+      print(f'{badge} {display:<{name_w}}{age_col}  {_truncate(subject, 80)}')
   return 0
 
 
@@ -343,9 +368,7 @@ def _worktree_is_clean(path: Path, container_proj: Path | None = None) -> tuple[
       if len(parts) < 2:
         continue
       sub_hash, sub_path = parts[0], parts[1]
-      sub_check_root = (
-        container_proj / sub_path if container_proj is not None else path / sub_path
-      )
+      sub_check_root = container_proj / sub_path if container_proj is not None else path / sub_path
       sub_fetch = subprocess.run(
         ['git', 'fetch', '--quiet', 'origin'],
         cwd=sub_check_root,
@@ -384,10 +407,24 @@ def _worktree_is_clean(path: Path, container_proj: Path | None = None) -> tuple[
   return len(reasons) == 0, reasons
 
 
-def clean_workspaces(force: bool = False, dry_run: bool = False) -> int:
+def clean_workspaces(
+  force: bool = False, dry_run: bool = False, refs: list[str] | None = None
+) -> int:
   proj = _project_root()
   worktrees_dir = proj / '.claude' / 'worktrees'
   containers_dir = proj / 'var' / 'cw' / 'containers'
+
+  filter_refs = set(refs) if refs is not None and len(refs) > 0 else None
+  if filter_refs is not None:
+    available: set[str] = set()
+    if worktrees_dir.is_dir():
+      available.update(p.name for p in worktrees_dir.iterdir() if p.is_dir())
+    if containers_dir.is_dir():
+      available.update(_format_ref(p.name, True) for p in containers_dir.iterdir() if p.is_dir())
+    missing = filter_refs - available
+    if len(missing) > 0:
+      log.error('workspace(s) not found: %s', ', '.join(sorted(missing)))
+      return 1
 
   removed = 0
   skipped = 0
@@ -395,6 +432,8 @@ def clean_workspaces(force: bool = False, dry_run: bool = False) -> int:
   if worktrees_dir.is_dir():
     for p in sorted(worktrees_dir.iterdir()):
       if not p.is_dir():
+        continue
+      if filter_refs is not None and p.name not in filter_refs:
         continue
       if _is_local_active(p.name):
         log.info('skip %s: active session', p.name)
@@ -423,25 +462,28 @@ def clean_workspaces(force: bool = False, dry_run: bool = False) -> int:
     for p in sorted(containers_dir.iterdir()):
       if not p.is_dir():
         continue
+      ref = _format_ref(p.name, True)
+      if filter_refs is not None and ref not in filter_refs:
+        continue
       if str(p) in mounts:
-        log.info('skip %s (container): active session', p.name)
+        log.info('skip %s: active session', ref)
         skipped += 1
         continue
       safe, reasons = _worktree_is_clean(p, container_proj=proj)
       if not safe:
         if not force:
-          log.info('skip %s (container): %s', p.name, '; '.join(reasons))
+          log.info('skip %s: %s', ref, '; '.join(reasons))
           skipped += 1
           continue
-        log.info('force %s (container): %s', p.name, '; '.join(reasons))
+        log.info('force %s: %s', ref, '; '.join(reasons))
       if dry_run:
-        log.info('would remove %s (container)', p.name)
+        log.info('would remove %s', ref)
       else:
         shutil.rmtree(p)
         session_dir = Path.home() / '.claude' / 'cw-sessions' / p.name
         if session_dir.is_dir():
           shutil.rmtree(session_dir)
-        log.info('removed %s (container)', p.name)
+        log.info('removed %s', ref)
       removed += 1
 
   log.info('cleaned %d workspace(s), skipped %d', removed, skipped)
@@ -511,10 +553,20 @@ def main(argv=None):
     action='store_true',
     help='show what would be removed without actually removing',
   )
+  clean.add_argument(
+    'refs',
+    nargs='*',
+    help='workspaces to clean (default: all); use c:<name> for container workspaces',
+  )
 
-  subparsers.add_parser(
+  check_clean = subparsers.add_parser(
     'check-clean',
-    help='check if cwd is a clean worktree (exit 0=clean, 1=not); reasons printed to stderr',
+    help='check if a workspace is clean (exit 0=clean, 1=not); reasons printed to stderr',
+  )
+  check_clean.add_argument(
+    'ref',
+    nargs='?',
+    help='workspace to check (default: cwd); use c:<name> for container workspaces',
   )
 
   args = parser.parse(argv)
@@ -523,9 +575,18 @@ def main(argv=None):
   if cmd == 'list':
     return list_workspaces()
   if cmd == 'clean':
-    return clean_workspaces(force=args['force'], dry_run=args['dry_run'])
+    return clean_workspaces(force=args['force'], dry_run=args['dry_run'], refs=args['refs'])
   if cmd == 'check-clean':
-    clean_, reasons = _worktree_is_clean(Path.cwd())
+    ref = args['ref']
+    if ref is None:
+      target, container_proj = Path.cwd(), None
+    else:
+      try:
+        target, container_proj = _resolve_workspace(ref, _project_root())
+      except ValueError as e:
+        print(str(e), file=sys.stderr)
+        return 1
+    clean_, reasons = _worktree_is_clean(target, container_proj=container_proj)
     for r in reasons:
       print(r, file=sys.stderr)
     return 0 if clean_ else 1
