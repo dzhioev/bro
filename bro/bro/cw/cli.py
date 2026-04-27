@@ -295,6 +295,8 @@ def _worktree_is_clean(path: Path, container_proj: Path | None = None) -> tuple[
   no_prompt_env = {**os.environ, 'GIT_TERMINAL_PROMPT': '0'}
   local_env = dict(no_prompt_env)
   if container_proj is not None:
+    if not (path / '.git').exists():
+      return False, ['not a git repository']
     local_env['GIT_ALTERNATE_OBJECT_DIRECTORIES'] = str(container_proj / '.git' / 'objects')
   reasons: list[str] = []
   status = subprocess.run(
