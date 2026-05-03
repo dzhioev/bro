@@ -503,7 +503,14 @@ def cw(name: str, container: bool, drop: bool, claude_args: list[str]) -> int:
     session.mkdir(parents=True, exist_ok=True)
     tag = _image_tag()
     _ensure_image(tag)
-    os.execvp('docker', _docker_run_argv(tag, name, proj, session, claude_args))
+    result = subprocess.run(_docker_run_argv(tag, name, proj, session, claude_args))
+    if drop:
+      shutil.rmtree(session)
+      session_dir = Path.home() / '.claude' / 'cw-sessions' / name
+      if session_dir.is_dir():
+        shutil.rmtree(session_dir)
+      log.info('removed container workspace %s', name)
+    return result.returncode
 
   proj = _project_root()
   os.chdir(proj)
@@ -530,7 +537,7 @@ def main(argv=None):
     '-c', '--container', action='store_true', help='run claude inside an isolated docker container'
   )
   ss.add_argument(
-    '--drop', action='store_true', help='remove the worktree on exit without prompting (host mode)'
+    '--drop', action='store_true', help='remove the workspace on exit without prompting'
   )
   ss.add_argument(
     '--auto',

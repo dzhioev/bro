@@ -1,7 +1,7 @@
 #!/usr/bin/env -S bash -e
 
 # root phase: align container user with host uid/gid, then re-exec as cw
-if [ "$(id -u)" = "0" ]; then
+if [ "$(id -u)" = "0" ] && [ -z "${CW_ENTRYPOINT_REEXEC:-}" ]; then
   TARGET_UID="$(stat -c '%u' /workspace)"
   TARGET_GID="$(stat -c '%g' /workspace)"
   if [ "$(id -u cw)" != "$TARGET_UID" ] || [ "$(id -g cw)" != "$TARGET_GID" ]; then
@@ -9,6 +9,7 @@ if [ "$(id -u)" = "0" ]; then
     usermod -o -u "$TARGET_UID" -g "$TARGET_GID" cw
     chown cw:cw /home/cw /home/cw/.claude
   fi
+  export CW_ENTRYPOINT_REEXEC=1
   exec gosu cw "$0" "$@"
 fi
 
