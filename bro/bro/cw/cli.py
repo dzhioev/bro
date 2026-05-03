@@ -50,6 +50,20 @@ def _project_root() -> Path:
   return Path(_git_out('rev-parse', '--git-common-dir')).resolve().parent
 
 
+def _keychain_credentials() -> dict | None:
+  if sys.platform != 'darwin':
+    return None
+  try:
+    raw = subprocess.check_output(
+      ['security', 'find-generic-password', '-s', 'Claude Code-credentials', '-w'],
+      text=True,
+      stderr=subprocess.DEVNULL,
+    ).strip()
+    return json.loads(raw)
+  except (subprocess.CalledProcessError, json.JSONDecodeError):
+    return None
+
+
 def _image_tag() -> str:
   h = hashlib.sha256()
   for path in sorted(CONTAINER_DIR.iterdir()):
@@ -116,6 +130,11 @@ def _docker_run_argv(
   github_token = (proj / '.configs' / 'cw_github_token').resolve()
   if github_token.is_file():
     argv += ['-v', f'{github_token}:/run/secrets/github_token:ro']
+  creds = _keychain_credentials()
+  if creds is not None:
+    creds_file = claude_dir / '.credentials.json'
+    creds_file.write_text(json.dumps(creds))
+    creds_file.chmod(0o600)
   return [*argv, tag, 'claude', *claude_args]
 
 
