@@ -624,7 +624,7 @@ def main(argv=None):
     if not args['container']:
       parser.error('--auto requires --container')
     args['claude_args'] = ['--dangerously-skip-permissions', *args['claude_args']]
-  args['claude_args'] = ['--remote-control', *args['claude_args']]
+  args['claude_args'] = ['--remote-control', args['name'], *args['claude_args']]
   return cw(**args)
 
 
