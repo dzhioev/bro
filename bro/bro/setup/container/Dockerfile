@@ -19,13 +19,15 @@ RUN useradd -m -u 1000 -s /bin/bash cw \
 # re-download wheels. /opt is on the image overlay (different fs from the
 # bind mount), so hardlinks won't work — UV_LINK_MODE=copy makes runtime
 # `uv sync` skip the failed hardlink probe and copy straight from cache.
+# Cache is chmod'd world-writable because the entrypoint usermod's `cw` to
+# match the host uid at runtime, so build-time ownership is irrelevant.
 ENV UV_CACHE_DIR=/opt/uv-cache
 ENV UV_LINK_MODE=copy
 COPY --from=proj pyproject.toml uv.lock /tmp/uv-warm/
 RUN cd /tmp/uv-warm \
  && uv sync --no-install-project --frozen --all-groups \
  && rm -rf /tmp/uv-warm \
- && chown -R cw:cw /opt/uv-cache
+ && chmod -R a+rwX /opt/uv-cache
 
 WORKDIR /workspace
 ENV CW_IN_CONTAINER=1
