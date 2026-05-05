@@ -66,7 +66,9 @@ def _keychain_credentials() -> dict | None:
 
 def _image_tag() -> str:
   h = hashlib.sha256()
-  for path in sorted(CONTAINER_DIR.iterdir()):
+  proj = _project_root()
+  inputs = sorted(CONTAINER_DIR.iterdir()) + [proj / 'pyproject.toml', proj / 'uv.lock']
+  for path in inputs:
     if path.is_file():
       h.update(path.name.encode())
       h.update(b'\0')
@@ -87,6 +89,8 @@ def _ensure_image(tag: str) -> None:
       tag,
       '-f',
       str(CONTAINER_DIR / 'Dockerfile'),
+      '--build-context',
+      f'proj={_project_root()}',
       str(CONTAINER_DIR),
     ],
     check=True,

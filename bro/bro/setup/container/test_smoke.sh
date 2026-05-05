@@ -8,7 +8,7 @@ PROJ="$(cd "$DIR" && realpath "$(git rev-parse --git-common-dir)/..")"
 
 TAG="ppp-cw:smoke-test"
 echo "building image" >&2
-docker build -t "$TAG" -f "$DIR/Dockerfile" "$DIR" >&2
+docker build -t "$TAG" -f "$DIR/Dockerfile" --build-context "proj=$PROJ" "$DIR" >&2
 
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
@@ -42,6 +42,10 @@ docker run --rm \
     test -d /workspace/.git
     # pre-push hook should be installed
     test -x /workspace/.git/hooks/pre-push
+    # uv cache should be pre-warmed and writable by cw
+    test -d /opt/uv-cache
+    test -n "$(ls -A /opt/uv-cache)"
+    test -w /opt/uv-cache
   ' >&2
 
 echo "smoke test passed" >&2
