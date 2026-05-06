@@ -131,6 +131,12 @@ def _docker_run_argv(
     '-w',
     '/workspace',
   ]
+  # forward terminal capability vars so claude's markdown renderer detects
+  # hyperlink support the same way it does on the host (OSC 8 rendering of
+  # `[text](url)` otherwise falls back to raw markdown inside the container)
+  for var in ('TERM_PROGRAM', 'TERM_PROGRAM_VERSION', 'COLORTERM', 'VTE_VERSION'):
+    if os.environ.get(var) is not None:
+      argv += ['-e', var]
   github_token = (proj / '.configs' / 'cw_github_token').resolve()
   if github_token.is_file():
     argv += ['-v', f'{github_token}:/run/secrets/github_token:ro']
