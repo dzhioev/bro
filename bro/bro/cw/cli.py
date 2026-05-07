@@ -573,6 +573,9 @@ def main(argv=None):
     action='store_true',
     help='let claude run autonomously, skipping most permissions (allowed only with -c)',
   )
+  ss.add_argument(
+    '--mcp', action='store_true', help='enable the local flow MCP server in the claude session'
+  )
   ss.add_argument('name', help='worktree name')
   ss.add_argument('claude_args', nargs=argparse.REMAINDER, help='args forwarded to claude')
 
@@ -630,10 +633,13 @@ def main(argv=None):
     return 0 if clean_ else 1
   assert cmd == 'ss'
   auto = args.pop('auto')
+  mcp = args.pop('mcp')
   if auto:
     if not args['container']:
       parser.error('--auto requires --container')
     args['claude_args'] = ['--dangerously-skip-permissions', *args['claude_args']]
+  if mcp:
+    args['claude_args'] = ['--mcp-config=flow/mcp/mcp.json', *args['claude_args']]
   args['claude_args'] = ['--remote-control', args['name'], *args['claude_args']]
   return cw(**args)
 
