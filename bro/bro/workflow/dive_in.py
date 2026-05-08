@@ -52,7 +52,7 @@ def _shell_quote(s: str) -> str:
   return "'" + s.replace("'", "'\\''") + "'"
 
 
-def dive_in(dry_run: bool = False) -> int:
+def dive_in(dry_run: bool = False, command: str | None = None) -> int:
   client = default_client()
   state = client.get_focus()
   if state is None:
@@ -63,9 +63,11 @@ def dive_in(dry_run: bool = False) -> int:
     name = 'dive-in'
   log.info('focused: %s', state.task.name)
 
+  prompt = PROMPT if command is None else f'{PROMPT}\n\nOnce you understand the task, {command}'
+
   proj = _project_root()
   cw_bin = proj / '.venv' / 'bin' / 'cw'
-  cmd = [str(cw_bin), 'ss', '-c', '--mcp', name, PROMPT]
+  cmd = [str(cw_bin), 'ss', '-c', '--mcp', name, prompt]
   if dry_run:
     print(' '.join(_shell_quote(c) for c in cmd))
     return 0
@@ -76,6 +78,9 @@ def main(argv=None):
   parser = Parser(description='start a cw session focused on the currently focused task')
   parser.add_argument(
     '-n', '--dry-run', action='store_true', help='print the command without running it'
+  )
+  parser.add_argument(
+    'command', nargs='?', default=None, help='initial command for the session (appended to prompt)'
   )
   args = parser.parse(argv)
   return dive_in(**args)
