@@ -129,13 +129,23 @@ def convert_message(msg: dict) -> EasyInputMessageParam:
 
 class ChatGPT(llm.llm.LLM):
   @staticmethod
-  def create(config_path=DEFAULT_CONFIG_PATH, mcp_servers: list[MCPServer] | None = None):
+  def create(
+    config_path=DEFAULT_CONFIG_PATH,
+    model: str = 'gpt-5',
+    mcp_servers: list[MCPServer] | None = None,
+  ):
     with open(config_path, 'r') as f:
       config = json.load(f)
-    return ChatGPT(api_key=config['api_key'], mcp_servers=mcp_servers)
+    return ChatGPT(api_key=config['api_key'], model=model, mcp_servers=mcp_servers)
 
-  def __init__(self, api_key: str, mcp_servers: list[MCPServer] | None = None):
+  def __init__(
+    self,
+    api_key: str,
+    model: str = 'gpt-5',
+    mcp_servers: list[MCPServer] | None = None,
+  ):
     super().__init__(mcp_servers)
+    self.model = model
     self.client = OpenAI(api_key=api_key)
     self._openai_tools: list[ToolParam] | None = None
 
@@ -167,7 +177,7 @@ class ChatGPT(llm.llm.LLM):
     api_input: list[ResponseInputItemParam] = [convert_message(msg) for msg in messages]
 
     response = self.client.responses.create(
-      model='gpt-5',
+      model=self.model,
       input=api_input,
       tools=openai_tools,
     )
@@ -175,7 +185,7 @@ class ChatGPT(llm.llm.LLM):
     while has_tool_calls(response):
       tool_results = await self._execute_tool_calls(response)
       response = self.client.responses.create(
-        model='gpt-5',
+        model=self.model,
         previous_response_id=response.id,
         input=tool_results,
         tools=openai_tools,
