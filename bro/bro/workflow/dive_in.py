@@ -57,7 +57,9 @@ def _resolve_task_name(task_id: str) -> str:
   return task.name
 
 
-def dive_in(dry_run: bool = False, command: str | None = None, task: str | None = None) -> int:
+def dive_in(
+  dry_run: bool = False, auto: bool = False, command: str | None = None, task: str | None = None
+) -> int:
   if task is not None:
     task_id = _resolve_task_id(task)
     task_name = _resolve_task_name(task_id)
@@ -96,7 +98,10 @@ def dive_in(dry_run: bool = False, command: str | None = None, task: str | None 
 
   proj = _project_root()
   cw_bin = proj / '.venv' / 'bin' / 'cw'
-  cmd = [str(cw_bin), 'ss', '-c', '--mcp', '-p', prompt, name]
+  cmd = [str(cw_bin), 'ss', '-c', '--mcp']
+  if auto:
+    cmd.append('--auto')
+  cmd.extend(['-p', prompt, name])
   if dry_run:
     print(' '.join(_shell_quote(c) for c in cmd))
     return 0
@@ -107,6 +112,9 @@ def main(argv=None):
   parser = Parser(description='start a cw session focused on a task')
   parser.add_argument(
     '-n', '--dry-run', action='store_true', help='print the command without running it'
+  )
+  parser.add_argument(
+    '--auto', action='store_true', help='run autonomously, skipping most permissions'
   )
   parser.add_argument(
     '-t', '--task', default=None, help='task ID or Notion URL to dive into (default: focused task)'
