@@ -40,6 +40,14 @@ from base import log
 from base.args import Parser
 
 CONTAINER_DIR = Path(__file__).resolve().parent / '.claude' / 'container'
+_DOCKER_FORWARD_ENV = (
+  'CW_COMMAND',
+  'PPP_COMMAND',
+  'TERM_PROGRAM',
+  'TERM_PROGRAM_VERSION',
+  'COLORTERM',
+  'VTE_VERSION',
+)
 
 
 def _git_out(*args: str, cwd: str | None = None) -> str:
@@ -131,10 +139,7 @@ def _docker_run_argv(
     '-w',
     '/workspace',
   ]
-  # forward terminal capability vars so claude's markdown renderer detects
-  # hyperlink support the same way it does on the host (OSC 8 rendering of
-  # `[text](url)` otherwise falls back to raw markdown inside the container)
-  for var in ('TERM_PROGRAM', 'TERM_PROGRAM_VERSION', 'COLORTERM', 'VTE_VERSION'):
+  for var in _DOCKER_FORWARD_ENV:
     if os.environ.get(var) is not None:
       argv += ['-e', var]
   github_token = (proj / '.configs' / 'cw_github_token').resolve()
@@ -660,6 +665,21 @@ def main(argv=None):
   if mcp:
     args['claude_args'] = ['--mcp-config=flow/mcp/mcp.json', *args['claude_args']]
   args['claude_args'] = ['--remote-control', args['name'], *args['claude_args']]
+
+  cw_parts = ['cw', 'ss']
+  if args['container']:
+    cw_parts.append('-c')
+  if auto:
+    cw_parts.append('--auto')
+  if args['drop']:
+    cw_parts.append('--drop')
+  if mcp:
+    cw_parts.append('--mcp')
+  cw_parts.append(args['name'])
+  cw_parts.extend(args['claude_args'])
+  os.environ['CW_COMMAND'] = ' '.join(cw_parts)
+  os.environ.setdefault('PPP_COMMAND', os.environ['CW_COMMAND'])
+
   return cw(**args)
 
 

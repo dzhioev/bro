@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 """start a cw session focused on a task."""
 
+import os
 import re
 import subprocess
 import sys
@@ -116,6 +117,13 @@ def dive_in(dry_run: bool = False, command: str | None = None, task: str | None 
 
   if command is not None:
     prompt = f'{prompt}\n\nOnce you understand the task, {command}'
+
+  ppp_parts = ['dive-in']
+  if task is not None:
+    ppp_parts.extend(['-t', task])
+  if command is not None:
+    ppp_parts.append(command)
+  os.environ.setdefault('PPP_COMMAND', ' '.join(ppp_parts))
 
   proj = _project_root()
   cw_bin = proj / '.venv' / 'bin' / 'cw'
