@@ -140,11 +140,30 @@ def _docker_run_argv(
   github_token = (proj / '.configs' / 'cw_github_token').resolve()
   if github_token.is_file():
     argv += ['-v', f'{github_token}:/run/secrets/github_token:ro']
-  creds = _keychain_credentials()
-  if creds is not None:
-    creds_file = claude_dir / '.credentials.json'
-    creds_file.write_text(json.dumps(creds))
-    creds_file.chmod(0o600)
+  # bind-mount the host credentials file rw so token refreshes inside the
+  # container propagate back to the host; without this, each container consumes
+  # the single-use OAuth refresh token and the host copy becomes stale, forcing
+  # re-login on the next session.
+  # on macOS: the keychain may have fresher tokens (e.g. after a host-mode login
+  # that updated the keychain but not the file) — compare expiresAt and pick the
+  # more recent source.
+  host_creds = home / '.claude' / '.credentials.json'
+  keychain_creds = _keychain_credentials()
+  if keychain_creds is not None:
+    keychain_expiry = keychain_creds.get('claudeAiOauth', {}).get('expiresAt', 0)
+    file_expiry = 0
+    if host_creds.is_file():
+      try:
+        file_expiry = (
+          json.loads(host_creds.read_text()).get('claudeAiOauth', {}).get('expiresAt', 0)
+        )
+      except (json.JSONDecodeError, OSError):
+        pass
+    if keychain_expiry > file_expiry:
+      host_creds.write_text(json.dumps(keychain_creds))
+      host_creds.chmod(0o600)
+  if host_creds.is_file():
+    argv += ['-v', f'{host_creds}:/home/cw/.claude/.credentials.json']
   return [*argv, tag, 'claude', *claude_args]
 
 
