@@ -3,6 +3,8 @@
 DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 cd "$DIR/.."
 
+unset VIRTUAL_ENV
+
 if ! command -v uv >/dev/null 2>&1; then
   echo "uv not found; run setup/setup_env.sh first or install manually" >&2
   exit 1
