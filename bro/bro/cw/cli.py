@@ -688,7 +688,7 @@ def main(argv=None):
   parts = [BASE_PROMPT]
   if prompt is not None:
     parts.append(prompt)
-  args['claude_args'] = ['-p', '\n\n'.join(parts), *args['claude_args']]
+  args['claude_args'] = [*args['claude_args'], '\n\n'.join(parts)]
 
   return cw(**args)
 
