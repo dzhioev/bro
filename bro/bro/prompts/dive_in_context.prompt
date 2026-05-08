@@ -1,0 +1,6 @@
+Step 2 — gather context:
+- If the task has a project: look it up in get_projects for its summary, then list_tasks filtered to that project (active statuses: Live, Waiting, Repeated) to see sibling tasks
+- Note any tags — they classify the task domain
+
+Step 3 — plan:
+Synthesize what you learned. What is this task about, what is the goal, what is the project context. Figure out how to achieve it — for coding tasks, explore the codebase; for tasks that need external information, say what you need. Present your understanding and proposed approach, then start working.

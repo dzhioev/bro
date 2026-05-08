@@ -10,45 +10,7 @@ from pathlib import Path
 from base import log
 from base.args import Parser
 from flow.focus.client.client import default_client
-
-
-FOCUSED_PROMPT = """\
-Dive into the currently focused task and figure out how to accomplish it.
-
-Step 1 — understand the task:
-- get_focused_task to find what is currently focused (if nothing is focused, say so and stop)
-- get_task_info for full metadata
-- get_content for the task body
-
-Step 2 — gather context:
-- If the task has a project: look it up in get_projects for its summary, then list_tasks \
-filtered to that project (active statuses: Live, Waiting, Repeated) to see sibling tasks
-- Note any tags — they classify the task domain
-
-Step 3 — plan:
-Synthesize what you learned. What is this task about, what is the goal, what is the project \
-context. Figure out how to achieve it — for coding tasks, explore the codebase; for tasks that \
-need external information, say what you need. Present your understanding and proposed approach, \
-then start working."""
-
-
-TASK_PROMPT = """\
-Dive into task {task_id} and figure out how to accomplish it.
-
-Step 1 — understand the task:
-- get_task_info("{task_id}") for full metadata
-- get_content("{task_id}") for the task body
-
-Step 2 — gather context:
-- If the task has a project: look it up in get_projects for its summary, then list_tasks \
-filtered to that project (active statuses: Live, Waiting, Repeated) to see sibling tasks
-- Note any tags — they classify the task domain
-
-Step 3 — plan:
-Synthesize what you learned. What is this task about, what is the goal, what is the project \
-context. Figure out how to achieve it — for coding tasks, explore the codebase; for tasks that \
-need external information, say what you need. Present your understanding and proposed approach, \
-then start working."""
+from prompts import get_prompt
 
 
 def _slugify(name: str) -> str:
@@ -100,7 +62,10 @@ def dive_in(dry_run: bool = False, command: str | None = None, task: str | None 
     task_id = _resolve_task_id(task)
     task_name = _resolve_task_name(task_id)
     log.info('task: %s', task_name)
-    prompt = TASK_PROMPT.format(task_id=task_id)
+    startup = get_prompt('dive_in_task.prompt').format(task_id=task_id)
+    prompt = get_prompt('dive_in.prompt').format(
+      target=f'task {task_id}', startup=startup, context=get_prompt('dive_in_context.prompt')
+    )
   else:
     client = default_client()
     state = client.get_focus()
@@ -109,7 +74,11 @@ def dive_in(dry_run: bool = False, command: str | None = None, task: str | None 
       return 1
     task_name = state.task.name
     log.info('focused: %s', task_name)
-    prompt = FOCUSED_PROMPT
+    prompt = get_prompt('dive_in.prompt').format(
+      target='the currently focused task',
+      startup=get_prompt('dive_in_focused.prompt'),
+      context=get_prompt('dive_in_context.prompt'),
+    )
 
   name = _slugify(task_name)
   if len(name) == 0:
