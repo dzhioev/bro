@@ -76,6 +76,7 @@ _UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 
 
 def _resolve_task_id(task_ref: str) -> str:
+  task_ref = task_ref.replace('\\', '')
   m = _NOTION_URL_RE.match(task_ref)
   if m is not None:
     raw = m.group(1)
