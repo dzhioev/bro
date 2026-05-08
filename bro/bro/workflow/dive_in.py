@@ -96,7 +96,7 @@ def dive_in(dry_run: bool = False, command: str | None = None, task: str | None 
 
   proj = _project_root()
   cw_bin = proj / '.venv' / 'bin' / 'cw'
-  cmd = [str(cw_bin), 'ss', '-c', '--mcp', name, prompt]
+  cmd = [str(cw_bin), 'ss', '-c', '--mcp', '-p', prompt, name]
   if dry_run:
     print(' '.join(_shell_quote(c) for c in cmd))
     return 0

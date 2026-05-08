@@ -40,6 +40,7 @@ from base import log
 from base.args import Parser
 
 CONTAINER_DIR = Path(__file__).resolve().parent / '.claude' / 'container'
+BASE_PROMPT = 'Read all files in prompts/base/ and follow their instructions.'
 _DOCKER_FORWARD_ENV = (
   'CW_COMMAND',
   'PPP_COMMAND',
@@ -600,6 +601,9 @@ def main(argv=None):
   ss.add_argument(
     '--mcp', action='store_true', help='enable the local flow MCP server in the claude session'
   )
+  ss.add_argument(
+    '-p', '--prompt', default=None, help='initial prompt (prepended with base prompt)'
+  )
   ss.add_argument('name', help='worktree name')
   ss.add_argument('claude_args', nargs=argparse.REMAINDER, help='args forwarded to claude')
 
@@ -658,6 +662,7 @@ def main(argv=None):
   assert cmd == 'ss'
   auto = args.pop('auto')
   mcp = args.pop('mcp')
+  prompt = args.pop('prompt')
   if auto:
     if not args['container']:
       parser.error('--auto requires --container')
@@ -679,6 +684,11 @@ def main(argv=None):
   cw_parts.extend(args['claude_args'])
   os.environ['CW_COMMAND'] = ' '.join(cw_parts)
   os.environ.setdefault('PPP_COMMAND', os.environ['CW_COMMAND'])
+
+  parts = [BASE_PROMPT]
+  if prompt is not None:
+    parts.append(prompt)
+  args['claude_args'] = ['-p', '\n\n'.join(parts), *args['claude_args']]
 
   return cw(**args)
 
