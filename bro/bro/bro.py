@@ -14,8 +14,11 @@ class Bro(ABC):
   system_prompt: str
   model: str = DEFAULT_MODEL
 
+  def __init__(self, mcp_servers: list[llm.mcp.MCPServer] | None = None):
+    self._mcp_servers = mcp_servers if mcp_servers is not None else []
+
   def mcp_servers(self) -> list[llm.mcp.MCPServer]:
-    return []
+    return self._mcp_servers
 
   async def run(self, input: str) -> str:
     llm = self._create_llm()
