@@ -5,6 +5,10 @@ Step 2 — gather context:
 Step 3 — plan:
 Synthesize what you learned. What is this task about, what is the goal, what is the project context. Figure out how to achieve it — for coding tasks, explore the codebase; for tasks that need external information, say what you need. Present your understanding and proposed approach, then start working.
 
+## Task closure
+
+When the task's goal appears to be achieved — whether through code changes, investigation, or confirming existing behavior — propose closing the task (update_task with status='Done'). Don't close automatically; ask the user first. For code changes, the finalize-and-land skill handles this after landing; for everything else, propose it as soon as you've confirmed the goal is met.
+
 ## Development log
 
 Throughout the session, maintain a development log on the task itself using append_content. This gives the task a persistent record of what happened and why.
