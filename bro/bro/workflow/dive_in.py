@@ -78,6 +78,7 @@ def dive_in(
       if state is None:
         log.error('no task is currently focused')
         return 1
+      task_id = state.task.id
       task_name = state.task.name
       log.info('focused: %s', task_name)
       prompt = get_prompt('dive_in.prompt').format(
@@ -92,6 +93,8 @@ def dive_in(
 
     if command is not None:
       prompt = f'{prompt}\n\nOnce you understand the task, {command}'
+
+    os.environ['CW_TASK_ID'] = task_id
 
   ppp_parts = ['dive-in']
   if new:
