@@ -250,7 +250,7 @@ def main(argv=None):
   parser = Parser(description='sync Claude Code session logs to S3 + DynamoDB')
   parser.add_argument('--watch', action='store_true', help='poll for changes and sync continuously')
   parser.add_argument(
-    '--interval', type=int, default=60, help='poll interval in seconds (default: 60)'
+    '--interval', type=int, default=1, help='poll interval in seconds (default: 1)'
   )
   parser.add_argument(
     '--workspace', default=None, help='workspace name (default: from CW_COMMAND/CW_NAME)'
