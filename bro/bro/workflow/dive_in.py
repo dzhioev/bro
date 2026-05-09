@@ -58,38 +58,53 @@ def _resolve_task_name(task_id: str) -> str:
 
 
 def dive_in(
-  dry_run: bool = False, auto: bool = False, command: str | None = None, task: str | None = None
+  dry_run: bool = False,
+  auto: bool = False,
+  command: str | None = None,
+  task: str | None = None,
+  new: bool = False,
 ) -> int:
-  if task is not None:
-    task_id = _resolve_task_id(task)
-    task_name = _resolve_task_name(task_id)
-    log.info('task: %s', task_name)
-    startup = get_prompt('dive_in_task.prompt').format(task_id=task_id)
-    prompt = get_prompt('dive_in.prompt').format(
-      target=f'task {task_id}', startup=startup, context=get_prompt('dive_in_context.prompt')
+  if new:
+    hint = f'- Initial idea from the user: {command}\n' if command is not None else ''
+    prompt = get_prompt('dive_in_new.prompt').format(
+      hint=hint, context=get_prompt('dive_in_context.prompt')
     )
+    name = _slugify(command) if command is not None else ''
+    if len(name) == 0:
+      name = 'dive-in-new'
   else:
-    client = default_client()
-    state = client.get_focus()
-    if state is None:
-      log.error('no task is currently focused')
-      return 1
-    task_name = state.task.name
-    log.info('focused: %s', task_name)
-    prompt = get_prompt('dive_in.prompt').format(
-      target='the currently focused task',
-      startup=get_prompt('dive_in_focused.prompt'),
-      context=get_prompt('dive_in_context.prompt'),
-    )
+    if task is not None:
+      task_id = _resolve_task_id(task)
+      task_name = _resolve_task_name(task_id)
+      log.info('task: %s', task_name)
+      startup = get_prompt('dive_in_task.prompt').format(task_id=task_id)
+      prompt = get_prompt('dive_in.prompt').format(
+        target=f'task {task_id}', startup=startup, context=get_prompt('dive_in_context.prompt')
+      )
+    else:
+      client = default_client()
+      state = client.get_focus()
+      if state is None:
+        log.error('no task is currently focused')
+        return 1
+      task_name = state.task.name
+      log.info('focused: %s', task_name)
+      prompt = get_prompt('dive_in.prompt').format(
+        target='the currently focused task',
+        startup=get_prompt('dive_in_focused.prompt'),
+        context=get_prompt('dive_in_context.prompt'),
+      )
 
-  name = _slugify(task_name)
-  if len(name) == 0:
-    name = 'dive-in'
+    name = _slugify(task_name)
+    if len(name) == 0:
+      name = 'dive-in'
 
-  if command is not None:
-    prompt = f'{prompt}\n\nOnce you understand the task, {command}'
+    if command is not None:
+      prompt = f'{prompt}\n\nOnce you understand the task, {command}'
 
   ppp_parts = ['dive-in']
+  if new:
+    ppp_parts.append('--new')
   if task is not None:
     ppp_parts.extend(['-t', task])
   if command is not None:
@@ -116,11 +131,20 @@ def main(argv=None):
   parser.add_argument(
     '--auto', action='store_true', help='run autonomously, skipping most permissions'
   )
-  parser.add_argument(
+  group = parser.add_mutually_exclusive_group()
+  group.add_argument(
     '-t', '--task', default=None, help='task ID or Notion URL to dive into (default: focused task)'
   )
+  group.add_argument(
+    '--new',
+    action='store_true',
+    help='start by creating a new task, then dive into it',
+  )
   parser.add_argument(
-    'command', nargs='?', default=None, help='initial command for the session (appended to prompt)'
+    'command',
+    nargs='?',
+    default=None,
+    help='initial command for the session (appended to prompt; with --new, used as the seed idea for the task)',
   )
   args = parser.parse(argv)
   return dive_in(**args)
