@@ -671,13 +671,21 @@ def main(argv=None):
       print(r, file=sys.stderr)
     return 0 if clean_ else 1
   assert cmd == 'ss'
-  auto = args.pop('auto')
-  mcp = args.pop('mcp')
-  prompt = args.pop('prompt')
+  name = args['name']
+  container = args['container']
+  drop = args['drop']
+  auto = args['auto']
+  mcp = args['mcp']
+  prompt = args['prompt']
+  claude_args = args['claude_args']
+
+  if auto and not container:
+    parser.error('--auto requires --container')
+
+  os.environ['CW_COMMAND'] = ' '.join(ss.reconstruct(args, prog=['cw', 'ss'], exclude=('prompt',)))
+  os.environ.setdefault('PPP_COMMAND', os.environ['CW_COMMAND'])
+
   if auto:
-    if not args['container']:
-      parser.error('--auto requires --container')
-    args['claude_args'] = ['--dangerously-skip-permissions', *args['claude_args']]
     os.environ['GIT_AUTHOR_NAME'] = _BRO_GIT_NAME
     os.environ['GIT_AUTHOR_EMAIL'] = _BRO_GIT_EMAIL
     os.environ['GIT_COMMITTER_NAME'] = _BRO_GIT_NAME
@@ -687,32 +695,22 @@ def main(argv=None):
     token_path = (proj / '.configs' / _BRO_TOKEN_FILE).resolve()
     if token_path.is_file():
       os.environ['GITHUB_TOKEN'] = token_path.read_text().strip()
-  if mcp:
-    args['claude_args'] = ['--mcp-config=flow/mcp/mcp.json', *args['claude_args']]
-  args['claude_args'] = ['--remote-control', args['name'], *args['claude_args']]
 
-  cw_parts = ['cw', 'ss']
-  if args['container']:
-    cw_parts.append('-c')
-  if auto:
-    cw_parts.append('--auto')
-  if args['drop']:
-    cw_parts.append('--drop')
+  inject = ['--remote-control', name]
   if mcp:
-    cw_parts.append('--mcp')
-  cw_parts.append(args['name'])
-  cw_parts.extend(args['claude_args'])
-  os.environ['CW_COMMAND'] = ' '.join(cw_parts)
-  os.environ.setdefault('PPP_COMMAND', os.environ['CW_COMMAND'])
-
-  parts = [BASE_PROMPT]
+    inject.append('--mcp-config=flow/mcp/mcp.json')
   if auto:
-    parts.append('Land mode: PR')
+    inject.append('--dangerously-skip-permissions')
+  claude_args = [*inject, *claude_args]
+
+  prompt_parts = [BASE_PROMPT]
+  if auto:
+    prompt_parts.append('Land mode: PR')
   if prompt is not None:
-    parts.append(prompt)
-  args['claude_args'] = [*args['claude_args'], '\n\n'.join(parts)]
+    prompt_parts.append(prompt)
+  claude_args = [*claude_args, '\n\n'.join(prompt_parts)]
 
-  return cw(**args)
+  return cw(name=name, container=container, drop=drop, claude_args=claude_args)
 
 
 if __name__ == '__main__':
