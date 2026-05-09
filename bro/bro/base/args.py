@@ -5,7 +5,8 @@ import os
 import sys
 from base.time_util import parse_moment, Moment
 from icecream import ic
-from typing import Callable, Type, Sequence, TypeVar, overload
+from collections.abc import Iterable, Sequence
+from typing import Callable, Type, TypeVar, overload
 import logging
 
 from base import log
@@ -294,14 +295,14 @@ class Parser(argparse.ArgumentParser):
 
   @overload
   def parse_args(
-    self, args: Sequence[str] | None = ..., namespace: None = ...
+    self, args: Iterable[str] | None = ..., namespace: None = ...
   ) -> argparse.Namespace: ...
   @overload
-  def parse_args(self, args: Sequence[str] | None, namespace: _N) -> _N: ...
+  def parse_args(self, args: Iterable[str] | None, namespace: _N) -> _N: ...
   @overload
   def parse_args(self, *, namespace: _N) -> _N: ...
   def parse_args(
-    self, args: Sequence[str] | None = None, namespace: _N | None = None
+    self, args: Iterable[str] | None = None, namespace: _N | None = None
   ) -> _N | argparse.Namespace:
     ic.disable()
     argv_list = list(args) if args is not None else list(sys.argv[1:])
