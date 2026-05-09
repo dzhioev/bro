@@ -10,25 +10,27 @@ TAG="ppp-cw:smoke-test"
 echo "building image" >&2
 docker build -t "$TAG" -f "$DIR/Dockerfile" --build-context "proj=$PROJ" "$DIR" >&2
 
-TMPDIR="$(mktemp -d)"
-trap 'rm -rf "$TMPDIR"' EXIT
-mkdir -p "$TMPDIR/workspace" "$TMPDIR/claude"
+# colima only shares /Users; mktemp uses /var/folders which is invisible
+# inside the container. create temp dir under the project tree instead.
+SMOKE_TMP="$(mktemp -d "$PROJ/.smoke-XXXXXX")"
+trap 'rm -rf "$SMOKE_TMP"' EXIT
+mkdir -p "$SMOKE_TMP/workspace" "$SMOKE_TMP/claude"
 
-cat > "$TMPDIR/gitconfig" << 'GC'
+cat > "$SMOKE_TMP/gitconfig" << 'GC'
 [user]
     name = Smoke Test
     email = test@test.com
 GC
 
-echo "ghp_fake_token" > "$TMPDIR/github_token"
+echo "ghp_fake_token" > "$SMOKE_TMP/github_token"
 
 echo "running entrypoint" >&2
 docker run --rm \
-  -v "$TMPDIR/workspace:/workspace" \
+  -v "$SMOKE_TMP/workspace:/workspace" \
   -v "$PROJ:/host-repo:ro" \
-  -v "$TMPDIR/gitconfig:/host-gitconfig:ro" \
-  -v "$TMPDIR/claude:/home/cw/.claude" \
-  -v "$TMPDIR/github_token:/run/secrets/github_token:ro" \
+  -v "$SMOKE_TMP/gitconfig:/host-gitconfig:ro" \
+  -v "$SMOKE_TMP/claude:/home/cw/.claude" \
+  -v "$SMOKE_TMP/github_token:/run/secrets/github_token:ro" \
   -e "HOME=/home/cw" \
   -e "CW_NAME=smoke-test" \
   -e "CW_SKIP_VENV=1" \
