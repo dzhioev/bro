@@ -179,6 +179,7 @@ def _watch(interval: int, workspace: str, bucket: str, s3, dynamo, table_name: s
   last_mtime = 0.0
   last_path: Path | None = None
   stop = threading.Event()
+  parent_pid = os.getppid()
 
   def _handle_signal(signum, frame):
     stop.set()
@@ -187,6 +188,9 @@ def _watch(interval: int, workspace: str, bucket: str, s3, dynamo, table_name: s
   signal.signal(signal.SIGINT, _handle_signal)
 
   while not stop.is_set():
+    if os.getppid() != parent_pid:
+      log.info('parent process exited, shutting down')
+      break
     path = _latest_jsonl(projects_dir)
     if path is not None:
       try:
@@ -250,7 +254,7 @@ def main(argv=None):
   parser = Parser(description='sync Claude Code session logs to S3 + DynamoDB')
   parser.add_argument('--watch', action='store_true', help='poll for changes and sync continuously')
   parser.add_argument(
-    '--interval', type=int, default=60, help='poll interval in seconds (default: 60)'
+    '--interval', type=int, default=1, help='poll interval in seconds (default: 1)'
   )
   parser.add_argument(
     '--workspace', default=None, help='workspace name (default: from CW_COMMAND/CW_NAME)'
