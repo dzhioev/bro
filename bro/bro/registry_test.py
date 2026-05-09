@@ -1,6 +1,7 @@
 import pytest
 
 from bro.bro import Bro
+import bro.registry
 from bro.registry import _REGISTRY, register, get_bro, list_bros
 from llm.llm import LLM
 from llm.mcp import MCPServer
@@ -38,10 +39,13 @@ class BetaBro(Bro):
 @pytest.fixture(autouse=True)
 def clean_registry():
   saved = dict(_REGISTRY)
+  saved_initialized = bro.registry._initialized
   _REGISTRY.clear()
+  bro.registry._initialized = True
   yield
   _REGISTRY.clear()
   _REGISTRY.update(saved)
+  bro.registry._initialized = saved_initialized
 
 
 class TestRegister:
