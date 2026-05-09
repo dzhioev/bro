@@ -52,10 +52,19 @@ def _projects_dir() -> Path:
 def _latest_jsonl(projects_dir: Path) -> Path | None:
   if not projects_dir.is_dir():
     return None
-  jsonls = [p for p in projects_dir.iterdir() if p.suffix == '.jsonl']
-  if len(jsonls) == 0:
-    return None
-  return max(jsonls, key=lambda p: p.stat().st_mtime)
+  best: Path | None = None
+  best_mtime = 0.0
+  for p in projects_dir.iterdir():
+    if p.suffix != '.jsonl':
+      continue
+    try:
+      mtime = p.stat().st_mtime
+    except FileNotFoundError:
+      continue
+    if mtime > best_mtime:
+      best = p
+      best_mtime = mtime
+  return best
 
 
 def _extract_metadata(path: Path) -> dict:
@@ -202,6 +211,8 @@ def _watch(interval: int, workspace: str, bucket: str, s3, dynamo, table_name: s
           _sync_once(path, workspace, bucket, s3, dynamo, table_name)
           last_mtime = mtime
           last_path = path
+        except FileNotFoundError:
+          log.info('session log disappeared, skipping')
         except Exception:
           log.exception('sync failed')
     stop.wait(interval)
@@ -210,6 +221,8 @@ def _watch(interval: int, workspace: str, bucket: str, s3, dynamo, table_name: s
   if path is not None:
     try:
       _sync_once(path, workspace, bucket, s3, dynamo, table_name)
+    except FileNotFoundError:
+      log.info('session log disappeared during final sync, skipping')
     except Exception:
       log.exception('final sync failed')
 
