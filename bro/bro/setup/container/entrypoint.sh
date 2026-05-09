@@ -108,6 +108,8 @@ if [ ! -x .venv/bin/python ] && [ "${CW_SKIP_VENV:-}" != "1" ]; then
 fi
 
 # activate venv so all child processes (hooks, MCP servers, Bash tool) inherit it
-source /workspace/.venv/bin/activate
+if [ "${CW_SKIP_VENV:-}" != "1" ]; then
+  source /workspace/.venv/bin/activate
+fi
 
 exec "$@"
