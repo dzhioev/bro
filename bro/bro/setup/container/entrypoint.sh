@@ -107,4 +107,7 @@ if [ ! -x .venv/bin/python ] && [ "${CW_SKIP_VENV:-}" != "1" ]; then
   uv sync --all-groups >&2
 fi
 
+# activate venv so all child processes (hooks, MCP servers, Bash tool) inherit it
+source /workspace/.venv/bin/activate
+
 exec "$@"

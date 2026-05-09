@@ -62,6 +62,13 @@ _BRO_TOKEN_FILE = 'cw_github_token_bro'
 _USER_TOKEN_FILE = 'cw_github_token'
 
 
+def _venv_env(venv: Path) -> dict[str, str]:
+  env = {**os.environ, 'VIRTUAL_ENV': str(venv)}
+  env['PATH'] = str(venv / 'bin') + ':' + env.get('PATH', '')
+  env.pop('PYTHONHOME', None)
+  return env
+
+
 def _git_out(*args: str, cwd: str | None = None) -> str:
   return subprocess.check_output(['git', *args], cwd=cwd, text=True).strip()
 
@@ -623,10 +630,12 @@ def cw(name: str, container: bool, drop: bool, claude_args: list[str]) -> int:
   proj = _project_root()
   os.chdir(proj)
 
-  if not drop:
-    os.execvp('claude', ['claude', '-w', name, *claude_args])
+  env = _venv_env(proj / '.claude' / 'worktrees' / name / '.venv')
 
-  env = {**os.environ, 'CW_DROP': '1'}
+  if not drop:
+    os.execvpe('claude', ['claude', '-w', name, *claude_args], env)
+
+  env['CW_DROP'] = '1'
   result = subprocess.run(['claude', '-w', name, *claude_args], env=env)
   worktree = proj / '.claude' / 'worktrees' / name
   subprocess.run(

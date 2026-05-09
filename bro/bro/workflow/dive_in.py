@@ -5,7 +5,6 @@ import os
 import re
 import subprocess
 import sys
-from pathlib import Path
 
 from base import log
 from base.args import Parser
@@ -18,14 +17,6 @@ def _slugify(name: str) -> str:
   s = re.sub(r'[^a-z0-9]+', '-', s)
   s = s.strip('-')
   return s[:40].rstrip('-') if len(s) > 40 else s
-
-
-def _project_root() -> Path:
-  return (
-    Path(subprocess.check_output(['git', 'rev-parse', '--git-common-dir'], text=True).strip())
-    .resolve()
-    .parent
-  )
 
 
 def _shell_quote(s: str) -> str:
@@ -111,9 +102,7 @@ def dive_in(
     ppp_parts.append(command)
   os.environ.setdefault('PPP_COMMAND', ' '.join(ppp_parts))
 
-  proj = _project_root()
-  cw_bin = proj / '.venv' / 'bin' / 'cw'
-  cmd = [str(cw_bin), 'ss', '-c', '--mcp']
+  cmd = ['cw', 'ss', '-c', '--mcp']
   if auto:
     cmd.append('--auto')
   cmd.extend(['-p', prompt, name])
