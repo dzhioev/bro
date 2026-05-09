@@ -25,6 +25,13 @@ if [ ! -f "$HOME/.claude/.seeded" ] && [ -d /host-claude ]; then
   touch "$HOME/.claude/.seeded"
 fi
 
+# seed host git config into a writable copy (the host file is bind-mounted
+# read-only at /host-gitconfig; git config --global needs atomic rename).
+# done before the clone so init.defaultBranch suppresses the git hint
+if [ -f /host-gitconfig ] && [ ! -f "$HOME/.gitconfig" ]; then
+  cp /host-gitconfig "$HOME/.gitconfig"
+fi
+
 # first-run clone: /workspace starts empty; host repo is bind-mounted at /host-repo
 # read-only. clone --shared reuses /host-repo/.git/objects via alternates so there's
 # no disk duplication. origin is retargeted to the host's upstream (so `git push`
@@ -62,12 +69,6 @@ if [ ! -d /workspace/.git ]; then
               submodule update --init -- "$path" >&2
         done
   fi
-fi
-
-# seed host git config into a writable copy (the host file is bind-mounted
-# read-only at /host-gitconfig; git config --global needs atomic rename)
-if [ -f /host-gitconfig ] && [ ! -f "$HOME/.gitconfig" ]; then
-  cp /host-gitconfig "$HOME/.gitconfig"
 fi
 
 # configure git to authenticate with a GitHub token when available
