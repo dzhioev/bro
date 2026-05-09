@@ -557,6 +557,49 @@ def clean_workspaces(
   return 0
 
 
+def start_session(
+  name: str,
+  container: bool,
+  drop: bool,
+  auto: bool,
+  mcp: bool,
+  prompt: str | None,
+  claude_args: list[str],
+) -> int:
+  flags = {'-c': container, '--auto': auto, '--drop': drop, '--mcp': mcp}
+  os.environ['CW_COMMAND'] = ' '.join(
+    ['cw', 'ss', *(f for f, v in flags.items() if v), name, *claude_args]
+  )
+  os.environ.setdefault('PPP_COMMAND', os.environ['CW_COMMAND'])
+
+  if auto:
+    os.environ['GIT_AUTHOR_NAME'] = _BRO_GIT_NAME
+    os.environ['GIT_AUTHOR_EMAIL'] = _BRO_GIT_EMAIL
+    os.environ['GIT_COMMITTER_NAME'] = _BRO_GIT_NAME
+    os.environ['GIT_COMMITTER_EMAIL'] = _BRO_GIT_EMAIL
+    os.environ['CW_TOKEN_FILE'] = _BRO_TOKEN_FILE
+    proj = _project_root()
+    token_path = (proj / '.configs' / _BRO_TOKEN_FILE).resolve()
+    if token_path.is_file():
+      os.environ['GITHUB_TOKEN'] = token_path.read_text().strip()
+
+  inject = ['--remote-control', name]
+  if mcp:
+    inject.append('--mcp-config=flow/mcp/mcp.json')
+  if auto:
+    inject.append('--dangerously-skip-permissions')
+  claude_args = [*inject, *claude_args]
+
+  prompt_parts = [BASE_PROMPT]
+  if auto:
+    prompt_parts.append('Land mode: PR')
+  if prompt is not None:
+    prompt_parts.append(prompt)
+  claude_args = [*claude_args, '\n\n'.join(prompt_parts)]
+
+  return cw(name=name, container=container, drop=drop, claude_args=claude_args)
+
+
 def cw(name: str, container: bool, drop: bool, claude_args: list[str]) -> int:
   if container and os.environ.get('CW_IN_CONTAINER') is not None:
     log.info('already inside a container; falling back to host mode')
@@ -671,46 +714,9 @@ def main(argv=None):
       print(r, file=sys.stderr)
     return 0 if clean_ else 1
   assert cmd == 'ss'
-  name = args['name']
-  container = args['container']
-  drop = args['drop']
-  auto = args['auto']
-  mcp = args['mcp']
-  prompt = args['prompt']
-  claude_args = args['claude_args']
-
-  if auto and not container:
+  if args['auto'] and not args['container']:
     parser.error('--auto requires --container')
-
-  os.environ['CW_COMMAND'] = ' '.join(ss.reconstruct(args, prog=['cw', 'ss'], exclude=('prompt',)))
-  os.environ.setdefault('PPP_COMMAND', os.environ['CW_COMMAND'])
-
-  if auto:
-    os.environ['GIT_AUTHOR_NAME'] = _BRO_GIT_NAME
-    os.environ['GIT_AUTHOR_EMAIL'] = _BRO_GIT_EMAIL
-    os.environ['GIT_COMMITTER_NAME'] = _BRO_GIT_NAME
-    os.environ['GIT_COMMITTER_EMAIL'] = _BRO_GIT_EMAIL
-    os.environ['CW_TOKEN_FILE'] = _BRO_TOKEN_FILE
-    proj = _project_root()
-    token_path = (proj / '.configs' / _BRO_TOKEN_FILE).resolve()
-    if token_path.is_file():
-      os.environ['GITHUB_TOKEN'] = token_path.read_text().strip()
-
-  inject = ['--remote-control', name]
-  if mcp:
-    inject.append('--mcp-config=flow/mcp/mcp.json')
-  if auto:
-    inject.append('--dangerously-skip-permissions')
-  claude_args = [*inject, *claude_args]
-
-  prompt_parts = [BASE_PROMPT]
-  if auto:
-    prompt_parts.append('Land mode: PR')
-  if prompt is not None:
-    prompt_parts.append(prompt)
-  claude_args = [*claude_args, '\n\n'.join(prompt_parts)]
-
-  return cw(name=name, container=container, drop=drop, claude_args=claude_args)
+  return start_session(**args)
 
 
 if __name__ == '__main__':
