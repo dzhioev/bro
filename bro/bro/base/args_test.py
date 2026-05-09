@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+import argparse
+
 import pytest
 from base.args import Parser, moment_parser, list_parser
 
@@ -545,3 +547,89 @@ class TestPrintEnv:
       'CURRENT VALUE': 'x,y',
       'ENV VALUE': '(not set)',
     }
+
+
+class TestReconstruct:
+  def test_store_true_flags(self):
+    parser = Parser()
+    parser.add_argument('-c', '--container', action='store_true')
+    parser.add_argument('--drop', action='store_true')
+    args = parser.parse(['cmd', '-c'])
+    assert parser.reconstruct(args) == [parser.prog, '-c']
+
+  def test_value_arg_included_when_set(self):
+    parser = Parser()
+    parser.add_argument('--name', default=None)
+    args = parser.parse(['cmd', '--name', 'foo'])
+    assert parser.reconstruct(args) == [parser.prog, '--name', 'foo']
+
+  def test_value_arg_omitted_when_default(self):
+    parser = Parser()
+    parser.add_argument('--name', default='team')
+    args = parser.parse(['cmd'])
+    assert parser.reconstruct(args) == [parser.prog]
+
+  def test_positional_and_remainder(self):
+    parser = Parser()
+    parser.add_argument('target')
+    parser.add_argument('extra', nargs=argparse.REMAINDER)
+    args = parser.parse(['cmd', 'mytarget', '--foo', 'bar'])
+    assert parser.reconstruct(args) == [parser.prog, 'mytarget', '--foo', 'bar']
+
+  def test_prog_override_string(self):
+    parser = Parser()
+    parser.add_argument('--flag', action='store_true')
+    args = parser.parse(['cmd', '--flag'])
+    assert parser.reconstruct(args, prog='mycli') == ['mycli', '--flag']
+
+  def test_prog_override_list(self):
+    parser = Parser()
+    parser.add_argument('--flag', action='store_true')
+    args = parser.parse(['cmd', '--flag'])
+    assert parser.reconstruct(args, prog=['cw', 'ss']) == ['cw', 'ss', '--flag']
+
+  def test_exclude(self):
+    parser = Parser()
+    parser.add_argument('-c', '--container', action='store_true')
+    parser.add_argument('--auto', action='store_true')
+    parser.add_argument('-p', '--prompt', default=None)
+    args = parser.parse(['cmd', '-c', '--auto', '-p', 'hello'])
+    result = parser.reconstruct(args, exclude=('prompt',))
+    assert result == [parser.prog, '-c', '--auto']
+
+  def test_global_flags_excluded(self):
+    parser = Parser()
+    parser.add_argument('--flag', action='store_true')
+    args = parser.parse(['cmd', '--flag'])
+    # global flags like --verbose, --ic are not in the output
+    result = parser.reconstruct(args)
+    assert '--verbose' not in result
+    assert '--ic' not in result
+    assert '--allow-env' not in result
+    assert '--flag' in result
+
+  def test_namespace_input(self):
+    parser = Parser()
+    parser.add_argument('--flag', action='store_true')
+    ns = parser.parse_args(['--flag'])
+    result = parser.reconstruct(ns)
+    assert result == [parser.prog, '--flag']
+
+  def test_empty_remainder(self):
+    parser = Parser()
+    parser.add_argument('name')
+    parser.add_argument('rest', nargs=argparse.REMAINDER)
+    args = parser.parse(['cmd', 'foo'])
+    assert parser.reconstruct(args) == [parser.prog, 'foo']
+
+  def test_subparser_reconstruct(self):
+    parser = Parser()
+    subs = parser.add_subparsers(dest='cmd')
+    sub = subs.add_parser('ss')
+    sub.add_argument('-c', '--container', action='store_true')
+    sub.add_argument('--mcp', action='store_true')
+    sub.add_argument('name')
+    sub.add_argument('extra', nargs=argparse.REMAINDER)
+    args = parser.parse(['cmd', 'ss', '-c', '--mcp', 'myname', '--foo'])
+    result = sub.reconstruct(args, prog=['cw', 'ss'])
+    assert result == ['cw', 'ss', '-c', '--mcp', 'myname', '--foo']

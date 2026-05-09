@@ -322,6 +322,42 @@ class Parser(argparse.ArgumentParser):
     delattr(ns, 'allow_env')
     return ns
 
+  def reconstruct(self, ns, *, prog=None, exclude=()):
+    """Reconstruct canonical argv from a parsed namespace.
+
+    Iterates over the parser's actions and builds the command line from the
+    namespace values. Global flags (--verbose, --ic, --allow-env, --print-env)
+    and help are always excluded. Flags appear in definition order; positionals
+    follow.
+    """
+    get = ns.get if isinstance(ns, dict) else lambda d: getattr(ns, d, None)
+    parts = [prog] if isinstance(prog, str) else list(prog if prog is not None else [self.prog])
+    global_dests = {a.dest for a in self._global_group._group_actions}
+    skip = global_dests | set(exclude)
+    flags: list[argparse.Action] = []
+    positionals: list[argparse.Action] = []
+    for action in self._actions:
+      if action.dest in skip or isinstance(action, argparse._SubParsersAction):
+        continue
+      if len(action.option_strings) > 0:
+        flags.append(action)
+      else:
+        positionals.append(action)
+    for action in flags:
+      val = get(action.dest)
+      if isinstance(action, (argparse._StoreTrueAction, argparse._StoreFalseAction)):
+        if val != action.default:
+          parts.append(action.option_strings[0])
+      elif val is not None and val != action.default:
+        parts.extend([action.option_strings[0], str(val)])
+    for action in positionals:
+      val = get(action.dest)
+      if isinstance(val, list):
+        parts.extend(str(v) for v in val)
+      elif val is not None:
+        parts.append(str(val))
+    return parts
+
   def parse(self, argv=None):
     if argv is None:
       argv = sys.argv
