@@ -19,8 +19,6 @@ def main(argv=None) -> int | None:
 
   args = parser.parse(argv)
 
-  import bro.bros  # noqa: F401 — triggers registration
-
   from bro.registry import get_bro, list_bros
 
   command = args.get('command')
