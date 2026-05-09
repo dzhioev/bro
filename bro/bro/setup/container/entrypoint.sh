@@ -76,13 +76,20 @@ if [ -f /run/secrets/github_token ]; then
     '!f() { echo "username=x-access-token"; echo "password=$(cat /run/secrets/github_token)"; }; f'
 fi
 
-# block non-fast-forward pushes — the container token can't be scoped to
-# reject force push, and the repo has no branch protection
+# block non-fast-forward pushes and (for bro sessions) direct pushes to master
 hooks_dir="$(git -C /workspace rev-parse --git-dir)/hooks"
 mkdir -p "$hooks_dir"
 cat > "$hooks_dir/pre-push" << 'HOOK'
 #!/usr/bin/env -S bash -e
 while read -r _ local_sha remote_ref remote_sha; do
+  case "$remote_ref" in
+    refs/heads/master|refs/heads/main)
+      if [ "${GIT_AUTHOR_EMAIL:-}" = "dzhioev+bro@gmail.com" ]; then
+        echo "error: bro cannot push directly to $remote_ref — create a PR instead" >&2
+        exit 1
+      fi
+      ;;
+  esac
   [ "$remote_sha" = "0000000000000000000000000000000000000000" ] && continue
   if ! git merge-base --is-ancestor "$remote_sha" "$local_sha"; then
     echo "error: non-fast-forward push to $remote_ref is blocked" >&2

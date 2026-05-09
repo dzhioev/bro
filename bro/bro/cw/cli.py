@@ -43,12 +43,23 @@ CONTAINER_DIR = Path(__file__).resolve().parent / '.claude' / 'container'
 BASE_PROMPT = 'Read all files in prompts/base/ and follow their instructions.'
 _DOCKER_FORWARD_ENV = (
   'CW_COMMAND',
+  'CW_TOKEN_FILE',
+  'GITHUB_TOKEN',
+  'GIT_AUTHOR_NAME',
+  'GIT_AUTHOR_EMAIL',
+  'GIT_COMMITTER_NAME',
+  'GIT_COMMITTER_EMAIL',
   'PPP_COMMAND',
   'TERM_PROGRAM',
   'TERM_PROGRAM_VERSION',
   'COLORTERM',
   'VTE_VERSION',
 )
+
+_BRO_GIT_NAME = 'Bro'
+_BRO_GIT_EMAIL = 'dzhioev+bro@gmail.com'
+_BRO_TOKEN_FILE = 'cw_github_token_bro'
+_USER_TOKEN_FILE = 'cw_github_token'
 
 
 def _git_out(*args: str, cwd: str | None = None) -> str:
@@ -143,7 +154,7 @@ def _docker_run_argv(
   for var in _DOCKER_FORWARD_ENV:
     if os.environ.get(var) is not None:
       argv += ['-e', var]
-  github_token = (proj / '.configs' / 'cw_github_token').resolve()
+  github_token = (proj / '.configs' / os.environ.get('CW_TOKEN_FILE', _USER_TOKEN_FILE)).resolve()
   if github_token.is_file():
     argv += ['-v', f'{github_token}:/run/secrets/github_token:ro']
   # bind-mount the host credentials file rw so token refreshes inside the
@@ -667,6 +678,15 @@ def main(argv=None):
     if not args['container']:
       parser.error('--auto requires --container')
     args['claude_args'] = ['--dangerously-skip-permissions', *args['claude_args']]
+    os.environ['GIT_AUTHOR_NAME'] = _BRO_GIT_NAME
+    os.environ['GIT_AUTHOR_EMAIL'] = _BRO_GIT_EMAIL
+    os.environ['GIT_COMMITTER_NAME'] = _BRO_GIT_NAME
+    os.environ['GIT_COMMITTER_EMAIL'] = _BRO_GIT_EMAIL
+    os.environ['CW_TOKEN_FILE'] = _BRO_TOKEN_FILE
+    proj = _project_root()
+    token_path = (proj / '.configs' / _BRO_TOKEN_FILE).resolve()
+    if token_path.is_file():
+      os.environ['GITHUB_TOKEN'] = token_path.read_text().strip()
   if mcp:
     args['claude_args'] = ['--mcp-config=flow/mcp/mcp.json', *args['claude_args']]
   args['claude_args'] = ['--remote-control', args['name'], *args['claude_args']]
@@ -686,6 +706,8 @@ def main(argv=None):
   os.environ.setdefault('PPP_COMMAND', os.environ['CW_COMMAND'])
 
   parts = [BASE_PROMPT]
+  if auto:
+    parts.append('Land mode: PR')
   if prompt is not None:
     parts.append(prompt)
   args['claude_args'] = [*args['claude_args'], '\n\n'.join(parts)]
