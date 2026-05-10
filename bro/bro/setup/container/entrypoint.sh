@@ -4,10 +4,15 @@
 if [ "$(id -u)" = "0" ] && [ -z "${CW_ENTRYPOINT_REEXEC:-}" ]; then
   TARGET_UID="$(stat -c '%u' /workspace)"
   TARGET_GID="$(stat -c '%g' /workspace)"
-  if [ "$(id -u cw)" != "$TARGET_UID" ] || [ "$(id -g cw)" != "$TARGET_GID" ]; then
-    groupmod -o -g "$TARGET_GID" cw
-    usermod -o -u "$TARGET_UID" -g "$TARGET_GID" cw
-    chown cw:cw /home/cw /home/cw/.claude
+  # skip remapping when detected uid is 0 — on Docker for Mac, virtiofs reports
+  # bind mounts as root-owned but handles permissions transparently; remapping to
+  # uid 0 would make claude refuse --dangerously-skip-permissions
+  if [ "$TARGET_UID" != "0" ]; then
+    if [ "$(id -u cw)" != "$TARGET_UID" ] || [ "$(id -g cw)" != "$TARGET_GID" ]; then
+      groupmod -o -g "$TARGET_GID" cw
+      usermod -o -u "$TARGET_UID" -g "$TARGET_GID" cw
+      chown cw:cw /home/cw /home/cw/.claude
+    fi
   fi
   export CW_ENTRYPOINT_REEXEC=1
   exec gosu cw "$0" "$@"
