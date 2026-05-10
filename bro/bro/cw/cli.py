@@ -40,7 +40,7 @@ from base import log
 from base.args import Parser
 
 CONTAINER_DIR = Path(__file__).resolve().parent / '.claude' / 'container'
-BASE_PROMPT = 'Read all files in prompts/base/ and follow their instructions.'
+BASE_PROMPT = 'Read all files in prompts/shared/ and prompts/base/ and follow their instructions.'
 _DOCKER_FORWARD_ENV = (
   'CW_COMMAND',
   'CW_TASK_ID',

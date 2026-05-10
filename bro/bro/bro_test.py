@@ -53,7 +53,8 @@ class TestBroRun:
     bro = CaptureBro()
     await bro.run('test input')
     assert len(llm.told_messages) == 2
-    assert llm.told_messages[0] == {'role': 'system', 'content': 'be helpful'}
+    assert llm.told_messages[0]['role'] == 'system'
+    assert llm.told_messages[0]['content'].endswith('be helpful')
     assert llm.told_messages[1] == {'role': 'user', 'content': 'test input'}
 
 

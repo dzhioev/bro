@@ -1,11 +1,23 @@
 import asyncio
 import json
 from abc import ABC
+from pathlib import Path
 
 import llm.mcp
 from llm.llm import LLM, get_llm
 
 DEFAULT_MODEL = 'gpt-5'
+
+_SHARED_PROMPTS_DIR = Path(__file__).resolve().parent.parent / 'prompts' / 'shared'
+
+
+def _load_shared_prompts() -> str:
+  if not _SHARED_PROMPTS_DIR.is_dir():
+    return ''
+  parts = []
+  for path in sorted(_SHARED_PROMPTS_DIR.glob('*.md')):
+    parts.append(path.read_text().strip())
+  return '\n\n'.join(parts)
 
 
 class Bro(ABC):
@@ -16,6 +28,9 @@ class Bro(ABC):
 
   def __init__(self, mcp_servers: list[llm.mcp.MCPServer] | None = None):
     self._mcp_servers = mcp_servers if mcp_servers is not None else []
+    shared = _load_shared_prompts()
+    if len(shared) > 0:
+      self.system_prompt = f'{shared}\n\n{self.system_prompt}'
 
   def mcp_servers(self) -> list[llm.mcp.MCPServer]:
     return self._mcp_servers
