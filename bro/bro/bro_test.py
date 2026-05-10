@@ -10,12 +10,10 @@ class MockLLM(LLM):
   def __init__(self, response: str = 'mock', mcp_servers: list[MCPServer] | None = None):
     super().__init__(mcp_servers)
     self.response = response
-    self.told_messages: list[dict] = []
+    self.send_calls: list[list[dict]] = []
 
-  async def tell(self, messages: list[dict]) -> None:
-    self.told_messages = messages
-
-  async def ask(self) -> str:
+  async def send(self, messages: list[dict]) -> str:
+    self.send_calls.append(messages)
     return self.response
 
 
@@ -52,10 +50,100 @@ class TestBroRun:
 
     bro = CaptureBro()
     await bro.run('test input')
-    assert len(llm.told_messages) == 2
-    assert llm.told_messages[0]['role'] == 'system'
-    assert llm.told_messages[0]['content'].endswith('be helpful')
-    assert llm.told_messages[1] == {'role': 'user', 'content': 'test input'}
+    assert len(llm.send_calls) == 1
+    messages = llm.send_calls[0]
+    assert len(messages) == 2
+    assert messages[0]['role'] == 'system'
+    assert messages[0]['content'].endswith('be helpful')
+    assert messages[1] == {'role': 'user', 'content': 'test input'}
+
+
+class TestBroSend:
+  @pytest.mark.asyncio
+  async def test_send_returns_response(self):
+    bro = EchoBro(response='hello')
+    result = await bro.send('hi')
+    assert result == 'hello'
+
+  @pytest.mark.asyncio
+  async def test_send_reuses_llm(self):
+    llm_instances = []
+
+    class TrackBro(Bro):
+      name = 'track'
+      description = 'tracks'
+      system_prompt = 'track'
+
+      def _create_llm(self):
+        llm = MockLLM()
+        llm_instances.append(llm)
+        return llm
+
+    bro = TrackBro()
+    await bro.send('a')
+    await bro.send('b')
+    assert len(llm_instances) == 1
+
+  @pytest.mark.asyncio
+  async def test_send_first_call_includes_system_prompt(self):
+    llm = MockLLM()
+
+    class CaptureBro(Bro):
+      name = 'capture'
+      description = 'captures'
+      system_prompt = 'be helpful'
+
+      def _create_llm(self):
+        return llm
+
+    bro = CaptureBro()
+    await bro.send('hi')
+    assert len(llm.send_calls) == 1
+    messages = llm.send_calls[0]
+    assert len(messages) == 2
+    assert messages[0]['role'] == 'system'
+    assert messages[0]['content'].endswith('be helpful')
+    assert messages[1] == {'role': 'user', 'content': 'hi'}
+
+  @pytest.mark.asyncio
+  async def test_send_subsequent_calls_only_user(self):
+    llm = MockLLM()
+
+    class CaptureBro(Bro):
+      name = 'capture'
+      description = 'captures'
+      system_prompt = 'be helpful'
+
+      def _create_llm(self):
+        return llm
+
+    bro = CaptureBro()
+    await bro.send('first')
+    await bro.send('second')
+    assert len(llm.send_calls) == 2
+    messages = llm.send_calls[1]
+    assert len(messages) == 1
+    assert messages[0] == {'role': 'user', 'content': 'second'}
+
+  @pytest.mark.asyncio
+  async def test_run_does_not_affect_send_llm(self):
+    llm_instances = []
+
+    class TrackBro(Bro):
+      name = 'track'
+      description = 'tracks'
+      system_prompt = 'track'
+
+      def _create_llm(self):
+        llm = MockLLM()
+        llm_instances.append(llm)
+        return llm
+
+    bro = TrackBro()
+    await bro.run('one-shot')
+    await bro.send('first')
+    await bro.send('second')
+    assert len(llm_instances) == 2
 
 
 class TestBroMap:

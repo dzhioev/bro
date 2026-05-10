@@ -16,10 +16,7 @@ class LLM(ABC):
     self.tools = ToolRegistry(mcp_servers if mcp_servers is not None else [])
 
   @abstractmethod
-  async def tell(self, messages: list[dict]) -> None: ...
-
-  @abstractmethod
-  async def ask(self) -> str: ...
+  async def send(self, messages: list[dict]) -> str: ...
 
 
 class LazyConstants:
@@ -59,10 +56,9 @@ async def llm_main(request: str, llm_type: str, attachments: list[str], *args, *
     content.append({'type': 'image_url', 'image_url': {'url': path}})
   messages: list[dict] = [{'role': 'user', 'content': content}]
   print(f'> {request}')
-  await instance.tell(messages)
   print()
-  asked = await instance.ask()
-  print(f'< {asked}')
+  response = await instance.send(messages)
+  print(f'< {response}')
 
 
 def main(argv=None) -> int | None:

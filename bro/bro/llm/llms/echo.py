@@ -9,15 +9,11 @@ class Echo(llm.llm.LLM):
 
   def __init__(self, mcp_servers: list[MCPServer] | None = None):
     super().__init__(mcp_servers)
-    self.messages = []
 
-  async def tell(self, messages: list[dict]) -> None:
-    self.messages = messages
-
-  async def ask(self) -> str:
-    if len(self.messages) == 0:
+  async def send(self, messages: list[dict]) -> str:
+    if len(messages) == 0:
       return ''
-    last = self.messages[-1]
+    last = messages[-1]
     content = last.get('content', '')
     if isinstance(content, str):
       return content

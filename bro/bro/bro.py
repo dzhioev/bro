@@ -26,8 +26,11 @@ class Bro(ABC):
   system_prompt: str
   model: str = DEFAULT_MODEL
 
+  _llm: LLM | None = None
+
   def __init__(self, mcp_servers: list[llm.mcp.MCPServer] | None = None):
     self._mcp_servers = mcp_servers if mcp_servers is not None else []
+    self._llm = None
     shared = _load_shared_prompts()
     if len(shared) > 0:
       self.system_prompt = f'{shared}\n\n{self.system_prompt}'
@@ -41,8 +44,18 @@ class Bro(ABC):
       {'role': 'system', 'content': self.system_prompt},
       {'role': 'user', 'content': input},
     ]
-    await llm.tell(messages)
-    return await llm.ask()
+    return await llm.send(messages)
+
+  async def send(self, message: str) -> str:
+    if self._llm is None:
+      self._llm = self._create_llm()
+      messages = [
+        {'role': 'system', 'content': self.system_prompt},
+        {'role': 'user', 'content': message},
+      ]
+    else:
+      messages = [{'role': 'user', 'content': message}]
+    return await self._llm.send(messages)
 
   async def map(self, inputs: list[str], max_concurrency: int = 5) -> list[str]:
     semaphore = asyncio.Semaphore(max_concurrency)

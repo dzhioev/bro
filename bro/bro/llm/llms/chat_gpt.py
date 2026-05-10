@@ -148,6 +148,7 @@ class ChatGPT(llm.llm.LLM):
     self.model = model
     self.client = OpenAI(api_key=api_key)
     self._openai_tools: list[ToolParam] | None = None
+    self._last_response_id: str | None = None
 
   async def _resolve_openai_tools(self) -> list[ToolParam]:
     if self._openai_tools is not None:
@@ -172,15 +173,19 @@ class ChatGPT(llm.llm.LLM):
       results.append({'type': 'function_call_output', 'call_id': item.call_id, 'output': output})
     return results
 
-  async def tell(self, messages: list[dict]) -> None:
+  async def send(self, messages: list[dict]) -> str:
     openai_tools = await self._resolve_openai_tools()
     api_input: list[ResponseInputItemParam] = [convert_message(msg) for msg in messages]
 
-    response = self.client.responses.create(
-      model=self.model,
-      input=api_input,
-      tools=openai_tools,
-    )
+    kwargs: dict = {
+      'model': self.model,
+      'input': api_input,
+      'tools': openai_tools,
+    }
+    if self._last_response_id is not None:
+      kwargs['previous_response_id'] = self._last_response_id
+
+    response = self.client.responses.create(**kwargs)
 
     while has_tool_calls(response):
       tool_results = await self._execute_tool_calls(response)
@@ -191,7 +196,5 @@ class ChatGPT(llm.llm.LLM):
         tools=openai_tools,
       )
 
-    self.text_response = parse_response(response)
-
-  async def ask(self) -> str:
-    return self.text_response
+    self._last_response_id = response.id
+    return parse_response(response)
