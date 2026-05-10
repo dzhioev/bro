@@ -41,18 +41,23 @@ class Bro(ABC):
     return []
 
   async def run(self, input: str) -> str:
-    """execute the agent on a single input; returns the final text response"""
+    """single-turn: fresh LLM, returns the final text response"""
+
+  async def send(self, message: str) -> str:
+    """multi-turn: lazily creates and reuses an LLM across calls"""
 ```
 
-`run()` is the fundamental operation. It creates a fresh `LLM` with the Bro's tools,
-passes `[system, user]` messages, and returns the response. Conversation history is
-the caller's problem — `run()` is a pure function of input.
+`run()` is stateless — fresh LLM per call, no history carried over. `send()` is
+multi-turn — it lazily creates an LLM on first call (with system prompt + user message)
+and reuses it for subsequent calls (user message only). The underlying `ChatGPT` LLM
+uses `_last_response_id` for conversation continuity via the OpenAI Responses API, so
+previous context is available without re-sending the full message history.
 
 ### LLM backend
 
 The initial implementation uses the existing `ChatGPT` LLM backend, which works with
 any OpenAI-compatible completion API (GPT, Claude via OpenAI-compat endpoint, local
-models, etc.). The agentic tool-use loop already lives in `ChatGPT.tell()`. The Bro
+models, etc.). The agentic tool-use loop already lives in `ChatGPT.send()`. The Bro
 layer doesn't touch it — it just composes system prompt + tools + input and delegates.
 
 Model selection: `Bro` base class has a `model` property (default from config);
@@ -226,10 +231,10 @@ The existing `bro/server/server.py` continues to serve `/v1/chat/completions`. C
 
 - The server instantiates the **default Bro** (assistant) per request instead of a raw
   LLM. The Bro's system prompt and tools are baked in.
-- Session state (conversation history) lives in the server layer — it accumulates
-  messages across requests and passes the full history to `Bro.run()` each time. (Or
-  more precisely, it builds the messages list and calls `LLM.tell()` + `LLM.ask()`
-  directly, since the server needs multi-turn state that `run()` doesn't provide.)
+- Each request creates a fresh LLM via `bro._create_llm()` and calls `llm.send()`.
+  For multi-turn conversation with `_last_response_id` continuity, use `Bro.send()`
+  programmatically (the HTTP server can adopt this in a future iteration with
+  per-session Bro instances).
 - Optional: `?bro=<name>` query parameter to target a specific Bro.
 
 The iOS app doesn't change — it still sends OpenAI-format requests to the same
@@ -251,11 +256,12 @@ More Bros from the backlog (future):
 ## Changes to existing code
 
 ### `llm/llm.py`
-- `get_llm()` and `LLM` stay as-is
-- Add model parameter passthrough: `ChatGPT` currently hardcodes `model='gpt-5'`; make
-  it configurable via constructor arg so Bros can pick their model
+- `LLM` ABC: replaced `tell()` + `ask()` with single `send(messages) -> str`
+- `get_llm()` stays as-is
 
 ### `llm/llms/chat_gpt.py`
+- Implements `send()` with `_last_response_id` tracking for conversation continuity
+  via OpenAI Responses API `previous_response_id`
 - Accept `model` parameter (default `'gpt-5'`)
 - Accept optional `base_url` for OpenAI-compat endpoints (Claude, local models)
 
@@ -307,7 +313,7 @@ More Bros from the backlog (future):
 1. **Config**: should there be a central config for model defaults and API keys per
    backend, or does each Bro manage its own? (Lean: central config in `.configs/bro.json`,
    Bro overrides where needed.)
-2. **Streaming**: the current `tell()`/`ask()` pattern is non-streaming. The iOS app
+2. **Streaming**: the current `send()` pattern is non-streaming. The iOS app
    doesn't support streaming either. Defer streaming to a future phase?
 3. **Error handling in sub-agents**: if a sub-Bro fails (tool error, LLM refusal), how
    should the calling Bro see it? (Lean: return error text as the tool result, let the
