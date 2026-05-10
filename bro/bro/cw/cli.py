@@ -569,7 +569,10 @@ def _mcp_config_argv(mcp: str) -> list[str]:
   if mcp == 'local':
     return ['--mcp-config=flow/mcp/mcp_local.json']
   assert mcp == 'http'
-  cfg = json.loads((_project_root() / '.configs' / 'flow_mcp.json').read_text())
+  config_path = _project_root() / '.configs' / 'flow_mcp.json'
+  if not config_path.is_file():
+    raise SystemExit(f'missing {config_path} — run flow/mcp/server/bootstrap_secrets.sh')
+  cfg = json.loads(config_path.read_text())
   mcp_json = json.dumps(
     {
       'mcpServers': {
