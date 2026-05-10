@@ -44,6 +44,7 @@ fi
 # remote for fetching commits that haven't been pushed upstream yet.
 if [ ! -d /workspace/.git ]; then
   echo 'cloning host repo into /workspace' >&2
+  git config --global --add safe.directory /host-repo
   cd /
   git -c protocol.file.allow=always clone --shared /host-repo /workspace >&2
   cd /workspace
