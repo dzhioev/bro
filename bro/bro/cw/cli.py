@@ -565,19 +565,43 @@ def clean_workspaces(
   return 0
 
 
+def _mcp_config_argv(mcp: str) -> list[str]:
+  if mcp == 'local':
+    return ['--mcp-config=flow/mcp/mcp_local.json']
+  assert mcp == 'http'
+  cfg = json.loads((_project_root() / '.configs' / 'flow_mcp.json').read_text())
+  mcp_json = json.dumps(
+    {
+      'mcpServers': {
+        'flow': {
+          'type': 'http',
+          'url': cfg['url'] + '/mcp',
+          'headers': {'Authorization': f'Bearer {cfg["token"]}'},
+        },
+      },
+    },
+    separators=(',', ':'),
+  )
+  return ['--mcp-config', mcp_json]
+
+
 def start_session(
   name: str,
   container: bool,
   drop: bool,
   auto: bool,
-  mcp: bool,
+  mcp: str | None,
   prompt: str | None,
   claude_args: list[str],
 ) -> int:
-  flags = {'-c': container, '--auto': auto, '--drop': drop, '--mcp': mcp}
-  os.environ['CW_COMMAND'] = ' '.join(
-    ['cw', 'ss', *(f for f, v in flags.items() if v), name, *claude_args]
-  )
+  flags = {'-c': container, '--auto': auto, '--drop': drop}
+  parts = ['cw', 'ss', *(f for f, v in flags.items() if v)]
+  if mcp is not None:
+    parts.append('--mcp')
+    if mcp != 'http':
+      parts.append(mcp)
+  parts.extend([name, *claude_args])
+  os.environ['CW_COMMAND'] = ' '.join(parts)
   os.environ.setdefault('PPP_COMMAND', os.environ['CW_COMMAND'])
 
   if auto:
@@ -592,8 +616,8 @@ def start_session(
       os.environ['GITHUB_TOKEN'] = token_path.read_text().strip()
 
   inject = ['--remote-control', name]
-  if mcp:
-    inject.append('--mcp-config=flow/mcp/mcp.json')
+  if mcp is not None:
+    inject.extend(_mcp_config_argv(mcp))
   if auto:
     inject.append('--dangerously-skip-permissions')
   claude_args = [*inject, *claude_args]
@@ -663,7 +687,12 @@ def main(argv=None):
     help='let claude run autonomously, skipping most permissions (allowed only with -c)',
   )
   ss.add_argument(
-    '--mcp', action='store_true', help='enable the local flow MCP server in the claude session'
+    '--mcp',
+    nargs='?',
+    const='http',
+    default=None,
+    choices=['http', 'local'],
+    help='connect flow MCP tools: http (default) uses the deployed server, local spawns a stdio process',
   )
   ss.add_argument(
     '-p', '--prompt', default=None, help='initial prompt (prepended with base prompt)'
