@@ -20,6 +20,8 @@ cat > "$SMOKE_TMP/gitconfig" << 'GC'
 [user]
     name = Smoke Test
     email = test@test.com
+[init]
+    defaultBranch = master
 GC
 
 echo "ghp_fake_token" > "$SMOKE_TMP/github_token"
