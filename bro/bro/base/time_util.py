@@ -10,6 +10,13 @@ import dateutil.parser
 UTC = dt.timezone.utc
 timezone = ZoneInfo
 
+LOCAL_TZ_NAME = 'Europe/Nicosia'
+
+
+def local_tz() -> ZoneInfo:
+  return ZoneInfo(LOCAL_TZ_NAME)
+
+
 DATE_FORMAT = '%Y-%m-%d'
 DATETIME_FORMAT = '%Y-%m-%dT%H:%M:%S'
 
