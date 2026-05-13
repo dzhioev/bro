@@ -57,8 +57,8 @@ def dive_in(
 ) -> int:
   if new:
     hint = f'- Initial idea from the user: {command}\n' if command is not None else ''
-    prompt = get_prompt('dive_in_new.prompt').format(
-      hint=hint, context=get_prompt('dive_in_context.prompt')
+    prompt = get_prompt(
+      'dive_in_new.prompt.template', hint=hint, context=get_prompt('dive_in_context.prompt')
     )
     name = _slugify(command) if command is not None else ''
     if len(name) == 0:
@@ -68,9 +68,12 @@ def dive_in(
       task_id = _resolve_task_id(task)
       task_name = _resolve_task_name(task_id)
       log.info('task: %s', task_name)
-      startup = get_prompt('dive_in_task.prompt').format(task_id=task_id)
-      prompt = get_prompt('dive_in.prompt').format(
-        target=f'task {task_id}', startup=startup, context=get_prompt('dive_in_context.prompt')
+      startup = get_prompt('dive_in_task.prompt.template', task_id=task_id)
+      prompt = get_prompt(
+        'dive_in.prompt.template',
+        target=f'task {task_id}',
+        startup=startup,
+        context=get_prompt('dive_in_context.prompt'),
       )
     else:
       client = default_client()
@@ -81,7 +84,8 @@ def dive_in(
       task_id = state.task.id
       task_name = state.task.name
       log.info('focused: %s', task_name)
-      prompt = get_prompt('dive_in.prompt').format(
+      prompt = get_prompt(
+        'dive_in.prompt.template',
         target='the currently focused task',
         startup=get_prompt('dive_in_focused.prompt'),
         context=get_prompt('dive_in_context.prompt'),
