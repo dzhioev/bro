@@ -618,7 +618,7 @@ def start_session(
     if token_path.is_file():
       os.environ['GITHUB_TOKEN'] = token_path.read_text().strip()
 
-  inject = ['--remote-control', name]
+  inject = ['--remote-control', name, '--disallowed-tools', 'mcp__claude_ai_*']
   if mcp is not None:
     inject.extend(_mcp_config_argv(mcp))
   if auto:
