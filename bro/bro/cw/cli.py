@@ -578,7 +578,7 @@ def _mcp_config_argv(mcp: str) -> list[str]:
       'mcpServers': {
         'flow': {
           'type': 'http',
-          'url': cfg['url'] + '/mcp',
+          'url': cfg['url'],
           'headers': {'Authorization': f'Bearer {cfg["token"]}'},
         },
       },
