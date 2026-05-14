@@ -115,7 +115,7 @@ install_docker() {
   check_brew
   echo "Installing Docker (via Colima)..."
   brew install colima docker docker-buildx
-  brew services start colima
+  brew services start colima 2>/dev/null || colima start
 
   # Configure Docker to find Homebrew plugins
   mkdir -p ~/.docker
