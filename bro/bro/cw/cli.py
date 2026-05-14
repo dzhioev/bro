@@ -29,6 +29,7 @@ import datetime
 import hashlib
 import json
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -79,7 +80,7 @@ def _project_root() -> Path:
 
 
 def _keychain_credentials() -> dict | None:
-  if sys.platform != 'darwin':
+  if platform.system() != 'Darwin':
     return None
   try:
     raw = subprocess.check_output(
