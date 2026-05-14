@@ -23,17 +23,20 @@ def _load_shared_prompts() -> str:
 class Bro(ABC):
   name: str
   description: str
-  system_prompt: str
   model: str = DEFAULT_MODEL
+  reasoning_effort: str | None = None
 
   _llm: LLM | None = None
 
-  def __init__(self, mcp_servers: list[llm.mcp.MCPServer] | None = None):
+  def __init__(
+    self,
+    system_prompt: str = '',
+    mcp_servers: list[llm.mcp.MCPServer] | None = None,
+  ):
     self._mcp_servers = mcp_servers if mcp_servers is not None else []
     self._llm = None
     shared = _load_shared_prompts()
-    if len(shared) > 0:
-      self.system_prompt = f'{shared}\n\n{self.system_prompt}'
+    self.system_prompt = f'{shared}\n\n{system_prompt}' if len(shared) > 0 else system_prompt
 
   def mcp_servers(self) -> list[llm.mcp.MCPServer]:
     return self._mcp_servers
@@ -67,7 +70,12 @@ class Bro(ABC):
     return list(await asyncio.gather(*[bounded_run(x) for x in inputs]))
 
   def _create_llm(self) -> LLM:
-    return get_llm('chat_gpt', model=self.model, mcp_servers=self.mcp_servers())
+    return get_llm(
+      'chat_gpt',
+      model=self.model,
+      mcp_servers=self.mcp_servers(),
+      reasoning_effort=self.reasoning_effort,
+    )
 
 
 class Tool(llm.mcp.Tool):

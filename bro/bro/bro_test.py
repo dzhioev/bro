@@ -20,9 +20,9 @@ class MockLLM(LLM):
 class EchoBro(Bro):
   name = 'echo'
   description = 'echoes input'
-  system_prompt = 'you echo'
 
   def __init__(self, response: str = 'echoed'):
+    super().__init__(system_prompt='you echo')
     self._response = response
 
   def _create_llm(self) -> LLM:
@@ -43,7 +43,9 @@ class TestBroRun:
     class CaptureBro(Bro):
       name = 'capture'
       description = 'captures messages'
-      system_prompt = 'be helpful'
+
+      def __init__(self):
+        super().__init__(system_prompt='be helpful')
 
       def _create_llm(self):
         return llm
@@ -72,7 +74,9 @@ class TestBroSend:
     class TrackBro(Bro):
       name = 'track'
       description = 'tracks'
-      system_prompt = 'track'
+
+      def __init__(self):
+        super().__init__(system_prompt='track')
 
       def _create_llm(self):
         llm = MockLLM()
@@ -91,7 +95,9 @@ class TestBroSend:
     class CaptureBro(Bro):
       name = 'capture'
       description = 'captures'
-      system_prompt = 'be helpful'
+
+      def __init__(self):
+        super().__init__(system_prompt='be helpful')
 
       def _create_llm(self):
         return llm
@@ -112,7 +118,9 @@ class TestBroSend:
     class CaptureBro(Bro):
       name = 'capture'
       description = 'captures'
-      system_prompt = 'be helpful'
+
+      def __init__(self):
+        super().__init__(system_prompt='be helpful')
 
       def _create_llm(self):
         return llm
@@ -132,7 +140,9 @@ class TestBroSend:
     class TrackBro(Bro):
       name = 'track'
       description = 'tracks'
-      system_prompt = 'track'
+
+      def __init__(self):
+        super().__init__(system_prompt='track')
 
       def _create_llm(self):
         llm = MockLLM()
@@ -154,7 +164,9 @@ class TestBroMap:
     class CountBro(Bro):
       name = 'counter'
       description = 'counts'
-      system_prompt = 'count'
+
+      def __init__(self):
+        super().__init__(system_prompt='count')
 
       def _create_llm(self):
         nonlocal call_count

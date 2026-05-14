@@ -18,7 +18,9 @@ class MockLLM(LLM):
 class AlphaBro(Bro):
   name = 'alpha'
   description = 'alpha bro'
-  system_prompt = 'alpha'
+
+  def __init__(self, mcp_servers=None):
+    super().__init__(system_prompt='alpha', mcp_servers=mcp_servers)
 
   def _create_llm(self):
     return MockLLM()
@@ -27,7 +29,9 @@ class AlphaBro(Bro):
 class BetaBro(Bro):
   name = 'beta'
   description = 'beta bro'
-  system_prompt = 'beta'
+
+  def __init__(self, mcp_servers=None):
+    super().__init__(system_prompt='beta', mcp_servers=mcp_servers)
 
   def _create_llm(self):
     return MockLLM()

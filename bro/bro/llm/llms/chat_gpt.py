@@ -15,6 +15,7 @@ from openai.types.responses.function_tool_param import FunctionToolParam
 from openai.types.responses.response_input_content_param import ResponseInputContentParam
 from openai.types.responses.response_input_image_param import ResponseInputImageParam
 from openai.types.responses.response_input_text_param import ResponseInputTextParam
+from openai.types.shared import ReasoningEffort
 
 ResponseInputContentPart = ResponseInputContentParam
 
@@ -133,22 +134,30 @@ class ChatGPT(llm.llm.LLM):
     config_path=DEFAULT_CONFIG_PATH,
     model: str = 'gpt-5',
     mcp_servers: list[MCPServer] | None = None,
+    reasoning_effort: ReasoningEffort | None = None,
   ):
     with open(config_path, 'r') as f:
       config = json.load(f)
-    return ChatGPT(api_key=config['api_key'], model=model, mcp_servers=mcp_servers)
+    return ChatGPT(
+      api_key=config['api_key'],
+      model=model,
+      mcp_servers=mcp_servers,
+      reasoning_effort=reasoning_effort,
+    )
 
   def __init__(
     self,
     api_key: str,
     model: str = 'gpt-5',
     mcp_servers: list[MCPServer] | None = None,
+    reasoning_effort: ReasoningEffort | None = None,
   ):
     super().__init__(mcp_servers)
     self.model = model
     self.client = OpenAI(api_key=api_key)
     self._openai_tools: list[ToolParam] | None = None
     self._last_response_id: str | None = None
+    self._reasoning_effort = reasoning_effort
 
   async def _resolve_openai_tools(self) -> list[ToolParam]:
     if self._openai_tools is not None:
@@ -184,17 +193,22 @@ class ChatGPT(llm.llm.LLM):
     }
     if self._last_response_id is not None:
       kwargs['previous_response_id'] = self._last_response_id
+    if self._reasoning_effort is not None:
+      kwargs['reasoning'] = {'effort': self._reasoning_effort}
 
     response = self.client.responses.create(**kwargs)
 
     while has_tool_calls(response):
       tool_results = await self._execute_tool_calls(response)
-      response = self.client.responses.create(
-        model=self.model,
-        previous_response_id=response.id,
-        input=tool_results,
-        tools=openai_tools,
-      )
+      continuation_kwargs: dict = {
+        'model': self.model,
+        'previous_response_id': response.id,
+        'input': tool_results,
+        'tools': openai_tools,
+      }
+      if self._reasoning_effort is not None:
+        continuation_kwargs['reasoning'] = {'effort': self._reasoning_effort}
+      response = self.client.responses.create(**continuation_kwargs)
 
     self._last_response_id = response.id
     return parse_response(response)
