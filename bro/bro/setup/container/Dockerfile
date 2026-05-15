@@ -14,7 +14,8 @@ RUN apt-get update \
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-RUN npm install -g @anthropic-ai/claude-code
+ARG CLAUDE_CODE_VERSION
+RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 
 RUN useradd -m -u 1000 -s /bin/bash cw \
  && mkdir -p /home/cw/.claude \

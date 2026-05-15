@@ -40,7 +40,7 @@ import humanize
 from base import log
 from base.args import Parser
 
-CONTAINER_DIR = Path(__file__).resolve().parent / '.claude' / 'container'
+CONTAINER_DIR = Path(__file__).resolve().parent / 'setup' / 'container'
 BASE_PROMPT = 'Read all files in prompts/shared/ and prompts/base/ and follow their instructions.'
 _DOCKER_FORWARD_ENV = (
   'CW_COMMAND',
@@ -117,7 +117,8 @@ def _ensure_image(tag: str) -> None:
   inspect = subprocess.run(['docker', 'image', 'inspect', tag], capture_output=True, text=True)
   if inspect.returncode == 0:
     return
-  log.info('building %s', tag)
+  version = (CONTAINER_DIR / 'claude-code-version').read_text().strip()
+  log.info('building %s (claude-code %s)', tag, version)
   subprocess.run(
     [
       'docker',
@@ -126,6 +127,8 @@ def _ensure_image(tag: str) -> None:
       tag,
       '-f',
       str(CONTAINER_DIR / 'Dockerfile'),
+      '--build-arg',
+      f'CLAUDE_CODE_VERSION={version}',
       '--build-context',
       f'proj={_project_root()}',
       str(CONTAINER_DIR),
