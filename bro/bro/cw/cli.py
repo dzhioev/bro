@@ -57,6 +57,14 @@ _DOCKER_FORWARD_ENV = (
   'COLORTERM',
   'VTE_VERSION',
 )
+_DOCKER_AWS_ENV = (
+  'AWS_ACCESS_KEY_ID',
+  'AWS_SECRET_ACCESS_KEY',
+  'AWS_SESSION_TOKEN',
+  'AWS_DEFAULT_REGION',
+  'AWS_REGION',
+  'AWS_PROFILE',
+)
 
 _BRO_GIT_NAME = 'Bro'
 _BRO_GIT_EMAIL = 'dzhioev+bro@gmail.com'
@@ -127,7 +135,7 @@ def _ensure_image(tag: str) -> None:
 
 
 def _docker_run_argv(
-  tag: str, name: str, proj: Path, session: Path, claude_args: list[str]
+  tag: str, name: str, proj: Path, session: Path, claude_args: list[str], *, aws: bool = False
 ) -> list[str]:
   home = Path.home()
   claude_dir = home / '.claude' / 'cw-sessions' / name
@@ -190,6 +198,13 @@ def _docker_run_argv(
       host_creds.chmod(0o600)
   if host_creds.is_file():
     argv += ['-v', f'{host_creds}:/home/cw/.claude/.credentials.json']
+  if aws:
+    host_aws = home / '.aws'
+    if host_aws.is_dir():
+      argv += ['-v', f'{host_aws}:/home/cw/.aws:ro']
+    for var in _DOCKER_AWS_ENV:
+      if os.environ.get(var) is not None:
+        argv += ['-e', var]
   return [*argv, tag, 'claude', *claude_args]
 
 
@@ -595,11 +610,12 @@ def start_session(
   drop: bool,
   auto: bool,
   fast: bool,
+  aws: bool,
   mcp: str | None,
   prompt: str | None,
   claude_args: list[str],
 ) -> int:
-  flags = {'-c': container, '--auto': auto, '--drop': drop}
+  flags = {'-c': container, '--auto': auto, '--drop': drop, '--aws': aws}
   parts = ['cw', 'ss', *(f for f, v in flags.items() if v)]
   if mcp is not None:
     parts.append('--mcp')
@@ -642,10 +658,10 @@ def start_session(
     prompt_parts.append(prompt)
   claude_args = [*claude_args, '--', '\n\n'.join(prompt_parts)]
 
-  return cw(name=name, container=container, drop=drop, claude_args=claude_args)
+  return cw(name=name, container=container, drop=drop, aws=aws, claude_args=claude_args)
 
 
-def cw(name: str, container: bool, drop: bool, claude_args: list[str]) -> int:
+def cw(name: str, container: bool, drop: bool, aws: bool, claude_args: list[str]) -> int:
   if container and os.environ.get('CW_IN_CONTAINER') is not None:
     log.info('already inside a container; falling back to host mode')
     container = False
@@ -656,7 +672,7 @@ def cw(name: str, container: bool, drop: bool, claude_args: list[str]) -> int:
     session.mkdir(parents=True, exist_ok=True)
     tag = _image_tag()
     _ensure_image(tag)
-    result = subprocess.run(_docker_run_argv(tag, name, proj, session, claude_args))
+    result = subprocess.run(_docker_run_argv(tag, name, proj, session, claude_args, aws=aws))
     if drop:
       shutil.rmtree(session)
       session_dir = Path.home() / '.claude' / 'cw-sessions' / name
@@ -703,6 +719,11 @@ def main(argv=None):
     '--fast',
     action='store_true',
     help='enable fast mode for the session (disabled by default regardless of host settings)',
+  )
+  ss.add_argument(
+    '--aws',
+    action='store_true',
+    help='expose host AWS credentials (~/.aws and env vars) to the container',
   )
   ss.add_argument(
     '--mcp',
@@ -773,6 +794,11 @@ def main(argv=None):
   assert cmd == 'ss'
   if args['auto'] and not args['container']:
     parser.error('--auto requires --container')
+  if args['aws']:
+    has_aws_dir = (Path.home() / '.aws').is_dir()
+    has_aws_env = any(os.environ.get(v) is not None for v in _DOCKER_AWS_ENV)
+    if not has_aws_dir and not has_aws_env:
+      parser.error('--aws: no AWS credentials found (~/.aws missing and no AWS env vars set)')
   return start_session(**args)
 
 

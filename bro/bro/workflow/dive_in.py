@@ -52,6 +52,7 @@ def dive_in(
   dry_run: bool = False,
   auto: bool = False,
   fast: bool = False,
+  aws: bool = False,
   command: str | None = None,
   task: str | None = None,
   new: bool = False,
@@ -115,6 +116,8 @@ def dive_in(
     cmd.append('--auto')
   if fast:
     cmd.append('--fast')
+  if aws:
+    cmd.append('--aws')
   cmd.extend(['-p', prompt, name])
   if dry_run:
     print(' '.join(_shell_quote(c) for c in cmd))
@@ -131,6 +134,9 @@ def main(argv=None):
     '--auto', action='store_true', help='run autonomously, skipping most permissions'
   )
   parser.add_argument('--fast', action='store_true', help='enable fast mode for the session')
+  parser.add_argument(
+    '--aws', action='store_true', help='expose host AWS credentials to the container'
+  )
   group = parser.add_mutually_exclusive_group()
   group.add_argument(
     '-t', '--task', default=None, help='task ID or Notion URL to dive into (default: focused task)'
