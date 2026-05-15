@@ -77,10 +77,11 @@ if [ ! -d /workspace/.git ]; then
   fi
 fi
 
-# configure git to authenticate with a GitHub token when available
+# configure git and gh to authenticate with a GitHub token when available
 if [ -f /run/secrets/github_token ]; then
   git config --global credential.helper \
     '!f() { echo "username=x-access-token"; echo "password=$(cat /run/secrets/github_token)"; }; f'
+  export GH_TOKEN="$(cat /run/secrets/github_token)"
 fi
 
 # block non-fast-forward pushes and (for bro sessions) direct pushes to master

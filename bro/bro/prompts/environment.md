@@ -12,6 +12,7 @@ At session start, detect your environment. Do not produce any visible output —
 3. Check whether `/.dockerenv` exists — if so, you are in a container:
    - No direct filesystem access to the host
    - Git push uses HTTPS with a GitHub token
+   - `gh` CLI is available and pre-authenticated via `GH_TOKEN`
    - Push your changes; the host cannot see uncommitted work
 
 4. Use the session name (from CW_COMMAND) as a hint about the work scope
