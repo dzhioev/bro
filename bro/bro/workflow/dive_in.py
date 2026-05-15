@@ -51,6 +51,7 @@ def _resolve_task_name(task_id: str) -> str:
 def dive_in(
   dry_run: bool = False,
   auto: bool = False,
+  fast: bool = False,
   command: str | None = None,
   task: str | None = None,
   new: bool = False,
@@ -112,6 +113,8 @@ def dive_in(
   cmd = ['cw', 'ss', '-c', '--mcp']
   if auto:
     cmd.append('--auto')
+  if fast:
+    cmd.append('--fast')
   cmd.extend(['-p', prompt, name])
   if dry_run:
     print(' '.join(_shell_quote(c) for c in cmd))
@@ -127,6 +130,7 @@ def main(argv=None):
   parser.add_argument(
     '--auto', action='store_true', help='run autonomously, skipping most permissions'
   )
+  parser.add_argument('--fast', action='store_true', help='enable fast mode for the session')
   group = parser.add_mutually_exclusive_group()
   group.add_argument(
     '-t', '--task', default=None, help='task ID or Notion URL to dive into (default: focused task)'

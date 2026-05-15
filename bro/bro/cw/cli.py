@@ -594,6 +594,7 @@ def start_session(
   container: bool,
   drop: bool,
   auto: bool,
+  fast: bool,
   mcp: str | None,
   prompt: str | None,
   claude_args: list[str],
@@ -619,7 +620,15 @@ def start_session(
     if token_path.is_file():
       os.environ['GITHUB_TOKEN'] = token_path.read_text().strip()
 
-  inject = ['--remote-control', name, '--disallowed-tools', 'mcp__claude_ai_*']
+  fast_mode_settings = json.dumps({'fastMode': fast})
+  inject = [
+    '--remote-control',
+    name,
+    '--disallowed-tools',
+    'mcp__claude_ai_*',
+    '--settings',
+    fast_mode_settings,
+  ]
   if mcp is not None:
     inject.extend(_mcp_config_argv(mcp))
   if auto:
@@ -689,6 +698,11 @@ def main(argv=None):
     '--auto',
     action='store_true',
     help='let claude run autonomously, skipping most permissions (allowed only with -c)',
+  )
+  ss.add_argument(
+    '--fast',
+    action='store_true',
+    help='enable fast mode for the session (disabled by default regardless of host settings)',
   )
   ss.add_argument(
     '--mcp',
