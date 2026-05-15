@@ -41,7 +41,19 @@ from base import log
 from base.args import Parser
 
 CONTAINER_DIR = Path(__file__).resolve().parent / 'setup' / 'container'
-BASE_PROMPT = 'Read all files in prompts/shared/ and prompts/base/ and follow their instructions.'
+_PROMPTS_DIR = Path(__file__).resolve().parent / 'prompts'
+_BASE_PROMPT_DIRS = ['shared', 'base']
+
+
+def _load_base_prompts() -> str:
+  parts = []
+  for subdir in _BASE_PROMPT_DIRS:
+    for p in sorted((_PROMPTS_DIR / subdir).glob('*')):
+      if p.is_file():
+        parts.append(p.read_text().strip())
+  return '\n\n'.join(parts)
+
+
 _DOCKER_FORWARD_ENV = (
   'CW_COMMAND',
   'CW_TASK_ID',
@@ -655,7 +667,7 @@ def start_session(
     inject.append('--dangerously-skip-permissions')
   claude_args = [*inject, *claude_args]
 
-  prompt_parts = [BASE_PROMPT]
+  prompt_parts = [_load_base_prompts()]
   if auto:
     prompt_parts.append('Land mode: PR')
   if prompt is not None:
