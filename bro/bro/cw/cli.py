@@ -167,6 +167,7 @@ def _docker_run_argv(
     'DISABLE_AUTOUPDATER=1',
     '-w',
     '/workspace',
+    '--memory=8g',
   ]
   for var in _DOCKER_FORWARD_ENV:
     if os.environ.get(var) is not None:
