@@ -25,6 +25,7 @@ network is not restricted by design.
 """
 
 import argparse
+import concurrent.futures
 import datetime
 import hashlib
 import json
@@ -348,25 +349,36 @@ def _resolve_workspace(ref: str, proj: Path) -> tuple[Path, Path | None]:
   return path, None
 
 
+def _list_entry_local(p: Path, proj: Path) -> tuple[str, bool, str, str | None, float | None]:
+  kind = 'L' if _is_local_active(p.name) else 'X'
+  pdir = _projects_dir_for_local(p.name, proj)
+  return (kind, False, p.name, _read_subject(pdir), _last_active(p))
+
+
+def _list_entry_container(
+  p: Path, mounts: set[str]
+) -> tuple[str, bool, str, str | None, float | None]:
+  kind = 'C' if str(p) in mounts else 'X'
+  pdir = _projects_dir_for_container(p.name)
+  return (kind, True, p.name, _read_subject(pdir), _last_active(p))
+
+
 def list_workspaces() -> int:
   proj = _project_root()
   worktrees_dir = proj / '.claude' / 'worktrees'
   containers_dir = proj / 'var' / 'cw' / 'containers'
 
-  entries: list[tuple[str, bool, str, str | None, float | None]] = []
-  if worktrees_dir.is_dir():
-    for p in worktrees_dir.iterdir():
-      if p.is_dir():
-        kind = 'L' if _is_local_active(p.name) else 'X'
-        pdir = _projects_dir_for_local(p.name, proj)
-        entries.append((kind, False, p.name, _read_subject(pdir), _last_active(p)))
-  if containers_dir.is_dir():
-    mounts = _running_container_mounts()
-    for p in containers_dir.iterdir():
-      if p.is_dir():
-        kind = 'C' if str(p) in mounts else 'X'
-        pdir = _projects_dir_for_container(p.name)
-        entries.append((kind, True, p.name, _read_subject(pdir), _last_active(p)))
+  local_dirs = [p for p in worktrees_dir.iterdir() if p.is_dir()] if worktrees_dir.is_dir() else []
+  container_dirs = (
+    [p for p in containers_dir.iterdir() if p.is_dir()] if containers_dir.is_dir() else []
+  )
+
+  with concurrent.futures.ThreadPoolExecutor() as pool:
+    mounts_future = pool.submit(_running_container_mounts) if len(container_dirs) > 0 else None
+    local_futures = [pool.submit(_list_entry_local, p, proj) for p in local_dirs]
+    mounts = mounts_future.result() if mounts_future is not None else set()
+    container_futures = [pool.submit(_list_entry_container, p, mounts) for p in container_dirs]
+    entries = [f.result() for f in local_futures] + [f.result() for f in container_futures]
 
   if len(entries) == 0:
     return 0
@@ -533,65 +545,81 @@ def clean_workspaces(
       log.error('workspace(s) not found: %s', ', '.join(sorted(missing)))
       return 1
 
+  local_dirs = sorted(
+    p
+    for p in (worktrees_dir.iterdir() if worktrees_dir.is_dir() else [])
+    if p.is_dir() and (filter_refs is None or p.name in filter_refs)
+  )
+  container_dirs = sorted(
+    p
+    for p in (containers_dir.iterdir() if containers_dir.is_dir() else [])
+    if p.is_dir() and (filter_refs is None or _format_ref(p.name, True) in filter_refs)
+  )
+
+  def _check_local(p: Path) -> tuple[Path, bool, bool, list[str]]:
+    if _is_local_active(p.name):
+      return p, True, False, []
+    safe, reasons = _worktree_is_clean(p)
+    return p, False, safe, reasons
+
+  def _check_container(p: Path, mounts: set[str]) -> tuple[Path, bool, bool, list[str]]:
+    if str(p) in mounts:
+      return p, True, False, []
+    safe, reasons = _worktree_is_clean(p, container_proj=proj)
+    return p, False, safe, reasons
+
+  with concurrent.futures.ThreadPoolExecutor() as pool:
+    mounts_future = pool.submit(_running_container_mounts) if len(container_dirs) > 0 else None
+    local_results = list(pool.map(_check_local, local_dirs))
+    mounts = mounts_future.result() if mounts_future is not None else set()
+    container_results = list(pool.map(lambda p: _check_container(p, mounts), container_dirs))
+
   removed = 0
   skipped = 0
 
-  if worktrees_dir.is_dir():
-    for p in sorted(worktrees_dir.iterdir()):
-      if not p.is_dir():
-        continue
-      if filter_refs is not None and p.name not in filter_refs:
-        continue
-      if _is_local_active(p.name):
-        log.info('skip %s: active session', p.name)
+  for p, active, safe, reasons in local_results:
+    if active:
+      log.info('skip %s: active session', p.name)
+      skipped += 1
+      continue
+    if not safe:
+      if not force:
+        log.info('skip %s: %s', p.name, '; '.join(reasons))
         skipped += 1
         continue
-      safe, reasons = _worktree_is_clean(p)
-      if not safe:
-        if not force:
-          log.info('skip %s: %s', p.name, '; '.join(reasons))
-          skipped += 1
-          continue
-        log.info('force %s: %s', p.name, '; '.join(reasons))
-      if dry_run:
-        log.info('would remove %s', p.name)
-      else:
-        branch = f'worktree-{p.name}'
-        subprocess.run(
-          ['git', 'worktree', 'remove', '--force', str(p)], check=False, capture_output=True
-        )
-        subprocess.run(['git', 'branch', '-D', branch], check=False, capture_output=True)
-        log.info('removed %s', p.name)
-      removed += 1
+      log.info('force %s: %s', p.name, '; '.join(reasons))
+    if dry_run:
+      log.info('would remove %s', p.name)
+    else:
+      branch = f'worktree-{p.name}'
+      subprocess.run(
+        ['git', 'worktree', 'remove', '--force', str(p)], check=False, capture_output=True
+      )
+      subprocess.run(['git', 'branch', '-D', branch], check=False, capture_output=True)
+      log.info('removed %s', p.name)
+    removed += 1
 
-  if containers_dir.is_dir():
-    mounts = _running_container_mounts()
-    for p in sorted(containers_dir.iterdir()):
-      if not p.is_dir():
-        continue
-      ref = _format_ref(p.name, True)
-      if filter_refs is not None and ref not in filter_refs:
-        continue
-      if str(p) in mounts:
-        log.info('skip %s: active session', ref)
+  for p, active, safe, reasons in container_results:
+    ref = _format_ref(p.name, True)
+    if active:
+      log.info('skip %s: active session', ref)
+      skipped += 1
+      continue
+    if not safe:
+      if not force:
+        log.info('skip %s: %s', ref, '; '.join(reasons))
         skipped += 1
         continue
-      safe, reasons = _worktree_is_clean(p, container_proj=proj)
-      if not safe:
-        if not force:
-          log.info('skip %s: %s', ref, '; '.join(reasons))
-          skipped += 1
-          continue
-        log.info('force %s: %s', ref, '; '.join(reasons))
-      if dry_run:
-        log.info('would remove %s', ref)
-      else:
-        shutil.rmtree(p)
-        session_dir = Path.home() / '.claude' / 'cw-sessions' / p.name
-        if session_dir.is_dir():
-          shutil.rmtree(session_dir)
-        log.info('removed %s', ref)
-      removed += 1
+      log.info('force %s: %s', ref, '; '.join(reasons))
+    if dry_run:
+      log.info('would remove %s', ref)
+    else:
+      shutil.rmtree(p)
+      session_dir = Path.home() / '.claude' / 'cw-sessions' / p.name
+      if session_dir.is_dir():
+        shutil.rmtree(session_dir)
+      log.info('removed %s', ref)
+    removed += 1
 
   log.info('cleaned %d workspace(s), skipped %d', removed, skipped)
   return 0
