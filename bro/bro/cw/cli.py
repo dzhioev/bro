@@ -670,9 +670,9 @@ def start_session(
   prompt_parts = [_load_base_prompts()]
   if auto:
     prompt_parts.append('Land mode: PR')
+  claude_args = [*claude_args, '--append-system-prompt', '\n\n'.join(prompt_parts)]
   if prompt is not None:
-    prompt_parts.append(prompt)
-  claude_args = [*claude_args, '--', '\n\n'.join(prompt_parts)]
+    claude_args = [*claude_args, '--', prompt]
 
   return cw(name=name, container=container, drop=drop, aws=aws, claude_args=claude_args)
 
