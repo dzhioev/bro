@@ -11,7 +11,7 @@ When the task's goal appears to be achieved — whether through code changes, in
 
 ## Development log
 
-Throughout the session, maintain a development log on the task itself using append_content. This gives the task a persistent record of what happened and why.
+Throughout the session, maintain a development log on the task itself using append_page_content. This gives the task a persistent record of what happened and why.
 
 ### When to log
 
@@ -33,7 +33,7 @@ Throughout the session, maintain a development log on the task itself using appe
 
 ### Style
 
-- Use append_content(task_id, markdown) — never read-then-replace the full body
+- Use append_page_content(task_id, markdown) — never read-then-replace the full body
 - Keep entries short (2-5 lines each)
 - Use `@YYYY-MM-DD HH:MM` for timestamps (converted to native Notion date mentions)
 - The first entry creates the `## Development log` heading; subsequent entries are `###` subsections under it

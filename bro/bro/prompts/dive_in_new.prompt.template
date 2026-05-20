@@ -7,6 +7,6 @@ Step 0 — create the task:
 
 Step 1 — understand the task you just created:
 - get_task_info on the new task id for full metadata
-- get_content on the new task id for the body (may be empty if you did not set content)
+- get_page_content on the new task id for the body (may be empty if you did not set content)
 
 {context}
