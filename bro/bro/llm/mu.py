@@ -4,8 +4,10 @@ import json
 from llm.llms import ChatGPT
 from llm.llms.chat_gpt import (
   ResponseInputContentPart,
+  image_to_content,
   png_to_content,
   image_file_to_content,
+  pdf_to_content,
   text_to_content,
 )
 from openai.types.responses import ResponseInputParam
@@ -42,6 +44,24 @@ class PngImage(Content):
 
   def dump(self) -> ResponseInputContentPart:
     return png_to_content(self.image)
+
+
+@dataclass
+class Image(Content):
+  data: bytes
+  mime_type: str
+
+  def dump(self) -> ResponseInputContentPart:
+    return image_to_content(self.data, self.mime_type)
+
+
+@dataclass
+class PDFFile(Content):
+  data: bytes
+  filename: str
+
+  def dump(self) -> ResponseInputContentPart:
+    return pdf_to_content(self.data, self.filename)
 
 
 @dataclass

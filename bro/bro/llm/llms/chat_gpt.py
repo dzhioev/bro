@@ -13,6 +13,7 @@ from openai.types.responses import (
 from openai.types.responses.easy_input_message_param import EasyInputMessageParam
 from openai.types.responses.function_tool_param import FunctionToolParam
 from openai.types.responses.response_input_content_param import ResponseInputContentParam
+from openai.types.responses.response_input_file_param import ResponseInputFileParam
 from openai.types.responses.response_input_image_param import ResponseInputImageParam
 from openai.types.responses.response_input_text_param import ResponseInputTextParam
 from openai.types.shared import ReasoningEffort
@@ -33,10 +34,14 @@ def encode_file(path: str) -> str:
     return base64.b64encode(f.read()).decode('utf-8')
 
 
-def png_to_content(data: bytes) -> ResponseInputImageParam:
+def image_to_content(data: bytes, mime_type: str) -> ResponseInputImageParam:
   encoded = base64.b64encode(data).decode('utf-8')
-  image_url = f'data:image/png;base64,{encoded}'
+  image_url = f'data:{mime_type};base64,{encoded}'
   return ResponseInputImageParam(type='input_image', image_url=image_url, detail='high')
+
+
+def png_to_content(data: bytes) -> ResponseInputImageParam:
+  return image_to_content(data, 'image/png')
 
 
 def image_file_to_content(image_path: str) -> ResponseInputImageParam:
@@ -44,6 +49,16 @@ def image_file_to_content(image_path: str) -> ResponseInputImageParam:
     raise NotImplementedError('only PNG images supported')
   with open(image_path, 'rb') as f:
     return png_to_content(f.read())
+
+
+def pdf_to_content(data: bytes, filename: str) -> ResponseInputFileParam:
+  encoded = base64.b64encode(data).decode('utf-8')
+  # OpenAI's input_file rejects filenames containing path separators (e.g.
+  # "Payslip4/2026.pdf" comes back as 400 "badly formatted or corrupted").
+  safe_filename = filename.replace('/', '_').replace('\\', '_') or 'file.pdf'
+  return ResponseInputFileParam(
+    type='input_file', file_data=f'data:application/pdf;base64,{encoded}', filename=safe_filename
+  )
 
 
 def text_to_content(text: str) -> ResponseInputTextParam:
