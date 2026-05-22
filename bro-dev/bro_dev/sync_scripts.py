@@ -14,6 +14,7 @@ import inspect
 import logging
 import re
 import sys
+import tomllib
 from pathlib import Path
 
 from base.args import Parser
@@ -58,6 +59,7 @@ def _has_ast_main(path: Path) -> bool:
 def _discover():
   entries = []
   top_level_modules = []
+  unverifiable_modules: list[str] = []
   for rel in _iter_py_files():
     mod_name = _module_name(rel)
     if len(rel.parts) == 1:
@@ -67,7 +69,8 @@ def _discover():
     try:
       mod = importlib.import_module(mod_name)
     except Exception as e:
-      logging.warning('cannot import %s: %s', mod_name, e)
+      logging.warning('cannot import %s: %s; preserving existing entries', mod_name, e)
+      unverifiable_modules.append(mod_name)
       continue
     fn = getattr(mod, 'main', None)
     if fn is None or not callable(fn) or inspect.iscoroutinefunction(fn):
@@ -79,10 +82,19 @@ def _discover():
         'explicit': getattr(mod, '__cli_name__', None),
       }
     )
-  return entries, top_level_modules
+  return entries, top_level_modules, unverifiable_modules
 
 
-def _build_scripts(entries: list[dict]) -> dict[str, str]:
+def _read_existing_scripts() -> dict[str, str]:
+  data = tomllib.loads(PYPROJECT.read_text())
+  return data.get('project', {}).get('scripts', {})
+
+
+def _build_scripts(
+  entries: list[dict],
+  unverifiable_modules: list[str],
+  existing_scripts: dict[str, str],
+) -> dict[str, str]:
   scripts: dict[str, str] = {}
 
   def add(name: str, target: str) -> None:
@@ -96,6 +108,11 @@ def _build_scripts(entries: list[dict]) -> dict[str, str]:
     add(e['canonical'], target)
     if e['explicit'] is not None and e['explicit'] != e['canonical']:
       add(e['explicit'], target)
+  for mod_name in unverifiable_modules:
+    target = f'{mod_name}:main'
+    for name, t in existing_scripts.items():
+      if t == target:
+        add(name, t)
   return scripts
 
 
@@ -150,8 +167,9 @@ def _replace_py_modules(text: str, block: str) -> str:
 
 
 def sync_scripts() -> None:
-  entries, top_level = _discover()
-  scripts = _build_scripts(entries)
+  existing_scripts = _read_existing_scripts()
+  entries, top_level, unverifiable_modules = _discover()
+  scripts = _build_scripts(entries, unverifiable_modules, existing_scripts)
   text = PYPROJECT.read_text()
   text = _replace_scripts(text, _render_scripts(scripts))
   text = _replace_py_modules(text, _render_py_modules(top_level))
