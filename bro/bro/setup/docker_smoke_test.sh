@@ -1,6 +1,6 @@
 #!/usr/bin/env -S bash -e
 #
-# Shared docker smoke-test helper for server images.
+# Shared docker/podman smoke-test helper for server images.
 # Source this, then call:
 #
 #   smoke_build <dockerfile>
@@ -10,6 +10,10 @@
 #   smoke_assert_status <path> <expected-status> [-H <header>]
 #
 # Container is cleaned up on EXIT. $SMOKE_PORT holds the mapped host port.
+# Picks docker on the host and podman inside cw containers via $OCI_CMD.
+
+_SMOKE_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+source "$_SMOKE_DIR/../infra/deploy_lib.sh"
 
 SMOKE_PORT=
 _SMOKE_CID=
@@ -19,8 +23,8 @@ smoke_build() {
   local dockerfile=$1
   _SMOKE_IMAGE="smoke-test-$$"
 
-  echo "=== docker build ==="
-  docker build -f "$dockerfile" -t "$_SMOKE_IMAGE" .
+  echo "=== $OCI_CMD build ==="
+  "$OCI_CMD" build -f "$dockerfile" -t "$_SMOKE_IMAGE" .
 }
 
 smoke_start() {
@@ -28,7 +32,7 @@ smoke_start() {
   SMOKE_PORT=$((internal_port + 10000 + RANDOM % 10000))
 
   echo "=== starting container ==="
-  _SMOKE_CID=$(docker run -d --rm -p "${SMOKE_PORT}:${internal_port}" "$@" "$_SMOKE_IMAGE")
+  _SMOKE_CID=$("$OCI_CMD" run -d --rm -p "${SMOKE_PORT}:${internal_port}" "$@" "$_SMOKE_IMAGE")
   trap '_smoke_cleanup' EXIT
 }
 
@@ -41,7 +45,7 @@ smoke_await() {
     sleep 0.5
   done
   echo "container failed to become ready" >&2
-  docker logs "$_SMOKE_CID" >&2
+  "$OCI_CMD" logs "$_SMOKE_CID" >&2
   exit 1
 }
 
@@ -61,5 +65,5 @@ smoke_assert_status() {
 }
 
 _smoke_cleanup() {
-  docker stop "$_SMOKE_CID" >/dev/null 2>&1 || true
+  "$OCI_CMD" stop "$_SMOKE_CID" >/dev/null 2>&1 || true
 }
