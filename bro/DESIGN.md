@@ -157,6 +157,35 @@ class Assistant(Bro):
 The LLM decides which to use: single `BroTool` for one item, `BroScatterTool` when it
 has a batch. Both are regular tools — the parallelism is invisible to the calling LLM.
 
+## Data sources
+
+A `DataSource` describes and provides a connector to a read-only data source (a book,
+a database, a web reference like Wikipedia). It has three jobs:
+
+1. **Self-description.** Each source has a `name` and a one-line `summary`. The Bro
+   base class injects every source's summary into the system prompt under a `## Data
+   sources` section so the LLM knows what is available without enumerating raw tools.
+2. **Uniform query shape.** Two methods: `async search(query, limit) -> list[Hit]` and
+   `async fetch(id, query=None) -> str`. The default `as_mcp_server()` exposes them
+   as `<name>-search` / `<name>-fetch` tools. `fetch` receives the original user query
+   so the connector can return a focused summary instead of the raw record.
+3. **Read-only by contract.** Unlike a generic `MCPServer`, a `DataSource` never
+   mutates state — so it is safe to bind to any Bro.
+
+```python
+class Librorian(Bro):
+  name = 'librorian'
+  description = 'research assistant that looks things up across read-only data sources'
+
+# in bros/__init__.py
+register(Librorian, data_sources=[Wikipedia()])
+```
+
+Concrete connectors live in `bro/datasources/`. The Wikipedia connector pulls the
+article extract from the REST API, then runs `mu()` with a fine-tuned prompt to
+return a query-biased summary — the LLM downstream sees a tight digest, not the
+whole article.
+
 ## Registry
 
 Bros live in `bro/bros/`, one file per agent. The registry discovers them at import

@@ -2,6 +2,7 @@ import json
 import pytest
 
 from bro.bro import Bro, ScatterTool, Tool
+from bro.datasources.base import DataSource, Hit
 from llm.llm import LLM
 from llm.mcp import MCPServer
 
@@ -208,6 +209,66 @@ class TestTool:
     tool = Tool(bro)
     result = await tool.call({'input': 'hi'})
     assert result == 'tool result'
+
+
+class _StubSource(DataSource):
+  name = 'stub'
+  summary = 'a stub data source for tests'
+
+  def __init__(self):
+    self.fetch_calls: list[tuple[str, str | None]] = []
+
+  async def search(self, query: str, limit: int = 5) -> list[Hit]:
+    return [Hit(id='stub-1', title=f'hit for {query}', snippet='stub snippet')]
+
+  async def fetch(self, id: str, query: str | None = None) -> str:
+    self.fetch_calls.append((id, query))
+    return f'content for {id}'
+
+
+class TestBroDataSources:
+  @pytest.mark.asyncio
+  async def test_data_source_mcp_server_mounted(self):
+    class SourceBro(Bro):
+      name = 'with-source'
+      description = 'has a data source'
+
+      def __init__(self):
+        super().__init__(system_prompt='hi', data_sources=[_StubSource()])
+
+    bro = SourceBro()
+    servers = bro.mcp_servers()
+    assert len(servers) == 1
+    tools = await servers[0].list_tools()
+    tool_names = {t.name for t in tools}
+    assert tool_names == {'stub-search', 'stub-fetch'}
+
+  def test_data_source_summary_in_system_prompt(self):
+    class SourceBro(Bro):
+      name = 'summary-bro'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='base', data_sources=[_StubSource()])
+
+    bro = SourceBro()
+    assert '## Data sources' in bro.system_prompt
+    assert '**stub**' in bro.system_prompt
+    assert 'a stub data source for tests' in bro.system_prompt
+
+  @pytest.mark.asyncio
+  async def test_data_source_search_and_fetch_calls(self):
+    source = _StubSource()
+    server = source.as_mcp_server()
+    tools = await server.list_tools()
+    by_name = {t.name: t for t in tools}
+    search_result = await by_name['stub-search'].call({'query': 'foo'})
+    assert isinstance(search_result, str)
+    parsed = json.loads(search_result)
+    assert parsed[0]['id'] == 'stub-1'
+    fetch_result = await by_name['stub-fetch'].call({'id': 'x', 'query': 'why'})
+    assert fetch_result == 'content for x'
+    assert source.fetch_calls == [('x', 'why')]
 
 
 class TestScatterTool:

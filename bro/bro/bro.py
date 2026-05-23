@@ -4,6 +4,7 @@ from abc import ABC
 from pathlib import Path
 
 import llm.mcp
+from bro.datasources.base import DataSource
 from llm.llm import LLM, get_llm
 
 DEFAULT_MODEL = 'gpt-5'
@@ -20,6 +21,18 @@ def _load_shared_prompts() -> str:
   return '\n\n'.join(parts)
 
 
+def _render_data_sources(sources: list[DataSource]) -> str:
+  lines = ['## Data sources', '', 'You have access to the following read-only data sources:', '']
+  for ds in sources:
+    lines.append(f'- **{ds.name}** — {ds.summary}')
+  lines.append('')
+  lines.append(
+    'Each source exposes `<name>-search` and `<name>-fetch` tools. '
+    'Pass the original user query to `<name>-fetch` so the source can focus the result.'
+  )
+  return '\n'.join(lines)
+
+
 class Bro(ABC):
   name: str
   description: str
@@ -32,11 +45,22 @@ class Bro(ABC):
     self,
     system_prompt: str = '',
     mcp_servers: list[llm.mcp.MCPServer] | None = None,
+    data_sources: list[DataSource] | None = None,
   ):
-    self._mcp_servers = mcp_servers if mcp_servers is not None else []
+    self._mcp_servers = list(mcp_servers) if mcp_servers is not None else []
+    self._data_sources = list(data_sources) if data_sources is not None else []
+    for ds in self._data_sources:
+      self._mcp_servers.append(ds.as_mcp_server())
     self._llm = None
     shared = _load_shared_prompts()
-    self.system_prompt = f'{shared}\n\n{system_prompt}' if len(shared) > 0 else system_prompt
+    parts = []
+    if len(shared) > 0:
+      parts.append(shared)
+    if len(system_prompt) > 0:
+      parts.append(system_prompt)
+    if len(self._data_sources) > 0:
+      parts.append(_render_data_sources(self._data_sources))
+    self.system_prompt = '\n\n'.join(parts)
 
   def mcp_servers(self) -> list[llm.mcp.MCPServer]:
     return self._mcp_servers

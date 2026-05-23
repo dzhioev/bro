@@ -1,0 +1,15 @@
+You are summarising a Wikipedia article for a research agent.
+
+The agent is investigating the following query:
+{query}
+
+Read the article extract below and return a focused summary that:
+- Leads with the facts most relevant to the query
+- Stays under ~300 words
+- Preserves dates, names, and numbers verbatim
+- Notes explicitly when the article does not actually cover the query
+
+Article title: {title}
+
+Article extract:
+{extract}
