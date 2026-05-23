@@ -6,6 +6,7 @@ import re
 import subprocess
 import sys
 
+import cw
 from base import log
 from base.args import Parser
 from flow.focus.client.client import default_client
@@ -49,10 +50,8 @@ def _resolve_task_name(task_id: str) -> str:
 
 
 def dive_in(
+  forwarded: list[str],
   dry_run: bool = False,
-  auto: bool = False,
-  fast: bool = False,
-  aws: bool = False,
   host: bool = False,
   command: str | None = None,
   task: str | None = None,
@@ -103,7 +102,7 @@ def dive_in(
 
     os.environ['CW_TASK_ID'] = task_id
 
-  ppp_parts = ['dive-in']
+  ppp_parts = ['dive-in', *forwarded]
   if host:
     ppp_parts.append('--host')
   if new:
@@ -114,15 +113,9 @@ def dive_in(
     ppp_parts.append(command)
   os.environ.setdefault('PPP_SHELL_COMMAND', ' '.join(ppp_parts))
 
-  cmd = ['cw', 'ss', '--mcp']
+  cmd = ['cw', 'ss', '--mcp', *forwarded]
   if not host:
     cmd.append('-c')
-  if auto:
-    cmd.append('--auto')
-  if fast:
-    cmd.append('--fast')
-  if aws:
-    cmd.append('--aws')
   cmd.extend(['-p', prompt, name])
   if dry_run:
     print(' '.join(_shell_quote(c) for c in cmd))
@@ -135,13 +128,7 @@ def main(argv=None):
   parser.add_argument(
     '-n', '--dry-run', action='store_true', help='print the command without running it'
   )
-  parser.add_argument(
-    '--auto', action='store_true', help='run autonomously, skipping most permissions'
-  )
-  parser.add_argument('--fast', action='store_true', help='enable fast mode for the session')
-  parser.add_argument(
-    '--aws', action='store_true', help='expose host AWS credentials to the container'
-  )
+  cw.add_forwarded_flags(parser)
   parser.add_argument(
     '--host',
     action='store_true',
@@ -163,7 +150,8 @@ def main(argv=None):
     help='initial command for the session (appended to prompt; with --new, used as the seed idea for the task)',
   )
   args = parser.parse(argv)
-  return dive_in(**args)
+  forwarded = cw.extract_forwarded_argv(args)
+  return dive_in(forwarded=forwarded, **args)
 
 
 if __name__ == '__main__':

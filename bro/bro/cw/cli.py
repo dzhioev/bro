@@ -648,6 +648,54 @@ def _mcp_config_argv(mcp: str) -> list[str]:
   return ['--mcp-config', mcp_json]
 
 
+EFFORT_LEVELS = ('low', 'medium', 'high', 'xhigh', 'max')
+
+
+def add_forwarded_flags(parser: argparse.ArgumentParser) -> None:
+  """register the flags that wrappers (dive-in, start-session) forward to `cw ss`.
+
+  Adding a new pass-through flag here makes it available in every wrapper that
+  calls this helper — no per-flag plumbing in each wrapper.
+  """
+  parser.add_argument(
+    '--auto',
+    action='store_true',
+    help='let claude run autonomously, skipping most permissions (allowed only with -c)',
+  )
+  parser.add_argument(
+    '--fast',
+    action='store_true',
+    help='enable fast mode for the session (disabled by default regardless of host settings)',
+  )
+  parser.add_argument(
+    '--aws',
+    action='store_true',
+    help='expose host AWS credentials (~/.aws and env vars) to the container',
+  )
+  parser.add_argument(
+    '--effort',
+    default=None,
+    choices=EFFORT_LEVELS,
+    help='thinking effort level (forwarded to claude --effort)',
+  )
+
+
+def extract_forwarded_argv(args: dict) -> list[str]:
+  """pop forwarded-flag values from `args` and return them as canonical argv tokens.
+
+  mutates `args`: removes every key registered by `add_forwarded_flags`. The returned
+  list is suitable to splice directly into a `cw ss` invocation.
+  """
+  parser = Parser(add_help=False)
+  add_forwarded_flags(parser)
+  forwarded = {
+    a.dest: args.pop(a.dest)
+    for a in parser._actions
+    if len(a.option_strings) > 0 and a.dest in args
+  }
+  return parser.reconstruct(forwarded, prog=[])
+
+
 def start_session(
   name: str,
   container: bool,
@@ -655,12 +703,15 @@ def start_session(
   auto: bool,
   fast: bool,
   aws: bool,
+  effort: str | None,
   mcp: str | None,
   prompt: str | None,
   claude_args: list[str],
 ) -> int:
   flags = {'-c': container, '--auto': auto, '--drop': drop, '--aws': aws}
   parts = ['cw', 'ss', *(f for f, v in flags.items() if v)]
+  if effort is not None:
+    parts.extend(['--effort', effort])
   if mcp is not None:
     parts.append('--mcp')
     if mcp != 'http':
@@ -689,6 +740,8 @@ def start_session(
     '--settings',
     fast_mode_settings,
   ]
+  if effort is not None:
+    inject.extend(['--effort', effort])
   if mcp is not None:
     inject.extend(_mcp_config_argv(mcp))
   if auto:
@@ -754,21 +807,7 @@ def main(argv=None):
   ss.add_argument(
     '--drop', action='store_true', help='remove the workspace on exit without prompting'
   )
-  ss.add_argument(
-    '--auto',
-    action='store_true',
-    help='let claude run autonomously, skipping most permissions (allowed only with -c)',
-  )
-  ss.add_argument(
-    '--fast',
-    action='store_true',
-    help='enable fast mode for the session (disabled by default regardless of host settings)',
-  )
-  ss.add_argument(
-    '--aws',
-    action='store_true',
-    help='expose host AWS credentials (~/.aws and env vars) to the container',
-  )
+  add_forwarded_flags(ss)
   ss.add_argument(
     '--mcp',
     nargs='?',
