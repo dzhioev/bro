@@ -53,6 +53,7 @@ def dive_in(
   auto: bool = False,
   fast: bool = False,
   aws: bool = False,
+  host: bool = False,
   command: str | None = None,
   task: str | None = None,
   new: bool = False,
@@ -103,15 +104,19 @@ def dive_in(
     os.environ['CW_TASK_ID'] = task_id
 
   ppp_parts = ['dive-in']
+  if host:
+    ppp_parts.append('--host')
   if new:
     ppp_parts.append('--new')
   if task is not None:
     ppp_parts.extend(['-t', task])
   if command is not None:
     ppp_parts.append(command)
-  os.environ.setdefault('PPP_COMMAND', ' '.join(ppp_parts))
+  os.environ.setdefault('PPP_SHELL_COMMAND', ' '.join(ppp_parts))
 
-  cmd = ['cw', 'ss', '-c', '--mcp']
+  cmd = ['cw', 'ss', '--mcp']
+  if not host:
+    cmd.append('-c')
   if auto:
     cmd.append('--auto')
   if fast:
@@ -136,6 +141,11 @@ def main(argv=None):
   parser.add_argument('--fast', action='store_true', help='enable fast mode for the session')
   parser.add_argument(
     '--aws', action='store_true', help='expose host AWS credentials to the container'
+  )
+  parser.add_argument(
+    '--host',
+    action='store_true',
+    help='run on the host in a same-machine worktree instead of a container',
   )
   group = parser.add_mutually_exclusive_group()
   group.add_argument(

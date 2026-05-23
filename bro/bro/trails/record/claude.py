@@ -163,7 +163,7 @@ def _build_item(path: Path, workspace: str, s3_key: str) -> dict:
     'is_container': os.path.isfile('/.dockerenv'),
   }
 
-  for key, env in [('cw_command', 'CW_COMMAND'), ('ppp_command', 'PPP_COMMAND')]:
+  for key, env in [('cw_command', 'CW_COMMAND'), ('shell_command', 'PPP_SHELL_COMMAND')]:
     val = os.environ.get(env)
     if val is not None:
       item[key] = val

@@ -64,7 +64,7 @@ _DOCKER_FORWARD_ENV = (
   'GIT_AUTHOR_EMAIL',
   'GIT_COMMITTER_NAME',
   'GIT_COMMITTER_EMAIL',
-  'PPP_COMMAND',
+  'PPP_SHELL_COMMAND',
   'TERM_PROGRAM',
   'TERM_PROGRAM_VERSION',
   'COLORTERM',
@@ -667,7 +667,7 @@ def start_session(
       parts.append(mcp)
   parts.extend([name, *claude_args])
   os.environ['CW_COMMAND'] = ' '.join(parts)
-  os.environ.setdefault('PPP_COMMAND', os.environ['CW_COMMAND'])
+  os.environ.setdefault('PPP_SHELL_COMMAND', os.environ['CW_COMMAND'])
 
   if auto:
     os.environ['GIT_AUTHOR_NAME'] = _BRO_GIT_NAME
