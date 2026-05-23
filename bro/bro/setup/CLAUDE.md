@@ -25,8 +25,8 @@ Worktrees get their own `.venv`. The `.claude/hooks/session_start.sh` hook seeds
 - `setup_repo.sh` — submodules + `uv sync` + `sync-scripts` + `uv sync` again + `.configs` symlink sanity check
 - `bootstrap_session_log.sh` — one-time IAM/SSM setup for session-log sync (creates `cw-session-log-sync` IAM user + key, writes `.configs/session_log.json`). Run once after deploying `SessionLogStack`
 - `claude_commit_footer.py` — prints the per-commit footer with cumulative per-model token totals plus the session id (`> created with Claude Code <version> (<model>: N,NNN, …; session: <id>)`). The session id links a commit back to its source transcript; the comma-separated totals are precise enough that `usage-report <git-range>` can sum them across a commit range
-- `docker_smoke_test.sh` — sourceable helper for service `verify_deps.sh` scripts (`smoke_build`, `smoke_start`, `smoke_await`, `smoke_curl`, `smoke_assert_status`)
-- `container/` — Dockerfile + entrypoint for the `cw -c` container image; `bump-claude-code.sh` rebuilds with the pinned `claude-code-version`
+- `docker_smoke_test.sh` — sourceable helper for service `verify_deps.sh` scripts (`smoke_build`, `smoke_start`, `smoke_await`, `smoke_curl`, `smoke_assert_status`); picks docker or podman via `$OCI_CMD` from `infra/deploy_lib.sh`
+- `container/` — Dockerfile + entrypoint for the `cw -c` container image; `bump-claude-code.sh` rebuilds with the pinned `claude-code-version`. Image bundles the docker CLI; cw.py bind-mounts the host docker socket so deploy scripts inside the container can build + push against the host daemon
 - `ubuntu/` — Ubuntu-only install helpers (currently `install_stow.sh`)
 - `dotfiles/` — GNU Stow dotfiles submodule. `.configs` at the repo root is a symlink into `setup/dotfiles/dotfiles/dot-ppp`
 
