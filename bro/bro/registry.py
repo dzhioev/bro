@@ -1,6 +1,5 @@
 import llm.mcp
 from bro.bro import Bro
-from bro.datasources.base import DataSource
 
 _REGISTRY: dict[str, Bro] = {}
 _initialized = False
@@ -16,12 +15,8 @@ def _ensure_initialized() -> None:
   init()
 
 
-def register(
-  bro_cls: type[Bro],
-  mcp_servers: list[llm.mcp.MCPServer] | None = None,
-  data_sources: list[DataSource] | None = None,
-) -> None:
-  instance = bro_cls(mcp_servers=mcp_servers, data_sources=data_sources)
+def register(bro_cls: type[Bro], mcp_servers: list[llm.mcp.MCPServer] | None = None) -> None:
+  instance = bro_cls(mcp_servers=mcp_servers)
   if instance.name in _REGISTRY:
     raise ValueError(f'duplicate bro name: {instance.name!r}')
   _REGISTRY[instance.name] = instance

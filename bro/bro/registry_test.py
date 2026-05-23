@@ -19,8 +19,8 @@ class AlphaBro(Bro):
   name = 'alpha'
   description = 'alpha bro'
 
-  def __init__(self, mcp_servers=None, data_sources=None):
-    super().__init__(system_prompt='alpha', mcp_servers=mcp_servers, data_sources=data_sources)
+  def __init__(self, mcp_servers=None):
+    super().__init__(system_prompt='alpha', mcp_servers=mcp_servers)
 
   def _create_llm(self):
     return MockLLM()
@@ -30,8 +30,8 @@ class BetaBro(Bro):
   name = 'beta'
   description = 'beta bro'
 
-  def __init__(self, mcp_servers=None, data_sources=None):
-    super().__init__(system_prompt='beta', mcp_servers=mcp_servers, data_sources=data_sources)
+  def __init__(self, mcp_servers=None):
+    super().__init__(system_prompt='beta', mcp_servers=mcp_servers)
 
   def _create_llm(self):
     return MockLLM()

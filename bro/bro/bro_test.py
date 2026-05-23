@@ -232,9 +232,10 @@ class TestBroDataSources:
     class SourceBro(Bro):
       name = 'with-source'
       description = 'has a data source'
+      data_sources = [_StubSource()]
 
       def __init__(self):
-        super().__init__(system_prompt='hi', data_sources=[_StubSource()])
+        super().__init__(system_prompt='hi')
 
     bro = SourceBro()
     servers = bro.mcp_servers()
@@ -247,9 +248,10 @@ class TestBroDataSources:
     class SourceBro(Bro):
       name = 'summary-bro'
       description = 'd'
+      data_sources = [_StubSource()]
 
       def __init__(self):
-        super().__init__(system_prompt='base', data_sources=[_StubSource()])
+        super().__init__(system_prompt='base')
 
     bro = SourceBro()
     assert '## Data sources' in bro.system_prompt

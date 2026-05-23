@@ -172,14 +172,19 @@ a database, a web reference like Wikipedia). It has three jobs:
 3. **Read-only by contract.** Unlike a generic `MCPServer`, a `DataSource` never
    mutates state — so it is safe to bind to any Bro.
 
+Data sources are declared **on the Bro class** alongside `name` and `description`:
+
 ```python
 class Librorian(Bro):
   name = 'librorian'
   description = 'research assistant that looks things up across read-only data sources'
+  data_sources = [Wikipedia()]
 
 # in bros/__init__.py
-register(Librorian, data_sources=[Wikipedia()])
+register(Librorian)
 ```
+
+The Bro base class reads `type(self).data_sources` and mounts each one automatically — no per-Bro plumbing required.
 
 Concrete connectors live in `bro/datasources/`. The Wikipedia connector pulls the
 article extract from the REST API, then runs `mu()` with a fine-tuned prompt to

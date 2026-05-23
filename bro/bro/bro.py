@@ -38,6 +38,7 @@ class Bro(ABC):
   description: str
   model: str = DEFAULT_MODEL
   reasoning_effort: str | None = None
+  data_sources: list[DataSource] = []
 
   _llm: LLM | None = None
 
@@ -45,11 +46,9 @@ class Bro(ABC):
     self,
     system_prompt: str = '',
     mcp_servers: list[llm.mcp.MCPServer] | None = None,
-    data_sources: list[DataSource] | None = None,
   ):
     self._mcp_servers = list(mcp_servers) if mcp_servers is not None else []
-    self._data_sources = list(data_sources) if data_sources is not None else []
-    for ds in self._data_sources:
+    for ds in self.data_sources:
       self._mcp_servers.append(ds.as_mcp_server())
     self._llm = None
     shared = _load_shared_prompts()
@@ -58,8 +57,8 @@ class Bro(ABC):
       parts.append(shared)
     if len(system_prompt) > 0:
       parts.append(system_prompt)
-    if len(self._data_sources) > 0:
-      parts.append(_render_data_sources(self._data_sources))
+    if len(self.data_sources) > 0:
+      parts.append(_render_data_sources(self.data_sources))
     self.system_prompt = '\n\n'.join(parts)
 
   def mcp_servers(self) -> list[llm.mcp.MCPServer]:
