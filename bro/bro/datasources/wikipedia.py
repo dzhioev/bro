@@ -3,6 +3,7 @@ import urllib.parse
 import aiohttp
 from pydantic import BaseModel
 
+from base import log
 from bro.datasources.base import DataSource, Hit
 from mu import Text, mu
 from prompts import get_prompt
@@ -42,6 +43,7 @@ class Wikipedia(DataSource):
 
   async def fetch(self, id: str, query: str | None = None) -> str:
     title, extract = await self._fetch_extract(id)
+    log.info(f'wikipedia: fetched {title!r} ({len(extract):,} chars)')
     if query is None or len(query) == 0:
       return extract
     prompt = get_prompt(
