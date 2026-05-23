@@ -26,12 +26,21 @@ GC
 
 echo "ghp_fake_token" > "$SMOKE_TMP/github_token"
 
+# pre-seed the container-private .claude.json (cw.py does this on first run).
+# also drop a "host" .claude.json next to it as a tripwire: it must not exist
+# on any container mount, so any write the container makes to /home/cw/.claude.json
+# must land in claude/.claude.json and leave host_claude.json untouched.
+echo '{"projects":{"/workspace":{"smoke_seed":true}}}' > "$SMOKE_TMP/claude/.claude.json"
+echo '{"host_marker":"untouched"}' > "$SMOKE_TMP/host_claude.json"
+HOST_CLAUDE_SHA="$(sha256sum "$SMOKE_TMP/host_claude.json" | cut -d' ' -f1)"
+
 echo "running entrypoint" >&2
 docker run --rm \
   -v "$SMOKE_TMP/workspace:/workspace" \
   -v "$PROJ:/host-repo:ro" \
   -v "$SMOKE_TMP/gitconfig:/host-gitconfig:ro" \
   -v "$SMOKE_TMP/claude:/home/cw/.claude" \
+  -v "$SMOKE_TMP/claude/.claude.json:/home/cw/.claude.json" \
   -v "$SMOKE_TMP/github_token:/run/secrets/github_token:ro" \
   -e "HOME=/home/cw" \
   -e "CW_NAME=smoke-test" \
@@ -52,6 +61,14 @@ docker run --rm \
     test -d /opt/uv-cache
     test -n "$(ls -A /opt/uv-cache)"
     test -w /opt/uv-cache
+    # /home/cw/.claude.json reflects the container-private seed and is writable
+    grep -q smoke_seed /home/cw/.claude.json
+    echo "{\"modified_by_container\":true}" > /home/cw/.claude.json
   ' >&2
+
+# container-private .claude.json reflects the in-container write
+grep -q modified_by_container "$SMOKE_TMP/claude/.claude.json"
+# the parallel host-shadow file is unmounted, so it must be byte-identical to before
+test "$(sha256sum "$SMOKE_TMP/host_claude.json" | cut -d' ' -f1)" = "$HOST_CLAUDE_SHA"
 
 echo "smoke test passed" >&2

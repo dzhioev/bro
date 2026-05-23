@@ -15,9 +15,18 @@ keeps the container's git state genuinely isolated. layout:
   - host project root → /host-repo ro
     (clone --shared reads objects from here via alternates; also the source for
     local submodule clones to avoid needing ssh keys in the container)
-  - ~/.claude.json rw (auth tokens; refresh writes back to host)
+  - ~/.claude.json: not bind-mounted from host. Seeded once per workspace from
+    host into a container-private file at cw-sessions/<name>/.claude.json and
+    bind-mounted from there, so per-project state mutations (mcpServers,
+    allowedTools, hasTrustDialogAccepted) stay in the container and can't be
+    used to escalate to code execution in the next host claude session.
   - ~/.claude → /host-claude ro (seeded once into the container-private
     ~/.claude/cw-sessions/<name>/, minus sessions/projects/history)
+  - ~/.claude/.credentials.json: not bind-mounted from host. Seeded into
+    cw-sessions/<name>/.credentials.json before launch (if host is fresher)
+    and synced back to host on exit (if container is fresher), keyed on
+    claudeAiOauth.expiresAt. Removes the runtime token-swap vector while
+    preserving OAuth refresh.
   - .configs/cw_github_token → /run/secrets/github_token ro (when present;
     entrypoint configures git credential helper for https push)
 
@@ -114,6 +123,44 @@ def _keychain_credentials() -> dict | None:
     return None
 
 
+def _credentials_expiry(path: Path) -> int:
+  if not path.is_file():
+    return 0
+  try:
+    return json.loads(path.read_text()).get('claudeAiOauth', {}).get('expiresAt', 0)
+  except (json.JSONDecodeError, OSError):
+    return 0
+
+
+def _sync_credentials(src: Path, dst: Path) -> None:
+  """copy src → dst if src's claudeAiOauth.expiresAt is newer than dst's."""
+  src_expiry = _credentials_expiry(src)
+  if src_expiry == 0:
+    return
+  if src_expiry > _credentials_expiry(dst):
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(src, dst)
+    dst.chmod(0o600)
+
+
+def _seed_container_claude_json(claude_dir: Path, host_file: Path) -> Path:
+  """seed-once per-workspace container-private copy of ~/.claude.json.
+
+  if the seed doesn't exist yet, copy host's ~/.claude.json into it (or write
+  an empty JSON object if the host has no such file). subsequent runs keep
+  whatever the container last wrote. returns the seed path; caller bind-mounts
+  it to /home/cw/.claude.json.
+  """
+  seed = claude_dir / '.claude.json'
+  if not seed.exists():
+    if host_file.is_file():
+      shutil.copyfile(host_file, seed)
+    else:
+      seed.write_text('{}')
+    seed.chmod(0o600)
+  return seed
+
+
 def _image_tag() -> str:
   h = hashlib.sha256()
   proj = _project_root()
@@ -156,6 +203,21 @@ def _docker_run_argv(
   home = Path.home()
   claude_dir = home / '.claude' / 'cw-sessions' / name
   claude_dir.mkdir(parents=True, exist_ok=True)
+  # seed-once container-private ~/.claude.json (see module docstring)
+  claude_json = _seed_container_claude_json(claude_dir, home / '.claude.json')
+  # credentials: on macOS the keychain may be fresher than the file (e.g. after a
+  # host-mode login that updated the keychain but not the file) — pick the more
+  # recent source for the host file, then sync host → container-private so the
+  # container starts with the freshest tokens. post-run, we'll sync back if the
+  # container refreshed during the session.
+  host_creds = home / '.claude' / '.credentials.json'
+  keychain_creds = _keychain_credentials()
+  if keychain_creds is not None:
+    keychain_expiry = keychain_creds.get('claudeAiOauth', {}).get('expiresAt', 0)
+    if keychain_expiry > _credentials_expiry(host_creds):
+      host_creds.write_text(json.dumps(keychain_creds))
+      host_creds.chmod(0o600)
+  _sync_credentials(host_creds, claude_dir / '.credentials.json')
   argv = [
     'docker',
     'run',
@@ -166,7 +228,7 @@ def _docker_run_argv(
     '-v',
     f'{proj}:/host-repo:ro',
     '-v',
-    f'{home}/.claude.json:/home/cw/.claude.json',
+    f'{claude_json}:/home/cw/.claude.json',
     '-v',
     f'{home}/.claude:/host-claude:ro',
     '-v',
@@ -191,30 +253,6 @@ def _docker_run_argv(
   github_token = (proj / '.configs' / os.environ.get('CW_TOKEN_FILE', _USER_TOKEN_FILE)).resolve()
   if github_token.is_file():
     argv += ['-v', f'{github_token}:/run/secrets/github_token:ro']
-  # bind-mount the host credentials file rw so token refreshes inside the
-  # container propagate back to the host; without this, each container consumes
-  # the single-use OAuth refresh token and the host copy becomes stale, forcing
-  # re-login on the next session.
-  # on macOS: the keychain may have fresher tokens (e.g. after a host-mode login
-  # that updated the keychain but not the file) — compare expiresAt and pick the
-  # more recent source.
-  host_creds = home / '.claude' / '.credentials.json'
-  keychain_creds = _keychain_credentials()
-  if keychain_creds is not None:
-    keychain_expiry = keychain_creds.get('claudeAiOauth', {}).get('expiresAt', 0)
-    file_expiry = 0
-    if host_creds.is_file():
-      try:
-        file_expiry = (
-          json.loads(host_creds.read_text()).get('claudeAiOauth', {}).get('expiresAt', 0)
-        )
-      except (json.JSONDecodeError, OSError):
-        pass
-    if keychain_expiry > file_expiry:
-      host_creds.write_text(json.dumps(keychain_creds))
-      host_creds.chmod(0o600)
-  if host_creds.is_file():
-    argv += ['-v', f'{host_creds}:/home/cw/.claude/.credentials.json']
   if aws:
     host_aws = home / '.aws'
     if host_aws.is_dir():
@@ -776,12 +814,17 @@ def cw(name: str, container: bool, drop: bool, aws: bool, claude_args: list[str]
     session.mkdir(parents=True, exist_ok=True)
     tag = _image_tag()
     _ensure_image(tag)
+    home = Path.home()
+    claude_dir = home / '.claude' / 'cw-sessions' / name
     result = subprocess.run(_docker_run_argv(tag, name, proj, session, claude_args, aws=aws))
+    # post-run sync: if the container refreshed its OAuth token during the
+    # session, propagate the fresher copy back to the host so the next session
+    # (host or container) sees the live tokens.
+    _sync_credentials(claude_dir / '.credentials.json', home / '.claude' / '.credentials.json')
     if drop:
       shutil.rmtree(session)
-      session_dir = Path.home() / '.claude' / 'cw-sessions' / name
-      if session_dir.is_dir():
-        shutil.rmtree(session_dir)
+      if claude_dir.is_dir():
+        shutil.rmtree(claude_dir)
       log.info('removed container workspace %s', name)
     return result.returncode
 
