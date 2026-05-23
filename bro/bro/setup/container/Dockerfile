@@ -3,13 +3,17 @@ FROM python:3.12-slim
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      git curl ca-certificates nodejs npm gosu procps unzip \
+      git curl ca-certificates nodejs npm gosu procps unzip gnupg \
  && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
       -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
       > /etc/apt/sources.list.d/github-cli.list \
+ && curl -fsSL https://download.docker.com/linux/debian/gpg \
+      | gpg --dearmor -o /usr/share/keyrings/docker.gpg \
+ && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker.gpg] https://download.docker.com/linux/debian bookworm stable" \
+      > /etc/apt/sources.list.d/docker.list \
  && apt-get update \
- && apt-get install -y --no-install-recommends gh \
+ && apt-get install -y --no-install-recommends gh docker-ce-cli \
  && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscli.zip \
@@ -25,6 +29,14 @@ RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 RUN useradd -m -u 1000 -s /bin/bash cw \
  && mkdir -p /home/cw/.claude \
  && chown cw:cw /home/cw/.claude
+
+# cw needs to talk to the host docker socket (bind-mounted at runtime) so
+# deploy scripts can build + push without a nested runtime. group `docker`
+# inside the container owns /var/run/docker.sock; cw is added so it can
+# access without sudo. socket gid is reconciled with the host's at runtime
+# by the entrypoint.
+RUN groupadd -g 999 docker \
+ && usermod -aG docker cw
 
 # pre-warm the uv wheel cache from the project's pyproject + uv.lock so the
 # entrypoint's `uv sync` against the bind-mounted /workspace doesn't have to

@@ -246,6 +246,14 @@ def _docker_run_argv(
     '-w',
     '/workspace',
     '--memory=8g',
+    # bind-mount the host docker socket so deploy scripts inside the container
+    # can `docker build` / `docker push` against the host daemon (no nested
+    # runtime). gives an in-container process API-level control over host
+    # docker, which is a real escalation vector but bounded — the alternative
+    # (rootless podman + privileged-equivalent flags) has the same blast
+    # radius across more attack surfaces. cw is single-user dev.
+    '-v',
+    '/var/run/docker.sock:/var/run/docker.sock',
   ]
   for var in _DOCKER_FORWARD_ENV:
     if os.environ.get(var) is not None:

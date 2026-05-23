@@ -14,6 +14,14 @@ if [ "$(id -u)" = "0" ] && [ -z "${CW_ENTRYPOINT_REEXEC:-}" ]; then
       chown cw:cw /home/cw /home/cw/.claude
     fi
   fi
+  # align the in-container `docker` group's gid with the bind-mounted host
+  # socket's gid so cw can talk to the host daemon without sudo
+  if [ -S /var/run/docker.sock ]; then
+    SOCK_GID="$(stat -c '%g' /var/run/docker.sock)"
+    if [ "$(getent group docker | cut -d: -f3)" != "$SOCK_GID" ]; then
+      groupmod -o -g "$SOCK_GID" docker
+    fi
+  fi
   export CW_ENTRYPOINT_REEXEC=1
   exec gosu cw "$0" "$@"
 fi

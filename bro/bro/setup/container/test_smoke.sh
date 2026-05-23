@@ -57,6 +57,8 @@ docker run --rm \
     test -x /workspace/.git/hooks/pre-push
     # aws cli should be installed
     aws --version
+    # docker CLI should be installed for deploys via host socket
+    docker --version
     # uv cache should be pre-warmed and writable by cw
     test -d /opt/uv-cache
     test -n "$(ls -A /opt/uv-cache)"
