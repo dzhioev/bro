@@ -5,7 +5,7 @@ Bro is the agent system: independent specialised agents (a "Bro") each run as a 
 ## Layout
 
 - `bro.py` — `Bro` ABC. Subclasses set `name`, `description`, `system_prompt`; instances are wired with MCP servers and/or data sources at registration time. `Bro` auto-prepends every `prompts/shared/*.md` to the system prompt and appends a `## Data sources` block describing each bound `DataSource`
-- `bros/` — one file per specialised agent; `bros/__init__.py:init()` registers each with the registry, wiring `flow.mcp.bridge.create_flow_server()` and/or data sources as tool sources. Currently `assistant.py` (general-purpose) and `pm.py` (Flow inbox triage)
+- `bros/` — one file per specialised agent; `bros/__init__.py:init()` registers each with the registry, wiring `flow.mcp.bridge.create_flow_server()` and/or data sources as tool sources. Currently `assistant.py` (general-purpose), `pm.py` (Flow inbox triage), and `librorian.py` (research assistant over data sources)
 - `datasources/` — `DataSource` ABC + connectors to read-only sources (books, databases, web references). Each connector exposes `<name>-search` / `<name>-fetch` tools via `as_mcp_server()`. Currently `wikipedia.py` (Wikipedia REST API, query-aware fetch via `mu`)
 - `registry.py` — process-wide registry (`register`, `get_bro`, `list_bros`); first lookup triggers `bros.init()`
 - `run.py` (`bro`) — CLI: `bro run <name> --input ...` and `bro list`
