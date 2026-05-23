@@ -678,6 +678,11 @@ def add_forwarded_flags(parser: argparse.ArgumentParser) -> None:
     choices=EFFORT_LEVELS,
     help='thinking effort level (forwarded to claude --effort)',
   )
+  parser.add_argument(
+    '--rc',
+    action='store_true',
+    help='enable claude remote control (--remote-control); breaks local Ctrl+V image paste, so off by default — implied by --auto',
+  )
 
 
 def extract_forwarded_argv(args: dict) -> list[str]:
@@ -704,11 +709,13 @@ def start_session(
   fast: bool,
   aws: bool,
   effort: str | None,
+  rc: bool,
   mcp: str | None,
   prompt: str | None,
   claude_args: list[str],
 ) -> int:
-  flags = {'-c': container, '--auto': auto, '--drop': drop, '--aws': aws}
+  rc = rc or auto
+  flags = {'-c': container, '--auto': auto, '--drop': drop, '--aws': aws, '--rc': rc}
   parts = ['cw', 'ss', *(f for f, v in flags.items() if v)]
   if effort is not None:
     parts.extend(['--effort', effort])
@@ -733,13 +740,13 @@ def start_session(
 
   fast_mode_settings = json.dumps({'fastMode': fast})
   inject = [
-    '--remote-control',
-    name,
     '--disallowed-tools',
     'mcp__claude_ai_*',
     '--settings',
     fast_mode_settings,
   ]
+  if rc:
+    inject[:0] = ['--remote-control', name]
   if effort is not None:
     inject.extend(['--effort', effort])
   if mcp is not None:
