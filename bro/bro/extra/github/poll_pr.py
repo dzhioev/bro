@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""poll a GitHub PR for merge status and new comments."""
+"""poll a GitHub PR for merge status, new comments, and new reviews."""
 
 import json
 import logging
@@ -43,6 +43,11 @@ def _fetch_review_comments(owner: str, repo: str, pr: int, token: str) -> list[d
   return _gh_get(url, token)
 
 
+def _fetch_reviews(owner: str, repo: str, pr: int, token: str) -> list[dict[str, Any]]:
+  url = f'https://api.github.com/repos/{owner}/{repo}/pulls/{pr}/reviews?per_page=100'
+  return _gh_get(url, token)
+
+
 def _owner_login(owner: str, repo: str, token: str) -> str:
   url = f'https://api.github.com/repos/{owner}/{repo}'
   data: dict[str, Any] = _gh_get(url, token)
@@ -58,6 +63,7 @@ def poll_pr(
   self_login: str | None,
 ) -> int:
   seen_comment_ids: set[int] = set()
+  seen_review_ids: set[int] = set()
 
   repo_owner_login = _owner_login(owner, repo, token)
   _log.info(f'repo owner: {repo_owner_login}')
@@ -68,7 +74,16 @@ def poll_pr(
   ):
     for c in comments:
       seen_comment_ids.add(c['id'])
-  _log.info(f'existing comments: {len(seen_comment_ids)}')
+  for r in _fetch_reviews(owner, repo, pr, token):
+    seen_review_ids.add(r['id'])
+  _log.info(f'existing comments: {len(seen_comment_ids)}, existing reviews: {len(seen_review_ids)}')
+
+  def _is_actionable(login: str) -> bool:
+    if self_login is not None and login == self_login:
+      return False
+    if login.endswith('[bot]'):
+      return False
+    return login == repo_owner_login
 
   while True:
     pr_data = _fetch_pr(owner, repo, pr, token)
@@ -91,11 +106,7 @@ def poll_pr(
         seen_comment_ids.add(c['id'])
 
         login = c.get('user', {}).get('login', '')
-        if self_login is not None and login == self_login:
-          continue
-        if login.endswith('[bot]'):
-          continue
-        if login != repo_owner_login:
+        if not _is_actionable(login):
           continue
 
         print(
@@ -112,11 +123,34 @@ def poll_pr(
           flush=True,
         )
 
+    for r in _fetch_reviews(owner, repo, pr, token):
+      if r['id'] in seen_review_ids:
+        continue
+      seen_review_ids.add(r['id'])
+
+      login = r.get('user', {}).get('login', '')
+      if not _is_actionable(login):
+        continue
+
+      print(
+        json.dumps(
+          {
+            'event': 'review',
+            'id': r['id'],
+            'user': login,
+            'state': r.get('state', ''),
+            'body': r.get('body', ''),
+            'url': r.get('html_url', ''),
+          }
+        ),
+        flush=True,
+      )
+
     time.sleep(interval)
 
 
 def main(argv=None):
-  parser = Parser(description='poll a GitHub PR for merge status and new comments')
+  parser = Parser(description='poll a GitHub PR for merge status, new comments, and new reviews')
   parser.add_argument('repo', help='owner/repo (e.g. dzhioev/ppp)')
   parser.add_argument('pr', type=int, help='PR number')
   parser.add_argument('--token', required=True, secret=True, help='GitHub token')
