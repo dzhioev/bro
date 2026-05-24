@@ -47,6 +47,7 @@ from pathlib import Path
 
 import humanize
 
+import configs
 from base import log
 from base.args import Parser
 
@@ -65,6 +66,7 @@ def _load_base_prompts() -> str:
 
 
 _DOCKER_FORWARD_ENV = (
+  'ANTHROPIC_API_KEY',
   'CW_COMMAND',
   'CW_TASK_ID',
   'CW_TOKEN_FILE',
@@ -92,6 +94,17 @@ _BRO_GIT_NAME = 'Bro'
 _BRO_GIT_EMAIL = 'dzhioev+bro@gmail.com'
 _BRO_TOKEN_FILE = 'cw_github_token_bro'
 _USER_TOKEN_FILE = 'cw_github_token'
+_ANTHROPIC_CONFIG_PATH = Path(configs.DEFAULT_CONFIGS_DIR) / 'anthropic.json'
+
+
+def _load_anthropic_key() -> str | None:
+  """return the api_key from anthropic.json, or None if missing/invalid."""
+  if not _ANTHROPIC_CONFIG_PATH.is_file():
+    return None
+  key = json.loads(_ANTHROPIC_CONFIG_PATH.read_text()).get('api_key')
+  if not isinstance(key, str) or len(key) == 0:
+    return None
+  return key
 
 
 def _venv_env(venv: Path) -> dict[str, str]:
@@ -763,6 +776,7 @@ def start_session(
   rc: bool,
   resume: bool,
   mcp: str | None,
+  bro: str | None,
   prompt: str | None,
   claude_args: list[str],
 ) -> int:
@@ -782,6 +796,8 @@ def start_session(
     parts.append('--mcp')
     if mcp != 'http':
       parts.append(mcp)
+  if bro is not None:
+    parts.extend(['--bro', bro])
   parts.extend([name, *claude_args])
   os.environ['CW_COMMAND'] = ' '.join(parts)
   os.environ.setdefault('PPP_SHELL_COMMAND', os.environ['CW_COMMAND'])
@@ -810,6 +826,12 @@ def start_session(
     if token_path.is_file():
       os.environ['GITHUB_TOKEN'] = token_path.read_text().strip()
 
+  if bro is not None:
+    claude_args = [*_bro_claude_argv(bro), *claude_args]
+    if prompt is not None:
+      claude_args = [*claude_args, '--', prompt]
+    return cw(name=name, container=container, drop=drop, aws=aws, claude_args=claude_args)
+
   fast_mode_settings = json.dumps({'fastMode': fast})
   inject = [
     '--disallowed-tools',
@@ -835,6 +857,44 @@ def start_session(
     claude_args = [*claude_args, '--', prompt]
 
   return cw(name=name, container=container, drop=drop, aws=aws, claude_args=claude_args)
+
+
+_BRO_MCP_SERVER_NAME = 'bro'
+
+
+def _bro_claude_argv(bro_name: str) -> list[str]:
+  """build the clean claude argv for `cw ss --bro <bro_name>`.
+
+  resolves the bro to extract its system prompt (no shared/base prepend), wires
+  its declared MCP servers + data sources through the `mcp-server bro:<name>`
+  stdio shim, and uses `--bare` + `--strict-mcp-config` + `--tools ""` to start
+  claude with no project/user CLAUDE.md, no host MCP servers, no built-in
+  skills, and only the bro's MCP tools.
+  """
+  from bro.registry import get_bro
+
+  bro = get_bro(bro_name)
+  mcp_config = json.dumps(
+    {
+      'mcpServers': {
+        _BRO_MCP_SERVER_NAME: {'command': 'mcp-server', 'args': [f'bro:{bro_name}']},
+      },
+    },
+    separators=(',', ':'),
+  )
+  return [
+    '--bare',
+    '--strict-mcp-config',
+    '--mcp-config',
+    mcp_config,
+    '--system-prompt',
+    bro.system_prompt,
+    '--tools',
+    '',
+    '--allowed-tools',
+    f'mcp__{_BRO_MCP_SERVER_NAME}__*',
+    '--disable-slash-commands',
+  ]
 
 
 def _replace_container_resume_hint(name: str) -> None:
@@ -926,6 +986,11 @@ def main(argv=None):
     help='connect flow MCP tools: http (default) uses the deployed server, local spawns a stdio process',
   )
   ss.add_argument(
+    '--bro',
+    default=None,
+    help='start a clean claude session with the named bro\'s persona (system prompt, MCP servers, tools); requires -c and .configs/anthropic.json; mutually exclusive with --mcp, --auto, --resume',
+  )
+  ss.add_argument(
     '-p', '--prompt', default=None, help='initial prompt (prepended with base prompt)'
   )
   ss.add_argument('name', help='worktree name')
@@ -986,6 +1051,22 @@ def main(argv=None):
   assert cmd == 'ss'
   if args['auto'] and not args['container']:
     parser.error('--auto requires --container')
+  if args['bro'] is not None:
+    if not args['container']:
+      parser.error('--bro requires --container')
+    if args['auto']:
+      parser.error('--bro cannot be combined with --auto')
+    if args['mcp'] is not None:
+      parser.error('--bro cannot be combined with --mcp (the bro defines its own MCP servers)')
+    if args['resume']:
+      parser.error('--bro cannot be combined with --resume')
+    key = _load_anthropic_key()
+    if key is None:
+      parser.error(
+        f'--bro requires an Anthropic API key at {_ANTHROPIC_CONFIG_PATH} '
+        '({"api_key": "..."}); claude --bare does not use OAuth or keychain'
+      )
+    os.environ['ANTHROPIC_API_KEY'] = key
   if args['resume']:
     if args['drop']:
       parser.error('--resume cannot be combined with --drop')
