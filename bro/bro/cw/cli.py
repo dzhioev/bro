@@ -729,6 +729,11 @@ def add_forwarded_flags(parser: argparse.ArgumentParser) -> None:
     action='store_true',
     help='enable claude remote control (--remote-control); breaks local Ctrl+V image paste, so off by default — implied by --auto',
   )
+  parser.add_argument(
+    '--resume',
+    action='store_true',
+    help='resume the latest claude session in the named workspace; skips the initial prompt',
+  )
 
 
 def extract_forwarded_argv(args: dict) -> list[str]:
@@ -756,12 +761,20 @@ def start_session(
   aws: bool,
   effort: str | None,
   rc: bool,
+  resume: bool,
   mcp: str | None,
   prompt: str | None,
   claude_args: list[str],
 ) -> int:
   rc = rc or auto
-  flags = {'-c': container, '--auto': auto, '--drop': drop, '--aws': aws, '--rc': rc}
+  flags = {
+    '-c': container,
+    '--auto': auto,
+    '--drop': drop,
+    '--aws': aws,
+    '--rc': rc,
+    '--resume': resume,
+  }
   parts = ['cw', 'ss', *(f for f, v in flags.items() if v)]
   if effort is not None:
     parts.extend(['--effort', effort])
@@ -772,6 +785,19 @@ def start_session(
   parts.extend([name, *claude_args])
   os.environ['CW_COMMAND'] = ' '.join(parts)
   os.environ.setdefault('PPP_SHELL_COMMAND', os.environ['CW_COMMAND'])
+
+  if resume:
+    proj = _project_root()
+    projects_dir = (
+      _projects_dir_for_container(name) if container else _projects_dir_for_local(name, proj)
+    )
+    latest = _latest_jsonl(projects_dir)
+    if latest is None:
+      log.error('no claude session found for %s in %s', name, projects_dir)
+      return 1
+    session_id = latest.stem
+    log.info('resuming session %s', session_id)
+    claude_args = ['--resume', session_id, *claude_args]
 
   if auto:
     os.environ['GIT_AUTHOR_NAME'] = _BRO_GIT_NAME
@@ -811,6 +837,29 @@ def start_session(
   return cw(name=name, container=container, drop=drop, aws=aws, claude_args=claude_args)
 
 
+def _replace_container_resume_hint(name: str) -> None:
+  """overwrite claude's misleading `claude --resume <id>` hint with a host-side one.
+
+  claude prints a two-line resume hint on exit, but the `claude --resume <id>`
+  command it suggests only works inside the container — the session jsonl
+  lives at ~/.claude/cw-sessions/<name>/projects/-workspace/ on the host, not
+  where a bare host-side `claude` would look. We replace it with the
+  cw-side resume command that actually works.
+
+  Only meaningful when stdout is a TTY (otherwise the ANSI escape is junk in
+  a log) and a session jsonl exists (otherwise claude didn't print a hint).
+  """
+  if not sys.stdout.isatty():
+    return
+  if _latest_jsonl(_projects_dir_for_container(name)) is None:
+    return
+  # \033[2A: move cursor up 2 lines (over claude's hint).
+  # \033[J:  clear from cursor to end of screen.
+  sys.stdout.write('\033[2A\033[J')
+  print('Resume this session with:')
+  print(f'  cw ss -c --mcp --resume {name}')
+
+
 def cw(name: str, container: bool, drop: bool, aws: bool, claude_args: list[str]) -> int:
   if container and os.environ.get('CW_IN_CONTAINER') is not None:
     log.info('already inside a container; falling back to host mode')
@@ -829,6 +878,8 @@ def cw(name: str, container: bool, drop: bool, aws: bool, claude_args: list[str]
     # session, propagate the fresher copy back to the host so the next session
     # (host or container) sees the live tokens.
     _sync_credentials(claude_dir / '.credentials.json', home / '.claude' / '.credentials.json')
+    if not drop and result.returncode == 0:
+      _replace_container_resume_hint(name)
     if drop:
       shutil.rmtree(session)
       if claude_dir.is_dir():
@@ -935,6 +986,13 @@ def main(argv=None):
   assert cmd == 'ss'
   if args['auto'] and not args['container']:
     parser.error('--auto requires --container')
+  if args['resume']:
+    if args['drop']:
+      parser.error('--resume cannot be combined with --drop')
+    if args['prompt'] is not None:
+      parser.error(
+        '--resume cannot be combined with -p/--prompt (the initial prompt is ignored on resume)'
+      )
   if args['aws']:
     has_aws_dir = (Path.home() / '.aws').is_dir()
     has_aws_env = any(os.environ.get(v) is not None for v in _DOCKER_AWS_ENV)

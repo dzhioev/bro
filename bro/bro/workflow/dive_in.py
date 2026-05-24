@@ -56,7 +56,9 @@ def dive_in(
   command: str | None = None,
   task: str | None = None,
   new: bool = False,
+  resume: bool = False,
 ) -> int:
+  prompt: str | None = None
   if new:
     hint = f'- Initial idea from the user: {command}\n' if command is not None else ''
     prompt = get_prompt(
@@ -70,13 +72,14 @@ def dive_in(
       task_id = _resolve_task_id(task)
       task_name = _resolve_task_name(task_id)
       log.info('task: %s', task_name)
-      startup = get_prompt('dive_in_task.prompt.template', task_id=task_id)
-      prompt = get_prompt(
-        'dive_in.prompt.template',
-        target=f'task {task_id}',
-        startup=startup,
-        context=get_prompt('dive_in_context.prompt'),
-      )
+      if not resume:
+        startup = get_prompt('dive_in_task.prompt.template', task_id=task_id)
+        prompt = get_prompt(
+          'dive_in.prompt.template',
+          target=f'task {task_id}',
+          startup=startup,
+          context=get_prompt('dive_in_context.prompt'),
+        )
     else:
       client = default_client()
       state = client.get_focus()
@@ -86,18 +89,19 @@ def dive_in(
       task_id = state.task.id
       task_name = state.task.name
       log.info('focused: %s', task_name)
-      prompt = get_prompt(
-        'dive_in.prompt.template',
-        target='the currently focused task',
-        startup=get_prompt('dive_in_focused.prompt'),
-        context=get_prompt('dive_in_context.prompt'),
-      )
+      if not resume:
+        prompt = get_prompt(
+          'dive_in.prompt.template',
+          target='the currently focused task',
+          startup=get_prompt('dive_in_focused.prompt'),
+          context=get_prompt('dive_in_context.prompt'),
+        )
 
     name = _slugify(task_name)
     if len(name) == 0:
       name = 'dive-in'
 
-    if command is not None:
+    if not resume and command is not None:
       prompt = f'{prompt}\n\nOnce you understand the task, {command}'
 
     os.environ['CW_TASK_ID'] = task_id
@@ -116,7 +120,9 @@ def dive_in(
   cmd = ['cw', 'ss', '--mcp', *forwarded]
   if not host:
     cmd.append('-c')
-  cmd.extend(['-p', prompt, name])
+  if prompt is not None:
+    cmd.extend(['-p', prompt])
+  cmd.append(name)
   if dry_run:
     print(' '.join(_shell_quote(c) for c in cmd))
     return 0
@@ -150,8 +156,16 @@ def main(argv=None):
     help='initial command for the session (appended to prompt; with --new, used as the seed idea for the task)',
   )
   args = parser.parse(argv)
+  if args['resume']:
+    if args['new']:
+      parser.error('--resume cannot be combined with --new')
+    if args['command'] is not None:
+      parser.error(
+        '--resume cannot be combined with a positional command (it is ignored on resume)'
+      )
+  resume = args['resume']
   forwarded = cw.extract_forwarded_argv(args)
-  return dive_in(forwarded=forwarded, **args)
+  return dive_in(forwarded=forwarded, resume=resume, **args)
 
 
 if __name__ == '__main__':
