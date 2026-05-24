@@ -22,6 +22,9 @@ uv run sync-scripts
 echo "re-syncing after script registration"
 uv sync --all-groups
 
+echo "registering local git aliases"
+git config --local alias.golc '!./setup/git_golc.py'
+
 if [ -L .configs ] && [ -d .configs ]; then
   echo ".configs symlink OK"
 elif [ -L .configs ]; then
