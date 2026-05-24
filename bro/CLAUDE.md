@@ -6,7 +6,7 @@ Bro is the agent system: independent specialised agents (a "Bro") each run as a 
 
 - `bro.py` — `Bro` ABC. Subclasses set `name`, `description`, `system_prompt`, and optionally class-level `data_sources = [...]` and `mcp_servers = [...]` (factories, or `McpServerSpec(factory, allowed_tools=[...])` for per-tool allowlists). `Bro` materialises each factory once per instance, auto-prepends every `prompts/shared/*.md` to the system prompt, and appends a `## Data sources` block describing each declared `DataSource`. Non-interactive runs (`bro.run()`, the `bro run`/`do`/`do-task` CLIs, sub-Bros invoked via `Tool`) also expose a built-in `raise` service tool — the agent calls it to abort with a reason when the request cannot be fulfilled (missing credentials, no appropriate tool, contradictory constraints); the call raises `BroRaised(reason)` out of `bro.run()`. Interactive paths (`bro.send()`, the HTTP server backing the iOS app) don't expose `raise` — the agent should just describe any blocker in its reply. Post-init injection of extra servers is available via `extend_mcp_servers(...)` for tests or unusual hosts
 - `bros/` — one file per specialised agent; `bros/__init__.py:init()` registers each with the registry. Currently `assistant.py` (general-purpose), `pm.py` (Flow inbox triage), and `librorian.py` (steward of the Flow media library — adds, maintains, and recommends)
-- `datasources/` — `DataSource` ABC + connectors to read-only sources (books, films, web references). Each connector exposes `<name>-search` / `<name>-fetch` tools via `as_mcp_server()`. Currently `wikipedia.py` (Wikipedia REST API, query-aware fetch via `mu`), `tmdb.py` (movies + series; needs `.configs/tmdb.json`), `open_library.py` (books, no auth)
+- `datasources/` — `DataSource` ABC + connectors to read-only sources (books, films, web references). Each connector exposes `<name>-search` / `<name>-fetch` tools via `as_mcp_server()`. Currently `wikipedia.py` (Wikipedia REST API, query-aware fetch via `mu`), `tmdb.py` (movies + series; needs `.configs/tmdb.json`), `open_library.py` (books, no auth), `web_search.py` (Brave Search; needs `.configs/brave.json`)
 - `registry.py` — process-wide registry (`register`, `get_bro`, `list_bros`); first lookup triggers `bros.init()`
 - `run.py` (`bro`) — CLI: `bro run <name> --input ...`, `bro list`, `bro show <name> [--system-prompt]` (markdown info card; renderer in `show.py`)
 - `server/server.py` (`bro.server.server`) — aiohttp wrapper exposing the `assistant` Bro on `POST /v1/chat/completions` (OpenAI-compatible). Used by the iOS app
@@ -19,7 +19,6 @@ Create `bros/<name>.py` with a `Bro` subclass (`name`, `description`, `system_pr
 - `data_sources = [YourSource()]` for read-only data connectors
 - `mcp_servers = [create_flow_server]` for full-server mounts (the entry is a factory — `() -> MCPServer`)
 - `mcp_servers = [McpServerSpec(create_flow_server, allowed_tools=['add_task', 'list_tasks'])]` to restrict which tools the Bro sees
-- `web_search = True` to give the LLM OpenAI's hosted `web_search` tool (no extra infra; uses the same `.configs/openai.json` key). Use for finding canonical URLs / ids when a structured source needs a hint
 
 The flow MCP factory is `flow.mcp.bridge.create_flow_server`.
 

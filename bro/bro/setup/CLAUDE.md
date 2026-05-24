@@ -45,3 +45,4 @@ Credentials live in `.configs/` (symlink into the dotfiles submodule).
 - `session_log.json` — `{ "aws_access_key_id", "aws_secret_access_key", "region", "bucket", "table" }` for `sync-session-log` (created by `bootstrap_session_log.sh`)
 - `anthropic.json` — `{ "api_key": "sk-ant-..." }` shared Anthropic Console API key for any in-repo Anthropic API usage
 - `tmdb.json` — `{ "api_key": "<v3-key>" }` The Movie Database v3 API key (get one at themoviedb.org → Settings → API). Read lazily by the Librorian bro's TMDb data source
+- `brave.json` — `{ "api_key": "<subscription-token>" }` Brave Search API key (api.search.brave.com → Subscriptions; free tier gives 2,000 queries/month at 1 qps). Read lazily by the `WebSearch` data source
