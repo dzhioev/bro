@@ -4,7 +4,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from git_golc import _format_credits, _model_initial, _parse_footer, round_credits  # noqa: E402
+from git_golc import (  # noqa: E402
+  _format_credits,
+  _model_initial,
+  _parse_footer,
+  _SENTINEL_RE,
+  round_credits,
+)
 
 FOOTER_SINGLE = (
   '> created with Claude Code 2.1.114 '
@@ -87,3 +93,19 @@ class TestFormatCredits:
     # 'Haiku' < 'Opus' < 'Sonnet' alphabetically
     out = _format_credits({'Opus 4.7': 1_200_000, 'Sonnet 4.6': 50_000, 'Haiku 4.5': 2_000})
     assert out == 'H:2.0K O:1.2M S:50K'
+
+
+class TestSentinelRegex:
+  SHA = 'a' * 40
+
+  def test_plain(self):
+    m = _SENTINEL_RE.search(f'CREDITS:{self.SHA} subject')
+    assert m is not None and m.group(1) == self.SHA
+
+  def test_ansi_wrapped_sha(self):
+    # `%H` under `%C(auto)` arrives wrapped in yellow + reset
+    s = f'CREDITS:\x1b[33m{self.SHA}\x1b[m\x1b[33m (HEAD)\x1b[m subject'
+    m = _SENTINEL_RE.search(s)
+    assert m is not None and m.group(1) == self.SHA
+    # the trailing decoration color must survive substitution
+    assert _SENTINEL_RE.sub('CR', s) == 'CR\x1b[33m (HEAD)\x1b[m subject'

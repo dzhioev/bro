@@ -86,7 +86,8 @@ def _collect_credits(git_args: list[str]) -> dict[str, str]:
   return credits
 
 
-_SENTINEL_RE = re.compile(r'CREDITS:([0-9a-f]{40})')
+_ANSI = r'(?:\x1b\[[0-9;]*m)?'
+_SENTINEL_RE = re.compile(rf'CREDITS:{_ANSI}([0-9a-f]{{40}}){_ANSI}')
 
 
 def _render(git_args: list[str], use_color: bool) -> str:
