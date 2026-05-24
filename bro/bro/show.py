@@ -26,6 +26,8 @@ def _identity_lines(bro: Bro) -> list[str]:
   lines = [f'- model: `{bro.model}`']
   if bro.reasoning_effort is not None:
     lines.append(f'- reasoning effort: `{bro.reasoning_effort}`')
+  if bro.web_search:
+    lines.append('- web search: enabled (OpenAI hosted)')
   return lines
 
 

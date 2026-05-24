@@ -57,9 +57,11 @@ _RAISE_DESCRIPTION = (
 
 
 def _build_service_server() -> llm.mcp.MCPServer:
-  return llm.mcp.InProcessMCPServer([
-    llm.mcp.FunctionTool(_raise, name='raise', description=_RAISE_DESCRIPTION),
-  ])
+  return llm.mcp.InProcessMCPServer(
+    [
+      llm.mcp.FunctionTool(_raise, name='raise', description=_RAISE_DESCRIPTION),
+    ]
+  )
 
 
 _NON_INTERACTIVE_NOTE = (
@@ -98,6 +100,7 @@ class Bro(ABC):
   reasoning_effort: str | None = None
   data_sources: list[DataSource] = []
   mcp_servers: list[McpServerEntry] = []
+  web_search: bool = False
 
   _llm: LLM | None = None
 
@@ -174,6 +177,7 @@ class Bro(ABC):
       model=self.model,
       mcp_servers=self._mcp_servers_for(interactive=interactive),
       reasoning_effort=self.reasoning_effort,
+      web_search=self.web_search,
     )
 
 

@@ -26,9 +26,7 @@ def _resolve_server(spec: str) -> MCPServer:
     return _compose_bro_server(spec[len(_BRO_PREFIX) :])
   static = _static_servers()
   if spec not in static:
-    raise SystemExit(
-      f'unknown server {spec!r}; expected one of {sorted(static)} or bro:<name>'
-    )
+    raise SystemExit(f'unknown server {spec!r}; expected one of {sorted(static)} or bro:<name>')
   return static[spec]()
 
 

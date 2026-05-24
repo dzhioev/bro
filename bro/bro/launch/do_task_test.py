@@ -30,9 +30,18 @@ class RecordBro(Bro):
 
 
 @pytest.mark.asyncio
-async def test_wraps_task_id_in_fix_prompt():
+async def test_wraps_task_reference_in_fix_prompt():
   bro = RecordBro(response='fixed')
   result = await do_task(bro, 'abc-123')
   assert result == 'fixed'
   messages = bro.mock_llm.send_calls[0]
-  assert messages[-1] == {'role': 'user', 'content': 'fix the flow task abc-123'}
+  assert messages[-1] == {'role': 'user', 'content': 'fix the flow task: abc-123'}
+
+
+@pytest.mark.asyncio
+async def test_passes_arbitrary_string_through():
+  bro = RecordBro(response='ok')
+  url = 'https://www.notion.so/foo/add-X-to-media-369d38d85a6d818caf91c12a203b17e1?source=copy_link'
+  await do_task(bro, url)
+  messages = bro.mock_llm.send_calls[0]
+  assert messages[-1]['content'] == f'fix the flow task: {url}'

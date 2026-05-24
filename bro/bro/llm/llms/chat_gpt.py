@@ -9,6 +9,7 @@ from openai.types.responses import (
   ResponseOutputItem,
   ResponseOutputMessage,
   ToolParam,
+  WebSearchToolParam,
 )
 from openai.types.responses.easy_input_message_param import EasyInputMessageParam
 from openai.types.responses.function_tool_param import FunctionToolParam
@@ -97,12 +98,25 @@ def has_tool_calls(response: Response) -> bool:
 
 
 def _make_strict_schema(schema: dict) -> dict:
+  # OpenAI strict mode requires every object schema in the tree to have
+  # `additionalProperties: false` and a `required` array listing all properties.
+  # Optionality is expressed via `anyOf: [..., {type: 'null'}]` rather than by
+  # omission from `required`. Walk every branch: properties, $defs, anyOf/oneOf/
+  # allOf, array items.
   result = dict(schema)
   if result.get('type') == 'object' and 'properties' in result:
     properties = {k: _make_strict_schema(v) for k, v in result['properties'].items()}
     result['properties'] = properties
     result['required'] = list(properties.keys())
     result['additionalProperties'] = False
+  for key in ('anyOf', 'oneOf', 'allOf'):
+    if key in result and isinstance(result[key], list):
+      result[key] = [_make_strict_schema(s) for s in result[key]]
+  if '$defs' in result and isinstance(result['$defs'], dict):
+    result['$defs'] = {k: _make_strict_schema(v) for k, v in result['$defs'].items()}
+  items = result.get('items')
+  if isinstance(items, dict):
+    result['items'] = _make_strict_schema(items)
   return result
 
 
@@ -150,6 +164,7 @@ class ChatGPT(llm.llm.LLM):
     model: str = 'gpt-5',
     mcp_servers: list[MCPServer] | None = None,
     reasoning_effort: ReasoningEffort | None = None,
+    web_search: bool = False,
   ):
     with open(config_path, 'r') as f:
       config = json.load(f)
@@ -158,6 +173,7 @@ class ChatGPT(llm.llm.LLM):
       model=model,
       mcp_servers=mcp_servers,
       reasoning_effort=reasoning_effort,
+      web_search=web_search,
     )
 
   def __init__(
@@ -166,6 +182,7 @@ class ChatGPT(llm.llm.LLM):
     model: str = 'gpt-5',
     mcp_servers: list[MCPServer] | None = None,
     reasoning_effort: ReasoningEffort | None = None,
+    web_search: bool = False,
   ):
     super().__init__(mcp_servers)
     self.model = model
@@ -173,12 +190,16 @@ class ChatGPT(llm.llm.LLM):
     self._openai_tools: list[ToolParam] | None = None
     self._last_response_id: str | None = None
     self._reasoning_effort = reasoning_effort
+    self._web_search = web_search
 
   async def _resolve_openai_tools(self) -> list[ToolParam]:
     if self._openai_tools is not None:
       return self._openai_tools
     tools = await self.tools.resolve()
-    self._openai_tools = tools_to_openai_format(tools)
+    resolved: list[ToolParam] = tools_to_openai_format(tools)
+    if self._web_search:
+      resolved.append(WebSearchToolParam(type='web_search'))
+    self._openai_tools = resolved
     return self._openai_tools
 
   async def _execute_tool_calls(self, response: Response) -> list[ResponseInputItemParam]:
