@@ -9,12 +9,9 @@ maps to the same module:main.
 """
 
 import ast
-import importlib
-import inspect
 import logging
 import re
 import sys
-import tomllib
 from pathlib import Path
 
 from base.args import Parser
@@ -46,55 +43,52 @@ def _canonical(rel: Path) -> str:
   return '.'.join(parts)
 
 
-def _has_ast_main(path: Path) -> bool:
+def _parse_module(path: Path) -> ast.Module | None:
   try:
-    tree = ast.parse(path.read_text(), filename=str(path))
+    return ast.parse(path.read_text(), filename=str(path))
   except SyntaxError:
-    return False
-  return any(
-    isinstance(node, ast.FunctionDef) and node.name == 'main' for node in ast.iter_child_nodes(tree)
-  )
+    return None
+
+
+def _has_sync_main(tree: ast.Module) -> bool:
+  return any(isinstance(node, ast.FunctionDef) and node.name == 'main' for node in tree.body)
+
+
+def _cli_name(tree: ast.Module, mod_name: str) -> str | None:
+  for node in tree.body:
+    if not isinstance(node, ast.Assign):
+      continue
+    if not (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
+      continue
+    if node.targets[0].id != '__cli_name__':
+      continue
+    if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+      return node.value.value
+    raise ValueError(f'{mod_name}: __cli_name__ must be a string literal')
+  return None
 
 
 def _discover():
   entries = []
   top_level_modules = []
-  unverifiable_modules: list[str] = []
   for rel in _iter_py_files():
     mod_name = _module_name(rel)
     if len(rel.parts) == 1:
       top_level_modules.append(mod_name)
-    if not _has_ast_main(ROOT / rel):
-      continue
-    try:
-      mod = importlib.import_module(mod_name)
-    except Exception as e:
-      logging.warning('cannot import %s: %s; preserving existing entries', mod_name, e)
-      unverifiable_modules.append(mod_name)
-      continue
-    fn = getattr(mod, 'main', None)
-    if fn is None or not callable(fn) or inspect.iscoroutinefunction(fn):
+    tree = _parse_module(ROOT / rel)
+    if tree is None or not _has_sync_main(tree):
       continue
     entries.append(
       {
         'module': mod_name,
         'canonical': _canonical(rel),
-        'explicit': getattr(mod, '__cli_name__', None),
+        'explicit': _cli_name(tree, mod_name),
       }
     )
-  return entries, top_level_modules, unverifiable_modules
+  return entries, top_level_modules
 
 
-def _read_existing_scripts() -> dict[str, str]:
-  data = tomllib.loads(PYPROJECT.read_text())
-  return data.get('project', {}).get('scripts', {})
-
-
-def _build_scripts(
-  entries: list[dict],
-  unverifiable_modules: list[str],
-  existing_scripts: dict[str, str],
-) -> dict[str, str]:
+def _build_scripts(entries: list[dict]) -> dict[str, str]:
   scripts: dict[str, str] = {}
 
   def add(name: str, target: str) -> None:
@@ -108,11 +102,6 @@ def _build_scripts(
     add(e['canonical'], target)
     if e['explicit'] is not None and e['explicit'] != e['canonical']:
       add(e['explicit'], target)
-  for mod_name in unverifiable_modules:
-    target = f'{mod_name}:main'
-    for name, t in existing_scripts.items():
-      if t == target:
-        add(name, t)
   return scripts
 
 
@@ -167,9 +156,8 @@ def _replace_py_modules(text: str, block: str) -> str:
 
 
 def sync_scripts() -> None:
-  existing_scripts = _read_existing_scripts()
-  entries, top_level, unverifiable_modules = _discover()
-  scripts = _build_scripts(entries, unverifiable_modules, existing_scripts)
+  entries, top_level = _discover()
+  scripts = _build_scripts(entries)
   text = PYPROJECT.read_text()
   text = _replace_scripts(text, _render_scripts(scripts))
   text = _replace_py_modules(text, _render_py_modules(top_level))
