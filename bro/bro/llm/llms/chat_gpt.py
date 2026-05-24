@@ -96,30 +96,12 @@ def has_tool_calls(response: Response) -> bool:
   return any(item.type == 'function_call' for item in response.output)
 
 
-def _make_strict_schema(schema: dict) -> dict:
-  # OpenAI strict mode requires every object schema in the tree to have
-  # `additionalProperties: false` and a `required` array listing all properties.
-  # Optionality is expressed via `anyOf: [..., {type: 'null'}]` rather than by
-  # omission from `required`. Walk every branch: properties, $defs, anyOf/oneOf/
-  # allOf, array items.
-  result = dict(schema)
-  if result.get('type') == 'object' and 'properties' in result:
-    properties = {k: _make_strict_schema(v) for k, v in result['properties'].items()}
-    result['properties'] = properties
-    result['required'] = list(properties.keys())
-    result['additionalProperties'] = False
-  for key in ('anyOf', 'oneOf', 'allOf'):
-    if key in result and isinstance(result[key], list):
-      result[key] = [_make_strict_schema(s) for s in result[key]]
-  if '$defs' in result and isinstance(result['$defs'], dict):
-    result['$defs'] = {k: _make_strict_schema(v) for k, v in result['$defs'].items()}
-  items = result.get('items')
-  if isinstance(items, dict):
-    result['items'] = _make_strict_schema(items)
-  return result
-
-
 def tools_to_openai_format(tools: list[Tool]) -> list[ToolParam]:
+  # strict mode is intentionally off: it forces every property into `required`,
+  # which makes pydantic-`default=None` fields un-omittable and traps the model
+  # into clobbering them with default-looking values on every call. With
+  # strict=False the schema flows through as pydantic generated it and optional
+  # fields stay genuinely optional.
   result: list[ToolParam] = []
   for tool in tools:
     result.append(
@@ -127,8 +109,8 @@ def tools_to_openai_format(tools: list[Tool]) -> list[ToolParam]:
         type='function',
         name=tool.name,
         description=tool.description,
-        parameters=_make_strict_schema(tool.parameters),
-        strict=True,
+        parameters=tool.parameters,
+        strict=False,
       )
     )
   return result
