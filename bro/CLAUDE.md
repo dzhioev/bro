@@ -8,7 +8,7 @@ Bro is the agent system: independent specialised agents (a "Bro") each run as a 
 - `bros/` — one file per specialised agent; `bros/__init__.py:init()` registers each with the registry. Currently `assistant.py` (general-purpose), `pm.py` (Flow inbox triage), and `librorian.py` (research assistant over data sources)
 - `datasources/` — `DataSource` ABC + connectors to read-only sources (books, databases, web references). Each connector exposes `<name>-search` / `<name>-fetch` tools via `as_mcp_server()`. Currently `wikipedia.py` (Wikipedia REST API, query-aware fetch via `mu`)
 - `registry.py` — process-wide registry (`register`, `get_bro`, `list_bros`); first lookup triggers `bros.init()`
-- `run.py` (`bro`) — CLI: `bro run <name> --input ...` and `bro list`
+- `run.py` (`bro`) — CLI: `bro run <name> --input ...`, `bro list`, `bro show <name> [--system-prompt]` (markdown info card; renderer in `show.py`)
 - `server/server.py` (`bro.server.server`) — aiohttp wrapper exposing the `assistant` Bro on `POST /v1/chat/completions` (OpenAI-compatible). Used by the iOS app
 - `app/ios/` — iOS chat client; see `app/ios/CLAUDE.md`
 

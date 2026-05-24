@@ -44,8 +44,11 @@ class McpServerSpec:
 McpServerEntry = McpServerSpec | Callable[[], llm.mcp.MCPServer]
 
 
-def _materialize(entry: McpServerEntry) -> llm.mcp.MCPServer:
-  spec = entry if isinstance(entry, McpServerSpec) else McpServerSpec(entry)
+def _normalize(entry: McpServerEntry) -> McpServerSpec:
+  return entry if isinstance(entry, McpServerSpec) else McpServerSpec(entry)
+
+
+def _materialize(spec: McpServerSpec) -> llm.mcp.MCPServer:
   server = spec.factory()
   if spec.allowed_tools is not None:
     server = llm.mcp.FilteredMCPServer(server, spec.allowed_tools)
@@ -63,7 +66,14 @@ class Bro(ABC):
   _llm: LLM | None = None
 
   def __init__(self, system_prompt: str = ''):
-    self._mcp_servers: list[llm.mcp.MCPServer] = [_materialize(e) for e in type(self).mcp_servers]
+    specs = [_normalize(e) for e in type(self).mcp_servers]
+    declared_servers = [_materialize(s) for s in specs]
+    # spec + materialized server for each declared entry — preserves factory and
+    # allowed_tools info so renderers (bro show) can describe entries faithfully
+    self._declared_mcp: list[tuple[McpServerSpec, llm.mcp.MCPServer]] = list(
+      zip(specs, declared_servers)
+    )
+    self._mcp_servers: list[llm.mcp.MCPServer] = list(declared_servers)
     for ds in self.data_sources:
       self._mcp_servers.append(ds.as_mcp_server())
     self._llm = None

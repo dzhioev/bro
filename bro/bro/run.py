@@ -17,6 +17,14 @@ def main(argv=None) -> int | None:
 
   sub.add_parser('list', help='list registered bros')
 
+  show_parser = sub.add_parser('show', help='print an info card for a bro')
+  show_parser.add_argument('name', help='bro name')
+  show_parser.add_argument(
+    '--system-prompt',
+    action='store_true',
+    help='also include the full assembled system prompt',
+  )
+
   args = parser.parse(argv)
 
   from bro.registry import get_bro, list_bros
@@ -31,6 +39,14 @@ def main(argv=None) -> int | None:
     b = get_bro(args['name'])
     result = asyncio.run(b.run(args['input']))
     print(result)
+    return
+
+  if command == 'show':
+    from bro.show import format_card
+
+    b = get_bro(args['name'])
+    card = asyncio.run(format_card(b, include_system_prompt=args['system_prompt']))
+    print(card, end='')
     return
 
   parser.print_help(sys.stderr)
