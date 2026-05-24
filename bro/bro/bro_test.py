@@ -1,7 +1,7 @@
 import json
 import pytest
 
-from bro.bro import Bro, McpServerSpec, ScatterTool, Tool
+from bro.bro import Bro, BroRaised, McpServerSpec, ScatterTool, Tool
 from bro.datasources.base import DataSource, Hit
 from llm.llm import LLM
 from llm.mcp import FunctionTool, InProcessMCPServer, MCPServer, describe
@@ -26,7 +26,7 @@ class EchoBro(Bro):
     super().__init__(system_prompt='you echo')
     self._response = response
 
-  def _create_llm(self) -> LLM:
+  def _create_llm(self, *, interactive: bool) -> LLM:
     return MockLLM(response=self._response)
 
 
@@ -48,7 +48,7 @@ class TestBroRun:
       def __init__(self):
         super().__init__(system_prompt='be helpful')
 
-      def _create_llm(self):
+      def _create_llm(self, *, interactive: bool):
         return llm
 
     bro = CaptureBro()
@@ -57,7 +57,7 @@ class TestBroRun:
     messages = llm.send_calls[0]
     assert len(messages) == 2
     assert messages[0]['role'] == 'system'
-    assert messages[0]['content'].endswith('be helpful')
+    assert 'be helpful' in messages[0]['content']
     assert messages[1] == {'role': 'user', 'content': 'test input'}
 
 
@@ -79,7 +79,7 @@ class TestBroSend:
       def __init__(self):
         super().__init__(system_prompt='track')
 
-      def _create_llm(self):
+      def _create_llm(self, *, interactive: bool):
         llm = MockLLM()
         llm_instances.append(llm)
         return llm
@@ -100,7 +100,7 @@ class TestBroSend:
       def __init__(self):
         super().__init__(system_prompt='be helpful')
 
-      def _create_llm(self):
+      def _create_llm(self, *, interactive: bool):
         return llm
 
     bro = CaptureBro()
@@ -123,7 +123,7 @@ class TestBroSend:
       def __init__(self):
         super().__init__(system_prompt='be helpful')
 
-      def _create_llm(self):
+      def _create_llm(self, *, interactive: bool):
         return llm
 
     bro = CaptureBro()
@@ -145,7 +145,7 @@ class TestBroSend:
       def __init__(self):
         super().__init__(system_prompt='track')
 
-      def _create_llm(self):
+      def _create_llm(self, *, interactive: bool):
         llm = MockLLM()
         llm_instances.append(llm)
         return llm
@@ -169,7 +169,7 @@ class TestBroMap:
       def __init__(self):
         super().__init__(system_prompt='count')
 
-      def _create_llm(self):
+      def _create_llm(self, *, interactive: bool):
         nonlocal call_count
         call_count += 1
         return MockLLM(response=f'result-{call_count}')
@@ -396,3 +396,106 @@ class TestScatterTool:
     result = await tool.call({'inputs': ['a', 'b']})
     parsed = json.loads(result)
     assert parsed == ['done', 'done']
+
+
+async def _collect_tool_names(servers):
+  names: set[str] = set()
+  for server in servers:
+    for tool in await server.list_tools():
+      names.add(tool.name)
+  return names
+
+
+async def _find_raise_tool(bro: Bro):
+  for tool in await bro._service_server.list_tools():
+    if tool.name == 'raise':
+      return tool
+  raise AssertionError('raise tool not found on bro service server')
+
+
+class TestRaise:
+  @pytest.mark.asyncio
+  async def test_raise_tool_included_in_non_interactive_mode(self):
+    bro = EchoBro()
+    names = await _collect_tool_names(bro._mcp_servers_for(interactive=False))
+    assert 'raise' in names
+
+  @pytest.mark.asyncio
+  async def test_raise_tool_excluded_in_interactive_mode(self):
+    bro = EchoBro()
+    names = await _collect_tool_names(bro._mcp_servers_for(interactive=True))
+    assert 'raise' not in names
+
+  @pytest.mark.asyncio
+  async def test_raise_tool_raises_bro_raised(self):
+    bro = EchoBro()
+    tool = await _find_raise_tool(bro)
+    with pytest.raises(BroRaised) as exc:
+      await tool.call({'reason': 'missing api key'})
+    assert exc.value.reason == 'missing api key'
+
+  def test_non_interactive_system_prompt_includes_note(self):
+    bro = EchoBro()
+    prompt = bro._system_prompt_for(interactive=False)
+    assert 'non-interactive' in prompt
+    assert '`raise`' in prompt
+    assert bro.system_prompt in prompt
+
+  def test_interactive_system_prompt_omits_note(self):
+    bro = EchoBro()
+    prompt = bro._system_prompt_for(interactive=True)
+    assert 'non-interactive' not in prompt
+    assert prompt == bro.system_prompt
+
+  @pytest.mark.asyncio
+  async def test_run_creates_llm_in_non_interactive_mode(self):
+    captured: list[bool] = []
+
+    class CaptureBro(Bro):
+      name = 'capture-mode'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+      def _create_llm(self, *, interactive: bool):
+        captured.append(interactive)
+        return MockLLM()
+
+    await CaptureBro().run('input')
+    assert captured == [False]
+
+  @pytest.mark.asyncio
+  async def test_send_creates_llm_in_interactive_mode(self):
+    captured: list[bool] = []
+
+    class CaptureBro(Bro):
+      name = 'capture-mode'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+      def _create_llm(self, *, interactive: bool):
+        captured.append(interactive)
+        return MockLLM()
+
+    await CaptureBro().send('input')
+    assert captured == [True]
+
+  @pytest.mark.asyncio
+  async def test_sub_bro_raise_propagates_through_parent_tool(self):
+    class RaiseBro(Bro):
+      name = 'raiser'
+      description = 'always raises'
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+      async def run(self, input: str) -> str:
+        raise BroRaised('inner failure')
+
+    tool = Tool(RaiseBro())
+    with pytest.raises(BroRaised) as exc:
+      await tool.call({'input': 'anything'})
+    assert exc.value.reason == 'inner failure'

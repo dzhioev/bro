@@ -22,7 +22,7 @@ class AlphaBro(Bro):
   def __init__(self):
     super().__init__(system_prompt='alpha')
 
-  def _create_llm(self):
+  def _create_llm(self, *, interactive: bool):
     return MockLLM()
 
 
@@ -33,7 +33,7 @@ class BetaBro(Bro):
   def __init__(self):
     super().__init__(system_prompt='beta')
 
-  def _create_llm(self):
+  def _create_llm(self, *, interactive: bool):
     return MockLLM()
 
 

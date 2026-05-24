@@ -27,6 +27,7 @@ def main(argv=None) -> int | None:
 
   args = parser.parse(argv)
 
+  from bro.bro import BroRaised
   from bro.registry import get_bro, list_bros
 
   command = args.get('command')
@@ -37,7 +38,11 @@ def main(argv=None) -> int | None:
 
   if command == 'run':
     b = get_bro(args['name'])
-    result = asyncio.run(b.run(args['input']))
+    try:
+      result = asyncio.run(b.run(args['input']))
+    except BroRaised as e:
+      print(f'raised: {e.reason}', file=sys.stderr)
+      return 1
     print(result)
     return
 

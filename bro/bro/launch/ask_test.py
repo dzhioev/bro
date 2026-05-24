@@ -25,7 +25,7 @@ class RecordBro(Bro):
     super().__init__(system_prompt='record')
     self.mock_llm = MockLLM(response=response)
 
-  def _create_llm(self) -> LLM:
+  def _create_llm(self, *, interactive: bool) -> LLM:
     return self.mock_llm
 
 

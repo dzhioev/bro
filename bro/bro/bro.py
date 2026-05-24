@@ -35,6 +35,42 @@ def _render_data_sources(sources: list[DataSource]) -> str:
   return '\n'.join(lines)
 
 
+class BroRaised(Exception):
+  """raised by the `raise` service tool to abort a Bro run."""
+
+  def __init__(self, reason: str):
+    super().__init__(reason)
+    self.reason = reason
+
+
+def _raise(reason: str) -> str:
+  raise BroRaised(reason)
+
+
+_RAISE_DESCRIPTION = (
+  'abort the run because the request cannot be fulfilled. Call this when '
+  'required credentials or API keys are missing, no appropriate tool or data '
+  'source is available, the request contains contradictory constraints, or '
+  'any other blocker prevents completing the task. Pass a clear, specific '
+  'reason — it surfaces to the caller as the failure cause.'
+)
+
+
+def _build_service_server() -> llm.mcp.MCPServer:
+  return llm.mcp.InProcessMCPServer([
+    llm.mcp.FunctionTool(_raise, name='raise', description=_RAISE_DESCRIPTION),
+  ])
+
+
+_NON_INTERACTIVE_NOTE = (
+  'You are running in non-interactive mode — this is a one-shot invocation '
+  'with no follow-up turn. If you cannot fulfill the request (missing '
+  'credentials, no appropriate tool or data source, contradictory '
+  'constraints, or any other blocker), call the `raise` tool with a clear '
+  'reason instead of producing a partial or speculative answer.'
+)
+
+
 @dataclass
 class McpServerSpec:
   factory: Callable[[], llm.mcp.MCPServer]
@@ -76,6 +112,7 @@ class Bro(ABC):
     self._mcp_servers: list[llm.mcp.MCPServer] = list(declared_servers)
     for ds in self.data_sources:
       self._mcp_servers.append(ds.as_mcp_server())
+    self._service_server: llm.mcp.MCPServer = _build_service_server()
     self._llm = None
     shared = _load_shared_prompts()
     parts = []
@@ -91,18 +128,18 @@ class Bro(ABC):
     self._mcp_servers.extend(servers)
 
   async def run(self, input: str) -> str:
-    llm = self._create_llm()
+    llm = self._create_llm(interactive=False)
     messages = [
-      {'role': 'system', 'content': self.system_prompt},
+      {'role': 'system', 'content': self._system_prompt_for(interactive=False)},
       {'role': 'user', 'content': input},
     ]
     return await llm.send(messages)
 
   async def send(self, message: str) -> str:
     if self._llm is None:
-      self._llm = self._create_llm()
+      self._llm = self._create_llm(interactive=True)
       messages = [
-        {'role': 'system', 'content': self.system_prompt},
+        {'role': 'system', 'content': self._system_prompt_for(interactive=True)},
         {'role': 'user', 'content': message},
       ]
     else:
@@ -118,11 +155,24 @@ class Bro(ABC):
 
     return list(await asyncio.gather(*[bounded_run(x) for x in inputs]))
 
-  def _create_llm(self) -> LLM:
+  def _mcp_servers_for(self, *, interactive: bool) -> list[llm.mcp.MCPServer]:
+    # the `raise` service tool only makes sense in non-interactive runs — when no
+    # human is in the loop to negotiate, the agent needs a way to abort. In
+    # interactive sessions the agent can just describe any blocker in its reply.
+    if interactive:
+      return list(self._mcp_servers)
+    return [*self._mcp_servers, self._service_server]
+
+  def _system_prompt_for(self, *, interactive: bool) -> str:
+    if interactive:
+      return self.system_prompt
+    return f'{self.system_prompt}\n\n{_NON_INTERACTIVE_NOTE}'
+
+  def _create_llm(self, *, interactive: bool) -> LLM:
     return get_llm(
       'chat_gpt',
       model=self.model,
-      mcp_servers=self._mcp_servers,
+      mcp_servers=self._mcp_servers_for(interactive=interactive),
       reasoning_effort=self.reasoning_effort,
     )
 

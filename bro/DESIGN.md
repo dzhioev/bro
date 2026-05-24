@@ -350,6 +350,11 @@ More Bros from the backlog (future):
    doesn't support streaming either. Defer streaming to a future phase?
 3. **Error handling in sub-agents**: if a sub-Bro fails (tool error, LLM refusal), how
    should the calling Bro see it? (Lean: return error text as the tool result, let the
-   caller handle it.)
+   caller handle it.) — Partially answered: for *intentional* aborts, non-interactive
+   runs (`bro.run()` and friends) expose a built-in `raise` service tool; calling it
+   raises `BroRaised(reason)` which propagates through any sub-Bro chain, crashing the
+   whole run. Interactive paths (`bro.send()`, the HTTP server) don't expose `raise` —
+   the agent just describes the blocker in its reply. Open: how *unintended* failures
+   (uncaught tool exceptions, LLM refusal) should reach the caller.
 4. **Token budgets**: should Bros have configurable max_tokens? (Lean: yes, as a base
    class property with sensible defaults.)

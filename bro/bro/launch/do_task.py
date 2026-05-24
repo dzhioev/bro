@@ -2,7 +2,7 @@ import asyncio
 import sys
 
 import base.args
-from bro.bro import Bro
+from bro.bro import Bro, BroRaised
 from do.do import do
 
 __cli_name__ = 'do-task'
@@ -20,7 +20,11 @@ def main(argv=None) -> int | None:
 
   from bro.registry import get_bro
 
-  result = asyncio.run(do_task(get_bro(args['bro']), args['task_id']))
+  try:
+    result = asyncio.run(do_task(get_bro(args['bro']), args['task_id']))
+  except BroRaised as e:
+    print(f'raised: {e.reason}', file=sys.stderr)
+    return 1
   print(result)
 
 
