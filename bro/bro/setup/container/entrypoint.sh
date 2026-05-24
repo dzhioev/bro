@@ -45,6 +45,11 @@ if [ -f /host-gitconfig ] && [ ! -f "$HOME/.gitconfig" ]; then
   cp /host-gitconfig "$HOME/.gitconfig"
 fi
 
+# mark /workspace safe for git. on Docker for Mac, virtiofs reports the bind
+# mount as root-owned even though cw can read/write it (see uid-remap skip in
+# the root phase); without this, git refuses with "dubious ownership"
+git config --global --add safe.directory /workspace
+
 # first-run clone: /workspace starts empty; host repo is bind-mounted at /host-repo
 # read-only. clone --shared reuses /host-repo/.git/objects via alternates so there's
 # no disk duplication. origin is retargeted to the host's upstream (so `git push`
