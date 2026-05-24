@@ -66,7 +66,6 @@ def _load_base_prompts() -> str:
 
 
 _DOCKER_FORWARD_ENV = (
-  'ANTHROPIC_API_KEY',
   'CW_COMMAND',
   'CW_TASK_ID',
   'CW_TOKEN_FILE',
@@ -860,6 +859,11 @@ def start_session(
 
 
 _BRO_MCP_SERVER_NAME = 'bro'
+# path inside the container; /host-repo is the host project bind mount (see
+# _docker_run_argv). passed as claude code's apiKeyHelper so claude reads the
+# api key from .configs/anthropic.json without the "Detected a custom API key"
+# prompt that ANTHROPIC_API_KEY would trigger.
+_BRO_API_KEY_HELPER = '/host-repo/setup/print_anthropic_key.sh'
 
 
 def _bro_claude_argv(bro_name: str) -> list[str]:
@@ -869,7 +873,9 @@ def _bro_claude_argv(bro_name: str) -> list[str]:
   its declared MCP servers + data sources through the `mcp-server bro:<name>`
   stdio shim, and uses `--bare` + `--strict-mcp-config` + `--tools ""` to start
   claude with no project/user CLAUDE.md, no host MCP servers, no built-in
-  skills, and only the bro's MCP tools.
+  skills, and only the bro's MCP tools. supplies apiKeyHelper via `--settings`
+  (flagSettings, not project/local) so claude executes it without a workspace
+  trust gate.
   """
   from bro.registry import get_bro
 
@@ -882,11 +888,14 @@ def _bro_claude_argv(bro_name: str) -> list[str]:
     },
     separators=(',', ':'),
   )
+  settings = json.dumps({'apiKeyHelper': _BRO_API_KEY_HELPER}, separators=(',', ':'))
   return [
     '--bare',
     '--strict-mcp-config',
     '--mcp-config',
     mcp_config,
+    '--settings',
+    settings,
     '--system-prompt',
     bro.system_prompt,
     '--tools',
@@ -988,7 +997,7 @@ def main(argv=None):
   ss.add_argument(
     '--bro',
     default=None,
-    help='start a clean claude session with the named bro\'s persona (system prompt, MCP servers, tools); requires -c and .configs/anthropic.json; mutually exclusive with --mcp, --auto, --resume',
+    help="start a clean claude session with the named bro's persona (system prompt, MCP servers, tools); requires -c and .configs/anthropic.json; mutually exclusive with --mcp, --auto, --resume",
   )
   ss.add_argument(
     '-p', '--prompt', default=None, help='initial prompt (prepended with base prompt)'
@@ -1060,13 +1069,11 @@ def main(argv=None):
       parser.error('--bro cannot be combined with --mcp (the bro defines its own MCP servers)')
     if args['resume']:
       parser.error('--bro cannot be combined with --resume')
-    key = _load_anthropic_key()
-    if key is None:
+    if _load_anthropic_key() is None:
       parser.error(
         f'--bro requires an Anthropic API key at {_ANTHROPIC_CONFIG_PATH} '
         '({"api_key": "..."}); claude --bare does not use OAuth or keychain'
       )
-    os.environ['ANTHROPIC_API_KEY'] = key
   if args['resume']:
     if args['drop']:
       parser.error('--resume cannot be combined with --drop')
