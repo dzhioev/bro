@@ -4,7 +4,7 @@ from typing import Annotated
 
 from pydantic import Field
 
-from llm.mcp import FunctionTool, InProcessMCPServer, ToolRegistry, describe
+from llm.mcp import FunctionTool, InProcessMCPServer, ToolRegistry, UnknownToolError, describe
 
 
 class TestFunctionTool:
@@ -237,8 +237,9 @@ class TestToolRegistry:
   @pytest.mark.asyncio
   async def test_call_unknown_raises(self):
     registry = ToolRegistry([InProcessMCPServer([])])
-    with pytest.raises(KeyError, match='unknown tool'):
+    with pytest.raises(UnknownToolError, match="unknown or disallowed tool: 'nonexistent'") as exc:
       await registry.call('nonexistent', {})
+    assert exc.value.name == 'nonexistent'
 
   @pytest.mark.asyncio
   async def test_empty_registry(self):

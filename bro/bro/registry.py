@@ -1,4 +1,3 @@
-import llm.mcp
 from bro.bro import Bro
 
 _REGISTRY: dict[str, Bro] = {}
@@ -15,8 +14,8 @@ def _ensure_initialized() -> None:
   init()
 
 
-def register(bro_cls: type[Bro], mcp_servers: list[llm.mcp.MCPServer] | None = None) -> None:
-  instance = bro_cls(mcp_servers=mcp_servers)
+def register(bro_cls: type[Bro]) -> None:
+  instance = bro_cls()
   if instance.name in _REGISTRY:
     raise ValueError(f'duplicate bro name: {instance.name!r}')
   _REGISTRY[instance.name] = instance

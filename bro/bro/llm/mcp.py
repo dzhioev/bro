@@ -103,6 +103,27 @@ class InProcessMCPServer(MCPServer):
     return list(self._tools)
 
 
+class FilteredMCPServer(MCPServer):
+  def __init__(self, inner: MCPServer, allowed_tools: Iterable[str]):
+    self._inner = inner
+    self._allowed = list(allowed_tools)
+    if len(self._allowed) == 0:
+      raise ValueError('allowed_tools must be non-empty')
+
+  async def list_tools(self) -> list[Tool]:
+    by_name = {t.name: t for t in await self._inner.list_tools()}
+    missing = [name for name in self._allowed if name not in by_name]
+    if len(missing) > 0:
+      raise ValueError(f'unknown tools in allowlist: {missing}; available: {sorted(by_name)}')
+    return [by_name[name] for name in self._allowed]
+
+
+class UnknownToolError(Exception):
+  def __init__(self, name: str):
+    super().__init__(f'unknown or disallowed tool: {name!r}')
+    self.name = name
+
+
 class ToolRegistry:
   def __init__(self, mcp_servers: list[MCPServer]):
     self._mcp_servers: list[MCPServer] = list(mcp_servers)
@@ -126,5 +147,5 @@ class ToolRegistry:
     assert self._tools_by_name is not None
     tool = self._tools_by_name.get(name)
     if tool is None:
-      raise KeyError(f'unknown tool: {name}')
+      raise UnknownToolError(name)
     return await tool.call(arguments)

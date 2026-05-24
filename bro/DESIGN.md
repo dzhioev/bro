@@ -19,13 +19,11 @@ from flow.mcp.bridge import create_flow_server
 class InboxProcessor(Bro):
   name = 'inbox-processor'
   description = 'triages tasks in the Notion inbox'
+  mcp_servers = [create_flow_server]
 
   system_prompt = """
   You are an inbox processor. For each inbox item, ...
   """
-
-  def mcp_servers(self):
-    return [create_flow_server()]
 ```
 
 ### Base class
@@ -36,15 +34,17 @@ class Bro(ABC):
   description: str                       # one line, shown in tool listings
   system_prompt: str                     # specialization instructions
 
-  def mcp_servers(self) -> list[MCPServer]:
-    """tool sources this Bro has access to; override to provide tools"""
-    return []
+  data_sources: list[DataSource] = []                   # declarative
+  mcp_servers: list[McpServerEntry] = []                # declarative; factory or McpServerSpec
 
   async def run(self, input: str) -> str:
     """single-turn: fresh LLM, returns the final text response"""
 
   async def send(self, message: str) -> str:
     """multi-turn: lazily creates and reuses an LLM across calls"""
+
+  def extend_mcp_servers(self, servers: list[MCPServer]) -> None:
+    """post-init injection for tests or unusual hosts"""
 ```
 
 `run()` is stateless — fresh LLM per call, no history carried over. `send()` is
@@ -140,18 +140,17 @@ An orchestrator Bro composes specialists via both patterns:
 class Assistant(Bro):
   name = 'assistant'
   description = 'general-purpose assistant that delegates to specialists'
+  mcp_servers = [create_flow_server, _build_specialist_server]
 
-  def mcp_servers(self):
-    from bro.registry import get_bro
-    translator = get_bro('email-translator')
-    return [
-      create_flow_server(),
-      InProcessMCPServer([
-        BroTool(translator),               # translate one email
-        BroScatterTool(translator),         # translate many in parallel
-        BroTool(get_bro('inbox-processor')),
-      ]),
-    ]
+
+def _build_specialist_server() -> MCPServer:
+  from bro.registry import get_bro
+  translator = get_bro('email-translator')
+  return InProcessMCPServer([
+    BroTool(translator),                    # translate one email
+    BroScatterTool(translator),             # translate many in parallel
+    BroTool(get_bro('inbox-processor')),
+  ])
 ```
 
 The LLM decides which to use: single `BroTool` for one item, `BroScatterTool` when it

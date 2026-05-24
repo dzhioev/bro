@@ -188,10 +188,7 @@ class ChatGPT(llm.llm.LLM):
         continue
       kwargs = json.loads(item.arguments)
       log.info(f'calling tool {item.name} with {kwargs}')
-      try:
-        output = await self.tools.call(item.name, kwargs)
-      except KeyError:
-        output = f'unknown tool: {item.name}'
+      output = await self.tools.call(item.name, kwargs)
       if isinstance(output, dict):
         output = json.dumps(output)
       results.append({'type': 'function_call_output', 'call_id': item.call_id, 'output': output})

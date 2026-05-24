@@ -1,7 +1,9 @@
 import asyncio
 import json
 from abc import ABC
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 import llm.mcp
 from bro.datasources.base import DataSource
@@ -33,21 +35,35 @@ def _render_data_sources(sources: list[DataSource]) -> str:
   return '\n'.join(lines)
 
 
+@dataclass
+class McpServerSpec:
+  factory: Callable[[], llm.mcp.MCPServer]
+  allowed_tools: list[str] | None = None
+
+
+McpServerEntry = McpServerSpec | Callable[[], llm.mcp.MCPServer]
+
+
+def _materialize(entry: McpServerEntry) -> llm.mcp.MCPServer:
+  spec = entry if isinstance(entry, McpServerSpec) else McpServerSpec(entry)
+  server = spec.factory()
+  if spec.allowed_tools is not None:
+    server = llm.mcp.FilteredMCPServer(server, spec.allowed_tools)
+  return server
+
+
 class Bro(ABC):
   name: str
   description: str
   model: str = DEFAULT_MODEL
   reasoning_effort: str | None = None
   data_sources: list[DataSource] = []
+  mcp_servers: list[McpServerEntry] = []
 
   _llm: LLM | None = None
 
-  def __init__(
-    self,
-    system_prompt: str = '',
-    mcp_servers: list[llm.mcp.MCPServer] | None = None,
-  ):
-    self._mcp_servers = list(mcp_servers) if mcp_servers is not None else []
+  def __init__(self, system_prompt: str = ''):
+    self._mcp_servers: list[llm.mcp.MCPServer] = [_materialize(e) for e in type(self).mcp_servers]
     for ds in self.data_sources:
       self._mcp_servers.append(ds.as_mcp_server())
     self._llm = None
@@ -61,8 +77,8 @@ class Bro(ABC):
       parts.append(_render_data_sources(self.data_sources))
     self.system_prompt = '\n\n'.join(parts)
 
-  def mcp_servers(self) -> list[llm.mcp.MCPServer]:
-    return self._mcp_servers
+  def extend_mcp_servers(self, servers: list[llm.mcp.MCPServer]) -> None:
+    self._mcp_servers.extend(servers)
 
   async def run(self, input: str) -> str:
     llm = self._create_llm()
@@ -96,7 +112,7 @@ class Bro(ABC):
     return get_llm(
       'chat_gpt',
       model=self.model,
-      mcp_servers=self.mcp_servers(),
+      mcp_servers=self._mcp_servers,
       reasoning_effort=self.reasoning_effort,
     )
 
