@@ -42,3 +42,4 @@ Credentials live in `.configs/` (symlink into the dotfiles submodule).
 - `focus.json` — `{ "url": ..., "token": ... }` for the focus HTTP client
 - `infra.json` — `{ "apex": ..., "delegated_subdomain": ... }` consumed by `infra/cdk/config.py`
 - `session_log.json` — `{ "aws_access_key_id", "aws_secret_access_key", "region", "bucket", "table" }` for `sync-session-log` (created by `bootstrap_session_log.sh`)
+- `anthropic.json` — `{ "api_key": "sk-ant-..." }` shared Anthropic Console API key for any in-repo Anthropic API usage
