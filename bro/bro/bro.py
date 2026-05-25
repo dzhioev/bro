@@ -50,9 +50,12 @@ def _raise(reason: str) -> str:
 _RAISE_DESCRIPTION = (
   'abort the run because the request cannot be fulfilled. Call this when '
   'required credentials or API keys are missing, no appropriate tool or data '
-  'source is available, the request contains contradictory constraints, or '
-  'any other blocker prevents completing the task. Pass a clear, specific '
-  'reason — it surfaces to the caller as the failure cause.'
+  'source is available, the request contains contradictory constraints, the '
+  'input is unclear or cannot be understood (gibberish, ambiguous, or missing '
+  'the context needed to act), or any other blocker prevents completing the '
+  'task. Do NOT reply with a clarifying question — there is no follow-up turn; '
+  'raise instead. Pass a clear, specific reason — it surfaces to the caller as '
+  'the failure cause.'
 )
 
 
@@ -68,8 +71,10 @@ _NON_INTERACTIVE_NOTE = (
   'You are running in non-interactive mode — this is a one-shot invocation '
   'with no follow-up turn. If you cannot fulfill the request (missing '
   'credentials, no appropriate tool or data source, contradictory '
-  'constraints, or any other blocker), call the `raise` tool with a clear '
-  'reason instead of producing a partial or speculative answer.'
+  'constraints, the input is unclear or cannot be understood, or any other '
+  'blocker), call the `raise` tool with a clear reason instead of producing '
+  'a partial or speculative answer or asking a clarifying question — there '
+  'is no one to answer it.'
 )
 
 

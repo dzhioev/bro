@@ -439,7 +439,14 @@ class TestRaise:
     prompt = bro._system_prompt_for(interactive=False)
     assert 'non-interactive' in prompt
     assert '`raise`' in prompt
+    assert 'unclear' in prompt
     assert bro.system_prompt in prompt
+
+  @pytest.mark.asyncio
+  async def test_raise_tool_description_covers_unclear_input(self):
+    bro = EchoBro()
+    tool = await _find_raise_tool(bro)
+    assert 'unclear' in tool.description
 
   def test_interactive_system_prompt_omits_note(self):
     bro = EchoBro()
