@@ -49,6 +49,23 @@ def _resolve_task_name(task_id: str) -> str:
   return task.name
 
 
+def _pick_fresh_name(base: str) -> str:
+  """return base, or base-2/-3/... — the first slug with no existing worktree/container dir.
+
+  Both namespaces (host worktrees and container sessions) are checked together so a
+  --new dive-in never lands on a directory already in use by either mode.
+  """
+  proj = cw._project_root()
+  worktrees = proj / '.claude' / 'worktrees'
+  containers = proj / 'var' / 'cw' / 'containers'
+  i = 1
+  while True:
+    name = base if i == 1 else f'{base}-{i}'
+    if not (worktrees / name).exists() and not (containers / name).exists():
+      return name
+    i += 1
+
+
 def dive_in(
   forwarded: list[str],
   dry_run: bool = False,
@@ -67,6 +84,10 @@ def dive_in(
     name = _slugify(command) if command is not None else ''
     if len(name) == 0:
       name = 'dive-in-new'
+    fresh = _pick_fresh_name(name)
+    if fresh != name:
+      log.info('workspace %s is in use, picking %s', name, fresh)
+    name = fresh
   else:
     if task is not None:
       task_id = _resolve_task_id(task)
