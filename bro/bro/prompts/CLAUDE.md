@@ -16,7 +16,7 @@ Centralised prompt store. Two file conventions, two injection conventions.
 
 Both directories are loaded by `cw.py:_load_base_prompts` (sorted glob, concatenated with blank lines). Bros load only `shared/`.
 
-Top-level `.prompt` / `.prompt.template` files are explicit one-shot prompts loaded by name from their callers (e.g. `email_to_markdown.prompt`, `flow_bundle.prompt.template`).
+Top-level `.prompt` / `.prompt.template` files are explicit one-shot prompts loaded by name from their callers (e.g. `email_to_markdown.prompt`).
 
 ## Adding a prompt
 

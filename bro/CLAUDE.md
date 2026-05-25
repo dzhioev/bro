@@ -12,6 +12,15 @@ Bro is the agent system: independent specialised agents (a "Bro") each run as a 
 - `server/server.py` (`bro.server.server`) — aiohttp wrapper exposing the `assistant` Bro on `POST /v1/chat/completions` (OpenAI-compatible). Used by the iOS app
 - `app/ios/` — iOS chat client; see `app/ios/CLAUDE.md`
 
+## PM Bro
+
+`bros/pm.py` is the single source of truth for Flow inbox triage policy — status taxonomy, importance/driver semantics, every per-kind policy (payment receipts, subscription renewals, bill payments, media items, title metadata extraction, sphere tags, …). Its `SYSTEM_PROMPT` is canonical: do not duplicate the policies elsewhere. Two delivery surfaces consume it:
+
+- `process-inbox` TUI (`flow/process_inbox.py`) — Textual app; instantiates `PM()` with no MCP servers and constrains it to a JSON suggestion protocol so the user previews every change before it applies. Engine details in `flow/process_inbox.REFERENCE.md`
+- `cw ss --bro pm` — Claude Code session with PM's system prompt and the flow MCP toolkit; PM calls `update_task` / `add_task` itself (no preview). Use when you want to triage from a chat UI rather than the TUI
+
+Changes to triage policy go in `bro/bros/pm.py` and propagate to both surfaces on next process start.
+
 ## Adding a Bro
 
 Create `bros/<name>.py` with a `Bro` subclass (`name`, `description`, `system_prompt`). Declare required tool sources on the class:
