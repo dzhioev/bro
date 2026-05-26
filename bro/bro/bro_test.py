@@ -5,6 +5,7 @@ from bro.bro import Bro, BroRaised, ScatterTool, Tool
 from bro.datasources.base import DataSource, Hit
 from llm.llm import LLM
 from llm.mcp import FunctionTool, InProcessMCPServer, MCPServer, describe
+from llm.tracer import NullTracer, Tracer
 
 
 class MockLLM(LLM):
@@ -26,6 +27,9 @@ class EchoBro(Bro):
     super().__init__(system_prompt='you echo')
     self._response = response
 
+  def _make_tracer(self) -> Tracer:
+    return NullTracer()
+
   def _create_llm(self, *, interactive: bool) -> LLM:
     return MockLLM(response=self._response)
 
@@ -36,6 +40,60 @@ class TestBroRun:
     bro = EchoBro(response='hello back')
     result = await bro.run('hello')
     assert result == 'hello back'
+
+  @pytest.mark.asyncio
+  async def test_run_wires_tracer_through_to_llm(self):
+    captured: list[Tracer] = []
+
+    class CapturingTracer(NullTracer):
+      pass
+
+    class WireBro(Bro):
+      name = 'wire'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+      def _make_tracer(self) -> Tracer:
+        return CapturingTracer()
+
+      def _create_llm(self, *, interactive: bool):
+        captured.append(self._tracer)
+        return MockLLM()
+
+    await WireBro().run('hi')
+    assert len(captured) == 1
+    assert isinstance(captured[0], CapturingTracer)
+
+  @pytest.mark.asyncio
+  async def test_run_explicit_tracer_overrides_make_tracer(self):
+    captured: list[Tracer] = []
+
+    class MadeTracer(NullTracer):
+      pass
+
+    class ExplicitTracer(NullTracer):
+      pass
+
+    class OverrideBro(Bro):
+      name = 'override'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+      def _make_tracer(self) -> Tracer:
+        return MadeTracer()
+
+      def _create_llm(self, *, interactive: bool):
+        captured.append(self._tracer)
+        return MockLLM()
+
+    explicit = ExplicitTracer()
+    await OverrideBro().run('hi', tracer=explicit)
+    assert len(captured) == 1
+    assert captured[0] is explicit
 
   @pytest.mark.asyncio
   async def test_run_passes_system_and_user_messages(self):
@@ -473,7 +531,7 @@ class TestRaise:
       def __init__(self):
         super().__init__(system_prompt='')
 
-      async def run(self, input: str) -> str:
+      async def run(self, input: str, tracer: Tracer | None = None) -> str:
         raise BroRaised('inner failure')
 
     tool = Tool(RaiseBro())

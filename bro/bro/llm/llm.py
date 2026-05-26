@@ -9,11 +9,13 @@ from functools import cached_property
 from typing import Callable
 
 from llm.mcp import MCPServer, ToolRegistry
+from llm.tracer import NullTracer, Tracer
 
 
 class LLM(ABC):
-  def __init__(self, mcp_servers: list[MCPServer] | None = None):
+  def __init__(self, mcp_servers: list[MCPServer] | None = None, tracer: Tracer | None = None):
     self.tools = ToolRegistry(mcp_servers if mcp_servers is not None else [])
+    self.tracer: Tracer = tracer if tracer is not None else NullTracer()
 
   @abstractmethod
   async def send(self, messages: list[dict]) -> str: ...

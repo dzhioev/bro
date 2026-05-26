@@ -7,6 +7,7 @@ from typing import Callable
 import llm.mcp
 from bro.datasources.base import DataSource
 from llm.llm import LLM, get_llm
+from llm.tracer import BoringTracer, NullTracer, Tracer
 
 DEFAULT_MODEL = 'gpt-5'
 
@@ -101,6 +102,9 @@ class Bro(ABC):
       self._mcp_servers.append(ds.as_mcp_server())
     self._service_server: llm.mcp.MCPServer = _build_service_server()
     self._llm = None
+    # default to no-op; Bro.run() swaps in a real tracer per invocation so the
+    # LLM construction path picks it up via self._tracer.
+    self._tracer: Tracer = NullTracer()
     shared = _load_shared_prompts()
     parts = []
     if len(shared) > 0:
@@ -114,7 +118,11 @@ class Bro(ABC):
   def extend_mcp_servers(self, servers: list[llm.mcp.MCPServer]) -> None:
     self._mcp_servers.extend(servers)
 
-  async def run(self, input: str) -> str:
+  async def run(self, input: str, tracer: Tracer | None = None) -> str:
+    # caller-supplied tracer wins (CLIs use this to force --boring); otherwise
+    # _make_tracer() picks the default. set on self before _create_llm so the
+    # LLM construction path can pick it up.
+    self._tracer = tracer if tracer is not None else self._make_tracer()
     llm = self._create_llm(interactive=False)
     messages = [
       {'role': 'system', 'content': self._system_prompt_for(interactive=False)},
@@ -155,12 +163,16 @@ class Bro(ABC):
       return self.system_prompt
     return f'{self.system_prompt}\n\n{_NON_INTERACTIVE_NOTE}'
 
+  def _make_tracer(self) -> Tracer:
+    return BoringTracer(prefix=self.name)
+
   def _create_llm(self, *, interactive: bool) -> LLM:
     return get_llm(
       'chat_gpt',
       model=self.model,
       mcp_servers=self._mcp_servers_for(interactive=interactive),
       reasoning_effort=self.reasoning_effort,
+      tracer=self._tracer,
     )
 
 

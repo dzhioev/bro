@@ -1,14 +1,15 @@
 import llm.llm
 from llm.mcp import MCPServer
+from llm.tracer import Tracer
 
 
 class Echo(llm.llm.LLM):
   @staticmethod
-  def create(mcp_servers: list[MCPServer] | None = None):
-    return Echo(mcp_servers=mcp_servers)
+  def create(mcp_servers: list[MCPServer] | None = None, tracer: Tracer | None = None):
+    return Echo(mcp_servers=mcp_servers, tracer=tracer)
 
-  def __init__(self, mcp_servers: list[MCPServer] | None = None):
-    super().__init__(mcp_servers)
+  def __init__(self, mcp_servers: list[MCPServer] | None = None, tracer: Tracer | None = None):
+    super().__init__(mcp_servers, tracer=tracer)
 
   async def send(self, messages: list[dict]) -> str:
     if len(messages) == 0:

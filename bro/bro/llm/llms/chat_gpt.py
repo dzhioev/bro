@@ -1,6 +1,7 @@
 import llm.llm
 import configs
 from llm.mcp import MCPServer, Tool
+from llm.tracer import Tracer
 
 from openai import OpenAI
 from openai.types.responses import (
@@ -23,8 +24,6 @@ ResponseInputContentPart = ResponseInputContentParam
 import json
 import os
 import base64
-
-from base import log
 
 DEFAULT_CONFIG_PATH = os.path.join(configs.DEFAULT_CONFIGS_DIR, 'openai.json')
 
@@ -145,6 +144,7 @@ class ChatGPT(llm.llm.LLM):
     model: str = 'gpt-5',
     mcp_servers: list[MCPServer] | None = None,
     reasoning_effort: ReasoningEffort | None = None,
+    tracer: Tracer | None = None,
   ):
     with open(config_path, 'r') as f:
       config = json.load(f)
@@ -153,6 +153,7 @@ class ChatGPT(llm.llm.LLM):
       model=model,
       mcp_servers=mcp_servers,
       reasoning_effort=reasoning_effort,
+      tracer=tracer,
     )
 
   def __init__(
@@ -161,8 +162,9 @@ class ChatGPT(llm.llm.LLM):
     model: str = 'gpt-5',
     mcp_servers: list[MCPServer] | None = None,
     reasoning_effort: ReasoningEffort | None = None,
+    tracer: Tracer | None = None,
   ):
-    super().__init__(mcp_servers)
+    super().__init__(mcp_servers, tracer=tracer)
     self.model = model
     self.client = OpenAI(api_key=api_key)
     self._openai_tools: list[ToolParam] | None = None
@@ -176,18 +178,46 @@ class ChatGPT(llm.llm.LLM):
     self._openai_tools = tools_to_openai_format(tools)
     return self._openai_tools
 
+  def _emit_response_events(self, response: Response) -> None:
+    # walk output in order so the trace mirrors the model's own sequence of
+    # reasoning, interim messages, and tool calls. tool *results* are emitted
+    # by _execute_tool_calls after the call returns.
+    for item in response.output:
+      if item.type == 'reasoning':
+        for part in item.summary:
+          if part.type == 'summary_text' and len(part.text) > 0:
+            self.tracer.on_reasoning(part.text)
+      elif item.type == 'message':
+        text = ''.join(c.text for c in item.content if c.type == 'output_text')
+        if len(text) > 0:
+          self.tracer.on_assistant_message(text)
+      elif item.type == 'function_call':
+        try:
+          args = json.loads(item.arguments)
+        except json.JSONDecodeError:
+          args = {'_raw_arguments': item.arguments}
+        self.tracer.on_tool_call(item.name, args)
+
   async def _execute_tool_calls(self, response: Response) -> list[ResponseInputItemParam]:
     results: list[ResponseInputItemParam] = []
     for item in response.output:
       if item.type != 'function_call':
         continue
       kwargs = json.loads(item.arguments)
-      log.info(f'calling tool {item.name} with {kwargs}')
       output = await self.tools.call(item.name, kwargs)
+      self.tracer.on_tool_result(item.name, output)
       if isinstance(output, dict):
         output = json.dumps(output)
       results.append({'type': 'function_call_output', 'call_id': item.call_id, 'output': output})
     return results
+
+  def _reasoning_kwargs(self) -> dict:
+    if self._reasoning_effort is None:
+      return {}
+    # `summary='auto'` is what gives us the inner monologue. it's free (not
+    # billed as output tokens) and only renders when the model actually has
+    # something worth summarising.
+    return {'reasoning': {'effort': self._reasoning_effort, 'summary': 'auto'}}
 
   async def send(self, messages: list[dict]) -> str:
     openai_tools = await self._resolve_openai_tools()
@@ -197,13 +227,13 @@ class ChatGPT(llm.llm.LLM):
       'model': self.model,
       'input': api_input,
       'tools': openai_tools,
+      **self._reasoning_kwargs(),
     }
     if self._last_response_id is not None:
       kwargs['previous_response_id'] = self._last_response_id
-    if self._reasoning_effort is not None:
-      kwargs['reasoning'] = {'effort': self._reasoning_effort}
 
     response = self.client.responses.create(**kwargs)
+    self._emit_response_events(response)
 
     while has_tool_calls(response):
       tool_results = await self._execute_tool_calls(response)
@@ -212,10 +242,10 @@ class ChatGPT(llm.llm.LLM):
         'previous_response_id': response.id,
         'input': tool_results,
         'tools': openai_tools,
+        **self._reasoning_kwargs(),
       }
-      if self._reasoning_effort is not None:
-        continuation_kwargs['reasoning'] = {'effort': self._reasoning_effort}
       response = self.client.responses.create(**continuation_kwargs)
+      self._emit_response_events(response)
 
     self._last_response_id = response.id
     return parse_response(response)

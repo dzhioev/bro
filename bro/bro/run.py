@@ -14,6 +14,11 @@ def main(argv=None) -> int | None:
   run_parser = sub.add_parser('run', help='run a bro on a single input')
   run_parser.add_argument('name', help='bro name')
   run_parser.add_argument('input', help='input to send to the bro')
+  run_parser.add_argument(
+    '--rich',
+    action='store_true',
+    help='render the trace as colored rich panels instead of plain log lines',
+  )
 
   sub.add_parser('list', help='list registered bros')
 
@@ -38,8 +43,13 @@ def main(argv=None) -> int | None:
 
   if command == 'run':
     b = get_bro(args['name'])
+    tracer = None
+    if args.get('rich'):
+      from llm.tracer import RichConsoleTracer
+
+      tracer = RichConsoleTracer(prefix=b.name)
     try:
-      result = asyncio.run(b.run(args['input']))
+      result = asyncio.run(b.run(args['input'], tracer=tracer))
     except BroRaised as e:
       print(f'raised: {e.reason}', file=sys.stderr)
       return 1

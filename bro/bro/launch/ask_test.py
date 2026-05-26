@@ -4,6 +4,7 @@ from bro.bro import Bro
 from do.do import do
 from llm.llm import LLM
 from llm.mcp import MCPServer
+from llm.tracer import NullTracer, Tracer
 
 
 class MockLLM(LLM):
@@ -24,6 +25,9 @@ class RecordBro(Bro):
   def __init__(self, response: str = 'done'):
     super().__init__(system_prompt='record')
     self.mock_llm = MockLLM(response=response)
+
+  def _make_tracer(self) -> Tracer:
+    return NullTracer()
 
   def _create_llm(self, *, interactive: bool) -> LLM:
     return self.mock_llm
