@@ -5,7 +5,7 @@ import base.args
 from bro.bro import Bro, BroRaised
 from llm.tracer import Tracer
 
-__cli_name__ = 'do'
+__cli_name__ = 'ask'
 
 
 async def do(bro: Bro, what: str, tracer: Tracer | None = None) -> str:

@@ -78,7 +78,7 @@ The same Bro runs from many launchers:
 - **Sub-agent** — invoked by another Bro via `Tool` / `ScatterTool`.
 - **HTTP** — `bro/server/server.py` serves the `assistant` Bro on `POST /v1/chat/completions` (OpenAI-compatible). The iOS chat app speaks to this endpoint.
 - **Claude Code** — `cw ss --bro <name>` launches a bare Claude Code session whose system prompt and MCP servers come from the named Bro. Tools are wired through the `mcp-server bro:<name>` stdio shim, which exposes the union of the Bro's declared MCP servers and data-source tools. Useful when the user wants a chat UI over the Bro's policy + toolkit.
-- **`do` / `do-task`** — one-shot launchers for autonomous runs; see `do/CLAUDE.md`.
+- **`ask` / `do-task`** — one-shot launchers for autonomous runs; see `do/CLAUDE.md`.
 
 A given Bro need not support every surface — `pm` is consumed by both `cw ss --bro pm` and the `process-inbox` TUI; `assistant` is HTTP-only; `librorian` runs as console + sub-agent.
 
