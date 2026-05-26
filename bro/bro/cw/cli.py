@@ -255,6 +255,8 @@ def _docker_run_argv(
     f'CW_NAME={name}',
     '-e',
     'DISABLE_AUTOUPDATER=1',
+    '-e',
+    'CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1',
     '-w',
     '/workspace',
     '--memory=8g',
