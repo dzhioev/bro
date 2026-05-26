@@ -396,6 +396,57 @@ def _parse_ref(ref: str) -> tuple[str, bool]:
   return ref, False
 
 
+def _find_container_id(name: str, proj: Path) -> str | None:
+  """find the running container backing the named container workspace.
+
+  filters `docker ps` by the workspace's host mount path, which is unique per
+  workspace. returns the container short id, or None if no running container
+  is bound to that mount.
+  """
+  session = proj / 'var' / 'cw' / 'containers' / name
+  if not session.is_dir():
+    return None
+  result = subprocess.run(
+    ['docker', 'ps', '-q', '--filter', f'volume={session}'],
+    capture_output=True,
+    text=True,
+  )
+  if result.returncode != 0:
+    return None
+  ids = [line for line in result.stdout.splitlines() if len(line) > 0]
+  if len(ids) == 0:
+    return None
+  return ids[0]
+
+
+def exec_in_workspace(name: str, cmd: list[str]) -> int:
+  """exec a command in the running container backing the named workspace.
+
+  with no command, starts an interactive bash. either way, `/workspace/.venv`
+  is sourced first so the workspace's console scripts (created by `uv sync`)
+  are on PATH; the prompt's `(.venv)` prefix is dropped after `.bashrc` re-runs,
+  but VIRTUAL_ENV and PATH survive.
+  """
+  if name.startswith(_CONTAINER_PREFIX):
+    name = name[len(_CONTAINER_PREFIX) :]
+  proj = _project_root()
+  container_id = _find_container_id(name, proj)
+  if container_id is None:
+    log.error('no running container for workspace %r', name)
+    return 1
+  if len(cmd) == 0:
+    docker_cmd = ['bash', '-c', 'source /workspace/.venv/bin/activate 2>/dev/null; exec bash']
+  else:
+    docker_cmd = [
+      'bash',
+      '-c',
+      'source /workspace/.venv/bin/activate 2>/dev/null; exec "$@"',
+      'cw-exec',
+      *cmd,
+    ]
+  return subprocess.run(['docker', 'exec', '-it', container_id, *docker_cmd]).returncode
+
+
 def _resolve_workspace(ref: str, proj: Path) -> tuple[Path, Path | None]:
   name, is_container = _parse_ref(ref)
   if is_container:
@@ -1038,6 +1089,17 @@ def main(argv=None):
     help='workspace to check (default: cwd); use c:<name> for container workspaces',
   )
 
+  exec_cmd = subparsers.add_parser(
+    'exec',
+    help='exec a command in the running container for a workspace (default: interactive bash with .venv activated)',
+  )
+  exec_cmd.add_argument(
+    'name', help="container workspace name (the 'c:' prefix is accepted but optional)"
+  )
+  exec_cmd.add_argument(
+    'command', nargs=argparse.REMAINDER, help='command + args to exec (default: bash)'
+  )
+
   args = parser.parse(argv)
   cmd = args.pop('cmd')
 
@@ -1059,6 +1121,8 @@ def main(argv=None):
     for r in reasons:
       print(r, file=sys.stderr)
     return 0 if clean_ else 1
+  if cmd == 'exec':
+    return exec_in_workspace(name=args['name'], cmd=args['command'])
   assert cmd == 'ss'
   if args['auto'] and not args['container']:
     parser.error('--auto requires --container')

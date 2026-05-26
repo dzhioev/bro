@@ -92,11 +92,25 @@ class Bro(ABC):
   reasoning_effort: str | None = None
   data_sources: list[DataSource] = []
   mcp_servers: list[McpServerEntry] = []
+  # subclasses declare their own `system_prompt = "..."` as a class attribute;
+  # `__init__` walks the MRO from base to derived and concatenates each class's
+  # own contribution. so `PPPDev(Dev)` only needs to declare what PPPDev adds —
+  # Dev's prompt is picked up automatically. same for `mcp_servers`.
+  system_prompt: str = ''
 
   _llm: LLM | None = None
 
-  def __init__(self, system_prompt: str = ''):
-    self._declared_mcp: list[llm.mcp.MCPServer] = [_materialize(e) for e in type(self).mcp_servers]
+  def __init__(self, system_prompt: str | None = None):
+    mcp_entries: list[McpServerEntry] = []
+    prompt_parts: list[str] = []
+    for cls in reversed(type(self).__mro__):
+      raw_mcp = cls.__dict__.get('mcp_servers')
+      if raw_mcp is not None:
+        mcp_entries.extend(raw_mcp)
+      raw_prompt = cls.__dict__.get('system_prompt')
+      if isinstance(raw_prompt, str) and len(raw_prompt) > 0:
+        prompt_parts.append(raw_prompt)
+    self._declared_mcp: list[llm.mcp.MCPServer] = [_materialize(e) for e in mcp_entries]
     self._mcp_servers: list[llm.mcp.MCPServer] = list(self._declared_mcp)
     for ds in self.data_sources:
       self._mcp_servers.append(ds.as_mcp_server())
@@ -105,12 +119,15 @@ class Bro(ABC):
     # default to no-op; Bro.run() swaps in a real tracer per invocation so the
     # LLM construction path picks it up via self._tracer.
     self._tracer: Tracer = NullTracer()
+    # explicit `system_prompt=...` arg overrides MRO collection — escape hatch
+    # for callers that need a dynamic prompt (e.g. PM injects current time).
+    if system_prompt is not None:
+      prompt_parts = [system_prompt] if len(system_prompt) > 0 else []
     shared = _load_shared_prompts()
     parts = []
     if len(shared) > 0:
       parts.append(shared)
-    if len(system_prompt) > 0:
-      parts.append(system_prompt)
+    parts.extend(prompt_parts)
     if len(self.data_sources) > 0:
       parts.append(_render_data_sources(self.data_sources))
     self.system_prompt = '\n\n'.join(parts)
