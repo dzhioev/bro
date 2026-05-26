@@ -73,10 +73,14 @@ def dive_in(
   command: str | None = None,
   task: str | None = None,
   new: bool = False,
+  no_task: bool = False,
   resume: bool = False,
 ) -> int:
   prompt: str | None = None
-  if new:
+  if no_task:
+    prompt = command
+    name = _pick_fresh_name('dive-in-no-task')
+  elif new:
     hint = f'- Initial idea from the user: {command}\n' if command is not None else ''
     prompt = get_prompt(
       'dive_in_new.prompt.template', hint=hint, context=get_prompt('dive_in_context.prompt')
@@ -132,6 +136,8 @@ def dive_in(
     ppp_parts.append('--host')
   if new:
     ppp_parts.append('--new')
+  if no_task:
+    ppp_parts.append('--no-task')
   if task is not None:
     ppp_parts.extend(['-t', task])
   if command is not None:
@@ -170,16 +176,23 @@ def main(argv=None):
     action='store_true',
     help='start by creating a new task, then dive into it',
   )
+  group.add_argument(
+    '--no-task',
+    action='store_true',
+    help='start a throwaway session unattached to any task',
+  )
   parser.add_argument(
     'command',
     nargs='?',
     default=None,
-    help='initial command for the session (appended to prompt; with --new, used as the seed idea for the task)',
+    help='initial command for the session (appended to prompt; with --new, used as the seed idea for the task; with --no-task, used as the entire prompt)',
   )
   args = parser.parse(argv)
   if args['resume']:
     if args['new']:
       parser.error('--resume cannot be combined with --new')
+    if args['no_task']:
+      parser.error('--resume cannot be combined with --no-task')
     if args['command'] is not None:
       parser.error(
         '--resume cannot be combined with a positional command (it is ignored on resume)'
