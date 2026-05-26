@@ -3,7 +3,8 @@
 At session start, detect your environment. Do not produce any visible output — silently incorporate this context into your planning.
 
 1. Read the `PPP_SHELL_COMMAND` env var to identify how this session was launched:
-   - Starts with `dive-in`: scoped to a specific task. `-t` means a specific task ID was targeted; otherwise the currently focused task
+   - Starts with `dive-in` with `-t <id>` or `--focus`: scoped to a specific task (`-t` names it directly; `--focus` uses whatever is currently focused)
+   - Starts with `dive-in` without either flag: a clean session unattached to any task — start by asking what to work on
    - Starts with `start-session`: launched via the team session manager
    - Starts with `cw ss`: a plain workspace session
 

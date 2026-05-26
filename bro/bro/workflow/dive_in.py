@@ -73,18 +73,20 @@ def dive_in(
   command: str | None = None,
   task: str | None = None,
   new: bool = False,
-  no_task: bool = False,
+  focus: bool = False,
   resume: bool = False,
 ) -> int:
   prompt: str | None = None
-  if no_task:
-    prompt = command
-    name = _pick_fresh_name('dive-in-no-task')
-  elif new:
+  if new:
     hint = f'- Initial idea from the user: {command}\n' if command is not None else ''
     prompt = get_prompt(
       'dive_in_new.prompt.template', hint=hint, context=get_prompt('dive_in_context.prompt')
     )
+    if focus:
+      prompt = (
+        f'{prompt}\n\nAfter creating the task, call set_focus on its id so it becomes the '
+        'currently focused task.'
+      )
     name = _slugify(command) if command is not None else ''
     if len(name) == 0:
       name = 'dive-in-new'
@@ -92,22 +94,29 @@ def dive_in(
     if fresh != name:
       log.info('workspace %s is in use, picking %s', name, fresh)
     name = fresh
-  else:
+  elif task is not None or focus:
     if task is not None:
       task_id = _resolve_task_id(task)
+      if focus:
+        default_client().set_focus(task_id)
+        log.info('focused task: %s', task_id)
       task_name = _resolve_task_name(task_id)
       log.info('task: %s', task_name)
       if not resume:
-        startup = get_prompt('dive_in_task.prompt.template', task_id=task_id)
+        if focus:
+          startup = get_prompt('dive_in_focused.prompt')
+          target = 'the currently focused task'
+        else:
+          startup = get_prompt('dive_in_task.prompt.template', task_id=task_id)
+          target = f'task {task_id}'
         prompt = get_prompt(
           'dive_in.prompt.template',
-          target=f'task {task_id}',
+          target=target,
           startup=startup,
           context=get_prompt('dive_in_context.prompt'),
         )
     else:
-      client = default_client()
-      state = client.get_focus()
+      state = default_client().get_focus()
       if state is None:
         log.error('no task is currently focused')
         return 1
@@ -130,14 +139,17 @@ def dive_in(
       prompt = f'{prompt}\n\nOnce you understand the task, {command}'
 
     os.environ['CW_TASK_ID'] = task_id
+  else:
+    prompt = command
+    name = _pick_fresh_name('dive-in')
 
   ppp_parts = ['dive-in', *forwarded]
   if host:
     ppp_parts.append('--host')
   if new:
     ppp_parts.append('--new')
-  if no_task:
-    ppp_parts.append('--no-task')
+  if focus:
+    ppp_parts.append('--focus')
   if task is not None:
     ppp_parts.extend(['-t', task])
   if command is not None:
@@ -168,31 +180,29 @@ def main(argv=None):
     help='run on the host in a same-machine worktree instead of a container',
   )
   group = parser.add_mutually_exclusive_group()
-  group.add_argument(
-    '-t', '--task', default=None, help='task ID or Notion URL to dive into (default: focused task)'
-  )
+  group.add_argument('-t', '--task', default=None, help='task ID or Notion URL to dive into')
   group.add_argument(
     '--new',
     action='store_true',
     help='start by creating a new task, then dive into it',
   )
-  group.add_argument(
-    '--no-task',
+  parser.add_argument(
+    '--focus',
     action='store_true',
-    help='start a throwaway session unattached to any task',
+    help='dive into the currently focused task; with -t, set focus to that task first; with --new, focus the newly created task',
   )
   parser.add_argument(
     'command',
     nargs='?',
     default=None,
-    help='initial command for the session (appended to prompt; with --new, used as the seed idea for the task; with --no-task, used as the entire prompt)',
+    help='initial command for the session (with no task flag, used as the entire prompt; with --new, used as the seed idea for the task; otherwise appended to the prompt)',
   )
   args = parser.parse(argv)
   if args['resume']:
     if args['new']:
       parser.error('--resume cannot be combined with --new')
-    if args['no_task']:
-      parser.error('--resume cannot be combined with --no-task')
+    if args['task'] is None and not args['focus']:
+      parser.error('--resume requires a task — pass -t <task> or --focus')
     if args['command'] is not None:
       parser.error(
         '--resume cannot be combined with a positional command (it is ignored on resume)'
