@@ -13,7 +13,7 @@ def main(argv=None) -> int | None:
 
   run_parser = sub.add_parser('run', help='run a bro on a single input')
   run_parser.add_argument('name', help='bro name')
-  run_parser.add_argument('--input', '-i', required=True, help='input text')
+  run_parser.add_argument('input', help='input to send to the bro')
 
   sub.add_parser('list', help='list registered bros')
 

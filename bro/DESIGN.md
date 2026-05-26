@@ -74,7 +74,7 @@ Interactive paths (`Bro.send()`, the HTTP server, `cw ss --bro` Claude Code sess
 
 The same Bro runs from many launchers:
 
-- **Console** — `bro run <name> --input ...`, `bro list`, `bro show <name>`. Backed by `bro/run.py`.
+- **Console** — `bro run <name> <input>`, `bro list`, `bro show <name>`. Backed by `bro/run.py`.
 - **Sub-agent** — invoked by another Bro via `Tool` / `ScatterTool`.
 - **HTTP** — `bro/server/server.py` serves the `assistant` Bro on `POST /v1/chat/completions` (OpenAI-compatible). The iOS chat app speaks to this endpoint.
 - **Claude Code** — `cw ss --bro <name>` launches a bare Claude Code session whose system prompt and MCP servers come from the named Bro. Tools are wired through the `mcp-server bro:<name>` stdio shim, which exposes the union of the Bro's declared MCP servers and data-source tools. Useful when the user wants a chat UI over the Bro's policy + toolkit.
@@ -93,5 +93,6 @@ The current set lives in `bros/`:
 - `assistant` — general-purpose chat; default for the iOS app via the HTTP server
 - `pm` — Flow inbox triage; canonical source of triage policy for both the `process-inbox` TUI and `cw ss --bro pm`
 - `librorian` — steward of the Flow media library (adds, maintains, recommends)
+- `devoops` — autonomous service deploys (flow-mcp, flow-focus, emails-test, emails-prod) with a dry-run-first safety reflex; tools wrap `infra/mcp.py`
 
 Adding a new Bro is creating a new subclass and registering it — see `CLAUDE.md` for the operational checklist.
