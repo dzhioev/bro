@@ -5,6 +5,20 @@ from dataclasses import asdict, dataclass
 from llm.mcp import InProcessMCPServer, MCPServer, Tool
 
 
+class SourceUnavailable(Exception):
+  """a data source can't respond (HTTP error, timeout, rate limit, ...).
+
+  the LLM agent loop catches this and feeds the message back to the model as
+  the tool result, so the agent can fall back to another source instead of
+  crashing the run.
+  """
+
+  def __init__(self, source: str, reason: str):
+    super().__init__(f'{source} unavailable: {reason}')
+    self.source = source
+    self.reason = reason
+
+
 @dataclass
 class Hit:
   id: str

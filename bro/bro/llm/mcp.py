@@ -8,6 +8,16 @@ def describe[F: Callable[..., Any]](fn: F, text: str) -> F:
   return fn
 
 
+class ToolControlSignal(Exception):
+  """tool exception that must escape the LLM agent loop.
+
+  the loop catches generic exceptions from a tool call and feeds them back to
+  the model as the tool result, so the agent can react. tools that need to
+  abort the run instead (a service-level signal like `raise`) must derive from
+  this class.
+  """
+
+
 class Tool(ABC):
   @property
   @abstractmethod

@@ -35,7 +35,7 @@ def _render_data_sources(sources: list[DataSource]) -> str:
   return '\n'.join(lines)
 
 
-class BroRaised(Exception):
+class BroRaised(llm.mcp.ToolControlSignal):
   """raised by the `raise` service tool to abort a Bro run."""
 
   def __init__(self, reason: str):

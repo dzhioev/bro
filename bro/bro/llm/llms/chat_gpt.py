@@ -1,6 +1,6 @@
 import llm.llm
 import configs
-from llm.mcp import MCPServer, Tool
+from llm.mcp import MCPServer, Tool, ToolControlSignal
 from llm.tracer import Tracer
 
 from openai import OpenAI
@@ -204,7 +204,14 @@ class ChatGPT(llm.llm.LLM):
       if item.type != 'function_call':
         continue
       kwargs = json.loads(item.arguments)
-      output = await self.tools.call(item.name, kwargs)
+      try:
+        output = await self.tools.call(item.name, kwargs)
+      except ToolControlSignal:
+        raise
+      except Exception as exc:
+        # surface the failure back to the model as the tool result so the agent
+        # can react (retry, switch source, raise) instead of crashing the loop.
+        output = f'tool {item.name!r} failed: {type(exc).__name__}: {exc}'
       self.tracer.on_tool_result(item.name, output)
       if isinstance(output, dict):
         output = json.dumps(output)
