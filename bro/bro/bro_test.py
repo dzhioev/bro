@@ -1,7 +1,7 @@
 import json
 import pytest
 
-from bro.bro import Bro, BroRaised, McpServerSpec, ScatterTool, Tool
+from bro.bro import Bro, BroRaised, ScatterTool, Tool
 from bro.datasources.base import DataSource, Hit
 from llm.llm import LLM
 from llm.mcp import FunctionTool, InProcessMCPServer, MCPServer, describe
@@ -288,22 +288,24 @@ def _make_server(*tool_names: str) -> InProcessMCPServer:
 
 class TestBroMcpServers:
   @pytest.mark.asyncio
-  async def test_bare_factory_exposes_all_tools(self):
-    class FactoryBro(Bro):
-      name = 'factory'
+  async def test_instance_entry_exposes_its_tools(self):
+    server = _make_server('a', 'b', 'c')
+
+    class InstanceBro(Bro):
+      name = 'instance'
       description = 'd'
-      mcp_servers = [lambda: _make_server('a', 'b', 'c')]
+      mcp_servers = [server]
 
       def __init__(self):
         super().__init__(system_prompt='')
 
-    bro = FactoryBro()
-    assert len(bro._mcp_servers) == 1
+    bro = InstanceBro()
+    assert bro._mcp_servers == [server]
     tools = await bro._mcp_servers[0].list_tools()
     assert {t.name for t in tools} == {'a', 'b', 'c'}
 
   @pytest.mark.asyncio
-  async def test_factory_called_once_per_instance(self):
+  async def test_factory_entry_called_once_per_instance(self):
     calls = 0
 
     def factory():
@@ -322,34 +324,6 @@ class TestBroMcpServers:
     CountBro()
     CountBro()
     assert calls == 2
-
-  @pytest.mark.asyncio
-  async def test_spec_with_allowlist_filters_tools(self):
-    class AllowBro(Bro):
-      name = 'allow'
-      description = 'd'
-      mcp_servers = [McpServerSpec(lambda: _make_server('a', 'b', 'c'), allowed_tools=['a', 'c'])]
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    bro = AllowBro()
-    tools = await bro._mcp_servers[0].list_tools()
-    assert [t.name for t in tools] == ['a', 'c']
-
-  @pytest.mark.asyncio
-  async def test_allowlist_with_unknown_tool_raises(self):
-    class BadBro(Bro):
-      name = 'bad'
-      description = 'd'
-      mcp_servers = [McpServerSpec(lambda: _make_server('a'), allowed_tools=['ghost'])]
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    bro = BadBro()
-    with pytest.raises(ValueError, match='unknown tools in allowlist'):
-      await bro._mcp_servers[0].list_tools()
 
   @pytest.mark.asyncio
   async def test_extend_mcp_servers_appends(self):

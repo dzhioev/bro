@@ -22,8 +22,8 @@ class PM(Bro):
   description = '...'                  # one line, shown in tool listings
   model = 'gpt-5.4-mini'               # override the base default
   reasoning_effort = 'medium'          # optional
-  mcp_servers = [create_flow_server]   # full-server mount
-  # or: McpServerSpec(create_flow_server, allowed_tools=['add_task', 'list_tasks'])
+  mcp_servers = [flow.MCPServer()]     # full flow toolset
+  # or: flow.MCPServer('add_task', 'list_tasks')  # subset, validated at construction
   data_sources = [Wikipedia()]         # read-only connectors
 
   def __init__(self):
@@ -32,7 +32,7 @@ class PM(Bro):
 
 The base class, on instantiation:
 
-- materialises each declared MCP-server factory exactly once
+- materialises any `mcp_servers` entry that is a factory (callable) — instances pass through unchanged
 - auto-prepends every `prompts/shared/*.md` to the system prompt (conventions that must hold across every surface live there)
 - appends a `## Data sources` block describing each declared `DataSource`
 - on non-interactive runs, exposes a built-in `raise` service tool (see below)
@@ -50,7 +50,7 @@ Cloning a stateless Bro is free, so `map` is a bounded `asyncio.gather` over `ru
 A Bro's behaviour comes from three sources, all declared on the class:
 
 - **`system_prompt`** — the specialisation. Triage policies, output protocol, voice. The single source of truth for what the Bro knows and decides.
-- **`mcp_servers`** — sets of stateful tools. Each entry is a factory `() -> MCPServer`, optionally wrapped in `McpServerSpec(factory, allowed_tools=[...])` for per-tool allowlists.
+- **`mcp_servers`** — sets of stateful tools. Each entry is either an `MCPServer` instance (typically `flow.MCPServer(*tool_names)` or `infra.MCPServer(*tool_names)`; no args = full toolset, with args = a validated subset built directly with only those tools) or a `() -> MCPServer` factory for the rare server that needs per-instance materialisation.
 - **`data_sources`** — read-only connectors (Wikipedia, TMDb, Open Library, web search). Each implements `search(query, limit)` and `fetch(id, query=None)`. The base class exposes them as `<name>-search` / `<name>-fetch` MCP tools and injects each source's `summary` into the system prompt so the LLM knows what is available without enumerating raw tool names.
 
 The split between `mcp_servers` and `data_sources` is a contract: data sources never mutate state, so they are safe to bind to any Bro. MCP servers may mutate state and are chosen per Bro.

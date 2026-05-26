@@ -1,12 +1,12 @@
 import pytest
 
-from bro.bro import Bro, McpServerSpec
+from bro.bro import Bro
 from bro.datasources.base import DataSource, Hit
 from bro.show import format_card
 from llm.mcp import FunctionTool, InProcessMCPServer, describe
 
 
-def _make_server(*tool_names: str) -> InProcessMCPServer:
+def _make_tools(*tool_names: str) -> list[FunctionTool]:
   tools = []
   for name in tool_names:
 
@@ -16,15 +16,17 @@ def _make_server(*tool_names: str) -> InProcessMCPServer:
     fn.__name__ = name
     describe(fn, f'{name} tool description')
     tools.append(FunctionTool(fn))
-  return InProcessMCPServer(tools)
+  return tools
 
 
-def make_server_ab():
-  return _make_server('a', 'b')
+class ServerAB(InProcessMCPServer):
+  def __init__(self):
+    super().__init__(_make_tools('a', 'b'))
 
 
-def make_server_xyz():
-  return _make_server('x', 'y', 'z')
+class ServerXZ(InProcessMCPServer):
+  def __init__(self):
+    super().__init__(_make_tools('x', 'z'))
 
 
 class _StubSource(DataSource):
@@ -51,10 +53,7 @@ class _FullBro(Bro):
   description = 'has a data source and two MCP servers'
   reasoning_effort = 'medium'
   data_sources = [_StubSource()]
-  mcp_servers = [
-    make_server_ab,
-    McpServerSpec(make_server_xyz, allowed_tools=['x', 'z']),
-  ]
+  mcp_servers = [ServerAB(), ServerXZ()]
 
   def __init__(self):
     super().__init__(system_prompt='YOU ARE FULL')
@@ -99,20 +98,19 @@ class TestFormatCard:
     assert '## MCP servers' not in card
 
   @pytest.mark.asyncio
-  async def test_mcp_section_renders_factories_and_tools(self):
+  async def test_mcp_section_renders_server_type_and_tools(self):
     card = await format_card(_FullBro())
     assert '## MCP servers' in card
-    assert '`bro.show_test.make_server_ab` — 2 tools' in card
+    assert '`bro.show_test.ServerAB` — 2 tools' in card
     assert '  - `a` — a tool description' in card
     assert '  - `b` — b tool description' in card
 
   @pytest.mark.asyncio
-  async def test_mcp_filtered_badge_and_filtered_tool_list(self):
+  async def test_mcp_second_server_rendered(self):
     card = await format_card(_FullBro())
-    assert '`bro.show_test.make_server_xyz` — 2 tools (filtered)' in card
+    assert '`bro.show_test.ServerXZ` — 2 tools' in card
     assert '  - `x` — x tool description' in card
     assert '  - `z` — z tool description' in card
-    assert '`y`' not in card
 
   @pytest.mark.asyncio
   async def test_system_prompt_omitted_by_default(self):
@@ -142,13 +140,14 @@ class TestFormatCard:
     long_fn.__name__ = 'longy'
     describe(long_fn, long_desc)
 
-    def factory():
-      return InProcessMCPServer([FunctionTool(long_fn)])
+    class LongServer(InProcessMCPServer):
+      def __init__(self):
+        super().__init__([FunctionTool(long_fn)])
 
     class _LongBro(Bro):
       name = 'long'
       description = 'd'
-      mcp_servers = [factory]
+      mcp_servers = [LongServer()]
 
       def __init__(self):
         super().__init__(system_prompt='')

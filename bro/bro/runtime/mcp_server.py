@@ -13,11 +13,11 @@ from llm.mcp import MCPServer
 _BRO_PREFIX = 'bro:'
 
 
-def _static_servers():
-  from flow.mcp.bridge import create_flow_server
+def _static_servers() -> dict[str, MCPServer]:
+  import flow
 
   return {
-    'flow': create_flow_server,
+    'flow': flow.MCPServer(),
   }
 
 
@@ -27,7 +27,7 @@ def _resolve_server(spec: str) -> MCPServer:
   static = _static_servers()
   if spec not in static:
     raise SystemExit(f'unknown server {spec!r}; expected one of {sorted(static)} or bro:<name>')
-  return static[spec]()
+  return static[spec]
 
 
 def _compose_bro_server(name: str) -> MCPServer:

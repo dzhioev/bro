@@ -4,7 +4,7 @@ Bro is the agent system: independent specialised agents (a "Bro") each run as a 
 
 ## Layout
 
-- `bro.py` — `Bro` ABC. Subclasses set `name`, `description`, `system_prompt`, and optionally class-level `data_sources = [...]` and `mcp_servers = [...]` (factories, or `McpServerSpec(factory, allowed_tools=[...])` for per-tool allowlists). `Bro` materialises each factory once per instance, auto-prepends every `prompts/shared/*.md` to the system prompt, and appends a `## Data sources` block describing each declared `DataSource`. Non-interactive runs (`bro.run()`, the `bro run`/`do`/`do-task` CLIs, sub-Bros invoked via `Tool`) also expose a built-in `raise` service tool — the agent calls it to abort with a reason when the request cannot be fulfilled (missing credentials, no appropriate tool, contradictory constraints, unclear/uninterpretable input); the call raises `BroRaised(reason)` out of `bro.run()`. Interactive paths (`bro.send()`, the HTTP server backing the iOS app) don't expose `raise` — the agent should just describe any blocker in its reply. Post-init injection of extra servers is available via `extend_mcp_servers(...)` for tests or unusual hosts
+- `bro.py` — `Bro` ABC. Subclasses set `name`, `description`, `system_prompt`, and optionally class-level `data_sources = [...]` and `mcp_servers = [...]` (each entry is either an `MCPServer` instance — typically `flow.MCPServer(...)` / `infra.MCPServer(...)` — or a `() -> MCPServer` factory for stateful servers that need per-instance materialisation). `Bro` auto-prepends every `prompts/shared/*.md` to the system prompt and appends a `## Data sources` block describing each declared `DataSource`. Non-interactive runs (`bro.run()`, the `bro run`/`do`/`do-task` CLIs, sub-Bros invoked via `Tool`) also expose a built-in `raise` service tool — the agent calls it to abort with a reason when the request cannot be fulfilled (missing credentials, no appropriate tool, contradictory constraints, unclear/uninterpretable input); the call raises `BroRaised(reason)` out of `bro.run()`. Interactive paths (`bro.send()`, the HTTP server backing the iOS app) don't expose `raise` — the agent should just describe any blocker in its reply. Post-init injection of extra servers is available via `extend_mcp_servers(...)` for tests or unusual hosts
 - `bros/` — one file per specialised agent; `bros/__init__.py:init()` registers each with the registry. Currently `assistant.py` (general-purpose), `pm.py` (Flow inbox triage), `librorian.py` (steward of the Flow media library — adds, maintains, and recommends), and `devoops.py` (autonomous service deploys with a dry-run safety reflex; tools live in `infra/mcp.py`)
 - `datasources/` — `DataSource` ABC + connectors to read-only sources (books, films, web references). Each connector exposes `<name>-search` / `<name>-fetch` tools via `as_mcp_server()`. Currently `wikipedia.py` (Wikipedia REST API, query-aware fetch via `mu`), `tmdb.py` (movies + series; needs `.configs/tmdb.json`), `open_library.py` (books, no auth), `web_search.py` (Brave Search; needs `.configs/brave.json`)
 - `registry.py` — process-wide registry (`register`, `get_bro`, `list_bros`); first lookup triggers `bros.init()`
@@ -26,10 +26,10 @@ Changes to triage policy go in `bro/bros/pm.py` and propagate to both surfaces o
 Create `bros/<name>.py` with a `Bro` subclass (`name`, `description`, `system_prompt`). Declare required tool sources on the class:
 
 - `data_sources = [YourSource()]` for read-only data connectors
-- `mcp_servers = [create_flow_server]` for full-server mounts (the entry is a factory — `() -> MCPServer`)
-- `mcp_servers = [McpServerSpec(create_flow_server, allowed_tools=['add_task', 'list_tasks'])]` to restrict which tools the Bro sees
-
-The flow MCP factory is `flow.mcp.bridge.create_flow_server`.
+- `mcp_servers = [flow.MCPServer()]` for the full flow toolset
+- `mcp_servers = [flow.MCPServer('add_task', 'list_tasks')]` to scope to specific tools (validated at construction)
+- `mcp_servers = [infra.MCPServer()]` for the devops toolset; same `*tool_names` API
+- Stateful servers that need a fresh instance per Bro can pass a factory: `mcp_servers = [some_factory]` where `some_factory: () -> MCPServer`
 
 **Register the new bro manually** — import `YourBro` in `bros/__init__.py:init()` and append it to the list iterated there. There is no auto-discovery; the import + list entry is required for `get_bro('your-name')` to work.
 

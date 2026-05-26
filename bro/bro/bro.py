@@ -1,7 +1,6 @@
 import asyncio
 import json
 from abc import ABC
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
@@ -78,24 +77,11 @@ _NON_INTERACTIVE_NOTE = (
 )
 
 
-@dataclass
-class McpServerSpec:
-  factory: Callable[[], llm.mcp.MCPServer]
-  allowed_tools: list[str] | None = None
+McpServerEntry = llm.mcp.MCPServer | Callable[[], llm.mcp.MCPServer]
 
 
-McpServerEntry = McpServerSpec | Callable[[], llm.mcp.MCPServer]
-
-
-def _normalize(entry: McpServerEntry) -> McpServerSpec:
-  return entry if isinstance(entry, McpServerSpec) else McpServerSpec(entry)
-
-
-def _materialize(spec: McpServerSpec) -> llm.mcp.MCPServer:
-  server = spec.factory()
-  if spec.allowed_tools is not None:
-    server = llm.mcp.FilteredMCPServer(server, spec.allowed_tools)
-  return server
+def _materialize(entry: McpServerEntry) -> llm.mcp.MCPServer:
+  return entry if isinstance(entry, llm.mcp.MCPServer) else entry()
 
 
 class Bro(ABC):
@@ -109,14 +95,8 @@ class Bro(ABC):
   _llm: LLM | None = None
 
   def __init__(self, system_prompt: str = ''):
-    specs = [_normalize(e) for e in type(self).mcp_servers]
-    declared_servers = [_materialize(s) for s in specs]
-    # spec + materialized server for each declared entry — preserves factory and
-    # allowed_tools info so renderers (bro show) can describe entries faithfully
-    self._declared_mcp: list[tuple[McpServerSpec, llm.mcp.MCPServer]] = list(
-      zip(specs, declared_servers)
-    )
-    self._mcp_servers: list[llm.mcp.MCPServer] = list(declared_servers)
+    self._declared_mcp: list[llm.mcp.MCPServer] = [_materialize(e) for e in type(self).mcp_servers]
+    self._mcp_servers: list[llm.mcp.MCPServer] = list(self._declared_mcp)
     for ds in self.data_sources:
       self._mcp_servers.append(ds.as_mcp_server())
     self._service_server: llm.mcp.MCPServer = _build_service_server()
