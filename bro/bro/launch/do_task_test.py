@@ -1,7 +1,9 @@
+from unittest.mock import patch
+
 import pytest
 
 from bro.bro import BaseBro
-from do.do_task import do_task
+from do.do_task import do_task, main
 from llm.llm import LLM
 from llm.mcp import MCPServer
 from llm.tracer import NullTracer, Tracer
@@ -49,3 +51,17 @@ async def test_passes_arbitrary_string_through():
   await do_task(bro, url)
   messages = bro.mock_llm.send_calls[0]
   assert messages[-1]['content'] == f'fix the flow task: {url}'
+
+
+def test_main_re_execs_into_container_when_outside():
+  with (
+    patch.dict('os.environ', {}, clear=False) as env,
+    patch('cw.run_in_container', return_value=0) as run,
+  ):
+    env.pop('CW_IN_CONTAINER', None)
+    rc = main(['do-task', 'ppp-dev', 'abc-123'])
+    assert rc == 0
+    (workspace, command), kwargs = run.call_args
+    assert workspace.startswith('do-task-ppp-dev-')
+    assert command == ['do-task', 'ppp-dev', 'abc-123']
+    assert kwargs == {'drop': True}

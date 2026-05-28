@@ -1,8 +1,7 @@
-import asyncio
 import sys
 
-import base.args
-from bro.bro import BaseBro, BroRaised
+from bro.bro import BaseBro
+from do._cli import run
 from do.do import do
 from llm.tracer import Tracer
 
@@ -16,32 +15,14 @@ async def do_task(bro: BaseBro, task: str, tracer: Tracer | None = None) -> str:
 
 
 def main(argv=None) -> int | None:
-  parser = base.args.Parser(description='run a bro on a flow task')
-  parser.add_argument('bro', help='bro name')
-  parser.add_argument(
-    'task', help='flow task reference: id, dashed UUID, Notion URL, or description'
+  return run(
+    cli_name='do-task',
+    parser_desc='run a bro on a flow task',
+    arg_name='task',
+    arg_help='flow task reference: id, dashed UUID, Notion URL, or description',
+    run_fn=do_task,
+    argv=argv,
   )
-  parser.add_argument(
-    '--rich',
-    action='store_true',
-    help='render the trace as colored rich panels instead of plain log lines',
-  )
-  args = parser.parse(argv)
-
-  from bro.registry import get_bro
-
-  bro = get_bro(args['bro'])
-  tracer: Tracer | None = None
-  if args['rich']:
-    from llm.tracer import RichConsoleTracer
-
-    tracer = RichConsoleTracer(prefix=bro.name)
-  try:
-    result = asyncio.run(do_task(bro, args['task'], tracer=tracer))
-  except BroRaised as e:
-    print(f'raised: {e.reason}', file=sys.stderr)
-    return 1
-  print(result)
 
 
 if __name__ == '__main__':

@@ -210,7 +210,7 @@ def _ensure_image(tag: str) -> None:
 
 
 def _docker_run_argv(
-  tag: str, name: str, proj: Path, session: Path, claude_args: list[str], *, aws: bool = False
+  tag: str, name: str, proj: Path, session: Path, command: list[str], *, aws: bool = False
 ) -> list[str]:
   home = Path.home()
   claude_dir = home / '.claude' / 'cw-sessions' / name
@@ -282,7 +282,7 @@ def _docker_run_argv(
     for var in _DOCKER_AWS_ENV:
       if os.environ.get(var) is not None:
         argv += ['-e', var]
-  return [*argv, tag, 'claude', *claude_args]
+  return [*argv, tag, *command]
 
 
 def _is_local_active(name: str) -> bool:
@@ -982,32 +982,47 @@ def _replace_container_resume_hint(name: str) -> None:
   print(f'  cw ss -c --mcp --resume {name}')
 
 
+def run_in_container(
+  name: str, command: list[str], *, aws: bool = False, drop: bool = False
+) -> int:
+  """run `command` inside a fresh cw-style container backed by workspace `name`.
+
+  builds/reuses the image, creates `var/cw/containers/<name>/`, runs `docker run
+  -it --rm` with the standard bind mounts (`/workspace`, `/host-repo:ro`,
+  `.claude` overlay, docker socket, …), then post-syncs OAuth credentials. When
+  `drop=True`, removes the workspace dir and per-session claude state on exit.
+  Returns the container's exit code.
+  """
+  proj = _project_root()
+  session = proj / 'var' / 'cw' / 'containers' / name
+  session.mkdir(parents=True, exist_ok=True)
+  tag = _image_tag()
+  _ensure_image(tag)
+  home = Path.home()
+  claude_dir = home / '.claude' / 'cw-sessions' / name
+  result = subprocess.run(_docker_run_argv(tag, name, proj, session, command, aws=aws))
+  # post-run sync: if the container refreshed its OAuth token during the
+  # session, propagate the fresher copy back to the host so the next session
+  # (host or container) sees the live tokens.
+  _sync_credentials(claude_dir / '.credentials.json', home / '.claude' / '.credentials.json')
+  if drop:
+    shutil.rmtree(session, ignore_errors=True)
+    if claude_dir.is_dir():
+      shutil.rmtree(claude_dir, ignore_errors=True)
+    log.info('removed container workspace %s', name)
+  return result.returncode
+
+
 def cw(name: str, container: bool, drop: bool, aws: bool, claude_args: list[str]) -> int:
   if container and os.environ.get('CW_IN_CONTAINER') is not None:
     log.info('already inside a container; falling back to host mode')
     container = False
 
   if container:
-    proj = _project_root()
-    session = proj / 'var' / 'cw' / 'containers' / name
-    session.mkdir(parents=True, exist_ok=True)
-    tag = _image_tag()
-    _ensure_image(tag)
-    home = Path.home()
-    claude_dir = home / '.claude' / 'cw-sessions' / name
-    result = subprocess.run(_docker_run_argv(tag, name, proj, session, claude_args, aws=aws))
-    # post-run sync: if the container refreshed its OAuth token during the
-    # session, propagate the fresher copy back to the host so the next session
-    # (host or container) sees the live tokens.
-    _sync_credentials(claude_dir / '.credentials.json', home / '.claude' / '.credentials.json')
-    if not drop and result.returncode == 0:
+    code = run_in_container(name, ['claude', *claude_args], aws=aws, drop=drop)
+    if not drop and code == 0:
       _replace_container_resume_hint(name)
-    if drop:
-      shutil.rmtree(session)
-      if claude_dir.is_dir():
-        shutil.rmtree(claude_dir)
-      log.info('removed container workspace %s', name)
-    return result.returncode
+    return code
 
   proj = _project_root()
   os.chdir(proj)

@@ -10,3 +10,7 @@ Bros launching and managing layer — thin helpers that drive a `Bro` toward a s
 - `do_task.py` (`do-task`) — `async do_task(bro, task)`; ask a bro to fix a flow task. The `task` arg is opaque (id, dashed UUID, Notion URL, or description); the bro's system prompt is responsible for normalising it. CLI: `do-task <bro-name> <task>`
 
 All modules expose their function for library use (`from do.do import do`, `from do.call import call_raw`, `from do.do_task import do_task`) and as a CLI runnable via `python -m do.<module>` or the registered console scripts; CLIs resolve the bro name through `bro.registry.get_bro`.
+
+## Container isolation
+
+`ask` / `do-task` re-exec the bro in a throwaway `cw -c`-style container (workspace `var/cw/containers/<cli>-<bro>-<hex>/`, dropped on exit) so the bro's tools operate on `/workspace`, not host paths. `CW_IN_CONTAINER=1` short-circuits the hop; `--no-container` opts out for host-side debugging. The launch primitive is `cw.run_in_container`. Interactive `call` runs in the calling process — it needs a real TTY.
