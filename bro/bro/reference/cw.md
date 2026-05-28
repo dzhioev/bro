@@ -13,7 +13,13 @@ This document explains *how it actually works*: where things live on disk, what 
 - **`cw clean [--force] [--dry-run] [<ref> ...]`** — remove workspaces with no uncommitted or unpushed work. Without args, scans both namespaces. With explicit `<ref>`s, restricts to those (`name` for host, `c:name` for container). `--force` removes despite dirty state; `--dry-run` only prints. Safety is shared with `check-clean`.
 - **`cw check-clean [<ref>]`** — probe a single workspace (or the cwd if omitted). Exit 0 if it's safe to drop; exit 1 with reasons on stderr otherwise. The hook `.claude/hooks/check-worktree-landed.sh` calls this to populate the keep-or-drop prompt at session end.
 
-A workspace is "clean" when (a) `git status --porcelain` is empty, (b) `HEAD` is an ancestor of `origin/master`, and (c) every submodule's pinned commit is reachable from its remote default ref. For container workspaces the ancestry checks run against the host project's `.git`, with the container's `HEAD` fetched in first, because the container clone's `origin` is an HTTPS URL that the host can't reach without credentials.
+A workspace is "clean" when:
+
+- (a) `git status --porcelain` is empty,
+- (b) `HEAD` is an ancestor of `origin/master`, and
+- (c) every submodule's pinned commit is reachable from its remote default ref.
+
+For container workspaces the ancestry checks run against the host project's `.git`, with the container's `HEAD` fetched in first, because the container clone's `origin` is an HTTPS URL that the host can't reach without credentials.
 
 ## Host mode vs container mode
 
@@ -24,6 +30,7 @@ A workspace is "clean" when (a) `git status --porcelain` is empty, (b) `HEAD` is
 Runs `claude -w <name>` from the project root, with the env extended to activate the worktree's `.venv`. Claude Code itself owns the worktree lifecycle: it triggers the `.claude/hooks/worktree_create.sh` hook on first use (which is what actually does `git worktree add` plus the project-specific tweaks — `worktree-<name>` branch, `CLAUDE_BASE` marker file, `submodule.alternateLocation=superproject`), and on exit it shows the keep-or-drop prompt. `cw` itself does not directly create or remove worktrees in host mode unless `--drop` is passed (in which case it `git worktree remove --force` and `git branch -D worktree-<name>` after `claude` exits).
 
 Layout on disk:
+
 - `<project>/.claude/worktrees/<name>/` — the worktree (regular working tree with a `.git` gitfile that points at `<project>/.git/worktrees/<name>/`).
 - `<project>/.git/worktrees/<name>/CLAUDE_BASE` — marker recording the `HEAD` at worktree creation (set by `worktree_create.sh`).
 - `<project>/.claude/worktrees/<name>/.venv` — per-worktree virtualenv created on first run by `.claude/hooks/session_start.sh` (which also reflinks submodule git-dirs from the main repo to avoid re-fetching ~200M of objects).
@@ -39,6 +46,7 @@ Layout on disk:
 - `/var/run/docker.sock` (host) → same path in the container. Lets deploy scripts run `docker build`/`docker push` against the host daemon — no nested runtime — at the cost of giving in-container processes API-level control over host docker. The entrypoint reconciles the in-container `docker` group's GID with the bind-mounted socket's GID so `cw` can use it without sudo.
 
 Inside the container, the entrypoint (running as root first):
+
 1. Aligns the `cw` user's UID/GID with whoever owns `/workspace` on the host, then re-execs as `cw` (skipped on Docker for Mac when the bind mount reports root-owned via virtiofs — remapping to UID 0 would make claude refuse `--dangerously-skip-permissions`).
 2. Seeds `~/.claude/` from `/host-claude` once (skipping `sessions`/`projects`/`history.jsonl`/`cw-sessions` so transcripts from prior sessions don't leak across containers).
 3. Copies the host's `~/.gitconfig` into the writable container `$HOME` and marks `/workspace` as a safe git directory.
@@ -75,16 +83,36 @@ If `cw ss -c` is invoked from inside an already-containerised session (`CW_IN_CO
 These flags apply to `cw ss` and (with the exception of `-c` / `--drop` / `--mcp` / `--bro` / `-p`) are also exported via `cw.add_forwarded_flags` so wrappers like `dive-in` and `start-session` can pass them straight through without per-flag plumbing.
 
 - **`-c`, `--container`** — container mode (see above). Defaults off; host mode is the default.
-- **`--drop`** — remove the workspace on exit without prompting. In host mode this means `git worktree remove --force` and deleting the `worktree-<name>` branch; in container mode it means `rm -rf var/cw/containers/<name>` and `~/.claude/cw-sessions/<name>`. In host mode it also sets `CW_DROP=1` so `.claude/hooks/check-worktree-landed.sh` skips the warn-and-exit-2 dance. In container mode no `CW_DROP` is set and the var is not in `_DOCKER_FORWARD_ENV` — the hook's path guard already short-circuits inside the container (cwd is `/workspace`, not under `.claude/worktrees/`), so the dance is skipped anyway.
-- **`--mcp [http|local]`** — wire up the flow MCP server. `http` (default when the flag is bare) connects to the deployed server at `.configs/flow_mcp.json`'s `url` with a bearer token; `local` spawns a stdio process from `flow/mcp/mcp_local.json`. Without `--mcp`, no flow MCP is connected — Claude doesn't see task/project tools.
-- **`--bro <name>`** — launch a clean session under a chosen bro persona (system prompt, MCP servers, tools) using `claude --bare`, `--strict-mcp-config`, and only the bro's MCP tools. Wires the bro's MCP servers and data sources through `mcp-server bro:<name>`. **Requires `-c`** (the bro flow uses an Anthropic Console API key, not the user OAuth, and is fenced to the container). **Requires `.configs/anthropic.json`**. Mutually exclusive with `--mcp`, `--auto`, and `--resume`. `cw --bro` reads its api key from that file via `setup/print_anthropic_key.sh` (wired as `apiKeyHelper`); using `ANTHROPIC_API_KEY` instead would trigger Claude's "Detected a custom API key" prompt every session.
-- **`--auto`** — autonomous mode: passes `--dangerously-skip-permissions` to claude, switches the git identity to bro (`Bro <dzhioev+bro@gmail.com>`), and uses `.configs/cw_github_token_bro` instead of the user token. Implies `--rc`. **Requires `-c`** (a sandbox is mandatory for skip-permissions). Adds a `Land mode: PR` line to the system prompt. Cannot be combined with `--bro`.
+- **`--drop`** — remove the workspace on exit without prompting.
+
+  In host mode this means `git worktree remove --force` and deleting the `worktree-<name>` branch; in container mode it means `rm -rf var/cw/containers/<name>` and `~/.claude/cw-sessions/<name>`.
+
+  In host mode it also sets `CW_DROP=1` so `.claude/hooks/check-worktree-landed.sh` skips the warn-and-exit-2 dance. In container mode no `CW_DROP` is set and the var is not in `_DOCKER_FORWARD_ENV` — the hook's path guard already short-circuits inside the container (cwd is `/workspace`, not under `.claude/worktrees/`), so the dance is skipped anyway.
+- **`--mcp [http|local]`** — wire up the flow MCP server.
+
+  `http` (default when the flag is bare) connects to the deployed server at `.configs/flow_mcp.json`'s `url` with a bearer token; `local` spawns a stdio process from `flow/mcp/mcp_local.json`.
+
+  Without `--mcp`, no flow MCP is connected — Claude doesn't see task/project tools.
+- **`--bro <name>`** — launch a clean session under a chosen bro persona (system prompt, MCP servers, tools) using `claude --bare`, `--strict-mcp-config`, and only the bro's MCP tools. Wires the bro's MCP servers and data sources through `mcp-server bro:<name>`.
+
+  **Requires `-c`** (the bro flow uses an Anthropic Console API key, not the user OAuth, and is fenced to the container). **Requires `.configs/anthropic.json`**. Mutually exclusive with `--mcp`, `--auto`, and `--resume`.
+
+  `cw --bro` reads its api key from that file via `setup/print_anthropic_key.sh` (wired as `apiKeyHelper`); using `ANTHROPIC_API_KEY` instead would trigger Claude's "Detected a custom API key" prompt every session.
+- **`--auto`** — autonomous mode: passes `--dangerously-skip-permissions` to claude, switches the git identity to bro (`Bro <dzhioev+bro@gmail.com>`), and uses `.configs/cw_github_token_bro` instead of the user token. Implies `--rc`.
+
+  **Requires `-c`** (a sandbox is mandatory for skip-permissions). Adds a `Land mode: PR` line to the system prompt. Cannot be combined with `--bro`.
 - **`--fast`** — enables fast mode for the session (injected via `--settings '{"fastMode": true}'`). Off by default regardless of host settings, so individual `cw ss` invocations are predictable.
 - **`--aws`** — expose host AWS credentials to the container: bind-mounts `~/.aws` read-only and forwards the `AWS_*` env vars. Pre-flight check rejects the flag if neither source is present. Ignored in host mode.
 - **`--effort {low|medium|high|xhigh|max}`** — forwarded as `claude --effort` (thinking effort).
 - **`--rc`** — enables claude remote control (`--remote-control`). Off by default because it breaks Ctrl+V image paste; implied by `--auto`.
-- **`--resume`** — resume the latest Claude session in this workspace. Looks up the newest `.jsonl` in the right projects directory (`~/.claude/projects/<encoded>/` for host, `~/.claude/cw-sessions/<name>/projects/-workspace/` for container), extracts the session id from the filename stem, and adds `--resume <id>` to the claude argv. Skips the initial prompt. Cannot be combined with `--drop` or `-p/--prompt`. After a container session exits, `cw` overwrites Claude's printed resume hint (which suggests `claude --resume <id>` — only valid inside the container) with the host-side one: `cw ss -c --mcp --resume <name>`.
-- **`-p / --prompt <text>`** — the initial prompt for the session. `cw ss` prepends the auto-injected base prompts (`prompts/shared/*` + `prompts/base/*`, via `cw.py:_load_base_prompts`) using `--append-system-prompt`, and forwards the text via `--`.
+- **`--resume`** — resume the latest Claude session in this workspace.
+
+  Looks up the newest `.jsonl` in the right projects directory (`~/.claude/projects/<encoded>/` for host, `~/.claude/cw-sessions/<name>/projects/-workspace/` for container), extracts the session id from the filename stem, and adds `--resume <id>` to the claude argv. Skips the initial prompt. Cannot be combined with `--drop` or `-p/--prompt`.
+
+  After a container session exits, `cw` overwrites Claude's printed resume hint (which suggests `claude --resume <id>` — only valid inside the container) with the host-side one: `cw ss -c --mcp --resume <name>`.
+- **`-p / --prompt <text>`** — the initial prompt for the session.
+
+  `cw ss` prepends the auto-injected base prompts (`prompts/shared/*` + `prompts/base/*`, via `cw.py:_load_base_prompts`) using `--append-system-prompt`, and forwards the text via `--`.
 
 Trailing positional args after `<name>` are forwarded to `claude` verbatim (`argparse.REMAINDER`).
 

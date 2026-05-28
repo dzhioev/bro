@@ -27,6 +27,7 @@ If `--focus` is combined with `-t`, the focus client is also told to focus the r
 ### New mode (`--new`)
 
 `--new` starts a session that will *create* the task and then dive into it. The session prompt is `dive_in_new.prompt.template`, which tells Claude to:
+
 1. Collect any missing properties (name, importance, project, tags, deadline, content) from the user.
 2. Call `add_task` and treat the returned id as the target.
 3. Continue with the normal `get_task_info` / `get_page_content` flow on that new id.
@@ -71,6 +72,7 @@ Step 1 — understand the task:
 ```
 
 Slots:
+
 - `{target}` — either `the currently focused task` (focused / `-t --focus`) or `task <task_id>` (`-t` alone).
 - `{startup}` — `dive_in_focused.prompt` (call `get_focused_task` first) or `dive_in_task.prompt.template` rendered with the resolved id.
 - `{context}` — `dive_in_context.prompt`, which contains the Step 2 (gather context — project, sibling tasks, tags) and Step 3 (plan) instructions, plus the **task-closure policy** (propose `update_task status='Done'` when goal is met, don't close automatically) and the **development-log convention** (`append_page_content` with a timestamped plan summary, then key decisions, under a `## Development log` heading).
@@ -88,6 +90,7 @@ On top of that, `cw ss` injects its own auto-base prompt (`prompts/shared/*` + `
 `--resume` resumes the latest Claude session in the workspace, skipping the initial prompt entirely (you're picking up mid-conversation, not orienting Claude to the task afresh).
 
 Argparse-enforced rules in `dive_in.py:main`:
+
 - **Requires a task scope** — `-t <ref>` or `--focus`. Bare `dive-in --resume` is rejected. (You need to know which workspace to resume; the slug comes from the task.)
 - **Cannot be combined with `--new`** — `--new` creates a new task, which would create a new workspace; resuming is the opposite of new.
 - **Cannot be combined with a positional `command`** — the initial prompt is ignored on resume, so passing one would silently do nothing.
