@@ -1,6 +1,6 @@
-from bro.bro import Bro
+from bro.bro import BaseBro
 
-_REGISTRY: dict[str, Bro] = {}
+_REGISTRY: dict[str, BaseBro] = {}
 _initialized = False
 
 
@@ -14,14 +14,14 @@ def _ensure_initialized() -> None:
   init()
 
 
-def register(bro_cls: type[Bro]) -> None:
+def register(bro_cls: type[BaseBro]) -> None:
   instance = bro_cls()
   if instance.name in _REGISTRY:
     raise ValueError(f'duplicate bro name: {instance.name!r}')
   _REGISTRY[instance.name] = instance
 
 
-def get_bro(name: str) -> Bro:
+def get_bro(name: str) -> BaseBro:
   _ensure_initialized()
   bro = _REGISTRY.get(name)
   if bro is None:
@@ -29,6 +29,6 @@ def get_bro(name: str) -> Bro:
   return bro
 
 
-def list_bros() -> list[Bro]:
+def list_bros() -> list[BaseBro]:
   _ensure_initialized()
   return list(_REGISTRY.values())

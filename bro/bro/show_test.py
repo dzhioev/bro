@@ -1,6 +1,6 @@
 import pytest
 
-from bro.bro import Bro
+from bro.bro import BaseBro
 from bro.datasources.base import DataSource, Hit
 from bro.show import format_card
 from llm.mcp import FunctionTool, InProcessMCPServer, describe
@@ -40,7 +40,7 @@ class _StubSource(DataSource):
     return ''
 
 
-class _MinimalBro(Bro):
+class _MinimalBro(BaseBro):
   name = 'minimal'
   description = 'has nothing extra'
 
@@ -48,7 +48,7 @@ class _MinimalBro(Bro):
     super().__init__(system_prompt='you are minimal')
 
 
-class _FullBro(Bro):
+class _FullBro(BaseBro):
   name = 'full'
   description = 'has a data source and two MCP servers'
   reasoning_effort = 'medium'
@@ -144,7 +144,7 @@ class TestFormatCard:
       def __init__(self):
         super().__init__([FunctionTool(long_fn)])
 
-    class _LongBro(Bro):
+    class _LongBro(BaseBro):
       name = 'long'
       description = 'd'
       mcp_servers = [LongServer()]

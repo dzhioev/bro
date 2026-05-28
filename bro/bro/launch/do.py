@@ -2,13 +2,13 @@ import asyncio
 import sys
 
 import base.args
-from bro.bro import Bro, BroRaised
+from bro.bro import BaseBro, BroRaised
 from llm.tracer import Tracer
 
 __cli_name__ = 'ask'
 
 
-async def do(bro: Bro, what: str, tracer: Tracer | None = None) -> str:
+async def do(bro: BaseBro, what: str, tracer: Tracer | None = None) -> str:
   return await bro.run(what, tracer=tracer)
 
 

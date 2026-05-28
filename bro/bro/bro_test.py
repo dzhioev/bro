@@ -1,7 +1,7 @@
 import json
 import pytest
 
-from bro.bro import Bro, BroRaised, ScatterTool, Tool
+from bro.bro import BaseBro, BroRaised, ScatterTool, Tool
 from bro.datasources.base import DataSource, Hit
 from llm.llm import LLM
 from llm.mcp import FunctionTool, InProcessMCPServer, MCPServer, describe
@@ -19,7 +19,7 @@ class MockLLM(LLM):
     return self.response
 
 
-class EchoBro(Bro):
+class EchoBro(BaseBro):
   name = 'echo'
   description = 'echoes input'
 
@@ -48,7 +48,7 @@ class TestBroRun:
     class CapturingTracer(NullTracer):
       pass
 
-    class WireBro(Bro):
+    class WireBro(BaseBro):
       name = 'wire'
       description = 'd'
 
@@ -76,7 +76,7 @@ class TestBroRun:
     class ExplicitTracer(NullTracer):
       pass
 
-    class OverrideBro(Bro):
+    class OverrideBro(BaseBro):
       name = 'override'
       description = 'd'
 
@@ -99,7 +99,7 @@ class TestBroRun:
   async def test_run_passes_system_and_user_messages(self):
     llm = MockLLM()
 
-    class CaptureBro(Bro):
+    class CaptureBro(BaseBro):
       name = 'capture'
       description = 'captures messages'
 
@@ -130,7 +130,7 @@ class TestBroSend:
   async def test_send_reuses_llm(self):
     llm_instances = []
 
-    class TrackBro(Bro):
+    class TrackBro(BaseBro):
       name = 'track'
       description = 'tracks'
 
@@ -151,7 +151,7 @@ class TestBroSend:
   async def test_send_first_call_includes_system_prompt(self):
     llm = MockLLM()
 
-    class CaptureBro(Bro):
+    class CaptureBro(BaseBro):
       name = 'capture'
       description = 'captures'
 
@@ -167,14 +167,39 @@ class TestBroSend:
     messages = llm.send_calls[0]
     assert len(messages) == 2
     assert messages[0]['role'] == 'system'
-    assert messages[0]['content'].endswith('be helpful')
+    assert 'be helpful' in messages[0]['content']
     assert messages[1] == {'role': 'user', 'content': 'hi'}
+
+  @pytest.mark.asyncio
+  async def test_send_wires_explicit_tracer(self):
+    captured: list[Tracer] = []
+
+    class TracerTracer(NullTracer):
+      pass
+
+    class WireBro(BaseBro):
+      name = 'wire-send'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+      def _create_llm(self, *, interactive: bool):
+        captured.append(self._tracer)
+        return MockLLM()
+
+    explicit = TracerTracer()
+    bro = WireBro()
+    await bro.send('hi', tracer=explicit)
+    await bro.send('again')
+    assert len(captured) == 1
+    assert captured[0] is explicit
 
   @pytest.mark.asyncio
   async def test_send_subsequent_calls_only_user(self):
     llm = MockLLM()
 
-    class CaptureBro(Bro):
+    class CaptureBro(BaseBro):
       name = 'capture'
       description = 'captures'
 
@@ -196,7 +221,7 @@ class TestBroSend:
   async def test_run_does_not_affect_send_llm(self):
     llm_instances = []
 
-    class TrackBro(Bro):
+    class TrackBro(BaseBro):
       name = 'track'
       description = 'tracks'
 
@@ -220,7 +245,7 @@ class TestBroMap:
   async def test_map_returns_all_results(self):
     call_count = 0
 
-    class CountBro(Bro):
+    class CountBro(BaseBro):
       name = 'counter'
       description = 'counts'
 
@@ -287,7 +312,7 @@ class _StubSource(DataSource):
 class TestBroDataSources:
   @pytest.mark.asyncio
   async def test_data_source_mcp_server_mounted(self):
-    class SourceBro(Bro):
+    class SourceBro(BaseBro):
       name = 'with-source'
       description = 'has a data source'
       data_sources = [_StubSource()]
@@ -303,7 +328,7 @@ class TestBroDataSources:
     assert tool_names == {'stub-search', 'stub-fetch'}
 
   def test_data_source_summary_in_system_prompt(self):
-    class SourceBro(Bro):
+    class SourceBro(BaseBro):
       name = 'summary-bro'
       description = 'd'
       data_sources = [_StubSource()]
@@ -349,7 +374,7 @@ class TestBroMcpServers:
   async def test_instance_entry_exposes_its_tools(self):
     server = _make_server('a', 'b', 'c')
 
-    class InstanceBro(Bro):
+    class InstanceBro(BaseBro):
       name = 'instance'
       description = 'd'
       mcp_servers = [server]
@@ -371,7 +396,7 @@ class TestBroMcpServers:
       calls += 1
       return _make_server('a')
 
-    class CountBro(Bro):
+    class CountBro(BaseBro):
       name = 'count'
       description = 'd'
       mcp_servers = [factory]
@@ -385,7 +410,7 @@ class TestBroMcpServers:
 
   @pytest.mark.asyncio
   async def test_extend_mcp_servers_appends(self):
-    class EmptyBro(Bro):
+    class EmptyBro(BaseBro):
       name = 'empty'
       description = 'd'
 
@@ -438,7 +463,7 @@ async def _collect_tool_names(servers):
   return names
 
 
-async def _find_raise_tool(bro: Bro):
+async def _find_raise_tool(bro: BaseBro):
   for tool in await bro._service_server.list_tools():
     if tool.name == 'raise':
       return tool
@@ -480,17 +505,19 @@ class TestRaise:
     tool = await _find_raise_tool(bro)
     assert 'unclear' in tool.description
 
-  def test_interactive_system_prompt_omits_note(self):
+  def test_interactive_system_prompt_includes_note(self):
     bro = EchoBro()
     prompt = bro._system_prompt_for(interactive=True)
     assert 'non-interactive' not in prompt
-    assert prompt == bro.system_prompt
+    assert 'interactive mode' in prompt
+    assert 'clarifying question' in prompt
+    assert bro.system_prompt in prompt
 
   @pytest.mark.asyncio
   async def test_run_creates_llm_in_non_interactive_mode(self):
     captured: list[bool] = []
 
-    class CaptureBro(Bro):
+    class CaptureBro(BaseBro):
       name = 'capture-mode'
       description = 'd'
 
@@ -508,7 +535,7 @@ class TestRaise:
   async def test_send_creates_llm_in_interactive_mode(self):
     captured: list[bool] = []
 
-    class CaptureBro(Bro):
+    class CaptureBro(BaseBro):
       name = 'capture-mode'
       description = 'd'
 
@@ -524,7 +551,7 @@ class TestRaise:
 
   @pytest.mark.asyncio
   async def test_sub_bro_raise_propagates_through_parent_tool(self):
-    class RaiseBro(Bro):
+    class RaiseBro(BaseBro):
       name = 'raiser'
       description = 'always raises'
 

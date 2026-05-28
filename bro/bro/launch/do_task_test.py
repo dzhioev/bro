@@ -1,6 +1,6 @@
 import pytest
 
-from bro.bro import Bro
+from bro.bro import BaseBro
 from do.do_task import do_task
 from llm.llm import LLM
 from llm.mcp import MCPServer
@@ -18,7 +18,7 @@ class MockLLM(LLM):
     return self.response
 
 
-class RecordBro(Bro):
+class RecordBro(BaseBro):
   name = 'record'
   description = 'records inputs'
 

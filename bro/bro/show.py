@@ -1,8 +1,8 @@
-from bro.bro import Bro
+from bro.bro import BaseBro
 from llm.mcp import MCPServer
 
 
-async def format_card(bro: Bro, *, include_system_prompt: bool = False) -> str:
+async def format_card(bro: BaseBro, *, include_system_prompt: bool = False) -> str:
   parts = [f'# {bro.name}', '', bro.description, '']
   parts.extend(_identity_lines(bro))
 
@@ -22,7 +22,7 @@ async def format_card(bro: Bro, *, include_system_prompt: bool = False) -> str:
   return '\n'.join(parts) + '\n'
 
 
-def _identity_lines(bro: Bro) -> list[str]:
+def _identity_lines(bro: BaseBro) -> list[str]:
   lines = [f'- model: `{bro.model}`']
   if bro.reasoning_effort is not None:
     lines.append(f'- reasoning effort: `{bro.reasoning_effort}`')

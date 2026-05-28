@@ -1,6 +1,6 @@
 import pytest
 
-from bro.bro import Bro
+from bro.bro import BaseBro
 import bro.registry
 from bro.registry import _REGISTRY, register, get_bro, list_bros
 from llm.llm import LLM
@@ -15,7 +15,7 @@ class MockLLM(LLM):
     return ''
 
 
-class AlphaBro(Bro):
+class AlphaBro(BaseBro):
   name = 'alpha'
   description = 'alpha bro'
 
@@ -26,7 +26,7 @@ class AlphaBro(Bro):
     return MockLLM()
 
 
-class BetaBro(Bro):
+class BetaBro(BaseBro):
   name = 'beta'
   description = 'beta bro'
 

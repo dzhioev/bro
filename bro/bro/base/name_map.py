@@ -24,9 +24,7 @@ class NameMap[V]:
       normalized = _normalize(name)
       existing = self._by_normalized.get(normalized)
       if existing is not None:
-        raise ValueError(
-          f'duplicate names after normalisation: "{existing[0]}" and "{name}"'
-        )
+        raise ValueError(f'duplicate names after normalisation: "{existing[0]}" and "{name}"')
       self._by_normalized[normalized] = (name, value)
 
   def resolve(self, query: str) -> V:

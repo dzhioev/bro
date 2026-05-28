@@ -1,5 +1,5 @@
 import dev
-from bro.bro import Bro
+from bro.bros.bro import Bro
 
 SYSTEM_PROMPT = """\
 You are a software developer. You have an MCP toolset for filesystem, shell,

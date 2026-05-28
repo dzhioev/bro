@@ -77,6 +77,14 @@ _NON_INTERACTIVE_NOTE = (
   'is no one to answer it.'
 )
 
+_INTERACTIVE_NOTE = (
+  'You are running in interactive mode — there is a human on the other end '
+  'of the conversation and your reply will be followed by further turns. '
+  'When the request is unclear, ambiguous, or missing context, ask a '
+  'clarifying question instead of guessing. There is no `raise` tool here; '
+  'just describe any blocker in your reply.'
+)
+
 
 McpServerEntry = llm.mcp.MCPServer | Callable[[], llm.mcp.MCPServer]
 
@@ -85,7 +93,7 @@ def _materialize(entry: McpServerEntry) -> llm.mcp.MCPServer:
   return entry if isinstance(entry, llm.mcp.MCPServer) else entry()
 
 
-class Bro(ABC):
+class BaseBro(ABC):
   name: str
   description: str
   model: str = DEFAULT_MODEL
@@ -95,7 +103,9 @@ class Bro(ABC):
   # subclasses declare their own `system_prompt = "..."` as a class attribute;
   # `__init__` walks the MRO from base to derived and concatenates each class's
   # own contribution. so `PPPDev(Dev)` only needs to declare what PPPDev adds —
-  # Dev's prompt is picked up automatically. same for `mcp_servers`.
+  # Dev's prompt (and Bro's) are picked up automatically. same for
+  # `mcp_servers`. inherit directly from BaseBro to opt out of the concrete
+  # `Bro`'s shared defaults.
   system_prompt: str = ''
 
   _llm: LLM | None = None
@@ -116,7 +126,7 @@ class Bro(ABC):
       self._mcp_servers.append(ds.as_mcp_server())
     self._service_server: llm.mcp.MCPServer = _build_service_server()
     self._llm = None
-    # default to no-op; Bro.run() swaps in a real tracer per invocation so the
+    # default to no-op; BaseBro.run() swaps in a real tracer per invocation so the
     # LLM construction path picks it up via self._tracer.
     self._tracer: Tracer = NullTracer()
     # explicit `system_prompt=...` arg overrides MRO collection — escape hatch
@@ -147,8 +157,12 @@ class Bro(ABC):
     ]
     return await llm.send(messages)
 
-  async def send(self, message: str) -> str:
+  async def send(self, message: str, tracer: Tracer | None = None) -> str:
     if self._llm is None:
+      # tracer is locked in on first send (the LLM is constructed once and
+      # holds onto whatever tracer was set on self at that moment); later
+      # calls can't swap it. Mirrors BaseBro.run().
+      self._tracer = tracer if tracer is not None else self._make_tracer()
       self._llm = self._create_llm(interactive=True)
       messages = [
         {'role': 'system', 'content': self._system_prompt_for(interactive=True)},
@@ -176,9 +190,8 @@ class Bro(ABC):
     return [*self._mcp_servers, self._service_server]
 
   def _system_prompt_for(self, *, interactive: bool) -> str:
-    if interactive:
-      return self.system_prompt
-    return f'{self.system_prompt}\n\n{_NON_INTERACTIVE_NOTE}'
+    note = _INTERACTIVE_NOTE if interactive else _NON_INTERACTIVE_NOTE
+    return f'{self.system_prompt}\n\n{note}'
 
   def _make_tracer(self) -> Tracer:
     return BoringTracer(prefix=self.name)
@@ -194,7 +207,7 @@ class Bro(ABC):
 
 
 class Tool(llm.mcp.Tool):
-  def __init__(self, bro: Bro):
+  def __init__(self, bro: BaseBro):
     self._bro = bro
 
   @property
@@ -223,7 +236,7 @@ class Tool(llm.mcp.Tool):
 
 
 class ScatterTool(llm.mcp.Tool):
-  def __init__(self, bro: Bro, max_concurrency: int = 5):
+  def __init__(self, bro: BaseBro, max_concurrency: int = 5):
     self._bro = bro
     self._max_concurrency = max_concurrency
 

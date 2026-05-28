@@ -88,7 +88,10 @@ def _get_console() -> Any:
   if _CONSOLE is None:
     from rich.console import Console
 
-    _CONSOLE = Console(file=sys.stderr, highlight=False)
+    # `--rich` is an explicit opt-in for the colored panel format; honor it
+    # regardless of TTY detection (rich's auto-detection is brittle —
+    # subprocess wrappers and unusual $TERM values silently strip colors).
+    _CONSOLE = Console(file=sys.stderr, highlight=False, force_terminal=True)
   return _CONSOLE
 
 
@@ -124,7 +127,7 @@ class RichConsoleTracer(Tracer):
     from rich.text import Text
 
     body = Text(_truncate(text, _MESSAGE_LIMIT))
-    self._emit('assistant', body, 'white')
+    self._emit('assistant', body, 'blue')
 
   def on_tool_call(self, name: str, arguments: dict[str, Any]) -> None:
     self._emit(f'tool call · {name}', _render_json_or_text(arguments, _RESULT_LIMIT), 'cyan')

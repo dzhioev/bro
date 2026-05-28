@@ -178,16 +178,20 @@ class ChatGPT(llm.llm.LLM):
     self._openai_tools = tools_to_openai_format(tools)
     return self._openai_tools
 
-  def _emit_response_events(self, response: Response) -> None:
+  def _emit_response_events(self, response: Response, *, is_terminal: bool) -> None:
     # walk output in order so the trace mirrors the model's own sequence of
     # reasoning, interim messages, and tool calls. tool *results* are emitted
-    # by _execute_tool_calls after the call returns.
+    # by _execute_tool_calls after the call returns. on the terminal response
+    # (no more tool calls), the assistant message text IS the return value of
+    # send() — skip it here so callers don't see it twice.
     for item in response.output:
       if item.type == 'reasoning':
         for part in item.summary:
           if part.type == 'summary_text' and len(part.text) > 0:
             self.tracer.on_reasoning(part.text)
       elif item.type == 'message':
+        if is_terminal:
+          continue
         text = ''.join(c.text for c in item.content if c.type == 'output_text')
         if len(text) > 0:
           self.tracer.on_assistant_message(text)
@@ -240,7 +244,7 @@ class ChatGPT(llm.llm.LLM):
       kwargs['previous_response_id'] = self._last_response_id
 
     response = self.client.responses.create(**kwargs)
-    self._emit_response_events(response)
+    self._emit_response_events(response, is_terminal=not has_tool_calls(response))
 
     while has_tool_calls(response):
       tool_results = await self._execute_tool_calls(response)
@@ -252,7 +256,7 @@ class ChatGPT(llm.llm.LLM):
         **self._reasoning_kwargs(),
       }
       response = self.client.responses.create(**continuation_kwargs)
-      self._emit_response_events(response)
+      self._emit_response_events(response, is_terminal=not has_tool_calls(response))
 
     self._last_response_id = response.id
     return parse_response(response)

@@ -1,6 +1,6 @@
 import pytest
 
-from bro.bro import Bro
+from bro.bro import BaseBro
 from bro.datasources.base import DataSource, Hit
 from llm.mcp import FunctionTool, InProcessMCPServer, MCPServer, describe
 from mcp_server import _Aggregate, _resolve_server
@@ -28,7 +28,7 @@ def _create_ping_server() -> MCPServer:
   return InProcessMCPServer([FunctionTool(_ping)])
 
 
-class _ShimBro(Bro):
+class _ShimBro(BaseBro):
   name = 'shim-test'
   description = 'composes a ping server and a data source'
   data_sources = [_NoopSource()]
@@ -38,7 +38,7 @@ class _ShimBro(Bro):
     super().__init__(system_prompt='test')
 
 
-class _CollidingBro(Bro):
+class _CollidingBro(BaseBro):
   name = 'colliding'
   description = 'two servers that both expose ping'
   mcp_servers = [_create_ping_server, _create_ping_server]
