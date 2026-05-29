@@ -132,9 +132,7 @@ def read_file(file_path: str, offset: int = 0, limit: int = DEFAULT_LIMIT) -> st
   before_count = min(max(offset, 0), len(all_lines))
   before_bytes = sum(len(line) for line in all_lines[:before_count])
   visible = all_lines[before_count:]
-  numbered = ''.join(
-    f'{i:>5}\t{line}' for i, line in enumerate(visible, start=before_count + 1)
-  )
+  numbered = ''.join(f'{i:>5}\t{line}' for i, line in enumerate(visible, start=before_count + 1))
   return _apply_limit(
     numbered,
     limit,
@@ -203,7 +201,11 @@ def bash(command: str, limit: int = DEFAULT_LIMIT, timeout_seconds: int = 120) -
   if len(proc.stderr) > 0:
     combined = f'{combined}\n--- stderr ---\n{proc.stderr}' if len(combined) > 0 else proc.stderr
   capped = _apply_limit(combined, limit, keep='tail')
-  return f'exit_code: {proc.returncode}\n{capped}' if len(capped) > 0 else f'exit_code: {proc.returncode}'
+  return (
+    f'exit_code: {proc.returncode}\n{capped}'
+    if len(capped) > 0
+    else f'exit_code: {proc.returncode}'
+  )
 
 
 describe(
