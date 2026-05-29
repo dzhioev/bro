@@ -133,4 +133,11 @@ if [ "${CW_SKIP_VENV:-}" != "1" ]; then
   source /workspace/.venv/bin/activate
 fi
 
+# in --bro mode, surface the bro's skills to Claude Code by symlinking them into
+# .claude/skills/; --bare keeps slash-command resolution working so /skill-name
+# from chat picks them up. must run after venv activation (needs `cw` on PATH).
+if [ -n "${CW_BRO:-}" ] && [ "${CW_SKIP_VENV:-}" != "1" ]; then
+  cw populate-bro-skills "$CW_BRO" >&2
+fi
+
 exec "$@"

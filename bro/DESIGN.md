@@ -55,6 +55,8 @@ A Bro's behaviour comes from three sources, all declared on the class:
 
 The split between `mcp_servers` and `data_sources` is a contract: data sources never mutate state, so they are safe to bind to any Bro. MCP servers may mutate state and are chosen per Bro.
 
+A Bro can additionally declare **skills** — named procedures backed by markdown files under `<bro_pkg>/skills/*.md` with YAML frontmatter. Skills compose along the MRO like `mcp_servers` (derived overrides parent on name), the base class auto-appends a `## Available skills` block to the system prompt, and a built-in `skill(name)` service tool returns the named skill's body for the LLM to follow. Skill files use the same `SKILL.md` shape Claude Code consumes, so the same file is the source of truth across surfaces.
+
 ## Sub-agents
 
 A Bro can be exposed as an MCP tool that other Bros call. Two shapes, both in `bro/bro.py`:

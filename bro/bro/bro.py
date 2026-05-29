@@ -1,5 +1,6 @@
 import asyncio
 import json
+import sys
 from abc import ABC
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -45,6 +46,61 @@ def _render_data_sources(sources: list[DataSource]) -> str:
   return '\n'.join(lines)
 
 
+def _collect_skills(classes: list[type]) -> dict[str, Path]:
+  # walk classes in base→derived order; for each class located in a real package
+  # (__file__ is an __init__.py), collect *.md skills from <pkg>/skills/.
+  # later writes overwrite earlier ones, so derived classes win on name collision.
+  # framework classes (BaseBro in bro/bro.py) and ad-hoc test subclasses are
+  # naturally skipped because their __file__ is not an __init__.py.
+  found: dict[str, Path] = {}
+  for cls in classes:
+    module = sys.modules.get(cls.__module__)
+    module_file = getattr(module, '__file__', None) if module is not None else None
+    if module_file is None:
+      continue
+    file_path = Path(module_file).resolve()
+    if file_path.name != '__init__.py':
+      continue
+    skills_dir = file_path.parent / 'skills'
+    if not skills_dir.is_dir():
+      continue
+    for path in sorted(skills_dir.glob('*.md')):
+      found[path.stem] = path
+  return found
+
+
+def _parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
+  # parse `---`-delimited YAML frontmatter. only flat one-line key:value pairs
+  # are supported — the skill format we use, same as Claude Code's SKILL.md.
+  # returns ({}, text) if no frontmatter; otherwise (kv-dict, body).
+  if not text.startswith('---\n'):
+    return ({}, text)
+  end = text.find('\n---\n', 4)
+  if end < 0:
+    return ({}, text)
+  fm: dict[str, str] = {}
+  for line in text[4:end].splitlines():
+    if ':' not in line:
+      continue
+    key, _, value = line.partition(':')
+    fm[key.strip()] = value.strip()
+  return (fm, text[end + 5 :])
+
+
+def _render_skills(skills: list[tuple[str, str]]) -> str:
+  lines = [
+    '## Available skills',
+    '',
+    'You have the following named skills available. To invoke one, call the '
+    "`skill` tool with its name — the tool returns the skill's markdown body, "
+    'which you then execute.',
+    '',
+  ]
+  for name, desc in skills:
+    lines.append(f'- **{name}** — {desc}')
+  return '\n'.join(lines)
+
+
 class BroRaised(llm.mcp.ToolControlSignal):
   """raised by the `raise` service tool to abort a Bro run."""
 
@@ -69,12 +125,24 @@ _RAISE_DESCRIPTION = (
 )
 
 
-def _build_service_server() -> llm.mcp.MCPServer:
-  return llm.mcp.InProcessMCPServer(
-    [
-      llm.mcp.FunctionTool(_raise, name='raise', description=_RAISE_DESCRIPTION),
-    ]
-  )
+_SKILL_DESCRIPTION = (
+  'load a named skill and execute its body. pass `name` matching one of the '
+  'skills listed under `## Available skills` in your system prompt. returns the '
+  "skill's markdown body — follow its steps. fails if the name is unknown."
+)
+
+
+def _build_service_server(bro: 'BaseBro') -> llm.mcp.MCPServer:
+  tools: list[llm.mcp.Tool] = [
+    llm.mcp.FunctionTool(_raise, name='raise', description=_RAISE_DESCRIPTION),
+  ]
+  if len(bro.skills) > 0:
+
+    def skill(name: str) -> str:
+      return bro.get_skill_body(name)
+
+    tools.append(llm.mcp.FunctionTool(skill, name='skill', description=_SKILL_DESCRIPTION))
+  return llm.mcp.InProcessMCPServer(tools)
 
 
 _NON_INTERACTIVE_NOTE = (
@@ -144,7 +212,7 @@ class BaseBro(ABC):
     self._mcp_servers: list[llm.mcp.MCPServer] = list(self._declared_mcp)
     for ds in self.data_sources:
       self._mcp_servers.append(ds.as_mcp_server())
-    self._service_server: llm.mcp.MCPServer = _build_service_server()
+    self._service_server: llm.mcp.MCPServer = _build_service_server(self)
     self._llm = None
     # default to no-op; BaseBro.run() swaps in a real tracer per invocation so the
     # LLM construction path picks it up via self._tracer.
@@ -160,7 +228,38 @@ class BaseBro(ABC):
     parts.extend(prompt_parts)
     if len(self.data_sources) > 0:
       parts.append(_render_data_sources(self.data_sources))
+    descriptions = self.skill_descriptions()
+    if len(descriptions) > 0:
+      parts.append(_render_skills(descriptions))
     self.system_prompt = '\n\n'.join(parts)
+
+  @property
+  def skills(self) -> dict[str, Path]:
+    # walks <pkg>/skills/*.md along the MRO (base→derived); derived classes
+    # override parents on name collision. computed on each access — the FS walk
+    # is cheap and avoids stale state if a skill file is added at runtime.
+    return _collect_skills(list(reversed(type(self).__mro__)))
+
+  def get_skill_body(self, name: str) -> str:
+    # return the markdown body of the named skill with frontmatter stripped.
+    # raises KeyError if the name is not one of `self.skills`.
+    skills = self.skills
+    path = skills.get(name)
+    if path is None:
+      available = ', '.join(sorted(skills)) if len(skills) > 0 else '(none)'
+      raise KeyError(f'no skill named {name!r}; available: {available}')
+    _, body = _parse_frontmatter(path.read_text())
+    return body.strip()
+
+  def skill_descriptions(self) -> list[tuple[str, str]]:
+    # return (name, description) pairs for each available skill, in the same
+    # order as `self.skills`. description comes from the frontmatter; empty
+    # string if missing.
+    result: list[tuple[str, str]] = []
+    for name, path in self.skills.items():
+      fm, _ = _parse_frontmatter(path.read_text())
+      result.append((name, fm.get('description', '')))
+    return result
 
   @classmethod
   def create(cls, llm: LLMSpec) -> Self:

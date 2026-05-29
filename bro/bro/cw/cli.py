@@ -66,6 +66,7 @@ def _load_base_prompts() -> str:
 
 
 _DOCKER_FORWARD_ENV = (
+  'CW_BRO',
   'CW_COMMAND',
   'CW_TASK_ID',
   'CW_TOKEN_FILE',
@@ -879,6 +880,10 @@ def start_session(
       os.environ['GITHUB_TOKEN'] = token_path.read_text().strip()
 
   if bro is not None:
+    # the container entrypoint reads CW_BRO and runs `cw populate-bro-skills`
+    # after venv activation, so claude code's slash-command discovery picks up
+    # the bro's skills from .claude/skills/<name>/SKILL.md symlinks.
+    os.environ['CW_BRO'] = bro
     claude_args = [*_bro_claude_argv(bro), *claude_args]
     if prompt is not None:
       claude_args = [*claude_args, '--', prompt]
@@ -919,6 +924,41 @@ _BRO_MCP_SERVER_NAME = 'bro'
 _BRO_API_KEY_HELPER = '/host-repo/setup/print_anthropic_key.sh'
 
 
+def _populate_bro_skills(proj: Path, bro_name: str) -> None:
+  """populate <proj>/.claude/skills/<name>/SKILL.md as relative symlinks into the
+  named bro's `bro/bros/<bro>/skills/<name>.md` files. used by `cw ss --bro`
+  to surface a bro's skills to Claude Code's slash-command discovery — `--bare`
+  keeps skill resolution working, so populated symlinks are picked up by
+  `/skill-name` typed in chat.
+
+  cleanup is symlink-aware: any existing `<name>/SKILL.md` that's a symlink is
+  removed (and its parent dir cleaned up if empty) before recreating. static
+  skills (regular SKILL.md files) are left untouched.
+  """
+  from bro.registry import get_bro
+
+  bro = get_bro(bro_name)
+  skills_dir = proj / '.claude' / 'skills'
+  skills_dir.mkdir(parents=True, exist_ok=True)
+  for child in skills_dir.iterdir():
+    if not child.is_dir():
+      continue
+    skill_md = child / 'SKILL.md'
+    if skill_md.is_symlink():
+      skill_md.unlink()
+      try:
+        child.rmdir()
+      except OSError:
+        pass
+  for name, src in bro.skills.items():
+    target_dir = skills_dir / name
+    target_dir.mkdir(parents=True, exist_ok=True)
+    link = target_dir / 'SKILL.md'
+    rel = os.path.relpath(src, link.parent)
+    link.symlink_to(rel)
+    log.info('populated .claude/skills/%s/SKILL.md → %s', name, rel)
+
+
 def _bro_claude_argv(bro_name: str) -> list[str]:
   """build the clean claude argv for `cw ss --bro <bro_name>`.
 
@@ -955,7 +995,6 @@ def _bro_claude_argv(bro_name: str) -> list[str]:
     '',
     '--allowed-tools',
     f'mcp__{_BRO_MCP_SERVER_NAME}__*',
-    '--disable-slash-commands',
   ]
 
 
@@ -1115,6 +1154,12 @@ def main(argv=None):
     'command', nargs=argparse.REMAINDER, help='command + args to exec (default: bash)'
   )
 
+  populate = subparsers.add_parser(
+    'populate-bro-skills',
+    help="symlink the named bro's skills into .claude/skills/ for Claude Code slash-command discovery (run from the --bro container entrypoint)",
+  )
+  populate.add_argument('bro_name', help='registered bro name (e.g. ppp-dev)')
+
   args = parser.parse(argv)
   cmd = args.pop('cmd')
 
@@ -1138,6 +1183,9 @@ def main(argv=None):
     return 0 if clean_ else 1
   if cmd == 'exec':
     return exec_in_workspace(name=args['name'], cmd=args['command'])
+  if cmd == 'populate-bro-skills':
+    _populate_bro_skills(_project_root(), args['bro_name'])
+    return 0
   assert cmd == 'ss'
   if args['auto'] and not args['container']:
     parser.error('--auto requires --container')

@@ -93,7 +93,7 @@ These flags apply to `cw ss` and (with the exception of `-c` / `--drop` / `--mcp
   `http` (default when the flag is bare) connects to the deployed server at `.configs/flow_mcp.json`'s `url` with a bearer token; `local` spawns a stdio process from `flow/mcp/mcp_local.json`.
 
   Without `--mcp`, no flow MCP is connected — Claude doesn't see task/project tools.
-- **`--bro <name>`** — launch a clean session under a chosen bro persona (system prompt, MCP servers, tools) using `claude --bare`, `--strict-mcp-config`, and only the bro's MCP tools. Wires the bro's MCP servers and data sources through `mcp-server bro:<name>`.
+- **`--bro <name>`** — launch a clean session under a chosen bro persona (system prompt, MCP servers, tools) using `claude --bare`, `--strict-mcp-config`, and only the bro's MCP tools. Wires the bro's MCP servers and data sources through `mcp-server bro:<name>`. The bro's skills (`bro/bros/<bro>/skills/*.md`, MRO-merged) are symlinked into `.claude/skills/<name>/SKILL.md` by the container entrypoint (`cw populate-bro-skills $CW_BRO`, triggered by the forwarded `CW_BRO` env var) so claude's `--bare` slash-command discovery picks them up — type `/<name>` in chat to invoke.
 
   **Requires `-c`** (the bro flow uses an Anthropic Console API key, not the user OAuth, and is fenced to the container). **Requires `.configs/anthropic.json`**. Mutually exclusive with `--mcp`, `--auto`, and `--resume`.
 
@@ -126,6 +126,7 @@ Wrappers and hooks rely on a small set of env vars:
 
 - `CW_NAME` — workspace name. Set by `cw` when launching the container (`-e CW_NAME=<name>`). The container entrypoint uses it to pick the branch name (`worktree-$CW_NAME`).
 - `CW_COMMAND` — the user-visible `cw ss …` invocation, reconstructed by `start_session` for telemetry and resume hints. Defaulted into `PPP_SHELL_COMMAND` if that's not already set.
+- `CW_BRO` — set by `start_session` when `--bro <name>` is passed; the container entrypoint reads it and runs `cw populate-bro-skills "$CW_BRO"` after venv activation to symlink the bro's skills into `.claude/skills/`.
 - `CW_TASK_ID` — set by `dive-in` when it has resolved a task; consumed by `setup/claude_commit_footer.py` to add a `Task: <url>` line to commit messages.
 - `CW_TOKEN_FILE` — selects which `.configs/cw_github_token*` to bind-mount as `/run/secrets/github_token`. Defaults to `cw_github_token`; `--auto` switches it to `cw_github_token_bro`.
 - `CW_IN_CONTAINER=1` — set by the Dockerfile. Detected by `cw.py:cw` to fall back to host mode when nesting would be requested, and by `.claude/hooks/session_start.sh` to skip the host-only worktree provisioning.
