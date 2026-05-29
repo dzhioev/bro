@@ -1,8 +1,9 @@
 import asyncio
 import json
 from abc import ABC
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Self
 
 import llm.mcp
 from bro.datasources.base import DataSource
@@ -10,6 +11,15 @@ from llm.llm import LLM, get_llm
 from llm.tracer import BoringTracer, NullTracer, Tracer
 
 DEFAULT_MODEL = 'gpt-5'
+
+
+@dataclass(frozen=True)
+class LLMSpec:
+  # a model paired with its settings — settings are model-specific (e.g.
+  # service_tier is OpenAI-only), so they always travel bound to a model.
+  model: str
+  settings: dict[str, object] = field(default_factory=dict)
+
 
 _SHARED_PROMPTS_DIR = Path(__file__).resolve().parent.parent / 'prompts' / 'shared'
 
@@ -98,6 +108,11 @@ class BaseBro(ABC):
   description: str
   model: str = DEFAULT_MODEL
   reasoning_effort: str | None = None
+  # LLM-specific knobs (e.g. service_tier) splatted straight into the LLM
+  # constructor. class-level defaults are MRO-merged (base→derived, derived
+  # wins) like mcp_servers; per-instance overrides go through `create()`.
+  # adding a new knob touches only the LLM class — not BaseBro or get_llm.
+  llm_settings: dict[str, object] = {}
   data_sources: list[DataSource] = []
   mcp_servers: list[McpServerEntry] = []
   # subclasses declare their own `system_prompt = "..."` as a class attribute;
@@ -113,6 +128,7 @@ class BaseBro(ABC):
   def __init__(self, system_prompt: str | None = None):
     mcp_entries: list[McpServerEntry] = []
     prompt_parts: list[str] = []
+    merged_settings: dict[str, object] = {}
     for cls in reversed(type(self).__mro__):
       raw_mcp = cls.__dict__.get('mcp_servers')
       if raw_mcp is not None:
@@ -120,6 +136,10 @@ class BaseBro(ABC):
       raw_prompt = cls.__dict__.get('system_prompt')
       if isinstance(raw_prompt, str) and len(raw_prompt) > 0:
         prompt_parts.append(raw_prompt)
+      raw_settings = cls.__dict__.get('llm_settings')
+      if raw_settings is not None:
+        merged_settings.update(raw_settings)
+    self.llm_settings = merged_settings
     self._declared_mcp: list[llm.mcp.MCPServer] = [_materialize(e) for e in mcp_entries]
     self._mcp_servers: list[llm.mcp.MCPServer] = list(self._declared_mcp)
     for ds in self.data_sources:
@@ -141,6 +161,17 @@ class BaseBro(ABC):
     if len(self.data_sources) > 0:
       parts.append(_render_data_sources(self.data_sources))
     self.system_prompt = '\n\n'.join(parts)
+
+  @classmethod
+  def create(cls, llm: LLMSpec) -> Self:
+    # factory for a construction-time LLMSpec override — applied after the bro's
+    # own __init__, so subclass constructors never need to know about it. the
+    # settings win over the class default (and over reasoning_effort); the spec
+    # keeps model-specific settings bound to a model.
+    bro = cls()
+    bro.model = llm.model
+    bro.llm_settings = {**bro.llm_settings, **llm.settings}
+    return bro
 
   def extend_mcp_servers(self, servers: list[llm.mcp.MCPServer]) -> None:
     self._mcp_servers.extend(servers)
@@ -197,12 +228,17 @@ class BaseBro(ABC):
     return BoringTracer(prefix=self.name)
 
   def _create_llm(self, *, interactive: bool) -> LLM:
+    # reasoning_effort is a first-class knob but rides in the same settings bag;
+    # an explicit llm_settings override wins over the class default.
+    settings = dict(self.llm_settings)
+    if self.reasoning_effort is not None:
+      settings.setdefault('reasoning_effort', self.reasoning_effort)
     return get_llm(
       'chat_gpt',
       model=self.model,
       mcp_servers=self._mcp_servers_for(interactive=interactive),
-      reasoning_effort=self.reasoning_effort,
       tracer=self._tracer,
+      **settings,
     )
 
 

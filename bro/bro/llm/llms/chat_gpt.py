@@ -144,6 +144,7 @@ class ChatGPT(llm.llm.LLM):
     model: str = 'gpt-5',
     mcp_servers: list[MCPServer] | None = None,
     reasoning_effort: ReasoningEffort | None = None,
+    service_tier: str | None = None,
     tracer: Tracer | None = None,
   ):
     with open(config_path, 'r') as f:
@@ -153,6 +154,7 @@ class ChatGPT(llm.llm.LLM):
       model=model,
       mcp_servers=mcp_servers,
       reasoning_effort=reasoning_effort,
+      service_tier=service_tier,
       tracer=tracer,
     )
 
@@ -162,6 +164,7 @@ class ChatGPT(llm.llm.LLM):
     model: str = 'gpt-5',
     mcp_servers: list[MCPServer] | None = None,
     reasoning_effort: ReasoningEffort | None = None,
+    service_tier: str | None = None,
     tracer: Tracer | None = None,
   ):
     super().__init__(mcp_servers, tracer=tracer)
@@ -170,6 +173,7 @@ class ChatGPT(llm.llm.LLM):
     self._openai_tools: list[ToolParam] | None = None
     self._last_response_id: str | None = None
     self._reasoning_effort = reasoning_effort
+    self._service_tier = service_tier
 
   async def _resolve_openai_tools(self) -> list[ToolParam]:
     if self._openai_tools is not None:
@@ -230,6 +234,13 @@ class ChatGPT(llm.llm.LLM):
     # something worth summarising.
     return {'reasoning': {'effort': self._reasoning_effort, 'summary': 'auto'}}
 
+  def _service_tier_kwargs(self) -> dict:
+    # 'priority' trades a higher per-token price for faster, more consistent
+    # generation at the same model/quality — the analog of Claude Code's /fast.
+    if self._service_tier is None:
+      return {}
+    return {'service_tier': self._service_tier}
+
   async def send(self, messages: list[dict]) -> str:
     openai_tools = await self._resolve_openai_tools()
     api_input: list[ResponseInputItemParam] = [convert_message(msg) for msg in messages]
@@ -239,6 +250,7 @@ class ChatGPT(llm.llm.LLM):
       'input': api_input,
       'tools': openai_tools,
       **self._reasoning_kwargs(),
+      **self._service_tier_kwargs(),
     }
     if self._last_response_id is not None:
       kwargs['previous_response_id'] = self._last_response_id
@@ -254,6 +266,7 @@ class ChatGPT(llm.llm.LLM):
         'input': tool_results,
         'tools': openai_tools,
         **self._reasoning_kwargs(),
+        **self._service_tier_kwargs(),
       }
       response = self.client.responses.create(**continuation_kwargs)
       self._emit_response_events(response, is_terminal=not has_tool_calls(response))
