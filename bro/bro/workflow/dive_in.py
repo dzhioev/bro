@@ -26,7 +26,9 @@ def _shell_quote(s: str) -> str:
   return "'" + s.replace("'", "'\\''") + "'"
 
 
-_NOTION_URL_RE = re.compile(r'https?://(?:www\.)?notion\.(?:so|site)/.+-([0-9a-f]{32})(?:\?.*)?$')
+_NOTION_URL_RE = re.compile(
+  r'https?://(?:[\w-]+\.)?notion\.(?:so|site|com)/.+-([0-9a-f]{32})(?:\?.*)?$'
+)
 _UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
 
 

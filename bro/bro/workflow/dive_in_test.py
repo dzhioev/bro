@@ -36,6 +36,14 @@ class TestResolveTaskId:
     url = f'http://www.notion.so/dzhioev/some-task-{HEX}'
     assert _resolve_task_id(url) == UUID
 
+  def test_app_notion_com_url(self):
+    url = f'https://app.notion.com/p/dzhioev/some-task-{HEX}?source=copy_link'
+    assert _resolve_task_id(url) == UUID
+
+  def test_notion_com_url(self):
+    url = f'https://notion.com/dzhioev/some-task-{HEX}'
+    assert _resolve_task_id(url) == UUID
+
   def test_invalid_ref_raises(self):
     with pytest.raises(ValueError, match='--task must be a Notion URL or a UUID task ID'):
       _resolve_task_id('not-a-valid-ref')
