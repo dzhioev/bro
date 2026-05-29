@@ -13,7 +13,7 @@ class TestResolveTaskId:
     assert _resolve_task_id(UUID) == UUID
 
   def test_notion_so_url(self):
-    url = f'https://www.notion.so/dzhioev/some-task-{HEX}'
+    url = f'https://www.notion.so/workspace/some-task-{HEX}'
     assert _resolve_task_id(url) == UUID
 
   def test_notion_site_url(self):
@@ -21,27 +21,39 @@ class TestResolveTaskId:
     assert _resolve_task_id(url) == UUID
 
   def test_url_with_query_string(self):
-    url = f'https://www.notion.so/dzhioev/some-task-{HEX}?source=copy_link'
+    url = f'https://www.notion.so/workspace/some-task-{HEX}?source=copy_link'
     assert _resolve_task_id(url) == UUID
 
   def test_url_with_shell_escaped_query_string(self):
-    url = f'https://www.notion.so/dzhioev/some-task-{HEX}\\?source\\=copy_link'
+    url = f'https://www.notion.so/workspace/some-task-{HEX}\\?source\\=copy_link'
     assert _resolve_task_id(url) == UUID
 
   def test_url_without_www(self):
-    url = f'https://notion.so/dzhioev/some-task-{HEX}'
+    url = f'https://notion.so/workspace/some-task-{HEX}'
     assert _resolve_task_id(url) == UUID
 
   def test_http_url(self):
-    url = f'http://www.notion.so/dzhioev/some-task-{HEX}'
+    url = f'http://www.notion.so/workspace/some-task-{HEX}'
     assert _resolve_task_id(url) == UUID
 
   def test_app_notion_com_url(self):
-    url = f'https://app.notion.com/p/dzhioev/some-task-{HEX}?source=copy_link'
+    url = f'https://app.notion.com/p/workspace/some-task-{HEX}?source=copy_link'
     assert _resolve_task_id(url) == UUID
 
   def test_notion_com_url(self):
-    url = f'https://notion.com/dzhioev/some-task-{HEX}'
+    url = f'https://notion.com/workspace/some-task-{HEX}'
+    assert _resolve_task_id(url) == UUID
+
+  def test_url_without_slug(self):
+    url = f'https://www.notion.so/{HEX}'
+    assert _resolve_task_id(url) == UUID
+
+  def test_workspace_prefixed_url_without_slug(self):
+    url = f'https://www.notion.so/workspace/{HEX}'
+    assert _resolve_task_id(url) == UUID
+
+  def test_app_notion_com_url_without_slug(self):
+    url = f'https://app.notion.com/p/workspace/{HEX}?source=copy_link'
     assert _resolve_task_id(url) == UUID
 
   def test_invalid_ref_raises(self):
