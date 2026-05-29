@@ -18,7 +18,7 @@ This document explains the modes, slug derivation, the `/fix`-seeding rules, and
 
 ### Task mode (`-t / --task <ref>`)
 
-`-t` accepts either a Notion URL (`https://www.notion.so/.../-<hex>(?:\?…)?`) or a UUID (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`). URLs get normalised to UUIDs by `_resolve_task_id` — the 32-hex tail of the URL is split into the canonical 8-4-4-4-12 layout. A bare 32-hex string is **not** accepted (would be ambiguous with a future ref shape). Backslash-escaped query strings (e.g. shell-pasted `\?source\=copy_link`) are tolerated.
+`-t` accepts either a Notion URL or a UUID (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`). URL forms accepted: `https://[www.|app.]notion.{so,com,site}/[<path>/][<slug>-]<32hex>(?:\?…)?` — the slug prefix and the workspace/path prefix are both optional, so root-level (`notion.so/<hex>`), workspace-prefixed without slug (`notion.so/<ws>/<hex>`), and share URLs (`app.notion.com/p/<ws>/<slug>-<hex>`) all parse. URLs get normalised to UUIDs by `_resolve_task_id` — the 32-hex tail is split into the canonical 8-4-4-4-12 layout. A bare 32-hex string (no URL prefix) is **not** accepted (would be ambiguous with a future ref shape). Backslash-escaped query strings (e.g. shell-pasted `\?source\=copy_link`) are tolerated.
 
 The first user message becomes `/fix <original-task-ref>` — the URL or UUID exactly as the user typed it. The skill body resolves it and calls `get_task_info` / `get_page_content` itself.
 
