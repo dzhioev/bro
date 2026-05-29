@@ -1,6 +1,6 @@
 # dev tools reference
 
-Shared behaviour for tools exposed by `dev.MCPServer` (`read_file`, `write_file`, `edit_file`, `bash`, `grep`, `glob`, `read_reference`).
+Shared behaviour for the dev MCP server tools (`read_file`, `write_file`, `edit_file`, `bash`, `grep`, `glob`, `read_reference`).
 Per-tool descriptions are intentionally terse and point here for the shared rules.
 
 ## Output cap (`limit`)

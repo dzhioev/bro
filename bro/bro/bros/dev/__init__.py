@@ -1,5 +1,5 @@
-import dev
 from bro.bros.bro import Bro
+from bro.bros.dev.mcp import MCPServer
 
 SYSTEM_PROMPT = """\
 You are a software developer. You have an MCP toolset for filesystem, shell,
@@ -29,5 +29,5 @@ Caution:
 class Dev(Bro):
   name = 'dev'
   description = 'generic software developer with file + shell + search tools'
-  mcp_servers = [dev.MCPServer()]
+  mcp_servers = [MCPServer()]
   system_prompt = SYSTEM_PROMPT

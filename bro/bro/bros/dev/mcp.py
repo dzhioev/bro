@@ -7,7 +7,7 @@ LLM (chat_gpt) reaches them through the same ToolRegistry that wraps
 `flow.MCPServer()` or `infra.MCPServer()`. Same shape as `infra/mcp.py`.
 
 Shared behaviour (output `limit`, skipped-content markers, fat-finger clamp)
-lives in `dev/REFERENCE.md` so per-tool `describe()` text stays terse and the
+lives in sibling `REFERENCE.md` so per-tool `describe()` text stays terse and the
 LLM can call `read_reference` once to learn the rules. Add new shared concepts
 there, not in each tool's description.
 """

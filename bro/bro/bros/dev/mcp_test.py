@@ -3,7 +3,7 @@ import tempfile
 
 import pytest
 
-from dev.mcp import (
+from bro.bros.dev.mcp import (
   DEFAULT_LIMIT,
   MAX_LIMIT,
   MCPServer,
