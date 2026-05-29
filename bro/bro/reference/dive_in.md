@@ -1,8 +1,8 @@
 # dive-in
 
-`dive-in` is a thin wrapper around `cw ss` that turns "I want to work on this task" into a ready-to-go Claude Code session: it picks the workspace name from the task, composes an initial prompt that orients Claude toward the task, and forwards into `cw ss --mcp` with the right flags.
+`dive-in` is a thin wrapper around `cw ss` that turns "I want to work on this task" into a ready-to-go Claude Code session: it picks the workspace name from the task, seeds `/fix <task-ref>` as the first user message (so the `ppp-dev` bro's `fix` skill orients Claude toward the task), and forwards into `cw ss --mcp` with the right flags.
 
-This document explains the modes, slug derivation, prompt composition, and the rules around `--host` and `--resume`. The source of truth is `dive_in.py` (which also has unit tests in `dive_in_test.py`).
+This document explains the modes, slug derivation, the `/fix`-seeding rules, and the rules around `--host` and `--resume`. The source of truth is `dive_in.py` (which also has unit tests in `dive_in_test.py`).
 
 ## Modes
 
@@ -14,27 +14,24 @@ This document explains the modes, slug derivation, prompt composition, and the r
 
 ### Focused mode (`--focus`)
 
-`dive-in --focus` (no `-t`, no `--new`) reads the currently focused task from the focus client (`flow/focus/client/client.py`). If nothing is focused, it logs an error and exits 1 — there is no implicit fallback to "any task". The dive-in prompt is built from `prompts/dive_in.prompt.template` with the `dive_in_focused.prompt` startup body, which tells Claude to call `get_focused_task` → `get_task_info` → `get_page_content`.
+`dive-in --focus` (no `-t`, no `--new`) reads the currently focused task from the focus client (`flow/focus/client/client.py`). If nothing is focused, it logs an error and exits 1 — there is no implicit fallback to "any task". The first user message becomes `/fix --focus`, which tells the `fix` skill to call `get_focused_task` → `get_task_info` → `get_page_content`.
 
 ### Task mode (`-t / --task <ref>`)
 
 `-t` accepts either a Notion URL (`https://www.notion.so/.../-<hex>(?:\?…)?`) or a UUID (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`). URLs get normalised to UUIDs by `_resolve_task_id` — the 32-hex tail of the URL is split into the canonical 8-4-4-4-12 layout. A bare 32-hex string is **not** accepted (would be ambiguous with a future ref shape). Backslash-escaped query strings (e.g. shell-pasted `\?source\=copy_link`) are tolerated.
 
-The startup is `dive_in_task.prompt.template`, which inlines the resolved task id so Claude can call `get_task_info("<id>")` / `get_page_content("<id>")` directly without rediscovering the id.
+The first user message becomes `/fix <original-task-ref>` — the URL or UUID exactly as the user typed it. The skill body resolves it and calls `get_task_info` / `get_page_content` itself.
 
-If `--focus` is combined with `-t`, the focus client is also told to focus the resolved task before the session starts — this is the canonical way to "switch to this task and dive in" in one command. In that case the startup becomes `dive_in_focused.prompt` and the target text becomes "the currently focused task", so the prompt stays consistent with what's actually focused.
+If `--focus` is combined with `-t`, the focus client is also told to focus the resolved task before the session starts — this is the canonical way to "switch to this task and dive in" in one command. In that case the first message becomes `/fix --focus` instead (focus was just set, so the focused form is equivalent and slightly cleaner).
 
 ### New mode (`--new`)
 
-`--new` starts a session that will *create* the task and then dive into it. The session prompt is `dive_in_new.prompt.template`, which tells Claude to:
+`--new` starts a session that will *create* the task and then dive into it. The first user message becomes `/fix --new` (optionally `/fix --new <seed>` if a positional `command` is present, and `/fix --new <seed> --focus` if `--focus` is also passed). The `fix` skill body tells Claude to:
 
 1. Collect any missing properties (name, importance, project, tags, deadline, content) from the user.
 2. Call `add_task` and treat the returned id as the target.
 3. Continue with the normal `get_task_info` / `get_page_content` flow on that new id.
-
-If the positional `command` is present, it's threaded into the template as "Initial idea from the user: `<command>`" so Claude has the seed without prompting the user for it from scratch.
-
-If `--focus` is combined with `--new`, an instruction is appended to the prompt telling Claude to call `set_focus` on the newly created task's id after creation.
+4. If `--focus` was passed, call `set_focus` on the newly created task's id.
 
 `-t` and `--new` are mutually exclusive (argparse-enforced); `--focus` is orthogonal and combines with either or stands alone.
 
@@ -60,30 +57,20 @@ The reason this isn't just "pass `-c` through" is that container is the safer / 
 
 ## Initial-prompt composition
 
-The initial prompt that gets passed via `cw ss -p` is built from `prompts/dive_in.prompt.template`:
+`dive-in` seeds the first user message as a `/fix …` slash command and lets the `fix` skill body (`bro/bros/ppp_dev/skills/fix.md`) carry the workflow — resolve → context → plan → log → implement → verify → hand off to `/pr`. The mapping from CLI form to message is:
 
-```
-Dive into {target} and figure out how to accomplish it.
+- `dive-in -t <ref>` → `/fix <ref>`
+- `dive-in -t <ref> --focus` → `set_focus(<ref>)` (focus client), then `/fix --focus`
+- `dive-in --focus` → `/fix --focus`
+- `dive-in --new` → `/fix --new`
+- `dive-in --new <seed>` → `/fix --new <seed>`
+- `dive-in --new <seed> --focus` → `/fix --new <seed> --focus`
 
-Step 1 — understand the task:
-{startup}
+If a positional `command` is present alongside a task scope (`-t` or bare `--focus`), it gets appended as `Once you understand the task, <command>`. This lets you say `dive-in -t URL "draft a PR description"` and have it threaded through the task-orientation flow.
 
-{context}
-```
+For bare mode, the prompt is just the `command` string verbatim — no `/fix` wrapping.
 
-Slots:
-
-- `{target}` — either `the currently focused task` (focused / `-t --focus`) or `task <task_id>` (`-t` alone).
-- `{startup}` — `dive_in_focused.prompt` (call `get_focused_task` first) or `dive_in_task.prompt.template` rendered with the resolved id.
-- `{context}` — `dive_in_context.prompt`, which contains the Step 2 (gather context — project, sibling tasks, tags) and Step 3 (plan) instructions, plus the **task-closure policy** (propose `update_task status='Done'` when goal is met, don't close automatically) and the **development-log convention** (`append_page_content` with a timestamped plan summary, then key decisions, under a `## Development log` heading).
-
-If a positional `command` is present alongside a task scope, it gets appended as: `Once you understand the task, <command>`. This lets you say `dive-in -t URL "draft a PR description"` and have it threaded through the task-orientation flow.
-
-For `--new`, the prompt comes from `dive_in_new.prompt.template` instead (which embeds the seed idea, instructs Claude to add the task, and concatenates `dive_in_context.prompt` as `{context}`).
-
-For bare mode, the prompt is just the `command` string verbatim — no template wrapping.
-
-On top of that, `cw ss` injects its own auto-base prompt (`prompts/shared/*` + `prompts/base/*`) into the system prompt — that's where the environment-awareness and interaction-policy rules live. `dive-in` doesn't need to know about it; it's appended by `cw.py:_load_base_prompts`.
+For the skill to be discoverable by Claude Code's slash-command resolution, `dive-in` sets `CW_BRO=ppp-dev` in the environment. The container entrypoint reads `CW_BRO` and runs `cw populate-bro-skills "$CW_BRO"`, which symlinks the bro's skills (`/fix`, plus the inherited `/pr` and `/land` from `dev`) into `<proj>/.claude/skills/<name>/SKILL.md`. In `--host` mode `.claude/hooks/session_start.sh` does the same. The bro's `system_prompt` is **not** injected into the dive-in session — Claude Code runs with the project's normal system prompt (`prompts/shared/*` + `prompts/base/*`), and only the bro's skills hop the surface boundary.
 
 ## `--resume`
 
@@ -105,7 +92,8 @@ When resuming, `dive-in` still resolves the task id (and, with `--focus`, still 
 
 ## Env-var handoff
 
-- `CW_TASK_ID` — set to the resolved task id in any mode that has one (focused, `-t`, `-t --focus`). Picked up by `setup/claude_commit_footer.py` to insert `Task: <notion-url>` into commit messages.
+- `CW_TASK_ID` — set to the resolved task id in any mode that has one (focused, `-t`, `-t --focus`). Picked up by `setup/claude_commit_footer.py` to insert `Task: <notion-url>` into commit messages, and by the `/pr` skill to build the commit footer.
+- `CW_BRO` — set unconditionally to `ppp-dev` so the container entrypoint (`setup/container/entrypoint.sh`) and the host-mode `session_start.sh` hook symlink the bro's skills into `.claude/skills/`, making `/fix`, `/pr`, and `/land` discoverable by Claude Code's slash-command resolution.
 - `PPP_SHELL_COMMAND` — set (if not already set) to the user-facing reconstruction of the dive-in invocation. Read by `prompts/base/environment.md` so Claude can self-detect that it was launched via `dive-in` (and whether `-t` / `--focus` / `--new` was used) without needing to be told.
 
 The user-facing `dive-in` reconstruction is built explicitly in `dive_in.py` (not via `cw.add_forwarded_flags`'s reconstruct) so that env-detection sees `dive-in`, not the underlying `cw ss`.

@@ -1,2 +1,0 @@
-- get_task_info("{task_id}") for full metadata
-- get_page_content("{task_id}") for the task body

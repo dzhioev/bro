@@ -10,7 +10,6 @@ import cw
 from base import log
 from base.args import Parser
 from flow.focus.client.client import default_client
-from prompts import get_prompt
 
 
 def _slugify(name: str) -> str:
@@ -68,6 +67,31 @@ def _pick_fresh_name(base: str) -> str:
     i += 1
 
 
+def _fix_command(task_arg: str | None, focus: bool, new: bool, command: str | None) -> str:
+  """build the `/fix …` first-user-message for a non-bare dive-in.
+
+  Mirrors the CLI: task ref + optional `--focus`; or `--new` + optional seed +
+  optional `--focus`; or bare `--focus`. The `/fix` skill body interprets the
+  args.
+  """
+  parts = ['/fix']
+  if new:
+    parts.append('--new')
+    if command is not None:
+      parts.append(command)
+    if focus:
+      parts.append('--focus')
+  elif task_arg is not None and focus:
+    # focus was already set on the resolved task; use the focused form so the
+    # skill body reads it back from get_focused_task.
+    parts.append('--focus')
+  elif task_arg is not None:
+    parts.append(task_arg)
+  else:
+    parts.append('--focus')
+  return ' '.join(parts)
+
+
 def dive_in(
   forwarded: list[str],
   dry_run: bool = False,
@@ -80,15 +104,6 @@ def dive_in(
 ) -> int:
   prompt: str | None = None
   if new:
-    hint = f'- Initial idea from the user: {command}\n' if command is not None else ''
-    prompt = get_prompt(
-      'dive_in_new.prompt.template', hint=hint, context=get_prompt('dive_in_context.prompt')
-    )
-    if focus:
-      prompt = (
-        f'{prompt}\n\nAfter creating the task, call set_focus on its id so it becomes the '
-        'currently focused task.'
-      )
     name = _slugify(command) if command is not None else ''
     if len(name) == 0:
       name = 'dive-in-new'
@@ -96,6 +111,7 @@ def dive_in(
     if fresh != name:
       log.info('workspace %s is in use, picking %s', name, fresh)
     name = fresh
+    prompt = _fix_command(task_arg=None, focus=focus, new=True, command=command)
   elif task is not None or focus:
     if task is not None:
       task_id = _resolve_task_id(task)
@@ -104,19 +120,6 @@ def dive_in(
         log.info('focused task: %s', task_id)
       task_name = _resolve_task_name(task_id)
       log.info('task: %s', task_name)
-      if not resume:
-        if focus:
-          startup = get_prompt('dive_in_focused.prompt')
-          target = 'the currently focused task'
-        else:
-          startup = get_prompt('dive_in_task.prompt.template', task_id=task_id)
-          target = f'task {task_id}'
-        prompt = get_prompt(
-          'dive_in.prompt.template',
-          target=target,
-          startup=startup,
-          context=get_prompt('dive_in_context.prompt'),
-        )
     else:
       state = default_client().get_focus()
       if state is None:
@@ -125,25 +128,25 @@ def dive_in(
       task_id = state.task.id
       task_name = state.task.name
       log.info('focused: %s', task_name)
-      if not resume:
-        prompt = get_prompt(
-          'dive_in.prompt.template',
-          target='the currently focused task',
-          startup=get_prompt('dive_in_focused.prompt'),
-          context=get_prompt('dive_in_context.prompt'),
-        )
 
     name = _slugify(task_name)
     if len(name) == 0:
       name = 'dive-in'
 
-    if not resume and command is not None:
-      prompt = f'{prompt}\n\nOnce you understand the task, {command}'
+    if not resume:
+      prompt = _fix_command(task_arg=task, focus=focus, new=False, command=None)
+      if command is not None:
+        prompt = f'{prompt}\n\nOnce you understand the task, {command}'
 
     os.environ['CW_TASK_ID'] = task_id
   else:
     prompt = command
     name = _pick_fresh_name('dive-in')
+
+  # surface ppp-dev's skills (/fix, /pr, /land) via .claude/skills/ symlinks.
+  # in container mode the entrypoint reads CW_BRO and runs `cw populate-bro-skills`;
+  # in host mode .claude/hooks/session_start.sh does the same.
+  os.environ['CW_BRO'] = 'ppp-dev'
 
   ppp_parts = ['dive-in', *forwarded]
   if host:

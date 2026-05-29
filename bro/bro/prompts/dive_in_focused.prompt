@@ -1,3 +1,0 @@
-- get_focused_task to find what is currently focused (if nothing is focused, say so and stop)
-- get_task_info for full metadata
-- get_page_content for the task body

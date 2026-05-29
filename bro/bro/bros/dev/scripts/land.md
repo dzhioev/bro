@@ -1,6 +1,6 @@
 ---
 name: land
-description: This skill should be used when the user signals that an open PR should be merged into master — "land it", "land", "merge it", "merge the PR", "merge to master". Squash-merges the open PR for the current branch via `gh pr merge --squash --delete-branch`, reusing the original commit's subject and body. Appends a `### Merged` entry to the task page and closes the task to Done unless the user explicitly said to keep it open. In `--auto` sessions, `/pr` chains into this skill automatically on APPROVED. Direct push to master (no PR) is a one-liner — see `bro/bros/ppp_dev/__init__.py` "Land" step — not this skill.
+description: This skill should be used when the user signals that an open PR should be merged into master — "land it", "land", "merge it", "merge the PR", "merge to master". Squash-merges the open PR for the current branch via `gh pr merge --squash --delete-branch`, reusing the original commit's subject and body. Appends a `### Merged` entry to the task page and closes the task to Done unless the user explicitly said to keep it open. In `--auto` sessions, `/pr` chains into this skill automatically on APPROVED. Direct push to master (no PR) is a one-liner (`git fetch origin && git rebase origin/master && git push origin HEAD:master`) — not this skill.
 version: 1.0.0
 ---
 
