@@ -58,4 +58,9 @@ def run(
   except BroRaised as e:
     print(f'raised: {e.reason}', file=sys.stderr)
     return 1
+  except KeyError as e:
+    # raised by bro.get_skill_body when the `/<name>` prefix in input names
+    # a skill the bro does not expose; the message includes the available list.
+    print(str(e.args[0]) if len(e.args) > 0 else str(e), file=sys.stderr)
+    return 1
   print(result)

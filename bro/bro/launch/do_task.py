@@ -9,9 +9,11 @@ __cli_name__ = 'do-task'
 
 
 async def do_task(bro: BaseBro, task: str, tracer: Tracer | None = None) -> str:
-  # the task argument is opaque to us — id, dashed UUID, Notion URL, or free text
-  # describing the task. the bro's system prompt is responsible for normalising it
-  return await do(bro, f'fix the flow task: {task}', tracer=tracer)
+  # `do-task <bro> <ref>` is shorthand for `ask <bro> /fix <ref>`. Pass an
+  # already-slash-prefixed input straight through so users can override (e.g.
+  # `do-task ppp-dev "/fix --focus"`).
+  what = task if task.lstrip().startswith('/') else f'/fix {task}'
+  return await do(bro, what, tracer=tracer)
 
 
 def main(argv=None) -> int | None:
