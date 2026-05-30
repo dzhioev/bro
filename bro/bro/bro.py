@@ -40,8 +40,7 @@ def _render_data_sources(sources: list[DataSource]) -> str:
     lines.append(f'- **{ds.name}** — {ds.summary}')
   lines.append('')
   lines.append(
-    'Each source exposes `<name>-search` and `<name>-fetch` tools. '
-    'Pass the original user query to `<name>-fetch` so the source can focus the result.'
+    "Each source's tools are prefixed with `<name>-`; see the tool listings for details."
   )
   return '\n'.join(lines)
 

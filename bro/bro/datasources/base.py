@@ -31,6 +31,11 @@ class DataSource(ABC):
   summary: str
 
   @abstractmethod
+  def as_mcp_server(self) -> MCPServer: ...
+
+
+class SearchableDataSource(DataSource):
+  @abstractmethod
   async def search(self, query: str, limit: int = 5) -> list[Hit]: ...
 
   @abstractmethod
@@ -41,7 +46,7 @@ class DataSource(ABC):
 
 
 class _SearchTool(Tool):
-  def __init__(self, source: DataSource):
+  def __init__(self, source: SearchableDataSource):
     self._source = source
 
   @property
@@ -76,7 +81,7 @@ class _SearchTool(Tool):
 
 
 class _FetchTool(Tool):
-  def __init__(self, source: DataSource):
+  def __init__(self, source: SearchableDataSource):
     self._source = source
 
   @property

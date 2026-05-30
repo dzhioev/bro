@@ -1,12 +1,12 @@
 import pytest
 
 from bro.bro import BaseBro
-from bro.datasources.base import DataSource, Hit
+from bro.datasources.base import Hit, SearchableDataSource
 from llm.mcp import FunctionTool, InProcessMCPServer, MCPServer, describe
 from mcp_server import _Aggregate, _resolve_server
 
 
-class _NoopSource(DataSource):
+class _NoopSource(SearchableDataSource):
   name = 'noop'
   summary = 'no-op data source'
 

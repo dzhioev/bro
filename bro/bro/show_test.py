@@ -1,7 +1,7 @@
 import pytest
 
 from bro.bro import BaseBro
-from bro.datasources.base import DataSource, Hit
+from bro.datasources.base import Hit, SearchableDataSource
 from bro.show import format_card
 from llm.mcp import FunctionTool, InProcessMCPServer, describe
 
@@ -29,7 +29,7 @@ class ServerXZ(InProcessMCPServer):
     super().__init__(_make_tools('x', 'z'))
 
 
-class _StubSource(DataSource):
+class _StubSource(SearchableDataSource):
   name = 'stub'
   summary = 'a stub data source for tests'
 

@@ -4,7 +4,7 @@ import aiohttp
 from pydantic import BaseModel
 
 from base import log
-from bro.datasources.base import DataSource, Hit
+from bro.datasources.base import Hit, SearchableDataSource
 from mu import Text, mu
 from prompts import get_prompt
 
@@ -17,7 +17,7 @@ class _Summary(BaseModel):
   summary: str
 
 
-class Wikipedia(DataSource):
+class Wikipedia(SearchableDataSource):
   name = 'wikipedia'
   summary = (
     'Wikipedia articles — general-knowledge reference covering people, places, events, '

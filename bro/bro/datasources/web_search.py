@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 import configs
 from base import log
-from bro.datasources.base import DataSource, Hit
+from bro.datasources.base import Hit, SearchableDataSource
 from mu import Text, mu
 from prompts import get_prompt
 
@@ -22,7 +22,7 @@ class _Summary(BaseModel):
   summary: str
 
 
-class WebSearch(DataSource):
+class WebSearch(SearchableDataSource):
   name = 'web-search'
   summary = (
     'Web search — open-ended search across the public web (Brave Search index). '

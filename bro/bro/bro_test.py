@@ -5,7 +5,7 @@ import types
 import pytest
 
 from bro.bro import BaseBro, BroRaised, ScatterTool, Tool
-from bro.datasources.base import DataSource, Hit
+from bro.datasources.base import Hit, SearchableDataSource
 from llm.llm import LLM
 from llm.mcp import FunctionTool, InProcessMCPServer, MCPServer, describe
 from llm.tracer import NullTracer, Tracer
@@ -297,7 +297,7 @@ class TestTool:
     assert result == 'tool result'
 
 
-class _StubSource(DataSource):
+class _StubSource(SearchableDataSource):
   name = 'stub'
   summary = 'a stub data source for tests'
 

@@ -34,11 +34,12 @@ Bro is the agent system: independent specialised agents (a "Bro") each run as a 
   - `devoops/` — autonomous service deploys with a dry-run safety reflex; tools live in `infra/mcp.py`
   - `dev/` — generic developer with file/shell/search tools from sibling `mcp.py` (exposes `read_file`, `write_file`, `edit_file`, `bash`, `grep`, `glob`, `read_reference` as `FunctionTool`s; `bash` and `grep` shell out, file ops are thin Python; `MCPServer(*names)` is the `InProcessMCPServer` subclass — same shape as `flow.MCPServer` / `infra.MCPServer`; see sibling `REFERENCE.md` for the shared output cap / skipped-content markers / fat-finger clamp the LLM fetches via `read_reference`)
   - `ppp_dev/` — PPP-specific developer: inherits `dev/` + `/pr` + `/land`, adds the flow toolset and the `/fix` skill (task-driven workflow); `dive-in` seeds `/fix` as its first user message
-- `datasources/` — `DataSource` ABC + connectors to read-only sources (books, films, web references). Each connector exposes `<name>-search` / `<name>-fetch` tools via `as_mcp_server()`. Currently:
+- `datasources/` — `DataSource` ABC + connectors to read-only sources. The base ABC declares only `name`, `summary`, and `as_mcp_server()`; the `SearchableDataSource` subclass adds the canonical `search` + `fetch` pair and exposes them as `<name>-search` / `<name>-fetch` tools. Subclass `DataSource` directly for sources that don't fit the search/fetch shape and override `as_mcp_server()`. Currently:
   - `wikipedia.py` — Wikipedia REST API, query-aware fetch via `mu`
   - `tmdb.py` — movies + series; needs `.configs/tmdb.json`
   - `open_library.py` — books, no auth
   - `web_search.py` — Brave Search; needs `.configs/brave.json`
+  - `current_time.py` — current local date and time; single `current-time-get-time` tool
 - `registry.py` — process-wide registry (`register`, `get_bro`, `list_bros`); first lookup triggers `bros.init()`
 - `run.py` (`bro`) — CLI: `bro run <name> <input>`, `bro list`, `bro show <name> [--system-prompt]` (markdown info card; renderer in `show.py`)
 - `server/server.py` (`bro.server.server`) — aiohttp wrapper exposing the `assistant` bro on `POST /v1/chat/completions` (OpenAI-compatible). Used by the iOS app
@@ -72,4 +73,4 @@ Create `bros/<name>/__init__.py` with `from bro.bros.bro import Bro` and a `clas
 
 ## Adding a DataSource
 
-Subclass `bro.datasources.base.DataSource`, set `name` (slug) and `summary` (one-line; injected into the system prompt of every Bro that uses it), and implement `async search(query, limit) -> list[Hit]` and `async fetch(id, query=None) -> str`. `fetch` receives the original user query so the connector can return a focused summary (see `wikipedia.py` for the `mu`-based pattern). When an upstream HTTP/network failure makes the source temporarily unusable, raise `bro.datasources.base.SourceUnavailable(source, reason)` rather than letting raw transport exceptions escape — the agent loop turns it into a tool result the model can route around. Bind to a Bro by declaring `data_sources = [YourSource()]` on its class.
+Set `name` (slug) and `summary` (one-line; injected into the system prompt of every Bro that uses it). For the common search/fetch shape, subclass `SearchableDataSource` and implement `async search(query, limit) -> list[Hit]` and `async fetch(id, query=None) -> str`; `fetch` receives the original user query so the connector can return a focused summary (see `wikipedia.py` for the `mu`-based pattern). For other shapes (e.g. a singleton fact like `current_time.py`), subclass `DataSource` directly and override `as_mcp_server()` to expose whatever tools fit. When an upstream HTTP/network failure makes the source temporarily unusable, raise `bro.datasources.base.SourceUnavailable(source, reason)` rather than letting raw transport exceptions escape — the agent loop turns it into a tool result the model can route around. Bind to a Bro by declaring `data_sources = [YourSource()]` on its class.
