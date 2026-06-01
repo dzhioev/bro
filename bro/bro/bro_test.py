@@ -5,6 +5,7 @@ import types
 import pytest
 
 from bro.bro import BaseBro, BroRaised, ScatterTool, Tool
+from bro.bros.ppp_dev import PPPDev
 from bro.datasources.base import Hit, SearchableDataSource
 from llm.llm import LLM
 from llm.mcp import FunctionTool, InProcessMCPServer, MCPServer, describe
@@ -960,3 +961,15 @@ class TestSkillServiceTool:
     skill_tool = next(t for t in tools if t.name == 'skill')
     with pytest.raises(KeyError):
       await skill_tool.call({'name': 'missing'})
+
+
+class TestPPPDevSkillsMRO:
+  def test_inherits_dev_skills_and_adds_own(self):
+    # `pr` and `land` come from `Dev`'s skills/ via the MRO walk; `fix` is
+    # declared in `PPPDev`'s own skills/. All three must surface in the
+    # rendered system prompt.
+    prompt = PPPDev().system_prompt
+    assert '## Available skills' in prompt
+    assert '**pr**' in prompt
+    assert '**land**' in prompt
+    assert '**fix**' in prompt
