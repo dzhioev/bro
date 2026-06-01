@@ -6,7 +6,7 @@ import logging
 import sys
 import time
 import urllib.request
-from typing import Any
+from typing import Any, Callable
 
 from base.args import Parser
 
@@ -48,10 +48,111 @@ def _fetch_reviews(owner: str, repo: str, pr: int, token: str) -> list[dict[str,
   return _gh_get(url, token)
 
 
+def _fetch_review_inline_comments(
+  owner: str, repo: str, pr: int, review_id: int, token: str
+) -> list[dict[str, Any]]:
+  url = (
+    f'https://api.github.com/repos/{owner}/{repo}/pulls/{pr}/reviews/'
+    f'{review_id}/comments?per_page=100'
+  )
+  return _gh_get(url, token)
+
+
 def _owner_login(owner: str, repo: str, token: str) -> str:
   url = f'https://api.github.com/repos/{owner}/{repo}'
   data: dict[str, Any] = _gh_get(url, token)
   return data['owner']['login']
+
+
+def _comment_event(comment: dict[str, Any]) -> dict[str, Any]:
+  return {
+    'event': 'comment',
+    'id': comment['id'],
+    'user': comment.get('user', {}).get('login', ''),
+    'body': comment.get('body', ''),
+    'path': comment.get('path'),
+    'url': comment.get('html_url', ''),
+  }
+
+
+def _bundled_comment(comment: dict[str, Any]) -> dict[str, Any]:
+  return {
+    'id': comment['id'],
+    'path': comment.get('path'),
+    'line': comment.get('line'),
+    'body': comment.get('body', ''),
+    'url': comment.get('html_url', ''),
+  }
+
+
+def emit_cycle(
+  owner: str,
+  repo: str,
+  pr: int,
+  token: str,
+  seen_comment_ids: set[int],
+  seen_review_ids: set[int],
+  is_actionable: Callable[[str], bool],
+) -> list[dict[str, Any]]:
+  """one polling cycle: fetch comments + reviews, return events to emit.
+
+  mutates `seen_comment_ids` / `seen_review_ids` so subsequent cycles skip
+  what was already emitted. inline review comments are bundled into the
+  parent `review` event under a `comments` key — this kills the race where
+  the inline-comments endpoint lags the reviews endpoint by milliseconds, so
+  an APPROVED review with an attached "ship after fix" comment would
+  otherwise emit as a comment-less APPROVED on one cycle and the comment on
+  the next.
+  """
+  events: list[dict[str, Any]] = []
+
+  for c in _fetch_issue_comments(owner, repo, pr, token):
+    if c['id'] in seen_comment_ids:
+      continue
+    seen_comment_ids.add(c['id'])
+    if not is_actionable(c.get('user', {}).get('login', '')):
+      continue
+    events.append(_comment_event(c))
+
+  for r in _fetch_reviews(owner, repo, pr, token):
+    if r['id'] in seen_review_ids:
+      continue
+    seen_review_ids.add(r['id'])
+    login = r.get('user', {}).get('login', '')
+    # fetch inline comments AFTER seeing the review so the window in which a
+    # comment isn't yet indexed is as small as possible. mark them seen even
+    # if the review's author is not actionable — we don't want them to fire
+    # as standalone comment events on a later cycle.
+    bundled: list[dict[str, Any]] = []
+    for c in _fetch_review_inline_comments(owner, repo, pr, r['id'], token):
+      seen_comment_ids.add(c['id'])
+      bundled.append(_bundled_comment(c))
+    if not is_actionable(login):
+      continue
+    events.append(
+      {
+        'event': 'review',
+        'id': r['id'],
+        'user': login,
+        'state': r.get('state', ''),
+        'body': r.get('body', ''),
+        'url': r.get('html_url', ''),
+        'comments': bundled,
+      }
+    )
+
+  # any inline review comments not bundled with a review fire standalone —
+  # covers replies to existing review threads and comments that became
+  # visible after the per-review fetch above.
+  for c in _fetch_review_comments(owner, repo, pr, token):
+    if c['id'] in seen_comment_ids:
+      continue
+    seen_comment_ids.add(c['id'])
+    if not is_actionable(c.get('user', {}).get('login', '')):
+      continue
+    events.append(_comment_event(c))
+
+  return events
 
 
 def poll_pr(
@@ -78,7 +179,7 @@ def poll_pr(
     seen_review_ids.add(r['id'])
   _log.info(f'existing comments: {len(seen_comment_ids)}, existing reviews: {len(seen_review_ids)}')
 
-  def _is_actionable(login: str) -> bool:
+  def is_actionable(login: str) -> bool:
     if self_login is not None and login == self_login:
       return False
     if login.endswith('[bot]'):
@@ -96,55 +197,10 @@ def poll_pr(
       print(json.dumps({'event': 'closed', 'pr': pr}), flush=True)
       return 1
 
-    for comments in (
-      _fetch_issue_comments(owner, repo, pr, token),
-      _fetch_review_comments(owner, repo, pr, token),
+    for event in emit_cycle(
+      owner, repo, pr, token, seen_comment_ids, seen_review_ids, is_actionable
     ):
-      for c in comments:
-        if c['id'] in seen_comment_ids:
-          continue
-        seen_comment_ids.add(c['id'])
-
-        login = c.get('user', {}).get('login', '')
-        if not _is_actionable(login):
-          continue
-
-        print(
-          json.dumps(
-            {
-              'event': 'comment',
-              'id': c['id'],
-              'user': login,
-              'body': c.get('body', ''),
-              'path': c.get('path'),
-              'url': c.get('html_url', ''),
-            }
-          ),
-          flush=True,
-        )
-
-    for r in _fetch_reviews(owner, repo, pr, token):
-      if r['id'] in seen_review_ids:
-        continue
-      seen_review_ids.add(r['id'])
-
-      login = r.get('user', {}).get('login', '')
-      if not _is_actionable(login):
-        continue
-
-      print(
-        json.dumps(
-          {
-            'event': 'review',
-            'id': r['id'],
-            'user': login,
-            'state': r.get('state', ''),
-            'body': r.get('body', ''),
-            'url': r.get('html_url', ''),
-          }
-        ),
-        flush=True,
-      )
+      print(json.dumps(event), flush=True)
 
     time.sleep(interval)
 

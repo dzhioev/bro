@@ -188,14 +188,16 @@ poll-pr <owner>/<repo> <pr_number> --token "$GH_TOKEN" --self "$(gh api user --j
 `poll-pr` outputs JSON-lines to stdout:
 - `{"event": "merged", "pr": N}` — PR was merged
 - `{"event": "closed", "pr": N}` — PR was closed without merging
-- `{"event": "comment", "id": N, "user": "...", "body": "...", "path": "...", "url": "..."}` — new comment from the repo owner (bot and self filtered out)
-- `{"event": "review", "id": N, "user": "...", "state": "APPROVED|CHANGES_REQUESTED|COMMENTED|DISMISSED", "body": "...", "url": "..."}` — new review
+- `{"event": "comment", "id": N, "user": "...", "body": "...", "path": "...", "url": "..."}` — new comment from the repo owner (bot and self filtered out). Standalone inline review comments (replies to existing review threads) fire here; inline comments attached to a fresh review are bundled into the `review` event instead.
+- `{"event": "review", "id": N, "user": "...", "state": "APPROVED|CHANGES_REQUESTED|COMMENTED|DISMISSED", "body": "...", "url": "...", "comments": [{"id": N, "path": "...", "line": N, "body": "...", "url": "..."}]}` — new review. `comments` is the array of inline comments attached to this review at the moment `poll-pr` saw it (typically all of them; rarely empty if the inline-comments endpoint lags the reviews endpoint — late arrivals then fire as standalone `comment` events on a later cycle).
 
 ### 15. React to review events
 
-**`comment` event** or **`review` with `state: "CHANGES_REQUESTED"`**:
+**`comment` event** or **`review` with `state: "CHANGES_REQUESTED"` or non-empty `comments`**:
 
-1. Read and understand the feedback.
+A non-empty `comments` array on an APPROVED review counts as actionable feedback too — the reviewer may be saying "ship after fix" via inline nits even when the top-level review body is empty. Read every comment in the array before chaining.
+
+1. Read and understand the feedback (review body + every `comments[]` entry).
 2. Make the requested code changes locally.
 3. Re-run tests (`./run_tests.py --no-docker` inside a container).
 4. Commit (a **new** commit, not `--amend`) with the same conventions as step 6–7.
@@ -207,15 +209,15 @@ poll-pr <owner>/<repo> <pr_number> --token "$GH_TOKEN" --self "$(gh api user --j
      gh api -X POST repos/<owner>/<repo>/pulls/comments/<comment_id>/replies -f body="..."
      ```
 
-**`review` with `state: "APPROVED"`**:
+**`review` with `state: "APPROVED"` and empty `comments`**:
 
-Approval is the signal that the PR is ready to merge. Stop polling and surface:
+Unconditional approval. Stop polling and surface:
 
 > PR approved — ready to merge. Invoke `/land` to squash and close.
 
 **In `--auto` sessions** (detect via `launch_command` from `cw banner --llm` containing `--auto`), immediately invoke `/land` to chain into the merge. **In manual sessions**, wait for the user's `/land` (or "land it") trigger.
 
-**`review` with `state: "COMMENTED"` or `"DISMISSED"`**: informational; the actionable feedback (if any) arrives via the accompanying `comment` events.
+**`review` with `state: "COMMENTED"` or `"DISMISSED"`**: informational; the actionable feedback (if any) is in this event's `comments` array or arrives via accompanying `comment` events.
 
 **`merged` / `closed`**: someone (the user, `/land`, or external action) terminated the PR. If `merged`, hand off to `/land`'s post-merge steps — append `### Merged` entry and propose closing the task. If `closed` without merge, log it and ask the user.
 
