@@ -114,13 +114,13 @@ These flags apply to `cw ss` and (with the exception of `-c` / `--drop` / `--mcp
   After a container session exits, `cw` overwrites Claude's printed resume hint (which suggests `claude --resume <id>` — only valid inside the container) with the host-side one: `cw ss -c --mcp --resume <name>`.
 - **`-p / --prompt <text>`** — the initial prompt for the session.
 
-  `cw ss` prepends the auto-injected base prompts (`prompts/shared/*` + `prompts/base/*`, via `cw.py:_load_base_prompts`) using `--append-system-prompt`, and forwards the text via `--`.
+  `cw ss` prepends the auto-injected base prompts (via `cw.py:_load_base_prompts`) using `--append-system-prompt`, and forwards the text via `--`.
 
 Trailing positional args after `<name>` are forwarded to `claude` verbatim (`argparse.REMAINDER`).
 
 ## Auto-injected system prompt
 
-For every non-bro `cw ss` session (regardless of mode), `cw.py:_load_base_prompts` builds a base prompt by concatenating, in sorted order, every file in `prompts/shared/` and `prompts/base/`. The result is appended to claude's system prompt via `--append-system-prompt`. `shared/` is also injected into bros; `base/` is Claude-Code-specific and is **not** injected when `--bro` is used (the bro flow runs `--bare` with its own `--system-prompt`).
+For every non-bro `cw ss` session (regardless of mode), `cw.py:_load_base_prompts` builds a base prompt from `prompts/shared/*` and the top-level reference docs the loader registers (see `prompts/CLAUDE.md` for the inventory). The result is appended to claude's system prompt via `--append-system-prompt`. `shared/` is also injected into every bro; the top-level reference docs are Claude-Code-specific and are **not** injected when `--bro` is used (the bro flow runs `--bare` with its own `--system-prompt`).
 
 ## Forwarded env vars
 

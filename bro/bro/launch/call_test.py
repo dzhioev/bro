@@ -254,4 +254,3 @@ def test_tui_tracer_posts_one_line_per_event():
     '✎ says: thinking out loud',
     # terminal message is skipped — ChatApp renders the reply itself
   ]
-

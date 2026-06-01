@@ -10,7 +10,7 @@ This document explains the modes, slug derivation, the `/fix`-seeding rules, and
 
 ### Bare mode (default — no task flag, no `--focus`)
 
-`dive-in` with no task-selecting flags falls through to "open a clean session, unattached to any task". The positional `command` (if any) becomes the entire initial prompt; otherwise the session starts with no prompt at all. This is the same as `cw ss --mcp -c <slug>` and is handy when you have a request to make but no task to attach to. The environment-awareness rule in `prompts/base/environment.md` tells Claude to ask what to work on in this case.
+`dive-in` with no task-selecting flags falls through to "open a clean session, unattached to any task". The positional `command` (if any) becomes the entire initial prompt; otherwise the session starts with no prompt at all. This is the same as `cw ss --mcp -c <slug>` and is handy when you have a request to make but no task to attach to. The environment-awareness rule in `prompts/environment.md` tells Claude to ask what to work on in this case.
 
 ### Focused mode (`--focus`)
 
@@ -70,7 +70,7 @@ If a positional `command` is present alongside a task scope (`-t` or bare `--foc
 
 For bare mode, the prompt is just the `command` string verbatim — no `/fix` wrapping.
 
-For the skill to be discoverable by Claude Code's slash-command resolution, `dive-in` sets `CW_BRO=ppp-dev` in the environment. Container mode: the entrypoint reads `CW_BRO` and runs `cw populate-bro-skills "$CW_BRO"`, which symlinks the bro's skills (`/fix`, plus the inherited `/pr` and `/land` from `dev`) into the workspace's `.claude/skills/<name>/SKILL.md`. Host mode: `cw.py:start_session` populates a per-session `tempfile.mkdtemp` directory and passes it to claude via `--add-dir <tmp>` so concurrent dive-in sessions on the same repo don't share `.claude/skills/`. The bro's `system_prompt` is **not** injected into the dive-in session — Claude Code runs with the project's normal system prompt (`prompts/shared/*` + `prompts/base/*`), and only the bro's skills hop the surface boundary.
+For the skill to be discoverable by Claude Code's slash-command resolution, `dive-in` sets `CW_BRO=ppp-dev` in the environment. Container mode: the entrypoint reads `CW_BRO` and runs `cw populate-bro-skills "$CW_BRO"`, which symlinks the bro's skills (`/fix`, plus the inherited `/pr` and `/land` from `dev`) into the workspace's `.claude/skills/<name>/SKILL.md`. Host mode: `cw.py:start_session` populates a per-session `tempfile.mkdtemp` directory and passes it to claude via `--add-dir <tmp>` so concurrent dive-in sessions on the same repo don't share `.claude/skills/`. The bro's `system_prompt` is **not** injected into the dive-in session — Claude Code runs with the project's normal `cw ss` system prompt, and only the bro's skills hop the surface boundary.
 
 ## `--resume`
 
@@ -94,6 +94,6 @@ When resuming, `dive-in` still resolves the task id (and, with `--focus`, still 
 
 - `CW_TASK_ID` — set to the resolved task id in any mode that has one (focused, `-t`, `-t --focus`). Picked up by `setup/claude_commit_footer.py` to insert `Task: <notion-url>` into commit messages, and by the `/pr` skill to build the commit footer.
 - `CW_BRO` — set unconditionally to `ppp-dev` so the bro's skills (`/fix`, plus the inherited `/pr` and `/land`) are surfaced to Claude Code's slash-command resolution. Container mode: the entrypoint (`setup/container/entrypoint.sh`) symlinks them into the workspace's `.claude/skills/`. Host mode: `cw.py:start_session` populates a per-session tmp dir and passes it to claude via `--add-dir`.
-- `PPP_SHELL_COMMAND` — set (if not already set) to the user-facing reconstruction of the dive-in invocation. Consumed by `cw banner` and surfaced as `launch_command` in `cw banner --llm`, which is what Claude reads at session start (see `prompts/base/environment.md`) to self-detect that it was launched via `dive-in` (and whether `-t` / `--focus` / `--new` was used).
+- `PPP_SHELL_COMMAND` — set (if not already set) to the user-facing reconstruction of the dive-in invocation. Consumed by `cw banner` and surfaced as `launch_command` in `cw banner --llm`, which is what Claude reads at session start (see `prompts/environment.md`) to self-detect that it was launched via `dive-in` (and whether `-t` / `--focus` / `--new` was used).
 
 The user-facing `dive-in` reconstruction is built explicitly in `dive_in.py` (not via `cw.add_forwarded_flags`'s reconstruct) so that env-detection sees `dive-in`, not the underlying `cw ss`.
