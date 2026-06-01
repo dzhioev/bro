@@ -43,6 +43,12 @@ def _collect_skills(classes: list[type]) -> dict[str, Path]:
   # later writes overwrite earlier ones, so derived classes win on name collision.
   # framework classes (BaseBro in bro/bro.py) and ad-hoc test subclasses are
   # naturally skipped because their __file__ is not an __init__.py.
+  # the concrete `Bro` (bro/bros/bro/__init__.py) sits at the base of every bro's
+  # MRO, so dropping a skill into `bro/bros/bro/skills/` makes it the shared
+  # skill mechanism — that skill becomes available to every bro by default,
+  # parallel to how `system_prompt` and `mcp_servers` are inherited and
+  # concatenated. derived bros can shadow it by declaring a skill of the same
+  # name in their own `skills/` dir.
   found: dict[str, Path] = {}
   for cls in classes:
     module = sys.modules.get(cls.__module__)

@@ -66,11 +66,11 @@ Create `bros/<name>/__init__.py` with `from bro.bros.bro import Bro` and a `clas
 - `mcp_servers = [flow.MCPServer()]` for the full flow toolset
 - `mcp_servers = [flow.MCPServer('add_task', 'list_tasks')]` to scope to specific tools (validated at construction)
 - `mcp_servers = [infra.MCPServer()]` for the devops toolset; same `*tool_names` API
-- `mcp_servers = [MCPServer()]` (imported from `bro.bros.dev.mcp`) for the developer toolset (read_file/write_file/edit_file/bash/grep/glob)
+- `mcp_servers = [MCPServer()]` (imported from `bro.bros.dev.mcp`) for the developer toolset (read_file/write_file/edit_file/bash/grep/glob, plus read_reference for the shared output cap / skipped-content / clamp rules)
 - Stateful servers that need a fresh instance per Bro can pass a factory: `mcp_servers = [some_factory]` where `some_factory: () -> MCPServer`
 - `mcp_servers` is also walked along the MRO and concatenated — `PPPDev(Dev)` with `mcp_servers = [flow.MCPServer()]` ends up with Dev's dev MCP server *plus* `flow.MCPServer()`.
 - `llm_spec = chat_gpt.LLMSpec(...)` (or any other provider's `LLMSpec`) overrides the LLM recipe. Per-instance overrides go through `YourBro.create(spec)`.
-- Drop markdown files into `bros/<name>/skills/*.md` (YAML frontmatter `name`, `description`, body) to declare skills the LLM can invoke via the `skill` service tool; siblings under any ancestor's `skills/` dir are inherited via the MRO walk.
+- Drop markdown files into `bros/<name>/skills/*.md` (YAML frontmatter `name`, `description`, body) to declare skills the LLM can invoke via the `skill` service tool. Skills follow the same MRO walk as `system_prompt` and `mcp_servers`: each ancestor's `skills/*.md` files contribute, but because skills are keyed by name (not concatenated), derived classes override parents on name collision (`ppp_dev/skills/fix.md` would shadow a `dev/skills/fix.md` of the same name). Anything dropped into `bros/bro/skills/` becomes available to every bro by default — the shared-skill mechanism.
 
 **Register the new bro manually** — import `YourBro` in `bros/__init__.py:init()` and append it to the list iterated there. There is no auto-discovery; the import + list entry is required for `create_bro('your-name')` to work.
 
