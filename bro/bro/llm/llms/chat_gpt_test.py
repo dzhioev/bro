@@ -146,6 +146,8 @@ class TestLLMSpec:
     import subprocess
     import sys
 
+    from base.project_root import PROJECT_ROOT
+
     script = (
       'import sys; '
       "assert 'llm.llms.chat_gpt' not in sys.modules; "
@@ -155,6 +157,6 @@ class TestLLMSpec:
       "assert spec.TYPE == 'chat_gpt'"
     )
     result = subprocess.run(
-      [sys.executable, '-c', script], capture_output=True, text=True, cwd='/workspace'
+      [sys.executable, '-c', script], capture_output=True, text=True, cwd=PROJECT_ROOT
     )
     assert result.returncode == 0, f'stderr: {result.stderr}'
