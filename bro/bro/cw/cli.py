@@ -43,6 +43,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import humanize
@@ -1102,7 +1103,9 @@ def start_session(
   if bro is not None:
     # the container entrypoint reads CW_BRO and runs `cw populate-bro-skills`
     # after venv activation, so claude code's slash-command discovery picks up
-    # the bro's skills from .claude/skills/<name>/SKILL.md symlinks.
+    # the bro's skills from .claude/skills/<name>/SKILL.md symlinks. host-mode
+    # `--bro` is unsupported (the --bare flow needs the container entrypoint to
+    # wire MCP and the api-key helper).
     os.environ['CW_BRO'] = bro
     claude_args = [*_bro_claude_argv(bro), *claude_args]
     if prompt is not None:
@@ -1130,6 +1133,20 @@ def start_session(
   if auto:
     prompt_parts.append('Land mode: PR')
   claude_args = [*claude_args, '--append-system-prompt', '\n\n'.join(prompt_parts)]
+
+  # host-mode bro skill surfacing: populate a per-session tmp dir and pass it
+  # via `--add-dir` so claude's skill discovery picks up `<dir>/.claude/skills/`.
+  # avoids the shared `<proj>/.claude/skills/` collision when multiple host
+  # sessions run on the same repo — each `_populate_bro_skills` call wipes
+  # foreign symlinks before recreating its own, which previously trampled
+  # concurrent sessions. container mode keeps writing to the workspace's
+  # `.claude/skills/` (single-session FS, no concurrency).
+  bro_env = os.environ.get('CW_BRO')
+  if not container and bro_env is not None:
+    skills_root = Path(tempfile.mkdtemp(prefix=f'cw-skills-{bro_env}-'))
+    _populate_bro_skills(skills_root, bro_env)
+    claude_args = [*claude_args, '--add-dir', str(skills_root)]
+
   if prompt is not None:
     claude_args = [*claude_args, '--', prompt]
 
@@ -1146,10 +1163,14 @@ _BRO_API_KEY_HELPER = '/host-repo/setup/print_anthropic_key.sh'
 
 def _populate_bro_skills(proj: Path, bro_name: str) -> None:
   """populate <proj>/.claude/skills/<name>/SKILL.md as relative symlinks into the
-  named bro's `bro/bros/<bro>/skills/<name>.md` files. used by `cw ss --bro`
-  to surface a bro's skills to Claude Code's slash-command discovery — `--bare`
-  keeps skill resolution working, so populated symlinks are picked up by
-  `/skill-name` typed in chat.
+  named bro's `bro/bros/<bro>/skills/<name>.md` files.
+
+  two call sites:
+   - container entrypoint (`cw populate-bro-skills $CW_BRO`) — `proj` is the
+     workspace root; the container's ephemeral FS means no concurrency concerns.
+   - host-mode `start_session` — `proj` is a per-session `tempfile.mkdtemp`
+     directory passed to claude via `--add-dir`, so concurrent dive-in sessions
+     on the same repo don't share `.claude/skills/`.
 
   cleanup is symlink-aware: any existing `<name>/SKILL.md` that's a symlink is
   removed (and its parent dir cleaned up if empty) before recreating. static
