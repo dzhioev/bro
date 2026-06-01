@@ -7,7 +7,8 @@ import sys
 from typing import Callable, Coroutine
 
 import base.args
-from bro.bro import BaseBro, BroRaised
+from bro.bro import BroRaised
+from bro.bros.bro import Bro
 from llm.tracer import Tracer
 
 
@@ -17,7 +18,7 @@ def run(
   parser_desc: str,
   arg_name: str,
   arg_help: str,
-  run_fn: Callable[[BaseBro, str, Tracer | None], Coroutine[None, None, str]],
+  run_fn: Callable[[Bro, str, Tracer | None], Coroutine[None, None, str]],
   argv: list[str] | None,
 ) -> int | None:
   parser = base.args.Parser(description=parser_desc)
@@ -45,9 +46,9 @@ def run(
       inner.append('--rich')
     return run_in_container(workspace, inner, drop=True)
 
-  from bro.registry import get_bro
+  from bro.registry import create_bro
 
-  bro = get_bro(args['bro'])
+  bro = create_bro(args['bro'])
   tracer: Tracer | None = None
   if args['rich']:
     from llm.tracer import RichConsoleTracer

@@ -1,1 +1,1 @@
-from llm.llm import LLM, get_llm
+from llm.llm import LLM, LLMSpec

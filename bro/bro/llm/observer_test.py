@@ -52,7 +52,8 @@ class TestNullTracer:
     t = NullTracer()
     # just verify they don't raise and return None
     assert t.on_reasoning('x') is None
-    assert t.on_assistant_message('x') is None
+    assert t.on_assistant_message('x', terminal=False) is None
+    assert t.on_assistant_message('x', terminal=True) is None
     assert t.on_tool_call('n', {'a': 1}) is None
     assert t.on_tool_result('n', 'r') is None
 
@@ -77,7 +78,9 @@ def _replay(tracer, events: list[tuple[str, Any]]) -> None:
     if kind == 'reasoning':
       tracer.on_reasoning(payload)
     elif kind == 'message':
-      tracer.on_assistant_message(payload)
+      tracer.on_assistant_message(payload, terminal=False)
+    elif kind == 'reply':
+      tracer.on_assistant_message(payload, terminal=True)
     elif kind == 'tool_call':
       tracer.on_tool_call(payload[0], payload[1])
     elif kind == 'tool_result':
@@ -91,9 +94,14 @@ class TestRichConsoleTracer:
     assert 'reasoning' in out
     assert 'thinking about the task' in out
 
-  def test_assistant_message_panel(self):
-    out = _render_to_string([('message', 'here is the answer')])
+  def test_interim_assistant_message_panel_labeled_assistant(self):
+    out = _render_to_string([('message', 'narrating mid-stream')])
     assert 'assistant' in out
+    assert 'narrating mid-stream' in out
+
+  def test_terminal_assistant_message_panel_labeled_reply(self):
+    out = _render_to_string([('reply', 'here is the answer')])
+    assert 'reply' in out
     assert 'here is the answer' in out
 
   def test_tool_call_panel_pretty_prints_args(self):

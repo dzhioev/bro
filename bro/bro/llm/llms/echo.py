@@ -1,6 +1,33 @@
+from dataclasses import dataclass
+from typing import ClassVar
+
 import llm.llm
 from llm.mcp import MCPServer
 from llm.tracer import Tracer
+
+
+@dataclass(frozen=True)
+class LLMSpec(llm.llm.LLMSpec):
+  """trivial spec for Echo. inherits the raising base `.fast` since echo has
+  no fast-mode equivalent."""
+
+  TYPE: ClassVar[str] = 'echo'
+
+  model: str = 'echo'
+
+  def create_llm(
+    self,
+    mcp_servers: list[MCPServer] | None = None,
+    tracer: Tracer | None = None,
+  ) -> llm.llm.LLM:
+    return Echo.create(mcp_servers=mcp_servers, tracer=tracer)
+
+  def dump(self) -> dict:
+    return {'type': self.TYPE, 'model': self.model}
+
+  @classmethod
+  def _from_dict_impl(cls, data: dict) -> 'LLMSpec':
+    return cls(model=data['model'])
 
 
 class Echo(llm.llm.LLM):

@@ -111,7 +111,7 @@ def test_main_skips_container_when_inside():
   with (
     patch.dict('os.environ', {'CW_IN_CONTAINER': '1'}),
     patch('cw.run_in_container') as run,
-    patch('bro.registry.get_bro', return_value=RecordBro(response='ok')),
+    patch('bro.registry.create_bro', return_value=RecordBro(response='ok')),
   ):
     rc = main(['ask', 'record', 'hi'])
     assert rc is None
@@ -122,7 +122,7 @@ def test_main_skips_container_with_no_container_flag():
   with (
     patch.dict('os.environ', {}, clear=False) as env,
     patch('cw.run_in_container') as run,
-    patch('bro.registry.get_bro', return_value=RecordBro(response='ok')),
+    patch('bro.registry.create_bro', return_value=RecordBro(response='ok')),
   ):
     env.pop('CW_IN_CONTAINER', None)
     rc = main(['ask', 'record', 'hi', '--no-container'])
@@ -133,7 +133,7 @@ def test_main_skips_container_with_no_container_flag():
 def test_main_surfaces_unknown_skill_as_stderr_exit_1(capsys):
   with (
     patch.dict('os.environ', {'CW_IN_CONTAINER': '1'}),
-    patch('bro.registry.get_bro', return_value=RecordBro(skills={'fix': 'FIX BODY'})),
+    patch('bro.registry.create_bro', return_value=RecordBro(skills={'fix': 'FIX BODY'})),
   ):
     rc = main(['ask', 'record', '/nope something'])
   assert rc == 1

@@ -33,16 +33,16 @@ def main(argv=None) -> int | None:
   args = parser.parse(argv)
 
   from bro.bro import BroRaised
-  from bro.registry import get_bro, list_bros
+  from bro.registry import create_bro, list_classes
 
   command = args.get('command')
   if command == 'list':
-    for b in list_bros():
-      print(f'{b.name}: {b.description}')
+    for cls in list_classes():
+      print(f'{cls.name}: {cls.description}')
     return
 
   if command == 'run':
-    b = get_bro(args['name'])
+    b = create_bro(args['name'])
     tracer = None
     if args.get('rich'):
       from llm.tracer import RichConsoleTracer
@@ -59,7 +59,7 @@ def main(argv=None) -> int | None:
   if command == 'show':
     from bro.show import format_card
 
-    b = get_bro(args['name'])
+    b = create_bro(args['name'])
     card = asyncio.run(format_card(b, include_system_prompt=args['system_prompt']))
     print(card, end='')
     return

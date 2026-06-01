@@ -6,19 +6,25 @@ from typing import Any, Callable, TextIO
 
 
 class Tracer(ABC):
-  """observe a non-interactive LLM run as it streams.
+  """observe an LLM run as it streams.
 
   events arrive in the order the model produces them: reasoning summaries,
-  assistant text emitted between tool calls, the tool calls themselves, and the
+  assistant text (interim and terminal), the tool calls themselves, and the
   tool outputs that come back. implementations are free to render, discard, or
   capture them.
+
+  `on_assistant_message`'s `terminal` flag distinguishes mid-stream chatter
+  (`terminal=False` — assistant text emitted alongside or between tool calls,
+  while the run continues) from the final reply (`terminal=True` — the text
+  that's also returned from `LLM.send`). Callers that already render the
+  return value themselves can branch on the flag to avoid double-emitting.
   """
 
   @abstractmethod
   def on_reasoning(self, text: str) -> None: ...
 
   @abstractmethod
-  def on_assistant_message(self, text: str) -> None: ...
+  def on_assistant_message(self, text: str, terminal: bool) -> None: ...
 
   @abstractmethod
   def on_tool_call(self, name: str, arguments: dict[str, Any]) -> None: ...
@@ -33,7 +39,7 @@ class NullTracer(Tracer):
   def on_reasoning(self, text: str) -> None:
     pass
 
-  def on_assistant_message(self, text: str) -> None:
+  def on_assistant_message(self, text: str, terminal: bool) -> None:
     pass
 
   def on_tool_call(self, name: str, arguments: dict[str, Any]) -> None:
@@ -123,11 +129,15 @@ class RichConsoleTracer(Tracer):
     body = Text(_truncate(text, _REASONING_LIMIT), style='italic')
     self._emit('reasoning', body, 'magenta')
 
-  def on_assistant_message(self, text: str) -> None:
+  def on_assistant_message(self, text: str, terminal: bool) -> None:
     from rich.text import Text
 
     body = Text(_truncate(text, _MESSAGE_LIMIT))
-    self._emit('assistant', body, 'blue')
+    # mark terminal panels distinctly so 'this is the answer' stands out from
+    # the rare interim narration the model emits between tool calls.
+    label = 'reply' if terminal else 'assistant'
+    style = 'bright_blue' if terminal else 'blue'
+    self._emit(label, body, style)
 
   def on_tool_call(self, name: str, arguments: dict[str, Any]) -> None:
     self._emit(f'tool call · {name}', _render_json_or_text(arguments, _RESULT_LIMIT), 'cyan')
@@ -179,8 +189,8 @@ class BoringTracer(Tracer):
   def on_reasoning(self, text: str) -> None:
     self._emit('reasoning', _truncate(text, _REASONING_LIMIT))
 
-  def on_assistant_message(self, text: str) -> None:
-    self._emit('assistant', _truncate(text, _MESSAGE_LIMIT))
+  def on_assistant_message(self, text: str, terminal: bool) -> None:
+    self._emit('reply' if terminal else 'assistant', _truncate(text, _MESSAGE_LIMIT))
 
   def on_tool_call(self, name: str, arguments: dict[str, Any]) -> None:
     rendered, _ = _format_value(arguments, _RESULT_LIMIT)

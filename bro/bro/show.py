@@ -23,9 +23,15 @@ async def format_card(bro: BaseBro, *, include_system_prompt: bool = False) -> s
 
 
 def _identity_lines(bro: BaseBro) -> list[str]:
-  lines = [f'- model: `{bro.model}`']
-  if bro.reasoning_effort is not None:
-    lines.append(f'- reasoning effort: `{bro.reasoning_effort}`')
+  # render the bro's LLM spec generically via its `dump()` — each provider's
+  # spec carries its own knobs and we don't want this module to know about any
+  # one provider. drop the `type` discriminator and any unset (None) field.
+  lines = []
+  for key, value in bro.llm_spec.dump().items():
+    if key == 'type' or value is None:
+      continue
+    label = key.replace('_', ' ')
+    lines.append(f'- {label}: `{value}`')
   return lines
 
 

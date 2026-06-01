@@ -2,6 +2,7 @@
 
 import asyncio
 from datetime import date, datetime
+from typing import Any
 
 from rich.markup import escape as rich_escape
 from textual import work
@@ -11,8 +12,13 @@ from textual.containers import Container, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Input, Static
 
-from bro.bro import BaseBro
+from bro.bros.bro import Bro
 from bro.show import format_card
+from do._trace_format import compact_value, oneline, truncate
+from llm.tracer import Tracer
+
+
+_TRACE_VALUE_LIMIT = 200
 
 
 class MessageBubble(Static):
@@ -39,6 +45,27 @@ class MessageBubble(Static):
     ts = when.strftime('%H:%M')
     body = f'{rich_escape(text)}\n[dim]{ts}[/dim]'
     super().__init__(body, classes=classes, markup=True)
+
+
+class SystemBubble(Static):
+  """dim full-width line for a trace event (reasoning / tool call / tool result).
+
+  no border, no timestamp, no max-width — these are background activity that
+  sits between user and bro bubbles. styled muted so the chat stays readable.
+  """
+
+  DEFAULT_CSS = """
+  SystemBubble {
+    width: 100%;
+    height: auto;
+    padding: 0 2;
+    margin: 0 1;
+    color: $text-muted;
+  }
+  """
+
+  def __init__(self, text: str):
+    super().__init__(rich_escape(text), markup=True)
 
 
 class BubbleRow(Container):
@@ -153,7 +180,7 @@ class ChatApp(App):
     Binding('grave_accent', 'show_stats', show=False, priority=True),
   ]
 
-  def __init__(self, bro: BaseBro, initial: str):
+  def __init__(self, bro: Bro, initial: str):
     super().__init__()
     self._bro = bro
     self._initial = initial
@@ -195,6 +222,15 @@ class ChatApp(App):
     self.query_one('#history', VerticalScroll).mount(BubbleRow(bubble, by_user=False))
     self._scroll_to_end()
 
+  def append_trace_line(self, text: str) -> None:
+    """mount a dim system bubble; called from `TUITracer` via `call_from_thread`."""
+    # the trace lives in the history stream, so the typing indicator (which is
+    # also mounted there) needs to slide back to the bottom after each event.
+    self.query_one('#history', VerticalScroll).mount(
+      SystemBubble(text), before=self._typing if self._typing is not None else None
+    )
+    self._scroll_to_end()
+
   def _maybe_add_date_separator(self) -> None:
     today = date.today()
     if self._last_date != today:
@@ -231,8 +267,9 @@ class ChatApp(App):
     # run in a thread so the OpenAI client's blocking `responses.create` call
     # doesn't freeze the Textual event loop (no user-bubble paint, no typing
     # animation). bridge UI updates back via call_from_thread.
+    tracer = TUITracer(self)
     try:
-      reply = asyncio.run(self._bro.send(text))
+      reply = asyncio.run(self._bro.send(text, tracer=tracer))
     except Exception as e:
       reply = f'[error] {type(e).__name__}: {e}'
     self.call_from_thread(self._on_reply, reply)
@@ -244,3 +281,37 @@ class ChatApp(App):
   async def action_show_stats(self) -> None:
     card = await format_card(self._bro, include_system_prompt=False)
     await self.push_screen(StatsScreen(card))
+
+
+class TUITracer(Tracer):
+  """post trace events into a `ChatApp` as dim `SystemBubble` rows.
+
+  the bro runs in a Textual worker thread; each callback hops onto the app
+  thread via `call_from_thread` to mount the bubble safely.
+  """
+
+  def __init__(self, app: 'ChatApp'):
+    self._app = app
+
+  def _post(self, text: str) -> None:
+    self._app.call_from_thread(self._app.append_trace_line, text)
+
+  def on_reasoning(self, text: str) -> None:
+    self._post(f'✎ thinking: {truncate(oneline(text), _TRACE_VALUE_LIMIT, overflow_marker=False)}')
+
+  def on_assistant_message(self, text: str, terminal: bool) -> None:
+    # skip terminal — ChatApp mounts the reply as a bro bubble via _on_reply,
+    # so emitting here would double-render.
+    if terminal:
+      return
+    self._post(f'✎ says: {truncate(oneline(text), _TRACE_VALUE_LIMIT, overflow_marker=False)}')
+
+  def on_tool_call(self, name: str, arguments: dict[str, Any]) -> None:
+    self._post(
+      f'→ {name} {truncate(compact_value(arguments), _TRACE_VALUE_LIMIT, overflow_marker=False)}'
+    )
+
+  def on_tool_result(self, name: str, result: dict[str, Any] | str) -> None:
+    self._post(
+      f'← {name} {truncate(compact_value(result), _TRACE_VALUE_LIMIT, overflow_marker=False)}'
+    )

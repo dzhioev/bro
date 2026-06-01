@@ -1,3 +1,7 @@
+import dataclasses
+from dataclasses import dataclass
+from typing import ClassVar, Literal, Self, cast, get_args
+
 import llm.llm
 import configs
 from llm.mcp import MCPServer, Tool, ToolControlSignal
@@ -26,6 +30,75 @@ import os
 import base64
 
 DEFAULT_CONFIG_PATH = os.path.join(configs.DEFAULT_CONFIGS_DIR, 'openai.json')
+
+ServiceTier = Literal['auto', 'default', 'flex', 'priority']
+_VALID_SERVICE_TIERS: frozenset[str] = frozenset(get_args(ServiceTier))
+# openai exports ReasoningEffort as Optional[Literal[...]], so unwrap the inner
+# Literal before flattening to a set of valid string values.
+_VALID_REASONING_EFFORTS: frozenset[str] = frozenset(get_args(get_args(ReasoningEffort)[0]))
+
+
+@dataclass(frozen=True)
+class LLMSpec(llm.llm.LLMSpec):
+  """spec for the OpenAI Responses API.
+
+  service_tier='priority' is the analog of Claude Code's /fast — same model
+  and quality, higher per-token price, faster and more consistent generation.
+  Toggle it through `.fast()` rather than constructing a new spec by hand.
+  """
+
+  TYPE: ClassVar[str] = 'chat_gpt'
+
+  model: str = 'gpt-5'
+  reasoning_effort: ReasoningEffort | None = None
+  service_tier: ServiceTier | None = None
+
+  def __post_init__(self):
+    if self.service_tier is not None and self.service_tier not in _VALID_SERVICE_TIERS:
+      raise ValueError(
+        f'invalid service_tier {self.service_tier!r}; expected one of '
+        f'{sorted(_VALID_SERVICE_TIERS)} or None'
+      )
+    if self.reasoning_effort is not None and self.reasoning_effort not in _VALID_REASONING_EFFORTS:
+      raise ValueError(
+        f'invalid reasoning_effort {self.reasoning_effort!r}; expected one of '
+        f'{sorted(_VALID_REASONING_EFFORTS)} or None'
+      )
+
+  def fast(self) -> Self:
+    return dataclasses.replace(self, service_tier='priority')
+
+  def create_llm(
+    self,
+    mcp_servers: list[MCPServer] | None = None,
+    tracer: Tracer | None = None,
+  ) -> llm.llm.LLM:
+    return ChatGPT.create(
+      model=self.model,
+      reasoning_effort=self.reasoning_effort,
+      service_tier=self.service_tier,
+      mcp_servers=mcp_servers,
+      tracer=tracer,
+    )
+
+  def dump(self) -> dict:
+    return {
+      'type': self.TYPE,
+      'model': self.model,
+      'reasoning_effort': self.reasoning_effort,
+      'service_tier': self.service_tier,
+    }
+
+  @classmethod
+  def _from_dict_impl(cls, data: dict) -> 'LLMSpec':
+    # __post_init__ revalidates these against the Literal types; the cast keeps
+    # the static checker happy on the JSON-derived path where pyright sees
+    # `str | None`.
+    return cls(
+      model=data['model'],
+      reasoning_effort=cast(ReasoningEffort | None, data.get('reasoning_effort')),
+      service_tier=cast(ServiceTier | None, data.get('service_tier')),
+    )
 
 
 def encode_file(path: str) -> str:
@@ -184,21 +257,20 @@ class ChatGPT(llm.llm.LLM):
 
   def _emit_response_events(self, response: Response, *, is_terminal: bool) -> None:
     # walk output in order so the trace mirrors the model's own sequence of
-    # reasoning, interim messages, and tool calls. tool *results* are emitted
-    # by _execute_tool_calls after the call returns. on the terminal response
-    # (no more tool calls), the assistant message text IS the return value of
-    # send() — skip it here so callers don't see it twice.
+    # reasoning, assistant text, and tool calls. tool *results* are emitted by
+    # _execute_tool_calls after the call returns. assistant text carries the
+    # `terminal` flag so the tracer can tell mid-stream chatter (between tool
+    # calls) apart from the final reply (the same text LLM.send returns) —
+    # callers that already render the return value can branch on it.
     for item in response.output:
       if item.type == 'reasoning':
         for part in item.summary:
           if part.type == 'summary_text' and len(part.text) > 0:
             self.tracer.on_reasoning(part.text)
       elif item.type == 'message':
-        if is_terminal:
-          continue
         text = ''.join(c.text for c in item.content if c.type == 'output_text')
         if len(text) > 0:
-          self.tracer.on_assistant_message(text)
+          self.tracer.on_assistant_message(text, terminal=is_terminal)
       elif item.type == 'function_call':
         try:
           args = json.loads(item.arguments)

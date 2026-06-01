@@ -53,9 +53,9 @@ class TestBroClaudeArgv:
     assert bro_server['args'] == ['bro:pm']
 
   def test_system_prompt_is_bros_own(self):
-    from bro.registry import get_bro
+    from bro.registry import create_bro
 
-    bro = get_bro('pm')
+    bro = create_bro('pm')
     argv = cw._bro_claude_argv('pm')
     i = argv.index('--system-prompt')
     assert argv[i + 1] == bro.system_prompt

@@ -935,9 +935,9 @@ def _populate_bro_skills(proj: Path, bro_name: str) -> None:
   removed (and its parent dir cleaned up if empty) before recreating. static
   skills (regular SKILL.md files) are left untouched.
   """
-  from bro.registry import get_bro
+  from bro.registry import create_bro
 
-  bro = get_bro(bro_name)
+  bro = create_bro(bro_name)
   skills_dir = proj / '.claude' / 'skills'
   skills_dir.mkdir(parents=True, exist_ok=True)
   for child in skills_dir.iterdir():
@@ -970,9 +970,9 @@ def _bro_claude_argv(bro_name: str) -> list[str]:
   (flagSettings, not project/local) so claude executes it without a workspace
   trust gate.
   """
-  from bro.registry import get_bro
+  from bro.registry import create_bro
 
-  bro = get_bro(bro_name)
+  bro = create_bro(bro_name)
   mcp_config = json.dumps(
     {
       'mcpServers': {

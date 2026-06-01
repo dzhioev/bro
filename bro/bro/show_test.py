@@ -1,5 +1,6 @@
 import pytest
 
+import llm.llms.chat_gpt
 from bro.bro import BaseBro
 from bro.datasources.base import Hit, SearchableDataSource
 from bro.show import format_card
@@ -51,7 +52,7 @@ class _MinimalBro(BaseBro):
 class _FullBro(BaseBro):
   name = 'full'
   description = 'has a data source and two MCP servers'
-  reasoning_effort = 'medium'
+  llm_spec = llm.llms.chat_gpt.LLMSpec(reasoning_effort='medium')
   data_sources = [_StubSource()]
   mcp_servers = [ServerAB(), ServerXZ()]
 

@@ -31,9 +31,9 @@ def _resolve_server(spec: str) -> MCPServer:
 
 
 def _compose_bro_server(name: str) -> MCPServer:
-  from bro.registry import get_bro
+  from bro.registry import create_bro
 
-  return _Aggregate(name, get_bro(name)._mcp_servers)
+  return _Aggregate(name, create_bro(name)._mcp_servers)
 
 
 class _Aggregate(MCPServer):
