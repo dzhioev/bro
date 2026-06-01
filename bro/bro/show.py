@@ -16,6 +16,12 @@ async def format_card(bro: BaseBro, *, include_system_prompt: bool = False) -> s
     for server in bro._declared_mcp:
       parts.extend(await _format_mcp_entry(server))
 
+  skills = bro.skill_descriptions()
+  if len(skills) > 0:
+    parts.extend(['', '## Skills', ''])
+    for name, desc in skills:
+      parts.append(f'- **{name}** — {_one_line(desc)}')
+
   if include_system_prompt:
     parts.extend(['', '## System prompt', '', '```', bro.system_prompt, '```'])
 

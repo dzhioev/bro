@@ -21,7 +21,7 @@ def _expand_skill_invocation(bro: BaseBro, what: str) -> str:
     return what
   name, args = match.group(1), match.group(2)
   body = bro.get_skill_body(name)
-  if args is None or args.strip() == '':
+  if args is None or len(args.strip()) == 0:
     return body
   return f'{body}\n\nARGUMENTS: {args.strip()}'
 

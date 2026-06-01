@@ -132,6 +132,46 @@ class TestFormatCard:
     assert card.endswith('\n')
 
   @pytest.mark.asyncio
+  async def test_skills_section_omitted_when_empty(self):
+    card = await format_card(_MinimalBro())
+    assert '## Skills' not in card
+
+  @pytest.mark.asyncio
+  async def test_skills_section_renders_each_skill(self):
+    class _SkillyBro(BaseBro):
+      name = 'skilly'
+      description = 'has skills'
+
+      def __init__(self):
+        super().__init__(system_prompt='hi')
+
+      def skill_descriptions(self) -> list[tuple[str, str]]:
+        return [('pr', 'open a PR'), ('land', 'merge an approved PR')]
+
+    card = await format_card(_SkillyBro())
+    assert '## Skills' in card
+    assert '- **pr** — open a PR' in card
+    assert '- **land** — merge an approved PR' in card
+
+  @pytest.mark.asyncio
+  async def test_skills_long_description_truncated(self):
+    long = 'x' * 300
+
+    class _LongSkillBro(BaseBro):
+      name = 'longskill'
+      description = 'has a long skill description'
+
+      def __init__(self):
+        super().__init__(system_prompt='hi')
+
+      def skill_descriptions(self) -> list[tuple[str, str]]:
+        return [('foo', long)]
+
+    card = await format_card(_LongSkillBro())
+    assert '…' in card
+    assert long not in card
+
+  @pytest.mark.asyncio
   async def test_long_tool_description_truncated(self):
     long_desc = 'x' * 300
 

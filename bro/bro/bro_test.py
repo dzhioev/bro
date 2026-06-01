@@ -600,7 +600,9 @@ def fake_pkgs(tmp_path):
 
 
 def _skill(description: str = 'a skill', body: str = 'do the thing') -> str:
-  return f'---\nname: x\ndescription: {description}\nversion: 1.0\n---\n\n{body}'
+  # omit `name:` from the frontmatter — `_load_skill` validates it against the
+  # filename stem, and each caller picks its own stem via fake_pkgs.
+  return f'---\ndescription: {description}\nversion: 1.0\n---\n\n{body}'
 
 
 class TestSkillsDiscovery:
@@ -804,6 +806,83 @@ class TestSkillsInSystemPrompt:
 
     B.__module__ = pkg
     assert '## Available skills' not in B().system_prompt
+
+  def test_description_truncated_to_first_sentence(self, fake_pkgs):
+    long = 'Trigger here. Second sentence with detail. Third sentence.'
+    pkg = fake_pkgs('_prompt_trunc', {'foo': _skill(long)})
+
+    class B(BaseBro):
+      name = 'b'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    B.__module__ = pkg
+    prompt = B().system_prompt
+    assert '**foo** — Trigger here.' in prompt
+    assert 'Second sentence' not in prompt
+    assert 'Third sentence' not in prompt
+
+
+class TestSkillNameValidation:
+  def test_mismatched_name_raises(self, fake_pkgs):
+    pkg = fake_pkgs('_name_drift', {'real': '---\nname: wrong\n---\n\nbody'})
+
+    class B(BaseBro):
+      name = 'b'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    B.__module__ = pkg
+    with pytest.raises(ValueError) as exc:
+      B()
+    msg = str(exc.value)
+    assert 'wrong' in msg
+    assert 'real' in msg
+
+  def test_matching_name_accepted(self, fake_pkgs):
+    pkg = fake_pkgs('_name_ok', {'real': '---\nname: real\ndescription: d\n---\n\nbody'})
+
+    class B(BaseBro):
+      name = 'b'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    B.__module__ = pkg
+    bro = B()
+    assert bro.skill_descriptions() == [('real', 'd')]
+
+  def test_missing_name_accepted(self, fake_pkgs):
+    pkg = fake_pkgs('_name_absent', {'real': '---\ndescription: d\n---\n\nbody'})
+
+    class B(BaseBro):
+      name = 'b'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    B.__module__ = pkg
+    assert B().skill_descriptions() == [('real', 'd')]
+
+  def test_mismatch_caught_by_load_skill_helper(self, tmp_path):
+    # `_load_skill` is the shared validation point used by both get_skill_body
+    # and skill_descriptions; check it directly so the behavior doesn't depend
+    # on the __init__ path.
+    from bro.bro import _load_skill
+
+    path = tmp_path / 'real.md'
+    path.write_text('---\nname: wrong\n---\n\nbody')
+    with pytest.raises(ValueError) as exc:
+      _load_skill('real', path)
+    msg = str(exc.value)
+    assert 'wrong' in msg
+    assert 'real' in msg
 
 
 class TestSkillServiceTool:

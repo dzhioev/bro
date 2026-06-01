@@ -84,6 +84,32 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
   return (fm, text[end + 5 :])
 
 
+def _load_skill(name: str, path: Path) -> tuple[dict[str, str], str]:
+  # parse the skill file and enforce that its `name:` frontmatter (when
+  # present) agrees with the filename stem — filename is canonical because
+  # `_collect_skills` keys on it, so a disagreement is a silent footgun.
+  fm, body = _parse_frontmatter(path.read_text())
+  declared = fm.get('name')
+  if declared is not None and declared != name:
+    raise ValueError(
+      f'skill {path}: frontmatter name={declared!r} disagrees with filename '
+      f'stem {name!r}; filename is canonical'
+    )
+  return fm, body
+
+
+def _first_sentence(text: str) -> str:
+  # truncate at the first sentence boundary (`.`/`!`/`?` followed by whitespace)
+  # so a paragraph-length frontmatter `description:` doesn't bloat the bro
+  # system prompt. the first sentence is by convention the "when to invoke"
+  # trigger guide — that's what the LLM needs to pick the right skill.
+  text = text.strip()
+  for i, c in enumerate(text):
+    if c in '.!?' and i + 1 < len(text) and text[i + 1].isspace():
+      return text[: i + 1]
+  return text
+
+
 def _render_skills(skills: list[tuple[str, str]]) -> str:
   lines = [
     '## Available skills',
@@ -94,7 +120,7 @@ def _render_skills(skills: list[tuple[str, str]]) -> str:
     '',
   ]
   for name, desc in skills:
-    lines.append(f'- **{name}** — {desc}')
+    lines.append(f'- **{name}** — {_first_sentence(desc)}')
   return '\n'.join(lines)
 
 
@@ -234,7 +260,7 @@ class BaseBro(ABC):
     if path is None:
       available = ', '.join(sorted(skills)) if len(skills) > 0 else '(none)'
       raise KeyError(f'no skill named {name!r}; available: {available}')
-    _, body = _parse_frontmatter(path.read_text())
+    _, body = _load_skill(name, path)
     return body.strip()
 
   def skill_descriptions(self) -> list[tuple[str, str]]:
@@ -243,7 +269,7 @@ class BaseBro(ABC):
     # string if missing.
     result: list[tuple[str, str]] = []
     for name, path in self.skills.items():
-      fm, _ = _parse_frontmatter(path.read_text())
+      fm, _ = _load_skill(name, path)
       result.append((name, fm.get('description', '')))
     return result
 

@@ -11,9 +11,14 @@ __cli_name__ = 'do-task'
 async def do_task(bro: BaseBro, task: str, tracer: Tracer | None = None) -> str:
   # `do-task <bro> <ref>` is shorthand for `ask <bro> /fix <ref>`. Pass an
   # already-slash-prefixed input straight through so users can override (e.g.
-  # `do-task ppp-dev "/fix --focus"`).
-  what = task if task.lstrip().startswith('/') else f'/fix {task}'
-  return await do(bro, what, tracer=tracer)
+  # `do-task ppp-dev "/fix --focus"`). Matches `do.py`'s `_SKILL_INVOCATION`
+  # regex — leading whitespace before `/` is not a slash invocation in either
+  # surface.
+  if not task.startswith('/'):
+    if 'fix' not in bro.skills:
+      raise KeyError(f"bro {bro.name!r} has no 'fix' skill — use 'ask' instead")
+    task = f'/fix {task}'
+  return await do(bro, task, tracer=tracer)
 
 
 def main(argv=None) -> int | None:
