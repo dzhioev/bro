@@ -34,6 +34,18 @@ RUN useradd -m -u 1000 -s /bin/bash cw \
  && mkdir -p /home/cw/.claude \
  && chown cw:cw /home/cw/.claude
 
+# print the session-info banner once per interactive shell — surfaces workspace
+# paths, the `cw exec` command, and (for bro sessions) the ASCII Bro logo when
+# users shell in via `cw exec <name>`. guarded so it runs only when `cw` is on
+# PATH (i.e. after venv activation) and only once per shell process.
+RUN cat >> /home/cw/.bashrc <<'EOF'
+
+if [ -z "${CW_BANNER_SHOWN:-}" ] && command -v cw >/dev/null 2>&1; then
+  export CW_BANNER_SHOWN=1
+  cw banner || true
+fi
+EOF
+
 # cw needs to talk to the host docker socket (bind-mounted at runtime) so
 # deploy scripts can build + push without a nested runtime. group `docker`
 # inside the container owns /var/run/docker.sock; cw is added so it can

@@ -42,6 +42,7 @@ Bro is the agent system: independent specialised agents (a "Bro") each run as a 
   - `open_library.py` — books, no auth
   - `web_search.py` — Brave Search; needs `.configs/brave.json`
   - `current_time.py` — current local date and time; single `current-time-get-time` tool
+  - `file.py` — `FileSource(name, summary, path)`: surface a static reference file as a single `<name>-read` tool. Use for canonical docs the bro consults on demand (e.g. PPPDev's `environment` source pointing at `prompts/environment.md`, the same playbook auto-injected into `cw ss` Claude Code sessions)
 - `registry.py` — process-wide registry of bro classes: `register(cls)`, `get_class(name)`, `create_bro(name, llm_spec=None)`, `list_classes()`. `create_bro` returns a fresh instance every call. First lookup triggers `bros.init()`
 - `run.py` (`bro`) — CLI: `bro run <name> <input>`, `bro list`, `bro show <name> [--system-prompt]` (markdown info card; renderer in `show.py`)
 - `server/server.py` (`bro.server.server`) — aiohttp wrapper exposing the `assistant` bro on `POST /v1/chat/completions` (OpenAI-compatible). Used by the iOS app

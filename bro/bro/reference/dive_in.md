@@ -94,6 +94,6 @@ When resuming, `dive-in` still resolves the task id (and, with `--focus`, still 
 
 - `CW_TASK_ID` — set to the resolved task id in any mode that has one (focused, `-t`, `-t --focus`). Picked up by `setup/claude_commit_footer.py` to insert `Task: <notion-url>` into commit messages, and by the `/pr` skill to build the commit footer.
 - `CW_BRO` — set unconditionally to `ppp-dev` so the container entrypoint (`setup/container/entrypoint.sh`) and the host-mode `session_start.sh` hook symlink the bro's skills into `.claude/skills/`, making `/fix`, `/pr`, and `/land` discoverable by Claude Code's slash-command resolution.
-- `PPP_SHELL_COMMAND` — set (if not already set) to the user-facing reconstruction of the dive-in invocation. Read by `prompts/base/environment.md` so Claude can self-detect that it was launched via `dive-in` (and whether `-t` / `--focus` / `--new` was used) without needing to be told.
+- `PPP_SHELL_COMMAND` — set (if not already set) to the user-facing reconstruction of the dive-in invocation. Consumed by `cw banner` and surfaced as `launch_command` in `cw banner --llm`, which is what Claude reads at session start (see `prompts/base/environment.md`) to self-detect that it was launched via `dive-in` (and whether `-t` / `--focus` / `--new` was used).
 
 The user-facing `dive-in` reconstruction is built explicitly in `dive_in.py` (not via `cw.add_forwarded_flags`'s reconstruct) so that env-detection sees `dive-in`, not the underlying `cw ss`.

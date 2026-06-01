@@ -164,7 +164,7 @@ Report the PR URL `gh` prints to the user.
 
 ### 13. Log "PR opened" to the task (dive-in sessions only)
 
-If this session was launched via `dive-in` (check `PPP_SHELL_COMMAND`) and you have access to flow MCP tools:
+If this session was launched via `dive-in` (check `launch_command` from `cw banner --llm`) and you have access to flow MCP tools:
 
 ```
 ### PR opened — @YYYY-MM-DD HH:MM
@@ -213,7 +213,7 @@ Approval is the signal that the PR is ready to merge. Stop polling and surface:
 
 > PR approved — ready to merge. Invoke `/land` to squash and close.
 
-**In `--auto` sessions** (detect via `PPP_SHELL_COMMAND` containing `--auto`), immediately invoke `/land` to chain into the merge. **In manual sessions**, wait for the user's `/land` (or "land it") trigger.
+**In `--auto` sessions** (detect via `launch_command` from `cw banner --llm` containing `--auto`), immediately invoke `/land` to chain into the merge. **In manual sessions**, wait for the user's `/land` (or "land it") trigger.
 
 **`review` with `state: "COMMENTED"` or `"DISMISSED"`**: informational; the actionable feedback (if any) arrives via the accompanying `comment` events.
 

@@ -53,7 +53,13 @@ from base.args import Parser
 
 CONTAINER_DIR = Path(__file__).resolve().parent / 'setup' / 'container'
 _PROMPTS_DIR = Path(__file__).resolve().parent / 'prompts'
-_BASE_PROMPT_DIRS = ['shared', 'base']
+# auto-injected into every `cw ss` session via --append-system-prompt. Files in
+# `shared/` also flow into every bro (via bro/bro.py:_load_shared_prompts), so
+# put cross-surface conventions there. The top-level `environment.md` is the
+# single source of truth for the cw-banner playbook — same file
+# is reachable from bros via `FileSource` (see bro/bros/ppp_dev/__init__.py).
+_BASE_PROMPT_DIRS = ['shared']
+_BASE_PROMPT_FILES = ['environment.md']
 
 
 def _load_base_prompts() -> str:
@@ -62,6 +68,10 @@ def _load_base_prompts() -> str:
     for p in sorted((_PROMPTS_DIR / subdir).glob('*')):
       if p.is_file():
         parts.append(p.read_text().strip())
+  for name in _BASE_PROMPT_FILES:
+    p = _PROMPTS_DIR / name
+    if p.is_file():
+      parts.append(p.read_text().strip())
   return '\n\n'.join(parts)
 
 
@@ -254,6 +264,10 @@ def _docker_run_argv(
     'HOME=/home/cw',
     '-e',
     f'CW_NAME={name}',
+    # surface the host-side workspace path inside the container so `cw banner`
+    # can show users where their /workspace mount actually lives on the host
+    '-e',
+    f'CW_HOST_WORKSPACE={session}',
     '-e',
     'DISABLE_AUTOUPDATER=1',
     '-e',
@@ -385,6 +399,211 @@ def _truncate(s: str, n: int) -> str:
 _BADGES = {'L': '[.]', 'C': '[o]', 'X': '[x]'}
 _KIND_ORDER = {'L': 0, 'C': 1, 'X': 2}
 _CONTAINER_PREFIX = 'c:'
+
+# six-line block-letter "B R O" rendered with box-drawing characters;
+# shown on top of the `cw banner` output in --bro sessions.
+_BRO_LOGO = """\
+██████╗   ██████╗    ██████╗
+██╔══██╗  ██╔══██╗  ██╔═══██╗
+██████╔╝  ██████╔╝  ██║   ██║
+██╔══██╗  ██╔══██╗  ██║   ██║
+██████╔╝  ██║  ██║  ╚██████╔╝
+╚═════╝   ╚═╝  ╚═╝   ╚═════╝\
+"""
+
+
+def _in_container() -> bool:
+  """detect a container by /.dockerenv presence. extracted so tests can stub it."""
+  return Path('/.dockerenv').is_file()
+
+
+# tokens after which the rest of an unquoted launch command is the user-typed
+# prompt — `dive-in --new <seed>`, `cw ss -p <prompt>`, `cw ss ... -- <prompt>`.
+# rfind so the *last* marker wins if more than one is present.
+_PROMPT_MARKERS = (' --new ', ' --prompt ', ' -p ', ' -- ')
+
+
+def _split_launch_prompt(command: str) -> tuple[str, str | None]:
+  """split a launch command into (prefix, prompt) at the prompt marker, if any.
+
+  prefix keeps the marker token (e.g. 'dive-in --new ') so callers can append a
+  placeholder. returns (command, None) when no marker is present or nothing
+  follows it.
+  """
+  for marker in _PROMPT_MARKERS:
+    idx = command.rfind(marker)
+    if idx < 0:
+      continue
+    head = command[: idx + len(marker)]
+    tail = command[idx + len(marker) :].strip()
+    if len(tail) > 0:
+      return head, tail
+  return command, None
+
+
+def _session_facts() -> dict[str, str | bool | None]:
+  """collect session facts from env + /.dockerenv for `cw banner`.
+
+  read-only; never raises. callers decide whether to render visually or for an
+  LLM tool result. Fields:
+    - in_container (bool) — /.dockerenv presence
+    - name (str | None) — workspace name (CW_NAME)
+    - bro (str | None) — bro persona (CW_BRO), only set under `cw ss --bro`
+    - host_workspace (str | None) — host-side path to the workspace dir
+    - container_workspace (str | None) — '/workspace' inside a container, else None
+    - exec_command (str | None) — `cw exec <name>` for container sessions
+    - cw_command (str | None) — the canonical `cw ss …` invocation (CW_COMMAND)
+    - shell_command (str | None) — the outer launch command (PPP_SHELL_COMMAND).
+      For wrappers like dive-in, this differs from cw_command; for direct `cw ss`
+      use, the two are equal and the banner suppresses the duplicate
+    - prompt (str | None) — the user-typed prompt extracted from shell_command
+      when a `--new`/`-p`/`--prompt`/`--` marker is found; shell_command is
+      shown with the prompt portion replaced by a placeholder in this case
+  """
+  in_container = _in_container()
+  name = os.environ.get('CW_NAME') or None
+  bro = os.environ.get('CW_BRO') or None
+  cw_command = os.environ.get('CW_COMMAND') or None
+  shell_command = os.environ.get('PPP_SHELL_COMMAND') or cw_command
+  host_workspace: str | None = os.environ.get('CW_HOST_WORKSPACE') or None
+  container_workspace: str | None = '/workspace' if in_container else None
+
+  if not in_container and host_workspace is None and name is not None:
+    # host worktree case — derive path from the project root + worktree name
+    try:
+      proj = _project_root()
+    except subprocess.CalledProcessError:
+      proj = None
+    if proj is not None:
+      candidate = proj / '.claude' / 'worktrees' / name
+      if candidate.is_dir():
+        host_workspace = str(candidate)
+
+  exec_command = f'cw exec {name}' if in_container and name is not None else None
+
+  prompt: str | None = None
+  if shell_command is not None:
+    shell_command, prompt = _split_launch_prompt(shell_command)
+
+  return {
+    'in_container': in_container,
+    'name': name,
+    'bro': bro,
+    'host_workspace': host_workspace,
+    'container_workspace': container_workspace,
+    'exec_command': exec_command,
+    'cw_command': cw_command,
+    'shell_command': shell_command,
+    'prompt': prompt,
+  }
+
+
+def _render_banner_visual(facts: dict[str, str | bool | None]) -> str:
+  """render the banner with ANSI colour + the Bro logo for bro sessions."""
+  red = '\033[31m'
+  bold = '\033[1m'
+  bold_white = '\033[1;97m'  # bright-white bold — emphasis for the @prompt@ slot
+  dim = '\033[2m'
+  reset = '\033[0m'
+
+  lines: list[str] = []
+  if facts['bro'] is not None:
+    # annotate the bottom line of the logo with a `// <bro>` signature — dim
+    # slashes (comment style), bro name in bright-white bold so it stands out
+    logo_lines: list[str] = list(_BRO_LOGO.split('\n'))
+    logo_lines[-1] = f'{logo_lines[-1]} {dim}//{reset} {bold_white}{facts["bro"]}{reset}'
+    lines.extend(logo_lines)
+    lines.append('')
+
+  # collect rows as (label, label_style, value) — label_style is applied to
+  # the padded label so width math runs on the raw text, not on ANSI bytes
+  raw_name = facts['name'] if isinstance(facts['name'], str) else '(unnamed)'
+  display_name = _format_ref(raw_name, bool(facts['in_container']))
+  rows: list[tuple[str, str, str]] = [
+    ('cw session:', '', f'{bold}{display_name}{reset}'),
+  ]
+
+  # `cw command` is the canonical `cw ss …` invocation; suppress when it's
+  # the same string as `launched` (direct `cw ss` use) so we don't show the
+  # same text twice
+  if facts['cw_command'] is not None and facts['cw_command'] != facts['shell_command']:
+    rows.append(('cw command:', '', f'{dim}{facts["cw_command"]}{reset}'))
+
+  if facts['in_container']:
+    # /workspace inside, host bind-mount path below — both are useful and
+    # packing them onto one line crowded the eye
+    rows.append(('workspace:', '', str(facts['container_workspace'])))
+    hp = facts['host_workspace']
+    if hp is not None:
+      rows.append(('host path:', '', f'{dim}{hp}{reset}'))
+  else:
+    hp = facts['host_workspace']
+    # host-mode worktree path printed in red as a "this is your actual repo
+    # on disk — careless edits leak out of the session" reminder
+    if hp is not None:
+      rows.append(('workspace:', '', f'{red}{hp}{reset}'))
+    else:
+      rows.append(
+        ('workspace:', '', f'{dim}(unknown — no CW_NAME / not a registered worktree){reset}')
+      )
+
+  if facts['exec_command'] is not None:
+    # "docker shell" because the command opens a shell *inside* the docker
+    # container — the label tracks the destination, not the host that launches it
+    rows.append(('docker shell:', '', f'{dim}{facts["exec_command"]}{reset}'))
+
+  if facts['shell_command'] is not None:
+    launched = f'{dim}{facts["shell_command"]}{reset}'
+    if facts['prompt'] is not None:
+      launched += f'{bold_white}@prompt@{reset}'
+    rows.append(('launched:', '', launched))
+
+  if facts['prompt'] is not None:
+    rows.append(('prompt:', bold_white, str(facts['prompt'])))
+
+  # auto-align the value column to one space past the widest label
+  width = max(len(label) for label, _, _ in rows)
+  for label, label_style, value in rows:
+    padded = label.ljust(width)
+    styled_label = f'{label_style}{padded}{reset}' if len(label_style) > 0 else padded
+    lines.append(f'{styled_label} {value}')
+
+  return '\n'.join(lines)
+
+
+def _render_banner_llm(facts: dict[str, str | bool | None]) -> str:
+  """render the banner as plain key:value lines for an LLM Bash tool result.
+
+  cw_command is suppressed when it equals launch_command (no wrapper involved).
+  The user prompt is deliberately *not* emitted — the LLM already has it as
+  the first message of the conversation, so re-printing it would just burn
+  context. launch_command keeps its trailing marker (e.g. `dive-in --new `)
+  as the signal that a seed prompt exists.
+  """
+  lines: list[str] = [f'kind: {"container" if facts["in_container"] else "host worktree"}']
+  pairs: list[tuple[str, str]] = [
+    ('name', 'name'),
+    ('bro', 'bro'),
+    ('host_workspace', 'workspace_host_path'),
+    ('container_workspace', 'workspace_container_path'),
+    ('exec_command', 'docker_shell_command'),
+  ]
+  if facts['cw_command'] is not None and facts['cw_command'] != facts['shell_command']:
+    pairs.append(('cw_command', 'cw_command'))
+  pairs.append(('shell_command', 'launch_command'))
+  for key, label in pairs:
+    value = facts[key]
+    if value is not None:
+      lines.append(f'{label}: {value}')
+  return '\n'.join(lines)
+
+
+def banner(llm: bool) -> int:
+  """print the banner. visual by default; --llm for plain text."""
+  facts = _session_facts()
+  rendered = _render_banner_llm(facts) if llm else _render_banner_visual(facts)
+  print(rendered)
+  return 0
 
 
 def _format_ref(name: str, is_container: bool) -> str:
@@ -853,6 +1072,7 @@ def start_session(
     parts.extend(['--bro', bro])
   parts.extend([name, *claude_args])
   os.environ['CW_COMMAND'] = ' '.join(parts)
+  os.environ['CW_NAME'] = name
   os.environ.setdefault('PPP_SHELL_COMMAND', os.environ['CW_COMMAND'])
 
   if resume:
@@ -1160,6 +1380,16 @@ def main(argv=None):
   )
   populate.add_argument('bro_name', help='registered bro name (e.g. ppp-dev)')
 
+  banner_parser = subparsers.add_parser(
+    'banner',
+    help='print the banner; auto-run by the container .bashrc on `cw exec` shells',
+  )
+  banner_parser.add_argument(
+    '--llm',
+    action='store_true',
+    help='emit plain key:value lines for LLM Bash-tool consumption (no ANSI, no logo)',
+  )
+
   args = parser.parse(argv)
   cmd = args.pop('cmd')
 
@@ -1186,6 +1416,8 @@ def main(argv=None):
   if cmd == 'populate-bro-skills':
     _populate_bro_skills(_project_root(), args['bro_name'])
     return 0
+  if cmd == 'banner':
+    return banner(llm=args['llm'])
   assert cmd == 'ss'
   if args['auto'] and not args['container']:
     parser.error('--auto requires --container')

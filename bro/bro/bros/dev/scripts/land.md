@@ -46,7 +46,7 @@ gh pr merge <n> --squash --delete-branch \
 
 ### 4. Log "Merged" to the task (dive-in sessions only)
 
-If this session was launched via `dive-in` (check `PPP_SHELL_COMMAND`):
+If this session was launched via `dive-in` (check `launch_command` from `cw banner --llm`):
 
 ```
 ### Merged — @YYYY-MM-DD HH:MM
