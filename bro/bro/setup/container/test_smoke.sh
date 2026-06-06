@@ -53,6 +53,11 @@ docker run --rm \
     git config --global credential.helper | grep -q github_token
     # workspace should have a cloned repo
     test -d /workspace/.git
+    # worktree branch is created from upstream origin/master, not from the
+    # clone's stale HEAD; the entrypoint ref-copies origin/master from /host-repo
+    cd /workspace
+    test "$(git rev-parse HEAD)" = "$(git rev-parse origin/master)"
+    test "$(git rev-parse refs/remotes/origin/master)" = "$(git -C /host-repo rev-parse refs/remotes/origin/master)"
     # pre-push hook should be installed
     test -x /workspace/.git/hooks/pre-push
     # aws cli should be installed

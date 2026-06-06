@@ -66,12 +66,13 @@ if [ ! -d /workspace/.git ]; then
   host_origin="$(echo "$host_origin" | sed 's|^git@github\.com:|https://github.com/|')"
   git remote set-url origin "$host_origin"
   git remote add host /host-repo
-  branch="worktree-$CW_NAME"
-  if git show-ref --verify --quiet "refs/heads/$branch"; then
-    git checkout "$branch" >&2
-  else
-    git checkout -b "$branch" >&2
-  fi
+  # the clone copied /host-repo's local master into refs/remotes/origin/master,
+  # which is often behind the host's freshly-fetched origin/master. pull the
+  # fresh ref through the local `host` remote — no token needed, and objects
+  # are already shared via alternates so this is ref-only.
+  git fetch host '+refs/remotes/origin/master:refs/remotes/origin/master' >&2
+  # -B resets if a stale worktree-<CW_NAME> branch came through with the clone.
+  git checkout -B "worktree-$CW_NAME" origin/master >&2
   # init submodules from host-local paths — .gitmodules uses ssh URLs and the
   # container has no ssh keys. skip any submodule the host hasn't initialized.
   if [ -f .gitmodules ]; then

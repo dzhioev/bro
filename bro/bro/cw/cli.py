@@ -1276,6 +1276,11 @@ def run_in_container(
   proj = _project_root()
   session = proj / 'var' / 'cw' / 'containers' / name
   session.mkdir(parents=True, exist_ok=True)
+  # refresh host origin/master so the entrypoint can branch a fresh worktree
+  # from current upstream rather than the host's stale snapshot. skip on
+  # container re-entry — the entrypoint's clone block won't fire then.
+  if not (session / '.git').exists():
+    subprocess.run(['git', '-C', str(proj), 'fetch', 'origin', 'master'], check=True)
   tag = _image_tag()
   _ensure_image(tag)
   home = Path.home()
