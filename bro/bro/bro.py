@@ -8,8 +8,20 @@ import llm.mcp
 from bro.datasources.base import DataSource
 from llm.llm import LLM, LLMSpec
 from llm.observer import BoringRenderer, NullObserver, Observer
+from llm.tracker import EndReason, NullTracker, Tracker
 
 DEFAULT_LLM_SPEC: LLMSpec = llm.llms.chat_gpt.LLMSpec()
+
+
+# default factory for the per-run `Tracker` an unconfigured bro uses. swap with
+# `set_default_tracker_factory(...)` — `conftest.py` pins it to `NullTracker`
+# so tests never try to record.
+_default_tracker_factory: Callable[[], Tracker] = NullTracker
+
+
+def set_default_tracker_factory(factory: Callable[[], Tracker]) -> None:
+  global _default_tracker_factory
+  _default_tracker_factory = factory
 
 
 _SHARED_PROMPTS_DIR = Path(__file__).resolve().parent.parent / 'prompts' / 'shared'
@@ -227,6 +239,10 @@ class BaseBro(ABC):
     # default to no-op; BaseBro.run() swaps in a real observer per invocation so the
     # LLM construction path picks it up via self._observer.
     self._observer: Observer = NullObserver()
+    # sibling of _observer — the tracker records the run for offline analysis
+    # rather than rendering it to stderr. swapped in BaseBro.run() / .send() the
+    # same way _observer is.
+    self._tracker: Tracker = NullTracker()
     # explicit `system_prompt=...` arg overrides MRO collection — escape hatch
     # for callers that need a dynamic prompt (e.g. PM injects current time).
     if system_prompt is not None:
@@ -282,27 +298,68 @@ class BaseBro(ABC):
     bro.llm_spec = llm_spec
     return bro
 
-  async def run(self, input: str, observer: Observer | None = None) -> str:
-    # caller-supplied observer wins (CLIs use this to force --boring); otherwise
-    # _make_observer() picks the default. set on self before _create_llm so the
-    # LLM construction path can pick it up.
+  async def run(
+    self,
+    input: str,
+    observer: Observer | None = None,
+    tracker: Tracker | None = None,
+  ) -> str:
+    # caller-supplied observer / tracker win (CLIs use this to force --boring
+    # or to pass a LocalFileTracker for dev capture); otherwise _make_observer()
+    # / _make_tracker() pick the defaults. set on self before _create_llm so the
+    # LLM construction path can pick them up.
     self._observer = observer if observer is not None else self._make_observer()
+    self._tracker = tracker if tracker is not None else self._make_tracker()
     llm = self._create_llm(interactive=False)
+    system_prompt = self._system_prompt_for(interactive=False)
+    self._tracker.start_trail(
+      bro=self.name,
+      llm_spec=self.llm_spec.dump(),
+      system_prompt=system_prompt,
+      parent=None,
+      interactive=False,
+      entry_point='cli:bro_run',
+    )
     messages = [
-      {'role': 'system', 'content': self._system_prompt_for(interactive=False)},
+      {'role': 'system', 'content': system_prompt},
       {'role': 'user', 'content': input},
     ]
-    return await llm.send(messages)
+    end_reason: EndReason = 'terminal'
+    try:
+      return await llm.send(messages)
+    except BroRaised:
+      end_reason = 'raised'
+      raise
+    except Exception:
+      end_reason = 'error'
+      raise
+    finally:
+      self._tracker.end_trail(end_reason)
 
-  async def send(self, message: str, observer: Observer | None = None) -> str:
+  async def send(
+    self,
+    message: str,
+    observer: Observer | None = None,
+    tracker: Tracker | None = None,
+  ) -> str:
     if self._llm is None:
-      # observer is locked in on first send (the LLM is constructed once and
-      # holds onto whatever observer was set on self at that moment); later
-      # calls can't swap it. Mirrors BaseBro.run().
+      # observer / tracker are locked in on first send (the LLM is constructed
+      # once and holds onto whatever was set on self at that moment); later
+      # calls can't swap them. Mirrors BaseBro.run().
       self._observer = observer if observer is not None else self._make_observer()
+      self._tracker = tracker if tracker is not None else self._make_tracker()
       self._llm = self._create_llm(interactive=True)
+      system_prompt = self._system_prompt_for(interactive=True)
+      self._tracker.start_trail(
+        bro=self.name,
+        llm_spec=self.llm_spec.dump(),
+        system_prompt=system_prompt,
+        parent=None,
+        interactive=True,
+        entry_point='http',
+      )
       messages = [
-        {'role': 'system', 'content': self._system_prompt_for(interactive=True)},
+        {'role': 'system', 'content': system_prompt},
         {'role': 'user', 'content': message},
       ]
     else:
@@ -323,6 +380,9 @@ class BaseBro(ABC):
 
   def _make_observer(self) -> Observer:
     return BoringRenderer(prefix=self.name)
+
+  def _make_tracker(self) -> Tracker:
+    return _default_tracker_factory()
 
   def _create_llm(self, *, interactive: bool) -> LLM:
     return self.llm_spec.create_llm(

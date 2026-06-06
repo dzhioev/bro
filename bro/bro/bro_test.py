@@ -4,12 +4,13 @@ import types
 
 import pytest
 
-from bro.bro import BaseBro, BroRaised
+from bro.bro import BaseBro, BroRaised, set_default_tracker_factory
 from bro.bros.ppp_dev import PPPDev
 from bro.datasources.base import Hit, SearchableDataSource
 from llm.llm import LLM
 from llm.mcp import FunctionTool, InProcessMCPServer, MCPServer, describe
 from llm.observer import NullObserver, Observer
+from llm.tracker import NullTracker, Tracker
 
 
 class MockLLM(LLM):
@@ -98,6 +99,141 @@ class TestBroRun:
     await OverrideBro().run('hi', observer=explicit)
     assert len(captured) == 1
     assert captured[0] is explicit
+
+  @pytest.mark.asyncio
+  async def test_run_explicit_tracker_overrides_default(self):
+    captured: list[Tracker] = []
+
+    class ExplicitTracker(NullTracker):
+      pass
+
+    class WireBro(BaseBro):
+      name = 'tracker-run'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='hi')
+
+      def _create_llm(self, *, interactive: bool):
+        captured.append(self._tracker)
+        return MockLLM()
+
+    explicit = ExplicitTracker()
+    await WireBro().run('input', tracker=explicit)
+    assert len(captured) == 1
+    assert captured[0] is explicit
+
+  @pytest.mark.asyncio
+  async def test_run_calls_start_and_end_trail(self):
+    calls: list[tuple[str, dict]] = []
+
+    class RecordingTracker(NullTracker):
+      def start_trail(self, bro, llm_spec, system_prompt, parent, interactive, entry_point) -> str:
+        calls.append(
+          (
+            'start',
+            {
+              'bro': bro,
+              'llm_spec': llm_spec,
+              'system_prompt': system_prompt,
+              'interactive': interactive,
+              'entry_point': entry_point,
+              'parent': parent,
+            },
+          )
+        )
+        return 'tid'
+
+      def end_trail(self, reason) -> None:
+        calls.append(('end', {'reason': reason}))
+
+    class TraceBro(BaseBro):
+      name = 'trace-bro'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='base prompt')
+
+      def _create_llm(self, *, interactive: bool):
+        return MockLLM(response='ok')
+
+    await TraceBro().run('hello', tracker=RecordingTracker())
+    assert [c[0] for c in calls] == ['start', 'end']
+    start_kwargs = calls[0][1]
+    assert start_kwargs['bro'] == 'trace-bro'
+    assert start_kwargs['interactive'] is False
+    assert start_kwargs['entry_point'] == 'cli:bro_run'
+    assert start_kwargs['parent'] is None
+    assert 'base prompt' in start_kwargs['system_prompt']
+    assert calls[1][1]['reason'] == 'terminal'
+
+  @pytest.mark.asyncio
+  async def test_run_end_reason_is_raised_on_bro_raised(self):
+    calls: list[str] = []
+
+    class RecordingTracker(NullTracker):
+      def end_trail(self, reason) -> None:
+        calls.append(reason)
+
+    class RaiseBro(BaseBro):
+      name = 'raise-bro'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+      def _create_llm(self, *, interactive: bool):
+        class Boom(MockLLM):
+          async def send(self, messages):
+            raise BroRaised('nope')
+
+        return Boom()
+
+    with pytest.raises(BroRaised):
+      await RaiseBro().run('x', tracker=RecordingTracker())
+    assert calls == ['raised']
+
+  @pytest.mark.asyncio
+  async def test_run_end_reason_is_error_on_generic_exception(self):
+    calls: list[str] = []
+
+    class RecordingTracker(NullTracker):
+      def end_trail(self, reason) -> None:
+        calls.append(reason)
+
+    class BoomBro(BaseBro):
+      name = 'boom-bro'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+      def _create_llm(self, *, interactive: bool):
+        class Boom(MockLLM):
+          async def send(self, messages):
+            raise RuntimeError('kaboom')
+
+        return Boom()
+
+    with pytest.raises(RuntimeError):
+      await BoomBro().run('x', tracker=RecordingTracker())
+    assert calls == ['error']
+
+  def test_default_tracker_factory_can_be_swapped(self):
+    sentinel = NullTracker()
+
+    class FactoryBro(BaseBro):
+      name = 'factory-bro'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    set_default_tracker_factory(lambda: sentinel)
+    try:
+      assert FactoryBro()._make_tracker() is sentinel
+    finally:
+      set_default_tracker_factory(NullTracker)
 
   @pytest.mark.asyncio
   async def test_run_passes_system_and_user_messages(self):
@@ -198,6 +334,39 @@ class TestBroSend:
     await bro.send('again')
     assert len(captured) == 1
     assert captured[0] is explicit
+
+  @pytest.mark.asyncio
+  async def test_send_first_call_starts_interactive_trail(self):
+    calls: list[tuple[str, dict]] = []
+
+    class RecordingTracker(NullTracker):
+      def start_trail(self, bro, llm_spec, system_prompt, parent, interactive, entry_point) -> str:
+        calls.append(
+          (
+            'start',
+            {'interactive': interactive, 'entry_point': entry_point, 'bro': bro},
+          )
+        )
+        return 'tid'
+
+    class SendBro(BaseBro):
+      name = 'send-bro'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+      def _create_llm(self, *, interactive: bool):
+        return MockLLM()
+
+    bro = SendBro()
+    await bro.send('first', tracker=RecordingTracker())
+    await bro.send('second')
+    # start_trail fires once — interactive trails span the whole conversation.
+    assert [c[0] for c in calls] == ['start']
+    assert calls[0][1]['interactive'] is True
+    assert calls[0][1]['entry_point'] == 'http'
+    assert calls[0][1]['bro'] == 'send-bro'
 
   @pytest.mark.asyncio
   async def test_send_subsequent_calls_only_user(self):
