@@ -4,7 +4,7 @@ Bro is the agent system: independent specialised agents (a "Bro") each run as a 
 
 ## Layout
 
-- `bro.py` — `BaseBro` ABC (the framework) and the framework helpers (`Tool`, `ScatterTool`, `BroRaised`).
+- `bro.py` — `BaseBro` ABC (the framework) and the framework helpers (`BroRaised`).
 
   Subclasses set `name`, `description`, and class-level `system_prompt = "..."` plus optionally `data_sources = [...]` and `mcp_servers = [...]`. Each `mcp_servers` entry is either:
   - an `MCPServer` instance (typically `flow.MCPServer(...)` / `infra.MCPServer(...)`), or
@@ -18,13 +18,11 @@ Bro is the agent system: independent specialised agents (a "Bro") each run as a 
 
   **Skills.** A bro can declare named procedures as markdown files under `<bro_pkg>/skills/*.md` with YAML frontmatter (`name`, `description`, body). `BaseBro.skills` walks `<pkg>/skills/` along the MRO and returns `{name: Path}`; derived classes override parents on name collision, parallel to `mcp_servers` / `system_prompt`. When skills are present, `__init__` auto-appends a `## Available skills` block to the system prompt and the service server mounts a `skill(name)` tool whose body returns the skill's markdown body for the LLM to follow. `get_skill_body(name)` and `skill_descriptions()` expose the same data programmatically for non-LLM consumers. Skill file format mirrors Claude Code's `SKILL.md` so the same file can be surfaced through both the bro framework and the Claude Code harness.
 
-  **Interactive vs non-interactive paths.** Non-interactive runs (`bro.run()`, the `bro run` / `ask` / `do-task` CLIs, sub-Bros invoked via `Tool`) expose a built-in `raise` service tool — the agent calls it to abort with a reason when the request cannot be fulfilled (missing credentials, no appropriate tool, contradictory constraints, unclear/uninterpretable input); the call raises `BroRaised(reason)` out of `bro.run()`. Interactive paths (`bro.send()`, the HTTP server backing the iOS app, the `call` CLI) don't expose `raise` and inject a symmetric interactive-mode note instead — the agent is told to ask clarifying questions rather than guess, and to describe any blocker in its reply.
+  **Interactive vs non-interactive paths.** Non-interactive runs (`bro.run()`, the `bro run` / `ask` / `do-task` CLIs) expose a built-in `raise` service tool — the agent calls it to abort with a reason when the request cannot be fulfilled (missing credentials, no appropriate tool, contradictory constraints, unclear/uninterpretable input); the call raises `BroRaised(reason)` out of `bro.run()`. Interactive paths (`bro.send()`, the HTTP server backing the iOS app, the `call` CLI) don't expose `raise` and inject a symmetric interactive-mode note instead — the agent is told to ask clarifying questions rather than guess, and to describe any blocker in its reply.
 
   **Tracing.** Non-interactive runs stream a live trace of reasoning summaries, tool calls, tool outputs, and assistant text to stderr — timestamped plain log lines via `llm.tracer.BoringTracer` by default, or colored `rich` panels via `RichConsoleTracer` when `--rich` is passed (`ask --rich`, `do-task --rich`, `bro run --rich`); both honor `tracer=` on `BaseBro.run` for explicit overrides. Subclasses override `_make_tracer()` to set the default tracer; test bros return `NullTracer()` for silence.
 
   Assistant text flows through `on_assistant_message(text, terminal)` with the flag distinguishing mid-stream chatter (interim, model is still calling tools) from the terminal reply (also returned from `LLM.send`). `BoringTracer` / `RichConsoleTracer` render both — terminal as `reply` (bright), interim as `assistant`. Callers that already render the return value themselves (e.g. `do.call`'s `TextTracer` / `TUITracer`) branch on `terminal=True` and skip to avoid double-emitting.
-
-  Post-init injection of extra servers is available via `extend_mcp_servers(...)` for tests or unusual hosts.
 - `bros/` — one package per concrete agent (`bros/<name>/__init__.py`); `bros/__init__.py:init()` registers each with the registry.
 
   `bros/bro/` defines the concrete `Bro(BaseBro)` — the "default bro" registered as `bro`, with a minimal go-to system prompt and no MCP servers. **All other bros inherit from this `Bro`** (not `BaseBro` directly), so they pick up the shared defaults via the MRO walk; inherit from `BaseBro` only when you want to opt out of those defaults.

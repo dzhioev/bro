@@ -9,7 +9,7 @@ This document is the conceptual model. Operational details (layout, how to add a
 - **One capability per Bro.** A Bro is named, described, and prompted for exactly one job. Composition happens externally — an orchestrator Bro delegates to specialists via the same abstractions used everywhere else.
 - **Declarative tool composition.** A Bro lists its tool sources on the class (`data_sources`, `mcp_servers`); the base class materialises and mounts them. No per-Bro wiring code.
 - **Stateless by default.** `run()` is a fresh agent loop per call — no history carried over, no hidden state. `send()` opts into multi-turn continuity when the surface needs it.
-- **Delivery-agnostic.** The same Bro instance is invoked from a CLI, an HTTP server, a Claude Code session, a sub-agent call, or a scheduled job. The launcher picks the entry point; the Bro does not care.
+- **Delivery-agnostic.** The same Bro instance is invoked from a CLI, an HTTP server, a Claude Code session, or a scheduled job. The launcher picks the entry point; the Bro does not care.
 - **Policy lives in the system prompt.** What the Bro decides is in `system_prompt`; how it acts is in its tools. There is no third place. Consumers of the policy (other surfaces, documentation) reference the Bro, they do not restate it.
 
 ## Anatomy
@@ -39,11 +39,8 @@ The base class, on instantiation:
 
 ## Stateless vs stateful
 
-- `run(input) -> str` — single-turn. Fresh LLM, fresh tool set, no history. Used by `bro run`, sub-agent invocations, and any one-shot launcher.
+- `run(input) -> str` — single-turn. Fresh LLM, fresh tool set, no history. Used by `bro run` and any one-shot launcher.
 - `send(message) -> str` — multi-turn. Lazily creates an LLM on the first call (with system prompt + message), reuses it across subsequent calls (message only). Continuity comes from the OpenAI Responses API's `previous_response_id`, not from re-sending the message history.
-- `map(inputs, max_concurrency=5) -> list[str]` — parallel over `run`. Each clone gets its own LLM and tool set; results return in input order, bounded by `max_concurrency`.
-
-Cloning a stateless Bro is free, so `map` is a bounded `asyncio.gather` over `run`.
 
 ## Tools and data
 
@@ -57,15 +54,6 @@ The split between `mcp_servers` and `data_sources` is a contract: data sources n
 
 A Bro can additionally declare **skills** — named procedures backed by markdown files under `<bro_pkg>/skills/*.md` with YAML frontmatter. Skills compose along the MRO like `mcp_servers` (derived overrides parent on name), the base class auto-appends a `## Available skills` block to the system prompt, and a built-in `skill(name)` service tool returns the named skill's body for the LLM to follow. Skill files use the same `SKILL.md` shape Claude Code consumes, so the same file is the source of truth across surfaces.
 
-## Sub-agents
-
-A Bro can be exposed as an MCP tool that other Bros call. Two shapes, both in `bro/bro.py`:
-
-- **`Tool`** — single-input wrapper. The calling LLM passes one `input` string; the sub-Bro's final text comes back as the tool result.
-- **`ScatterTool`** — parallel map. The calling LLM passes a list of inputs; the sub-Bro runs each concurrently; results come back as a JSON array.
-
-Composition is just mounting a server that exposes the chosen sub-Bros. `ScatterTool`'s parallelism is invisible to the caller — it is a regular MCP tool that fans out internally.
-
 ## The `raise` service tool
 
 Non-interactive Bro invocations cannot ask a follow-up question. To let an agent abort cleanly when the request cannot be fulfilled — missing credentials, no appropriate tool or data source, contradictory constraints — the base class exposes a built-in `raise` tool on `run()`. Calling it raises `BroRaised(reason)` out of `run()`; the reason surfaces to the caller as the failure cause. The system prompt is augmented with a non-interactive note so the agent knows it cannot negotiate.
@@ -77,12 +65,11 @@ Interactive paths (`Bro.send()`, the HTTP server, `cw ss --bro` Claude Code sess
 The same Bro runs from many launchers:
 
 - **Console** — `bro run <name> <input>`, `bro list`, `bro show <name>`. Backed by `bro/run.py`.
-- **Sub-agent** — invoked by another Bro via `Tool` / `ScatterTool`.
 - **HTTP** — `bro/server/server.py` serves the `assistant` Bro on `POST /v1/chat/completions` (OpenAI-compatible). The iOS chat app speaks to this endpoint.
 - **Claude Code** — `cw ss --bro <name>` launches a bare Claude Code session whose system prompt and MCP servers come from the named Bro. Tools are wired through the `mcp-server bro:<name>` stdio shim, which exposes the union of the Bro's declared MCP servers and data-source tools. Useful when the user wants a chat UI over the Bro's policy + toolkit.
 - **`ask` / `do-task`** — one-shot launchers for autonomous runs; see `do/CLAUDE.md`.
 
-A given Bro need not support every surface — `pm` is consumed by both `cw ss --bro pm` and the `process-inbox` TUI; `assistant` is HTTP-only; `librorian` runs as console + sub-agent.
+A given Bro need not support every surface — `pm` is consumed by both `cw ss --bro pm` and the `process-inbox` TUI; `assistant` is HTTP-only; `librorian` runs from the console.
 
 ## Registry
 

@@ -4,7 +4,7 @@ import types
 
 import pytest
 
-from bro.bro import BaseBro, BroRaised, ScatterTool, Tool
+from bro.bro import BaseBro, BroRaised
 from bro.bros.ppp_dev import PPPDev
 from bro.datasources.base import Hit, SearchableDataSource
 from llm.llm import LLM
@@ -244,60 +244,6 @@ class TestBroSend:
     assert len(llm_instances) == 2
 
 
-class TestBroMap:
-  @pytest.mark.asyncio
-  async def test_map_returns_all_results(self):
-    call_count = 0
-
-    class CountBro(BaseBro):
-      name = 'counter'
-      description = 'counts'
-
-      def __init__(self):
-        super().__init__(system_prompt='count')
-
-      def _create_llm(self, *, interactive: bool):
-        nonlocal call_count
-        call_count += 1
-        return MockLLM(response=f'result-{call_count}')
-
-    bro = CountBro()
-    results = await bro.map(['a', 'b', 'c'])
-    assert len(results) == 3
-    assert all(r.startswith('result-') for r in results)
-
-  @pytest.mark.asyncio
-  async def test_map_empty_inputs(self):
-    bro = EchoBro()
-    results = await bro.map([])
-    assert results == []
-
-
-class TestTool:
-  @pytest.mark.asyncio
-  async def test_tool_name_and_description(self):
-    bro = EchoBro()
-    tool = Tool(bro)
-    assert tool.name == 'echo'
-    assert tool.description == 'echoes input'
-
-  @pytest.mark.asyncio
-  async def test_tool_parameters_schema(self):
-    bro = EchoBro()
-    tool = Tool(bro)
-    params = tool.parameters
-    assert params['type'] == 'object'
-    assert 'input' in params['properties']
-    assert params['required'] == ['input']
-
-  @pytest.mark.asyncio
-  async def test_tool_call(self):
-    bro = EchoBro(response='tool result')
-    tool = Tool(bro)
-    result = await tool.call({'input': 'hi'})
-    assert result == 'tool result'
-
-
 class _StubSource(SearchableDataSource):
   name = 'stub'
   summary = 'a stub data source for tests'
@@ -412,52 +358,6 @@ class TestBroMcpServers:
     CountBro()
     assert calls == 2
 
-  @pytest.mark.asyncio
-  async def test_extend_mcp_servers_appends(self):
-    class EmptyBro(BaseBro):
-      name = 'empty'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    bro = EmptyBro()
-    assert bro._mcp_servers == []
-    extra = _make_server('x')
-    bro.extend_mcp_servers([extra])
-    assert bro._mcp_servers == [extra]
-
-
-class TestScatterTool:
-  @pytest.mark.asyncio
-  async def test_scatter_tool_name(self):
-    bro = EchoBro()
-    tool = ScatterTool(bro)
-    assert tool.name == 'echo-scatter'
-
-  @pytest.mark.asyncio
-  async def test_scatter_tool_description(self):
-    bro = EchoBro()
-    tool = ScatterTool(bro)
-    assert 'parallel' in tool.description
-
-  @pytest.mark.asyncio
-  async def test_scatter_tool_parameters_schema(self):
-    bro = EchoBro()
-    tool = ScatterTool(bro)
-    params = tool.parameters
-    assert params['type'] == 'object'
-    assert params['properties']['inputs']['type'] == 'array'
-    assert params['required'] == ['inputs']
-
-  @pytest.mark.asyncio
-  async def test_scatter_tool_call(self):
-    bro = EchoBro(response='done')
-    tool = ScatterTool(bro)
-    result = await tool.call({'inputs': ['a', 'b']})
-    parsed = json.loads(result)
-    assert parsed == ['done', 'done']
-
 
 async def _collect_tool_names(servers):
   names: set[str] = set()
@@ -552,23 +452,6 @@ class TestRaise:
 
     await CaptureBro().send('input')
     assert captured == [True]
-
-  @pytest.mark.asyncio
-  async def test_sub_bro_raise_propagates_through_parent_tool(self):
-    class RaiseBro(BaseBro):
-      name = 'raiser'
-      description = 'always raises'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-      async def run(self, input: str, tracer: Tracer | None = None) -> str:
-        raise BroRaised('inner failure')
-
-    tool = Tool(RaiseBro())
-    with pytest.raises(BroRaised) as exc:
-      await tool.call({'input': 'anything'})
-    assert exc.value.reason == 'inner failure'
 
 
 @pytest.fixture

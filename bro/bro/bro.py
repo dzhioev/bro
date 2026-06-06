@@ -1,5 +1,3 @@
-import asyncio
-import json
 import sys
 from abc import ABC
 from pathlib import Path
@@ -284,9 +282,6 @@ class BaseBro(ABC):
     bro.llm_spec = llm_spec
     return bro
 
-  def extend_mcp_servers(self, servers: list[llm.mcp.MCPServer]) -> None:
-    self._mcp_servers.extend(servers)
-
   async def run(self, input: str, tracer: Tracer | None = None) -> str:
     # caller-supplied tracer wins (CLIs use this to force --boring); otherwise
     # _make_tracer() picks the default. set on self before _create_llm so the
@@ -314,15 +309,6 @@ class BaseBro(ABC):
       messages = [{'role': 'user', 'content': message}]
     return await self._llm.send(messages)
 
-  async def map(self, inputs: list[str], max_concurrency: int = 5) -> list[str]:
-    semaphore = asyncio.Semaphore(max_concurrency)
-
-    async def bounded_run(input: str) -> str:
-      async with semaphore:
-        return await self.run(input)
-
-    return list(await asyncio.gather(*[bounded_run(x) for x in inputs]))
-
   def _mcp_servers_for(self, *, interactive: bool) -> list[llm.mcp.MCPServer]:
     # the `raise` service tool only makes sense in non-interactive runs — when no
     # human is in the loop to negotiate, the agent needs a way to abort. In
@@ -343,64 +329,3 @@ class BaseBro(ABC):
       mcp_servers=self._mcp_servers_for(interactive=interactive),
       tracer=self._tracer,
     )
-
-
-class Tool(llm.mcp.Tool):
-  def __init__(self, bro: BaseBro):
-    self._bro = bro
-
-  @property
-  def name(self) -> str:
-    return self._bro.name
-
-  @property
-  def description(self) -> str:
-    return self._bro.description
-
-  @property
-  def parameters(self) -> dict:
-    return {
-      'type': 'object',
-      'properties': {
-        'input': {
-          'type': 'string',
-          'description': 'input to send to the agent',
-        },
-      },
-      'required': ['input'],
-    }
-
-  async def call(self, arguments: dict) -> str:
-    return await self._bro.run(arguments['input'])
-
-
-class ScatterTool(llm.mcp.Tool):
-  def __init__(self, bro: BaseBro, max_concurrency: int = 5):
-    self._bro = bro
-    self._max_concurrency = max_concurrency
-
-  @property
-  def name(self) -> str:
-    return f'{self._bro.name}-scatter'
-
-  @property
-  def description(self) -> str:
-    return f'{self._bro.description} (parallel over multiple inputs)'
-
-  @property
-  def parameters(self) -> dict:
-    return {
-      'type': 'object',
-      'properties': {
-        'inputs': {
-          'type': 'array',
-          'items': {'type': 'string'},
-          'description': 'list of inputs to process in parallel',
-        },
-      },
-      'required': ['inputs'],
-    }
-
-  async def call(self, arguments: dict) -> str:
-    results = await self._bro.map(arguments['inputs'], self._max_concurrency)
-    return json.dumps(results)

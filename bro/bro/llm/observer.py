@@ -81,11 +81,10 @@ def _default_now() -> str:
   return datetime.now().strftime('%H:%M:%S')
 
 
-# shared so concurrent Bro.run() calls (e.g. via Bro.map / ScatterTool) don't
-# tear each other's panels apart on stderr. lazily built so importing this module
-# stays free of `rich` — required so deployed images (flow-mcp-server, the
-# emails Lambda) that never instantiate a RichConsoleTracer don't need to ship
-# the `rich` package.
+# shared so concurrent tracer calls don't tear each other's panels apart on
+# stderr. lazily built so importing this module stays free of `rich` —
+# required so deployed images (flow-mcp-server, the emails Lambda) that never
+# instantiate a RichConsoleTracer don't need to ship the `rich` package.
 _CONSOLE: Any = None
 
 
