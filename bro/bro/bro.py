@@ -7,7 +7,7 @@ import llm.llms.chat_gpt
 import llm.mcp
 from bro.datasources.base import DataSource
 from llm.llm import LLM, LLMSpec
-from llm.tracer import BoringTracer, NullTracer, Tracer
+from llm.observer import BoringRenderer, NullObserver, Observer
 
 DEFAULT_LLM_SPEC: LLMSpec = llm.llms.chat_gpt.LLMSpec()
 
@@ -224,9 +224,9 @@ class BaseBro(ABC):
       self._mcp_servers.append(ds.as_mcp_server())
     self._service_server: llm.mcp.MCPServer = _build_service_server(self)
     self._llm = None
-    # default to no-op; BaseBro.run() swaps in a real tracer per invocation so the
-    # LLM construction path picks it up via self._tracer.
-    self._tracer: Tracer = NullTracer()
+    # default to no-op; BaseBro.run() swaps in a real observer per invocation so the
+    # LLM construction path picks it up via self._observer.
+    self._observer: Observer = NullObserver()
     # explicit `system_prompt=...` arg overrides MRO collection — escape hatch
     # for callers that need a dynamic prompt (e.g. PM injects current time).
     if system_prompt is not None:
@@ -282,11 +282,11 @@ class BaseBro(ABC):
     bro.llm_spec = llm_spec
     return bro
 
-  async def run(self, input: str, tracer: Tracer | None = None) -> str:
-    # caller-supplied tracer wins (CLIs use this to force --boring); otherwise
-    # _make_tracer() picks the default. set on self before _create_llm so the
+  async def run(self, input: str, observer: Observer | None = None) -> str:
+    # caller-supplied observer wins (CLIs use this to force --boring); otherwise
+    # _make_observer() picks the default. set on self before _create_llm so the
     # LLM construction path can pick it up.
-    self._tracer = tracer if tracer is not None else self._make_tracer()
+    self._observer = observer if observer is not None else self._make_observer()
     llm = self._create_llm(interactive=False)
     messages = [
       {'role': 'system', 'content': self._system_prompt_for(interactive=False)},
@@ -294,12 +294,12 @@ class BaseBro(ABC):
     ]
     return await llm.send(messages)
 
-  async def send(self, message: str, tracer: Tracer | None = None) -> str:
+  async def send(self, message: str, observer: Observer | None = None) -> str:
     if self._llm is None:
-      # tracer is locked in on first send (the LLM is constructed once and
-      # holds onto whatever tracer was set on self at that moment); later
+      # observer is locked in on first send (the LLM is constructed once and
+      # holds onto whatever observer was set on self at that moment); later
       # calls can't swap it. Mirrors BaseBro.run().
-      self._tracer = tracer if tracer is not None else self._make_tracer()
+      self._observer = observer if observer is not None else self._make_observer()
       self._llm = self._create_llm(interactive=True)
       messages = [
         {'role': 'system', 'content': self._system_prompt_for(interactive=True)},
@@ -321,11 +321,11 @@ class BaseBro(ABC):
     note = _INTERACTIVE_NOTE if interactive else _NON_INTERACTIVE_NOTE
     return f'{self.system_prompt}\n\n{note}'
 
-  def _make_tracer(self) -> Tracer:
-    return BoringTracer(prefix=self.name)
+  def _make_observer(self) -> Observer:
+    return BoringRenderer(prefix=self.name)
 
   def _create_llm(self, *, interactive: bool) -> LLM:
     return self.llm_spec.create_llm(
       mcp_servers=self._mcp_servers_for(interactive=interactive),
-      tracer=self._tracer,
+      observer=self._observer,
     )

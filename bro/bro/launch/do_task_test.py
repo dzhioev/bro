@@ -7,7 +7,7 @@ from bro.bro import BaseBro
 from do.do_task import do_task, main
 from llm.llm import LLM
 from llm.mcp import MCPServer
-from llm.tracer import NullTracer, Tracer
+from llm.observer import NullObserver, Observer
 
 
 class MockLLM(LLM):
@@ -32,8 +32,8 @@ class RecordBro(BaseBro):
     super().__init__(system_prompt='record')
     self.mock_llm = MockLLM(response=response)
 
-  def _make_tracer(self) -> Tracer:
-    return NullTracer()
+  def _make_observer(self) -> Observer:
+    return NullObserver()
 
   def _create_llm(self, *, interactive: bool) -> LLM:
     return self.mock_llm

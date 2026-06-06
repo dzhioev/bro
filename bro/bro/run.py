@@ -43,13 +43,13 @@ def main(argv=None) -> int | None:
 
   if command == 'run':
     b = create_bro(args['name'])
-    tracer = None
+    observer = None
     if args.get('rich'):
-      from llm.tracer import RichConsoleTracer
+      from llm.observer import RichConsoleRenderer
 
-      tracer = RichConsoleTracer(prefix=b.name)
+      observer = RichConsoleRenderer(prefix=b.name)
     try:
-      result = asyncio.run(b.run(args['input'], tracer=tracer))
+      result = asyncio.run(b.run(args['input'], observer=observer))
     except BroRaised as e:
       print(f'raised: {e.reason}', file=sys.stderr)
       return 1

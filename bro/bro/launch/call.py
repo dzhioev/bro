@@ -7,7 +7,7 @@ import base.args
 from bro.bro import BroRaised
 from bro.bros.bro import Bro
 from do._trace_format import compact_value, oneline, truncate
-from llm.tracer import Tracer
+from llm.observer import Observer
 
 __cli_name__ = 'call'
 
@@ -21,10 +21,10 @@ def _now_hms() -> str:
   return datetime.now().strftime('%H:%M:%S')
 
 
-class TextTracer(Tracer):
-  """trace events as one-liners that share the `[HH:MM:SS] bro …` shape with
-  text-mode reply emission. background activity and final replies read as one
-  stream — no multi-line panels, no extra blank lines.
+class TextRenderer(Observer):
+  """render observed events as one-liners that share the `[HH:MM:SS] bro …` shape
+  with text-mode reply emission. background activity and final replies read as
+  one stream — no multi-line panels, no extra blank lines.
   """
 
   def __init__(
@@ -61,23 +61,23 @@ class TextTracer(Tracer):
 async def call_text(
   bro: Bro,
   initial: str,
-  tracer: Tracer | None = None,
+  observer: Observer | None = None,
   read_line: Callable[[], str] | None = None,
   now: Callable[[], datetime] = datetime.now,
 ) -> None:
   """text-mode REPL: `[HH:MM:SS] bro: <reply>` lines, plain `> ` prompt.
 
   used when stdin/stdout isn't a TTY or when `--text` is forced. read_line,
-  now, and tracer are injectable for tests.
+  now, and observer are injectable for tests.
   """
   read = read_line if read_line is not None else (lambda: input('> '))
-  effective_tracer: Tracer = tracer if tracer is not None else TextTracer(prefix=bro.name)
+  effective_observer: Observer = observer if observer is not None else TextRenderer(prefix=bro.name)
 
   def emit(reply: str) -> None:
     ts = now().strftime('%H:%M:%S')
     print(f'[{ts}] {bro.name}: {reply}')
 
-  reply = await bro.send(initial, tracer=effective_tracer)
+  reply = await bro.send(initial, observer=effective_observer)
   emit(reply)
   while True:
     try:

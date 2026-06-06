@@ -15,7 +15,7 @@ from textual.widgets import Input, Static
 from bro.bros.bro import Bro
 from bro.show import format_card
 from do._trace_format import compact_value, oneline, truncate
-from llm.tracer import Tracer
+from llm.observer import Observer
 
 
 _TRACE_VALUE_LIMIT = 200
@@ -223,7 +223,7 @@ class ChatApp(App):
     self._scroll_to_end()
 
   def append_trace_line(self, text: str) -> None:
-    """mount a dim system bubble; called from `TUITracer` via `call_from_thread`."""
+    """mount a dim system bubble; called from `TUIRenderer` via `call_from_thread`."""
     # the trace lives in the history stream, so the typing indicator (which is
     # also mounted there) needs to slide back to the bottom after each event.
     self.query_one('#history', VerticalScroll).mount(
@@ -267,9 +267,9 @@ class ChatApp(App):
     # run in a thread so the OpenAI client's blocking `responses.create` call
     # doesn't freeze the Textual event loop (no user-bubble paint, no typing
     # animation). bridge UI updates back via call_from_thread.
-    tracer = TUITracer(self)
+    observer = TUIRenderer(self)
     try:
-      reply = asyncio.run(self._bro.send(text, tracer=tracer))
+      reply = asyncio.run(self._bro.send(text, observer=observer))
     except Exception as e:
       reply = f'[error] {type(e).__name__}: {e}'
     self.call_from_thread(self._on_reply, reply)
@@ -283,8 +283,8 @@ class ChatApp(App):
     await self.push_screen(StatsScreen(card))
 
 
-class TUITracer(Tracer):
-  """post trace events into a `ChatApp` as dim `SystemBubble` rows.
+class TUIRenderer(Observer):
+  """post observed events into a `ChatApp` as dim `SystemBubble` rows.
 
   the bro runs in a Textual worker thread; each callback hops onto the app
   thread via `call_from_thread` to mount the bubble safely.

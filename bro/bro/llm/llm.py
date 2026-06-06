@@ -8,13 +8,13 @@ from typing import ClassVar, Self
 
 import base.args
 from llm.mcp import MCPServer, ToolRegistry
-from llm.tracer import NullTracer, Tracer
+from llm.observer import NullObserver, Observer
 
 
 class LLM(ABC):
-  def __init__(self, mcp_servers: list[MCPServer] | None = None, tracer: Tracer | None = None):
+  def __init__(self, mcp_servers: list[MCPServer] | None = None, observer: Observer | None = None):
     self.tools = ToolRegistry(mcp_servers if mcp_servers is not None else [])
-    self.tracer: Tracer = tracer if tracer is not None else NullTracer()
+    self.observer: Observer = observer if observer is not None else NullObserver()
 
   @abstractmethod
   async def send(self, messages: list[dict]) -> str: ...
@@ -52,7 +52,7 @@ class LLMSpec(ABC):
   def create_llm(
     self,
     mcp_servers: list[MCPServer] | None = None,
-    tracer: Tracer | None = None,
+    observer: Observer | None = None,
   ) -> LLM: ...
 
   @abstractmethod

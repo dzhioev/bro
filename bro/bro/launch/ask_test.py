@@ -6,7 +6,7 @@ from bro.bro import BaseBro
 from do.do import _expand_skill_invocation, do, main
 from llm.llm import LLM
 from llm.mcp import MCPServer
-from llm.tracer import NullTracer, Tracer
+from llm.observer import NullObserver, Observer
 
 
 class MockLLM(LLM):
@@ -29,8 +29,8 @@ class RecordBro(BaseBro):
     self.mock_llm = MockLLM(response=response)
     self._fake_skills = skills if skills is not None else {}
 
-  def _make_tracer(self) -> Tracer:
-    return NullTracer()
+  def _make_observer(self) -> Observer:
+    return NullObserver()
 
   def _create_llm(self, *, interactive: bool) -> LLM:
     return self.mock_llm

@@ -1,6 +1,6 @@
 """shared formatting helpers for `call`'s trace renderers.
 
-both `TextTracer` (in `do/call.py`) and `TUITracer` (in `do/call_tui.py`)
+both `TextRenderer` (in `do/call.py`) and `TUIRenderer` (in `do/call_tui.py`)
 render the same kinds of payloads — short reasoning summaries, JSON tool
 arguments, JSON-or-text tool results — into single-line strings. the
 truncation limit is per-caller (text mode runs alongside reply lines, the

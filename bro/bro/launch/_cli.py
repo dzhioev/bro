@@ -9,7 +9,7 @@ from typing import Callable, Coroutine
 import base.args
 from bro.bro import BroRaised
 from bro.bros.bro import Bro
-from llm.tracer import Tracer
+from llm.observer import Observer
 
 
 def run(
@@ -18,7 +18,7 @@ def run(
   parser_desc: str,
   arg_name: str,
   arg_help: str,
-  run_fn: Callable[[Bro, str, Tracer | None], Coroutine[None, None, str]],
+  run_fn: Callable[[Bro, str, Observer | None], Coroutine[None, None, str]],
   argv: list[str] | None,
 ) -> int | None:
   parser = base.args.Parser(description=parser_desc)
@@ -49,13 +49,13 @@ def run(
   from bro.registry import create_bro
 
   bro = create_bro(args['bro'])
-  tracer: Tracer | None = None
+  observer: Observer | None = None
   if args['rich']:
-    from llm.tracer import RichConsoleTracer
+    from llm.observer import RichConsoleRenderer
 
-    tracer = RichConsoleTracer(prefix=bro.name)
+    observer = RichConsoleRenderer(prefix=bro.name)
   try:
-    result = asyncio.run(run_fn(bro, args[arg_name], tracer))
+    result = asyncio.run(run_fn(bro, args[arg_name], observer))
   except BroRaised as e:
     print(f'raised: {e.reason}', file=sys.stderr)
     return 1

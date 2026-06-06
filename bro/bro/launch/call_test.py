@@ -7,10 +7,10 @@ import pytest
 
 import llm.llms.chat_gpt
 from bro.bros.bro import Bro
-from do.call import TextTracer, call_text, main
+from do.call import TextRenderer, call_text, main
 from llm.llm import LLM, LLMSpec
 from llm.mcp import MCPServer
-from llm.tracer import NullTracer, Tracer
+from llm.observer import NullObserver, Observer
 
 
 class MockLLM(LLM):
@@ -32,8 +32,8 @@ class RecordBro(Bro):
     super().__init__(system_prompt='record')
     self.mock_llm = MockLLM(response=response)
 
-  def _make_tracer(self) -> Tracer:
-    return NullTracer()
+  def _make_observer(self) -> Observer:
+    return NullObserver()
 
   def _create_llm(self, *, interactive: bool) -> LLM:
     return self.mock_llm
@@ -61,7 +61,7 @@ async def test_text_drives_send_until_eof(capsys):
   await call_text(
     bro,
     'first',
-    tracer=NullTracer(),
+    observer=NullObserver(),
     read_line=_ScriptedLines(['second', 'third']),
     now=_fixed_now,
   )
@@ -80,7 +80,7 @@ async def test_text_skips_empty_input(capsys):
   await call_text(
     bro,
     'first',
-    tracer=NullTracer(),
+    observer=NullObserver(),
     read_line=_ScriptedLines(['', '   ', 'real']),
     now=_fixed_now,
   )
@@ -93,48 +93,50 @@ async def test_text_skips_empty_input(capsys):
 @pytest.mark.asyncio
 async def test_text_returns_on_immediate_eof(capsys):
   bro = RecordBro(response='reply')
-  await call_text(bro, 'only', tracer=NullTracer(), read_line=_ScriptedLines([]), now=_fixed_now)
+  await call_text(
+    bro, 'only', observer=NullObserver(), read_line=_ScriptedLines([]), now=_fixed_now
+  )
   assert len(bro.mock_llm.send_calls) == 1
   assert bro.mock_llm.send_calls[0][-1] == {'role': 'user', 'content': 'only'}
 
 
-def _make_text_tracer() -> tuple[TextTracer, io.StringIO]:
+def _make_text_renderer() -> tuple[TextRenderer, io.StringIO]:
   out = io.StringIO()
-  tracer = TextTracer(prefix='bro', file=out, now=lambda: '12:34:56')
-  return tracer, out
+  renderer = TextRenderer(prefix='bro', file=out, now=lambda: '12:34:56')
+  return renderer, out
 
 
-def test_text_tracer_renders_reasoning_one_liner():
-  tracer, out = _make_text_tracer()
-  tracer.on_reasoning('user wants a movie rec\nwithout horror, please')
+def test_text_renderer_renders_reasoning_one_liner():
+  renderer, out = _make_text_renderer()
+  renderer.on_reasoning('user wants a movie rec\nwithout horror, please')
   assert (
     out.getvalue() == '[12:34:56] bro · thinking: user wants a movie rec without horror, please\n'
   )
 
 
-def test_text_tracer_renders_tool_call_with_compact_json():
-  tracer, out = _make_text_tracer()
-  tracer.on_tool_call('web_search', {'query': 'sci-fi movies'})
+def test_text_renderer_renders_tool_call_with_compact_json():
+  renderer, out = _make_text_renderer()
+  renderer.on_tool_call('web_search', {'query': 'sci-fi movies'})
   assert out.getvalue() == '[12:34:56] bro → web_search {"query":"sci-fi movies"}\n'
 
 
-def test_text_tracer_renders_tool_result_compacts_json_string():
-  tracer, out = _make_text_tracer()
-  tracer.on_tool_result('web_search', '[\n  "Arrival",\n  "Annihilation"\n]')
+def test_text_renderer_renders_tool_result_compacts_json_string():
+  renderer, out = _make_text_renderer()
+  renderer.on_tool_result('web_search', '[\n  "Arrival",\n  "Annihilation"\n]')
   assert out.getvalue() == '[12:34:56] bro ← web_search ["Arrival","Annihilation"]\n'
 
 
-def test_text_tracer_truncates_long_interim_message():
-  tracer, out = _make_text_tracer()
-  tracer.on_assistant_message('x' * 500, terminal=False)
+def test_text_renderer_truncates_long_interim_message():
+  renderer, out = _make_text_renderer()
+  renderer.on_assistant_message('x' * 500, terminal=False)
   # body capped at _MESSAGE_LIMIT (240); the line ends with the overflow marker
   assert '<260 more chars>' in out.getvalue()
 
 
-def test_text_tracer_skips_terminal_message():
-  tracer, out = _make_text_tracer()
-  tracer.on_assistant_message('here is the answer', terminal=True)
-  # call_text renders the reply itself; the tracer must not double-emit
+def test_text_renderer_skips_terminal_message():
+  renderer, out = _make_text_renderer()
+  renderer.on_assistant_message('here is the answer', terminal=True)
+  # call_text renders the reply itself; the renderer must not double-emit
   assert out.getvalue() == ''
 
 
@@ -146,7 +148,7 @@ class _FastlessSpec(LLMSpec):
 
   model: str = 'whatever'
 
-  def create_llm(self, mcp_servers=None, tracer=None) -> LLM:
+  def create_llm(self, mcp_servers=None, observer=None) -> LLM:
     raise NotImplementedError('not constructible in tests')
 
   def dump(self) -> dict:
@@ -166,8 +168,8 @@ class _ChatBro(Bro):
     super().__init__(system_prompt='record')
     self.mock_llm = MockLLM(response='reply')
 
-  def _make_tracer(self) -> Tracer:
-    return NullTracer()
+  def _make_observer(self) -> Observer:
+    return NullObserver()
 
   def _create_llm(self, *, interactive: bool) -> LLM:
     return self.mock_llm
@@ -182,8 +184,8 @@ class _FastlessBro(Bro):
     super().__init__(system_prompt='fastless')
     self.mock_llm = MockLLM(response='reply')
 
-  def _make_tracer(self) -> Tracer:
-    return NullTracer()
+  def _make_observer(self) -> Observer:
+    return NullObserver()
 
   def _create_llm(self, *, interactive: bool) -> LLM:
     return self.mock_llm
@@ -223,7 +225,7 @@ def test_fast_flag_reports_when_bro_spec_has_no_fast_mode(monkeypatch, capsys):
 
 
 class _FakeApp:
-  """captures `append_trace_line` calls; stands in for `ChatApp` in TUITracer
+  """captures `append_trace_line` calls; stands in for `ChatApp` in TUIRenderer
   tests so we don't have to spin up a Textual runtime."""
 
   def __init__(self):
@@ -236,16 +238,16 @@ class _FakeApp:
     self.posted.append(text)
 
 
-def test_tui_tracer_posts_one_line_per_event():
-  from do.call_tui import TUITracer
+def test_tui_renderer_posts_one_line_per_event():
+  from do.call_tui import TUIRenderer
 
   app = _FakeApp()
-  tracer = TUITracer(app)  # type: ignore[arg-type]
-  tracer.on_reasoning('user wants\na movie rec')
-  tracer.on_tool_call('web_search', {'query': 'sci-fi'})
-  tracer.on_tool_result('web_search', '[\n  "Arrival"\n]')
-  tracer.on_assistant_message('thinking out loud', terminal=False)
-  tracer.on_assistant_message('the final answer', terminal=True)
+  renderer = TUIRenderer(app)  # type: ignore[arg-type]
+  renderer.on_reasoning('user wants\na movie rec')
+  renderer.on_tool_call('web_search', {'query': 'sci-fi'})
+  renderer.on_tool_result('web_search', '[\n  "Arrival"\n]')
+  renderer.on_assistant_message('thinking out loud', terminal=False)
+  renderer.on_assistant_message('the final answer', terminal=True)
 
   assert app.posted == [
     '✎ thinking: user wants a movie rec',

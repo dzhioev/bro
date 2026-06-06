@@ -3,7 +3,7 @@ from typing import ClassVar
 
 import llm.llm
 from llm.mcp import MCPServer
-from llm.tracer import Tracer
+from llm.observer import Observer
 
 
 @dataclass(frozen=True)
@@ -18,9 +18,9 @@ class LLMSpec(llm.llm.LLMSpec):
   def create_llm(
     self,
     mcp_servers: list[MCPServer] | None = None,
-    tracer: Tracer | None = None,
+    observer: Observer | None = None,
   ) -> llm.llm.LLM:
-    return Echo.create(mcp_servers=mcp_servers, tracer=tracer)
+    return Echo.create(mcp_servers=mcp_servers, observer=observer)
 
   def dump(self) -> dict:
     return {'type': self.TYPE, 'model': self.model}
@@ -32,11 +32,11 @@ class LLMSpec(llm.llm.LLMSpec):
 
 class Echo(llm.llm.LLM):
   @staticmethod
-  def create(mcp_servers: list[MCPServer] | None = None, tracer: Tracer | None = None):
-    return Echo(mcp_servers=mcp_servers, tracer=tracer)
+  def create(mcp_servers: list[MCPServer] | None = None, observer: Observer | None = None):
+    return Echo(mcp_servers=mcp_servers, observer=observer)
 
-  def __init__(self, mcp_servers: list[MCPServer] | None = None, tracer: Tracer | None = None):
-    super().__init__(mcp_servers, tracer=tracer)
+  def __init__(self, mcp_servers: list[MCPServer] | None = None, observer: Observer | None = None):
+    super().__init__(mcp_servers, observer=observer)
 
   async def send(self, messages: list[dict]) -> str:
     if len(messages) == 0:

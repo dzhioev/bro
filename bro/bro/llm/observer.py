@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any, Callable, TextIO
 
 
-class Tracer(ABC):
+class Observer(ABC):
   """observe an LLM run as it streams.
 
   events arrive in the order the model produces them: reasoning summaries,
@@ -33,8 +33,8 @@ class Tracer(ABC):
   def on_tool_result(self, name: str, result: dict[str, Any] | str) -> None: ...
 
 
-class NullTracer(Tracer):
-  """no-op tracer used when nothing should be rendered."""
+class NullObserver(Observer):
+  """no-op observer used when nothing should be rendered."""
 
   def on_reasoning(self, text: str) -> None:
     pass
@@ -81,10 +81,10 @@ def _default_now() -> str:
   return datetime.now().strftime('%H:%M:%S')
 
 
-# shared so concurrent tracer calls don't tear each other's panels apart on
+# shared so concurrent renderer calls don't tear each other's panels apart on
 # stderr. lazily built so importing this module stays free of `rich` —
 # required so deployed images (flow-mcp-server, the emails Lambda) that never
-# instantiate a RichConsoleTracer don't need to ship the `rich` package.
+# instantiate a RichConsoleRenderer don't need to ship the `rich` package.
 _CONSOLE: Any = None
 
 
@@ -100,8 +100,8 @@ def _get_console() -> Any:
   return _CONSOLE
 
 
-class RichConsoleTracer(Tracer):
-  """render trace events as colored `rich` panels to stderr."""
+class RichConsoleRenderer(Observer):
+  """render observed events as colored `rich` panels to stderr."""
 
   def __init__(self, prefix: str = '', console: Any = None, now: Callable[[], str] = _default_now):
     self._prefix = prefix
@@ -153,8 +153,8 @@ def _render_json_or_text(value: dict[str, Any] | str, limit: int) -> Any:
   return Syntax(rendered, 'json', theme='ansi_dark') if is_json else Text(rendered)
 
 
-class BoringTracer(Tracer):
-  """plain-text tracer — no colors, no boxes, no rich dependency.
+class BoringRenderer(Observer):
+  """plain-text renderer — no colors, no boxes, no rich dependency.
 
   each event becomes a timestamped header line followed by an indented body and
   a trailing blank line. JSON values stay pretty-printed so the structure is

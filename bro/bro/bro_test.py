@@ -9,7 +9,7 @@ from bro.bros.ppp_dev import PPPDev
 from bro.datasources.base import Hit, SearchableDataSource
 from llm.llm import LLM
 from llm.mcp import FunctionTool, InProcessMCPServer, MCPServer, describe
-from llm.tracer import NullTracer, Tracer
+from llm.observer import NullObserver, Observer
 
 
 class MockLLM(LLM):
@@ -31,8 +31,8 @@ class EchoBro(BaseBro):
     super().__init__(system_prompt='you echo')
     self._response = response
 
-  def _make_tracer(self) -> Tracer:
-    return NullTracer()
+  def _make_observer(self) -> Observer:
+    return NullObserver()
 
   def _create_llm(self, *, interactive: bool) -> LLM:
     return MockLLM(response=self._response)
@@ -46,10 +46,10 @@ class TestBroRun:
     assert result == 'hello back'
 
   @pytest.mark.asyncio
-  async def test_run_wires_tracer_through_to_llm(self):
-    captured: list[Tracer] = []
+  async def test_run_wires_observer_through_to_llm(self):
+    captured: list[Observer] = []
 
-    class CapturingTracer(NullTracer):
+    class CapturingObserver(NullObserver):
       pass
 
     class WireBro(BaseBro):
@@ -59,25 +59,25 @@ class TestBroRun:
       def __init__(self):
         super().__init__(system_prompt='')
 
-      def _make_tracer(self) -> Tracer:
-        return CapturingTracer()
+      def _make_observer(self) -> Observer:
+        return CapturingObserver()
 
       def _create_llm(self, *, interactive: bool):
-        captured.append(self._tracer)
+        captured.append(self._observer)
         return MockLLM()
 
     await WireBro().run('hi')
     assert len(captured) == 1
-    assert isinstance(captured[0], CapturingTracer)
+    assert isinstance(captured[0], CapturingObserver)
 
   @pytest.mark.asyncio
-  async def test_run_explicit_tracer_overrides_make_tracer(self):
-    captured: list[Tracer] = []
+  async def test_run_explicit_observer_overrides_make_observer(self):
+    captured: list[Observer] = []
 
-    class MadeTracer(NullTracer):
+    class MadeObserver(NullObserver):
       pass
 
-    class ExplicitTracer(NullTracer):
+    class ExplicitObserver(NullObserver):
       pass
 
     class OverrideBro(BaseBro):
@@ -87,15 +87,15 @@ class TestBroRun:
       def __init__(self):
         super().__init__(system_prompt='')
 
-      def _make_tracer(self) -> Tracer:
-        return MadeTracer()
+      def _make_observer(self) -> Observer:
+        return MadeObserver()
 
       def _create_llm(self, *, interactive: bool):
-        captured.append(self._tracer)
+        captured.append(self._observer)
         return MockLLM()
 
-    explicit = ExplicitTracer()
-    await OverrideBro().run('hi', tracer=explicit)
+    explicit = ExplicitObserver()
+    await OverrideBro().run('hi', observer=explicit)
     assert len(captured) == 1
     assert captured[0] is explicit
 
@@ -175,10 +175,10 @@ class TestBroSend:
     assert messages[1] == {'role': 'user', 'content': 'hi'}
 
   @pytest.mark.asyncio
-  async def test_send_wires_explicit_tracer(self):
-    captured: list[Tracer] = []
+  async def test_send_wires_explicit_observer(self):
+    captured: list[Observer] = []
 
-    class TracerTracer(NullTracer):
+    class ExplicitObserver(NullObserver):
       pass
 
     class WireBro(BaseBro):
@@ -189,12 +189,12 @@ class TestBroSend:
         super().__init__(system_prompt='')
 
       def _create_llm(self, *, interactive: bool):
-        captured.append(self._tracer)
+        captured.append(self._observer)
         return MockLLM()
 
-    explicit = TracerTracer()
+    explicit = ExplicitObserver()
     bro = WireBro()
-    await bro.send('hi', tracer=explicit)
+    await bro.send('hi', observer=explicit)
     await bro.send('again')
     assert len(captured) == 1
     assert captured[0] is explicit

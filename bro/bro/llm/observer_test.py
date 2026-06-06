@@ -3,7 +3,7 @@ from typing import Any
 
 from rich.console import Console
 
-from llm.tracer import BoringTracer, NullTracer, RichConsoleTracer, _format_value, _truncate
+from llm.observer import BoringRenderer, NullObserver, RichConsoleRenderer, _format_value, _truncate
 
 
 class TestTruncate:
@@ -47,9 +47,9 @@ class TestFormatValue:
     assert rendered == '{not actually json'
 
 
-class TestNullTracer:
+class TestNullObserver:
   def test_all_methods_are_noops(self):
-    t = NullTracer()
+    t = NullObserver()
     # just verify they don't raise and return None
     assert t.on_reasoning('x') is None
     assert t.on_assistant_message('x', terminal=False) is None
@@ -68,26 +68,26 @@ def _fixed_now() -> str:
 def _render_to_string(events: list[tuple[str, Any]]) -> str:
   buf = io.StringIO()
   console = Console(file=buf, width=120, force_terminal=False, highlight=False)
-  tracer = RichConsoleTracer(prefix='test-bro', console=console, now=_fixed_now)
-  _replay(tracer, events)
+  renderer = RichConsoleRenderer(prefix='test-bro', console=console, now=_fixed_now)
+  _replay(renderer, events)
   return buf.getvalue()
 
 
-def _replay(tracer, events: list[tuple[str, Any]]) -> None:
+def _replay(renderer, events: list[tuple[str, Any]]) -> None:
   for kind, payload in events:
     if kind == 'reasoning':
-      tracer.on_reasoning(payload)
+      renderer.on_reasoning(payload)
     elif kind == 'message':
-      tracer.on_assistant_message(payload, terminal=False)
+      renderer.on_assistant_message(payload, terminal=False)
     elif kind == 'reply':
-      tracer.on_assistant_message(payload, terminal=True)
+      renderer.on_assistant_message(payload, terminal=True)
     elif kind == 'tool_call':
-      tracer.on_tool_call(payload[0], payload[1])
+      renderer.on_tool_call(payload[0], payload[1])
     elif kind == 'tool_result':
-      tracer.on_tool_result(payload[0], payload[1])
+      renderer.on_tool_result(payload[0], payload[1])
 
 
-class TestRichConsoleTracer:
+class TestRichConsoleRenderer:
   def test_reasoning_panel_includes_prefix_and_text(self):
     out = _render_to_string([('reasoning', 'thinking about the task')])
     assert 'test-bro' in out
@@ -125,8 +125,8 @@ class TestRichConsoleTracer:
   def test_no_prefix_includes_timestamp_only(self):
     buf = io.StringIO()
     console = Console(file=buf, width=120, force_terminal=False, highlight=False)
-    tracer = RichConsoleTracer(console=console, now=_fixed_now)
-    tracer.on_reasoning('hi')
+    renderer = RichConsoleRenderer(console=console, now=_fixed_now)
+    renderer.on_reasoning('hi')
     out = buf.getvalue()
     # title is "[12:00:00] · reasoning" — no bro prefix between them
     assert 'test-bro' not in out
@@ -138,11 +138,11 @@ class TestRichConsoleTracer:
     assert _FIXED_NOW in out
 
 
-class TestBoringTracer:
+class TestBoringRenderer:
   def _render(self, events: list[tuple[str, Any]]) -> str:
     buf = io.StringIO()
-    tracer = BoringTracer(prefix='test-bro', file=buf, now=_fixed_now)
-    _replay(tracer, events)
+    renderer = BoringRenderer(prefix='test-bro', file=buf, now=_fixed_now)
+    _replay(renderer, events)
     return buf.getvalue()
 
   def test_reasoning_emits_timestamped_header_and_indented_body(self):
@@ -192,7 +192,7 @@ class TestBoringTracer:
 
   def test_no_prefix(self):
     buf = io.StringIO()
-    tracer = BoringTracer(file=buf, now=_fixed_now)
-    tracer.on_reasoning('hi')
+    renderer = BoringRenderer(file=buf, now=_fixed_now)
+    renderer.on_reasoning('hi')
     out = buf.getvalue()
     assert out.startswith(f'[{_FIXED_NOW}] reasoning\n')

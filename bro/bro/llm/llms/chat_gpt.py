@@ -5,7 +5,7 @@ from typing import ClassVar, Literal, Self, cast, get_args
 import llm.llm
 import configs
 from llm.mcp import MCPServer, Tool, ToolControlSignal
-from llm.tracer import Tracer
+from llm.observer import Observer
 
 from openai import OpenAI
 from openai.types.responses import (
@@ -71,14 +71,14 @@ class LLMSpec(llm.llm.LLMSpec):
   def create_llm(
     self,
     mcp_servers: list[MCPServer] | None = None,
-    tracer: Tracer | None = None,
+    observer: Observer | None = None,
   ) -> llm.llm.LLM:
     return ChatGPT.create(
       model=self.model,
       reasoning_effort=self.reasoning_effort,
       service_tier=self.service_tier,
       mcp_servers=mcp_servers,
-      tracer=tracer,
+      observer=observer,
     )
 
   def dump(self) -> dict:
@@ -218,7 +218,7 @@ class ChatGPT(llm.llm.LLM):
     mcp_servers: list[MCPServer] | None = None,
     reasoning_effort: ReasoningEffort | None = None,
     service_tier: str | None = None,
-    tracer: Tracer | None = None,
+    observer: Observer | None = None,
   ):
     with open(config_path, 'r') as f:
       config = json.load(f)
@@ -228,7 +228,7 @@ class ChatGPT(llm.llm.LLM):
       mcp_servers=mcp_servers,
       reasoning_effort=reasoning_effort,
       service_tier=service_tier,
-      tracer=tracer,
+      observer=observer,
     )
 
   def __init__(
@@ -238,9 +238,9 @@ class ChatGPT(llm.llm.LLM):
     mcp_servers: list[MCPServer] | None = None,
     reasoning_effort: ReasoningEffort | None = None,
     service_tier: str | None = None,
-    tracer: Tracer | None = None,
+    observer: Observer | None = None,
   ):
-    super().__init__(mcp_servers, tracer=tracer)
+    super().__init__(mcp_servers, observer=observer)
     self.model = model
     self.client = OpenAI(api_key=api_key)
     self._openai_tools: list[ToolParam] | None = None
@@ -259,24 +259,24 @@ class ChatGPT(llm.llm.LLM):
     # walk output in order so the trace mirrors the model's own sequence of
     # reasoning, assistant text, and tool calls. tool *results* are emitted by
     # _execute_tool_calls after the call returns. assistant text carries the
-    # `terminal` flag so the tracer can tell mid-stream chatter (between tool
+    # `terminal` flag so the observer can tell mid-stream chatter (between tool
     # calls) apart from the final reply (the same text LLM.send returns) —
     # callers that already render the return value can branch on it.
     for item in response.output:
       if item.type == 'reasoning':
         for part in item.summary:
           if part.type == 'summary_text' and len(part.text) > 0:
-            self.tracer.on_reasoning(part.text)
+            self.observer.on_reasoning(part.text)
       elif item.type == 'message':
         text = ''.join(c.text for c in item.content if c.type == 'output_text')
         if len(text) > 0:
-          self.tracer.on_assistant_message(text, terminal=is_terminal)
+          self.observer.on_assistant_message(text, terminal=is_terminal)
       elif item.type == 'function_call':
         try:
           args = json.loads(item.arguments)
         except json.JSONDecodeError:
           args = {'_raw_arguments': item.arguments}
-        self.tracer.on_tool_call(item.name, args)
+        self.observer.on_tool_call(item.name, args)
 
   async def _execute_tool_calls(self, response: Response) -> list[ResponseInputItemParam]:
     results: list[ResponseInputItemParam] = []
@@ -292,7 +292,7 @@ class ChatGPT(llm.llm.LLM):
         # surface the failure back to the model as the tool result so the agent
         # can react (retry, switch source, raise) instead of crashing the loop.
         output = f'tool {item.name!r} failed: {type(exc).__name__}: {exc}'
-      self.tracer.on_tool_result(item.name, output)
+      self.observer.on_tool_result(item.name, output)
       if isinstance(output, dict):
         output = json.dumps(output)
       results.append({'type': 'function_call_output', 'call_id': item.call_id, 'output': output})

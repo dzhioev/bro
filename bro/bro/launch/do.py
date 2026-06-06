@@ -3,7 +3,7 @@ import sys
 
 from bro.bro import BaseBro
 from do._cli import run
-from llm.tracer import Tracer
+from llm.observer import Observer
 
 __cli_name__ = 'ask'
 
@@ -26,8 +26,8 @@ def _expand_skill_invocation(bro: BaseBro, what: str) -> str:
   return f'{body}\n\nARGUMENTS: {args.strip()}'
 
 
-async def do(bro: BaseBro, what: str, tracer: Tracer | None = None) -> str:
-  return await bro.run(_expand_skill_invocation(bro, what), tracer=tracer)
+async def do(bro: BaseBro, what: str, observer: Observer | None = None) -> str:
+  return await bro.run(_expand_skill_invocation(bro, what), observer=observer)
 
 
 def main(argv=None) -> int | None:

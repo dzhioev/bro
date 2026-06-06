@@ -3,12 +3,12 @@ import sys
 from bro.bro import BaseBro
 from do._cli import run
 from do.do import do
-from llm.tracer import Tracer
+from llm.observer import Observer
 
 __cli_name__ = 'do-task'
 
 
-async def do_task(bro: BaseBro, task: str, tracer: Tracer | None = None) -> str:
+async def do_task(bro: BaseBro, task: str, observer: Observer | None = None) -> str:
   # `do-task <bro> <ref>` is shorthand for `ask <bro> /fix <ref>`. Pass an
   # already-slash-prefixed input straight through so users can override (e.g.
   # `do-task ppp-dev "/fix --focus"`). Matches `do.py`'s `_SKILL_INVOCATION`
@@ -18,7 +18,7 @@ async def do_task(bro: BaseBro, task: str, tracer: Tracer | None = None) -> str:
     if 'fix' not in bro.skills:
       raise KeyError(f"bro {bro.name!r} has no 'fix' skill — use 'ask' instead")
     task = f'/fix {task}'
-  return await do(bro, task, tracer=tracer)
+  return await do(bro, task, observer=observer)
 
 
 def main(argv=None) -> int | None:
