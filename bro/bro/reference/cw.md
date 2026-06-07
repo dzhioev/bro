@@ -44,7 +44,7 @@ Layout on disk:
 
 - `<project>/var/cw/containers/<name>/` (host) → `/workspace` rw. Empty on first run; the entrypoint clones into it.
 - `<project>` (host) → `/host-repo` ro. The clone uses `--shared`, so the container reuses the host's `.git/objects` via alternates instead of duplicating them, and submodules can clone from local paths (avoiding the need for SSH keys in the container).
-- `<project>/.configs/cw_github_token` (or `cw_github_token_bro` when `--auto`) → `/run/secrets/github_token` ro. The entrypoint wires this into `git credential.helper` and exports it as `GH_TOKEN` so `git push` over HTTPS and the `gh` CLI both work.
+- `<project>/.configs/cw_github_token_bro` → `/run/secrets/github_token` ro. The entrypoint wires this into `git credential.helper` and exports it as `GH_TOKEN` so `git push` over HTTPS and the `gh` CLI both work.
 - `/var/run/docker.sock` (host) → same path in the container. Lets deploy scripts run `docker build`/`docker push` against the host daemon — no nested runtime — at the cost of giving in-container processes API-level control over host docker. The entrypoint reconciles the in-container `docker` group's GID with the bind-mounted socket's GID so `cw` can use it without sudo.
 
 Inside the container, the entrypoint (running as root first):
@@ -100,7 +100,7 @@ These flags apply to `cw ss` and (with the exception of `-c` / `--drop` / `--mcp
   **Requires `-c`** (the bro flow uses an Anthropic Console API key, not the user OAuth, and is fenced to the container). **Requires `.configs/anthropic.json`**. Mutually exclusive with `--mcp`, `--auto`, and `--resume`.
 
   `cw --bro` reads its api key from that file via `setup/print_anthropic_key.sh` (wired as `apiKeyHelper`); using `ANTHROPIC_API_KEY` instead would trigger Claude's "Detected a custom API key" prompt every session.
-- **`--auto`** — autonomous mode: passes `--dangerously-skip-permissions` to claude, switches the git identity to bro (`Bro <dzhioev+bro@gmail.com>`), and uses `.configs/cw_github_token_bro` instead of the user token. Implies `--rc`.
+- **`--auto`** — autonomous mode: passes `--dangerously-skip-permissions` to claude and switches the git identity to bro (`Bro <dzhioev+bro@gmail.com>`). Implies `--rc`.
 
   **Requires `-c`** (a sandbox is mandatory for skip-permissions). Adds a `Land mode: PR` line to the system prompt. Cannot be combined with `--bro`.
 - **`--fast`** — enables fast mode for the session (injected via `--settings '{"fastMode": true}'`). Off by default regardless of host settings, so individual `cw ss` invocations are predictable.
@@ -131,7 +131,6 @@ Wrappers and hooks rely on a small set of env vars:
 - `CW_COMMAND` — the user-visible `cw ss …` invocation, reconstructed by `start_session` for telemetry and resume hints. Defaulted into `PPP_SHELL_COMMAND` if that's not already set.
 - `CW_BRO` — names the bro whose skills should be surfaced to Claude Code's slash-command discovery. Set by `start_session` when `--bro <name>` is passed, and unconditionally by `dive-in` (`ppp-dev`). Container mode: forwarded into the container; the entrypoint runs `cw populate-bro-skills "$CW_BRO"` after venv activation to symlink the skills into the workspace's `.claude/skills/`. Host mode: `start_session` populates a per-session `tempfile.mkdtemp` directory and passes it to claude via `--add-dir <tmp>`, so concurrent host sessions on the same repo don't share the project's `.claude/skills/`. Also drives `cw banner`'s ASCII Bro logo + bro-name header.
 - `CW_TASK_ID` — set by `dive-in` when it has resolved a task; consumed by `setup/claude_commit_footer.py` to add a `Task: <url>` line to commit messages.
-- `CW_TOKEN_FILE` — selects which `.configs/cw_github_token*` to bind-mount as `/run/secrets/github_token`. Defaults to `cw_github_token`; `--auto` switches it to `cw_github_token_bro`.
 - `CW_IN_CONTAINER=1` — set by the Dockerfile. Detected by `cw.py:cw` to fall back to host mode when nesting would be requested, and by `.claude/hooks/session_start.sh` to skip the host-only worktree provisioning.
 - `CW_DROP=1` — set by `cw` (host mode only) when `--drop` was passed; used by `.claude/hooks/check-worktree-landed.sh` to skip the keep-or-drop prompt. Container mode doesn't set or forward it (the hook short-circuits on its path guard in the container anyway).
 - Plus the standard `GITHUB_TOKEN`, `GIT_AUTHOR_*` / `GIT_COMMITTER_*`, and (with `--aws`) `AWS_*` — all explicitly forwarded into the container via `_DOCKER_FORWARD_ENV` / `_DOCKER_AWS_ENV`.

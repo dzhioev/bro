@@ -27,7 +27,7 @@ keeps the container's git state genuinely isolated. layout:
     and synced back to host on exit (if container is fresher), keyed on
     claudeAiOauth.expiresAt. Removes the runtime token-swap vector while
     preserving OAuth refresh.
-  - .configs/cw_github_token → /run/secrets/github_token ro (when present;
+  - .configs/cw_github_token_bro → /run/secrets/github_token ro (when present;
     entrypoint configures git credential helper for https push)
 
 network is not restricted by design.
@@ -80,7 +80,6 @@ _DOCKER_FORWARD_ENV = (
   'CW_BRO',
   'CW_COMMAND',
   'CW_TASK_ID',
-  'CW_TOKEN_FILE',
   'GITHUB_TOKEN',
   'GIT_AUTHOR_NAME',
   'GIT_AUTHOR_EMAIL',
@@ -103,8 +102,7 @@ _DOCKER_AWS_ENV = (
 
 _BRO_GIT_NAME = 'Bro'
 _BRO_GIT_EMAIL = 'dzhioev+bro@gmail.com'
-_BRO_TOKEN_FILE = 'cw_github_token_bro'
-_USER_TOKEN_FILE = 'cw_github_token'
+_GITHUB_TOKEN_FILE = 'cw_github_token_bro'
 _ANTHROPIC_CONFIG_PATH = Path(configs.DEFAULT_CONFIGS_DIR) / 'anthropic.json'
 
 
@@ -288,7 +286,7 @@ def _docker_run_argv(
   for var in _DOCKER_FORWARD_ENV:
     if os.environ.get(var) is not None:
       argv += ['-e', var]
-  github_token = (proj / '.configs' / os.environ.get('CW_TOKEN_FILE', _USER_TOKEN_FILE)).resolve()
+  github_token = (proj / '.configs' / _GITHUB_TOKEN_FILE).resolve()
   if github_token.is_file():
     argv += ['-v', f'{github_token}:/run/secrets/github_token:ro']
   if aws:
@@ -1094,9 +1092,8 @@ def start_session(
     os.environ['GIT_AUTHOR_EMAIL'] = _BRO_GIT_EMAIL
     os.environ['GIT_COMMITTER_NAME'] = _BRO_GIT_NAME
     os.environ['GIT_COMMITTER_EMAIL'] = _BRO_GIT_EMAIL
-    os.environ['CW_TOKEN_FILE'] = _BRO_TOKEN_FILE
     proj = _project_root()
-    token_path = (proj / '.configs' / _BRO_TOKEN_FILE).resolve()
+    token_path = (proj / '.configs' / _GITHUB_TOKEN_FILE).resolve()
     if token_path.is_file():
       os.environ['GITHUB_TOKEN'] = token_path.read_text().strip()
 
