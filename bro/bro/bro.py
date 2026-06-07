@@ -8,15 +8,31 @@ import llm.mcp
 from bro.datasources.base import DataSource
 from llm.llm import LLM, LLMSpec
 from llm.observer import BoringRenderer, NullObserver, Observer
-from llm.tracker import EndReason, NullTracker, Tracker
+from llm.tracker import DEFAULT_CONFIG_PATH as _TRAILS_CONFIG_PATH
+from llm.tracker import EndReason, HTTPTracker, NullTracker, Tracker
 
 DEFAULT_LLM_SPEC: LLMSpec = llm.llms.chat_gpt.LLMSpec()
+
+
+def _default_factory() -> Tracker:
+  # recording is mandatory in production: `.configs/trails.json` must be
+  # present (`setup/bootstrap_trails.sh` writes it, or the container
+  # entrypoint provisions on first run). a missing config is a setup error,
+  # not a fallback path — `NullTracker` is opt-in:
+  # - tests: `conftest.py`'s `set_default_tracker_factory(NullTracker)`.
+  # - one-shot exploration: `bro.run(..., tracker=NullTracker())`.
+  if not Path(_TRAILS_CONFIG_PATH).is_file():
+    raise RuntimeError(
+      f'trails: {_TRAILS_CONFIG_PATH} missing; run setup/bootstrap_trails.sh '
+      'to enable recording, or pass tracker=NullTracker() to skip explicitly'
+    )
+  return HTTPTracker.from_config(_TRAILS_CONFIG_PATH)
 
 
 # default factory for the per-run `Tracker` an unconfigured bro uses. swap with
 # `set_default_tracker_factory(...)` — `conftest.py` pins it to `NullTracker`
 # so tests never try to record.
-_default_tracker_factory: Callable[[], Tracker] = NullTracker
+_default_tracker_factory: Callable[[], Tracker] = _default_factory
 
 
 def set_default_tracker_factory(factory: Callable[[], Tracker]) -> None:

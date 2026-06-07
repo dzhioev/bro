@@ -235,6 +235,15 @@ class TestBroRun:
     finally:
       set_default_tracker_factory(NullTracker)
 
+  def test_default_factory_raises_when_trails_config_missing(self, monkeypatch, tmp_path):
+    # `_default_factory` refuses to silently fall back to `NullTracker` —
+    # missing config is a setup error that must be surfaced.
+    from bro import bro as bro_module
+
+    monkeypatch.setattr(bro_module, '_TRAILS_CONFIG_PATH', str(tmp_path / 'missing.json'))
+    with pytest.raises(RuntimeError, match='bootstrap_trails.sh'):
+      bro_module._default_factory()
+
   @pytest.mark.asyncio
   async def test_run_passes_system_and_user_messages(self):
     llm = MockLLM()

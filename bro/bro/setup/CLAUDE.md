@@ -24,6 +24,7 @@ Worktrees get their own `.venv`. The `.claude/hooks/session_start.sh` hook seeds
 - `setup_env.sh` — installs system tools (stow, claude-code, docker via colima on macOS, awscli, uv). macOS and Ubuntu only
 - `setup_repo.sh` — submodules + `uv sync` + `sync-scripts` + `uv sync` again + registers repo-local `git golc` alias + `.configs` symlink sanity check
 - `bootstrap_session_log.sh` — one-time IAM/SSM setup for session-log sync (creates `cw-session-log-sync` IAM user + key, writes `.configs/session_log.json`). Run once after deploying `SessionLogStack`
+- `bootstrap_trails.sh` — one-time setup for the trails sink (reads `/trails/bearer-token` from SSM, derives `base_url` from `.configs/infra.json`'s `delegated_subdomain`, writes `.configs/trails.json`). Run once after deploying `TrailsServerStack`. The container entrypoint also invokes it silently on first run so dive-in sessions with AWS creds bootstrap themselves
 - `claude_commit_footer.py` — prints the per-commit footer with cumulative per-model token totals plus the session id (`> created with Claude Code <version> (<model>: N,NNN, …; session: <id>)`).
 
   The session id links a commit back to its source transcript; the comma-separated totals are precise enough that `usage-report <git-range>` can sum them across a commit range.
@@ -47,6 +48,7 @@ Credentials live in `.configs/` (symlink into the dotfiles submodule).
 - `focus.json` — `{ "url": ..., "token": ... }` for the focus HTTP client
 - `infra.json` — `{ "apex": ..., "delegated_subdomain": ... }` consumed by `infra/cdk/config.py`
 - `session_log.json` — `{ "aws_access_key_id", "aws_secret_access_key", "region", "bucket", "table" }` for `sync-session-log` (created by `bootstrap_session_log.sh`)
+- `trails.json` — `{ "base_url": "https://trails.<apex>", "token": "<bearer>" }` for the deployed trails server. Required for production bro runs — `BaseBro`'s default tracker factory raises when the file is missing rather than silently falling back. Created by `bootstrap_trails.sh`
 - `anthropic.json` — `{ "api_key": "sk-ant-..." }` shared Anthropic Console API key for any in-repo Anthropic API usage
 - `tmdb.json` — `{ "api_key": "<v3-key>" }` The Movie Database v3 API key (get one at themoviedb.org → Settings → API). Read lazily by the Librorian bro's TMDb data source
 - `brave.json` — `{ "api_key": "<subscription-token>" }` Brave Search API key (api.search.brave.com → Subscriptions; free tier gives 2,000 queries/month at 1 qps). Read lazily by the `WebSearch` data source

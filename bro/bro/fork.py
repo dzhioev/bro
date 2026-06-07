@@ -1,20 +1,29 @@
-"""client-side forking of recorded trails.
+"""forking of recorded trails.
 
-a *fork* replays a parent trail's prefix into a fresh `Bro` and lets the caller
-continue with `.send(next_message)`. the new run gets its own trail with
-`parent={trail_id, step_id, relationship='fork'}` so the parent → child edge
-shows up under the same `parent.trail_id` GSI that sub-bro trails will use.
+a *fork* spins up a fresh `Bro` preseeded with a parent trail's prefix and
+lets the caller continue with `.send(next_message)`. the new run gets its own
+trail with `parent={trail_id, step_id, relationship='fork'}` so the parent →
+child edge shows up under the same `parent.trail_id` GSI that sub-bro trails
+will use.
 
-two replay paths exist in the design: server-side via `previous_response_id`
-(cheap, same-provider only) and client-side via full message replay (universal).
-this module implements the client-side path; the server-side path lands in
-stage 5 once the deployed server is in place.
+two replay paths, picked automatically based on the spec / fork-point combo:
 
-reasoning-fidelity caveat for OpenAI reasoning models: same-model forks past the
-provider's response_id TTL rely on the encrypted reasoning items captured in
-each `llm_call.body.response.output` at record time. cross-model forks discard
-reasoning by design — a different model wouldn't have used the prior model's
-thinking anyway.
+- **server-side via ****`previous_response_id`** (cheap, same-provider/model
+  only). when forking right after an `llm_call` step with the same provider,
+  the same model, and no `system_prompt` override, set the new LLM's
+  `_last_response_id` to that step's `response_id`. the provider holds the
+  full prefix cached server-side; only the new user message is sent.
+- **client-side via message replay** (universal). when any of those
+  conditions doesn't hold (different model, different provider, fork at a
+  non-`llm_call` step, prompt override), walk the trail and rebuild the full
+  OpenAI input list, then pass it as the new LLM's input prefix. one API call,
+  full re-tokenization.
+
+reasoning-fidelity caveat for OpenAI reasoning models: same-model forks past
+the provider's response_id TTL fall back to client-side replay and rely on
+the encrypted reasoning items captured in each `llm_call.body.response.output`
+at record time. cross-model forks discard reasoning by design — a different
+model wouldn't have used the prior model's thinking anyway.
 """
 
 import json
@@ -24,7 +33,7 @@ import llm.llms.chat_gpt
 from bro.bros.bro import Bro
 from bro.registry import create_bro
 from llm.llm import LLM, LLMSpec
-from llm.tracker import NullTracker, Parent, RecordedTrail, Tracker
+from llm.tracker import NullTracker, Parent, RecordedTrail, Step, Tracker
 
 
 def replay_messages(trail: RecordedTrail, up_to_step_id: str) -> list[dict]:
@@ -94,19 +103,28 @@ def fork(
   defaults to the prompt recorded on the parent (`system_prompt` step body);
   pass an override to fork with a swapped prompt.
 
+  the replay path is picked automatically: same-provider + same-model + fork
+  at an `llm_call` step + no `system_prompt` override → server-side via
+  `previous_response_id`. otherwise → client-side message replay.
+
   `record=False` pins the new bro to a `NullTracker` — handy for one-shot
   exploration where the fork's trail is not worth keeping. `record=True` (the
   default) uses the explicit `tracker` if given, otherwise the bro's default
-  factory (production: `HttpTracker`; tests: `NullTracker` via `conftest.py`).
+  factory (production: `HTTPTracker`; tests: `NullTracker` via `conftest.py`).
   """
   bro = create_bro(parent_trail.header.bro)
   spec = llm_spec if llm_spec is not None else LLMSpec.from_dict(parent_trail.header.llm_spec)
   bro.llm_spec = spec
 
-  prefix = replay_messages(parent_trail, up_to_step_id)
-  if system_prompt is not None:
-    prefix[0] = {'role': 'system', 'content': system_prompt}
-  effective_system_prompt = prefix[0]['content']
+  fork_step = _find_step(parent_trail, up_to_step_id)
+  use_server_side = _server_side_eligible(
+    parent_spec=parent_trail.header.llm_spec,
+    new_spec=spec,
+    fork_step=fork_step,
+    system_prompt_override=system_prompt,
+  )
+  parent_system_prompt = _extract_system_prompt(parent_trail)
+  effective_system_prompt = system_prompt if system_prompt is not None else parent_system_prompt
   # `bro.system_prompt` is the raw prompt without the interactive-mode note;
   # forks reuse the parent's exact text and skip BaseBro's note-appending path
   # (the parent's prompt — recorded in the trail — already has the note baked
@@ -122,10 +140,17 @@ def fork(
     observer=bro._observer,
     tracker=bro._tracker,
   )
-  _preseed(inner_llm, prefix)
+  if use_server_side:
+    _seed_response_id(inner_llm, fork_step.extras['response_id'])
+  else:
+    prefix = replay_messages(parent_trail, up_to_step_id)
+    if system_prompt is not None:
+      prefix[0] = {'role': 'system', 'content': system_prompt}
+    _preseed(inner_llm, prefix)
   # pre-assigning _llm makes BaseBro.send take the subsequent-call branch on
   # the first .send(next_message) — it ships `[{'role': 'user', 'content': ...}]`
-  # straight to the wrapped LLM, which prepends the prefix to the API input.
+  # straight to the wrapped LLM, which either prepends the replayed prefix
+  # (client-side) or passes `previous_response_id=<seeded>` (server-side).
   bro._llm = inner_llm
 
   parent = Parent(
@@ -142,6 +167,53 @@ def fork(
     entry_point='fork',
   )
   return bro
+
+
+def _server_side_eligible(
+  *,
+  parent_spec: dict,
+  new_spec: LLMSpec,
+  fork_step: Step,
+  system_prompt_override: str | None,
+) -> bool:
+  # server-side fork hands the prefix to the provider via `previous_response_id`,
+  # so it only works when (a) the provider hasn't changed (the response_id
+  # belongs to that provider's storage), (b) the model hasn't changed (the
+  # response_id pins the model on the server), (c) the fork point is right
+  # after an `llm_call` so a response_id actually exists at that point, and
+  # (d) the system prompt hasn't been swapped — the cached server-side prefix
+  # already carries the prompt and we can't restate it. client-side replay
+  # covers every other case.
+  if system_prompt_override is not None:
+    return False
+  if parent_spec.get('type') != new_spec.TYPE:
+    return False
+  if parent_spec.get('model') != new_spec.model:
+    return False
+  if fork_step.kind != 'llm_call':
+    return False
+  return fork_step.extras.get('response_id') is not None
+
+
+def _find_step(trail: RecordedTrail, step_id: str) -> Step:
+  for step in trail.steps:
+    if step.step_id == step_id:
+      return step
+  raise ValueError(f'step_id {step_id!r} not found in trail {trail.header.trail_id!r}')
+
+
+def _seed_response_id(inner_llm: LLM, response_id: str) -> None:
+  # server-side replay seam: ChatGPT.send sends `previous_response_id=...` on
+  # its first call when `_last_response_id` is set, and OpenAI carries the
+  # entire prefix it had cached for that response. other LLM impls don't
+  # support this; raise loudly rather than silently producing a fork that
+  # ignores the seed.
+  if not isinstance(inner_llm, llm.llms.chat_gpt.ChatGPT):
+    raise NotImplementedError(
+      f'server-side fork not implemented for {type(inner_llm).__name__}; '
+      'currently supports ChatGPT only'
+    )
+  inner_llm._last_response_id = response_id
 
 
 def _extract_system_prompt(trail: RecordedTrail) -> str:

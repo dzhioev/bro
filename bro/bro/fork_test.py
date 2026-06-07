@@ -489,11 +489,15 @@ class TestForkSpec:
     assert tracker.headers[0]['llm_spec']['reasoning_effort'] == 'medium'
 
 
-class TestForkContinuation:
+class TestForkServerSidePath:
+  """default path when forking right after an `llm_call` with the same spec:
+  the new LLM is seeded with `previous_response_id` and OpenAI carries the
+  whole prefix server-side. only the new user message hits the wire.
+  """
+
   @pytest.mark.asyncio
-  async def test_send_routes_through_replay_prefix(self):
+  async def test_send_seeds_previous_response_id_and_omits_prefix(self):
     parent_trail = _simple_trail()
-    captured: list[dict]
     ctx, captured, _ = _patch_chat_gpt_create_llm(
       [_fake_response(output=[_message_item('continuation')])]
     )
@@ -502,12 +506,8 @@ class TestForkContinuation:
       result = await bro.send('follow up')
     assert result == 'continuation'
     assert len(captured) == 1
-    # the first api call's input list begins with the replayed prefix and ends
-    # with the new user message — that is the whole point of client-side replay
-    api_input = captured[0]['input']
-    assert api_input[0] == {'role': 'system', 'content': _SYS_TEXT}
-    assert api_input[1] == {'role': 'user', 'content': 'hello'}
-    assert api_input[-1] == {'role': 'user', 'content': 'follow up'}
+    assert captured[0].get('previous_response_id') == 'r1'
+    assert captured[0]['input'] == [{'role': 'user', 'content': 'follow up'}]
 
   @pytest.mark.asyncio
   async def test_user_input_step_recorded_only_for_new_message(self):
@@ -524,25 +524,38 @@ class TestForkContinuation:
     assert user_inputs[0][1] == 'follow up'
 
   @pytest.mark.asyncio
-  async def test_subsequent_send_does_not_re_inject_prefix(self):
+  async def test_multi_send_chains_response_ids(self):
     parent_trail = _simple_trail()
     ctx, captured, _ = _patch_chat_gpt_create_llm(
       [
-        _fake_response(output=[_message_item('first')], response_id='r1'),
-        _fake_response(output=[_message_item('second')], response_id='r2'),
+        _fake_response(output=[_message_item('first')], response_id='r2'),
+        _fake_response(output=[_message_item('second')], response_id='r3'),
       ]
     )
     with ctx:
       bro = fork(parent_trail, 'c1', record=False)
       await bro.send('msg one')
       await bro.send('msg two')
-    # second call goes through `previous_response_id` and only ships the new
-    # user message — no prefix replayed again
-    assert captured[1].get('previous_response_id') == 'r1'
+    # first send carries the seeded fork-point response_id; the second chains
+    # off the first response's id. interleaved calls only ship the new user
+    # message — the prefix lives server-side throughout.
+    assert captured[0].get('previous_response_id') == 'r1'
+    assert captured[0]['input'] == [{'role': 'user', 'content': 'msg one'}]
+    assert captured[1].get('previous_response_id') == 'r2'
     assert captured[1]['input'] == [{'role': 'user', 'content': 'msg two'}]
+
+
+class TestForkClientSideReplay:
+  """client-side replay covers everything server-side can't:
+  - fork at a non-`llm_call` step (e.g. a user_input)
+  - cross-model / cross-provider forks
+  - swapped system prompt
+  """
 
   @pytest.mark.asyncio
   async def test_fork_at_first_user_input(self):
+    # u0 isn't an `llm_call`; server-side has nothing to anchor on, so the
+    # replay path is the only option.
     parent_trail = _simple_trail()
     ctx, captured, _ = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('rerun')])])
     with ctx:
@@ -625,7 +638,10 @@ class TestForkContinuation:
       [_fake_response(output=[_message_item('continued')])]
     )
     with ctx:
-      bro = fork(parent_trail, 'c2', record=False)
+      # forcing client-side via a no-op system_prompt override — the path
+      # picker treats any override as "client-side only" since the cached
+      # server-side prefix can't be restated.
+      bro = fork(parent_trail, 'c2', system_prompt=_SYS_TEXT, record=False)
       await bro.send('next')
     api_input = captured[0]['input']
     # prefix preserves: system, user, function_call, function_call_output (with
@@ -638,6 +654,54 @@ class TestForkContinuation:
       assistant_reply,
       {'role': 'user', 'content': 'next'},
     ]
+
+  @pytest.mark.asyncio
+  async def test_cross_model_falls_back_to_client_side(self):
+    # different model on the new spec disqualifies server-side (a
+    # response_id is pinned to the originating model on OpenAI's side).
+    parent_trail = _simple_trail()
+    override = chat_gpt_module.LLMSpec(model='gpt-5.4-mini')
+    ctx, captured, _ = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('ok')])])
+    with ctx:
+      bro = fork(parent_trail, 'c1', llm_spec=override, record=False)
+      await bro.send('next')
+    assert captured[0].get('previous_response_id') is None
+    api_input = captured[0]['input']
+    assert api_input[0] == {'role': 'system', 'content': _SYS_TEXT}
+    assert api_input[-1] == {'role': 'user', 'content': 'next'}
+
+  @pytest.mark.asyncio
+  async def test_system_prompt_override_forces_client_side(self):
+    # the cached server-side prefix already carries the prompt; we can't
+    # restate it through `previous_response_id`, so any override forces a
+    # full replay so the swapped prompt actually takes effect.
+    parent_trail = _simple_trail()
+    ctx, captured, _ = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('ok')])])
+    with ctx:
+      bro = fork(parent_trail, 'c1', system_prompt='swapped prompt', record=False)
+      await bro.send('next')
+    assert captured[0].get('previous_response_id') is None
+    assert captured[0]['input'][0] == {'role': 'system', 'content': 'swapped prompt'}
+
+  @pytest.mark.asyncio
+  async def test_subsequent_send_does_not_re_inject_prefix(self):
+    # `_input_prefix` is consumed exactly once on first send. forced
+    # client-side here via prompt override so the prefix path actually fires.
+    parent_trail = _simple_trail()
+    ctx, captured, _ = _patch_chat_gpt_create_llm(
+      [
+        _fake_response(output=[_message_item('first')], response_id='resp_a'),
+        _fake_response(output=[_message_item('second')], response_id='resp_b'),
+      ]
+    )
+    with ctx:
+      bro = fork(parent_trail, 'c1', system_prompt=_SYS_TEXT, record=False)
+      await bro.send('msg one')
+      await bro.send('msg two')
+    # second call goes through `previous_response_id` and only ships the new
+    # user message — the replayed prefix never re-injects
+    assert captured[1].get('previous_response_id') == 'resp_a'
+    assert captured[1]['input'] == [{'role': 'user', 'content': 'msg two'}]
 
 
 class TestForkAcrossWriteAndRead:

@@ -10,17 +10,33 @@ implementations:
 - `NullTracker` — no-op, the default when no sink is configured.
 - `LocalFileTracker` — appends JSONL to a local file; one header line + N
   step lines per trail. dev helper for offline inspection.
+- `HTTPTracker` — sync per-step HTTPS POSTs to the deployed `trails-server`.
+  the production sink, configured via `.configs/trails.json`.
 """
 
+import http.client
 import json
+import logging
+import os
+import ssl
+import time
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, TextIO
+from urllib.parse import urlparse
 
 import configs
+
+DEFAULT_CONFIG_PATH = os.path.join(configs.DEFAULT_CONFIGS_DIR, 'trails.json')
+
+# delays before each retry attempt for transient blips on per-step POSTs and
+# end-trail POSTs (an empty tuple means "fail-fast, no retries", used by
+# start_trail). format: schedule[i] is the sleep before retry-attempt i; the
+# initial attempt has no preceding sleep.
+_STEP_RETRY_DELAYS_SECONDS = (0.1, 0.5, 2.0)
 
 StepKind = Literal[
   'system_prompt',
@@ -249,6 +265,163 @@ class LocalFileTracker(Tracker):
 # `tokens_in`, ...). kept module-private so the writer stays the only place
 # that mints record shapes.
 _STEP_CANONICAL_FIELDS = frozenset({'record_type', 'trail_id', 'step_id', 'ts', 'kind', 'body'})
+
+
+class HTTPTracker(Tracker):
+  """ship trail events to the deployed `trails-server` over HTTPS.
+
+  one persistent connection per tracker; each call is a synchronous POST and
+  every step either commits or propagates the error out of the bro. sync writes
+  are what makes crash-on-failure meaningful — async fire-and-forget would lose
+  steps when one-shot bros exit before a flush.
+
+  policy by endpoint:
+  - `start_trail` (`POST /v1/trails`): fail-fast. one attempt; raising aborts
+    the run before any work happens, because a bro that can't record shouldn't
+    proceed.
+  - `step` (`POST /v1/trails/{id}/steps`): 100ms / 500ms / 2s in-process
+    retries on transient blips, then propagate.
+  - `end_trail` (`POST /v1/trails/{id}/end`): same retry schedule, but a
+    persistent failure is logged loudly and not re-raised — the trail is
+    already finished, and the server can reap headers missing `ended_at`.
+
+  the server auto-emits the `system_prompt` step inside `POST /v1/trails`, so
+  `HTTPTracker.start_trail` does not mirror `LocalFileTracker`'s extra
+  `step('system_prompt', ...)` call.
+  """
+
+  def __init__(self, base_url: str, token: str, *, timeout: float = 5.0):
+    self._base_url = base_url.rstrip('/')
+    self._token = token
+    self._timeout = timeout
+    parsed = urlparse(self._base_url)
+    if parsed.scheme != 'https':
+      raise ValueError(f'HTTPTracker requires an https URL, got {base_url!r}')
+    hostname = parsed.hostname
+    self._host: str = hostname if hostname is not None else 'localhost'
+    self._port = parsed.port
+    self._conn: http.client.HTTPSConnection | None = None
+    self._trail_id: str | None = None
+
+  @classmethod
+  def from_config(cls, path: Path | str = DEFAULT_CONFIG_PATH) -> 'HTTPTracker':
+    """build an `HTTPTracker` from a JSON config file.
+
+    schema: `{"base_url": "https://trails.<apex>", "token": "<bearer>"}`.
+    raises `FileNotFoundError` if the file is missing.
+    """
+    config = json.loads(Path(path).read_text())
+    return cls(base_url=config['base_url'], token=config['token'])
+
+  def start_trail(
+    self,
+    bro: str,
+    llm_spec: dict,
+    system_prompt: str,
+    parent: Parent | None,
+    interactive: bool,
+    entry_point: str,
+  ) -> str:
+    payload = {
+      'bro': bro,
+      'bro_version': configs.VERSION,
+      'llm_spec': llm_spec,
+      'system_prompt': system_prompt,
+      'parent': asdict(parent) if parent is not None else None,
+      'interactive': interactive,
+      'entry_point': entry_point,
+    }
+    response = self._post('/v1/trails', payload, retry_delays=())
+    trail_id: str = response['trail_id']
+    self._trail_id = trail_id
+    return trail_id
+
+  def step(self, kind: StepKind, body: Any, **extras: Any) -> None:
+    if self._trail_id is None:
+      raise RuntimeError('step() called before start_trail()')
+    payload = {'kind': kind, 'body': body, **extras}
+    self._post(
+      f'/v1/trails/{self._trail_id}/steps',
+      payload,
+      retry_delays=_STEP_RETRY_DELAYS_SECONDS,
+    )
+
+  def end_trail(self, reason: EndReason) -> None:
+    if self._trail_id is None:
+      return
+    payload = {'reason': reason}
+    try:
+      self._post(
+        f'/v1/trails/{self._trail_id}/end',
+        payload,
+        retry_delays=_STEP_RETRY_DELAYS_SECONDS,
+      )
+    except Exception as exc:
+      # work is already done; the server reaps trails missing ended_at, so we
+      # log loudly and let the run return normally rather than masking the
+      # outcome with a tracker failure.
+      logging.warning('trails end_trail failed for trail %s: %s', self._trail_id, exc)
+    finally:
+      self._trail_id = None
+      self._drop_conn()
+
+  def close(self) -> None:
+    self._drop_conn()
+
+  def _post(self, path: str, payload: dict, *, retry_delays: tuple[float, ...]) -> dict:
+    body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
+    headers = {
+      'Authorization': f'Bearer {self._token}',
+      'Content-Type': 'application/json',
+    }
+    last_exc: Exception | None = None
+    # initial attempt has no preceding sleep; each retry sleeps its delay
+    # before attempting. the loop falls through after the last failure and
+    # raises the captured exception.
+    schedule: tuple[float, ...] = (0.0,) + retry_delays
+    for delay in schedule:
+      if delay > 0:
+        time.sleep(delay)
+      try:
+        return self._request('POST', path, headers, body)
+      except Exception as exc:
+        last_exc = exc
+        # drop the persistent connection so the next attempt opens a fresh one;
+        # transient blips often leave the socket half-open.
+        self._drop_conn()
+    assert last_exc is not None
+    raise last_exc
+
+  def _request(self, method: str, path: str, headers: dict, body: bytes) -> dict:
+    conn = self._get_conn()
+    conn.request(method, path, body=body, headers=headers)
+    resp = conn.getresponse()
+    raw = resp.read()
+    if resp.status >= 400:
+      raise http.client.HTTPException(
+        f'{method} {path} -> HTTP {resp.status}: {raw.decode(errors="replace")}'
+      )
+    if resp.status == 204 or len(raw) == 0:
+      return {}
+    return json.loads(raw)
+
+  def _get_conn(self) -> http.client.HTTPSConnection:
+    if self._conn is not None:
+      return self._conn
+    ctx = ssl.create_default_context()
+    self._conn = http.client.HTTPSConnection(
+      self._host, self._port, timeout=self._timeout, context=ctx
+    )
+    return self._conn
+
+  def _drop_conn(self) -> None:
+    if self._conn is None:
+      return
+    try:
+      self._conn.close()
+    except Exception:
+      pass
+    self._conn = None
 
 
 def read_local_file(path: Path | str) -> list[RecordedTrail]:
