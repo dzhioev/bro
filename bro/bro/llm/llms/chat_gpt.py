@@ -259,6 +259,13 @@ class ChatGPT(llm.llm.LLM):
     # responses.create increments it before emitting the llm_call + per-output
     # steps it produces.
     self._turn_index: int = 0
+    # client-side fork seam: bro.fork sets this to the replayed conversation
+    # prefix (already in OpenAI input shape — system message at index 0, user
+    # messages, model output items, function_call_outputs). consumed on the
+    # first send: prepended to the API input and a system message in the
+    # incoming messages list is dropped (the prefix already carries the
+    # system). cleared after one use so subsequent send()s behave normally.
+    self._input_prefix: list[ResponseInputItemParam] | None = None
 
   async def _resolve_openai_tools(self) -> list[ToolParam]:
     if self._openai_tools is not None:
@@ -397,14 +404,25 @@ class ChatGPT(llm.llm.LLM):
 
   async def send(self, messages: list[dict]) -> str:
     openai_tools = await self._resolve_openai_tools()
-    api_input: list[ResponseInputItemParam] = [convert_message(msg) for msg in messages]
+    # client-side fork: the replayed prefix passes through unconverted (it is
+    # already in OpenAI input shape, mixing role-keyed messages with raw output
+    # items and function_call_outputs). the incoming system message is dropped
+    # because the prefix carries its own system at index 0. the prefix is
+    # consumed exactly once.
+    api_input: list[ResponseInputItemParam] = []
+    incoming = messages
+    if self._input_prefix is not None:
+      api_input.extend(self._input_prefix)
+      incoming = [msg for msg in messages if msg.get('role') != 'system']
+      self._input_prefix = None
+    api_input.extend(convert_message(msg) for msg in incoming)
 
     # user_input shares turn 0 with the auto-emitted system_prompt on the very
     # first send(). on later send()s (interactive multi-turn) advance to a
     # fresh turn so the new user_input doesn't share a turn_index with the
     # previous turn's llm_call. system messages are skipped — start_trail
     # already emitted the system_prompt step.
-    user_messages = [msg for msg in messages if msg.get('role') == 'user']
+    user_messages = [msg for msg in incoming if msg.get('role') == 'user']
     if len(user_messages) > 0 and self._turn_index > 0:
       self._turn_index += 1
     for msg in user_messages:

@@ -86,6 +86,17 @@ class Step:
   extras: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class RecordedTrail:
+  """a trail rehydrated from a sink — header plus the ordered steps. consumed
+  by `bro.fork` to replay or fork a recorded run. richer query / reader APIs
+  land in the stage 6 reader library; this is the minimum the forker needs.
+  """
+
+  header: Trail
+  steps: list[Step]
+
+
 class Tracker(ABC):
   """capture a trail of bro / LLM run events and ship it to a sink.
 
@@ -231,3 +242,58 @@ class LocalFileTracker(Tracker):
 
   def _write(self, record: dict) -> None:
     self._file.write(json.dumps(record, ensure_ascii=False) + '\n')
+
+
+# canonical step fields written by LocalFileTracker (everything else on a step
+# line is an extras field — `turn_index`, `tool_name`, `arguments`, `call_id`,
+# `tokens_in`, ...). kept module-private so the writer stays the only place
+# that mints record shapes.
+_STEP_CANONICAL_FIELDS = frozenset({'record_type', 'trail_id', 'step_id', 'ts', 'kind', 'body'})
+
+
+def read_local_file(path: Path | str) -> list[RecordedTrail]:
+  """load every trail from a JSONL file produced by `LocalFileTracker`.
+
+  multiple trails in the same file are demultiplexed by `trail_id`; steps come
+  back in file order (the writer is append-only and writes header + N steps per
+  trail sequentially). returned trails are listed in the order their headers
+  appear in the file.
+  """
+  path = Path(path)
+  headers: dict[str, Trail] = {}
+  steps: dict[str, list[Step]] = {}
+  order: list[str] = []
+  for line in path.read_text().splitlines():
+    if len(line) == 0:
+      continue
+    record = json.loads(line)
+    record_type = record['record_type']
+    trail_id = record['trail_id']
+    if record_type == 'trail':
+      parent_data = record.get('parent')
+      parent = Parent(**parent_data) if parent_data is not None else None
+      headers[trail_id] = Trail(
+        trail_id=trail_id,
+        bro=record['bro'],
+        bro_version=record['bro_version'],
+        llm_spec=record['llm_spec'],
+        started_at=record['started_at'],
+        interactive=record['interactive'],
+        entry_point=record['entry_point'],
+        parent=parent,
+      )
+      steps[trail_id] = []
+      order.append(trail_id)
+    elif record_type == 'step':
+      extras = {k: v for k, v in record.items() if k not in _STEP_CANONICAL_FIELDS}
+      steps[trail_id].append(
+        Step(
+          trail_id=trail_id,
+          step_id=record['step_id'],
+          ts=record['ts'],
+          kind=record['kind'],
+          body=record['body'],
+          extras=extras,
+        )
+      )
+  return [RecordedTrail(header=headers[tid], steps=steps[tid]) for tid in order]
