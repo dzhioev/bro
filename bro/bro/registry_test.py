@@ -24,7 +24,7 @@ class _EchoOnlySpec(LLMSpec):
 
   model: str = 'mock'
 
-  def create_llm(self, mcp_servers=None, observer=None) -> LLM:
+  def create_llm(self, mcp_servers=None, observer=None, tracker=None) -> LLM:
     return MockLLM(mcp_servers)
 
   def dump(self) -> dict:

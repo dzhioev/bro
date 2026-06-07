@@ -6,6 +6,7 @@ import llm.llm
 import configs
 from llm.mcp import MCPServer, Tool, ToolControlSignal
 from llm.observer import Observer
+from llm.tracker import Tracker
 
 from openai import OpenAI
 from openai.types.responses import (
@@ -72,6 +73,7 @@ class LLMSpec(llm.llm.LLMSpec):
     self,
     mcp_servers: list[MCPServer] | None = None,
     observer: Observer | None = None,
+    tracker: Tracker | None = None,
   ) -> llm.llm.LLM:
     return ChatGPT.create(
       model=self.model,
@@ -79,6 +81,7 @@ class LLMSpec(llm.llm.LLMSpec):
       service_tier=self.service_tier,
       mcp_servers=mcp_servers,
       observer=observer,
+      tracker=tracker,
     )
 
   def dump(self) -> dict:
@@ -219,6 +222,7 @@ class ChatGPT(llm.llm.LLM):
     reasoning_effort: ReasoningEffort | None = None,
     service_tier: str | None = None,
     observer: Observer | None = None,
+    tracker: Tracker | None = None,
   ):
     with open(config_path, 'r') as f:
       config = json.load(f)
@@ -229,6 +233,7 @@ class ChatGPT(llm.llm.LLM):
       reasoning_effort=reasoning_effort,
       service_tier=service_tier,
       observer=observer,
+      tracker=tracker,
     )
 
   def __init__(
@@ -239,14 +244,21 @@ class ChatGPT(llm.llm.LLM):
     reasoning_effort: ReasoningEffort | None = None,
     service_tier: str | None = None,
     observer: Observer | None = None,
+    tracker: Tracker | None = None,
   ):
-    super().__init__(mcp_servers, observer=observer)
+    super().__init__(mcp_servers, observer=observer, tracker=tracker)
     self.model = model
     self.client = OpenAI(api_key=api_key)
     self._openai_tools: list[ToolParam] | None = None
     self._last_response_id: str | None = None
     self._reasoning_effort = reasoning_effort
     self._service_tier = service_tier
+    # round-trip counter shared across the whole trail: turn 0 holds the
+    # framework's system_prompt step (auto-emitted by tracker.start_trail) and
+    # the user_input we emit at the top of send(); each subsequent
+    # responses.create increments it before emitting the llm_call + per-output
+    # steps it produces.
+    self._turn_index: int = 0
 
   async def _resolve_openai_tools(self) -> list[ToolParam]:
     if self._openai_tools is not None:
@@ -255,35 +267,49 @@ class ChatGPT(llm.llm.LLM):
     self._openai_tools = tools_to_openai_format(tools)
     return self._openai_tools
 
-  def _emit_response_events(self, response: Response, *, is_terminal: bool) -> None:
-    # walk output in order so the trace mirrors the model's own sequence of
-    # reasoning, assistant text, and tool calls. tool *results* are emitted by
-    # _execute_tool_calls after the call returns. assistant text carries the
-    # `terminal` flag so the observer can tell mid-stream chatter (between tool
-    # calls) apart from the final reply (the same text LLM.send returns) —
-    # callers that already render the return value can branch on it.
+  def _emit_response_steps(self, response: Response, *, is_terminal: bool, turn_index: int) -> None:
+    # walk output in order so both the live observer trace and the recorded
+    # trail mirror the model's own sequence of reasoning, assistant text, and
+    # tool calls. tool *results* are emitted by _execute_tool_calls after the
+    # call returns. assistant text carries the `terminal` flag so the observer
+    # can tell mid-stream chatter (between tool calls) apart from the final
+    # reply (the same text LLM.send returns) — callers that already render the
+    # return value can branch on it; on the trail it lands as an extras field.
     for item in response.output:
       if item.type == 'reasoning':
         for part in item.summary:
           if part.type == 'summary_text' and len(part.text) > 0:
             self.observer.on_reasoning(part.text)
+            self.tracker.step('reasoning', part.text, turn_index=turn_index)
       elif item.type == 'message':
         text = ''.join(c.text for c in item.content if c.type == 'output_text')
         if len(text) > 0:
           self.observer.on_assistant_message(text, terminal=is_terminal)
+          self.tracker.step('assistant', text, turn_index=turn_index, terminal=is_terminal)
       elif item.type == 'function_call':
         try:
           args = json.loads(item.arguments)
         except json.JSONDecodeError:
           args = {'_raw_arguments': item.arguments}
         self.observer.on_tool_call(item.name, args)
+        self.tracker.step(
+          'tool_call',
+          None,
+          turn_index=turn_index,
+          tool_name=item.name,
+          arguments=args,
+          call_id=item.call_id,
+        )
 
-  async def _execute_tool_calls(self, response: Response) -> list[ResponseInputItemParam]:
+  async def _execute_tool_calls(
+    self, response: Response, *, turn_index: int
+  ) -> list[ResponseInputItemParam]:
     results: list[ResponseInputItemParam] = []
     for item in response.output:
       if item.type != 'function_call':
         continue
       kwargs = json.loads(item.arguments)
+      is_error = False
       try:
         output = await self.tools.call(item.name, kwargs)
       except ToolControlSignal:
@@ -292,7 +318,18 @@ class ChatGPT(llm.llm.LLM):
         # surface the failure back to the model as the tool result so the agent
         # can react (retry, switch source, raise) instead of crashing the loop.
         output = f'tool {item.name!r} failed: {type(exc).__name__}: {exc}'
+        is_error = True
       self.observer.on_tool_result(item.name, output)
+      # tracker body keeps the raw tool output (dict or str) — the JSON encoding
+      # we do below for the API is a wire-format concern only.
+      self.tracker.step(
+        'tool_result',
+        output,
+        turn_index=turn_index,
+        tool_name=item.name,
+        call_id=item.call_id,
+        is_error=is_error,
+      )
       if isinstance(output, dict):
         output = json.dumps(output)
       results.append({'type': 'function_call_output', 'call_id': item.call_id, 'output': output})
@@ -303,8 +340,14 @@ class ChatGPT(llm.llm.LLM):
       return {}
     # `summary='auto'` is what gives us the inner monologue. it's free (not
     # billed as output tokens) and only renders when the model actually has
-    # something worth summarising.
-    return {'reasoning': {'effort': self._reasoning_effort, 'summary': 'auto'}}
+    # something worth summarising. `include=['reasoning.encrypted_content']`
+    # asks the server to return its raw (encrypted) reasoning items in the
+    # response payload — captured into the llm_call body so client-side replay
+    # past the response_id TTL stays high-fidelity for reasoning models.
+    return {
+      'reasoning': {'effort': self._reasoning_effort, 'summary': 'auto'},
+      'include': ['reasoning.encrypted_content'],
+    }
 
   def _service_tier_kwargs(self) -> dict:
     # 'priority' trades a higher per-token price for faster, more consistent
@@ -313,35 +356,93 @@ class ChatGPT(llm.llm.LLM):
       return {}
     return {'service_tier': self._service_tier}
 
-  async def send(self, messages: list[dict]) -> str:
-    openai_tools = await self._resolve_openai_tools()
-    api_input: list[ResponseInputItemParam] = [convert_message(msg) for msg in messages]
+  def _record_llm_call(self, request: dict, response: Response, *, turn_index: int) -> None:
+    # raw request + response payload lands inline in the trail step body. for
+    # LocalFileTracker that's a fat JSONL line; HttpTracker will spill anything
+    # over the inline threshold to S3 server-side and replace the body with
+    # `{"s3": <key>}` — the bro doesn't know the difference.
+    body = {'request': request, 'response': response.model_dump(mode='json')}
+    usage = getattr(response, 'usage', None)
+    tokens_in = getattr(usage, 'input_tokens', 0) if usage is not None else 0
+    tokens_out = getattr(usage, 'output_tokens', 0) if usage is not None else 0
+    details = getattr(usage, 'output_tokens_details', None) if usage is not None else None
+    tokens_reasoning = getattr(details, 'reasoning_tokens', 0) if details is not None else 0
+    self.tracker.step(
+      'llm_call',
+      body,
+      turn_index=turn_index,
+      response_id=response.id,
+      tokens_in=tokens_in,
+      tokens_out=tokens_out,
+      tokens_reasoning=tokens_reasoning,
+    )
 
+  def _build_request_kwargs(
+    self,
+    input_items: list[ResponseInputItemParam],
+    openai_tools: list[ToolParam],
+    *,
+    previous_response_id: str | None,
+  ) -> dict:
     kwargs: dict = {
       'model': self.model,
-      'input': api_input,
+      'input': input_items,
       'tools': openai_tools,
       **self._reasoning_kwargs(),
       **self._service_tier_kwargs(),
     }
-    if self._last_response_id is not None:
-      kwargs['previous_response_id'] = self._last_response_id
+    if previous_response_id is not None:
+      kwargs['previous_response_id'] = previous_response_id
+    return kwargs
 
-    response = self.client.responses.create(**kwargs)
-    self._emit_response_events(response, is_terminal=not has_tool_calls(response))
+  async def send(self, messages: list[dict]) -> str:
+    openai_tools = await self._resolve_openai_tools()
+    api_input: list[ResponseInputItemParam] = [convert_message(msg) for msg in messages]
+
+    # user_input shares turn 0 with the auto-emitted system_prompt on the very
+    # first send(). on later send()s (interactive multi-turn) advance to a
+    # fresh turn so the new user_input doesn't share a turn_index with the
+    # previous turn's llm_call. system messages are skipped — start_trail
+    # already emitted the system_prompt step.
+    user_messages = [msg for msg in messages if msg.get('role') == 'user']
+    if len(user_messages) > 0 and self._turn_index > 0:
+      self._turn_index += 1
+    for msg in user_messages:
+      self.tracker.step('user_input', _extract_text(msg), turn_index=self._turn_index)
+
+    request_kwargs = self._build_request_kwargs(
+      api_input, openai_tools, previous_response_id=self._last_response_id
+    )
+    self._turn_index += 1
+    response = self.client.responses.create(**request_kwargs)
+    self._record_llm_call(request_kwargs, response, turn_index=self._turn_index)
+    self._emit_response_steps(
+      response, is_terminal=not has_tool_calls(response), turn_index=self._turn_index
+    )
 
     while has_tool_calls(response):
-      tool_results = await self._execute_tool_calls(response)
-      continuation_kwargs: dict = {
-        'model': self.model,
-        'previous_response_id': response.id,
-        'input': tool_results,
-        'tools': openai_tools,
-        **self._reasoning_kwargs(),
-        **self._service_tier_kwargs(),
-      }
-      response = self.client.responses.create(**continuation_kwargs)
-      self._emit_response_events(response, is_terminal=not has_tool_calls(response))
+      tool_results = await self._execute_tool_calls(response, turn_index=self._turn_index)
+      request_kwargs = self._build_request_kwargs(
+        tool_results, openai_tools, previous_response_id=response.id
+      )
+      self._turn_index += 1
+      response = self.client.responses.create(**request_kwargs)
+      self._record_llm_call(request_kwargs, response, turn_index=self._turn_index)
+      self._emit_response_steps(
+        response, is_terminal=not has_tool_calls(response), turn_index=self._turn_index
+      )
 
     self._last_response_id = response.id
     return parse_response(response)
+
+
+def _extract_text(msg: dict) -> str:
+  # body for the user_input step. multimodal content (images, files) is
+  # discarded here; the full structured input still lives on the next
+  # llm_call step's request payload.
+  content = msg.get('content', '')
+  if isinstance(content, str):
+    return content
+  if isinstance(content, list):
+    return '\n'.join(p.get('text', '') for p in content if p.get('type') == 'text')
+  return str(content)

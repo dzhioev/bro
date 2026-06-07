@@ -148,7 +148,7 @@ class _FastlessSpec(LLMSpec):
 
   model: str = 'whatever'
 
-  def create_llm(self, mcp_servers=None, observer=None) -> LLM:
+  def create_llm(self, mcp_servers=None, observer=None, tracker=None) -> LLM:
     raise NotImplementedError('not constructible in tests')
 
   def dump(self) -> dict:

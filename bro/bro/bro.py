@@ -388,4 +388,5 @@ class BaseBro(ABC):
     return self.llm_spec.create_llm(
       mcp_servers=self._mcp_servers_for(interactive=interactive),
       observer=self._observer,
+      tracker=self._tracker,
     )

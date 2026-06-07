@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from openai.types.responses import Response
@@ -7,6 +7,7 @@ from openai.types.responses import Response
 import llm.llm
 from llm.llms.chat_gpt import ChatGPT, LLMSpec
 from llm.mcp import InProcessMCPServer, Tool, ToolControlSignal, ToolRegistry
+from llm.tracker import Tracker
 
 
 class _StaticTool(Tool):
@@ -56,12 +57,112 @@ def _make_chat_gpt(tools: list[Tool]) -> ChatGPT:
   return gpt
 
 
+class _RecordingTracker(Tracker):
+  """captures every tracker call so tests can assert kind/body/extras."""
+
+  def __init__(self):
+    self.headers: list[dict] = []
+    self.steps: list[tuple[str, Any, dict]] = []
+    self.ended: list[str] = []
+
+  def start_trail(self, bro, llm_spec, system_prompt, parent, interactive, entry_point) -> str:
+    self.headers.append(
+      {
+        'bro': bro,
+        'llm_spec': llm_spec,
+        'system_prompt': system_prompt,
+        'parent': parent,
+        'interactive': interactive,
+        'entry_point': entry_point,
+      }
+    )
+    return 'tid'
+
+  def step(self, kind, body, **extras) -> None:
+    self.steps.append((kind, body, extras))
+
+  def end_trail(self, reason) -> None:
+    self.ended.append(reason)
+
+
+def _fake_usage(*, input_tokens=10, output_tokens=20, reasoning_tokens=5):
+  return SimpleNamespace(
+    input_tokens=input_tokens,
+    output_tokens=output_tokens,
+    output_tokens_details=SimpleNamespace(reasoning_tokens=reasoning_tokens),
+  )
+
+
+def _fake_response(*, output, response_id='resp_1', usage=None, dump_payload=None) -> Response:
+  # `output` is the list of duck-typed items _emit_response_steps walks.
+  # `dump_payload` becomes the response.model_dump() result captured into
+  # the llm_call body — tests can pass a sentinel dict to verify it lands.
+  ns = SimpleNamespace(
+    id=response_id,
+    output=output,
+    usage=usage if usage is not None else _fake_usage(),
+  )
+  payload = dump_payload if dump_payload is not None else {'id': response_id}
+  ns.model_dump = lambda mode='json': payload
+  return cast(Response, ns)
+
+
+def _reasoning_item(*texts: str):
+  return SimpleNamespace(
+    type='reasoning',
+    summary=[SimpleNamespace(type='summary_text', text=t) for t in texts],
+  )
+
+
+def _message_item(text: str):
+  return SimpleNamespace(
+    type='message',
+    content=[SimpleNamespace(type='output_text', text=text)],
+  )
+
+
+def _function_call_item(name: str, *, call_id: str, arguments='{}'):
+  return SimpleNamespace(type='function_call', name=name, arguments=arguments, call_id=call_id)
+
+
+def _make_chat_gpt_with_tracker(
+  tools: list[Tool] | None = None,
+  *,
+  reasoning_effort=None,
+) -> tuple[ChatGPT, _RecordingTracker, list[dict]]:
+  """build a ChatGPT instance with mocked tool registry + tracker + a captured-
+  kwargs sink for responses.create. callers wire `gpt.client.responses.create`
+  to whatever stub sequence they need.
+  """
+  gpt = ChatGPT(api_key='dummy', reasoning_effort=reasoning_effort)
+  gpt.tools = ToolRegistry([InProcessMCPServer(tools)] if tools is not None else [])
+  # bypass the real openai schema conversion path — tests don't care about it.
+  gpt._openai_tools = []
+  tracker = _RecordingTracker()
+  gpt.tracker = tracker
+  captured: list[dict] = []
+  return gpt, tracker, captured
+
+
+def _install_responses(gpt: ChatGPT, sequence: list, captured: list[dict]) -> None:
+  it = iter(sequence)
+
+  def create(**kwargs):
+    captured.append(kwargs)
+    return next(it)
+
+  # OpenAI client exposes `responses` as a cached_property — write through to
+  # a duck-typed namespace instead by replacing `gpt.client` wholesale. cast
+  # keeps pyright quiet since the attribute is typed as the OpenAI class.
+  gpt.client = cast(Any, SimpleNamespace(responses=SimpleNamespace(create=create)))
+
+
 @pytest.mark.asyncio
 async def test_tool_exception_becomes_function_call_output():
   tool = _StaticTool('boom', raise_with=RuntimeError('upstream down'))
   gpt = _make_chat_gpt([tool])
 
-  results = await gpt._execute_tool_calls(_function_call_response('boom'))
+  results = await gpt._execute_tool_calls(_function_call_response('boom'), turn_index=1)
 
   assert len(results) == 1
   result = cast(dict, results[0])
@@ -81,17 +182,256 @@ async def test_tool_control_signal_propagates_past_loop():
   gpt = _make_chat_gpt([tool])
 
   with pytest.raises(_Abort, match='stop the run'):
-    await gpt._execute_tool_calls(_function_call_response('halt'))
+    await gpt._execute_tool_calls(_function_call_response('halt'), turn_index=1)
 
 
 @pytest.mark.asyncio
 async def test_successful_tool_call_returns_output_unchanged():
   gpt = _make_chat_gpt([_StaticTool('ping')])
 
-  results = await gpt._execute_tool_calls(_function_call_response('ping'))
+  results = await gpt._execute_tool_calls(_function_call_response('ping'), turn_index=1)
 
   assert len(results) == 1
   assert cast(dict, results[0])['output'] == 'ok'
+
+
+class TestToolResultTrackerEmission:
+  @pytest.mark.asyncio
+  async def test_emits_tool_result_with_call_id_and_is_error_false(self):
+    gpt, tracker, _ = _make_chat_gpt_with_tracker([_StaticTool('ping')])
+    await gpt._execute_tool_calls(_function_call_response('ping'), turn_index=2)
+
+    results = [s for s in tracker.steps if s[0] == 'tool_result']
+    assert len(results) == 1
+    kind, body, extras = results[0]
+    assert body == 'ok'
+    assert extras == {
+      'turn_index': 2,
+      'tool_name': 'ping',
+      'call_id': 'call_1',
+      'is_error': False,
+    }
+
+  @pytest.mark.asyncio
+  async def test_emits_tool_result_with_is_error_true_on_exception(self):
+    tool = _StaticTool('boom', raise_with=RuntimeError('upstream down'))
+    gpt, tracker, _ = _make_chat_gpt_with_tracker([tool])
+    await gpt._execute_tool_calls(_function_call_response('boom'), turn_index=3)
+
+    results = [s for s in tracker.steps if s[0] == 'tool_result']
+    assert len(results) == 1
+    _, body, extras = results[0]
+    assert "'boom' failed" in body
+    assert extras['is_error'] is True
+    assert extras['turn_index'] == 3
+    assert extras['call_id'] == 'call_1'
+
+
+class TestSendTrackerEmission:
+  @pytest.mark.asyncio
+  async def test_user_input_emitted_at_turn_zero_skipping_system(self):
+    gpt, tracker, captured = _make_chat_gpt_with_tracker()
+    _install_responses(gpt, [_fake_response(output=[_message_item('hi back')])], captured)
+
+    await gpt.send(
+      [
+        {'role': 'system', 'content': 'be helpful'},
+        {'role': 'user', 'content': 'hello'},
+      ]
+    )
+
+    user_steps = [s for s in tracker.steps if s[0] == 'user_input']
+    assert len(user_steps) == 1
+    _, body, extras = user_steps[0]
+    assert body == 'hello'
+    assert extras == {'turn_index': 0}
+
+  @pytest.mark.asyncio
+  async def test_user_input_text_extracted_from_multimodal_content(self):
+    gpt, tracker, captured = _make_chat_gpt_with_tracker()
+    _install_responses(gpt, [_fake_response(output=[_message_item('ack')])], captured)
+
+    await gpt.send(
+      [
+        {
+          'role': 'user',
+          'content': [
+            {'type': 'text', 'text': 'caption this'},
+            {'type': 'image_url', 'image_url': {'url': 'data:image/png;base64,AAAA'}},
+          ],
+        }
+      ]
+    )
+
+    user_steps = [s for s in tracker.steps if s[0] == 'user_input']
+    assert user_steps[0][1] == 'caption this'
+
+  @pytest.mark.asyncio
+  async def test_llm_call_records_request_response_id_and_token_counts(self):
+    gpt, tracker, captured = _make_chat_gpt_with_tracker()
+    response = _fake_response(
+      output=[_message_item('reply')],
+      response_id='resp_xyz',
+      usage=_fake_usage(input_tokens=11, output_tokens=22, reasoning_tokens=33),
+      dump_payload={'id': 'resp_xyz', 'output': ['…']},
+    )
+    _install_responses(gpt, [response], captured)
+
+    await gpt.send([{'role': 'user', 'content': 'hi'}])
+
+    llm_calls = [s for s in tracker.steps if s[0] == 'llm_call']
+    assert len(llm_calls) == 1
+    _, body, extras = llm_calls[0]
+    assert body['response'] == {'id': 'resp_xyz', 'output': ['…']}
+    assert body['request']['model'] == 'gpt-5'
+    # request kwargs round-tripped, including the input list passed to the API.
+    assert body['request']['input'] == captured[0]['input']
+    assert extras == {
+      'turn_index': 1,
+      'response_id': 'resp_xyz',
+      'tokens_in': 11,
+      'tokens_out': 22,
+      'tokens_reasoning': 33,
+    }
+
+  @pytest.mark.asyncio
+  async def test_emits_reasoning_assistant_tool_call_in_order(self):
+    gpt, tracker, captured = _make_chat_gpt_with_tracker([_StaticTool('ping')])
+    # first response: reasoning + interim assistant + tool_call → tool loop runs;
+    # second response: terminal reasoning + terminal assistant.
+    first = _fake_response(
+      output=[
+        _reasoning_item('thinking part 1', 'thinking part 2'),
+        _message_item('checking…'),
+        _function_call_item('ping', call_id='call_a'),
+      ],
+      response_id='resp_1',
+    )
+    second = _fake_response(
+      output=[
+        _reasoning_item('final thought'),
+        _message_item('done'),
+      ],
+      response_id='resp_2',
+    )
+    _install_responses(gpt, [first, second], captured)
+
+    await gpt.send([{'role': 'user', 'content': 'go'}])
+
+    kinds = [s[0] for s in tracker.steps]
+    # ordering: user_input, then per-output for first response (in source order),
+    # then tool_result, then per-output for second response.
+    assert kinds == [
+      'user_input',
+      'llm_call',
+      'reasoning',
+      'reasoning',
+      'assistant',
+      'tool_call',
+      'tool_result',
+      'llm_call',
+      'reasoning',
+      'assistant',
+    ]
+
+  @pytest.mark.asyncio
+  async def test_assistant_carries_terminal_flag(self):
+    gpt, tracker, captured = _make_chat_gpt_with_tracker([_StaticTool('ping')])
+    first = _fake_response(
+      output=[_message_item('interim'), _function_call_item('ping', call_id='c1')],
+    )
+    second = _fake_response(output=[_message_item('final')])
+    _install_responses(gpt, [first, second], captured)
+
+    await gpt.send([{'role': 'user', 'content': 'go'}])
+
+    assistants = [s for s in tracker.steps if s[0] == 'assistant']
+    assert [(body, extras['terminal']) for _, body, extras in assistants] == [
+      ('interim', False),
+      ('final', True),
+    ]
+
+  @pytest.mark.asyncio
+  async def test_tool_call_step_carries_name_args_and_call_id(self):
+    gpt, tracker, captured = _make_chat_gpt_with_tracker([_StaticTool('ping')])
+    first = _fake_response(
+      output=[_function_call_item('ping', call_id='c1', arguments='{"x": 1}')],
+    )
+    second = _fake_response(output=[_message_item('done')])
+    _install_responses(gpt, [first, second], captured)
+
+    await gpt.send([{'role': 'user', 'content': 'go'}])
+
+    tool_calls = [s for s in tracker.steps if s[0] == 'tool_call']
+    assert len(tool_calls) == 1
+    _, body, extras = tool_calls[0]
+    assert body is None
+    assert extras['tool_name'] == 'ping'
+    assert extras['arguments'] == {'x': 1}
+    assert extras['call_id'] == 'c1'
+
+  @pytest.mark.asyncio
+  async def test_turn_index_monotonic_across_responses(self):
+    gpt, tracker, captured = _make_chat_gpt_with_tracker([_StaticTool('ping')])
+    first = _fake_response(output=[_function_call_item('ping', call_id='c1')])
+    second = _fake_response(output=[_function_call_item('ping', call_id='c2')])
+    third = _fake_response(output=[_message_item('done')])
+    _install_responses(gpt, [first, second, third], captured)
+
+    await gpt.send([{'role': 'user', 'content': 'go'}])
+
+    turns_by_kind: dict[str, list[int]] = {}
+    for kind, _, extras in tracker.steps:
+      turns_by_kind.setdefault(kind, []).append(extras['turn_index'])
+    assert turns_by_kind['user_input'] == [0]
+    assert turns_by_kind['llm_call'] == [1, 2, 3]
+    # tool_call belongs to the turn whose responses.create produced it; tool_result
+    # rides on the same turn since it's the immediate response to that call.
+    assert turns_by_kind['tool_call'] == [1, 2]
+    assert turns_by_kind['tool_result'] == [1, 2]
+
+  @pytest.mark.asyncio
+  async def test_subsequent_send_advances_turn_for_new_user_input(self):
+    gpt, tracker, captured = _make_chat_gpt_with_tracker()
+    _install_responses(
+      gpt,
+      [
+        _fake_response(output=[_message_item('hi')], response_id='r1'),
+        _fake_response(output=[_message_item('bye')], response_id='r2'),
+      ],
+      captured,
+    )
+
+    await gpt.send([{'role': 'user', 'content': 'first'}])
+    await gpt.send([{'role': 'user', 'content': 'second'}])
+
+    user_turns = [extras['turn_index'] for k, _, extras in tracker.steps if k == 'user_input']
+    llm_turns = [extras['turn_index'] for k, _, extras in tracker.steps if k == 'llm_call']
+    # first user_input at 0, first llm_call at 1; subsequent send bumps off the
+    # previous final turn (1) before emitting the next user_input at 2, then
+    # llm_call at 3 — so user_input and llm_call never collide on a turn_index.
+    assert user_turns == [0, 2]
+    assert llm_turns == [1, 3]
+
+
+class TestReasoningKwargs:
+  def test_include_added_when_reasoning_effort_set(self):
+    gpt = ChatGPT(api_key='dummy', reasoning_effort='medium')
+    kwargs = gpt._reasoning_kwargs()
+    assert kwargs['reasoning'] == {'effort': 'medium', 'summary': 'auto'}
+    assert kwargs['include'] == ['reasoning.encrypted_content']
+
+  def test_no_include_when_reasoning_effort_absent(self):
+    gpt = ChatGPT(api_key='dummy')
+    assert gpt._reasoning_kwargs() == {}
+
+  @pytest.mark.asyncio
+  async def test_send_passes_include_to_responses_create(self):
+    gpt, _, captured = _make_chat_gpt_with_tracker(reasoning_effort='medium')
+    _install_responses(gpt, [_fake_response(output=[_message_item('hi')])], captured)
+    await gpt.send([{'role': 'user', 'content': 'go'}])
+    assert captured[0]['include'] == ['reasoning.encrypted_content']
+    assert captured[0]['reasoning'] == {'effort': 'medium', 'summary': 'auto'}
 
 
 class TestLLMSpec:
