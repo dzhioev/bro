@@ -29,11 +29,13 @@ fi
 # --- running as cw from here ---
 
 # seed per-worktree ~/.claude/ from host on first run; skip sensitive transcript
-# data so prior sessions from other repos don't leak into this container
+# data and auto-memories so prior-session state from other repos doesn't leak
+# into this container
 if [ ! -f "$HOME/.claude/.seeded" ] && [ -d /host-claude ]; then
   echo 'seeding ~/.claude from host' >&2
   find /host-claude -mindepth 1 -maxdepth 1 \
     ! -name sessions ! -name projects ! -name history.jsonl ! -name cw-sessions \
+    ! -name auto-memories \
     -exec cp -rn {} "$HOME/.claude/" \;
   touch "$HOME/.claude/.seeded"
 fi

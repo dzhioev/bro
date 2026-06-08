@@ -50,7 +50,7 @@ Layout on disk:
 Inside the container, the entrypoint (running as root first):
 
 1. Aligns the `cw` user's UID/GID with whoever owns `/workspace` on the host, then re-execs as `cw` (skipped on Docker for Mac when the bind mount reports root-owned via virtiofs — remapping to UID 0 would make claude refuse `--dangerously-skip-permissions`).
-2. Seeds `~/.claude/` from `/host-claude` once (skipping `sessions`/`projects`/`history.jsonl`/`cw-sessions` so transcripts from prior sessions don't leak across containers).
+2. Seeds `~/.claude/` from `/host-claude` once (skipping `sessions`/`projects`/`history.jsonl`/`cw-sessions`/`auto-memories` so transcripts and memories from prior sessions don't leak across containers).
 3. Copies the host's `~/.gitconfig` into the writable container `$HOME` and marks `/workspace` as a safe git directory.
 4. On first run, clones `/host-repo` into `/workspace` with `--shared`, retargets `origin` to the host's upstream (converting `git@github.com:` to `https://github.com/` so token auth works), and adds `host` as a local remote (pointing at `/host-repo`) for fetching commits that haven't been pushed yet. Branches `worktree-<CW_NAME>` from current upstream `origin/master`.
 5. Initialises submodules from the matching host-local paths in `/host-repo` (since `.gitmodules` uses SSH URLs the container can't auth to), skipping any submodule the host hasn't initialised.
