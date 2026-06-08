@@ -155,10 +155,16 @@ def _spilled_body(body: Any) -> dict | None:
 
 def _format_step_summary(step: dict, col: _Colors) -> str:
   kind = step.get('kind', '?')
+  # the full step ULID leads the line so the user can copy it straight into
+  # `trails fork <trail_id> <step_id>` — the server doesn't accept prefixes.
+  step_id = step.get('step_id', '?')
   ts = _format_ts(step.get('ts'))
   turn = step.get('turn_index')
   turn_str = f't{turn} ' if turn is not None else ''
-  prefix = f'{col.dim}{ts}{col.reset}  {col.yellow}{turn_str}{kind:<14}{col.reset}'
+  prefix = (
+    f'{col.yellow}{step_id}{col.reset}  '
+    f'{col.dim}{ts}{col.reset}  {col.yellow}{turn_str}{kind:<14}{col.reset}'
+  )
 
   body = step.get('body')
   spilled = _spilled_body(body)

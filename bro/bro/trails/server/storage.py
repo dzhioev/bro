@@ -14,6 +14,7 @@ trail creation so per-step `SET` updates always hit existing fields.
 """
 
 import asyncio
+import decimal
 import json
 from datetime import datetime, timezone
 from typing import Any
@@ -61,8 +62,22 @@ def _new_id() -> str:
   return str(ULID())
 
 
+def _normalise_float(value: Any) -> Any:
+  # TypeSerializer rejects float (DynamoDB numbers are Decimal), but JSON
+  # payloads carry floats — inline llm_call bodies (temperature, top_p, ...),
+  # tool arguments. convert on the way in; _normalise_decimal is the inverse
+  # on the way out.
+  if isinstance(value, float):
+    return decimal.Decimal(str(value))
+  if isinstance(value, list):
+    return [_normalise_float(v) for v in value]
+  if isinstance(value, dict):
+    return {k: _normalise_float(v) for k, v in value.items()}
+  return value
+
+
 def _ddb(value: Any) -> dict:
-  return _serializer.serialize(value)
+  return _serializer.serialize(_normalise_float(value))
 
 
 def _ddb_item(item: dict) -> dict:
@@ -78,8 +93,6 @@ def _normalise_decimal(value: Any) -> Any:
   # boto3's TypeDeserializer returns Decimal for any N attribute. JSON
   # serialisation barfs on Decimal — convert to int/float here so handlers can
   # return raw dicts straight to web.json_response.
-  import decimal
-
   if isinstance(value, decimal.Decimal):
     return int(value) if value == value.to_integral_value() else float(value)
   if isinstance(value, list):

@@ -48,6 +48,7 @@ class TestFormatStepSummary:
   def test_inline_body_appears_inline(self):
     out = _format_step_summary(
       {
+        'step_id': '01ARZ3NDEKTSV4RRFFQ69G5FAV',
         'kind': 'user_input',
         'body': 'hello',
         'ts': '2026-06-07T00:00:00.000000Z',
@@ -58,6 +59,19 @@ class TestFormatStepSummary:
     assert 'user_input' in out
     assert 'hello' in out
     assert 't0' in out
+
+  def test_step_id_leads_the_line(self):
+    out = _format_step_summary(
+      {
+        'step_id': '01ARZ3NDEKTSV4RRFFQ69G5FAV',
+        'kind': 'llm_call',
+        'body': None,
+        'ts': '2026-06-07T00:00:00.000000Z',
+        'turn_index': 1,
+      },
+      NO_COLOR,
+    )
+    assert out.startswith('01ARZ3NDEKTSV4RRFFQ69G5FAV  ')
 
   def test_spilled_body_renders_size_and_url(self):
     out = _format_step_summary(

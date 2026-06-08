@@ -476,6 +476,32 @@ class TestResolveAuth:
     assert resolve_auth(bearer_token=None, allow_no_auth=True, host='localhost') is None
 
 
+class TestDdbSerialisation:
+  """floats must survive the DynamoDB write path.
+
+  TypeSerializer rejects raw floats, and inline (< 50KB) llm_call bodies carry
+  them (temperature, top_p, created_at in the OpenAI response dump) — the
+  end-to-end smoke caught the unconverted write 500ing the step handler.
+  """
+
+  def test_floats_round_trip_through_ddb_item(self):
+    item = {
+      'trail_id': 'T1',
+      'body': {'request': {'temperature': 1.0, 'top_p': 0.95}, 'created_at': 1765142770.5},
+    }
+    wire = storage._ddb_item(item)
+    back = storage._from_ddb_item(wire)
+    assert back == item
+
+  def test_floats_nested_in_lists_convert(self):
+    wire = storage._ddb([0.5, {'p': 0.25}])
+    assert storage._from_ddb(wire) == [0.5, {'p': 0.25}]
+
+  def test_ints_and_bools_unaffected(self):
+    item = {'tokens_in': 42, 'is_error': False}
+    assert storage._from_ddb_item(storage._ddb_item(item)) == item
+
+
 class TestBodySize:
   def test_none(self):
     assert storage._body_size_bytes(None) == 0

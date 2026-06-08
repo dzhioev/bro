@@ -230,7 +230,16 @@ def _response_output_items(llm_call_body: Any) -> list[dict]:
   if not isinstance(response, dict):
     return []
   output = response.get('output', [])
-  return [item for item in output if isinstance(item, dict)]
+  # recorded items are full Response dumps; as *input* the API rejects the
+  # response-only `status` field and null-valued optionals (e.g.
+  # `encrypted_content: null` on reasoning items), so strip both. reasoning
+  # items replay as-is even cross-model — OpenAI requires a function_call's
+  # paired reasoning item when the call carries its id.
+  return [
+    {k: v for k, v in item.items() if k != 'status' and v is not None}
+    for item in output
+    if isinstance(item, dict)
+  ]
 
 
 def _encode_tool_output(output: Any) -> str:

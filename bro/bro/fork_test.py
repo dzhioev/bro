@@ -137,6 +137,51 @@ class TestReplayMessages:
       assistant_msg,
     ]
 
+  def test_strips_response_only_fields_from_output_items(self):
+    # response.model_dump carries fields the API rejects when the items are
+    # replayed as input: `status` on every item kind, null-valued optionals
+    # (content / encrypted_content) on reasoning items.
+    raw_reasoning = {
+      'type': 'reasoning',
+      'id': 'rs_1',
+      'summary': [],
+      'content': None,
+      'encrypted_content': None,
+      'status': None,
+    }
+    raw_message = {
+      'type': 'message',
+      'role': 'assistant',
+      'id': 'msg_1',
+      'status': 'completed',
+      'content': [{'type': 'output_text', 'text': 'hi back'}],
+    }
+    trail = RecordedTrail(
+      header=_trail_header(),
+      steps=[
+        _step('system_prompt', _SYS_TEXT, step_id='s0', turn_index=0),
+        _step('user_input', 'hello', step_id='u0', turn_index=0),
+        _step(
+          'llm_call',
+          _llm_call_body(raw_reasoning, raw_message),
+          step_id='c1',
+          turn_index=1,
+          response_id='r1',
+        ),
+      ],
+    )
+    assert replay_messages(trail, 'c1') == [
+      {'role': 'system', 'content': _SYS_TEXT},
+      {'role': 'user', 'content': 'hello'},
+      {'type': 'reasoning', 'id': 'rs_1', 'summary': []},
+      {
+        'type': 'message',
+        'role': 'assistant',
+        'id': 'msg_1',
+        'content': [{'type': 'output_text', 'text': 'hi back'}],
+      },
+    ]
+
   def test_appends_function_call_output_for_tool_result(self):
     call_item = _output_function_call('add', call_id='c1')
     trail = RecordedTrail(
