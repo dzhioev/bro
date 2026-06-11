@@ -19,7 +19,7 @@ class MockLLM(LLM):
     self.response = response
     self.send_calls: list[list[dict]] = []
 
-  async def send(self, messages: list[dict]) -> str:
+  async def send(self, messages: list[dict], *, request_timeout: float | None = None) -> str:
     self.send_calls.append(messages)
     return self.response
 

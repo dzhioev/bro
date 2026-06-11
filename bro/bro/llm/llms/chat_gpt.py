@@ -402,7 +402,17 @@ class ChatGPT(llm.llm.LLM):
       kwargs['previous_response_id'] = previous_response_id
     return kwargs
 
-  async def send(self, messages: list[dict]) -> str:
+  def _create(self, request_kwargs: dict, request_timeout: float | None) -> Response:
+    # per-request timeout overrides the client default (the OpenAI SDK's 600s)
+    # for this call; None leaves that default in place. responses.create is
+    # non-streaming — no bytes return until generation finishes — so without a
+    # tighter bound a stalled request blocks the full client timeout before the
+    # SDK's automatic retry fires.
+    if request_timeout is not None:
+      return self.client.responses.create(**request_kwargs, timeout=request_timeout)
+    return self.client.responses.create(**request_kwargs)
+
+  async def send(self, messages: list[dict], *, request_timeout: float | None = None) -> str:
     openai_tools = await self._resolve_openai_tools()
     # client-side fork: the replayed prefix passes through unconverted (it is
     # already in OpenAI input shape, mixing role-keyed messages with raw output
@@ -432,7 +442,7 @@ class ChatGPT(llm.llm.LLM):
       api_input, openai_tools, previous_response_id=self._last_response_id
     )
     self._turn_index += 1
-    response = self.client.responses.create(**request_kwargs)
+    response = self._create(request_kwargs, request_timeout)
     self._record_llm_call(request_kwargs, response, turn_index=self._turn_index)
     self._emit_response_steps(
       response, is_terminal=not has_tool_calls(response), turn_index=self._turn_index
@@ -444,7 +454,7 @@ class ChatGPT(llm.llm.LLM):
         tool_results, openai_tools, previous_response_id=response.id
       )
       self._turn_index += 1
-      response = self.client.responses.create(**request_kwargs)
+      response = self._create(request_kwargs, request_timeout)
       self._record_llm_call(request_kwargs, response, turn_index=self._turn_index)
       self._emit_response_steps(
         response, is_terminal=not has_tool_calls(response), turn_index=self._turn_index

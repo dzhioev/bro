@@ -319,6 +319,7 @@ class BaseBro(ABC):
     input: str,
     observer: Observer | None = None,
     tracker: Tracker | None = None,
+    request_timeout: float | None = None,
   ) -> str:
     # caller-supplied observer / tracker win (CLIs use this to force --boring
     # or to pass a LocalFileTracker for dev capture); otherwise _make_observer()
@@ -342,7 +343,7 @@ class BaseBro(ABC):
     ]
     end_reason: EndReason = 'terminal'
     try:
-      return await llm.send(messages)
+      return await llm.send(messages, request_timeout=request_timeout)
     except BroRaised:
       end_reason = 'raised'
       raise
@@ -357,6 +358,7 @@ class BaseBro(ABC):
     message: str,
     observer: Observer | None = None,
     tracker: Tracker | None = None,
+    request_timeout: float | None = None,
   ) -> str:
     if self._llm is None:
       # observer / tracker are locked in on first send (the LLM is constructed
@@ -380,7 +382,7 @@ class BaseBro(ABC):
       ]
     else:
       messages = [{'role': 'user', 'content': message}]
-    return await self._llm.send(messages)
+    return await self._llm.send(messages, request_timeout=request_timeout)
 
   def _mcp_servers_for(self, *, interactive: bool) -> list[llm.mcp.MCPServer]:
     # the `raise` service tool only makes sense in non-interactive runs — when no

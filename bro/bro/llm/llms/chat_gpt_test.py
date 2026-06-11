@@ -267,6 +267,24 @@ class TestSendTrackerEmission:
     assert user_steps[0][1] == 'caption this'
 
   @pytest.mark.asyncio
+  async def test_request_timeout_forwarded_to_responses_create(self):
+    gpt, _, captured = _make_chat_gpt_with_tracker()
+    _install_responses(gpt, [_fake_response(output=[_message_item('ok')])], captured)
+
+    await gpt.send([{'role': 'user', 'content': 'hi'}], request_timeout=120.0)
+
+    assert captured[0]['timeout'] == 120.0
+
+  @pytest.mark.asyncio
+  async def test_request_timeout_omitted_leaves_client_default(self):
+    gpt, _, captured = _make_chat_gpt_with_tracker()
+    _install_responses(gpt, [_fake_response(output=[_message_item('ok')])], captured)
+
+    await gpt.send([{'role': 'user', 'content': 'hi'}])
+
+    assert 'timeout' not in captured[0]
+
+  @pytest.mark.asyncio
   async def test_llm_call_records_request_response_id_and_token_counts(self):
     gpt, tracker, captured = _make_chat_gpt_with_tracker()
     response = _fake_response(

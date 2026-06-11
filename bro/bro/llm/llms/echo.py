@@ -49,7 +49,7 @@ class Echo(llm.llm.LLM):
   ):
     super().__init__(mcp_servers, observer=observer, tracker=tracker)
 
-  async def send(self, messages: list[dict]) -> str:
+  async def send(self, messages: list[dict], *, request_timeout: float | None = None) -> str:
     if len(messages) == 0:
       return ''
     last = messages[-1]

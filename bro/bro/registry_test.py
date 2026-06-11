@@ -14,7 +14,7 @@ class MockLLM(LLM):
   def __init__(self, mcp_servers: list[MCPServer] | None = None):
     super().__init__(mcp_servers)
 
-  async def send(self, messages: list[dict]) -> str:
+  async def send(self, messages: list[dict], *, request_timeout: float | None = None) -> str:
     return ''
 
 

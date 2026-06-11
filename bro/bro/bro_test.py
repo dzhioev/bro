@@ -19,7 +19,7 @@ class MockLLM(LLM):
     self.response = response
     self.send_calls: list[list[dict]] = []
 
-  async def send(self, messages: list[dict]) -> str:
+  async def send(self, messages: list[dict], *, request_timeout: float | None = None) -> str:
     self.send_calls.append(messages)
     return self.response
 
@@ -184,7 +184,7 @@ class TestBroRun:
 
       def _create_llm(self, *, interactive: bool):
         class Boom(MockLLM):
-          async def send(self, messages):
+          async def send(self, messages, *, request_timeout=None):
             raise BroRaised('nope')
 
         return Boom()
@@ -210,7 +210,7 @@ class TestBroRun:
 
       def _create_llm(self, *, interactive: bool):
         class Boom(MockLLM):
-          async def send(self, messages):
+          async def send(self, messages, *, request_timeout=None):
             raise RuntimeError('kaboom')
 
         return Boom()

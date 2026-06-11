@@ -27,7 +27,7 @@ class LLM(ABC):
     self.tracker: Tracker = tracker if tracker is not None else NullTracker()
 
   @abstractmethod
-  async def send(self, messages: list[dict]) -> str: ...
+  async def send(self, messages: list[dict], *, request_timeout: float | None = None) -> str: ...
 
 
 @dataclass(frozen=True)
