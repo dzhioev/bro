@@ -408,14 +408,19 @@ class Storage:
     else:
       kwargs: dict = {'TableName': self._trails_table, 'Limit': limit}
       if cursor is not None:
-        kwargs['ExclusiveStartKey'] = _ddb_item({'trail_id': cursor})
+        kwargs['ExclusiveStartKey'] = _ddb_item(json.loads(cursor))
       response = await asyncio.to_thread(self._dynamo.scan, **kwargs)
 
     items = [_from_ddb_item(it) or {} for it in response.get('Items', [])]
     next_cursor = None
     last = response.get('LastEvaluatedKey')
     if last is not None:
-      next_cursor = _from_ddb(last['trail_id'])
+      # encode the whole LastEvaluatedKey as one JSON string. on a GSI the LEK
+      # is a triple (base PK trail_id + index PK bro/parent_trail_id + index SK
+      # started_at); on the base-table scan it is just {trail_id}. all attrs are
+      # strings, so the dump is JSON-safe and every path decodes uniformly via
+      # _ddb_item(json.loads(cursor)).
+      next_cursor = json.dumps(_from_ddb_item(last))
     return {'trails': items, 'next': next_cursor}
 
   async def _resolve_body(self, item: dict) -> dict:
