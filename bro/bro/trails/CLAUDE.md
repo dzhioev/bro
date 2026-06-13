@@ -19,7 +19,7 @@ Trails is the recording pipeline for bro runs: every `BaseBro.run()` / `.send()`
 ```
 
 - Write side lives in `llm/tracker.py` (`Tracker` ABC, `HTTPTracker`); plumbing through `BaseBro` and `ChatGPT` is documented in `bro/CLAUDE.md`. Writes are synchronous and crash-on-failure: `start_trail` fail-fast, `step` retries 100ms / 500ms / 2s then propagates, `end_trail` logs and never raises. The server auto-emits the `system_prompt` step inside trail creation.
-- Recording is mandatory for bros: the default tracker factory raises when `.configs/trails.json` is missing; `NullTracker` is opt-in (tests via `conftest.py`, one-offs via `tracker=`).
+- Recording is mandatory for bros: the default tracker factory raises when `.configs/trails.json` is missing; `NullTracker` is opt-in (env-var kill switch `TRAILS_DISABLED=1`, tests via `conftest.py`, one-offs via `tracker=`).
 - Read side is this package: `TrailsClient` for code, the `trails` CLI for humans, `fetch_recorded_trail` → `bro.fork.fork()` for forking.
 - Bros never touch DynamoDB or S3 — only the server holds those credentials; clients hold one bearer token.
 
@@ -50,7 +50,7 @@ ECS Fargate behind the shared ALB at `trails.<apex>`; CDK stacks `TrailsEcrStack
 
 First-time ordering: `bootstrap_secrets.sh` → `deploy.sh` → `setup/bootstrap_trails.sh` on each client machine.
 
-Recording is mandatory and crash-on-failure, so an unhealthy `trails-server` blocks every bro run — including the devoops bro that would deploy the fix. When the server itself is the thing that's broken, run `./trails/server/deploy.sh` directly instead of going through `ask devoops`.
+Recording is mandatory and crash-on-failure, so an unhealthy `trails-server` blocks every bro run — including the devoops bro that would deploy the fix. When the server itself is the thing that's broken, set `TRAILS_DISABLED=1` to run a bro without recording, or run `./trails/server/deploy.sh` directly instead of going through `ask devoops`.
 
 Server changes are not live until deployed. The unit suite fakes storage at the HTTP boundary, so a storage-layer change deserves a live re-smoke after deploy: `bro run dev 'list this dir'`, then `trails show <new id>` — the float→Decimal conversion was exactly the kind of gap the fakes miss.
 

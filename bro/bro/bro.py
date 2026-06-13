@@ -1,3 +1,4 @@
+import os
 import sys
 from abc import ABC
 from pathlib import Path
@@ -14,11 +15,25 @@ from llm.tracker import EndReason, HTTPTracker, NullTracker, Tracker
 DEFAULT_LLM_SPEC: LLMSpec = llm.llms.chat_gpt.LLMSpec()
 
 
+_TRAILS_DISABLED_ENV = 'TRAILS_DISABLED'
+
+
 def _default_factory() -> Tracker:
-  # recording is mandatory in production: `.configs/trails.json` must be
-  # present (`setup/bootstrap_trails.sh` writes it, or the container
+  # explicit kill switch wins over everything: define `TRAILS_DISABLED` (to any
+  # value, presence is what counts — same convention as `NO_COLOR` /
+  # `CW_IN_CONTAINER`) to skip recording for a process — local dev, ad-hoc runs,
+  # or deploying a fix while trails-server itself is down (recording is otherwise
+  # mandatory + crash-on-failure, so a broken server blocks every bro,
+  # including the devoops bro that would fix it). this only governs the default
+  # factory: a per-run `tracker=` and a custom `set_default_tracker_factory(...)`
+  # still take precedence.
+  if os.environ.get(_TRAILS_DISABLED_ENV) is not None:
+    return NullTracker()
+  # recording is otherwise mandatory in production: `.configs/trails.json` must
+  # be present (`setup/bootstrap_trails.sh` writes it, or the container
   # entrypoint provisions on first run). a missing config is a setup error,
   # not a fallback path — `NullTracker` is opt-in:
+  # - kill switch: `TRAILS_DISABLED` set in the environment.
   # - tests: `conftest.py`'s `set_default_tracker_factory(NullTracker)`.
   # - one-shot exploration: `bro.run(..., tracker=NullTracker())`.
   if not Path(_TRAILS_CONFIG_PATH).is_file():
