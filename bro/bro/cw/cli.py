@@ -15,13 +15,15 @@ keeps the container's git state genuinely isolated. layout:
   - host project root → /host-repo ro
     (clone --shared reads objects from here via alternates; also the source for
     local submodule clones to avoid needing ssh keys in the container)
-  - ~/.claude.json: not bind-mounted from host. Seeded once per workspace from
-    host into a container-private file at cw-sessions/<name>/.claude.json and
-    bind-mounted from there, so per-project state mutations (mcpServers,
-    allowedTools, hasTrustDialogAccepted) stay in the container and can't be
-    used to escalate to code execution in the next host claude session.
-  - ~/.claude → /host-claude ro (seeded once into the container-private
-    ~/.claude/cw-sessions/<name>/, minus sessions/projects/history)
+  - ~/.claude.json: not bind-mounted from host. Constructed per workspace from
+    an explicit config + the host's account-identity fields into a container-
+    private file at cw-sessions/<name>/.claude.json and bind-mounted from there,
+    so per-project state mutations (mcpServers, allowedTools,
+    hasTrustDialogAccepted) stay in the container and can't be used to escalate
+    to code execution in the next host claude session.
+  - ~/.claude: not seeded from host. cw-sessions/<name>/ is mounted as the
+    container's ~/.claude and gets the constructed settings.json; host machine
+    state stays on the host.
   - ~/.claude/.credentials.json: not bind-mounted from host. Seeded into
     cw-sessions/<name>/.credentials.json before launch (if host is fresher)
     and synced back to host on exit (if container is fresher), keyed on
@@ -165,20 +167,47 @@ def _sync_credentials(src: Path, dst: Path) -> None:
     dst.chmod(0o600)
 
 
-def _seed_container_claude_json(claude_dir: Path, host_file: Path) -> Path:
-  """seed-once per-workspace container-private copy of ~/.claude.json.
+# explicit container-side ~/.claude.json config (installMethod matches the
+# image's npm-global claude; the project entry pre-accepts the trust dialog).
+_CONTAINER_CLAUDE_JSON: dict = {
+  'installMethod': 'global',
+  'autoUpdates': False,
+  'hasCompletedOnboarding': True,
+  'projects': {'/workspace': {'hasTrustDialogAccepted': True}},
+}
+# account-identity keys carried over from the host so the session starts logged
+# in (oauth tokens live in .credentials.json; these hold the matching metadata).
+_CLAUDE_JSON_IDENTITY_KEYS = ('oauthAccount', 'userID')
 
-  if the seed doesn't exist yet, copy host's ~/.claude.json into it (or write
-  an empty JSON object if the host has no such file). subsequent runs keep
-  whatever the container last wrote. returns the seed path; caller bind-mounts
-  it to /home/cw/.claude.json.
+# the global ~/.claude/settings.json for container sessions: UX prefs only,
+# built from scratch so host settings (permissions, hooks, model/effort) don't
+# leak in. the repo's /workspace/.claude/settings.json layers on top.
+_CONTAINER_SETTINGS_JSON: dict = {
+  'spinnerVerbs': {'mode': 'replace', 'verbs': ['Thinking']},
+  'spinnerTipsEnabled': False,
+  'prefersReducedMotion': True,
+  'feedbackSurveyRate': 0,
+}
+
+
+def _seed_container_claude_json(claude_dir: Path, host_file: Path) -> Path:
+  """seed-once per-workspace container-private ~/.claude.json.
+
+  built from the explicit container config plus the host's account-identity
+  fields — no host machine state copied. missing identity is fatal. subsequent
+  runs keep whatever the container last wrote.
   """
   seed = claude_dir / '.claude.json'
   if not seed.exists():
-    if host_file.is_file():
-      shutil.copyfile(host_file, seed)
-    else:
-      seed.write_text('{}')
+    if not host_file.is_file():
+      raise SystemExit(f'missing {host_file} — log in with claude on the host first')
+    host = json.loads(host_file.read_text())
+    data = dict(_CONTAINER_CLAUDE_JSON)
+    for key in _CLAUDE_JSON_IDENTITY_KEYS:
+      if key not in host:
+        raise SystemExit(f'{host_file} has no {key!r} — log in with claude on the host first')
+      data[key] = host[key]
+    seed.write_text(json.dumps(data))
     seed.chmod(0o600)
   return seed
 
@@ -227,6 +256,7 @@ def _docker_run_argv(
   claude_dir.mkdir(parents=True, exist_ok=True)
   # seed-once container-private ~/.claude.json (see module docstring)
   claude_json = _seed_container_claude_json(claude_dir, home / '.claude.json')
+  (claude_dir / 'settings.json').write_text(json.dumps(_CONTAINER_SETTINGS_JSON))
   # credentials: on macOS the keychain may be fresher than the file (e.g. after a
   # host-mode login that updated the keychain but not the file) — pick the more
   # recent source for the host file, then sync host → container-private so the
@@ -252,11 +282,7 @@ def _docker_run_argv(
     '-v',
     f'{claude_json}:/home/cw/.claude.json',
     '-v',
-    f'{home}/.claude:/host-claude:ro',
-    '-v',
     f'{claude_dir}:/home/cw/.claude',
-    '-v',
-    f'{home}/.claude/settings.json:/home/cw/.claude/settings.json:ro',
     '-v',
     f'{home}/.gitconfig:/host-gitconfig:ro',
     '-e',
@@ -269,8 +295,9 @@ def _docker_run_argv(
     f'CW_HOST_WORKSPACE={session}',
     '-e',
     'DISABLE_AUTOUPDATER=1',
+    # doctor would otherwise flag the absent host-native ~/.local/bin/claude
     '-e',
-    'CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1',
+    'DISABLE_INSTALLATION_CHECKS=1',
     '-w',
     '/workspace',
     '--memory=8g',

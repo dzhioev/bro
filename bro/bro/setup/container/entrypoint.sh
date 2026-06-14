@@ -28,17 +28,8 @@ fi
 
 # --- running as cw from here ---
 
-# seed per-worktree ~/.claude/ from host on first run; skip sensitive transcript
-# data and auto-memories so prior-session state from other repos doesn't leak
-# into this container
-if [ ! -f "$HOME/.claude/.seeded" ] && [ -d /host-claude ]; then
-  echo 'seeding ~/.claude from host' >&2
-  find /host-claude -mindepth 1 -maxdepth 1 \
-    ! -name sessions ! -name projects ! -name history.jsonl ! -name cw-sessions \
-    ! -name auto-memories \
-    -exec cp -rn {} "$HOME/.claude/" \;
-  touch "$HOME/.claude/.seeded"
-fi
+# ~/.claude is not seeded from the host: cw constructs ~/.claude.json and
+# settings.json and syncs credentials; host machine state stays on the host.
 
 # seed host git config into a writable copy (the host file is bind-mounted
 # read-only at /host-gitconfig; git config --global needs atomic rename).
@@ -123,7 +114,8 @@ done
 HOOK
 chmod +x "$hooks_dir/pre-push"
 
-# pre-create the project directory so Claude Code considers /workspace trusted
+# pre-create the /workspace transcript directory (trust is granted in the
+# constructed ~/.claude.json, not here)
 mkdir -p "$HOME/.claude/projects/-workspace"
 
 if [ ! -x .venv/bin/python ] && [ "${CW_SKIP_VENV:-}" != "1" ]; then
