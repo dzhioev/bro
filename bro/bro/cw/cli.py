@@ -78,6 +78,23 @@ def _load_base_prompts() -> str:
   return '\n\n'.join(parts)
 
 
+def _session_append_prompt(auto: bool, bro_name: str | None) -> str:
+  """--append-system-prompt text for a non --bro `cw ss` session.
+
+  base prompts plus, when launched for a bro (dive-in sets CW_BRO), that bro's
+  persona — so dive-in carries ppp-dev's policies even though it runs the native
+  Claude Code harness rather than --bro.
+  """
+  parts = [_load_base_prompts()]
+  if bro_name is not None:
+    from bro.registry import create_bro
+
+    parts.append(create_bro(bro_name).persona)
+  if auto:
+    parts.append('Land mode: PR')
+  return '\n\n'.join(parts)
+
+
 _DOCKER_FORWARD_ENV = (
   'CW_BRO',
   'CW_COMMAND',
@@ -1153,10 +1170,9 @@ def start_session(
     inject.append('--dangerously-skip-permissions')
   claude_args = [*inject, *claude_args]
 
-  prompt_parts = [_load_base_prompts()]
-  if auto:
-    prompt_parts.append('Land mode: PR')
-  claude_args = [*claude_args, '--append-system-prompt', '\n\n'.join(prompt_parts)]
+  bro_env = os.environ.get('CW_BRO')
+  append_prompt = _session_append_prompt(auto, bro_env)
+  claude_args = [*claude_args, '--append-system-prompt', append_prompt]
 
   # host-mode bro skill surfacing: populate a per-session tmp dir and pass it
   # via `--add-dir` so claude's skill discovery picks up `<dir>/.claude/skills/`.
@@ -1165,7 +1181,6 @@ def start_session(
   # foreign symlinks before recreating its own, which previously trampled
   # concurrent sessions. container mode keeps writing to the workspace's
   # `.claude/skills/` (single-session FS, no concurrency).
-  bro_env = os.environ.get('CW_BRO')
   if not container and bro_env is not None:
     skills_root = Path(tempfile.mkdtemp(prefix=f'cw-skills-{bro_env}-'))
     _populate_bro_skills(skills_root, bro_env)

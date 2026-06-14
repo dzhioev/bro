@@ -107,6 +107,24 @@ class TestBroClaudeArgv:
       cw._bro_claude_argv('does-not-exist')
 
 
+class TestSessionAppendPrompt:
+  def test_includes_base_prompts(self):
+    out = cw._session_append_prompt(False, None)
+    assert 'Interaction policy' in out
+    assert 'Land mode: PR' not in out
+
+  def test_auto_adds_land_mode(self):
+    assert 'Land mode: PR' in cw._session_append_prompt(True, None)
+
+  def test_bro_persona_injected(self):
+    out = cw._session_append_prompt(False, 'ppp-dev')
+    assert '## PPP project' in out
+    assert 'cold reader' in out
+
+  def test_no_persona_without_bro(self):
+    assert '## PPP project' not in cw._session_append_prompt(False, None)
+
+
 class TestSplitLaunchPrompt:
   def test_new_marker(self):
     head, prompt = cw._split_launch_prompt('dive-in --auto --new I want X')

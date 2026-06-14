@@ -1047,3 +1047,20 @@ class TestPPPDevSkillsMRO:
     assert '**pr**' in prompt
     assert '**land**' in prompt
     assert '**fix**' in prompt
+
+
+class TestPersona:
+  def test_persona_is_class_prompts_without_shared(self):
+    bro = PPPDev()
+    # MRO-concatenated class prompts: Dev's contribution + PPPDev's own
+    assert 'software developer' in bro.persona
+    assert '## PPP project' in bro.persona
+    assert 'cold reader' in bro.persona
+    # shared prompts and the skills block are excluded from persona but present
+    # in the full composed system prompt
+    assert 'Interaction policy' not in bro.persona
+    assert '## Available skills' not in bro.persona
+    assert 'Interaction policy' in bro.system_prompt
+
+  def test_persona_honors_explicit_override(self):
+    assert EchoBro().persona == 'you echo'

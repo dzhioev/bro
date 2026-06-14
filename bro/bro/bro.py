@@ -248,6 +248,8 @@ class BaseBro(ABC):
   # `mcp_servers`. inherit directly from BaseBro to opt out of the concrete
   # `Bro`'s shared defaults.
   system_prompt: str = ''
+  # the bro's own class prompts (MRO-concatenated); set in __init__
+  persona: str
 
   _llm: LLM | None = None
 
@@ -278,6 +280,10 @@ class BaseBro(ABC):
     # for callers that need a dynamic prompt (e.g. PM injects current time).
     if system_prompt is not None:
       prompt_parts = [system_prompt] if len(system_prompt) > 0 else []
+    # the bro's own persona: MRO-concatenated class system_prompt(s) without the
+    # shared / data-source / skills blocks. injected into dive-in Claude Code
+    # sessions (cw.py) so they carry the bro's policies outside --bro mode.
+    self.persona = '\n\n'.join(prompt_parts)
     shared = _load_shared_prompts()
     parts = []
     if len(shared) > 0:
