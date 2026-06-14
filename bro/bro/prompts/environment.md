@@ -18,3 +18,5 @@ Run `cw banner --llm` once via Bash. It prints the structured session facts on s
    - `docker_shell_command` (`cw exec <name>`) is what the user runs from their host shell to drop into a shell inside this container
 
 3. Use the session `name` as a hint about the work scope
+
+4. If a `session_log_sync: FAILING` line appears (always first in the output), the session-log sync is broken — transcripts aren't reaching S3/DynamoDB and this session could be lost on `--drop`. Don't swallow it: tell the user up front and suggest re-running `setup/bootstrap_session_log.sh`. A red statusLine warning also stays pinned for the user, but surface it in your first reply too.

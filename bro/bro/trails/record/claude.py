@@ -13,6 +13,7 @@ from pathlib import Path
 
 import boto3
 
+import session_log_health
 from base import log
 from base.args import Parser
 
@@ -175,6 +176,10 @@ def _build_item(path: Path, workspace: str, s3_key: str) -> dict:
   return item
 
 
+def _exc_summary(exc: BaseException) -> str:
+  return f'{type(exc).__name__}: {exc}'
+
+
 def _sync_once(path: Path, workspace: str, bucket: str, s3, dynamo, table_name: str) -> None:
   s3_key = f'logs/{workspace}/{path.stem}.jsonl'
   s3.upload_file(str(path), bucket, s3_key)
@@ -211,20 +216,24 @@ def _watch(interval: int, workspace: str, bucket: str, s3, dynamo, table_name: s
           _sync_once(path, workspace, bucket, s3, dynamo, table_name)
           last_mtime = mtime
           last_path = path
+          session_log_health.write('ok')
         except FileNotFoundError:
           log.info('session log disappeared, skipping')
-        except Exception:
+        except Exception as e:
           log.exception('sync failed')
+          session_log_health.write('error', _exc_summary(e))
     stop.wait(interval)
 
   path = _latest_jsonl(projects_dir)
   if path is not None:
     try:
       _sync_once(path, workspace, bucket, s3, dynamo, table_name)
+      session_log_health.write('ok')
     except FileNotFoundError:
       log.info('session log disappeared during final sync, skipping')
-    except Exception:
+    except Exception as e:
       log.exception('final sync failed')
+      session_log_health.write('error', _exc_summary(e))
 
 
 def sync_session_log(
@@ -239,6 +248,7 @@ def sync_session_log(
 
   if not _CONFIG_PATH.is_file():
     log.error('config not found: %s (run setup/bootstrap_session_log.sh)', _CONFIG_PATH)
+    session_log_health.write('error', f'config not found: {_CONFIG_PATH}')
     return 1
 
   config = _load_config()
@@ -259,7 +269,12 @@ def sync_session_log(
     log.error('no session log found in %s', projects_dir)
     return 1
 
-  _sync_once(path, ws, bucket, s3, dynamo, table_name)
+  try:
+    _sync_once(path, ws, bucket, s3, dynamo, table_name)
+  except Exception as e:
+    session_log_health.write('error', _exc_summary(e))
+    raise
+  session_log_health.write('ok')
   return 0
 
 

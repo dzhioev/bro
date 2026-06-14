@@ -51,6 +51,7 @@ from pathlib import Path
 import humanize
 
 import configs
+import session_log_health
 from base import log
 from base.args import Parser
 
@@ -204,6 +205,11 @@ _CONTAINER_SETTINGS_JSON: dict = {
   'spinnerTipsEnabled': False,
   'prefersReducedMotion': True,
   'feedbackSurveyRate': 0,
+  # silent when healthy (Claude's default bar); a red warning pinned on-screen
+  # when session-log sync is failing — the one channel Claude doesn't hide
+  # behind its alternate-screen buffer (the entrypoint can't print a banner that
+  # survives the session)
+  'statusLine': {'type': 'command', 'command': 'session-log-statusline'},
 }
 
 
@@ -502,6 +508,8 @@ def _session_facts() -> dict[str, str | bool | None]:
     - prompt (str | None) — the user-typed prompt extracted from shell_command
       when a `--new`/`-p`/`--prompt`/`--` marker is found; shell_command is
       shown with the prompt portion replaced by a placeholder in this case
+    - sync_warning (str | None) — set when the session-log sync health file
+      reports a failure, so the banner can warn that logs aren't reaching S3
   """
   in_container = _in_container()
   name = os.environ.get('CW_NAME') or None
@@ -528,6 +536,10 @@ def _session_facts() -> dict[str, str | bool | None]:
   if shell_command is not None:
     shell_command, prompt = _split_launch_prompt(shell_command)
 
+  sync_warning: str | None = None
+  if session_log_health.is_failing():
+    sync_warning = 'session-log sync FAILING — run setup/bootstrap_session_log.sh'
+
   return {
     'in_container': in_container,
     'name': name,
@@ -538,6 +550,7 @@ def _session_facts() -> dict[str, str | bool | None]:
     'cw_command': cw_command,
     'shell_command': shell_command,
     'prompt': prompt,
+    'sync_warning': sync_warning,
   }
 
 
@@ -550,6 +563,11 @@ def _render_banner_visual(facts: dict[str, str | bool | None]) -> str:
   reset = '\033[0m'
 
   lines: list[str] = []
+  if facts['sync_warning'] is not None:
+    # most prominent slot — above the logo, red+bold so a broken sync is the
+    # first thing the eye lands on in a `cw exec` shell
+    lines.append(f'{red}{bold}⚠ {facts["sync_warning"]}{reset}')
+    lines.append('')
   if facts['bro'] is not None:
     # annotate the bottom line of the logo with a `// <bro>` signature — dim
     # slashes (comment style), bro name in bright-white bold so it stands out
@@ -623,7 +641,12 @@ def _render_banner_llm(facts: dict[str, str | bool | None]) -> str:
   context. launch_command keeps its trailing marker (e.g. `dive-in --new `)
   as the signal that a seed prompt exists.
   """
-  lines: list[str] = [f'kind: {"container" if facts["in_container"] else "host worktree"}']
+  lines: list[str] = []
+  if facts['sync_warning'] is not None:
+    # first line so it lands in Claude's collapsed tool-output preview without
+    # needing expansion; the agent should relay it to the user
+    lines.append('session_log_sync: FAILING — run setup/bootstrap_session_log.sh')
+  lines.append(f'kind: {"container" if facts["in_container"] else "host worktree"}')
   pairs: list[tuple[str, str]] = [
     ('name', 'name'),
     ('bro', 'bro'),

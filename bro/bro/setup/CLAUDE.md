@@ -47,7 +47,9 @@ Credentials live in `.configs/` (symlink into the dotfiles submodule).
 - `flow_mcp.json` — `{ "url": "https://flow.<delegated_subdomain>", "token": "<bearer-token>" }` for the deployed flow MCP server (`cw --mcp http` and external MCP clients)
 - `focus.json` — `{ "url": ..., "token": ... }` for the focus HTTP client
 - `infra.json` — `{ "apex": ..., "delegated_subdomain": ... }` consumed by `infra/cdk/config.py`
-- `session_log.json` — `{ "aws_access_key_id", "aws_secret_access_key", "region", "bucket", "table" }` for `sync-session-log` (created by `bootstrap_session_log.sh`)
+- `session_log.json` — `{ "aws_access_key_id", "aws_secret_access_key", "region", "bucket", "table" }` for `sync-session-log` (created by `bootstrap_session_log.sh`).
+
+  A persistently-broken sync (e.g. a missing IAM grant) surfaces via the health file `~/.claude/session-log-sync-health.json` that `sync-session-log` writes after each attempt — read by the cw statusLine and `cw banner`, which warn to re-run `bootstrap_session_log.sh`. Without it the failure is silent (the hooks discard the watcher's stderr).
 - `trails.json` — `{ "base_url": "https://trails.<apex>", "token": "<bearer>" }` for the deployed trails server. Required for production bro runs — `BaseBro`'s default tracker factory raises when the file is missing rather than silently falling back. Created by `bootstrap_trails.sh`
 - `anthropic.json` — `{ "api_key": "sk-ant-..." }` shared Anthropic Console API key for any in-repo Anthropic API usage
 - `tmdb.json` — `{ "api_key": "<v3-key>" }` The Movie Database v3 API key (get one at themoviedb.org → Settings → API). Read lazily by the Librorian bro's TMDb data source

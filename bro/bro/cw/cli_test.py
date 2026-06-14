@@ -238,6 +238,7 @@ def _facts(**overrides) -> dict:
     'cw_command': None,
     'shell_command': None,
     'prompt': None,
+    'sync_warning': None,
   }
   base.update(overrides)
   return base
@@ -383,6 +384,28 @@ class TestRenderBanner:
     # the actual prompt text appears once, on its own line
     assert 'I want a banner' in out
     assert out.count('I want a banner') == 1
+
+  def test_llm_emits_sync_warning_as_first_line(self):
+    out = cw._render_banner_llm(
+      _facts(sync_warning='session-log sync FAILING — run setup/bootstrap_session_log.sh')
+    )
+    # first line so it survives Claude's collapsed tool-output preview
+    assert out.splitlines()[0] == 'session_log_sync: FAILING — run setup/bootstrap_session_log.sh'
+    assert 'kind: container' in out
+
+  def test_llm_omits_sync_warning_when_healthy(self):
+    out = cw._render_banner_llm(_facts())
+    assert 'session_log_sync' not in out
+
+  def test_visual_paints_sync_warning_red_above_logo(self):
+    out = cw._render_banner_visual(
+      _facts(bro='pm', sync_warning='session-log sync FAILING — run setup/bootstrap_session_log.sh')
+    )
+    first = out.splitlines()[0]
+    assert first.startswith('\033[31m\033[1m⚠ ')
+    assert 'session-log sync FAILING' in first
+    # warning sits above the bro logo
+    assert out.index('⚠') < out.index('██')
 
 
 class TestPopulateBroSkills:
