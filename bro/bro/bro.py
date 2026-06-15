@@ -30,9 +30,8 @@ def _default_factory() -> Tracker:
   if os.environ.get(_TRAILS_DISABLED_ENV) is not None:
     return NullTracker()
   # recording is otherwise mandatory in production: the `trails` secret must
-  # resolve (`setup/bootstrap_trails.sh` writes `.configs/trails.json`, or the
-  # container entrypoint provisions it on first run). a missing secret is a setup
-  # error, not a fallback path — `NullTracker` is opt-in:
+  # resolve (`setup/bootstrap_trails.sh` writes `~/.ppp/trails.json`). a missing
+  # secret is a setup error, not a fallback path — `NullTracker` is opt-in:
   # - kill switch: `TRAILS_DISABLED` set in the environment.
   # - tests: `conftest.py`'s `set_default_tracker_factory(NullTracker)`.
   # - one-shot exploration: `bro.run(..., tracker=NullTracker())`.

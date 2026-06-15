@@ -11,7 +11,7 @@ implementations:
 - `LocalFileTracker` — appends JSONL to a local file; one header line + N
   step lines per trail. dev helper for offline inspection.
 - `HTTPTracker` — sync per-step HTTPS POSTs to the deployed `trails-server`.
-  the production sink, configured via `.configs/trails.json`.
+  the production sink, configured via the `trails` secret.
 """
 
 import http.client

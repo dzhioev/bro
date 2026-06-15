@@ -35,7 +35,7 @@ Layout on disk:
 
 - `<project>/.claude/worktrees/<name>/` — the worktree (regular working tree with a `.git` gitfile that points at `<project>/.git/worktrees/<name>/`).
 - `<project>/.git/worktrees/<name>/CLAUDE_BASE` — marker recording the `HEAD` at worktree creation (set by `worktree_create.sh`).
-- `<project>/.claude/worktrees/<name>/.venv` — per-worktree virtualenv created on first run by `.claude/hooks/session_start.sh` (which also reflinks submodule git-dirs from the main repo to avoid re-fetching ~200M of objects).
+- `<project>/.claude/worktrees/<name>/.venv` — per-worktree virtualenv created on first run by `.claude/hooks/session_start.sh`.
 - `~/.claude/projects/<encoded-worktree-path>/` — Claude Code's own per-project state, including the session JSONL files. The encoded path is the worktree path with `/` and `.` replaced by `-`.
 
 ### Container mode (`cw ss -c <name>`)
@@ -43,8 +43,9 @@ Layout on disk:
 `/workspace` inside the container is a **fresh clone**, not a worktree. The gitfile-based worktree layout doesn't survive the container boundary (the gitfile points at a host absolute path), and a clone keeps the container's git state genuinely isolated. Layout:
 
 - `<project>/var/cw/containers/<name>/` (host) → `/workspace` rw. Empty on first run; the entrypoint clones into it.
-- `<project>` (host) → `/host-repo` ro. The clone uses `--shared`, so the container reuses the host's `.git/objects` via alternates instead of duplicating them, and submodules can clone from local paths (avoiding the need for SSH keys in the container).
-- `<project>/.configs/cw_github_token_bro` → `/run/secrets/github_token` ro. The entrypoint wires this into `git credential.helper` and exports it as `GH_TOKEN` so `git push` over HTTPS and the `gh` CLI both work.
+- `<project>` (host) → `/host-repo` ro. The clone uses `--shared`, so the container reuses the host's `.git/objects` via alternates instead of duplicating them.
+- `~/.ppp` (host) → `/home/cw/.ppp` ro. Transitional (phase 1.5): the standalone secret store the container resolves credentials from now that the repo no longer carries them. Phase 2 replaces it with scoped per-bro hydration.
+- `~/.ppp/cw_github_token_bro` → `/run/secrets/github_token` ro (when present). The entrypoint wires this into `git credential.helper` and exports it as `GH_TOKEN` so `git push` over HTTPS and the `gh` CLI both work.
 - `/var/run/docker.sock` (host) → same path in the container. Lets deploy scripts run `docker build`/`docker push` against the host daemon — no nested runtime — at the cost of giving in-container processes API-level control over host docker. The entrypoint reconciles the in-container `docker` group's GID with the bind-mounted socket's GID so `cw` can use it without sudo.
 
 Inside the container, the entrypoint (running as root first):
@@ -92,14 +93,14 @@ These flags apply to `cw ss` and (with the exception of `-c` / `--drop` / `--mcp
   In host mode it also sets `CW_DROP=1` so `.claude/hooks/check-worktree-landed.sh` skips the warn-and-exit-2 dance. In container mode no `CW_DROP` is set and the var is not in `_DOCKER_FORWARD_ENV` — the hook's path guard already short-circuits inside the container (cwd is `/workspace`, not under `.claude/worktrees/`), so the dance is skipped anyway.
 - **`--mcp [http|local]`** — wire up the flow MCP server.
 
-  `http` (default when the flag is bare) connects to the deployed server at `.configs/flow_mcp.json`'s `url` with a bearer token; `local` spawns a stdio process from `flow/mcp/mcp_local.json`.
+  `http` (default when the flag is bare) connects to the deployed server at the `flow_mcp` secret's `url` with a bearer token; `local` spawns a stdio process from `flow/mcp/mcp_local.json`.
 
   Without `--mcp`, no flow MCP is connected — Claude doesn't see task/project tools.
 - **`--bro <name>`** — launch a clean session under a chosen bro persona (system prompt, MCP servers, tools) using `claude --bare`, `--strict-mcp-config`, and only the bro's MCP tools. Wires the bro's MCP servers and data sources through `mcp-server bro:<name>`. The bro's skills (`bro/bros/<bro>/skills/*.md`, MRO-merged) are symlinked into `<workspace>/.claude/skills/<name>/SKILL.md` by the container entrypoint (`cw populate-bro-skills $CW_BRO`, triggered by the forwarded `CW_BRO` env var) so claude's `--bare` slash-command discovery picks them up — type `/<name>` in chat to invoke.
 
-  **Requires `-c`** (the bro flow uses an Anthropic Console API key, not the user OAuth, and is fenced to the container). **Requires `.configs/anthropic.json`**. Mutually exclusive with `--mcp`, `--auto`, and `--resume`.
+  **Requires `-c`** (the bro flow uses an Anthropic Console API key, not the user OAuth, and is fenced to the container). **Requires the `anthropic` secret**. Mutually exclusive with `--mcp`, `--auto`, and `--resume`.
 
-  `cw --bro` reads its api key from that file via `setup/print_anthropic_key.sh` (wired as `apiKeyHelper`); using `ANTHROPIC_API_KEY` instead would trigger Claude's "Detected a custom API key" prompt every session.
+  `cw --bro` reads its api key from that secret via `setup/print_anthropic_key.sh` (wired as `apiKeyHelper`); using `ANTHROPIC_API_KEY` instead would trigger Claude's "Detected a custom API key" prompt every session.
 - **`--auto`** — autonomous mode: passes `--dangerously-skip-permissions` to claude and switches the git identity to bro (`Bro <dzhioev+bro@gmail.com>`). Implies `--rc`.
 
   **Requires `-c`** (a sandbox is mandatory for skip-permissions). Adds a `Land mode: PR` line to the system prompt. Cannot be combined with `--bro`.
@@ -140,6 +141,6 @@ Wrappers and hooks rely on a small set of env vars:
 `cw` itself doesn't run hooks — Claude Code does, based on `.claude/settings.json`. The ones that interact with `cw`'s lifecycle:
 
 - `WorktreeCreate` → `.claude/hooks/worktree_create.sh` — creates the worktree with the project's conventions (branch naming, `CLAUDE_BASE`, submodule alternate location).
-- `SessionStart` → `.claude/hooks/session_start.sh` — first-time provisioning per host worktree (submodule git-dir reflinks, `.venv` via `uv sync`). Bails fast on subsequent sessions and inside containers (where the entrypoint owns first-run setup).
+- `SessionStart` → `.claude/hooks/session_start.sh` — first-time provisioning per host worktree (`.venv` via `uv sync`). Bails fast on subsequent sessions and inside containers (where the entrypoint owns first-run setup).
 - `SessionEnd` → `.claude/hooks/check-worktree-landed.sh` — wraps `cw check-clean` and always exits 2 so the keep-or-drop prompt appears every time. Silent if `CW_DROP=1`.
 - `SessionStart` / `SessionEnd` → `.claude/hooks/sync-session-log-start.sh` / `sync-session-log-stop.sh` — bracket the session with calls to `sync-session-log` (S3 + DynamoDB transcript upload). The hooks discard `sync-session-log`'s stderr, so its only durable failure signal is the health file it writes (`session_log_health.py`), which the statusLine and `cw banner` surface.

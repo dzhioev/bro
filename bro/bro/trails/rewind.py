@@ -10,7 +10,7 @@ four subcommands:
   an interactive `.send()` loop, similar in spirit to `do.call.call_text`.
 
 All commands talk to the deployed `trails-server` via `TrailsClient`; config
-comes from `.configs/trails.json` (the same file `HTTPTracker` reads).
+comes from the `trails` secret (the same one `HTTPTracker` reads).
 """
 
 import asyncio

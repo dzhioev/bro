@@ -29,7 +29,9 @@ keeps the container's git state genuinely isolated. layout:
     and synced back to host on exit (if container is fresher), keyed on
     claudeAiOauth.expiresAt. Removes the runtime token-swap vector while
     preserving OAuth refresh.
-  - .configs/cw_github_token_bro → /run/secrets/github_token ro (when present;
+  - ~/.ppp → /home/cw/.ppp ro (transitional: the host secret store the container
+    resolves credentials from until phase 2 scopes them per bro)
+  - ~/.ppp/cw_github_token_bro → /run/secrets/github_token ro (when present;
     entrypoint configures git credential helper for https push)
 
 network is not restricted by design.
@@ -336,7 +338,13 @@ def _docker_run_argv(
   for var in _DOCKER_FORWARD_ENV:
     if os.environ.get(var) is not None:
       argv += ['-e', var]
-  github_token = (proj / '.configs' / _GITHUB_TOKEN_FILE).resolve()
+  # transitional (phase 1.5): mount the host secret store so the container
+  # resolves credentials from ~/.ppp now that the repo no longer carries them.
+  # phase 2 replaces this with scoped per-bro hydration.
+  host_ppp = home / '.ppp'
+  if host_ppp.is_dir():
+    argv += ['-v', f'{host_ppp}:/home/cw/.ppp:ro']
+  github_token = (host_ppp / _GITHUB_TOKEN_FILE).resolve()
   if github_token.is_file():
     argv += ['-v', f'{github_token}:/run/secrets/github_token:ro']
   if aws:
@@ -1159,8 +1167,7 @@ def start_session(
     os.environ['GIT_AUTHOR_EMAIL'] = _BRO_GIT_EMAIL
     os.environ['GIT_COMMITTER_NAME'] = _BRO_GIT_NAME
     os.environ['GIT_COMMITTER_EMAIL'] = _BRO_GIT_EMAIL
-    proj = _project_root()
-    token_path = (proj / '.configs' / _GITHUB_TOKEN_FILE).resolve()
+    token_path = (Path.home() / '.ppp' / _GITHUB_TOKEN_FILE).resolve()
     if token_path.is_file():
       os.environ['GITHUB_TOKEN'] = token_path.read_text().strip()
 
@@ -1218,7 +1225,7 @@ def start_session(
 _BRO_MCP_SERVER_NAME = 'bro'
 # path inside the container; /host-repo is the host project bind mount (see
 # _docker_run_argv). passed as claude code's apiKeyHelper so claude reads the
-# api key from .configs/anthropic.json without the "Detected a custom API key"
+# api key from the `anthropic` secret without the "Detected a custom API key"
 # prompt that ANTHROPIC_API_KEY would trigger.
 _BRO_API_KEY_HELPER = '/host-repo/setup/print_anthropic_key.sh'
 
@@ -1412,7 +1419,7 @@ def main(argv=None):
   ss.add_argument(
     '--bro',
     default=None,
-    help="start a clean claude session with the named bro's persona (system prompt, MCP servers, tools); requires -c and .configs/anthropic.json; mutually exclusive with --mcp, --auto, --resume",
+    help="start a clean claude session with the named bro's persona (system prompt, MCP servers, tools); requires -c and the `anthropic` secret; mutually exclusive with --mcp, --auto, --resume",
   )
   ss.add_argument(
     '-p', '--prompt', default=None, help='initial prompt (prepended with base prompt)'

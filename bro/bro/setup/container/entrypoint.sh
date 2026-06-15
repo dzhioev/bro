@@ -128,14 +128,8 @@ if [ "${CW_SKIP_VENV:-}" != "1" ]; then
   source /workspace/.venv/bin/activate
 fi
 
-# bootstrap the trails sink config on first run so dive-in sessions are
-# recorded by default. the script writes .configs/trails.json by reading the
-# bearer token from SSM; tolerated to fail when AWS creds aren't forwarded
-# (the bro then falls back to NullTracker). already-present config short-
-# circuits inside the script — no-op after the first container boot.
-if [ ! -f /workspace/.configs/trails.json ]; then
-  /workspace/setup/bootstrap_trails.sh >&2 || true
-fi
+# trails recording config (and every other secret) now comes from the
+# bind-mounted host store ~/.ppp (see cw.py); no in-container bootstrap needed.
 
 # in --bro mode, surface the bro's skills to Claude Code by symlinking them into
 # .claude/skills/; --bare keeps slash-command resolution working so /skill-name

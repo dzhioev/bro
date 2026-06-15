@@ -19,13 +19,13 @@ Trails is the recording pipeline for bro runs: every `BaseBro.run()` / `.send()`
 ```
 
 - Write side lives in `llm/tracker.py` (`Tracker` ABC, `HTTPTracker`); plumbing through `BaseBro` and `ChatGPT` is documented in `bro/CLAUDE.md`. Writes are synchronous and crash-on-failure: `start_trail` fail-fast, `step` retries 100ms / 500ms / 2s then propagates, `end_trail` logs and never raises. The server auto-emits the `system_prompt` step inside trail creation.
-- Recording is mandatory for bros: the default tracker factory raises when `.configs/trails.json` is missing; `NullTracker` is opt-in (env-var kill switch `TRAILS_DISABLED=1`, tests via `conftest.py`, one-offs via `tracker=`).
+- Recording is mandatory for bros: the default tracker factory raises when the `trails` secret is missing; `NullTracker` is opt-in (env-var kill switch `TRAILS_DISABLED=1`, tests via `conftest.py`, one-offs via `tracker=`).
 - Read side is this package: `TrailsClient` for code, the `trails` CLI for humans, `fetch_recorded_trail` → `bro.fork.fork()` for forking.
 - Bros never touch DynamoDB or S3 — only the server holds those credentials; clients hold one bearer token.
 
 ## Layout
 
-- `client.py` — `TrailsClient` over the read endpoints (`list_trails` / `get_trail` / `get_steps` + `iter_*` cursor helpers); `default_client()` reads `.configs/trails.json`; `fetch_recorded_trail(client, trail_id)` rehydrates a header + steps into the `llm.tracker` dataclasses that `bro.fork.fork()` consumes
+- `client.py` — `TrailsClient` over the read endpoints (`list_trails` / `get_trail` / `get_steps` + `iter_*` cursor helpers); `default_client()` resolves the `trails` secret; `fetch_recorded_trail(client, trail_id)` rehydrates a header + steps into the `llm.tracker` dataclasses that `bro.fork.fork()` consumes
 - `cli.py` (`trails`) — `list` / `show` / `tree` / `fork` subcommands; counterpart to `sessions` / `rewind` for recorded bros
 - `server/server.py` (`trails-server`) — aiohttp HTTP API: bearer-token auth middleware, request validation, storage exceptions → HTTP statuses
 - `server/storage.py` — DynamoDB + S3 mechanics: step write + header-aggregate update are one `TransactWriteItems`; bodies ≥ 50KB spill to S3, > 10MB rejected with 413; reads resolve spilled bodies transparently (inline < 1MB, presigned URL above); floats convert to Decimal on write and back on read (DynamoDB numbers are Decimal)
@@ -42,7 +42,7 @@ The CLI keeps the parent's spec and prompt; for cross-model / cross-prompt forks
 
 ## Auth
 
-Bearer token, mandatory by default; the no-auth mode (`TRAILS_ALLOW_NO_AUTH=1`) requires a loopback `HOST` and exists for `run_local.sh`. The deployed token lives in SSM `/trails/bearer-token` (seeded by `server/bootstrap_secrets.sh`); clients read it from `.configs/trails.json` (written by `setup/bootstrap_trails.sh`, see `setup/CLAUDE.md`) — read and write sides share that one credential.
+Bearer token, mandatory by default; the no-auth mode (`TRAILS_ALLOW_NO_AUTH=1`) requires a loopback `HOST` and exists for `run_local.sh`. The deployed token lives in SSM `/trails/bearer-token` (seeded by `server/bootstrap_secrets.sh`); clients resolve the `trails` secret (written by `setup/bootstrap_trails.sh` to `~/.ppp/trails.json`, see `setup/CLAUDE.md`) — read and write sides share that one credential.
 
 ## Deployment
 

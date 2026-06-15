@@ -10,9 +10,6 @@ if ! command -v uv >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "initializing submodules"
-git submodule update --init --recursive
-
 echo "syncing python dependencies"
 uv sync --all-groups
 
@@ -25,12 +22,10 @@ uv sync --all-groups
 echo "registering local git aliases"
 git config --local alias.golc '!./setup/git_golc.py'
 
-if [ -L .configs ] && [ -d .configs ]; then
-  echo ".configs symlink OK"
-elif [ -L .configs ]; then
-  echo "warning: .configs symlink is broken (target missing); check setup/dotfiles submodule" >&2
+if [ -d "$HOME/.ppp" ]; then
+  echo "secret store ~/.ppp OK"
 else
-  echo "warning: .configs symlink not found; credentials will not be available" >&2
+  echo "warning: ~/.ppp not found; credentials will not be available (stow dot-ppp)" >&2
 fi
 
 echo "repo setup complete"

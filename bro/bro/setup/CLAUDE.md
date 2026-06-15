@@ -1,11 +1,11 @@
 # setup/CLAUDE.md
 
-How to bring up a fresh checkout, plus the credential schemas the project reads from `.configs/`. Run any script with `--help` for flags.
+How to bring up a fresh checkout, plus the credential schemas the project reads (secrets live in `~/.ppp`). Run any script with `--help` for flags.
 
 ## Setup
 
 ```bash
-./setup/setup_repo.sh   # submodules, uv sync, sync-scripts, .configs check
+./setup/setup_repo.sh   # uv sync, sync-scripts, ~/.ppp check
 source .venv/bin/activate
 ```
 
@@ -15,16 +15,16 @@ For a fresh machine, `./setup.sh` (repo root) runs `setup_env.sh` (system tools:
 
 ### Worktrees
 
-Worktrees get their own `.venv`. The `.claude/hooks/session_start.sh` hook seeds submodule git-dirs from the main repo (APFS clonefile on macOS, `--reflink=auto` on Linux) and runs `uv sync` on first session in the worktree; subsequent sessions bail.
+Worktrees get their own `.venv`. The `.claude/hooks/session_start.sh` hook runs `uv sync` on first session in the worktree; subsequent sessions bail.
 
 **Never run `uv sync` against the main repo from inside a worktree.** The editable install hardcodes absolute paths and would pin the shared venv to a worktree that may later disappear.
 
 ## Files
 
 - `setup_env.sh` — installs system tools (stow, claude-code, docker via colima on macOS, awscli, uv). macOS and Ubuntu only
-- `setup_repo.sh` — submodules + `uv sync` + `sync-scripts` + `uv sync` again + registers repo-local `git golc` alias + `.configs` symlink sanity check
-- `bootstrap_session_log.sh` — one-time IAM/SSM setup for session-log sync (creates `cw-session-log-sync` IAM user + key, writes `.configs/session_log.json`). Run once after deploying `SessionLogStack`
-- `bootstrap_trails.sh` — one-time setup for the trails sink (reads `/trails/bearer-token` from SSM, derives `base_url` from `.configs/infra.json`'s `delegated_subdomain`, writes `.configs/trails.json`). Run once after deploying `TrailsServerStack`. The container entrypoint also invokes it silently on first run so dive-in sessions with AWS creds bootstrap themselves
+- `setup_repo.sh` — `uv sync` + `sync-scripts` + `uv sync` again + registers repo-local `git golc` alias + `~/.ppp` presence check
+- `bootstrap_session_log.sh` — one-time IAM/SSM setup for session-log sync (creates `cw-session-log-sync` IAM user + key, writes `~/.ppp/session_log.json`). Run once after deploying `SessionLogStack`
+- `bootstrap_trails.sh` — one-time setup for the trails sink (reads `/trails/bearer-token` from SSM, derives `base_url` from the `infra` secret's `delegated_subdomain`, writes `~/.ppp/trails.json`). Run once after deploying `TrailsServerStack`
 - `claude_commit_footer.py` — prints the per-commit footer with cumulative per-model token totals plus the session id (`> created with Claude Code <version> (<model>: N,NNN, …; session: <id>)`).
 
   The session id links a commit back to its source transcript; the comma-separated totals are precise enough that `usage-report <git-range>` can sum them across a commit range.
@@ -35,11 +35,10 @@ Worktrees get their own `.venv`. The `.claude/hooks/session_start.sh` hook seeds
 - `print_anthropic_key.sh` — prints the `anthropic` secret's `api_key` via `credentials get anthropic --field api_key`. Wired as `apiKeyHelper` by `cw --bro` so claude reads the key without the "Detected a custom API key" confirmation that `ANTHROPIC_API_KEY` would trigger every session
 - `container/` — Dockerfile + entrypoint for the `cw -c` container image; `bump-claude-code.sh` rebuilds with the pinned `claude-code-version`. Image bundles the docker CLI; `cw.py` bind-mounts the host docker socket so deploy scripts inside the container can build + push against the host daemon
 - `ubuntu/` — Ubuntu-only install helpers (currently `install_stow.sh`)
-- `dotfiles/` — GNU Stow dotfiles submodule. `.configs` at the repo root is a symlink into `setup/dotfiles/dotfiles/dot-ppp`
 
 ## Configuration
 
-Credentials live in `.configs/` (symlink into the dotfiles submodule). Readers resolve them through `base.credentials` — `credentials.default_store().get_json(name)` — rather than opening the files directly; the built-in registry maps each secret name below to its `.configs/<file>`. The `credentials get <name> [--field <key>]` CLI exposes the same resolver to non-Python callers (e.g. the Anthropic apiKeyHelper).
+Credentials live in the standalone `~/.ppp` store (the GNU Stow target of `dot-ppp`); the repo no longer carries them. Readers resolve them through `base.credentials` — `credentials.default_store().get_json(name)` — which searches `<repo>/.configs` (where the deployed services synthesize their configs at runtime) then `~/.ppp`. The built-in registry maps each secret name below to its `<file>`. The `credentials get <name> [--field <key>]` CLI exposes the same resolver to non-Python callers (e.g. the Anthropic apiKeyHelper); host scripts that write new secrets write directly to `~/.ppp`.
 
 - `notion.json` — Notion token + database IDs (`tasks_db_id`, `events_db_id`, `projects_db_id`, `media_db_id`)
 - `google_api.json` — Google OAuth client config

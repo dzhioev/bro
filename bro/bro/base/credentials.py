@@ -6,10 +6,11 @@ value — a parsed dict for a json secret, a stripped string for a scalar token 
 without caring where it lives or on which surface it runs. resolution walks an
 ordered list of `Source`s per secret; the first source that has the value wins.
 
-phase 1 ships one source type, `local`, reading `<project>/.configs/<file>`.
-later phases add the `~/.ppp` search path, AWS-backed sources, and let a
-generated `.configs/credentials.json` override the built-in registry — see the
-"share credentials with bros" design doc.
+the one source type so far, `local`, searches `<project>/.configs/<file>` then
+`~/.ppp/<file>` — the deployed services synthesize `<project>/.configs` at
+runtime; on the host secrets live only in `~/.ppp`. later phases add AWS-backed
+sources and let a generated `.configs/credentials.json` override the built-in
+registry — see the "share credentials with bros" design doc.
 """
 
 from __future__ import annotations
@@ -25,10 +26,12 @@ import configs
 
 __cli_name__ = 'credentials'
 
-# local search roots, highest priority first. phase 1 has exactly one — the
-# project `.configs` dir; phase 1.5 appends `~/.ppp`. module-level so tests can
-# point it at a tmp dir, and read at fetch time so the override takes effect.
+# local search roots, highest priority first: the project `.configs` dir (where
+# deployed services synthesize their configs) then the standalone `~/.ppp` host
+# store. module-level so tests can point them at tmp dirs, and read at fetch time
+# so the overrides take effect.
 CONFIGS_DIR = configs.DEFAULT_CONFIGS_DIR
+PPP_DIR = configs.DEFAULT_PPP_DIR
 
 # a generated registry file overrides the built-in default when present (phase 2
 # writes scoped ones); phase 1 always falls through to the built-in registry.
@@ -82,8 +85,7 @@ class LocalSource:
 
 
 def _search_dirs() -> list[str]:
-  # phase 1: only the project `.configs`. phase 1.5 appends ~/.ppp here.
-  return [CONFIGS_DIR]
+  return [CONFIGS_DIR, PPP_DIR]
 
 
 def _source_from_dict(data: dict) -> Source:

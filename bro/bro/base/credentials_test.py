@@ -10,10 +10,23 @@ from base import credentials
 
 @pytest.fixture
 def configs_dir(monkeypatch, tmp_path: Path) -> Path:
-  """point the resolver's local search root at a tmp dir and reset the singleton."""
-  monkeypatch.setattr(credentials, 'CONFIGS_DIR', str(tmp_path))
+  """point the resolver's project search root at a tmp dir, isolate the `~/.ppp`
+  fallback to an empty tmp dir (so the host's real store can't leak in), and reset
+  the singleton."""
+  configs = tmp_path / 'configs'
+  ppp = tmp_path / 'ppp'
+  configs.mkdir()
+  ppp.mkdir()
+  monkeypatch.setattr(credentials, 'CONFIGS_DIR', str(configs))
+  monkeypatch.setattr(credentials, 'PPP_DIR', str(ppp))
   monkeypatch.setattr(credentials, '_default_store', None)
-  return tmp_path
+  return configs
+
+
+@pytest.fixture
+def ppp_dir(configs_dir: Path) -> Path:
+  """the `~/.ppp` fallback search root set up alongside `configs_dir`."""
+  return configs_dir.parent / 'ppp'
 
 
 def _write(dir: Path, name: str, payload) -> None:
@@ -24,6 +37,15 @@ class TestLocalSource:
   def test_fetch_reads_from_configs_dir(self, configs_dir: Path):
     _write(configs_dir, 'notion.json', {'token': 't'})
     assert credentials.LocalSource('notion.json').fetch() == '{"token": "t"}'
+
+  def test_fetch_falls_back_to_ppp_dir(self, configs_dir: Path, ppp_dir: Path):
+    _write(ppp_dir, 'notion.json', {'token': 'p'})
+    assert credentials.LocalSource('notion.json').fetch() == '{"token": "p"}'
+
+  def test_configs_dir_wins_over_ppp_dir(self, configs_dir: Path, ppp_dir: Path):
+    _write(configs_dir, 'notion.json', {'token': 'c'})
+    _write(ppp_dir, 'notion.json', {'token': 'p'})
+    assert credentials.LocalSource('notion.json').fetch() == '{"token": "c"}'
 
   def test_fetch_returns_none_when_absent(self, configs_dir: Path):
     assert credentials.LocalSource('missing.json').fetch() is None
