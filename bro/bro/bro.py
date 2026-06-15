@@ -6,10 +6,10 @@ from typing import Callable, Self
 
 import llm.llms.chat_gpt
 import llm.mcp
+from base import credentials
 from bro.datasources.base import DataSource
 from llm.llm import LLM, LLMSpec
 from llm.observer import BoringRenderer, NullObserver, Observer
-from llm.tracker import DEFAULT_CONFIG_PATH as _TRAILS_CONFIG_PATH
 from llm.tracker import EndReason, HTTPTracker, NullTracker, Tracker
 
 DEFAULT_LLM_SPEC: LLMSpec = llm.llms.chat_gpt.LLMSpec()
@@ -29,19 +29,21 @@ def _default_factory() -> Tracker:
   # still take precedence.
   if os.environ.get(_TRAILS_DISABLED_ENV) is not None:
     return NullTracker()
-  # recording is otherwise mandatory in production: `.configs/trails.json` must
-  # be present (`setup/bootstrap_trails.sh` writes it, or the container
-  # entrypoint provisions on first run). a missing config is a setup error,
-  # not a fallback path — `NullTracker` is opt-in:
+  # recording is otherwise mandatory in production: the `trails` secret must
+  # resolve (`setup/bootstrap_trails.sh` writes `.configs/trails.json`, or the
+  # container entrypoint provisions it on first run). a missing secret is a setup
+  # error, not a fallback path — `NullTracker` is opt-in:
   # - kill switch: `TRAILS_DISABLED` set in the environment.
   # - tests: `conftest.py`'s `set_default_tracker_factory(NullTracker)`.
   # - one-shot exploration: `bro.run(..., tracker=NullTracker())`.
-  if not Path(_TRAILS_CONFIG_PATH).is_file():
+  try:
+    cfg = credentials.default_store().get_json('trails')
+  except credentials.SecretNotFound as e:
     raise RuntimeError(
-      f'trails: {_TRAILS_CONFIG_PATH} missing; run setup/bootstrap_trails.sh '
-      'to enable recording, or pass tracker=NullTracker() to skip explicitly'
-    )
-  return HTTPTracker.from_config(_TRAILS_CONFIG_PATH)
+      'trails: secret not found; run setup/bootstrap_trails.sh to enable '
+      'recording, or pass tracker=NullTracker() to skip explicitly'
+    ) from e
+  return HTTPTracker(cfg['base_url'], cfg['token'])
 
 
 # default factory for the per-run `Tracker` an unconfigured bro uses. swap with

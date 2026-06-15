@@ -238,9 +238,11 @@ class TestBroRun:
   def test_default_factory_raises_when_trails_config_missing(self, monkeypatch, tmp_path):
     # `_default_factory` refuses to silently fall back to `NullTracker` —
     # missing config is a setup error that must be surfaced.
+    from base import credentials
     from bro import bro as bro_module
 
-    monkeypatch.setattr(bro_module, '_TRAILS_CONFIG_PATH', str(tmp_path / 'missing.json'))
+    monkeypatch.setattr(credentials, 'CONFIGS_DIR', str(tmp_path))
+    monkeypatch.setattr(credentials, '_default_store', None)
     monkeypatch.delenv(bro_module._TRAILS_DISABLED_ENV, raising=False)
     with pytest.raises(RuntimeError, match='bootstrap_trails.sh'):
       bro_module._default_factory()
@@ -248,12 +250,11 @@ class TestBroRun:
   # presence is what counts (same convention as NO_COLOR / CW_IN_CONTAINER):
   # any value, including '' and '0', enables the switch. unset it to record.
   @pytest.mark.parametrize('value', ['1', '', '0', 'whatever'])
-  def test_default_factory_disabled_by_env_var(self, monkeypatch, tmp_path, value):
-    # the kill switch wins before the config check: a missing config would
+  def test_default_factory_disabled_by_env_var(self, monkeypatch, value):
+    # the kill switch wins before the secret check: a missing secret would
     # otherwise raise, but `TRAILS_DISABLED` short-circuits to NullTracker.
     from bro import bro as bro_module
 
-    monkeypatch.setattr(bro_module, '_TRAILS_CONFIG_PATH', str(tmp_path / 'missing.json'))
     monkeypatch.setenv(bro_module._TRAILS_DISABLED_ENV, value)
     assert isinstance(bro_module._default_factory(), NullTracker)
 

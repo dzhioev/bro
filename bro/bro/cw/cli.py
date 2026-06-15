@@ -50,9 +50,8 @@ from pathlib import Path
 
 import humanize
 
-import configs
 import session_log_health
-from base import log
+from base import credentials, log
 from base.args import Parser
 
 CONTAINER_DIR = Path(__file__).resolve().parent / 'setup' / 'container'
@@ -123,14 +122,15 @@ _DOCKER_AWS_ENV = (
 _BRO_GIT_NAME = 'Bro'
 _BRO_GIT_EMAIL = 'dzhioev+bro@gmail.com'
 _GITHUB_TOKEN_FILE = 'cw_github_token_bro'
-_ANTHROPIC_CONFIG_PATH = Path(configs.DEFAULT_CONFIGS_DIR) / 'anthropic.json'
 
 
 def _load_anthropic_key() -> str | None:
-  """return the api_key from anthropic.json, or None if missing/invalid."""
-  if not _ANTHROPIC_CONFIG_PATH.is_file():
+  """return the api_key from the `anthropic` secret, or None if missing/invalid."""
+  try:
+    config = credentials.default_store().get_json('anthropic')
+  except credentials.SecretNotFound:
     return None
-  key = json.loads(_ANTHROPIC_CONFIG_PATH.read_text()).get('api_key')
+  key = config.get('api_key')
   if not isinstance(key, str) or len(key) == 0:
     return None
   return key
@@ -1026,10 +1026,10 @@ def _mcp_config_argv(mcp: str) -> list[str]:
   if mcp == 'local':
     return ['--mcp-config=flow/mcp/mcp_local.json']
   assert mcp == 'http'
-  config_path = _project_root() / '.configs' / 'flow_mcp.json'
-  if not config_path.is_file():
-    raise SystemExit(f'missing {config_path} — run flow/mcp/server/bootstrap_secrets.sh')
-  cfg = json.loads(config_path.read_text())
+  try:
+    cfg = credentials.default_store().get_json('flow_mcp')
+  except credentials.SecretNotFound:
+    raise SystemExit('missing flow_mcp secret — run flow/mcp/server/bootstrap_secrets.sh')
   mcp_json = json.dumps(
     {
       'mcpServers': {
@@ -1520,7 +1520,7 @@ def main(argv=None):
       parser.error('--bro cannot be combined with --resume')
     if _load_anthropic_key() is None:
       parser.error(
-        f'--bro requires an Anthropic API key at {_ANTHROPIC_CONFIG_PATH} '
+        '--bro requires the `anthropic` secret to provide an api_key '
         '({"api_key": "..."}); claude --bare does not use OAuth or keychain'
       )
   if args['resume']:

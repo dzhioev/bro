@@ -1,19 +1,15 @@
-import json
-import os
 import urllib.parse
 
 import aiohttp
 import trafilatura
 from pydantic import BaseModel
 
-import configs
-from base import log
+from base import credentials, log
 from bro.datasources.base import Hit, SearchableDataSource
 from mu import Text, mu
 from prompts import get_prompt
 
 _SEARCH_URL = 'https://api.search.brave.com/res/v1/web/search'
-_DEFAULT_CONFIG_PATH = os.path.join(configs.DEFAULT_CONFIGS_DIR, 'brave.json')
 _USER_AGENT = 'bro-librorian/1.0 (https://github.com/dzhioev/ppp)'
 _MAX_EXTRACT_CHARS = 60_000
 
@@ -31,16 +27,15 @@ class WebSearch(SearchableDataSource):
     'text (optionally summarised for the query).'
   )
 
-  def __init__(self, config_path: str = _DEFAULT_CONFIG_PATH):
-    # lazy: defer the file read so a Bro that declares WebSearch can still be listed
-    # (`bro list`, `bro show`) when the key file is not present
-    self._config_path = config_path
+  def __init__(self, store: credentials.Store | None = None):
+    # lazy: defer the credential read so a Bro that declares WebSearch can still
+    # be listed (`bro list`, `bro show`) when the key is not present
+    self._store = store if store is not None else credentials.default_store()
     self._api_key: str | None = None
 
   def _resolve_api_key(self) -> str:
     if self._api_key is None:
-      with open(self._config_path, 'r') as f:
-        key: str = json.load(f)['api_key']
+      key: str = self._store.get_json('brave')['api_key']
       self._api_key = key
     return self._api_key
 

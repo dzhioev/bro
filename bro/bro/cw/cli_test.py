@@ -7,9 +7,11 @@ import cw
 
 @pytest.fixture
 def config_path(monkeypatch, tmp_path):
-  path = tmp_path / 'anthropic.json'
-  monkeypatch.setattr(cw, '_ANTHROPIC_CONFIG_PATH', path)
-  return path
+  from base import credentials
+
+  monkeypatch.setattr(credentials, 'CONFIGS_DIR', str(tmp_path))
+  monkeypatch.setattr(credentials, '_default_store', None)
+  return tmp_path / 'anthropic.json'
 
 
 class TestLoadAnthropicKey:

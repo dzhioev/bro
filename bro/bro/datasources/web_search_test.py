@@ -4,18 +4,19 @@ from unittest.mock import patch
 
 import pytest
 
+from base import credentials
 from bro.datasources import web_search as ws
 
 
 @pytest.fixture
-def brave_config(tmp_path: Path) -> str:
-  path = tmp_path / 'brave.json'
-  path.write_text(json.dumps({'api_key': 'k'}))
-  return str(path)
+def brave_store(tmp_path: Path, monkeypatch) -> credentials.Store:
+  monkeypatch.setattr(credentials, 'CONFIGS_DIR', str(tmp_path))
+  (tmp_path / 'brave.json').write_text(json.dumps({'api_key': 'k'}))
+  return credentials.Store(credentials.default_registry())
 
 
 @pytest.mark.asyncio
-async def test_search_parses_hits(brave_config):
+async def test_search_parses_hits(brave_store):
   captured: dict = {}
 
   async def fake_get_json(url, params, headers):
@@ -40,7 +41,7 @@ async def test_search_parses_hits(brave_config):
     }
 
   with patch.object(ws, '_get_json', side_effect=fake_get_json):
-    hits = await ws.WebSearch(config_path=brave_config).search('weapons 2025 horror', limit=2)
+    hits = await ws.WebSearch(store=brave_store).search('weapons 2025 horror', limit=2)
   assert captured['params'] == {'q': 'weapons 2025 horror', 'count': '2'}
   assert captured['headers']['X-Subscription-Token'] == 'k'
   assert len(hits) == 2
@@ -51,7 +52,7 @@ async def test_search_parses_hits(brave_config):
 
 
 @pytest.mark.asyncio
-async def test_search_respects_limit(brave_config):
+async def test_search_respects_limit(brave_store):
   async def fake_get_json(url, params, headers):
     return {
       'web': {
@@ -63,12 +64,12 @@ async def test_search_respects_limit(brave_config):
     }
 
   with patch.object(ws, '_get_json', side_effect=fake_get_json):
-    hits = await ws.WebSearch(config_path=brave_config).search('q', limit=3)
+    hits = await ws.WebSearch(store=brave_store).search('q', limit=3)
   assert len(hits) == 3
 
 
 @pytest.mark.asyncio
-async def test_search_skips_results_without_url(brave_config):
+async def test_search_skips_results_without_url(brave_store):
   async def fake_get_json(url, params, headers):
     return {
       'web': {
@@ -81,13 +82,13 @@ async def test_search_skips_results_without_url(brave_config):
     }
 
   with patch.object(ws, '_get_json', side_effect=fake_get_json):
-    hits = await ws.WebSearch(config_path=brave_config).search('q')
+    hits = await ws.WebSearch(store=brave_store).search('q')
   assert len(hits) == 1
   assert hits[0].id == 'https://example.com/ok'
 
 
 @pytest.mark.asyncio
-async def test_fetch_without_query_returns_extracted_text(brave_config):
+async def test_fetch_without_query_returns_extracted_text(brave_store):
   async def fake_get_text(url):
     return '<html><body><article>Main article text.</article></body></html>'
 
@@ -95,12 +96,12 @@ async def test_fetch_without_query_returns_extracted_text(brave_config):
     patch.object(ws, '_get_text', side_effect=fake_get_text),
     patch.object(ws.trafilatura, 'extract', return_value='Main article text.'),
   ):
-    text = await ws.WebSearch(config_path=brave_config).fetch('https://example.com/x')
+    text = await ws.WebSearch(store=brave_store).fetch('https://example.com/x')
   assert text == 'Main article text.'
 
 
 @pytest.mark.asyncio
-async def test_fetch_with_query_summarises_via_mu(brave_config):
+async def test_fetch_with_query_summarises_via_mu(brave_store):
   captured_prompt: list[str] = []
 
   async def fake_get_text(url):
@@ -115,7 +116,7 @@ async def test_fetch_with_query_summarises_via_mu(brave_config):
     patch.object(ws.trafilatura, 'extract', return_value='Weapons released August 2025.'),
     patch.object(ws, 'mu', side_effect=fake_mu),
   ):
-    result = await ws.WebSearch(config_path=brave_config).fetch(
+    result = await ws.WebSearch(store=brave_store).fetch(
       'https://www.imdb.com/title/tt26581740/',
       query='when did Weapons release?',
     )
@@ -126,7 +127,7 @@ async def test_fetch_with_query_summarises_via_mu(brave_config):
 
 
 @pytest.mark.asyncio
-async def test_fetch_raises_when_extraction_empty(brave_config):
+async def test_fetch_raises_when_extraction_empty(brave_store):
   async def fake_get_text(url):
     return '<html></html>'
 
@@ -135,12 +136,12 @@ async def test_fetch_raises_when_extraction_empty(brave_config):
     patch.object(ws.trafilatura, 'extract', return_value=''),
   ):
     with pytest.raises(LookupError, match='no extractable text'):
-      await ws.WebSearch(config_path=brave_config).fetch('https://example.com/empty')
+      await ws.WebSearch(store=brave_store).fetch('https://example.com/empty')
 
 
-def test_api_key_loaded_lazily(tmp_path: Path):
-  # ctor should not touch the filesystem — needed so `bro list` / `bro show` work
-  # without the credential file present
-  missing = tmp_path / 'absent.json'
-  source = ws.WebSearch(config_path=str(missing))
+def test_api_key_loaded_lazily(tmp_path: Path, monkeypatch):
+  # ctor should not read the credential — needed so `bro list` / `bro show` work
+  # without the key present
+  monkeypatch.setattr(credentials, 'CONFIGS_DIR', str(tmp_path))
+  source = ws.WebSearch(store=credentials.Store(credentials.default_registry()))
   assert source._api_key is None

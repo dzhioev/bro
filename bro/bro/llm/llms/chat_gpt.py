@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import ClassVar, Literal, Self, cast, get_args
 
 import llm.llm
-import configs
+from base import credentials
 from llm.mcp import MCPServer, Tool, ToolControlSignal
 from llm.observer import Observer
 from llm.tracker import Tracker
@@ -27,10 +27,7 @@ from openai.types.shared import ReasoningEffort
 ResponseInputContentPart = ResponseInputContentParam
 
 import json
-import os
 import base64
-
-DEFAULT_CONFIG_PATH = os.path.join(configs.DEFAULT_CONFIGS_DIR, 'openai.json')
 
 ServiceTier = Literal['auto', 'default', 'flex', 'priority']
 _VALID_SERVICE_TIERS: frozenset[str] = frozenset(get_args(ServiceTier))
@@ -216,7 +213,6 @@ def convert_message(msg: dict) -> EasyInputMessageParam:
 class ChatGPT(llm.llm.LLM):
   @staticmethod
   def create(
-    config_path=DEFAULT_CONFIG_PATH,
     model: str = 'gpt-5',
     mcp_servers: list[MCPServer] | None = None,
     reasoning_effort: ReasoningEffort | None = None,
@@ -224,8 +220,7 @@ class ChatGPT(llm.llm.LLM):
     observer: Observer | None = None,
     tracker: Tracker | None = None,
   ):
-    with open(config_path, 'r') as f:
-      config = json.load(f)
+    config = credentials.default_store().get_json('openai')
     return ChatGPT(
       api_key=config['api_key'],
       model=model,

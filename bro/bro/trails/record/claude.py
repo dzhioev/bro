@@ -14,17 +14,14 @@ from pathlib import Path
 import boto3
 
 import session_log_health
-from base import log
+from base import credentials, log
 from base.args import Parser
-
-_CONFIG_PATH = Path(__file__).resolve().parent / '.configs' / 'session_log.json'
 
 __cli_name__ = 'sync-session-log'
 
 
 def _load_config() -> dict:
-  with open(_CONFIG_PATH) as f:
-    return json.load(f)
+  return credentials.default_store().get_json('session_log')
 
 
 def _create_session(config: dict) -> boto3.Session:
@@ -246,12 +243,12 @@ def sync_session_log(
     log.error('cannot determine workspace name; pass --workspace or set CW_COMMAND/CW_NAME')
     return 1
 
-  if not _CONFIG_PATH.is_file():
-    log.error('config not found: %s (run setup/bootstrap_session_log.sh)', _CONFIG_PATH)
-    session_log_health.write('error', f'config not found: {_CONFIG_PATH}')
+  try:
+    config = _load_config()
+  except credentials.SecretNotFound:
+    log.error('config not found: session_log (run setup/bootstrap_session_log.sh)')
+    session_log_health.write('error', 'config not found: session_log')
     return 1
-
-  config = _load_config()
   session = _create_session(config)
   bucket = config['bucket']
   table_name = config['table']

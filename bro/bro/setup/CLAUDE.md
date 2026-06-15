@@ -32,14 +32,14 @@ Worktrees get their own `.venv`. The `.claude/hooks/session_start.sh` hook seeds
 
   Two-pass: collects per-sha totals from commit-message footers (same format as `claude_commit_footer.py`), then substitutes a sentinel in a `--graph --color=always` render. Pages through `less -RFX` on tty. Alias is registered by `setup_repo.sh`.
 - `docker_smoke_test.sh` — sourceable helper for service `verify_deps.sh` scripts (`smoke_build`, `smoke_start`, `smoke_await`, `smoke_curl`, `smoke_assert_status`); picks docker or podman via `$OCI_CMD` from `infra/deploy_lib.sh`
-- `print_anthropic_key.sh` — prints `.configs/anthropic.json`'s `api_key`. Wired as `apiKeyHelper` by `cw --bro` so claude reads the key without the "Detected a custom API key" confirmation that `ANTHROPIC_API_KEY` would trigger every session
+- `print_anthropic_key.sh` — prints the `anthropic` secret's `api_key` via `credentials get anthropic --field api_key`. Wired as `apiKeyHelper` by `cw --bro` so claude reads the key without the "Detected a custom API key" confirmation that `ANTHROPIC_API_KEY` would trigger every session
 - `container/` — Dockerfile + entrypoint for the `cw -c` container image; `bump-claude-code.sh` rebuilds with the pinned `claude-code-version`. Image bundles the docker CLI; `cw.py` bind-mounts the host docker socket so deploy scripts inside the container can build + push against the host daemon
 - `ubuntu/` — Ubuntu-only install helpers (currently `install_stow.sh`)
 - `dotfiles/` — GNU Stow dotfiles submodule. `.configs` at the repo root is a symlink into `setup/dotfiles/dotfiles/dot-ppp`
 
 ## Configuration
 
-Credentials live in `.configs/` (symlink into the dotfiles submodule).
+Credentials live in `.configs/` (symlink into the dotfiles submodule). Readers resolve them through `base.credentials` — `credentials.default_store().get_json(name)` — rather than opening the files directly; the built-in registry maps each secret name below to its `.configs/<file>`. The `credentials get <name> [--field <key>]` CLI exposes the same resolver to non-Python callers (e.g. the Anthropic apiKeyHelper).
 
 - `notion.json` — Notion token + database IDs (`tasks_db_id`, `events_db_id`, `projects_db_id`, `media_db_id`)
 - `google_api.json` — Google OAuth client config

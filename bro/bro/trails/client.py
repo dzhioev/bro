@@ -28,6 +28,7 @@ from typing import Any
 from urllib.parse import urlencode, urlparse
 
 import configs
+from base import credentials
 from llm.tracker import (
   DEFAULT_CONFIG_PATH,
   Parent,
@@ -221,10 +222,11 @@ class TrailsClient:
 
 
 def default_client() -> TrailsClient:
-  """build a `TrailsClient` from `.configs/trails.json` — the same config the
-  in-bro `HTTPTracker` reads, so the read and write sides share one credential.
+  """build a `TrailsClient` from the `trails` secret — the same credential the
+  in-bro `HTTPTracker` reads, so the read and write sides share one source.
   """
-  return TrailsClient.from_config()
+  cfg = credentials.default_store().get_json('trails')
+  return TrailsClient(cfg['base_url'], cfg['token'])
 
 
 # fields the server stamps onto every step row alongside the per-kind extras.
