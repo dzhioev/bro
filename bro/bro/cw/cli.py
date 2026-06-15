@@ -212,6 +212,7 @@ _CONTAINER_SETTINGS_JSON: dict = {
   # behind its alternate-screen buffer (the entrypoint can't print a banner that
   # survives the session)
   'statusLine': {'type': 'command', 'command': 'session-log-statusline'},
+  'enabledPlugins': {'pyright-lsp@claude-plugins-official': True},
 }
 
 
