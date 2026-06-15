@@ -808,17 +808,24 @@ def list_workspaces() -> int:
   return 0
 
 
-def _worktree_is_clean(path: Path, container_proj: Path | None = None) -> tuple[bool, list[str]]:
+def _worktree_is_clean(
+  path: Path, container_proj: Path | None = None, refresh_origin: bool = True
+) -> tuple[bool, list[str]]:
   """check whether a worktree is safe to remove.
 
   returns (safe, reasons) where reasons lists what prevents removal.
   container_proj: when set, `path` is a container clone whose own remotes
   are unreachable from the host (origin = HTTPS GitHub without creds, host
   remote = /host-repo bind mount). Ancestry checks run in container_proj
-  (resp. container_proj/<sub_path>) instead, with the container's HEAD
-  fetched in first; container_proj/.git/objects is also exposed as an
-  alternate so basic git ops in the container clone can resolve their
-  /host-repo alternates.
+  (resp. container_proj/<sub_path>) instead; container_proj/.git/objects is
+  exposed as an alternate so git ops in the container clone can resolve their
+  /host-repo alternates, and the clone's own object store is exposed as an
+  alternate to container_proj so the ancestry walk can reach the container's
+  local commits without writing them into the shared repo.
+  refresh_origin: fetch origin/master before the ancestry check. callers that
+  run many checks concurrently (clean_workspaces) fetch once up front and pass
+  False — a per-check fetch into the shared repo races on the ref lock, and the
+  old FETCH_HEAD-based bring-in raced on the single shared FETCH_HEAD file.
   """
   no_prompt_env = {**os.environ, 'GIT_TERMINAL_PROMPT': '0'}
   local_env = dict(no_prompt_env)
@@ -837,28 +844,35 @@ def _worktree_is_clean(path: Path, container_proj: Path | None = None) -> tuple[
     reasons.append('uncommitted or untracked changes')
 
   check_root = container_proj if container_proj is not None else path
-  fetch = subprocess.run(
-    ['git', 'fetch', '--quiet', 'origin', 'master'],
-    cwd=check_root,
-    capture_output=True,
-    env=no_prompt_env,
-  )
-  if fetch.returncode != 0:
-    reasons.append('could not fetch origin/master')
-  else:
-    head_ref = 'HEAD'
+  origin_ok = True
+  if refresh_origin:
+    fetch = subprocess.run(
+      ['git', 'fetch', '--quiet', 'origin', 'master'],
+      cwd=check_root,
+      capture_output=True,
+      env=no_prompt_env,
+    )
+    origin_ok = fetch.returncode == 0
+    if not origin_ok:
+      reasons.append('could not fetch origin/master')
+  if origin_ok:
+    # resolve the ref to compare against origin/master, plus the object store(s)
+    # the ancestry walk needs. for a container clone, read its HEAD sha and
+    # expose the clone's objects to check_root as a read-only alternate — the
+    # walk then reaches the container's local commits without fetching them into
+    # the shared repo (which would race on FETCH_HEAD across concurrent checks).
+    ancestry_env = dict(no_prompt_env)
     if container_proj is not None:
-      bring_in = subprocess.run(
-        ['git', 'fetch', '--quiet', str(path), 'HEAD'],
-        cwd=check_root,
-        capture_output=True,
-        env=no_prompt_env,
+      head = subprocess.run(
+        ['git', 'rev-parse', 'HEAD'], cwd=path, capture_output=True, text=True, env=local_env
       )
-      if bring_in.returncode != 0:
-        reasons.append("could not fetch container's HEAD")
-        head_ref = None
+      head_ref = head.stdout.strip() if head.returncode == 0 else None
+      if head_ref is None:
+        reasons.append("could not read container's HEAD")
       else:
-        head_ref = 'FETCH_HEAD'
+        ancestry_env['GIT_ALTERNATE_OBJECT_DIRECTORIES'] = str(path / '.git' / 'objects')
+    else:
+      head_ref = 'HEAD'
     if head_ref is not None:
       master_check = subprocess.run(
         ['git', 'rev-parse', '--verify', 'origin/master'],
@@ -873,7 +887,7 @@ def _worktree_is_clean(path: Path, container_proj: Path | None = None) -> tuple[
           ['git', 'merge-base', '--is-ancestor', head_ref, 'origin/master'],
           cwd=check_root,
           capture_output=True,
-          env=no_prompt_env,
+          env=ancestry_env,
         )
         if ancestor.returncode != 0:
           ahead = subprocess.run(
@@ -881,7 +895,7 @@ def _worktree_is_clean(path: Path, container_proj: Path | None = None) -> tuple[
             cwd=check_root,
             capture_output=True,
             text=True,
-            env=no_prompt_env,
+            env=ancestry_env,
           )
           n = ahead.stdout.strip() if ahead.returncode == 0 else '?'
           reasons.append(f'{n} commit(s) not on origin/master')
@@ -1035,16 +1049,31 @@ def clean_workspaces(
     if p.is_dir() and (filter_refs is None or _format_ref(p.name, True) in filter_refs)
   )
 
+  # fetch origin/master once up front: the per-workspace checks below run
+  # concurrently and share proj's (resp. the common dir's) refs, so a fetch
+  # inside each would race on the ref lock. a stale ref only ever makes the
+  # ancestry check stricter (errs toward keeping a workspace), so a failed
+  # fetch is a warning, not fatal. with this done, the top-level ancestry check
+  # passes refresh_origin=False and touches only read-only shared state.
+  fetched = subprocess.run(
+    ['git', 'fetch', '--quiet', 'origin', 'master'],
+    cwd=proj,
+    capture_output=True,
+    env={**os.environ, 'GIT_TERMINAL_PROMPT': '0'},
+  )
+  if fetched.returncode != 0:
+    log.warning('could not fetch origin/master; ancestry checks use the local ref')
+
   def _check_local(p: Path) -> tuple[Path, bool, bool, list[str]]:
     if _is_local_active(p.name):
       return p, True, False, []
-    safe, reasons = _worktree_is_clean(p)
+    safe, reasons = _worktree_is_clean(p, refresh_origin=False)
     return p, False, safe, reasons
 
   def _check_container(p: Path, mounts: set[str]) -> tuple[Path, bool, bool, list[str]]:
     if str(p) in mounts:
       return p, True, False, []
-    safe, reasons = _worktree_is_clean(p, container_proj=proj)
+    safe, reasons = _worktree_is_clean(p, container_proj=proj, refresh_origin=False)
     return p, False, safe, reasons
 
   with concurrent.futures.ThreadPoolExecutor() as pool:

@@ -21,7 +21,7 @@ A workspace is "clean" when:
 - (b) `HEAD` is an ancestor of `origin/master`, and
 - (c) every submodule's pinned commit is reachable from its remote default ref.
 
-For container workspaces the ancestry checks run against the host project's `.git`, with the container's `HEAD` fetched in first, because the container clone's `origin` is an HTTPS URL that the host can't reach without credentials.
+For container workspaces the ancestry checks run against the host project's `.git` (the container clone's own `origin` is an HTTPS URL the host can't reach without credentials). The check reads the clone's `HEAD` sha and runs `merge-base`/`rev-list` in the host repo with the clone's object store exposed as a read-only alternate, rather than fetching the clone's `HEAD` into the host repo — `cw clean` checks every workspace concurrently, and a per-check fetch raced on the shared `FETCH_HEAD`/ref locks (yielding wrong commit counts and a flapping clean/dirty verdict). `origin/master` is fetched once up front for the same reason; `check-clean` (single workspace, no concurrency) still fetches inline.
 
 ## Host mode vs container mode
 

@@ -517,6 +517,60 @@ class TestRemoveContainerDir:
       cw._remove_container_dir(survivor, image='ppp-cw:x')
 
 
+class TestWorktreeIsClean:
+  def _git(self, cwd, *args):
+    import subprocess
+
+    subprocess.run(['git', *args], cwd=cwd, check=True, capture_output=True)
+
+  def _repo(self, tmp_path):
+    d = tmp_path / 'repo'
+    d.mkdir()
+    self._git(d, 'init', '-b', 'master')
+    self._git(d, 'config', 'user.email', 't@t')
+    self._git(d, 'config', 'user.name', 't')
+    (d / 'f').write_text('a')
+    self._git(d, 'add', '.')
+    self._git(d, 'commit', '-m', 'c1')
+    # simulate a pushed upstream at the current commit
+    self._git(d, 'update-ref', 'refs/remotes/origin/master', 'HEAD')
+    return d
+
+  def test_clean_when_head_matches_origin_master(self, tmp_path):
+    d = self._repo(tmp_path)
+    safe, reasons = cw._worktree_is_clean(d, refresh_origin=False)
+    assert safe is True
+    assert reasons == []
+
+  def test_counts_unpushed_commits(self, tmp_path):
+    d = self._repo(tmp_path)
+    (d / 'f').write_text('b')
+    self._git(d, 'commit', '-am', 'c2')
+    safe, reasons = cw._worktree_is_clean(d, refresh_origin=False)
+    assert safe is False
+    assert reasons == ['1 commit(s) not on origin/master']
+
+  def test_flags_uncommitted_changes(self, tmp_path):
+    d = self._repo(tmp_path)
+    (d / 'untracked').write_text('x')
+    safe, reasons = cw._worktree_is_clean(d, refresh_origin=False)
+    assert safe is False
+    assert 'uncommitted or untracked changes' in reasons
+
+  def test_missing_origin_master_is_not_clean(self, tmp_path):
+    d = tmp_path / 'repo'
+    d.mkdir()
+    self._git(d, 'init', '-b', 'master')
+    self._git(d, 'config', 'user.email', 't@t')
+    self._git(d, 'config', 'user.name', 't')
+    (d / 'f').write_text('a')
+    self._git(d, 'add', '.')
+    self._git(d, 'commit', '-m', 'c1')
+    safe, reasons = cw._worktree_is_clean(d, refresh_origin=False)
+    assert safe is False
+    assert 'origin/master not found' in reasons
+
+
 class TestPopulateBroSkills:
   def test_creates_symlinks_for_each_skill(self, tmp_path):
     # ppp-dev inherits /pr and /land from dev via the MRO walk
