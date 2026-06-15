@@ -35,7 +35,12 @@ echo '{"host_marker":"untouched"}' > "$SMOKE_TMP/host_claude.json"
 HOST_CLAUDE_SHA="$(sha256sum "$SMOKE_TMP/host_claude.json" | cut -d' ' -f1)"
 
 echo "running entrypoint" >&2
-docker run --rm \
+# the assertion body is piped to the container via a quoted heredoc + `bash -s`
+# (needs `-i` so docker forwards stdin): everything between the markers reaches
+# bash verbatim, so apostrophes, quotes, and `$(...)` need no escaping. don't
+# switch back to `bash -c '...'` — a single apostrophe in a comment silently
+# breaks out of the quote and corrupts the script.
+docker run --rm -i \
   -v "$SMOKE_TMP/workspace:/workspace" \
   -v "$PROJ:/host-repo:ro" \
   -v "$SMOKE_TMP/gitconfig:/host-gitconfig:ro" \
@@ -45,7 +50,7 @@ docker run --rm \
   -e "HOME=/home/cw" \
   -e "CW_NAME=smoke-test" \
   -e "CW_SKIP_VENV=1" \
-  "$TAG" bash -c '
+  "$TAG" bash -s >&2 << 'SMOKE'
     set -e
     # gitconfig should be writable (the bug this test guards against)
     git config --global --list > /dev/null
@@ -70,8 +75,8 @@ docker run --rm \
     test -w /opt/uv-cache
     # /home/cw/.claude.json reflects the container-private seed and is writable
     grep -q smoke_seed /home/cw/.claude.json
-    echo "{\"modified_by_container\":true}" > /home/cw/.claude.json
-  ' >&2
+    echo '{"modified_by_container":true}' > /home/cw/.claude.json
+SMOKE
 
 # container-private .claude.json reflects the in-container write
 grep -q modified_by_container "$SMOKE_TMP/claude/.claude.json"
