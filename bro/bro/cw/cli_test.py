@@ -410,6 +410,113 @@ class TestRenderBanner:
     assert out.index('⚠') < out.index('██')
 
 
+class _FakeProc:
+  def __init__(self, returncode=0, stdout='', stderr=''):
+    self.returncode = returncode
+    self.stdout = stdout
+    self.stderr = stderr
+
+
+class TestCleanupImage:
+  def test_prefers_current_tag_when_present(self, monkeypatch):
+    monkeypatch.setattr(cw, '_image_tag', lambda: 'ppp-cw:cur')
+    monkeypatch.setattr(cw.subprocess, 'run', lambda *a, **k: _FakeProc(returncode=0))
+    assert cw._cleanup_image() == 'ppp-cw:cur'
+
+  def test_falls_back_to_any_ppp_cw_image(self, monkeypatch):
+    monkeypatch.setattr(cw, '_image_tag', lambda: 'ppp-cw:cur')
+
+    def fake_run(argv, *a, **k):
+      if argv[1] == 'image':  # docker image inspect -> miss
+        return _FakeProc(returncode=1)
+      return _FakeProc(returncode=0, stdout='ppp-cw:<none>\nppp-cw:abc123\n')
+
+    monkeypatch.setattr(cw.subprocess, 'run', fake_run)
+    assert cw._cleanup_image() == 'ppp-cw:abc123'
+
+  def test_none_when_no_image(self, monkeypatch):
+    monkeypatch.setattr(cw, '_image_tag', lambda: 'ppp-cw:cur')
+
+    def fake_run(argv, *a, **k):
+      if argv[1] == 'image':
+        return _FakeProc(returncode=1)
+      return _FakeProc(returncode=0, stdout='')
+
+    monkeypatch.setattr(cw.subprocess, 'run', fake_run)
+    assert cw._cleanup_image() is None
+
+
+class TestRemoveContainerDir:
+  def test_plain_rmtree_when_host_owned(self, monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(cw.shutil, 'rmtree', lambda p: calls.append(p))
+    monkeypatch.setattr(
+      cw.subprocess, 'run', lambda *a, **k: pytest.fail('docker must not be invoked')
+    )
+    cw._remove_container_dir(tmp_path / 'ws', image='ppp-cw:x')
+    assert calls == [tmp_path / 'ws']
+
+  def test_missing_dir_is_noop(self, monkeypatch, tmp_path):
+    def boom(_):
+      raise FileNotFoundError
+
+    monkeypatch.setattr(cw.shutil, 'rmtree', boom)
+    monkeypatch.setattr(
+      cw.subprocess, 'run', lambda *a, **k: pytest.fail('docker must not be invoked')
+    )
+    cw._remove_container_dir(tmp_path / 'gone', image='ppp-cw:x')
+
+  def test_escalates_to_root_container_on_eperm(self, monkeypatch, tmp_path):
+    def boom(_):
+      raise PermissionError
+
+    monkeypatch.setattr(cw.shutil, 'rmtree', boom)
+    seen = {}
+
+    def fake_run(argv, *a, **k):
+      seen['argv'] = argv
+      return _FakeProc(returncode=0)
+
+    monkeypatch.setattr(cw.subprocess, 'run', fake_run)
+    target = tmp_path / 'ws'  # never created -> path.exists() is False afterwards
+    cw._remove_container_dir(target, image='ppp-cw:x')
+    argv = seen['argv']
+    assert argv[:5] == ['docker', 'run', '--rm', '-u', '0']
+    assert '--entrypoint' in argv and argv[argv.index('--entrypoint') + 1] == 'rm'
+    assert f'{tmp_path}:/target' in argv
+    assert argv[-2:] == ['-rf', f'/target/{target.name}']
+
+  def test_raises_when_no_image_available(self, monkeypatch, tmp_path):
+    def boom(_):
+      raise PermissionError
+
+    monkeypatch.setattr(cw.shutil, 'rmtree', boom)
+    with pytest.raises(RuntimeError, match='no ppp-cw image'):
+      cw._remove_container_dir(tmp_path / 'ws', image=None)
+
+  def test_raises_when_docker_rm_fails(self, monkeypatch, tmp_path):
+    def boom(_):
+      raise PermissionError
+
+    monkeypatch.setattr(cw.shutil, 'rmtree', boom)
+    monkeypatch.setattr(
+      cw.subprocess, 'run', lambda *a, **k: _FakeProc(returncode=1, stderr='denied')
+    )
+    with pytest.raises(RuntimeError, match='docker rm failed: denied'):
+      cw._remove_container_dir(tmp_path / 'ws', image='ppp-cw:x')
+
+  def test_raises_when_dir_survives_docker_rm(self, monkeypatch, tmp_path):
+    def boom(_):
+      raise PermissionError
+
+    monkeypatch.setattr(cw.shutil, 'rmtree', boom)
+    monkeypatch.setattr(cw.subprocess, 'run', lambda *a, **k: _FakeProc(returncode=0))
+    survivor = tmp_path / 'ws'
+    survivor.mkdir()  # still present after the mocked docker rm
+    with pytest.raises(RuntimeError, match='still present'):
+      cw._remove_container_dir(survivor, image='ppp-cw:x')
+
+
 class TestPopulateBroSkills:
   def test_creates_symlinks_for_each_skill(self, tmp_path):
     # ppp-dev inherits /pr and /land from dev via the MRO walk

@@ -739,7 +739,12 @@ def exec_in_workspace(name: str, cmd: list[str]) -> int:
       'cw-exec',
       *cmd,
     ]
-  return subprocess.run(['docker', 'exec', '-it', container_id, *docker_cmd]).returncode
+  # run as cw, not the image's default root: docker exec ignores the entrypoint's
+  # gosu drop, so without -u every exec'd command runs as root and writes
+  # root-owned files into the bind-mounted /workspace that the host user can't
+  # later remove. the entrypoint remaps cw to the host uid, so -u cw matches the
+  # session user and keeps workspace files host-owned.
+  return subprocess.run(['docker', 'exec', '-it', '-u', 'cw', container_id, *docker_cmd]).returncode
 
 
 def _resolve_workspace(ref: str, proj: Path) -> tuple[Path, Path | None]:
@@ -932,6 +937,74 @@ def _worktree_is_clean(path: Path, container_proj: Path | None = None) -> tuple[
   return len(reasons) == 0, reasons
 
 
+def _cleanup_image() -> str | None:
+  """a locally-present ppp-cw image usable to delete root-owned container files.
+
+  prefers the current image tag, then any other locally-present ppp-cw image.
+  returns None when none exist (nothing to escalate the removal with).
+  """
+  tag = _image_tag()
+  if subprocess.run(['docker', 'image', 'inspect', tag], capture_output=True).returncode == 0:
+    return tag
+  listed = subprocess.run(
+    ['docker', 'images', '--format', '{{.Repository}}:{{.Tag}}', 'ppp-cw'],
+    capture_output=True,
+    text=True,
+  )
+  for line in listed.stdout.splitlines():
+    candidate = line.strip()
+    if len(candidate) > 0 and '<none>' not in candidate:
+      return candidate
+  return None
+
+
+def _remove_container_dir(path: Path, image: str | None) -> None:
+  """remove a container workspace dir, including files the host user can't unlink.
+
+  container processes can leave files owned by uids that don't match the host
+  user (e.g. a pre-fix `cw exec` ran as root, or root-running tooling reached
+  the docker socket), which a host-side rmtree hits EPERM on. try a plain rmtree
+  first, then escalate to deleting from inside a throwaway root container, which
+  can unlink regardless of owner. raises RuntimeError if removal fails.
+  """
+  try:
+    shutil.rmtree(path)
+    return
+  except FileNotFoundError:
+    return
+  except PermissionError:
+    pass
+  if image is None:
+    raise RuntimeError(
+      f'{path}: contains files owned by an in-container uid and no ppp-cw image '
+      'is available to remove them as root'
+    )
+  result = subprocess.run(
+    # override the entrypoint and force uid 0 so `rm` runs as root inside the
+    # container; mount the host-owned parent so it can delete the child tree
+    [
+      'docker',
+      'run',
+      '--rm',
+      '-u',
+      '0',
+      '--entrypoint',
+      'rm',
+      '-v',
+      f'{path.parent}:/target',
+      image,
+      '-rf',
+      f'/target/{path.name}',
+    ],
+    capture_output=True,
+    text=True,
+  )
+  if result.returncode != 0:
+    raise RuntimeError(f'{path}: docker rm failed: {result.stderr.strip()}')
+  if path.exists():
+    raise RuntimeError(f'{path}: still present after docker rm')
+
+
 def clean_workspaces(
   force: bool = False, dry_run: bool = False, refs: list[str] | None = None
 ) -> int:
@@ -982,6 +1055,8 @@ def clean_workspaces(
 
   removed = 0
   skipped = 0
+  failed = 0
+  cleanup_image = _cleanup_image() if len(container_results) > 0 else None
 
   for p, active, safe, reasons in local_results:
     if active:
@@ -1020,15 +1095,20 @@ def clean_workspaces(
     if dry_run:
       log.info('would remove %s', ref)
     else:
-      shutil.rmtree(p)
+      try:
+        _remove_container_dir(p, cleanup_image)
+      except RuntimeError as e:
+        log.error('skip %s: %s', ref, e)
+        failed += 1
+        continue
       session_dir = Path.home() / '.claude' / 'cw-sessions' / p.name
       if session_dir.is_dir():
-        shutil.rmtree(session_dir)
+        shutil.rmtree(session_dir, ignore_errors=True)
       log.info('removed %s', ref)
     removed += 1
 
-  log.info('cleaned %d workspace(s), skipped %d', removed, skipped)
-  return 0
+  log.info('cleaned %d workspace(s), skipped %d, failed %d', removed, skipped, failed)
+  return 1 if failed > 0 else 0
 
 
 def _mcp_config_argv(mcp: str) -> list[str]:
@@ -1361,10 +1441,13 @@ def run_in_container(
   # (host or container) sees the live tokens.
   _sync_credentials(claude_dir / '.credentials.json', home / '.claude' / '.credentials.json')
   if drop:
-    shutil.rmtree(session, ignore_errors=True)
+    try:
+      _remove_container_dir(session, _cleanup_image())
+      log.info('removed container workspace %s', name)
+    except RuntimeError as e:
+      log.warning('could not fully remove container workspace %s: %s', name, e)
     if claude_dir.is_dir():
       shutil.rmtree(claude_dir, ignore_errors=True)
-    log.info('removed container workspace %s', name)
   return result.returncode
 
 
