@@ -21,6 +21,8 @@ def _make_tools(*tool_names: str) -> list[FunctionTool]:
 
 
 class ServerAB(InProcessMCPServer):
+  needed_secrets = ('notion',)
+
   def __init__(self):
     super().__init__(_make_tools('a', 'b'))
 
@@ -112,6 +114,28 @@ class TestFormatCard:
     assert '`bro.show_test.ServerXZ` — 2 tools' in card
     assert '  - `x` — x tool description' in card
     assert '  - `z` — z tool description' in card
+
+  @pytest.mark.asyncio
+  async def test_secrets_section_lists_manifest(self):
+    # ServerAB declares `notion`; needed_secrets() is the component manifest (no llm)
+    card = await format_card(_FullBro())
+    assert '## Secrets' in card
+    assert '- `notion`' in card
+
+  @pytest.mark.asyncio
+  async def test_secrets_section_omitted_when_empty(self):
+    import llm.llms.echo
+
+    class _KeylessBro(BaseBro):
+      name = 'keyless'
+      description = 'no secrets'
+      llm_spec = llm.llms.echo.LLMSpec()
+
+      def __init__(self):
+        super().__init__(system_prompt='hi')
+
+    card = await format_card(_KeylessBro())
+    assert '## Secrets' not in card
 
   @pytest.mark.asyncio
   async def test_system_prompt_omitted_by_default(self):

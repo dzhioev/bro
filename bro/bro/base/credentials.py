@@ -1,16 +1,16 @@
 #!/usr/bin/env python
 """client-side credential resolver.
 
-a reader calls `credentials.default_store().get(name)` and gets the secret's
-value — a parsed dict for a json secret, a stripped string for a scalar token —
-without caring where it lives or on which surface it runs. resolution walks an
-ordered list of `Source`s per secret; the first source that has the value wins.
+a reader calls `credentials.default_store().get(name)` for a secret's raw text,
+or `get_json(name)` to parse it as a json object — without caring where it lives
+or on which surface it runs. resolution walks an ordered list of `Source`s per
+secret; the first source that has the value wins.
 
 the one source type so far, `local`, searches `<project>/.configs/<file>` then
 `~/.ppp/<file>` — the deployed services synthesize `<project>/.configs` at
-runtime; on the host secrets live only in `~/.ppp`. later phases add AWS-backed
-sources and let a generated `.configs/credentials.json` override the built-in
-registry — see the "share credentials with bros" design doc.
+runtime; on the host secrets live only in `~/.ppp`. a generated `credentials.json`
+in either search dir overrides the built-in registry; `write_scoped_store` writes
+a scoped one into a container's `~/.ppp` to bound it to a chosen set of secrets.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import sys
 import threading
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Protocol
 
@@ -33,8 +33,8 @@ __cli_name__ = 'credentials'
 CONFIGS_DIR = configs.DEFAULT_CONFIGS_DIR
 PPP_DIR = configs.DEFAULT_PPP_DIR
 
-# a generated registry file overrides the built-in default when present (phase 2
-# writes scoped ones); phase 1 always falls through to the built-in registry.
+# a generated registry file (written by `write_scoped_store`) overrides the
+# built-in default when present; absent, resolution falls through to the built-in.
 REGISTRY_FILE = 'credentials.json'
 
 
@@ -89,8 +89,9 @@ def _search_dirs() -> list[str]:
 
 
 def _source_from_dict(data: dict) -> Source:
-  """reconstruct a Source from its `type` discriminator (mirrors LLMSpec.from_dict)."""
-  type_name = data['type']
+  """reconstruct a Source from its `type` discriminator (mirrors LLMSpec.from_dict);
+  `type` defaults to `local` when omitted."""
+  type_name = data.get('type', LocalSource.TYPE)
   if type_name == LocalSource.TYPE:
     return LocalSource.from_dict(data)
   raise ValueError(f'unknown credential source type: {type_name!r}')
@@ -98,17 +99,27 @@ def _source_from_dict(data: dict) -> Source:
 
 class Secret:
   """one named credential: an ordered source list (the order is the resolution
-  priority) plus how to parse the raw text. `text=True` → a scalar token returned
-  stripped; `text=False` → a json object parsed to a dict."""
+  priority). the resolver treats the value as an opaque text blob — callers pick
+  the shape, `get()` for the raw text or `get_json()` to parse it as a json object.
 
-  def __init__(self, name: str, sources: Sequence[Source], *, text: bool):
+  `install` is an optional shell template that wires the resolved secret into the
+  tool that consumes it from *outside* the resolver (git, the aws CLI, ...). The
+  container entrypoint `eval`s it after hydration — `{path}` is substituted with
+  the resolved file path — so per-secret wiring lives in the registry and the
+  entrypoint stays generic."""
+
+  def __init__(self, name: str, sources: Sequence[Source], *, install: str | None = None):
     self.name = name
     self.sources = sources
-    self.text = text
+    self.install = install
 
   @classmethod
   def from_dict(cls, name: str, data: dict) -> Secret:
-    return cls(name, [_source_from_dict(s) for s in data['sources']], text=data['text'])
+    return cls(
+      name,
+      [_source_from_dict(s) for s in data['sources']],
+      install=data.get('install'),
+    )
 
 
 class Store:
@@ -116,10 +127,11 @@ class Store:
 
   def __init__(self, registry: dict[str, Secret]):
     self._registry = registry
-    self._cache: dict[str, dict | str] = {}
+    self._cache: dict[str, str] = {}
     self._lock = threading.Lock()
 
-  def get(self, name: str) -> dict | str:
+  def get(self, name: str) -> str:
+    """resolve a secret to its raw text (stripped)."""
     cached = self._cache.get(name)
     if cached is not None:
       return cached
@@ -138,57 +150,77 @@ class Store:
         tried.append(source.describe())
         raw = source.fetch()
         if raw is not None:
-          value = raw.strip() if secret.text else json.loads(raw)
+          value = raw.strip()
           self._cache[name] = value
           return value
       raise SecretNotFound(name, tried)
 
   def get_json(self, name: str) -> dict:
-    """resolve a json secret, narrowing the return type to dict for callers."""
-    value = self.get(name)
+    """resolve a secret and parse it as a json object. raises if the text isn't
+    valid json or isn't an object (e.g. a scalar token)."""
+    raw = self.get(name)
+    try:
+      value = json.loads(raw)
+    except json.JSONDecodeError as e:
+      raise ValueError(f'secret {name!r} is not valid json') from e
     if not isinstance(value, dict):
-      raise TypeError(f'secret {name!r} resolved to a scalar token, expected a json object')
+      raise ValueError(f'secret {name!r} is not a json object')
     return value
 
 
-# (name, file, text) for every secret the project knows about. the built-in
-# default registry maps each to a single local source — this is what keeps any
-# surface without a generated registry file (notably the deployed services,
-# which synthesize `.configs` at runtime via `_write_configs`) resolving exactly
-# as before. the two github tokens are scalar text; everything else is json.
-_DEFAULT_SECRETS: list[tuple[str, str, bool]] = [
-  ('notion', 'notion.json', False),
-  ('focus', 'focus.json', False),
-  ('flow_mcp', 'flow_mcp.json', False),
-  ('infra', 'infra.json', False),
-  ('trails', 'trails.json', False),
-  ('session_log', 'session_log.json', False),
-  ('process_inbox', 'process_inbox.json', False),
-  ('openai', 'openai.json', False),
-  ('anthropic', 'anthropic.json', False),
-  ('tmdb', 'tmdb.json', False),
-  ('brave', 'brave.json', False),
-  ('google_api', 'google_api.json', False),
-  ('gmail_creds', 'gmail_creds.json', False),
-  ('twitch', 'twitch.json', False),
-  ('twitch_user_token', 'twitch_user_token.json', False),
-  ('github', 'cw_github_token', True),
-  ('github_bro', 'cw_github_token_bro', True),
-]
+# the built-in registry for every secret the project knows about, in the same
+# shape as a generated `credentials.json` so it is constructed the same way (via
+# `Secret.from_dict`). each secret maps to one local file. an `install` hook wires
+# a secret into a tool that reads it from outside the resolver (git, the aws CLI)
+# — see `install_hooks`.
+_BUILTIN_REGISTRY: dict = {
+  'notion': {'sources': [{'file': 'notion.json'}]},
+  'focus': {'sources': [{'file': 'focus.json'}]},
+  'flow_mcp': {'sources': [{'file': 'flow_mcp.json'}]},
+  'infra': {'sources': [{'file': 'infra.json'}]},
+  'trails': {'sources': [{'file': 'trails.json'}]},
+  'session_log': {'sources': [{'file': 'session_log.json'}]},
+  'process_inbox': {'sources': [{'file': 'process_inbox.json'}]},
+  'openai': {'sources': [{'file': 'openai.json'}]},
+  'anthropic': {'sources': [{'file': 'anthropic.json'}]},
+  'tmdb': {'sources': [{'file': 'tmdb.json'}]},
+  'brave': {'sources': [{'file': 'brave.json'}]},
+  'google_api': {'sources': [{'file': 'google_api.json'}]},
+  'gmail_creds': {'sources': [{'file': 'gmail_creds.json'}]},
+  'twitch': {'sources': [{'file': 'twitch.json'}]},
+  'twitch_user_token': {'sources': [{'file': 'twitch_user_token.json'}]},
+  'github': {
+    'sources': [{'file': 'cw_github_token_bro'}],
+    'install': (
+      'git config --global credential.helper '
+      '\'!f() {{ echo username=x-access-token; echo "password=$(cat {path})"; }}; f\'\n'
+      'export GH_TOKEN="$(cat {path})"'
+    ),
+  },
+  'aws': {
+    'sources': [{'file': 'aws_credentials'}],
+    'install': 'export AWS_SHARED_CREDENTIALS_FILE="{path}"',
+  },
+}
+
+
+def _registry_from_dict(data: dict) -> dict[str, Secret]:
+  return {name: Secret.from_dict(name, spec) for name, spec in data.items()}
 
 
 def default_registry() -> dict[str, Secret]:
-  """the built-in registry: every known secret as a single local source."""
-  return {
-    name: Secret(name, [LocalSource(file)], text=text) for name, file, text in _DEFAULT_SECRETS
-  }
+  """the built-in registry (every known secret as a single local source)."""
+  return _registry_from_dict(_BUILTIN_REGISTRY)
 
 
 def _load_registry() -> dict[str, Secret]:
-  path = Path(CONFIGS_DIR) / REGISTRY_FILE
-  if path.is_file():
-    data = json.loads(path.read_text())
-    return {name: Secret.from_dict(name, spec) for name, spec in data.items()}
+  # a generated registry file in either search dir (`<project>/.configs` for the
+  # deployed services, `~/.ppp` for a scoped per-container store) overrides the
+  # built-in default; the first dir that has it wins, absent everywhere → built-in.
+  for directory in _search_dirs():
+    path = Path(directory) / REGISTRY_FILE
+    if path.is_file():
+      return _registry_from_dict(json.loads(path.read_text()))
   return default_registry()
 
 
@@ -207,21 +239,96 @@ def default_store() -> Store:
   return _default_store
 
 
-def _get(name: str, field: str | None) -> int | None:
+def write_scoped_store(dest: Path, names: Iterable[str]) -> list[str]:
+  """write a per-container scoped credential store into `dest`.
+
+  for each requested secret: one local file holding its raw text plus a generated
+  `credentials.json` registry covering exactly the secrets written. mounting
+  `dest` as the container's `~/.ppp` then bounds the container to this set; any
+  other secret resolves to a clean `SecretNotFound`.
+
+  hydration is strict: an unknown name (not in the host registry) raises
+  `ValueError`, and a declared name whose value can't be resolved raises
+  `SecretNotFound` — a typo or a missing secret fails loudly here, on the host,
+  before the container exists. returns the sorted list of names written.
+  """
+  registry = _load_registry()
+  store = Store(registry)
+  dest.mkdir(parents=True, exist_ok=True)
+  scoped: dict[str, dict] = {}
+  written: list[str] = []
+  for name in sorted(set(names)):
+    secret = registry.get(name)
+    if secret is None:
+      raise ValueError(f'unknown secret {name!r} declared in manifest; not in the registry')
+    source = secret.sources[0]
+    if not isinstance(source, LocalSource):
+      raise ValueError(f'secret {name!r} first source is not local: {source.describe()}')
+    value = store.get(name)  # strict: SecretNotFound propagates on a missing value
+    path = dest / source.file
+    path.write_text(value)
+    path.chmod(0o600)
+    entry: dict = {'sources': [{'file': source.file}]}
+    if secret.install is not None:
+      entry['install'] = secret.install
+    scoped[name] = entry
+    written.append(name)
+  registry_path = dest / REGISTRY_FILE
+  registry_path.write_text(json.dumps(scoped))
+  registry_path.chmod(0o600)
+  return written
+
+
+def _resolve_local_path(secret: Secret) -> str | None:
+  """absolute path of the first search dir that holds the secret's local file, or
+  None if absent. used to substitute `{path}` into an install hook."""
+  source = secret.sources[0]
+  if not isinstance(source, LocalSource):
+    return None
+  for directory in _search_dirs():
+    path = Path(directory) / source.file
+    if path.is_file():
+      return str(path)
+  return None
+
+
+def install_hooks() -> str:
+  """shell wiring each present secret into the tool that consumes it from outside
+  the resolver (git, the aws CLI, ...), for the container entrypoint to `eval`.
+  each secret declares its hook in the registry; `{path}` is substituted with the
+  resolved file path. in a scoped container the registry is the hydrated set, so
+  only those secrets emit."""
+  lines: list[str] = []
+  for secret in _load_registry().values():
+    if secret.install is None:
+      continue
+    path = _resolve_local_path(secret)
+    if path is not None:
+      lines.append(secret.install.format(path=path))
+  return '\n'.join(lines)
+
+
+def _get(name: str, field: str | None, as_json: bool) -> int | None:
+  store = default_store()
   try:
-    value = default_store().get(name)
-  except SecretNotFound as e:
+    # a bare get prints the raw text; --field / --json need the parsed object.
+    if field is None and not as_json:
+      print(store.get(name))
+      return None
+    data = store.get_json(name)
+  except (SecretNotFound, ValueError) as e:
     print(str(e), file=sys.stderr)
     return 1
+  value: dict | str = data
   if field is not None:
-    if not isinstance(value, dict):
-      print(f'secret {name!r} is a scalar token; --field does not apply', file=sys.stderr)
-      return 1
-    if field not in value:
+    if field not in data:
       print(f'secret {name!r} has no field {field!r}', file=sys.stderr)
       return 1
-    value = value[field]
-  print(value if isinstance(value, str) else json.dumps(value))
+    value = data[field]
+  if as_json:
+    print(json.dumps(value, indent=2))
+  else:
+    print(value if isinstance(value, str) else json.dumps(value))
   return None
 
 
@@ -229,11 +336,20 @@ def main(argv=None) -> int | None:
   import base.args
 
   parser = base.args.Parser(description='resolve credentials from the default store')
-  parser.add_argument('action', choices=['get'], help='operation')
-  parser.add_argument('name', help='secret name (e.g. anthropic, notion)')
+  parser.add_argument('action', choices=['get', 'install-hooks'], help='operation')
+  parser.add_argument('name', nargs='?', help='secret name for get (e.g. anthropic, notion)')
   parser.add_argument('--field', help='for a json secret, print only this field')
+  parser.add_argument(
+    '--json', dest='as_json', action='store_true', help='parse as json and pretty-print (indent=2)'
+  )
   args = parser.parse(argv)
-  del args['action']
+  action = args.pop('action')
+  if action == 'install-hooks':
+    print(install_hooks())
+    return
+  if args['name'] is None:
+    print('get requires a secret name', file=sys.stderr)
+    return 1
   return _get(**args)
 
 

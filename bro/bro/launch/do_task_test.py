@@ -139,4 +139,6 @@ def test_main_re_execs_into_container_when_outside():
     (workspace, command), kwargs = run.call_args
     assert workspace.startswith('do-task-ppp-dev-')
     assert command == ['do-task', 'ppp-dev', 'abc-123']
-    assert kwargs == {'drop': True}
+    assert kwargs['drop'] is True
+    assert {'github', 'notion', 'trails'} <= kwargs['secrets']
+    assert kwargs['docker_sock'] is False

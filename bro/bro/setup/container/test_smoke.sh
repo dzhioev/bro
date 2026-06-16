@@ -24,7 +24,9 @@ cat > "$SMOKE_TMP/gitconfig" << 'GC'
     defaultBranch = master
 GC
 
-echo "ghp_fake_token" > "$SMOKE_TMP/github_token"
+# credential wiring (git helper, AWS, ...) is applied by `eval "$(credentials
+# install-hooks)"` after venv activation, which this smoke test skips
+# (CW_SKIP_VENV=1) — so that path is covered by base/credentials_test.py, not here.
 
 # pre-seed the container-private .claude.json (cw.py does this on first run).
 # also drop a "host" .claude.json next to it as a tripwire: it must not exist
@@ -46,7 +48,6 @@ docker run --rm -i \
   -v "$SMOKE_TMP/gitconfig:/host-gitconfig:ro" \
   -v "$SMOKE_TMP/claude:/home/cw/.claude" \
   -v "$SMOKE_TMP/claude/.claude.json:/home/cw/.claude.json" \
-  -v "$SMOKE_TMP/github_token:/run/secrets/github_token:ro" \
   -e "HOME=/home/cw" \
   -e "CW_NAME=smoke-test" \
   -e "CW_SKIP_VENV=1" \
@@ -54,8 +55,6 @@ docker run --rm -i \
     set -e
     # gitconfig should be writable (the bug this test guards against)
     git config --global --list > /dev/null
-    # credential helper should be configured
-    git config --global credential.helper | grep -q github_token
     # workspace should have a cloned repo
     test -d /workspace/.git
     # worktree branch is created from upstream origin/master, not from the

@@ -29,10 +29,12 @@ keeps the container's git state genuinely isolated. layout:
     and synced back to host on exit (if container is fresher), keyed on
     claudeAiOauth.expiresAt. Removes the runtime token-swap vector while
     preserving OAuth refresh.
-  - ~/.ppp → /home/cw/.ppp ro (transitional: the host secret store the container
-    resolves credentials from until phase 2 scopes them per bro)
-  - ~/.ppp/cw_github_token_bro → /run/secrets/github_token ro (when present;
-    entrypoint configures git credential helper for https push)
+  - a per-launch scoped credential store → /home/cw/.ppp ro: the host resolves
+    only the secrets the session uses into an ephemeral dir and mounts that as the
+    container's ~/.ppp, with a credentials.json that bounds the container's
+    registry to them. github and aws arrive as declared secrets in this store
+    (wired into git / the aws CLI by their install hooks), so there is no
+    out-of-band github-token bind-mount and no ~/.aws mount.
 
 network is not restricted by design.
 """
@@ -48,6 +50,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Collection
 from pathlib import Path
 
 import humanize
@@ -112,18 +115,30 @@ _DOCKER_FORWARD_ENV = (
   'COLORTERM',
   'VTE_VERSION',
 )
-_DOCKER_AWS_ENV = (
-  'AWS_ACCESS_KEY_ID',
-  'AWS_SECRET_ACCESS_KEY',
-  'AWS_SESSION_TOKEN',
-  'AWS_DEFAULT_REGION',
-  'AWS_REGION',
-  'AWS_PROFILE',
-)
-
 _BRO_GIT_NAME = 'Bro'
 _BRO_GIT_EMAIL = 'dzhioev+bro@gmail.com'
 _GITHUB_TOKEN_FILE = 'cw_github_token_bro'
+
+# the `aws` secret name; `--aws` adds it to a session's set (it is delivered like
+# any other secret, via the scoped store and its install hook).
+_AWS_SECRET = 'aws'
+
+# secrets every containerized claude code session resolves regardless of bro: the
+# sync-session-log hooks run in-container, and an in-session bro run records to trails.
+_CW_SESSION_BASELINE = ('session_log', 'trails')
+
+# the bro a no-`--bro` container session themes as (dive-in already sets CW_BRO to
+# this); bounds a manual `cw ss -c` session's scoped credentials.
+_DEFAULT_CW_BRO = 'ppp-dev'
+
+
+def _scoped_secrets_root() -> Path:
+  # per-launch scoped credential stores live under the user's cache, NOT the repo:
+  # the project is bind-mounted read-only at /host-repo in every container, so a
+  # secrets dir under it would re-leak across containers. under ~ so colima /
+  # Docker-for-Mac (which share /Users) can bind-mount it, unlike a /tmp mkdtemp
+  # (invisible to those daemons).
+  return Path.home() / '.cache' / 'ppp-cw' / 'secrets'
 
 
 def _load_anthropic_key() -> str | None:
@@ -275,7 +290,14 @@ def _ensure_image(tag: str) -> None:
 
 
 def _docker_run_argv(
-  tag: str, name: str, proj: Path, session: Path, command: list[str], *, aws: bool = False
+  tag: str,
+  name: str,
+  proj: Path,
+  session: Path,
+  command: list[str],
+  *,
+  configs_dir: Path | None = None,
+  docker_sock: bool = True,
 ) -> list[str]:
   home = Path.home()
   claude_dir = home / '.claude' / 'cw-sessions' / name
@@ -327,34 +349,25 @@ def _docker_run_argv(
     '-w',
     '/workspace',
     '--memory=8g',
-    # bind-mount the host docker socket so deploy scripts inside the container
-    # can `docker build` / `docker push` against the host daemon (no nested
-    # runtime). gives an in-container process API-level control over host
-    # docker, which is a real escalation vector but bounded — the alternative
-    # (rootless podman + privileged-equivalent flags) has the same blast
-    # radius across more attack surfaces. cw is single-user dev.
-    '-v',
-    '/var/run/docker.sock:/var/run/docker.sock',
   ]
+  # bind-mount the host docker socket so deploy scripts inside the container can
+  # `docker build` / `docker push` against the host daemon (no nested runtime).
+  # gives an in-container process API-level control over host docker, a real but
+  # bounded escalation vector (cw is single-user dev; the rootless-podman
+  # alternative has the same blast radius across more surfaces). gated by
+  # `docker_sock` so a session that does no docker work is denied it, keeping the
+  # scoped boundary intact against prompt-injection exfiltration.
+  if docker_sock:
+    argv += ['-v', '/var/run/docker.sock:/var/run/docker.sock']
   for var in _DOCKER_FORWARD_ENV:
     if os.environ.get(var) is not None:
       argv += ['-e', var]
-  # transitional (phase 1.5): mount the host secret store so the container
-  # resolves credentials from ~/.ppp now that the repo no longer carries them.
-  # phase 2 replaces this with scoped per-bro hydration.
-  host_ppp = home / '.ppp'
-  if host_ppp.is_dir():
-    argv += ['-v', f'{host_ppp}:/home/cw/.ppp:ro']
-  github_token = (host_ppp / _GITHUB_TOKEN_FILE).resolve()
-  if github_token.is_file():
-    argv += ['-v', f'{github_token}:/run/secrets/github_token:ro']
-  if aws:
-    host_aws = home / '.aws'
-    if host_aws.is_dir():
-      argv += ['-v', f'{host_aws}:/home/cw/.aws:ro']
-    for var in _DOCKER_AWS_ENV:
-      if os.environ.get(var) is not None:
-        argv += ['-e', var]
+  # mount the scoped credential store as the container's ~/.ppp. the host hydrated
+  # only the secrets this session uses into configs_dir, with a credentials.json
+  # bounding the container's registry to them — any other secret resolves to a
+  # clean SecretNotFound.
+  if configs_dir is not None:
+    argv += ['-v', f'{configs_dir}:/home/cw/.ppp:ro']
   return [*argv, tag, *command]
 
 
@@ -1185,7 +1198,7 @@ def add_forwarded_flags(parser: argparse.ArgumentParser) -> None:
   parser.add_argument(
     '--aws',
     action='store_true',
-    help='expose host AWS credentials (~/.aws and env vars) to the container',
+    help='hydrate the `aws` secret (~/.ppp/aws_credentials) into the container for AWS access',
   )
   parser.add_argument(
     '--effort',
@@ -1291,7 +1304,17 @@ def start_session(
     claude_args = [*_bro_claude_argv(bro), *claude_args]
     if prompt is not None:
       claude_args = [*claude_args, '--', prompt]
-    return cw(name=name, container=container, drop=drop, aws=aws, claude_args=claude_args)
+    secrets, docker_sock = _container_secrets(bro, mcp=mcp, bro_mode=True)
+    if aws:
+      secrets.add(_AWS_SECRET)
+    return cw(
+      name=name,
+      container=container,
+      drop=drop,
+      claude_args=claude_args,
+      secrets=secrets,
+      docker_sock=docker_sock,
+    )
 
   fast_mode_settings = json.dumps({'fastMode': fast})
   inject = [
@@ -1329,7 +1352,16 @@ def start_session(
   if prompt is not None:
     claude_args = [*claude_args, '--', prompt]
 
-  return cw(name=name, container=container, drop=drop, aws=aws, claude_args=claude_args)
+  # scope credentials to the themed bro (dive-in sets CW_BRO=ppp-dev; a manual
+  # `cw ss -c` defaults to it too). host mode resolves from ~/.ppp directly, so no
+  # hydration there. `--aws` opts the session into the aws secret.
+  secrets: set[str] = set()
+  if container:
+    bro_name = bro_env if bro_env is not None else _DEFAULT_CW_BRO
+    secrets, _ = _container_secrets(bro_name, mcp=mcp, bro_mode=False)
+    if aws:
+      secrets.add(_AWS_SECRET)
+  return cw(name=name, container=container, drop=drop, claude_args=claude_args, secrets=secrets)
 
 
 _BRO_MCP_SERVER_NAME = 'bro'
@@ -1418,6 +1450,41 @@ def _bro_claude_argv(bro_name: str) -> list[str]:
   ]
 
 
+def _container_secrets(bro_name: str, *, mcp: str | None, bro_mode: bool) -> tuple[set[str], bool]:
+  """scoped credential set + docker-socket decision for a container session
+  themed as `bro_name`. the two surfaces request different sets (hydration is
+  strict, so each requests only what it actually uses):
+
+  - `--bro` (`claude --bare` serving the bro's own in-process MCP servers): the
+    bro's full `needed_secrets()` + `anthropic` for the apiKeyHelper. docker
+    socket only if the bro has a shell.
+  - a native claude code session themed as the bro (dive-in / plain `cw ss`): it
+    drives the bro's *skills* (bash → `extra_secrets`) and its flow via `--mcp`,
+    not the bro's in-process MCP / data-source toolset — so only `extra_secrets`
+    + `flow_mcp` (when `--mcp http`). always keeps the socket (it has a Bash tool).
+
+  both add the session baseline (sync-log + trails).
+  """
+  from bro.registry import create_bro
+
+  secrets: set[str] = set(_CW_SESSION_BASELINE)
+  docker_sock = True
+  try:
+    bro = create_bro(bro_name)
+  except Exception as e:
+    log.warning('could not resolve bro %r for credential scoping: %s', bro_name, e)
+    return secrets, docker_sock
+  if bro_mode:
+    secrets.update(bro.needed_secrets())
+    secrets.add('anthropic')
+    docker_sock = bro.needs_docker
+  else:
+    secrets.update(bro._extra_secrets)
+    if mcp == 'http':
+      secrets.add('flow_mcp')
+  return secrets, docker_sock
+
+
 def _replace_container_resume_hint(name: str) -> None:
   """overwrite claude's misleading `claude --resume <id>` hint with a host-side one.
 
@@ -1442,15 +1509,25 @@ def _replace_container_resume_hint(name: str) -> None:
 
 
 def run_in_container(
-  name: str, command: list[str], *, aws: bool = False, drop: bool = False
+  name: str,
+  command: list[str],
+  *,
+  drop: bool = False,
+  secrets: Collection[str] = (),
+  docker_sock: bool = True,
 ) -> int:
   """run `command` inside a fresh cw-style container backed by workspace `name`.
 
   builds/reuses the image, creates `var/cw/containers/<name>/`, runs `docker run
   -it --rm` with the standard bind mounts (`/workspace`, `/host-repo:ro`,
-  `.claude` overlay, docker socket, …), then post-syncs OAuth credentials. When
-  `drop=True`, removes the workspace dir and per-session claude state on exit.
-  Returns the container's exit code.
+  `.claude` overlay, the scoped credential store, optionally the docker socket,
+  …), then post-syncs OAuth credentials. When `drop=True`, removes the workspace
+  dir and per-session claude state on exit. Returns the container's exit code.
+
+  `secrets` is the scoped credential set to hydrate into the container's ~/.ppp
+  (see `credentials.write_scoped_store`); a missing secret raises (strict). AWS is
+  just one of them (`aws`), wired in by its install hook. `docker_sock=False`
+  drops the docker socket mount (shell-less bros).
   """
   proj = _project_root()
   session = proj / 'var' / 'cw' / 'containers' / name
@@ -1464,7 +1541,23 @@ def run_in_container(
   _ensure_image(tag)
   home = Path.home()
   claude_dir = home / '.claude' / 'cw-sessions' / name
-  result = subprocess.run(_docker_run_argv(tag, name, proj, session, command, aws=aws))
+  # hydrate a fresh scoped credential store for this launch (strict: a missing
+  # secret raises before the container starts).
+  scoped = _scoped_secrets_root() / name
+  if scoped.exists():
+    shutil.rmtree(scoped)
+  written = credentials.write_scoped_store(scoped, secrets)
+  scoped.chmod(0o700)
+  log.info('scoped secrets for %s: %s', name, ', '.join(written) if len(written) > 0 else '(none)')
+  try:
+    result = subprocess.run(
+      _docker_run_argv(
+        tag, name, proj, session, command, configs_dir=scoped, docker_sock=docker_sock
+      )
+    )
+  finally:
+    # secrets are re-hydrated fresh each launch; never leave a plaintext copy behind.
+    shutil.rmtree(scoped, ignore_errors=True)
   # post-run sync: if the container refreshed its OAuth token during the
   # session, propagate the fresher copy back to the host so the next session
   # (host or container) sees the live tokens.
@@ -1480,13 +1573,23 @@ def run_in_container(
   return result.returncode
 
 
-def cw(name: str, container: bool, drop: bool, aws: bool, claude_args: list[str]) -> int:
+def cw(
+  name: str,
+  container: bool,
+  drop: bool,
+  claude_args: list[str],
+  *,
+  secrets: Collection[str] = (),
+  docker_sock: bool = True,
+) -> int:
   if container and os.environ.get('CW_IN_CONTAINER') is not None:
     log.info('already inside a container; falling back to host mode')
     container = False
 
   if container:
-    code = run_in_container(name, ['claude', *claude_args], aws=aws, drop=drop)
+    code = run_in_container(
+      name, ['claude', *claude_args], drop=drop, secrets=secrets, docker_sock=docker_sock
+    )
     if not drop and code == 0:
       _replace_container_resume_hint(name)
     return code
@@ -1650,11 +1753,8 @@ def main(argv=None):
       parser.error(
         '--resume cannot be combined with -p/--prompt (the initial prompt is ignored on resume)'
       )
-  if args['aws']:
-    has_aws_dir = (Path.home() / '.aws').is_dir()
-    has_aws_env = any(os.environ.get(v) is not None for v in _DOCKER_AWS_ENV)
-    if not has_aws_dir and not has_aws_env:
-      parser.error('--aws: no AWS credentials found (~/.aws missing and no AWS env vars set)')
+  # `--aws` needs no pre-flight: it adds the `aws` secret to the session set, and
+  # strict hydration fails loudly if `~/.ppp/aws_credentials` is absent.
   return start_session(**args)
 
 

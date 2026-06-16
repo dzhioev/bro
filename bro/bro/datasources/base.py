@@ -29,6 +29,11 @@ class Hit:
 class DataSource(ABC):
   name: str
   summary: str
+  # credentials this source resolves through the store. unioned (along the MRO)
+  # into `bro.needed_secrets()` so the host can hydrate a scoped credential set
+  # per bro. override with the API key a subclass reads (e.g. TMDb → `tmdb`); the
+  # empty default means "no credentials" (e.g. Wikipedia, OpenLibrary).
+  needed_secrets: tuple[str, ...] = ()
 
   @abstractmethod
   def as_mcp_server(self) -> MCPServer: ...

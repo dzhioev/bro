@@ -44,9 +44,9 @@ Layout on disk:
 
 - `<project>/var/cw/containers/<name>/` (host) → `/workspace` rw. Empty on first run; the entrypoint clones into it.
 - `<project>` (host) → `/host-repo` ro. The clone uses `--shared`, so the container reuses the host's `.git/objects` via alternates instead of duplicating them.
-- `~/.ppp` (host) → `/home/cw/.ppp` ro. Transitional (phase 1.5): the standalone secret store the container resolves credentials from now that the repo no longer carries them. Phase 2 replaces it with scoped per-bro hydration.
-- `~/.ppp/cw_github_token_bro` → `/run/secrets/github_token` ro (when present). The entrypoint wires this into `git credential.helper` and exports it as `GH_TOKEN` so `git push` over HTTPS and the `gh` CLI both work.
-- `/var/run/docker.sock` (host) → same path in the container. Lets deploy scripts run `docker build`/`docker push` against the host daemon — no nested runtime — at the cost of giving in-container processes API-level control over host docker. The entrypoint reconciles the in-container `docker` group's GID with the bind-mounted socket's GID so `cw` can use it without sudo.
+- a per-launch **scoped credential store** (host) → `/home/cw/.ppp` ro. Before the container exists, the host resolves only the secrets the session actually uses into an ephemeral dir under `~/.cache/ppp-cw/secrets/<name>` and mounts that as the container's `~/.ppp`. It carries one file per resolved secret (its raw text) plus a `credentials.json` registry covering exactly those, so the in-container resolver is bounded to the scoped set — any other secret resolves to a clean `SecretNotFound`. Hydration is **strict** — a missing secret raises on the host before the container starts. The dir is hydrated fresh each launch and removed on exit (secrets never linger on disk). The store lives outside `<project>` precisely because `/host-repo` is bind-mounted into every container — a secrets dir under the project would re-leak across containers. See "Scoped credential hydration" below.
+- **github** and **aws** are ordinary scoped secrets — no out-of-band `/run/secrets/github_token` mount, no `~/.aws` mount. Each carries an **install hook** in the registry (a shell template) that the entrypoint applies generically via `eval "$(credentials install-hooks)"` after venv activation: `github` → `git credential.helper` + `GH_TOKEN`; `aws` → `AWS_SHARED_CREDENTIALS_FILE` pointing at the hydrated `~/.ppp/aws_credentials`. No per-secret logic lives in the entrypoint.
+- `/var/run/docker.sock` (host) → same path in the container, **only where docker work happens**. Lets deploy scripts run `docker build`/`docker push` against the host daemon — no nested runtime — at the cost of giving in-container processes API-level control over host docker. The entrypoint reconciles the in-container `docker` group's GID with the bind-mounted socket's GID so `cw` can use it without sudo. Claude code sessions (`cw ss`/dive-in) always get it; a `--bro`/`ask` container gets it only when the bro declares `needs_docker` (just `Devoops`, the deployer), so other bros (ppp-dev, Librorian / PM / assistant) don't — the scoped boundary then holds against prompt-injection exfiltration via docker.
 
 Inside the container, the entrypoint (running as root first):
 
@@ -77,6 +77,22 @@ The container does **not** bind-mount `~/.claude.json` or `~/.claude/.credential
 
 This means each container session has its own private `~/.claude.json` (so MCP server allow-lists are per-workspace), its own credentials (so a refresh in one container doesn't blow away another), and its own session log directory.
 
+#### Scoped credential hydration
+
+`cw.run_in_container` hydrates only the secrets the session's bro declares into the container's `~/.ppp`, scoping each container to a minimal credential set.
+
+- **The manifest.** A bro's `needed_secrets()` (`bro/bro.py`) is the union of each declared MCP server's and data source's `needed_secrets` (each MRO-walked) and the bro's MRO-collected `extra_secrets`. It deliberately omits the LLM key — that is added only by surfaces that run the bro as an LLM process. `bro show <name>` lists it. Components declare what they read: `flow.MCPServer` → `notion`, `infra.MCPServer` → `infra, focus, aws`, `TMDb` → `tmdb`, `WebSearch` → `brave`, `chat_gpt.LLMSpec.needed_secrets()` → `openai`. `extra_secrets` is the escape hatch for environment needs no component expresses: ppp-dev → `github`, devoops → `aws`.
+- **Which bro.** Scope keys on the manifest, not the launching CLI — `do` (ask / do-task) and `cw ss` both containerise through `cw.run_in_container`. `cw ss --bro <name>` and `ask <name>` use that bro; a no-`--bro` `cw ss` (including dive-in, which sets `CW_BRO=ppp-dev`) themes as ppp-dev.
+- **Per-surface sets (strict → request only what's used).** The three container surfaces use the bro differently, so each requests a precise set:
+  - native claude code session (dive-in / plain `cw ss`): baseline `{session_log, trails}` + the bro's `extra_secrets` + `flow_mcp` (when `--mcp http`). It drives the bro's *skills* (bash → `extra_secrets`) and its flow via `--mcp`, not the bro's in-process MCP/data-source toolset — so a dive-in needs neither `notion` nor `openai`.
+  - `--bro` (`claude --bare` serving the bro's own in-process MCP servers): the bro's full `needed_secrets()` + baseline + `anthropic` (apiKeyHelper).
+  - `ask` / `do-task` (bro runs as a chat_gpt process): `needed_secrets()` + `llm_spec.needed_secrets()` + `trails` (recording is mandatory).
+  - `--aws` adds `aws` to any session's set.
+- **Hydration.** `credentials.write_scoped_store(dest, names)` writes one file per resolved secret (its raw text) plus a scoped `credentials.json` (carrying each secret's `install` hook). Strict: a name not in the host registry raises (a manifest typo), and a declared name with no value also raises (`SecretNotFound`) — both fail loudly on the host, before the container exists.
+- **`aws` is an ordinary secret.** `aws` → `aws_credentials`, the host's AWS shared-credentials INI at `~/.ppp/aws_credentials`. Its install hook sets `AWS_SHARED_CREDENTIALS_FILE`; no `~/.aws` mount, no `AWS_*` forwarding.
+- **Install hooks.** A secret can declare an `install` shell template (`{path}` → resolved file path) in the registry; `credentials install-hooks` emits the hooks for the present secrets and the entrypoint `eval`s them, so wiring a secret into its consumer (git, the aws CLI) is declarative, not entrypoint-special-cased.
+- **The container side.** `base.credentials._load_registry()` searches both `<project>/.configs` and `~/.ppp` for `credentials.json`, so the scoped registry mounted at `~/.ppp` takes effect; the built-in registry (and the deployed services that synthesize `<project>/.configs`) are unchanged.
+
 #### "Already in a container" fallback
 
 If `cw ss -c` is invoked from inside an already-containerised session (`CW_IN_CONTAINER=1` is set by the Dockerfile), `cw.py:cw` falls back to host mode rather than trying to nest containers.
@@ -105,7 +121,7 @@ These flags apply to `cw ss` and (with the exception of `-c` / `--drop` / `--mcp
 
   **Requires `-c`** (a sandbox is mandatory for skip-permissions). Adds a `Land mode: PR` line to the system prompt. Cannot be combined with `--bro`.
 - **`--fast`** — enables fast mode for the session (injected via `--settings '{"fastMode": true}'`). Off by default regardless of host settings, so individual `cw ss` invocations are predictable.
-- **`--aws`** — expose host AWS credentials to the container: bind-mounts `~/.aws` read-only and forwards the `AWS_*` env vars. Pre-flight check rejects the flag if neither source is present. Ignored in host mode.
+- **`--aws`** — give the session AWS access by adding the `aws` secret to its scoped credential store; its install hook points the AWS CLI/SDK at the hydrated `~/.ppp/aws_credentials` via `AWS_SHARED_CREDENTIALS_FILE`. Strict hydration fails the launch if the secret is absent on the host. Ignored in host mode.
 - **`--effort {low|medium|high|xhigh|max}`** — forwarded as `claude --effort` (thinking effort).
 - **`--rc`** — enables claude remote control (`--remote-control`). Off by default because it breaks Ctrl+V image paste; implied by `--auto`.
 - **`--resume`** — resume the latest Claude session in this workspace.
@@ -134,7 +150,7 @@ Wrappers and hooks rely on a small set of env vars:
 - `CW_TASK_ID` — set by `dive-in` when it has resolved a task; consumed by `setup/claude_commit_footer.py` to add a `Task: <url>` line to commit messages.
 - `CW_IN_CONTAINER=1` — set by the Dockerfile. Detected by `cw.py:cw` to fall back to host mode when nesting would be requested, and by `.claude/hooks/session_start.sh` to skip the host-only worktree provisioning.
 - `CW_DROP=1` — set by `cw` (host mode only) when `--drop` was passed; used by `.claude/hooks/check-worktree-landed.sh` to skip the keep-or-drop prompt. Container mode doesn't set or forward it (the hook short-circuits on its path guard in the container anyway).
-- Plus the standard `GITHUB_TOKEN`, `GIT_AUTHOR_*` / `GIT_COMMITTER_*`, and (with `--aws`) `AWS_*` — all explicitly forwarded into the container via `_DOCKER_FORWARD_ENV` / `_DOCKER_AWS_ENV`.
+- Plus the standard `GITHUB_TOKEN` and `GIT_AUTHOR_*` / `GIT_COMMITTER_*` — explicitly forwarded into the container via `_DOCKER_FORWARD_ENV`. (AWS reaches the container as the scoped `aws` secret, not as forwarded env.)
 
 ## Hooks
 

@@ -38,13 +38,22 @@ def run(
   args = parser.parse(argv)
 
   if os.environ.get('CW_IN_CONTAINER') is None and not args['no_container']:
+    from bro.registry import create_bro
     from cw import run_in_container
 
+    # scope the throwaway container to this bro's manifest. the bro runs as an LLM
+    # process here (not claude code), so add its llm key (`needed_secrets()` omits
+    # it) and `trails` (recording is mandatory for bro runs). `aws` in the set is
+    # delivered like any secret; the docker socket only when the bro does docker work.
+    bro = create_bro(args['bro'])
+    needed = set(bro.needed_secrets()) | set(bro.llm_spec.needed_secrets()) | {'trails'}
     workspace = f'{cli_name}-{args["bro"]}-{secrets.token_hex(4)}'
     inner = [cli_name, args['bro'], args[arg_name]]
     if args['rich']:
       inner.append('--rich')
-    return run_in_container(workspace, inner, drop=True)
+    return run_in_container(
+      workspace, inner, drop=True, secrets=needed, docker_sock=bro.needs_docker
+    )
 
   from bro.registry import create_bro
 

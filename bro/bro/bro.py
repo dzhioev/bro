@@ -236,12 +236,35 @@ def _materialize(entry: McpServerEntry) -> llm.mcp.MCPServer:
   return entry if isinstance(entry, llm.mcp.MCPServer) else entry()
 
 
+def _component_needed_secrets(obj: object) -> set[str]:
+  # walk a component's (MCP server / data source) MRO, unioning each class's own
+  # `needed_secrets` — parallel to how the bro MRO-collects mcp_servers /
+  # system_prompt — so a subclass extends rather than silently replaces its
+  # base's declarations.
+  names: set[str] = set()
+  for cls in type(obj).__mro__:
+    raw = cls.__dict__.get('needed_secrets')
+    if raw is not None:
+      names.update(raw)
+  return names
+
+
 class BaseBro(ABC):
   name: str
   description: str
   llm_spec: LLMSpec = DEFAULT_LLM_SPEC
   data_sources: list[DataSource] = []
   mcp_servers: list[McpServerEntry] = []
+  # credentials no component expresses — the escape hatch for a bro's environment
+  # needs (ppp-dev → `github`; devoops → `aws`). MRO-walked and unioned like
+  # `mcp_servers`, so a subclass declares only what it adds. folded into
+  # `needed_secrets()`.
+  extra_secrets: tuple[str, ...] = ()
+  # whether the bro does docker work (building/pushing images for deploys) and so
+  # needs the host docker socket. an explicit capability, inherited normally. the
+  # host grants `/var/run/docker.sock` to a `--bro`/`ask` container only when this
+  # is set (claude code sessions get it unconditionally); see cw.py.
+  needs_docker: bool = False
   # subclasses declare their own `system_prompt = "..."` as a class attribute;
   # `__init__` walks the MRO from base to derived and concatenates each class's
   # own contribution. so `PPPDev(Dev)` only needs to declare what PPPDev adds —
@@ -257,6 +280,7 @@ class BaseBro(ABC):
   def __init__(self, system_prompt: str | None = None):
     mcp_entries: list[McpServerEntry] = []
     prompt_parts: list[str] = []
+    extra_secret_names: list[str] = []
     for cls in reversed(type(self).__mro__):
       raw_mcp = cls.__dict__.get('mcp_servers')
       if raw_mcp is not None:
@@ -264,6 +288,10 @@ class BaseBro(ABC):
       raw_prompt = cls.__dict__.get('system_prompt')
       if isinstance(raw_prompt, str) and len(raw_prompt) > 0:
         prompt_parts.append(raw_prompt)
+      raw_extra = cls.__dict__.get('extra_secrets')
+      if raw_extra is not None:
+        extra_secret_names.extend(raw_extra)
+    self._extra_secrets: tuple[str, ...] = tuple(extra_secret_names)
     self._declared_mcp: list[llm.mcp.MCPServer] = [_materialize(e) for e in mcp_entries]
     self._mcp_servers: list[llm.mcp.MCPServer] = list(self._declared_mcp)
     for ds in self.data_sources:
@@ -324,6 +352,22 @@ class BaseBro(ABC):
       fm, _ = _load_skill(name, path)
       result.append((name, fm.get('description', '')))
     return result
+
+  def needed_secrets(self) -> tuple[str, ...]:
+    # the bro's component credential manifest: the union of each declared MCP
+    # server's + data source's `needed_secrets` (each walked along its own MRO)
+    # and the bro's MRO-collected `extra_secrets`. NOT the LLM key — that is added
+    # only by surfaces that run the bro as an LLM process (ask / do-task); a
+    # claude-code session themed as the bro uses its own auth, not the bro's spec.
+    # the host hydrates the per-surface set into a scoped store; a secret used but
+    # not declared surfaces as SecretNotFound — an under-declaration to fix.
+    names: set[str] = set()
+    for server in self._declared_mcp:
+      names.update(_component_needed_secrets(server))
+    for ds in self.data_sources:
+      names.update(_component_needed_secrets(ds))
+    names.update(self._extra_secrets)
+    return tuple(sorted(names))
 
   @classmethod
   def create(cls, llm_spec: LLMSpec) -> Self:

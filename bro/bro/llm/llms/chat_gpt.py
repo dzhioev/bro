@@ -66,6 +66,9 @@ class LLMSpec(llm.llm.LLMSpec):
   def fast(self) -> Self:
     return dataclasses.replace(self, service_tier='priority')
 
+  def needed_secrets(self) -> tuple[str, ...]:
+    return ('openai',)
+
   def create_llm(
     self,
     mcp_servers: list[MCPServer] | None = None,

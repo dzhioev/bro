@@ -552,6 +552,102 @@ class TestBroMcpServers:
     assert calls == 2
 
 
+class _SecretServer(InProcessMCPServer):
+  needed_secrets = ('alpha', 'beta')
+
+  def __init__(self):
+    super().__init__([])
+
+
+class _SecretSource(SearchableDataSource):
+  name = 'secret-src'
+  summary = 'src with a secret'
+  needed_secrets = ('gamma',)
+
+  async def search(self, query: str, limit: int = 5) -> list[Hit]:
+    return []
+
+  async def fetch(self, id: str, query: str | None = None) -> str:
+    return ''
+
+
+class TestNeededSecrets:
+  def test_unions_mcp_datasources_and_extra(self):
+    class ManifestBro(BaseBro):
+      name = 'manifest'
+      description = 'd'
+      mcp_servers = [_SecretServer()]
+      data_sources = [_SecretSource()]
+      extra_secrets = ('delta',)
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    bro = ManifestBro()
+    # the llm key is NOT in needed_secrets() — surfaces that run the bro add it
+    assert bro.needed_secrets() == ('alpha', 'beta', 'delta', 'gamma')
+    assert bro.llm_spec.needed_secrets() == ('openai',)  # default chat_gpt
+
+  def test_extra_secrets_mro_unioned(self):
+    class Base(BaseBro):
+      name = 'base'
+      description = 'd'
+      extra_secrets = ('one',)
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    class Derived(Base):
+      name = 'derived'
+      extra_secrets = ('two',)
+
+    assert {'one', 'two'} <= set(Derived().needed_secrets())
+
+  def test_empty_when_no_components_and_keyless_llm(self):
+    import llm.llms.echo
+
+    class Bare(BaseBro):
+      name = 'bare'
+      description = 'd'
+      llm_spec = llm.llms.echo.LLMSpec()
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    assert Bare().needed_secrets() == ()
+
+  def test_real_bro_manifests(self):
+    from bro.bros.devoops import Devoops
+    from bro.bros.librorian import Librorian
+
+    # component manifest only (no llm key)
+    assert set(PPPDev().needed_secrets()) == {'github', 'notion'}
+    assert {'tmdb', 'brave', 'notion'} <= set(Librorian().needed_secrets())
+    assert 'openai' not in PPPDev().needed_secrets()
+    assert {'aws', 'infra', 'focus'} <= set(Devoops().needed_secrets())
+
+
+class TestNeedsDocker:
+  def test_default_is_false(self):
+    class Plain(BaseBro):
+      name = 'plain'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    assert Plain().needs_docker is False
+
+  def test_real_bros(self):
+    from bro.bros.devoops import Devoops
+    from bro.bros.librorian import Librorian
+
+    # only the deployer declares it; other bros (incl. ppp-dev) do not
+    assert Devoops().needs_docker is True
+    assert PPPDev().needs_docker is False
+    assert Librorian().needs_docker is False
+
+
 async def _collect_tool_names(servers):
   names: set[str] = set()
   for server in servers:

@@ -104,7 +104,11 @@ def test_main_re_execs_into_container_when_outside():
     (workspace, command), kwargs = run.call_args
     assert workspace.startswith('ask-ppp-dev-')
     assert command == ['ask', 'ppp-dev', 'hello world', '--rich']
-    assert kwargs == {'drop': True}
+    assert kwargs['drop'] is True
+    # ppp-dev's manifest (github + notion via flow) plus the mandatory trails sink
+    assert {'github', 'notion', 'trails'} <= kwargs['secrets']
+    # ppp-dev doesn't deploy → no docker socket
+    assert kwargs['docker_sock'] is False
 
 
 def test_main_skips_container_when_inside():

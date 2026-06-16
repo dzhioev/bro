@@ -40,6 +40,13 @@ class Tool(ABC):
 
 
 class MCPServer(ABC):
+  # credentials this server's tools resolve through the store. unioned across a
+  # bro's declared servers (and along each server's own MRO) into
+  # `bro.needed_secrets()` so the host can hydrate a scoped credential set per
+  # bro. override with the secret names a subclass actually reads (e.g. flow →
+  # `notion`); the empty default means "no credentials".
+  needed_secrets: tuple[str, ...] = ()
+
   @abstractmethod
   async def list_tools(self) -> list[Tool]: ...
 

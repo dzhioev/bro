@@ -84,13 +84,6 @@ if [ ! -d /workspace/.git ]; then
   fi
 fi
 
-# configure git and gh to authenticate with a GitHub token when available
-if [ -f /run/secrets/github_token ]; then
-  git config --global credential.helper \
-    '!f() { echo "username=x-access-token"; echo "password=$(cat /run/secrets/github_token)"; }; f'
-  export GH_TOKEN="$(cat /run/secrets/github_token)"
-fi
-
 # block non-fast-forward pushes and (for bro sessions) direct pushes to master
 hooks_dir="$(git -C /workspace rev-parse --git-dir)/hooks"
 mkdir -p "$hooks_dir"
@@ -128,8 +121,14 @@ if [ "${CW_SKIP_VENV:-}" != "1" ]; then
   source /workspace/.venv/bin/activate
 fi
 
-# trails recording config (and every other secret) now comes from the
-# bind-mounted host store ~/.ppp (see cw.py); no in-container bootstrap needed.
+# secrets resolve from the scoped credential store bind-mounted at ~/.ppp (see
+# cw.py). wire each into the tool that consumes it from outside the resolver (git
+# credential helper, AWS_SHARED_CREDENTIALS_FILE, ...) via its registry-declared
+# install hook — one generic step, no per-secret logic here. env exports must
+# persist into `exec`, so this is eval'd in the entrypoint shell.
+if [ "${CW_SKIP_VENV:-}" != "1" ]; then
+  eval "$(credentials install-hooks)"
+fi
 
 # in --bro mode, surface the bro's skills to Claude Code by symlinking them into
 # .claude/skills/; --bare keeps slash-command resolution working so /skill-name

@@ -616,3 +616,72 @@ class TestPopulateBroSkills:
     cw._populate_bro_skills(tmp_path, 'ppp-dev')
     link = tmp_path / '.claude' / 'skills' / 'pr' / 'SKILL.md'
     assert link.is_symlink()
+
+
+class TestContainerSecrets:
+  def test_claude_code_session_set(self):
+    # native claude code session themed as ppp-dev: baseline + the bro's
+    # extra_secrets (github) + the deployed flow MCP token (--mcp http). NOT the
+    # bro's in-process MCP secret (notion) — claude code uses flow_mcp instead.
+    secrets, docker_sock = cw._container_secrets('ppp-dev', mcp='http', bro_mode=False)
+    assert {'session_log', 'trails', 'github', 'flow_mcp'} <= secrets
+    assert 'notion' not in secrets
+    # a normal claude code session keeps the docker socket
+    assert docker_sock is True
+
+  def test_no_flow_mcp_without_http(self):
+    secrets, _ = cw._container_secrets('ppp-dev', mcp=None, bro_mode=False)
+    assert 'flow_mcp' not in secrets
+
+  def test_bro_mode_uses_full_manifest_and_anthropic(self):
+    # --bro serves the bro's own MCP servers, so it gets the full manifest (notion)
+    # plus anthropic for the apiKeyHelper. ppp-dev doesn't deploy → no docker socket.
+    secrets, docker_sock = cw._container_secrets('ppp-dev', mcp=None, bro_mode=True)
+    assert {'notion', 'github', 'anthropic'} <= secrets
+    assert docker_sock is False
+
+  def test_docker_socket_only_for_deploy_bros(self):
+    # the socket is gated on needs_docker: devoops (deployer) keeps it, librorian doesn't
+    _, devoops_sock = cw._container_secrets('devoops', mcp=None, bro_mode=True)
+    secrets, librorian_sock = cw._container_secrets('librorian', mcp=None, bro_mode=True)
+    assert devoops_sock is True
+    assert librorian_sock is False
+    assert {'tmdb', 'brave', 'notion'} <= secrets
+
+  def test_unknown_bro_falls_back_to_baseline(self):
+    secrets, docker_sock = cw._container_secrets('nonexistent-bro', mcp=None, bro_mode=False)
+    assert secrets == set(cw._CW_SESSION_BASELINE)
+    assert docker_sock is True
+
+
+class TestDockerRunArgv:
+  @pytest.fixture
+  def build_argv(self, monkeypatch, tmp_path):
+    monkeypatch.setattr(cw.Path, 'home', lambda: tmp_path)
+    monkeypatch.setattr(cw, '_seed_container_claude_json', lambda d, h: tmp_path / '.claude.json')
+    monkeypatch.setattr(cw, '_keychain_credentials', lambda: None)
+    monkeypatch.setattr(cw, '_sync_credentials', lambda s, d: None)
+
+    def build(**kwargs):
+      return cw._docker_run_argv(
+        'tag', 'ws', tmp_path / 'proj', tmp_path / 'sess', ['claude'], **kwargs
+      )
+
+    return build
+
+  def test_docker_sock_mounted_by_default(self, build_argv):
+    assert '/var/run/docker.sock:/var/run/docker.sock' in build_argv()
+
+  def test_docker_sock_dropped_when_disabled(self, build_argv):
+    assert '/var/run/docker.sock:/var/run/docker.sock' not in build_argv(docker_sock=False)
+
+  def test_scoped_configs_mounted_as_ppp(self, build_argv, tmp_path):
+    scoped = tmp_path / 'scoped'
+    assert f'{scoped}:/home/cw/.ppp:ro' in build_argv(configs_dir=scoped)
+
+  def test_no_ppp_mount_without_configs_dir(self, build_argv):
+    assert not any('/home/cw/.ppp' in a for a in build_argv())
+
+  def test_no_out_of_band_github_token_mount(self, build_argv, tmp_path):
+    argv = build_argv(configs_dir=tmp_path / 'scoped')
+    assert not any('/run/secrets/github_token' in a for a in argv)
