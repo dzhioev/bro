@@ -617,11 +617,19 @@ class TestNeededSecrets:
     assert Bare().needed_secrets() == ()
 
   def test_real_bro_manifests(self):
+    from bro.bros.assistant import Assistant
     from bro.bros.devoops import Devoops
     from bro.bros.librorian import Librorian
+    from bro.bros.pm import PM
 
-    # component manifest only (no llm key)
-    assert set(PPPDev().needed_secrets()) == {'github', 'notion'}
+    # component manifest only (no llm key). the full-toolset flow bros hold the
+    # focus tools, so `focus` must be present — exact-set checks (not `<=`) so an
+    # under-declaration like B1 can't slip through.
+    assert set(PPPDev().needed_secrets()) == {'github', 'notion', 'focus'}
+    assert set(Assistant().needed_secrets()) == {'notion', 'focus'}
+    assert set(PM().needed_secrets()) == {'notion', 'focus'}
+    # librorian scopes flow to non-focus tools, so it must NOT pull in `focus`.
+    assert 'focus' not in set(Librorian().needed_secrets())
     assert {'tmdb', 'brave', 'notion'} <= set(Librorian().needed_secrets())
     assert 'openai' not in PPPDev().needed_secrets()
     assert {'aws', 'infra', 'focus'} <= set(Devoops().needed_secrets())

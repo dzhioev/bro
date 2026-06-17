@@ -236,17 +236,13 @@ def _materialize(entry: McpServerEntry) -> llm.mcp.MCPServer:
   return entry if isinstance(entry, llm.mcp.MCPServer) else entry()
 
 
-def _component_needed_secrets(obj: object) -> set[str]:
-  # walk a component's (MCP server / data source) MRO, unioning each class's own
-  # `needed_secrets` — parallel to how the bro MRO-collects mcp_servers /
-  # system_prompt — so a subclass extends rather than silently replaces its
-  # base's declarations.
-  names: set[str] = set()
-  for cls in type(obj).__mro__:
-    raw = cls.__dict__.get('needed_secrets')
-    if raw is not None:
-      names.update(raw)
-  return names
+def _component_needed_secrets(obj: llm.mcp.MCPServer | DataSource) -> set[str]:
+  # a component declares its credentials as a class attribute
+  # (`needed_secrets = (...)`) or a computed instance property (flow's server
+  # derives it from the tools it holds); both surface through a plain instance
+  # read. no real component extends a non-empty base's declaration, so an MRO
+  # union would be identical.
+  return set(obj.needed_secrets)
 
 
 class BaseBro(ABC):
