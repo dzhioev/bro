@@ -1,7 +1,10 @@
 #!/usr/bin/env python
+import re
+
 import pytest
 
 import cw
+import dive_in
 from dive_in import _pick_fresh_name, _resolve_task_id
 
 UUID = '35ad38d8-5a6d-81ea-bce6-e4caf17ece7f'
@@ -76,29 +79,19 @@ def fake_proj(monkeypatch, tmp_path):
 
 
 class TestPickFreshName:
-  def test_base_when_unused(self, fake_proj):
-    assert _pick_fresh_name('idea') == 'idea'
+  def test_appends_random_suffix(self, fake_proj):
+    assert re.fullmatch(r'idea-[0-9a-f]{6}', _pick_fresh_name('idea')) is not None
 
-  def test_bumps_when_worktree_exists(self, fake_proj):
+  def test_regenerates_on_worktree_collision(self, fake_proj, monkeypatch):
     worktrees, _ = fake_proj
-    (worktrees / 'idea').mkdir()
-    assert _pick_fresh_name('idea') == 'idea-2'
+    suffixes = iter(['aaaaaa', 'bbbbbb'])
+    monkeypatch.setattr(dive_in.secrets, 'token_hex', lambda _: next(suffixes))
+    (worktrees / 'idea-aaaaaa').mkdir()
+    assert _pick_fresh_name('idea') == 'idea-bbbbbb'
 
-  def test_bumps_when_container_exists(self, fake_proj):
+  def test_regenerates_on_container_collision(self, fake_proj, monkeypatch):
     _, containers = fake_proj
-    (containers / 'idea').mkdir()
-    assert _pick_fresh_name('idea') == 'idea-2'
-
-  def test_walks_past_multiple_collisions(self, fake_proj):
-    worktrees, containers = fake_proj
-    (worktrees / 'idea').mkdir()
-    (containers / 'idea-2').mkdir()
-    (worktrees / 'idea-3').mkdir()
-    assert _pick_fresh_name('idea') == 'idea-4'
-
-  def test_namespaces_are_combined(self, fake_proj):
-    # a host worktree blocks the container slug too, and vice versa.
-    worktrees, containers = fake_proj
-    (worktrees / 'idea').mkdir()
-    (containers / 'idea-2').mkdir()
-    assert _pick_fresh_name('idea') == 'idea-3'
+    suffixes = iter(['aaaaaa', 'bbbbbb'])
+    monkeypatch.setattr(dive_in.secrets, 'token_hex', lambda _: next(suffixes))
+    (containers / 'idea-aaaaaa').mkdir()
+    assert _pick_fresh_name('idea') == 'idea-bbbbbb'

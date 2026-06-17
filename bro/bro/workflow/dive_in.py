@@ -3,6 +3,7 @@
 
 import os
 import re
+import secrets
 import subprocess
 import sys
 
@@ -51,20 +52,21 @@ def _resolve_task_name(task_id: str) -> str:
 
 
 def _pick_fresh_name(base: str) -> str:
-  """return base, or base-2/-3/... — the first slug with no existing worktree/container dir.
+  """return base-<rand> — a unique slug for a --new or bare dive-in.
 
-  Both namespaces (host worktrees and container sessions) are checked together so a
-  --new dive-in never lands on a directory already in use by either mode.
+  The session commits to a worktree-<slug> branch. A random suffix makes that
+  branch unique by construction, so a later session never reuses a slug whose
+  remote branch still holds unmerged work — the remote needs no consulting.
+  Only the local dirs are checked (no network); the loop just regenerates on the
+  vanishingly rare clash with a live workspace.
   """
   proj = cw._project_root()
   worktrees = proj / '.claude' / 'worktrees'
   containers = proj / 'var' / 'cw' / 'containers'
-  i = 1
   while True:
-    name = base if i == 1 else f'{base}-{i}'
+    name = f'{base}-{secrets.token_hex(3)}'
     if not (worktrees / name).exists() and not (containers / name).exists():
       return name
-    i += 1
 
 
 def _fix_command(task_arg: str | None, focus: bool, new: bool, command: str | None) -> str:
@@ -104,13 +106,11 @@ def dive_in(
 ) -> int:
   prompt: str | None = None
   if new:
-    name = _slugify(command) if command is not None else ''
-    if len(name) == 0:
-      name = 'dive-in-new'
-    fresh = _pick_fresh_name(name)
-    if fresh != name:
-      log.info('workspace %s is in use, picking %s', name, fresh)
-    name = fresh
+    base = _slugify(command) if command is not None else ''
+    if len(base) == 0:
+      base = 'dive-in-new'
+    name = _pick_fresh_name(base)
+    log.info('workspace: %s', name)
     prompt = _fix_command(task_arg=None, focus=focus, new=True, command=command)
   elif task is not None or focus:
     if task is not None:
@@ -142,6 +142,7 @@ def dive_in(
   else:
     prompt = command
     name = _pick_fresh_name('dive-in')
+    log.info('workspace: %s', name)
 
   # surface ppp-dev's skills (/fix, /pr, /land) via .claude/skills/ symlinks.
   # in container mode the entrypoint reads CW_BRO and runs `cw populate-bro-skills`;

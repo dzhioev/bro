@@ -40,14 +40,16 @@ If `--focus` is combined with `-t`, the focus client is also told to focus the r
 The workspace name (= `cw ss <name>`) is derived from whatever the session is *about*:
 
 - **Task / focused mode** — slug is `_slugify(task_name)`. `_slugify` lowercases, replaces any run of non-alphanumerics with `-`, trims leading/trailing `-`, and truncates to 40 chars (re-trimming a trailing `-` if the truncation produced one). If the slug ends up empty (e.g. all-CJK task name), it falls back to `dive-in`.
-- **`--new` mode** — slug is `_slugify(command)` if a seed command is present, otherwise `dive-in-new`.
-- **Bare mode** — slug is always `dive-in` (then `dive-in-2`, etc. on collision).
+- **`--new` mode** — base is `_slugify(command)` if a seed command is present, otherwise `dive-in-new`.
+- **Bare mode** — base is always `dive-in`.
 
-After slug derivation, **`_pick_fresh_name` walks the slug to the first non-colliding name**: `name`, then `name-2`, `name-3`, …, checking both `.claude/worktrees/<slug>` (host) and `var/cw/containers/<slug>` (container) — i.e. the two namespaces are checked together. This means a `--new` (or bare) dive-in never lands on a directory already in use by either mode, even if you're about to start a host session and the collision is in the container namespace (or vice versa). `dive_in_test.py:TestPickFreshName` covers the cases.
+For `--new` and bare mode, **`_pick_fresh_name` appends a random suffix** — `base-<6 hex>` (e.g. `dive-in-new-a3f9c2`) — retrying until neither `.claude/worktrees/<slug>` (host) nor `var/cw/containers/<slug>` (container) exists.
 
-In task / focused mode the slug is **not** bumped — those modes intentionally reuse the worktree across sessions, because the slug deterministically maps to the task, and re-entering should land you back in the same workspace. Only `--new` (and bare mode) bumps. This is why the `_pick_fresh_name` call is gated on `new` / "no task" branches in `dive_in.py:dive_in`.
+The suffix makes each session's `worktree-<slug>` branch **unique by construction**, which is what prevents the remote-branch collision: local cleanup (`cw clean` / `--drop`) deletes only the *local* `worktree-<slug>` branch, so an un-merged `--new` session leaves `origin/worktree-<slug>` behind — but the next session picks a different suffix, so it never reuses a slug whose pushed branch still holds unmerged work. Because uniqueness is structural, the remote is never consulted (no `git ls-remote`, no network); the two local `.exists()` checks only guard against the vanishingly rare clash with a live workspace, regenerating the suffix if one hits. `dive_in_test.py:TestPickFreshName` covers the cases.
 
-In `--new` mode `dive-in` logs `workspace <slug> is in use, picking <bumped>` when a bump happens so the user notices. In bare mode the bump is silent — `_pick_fresh_name` has no logging of its own, and the bare-mode branch in `dive_in.py:dive_in` does not log around the call.
+In task / focused mode the slug is **not** suffixed — those modes intentionally reuse the worktree across sessions, because the slug deterministically maps to the task, and re-entering should land you back in the same workspace. Only `--new` and bare mode go through `_pick_fresh_name`; this is why the call is gated on the `new` / "no task" branches in `dive_in.py:dive_in`.
+
+`dive-in` logs `workspace: <slug>` after picking (both `--new` and bare mode), so the generated name is visible — you need it to reattach via `cw exec <name>` or `cw ss --resume <name>` (`dive-in --resume` itself only works in task / focused mode).
 
 ## Host vs container
 
