@@ -23,14 +23,11 @@ import http.client
 import json
 import ssl
 from collections.abc import Iterator
-from pathlib import Path
-from typing import Any
 from urllib.parse import urlencode, urlparse
 
 import configs
 from base import credentials
 from llm.tracker import (
-  DEFAULT_CONFIG_PATH,
   Parent,
   RecordedTrail,
   Step,
@@ -61,11 +58,6 @@ class TrailsClient:
     self._host: str = hostname if hostname is not None else 'localhost'
     self._port = parsed.port
     self._conn: http.client.HTTPSConnection | None = None
-
-  @classmethod
-  def from_config(cls, path: Path | str = DEFAULT_CONFIG_PATH) -> 'TrailsClient':
-    config = json.loads(Path(path).read_text())
-    return cls(base_url=config['base_url'], token=config['token'])
 
   def list_trails(
     self,

@@ -1,6 +1,5 @@
 import http.client
 import json
-from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
@@ -66,19 +65,6 @@ def _install_fake_conn(monkeypatch) -> _FakeConn:
 
 def _client() -> TrailsClient:
   return TrailsClient('https://trails.example', 'tok')
-
-
-class TestFromConfig:
-  def test_reads_base_url_and_token(self, tmp_path: Path):
-    cfg = tmp_path / 'trails.json'
-    cfg.write_text(json.dumps({'base_url': 'https://t.example', 'token': 'tok'}))
-    c = TrailsClient.from_config(cfg)
-    assert c._base_url == 'https://t.example'
-    assert c._token == 'tok'
-
-  def test_missing_file_raises(self, tmp_path: Path):
-    with pytest.raises(FileNotFoundError):
-      TrailsClient.from_config(tmp_path / 'nope.json')
 
 
 class TestConstructor:

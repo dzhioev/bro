@@ -17,7 +17,6 @@ implementations:
 import http.client
 import json
 import logging
-import os
 import ssl
 import time
 import uuid
@@ -29,8 +28,6 @@ from typing import Any, Literal, TextIO
 from urllib.parse import urlparse
 
 import configs
-
-DEFAULT_CONFIG_PATH = os.path.join(configs.DEFAULT_CONFIGS_DIR, 'trails.json')
 
 # delays before each retry attempt for transient blips on per-step POSTs and
 # end-trail POSTs (an empty tuple means "fail-fast, no retries", used by
@@ -302,16 +299,6 @@ class HTTPTracker(Tracker):
     self._port = parsed.port
     self._conn: http.client.HTTPSConnection | None = None
     self._trail_id: str | None = None
-
-  @classmethod
-  def from_config(cls, path: Path | str = DEFAULT_CONFIG_PATH) -> 'HTTPTracker':
-    """build an `HTTPTracker` from a JSON config file.
-
-    schema: `{"base_url": "https://trails.<apex>", "token": "<bearer>"}`.
-    raises `FileNotFoundError` if the file is missing.
-    """
-    config = json.loads(Path(path).read_text())
-    return cls(base_url=config['base_url'], token=config['token'])
 
   def start_trail(
     self,

@@ -1456,7 +1456,7 @@ def _container_secrets(bro_name: str, *, mcp: str | None, bro_mode: bool) -> tup
 
   - `--bro` (`claude --bare` serving the bro's own in-process MCP servers): the
     bro's full `needed_secrets()` + `anthropic` for the apiKeyHelper. docker
-    socket only if the bro has a shell.
+    socket only if `bro.needs_docker`.
   - a native claude code session themed as the bro (dive-in / plain `cw ss`): it
     drives the bro's *skills* (bash → `extra_secrets`) and its flow via `--mcp`,
     not the bro's in-process MCP / data-source toolset — so only `extra_secrets`
@@ -1470,9 +1470,13 @@ def _container_secrets(bro_name: str, *, mcp: str | None, bro_mode: bool) -> tup
   docker_sock = True
   try:
     bro = create_bro(bro_name)
-  except Exception as e:
+  except KeyError as e:
+    # unknown bro (registry KeyError) only — other failures propagate rather than
+    # collapse into a silently under-scoped session. a native session still gets
+    # the socket; a --bro fallback does not (moot anyway — _bro_claude_argv
+    # re-raises the same KeyError downstream).
     log.warning('could not resolve bro %r for credential scoping: %s', bro_name, e)
-    return secrets, docker_sock
+    return secrets, not bro_mode
   if bro_mode:
     secrets.update(bro.needed_secrets())
     secrets.add('anthropic')

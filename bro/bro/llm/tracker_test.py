@@ -300,19 +300,6 @@ def _install_fake_conn(monkeypatch: pytest.MonkeyPatch) -> _FakeConn:
   return fake
 
 
-class TestHTTPTrackerFromConfig:
-  def test_reads_base_url_and_token(self, tmp_path: Path):
-    cfg = tmp_path / 'trails.json'
-    cfg.write_text(json.dumps({'base_url': 'https://t.example', 'token': 'tok'}))
-    tracker = HTTPTracker.from_config(cfg)
-    assert tracker._base_url == 'https://t.example'
-    assert tracker._token == 'tok'
-
-  def test_missing_file_raises(self, tmp_path: Path):
-    with pytest.raises(FileNotFoundError):
-      HTTPTracker.from_config(tmp_path / 'nope.json')
-
-
 class TestHTTPTrackerConstructor:
   def test_rejects_non_https_url(self):
     with pytest.raises(ValueError, match='https'):
