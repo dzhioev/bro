@@ -133,12 +133,10 @@ class Store:
 
   def get(self, name: str) -> str:
     """resolve a secret to its raw text (stripped)."""
-    cached = self._cache.get(name)
-    if cached is not None:
-      return cached
-    # double-checked lock: the hot path above is lock-free (dict reads are atomic
-    # under the GIL), and the lock makes a secret fetch at most once even under
-    # concurrent callers — no duplicate source reads, no torn cache.
+    # one lock around the whole resolve: a secret is fetched at most once even
+    # under concurrent callers, and the store is read only a handful of times per
+    # process (each value cached on first read), so a lock-free fast path buys
+    # nothing.
     with self._lock:
       cached = self._cache.get(name)
       if cached is not None:

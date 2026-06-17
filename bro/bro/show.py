@@ -16,11 +16,17 @@ async def format_card(bro: BaseBro, *, include_system_prompt: bool = False) -> s
     for server in bro._declared_mcp:
       parts.extend(await _format_mcp_entry(server))
 
-  secrets = bro.needed_secrets()
-  if len(secrets) > 0:
+  manifest = bro.needed_secrets()
+  llm_secrets = bro.llm_spec.needed_secrets()
+  if len(manifest) > 0 or len(llm_secrets) > 0:
     parts.extend(['', '## Secrets', ''])
-    for name in secrets:
+    for name in manifest:
       parts.append(f'- `{name}`')
+    for name in llm_secrets:
+      parts.append(f'- `{name}` — LLM key')
+    parts.append(
+      '- _session baselines (`trails`, `session_log`; `anthropic` for `--bro`) added per-surface_'
+    )
 
   skills = bro.skill_descriptions()
   if len(skills) > 0:

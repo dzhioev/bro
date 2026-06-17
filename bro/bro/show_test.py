@@ -123,6 +123,17 @@ class TestFormatCard:
     assert '- `notion`' in card
 
   @pytest.mark.asyncio
+  async def test_secrets_section_lists_llm_key(self):
+    # the LLM key (chat_gpt → openai) surfaces on its own line beyond the manifest
+    card = await format_card(_FullBro())
+    assert '- `openai` — LLM key' in card
+
+  @pytest.mark.asyncio
+  async def test_secrets_section_notes_per_surface_baselines(self):
+    card = await format_card(_FullBro())
+    assert 'added per-surface' in card
+
+  @pytest.mark.asyncio
   async def test_secrets_section_omitted_when_empty(self):
     import llm.llms.echo
 
