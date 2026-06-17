@@ -109,7 +109,6 @@ _DOCKER_FORWARD_ENV = (
   'CW_BRO',
   'CW_COMMAND',
   'CW_TASK_ID',
-  'GITHUB_TOKEN',
   'GIT_AUTHOR_NAME',
   'GIT_AUTHOR_EMAIL',
   'GIT_COMMITTER_NAME',
@@ -122,7 +121,6 @@ _DOCKER_FORWARD_ENV = (
 )
 _BRO_GIT_NAME = 'Bro'
 _BRO_GIT_EMAIL = 'dzhioev+bro@gmail.com'
-_GITHUB_TOKEN_FILE = 'cw_github_token_bro'
 
 # the `aws` secret name; `--aws` adds it to a session's set (it is delivered like
 # any other secret, via the scoped store and its install hook).
@@ -1294,9 +1292,6 @@ def start_session(
     os.environ['GIT_AUTHOR_EMAIL'] = _BRO_GIT_EMAIL
     os.environ['GIT_COMMITTER_NAME'] = _BRO_GIT_NAME
     os.environ['GIT_COMMITTER_EMAIL'] = _BRO_GIT_EMAIL
-    token_path = (Path.home() / '.ppp' / _GITHUB_TOKEN_FILE).resolve()
-    if token_path.is_file():
-      os.environ['GITHUB_TOKEN'] = token_path.read_text().strip()
 
   if bro is not None:
     # the container entrypoint reads CW_BRO and runs `cw populate-bro-skills`

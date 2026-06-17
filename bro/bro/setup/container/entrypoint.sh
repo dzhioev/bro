@@ -141,7 +141,7 @@ fi
 
 # secrets resolve from the scoped credential store bind-mounted at ~/.ppp (see
 # cw.py). wire each into the tool that consumes it from outside the resolver (git
-# credential helper, AWS_SHARED_CREDENTIALS_FILE, ...) via its registry-declared
+# credential helper, the aws CLI's ~/.aws/credentials, ...) via its registry-declared
 # install hook — one generic step, no per-secret logic here. env exports must
 # persist into `exec`, so this is eval'd in the entrypoint shell.
 if [ "${CW_SKIP_VENV:-}" != "1" ]; then

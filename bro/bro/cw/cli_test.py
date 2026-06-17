@@ -716,6 +716,14 @@ class TestDockerCreateArgv:
   def test_no_out_of_band_github_token_mount(self, build_argv):
     assert not any('/run/secrets/github_token' in a for a in build_argv())
 
+  def test_ambient_github_token_not_forwarded(self, build_argv, monkeypatch):
+    # an ambient host GITHUB_TOKEN must not leak into the container — github
+    # arrives only via the scoped `github` secret's install hook.
+    monkeypatch.setenv('GITHUB_TOKEN', 'ghp_leak')
+    argv = build_argv()
+    assert 'GITHUB_TOKEN' not in argv
+    assert not any('ghp_leak' in a for a in argv)
+
 
 class TestPppTarball:
   def _entries(self, blob: bytes) -> dict:

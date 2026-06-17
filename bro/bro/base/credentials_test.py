@@ -313,30 +313,38 @@ class TestInstallHooks:
     assert isinstance(source, credentials.LocalSource)
     assert source.file == 'aws_credentials'
 
-  def test_install_hooks_emits_for_present_secrets(self, configs_dir: Path):
-    _write(configs_dir, 'cw_github_token_bro', 'ghp_abc')
-    _write(configs_dir, 'aws_credentials', '[default]\naws_access_key_id=AKIA\n')
-    _write(configs_dir, 'notion.json', {'token': 't'})
+  def test_install_hooks_are_source_agnostic(self, configs_dir: Path):
+    # hooks pull their value via `credentials get` at eval time — no resolved file
+    # path is interpolated, so there's no quoting/injection surface. no files
+    # written: presence is no longer a path check.
     out = credentials.install_hooks()
-    # github → git credential helper + GH_TOKEN; aws → AWS_SHARED_CREDENTIALS_FILE
+    # github → git credential helper + GH_TOKEN, pulled via `credentials get github`
     assert 'credential.helper' in out
     assert 'GH_TOKEN' in out
-    assert 'AWS_SHARED_CREDENTIALS_FILE=' in out
-    # {path} resolved to the actual file path; notion declares no hook
-    assert str(configs_dir / 'cw_github_token_bro') in out
-    assert 'notion' not in out
-
-  def test_install_hooks_skips_absent_secrets(self, configs_dir: Path):
-    # github file present, aws absent → only github's hook emits
-    _write(configs_dir, 'cw_github_token_bro', 'ghp_abc')
-    out = credentials.install_hooks()
-    assert 'GH_TOKEN' in out
+    assert 'credentials get github' in out
+    # aws → materialized to ~/.aws/credentials (the path the CLI reads by default,
+    # so no AWS_SHARED_CREDENTIALS_FILE export needed) via `credentials get aws`
+    assert 'credentials get aws' in out
+    assert '.aws/credentials' in out
     assert 'AWS_SHARED_CREDENTIALS_FILE' not in out
+    # no absolute resolver path is interpolated; notion declares no hook
+    assert str(configs_dir) not in out
+    assert 'notion' not in out
+    # aws materializes to its own dedicated path, never the ~/.ppp resolver source
+    assert '.ppp' not in out
+    assert 'aws_credentials' not in out
+
+  def test_install_hooks_emit_for_all_declared_secrets(self, configs_dir: Path):
+    # presence is no longer a path check: every registry secret that declares a
+    # hook emits even with no local file present. in a scoped container the
+    # registry *is* the hydrated (present) set, so this is the right bound.
+    out = credentials.install_hooks()
+    assert 'credentials get github' in out
+    assert 'credentials get aws' in out
 
   def test_cli_install_hooks(self, configs_dir: Path, capsys):
-    _write(configs_dir, 'aws_credentials', '[default]\n')
     assert credentials.main(['credentials', 'install-hooks']) is None
-    assert 'AWS_SHARED_CREDENTIALS_FILE=' in capsys.readouterr().out
+    assert 'credentials get aws' in capsys.readouterr().out
 
   def test_cli_get_without_name_errors(self, configs_dir: Path, capsys):
     assert credentials.main(['credentials', 'get']) == 1

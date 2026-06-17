@@ -103,11 +103,11 @@ class Secret:
   priority). the resolver treats the value as an opaque text blob — callers pick
   the shape, `get()` for the raw text or `get_json()` to parse it as a json object.
 
-  `install` is an optional shell template that wires the resolved secret into the
-  tool that consumes it from *outside* the resolver (git, the aws CLI, ...). The
-  container entrypoint `eval`s it after hydration — `{path}` is substituted with
-  the resolved file path — so per-secret wiring lives in the registry and the
-  entrypoint stays generic."""
+  `install` is an optional static shell hook that wires the secret into the tool
+  that consumes it from *outside* the resolver (git, the aws CLI, ...). The
+  container entrypoint `eval`s it after hydration; the hook pulls the value via
+  `credentials get <name>` at eval time, so per-secret wiring lives in the registry
+  with no interpolated path and the entrypoint stays generic."""
 
   def __init__(self, name: str, sources: Sequence[Source], *, install: str | None = None):
     self.name = name
@@ -192,15 +192,20 @@ _BUILTIN_REGISTRY: dict = {
   'twitch_user_token': {'sources': [{'file': 'twitch_user_token.json'}]},
   'github': {
     'sources': [{'file': 'cw_github_token_bro'}],
+    # GH_TOKEN is exported once and read by both gh and the git credential helper
+    # below (which expands it per push).
     'install': (
+      'export GH_TOKEN="$(credentials get github)"\n'
       'git config --global credential.helper '
-      '\'!f() {{ echo username=x-access-token; echo "password=$(cat {path})"; }}; f\'\n'
-      'export GH_TOKEN="$(cat {path})"'
+      '\'!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f\''
     ),
   },
   'aws': {
     'sources': [{'file': 'aws_credentials'}],
-    'install': 'export AWS_SHARED_CREDENTIALS_FILE="{path}"',
+    # ~/.aws/credentials is where the aws CLI/SDK reads by default, so placing the
+    # value there is the whole install. the subshell confines umask 077 to the
+    # write so the file lands 0600 without the umask persisting into the session.
+    'install': '(umask 077; mkdir -p "$HOME/.aws"; credentials get aws > "$HOME/.aws/credentials")',
   },
 }
 
@@ -276,32 +281,18 @@ def build_scoped_store(names: Iterable[str]) -> dict[str, bytes]:
   return files
 
 
-def _resolve_local_path(secret: Secret) -> str | None:
-  """absolute path of the first search dir that holds the secret's local file, or
-  None if absent. used to substitute `{path}` into an install hook."""
-  source = secret.sources[0]
-  if not isinstance(source, LocalSource):
-    return None
-  for directory in _search_dirs():
-    path = Path(directory) / source.file
-    if path.is_file():
-      return str(path)
-  return None
-
-
 def install_hooks() -> str:
-  """shell wiring each present secret into the tool that consumes it from outside
-  the resolver (git, the aws CLI, ...), for the container entrypoint to `eval`.
-  each secret declares its hook in the registry; `{path}` is substituted with the
-  resolved file path. in a scoped container the registry is the hydrated set, so
-  only those secrets emit."""
+  """shell wiring each secret into the tool that consumes it from outside the
+  resolver (git, the aws CLI, ...), for the container entrypoint to `eval`. each
+  secret declares a static `install` hook in the registry that pulls its value via
+  `credentials get` at eval time — no path interpolation. a hook emits for every
+  registry secret that declares one: in a scoped container the registry is exactly
+  the hydrated (present) set, since `build_scoped_store` only includes resolvable
+  secrets."""
   lines: list[str] = []
   for secret in _load_registry().values():
-    if secret.install is None:
-      continue
-    path = _resolve_local_path(secret)
-    if path is not None:
-      lines.append(secret.install.format(path=path))
+    if secret.install is not None:
+      lines.append(secret.install)
   return '\n'.join(lines)
 
 
