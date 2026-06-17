@@ -1161,7 +1161,7 @@ class TestPersona:
     # MRO-concatenated class prompts: Dev's contribution + PPPDev's own
     assert 'software developer' in bro.persona
     assert '## PPP project' in bro.persona
-    assert 'cold reader' in bro.persona
+    assert "wasn't in the room" in bro.persona
     # shared prompts and the skills block are excluded from persona but present
     # in the full composed system prompt
     assert 'Interaction policy' not in bro.persona

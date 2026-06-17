@@ -151,7 +151,7 @@ class TestSessionAppendPrompt:
   def test_bro_persona_injected(self):
     out = cw._session_append_prompt(False, 'ppp-dev')
     assert '## PPP project' in out
-    assert 'cold reader' in out
+    assert "wasn't in the room" in out
 
   def test_no_persona_without_bro(self):
     assert '## PPP project' not in cw._session_append_prompt(False, None)

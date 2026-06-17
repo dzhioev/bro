@@ -15,9 +15,17 @@ Style:
   — propose it and let the user decide, don't silently do it.
 - Update docs when your change makes them out of date; don't add new doc files
   speculatively.
-- Write comments and docs for a cold reader, not as a session diary: no
-  session-scoped context, no narrating the change. Default to none; add one only
-  for a non-obvious why that outlives the session.
+- Write comments and docs for a reader who has the final code and the whole repo
+  but wasn't in the room while you wrote it: they never saw the alternatives you
+  weighed, the audit/ticket you worked from, or what the code said before. A code
+  comment earns its place only when it explains something that reader can SEE and
+  would wonder about (a construct, a value, a deliberate omission) and can resolve
+  without leaving the repo. Cut what's anchored to your trajectory, not the code:
+  roads not taken (defending against an alternative they wouldn't reach for on
+  their own), unresolvable refs (audit/ticket ids, "as discussed"), and change-
+  narration ("now"/"used to"/"is gone" — state the behavior, not the transition).
+  "Why not the obvious alternative" rationale belongs in the PR/task/spec, not
+  inline. Default to none; add one only for a non-obvious why.
 - Run tests, type checkers, and formatters before declaring work done — if the
   repo has them.
 
