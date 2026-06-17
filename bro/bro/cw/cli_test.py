@@ -412,7 +412,7 @@ class TestRenderBanner:
 
 
 class _FakeProc:
-  def __init__(self, returncode=0, stdout='', stderr=''):
+  def __init__(self, returncode=0, stdout='', stderr: str | bytes = ''):
     self.returncode = returncode
     self.stdout = stdout
     self.stderr = stderr
@@ -654,7 +654,7 @@ class TestContainerSecrets:
     assert docker_sock is True
 
 
-class TestDockerRunArgv:
+class TestDockerCreateArgv:
   @pytest.fixture
   def build_argv(self, monkeypatch, tmp_path):
     monkeypatch.setattr(cw.Path, 'home', lambda: tmp_path)
@@ -663,11 +663,16 @@ class TestDockerRunArgv:
     monkeypatch.setattr(cw, '_sync_credentials', lambda s, d: None)
 
     def build(**kwargs):
-      return cw._docker_run_argv(
+      return cw._docker_create_argv(
         'tag', 'ws', tmp_path / 'proj', tmp_path / 'sess', ['claude'], **kwargs
       )
 
     return build
+
+  def test_uses_docker_create_run_equivalent(self, build_argv):
+    # `docker create -it --rm` is the unstarted half of `docker run -it --rm`;
+    # run_in_container pairs it with `docker start -a -i`.
+    assert build_argv()[:4] == ['docker', 'create', '-it', '--rm']
 
   def test_docker_sock_mounted_by_default(self, build_argv):
     assert '/var/run/docker.sock:/var/run/docker.sock' in build_argv()
@@ -675,13 +680,113 @@ class TestDockerRunArgv:
   def test_docker_sock_dropped_when_disabled(self, build_argv):
     assert '/var/run/docker.sock:/var/run/docker.sock' not in build_argv(docker_sock=False)
 
-  def test_scoped_configs_mounted_as_ppp(self, build_argv, tmp_path):
-    scoped = tmp_path / 'scoped'
-    assert f'{scoped}:/home/cw/.ppp:ro' in build_argv(configs_dir=scoped)
-
-  def test_no_ppp_mount_without_configs_dir(self, build_argv):
+  def test_no_ppp_mount(self, build_argv):
+    # the scoped store is injected via `docker cp`, never bind-mounted
     assert not any('/home/cw/.ppp' in a for a in build_argv())
 
-  def test_no_out_of_band_github_token_mount(self, build_argv, tmp_path):
-    argv = build_argv(configs_dir=tmp_path / 'scoped')
-    assert not any('/run/secrets/github_token' in a for a in argv)
+  def test_no_out_of_band_github_token_mount(self, build_argv):
+    assert not any('/run/secrets/github_token' in a for a in build_argv())
+
+
+class TestPppTarball:
+  def _entries(self, blob: bytes) -> dict:
+    import io
+    import tarfile
+
+    with tarfile.open(fileobj=io.BytesIO(blob), mode='r') as tar:
+      return {m.name: m for m in tar.getmembers()}
+
+  def test_prefixes_ppp_and_round_trips_content(self):
+    blob = cw._ppp_tarball({'notion.json': b'{"token": "t"}', 'credentials.json': b'{}'})
+    members = self._entries(blob)
+    assert set(members) == {'.ppp', '.ppp/notion.json', '.ppp/credentials.json'}
+
+    import io
+    import tarfile
+
+    with tarfile.open(fileobj=io.BytesIO(blob), mode='r') as tar:
+      extracted = tar.extractfile('.ppp/notion.json')
+      assert extracted is not None
+      assert extracted.read() == b'{"token": "t"}'
+
+  def test_modes_and_owner(self):
+    members = self._entries(cw._ppp_tarball({'notion.json': b'x'}))
+    assert members['.ppp'].isdir()
+    assert members['.ppp'].mode == 0o700
+    assert members['.ppp/notion.json'].mode == 0o600
+    # owned by the host uid/gid — the same uid the entrypoint remaps cw to on Linux
+    assert members['.ppp/notion.json'].uid == cw.os.getuid()
+    assert members['.ppp/notion.json'].gid == cw.os.getgid()
+
+
+class TestRunInContainerInjection:
+  @pytest.fixture
+  def harness(self, monkeypatch, tmp_path):
+    monkeypatch.setattr(cw, '_project_root', lambda: tmp_path / 'proj')
+    monkeypatch.setattr(cw, '_image_tag', lambda: 'tag')
+    monkeypatch.setattr(cw, '_ensure_image', lambda tag: None)
+    monkeypatch.setattr(cw.Path, 'home', lambda: tmp_path / 'home')
+    monkeypatch.setattr(cw, '_docker_create_argv', lambda *a, **k: ['docker', 'create', 'ARGS'])
+    monkeypatch.setattr(
+      cw.credentials, 'build_scoped_store', lambda names: {'credentials.json': b'{}'}
+    )
+    monkeypatch.setattr(cw, '_sync_credentials', lambda s, d: None)
+    calls: list = []
+
+    def fake_run(argv, *a, **k):
+      calls.append({'argv': argv, 'input': k.get('input')})
+      if argv[0] == 'git':
+        return _FakeProc(returncode=0)
+      if argv[:2] == ['docker', 'create']:
+        return _FakeProc(returncode=0, stdout='cid123\n')
+      if argv[:2] == ['docker', 'start']:
+        return _FakeProc(returncode=7)
+      return _FakeProc(returncode=0)  # cp, rm
+
+    monkeypatch.setattr(cw.subprocess, 'run', fake_run)
+    return calls
+
+  def test_create_cp_start_sequence(self, harness):
+    import io
+    import tarfile
+
+    code = cw.run_in_container('ws', ['claude'])
+    assert code == 7  # propagates `docker start` exit code
+    docker_calls = [c for c in harness if c['argv'][0] == 'docker']
+    assert docker_calls[0]['argv'][:2] == ['docker', 'create']
+    # the scoped store is cp'd into the pre-start container as a tar on stdin
+    cp = next(c for c in harness if c['argv'][:3] == ['docker', 'cp', '-'])
+    assert cp['argv'][3] == 'cid123:/home/cw'
+    assert isinstance(cp['input'], bytes)
+    with tarfile.open(fileobj=io.BytesIO(cp['input']), mode='r') as tar:
+      assert '.ppp/credentials.json' in tar.getnames()
+    # last call is the run-equivalent `docker start -a -i <id>`
+    assert harness[-1]['argv'] == ['docker', 'start', '-a', '-i', 'cid123']
+
+  def test_cp_failure_removes_container_and_raises(self, monkeypatch, tmp_path):
+    monkeypatch.setattr(cw, '_project_root', lambda: tmp_path / 'proj')
+    monkeypatch.setattr(cw, '_image_tag', lambda: 'tag')
+    monkeypatch.setattr(cw, '_ensure_image', lambda tag: None)
+    monkeypatch.setattr(cw.Path, 'home', lambda: tmp_path / 'home')
+    monkeypatch.setattr(cw, '_docker_create_argv', lambda *a, **k: ['docker', 'create'])
+    monkeypatch.setattr(
+      cw.credentials, 'build_scoped_store', lambda names: {'credentials.json': b'{}'}
+    )
+    removed: list = []
+
+    def fake_run(argv, *a, **k):
+      if argv[0] == 'git':
+        return _FakeProc(returncode=0)
+      if argv[:2] == ['docker', 'create']:
+        return _FakeProc(returncode=0, stdout='cid123\n')
+      if argv[:3] == ['docker', 'cp', '-']:
+        return _FakeProc(returncode=1, stderr=b'no such container')
+      if argv[:3] == ['docker', 'rm', '-f']:
+        removed.append(argv)
+        return _FakeProc(returncode=0)
+      return _FakeProc(returncode=0)
+
+    monkeypatch.setattr(cw.subprocess, 'run', fake_run)
+    with pytest.raises(RuntimeError, match='docker cp'):
+      cw.run_in_container('ws', ['claude'])
+    assert removed == [['docker', 'rm', '-f', 'cid123']]

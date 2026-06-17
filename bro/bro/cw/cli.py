@@ -29,12 +29,15 @@ keeps the container's git state genuinely isolated. layout:
     and synced back to host on exit (if container is fresher), keyed on
     claudeAiOauth.expiresAt. Removes the runtime token-swap vector while
     preserving OAuth refresh.
-  - a per-launch scoped credential store → /home/cw/.ppp ro: the host resolves
-    only the secrets the session uses into an ephemeral dir and mounts that as the
-    container's ~/.ppp, with a credentials.json that bounds the container's
-    registry to them. github and aws arrive as declared secrets in this store
-    (wired into git / the aws CLI by their install hooks), so there is no
-    out-of-band github-token bind-mount and no ~/.aws mount.
+  - a per-launch scoped credential store at /home/cw/.ppp: the host resolves only
+    the secrets the session uses into an in-memory tar and `docker cp`s it into
+    the container before it starts (no host-side store, no bind mount), with a
+    credentials.json that bounds the container's registry to them. Living in the
+    container's own writable layer, the store is removed with the container on
+    --rm exit (or by `cw clean`), so plaintext secrets never linger on the host.
+    github and aws arrive as declared secrets in this store (wired into git / the
+    aws CLI by their install hooks), so there is no out-of-band github-token
+    bind-mount and no ~/.aws mount.
 
 network is not restricted by design.
 """
@@ -43,12 +46,14 @@ import argparse
 import concurrent.futures
 import datetime
 import hashlib
+import io
 import json
 import os
 import platform
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 from collections.abc import Collection
 from pathlib import Path
@@ -130,15 +135,6 @@ _CW_SESSION_BASELINE = ('session_log', 'trails')
 # the bro a no-`--bro` container session themes as (dive-in already sets CW_BRO to
 # this); bounds a manual `cw ss -c` session's scoped credentials.
 _DEFAULT_CW_BRO = 'ppp-dev'
-
-
-def _scoped_secrets_root() -> Path:
-  # per-launch scoped credential stores live under the user's cache, NOT the repo:
-  # the project is bind-mounted read-only at /host-repo in every container, so a
-  # secrets dir under it would re-leak across containers. under ~ so colima /
-  # Docker-for-Mac (which share /Users) can bind-mount it, unlike a /tmp mkdtemp
-  # (invisible to those daemons).
-  return Path.home() / '.cache' / 'ppp-cw' / 'secrets'
 
 
 def _load_anthropic_key() -> str | None:
@@ -289,16 +285,22 @@ def _ensure_image(tag: str) -> None:
   )
 
 
-def _docker_run_argv(
+def _docker_create_argv(
   tag: str,
   name: str,
   proj: Path,
   session: Path,
   command: list[str],
   *,
-  configs_dir: Path | None = None,
   docker_sock: bool = True,
 ) -> list[str]:
+  """argv for `docker create` of the session container (run-equivalent, unstarted).
+
+  `docker create -it --rm …` then `docker start -a -i <id>` reproduces `docker run
+  -it --rm` exactly (TTY, signals, exit code, auto-remove on exit). Splitting them
+  gives `run_in_container` a window to `docker cp` the scoped credential store into
+  the pre-start container's writable layer — no host-side store, no bind mount.
+  """
   home = Path.home()
   claude_dir = home / '.claude' / 'cw-sessions' / name
   claude_dir.mkdir(parents=True, exist_ok=True)
@@ -320,7 +322,7 @@ def _docker_run_argv(
   _sync_credentials(host_creds, claude_dir / '.credentials.json')
   argv = [
     'docker',
-    'run',
+    'create',
     '-it',
     '--rm',
     '-v',
@@ -362,12 +364,6 @@ def _docker_run_argv(
   for var in _DOCKER_FORWARD_ENV:
     if os.environ.get(var) is not None:
       argv += ['-e', var]
-  # mount the scoped credential store as the container's ~/.ppp. the host hydrated
-  # only the secrets this session uses into configs_dir, with a credentials.json
-  # bounding the container's registry to them — any other secret resolves to a
-  # clean SecretNotFound.
-  if configs_dir is not None:
-    argv += ['-v', f'{configs_dir}:/home/cw/.ppp:ro']
   return [*argv, tag, *command]
 
 
@@ -1366,7 +1362,7 @@ def start_session(
 
 _BRO_MCP_SERVER_NAME = 'bro'
 # path inside the container; /host-repo is the host project bind mount (see
-# _docker_run_argv). passed as claude code's apiKeyHelper so claude reads the
+# _docker_create_argv). passed as claude code's apiKeyHelper so claude reads the
 # api key from the `anthropic` secret without the "Detected a custom API key"
 # prompt that ANTHROPIC_API_KEY would trigger.
 _BRO_API_KEY_HELPER = '/host-repo/setup/print_anthropic_key.sh'
@@ -1508,6 +1504,34 @@ def _replace_container_resume_hint(name: str) -> None:
   print(f'  cw ss -c --mcp --resume {name}')
 
 
+def _ppp_tarball(files: dict[str, bytes]) -> bytes:
+  """pack a scoped credential store into a tar for `docker cp` into /home/cw.
+
+  entries are prefixed `.ppp/` so extracting at /home/cw lands them at
+  /home/cw/.ppp/<file>. files are 0600, the dir 0700, all owned by the host
+  uid/gid (the same uid the entrypoint remaps `cw` to on Linux); the entrypoint
+  re-owns the tree to `cw` after its remap so the bytes are readable there and on
+  Docker for Mac (where the remap is skipped). mtime defaults to 0 — deterministic,
+  no clock needed.
+  """
+  uid, gid = os.getuid(), os.getgid()
+  buf = io.BytesIO()
+  with tarfile.open(fileobj=buf, mode='w') as tar:
+    root = tarfile.TarInfo('.ppp')
+    root.type = tarfile.DIRTYPE
+    root.mode = 0o700
+    root.uid, root.gid = uid, gid
+    tar.addfile(root)
+    for fname in sorted(files):
+      data = files[fname]
+      info = tarfile.TarInfo(f'.ppp/{fname}')
+      info.size = len(data)
+      info.mode = 0o600
+      info.uid, info.gid = uid, gid
+      tar.addfile(info, io.BytesIO(data))
+  return buf.getvalue()
+
+
 def run_in_container(
   name: str,
   command: list[str],
@@ -1518,14 +1542,16 @@ def run_in_container(
 ) -> int:
   """run `command` inside a fresh cw-style container backed by workspace `name`.
 
-  builds/reuses the image, creates `var/cw/containers/<name>/`, runs `docker run
-  -it --rm` with the standard bind mounts (`/workspace`, `/host-repo:ro`,
-  `.claude` overlay, the scoped credential store, optionally the docker socket,
-  …), then post-syncs OAuth credentials. When `drop=True`, removes the workspace
-  dir and per-session claude state on exit. Returns the container's exit code.
+  builds/reuses the image, creates `var/cw/containers/<name>/`, runs the container
+  (`docker create` + `docker cp` scoped secrets in + `docker start -a -i`, the
+  run-equivalent split that lets us inject the store into the pre-start container)
+  with the standard bind mounts (`/workspace`, `/host-repo:ro`, `.claude` overlay,
+  optionally the docker socket, …), then post-syncs OAuth credentials. When
+  `drop=True`, removes the workspace dir and per-session claude state on exit.
+  Returns the container's exit code.
 
-  `secrets` is the scoped credential set to hydrate into the container's ~/.ppp
-  (see `credentials.write_scoped_store`); a missing secret raises (strict). AWS is
+  `secrets` is the scoped credential set hydrated into the container's ~/.ppp
+  (see `credentials.build_scoped_store`); a missing secret raises (strict). AWS is
   just one of them (`aws`), wired in by its install hook. `docker_sock=False`
   drops the docker socket mount (shell-less bros).
   """
@@ -1541,23 +1567,35 @@ def run_in_container(
   _ensure_image(tag)
   home = Path.home()
   claude_dir = home / '.claude' / 'cw-sessions' / name
-  # hydrate a fresh scoped credential store for this launch (strict: a missing
-  # secret raises before the container starts).
-  scoped = _scoped_secrets_root() / name
-  if scoped.exists():
-    shutil.rmtree(scoped)
-  written = credentials.write_scoped_store(scoped, secrets)
-  scoped.chmod(0o700)
-  log.info('scoped secrets for %s: %s', name, ', '.join(written) if len(written) > 0 else '(none)')
-  try:
-    result = subprocess.run(
-      _docker_run_argv(
-        tag, name, proj, session, command, configs_dir=scoped, docker_sock=docker_sock
-      )
+  # build the scoped store in memory (strict: a missing secret raises before the
+  # container is created), then inject it into the pre-start container's writable
+  # layer via `docker cp`. nothing plaintext touches the host disk.
+  store = credentials.build_scoped_store(secrets)
+  names = sorted(set(secrets))
+  log.info('scoped secrets for %s: %s', name, ', '.join(names) if len(names) > 0 else '(none)')
+  created = subprocess.run(
+    _docker_create_argv(tag, name, proj, session, command, docker_sock=docker_sock),
+    capture_output=True,
+    text=True,
+  )
+  if created.returncode != 0:
+    raise RuntimeError(f'docker create for {name} failed: {created.stderr.strip()}')
+  container_id = created.stdout.strip()
+  cp = subprocess.run(
+    ['docker', 'cp', '-', f'{container_id}:/home/cw'],
+    input=_ppp_tarball(store),
+    capture_output=True,
+  )
+  if cp.returncode != 0:
+    # a created-never-started container isn't covered by --rm; remove it so it
+    # doesn't linger (cw clean would reclaim it anyway, but eagerly is tidier).
+    subprocess.run(['docker', 'rm', '-f', container_id], capture_output=True)
+    raise RuntimeError(
+      f'docker cp of scoped store into {name} failed: {cp.stderr.decode().strip()}'
     )
-  finally:
-    # secrets are re-hydrated fresh each launch; never leave a plaintext copy behind.
-    shutil.rmtree(scoped, ignore_errors=True)
+  # `docker start -a -i` reattaches the TTY/stdin and returns the exit code; --rm
+  # (set at create) removes the container — and its scoped secrets — on exit.
+  result = subprocess.run(['docker', 'start', '-a', '-i', container_id])
   # post-run sync: if the container refreshed its OAuth token during the
   # session, propagate the fresher copy back to the host so the next session
   # (host or container) sees the live tokens.

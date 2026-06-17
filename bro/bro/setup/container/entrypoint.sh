@@ -22,6 +22,14 @@ if [ "$(id -u)" = "0" ] && [ -z "${CW_ENTRYPOINT_REEXEC:-}" ]; then
       groupmod -o -g "$SOCK_GID" docker
     fi
   fi
+  # the scoped credential store is `docker cp`'d into /home/cw/.ppp before start
+  # (cw.py), landing owned by the uid baked into the tar. re-own it to cw after the
+  # remap above so the resolver and install hooks (run as cw) can read the 0600
+  # files — on Linux (cw remapped to the host uid) and on Docker for Mac (remap
+  # skipped, cw keeps its image uid).
+  if [ -d /home/cw/.ppp ]; then
+    chown -R cw:cw /home/cw/.ppp
+  fi
   export CW_ENTRYPOINT_REEXEC=1
   exec gosu cw "$0" "$@"
 fi

@@ -243,17 +243,17 @@ class TestCli:
     assert 'not valid json' in capsys.readouterr().err
 
 
-class TestWriteScopedStore:
-  def test_writes_files_and_scoped_registry(self, configs_dir: Path, tmp_path: Path):
+class TestBuildScopedStore:
+  def test_builds_files_and_scoped_registry(self, configs_dir: Path):
     _write(configs_dir, 'notion.json', {'token': 't'})
     _write(configs_dir, 'cw_github_token_bro', 'ghp_abc\n')
-    dest = tmp_path / 'scoped'
-    written = credentials.write_scoped_store(dest, ['notion', 'github'])
-    assert written == ['github', 'notion']
-    # each secret's raw text written to its file (stripped)
-    assert json.loads((dest / 'notion.json').read_text()) == {'token': 't'}
-    assert (dest / 'cw_github_token_bro').read_text() == 'ghp_abc'
-    registry = json.loads((dest / credentials.REGISTRY_FILE).read_text())
+    store = credentials.build_scoped_store(['notion', 'github'])
+    # one entry per secret keyed by its file name, plus the scoped registry
+    assert set(store) == {'notion.json', 'cw_github_token_bro', credentials.REGISTRY_FILE}
+    # each secret's raw text (stripped) as bytes
+    assert json.loads(store['notion.json']) == {'token': 't'}
+    assert store['cw_github_token_bro'] == b'ghp_abc'
+    registry = json.loads(store[credentials.REGISTRY_FILE])
     assert set(registry) == {'notion', 'github'}
     # the install hook rides along so the container can apply it generically;
     # the source omits `type` (local is the default)
@@ -262,15 +262,24 @@ class TestWriteScopedStore:
     # a secret with no install hook carries none
     assert 'install' not in registry['notion']
 
+  def test_empty_names_yields_only_registry(self, configs_dir: Path):
+    # cw always cps a store in (even a zero-secret session), so the registry
+    # file is always present — an empty bounding registry.
+    store = credentials.build_scoped_store([])
+    assert set(store) == {credentials.REGISTRY_FILE}
+    assert json.loads(store[credentials.REGISTRY_FILE]) == {}
+
   def test_scoped_store_bounds_container_registry(
     self, configs_dir: Path, monkeypatch, tmp_path: Path
   ):
-    # mounting the scoped dir as a container's ~/.ppp bounds it to the written
+    # materialising the store as a container's ~/.ppp bounds it to the built
     # set: a non-declared secret resolves to a clean SecretNotFound.
     _write(configs_dir, 'notion.json', {'token': 't'})
     _write(configs_dir, 'tmdb.json', {'api_key': 'k'})
     dest = tmp_path / 'scoped'
-    credentials.write_scoped_store(dest, ['notion'])
+    dest.mkdir()
+    for fname, data in credentials.build_scoped_store(['notion']).items():
+      (dest / fname).write_bytes(data)
     # resolve as the container would: scoped dir is its ~/.ppp (and there is no
     # <project>/.configs). the scoped credentials.json bounds the registry.
     monkeypatch.setattr(credentials, 'CONFIGS_DIR', str(tmp_path / 'absent'))
@@ -280,15 +289,15 @@ class TestWriteScopedStore:
     with pytest.raises(credentials.SecretNotFound):
       credentials.default_store().get('tmdb')
 
-  def test_unknown_name_raises(self, configs_dir: Path, tmp_path: Path):
+  def test_unknown_name_raises(self, configs_dir: Path):
     with pytest.raises(ValueError, match='unknown secret'):
-      credentials.write_scoped_store(tmp_path / 'scoped', ['notion', 'nonsense'])
+      credentials.build_scoped_store(['notion', 'nonsense'])
 
-  def test_absent_value_raises(self, configs_dir: Path, tmp_path: Path):
+  def test_absent_value_raises(self, configs_dir: Path):
     # strict: a declared name with no value on the host fails loudly here.
     _write(configs_dir, 'notion.json', {'token': 't'})
     with pytest.raises(credentials.SecretNotFound):
-      credentials.write_scoped_store(tmp_path / 'scoped', ['notion', 'tmdb'])
+      credentials.build_scoped_store(['notion', 'tmdb'])
 
 
 class TestInstallHooks:

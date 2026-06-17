@@ -9,8 +9,9 @@ secret; the first source that has the value wins.
 the one source type so far, `local`, searches `<project>/.configs/<file>` then
 `~/.ppp/<file>` — the deployed services synthesize `<project>/.configs` at
 runtime; on the host secrets live only in `~/.ppp`. a generated `credentials.json`
-in either search dir overrides the built-in registry; `write_scoped_store` writes
-a scoped one into a container's `~/.ppp` to bound it to a chosen set of secrets.
+in either search dir overrides the built-in registry; `build_scoped_store` emits
+a scoped one (in memory) that `cw` `docker cp`s into a container's `~/.ppp` to
+bound it to a chosen set of secrets.
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ __cli_name__ = 'credentials'
 CONFIGS_DIR = configs.DEFAULT_CONFIGS_DIR
 PPP_DIR = configs.DEFAULT_PPP_DIR
 
-# a generated registry file (written by `write_scoped_store`) overrides the
+# a generated registry file (emitted by `build_scoped_store`) overrides the
 # built-in default when present; absent, resolution falls through to the built-in.
 REGISTRY_FILE = 'credentials.json'
 
@@ -239,24 +240,25 @@ def default_store() -> Store:
   return _default_store
 
 
-def write_scoped_store(dest: Path, names: Iterable[str]) -> list[str]:
-  """write a per-container scoped credential store into `dest`.
+def build_scoped_store(names: Iterable[str]) -> dict[str, bytes]:
+  """build a per-container scoped credential store in memory.
 
-  for each requested secret: one local file holding its raw text plus a generated
-  `credentials.json` registry covering exactly the secrets written. mounting
-  `dest` as the container's `~/.ppp` then bounds the container to this set; any
-  other secret resolves to a clean `SecretNotFound`.
+  returns a map of relative file name to its bytes: one entry per requested
+  secret holding its raw text, plus a generated `credentials.json` registry
+  covering exactly those secrets. materialising this map as the container's
+  `~/.ppp` then bounds the container to this set; any other secret resolves to a
+  clean `SecretNotFound`. The bytes never touch a host file — `cw` packs them
+  into a tar and `docker cp`s them straight into the container.
 
   hydration is strict: an unknown name (not in the host registry) raises
   `ValueError`, and a declared name whose value can't be resolved raises
   `SecretNotFound` — a typo or a missing secret fails loudly here, on the host,
-  before the container exists. returns the sorted list of names written.
+  before the container exists.
   """
   registry = _load_registry()
   store = Store(registry)
-  dest.mkdir(parents=True, exist_ok=True)
+  files: dict[str, bytes] = {}
   scoped: dict[str, dict] = {}
-  written: list[str] = []
   for name in sorted(set(names)):
     secret = registry.get(name)
     if secret is None:
@@ -265,18 +267,13 @@ def write_scoped_store(dest: Path, names: Iterable[str]) -> list[str]:
     if not isinstance(source, LocalSource):
       raise ValueError(f'secret {name!r} first source is not local: {source.describe()}')
     value = store.get(name)  # strict: SecretNotFound propagates on a missing value
-    path = dest / source.file
-    path.write_text(value)
-    path.chmod(0o600)
+    files[source.file] = value.encode()
     entry: dict = {'sources': [{'file': source.file}]}
     if secret.install is not None:
       entry['install'] = secret.install
     scoped[name] = entry
-    written.append(name)
-  registry_path = dest / REGISTRY_FILE
-  registry_path.write_text(json.dumps(scoped))
-  registry_path.chmod(0o600)
-  return written
+  files[REGISTRY_FILE] = json.dumps(scoped).encode()
+  return files
 
 
 def _resolve_local_path(secret: Secret) -> str | None:
