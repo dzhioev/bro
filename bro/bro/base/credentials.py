@@ -248,9 +248,10 @@ def default_store() -> Store:
 def build_scoped_store(names: Iterable[str]) -> dict[str, bytes]:
   """build a per-container scoped credential store in memory.
 
-  returns a map of relative file name to its bytes: one entry per requested
-  secret holding its raw text, plus a generated `credentials.json` registry
-  covering exactly those secrets. materialising this map as the container's
+  returns a map of relative file name to its bytes: one `{name}.cred` entry per
+  requested secret holding its resolved raw text, plus a generated
+  `credentials.json` registry covering exactly those secrets and pointing each at
+  its `{name}.cred`. materialising this map as the container's
   `~/.ppp` then bounds the container to this set; any other secret resolves to a
   clean `SecretNotFound`. The bytes never touch a host file — `cw` packs them
   into a tar and `docker cp`s them straight into the container.
@@ -268,12 +269,16 @@ def build_scoped_store(names: Iterable[str]) -> dict[str, bytes]:
     secret = registry.get(name)
     if secret is None:
       raise ValueError(f'unknown secret {name!r} declared in manifest; not in the registry')
-    source = secret.sources[0]
-    if not isinstance(source, LocalSource):
-      raise ValueError(f'secret {name!r} first source is not local: {source.describe()}')
+    # resolve generically on the host (a future non-local source uses the host's
+    # own credentials), then materialize under a uniform `{name}.cred`. the scoped
+    # file is local regardless of the host source type, so the container only ever
+    # sees a plain local file and the registry it reads stays local-only by
+    # construction — the filename is internal to the scoped store, not borrowed
+    # from the source.
     value = store.get(name)  # strict: SecretNotFound propagates on a missing value
-    files[source.file] = value.encode()
-    entry: dict = {'sources': [{'file': source.file}]}
+    file = f'{name}.cred'
+    files[file] = value.encode()
+    entry: dict = {'sources': [{'file': file}]}
     if secret.install is not None:
       entry['install'] = secret.install
     scoped[name] = entry

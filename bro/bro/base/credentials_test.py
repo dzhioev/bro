@@ -248,19 +248,43 @@ class TestBuildScopedStore:
     _write(configs_dir, 'notion.json', {'token': 't'})
     _write(configs_dir, 'cw_github_token_bro', 'ghp_abc\n')
     store = credentials.build_scoped_store(['notion', 'github'])
-    # one entry per secret keyed by its file name, plus the scoped registry
-    assert set(store) == {'notion.json', 'cw_github_token_bro', credentials.REGISTRY_FILE}
+    # one `{name}.cred` entry per secret, plus the scoped registry
+    assert set(store) == {'notion.cred', 'github.cred', credentials.REGISTRY_FILE}
     # each secret's raw text (stripped) as bytes
-    assert json.loads(store['notion.json']) == {'token': 't'}
-    assert store['cw_github_token_bro'] == b'ghp_abc'
+    assert json.loads(store['notion.cred']) == {'token': 't'}
+    assert store['github.cred'] == b'ghp_abc'
     registry = json.loads(store[credentials.REGISTRY_FILE])
     assert set(registry) == {'notion', 'github'}
-    # the install hook rides along so the container can apply it generically;
-    # the source omits `type` (local is the default)
-    assert registry['github']['sources'] == [{'file': 'cw_github_token_bro'}]
+    # the install hook rides along so the container can apply it generically; the
+    # source omits `type` (local is the default) and points at the scoped file
+    assert registry['github']['sources'] == [{'file': 'github.cred'}]
     assert 'install' in registry['github']
     # a secret with no install hook carries none
     assert 'install' not in registry['notion']
+
+  def test_non_local_source_round_trips_to_scoped_local_file(self, configs_dir: Path, monkeypatch):
+    # a pure non-local secret (no LocalSource) hydrates the same as a local one:
+    # the value resolves generically via store.get on the host and materializes as
+    # a scoped local `{name}.cred`, so the container reads a plain local file with
+    # no idea the host source was remote.
+    class _StubSource:
+      def fetch(self) -> str | None:
+        return 'sekret'
+
+      def describe(self) -> str:
+        return 'stub'
+
+    registry = {'remote': credentials.Secret('remote', [_StubSource()])}
+    monkeypatch.setattr(credentials, '_load_registry', lambda: registry)
+    store = credentials.build_scoped_store(['remote'])
+    assert set(store) == {'remote.cred', credentials.REGISTRY_FILE}
+    assert store['remote.cred'] == b'sekret'
+    scoped = json.loads(store[credentials.REGISTRY_FILE])
+    # declared as a plain local source pointing at the materialized file...
+    assert scoped['remote']['sources'] == [{'file': 'remote.cred'}]
+    # ...and that scoped entry rehydrates as a LocalSource (type defaults to local)
+    rebuilt = credentials._registry_from_dict(scoped)
+    assert isinstance(rebuilt['remote'].sources[0], credentials.LocalSource)
 
   def test_empty_names_yields_only_registry(self, configs_dir: Path):
     # cw always cps a store in (even a zero-secret session), so the registry
