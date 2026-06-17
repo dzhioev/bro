@@ -144,8 +144,14 @@ fi
 # credential helper, the aws CLI's ~/.aws/credentials, ...) via its registry-declared
 # install hook — one generic step, no per-secret logic here. env exports must
 # persist into `exec`, so this is eval'd in the entrypoint shell.
+#
+# capture before eval: `eval "$(credentials install-hooks)"` would mask a generator
+# crash — the failed command substitution yields empty stdout, `eval ""` exits 0, and
+# set -e never fires, so claude would launch with credentials unwired. a plain
+# assignment propagates the substitution's exit status to set -e, aborting the launch.
 if [ "${CW_SKIP_VENV:-}" != "1" ]; then
-  eval "$(credentials install-hooks)"
+  install_hooks="$(credentials install-hooks)"
+  eval "$install_hooks"
 fi
 
 # in --bro mode, surface the bro's skills to Claude Code by symlinking them into
