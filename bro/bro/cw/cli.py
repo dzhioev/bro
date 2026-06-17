@@ -204,6 +204,11 @@ _CONTAINER_CLAUDE_JSON: dict = {
   'installMethod': 'global',
   'autoUpdates': False,
   'hasCompletedOnboarding': True,
+  # the pyright-lsp plugin + official marketplace are baked into the image and
+  # seeded by the entrypoint; mark the auto-install done so claude doesn't re-run
+  # the network fetch (and never prompts) at session start.
+  'officialMarketplaceAutoInstallAttempted': True,
+  'officialMarketplaceAutoInstalled': True,
   'projects': {'/workspace': {'hasTrustDialogAccepted': True}},
 }
 # account-identity keys carried over from the host so the session starts logged
@@ -223,6 +228,9 @@ _CONTAINER_SETTINGS_JSON: dict = {
   # behind its alternate-screen buffer (the entrypoint can't print a banner that
   # survives the session)
   'statusLine': {'type': 'command', 'command': 'session-log-statusline'},
+  # enable the pyright-lsp Python language server. the plugin itself is installed
+  # at image-build time and seeded into ~/.claude/plugins by the entrypoint;
+  # enabling alone is not enough (claude would prompt to install it on .py files).
   'enabledPlugins': {'pyright-lsp@claude-plugins-official': True},
 }
 

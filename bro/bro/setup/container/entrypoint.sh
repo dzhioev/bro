@@ -119,6 +119,16 @@ chmod +x "$hooks_dir/pre-push"
 # constructed ~/.claude.json, not here)
 mkdir -p "$HOME/.claude/projects/-workspace"
 
+# seed the pre-installed plugins baked into the image (pyright-lsp). ~/.claude is
+# bind-mounted from a fresh per-session dir, so the build-time install staged at
+# /opt is copied in on first run. settings.json enables the plugin (cw.py); this
+# provides the matching install records so claude doesn't prompt to install it on
+# .py files.
+if [ -d /opt/claude-plugins-seed ] && [ ! -f "$HOME/.claude/plugins/installed_plugins.json" ]; then
+  mkdir -p "$HOME/.claude/plugins"
+  cp -r /opt/claude-plugins-seed/. "$HOME/.claude/plugins/"
+fi
+
 if [ ! -x .venv/bin/python ] && [ "${CW_SKIP_VENV:-}" != "1" ]; then
   echo 'provisioning linux venv' >&2
   uv sync --all-groups >&2

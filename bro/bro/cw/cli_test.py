@@ -74,6 +74,35 @@ class TestSeedContainerClaudeJson:
     assert json.loads(again.read_text()) == {'container': 'wrote-this'}
 
 
+class TestPluginSeedContract:
+  # the enabled plugin must also be installed: settings.json enables it (cw.py),
+  # the Dockerfile installs + stages it, and the entrypoint copies the stage into
+  # the bind-mounted ~/.claude/plugins. enabling without installing is exactly the
+  # regression that reintroduced the "LSP Plugin Recommendation" prompt.
+  _SEED_DIR = '/opt/claude-plugins-seed'
+
+  def test_settings_enables_pyright_lsp(self):
+    assert cw._CONTAINER_SETTINGS_JSON['enabledPlugins'] == {
+      'pyright-lsp@claude-plugins-official': True
+    }
+
+  def test_claude_json_suppresses_marketplace_autoinstall(self):
+    # the marketplace is baked into the image, so the runtime auto-install (a
+    # network fetch that can also prompt) must be marked already-done.
+    assert cw._CONTAINER_CLAUDE_JSON['officialMarketplaceAutoInstallAttempted'] is True
+
+  def test_dockerfile_installs_and_stages_the_enabled_plugin(self):
+    plugin = next(iter(cw._CONTAINER_SETTINGS_JSON['enabledPlugins']))
+    dockerfile = (cw.CONTAINER_DIR / 'Dockerfile').read_text()
+    assert f'claude plugin install {plugin}' in dockerfile
+    assert self._SEED_DIR in dockerfile
+
+  def test_entrypoint_copies_the_stage(self):
+    entrypoint = (cw.CONTAINER_DIR / 'entrypoint.sh').read_text()
+    assert self._SEED_DIR in entrypoint
+    assert '.claude/plugins' in entrypoint
+
+
 class TestBroClaudeArgv:
   def test_basic_shape(self):
     argv = cw._bro_claude_argv('pm')

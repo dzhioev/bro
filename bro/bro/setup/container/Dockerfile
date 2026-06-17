@@ -54,6 +54,24 @@ EOF
 RUN groupadd -g 999 docker \
  && usermod -aG docker cw
 
+# pre-install the pyright-lsp Claude Code plugin at build time. settings.json
+# only *enables* the plugin (cw.py); without a matching *install* record Claude
+# prompts the "LSP Plugin Recommendation" on .py files. CLAUDE_CONFIG_DIR is the
+# runtime ~/.claude path so the absolute paths baked into installed_plugins.json
+# / known_marketplaces.json match where the entrypoint copies the seed. That dir
+# is bind-mounted from a fresh per-session dir at runtime, so the built plugin
+# tree is staged at /opt and copied in on first run. Done as cw (file ownership)
+# and offline-after-build (no per-session network race). swift-lsp is left out —
+# no Swift toolchain in this image.
+RUN mkdir -p /opt/claude-plugins-seed && chown cw:cw /opt/claude-plugins-seed
+RUN gosu cw bash -ec '\
+      export CLAUDE_CONFIG_DIR=/home/cw/.claude; \
+      printf "%s" "{\"hasCompletedOnboarding\":true,\"installMethod\":\"global\"}" > "$CLAUDE_CONFIG_DIR/.claude.json"; \
+      claude plugin marketplace add anthropics/claude-plugins-official; \
+      claude plugin install pyright-lsp@claude-plugins-official; \
+      cp -r "$CLAUDE_CONFIG_DIR/plugins/." /opt/claude-plugins-seed/; \
+      rm -rf "$CLAUDE_CONFIG_DIR/plugins" "$CLAUDE_CONFIG_DIR/.claude.json" "$CLAUDE_CONFIG_DIR/backups"'
+
 # pre-warm the uv wheel cache from the project's pyproject + uv.lock so the
 # entrypoint's `uv sync` against the bind-mounted /workspace doesn't have to
 # re-download wheels. /opt is on the image overlay (different fs from the
