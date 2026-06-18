@@ -197,10 +197,12 @@ _SKILL_DESCRIPTION = (
 )
 
 
-def _build_service_server(bro: 'BaseBro') -> llm.mcp.MCPServer:
-  tools: list[llm.mcp.Tool] = [
-    llm.mcp.FunctionTool(_raise, name='raise', description=_RAISE_DESCRIPTION),
-  ]
+def _build_service_server(bro: 'BaseBro', *, include_raise: bool) -> llm.mcp.MCPServer:
+  # `raise` only makes sense non-interactively (a caller to abort to); `skill` is
+  # needed in both modes. interactive callers pass include_raise=False.
+  tools: list[llm.mcp.Tool] = []
+  if include_raise:
+    tools.append(llm.mcp.FunctionTool(_raise, name='raise', description=_RAISE_DESCRIPTION))
   if len(bro.skills) > 0:
 
     def skill(name: str) -> str:
@@ -292,7 +294,7 @@ class BaseBro(ABC):
     self._mcp_servers: list[llm.mcp.MCPServer] = list(self._declared_mcp)
     for ds in self.data_sources:
       self._mcp_servers.append(ds.as_mcp_server())
-    self._service_server: llm.mcp.MCPServer = _build_service_server(self)
+    self._service_server: llm.mcp.MCPServer = _build_service_server(self, include_raise=True)
     self._llm = None
     # default to no-op; BaseBro.run() swaps in a real observer per invocation so the
     # LLM construction path picks it up via self._observer.
@@ -449,9 +451,11 @@ class BaseBro(ABC):
   def _mcp_servers_for(self, *, interactive: bool) -> list[llm.mcp.MCPServer]:
     # the `raise` service tool only makes sense in non-interactive runs — when no
     # human is in the loop to negotiate, the agent needs a way to abort. In
-    # interactive sessions the agent can just describe any blocker in its reply.
+    # interactive sessions the agent describes any blocker in its reply instead.
+    # `skill`, however, is needed in both modes, so interactive rebuilds the
+    # service server without `raise` rather than dropping it wholesale.
     if interactive:
-      return list(self._mcp_servers)
+      return [*self._mcp_servers, _build_service_server(self, include_raise=False)]
     return [*self._mcp_servers, self._service_server]
 
   def _system_prompt_for(self, *, interactive: bool) -> str:

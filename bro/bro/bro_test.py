@@ -1103,6 +1103,27 @@ class TestSkillServiceTool:
     assert names == {'raise'}
 
   @pytest.mark.asyncio
+  async def test_skill_tool_survives_interactive_mode(self, fake_pkgs):
+    # interactive runs drop `raise` (no caller to abort to) but must KEEP `skill`
+    # — a skill-having bro driven via `call` still needs to load its skills.
+    pkg = fake_pkgs('_svc_interactive', {'foo': _skill()})
+
+    class B(BaseBro):
+      name = 'b'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    B.__module__ = pkg
+    bro = B()
+    interactive = await _collect_tool_names(bro._mcp_servers_for(interactive=True))
+    non_interactive = await _collect_tool_names(bro._mcp_servers_for(interactive=False))
+    assert 'skill' in interactive  # the fix: skill is not dropped along with raise
+    assert 'raise' not in interactive  # raise is still dropped interactively
+    assert {'skill', 'raise'} <= non_interactive
+
+  @pytest.mark.asyncio
   async def test_skill_tool_returns_body(self, fake_pkgs):
     pkg = fake_pkgs(
       '_svc_call',
