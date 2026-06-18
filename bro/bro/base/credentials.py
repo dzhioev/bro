@@ -295,6 +295,37 @@ def build_scoped_store(names: Iterable[str]) -> dict[str, bytes]:
   return files
 
 
+def apply_grant_revoke(
+  computed: Iterable[str], *, grant: Iterable[str] = (), revoke: Iterable[str] = ()
+) -> set[str]:
+  """layer per-session grant/revoke overrides onto a computed scoped credential set.
+
+  returns `(computed | grant) - revoke`. every override must change the set:
+  granting a secret already present, or revoking one absent, raises `ValueError`
+  and stops — a redundant grant/revoke is a mistake to surface, not silently
+  swallow (a no-op revoke especially: it would read as "tightened" while changing
+  nothing). granting or revoking the same name twice trips the same checks, and a
+  name in both lists is rejected outright. unknown grant names are not validated
+  here — `build_scoped_store` is strict on the registry and rejects them loudly on
+  the host. does not mutate the inputs.
+  """
+  result = set(computed)
+  grant = list(grant)
+  revoke = list(revoke)
+  both = sorted(set(grant) & set(revoke))
+  if len(both) > 0:
+    raise ValueError(f'cannot grant and revoke the same secret: {", ".join(both)}')
+  for name in grant:
+    if name in result:
+      raise ValueError(f'cannot grant {name!r}: already in the scoped credential set')
+    result.add(name)
+  for name in revoke:
+    if name not in result:
+      raise ValueError(f'cannot revoke {name!r}: not in the scoped credential set')
+    result.remove(name)
+  return result
+
+
 def install_hooks() -> str:
   """shell wiring each secret into the tool that consumes it from outside the
   resolver (git, the aws CLI, ...), for the container entrypoint to `eval`. each

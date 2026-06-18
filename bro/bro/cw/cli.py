@@ -1206,6 +1206,20 @@ def add_forwarded_flags(parser: argparse.ArgumentParser) -> None:
     help='hydrate the `aws` secret (~/.ppp/aws_credentials) into the container for AWS access',
   )
   parser.add_argument(
+    '--grant',
+    action='append',
+    default=None,
+    metavar='SECRET',
+    help='grant a secret to the container scoped set on top of the computed set (repeatable); requires -c; errors if already in the set or unknown to the registry',
+  )
+  parser.add_argument(
+    '--revoke',
+    action='append',
+    default=None,
+    metavar='SECRET',
+    help='revoke a secret from the container scoped set (repeatable); requires -c; errors if not in the set',
+  )
+  parser.add_argument(
     '--effort',
     default=None,
     choices=EFFORT_LEVELS,
@@ -1246,6 +1260,8 @@ def start_session(
   auto: bool,
   fast: bool,
   aws: bool,
+  grant: list[str] | None,
+  revoke: list[str] | None,
   effort: str | None,
   rc: bool,
   resume: bool,
@@ -1255,6 +1271,8 @@ def start_session(
   claude_args: list[str],
 ) -> int:
   rc = rc or auto
+  grant = grant if grant is not None else []
+  revoke = revoke if revoke is not None else []
   flags = {
     '-c': container,
     '--auto': auto,
@@ -1272,6 +1290,10 @@ def start_session(
       parts.append(mcp)
   if bro is not None:
     parts.extend(['--bro', bro])
+  for g in grant:
+    parts.extend(['--grant', g])
+  for r in revoke:
+    parts.extend(['--revoke', r])
   parts.extend([name, *claude_args])
   os.environ['CW_COMMAND'] = ' '.join(parts)
   os.environ['CW_NAME'] = name
@@ -1307,8 +1329,11 @@ def start_session(
     if prompt is not None:
       claude_args = [*claude_args, '--', prompt]
     secrets, docker_sock = _container_secrets(bro, mcp=mcp, bro_mode=True)
-    if aws:
-      secrets.add(_AWS_SECRET)
+    try:
+      secrets = _finalize_secrets(secrets, aws=aws, grant=grant, revoke=revoke)
+    except ValueError as e:
+      log.error('%s', e)
+      return 1
     return cw(
       name=name,
       container=container,
@@ -1361,8 +1386,11 @@ def start_session(
   if container:
     bro_name = bro_env if bro_env is not None else _DEFAULT_CW_BRO
     secrets, _ = _container_secrets(bro_name, mcp=mcp, bro_mode=False)
-    if aws:
-      secrets.add(_AWS_SECRET)
+    try:
+      secrets = _finalize_secrets(secrets, aws=aws, grant=grant, revoke=revoke)
+    except ValueError as e:
+      log.error('%s', e)
+      return 1
   return cw(name=name, container=container, drop=drop, claude_args=claude_args, secrets=secrets)
 
 
@@ -1450,6 +1478,18 @@ def _bro_claude_argv(bro_name: str) -> list[str]:
     '--allowed-tools',
     f'mcp__{_BRO_MCP_SERVER_NAME}__*',
   ]
+
+
+def _finalize_secrets(
+  secrets: set[str], *, aws: bool, grant: list[str], revoke: list[str]
+) -> set[str]:
+  """layer `--aws` and the per-session `--grant` / `--revoke` overrides onto a
+  computed scoped set. `--aws` joins the baseline first (so it can be revoked or
+  collides with a redundant `--grant aws`), then grant/revoke apply strictly — a
+  grant/revoke that doesn't change the set raises `ValueError`
+  (`credentials.apply_grant_revoke`)."""
+  base = secrets | {_AWS_SECRET} if aws else secrets
+  return credentials.apply_grant_revoke(base, grant=grant, revoke=revoke)
 
 
 def _container_secrets(bro_name: str, *, mcp: str | None, bro_mode: bool) -> tuple[set[str], bool]:
@@ -1801,6 +1841,11 @@ def main(argv=None):
       parser.error(
         '--resume cannot be combined with -p/--prompt (the initial prompt is ignored on resume)'
       )
+  if (args['grant'] is not None or args['revoke'] is not None) and not args['container']:
+    parser.error(
+      '--grant/--revoke require -c/--container: host mode is unscoped, so a revoke '
+      'could not actually restrict the session'
+    )
   # `--aws` needs no pre-flight: it adds the `aws` secret to the session set, and
   # strict hydration fails loudly if `~/.ppp/aws_credentials` is absent.
   return start_session(**args)

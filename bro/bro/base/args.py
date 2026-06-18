@@ -348,6 +348,9 @@ class Parser(argparse.ArgumentParser):
       if isinstance(action, (argparse._StoreTrueAction, argparse._StoreFalseAction)):
         if val != action.default:
           parts.append(action.option_strings[0])
+      elif isinstance(action, argparse._AppendAction):
+        for item in val if val is not None else []:
+          parts.extend([action.option_strings[0], str(item)])
       elif val is not None and val != action.default:
         parts.extend([action.option_strings[0], str(val)])
     for action in positionals:

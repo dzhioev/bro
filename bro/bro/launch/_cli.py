@@ -8,6 +8,7 @@ import sys
 from typing import Callable, Coroutine
 
 import base.args
+from base import credentials
 from bro.bro import BroRaised
 from bro.bros.bro import Bro
 from llm.observer import Observer
@@ -19,6 +20,13 @@ FAST_HELP = (
   'consistent generation at a higher per-token price)'
 )
 NO_CONTAINER_HELP = 'skip the auto-container hop and run in the calling process'
+GRANT_HELP = (
+  "grant a secret to the container's scoped set on top of the bro's manifest "
+  '(repeatable); errors if it is already in the set or unknown to the registry'
+)
+REVOKE_HELP = (
+  "revoke a secret from the container's scoped set (repeatable); errors if it is not in the set"
+)
 
 
 def create_bro_for_run(bro_name: str, *, fast: bool) -> Bro:
@@ -34,7 +42,13 @@ def create_bro_for_run(bro_name: str, *, fast: bool) -> Bro:
 
 
 def maybe_containerize(
-  *, cli_name: str, bro_name: str, inner_args: list[str], no_container: bool
+  *,
+  cli_name: str,
+  bro_name: str,
+  inner_args: list[str],
+  no_container: bool,
+  grant: list[str] | None = None,
+  revoke: list[str] | None = None,
 ) -> int | None:
   """re-exec `<cli_name> <bro_name> <inner_args...>` inside a scoped throwaway
   container and return its exit code, or return None so the caller runs in the
@@ -47,14 +61,34 @@ def maybe_containerize(
   add its llm key (`needed_secrets()` omits it) and `trails` (recording is mandatory
   for bro runs); the docker socket is granted only when the bro does docker work.
   `run_in_container`'s `docker start -a -i` gives the container a real `-it` TTY, so
-  an interactive surface (`call`) renders inside it just as claude code does."""
+  an interactive surface (`call`) renders inside it just as claude code does.
+
+  `grant`/`revoke` adjust that scoped set per `credentials.apply_grant_revoke`
+  (strict: see its rules). they are host-side only — not threaded into the inner
+  command — so passing them when the hop is skipped (`--no-container` / already
+  in-container) is a no-op the caller didn't get, hence an error: host mode is
+  unscoped and a revoke there would not actually restrict anything. returns 1
+  (printing to stderr) on any grant/revoke misuse so the caller exits non-zero."""
+  grant = grant if grant is not None else []
+  revoke = revoke if revoke is not None else []
   if no_container or os.environ.get('CW_IN_CONTAINER') is not None:
+    if len(grant) > 0 or len(revoke) > 0:
+      print(
+        '--grant/--revoke require containerization (not valid with --no-container)',
+        file=sys.stderr,
+      )
+      return 1
     return None
   from bro.registry import create_bro
   from cw import run_in_container
 
   bro = create_bro(bro_name)
   needed = set(bro.needed_secrets()) | set(bro.llm_spec.needed_secrets()) | {'trails'}
+  try:
+    needed = credentials.apply_grant_revoke(needed, grant=grant, revoke=revoke)
+  except ValueError as e:
+    print(str(e), file=sys.stderr)
+    return 1
   workspace = f'{cli_name}-{bro_name}-{secrets.token_hex(4)}'
   command = [cli_name, bro_name, *inner_args]
   return run_in_container(
@@ -83,6 +117,8 @@ def run(
   parser.add_argument(
     '--no-container', dest='no_container', action='store_true', help=NO_CONTAINER_HELP
   )
+  parser.add_argument('--grant', action='append', default=None, metavar='SECRET', help=GRANT_HELP)
+  parser.add_argument('--revoke', action='append', default=None, metavar='SECRET', help=REVOKE_HELP)
   args = parser.parse(argv)
 
   inner_args = [args[arg_name]]
@@ -95,6 +131,8 @@ def run(
     bro_name=args['bro'],
     inner_args=inner_args,
     no_container=args['no_container'],
+    grant=args['grant'],
+    revoke=args['revoke'],
   )
   if hopped is not None:
     return hopped

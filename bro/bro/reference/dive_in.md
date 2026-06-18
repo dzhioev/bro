@@ -88,7 +88,7 @@ When resuming, `dive-in` still resolves the task id (and, with `--focus`, still 
 
 ## Forwarded flags
 
-`dive-in` accepts all the flags `cw.add_forwarded_flags` registers (`--auto`, `--fast`, `--aws`, `--effort`, `--rc`, `--resume`) and forwards them straight through into `cw ss`. Adding a new pass-through flag in `cw.py` makes it available to `dive-in` for free — no per-flag plumbing in this file.
+`dive-in` accepts all the flags `cw.add_forwarded_flags` registers (`--auto`, `--fast`, `--aws`, `--grant`, `--revoke`, `--effort`, `--rc`, `--resume`) and forwards them straight through into `cw ss`. Adding a new pass-through flag in `cw.py` makes it available to `dive-in` for free — no per-flag plumbing in this file. `--grant`/`--revoke` (repeatable) require container mode, so they are unusable with `dive-in --host`.
 
 `-n / --dry-run` prints the final `cw ss …` invocation (shell-quoted) without running it.
 

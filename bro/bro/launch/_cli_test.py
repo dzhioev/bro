@@ -53,6 +53,107 @@ def test_maybe_containerize_hops_and_scopes_to_bro():
   assert kwargs['docker_sock'] is False
 
 
+def test_maybe_containerize_grant_adds_secret():
+  with (
+    patch.dict('os.environ', {}, clear=False) as env,
+    patch('cw.run_in_container', return_value=0) as run,
+  ):
+    env.pop('CW_IN_CONTAINER', None)
+    rc = maybe_containerize(
+      cli_name='call',
+      bro_name='ppp-dev',
+      inner_args=['hi'],
+      no_container=False,
+      grant=['gmail_creds'],
+    )
+  assert rc == 0
+  _, kwargs = run.call_args
+  assert 'gmail_creds' in kwargs['secrets']
+
+
+def test_maybe_containerize_revoke_removes_secret():
+  with (
+    patch.dict('os.environ', {}, clear=False) as env,
+    patch('cw.run_in_container', return_value=0) as run,
+  ):
+    env.pop('CW_IN_CONTAINER', None)
+    rc = maybe_containerize(
+      cli_name='call', bro_name='ppp-dev', inner_args=['hi'], no_container=False, revoke=['github']
+    )
+  assert rc == 0
+  _, kwargs = run.call_args
+  # github is in ppp-dev's manifest; the revoke drops it from the scoped set
+  assert 'github' not in kwargs['secrets']
+
+
+def test_maybe_containerize_grant_already_present_errors(capsys):
+  with (
+    patch.dict('os.environ', {}, clear=False) as env,
+    patch('cw.run_in_container') as run,
+  ):
+    env.pop('CW_IN_CONTAINER', None)
+    # trails is always in the bro-run set, so granting it is a no-op → error
+    rc = maybe_containerize(
+      cli_name='call', bro_name='ppp-dev', inner_args=['hi'], no_container=False, grant=['trails']
+    )
+  assert rc == 1
+  assert run.call_count == 0
+  assert 'already in the scoped' in capsys.readouterr().err
+
+
+def test_maybe_containerize_revoke_absent_errors(capsys):
+  with (
+    patch.dict('os.environ', {}, clear=False) as env,
+    patch('cw.run_in_container') as run,
+  ):
+    env.pop('CW_IN_CONTAINER', None)
+    rc = maybe_containerize(
+      cli_name='call',
+      bro_name='ppp-dev',
+      inner_args=['hi'],
+      no_container=False,
+      revoke=['nonexistent'],
+    )
+  assert rc == 1
+  assert run.call_count == 0
+  assert 'not in the scoped' in capsys.readouterr().err
+
+
+def test_maybe_containerize_grant_with_no_container_errors(capsys):
+  with (
+    patch.dict('os.environ', {}, clear=False) as env,
+    patch('cw.run_in_container') as run,
+  ):
+    env.pop('CW_IN_CONTAINER', None)
+    rc = maybe_containerize(
+      cli_name='call',
+      bro_name='ppp-dev',
+      inner_args=['hi'],
+      no_container=True,
+      grant=['gmail_creds'],
+    )
+  assert rc == 1
+  assert run.call_count == 0
+  assert 'require containerization' in capsys.readouterr().err
+
+
+def test_maybe_containerize_grant_inside_container_errors(capsys):
+  with (
+    patch.dict('os.environ', {'CW_IN_CONTAINER': '1'}),
+    patch('cw.run_in_container') as run,
+  ):
+    rc = maybe_containerize(
+      cli_name='call',
+      bro_name='ppp-dev',
+      inner_args=['hi'],
+      no_container=False,
+      revoke=['github'],
+    )
+  assert rc == 1
+  assert run.call_count == 0
+  assert 'require containerization' in capsys.readouterr().err
+
+
 def test_create_bro_for_run_without_fast_uses_create_bro(monkeypatch):
   captured: list[str] = []
 

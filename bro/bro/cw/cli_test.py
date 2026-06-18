@@ -1,4 +1,5 @@
 import json
+from unittest.mock import patch
 
 import pytest
 
@@ -681,6 +682,68 @@ class TestContainerSecrets:
     secrets, docker_sock = cw._container_secrets('nonexistent-bro', mcp=None, bro_mode=False)
     assert secrets == set(cw._CW_SESSION_BASELINE)
     assert docker_sock is True
+
+
+class TestGrantRevoke:
+  def test_extract_forwarded_argv_round_trips_grant_revoke(self):
+    from base.args import Parser
+
+    parser = Parser(add_help=False)
+    cw.add_forwarded_flags(parser)
+    args = vars(parser.parse_args(['--grant', 'a', '--grant', 'b', '--revoke', 'c']))
+    assert cw.extract_forwarded_argv(args) == ['--grant', 'a', '--grant', 'b', '--revoke', 'c']
+
+  def _start(self, *, grant: list[str] | None = None, revoke: list[str] | None = None) -> int:
+    return cw.start_session(
+      name='w',
+      container=True,
+      drop=True,
+      auto=False,
+      fast=False,
+      aws=False,
+      grant=grant,
+      revoke=revoke,
+      effort=None,
+      rc=False,
+      resume=False,
+      mcp=None,
+      bro=None,
+      prompt=None,
+      claude_args=[],
+    )
+
+  def test_start_session_applies_grant_and_revoke(self):
+    with (
+      patch.dict('os.environ', {}, clear=False) as env,
+      patch('cw.cw', return_value=0) as fake_cw,
+      patch('cw._container_secrets', return_value=({'notion', 'trails', 'github'}, True)),
+      patch('cw._session_append_prompt', return_value=''),
+    ):
+      env.pop('CW_BRO', None)
+      env.pop('CW_IN_CONTAINER', None)
+      rc = self._start(grant=['gmail_creds'], revoke=['notion'])
+    assert rc == 0
+    _, kwargs = fake_cw.call_args
+    assert 'gmail_creds' in kwargs['secrets']
+    assert 'notion' not in kwargs['secrets']
+
+  def test_start_session_grant_already_present_returns_1(self):
+    with (
+      patch.dict('os.environ', {}, clear=False) as env,
+      patch('cw.cw', return_value=0) as fake_cw,
+      patch('cw._container_secrets', return_value=({'github'}, True)),
+      patch('cw._session_append_prompt', return_value=''),
+    ):
+      env.pop('CW_BRO', None)
+      env.pop('CW_IN_CONTAINER', None)
+      rc = self._start(grant=['github'])
+    assert rc == 1
+    assert fake_cw.call_count == 0
+
+  def test_ss_grant_without_container_errors(self, capsys):
+    with pytest.raises(SystemExit):
+      cw.main(['cw', 'ss', '--grant', 'gmail_creds', 'wsname'])
+    assert 'require -c' in capsys.readouterr().err
 
 
 class TestDockerCreateArgv:

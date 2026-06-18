@@ -339,6 +339,49 @@ class TestBuildScopedStore:
       credentials.build_scoped_store(['notion', 'tmdb'])
 
 
+class TestApplyGrantRevoke:
+  def test_grant_adds(self):
+    assert credentials.apply_grant_revoke({'a'}, grant=['b']) == {'a', 'b'}
+
+  def test_revoke_removes(self):
+    assert credentials.apply_grant_revoke({'a', 'b'}, revoke=['b']) == {'a'}
+
+  def test_grant_and_revoke_combine(self):
+    assert credentials.apply_grant_revoke({'a'}, grant=['b'], revoke=['a']) == {'b'}
+
+  def test_empty_returns_copy(self):
+    computed = {'a'}
+    result = credentials.apply_grant_revoke(computed)
+    assert result == {'a'}
+    assert result is not computed  # never mutates the input
+
+  def test_does_not_mutate_input(self):
+    computed = {'a'}
+    credentials.apply_grant_revoke(computed, grant=['b'], revoke=['a'])
+    assert computed == {'a'}
+
+  def test_grant_already_present_raises(self):
+    with pytest.raises(ValueError, match='already in the scoped'):
+      credentials.apply_grant_revoke({'a'}, grant=['a'])
+
+  def test_revoke_absent_raises(self):
+    with pytest.raises(ValueError, match='not in the scoped'):
+      credentials.apply_grant_revoke({'a'}, revoke=['b'])
+
+  def test_duplicate_grant_raises(self):
+    # the second grant of the same name sees it already present
+    with pytest.raises(ValueError, match='already in the scoped'):
+      credentials.apply_grant_revoke({'a'}, grant=['b', 'b'])
+
+  def test_duplicate_revoke_raises(self):
+    with pytest.raises(ValueError, match='not in the scoped'):
+      credentials.apply_grant_revoke({'a', 'b'}, revoke=['b', 'b'])
+
+  def test_grant_and_revoke_same_name_raises(self):
+    with pytest.raises(ValueError, match='grant and revoke the same'):
+      credentials.apply_grant_revoke({'a'}, grant=['b'], revoke=['b'])
+
+
 class TestInstallHooks:
   def test_github_and_aws_have_install_hooks(self):
     registry = credentials.default_registry()

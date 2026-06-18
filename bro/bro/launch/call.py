@@ -6,7 +6,14 @@ from typing import Any, Callable, TextIO
 import base.args
 from bro.bro import BroRaised
 from bro.bros.bro import Bro
-from do._cli import FAST_HELP, NO_CONTAINER_HELP, create_bro_for_run, maybe_containerize
+from do._cli import (
+  FAST_HELP,
+  GRANT_HELP,
+  NO_CONTAINER_HELP,
+  REVOKE_HELP,
+  create_bro_for_run,
+  maybe_containerize,
+)
 from do._trace_format import compact_value, oneline, truncate
 from llm.observer import Observer
 
@@ -108,6 +115,8 @@ def main(argv=None) -> int | None:
   parser.add_argument(
     '--no-container', dest='no_container', action='store_true', help=NO_CONTAINER_HELP
   )
+  parser.add_argument('--grant', action='append', default=None, metavar='SECRET', help=GRANT_HELP)
+  parser.add_argument('--revoke', action='append', default=None, metavar='SECRET', help=REVOKE_HELP)
   args = parser.parse(argv)
 
   # decide TUI-vs-text on the host, before the hop: `run_in_container` always
@@ -125,6 +134,8 @@ def main(argv=None) -> int | None:
     bro_name=args['bro'],
     inner_args=inner_args,
     no_container=args['no_container'],
+    grant=args['grant'],
+    revoke=args['revoke'],
   )
   if hopped is not None:
     return hopped

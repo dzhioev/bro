@@ -622,6 +622,18 @@ class TestReconstruct:
     args = parser.parse(['cmd', 'foo'])
     assert parser.reconstruct(args) == [parser.prog, 'foo']
 
+  def test_append_action_repeats_flag(self):
+    parser = Parser()
+    parser.add_argument('--grant', action='append', default=None)
+    args = parser.parse(['cmd', '--grant', 'a', '--grant', 'b'])
+    assert parser.reconstruct(args) == [parser.prog, '--grant', 'a', '--grant', 'b']
+
+  def test_append_action_omitted_when_none(self):
+    parser = Parser()
+    parser.add_argument('--grant', action='append', default=None)
+    args = parser.parse(['cmd'])
+    assert parser.reconstruct(args) == [parser.prog]
+
   def test_subparser_reconstruct(self):
     parser = Parser()
     subs = parser.add_subparsers(dest='cmd')
