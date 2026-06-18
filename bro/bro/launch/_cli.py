@@ -20,6 +20,10 @@ FAST_HELP = (
   'consistent generation at a higher per-token price)'
 )
 NO_CONTAINER_HELP = 'skip the auto-container hop and run in the calling process'
+NO_TRAILS_HELP = (
+  'disable trails recording: set TRAILS_DISABLED in the container and drop the '
+  'trails secret from the scoped set'
+)
 GRANT_HELP = (
   "grant a secret to the container's scoped set on top of the bro's manifest "
   '(repeatable); errors if it is already in the set or unknown to the registry'
@@ -47,6 +51,7 @@ def maybe_containerize(
   bro_name: str,
   inner_args: list[str],
   no_container: bool,
+  no_trails: bool = False,
   grant: list[str] | None = None,
   revoke: list[str] | None = None,
 ) -> int | None:
@@ -60,8 +65,10 @@ def maybe_containerize(
   to the bro's manifest: the bro runs as an LLM process here (not claude code), so
   add its llm key (`needed_secrets()` omits it) and `trails` (recording is mandatory
   for bro runs); the docker socket is granted only when the bro does docker work.
-  `run_in_container`'s `docker start -a -i` gives the container a real `-it` TTY, so
   an interactive surface (`call`) renders inside it just as claude code does.
+
+  `no_trails` drops `trails` from the scoped set and sets `TRAILS_DISABLED` in the
+  container (the in-container tracker factory then returns `NullTracker`).
 
   `grant`/`revoke` adjust that scoped set per `credentials.apply_grant_revoke`
   (strict: see its rules). they are host-side only — not threaded into the inner
@@ -83,7 +90,12 @@ def maybe_containerize(
   from cw import run_in_container
 
   bro = create_bro(bro_name)
-  needed = set(bro.needed_secrets()) | set(bro.llm_spec.needed_secrets()) | {'trails'}
+  needed = set(bro.needed_secrets()) | set(bro.llm_spec.needed_secrets())
+  extra_env: dict[str, str] = {}
+  if no_trails:
+    extra_env['TRAILS_DISABLED'] = '1'
+  else:
+    needed |= {'trails'}
   try:
     needed = credentials.apply_grant_revoke(needed, grant=grant, revoke=revoke)
   except ValueError as e:
@@ -92,7 +104,12 @@ def maybe_containerize(
   workspace = f'{cli_name}-{bro_name}-{secrets.token_hex(4)}'
   command = [cli_name, bro_name, *inner_args]
   return run_in_container(
-    workspace, command, drop=True, secrets=needed, docker_sock=bro.needs_docker
+    workspace,
+    command,
+    drop=True,
+    secrets=needed,
+    docker_sock=bro.needs_docker,
+    extra_env=extra_env,
   )
 
 
@@ -117,6 +134,9 @@ def run(
   parser.add_argument(
     '--no-container', dest='no_container', action='store_true', help=NO_CONTAINER_HELP
   )
+  parser.add_argument('--no-trails', dest='no_trails', action='store_true', help=NO_TRAILS_HELP)
+  # --no-trails acts only on the container hop; --no-container has no hop to act on.
+  parser.add_exclusive_groups(['no_container'], ['no_trails'])
   parser.add_argument('--grant', action='append', default=None, metavar='SECRET', help=GRANT_HELP)
   parser.add_argument('--revoke', action='append', default=None, metavar='SECRET', help=REVOKE_HELP)
   args = parser.parse(argv)
@@ -131,6 +151,7 @@ def run(
     bro_name=args['bro'],
     inner_args=inner_args,
     no_container=args['no_container'],
+    no_trails=args['no_trails'],
     grant=args['grant'],
     revoke=args['revoke'],
   )

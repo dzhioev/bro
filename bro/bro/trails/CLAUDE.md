@@ -50,7 +50,7 @@ ECS Fargate behind the shared ALB at `trails.<apex>`; CDK stacks `TrailsEcrStack
 
 First-time ordering: `bootstrap_secrets.sh` → `deploy.sh` → `setup/bootstrap_trails.sh` on each client machine.
 
-Recording is mandatory and crash-on-failure, so an unhealthy `trails-server` blocks every bro run — including the devoops bro that would deploy the fix. When the server itself is the thing that's broken, set `TRAILS_DISABLED=1` to run a bro without recording, or run `./trails/server/deploy.sh` directly instead of going through `ask devoops`.
+Recording is mandatory and crash-on-failure, so an unhealthy `trails-server` blocks every bro run — including the devoops bro that would deploy the fix. When the server itself is the thing that's broken, run the bro with `--no-trails` (e.g. `call --no-trails devoops "deploy trails"`): it sets `TRAILS_DISABLED` in the container and drops the `trails` secret from the scoped set, so the rollout can't break the bro's own recording mid-deploy. `--no-trails` covers the containerized `call` / `ask` / `do-task` path; for a `--no-container` (or otherwise non-container) run there is no container to set the env in, so set `TRAILS_DISABLED=1` in the environment instead. Running `./trails/server/deploy.sh` directly (no bro) sidesteps recording entirely.
 
 Server changes are not live until deployed. The unit suite fakes storage at the HTTP boundary, so a storage-layer change deserves a live re-smoke after deploy: `bro run dev 'list this dir'`, then `trails show <new id>` — the float→Decimal conversion was exactly the kind of gap the fakes miss.
 

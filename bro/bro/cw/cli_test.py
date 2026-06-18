@@ -795,6 +795,17 @@ class TestDockerCreateArgv:
     assert 'TERM' in argv
     assert argv[argv.index('TERM') - 1] == '-e'
 
+  def test_extra_env_injected_as_explicit_key_value(self, build_argv, monkeypatch):
+    # extra_env sets the value here (`-e KEY=VALUE`), unlike _DOCKER_FORWARD_ENV which
+    # forwards a host var by name — so it works even with no such var on the host.
+    monkeypatch.delenv('TRAILS_DISABLED', raising=False)
+    argv = build_argv(extra_env={'TRAILS_DISABLED': '1'})
+    assert 'TRAILS_DISABLED=1' in argv
+    assert argv[argv.index('TRAILS_DISABLED=1') - 1] == '-e'
+
+  def test_no_extra_env_by_default(self, build_argv):
+    assert not any('TRAILS_DISABLED' in a for a in build_argv())
+
 
 class TestPppTarball:
   def _entries(self, blob: bytes) -> dict:

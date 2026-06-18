@@ -12,7 +12,7 @@ def test_maybe_containerize_skips_when_inside_container():
     patch('cw.run_in_container') as run,
   ):
     rc = maybe_containerize(
-      cli_name='call', bro_name='ppp-dev', inner_args=['hi'], no_container=False
+      cli_name='call', bro_name='ppp-dev', inner_args=['hi'], no_container=False, no_trails=False
     )
   assert rc is None
   assert run.call_count == 0
@@ -25,7 +25,7 @@ def test_maybe_containerize_skips_with_no_container():
   ):
     env.pop('CW_IN_CONTAINER', None)
     rc = maybe_containerize(
-      cli_name='call', bro_name='ppp-dev', inner_args=['hi'], no_container=True
+      cli_name='call', bro_name='ppp-dev', inner_args=['hi'], no_container=True, no_trails=False
     )
   assert rc is None
   assert run.call_count == 0
@@ -38,7 +38,11 @@ def test_maybe_containerize_hops_and_scopes_to_bro():
   ):
     env.pop('CW_IN_CONTAINER', None)
     rc = maybe_containerize(
-      cli_name='call', bro_name='ppp-dev', inner_args=['hi', '--fast'], no_container=False
+      cli_name='call',
+      bro_name='ppp-dev',
+      inner_args=['hi', '--fast'],
+      no_container=False,
+      no_trails=False,
     )
   assert rc == 7
   (workspace, command), kwargs = run.call_args
@@ -49,8 +53,30 @@ def test_maybe_containerize_hops_and_scopes_to_bro():
   assert kwargs['drop'] is True
   # ppp-dev's manifest (github + notion via flow) + its llm key + the mandatory trails sink
   assert {'github', 'notion', 'trails'} <= kwargs['secrets']
+  # recording on → no TRAILS_DISABLED injected
+  assert 'TRAILS_DISABLED' not in kwargs['extra_env']
   # ppp-dev doesn't deploy → no docker socket
   assert kwargs['docker_sock'] is False
+
+
+def test_maybe_containerize_no_trails_drops_secret_and_disables_recording():
+  with (
+    patch.dict('os.environ', {}, clear=False) as env,
+    patch('cw.run_in_container', return_value=0) as run,
+  ):
+    env.pop('CW_IN_CONTAINER', None)
+    maybe_containerize(
+      cli_name='call',
+      bro_name='ppp-dev',
+      inner_args=['hi'],
+      no_container=False,
+      no_trails=True,
+    )
+  (_workspace, command), kwargs = run.call_args
+  # the env var carries the effect in, so --no-trails isn't forwarded into the inner argv
+  assert command == ['call', 'ppp-dev', 'hi']
+  assert 'trails' not in kwargs['secrets']
+  assert kwargs['extra_env'] == {'TRAILS_DISABLED': '1'}
 
 
 def test_maybe_containerize_grant_adds_secret():

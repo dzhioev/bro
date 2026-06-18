@@ -10,6 +10,7 @@ from do._cli import (
   FAST_HELP,
   GRANT_HELP,
   NO_CONTAINER_HELP,
+  NO_TRAILS_HELP,
   REVOKE_HELP,
   create_bro_for_run,
   maybe_containerize,
@@ -115,6 +116,9 @@ def main(argv=None) -> int | None:
   parser.add_argument(
     '--no-container', dest='no_container', action='store_true', help=NO_CONTAINER_HELP
   )
+  parser.add_argument('--no-trails', dest='no_trails', action='store_true', help=NO_TRAILS_HELP)
+  # --no-trails acts only on the container hop; --no-container has no hop to act on.
+  parser.add_exclusive_groups(['no_container'], ['no_trails'])
   parser.add_argument('--grant', action='append', default=None, metavar='SECRET', help=GRANT_HELP)
   parser.add_argument('--revoke', action='append', default=None, metavar='SECRET', help=REVOKE_HELP)
   args = parser.parse(argv)
@@ -134,6 +138,7 @@ def main(argv=None) -> int | None:
     bro_name=args['bro'],
     inner_args=inner_args,
     no_container=args['no_container'],
+    no_trails=args['no_trails'],
     grant=args['grant'],
     revoke=args['revoke'],
   )

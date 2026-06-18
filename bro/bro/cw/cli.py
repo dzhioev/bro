@@ -55,7 +55,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from pathlib import Path
 
 import humanize
@@ -302,6 +302,7 @@ def _docker_create_argv(
   command: list[str],
   *,
   docker_sock: bool = True,
+  extra_env: Mapping[str, str] | None = None,
 ) -> list[str]:
   """argv for `docker create` of the session container (run-equivalent, unstarted).
 
@@ -309,6 +310,9 @@ def _docker_create_argv(
   -it --rm` exactly (TTY, signals, exit code, auto-remove on exit). Splitting them
   gives `run_in_container` a window to `docker cp` the scoped credential store into
   the pre-start container's writable layer — no host-side store, no bind mount.
+
+  `extra_env` adds explicit `-e KEY=VALUE` entries (value set here) — distinct from the
+  `_DOCKER_FORWARD_ENV` loop, which forwards a host var by name.
   """
   home = Path.home()
   claude_dir = home / '.claude' / 'cw-sessions' / name
@@ -373,6 +377,9 @@ def _docker_create_argv(
   for var in _DOCKER_FORWARD_ENV:
     if os.environ.get(var) is not None:
       argv += ['-e', var]
+  if extra_env is not None:
+    for key, value in extra_env.items():
+      argv += ['-e', f'{key}={value}']
   return [*argv, tag, *command]
 
 
@@ -1589,6 +1596,7 @@ def run_in_container(
   drop: bool = False,
   secrets: Collection[str] = (),
   docker_sock: bool = True,
+  extra_env: Mapping[str, str] | None = None,
 ) -> int:
   """run `command` inside a fresh cw-style container backed by workspace `name`.
 
@@ -1603,7 +1611,8 @@ def run_in_container(
   `secrets` is the scoped credential set hydrated into the container's ~/.ppp
   (see `credentials.build_scoped_store`); a missing secret raises (strict). AWS is
   just one of them (`aws`), wired in by its install hook. `docker_sock=False`
-  drops the docker socket mount (shell-less bros).
+  drops the docker socket mount (shell-less bros). `extra_env` sets explicit
+  `-e KEY=VALUE` vars in the container (see `_docker_create_argv`).
   """
   proj = _project_root()
   session = proj / 'var' / 'cw' / 'containers' / name
@@ -1624,7 +1633,9 @@ def run_in_container(
   names = sorted(set(secrets))
   log.info('scoped secrets for %s: %s', name, ', '.join(names) if len(names) > 0 else '(none)')
   created = subprocess.run(
-    _docker_create_argv(tag, name, proj, session, command, docker_sock=docker_sock),
+    _docker_create_argv(
+      tag, name, proj, session, command, docker_sock=docker_sock, extra_env=extra_env
+    ),
     capture_output=True,
     text=True,
   )

@@ -124,6 +124,26 @@ def test_main_forwards_fast_into_container():
     assert command == ['ask', 'ppp-dev', 'hello', '--fast']
 
 
+def test_main_no_trails_disables_recording_in_container():
+  with (
+    patch.dict('os.environ', {}, clear=False) as env,
+    patch('cw.run_in_container', return_value=0) as run,
+  ):
+    env.pop('CW_IN_CONTAINER', None)
+    rc = main(['ask', 'ppp-dev', 'hello', '--no-trails'])
+    assert rc == 0
+    (_workspace, command), kwargs = run.call_args
+    # the env var carries the effect in, so --no-trails isn't forwarded into the inner argv
+    assert command == ['ask', 'ppp-dev', 'hello']
+    assert 'trails' not in kwargs['secrets']
+    assert kwargs['extra_env'] == {'TRAILS_DISABLED': '1'}
+
+
+def test_main_no_trails_with_no_container_is_an_error():
+  with pytest.raises(SystemExit):
+    main(['ask', 'ppp-dev', 'hello', '--no-trails', '--no-container'])
+
+
 def test_main_skips_container_when_inside():
   with (
     patch.dict('os.environ', {'CW_IN_CONTAINER': '1'}),

@@ -264,6 +264,27 @@ def test_call_forwards_text_when_host_not_a_tty():
     assert command == ['call', 'ppp-dev', 'hey', '--text']
 
 
+def test_call_no_trails_disables_recording_in_container():
+  with (
+    patch.dict('os.environ', {}, clear=False) as env,
+    patch('cw.run_in_container', return_value=0) as run,
+    patch('do.call._tty_supported', return_value=True),
+  ):
+    env.pop('CW_IN_CONTAINER', None)
+    rc = main(['call', 'ppp-dev', 'hey', '--no-trails'])
+    assert rc == 0
+    (_workspace, command), kwargs = run.call_args
+    # the env var carries the effect in, so --no-trails isn't forwarded into the inner argv
+    assert command == ['call', 'ppp-dev', 'hey']
+    assert 'trails' not in kwargs['secrets']
+    assert kwargs['extra_env'] == {'TRAILS_DISABLED': '1'}
+
+
+def test_call_no_trails_with_no_container_is_an_error():
+  with pytest.raises(SystemExit):
+    main(['call', 'ppp-dev', 'hey', '--no-trails', '--no-container'])
+
+
 def test_call_skips_container_with_no_container_flag(monkeypatch):
   built: list[Bro] = []
 
