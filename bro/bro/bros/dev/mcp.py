@@ -278,10 +278,10 @@ class MCPServer(InProcessMCPServer):
 
   def __init__(self, *tool_names: str):
     if len(tool_names) == 0:
-      super().__init__(TOOLS)
+      super().__init__('dev', TOOLS)
       return
     by_name = {t.name: t for t in TOOLS}
     unknown = [n for n in tool_names if n not in by_name]
     if len(unknown) > 0:
       raise ValueError(f'unknown dev tools: {unknown}; available: {sorted(by_name)}')
-    super().__init__([by_name[n] for n in tool_names])
+    super().__init__('dev', [by_name[n] for n in tool_names])

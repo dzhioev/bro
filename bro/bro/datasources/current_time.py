@@ -12,13 +12,14 @@ class CurrentTime(DataSource):
 
   def as_mcp_server(self) -> MCPServer:
     return InProcessMCPServer(
+      self.namespace,
       [
         FunctionTool(
           self.get_time,
-          name=f'{self.name}-get-time',
+          name='get_time',
           description='return the current local date and time',
         )
-      ]
+      ],
     )
 
   def get_time(self) -> str:

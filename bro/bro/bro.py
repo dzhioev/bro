@@ -68,13 +68,28 @@ def _load_shared_prompts() -> str:
   return '\n\n'.join(parts)
 
 
+# bro-facing tool-name rule, appended to a bro's system prompt when it has any
+# namespaced tools or skills. the Claude-Code counterpart lives in
+# prompts/tool_names.md (cw.py `_BASE_PROMPT_FILES`); kept harness-specific on
+# purpose — a bro resolves `::` to `ns__tool` (no `mcp__`, nothing to load).
+_TOOL_NAMES_BLOCK = (
+  '## Tool names\n'
+  '\n'
+  'Your tools are namespaced. A name written `namespace::tool` — in a skill, a '
+  'data-source description, or this prompt — is the tool `namespace__tool` in your '
+  'tool list (replace `::` with `__`). Call that wire name directly.'
+)
+
+
 def _render_data_sources(sources: list[DataSource]) -> str:
   lines = ['## Data sources', '', 'You have access to the following read-only data sources:', '']
   for ds in sources:
     lines.append(f'- **{ds.name}** — {ds.summary}')
   lines.append('')
   lines.append(
-    "Each source's tools are prefixed with `<name>-`; see the tool listings for details."
+    "Each source's tools live in its own `<name>-source` namespace — e.g. "
+    '`wikipedia-source::search`, `current-time-source::get_time`. See the tool '
+    'listings for what each source exposes.'
   )
   return '\n'.join(lines)
 
@@ -209,7 +224,7 @@ def _build_service_server(bro: 'BaseBro', *, include_raise: bool) -> llm.mcp.MCP
       return bro.get_skill_body(name)
 
     tools.append(llm.mcp.FunctionTool(skill, name='skill', description=_SKILL_DESCRIPTION))
-  return llm.mcp.InProcessMCPServer(tools)
+  return llm.mcp.InProcessMCPServer('bro', tools)
 
 
 _NON_INTERACTIVE_NOTE = (
@@ -312,13 +327,17 @@ class BaseBro(ABC):
     # sessions (cw.py) so they carry the bro's policies outside --bro mode.
     self.persona = '\n\n'.join(prompt_parts)
     shared = _load_shared_prompts()
+    descriptions = self.skill_descriptions()
     parts = []
     if len(shared) > 0:
       parts.append(shared)
     parts.extend(prompt_parts)
+    # the namespaced-tool convention only matters once the bro actually has tools
+    # or skills (which reference tools by their `ns::tool` name).
+    if len(self._mcp_servers) > 0 or len(descriptions) > 0:
+      parts.append(_TOOL_NAMES_BLOCK)
     if len(self.data_sources) > 0:
       parts.append(_render_data_sources(self.data_sources))
-    descriptions = self.skill_descriptions()
     if len(descriptions) > 0:
       parts.append(_render_skills(descriptions))
     self.system_prompt = '\n\n'.join(parts)

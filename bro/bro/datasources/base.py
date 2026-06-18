@@ -35,6 +35,13 @@ class DataSource(ABC):
   # empty default means "no credentials" (e.g. Wikipedia, OpenLibrary).
   needed_secrets: tuple[str, ...] = ()
 
+  @property
+  def namespace(self) -> str:
+    # the `-source` suffix keeps generic, collision-prone tool names (`search`,
+    # `fetch`, `read`) distinct per source without nested namespaces: the
+    # category *is* the source. stamped onto whatever `as_mcp_server()` returns.
+    return f'{self.name}-source'
+
   @abstractmethod
   def as_mcp_server(self) -> MCPServer: ...
 
@@ -47,7 +54,7 @@ class SearchableDataSource(DataSource):
   async def fetch(self, id: str, query: str | None = None) -> str: ...
 
   def as_mcp_server(self) -> MCPServer:
-    return InProcessMCPServer([_SearchTool(self), _FetchTool(self)])
+    return InProcessMCPServer(self.namespace, [_SearchTool(self), _FetchTool(self)])
 
 
 class _SearchTool(Tool):
@@ -56,7 +63,7 @@ class _SearchTool(Tool):
 
   @property
   def name(self) -> str:
-    return f'{self._source.name}-search'
+    return 'search'
 
   @property
   def description(self) -> str:
@@ -91,7 +98,7 @@ class _FetchTool(Tool):
 
   @property
   def name(self) -> str:
-    return f'{self._source.name}-fetch'
+    return 'fetch'
 
   @property
   def description(self) -> str:

@@ -59,7 +59,7 @@ Use `date '+%Y-%m-%d %H:%M'` for the timestamp — do not invent it.
 
 Check the session's initial prompt for an explicit instruction to keep the task open. Phrases like "keep this Live", "leave open with notes", "only landing a subset", or similar mean the user wants the task to stay in its current status after merge.
 
-- **If no such instruction**: `update_task(task_id, status='Done')`.
+- **If no such instruction**: `flow::update_task(task_id, status='Done')`.
 - **If the user said to keep it open**: skip the status update. Mention in your final report that the task was left in its current status per the user's instruction.
 
 ### 6. Report to the user

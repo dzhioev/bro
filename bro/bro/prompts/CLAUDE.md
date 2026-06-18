@@ -15,16 +15,14 @@ Centralised prompt store. Three loading conventions: auto-inject into every bro 
 
 ## Top-level `*.md` reference docs
 
-Top-level markdown files in `prompts/` are dual-purpose reference docs:
+Top-level markdown files in `prompts/` are auto-injected into every `cw ss` Claude Code session via `cw.py:_load_base_prompts` (the file name must be listed in `_BASE_PROMPT_FILES`). Each can optionally also be exposed to a specific bro via a `FileSource` declaration in `data_sources` (see `bro/bros/ppp_dev/__init__.py` for the `environment.md` example — the bro framework auto-lists the source in the `## Data sources` block and mounts a `read` tool that returns the file body).
 
-- Auto-injected into every `cw ss` Claude Code session via `cw.py:_load_base_prompts` (the file name must be listed in `_BASE_PROMPT_FILES`)
-- Available to specific bros via a `FileSource` declaration in `data_sources` (see `bro/bros/ppp_dev/__init__.py` for the `environment.md` example). The bro framework auto-lists the source in the bro's `## Data sources` block and mounts a `<source>-read` tool that returns the file body.
-
-Use this when the same playbook must hold in both a Claude Code session prompt and a specific bro — but doesn't make sense to push onto bros that won't use it (which is what `shared/` would do).
+Use a top-level file when content must hold in a `cw ss` Claude Code session — optionally shared with a specific bro via `FileSource`, but **not** pushed onto every bro the way `shared/` would. A file is Claude-Code-only precisely when no bro declares a `FileSource` for it.
 
 Current top-level reference docs:
 
 - `environment.md` — `cw banner` playbook; loaded into every `cw ss` session and exposed to `ppp-dev` via `FileSource('environment', ...)`
+- `tool_names.md` — Claude-Code tool-name resolution rule (`ns::tool` → `mcp__ns__tool`, load via `ToolSearch select:`). Deliberately Claude-Code-only (no `FileSource`); the bro counterpart is the framework `## Tool names` block in `bro/bro.py` (bros resolve `ns::tool` → `ns__tool`)
 
 ## Top-level one-shot prompts
 
@@ -34,4 +32,4 @@ Current top-level reference docs:
 
 - **One-shot**: drop `<name>.prompt` (or `<name>.prompt.template` for `str.format` slots) at the top level. Load with `get_prompt('<name>.prompt'[, **kwargs])`
 - **Auto-injected into bros and `cw ss` sessions**: drop a `*.md` in `shared/`. Conventions that must hold for both surfaces (interaction policy, tone) belong here
-- **Auto-injected into `cw ss` sessions + on-demand for a specific bro**: drop a `*.md` at top level, add its filename to `cw.py:_BASE_PROMPT_FILES`, and declare a `FileSource` on the bro that should see it
+- **Auto-injected into `cw ss` Claude Code sessions only**: drop a `*.md` at top level and add its filename to `cw.py:_BASE_PROMPT_FILES`. Leave it without a `FileSource` to keep it Claude-Code-only (e.g. `tool_names.md`); add a `FileSource` on a bro to also expose it there on demand (e.g. `environment.md`)

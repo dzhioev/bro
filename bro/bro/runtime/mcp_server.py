@@ -8,7 +8,7 @@ from mcp.server.lowlevel import Server
 from mcp.server.stdio import stdio_server
 
 import base.args
-from llm.mcp import MCPServer
+from llm.mcp import MCPServer, namespaced_tools
 
 _BRO_PREFIX = 'bro:'
 
@@ -37,7 +37,13 @@ def _compose_bro_server(name: str) -> MCPServer:
 
 
 class _Aggregate(MCPServer):
-  """exposes the union of several MCPServers' tools; errors on name collision."""
+  """exposes the union of several MCPServers' tools under their `namespace__tool`
+  wire names; errors on collision.
+
+  this is the `cw ss --bro` stdio surface: Claude Code mounts it under the single
+  `bro` server key, so a tool surfaces as `mcp__bro__<namespace>__<tool>`. the
+  namespace keeps generically-named tools (two sources' `search`) distinct.
+  """
 
   def __init__(self, label: str, servers: list[MCPServer]):
     self._label = label
@@ -47,11 +53,14 @@ class _Aggregate(MCPServer):
     tools = []
     seen: set[str] = set()
     for server in self._servers:
-      for tool in await server.list_tools():
-        if tool.name in seen:
-          raise SystemExit(f'bro {self._label!r}: duplicate tool name {tool.name!r}')
-        seen.add(tool.name)
-        tools.append(tool)
+      for wrapped in await namespaced_tools(server):
+        if wrapped.name in seen:
+          raise SystemExit(
+            f'bro {self._label!r}: duplicate tool wire name {wrapped.name!r} '
+            f'(namespace {server.namespace!r})'
+          )
+        seen.add(wrapped.name)
+        tools.append(wrapped)
     return tools
 
 

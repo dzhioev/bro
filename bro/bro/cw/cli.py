@@ -68,11 +68,15 @@ CONTAINER_DIR = Path(__file__).resolve().parent / 'setup' / 'container'
 _PROMPTS_DIR = Path(__file__).resolve().parent / 'prompts'
 # auto-injected into every `cw ss` session via --append-system-prompt. Files in
 # `shared/` also flow into every bro (via bro/bro.py:_load_shared_prompts), so
-# put cross-surface conventions there. The top-level `environment.md` is the
-# single source of truth for the cw-banner playbook — same file
-# is reachable from bros via `FileSource` (see bro/bros/ppp_dev/__init__.py).
+# put cross-surface conventions there. Top-level files here are Claude-Code-only:
+# - `environment.md` is the single source of truth for the cw-banner playbook —
+#   same file is reachable from bros via `FileSource` (bro/bros/ppp_dev).
+# - `tool_names.md` is the Claude-Code tool-name resolution rule (`ns::tool` →
+#   `mcp__ns__tool`); the bro counterpart is the framework `## Tool names` block
+#   in bro/bro.py (bros resolve to `ns__tool`, no `mcp__`). Kept harness-specific
+#   on purpose — do not give a bro a `FileSource` for this file.
 _BASE_PROMPT_DIRS = ['shared']
-_BASE_PROMPT_FILES = ['environment.md']
+_BASE_PROMPT_FILES = ['environment.md', 'tool_names.md']
 
 
 def _load_base_prompts() -> str:

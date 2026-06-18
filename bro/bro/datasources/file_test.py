@@ -32,8 +32,9 @@ def test_read_picks_up_file_edits(env_file):
 @pytest.mark.asyncio
 async def test_as_mcp_server_exposes_single_read_tool(env_file):
   server = FileSource('environment', summary='x', path=env_file).as_mcp_server()
+  assert server.namespace == 'environment-source'
   tools = await server.list_tools()
-  assert [t.name for t in tools] == ['environment-read']
+  assert [t.name for t in tools] == ['read']
 
 
 @pytest.mark.asyncio

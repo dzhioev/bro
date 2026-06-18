@@ -6,8 +6,13 @@ from openai.types.responses import Response
 
 import llm.llm
 from llm.llms.chat_gpt import ChatGPT, LLMSpec
-from llm.mcp import InProcessMCPServer, Tool, ToolControlSignal, ToolRegistry
+from llm.mcp import InProcessMCPServer, Tool, ToolControlSignal, ToolRegistry, wire_name
 from llm.tracker import Tracker
+
+# the registry advertises namespaced wire names, so a tool whose local name is
+# `ping` in this namespace surfaces to the LLM as `svc__ping`. the emit helpers
+# below wrap the local name the same way, modeling what the model calls back.
+_TEST_NS = 'svc'
 
 
 class _StaticTool(Tool):
@@ -42,7 +47,7 @@ def _function_call_response(name: str) -> Response:
       output=[
         SimpleNamespace(
           type='function_call',
-          name=name,
+          name=wire_name(_TEST_NS, name),
           arguments='{}',
           call_id='call_1',
         )
@@ -53,7 +58,7 @@ def _function_call_response(name: str) -> Response:
 
 def _make_chat_gpt(tools: list[Tool]) -> ChatGPT:
   gpt = ChatGPT(api_key='dummy')
-  gpt.tools = ToolRegistry([InProcessMCPServer(tools)])
+  gpt.tools = ToolRegistry([InProcessMCPServer(_TEST_NS, tools)])
   return gpt
 
 
@@ -122,7 +127,9 @@ def _message_item(text: str):
 
 
 def _function_call_item(name: str, *, call_id: str, arguments='{}'):
-  return SimpleNamespace(type='function_call', name=name, arguments=arguments, call_id=call_id)
+  return SimpleNamespace(
+    type='function_call', name=wire_name(_TEST_NS, name), arguments=arguments, call_id=call_id
+  )
 
 
 def _make_chat_gpt_with_tracker(
@@ -135,7 +142,7 @@ def _make_chat_gpt_with_tracker(
   to whatever stub sequence they need.
   """
   gpt = ChatGPT(api_key='dummy', reasoning_effort=reasoning_effort)
-  gpt.tools = ToolRegistry([InProcessMCPServer(tools)] if tools is not None else [])
+  gpt.tools = ToolRegistry([InProcessMCPServer(_TEST_NS, tools)] if tools is not None else [])
   # bypass the real openai schema conversion path — tests don't care about it.
   gpt._openai_tools = []
   tracker = _RecordingTracker()
@@ -168,7 +175,7 @@ async def test_tool_exception_becomes_function_call_output():
   result = cast(dict, results[0])
   assert result['type'] == 'function_call_output'
   assert result['call_id'] == 'call_1'
-  assert "'boom' failed" in result['output']
+  assert "'svc__boom' failed" in result['output']
   assert 'RuntimeError' in result['output']
   assert 'upstream down' in result['output']
 
@@ -207,7 +214,7 @@ class TestToolResultTrackerEmission:
     assert body == 'ok'
     assert extras == {
       'turn_index': 2,
-      'tool_name': 'ping',
+      'tool_name': 'svc__ping',
       'call_id': 'call_1',
       'is_error': False,
     }
@@ -221,7 +228,7 @@ class TestToolResultTrackerEmission:
     results = [s for s in tracker.steps if s[0] == 'tool_result']
     assert len(results) == 1
     _, body, extras = results[0]
-    assert "'boom' failed" in body
+    assert "'svc__boom' failed" in body
     assert extras['is_error'] is True
     assert extras['turn_index'] == 3
     assert extras['call_id'] == 'call_1'
@@ -384,7 +391,7 @@ class TestSendTrackerEmission:
     assert len(tool_calls) == 1
     _, body, extras = tool_calls[0]
     assert body is None
-    assert extras['tool_name'] == 'ping'
+    assert extras['tool_name'] == 'svc__ping'
     assert extras['arguments'] == {'x': 1}
     assert extras['call_id'] == 'c1'
 

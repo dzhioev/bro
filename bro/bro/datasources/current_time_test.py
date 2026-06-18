@@ -15,8 +15,9 @@ def test_get_time_format():
 @pytest.mark.asyncio
 async def test_as_mcp_server_exposes_single_get_time_tool():
   server = CurrentTime().as_mcp_server()
+  assert server.namespace == 'current-time-source'
   tools = await server.list_tools()
-  assert [t.name for t in tools] == ['current-time-get-time']
+  assert [t.name for t in tools] == ['get_time']
 
 
 @pytest.mark.asyncio

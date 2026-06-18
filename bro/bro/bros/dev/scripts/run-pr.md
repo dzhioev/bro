@@ -56,7 +56,7 @@ Match recent-log style:
 
 - **Title**: `<area>: <imperative lowercase summary>`, under ~70 chars. `<area>` is a module path or file stem — `cw`, `flow/mcp`, `.claude/settings`, `CLAUDE.md`, `sync-scripts`, etc.
 - **Body**: terse — itemised bullets over prose, cap ~10 lines, often skipped entirely. Only context a reader can't recover from the code (motivation, constraint, non-obvious tradeoff).
-- **Footer**: one blank line, then a `Task: <url>` line (resolve via `get_task_info(task_id).address` — task id comes from `CW_TASK_ID` env var or an `add_task` call earlier in this session), then the output of `./setup/claude_commit_footer.py`. Example:
+- **Footer**: one blank line, then a `Task: <url>` line (resolve via `flow::get_task_info(task_id).address` — task id comes from `CW_TASK_ID` env var or a `flow::add_task` call earlier in this session), then the output of `./setup/claude_commit_footer.py`. Example:
   ```
   Task: https://www.notion.so/my-task-abc123
   > created with Claude Code X.Y.Z (Model, context: Nk)

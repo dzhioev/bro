@@ -24,12 +24,12 @@ class ServerAB(InProcessMCPServer):
   needed_secrets = ('notion',)
 
   def __init__(self):
-    super().__init__(_make_tools('a', 'b'))
+    super().__init__('ab', _make_tools('a', 'b'))
 
 
 class ServerXZ(InProcessMCPServer):
   def __init__(self):
-    super().__init__(_make_tools('x', 'z'))
+    super().__init__('xz', _make_tools('x', 'z'))
 
 
 class _StubSource(SearchableDataSource):
@@ -218,7 +218,7 @@ class TestFormatCard:
 
     class LongServer(InProcessMCPServer):
       def __init__(self):
-        super().__init__([FunctionTool(long_fn)])
+        super().__init__('long', [FunctionTool(long_fn)])
 
     class _LongBro(BaseBro):
       name = 'long'

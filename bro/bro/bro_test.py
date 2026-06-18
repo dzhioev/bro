@@ -466,9 +466,12 @@ class TestBroDataSources:
     bro = SourceBro()
     servers = bro._mcp_servers
     assert len(servers) == 1
+    assert servers[0].namespace == 'stub-source'
     tools = await servers[0].list_tools()
     tool_names = {t.name for t in tools}
-    assert tool_names == {'stub-search', 'stub-fetch'}
+    # local (in-namespace) names; the `stub-source` namespace is applied when the
+    # registry forms wire names (`stub-source__search`).
+    assert tool_names == {'search', 'fetch'}
 
   def test_data_source_summary_in_system_prompt(self):
     class SourceBro(BaseBro):
@@ -483,6 +486,36 @@ class TestBroDataSources:
     assert '## Data sources' in bro.system_prompt
     assert '**stub**' in bro.system_prompt
     assert 'a stub data source for tests' in bro.system_prompt
+    # canonical `::` in the data-source block, resolved by the tool-names rule
+    assert 'wikipedia-source::search' in bro.system_prompt
+
+
+class TestToolNamesBlock:
+  def test_present_when_bro_has_tools(self):
+    class ToolBro(BaseBro):
+      name = 'tooled'
+      description = 'd'
+      mcp_servers = [_make_server('a')]
+
+      def __init__(self):
+        super().__init__(system_prompt='base')
+
+    prompt = ToolBro().system_prompt
+    assert '## Tool names' in prompt
+    assert '`namespace::tool`' in prompt
+    assert '`namespace__tool`' in prompt
+    # generic wording: nothing about a repo/codebase (reaches repo-unaware bros)
+    assert 'repo' not in prompt.lower()
+
+  def test_absent_when_bro_has_no_tools_or_skills(self):
+    class BareBro(BaseBro):
+      name = 'bare'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='base')
+
+    assert '## Tool names' not in BareBro().system_prompt
 
   @pytest.mark.asyncio
   async def test_data_source_search_and_fetch_calls(self):
@@ -490,11 +523,11 @@ class TestBroDataSources:
     server = source.as_mcp_server()
     tools = await server.list_tools()
     by_name = {t.name: t for t in tools}
-    search_result = await by_name['stub-search'].call({'query': 'foo'})
+    search_result = await by_name['search'].call({'query': 'foo'})
     assert isinstance(search_result, str)
     parsed = json.loads(search_result)
     assert parsed[0]['id'] == 'stub-1'
-    fetch_result = await by_name['stub-fetch'].call({'id': 'x', 'query': 'why'})
+    fetch_result = await by_name['fetch'].call({'id': 'x', 'query': 'why'})
     assert fetch_result == 'content for x'
     assert source.fetch_calls == [('x', 'why')]
 
@@ -509,7 +542,7 @@ def _make_server(*tool_names: str) -> InProcessMCPServer:
     fn.__name__ = name
     describe(fn, f'{name} tool')
     tools.append(FunctionTool(fn))
-  return InProcessMCPServer(tools)
+  return InProcessMCPServer('test', tools)
 
 
 class TestBroMcpServers:
@@ -556,7 +589,7 @@ class _SecretServer(InProcessMCPServer):
   needed_secrets = ('alpha', 'beta')
 
   def __init__(self):
-    super().__init__([])
+    super().__init__('secret', [])
 
 
 class _SecretSource(SearchableDataSource):

@@ -39,6 +39,25 @@ class Tool(ABC):
   async def call(self, arguments: dict[str, Any]) -> dict[str, Any] | str: ...
 
 
+def _validate_segment(kind: str, value: str) -> None:
+  # `__` is the namespace/tool wire separator (`ns__tool`); a segment that
+  # contains it would break round-tripping. single `_` and `-` are fine.
+  if len(value) == 0:
+    raise ValueError(f'{kind} must be non-empty')
+  if '__' in value:
+    raise ValueError(
+      f'{kind} {value!r} contains a double underscore; "__" is reserved as the '
+      'namespace/tool separator (single "_" and "-" are allowed)'
+    )
+
+
+def wire_name(namespace: str, tool: str) -> str:
+  # the harness-agnostic canonical name is `namespace::tool`; every harness that
+  # actually runs the tool resolves `::` to `__` (Claude Code additionally
+  # prepends `mcp__`). this builds the `__` wire name the bro LLM sees and calls.
+  return f'{namespace}__{tool}'
+
+
 class MCPServer(ABC):
   # credentials this server's tools resolve through the store. unioned across a
   # bro's declared servers (and along each server's own MRO) into
@@ -46,6 +65,12 @@ class MCPServer(ABC):
   # bro. override with the secret names a subclass actually reads (e.g. flow →
   # `notion`); the empty default means "no credentials".
   needed_secrets: tuple[str, ...] = ()
+  # the flat namespace this server's tools live in (`flow`, `dev`, `infra`,
+  # `bro`, `<name>-source`). the assembling layer (`ToolRegistry` /
+  # `mcp_server._Aggregate`) reads it to form `namespace__tool` wire names and to
+  # keep two sources' identically-named tools (e.g. `search`) distinct. set by
+  # whatever builds the server.
+  namespace: str
 
   @abstractmethod
   async def list_tools(self) -> list[Tool]: ...
@@ -112,9 +137,54 @@ class FunctionTool(Tool):
     return validated.model_dump(mode='json', by_alias=True)
 
 
+class _NamespacedTool(Tool):
+  """wraps a tool to advertise its `namespace__tool` wire name.
+
+  the underlying tool keeps its local `name` (the in-namespace identity, and what
+  surfaces that namespace externally — the flow HTTP server, Claude Code's
+  `mcp__flow__` — advertise); the assembling layer wraps it so the bro LLM sees,
+  and calls back with, the namespaced wire name.
+  """
+
+  def __init__(self, namespace: str, tool: Tool):
+    self._wire_name = wire_name(namespace, tool.name)
+    self._tool = tool
+
+  @property
+  def name(self) -> str:
+    return self._wire_name
+
+  @property
+  def description(self) -> str:
+    return self._tool.description
+
+  @property
+  def parameters(self) -> dict[str, Any]:
+    return self._tool.parameters
+
+  @property
+  def output_schema(self) -> dict[str, Any] | None:
+    return self._tool.output_schema
+
+  async def call(self, arguments: dict[str, Any]) -> dict[str, Any] | str:
+    return await self._tool.call(arguments)
+
+
+async def namespaced_tools(server: MCPServer) -> list[Tool]:
+  # a server's tools wrapped with their `namespace__tool` wire names — the shared
+  # step for every layer that assembles tools across servers for a harness
+  # (`ToolRegistry`, `mcp_server._Aggregate`). each caller adds its own
+  # collision policy on top.
+  return [_NamespacedTool(server.namespace, tool) for tool in await server.list_tools()]
+
+
 class InProcessMCPServer(MCPServer):
-  def __init__(self, tools: Iterable[Tool]):
+  def __init__(self, namespace: str, tools: Iterable[Tool]):
+    _validate_segment('namespace', namespace)
+    self.namespace = namespace
     self._tools = list(tools)
+    for tool in self._tools:
+      _validate_segment('tool name', tool.name)
 
   async def list_tools(self) -> list[Tool]:
     return list(self._tools)
@@ -136,10 +206,13 @@ class ToolRegistry:
       return list(self._tools_by_name.values())
     tools_by_name: dict[str, Tool] = {}
     for server in self._mcp_servers:
-      for tool in await server.list_tools():
-        if tool.name in tools_by_name:
-          raise ValueError(f'duplicate tool name across MCP servers: {tool.name}')
-        tools_by_name[tool.name] = tool
+      for wrapped in await namespaced_tools(server):
+        if wrapped.name in tools_by_name:
+          raise ValueError(
+            f'duplicate tool wire name across MCP servers: {wrapped.name} '
+            f'(namespace {server.namespace!r})'
+          )
+        tools_by_name[wrapped.name] = wrapped
     self._tools_by_name = tools_by_name
     return list(tools_by_name.values())
 

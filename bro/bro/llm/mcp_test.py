@@ -4,7 +4,14 @@ from typing import Annotated
 
 from pydantic import Field
 
-from llm.mcp import FunctionTool, InProcessMCPServer, ToolRegistry, UnknownToolError, describe
+from llm.mcp import (
+  FunctionTool,
+  InProcessMCPServer,
+  ToolRegistry,
+  UnknownToolError,
+  describe,
+  wire_name,
+)
 
 
 class TestFunctionTool:
@@ -139,17 +146,39 @@ class TestInProcessMCPServer:
 
     describe(tool_b, 'tool b')
 
-    server = InProcessMCPServer([FunctionTool(tool_a), FunctionTool(tool_b)])
+    server = InProcessMCPServer('test', [FunctionTool(tool_a), FunctionTool(tool_b)])
     tools = await server.list_tools()
     assert len(tools) == 2
+    # the server's own list_tools returns the local (in-namespace) names; the
+    # namespacing happens at the assembling layer (ToolRegistry / _Aggregate).
     assert tools[0].name == 'tool_a'
     assert tools[1].name == 'tool_b'
 
   @pytest.mark.asyncio
   async def test_empty_server(self):
-    server = InProcessMCPServer([])
+    server = InProcessMCPServer('test', [])
     tools = await server.list_tools()
     assert tools == []
+
+  @pytest.mark.asyncio
+  async def test_rejects_double_underscore_in_namespace(self):
+    with pytest.raises(ValueError, match='double underscore'):
+      InProcessMCPServer('bad__ns', [])
+
+  @pytest.mark.asyncio
+  async def test_rejects_empty_namespace(self):
+    with pytest.raises(ValueError, match='non-empty'):
+      InProcessMCPServer('', [])
+
+  @pytest.mark.asyncio
+  async def test_rejects_double_underscore_in_tool_name(self):
+    def bad(x: Annotated[str, Field(description='input')]) -> str:
+      return x
+
+    describe(bad, 'bad tool')
+
+    with pytest.raises(ValueError, match='double underscore'):
+      InProcessMCPServer('test', [FunctionTool(bad, name='bad__tool')])
 
   @pytest.mark.asyncio
   async def test_list_tools_returns_copy(self):
@@ -158,7 +187,7 @@ class TestInProcessMCPServer:
 
     describe(tool_a, 'tool a')
 
-    server = InProcessMCPServer([FunctionTool(tool_a)])
+    server = InProcessMCPServer('test', [FunctionTool(tool_a)])
     tools1 = await server.list_tools()
     tools2 = await server.list_tools()
     assert tools1 is not tools2
@@ -173,10 +202,11 @@ class TestToolRegistry:
 
     describe(tool_a, 'tool a')
 
-    registry = ToolRegistry([InProcessMCPServer([FunctionTool(tool_a)])])
+    registry = ToolRegistry([InProcessMCPServer('a', [FunctionTool(tool_a)])])
     tools = await registry.resolve()
     assert len(tools) == 1
-    assert tools[0].name == 'tool_a'
+    # the registry advertises namespaced wire names to the LLM.
+    assert tools[0].name == 'a__tool_a'
 
   @pytest.mark.asyncio
   async def test_resolve_from_multiple_servers(self):
@@ -190,13 +220,28 @@ class TestToolRegistry:
 
     describe(tool_b, 'tool b')
 
-    server_a = InProcessMCPServer([FunctionTool(tool_a)])
-    server_b = InProcessMCPServer([FunctionTool(tool_b)])
+    server_a = InProcessMCPServer('a', [FunctionTool(tool_a)])
+    server_b = InProcessMCPServer('b', [FunctionTool(tool_b)])
     registry = ToolRegistry([server_a, server_b])
     tools = await registry.resolve()
     assert len(tools) == 2
     names = {t.name for t in tools}
-    assert names == {'tool_a', 'tool_b'}
+    assert names == {'a__tool_a', 'b__tool_b'}
+
+  @pytest.mark.asyncio
+  async def test_same_local_name_distinct_across_namespaces(self):
+    # the collision case namespaces exist to solve: two sources both exposing a
+    # `search` tool stay distinct because the wire name carries the namespace.
+    def search(query: Annotated[str, Field(description='q')]) -> str:
+      return query
+
+    describe(search, 'search')
+
+    server_a = InProcessMCPServer('wikipedia-source', [FunctionTool(search)])
+    server_b = InProcessMCPServer('tmdb-source', [FunctionTool(search)])
+    registry = ToolRegistry([server_a, server_b])
+    names = {t.name for t in await registry.resolve()}
+    assert names == {'wikipedia-source__search', 'tmdb-source__search'}
 
   @pytest.mark.asyncio
   async def test_resolve_caches(self):
@@ -205,7 +250,7 @@ class TestToolRegistry:
 
     describe(tool_a, 'tool a')
 
-    registry = ToolRegistry([InProcessMCPServer([FunctionTool(tool_a)])])
+    registry = ToolRegistry([InProcessMCPServer('a', [FunctionTool(tool_a)])])
     tools1 = await registry.resolve()
     tools2 = await registry.resolve()
     assert tools1[0] is tools2[0]
@@ -217,10 +262,10 @@ class TestToolRegistry:
 
     describe(dupe, 'duplicate')
 
-    server_a = InProcessMCPServer([FunctionTool(dupe)])
-    server_b = InProcessMCPServer([FunctionTool(dupe)])
+    server_a = InProcessMCPServer('a', [FunctionTool(dupe)])
+    server_b = InProcessMCPServer('a', [FunctionTool(dupe)])
     registry = ToolRegistry([server_a, server_b])
-    with pytest.raises(ValueError, match='duplicate tool name'):
+    with pytest.raises(ValueError, match="duplicate tool wire name.*namespace 'a'"):
       await registry.resolve()
 
   @pytest.mark.asyncio
@@ -230,13 +275,13 @@ class TestToolRegistry:
 
     describe(reverse, 'reverse text')
 
-    registry = ToolRegistry([InProcessMCPServer([FunctionTool(reverse)])])
-    result = await registry.call('reverse', {'text': 'hello'})
+    registry = ToolRegistry([InProcessMCPServer('a', [FunctionTool(reverse)])])
+    result = await registry.call('a__reverse', {'text': 'hello'})
     assert result == 'olleh'
 
   @pytest.mark.asyncio
   async def test_call_unknown_raises(self):
-    registry = ToolRegistry([InProcessMCPServer([])])
+    registry = ToolRegistry([InProcessMCPServer('test', [])])
     with pytest.raises(UnknownToolError, match="unknown or disallowed tool: 'nonexistent'") as exc:
       await registry.call('nonexistent', {})
     assert exc.value.name == 'nonexistent'
@@ -246,3 +291,11 @@ class TestToolRegistry:
     registry = ToolRegistry([])
     tools = await registry.resolve()
     assert tools == []
+
+
+class TestWireName:
+  def test_joins_with_double_underscore(self):
+    assert wire_name('flow', 'get_task_info') == 'flow__get_task_info'
+
+  def test_local_hyphen_and_single_underscore_preserved(self):
+    assert wire_name('wikipedia-source', 'get_time') == 'wikipedia-source__get_time'
