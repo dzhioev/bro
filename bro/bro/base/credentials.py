@@ -1,10 +1,11 @@
 #!/usr/bin/env python
 """client-side credential resolver.
 
-a reader calls `credentials.default_store().get(name)` for a secret's raw text,
-or `get_json(name)` to parse it as a json object — without caring where it lives
-or on which surface it runs. resolution walks an ordered list of `Source`s per
-secret; the first source that has the value wins.
+a reader calls `credentials.get(name)` for a secret's raw text, or
+`get_json(name)` to parse it as a json object — without caring where it lives or
+on which surface it runs. both are thin aliases over `default_store()`.
+resolution walks an ordered list of `Source`s per secret; the first source that
+has the value wins.
 
 the one source type so far, `local`, searches `<project>/.configs/<file>` then
 `~/.ppp/<file>` — the deployed services synthesize `<project>/.configs` at
@@ -241,6 +242,16 @@ def default_store() -> Store:
       if _default_store is None:
         _default_store = Store(_load_registry())
   return _default_store
+
+
+def get(name: str) -> str:
+  """resolve a secret to its raw text via the process-wide default store."""
+  return default_store().get(name)
+
+
+def get_json(name: str) -> dict:
+  """resolve a secret and parse it as a json object via the process-wide default store."""
+  return default_store().get_json(name)
 
 
 def build_scoped_store(names: Iterable[str]) -> dict[str, bytes]:

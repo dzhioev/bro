@@ -223,7 +223,7 @@ class ChatGPT(llm.llm.LLM):
     observer: Observer | None = None,
     tracker: Tracker | None = None,
   ):
-    config = credentials.default_store().get_json('openai')
+    config = credentials.get_json('openai')
     return ChatGPT(
       api_key=config['api_key'],
       model=model,

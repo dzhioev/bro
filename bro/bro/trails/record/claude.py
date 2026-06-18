@@ -21,7 +21,7 @@ __cli_name__ = 'sync-session-log'
 
 
 def _load_config() -> dict:
-  return credentials.default_store().get_json('session_log')
+  return credentials.get_json('session_log')
 
 
 def _create_session(config: dict) -> boto3.Session:

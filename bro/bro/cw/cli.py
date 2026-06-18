@@ -138,7 +138,7 @@ _DEFAULT_CW_BRO = 'ppp-dev'
 def _load_anthropic_key() -> str | None:
   """return the api_key from the `anthropic` secret, or None if missing/invalid."""
   try:
-    config = credentials.default_store().get_json('anthropic')
+    config = credentials.get_json('anthropic')
   except credentials.SecretNotFound:
     return None
   key = config.get('api_key')
@@ -1160,7 +1160,7 @@ def _mcp_config_argv(mcp: str) -> list[str]:
     return ['--mcp-config=flow/mcp/mcp_local.json']
   assert mcp == 'http'
   try:
-    cfg = credentials.default_store().get_json('flow_mcp')
+    cfg = credentials.get_json('flow_mcp')
   except credentials.SecretNotFound:
     raise SystemExit('missing flow_mcp secret — run flow/mcp/server/bootstrap_secrets.sh')
   mcp_json = json.dumps(

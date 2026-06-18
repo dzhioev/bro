@@ -36,7 +36,7 @@ def _default_factory() -> Tracker:
   # - tests: `conftest.py`'s `set_default_tracker_factory(NullTracker)`.
   # - one-shot exploration: `bro.run(..., tracker=NullTracker())`.
   try:
-    cfg = credentials.default_store().get_json('trails')
+    cfg = credentials.get_json('trails')
   except credentials.SecretNotFound as e:
     raise RuntimeError(
       'trails: secret not found; run setup/bootstrap_trails.sh to enable '

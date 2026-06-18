@@ -217,7 +217,7 @@ def default_client() -> TrailsClient:
   """build a `TrailsClient` from the `trails` secret — the same credential the
   in-bro `HTTPTracker` reads, so the read and write sides share one source.
   """
-  cfg = credentials.default_store().get_json('trails')
+  cfg = credentials.get_json('trails')
   return TrailsClient(cfg['base_url'], cfg['token'])
 
 

@@ -200,6 +200,21 @@ class TestDefaultStore:
     assert credentials.default_store().get_json('notion') == {'token': 'p'}
 
 
+class TestModuleAliases:
+  def test_get_json_aliases_default_store(self, configs_dir: Path):
+    _write(configs_dir, 'notion.json', {'token': 't'})
+    assert credentials.get_json('notion') == {'token': 't'}
+
+  def test_get_aliases_default_store_raw_text(self, configs_dir: Path):
+    # `github` maps to a raw-text file; the alias returns it stripped, like the store.
+    _write(configs_dir, 'cw_github_token_bro', 'tok\n')
+    assert credentials.get('github') == 'tok'
+
+  def test_get_raises_secret_not_found(self, configs_dir: Path):
+    with pytest.raises(credentials.SecretNotFound):
+      credentials.get('notion')
+
+
 class TestCli:
   def test_get_json_prints_json(self, configs_dir: Path, capsys):
     _write(configs_dir, 'notion.json', {'token': 't'})
