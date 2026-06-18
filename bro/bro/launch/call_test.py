@@ -2,6 +2,7 @@ import io
 from dataclasses import dataclass
 from datetime import datetime
 from typing import ClassVar
+from unittest.mock import patch
 
 import pytest
 
@@ -197,6 +198,8 @@ def test_fast_flag_invokes_spec_fast(monkeypatch):
   async def fake_call_text(bro, initial):
     built.append(bro)
 
+  # exercise the in-process path: outside a container, main() would re-exec into one.
+  monkeypatch.setenv('CW_IN_CONTAINER', '1')
   monkeypatch.setattr('bro.registry.get_class', lambda name: _ChatBro)
   monkeypatch.setattr('do.call.call_text', fake_call_text)
   monkeypatch.setattr('do.call._tty_supported', lambda: False)
@@ -214,6 +217,7 @@ def test_fast_flag_invokes_spec_fast(monkeypatch):
 
 
 def test_fast_flag_reports_when_bro_spec_has_no_fast_mode(monkeypatch, capsys):
+  monkeypatch.setenv('CW_IN_CONTAINER', '1')
   monkeypatch.setattr('bro.registry.get_class', lambda name: _FastlessBro)
   monkeypatch.setattr('do.call._tty_supported', lambda: False)
 
@@ -222,6 +226,59 @@ def test_fast_flag_reports_when_bro_spec_has_no_fast_mode(monkeypatch, capsys):
   err = capsys.readouterr().err
   assert '--fast' in err
   assert '_FastlessSpec' in err
+
+
+def test_call_re_execs_into_container_when_outside():
+  with (
+    patch.dict('os.environ', {}, clear=False) as env,
+    patch('cw.run_in_container', return_value=0) as run,
+    patch('do.call._tty_supported', return_value=True),
+  ):
+    env.pop('CW_IN_CONTAINER', None)
+    rc = main(['call', 'ppp-dev', 'hey', '--fast'])
+    assert rc == 0
+    assert run.call_count == 1
+    (workspace, command), kwargs = run.call_args
+    assert workspace.startswith('call-ppp-dev-')
+    # host is a tty → the TUI runs in-container, so no --text is forwarded; --fast is
+    assert command == ['call', 'ppp-dev', 'hey', '--fast']
+    assert kwargs['drop'] is True
+    # ppp-dev's manifest (github + notion via flow) plus the mandatory trails sink
+    assert {'github', 'notion', 'trails'} <= kwargs['secrets']
+    # ppp-dev doesn't deploy → no docker socket
+    assert kwargs['docker_sock'] is False
+
+
+def test_call_forwards_text_when_host_not_a_tty():
+  with (
+    patch.dict('os.environ', {}, clear=False) as env,
+    patch('cw.run_in_container', return_value=0) as run,
+    patch('do.call._tty_supported', return_value=False),
+  ):
+    env.pop('CW_IN_CONTAINER', None)
+    rc = main(['call', 'ppp-dev', 'hey'])
+    assert rc == 0
+    (_workspace, command), _kwargs = run.call_args
+    # host can't back the TUI → force text mode inside the container (the container's
+    # PTY always reports a TTY, so the decision has to be made here on the host)
+    assert command == ['call', 'ppp-dev', 'hey', '--text']
+
+
+def test_call_skips_container_with_no_container_flag(monkeypatch):
+  built: list[Bro] = []
+
+  async def fake_call_text(bro, initial):
+    built.append(bro)
+
+  monkeypatch.delenv('CW_IN_CONTAINER', raising=False)
+  monkeypatch.setattr('bro.registry.create_bro', lambda name: _ChatBro())
+  monkeypatch.setattr('do.call.call_text', fake_call_text)
+  monkeypatch.setattr('do.call._tty_supported', lambda: False)
+  with patch('cw.run_in_container') as run:
+    rc = main(['call', 'record', 'hi', '--no-container'])
+  assert rc is None
+  assert run.call_count == 0
+  assert len(built) == 1
 
 
 class _FakeApp:

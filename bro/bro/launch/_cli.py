@@ -1,4 +1,5 @@
-"""shared main() for `ask` and `do-task`: parse, re-exec into a container, or run the bro."""
+"""shared CLI plumbing for `ask` / `do-task` / `call`: the scoped-container hop,
+fast-mode bro construction, and the `ask`/`do-task` main()."""
 
 import asyncio
 import os
@@ -10,6 +11,55 @@ import base.args
 from bro.bro import BroRaised
 from bro.bros.bro import Bro
 from llm.observer import Observer
+
+# shared flag help so all three CLIs describe `--fast` / `--no-container` identically.
+FAST_HELP = (
+  "enable the bro's fast-mode LLM knob (provider-specific; for ChatGPT this is "
+  "OpenAI's 'priority' service tier — same model and quality, faster and more "
+  'consistent generation at a higher per-token price)'
+)
+NO_CONTAINER_HELP = 'skip the auto-container hop and run in the calling process'
+
+
+def create_bro_for_run(bro_name: str, *, fast: bool) -> Bro:
+  """instantiate the bro for an in-process run, applying the provider's fast knob
+  when `fast` is set. raises NotImplementedError (from LLMSpec.fast) when the bro's
+  provider has no fast mode — CLIs surface it as `--fast: <message>` and exit 1."""
+  from bro.registry import create_bro, get_class
+
+  if not fast:
+    return create_bro(bro_name)
+  cls = get_class(bro_name)
+  return cls.create(cls.llm_spec.fast())
+
+
+def maybe_containerize(
+  *, cli_name: str, bro_name: str, inner_args: list[str], no_container: bool
+) -> int | None:
+  """re-exec `<cli_name> <bro_name> <inner_args...>` inside a scoped throwaway
+  container and return its exit code, or return None so the caller runs in the
+  calling process.
+
+  the hop is skipped when already inside a container (`CW_IN_CONTAINER`, set by the
+  container) or when `--no-container` was passed — that is how the inner process
+  avoids re-hopping and runs the bro in-process. otherwise the container is scoped
+  to the bro's manifest: the bro runs as an LLM process here (not claude code), so
+  add its llm key (`needed_secrets()` omits it) and `trails` (recording is mandatory
+  for bro runs); the docker socket is granted only when the bro does docker work.
+  `run_in_container`'s `docker start -a -i` gives the container a real `-it` TTY, so
+  an interactive surface (`call`) renders inside it just as claude code does."""
+  if no_container or os.environ.get('CW_IN_CONTAINER') is not None:
+    return None
+  from bro.registry import create_bro
+  from cw import run_in_container
+
+  bro = create_bro(bro_name)
+  needed = set(bro.needed_secrets()) | set(bro.llm_spec.needed_secrets()) | {'trails'}
+  workspace = f'{cli_name}-{bro_name}-{secrets.token_hex(4)}'
+  command = [cli_name, bro_name, *inner_args]
+  return run_in_container(
+    workspace, command, drop=True, secrets=needed, docker_sock=bro.needs_docker
+  )
 
 
 def run(
@@ -29,35 +79,31 @@ def run(
     action='store_true',
     help='render the trace as colored rich panels instead of plain log lines',
   )
+  parser.add_argument('--fast', action='store_true', help=FAST_HELP)
   parser.add_argument(
-    '--no-container',
-    dest='no_container',
-    action='store_true',
-    help='skip the auto-container hop and run the bro in the calling process',
+    '--no-container', dest='no_container', action='store_true', help=NO_CONTAINER_HELP
   )
   args = parser.parse(argv)
 
-  if os.environ.get('CW_IN_CONTAINER') is None and not args['no_container']:
-    from bro.registry import create_bro
-    from cw import run_in_container
+  inner_args = [args[arg_name]]
+  if args['rich']:
+    inner_args.append('--rich')
+  if args['fast']:
+    inner_args.append('--fast')
+  hopped = maybe_containerize(
+    cli_name=cli_name,
+    bro_name=args['bro'],
+    inner_args=inner_args,
+    no_container=args['no_container'],
+  )
+  if hopped is not None:
+    return hopped
 
-    # scope the throwaway container to this bro's manifest. the bro runs as an LLM
-    # process here (not claude code), so add its llm key (`needed_secrets()` omits
-    # it) and `trails` (recording is mandatory for bro runs). `aws` in the set is
-    # delivered like any secret; the docker socket only when the bro does docker work.
-    bro = create_bro(args['bro'])
-    needed = set(bro.needed_secrets()) | set(bro.llm_spec.needed_secrets()) | {'trails'}
-    workspace = f'{cli_name}-{args["bro"]}-{secrets.token_hex(4)}'
-    inner = [cli_name, args['bro'], args[arg_name]]
-    if args['rich']:
-      inner.append('--rich')
-    return run_in_container(
-      workspace, inner, drop=True, secrets=needed, docker_sock=bro.needs_docker
-    )
-
-  from bro.registry import create_bro
-
-  bro = create_bro(args['bro'])
+  try:
+    bro = create_bro_for_run(args['bro'], fast=args['fast'])
+  except NotImplementedError as e:
+    print(f'--fast: {e}', file=sys.stderr)
+    return 1
   observer: Observer | None = None
   if args['rich']:
     from llm.observer import RichConsoleRenderer

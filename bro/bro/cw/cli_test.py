@@ -724,6 +724,14 @@ class TestDockerCreateArgv:
     assert 'GITHUB_TOKEN' not in argv
     assert not any('ghp_leak' in a for a in argv)
 
+  def test_term_forwarded_for_color_fidelity(self, build_argv, monkeypatch):
+    # forward the host TERM so in-container TUIs detect the same color tier — docker
+    # otherwise defaults TERM=xterm (low tier), flattening dim/256-color styling.
+    monkeypatch.setenv('TERM', 'tmux-256color')
+    argv = build_argv()
+    assert 'TERM' in argv
+    assert argv[argv.index('TERM') - 1] == '-e'
+
 
 class TestPppTarball:
   def _entries(self, blob: bytes) -> dict:

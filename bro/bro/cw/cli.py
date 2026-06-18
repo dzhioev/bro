@@ -114,6 +114,9 @@ _DOCKER_FORWARD_ENV = (
   'GIT_COMMITTER_NAME',
   'GIT_COMMITTER_EMAIL',
   'PPP_SHELL_COMMAND',
+  # docker defaults containers to TERM=xterm (a low color tier that flattens
+  # dim/256-color TUIs); forward the host TERM so in-container colors match.
+  'TERM',
   'TERM_PROGRAM',
   'TERM_PROGRAM_VERSION',
   'COLORTERM',

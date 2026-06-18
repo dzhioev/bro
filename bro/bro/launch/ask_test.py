@@ -111,6 +111,19 @@ def test_main_re_execs_into_container_when_outside():
     assert kwargs['docker_sock'] is False
 
 
+def test_main_forwards_fast_into_container():
+  with (
+    patch.dict('os.environ', {}, clear=False) as env,
+    patch('cw.run_in_container', return_value=0) as run,
+  ):
+    env.pop('CW_IN_CONTAINER', None)
+    rc = main(['ask', 'ppp-dev', 'hello', '--fast'])
+    assert rc == 0
+    (_workspace, command), _kwargs = run.call_args
+    # --fast is forwarded like --rich; the in-container run applies llm_spec.fast()
+    assert command == ['ask', 'ppp-dev', 'hello', '--fast']
+
+
 def test_main_skips_container_when_inside():
   with (
     patch.dict('os.environ', {'CW_IN_CONTAINER': '1'}),

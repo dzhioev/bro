@@ -6,6 +6,7 @@ from typing import Any, Callable, TextIO
 import base.args
 from bro.bro import BroRaised
 from bro.bros.bro import Bro
+from do._cli import FAST_HELP, NO_CONTAINER_HELP, create_bro_for_run, maybe_containerize
 from do._trace_format import compact_value, oneline, truncate
 from llm.observer import Observer
 
@@ -103,26 +104,36 @@ def main(argv=None) -> int | None:
     action='store_true',
     help='force text mode (timestamped lines) instead of the Textual chat UI',
   )
+  parser.add_argument('--fast', action='store_true', help=FAST_HELP)
   parser.add_argument(
-    '--fast',
-    action='store_true',
-    help="enable the bro's fast-mode LLM knob (provider-specific; for ChatGPT this "
-    "is OpenAI's 'priority' service tier — same model and quality, faster and "
-    'more consistent generation at a higher per-token price)',
+    '--no-container', dest='no_container', action='store_true', help=NO_CONTAINER_HELP
   )
   args = parser.parse(argv)
 
-  from bro.registry import get_class
-
-  cls = get_class(args['bro'])
-  spec = cls.llm_spec
+  # decide TUI-vs-text on the host, before the hop: `run_in_container` always
+  # allocates a `-it` PTY, so an in-container `_tty_supported()` check would pick the
+  # TUI even for a piped/redirected host invocation. force text mode into the
+  # container whenever the host can't back the TUI (or the user asked for it).
+  force_text = args['text'] or not _tty_supported()
+  inner_args = [args['what']]
+  if force_text:
+    inner_args.append('--text')
   if args['fast']:
-    try:
-      spec = spec.fast()
-    except NotImplementedError as e:
-      print(f'--fast: {e}', file=sys.stderr)
-      return 1
-  bro = cls.create(spec)
+    inner_args.append('--fast')
+  hopped = maybe_containerize(
+    cli_name='call',
+    bro_name=args['bro'],
+    inner_args=inner_args,
+    no_container=args['no_container'],
+  )
+  if hopped is not None:
+    return hopped
+
+  try:
+    bro = create_bro_for_run(args['bro'], fast=args['fast'])
+  except NotImplementedError as e:
+    print(f'--fast: {e}', file=sys.stderr)
+    return 1
   use_tui = not args['text'] and _tty_supported()
 
   try:
