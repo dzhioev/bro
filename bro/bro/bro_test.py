@@ -632,7 +632,9 @@ class TestNeededSecrets:
     assert 'focus' not in set(Librorian().needed_secrets())
     assert {'tmdb', 'brave', 'notion'} <= set(Librorian().needed_secrets())
     assert 'openai' not in PPPDev().needed_secrets()
-    assert {'aws', 'infra', 'focus'} <= set(Devoops().needed_secrets())
+    # devoops adds a task-scoped flow server (non-focus tools → `notion`); `focus`
+    # still comes from its infra server.
+    assert set(Devoops().needed_secrets()) == {'aws', 'infra', 'focus', 'notion'}
 
 
 class TestNeedsDocker:
