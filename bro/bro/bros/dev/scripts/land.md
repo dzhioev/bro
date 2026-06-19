@@ -30,7 +30,7 @@ gh pr view --json number,title,body,state,reviewDecision
 
 ### 2. Recover the original commit message
 
-Use the PR's title and body as the squash subject and body. Pull from `gh pr view --json title,body`. This preserves the commit footer (`Task:` + Claude Code footer) on the merge commit.
+Use the PR's title and body as the squash subject and body. Pull from `gh pr view --json title,body`. The PR body's `Task:` line carries onto the merge commit; the per-commit Claude Code token footer (`claude_commit_footer.py`) does not — it lives only in the branch commits, which the squash discards.
 
 If the worktree has multiple commits, the PR title/body should already reflect the full scope (step 12 of `/pr` enforced this).
 

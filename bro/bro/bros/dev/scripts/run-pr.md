@@ -204,9 +204,9 @@ A non-empty `comments` array on an APPROVED review counts as actionable feedback
 5. Push: `git push origin HEAD`.
 6. Reply on the PR confirming the fix (reference the commit SHA):
    - **Top-level PR comment**: `gh pr comment <n> --body "..."`
-   - **Reply to a specific review comment** (note the endpoint shape — `pulls/comments/<id>/replies`, not `pulls/<n>/comments/<id>/replies`):
+   - **Reply to a specific review comment** (endpoint includes the PR number `<n>`):
      ```bash
-     gh api -X POST repos/<owner>/<repo>/pulls/comments/<comment_id>/replies -f body="..."
+     gh api -X POST repos/<owner>/<repo>/pulls/<n>/comments/<comment_id>/replies -f body="..."
      ```
 
 **`review` with `state: "APPROVED"` and empty `comments`**:
