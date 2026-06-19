@@ -25,7 +25,7 @@ Trails is the recording pipeline for bro runs: every `BaseBro.run()` / `.send()`
 
 ## Layout
 
-- `client.py` — `TrailsClient` over the read endpoints (`list_trails` / `get_trail` / `get_steps` + `iter_*` cursor helpers); `default_client()` resolves the `trails` secret; `fetch_recorded_trail(client, trail_id)` rehydrates a header + steps into the `llm.tracker` dataclasses that `bro.fork.fork()` consumes
+- `client.py` — `TrailsClient` over the read endpoints (`list_trails` / `get_trail` / `get_steps` + `iter_*` cursor helpers); `default_client()` resolves the `trails` secret; `fetch_recorded_trail(client, trail_id)` rehydrates a header + steps into the `llm.tracker` dataclasses that `bro.fork.fork()` consumes — following the server's `{s3,url,size}` presigned-URL descriptor for any spilled body so fork replay gets the full `llm_call.response.output` (the CLI's `list`/`show` keep the lazy descriptor)
 - `cli.py` (`trails`) — `list` / `show` / `tree` / `fork` subcommands; counterpart to `sessions` / `rewind` for recorded bros
 - `server/server.py` (`trails-server`) — aiohttp HTTP API: bearer-token auth middleware, request validation, storage exceptions → HTTP statuses
 - `server/storage.py` — DynamoDB + S3 mechanics: step write + header-aggregate update are one `TransactWriteItems`; bodies ≥ 50KB spill to S3, > 10MB rejected with 413; reads resolve spilled bodies transparently (inline < 1MB, presigned URL above); floats convert to Decimal on write and back on read (DynamoDB numbers are Decimal)

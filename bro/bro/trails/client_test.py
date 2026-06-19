@@ -326,3 +326,88 @@ class TestFetchRecordedTrail:
       assert trail.header.trail_id == 'T1'
       assert [s.kind for s in trail.steps] == ['system_prompt', 'user_input']
       assert [s.step_id for s in trail.steps] == ['S1', 'S2']
+
+  def test_follows_spilled_body_descriptor(self):
+    """a step whose body is a `{s3,url,size}` spill descriptor is resolved by
+    following the presigned URL, so the rehydrated step carries the full body
+    (not the descriptor) — fork replay depends on the complete `response.output`.
+    """
+    full_body = {'response': {'output': [{'type': 'message', 'content': 'big'}]}}
+    descriptor = {'s3': 'trails/T1/steps/S2.json', 'url': 'https://s3/presigned', 'size': 2_000_000}
+    with (
+      patch.object(TrailsClient, 'get_trail') as get_trail,
+      patch.object(TrailsClient, 'get_steps') as get_steps,
+      patch.object(TrailsClient, 'fetch_spilled_body') as fetch_spilled,
+    ):
+      get_trail.return_value = {
+        'trail_id': 'T1',
+        'bro': 'dev',
+        'bro_version': 1,
+        'llm_spec': {},
+        'started_at': '2026-06-07T00:00:00.000000Z',
+        'interactive': False,
+        'entry_point': 'cli:bro_run',
+        'parent': None,
+      }
+      get_steps.return_value = {
+        'steps': [
+          {
+            'trail_id': 'T1',
+            'step_id': 'S1',
+            'ts': '2026-06-07T00:00:00.000000Z',
+            'kind': 'user_input',
+            'body': 'hi',
+          },
+          {
+            'trail_id': 'T1',
+            'step_id': 'S2',
+            'ts': '2026-06-07T00:00:01.000000Z',
+            'kind': 'llm_call',
+            'body': descriptor,
+          },
+        ],
+        'next': None,
+      }
+      fetch_spilled.return_value = full_body
+      trail = fetch_recorded_trail(_client(), 'T1')
+      fetch_spilled.assert_called_once_with(descriptor['url'])
+      bodies = {s.step_id: s.body for s in trail.steps}
+      assert bodies['S1'] == 'hi'
+      assert bodies['S2'] == full_body
+
+  def test_inline_body_with_s3_key_is_not_followed(self):
+    """a genuine body that merely contains an `s3` key (but not the full
+    descriptor triple) is left untouched — only the exact {s3,url,size} shape is
+    a spill descriptor.
+    """
+    with (
+      patch.object(TrailsClient, 'get_trail') as get_trail,
+      patch.object(TrailsClient, 'get_steps') as get_steps,
+      patch.object(TrailsClient, 'fetch_spilled_body') as fetch_spilled,
+    ):
+      get_trail.return_value = {
+        'trail_id': 'T1',
+        'bro': 'dev',
+        'bro_version': 1,
+        'llm_spec': {},
+        'started_at': '2026-06-07T00:00:00.000000Z',
+        'interactive': False,
+        'entry_point': 'cli:bro_run',
+        'parent': None,
+      }
+      lookalike = {'s3': 'some/key'}
+      get_steps.return_value = {
+        'steps': [
+          {
+            'trail_id': 'T1',
+            'step_id': 'S1',
+            'ts': '2026-06-07T00:00:00.000000Z',
+            'kind': 'tool_result',
+            'body': lookalike,
+          },
+        ],
+        'next': None,
+      }
+      trail = fetch_recorded_trail(_client(), 'T1')
+      fetch_spilled.assert_not_called()
+      assert trail.steps[0].body == lookalike

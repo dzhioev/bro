@@ -17,12 +17,17 @@ S3 spillover is resolved on the server (`storage._resolve_body`) — step bodies
 come back inline when small, as `{'s3': key, 'url': <presigned>, 'size': N}`
 when large. clients receive whichever shape the server emits; the CLI surfaces
 the spilled form with size + URL rather than fetching multi-MB blobs eagerly.
+`fetch_recorded_trail`, by contrast, follows the presigned URL and inlines the
+full body — fork replay needs the complete `llm_call.response.output`, and a
+bare descriptor would silently drop that turn's output items.
 """
 
 import http.client
 import json
 import ssl
+import urllib.request
 from collections.abc import Iterator
+from typing import Any
 from urllib.parse import urlencode, urlparse
 
 import configs
@@ -156,6 +161,19 @@ class TrailsClient:
   def close(self) -> None:
     self._drop_conn()
 
+  def fetch_spilled_body(self, url: str) -> Any:
+    """download a spilled step body from its presigned S3 URL and parse it the
+    same way the server resolves an inline body (`storage._resolve_body`): JSON
+    when it decodes, raw text otherwise. the URL is self-authenticating, so this
+    bypasses the bearer-token connection and hits S3 directly.
+    """
+    with urllib.request.urlopen(url, timeout=self._timeout) as resp:
+      raw = resp.read()
+    try:
+      return json.loads(raw)
+    except json.JSONDecodeError:
+      return raw.decode('utf-8')
+
   def _get(self, path: str, query: dict[str, str]) -> dict:
     if len(query) > 0:
       path = f'{path}?{urlencode(query)}'
@@ -226,6 +244,18 @@ def default_client() -> TrailsClient:
 # kind-specific metadata (turn_index, tool_name, call_id, response_id, ...).
 _STEP_CANONICAL_FIELDS = frozenset({'trail_id', 'step_id', 'ts', 'kind', 'body'})
 
+# exact key set of the spill descriptor the server returns for bodies it leaves
+# in S3 (`storage._resolve_body`, ≥ INLINE_RESPONSE_THRESHOLD_BYTES). matching
+# the full triple — not just `s3` presence — keeps a genuine body that happens
+# to carry an `s3` key from being mistaken for a descriptor.
+_SPILL_DESCRIPTOR_KEYS = frozenset({'s3', 'url', 'size'})
+
+
+def _spill_url(body: Any) -> str | None:
+  if isinstance(body, dict) and frozenset(body.keys()) == _SPILL_DESCRIPTOR_KEYS:
+    return body['url']
+  return None
+
 
 def trail_from_header(data: dict) -> Trail:
   """rehydrate a server header dict into the typed `Trail` dataclass.
@@ -271,5 +301,12 @@ def fetch_recorded_trail(client: TrailsClient, trail_id: str) -> RecordedTrail:
   `RecordedTrail` — the shape `bro.fork.fork()` and `replay_messages` consume.
   """
   header = trail_from_header(client.get_trail(trail_id))
-  steps = [step_from_row(row) for row in client.iter_steps(trail_id)]
+  steps = []
+  for row in client.iter_steps(trail_id):
+    url = _spill_url(row.get('body'))
+    if url is not None:
+      # follow the descriptor so the rehydrated step carries the full body;
+      # large `llm_call.response.output`s would otherwise be lost from replay.
+      row = {**row, 'body': client.fetch_spilled_body(url)}
+    steps.append(step_from_row(row))
   return RecordedTrail(header=header, steps=steps)
