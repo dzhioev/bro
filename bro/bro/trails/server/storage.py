@@ -218,29 +218,33 @@ class Storage:
     step_id = _new_id()
     ts = _now_iso()
 
-    stored_body: Any = body
+    spilled_key: str | None = None
     if size_bytes >= SPILLOVER_THRESHOLD_BYTES:
-      key = _spillover_key(trail_id, step_id)
+      spilled_key = _spillover_key(trail_id, step_id)
       payload = body if isinstance(body, (bytes, str)) else json.dumps(body, ensure_ascii=False)
       if isinstance(payload, str):
         payload = payload.encode('utf-8')
       await asyncio.to_thread(
         self._s3.put_object,
         Bucket=self._bucket,
-        Key=key,
+        Key=spilled_key,
         Body=payload,
         ContentType='application/json',
       )
-      stored_body = {'s3': key}
 
     step_item = {
       'trail_id': trail_id,
       'step_id': step_id,
       'ts': ts,
       'kind': kind,
-      'body': stored_body,
       **extras,
     }
+    # the spill pointer lives in its own sparse attribute, never inside `body` —
+    # so a genuine body that happens to equal {'s3': key} can't read as spilled.
+    if spilled_key is not None:
+      step_item['body_s3'] = spilled_key
+    else:
+      step_item['body'] = body
 
     delta_turn = 1 if kind == 'llm_call' else 0
     delta_tool_call = 1 if kind == 'tool_call' else 0
@@ -444,10 +448,11 @@ class Storage:
     return {'trails': items, 'next': next_cursor}
 
   async def _resolve_body(self, item: dict) -> dict:
-    body = item.get('body')
-    if not isinstance(body, dict) or 's3' not in body or len(body) != 1:
+    # body_s3 is a server-internal helper attr marking a spilled body; pop it so
+    # it never leaks into the step row returned to clients.
+    key = item.pop('body_s3', None)
+    if key is None:
       return item
-    key = body['s3']
     head = await asyncio.to_thread(self._s3.head_object, Bucket=self._bucket, Key=key)
     size = int(head.get('ContentLength', 0))
     if size <= INLINE_RESPONSE_THRESHOLD_BYTES:

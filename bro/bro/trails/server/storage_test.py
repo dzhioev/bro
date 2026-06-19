@@ -8,12 +8,13 @@ a GSI query (`bro` / `parent` / the constant-PK `all` index), and the LEK is the
 triple `{trail_id, <index PK>, started_at}` the cursor round-trip must survive.
 """
 
+import io
 import json
 
 import pytest
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 
-from trails.server.storage import GSI_PK_ATTR, GSI_PK_VALUE, Storage
+from trails.server.storage import GSI_PK_ATTR, GSI_PK_VALUE, SPILLOVER_THRESHOLD_BYTES, Storage
 
 _serializer = TypeSerializer()
 _deserializer = TypeDeserializer()
@@ -218,3 +219,81 @@ async def test_all_index_cursor_is_a_json_object():
   # the all-index LEK is the same triple shape, keyed on the constant gsi_pk.
   assert set(decoded) == {'trail_id', GSI_PK_ATTR, 'started_at'}
   assert decoded['trail_id'] == 'trail-004'
+
+
+# spill round-trip: the spill pointer lives in body_s3, so a body that equals the
+# old {'s3': key} sentinel must survive as literal content (the regression), and a
+# genuinely spilled body must resolve back through body_s3.
+
+
+class _FakeS3:
+  def __init__(self):
+    self.objects: dict[str, bytes] = {}
+
+  def put_object(self, *, Key, Body, **_):
+    self.objects[Key] = Body
+
+  def head_object(self, *, Key, **_):
+    return {'ContentLength': len(self.objects[Key])}
+
+  def get_object(self, *, Key, **_):
+    return {'Body': io.BytesIO(self.objects[Key])}
+
+
+class _FakeStepsDynamo:
+  class exceptions:
+    class TransactionCanceledException(Exception):
+      pass
+
+  def __init__(self):
+    self._steps: list[dict] = []
+
+  def transact_write_items(self, *, TransactItems):
+    for ti in TransactItems:
+      put = ti.get('Put')
+      if put is not None and put['TableName'] == 'trail_steps':
+        self._steps.append(_des(put['Item']))
+
+  def query(self, **kwargs):
+    tid = _deserializer.deserialize(kwargs['ExpressionAttributeValues'][':tid'])
+    items = [it for it in self._steps if it['trail_id'] == tid]
+    return {'Items': [_ser(it) for it in items]}
+
+
+def _spill_store() -> tuple[Storage, _FakeStepsDynamo, _FakeS3]:
+  dynamo = _FakeStepsDynamo()
+  s3 = _FakeS3()
+  store = Storage(
+    dynamo=dynamo, s3=s3, trails_table='trails', steps_table='trail_steps', bucket='bucket'
+  )
+  return store, dynamo, s3
+
+
+@pytest.mark.asyncio
+async def test_literal_s3_body_round_trips_as_content():
+  store, dynamo, s3 = _spill_store()
+  await store.put_step(trail_id='T1', kind='tool_result', body={'s3': 'x'}, extras={})
+  # small body stays inline: no spill, no S3 object, body untouched.
+  assert len(s3.objects) == 0
+  assert 'body_s3' not in dynamo._steps[0]
+  page = await store.query_steps('T1', after=None, limit=100)
+  step = page['steps'][0]
+  assert step['body'] == {'s3': 'x'}
+  assert 'body_s3' not in step
+
+
+@pytest.mark.asyncio
+async def test_spilled_body_resolves_via_body_s3():
+  store, dynamo, s3 = _spill_store()
+  big = {'big': 'x' * (SPILLOVER_THRESHOLD_BYTES + 1)}
+  await store.put_step(trail_id='T1', kind='llm_call', body=big, extras={})
+  # spilled: pointer is in body_s3, real content omitted from the row.
+  stored = dynamo._steps[0]
+  assert 'body' not in stored
+  assert stored['body_s3'] in s3.objects
+  page = await store.query_steps('T1', after=None, limit=100)
+  step = page['steps'][0]
+  # under the 1MB inline cap, so it comes back as content, and the helper attr
+  # never leaks into the row.
+  assert step['body'] == big
+  assert 'body_s3' not in step
