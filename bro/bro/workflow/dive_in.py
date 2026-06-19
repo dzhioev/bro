@@ -51,6 +51,37 @@ def _resolve_task_name(task_id: str) -> str:
   return task.name
 
 
+def _prefetch_task(task_id: str) -> tuple[str, str]:
+  """return (task_name, prompt_block) for a task ref.
+
+  Fetches the task metadata + page body here, in dive-in, so the seeded `/fix`
+  message can carry them and the agent's first turn doesn't call get_task_info /
+  get_page_content. The flow MCP server is not yet connected on the session's
+  first turn, so an in-session call would race the connection and error.
+  """
+  import dataclasses
+  import enum
+  import json
+
+  from flow.system import default_system
+
+  system = default_system()
+  task = system.get_task_info(task_id)
+  page = system.get_page_content(task_id)
+  meta = json.dumps(
+    dataclasses.asdict(task),
+    default=lambda o: o.value if isinstance(o, enum.Enum) else str(o),
+    indent=2,
+  )
+  block = (
+    'Task metadata and page body were pre-fetched at launch (the flow MCP server '
+    'is not yet connected on the first turn) — use them as your initial read; do '
+    'not call get_task_info / get_page_content for this task.\n\n'
+    f'## Task metadata\n```json\n{meta}\n```\n\n## Task page\n{page}'
+  )
+  return task.name, block
+
+
 def _pick_fresh_name(base: str) -> str:
   """return base-<rand> — a unique slug for a --new or bare dive-in.
 
@@ -118,25 +149,27 @@ def dive_in(
       if focus:
         default_client().set_focus(task_id)
         log.info('focused task: %s', task_id)
-      task_name = _resolve_task_name(task_id)
-      log.info('task: %s', task_name)
     else:
       state = default_client().get_focus()
       if state is None:
         log.error('no task is currently focused')
         return 1
       task_id = state.task.id
-      task_name = state.task.name
-      log.info('focused: %s', task_name)
+
+    if not resume:
+      task_name, task_block = _prefetch_task(task_id)
+      log.info('task: %s', task_name)
+      prompt = _fix_command(task_arg=task, focus=focus, new=False, command=None)
+      prompt = f'{prompt}\n\n{task_block}'
+      if command is not None:
+        prompt = f'{prompt}\n\nOnce you understand the task, {command}'
+    else:
+      task_name = _resolve_task_name(task_id)
+      log.info('task: %s', task_name)
 
     name = _slugify(task_name)
     if len(name) == 0:
       name = 'dive-in'
-
-    if not resume:
-      prompt = _fix_command(task_arg=task, focus=focus, new=False, command=None)
-      if command is not None:
-        prompt = f'{prompt}\n\nOnce you understand the task, {command}'
 
     os.environ['CW_TASK_ID'] = task_id
   else:

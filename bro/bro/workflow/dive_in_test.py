@@ -95,3 +95,50 @@ class TestPickFreshName:
     monkeypatch.setattr(dive_in.secrets, 'token_hex', lambda _: next(suffixes))
     (containers / 'idea-aaaaaa').mkdir()
     assert _pick_fresh_name('idea') == 'idea-bbbbbb'
+
+
+class TestPrefetchTask:
+  def test_returns_name_and_embeds_metadata_and_page(self, monkeypatch):
+    from flow.model import Importance, Task
+
+    task = Task(
+      id=UUID,
+      name='my task',
+      status='Live',
+      importance=Importance.NORMAL,
+      driver=None,
+      project='proj-1',
+      tags=['infra'],
+      links=[],
+      created_time='2026-01-01',
+      last_edited='2026-01-02',
+      sender=None,
+      received=None,
+      date=None,
+      deadline=None,
+      today=False,
+      last_done=None,
+      address=f'https://app.notion.com/p/my-task-{HEX}',
+    )
+
+    class FakeSystem:
+      def get_task_info(self, task_id):
+        assert task_id == UUID
+        return task
+
+      def get_page_content(self, page_id):
+        assert page_id == UUID
+        return '## Goal\nDo the thing.'
+
+    monkeypatch.setattr('flow.system.default_system', lambda: FakeSystem())
+
+    name, block = dive_in._prefetch_task(UUID)
+    assert name == 'my task'
+    # page body embedded verbatim
+    assert '## Goal\nDo the thing.' in block
+    # metadata embedded as json, enums rendered by value
+    assert '"status": "Live"' in block
+    assert '"importance": "Normal"' in block
+    assert '"project": "proj-1"' in block
+    # instruction to skip the in-session fetch
+    assert 'do not call get_task_info / get_page_content' in block
