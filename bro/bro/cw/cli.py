@@ -129,10 +129,6 @@ _DOCKER_FORWARD_ENV = (
 _BRO_GIT_NAME = 'Bro'
 _BRO_GIT_EMAIL = 'dzhioev+bro@gmail.com'
 
-# the `aws` secret name; `--aws` adds it to a session's set (it is delivered like
-# any other secret, via the scoped store and its install hook).
-_AWS_SECRET = 'aws'
-
 # secrets every containerized claude code session resolves regardless of bro: the
 # sync-session-log hooks run in-container, and an in-session bro run records to trails.
 _CW_SESSION_BASELINE = ('session_log', 'trails')
@@ -1212,11 +1208,6 @@ def add_forwarded_flags(parser: argparse.ArgumentParser) -> None:
     help='enable fast mode for the session (disabled by default regardless of host settings)',
   )
   parser.add_argument(
-    '--aws',
-    action='store_true',
-    help='hydrate the `aws` secret (~/.ppp/aws_credentials) into the container for AWS access',
-  )
-  parser.add_argument(
     '--grant',
     action='append',
     default=None,
@@ -1270,7 +1261,6 @@ def start_session(
   drop: bool,
   auto: bool,
   fast: bool,
-  aws: bool,
   grant: list[str] | None,
   revoke: list[str] | None,
   effort: str | None,
@@ -1288,7 +1278,6 @@ def start_session(
     '-c': container,
     '--auto': auto,
     '--drop': drop,
-    '--aws': aws,
     '--rc': rc,
     '--resume': resume,
   }
@@ -1341,7 +1330,7 @@ def start_session(
       claude_args = [*claude_args, '--', prompt]
     secrets, docker_sock = _container_secrets(bro, mcp=mcp, bro_mode=True)
     try:
-      secrets = _finalize_secrets(secrets, aws=aws, grant=grant, revoke=revoke)
+      secrets = _finalize_secrets(secrets, grant=grant, revoke=revoke)
     except ValueError as e:
       log.error('%s', e)
       return 1
@@ -1392,13 +1381,13 @@ def start_session(
 
   # scope credentials to the themed bro (dive-in sets CW_BRO=ppp-dev; a manual
   # `cw ss -c` defaults to it too). host mode resolves from ~/.ppp directly, so no
-  # hydration there. `--aws` opts the session into the aws secret.
+  # hydration there.
   secrets: set[str] = set()
   if container:
     bro_name = bro_env if bro_env is not None else _DEFAULT_CW_BRO
     secrets, _ = _container_secrets(bro_name, mcp=mcp, bro_mode=False)
     try:
-      secrets = _finalize_secrets(secrets, aws=aws, grant=grant, revoke=revoke)
+      secrets = _finalize_secrets(secrets, grant=grant, revoke=revoke)
     except ValueError as e:
       log.error('%s', e)
       return 1
@@ -1491,16 +1480,11 @@ def _bro_claude_argv(bro_name: str) -> list[str]:
   ]
 
 
-def _finalize_secrets(
-  secrets: set[str], *, aws: bool, grant: list[str], revoke: list[str]
-) -> set[str]:
-  """layer `--aws` and the per-session `--grant` / `--revoke` overrides onto a
-  computed scoped set. `--aws` joins the baseline first (so it can be revoked or
-  collides with a redundant `--grant aws`), then grant/revoke apply strictly — a
-  grant/revoke that doesn't change the set raises `ValueError`
-  (`credentials.apply_grant_revoke`)."""
-  base = secrets | {_AWS_SECRET} if aws else secrets
-  return credentials.apply_grant_revoke(base, grant=grant, revoke=revoke)
+def _finalize_secrets(secrets: set[str], *, grant: list[str], revoke: list[str]) -> set[str]:
+  """layer the per-session `--grant` / `--revoke` overrides onto a computed scoped
+  set. grant/revoke apply strictly — a grant/revoke that doesn't change the set
+  raises `ValueError` (`credentials.apply_grant_revoke`)."""
+  return credentials.apply_grant_revoke(secrets, grant=grant, revoke=revoke)
 
 
 def _container_secrets(bro_name: str, *, mcp: str | None, bro_mode: bool) -> tuple[set[str], bool]:
@@ -1861,8 +1845,6 @@ def main(argv=None):
       '--grant/--revoke require -c/--container: host mode is unscoped, so a revoke '
       'could not actually restrict the session'
     )
-  # `--aws` needs no pre-flight: it adds the `aws` secret to the session set, and
-  # strict hydration fails loudly if `~/.ppp/aws_credentials` is absent.
   return start_session(**args)
 
 

@@ -700,7 +700,6 @@ class TestGrantRevoke:
       drop=True,
       auto=False,
       fast=False,
-      aws=False,
       grant=grant,
       revoke=revoke,
       effort=None,
