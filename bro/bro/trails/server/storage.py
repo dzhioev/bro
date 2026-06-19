@@ -1,8 +1,9 @@
 """DynamoDB + S3 storage for the trails server.
 
 Two DynamoDB tables and one S3 bucket back every operation:
-- `trails`: PK=`trail_id`. Header row, incrementally updated aggregates, sparse
-  `parent_trail_id` for the parent GSI.
+- `trails`: PK=`trail_id`. Header row, incrementally updated aggregates, a
+  constant `gsi_pk` for the global newest-first GSI, sparse `parent_trail_id`
+  for the parent GSI.
 - `trail_steps`: PK=`trail_id`, SK=`step_id`. Append-only, ULID-keyed step rows.
 - `cw-trails-{account}` bucket: spillover for step bodies ≥ `SPILLOVER_THRESHOLD_BYTES`.
 
@@ -40,6 +41,14 @@ STEP_KINDS = (
   'error',
   'end',
 )
+
+# the no-filter list path can't sort or range a full-table scan by time, so every
+# trail item carries this constant attribute and the `all-index` GSI
+# keys on it — a query there returns all trails by started_at (global newest-first
+# + since/until range). one logical partition suffices at this write volume; shard
+# the constant value if write throughput ever grows.
+GSI_PK_ATTR = 'gsi_pk'
+GSI_PK_VALUE = 'trail'
 
 
 class TrailNotFound(Exception):
@@ -169,6 +178,8 @@ class Storage:
       'continuation': None,
       'aggregates': aggregates,
     }
+    # constant PK for the all-index GSI (global newest-first list).
+    trail_item[GSI_PK_ATTR] = GSI_PK_VALUE
     if parent is not None:
       # surface parent.trail_id as a top-level attribute so the sparse
       # parent-trail-id GSI picks this trail up. trails without a parent omit
@@ -406,20 +417,29 @@ class Storage:
         ),
       )
     else:
-      kwargs: dict = {'TableName': self._trails_table, 'Limit': limit}
-      if cursor is not None:
-        kwargs['ExclusiveStartKey'] = _ddb_item(json.loads(cursor))
-      response = await asyncio.to_thread(self._dynamo.scan, **kwargs)
+      response = await asyncio.to_thread(
+        self._dynamo.query,
+        **_range_query(
+          table=self._trails_table,
+          index='all-index',
+          pk_name=GSI_PK_ATTR,
+          pk_value=GSI_PK_VALUE,
+          sk_name='started_at',
+          sk_low=since,
+          sk_high=until,
+          limit=limit,
+          cursor=cursor,
+        ),
+      )
 
     items = [_from_ddb_item(it) or {} for it in response.get('Items', [])]
     next_cursor = None
     last = response.get('LastEvaluatedKey')
     if last is not None:
-      # encode the whole LastEvaluatedKey as one JSON string. on a GSI the LEK
-      # is a triple (base PK trail_id + index PK bro/parent_trail_id + index SK
-      # started_at); on the base-table scan it is just {trail_id}. all attrs are
-      # strings, so the dump is JSON-safe and every path decodes uniformly via
-      # _ddb_item(json.loads(cursor)).
+      # every path is a GSI query, so the LEK is a triple (base PK trail_id +
+      # index PK bro/parent_trail_id/gsi_pk + index SK started_at). all attrs are
+      # strings, so the dump is JSON-safe and decodes uniformly via
+      # _ddb_item(json.loads(cursor)) in _range_query.
       next_cursor = json.dumps(_from_ddb_item(last))
     return {'trails': items, 'next': next_cursor}
 
