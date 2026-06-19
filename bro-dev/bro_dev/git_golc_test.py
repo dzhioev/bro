@@ -8,15 +8,24 @@ from git_golc import (  # noqa: E402
   _format_credits,
   _model_initial,
   _parse_footer,
+  _parse_legacy,
   _SENTINEL_RE,
   round_credits,
 )
 
 FOOTER_SINGLE = (
+  "> created with Claude Code 2.1.181 | Opus 4.8: 275'432\n"
+  '> session(s): abc12345-1234-5678-9abc-def012345678'
+)
+FOOTER_MULTI = (
+  "> created with Claude Code 2.1.114, 2.1.120 | Opus 4.8: 1'275'432, Sonnet 4.6: 12'345\n"
+  '> session(s): x, y'
+)
+LEGACY_SINGLE = (
   '> created with Claude Code 2.1.114 '
   '(Opus 4.7: 275,432; session: abc12345-1234-5678-9abc-def012345678)'
 )
-FOOTER_MULTI = (
+LEGACY_MULTI = (
   '> created with Claude Code 2.1.114 (Opus 4.7: 1,275,432, Sonnet 4.6: 12,345; session: x)'
 )
 COMMIT_NO_FOOTER = """chore: bump deps
@@ -60,16 +69,33 @@ class TestRoundCredits:
 
 class TestParseFooter:
   def test_single_model(self):
-    assert _parse_footer(FOOTER_SINGLE) == {'Opus 4.7': 275432}
+    assert _parse_footer(FOOTER_SINGLE) == {'Opus 4.8': 275432}
 
   def test_multi_model(self):
-    assert _parse_footer(FOOTER_MULTI) == {'Opus 4.7': 1275432, 'Sonnet 4.6': 12345}
+    assert _parse_footer(FOOTER_MULTI) == {'Opus 4.8': 1275432, 'Sonnet 4.6': 12345}
+
+  def test_legacy_is_not_a_new_footer(self):
+    assert _parse_footer(LEGACY_SINGLE) is None
 
   def test_no_footer(self):
     assert _parse_footer(COMMIT_NO_FOOTER) is None
 
   def test_empty_string(self):
     assert _parse_footer('') is None
+
+
+class TestParseLegacy:
+  def test_single_model(self):
+    assert _parse_legacy(LEGACY_SINGLE) == {'Opus 4.7': 275432}
+
+  def test_multi_model(self):
+    assert _parse_legacy(LEGACY_MULTI) == {'Opus 4.7': 1275432, 'Sonnet 4.6': 12345}
+
+  def test_new_format_is_not_legacy(self):
+    assert _parse_legacy(FOOTER_SINGLE) is None
+
+  def test_no_footer(self):
+    assert _parse_legacy(COMMIT_NO_FOOTER) is None
 
 
 class TestModelInitial:

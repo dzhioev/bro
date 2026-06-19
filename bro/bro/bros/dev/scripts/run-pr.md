@@ -56,16 +56,17 @@ Match recent-log style:
 
 - **Title**: `<area>: <imperative lowercase summary>`, under ~70 chars. `<area>` is a module path or file stem — `cw`, `flow/mcp`, `.claude/settings`, `CLAUDE.md`, `sync-scripts`, etc.
 - **Body**: terse — itemised bullets over prose, cap ~10 lines, often skipped entirely. Only context a reader can't recover from the code (motivation, constraint, non-obvious tradeoff).
-- **Footer**: one blank line, then a `Task: <url>` line (resolve via `flow::get_task_info(task_id).address` — task id comes from `CW_TASK_ID` env var or a `flow::add_task` call earlier in this session), then the output of `./setup/claude_commit_footer.py`. Example:
+- **Footer**: one blank line, then a `Task: <url>` line (resolve via `flow::get_task_info(task_id).address` — task id comes from `CW_TASK_ID` env var or a `flow::add_task` call earlier in this session), then the two-line output of `./setup/claude_commit_footer.py` (the per-commit token delta plus the session id). Example:
   ```
   Task: https://www.notion.so/my-task-abc123
-  > created with Claude Code X.Y.Z (Model, context: Nk)
+  > created with Claude Code 2.1.181 | Opus 4.8: 45'231
+  > session(s): 04ee83b5-ff91-4740-8791-073d14939b91
   ```
   Omit the `Task:` line if no task ID is available.
 - **Never** include `Co-Authored-By:` lines or "Generated with Claude Code" boilerplate.
 - Log/echo/help strings in code: lowercase, no trailing dots, neutral tone (per `CLAUDE.md`).
 
-Generate the footer once per commit:
+**Regenerate the footer immediately before every commit — and again before every retry.** It emits the token *delta* since this session's last successful commit (the baseline lives in the gitignored `.token_accounting_state.json`), and the session cumulative grows with each attempt, so a reused footer would misattribute the delta. A `post-commit` git hook advances the baseline only after a commit actually lands, which keeps retries and footerless commits correct — so never reuse an earlier footer.
 
 ```bash
 ./setup/claude_commit_footer.py
@@ -83,7 +84,8 @@ git commit -m "$(cat <<'EOF'
 <optional terse body>
 
 Task: https://www.notion.so/...
-> created with Claude Code X.Y.Z (Model, context: Nk)
+> created with Claude Code 2.1.181 | Opus 4.8: 45'231
+> session(s): 04ee83b5-ff91-4740-8791-073d14939b91
 EOF
 )"
 ```

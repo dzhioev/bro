@@ -115,6 +115,10 @@ done
 HOOK
 chmod +x "$hooks_dir/pre-push"
 
+# promote the staged token-accounting baseline after each commit lands
+cp /workspace/setup/git_hooks/post-commit "$hooks_dir/post-commit"
+chmod +x "$hooks_dir/post-commit"
+
 # pre-create the /workspace transcript directory (trust is granted in the
 # constructed ~/.claude.json, not here)
 mkdir -p "$HOME/.claude/projects/-workspace"

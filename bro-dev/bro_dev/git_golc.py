@@ -9,7 +9,9 @@ line-by-line with a fixed-width credits column.
 Repo-local — wired by setup/setup_repo.sh via `git config --local alias.golc`.
 The footer format is owned by setup/claude_commit_footer.py; the small parser
 here is a duplicate of usage_report.py's (sharing would require making setup/ a
-Python package, which is out of scope).
+Python package, which is out of scope). New-format footers carry per-commit
+deltas; legacy single-line footers carry a session cumulative, so their value is
+marked with a `~` and rendered dimmed — visibly not a real per-commit delta.
 """
 
 from __future__ import annotations
@@ -20,11 +22,23 @@ import shutil
 import subprocess
 import sys
 
+# two-line delta footer (owned by setup/claude_commit_footer.py)
 _FOOTER_RE = re.compile(
-  r'^>\s*created with Claude Code\s+\S+\s+\((.+?);\s*session:\s*(\S+?)\)\s*$',
+  r'^>\s*created with Claude Code\s+(?P<versions>.+?)\s*\|\s*(?P<tokens>.+?)\s*\n'
+  r'>\s*session\(s\):\s*(?P<sessions>.+?)\s*$',
   re.MULTILINE,
 )
-_PART_RE = re.compile(r'^(.*?):\s*([\d,]+)$')
+_PART_RE = re.compile(r"^(?P<model>.*?):\s*(?P<n>[\d']+)$")
+
+# legacy single-line cumulative footer (pre-redesign)
+_LEGACY_RE = re.compile(
+  r'^>\s*created with Claude Code\s+\S+\s+\((?P<tokens>.+?);\s*session:\s*\S+?\)\s*$',
+  re.MULTILINE,
+)
+_LEGACY_PART_RE = re.compile(r'^(?P<model>.*?):\s*(?P<n>[\d,]+)$')
+
+_LEGACY_COLOR = '\x1b[2;33m'  # dim yellow
+_RESET = '\x1b[0m'
 
 
 def _parse_footer(commit_msg: str) -> dict[str, int] | None:
@@ -32,13 +46,26 @@ def _parse_footer(commit_msg: str) -> dict[str, int] | None:
   if m is None:
     return None
   per_model: dict[str, int] = {}
-  for chunk in m.group(1).split(', '):
+  for chunk in m.group('tokens').split(', '):
     pm = _PART_RE.match(chunk.strip())
     if pm is None:
       continue
-    per_model[pm.group(1).strip()] = per_model.get(pm.group(1).strip(), 0) + int(
-      pm.group(2).replace(',', '')
-    )
+    model = pm.group('model').strip()
+    per_model[model] = per_model.get(model, 0) + int(pm.group('n').replace("'", ''))
+  return per_model if len(per_model) > 0 else None
+
+
+def _parse_legacy(commit_msg: str) -> dict[str, int] | None:
+  m = _LEGACY_RE.search(commit_msg)
+  if m is None:
+    return None
+  per_model: dict[str, int] = {}
+  for chunk in m.group('tokens').split(', '):
+    pm = _LEGACY_PART_RE.match(chunk.strip())
+    if pm is None:
+      continue
+    model = pm.group('model').strip()
+    per_model[model] = per_model.get(model, 0) + int(pm.group('n').replace(',', ''))
   return per_model if len(per_model) > 0 else None
 
 
@@ -73,16 +100,24 @@ def _format_credits(per_model: dict[str, int]) -> str:
   )
 
 
-def _collect_credits(git_args: list[str]) -> dict[str, str]:
+def _collect_credits(git_args: list[str]) -> dict[str, tuple[str, bool]]:
+  """sha -> (credits text, is_legacy). legacy text is prefixed with `~`."""
   out = subprocess.check_output(['git', 'log', '--format=%H%x1f%B%x1e', *git_args], text=True)
-  credits: dict[str, str] = {}
+  credits: dict[str, tuple[str, bool]] = {}
   for record in out.split('\x1e'):
     record = record.strip()
     if len(record) == 0:
       continue
     sha, _, body = record.partition('\x1f')
     parsed = _parse_footer(body)
-    credits[sha] = _format_credits(parsed) if parsed is not None else '—'
+    if parsed is not None:
+      credits[sha] = (_format_credits(parsed), False)
+      continue
+    legacy = _parse_legacy(body)
+    if legacy is not None:
+      credits[sha] = (f'~{_format_credits(legacy)}', True)
+    else:
+      credits[sha] = ('—', False)
   return credits
 
 
@@ -94,7 +129,7 @@ def _render(git_args: list[str], use_color: bool) -> str:
   credits = _collect_credits(git_args)
   if len(credits) == 0:
     return ''
-  width = max(len(c) for c in credits.values())
+  width = max(len(text) for text, _ in credits.values())
   color_args = ['--color=always'] if use_color else ['--color=never']
   fmt = 'tformat:%C(auto)%h CREDITS:%H%d %s'
   out = subprocess.check_output(
@@ -110,7 +145,15 @@ def _render(git_args: list[str], use_color: bool) -> str:
     ],
     text=True,
   )
-  return _SENTINEL_RE.sub(lambda m: f'{credits.get(m.group(1), "—"):<{width}}', out)
+
+  def _sub(m: re.Match[str]) -> str:
+    text, is_legacy = credits.get(m.group(1), ('—', False))
+    padded = f'{text:<{width}}'
+    if is_legacy and use_color:
+      return f'{_LEGACY_COLOR}{padded}{_RESET}'
+    return padded
+
+  return _SENTINEL_RE.sub(_sub, out)
 
 
 def _maybe_page(text: str) -> None:

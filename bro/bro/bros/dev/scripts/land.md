@@ -1,6 +1,6 @@
 ---
 name: land
-description: This skill should be used when the user signals that an open PR should be merged into master — "land it", "land", "merge it", "merge the PR", "merge to master". Squash-merges the open PR for the current branch via `gh pr merge --squash --delete-branch`, reusing the original commit's subject and body. Appends a `### Merged` entry to the task page and closes the task to Done unless the user explicitly said to keep it open. In `--auto` sessions, `/pr` chains into this skill automatically on APPROVED. Direct push to master (no PR) is a one-liner (`git fetch origin && git rebase origin/master && git push origin HEAD:master`) — not this skill.
+description: This skill should be used when the user signals that an open PR should be merged into master — "land it", "land", "merge it", "merge the PR", "merge to master". Squash-merges the open PR for the current branch via `gh pr merge --squash --delete-branch`, reusing the original commit's subject and body and injecting an aggregated token footer (`claude-commit-footer --squash`) so the session spend survives the squash. Appends a `### Merged` entry to the task page and closes the task to Done unless the user explicitly said to keep it open. In `--auto` sessions, `/pr` chains into this skill automatically on APPROVED. Direct push to master (no PR) is a one-liner (`git fetch origin && git rebase origin/master && git push origin HEAD:master`) — not this skill.
 version: 1.0.0
 ---
 
@@ -28,18 +28,28 @@ gh pr view --json number,title,body,state,reviewDecision
 - If `reviewDecision` is not `APPROVED` and the user has not explicitly waived it, stop and surface:
   > PR not approved (state=<X>). Use `/pr` to continue review, or override with explicit "merge anyway".
 
-### 2. Recover the original commit message
+### 2. Recover the commit message and aggregate the token footer
 
-Use the PR's title and body as the squash subject and body. Pull from `gh pr view --json title,body`. The PR body's `Task:` line carries onto the merge commit; the per-commit Claude Code token footer (`claude_commit_footer.py`) does not — it lives only in the branch commits, which the squash discards.
+Use the PR's title and body as the squash subject and body. Pull from `gh pr view --json title,body`.
+
+GitHub builds the squash commit server-side from the PR title + `--body`, so the per-commit token footers on the branch commits are discarded with those commits. To keep the session spend on master, generate an **aggregated** footer over the PR's commits and append it to the body so it lands on the squash commit:
+
+```bash
+./setup/claude_commit_footer.py --squash origin/master..HEAD
+```
+
+This emits the two-line footer summing every branch commit's per-model deltas (with the union of their session ids and Claude Code versions) plus this land session's own uncommitted work. Append its two lines to the PR body, below the `Task:` line. If it warns about footerless commits in the range, surface that — those commits' tokens are not captured.
 
 If the worktree has multiple commits, the PR title/body should already reflect the full scope (step 12 of `/pr` enforced this).
 
 ### 3. Squash-merge
 
+Merge with the recovered subject and the body that now carries the aggregated footer:
+
 ```bash
 gh pr merge <n> --squash --delete-branch \
   --subject "<orig PR title>" \
-  --body "<orig PR body>"
+  --body "<orig PR body, with the aggregated footer appended>"
 ```
 
 `--delete-branch` removes the remote feature branch after merge.

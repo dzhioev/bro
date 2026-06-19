@@ -1,10 +1,15 @@
 #!/usr/bin/env python
 """aggregate Claude Code token usage across a git commit range.
 
-Walks `git log <range>`, parses the footer line emitted by
-`setup/claude_commit_footer.py` (`> created with Claude Code <ver> (Model: N,NNN,
-...; session: <id>)`), and sums per-model totals across every commit in the
-range. Output is a small table — one line per model plus a grand total.
+Walks `git log <range>`, parses the two-line footer emitted by
+`setup/claude_commit_footer.py`, and sums the per-model *deltas* across every
+commit in the range — which, under the squash-merge workflow, equals the true
+total spent producing that range (each session counted once).
+
+Legacy single-line footers (`> created with Claude Code <ver> (<model>: N,NNN;
+session: <id>)`) carry a session *cumulative*, not a delta, and are not summable;
+they are counted as legacy, excluded from the total, and reported with a warning
+so the number is honestly incomplete rather than silently wrong.
 
 Example:
   usage-report master..HEAD
@@ -25,35 +30,47 @@ from base.args import Parser
 
 __cli_name__ = 'usage-report'
 
+# two-line delta footer (owned by setup/claude_commit_footer.py)
 _FOOTER_RE = re.compile(
-  r'^>\s*created with Claude Code\s+\S+\s+\((.+?);\s*session:\s*(\S+?)\)\s*$',
+  r'^>\s*created with Claude Code\s+(?P<versions>.+?)\s*\|\s*(?P<tokens>.+?)\s*\n'
+  r'>\s*session\(s\):\s*(?P<sessions>.+?)\s*$',
   re.MULTILINE,
 )
-_PART_RE = re.compile(r'^(.*?):\s*([\d,]+)$')
+_PART_RE = re.compile(r"^(?P<model>.*?):\s*(?P<n>[\d']+)$")
+
+# legacy single-line cumulative footer (pre-redesign; not summable)
+_LEGACY_RE = re.compile(
+  r'^>\s*created with Claude Code\s+\S+\s+\(.+?;\s*session:\s*\S+?\)\s*$',
+  re.MULTILINE,
+)
 
 
 @dataclass
 class CommitUsage:
-  session_id: str
+  session_ids: list[str]
   per_model: dict[str, int]
 
 
 def _parse_footer(commit_msg: str) -> CommitUsage | None:
+  """parse the two-line delta footer; returns None if it is absent or legacy."""
   m = _FOOTER_RE.search(commit_msg)
   if m is None:
     return None
-  parts_str, session_id = m.group(1), m.group(2)
   per_model: dict[str, int] = {}
-  for chunk in parts_str.split(', '):
+  for chunk in m.group('tokens').split(', '):
     pm = _PART_RE.match(chunk.strip())
     if pm is None:
       continue
-    model = pm.group(1).strip()
-    n = int(pm.group(2).replace(',', ''))
-    per_model[model] = per_model.get(model, 0) + n
+    model = pm.group('model').strip()
+    per_model[model] = per_model.get(model, 0) + int(pm.group('n').replace("'", ''))
   if len(per_model) == 0:
     return None
-  return CommitUsage(session_id=session_id, per_model=per_model)
+  sessions = [s.strip() for s in m.group('sessions').split(', ')]
+  return CommitUsage(session_ids=sessions, per_model=per_model)
+
+
+def _is_legacy_footer(commit_msg: str) -> bool:
+  return _LEGACY_RE.search(commit_msg) is not None
 
 
 def _git_log(git_range: str) -> list[tuple[str, str]]:
@@ -71,13 +88,16 @@ def _git_log(git_range: str) -> list[tuple[str, str]]:
   return commits
 
 
-def _format_table(totals: dict[str, int], commit_count: int, footer_count: int) -> str:
+def _format_table(
+  totals: dict[str, int], commit_count: int, new_count: int, legacy_count: int
+) -> str:
   models = sorted(totals.keys())
   width = max((len(m) for m in models), default=0)
   width = max(width, len('total'))
   lines = [
     f'commits scanned: {commit_count}',
-    f'commits with footer: {footer_count}',
+    f'delta footers summed: {new_count}',
+    f'legacy footers skipped: {legacy_count}',
     '',
   ]
   for m in models:
@@ -96,16 +116,25 @@ def usage_report(git_range: str) -> int:
     return 1
 
   totals: dict[str, int] = defaultdict(int)
-  footer_count = 0
-  for _sha, body in commits:
+  new_count = 0
+  legacy_shas: list[str] = []
+  for sha, body in commits:
     parsed = _parse_footer(body)
-    if parsed is None:
-      continue
-    footer_count += 1
-    for model, n in parsed.per_model.items():
-      totals[model] += n
+    if parsed is not None:
+      new_count += 1
+      for model, n in parsed.per_model.items():
+        totals[model] += n
+    elif _is_legacy_footer(body):
+      legacy_shas.append(sha[:9])
 
-  print(_format_table(totals, len(commits), footer_count))
+  if len(legacy_shas) > 0:
+    log.warning(
+      '%d legacy-footer commit(s) excluded from the total (cumulative, not deltas): %s',
+      len(legacy_shas),
+      ', '.join(legacy_shas),
+    )
+
+  print(_format_table(dict(totals), len(commits), new_count, len(legacy_shas)))
   return 0
 
 
