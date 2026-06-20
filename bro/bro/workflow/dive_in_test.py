@@ -80,7 +80,7 @@ def fake_proj(monkeypatch, tmp_path):
 
 class TestPickFreshName:
   def test_appends_random_suffix(self, fake_proj):
-    assert re.fullmatch(r'idea-[0-9a-f]{6}', _pick_fresh_name('idea')) is not None
+    assert re.fullmatch(r'idea-[0-9a-f]{8}', _pick_fresh_name('idea')) is not None
 
   def test_regenerates_on_worktree_collision(self, fake_proj, monkeypatch):
     worktrees, _ = fake_proj
