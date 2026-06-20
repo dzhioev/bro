@@ -1,6 +1,6 @@
 ---
 name: pr
-description: This skill should be used when the user signals that the worktree's changes are ready for review and a PR should be opened — "open a PR", "send for review", "PR it", "ship it", "ready for review", "finalize". Covers commit hygiene (CLAUDE.md sync, Dockerfile audit, comment scan, commit splitting), the project's commit-message style, footer generation via `./setup/claude_commit_footer.py`, submodule landing, rebase onto master, opens the PR via `gh pr create`, then launches `Monitor` + `poll-pr` to handle review comments and APPROVED events. In `--auto` mode, chains into `/land` automatically on approval. For the post-approval merge step, use `/land`.
+description: This skill should be used when the user signals that the worktree's changes are ready for review and a PR should be opened — "open a PR", "send for review", "PR it", "ship it", "ready for review", "finalize". Covers commit hygiene (CLAUDE.md sync, Dockerfile audit, policy audit, commit splitting), the project's commit-message style, footer generation via `./setup/claude_commit_footer.py`, submodule landing, rebase onto master, opens the PR via `gh pr create`, then launches `Monitor` + `poll-pr` to handle review comments and APPROVED events. In `--auto` mode, chains into `/land` automatically on approval. For the post-approval merge step, use `/land`.
 version: 1.0.0
 ---
 
@@ -32,13 +32,7 @@ Run before committing:
 
 A red suite blocks the commit. Do not interpret or triage failures — propose fixing in this session or a separate one, but do not commit through failures.
 
-**Comment scan**: re-read the comments, docstrings, and help/log strings you added (`git diff`) against the comment/doc policy in your dev guidance (the "reader-not-in-the-room" test). This is the single most-corrected class in review — catch it here, not in a review round. Cut in particular:
-- change-narration — "now" / "used to" / "is gone" / "replaces the old"; state the behavior, not the transition
-- roads not taken, "why not the obvious alternative", "as discussed", or audit/ticket ids — that context belongs in the PR/task, not inline
-- help or doc text that narrates a use case instead of stating what the thing does
-- comments duplicating a `CLAUDE.md` / reference doc or restating the code; redundant per-assertion test comments
-
-Default to none; keep a comment only for a non-obvious *why* the reader can't recover from the code.
+**Policy audit**: before committing, re-read your Style guidance and audit your `git diff` for anything that violates it. The policies carry their own specifics, so this gate just re-applies all of them — including any added later. It's the cheapest place to catch a violation; the alternative is a review round-trip.
 
 ### 3. Sync CLAUDE.md
 

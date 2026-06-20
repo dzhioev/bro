@@ -24,8 +24,19 @@ Style:
   roads not taken (defending against an alternative they wouldn't reach for on
   their own), unresolvable refs (audit/ticket ids, "as discussed"), and change-
   narration ("now"/"used to"/"is gone" — state the behavior, not the transition).
+  Also cut what merely restates what's already there: a comment duplicating a
+  reference doc or paraphrasing the code, per-assertion narration in tests, and
+  help/doc text that narrates a use case instead of saying what the thing does.
   "Why not the obvious alternative" rationale belongs in the PR/task/spec, not
   inline. Default to none; add one only for a non-obvious why.
+- Fail fast on violated assumptions — make it the default, not something to be
+  asked for. When data is malformed, missing where it's required, or in a state
+  that "shouldn't happen", raise and stop rather than coping — no fallback
+  value, no swallowing try/except, no silent continue/skip, no permissive
+  default for a value that must be present, no coercing an unexpected type.
+  Reserve graceful handling for genuinely expected conditions (optional input,
+  known-transient errors); recovering from an impossible case only hides the bug
+  and moves the failure far from its cause.
 - Run tests, type checkers, and formatters before declaring work done — if the
   repo has them.
 
