@@ -6,7 +6,6 @@ import json
 import os
 import signal
 import socket
-import sys
 import threading
 import time
 from pathlib import Path
@@ -275,7 +274,7 @@ def sync_session_log(
   return 0
 
 
-def main(argv=None):
+def main(argv: list[str]) -> int | None:
   parser = Parser(description='sync Claude Code session logs to S3 + DynamoDB')
   parser.add_argument('--watch', action='store_true', help='poll for changes and sync continuously')
   parser.add_argument(
@@ -285,7 +284,3 @@ def main(argv=None):
     '--workspace', default=None, help='workspace name (default: from CW_COMMAND/CW_NAME)'
   )
   return sync_session_log(**parser.parse(argv))
-
-
-if __name__ == '__main__':
-  sys.exit(main(sys.argv))

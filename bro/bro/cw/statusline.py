@@ -23,7 +23,8 @@ def statusline() -> int:
   return 0
 
 
-def main(argv=None):
+def main(argv: list[str]) -> int | None:
+  del argv
   return statusline()
 
 

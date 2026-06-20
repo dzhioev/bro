@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 
 import asyncio
-import sys
 
 import mcp.types as types
 from mcp.server.lowlevel import Server
@@ -96,7 +95,7 @@ async def run(mcp_server: MCPServer):
     await server.run(read_stream, write_stream, server.create_initialization_options())
 
 
-def main(argv=None) -> int | None:
+def main(argv: list[str]) -> int | None:
   parser = base.args.Parser(description='generic MCP stdio server')
   parser.add_argument(
     'server',
@@ -104,7 +103,3 @@ def main(argv=None) -> int | None:
   )
   args = parser.parse(argv)
   asyncio.run(run(_resolve_server(args['server'])))
-
-
-if __name__ == '__main__':
-  sys.exit(main(sys.argv))

@@ -210,7 +210,7 @@ def resolve_auth(bearer_token: str | None, allow_no_auth: bool, host: str) -> st
   return None
 
 
-def main(argv=None) -> int | None:
+def main(argv: list[str]) -> int | None:
   parser = base.args.Parser(description='trails recording server')
   parser.add_argument('--host', default='0.0.0.0')
   parser.add_argument('--port', type=int, default=DEFAULT_PORT)
@@ -242,5 +242,7 @@ def main(argv=None) -> int | None:
   web.run_app(create_app(store, bearer_token), host=args['host'], port=args['port'])
 
 
+# deployed via `python -m trails.server.server` (Dockerfile), so it keeps its own
+# entry guard; the `trails-server` console script routes through the bridge.
 if __name__ == '__main__':
   sys.exit(main(sys.argv))

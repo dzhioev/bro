@@ -1,18 +1,40 @@
 #!/usr/bin/env python
+"""argument parsing built on argparse.
+
+base.args must stay importable in a stdlib-only environment (no venv): some
+consumers run outside it — e.g. setup/claude_commit_footer.py via the post-commit
+git hook. So it imports no third-party package at module load. icecream is the one
+exception, treated as optional — the --ic debug flag is registered only when it is
+installed.
+"""
 
 import argparse
 import os
 import sys
-from base.time_util import parse_moment, Moment
-from icecream import ic
 from collections.abc import Iterable, Sequence
-from typing import Callable, Type, TypeVar, overload
+from typing import Callable, TYPE_CHECKING, Type, TypeVar, overload
 import logging
 
 from base import log
 
+try:
+  from icecream import ic
+except ImportError:  # icecream is a venv dep; base.args must import without it
+  ic = None
 
-def moment_parser(arg: str) -> Moment:
+# re-exported so base.args is the only module in the repo that imports argparse
+REMAINDER = argparse.REMAINDER
+ArgumentTypeError = argparse.ArgumentTypeError
+
+if TYPE_CHECKING:
+  from base.time_util import Moment
+
+
+def moment_parser(arg: str) -> 'Moment':
+  # lazy: base.time_util imports base.args for its own CLI, so a top-level import
+  # here would be a cycle.
+  from base.time_util import parse_moment
+
   try:
     return parse_moment(arg)
   except ValueError as e:
@@ -44,10 +66,14 @@ def set_log_level(level: int) -> Callable:
 
 
 def enable_ic() -> None:
-  ic.enable()
+  if ic is not None:
+    ic.enable()
 
 
 _N = TypeVar('_N')
+
+# subparser handler stashed via set_handler, popped by dispatch
+_HANDLER_DEST = '_handler'
 
 
 def _default_env_name(option_strings: Sequence[str]) -> str | None:
@@ -115,7 +141,8 @@ class Parser(argparse.ArgumentParser):
     self._add_global_argument(
       '--verbose', action=trigger(set_log_level(logging.DEBUG)), help='enable verbose logging'
     )
-    self._add_global_argument('--ic', action=trigger(enable_ic), help='enable ic ouptput')
+    if ic is not None:
+      self._add_global_argument('--ic', action=trigger(enable_ic), help='enable ic output')
 
   def _move_to_global(self, action: argparse.Action) -> None:
     for group in self._action_groups:
@@ -168,7 +195,7 @@ class Parser(argparse.ArgumentParser):
     return formatter
 
   def format_help(self) -> str:
-    argv = self._last_argv if self._last_argv is not None else sys.argv[1:]
+    argv = self._last_argv if self._last_argv is not None else []
     show_env = '--allow-env' in argv
     originals: dict[str, str | None] = {}
     if show_env:
@@ -294,18 +321,15 @@ class Parser(argparse.ArgumentParser):
       print('  '.join(r[i].ljust(widths[i]) for i in range(4)).rstrip())
 
   @overload
-  def parse_args(
-    self, args: Iterable[str] | None = ..., namespace: None = ...
-  ) -> argparse.Namespace: ...
+  def parse_args(self, args: Iterable[str], namespace: None = ...) -> argparse.Namespace: ...
   @overload
-  def parse_args(self, args: Iterable[str] | None, namespace: _N) -> _N: ...
-  @overload
-  def parse_args(self, *, namespace: _N) -> _N: ...
-  def parse_args(
-    self, args: Iterable[str] | None = None, namespace: _N | None = None
+  def parse_args(self, args: Iterable[str], namespace: _N) -> _N: ...
+  def parse_args(  # type: ignore[override]
+    self, args: Iterable[str], namespace: _N | None = None
   ) -> _N | argparse.Namespace:
-    ic.disable()
-    argv_list = list(args) if args is not None else list(sys.argv[1:])
+    if ic is not None:
+      ic.disable()
+    argv_list = list(args)
     self._last_argv = argv_list
     allow_env = '--allow-env' in argv_list
     print_env = '--print-env' in argv_list
@@ -316,7 +340,8 @@ class Parser(argparse.ArgumentParser):
       self._print_env_table(ns, argv_list)
       sys.exit(0)
     self._check_exclusive_groups(ns)
-    delattr(ns, 'ic')
+    if ic is not None:
+      delattr(ns, 'ic')
     delattr(ns, 'verbose')
     delattr(ns, 'print_env')
     delattr(ns, 'allow_env')
@@ -361,7 +386,30 @@ class Parser(argparse.ArgumentParser):
         parts.append(str(val))
     return parts
 
-  def parse(self, argv=None):
-    if argv is None:
-      argv = sys.argv
+  def set_handler(self, fn: Callable) -> 'Parser':
+    """register the handler dispatch() calls when this (sub)parser is selected; it
+    is invoked with the parsed args as keyword arguments."""
+    self.set_defaults(**{_HANDLER_DEST: fn})
+    return self
+
+  def dispatch(self, argv: list[str]):
+    """parse argv and invoke the selected subcommand's handler.
+
+    each subparser registers a handler with set_handler(fn); dispatch pops the
+    subcommand dest and the handler and calls handler(**remaining_args), returning
+    its value. with no subcommand given (optional subparsers) it prints help to
+    stderr and returns 1."""
+    args = self.parse(argv)
+    sub = next((a for a in self._actions if isinstance(a, argparse._SubParsersAction)), None)
+    if sub is None:
+      raise RuntimeError('dispatch() requires add_subparsers()')
+    if sub.dest != argparse.SUPPRESS:
+      args.pop(sub.dest, None)
+    handler = args.pop(_HANDLER_DEST, None)
+    if handler is None:
+      self.print_help(sys.stderr)
+      return 1
+    return handler(**args)
+
+  def parse(self, argv: list[str]) -> dict:
     return vars(self.parse_args(argv[1:]))

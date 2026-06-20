@@ -120,7 +120,7 @@ def run(
   arg_name: str,
   arg_help: str,
   run_fn: Callable[[Bro, str, Observer | None], Coroutine[None, None, str]],
-  argv: list[str] | None,
+  argv: list[str],
 ) -> int | None:
   parser = base.args.Parser(description=parser_desc)
   parser.add_argument('bro', help='bro name')

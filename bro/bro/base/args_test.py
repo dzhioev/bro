@@ -1,8 +1,8 @@
 #!/usr/bin/env python
-import argparse
+import sys
 
 import pytest
-from base.args import Parser, moment_parser, list_parser
+from base.args import ArgumentTypeError, Parser, REMAINDER, moment_parser, list_parser
 
 
 class TestExclusiveGroups:
@@ -118,9 +118,7 @@ class TestMomentParser:
     assert m is not None
 
   def test_invalid_raises_argument_type_error(self):
-    import argparse
-
-    with pytest.raises(argparse.ArgumentTypeError):
+    with pytest.raises(ArgumentTypeError):
       moment_parser('invalid-date')
 
 
@@ -572,7 +570,7 @@ class TestReconstruct:
   def test_positional_and_remainder(self):
     parser = Parser()
     parser.add_argument('target')
-    parser.add_argument('extra', nargs=argparse.REMAINDER)
+    parser.add_argument('extra', nargs=REMAINDER)
     args = parser.parse(['cmd', 'mytarget', '--foo', 'bar'])
     assert parser.reconstruct(args) == [parser.prog, 'mytarget', '--foo', 'bar']
 
@@ -618,7 +616,7 @@ class TestReconstruct:
   def test_empty_remainder(self):
     parser = Parser()
     parser.add_argument('name')
-    parser.add_argument('rest', nargs=argparse.REMAINDER)
+    parser.add_argument('rest', nargs=REMAINDER)
     args = parser.parse(['cmd', 'foo'])
     assert parser.reconstruct(args) == [parser.prog, 'foo']
 
@@ -641,7 +639,72 @@ class TestReconstruct:
     sub.add_argument('-c', '--container', action='store_true')
     sub.add_argument('--mcp', action='store_true')
     sub.add_argument('name')
-    sub.add_argument('extra', nargs=argparse.REMAINDER)
+    sub.add_argument('extra', nargs=REMAINDER)
     args = parser.parse(['cmd', 'ss', '-c', '--mcp', 'myname', '--foo'])
     result = sub.reconstruct(args, prog=['cw', 'ss'])
     assert result == ['cw', 'ss', '-c', '--mcp', 'myname', '--foo']
+
+
+class TestParseArgvBoundary:
+  def test_parse_args_ignores_sys_argv(self, monkeypatch):
+    monkeypatch.setattr(sys, 'argv', ['prog', '--foo', 'leaked'])
+    parser = Parser()
+    parser.add_argument('--foo')
+    args = parser.parse_args([])
+    assert args.foo is None
+
+  def test_parse_strips_prog_name(self):
+    parser = Parser()
+    parser.add_argument('--foo')
+    assert parser.parse(['prog', '--foo', 'bar']) == {'foo': 'bar'}
+
+
+class TestDispatch:
+  def _build(self) -> Parser:
+    parser = Parser()
+    sub = parser.add_subparsers(dest='cmd')
+    create = sub.add_parser('create')
+    create.add_argument('--title')
+    create.set_handler(lambda title=None: ('create', title))
+    sub.add_parser('list').set_handler(lambda: 'listed')
+    return parser
+
+  def test_routes_with_kwargs(self):
+    assert self._build().dispatch(['prog', 'create', '--title', 'hi']) == ('create', 'hi')
+
+  def test_routes_no_arg_subcommand(self):
+    assert self._build().dispatch(['prog', 'list']) == 'listed'
+
+  def test_no_subcommand_prints_help_returns_1(self, capsys):
+    assert self._build().dispatch(['prog']) == 1
+    assert 'usage' in capsys.readouterr().err.lower()
+
+  def test_requires_subparsers(self):
+    parser = Parser()
+    with pytest.raises(RuntimeError):
+      parser.dispatch(['prog'])
+
+  def test_set_handler_returns_parser(self):
+    parser = Parser()
+    sub = parser.add_subparsers(dest='cmd')
+    p = sub.add_parser('x')
+    assert p.set_handler(lambda: None) is p
+
+
+class TestStdlibOnlyImport:
+  def test_imports_and_parses_without_icecream(self):
+    # base.args must import in a stdlib-only environment (no venv); icecream is
+    # optional. simulate its absence in a fresh subprocess. cwd is the repo root
+    # (run_tests invokes pytest there), so `import base.args` resolves.
+    import subprocess
+
+    code = (
+      "import sys; sys.modules['icecream'] = None; "
+      'import base.args; '
+      "ns = base.args.Parser().parse(['prog']); "
+      "assert 'ic' not in ns and '--ic' not in base.args.Parser().format_help(); "
+      "print('ok')"
+    )
+    result = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == 'ok'

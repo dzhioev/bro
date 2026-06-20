@@ -141,6 +141,9 @@ fi
 # activate venv so all child processes (hooks, MCP servers, Bash tool) inherit it
 if [ "${CW_SKIP_VENV:-}" != "1" ]; then
   source /workspace/.venv/bin/activate
+  # materialize the gitignored console-script bridge (see sync_scripts.py); cheap,
+  # and the venv may persist across container starts with a stale/absent shim
+  python -m sync_scripts --entrypoints >&2
 fi
 
 # secrets resolve from the scoped credential store bind-mounted at ~/.ppp (see

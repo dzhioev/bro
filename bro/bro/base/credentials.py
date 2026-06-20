@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Protocol
 
 import configs
+from base.args import Parser
 
 __cli_name__ = 'credentials'
 
@@ -365,26 +366,21 @@ def _get(name: str, field: str | None, as_json: bool) -> int | None:
   return None
 
 
-def main(argv=None) -> int | None:
-  import base.args
+def _print_hooks() -> None:
+  print(install_hooks())
 
-  parser = base.args.Parser(description='resolve credentials from the default store')
-  parser.add_argument('action', choices=['get', 'install-hooks'], help='operation')
-  parser.add_argument('name', nargs='?', help='secret name for get (e.g. anthropic, notion)')
-  parser.add_argument('--field', help='for a json secret, print only this field')
-  parser.add_argument(
+
+def main(argv: list[str]) -> int | None:
+  parser = Parser(description='resolve credentials from the default store')
+  subparser = parser.add_subparsers(dest='action', required=True)
+  get_parser = subparser.add_parser('get', help='resolve a secret and print it')
+  get_parser.add_argument('name', help='secret name (e.g. anthropic, notion)')
+  get_parser.add_argument('--field', help='for a json secret, print only this field')
+  get_parser.add_argument(
     '--json', dest='as_json', action='store_true', help='parse as json and pretty-print (indent=2)'
   )
-  args = parser.parse(argv)
-  action = args.pop('action')
-  if action == 'install-hooks':
-    print(install_hooks())
-    return
-  if args['name'] is None:
-    print('get requires a secret name', file=sys.stderr)
-    return 1
-  return _get(**args)
-
-
-if __name__ == '__main__':
-  sys.exit(main(sys.argv))
+  get_parser.set_handler(_get)
+  subparser.add_parser(
+    'install-hooks', help='print shell install hooks for the container entrypoint to eval'
+  ).set_handler(_print_hooks)
+  return parser.dispatch(argv)

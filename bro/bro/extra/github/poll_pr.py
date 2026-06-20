@@ -3,12 +3,11 @@
 
 import json
 import logging
-import sys
 import time
 import urllib.request
 from typing import Any, Callable
 
-from base.args import Parser
+from base.args import ArgumentTypeError, Parser
 
 __cli_name__ = 'poll-pr'
 
@@ -205,19 +204,24 @@ def poll_pr(
     time.sleep(interval)
 
 
-def main(argv=None):
+def _owner_repo(arg: str) -> tuple[str, str]:
+  parts = arg.split('/')
+  if len(parts) != 2:
+    raise ArgumentTypeError('repo must be in owner/repo format')
+  return parts[0], parts[1]
+
+
+def main(argv: list[str]) -> int | None:
   parser = Parser(description='poll a GitHub PR for merge status, new comments, and new reviews')
-  parser.add_argument('repo', help='owner/repo (e.g. dzhioev/ppp)')
+  parser.add_argument(
+    'repo', type=_owner_repo, metavar='owner/repo', help='target repo (e.g. dzhioev/ppp)'
+  )
   parser.add_argument('pr', type=int, help='PR number')
   parser.add_argument('--token', required=True, secret=True, help='GitHub token')
   parser.add_argument('--interval', type=int, default=10, help='poll interval in seconds')
   parser.add_argument('--self', dest='self_login', help='login to filter out (your own comments)')
   ns = parser.parse(argv)
-  parts = ns['repo'].split('/')
-  if len(parts) != 2:
-    print('repo must be owner/repo format', file=sys.stderr)
-    return 2
-  owner, repo = parts
+  owner, repo = ns['repo']
   return poll_pr(
     owner=owner,
     repo=repo,
@@ -226,7 +230,3 @@ def main(argv=None):
     interval=ns['interval'],
     self_login=ns['self_login'],
   )
-
-
-if __name__ == '__main__':
-  sys.exit(main(sys.argv))

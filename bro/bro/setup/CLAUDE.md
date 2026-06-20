@@ -5,30 +5,30 @@ How to bring up a fresh checkout, plus the credential schemas the project reads 
 ## Setup
 
 ```bash
-./setup/setup_repo.sh   # uv sync, sync-scripts, ~/.ppp check
+./setup/setup_repo.sh   # uv sync, generate entrypoints bridge, ~/.ppp check
 source .venv/bin/activate
 ```
 
 For a fresh machine, `./setup.sh` (repo root) runs `setup_env.sh` (system tools: stow, uv, docker, AWS CLI, Claude Code) then `setup_repo.sh`. Both scripts are idempotent.
 
-`uv sync` creates `.venv`, installs runtime + `dev` + `cdk` dependency groups from `uv.lock`, and editable-installs the project. Lockfile (`uv.lock`) is committed; refresh with `uv lock --upgrade` when bumping deps. Runtime deps live in `pyproject.toml` `[project] dependencies` (exact `==` pins); dev/cdk deps live in `[dependency-groups]`. The editable install registers the CLI console scripts declared in `[project.scripts]` — after activating the venv, every CLI is a bare command on `PATH`.
+`uv sync` creates `.venv`, installs runtime + `dev` + `cdk` dependency groups from `uv.lock`, and editable-installs the project. Lockfile (`uv.lock`) is committed; refresh with `uv lock --upgrade` when bumping deps. Runtime deps live in `pyproject.toml` `[project] dependencies` (exact `==` pins); dev/cdk deps live in `[dependency-groups]`. The editable install registers the CLI console scripts declared in `[project.scripts]` — after activating the venv, every CLI is a bare command on `PATH`. Those launchers import a generated `_entrypoints.py` shim (gitignored, in the venv site-packages) that feeds `sys.argv` to each CLI's `main(argv)`; provisioning regenerates it via `sync_scripts --entrypoints` after `uv sync` (see the entry-point convention in the root `CLAUDE.md`).
 
 ### Worktrees
 
-Worktrees get their own `.venv`. The `.claude/hooks/session_start.sh` hook runs `uv sync` on first session in the worktree; subsequent sessions bail.
+Worktrees get their own `.venv`. The `.claude/hooks/session_start.sh` hook runs `uv sync` + generates the `_entrypoints.py` bridge on first session in the worktree; subsequent sessions bail.
 
 **Never run `uv sync` against the main repo from inside a worktree.** The editable install hardcodes absolute paths and would pin the shared venv to a worktree that may later disappear.
 
 ## Files
 
 - `setup_env.sh` — installs system tools (stow, claude-code, docker via colima on macOS, awscli, uv). macOS and Ubuntu only
-- `setup_repo.sh` — `uv sync` + `sync-scripts` + `uv sync` again + registers repo-local `git golc` alias + installs the `post-commit` git hook + `~/.ppp` presence check
+- `setup_repo.sh` — `uv sync` + generates the `_entrypoints.py` console-script bridge (`sync_scripts --entrypoints`) + registers repo-local `git golc` alias + installs the `post-commit` git hook + `~/.ppp` presence check
 - `bootstrap_session_log.sh` — one-time IAM/SSM setup for session-log sync (creates `cw-session-log-sync` IAM user + key, writes `~/.ppp/session_log.json`). Run once after deploying `SessionLogStack`
 - `bootstrap_trails.sh` — one-time setup for the trails sink (reads `/trails/bearer-token` from SSM, derives `base_url` from the `infra` secret's `delegated_subdomain`, writes `~/.ppp/trails.json`). Run once after deploying `TrailsServerStack`
-- `claude_commit_footer.py` — prints the per-commit token-accounting footer (path-invoked, not a console script; stdlib-only so the git hook and `/pr` run it without the venv). Two `>`-quoted lines — `> created with Claude Code <versions> | <model>: <delta>[, …]` then `> session(s): <id>[, …]` — with `'` as the thousands separator so it never collides with the `, ` joining entries.
+- `claude_commit_footer.py` — prints the per-commit token-accounting footer (path-invoked, not a console script; runs through `base.args`, so the project venv must be active — the editable install puts `base` on the path even when it is invoked by file path). Two `>`-quoted lines — `> created with Claude Code <versions> | <model>: <delta>[, …]` then `> session(s): <id>[, …]` — with `'` as the thousands separator so it never collides with the `, ` joining entries.
 
   The per-model number is a per-commit *delta*: the session's cumulative transcript usage now minus the baseline already attributed to its earlier commits. So deltas — not cumulatives — are what sum across a range. Baselines live in the gitignored `<repo>/.token_accounting_state.json` (`committed` marks plus a `staged` proposal). Default mode emits the delta and stages the new cumulative; `--record` (run by the `post-commit` hook) promotes staged→committed once a commit lands, so the mark only advances on success; `--squash <range>` (run by `/land`) emits an aggregated footer over a branch — the union of its commits' deltas / sessions / versions plus the land session's uncommitted remainder — so squash merges keep their discarded children's tokens. The session ids link each commit back to its source trail.
-- `git_hooks/post-commit` — git hook installed into `.git/hooks` by `setup_repo.sh` (host) and the container entrypoint; runs `claude_commit_footer.py --record` to promote the staged token-accounting baseline after a commit lands. Best-effort (never fails or noises the commit)
+- `git_hooks/post-commit` — git hook installed into `.git/hooks` by `setup_repo.sh` (host) and the container entrypoint; runs `claude_commit_footer.py --record` to promote the staged token-accounting baseline after a commit lands. Surfaces failures (it imports `base.args`) rather than swallowing them, so commit with the venv active
 - `git_golc.py` — `git golc` alias backend (repo-local). Renders `git gol`-style oneline-graph log with a per-commit credits column (per-model, rounded — e.g. `O:18K S:1.2M`).
 
   Two-pass: collects per-sha deltas from commit-message footers (same format as `claude_commit_footer.py`), then substitutes a sentinel in a `--graph --color=always` render. Legacy single-line footers carry a session cumulative, not a delta, so their value is prefixed with `~` and dimmed — visibly not a real per-commit number. Pages through `less -RFX` on tty. Alias is registered by `setup_repo.sh`.

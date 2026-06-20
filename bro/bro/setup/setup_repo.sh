@@ -13,11 +13,10 @@ fi
 echo "syncing python dependencies"
 uv sync --all-groups
 
-echo "syncing console scripts"
-uv run sync-scripts
-
-echo "re-syncing after script registration"
-uv sync --all-groups
+# pyproject's [project.scripts] is committed; provisioning only materializes the
+# gitignored _entrypoints.py shim the launchers import (see sync_scripts.py).
+echo "generating console-script entrypoints"
+uv run python -m sync_scripts --entrypoints
 
 echo "registering local git aliases"
 git config --local alias.golc '!./setup/git_golc.py'

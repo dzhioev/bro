@@ -1,5 +1,3 @@
-import sys
-
 from bro.bro import BaseBro
 from do._cli import run
 from do.do import do
@@ -21,7 +19,7 @@ async def do_task(bro: BaseBro, task: str, observer: Observer | None = None) -> 
   return await do(bro, task, observer=observer)
 
 
-def main(argv=None) -> int | None:
+def main(argv: list[str]) -> int | None:
   return run(
     cli_name='do-task',
     parser_desc='run a bro on a flow task',
@@ -30,7 +28,3 @@ def main(argv=None) -> int | None:
     run_fn=do_task,
     argv=argv,
   )
-
-
-if __name__ == '__main__':
-  sys.exit(main(sys.argv))

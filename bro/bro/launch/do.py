@@ -1,5 +1,4 @@
 import re
-import sys
 
 from bro.bro import BaseBro
 from do._cli import run
@@ -30,7 +29,7 @@ async def do(bro: BaseBro, what: str, observer: Observer | None = None) -> str:
   return await bro.run(_expand_skill_invocation(bro, what), observer=observer)
 
 
-def main(argv=None) -> int | None:
+def main(argv: list[str]) -> int | None:
   return run(
     cli_name='ask',
     parser_desc='run a bro on the given input',
@@ -39,7 +38,3 @@ def main(argv=None) -> int | None:
     run_fn=do,
     argv=argv,
   )
-
-
-if __name__ == '__main__':
-  sys.exit(main(sys.argv))

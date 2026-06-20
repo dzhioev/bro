@@ -103,7 +103,7 @@ def _tty_supported() -> bool:
   return sys.stdin.isatty() and sys.stdout.isatty()
 
 
-def main(argv=None) -> int | None:
+def main(argv: list[str]) -> int | None:
   parser = base.args.Parser(description='open an interactive session with a bro')
   parser.add_argument('bro', help='bro name')
   parser.add_argument('what', help='first message to send to the bro')
@@ -164,7 +164,3 @@ def main(argv=None) -> int | None:
     return 1
   except KeyboardInterrupt:
     return 130
-
-
-if __name__ == '__main__':
-  sys.exit(main(sys.argv))

@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import re
 import subprocess
-import sys
 from collections import defaultdict
 from dataclasses import dataclass
 
@@ -138,14 +137,10 @@ def usage_report(git_range: str) -> int:
   return 0
 
 
-def main(argv=None):
+def main(argv: list[str]) -> int | None:
   parser = Parser(description='aggregate Claude Code token usage across a git commit range')
   parser.add_argument(
     'git_range',
     help='git range, e.g. master..HEAD or HEAD~10..HEAD',
   )
   return usage_report(**parser.parse(argv))
-
-
-if __name__ == '__main__':
-  sys.exit(main(sys.argv))

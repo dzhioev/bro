@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 
 import asyncio
-import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import ClassVar, Self
@@ -146,13 +145,9 @@ async def llm_main(request: str, llm_type: str, attachments: list[str]):
   print(f'< {response}')
 
 
-def main(argv=None) -> int | None:
+def main(argv: list[str]) -> int | None:
   parser = base.args.Parser(description='chat with LLM')
   parser.add_argument('--attach', '-a', dest='attachments', nargs='*', default=[])
   parser.add_argument('--llm-type', '-t', choices=_LLM_TYPES, default='echo')
   parser.add_argument('request')
   return asyncio.run(llm_main(**parser.parse(argv)))
-
-
-if __name__ == '__main__':
-  sys.exit(main(sys.argv))

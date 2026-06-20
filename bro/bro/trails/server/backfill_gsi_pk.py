@@ -16,7 +16,6 @@ Run once after deploying the GSI, with AWS credentials for the trails account
 """
 
 import os
-import sys
 
 import boto3
 
@@ -25,7 +24,7 @@ from base import log
 from trails.server.storage import GSI_PK_ATTR, GSI_PK_VALUE
 
 
-def main(argv=None) -> int | None:
+def main(argv: list[str]) -> int | None:
   parser = base.args.Parser(description='backfill the constant gsi_pk on existing trail rows')
   parser.add_argument('--trails-table', default=os.environ.get('TRAILS_TABLE', 'trails'))
   parser.add_argument('--aws-region', default=os.environ.get('AWS_REGION', 'eu-central-1'))
@@ -75,7 +74,3 @@ def main(argv=None) -> int | None:
   suffix = ' (dry run)' if dry_run else ''
   log.info('backfill complete%s: %d rows stamped with %s', suffix, stamped, GSI_PK_ATTR)
   return 0
-
-
-if __name__ == '__main__':
-  sys.exit(main(sys.argv))

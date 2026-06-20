@@ -27,13 +27,14 @@ with the `, ` joining model entries and list items):
   > session(s): <session-id>[, <session-id> …]
 
 State lives in a gitignored `<repo>/.token_accounting_state.json`; git history
-carries only the durable deltas / versions / sessions. Kept stdlib-only so the
-post-commit hook and /pr can run it without the project venv.
+carries only the durable deltas / versions / sessions. Runs through base.args, so
+it needs the project venv active (the editable install puts `base` on the path even
+when invoked by file path); the post-commit hook surfaces a failure rather than
+swallowing it, so committing without the venv is caught.
 """
 
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import re
@@ -41,6 +42,8 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+from base.args import Parser
 
 STATE_FILENAME = '.token_accounting_state.json'
 _THOUSANDS = "'"
@@ -295,8 +298,8 @@ def _git_log(git_range: str) -> list[tuple[str, str]]:
   return commits
 
 
-def main(argv: list[str] | None = None) -> int:
-  parser = argparse.ArgumentParser(description='print/aggregate the Claude Code commit footer')
+def main(argv: list[str]) -> int | None:
+  parser = Parser(description='print/aggregate the Claude Code commit footer')
   group = parser.add_mutually_exclusive_group()
   group.add_argument(
     '--record',
@@ -308,16 +311,16 @@ def main(argv: list[str] | None = None) -> int:
     metavar='RANGE',
     help='emit an aggregated footer over a git range (for /land squash merges)',
   )
-  args = parser.parse_args(argv)
+  args = parser.parse(argv)
 
   state = State(_repo_root() / STATE_FILENAME)
 
-  if args.record is True:
+  if args['record'] is True:
     state.record()
     return 0
 
-  if args.squash is not None:
-    commits = _git_log(args.squash)
+  if args['squash'] is not None:
+    commits = _git_log(args['squash'])
     jsonl = _find_session_jsonl()
     land: tuple[str, dict[str, int]] | None = None
     if jsonl is not None:
@@ -352,4 +355,4 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == '__main__':
-  sys.exit(main())
+  sys.exit(main(sys.argv))

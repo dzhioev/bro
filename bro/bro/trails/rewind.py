@@ -410,7 +410,7 @@ async def _fork_repl(
     emit_reply(reply)
 
 
-def main(argv=None) -> int | None:
+def main(argv: list[str]) -> int | None:
   parser = base.args.Parser(description='inspect and fork recorded bro trails')
   parser.add_argument(
     '--color',
@@ -474,7 +474,3 @@ def main(argv=None) -> int | None:
 # re-exported so tests / external callers can rehydrate steps without reaching
 # into trails.client themselves.
 __all__ = ['RecordedTrail', 'Step', 'main', 'step_from_row', 'trail_from_header']
-
-
-if __name__ == '__main__':
-  sys.exit(main(sys.argv))

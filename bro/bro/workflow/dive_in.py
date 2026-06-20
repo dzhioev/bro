@@ -5,7 +5,6 @@ import os
 import re
 import secrets
 import subprocess
-import sys
 
 import cw
 from base import log
@@ -207,7 +206,7 @@ def dive_in(
   return subprocess.run(cmd).returncode
 
 
-def main(argv=None):
+def main(argv: list[str]) -> int | None:
   parser = Parser(description='start a cw session focused on a task')
   parser.add_argument(
     '-n', '--dry-run', action='store_true', help='print the command without running it'
@@ -249,7 +248,3 @@ def main(argv=None):
   resume = args['resume']
   forwarded = cw.extract_forwarded_argv(args)
   return dive_in(forwarded=forwarded, resume=resume, **args)
-
-
-if __name__ == '__main__':
-  sys.exit(main(sys.argv))

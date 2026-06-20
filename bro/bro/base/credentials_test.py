@@ -429,5 +429,7 @@ class TestInstallHooks:
     assert 'credentials get aws' in capsys.readouterr().out
 
   def test_cli_get_without_name_errors(self, configs_dir: Path, capsys):
-    assert credentials.main(['credentials', 'get']) == 1
-    assert 'requires a secret name' in capsys.readouterr().err
+    # the get subparser makes name a required positional, so argparse enforces it
+    with pytest.raises(SystemExit):
+      credentials.main(['credentials', 'get'])
+    assert 'required: name' in capsys.readouterr().err

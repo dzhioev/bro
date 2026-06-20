@@ -42,7 +42,6 @@ keeps the container's git state genuinely isolated. layout:
 network is not restricted by design.
 """
 
-import argparse
 import concurrent.futures
 import datetime
 import hashlib
@@ -62,7 +61,7 @@ import humanize
 
 import session_log_health
 from base import credentials, log
-from base.args import Parser
+from base.args import Parser, REMAINDER
 
 CONTAINER_DIR = Path(__file__).resolve().parent / 'setup' / 'container'
 _PROMPTS_DIR = Path(__file__).resolve().parent / 'prompts'
@@ -1191,7 +1190,7 @@ def _mcp_config_argv(mcp: str) -> list[str]:
 EFFORT_LEVELS = ('low', 'medium', 'high', 'xhigh', 'max')
 
 
-def add_forwarded_flags(parser: argparse.ArgumentParser) -> None:
+def add_forwarded_flags(parser: Parser) -> None:
   """register the flags that wrappers (dive-in, start-session) forward to `cw ss`.
 
   Adding a new pass-through flag here makes it available in every wrapper that
@@ -1699,7 +1698,7 @@ def cw(
   return result.returncode
 
 
-def main(argv=None):
+def main(argv: list[str]) -> int | None:
   parser = Parser(description='launch claude with worktree management')
   subparsers = parser.add_subparsers(dest='cmd', required=True)
 
@@ -1728,7 +1727,7 @@ def main(argv=None):
     '-p', '--prompt', default=None, help='initial prompt (prepended with base prompt)'
   )
   ss.add_argument('name', help='worktree name')
-  ss.add_argument('claude_args', nargs=argparse.REMAINDER, help='args forwarded to claude')
+  ss.add_argument('claude_args', nargs=REMAINDER, help='args forwarded to claude')
 
   subparsers.add_parser('list', help='list workspaces ([.]=local, [o]=container, [x]=abandoned)')
 
@@ -1768,9 +1767,7 @@ def main(argv=None):
   exec_cmd.add_argument(
     'name', help="container workspace name (the 'c:' prefix is accepted but optional)"
   )
-  exec_cmd.add_argument(
-    'command', nargs=argparse.REMAINDER, help='command + args to exec (default: bash)'
-  )
+  exec_cmd.add_argument('command', nargs=REMAINDER, help='command + args to exec (default: bash)')
 
   populate = subparsers.add_parser(
     'populate-bro-skills',
@@ -1846,7 +1843,3 @@ def main(argv=None):
       'could not actually restrict the session'
     )
   return start_session(**args)
-
-
-if __name__ == '__main__':
-  sys.exit(main(sys.argv))

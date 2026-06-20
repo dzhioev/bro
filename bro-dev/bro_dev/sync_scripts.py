@@ -1,17 +1,40 @@
 #!/usr/bin/env python
-"""regenerate [project.scripts] and py-modules in pyproject.toml.
+"""regenerate the console-script tables in pyproject.toml and the venv entrypoints bridge.
 
 scans every .py file for a callable, non-async top-level `main`. each such file
-produces a canonical script entry named after its full module path with the
-stem kebab-cased (e.g. flow/create_report.py -> flow.create-report). a module
-may declare __cli_name__ = 'custom-name' to register an additional alias that
-maps to the same module:main.
+produces a canonical script entry named after its full module path with the stem
+kebab-cased (e.g. flow/create_report.py -> flow.create-report). a module may
+declare __cli_name__ = 'custom-name' to register an additional alias.
+
+CLIs expose a pure `def main(argv)` (no sys.argv default). a console script can't
+call that directly -- the generated launcher invokes its entry point with no args
+-- so each script's [project.scripts] target points at a generated `_entrypoints`
+shim whose zero-arg functions feed sys.argv to the CLI's main:
+
+    gmail = "_entrypoints:gmail"   ->   def gmail(): return _run('gmail')
+
+`_entrypoints.py` is written into the venv's site-packages (gitignored, since all
+of .venv is) and regenerated on every venv build -- setup_repo.sh, the
+session-start hook, the container entrypoint. So it is NOT committed, unlike the
+pyproject tables. That shim is the single place the process reads the global argv.
+
+modes:
+  --pyproject    rewrite [project.scripts] + py-modules in pyproject.toml (committed)
+  --entrypoints  write _entrypoints.py into the venv site-packages (ephemeral)
+  --check        verify pyproject.toml is up to date; exit 1 if stale (no write)
+  (no flags)     run --pyproject and --entrypoints
+
+provisioning invokes `python -m sync_scripts --entrypoints` (module path, not the
+`sync-scripts` console script) -- the console script routes through the bridge,
+which doesn't exist yet on a fresh venv. main keeps its own `__main__` guard for
+the same reason.
 """
 
 import ast
 import logging
 import re
 import sys
+import sysconfig
 from pathlib import Path
 
 from base.args import Parser
@@ -38,9 +61,12 @@ def _module_name(rel: Path) -> str:
 
 
 def _canonical(rel: Path) -> str:
-  parts = list(rel.with_suffix('').parts)
-  parts = [p.replace('_', '-') for p in parts]
+  parts = [p.replace('_', '-') for p in rel.with_suffix('').parts]
   return '.'.join(parts)
+
+
+def _attr(module: str) -> str:
+  return module.replace('.', '_')
 
 
 def _parse_module(path: Path) -> ast.Module | None:
@@ -88,30 +114,35 @@ def _discover():
   return entries, top_level_modules
 
 
-def _build_scripts(entries: list[dict]) -> dict[str, str]:
+def _scripts_and_modules(entries: list[dict]) -> tuple[dict[str, str], dict[str, str]]:
+  """returns (name -> "_entrypoints:attr" target, name -> source module)."""
   scripts: dict[str, str] = {}
+  name_module: dict[str, str] = {}
 
-  def add(name: str, target: str) -> None:
+  def add(name: str, module: str) -> None:
+    target = f'_entrypoints:{_attr(module)}'
     prev = scripts.get(name)
     if prev is not None and prev != target:
       raise ValueError(f'script name collision: {name!r} -> {prev} vs {target}')
     scripts[name] = target
+    name_module[name] = module
 
   for e in entries:
-    target = f'{e["module"]}:main'
-    add(e['canonical'], target)
+    add(e['canonical'], e['module'])
     if e['explicit'] is not None and e['explicit'] != e['canonical']:
-      add(e['explicit'], target)
-  return scripts
+      add(e['explicit'], e['module'])
+  return scripts, name_module
 
 
-def _group_entries(scripts: dict[str, str]) -> list[tuple[str, list[tuple[str, str]]]]:
+def _group_entries(
+  scripts: dict[str, str], name_module: dict[str, str]
+) -> list[tuple[str, list[tuple[str, str]]]]:
   by_target: dict[str, list[str]] = {}
   for name, target in scripts.items():
     by_target.setdefault(target, []).append(name)
   groups: dict[str | None, list[tuple[str, str]]] = {}
   for target, names in by_target.items():
-    module = target.split(':', 1)[0]
+    module = name_module[names[0]]  # canonical + alias for a target share the module
     top = module.split('.', 1)[0] if '.' in module else None
     names.sort(key=lambda n: (len(n.split('.')) == 1, n))
     for name in names:
@@ -124,9 +155,9 @@ def _group_entries(scripts: dict[str, str]) -> list[tuple[str, list[tuple[str, s
   return ordered
 
 
-def _render_scripts(scripts: dict[str, str]) -> str:
+def _render_scripts(scripts: dict[str, str], name_module: dict[str, str]) -> str:
   lines: list[str] = []
-  for group, pairs in _group_entries(scripts):
+  for group, pairs in _group_entries(scripts, name_module):
     lines.append(f'# {group}')
     for name, target in pairs:
       lines.append(f'"{name}" = "{target}"')
@@ -155,25 +186,81 @@ def _replace_py_modules(text: str, block: str) -> str:
   return pat.sub(block, text)
 
 
-def sync_scripts() -> None:
+def _render_pyproject(text: str) -> str:
   entries, top_level = _discover()
-  scripts = _build_scripts(entries)
-  text = PYPROJECT.read_text()
-  text = _replace_scripts(text, _render_scripts(scripts))
+  scripts, name_module = _scripts_and_modules(entries)
+  text = _replace_scripts(text, _render_scripts(scripts, name_module))
   text = _replace_py_modules(text, _render_py_modules(top_level))
-  PYPROJECT.write_text(text)
-  logging.info(
-    'wrote %d script entries (%d modules), %d py-modules',
-    len(scripts),
-    len(entries),
-    len(top_level),
+  return text
+
+
+def sync_pyproject() -> None:
+  PYPROJECT.write_text(_render_pyproject(PYPROJECT.read_text()))
+  logging.info('updated %s', PYPROJECT.name)
+
+
+def check_pyproject() -> bool:
+  current = PYPROJECT.read_text()
+  return _render_pyproject(current) == current
+
+
+def _render_entrypoints(entries: list[dict]) -> str:
+  by_attr: dict[str, str] = {}
+  for e in entries:
+    attr = _attr(e['module'])
+    existing = by_attr.get(attr)
+    if existing is not None and existing != e['module']:
+      raise ValueError(f'entrypoint attr collision: {attr!r} from {existing} and {e["module"]}')
+    by_attr[attr] = e['module']
+  lines = [
+    '# generated by `sync-scripts --entrypoints`; do not edit.',
+    '# lives in the venv site-packages (gitignored), regenerated on every venv build.',
+    '# console scripts import these zero-arg shims, which feed sys.argv to each',
+    "# CLI's main(argv) -- the single place the process reads the global argv.",
+    'import importlib',
+    'import sys',
+    '',
+    '',
+    'def _run(module):',
+    '  return importlib.import_module(module).main(sys.argv)',
+  ]
+  for attr in sorted(by_attr):
+    lines += ['', '', f'def {attr}():', f'  return _run({by_attr[attr]!r})']
+  return '\n'.join(lines) + '\n'
+
+
+def write_entrypoints() -> None:
+  entries, _ = _discover()
+  target = Path(sysconfig.get_paths()['purelib']) / '_entrypoints.py'
+  target.write_text(_render_entrypoints(entries))
+  logging.info('wrote %s (%d entrypoints)', target, len(entries))
+
+
+def main(argv: list[str]) -> int | None:
+  parser = Parser(
+    description='regenerate the console-script tables and/or the venv entrypoints bridge'
   )
-
-
-def main(argv=None):
-  parser = Parser(description='regenerate [project.scripts] and py-modules in pyproject.toml')
-  parser.parse(argv)
-  sync_scripts()
+  parser.add_argument(
+    '--pyproject', action='store_true', help='rewrite [project.scripts] + py-modules'
+  )
+  parser.add_argument(
+    '--entrypoints', action='store_true', help='write _entrypoints.py into the venv site-packages'
+  )
+  parser.add_argument(
+    '--check', action='store_true', help='verify pyproject.toml is up to date; exit 1 if stale'
+  )
+  args = parser.parse(argv)
+  if args['check']:
+    if not check_pyproject():
+      print('pyproject.toml is stale; run `sync-scripts --pyproject` and commit', file=sys.stderr)
+      return 1
+    return 0
+  both = not args['pyproject'] and not args['entrypoints']
+  if args['pyproject'] or both:
+    sync_pyproject()
+  if args['entrypoints'] or both:
+    write_entrypoints()
+  return 0
 
 
 if __name__ == '__main__':

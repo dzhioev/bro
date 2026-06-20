@@ -11,7 +11,6 @@ nothing, since migrated rows no longer carry a single-key `{'s3': key}` body.
 """
 
 import os
-import sys
 
 import boto3
 from boto3.dynamodb.types import TypeDeserializer
@@ -63,7 +62,7 @@ def migrate(dynamo, steps_table: str, *, dry_run: bool) -> int:
   return migrated
 
 
-def main(argv=None) -> int | None:
+def main(argv: list[str]) -> int | None:
   parser = base.args.Parser(description='migrate spilled step bodies to the body_s3 attribute')
   parser.add_argument('--steps-table', default='trail_steps')
   parser.add_argument('--aws-region', default=os.environ.get('AWS_REGION', 'eu-central-1'))
@@ -72,7 +71,3 @@ def main(argv=None) -> int | None:
 
   session = boto3.Session(region_name=args['aws_region'])
   migrate(session.client('dynamodb'), args['steps_table'], dry_run=args['dry_run'])
-
-
-if __name__ == '__main__':
-  sys.exit(main(sys.argv))

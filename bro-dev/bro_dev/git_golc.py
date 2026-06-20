@@ -176,8 +176,8 @@ def _maybe_page(text: str) -> None:
     pass
 
 
-def main(argv: list[str] | None = None) -> int:
-  args = (argv if argv is not None else sys.argv)[1:]
+def main(argv: list[str]) -> int | None:
+  args = argv[1:]
   if len(args) == 0:
     args = ['HEAD']
   _maybe_page(_render(args, use_color=sys.stdout.isatty()))
@@ -185,4 +185,4 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == '__main__':
-  sys.exit(main())
+  sys.exit(main(sys.argv))
