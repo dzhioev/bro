@@ -15,6 +15,7 @@ there, not in each tool's description.
 import subprocess
 from pathlib import Path
 
+from base import spawn
 from llm.mcp import FunctionTool, InProcessMCPServer, Tool, describe
 
 # default cap on output lines. Callers can pass `limit=N` to extend, up to
@@ -189,7 +190,7 @@ describe(
 
 def bash(command: str, limit: int = DEFAULT_LIMIT, timeout_seconds: int = 120) -> str:
   try:
-    proc = subprocess.run(
+    proc = spawn.run(
       ['bash', '-c', command],
       capture_output=True,
       text=True,
@@ -230,7 +231,7 @@ def grep(
   if glob is not None:
     cmd.extend(['--include', glob])
   cmd.extend(['--', pattern, path])
-  proc = subprocess.run(cmd, capture_output=True, text=True)
+  proc = spawn.run(cmd, capture_output=True, text=True)
   if proc.returncode == 1:
     return 'no matches'
   if proc.returncode != 0:
