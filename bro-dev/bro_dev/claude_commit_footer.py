@@ -45,6 +45,11 @@ from pathlib import Path
 STATE_FILENAME = '.token_accounting_state.json'
 _THOUSANDS = "'"
 
+# claude code labels locally-generated assistant turns (interrupts, local errors,
+# injected notices) with this sentinel model — no real API round-trip, so their
+# usage is not billed spend and must not be credited to any commit.
+_SYNTHETIC_MODEL = '<synthetic>'
+
 _USAGE_FIELDS = (
   'input_tokens',
   'cache_creation_input_tokens',
@@ -74,7 +79,10 @@ def _find_session_jsonl() -> Path | None:
 
 
 def _cumulative_usage(path: Path) -> dict[str, int]:
-  """returns {model_slug: total_tokens} summed across every assistant message."""
+  """returns {model_slug: total_tokens} summed across every billed assistant message.
+
+  synthetic turns (model `<synthetic>`) are skipped — they carry no real API spend.
+  """
   totals: dict[str, int] = {}
   with path.open() as f:
     for line in f:
@@ -91,6 +99,8 @@ def _cumulative_usage(path: Path) -> dict[str, int]:
       model = msg.get('model')
       if not isinstance(model, str):
         model = 'unknown'
+      if model == _SYNTHETIC_MODEL:
+        continue
       total = sum(int(v) for k in _USAGE_FIELDS if (v := u.get(k)) is not None)
       totals[model] = totals.get(model, 0) + total
   return totals

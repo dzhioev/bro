@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+import json
 import sys
 from pathlib import Path
 
@@ -7,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from claude_commit_footer import (  # noqa: E402
   Footer,
   State,
+  _cumulative_usage,
   _emit_default,
   _emit_squash,
   _fmt_int,
@@ -44,6 +46,29 @@ class TestModelLabel:
   def test_unknown_slug_passes_through(self):
     assert _model_label('<synthetic>') == '<synthetic>'
     assert _model_label('claude-experimental-99-12') == 'claude-experimental-99-12'
+
+
+class TestCumulativeUsage:
+  def _write(self, path, rows):
+    path.write_text('\n'.join(json.dumps(r) for r in rows) + '\n')
+
+  def _msg(self, model, output):
+    return {'message': {'model': model, 'usage': {'output_tokens': output}}}
+
+  def test_sums_per_model(self, tmp_path):
+    p = tmp_path / 't.jsonl'
+    self._write(p, [self._msg(OPUS, 10), self._msg(OPUS, 5), self._msg(HAIKU, 3)])
+    assert _cumulative_usage(p) == {OPUS: 15, HAIKU: 3}
+
+  def test_skips_synthetic(self, tmp_path):
+    p = tmp_path / 't.jsonl'
+    self._write(p, [self._msg(OPUS, 10), self._msg('<synthetic>', 999)])
+    assert _cumulative_usage(p) == {OPUS: 10}
+
+  def test_all_synthetic_yields_empty(self, tmp_path):
+    p = tmp_path / 't.jsonl'
+    self._write(p, [self._msg('<synthetic>', 12), self._msg('<synthetic>', 7)])
+    assert _cumulative_usage(p) == {}
 
 
 class TestToLabels:
