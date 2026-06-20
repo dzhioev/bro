@@ -95,7 +95,7 @@ def _pick_fresh_name(base: str) -> str:
   worktrees = proj / '.claude' / 'worktrees'
   containers = proj / 'var' / 'cw' / 'containers'
   while True:
-    name = f'{base}-{secrets.token_hex(3)}'
+    name = f'{base}-{secrets.token_hex(4)}'
     if not (worktrees / name).exists() and not (containers / name).exists():
       return name
 
