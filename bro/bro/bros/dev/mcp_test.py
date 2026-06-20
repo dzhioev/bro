@@ -128,6 +128,29 @@ def test_bash_timeout_returns_clearly():
   assert 'TIMED OUT' in result
 
 
+def test_file_ops_reject_non_regular_file():
+  # a FIFO would block open()/read_text forever; the file tools refuse it up front.
+  with tempfile.TemporaryDirectory() as d:
+    fifo = os.path.join(d, 'pipe')
+    os.mkfifo(fifo)
+    with pytest.raises(ValueError, match='not a regular file'):
+      read_file(fifo)
+    with pytest.raises(ValueError, match='not a regular file'):
+      write_file(fifo, 'x')
+    with pytest.raises(ValueError, match='not a regular file'):
+      edit_file(fifo, 'a', 'b')
+
+
+def test_grep_skips_fifo_without_blocking():
+  # -D skip means grep never reads a FIFO/device — even one named directly — so it
+  # returns immediately instead of blocking on the open. timeout_seconds is a safety
+  # net: a regression that drops -D skip fails as TIMED OUT here rather than hanging.
+  with tempfile.TemporaryDirectory() as d:
+    fifo = os.path.join(d, 'pipe')
+    os.mkfifo(fifo)
+    assert grep('anything', path=fifo, timeout_seconds=5) == 'no matches'
+
+
 def test_bash_long_output_emits_before_marker_keeps_tail():
   # bash tails are usually most informative — confirm we keep the LAST `limit`
   # lines and report the dropped head via a [...skipped before...] marker.
@@ -238,6 +261,7 @@ def test_read_reference_returns_file_contents():
   assert '# dev tools reference' in ref
   assert 'Output cap (`limit`)' in ref
   assert 'Skipped-content markers' in ref
+  assert 'Timeout (`timeout_seconds`)' in ref
   assert 'Fat-finger clamp' in ref
 
 

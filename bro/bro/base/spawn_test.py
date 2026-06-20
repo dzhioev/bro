@@ -2,9 +2,21 @@
 controlling terminal, so an interactive prompt (read of /dev/tty) fails fast instead
 of blocking the agent, and stdin defaults to /dev/null."""
 
+import os
 import subprocess
+import time
+
+import pytest
 
 from base import spawn
+
+
+def _alive(pid: int) -> bool:
+  try:
+    os.kill(pid, 0)
+  except ProcessLookupError:
+    return False
+  return True
 
 
 def test_child_is_detached_into_own_session() -> None:
@@ -49,6 +61,26 @@ def test_run_returns_completed_process() -> None:
   proc = spawn.run(['true'])
   assert isinstance(proc, subprocess.CompletedProcess)
   assert proc.returncode == 0
+
+
+def test_run_timeout_kills_grandchildren(tmp_path) -> None:
+  # the bug this guards against: a timed-out shell pipeline must take its whole
+  # process group with it. The left side of the pipe records its pid and then
+  # blocks; if only the shell were killed it would survive as an orphan.
+  pidfile = tmp_path / 'pid'
+  cmd = f'(echo $BASHPID > {pidfile}; sleep 60) | cat'
+  with pytest.raises(subprocess.TimeoutExpired):
+    spawn.run(['bash', '-c', cmd], timeout=1, capture_output=True, text=True)
+  pid = int(pidfile.read_text())
+  deadline = time.time() + 5
+  while time.time() < deadline and _alive(pid):
+    time.sleep(0.05)
+  assert not _alive(pid), 'grandchild survived the timeout'
+
+
+def test_run_check_raises_on_nonzero() -> None:
+  with pytest.raises(subprocess.CalledProcessError):
+    spawn.run(['false'], check=True)
 
 
 def test_popen_streams_and_detaches() -> None:

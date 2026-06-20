@@ -32,6 +32,15 @@ Truncation is announced inline. Markers report both line and byte counts of what
 
 `bash` keeps the **tail** (shell diagnostics live at the end — final error, exit message). Other tools keep the **head**.
 
+## Timeout (`timeout_seconds`)
+
+The shell-out tools (`bash`, `grep`) take a `timeout_seconds: int` parameter (default 45).
+
+- On expiry the command's whole process group is killed — pipelines and any grandchildren die with it, so nothing is left running in the background.
+- The tool returns a `TIMED OUT after Ns — killed.` result instead of output. If the command legitimately needs longer, re-run with a larger `timeout_seconds`.
+
+The in-process file tools (`read_file`, `write_file`, `edit_file`) have no timeout — they can't be killed mid-call the way a subprocess can. Instead they refuse non-regular files (FIFO, device, socket, directory) up front, since those are the only inputs that could block them indefinitely.
+
 ## Fat-finger clamp
 
 `limit > 2,000` is silently clamped to 2,000; `limit < 1` is clamped to 1. The clamp is announced inline on the relevant marker:

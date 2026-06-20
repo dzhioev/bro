@@ -26,7 +26,24 @@ DEFAULT_LIMIT = 100
 MAX_LIMIT = 2000
 _BYTES_PER_LINE = 150
 
+# default wall-clock cap for the shell-out tools (bash, grep). On expiry the whole
+# process group is killed and the tool returns a TIMED OUT result; callers can raise
+# their `timeout_seconds` to retry. See REFERENCE.md.
+DEFAULT_TIMEOUT_SECONDS = 45
+
 _REFERENCE_PATH = Path(__file__).parent / 'REFERENCE.md'
+
+
+def _require_regular_file(path: Path) -> None:
+  # the file-op tools read/write in-process, so they can't be killed by a timeout
+  # the way the shell-out tools can. A FIFO or device would hang `open()`/`read_text`
+  # forever (or, for `/dev/zero`, run away before any cap could fire), so reject
+  # anything that isn't a regular file up front.
+  if path.exists() and not path.is_file():
+    raise ValueError(
+      f'{path} is not a regular file; refusing to open a FIFO, device, socket, or '
+      'directory (the read or write could block forever)'
+    )
 
 
 def read_reference() -> str:
@@ -128,6 +145,7 @@ def _apply_limit(
 
 def read_file(file_path: str, offset: int = 0, limit: int = DEFAULT_LIMIT) -> str:
   path = Path(file_path)
+  _require_regular_file(path)
   with path.open() as f:
     all_lines = f.readlines()
   before_count = min(max(offset, 0), len(all_lines))
@@ -153,6 +171,7 @@ describe(
 
 def write_file(file_path: str, content: str) -> str:
   path = Path(file_path)
+  _require_regular_file(path)
   path.parent.mkdir(parents=True, exist_ok=True)
   path.write_text(content)
   return f'wrote {len(content)} chars to {file_path}'
@@ -167,6 +186,7 @@ describe(
 
 def edit_file(file_path: str, old_string: str, new_string: str, replace_all: bool = False) -> str:
   path = Path(file_path)
+  _require_regular_file(path)
   text = path.read_text()
   count = text.count(old_string)
   if count == 0:
@@ -188,7 +208,9 @@ describe(
 )
 
 
-def bash(command: str, limit: int = DEFAULT_LIMIT, timeout_seconds: int = 120) -> str:
+def bash(
+  command: str, limit: int = DEFAULT_LIMIT, timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS
+) -> str:
   try:
     proc = spawn.run(
       ['bash', '-c', command],
@@ -197,7 +219,10 @@ def bash(command: str, limit: int = DEFAULT_LIMIT, timeout_seconds: int = 120) -
       timeout=timeout_seconds,
     )
   except subprocess.TimeoutExpired:
-    return f'TIMED OUT after {timeout_seconds}s: command did not complete'
+    return (
+      f'TIMED OUT after {timeout_seconds}s — killed. Re-run with a larger '
+      'timeout_seconds if the command needs more time.'
+    )
   combined = proc.stdout
   if len(proc.stderr) > 0:
     combined = f'{combined}\n--- stderr ---\n{proc.stderr}' if len(combined) > 0 else proc.stderr
@@ -212,9 +237,9 @@ def bash(command: str, limit: int = DEFAULT_LIMIT, timeout_seconds: int = 120) -
 describe(
   bash,
   'run a bash command, capture stdout and stderr, and return exit code + combined '
-  'output. timeout_seconds caps the run (default 120s). bash keeps the tail (shell '
-  'diagnostics live at the end). limit: see read_reference for the shared output '
-  'cap policy. use for shell work (git, sed, awk, find, …) that has no dedicated tool.',
+  'output. bash keeps the tail (shell diagnostics live at the end). limit and '
+  'timeout_seconds: see read_reference for the shared output cap and timeout '
+  'policies. use for shell work (git, sed, awk, find, …) that has no dedicated tool.',
 )
 
 
@@ -224,14 +249,23 @@ def grep(
   glob: str | None = None,
   case_insensitive: bool = False,
   limit: int = DEFAULT_LIMIT,
+  timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
 ) -> str:
-  cmd = ['grep', '-rnE']
+  # -D skip: never read a device, FIFO, or socket (recursion or named directly), so
+  # the tool can't block forever on a pipe — the timeout is only a huge-tree backstop.
+  cmd = ['grep', '-rnE', '-D', 'skip']
   if case_insensitive:
     cmd.append('-i')
   if glob is not None:
     cmd.extend(['--include', glob])
   cmd.extend(['--', pattern, path])
-  proc = spawn.run(cmd, capture_output=True, text=True)
+  try:
+    proc = spawn.run(cmd, capture_output=True, text=True, timeout=timeout_seconds)
+  except subprocess.TimeoutExpired:
+    return (
+      f'TIMED OUT after {timeout_seconds}s — killed. Re-run with a larger '
+      'timeout_seconds if the search needs more time.'
+    )
   if proc.returncode == 1:
     return 'no matches'
   if proc.returncode != 0:
@@ -243,9 +277,9 @@ describe(
   grep,
   'recursively search for pattern (extended regex) in files under path. glob filters '
   'which files to match (e.g. "*.py"). case_insensitive lowers the comparison. '
-  'limit: see read_reference for the shared output cap policy. backed by GNU grep — '
-  "gitignore is NOT honored (unlike Claude Code's ripgrep-backed Grep); pass a glob "
-  'or narrower path to scope.',
+  'limit and timeout_seconds: see read_reference for the shared output cap and '
+  'timeout policies. backed by GNU grep — gitignore is NOT honored (unlike Claude '
+  "Code's ripgrep-backed Grep); pass a glob or narrower path to scope.",
 )
 
 
