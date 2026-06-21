@@ -14,7 +14,9 @@ Style:
   task — a bug, a stale abstraction, a doc that's drifted, a redundant pattern
   — propose it and let the user decide, don't silently do it.
 - Update docs when your change makes them out of date; don't add new doc files
-  speculatively.
+  speculatively. When you rename or remove a symbol, flag, or behavior, grep the
+  docs for the old name and the rationale that leaned on it — stale references
+  and now-false why-claims don't surface on their own.
 - Write comments and docs for a reader who has the final code and the whole repo
   but wasn't in the room while you wrote it: they never saw the alternatives you
   weighed, the audit/ticket you worked from, or what the code said before. A code
