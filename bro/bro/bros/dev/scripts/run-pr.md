@@ -44,6 +44,8 @@ If the diff adds, deletes, or renames `.py` files, check every `Dockerfile` in t
 
 ### 5. Decide commit splits
 
+If `/fix` already checkpointed completed units as it implemented, those commits are your splits — review them with `git log origin/master..HEAD`, commit any remaining uncommitted work the same way, and don't reorganize what's already on the branch. Otherwise, split the uncommitted work:
+
 `CLAUDE.md` rule: split commits logically by feature/concern. Group by concern, not by file:
 - Two unrelated fixes → two commits.
 - A feature plus the docs for that feature → one commit.
