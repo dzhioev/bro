@@ -57,10 +57,11 @@ docker run --rm -i \
     git config --global --list > /dev/null
     # workspace should have a cloned repo
     test -d /workspace/.git
-    # worktree branch is created from upstream origin/master, not from the
-    # clone's stale HEAD; the entrypoint ref-copies origin/master from /host-repo
+    # worktree branch is based on the host repo's current HEAD (the default base,
+    # matching host-mode worktrees)
     cd /workspace
-    test "$(git rev-parse HEAD)" = "$(git rev-parse origin/master)"
+    test "$(git rev-parse HEAD)" = "$(git -C /host-repo rev-parse HEAD)"
+    # origin/master is still ref-refreshed from /host-repo for later clean/rebase checks
     test "$(git rev-parse refs/remotes/origin/master)" = "$(git -C /host-repo rev-parse refs/remotes/origin/master)"
     # pre-push hook is installed (unconditionally by the entrypoint). post-commit
     # is installed by provision_repo.sh, inside the venv-dependent block that

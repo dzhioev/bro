@@ -1265,6 +1265,12 @@ def add_forwarded_flags(parser: Parser) -> None:
     action='store_true',
     help='resume the latest claude session in the named workspace; skips the initial prompt',
   )
+  parser.add_argument(
+    '--into',
+    default=None,
+    metavar='REF',
+    help="base a new session on git REF (branch/tag/sha) instead of the default (the host repo's current HEAD, in both container and host mode). ignored once the workspace exists",
+  )
 
 
 def extract_forwarded_argv(args: dict) -> list[str]:
@@ -1294,6 +1300,7 @@ def start_session(
   effort: str | None,
   rc: bool,
   resume: bool,
+  into: str | None,
   mcp: str | None,
   bro: str | None,
   prompt: str | None,
@@ -1322,6 +1329,8 @@ def start_session(
     parts.extend(['--grant', g])
   for r in revoke:
     parts.extend(['--revoke', r])
+  if into is not None:
+    parts.extend(['--into', into])
   parts.extend([name, *claude_args])
   os.environ['CW_COMMAND'] = ' '.join(parts)
   os.environ['CW_NAME'] = name
@@ -1339,6 +1348,23 @@ def start_session(
     session_id = latest.stem
     log.info('resuming session %s', session_id)
     claude_args = ['--resume', session_id, *claude_args]
+
+  # resolve --into against the host repo now (a branch/tag/sha → a sha). the
+  # container reaches it via /host-repo's shared objects; the host worktree bases
+  # its new branch on it. only meaningful at creation — resume reuses the existing
+  # workspace, so the two are mutually exclusive (checked in main).
+  base_ref: str | None = None
+  if into is not None:
+    rev = subprocess.run(
+      ['git', 'rev-parse', '--verify', f'{into}^{{commit}}'],
+      cwd=_project_root(),
+      capture_output=True,
+      text=True,
+    )
+    if rev.returncode != 0:
+      log.error('cannot resolve --into ref: %s', into)
+      return 1
+    base_ref = rev.stdout.strip()
 
   if auto:
     os.environ['GIT_AUTHOR_NAME'] = _BRO_GIT_NAME
@@ -1367,6 +1393,7 @@ def start_session(
       container=container,
       drop=drop,
       auto=auto,
+      base_ref=base_ref,
       claude_args=claude_args,
       secrets=secrets,
       docker_sock=docker_sock,
@@ -1421,7 +1448,13 @@ def start_session(
       log.error('%s', e)
       return 1
   return cw(
-    name=name, container=container, drop=drop, auto=auto, claude_args=claude_args, secrets=secrets
+    name=name,
+    container=container,
+    drop=drop,
+    auto=auto,
+    base_ref=base_ref,
+    claude_args=claude_args,
+    secrets=secrets,
   )
 
 
@@ -1636,9 +1669,9 @@ def run_in_container(
   proj = _project_root()
   session = proj / 'var' / 'cw' / 'containers' / name
   session.mkdir(parents=True, exist_ok=True)
-  # refresh host origin/master so the entrypoint can branch a fresh worktree
-  # from current upstream rather than the host's stale snapshot. skip on
-  # container re-entry — the entrypoint's clone block won't fire then.
+  # refresh the host's origin/master so the container's copy (which it uses for
+  # later clean/rebase ancestry checks) is current. skip on container re-entry —
+  # the entrypoint's clone block won't fire then.
   if not (session / '.git').exists():
     subprocess.run(['git', '-C', str(proj), 'fetch', 'origin', 'master'], check=True)
   tag = _image_tag()
@@ -1691,10 +1724,12 @@ def run_in_container(
   return result.returncode
 
 
-def _ensure_host_worktree(worktree: Path, branch: str) -> bool:
+def _ensure_host_worktree(worktree: Path, branch: str, base_ref: str | None = None) -> bool:
   # create the worktree if new (git ops run in the project root, the cwd): a
-  # `worktree-<name>` branch plus submodule alternates so `git submodule update`
-  # reuses the superproject's modules.
+  # `worktree-<name>` branch — based on base_ref (`--into`) when given, else the
+  # current HEAD — plus submodule alternates so `git submodule update` reuses the
+  # superproject's modules. an already-existing branch defines its own base, so
+  # base_ref doesn't apply there.
   if worktree.is_dir():
     return True
   log.info('creating worktree %s', worktree)
@@ -1704,7 +1739,11 @@ def _ensure_host_worktree(worktree: Path, branch: str) -> bool:
     ).returncode
     == 0
   )
-  add = ['git', 'worktree', 'add', str(worktree), *([branch] if branch_exists else ['-b', branch])]
+  if branch_exists:
+    add = ['git', 'worktree', 'add', str(worktree), branch]
+  else:
+    base = [base_ref] if base_ref is not None else []
+    add = ['git', 'worktree', 'add', str(worktree), '-b', branch, *base]
   if subprocess.run(add).returncode != 0:
     log.error('failed to create worktree %s', worktree)
     return False
@@ -1759,6 +1798,7 @@ def cw(
   claude_args: list[str],
   *,
   auto: bool = False,
+  base_ref: str | None = None,
   secrets: Collection[str] = (),
   docker_sock: bool = True,
 ) -> int:
@@ -1767,8 +1807,16 @@ def cw(
     container = False
 
   if container:
+    # the entrypoint reads CW_BASE_REF to base the fresh clone's worktree branch
+    # (the sha's objects are already shared from /host-repo via clone alternates)
+    extra_env = {'CW_BASE_REF': base_ref} if base_ref is not None else None
     code = run_in_container(
-      name, ['claude', *claude_args], drop=drop, secrets=secrets, docker_sock=docker_sock
+      name,
+      ['claude', *claude_args],
+      drop=drop,
+      secrets=secrets,
+      docker_sock=docker_sock,
+      extra_env=extra_env,
     )
     if not drop and code == 0:
       _replace_container_resume_hint(name)
@@ -1782,7 +1830,7 @@ def cw(
   worktree = proj / '.claude' / 'worktrees' / name
   branch = f'worktree-{name}'
 
-  if not _ensure_host_worktree(worktree, branch):
+  if not _ensure_host_worktree(worktree, branch, base_ref):
     return 1
   if not _provision_host_worktree(worktree):
     return 1
@@ -1921,6 +1969,10 @@ def main(argv: list[str]) -> int | None:
   assert cmd == 'ss'
   if args['auto'] and not args['container']:
     parser.error('--auto requires --container')
+  if args['into'] is not None and args['resume']:
+    parser.error(
+      '--into cannot be combined with --resume (it only applies when creating a workspace)'
+    )
   if args['bro'] is not None:
     if not args['container']:
       parser.error('--bro requires --container')

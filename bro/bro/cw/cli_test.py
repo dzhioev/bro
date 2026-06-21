@@ -663,6 +663,50 @@ class TestFinishHostWorktree:
     assert removed == []
 
 
+class TestEnsureHostWorktree:
+  def _recorder(self, monkeypatch, *, branch_exists=False):
+    from types import SimpleNamespace
+
+    calls: list = []
+
+    def fake_run(args, **kwargs):
+      calls.append(args)
+      is_show_ref = len(args) > 1 and args[1] == 'show-ref'
+      rc = 0 if (branch_exists or not is_show_ref) else 1
+      return SimpleNamespace(returncode=rc, stdout='')
+
+    monkeypatch.setattr(cw.subprocess, 'run', fake_run)
+    return calls
+
+  def _add_cmd(self, calls):
+    return next(c for c in calls if c[:3] == ['git', 'worktree', 'add'])
+
+  def test_new_branch_uses_base_ref(self, monkeypatch, tmp_path):
+    calls = self._recorder(monkeypatch)
+    wt = tmp_path / 'wt'
+    assert cw._ensure_host_worktree(wt, 'worktree-x', 'sha123') is True
+    assert self._add_cmd(calls) == ['git', 'worktree', 'add', str(wt), '-b', 'worktree-x', 'sha123']
+
+  def test_new_branch_defaults_to_head(self, monkeypatch, tmp_path):
+    calls = self._recorder(monkeypatch)
+    wt = tmp_path / 'wt'
+    assert cw._ensure_host_worktree(wt, 'worktree-x') is True
+    assert self._add_cmd(calls) == ['git', 'worktree', 'add', str(wt), '-b', 'worktree-x']
+
+  def test_existing_branch_ignores_base_ref(self, monkeypatch, tmp_path):
+    calls = self._recorder(monkeypatch, branch_exists=True)
+    wt = tmp_path / 'wt'
+    assert cw._ensure_host_worktree(wt, 'worktree-x', 'sha123') is True
+    assert self._add_cmd(calls) == ['git', 'worktree', 'add', str(wt), 'worktree-x']
+
+  def test_existing_dir_is_noop(self, monkeypatch, tmp_path):
+    calls = self._recorder(monkeypatch)
+    wt = tmp_path / 'wt'
+    wt.mkdir()
+    assert cw._ensure_host_worktree(wt, 'worktree-x', 'sha123') is True
+    assert calls == []
+
+
 class TestPopulateBroSkills:
   def test_creates_symlinks_for_each_skill(self, tmp_path):
     # ppp-dev inherits /pr and /land from dev via the MRO walk
@@ -754,6 +798,14 @@ class TestGrantRevoke:
     args = vars(parser.parse_args(['--grant', 'a', '--grant', 'b', '--revoke', 'c']))
     assert cw.extract_forwarded_argv(args) == ['--grant', 'a', '--grant', 'b', '--revoke', 'c']
 
+  def test_extract_forwarded_argv_round_trips_into(self):
+    from base.args import Parser
+
+    parser = Parser(add_help=False)
+    cw.add_forwarded_flags(parser)
+    args = vars(parser.parse_args(['--into', 'my-branch']))
+    assert cw.extract_forwarded_argv(args) == ['--into', 'my-branch']
+
   def _start(self, *, grant: list[str] | None = None, revoke: list[str] | None = None) -> int:
     return cw.start_session(
       name='w',
@@ -766,6 +818,7 @@ class TestGrantRevoke:
       effort=None,
       rc=False,
       resume=False,
+      into=None,
       mcp=None,
       bro=None,
       prompt=None,
@@ -831,6 +884,10 @@ class TestDockerCreateArgv:
 
   def test_docker_sock_dropped_when_disabled(self, build_argv):
     assert '/var/run/docker.sock:/var/run/docker.sock' not in build_argv(docker_sock=False)
+
+  def test_base_ref_passed_as_env(self, build_argv):
+    argv = build_argv(extra_env={'CW_BASE_REF': 'deadbeef'})
+    assert 'CW_BASE_REF=deadbeef' in argv
 
   def test_no_ppp_mount(self, build_argv):
     # the scoped store is injected via `docker cp`, never bind-mounted

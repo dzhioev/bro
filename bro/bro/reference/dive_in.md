@@ -57,6 +57,10 @@ By default `dive-in` runs in container mode (it appends `-c` when calling `cw ss
 
 The reason this isn't just "pass `-c` through" is that container is the safer / more isolated default for an unattended task-focused workflow (especially with `--auto`), so the wrapper inverts the polarity. If you need the host worktree (e.g. you want to use the host's docker daemon directly without the bind-mounted socket, or you want filesystem access to your dotfiles), `--host` opts out.
 
+## Base ref (`--into`)
+
+By default a session is based on the host repo's current `HEAD` — both in container mode (the clone checks out the host's checkout) and host mode (the worktree branches from `HEAD`). `dive-in --into <ref>` (a forwarded `cw ss` flag — see `reference/cw.md`) overrides that, basing the new session on any branch/tag/sha instead: the container checks that ref out in its clone, and a `--host` session bases its worktree branch on it. Useful for basing a session on a ref you don't have checked out. Only applies when the workspace is first created.
+
 ## Initial-prompt composition
 
 `dive-in` seeds the first user message as a `/fix …` slash command and lets the `fix` skill body (`bro/bros/ppp_dev/skills/fix.md`) carry the workflow — resolve → context → plan → log → implement → verify → hand off to `/pr`. The mapping from CLI form to message is:

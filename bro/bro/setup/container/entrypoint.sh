@@ -67,13 +67,16 @@ if [ ! -d /workspace/.git ]; then
   host_origin="$(echo "$host_origin" | sed 's|^git@github\.com:|https://github.com/|')"
   git remote set-url origin "$host_origin"
   git remote add host /host-repo
-  # the clone copied /host-repo's local master into refs/remotes/origin/master,
-  # which is often behind the host's freshly-fetched origin/master. pull the
-  # fresh ref through the local `host` remote — no token needed, and objects
-  # are already shared via alternates so this is ref-only.
+  # refresh refs/remotes/origin/master (the clone copied /host-repo's possibly-stale
+  # local copy) so later ancestry/clean checks and rebases compare against the real
+  # upstream. ref-only — objects are already shared via alternates, no token needed.
   git fetch host '+refs/remotes/origin/master:refs/remotes/origin/master' >&2
-  # -B resets if a stale worktree-<CW_NAME> branch came through with the clone.
-  git checkout -B "worktree-$CW_NAME" origin/master >&2
+  # branch worktree-<CW_NAME> from CW_BASE_REF: the host's current HEAD by default
+  # (the clone is already checked out there, matching host-mode worktrees), or the
+  # sha `cw ss --into <ref>` resolved on the host. -B resets if a stale
+  # worktree-<CW_NAME> branch came through with the clone. either base's objects are
+  # shared from /host-repo via the clone's alternates, so no extra fetch is needed.
+  git checkout -B "worktree-$CW_NAME" "${CW_BASE_REF:-HEAD}" >&2
   # init submodules from host-local paths — .gitmodules uses ssh URLs and the
   # container has no ssh keys. skip any submodule the host hasn't initialized.
   if [ -f .gitmodules ]; then
