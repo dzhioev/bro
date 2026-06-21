@@ -14,7 +14,13 @@ import json
 import pytest
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 
-from trails.server.storage import GSI_PK_ATTR, GSI_PK_VALUE, SPILLOVER_THRESHOLD_BYTES, Storage
+from trails.server.storage import (
+  GSI_PK_ATTR,
+  GSI_PK_VALUE,
+  SPILLOVER_THRESHOLD_BYTES,
+  Storage,
+  TrailNotFound,
+)
 
 _serializer = TypeSerializer()
 _deserializer = TypeDeserializer()
@@ -241,18 +247,61 @@ class _FakeS3:
 
 
 class _FakeStepsDynamo:
+  """faithful enough to exercise the per-step transaction's two conditions: the
+  step Put's `attribute_not_exists(step_id)` (idempotency) and the trail Update's
+  `attribute_exists(trail_id)` (trail-not-found). On a failed condition it raises
+  `TransactionCanceledException` with positional `CancellationReasons` matching
+  the real service — item 0 the step Put, item 1 the trail Update.
+
+  `existing_trails=None` means "every trail exists" (permissive — what the spill
+  round-trip tests want); pass an explicit set to make the Update condition bite.
+  """
+
   class exceptions:
     class TransactionCanceledException(Exception):
       pass
 
-  def __init__(self):
+  def __init__(self, existing_trails: set[str] | None = None):
     self._steps: list[dict] = []
+    self._existing_trails = existing_trails
 
   def transact_write_items(self, *, TransactItems):
+    reasons: list[dict] = []
+    staged: list[dict] = []
+    failed = False
     for ti in TransactItems:
       put = ti.get('Put')
+      update = ti.get('Update')
       if put is not None and put['TableName'] == 'trail_steps':
-        self._steps.append(_des(put['Item']))
+        item = _des(put['Item'])
+        duplicate = put.get('ConditionExpression') == 'attribute_not_exists(step_id)' and any(
+          s['trail_id'] == item['trail_id'] and s['step_id'] == item['step_id'] for s in self._steps
+        )
+        if duplicate:
+          reasons.append({'Code': 'ConditionalCheckFailed'})
+          failed = True
+        else:
+          reasons.append({'Code': 'None'})
+          staged.append(item)
+      elif update is not None:
+        tid = _des(update['Key'])['trail_id']
+        missing = (
+          update.get('ConditionExpression') == 'attribute_exists(trail_id)'
+          and self._existing_trails is not None
+          and tid not in self._existing_trails
+        )
+        if missing:
+          reasons.append({'Code': 'ConditionalCheckFailed'})
+          failed = True
+        else:
+          reasons.append({'Code': 'None'})
+      else:
+        reasons.append({'Code': 'None'})
+    if failed:
+      exc = self.exceptions.TransactionCanceledException('cancelled')
+      exc.response = {'CancellationReasons': reasons}  # type: ignore[attr-defined]
+      raise exc
+    self._steps.extend(staged)
 
   def query(self, **kwargs):
     tid = _deserializer.deserialize(kwargs['ExpressionAttributeValues'][':tid'])
@@ -260,8 +309,10 @@ class _FakeStepsDynamo:
     return {'Items': [_ser(it) for it in items]}
 
 
-def _spill_store() -> tuple[Storage, _FakeStepsDynamo, _FakeS3]:
-  dynamo = _FakeStepsDynamo()
+def _spill_store(
+  existing_trails: set[str] | None = None,
+) -> tuple[Storage, _FakeStepsDynamo, _FakeS3]:
+  dynamo = _FakeStepsDynamo(existing_trails)
   s3 = _FakeS3()
   store = Storage(
     dynamo=dynamo, s3=s3, trails_table='trails', steps_table='trail_steps', bucket='bucket'
@@ -297,3 +348,54 @@ async def test_spilled_body_resolves_via_body_s3():
   # never leaks into the row.
   assert step['body'] == big
   assert 'body_s3' not in step
+
+
+# idempotency: a retried POST reuses the client-minted step_id, so the conditional
+# step Put cancels the whole transaction (step + aggregate increment) atomically.
+
+
+@pytest.mark.asyncio
+async def test_retried_step_id_is_idempotent():
+  store, dynamo, _ = _spill_store()
+  first = await store.put_step(trail_id='T1', kind='llm_call', body='x', extras={}, step_id='S1')
+  second = await store.put_step(trail_id='T1', kind='llm_call', body='x', extras={}, step_id='S1')
+  # the retry writes no second row (so the aggregate increment never re-ran) and
+  # reports success rather than raising.
+  assert len([s for s in dynamo._steps if s['step_id'] == 'S1']) == 1
+  assert first['step_id'] == 'S1'
+  assert second.get('duplicate') is True
+
+
+@pytest.mark.asyncio
+async def test_distinct_step_ids_both_written():
+  store, dynamo, _ = _spill_store()
+  await store.put_step(trail_id='T1', kind='reasoning', body='a', extras={}, step_id='S1')
+  await store.put_step(trail_id='T1', kind='reasoning', body='b', extras={}, step_id='S2')
+  assert {s['step_id'] for s in dynamo._steps} == {'S1', 'S2'}
+
+
+@pytest.mark.asyncio
+async def test_put_step_on_missing_trail_raises_trail_not_found():
+  # empty existing-trails set -> the trail Update's attribute_exists condition
+  # fails (item 1), which must surface as TrailNotFound, not a duplicate.
+  store, _, _ = _spill_store(existing_trails=set())
+  with pytest.raises(TrailNotFound):
+    await store.put_step(trail_id='ghost', kind='reasoning', body='x', extras={}, step_id='S1')
+
+
+@pytest.mark.asyncio
+async def test_server_minted_step_id_when_client_omits():
+  store, dynamo, _ = _spill_store()
+  result = await store.put_step(trail_id='T1', kind='reasoning', body='x', extras={})
+  # older clients send no step_id; the server mints one and the row still lands.
+  assert len(result['step_id']) > 0
+  assert dynamo._steps[0]['step_id'] == result['step_id']
+
+
+@pytest.mark.asyncio
+async def test_retried_end_is_idempotent():
+  store, dynamo, _ = _spill_store()
+  await store.end_trail(trail_id='T1', reason='terminal', continuation=None, step_id='E1')
+  second = await store.end_trail(trail_id='T1', reason='terminal', continuation=None, step_id='E1')
+  assert len([s for s in dynamo._steps if s['step_id'] == 'E1']) == 1
+  assert second.get('duplicate') is True

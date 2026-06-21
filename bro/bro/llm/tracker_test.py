@@ -8,11 +8,24 @@ from typing import Any
 import pytest
 
 import configs
-from llm.tracker import HTTPTracker, LocalFileTracker, NullTracker, Parent, Tracker
+from llm.tracker import (
+  HTTPStatusError,
+  HTTPTracker,
+  LocalFileTracker,
+  NullTracker,
+  Parent,
+  Tracker,
+)
 
 
 def _read_jsonl(path: Path) -> list[dict]:
   return [json.loads(line) for line in path.read_text().splitlines() if len(line) > 0]
+
+
+def _req_payload(req: tuple[str, str, bytes | None, dict[str, str]]) -> dict:
+  body = req[2]
+  assert body is not None
+  return json.loads(body)
 
 
 class TestNullTracker:
@@ -377,7 +390,7 @@ class TestHTTPTrackerStartTrail:
     fake = _install_fake_conn(monkeypatch)
     fake.queue((500, b'oops'))
     tracker = HTTPTracker('https://trails.example', 'tok')
-    with pytest.raises(http.client.HTTPException):
+    with pytest.raises(HTTPStatusError) as exc_info:
       tracker.start_trail(
         bro='b',
         llm_spec={},
@@ -386,6 +399,7 @@ class TestHTTPTrackerStartTrail:
         interactive=False,
         entry_point='x',
       )
+    assert exc_info.value.status == 500
     assert len(fake.requests) == 1
 
 
@@ -432,6 +446,8 @@ class TestHTTPTrackerStep:
     assert payload['arguments'] == {'name': 'x'}
     assert payload['call_id'] == 'c1'
     assert payload['turn_index'] == 1
+    # the client mints the step_id so the server can dedup retries on it.
+    assert isinstance(payload['step_id'], str) and len(payload['step_id']) > 0
 
   def test_retries_transient_blips_and_recovers(self, monkeypatch):
     tracker, fake = self._ready(monkeypatch)
@@ -462,6 +478,56 @@ class TestHTTPTrackerStep:
     # one start_trail conn open + at least one drop after the blip.
     assert fake.closes >= 1
 
+  def test_retry_reuses_the_same_step_id(self, monkeypatch):
+    tracker, fake = self._ready(monkeypatch)
+    fake.queue(ConnectionError('blip'))
+    fake.queue((204, b''))
+    tracker.step('reasoning', 'thinking', turn_index=1)
+    step_requests = [r for r in fake.requests if r[1].endswith('/steps')]
+    assert len(step_requests) == 2
+    ids = [_req_payload(r)['step_id'] for r in step_requests]
+    # both attempts of the same POST carry one id — that is what lets the server
+    # treat the retry as an idempotent no-op rather than a duplicate row.
+    assert ids[0] == ids[1]
+
+  def test_distinct_steps_get_distinct_ids(self, monkeypatch):
+    tracker, fake = self._ready(monkeypatch)
+    fake.queue((204, b''))
+    fake.queue((204, b''))
+    tracker.step('reasoning', 'a', turn_index=1)
+    tracker.step('reasoning', 'b', turn_index=2)
+    ids = [_req_payload(r)['step_id'] for r in fake.requests if r[1].endswith('/steps')]
+    assert len(ids) == 2 and ids[0] != ids[1]
+
+  def test_deterministic_4xx_is_not_retried(self, monkeypatch):
+    tracker, fake = self._ready(monkeypatch)
+    # 413 (body too large) is deterministic — retrying can't help.
+    fake.queue((413, b'too large'))
+    with pytest.raises(HTTPStatusError) as exc_info:
+      tracker.step('llm_call', 'x', turn_index=1)
+    assert exc_info.value.status == 413
+    step_requests = [r for r in fake.requests if r[1].endswith('/steps')]
+    assert len(step_requests) == 1
+
+  def test_5xx_is_retried(self, monkeypatch):
+    tracker, fake = self._ready(monkeypatch)
+    for _ in range(4):
+      fake.queue((503, b'unavailable'))
+    with pytest.raises(HTTPStatusError) as exc_info:
+      tracker.step('reasoning', 'thinking', turn_index=1)
+    assert exc_info.value.status == 503
+    step_requests = [r for r in fake.requests if r[1].endswith('/steps')]
+    # initial + 3 retries (5xx is transient).
+    assert len(step_requests) == 4
+
+  def test_429_is_retried(self, monkeypatch):
+    tracker, fake = self._ready(monkeypatch)
+    fake.queue((429, b'slow down'))
+    fake.queue((204, b''))
+    tracker.step('reasoning', 'thinking', turn_index=1)
+    step_requests = [r for r in fake.requests if r[1].endswith('/steps')]
+    assert len(step_requests) == 2
+
 
 class TestHTTPTrackerEndTrail:
   def _ready(self, monkeypatch) -> tuple[HTTPTracker, _FakeConn]:
@@ -485,7 +551,10 @@ class TestHTTPTrackerEndTrail:
     method, path, body, _ = fake.requests[1]
     assert (method, path) == ('POST', '/v1/trails/T1/end')
     assert body is not None
-    assert json.loads(body) == {'reason': 'terminal'}
+    payload = json.loads(body)
+    assert payload['reason'] == 'terminal'
+    # the end step carries a client-minted id too, so a retried end POST dedups.
+    assert isinstance(payload['step_id'], str) and len(payload['step_id']) > 0
     # trail_id cleared so second end_trail is a no-op.
     assert tracker._trail_id is None
 

@@ -69,12 +69,12 @@ class FakeStorage:
     ]
     return {'trail_id': trail_id, 'started_at': started_at}
 
-  async def put_step(self, *, trail_id, kind, body, extras):
+  async def put_step(self, *, trail_id, kind, body, extras, step_id=None):
     if self.raise_body_too_large:
       raise storage.BodyTooLarge('too big')
     if trail_id not in self.trails:
       raise storage.TrailNotFound(trail_id)
-    step_id = self._new_id()
+    step_id = step_id if step_id is not None else self._new_id()
     ts = self._now()
     self.steps[trail_id].append(
       {'trail_id': trail_id, 'step_id': step_id, 'ts': ts, 'kind': kind, 'body': body, **extras}
@@ -83,7 +83,7 @@ class FakeStorage:
     counts[kind] = counts.get(kind, 0) + 1
     return {'step_id': step_id, 'ts': ts}
 
-  async def end_trail(self, *, trail_id, reason, continuation):
+  async def end_trail(self, *, trail_id, reason, continuation, step_id=None):
     if trail_id not in self.trails:
       raise storage.TrailNotFound(trail_id)
     ts = self._now()
@@ -94,7 +94,7 @@ class FakeStorage:
     self.steps[trail_id].append(
       {
         'trail_id': trail_id,
-        'step_id': self._new_id(),
+        'step_id': step_id if step_id is not None else self._new_id(),
         'ts': ts,
         'kind': 'end',
         'body': {'reason': reason},
@@ -328,6 +328,32 @@ class TestPutStep:
     assert step['tool_name'] == 'foo'
     assert step['arguments'] == {'a': 1}
     assert step['call_id'] == 'c1'
+
+  @pytest.mark.asyncio
+  async def test_client_step_id_used_and_not_in_extras(self, client, store):
+    cli = await client
+    trail_id = await self._make_trail(cli)
+    await cli.post(
+      f'/v1/trails/{trail_id}/steps',
+      json={'kind': 'user_input', 'body': 'hi', 'step_id': 'CLIENT-1', 'turn_index': 0},
+      headers=_auth(),
+    )
+    step = store.steps[trail_id][-1]
+    # the client-minted id is honored, and step_id is consumed as the row key —
+    # it must not also leak into the extras blob.
+    assert step['step_id'] == 'CLIENT-1'
+    assert step['kind'] == 'user_input'
+
+  @pytest.mark.asyncio
+  async def test_non_string_step_id_rejected(self, client):
+    cli = await client
+    trail_id = await self._make_trail(cli)
+    resp = await cli.post(
+      f'/v1/trails/{trail_id}/steps',
+      json={'kind': 'user_input', 'body': 'hi', 'step_id': 123},
+      headers=_auth(),
+    )
+    assert resp.status == 400
 
 
 class TestEndTrail:

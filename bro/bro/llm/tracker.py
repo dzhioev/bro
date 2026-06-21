@@ -27,6 +27,8 @@ from pathlib import Path
 from typing import Any, Literal, TextIO
 from urllib.parse import urlparse
 
+from ulid import ULID
+
 import configs
 
 # delays before each retry attempt for transient blips on per-step POSTs and
@@ -183,6 +185,15 @@ def _new_id() -> str:
   return uuid.uuid4().hex
 
 
+def _new_step_id() -> str:
+  # HTTPTracker mints the step_id client-side (ULID, matching the server's own
+  # id format) and reuses it across retries of the same POST: the server Puts it
+  # with attribute_not_exists, so a retried write is an idempotent no-op rather
+  # than a duplicate row + double-counted aggregate. ULID (not _new_id's uuid)
+  # because the steps-table sort key relies on the ordering.
+  return str(ULID())
+
+
 class LocalFileTracker(Tracker):
   """append trails to a JSONL file (one JSON object per line).
 
@@ -264,6 +275,23 @@ class LocalFileTracker(Tracker):
 _STEP_CANONICAL_FIELDS = frozenset({'record_type', 'trail_id', 'step_id', 'ts', 'kind', 'body'})
 
 
+class HTTPStatusError(Exception):
+  """a non-2xx response from trails-server, carrying the numeric status so the
+  retry loop can branch on it (a generic HTTPException buries it in the message).
+  """
+
+  def __init__(self, status: int, message: str):
+    super().__init__(message)
+    self.status = status
+
+
+def _is_retryable_status(status: int) -> bool:
+  # transient: 5xx (server-side) and 429 (rate limit) are worth retrying.
+  # deterministic 4xx (400 malformed, 404 missing trail, 413 too large) won't
+  # change on a retry — fail fast instead of sleeping through the schedule.
+  return status >= 500 or status == 429
+
+
 class HTTPTracker(Tracker):
   """ship trail events to the deployed `trails-server` over HTTPS.
 
@@ -326,7 +354,9 @@ class HTTPTracker(Tracker):
   def step(self, kind: StepKind, body: Any, **extras: Any) -> None:
     if self._trail_id is None:
       raise RuntimeError('step() called before start_trail()')
-    payload = {'kind': kind, 'body': body, **extras}
+    # mint the step_id here, outside _post, so every retry of this POST carries
+    # the same id — that is what makes the server-side write idempotent.
+    payload = {'step_id': _new_step_id(), 'kind': kind, 'body': body, **extras}
     self._post(
       f'/v1/trails/{self._trail_id}/steps',
       payload,
@@ -336,7 +366,7 @@ class HTTPTracker(Tracker):
   def end_trail(self, reason: EndReason) -> None:
     if self._trail_id is None:
       return
-    payload = {'reason': reason}
+    payload = {'step_id': _new_step_id(), 'reason': reason}
     try:
       self._post(
         f'/v1/trails/{self._trail_id}/end',
@@ -371,10 +401,17 @@ class HTTPTracker(Tracker):
         time.sleep(delay)
       try:
         return self._request('POST', path, headers, body)
+      except HTTPStatusError as exc:
+        # drop the persistent connection so the next attempt opens a fresh one.
+        self._drop_conn()
+        # deterministic 4xx won't change on a retry — propagate immediately
+        # rather than sleeping through the rest of the schedule.
+        if not _is_retryable_status(exc.status):
+          raise
+        last_exc = exc
       except Exception as exc:
         last_exc = exc
-        # drop the persistent connection so the next attempt opens a fresh one;
-        # transient blips often leave the socket half-open.
+        # transient blips often leave the socket half-open; reopen next attempt.
         self._drop_conn()
     assert last_exc is not None
     raise last_exc
@@ -385,8 +422,8 @@ class HTTPTracker(Tracker):
     resp = conn.getresponse()
     raw = resp.read()
     if resp.status >= 400:
-      raise http.client.HTTPException(
-        f'{method} {path} -> HTTP {resp.status}: {raw.decode(errors="replace")}'
+      raise HTTPStatusError(
+        resp.status, f'{method} {path} -> HTTP {resp.status}: {raw.decode(errors="replace")}'
       )
     if resp.status == 204 or len(raw) == 0:
       return {}

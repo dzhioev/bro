@@ -211,11 +211,16 @@ class Storage:
     kind: str,
     body: Any,
     extras: dict,
+    step_id: str | None = None,
   ) -> dict:
     size_bytes = _body_size_bytes(body)
     if size_bytes > MAX_BODY_BYTES:
       raise BodyTooLarge(f'body size {size_bytes} exceeds {MAX_BODY_BYTES}')
-    step_id = _new_id()
+    # the client mints the step_id and reuses it across retries; the conditional
+    # Put below turns a retried POST into an idempotent no-op. older clients that
+    # send no id fall back to a server-minted ULID (no dedup, but harmless — a
+    # fresh id never collides).
+    step_id = step_id if step_id is not None else _new_id()
     ts = _now_iso()
 
     spilled_key: str | None = None
@@ -284,11 +289,24 @@ class Storage:
       await asyncio.to_thread(
         self._dynamo.transact_write_items,
         TransactItems=[
-          {'Put': {'TableName': self._steps_table, 'Item': _ddb_item(step_item)}},
+          {
+            'Put': {
+              'TableName': self._steps_table,
+              'Item': _ddb_item(step_item),
+              'ConditionExpression': 'attribute_not_exists(step_id)',
+            }
+          },
           {'Update': update},
         ],
       )
     except self._dynamo.exceptions.TransactionCanceledException as e:
+      # item 0 is the step Put: a failed attribute_not_exists means this step_id
+      # already landed (a retried POST) — the transaction cancelled atomically,
+      # so the aggregate was not double-incremented. report idempotent success.
+      codes = _cancellation_codes(e)
+      if len(codes) > 0 and codes[0] == 'ConditionalCheckFailed':
+        return {'step_id': step_id, 'ts': ts, 'duplicate': True}
+      # item 1 is the trail Update: a failed attribute_exists means no such trail.
       if _conditional_check_failed(e):
         raise TrailNotFound(trail_id) from e
       raise
@@ -300,8 +318,9 @@ class Storage:
     trail_id: str,
     reason: str,
     continuation: dict | None,
+    step_id: str | None = None,
   ) -> dict:
-    step_id = _new_id()
+    step_id = step_id if step_id is not None else _new_id()
     ts = _now_iso()
     step_item = {
       'trail_id': trail_id,
@@ -337,11 +356,23 @@ class Storage:
       await asyncio.to_thread(
         self._dynamo.transact_write_items,
         TransactItems=[
-          {'Put': {'TableName': self._steps_table, 'Item': _ddb_item(step_item)}},
+          {
+            'Put': {
+              'TableName': self._steps_table,
+              'Item': _ddb_item(step_item),
+              'ConditionExpression': 'attribute_not_exists(step_id)',
+            }
+          },
           {'Update': update},
         ],
       )
     except self._dynamo.exceptions.TransactionCanceledException as e:
+      # item 0 is the end-step Put: a retried end POST reuses the same step_id,
+      # so a failed condition means it already landed — idempotent success
+      # (the end count was not double-incremented).
+      codes = _cancellation_codes(e)
+      if len(codes) > 0 and codes[0] == 'ConditionalCheckFailed':
+        return {'ended_at': ts, 'duplicate': True}
       if _conditional_check_failed(e):
         raise TrailNotFound(trail_id) from e
       raise
@@ -516,3 +547,10 @@ def _range_query(
 def _conditional_check_failed(exc) -> bool:
   reasons = getattr(exc, 'response', {}).get('CancellationReasons', [])
   return any(r.get('Code') == 'ConditionalCheckFailed' for r in reasons)
+
+
+def _cancellation_codes(exc) -> list[str]:
+  # per-item failure codes, positionally aligned with the TransactItems list —
+  # lets a caller tell which leg of the transaction tripped its condition.
+  reasons = getattr(exc, 'response', {}).get('CancellationReasons', [])
+  return [r.get('Code', 'None') for r in reasons]

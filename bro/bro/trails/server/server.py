@@ -2,9 +2,11 @@
 """aiohttp HTTP API for the trails service.
 
 Frames the storage layer for HTTP: bearer-token auth on every `/v1/*` route,
-body validation, ULID step ids assigned by `storage.Storage`, mapping of
-storage exceptions to HTTP statuses. Schema and write semantics live in the
-parent `save bros logs` design doc (the schema-locking gate was stage 3).
+body validation, mapping of storage exceptions to HTTP statuses. Step ids are
+minted client-side (a ULID, reused across retries) so the conditional step Put
+makes a retried POST idempotent; older clients that omit `step_id` fall back to
+a server-minted id. Schema and write semantics live in the parent `save bros
+logs` design doc (the schema-locking gate was stage 3).
 """
 
 import hmac
@@ -106,11 +108,14 @@ async def _handle_put_step(request: web.Request) -> web.Response:
   if not isinstance(kind, str) or kind not in VALID_STEP_KINDS:
     return _err(f'kind must be one of {sorted(VALID_STEP_KINDS)}', 400)
   body = payload.get('body')
-  extras = {k: v for k, v in payload.items() if k not in ('kind', 'body')}
+  step_id = payload.get('step_id')
+  if step_id is not None and not isinstance(step_id, str):
+    return _err('step_id must be a string', 400)
+  extras = {k: v for k, v in payload.items() if k not in ('kind', 'body', 'step_id')}
 
   store: storage.Storage = request.app['storage']
   try:
-    await store.put_step(trail_id=trail_id, kind=kind, body=body, extras=extras)
+    await store.put_step(trail_id=trail_id, kind=kind, body=body, extras=extras, step_id=step_id)
   except storage.BodyTooLarge as e:
     return _err(str(e), 413)
   except storage.TrailNotFound:
@@ -129,10 +134,15 @@ async def _handle_end_trail(request: web.Request) -> web.Response:
   continuation = payload.get('continuation')
   if continuation is not None and not isinstance(continuation, dict):
     return _err('continuation must be an object or null', 400)
+  step_id = payload.get('step_id')
+  if step_id is not None and not isinstance(step_id, str):
+    return _err('step_id must be a string', 400)
 
   store: storage.Storage = request.app['storage']
   try:
-    await store.end_trail(trail_id=trail_id, reason=reason, continuation=continuation)
+    await store.end_trail(
+      trail_id=trail_id, reason=reason, continuation=continuation, step_id=step_id
+    )
   except storage.TrailNotFound:
     return _err(f'trail not found: {trail_id}', 404)
   return web.Response(status=204)
