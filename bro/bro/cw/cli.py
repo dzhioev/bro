@@ -305,8 +305,8 @@ def _docker_create_argv(
 ) -> list[str]:
   """argv for `docker create` of the session container (run-equivalent, unstarted).
 
-  `docker create -it --rm …` then `docker start -a -i <id>` reproduces `docker run
-  -it --rm` exactly (TTY, signals, exit code, auto-remove on exit). Splitting them
+  `docker create -it --rm --init …` then `docker start -a -i <id>` reproduces `docker
+  run -it --rm --init` exactly (TTY, signals, exit code, auto-remove on exit). Splitting them
   gives `run_in_container` a window to `docker cp` the scoped credential store into
   the pre-start container's writable layer — no host-side store, no bind mount.
 
@@ -337,6 +337,11 @@ def _docker_create_argv(
     'create',
     '-it',
     '--rm',
+    # tini as pid 1 reaps orphaned grandchildren. our entrypoint re-execs into
+    # claude, so without this pid 1 is claude — which doesn't wait() on orphans, so
+    # every group-killed pipeline (spawn.run's timeout path: the dev bro's bash/grep,
+    # infra deploys) would leak a zombie grandchild for the container's lifetime.
+    '--init',
     '-v',
     f'{session}:/workspace',
     '-v',

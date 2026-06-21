@@ -11,12 +11,22 @@ import pytest
 from base import spawn
 
 
-def _alive(pid: int) -> bool:
+def _running(pid: int) -> bool:
+  """True only if pid names a live, *running* process. A killed grandchild that gets
+  orphaned lingers as a zombie wherever pid 1 doesn't reap it; `os.kill(pid, 0)`
+  succeeds on a zombie, so it can't tell a dead-but-unreaped process from a live one.
+  Read the process state directly to exclude zombies, so this asserts what the test
+  means (not running) without depending on the ambient reaper. Where /proc is absent
+  (e.g. a macOS host) existence implies running."""
   try:
     os.kill(pid, 0)
   except ProcessLookupError:
     return False
-  return True
+  try:
+    stat = open(f'/proc/{pid}/stat').read()
+  except FileNotFoundError:
+    return True
+  return stat.rsplit(')', 1)[1].split()[0] != 'Z'
 
 
 def test_child_is_detached_into_own_session() -> None:
@@ -73,9 +83,9 @@ def test_run_timeout_kills_grandchildren(tmp_path) -> None:
     spawn.run(['bash', '-c', cmd], timeout=1, capture_output=True, text=True)
   pid = int(pidfile.read_text())
   deadline = time.time() + 5
-  while time.time() < deadline and _alive(pid):
+  while time.time() < deadline and _running(pid):
     time.sleep(0.05)
-  assert not _alive(pid), 'grandchild survived the timeout'
+  assert not _running(pid), 'grandchild survived the timeout'
 
 
 def test_run_check_raises_on_nonzero() -> None:
