@@ -124,8 +124,6 @@ git fetch origin master && git rebase origin/master
 
 Conflicts → stop and report to the user. Do not `--abort` or `--skip` without asking. Prefer `Edit` over `Write` for resolving conflict markers — re-Read in conflict state, replace each `<<<<<<<...=======...>>>>>>>` block with the merged version. Cheaper than rewriting whole files.
 
-If the rebase pulled in `pyproject.toml` changes (e.g. another PR's `[project.scripts]`), the local venv is now stale — run `uv sync --all-groups` and smoke a bare console script (`cw banner --llm`) before relying on any CLI. Green tests don't catch this: they import the package, not the freshly-registered scripts.
-
 ### 10. Verify PR scope
 
 ```bash
