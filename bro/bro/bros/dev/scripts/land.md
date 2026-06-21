@@ -13,6 +13,7 @@ Merge an approved PR for the current branch into master. The terminal action of 
 - You are in a worktree on a non-master branch.
 - A PR exists for the current branch (`gh pr view --json number` returns one).
 - The PR's `reviewDecision` is `APPROVED`, OR the user has explicitly said to merge despite missing approval.
+- **Test plan fully checked (auto-chain).** When `/land` is reached via the `--auto` APPROVED chain rather than a direct user "land it", the PR's `## Test plan` has no unchecked boxes (`- [ ]`). An unchecked box means you couldn't verify that item yourself — stop, surface the unchecked items, and wait for the user to verify them or say to land anyway.
 
 If any precondition fails, stop and report — do not invent state.
 
@@ -67,14 +68,16 @@ Use `date '+%Y-%m-%d %H:%M'` for the timestamp — do not invent it.
 
 ### 5. Close the task — conditionally
 
-Check the session's initial prompt for an explicit instruction to keep the task open. Phrases like "keep this Live", "leave open with notes", "only landing a subset", or similar mean the user wants the task to stay in its current status after merge.
+Don't close if either holds:
 
-- **If no such instruction**: `flow::update_task(task_id, status='Done')`.
-- **If the user said to keep it open**: skip the status update. Mention in your final report that the task was left in its current status per the user's instruction.
+- **The change needs a deploy or migration to take effect.** If it touches code/config that runs in a deployed service (the ECS services / emails pipeline — see `infra/CLAUDE.md`) or adds a migration/backfill, the merge alone doesn't make it live. Leave the task in its current status and **propose** the rollout as a `call --fast devoops "<what to deploy or run>"` command — don't run it yourself; the task closes only after the deploy succeeds.
+- **The user said to keep it open.** Phrases in the initial prompt like "keep this Live", "leave open with notes", or "only landing a subset" mean the task stays in its current status; note it in your report.
+
+Otherwise: `flow::update_task(task_id, status='Done')`.
 
 ### 6. Report to the user
 
-One line: PR URL, "merged to master", and task status (closed-to-Done or left-Live-per-instruction).
+One line: PR URL, "merged to master", and task status — closed-to-Done, left open per instruction, or left open pending deploy (in which case include the proposed `call --fast devoops "…"` command).
 
 ## Safety rules
 
