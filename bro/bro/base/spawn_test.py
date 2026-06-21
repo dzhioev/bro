@@ -2,6 +2,7 @@
 controlling terminal, so an interactive prompt (read of /dev/tty) fails fast instead
 of blocking the agent, and stdin defaults to /dev/null."""
 
+import errno
 import os
 import subprocess
 import time
@@ -53,7 +54,9 @@ def test_no_controlling_tty_so_dev_tty_open_fails() -> None:
     timeout=10,
   )
   assert proc.returncode != 0
-  assert 'No such device or address' in proc.stderr
+  # ENXIO surfaces with a platform-specific strerror ("No such device or address" on
+  # Linux, "Device not configured" on macOS), so match the errno rather than the text.
+  assert f'Errno {errno.ENXIO}' in proc.stderr
 
 
 def test_run_redirects_stdin_to_devnull_by_default() -> None:
