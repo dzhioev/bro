@@ -3,7 +3,7 @@ FROM python:3.12-slim
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      git curl ca-certificates gosu procps unzip gnupg \
+      git curl ca-certificates gosu procps unzip gnupg bc \
  && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
       | gpg --dearmor -o /usr/share/keyrings/nodesource.gpg \
  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/nodesource.gpg] https://deb.nodesource.com/node_24.x nodistro main" \
@@ -72,20 +72,33 @@ RUN gosu cw bash -ec '\
       cp -r "$CLAUDE_CONFIG_DIR/plugins/." /opt/claude-plugins-seed/; \
       rm -rf "$CLAUDE_CONFIG_DIR/plugins" "$CLAUDE_CONFIG_DIR/.claude.json" "$CLAUDE_CONFIG_DIR/backups"'
 
-# pre-warm the uv wheel cache from the project's pyproject + uv.lock so the
-# entrypoint's `uv sync` against the bind-mounted /workspace doesn't have to
-# re-download wheels. /opt is on the image overlay (different fs from the
-# bind mount), so hardlinks won't work — UV_LINK_MODE=copy makes runtime
-# `uv sync` skip the failed hardlink probe and copy straight from cache.
-# Cache is chmod'd world-writable because the entrypoint usermod's `cw` to
-# match the host uid at runtime, so build-time ownership is irrelevant.
+# bake the project venv at /opt/cw-venv at image-build time so per-session
+# containers reuse it instead of running `uv sync` (~3.4s) on every launch (the
+# entrypoint symlinks /workspace/.venv to it and stamps provision_repo.sh's skip
+# marker). the sync runs with the project tree at /workspace, so the editable
+# install's module finder records each top-level module under /workspace — the
+# exact path the entrypoint clones into at runtime — and resolves against the live
+# clone. also bake the `_entrypoints.py` console-script bridge into the venv so the
+# entrypoint can skip the ~1s `sync-scripts --entrypoints` regen too: the bridge is
+# a pure function of the `[project.scripts]` table, which the tag pins, so the baked
+# copy matches any session whose clone produced this image. only the venv is kept:
+# the build-time source is a bind mount removed in the same layer, so nothing is
+# duplicated. correctness holds for the life of the image because the tag pins
+# pyproject.toml + uv.lock (see cw.py:_image_tag), so a session's clone always
+# carries the same deps and the same launcher set the bake produced. UV_LINK_MODE=copy:
+# /opt is on the image overlay, a different fs from any bind mount, so hardlinks can't
+# be probed.
 ENV UV_CACHE_DIR=/opt/uv-cache
 ENV UV_LINK_MODE=copy
-COPY --from=proj pyproject.toml uv.lock /tmp/uv-warm/
-RUN cd /tmp/uv-warm \
- && uv sync --no-install-project --frozen --all-groups \
- && rm -rf /tmp/uv-warm \
- && chmod -R a+rwX /opt/uv-cache
+RUN --mount=type=bind,from=proj,target=/proj-src \
+    mkdir -p /workspace \
+ && tar -C /proj-src --exclude=./.git --exclude=./.venv --exclude=./var \
+      --exclude=./node_modules --exclude=./.configs -cf - . | tar -C /workspace -xf - \
+ && cd /workspace \
+ && UV_PROJECT_ENVIRONMENT=/opt/cw-venv uv sync --frozen --all-groups \
+ && /opt/cw-venv/bin/python -m sync_scripts --entrypoints \
+ && find /workspace -mindepth 1 -delete \
+ && chmod -R a+rwX /opt/uv-cache /opt/cw-venv
 
 WORKDIR /workspace
 ENV CW_IN_CONTAINER=1

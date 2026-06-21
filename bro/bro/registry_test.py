@@ -59,14 +59,16 @@ class BetaBro(Bro):
 
 @pytest.fixture(autouse=True)
 def clean_registry():
+  # isolate to hand-registered bros: disable autoload so the real bros from
+  # BRO_SPECS never bleed into get_class / list_classes during the test.
   saved = dict(_REGISTRY)
-  saved_initialized = bro.registry._initialized
+  saved_autoload = bro.registry._autoload
   _REGISTRY.clear()
-  bro.registry._initialized = True
+  bro.registry._autoload = False
   yield
   _REGISTRY.clear()
   _REGISTRY.update(saved)
-  bro.registry._initialized = saved_initialized
+  bro.registry._autoload = saved_autoload
 
 
 class TestRegister:
@@ -116,3 +118,29 @@ class TestListClasses:
     classes = list_classes()
     assert {cls.name for cls in classes} == {'alpha', 'beta'}
     assert all(isinstance(cls, type) for cls in classes)
+
+
+class TestAutoload:
+  # the autouse fixture disables autoload; re-enable it here to exercise the
+  # real lazy-import path against BRO_SPECS.
+  @pytest.fixture(autouse=True)
+  def enable_autoload(self):
+    bro.registry._autoload = True
+
+  def test_get_class_imports_bro_by_name_without_manual_register(self):
+    cls = get_class('pm')
+    assert cls.name == 'pm'
+
+  def test_unknown_name_raises_even_with_autoload(self):
+    with pytest.raises(KeyError, match='unknown bro'):
+      get_class('nonexistent')
+
+  def test_list_classes_autoloads_every_bro_spec(self):
+    from bro.bros import BRO_SPECS
+
+    assert {cls.name for cls in list_classes()} == set(BRO_SPECS)
+
+  def test_autoload_off_does_not_import_real_bros(self):
+    bro.registry._autoload = False
+    with pytest.raises(KeyError, match='unknown bro'):
+      get_class('pm')

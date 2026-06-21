@@ -1,18 +1,13 @@
+import importlib
+
 from bro.bros.bro import Bro
 from llm.llm import LLMSpec
 
 _REGISTRY: dict[str, type[Bro]] = {}
-_initialized = False
-
-
-def _ensure_initialized() -> None:
-  global _initialized
-  if _initialized:
-    return
-  _initialized = True
-  from bro.bros import init
-
-  init()
+# when True (the default), a lookup miss imports the matching bro module from
+# BRO_SPECS on demand. tests flip it off to isolate the registry to whatever they
+# register by hand, so the real bros never bleed into list_classes().
+_autoload = True
 
 
 def register(bro_cls: type[Bro]) -> None:
@@ -24,12 +19,33 @@ def register(bro_cls: type[Bro]) -> None:
   _REGISTRY[name] = bro_cls
 
 
+def _autoload_class(name: str) -> type[Bro] | None:
+  # import only the single bro module that declares `name` and register it; None
+  # if `name` is not a known bro. importing one bro instead of all of them keeps
+  # `create_bro('pm')` from dragging in every other bro's dependency graph.
+  from bro.bros import BRO_SPECS
+
+  spec = BRO_SPECS.get(name)
+  if spec is None:
+    return None
+  module_path, class_name = spec.split(':')
+  cls = getattr(importlib.import_module(module_path), class_name)
+  if cls.name != name:
+    raise ValueError(f'bro class {class_name} declares name {cls.name!r}, expected {name!r}')
+  if name not in _REGISTRY:
+    register(cls)
+  return _REGISTRY[name]
+
+
 def get_class(name: str) -> type[Bro]:
-  _ensure_initialized()
   cls = _REGISTRY.get(name)
-  if cls is None:
-    raise KeyError(f'unknown bro: {name!r}')
-  return cls
+  if cls is not None:
+    return cls
+  if _autoload:
+    loaded = _autoload_class(name)
+    if loaded is not None:
+      return loaded
+  raise KeyError(f'unknown bro: {name!r}')
 
 
 def create_bro(name: str, llm_spec: LLMSpec | None = None) -> Bro:
@@ -44,5 +60,9 @@ def create_bro(name: str, llm_spec: LLMSpec | None = None) -> Bro:
 
 
 def list_classes() -> list[type[Bro]]:
-  _ensure_initialized()
+  if _autoload:
+    from bro.bros import BRO_SPECS
+
+    for name in BRO_SPECS:
+      _autoload_class(name)
   return list(_REGISTRY.values())

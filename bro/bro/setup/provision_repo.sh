@@ -33,8 +33,15 @@ fi
 # committed [project.scripts] table points at it; it must track the source on
 # every provision. run with the venv's python directly (cwd-independent, and
 # avoids `uv run` re-syncing the env). see sync_scripts.py.
-echo "generating console-script entrypoints" >&2
-.venv/bin/python -m sync_scripts --entrypoints >&2
+# CW_VENV_BAKED: the container entrypoint sets this when it reuses the venv baked
+# into the image, whose bridge was generated from the tag-pinned [project.scripts]
+# and so already matches this clone — skip the regen.
+if [ "${CW_VENV_BAKED:-}" = "1" ]; then
+  echo "console-script entrypoints baked into image; skipping regen" >&2
+else
+  echo "generating console-script entrypoints" >&2
+  .venv/bin/python -m sync_scripts --entrypoints >&2
+fi
 
 # promote the staged token-accounting baseline after each commit lands. --git-path
 # hooks (not --git-dir/hooks) resolves to the shared common hooks dir from inside a

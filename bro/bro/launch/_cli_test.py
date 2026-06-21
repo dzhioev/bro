@@ -57,6 +57,8 @@ def test_maybe_containerize_hops_and_scopes_to_bro():
   assert 'TRAILS_DISABLED' not in kwargs['extra_env']
   # ppp-dev doesn't deploy → no docker socket
   assert kwargs['docker_sock'] is False
+  # LLM-process container, not Claude Code: the ambient CW_BRO must not leak in
+  assert kwargs['forward_bro'] is False
 
 
 def test_maybe_containerize_no_trails_drops_secret_and_disables_recording():

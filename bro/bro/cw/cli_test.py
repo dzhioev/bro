@@ -912,6 +912,18 @@ class TestDockerCreateArgv:
     assert 'TERM' in argv
     assert argv[argv.index('TERM') - 1] == '-e'
 
+  def test_cw_bro_forwarded_by_default(self, build_argv, monkeypatch):
+    # the Claude Code session path relies on CW_BRO reaching the container so the
+    # entrypoint runs `cw populate-bro-skills`.
+    monkeypatch.setenv('CW_BRO', 'ppp-dev')
+    assert 'CW_BRO' in build_argv()
+
+  def test_cw_bro_dropped_when_forward_bro_false(self, build_argv, monkeypatch):
+    # the ask/do/call hop runs the bro as an LLM process (no Claude Code), so the
+    # calling session's ambient CW_BRO must not leak in and trigger a skills populate.
+    monkeypatch.setenv('CW_BRO', 'ppp-dev')
+    assert 'CW_BRO' not in build_argv(forward_bro=False)
+
   def test_extra_env_injected_as_explicit_key_value(self, build_argv, monkeypatch):
     # extra_env sets the value here (`-e KEY=VALUE`), unlike _DOCKER_FORWARD_ENV which
     # forwards a host var by name — so it works even with no such var on the host.

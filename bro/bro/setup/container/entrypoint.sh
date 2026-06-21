@@ -132,6 +132,24 @@ if [ -d /opt/claude-plugins-seed ] && [ ! -f "$HOME/.claude/plugins/installed_pl
   cp -r /opt/claude-plugins-seed/. "$HOME/.claude/plugins/"
 fi
 
+# reuse the venv baked into the image (deps + editable project already installed,
+# its module finder pointing at /workspace — see the Dockerfile) instead of a fresh
+# `uv sync` (~3.4s). symlink it in and stamp provision_repo.sh's skip marker newer
+# than the just-cloned uv.lock/pyproject so the sync is skipped: the image tag pins
+# both, so the baked env always matches this clone's deps. provision still runs to
+# regenerate the console-script bridge + git hooks. absent /opt/cw-venv (older
+# image) or a pre-existing /workspace/.venv (reused workspace) falls through to a
+# normal sync.
+if [ "${CW_SKIP_VENV:-}" != "1" ] && [ -d /opt/cw-venv ] && [ ! -e /workspace/.venv ]; then
+  ln -s /opt/cw-venv /workspace/.venv
+  touch /workspace/.venv/.provision-stamp
+  # the baked venv also carries a `_entrypoints.py` bridge generated from this
+  # image's [project.scripts]; the tag pins that table, so it matches this clone.
+  # tell provision_repo.sh to skip the regen (the only other thing it does is the
+  # console-script bridge + git hooks).
+  export CW_VENV_BAKED=1
+fi
+
 # provision the cloned repo (venv sync if stale, console-script bridge, post-commit
 # hook, git alias) — shared with host setup_repo.sh and the worktree session-start
 # hook. then activate the venv so child processes (hooks, MCP servers, Bash tool)

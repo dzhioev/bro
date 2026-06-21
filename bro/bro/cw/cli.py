@@ -314,6 +314,7 @@ def _docker_create_argv(
   *,
   docker_sock: bool = True,
   extra_env: Mapping[str, str] | None = None,
+  forward_bro: bool = True,
 ) -> list[str]:
   """argv for `docker create` of the session container (run-equivalent, unstarted).
 
@@ -324,6 +325,12 @@ def _docker_create_argv(
 
   `extra_env` adds explicit `-e KEY=VALUE` entries (value set here) — distinct from the
   `_DOCKER_FORWARD_ENV` loop, which forwards a host var by name.
+
+  `forward_bro=False` drops `CW_BRO` from that forward set: the only thing the
+  container does with it is `cw populate-bro-skills` (Claude Code slash-command
+  discovery), so an LLM-process container (`ask`/`do-task`/`call`) that never runs
+  Claude Code must not inherit the calling session's ambient `CW_BRO` and pay for a
+  pointless skills populate.
   """
   home = Path.home()
   claude_dir = home / '.claude' / 'cw-sessions' / name
@@ -391,6 +398,8 @@ def _docker_create_argv(
   if docker_sock:
     argv += ['-v', '/var/run/docker.sock:/var/run/docker.sock']
   for var in _DOCKER_FORWARD_ENV:
+    if var == 'CW_BRO' and not forward_bro:
+      continue
     if os.environ.get(var) is not None:
       argv += ['-e', var]
   if extra_env is not None:
@@ -1658,6 +1667,7 @@ def run_in_container(
   secrets: Collection[str] = (),
   docker_sock: bool = True,
   extra_env: Mapping[str, str] | None = None,
+  forward_bro: bool = True,
 ) -> int:
   """run `command` inside a fresh cw-style container backed by workspace `name`.
 
@@ -1673,16 +1683,20 @@ def run_in_container(
   (see `credentials.build_scoped_store`); a missing secret raises (strict). AWS is
   just one of them (`aws`), wired in by its install hook. `docker_sock=False`
   drops the docker socket mount (shell-less bros). `extra_env` sets explicit
-  `-e KEY=VALUE` vars in the container (see `_docker_create_argv`).
+  `-e KEY=VALUE` vars in the container (see `_docker_create_argv`). `forward_bro=False`
+  keeps the calling session's ambient `CW_BRO` out of the container — used by the
+  `ask`/`do-task`/`call` hop, whose LLM-process container never runs Claude Code and
+  so must not trigger a `cw populate-bro-skills` (see `_docker_create_argv`).
   """
   proj = _project_root()
   session = _containers_dir(proj) / name
   session.mkdir(parents=True, exist_ok=True)
-  # refresh the host's origin/master so the container's copy (which it uses for
-  # later clean/rebase ancestry checks) is current. skip on container re-entry —
-  # the entrypoint's clone block won't fire then.
-  if not (session / '.git').exists():
-    subprocess.run(['git', '-C', str(proj), 'fetch', 'origin', 'master'], check=True)
+  # the container starts with origin/master only as fresh as the host's last fetch
+  # (the entrypoint copies the ref from /host-repo, no network). that is fine: the
+  # only operations that decide on master ancestry — /pr and /land — fetch from
+  # GitHub themselves before rebasing (the container's origin points upstream), so
+  # a launch-time refresh here would buy nothing they don't redo. the lone reader of
+  # a possibly-stale ref, infra's git_changes diff, is informational.
   tag = _image_tag()
   _ensure_image(tag)
   home = Path.home()
@@ -1695,7 +1709,14 @@ def run_in_container(
   log.info('scoped secrets for %s: %s', name, ', '.join(names) if len(names) > 0 else '(none)')
   created = subprocess.run(
     _docker_create_argv(
-      tag, name, proj, session, command, docker_sock=docker_sock, extra_env=extra_env
+      tag,
+      name,
+      proj,
+      session,
+      command,
+      docker_sock=docker_sock,
+      extra_env=extra_env,
+      forward_bro=forward_bro,
     ),
     capture_output=True,
     text=True,
