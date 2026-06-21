@@ -40,9 +40,9 @@ On exit: `--drop` removes the worktree (`git worktree remove --force` + `git bra
 
 Layout on disk:
 
-- `<project>/.claude/worktrees/<name>/` — the worktree (regular working tree with a `.git` gitfile that points at `<project>/.git/worktrees/<name>/`).
+- `<project>/var/cw/worktrees/<name>/` — the worktree (regular working tree with a `.git` gitfile that points at `<project>/.git/worktrees/<name>/`), a sibling of the container workspaces under `var/cw/`.
 - `<project>/.git/worktrees/<name>/cw-session.pid` — the launching `cw` process's pid, present while a host session is live (drives `cw list`/`clean` active-session detection).
-- `<project>/.claude/worktrees/<name>/.venv` — per-worktree virtualenv created on first launch by `cw` (via `setup/provision_repo.sh`).
+- `<project>/var/cw/worktrees/<name>/.venv` — per-worktree virtualenv created on first launch by `cw` (via `setup/provision_repo.sh`).
 - `~/.claude/projects/<encoded-worktree-path>/` — Claude Code's own per-project state, including the session JSONL files. The encoded path is the worktree path with `/` and `.` replaced by `-`.
 
 ### Container mode (`cw ss -c <name>`)

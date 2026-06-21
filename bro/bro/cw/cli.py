@@ -2,11 +2,12 @@
 """launch claude, optionally in an isolated docker container.
 
 host mode (default): cw owns the worktree lifecycle — it creates the worktree
-(`worktree-<name>` branch + submodule alternates), provisions it with the shared
-setup/provision_repo.sh (same as the container entrypoint), then runs plain `claude`
-from inside it (not `claude -w`, so no claude-side worktree/provisioning hooks). On
-exit it drops the worktree (`--drop`) or, interactively, offers to. cw writes its pid
-to the per-worktree git admin dir so `cw list`/`clean` can tell a session is live.
+(`var/cw/worktrees/<name>`, `worktree-<name>` branch + submodule alternates),
+provisions it with the shared setup/provision_repo.sh (same as the container
+entrypoint), then runs plain `claude` from inside it (not `claude -w`, so no
+claude-side worktree/provisioning hooks). On exit it drops the worktree (`--drop`)
+or, interactively, offers to. cw writes its pid to the per-worktree git admin dir
+so `cw list`/`clean` can tell a session is live.
 
 container mode (--container): /workspace is a fresh clone, not a worktree — the
 gitfile-based worktree layout doesn't survive the container boundary, and this
@@ -165,6 +166,14 @@ def _git_out(*args: str, cwd: str | None = None) -> str:
 
 def _project_root() -> Path:
   return Path(_git_out('rev-parse', '--git-common-dir')).resolve().parent
+
+
+def _worktrees_dir(proj: Path) -> Path:
+  return proj / 'var' / 'cw' / 'worktrees'
+
+
+def _containers_dir(proj: Path) -> Path:
+  return proj / 'var' / 'cw' / 'containers'
 
 
 def _keychain_credentials() -> dict | None:
@@ -440,7 +449,7 @@ def _latest_jsonl(projects_dir: Path) -> Path | None:
 
 
 def _projects_dir_for_local(name: str, proj: Path) -> Path:
-  worktree = proj / '.claude' / 'worktrees' / name
+  worktree = _worktrees_dir(proj) / name
   encoded = str(worktree).replace('/', '-').replace('.', '-')
   return Path.home() / '.claude' / 'projects' / encoded
 
@@ -588,7 +597,7 @@ def _session_facts() -> dict[str, str | bool | None]:
     except subprocess.CalledProcessError:
       proj = None
     if proj is not None:
-      candidate = proj / '.claude' / 'worktrees' / name
+      candidate = _worktrees_dir(proj) / name
       if candidate.is_dir():
         host_workspace = str(candidate)
 
@@ -751,7 +760,7 @@ def _find_container_id(name: str, proj: Path) -> str | None:
   workspace. returns the container short id, or None if no running container
   is bound to that mount.
   """
-  session = proj / 'var' / 'cw' / 'containers' / name
+  session = _containers_dir(proj) / name
   if not session.is_dir():
     return None
   result = subprocess.run(
@@ -803,11 +812,11 @@ def exec_in_workspace(name: str, cmd: list[str]) -> int:
 def _resolve_workspace(ref: str, proj: Path) -> tuple[Path, Path | None]:
   name, is_container = _parse_ref(ref)
   if is_container:
-    path = proj / 'var' / 'cw' / 'containers' / name
+    path = _containers_dir(proj) / name
     if not path.is_dir():
       raise ValueError(f'container workspace not found: {ref}')
     return path, proj
-  path = proj / '.claude' / 'worktrees' / name
+  path = _worktrees_dir(proj) / name
   if not path.is_dir():
     raise ValueError(f'workspace not found: {ref}')
   return path, None
@@ -829,8 +838,8 @@ def _list_entry_container(
 
 def list_workspaces() -> int:
   proj = _project_root()
-  worktrees_dir = proj / '.claude' / 'worktrees'
-  containers_dir = proj / 'var' / 'cw' / 'containers'
+  worktrees_dir = _worktrees_dir(proj)
+  containers_dir = _containers_dir(proj)
 
   local_dirs = [p for p in worktrees_dir.iterdir() if p.is_dir()] if worktrees_dir.is_dir() else []
   container_dirs = (
@@ -1076,8 +1085,8 @@ def clean_workspaces(
   force: bool = False, dry_run: bool = False, refs: list[str] | None = None
 ) -> int:
   proj = _project_root()
-  worktrees_dir = proj / '.claude' / 'worktrees'
-  containers_dir = proj / 'var' / 'cw' / 'containers'
+  worktrees_dir = _worktrees_dir(proj)
+  containers_dir = _containers_dir(proj)
 
   filter_refs = set(refs) if refs is not None and len(refs) > 0 else None
   if filter_refs is not None:
@@ -1667,7 +1676,7 @@ def run_in_container(
   `-e KEY=VALUE` vars in the container (see `_docker_create_argv`).
   """
   proj = _project_root()
-  session = proj / 'var' / 'cw' / 'containers' / name
+  session = _containers_dir(proj) / name
   session.mkdir(parents=True, exist_ok=True)
   # refresh the host's origin/master so the container's copy (which it uses for
   # later clean/rebase ancestry checks) is current. skip on container re-entry —
@@ -1827,7 +1836,7 @@ def cw(
   # hooks. provisioning is the same provision_repo.sh the container entrypoint runs.
   proj = _project_root()
   os.chdir(proj)
-  worktree = proj / '.claude' / 'worktrees' / name
+  worktree = _worktrees_dir(proj) / name
   branch = f'worktree-{name}'
 
   if not _ensure_host_worktree(worktree, branch, base_ref):

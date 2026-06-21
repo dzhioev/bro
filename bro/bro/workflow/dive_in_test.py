@@ -71,7 +71,7 @@ class TestResolveTaskId:
 @pytest.fixture
 def fake_proj(monkeypatch, tmp_path):
   monkeypatch.setattr(cw, '_project_root', lambda: tmp_path)
-  worktrees = tmp_path / '.claude' / 'worktrees'
+  worktrees = tmp_path / 'var' / 'cw' / 'worktrees'
   containers = tmp_path / 'var' / 'cw' / 'containers'
   worktrees.mkdir(parents=True)
   containers.mkdir(parents=True)

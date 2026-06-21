@@ -226,7 +226,7 @@ class TestSessionFacts:
 
   def test_host_worktree_with_derived_path(self, monkeypatch, tmp_path):
     proj = tmp_path / 'proj'
-    worktree = proj / '.claude' / 'worktrees' / 'feature'
+    worktree = proj / 'var' / 'cw' / 'worktrees' / 'feature'
     worktree.mkdir(parents=True)
     monkeypatch.setattr(cw, '_project_root', lambda: proj)
     monkeypatch.setenv('CW_NAME', 'feature')
@@ -353,7 +353,7 @@ class TestRenderBanner:
       _facts(
         in_container=False,
         name='feature',
-        host_workspace='/proj/.claude/worktrees/feature',
+        host_workspace='/proj/var/cw/worktrees/feature',
         container_workspace=None,
         exec_command=None,
       )
@@ -372,12 +372,12 @@ class TestRenderBanner:
       _facts(
         in_container=False,
         name='feature',
-        host_workspace='/proj/.claude/worktrees/feature',
+        host_workspace='/proj/var/cw/worktrees/feature',
         container_workspace=None,
         exec_command=None,
       )
     )
-    assert '\033[31m/proj/.claude/worktrees/feature\033[0m' in out
+    assert '\033[31m/proj/var/cw/worktrees/feature\033[0m' in out
 
   def test_visual_does_not_paint_container_path_red(self):
     out = cw._render_banner_visual(_facts(host_workspace='/host/var/cw/containers/task'))

@@ -10,7 +10,7 @@ Take worktree changes from "work is finished" to "PR open and through review". S
 
 ## Preconditions
 
-- You are in a worktree (under `.claude/worktrees/` or otherwise on a non-master branch). Do NOT run this against the main repo's working copy — the user's global CLAUDE.md forbids touching it.
+- You are in a worktree (under `var/cw/worktrees/` or otherwise on a non-master branch). Do NOT run this against the main repo's working copy — the user's global CLAUDE.md forbids touching it.
 - The work looks finished. If tests are failing, edits look WIP, or a refactor is half-done, confirm with the user before proceeding.
 
 ## Workflow

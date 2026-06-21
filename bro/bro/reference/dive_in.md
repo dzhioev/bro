@@ -43,7 +43,7 @@ The workspace name (= `cw ss <name>`) is derived from whatever the session is *a
 - **`--new` mode** — base is `_slugify(command)` if a seed command is present, otherwise `dive-in-new`.
 - **Bare mode** — base is always `dive-in`.
 
-For `--new` and bare mode, **`_pick_fresh_name` appends a random suffix** — `base-<6 hex>` (e.g. `dive-in-new-a3f9c2`) — retrying until neither `.claude/worktrees/<slug>` (host) nor `var/cw/containers/<slug>` (container) exists.
+For `--new` and bare mode, **`_pick_fresh_name` appends a random suffix** — `base-<6 hex>` (e.g. `dive-in-new-a3f9c2`) — retrying until neither `var/cw/worktrees/<slug>` (host) nor `var/cw/containers/<slug>` (container) exists.
 
 The suffix makes each session's `worktree-<slug>` branch **unique by construction**, which is what prevents the remote-branch collision: local cleanup (`cw clean` / `--drop`) deletes only the *local* `worktree-<slug>` branch, so an un-merged `--new` session leaves `origin/worktree-<slug>` behind — but the next session picks a different suffix, so it never reuses a slug whose pushed branch still holds unmerged work. Because uniqueness is structural, the remote is never consulted (no `git ls-remote`, no network); the two local `.exists()` checks only guard against the vanishingly rare clash with a live workspace, regenerating the suffix if one hits. `dive_in_test.py:TestPickFreshName` covers the cases.
 

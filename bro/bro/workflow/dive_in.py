@@ -91,8 +91,8 @@ def _pick_fresh_name(base: str) -> str:
   vanishingly rare clash with a live workspace.
   """
   proj = cw._project_root()
-  worktrees = proj / '.claude' / 'worktrees'
-  containers = proj / 'var' / 'cw' / 'containers'
+  worktrees = cw._worktrees_dir(proj)
+  containers = cw._containers_dir(proj)
   while True:
     name = f'{base}-{secrets.token_hex(4)}'
     if not (worktrees / name).exists() and not (containers / name).exists():
