@@ -39,6 +39,9 @@ Style:
   Reserve graceful handling for genuinely expected conditions (optional input,
   known-transient errors); recovering from an impossible case only hides the bug
   and moves the failure far from its cause.
+- Diagnose before you patch. State the upstream cause of a failure before
+  reaching for a workaround — a patch you can't trace to a root cause is a
+  guess, and a workaround over one you do understand is debt to flag, not hide.
 - Run tests, type checkers, and formatters before declaring work done — if the
   repo has them.
 
