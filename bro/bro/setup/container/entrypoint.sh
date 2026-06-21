@@ -115,10 +115,6 @@ done
 HOOK
 chmod +x "$hooks_dir/pre-push"
 
-# promote the staged token-accounting baseline after each commit lands
-cp /workspace/setup/git_hooks/post-commit "$hooks_dir/post-commit"
-chmod +x "$hooks_dir/post-commit"
-
 # pre-create the /workspace transcript directory (trust is granted in the
 # constructed ~/.claude.json, not here)
 mkdir -p "$HOME/.claude/projects/-workspace"
@@ -133,17 +129,13 @@ if [ -d /opt/claude-plugins-seed ] && [ ! -f "$HOME/.claude/plugins/installed_pl
   cp -r /opt/claude-plugins-seed/. "$HOME/.claude/plugins/"
 fi
 
-if [ ! -x .venv/bin/python ] && [ "${CW_SKIP_VENV:-}" != "1" ]; then
-  echo 'provisioning linux venv' >&2
-  uv sync --all-groups >&2
-fi
-
-# activate venv so all child processes (hooks, MCP servers, Bash tool) inherit it
+# provision the cloned repo (venv sync if stale, console-script bridge, post-commit
+# hook, git alias) — shared with host setup_repo.sh and the worktree session-start
+# hook. then activate the venv so child processes (hooks, MCP servers, Bash tool)
+# inherit it. CW_SKIP_VENV (smoke test only) skips the whole venv-dependent block.
 if [ "${CW_SKIP_VENV:-}" != "1" ]; then
+  /workspace/setup/provision_repo.sh >&2
   source /workspace/.venv/bin/activate
-  # materialize the gitignored console-script bridge (see sync_scripts.py); cheap,
-  # and the venv may persist across container starts with a stale/absent shim
-  python -m sync_scripts --entrypoints >&2
 fi
 
 # secrets resolve from the scoped credential store bind-mounted at ~/.ppp (see

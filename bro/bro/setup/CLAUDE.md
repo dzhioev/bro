@@ -15,20 +15,21 @@ For a fresh machine, `./setup.sh` (repo root) runs `setup_env.sh` (system tools:
 
 ### Worktrees
 
-Worktrees get their own `.venv`. The `.claude/hooks/session_start.sh` hook runs `uv sync` + generates the `_entrypoints.py` bridge on first session in the worktree; subsequent sessions bail.
+Worktrees get their own `.venv`. `cw` (host mode) creates the worktree and runs `provision_repo.sh` on every launch; it syncs the venv on the first launch and skips the slow `uv sync` on later ones (re-syncing only when `uv.lock`/`pyproject.toml` changed), while always refreshing the `_entrypoints.py` bridge and git hooks.
 
 **Never run `uv sync` against the main repo from inside a worktree.** The editable install hardcodes absolute paths and would pin the shared venv to a worktree that may later disappear.
 
 ## Files
 
 - `setup_env.sh` — installs system tools (stow, claude-code, docker via colima on macOS, awscli, uv). macOS and Ubuntu only
-- `setup_repo.sh` — `uv sync` + generates the `_entrypoints.py` console-script bridge (`sync_scripts --entrypoints`) + registers repo-local `git golc` alias + installs the `post-commit` git hook + `~/.ppp` presence check
+- `setup_repo.sh` — host repo setup: calls `provision_repo.sh`, then runs the `~/.ppp` presence check
+- `provision_repo.sh` — the shared, idempotent "provision a checked-out repo" step: `uv sync` (skipped when the venv is already current) + regenerates the `_entrypoints.py` console-script bridge + installs the `post-commit` git hook + registers the repo-local `git golc` alias. Called by all three surfaces that need a provisioned repo — `setup_repo.sh` (host main repo), `cw` host mode (host worktrees), and the container entrypoint. Tree creation (clone / worktree) and surface-specific wiring (credentials, bro-skills) stay with the callers
 - `bootstrap_session_log.sh` — one-time IAM/SSM setup for session-log sync (creates `cw-session-log-sync` IAM user + key, writes `~/.ppp/session_log.json`). Run once after deploying `SessionLogStack`
 - `bootstrap_trails.sh` — one-time setup for the trails sink (reads `/trails/bearer-token` from SSM, derives `base_url` from the `infra` secret's `delegated_subdomain`, writes `~/.ppp/trails.json`). Run once after deploying `TrailsServerStack`
 - `claude_commit_footer.py` — prints the per-commit token-accounting footer (path-invoked, not a console script; runs through `base.args`, so the project venv must be active — the editable install puts `base` on the path even when it is invoked by file path). Two `>`-quoted lines — `> created with Claude Code <versions> | <model>: <delta>[, …]` then `> session(s): <id>[, …]` — with `'` as the thousands separator so it never collides with the `, ` joining entries.
 
   The per-model number is a per-commit *delta*: the session's cumulative transcript usage now minus the baseline already attributed to its earlier commits. So deltas — not cumulatives — are what sum across a range. Baselines live in the gitignored `<repo>/.token_accounting_state.json` (`committed` marks plus a `staged` proposal). Default mode emits the delta and stages the new cumulative; `--record` (run by the `post-commit` hook) promotes staged→committed once a commit lands, so the mark only advances on success; `--squash <range>` (run by `/land`) emits an aggregated footer over a branch — the union of its commits' deltas / sessions / versions plus the land session's uncommitted remainder — so squash merges keep their discarded children's tokens. The session ids link each commit back to its source trail.
-- `git_hooks/post-commit` — git hook installed into `.git/hooks` by `setup_repo.sh` (host) and the container entrypoint; runs `claude_commit_footer.py --record` to promote the staged token-accounting baseline after a commit lands. Surfaces failures (it imports `base.args`) rather than swallowing them, so commit with the venv active
+- `git_hooks/post-commit` — git hook installed into `.git/hooks` by `provision_repo.sh` (on every surface); runs `claude_commit_footer.py --record` to promote the staged token-accounting baseline after a commit lands. Surfaces failures (it imports `base.args`) rather than swallowing them, so commit with the venv active
 - `git_golc.py` — `git golc` alias backend (repo-local). Renders `git gol`-style oneline-graph log with a per-commit credits column (per-model, rounded — e.g. `O:18K S:1.2M`).
 
   Two-pass: collects per-sha deltas from commit-message footers (same format as `claude_commit_footer.py`), then substitutes a sentinel in a `--graph --color=always` render. Legacy single-line footers carry a session cumulative, not a delta, so their value is prefixed with `~` and dimmed — visibly not a real per-commit number. Pages through `less -RFX` on tty. Alias is registered by `setup_repo.sh`.

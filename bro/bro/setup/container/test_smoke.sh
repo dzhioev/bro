@@ -62,9 +62,10 @@ docker run --rm -i \
     cd /workspace
     test "$(git rev-parse HEAD)" = "$(git rev-parse origin/master)"
     test "$(git rev-parse refs/remotes/origin/master)" = "$(git -C /host-repo rev-parse refs/remotes/origin/master)"
-    # pre-push + post-commit hooks should be installed
+    # pre-push hook is installed (unconditionally by the entrypoint). post-commit
+    # is installed by provision_repo.sh, inside the venv-dependent block that
+    # CW_SKIP_VENV=1 skips, so it is not asserted here.
     test -x /workspace/.git/hooks/pre-push
-    test -x /workspace/.git/hooks/post-commit
     # aws cli should be installed
     aws --version
     # docker CLI should be installed for deploys via host socket

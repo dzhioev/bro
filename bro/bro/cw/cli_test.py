@@ -602,6 +602,67 @@ class TestWorktreeIsClean:
     assert 'origin/master not found' in reasons
 
 
+class TestIsLocalActive:
+  def _seed(self, monkeypatch, tmp_path, name):
+    monkeypatch.setattr(cw, '_project_root', lambda: tmp_path)
+    pidfile = cw._host_pidfile(tmp_path, name)
+    pidfile.parent.mkdir(parents=True, exist_ok=True)
+    return pidfile
+
+  def test_false_when_no_pidfile(self, monkeypatch, tmp_path):
+    monkeypatch.setattr(cw, '_project_root', lambda: tmp_path)
+    assert cw._is_local_active('feat') is False
+
+  def test_true_for_live_pid(self, monkeypatch, tmp_path):
+    import os
+
+    self._seed(monkeypatch, tmp_path, 'feat').write_text(str(os.getpid()))
+    assert cw._is_local_active('feat') is True
+
+  def test_false_for_dead_pid(self, monkeypatch, tmp_path):
+    import subprocess
+
+    proc = subprocess.Popen(['true'])
+    proc.wait()
+    self._seed(monkeypatch, tmp_path, 'feat').write_text(str(proc.pid))
+    assert cw._is_local_active('feat') is False
+
+  def test_false_for_garbage(self, monkeypatch, tmp_path):
+    self._seed(monkeypatch, tmp_path, 'feat').write_text('not-a-pid')
+    assert cw._is_local_active('feat') is False
+
+
+class TestFinishHostWorktree:
+  def _patch(self, monkeypatch, *, clean):
+    reasons = [] if clean else ['1 commit(s) not on origin/master']
+    monkeypatch.setattr(cw, '_worktree_is_clean', lambda p: (clean, reasons))
+    removed: list = []
+    monkeypatch.setattr(cw, '_remove_host_worktree', lambda wt, br: removed.append((wt, br)))
+    return removed
+
+  def test_interactive_drops_on_yes(self, monkeypatch, tmp_path):
+    removed = self._patch(monkeypatch, clean=True)
+    monkeypatch.setattr(cw, 'yesno', lambda q: True)
+    cw._finish_host_worktree('feat', tmp_path / 'wt', 'worktree-feat', interactive=True)
+    assert removed == [(tmp_path / 'wt', 'worktree-feat')]
+
+  def test_interactive_keeps_on_no(self, monkeypatch, tmp_path):
+    removed = self._patch(monkeypatch, clean=True)
+    monkeypatch.setattr(cw, 'yesno', lambda q: False)
+    cw._finish_host_worktree('feat', tmp_path / 'wt', 'worktree-feat', interactive=True)
+    assert removed == []
+
+  def test_non_interactive_keeps_and_never_prompts(self, monkeypatch, tmp_path):
+    removed = self._patch(monkeypatch, clean=False)
+
+    def boom(q):
+      raise AssertionError('must not prompt in a non-interactive session')
+
+    monkeypatch.setattr(cw, 'yesno', boom)
+    cw._finish_host_worktree('feat', tmp_path / 'wt', 'worktree-feat', interactive=False)
+    assert removed == []
+
+
 class TestPopulateBroSkills:
   def test_creates_symlinks_for_each_skill(self, tmp_path):
     # ppp-dev inherits /pr and /land from dev via the MRO walk

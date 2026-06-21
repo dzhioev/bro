@@ -11,7 +11,7 @@ This document explains *how it actually works*: where things live on disk, what 
 - **`cw ss <name>`** — start a session in the workspace `<name>`. Creates the workspace on the fly if it doesn't exist. This is the workhorse; everything below describes its behaviour.
 - **`cw list`** — list every workspace under this project. Each entry shows a state badge (`[.]` live host session, `[o]` live container session, `[x]` abandoned), the workspace name (container names are prefixed `c:`), an age (last filesystem touch), and the first user prompt of the latest session.
 - **`cw clean [--force] [--dry-run] [<ref> ...]`** — remove workspaces with no uncommitted or unpushed work. Without args, scans both namespaces. With explicit `<ref>`s, restricts to those (`name` for host, `c:name` for container). `--force` removes despite dirty state; `--dry-run` only prints. Safety is shared with `check-clean`. Container workspaces may hold files owned by an in-container uid (root, or `cw` ≠ the host user) that a host-side `rmtree` can't unlink; removal first tries `rmtree`, then escalates to deleting from inside a throwaway root container (any local `ppp-cw` image). A workspace whose removal fails is logged and skipped rather than aborting the sweep; a non-empty failure count makes the command exit non-zero.
-- **`cw check-clean [<ref>]`** — probe a single workspace (or the cwd if omitted). Exit 0 if it's safe to drop; exit 1 with reasons on stderr otherwise. The hook `.claude/hooks/check-worktree-landed.sh` calls this to populate the keep-or-drop prompt at session end.
+- **`cw check-clean [<ref>]`** — probe a single workspace (or the cwd if omitted). Exit 0 if it's safe to drop; exit 1 with reasons on stderr otherwise. (Host mode applies the same `_worktree_is_clean` check inline at session exit to drive its keep-or-drop offer.)
 - **`cw exec <name> [<cmd>…]`** — exec into the container backing workspace `<name>`. With no command, opens an interactive bash with `/workspace/.venv` sourced; otherwise runs `<cmd>` in the same activated env. Runs as the `cw` user (`docker exec -u cw`), matching the entrypoint's `gosu` drop — without it `docker exec` would default to the image's root and write root-owned files into the bind-mounted `/workspace` that the host user can't later remove. Container workspaces only; the `c:` prefix is accepted but optional.
 - **`cw banner [--llm]`** — print the banner: workspace name (with the `c:` prefix from `cw list` for container workspaces), the canonical `cw ss …` invocation (`CW_COMMAND`), `/workspace` plus its host bind-mount path on separate lines, the `cw exec <name>` hint (labelled `docker shell:` because it drops into a shell *inside* the container), the outer launching command (`PPP_SHELL_COMMAND`), and the user-typed prompt extracted out of it (split at the last `--new`/`-p`/`--prompt`/`--` marker). For `--bro` sessions, prepends the ASCII Bro logo with a dim `// <bro>` signature on its bottom line. The container image's `~/.bashrc` runs `cw banner` once per interactive shell so users see it on `cw exec` entry. The visual mode renders the `@prompt@` placeholder and the `prompt:` label in bright-white bold for emphasis. The `--llm` flag emits the same facts as plain `key: value` lines (no ANSI, no logo) for Claude itself to read at session start via the Bash tool (see `prompts/environment.md`); the prompt body is deliberately omitted there since the LLM already has it as its first message — `launch_command` retains its trailing marker (`dive-in --new `) as the signal that a seed prompt exists.
 
@@ -29,13 +29,20 @@ For container workspaces the ancestry checks run against the host project's `.gi
 
 ### Host mode (`cw ss <name>`)
 
-Runs `claude -w <name>` from the project root, with the env extended to activate the worktree's `.venv`. Claude Code itself owns the worktree lifecycle: it triggers the `.claude/hooks/worktree_create.sh` hook on first use (which is what actually does `git worktree add` plus the project-specific tweaks — `worktree-<name>` branch, `CLAUDE_BASE` marker file, `submodule.alternateLocation=superproject`), and on exit it shows the keep-or-drop prompt. `cw` itself does not directly create or remove worktrees in host mode unless `--drop` is passed (in which case it `git worktree remove --force` and `git branch -D worktree-<name>` after `claude` exits).
+`cw` owns the worktree lifecycle directly and runs plain `claude` from inside the worktree (not `claude -w`), so no Claude Code worktree/provisioning hooks are involved. On launch it:
+
+1. creates the worktree if new — a `worktree-<name>` branch plus `submodule.alternateLocation=superproject` so submodule updates reuse the superproject's modules;
+2. runs `setup/provision_repo.sh` against the worktree (the same provisioner the container entrypoint uses — venv sync if stale, console-script bridge, git hooks, `git golc` alias);
+3. writes its own pid to `<project>/.git/worktrees/<name>/cw-session.pid` for the session's duration, so `cw list` / `cw clean` can tell the session is live;
+4. runs `claude` with the env extended to activate the worktree's `.venv`.
+
+On exit: `--drop` removes the worktree (`git worktree remove --force` + `git branch -D worktree-<name>`); otherwise `cw` warns if the worktree isn't landed on `origin/master` and, in an interactive session, offers to drop it (non-interactive sessions keep it — run `cw clean` later).
 
 Layout on disk:
 
 - `<project>/.claude/worktrees/<name>/` — the worktree (regular working tree with a `.git` gitfile that points at `<project>/.git/worktrees/<name>/`).
-- `<project>/.git/worktrees/<name>/CLAUDE_BASE` — marker recording the `HEAD` at worktree creation (set by `worktree_create.sh`).
-- `<project>/.claude/worktrees/<name>/.venv` — per-worktree virtualenv created on first run by `.claude/hooks/session_start.sh`.
+- `<project>/.git/worktrees/<name>/cw-session.pid` — the launching `cw` process's pid, present while a host session is live (drives `cw list`/`clean` active-session detection).
+- `<project>/.claude/worktrees/<name>/.venv` — per-worktree virtualenv created on first launch by `cw` (via `setup/provision_repo.sh`).
 - `~/.claude/projects/<encoded-worktree-path>/` — Claude Code's own per-project state, including the session JSONL files. The encoded path is the worktree path with `/` and `.` replaced by `-`.
 
 ### Container mode (`cw ss -c <name>`)
@@ -104,9 +111,7 @@ These flags apply to `cw ss` and (with the exception of `-c` / `--drop` / `--mcp
 - **`-c`, `--container`** — container mode (see above). Defaults off; host mode is the default.
 - **`--drop`** — remove the workspace on exit without prompting.
 
-  In host mode this means `git worktree remove --force` and deleting the `worktree-<name>` branch; in container mode it means `rm -rf var/cw/containers/<name>` and `~/.claude/cw-sessions/<name>`.
-
-  In host mode it also sets `CW_DROP=1` so `.claude/hooks/check-worktree-landed.sh` skips the warn-and-exit-2 dance. In container mode no `CW_DROP` is set and the var is not in `_DOCKER_FORWARD_ENV` — the hook's path guard already short-circuits inside the container (cwd is `/workspace`, not under `.claude/worktrees/`), so the dance is skipped anyway.
+  In host mode this means `git worktree remove --force` and deleting the `worktree-<name>` branch (skipping the keep-or-drop offer `cw` makes otherwise); in container mode it means `rm -rf var/cw/containers/<name>` and `~/.claude/cw-sessions/<name>`.
 - **`--mcp [http|local]`** — wire up the flow MCP server.
 
   `http` (default when the flag is bare) connects to the deployed server at the `flow_mcp` secret's `url` with a bearer token; `local` spawns a stdio process from `flow/mcp/mcp_local.json`.
@@ -154,15 +159,13 @@ Wrappers and hooks rely on a small set of env vars:
 - `CW_COMMAND` — the user-visible `cw ss …` invocation, reconstructed by `start_session` for telemetry and resume hints. Defaulted into `PPP_SHELL_COMMAND` if that's not already set.
 - `CW_BRO` — names the bro whose skills should be surfaced to Claude Code's slash-command discovery. Set by `start_session` when `--bro <name>` is passed, and unconditionally by `dive-in` (`ppp-dev`). Container mode: forwarded into the container; the entrypoint runs `cw populate-bro-skills "$CW_BRO"` after venv activation to symlink the skills into the workspace's `.claude/skills/`. Host mode: `start_session` populates a per-session `tempfile.mkdtemp` directory and passes it to claude via `--add-dir <tmp>`, so concurrent host sessions on the same repo don't share the project's `.claude/skills/`. Also drives `cw banner`'s ASCII Bro logo + bro-name header.
 - `CW_TASK_ID` — set by `dive-in` when it has resolved a task; consumed by `setup/claude_commit_footer.py` to add a `Task: <url>` line to commit messages.
-- `CW_IN_CONTAINER=1` — set by the Dockerfile. Detected by `cw.py:cw` to fall back to host mode when nesting would be requested, and by `.claude/hooks/session_start.sh` to skip the host-only worktree provisioning.
-- `CW_DROP=1` — set by `cw` (host mode only) when `--drop` was passed; used by `.claude/hooks/check-worktree-landed.sh` to skip the keep-or-drop prompt. Container mode doesn't set or forward it (the hook short-circuits on its path guard in the container anyway).
+- `CW_IN_CONTAINER=1` — set by the Dockerfile. Detected by `cw.py:cw` to fall back to host mode when nesting would be requested.
 - Plus the standard `GIT_AUTHOR_*` / `GIT_COMMITTER_*` — explicitly forwarded into the container via `_DOCKER_FORWARD_ENV`. (github and AWS reach the container as the scoped `github` / `aws` secrets via their install hooks, not as forwarded env; an ambient host `GITHUB_TOKEN` is deliberately not forwarded.)
 
 ## Hooks
 
 `cw` itself doesn't run hooks — Claude Code does, based on `.claude/settings.json`. The ones that interact with `cw`'s lifecycle:
 
-- `WorktreeCreate` → `.claude/hooks/worktree_create.sh` — creates the worktree with the project's conventions (branch naming, `CLAUDE_BASE`, submodule alternate location).
-- `SessionStart` → `.claude/hooks/session_start.sh` — first-time provisioning per host worktree (`.venv` via `uv sync`). Bails fast on subsequent sessions and inside containers (where the entrypoint owns first-run setup).
-- `SessionEnd` → `.claude/hooks/check-worktree-landed.sh` — wraps `cw check-clean` and always exits 2 so the keep-or-drop prompt appears every time. Silent if `CW_DROP=1`.
 - `SessionStart` / `SessionEnd` → `.claude/hooks/sync-session-log-start.sh` / `sync-session-log-stop.sh` — bracket the session with calls to `sync-session-log` (S3 + DynamoDB transcript upload). The hooks discard `sync-session-log`'s stderr, so its only durable failure signal is the health file it writes (`session_log_health.py`), which the statusLine and `cw banner` surface.
+
+Worktree creation, provisioning, and the keep-or-drop offer are **not** hooks — `cw` (host mode) owns them directly (see Host mode above), so the only Claude Code hooks left are the session-log pair.

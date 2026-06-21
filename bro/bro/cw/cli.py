@@ -1,10 +1,12 @@
 #!/usr/bin/env python
 """launch claude, optionally in an isolated docker container.
 
-host mode (default): execs `claude -w <name>` from the project root. Claude's
-`-w` flag owns the worktree lifecycle (create, keep/drop prompt, cleanup); our
-.claude/hooks/worktree_create.sh WorktreeCreate hook applies project-specific
-provisioning (branch naming, CLAUDE_BASE marker, submodule alternateLocation).
+host mode (default): cw owns the worktree lifecycle — it creates the worktree
+(`worktree-<name>` branch + submodule alternates), provisions it with the shared
+setup/provision_repo.sh (same as the container entrypoint), then runs plain `claude`
+from inside it (not `claude -w`, so no claude-side worktree/provisioning hooks). On
+exit it drops the worktree (`--drop`) or, interactively, offers to. cw writes its pid
+to the per-worktree git admin dir so `cw list`/`clean` can tell a session is live.
 
 container mode (--container): /workspace is a fresh clone, not a worktree — the
 gitfile-based worktree layout doesn't survive the container boundary, and this
@@ -62,6 +64,7 @@ import humanize
 import session_log_health
 from base import credentials, log
 from base.args import Parser, REMAINDER
+from base.yesno import yesno
 
 CONTAINER_DIR = Path(__file__).resolve().parent / 'setup' / 'container'
 _PROMPTS_DIR = Path(__file__).resolve().parent / 'prompts'
@@ -387,9 +390,30 @@ def _docker_create_argv(
   return [*argv, tag, *command]
 
 
+def _host_pidfile(proj: Path, name: str) -> Path:
+  # per-worktree git admin dir (outside the working tree, so it never shows up in
+  # `git status` and is cleaned up with the worktree). `cw` writes its own pid here
+  # for the session's duration.
+  return proj / '.git' / 'worktrees' / name / 'cw-session.pid'
+
+
 def _is_local_active(name: str) -> bool:
-  result = subprocess.run(['pgrep', '-f', f'claude -w {name}'], capture_output=True)
-  return result.returncode == 0
+  # host sessions run plain `claude` (no `-w`), so cw is the worktree's owner for
+  # the session; its pid in the lockfile, still alive, means the session is active.
+  pidfile = _host_pidfile(_project_root(), name)
+  if not pidfile.is_file():
+    return False
+  try:
+    pid = int(pidfile.read_text().strip())
+  except ValueError:
+    return False
+  try:
+    os.kill(pid, 0)
+  except ProcessLookupError:
+    return False
+  except PermissionError:
+    return True
+  return True
 
 
 def _running_container_mounts() -> set[str]:
@@ -1342,6 +1366,7 @@ def start_session(
       name=name,
       container=container,
       drop=drop,
+      auto=auto,
       claude_args=claude_args,
       secrets=secrets,
       docker_sock=docker_sock,
@@ -1395,7 +1420,9 @@ def start_session(
     except ValueError as e:
       log.error('%s', e)
       return 1
-  return cw(name=name, container=container, drop=drop, claude_args=claude_args, secrets=secrets)
+  return cw(
+    name=name, container=container, drop=drop, auto=auto, claude_args=claude_args, secrets=secrets
+  )
 
 
 _BRO_MCP_SERVER_NAME = 'bro'
@@ -1664,12 +1691,74 @@ def run_in_container(
   return result.returncode
 
 
+def _ensure_host_worktree(worktree: Path, branch: str) -> bool:
+  # create the worktree if new (git ops run in the project root, the cwd): a
+  # `worktree-<name>` branch plus submodule alternates so `git submodule update`
+  # reuses the superproject's modules.
+  if worktree.is_dir():
+    return True
+  log.info('creating worktree %s', worktree)
+  branch_exists = (
+    subprocess.run(
+      ['git', 'show-ref', '--verify', '--quiet', f'refs/heads/{branch}'], capture_output=True
+    ).returncode
+    == 0
+  )
+  add = ['git', 'worktree', 'add', str(worktree), *([branch] if branch_exists else ['-b', branch])]
+  if subprocess.run(add).returncode != 0:
+    log.error('failed to create worktree %s', worktree)
+    return False
+  for key, value in (
+    ('submodule.alternateLocation', 'superproject'),
+    ('submodule.alternateErrorStrategy', 'info'),
+  ):
+    subprocess.run(['git', '-C', str(worktree), 'config', key, value], check=False)
+  return True
+
+
+def _provision_host_worktree(worktree: Path) -> bool:
+  # run the worktree's own provision_repo.sh against itself (idempotent: skips the
+  # uv sync when the venv is current, always refreshes the console-script bridge +
+  # git hooks). shared with host setup_repo.sh and the container entrypoint.
+  script = worktree / 'setup' / 'provision_repo.sh'
+  if not script.is_file():
+    log.warning('%s not found (worktree on an old base?); skipping provisioning', script)
+    return True
+  if subprocess.run([str(script)], cwd=str(worktree)).returncode != 0:
+    log.error('failed to provision worktree %s', worktree)
+    return False
+  return True
+
+
+def _remove_host_worktree(worktree: Path, branch: str) -> None:
+  subprocess.run(
+    ['git', 'worktree', 'remove', '--force', str(worktree)], check=False, capture_output=True
+  )
+  subprocess.run(['git', 'branch', '-D', branch], check=False, capture_output=True)
+
+
+def _finish_host_worktree(name: str, worktree: Path, branch: str, *, interactive: bool) -> None:
+  # on exit, warn if the worktree isn't landed on origin/master, then (interactive
+  # only) offer to drop it. non-interactive sessions keep it — safe default, and the
+  # path stays correct if --auto/--bro ever run on host. `cw clean` removes it later.
+  _, reasons = _worktree_is_clean(worktree)
+  if len(reasons) > 0:
+    log.warning('worktree %s not landed on origin/master:', name)
+    for reason in reasons:
+      log.warning('  - %s', reason)
+  if not interactive:
+    return
+  if yesno(f'drop worktree {name}?'):
+    _remove_host_worktree(worktree, branch)
+
+
 def cw(
   name: str,
   container: bool,
   drop: bool,
   claude_args: list[str],
   *,
+  auto: bool = False,
   secrets: Collection[str] = (),
   docker_sock: bool = True,
 ) -> int:
@@ -1685,21 +1774,32 @@ def cw(
       _replace_container_resume_hint(name)
     return code
 
+  # host mode: cw owns the worktree lifecycle (create + provision + cleanup) and
+  # launches plain `claude` from inside it — no `claude -w`, so no claude provisioning
+  # hooks. provisioning is the same provision_repo.sh the container entrypoint runs.
   proj = _project_root()
   os.chdir(proj)
-
-  env = _venv_env(proj / '.claude' / 'worktrees' / name / '.venv')
-
-  if not drop:
-    os.execvpe('claude', ['claude', '-w', name, *claude_args], env)
-
-  env['CW_DROP'] = '1'
-  result = subprocess.run(['claude', '-w', name, *claude_args], env=env)
   worktree = proj / '.claude' / 'worktrees' / name
-  subprocess.run(
-    ['git', 'worktree', 'remove', '--force', str(worktree)], check=False, capture_output=True
-  )
-  subprocess.run(['git', 'branch', '-D', f'worktree-{name}'], check=False, capture_output=True)
+  branch = f'worktree-{name}'
+
+  if not _ensure_host_worktree(worktree, branch):
+    return 1
+  if not _provision_host_worktree(worktree):
+    return 1
+
+  env = _venv_env(worktree / '.venv')
+  pidfile = _host_pidfile(proj, name)
+  pidfile.parent.mkdir(parents=True, exist_ok=True)
+  pidfile.write_text(str(os.getpid()))
+  try:
+    result = subprocess.run(['claude', *claude_args], cwd=str(worktree), env=env)
+  finally:
+    pidfile.unlink(missing_ok=True)
+
+  if drop:
+    _remove_host_worktree(worktree, branch)
+  else:
+    _finish_host_worktree(name, worktree, branch, interactive=not auto and sys.stdin.isatty())
   return result.returncode
 
 

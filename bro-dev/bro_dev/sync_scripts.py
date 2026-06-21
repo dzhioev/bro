@@ -14,9 +14,10 @@ shim whose zero-arg functions feed sys.argv to the CLI's main:
     gmail = "_entrypoints:gmail"   ->   def gmail(): return _run('gmail')
 
 `_entrypoints.py` is written into the venv's site-packages (gitignored, since all
-of .venv is) and regenerated on every venv build -- setup_repo.sh, the
-session-start hook, the container entrypoint. So it is NOT committed, unlike the
-pyproject tables. That shim is the single place the process reads the global argv.
+of .venv is) and regenerated on every provision by `setup/provision_repo.sh` -- the
+shared provisioner the three surfaces (setup_repo.sh, the session-start hook, the
+container entrypoint) call. So it is NOT committed, unlike the pyproject tables.
+That shim is the single place the process reads the global argv.
 
 modes:
   --pyproject    rewrite [project.scripts] + py-modules in pyproject.toml (committed)
@@ -24,7 +25,7 @@ modes:
   --check        verify pyproject.toml is up to date; exit 1 if stale (no write)
   (no flags)     run --pyproject and --entrypoints
 
-provisioning invokes `python -m sync_scripts --entrypoints` (module path, not the
+the provisioner invokes `python -m sync_scripts --entrypoints` (module path, not the
 `sync-scripts` console script) -- the console script routes through the bridge,
 which doesn't exist yet on a fresh venv. main keeps its own `__main__` guard for
 the same reason.
