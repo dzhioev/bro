@@ -4,7 +4,9 @@
 import json
 import logging
 import time
+import urllib.error
 import urllib.request
+from email.utils import parsedate_to_datetime
 from typing import Any, Callable
 
 from base.args import ArgumentTypeError, Parser
@@ -12,6 +14,64 @@ from base.args import ArgumentTypeError, Parser
 __cli_name__ = 'poll-pr'
 
 _log = logging.getLogger(__name__)
+
+# transient HTTP statuses worth retrying: server errors, rate limiting, and
+# 401/403 — GitHub returns these for token-propagation and secondary-rate-limit
+# blips that clear within seconds (observed on PR #169: a lone 401 then 200).
+_RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
+_TRANSIENT_AUTH_STATUSES = frozenset({401, 403})
+_MAX_ATTEMPTS = 5
+_BASE_BACKOFF = 1.0  # seconds; doubled per attempt
+_MAX_BACKOFF = 30.0  # ceiling for both exponential backoff and server-hinted waits
+
+
+def _is_transient(err: urllib.error.URLError) -> bool:
+  """whether a failed GitHub call is a blip worth retrying vs a genuine error.
+
+  HTTPError is a subclass of URLError; a bare URLError is a network/transport
+  failure, which is always transient. genuine client errors (404, malformed
+  request) surface immediately.
+  """
+  if isinstance(err, urllib.error.HTTPError):
+    return err.code in _RETRYABLE_STATUSES or err.code in _TRANSIENT_AUTH_STATUSES
+  return True
+
+
+def _retry_delay(err: urllib.error.URLError, attempt: int) -> float:
+  """seconds to wait before the next attempt (0-indexed), honoring server hints.
+
+  prefers the server's own `Retry-After` (secondary rate limits) or
+  `X-RateLimit-Reset` (when the remaining quota is exhausted); falls back to
+  exponential backoff. all waits are capped at `_MAX_BACKOFF`.
+  """
+  backoff = min(_MAX_BACKOFF, _BASE_BACKOFF * (2**attempt))
+  if not isinstance(err, urllib.error.HTTPError):
+    return backoff
+  headers = err.headers
+  retry_after = headers.get('Retry-After')
+  if retry_after is not None:
+    hinted = _parse_retry_after(retry_after)
+    if hinted is not None:
+      return min(_MAX_BACKOFF, hinted)
+  reset = headers.get('X-RateLimit-Reset')
+  if reset is not None and headers.get('X-RateLimit-Remaining') == '0':
+    try:
+      return min(_MAX_BACKOFF, max(0.0, float(reset) - time.time()))
+    except ValueError:
+      pass
+  return backoff
+
+
+def _parse_retry_after(value: str) -> float | None:
+  """parse a Retry-After header (delta-seconds or HTTP-date) into seconds."""
+  try:
+    return float(value)
+  except ValueError:
+    pass
+  try:
+    return max(0.0, parsedate_to_datetime(value).timestamp() - time.time())
+  except (TypeError, ValueError):
+    return None
 
 
 def _gh_get(url: str, token: str) -> Any:
@@ -23,8 +83,20 @@ def _gh_get(url: str, token: str) -> Any:
       'X-GitHub-Api-Version': '2022-11-28',
     },
   )
-  with urllib.request.urlopen(req) as resp:
-    return json.loads(resp.read())
+  for attempt in range(_MAX_ATTEMPTS):
+    try:
+      with urllib.request.urlopen(req) as resp:
+        return json.loads(resp.read())
+    except urllib.error.URLError as err:
+      if not _is_transient(err) or attempt == _MAX_ATTEMPTS - 1:
+        raise
+      delay = _retry_delay(err, attempt)
+      reason = f'HTTP {err.code}' if isinstance(err, urllib.error.HTTPError) else err.reason
+      _log.warning(
+        f'{reason} from {url}; retrying in {delay:.1f}s (attempt {attempt + 1}/{_MAX_ATTEMPTS})'
+      )
+      time.sleep(delay)
+  raise AssertionError('unreachable: final attempt returns or raises')
 
 
 def _fetch_pr(owner: str, repo: str, pr: int, token: str) -> dict[str, Any]:
@@ -186,20 +258,31 @@ def poll_pr(
     return login == repo_owner_login
 
   while True:
-    pr_data = _fetch_pr(owner, repo, pr, token)
+    # `_gh_get` already retries transient blips per call; this guard is the
+    # second layer — if a whole cycle still fails on a transient error (a longer
+    # outage), log and poll again next interval instead of exiting, preserving
+    # the seen-id baselines. a non-transient error (404 — PR/repo gone) is fatal
+    # and propagates.
+    try:
+      pr_data = _fetch_pr(owner, repo, pr, token)
 
-    if pr_data.get('merged'):
-      print(json.dumps({'event': 'merged', 'pr': pr}), flush=True)
-      return 0
+      if pr_data.get('merged'):
+        print(json.dumps({'event': 'merged', 'pr': pr}), flush=True)
+        return 0
 
-    if pr_data.get('state') == 'closed':
-      print(json.dumps({'event': 'closed', 'pr': pr}), flush=True)
-      return 1
+      if pr_data.get('state') == 'closed':
+        print(json.dumps({'event': 'closed', 'pr': pr}), flush=True)
+        return 1
 
-    for event in emit_cycle(
-      owner, repo, pr, token, seen_comment_ids, seen_review_ids, is_actionable
-    ):
-      print(json.dumps(event), flush=True)
+      for event in emit_cycle(
+        owner, repo, pr, token, seen_comment_ids, seen_review_ids, is_actionable
+      ):
+        print(json.dumps(event), flush=True)
+    except urllib.error.URLError as err:
+      if not _is_transient(err):
+        raise
+      reason = f'HTTP {err.code}' if isinstance(err, urllib.error.HTTPError) else err.reason
+      _log.warning(f'{reason} during poll cycle; continuing after {interval}s')
 
     time.sleep(interval)
 
