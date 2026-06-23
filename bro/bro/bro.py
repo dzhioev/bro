@@ -85,7 +85,12 @@ _TOOL_NAMES_BLOCK = (
 def _render_data_sources(sources: list[DataSource]) -> str:
   lines = ['## Data sources', '', 'You have access to the following read-only data sources:', '']
   for ds in sources:
-    lines.append(f'- **{ds.name}** — {ds.summary}')
+    # resolve any `has_cred` blocks in the summary against live credential
+    # availability (e.g. a source advertising query-focused fetch only when its
+    # LLM key is present), validated against the source's declared secrets.
+    declared = set(ds.needed_secrets) | set(ds.optional_secrets)
+    summary = llm.mcp.render_has_cred(ds.summary, credentials.available, declared)
+    lines.append(f'- **{ds.name}** — {summary}')
   lines.append('')
   lines.append(
     "Each source's tools live in its own `<name>-source` namespace — e.g. "
@@ -263,6 +268,11 @@ def _component_needed_secrets(obj: llm.mcp.MCPServer | DataSource) -> set[str]:
   return set(obj.needed_secrets)
 
 
+def _component_optional_secrets(obj: llm.mcp.MCPServer | DataSource) -> set[str]:
+  # mirror of `_component_needed_secrets` for the best-effort tier (`optional_secrets`).
+  return set(obj.optional_secrets)
+
+
 class BaseBro(ABC):
   name: str
   description: str
@@ -386,6 +396,20 @@ class BaseBro(ABC):
       names.update(_component_needed_secrets(ds))
     names.update(self._extra_secrets)
     return tuple(sorted(names))
+
+  def optional_secrets(self) -> tuple[str, ...]:
+    # the bro's best-effort credential tier: the union of each declared MCP
+    # server's + data source's `optional_secrets`, minus anything already in
+    # `needed_secrets()` — a secret that is a hard requirement of any component
+    # is never downgraded to best-effort. the host hydrates these via
+    # `build_scoped_store(optional=...)`, so an absent one degrades the
+    # component instead of failing the launch.
+    names: set[str] = set()
+    for server in self._declared_mcp:
+      names.update(_component_optional_secrets(server))
+    for ds in self.data_sources:
+      names.update(_component_optional_secrets(ds))
+    return tuple(sorted(names - set(self.needed_secrets())))
 
   @classmethod
   def create(cls, llm_spec: LLMSpec) -> Self:

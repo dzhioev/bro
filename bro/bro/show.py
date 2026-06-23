@@ -1,5 +1,6 @@
+from base import credentials
 from bro.bro import BaseBro
-from llm.mcp import MCPServer
+from llm.mcp import MCPServer, render_has_cred
 
 
 async def format_card(bro: BaseBro, *, include_system_prompt: bool = False) -> str:
@@ -9,7 +10,9 @@ async def format_card(bro: BaseBro, *, include_system_prompt: bool = False) -> s
   if len(bro.data_sources) > 0:
     parts.extend(['', '## Data sources', ''])
     for ds in bro.data_sources:
-      parts.append(f'- **{ds.name}** — {ds.summary}')
+      declared = set(ds.needed_secrets) | set(ds.optional_secrets)
+      summary = render_has_cred(ds.summary, credentials.available, declared)
+      parts.append(f'- **{ds.name}** — {summary}')
 
   if len(bro._declared_mcp) > 0:
     parts.extend(['', '## MCP servers', ''])
@@ -17,11 +20,14 @@ async def format_card(bro: BaseBro, *, include_system_prompt: bool = False) -> s
       parts.extend(await _format_mcp_entry(server))
 
   manifest = bro.needed_secrets()
+  optional = bro.optional_secrets()
   llm_secrets = bro.llm_spec.needed_secrets()
-  if len(manifest) > 0 or len(llm_secrets) > 0:
+  if len(manifest) > 0 or len(optional) > 0 or len(llm_secrets) > 0:
     parts.extend(['', '## Secrets', ''])
     for name in manifest:
       parts.append(f'- `{name}`')
+    for name in optional:
+      parts.append(f'- `{name}` — optional (used if present)')
     for name in llm_secrets:
       parts.append(f'- `{name}` — LLM key')
     parts.append(

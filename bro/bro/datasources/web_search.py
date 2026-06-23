@@ -3,20 +3,13 @@ from typing import Optional
 
 import aiohttp
 import trafilatura
-from pydantic import BaseModel
 
 from base import credentials, log
-from bro.datasources.base import Hit, SearchableDataSource
-from mu import Text, mu
-from prompts import get_prompt
+from bro.datasources.searchable import Hit, SearchableDataSource
 
 _SEARCH_URL = 'https://api.search.brave.com/res/v1/web/search'
 _USER_AGENT = 'bro-librorian/1.0 (https://github.com/dzhioev/ppp)'
 _MAX_EXTRACT_CHARS = 60_000
-
-
-class _Summary(BaseModel):
-  summary: str
 
 
 class WebSearch(SearchableDataSource):
@@ -26,7 +19,9 @@ class WebSearch(SearchableDataSource):
     'Web search — open-ended search across the public web (Brave Search index). '
     'Use for finding canonical URLs, ids, or pages when a structured source has no '
     'direct entry. Search returns URLs; fetch downloads a URL and returns its main '
-    'text (optionally summarised for the query).'
+    'text'
+    '{{#has_cred openai}}, summarized for your query when you pass one{{else}} '
+    '(raw text; the `query` parameter is unavailable this session){{/has_cred}}.'
   )
 
   def __init__(self, store: Optional[credentials.Store] = None):
@@ -55,23 +50,14 @@ class WebSearch(SearchableDataSource):
       hits.append(Hit(id=url, title=title, snippet=snippet))
     return hits
 
-  async def fetch(self, id: str, query: Optional[str] = None) -> str:
+  async def _fetch_content(self, id: str) -> str:
     html = await _get_text(id)
     extracted = trafilatura.extract(html) or ''
     if len(extracted) == 0:
       raise LookupError(f'web-search: no extractable text at {id!r}')
     text = extracted[:_MAX_EXTRACT_CHARS]
     log.info(f'web-search: fetched {id!r} ({len(text):,} chars)')
-    if query is None or len(query) == 0:
-      return text
-    prompt = get_prompt(
-      'web_search_summary.prompt.template',
-      query=query,
-      url=id,
-      text=text,
-    )
-    result = mu(prompt, _Summary, Text(text), reasoning_effort='low')
-    return result.summary
+    return text
 
   def _auth_headers(self) -> dict[str, str]:
     return {

@@ -92,6 +92,11 @@ def maybe_containerize(
 
   bro = create_bro(bro_name)
   needed = set(bro.needed_secrets()) | set(bro.llm_spec.needed_secrets())
+  # the bro's best-effort tier (e.g. a data source's query-focused fetch summary).
+  # a no-op for a bro whose optional secret is already its required LLM key, but
+  # correct in general — a component that degrades without a secret still gets it
+  # when the host can resolve it.
+  optional = set(bro.optional_secrets())
   extra_env: dict[str, str] = {}
   if no_trails:
     extra_env['TRAILS_DISABLED'] = '1'
@@ -109,6 +114,7 @@ def maybe_containerize(
     command,
     drop=True,
     secrets=needed,
+    optional_secrets=optional,
     docker_sock=bro.needs_docker,
     extra_env=extra_env,
     # this container runs the bro as an LLM process, not Claude Code, so the

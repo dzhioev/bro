@@ -4,12 +4,15 @@ from typing import Annotated, Optional
 import pytest
 from pydantic import Field
 
+from llm import mcp as mcp_mod
 from llm.mcp import (
   FunctionTool,
   InProcessMCPServer,
   ToolRegistry,
   UnknownToolError,
   describe,
+  namespaced_tools,
+  render_has_cred,
   wire_name,
 )
 
@@ -291,6 +294,57 @@ class TestToolRegistry:
     registry = ToolRegistry([])
     tools = await registry.resolve()
     assert tools == []
+
+
+class TestRenderHasCred:
+  @staticmethod
+  def _avail(*present: str):
+    return lambda name: name in set(present)
+
+  def test_present_branch_when_available(self):
+    tmpl = 'base{{#has_cred openai}} yes{{else}} no{{/has_cred}}'
+    assert render_has_cred(tmpl, self._avail('openai'), ['openai']) == 'base yes'
+
+  def test_else_branch_when_absent(self):
+    tmpl = 'base{{#has_cred openai}} yes{{else}} no{{/has_cred}}'
+    assert render_has_cred(tmpl, self._avail(), ['openai']) == 'base no'
+
+  def test_no_else_yields_empty_when_absent(self):
+    tmpl = 'base{{#has_cred openai}} yes{{/has_cred}}'
+    assert render_has_cred(tmpl, self._avail(), ['openai']) == 'base'
+
+  def test_inverted_renders_only_when_absent(self):
+    tmpl = 'x{{^has_cred openai}} (no key){{/has_cred}}'
+    assert render_has_cred(tmpl, self._avail(), ['openai']) == 'x (no key)'
+    assert render_has_cred(tmpl, self._avail('openai'), ['openai']) == 'x'
+
+  def test_no_marker_returned_unchanged_without_reading_availability(self):
+    def boom(name: str) -> bool:
+      raise AssertionError('availability must not be consulted with no block')
+
+    assert render_has_cred('plain text', boom, []) == 'plain text'
+
+  def test_undeclared_name_raises(self):
+    with pytest.raises(ValueError, match='undeclared secret'):
+      render_has_cred('{{#has_cred typo}}x{{/has_cred}}', self._avail(), ['openai'])
+
+  @pytest.mark.asyncio
+  async def test_namespaced_tool_renders_description_against_availability(self, monkeypatch):
+    def fetch(id: Annotated[str, Field(description='id')]) -> str:
+      return id
+
+    describe(fetch, 'fetch a record{{#has_cred openai}}; summarized{{else}}; raw only{{/has_cred}}')
+
+    class Srv(InProcessMCPServer):
+      optional_secrets = ('openai',)
+
+      def __init__(self):
+        super().__init__('src', [FunctionTool(fetch)])
+
+    monkeypatch.setattr(mcp_mod.credentials, 'available', lambda name: False)
+    tools = await namespaced_tools(Srv())
+    assert tools[0].name == 'src__fetch'
+    assert tools[0].description == 'fetch a record; raw only'
 
 
 class TestWireName:

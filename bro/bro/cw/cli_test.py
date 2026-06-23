@@ -759,34 +759,46 @@ class TestContainerSecrets:
     # native claude code session themed as ppp-dev: baseline + the bro's
     # extra_secrets (github) + the deployed flow MCP token (--mcp http). NOT the
     # bro's in-process MCP secret (notion) — claude code uses flow_mcp instead.
-    secrets, docker_sock = cw._container_secrets('ppp-dev', mcp='http', bro_mode=False)
+    secrets, optional, docker_sock = cw._container_secrets('ppp-dev', mcp='http', bro_mode=False)
     assert {'session_log', 'trails', 'github', 'flow_mcp'} <= secrets
     assert 'notion' not in secrets
+    # native sessions don't mount the data-source toolset → no optional tier
+    assert optional == set()
     # a normal claude code session keeps the docker socket
     assert docker_sock is True
 
   def test_no_flow_mcp_without_http(self):
-    secrets, _ = cw._container_secrets('ppp-dev', mcp=None, bro_mode=False)
+    secrets, _, _ = cw._container_secrets('ppp-dev', mcp=None, bro_mode=False)
     assert 'flow_mcp' not in secrets
 
   def test_bro_mode_uses_full_manifest_and_anthropic(self):
     # --bro serves the bro's own MCP servers, so it gets the full manifest (notion)
     # plus anthropic for the apiKeyHelper. ppp-dev doesn't deploy → no docker socket.
-    secrets, docker_sock = cw._container_secrets('ppp-dev', mcp=None, bro_mode=True)
+    secrets, _, docker_sock = cw._container_secrets('ppp-dev', mcp=None, bro_mode=True)
     assert {'notion', 'github', 'anthropic'} <= secrets
     assert docker_sock is False
 
+  def test_bro_mode_includes_optional_secrets(self):
+    # a bro with searchable data sources (librorian) advertises openai best-effort
+    # for the query-focused fetch summary; --bro hydrates it as the optional tier.
+    secrets, optional, _ = cw._container_secrets('librorian', mcp=None, bro_mode=True)
+    assert 'openai' in optional
+    assert 'openai' not in secrets  # optional, not required
+
   def test_docker_socket_only_for_deploy_bros(self):
     # the socket is gated on needs_docker: devoops (deployer) keeps it, librorian doesn't
-    _, devoops_sock = cw._container_secrets('devoops', mcp=None, bro_mode=True)
-    secrets, librorian_sock = cw._container_secrets('librorian', mcp=None, bro_mode=True)
+    _, _, devoops_sock = cw._container_secrets('devoops', mcp=None, bro_mode=True)
+    secrets, _, librorian_sock = cw._container_secrets('librorian', mcp=None, bro_mode=True)
     assert devoops_sock is True
     assert librorian_sock is False
     assert {'tmdb', 'brave', 'notion'} <= secrets
 
   def test_unknown_bro_falls_back_to_baseline(self):
-    secrets, docker_sock = cw._container_secrets('nonexistent-bro', mcp=None, bro_mode=False)
+    secrets, optional, docker_sock = cw._container_secrets(
+      'nonexistent-bro', mcp=None, bro_mode=False
+    )
     assert secrets == set(cw._CW_SESSION_BASELINE)
+    assert optional == set()
     assert docker_sock is True
 
 
@@ -830,7 +842,7 @@ class TestGrantRevoke:
     with (
       patch.dict('os.environ', {}, clear=False) as env,
       patch('cw.cw', return_value=0) as fake_cw,
-      patch('cw._container_secrets', return_value=({'notion', 'trails', 'github'}, True)),
+      patch('cw._container_secrets', return_value=({'notion', 'trails', 'github'}, set(), True)),
       patch('cw._session_append_prompt', return_value=''),
     ):
       env.pop('CW_BRO', None)
@@ -845,7 +857,7 @@ class TestGrantRevoke:
     with (
       patch.dict('os.environ', {}, clear=False) as env,
       patch('cw.cw', return_value=0) as fake_cw,
-      patch('cw._container_secrets', return_value=({'github'}, True)),
+      patch('cw._container_secrets', return_value=({'github'}, set(), True)),
       patch('cw._session_append_prompt', return_value=''),
     ):
       env.pop('CW_BRO', None)
@@ -977,7 +989,7 @@ class TestRunInContainerInjection:
     monkeypatch.setattr(cw.Path, 'home', lambda: tmp_path / 'home')
     monkeypatch.setattr(cw, '_docker_create_argv', lambda *a, **k: ['docker', 'create', 'ARGS'])
     monkeypatch.setattr(
-      cw.credentials, 'build_scoped_store', lambda names: {'credentials.json': b'{}'}
+      cw.credentials, 'build_scoped_store', lambda names, optional=(): {'credentials.json': b'{}'}
     )
     monkeypatch.setattr(cw, '_sync_credentials', lambda s, d: None)
     calls: list = []
@@ -1019,7 +1031,7 @@ class TestRunInContainerInjection:
     monkeypatch.setattr(cw.Path, 'home', lambda: tmp_path / 'home')
     monkeypatch.setattr(cw, '_docker_create_argv', lambda *a, **k: ['docker', 'create'])
     monkeypatch.setattr(
-      cw.credentials, 'build_scoped_store', lambda names: {'credentials.json': b'{}'}
+      cw.credentials, 'build_scoped_store', lambda names, optional=(): {'credentials.json': b'{}'}
     )
     removed: list = []
 

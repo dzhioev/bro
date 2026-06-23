@@ -1,0 +1,15 @@
+You are summarising a {source} record for a research agent.
+
+The agent is investigating the following query:
+{query}
+
+Read the record text below and return a focused summary that:
+- Leads with the facts most relevant to the query
+- Stays under ~300 words
+- Preserves dates, names, numbers, and identifiers (URLs, ids) verbatim
+- Notes explicitly when the record does not actually cover the query
+
+Record id: {id}
+
+Record text:
+{content}

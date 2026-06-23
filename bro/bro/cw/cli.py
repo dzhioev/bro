@@ -1401,7 +1401,7 @@ def start_session(
     claude_args = [*_bro_claude_argv(bro), *claude_args]
     if prompt is not None:
       claude_args = [*claude_args, '--', prompt]
-    secrets, docker_sock = _container_secrets(bro, mcp=mcp, bro_mode=True)
+    secrets, optional, docker_sock = _container_secrets(bro, mcp=mcp, bro_mode=True)
     try:
       secrets = _finalize_secrets(secrets, grant=grant, revoke=revoke)
     except ValueError as e:
@@ -1415,6 +1415,7 @@ def start_session(
       base_ref=base_ref,
       claude_args=claude_args,
       secrets=secrets,
+      optional_secrets=optional,
       docker_sock=docker_sock,
     )
 
@@ -1458,9 +1459,10 @@ def start_session(
   # `cw ss -c` defaults to it too). host mode resolves from ~/.ppp directly, so no
   # hydration there.
   secrets: set[str] = set()
+  optional: set[str] = set()
   if container:
     bro_name = bro_env if bro_env is not None else _DEFAULT_CW_BRO
-    secrets, _ = _container_secrets(bro_name, mcp=mcp, bro_mode=False)
+    secrets, optional, _ = _container_secrets(bro_name, mcp=mcp, bro_mode=False)
     try:
       secrets = _finalize_secrets(secrets, grant=grant, revoke=revoke)
     except ValueError as e:
@@ -1474,6 +1476,7 @@ def start_session(
     base_ref=base_ref,
     claude_args=claude_args,
     secrets=secrets,
+    optional_secrets=optional,
   )
 
 
@@ -1572,24 +1575,28 @@ def _finalize_secrets(secrets: set[str], *, grant: list[str], revoke: list[str])
 
 def _container_secrets(
   bro_name: str, *, mcp: Optional[str], bro_mode: bool
-) -> tuple[set[str], bool]:
-  """scoped credential set + docker-socket decision for a container session
-  themed as `bro_name`. the two surfaces request different sets (hydration is
-  strict, so each requests only what it actually uses):
+) -> tuple[set[str], set[str], bool]:
+  """scoped credential sets (required, optional) + docker-socket decision for a
+  container session themed as `bro_name`. the two surfaces request different sets
+  (required hydration is strict, so each requests only what it actually uses):
 
   - `--bro` (`claude --bare` serving the bro's own in-process MCP servers): the
-    bro's full `needed_secrets()` + `anthropic` for the apiKeyHelper. docker
-    socket only if `bro.needs_docker`.
+    bro's full `needed_secrets()` + `anthropic` for the apiKeyHelper, plus the
+    bro's `optional_secrets()` hydrated best-effort (e.g. the LLM key behind a
+    data source's query-focused fetch summary). docker socket only if
+    `bro.needs_docker`.
   - a native claude code session themed as the bro (dive-in / plain `cw ss`): it
     drives the bro's *skills* (bash → `extra_secrets`) and its flow via `--mcp`,
     not the bro's in-process MCP / data-source toolset — so only `extra_secrets`
-    + `flow_mcp` (when `--mcp http`). always keeps the socket (it has a Bash tool).
+    + `flow_mcp` (when `--mcp http`), and no optional tier (that toolset isn't
+    mounted here). always keeps the socket (it has a Bash tool).
 
-  both add the session baseline (sync-log + trails).
+  both add the session baseline (sync-log + trails) to the required set.
   """
   from bro.registry import create_bro
 
   secrets: set[str] = set(_CW_SESSION_BASELINE)
+  optional: set[str] = set()
   docker_sock = True
   try:
     bro = create_bro(bro_name)
@@ -1599,16 +1606,17 @@ def _container_secrets(
     # the socket; a --bro fallback does not (moot anyway — _bro_claude_argv
     # re-raises the same KeyError downstream).
     log.warning('could not resolve bro %r for credential scoping: %s', bro_name, e)
-    return secrets, not bro_mode
+    return secrets, optional, not bro_mode
   if bro_mode:
     secrets.update(bro.needed_secrets())
     secrets.add('anthropic')
+    optional.update(bro.optional_secrets())
     docker_sock = bro.needs_docker
   else:
     secrets.update(bro._extra_secrets)
     if mcp == 'http':
       secrets.add('flow_mcp')
-  return secrets, docker_sock
+  return secrets, optional, docker_sock
 
 
 def _replace_container_resume_hint(name: str) -> None:
@@ -1668,6 +1676,7 @@ def run_in_container(
   *,
   drop: bool = False,
   secrets: Collection[str] = (),
+  optional_secrets: Collection[str] = (),
   docker_sock: bool = True,
   extra_env: Optional[Mapping[str, str]] = None,
   forward_bro: bool = True,
@@ -1682,9 +1691,12 @@ def run_in_container(
   `drop=True`, removes the workspace dir and per-session claude state on exit.
   Returns the container's exit code.
 
-  `secrets` is the scoped credential set hydrated into the container's ~/.ppp
-  (see `credentials.build_scoped_store`); a missing secret raises (strict). AWS is
-  just one of them (`aws`), wired in by its install hook. `docker_sock=False`
+  `secrets` is the required scoped credential set hydrated into the container's
+  ~/.ppp (see `credentials.build_scoped_store`); a missing secret raises (strict).
+  `optional_secrets` is the best-effort tier — hydrated when resolvable, silently
+  skipped when not, so a component that uses a secret only when present (e.g. a
+  query-focused fetch summary) degrades instead of failing launch. AWS is
+  just one of the required ones (`aws`), wired in by its install hook. `docker_sock=False`
   drops the docker socket mount (shell-less bros). `extra_env` sets explicit
   `-e KEY=VALUE` vars in the container (see `_docker_create_argv`). `forward_bro=False`
   keeps the calling session's ambient `CW_BRO` out of the container — used by the
@@ -1707,9 +1719,12 @@ def run_in_container(
   # build the scoped store in memory (strict: a missing secret raises before the
   # container is created), then inject it into the pre-start container's writable
   # layer via `docker cp`. nothing plaintext touches the host disk.
-  store = credentials.build_scoped_store(secrets)
+  store = credentials.build_scoped_store(secrets, optional=optional_secrets)
   names = sorted(set(secrets))
   log.info('scoped secrets for %s: %s', name, ', '.join(names) if len(names) > 0 else '(none)')
+  optional_names = sorted(set(optional_secrets) - set(secrets))
+  if len(optional_names) > 0:
+    log.info('optional (best-effort) secrets for %s: %s', name, ', '.join(optional_names))
   created = subprocess.run(
     _docker_create_argv(
       tag,
@@ -1833,6 +1848,7 @@ def cw(
   auto: bool = False,
   base_ref: Optional[str] = None,
   secrets: Collection[str] = (),
+  optional_secrets: Collection[str] = (),
   docker_sock: bool = True,
 ) -> int:
   if container and os.environ.get('CW_IN_CONTAINER') is not None:
@@ -1848,6 +1864,7 @@ def cw(
       ['claude', *claude_args],
       drop=drop,
       secrets=secrets,
+      optional_secrets=optional_secrets,
       docker_sock=docker_sock,
       extra_env=extra_env,
     )

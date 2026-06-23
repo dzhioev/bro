@@ -1,9 +1,9 @@
-from typing import ClassVar, Optional
+from typing import ClassVar
 
 import pytest
 
 from bro.bro import BaseBro
-from bro.datasources.base import Hit, SearchableDataSource
+from bro.datasources.searchable import Hit, SearchableDataSource
 from llm.mcp import FunctionTool, InProcessMCPServer, MCPServer, describe
 from mcp_server import _Aggregate, _resolve_server
 
@@ -15,7 +15,7 @@ class _NoopSource(SearchableDataSource):
   async def search(self, query: str, limit: int = 5) -> list[Hit]:
     return []
 
-  async def fetch(self, id: str, query: Optional[str] = None) -> str:
+  async def _fetch_content(self, id: str) -> str:
     return ''
 
 
@@ -56,7 +56,7 @@ class _SecondSource(SearchableDataSource):
   async def search(self, query: str, limit: int = 5) -> list[Hit]:
     return []
 
-  async def fetch(self, id: str, query: Optional[str] = None) -> str:
+  async def _fetch_content(self, id: str) -> str:
     return ''
 
 

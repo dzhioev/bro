@@ -1,21 +1,13 @@
 import urllib.parse
-from typing import Optional
 
 import aiohttp
-from pydantic import BaseModel
 
 from base import log
-from bro.datasources.base import Hit, SearchableDataSource
-from mu import Text, mu
-from prompts import get_prompt
+from bro.datasources.searchable import Hit, SearchableDataSource
 
 _SEARCH_URL = 'https://{lang}.wikipedia.org/w/rest.php/v1/search/page'
 _EXTRACT_URL = 'https://{lang}.wikipedia.org/w/api.php'
 _USER_AGENT = 'bro-librorian/1.0 (https://github.com/dzhioev/ppp)'
-
-
-class _Summary(BaseModel):
-  summary: str
 
 
 class Wikipedia(SearchableDataSource):
@@ -42,19 +34,10 @@ class Wikipedia(SearchableDataSource):
       for page in pages
     ]
 
-  async def fetch(self, id: str, query: Optional[str] = None) -> str:
+  async def _fetch_content(self, id: str) -> str:
     title, extract = await self._fetch_extract(id)
     log.info(f'wikipedia: fetched {title!r} ({len(extract):,} chars)')
-    if query is None or len(query) == 0:
-      return extract
-    prompt = get_prompt(
-      'wikipedia_summary.prompt.template',
-      query=query,
-      title=title,
-      extract=extract,
-    )
-    result = mu(prompt, _Summary, Text(extract), reasoning_effort='low')
-    return result.summary
+    return extract
 
   async def _fetch_extract(self, id: str) -> tuple[str, str]:
     url = _EXTRACT_URL.format(lang=self._lang)

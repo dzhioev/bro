@@ -1,9 +1,6 @@
-import json
 from abc import ABC, abstractmethod
-from dataclasses import asdict, dataclass
-from typing import Optional
 
-from llm.mcp import InProcessMCPServer, MCPServer, Tool
+from llm.mcp import MCPServer
 
 
 class SourceUnavailable(Exception):
@@ -20,13 +17,6 @@ class SourceUnavailable(Exception):
     self.reason = reason
 
 
-@dataclass
-class Hit:
-  id: str
-  title: str
-  snippet: Optional[str] = None
-
-
 class DataSource(ABC):
   name: str
   summary: str
@@ -35,6 +25,11 @@ class DataSource(ABC):
   # per bro. override with the API key a subclass reads (e.g. TMDb → `tmdb`); the
   # empty default means "no credentials" (e.g. Wikipedia, OpenLibrary).
   needed_secrets: tuple[str, ...] = ()
+  # credentials this source uses *if present* but degrades without (e.g. the LLM
+  # key behind a query-focused fetch summary). unioned into
+  # `bro.optional_secrets()`, hydrated best-effort by the host. mirrors
+  # `needed_secrets`.
+  optional_secrets: tuple[str, ...] = ()
 
   @property
   def namespace(self) -> str:
@@ -45,82 +40,3 @@ class DataSource(ABC):
 
   @abstractmethod
   def as_mcp_server(self) -> MCPServer: ...
-
-
-class SearchableDataSource(DataSource):
-  @abstractmethod
-  async def search(self, query: str, limit: int = 5) -> list[Hit]: ...
-
-  @abstractmethod
-  async def fetch(self, id: str, query: Optional[str] = None) -> str: ...
-
-  def as_mcp_server(self) -> MCPServer:
-    return InProcessMCPServer(self.namespace, [_SearchTool(self), _FetchTool(self)])
-
-
-class _SearchTool(Tool):
-  def __init__(self, source: SearchableDataSource):
-    self._source = source
-
-  @property
-  def name(self) -> str:
-    return 'search'
-
-  @property
-  def description(self) -> str:
-    return (
-      f'search the {self._source.name} data source; returns a list of hits with id, title, snippet'
-    )
-
-  @property
-  def parameters(self) -> dict:
-    return {
-      'type': 'object',
-      'properties': {
-        'query': {'type': 'string', 'description': 'search query'},
-        'limit': {
-          'type': 'integer',
-          'description': 'maximum number of hits to return',
-          'default': 5,
-        },
-      },
-      'required': ['query'],
-    }
-
-  async def call(self, arguments: dict) -> str:
-    limit = arguments.get('limit', 5)
-    hits = await self._source.search(arguments['query'], limit)
-    return json.dumps([asdict(h) for h in hits])
-
-
-class _FetchTool(Tool):
-  def __init__(self, source: SearchableDataSource):
-    self._source = source
-
-  @property
-  def name(self) -> str:
-    return 'fetch'
-
-  @property
-  def description(self) -> str:
-    return (
-      f'fetch a record from the {self._source.name} data source by id. '
-      'Pass the original query so the source can return a focused summary'
-    )
-
-  @property
-  def parameters(self) -> dict:
-    return {
-      'type': 'object',
-      'properties': {
-        'id': {'type': 'string', 'description': 'record id (e.g. from a prior search hit)'},
-        'query': {
-          'type': 'string',
-          'description': 'original query the caller is investigating; lets the source focus the result',
-        },
-      },
-      'required': ['id'],
-    }
-
-  async def call(self, arguments: dict) -> str:
-    return await self._source.fetch(arguments['id'], arguments.get('query'))

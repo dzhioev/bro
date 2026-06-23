@@ -48,7 +48,7 @@ class TestHealthOnOneShot:
     _redirect_health(monkeypatch, tmp_path)
 
     def _missing():
-      raise credentials.SecretNotFound('session_log', [])
+      raise credentials.SecretNotFound('session_log')
 
     monkeypatch.setattr(sync_session_log, '_load_config', _missing)
     assert sync_session_log.sync_session_log(workspace='ws') == 1

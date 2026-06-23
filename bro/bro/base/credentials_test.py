@@ -51,9 +51,6 @@ class TestLocalSource:
   def test_fetch_returns_none_when_absent(self, configs_dir: Path):
     assert credentials.LocalSource('missing.json').fetch() is None
 
-  def test_describe(self):
-    assert credentials.LocalSource('notion.json').describe() == 'local:notion.json'
-
 
 class TestStore:
   def _store(self, *secrets: credentials.Secret) -> credentials.Store:
@@ -89,13 +86,36 @@ class TestStore:
     with pytest.raises(credentials.SecretNotFound) as exc:
       credentials.Store({}).get('nope')
     assert exc.value.name == 'nope'
-    assert exc.value.tried == []
 
-  def test_no_source_has_value_raises_with_tried(self, configs_dir: Path):
+  def test_try_get_returns_value_when_resolvable(self, configs_dir: Path):
+    _write(configs_dir, 'notion.json', {'token': 't'})
+    store = self._store(credentials.Secret('notion', [credentials.LocalSource('notion.json')]))
+    assert store.try_get('notion') == '{"token": "t"}'
+
+  def test_try_get_returns_none_when_unresolvable(self, configs_dir: Path):
+    store = self._store(credentials.Secret('notion', [credentials.LocalSource('notion.json')]))
+    assert store.try_get('notion') is None
+
+  def test_try_get_returns_none_for_unknown_name(self):
+    assert credentials.Store({}).try_get('nope') is None
+
+  def test_available_true_when_resolvable(self, configs_dir: Path):
+    _write(configs_dir, 'notion.json', {'token': 't'})
+    store = self._store(credentials.Secret('notion', [credentials.LocalSource('notion.json')]))
+    assert store.available('notion') is True
+
+  def test_available_false_when_unresolvable(self, configs_dir: Path):
+    store = self._store(credentials.Secret('notion', [credentials.LocalSource('notion.json')]))
+    assert store.available('notion') is False
+
+  def test_available_false_for_unknown_name(self):
+    assert credentials.Store({}).available('nope') is False
+
+  def test_no_source_has_value_raises(self, configs_dir: Path):
     store = self._store(credentials.Secret('notion', [credentials.LocalSource('notion.json')]))
     with pytest.raises(credentials.SecretNotFound) as exc:
       store.get('notion')
-    assert exc.value.tried == ['local:notion.json']
+    assert exc.value.name == 'notion'
 
   def test_get_json_parses_to_dict(self, configs_dir: Path):
     _write(configs_dir, 'notion.json', {'token': 't'})
@@ -127,9 +147,6 @@ class TestStore:
         calls.append(1)  # list.append is atomic under the GIL
         time.sleep(0.02)
         return 'v'
-
-      def describe(self) -> str:
-        return 'counting'
 
     store = self._store(credentials.Secret('s', [_CountingSource()]))
     results: list[str] = []
@@ -215,6 +232,11 @@ class TestModuleAliases:
     with pytest.raises(credentials.SecretNotFound):
       credentials.get('notion')
 
+  def test_available_aliases_default_store(self, configs_dir: Path):
+    _write(configs_dir, 'notion.json', {'token': 't'})
+    assert credentials.available('notion') is True
+    assert credentials.available('tmdb') is False
+
 
 class TestCli:
   def test_get_json_prints_json(self, configs_dir: Path, capsys):
@@ -287,9 +309,6 @@ class TestBuildScopedStore:
       def fetch(self) -> Optional[str]:
         return 'sekret'
 
-      def describe(self) -> str:
-        return 'stub'
-
     registry = {'remote': credentials.Secret('remote', [_StubSource()])}
     monkeypatch.setattr(credentials, '_load_registry', lambda: registry)
     store = credentials.build_scoped_store(['remote'])
@@ -338,6 +357,34 @@ class TestBuildScopedStore:
     _write(configs_dir, 'notion.json', {'token': 't'})
     with pytest.raises(credentials.SecretNotFound):
       credentials.build_scoped_store(['notion', 'tmdb'])
+
+  def test_optional_present_is_hydrated(self, configs_dir: Path):
+    _write(configs_dir, 'notion.json', {'token': 't'})
+    _write(configs_dir, 'openai.json', {'api_key': 'k'})
+    store = credentials.build_scoped_store(['notion'], optional=['openai'])
+    assert set(store) == {'notion.cred', 'openai.cred', credentials.REGISTRY_FILE}
+    assert json.loads(store['openai.cred']) == {'api_key': 'k'}
+    assert set(json.loads(store[credentials.REGISTRY_FILE])) == {'notion', 'openai'}
+
+  def test_optional_unresolvable_is_skipped(self, configs_dir: Path):
+    # openai is a known registry secret but has no value on the host — best-effort,
+    # so it is skipped rather than raising the way a required secret would.
+    _write(configs_dir, 'notion.json', {'token': 't'})
+    store = credentials.build_scoped_store(['notion'], optional=['openai'])
+    assert set(store) == {'notion.cred', credentials.REGISTRY_FILE}
+    assert set(json.loads(store[credentials.REGISTRY_FILE])) == {'notion'}
+
+  def test_optional_unknown_is_skipped(self, configs_dir: Path):
+    _write(configs_dir, 'notion.json', {'token': 't'})
+    store = credentials.build_scoped_store(['notion'], optional=['nonsense'])
+    assert set(store) == {'notion.cred', credentials.REGISTRY_FILE}
+
+  def test_optional_also_required_hydrated_once(self, configs_dir: Path):
+    # a name in both tiers resolves once via the strict required pass; the optional
+    # pass skips it — required wins, never downgraded to best-effort.
+    _write(configs_dir, 'notion.json', {'token': 't'})
+    store = credentials.build_scoped_store(['notion'], optional=['notion'])
+    assert set(store) == {'notion.cred', credentials.REGISTRY_FILE}
 
 
 class TestApplyGrantRevoke:

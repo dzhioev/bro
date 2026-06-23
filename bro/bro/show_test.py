@@ -1,10 +1,10 @@
-from typing import ClassVar, Optional
+from typing import ClassVar
 
 import pytest
 
 import llm.llms.chat_gpt
 from bro.bro import BaseBro
-from bro.datasources.base import Hit, SearchableDataSource
+from bro.datasources.searchable import Hit, SearchableDataSource
 from bro.show import format_card
 from llm.mcp import FunctionTool, InProcessMCPServer, describe
 
@@ -41,7 +41,7 @@ class _StubSource(SearchableDataSource):
   async def search(self, query: str, limit: int = 5) -> list[Hit]:
     return []
 
-  async def fetch(self, id: str, query: Optional[str] = None) -> str:
+  async def _fetch_content(self, id: str) -> str:
     return ''
 
 
@@ -123,6 +123,12 @@ class TestFormatCard:
     card = await format_card(_FullBro())
     assert '## Secrets' in card
     assert '- `notion`' in card
+
+  @pytest.mark.asyncio
+  async def test_secrets_section_lists_optional(self):
+    # the stub source is a SearchableDataSource → openai is its optional summary key
+    card = await format_card(_FullBro())
+    assert '- `openai` — optional (used if present)' in card
 
   @pytest.mark.asyncio
   async def test_secrets_section_lists_llm_key(self):

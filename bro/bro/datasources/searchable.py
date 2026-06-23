@@ -1,0 +1,154 @@
+import json
+from abc import abstractmethod
+from dataclasses import asdict, dataclass
+from typing import Optional
+
+from pydantic import BaseModel
+
+from base import credentials
+from bro.datasources.base import DataSource
+from llm.mcp import InProcessMCPServer, MCPServer, Tool
+
+# every searchable source summarises a fetched record against the caller's query
+# through the one `mu` path, which reads the LLM key. so the query-focused branch
+# of `fetch` uniformly depends on this secret — declared best-effort (the raw
+# record is still returned when no query is passed), not a hard requirement.
+SUMMARY_SECRET = 'openai'
+
+
+class _Summary(BaseModel):
+  summary: str
+
+
+@dataclass
+class Hit:
+  id: str
+  title: str
+  snippet: Optional[str] = None
+
+
+class SearchableDataSource(DataSource):
+  optional_secrets = (SUMMARY_SECRET,)
+
+  @abstractmethod
+  async def search(self, query: str, limit: int = 5) -> list[Hit]: ...
+
+  @abstractmethod
+  async def _fetch_content(self, id: str) -> str:
+    """return the raw record text for `id` — no summarisation. subclasses
+    implement this; the base `fetch` layers the query-focused summary on top."""
+    ...
+
+  async def fetch(self, id: str, query: Optional[str] = None) -> str:
+    # omit `query` for the raw record; pass it to focus the record on what the
+    # caller is investigating. summarisation reads the LLM key, so when it is
+    # absent a non-null query errors rather than silently returning raw text —
+    # the agent loop turns the raise into a tool result it can retry without the
+    # query.
+    content = await self._fetch_content(id)
+    if query is None or len(query) == 0:
+      return content
+    if not credentials.available(SUMMARY_SECRET):
+      raise ValueError(
+        f'the `query` parameter requires the `{SUMMARY_SECRET}` secret, not available '
+        'this session; retry with `query` omitted for the raw record'
+      )
+    # lazy: keep the openai SDK (via mu) out of every datasource import — only the
+    # query path needs it.
+    from mu import Text, mu
+    from prompts import get_prompt
+
+    prompt = get_prompt(
+      'source_summary.prompt.template',
+      source=self.name,
+      id=id,
+      query=query,
+      content=content,
+    )
+    return mu(prompt, _Summary, Text(content), reasoning_effort='low').summary
+
+  def as_mcp_server(self) -> MCPServer:
+    server = InProcessMCPServer(self.namespace, [_SearchTool(self), _FetchTool(self)])
+    # stamp the source's secrets onto the vanilla server (writable class-attr
+    # defaults, no property clash) so the assembling layer can read them and
+    # resolve the fetch tool's `has_cred` description block.
+    server.needed_secrets = self.needed_secrets
+    server.optional_secrets = self.optional_secrets
+    return server
+
+
+class _SearchTool(Tool):
+  def __init__(self, source: SearchableDataSource):
+    self._source = source
+
+  @property
+  def name(self) -> str:
+    return 'search'
+
+  @property
+  def description(self) -> str:
+    return (
+      f'search the {self._source.name} data source; returns a list of hits with id, title, snippet'
+    )
+
+  @property
+  def parameters(self) -> dict:
+    return {
+      'type': 'object',
+      'properties': {
+        'query': {'type': 'string', 'description': 'search query'},
+        'limit': {
+          'type': 'integer',
+          'description': 'maximum number of hits to return',
+          'default': 5,
+        },
+      },
+      'required': ['query'],
+    }
+
+  async def call(self, arguments: dict) -> str:
+    limit = arguments.get('limit', 5)
+    hits = await self._source.search(arguments['query'], limit)
+    return json.dumps([asdict(h) for h in hits])
+
+
+class _FetchTool(Tool):
+  # `<source>` is interpolated via str.replace (NOT str.format — that would
+  # unescape the `{{ }}` has_cred fences). the has_cred block is rendered against
+  # live credential availability by the assembling layer (`_NamespacedTool`).
+  _DESCRIPTION = (
+    'fetch a record from the <source> data source by id. The optional `query` is '
+    'the question you are investigating; given one, the record is summarised to '
+    'focus on it'
+    '{{#has_cred openai}} (omit it for the raw record).{{else}} — but '
+    'summarisation is unavailable this session (no `openai` secret), so you '
+    'should omit `query`; fetch returns the raw record.{{/has_cred}}'
+  )
+
+  def __init__(self, source: SearchableDataSource):
+    self._source = source
+
+  @property
+  def name(self) -> str:
+    return 'fetch'
+
+  @property
+  def description(self) -> str:
+    return self._DESCRIPTION.replace('<source>', self._source.name)
+
+  @property
+  def parameters(self) -> dict:
+    return {
+      'type': 'object',
+      'properties': {
+        'id': {'type': 'string', 'description': 'record id (e.g. from a prior search hit)'},
+        'query': {
+          'type': 'string',
+          'description': 'original query the caller is investigating; lets the source focus the result',
+        },
+      },
+      'required': ['id'],
+    }
+
+  async def call(self, arguments: dict) -> str:
+    return await self._source.fetch(arguments['id'], arguments.get('query'))

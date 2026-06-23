@@ -1,12 +1,52 @@
 import inspect
+import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable
 from typing import Any, Optional
+
+from base import credentials
 
 
 def describe[F: Callable[..., Any]](fn: F, text: str) -> F:
   fn.description = text  # type: ignore[attr-defined]
   return fn
+
+
+# `{{#has_cred <name>}}present{{else}}absent{{/has_cred}}` (and inverted `^`)
+# blocks in a static description string. block-delimited and non-nested (the
+# `.*?` is lazy and a body may not itself contain another block), so the `{{ }}`
+# fences can't collide with literal text. rendered by `render_has_cred`.
+_HAS_CRED_RE = re.compile(
+  r'\{\{(?P<kind>[#^])has_cred\s+(?P<name>[A-Za-z0-9_]+)\}\}(?P<body>.*?)\{\{/has_cred\}\}',
+  re.DOTALL,
+)
+
+
+def render_has_cred(text: str, available: Callable[[str], bool], declared: Iterable[str]) -> str:
+  """render `{{#has_cred <name>}}…{{else}}…{{/has_cred}}` blocks in a description.
+
+  a `#` block keeps its present branch when `available(name)`, else its `{{else}}`
+  branch (empty when there is no `{{else}}`); an inverted `^` block keeps its body
+  only when the secret is NOT available (no `{{else}}`). a string with no block is
+  returned unchanged and `available` is never consulted. `name` must be one of
+  `declared` (the component's needed + optional secrets) — a typo would otherwise
+  silently render the absent branch forever, so it raises.
+  """
+  declared_set = set(declared)
+
+  def replace(m: re.Match) -> str:
+    name = m.group('name')
+    if name not in declared_set:
+      listing = ', '.join(sorted(declared_set)) if len(declared_set) > 0 else '(none)'
+      raise ValueError(f'has_cred references undeclared secret {name!r}; declared: {listing}')
+    is_available = available(name)
+    if m.group('kind') == '^':
+      # inverted: the whole body renders only when the secret is absent; no else.
+      return '' if is_available else m.group('body')
+    present, _, otherwise = m.group('body').partition('{{else}}')
+    return present if is_available else otherwise
+
+  return _HAS_CRED_RE.sub(replace, text)
 
 
 class ToolControlSignal(Exception):
@@ -66,6 +106,11 @@ class MCPServer(ABC):
   # bro. override with the secret names a subclass actually reads (e.g. flow →
   # `notion`); the empty default means "no credentials".
   needed_secrets: tuple[str, ...] = ()
+  # credentials this server's tools use *if present* but degrade without (e.g. the
+  # LLM key behind a query-focused summary). unioned into `bro.optional_secrets()`,
+  # which the host hydrates best-effort (`build_scoped_store(optional=...)`) — an
+  # absent one is skipped, not a launch failure. mirrors `needed_secrets`.
+  optional_secrets: tuple[str, ...] = ()
   # the flat namespace this server's tools live in (`flow`, `dev`, `infra`,
   # `bro`, `<name>-source`). the assembling layer (`ToolRegistry` /
   # `mcp_server._Aggregate`) reads it to form `namespace__tool` wire names and to
@@ -147,9 +192,10 @@ class _NamespacedTool(Tool):
   and calls back with, the namespaced wire name.
   """
 
-  def __init__(self, namespace: str, tool: Tool):
+  def __init__(self, namespace: str, tool: Tool, declared_secrets: Iterable[str] = ()):
     self._wire_name = wire_name(namespace, tool.name)
     self._tool = tool
+    self._declared_secrets = tuple(declared_secrets)
 
   @property
   def name(self) -> str:
@@ -157,7 +203,9 @@ class _NamespacedTool(Tool):
 
   @property
   def description(self) -> str:
-    return self._tool.description
+    # render any `has_cred` blocks against live credential availability — the
+    # one place that covers every assembled tool (bro LLM + deployed MCP servers).
+    return render_has_cred(self._tool.description, credentials.available, self._declared_secrets)
 
   @property
   def parameters(self) -> dict[str, Any]:
@@ -175,8 +223,10 @@ async def namespaced_tools(server: MCPServer) -> list[Tool]:
   # a server's tools wrapped with their `namespace__tool` wire names — the shared
   # step for every layer that assembles tools across servers for a harness
   # (`ToolRegistry`, `mcp_server._Aggregate`). each caller adds its own
-  # collision policy on top.
-  return [_NamespacedTool(server.namespace, tool) for tool in await server.list_tools()]
+  # collision policy on top. the server's declared secrets (needed + optional)
+  # ride along so each tool's description can resolve its `has_cred` blocks.
+  declared = set(server.needed_secrets) | set(server.optional_secrets)
+  return [_NamespacedTool(server.namespace, tool, declared) for tool in await server.list_tools()]
 
 
 class InProcessMCPServer(MCPServer):

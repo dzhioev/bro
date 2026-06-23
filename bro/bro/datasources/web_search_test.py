@@ -88,7 +88,9 @@ async def test_search_skips_results_without_url(brave_store):
 
 
 @pytest.mark.asyncio
-async def test_fetch_without_query_returns_extracted_text(brave_store):
+async def test_fetch_content_returns_extracted_text(brave_store):
+  # query-focused summarisation lives in the SearchableDataSource base
+  # (searchable_test.py); this verifies the source's raw record extraction.
   async def fake_get_text(url):
     return '<html><body><article>Main article text.</article></body></html>'
 
@@ -96,38 +98,12 @@ async def test_fetch_without_query_returns_extracted_text(brave_store):
     patch.object(ws, '_get_text', side_effect=fake_get_text),
     patch.object(ws.trafilatura, 'extract', return_value='Main article text.'),
   ):
-    text = await ws.WebSearch(store=brave_store).fetch('https://example.com/x')
+    text = await ws.WebSearch(store=brave_store)._fetch_content('https://example.com/x')
   assert text == 'Main article text.'
 
 
 @pytest.mark.asyncio
-async def test_fetch_with_query_summarises_via_mu(brave_store):
-  captured_prompt: list[str] = []
-
-  async def fake_get_text(url):
-    return '<html><body>...</body></html>'
-
-  def fake_mu(prompt, result_cls, *contents, reasoning_effort=None):
-    captured_prompt.append(prompt)
-    return result_cls(summary='focused summary about horror release')
-
-  with (
-    patch.object(ws, '_get_text', side_effect=fake_get_text),
-    patch.object(ws.trafilatura, 'extract', return_value='Weapons released August 2025.'),
-    patch.object(ws, 'mu', side_effect=fake_mu),
-  ):
-    result = await ws.WebSearch(store=brave_store).fetch(
-      'https://www.imdb.com/title/tt26581740/',
-      query='when did Weapons release?',
-    )
-  assert result == 'focused summary about horror release'
-  assert 'when did Weapons release?' in captured_prompt[0]
-  assert 'https://www.imdb.com/title/tt26581740/' in captured_prompt[0]
-  assert 'Weapons released August 2025.' in captured_prompt[0]
-
-
-@pytest.mark.asyncio
-async def test_fetch_raises_when_extraction_empty(brave_store):
+async def test_fetch_content_raises_when_extraction_empty(brave_store):
   async def fake_get_text(url):
     return '<html></html>'
 
@@ -136,7 +112,7 @@ async def test_fetch_raises_when_extraction_empty(brave_store):
     patch.object(ws.trafilatura, 'extract', return_value=''),
   ):
     with pytest.raises(LookupError, match='no extractable text'):
-      await ws.WebSearch(store=brave_store).fetch('https://example.com/empty')
+      await ws.WebSearch(store=brave_store)._fetch_content('https://example.com/empty')
 
 
 def test_api_key_loaded_lazily(tmp_path: Path, monkeypatch):

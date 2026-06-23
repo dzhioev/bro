@@ -7,7 +7,7 @@ import pytest
 
 from bro.bro import BaseBro, BroRaised, set_default_tracker_factory
 from bro.bros.ppp_dev import PPPDev
-from bro.datasources.base import Hit, SearchableDataSource
+from bro.datasources.searchable import Hit, SearchableDataSource
 from llm.llm import LLM
 from llm.mcp import FunctionTool, InProcessMCPServer, MCPServer, describe
 from llm.observer import NullObserver, Observer
@@ -448,9 +448,25 @@ class _StubSource(SearchableDataSource):
   async def search(self, query: str, limit: int = 5) -> list[Hit]:
     return [Hit(id='stub-1', title=f'hit for {query}', snippet='stub snippet')]
 
+  # override the concrete `fetch` to capture both args and skip summarisation —
+  # this double verifies the fetch tool routes (id, query) through unchanged.
   async def fetch(self, id: str, query: Optional[str] = None) -> str:
     self.fetch_calls.append((id, query))
     return f'content for {id}'
+
+  async def _fetch_content(self, id: str) -> str:
+    return f'content for {id}'
+
+
+class _MarkerSource(SearchableDataSource):
+  name = 'marker'
+  summary = 'base{{#has_cred openai}} query summary on{{else}} no key{{/has_cred}}'
+
+  async def search(self, query: str, limit: int = 5) -> list[Hit]:
+    return []
+
+  async def _fetch_content(self, id: str) -> str:
+    return ''
 
 
 class TestBroDataSources:
@@ -489,6 +505,41 @@ class TestBroDataSources:
     assert 'a stub data source for tests' in bro.system_prompt
     # canonical `::` in the data-source block, resolved by the tool-names rule
     assert 'wikipedia-source::search' in bro.system_prompt
+
+  def test_summary_has_cred_rendered_present(self, monkeypatch):
+    from base import credentials
+
+    monkeypatch.setattr(credentials, 'available', lambda name: True)
+
+    class MarkBro(BaseBro):
+      name = 'mark-on'
+      description = 'd'
+      data_sources: ClassVar = [_MarkerSource()]
+
+      def __init__(self):
+        super().__init__(system_prompt='base')
+
+    prompt = MarkBro().system_prompt
+    assert 'query summary on' in prompt
+    assert 'no key' not in prompt
+    assert '{{' not in prompt  # markers fully resolved, never leak raw
+
+  def test_summary_has_cred_rendered_absent(self, monkeypatch):
+    from base import credentials
+
+    monkeypatch.setattr(credentials, 'available', lambda name: False)
+
+    class MarkBro(BaseBro):
+      name = 'mark-off'
+      description = 'd'
+      data_sources: ClassVar = [_MarkerSource()]
+
+      def __init__(self):
+        super().__init__(system_prompt='base')
+
+    prompt = MarkBro().system_prompt
+    assert 'no key' in prompt
+    assert 'query summary on' not in prompt
 
 
 class TestToolNamesBlock:
@@ -601,7 +652,7 @@ class _SecretSource(SearchableDataSource):
   async def search(self, query: str, limit: int = 5) -> list[Hit]:
     return []
 
-  async def fetch(self, id: str, query: Optional[str] = None) -> str:
+  async def _fetch_content(self, id: str) -> str:
     return ''
 
 
@@ -661,7 +712,10 @@ class TestNeededSecrets:
     # under-declaration like B1 can't slip through.
     assert set(PPPDev().needed_secrets()) == {'github', 'notion', 'focus'}
     assert set(Assistant().needed_secrets()) == {'notion', 'focus'}
-    assert set(PM().needed_secrets()) == {'notion', 'focus'}
+    # PM carries the WebSearch source (brave) for triage lookups; its query-focused
+    # fetch summary makes openai an optional (best-effort) secret, not required.
+    assert set(PM().needed_secrets()) == {'notion', 'focus', 'brave'}
+    assert PM().optional_secrets() == ('openai',)
     # librorian scopes flow to non-focus tools, so it must NOT pull in `focus`.
     assert 'focus' not in set(Librorian().needed_secrets())
     assert {'tmdb', 'brave', 'notion'} <= set(Librorian().needed_secrets())
@@ -669,6 +723,74 @@ class TestNeededSecrets:
     # devoops adds a task-scoped flow server (non-focus tools → `notion`); `focus`
     # still comes from its infra server.
     assert set(Devoops().needed_secrets()) == {'aws', 'infra', 'focus', 'notion'}
+
+
+class _OptionalServer(InProcessMCPServer):
+  needed_secrets = ('alpha',)
+  optional_secrets = ('omega',)
+
+  def __init__(self):
+    super().__init__('optional-srv', [])
+
+
+class _OptionalSource(SearchableDataSource):
+  name = 'optional-src'
+  summary = 'src with an optional secret'
+  optional_secrets = ('psi',)
+
+  async def search(self, query: str, limit: int = 5) -> list[Hit]:
+    return []
+
+  async def _fetch_content(self, id: str) -> str:
+    return ''
+
+
+class TestOptionalSecrets:
+  def test_unions_mcp_and_datasource_optional(self):
+    class OptBro(BaseBro):
+      name = 'opt'
+      description = 'd'
+      mcp_servers: ClassVar = [_OptionalServer()]
+      data_sources: ClassVar = [_OptionalSource()]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    bro = OptBro()
+    assert bro.optional_secrets() == ('omega', 'psi')
+
+  def test_required_wins_over_optional(self):
+    # a secret declared both required (by one component) and optional (by another)
+    # stays required-only — never downgraded to best-effort.
+    class _BothServer(InProcessMCPServer):
+      needed_secrets = ('shared',)
+
+      def __init__(self):
+        super().__init__('both-srv', [])
+
+    class _OptShared(SearchableDataSource):
+      name = 'opt-shared'
+      summary = 's'
+      optional_secrets = ('shared',)
+
+      async def search(self, query: str, limit: int = 5) -> list[Hit]:
+        return []
+
+      async def _fetch_content(self, id: str) -> str:
+        return ''
+
+    class BothBro(BaseBro):
+      name = 'both'
+      description = 'd'
+      mcp_servers: ClassVar = [_BothServer()]
+      data_sources: ClassVar = [_OptShared()]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    bro = BothBro()
+    assert 'shared' in bro.needed_secrets()
+    assert bro.optional_secrets() == ()
 
 
 class TestNeedsDocker:
