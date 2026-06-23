@@ -1,7 +1,7 @@
 from dataclasses import dataclass
-import pytest
-from typing import Annotated
+from typing import Annotated, Optional
 
+import pytest
 from pydantic import Field
 
 from llm.mcp import (
@@ -71,7 +71,7 @@ class TestFunctionTool:
   def test_optional_parameter(self):
     def search(
       query: Annotated[str, Field(description='search query')],
-      limit: Annotated[int | None, Field(description='max results')] = None,
+      limit: Annotated[Optional[int], Field(description='max results')] = None,
     ) -> str:
       return f'{query}:{limit}'
 
@@ -114,7 +114,7 @@ class TestFunctionTool:
     class Point:
       x: int
       y: int
-      label: str | None
+      label: Optional[str]
 
     def make_point(
       x: Annotated[int, Field(description='x')],

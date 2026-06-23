@@ -1,6 +1,6 @@
 import http.client
 import json
-from typing import Any
+from typing import Any, Optional
 from unittest.mock import patch
 
 import pytest
@@ -31,14 +31,14 @@ class _FakeConn:
 
   def __init__(self) -> None:
     self.queued: list[Any] = []
-    self.requests: list[tuple[str, str, bytes | None, dict[str, str]]] = []
+    self.requests: list[tuple[str, str, Optional[bytes], dict[str, str]]] = []
     self.closes = 0
-    self._pending: tuple[int, bytes] | None = None
+    self._pending: Optional[tuple[int, bytes]] = None
 
   def queue(self, item: Any) -> None:
     self.queued.append(item)
 
-  def request(self, method: str, path: str, body: bytes | None = None, headers=None) -> None:
+  def request(self, method: str, path: str, body: Optional[bytes] = None, headers=None) -> None:
     self.requests.append((method, path, body, dict(headers) if headers is not None else {}))
     if len(self.queued) == 0:
       raise AssertionError(f'unexpected request: {method} {path}')

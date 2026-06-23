@@ -21,6 +21,7 @@ import re
 import shutil
 import subprocess
 import sys
+from typing import Optional
 
 # two-line delta footer (owned by setup/claude_commit_footer.py)
 _FOOTER_RE = re.compile(
@@ -41,7 +42,7 @@ _LEGACY_COLOR = '\x1b[2;33m'  # dim yellow
 _RESET = '\x1b[0m'
 
 
-def _parse_footer(commit_msg: str) -> dict[str, int] | None:
+def _parse_footer(commit_msg: str) -> Optional[dict[str, int]]:
   m = _FOOTER_RE.search(commit_msg)
   if m is None:
     return None
@@ -55,7 +56,7 @@ def _parse_footer(commit_msg: str) -> dict[str, int] | None:
   return per_model if len(per_model) > 0 else None
 
 
-def _parse_legacy(commit_msg: str) -> dict[str, int] | None:
+def _parse_legacy(commit_msg: str) -> Optional[dict[str, int]]:
   m = _LEGACY_RE.search(commit_msg)
   if m is None:
     return None
@@ -176,7 +177,7 @@ def _maybe_page(text: str) -> None:
     pass
 
 
-def main(argv: list[str]) -> int | None:
+def main(argv: list[str]) -> Optional[int]:
   args = argv[1:]
   if len(args) == 0:
     args = ['HEAD']

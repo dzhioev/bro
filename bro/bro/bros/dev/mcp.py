@@ -14,6 +14,7 @@ there, not in each tool's description.
 
 import subprocess
 from pathlib import Path
+from typing import Optional
 
 from base import spawn
 from llm.mcp import FunctionTool, InProcessMCPServer, Tool, describe
@@ -246,7 +247,7 @@ describe(
 def grep(
   pattern: str,
   path: str = '.',
-  glob: str | None = None,
+  glob: Optional[str] = None,
   case_insensitive: bool = False,
   limit: int = DEFAULT_LIMIT,
   timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
@@ -283,7 +284,7 @@ describe(
 )
 
 
-def glob(pattern: str, path: str | None = None, limit: int = DEFAULT_LIMIT) -> str:
+def glob(pattern: str, path: Optional[str] = None, limit: int = DEFAULT_LIMIT) -> str:
   base = Path(path) if path is not None else Path.cwd()
   if not base.is_absolute():
     base = base.resolve()

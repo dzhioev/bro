@@ -1,4 +1,5 @@
 import json
+from typing import Optional
 from unittest.mock import patch
 
 import pytest
@@ -806,7 +807,7 @@ class TestGrantRevoke:
     args = vars(parser.parse_args(['--into', 'my-branch']))
     assert cw.extract_forwarded_argv(args) == ['--into', 'my-branch']
 
-  def _start(self, *, grant: list[str] | None = None, revoke: list[str] | None = None) -> int:
+  def _start(self, *, grant: Optional[list[str]] = None, revoke: Optional[list[str]] = None) -> int:
     return cw.start_session(
       name='w',
       container=True,

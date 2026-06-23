@@ -1,4 +1,5 @@
 import urllib.parse
+from typing import Optional
 
 import aiohttp
 import trafilatura
@@ -28,11 +29,11 @@ class WebSearch(SearchableDataSource):
     'text (optionally summarised for the query).'
   )
 
-  def __init__(self, store: credentials.Store | None = None):
+  def __init__(self, store: Optional[credentials.Store] = None):
     # lazy: defer the credential read so a Bro that declares WebSearch can still
     # be listed (`bro list`, `bro show`) when the key is not present
     self._store = store if store is not None else credentials.default_store()
-    self._api_key: str | None = None
+    self._api_key: Optional[str] = None
 
   def _resolve_api_key(self) -> str:
     if self._api_key is None:
@@ -54,7 +55,7 @@ class WebSearch(SearchableDataSource):
       hits.append(Hit(id=url, title=title, snippet=snippet))
     return hits
 
-  async def fetch(self, id: str, query: str | None = None) -> str:
+  async def fetch(self, id: str, query: Optional[str] = None) -> str:
     html = await _get_text(id)
     extracted = trafilatura.extract(html) or ''
     if len(extracted) == 0:

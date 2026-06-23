@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, Optional, cast
 from unittest.mock import patch
 
 import pytest
@@ -15,11 +15,10 @@ from llm.tracker import (
   Parent,
   RecordedTrail,
   Step,
-  Trail,
   Tracker,
+  Trail,
   read_local_file,
 )
-
 
 _SYS_TEXT = 'you are a test bro'
 
@@ -28,7 +27,7 @@ def _trail_header(
   *,
   trail_id: str = 'trail-1',
   bro: str = 'bro',
-  llm_spec: dict | None = None,
+  llm_spec: Optional[dict] = None,
 ) -> Trail:
   return Trail(
     trail_id=trail_id,
@@ -68,7 +67,7 @@ def _output_function_call(name: str, *, call_id: str, arguments: str = '{}') -> 
   return {'type': 'function_call', 'name': name, 'arguments': arguments, 'call_id': call_id}
 
 
-def _llm_call_body(*output_items: dict, request_input: list | None = None) -> dict:
+def _llm_call_body(*output_items: dict, request_input: Optional[list] = None) -> dict:
   return {
     'request': {'model': 'gpt-5', 'input': request_input if request_input is not None else []},
     'response': {'id': 'resp', 'output': list(output_items)},

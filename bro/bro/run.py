@@ -1,5 +1,6 @@
 import asyncio
 import sys
+from typing import Optional
 
 import base.args
 
@@ -13,7 +14,7 @@ def _cmd_list() -> None:
     print(f'{cls.name}: {cls.description}')
 
 
-def _cmd_run(name: str, input: str, rich: bool) -> int | None:
+def _cmd_run(name: str, input: str, rich: bool) -> Optional[int]:
   from bro.bro import BroRaised
   from bro.registry import create_bro
 
@@ -40,7 +41,7 @@ def _cmd_show(name: str, system_prompt: bool) -> None:
   print(card, end='')
 
 
-def main(argv: list[str]) -> int | None:
+def main(argv: list[str]) -> Optional[int]:
   parser = base.args.Parser(description='run a bro agent')
   subparser = parser.add_subparsers(dest='command')
 

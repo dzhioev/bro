@@ -1,7 +1,7 @@
 import asyncio
 import sys
 from datetime import datetime
-from typing import Any, Callable, TextIO
+from typing import Any, Callable, Optional, TextIO
 
 import base.args
 from bro.bro import BroRaised
@@ -39,7 +39,7 @@ class TextRenderer(Observer):
   def __init__(
     self,
     prefix: str,
-    file: TextIO | None = None,
+    file: Optional[TextIO] = None,
     now: Callable[[], str] = _now_hms,
   ):
     self._prefix = prefix
@@ -70,8 +70,8 @@ class TextRenderer(Observer):
 async def call_text(
   bro: Bro,
   initial: str,
-  observer: Observer | None = None,
-  read_line: Callable[[], str] | None = None,
+  observer: Optional[Observer] = None,
+  read_line: Optional[Callable[[], str]] = None,
   now: Callable[[], datetime] = datetime.now,
 ) -> None:
   """text-mode REPL: `[HH:MM:SS] bro: <reply>` lines, plain `> ` prompt.
@@ -103,7 +103,7 @@ def _tty_supported() -> bool:
   return sys.stdin.isatty() and sys.stdout.isatty()
 
 
-def main(argv: list[str]) -> int | None:
+def main(argv: list[str]) -> Optional[int]:
   parser = base.args.Parser(description='open an interactive session with a bro')
   parser.add_argument('bro', help='bro name')
   parser.add_argument('what', help='first message to send to the bro')

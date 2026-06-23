@@ -27,7 +27,7 @@ import json
 import ssl
 import urllib.request
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, Optional
 from urllib.parse import urlencode, urlparse
 
 import configs
@@ -62,17 +62,17 @@ class TrailsClient:
     hostname = parsed.hostname
     self._host: str = hostname if hostname is not None else 'localhost'
     self._port = parsed.port
-    self._conn: http.client.HTTPSConnection | None = None
+    self._conn: Optional[http.client.HTTPSConnection] = None
 
   def list_trails(
     self,
     *,
-    bro: str | None = None,
-    parent: str | None = None,
-    since: str | None = None,
-    until: str | None = None,
-    cursor: str | None = None,
-    limit: int | None = None,
+    bro: Optional[str] = None,
+    parent: Optional[str] = None,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    cursor: Optional[str] = None,
+    limit: Optional[int] = None,
   ) -> dict:
     """one page of trail headers. server caps `limit` at 100; the response
     `next` is the opaque cursor for the next page (or None when exhausted).
@@ -95,18 +95,18 @@ class TrailsClient:
   def iter_trails(
     self,
     *,
-    bro: str | None = None,
-    parent: str | None = None,
-    since: str | None = None,
-    until: str | None = None,
+    bro: Optional[str] = None,
+    parent: Optional[str] = None,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
     page_size: int = DEFAULT_LIST_PAGE_SIZE,
-    max_items: int | None = None,
+    max_items: Optional[int] = None,
   ) -> Iterator[dict]:
     """walk every matching trail header across cursor pages. `max_items` caps
     the total — useful for the CLI's `--limit` flag.
     """
     yielded = 0
-    cursor: str | None = None
+    cursor: Optional[str] = None
     while True:
       page = self.list_trails(
         bro=bro,
@@ -132,8 +132,8 @@ class TrailsClient:
     self,
     trail_id: str,
     *,
-    after: str | None = None,
-    limit: int | None = None,
+    after: Optional[str] = None,
+    limit: Optional[int] = None,
   ) -> dict:
     query: dict[str, str] = {}
     if after is not None:
@@ -148,7 +148,7 @@ class TrailsClient:
     *,
     page_size: int = DEFAULT_STEPS_PAGE_SIZE,
   ) -> Iterator[dict]:
-    after: str | None = None
+    after: Optional[str] = None
     while True:
       page = self.get_steps(trail_id, after=after, limit=page_size)
       steps = page['steps']
@@ -185,9 +185,9 @@ class TrailsClient:
     method: str,
     path: str,
     headers: dict,
-    body: bytes | None,
+    body: Optional[bytes],
   ) -> dict:
-    last_exc: Exception | None = None
+    last_exc: Optional[Exception] = None
     # transient blips often leave the persistent socket half-open; one retry on
     # a fresh connection is enough to cover that without dragging in a full
     # backoff schedule (the read path is non-mutating and idempotent).
@@ -251,7 +251,7 @@ _STEP_CANONICAL_FIELDS = frozenset({'trail_id', 'step_id', 'ts', 'kind', 'body'}
 _SPILL_DESCRIPTOR_KEYS = frozenset({'s3', 'url', 'size'})
 
 
-def _spill_url(body: Any) -> str | None:
+def _spill_url(body: Any) -> Optional[str]:
   if isinstance(body, dict) and frozenset(body.keys()) == _SPILL_DESCRIPTOR_KEYS:
     return body['url']
   return None

@@ -1,4 +1,5 @@
 import urllib.parse
+from typing import Optional
 
 import aiohttp
 from pydantic import BaseModel
@@ -41,7 +42,7 @@ class Wikipedia(SearchableDataSource):
       for page in pages
     ]
 
-  async def fetch(self, id: str, query: str | None = None) -> str:
+  async def fetch(self, id: str, query: Optional[str] = None) -> str:
     title, extract = await self._fetch_extract(id)
     log.info(f'wikipedia: fetched {title!r} ({len(extract):,} chars)')
     if query is None or len(query) == 0:

@@ -1,3 +1,5 @@
+from typing import Optional
+
 import pytest
 
 from bro.bro import BaseBro
@@ -13,7 +15,7 @@ class _NoopSource(SearchableDataSource):
   async def search(self, query: str, limit: int = 5) -> list[Hit]:
     return []
 
-  async def fetch(self, id: str, query: str | None = None) -> str:
+  async def fetch(self, id: str, query: Optional[str] = None) -> str:
     return ''
 
 
@@ -54,7 +56,7 @@ class _SecondSource(SearchableDataSource):
   async def search(self, query: str, limit: int = 5) -> list[Hit]:
     return []
 
-  async def fetch(self, id: str, query: str | None = None) -> str:
+  async def fetch(self, id: str, query: Optional[str] = None) -> str:
     return ''
 
 

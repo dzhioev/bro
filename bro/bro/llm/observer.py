@@ -2,7 +2,7 @@ import json
 import sys
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Any, Callable, TextIO
+from typing import Any, Callable, Optional, TextIO
 
 
 class Observer(ABC):
@@ -164,7 +164,7 @@ class BoringRenderer(Observer):
   def __init__(
     self,
     prefix: str = '',
-    file: TextIO | None = None,
+    file: Optional[TextIO] = None,
     now: Callable[[], str] = _default_now,
   ):
     self._prefix = prefix

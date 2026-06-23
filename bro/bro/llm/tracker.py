@@ -24,7 +24,7 @@ from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal, TextIO
+from typing import Any, Literal, Optional, TextIO
 from urllib.parse import urlparse
 
 from ulid import ULID
@@ -83,7 +83,7 @@ class Trail:
   started_at: str
   interactive: bool
   entry_point: str
-  parent: Parent | None
+  parent: Optional[Parent]
 
 
 @dataclass(frozen=True)
@@ -126,7 +126,7 @@ class Tracker(ABC):
     bro: str,
     llm_spec: dict,
     system_prompt: str,
-    parent: Parent | None,
+    parent: Optional[Parent],
     interactive: bool,
     entry_point: str,
   ) -> str:
@@ -162,7 +162,7 @@ class NullTracker(Tracker):
     bro: str,
     llm_spec: dict,
     system_prompt: str,
-    parent: Parent | None,
+    parent: Optional[Parent],
     interactive: bool,
     entry_point: str,
   ) -> str:
@@ -208,14 +208,14 @@ class LocalFileTracker(Tracker):
   def __init__(self, path: Path | str):
     self._path = Path(path)
     self._file: TextIO = open(self._path, 'a', buffering=1)
-    self._trail_id: str | None = None
+    self._trail_id: Optional[str] = None
 
   def start_trail(
     self,
     bro: str,
     llm_spec: dict,
     system_prompt: str,
-    parent: Parent | None,
+    parent: Optional[Parent],
     interactive: bool,
     entry_point: str,
   ) -> str:
@@ -325,15 +325,15 @@ class HTTPTracker(Tracker):
     hostname = parsed.hostname
     self._host: str = hostname if hostname is not None else 'localhost'
     self._port = parsed.port
-    self._conn: http.client.HTTPSConnection | None = None
-    self._trail_id: str | None = None
+    self._conn: Optional[http.client.HTTPSConnection] = None
+    self._trail_id: Optional[str] = None
 
   def start_trail(
     self,
     bro: str,
     llm_spec: dict,
     system_prompt: str,
-    parent: Parent | None,
+    parent: Optional[Parent],
     interactive: bool,
     entry_point: str,
   ) -> str:
@@ -391,7 +391,7 @@ class HTTPTracker(Tracker):
       'Authorization': f'Bearer {self._token}',
       'Content-Type': 'application/json',
     }
-    last_exc: Exception | None = None
+    last_exc: Optional[Exception] = None
     # initial attempt has no preceding sleep; each retry sleeps its delay
     # before attempting. the loop falls through after the last failure and
     # raises the captured exception.

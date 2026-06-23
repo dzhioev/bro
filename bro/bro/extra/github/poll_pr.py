@@ -7,7 +7,7 @@ import time
 import urllib.error
 import urllib.request
 from email.utils import parsedate_to_datetime
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 from base.args import ArgumentTypeError, Parser
 
@@ -62,7 +62,7 @@ def _retry_delay(err: urllib.error.URLError, attempt: int) -> float:
   return backoff
 
 
-def _parse_retry_after(value: str) -> float | None:
+def _parse_retry_after(value: str) -> Optional[float]:
   """parse a Retry-After header (delta-seconds or HTTP-date) into seconds."""
   try:
     return float(value)
@@ -232,7 +232,7 @@ def poll_pr(
   pr: int,
   token: str,
   interval: int,
-  self_login: str | None,
+  self_login: Optional[str],
 ) -> int:
   seen_comment_ids: set[int] = set()
   seen_review_ids: set[int] = set()
@@ -294,7 +294,7 @@ def _owner_repo(arg: str) -> tuple[str, str]:
   return parts[0], parts[1]
 
 
-def main(argv: list[str]) -> int | None:
+def main(argv: list[str]) -> Optional[int]:
   parser = Parser(description='poll a GitHub PR for merge status, new comments, and new reviews')
   parser.add_argument(
     'repo', type=_owner_repo, metavar='owner/repo', help='target repo (e.g. dzhioev/ppp)'

@@ -7,6 +7,7 @@ the one coloured channel that survives Claude's alternate-screen buffer.
 """
 
 import sys
+from typing import Optional
 
 import session_log_health
 
@@ -23,7 +24,7 @@ def statusline() -> int:
   return 0
 
 
-def main(argv: list[str]) -> int | None:
+def main(argv: list[str]) -> Optional[int]:
   del argv
   return statusline()
 

@@ -1,4 +1,5 @@
 from collections.abc import Iterator, Mapping
+from typing import Optional
 
 
 def _normalize(s: str) -> str:
@@ -39,7 +40,7 @@ class NameMap[V]:
       raise LookupError(f'no match for "{query}" (available: {available})')
     return entry[1]
 
-  def get(self, query: str, default: V | None = None) -> V | None:
+  def get(self, query: str, default: Optional[V] = None) -> Optional[V]:
     entry = self._by_normalized.get(_normalize(query))
     return entry[1] if entry is not None else default
 

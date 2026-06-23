@@ -1,4 +1,5 @@
 import re
+from typing import Optional
 
 from bro.bro import BaseBro
 from do._cli import run
@@ -25,11 +26,11 @@ def _expand_skill_invocation(bro: BaseBro, what: str) -> str:
   return f'{body}\n\nARGUMENTS: {args.strip()}'
 
 
-async def do(bro: BaseBro, what: str, observer: Observer | None = None) -> str:
+async def do(bro: BaseBro, what: str, observer: Optional[Observer] = None) -> str:
   return await bro.run(_expand_skill_invocation(bro, what), observer=observer)
 
 
-def main(argv: list[str]) -> int | None:
+def main(argv: list[str]) -> Optional[int]:
   return run(
     cli_name='ask',
     parser_desc='run a bro on the given input',

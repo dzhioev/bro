@@ -1,11 +1,12 @@
 #!/usr/bin/env python
-from typing import Self, overload
-from zoneinfo import ZoneInfo
-from base import log
-from base.args import Parser
 import datetime as dt
+from typing import Optional, Self, overload
+from zoneinfo import ZoneInfo
 
 import dateutil.parser
+
+from base import log
+from base.args import Parser
 
 UTC = dt.timezone.utc
 timezone = ZoneInfo
@@ -50,7 +51,7 @@ class Moment(dt.datetime):
     return cls.from_datetime(dt.datetime.fromisoformat(s))
 
   @classmethod
-  def now(cls, tz: dt.tzinfo | None = None) -> Self:
+  def now(cls, tz: Optional[dt.tzinfo] = None) -> Self:
     return cls.from_datetime(dt.datetime.now(tz=tz))
 
   @classmethod
@@ -124,7 +125,7 @@ PAST = parse_date('1988-01-01')
 FUTURE = parse_date('2188-01-01')
 
 
-def format_now(show_tz_info: bool, zone: str | None) -> str:
+def format_now(show_tz_info: bool, zone: Optional[str]) -> str:
   now = utc_now()
 
   if zone is not None:
@@ -133,12 +134,12 @@ def format_now(show_tz_info: bool, zone: str | None) -> str:
   return format_time(now, show_tz_info=show_tz_info)
 
 
-def print_current_time(show_tz_info: bool, zone: str | None) -> None:
+def print_current_time(show_tz_info: bool, zone: Optional[str]) -> None:
   current_time = format_now(show_tz_info, zone)
   print(current_time)
 
 
-def main(argv: list[str]) -> int | None:
+def main(argv: list[str]) -> Optional[int]:
   parser = Parser(description='print current time')
   parser.add_argument('-z', dest='show_tz_info', help='show tz info', action='store_true')
   parser.add_argument('--zone', help='convert time to the timezone')

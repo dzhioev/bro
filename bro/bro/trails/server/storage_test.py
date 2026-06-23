@@ -10,6 +10,7 @@ triple `{trail_id, <index PK>, started_at}` the cursor round-trip must survive.
 
 import io
 import json
+from typing import Optional
 
 import pytest
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
@@ -81,7 +82,7 @@ class FakeDynamo:
     return response
 
 
-def _trail(idx: int, *, bro: str, parent: str | None, indexed: bool = True) -> dict:
+def _trail(idx: int, *, bro: str, parent: Optional[str], indexed: bool = True) -> dict:
   item = {
     'trail_id': f'trail-{idx:03d}',
     'bro': bro,
@@ -105,7 +106,7 @@ _TRAILS = [
 ]
 
 
-def _store(items: list[dict] | None = None) -> Storage:
+def _store(items: Optional[list[dict]] = None) -> Storage:
   return Storage(
     dynamo=FakeDynamo(_TRAILS if items is None else items),
     s3=None,
@@ -122,7 +123,7 @@ async def _collect(
   `TrailsClient.iter_trails`.
   """
   trails: list[dict] = []
-  cursor: str | None = None
+  cursor: Optional[str] = None
   while True:
     page = await store.list_trails(
       bro=bro, parent=parent, since=since, until=until, cursor=cursor, limit=limit
@@ -261,7 +262,7 @@ class _FakeStepsDynamo:
     class TransactionCanceledException(Exception):
       pass
 
-  def __init__(self, existing_trails: set[str] | None = None):
+  def __init__(self, existing_trails: Optional[set[str]] = None):
     self._steps: list[dict] = []
     self._existing_trails = existing_trails
 
@@ -310,7 +311,7 @@ class _FakeStepsDynamo:
 
 
 def _spill_store(
-  existing_trails: set[str] | None = None,
+  existing_trails: Optional[set[str]] = None,
 ) -> tuple[Storage, _FakeStepsDynamo, _FakeS3]:
   dynamo = _FakeStepsDynamo(existing_trails)
   s3 = _FakeS3()

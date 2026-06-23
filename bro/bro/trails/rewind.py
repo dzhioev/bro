@@ -19,7 +19,7 @@ import os
 import shutil
 import subprocess
 import sys
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 import base.args
 from base import log
@@ -118,7 +118,7 @@ def _short(trail_id: str) -> str:
   return trail_id[:_SHORT_ID_CHARS]
 
 
-def _format_ts(iso: str | None) -> str:
+def _format_ts(iso: Optional[str]) -> str:
   if iso is None:
     return '-'
   # 2026-06-07T22:14:03.123456Z -> 2026-06-07 22:14:03
@@ -141,7 +141,7 @@ def _truncate_oneline(body: Any, limit: int = _BODY_TRUNCATE_CHARS) -> str:
   return f'{text[:limit]}... <{len(text) - limit} more chars>'
 
 
-def _spilled_body(body: Any) -> dict | None:
+def _spilled_body(body: Any) -> Optional[dict]:
   """return the spillover descriptor `{s3, url, size}` if `body` is one; else
   None. the server inlines bodies <1MB and returns this shape above that — we
   surface it as a one-liner rather than fetching multi-MB blobs eagerly.
@@ -388,10 +388,10 @@ def _cmd_fork(client: TrailsClient, args: dict, col: _Colors) -> int:
 
 async def _fork_repl(
   bro,
-  initial: str | None,
+  initial: Optional[str],
   *,
-  read_line: Callable[[], str] | None = None,
-  emit: Callable[[str], None] | None = None,
+  read_line: Optional[Callable[[], str]] = None,
+  emit: Optional[Callable[[str], None]] = None,
 ) -> None:
   read = read_line if read_line is not None else (lambda: input('> '))
   emit_reply = emit if emit is not None else (lambda r: print(f'{bro.name}: {r}'))
@@ -410,7 +410,7 @@ async def _fork_repl(
     emit_reply(reply)
 
 
-def main(argv: list[str]) -> int | None:
+def main(argv: list[str]) -> Optional[int]:
   parser = base.args.Parser(description='inspect and fork recorded bro trails')
   parser.add_argument(
     '--color',

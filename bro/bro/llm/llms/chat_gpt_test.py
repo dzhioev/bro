@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, Optional, cast
 
 import pytest
 from openai.types.responses import Response
@@ -16,7 +16,7 @@ _TEST_NS = 'svc'
 
 
 class _StaticTool(Tool):
-  def __init__(self, name: str, raise_with: Exception | None = None):
+  def __init__(self, name: str, raise_with: Optional[Exception] = None):
     self._name = name
     self._raise_with = raise_with
 
@@ -133,7 +133,7 @@ def _function_call_item(name: str, *, call_id: str, arguments='{}'):
 
 
 def _make_chat_gpt_with_tracker(
-  tools: list[Tool] | None = None,
+  tools: Optional[list[Tool]] = None,
   *,
   reasoning_effort=None,
 ) -> tuple[ChatGPT, _RecordingTracker, list[dict]]:

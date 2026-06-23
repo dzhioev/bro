@@ -1,6 +1,7 @@
 import json
 import sys
 import types
+from typing import Optional
 
 import pytest
 
@@ -14,12 +15,12 @@ from llm.tracker import NullTracker, Tracker
 
 
 class MockLLM(LLM):
-  def __init__(self, response: str = 'mock', mcp_servers: list[MCPServer] | None = None):
+  def __init__(self, response: str = 'mock', mcp_servers: Optional[list[MCPServer]] = None):
     super().__init__(mcp_servers)
     self.response = response
     self.send_calls: list[list[dict]] = []
 
-  async def send(self, messages: list[dict], *, request_timeout: float | None = None) -> str:
+  async def send(self, messages: list[dict], *, request_timeout: Optional[float] = None) -> str:
     self.send_calls.append(messages)
     return self.response
 
@@ -442,12 +443,12 @@ class _StubSource(SearchableDataSource):
   summary = 'a stub data source for tests'
 
   def __init__(self):
-    self.fetch_calls: list[tuple[str, str | None]] = []
+    self.fetch_calls: list[tuple[str, Optional[str]]] = []
 
   async def search(self, query: str, limit: int = 5) -> list[Hit]:
     return [Hit(id='stub-1', title=f'hit for {query}', snippet='stub snippet')]
 
-  async def fetch(self, id: str, query: str | None = None) -> str:
+  async def fetch(self, id: str, query: Optional[str] = None) -> str:
     self.fetch_calls.append((id, query))
     return f'content for {id}'
 
@@ -600,7 +601,7 @@ class _SecretSource(SearchableDataSource):
   async def search(self, query: str, limit: int = 5) -> list[Hit]:
     return []
 
-  async def fetch(self, id: str, query: str | None = None) -> str:
+  async def fetch(self, id: str, query: Optional[str] = None) -> str:
     return ''
 
 
@@ -793,7 +794,7 @@ def fake_pkgs(tmp_path):
   # the real `bro/bros/` tree.
   added: list[str] = []
 
-  def make(name: str, skills: dict[str, str] | None = None) -> str:
+  def make(name: str, skills: Optional[dict[str, str]] = None) -> str:
     pkg_dir = tmp_path / name
     pkg_dir.mkdir()
     init_path = pkg_dir / '__init__.py'

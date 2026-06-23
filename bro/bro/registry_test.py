@@ -1,20 +1,20 @@
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import ClassVar, Optional
 
 import pytest
 
-from bro.bros.bro import Bro
 import bro.registry
-from bro.registry import _REGISTRY, register, create_bro, get_class, list_classes
+from bro.bros.bro import Bro
+from bro.registry import _REGISTRY, create_bro, get_class, list_classes, register
 from llm.llm import LLM, LLMSpec
 from llm.mcp import MCPServer
 
 
 class MockLLM(LLM):
-  def __init__(self, mcp_servers: list[MCPServer] | None = None):
+  def __init__(self, mcp_servers: Optional[list[MCPServer]] = None):
     super().__init__(mcp_servers)
 
-  async def send(self, messages: list[dict], *, request_timeout: float | None = None) -> str:
+  async def send(self, messages: list[dict], *, request_timeout: Optional[float] = None) -> str:
     return ''
 
 

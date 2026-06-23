@@ -1,6 +1,7 @@
 import json
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass
+from typing import Optional
 
 from llm.mcp import InProcessMCPServer, MCPServer, Tool
 
@@ -23,7 +24,7 @@ class SourceUnavailable(Exception):
 class Hit:
   id: str
   title: str
-  snippet: str | None = None
+  snippet: Optional[str] = None
 
 
 class DataSource(ABC):
@@ -51,7 +52,7 @@ class SearchableDataSource(DataSource):
   async def search(self, query: str, limit: int = 5) -> list[Hit]: ...
 
   @abstractmethod
-  async def fetch(self, id: str, query: str | None = None) -> str: ...
+  async def fetch(self, id: str, query: Optional[str] = None) -> str: ...
 
   def as_mcp_server(self) -> MCPServer:
     return InProcessMCPServer(self.namespace, [_SearchTool(self), _FetchTool(self)])

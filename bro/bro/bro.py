@@ -2,7 +2,7 @@ import os
 import sys
 from abc import ABC
 from pathlib import Path
-from typing import Callable, Self
+from typing import Callable, Optional, Self
 
 import llm.llms.chat_gpt
 import llm.mcp
@@ -288,9 +288,9 @@ class BaseBro(ABC):
   # the bro's own class prompts (MRO-concatenated); set in __init__
   persona: str
 
-  _llm: LLM | None = None
+  _llm: Optional[LLM] = None
 
-  def __init__(self, system_prompt: str | None = None):
+  def __init__(self, system_prompt: Optional[str] = None):
     mcp_entries: list[McpServerEntry] = []
     prompt_parts: list[str] = []
     extra_secret_names: list[str] = []
@@ -400,9 +400,9 @@ class BaseBro(ABC):
   async def run(
     self,
     input: str,
-    observer: Observer | None = None,
-    tracker: Tracker | None = None,
-    request_timeout: float | None = None,
+    observer: Optional[Observer] = None,
+    tracker: Optional[Tracker] = None,
+    request_timeout: Optional[float] = None,
   ) -> str:
     # caller-supplied observer / tracker win (CLIs use this to force --boring
     # or to pass a LocalFileTracker for dev capture); otherwise _make_observer()
@@ -439,9 +439,9 @@ class BaseBro(ABC):
   async def send(
     self,
     message: str,
-    observer: Observer | None = None,
-    tracker: Tracker | None = None,
-    request_timeout: float | None = None,
+    observer: Optional[Observer] = None,
+    tracker: Optional[Tracker] = None,
+    request_timeout: Optional[float] = None,
   ) -> str:
     if self._llm is None:
       # observer / tracker are locked in on first send (the LLM is constructed

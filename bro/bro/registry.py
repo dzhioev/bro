@@ -1,4 +1,5 @@
 import importlib
+from typing import Optional
 
 from bro.bros.bro import Bro
 from llm.llm import LLMSpec
@@ -19,7 +20,7 @@ def register(bro_cls: type[Bro]) -> None:
   _REGISTRY[name] = bro_cls
 
 
-def _autoload_class(name: str) -> type[Bro] | None:
+def _autoload_class(name: str) -> Optional[type[Bro]]:
   # import only the single bro module that declares `name` and register it; None
   # if `name` is not a known bro. importing one bro instead of all of them keeps
   # `create_bro('pm')` from dragging in every other bro's dependency graph.
@@ -48,7 +49,7 @@ def get_class(name: str) -> type[Bro]:
   raise KeyError(f'unknown bro: {name!r}')
 
 
-def create_bro(name: str, llm_spec: LLMSpec | None = None) -> Bro:
+def create_bro(name: str, llm_spec: Optional[LLMSpec] = None) -> Bro:
   """instantiate the registered bro by name. returns a fresh instance every
   call — construction walks the MRO, materialises MCP servers, and renders the
   system prompt, so callers that need the same instance across requests should

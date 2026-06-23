@@ -1,24 +1,25 @@
 #!/usr/bin/env python
 import json
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from datetime import datetime
+from json import JSONEncoder
+from typing import Any, Optional, Type, TypeVar
+
+from icecream import ic
+from openai.types.responses import ResponseInputParam
+from openai.types.shared.reasoning_effort import ReasoningEffort
+from pydantic import BaseModel
 
 from llm.llms import ChatGPT
 from llm.llms.chat_gpt import (
   ResponseInputContentPart,
-  image_to_content,
-  png_to_content,
   image_file_to_content,
+  image_to_content,
   pdf_to_content,
+  png_to_content,
   text_to_content,
 )
-from openai.types.responses import ResponseInputParam
-from openai.types.shared.reasoning_effort import ReasoningEffort
-from dataclasses import dataclass
-from icecream import ic
-from pydantic import BaseModel
-from json import JSONEncoder
-from datetime import datetime
-from typing import Any, Type, TypeVar
-from abc import abstractmethod, ABC
 
 
 class Markdown(BaseModel):
@@ -82,7 +83,7 @@ class DateTimeEncoder(json.JSONEncoder):
 @dataclass
 class Json(Content):
   json: dict[str, Any]
-  encoder: Type[JSONEncoder] | None = None
+  encoder: Optional[Type[JSONEncoder]] = None
 
   def dump(self) -> ResponseInputContentPart:
     return text_to_content(json.dumps(self.json, indent=4, cls=self.encoder))

@@ -13,7 +13,7 @@ import hmac
 import json
 import os
 import sys
-from typing import Any
+from typing import Any, Optional
 
 import boto3
 from aiohttp import web
@@ -182,7 +182,7 @@ async def _handle_list_trails(request: web.Request) -> web.Response:
   return web.json_response(result)
 
 
-def _parse_limit(raw: str | None, *, default: int, ceiling: int) -> int:
+def _parse_limit(raw: Optional[str], *, default: int, ceiling: int) -> int:
   if raw is None:
     return default
   try:
@@ -192,7 +192,7 @@ def _parse_limit(raw: str | None, *, default: int, ceiling: int) -> int:
   return max(1, min(ceiling, value))
 
 
-def create_app(store: storage.Storage, bearer_token: str | None) -> web.Application:
+def create_app(store: storage.Storage, bearer_token: Optional[str]) -> web.Application:
   app = web.Application(
     middlewares=[_auth_middleware], client_max_size=storage.MAX_BODY_BYTES + 64 * 1024
   )
@@ -208,7 +208,7 @@ def create_app(store: storage.Storage, bearer_token: str | None) -> web.Applicat
   return app
 
 
-def resolve_auth(bearer_token: str | None, allow_no_auth: bool, host: str) -> str | None:
+def resolve_auth(bearer_token: Optional[str], allow_no_auth: bool, host: str) -> Optional[str]:
   if bearer_token is not None:
     return bearer_token
   if not allow_no_auth:
@@ -220,7 +220,7 @@ def resolve_auth(bearer_token: str | None, allow_no_auth: bool, host: str) -> st
   return None
 
 
-def main(argv: list[str]) -> int | None:
+def main(argv: list[str]) -> Optional[int]:
   parser = base.args.Parser(description='trails recording server')
   parser.add_argument('--host', default='0.0.0.0')
   parser.add_argument('--port', type=int, default=DEFAULT_PORT)

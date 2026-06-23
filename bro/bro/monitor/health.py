@@ -11,6 +11,7 @@ not pull in boto3 (as importing `sync_session_log` would).
 import datetime
 import json
 from pathlib import Path
+from typing import Optional
 
 HEALTH_PATH = Path.home() / '.claude' / 'session-log-sync-health.json'
 
@@ -18,7 +19,7 @@ HEALTH_PATH = Path.home() / '.claude' / 'session-log-sync-health.json'
 _MAX_ERROR = 500
 
 
-def write(status: str, error: str | None = None) -> None:
+def write(status: str, error: Optional[str] = None) -> None:
   """atomically record the latest sync outcome. never raises — health
   reporting must not be able to break the sync it reports on."""
   payload = {

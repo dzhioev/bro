@@ -9,6 +9,7 @@ import socket
 import threading
 import time
 from pathlib import Path
+from typing import Optional
 
 import boto3
 
@@ -46,10 +47,10 @@ def _projects_dir() -> Path:
   return projects_root / _encode_cwd(str(cwd))
 
 
-def _latest_jsonl(projects_dir: Path) -> Path | None:
+def _latest_jsonl(projects_dir: Path) -> Optional[Path]:
   if not projects_dir.is_dir():
     return None
-  best: Path | None = None
+  best: Optional[Path] = None
   best_mtime = 0.0
   for p in projects_dir.iterdir():
     if p.suffix != '.jsonl':
@@ -65,9 +66,9 @@ def _latest_jsonl(projects_dir: Path) -> Path | None:
 
 
 def _extract_metadata(path: Path) -> dict:
-  subject: str | None = None
-  model: str | None = None
-  first_ts: str | None = None
+  subject: Optional[str] = None
+  model: Optional[str] = None
+  first_ts: Optional[str] = None
   line_count = 0
 
   with path.open() as f:
@@ -85,7 +86,7 @@ def _extract_metadata(path: Path) -> dict:
 
       if subject is None and entry.get('type') == 'user' and entry.get('isSidechain') is not True:
         content = entry.get('message', {}).get('content')
-        text: str | None = None
+        text: Optional[str] = None
         if isinstance(content, str):
           text = content
         elif isinstance(content, list):
@@ -112,7 +113,7 @@ def _extract_metadata(path: Path) -> dict:
   }
 
 
-def _workspace_name() -> str | None:
+def _workspace_name() -> Optional[str]:
   name = os.environ.get('CW_NAME')
   if name is not None:
     return name
@@ -187,7 +188,7 @@ def _sync_once(path: Path, workspace: str, bucket: str, s3, dynamo, table_name: 
 def _watch(interval: int, workspace: str, bucket: str, s3, dynamo, table_name: str) -> None:
   projects_dir = _projects_dir()
   last_mtime = 0.0
-  last_path: Path | None = None
+  last_path: Optional[Path] = None
   stop = threading.Event()
   parent_pid = os.getppid()
 
@@ -235,7 +236,7 @@ def _watch(interval: int, workspace: str, bucket: str, s3, dynamo, table_name: s
 def sync_session_log(
   watch: bool = False,
   interval: int = 60,
-  workspace: str | None = None,
+  workspace: Optional[str] = None,
 ) -> int:
   ws = workspace if workspace is not None else _workspace_name()
   if ws is None:
@@ -274,7 +275,7 @@ def sync_session_log(
   return 0
 
 
-def main(argv: list[str]) -> int | None:
+def main(argv: list[str]) -> Optional[int]:
   parser = Parser(description='sync Claude Code session logs to S3 + DynamoDB')
   parser.add_argument('--watch', action='store_true', help='poll for changes and sync continuously')
   parser.add_argument(

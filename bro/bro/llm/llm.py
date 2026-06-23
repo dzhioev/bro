@@ -3,7 +3,7 @@
 import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import ClassVar, Self
+from typing import ClassVar, Optional, Self
 
 import base.args
 from llm.mcp import MCPServer, ToolRegistry
@@ -14,9 +14,9 @@ from llm.tracker import NullTracker, Tracker
 class LLM(ABC):
   def __init__(
     self,
-    mcp_servers: list[MCPServer] | None = None,
-    observer: Observer | None = None,
-    tracker: Tracker | None = None,
+    mcp_servers: Optional[list[MCPServer]] = None,
+    observer: Optional[Observer] = None,
+    tracker: Optional[Tracker] = None,
   ):
     self.tools = ToolRegistry(mcp_servers if mcp_servers is not None else [])
     self.observer: Observer = observer if observer is not None else NullObserver()
@@ -26,7 +26,7 @@ class LLM(ABC):
     self.tracker: Tracker = tracker if tracker is not None else NullTracker()
 
   @abstractmethod
-  async def send(self, messages: list[dict], *, request_timeout: float | None = None) -> str: ...
+  async def send(self, messages: list[dict], *, request_timeout: Optional[float] = None) -> str: ...
 
 
 @dataclass(frozen=True)
@@ -66,9 +66,9 @@ class LLMSpec(ABC):
   @abstractmethod
   def create_llm(
     self,
-    mcp_servers: list[MCPServer] | None = None,
-    observer: Observer | None = None,
-    tracker: Tracker | None = None,
+    mcp_servers: Optional[list[MCPServer]] = None,
+    observer: Optional[Observer] = None,
+    tracker: Optional[Tracker] = None,
   ) -> LLM: ...
 
   @abstractmethod
@@ -145,7 +145,7 @@ async def llm_main(request: str, llm_type: str, attachments: list[str]):
   print(f'< {response}')
 
 
-def main(argv: list[str]) -> int | None:
+def main(argv: list[str]) -> Optional[int]:
   parser = base.args.Parser(description='chat with LLM')
   parser.add_argument('--attach', '-a', dest='attachments', nargs='*', default=[])
   parser.add_argument('--llm-type', '-t', choices=_LLM_TYPES, default='echo')

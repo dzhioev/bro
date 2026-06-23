@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Optional
 from unittest.mock import patch
 
 import pytest
@@ -11,12 +12,12 @@ from llm.observer import NullObserver, Observer
 
 
 class MockLLM(LLM):
-  def __init__(self, response: str = 'mock', mcp_servers: list[MCPServer] | None = None):
+  def __init__(self, response: str = 'mock', mcp_servers: Optional[list[MCPServer]] = None):
     super().__init__(mcp_servers)
     self.response = response
     self.send_calls: list[list[dict]] = []
 
-  async def send(self, messages: list[dict], *, request_timeout: float | None = None) -> str:
+  async def send(self, messages: list[dict], *, request_timeout: Optional[float] = None) -> str:
     self.send_calls.append(messages)
     return self.response
 
@@ -25,7 +26,7 @@ class RecordBro(BaseBro):
   name = 'record'
   description = 'records inputs'
 
-  def __init__(self, response: str = 'done', skills: dict[str, str] | None = None):
+  def __init__(self, response: str = 'done', skills: Optional[dict[str, str]] = None):
     # set _fake_skills before super().__init__() — BaseBro's init reads
     # self.skills (which we override below) when building the service server.
     self._fake_skills = skills if skills is not None else {'fix': 'FIX BODY'}

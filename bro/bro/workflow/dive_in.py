@@ -5,6 +5,7 @@ import os
 import re
 import secrets
 import subprocess
+from typing import Optional
 
 import cw
 from base import log
@@ -99,7 +100,7 @@ def _pick_fresh_name(base: str) -> str:
       return name
 
 
-def _fix_command(task_arg: str | None, focus: bool, new: bool, command: str | None) -> str:
+def _fix_command(task_arg: Optional[str], focus: bool, new: bool, command: Optional[str]) -> str:
   """build the `/fix …` first-user-message for a non-bare dive-in.
 
   Mirrors the CLI: task ref + optional `--focus`; or `--new` + optional seed +
@@ -128,13 +129,13 @@ def dive_in(
   forwarded: list[str],
   dry_run: bool = False,
   host: bool = False,
-  command: str | None = None,
-  task: str | None = None,
+  command: Optional[str] = None,
+  task: Optional[str] = None,
   new: bool = False,
   focus: bool = False,
   resume: bool = False,
 ) -> int:
-  prompt: str | None = None
+  prompt: Optional[str] = None
   if new:
     base = _slugify(command) if command is not None else ''
     if len(base) == 0:
@@ -207,7 +208,7 @@ def dive_in(
   return subprocess.run(cmd).returncode
 
 
-def main(argv: list[str]) -> int | None:
+def main(argv: list[str]) -> Optional[int]:
   parser = Parser(description='start a cw session focused on a task')
   parser.add_argument(
     '-n', '--dry-run', action='store_true', help='print the command without running it'

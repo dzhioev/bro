@@ -23,6 +23,7 @@ import re
 import subprocess
 from collections import defaultdict
 from dataclasses import dataclass
+from typing import Optional
 
 from base import log
 from base.args import Parser
@@ -50,7 +51,7 @@ class CommitUsage:
   per_model: dict[str, int]
 
 
-def _parse_footer(commit_msg: str) -> CommitUsage | None:
+def _parse_footer(commit_msg: str) -> Optional[CommitUsage]:
   """parse the two-line delta footer; returns None if it is absent or legacy."""
   m = _FOOTER_RE.search(commit_msg)
   if m is None:
@@ -137,7 +138,7 @@ def usage_report(git_range: str) -> int:
   return 0
 
 
-def main(argv: list[str]) -> int | None:
+def main(argv: list[str]) -> Optional[int]:
   parser = Parser(description='aggregate Claude Code token usage across a git commit range')
   parser.add_argument(
     'git_range',

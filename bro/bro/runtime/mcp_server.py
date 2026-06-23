@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import asyncio
+from typing import Optional
 
 import mcp.types as types
 from mcp.server.lowlevel import Server
@@ -82,7 +83,9 @@ async def run(mcp_server: MCPServer):
     ]
 
   @server.call_tool()
-  async def handle_call_tool(name: str, arguments: dict | None) -> list[types.TextContent] | dict:
+  async def handle_call_tool(
+    name: str, arguments: Optional[dict]
+  ) -> list[types.TextContent] | dict:
     tool = tools_by_name.get(name)
     if tool is None:
       raise ValueError(f'unknown tool: {name}')
@@ -95,7 +98,7 @@ async def run(mcp_server: MCPServer):
     await server.run(read_stream, write_stream, server.create_initialization_options())
 
 
-def main(argv: list[str]) -> int | None:
+def main(argv: list[str]) -> Optional[int]:
   parser = base.args.Parser(description='generic MCP stdio server')
   parser.add_argument(
     'server',

@@ -42,6 +42,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 from base.args import Parser
 
@@ -68,7 +69,7 @@ def _encode_cwd(cwd: str) -> str:
   return cwd.replace('/', '-').replace('.', '-')
 
 
-def _find_session_jsonl() -> Path | None:
+def _find_session_jsonl() -> Optional[Path]:
   projects_root = Path.home() / '.claude' / 'projects'
   pwd = os.environ.get('PWD')
   cwd = Path(pwd if pwd is not None else os.getcwd()).resolve()
@@ -173,7 +174,7 @@ class Footer:
   sessions: list[str]
 
 
-def _parse_footer(commit_msg: str) -> Footer | None:
+def _parse_footer(commit_msg: str) -> Optional[Footer]:
   m = _FOOTER_RE.search(commit_msg)
   if m is None:
     return None
@@ -254,7 +255,7 @@ def _emit_default(cum_now: dict[str, int], session: str, version: str, state: St
 
 def _emit_squash(
   commits: list[tuple[str, str]],
-  land: tuple[str, dict[str, int]] | None,
+  land: Optional[tuple[str, dict[str, int]]],
   version: str,
   state: State,
 ) -> tuple[str, list[str]]:
@@ -298,7 +299,7 @@ def _git_log(git_range: str) -> list[tuple[str, str]]:
   return commits
 
 
-def main(argv: list[str]) -> int | None:
+def main(argv: list[str]) -> Optional[int]:
   parser = Parser(description='print/aggregate the Claude Code commit footer')
   group = parser.add_mutually_exclusive_group()
   group.add_argument(
@@ -322,7 +323,7 @@ def main(argv: list[str]) -> int | None:
   if args['squash'] is not None:
     commits = _git_log(args['squash'])
     jsonl = _find_session_jsonl()
-    land: tuple[str, dict[str, int]] | None = None
+    land: Optional[tuple[str, dict[str, int]]] = None
     if jsonl is not None:
       cum = _cumulative_usage(jsonl)
       if len(cum) > 0:

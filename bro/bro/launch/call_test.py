@@ -1,7 +1,7 @@
 import io
 from dataclasses import dataclass
 from datetime import datetime
-from typing import ClassVar
+from typing import ClassVar, Optional
 from unittest.mock import patch
 
 import pytest
@@ -15,12 +15,12 @@ from llm.observer import NullObserver, Observer
 
 
 class MockLLM(LLM):
-  def __init__(self, response: str = 'mock', mcp_servers: list[MCPServer] | None = None):
+  def __init__(self, response: str = 'mock', mcp_servers: Optional[list[MCPServer]] = None):
     super().__init__(mcp_servers)
     self.response = response
     self.send_calls: list[list[dict]] = []
 
-  async def send(self, messages: list[dict], *, request_timeout: float | None = None) -> str:
+  async def send(self, messages: list[dict], *, request_timeout: Optional[float] = None) -> str:
     self.send_calls.append(messages)
     return self.response
 

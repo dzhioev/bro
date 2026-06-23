@@ -22,7 +22,7 @@ import sys
 import threading
 from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import Protocol
+from typing import Optional, Protocol
 
 import configs
 from base.args import Parser
@@ -54,7 +54,7 @@ class SecretNotFound(Exception):
 class Source(Protocol):
   """a place a secret's raw text might live."""
 
-  def fetch(self) -> str | None:
+  def fetch(self) -> Optional[str]:
     """return the raw text, or None when this source doesn't have it (try the next)."""
     ...
 
@@ -72,7 +72,7 @@ class LocalSource:
   def __init__(self, file: str):
     self.file = file
 
-  def fetch(self) -> str | None:
+  def fetch(self) -> Optional[str]:
     for directory in _search_dirs():
       path = Path(directory) / self.file
       if path.is_file():
@@ -111,7 +111,7 @@ class Secret:
   `credentials get <name>` at eval time, so per-secret wiring lives in the registry
   with no interpolated path and the entrypoint stays generic."""
 
-  def __init__(self, name: str, sources: Sequence[Source], *, install: str | None = None):
+  def __init__(self, name: str, sources: Sequence[Source], *, install: Optional[str] = None):
     self.name = name
     self.sources = sources
     self.install = install
@@ -230,7 +230,7 @@ def _load_registry() -> dict[str, Secret]:
   return default_registry()
 
 
-_default_store: Store | None = None
+_default_store: Optional[Store] = None
 _default_store_lock = threading.Lock()
 
 
@@ -342,7 +342,7 @@ def install_hooks() -> str:
   return '\n'.join(lines)
 
 
-def _get(name: str, field: str | None, as_json: bool) -> int | None:
+def _get(name: str, field: Optional[str], as_json: bool) -> Optional[int]:
   store = default_store()
   try:
     # a bare get prints the raw text; --field / --json need the parsed object.
@@ -370,7 +370,7 @@ def _print_hooks() -> None:
   print(install_hooks())
 
 
-def main(argv: list[str]) -> int | None:
+def main(argv: list[str]) -> Optional[int]:
   parser = Parser(description='resolve credentials from the default store')
   subparser = parser.add_subparsers(dest='action', required=True)
   get_parser = subparser.add_parser('get', help='resolve a secret and print it')

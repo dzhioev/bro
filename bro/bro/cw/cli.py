@@ -59,12 +59,13 @@ import tarfile
 import tempfile
 from collections.abc import Collection, Mapping
 from pathlib import Path
+from typing import Optional
 
 import humanize
 
 import session_log_health
 from base import credentials, log
-from base.args import Parser, REMAINDER
+from base.args import REMAINDER, Parser
 from base.yesno import yesno
 
 CONTAINER_DIR = Path(__file__).resolve().parent / 'setup' / 'container'
@@ -95,7 +96,7 @@ def _load_base_prompts() -> str:
   return '\n\n'.join(parts)
 
 
-def _session_append_prompt(auto: bool, bro_name: str | None) -> str:
+def _session_append_prompt(auto: bool, bro_name: Optional[str]) -> str:
   """--append-system-prompt text for a non --bro `cw ss` session.
 
   base prompts plus, when launched for a bro (dive-in sets CW_BRO), that bro's
@@ -141,7 +142,7 @@ _CW_SESSION_BASELINE = ('session_log', 'trails')
 _DEFAULT_CW_BRO = 'ppp-dev'
 
 
-def _load_anthropic_key() -> str | None:
+def _load_anthropic_key() -> Optional[str]:
   """return the api_key from the `anthropic` secret, or None if missing/invalid."""
   try:
     config = credentials.get_json('anthropic')
@@ -160,7 +161,7 @@ def _venv_env(venv: Path) -> dict[str, str]:
   return env
 
 
-def _git_out(*args: str, cwd: str | None = None) -> str:
+def _git_out(*args: str, cwd: Optional[str] = None) -> str:
   return subprocess.check_output(['git', *args], cwd=cwd, text=True).strip()
 
 
@@ -176,7 +177,7 @@ def _containers_dir(proj: Path) -> Path:
   return proj / 'var' / 'cw' / 'containers'
 
 
-def _keychain_credentials() -> dict | None:
+def _keychain_credentials() -> Optional[dict]:
   if platform.system() != 'Darwin':
     return None
   try:
@@ -313,7 +314,7 @@ def _docker_create_argv(
   command: list[str],
   *,
   docker_sock: bool = True,
-  extra_env: Mapping[str, str] | None = None,
+  extra_env: Optional[Mapping[str, str]] = None,
   forward_bro: bool = True,
 ) -> list[str]:
   """argv for `docker create` of the session container (run-equivalent, unstarted).
@@ -448,7 +449,7 @@ def _running_container_mounts() -> set[str]:
   return {line for line in inspect.stdout.splitlines() if len(line) > 0}
 
 
-def _latest_jsonl(projects_dir: Path) -> Path | None:
+def _latest_jsonl(projects_dir: Path) -> Optional[Path]:
   if not projects_dir.is_dir():
     return None
   jsonls = [p for p in projects_dir.iterdir() if p.suffix == '.jsonl']
@@ -467,7 +468,7 @@ def _projects_dir_for_container(name: str) -> Path:
   return Path.home() / '.claude' / 'cw-sessions' / name / 'projects' / '-workspace'
 
 
-def _read_subject(projects_dir: Path) -> str | None:
+def _read_subject(projects_dir: Path) -> Optional[str]:
   latest = _latest_jsonl(projects_dir)
   if latest is None:
     return None
@@ -484,7 +485,7 @@ def _read_subject(projects_dir: Path) -> str | None:
       if d.get('type') != 'user' or d.get('isSidechain') is True:
         continue
       content = d.get('message', {}).get('content')
-      text: str | None = None
+      text: Optional[str] = None
       if isinstance(content, str):
         text = content
       elif isinstance(content, list):
@@ -503,7 +504,7 @@ def _read_subject(projects_dir: Path) -> str | None:
   return None
 
 
-def _last_active(worktree: Path) -> float | None:
+def _last_active(worktree: Path) -> Optional[float]:
   if not worktree.is_dir():
     return None
   result = subprocess.run(
@@ -552,7 +553,7 @@ def _in_container() -> bool:
 _PROMPT_MARKERS = (' --new ', ' --prompt ', ' -p ', ' -- ')
 
 
-def _split_launch_prompt(command: str) -> tuple[str, str | None]:
+def _split_launch_prompt(command: str) -> tuple[str, Optional[str]]:
   """split a launch command into (prefix, prompt) at the prompt marker, if any.
 
   prefix keeps the marker token (e.g. 'dive-in --new ') so callers can append a
@@ -570,25 +571,25 @@ def _split_launch_prompt(command: str) -> tuple[str, str | None]:
   return command, None
 
 
-def _session_facts() -> dict[str, str | bool | None]:
+def _session_facts() -> dict[str, Optional[str | bool]]:
   """collect session facts from env + /.dockerenv for `cw banner`.
 
   read-only; never raises. callers decide whether to render visually or for an
   LLM tool result. Fields:
     - in_container (bool) — /.dockerenv presence
-    - name (str | None) — workspace name (CW_NAME)
-    - bro (str | None) — bro persona (CW_BRO), only set under `cw ss --bro`
-    - host_workspace (str | None) — host-side path to the workspace dir
-    - container_workspace (str | None) — '/workspace' inside a container, else None
-    - exec_command (str | None) — `cw exec <name>` for container sessions
-    - cw_command (str | None) — the canonical `cw ss …` invocation (CW_COMMAND)
-    - shell_command (str | None) — the outer launch command (PPP_SHELL_COMMAND).
+    - name (Optional[str]) — workspace name (CW_NAME)
+    - bro (Optional[str]) — bro persona (CW_BRO), only set under `cw ss --bro`
+    - host_workspace (Optional[str]) — host-side path to the workspace dir
+    - container_workspace (Optional[str]) — '/workspace' inside a container, else None
+    - exec_command (Optional[str]) — `cw exec <name>` for container sessions
+    - cw_command (Optional[str]) — the canonical `cw ss …` invocation (CW_COMMAND)
+    - shell_command (Optional[str]) — the outer launch command (PPP_SHELL_COMMAND).
       For wrappers like dive-in, this differs from cw_command; for direct `cw ss`
       use, the two are equal and the banner suppresses the duplicate
-    - prompt (str | None) — the user-typed prompt extracted from shell_command
+    - prompt (Optional[str]) — the user-typed prompt extracted from shell_command
       when a `--new`/`-p`/`--prompt`/`--` marker is found; shell_command is
       shown with the prompt portion replaced by a placeholder in this case
-    - sync_warning (str | None) — set when the session-log sync health file
+    - sync_warning (Optional[str]) — set when the session-log sync health file
       reports a failure, so the banner can warn that logs aren't reaching S3
   """
   in_container = _in_container()
@@ -596,8 +597,8 @@ def _session_facts() -> dict[str, str | bool | None]:
   bro = os.environ.get('CW_BRO') or None
   cw_command = os.environ.get('CW_COMMAND') or None
   shell_command = os.environ.get('PPP_SHELL_COMMAND') or cw_command
-  host_workspace: str | None = os.environ.get('CW_HOST_WORKSPACE') or None
-  container_workspace: str | None = '/workspace' if in_container else None
+  host_workspace: Optional[str] = os.environ.get('CW_HOST_WORKSPACE') or None
+  container_workspace: Optional[str] = '/workspace' if in_container else None
 
   if not in_container and host_workspace is None and name is not None:
     # host worktree case — derive path from the project root + worktree name
@@ -612,11 +613,11 @@ def _session_facts() -> dict[str, str | bool | None]:
 
   exec_command = f'cw exec {name}' if in_container and name is not None else None
 
-  prompt: str | None = None
+  prompt: Optional[str] = None
   if shell_command is not None:
     shell_command, prompt = _split_launch_prompt(shell_command)
 
-  sync_warning: str | None = None
+  sync_warning: Optional[str] = None
   if session_log_health.is_failing():
     sync_warning = 'session-log sync FAILING — run setup/bootstrap_session_log.sh'
 
@@ -634,7 +635,7 @@ def _session_facts() -> dict[str, str | bool | None]:
   }
 
 
-def _render_banner_visual(facts: dict[str, str | bool | None]) -> str:
+def _render_banner_visual(facts: dict[str, Optional[str | bool]]) -> str:
   """render the banner with ANSI colour + the Bro logo for bro sessions."""
   red = '\033[31m'
   bold = '\033[1m'
@@ -712,7 +713,7 @@ def _render_banner_visual(facts: dict[str, str | bool | None]) -> str:
   return '\n'.join(lines)
 
 
-def _render_banner_llm(facts: dict[str, str | bool | None]) -> str:
+def _render_banner_llm(facts: dict[str, Optional[str | bool]]) -> str:
   """render the banner as plain key:value lines for an LLM Bash tool result.
 
   cw_command is suppressed when it equals launch_command (no wrapper involved).
@@ -762,7 +763,7 @@ def _parse_ref(ref: str) -> tuple[str, bool]:
   return ref, False
 
 
-def _find_container_id(name: str, proj: Path) -> str | None:
+def _find_container_id(name: str, proj: Path) -> Optional[str]:
   """find the running container backing the named container workspace.
 
   filters `docker ps` by the workspace's host mount path, which is unique per
@@ -818,7 +819,7 @@ def exec_in_workspace(name: str, cmd: list[str]) -> int:
   return subprocess.run(['docker', 'exec', '-it', '-u', 'cw', container_id, *docker_cmd]).returncode
 
 
-def _resolve_workspace(ref: str, proj: Path) -> tuple[Path, Path | None]:
+def _resolve_workspace(ref: str, proj: Path) -> tuple[Path, Optional[Path]]:
   name, is_container = _parse_ref(ref)
   if is_container:
     path = _containers_dir(proj) / name
@@ -831,7 +832,7 @@ def _resolve_workspace(ref: str, proj: Path) -> tuple[Path, Path | None]:
   return path, None
 
 
-def _list_entry_local(p: Path, proj: Path) -> tuple[str, bool, str, str | None, float | None]:
+def _list_entry_local(p: Path, proj: Path) -> tuple[str, bool, str, Optional[str], Optional[float]]:
   kind = 'L' if _is_local_active(p.name) else 'X'
   pdir = _projects_dir_for_local(p.name, proj)
   return (kind, False, p.name, _read_subject(pdir), _last_active(p))
@@ -839,7 +840,7 @@ def _list_entry_local(p: Path, proj: Path) -> tuple[str, bool, str, str | None, 
 
 def _list_entry_container(
   p: Path, mounts: set[str]
-) -> tuple[str, bool, str, str | None, float | None]:
+) -> tuple[str, bool, str, Optional[str], Optional[float]]:
   kind = 'C' if str(p) in mounts else 'X'
   pdir = _projects_dir_for_container(p.name)
   return (kind, True, p.name, _read_subject(pdir), _last_active(p))
@@ -880,7 +881,7 @@ def list_workspaces() -> int:
 
 
 def _worktree_is_clean(
-  path: Path, container_proj: Path | None = None, refresh_origin: bool = True
+  path: Path, container_proj: Optional[Path] = None, refresh_origin: bool = True
 ) -> tuple[bool, list[str]]:
   """check whether a worktree is safe to remove.
 
@@ -1022,7 +1023,7 @@ def _worktree_is_clean(
   return len(reasons) == 0, reasons
 
 
-def _cleanup_image() -> str | None:
+def _cleanup_image() -> Optional[str]:
   """a locally-present ppp-cw image usable to delete root-owned container files.
 
   prefers the current image tag, then any other locally-present ppp-cw image.
@@ -1043,7 +1044,7 @@ def _cleanup_image() -> str | None:
   return None
 
 
-def _remove_container_dir(path: Path, image: str | None) -> None:
+def _remove_container_dir(path: Path, image: Optional[str]) -> None:
   """remove a container workspace dir, including files the host user can't unlink.
 
   container processes can leave files owned by uids that don't match the host
@@ -1091,7 +1092,7 @@ def _remove_container_dir(path: Path, image: str | None) -> None:
 
 
 def clean_workspaces(
-  force: bool = False, dry_run: bool = False, refs: list[str] | None = None
+  force: bool = False, dry_run: bool = False, refs: Optional[list[str]] = None
 ) -> int:
   proj = _project_root()
   worktrees_dir = _worktrees_dir(proj)
@@ -1313,15 +1314,15 @@ def start_session(
   drop: bool,
   auto: bool,
   fast: bool,
-  grant: list[str] | None,
-  revoke: list[str] | None,
-  effort: str | None,
+  grant: Optional[list[str]],
+  revoke: Optional[list[str]],
+  effort: Optional[str],
   rc: bool,
   resume: bool,
-  into: str | None,
-  mcp: str | None,
-  bro: str | None,
-  prompt: str | None,
+  into: Optional[str],
+  mcp: Optional[str],
+  bro: Optional[str],
+  prompt: Optional[str],
   claude_args: list[str],
 ) -> int:
   rc = rc or auto
@@ -1371,7 +1372,7 @@ def start_session(
   # container reaches it via /host-repo's shared objects; the host worktree bases
   # its new branch on it. only meaningful at creation — resume reuses the existing
   # workspace, so the two are mutually exclusive (checked in main).
-  base_ref: str | None = None
+  base_ref: Optional[str] = None
   if into is not None:
     rev = subprocess.run(
       ['git', 'rev-parse', '--verify', f'{into}^{{commit}}'],
@@ -1569,7 +1570,9 @@ def _finalize_secrets(secrets: set[str], *, grant: list[str], revoke: list[str])
   return credentials.apply_grant_revoke(secrets, grant=grant, revoke=revoke)
 
 
-def _container_secrets(bro_name: str, *, mcp: str | None, bro_mode: bool) -> tuple[set[str], bool]:
+def _container_secrets(
+  bro_name: str, *, mcp: Optional[str], bro_mode: bool
+) -> tuple[set[str], bool]:
   """scoped credential set + docker-socket decision for a container session
   themed as `bro_name`. the two surfaces request different sets (hydration is
   strict, so each requests only what it actually uses):
@@ -1666,7 +1669,7 @@ def run_in_container(
   drop: bool = False,
   secrets: Collection[str] = (),
   docker_sock: bool = True,
-  extra_env: Mapping[str, str] | None = None,
+  extra_env: Optional[Mapping[str, str]] = None,
   forward_bro: bool = True,
 ) -> int:
   """run `command` inside a fresh cw-style container backed by workspace `name`.
@@ -1754,7 +1757,7 @@ def run_in_container(
   return result.returncode
 
 
-def _ensure_host_worktree(worktree: Path, branch: str, base_ref: str | None = None) -> bool:
+def _ensure_host_worktree(worktree: Path, branch: str, base_ref: Optional[str] = None) -> bool:
   # create the worktree if new (git ops run in the project root, the cwd): a
   # `worktree-<name>` branch — based on base_ref (`--into`) when given, else the
   # current HEAD — plus submodule alternates so `git submodule update` reuses the
@@ -1828,7 +1831,7 @@ def cw(
   claude_args: list[str],
   *,
   auto: bool = False,
-  base_ref: str | None = None,
+  base_ref: Optional[str] = None,
   secrets: Collection[str] = (),
   docker_sock: bool = True,
 ) -> int:
@@ -1881,7 +1884,7 @@ def cw(
   return result.returncode
 
 
-def main(argv: list[str]) -> int | None:
+def main(argv: list[str]) -> Optional[int]:
   parser = Parser(description='launch claude with worktree management')
   subparsers = parser.add_subparsers(dest='cmd', required=True)
 

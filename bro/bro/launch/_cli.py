@@ -5,7 +5,7 @@ import asyncio
 import os
 import secrets
 import sys
-from typing import Callable, Coroutine
+from typing import Callable, Coroutine, Optional
 
 import base.args
 from base import credentials
@@ -52,9 +52,9 @@ def maybe_containerize(
   inner_args: list[str],
   no_container: bool,
   no_trails: bool = False,
-  grant: list[str] | None = None,
-  revoke: list[str] | None = None,
-) -> int | None:
+  grant: Optional[list[str]] = None,
+  revoke: Optional[list[str]] = None,
+) -> Optional[int]:
   """re-exec `<cli_name> <bro_name> <inner_args...>` inside a scoped throwaway
   container and return its exit code, or return None so the caller runs in the
   calling process.
@@ -123,9 +123,9 @@ def run(
   parser_desc: str,
   arg_name: str,
   arg_help: str,
-  run_fn: Callable[[Bro, str, Observer | None], Coroutine[None, None, str]],
+  run_fn: Callable[[Bro, str, Optional[Observer]], Coroutine[None, None, str]],
   argv: list[str],
-) -> int | None:
+) -> Optional[int]:
   parser = base.args.Parser(description=parser_desc)
   parser.add_argument('bro', help='bro name')
   parser.add_argument(arg_name, help=arg_help)
@@ -167,7 +167,7 @@ def run(
   except NotImplementedError as e:
     print(f'--fast: {e}', file=sys.stderr)
     return 1
-  observer: Observer | None = None
+  observer: Optional[Observer] = None
   if args['rich']:
     from llm.observer import RichConsoleRenderer
 

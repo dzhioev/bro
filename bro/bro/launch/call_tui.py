@@ -2,7 +2,7 @@
 
 import asyncio
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Optional
 
 from rich.markup import escape as rich_escape
 from textual import work
@@ -16,7 +16,6 @@ from bro.bros.bro import Bro
 from bro.show import format_card
 from do._trace_format import compact_value, oneline, truncate
 from llm.observer import Observer
-
 
 _TRACE_VALUE_LIMIT = 200
 
@@ -184,8 +183,8 @@ class ChatApp(App):
     super().__init__()
     self._bro = bro
     self._initial = initial
-    self._last_date: date | None = None
-    self._typing: TypingIndicator | None = None
+    self._last_date: Optional[date] = None
+    self._typing: Optional[TypingIndicator] = None
     self._typing_step = 0
 
   def compose(self) -> ComposeResult:

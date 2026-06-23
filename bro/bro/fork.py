@@ -27,7 +27,7 @@ model wouldn't have used the prior model's thinking anyway.
 """
 
 import json
-from typing import Any, cast
+from typing import Any, Optional, cast
 
 import llm.llms.chat_gpt
 from bro.bros.bro import Bro
@@ -89,10 +89,10 @@ def fork(
   parent_trail: RecordedTrail,
   up_to_step_id: str,
   *,
-  llm_spec: LLMSpec | None = None,
-  system_prompt: str | None = None,
+  llm_spec: Optional[LLMSpec] = None,
+  system_prompt: Optional[str] = None,
   record: bool = True,
-  tracker: Tracker | None = None,
+  tracker: Optional[Tracker] = None,
 ) -> Bro:
   """spin up a fresh `Bro` preseeded with the parent trail's prefix up to
   `up_to_step_id`. call `.send(next_message)` on the returned bro to continue
@@ -174,7 +174,7 @@ def _server_side_eligible(
   parent_spec: dict,
   new_spec: LLMSpec,
   fork_step: Step,
-  system_prompt_override: str | None,
+  system_prompt_override: Optional[str],
 ) -> bool:
   # server-side fork hands the prefix to the provider via `previous_response_id`,
   # so it only works when (a) the provider hasn't changed (the response_id

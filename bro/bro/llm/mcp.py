@@ -1,6 +1,6 @@
 import inspect
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Optional
 
 
 def describe[F: Callable[..., Any]](fn: F, text: str) -> F:
@@ -32,7 +32,7 @@ class Tool(ABC):
   def parameters(self) -> dict[str, Any]: ...
 
   @property
-  def output_schema(self) -> dict[str, Any] | None:
+  def output_schema(self) -> Optional[dict[str, Any]]:
     return None
 
   @abstractmethod
@@ -81,8 +81,8 @@ class FunctionTool(Tool):
     self,
     fn: Callable[..., Any],
     *,
-    name: str | None = None,
-    description: str | None = None,
+    name: Optional[str] = None,
+    description: Optional[str] = None,
   ):
     from mcp.server.fastmcp.utilities.func_metadata import func_metadata
 
@@ -116,7 +116,7 @@ class FunctionTool(Tool):
     return self._parameters
 
   @property
-  def output_schema(self) -> dict[str, Any] | None:
+  def output_schema(self) -> Optional[dict[str, Any]]:
     return self._output_schema
 
   async def call(self, arguments: dict[str, Any]) -> dict[str, Any] | str:
@@ -163,7 +163,7 @@ class _NamespacedTool(Tool):
     return self._tool.parameters
 
   @property
-  def output_schema(self) -> dict[str, Any] | None:
+  def output_schema(self) -> Optional[dict[str, Any]]:
     return self._tool.output_schema
 
   async def call(self, arguments: dict[str, Any]) -> dict[str, Any] | str:
@@ -199,7 +199,7 @@ class UnknownToolError(Exception):
 class ToolRegistry:
   def __init__(self, mcp_servers: list[MCPServer]):
     self._mcp_servers: list[MCPServer] = list(mcp_servers)
-    self._tools_by_name: dict[str, Tool] | None = None
+    self._tools_by_name: Optional[dict[str, Tool]] = None
 
   async def resolve(self) -> list[Tool]:
     if self._tools_by_name is not None:

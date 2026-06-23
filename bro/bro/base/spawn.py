@@ -16,6 +16,7 @@ only the direct child.
 import os
 import signal
 import subprocess
+from typing import Optional
 
 
 def kill_group(proc: subprocess.Popen) -> None:
@@ -36,7 +37,7 @@ def run(
   *,
   input=None,
   capture_output: bool = False,
-  timeout: float | None = None,
+  timeout: Optional[float] = None,
   check: bool = False,
   **kwargs,
 ) -> subprocess.CompletedProcess:

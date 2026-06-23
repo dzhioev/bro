@@ -1,12 +1,6 @@
 import dataclasses
 from dataclasses import dataclass
-from typing import ClassVar, Literal, Self, cast, get_args
-
-import llm.llm
-from base import credentials
-from llm.mcp import MCPServer, Tool, ToolControlSignal
-from llm.observer import Observer
-from llm.tracker import Tracker
+from typing import ClassVar, Literal, Optional, Self, cast, get_args
 
 from openai import OpenAI
 from openai.types.responses import (
@@ -24,10 +18,16 @@ from openai.types.responses.response_input_image_param import ResponseInputImage
 from openai.types.responses.response_input_text_param import ResponseInputTextParam
 from openai.types.shared import ReasoningEffort
 
+import llm.llm
+from base import credentials
+from llm.mcp import MCPServer, Tool, ToolControlSignal
+from llm.observer import Observer
+from llm.tracker import Tracker
+
 ResponseInputContentPart = ResponseInputContentParam
 
-import json
 import base64
+import json
 
 ServiceTier = Literal['auto', 'default', 'flex', 'priority']
 _VALID_SERVICE_TIERS: frozenset[str] = frozenset(get_args(ServiceTier))
@@ -48,8 +48,8 @@ class LLMSpec(llm.llm.LLMSpec):
   TYPE: ClassVar[str] = 'chat_gpt'
 
   model: str = 'gpt-5'
-  reasoning_effort: ReasoningEffort | None = None
-  service_tier: ServiceTier | None = None
+  reasoning_effort: Optional[ReasoningEffort] = None
+  service_tier: Optional[ServiceTier] = None
 
   def __post_init__(self):
     if self.service_tier is not None and self.service_tier not in _VALID_SERVICE_TIERS:
@@ -71,9 +71,9 @@ class LLMSpec(llm.llm.LLMSpec):
 
   def create_llm(
     self,
-    mcp_servers: list[MCPServer] | None = None,
-    observer: Observer | None = None,
-    tracker: Tracker | None = None,
+    mcp_servers: Optional[list[MCPServer]] = None,
+    observer: Optional[Observer] = None,
+    tracker: Optional[Tracker] = None,
   ) -> llm.llm.LLM:
     return ChatGPT.create(
       model=self.model,
@@ -99,8 +99,8 @@ class LLMSpec(llm.llm.LLMSpec):
     # `str | None`.
     return cls(
       model=data['model'],
-      reasoning_effort=cast(ReasoningEffort | None, data.get('reasoning_effort')),
-      service_tier=cast(ServiceTier | None, data.get('service_tier')),
+      reasoning_effort=cast(Optional[ReasoningEffort], data.get('reasoning_effort')),
+      service_tier=cast(Optional[ServiceTier], data.get('service_tier')),
     )
 
 
@@ -217,11 +217,11 @@ class ChatGPT(llm.llm.LLM):
   @staticmethod
   def create(
     model: str = 'gpt-5',
-    mcp_servers: list[MCPServer] | None = None,
-    reasoning_effort: ReasoningEffort | None = None,
-    service_tier: str | None = None,
-    observer: Observer | None = None,
-    tracker: Tracker | None = None,
+    mcp_servers: Optional[list[MCPServer]] = None,
+    reasoning_effort: Optional[ReasoningEffort] = None,
+    service_tier: Optional[str] = None,
+    observer: Optional[Observer] = None,
+    tracker: Optional[Tracker] = None,
   ):
     config = credentials.get_json('openai')
     return ChatGPT(
@@ -238,17 +238,17 @@ class ChatGPT(llm.llm.LLM):
     self,
     api_key: str,
     model: str = 'gpt-5',
-    mcp_servers: list[MCPServer] | None = None,
-    reasoning_effort: ReasoningEffort | None = None,
-    service_tier: str | None = None,
-    observer: Observer | None = None,
-    tracker: Tracker | None = None,
+    mcp_servers: Optional[list[MCPServer]] = None,
+    reasoning_effort: Optional[ReasoningEffort] = None,
+    service_tier: Optional[str] = None,
+    observer: Optional[Observer] = None,
+    tracker: Optional[Tracker] = None,
   ):
     super().__init__(mcp_servers, observer=observer, tracker=tracker)
     self.model = model
     self.client = OpenAI(api_key=api_key)
-    self._openai_tools: list[ToolParam] | None = None
-    self._last_response_id: str | None = None
+    self._openai_tools: Optional[list[ToolParam]] = None
+    self._last_response_id: Optional[str] = None
     self._reasoning_effort = reasoning_effort
     self._service_tier = service_tier
     # round-trip counter shared across the whole trail: turn 0 holds the
@@ -263,7 +263,7 @@ class ChatGPT(llm.llm.LLM):
     # first send: prepended to the API input and a system message in the
     # incoming messages list is dropped (the prefix already carries the
     # system). cleared after one use so subsequent send()s behave normally.
-    self._input_prefix: list[ResponseInputItemParam] | None = None
+    self._input_prefix: Optional[list[ResponseInputItemParam]] = None
 
   async def _resolve_openai_tools(self) -> list[ToolParam]:
     if self._openai_tools is not None:
@@ -387,7 +387,7 @@ class ChatGPT(llm.llm.LLM):
     input_items: list[ResponseInputItemParam],
     openai_tools: list[ToolParam],
     *,
-    previous_response_id: str | None,
+    previous_response_id: Optional[str],
   ) -> dict:
     kwargs: dict = {
       'model': self.model,
@@ -400,7 +400,7 @@ class ChatGPT(llm.llm.LLM):
       kwargs['previous_response_id'] = previous_response_id
     return kwargs
 
-  def _create(self, request_kwargs: dict, request_timeout: float | None) -> Response:
+  def _create(self, request_kwargs: dict, request_timeout: Optional[float]) -> Response:
     # per-request timeout overrides the client default (the OpenAI SDK's 600s)
     # for this call; None leaves that default in place. responses.create is
     # non-streaming — no bytes return until generation finishes — so without a
@@ -410,7 +410,7 @@ class ChatGPT(llm.llm.LLM):
       return self.client.responses.create(**request_kwargs, timeout=request_timeout)
     return self.client.responses.create(**request_kwargs)
 
-  async def send(self, messages: list[dict], *, request_timeout: float | None = None) -> str:
+  async def send(self, messages: list[dict], *, request_timeout: Optional[float] = None) -> str:
     openai_tools = await self._resolve_openai_tools()
     # client-side fork: the replayed prefix passes through unconverted (it is
     # already in OpenAI input shape, mixing role-keyed messages with raw output

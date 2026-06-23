@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import ClassVar, Optional
 
 import llm.llm
 from llm.mcp import MCPServer
@@ -18,9 +18,9 @@ class LLMSpec(llm.llm.LLMSpec):
 
   def create_llm(
     self,
-    mcp_servers: list[MCPServer] | None = None,
-    observer: Observer | None = None,
-    tracker: Tracker | None = None,
+    mcp_servers: Optional[list[MCPServer]] = None,
+    observer: Optional[Observer] = None,
+    tracker: Optional[Tracker] = None,
   ) -> llm.llm.LLM:
     return Echo.create(mcp_servers=mcp_servers, observer=observer, tracker=tracker)
 
@@ -35,21 +35,21 @@ class LLMSpec(llm.llm.LLMSpec):
 class Echo(llm.llm.LLM):
   @staticmethod
   def create(
-    mcp_servers: list[MCPServer] | None = None,
-    observer: Observer | None = None,
-    tracker: Tracker | None = None,
+    mcp_servers: Optional[list[MCPServer]] = None,
+    observer: Optional[Observer] = None,
+    tracker: Optional[Tracker] = None,
   ):
     return Echo(mcp_servers=mcp_servers, observer=observer, tracker=tracker)
 
   def __init__(
     self,
-    mcp_servers: list[MCPServer] | None = None,
-    observer: Observer | None = None,
-    tracker: Tracker | None = None,
+    mcp_servers: Optional[list[MCPServer]] = None,
+    observer: Optional[Observer] = None,
+    tracker: Optional[Tracker] = None,
   ):
     super().__init__(mcp_servers, observer=observer, tracker=tracker)
 
-  async def send(self, messages: list[dict], *, request_timeout: float | None = None) -> str:
+  async def send(self, messages: list[dict], *, request_timeout: Optional[float] = None) -> str:
     if len(messages) == 0:
       return ''
     last = messages[-1]

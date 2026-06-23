@@ -2,14 +2,14 @@
 import email.message
 import json
 import urllib.error
-from typing import Any
+from typing import Any, Optional
 
 import pytest
 
 import poll_pr
 
 
-def _http_error(code: int, headers: dict[str, str] | None = None) -> urllib.error.HTTPError:
+def _http_error(code: int, headers: Optional[dict[str, str]] = None) -> urllib.error.HTTPError:
   hdrs = email.message.Message()
   for k, v in (headers or {}).items():
     hdrs[k] = v
@@ -87,10 +87,10 @@ class _FakeApi:
 
   def __init__(
     self,
-    issue_comments: list[dict[str, Any]] | None = None,
-    reviews: list[dict[str, Any]] | None = None,
-    review_inline: dict[int, list[dict[str, Any]]] | None = None,
-    all_inline: list[dict[str, Any]] | None = None,
+    issue_comments: Optional[list[dict[str, Any]]] = None,
+    reviews: Optional[list[dict[str, Any]]] = None,
+    review_inline: Optional[dict[int, list[dict[str, Any]]]] = None,
+    all_inline: Optional[list[dict[str, Any]]] = None,
   ):
     self.issue_comments = issue_comments or []
     self.reviews = reviews or []

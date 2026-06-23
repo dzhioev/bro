@@ -3,7 +3,7 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import pytest
 
@@ -22,7 +22,7 @@ def _read_jsonl(path: Path) -> list[dict]:
   return [json.loads(line) for line in path.read_text().splitlines() if len(line) > 0]
 
 
-def _req_payload(req: tuple[str, str, bytes | None, dict[str, str]]) -> dict:
+def _req_payload(req: tuple[str, str, Optional[bytes], dict[str, str]]) -> dict:
   body = req[2]
   assert body is not None
   return json.loads(body)
@@ -276,14 +276,14 @@ class _FakeConn:
 
   def __init__(self) -> None:
     self.queued: list[Any] = []
-    self.requests: list[tuple[str, str, bytes | None, dict[str, str]]] = []
+    self.requests: list[tuple[str, str, Optional[bytes], dict[str, str]]] = []
     self.closes = 0
-    self._pending: tuple[int, bytes] | None = None
+    self._pending: Optional[tuple[int, bytes]] = None
 
   def queue(self, item: Any) -> None:
     self.queued.append(item)
 
-  def request(self, method: str, path: str, body: bytes | None = None, headers=None) -> None:
+  def request(self, method: str, path: str, body: Optional[bytes] = None, headers=None) -> None:
     self.requests.append((method, path, body, dict(headers) if headers is not None else {}))
     if len(self.queued) == 0:
       raise AssertionError(f'unexpected request: {method} {path}')

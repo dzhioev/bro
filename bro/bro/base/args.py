@@ -9,11 +9,11 @@ installed.
 """
 
 import argparse
+import logging
 import os
 import sys
 from collections.abc import Iterable, Sequence
-from typing import Callable, TYPE_CHECKING, Type, TypeVar, overload
-import logging
+from typing import TYPE_CHECKING, Callable, Optional, Type, TypeVar, overload
 
 from base import log
 
@@ -76,7 +76,7 @@ _N = TypeVar('_N')
 _HANDLER_DEST = '_handler'
 
 
-def _default_env_name(option_strings: Sequence[str]) -> str | None:
+def _default_env_name(option_strings: Sequence[str]) -> Optional[str]:
   long_opts = [o for o in option_strings if o.startswith('--')]
   if len(long_opts) == 0:
     return None
@@ -124,7 +124,7 @@ class Parser(argparse.ArgumentParser):
   def __init__(self, *args, **kwargs):
     self._exclusive_groups: list[list[list[str]]] = []
     self._env_info: dict[str, dict] = {}
-    self._last_argv: list[str] | None = None
+    self._last_argv: Optional[list[str]] = None
     kwargs.setdefault('formatter_class', _Formatter)
     super().__init__(*args, **kwargs)
     self._global_group = self.add_argument_group('global options')
@@ -197,7 +197,7 @@ class Parser(argparse.ArgumentParser):
   def format_help(self) -> str:
     argv = self._last_argv if self._last_argv is not None else []
     show_env = '--allow-env' in argv
-    originals: dict[str, str | None] = {}
+    originals: dict[str, Optional[str]] = {}
     if show_env:
       for dest, info in self._env_info.items():
         if not info['supported']:
@@ -325,7 +325,7 @@ class Parser(argparse.ArgumentParser):
   @overload
   def parse_args(self, args: Iterable[str], namespace: _N) -> _N: ...
   def parse_args(  # type: ignore[override]
-    self, args: Iterable[str], namespace: _N | None = None
+    self, args: Iterable[str], namespace: Optional[_N] = None
   ) -> _N | argparse.Namespace:
     if ic is not None:
       ic.disable()

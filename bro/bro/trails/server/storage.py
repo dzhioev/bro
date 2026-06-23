@@ -18,7 +18,7 @@ import asyncio
 import decimal
 import json
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Optional
 
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 from ulid import ULID
@@ -111,7 +111,7 @@ def _normalise_decimal(value: Any) -> Any:
   return value
 
 
-def _from_ddb_item(item: dict | None) -> dict | None:
+def _from_ddb_item(item: Optional[dict]) -> Optional[dict]:
   if item is None:
     return None
   return {k: _from_ddb(v) for k, v in item.items()}
@@ -148,7 +148,7 @@ class Storage:
     bro_version: int,
     llm_spec: dict,
     system_prompt: str,
-    parent: dict | None,
+    parent: Optional[dict],
     interactive: bool,
     entry_point: str,
   ) -> dict:
@@ -211,7 +211,7 @@ class Storage:
     kind: str,
     body: Any,
     extras: dict,
-    step_id: str | None = None,
+    step_id: Optional[str] = None,
   ) -> dict:
     size_bytes = _body_size_bytes(body)
     if size_bytes > MAX_BODY_BYTES:
@@ -223,7 +223,7 @@ class Storage:
     step_id = step_id if step_id is not None else _new_id()
     ts = _now_iso()
 
-    spilled_key: str | None = None
+    spilled_key: Optional[str] = None
     if size_bytes >= SPILLOVER_THRESHOLD_BYTES:
       spilled_key = _spillover_key(trail_id, step_id)
       payload = body if isinstance(body, (bytes, str)) else json.dumps(body, ensure_ascii=False)
@@ -317,8 +317,8 @@ class Storage:
     *,
     trail_id: str,
     reason: str,
-    continuation: dict | None,
-    step_id: str | None = None,
+    continuation: Optional[dict],
+    step_id: Optional[str] = None,
   ) -> dict:
     step_id = step_id if step_id is not None else _new_id()
     ts = _now_iso()
@@ -378,7 +378,7 @@ class Storage:
       raise
     return {'ended_at': ts}
 
-  async def get_trail(self, trail_id: str) -> dict | None:
+  async def get_trail(self, trail_id: str) -> Optional[dict]:
     response = await asyncio.to_thread(
       self._dynamo.get_item,
       TableName=self._trails_table,
@@ -390,7 +390,7 @@ class Storage:
     self,
     trail_id: str,
     *,
-    after: str | None,
+    after: Optional[str],
     limit: int,
   ) -> dict:
     kwargs: dict = {
@@ -414,11 +414,11 @@ class Storage:
   async def list_trails(
     self,
     *,
-    bro: str | None,
-    parent: str | None,
-    since: str | None,
-    until: str | None,
-    cursor: str | None,
+    bro: Optional[str],
+    parent: Optional[str],
+    since: Optional[str],
+    until: Optional[str],
+    cursor: Optional[str],
     limit: int,
   ) -> dict:
     if bro is not None:
@@ -511,10 +511,10 @@ def _range_query(
   pk_name: str,
   pk_value: str,
   sk_name: str,
-  sk_low: str | None,
-  sk_high: str | None,
+  sk_low: Optional[str],
+  sk_high: Optional[str],
   limit: int,
-  cursor: str | None,
+  cursor: Optional[str],
 ) -> dict:
   values: dict = {':pk': _ddb(pk_value)}
   if sk_low is not None and sk_high is not None:

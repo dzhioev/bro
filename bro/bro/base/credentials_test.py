@@ -2,6 +2,7 @@ import json
 import threading
 import time
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
@@ -122,7 +123,7 @@ class TestStore:
     calls: list[int] = []
 
     class _CountingSource:
-      def fetch(self) -> str | None:
+      def fetch(self) -> Optional[str]:
         calls.append(1)  # list.append is atomic under the GIL
         time.sleep(0.02)
         return 'v'
@@ -283,7 +284,7 @@ class TestBuildScopedStore:
     # a scoped local `{name}.cred`, so the container reads a plain local file with
     # no idea the host source was remote.
     class _StubSource:
-      def fetch(self) -> str | None:
+      def fetch(self) -> Optional[str]:
         return 'sekret'
 
       def describe(self) -> str:

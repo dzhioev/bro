@@ -37,6 +37,7 @@ import re
 import sys
 import sysconfig
 from pathlib import Path
+from typing import Optional
 
 from base.args import Parser
 
@@ -70,7 +71,7 @@ def _attr(module: str) -> str:
   return module.replace('.', '_')
 
 
-def _parse_module(path: Path) -> ast.Module | None:
+def _parse_module(path: Path) -> Optional[ast.Module]:
   try:
     return ast.parse(path.read_text(), filename=str(path))
   except SyntaxError:
@@ -81,7 +82,7 @@ def _has_sync_main(tree: ast.Module) -> bool:
   return any(isinstance(node, ast.FunctionDef) and node.name == 'main' for node in tree.body)
 
 
-def _cli_name(tree: ast.Module, mod_name: str) -> str | None:
+def _cli_name(tree: ast.Module, mod_name: str) -> Optional[str]:
   for node in tree.body:
     if not isinstance(node, ast.Assign):
       continue
@@ -141,7 +142,7 @@ def _group_entries(
   by_target: dict[str, list[str]] = {}
   for name, target in scripts.items():
     by_target.setdefault(target, []).append(name)
-  groups: dict[str | None, list[tuple[str, str]]] = {}
+  groups: dict[Optional[str], list[tuple[str, str]]] = {}
   for target, names in by_target.items():
     module = name_module[names[0]]  # canonical + alias for a target share the module
     top = module.split('.', 1)[0] if '.' in module else None
@@ -237,7 +238,7 @@ def write_entrypoints() -> None:
   logging.info('wrote %s (%d entrypoints)', target, len(entries))
 
 
-def main(argv: list[str]) -> int | None:
+def main(argv: list[str]) -> Optional[int]:
   parser = Parser(
     description='regenerate the console-script tables and/or the venv entrypoints bridge'
   )
