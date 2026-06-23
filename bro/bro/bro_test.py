@@ -1,7 +1,7 @@
 import json
 import sys
 import types
-from typing import Optional
+from typing import ClassVar, Optional
 
 import pytest
 
@@ -459,7 +459,7 @@ class TestBroDataSources:
     class SourceBro(BaseBro):
       name = 'with-source'
       description = 'has a data source'
-      data_sources = [_StubSource()]
+      data_sources: ClassVar = [_StubSource()]
 
       def __init__(self):
         super().__init__(system_prompt='hi')
@@ -478,7 +478,7 @@ class TestBroDataSources:
     class SourceBro(BaseBro):
       name = 'summary-bro'
       description = 'd'
-      data_sources = [_StubSource()]
+      data_sources: ClassVar = [_StubSource()]
 
       def __init__(self):
         super().__init__(system_prompt='base')
@@ -496,7 +496,7 @@ class TestToolNamesBlock:
     class ToolBro(BaseBro):
       name = 'tooled'
       description = 'd'
-      mcp_servers = [_make_server('a')]
+      mcp_servers: ClassVar = [_make_server('a')]
 
       def __init__(self):
         super().__init__(system_prompt='base')
@@ -554,7 +554,7 @@ class TestBroMcpServers:
     class InstanceBro(BaseBro):
       name = 'instance'
       description = 'd'
-      mcp_servers = [server]
+      mcp_servers: ClassVar = [server]
 
       def __init__(self):
         super().__init__(system_prompt='')
@@ -576,7 +576,7 @@ class TestBroMcpServers:
     class CountBro(BaseBro):
       name = 'count'
       description = 'd'
-      mcp_servers = [factory]
+      mcp_servers: ClassVar = [factory]
 
       def __init__(self):
         super().__init__(system_prompt='')
@@ -610,8 +610,8 @@ class TestNeededSecrets:
     class ManifestBro(BaseBro):
       name = 'manifest'
       description = 'd'
-      mcp_servers = [_SecretServer()]
-      data_sources = [_SecretSource()]
+      mcp_servers: ClassVar = [_SecretServer()]
+      data_sources: ClassVar = [_SecretSource()]
       extra_secrets = ('delta',)
 
       def __init__(self):

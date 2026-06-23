@@ -5,7 +5,8 @@ import asyncio
 import os
 import secrets
 import sys
-from typing import Callable, Coroutine, Optional
+from collections.abc import Callable, Coroutine
+from typing import Optional
 
 import base.args
 from base import credentials

@@ -5,11 +5,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from git_golc import (  # noqa: E402
+  _SENTINEL_RE,
   _format_credits,
   _model_initial,
   _parse_footer,
   _parse_legacy,
-  _SENTINEL_RE,
   round_credits,
 )
 

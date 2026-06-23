@@ -1,8 +1,10 @@
 #!/usr/bin/env python
+import re
 import sys
 
 import pytest
-from base.args import ArgumentTypeError, Parser, REMAINDER, moment_parser, list_parser
+
+from base.args import REMAINDER, ArgumentTypeError, Parser, list_parser, moment_parser
 
 
 class TestExclusiveGroups:
@@ -136,18 +138,15 @@ class TestListParser:
     assert result == ['foo', 'bar', 'baz']
 
 
-import re
-
-
 def _parse_env_table(out: str) -> list[dict[str, str]]:
-  lines = [l for l in out.splitlines() if l.strip() != '']
+  lines = [line for line in out.splitlines() if line.strip() != '']
   assert len(lines) > 0, 'expected at least a header row'
   header = re.split(r'\s{2,}', lines[0].strip())
   rows = []
   for line in lines[1:]:
     cells = re.split(r'\s{2,}', line.strip())
     assert len(cells) == len(header), f'row/header width mismatch: {cells!r} vs {header!r}'
-    rows.append(dict(zip(header, cells)))
+    rows.append(dict(zip(header, cells, strict=True)))
   return rows
 
 
@@ -284,6 +283,7 @@ class TestEnvBooleans:
 
   def test_verbose_env_triggered(self, monkeypatch):
     import logging as _logging
+
     from base import log
 
     monkeypatch.setenv('VERBOSE', '1')

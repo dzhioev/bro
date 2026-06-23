@@ -7,7 +7,6 @@ import os
 import signal
 import socket
 import threading
-import time
 from pathlib import Path
 from typing import Optional
 
@@ -157,7 +156,7 @@ def _build_item(path: Path, workspace: str, s3_key: str) -> dict:
     's3_key': s3_key,
     'size_bytes': int(stat.st_size),
     'line_count': meta['line_count'],
-    'synced_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    'synced_at': datetime.datetime.now(datetime.UTC).isoformat(),
     'is_container': os.path.isfile('/.dockerenv'),
   }
 

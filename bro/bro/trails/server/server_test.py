@@ -54,7 +54,7 @@ class FakeStorage:
         'tokens_in': 0,
         'tokens_out': 0,
         'tokens_reasoning': 0,
-        'step_counts_by_kind': {k: 0 for k in storage.STEP_KINDS} | {'system_prompt': 1},
+        'step_counts_by_kind': dict.fromkeys(storage.STEP_KINDS, 0) | {'system_prompt': 1},
       },
     }
     self.steps[trail_id] = [

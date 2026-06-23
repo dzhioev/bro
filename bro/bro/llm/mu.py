@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
 from json import JSONEncoder
-from typing import Any, Optional, Type, TypeVar
+from typing import Any, Optional
 
 from icecream import ic
 from openai.types.responses import ResponseInputParam
@@ -83,7 +83,7 @@ class DateTimeEncoder(json.JSONEncoder):
 @dataclass
 class Json(Content):
   json: dict[str, Any]
-  encoder: Optional[Type[JSONEncoder]] = None
+  encoder: Optional[type[JSONEncoder]] = None
 
   def dump(self) -> ResponseInputContentPart:
     return text_to_content(json.dumps(self.json, indent=4, cls=self.encoder))
@@ -107,10 +107,9 @@ def create_input(prompt: str, *args: Content) -> ResponseInputParam:
   return result
 
 
-T = TypeVar('T', bound=BaseModel)
-
-
-def mu(prompt: str, result: Type[T], *args: Content, reasoning_effort: ReasoningEffort = None) -> T:
+def mu[T: BaseModel](
+  prompt: str, result: type[T], *args: Content, reasoning_effort: ReasoningEffort = None
+) -> T:
   client = ChatGPT.create().client
   response = client.responses.parse(
     model='gpt-5.1-2025-11-13',

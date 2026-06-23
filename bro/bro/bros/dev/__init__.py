@@ -1,3 +1,5 @@
+from typing import ClassVar
+
 from bro.bros.bro import Bro
 from bro.bros.dev.mcp import MCPServer
 
@@ -57,5 +59,5 @@ Caution:
 class Dev(Bro):
   name = 'dev'
   description = 'generic software developer with file + shell + search tools'
-  mcp_servers = [MCPServer()]
+  mcp_servers: ClassVar = [MCPServer()]
   system_prompt = SYSTEM_PROMPT

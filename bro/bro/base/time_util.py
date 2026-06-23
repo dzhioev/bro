@@ -8,7 +8,7 @@ import dateutil.parser
 from base import log
 from base.args import Parser
 
-UTC = dt.timezone.utc
+UTC = dt.UTC
 timezone = ZoneInfo
 
 LOCAL_TZ_NAME = 'Europe/Nicosia'

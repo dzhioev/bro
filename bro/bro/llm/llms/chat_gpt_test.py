@@ -487,7 +487,8 @@ class TestLLMSpec:
 
   def test_frozen_rejects_mutation(self):
     spec = LLMSpec()
-    with pytest.raises(Exception):  # FrozenInstanceError is a subclass of AttributeError
+    # frozen dataclass raises FrozenInstanceError, a subclass of AttributeError
+    with pytest.raises(AttributeError):
       spec.service_tier = 'priority'  # type: ignore[misc]
 
   def test_dump_round_trips_through_base_from_dict(self):

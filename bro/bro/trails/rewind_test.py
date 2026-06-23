@@ -1,8 +1,5 @@
 import asyncio
-import json
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from trails import cli
 from trails.cli import (
@@ -13,7 +10,6 @@ from trails.cli import (
   _render_tree,
   _truncate_oneline,
 )
-
 
 NO_COLOR = _Colors(enabled=False)
 

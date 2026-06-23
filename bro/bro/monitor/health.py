@@ -24,7 +24,7 @@ def write(status: str, error: Optional[str] = None) -> None:
   reporting must not be able to break the sync it reports on."""
   payload = {
     'status': status,
-    'checked_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    'checked_at': datetime.datetime.now(datetime.UTC).isoformat(),
     'error': error[:_MAX_ERROR] if error is not None else None,
   }
   try:

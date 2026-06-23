@@ -22,7 +22,7 @@ import time
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, Optional, TextIO
 from urllib.parse import urlparse
@@ -176,7 +176,7 @@ class NullTracker(Tracker):
 
 
 def _now_iso() -> str:
-  return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+  return datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
 
 
 def _new_id() -> str:

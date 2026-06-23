@@ -17,7 +17,7 @@ trail creation so per-step `SET` updates always hit existing fields.
 import asyncio
 import decimal
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Optional
 
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
@@ -64,7 +64,7 @@ _deserializer = TypeDeserializer()
 
 
 def _now_iso() -> str:
-  return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+  return datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
 
 
 def _new_id() -> str:
@@ -130,7 +130,7 @@ def _spillover_key(trail_id: str, step_id: str) -> str:
 
 
 def _empty_step_counts() -> dict:
-  return {kind: 0 for kind in STEP_KINDS}
+  return dict.fromkeys(STEP_KINDS, 0)
 
 
 class Storage:

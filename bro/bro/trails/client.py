@@ -151,9 +151,7 @@ class TrailsClient:
     after: Optional[str] = None
     while True:
       page = self.get_steps(trail_id, after=after, limit=page_size)
-      steps = page['steps']
-      for step in steps:
-        yield step
+      yield from page['steps']
       after = page.get('next')
       if after is None:
         return

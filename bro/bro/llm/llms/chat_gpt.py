@@ -1,4 +1,6 @@
+import base64
 import dataclasses
+import json
 from dataclasses import dataclass
 from typing import ClassVar, Literal, Optional, Self, cast, get_args
 
@@ -25,9 +27,6 @@ from llm.observer import Observer
 from llm.tracker import Tracker
 
 ResponseInputContentPart = ResponseInputContentParam
-
-import base64
-import json
 
 ServiceTier = Literal['auto', 'default', 'flex', 'priority']
 _VALID_SERVICE_TIERS: frozenset[str] = frozenset(get_args(ServiceTier))

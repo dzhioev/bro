@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import ClassVar, Optional
 
 import pytest
 
@@ -33,8 +33,8 @@ def _create_ping_server() -> MCPServer:
 class _ShimBro(BaseBro):
   name = 'shim-test'
   description = 'composes a ping server and a data source'
-  data_sources = [_NoopSource()]
-  mcp_servers = [_create_ping_server]
+  data_sources: ClassVar = [_NoopSource()]
+  mcp_servers: ClassVar = [_create_ping_server]
 
   def __init__(self):
     super().__init__(system_prompt='test')
@@ -43,7 +43,7 @@ class _ShimBro(BaseBro):
 class _CollidingBro(BaseBro):
   name = 'colliding'
   description = 'two servers that both expose ping'
-  mcp_servers = [_create_ping_server, _create_ping_server]
+  mcp_servers: ClassVar = [_create_ping_server, _create_ping_server]
 
   def __init__(self):
     super().__init__(system_prompt='test')
@@ -63,7 +63,7 @@ class _SecondSource(SearchableDataSource):
 class _TwoSourceBro(BaseBro):
   name = 'two-source'
   description = 'two searchable sources that both expose search/fetch'
-  data_sources = [_NoopSource(), _SecondSource()]
+  data_sources: ClassVar = [_NoopSource(), _SecondSource()]
 
   def __init__(self):
     super().__init__(system_prompt='test')

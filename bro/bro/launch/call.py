@@ -1,7 +1,8 @@
 import asyncio
 import sys
+from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Callable, Optional, TextIO
+from typing import Any, Optional, TextIO
 
 import base.args
 from bro.bro import BroRaised

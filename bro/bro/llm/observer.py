@@ -1,8 +1,9 @@
 import json
 import sys
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Callable, Optional, TextIO
+from typing import Any, Optional, TextIO
 
 
 class Observer(ABC):

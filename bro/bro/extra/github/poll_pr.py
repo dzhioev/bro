@@ -6,8 +6,9 @@ import logging
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from email.utils import parsedate_to_datetime
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 from base.args import ArgumentTypeError, Parser
 

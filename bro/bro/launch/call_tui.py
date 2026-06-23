@@ -2,7 +2,7 @@
 
 import asyncio
 from datetime import date, datetime
-from typing import Any, Optional
+from typing import Any, ClassVar, Optional
 
 from rich.markup import escape as rich_escape
 from textual import work
@@ -174,7 +174,7 @@ class ChatApp(App):
   }
   """
 
-  BINDINGS = [
+  BINDINGS: ClassVar = [
     Binding('ctrl+d', 'quit', show=False, priority=True),
     Binding('grave_accent', 'show_stats', show=False, priority=True),
   ]

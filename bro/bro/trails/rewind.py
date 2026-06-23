@@ -19,7 +19,8 @@ import os
 import shutil
 import subprocess
 import sys
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any, Optional
 
 import base.args
 from base import log

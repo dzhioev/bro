@@ -1,8 +1,9 @@
 import os
 import sys
 from abc import ABC
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Optional, Self
+from typing import ClassVar, Optional, Self
 
 import llm.llms.chat_gpt
 import llm.mcp
@@ -266,8 +267,8 @@ class BaseBro(ABC):
   name: str
   description: str
   llm_spec: LLMSpec = DEFAULT_LLM_SPEC
-  data_sources: list[DataSource] = []
-  mcp_servers: list[McpServerEntry] = []
+  data_sources: ClassVar[list[DataSource]] = []
+  mcp_servers: ClassVar[list[McpServerEntry]] = []
   # credentials no component expresses — the escape hatch for a bro's environment
   # needs (ppp-dev → `github`; devoops → `aws`). MRO-walked and unioned like
   # `mcp_servers`, so a subclass declares only what it adds. folded into

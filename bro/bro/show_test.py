@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import ClassVar, Optional
 
 import pytest
 
@@ -57,8 +57,8 @@ class _FullBro(BaseBro):
   name = 'full'
   description = 'has a data source and two MCP servers'
   llm_spec = llm.llms.chat_gpt.LLMSpec(reasoning_effort='medium')
-  data_sources = [_StubSource()]
-  mcp_servers = [ServerAB(), ServerXZ()]
+  data_sources: ClassVar = [_StubSource()]
+  mcp_servers: ClassVar = [ServerAB(), ServerXZ()]
 
   def __init__(self):
     super().__init__(system_prompt='YOU ARE FULL')
@@ -225,7 +225,7 @@ class TestFormatCard:
     class _LongBro(BaseBro):
       name = 'long'
       description = 'd'
-      mcp_servers = [LongServer()]
+      mcp_servers: ClassVar = [LongServer()]
 
       def __init__(self):
         super().__init__(system_prompt='')

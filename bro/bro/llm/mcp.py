@@ -1,6 +1,7 @@
 import inspect
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Iterable, Optional
+from collections.abc import Callable, Iterable
+from typing import Any, Optional
 
 
 def describe[F: Callable[..., Any]](fn: F, text: str) -> F:

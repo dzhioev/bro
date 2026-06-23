@@ -12,8 +12,8 @@ import argparse
 import logging
 import os
 import sys
-from collections.abc import Iterable, Sequence
-from typing import TYPE_CHECKING, Callable, Optional, Type, TypeVar, overload
+from collections.abc import Callable, Iterable, Sequence
+from typing import TYPE_CHECKING, Optional, TypeVar, overload
 
 from base import log
 
@@ -45,7 +45,7 @@ def list_parser(arg: str) -> list[str]:
   return [item.strip() for item in arg.split(',')]
 
 
-def trigger(fn: Callable) -> Type[argparse.Action]:
+def trigger(fn: Callable) -> type[argparse.Action]:
   class TriggerAction(argparse.Action):
     def __init__(self, option_strings, dest, **kwargs):
       kwargs.setdefault('nargs', 0)
@@ -97,7 +97,7 @@ def _is_nargs_zero(action: argparse.Action) -> bool:
 
 
 class _Formatter(argparse.HelpFormatter):
-  _global_ids: set[int] = set()
+  _global_ids: frozenset[int] = frozenset()
 
   def _format_usage(self, usage, actions, groups, prefix):  # type: ignore[override]
     global_ids = self._global_ids
@@ -191,7 +191,7 @@ class Parser(argparse.ArgumentParser):
     formatter = super()._get_formatter()
     group = getattr(self, '_global_group', None)
     if isinstance(formatter, _Formatter) and group is not None:
-      formatter._global_ids = {id(a) for a in group._group_actions}
+      formatter._global_ids = frozenset(id(a) for a in group._group_actions)
     return formatter
 
   def format_help(self) -> str:

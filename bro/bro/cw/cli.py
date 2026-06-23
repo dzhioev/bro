@@ -870,7 +870,7 @@ def list_workspaces() -> int:
   name_w = max(len(d) for d in displays)
   ages = [_format_age(mtime) if mtime is not None else '' for _, _, _, _, mtime in entries]
   age_w = max(len(a) for a in ages) if len(ages) > 0 else 0
-  for (kind, _, _, subject, _), display, age in zip(entries, displays, ages):
+  for (kind, _, _, subject, _), display, age in zip(entries, displays, ages, strict=True):
     badge = _BADGES[kind]
     age_col = f'  {age:<{age_w}}' if len(age) > 0 else ' ' * (age_w + 2)
     if subject is None:
