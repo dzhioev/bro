@@ -53,7 +53,7 @@ class LLMSpec(ABC):
     """return a copy of self with the provider's 'fast' knob set.
 
     raises NotImplementedError when the provider has no fast-mode equivalent —
-    callers should treat that as 'this LLM type does not support --fast'.
+    callers should treat that as 'this LLM type does not support fast mode'.
     """
     raise NotImplementedError(f'{type(self).__name__} does not support fast mode')
 

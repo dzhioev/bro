@@ -112,17 +112,30 @@ def test_main_re_execs_into_container_when_outside():
     assert kwargs['docker_sock'] is False
 
 
-def test_main_forwards_fast_into_container():
+def test_main_default_forwards_no_slow_into_container():
   with (
     patch.dict('os.environ', {}, clear=False) as env,
     patch('cw.run_in_container', return_value=0) as run,
   ):
     env.pop('CW_IN_CONTAINER', None)
-    rc = main(['ask', 'ppp-dev', 'hello', '--fast'])
+    rc = main(['ask', 'ppp-dev', 'hello'])
     assert rc == 0
     (_workspace, command), _kwargs = run.call_args
-    # --fast is forwarded like --rich; the in-container run applies llm_spec.fast()
-    assert command == ['ask', 'ppp-dev', 'hello', '--fast']
+    # fast is the default, so nothing extra is forwarded; the in-container run applies fast()
+    assert command == ['ask', 'ppp-dev', 'hello']
+
+
+def test_main_forwards_slow_into_container():
+  with (
+    patch.dict('os.environ', {}, clear=False) as env,
+    patch('cw.run_in_container', return_value=0) as run,
+  ):
+    env.pop('CW_IN_CONTAINER', None)
+    rc = main(['ask', 'ppp-dev', 'hello', '--slow'])
+    assert rc == 0
+    (_workspace, command), _kwargs = run.call_args
+    # --slow is forwarded like --rich; the in-container run builds the plain spec
+    assert command == ['ask', 'ppp-dev', 'hello', '--slow']
 
 
 def test_main_no_trails_disables_recording_in_container():
@@ -151,7 +164,9 @@ def test_main_skips_container_when_inside():
     patch('cw.run_in_container') as run,
     patch('bro.registry.create_bro', return_value=RecordBro(response='ok')),
   ):
-    rc = main(['ask', 'record', 'hi'])
+    # --slow routes through the patched create_bro (the plain spec path); the
+    # container-skip behavior under test is independent of fast/slow.
+    rc = main(['ask', 'record', 'hi', '--slow'])
     assert rc is None
     assert run.call_count == 0
 
@@ -163,7 +178,7 @@ def test_main_skips_container_with_no_container_flag():
     patch('bro.registry.create_bro', return_value=RecordBro(response='ok')),
   ):
     env.pop('CW_IN_CONTAINER', None)
-    rc = main(['ask', 'record', 'hi', '--no-container'])
+    rc = main(['ask', 'record', 'hi', '--no-container', '--slow'])
     assert rc is None
     assert run.call_count == 0
 
@@ -173,7 +188,7 @@ def test_main_surfaces_unknown_skill_as_stderr_exit_1(capsys):
     patch.dict('os.environ', {'CW_IN_CONTAINER': '1'}),
     patch('bro.registry.create_bro', return_value=RecordBro(skills={'fix': 'FIX BODY'})),
   ):
-    rc = main(['ask', 'record', '/nope something'])
+    rc = main(['ask', 'record', '/nope something', '--slow'])
   assert rc == 1
   captured = capsys.readouterr()
   assert 'nope' in captured.err

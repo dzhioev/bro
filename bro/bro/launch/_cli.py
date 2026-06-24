@@ -2,6 +2,7 @@
 fast-mode bro construction, and the `ask`/`do-task` main()."""
 
 import asyncio
+import logging
 import os
 import secrets
 import sys
@@ -14,11 +15,13 @@ from bro.bro import BroRaised
 from bro.bros.bro import Bro
 from llm.observer import Observer
 
-# shared flag help so all three CLIs describe `--fast` / `--no-container` identically.
-FAST_HELP = (
-  "enable the bro's fast-mode LLM knob (provider-specific; for ChatGPT this is "
-  "OpenAI's 'priority' service tier — same model and quality, faster and more "
-  'consistent generation at a higher per-token price)'
+# shared flag help so all three CLIs describe `--slow` / `--no-container` identically.
+# fast mode is the default for these CLIs; --slow opts back out to the plain spec.
+SLOW_HELP = (
+  "disable the bro's fast-mode LLM knob, which is on by default here "
+  "(provider-specific; for ChatGPT fast mode is OpenAI's 'priority' service tier — "
+  'same model and quality, faster and more consistent generation at a higher '
+  'per-token price)'
 )
 NO_CONTAINER_HELP = 'skip the auto-container hop and run in the calling process'
 NO_TRAILS_HELP = (
@@ -35,15 +38,21 @@ REVOKE_HELP = (
 
 
 def create_bro_for_run(bro_name: str, *, fast: bool) -> Bro:
-  """instantiate the bro for an in-process run, applying the provider's fast knob
-  when `fast` is set. raises NotImplementedError (from LLMSpec.fast) when the bro's
-  provider has no fast mode — CLIs surface it as `--fast: <message>` and exit 1."""
+  """instantiate the bro for an in-process run. fast mode (the provider's fast knob)
+  is the default for these CLIs; pass fast=False (`--slow`) for the plain spec.
+  fast being implicit, a provider with no fast mode (e.g. echo) falls back to the
+  normal spec rather than raising — the user never explicitly asked for fast."""
   from bro.registry import create_bro, get_class
 
   if not fast:
     return create_bro(bro_name)
   cls = get_class(bro_name)
-  return cls.create(cls.llm_spec.fast())
+  try:
+    spec = cls.llm_spec.fast()
+  except NotImplementedError:
+    logging.getLogger(__name__).debug('%s has no fast mode; running with the normal spec', bro_name)
+    return create_bro(bro_name)
+  return cls.create(spec)
 
 
 def maybe_containerize(
@@ -141,7 +150,7 @@ def run(
     action='store_true',
     help='render the trace as colored rich panels instead of plain log lines',
   )
-  parser.add_argument('--fast', action='store_true', help=FAST_HELP)
+  parser.add_argument('--slow', action='store_true', help=SLOW_HELP)
   parser.add_argument(
     '--no-container', dest='no_container', action='store_true', help=NO_CONTAINER_HELP
   )
@@ -155,8 +164,8 @@ def run(
   inner_args = [args[arg_name]]
   if args['rich']:
     inner_args.append('--rich')
-  if args['fast']:
-    inner_args.append('--fast')
+  if args['slow']:
+    inner_args.append('--slow')
   hopped = maybe_containerize(
     cli_name=cli_name,
     bro_name=args['bro'],
@@ -169,11 +178,7 @@ def run(
   if hopped is not None:
     return hopped
 
-  try:
-    bro = create_bro_for_run(args['bro'], fast=args['fast'])
-  except NotImplementedError as e:
-    print(f'--fast: {e}', file=sys.stderr)
-    return 1
+  bro = create_bro_for_run(args['bro'], fast=not args['slow'])
   observer: Optional[Observer] = None
   if args['rich']:
     from llm.observer import RichConsoleRenderer

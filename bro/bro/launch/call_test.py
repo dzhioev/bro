@@ -192,7 +192,7 @@ class _FastlessBro(Bro):
     return self.mock_llm
 
 
-def test_fast_flag_invokes_spec_fast(monkeypatch):
+def test_default_invokes_spec_fast(monkeypatch):
   built: list[Bro] = []
 
   async def fake_call_text(bro, initial):
@@ -204,7 +204,8 @@ def test_fast_flag_invokes_spec_fast(monkeypatch):
   monkeypatch.setattr('do.call.call_text', fake_call_text)
   monkeypatch.setattr('do.call._tty_supported', lambda: False)
 
-  rc = main(['call', 'record', 'hi', '--fast'])
+  # no flag — fast is the default for these CLIs
+  rc = main(['call', 'record', 'hi'])
   assert rc is None
   assert len(built) == 1
   spec = built[0].llm_spec
@@ -216,16 +217,43 @@ def test_fast_flag_invokes_spec_fast(monkeypatch):
   assert default.service_tier is None
 
 
-def test_fast_flag_reports_when_bro_spec_has_no_fast_mode(monkeypatch, capsys):
+def test_slow_flag_builds_plain_spec(monkeypatch):
+  built: list[Bro] = []
+
+  async def fake_call_text(bro, initial):
+    built.append(bro)
+
   monkeypatch.setenv('CW_IN_CONTAINER', '1')
-  monkeypatch.setattr('bro.registry.get_class', lambda name: _FastlessBro)
+  monkeypatch.setattr('bro.registry.get_class', lambda name: _ChatBro)
+  monkeypatch.setattr('do.call.call_text', fake_call_text)
   monkeypatch.setattr('do.call._tty_supported', lambda: False)
 
-  rc = main(['call', 'fastless', 'hi', '--fast'])
-  assert rc == 1
-  err = capsys.readouterr().err
-  assert '--fast' in err
-  assert '_FastlessSpec' in err
+  rc = main(['call', 'record', 'hi', '--slow'])
+  assert rc is None
+  assert len(built) == 1
+  spec = built[0].llm_spec
+  assert isinstance(spec, llm.llms.chat_gpt.LLMSpec)
+  assert spec.service_tier is None
+
+
+def test_default_falls_back_to_plain_when_no_fast_mode(monkeypatch):
+  built: list[Bro] = []
+
+  async def fake_call_text(bro, initial):
+    built.append(bro)
+
+  monkeypatch.setenv('CW_IN_CONTAINER', '1')
+  monkeypatch.setattr('bro.registry.get_class', lambda name: _FastlessBro)
+  monkeypatch.setattr('bro.registry.create_bro', lambda name: _FastlessBro())
+  monkeypatch.setattr('do.call.call_text', fake_call_text)
+  monkeypatch.setattr('do.call._tty_supported', lambda: False)
+
+  # fast is implicit, so a provider with no fast mode degrades to the plain spec
+  # instead of erroring out.
+  rc = main(['call', 'fastless', 'hi'])
+  assert rc is None
+  assert len(built) == 1
+  assert isinstance(built[0], _FastlessBro)
 
 
 def test_call_re_execs_into_container_when_outside():
@@ -235,13 +263,14 @@ def test_call_re_execs_into_container_when_outside():
     patch('do.call._tty_supported', return_value=True),
   ):
     env.pop('CW_IN_CONTAINER', None)
-    rc = main(['call', 'ppp-dev', 'hey', '--fast'])
+    rc = main(['call', 'ppp-dev', 'hey'])
     assert rc == 0
     assert run.call_count == 1
     (workspace, command), kwargs = run.call_args
     assert workspace.startswith('call-ppp-dev-')
-    # host is a tty → the TUI runs in-container, so no --text is forwarded; --fast is
-    assert command == ['call', 'ppp-dev', 'hey', '--fast']
+    # host is a tty → the TUI runs in-container, so no --text is forwarded; fast is the
+    # default so no --slow either
+    assert command == ['call', 'ppp-dev', 'hey']
     assert kwargs['drop'] is True
     # ppp-dev's manifest (github + notion via flow) plus the mandatory trails sink
     assert {'github', 'notion', 'trails'} <= kwargs['secrets']
@@ -296,7 +325,9 @@ def test_call_skips_container_with_no_container_flag(monkeypatch):
   monkeypatch.setattr('do.call.call_text', fake_call_text)
   monkeypatch.setattr('do.call._tty_supported', lambda: False)
   with patch('cw.run_in_container') as run:
-    rc = main(['call', 'record', 'hi', '--no-container'])
+    # --slow routes through the patched create_bro; the container-skip behavior
+    # under test is independent of fast/slow.
+    rc = main(['call', 'record', 'hi', '--no-container', '--slow'])
   assert rc is None
   assert run.call_count == 0
   assert len(built) == 1

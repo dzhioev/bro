@@ -1,7 +1,5 @@
 from unittest.mock import patch
 
-import pytest
-
 import llm.llms.chat_gpt
 from do._cli import create_bro_for_run, maybe_containerize
 
@@ -40,7 +38,7 @@ def test_maybe_containerize_hops_and_scopes_to_bro():
     rc = maybe_containerize(
       cli_name='call',
       bro_name='ppp-dev',
-      inner_args=['hi', '--fast'],
+      inner_args=['hi', '--slow'],
       no_container=False,
       no_trails=False,
     )
@@ -49,7 +47,7 @@ def test_maybe_containerize_hops_and_scopes_to_bro():
   assert workspace.startswith('call-ppp-dev-')
   # the container re-runs the same CLI with CW_IN_CONTAINER set, which short-circuits
   # the re-hop so the inner process runs the bro in-process
-  assert command == ['call', 'ppp-dev', 'hi', '--fast']
+  assert command == ['call', 'ppp-dev', 'hi', '--slow']
   assert kwargs['drop'] is True
   # ppp-dev's manifest (github + notion via flow) + its llm key + the mandatory trails sink
   assert {'github', 'notion', 'trails'} <= kwargs['secrets']
@@ -212,7 +210,9 @@ def test_create_bro_for_run_with_fast_applies_fast_spec(monkeypatch):
   assert _Cls.llm_spec.service_tier is None
 
 
-def test_create_bro_for_run_propagates_unsupported_fast(monkeypatch):
+def test_create_bro_for_run_unsupported_fast_falls_back_to_plain(monkeypatch):
+  # fast is the implicit default for these CLIs, so a provider with no fast mode
+  # must degrade to the plain spec rather than raise — the user never asked for fast.
   class _NoFastSpec:
     def fast(self):
       raise NotImplementedError('_NoFastSpec does not support fast mode')
@@ -222,8 +222,8 @@ def test_create_bro_for_run_propagates_unsupported_fast(monkeypatch):
 
     @classmethod
     def create(cls, spec):
-      return spec
+      raise AssertionError('create() should not run when fast is unsupported')
 
   monkeypatch.setattr('bro.registry.get_class', lambda name: _Cls)
-  with pytest.raises(NotImplementedError, match='fast mode'):
-    create_bro_for_run('x', fast=True)
+  monkeypatch.setattr('bro.registry.create_bro', lambda name: f'plain-{name}')
+  assert create_bro_for_run('x', fast=True) == 'plain-x'

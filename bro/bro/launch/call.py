@@ -8,11 +8,11 @@ import base.args
 from bro.bro import BroRaised
 from bro.bros.bro import Bro
 from do._cli import (
-  FAST_HELP,
   GRANT_HELP,
   NO_CONTAINER_HELP,
   NO_TRAILS_HELP,
   REVOKE_HELP,
+  SLOW_HELP,
   create_bro_for_run,
   maybe_containerize,
 )
@@ -113,7 +113,7 @@ def main(argv: list[str]) -> Optional[int]:
     action='store_true',
     help='force text mode (timestamped lines) instead of the Textual chat UI',
   )
-  parser.add_argument('--fast', action='store_true', help=FAST_HELP)
+  parser.add_argument('--slow', action='store_true', help=SLOW_HELP)
   parser.add_argument(
     '--no-container', dest='no_container', action='store_true', help=NO_CONTAINER_HELP
   )
@@ -132,8 +132,8 @@ def main(argv: list[str]) -> Optional[int]:
   inner_args = [args['what']]
   if force_text:
     inner_args.append('--text')
-  if args['fast']:
-    inner_args.append('--fast')
+  if args['slow']:
+    inner_args.append('--slow')
   hopped = maybe_containerize(
     cli_name='call',
     bro_name=args['bro'],
@@ -146,11 +146,7 @@ def main(argv: list[str]) -> Optional[int]:
   if hopped is not None:
     return hopped
 
-  try:
-    bro = create_bro_for_run(args['bro'], fast=args['fast'])
-  except NotImplementedError as e:
-    print(f'--fast: {e}', file=sys.stderr)
-    return 1
+  bro = create_bro_for_run(args['bro'], fast=not args['slow'])
   use_tui = not args['text'] and _tty_supported()
 
   try:
