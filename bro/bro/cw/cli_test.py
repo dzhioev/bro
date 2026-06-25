@@ -1,4 +1,5 @@
 import json
+import os
 from typing import Optional
 from unittest.mock import patch
 
@@ -732,6 +733,22 @@ class TestPopulateBroSkills:
     link = tmp_path / '.claude' / 'skills' / 'pr' / 'SKILL.md'
     target = link.readlink()
     assert not target.is_absolute()
+
+  def test_relative_symlinks_resolve_through_var_style_symlink(self, tmp_path):
+    # macOS tempfile.mkdtemp() returns /var/folders/… where /var → /private/var,
+    # so the symlink target sits one dir deeper than its logical path. mirror that
+    # with a `var` → `private/var` indirection: a relpath against the logical path
+    # would be off by one level and the skill symlink would dangle.
+    real = tmp_path / 'private' / 'var'
+    real.mkdir(parents=True)
+    proj = tmp_path / 'var'
+    proj.symlink_to(real)
+    cw._populate_bro_skills(proj, 'ppp-dev')
+    link = proj / '.claude' / 'skills' / 'pr' / 'SKILL.md'
+    assert link.is_symlink()
+    assert not link.readlink().is_absolute()
+    assert os.path.exists(link)
+    assert len(link.read_text()) > 0
 
   def test_wipes_stale_symlinks_before_recreating(self, tmp_path):
     skills_dir = tmp_path / '.claude' / 'skills'

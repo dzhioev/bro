@@ -1533,7 +1533,11 @@ def _populate_bro_skills(proj: Path, bro_name: str) -> None:
     target_dir = skills_dir / name
     target_dir.mkdir(parents=True, exist_ok=True)
     link = target_dir / 'SKILL.md'
-    rel = os.path.relpath(src, link.parent)
+    # measure the ../-chain against the resolved parent: host mode roots this at a
+    # tempfile.mkdtemp() dir, and on macOS that lands under /var/folders/… where
+    # /var → /private/var. the kernel resolves the symlink from the physical
+    # (one-level-deeper) path, so a relpath against the logical dir would dangle.
+    rel = os.path.relpath(src, target_dir.resolve())
     link.symlink_to(rel)
     log.info('populated .claude/skills/%s/SKILL.md → %s', name, rel)
 
