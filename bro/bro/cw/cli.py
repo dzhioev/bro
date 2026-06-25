@@ -1912,7 +1912,7 @@ def cw(
   return result.returncode
 
 
-def main(argv: list[str]) -> Optional[int]:
+def build_parser() -> Parser:
   parser = Parser(description='launch claude with worktree management')
   subparsers = parser.add_subparsers(dest='cmd', required=True)
 
@@ -1999,6 +1999,11 @@ def main(argv: list[str]) -> Optional[int]:
     help='emit plain key:value lines for LLM Bash-tool consumption (no ANSI, no logo)',
   )
 
+  return parser
+
+
+def main(argv: list[str]) -> Optional[int]:
+  parser = build_parser()
   args = parser.parse(argv)
   cmd = args.pop('cmd')
 

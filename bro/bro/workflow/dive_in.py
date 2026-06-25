@@ -196,7 +196,10 @@ def dive_in(
     ppp_parts.append(command)
   os.environ.setdefault('PPP_SHELL_COMMAND', ' '.join(ppp_parts))
 
-  cmd = ['cw', 'ss', '--mcp', *forwarded]
+  # --mcp=http (joined form), not a bare --mcp: `cw ss --mcp` is nargs='?', so a bare
+  # flag immediately followed by the positional name makes argparse consume the name as
+  # its value. dive-in always wants the default http flow MCP.
+  cmd = ['cw', 'ss', '--mcp=http', *forwarded]
   if not host:
     cmd.append('-c')
   if prompt is not None:

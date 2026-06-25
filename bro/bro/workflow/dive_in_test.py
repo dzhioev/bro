@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 import re
+import shlex
 
 import pytest
 
@@ -95,6 +96,38 @@ class TestPickFreshName:
     monkeypatch.setattr(dive_in.secrets, 'token_hex', lambda _: next(suffixes))
     (containers / 'idea-aaaaaa').mkdir()
     assert _pick_fresh_name('idea') == 'idea-bbbbbb'
+
+
+class TestLaunchCommand:
+  """the emitted `cw ss ...` command must parse cleanly under cw's own ss parser.
+
+  regression: dive-in passed a bare `--mcp` immediately before the positional name.
+  `cw ss --mcp` is nargs='?' (const http), so with nothing between the flag and the
+  name argparse consumed the name as --mcp's value and failed the choices check. The
+  plain `dive-in --host` path (no -c, no forwarded flags, no -p) was the only one not
+  masked by an intervening token.
+  """
+
+  @pytest.mark.parametrize(
+    'kwargs',
+    [
+      {'host': True},  # the path that crashed: nothing sits between --mcp and name
+      {'host': True, 'forwarded': ['--auto']},
+      {'host': False, 'command': 'do a thing', 'new': True},
+    ],
+  )
+  def test_emitted_command_parses_with_mcp_http(self, kwargs, fake_proj, capsys):
+    forwarded = kwargs.pop('forwarded', [])
+    rc = dive_in.dive_in(forwarded=forwarded, dry_run=True, **kwargs)
+    assert rc == 0
+    tokens = shlex.split(capsys.readouterr().out.strip())
+    assert tokens[0] == 'cw'
+    # Parser.parse strips argv[0] as the program name, mirroring cw.main(['cw', ...])
+    args = cw.build_parser().parse(tokens)
+    assert args['cmd'] == 'ss'
+    assert args['mcp'] == 'http'
+    assert len(args['name']) > 0
+    assert len(args['claude_args']) == 0  # nothing leaked into the forwarded REMAINDER
 
 
 class TestPrefetchTask:
