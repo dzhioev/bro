@@ -4,7 +4,9 @@ import asyncio
 from datetime import date, datetime
 from typing import Any, ClassVar, Optional
 
+from rich.console import Group, RenderableType
 from rich.markup import escape as rich_escape
+from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -39,11 +41,15 @@ class MessageBubble(Static):
   }
   """
 
-  def __init__(self, text: str, *, by_user: bool, when: datetime):
+  def __init__(self, text: RenderableType, *, by_user: bool, when: datetime):
     classes = 'user' if by_user else 'bro'
     ts = when.strftime('%H:%M')
-    body = f'{rich_escape(text)}\n[dim]{ts}[/dim]'
-    super().__init__(body, classes=classes, markup=True)
+    if isinstance(text, str):
+      super().__init__(f'{rich_escape(text)}\n[dim]{ts}[/dim]', classes=classes, markup=True)
+    else:
+      # pre-rendered content (e.g. the ANSI-decoded cw banner); append the
+      # timestamp as a dim line without running it through markup parsing
+      super().__init__(Group(text, Text(ts, style='dim')), classes=classes)
 
 
 class SystemBubble(Static):
@@ -194,8 +200,26 @@ class ChatApp(App):
   async def on_mount(self) -> None:
     self.query_one('#input-bar', Input).focus()
     self.set_interval(0.4, self._tick_typing, pause=False)
+    self._append_banner()
     if len(self._initial) > 0:
       await self._submit(self._initial)
+
+  def _append_banner(self) -> None:
+    """opening bro bubble: the cw banner (session environment facts), shown
+    before the user's first message. display-only — not part of the bro's
+    conversation. the visual banner carries ANSI, decoded for Rich here."""
+    from cw import render_banner
+
+    self._maybe_add_date_separator()
+    # pass the bro name so the logo shows even though a `call` container doesn't
+    # forward CW_BRO.
+    bubble = MessageBubble(
+      Text.from_ansi(render_banner(llm=False, bro=self._bro.name)),
+      by_user=False,
+      when=datetime.now(),
+    )
+    self.query_one('#history', VerticalScroll).mount(BubbleRow(bubble, by_user=False))
+    self._scroll_to_end()
 
   async def _submit(self, text: str) -> None:
     self._append_user_message(text)

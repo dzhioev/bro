@@ -571,11 +571,14 @@ def _split_launch_prompt(command: str) -> tuple[str, Optional[str]]:
   return command, None
 
 
-def _session_facts() -> dict[str, Optional[str | bool]]:
+def _session_facts(bro_override: Optional[str] = None) -> dict[str, Optional[str | bool]]:
   """collect session facts from env + /.dockerenv for `cw banner`.
 
   read-only; never raises. callers decide whether to render visually or for an
-  LLM tool result. Fields:
+  LLM tool result. bro_override forces the `bro` fact regardless of `CW_BRO` —
+  used by `call`, which knows its bro but runs in a container that deliberately
+  doesn't forward `CW_BRO` (forwarding it would re-trigger `populate-bro-skills`).
+  Fields:
     - in_container (bool) — /.dockerenv presence
     - name (Optional[str]) — workspace name (CW_NAME)
     - bro (Optional[str]) — bro persona (CW_BRO), only set under `cw ss --bro`
@@ -594,7 +597,7 @@ def _session_facts() -> dict[str, Optional[str | bool]]:
   """
   in_container = _in_container()
   name = os.environ.get('CW_NAME') or None
-  bro = os.environ.get('CW_BRO') or None
+  bro = bro_override if bro_override is not None else (os.environ.get('CW_BRO') or None)
   cw_command = os.environ.get('CW_COMMAND') or None
   shell_command = os.environ.get('PPP_SHELL_COMMAND') or cw_command
   host_workspace: Optional[str] = os.environ.get('CW_HOST_WORKSPACE') or None
@@ -745,11 +748,19 @@ def _render_banner_llm(facts: dict[str, Optional[str | bool]]) -> str:
   return '\n'.join(lines)
 
 
+def render_banner(llm: bool = False, bro: Optional[str] = None) -> str:
+  """render the banner string for the current session. visual (ANSI + logo) by
+  default; --llm for plain key:value text. exposed so in-process callers (e.g.
+  `call`, which shows it as the opening bro message) can render without a shell-out.
+  bro overrides the `bro` fact (so `call` gets its logo even though a `call`
+  container doesn't forward `CW_BRO`); None falls back to the env."""
+  facts = _session_facts(bro_override=bro)
+  return _render_banner_llm(facts) if llm else _render_banner_visual(facts)
+
+
 def banner(llm: bool) -> int:
   """print the banner. visual by default; --llm for plain text."""
-  facts = _session_facts()
-  rendered = _render_banner_llm(facts) if llm else _render_banner_visual(facts)
-  print(rendered)
+  print(render_banner(llm))
   return 0
 
 

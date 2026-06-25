@@ -76,6 +76,20 @@ async def test_text_drives_send_until_eof(capsys):
 
 
 @pytest.mark.asyncio
+async def test_text_emits_banner_before_first_reply(capsys, monkeypatch):
+  monkeypatch.setattr('cw.render_banner', lambda llm=False, bro=None: f'BANNER[{bro}]')
+  bro = RecordBro(response='reply')
+  await call_text(
+    bro, 'first', observer=NullObserver(), read_line=_ScriptedLines([]), now=_fixed_now
+  )
+  out = capsys.readouterr().out
+  # banner is the opening bro message, before the first reply line; the bro name
+  # is passed through so the logo renders despite the unforwarded CW_BRO
+  assert out.index('BANNER[record]') < out.index('[12:34:56] record: reply')
+  assert '[12:34:56] record:\nBANNER[record]' in out
+
+
+@pytest.mark.asyncio
 async def test_text_skips_empty_input(capsys):
   bro = RecordBro(response='reply')
   await call_text(

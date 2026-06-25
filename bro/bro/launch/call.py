@@ -80,12 +80,21 @@ async def call_text(
   used when stdin/stdout isn't a TTY or when `--text` is forced. read_line,
   now, and observer are injectable for tests.
   """
+  from cw import render_banner
+
   read = read_line if read_line is not None else (lambda: input('> '))
   effective_observer: Observer = observer if observer is not None else TextRenderer(prefix=bro.name)
 
   def emit(reply: str) -> None:
     ts = now().strftime('%H:%M:%S')
     print(f'[{ts}] {bro.name}: {reply}')
+
+  # opening bro message: the cw banner (session environment facts), before the
+  # first user message is sent. visual form — its ANSI renders in the terminal.
+  # pass the bro name so the logo shows even though a `call` container doesn't
+  # forward CW_BRO.
+  print(f'[{now().strftime("%H:%M:%S")}] {bro.name}:')
+  print(render_banner(llm=False, bro=bro.name))
 
   reply = await bro.send(initial, observer=effective_observer)
   emit(reply)
