@@ -143,6 +143,8 @@ class TestPrefetchTask:
       project='proj-1',
       tags=['infra'],
       links=[],
+      blocks=[],
+      blocked_by=[],
       created_time='2026-01-01',
       last_edited='2026-01-02',
       sender=None,
