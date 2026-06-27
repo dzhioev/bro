@@ -236,6 +236,7 @@ _CONTAINER_SETTINGS_JSON: dict = {
   'spinnerTipsEnabled': False,
   'prefersReducedMotion': True,
   'feedbackSurveyRate': 0,
+  'tui': 'fullscreen',
   # silent when healthy (Claude's default bar); a red warning pinned on-screen
   # when session-log sync is failing — the one channel Claude doesn't hide
   # behind its alternate-screen buffer (the entrypoint can't print a banner that
