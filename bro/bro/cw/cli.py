@@ -27,20 +27,19 @@ keeps the container's git state genuinely isolated. layout:
   - ~/.claude: not seeded from host. cw-sessions/<name>/ is mounted as the
     container's ~/.claude and gets the constructed settings.json; host machine
     state stays on the host.
-  - ~/.claude/.credentials.json: not bind-mounted from host. Seeded into
-    cw-sessions/<name>/.credentials.json before launch (if host is fresher)
-    and synced back to host on exit (if container is fresher), keyed on
-    claudeAiOauth.expiresAt. Removes the runtime token-swap vector while
-    preserving OAuth refresh.
   - a per-launch scoped credential store at /home/cw/.ppp: the host resolves only
     the secrets the session uses into an in-memory tar and `docker cp`s it into
     the container before it starts (no host-side store, no bind mount), with a
     credentials.json that bounds the container's registry to them. Living in the
     container's own writable layer, the store is removed with the container on
     --rm exit (or by `cw clean`), so plaintext secrets never linger on the host.
-    github and aws arrive as declared secrets in this store (wired into git / the
-    aws CLI by their install hooks), so there is no out-of-band github-token
-    bind-mount and no ~/.aws mount.
+    github, aws, and the claude_code OAuth token arrive as declared secrets in
+    this store, each wired into its consumer by an install hook (git / the aws
+    CLI / the CLAUDE_CODE_OAUTH_TOKEN env a native claude code session
+    authenticates with). So there is no out-of-band github-token bind-mount, no
+    ~/.aws mount, and no OAuth credentials file: one stable bearer per session
+    means no token to refresh or sync between sessions. (`--bro` / `do`
+    containers run claude --bare against the anthropic api key instead.)
 
 network is not restricted by design.
 """
@@ -51,7 +50,6 @@ import hashlib
 import io
 import json
 import os
-import platform
 import shutil
 import subprocess
 import sys
@@ -154,6 +152,22 @@ def _load_anthropic_key() -> Optional[str]:
   return key
 
 
+def _claude_code_token_env() -> dict[str, str]:
+  """CLAUDE_CODE_OAUTH_TOKEN overlay for a host-mode claude session, or empty.
+
+  resolves the long-lived `claude setup-token` credential (`claude_code`)
+  best-effort: present → export it so claude prefers this stable subscription
+  bearer over the rotating OAuth in ~/.claude/.credentials.json (whose
+  cross-session refresh-token rotation forces the periodic re-login); absent →
+  empty, and claude falls back to that file. containers get the same var from
+  the secret's registry install hook, not here.
+  """
+  token = credentials.try_get('claude_code')
+  if token is None:
+    return {}
+  return {'CLAUDE_CODE_OAUTH_TOKEN': token}
+
+
 def _venv_env(venv: Path) -> dict[str, str]:
   env = {**os.environ, 'VIRTUAL_ENV': str(venv)}
   env['PATH'] = str(venv / 'bin') + ':' + env.get('PATH', '')
@@ -177,40 +191,6 @@ def _containers_dir(proj: Path) -> Path:
   return proj / 'var' / 'cw' / 'containers'
 
 
-def _keychain_credentials() -> Optional[dict]:
-  if platform.system() != 'Darwin':
-    return None
-  try:
-    raw = subprocess.check_output(
-      ['security', 'find-generic-password', '-s', 'Claude Code-credentials', '-w'],
-      text=True,
-      stderr=subprocess.DEVNULL,
-    ).strip()
-    return json.loads(raw)
-  except (subprocess.CalledProcessError, json.JSONDecodeError):
-    return None
-
-
-def _credentials_expiry(path: Path) -> int:
-  if not path.is_file():
-    return 0
-  try:
-    return json.loads(path.read_text()).get('claudeAiOauth', {}).get('expiresAt', 0)
-  except (json.JSONDecodeError, OSError):
-    return 0
-
-
-def _sync_credentials(src: Path, dst: Path) -> None:
-  """copy src → dst if src's claudeAiOauth.expiresAt is newer than dst's."""
-  src_expiry = _credentials_expiry(src)
-  if src_expiry == 0:
-    return
-  if src_expiry > _credentials_expiry(dst):
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(src, dst)
-    dst.chmod(0o600)
-
-
 # explicit container-side ~/.claude.json config (installMethod matches the
 # image's npm-global claude; the project entry pre-accepts the trust dialog).
 _CONTAINER_CLAUDE_JSON: dict = {
@@ -225,7 +205,8 @@ _CONTAINER_CLAUDE_JSON: dict = {
   'projects': {'/workspace': {'hasTrustDialogAccepted': True}},
 }
 # account-identity keys carried over from the host so the session starts logged
-# in (oauth tokens live in .credentials.json; these hold the matching metadata).
+# in (the OAuth bearer itself arrives via CLAUDE_CODE_OAUTH_TOKEN; these hold the
+# matching account metadata claude renders the logged-in account from).
 _CLAUDE_JSON_IDENTITY_KEYS = ('oauthAccount', 'userID')
 
 # the global ~/.claude/settings.json for container sessions: UX prefs only,
@@ -340,19 +321,6 @@ def _docker_create_argv(
   # seed-once container-private ~/.claude.json (see module docstring)
   claude_json = _seed_container_claude_json(claude_dir, home / '.claude.json')
   (claude_dir / 'settings.json').write_text(json.dumps(_CONTAINER_SETTINGS_JSON))
-  # credentials: on macOS the keychain may be fresher than the file (e.g. after a
-  # host-mode login that updated the keychain but not the file) — pick the more
-  # recent source for the host file, then sync host → container-private so the
-  # container starts with the freshest tokens. post-run, we'll sync back if the
-  # container refreshed during the session.
-  host_creds = home / '.claude' / '.credentials.json'
-  keychain_creds = _keychain_credentials()
-  if keychain_creds is not None:
-    keychain_expiry = keychain_creds.get('claudeAiOauth', {}).get('expiresAt', 0)
-    if keychain_expiry > _credentials_expiry(host_creds):
-      host_creds.write_text(json.dumps(keychain_creds))
-      host_creds.chmod(0o600)
-  _sync_credentials(host_creds, claude_dir / '.credentials.json')
   argv = [
     'docker',
     'create',
@@ -1605,9 +1573,10 @@ def _container_secrets(
     `bro.needs_docker`.
   - a native claude code session themed as the bro (dive-in / plain `cw ss`): it
     drives the bro's *skills* (bash → `extra_secrets`) and its flow via `--mcp`,
-    not the bro's in-process MCP / data-source toolset — so only `extra_secrets`
-    + `flow_mcp` (when `--mcp http`), and no optional tier (that toolset isn't
-    mounted here). always keeps the socket (it has a Bash tool).
+    not the bro's in-process MCP / data-source toolset — so `extra_secrets`
+    + `flow_mcp` (when `--mcp http`) + `claude_code` (required: the long-lived
+    OAuth token it exports as CLAUDE_CODE_OAUTH_TOKEN is a native session's only
+    auth). always keeps the socket (it has a Bash tool).
 
   both add the session baseline (sync-log + trails) to the required set.
   """
@@ -1634,6 +1603,12 @@ def _container_secrets(
     secrets.update(bro._extra_secrets)
     if mcp == 'http':
       secrets.add('flow_mcp')
+    # required, not best-effort: this secret's CLAUDE_CODE_OAUTH_TOKEN (registry
+    # install hook) is a native session's sole credential, so a missing token
+    # must fail loudly on the host before the container starts rather than as a
+    # turn-1 401 inside it. `--bro` (claude --bare) omits it — bare ignores the
+    # var and authenticates with the anthropic key.
+    secrets.add('claude_code')
   return secrets, optional, docker_sock
 
 
@@ -1705,9 +1680,8 @@ def run_in_container(
   (`docker create` + `docker cp` scoped secrets in + `docker start -a -i`, the
   run-equivalent split that lets us inject the store into the pre-start container)
   with the standard bind mounts (`/workspace`, `/host-repo:ro`, `.claude` overlay,
-  optionally the docker socket, …), then post-syncs OAuth credentials. When
-  `drop=True`, removes the workspace dir and per-session claude state on exit.
-  Returns the container's exit code.
+  optionally the docker socket, …). When `drop=True`, removes the workspace dir
+  and per-session claude state on exit. Returns the container's exit code.
 
   `secrets` is the required scoped credential set hydrated into the container's
   ~/.ppp (see `credentials.build_scoped_store`); a missing secret raises (strict).
@@ -1775,10 +1749,6 @@ def run_in_container(
   # `docker start -a -i` reattaches the TTY/stdin and returns the exit code; --rm
   # (set at create) removes the container — and its scoped secrets — on exit.
   result = subprocess.run(['docker', 'start', '-a', '-i', container_id])
-  # post-run sync: if the container refreshed its OAuth token during the
-  # session, propagate the fresher copy back to the host so the next session
-  # (host or container) sees the live tokens.
-  _sync_credentials(claude_dir / '.credentials.json', home / '.claude' / '.credentials.json')
   if drop:
     try:
       _remove_container_dir(session, _cleanup_image())
@@ -1904,6 +1874,7 @@ def cw(
     return 1
 
   env = _venv_env(worktree / '.venv')
+  env.update(_claude_code_token_env())
   pidfile = _host_pidfile(proj, name)
   pidfile.parent.mkdir(parents=True, exist_ok=True)
   pidfile.write_text(str(os.getpid()))

@@ -167,7 +167,18 @@ class TestStore:
 class TestDefaultRegistry:
   def test_inventory_covers_known_secrets(self):
     registry = credentials.default_registry()
-    for name in ('notion', 'focus', 'trails', 'openai', 'anthropic', 'tmdb', 'brave', 'github'):
+    names = (
+      'notion',
+      'focus',
+      'trails',
+      'openai',
+      'anthropic',
+      'claude_code',
+      'tmdb',
+      'brave',
+      'github',
+    )
+    for name in names:
       assert name in registry
 
   def test_github_maps_to_bro_token_file(self):
@@ -231,6 +242,11 @@ class TestModuleAliases:
   def test_get_raises_secret_not_found(self, configs_dir: Path):
     with pytest.raises(credentials.SecretNotFound):
       credentials.get('notion')
+
+  def test_try_get_aliases_default_store(self, configs_dir: Path):
+    _write(configs_dir, 'cw_github_token_bro', 'tok\n')
+    assert credentials.try_get('github') == 'tok'
+    assert credentials.try_get('notion') is None
 
   def test_available_aliases_default_store(self, configs_dir: Path):
     _write(configs_dir, 'notion.json', {'token': 't'})
@@ -437,6 +453,14 @@ class TestInstallHooks:
     assert registry['aws'].install is not None
     assert registry['notion'].install is None
 
+  def test_claude_code_maps_to_token_file_with_install_hook(self):
+    registry = credentials.default_registry()
+    source = registry['claude_code'].sources[0]
+    assert isinstance(source, credentials.LocalSource)
+    assert source.file == 'claude_code_oauth_token'
+    # install hook exports the env var claude reads above ~/.claude/.credentials.json
+    assert registry['claude_code'].install is not None
+
   def test_aws_source_file(self):
     registry = credentials.default_registry()
     source = registry['aws'].sources[0]
@@ -457,6 +481,9 @@ class TestInstallHooks:
     assert 'credentials get aws' in out
     assert '.aws/credentials' in out
     assert 'AWS_SHARED_CREDENTIALS_FILE' not in out
+    # claude_code → exports CLAUDE_CODE_OAUTH_TOKEN via `credentials get claude_code`
+    assert 'CLAUDE_CODE_OAUTH_TOKEN' in out
+    assert 'credentials get claude_code' in out
     # no absolute resolver path is interpolated; notion declares no hook
     assert str(configs_dir) not in out
     assert 'notion' not in out

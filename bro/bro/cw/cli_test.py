@@ -35,6 +35,17 @@ class TestLoadAnthropicKey:
     assert cw._load_anthropic_key() is None
 
 
+class TestClaudeCodeTokenEnv:
+  def test_present_exports_token(self, config_path):
+    # the `claude_code` secret is a scalar token file; the store strips it.
+    (config_path.parent / 'claude_code_oauth_token').write_text('oauth-tok\n')
+    assert cw._claude_code_token_env() == {'CLAUDE_CODE_OAUTH_TOKEN': 'oauth-tok'}
+
+  def test_absent_yields_empty(self, config_path):
+    # not populated → no overlay, host session falls back to ~/.claude/.credentials.json
+    assert cw._claude_code_token_env() == {}
+
+
 class TestSeedContainerClaudeJson:
   def _host(self, tmp_path, **extra):
     path = tmp_path / 'host.json'
@@ -783,12 +794,14 @@ class TestPopulateBroSkills:
 class TestContainerSecrets:
   def test_claude_code_session_set(self):
     # native claude code session themed as ppp-dev: baseline + the bro's
-    # extra_secrets (github) + the deployed flow MCP token (--mcp http). NOT the
-    # bro's in-process MCP secret (notion) — claude code uses flow_mcp instead.
+    # extra_secrets (github) + the deployed flow MCP token (--mcp http) + the
+    # claude_code OAuth token (the session's only auth). NOT the bro's in-process
+    # MCP secret (notion) — claude code uses flow_mcp instead.
     secrets, optional, docker_sock = cw._container_secrets('ppp-dev', mcp='http', bro_mode=False)
-    assert {'session_log', 'trails', 'github', 'flow_mcp'} <= secrets
+    assert {'session_log', 'trails', 'github', 'flow_mcp', 'claude_code'} <= secrets
     assert 'notion' not in secrets
-    # native sessions don't mount the data-source toolset → no optional tier
+    # required (strict), not optional: no .credentials.json fallback in the
+    # container, so a missing token must fail loudly on the host
     assert optional == set()
     # a normal claude code session keeps the docker socket
     assert docker_sock is True
@@ -800,9 +813,13 @@ class TestContainerSecrets:
   def test_bro_mode_uses_full_manifest_and_anthropic(self):
     # --bro serves the bro's own MCP servers, so it gets the full manifest (notion)
     # plus anthropic for the apiKeyHelper. ppp-dev doesn't deploy → no docker socket.
-    secrets, _, docker_sock = cw._container_secrets('ppp-dev', mcp=None, bro_mode=True)
+    secrets, optional, docker_sock = cw._container_secrets('ppp-dev', mcp=None, bro_mode=True)
     assert {'notion', 'github', 'anthropic'} <= secrets
     assert docker_sock is False
+    # --bro runs claude --bare, which ignores CLAUDE_CODE_OAUTH_TOKEN, so the token
+    # secret is not requested on this surface
+    assert 'claude_code' not in optional
+    assert 'claude_code' not in secrets
 
   def test_bro_mode_includes_optional_secrets(self):
     # a bro with searchable data sources (librorian) advertises openai best-effort
@@ -932,8 +949,6 @@ class TestDockerCreateArgv:
   def build_argv(self, monkeypatch, tmp_path):
     monkeypatch.setattr(cw.Path, 'home', lambda: tmp_path)
     monkeypatch.setattr(cw, '_seed_container_claude_json', lambda d, h: tmp_path / '.claude.json')
-    monkeypatch.setattr(cw, '_keychain_credentials', lambda: None)
-    monkeypatch.setattr(cw, '_sync_credentials', lambda s, d: None)
 
     def build(**kwargs):
       return cw._docker_create_argv(
@@ -1046,7 +1061,6 @@ class TestRunInContainerInjection:
     monkeypatch.setattr(
       cw.credentials, 'build_scoped_store', lambda names, optional=(): {'credentials.json': b'{}'}
     )
-    monkeypatch.setattr(cw, '_sync_credentials', lambda s, d: None)
     calls: list = []
 
     def fake_run(argv, *a, **k):

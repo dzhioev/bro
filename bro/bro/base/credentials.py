@@ -189,6 +189,12 @@ _BUILTIN_REGISTRY: dict = {
   'process_inbox': {'sources': [{'file': 'process_inbox.json'}]},
   'openai': {'sources': [{'file': 'openai.json'}]},
   'anthropic': {'sources': [{'file': 'anthropic.json'}]},
+  'claude_code': {
+    'sources': [{'file': 'claude_code_oauth_token'}],
+    # the long-lived `claude setup-token` OAuth token, exported as the env var
+    # Claude Code reads above its rotating ~/.claude/.credentials.json OAuth.
+    'install': 'export CLAUDE_CODE_OAUTH_TOKEN="$(credentials get claude_code)"',
+  },
   'tmdb': {'sources': [{'file': 'tmdb.json'}]},
   'brave': {'sources': [{'file': 'brave.json'}]},
   'google_api': {'sources': [{'file': 'google_api.json'}]},
@@ -253,6 +259,12 @@ def default_store() -> Store:
 def get(name: str) -> str:
   """resolve a secret to its raw text via the process-wide default store."""
   return default_store().get(name)
+
+
+def try_get(name: str) -> Optional[str]:
+  """resolve a secret to its raw text via the process-wide default store, or None
+  when no source yields a value — the non-raising sibling of `get`."""
+  return default_store().try_get(name)
 
 
 def get_json(name: str) -> dict:
