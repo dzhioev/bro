@@ -133,7 +133,7 @@ These flags apply to `cw ss` and (with the exception of `-c` / `--drop` / `--mcp
   Strict, and the launch stops on misuse: granting a secret already in the set, or revoking one not in it (including granting/revoking the same name twice, or naming it in both lists), is an error — a no-op flag is a mistake to surface, not swallow.
 
   **Requires `-c`**: host mode is unscoped (the process reads `~/.ppp` directly), so a revoke there couldn't actually restrict the session — passing them without `-c` errors rather than silently no-op.
-- **`--effort {low|medium|high|xhigh|max}`** — forwarded as `claude --effort` (thinking effort).
+- **`--effort {low|medium|high|xhigh|max}`** — forwarded as `claude --effort` (thinking effort). Defaults to `xhigh`; pass an explicit level to override.
 - **`--rc`** — enables claude remote control (`--remote-control`). Off by default because it breaks Ctrl+V image paste; implied by `--auto`.
 - **`--resume`** — resume the latest Claude session in this workspace.
 

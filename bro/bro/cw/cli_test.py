@@ -845,7 +845,13 @@ class TestGrantRevoke:
     args = vars(parser.parse_args(['--into', 'my-branch']))
     assert cw.extract_forwarded_argv(args) == ['--into', 'my-branch']
 
-  def _start(self, *, grant: Optional[list[str]] = None, revoke: Optional[list[str]] = None) -> int:
+  def _start(
+    self,
+    *,
+    grant: Optional[list[str]] = None,
+    revoke: Optional[list[str]] = None,
+    effort: Optional[str] = None,
+  ) -> int:
     return cw.start_session(
       name='w',
       container=True,
@@ -854,7 +860,7 @@ class TestGrantRevoke:
       fast=False,
       grant=grant,
       revoke=revoke,
-      effort=None,
+      effort=effort,
       rc=False,
       resume=False,
       into=None,
@@ -896,6 +902,29 @@ class TestGrantRevoke:
     with pytest.raises(SystemExit):
       cw.main(['cw', 'ss', '--grant', 'gmail_creds', 'wsname'])
     assert 'require -c' in capsys.readouterr().err
+
+  def test_effort_defaults_to_xhigh(self):
+    from base.args import Parser
+
+    parser = Parser(add_help=False)
+    cw.add_forwarded_flags(parser)
+    assert parser.parse_args([]).effort == 'xhigh'
+
+  def test_start_session_injects_effort_into_claude_args(self):
+    with (
+      patch.dict('os.environ', {}, clear=False) as env,
+      patch('cw.cw', return_value=0) as fake_cw,
+      patch('cw._container_secrets', return_value=({'github'}, set(), True)),
+      patch('cw._session_append_prompt', return_value=''),
+    ):
+      env.pop('CW_BRO', None)
+      env.pop('CW_IN_CONTAINER', None)
+      rc = self._start(effort='xhigh')
+    assert rc == 0
+    _, kwargs = fake_cw.call_args
+    claude_args = kwargs['claude_args']
+    idx = claude_args.index('--effort')
+    assert claude_args[idx + 1] == 'xhigh'
 
 
 class TestDockerCreateArgv:

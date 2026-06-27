@@ -1282,9 +1282,9 @@ def add_forwarded_flags(parser: Parser) -> None:
   )
   parser.add_argument(
     '--effort',
-    default=None,
+    default='xhigh',
     choices=EFFORT_LEVELS,
-    help='thinking effort level (forwarded to claude --effort)',
+    help='thinking effort level (forwarded to claude --effort); defaults to xhigh',
   )
   parser.add_argument(
     '--rc',
@@ -1411,6 +1411,8 @@ def start_session(
     # wire MCP and the api-key helper).
     os.environ['CW_BRO'] = bro
     claude_args = [*_bro_claude_argv(bro), *claude_args]
+    if effort is not None:
+      claude_args = ['--effort', effort, *claude_args]
     if prompt is not None:
       claude_args = [*claude_args, '--', prompt]
     secrets, optional, docker_sock = _container_secrets(bro, mcp=mcp, bro_mode=True)
