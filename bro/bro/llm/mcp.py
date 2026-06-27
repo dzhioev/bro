@@ -1,3 +1,4 @@
+import functools
 import inspect
 import re
 from abc import ABC, abstractmethod
@@ -47,6 +48,85 @@ def render_has_cred(text: str, available: Callable[[str], bool], declared: Itera
     return present if is_available else otherwise
 
   return _HAS_CRED_RE.sub(replace, text)
+
+
+_PRIMITIVE_SHAPE = {
+  'string': 'str',
+  'integer': 'int',
+  'number': 'float',
+  'boolean': 'bool',
+  'null': 'null',
+}
+
+
+def render_return_shape(output_schema: dict[str, Any]) -> str:
+  """render a tool's output JSON Schema as a readable shape.
+
+  objects are pretty-printed across lines with 2-space indentation; scalars, enums,
+  unions, and tuples stay inline. e.g. a list return renders as `Project{\\n  id: str,
+  \\n  ...\\n}[]`. Meant to be appended to a tool description so an LLM knows the return
+  shape without calling the tool first — clients ignore `outputSchema` unevenly and the
+  upstream proxy historically rejected `structuredContent`, but every client reads the
+  description.
+  """
+  defs = output_schema.get('$defs', {})
+  return _render_shape(_unwrap_structured(output_schema), defs, frozenset(), 0)
+
+
+def _unwrap_structured(schema: dict[str, Any]) -> dict[str, Any]:
+  # func_metadata wraps a non-object return (list / Optional / scalar) in a synthetic
+  # `{result: X}` object titled `<fn>Output`; peel it so the shape reflects the real
+  # return type rather than the wrapper.
+  props = schema.get('properties')
+  if (
+    schema.get('type') == 'object'
+    and isinstance(props, dict)
+    and set(props.keys()) == {'result'}
+    and schema.get('title', '').endswith('Output')
+  ):
+    return props['result']
+  return schema
+
+
+def _render_shape(
+  node: dict[str, Any], defs: dict[str, Any], seen: frozenset[str], indent: int
+) -> str:
+  if '$ref' in node:
+    name = node['$ref'].rsplit('/', 1)[-1]
+    if name in seen:
+      return name
+    body = _render_shape(defs.get(name, {}), defs, seen | {name}, indent)
+    # name a referenced object (`Project{...}`); leave inlined enums/scalars bare so
+    # their allowed values show through.
+    return f'{name}{body}' if body.startswith('{') else body
+  if 'anyOf' in node:
+    parts = [_render_shape(s, defs, seen, indent) for s in node['anyOf']]
+    nullable = 'null' in parts
+    non_null = [p for p in dict.fromkeys(parts) if p != 'null']
+    if len(non_null) == 0:
+      return 'null'
+    rendered = '|'.join(non_null)
+    return f'{rendered}|null' if nullable else rendered
+  if 'enum' in node:
+    return '|'.join(f'"{v}"' if isinstance(v, str) else str(v) for v in node['enum'])
+  # a fixed-length tuple carries both `prefixItems` and `type: array`; match it first.
+  if 'prefixItems' in node:
+    return '[' + ', '.join(_render_shape(s, defs, seen, indent) for s in node['prefixItems']) + ']'
+  node_type = node.get('type')
+  if node_type == 'array':
+    return f'{_render_shape(node.get("items", {}), defs, seen, indent)}[]'
+  if node_type == 'object' or 'properties' in node:
+    props = node.get('properties', {})
+    if len(props) == 0:
+      return '{}'
+    pad = '  ' * (indent + 1)
+    fields = ',\n'.join(
+      f'{pad}{k}: {_render_shape(v, defs, seen, indent + 1)}' for k, v in props.items()
+    )
+    return '{\n' + fields + '\n' + '  ' * indent + '}'
+  if node_type in _PRIMITIVE_SHAPE:
+    return _PRIMITIVE_SHAPE[node_type]
+  return 'any'
 
 
 class ToolControlSignal(Exception):
@@ -148,6 +228,9 @@ class FunctionTool(Tool):
     self._metadata = func_metadata(fn, structured_output=structured)
     self._output_schema = self._metadata.output_schema
     self._parameters = self._metadata.arg_model.model_json_schema(by_alias=True)
+    self._return_shape = (
+      render_return_shape(self._output_schema) if self._output_schema is not None else None
+    )
 
   @property
   def name(self) -> str:
@@ -155,7 +238,11 @@ class FunctionTool(Tool):
 
   @property
   def description(self) -> str:
-    return self._description
+    # append the return shape so an LLM knows the result structure without a probe call;
+    # str-returning tools have no schema and are left as-is.
+    if self._return_shape is None:
+      return self._description
+    return f'{self._description}\n\nReturns: {self._return_shape}'
 
   @property
   def parameters(self) -> dict[str, Any]:
@@ -171,16 +258,53 @@ class FunctionTool(Tool):
     result = self.fn(**kwargs)
     if inspect.isawaitable(result):
       result = await result
+    return self._coerce_output(result)
+
+  def _coerce_output(self, result: Any) -> dict[str, Any] | str:
+    # validate a raw return against the output schema and return the JSON-ready value: a
+    # str-returning tool passes through; a structured one is model-validated (raising on a
+    # backend result that doesn't match the declared shape) and dumped to canonical JSON.
     if self._output_schema is None:
       assert isinstance(result, str), (
         f'unstructured tool {self._name!r} must return str, got {type(result).__name__}'
       )
       return result
     assert self._metadata.output_model is not None
-    if self._metadata.wrap_output:
-      result = {'result': result}
-    validated = self._metadata.output_model.model_validate(result)
-    return validated.model_dump(mode='json', by_alias=True)
+    payload = {'result': result} if self._metadata.wrap_output else result
+    return self._metadata.output_model.model_validate(payload).model_dump(
+      mode='json', by_alias=True
+    )
+
+  def validate_output(self, result: Any) -> None:
+    """raise if a raw tool return doesn't conform to the output schema; no-op otherwise.
+
+    for delivery channels that serialize the result themselves (the HTTP MCP server) but
+    still want the in-process path's fail-fast guard against backend drift. The validated
+    JSON it produces is discarded — only the raising side effect is wanted.
+    """
+    self._coerce_output(result)
+
+
+def validated_callable(tool: FunctionTool) -> Callable[..., Any]:
+  """wrap a FunctionTool's raw function so its return is schema-validated before use.
+
+  for a delivery channel that registers the bare function with an external framework and
+  serializes the result itself (the HTTP MCP server via FastMCP): `functools.wraps` keeps
+  the original signature, so the framework derives the same input schema, while the wrapper
+  adds the in-process path's fail-fast check that the backend result matches the declared
+  output shape. The result is returned unchanged for the framework to serialize.
+  """
+  fn = tool.fn
+
+  @functools.wraps(fn)
+  async def validating(**kwargs: Any) -> Any:
+    result = fn(**kwargs)
+    if inspect.isawaitable(result):
+      result = await result
+    tool.validate_output(result)
+    return result
+
+  return validating
 
 
 class _NamespacedTool(Tool):

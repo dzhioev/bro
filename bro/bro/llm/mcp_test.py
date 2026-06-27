@@ -1,8 +1,9 @@
 from dataclasses import dataclass
+from enum import Enum
 from typing import Annotated, Optional
 
 import pytest
-from pydantic import Field
+from pydantic import Field, ValidationError
 
 from llm import mcp as mcp_mod
 from llm.mcp import (
@@ -13,8 +14,132 @@ from llm.mcp import (
   describe,
   namespaced_tools,
   render_has_cred,
+  render_return_shape,
+  validated_callable,
   wire_name,
 )
+
+
+class _Color(Enum):
+  RED = 'red'
+  BLUE = 'blue'
+
+
+@dataclass
+class _Item:
+  id: str
+  tags: list[str]
+  color: _Color
+  note: Optional[str]
+
+
+class TestReturnShape:
+  def _schema(self, fn) -> dict:
+    describe(fn, 'd')
+    schema = FunctionTool(fn).output_schema
+    assert schema is not None
+    return schema
+
+  def test_object_with_enum_list_and_optional(self):
+    def make() -> _Item:
+      raise NotImplementedError
+
+    assert render_return_shape(self._schema(make)) == (
+      '{\n  id: str,\n  tags: str[],\n  color: "red"|"blue",\n  note: str|null\n}'
+    )
+
+  def test_list_return_unwraps_and_names_element(self):
+    def make() -> list[_Item]:
+      raise NotImplementedError
+
+    assert render_return_shape(self._schema(make)).startswith('_Item{')
+    assert render_return_shape(self._schema(make)).endswith('}[]')
+
+  def test_optional_return_unwraps_to_nullable(self):
+    def make() -> Optional[_Item]:
+      raise NotImplementedError
+
+    assert render_return_shape(self._schema(make)).endswith('}|null')
+
+  def test_str_return_omits_shape_from_description(self):
+    def echo(x: Annotated[str, Field(description='x')]) -> str:
+      return x
+
+    describe(echo, 'echo')
+    assert FunctionTool(echo).description == 'echo'
+
+  def test_structured_return_appends_shape_to_description(self):
+    def make() -> _Item:
+      raise NotImplementedError
+
+    describe(make, 'make an item')
+    description = FunctionTool(make).description
+    assert description.startswith('make an item\n\nReturns: {')
+
+
+@dataclass
+class _Pair:
+  x: int
+  label: str
+
+
+class TestOutputValidation:
+  def _tool(self, fn) -> FunctionTool:
+    describe(fn, 'd')
+    return FunctionTool(fn)
+
+  def test_validate_output_accepts_conforming(self):
+    def make() -> _Pair:
+      return _Pair(x=1, label='a')
+
+    self._tool(make).validate_output(_Pair(x=1, label='a'))
+
+  def test_validate_output_raises_on_wrong_type(self):
+    def make() -> _Pair:
+      return _Pair(x=1, label='a')
+
+    with pytest.raises(ValidationError):
+      self._tool(make).validate_output({'x': 'not-an-int', 'label': 'a'})
+
+  def test_validate_output_raises_on_missing_field(self):
+    def make() -> _Pair:
+      return _Pair(x=1, label='a')
+
+    with pytest.raises(ValidationError):
+      self._tool(make).validate_output({'x': 1})
+
+  def test_validate_output_raises_on_wrong_list_shape(self):
+    def make() -> list[_Pair]:
+      return [_Pair(x=1, label='a')]
+
+    with pytest.raises(ValidationError):
+      self._tool(make).validate_output('not-a-list')
+
+  def test_validate_output_str_tool_rejects_non_str(self):
+    def echo(x: Annotated[str, Field(description='x')]) -> str:
+      return x
+
+    tool = self._tool(echo)
+    tool.validate_output('fine')
+    with pytest.raises(AssertionError):
+      tool.validate_output(123)
+
+  @pytest.mark.asyncio
+  async def test_validated_callable_returns_result_unchanged(self):
+    def make(n: Annotated[int, Field(description='n')]) -> _Pair:
+      return _Pair(x=n, label='a')
+
+    wrapped = validated_callable(self._tool(make))
+    assert await wrapped(n=5) == _Pair(x=5, label='a')
+
+  @pytest.mark.asyncio
+  async def test_validated_callable_raises_on_drift(self):
+    def make() -> _Pair:
+      return {'x': 1}  # type: ignore[return-value]  # simulate backend drift
+
+    wrapped = validated_callable(self._tool(make))
+    with pytest.raises(ValidationError):
+      await wrapped()
 
 
 class TestFunctionTool:
