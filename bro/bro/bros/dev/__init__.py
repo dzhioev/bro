@@ -21,18 +21,23 @@ Style:
   and now-false why-claims don't surface on their own.
 - Write comments and docs for a reader who has the final code and the whole repo
   but wasn't in the room while you wrote it: they never saw the alternatives you
-  weighed, the audit/ticket you worked from, or what the code said before. A code
-  comment earns its place only when it explains something that reader can SEE and
-  would wonder about (a construct, a value, a deliberate omission) and can resolve
-  without leaving the repo. Cut what's anchored to your trajectory, not the code:
-  roads not taken (defending against an alternative they wouldn't reach for on
-  their own), unresolvable refs (audit/ticket ids, "as discussed"), and change-
-  narration ("now"/"used to"/"is gone" — state the behavior, not the transition).
-  Also cut what merely restates what's already there: a comment duplicating a
-  reference doc or paraphrasing the code, per-assertion narration in tests, and
-  help/doc text that narrates a use case instead of saying what the thing does.
-  "Why not the obvious alternative" rationale belongs in the PR/task/spec, not
-  inline. Default to none; add one only for a non-obvious why.
+  weighed, the audit/ticket you worked from, or what the code said before. The
+  test every comment must pass: could that reader, holding ONLY the final code,
+  resolve it without leaving the repo? It earns its place only when it explains
+  something they can SEE and would wonder about (a construct, a value, a
+  deliberate omission); cut whatever fails the test as anchored to your
+  trajectory, not the code. Common ways it fails: roads not taken (defending
+  against an alternative they wouldn't reach for on their own); unresolvable refs
+  (audit/ticket ids, "as discussed"); change-narration ("now"/"used to"/"is gone"
+  — state the behavior, not the transition); and the one the act of editing
+  breeds — a comment or doc framed around a symbol, file, or behavior this change
+  just deleted or renamed, which the reader can no longer see, so re-read every
+  comment near a removal or rename, not only the code. Also cut what merely
+  restates what's already there: a comment duplicating a reference doc or
+  paraphrasing the code, per-assertion narration in tests, and help/doc text that
+  narrates a use case instead of saying what the thing does. "Why not the obvious
+  alternative" rationale belongs in the PR/task/spec, not inline. Default to none;
+  add one only for a non-obvious why.
 - Fail fast on violated assumptions — make it the default, not something to be
   asked for. When data is malformed, missing where it's required, or in a state
   that "shouldn't happen", raise and stop rather than coping — no fallback

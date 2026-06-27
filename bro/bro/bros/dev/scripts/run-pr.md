@@ -32,7 +32,9 @@ Run before committing:
 
 A red suite blocks the commit. Do not interpret or triage failures — propose fixing in this session or a separate one, but do not commit through failures.
 
-**Policy audit**: before committing, re-read your Style guidance and audit your `git diff` for anything that violates it. The policies carry their own specifics, so this gate just re-applies all of them — including any added later. It's the cheapest place to catch a violation; the alternative is a review round-trip.
+**Policy audit**: before each commit, re-read your Style guidance and audit that commit's `git diff` against it. The policies carry their own specifics, so this gate just re-applies all of them.
+
+Treat it as a precondition of the `git commit`, run at the moment of committing — not an intention you form earlier and carry across other steps. **State the verdict as visible output before the commit**: a one-line `clean`, or the violation(s) you found and how you fixed them. An audit done only in your head is indistinguishable from one skipped, so an interruption (a `[Request interrupted]`, a "continue") can silently drop it; a written verdict can't be dropped unnoticed. It's the cheapest place to catch a violation — the alternative is a review round-trip.
 
 ### 3. Sync CLAUDE.md
 
