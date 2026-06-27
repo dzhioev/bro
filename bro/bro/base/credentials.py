@@ -71,7 +71,13 @@ class LocalSource:
     for directory in _search_dirs():
       path = Path(directory) / self.file
       if path.is_file():
-        return path.read_text()
+        try:
+          text = path.read_text()
+        except UnicodeDecodeError:
+          raise ValueError(f'credential file {path} is not valid UTF-8 text')
+        if '\x00' in text:
+          raise ValueError(f'credential file {path} contains null bytes')
+        return text
     return None
 
   @classmethod
