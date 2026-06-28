@@ -106,7 +106,7 @@ If `cw ss -c` is invoked from inside an already-containerised session (`CW_IN_CO
 
 ## Flags that shape the session
 
-These flags apply to `cw ss` and (with the exception of `-c` / `--drop` / `--mcp` / `--bro` / `-p`) are also exported via `cw.add_forwarded_flags` so wrappers like `dive-in` and `start-session` can pass them straight through without per-flag plumbing.
+These flags apply to `cw ss` and (with the exception of `-c` / `--drop` / `--mcp` / `--bro` / `-p`) are also exported via `cw.add_forwarded_flags` so the `dive-in` wrapper can pass them straight through without per-flag plumbing.
 
 - **`-c`, `--container`** — container mode (see above). Defaults off; host mode is the default.
 - **`--drop`** — remove the workspace on exit without prompting.
