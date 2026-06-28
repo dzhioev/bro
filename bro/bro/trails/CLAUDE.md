@@ -42,7 +42,7 @@ The CLI keeps the parent's spec and prompt; for cross-model / cross-prompt forks
 
 ## Auth
 
-Bearer token, mandatory by default; the no-auth mode (`TRAILS_ALLOW_NO_AUTH=1`) requires a loopback `HOST` and exists for `run_local.sh`. The deployed token lives in SSM `/trails/bearer-token` (seeded by `server/bootstrap_secrets.sh`); clients resolve the `trails` secret (written by `setup/bootstrap_trails.sh` to `~/.ppp/trails.json`, see `setup/CLAUDE.md`) — read and write sides share that one credential.
+Bearer token, mandatory by default; the no-auth escape hatch (`TRAILS_ALLOW_NO_AUTH=1`) requires a loopback `HOST` and is opt-in only. `server/run_local.sh` does **not** use it — it runs with bearer auth (`exec trails-server --allow-env` after exporting `TRAILS_BEARER_TOKEN` from the `trails` secret). The deployed token lives in SSM `/trails/bearer-token` (seeded by `server/bootstrap_secrets.sh`); clients resolve the `trails` secret (written by `setup/bootstrap_trails.sh` to `~/.ppp/trails.json`, see `setup/CLAUDE.md`) — read and write sides share that one credential.
 
 ## Deployment
 

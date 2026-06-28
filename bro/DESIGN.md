@@ -20,15 +20,14 @@ A Bro is a subclass of `Bro`:
 class PM(Bro):
   name = 'pm'                          # unique, kebab-case
   description = '...'                  # one line, shown in tool listings
-  model = 'gpt-5.4-mini'               # override the base default
-  reasoning_effort = 'medium'          # optional
+  system_prompt = SYSTEM_PROMPT        # class-level; MRO-concatenated base→derived
+  llm_spec = llm.llms.chat_gpt.LLMSpec(model='gpt-5.4-mini', reasoning_effort='medium')
   mcp_servers = [flow.MCPServer()]     # full flow toolset
   # or: flow.MCPServer('add_task', 'list_tasks')  # subset, validated at construction
   data_sources = [Wikipedia()]         # read-only connectors
-
-  def __init__(self):
-    super().__init__(system_prompt=SYSTEM_PROMPT)
 ```
+
+Everything is a class attribute — there is no custom `__init__`. The LLM recipe is the whole `LLMSpec` (model + provider-specific knobs), overridden as one attribute; per-instance overrides go through `Bro.create(spec)`.
 
 The base class, on instantiation:
 
@@ -69,11 +68,11 @@ The same Bro runs from many launchers:
 - **Claude Code** — `cw ss --bro <name>` launches a bare Claude Code session whose system prompt and MCP servers come from the named Bro. Tools are wired through the `mcp-server bro:<name>` stdio shim, which exposes the union of the Bro's declared MCP servers and data-source tools. Useful when the user wants a chat UI over the Bro's policy + toolkit.
 - **`ask` / `do-task`** — one-shot launchers for autonomous runs; see `do/CLAUDE.md`.
 
-A given Bro need not support every surface — `pm` is consumed by both `cw ss --bro pm` and the `process-inbox` TUI; `assistant` is HTTP-only; `librorian` runs from the console.
+A given Bro need not support every surface — `pm` is consumed by both `cw ss --bro pm` and the `process-inbox` TUI; `librorian` runs from the console. `assistant` (which declares `mcp_servers=[flow.MCPServer()]`) is reachable from every surface — `bro run`/`bro show`, `cw ss --bro assistant`, and the HTTP server — but it is only the HTTP server's *default* bro, so the iOS app reaches it without naming it.
 
 ## Registry
 
-Bros live in a process-wide dict keyed by `name`. First lookup triggers `bros.init()`, which imports each module and registers its class. There is no auto-discovery; the import plus the registry entry is the contract. Each subclass is instantiated exactly once at registration time, and every caller gets that same instance.
+Bros live in a process-wide dict keyed by `name`, holding **classes** (not instances). Lookup is lazy per-name: a miss imports only the one module named for that name in the `BRO_SPECS` map (`name -> "module:ClassName"`) and registers its class, so `create_bro('pm')` never pulls in another bro's dependency graph. There is no `bros.init()` and no auto-discovery; the `BRO_SPECS` entry is the contract (only `list_classes()` / `bro list` imports them all). `create_bro(name, llm_spec=None)` returns a **fresh instance every call** — callers that need the same instance across requests cache the return value themselves.
 
 ## Concrete roster
 
@@ -82,6 +81,8 @@ The current set lives in `bros/`:
 - `assistant` — general-purpose chat; default for the iOS app via the HTTP server
 - `pm` — Flow inbox triage; canonical source of triage policy for both the `process-inbox` TUI and `cw ss --bro pm`
 - `librorian` — steward of the Flow media library (adds, maintains, recommends)
-- `devoops` — autonomous service deploys (flow-mcp, flow-focus, emails-test, emails-prod) with a dry-run-first safety reflex; tools wrap `infra/mcp.py`
+- `devoops` — autonomous service deploys (the deploy targets are enumerated in `infra/mcp.py`'s `TARGETS` / `list_targets`) with a dry-run-first safety reflex; tools wrap `infra/mcp.py`
+- `dev` — generic software developer with file + shell + search tools
+- `ppp-dev` — full-stack PPP development (inherits `dev`, adds the flow toolset and the `/fix`, `/pr`, `/land` skills); the bro whose persona `dive-in` sessions run under
 
 Adding a new Bro is creating a new subclass and registering it — see `CLAUDE.md` for the operational checklist.
