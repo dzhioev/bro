@@ -1268,7 +1268,7 @@ def add_forwarded_flags(parser: Parser) -> None:
     '--into',
     default=None,
     metavar='REF',
-    help="base a new session on git REF (branch/tag/sha) instead of the default (the host repo's current HEAD, in both container and host mode). ignored once the workspace exists",
+    help="base a new session on git REF (branch/tag/sha) instead of the default (the host repo's current HEAD, in both container and host mode). a REF that only exists on origin is fetched automatically. ignored once the workspace exists",
   )
 
 
@@ -1286,6 +1286,33 @@ def extract_forwarded_argv(args: dict) -> list[str]:
     if len(a.option_strings) > 0 and a.dest in args
   }
   return parser.reconstruct(forwarded, prog=[])
+
+
+def _resolve_base_ref(into: str) -> Optional[str]:
+  # resolve --into (branch/tag/sha) to a commit sha in the host repo. when the
+  # ref isn't host-local, fetch it from origin and resolve FETCH_HEAD: a feature
+  # branch pushed to origin from a container has no host-local ref, so basing a
+  # later workspace on it (the `/feature` per-stage flow) would otherwise fail. the
+  # container reaches the fetched objects via /host-repo's shared store. returns
+  # None when neither the local lookup nor the origin fetch resolves.
+  root = _project_root()
+  local = subprocess.run(
+    ['git', 'rev-parse', '--verify', f'{into}^{{commit}}'],
+    cwd=root,
+    capture_output=True,
+    text=True,
+  )
+  if local.returncode == 0:
+    return local.stdout.strip()
+  if subprocess.run(['git', 'fetch', 'origin', into], cwd=root).returncode != 0:
+    return None
+  fetched = subprocess.run(
+    ['git', 'rev-parse', '--verify', 'FETCH_HEAD^{commit}'],
+    cwd=root,
+    capture_output=True,
+    text=True,
+  )
+  return fetched.stdout.strip() if fetched.returncode == 0 else None
 
 
 def start_session(
@@ -1348,22 +1375,16 @@ def start_session(
     log.info('resuming session %s', session_id)
     claude_args = ['--resume', session_id, *claude_args]
 
-  # resolve --into against the host repo now (a branch/tag/sha → a sha). the
-  # container reaches it via /host-repo's shared objects; the host worktree bases
-  # its new branch on it. only meaningful at creation — resume reuses the existing
+  # resolve --into to a commit sha now (a branch/tag/sha → a sha). the container
+  # reaches it via /host-repo's shared objects; the host worktree bases its new
+  # branch on it. only meaningful at creation — resume reuses the existing
   # workspace, so the two are mutually exclusive (checked in main).
   base_ref: Optional[str] = None
   if into is not None:
-    rev = subprocess.run(
-      ['git', 'rev-parse', '--verify', f'{into}^{{commit}}'],
-      cwd=_project_root(),
-      capture_output=True,
-      text=True,
-    )
-    if rev.returncode != 0:
+    base_ref = _resolve_base_ref(into)
+    if base_ref is None:
       log.error('cannot resolve --into ref: %s', into)
       return 1
-    base_ref = rev.stdout.strip()
 
   if auto:
     os.environ['GIT_AUTHOR_NAME'] = _BRO_GIT_NAME

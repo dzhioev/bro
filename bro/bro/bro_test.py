@@ -1,3 +1,4 @@
+import asyncio
 import json
 import sys
 import types
@@ -973,6 +974,38 @@ class TestSkillsDiscovery:
     EmptyBro.__module__ = pkg
     bro = EmptyBro()
     assert bro.skills == {}
+
+  def test_claude_bro_servers_carry_skill_tool(self, fake_pkgs):
+    # the `cw ss --bro` surface reaches skills through the `skill` tool (--bare
+    # gives no slash commands), so claude_bro_mcp_servers must carry it — and not
+    # `raise`, since a human drives the session.
+    pkg = fake_pkgs('_skills_claude', {'epic': _skill('drive an epic', 'epic body')})
+
+    class SkillBro(BaseBro):
+      name = 'csb'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    SkillBro.__module__ = pkg
+    names = asyncio.run(_collect_tool_names(SkillBro().claude_bro_mcp_servers()))
+    assert 'skill' in names
+    assert 'raise' not in names
+
+  def test_claude_bro_servers_omit_skill_without_skills(self, fake_pkgs):
+    pkg = fake_pkgs('_skills_claude_empty')
+
+    class EmptyBro(BaseBro):
+      name = 'ceb'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    EmptyBro.__module__ = pkg
+    names = asyncio.run(_collect_tool_names(EmptyBro().claude_bro_mcp_servers()))
+    assert 'skill' not in names
 
   def test_ad_hoc_class_in_non_package_module_has_no_skills(self):
     # tests live in bro/bro_test.py — not an __init__.py — so the walk skips it

@@ -59,7 +59,7 @@ The reason this isn't just "pass `-c` through" is that container is the safer / 
 
 ## Base ref (`--into`)
 
-By default a session is based on the host repo's current `HEAD` — both in container mode (the clone checks out the host's checkout) and host mode (the worktree branches from `HEAD`). `dive-in --into <ref>` (a forwarded `cw ss` flag — see `reference/cw.md`) overrides that, basing the new session on any branch/tag/sha instead: the container checks that ref out in its clone, and a `--host` session bases its worktree branch on it. Useful for basing a session on a ref you don't have checked out. Only applies when the workspace is first created.
+By default a session is based on the host repo's current `HEAD` — both in container mode (the clone checks out the host's checkout) and host mode (the worktree branches from `HEAD`). `dive-in --into <ref>` (a forwarded `cw ss` flag — see `reference/cw.md`) overrides that, basing the new session on any branch/tag/sha instead: the container checks that ref out in its clone, and a `--host` session bases its worktree branch on it. Useful for basing a session on a ref you don't have checked out. A ref that's resolvable only on origin (e.g. a feature branch pushed from another container — the `/feature` per-stage flow bases each stage on its feature branch this way) is fetched from origin automatically. Only applies when the workspace is first created.
 
 ## Initial-prompt composition
 

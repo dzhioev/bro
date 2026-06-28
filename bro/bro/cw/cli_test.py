@@ -729,6 +729,42 @@ class TestEnsureHostWorktree:
     assert calls == []
 
 
+class TestResolveBaseRef:
+  def _patch(self, monkeypatch, *, local_rc, fetch_rc=1, fetched_sha='deadbeef'):
+    import pathlib
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(cw, '_project_root', lambda: pathlib.Path('/repo'))
+    calls: list = []
+
+    def fake_run(args, **kwargs):
+      calls.append(args)
+      if args[:3] == ['git', 'rev-parse', '--verify'] and args[3] == 'FETCH_HEAD^{commit}':
+        return SimpleNamespace(returncode=0, stdout=f'{fetched_sha}\n')
+      if args[:3] == ['git', 'rev-parse', '--verify']:
+        return SimpleNamespace(returncode=local_rc, stdout='localsha\n' if local_rc == 0 else '')
+      if args[:2] == ['git', 'fetch']:
+        return SimpleNamespace(returncode=fetch_rc, stdout='')
+      raise AssertionError(f'unexpected command {args}')
+
+    monkeypatch.setattr(cw.subprocess, 'run', fake_run)
+    return calls
+
+  def test_resolves_host_local_ref_without_fetching(self, monkeypatch):
+    calls = self._patch(monkeypatch, local_rc=0)
+    assert cw._resolve_base_ref('master') == 'localsha'
+    assert not any(c[:2] == ['git', 'fetch'] for c in calls)
+
+  def test_fetches_origin_when_ref_not_host_local(self, monkeypatch):
+    calls = self._patch(monkeypatch, local_rc=1, fetch_rc=0, fetched_sha='abc123')
+    assert cw._resolve_base_ref('worktree-feature') == 'abc123'
+    assert ['git', 'fetch', 'origin', 'worktree-feature'] in calls
+
+  def test_returns_none_when_neither_resolves(self, monkeypatch):
+    self._patch(monkeypatch, local_rc=1, fetch_rc=1)
+    assert cw._resolve_base_ref('nope') is None
+
+
 class TestPopulateBroSkills:
   def test_creates_symlinks_for_each_skill(self, tmp_path):
     # ppp-dev inherits /pr and /land from dev via the MRO walk

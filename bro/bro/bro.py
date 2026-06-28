@@ -502,6 +502,14 @@ class BaseBro(ABC):
       return [*self._mcp_servers, _build_service_server(self, include_raise=False)]
     return [*self._mcp_servers, self._service_server]
 
+  def claude_bro_mcp_servers(self) -> list[llm.mcp.MCPServer]:
+    # the MCP servers a `cw ss --bro` Claude Code session mounts (through
+    # mcp_server.py's `bro:<name>` surface): the same interactive set `send()`
+    # gets — declared servers plus the `skill` tool, no `raise` (a human drives
+    # the session). without it the `--bro` surface exposes only the declared
+    # servers, leaving the bro's skills unreachable there.
+    return self._mcp_servers_for(interactive=True)
+
   def _system_prompt_for(self, *, interactive: bool) -> str:
     note = _INTERACTIVE_NOTE if interactive else _NON_INTERACTIVE_NOTE
     return f'{self.system_prompt}\n\n{note}'

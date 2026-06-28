@@ -22,8 +22,10 @@ If any precondition fails, stop and report — do not invent state.
 ### 1. Resolve the PR
 
 ```bash
-gh pr view --json number,title,body,state,reviewDecision
+gh pr view --json number,title,body,state,reviewDecision,baseRefName
 ```
+
+`baseRefName` is the branch the PR merges into — `master` unless the PR was opened against another base. Step 2 scopes the footer range to it.
 
 - If `state` is not `OPEN`, report (`MERGED` / `CLOSED`) and stop.
 - If `reviewDecision` is not `APPROVED` and the user has not explicitly waived it, stop and surface:
@@ -33,13 +35,13 @@ gh pr view --json number,title,body,state,reviewDecision
 
 Use the PR's title and body as the squash subject and body. Pull from `gh pr view --json title,body`.
 
-GitHub builds the squash commit server-side from the PR title + `--body`, so the per-commit token footers on the branch commits are discarded with those commits. To keep the session spend on master, generate an **aggregated** footer over the PR's commits and append it to the body so it lands on the squash commit:
+GitHub builds the squash commit server-side from the PR title + `--body`, so the per-commit token footers on the branch commits are discarded with those commits. To keep the session spend on the squash commit, generate an **aggregated** footer over the PR's commits and append it to the body:
 
 ```bash
-./setup/claude_commit_footer.py --squash origin/master..HEAD
+./setup/claude_commit_footer.py --squash origin/<baseRefName>..HEAD
 ```
 
-This emits the two-line footer summing every branch commit's per-model deltas (with the union of their session ids and Claude Code versions) plus this land session's own uncommitted work. Append its two lines to the PR body, below the `Task:` line. If it warns about footerless commits in the range, surface that — those commits' tokens are not captured.
+Use the `baseRefName` from step 1 (`master` unless the PR targets another base) — the range must be relative to the PR's actual base, or the footer would miscount. This emits the two-line footer summing every branch commit's per-model deltas (with the union of their session ids and Claude Code versions) plus this land session's own uncommitted work. Append its two lines to the PR body, below the `Task:` line. If it warns about footerless commits in the range, surface that — those commits' tokens are not captured.
 
 If the worktree has multiple commits, the PR title/body should already reflect the full scope (step 12 of `/pr` enforced this).
 

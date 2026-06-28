@@ -1,12 +1,16 @@
 ---
 name: pr
-description: This skill should be used when the user signals that the worktree's changes are ready for review and a PR should be opened — "open a PR", "send for review", "PR it", "ship it", "ready for review", "finalize". Covers commit hygiene (CLAUDE.md sync, Dockerfile audit, policy audit, commit splitting), the project's commit-message style, footer generation via `./setup/claude_commit_footer.py`, submodule landing, rebase onto master, opens the PR via `gh pr create`, then launches `Monitor` + `poll-pr` to handle review comments and APPROVED events. In `--auto` mode, chains into `/land` automatically on approval. For the post-approval merge step, use `/land`.
+description: This skill should be used when the user signals that the worktree's changes are ready for review and a PR should be opened — "open a PR", "send for review", "PR it", "ship it", "ready for review", "finalize". Covers commit hygiene (CLAUDE.md sync, Dockerfile audit, policy audit, commit splitting), the project's commit-message style, footer generation via `./setup/claude_commit_footer.py`, submodule landing, rebase onto the base branch (master by default), opens the PR via `gh pr create`, then launches `Monitor` + `poll-pr` to handle review comments and APPROVED events. In `--auto` mode, chains into `/land` automatically on approval. For the post-approval merge step, use `/land`.
 version: 1.0.0
 ---
 
 # /pr
 
 Take worktree changes from "work is finished" to "PR open and through review". Stops at APPROVED — `/land` does the merge.
+
+## Arguments
+
+- `--base <branch>` — base the PR on `<branch>` instead of `master`: rebase onto it (step 9), scope the commit list against it (steps 5, 10), and pass `--base <branch>` to `gh pr create` (step 12). Default `master`. The `/feature` per-stage flow passes the feature integration branch here so each stage opens its PR into the feature branch rather than master. Below, `<base>` means this value (`master` when the flag is absent).
 
 ## Preconditions
 
@@ -46,7 +50,7 @@ If the diff adds, deletes, or renames `.py` files, check every `Dockerfile` in t
 
 ### 5. Decide commit splits
 
-If `/fix` already checkpointed completed units as it implemented, those commits are your splits — review them with `git log origin/master..HEAD`, commit any remaining uncommitted work the same way, and don't reorganize what's already on the branch. Otherwise, split the uncommitted work:
+If `/fix` already checkpointed completed units as it implemented, those commits are your splits — review them with `git log origin/<base>..HEAD`, commit any remaining uncommitted work the same way, and don't reorganize what's already on the branch. Otherwise, split the uncommitted work:
 
 `CLAUDE.md` rule: split commits logically by feature/concern. Group by concern, not by file:
 - Two unrelated fixes → two commits.
@@ -120,10 +124,10 @@ Before pushing the main repo, check whether any submodules have commits that are
 
 The main repo must not be pushed until all submodules it references are available on their remotes — otherwise anyone cloning/pulling gets a dangling submodule pointer.
 
-### 9. Rebase onto master
+### 9. Rebase onto the base branch
 
 ```bash
-git fetch origin master && git rebase origin/master
+git fetch origin <base> && git rebase origin/<base>
 ```
 
 Conflicts → stop and report to the user. Do not `--abort` or `--skip` without asking. Prefer `Edit` over `Write` for resolving conflict markers — re-Read in conflict state, replace each `<<<<<<<...=======...>>>>>>>` block with the merged version. Cheaper than rewriting whole files.
@@ -131,7 +135,7 @@ Conflicts → stop and report to the user. Do not `--abort` or `--skip` without 
 ### 10. Verify PR scope
 
 ```bash
-git log origin/master..HEAD --oneline
+git log origin/<base>..HEAD --oneline
 ```
 
 Confirm the commit list matches the intended PR title and body. If the worktree carries unrelated in-flight commits, either:
@@ -156,7 +160,7 @@ Build the PR title and body:
 - **Body**: `Task:` line linking the Notion URL (if `CW_TASK_ID` is set), then `## Summary` bullets describing the changes, then a `## Test plan` checklist.
 
 ```bash
-gh pr create --base master --title "<title>" --body "$(cat <<'EOF'
+gh pr create --base <base> --title "<title>" --body "$(cat <<'EOF'
 Task: https://www.notion.so/...
 
 ## Summary

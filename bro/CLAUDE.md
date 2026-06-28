@@ -62,6 +62,8 @@ Bro is the agent system: independent specialised agents (a "Bro") each run as a 
 
 Changes to triage policy go in `bro/bros/pm/__init__.py` and propagate to both surfaces on next process start.
 
+PM also owns the `/feature` skill (`bro/bros/pm/skills/feature.md`) — a coordinator playbook for driving a complex feature across many `dive-in` sub-sessions (design → review → plan → per-stage implement → integrate → deploy → close). The root runs as `cw ss -c --bro pm` and does no hard work itself: it owns the feature task page (the single source of truth) and hands the user one `dive-in` command per phase. Stages PR into a per-feature integration branch (`/pr --base <branch>`) and integrate to master once at the end; see the skill body for the per-phase commands. It's orthogonal to triage — the `process-inbox` TUI mounts no `skill` tool, so the skill is inert there (it only adds a one-line entry to PM's `## Available skills` block).
+
 ## Adding a Bro
 
 Create `bros/<name>/__init__.py` with `from bro.bros.bro import Bro` and a `class YourBro(Bro)` (inherit from the concrete `Bro` so you pick up the shared defaults; use `BaseBro` only when you want to opt out). Declare `name`, `description`, and `system_prompt` as class attributes; add tool sources as class attributes too:
