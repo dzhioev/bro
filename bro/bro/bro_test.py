@@ -1357,14 +1357,15 @@ class TestSkillServiceTool:
 
 class TestPPPDevSkillsMRO:
   def test_inherits_dev_skills_and_adds_own(self):
-    # `pr` and `land` come from `Dev`'s skills/ via the MRO walk; `fix` is
-    # declared in `PPPDev`'s own skills/. All three must surface in the
+    # `audit` comes from `Dev`'s skills/ via the MRO walk; `fix`, `pr`, and
+    # `land` are declared in `PPPDev`'s own skills/. All must surface in the
     # rendered system prompt.
     prompt = PPPDev().system_prompt
     assert '## Available skills' in prompt
+    assert '**audit**' in prompt
+    assert '**fix**' in prompt
     assert '**pr**' in prompt
     assert '**land**' in prompt
-    assert '**fix**' in prompt
 
 
 class TestPersona:
