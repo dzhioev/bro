@@ -1219,7 +1219,7 @@ EFFORT_LEVELS = ('low', 'medium', 'high', 'xhigh', 'max')
 
 
 def add_forwarded_flags(parser: Parser) -> None:
-  """register the flags that wrappers (dive-in, start-session) forward to `cw ss`.
+  """register the flags that the dive-in wrapper forwards to `cw ss`.
 
   Adding a new pass-through flag here makes it available in every wrapper that
   calls this helper — no per-flag plumbing in each wrapper.
