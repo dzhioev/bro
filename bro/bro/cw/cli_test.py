@@ -980,6 +980,103 @@ class TestGrantRevoke:
     assert claude_args[idx + 1] == 'xhigh'
 
 
+class TestResumeCommand:
+  def test_create_command_includes_drop_into_and_claude_args(self):
+    parts = cw._cw_session_command(
+      'w',
+      container=True,
+      auto=True,
+      fast=True,
+      drop=True,
+      rc=True,
+      resume=False,
+      effort='xhigh',
+      mcp='http',
+      bro=None,
+      grant=['gmail_creds'],
+      revoke=['notion'],
+      into='feature',
+      claude_args=['--foo'],
+    )
+    assert parts == [
+      'cw', 'ss', '-c', '--auto', '--fast', '--drop', '--rc',
+      '--effort', 'xhigh', '--mcp', '--grant', 'gmail_creds',
+      '--revoke', 'notion', '--into', 'feature', 'w', '--foo',
+    ]  # fmt: skip
+
+  def test_resume_command_carries_forwarded_flags(self):
+    # the same session as a resume: keeps --auto/--rc/--effort/--mcp/--grant,
+    # adds --resume, and drops the create-only --drop/--into/claude args
+    parts = cw._cw_session_command(
+      'w',
+      container=True,
+      auto=True,
+      fast=False,
+      drop=False,
+      rc=True,
+      resume=True,
+      effort='xhigh',
+      mcp='http',
+      bro=None,
+      grant=['gmail_creds'],
+      revoke=[],
+      into=None,
+      claude_args=[],
+    )
+    assert parts == [
+      'cw', 'ss', '-c', '--auto', '--rc', '--resume',
+      '--effort', 'xhigh', '--mcp', '--grant', 'gmail_creds', 'w',
+    ]  # fmt: skip
+
+  def test_start_session_records_resume_command(self):
+    with (
+      patch.dict('os.environ', {}, clear=False) as env,
+      patch('cw.cw', return_value=0),
+      patch('cw._container_secrets', return_value=({'github'}, set(), True)),
+      patch('cw._session_append_prompt', return_value=''),
+    ):
+      env.pop('CW_BRO', None)
+      env.pop('CW_IN_CONTAINER', None)
+      cw.start_session(
+        name='w',
+        container=True,
+        drop=True,
+        auto=True,
+        fast=False,
+        grant=['gmail_creds'],
+        revoke=None,
+        effort='xhigh',
+        rc=False,
+        resume=False,
+        into=None,
+        mcp='http',
+        bro=None,
+        prompt=None,
+        claude_args=[],
+      )
+      resume_command = env['CW_RESUME_COMMAND']
+    assert (
+      resume_command == 'cw ss -c --auto --rc --resume --effort xhigh --mcp --grant gmail_creds w'
+    )
+
+  def test_replace_container_resume_hint_prints_recorded_command(self, monkeypatch, capsys):
+    monkeypatch.setenv('CW_RESUME_COMMAND', 'cw ss -c --auto --resume w')
+    monkeypatch.setattr(cw, '_projects_dir_for_container', lambda name: name)
+    monkeypatch.setattr(cw, '_latest_jsonl', lambda d: 'session.jsonl')
+    monkeypatch.setattr('sys.stdout.isatty', lambda: True)
+    cw._replace_container_resume_hint('w')
+    assert 'cw ss -c --auto --resume w' in capsys.readouterr().out
+
+  def test_bro_with_resume_is_accepted(self):
+    with (
+      patch('cw._load_anthropic_key', return_value={'api_key': 'k'}),
+      patch('cw.start_session', return_value=0) as fake_start,
+    ):
+      rc = cw.main(['cw', 'ss', '-c', '--bro', 'ppp-dev', '--resume', 'w'])
+    assert rc == 0
+    assert fake_start.call_count == 1
+
+
 class TestDockerCreateArgv:
   @pytest.fixture
   def build_argv(self, monkeypatch, tmp_path):

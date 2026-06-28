@@ -1315,29 +1315,34 @@ def _resolve_base_ref(into: str) -> Optional[str]:
   return fetched.stdout.strip() if fetched.returncode == 0 else None
 
 
-def start_session(
+def _cw_session_command(
   name: str,
+  *,
   container: bool,
-  drop: bool,
   auto: bool,
   fast: bool,
-  grant: Optional[list[str]],
-  revoke: Optional[list[str]],
-  effort: Optional[str],
+  drop: bool,
   rc: bool,
   resume: bool,
-  into: Optional[str],
+  effort: Optional[str],
   mcp: Optional[str],
   bro: Optional[str],
-  prompt: Optional[str],
+  grant: list[str],
+  revoke: list[str],
+  into: Optional[str],
   claude_args: list[str],
-) -> int:
-  rc = rc or auto
-  grant = grant if grant is not None else []
-  revoke = revoke if revoke is not None else []
+) -> list[str]:
+  """reconstruct a `cw ss` invocation as argv tokens.
+
+  shared by CW_COMMAND (the session as launched) and the exit resume hint, so
+  both carry the same forwarded flags (--auto, --grant, --effort, ...). the
+  resume hint passes resume=True with the create-only inputs cleared
+  (drop=False, into=None, claude_args=[]).
+  """
   flags = {
     '-c': container,
     '--auto': auto,
+    '--fast': fast,
     '--drop': drop,
     '--rc': rc,
     '--resume': resume,
@@ -1358,9 +1363,68 @@ def start_session(
   if into is not None:
     parts.extend(['--into', into])
   parts.extend([name, *claude_args])
-  os.environ['CW_COMMAND'] = ' '.join(parts)
+  return parts
+
+
+def start_session(
+  name: str,
+  container: bool,
+  drop: bool,
+  auto: bool,
+  fast: bool,
+  grant: Optional[list[str]],
+  revoke: Optional[list[str]],
+  effort: Optional[str],
+  rc: bool,
+  resume: bool,
+  into: Optional[str],
+  mcp: Optional[str],
+  bro: Optional[str],
+  prompt: Optional[str],
+  claude_args: list[str],
+) -> int:
+  rc = rc or auto
+  grant = grant if grant is not None else []
+  revoke = revoke if revoke is not None else []
+  command = _cw_session_command(
+    name,
+    container=container,
+    auto=auto,
+    fast=fast,
+    drop=drop,
+    rc=rc,
+    resume=resume,
+    effort=effort,
+    mcp=mcp,
+    bro=bro,
+    grant=grant,
+    revoke=revoke,
+    into=into,
+    claude_args=claude_args,
+  )
+  os.environ['CW_COMMAND'] = ' '.join(command)
   os.environ['CW_NAME'] = name
   os.environ.setdefault('PPP_SHELL_COMMAND', os.environ['CW_COMMAND'])
+  # the resume hint printed on exit reuses this session's flags; --drop / --into /
+  # the initial prompt / forwarded claude args are create-only and dropped (the
+  # first three are rejected alongside --resume, see main).
+  resume_command = _cw_session_command(
+    name,
+    container=container,
+    auto=auto,
+    fast=fast,
+    drop=False,
+    rc=rc,
+    resume=True,
+    effort=effort,
+    mcp=mcp,
+    bro=bro,
+    grant=grant,
+    revoke=revoke,
+    into=None,
+    claude_args=[],
+  )
+  os.environ['CW_RESUME_COMMAND'] = ' '.join(resume_command)
 
   if resume:
     proj = _project_root()
@@ -1644,8 +1708,9 @@ def _replace_container_resume_hint(name: str) -> None:
   claude prints a two-line resume hint on exit, but the `claude --resume <id>`
   command it suggests only works inside the container — the session jsonl
   lives at ~/.claude/cw-sessions/<name>/projects/-workspace/ on the host, not
-  where a bare host-side `claude` would look. We replace it with the
-  cw-side resume command that actually works.
+  where a bare host-side `claude` would look. We replace it with the cw-side
+  resume command that actually works, carrying this session's own flags
+  (CW_RESUME_COMMAND, set by start_session) so it reproduces the session.
 
   Only meaningful when stdout is a TTY (otherwise the ANSI escape is junk in
   a log) and a session jsonl exists (otherwise claude didn't print a hint).
@@ -1654,11 +1719,12 @@ def _replace_container_resume_hint(name: str) -> None:
     return
   if _latest_jsonl(_projects_dir_for_container(name)) is None:
     return
+  resume_command = os.environ.get('CW_RESUME_COMMAND', f'cw ss -c --resume {name}')
   # \033[2A: move cursor up 2 lines (over claude's hint).
   # \033[J:  clear from cursor to end of screen.
   sys.stdout.write('\033[2A\033[J')
   print('Resume this session with:')
-  print(f'  cw ss -c --mcp --resume {name}')
+  print(f'  {resume_command}')
 
 
 def _ppp_tarball(files: dict[str, bytes]) -> bytes:
@@ -1939,7 +2005,7 @@ def build_parser() -> Parser:
   ss.add_argument(
     '--bro',
     default=None,
-    help="start a clean claude session with the named bro's persona (system prompt, MCP servers, tools); requires -c and the `anthropic` secret; mutually exclusive with --mcp, --auto, --resume",
+    help="start a clean claude session with the named bro's persona (system prompt, MCP servers, tools); requires -c and the `anthropic` secret; mutually exclusive with --mcp, --auto",
   )
   ss.add_argument(
     '-p', '--prompt', default=None, help='initial prompt (prepended with base prompt)'
@@ -2050,8 +2116,6 @@ def main(argv: list[str]) -> Optional[int]:
       parser.error('--bro cannot be combined with --auto')
     if args['mcp'] is not None:
       parser.error('--bro cannot be combined with --mcp (the bro defines its own MCP servers)')
-    if args['resume']:
-      parser.error('--bro cannot be combined with --resume')
     if _load_anthropic_key() is None:
       parser.error(
         '--bro requires the `anthropic` secret to provide an api_key '
