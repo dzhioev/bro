@@ -1403,6 +1403,8 @@ def start_session(
 
   fast_mode_settings = json.dumps({'fastMode': fast})
   inject = [
+    '--model',
+    _CW_MODEL,
     '--disallowed-tools',
     'mcp__claude_ai_*',
     '--settings',
@@ -1462,6 +1464,7 @@ def start_session(
   )
 
 
+_CW_MODEL = 'claude-opus-4-8'
 _BRO_MCP_SERVER_NAME = 'bro'
 # path inside the container; /host-repo is the host project bind mount (see
 # _docker_create_argv). passed as claude code's apiKeyHelper so claude reads the
@@ -1537,6 +1540,8 @@ def _bro_claude_argv(bro_name: str) -> list[str]:
   )
   settings = json.dumps({'apiKeyHelper': _BRO_API_KEY_HELPER}, separators=(',', ':'))
   return [
+    '--model',
+    _CW_MODEL,
     '--bare',
     '--strict-mcp-config',
     '--mcp-config',
