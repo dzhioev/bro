@@ -403,7 +403,9 @@ class Storage:
       kwargs['ExclusiveStartKey'] = _ddb_item({'trail_id': trail_id, 'step_id': after})
 
     response = await asyncio.to_thread(self._dynamo.query, **kwargs)
-    items = [_from_ddb_item(it) or {} for it in response.get('Items', [])]
+    items = [
+      item if (item := _from_ddb_item(it)) is not None else {} for it in response.get('Items', [])
+    ]
     resolved = await asyncio.gather(*(self._resolve_body(item) for item in items))
     next_cursor = None
     last = response.get('LastEvaluatedKey')
@@ -467,7 +469,9 @@ class Storage:
         ),
       )
 
-    items = [_from_ddb_item(it) or {} for it in response.get('Items', [])]
+    items = [
+      item if (item := _from_ddb_item(it)) is not None else {} for it in response.get('Items', [])
+    ]
     next_cursor = None
     last = response.get('LastEvaluatedKey')
     if last is not None:

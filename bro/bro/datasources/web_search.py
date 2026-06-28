@@ -52,7 +52,8 @@ class WebSearch(SearchableDataSource):
 
   async def _fetch_content(self, id: str) -> str:
     html = await _get_text(id)
-    extracted = trafilatura.extract(html) or ''
+    raw_extracted = trafilatura.extract(html)
+    extracted = raw_extracted if raw_extracted is not None else ''
     if len(extracted) == 0:
       raise LookupError(f'web-search: no extractable text at {id!r}')
     text = extracted[:_MAX_EXTRACT_CHARS]

@@ -204,7 +204,7 @@ def _format_step_summary(step: dict, col: _Colors) -> str:
 def _format_trail_row(trail: dict, col: _Colors) -> str:
   tid = trail.get('trail_id', '?')
   bro = trail.get('bro', '?')
-  spec = trail.get('llm_spec') or {}
+  spec = trail.get('llm_spec', {})
   model = spec.get('model', '?')
   started = _format_ts(trail.get('started_at'))
   ended_raw = trail.get('ended_at')
@@ -230,8 +230,8 @@ def _format_trail_row(trail: dict, col: _Colors) -> str:
 
 
 def _format_trail_header(trail: dict, col: _Colors) -> str:
-  spec = trail.get('llm_spec') or {}
-  aggregates = trail.get('aggregates') or {}
+  spec = trail.get('llm_spec', {})
+  aggregates = trail.get('aggregates', {})
   parent = trail.get('parent')
   lines = [
     f'{col.bold}trail     {col.reset} {trail.get("trail_id")}',
@@ -337,7 +337,7 @@ def _render_tree(
   tid = trail['trail_id']
   connector = '└── ' if is_last else '├── '
   marker = f' {col.bold}<-- here{col.reset}' if tid == highlight else ''
-  spec = trail.get('llm_spec') or {}
+  spec = trail.get('llm_spec', {})
   model = spec.get('model', '?')
   bro = trail.get('bro', '?')
   parent_step = ''
