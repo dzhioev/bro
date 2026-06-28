@@ -1,0 +1,19 @@
+# llm/CLAUDE.md
+
+Provider-agnostic LLM abstraction and MCP tooling that the `bro/` agent system and `flow/mcp/` build on. `LLM` is the chat interface; an `MCPServer` supplies callable `Tool`s; an `Observer` renders a run live while a `Tracker` records it durably. Run the `llm` CLI (`llm.py`) with `--help` to chat against a provider from the shell.
+
+## Modules
+
+- `llm.py` — the `LLM` ABC (`send(messages)`, holding a `ToolRegistry` + `Observer` + `Tracker`) and the `LLMSpec` ABC: a frozen recipe (model + provider knobs) with `create_llm`, `needed_secrets`, an optional `.fast()`, and a `dump` / `from_dict` round-trip keyed by a `TYPE` discriminator so a stored spec rehydrates. Also the `llm` chat CLI.
+- `mcp.py` — the tool layer. `Tool` / `MCPServer` ABCs, `FunctionTool` (wraps a Python fn, deriving input + output schema via FastMCP's `func_metadata`), and `ToolRegistry` which assembles tools across servers under `namespace__tool` wire names (the canonical form is `namespace::tool`; harnesses resolve `::`→`__`, Claude Code additionally prepends `mcp__`). `validated_callable` / `validate_output` give the HTTP delivery path the in-process fail-fast guard against backend drift; `render_return_shape` renders a tool's output schema into its description; `render_has_cred` expands `{{#has_cred}}` blocks against live credential availability. Servers declare `needed_secrets` / `optional_secrets`, unioned into a bro's hydration set.
+- `observer.py` — `Observer` ABC streaming run events (reasoning, assistant text, tool call / result) with renderers: `RichConsoleRenderer` (colored panels), `BoringRenderer` (plain text), `NullObserver` (no-op). `rich` is imported lazily so deployed images that never render need not ship it.
+- `tracker.py` — `Tracker` ABC, the durable sibling of `Observer`: it ships the same event stream (as a *trail* of *steps*) to a sink. `NullTracker` (default), `LocalFileTracker` (JSONL), `HTTPTracker` (the production sink, POSTing to the deployed `trails-server`). The trail model, server, and reader CLI are owned by `trails/CLAUDE.md` — read that, not this, for the recording subsystem.
+- `llms/` — provider specs / implementations, each pairing an `LLMSpec` subclass with its `LLM`:
+  - `chat_gpt.py` — `ChatGPT` over the OpenAI Responses API (the real provider; `needed_secrets` → `openai`, `.fast()` → `service_tier='priority'`).
+  - `echo.py` — `Echo`, returns the last user message verbatim; the dependency-free default for tests and the `llm` CLI.
+
+## Conventions
+
+- A new provider lives in `llms/`, subclasses `LLMSpec` with a unique `TYPE`, and is added to `_ensure_providers_loaded` / `_spec_for_type` in `llm.py` so `from_dict` and the CLI can find it.
+- A `Tool`'s `call` returns `str` for an unstructured tool or a JSON-ready `dict` for a structured one; raising `ToolControlSignal` (vs. a generic exception) escapes the agent loop instead of being fed back to the model as the tool result.
+- Acronyms stay all-caps in identifiers (`LLMSpec`, `MCPServer`, `HTTPTracker`); `TYPE` discriminator strings are lowercase snake_case (`chat_gpt`, `echo`).
