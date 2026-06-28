@@ -106,7 +106,7 @@ If `cw ss -c` is invoked from inside an already-containerised session (`CW_IN_CO
 
 ## Flags that shape the session
 
-These flags apply to `cw ss` and (with the exception of `-c` / `--drop` / `--mcp` / `--bro` / `-p`) are also exported via `cw.add_forwarded_flags` so the `dive-in` wrapper can pass them straight through without per-flag plumbing.
+These flags apply to `cw ss` and (with the exception of `-c` / `--drop` / `--mcp` / `--bro` / `-p`) are also exported via `cw.add_forwarded_flags` so wrappers like `dive-in` and `start-session` can pass them straight through without per-flag plumbing.
 
 - **`-c`, `--container`** — container mode (see above). Defaults off; host mode is the default.
 - **`--drop`** — remove the workspace on exit without prompting.
@@ -122,7 +122,7 @@ These flags apply to `cw ss` and (with the exception of `-c` / `--drop` / `--mcp
   **Requires `-c`** (the bro flow uses an Anthropic Console API key, not the user OAuth, and is fenced to the container). **Requires the `anthropic` secret**. Mutually exclusive with `--mcp` and `--auto`.
 
   `cw --bro` reads its api key from that secret via `setup/print_anthropic_key.sh` (wired as `apiKeyHelper`); using `ANTHROPIC_API_KEY` instead would trigger Claude's "Detected a custom API key" prompt every session.
-- **`--auto`** — autonomous mode: passes `--dangerously-skip-permissions` to claude and switches the git identity to bro (`Bro <dzhioev+bro@gmail.com>`). Implies `--rc`.
+- **`--auto`** — autonomous mode: passes `--dangerously-skip-permissions` to claude and switches the git identity to bro (`Bro <dzhioev+bro@gmail.com>`).
 
   **Requires `-c`** (a sandbox is mandatory for skip-permissions). Adds a `Land mode: PR` line to the system prompt. Cannot be combined with `--bro`.
 - **`--fast`** — enables fast mode for the session (injected via `--settings '{"fastMode": true}'`). Off by default regardless of host settings, so individual `cw ss` invocations are predictable.
@@ -134,7 +134,6 @@ These flags apply to `cw ss` and (with the exception of `-c` / `--drop` / `--mcp
 
   **Requires `-c`**: host mode is unscoped (the process reads `~/.ppp` directly), so a revoke there couldn't actually restrict the session — passing them without `-c` errors rather than silently no-op.
 - **`--effort {low|medium|high|xhigh|max}`** — forwarded as `claude --effort` (thinking effort). Defaults to `xhigh`; pass an explicit level to override.
-- **`--rc`** — enables claude remote control (`--remote-control`). Off by default because it breaks Ctrl+V image paste; implied by `--auto`.
 - **`--resume`** — resume the latest Claude session in this workspace.
 
   Looks up the newest `.jsonl` in the right projects directory (`~/.claude/projects/<encoded>/` for host, `~/.claude/cw-sessions/<name>/projects/-workspace/` for container), extracts the session id from the filename stem, and adds `--resume <id>` to the claude argv. Skips the initial prompt. Cannot be combined with `--drop` or `-p/--prompt`.

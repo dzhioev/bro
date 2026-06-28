@@ -1219,7 +1219,7 @@ EFFORT_LEVELS = ('low', 'medium', 'high', 'xhigh', 'max')
 
 
 def add_forwarded_flags(parser: Parser) -> None:
-  """register the flags that the dive-in wrapper forwards to `cw ss`.
+  """register the flags that wrappers (dive-in, start-session) forward to `cw ss`.
 
   Adding a new pass-through flag here makes it available in every wrapper that
   calls this helper — no per-flag plumbing in each wrapper.
@@ -1253,11 +1253,6 @@ def add_forwarded_flags(parser: Parser) -> None:
     default='xhigh',
     choices=EFFORT_LEVELS,
     help='thinking effort level (forwarded to claude --effort); defaults to xhigh',
-  )
-  parser.add_argument(
-    '--rc',
-    action='store_true',
-    help='enable claude remote control (--remote-control); breaks local Ctrl+V image paste, so off by default — implied by --auto',
   )
   parser.add_argument(
     '--resume',
@@ -1322,7 +1317,6 @@ def _cw_session_command(
   auto: bool,
   fast: bool,
   drop: bool,
-  rc: bool,
   resume: bool,
   effort: Optional[str],
   mcp: Optional[str],
@@ -1344,7 +1338,6 @@ def _cw_session_command(
     '--auto': auto,
     '--fast': fast,
     '--drop': drop,
-    '--rc': rc,
     '--resume': resume,
   }
   parts = ['cw', 'ss', *(f for f, v in flags.items() if v)]
@@ -1375,7 +1368,6 @@ def start_session(
   grant: Optional[list[str]],
   revoke: Optional[list[str]],
   effort: Optional[str],
-  rc: bool,
   resume: bool,
   into: Optional[str],
   mcp: Optional[str],
@@ -1383,7 +1375,6 @@ def start_session(
   prompt: Optional[str],
   claude_args: list[str],
 ) -> int:
-  rc = rc or auto
   grant = grant if grant is not None else []
   revoke = revoke if revoke is not None else []
   command = _cw_session_command(
@@ -1392,7 +1383,6 @@ def start_session(
     auto=auto,
     fast=fast,
     drop=drop,
-    rc=rc,
     resume=resume,
     effort=effort,
     mcp=mcp,
@@ -1414,7 +1404,6 @@ def start_session(
     auto=auto,
     fast=fast,
     drop=False,
-    rc=rc,
     resume=True,
     effort=effort,
     mcp=mcp,
@@ -1495,8 +1484,6 @@ def start_session(
     '--settings',
     fast_mode_settings,
   ]
-  if rc:
-    inject[:0] = ['--remote-control', name]
   if effort is not None:
     inject.extend(['--effort', effort])
   if mcp is not None:

@@ -914,7 +914,6 @@ class TestGrantRevoke:
       grant=grant,
       revoke=revoke,
       effort=effort,
-      rc=False,
       resume=False,
       into=None,
       mcp=None,
@@ -988,7 +987,6 @@ class TestResumeCommand:
       auto=True,
       fast=True,
       drop=True,
-      rc=True,
       resume=False,
       effort='xhigh',
       mcp='http',
@@ -999,13 +997,13 @@ class TestResumeCommand:
       claude_args=['--foo'],
     )
     assert parts == [
-      'cw', 'ss', '-c', '--auto', '--fast', '--drop', '--rc',
+      'cw', 'ss', '-c', '--auto', '--fast', '--drop',
       '--effort', 'xhigh', '--mcp', '--grant', 'gmail_creds',
       '--revoke', 'notion', '--into', 'feature', 'w', '--foo',
     ]  # fmt: skip
 
   def test_resume_command_carries_forwarded_flags(self):
-    # the same session as a resume: keeps --auto/--rc/--effort/--mcp/--grant,
+    # the same session as a resume: keeps --auto/--effort/--mcp/--grant,
     # adds --resume, and drops the create-only --drop/--into/claude args
     parts = cw._cw_session_command(
       'w',
@@ -1013,7 +1011,6 @@ class TestResumeCommand:
       auto=True,
       fast=False,
       drop=False,
-      rc=True,
       resume=True,
       effort='xhigh',
       mcp='http',
@@ -1024,7 +1021,7 @@ class TestResumeCommand:
       claude_args=[],
     )
     assert parts == [
-      'cw', 'ss', '-c', '--auto', '--rc', '--resume',
+      'cw', 'ss', '-c', '--auto', '--resume',
       '--effort', 'xhigh', '--mcp', '--grant', 'gmail_creds', 'w',
     ]  # fmt: skip
 
@@ -1046,7 +1043,6 @@ class TestResumeCommand:
         grant=['gmail_creds'],
         revoke=None,
         effort='xhigh',
-        rc=False,
         resume=False,
         into=None,
         mcp='http',
@@ -1055,9 +1051,7 @@ class TestResumeCommand:
         claude_args=[],
       )
       resume_command = env['CW_RESUME_COMMAND']
-    assert (
-      resume_command == 'cw ss -c --auto --rc --resume --effort xhigh --mcp --grant gmail_creds w'
-    )
+    assert resume_command == 'cw ss -c --auto --resume --effort xhigh --mcp --grant gmail_creds w'
 
   def test_replace_container_resume_hint_prints_recorded_command(self, monkeypatch, capsys):
     monkeypatch.setenv('CW_RESUME_COMMAND', 'cw ss -c --auto --resume w')

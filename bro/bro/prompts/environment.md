@@ -7,6 +7,7 @@ Run `cw banner --llm` once via Bash. It prints the structured session facts on s
 1. `launch_command` tells you how this session was launched:
    - Starts with `dive-in` with `-t <id>` or `--focus`: scoped to a specific task (`-t` names it directly; `--focus` uses whatever is currently focused)
    - Starts with `dive-in` without either flag: a clean session unattached to any task — start by asking what to work on
+   - Starts with `start-session`: launched via the team session manager
    - Starts with `cw ss`: a plain workspace session
 
 2. `kind: container` means you are inside an isolated docker container:

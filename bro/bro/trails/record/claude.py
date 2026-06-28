@@ -130,9 +130,6 @@ def _workspace_name() -> Optional[str]:
     if '=' in arg:
       i += 1
       continue
-    if arg == '--remote-control':
-      i += 2
-      continue
     i += 1
   return None
 
