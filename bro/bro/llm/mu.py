@@ -81,7 +81,7 @@ class DateTimeEncoder(json.JSONEncoder):
 
 
 @dataclass
-class Json(Content):
+class JSON(Content):
   json: dict[str, Any]
   encoder: Optional[type[JSONEncoder]] = None
 
@@ -90,7 +90,7 @@ class Json(Content):
 
 
 @dataclass
-class JsonList(Content):
+class JSONList(Content):
   items: list[BaseModel]
 
   def dump(self) -> ResponseInputContentPart:

@@ -254,7 +254,7 @@ class TestModuleAliases:
     assert credentials.available('tmdb') is False
 
 
-class TestCli:
+class TestCLI:
   def test_get_json_prints_json(self, configs_dir: Path, capsys):
     _write(configs_dir, 'notion.json', {'token': 't'})
     assert credentials.main(['credentials', 'get', 'notion']) is None

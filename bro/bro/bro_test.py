@@ -597,7 +597,7 @@ def _make_server(*tool_names: str) -> InProcessMCPServer:
   return InProcessMCPServer('test', tools)
 
 
-class TestBroMcpServers:
+class TestBroMCPServers:
   @pytest.mark.asyncio
   async def test_instance_entry_exposes_its_tools(self):
     server = _make_server('a', 'b', 'c')

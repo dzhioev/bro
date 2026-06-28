@@ -12,7 +12,7 @@ UUID = '35ad38d8-5a6d-81ea-bce6-e4caf17ece7f'
 HEX = '35ad38d85a6d81eabce6e4caf17ece7f'
 
 
-class TestResolveTaskId:
+class TestResolveTaskID:
   def test_uuid(self):
     assert _resolve_task_id(UUID) == UUID
 

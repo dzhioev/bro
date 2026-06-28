@@ -82,7 +82,7 @@ def _inline(id: int, review_id: int, login: str, body: str, line: int = 10) -> d
   }
 
 
-class _FakeApi:
+class _FakeAPI:
   """records inline-comment fetch arguments and serves canned per-endpoint data."""
 
   def __init__(
@@ -112,14 +112,14 @@ class _FakeApi:
     return self.all_inline
 
 
-def _install(monkeypatch, api: _FakeApi) -> None:
+def _install(monkeypatch, api: _FakeAPI) -> None:
   monkeypatch.setattr(poll_pr, '_fetch_issue_comments', api.fetch_issue_comments)
   monkeypatch.setattr(poll_pr, '_fetch_reviews', api.fetch_reviews)
   monkeypatch.setattr(poll_pr, '_fetch_review_inline_comments', api.fetch_review_inline_comments)
   monkeypatch.setattr(poll_pr, '_fetch_review_comments', api.fetch_review_comments)
 
 
-def _run(api: _FakeApi, **kwargs) -> list[dict[str, Any]]:
+def _run(api: _FakeAPI, **kwargs) -> list[dict[str, Any]]:
   return poll_pr.emit_cycle(
     owner='x',
     repo='y',
@@ -133,7 +133,7 @@ def _run(api: _FakeApi, **kwargs) -> list[dict[str, Any]]:
 
 class TestEmitCycle:
   def test_approved_review_bundles_inline_comments(self, monkeypatch):
-    api = _FakeApi(
+    api = _FakeAPI(
       reviews=[_review(100, 'alice', 'APPROVED')],
       review_inline={100: [_inline(200, 100, 'alice', 'nit: rename foo')]},
       # GitHub also returns the inline comment in the unfiltered list — bundling
@@ -154,7 +154,7 @@ class TestEmitCycle:
 
   def test_inline_comment_without_attached_review_fires_standalone(self, monkeypatch):
     # reply to an existing review thread, no new review wrapping it.
-    api = _FakeApi(all_inline=[_inline(201, 99, 'alice', 'follow-up note')])
+    api = _FakeAPI(all_inline=[_inline(201, 99, 'alice', 'follow-up note')])
     _install(monkeypatch, api)
     events = _run(api)
     assert len(events) == 1
@@ -163,7 +163,7 @@ class TestEmitCycle:
     assert events[0]['body'] == 'follow-up note'
 
   def test_issue_comment_emitted_separately(self, monkeypatch):
-    api = _FakeApi(issue_comments=[_issue_comment(50, 'alice', 'top-level comment')])
+    api = _FakeAPI(issue_comments=[_issue_comment(50, 'alice', 'top-level comment')])
     _install(monkeypatch, api)
     events = _run(api)
     assert len(events) == 1
@@ -171,7 +171,7 @@ class TestEmitCycle:
     assert events[0]['id'] == 50
 
   def test_seen_ids_prevent_re_emission(self, monkeypatch):
-    api = _FakeApi(
+    api = _FakeAPI(
       reviews=[_review(100, 'alice', 'APPROVED')],
       review_inline={100: [_inline(200, 100, 'alice', 'nit')]},
       all_inline=[_inline(200, 100, 'alice', 'nit')],
@@ -193,7 +193,7 @@ class TestEmitCycle:
     seen_c: set[int] = set()
     seen_r: set[int] = set()
 
-    cycle1 = _FakeApi(
+    cycle1 = _FakeAPI(
       reviews=[_review(100, 'alice', 'APPROVED')],
       review_inline={100: []},  # not yet indexed
       all_inline=[],
@@ -204,7 +204,7 @@ class TestEmitCycle:
     assert first[0]['event'] == 'review'
     assert first[0]['comments'] == []
 
-    cycle2 = _FakeApi(
+    cycle2 = _FakeAPI(
       reviews=[_review(100, 'alice', 'APPROVED')],  # already seen
       review_inline={100: [_inline(200, 100, 'alice', 'late comment')]},
       all_inline=[_inline(200, 100, 'alice', 'late comment')],
@@ -218,7 +218,7 @@ class TestEmitCycle:
   def test_non_actionable_review_still_marks_inline_comments_seen(self, monkeypatch):
     # a bot or self-authored review should not emit, but its inline comments
     # must still be marked seen so they don't fire as standalone events.
-    api = _FakeApi(
+    api = _FakeAPI(
       reviews=[_review(100, 'self-bot', 'APPROVED')],
       review_inline={100: [_inline(200, 100, 'self-bot', 'self comment')]},
       all_inline=[_inline(200, 100, 'self-bot', 'self comment')],

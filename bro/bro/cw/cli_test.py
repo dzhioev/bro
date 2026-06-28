@@ -46,7 +46,7 @@ class TestClaudeCodeTokenEnv:
     assert cw._claude_code_token_env() == {}
 
 
-class TestSeedContainerClaudeJson:
+class TestSeedContainerClaudeJSON:
   def _host(self, tmp_path, **extra):
     path = tmp_path / 'host.json'
     path.write_text(json.dumps({'oauthAccount': {'id': 'acct'}, 'userID': 'uid', **extra}))
