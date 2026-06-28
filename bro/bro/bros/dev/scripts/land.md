@@ -72,7 +72,7 @@ Use `date '+%Y-%m-%d %H:%M'` for the timestamp — do not invent it.
 
 Don't close if either holds:
 
-- **The change needs a deploy or migration to take effect.** If it touches code/config that runs in a deployed service (the ECS services / emails pipeline — see `infra/CLAUDE.md`) or adds a migration/backfill, the merge alone doesn't make it live. Leave the task in its current status and **propose** the rollout as a `call devoops "<what to deploy or run>"` command — don't run it yourself; the task closes only after the deploy succeeds.
+- **The change needs a deploy or migration to take effect.** If it touches code/config that runs in a deployed service (the ECS services / emails pipeline — see `infra/CLAUDE.md`) or adds a migration/backfill, the merge alone doesn't make it live. Leave the task in its current status and **propose** the rollout as a terse `call devoops "deploy <service or feature>"` — name the target, not the steps. devoops infers the commit, scripts, and sequence itself, so don't spell out targets/commands/health checks. Don't run it yourself; the task closes only after the deploy succeeds.
 - **The user said to keep it open.** Phrases in the initial prompt like "keep this Live", "leave open with notes", or "only landing a subset" mean the task stays in its current status; note it in your report.
 
 Otherwise: `flow::update_task(task_id, status='Done')`.
