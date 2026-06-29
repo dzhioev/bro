@@ -174,10 +174,17 @@ if [ "${CW_SKIP_VENV:-}" != "1" ]; then
   eval "$install_hooks"
 fi
 
-# in --bro mode, surface the bro's skills to Claude Code by symlinking them into
-# .claude/skills/; --bare keeps slash-command resolution working so /skill-name
-# from chat picks them up. must run after venv activation (needs `cw` on PATH).
-if [ -n "${CW_BRO:-}" ] && [ "${CW_SKIP_VENV:-}" != "1" ]; then
+# themed native sessions (dive-in / `cw ss` with CW_BRO set) surface the bro's
+# skills as Claude Code slash commands by symlinking them into .claude/skills/.
+# a `--bro` session runs `claude --bare`, which skips skills auto-discovery —
+# there the bro's skills reach the agent through its `skill` MCP tool, so the
+# symlinks would be dead weight; skip the populate. must run after venv
+# activation (needs `cw` on PATH).
+case " $* " in
+  *" --bare "*) bare_session=1 ;;
+  *) bare_session=0 ;;
+esac
+if [ -n "${CW_BRO:-}" ] && [ "${CW_SKIP_VENV:-}" != "1" ] && [ "$bare_session" = "0" ]; then
   cw populate-bro-skills "$CW_BRO" >&2
 fi
 

@@ -184,11 +184,12 @@ def start_session(spec: SessionSpec) -> int:
     os.environ['GIT_COMMITTER_EMAIL'] = _BRO_GIT_EMAIL
 
   if spec.bro is not None:
-    # the container entrypoint reads CW_BRO and runs `cw populate-bro-skills`
-    # after venv activation, so claude code's slash-command discovery picks up
-    # the bro's skills from .claude/skills/<name>/SKILL.md symlinks. host-mode
-    # `--bro` is unsupported (the --bare flow needs the container entrypoint to
-    # wire MCP and the api-key helper).
+    # CW_BRO themes the container session (banner, statusLine). the bro's skills
+    # reach a `--bro` session through its `skill` MCP tool (mounted by
+    # `mcp-server bro:<name>`), not `.claude/skills/` slash commands — `claude
+    # --bare` skips skills auto-discovery. host-mode `--bro` is unsupported (the
+    # --bare flow needs the container entrypoint to wire MCP and the api-key
+    # helper).
     os.environ['CW_BRO'] = spec.bro
     claude_args = [*_bro_claude_argv(spec.bro), *claude_args]
     if spec.effort is not None:

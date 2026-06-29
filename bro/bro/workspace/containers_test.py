@@ -113,6 +113,25 @@ class TestRunInContainerInjection:
     # last call is the run-equivalent `docker start -a -i <id>`
     assert harness[-1]['argv'] == ['docker', 'start', '-a', '-i', 'cid123']
 
+  def test_bare_session_synced_host_side(self, harness, monkeypatch):
+    # `--bare` (the --bro flow) runs hooks-free, so cw uploads the transcript
+    # itself after the container exits
+    synced: list = []
+    monkeypatch.setattr(
+      cw.containers, '_sync_container_log', lambda name, proj: synced.append(name)
+    )
+    cw.containers.run_in_container('ws', ['claude', '--bare'])
+    assert synced == ['ws']
+
+  def test_native_session_not_synced_host_side(self, harness, monkeypatch):
+    # native sessions self-upload via their in-container hooks; no host-side sync
+    synced: list = []
+    monkeypatch.setattr(
+      cw.containers, '_sync_container_log', lambda name, proj: synced.append(name)
+    )
+    cw.containers.run_in_container('ws', ['claude'])
+    assert synced == []
+
   def test_cp_failure_removes_container_and_raises(self, monkeypatch, tmp_path):
     monkeypatch.setattr(cw.containers, '_project_root', lambda: tmp_path / 'proj')
     monkeypatch.setattr(cw.containers, '_image_tag', lambda: 'tag')

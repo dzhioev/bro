@@ -110,6 +110,27 @@ def _replace_container_resume_hint(name: str) -> None:
   print(f'  {resume_command}')
 
 
+def _sync_container_log(name: str, proj: Path) -> None:
+  """upload a finished `--bro` container session's transcript from the host.
+
+  `claude --bare` (the `--bro` flow) runs hooks-free, so the in-container
+  `sync-session-log` SessionStart/SessionEnd hooks never fire and the session
+  would never reach S3/DynamoDB. cw owns the lifecycle and the transcript is
+  bind-mounted to the host at the workspace's `claude_projects_dir`, so it does
+  the one-shot upload itself after the container exits (and flushed the jsonl).
+  best-effort: a sync failure warns rather than failing session teardown.
+  """
+  import sync_session_log
+
+  projects_dir = ContainerWorkspace(name, proj).claude_projects_dir()
+  if _latest_jsonl(projects_dir) is None:
+    return
+  try:
+    sync_session_log.sync_session_log(workspace=name, projects_dir=projects_dir)
+  except Exception as e:
+    log.warning('host-side session-log sync for %s failed: %s', name, e)
+
+
 def run_in_container(
   name: str,
   command: list[str],
@@ -194,6 +215,11 @@ def run_in_container(
   # `docker start -a -i` reattaches the TTY/stdin and returns the exit code; --rm
   # (set at create) removes the container — and its scoped secrets — on exit.
   result = subprocess.run(['docker', 'start', '-a', '-i', container_id])
+  # `--bare` (the `--bro` flow) runs claude hooks-free, so the in-container
+  # session-log hooks never upload the transcript — sync it host-side now, before
+  # any `drop` removes it. native sessions keep self-uploading via their hooks.
+  if '--bare' in command:
+    _sync_container_log(name, proj)
   if drop:
     try:
       ContainerWorkspace(name, proj).remove()

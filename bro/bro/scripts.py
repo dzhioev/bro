@@ -66,6 +66,10 @@ def _bro_claude_argv(bro_name: str) -> list[str]:
   skills, and only the bro's MCP tools. supplies apiKeyHelper via `--settings`
   (flagSettings, not project/local) so claude executes it without a workspace
   trust gate.
+
+  `--bare` is minimal mode: it runs no hooks at all, so these sessions never run
+  the project's session-log upload hooks. `containers.run_in_container` syncs
+  their transcript host-side once the container exits (`_sync_container_log`).
   """
   from bro.registry import create_bro
 

@@ -233,6 +233,7 @@ def sync_session_log(
   watch: bool = False,
   interval: int = 60,
   workspace: Optional[str] = None,
+  projects_dir: Optional[Path] = None,
 ) -> int:
   ws = workspace if workspace is not None else _workspace_name()
   if ws is None:
@@ -256,10 +257,10 @@ def sync_session_log(
     _watch(interval, ws, bucket, s3, dynamo, table_name)
     return 0
 
-  projects_dir = _projects_dir()
-  path = _latest_jsonl(projects_dir)
+  src = projects_dir if projects_dir is not None else _projects_dir()
+  path = _latest_jsonl(src)
   if path is None:
-    log.error('no session log found in %s', projects_dir)
+    log.error('no session log found in %s', src)
     return 1
 
   try:

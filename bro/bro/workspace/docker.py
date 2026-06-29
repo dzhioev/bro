@@ -144,11 +144,11 @@ def _docker_create_argv(
   `extra_env` adds explicit `-e KEY=VALUE` entries (value set here) — distinct from the
   `_DOCKER_FORWARD_ENV` loop, which forwards a host var by name.
 
-  `forward_bro=False` drops `CW_BRO` from that forward set: the only thing the
-  container does with it is `cw populate-bro-skills` (Claude Code slash-command
-  discovery), so an LLM-process container (`ask`/`do-task`/`call`) that never runs
-  Claude Code must not inherit the calling session's ambient `CW_BRO` and pay for a
-  pointless skills populate.
+  `forward_bro=False` drops `CW_BRO` from that forward set: the container uses it
+  to theme `cw banner` and, for non-`--bare` themed sessions, to drive `cw
+  populate-bro-skills` — both Claude-Code-only. an LLM-process container
+  (`ask`/`do-task`/`call`) runs neither, so it must not inherit the calling
+  session's ambient `CW_BRO` and pay for a pointless skills populate.
   """
   # function-local to break the docker <-> containers import cycle: containers.py
   # imports the docker helpers at module level, so docker.py keeps no top-level
