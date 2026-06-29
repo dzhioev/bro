@@ -1,0 +1,68 @@
+from base.args import Parser
+
+EFFORT_LEVELS = ('low', 'medium', 'high', 'xhigh', 'max')
+
+
+def add_forwarded_flags(parser: Parser) -> None:
+  """register the flags that the dive-in wrapper forwards to `cw ss`.
+
+  Adding a new pass-through flag here makes it available in every wrapper that
+  calls this helper — no per-flag plumbing in each wrapper.
+  """
+  parser.add_argument(
+    '--auto',
+    action='store_true',
+    help='let claude run autonomously, skipping most permissions (allowed only with -c)',
+  )
+  parser.add_argument(
+    '--fast',
+    action='store_true',
+    help='enable fast mode for the session (disabled by default regardless of host settings)',
+  )
+  parser.add_argument(
+    '--grant',
+    action='append',
+    default=None,
+    metavar='SECRET',
+    help='grant a secret to the container scoped set on top of the computed set (repeatable); requires -c; errors if already in the set or unknown to the registry',
+  )
+  parser.add_argument(
+    '--revoke',
+    action='append',
+    default=None,
+    metavar='SECRET',
+    help='revoke a secret from the container scoped set (repeatable); requires -c; errors if not in the set',
+  )
+  parser.add_argument(
+    '--effort',
+    default='xhigh',
+    choices=EFFORT_LEVELS,
+    help='thinking effort level (forwarded to claude --effort); defaults to xhigh',
+  )
+  parser.add_argument(
+    '--resume',
+    action='store_true',
+    help='resume the latest claude session in the named workspace; skips the initial prompt',
+  )
+  parser.add_argument(
+    '--into',
+    default=None,
+    metavar='REF',
+    help="base a new session on git REF (branch/tag/sha) instead of the default (the host repo's current HEAD, in both container and host mode). a REF that only exists on origin is fetched automatically. ignored once the workspace exists",
+  )
+
+
+def extract_forwarded_argv(args: dict) -> list[str]:
+  """pop forwarded-flag values from `args` and return them as canonical argv tokens.
+
+  mutates `args`: removes every key registered by `add_forwarded_flags`. The returned
+  list is suitable to splice directly into a `cw ss` invocation.
+  """
+  parser = Parser(add_help=False)
+  add_forwarded_flags(parser)
+  forwarded = {
+    a.dest: args.pop(a.dest)
+    for a in parser._actions
+    if len(a.option_strings) > 0 and a.dest in args
+  }
+  return parser.reconstruct(forwarded, prog=[])

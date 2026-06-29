@@ -71,7 +71,7 @@ def _load_shared_prompts() -> str:
 
 # bro-facing tool-name rule, appended to a bro's system prompt when it has any
 # namespaced tools or skills. the Claude-Code counterpart lives in
-# prompts/tool_names.md (cw.py `_BASE_PROMPT_FILES`); kept harness-specific on
+# prompts/tool_names.md (cw/system_prompt.py `_BASE_PROMPT_FILES`); kept harness-specific on
 # purpose — a bro resolves `::` to `ns__tool` (no `mcp__`, nothing to load).
 _TOOL_NAMES_BLOCK = (
   '## Tool names\n'
@@ -287,7 +287,7 @@ class BaseBro(ABC):
   # whether the bro does docker work (building/pushing images for deploys) and so
   # needs the host docker socket. an explicit capability, inherited normally. the
   # host grants `/var/run/docker.sock` to a `--bro`/`ask` container only when this
-  # is set (claude code sessions get it unconditionally); see cw.py.
+  # is set (claude code sessions get it unconditionally); see cw/secrets.py.
   needs_docker: bool = False
   # subclasses declare their own `system_prompt = "..."` as a class attribute;
   # `__init__` walks the MRO from base to derived and concatenates each class's
@@ -335,7 +335,7 @@ class BaseBro(ABC):
       prompt_parts = [system_prompt] if len(system_prompt) > 0 else []
     # the bro's own persona: MRO-concatenated class system_prompt(s) without the
     # shared / data-source / skills blocks. injected into dive-in Claude Code
-    # sessions (cw.py) so they carry the bro's policies outside --bro mode.
+    # sessions (cw/system_prompt.py) so they carry the bro's policies outside --bro mode.
     self.persona = '\n\n'.join(prompt_parts)
     shared = _load_shared_prompts()
     descriptions = self.skill_descriptions()

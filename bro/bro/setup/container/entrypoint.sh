@@ -23,7 +23,7 @@ if [ "$(id -u)" = "0" ] && [ -z "${CW_ENTRYPOINT_REEXEC:-}" ]; then
     fi
   fi
   # the scoped credential store is `docker cp`'d into /home/cw/.ppp before start
-  # (cw.py), landing owned by the uid baked into the tar. re-own it to cw after the
+  # (cw/containers.py), landing owned by the uid baked into the tar. re-own it to cw after the
   # remap above so the resolver and install hooks (run as cw) can read the 0600
   # files — on Linux (cw remapped to the host uid) and on Docker for Mac (remap
   # skipped, cw keeps its image uid).
@@ -124,7 +124,7 @@ mkdir -p "$HOME/.claude/projects/-workspace"
 
 # seed the pre-installed plugins baked into the image (pyright-lsp). ~/.claude is
 # bind-mounted from a fresh per-session dir, so the build-time install staged at
-# /opt is copied in on first run. settings.json enables the plugin (cw.py); this
+# /opt is copied in on first run. settings.json enables the plugin (cw/docker.py); this
 # provides the matching install records so claude doesn't prompt to install it on
 # .py files.
 if [ -d /opt/claude-plugins-seed ] && [ ! -f "$HOME/.claude/plugins/installed_plugins.json" ]; then
@@ -160,7 +160,7 @@ if [ "${CW_SKIP_VENV:-}" != "1" ]; then
 fi
 
 # secrets resolve from the scoped credential store bind-mounted at ~/.ppp (see
-# cw.py). wire each into the tool that consumes it from outside the resolver (git
+# cw/containers.py). wire each into the tool that consumes it from outside the resolver (git
 # credential helper, the aws CLI's ~/.aws/credentials, ...) via its registry-declared
 # install hook — one generic step, no per-secret logic here. env exports must
 # persist into `exec`, so this is eval'd in the entrypoint shell.

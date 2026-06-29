@@ -28,7 +28,7 @@ GC
 # install-hooks)"` after venv activation, which this smoke test skips
 # (CW_SKIP_VENV=1) — so that path is covered by base/credentials_test.py, not here.
 
-# pre-seed the container-private .claude.json (cw.py does this on first run).
+# pre-seed the container-private .claude.json (cw/containers.py does this on first run).
 # also drop a "host" .claude.json next to it as a tripwire: it must not exist
 # on any container mount, so any write the container makes to /home/cw/.claude.json
 # must land in claude/.claude.json and leave host_claude.json untouched.

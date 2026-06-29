@@ -11,11 +11,11 @@ Centralised prompt store. Three loading conventions: auto-inject into every bro 
 
 ## Auto-injected `shared/` directory
 
-`prompts/shared/*.md` is appended to the system prompt of every Bro (see `bro/bro.py:_load_shared_prompts`) AND injected into every `cw ss` Claude Code session via `cw.py:_load_base_prompts`. Conventions that must hold across both surfaces (e.g. interaction policy) belong here. Files are sorted alphabetically at load time, so prefix with `00-`, `10-`, etc. if order matters.
+`prompts/shared/*.md` is appended to the system prompt of every Bro (see `bro/bro.py:_load_shared_prompts`) AND injected into every `cw ss` Claude Code session via `cw/system_prompt.py:_load_base_prompts`. Conventions that must hold across both surfaces (e.g. interaction policy) belong here. Files are sorted alphabetically at load time, so prefix with `00-`, `10-`, etc. if order matters.
 
 ## Top-level `*.md` reference docs
 
-Top-level markdown files in `prompts/` are auto-injected into every `cw ss` Claude Code session via `cw.py:_load_base_prompts` (the file name must be listed in `_BASE_PROMPT_FILES`). Each can optionally also be exposed to a specific bro via a `FileSource` declaration in `data_sources` (see `bro/bros/ppp_dev/__init__.py` for the `environment.md` example — the bro framework auto-lists the source in the `## Data sources` block and mounts a `read` tool that returns the file body).
+Top-level markdown files in `prompts/` are auto-injected into every `cw ss` Claude Code session via `cw/system_prompt.py:_load_base_prompts` (the file name must be listed in `_BASE_PROMPT_FILES`). Each can optionally also be exposed to a specific bro via a `FileSource` declaration in `data_sources` (see `bro/bros/ppp_dev/__init__.py` for the `environment.md` example — the bro framework auto-lists the source in the `## Data sources` block and mounts a `read` tool that returns the file body).
 
 Use a top-level file when content must hold in a `cw ss` Claude Code session — optionally shared with a specific bro via `FileSource`, but **not** pushed onto every bro the way `shared/` would. A file is Claude-Code-only precisely when no bro declares a `FileSource` for it.
 
@@ -32,4 +32,4 @@ Current top-level reference docs:
 
 - **One-shot**: drop `<name>.prompt` (or `<name>.prompt.template` for `str.format` slots) at the top level. Load with `get_prompt('<name>.prompt'[, **kwargs])`
 - **Auto-injected into bros and `cw ss` sessions**: drop a `*.md` in `shared/`. Conventions that must hold for both surfaces (interaction policy, tone) belong here
-- **Auto-injected into `cw ss` Claude Code sessions only**: drop a `*.md` at top level and add its filename to `cw.py:_BASE_PROMPT_FILES`. Leave it without a `FileSource` to keep it Claude-Code-only (e.g. `tool_names.md`); add a `FileSource` on a bro to also expose it there on demand (e.g. `environment.md`)
+- **Auto-injected into `cw ss` Claude Code sessions only**: drop a `*.md` at top level and add its filename to `cw/system_prompt.py:_BASE_PROMPT_FILES`. Leave it without a `FileSource` to keep it Claude-Code-only (e.g. `tool_names.md`); add a `FileSource` on a bro to also expose it there on demand (e.g. `environment.md`)

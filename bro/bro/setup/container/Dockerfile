@@ -55,7 +55,7 @@ RUN groupadd -g 999 docker \
  && usermod -aG docker cw
 
 # pre-install the pyright-lsp Claude Code plugin at build time. settings.json
-# only *enables* the plugin (cw.py); without a matching *install* record Claude
+# only *enables* the plugin (cw/docker.py); without a matching *install* record Claude
 # prompts the "LSP Plugin Recommendation" on .py files. CLAUDE_CONFIG_DIR is the
 # runtime ~/.claude path so the absolute paths baked into installed_plugins.json
 # / known_marketplaces.json match where the entrypoint copies the seed. That dir
@@ -84,7 +84,7 @@ RUN gosu cw bash -ec '\
 # copy matches any session whose clone produced this image. only the venv is kept:
 # the build-time source is a bind mount removed in the same layer, so nothing is
 # duplicated. correctness holds for the life of the image because the tag pins
-# pyproject.toml + uv.lock (see cw.py:_image_tag), so a session's clone always
+# pyproject.toml + uv.lock (see cw/docker.py:_image_tag), so a session's clone always
 # carries the same deps and the same launcher set the bake produced. UV_LINK_MODE=copy:
 # /opt is on the image overlay, a different fs from any bind mount, so hardlinks can't
 # be probed.
