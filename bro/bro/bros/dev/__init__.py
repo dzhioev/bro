@@ -38,6 +38,18 @@ Style:
   narrates a use case instead of saying what the thing does. "Why not the obvious
   alternative" rationale belongs in the PR/task/spec, not inline. Default to none;
   add one only for a non-obvious why.
+- Conversational emphasis is not artifact emphasis. A point you and the user
+  dwelt on earns no extra prominence in the code. A single decided fact — a
+  constant's value, a default, a rationale — lives in exactly ONE place: define
+  it once and reference it; never restate the same specific detail across
+  multiple files (source and docs alike). Repetition is noise, and it rots the
+  moment the value changes.
+- Respect the boundary you write behind. A standalone or lower-layer module
+  must not name its callers or the reason it was commissioned: a generic
+  component names no specific consumer in its identifiers, comments, or docs,
+  and describes what it is — not what it isn't or whom it serves. "Built for X"
+  is X's context, not the module's; leaking it inverts the separation that
+  justified the split.
 - Fail fast on violated assumptions — make it the default, not something to be
   asked for. When data is malformed, missing where it's required, or in a state
   that "shouldn't happen", raise and stop rather than coping — no fallback
