@@ -67,6 +67,7 @@ def _latest_jsonl(projects_dir: Path) -> Optional[Path]:
 def _extract_metadata(path: Path) -> dict:
   subject: Optional[str] = None
   model: Optional[str] = None
+  version: Optional[str] = None
   first_ts: Optional[str] = None
   line_count = 0
 
@@ -104,9 +105,15 @@ def _extract_metadata(path: Path) -> dict:
       if isinstance(msg, dict) and 'model' in msg:
         model = msg['model']
 
+      if version is None:
+        v = entry.get('version')
+        if isinstance(v, str):
+          version = v
+
   return {
     'subject': subject,
     'model': model,
+    'version': version,
     'started_at': first_ts,
     'line_count': line_count,
   }
@@ -157,14 +164,25 @@ def _build_item(path: Path, workspace: str, s3_key: str) -> dict:
     'is_container': os.path.isfile('/.dockerenv'),
   }
 
-  for key, env in [('cw_command', 'CW_COMMAND'), ('shell_command', 'PPP_SHELL_COMMAND')]:
+  for key, env in [
+    ('cw_command', 'CW_COMMAND'),
+    ('shell_command', 'PPP_SHELL_COMMAND'),
+    # launch-context records captured by cw (cw/session_context.py); a JSON list
+    # of typed records rendered by rewind as a SESSION CONTEXT preamble
+    ('context', 'CW_SESSION_CONTEXT'),
+  ]:
     val = os.environ.get(env)
     if val is not None:
       item[key] = val
 
-  for key in ('subject', 'model', 'started_at'):
+  for key, attr in (
+    ('subject', 'subject'),
+    ('model', 'model'),
+    ('version', 'claude_code_version'),
+    ('started_at', 'started_at'),
+  ):
     if meta[key] is not None:
-      item[key] = meta[key]
+      item[attr] = meta[key]
 
   return item
 

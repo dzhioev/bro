@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -53,6 +54,54 @@ class TestHealthOnOneShot:
     monkeypatch.setattr(sync_session_log, '_load_config', _missing)
     assert sync_session_log.sync_session_log(workspace='ws') == 1
     assert session_log_health.is_failing() is True
+
+
+def _write_log(path: Path) -> None:
+  path.write_text(
+    '\n'.join(
+      json.dumps(e)
+      for e in [
+        {
+          'type': 'user',
+          'timestamp': '2026-07-01T10:00:00Z',
+          'version': '2.1.195',
+          'message': {'content': 'hello'},
+        },
+        {
+          'type': 'assistant',
+          'version': '2.1.195',
+          'message': {'model': 'claude-opus-4-8', 'content': [{'type': 'text', 'text': 'hi'}]},
+        },
+      ]
+    )
+  )
+
+
+class TestMetadata:
+  def test_extracts_claude_code_version(self, tmp_path):
+    log_path = tmp_path / 'log.jsonl'
+    _write_log(log_path)
+    meta = sync_session_log._extract_metadata(log_path)
+    assert meta['version'] == '2.1.195'
+    assert meta['model'] == 'claude-opus-4-8'
+
+
+class TestBuildItem:
+  def test_version_and_context_into_item(self, monkeypatch, tmp_path):
+    log_path = tmp_path / 'sid.jsonl'
+    _write_log(log_path)
+    records = [{'kind': 'git', 'subtype': 'state', 'title': 'git', 'fields': {'branch': 'b'}}]
+    monkeypatch.setenv('CW_SESSION_CONTEXT', json.dumps(records))
+    item = sync_session_log._build_item(log_path, 'ws', 'logs/ws/sid.jsonl')
+    assert item['claude_code_version'] == '2.1.195'
+    assert json.loads(item['context']) == records
+
+  def test_context_absent_when_env_unset(self, monkeypatch, tmp_path):
+    log_path = tmp_path / 'sid.jsonl'
+    _write_log(log_path)
+    monkeypatch.delenv('CW_SESSION_CONTEXT', raising=False)
+    item = sync_session_log._build_item(log_path, 'ws', 'logs/ws/sid.jsonl')
+    assert 'context' not in item
 
 
 class TestProjectsDirOverride:

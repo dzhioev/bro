@@ -14,6 +14,7 @@ CONTAINER_DIR = Path(__file__).resolve().parent.parent / 'setup' / 'container'
 _DOCKER_FORWARD_ENV = (
   'CW_BRO',
   'CW_COMMAND',
+  'CW_SESSION_CONTEXT',
   'CW_TASK_ID',
   'GIT_AUTHOR_NAME',
   'GIT_AUTHOR_EMAIL',

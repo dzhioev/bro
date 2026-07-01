@@ -12,12 +12,18 @@ from base import credentials, log
 from cw.bro import _bro_claude_argv, _populate_bro_skills
 from cw.constants import _CW_MODEL
 from cw.containers import _replace_container_resume_hint, run_in_container
+from cw.git import git_out
 from cw.paths import _latest_jsonl, _project_root, _venv_env
 from cw.secrets import (
   _DEFAULT_CW_BRO,
   _claude_code_token_env,
   _container_secrets,
   _finalize_secrets,
+)
+from cw.session_context import (
+  CW_SESSION_CONTEXT_ENV,
+  build_session_context,
+  encode_session_context,
 )
 from cw.system_prompt import _session_append_prompt
 from cw.workspace import ContainerWorkspace, HostWorktree
@@ -75,6 +81,34 @@ def _resolve_base_ref(into: str) -> Optional[str]:
     text=True,
   )
   return fetched.stdout.strip() if fetched.returncode == 0 else None
+
+
+def _set_session_context(
+  spec: 'SessionSpec', system_prompt: str, *, bro_mode: bool, resolved_base: Optional[str]
+) -> None:
+  """capture the session's launch context into CW_SESSION_CONTEXT for sync-session-log.
+
+  `resolved_base` is the --into ref resolved to a sha (None when --into is unset),
+  used as the git base_sha; without --into the base is the project HEAD at launch.
+  """
+  proj = _project_root()
+  base_sha = resolved_base
+  if base_sha is None:
+    try:
+      base_sha = git_out('rev-parse', 'HEAD', cwd=str(proj))
+    except subprocess.CalledProcessError:
+      base_sha = None
+  records = build_session_context(
+    system_prompt=system_prompt,
+    bro_mode=bro_mode,
+    branch=f'worktree-{spec.name}',
+    base_sha=base_sha,
+    base_ref=spec.into,
+    mcp=spec.mcp,
+    bro=spec.bro,
+    proj_root=proj,
+  )
+  os.environ[CW_SESSION_CONTEXT_ENV] = encode_session_context(records)
 
 
 @dataclass(frozen=True)
@@ -191,7 +225,14 @@ def start_session(spec: SessionSpec) -> int:
     # --bare flow needs the container entrypoint to wire MCP and the api-key
     # helper).
     os.environ['CW_BRO'] = spec.bro
-    claude_args = [*_bro_claude_argv(spec.bro), *claude_args]
+    bro_argv = _bro_claude_argv(spec.bro)
+    _set_session_context(
+      spec,
+      bro_argv[bro_argv.index('--system-prompt') + 1],
+      bro_mode=True,
+      resolved_base=base_ref,
+    )
+    claude_args = [*bro_argv, *claude_args]
     if spec.effort is not None:
       claude_args = ['--effort', spec.effort, *claude_args]
     if spec.prompt is not None:
@@ -231,6 +272,7 @@ def start_session(spec: SessionSpec) -> int:
   bro_env = os.environ.get('CW_BRO')
   append_prompt = _session_append_prompt(spec.auto, bro_env)
   claude_args = [*claude_args, '--append-system-prompt', append_prompt]
+  _set_session_context(spec, append_prompt, bro_mode=False, resolved_base=base_ref)
 
   # host-mode bro skill surfacing: populate a per-session tmp dir and pass it
   # via `--add-dir` so claude's skill discovery picks up `<dir>/.claude/skills/`.

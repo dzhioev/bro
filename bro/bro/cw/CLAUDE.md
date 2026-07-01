@@ -12,6 +12,7 @@ Leaf utilities (no intra-package deps, or only on each other):
 - `flags.py` — `add_forwarded_flags` / `extract_forwarded_argv` / `EFFORT_LEVELS`: the pass-through flag set `dive-in` forwards into `cw ss`
 - `secrets.py` — scoped-credential logic (`_container_secrets` → a `ScopedSecrets(required, optional, docker_sock)` dataclass), `_finalize_secrets`, `_load_anthropic_key`, `_claude_code_token_env`, `_ppp_tarball`, the session baseline/default-bro constants
 - `system_prompt.py` — `_load_base_prompts` / `_session_append_prompt` (the `--append-system-prompt` text)
+- `session_context.py` — `build_session_context` / `encode_session_context`: the typed launch-context records (system prompt, git state, MCP servers, root CLAUDE.md) `start_session` captures into `CW_SESSION_CONTEXT` for `sync-session-log` → `rewind`
 
 Workspace inspection + docker mechanics:
 
