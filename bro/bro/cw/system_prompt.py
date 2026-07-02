@@ -8,9 +8,10 @@ _PROMPTS_DIR = Path(__file__).resolve().parent.parent / 'prompts'
 # - `environment.md` is the single source of truth for the cw-banner playbook —
 #   same file is reachable from bros via `FileSource` (bro/bros/ppp_dev).
 # - `tool_names.md` is the Claude-Code tool-name resolution rule (`ns::tool` →
-#   `mcp__ns__tool`); the bro counterpart is the framework `## Tool names` block
-#   in bro/bro.py (bros resolve to `ns__tool`, no `mcp__`). Kept harness-specific
-#   on purpose — do not give a bro a `FileSource` for this file.
+#   `mcp__ns__tool`). `--bro` sessions run `--bare` and skip this injection but
+#   get the same file through `BaseBro.claude_system_prompt`; bro-native LLM
+#   runs use the `_TOOL_NAMES_BLOCK` in bro/bro.py instead (`ns__tool`, no
+#   `mcp__`) — do not give a bro a `FileSource` for this file.
 _BASE_PROMPT_DIRS = ['shared']
 _BASE_PROMPT_FILES = ['environment.md', 'tool_names.md']
 

@@ -568,7 +568,26 @@ class TestToolNamesBlock:
       def __init__(self):
         super().__init__(system_prompt='base')
 
-    assert '## Tool names' not in BareBro().system_prompt
+    bro = BareBro()
+    assert '## Tool names' not in bro.system_prompt
+    # without a tool-names block the two flavors have nothing to differ on
+    assert bro.claude_system_prompt == bro.system_prompt
+
+  def test_claude_flavor_teaches_mcp_wire_form(self):
+    class ToolBro(BaseBro):
+      name = 'tooled'
+      description = 'd'
+      mcp_servers: ClassVar = [_make_server('a')]
+
+      def __init__(self):
+        super().__init__(system_prompt='base')
+
+    bro = ToolBro()
+    assert '`mcp__namespace__tool`' in bro.claude_system_prompt
+    assert '`mcp__namespace__tool`' not in bro.system_prompt
+    assert '`namespace__tool`' in bro.system_prompt
+    # everything but the tool-names rule is shared between the flavors
+    assert bro.claude_system_prompt.startswith(bro.system_prompt.split('## Tool names')[0])
 
   @pytest.mark.asyncio
   async def test_data_source_search_and_fetch_calls(self):
@@ -1164,7 +1183,7 @@ class TestSkillsInSystemPrompt:
     prompt = B().system_prompt
     assert '## Available skills' in prompt
     assert '**foo** — do foo thing' in prompt
-    assert '`skill` tool' in prompt
+    assert '`bro::skill` tool' in prompt
 
   def test_section_omitted_without_skills(self, fake_pkgs):
     pkg = fake_pkgs('_prompt_no')

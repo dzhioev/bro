@@ -22,7 +22,7 @@ Use a top-level file when content must hold in a `cw ss` Claude Code session —
 Current top-level reference docs:
 
 - `environment.md` — `cw banner` playbook; loaded into every `cw ss` session and exposed to `ppp-dev` via `FileSource('environment', ...)`
-- `tool_names.md` — Claude-Code tool-name resolution rule (`ns::tool` → `mcp__ns__tool`, load via `ToolSearch select:`). Deliberately Claude-Code-only (no `FileSource`); the bro counterpart is the framework `## Tool names` block in `bro/bro.py` (bros resolve `ns::tool` → `ns__tool`)
+- `tool_names.md` — Claude-Code tool-name resolution rule (`ns::tool` → `mcp__ns__tool`). Reaches both Claude Code surfaces: injected here for non-bro sessions, and composed into `BaseBro.claude_system_prompt` for `cw ss --bro` sessions. Deliberately no `FileSource` — the bro-native counterpart is the `_TOOL_NAMES_BLOCK` in `bro/bro.py` (`ns::tool` → `ns__tool`)
 
 ## Top-level one-shot prompts
 

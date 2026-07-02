@@ -70,8 +70,10 @@ class _BroLaunch:
 def _bro_launch(bro_name: str) -> _BroLaunch:
   """build the clean claude argv + container env for `cw ss --bro <bro_name>`.
 
-  resolves the bro to extract its system prompt (no shared/base prepend) and
-  enumerate its MCP namespaces. the bro's tools are served by a session-local
+  resolves the bro to extract its Claude-flavored system prompt
+  (`claude_system_prompt` — the tool-name rule teaches the `mcp__ns__tool` wire
+  form these MCP mounts produce; no cw base-prompt prepend) and enumerate its
+  MCP namespaces. the bro's tools are served by a session-local
   HTTP MCP server (`mcp-server bro:<name> --http`) that the container entrypoint
   starts and health-gates before launching claude, so the heavy bro import
   happens off claude's critical path and the first turn — which a seeded `-p`
@@ -105,7 +107,7 @@ def _bro_launch(bro_name: str) -> _BroLaunch:
     '--settings',
     settings,
     '--system-prompt',
-    bro.system_prompt,
+    bro.claude_system_prompt,
     '--tools',
     '',
     '--allowed-tools',

@@ -13,6 +13,7 @@ from bro.datasources.base import DataSource
 from llm.llm import LLM, LLMSpec
 from llm.observer import BoringRenderer, NullObserver, Observer
 from llm.tracker import EndReason, HTTPTracker, NullTracker, Tracker
+from prompts import get_prompt
 
 DEFAULT_LLM_SPEC: LLMSpec = llm.llms.chat_gpt.LLMSpec()
 
@@ -71,16 +72,26 @@ def _load_shared_prompts() -> str:
 
 
 # bro-facing tool-name rule, appended to a bro's system prompt when it has any
-# namespaced tools or skills. the Claude-Code counterpart lives in
-# prompts/tool_names.md (cw/system_prompt.py `_BASE_PROMPT_FILES`); kept harness-specific on
-# purpose — a bro resolves `::` to `ns__tool` (no `mcp__`, nothing to load).
+# namespaced tools or skills. this is the bro-native half of the per-harness
+# rule — a bro LLM run resolves `::` to `ns__tool` (no `mcp__`). the Claude-Code
+# half is prompts/tool_names.md (`ns::tool` → `mcp__ns__tool`): non-bro `cw ss`
+# sessions get it via cw/system_prompt.py, and `cw ss --bro` sessions via
+# `claude_system_prompt`, which composes it in place of this block.
 _TOOL_NAMES_BLOCK = (
   '## Tool names\n'
   '\n'
-  'Your tools are namespaced. A name written `namespace::tool` — in a skill, a '
-  'data-source description, or this prompt — is the tool `namespace__tool` in your '
-  'tool list (replace `::` with `__`). Call that wire name directly.'
+  "Your tools are namespaced. `namespace::tool` is a tool's canonical name; it "
+  'can appear anywhere — a skill, a doc, a tool description, a user message. In '
+  'your tool list it is `namespace__tool` (replace `::` with `__`); call that '
+  'wire name directly.'
 )
+
+
+def _load_claude_tool_names() -> str:
+  # a `cw ss --bro` session mounts each namespace as an MCP server, so its wire
+  # names carry the `mcp__` prefix — the bro-native block above would teach the
+  # wrong form there.
+  return get_prompt('tool_names.md').strip()
 
 
 def _render_data_sources(sources: list[DataSource]) -> str:
@@ -179,8 +190,8 @@ def _render_skills(skills: list[tuple[str, str]]) -> str:
     '## Available skills',
     '',
     'You have the following named skills available. To invoke one, call the '
-    "`skill` tool with its name — the tool returns the skill's markdown body, "
-    'which you then execute.',
+    "`bro::skill` tool with its name — the tool returns the skill's markdown "
+    'body, which you then execute.',
     '',
   ]
   for name, desc in skills:
@@ -299,6 +310,9 @@ class BaseBro(ABC):
   system_prompt: str = ''
   # the bro's own class prompts (MRO-concatenated); set in __init__
   persona: str
+  # `system_prompt` with the Claude-Code tool-name rule in place of the
+  # bro-native one; set in __init__, consumed by `cw ss --bro`
+  claude_system_prompt: str
 
   _llm: Optional[LLM] = None
 
@@ -340,19 +354,26 @@ class BaseBro(ABC):
     self.persona = '\n\n'.join(prompt_parts)
     shared = _load_shared_prompts()
     descriptions = self.skill_descriptions()
-    parts = []
-    if len(shared) > 0:
-      parts.append(shared)
-    parts.extend(prompt_parts)
-    # the namespaced-tool convention only matters once the bro actually has tools
-    # or skills (which reference tools by their `ns::tool` name).
-    if len(self._mcp_servers) > 0 or len(descriptions) > 0:
-      parts.append(_TOOL_NAMES_BLOCK)
-    if len(self.data_sources) > 0:
-      parts.append(_render_data_sources(self.data_sources))
-    if len(descriptions) > 0:
-      parts.append(_render_skills(descriptions))
-    self.system_prompt = '\n\n'.join(parts)
+
+    def compose(tool_names_block: str) -> str:
+      parts = []
+      if len(shared) > 0:
+        parts.append(shared)
+      parts.extend(prompt_parts)
+      # the namespaced-tool convention only matters once the bro actually has
+      # tools or skills (which reference tools by their `ns::tool` name).
+      if len(self._mcp_servers) > 0 or len(descriptions) > 0:
+        parts.append(tool_names_block)
+      if len(self.data_sources) > 0:
+        parts.append(_render_data_sources(self.data_sources))
+      if len(descriptions) > 0:
+        parts.append(_render_skills(descriptions))
+      return '\n\n'.join(parts)
+
+    self.system_prompt = compose(_TOOL_NAMES_BLOCK)
+    # the same prompt with the Claude-Code tool-name rule — what a `cw ss --bro`
+    # session passes as --system-prompt (cw/bro.py:_bro_launch).
+    self.claude_system_prompt = compose(_load_claude_tool_names())
 
   @property
   def skills(self) -> dict[str, Path]:
