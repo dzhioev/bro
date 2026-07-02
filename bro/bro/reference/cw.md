@@ -31,6 +31,7 @@ For container workspaces the ancestry checks run against the host project's `.gi
 
 `cw` owns the worktree lifecycle directly and runs plain `claude` from inside the worktree (not `claude -w`), so no Claude Code worktree/provisioning hooks are involved. On launch it:
 
+0. refuses if a session is already active on the target workspace — a live `cw-session.pid` (host) or a running bound container (container). One session per worktree: a second concurrent claude would mutate the same files and share the gitignored token-accounting state. The lock releases on exit, so re-entry / `--resume` after a session ends is unaffected;
 1. creates the worktree if new — a `worktree-<name>` branch (based on `--into <ref>` when given, else the current `HEAD`) plus `submodule.alternateLocation=superproject` so submodule updates reuse the superproject's modules;
 2. runs `setup/provision_repo.sh` against the worktree (the same provisioner the container entrypoint uses — venv sync if stale, console-script bridge, git hooks, `git golc` alias);
 3. writes its own pid to `<project>/.git/worktrees/<name>/cw-session.pid` for the session's duration, so `cw list` / `cw clean` can tell the session is live;

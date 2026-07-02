@@ -9,6 +9,7 @@ from claude_commit_footer import (  # noqa: E402
   Footer,
   State,
   _cumulative_usage,
+  _effective_baseline,
   _emit_default,
   _emit_squash,
   _fmt_int,
@@ -22,10 +23,12 @@ from claude_commit_footer import (  # noqa: E402
 OPUS = 'claude-opus-4-8'
 HAIKU = 'claude-haiku-4-5-20251001'
 
-LEGACY_FOOTER = (
-  '> created with Claude Code 2.1.114 '
-  '(Opus 4.7: 275,432; session: abc12345-1234-5678-9abc-def012345678)'
-)
+# an old single-number footer (pre four-class redesign) — must no longer parse
+OLD_FOOTER = "> created with Claude Code 2.1.114 | Opus 4.8: 45'231\n> session(s): abc12345"
+
+
+def C(input=0, cache_write=0, cache_read=0, output=0):
+  return {'input': input, 'cache_write': cache_write, 'cache_read': cache_read, 'output': output}
 
 
 class TestFmtInt:
@@ -43,6 +46,10 @@ class TestModelLabel:
     assert _model_label(HAIKU) == 'Haiku 4.5'
     assert _model_label('claude-sonnet-4-6') == 'Sonnet 4.6'
 
+  def test_single_number_families(self):
+    assert _model_label('claude-fable-5') == 'Fable 5'
+    assert _model_label('claude-mythos-5') == 'Mythos 5'
+
   def test_unknown_slug_passes_through(self):
     assert _model_label('<synthetic>') == '<synthetic>'
     assert _model_label('claude-experimental-99-12') == 'claude-experimental-99-12'
@@ -52,32 +59,79 @@ class TestCumulativeUsage:
   def _write(self, path, rows):
     path.write_text('\n'.join(json.dumps(r) for r in rows) + '\n')
 
-  def _msg(self, model, output):
-    return {'message': {'model': model, 'usage': {'output_tokens': output}}}
+  def _msg(self, model, input=0, cache_write=0, cache_read=0, output=0):
+    return {
+      'message': {
+        'model': model,
+        'usage': {
+          'input_tokens': input,
+          'cache_creation_input_tokens': cache_write,
+          'cache_read_input_tokens': cache_read,
+          'output_tokens': output,
+        },
+      }
+    }
 
-  def test_sums_per_model(self, tmp_path):
+  def test_sums_per_model_per_class(self, tmp_path):
     p = tmp_path / 't.jsonl'
-    self._write(p, [self._msg(OPUS, 10), self._msg(OPUS, 5), self._msg(HAIKU, 3)])
-    assert _cumulative_usage(p) == {OPUS: 15, HAIKU: 3}
+    self._write(
+      p,
+      [
+        self._msg(OPUS, input=2, cache_write=3, cache_read=4, output=10),
+        self._msg(OPUS, input=1, cache_write=1, cache_read=1, output=5),
+        self._msg(HAIKU, output=3),
+      ],
+    )
+    assert _cumulative_usage(p) == {
+      OPUS: C(input=3, cache_write=4, cache_read=5, output=15),
+      HAIKU: C(output=3),
+    }
+
+  def test_missing_fields_default_to_zero(self, tmp_path):
+    p = tmp_path / 't.jsonl'
+    # only output present in the usage block
+    p.write_text(json.dumps({'message': {'model': OPUS, 'usage': {'output_tokens': 7}}}) + '\n')
+    assert _cumulative_usage(p) == {OPUS: C(output=7)}
 
   def test_skips_synthetic(self, tmp_path):
     p = tmp_path / 't.jsonl'
-    self._write(p, [self._msg(OPUS, 10), self._msg('<synthetic>', 999)])
-    assert _cumulative_usage(p) == {OPUS: 10}
+    self._write(p, [self._msg(OPUS, output=10), self._msg('<synthetic>', output=999)])
+    assert _cumulative_usage(p) == {OPUS: C(output=10)}
 
   def test_all_synthetic_yields_empty(self, tmp_path):
     p = tmp_path / 't.jsonl'
-    self._write(p, [self._msg('<synthetic>', 12), self._msg('<synthetic>', 7)])
+    self._write(p, [self._msg('<synthetic>', output=12), self._msg('<synthetic>', output=7)])
     assert _cumulative_usage(p) == {}
 
 
 class TestToLabels:
   def test_collapses_slugs_to_labels(self):
-    assert _to_labels({OPUS: 100, HAIKU: 5}) == {'Opus 4.8': 100, 'Haiku 4.5': 5}
+    out = _to_labels({OPUS: C(output=100), HAIKU: C(output=5)})
+    assert out == {'Opus 4.8': C(output=100), 'Haiku 4.5': C(output=5)}
 
-  def test_same_label_different_date_merges(self):
-    out = _to_labels({'claude-haiku-4-5-20251001': 5, 'claude-haiku-4-5-20260101': 7})
-    assert out == {'Haiku 4.5': 12}
+  def test_same_label_different_date_merges_per_class(self):
+    out = _to_labels(
+      {
+        'claude-haiku-4-5-20251001': C(input=1, output=5),
+        'claude-haiku-4-5-20260101': C(input=2, output=7),
+      }
+    )
+    assert out == {'Haiku 4.5': C(input=3, output=12)}
+
+
+class TestEffectiveBaseline:
+  def test_normal_growth_uses_committed(self):
+    committed = C(input=10, output=20)
+    assert _effective_baseline(committed, C(input=15, output=30)) == committed
+
+  def test_equal_uses_committed(self):
+    committed = C(output=20)
+    assert _effective_baseline(committed, C(output=20)) == committed
+
+  def test_any_class_backwards_resets_to_zero(self):
+    # output dropped (a new transcript reused the worktree) -> reset even though
+    # input grew; a within-session cumulative could never go backwards in any class
+    assert _effective_baseline(C(input=10, output=20), C(input=15, output=5)) == C()
 
 
 class TestVersion:
@@ -97,44 +151,55 @@ class TestVersion:
 
 
 class TestFormatFooter:
-  def test_single_model_single_session(self):
-    out = _format_footer(['2.1.114'], {'Opus 4.8': 45_231}, ['04ee83b5'])
-    assert out == ("> created with Claude Code 2.1.114 | Opus 4.8: 45'231\n> session(s): 04ee83b5")
-
-  def test_multi_everything(self):
+  def test_single_model(self):
     out = _format_footer(
-      ['2.1.114', '2.1.120'],
-      {'Opus 4.8': 168_892, 'Haiku 4.5': 5_000},
-      ['04ee83b5', '9a2c1f00'],
+      ['2.1.114'],
+      {'Opus 4.8': C(input=48_787, cache_write=2_103_810, cache_read=41_676_292, output=434_029)},
     )
     assert out == (
-      "> created with Claude Code 2.1.114, 2.1.120 | Opus 4.8: 168'892, Haiku 4.5: 5'000\n"
-      '> session(s): 04ee83b5, 9a2c1f00'
+      "> created with Claude Code 2.1.114 | Opus 4.8: ↑ 48'787 / 2'103'810 (41'676'292) ↓ 434'029"
+    )
+
+  def test_multi_model(self):
+    out = _format_footer(
+      ['2.1.114', '2.1.120'],
+      {'Opus 4.8': C(input=168_892, output=10), 'Haiku 4.5': C(cache_read=5_000)},
+    )
+    assert out == (
+      '> created with Claude Code 2.1.114, 2.1.120 | '
+      "Opus 4.8: ↑ 168'892 / 0 (0) ↓ 10, Haiku 4.5: ↑ 0 / 0 (5'000) ↓ 0"
     )
 
 
 class TestParseFooter:
   def test_round_trips_format_footer(self):
     versions = ['2.1.114', '2.1.120']
-    tokens = {'Opus 4.8': 168_892, 'Haiku 4.5': 5_000}
-    sessions = ['04ee83b5', '9a2c1f00']
-    parsed = _parse_footer(_format_footer(versions, tokens, sessions))
-    assert parsed == Footer(versions=versions, delta=tokens, sessions=sessions)
+    tokens = {
+      'Opus 4.8': C(input=1, cache_write=2, cache_read=3, output=4),
+      'Haiku 4.5': C(output=5_000),
+    }
+    parsed = _parse_footer(_format_footer(versions, tokens))
+    assert parsed == Footer(versions=versions, delta=tokens)
 
   def test_single(self):
     parsed = _parse_footer(
-      "> created with Claude Code 2.1.114 | Opus 4.8: 45'231\n> session(s): sid-1"
+      "> created with Claude Code 2.1.114 | Opus 4.8: ↑ 48'787 / 2'103'810 (41'676'292) ↓ 434'029"
     )
-    assert parsed == Footer(versions=['2.1.114'], delta={'Opus 4.8': 45231}, sessions=['sid-1'])
+    assert parsed == Footer(
+      versions=['2.1.114'],
+      delta={
+        'Opus 4.8': C(input=48_787, cache_write=2_103_810, cache_read=41_676_292, output=434_029)
+      },
+    )
 
   def test_finds_footer_among_other_lines(self):
-    msg = f'fix: a thing\n\nbody text\n\n{_format_footer(["2.1"], {"Opus 4.8": 10}, ["s"])}\n'
+    msg = f'fix: a thing\n\nbody text\n\n{_format_footer(["2.1"], {"Opus 4.8": C(output=10)})}\n'
     parsed = _parse_footer(msg)
     assert parsed is not None
-    assert parsed.delta == {'Opus 4.8': 10}
+    assert parsed.delta == {'Opus 4.8': C(output=10)}
 
-  def test_legacy_footer_does_not_match(self):
-    assert _parse_footer(LEGACY_FOOTER) is None
+  def test_old_single_number_footer_does_not_parse(self):
+    assert _parse_footer(OLD_FOOTER) is None
 
   def test_footerless(self):
     assert _parse_footer('chore: bump deps\n\nroutine.\n') is None
@@ -144,16 +209,17 @@ class TestParseFooter:
 class TestState:
   def test_missing_file_is_empty(self, tmp_path):
     s = State(tmp_path / 'state.json')
-    assert s.baseline('whoever') == {}
+    assert s.committed == {}
+    assert s.staged == {}
 
   def test_stage_then_record_promotes(self, tmp_path):
     p = tmp_path / 'state.json'
     s = State(p)
-    s.stage('S', {OPUS: 100})
+    s.stage({OPUS: C(output=100)})
     # staged, not yet committed
-    assert State(p).baseline('S') == {}
+    assert State(p).committed == {}
     s.record()
-    assert State(p).baseline('S') == {OPUS: 100}
+    assert State(p).committed == {OPUS: C(output=100)}
     # staged cleared after record
     assert State(p).staged == {}
 
@@ -165,91 +231,95 @@ class TestState:
   def test_corrupt_file_falls_back_to_empty(self, tmp_path):
     p = tmp_path / 'state.json'
     p.write_text('{ not json')
-    assert State(p).baseline('S') == {}
+    assert State(p).committed == {}
 
 
 class TestEmitDefault:
   def test_first_commit_takes_full_cumulative(self, tmp_path):
     s = State(tmp_path / 'state.json')
-    footer = _emit_default({OPUS: 100}, 'S', '2.1', s)
-    assert 'Opus 4.8: 100' in footer
-    assert '> session(s): S' in footer
+    footer = _emit_default({OPUS: C(output=100)}, '2.1', s)
+    assert 'Opus 4.8: ↑ 0 / 0 (0) ↓ 100' in footer
     # cum_now staged for promotion
-    assert s.staged['S'] == {OPUS: 100}
+    assert s.staged[OPUS] == C(output=100)
 
   def test_second_commit_is_delta(self, tmp_path):
     p = tmp_path / 'state.json'
     s = State(p)
-    _emit_default({OPUS: 100}, 'S', '2.1', s)
+    _emit_default({OPUS: C(output=100)}, '2.1', s)
     s.record()
-    footer = _emit_default({OPUS: 130}, 'S', '2.1', State(p))
-    assert 'Opus 4.8: 30' in footer
+    footer = _emit_default({OPUS: C(output=130)}, '2.1', State(p))
+    assert '↓ 30' in footer
+
+  def test_transcript_reset_recredits_full_cumulative(self, tmp_path):
+    s = State(tmp_path / 'state.json')
+    s.committed[OPUS] = C(output=5_000)  # a prior session's mark in this worktree
+    # a new session reuses the worktree: cumulative reset, smaller than the mark
+    parsed = _parse_footer(_emit_default({OPUS: C(output=200)}, '2.1', s))
+    assert parsed is not None
+    assert parsed.delta == {'Opus 4.8': C(output=200)}  # full new cumulative, not negative
 
   def test_deltas_telescope_to_final_cumulative(self, tmp_path):
     p = tmp_path / 'state.json'
-    cums = [{OPUS: 100}, {OPUS: 130}, {OPUS: 175}]
+    cums = [C(output=100), C(output=130), C(output=175)]
     total = 0
     for cum in cums:
       s = State(p)
-      parsed = _parse_footer(_emit_default(cum, 'S', '2.1', s))
+      parsed = _parse_footer(_emit_default({OPUS: cum}, '2.1', s))
       assert parsed is not None
-      total += parsed.delta['Opus 4.8']
+      total += parsed.delta['Opus 4.8']['output']
       s.record()
     assert total == 175  # == final cumulative
 
 
 class TestEmitSquash:
-  def _commit(self, version: str, tokens: dict[str, int], session: str) -> tuple[str, str]:
-    return ('0' * 40, f'subject\n\n{_format_footer([version], tokens, [session])}\n')
+  def _commit(self, version, tokens) -> tuple[str, str]:
+    return ('0' * 40, f'subject\n\n{_format_footer([version], tokens)}\n')
 
   def test_auto_case_reduces_to_land_cumulative(self, tmp_path):
     # one session authored both branch commits and is also the land session;
-    # branch deltas telescope to committed[L], remainder adds L's /land work.
+    # branch deltas telescope to committed, remainder adds the /land work.
     p = tmp_path / 'state.json'
     s = State(p)
-    s.committed['L'] = {OPUS: 130}  # mark after L's last branch commit
+    s.committed[OPUS] = C(output=130)  # mark after the last branch commit
     commits = [
-      self._commit('2.1', {'Opus 4.8': 100}, 'L'),
-      self._commit('2.1', {'Opus 4.8': 30}, 'L'),
+      self._commit('2.1', {'Opus 4.8': C(output=100)}),
+      self._commit('2.1', {'Opus 4.8': C(output=30)}),
     ]
-    footer, footerless = _emit_squash(commits, ('L', {OPUS: 150}), '2.1', s)
+    footer, footerless = _emit_squash(commits, {OPUS: C(output=150)}, '2.1', s)
     parsed = _parse_footer(footer)
     assert parsed is not None
-    assert parsed.delta == {'Opus 4.8': 150}  # 100 + 30 + (150 - 130)
-    assert parsed.sessions == ['L']
+    assert parsed.delta == {'Opus 4.8': C(output=150)}  # 100 + 30 + (150 - 130)
     assert parsed.versions == ['2.1']
     assert footerless == []
 
-  def test_unions_sessions_and_versions_sorted(self, tmp_path):
+  def test_unions_versions_sorted_and_sums_classes(self, tmp_path):
     s = State(tmp_path / 'state.json')  # land session authored no branch commits
     commits = [
-      self._commit('2.1.120', {'Opus 4.8': 100}, 'A'),
-      self._commit('2.1.114', {'Haiku 4.5': 50}, 'B'),
+      self._commit('2.1.120', {'Opus 4.8': C(input=100, output=1)}),
+      self._commit('2.1.114', {'Haiku 4.5': C(cache_read=50)}),
     ]
-    footer, _ = _emit_squash(commits, ('L', {OPUS: 40}), '2.1.130', s)
+    footer, _ = _emit_squash(commits, {OPUS: C(input=40)}, '2.1.130', s)
     parsed = _parse_footer(footer)
     assert parsed is not None
-    assert parsed.delta == {'Opus 4.8': 140, 'Haiku 4.5': 50}
-    assert parsed.sessions == ['A', 'B', 'L']
+    assert parsed.delta == {'Opus 4.8': C(input=140, output=1), 'Haiku 4.5': C(cache_read=50)}
     assert parsed.versions == ['2.1.114', '2.1.120', '2.1.130']
 
   def test_footerless_commit_flagged_and_zero(self, tmp_path):
     s = State(tmp_path / 'state.json')
-    commits = [
-      self._commit('2.1', {'Opus 4.8': 100}, 'A'),
+    commits: list[tuple[str, str]] = [
+      self._commit('2.1', {'Opus 4.8': C(output=100)}),
       ('abcdef1234' + '0' * 30, 'chore: no footer\n\nbody\n'),
     ]
     footer, footerless = _emit_squash(commits, None, '2.1', s)
     parsed = _parse_footer(footer)
     assert parsed is not None
-    assert parsed.delta == {'Opus 4.8': 100}
+    assert parsed.delta == {'Opus 4.8': C(output=100)}
     assert footerless == ['abcdef1234' + '0' * 30]
 
-  def test_no_land_session_aggregates_branch_only(self, tmp_path):
+  def test_no_land_aggregates_branch_only(self, tmp_path):
     s = State(tmp_path / 'state.json')
-    commits = [self._commit('2.1', {'Opus 4.8': 100}, 'A')]
+    commits = [self._commit('2.1', {'Opus 4.8': C(output=100)})]
     footer, _ = _emit_squash(commits, None, '2.1', s)
     parsed = _parse_footer(footer)
     assert parsed is not None
-    assert parsed.sessions == ['A']
-    assert parsed.delta == {'Opus 4.8': 100}
+    assert parsed.delta == {'Opus 4.8': C(output=100)}

@@ -41,7 +41,7 @@ GitHub builds the squash commit server-side from the PR title + `--body`, so the
 ./setup/claude_commit_footer.py --squash origin/<baseRefName>..HEAD
 ```
 
-Use the `baseRefName` from step 1 (`master` unless the PR targets another base) — the range must be relative to the PR's actual base, or the footer would miscount. This emits the two-line footer summing every branch commit's per-model deltas (with the union of their session ids and Claude Code versions) plus this land session's own uncommitted work. Append its two lines to the PR body, below the `Task:` line. If it warns about footerless commits in the range, surface that — those commits' tokens are not captured.
+Use the `baseRefName` from step 1 (`master` unless the PR targets another base) — the range must be relative to the PR's actual base, or the footer would miscount. This emits the single-line footer summing every branch commit's per-class deltas (with the union of their Claude Code versions) plus this land session's own uncommitted work. Append that line to the PR body, below the `Task:` line. If it warns about footerless commits in the range, surface that — those commits' tokens are not captured.
 
 If the worktree has multiple commits, the PR title/body should already reflect the full scope (step 12 of `/pr` enforced this).
 

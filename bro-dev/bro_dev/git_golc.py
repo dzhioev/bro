@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 """show `git gol`-style log with per-commit Claude Code credit usage.
 
-Two passes: pass 1 sums per-model tokens from each commit body's footer (the one
-emitted by setup/claude_commit_footer.py); pass 2 renders `git log --graph
---color=always` with a `CREDITS:<full-sha>` sentinel that we substitute
-line-by-line with a fixed-width credits column.
+Two passes: pass 1 reads each commit body's footer (the one emitted by
+setup/claude_commit_footer.py) for its per-model output tokens; pass 2 renders
+`git log --graph --color=always` with a `CREDITS:<full-sha>` sentinel that we
+substitute line-by-line with a fixed-width credits column.
+
+The footer carries four token classes; the credits column shows **output** only —
+the clearest per-commit glance at generated work (the cheap, volume-dominating
+cache-read lives in the full footer, not here). Commits with no parseable footer
+render `—`.
 
 Repo-local — wired by setup/setup_repo.sh via `git config --local alias.golc`.
 The footer format is owned by setup/claude_commit_footer.py; the small parser
 here is a duplicate of usage_report.py's (sharing would require making setup/ a
-Python package, which is out of scope). New-format footers carry per-commit
-deltas; legacy single-line footers carry a session cumulative, so their value is
-marked with a `~` and rendered dimmed — visibly not a real per-commit delta.
+Python package, which is out of scope).
 """
 
 from __future__ import annotations
@@ -23,26 +26,21 @@ import subprocess
 import sys
 from typing import Optional
 
-# two-line delta footer (owned by setup/claude_commit_footer.py)
+# footer parser (owned by setup/claude_commit_footer.py)
 _FOOTER_RE = re.compile(
-  r'^>\s*created with Claude Code\s+(?P<versions>.+?)\s*\|\s*(?P<tokens>.+?)\s*\n'
-  r'>\s*session\(s\):\s*(?P<sessions>.+?)\s*$',
+  r'^>\s*created with Claude Code\s+(?P<versions>.+?)\s*\|\s*(?P<tokens>.+?)\s*$',
   re.MULTILINE,
 )
-_PART_RE = re.compile(r"^(?P<model>.*?):\s*(?P<n>[\d']+)$")
-
-# legacy single-line cumulative footer (pre-redesign)
-_LEGACY_RE = re.compile(
-  r'^>\s*created with Claude Code\s+\S+\s+\((?P<tokens>.+?);\s*session:\s*\S+?\)\s*$',
-  re.MULTILINE,
+_PART_RE = re.compile(
+  r'^(?P<model>.*?):\s*'
+  r'↑\s*(?P<input>[\d\']+)\s*/\s*(?P<cache_write>[\d\']+)\s*'
+  r'\(\s*(?P<cache_read>[\d\']+)\s*\)\s*'
+  r'↓\s*(?P<output>[\d\']+)$'
 )
-_LEGACY_PART_RE = re.compile(r'^(?P<model>.*?):\s*(?P<n>[\d,]+)$')
-
-_LEGACY_COLOR = '\x1b[2;33m'  # dim yellow
-_RESET = '\x1b[0m'
 
 
 def _parse_footer(commit_msg: str) -> Optional[dict[str, int]]:
+  """returns {model_label: output_tokens} for the credits column, or None."""
   m = _FOOTER_RE.search(commit_msg)
   if m is None:
     return None
@@ -52,21 +50,7 @@ def _parse_footer(commit_msg: str) -> Optional[dict[str, int]]:
     if pm is None:
       continue
     model = pm.group('model').strip()
-    per_model[model] = per_model.get(model, 0) + int(pm.group('n').replace("'", ''))
-  return per_model if len(per_model) > 0 else None
-
-
-def _parse_legacy(commit_msg: str) -> Optional[dict[str, int]]:
-  m = _LEGACY_RE.search(commit_msg)
-  if m is None:
-    return None
-  per_model: dict[str, int] = {}
-  for chunk in m.group('tokens').split(', '):
-    pm = _LEGACY_PART_RE.match(chunk.strip())
-    if pm is None:
-      continue
-    model = pm.group('model').strip()
-    per_model[model] = per_model.get(model, 0) + int(pm.group('n').replace(',', ''))
+    per_model[model] = per_model.get(model, 0) + int(pm.group('output').replace("'", ''))
   return per_model if len(per_model) > 0 else None
 
 
@@ -101,24 +85,17 @@ def _format_credits(per_model: dict[str, int]) -> str:
   )
 
 
-def _collect_credits(git_args: list[str]) -> dict[str, tuple[str, bool]]:
-  """sha -> (credits text, is_legacy). legacy text is prefixed with `~`."""
+def _collect_credits(git_args: list[str]) -> dict[str, str]:
+  """sha -> credits text (output per model, or `—` when no footer)."""
   out = subprocess.check_output(['git', 'log', '--format=%H%x1f%B%x1e', *git_args], text=True)
-  credits: dict[str, tuple[str, bool]] = {}
+  credits: dict[str, str] = {}
   for record in out.split('\x1e'):
     record = record.strip()
     if len(record) == 0:
       continue
     sha, _, body = record.partition('\x1f')
     parsed = _parse_footer(body)
-    if parsed is not None:
-      credits[sha] = (_format_credits(parsed), False)
-      continue
-    legacy = _parse_legacy(body)
-    if legacy is not None:
-      credits[sha] = (f'~{_format_credits(legacy)}', True)
-    else:
-      credits[sha] = ('—', False)
+    credits[sha] = _format_credits(parsed) if parsed is not None else '—'
   return credits
 
 
@@ -130,7 +107,7 @@ def _render(git_args: list[str], use_color: bool) -> str:
   credits = _collect_credits(git_args)
   if len(credits) == 0:
     return ''
-  width = max(len(text) for text, _ in credits.values())
+  width = max(len(text) for text in credits.values())
   color_args = ['--color=always'] if use_color else ['--color=never']
   fmt = 'tformat:%C(auto)%h CREDITS:%H%d %s'
   out = subprocess.check_output(
@@ -148,11 +125,8 @@ def _render(git_args: list[str], use_color: bool) -> str:
   )
 
   def _sub(m: re.Match[str]) -> str:
-    text, is_legacy = credits.get(m.group(1), ('—', False))
-    padded = f'{text:<{width}}'
-    if is_legacy and use_color:
-      return f'{_LEGACY_COLOR}{padded}{_RESET}'
-    return padded
+    text = credits.get(m.group(1), '—')
+    return f'{text:<{width}}'
 
   return _SENTINEL_RE.sub(_sub, out)
 

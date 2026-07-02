@@ -224,3 +224,70 @@ class TestResumeCommand:
       )
       resume_command = env['CW_RESUME_COMMAND']
     assert resume_command == 'cw ss -c --auto --resume --effort xhigh --mcp --grant gmail_creds w'
+
+
+class TestConcurrentSessionGuard:
+  def test_container_refuses_when_active(self, monkeypatch, tmp_path):
+    monkeypatch.delenv('CW_IN_CONTAINER', raising=False)
+    monkeypatch.setattr(cw.session, '_project_root', lambda: tmp_path)
+    monkeypatch.setattr(cw.session, 'find_container_id', lambda path: 'abc123')
+
+    def boom(*_a, **_k):
+      raise AssertionError('must not launch a second container session')
+
+    monkeypatch.setattr(cw.session, 'run_in_container', boom)
+    assert cw.session.cw(_spec(container=True), claude_args=[]) == 1
+
+  def test_container_proceeds_when_inactive(self, monkeypatch, tmp_path):
+    monkeypatch.delenv('CW_IN_CONTAINER', raising=False)
+    monkeypatch.setattr(cw.session, '_project_root', lambda: tmp_path)
+    monkeypatch.setattr(cw.session, 'find_container_id', lambda path: None)
+    called: list = []
+    monkeypatch.setattr(cw.session, 'run_in_container', lambda *_a, **_k: called.append(True) or 0)
+    monkeypatch.setattr(cw.session, '_replace_container_resume_hint', lambda name: None)
+    assert cw.session.cw(_spec(container=True), claude_args=[]) == 0
+    assert called == [True]
+
+  def test_host_refuses_when_active(self, monkeypatch, tmp_path):
+    import pathlib
+
+    monkeypatch.setattr(cw.session, '_project_root', lambda: tmp_path)
+    monkeypatch.setattr(cw.session.os, 'chdir', lambda p: None)
+
+    class _FakeHost:
+      def __init__(self, name, proj):
+        self.path = pathlib.Path('/wt')
+        self.pidfile = pathlib.Path('/wt.pid')
+
+      def is_active(self, mounts):
+        return True
+
+    monkeypatch.setattr(cw.session, 'HostWorktree', _FakeHost)
+
+    def boom(*_a, **_k):
+      raise AssertionError('must not provision when a session is already active')
+
+    monkeypatch.setattr(cw.session, '_ensure_host_worktree', boom)
+    assert cw.session.cw(_spec(container=False), claude_args=[]) == 1
+
+  def test_host_proceeds_when_inactive(self, monkeypatch, tmp_path):
+    import pathlib
+
+    monkeypatch.setattr(cw.session, '_project_root', lambda: tmp_path)
+    monkeypatch.setattr(cw.session.os, 'chdir', lambda p: None)
+
+    class _FakeHost:
+      def __init__(self, name, proj):
+        self.path = pathlib.Path('/wt')
+        self.pidfile = pathlib.Path('/wt.pid')
+
+      def is_active(self, mounts):
+        return False
+
+    monkeypatch.setattr(cw.session, 'HostWorktree', _FakeHost)
+    called: list = []
+    monkeypatch.setattr(
+      cw.session, '_ensure_host_worktree', lambda *_a: called.append(True) or False
+    )
+    assert cw.session.cw(_spec(container=False), claude_args=[]) == 1
+    assert called == [True]

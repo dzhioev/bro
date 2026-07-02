@@ -12,6 +12,7 @@ from base import credentials, log
 from cw.bro import _bro_launch, _populate_bro_skills
 from cw.constants import _CW_MODEL
 from cw.containers import _replace_container_resume_hint, run_in_container
+from cw.docker import find_container_id
 from cw.git import git_out
 from cw.mcp import _container_mcp_launch, _HostMCPServer, _start_host_mcp_server
 from cw.paths import _latest_jsonl, _project_root, _venv_env
@@ -336,7 +337,18 @@ def cw(
     log.info('already inside a container; falling back to host mode')
     container = False
 
+  proj = _project_root()
+
   if container:
+    # one session per worktree: refuse if a container is already bound to this
+    # workspace's mount. a second concurrent session would share /workspace — and
+    # its gitignored token-accounting state — and corrupt it.
+    if find_container_id(ContainerWorkspace(spec.name, proj).path) is not None:
+      log.error(
+        'session already active in the container for workspace %r; refusing to start a second',
+        spec.name,
+      )
+      return 1
     env = dict(extra_env) if extra_env is not None else {}
     if spec.mcp == 'local':
       # session-local flow MCP server: the entrypoint reads CW_MCP_HTTP_* to
@@ -364,11 +376,22 @@ def cw(
   # host mode: cw owns the worktree lifecycle (create + provision + cleanup) and
   # launches plain `claude` from inside it — no `claude -w`, so no claude provisioning
   # hooks. provisioning is the same provision_repo.sh the container entrypoint runs.
-  proj = _project_root()
   os.chdir(proj)
   ws = HostWorktree(spec.name, proj)
   worktree = ws.path
   branch = f'worktree-{spec.name}'
+
+  # one session per worktree: refuse if a live cw session already owns it (a
+  # second concurrent claude would mutate the same files and share the
+  # token-accounting state). releases on exit, so re-entry / --resume after a
+  # session ends is unaffected.
+  if ws.is_active(set()):
+    log.error(
+      'session already active on host worktree %r (pid in %s); refusing to start a second',
+      spec.name,
+      ws.pidfile,
+    )
+    return 1
 
   if not _ensure_host_worktree(worktree, branch, base_ref):
     return 1
