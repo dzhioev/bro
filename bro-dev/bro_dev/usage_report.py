@@ -48,8 +48,7 @@ _FOOTER_RE = re.compile(
 )
 _PART_RE = re.compile(
   r'^(?P<model>.*?):\s*'
-  r'↑\s*(?P<input>[\d\']+)\s*/\s*(?P<cache_write>[\d\']+)\s*'
-  r'\(\s*(?P<cache_read>[\d\']+)\s*\)\s*'
+  r'↑\s*\(\s*(?P<input>[\d\']+)\s+(?P<cache_write>[\d\']+)\s+(?P<cache_read>[\d\']+)\s*\)\s*'
   r'↓\s*(?P<output>[\d\']+)$'
 )
 

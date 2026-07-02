@@ -25,6 +25,8 @@ HAIKU = 'claude-haiku-4-5-20251001'
 
 # an old single-number footer (pre four-class redesign) — must no longer parse
 OLD_FOOTER = "> created with Claude Code 2.1.114 | Opus 4.8: 45'231\n> session(s): abc12345"
+# the previous four-class shape (`↑ a / b (c) ↓ d`) — must no longer parse
+PREV_FOOTER = "> created with Claude Code 2.1.181 | Opus 4.8: ↑ 4'812 / 18'903 (1'204'556) ↓ 12'905"
 
 
 def C(input=0, cache_write=0, cache_read=0, output=0):
@@ -157,7 +159,7 @@ class TestFormatFooter:
       {'Opus 4.8': C(input=48_787, cache_write=2_103_810, cache_read=41_676_292, output=434_029)},
     )
     assert out == (
-      "> created with Claude Code 2.1.114 | Opus 4.8: ↑ 48'787 / 2'103'810 (41'676'292) ↓ 434'029"
+      "> created with Claude Code 2.1.114 | Opus 4.8: ↑(48'787 2'103'810 41'676'292) ↓434'029"
     )
 
   def test_multi_model(self):
@@ -167,7 +169,7 @@ class TestFormatFooter:
     )
     assert out == (
       '> created with Claude Code 2.1.114, 2.1.120 | '
-      "Opus 4.8: ↑ 168'892 / 0 (0) ↓ 10, Haiku 4.5: ↑ 0 / 0 (5'000) ↓ 0"
+      "Opus 4.8: ↑(168'892 0 0) ↓10, Haiku 4.5: ↑(0 0 5'000) ↓0"
     )
 
 
@@ -183,7 +185,7 @@ class TestParseFooter:
 
   def test_single(self):
     parsed = _parse_footer(
-      "> created with Claude Code 2.1.114 | Opus 4.8: ↑ 48'787 / 2'103'810 (41'676'292) ↓ 434'029"
+      "> created with Claude Code 2.1.114 | Opus 4.8: ↑(48'787 2'103'810 41'676'292) ↓434'029"
     )
     assert parsed == Footer(
       versions=['2.1.114'],
@@ -200,6 +202,9 @@ class TestParseFooter:
 
   def test_old_single_number_footer_does_not_parse(self):
     assert _parse_footer(OLD_FOOTER) is None
+
+  def test_prev_slash_parens_footer_does_not_parse(self):
+    assert _parse_footer(PREV_FOOTER) is None
 
   def test_footerless(self):
     assert _parse_footer('chore: bump deps\n\nroutine.\n') is None
@@ -238,7 +243,7 @@ class TestEmitDefault:
   def test_first_commit_takes_full_cumulative(self, tmp_path):
     s = State(tmp_path / 'state.json')
     footer = _emit_default({OPUS: C(output=100)}, '2.1', s)
-    assert 'Opus 4.8: ↑ 0 / 0 (0) ↓ 100' in footer
+    assert 'Opus 4.8: ↑(0 0 0) ↓100' in footer
     # cum_now staged for promotion
     assert s.staged[OPUS] == C(output=100)
 
@@ -248,7 +253,7 @@ class TestEmitDefault:
     _emit_default({OPUS: C(output=100)}, '2.1', s)
     s.record()
     footer = _emit_default({OPUS: C(output=130)}, '2.1', State(p))
-    assert '↓ 30' in footer
+    assert '↓30' in footer
 
   def test_transcript_reset_recredits_full_cumulative(self, tmp_path):
     s = State(tmp_path / 'state.json')

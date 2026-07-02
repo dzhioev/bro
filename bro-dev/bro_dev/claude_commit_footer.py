@@ -33,9 +33,9 @@ Three modes:
 Footer shape (one `>`-quoted line; `'` thousands separator so it never collides
 with the `, ` joining model entries):
 
-  > created with Claude Code <versions> | <model>: ↑ <input> / <cache_write> (<cache_read>) ↓ <output>[, …]
+  > created with Claude Code <versions> | <model>: ↑(<input> <cache_write> <cache_read>) ↓<output>[, …]
 
-`↑` marks the upload group (input `/` cache_write, with cache_read parenthesized);
+`↑(…)` groups the upload classes (input, cache_write, cache_read, in that order);
 `↓` marks output.
 
 State lives in a gitignored `<repo>/.token_accounting_state.json`; git history
@@ -202,8 +202,8 @@ def _to_labels(slug_counts: dict[str, Counts]) -> dict[str, Counts]:
 
 def _fmt_entry(label: str, c: Counts) -> str:
   return (
-    f'{label}: {_UP} {_fmt_int(c.get("input", 0))} / {_fmt_int(c.get("cache_write", 0))} '
-    f'({_fmt_int(c.get("cache_read", 0))}) {_DOWN} {_fmt_int(c.get("output", 0))}'
+    f'{label}: {_UP}({_fmt_int(c.get("input", 0))} {_fmt_int(c.get("cache_write", 0))} '
+    f'{_fmt_int(c.get("cache_read", 0))}) {_DOWN}{_fmt_int(c.get("output", 0))}'
   )
 
 
@@ -218,8 +218,7 @@ _FOOTER_RE = re.compile(
 )
 _PART_RE = re.compile(
   r'^(?P<model>.*?):\s*'
-  r'↑\s*(?P<input>[\d\']+)\s*/\s*(?P<cache_write>[\d\']+)\s*'
-  r'\(\s*(?P<cache_read>[\d\']+)\s*\)\s*'
+  r'↑\s*\(\s*(?P<input>[\d\']+)\s+(?P<cache_write>[\d\']+)\s+(?P<cache_read>[\d\']+)\s*\)\s*'
   r'↓\s*(?P<output>[\d\']+)$'
 )
 

@@ -69,7 +69,7 @@ Match recent-log style:
 - **Footer**: one blank line, then a `Task: <url>` line (resolve via `flow::get_task_info(task_id).address` — task id comes from `CW_TASK_ID` env var or a `flow::add_task` call earlier in this session), then the single-line output of `./setup/claude_commit_footer.py` (the per-commit token delta, split into the four billed classes). Example:
   ```
   Task: https://www.notion.so/my-task-abc123
-  > created with Claude Code 2.1.181 | Opus 4.8: ↑ 4'812 / 18'903 (1'204'556) ↓ 12'905
+  <single-line output of ./setup/claude_commit_footer.py>
   ```
   Omit the `Task:` line if no task ID is available.
 - **Never** include `Co-Authored-By:` lines or "Generated with Claude Code" boilerplate.
@@ -93,7 +93,7 @@ git commit -m "$(cat <<'EOF'
 <optional terse body>
 
 Task: https://www.notion.so/...
-> created with Claude Code 2.1.181 | Opus 4.8: ↑ 4'812 / 18'903 (1'204'556) ↓ 12'905
+<single-line output of ./setup/claude_commit_footer.py>
 EOF
 )"
 ```
