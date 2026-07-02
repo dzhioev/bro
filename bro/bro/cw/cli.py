@@ -36,7 +36,7 @@ def build_parser() -> Parser:
     const='http',
     default=None,
     choices=['http', 'local'],
-    help='connect flow MCP tools: http (default) uses the deployed server, local spawns a stdio process',
+    help='connect flow MCP tools: http (default) uses the deployed server, local serves this checkout via a session-local HTTP server',
   )
   ss.add_argument(
     '--bro',

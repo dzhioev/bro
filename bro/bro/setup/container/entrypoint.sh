@@ -188,37 +188,66 @@ if [ -n "${CW_BRO:-}" ] && [ "${CW_SKIP_VENV:-}" != "1" ] && [ "$bare_session" =
   cw populate-bro-skills "$CW_BRO" >&2
 fi
 
-# --bro sessions serve the bro's tools over a session-local HTTP MCP server;
-# claude's mcp-config (built host-side by cw, see cw/bro.py:_bro_launch) points
-# one entry per namespace at it. start the server and gate the exec on its
-# readiness so claude's first turn — which a seeded `-p` prompt fires the moment
-# the REPL is up — already has every tool connected; the multi-second bro import
-# is paid here, off claude's critical path. output goes to a log file because
-# stdout/stderr belong to claude's TUI after the exec; the server dies with the
-# container (claude is the container's main process).
-if [ -n "${CW_BRO_MCP_TOKEN:-}" ]; then
-  bro_mcp_log=/tmp/bro-mcp-server.log
-  mcp-server "bro:$CW_BRO" --http --port "$CW_BRO_MCP_PORT" \
-    --bearer-token "$CW_BRO_MCP_TOKEN" > "$bro_mcp_log" 2>&1 &
-  bro_mcp_pid=$!
-  bro_mcp_ready=0
-  for _ in $(seq 1 300); do
-    if ! kill -0 "$bro_mcp_pid" 2>/dev/null; then
-      echo "error: bro MCP server exited during startup; $bro_mcp_log:" >&2
-      cat "$bro_mcp_log" >&2
-      exit 1
+# sessions with a session-local HTTP MCP server (CW_MCP_HTTP_SPEC set): --bro
+# serves the bro's tools (spec bro:<name>), --mcp local the flow tools (spec
+# flow). claude's mcp-config, built host-side by cw (cw/mcp.py), points at the
+# port. output goes to a log file because stdout/stderr belong to claude's TUI
+# after the exec; the server dies with the container (claude is the container's
+# main process).
+if [ -n "${CW_MCP_HTTP_SPEC:-}" ]; then
+  mcp_log=/tmp/mcp-server.log
+  mcp_port_file=/tmp/mcp-server.port
+  mcp_fail() {
+    echo "error: $1; $mcp_log:" >&2
+    cat "$mcp_log" >&2
+    exit 1
+  }
+  mcp-server "$CW_MCP_HTTP_SPEC" --http --port "$CW_MCP_HTTP_PORT" \
+    --port-file "$mcp_port_file" --bearer-token "$CW_MCP_HTTP_TOKEN" > "$mcp_log" 2>&1 &
+  mcp_pid=$!
+  # gate on the bind: the server writes the port file before its heavy imports,
+  # so this costs milliseconds, catches a server that crashed on startup, and a
+  # claude connect that lands mid-import sits in the TCP backlog until uvicorn
+  # accepts.
+  mcp_bound=0
+  for _ in $(seq 1 600); do
+    if ! kill -0 "$mcp_pid" 2>/dev/null; then
+      mcp_fail "MCP server exited during startup"
     fi
-    if curl -fsS -o /dev/null "http://127.0.0.1:$CW_BRO_MCP_PORT/health" 2>/dev/null; then
-      bro_mcp_ready=1
+    if [ -s "$mcp_port_file" ]; then
+      mcp_bound=1
       break
     fi
-    sleep 0.2
+    sleep 0.05
   done
-  if [ "$bro_mcp_ready" != "1" ]; then
-    echo "error: bro MCP server not ready after 60s; $bro_mcp_log:" >&2
-    cat "$bro_mcp_log" >&2
-    exit 1
+  if [ "$mcp_bound" != "1" ]; then
+    mcp_fail "MCP server not bound after 30s"
   fi
+  case "$CW_MCP_HTTP_SPEC" in
+    bro:*)
+      # --bro runs claude with --tools "" and a seeded -p prompt that fires the
+      # moment the REPL is up: gate the exec on full readiness (/health answers
+      # only once every tool is resolved) so the first turn already has every
+      # tool connected — the multi-second bro import is paid here, off claude's
+      # critical path. native sessions skip this barrier: their built-in tools
+      # exist either way, so the flow endpoint may finish coming up during the
+      # first turn.
+      mcp_ready=0
+      for _ in $(seq 1 300); do
+        if ! kill -0 "$mcp_pid" 2>/dev/null; then
+          mcp_fail "MCP server exited during startup"
+        fi
+        if curl -fsS -o /dev/null "http://127.0.0.1:$CW_MCP_HTTP_PORT/health" 2>/dev/null; then
+          mcp_ready=1
+          break
+        fi
+        sleep 0.2
+      done
+      if [ "$mcp_ready" != "1" ]; then
+        mcp_fail "MCP server not ready after 60s"
+      fi
+      ;;
+  esac
 fi
 
 exec "$@"

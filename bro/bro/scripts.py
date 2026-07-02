@@ -1,17 +1,12 @@
 import json
 import os
-import secrets
 from dataclasses import dataclass
 from pathlib import Path
 
 from base import log
 from cw.constants import _CW_MODEL
+from cw.mcp import _container_mcp_launch
 
-# the port the session's bro MCP server listens on inside the container. fixed:
-# the container network namespace is private, so there is nothing to collide
-# with. the value crosses the host/container boundary via CW_BRO_MCP_PORT (cw
-# builds the claude-config URLs host-side; the entrypoint starts the server).
-_BRO_MCP_PORT = 8300
 # path inside the container; /host-repo is the host project bind mount (see
 # _docker_create_argv). passed as claude code's apiKeyHelper so claude reads the
 # api key from the `anthropic` secret without the "Detected a custom API key"
@@ -65,8 +60,8 @@ def _populate_bro_skills(proj: Path, bro_name: str) -> None:
 @dataclass(frozen=True)
 class _BroLaunch:
   """the two halves of a `cw ss --bro` launch: the claude argv, and the container
-  env (`CW_BRO_MCP_TOKEN` / `CW_BRO_MCP_PORT`) the entrypoint reads to start the
-  bro MCP server the argv's mcp-config points at."""
+  env (`CW_MCP_HTTP_SPEC` / `PORT` / `TOKEN`) the entrypoint reads to start the
+  session-local MCP server the argv's mcp-config points at."""
 
   claude_argv: list[str]
   extra_env: dict[str, str]
@@ -97,21 +92,8 @@ def _bro_launch(bro_name: str) -> _BroLaunch:
   from bro.registry import create_bro
 
   bro = create_bro(bro_name)
-  token = secrets.token_urlsafe(32)
   namespaces = list(dict.fromkeys(s.namespace for s in bro.claude_bro_mcp_servers()))
-  mcp_config = json.dumps(
-    {
-      'mcpServers': {
-        ns: {
-          'type': 'http',
-          'url': f'http://127.0.0.1:{_BRO_MCP_PORT}/{ns}',
-          'headers': {'Authorization': f'Bearer {token}'},
-        }
-        for ns in namespaces
-      },
-    },
-    separators=(',', ':'),
-  )
+  extra_env, mcp_config = _container_mcp_launch(f'bro:{bro_name}', namespaces)
   settings = json.dumps({'apiKeyHelper': _BRO_API_KEY_HELPER}, separators=(',', ':'))
   claude_argv = [
     '--model',
@@ -129,7 +111,4 @@ def _bro_launch(bro_name: str) -> _BroLaunch:
     '--allowed-tools',
     ','.join(f'mcp__{ns}__*' for ns in namespaces),
   ]
-  return _BroLaunch(
-    claude_argv=claude_argv,
-    extra_env={'CW_BRO_MCP_TOKEN': token, 'CW_BRO_MCP_PORT': str(_BRO_MCP_PORT)},
-  )
+  return _BroLaunch(claude_argv=claude_argv, extra_env=extra_env)

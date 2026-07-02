@@ -76,7 +76,9 @@ def _container_secrets(bro_name: str, *, mcp: Optional[str], bro_mode: bool) -> 
   - a native claude code session themed as the bro (dive-in / plain `cw ss`): it
     drives the bro's *skills* (bash → `extra_secrets`) and its flow via `--mcp`,
     not the bro's in-process MCP / data-source toolset — so `extra_secrets`
-    + `flow_mcp` (when `--mcp http`) + `claude_code` (required: the long-lived
+    + the flow MCP secrets (`--mcp http` → `flow_mcp` for the deployed server;
+    `--mcp local` → whatever `flow.MCPServer` declares, since the session-local
+    server runs inside the container) + `claude_code` (required: the long-lived
     OAuth token it exports as CLAUDE_CODE_OAUTH_TOKEN is a native session's only
     auth). always keeps the socket (it has a Bash tool).
 
@@ -105,6 +107,10 @@ def _container_secrets(bro_name: str, *, mcp: Optional[str], bro_mode: bool) -> 
     secrets.update(bro._extra_secrets)
     if mcp == 'http':
       secrets.add('flow_mcp')
+    if mcp == 'local':
+      import flow
+
+      secrets.update(flow.MCPServer().needed_secrets)
     # required, not best-effort: this secret's CLAUDE_CODE_OAUTH_TOKEN (registry
     # install hook) is a native session's sole credential, so a missing token
     # must fail loudly on the host before the container starts rather than as a

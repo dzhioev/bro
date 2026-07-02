@@ -38,16 +38,17 @@ class TestBroLaunch:
     # the service server's `skill` tool rides the `bro` namespace
     assert 'bro' in namespaces
     assert list(cfg['mcpServers']) == namespaces
-    token = launch.extra_env['CW_BRO_MCP_TOKEN']
-    port = launch.extra_env['CW_BRO_MCP_PORT']
+    assert launch.extra_env['CW_MCP_HTTP_SPEC'] == 'bro:pm'
+    token = launch.extra_env['CW_MCP_HTTP_TOKEN']
+    port = launch.extra_env['CW_MCP_HTTP_PORT']
     for ns, entry in cfg['mcpServers'].items():
       assert entry['type'] == 'http'
       assert entry['url'] == f'http://127.0.0.1:{port}/{ns}'
       assert entry['headers'] == {'Authorization': f'Bearer {token}'}
 
   def test_token_is_per_launch(self):
-    first = cw.bro._bro_launch('pm').extra_env['CW_BRO_MCP_TOKEN']
-    second = cw.bro._bro_launch('pm').extra_env['CW_BRO_MCP_TOKEN']
+    first = cw.bro._bro_launch('pm').extra_env['CW_MCP_HTTP_TOKEN']
+    second = cw.bro._bro_launch('pm').extra_env['CW_MCP_HTTP_TOKEN']
     assert first != second
 
   def test_system_prompt_is_bros_own(self):

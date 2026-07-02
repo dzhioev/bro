@@ -13,6 +13,7 @@ from cw.bro import _bro_launch, _populate_bro_skills
 from cw.constants import _CW_MODEL
 from cw.containers import _replace_container_resume_hint, run_in_container
 from cw.git import git_out
+from cw.mcp import _container_mcp_launch, _HostMCPServer, _start_host_mcp_server
 from cw.paths import _latest_jsonl, _project_root, _venv_env
 from cw.secrets import (
   _DEFAULT_CW_BRO,
@@ -33,10 +34,8 @@ _BRO_GIT_NAME = 'Bro'
 _BRO_GIT_EMAIL = 'dzhioev+bro@gmail.com'
 
 
-def _mcp_config_argv(mcp: str) -> list[str]:
-  if mcp == 'local':
-    return ['--mcp-config=flow/mcp/mcp_local.json']
-  assert mcp == 'http'
+def _deployed_mcp_argv() -> list[str]:
+  """`--mcp-config` argv pointing at the deployed flow MCP server (`--mcp http`)."""
   try:
     cfg = credentials.get_json('flow_mcp')
   except credentials.SecretNotFound:
@@ -265,8 +264,11 @@ def start_session(spec: SessionSpec) -> int:
   ]
   if spec.effort is not None:
     inject.extend(['--effort', spec.effort])
-  if spec.mcp is not None:
-    inject.extend(_mcp_config_argv(spec.mcp))
+  # --mcp local is wired in cw(), not here: it depends on the final
+  # host/container decision (the in-container fallback) and, on the host path,
+  # on the provisioned worktree the server runs from.
+  if spec.mcp == 'http':
+    inject.extend(_deployed_mcp_argv())
   if spec.auto:
     inject.append('--dangerously-skip-permissions')
   claude_args = [*inject, *claude_args]
@@ -336,6 +338,12 @@ def cw(
 
   if container:
     env = dict(extra_env) if extra_env is not None else {}
+    if spec.mcp == 'local':
+      # session-local flow MCP server: the entrypoint reads CW_MCP_HTTP_* to
+      # start `mcp-server flow --http` and gates the claude exec on its bind
+      mcp_env, mcp_config = _container_mcp_launch('flow', ['flow'])
+      env.update(mcp_env)
+      claude_args = [*claude_args, '--mcp-config', mcp_config]
     if base_ref is not None:
       # the entrypoint reads CW_BASE_REF to base the fresh clone's worktree branch
       # (the sha's objects are already shared from /host-repo via clone alternates)
@@ -369,6 +377,20 @@ def cw(
 
   env = _venv_env(worktree / '.venv')
   env.update(_claude_code_token_env())
+
+  # session-local flow MCP server on an OS-assigned port (the shared host netns
+  # rules out the container's fixed one), started from the provisioned worktree
+  # so "local" means this checkout's flow code. terminated when claude exits;
+  # a SIGKILLed cw orphans it (no watchdog).
+  mcp_server: Optional[_HostMCPServer] = None
+  if spec.mcp == 'local':
+    try:
+      mcp_server = _start_host_mcp_server(worktree, env)
+    except RuntimeError as e:
+      log.error('%s', e)
+      return 1
+    claude_args = [*claude_args, '--mcp-config', mcp_server.mcp_config()]
+
   pidfile = ws.pidfile
   pidfile.parent.mkdir(parents=True, exist_ok=True)
   pidfile.write_text(str(os.getpid()))
@@ -376,6 +398,8 @@ def cw(
     result = subprocess.run(['claude', *claude_args], cwd=str(worktree), env=env)
   finally:
     pidfile.unlink(missing_ok=True)
+    if mcp_server is not None:
+      mcp_server.stop()
 
   if spec.drop:
     ws.remove()

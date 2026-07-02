@@ -1,52 +1,61 @@
 #!/usr/bin/env python
 
+# module import stays cheap by design: every heavy dependency (mcp, starlette,
+# uvicorn, llm.mcp, flow / the bro graph) is imported inside the function that
+# needs it, so the --http path can bind its socket — and publish the port via
+# --port-file — milliseconds after process start, before the multi-second tool
+# resolution (see main's bind-before-import ordering).
+
 import asyncio
 import contextlib
+import os
 import secrets
-from typing import Optional
-
-import mcp.types as types
-import uvicorn
-from mcp.server.fastmcp.server import StreamableHTTPASGIApp
-from mcp.server.lowlevel import Server
-from mcp.server.stdio import stdio_server
-from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
-from starlette.applications import Starlette
-from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
-from starlette.routing import Route
-from starlette.types import ASGIApp, Receive, Scope, Send
+import socket
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Optional
 
 import base.args
 from base import credentials
-from llm.mcp import MCPServer, Tool, render_has_cred
+
+if TYPE_CHECKING:
+  from mcp.server.lowlevel import Server
+  from starlette.types import ASGIApp, Receive, Scope, Send
+
+  from llm.mcp import MCPServer, Tool
 
 _BRO_PREFIX = 'bro:'
 
 
-def _static_servers() -> dict[str, MCPServer]:
+def _flow_server() -> 'MCPServer':
   import flow
 
-  return {
-    'flow': flow.MCPServer(),
-  }
+  return flow.MCPServer()
 
 
-def _resolve_servers(spec: str) -> list[MCPServer]:
+# lazy factories: a spec pays its import only when resolved, never at parser
+# construction
+_STATIC_SERVERS: dict[str, Callable[[], 'MCPServer']] = {'flow': _flow_server}
+
+
+def _resolve_servers(spec: str) -> list['MCPServer']:
   if spec.startswith(_BRO_PREFIX):
     from bro.registry import create_bro
 
     return create_bro(spec[len(_BRO_PREFIX) :]).claude_bro_mcp_servers()
-  static = _static_servers()
-  if spec not in static:
-    raise SystemExit(f'unknown server {spec!r}; expected one of {sorted(static)} or bro:<name>')
-  return [static[spec]]
+  factory = _STATIC_SERVERS.get(spec)
+  if factory is None:
+    raise SystemExit(
+      f'unknown server {spec!r}; expected one of {sorted(_STATIC_SERVERS)} or bro:<name>'
+    )
+  return [factory()]
 
 
-async def _server_tools(server: MCPServer) -> list[tuple[Tool, str]]:
+async def _server_tools(server: 'MCPServer') -> list[tuple['Tool', str]]:
   # (tool, description) pairs, with `has_cred` blocks in each description resolved
   # against live credential availability — the serving-side counterpart of the
   # rendering the bro-LLM assembling layer does (llm.mcp `_NamespacedTool`).
+  from llm.mcp import render_has_cred
+
   declared = set(server.needed_secrets) | set(server.optional_secrets)
   return [
     (tool, render_has_cred(tool.description, credentials.available, declared))
@@ -54,7 +63,10 @@ async def _server_tools(server: MCPServer) -> list[tuple[Tool, str]]:
   ]
 
 
-def _lowlevel_server(label: str, entries: list[tuple[Tool, str]]) -> Server:
+def _lowlevel_server(label: str, entries: list[tuple['Tool', str]]) -> 'Server':
+  import mcp.types as types
+  from mcp.server.lowlevel import Server
+
   tools_by_name: dict[str, Tool] = {}
   for tool, _ in entries:
     if tool.name in tools_by_name:
@@ -96,11 +108,13 @@ class _BearerAuth:
   `/health` is exempt so a readiness poll needs no secret.
   """
 
-  def __init__(self, app: ASGIApp, token: str):
+  def __init__(self, app: 'ASGIApp', token: str):
     self._app = app
     self._expected = f'Bearer {token}'.encode()
 
-  async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+  async def __call__(self, scope: 'Scope', receive: 'Receive', send: 'Send') -> None:
+    from starlette.responses import JSONResponse
+
     if scope['type'] != 'http' or scope['path'] == '/health':
       await self._app(scope, receive, send)
       return
@@ -111,7 +125,7 @@ class _BearerAuth:
     await self._app(scope, receive, send)
 
 
-def create_http_app(servers: list[MCPServer], bearer_token: str) -> _BearerAuth:
+def create_http_app(servers: list['MCPServer'], bearer_token: str) -> _BearerAuth:
   """Starlette app serving each namespace's tools at `/<namespace>` over streamable HTTP.
 
   tools keep their local names — the namespace reaches the client through the
@@ -121,8 +135,14 @@ def create_http_app(servers: list[MCPServer], bearer_token: str) -> _BearerAuth:
   namespace raises. tool resolution is eager, so once the app is constructed
   (and `/health` answers) every endpoint is ready to serve.
   """
+  from mcp.server.fastmcp.server import StreamableHTTPASGIApp
+  from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+  from starlette.applications import Starlette
+  from starlette.requests import Request
+  from starlette.responses import JSONResponse, Response
+  from starlette.routing import Route
 
-  async def collect() -> dict[str, list[tuple[Tool, str]]]:
+  async def collect() -> dict[str, list[tuple['Tool', str]]]:
     by_namespace: dict[str, list[tuple[Tool, str]]] = {}
     for server in servers:
       by_namespace.setdefault(server.namespace, []).extend(await _server_tools(server))
@@ -154,17 +174,27 @@ def create_http_app(servers: list[MCPServer], bearer_token: str) -> _BearerAuth:
   return _BearerAuth(Starlette(routes=routes, lifespan=lifespan), bearer_token)
 
 
-async def run(mcp_server: MCPServer):
+async def run(mcp_server: 'MCPServer'):
+  from mcp.server.stdio import stdio_server
+
   server = _lowlevel_server('mcp', await _server_tools(mcp_server))
   async with stdio_server() as (read_stream, write_stream):
     await server.run(read_stream, write_stream, server.create_initialization_options())
+
+
+def _write_port_file(path: str, port: int) -> None:
+  # write-then-rename so a reader polling for the file never sees a partial value
+  tmp = f'{path}.tmp'
+  with open(tmp, 'w') as f:
+    f.write(str(port))
+  os.replace(tmp, path)
 
 
 def main(argv: list[str]) -> Optional[int]:
   parser = base.args.Parser(description='generic MCP server: stdio by default, HTTP with --http')
   parser.add_argument(
     'server',
-    help=f'server to serve: {sorted(_static_servers())} or bro:<name>',
+    help=f'server to serve: {sorted(_STATIC_SERVERS)} or bro:<name>',
   )
   parser.add_argument(
     '--http',
@@ -172,7 +202,13 @@ def main(argv: list[str]) -> Optional[int]:
     help='serve over streamable HTTP, one endpoint per tool namespace',
   )
   parser.add_argument('--host', default='127.0.0.1', help='HTTP bind host')
-  parser.add_argument('--port', type=int, help='HTTP port (required with --http)')
+  parser.add_argument(
+    '--port', type=int, help='HTTP port; 0 binds an OS-assigned one (required with --http)'
+  )
+  parser.add_argument(
+    '--port-file',
+    help='write the bound port to this file as soon as the socket is bound (requires --http)',
+  )
   parser.add_argument(
     '--bearer-token',
     secret=True,
@@ -181,8 +217,10 @@ def main(argv: list[str]) -> Optional[int]:
   args = parser.parse(argv)
 
   if not bool(args['http']):
-    if args['port'] is not None or args['bearer_token'] is not None:
-      raise SystemExit('--port/--bearer-token only apply with --http')
+    if (
+      args['port'] is not None or args['port_file'] is not None or args['bearer_token'] is not None
+    ):
+      raise SystemExit('--port/--port-file/--bearer-token only apply with --http')
     if args['server'].startswith(_BRO_PREFIX):
       raise SystemExit('bro:<name> serves one endpoint per namespace; run it with --http')
     asyncio.run(run(_resolve_servers(args['server'])[0]))
@@ -190,6 +228,15 @@ def main(argv: list[str]) -> Optional[int]:
 
   if args['port'] is None or args['bearer_token'] is None:
     raise SystemExit('--http requires --port and --bearer-token')
+  # bind before the heavy import/tool resolution: the port is discoverable
+  # (--port-file) milliseconds in and is never released between discovery and
+  # serving, and a client connect that lands mid-import sits in the TCP backlog
+  # until uvicorn accepts on the pre-bound socket.
+  sock = socket.create_server((args['host'], int(args['port'])))
+  if args['port_file'] is not None:
+    _write_port_file(args['port_file'], sock.getsockname()[1])
   app = create_http_app(_resolve_servers(args['server']), args['bearer_token'])
-  uvicorn.run(app, host=args['host'], port=int(args['port']), log_level='info')
+  import uvicorn
+
+  uvicorn.Server(uvicorn.Config(app, log_level='info')).run(sockets=[sock])
   return None

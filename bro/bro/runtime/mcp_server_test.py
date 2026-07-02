@@ -3,6 +3,7 @@ from typing import ClassVar
 import pytest
 from starlette.testclient import TestClient
 
+import mcp_server
 from bro.bro import BaseBro
 from bro.datasources.searchable import Hit, SearchableDataSource
 from llm.mcp import FunctionTool, InProcessMCPServer, MCPServer, describe
@@ -94,6 +95,38 @@ class TestResolveServers:
     namespaces = {s.namespace for s in _resolve_servers('bro:pm')}
     assert 'bro' in namespaces
     assert 'flow' in namespaces
+
+
+class TestHTTPBindBeforeResolve:
+  def test_port_file_published_before_server_resolution(self, tmp_path, monkeypatch):
+    port_file = tmp_path / 'port'
+
+    def resolve(spec):
+      # the bind + port-file publish must precede the heavy tool resolution
+      assert port_file.exists()
+      raise RuntimeError('resolution reached')
+
+    monkeypatch.setattr(mcp_server, '_resolve_servers', resolve)
+    with pytest.raises(RuntimeError, match='resolution reached'):
+      mcp_server.main(
+        [
+          'mcp-server',
+          'flow',
+          '--http',
+          '--port',
+          '0',
+          '--port-file',
+          str(port_file),
+          '--bearer-token',
+          't',
+        ]
+      )
+    # --port 0 resolved to a real OS-assigned port
+    assert 0 < int(port_file.read_text()) < 65536
+
+  def test_port_file_requires_http(self):
+    with pytest.raises(SystemExit, match='only apply with --http'):
+      mcp_server.main(['mcp-server', 'flow', '--port-file', '/tmp/port'])
 
 
 class TestHealth:

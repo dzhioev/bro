@@ -11,6 +11,7 @@ Leaf utilities (no intra-package deps, or only on each other):
 - `paths.py` — project-root / worktrees-dir / containers-dir / broker control-dir resolution, `_venv_env`, `_in_container`, `_latest_jsonl`
 - `flags.py` — `add_forwarded_flags` / `extract_forwarded_argv` / `EFFORT_LEVELS`: the pass-through flag set `dive-in` forwards into `cw ss`
 - `secrets.py` — scoped-credential logic (`_container_secrets` → a `ScopedSecrets(required, optional, docker_sock)` dataclass), `_finalize_secrets`, `_load_anthropic_key`, `_claude_code_token_env`, `_ppp_tarball`, the session baseline/default-bro constants
+- `mcp.py` — session-local HTTP MCP serving: the fixed in-container port, `_http_mcp_config` / `_container_mcp_launch` (the claude mcp-config json + the `CW_MCP_HTTP_*` env the entrypoint reads), and `_start_host_mcp_server` / `_HostMCPServer` (the host-mode `mcp-server flow --http --port 0` lifecycle: OS-assigned port via port file, terminate on session exit)
 - `system_prompt.py` — `_load_base_prompts` / `_session_append_prompt` (the `--append-system-prompt` text)
 - `session_context.py` — `build_session_context` / `encode_session_context`: the typed launch-context records (system prompt, git state, MCP servers, root CLAUDE.md) `start_session` captures into `CW_SESSION_CONTEXT` for `sync-session-log` → `rewind`
 
@@ -27,8 +28,8 @@ Launch + lifecycle:
 - `worktrees.py` — host worktree create / provision / finish
 - `listing.py` — `cw list` (one loop over `Workspace.all(proj)`; keeps the `ThreadPoolExecutor` fan-out — mounts fetched concurrently with the per-workspace subject/last_active reads)
 - `clean.py` — `cw clean` (one `_assess` over `Workspace.all(proj)`; keeps the fan-out — host worktrees assessed concurrently with the `docker ps` mounts fetch, containers once it resolves)
-- `bro.py` — `_populate_bro_skills` (skill-symlink surfacing) + `_bro_launch` (the `claude --bare` argv and bro-MCP-server env for `--bro`)
-- `session.py` — the `SessionSpec` dataclass (the parsed session parameters; `to_command_argv` builds `CW_COMMAND` / the resume hint, `resume_variant` clears the create-only inputs) threaded through `start_session` → `cw`, plus `_resolve_base_ref` / `_mcp_config_argv`: the session-parameter plumbing both modes share
+- `bro.py` — `_populate_bro_skills` (skill-symlink surfacing) + `_bro_launch` (the `claude --bare` argv and session-local MCP env for `--bro`, via `cw.mcp`)
+- `session.py` — the `SessionSpec` dataclass (the parsed session parameters; `to_command_argv` builds `CW_COMMAND` / the resume hint, `resume_variant` clears the create-only inputs) threaded through `start_session` → `cw`, plus `_resolve_base_ref` / `_deployed_mcp_argv`: the session-parameter plumbing both modes share
 - `cli.py` — `build_parser` + `main`; `__cli_name__ = 'cw'` registers the `cw` alias on top of the canonical `cw.cli` script
 
 ## Workspace duality

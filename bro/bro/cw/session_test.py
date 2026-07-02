@@ -1,3 +1,4 @@
+import json
 from typing import Optional
 from unittest.mock import patch
 
@@ -132,6 +133,36 @@ class TestGrantRevoke:
     claude_args = kwargs['claude_args']
     idx = claude_args.index('--effort')
     assert claude_args[idx + 1] == 'xhigh'
+
+
+class TestContainerLocalMCP:
+  def test_cw_wires_entrypoint_env_and_mcp_config(self):
+    with (
+      patch.dict('os.environ', {}, clear=False) as env,
+      patch('cw.session.run_in_container', return_value=0) as run_in_container,
+    ):
+      env.pop('CW_IN_CONTAINER', None)
+      rc = cw.session.cw(_spec(mcp='local', drop=True), claude_args=['--foo'], secrets=set())
+    assert rc == 0
+    args, kwargs = run_in_container.call_args
+    command = args[1]
+    extra_env = kwargs['extra_env']
+    assert extra_env['CW_MCP_HTTP_SPEC'] == 'flow'
+    i = command.index('--mcp-config')
+    entry = json.loads(command[i + 1])['mcpServers']['flow']
+    assert entry['url'] == f'http://127.0.0.1:{extra_env["CW_MCP_HTTP_PORT"]}/flow'
+    assert entry['headers'] == {'Authorization': f'Bearer {extra_env["CW_MCP_HTTP_TOKEN"]}'}
+
+  def test_no_mcp_session_passes_no_mcp_env(self):
+    with (
+      patch.dict('os.environ', {}, clear=False) as env,
+      patch('cw.session.run_in_container', return_value=0) as run_in_container,
+    ):
+      env.pop('CW_IN_CONTAINER', None)
+      rc = cw.session.cw(_spec(mcp=None, drop=True), claude_args=[], secrets=set())
+    assert rc == 0
+    _, kwargs = run_in_container.call_args
+    assert kwargs['extra_env'] is None
 
 
 class TestResumeCommand:
