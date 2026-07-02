@@ -62,7 +62,7 @@ class TrailsClient:
     hostname = parsed.hostname
     self._host: str = hostname if hostname is not None else 'localhost'
     self._port = parsed.port
-    self._connection: Optional[http.client.HTTPSConnection] = None
+    self._conn: Optional[http.client.HTTPSConnection] = None
 
   def list_trails(
     self,
@@ -157,7 +157,7 @@ class TrailsClient:
         return
 
   def close(self) -> None:
-    self._drop_connection()
+    self._drop_conn()
 
   def fetch_spilled_body(self, url: str) -> Any:
     """download a spilled step body from its presigned S3 URL and parse it the
@@ -165,8 +165,8 @@ class TrailsClient:
     when it decodes, raw text otherwise. the URL is self-authenticating, so this
     bypasses the bearer-token connection and hits S3 directly.
     """
-    with urllib.request.urlopen(url, timeout=self._timeout) as response:
-      raw = response.read()
+    with urllib.request.urlopen(url, timeout=self._timeout) as resp:
+      raw = resp.read()
     try:
       return json.loads(raw)
     except json.JSONDecodeError:
@@ -190,51 +190,51 @@ class TrailsClient:
     # a fresh connection is enough to cover that without dragging in a full
     # backoff schedule (the read path is non-mutating and idempotent).
     for attempt in range(2):
-      connection = self._get_connection()
+      conn = self._get_conn()
       try:
-        connection.request(method, path, body=body, headers=headers)
-        response = connection.getresponse()
-        raw = response.read()
-        if response.status >= 400:
+        conn.request(method, path, body=body, headers=headers)
+        resp = conn.getresponse()
+        raw = resp.read()
+        if resp.status >= 400:
           raise http.client.HTTPException(
-            f'{method} {path} -> HTTP {response.status}: {raw.decode(errors="replace")}'
+            f'{method} {path} -> HTTP {resp.status}: {raw.decode(errors="replace")}'
           )
-        if response.status == 204 or len(raw) == 0:
+        if resp.status == 204 or len(raw) == 0:
           return {}
         return json.loads(raw)
       except Exception as exc:
         last_exc = exc
-        self._drop_connection()
+        self._drop_conn()
         if attempt == 1:
           break
     assert last_exc is not None
     raise last_exc
 
-  def _get_connection(self) -> http.client.HTTPSConnection:
-    if self._connection is not None:
-      return self._connection
-    context = ssl.create_default_context()
-    self._connection = http.client.HTTPSConnection(
-      self._host, self._port, timeout=self._timeout, context=context
+  def _get_conn(self) -> http.client.HTTPSConnection:
+    if self._conn is not None:
+      return self._conn
+    ctx = ssl.create_default_context()
+    self._conn = http.client.HTTPSConnection(
+      self._host, self._port, timeout=self._timeout, context=ctx
     )
-    return self._connection
+    return self._conn
 
-  def _drop_connection(self) -> None:
-    if self._connection is None:
+  def _drop_conn(self) -> None:
+    if self._conn is None:
       return
     try:
-      self._connection.close()
+      self._conn.close()
     except Exception:
       pass
-    self._connection = None
+    self._conn = None
 
 
 def default_client() -> TrailsClient:
   """build a `TrailsClient` from the `trails` secret — the same credential the
   in-bro `HTTPTracker` reads, so the read and write sides share one source.
   """
-  config = credentials.get_json('trails')
-  return TrailsClient(config['base_url'], config['token'])
+  cfg = credentials.get_json('trails')
+  return TrailsClient(cfg['base_url'], cfg['token'])
 
 
 # fields the server stamps onto every step row alongside the per-kind extras.

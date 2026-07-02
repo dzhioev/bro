@@ -13,12 +13,12 @@ def _make_tools(*tool_names: str) -> list[FunctionTool]:
   tools = []
   for name in tool_names:
 
-    def function() -> str:
+    def fn() -> str:
       return 'ok'
 
-    function.__name__ = name
-    describe(function, f'{name} tool description')
-    tools.append(FunctionTool(function))
+    fn.__name__ = name
+    describe(fn, f'{name} tool description')
+    tools.append(FunctionTool(fn))
   return tools
 
 
@@ -216,17 +216,17 @@ class TestFormatCard:
 
   @pytest.mark.asyncio
   async def test_long_tool_description_truncated(self):
-    long_description = 'x' * 300
+    long_desc = 'x' * 300
 
-    def long_function() -> str:
+    def long_fn() -> str:
       return 'ok'
 
-    long_function.__name__ = 'longy'
-    describe(long_function, long_description)
+    long_fn.__name__ = 'longy'
+    describe(long_fn, long_desc)
 
     class LongServer(InProcessMCPServer):
       def __init__(self):
-        super().__init__('long', [FunctionTool(long_function)])
+        super().__init__('long', [FunctionTool(long_fn)])
 
     class _LongBro(BaseBro):
       name = 'long'
@@ -238,4 +238,4 @@ class TestFormatCard:
 
     card = await format_card(_LongBro())
     assert '…' in card
-    assert long_description not in card
+    assert long_desc not in card

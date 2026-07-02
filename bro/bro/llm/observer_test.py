@@ -66,11 +66,11 @@ def _fixed_now() -> str:
 
 
 def _render_to_string(events: list[tuple[str, Any]]) -> str:
-  buffer = io.StringIO()
-  console = Console(file=buffer, width=120, force_terminal=False, highlight=False)
+  buf = io.StringIO()
+  console = Console(file=buf, width=120, force_terminal=False, highlight=False)
   renderer = RichConsoleRenderer(prefix='test-bro', console=console, now=_fixed_now)
   _replay(renderer, events)
-  return buffer.getvalue()
+  return buf.getvalue()
 
 
 def _replay(renderer, events: list[tuple[str, Any]]) -> None:
@@ -123,11 +123,11 @@ class TestRichConsoleRenderer:
     assert '"count"' in out
 
   def test_no_prefix_includes_timestamp_only(self):
-    buffer = io.StringIO()
-    console = Console(file=buffer, width=120, force_terminal=False, highlight=False)
+    buf = io.StringIO()
+    console = Console(file=buf, width=120, force_terminal=False, highlight=False)
     renderer = RichConsoleRenderer(console=console, now=_fixed_now)
     renderer.on_reasoning('hi')
-    out = buffer.getvalue()
+    out = buf.getvalue()
     # title is "[12:00:00] · reasoning" — no bro prefix between them
     assert 'test-bro' not in out
     assert _FIXED_NOW in out
@@ -140,10 +140,10 @@ class TestRichConsoleRenderer:
 
 class TestBoringRenderer:
   def _render(self, events: list[tuple[str, Any]]) -> str:
-    buffer = io.StringIO()
-    renderer = BoringRenderer(prefix='test-bro', file=buffer, now=_fixed_now)
+    buf = io.StringIO()
+    renderer = BoringRenderer(prefix='test-bro', file=buf, now=_fixed_now)
     _replay(renderer, events)
-    return buffer.getvalue()
+    return buf.getvalue()
 
   def test_reasoning_emits_timestamped_header_and_indented_body(self):
     out = self._render([('reasoning', 'thinking it through')])
@@ -191,8 +191,8 @@ class TestBoringRenderer:
     assert '\n\n[' in out
 
   def test_no_prefix(self):
-    buffer = io.StringIO()
-    renderer = BoringRenderer(file=buffer, now=_fixed_now)
+    buf = io.StringIO()
+    renderer = BoringRenderer(file=buf, now=_fixed_now)
     renderer.on_reasoning('hi')
-    out = buffer.getvalue()
+    out = buf.getvalue()
     assert out.startswith(f'[{_FIXED_NOW}] reasoning\n')

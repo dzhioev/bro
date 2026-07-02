@@ -123,25 +123,25 @@ def _workspace_name() -> Optional[str]:
   name = os.environ.get('CW_NAME')
   if name is not None:
     return name
-  cw_command = os.environ.get('CW_COMMAND')
-  if cw_command is None:
+  cw_cmd = os.environ.get('CW_COMMAND')
+  if cw_cmd is None:
     return None
-  parts = cw_command.split()
+  parts = cw_cmd.split()
   if len(parts) < 3 or parts[0] != 'cw' or parts[1] != 'ss':
     return None
   i = 2
   while i < len(parts):
-    argument = parts[i]
-    if not argument.startswith('-'):
-      return argument
-    if '=' in argument:
+    arg = parts[i]
+    if not arg.startswith('-'):
+      return arg
+    if '=' in arg:
       i += 1
       continue
     i += 1
   return None
 
 
-def _to_attribute(value: str | int | bool) -> dict:
+def _to_attr(value: str | int | bool) -> dict:
   if isinstance(value, bool):
     return {'BOOL': value}
   if isinstance(value, int):
@@ -171,9 +171,9 @@ def _build_item(path: Path, workspace: str, s3_key: str) -> dict:
     # of typed records rendered by rewind as a SESSION CONTEXT preamble
     ('context', 'CW_SESSION_CONTEXT'),
   ]:
-    value = os.environ.get(env)
-    if value is not None:
-      item[key] = value
+    val = os.environ.get(env)
+    if val is not None:
+      item[key] = val
 
   for key, attr in (
     ('subject', 'subject'),
@@ -195,7 +195,7 @@ def _sync_once(path: Path, workspace: str, bucket: str, s3, dynamo, table_name: 
   s3_key = f'logs/{workspace}/{path.stem}.jsonl'
   s3.upload_file(str(path), bucket, s3_key)
   item = _build_item(path, workspace, s3_key)
-  dynamo.put_item(TableName=table_name, Item={k: _to_attribute(v) for k, v in item.items()})
+  dynamo.put_item(TableName=table_name, Item={k: _to_attr(v) for k, v in item.items()})
   log.info('synced %s (%d bytes, %d lines)', path.stem[:12], item['size_bytes'], item['line_count'])
 
 

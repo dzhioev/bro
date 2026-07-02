@@ -8,9 +8,9 @@ from typing import Any, Optional
 from base import credentials
 
 
-def describe[F: Callable[..., Any]](function: F, text: str) -> F:
-  function.description = text  # type: ignore[attr-defined]
-  return function
+def describe[F: Callable[..., Any]](fn: F, text: str) -> F:
+  fn.description = text  # type: ignore[attr-defined]
+  return fn
 
 
 # `{{#has_cred <name>}}present{{else}}absent{{/has_cred}}` (and inverted `^`)
@@ -205,7 +205,7 @@ class MCPServer(ABC):
 class FunctionTool(Tool):
   def __init__(
     self,
-    function: Callable[..., Any],
+    fn: Callable[..., Any],
     *,
     name: Optional[str] = None,
     description: Optional[str] = None,
@@ -213,19 +213,19 @@ class FunctionTool(Tool):
     from mcp.server.fastmcp.utilities.func_metadata import func_metadata
 
     resolved_description = (
-      description if description is not None else getattr(function, 'description', None)
+      description if description is not None else getattr(fn, 'description', None)
     )
     if resolved_description is None:
       raise ValueError(
-        f'tool {function.__name__!r} has no description attribute and no description argument'
+        f'tool {fn.__name__!r} has no description attribute and no description argument'
       )
-    self._name = name if name is not None else function.__name__
+    self._name = name if name is not None else fn.__name__
     self._description = resolved_description
-    self.function = function
+    self.fn = fn
 
-    ret = inspect.signature(function).return_annotation
+    ret = inspect.signature(fn).return_annotation
     structured = ret is not inspect.Signature.empty and ret is not str
-    self._metadata = func_metadata(function, structured_output=structured)
+    self._metadata = func_metadata(fn, structured_output=structured)
     self._output_schema = self._metadata.output_schema
     self._parameters = self._metadata.arg_model.model_json_schema(by_alias=True)
     self._return_shape = (
@@ -255,7 +255,7 @@ class FunctionTool(Tool):
   async def call(self, arguments: dict[str, Any]) -> dict[str, Any] | str:
     validated = self._metadata.arg_model.model_validate(self._metadata.pre_parse_json(arguments))
     kwargs = validated.model_dump_one_level()
-    result = self.function(**kwargs)
+    result = self.fn(**kwargs)
     if inspect.isawaitable(result):
       result = await result
     return self._coerce_output(result)
@@ -294,11 +294,11 @@ def validated_callable(tool: FunctionTool) -> Callable[..., Any]:
   adds the in-process path's fail-fast check that the backend result matches the declared
   output shape. The result is returned unchanged for the framework to serialize.
   """
-  function = tool.function
+  fn = tool.fn
 
-  @functools.wraps(function)
+  @functools.wraps(fn)
   async def validating(**kwargs: Any) -> Any:
-    result = function(**kwargs)
+    result = fn(**kwargs)
     if inspect.isawaitable(result):
       result = await result
     tool.validate_output(result)

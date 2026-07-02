@@ -325,7 +325,7 @@ class HTTPTracker(Tracker):
     hostname = parsed.hostname
     self._host: str = hostname if hostname is not None else 'localhost'
     self._port = parsed.port
-    self._connection: Optional[http.client.HTTPSConnection] = None
+    self._conn: Optional[http.client.HTTPSConnection] = None
     self._trail_id: Optional[str] = None
 
   def start_trail(
@@ -380,10 +380,10 @@ class HTTPTracker(Tracker):
       logging.warning('trails end_trail failed for trail %s: %s', self._trail_id, exc)
     finally:
       self._trail_id = None
-      self._drop_connection()
+      self._drop_conn()
 
   def close(self) -> None:
-    self._drop_connection()
+    self._drop_conn()
 
   def _post(self, path: str, payload: dict, *, retry_delays: tuple[float, ...]) -> dict:
     body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
@@ -403,7 +403,7 @@ class HTTPTracker(Tracker):
         return self._request('POST', path, headers, body)
       except HTTPStatusError as exc:
         # drop the persistent connection so the next attempt opens a fresh one.
-        self._drop_connection()
+        self._drop_conn()
         # deterministic 4xx won't change on a retry — propagate immediately
         # rather than sleeping through the rest of the schedule.
         if not _is_retryable_status(exc.status):
@@ -412,41 +412,40 @@ class HTTPTracker(Tracker):
       except Exception as exc:
         last_exc = exc
         # transient blips often leave the socket half-open; reopen next attempt.
-        self._drop_connection()
+        self._drop_conn()
     assert last_exc is not None
     raise last_exc
 
   def _request(self, method: str, path: str, headers: dict, body: bytes) -> dict:
-    connection = self._get_connection()
-    connection.request(method, path, body=body, headers=headers)
-    response = connection.getresponse()
-    raw = response.read()
-    if response.status >= 400:
+    conn = self._get_conn()
+    conn.request(method, path, body=body, headers=headers)
+    resp = conn.getresponse()
+    raw = resp.read()
+    if resp.status >= 400:
       raise HTTPStatusError(
-        response.status,
-        f'{method} {path} -> HTTP {response.status}: {raw.decode(errors="replace")}',
+        resp.status, f'{method} {path} -> HTTP {resp.status}: {raw.decode(errors="replace")}'
       )
-    if response.status == 204 or len(raw) == 0:
+    if resp.status == 204 or len(raw) == 0:
       return {}
     return json.loads(raw)
 
-  def _get_connection(self) -> http.client.HTTPSConnection:
-    if self._connection is not None:
-      return self._connection
-    context = ssl.create_default_context()
-    self._connection = http.client.HTTPSConnection(
-      self._host, self._port, timeout=self._timeout, context=context
+  def _get_conn(self) -> http.client.HTTPSConnection:
+    if self._conn is not None:
+      return self._conn
+    ctx = ssl.create_default_context()
+    self._conn = http.client.HTTPSConnection(
+      self._host, self._port, timeout=self._timeout, context=ctx
     )
-    return self._connection
+    return self._conn
 
-  def _drop_connection(self) -> None:
-    if self._connection is None:
+  def _drop_conn(self) -> None:
+    if self._conn is None:
       return
     try:
-      self._connection.close()
+      self._conn.close()
     except Exception:
       pass
-    self._connection = None
+    self._conn = None
 
 
 def read_local_file(path: Path | str) -> list[RecordedTrail]:

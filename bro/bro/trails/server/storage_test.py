@@ -53,21 +53,21 @@ class FakeDynamo:
     self._items = list(items)
 
   def query(self, **kwargs) -> dict:
-    pk_attribute, sk_attribute = _INDEXES[kwargs['IndexName']]
+    pk_attr, sk_attr = _INDEXES[kwargs['IndexName']]
     values = {
       k: _deserializer.deserialize(v) for k, v in kwargs['ExpressionAttributeValues'].items()
     }
-    matched = [it for it in self._items if it.get(pk_attribute) == values[':pk']]
+    matched = [it for it in self._items if it.get(pk_attr) == values[':pk']]
     if ':lo' in values:
-      matched = [it for it in matched if it[sk_attribute] >= values[':lo']]
+      matched = [it for it in matched if it[sk_attr] >= values[':lo']]
     if ':hi' in values:
-      matched = [it for it in matched if it[sk_attribute] <= values[':hi']]
+      matched = [it for it in matched if it[sk_attr] <= values[':hi']]
     # storage passes ScanIndexForward=False -> descending on the SK.
     forward = kwargs.get('ScanIndexForward', True)
-    ordered = sorted(matched, key=lambda it: it[sk_attribute], reverse=not forward)
-    return self._page(ordered, kwargs, key_attributes=['trail_id', pk_attribute, sk_attribute])
+    ordered = sorted(matched, key=lambda it: it[sk_attr], reverse=not forward)
+    return self._page(ordered, kwargs, key_attrs=['trail_id', pk_attr, sk_attr])
 
-  def _page(self, ordered: list[dict], kwargs: dict, *, key_attributes: list[str]) -> dict:
+  def _page(self, ordered: list[dict], kwargs: dict, *, key_attrs: list[str]) -> dict:
     start = 0
     start_key = kwargs.get('ExclusiveStartKey')
     if start_key is not None:
@@ -78,17 +78,15 @@ class FakeDynamo:
     response: dict = {'Items': [_ser(it) for it in page]}
     if start + limit < len(ordered):
       last = page[-1]
-      response['LastEvaluatedKey'] = _ser(
-        {attribute: last[attribute] for attribute in key_attributes}
-      )
+      response['LastEvaluatedKey'] = _ser({attr: last[attr] for attr in key_attrs})
     return response
 
 
-def _trail(index: int, *, bro: str, parent: Optional[str], indexed: bool = True) -> dict:
+def _trail(idx: int, *, bro: str, parent: Optional[str], indexed: bool = True) -> dict:
   item = {
-    'trail_id': f'trail-{index:03d}',
+    'trail_id': f'trail-{idx:03d}',
     'bro': bro,
-    'started_at': f'2026-06-07T00:00:{index:02d}.000000Z',
+    'started_at': f'2026-06-07T00:00:{idx:02d}.000000Z',
   }
   if indexed:
     item[GSI_PK_ATTR] = GSI_PK_VALUE

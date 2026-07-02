@@ -38,7 +38,7 @@ def _mcp_config_argv(mcp: str) -> list[str]:
     return ['--mcp-config=flow/mcp/mcp_local.json']
   assert mcp == 'http'
   try:
-    config = credentials.get_json('flow_mcp')
+    cfg = credentials.get_json('flow_mcp')
   except credentials.SecretNotFound:
     raise SystemExit('missing flow_mcp secret — run flow/mcp/server/bootstrap_secrets.sh')
   mcp_json = json.dumps(
@@ -46,8 +46,8 @@ def _mcp_config_argv(mcp: str) -> list[str]:
       'mcpServers': {
         'flow': {
           'type': 'http',
-          'url': config['url'],
-          'headers': {'Authorization': f'Bearer {config["token"]}'},
+          'url': cfg['url'],
+          'headers': {'Authorization': f'Bearer {cfg["token"]}'},
         },
       },
     },

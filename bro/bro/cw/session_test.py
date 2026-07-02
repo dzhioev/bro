@@ -130,8 +130,8 @@ class TestGrantRevoke:
     assert rc == 0
     _, kwargs = fake_cw.call_args
     claude_args = kwargs['claude_args']
-    index = claude_args.index('--effort')
-    assert claude_args[index + 1] == 'xhigh'
+    idx = claude_args.index('--effort')
+    assert claude_args[idx + 1] == 'xhigh'
 
 
 class TestResumeCommand:

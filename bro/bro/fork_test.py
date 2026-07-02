@@ -436,8 +436,8 @@ def _patch_chat_gpt_create_llm(stub_responses):
     created.append(gpt)
     return gpt
 
-  context = patch.object(chat_gpt_module.LLMSpec, 'create_llm', _create)
-  return context, captured_kwargs, created
+  ctx = patch.object(chat_gpt_module.LLMSpec, 'create_llm', _create)
+  return ctx, captured_kwargs, created
 
 
 def _simple_trail(**header_overrides: Any) -> RecordedTrail:
@@ -456,8 +456,8 @@ class TestForkLinkage:
   def test_start_trail_records_parent_pointer(self):
     parent_trail = _simple_trail()
     tracker = _RecordingTracker()
-    context, _, _ = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('ok')])])
-    with context:
+    ctx, _, _ = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('ok')])])
+    with ctx:
       fork(parent_trail, 'c1', tracker=tracker)
     assert len(tracker.headers) == 1
     header = tracker.headers[0]
@@ -469,16 +469,16 @@ class TestForkLinkage:
   def test_records_resolved_system_prompt(self):
     parent_trail = _simple_trail()
     tracker = _RecordingTracker()
-    context, _, _ = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('ok')])])
-    with context:
+    ctx, _, _ = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('ok')])])
+    with ctx:
       fork(parent_trail, 'c1', tracker=tracker)
     assert tracker.headers[0]['system_prompt'] == _SYS_TEXT
 
   def test_system_prompt_override_replaces_prefix_and_header(self):
     parent_trail = _simple_trail()
     tracker = _RecordingTracker()
-    context, _, created = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('ok')])])
-    with context:
+    ctx, _, created = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('ok')])])
+    with ctx:
       bro = fork(parent_trail, 'c1', system_prompt='swapped prompt', tracker=tracker)
     assert tracker.headers[0]['system_prompt'] == 'swapped prompt'
     assert bro.system_prompt == 'swapped prompt'
@@ -491,16 +491,16 @@ class TestForkLinkage:
 class TestForkRecording:
   def test_record_false_uses_null_tracker(self):
     parent_trail = _simple_trail()
-    context, _, _ = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('ok')])])
-    with context:
+    ctx, _, _ = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('ok')])])
+    with ctx:
       bro = fork(parent_trail, 'c1', record=False)
     assert isinstance(bro._tracker, NullTracker)
 
   def test_record_true_uses_explicit_tracker(self):
     parent_trail = _simple_trail()
     tracker = _RecordingTracker()
-    context, _, _ = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('ok')])])
-    with context:
+    ctx, _, _ = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('ok')])])
+    with ctx:
       bro = fork(parent_trail, 'c1', tracker=tracker)
     assert bro._tracker is tracker
 
@@ -509,8 +509,8 @@ class TestForkSpec:
   def test_defaults_to_parent_spec(self):
     parent_trail = _simple_trail()
     tracker = _RecordingTracker()
-    context, _, created = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('ok')])])
-    with context:
+    ctx, _, created = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('ok')])])
+    with ctx:
       fork(parent_trail, 'c1', tracker=tracker)
     assert created[0].model == 'gpt-5'
     assert tracker.headers[0]['llm_spec'] == {
@@ -524,8 +524,8 @@ class TestForkSpec:
     parent_trail = _simple_trail()
     tracker = _RecordingTracker()
     override = chat_gpt_module.LLMSpec(model='gpt-5.4-mini', reasoning_effort='medium')
-    context, _, created = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('ok')])])
-    with context:
+    ctx, _, created = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('ok')])])
+    with ctx:
       fork(parent_trail, 'c1', llm_spec=override, tracker=tracker)
     assert created[0].model == 'gpt-5.4-mini'
     assert created[0]._reasoning_effort == 'medium'
@@ -542,10 +542,10 @@ class TestForkServerSidePath:
   @pytest.mark.asyncio
   async def test_send_seeds_previous_response_id_and_omits_prefix(self):
     parent_trail = _simple_trail()
-    context, captured, _ = _patch_chat_gpt_create_llm(
+    ctx, captured, _ = _patch_chat_gpt_create_llm(
       [_fake_response(output=[_message_item('continuation')])]
     )
-    with context:
+    with ctx:
       bro = fork(parent_trail, 'c1', record=False)
       result = await bro.send('follow up')
     assert result == 'continuation'
@@ -557,10 +557,8 @@ class TestForkServerSidePath:
   async def test_user_input_step_recorded_only_for_new_message(self):
     parent_trail = _simple_trail()
     tracker = _RecordingTracker()
-    context, _, _ = _patch_chat_gpt_create_llm(
-      [_fake_response(output=[_message_item('continuation')])]
-    )
-    with context:
+    ctx, _, _ = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('continuation')])])
+    with ctx:
       bro = fork(parent_trail, 'c1', tracker=tracker)
       await bro.send('follow up')
     user_inputs = [s for s in tracker.steps if s[0] == 'user_input']
@@ -572,13 +570,13 @@ class TestForkServerSidePath:
   @pytest.mark.asyncio
   async def test_multi_send_chains_response_ids(self):
     parent_trail = _simple_trail()
-    context, captured, _ = _patch_chat_gpt_create_llm(
+    ctx, captured, _ = _patch_chat_gpt_create_llm(
       [
         _fake_response(output=[_message_item('first')], response_id='r2'),
         _fake_response(output=[_message_item('second')], response_id='r3'),
       ]
     )
-    with context:
+    with ctx:
       bro = fork(parent_trail, 'c1', record=False)
       await bro.send('msg one')
       await bro.send('msg two')
@@ -603,10 +601,8 @@ class TestForkClientSideReplay:
     # u0 isn't an `llm_call`; server-side has nothing to anchor on, so the
     # replay path is the only option.
     parent_trail = _simple_trail()
-    context, captured, _ = _patch_chat_gpt_create_llm(
-      [_fake_response(output=[_message_item('rerun')])]
-    )
-    with context:
+    ctx, captured, _ = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('rerun')])])
+    with ctx:
       bro = fork(parent_trail, 'u0', record=False)
       assert await bro.send('rerun please') == 'rerun'
     api_input = captured[0]['input']
@@ -639,10 +635,10 @@ class TestForkClientSideReplay:
         ),
       ],
     )
-    context, captured, _ = _patch_chat_gpt_create_llm(
+    ctx, captured, _ = _patch_chat_gpt_create_llm(
       [_fake_response(output=[_message_item('forked answer')])]
     )
-    with context:
+    with ctx:
       bro = fork(parent_trail, 'u1', record=False)
       await bro.send('actually try this')
     api_input = captured[0]['input']
@@ -682,10 +678,10 @@ class TestForkClientSideReplay:
         ),
       ],
     )
-    context, captured, _ = _patch_chat_gpt_create_llm(
+    ctx, captured, _ = _patch_chat_gpt_create_llm(
       [_fake_response(output=[_message_item('continued')])]
     )
-    with context:
+    with ctx:
       # forcing client-side via a no-op system_prompt override — the path
       # picker treats any override as "client-side only" since the cached
       # server-side prefix can't be restated.
@@ -709,10 +705,8 @@ class TestForkClientSideReplay:
     # response_id is pinned to the originating model on OpenAI's side).
     parent_trail = _simple_trail()
     override = chat_gpt_module.LLMSpec(model='gpt-5.4-mini')
-    context, captured, _ = _patch_chat_gpt_create_llm(
-      [_fake_response(output=[_message_item('ok')])]
-    )
-    with context:
+    ctx, captured, _ = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('ok')])])
+    with ctx:
       bro = fork(parent_trail, 'c1', llm_spec=override, record=False)
       await bro.send('next')
     assert captured[0].get('previous_response_id') is None
@@ -726,10 +720,8 @@ class TestForkClientSideReplay:
     # restate it through `previous_response_id`, so any override forces a
     # full replay so the swapped prompt actually takes effect.
     parent_trail = _simple_trail()
-    context, captured, _ = _patch_chat_gpt_create_llm(
-      [_fake_response(output=[_message_item('ok')])]
-    )
-    with context:
+    ctx, captured, _ = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('ok')])])
+    with ctx:
       bro = fork(parent_trail, 'c1', system_prompt='swapped prompt', record=False)
       await bro.send('next')
     assert captured[0].get('previous_response_id') is None
@@ -740,13 +732,13 @@ class TestForkClientSideReplay:
     # `_input_prefix` is consumed exactly once on first send. forced
     # client-side here via prompt override so the prefix path actually fires.
     parent_trail = _simple_trail()
-    context, captured, _ = _patch_chat_gpt_create_llm(
+    ctx, captured, _ = _patch_chat_gpt_create_llm(
       [
         _fake_response(output=[_message_item('first')], response_id='resp_a'),
         _fake_response(output=[_message_item('second')], response_id='resp_b'),
       ]
     )
-    with context:
+    with ctx:
       bro = fork(parent_trail, 'c1', system_prompt=_SYS_TEXT, record=False)
       await bro.send('msg one')
       await bro.send('msg two')
@@ -788,8 +780,8 @@ class TestForkAcrossWriteAndRead:
     llm_call_step_id = next(s.step_id for s in parent_trail.steps if s.kind == 'llm_call')
 
     fork_tracker = _RecordingTracker()
-    context, _, _ = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('forked')])])
-    with context:
+    ctx, _, _ = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('forked')])])
+    with ctx:
       bro = fork(parent_trail, llm_call_step_id, tracker=fork_tracker)
     assert fork_tracker.headers[0]['parent'] == Parent(
       trail_id=trail_id, step_id=llm_call_step_id, relationship='fork'

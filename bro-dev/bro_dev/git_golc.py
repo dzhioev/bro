@@ -167,12 +167,12 @@ def _maybe_page(text: str) -> None:
     return
   env = os.environ.copy()
   env.setdefault('LESS', 'FRX')
-  process = subprocess.Popen([pager, '-R'], stdin=subprocess.PIPE, env=env)
-  assert process.stdin is not None
+  proc = subprocess.Popen([pager, '-R'], stdin=subprocess.PIPE, env=env)
+  assert proc.stdin is not None
   try:
-    process.stdin.write(text.encode())
-    process.stdin.close()
-    process.wait()
+    proc.stdin.write(text.encode())
+    proc.stdin.close()
+    proc.wait()
   except BrokenPipeError:
     pass
 

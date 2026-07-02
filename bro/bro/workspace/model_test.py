@@ -256,10 +256,10 @@ class TestIsActive:
     assert ws.is_active(set()) is True
 
   def test_host_false_for_dead_pid(self, tmp_path):
-    process = subprocess.Popen(['true'])
-    process.wait()
+    proc = subprocess.Popen(['true'])
+    proc.wait()
     ws = self._ws(tmp_path)
-    self._seed(ws).write_text(str(process.pid))
+    self._seed(ws).write_text(str(proc.pid))
     assert ws.is_active(set()) is False
 
   def test_host_false_for_garbage(self, tmp_path):

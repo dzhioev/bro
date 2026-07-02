@@ -33,13 +33,13 @@ def _running(pid: int) -> bool:
 def test_child_is_detached_into_own_session() -> None:
   # start_new_session makes the child a session leader (getsid == its own pid),
   # which means it inherits no controlling terminal from the parent.
-  process = spawn.run(
+  proc = spawn.run(
     ['python3', '-c', 'import os; print(os.getpid(), os.getsid(0))'],
     capture_output=True,
     text=True,
     timeout=10,
   )
-  pid, sid = process.stdout.split()
+  pid, sid = proc.stdout.split()
   assert pid == sid
 
 
@@ -47,33 +47,33 @@ def test_no_controlling_tty_so_dev_tty_open_fails() -> None:
   # with no controlling terminal, opening /dev/tty raises ENXIO immediately rather
   # than blocking — the exact failure mode that turns a credential prompt into an
   # error instead of a hang.
-  process = spawn.run(
+  proc = spawn.run(
     ['python3', '-c', 'open("/dev/tty")'],
     capture_output=True,
     text=True,
     timeout=10,
   )
-  assert process.returncode != 0
+  assert proc.returncode != 0
   # ENXIO surfaces with a platform-specific strerror ("No such device or address" on
   # Linux, "Device not configured" on macOS), so match the errno rather than the text.
-  assert f'Errno {errno.ENXIO}' in process.stderr
+  assert f'Errno {errno.ENXIO}' in proc.stderr
 
 
 def test_run_redirects_stdin_to_devnull_by_default() -> None:
-  process = spawn.run(['cat'], capture_output=True, text=True, timeout=10)
-  assert process.returncode == 0
-  assert process.stdout == ''
+  proc = spawn.run(['cat'], capture_output=True, text=True, timeout=10)
+  assert proc.returncode == 0
+  assert proc.stdout == ''
 
 
 def test_run_caller_can_override_stdin_with_input() -> None:
-  process = spawn.run(['cat'], input='hello', capture_output=True, text=True, timeout=10)
-  assert process.stdout == 'hello'
+  proc = spawn.run(['cat'], input='hello', capture_output=True, text=True, timeout=10)
+  assert proc.stdout == 'hello'
 
 
 def test_run_returns_completed_process() -> None:
-  process = spawn.run(['true'])
-  assert isinstance(process, subprocess.CompletedProcess)
-  assert process.returncode == 0
+  proc = spawn.run(['true'])
+  assert isinstance(proc, subprocess.CompletedProcess)
+  assert proc.returncode == 0
 
 
 def test_run_timeout_kills_grandchildren(tmp_path) -> None:
@@ -81,9 +81,9 @@ def test_run_timeout_kills_grandchildren(tmp_path) -> None:
   # process group with it. The left side of the pipe records its pid and then
   # blocks; if only the shell were killed it would survive as an orphan.
   pidfile = tmp_path / 'pid'
-  command = f'(echo $BASHPID > {pidfile}; sleep 60) | cat'
+  cmd = f'(echo $BASHPID > {pidfile}; sleep 60) | cat'
   with pytest.raises(subprocess.TimeoutExpired):
-    spawn.run(['bash', '-c', command], timeout=1, capture_output=True, text=True)
+    spawn.run(['bash', '-c', cmd], timeout=1, capture_output=True, text=True)
   pid = int(pidfile.read_text())
   deadline = time.time() + 5
   while time.time() < deadline and _running(pid):
@@ -97,10 +97,10 @@ def test_run_check_raises_on_nonzero() -> None:
 
 
 def test_popen_streams_and_detaches() -> None:
-  process = spawn.popen(
+  proc = spawn.popen(
     ['python3', '-c', 'import os; print(os.getsid(0) == os.getpid())'],
     stdout=subprocess.PIPE,
     text=True,
   )
-  out, _ = process.communicate(timeout=10)
+  out, _ = proc.communicate(timeout=10)
   assert out.strip() == 'True'

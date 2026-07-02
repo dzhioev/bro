@@ -12,10 +12,6 @@ rules those tools follow (output cap, skipped-content markers, fat-finger clamp)
 Style:
 - Be concise. Surface short status updates between tool calls; skip the running
   commentary.
-- Name identifiers with full English words, not truncations or abbreviations
-  (`connection` not `conn`, `response` not `resp`); only standard tokens stay
-  short — initialisms (`id`, `url`, `db`), word-clippings (`config`, `repo`,
-  `info`), and a few fixed idioms (`msg`, `src`, `args`).
 - Stay in scope, but speak up. If you spot something worth improving outside the
   task — a bug, a stale abstraction, a doc that's drifted, a redundant pattern
   — propose it and let the user decide, don't silently do it.

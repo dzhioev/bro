@@ -136,15 +136,15 @@ def maybe_containerize(
 def run(
   *,
   cli_name: str,
-  parser_description: str,
-  argument_name: str,
-  argument_help: str,
-  run_function: Callable[[Bro, str, Optional[Observer]], Coroutine[None, None, str]],
+  parser_desc: str,
+  arg_name: str,
+  arg_help: str,
+  run_fn: Callable[[Bro, str, Optional[Observer]], Coroutine[None, None, str]],
   argv: list[str],
 ) -> Optional[int]:
-  parser = base.args.Parser(description=parser_description)
+  parser = base.args.Parser(description=parser_desc)
   parser.add_argument('bro', help='bro name')
-  parser.add_argument(argument_name, help=argument_help)
+  parser.add_argument(arg_name, help=arg_help)
   parser.add_argument(
     '--rich',
     action='store_true',
@@ -161,7 +161,7 @@ def run(
   parser.add_argument('--revoke', action='append', default=None, metavar='SECRET', help=REVOKE_HELP)
   args = parser.parse(argv)
 
-  inner_args = [args[argument_name]]
+  inner_args = [args[arg_name]]
   if args['rich']:
     inner_args.append('--rich')
   if args['slow']:
@@ -185,7 +185,7 @@ def run(
 
     observer = RichConsoleRenderer(prefix=bro.name)
   try:
-    result = asyncio.run(run_function(bro, args[argument_name], observer))
+    result = asyncio.run(run_fn(bro, args[arg_name], observer))
   except BroRaised as e:
     print(f'raised: {e.reason}', file=sys.stderr)
     return 1
