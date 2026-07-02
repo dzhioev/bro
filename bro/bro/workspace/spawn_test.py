@@ -8,6 +8,7 @@ import pytest
 import cw.containers
 import cw.docker
 import cw.spawn
+import cw.workspace
 
 
 class TestDockerLaunchSpec:
@@ -128,6 +129,16 @@ _INTERRUPTIBLE = textwrap.dedent("""
 
 
 class TestAttachedRoot:
+  @pytest.fixture(autouse=True)
+  def removed(self, monkeypatch) -> list:
+    removed: list = []
+
+    async def fake_remove(container_id):
+      removed.append(container_id)
+
+    monkeypatch.setattr(cw.spawn, '_force_remove', fake_remove)
+    return removed
+
   async def _spawn_interruptible(self) -> asyncio.subprocess.Process:
     proc = await asyncio.create_subprocess_exec(
       sys.executable, '-c', _INTERRUPTIBLE, stdout=asyncio.subprocess.PIPE
@@ -153,6 +164,15 @@ class TestAttachedRoot:
     root._forward_sigint()  # process gone; must not raise
 
   @pytest.mark.asyncio
+  async def test_wait_removes_the_container(self, removed):
+    # the client can die while the container lives (sig-proxy is off on a tty attach),
+    # so client exit must always be followed by container teardown
+    proc = await asyncio.create_subprocess_exec(sys.executable, '-c', 'pass')
+    root = cw.spawn._AttachedRoot('cid', proc)
+    await root.wait()
+    assert removed == ['cid']
+
+  @pytest.mark.asyncio
   async def test_output_tail_is_empty(self):
     proc = await asyncio.create_subprocess_exec(sys.executable, '-c', 'pass')
     root = cw.spawn._AttachedRoot('cid', proc)
@@ -170,7 +190,7 @@ class TestDockerChildCapture:
       stdout=asyncio.subprocess.PIPE,
       stderr=asyncio.subprocess.STDOUT,
     )
-    return cw.spawn._DockerChild('cid', proc, ring_bytes)
+    return cw.spawn._DockerChild('cid', proc, ring_bytes, workspace=None)
 
   @pytest.mark.asyncio
   async def test_tail_combines_stdout_and_stderr(self):
@@ -187,6 +207,58 @@ class TestDockerChildCapture:
     child = await self._child(code, 16)
     assert await child.wait() == 0
     assert child.output_tail() == 'x' * 9 + 'THE-END'
+
+
+class TestDockerChildWorkspaceCleanup:
+  def _workspace(self, monkeypatch, tmp_path, removed: list) -> cw.workspace.ContainerWorkspace:
+    workspace = cw.workspace.ContainerWorkspace('broker-CH', tmp_path / 'proj')
+    monkeypatch.setattr(workspace, 'remove', lambda: removed.append(workspace.name))
+    return workspace
+
+  async def _child(self, workspace) -> cw.spawn._DockerChild:
+    proc = await asyncio.create_subprocess_exec(
+      sys.executable,
+      '-c',
+      'pass',
+      stdout=asyncio.subprocess.PIPE,
+      stderr=asyncio.subprocess.STDOUT,
+    )
+    return cw.spawn._DockerChild('cid', proc, cw.spawn.DEFAULT_RING_BYTES, workspace)
+
+  @pytest.mark.asyncio
+  async def test_wait_removes_throwaway_workspace(self, monkeypatch, tmp_path):
+    removed: list = []
+    child = await self._child(self._workspace(monkeypatch, tmp_path, removed))
+    assert await child.wait() == 0
+    assert removed == ['broker-CH']
+
+  @pytest.mark.asyncio
+  async def test_kill_removes_throwaway_workspace(self, monkeypatch, tmp_path):
+    async def fake_remove(container_id):
+      pass
+
+    monkeypatch.setattr(cw.spawn, '_force_remove', fake_remove)
+    removed: list = []
+    child = await self._child(self._workspace(monkeypatch, tmp_path, removed))
+    await child.kill()
+    assert removed == ['broker-CH']
+    # the timeout path kills, then the attach exits: wait() must not remove again
+    await child.wait()
+    assert removed == ['broker-CH']
+
+  @pytest.mark.asyncio
+  async def test_removal_failure_warns_instead_of_raising(self, monkeypatch, tmp_path):
+    workspace = cw.workspace.ContainerWorkspace('broker-CH', tmp_path / 'proj')
+
+    def boom():
+      raise RuntimeError('root-owned files')
+
+    monkeypatch.setattr(workspace, 'remove', boom)
+    warnings: list = []
+    monkeypatch.setattr(cw.spawn.log, 'warning', lambda msg, *args: warnings.append(msg % args))
+    child = await self._child(workspace)
+    assert await child.wait() == 0
+    assert warnings == ['could not remove broker child workspace broker-CH: root-owned files']
 
 
 class TestDockerSpawnerModes:
@@ -213,6 +285,11 @@ class TestDockerSpawnerModes:
       return 'cid123'
 
     monkeypatch.setattr(cw.spawn, '_create_container', fake_create)
+
+    async def fake_remove(container_id):
+      pass
+
+    monkeypatch.setattr(cw.spawn, '_force_remove', fake_remove)
     starts: list = []
     real_exec = asyncio.create_subprocess_exec
 

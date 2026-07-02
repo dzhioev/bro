@@ -173,7 +173,8 @@ def _run_root_via_broker(
   it on the broker loop until it exits. Returns the container's exit code."""
   # imported here, not at module level: _broker_enabled() must be able to short-circuit
   # a launch before anything touches the broker package (see its docstring).
-  from broker.dispatcher import Broker
+  from broker.brotocol import Tag
+  from broker.dispatcher import Broker, ping_handler
   from broker.transports.unix import UnixServerTransport
   from cw.spawn import DockerLaunchSpec, DockerSpawner
 
@@ -187,7 +188,12 @@ def _run_root_via_broker(
     docker_sock=docker_sock,
     forward_bro=forward_bro,
   )
-  return Broker(UnixServerTransport(str(_broker_dir(proj))), DockerSpawner()).run(launch)
+  facade = Broker(UnixServerTransport(str(_broker_dir(proj))), DockerSpawner())
+  # the substrate's acceptance round-trip: every live channel answers ping, so a
+  # session can verify its channel (`broker request ping '{}'`). Consumers register
+  # their own request types on top.
+  facade.on(Tag.PING, ping_handler)
+  return facade.run(launch)
 
 
 def run_in_container(

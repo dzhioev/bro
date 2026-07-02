@@ -27,6 +27,8 @@ def _running(pid: int) -> bool:
     stat = open(f'/proc/{pid}/stat').read()
   except FileNotFoundError:
     return True
+  except ProcessLookupError:  # reaped between the kill(0) probe and this read (ESRCH)
+    return False
   return stat.rsplit(')', 1)[1].split()[0] != 'Z'
 
 

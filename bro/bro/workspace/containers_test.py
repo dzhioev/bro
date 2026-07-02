@@ -187,6 +187,10 @@ class TestRunRootViaBroker:
       def __init__(self, transport, spawner, **kwargs):
         captured['transport'] = transport
         captured['spawner'] = spawner
+        captured['handlers'] = {}
+
+      def on(self, message_type, handler):
+        captured['handlers'][message_type] = handler
 
       def run(self, launch):
         captured['launch'] = launch
@@ -206,6 +210,7 @@ class TestRunRootViaBroker:
     assert code == 3
     assert captured['transport']._dir == tmp_path / 'proj' / 'var' / 'cw' / 'broker'
     assert isinstance(captured['spawner'], cw.spawn.DockerSpawner)
+    assert captured['handlers'] == {'ping': broker.dispatcher.ping_handler}
     launch = captured['launch']
     assert launch == cw.spawn.DockerLaunchSpec(
       command=['claude', '--auto'],

@@ -14,7 +14,8 @@ broker's Runtime is uniform:
   ring buffer for `failed{output_tail}` — the streams are diagnostics for a child
   that dies without reporting; its result is channel-native (`completed{result}`).
   Attaching (rather than detaching + `docker wait` + `docker logs`) is deliberate:
-  detached `--rm` removal races the log read.
+  detached `--rm` removal races the log read. A derived `broker-<channel>` workspace
+  is removed (both host dirs) once the child ends; a named one stays caller-owned.
 - Interactive (`attached == True`, e.g. a cw session root): `docker create -it` →
   `docker start -a -i` as an asyncio subprocess with inherited stdio (the host TTY),
   plus a SIGINT forwarder — an interrupt of the launcher must reach the attached
@@ -32,12 +33,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from base import credentials
+from base import credentials, log
 from broker.spawn import ChildHandle, LaunchSpec, Spawner
 from broker.transport import Provisioned
 from cw.docker import _create_container, _docker_create_argv, _ensure_image, _image_tag
 from cw.paths import _containers_dir, _project_root
 from cw.secrets import _ppp_tarball
+from cw.workspace import ContainerWorkspace
 
 DEFAULT_RING_BYTES = 1 << 16  # 64 KiB — a full traceback + context, bounded
 
@@ -57,7 +59,8 @@ class DockerLaunchSpec(LaunchSpec):
   for a substrate-native peer with no bro.
 
   `name` is the workspace backing the container (`var/cw/containers/<name>`); `None`
-  derives a throwaway `broker-<channel>` one. `secrets` hydrate strictly,
+  derives a throwaway `broker-<channel>` one, removed when the child ends. `secrets`
+  hydrate strictly,
   `optional_secrets` best-effort (`credentials.build_scoped_store`). `docker_sock` and
   `forward_bro` mirror the `_docker_create_argv` knobs: an attached cw session root
   gets the host docker socket and its ambient `CW_BRO` forwarded; a spawned child
@@ -139,11 +142,18 @@ async def _force_remove(container_id: str) -> None:
 
 
 class _DockerChild(ChildHandle):
-  def __init__(self, container_id: str, proc: asyncio.subprocess.Process, ring_bytes: int):
+  def __init__(
+    self,
+    container_id: str,
+    proc: asyncio.subprocess.Process,
+    ring_bytes: int,
+    workspace: Optional[ContainerWorkspace],
+  ):
     self._container_id = container_id
     self._proc = proc
     self._ring = _RingBuffer(ring_bytes)
     self._drain = asyncio.create_task(self._drain_output())
+    self._workspace = workspace  # a derived throwaway workspace, removed once the child ends
 
   async def _drain_output(self) -> None:
     assert self._proc.stdout is not None  # carries stderr too (merged at spawn)
@@ -153,13 +163,29 @@ class _DockerChild(ChildHandle):
         return
       self._ring.write(chunk)
 
+  async def _remove_workspace(self) -> None:
+    # wait() and kill() can both get here (the timeout path kills, then the attach
+    # exits); the swap happens before the first await, on the one loop, so the
+    # workspace is removed exactly once. Best-effort: a child's dirs must never
+    # break lifecycle routing.
+    if self._workspace is None:
+      return
+    workspace, self._workspace = self._workspace, None
+    try:
+      # remove() shells out (image discovery, root-escalated rm); keep it off the loop
+      await asyncio.to_thread(workspace.remove)
+    except (RuntimeError, OSError) as e:
+      log.warning('could not remove broker child workspace %s: %s', workspace.name, e)
+
   async def wait(self) -> int:
     code = await self._proc.wait()
     await self._drain  # let the final output land in the ring before tail() is read
+    await self._remove_workspace()
     return code
 
   async def kill(self) -> None:
     await _force_remove(self._container_id)
+    await self._remove_workspace()
 
   def output_tail(self) -> str:
     return self._ring.tail().decode('utf-8', errors='replace')
@@ -191,6 +217,11 @@ class _AttachedRoot(ChildHandle):
       return await self._proc.wait()
     finally:
       self._loop.remove_signal_handler(signal.SIGINT)
+      # a tty attach runs with docker's sig-proxy off, so the client can die (e.g. a
+      # SIGINT targeted at it) while the container lives on. Client exit ends the
+      # session either way; force-remove so the container follows — a no-op on the
+      # normal path, where the container already exited and --rm is removing it.
+      await _force_remove(self._container_id)
 
   async def kill(self) -> None:
     await _force_remove(self._container_id)
@@ -226,4 +257,5 @@ class DockerSpawner(Spawner):
       stdout=asyncio.subprocess.PIPE,
       stderr=asyncio.subprocess.STDOUT,
     )
-    return _DockerChild(container_id, proc, launch.ring_bytes)
+    workspace = ContainerWorkspace(name, proj) if launch.name is None else None
+    return _DockerChild(container_id, proc, launch.ring_bytes, workspace)

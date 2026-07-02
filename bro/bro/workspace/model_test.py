@@ -129,7 +129,10 @@ class TestRemoveContainerDir:
 
 
 class TestContainerWorkspaceRemove:
+  # session_dir resolves through Path.home(), so HOME must point at a tmp dir or
+  # the mkdir/remove below would touch the real ~/.claude/cw-sessions
   def test_removes_dir_with_cleanup_image_and_session_state(self, monkeypatch, tmp_path):
+    monkeypatch.setenv('HOME', str(tmp_path / 'home'))
     monkeypatch.setattr(cw.workspace, '_containers_dir', lambda proj: tmp_path / 'containers')
     monkeypatch.setattr(cw.workspace, '_cleanup_image', lambda: 'ppp-cw:img')
     removed = {}
@@ -145,6 +148,7 @@ class TestContainerWorkspaceRemove:
     assert not ws.session_dir.exists()  # session state cleaned
 
   def test_session_state_cleaned_even_when_dir_removal_raises(self, monkeypatch, tmp_path):
+    monkeypatch.setenv('HOME', str(tmp_path / 'home'))
     monkeypatch.setattr(cw.workspace, '_containers_dir', lambda proj: tmp_path / 'containers')
     monkeypatch.setattr(cw.workspace, '_cleanup_image', lambda: None)
 
