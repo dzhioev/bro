@@ -24,6 +24,13 @@ def _containers_dir(proj: Path) -> Path:
   return proj / 'var' / 'cw' / 'containers'
 
 
+def _broker_dir(proj: Path) -> Path:
+  # the broker's control dir (one socket file per peer). deliberately shallow: the
+  # host bind path must fit sun_path (~108 bytes), and a workspace-relative path
+  # would land inside every container's /workspace mount.
+  return proj / 'var' / 'cw' / 'broker'
+
+
 def _in_container() -> bool:
   """detect a container by /.dockerenv presence. extracted so tests can stub it."""
   return Path('/.dockerenv').is_file()

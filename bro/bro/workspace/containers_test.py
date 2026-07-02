@@ -1,8 +1,11 @@
 import json
+import sys
 
 import pytest
 
+import broker.dispatcher
 import cw.containers
+import cw.spawn
 
 
 class _FakeProc:
@@ -69,6 +72,8 @@ class TestReplaceContainerResumeHint:
 class TestRunInContainerInjection:
   @pytest.fixture
   def harness(self, monkeypatch, tmp_path):
+    # pin the broker-less direct path; the broker gate and root launch have their own tests
+    monkeypatch.setenv('BROKER_DISABLED', '1')
     monkeypatch.setattr(cw.containers, '_project_root', lambda: tmp_path / 'proj')
     monkeypatch.setattr(cw.containers, '_image_tag', lambda: 'tag')
     monkeypatch.setattr(cw.containers, '_ensure_image', lambda tag: None)
@@ -132,32 +137,83 @@ class TestRunInContainerInjection:
     cw.containers.run_in_container('ws', ['claude'])
     assert synced == []
 
-  def test_cp_failure_removes_container_and_raises(self, monkeypatch, tmp_path):
+
+class TestBrokerGate:
+  def test_disabled_by_env(self, monkeypatch):
+    # presence-checked: any value disables, and the check precedes any broker import
+    monkeypatch.setenv('BROKER_DISABLED', '')
+    assert cw.containers._broker_enabled() is False
+
+  def test_unimportable_broker_degrades(self, monkeypatch):
+    monkeypatch.delenv('BROKER_DISABLED', raising=False)
+    monkeypatch.setitem(sys.modules, 'broker', None)  # import machinery raises ImportError
+    assert cw.containers._broker_enabled() is False
+
+  def test_enabled_by_default(self, monkeypatch):
+    monkeypatch.delenv('BROKER_DISABLED', raising=False)
+    assert cw.containers._broker_enabled() is True
+
+  def test_run_in_container_routes_through_broker(self, monkeypatch, tmp_path):
+    monkeypatch.delenv('BROKER_DISABLED', raising=False)
     monkeypatch.setattr(cw.containers, '_project_root', lambda: tmp_path / 'proj')
-    monkeypatch.setattr(cw.containers, '_image_tag', lambda: 'tag')
-    monkeypatch.setattr(cw.containers, '_ensure_image', lambda tag: None)
-    monkeypatch.setattr(cw.containers.Path, 'home', lambda: tmp_path / 'home')
-    monkeypatch.setattr(cw.containers, '_docker_create_argv', lambda *a, **k: ['docker', 'create'])
-    monkeypatch.setattr(
-      cw.containers.credentials,
-      'build_scoped_store',
-      lambda names, optional=(): {'credentials.json': b'{}'},
+    roots: list = []
+
+    def fake_root(name, command, proj, **kwargs):
+      roots.append({'name': name, 'command': command, 'proj': proj, **kwargs})
+      return 5
+
+    monkeypatch.setattr(cw.containers, '_run_root_via_broker', fake_root)
+    code = cw.containers.run_in_container('ws', ['claude'], docker_sock=False)
+    assert code == 5
+    assert roots == [
+      {
+        'name': 'ws',
+        'command': ['claude'],
+        'proj': tmp_path / 'proj',
+        'secrets': (),
+        'optional_secrets': (),
+        'docker_sock': False,
+        'extra_env': None,
+        'forward_bro': True,
+      }
+    ]
+
+
+class TestRunRootViaBroker:
+  def test_wires_control_dir_spawner_and_launch(self, monkeypatch, tmp_path):
+    captured: dict = {}
+
+    class FakeBroker:
+      def __init__(self, transport, spawner, **kwargs):
+        captured['transport'] = transport
+        captured['spawner'] = spawner
+
+      def run(self, launch):
+        captured['launch'] = launch
+        return 3
+
+    monkeypatch.setattr(broker.dispatcher, 'Broker', FakeBroker)
+    code = cw.containers._run_root_via_broker(
+      'ws',
+      ['claude', '--auto'],
+      tmp_path / 'proj',
+      secrets=('github',),
+      optional_secrets=('openai',),
+      docker_sock=True,
+      extra_env={'CW_BASE_REF': 'deadbeef'},
+      forward_bro=True,
     )
-    removed: list = []
-
-    def fake_run(argv, *a, **k):
-      if argv[0] == 'git':
-        return _FakeProc(returncode=0)
-      if argv[:2] == ['docker', 'create']:
-        return _FakeProc(returncode=0, stdout='cid123\n')
-      if argv[:3] == ['docker', 'cp', '-']:
-        return _FakeProc(returncode=1, stderr=b'no such container')
-      if argv[:3] == ['docker', 'rm', '-f']:
-        removed.append(argv)
-        return _FakeProc(returncode=0)
-      return _FakeProc(returncode=0)
-
-    monkeypatch.setattr(cw.containers.subprocess, 'run', fake_run)
-    with pytest.raises(RuntimeError, match='docker cp'):
-      cw.containers.run_in_container('ws', ['claude'])
-    assert removed == [['docker', 'rm', '-f', 'cid123']]
+    assert code == 3
+    assert captured['transport']._dir == tmp_path / 'proj' / 'var' / 'cw' / 'broker'
+    assert isinstance(captured['spawner'], cw.spawn.DockerSpawner)
+    launch = captured['launch']
+    assert launch == cw.spawn.DockerLaunchSpec(
+      command=['claude', '--auto'],
+      env={'CW_BASE_REF': 'deadbeef'},
+      secrets=('github',),
+      attached=True,
+      name='ws',
+      optional_secrets=('openai',),
+      docker_sock=True,
+      forward_bro=True,
+    )

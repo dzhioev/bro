@@ -124,6 +124,30 @@ def _ensure_image(tag: str) -> None:
   )
 
 
+def _create_container(argv: list[str], store_tarball: bytes, name: str) -> str:
+  """`docker create` + `docker cp` of the scoped credential store, returning the container id.
+
+  The run-equivalent create/start split exists for exactly this window: the store is
+  injected into the pre-start container's writable layer, so no plaintext touches the
+  host disk and `--rm` removes it with the container. A failed cp removes the created
+  container (a created-never-started container isn't covered by `--rm`)."""
+  created = subprocess.run(argv, capture_output=True, text=True)
+  if created.returncode != 0:
+    raise RuntimeError(f'docker create for {name} failed: {created.stderr.strip()}')
+  container_id = created.stdout.strip()
+  cp = subprocess.run(
+    ['docker', 'cp', '-', f'{container_id}:/home/cw'],
+    input=store_tarball,
+    capture_output=True,
+  )
+  if cp.returncode != 0:
+    subprocess.run(['docker', 'rm', '-f', container_id], capture_output=True)
+    raise RuntimeError(
+      f'docker cp of scoped store into {name} failed: {cp.stderr.decode().strip()}'
+    )
+  return container_id
+
+
 def _docker_create_argv(
   tag: str,
   name: str,
@@ -134,6 +158,8 @@ def _docker_create_argv(
   docker_sock: bool = True,
   extra_env: Optional[Mapping[str, str]] = None,
   forward_bro: bool = True,
+  tty: bool = True,
+  extra_mounts: Optional[list[str]] = None,
 ) -> list[str]:
   """argv for `docker create` of the session container (run-equivalent, unstarted).
 
@@ -141,6 +167,11 @@ def _docker_create_argv(
   run -it --rm --init` exactly (TTY, signals, exit code, auto-remove on exit). Splitting them
   gives `run_in_container` a window to `docker cp` the scoped credential store into
   the pre-start container's writable layer — no host-side store, no bind mount.
+
+  `tty=False` is the non-TTY variant the broker's supervised children launch with: a
+  headless child gets no pty — its output is captured host-side into a ring buffer, not
+  rendered to a terminal. `extra_mounts` adds explicit `-v SRC:DST` bind mounts — the
+  broker child mounts its provisioned host socket → the in-container `/run/broker.sock`.
 
   `extra_env` adds explicit `-e KEY=VALUE` entries (value set here) — distinct from the
   `_DOCKER_FORWARD_ENV` loop, which forwards a host var by name.
@@ -162,10 +193,10 @@ def _docker_create_argv(
   # seed-once container-private ~/.claude.json (see module docstring)
   claude_json = _seed_container_claude_json(claude_dir, home / '.claude.json')
   (claude_dir / 'settings.json').write_text(json.dumps(_CONTAINER_SETTINGS_JSON))
-  argv = [
-    'docker',
-    'create',
-    '-it',
+  argv = ['docker', 'create']
+  if tty:
+    argv.append('-it')
+  argv += [
     '--rm',
     # tini as pid 1 reaps orphaned grandchildren. our entrypoint re-execs into
     # claude, so without this pid 1 is claude — which doesn't wait() on orphans, so
@@ -213,6 +244,9 @@ def _docker_create_argv(
       continue
     if os.environ.get(var) is not None:
       argv += ['-e', var]
+  if extra_mounts is not None:
+    for mount in extra_mounts:
+      argv += ['-v', mount]
   if extra_env is not None:
     for key, value in extra_env.items():
       argv += ['-e', f'{key}={value}']

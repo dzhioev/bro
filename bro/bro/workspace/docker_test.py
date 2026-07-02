@@ -33,6 +33,56 @@ class TestPluginSeedContract:
     assert '.claude/plugins' in entrypoint
 
 
+class _FakeProc:
+  def __init__(self, returncode=0, stdout='', stderr: str | bytes = ''):
+    self.returncode = returncode
+    self.stdout = stdout
+    self.stderr = stderr
+
+
+class TestCreateContainer:
+  def _patch_run(self, monkeypatch, results):
+    calls: list = []
+
+    def fake_run(argv, *a, **k):
+      calls.append({'argv': argv, 'input': k.get('input')})
+      return results(argv)
+
+    monkeypatch.setattr(cw.docker.subprocess, 'run', fake_run)
+    return calls
+
+  def test_creates_then_injects_store(self, monkeypatch):
+    def results(argv):
+      if argv[:2] == ['docker', 'create']:
+        return _FakeProc(returncode=0, stdout='cid123\n')
+      return _FakeProc(returncode=0)
+
+    calls = self._patch_run(monkeypatch, results)
+    cid = cw.docker._create_container(['docker', 'create', 'ARGS'], b'TARBALL', 'ws')
+    assert cid == 'cid123'
+    cp = next(c for c in calls if c['argv'][:3] == ['docker', 'cp', '-'])
+    assert cp['argv'][3] == 'cid123:/home/cw'
+    assert cp['input'] == b'TARBALL'
+
+  def test_create_failure_raises(self, monkeypatch):
+    self._patch_run(monkeypatch, lambda argv: _FakeProc(returncode=1, stderr='boom'))
+    with pytest.raises(RuntimeError, match='docker create'):
+      cw.docker._create_container(['docker', 'create'], b'', 'ws')
+
+  def test_cp_failure_removes_container_and_raises(self, monkeypatch):
+    def results(argv):
+      if argv[:2] == ['docker', 'create']:
+        return _FakeProc(returncode=0, stdout='cid123\n')
+      if argv[:3] == ['docker', 'cp', '-']:
+        return _FakeProc(returncode=1, stderr=b'no such container')
+      return _FakeProc(returncode=0)
+
+    calls = self._patch_run(monkeypatch, results)
+    with pytest.raises(RuntimeError, match='docker cp'):
+      cw.docker._create_container(['docker', 'create'], b'', 'ws')
+    assert calls[-1]['argv'] == ['docker', 'rm', '-f', 'cid123']
+
+
 class TestDockerCreateArgv:
   @pytest.fixture
   def build_argv(self, monkeypatch, tmp_path):
@@ -108,3 +158,18 @@ class TestDockerCreateArgv:
 
   def test_no_extra_env_by_default(self, build_argv):
     assert not any('TRAILS_DISABLED' in a for a in build_argv())
+
+  def test_tty_dropped_when_disabled(self, build_argv):
+    # the broker's non-TTY child variant: no -it, so stdout/stderr stay separate.
+    argv = build_argv(tty=False)
+    assert '-it' not in argv
+    assert argv[:2] == ['docker', 'create']
+
+  def test_extra_mounts_added_as_volumes(self, build_argv):
+    argv = build_argv(extra_mounts=['/h/s.sock:/run/broker.sock'])
+    assert '/h/s.sock:/run/broker.sock' in argv
+    assert argv[argv.index('/h/s.sock:/run/broker.sock') - 1] == '-v'
+
+  def test_no_extra_mounts_by_default(self, build_argv):
+    # the every-session path stays unchanged: still -it, no stray broker mount.
+    assert build_argv()[:4] == ['docker', 'create', '-it', '--rm']

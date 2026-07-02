@@ -7,8 +7,14 @@ from pathlib import Path
 from typing import Optional
 
 from base import credentials, log
-from cw.docker import _docker_create_argv, _ensure_image, _image_tag, find_container_id
-from cw.paths import _containers_dir, _latest_jsonl, _project_root
+from cw.docker import (
+  _create_container,
+  _docker_create_argv,
+  _ensure_image,
+  _image_tag,
+  find_container_id,
+)
+from cw.paths import _broker_dir, _containers_dir, _latest_jsonl, _project_root
 from cw.secrets import _ppp_tarball
 from cw.workspace import ContainerWorkspace, _parse_ref
 
@@ -131,6 +137,59 @@ def _sync_container_log(name: str, proj: Path) -> None:
     log.warning('host-side session-log sync for %s failed: %s', name, e)
 
 
+def _broker_enabled() -> bool:
+  """whether this launch runs under the broker (a channel for every container session).
+
+  `BROKER_DISABLED` is the presence-checked kill-switch (parallel to `TRAILS_DISABLED`):
+  the broker sits on the critical launch path of every container session, so a broker
+  defect needs an escape valve that works without touching code. It is checked before
+  any broker import, and an unimportable broker package (an environment provisioned
+  before broker existed) degrades to the broker-less path with a warning — the gate
+  itself can never break a launch.
+  """
+  if os.environ.get('BROKER_DISABLED') is not None:
+    return False
+  try:
+    import broker  # noqa: F401
+  except ImportError:
+    log.warning('broker package not importable; launching without a broker channel')
+    return False
+  return True
+
+
+def _run_root_via_broker(
+  name: str,
+  command: list[str],
+  proj: Path,
+  *,
+  secrets: Collection[str],
+  optional_secrets: Collection[str],
+  docker_sock: bool,
+  extra_env: Optional[Mapping[str, str]],
+  forward_bro: bool,
+) -> int:
+  """run the session as the broker's root peer: provision its channel socket under
+  `var/cw/broker`, bind-mount it at `/run/broker.sock`, launch attached, and supervise
+  it on the broker loop until it exits. Returns the container's exit code."""
+  # imported here, not at module level: _broker_enabled() must be able to short-circuit
+  # a launch before anything touches the broker package (see its docstring).
+  from broker.dispatcher import Broker
+  from broker.transports.unix import UnixServerTransport
+  from cw.spawn import DockerLaunchSpec, DockerSpawner
+
+  launch = DockerLaunchSpec(
+    command=command,
+    env=dict(extra_env) if extra_env is not None else {},
+    secrets=secrets,
+    attached=True,
+    name=name,
+    optional_secrets=optional_secrets,
+    docker_sock=docker_sock,
+    forward_bro=forward_bro,
+  )
+  return Broker(UnixServerTransport(str(_broker_dir(proj))), DockerSpawner()).run(launch)
+
+
 def run_in_container(
   name: str,
   command: list[str],
@@ -151,6 +210,11 @@ def run_in_container(
   optionally the docker socket, …). When `drop=True`, removes the workspace dir
   and per-session claude state on exit. Returns the container's exit code.
 
+  Unless `BROKER_DISABLED` short-circuits it (see `_broker_enabled`), the session runs
+  as the root peer of a broker whose loop supervises it: the per-peer channel socket is
+  provisioned before `docker create`, bind-mounted at `/run/broker.sock`, and pointed at
+  by `BROKER_CHANNEL`. The post-exit finish below runs after `Broker.run()` returns.
+
   `secrets` is the required scoped credential set hydrated into the container's
   ~/.ppp (see `credentials.build_scoped_store`); a missing secret raises (strict).
   `optional_secrets` is the best-effort tier — hydrated when resolvable, silently
@@ -163,28 +227,39 @@ def run_in_container(
   `ask`/`do-task`/`call` hop, whose LLM-process container never runs Claude Code and
   so must not trigger a `cw populate-bro-skills` (see `_docker_create_argv`).
   """
-  proj = _project_root()
-  session = _containers_dir(proj) / name
-  session.mkdir(parents=True, exist_ok=True)
   # the container starts with origin/master only as fresh as the host's last fetch
   # (the entrypoint copies the ref from /host-repo, no network). that is fine: the
   # only operations that decide on master ancestry — /pr and /land — fetch from
   # GitHub themselves before rebasing (the container's origin points upstream), so
   # a launch-time refresh here would buy nothing they don't redo. the lone reader of
   # a possibly-stale ref, infra's git_changes diff, is informational.
-  tag = _image_tag()
-  _ensure_image(tag)
-  # build the scoped store in memory (strict: a missing secret raises before the
-  # container is created), then inject it into the pre-start container's writable
-  # layer via `docker cp`. nothing plaintext touches the host disk.
-  store = credentials.build_scoped_store(secrets, optional=optional_secrets)
+  proj = _project_root()
   names = sorted(set(secrets))
   log.info('scoped secrets for %s: %s', name, ', '.join(names) if len(names) > 0 else '(none)')
   optional_names = sorted(set(optional_secrets) - set(secrets))
   if len(optional_names) > 0:
     log.info('optional (best-effort) secrets for %s: %s', name, ', '.join(optional_names))
-  created = subprocess.run(
-    _docker_create_argv(
+  if _broker_enabled():
+    code = _run_root_via_broker(
+      name,
+      command,
+      proj,
+      secrets=secrets,
+      optional_secrets=optional_secrets,
+      docker_sock=docker_sock,
+      extra_env=extra_env,
+      forward_bro=forward_bro,
+    )
+  else:
+    session = _containers_dir(proj) / name
+    session.mkdir(parents=True, exist_ok=True)
+    tag = _image_tag()
+    _ensure_image(tag)
+    # build the scoped store in memory (strict: a missing secret raises before the
+    # container is created), then inject it into the pre-start container's writable
+    # layer via `docker cp`. nothing plaintext touches the host disk.
+    store = credentials.build_scoped_store(secrets, optional=optional_secrets)
+    argv = _docker_create_argv(
       tag,
       name,
       proj,
@@ -193,28 +268,11 @@ def run_in_container(
       docker_sock=docker_sock,
       extra_env=extra_env,
       forward_bro=forward_bro,
-    ),
-    capture_output=True,
-    text=True,
-  )
-  if created.returncode != 0:
-    raise RuntimeError(f'docker create for {name} failed: {created.stderr.strip()}')
-  container_id = created.stdout.strip()
-  cp = subprocess.run(
-    ['docker', 'cp', '-', f'{container_id}:/home/cw'],
-    input=_ppp_tarball(store),
-    capture_output=True,
-  )
-  if cp.returncode != 0:
-    # a created-never-started container isn't covered by --rm; remove it so it
-    # doesn't linger (cw clean would reclaim it anyway, but eagerly is tidier).
-    subprocess.run(['docker', 'rm', '-f', container_id], capture_output=True)
-    raise RuntimeError(
-      f'docker cp of scoped store into {name} failed: {cp.stderr.decode().strip()}'
     )
-  # `docker start -a -i` reattaches the TTY/stdin and returns the exit code; --rm
-  # (set at create) removes the container — and its scoped secrets — on exit.
-  result = subprocess.run(['docker', 'start', '-a', '-i', container_id])
+    container_id = _create_container(argv, _ppp_tarball(store), name)
+    # `docker start -a -i` reattaches the TTY/stdin and returns the exit code; --rm
+    # (set at create) removes the container — and its scoped secrets — on exit.
+    code = subprocess.run(['docker', 'start', '-a', '-i', container_id]).returncode
   # `--bare` (the `--bro` flow) runs claude hooks-free, so the in-container
   # session-log hooks never upload the transcript — sync it host-side now, before
   # any `drop` removes it. native sessions keep self-uploading via their hooks.
@@ -226,4 +284,4 @@ def run_in_container(
       log.info('removed container workspace %s', name)
     except RuntimeError as e:
       log.warning('could not fully remove container workspace %s: %s', name, e)
-  return result.returncode
+  return code

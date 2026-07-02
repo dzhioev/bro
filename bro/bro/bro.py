@@ -8,6 +8,7 @@ from typing import ClassVar, Optional, Self
 import llm.llms.chat_gpt
 import llm.mcp
 from base import credentials
+from bro.channel import BroChannel
 from bro.datasources.base import DataSource
 from llm.llm import LLM, LLMSpec
 from llm.observer import BoringRenderer, NullObserver, Observer
@@ -437,7 +438,8 @@ class BaseBro(ABC):
     self._tracker = tracker if tracker is not None else self._make_tracker()
     llm = self._create_llm(interactive=False)
     system_prompt = self._system_prompt_for(interactive=False)
-    self._tracker.start_trail(
+    channel = self._make_channel()
+    trail_id = self._tracker.start_trail(
       bro=self.name,
       llm_spec=self.llm_spec.dump(),
       system_prompt=system_prompt,
@@ -445,21 +447,30 @@ class BaseBro(ABC):
       interactive=False,
       entry_point='cli:bro_run',
     )
+    if channel is not None:
+      channel.started(trail_id)
     messages = [
       {'role': 'system', 'content': system_prompt},
       {'role': 'user', 'content': input},
     ]
     end_reason: EndReason = 'terminal'
+    result: Optional[str] = None
     try:
-      return await llm.send(messages, request_timeout=request_timeout)
-    except BroRaised:
+      result = await llm.send(messages, request_timeout=request_timeout)
+      return result
+    except BroRaised as raised:
       end_reason = 'raised'
+      result = raised.reason
       raise
-    except Exception:
+    except Exception as error:
       end_reason = 'error'
+      result = str(error)
       raise
     finally:
       self._tracker.end_trail(end_reason)
+      if channel is not None:
+        channel.completed(result, end_reason)
+        channel.close()
 
   async def send(
     self,
@@ -519,6 +530,10 @@ class BaseBro(ABC):
 
   def _make_tracker(self) -> Tracker:
     return _default_tracker_factory()
+
+  def _make_channel(self) -> Optional[BroChannel]:
+    # None (no BROKER_CHANNEL in the environment) keeps the lifecycle emission inert
+    return BroChannel.from_env()
 
   def _create_llm(self, *, interactive: bool) -> LLM:
     return self.llm_spec.create_llm(
