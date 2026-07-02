@@ -188,4 +188,37 @@ if [ -n "${CW_BRO:-}" ] && [ "${CW_SKIP_VENV:-}" != "1" ] && [ "$bare_session" =
   cw populate-bro-skills "$CW_BRO" >&2
 fi
 
+# --bro sessions serve the bro's tools over a session-local HTTP MCP server;
+# claude's mcp-config (built host-side by cw, see cw/bro.py:_bro_launch) points
+# one entry per namespace at it. start the server and gate the exec on its
+# readiness so claude's first turn — which a seeded `-p` prompt fires the moment
+# the REPL is up — already has every tool connected; the multi-second bro import
+# is paid here, off claude's critical path. output goes to a log file because
+# stdout/stderr belong to claude's TUI after the exec; the server dies with the
+# container (claude is the container's main process).
+if [ -n "${CW_BRO_MCP_TOKEN:-}" ]; then
+  bro_mcp_log=/tmp/bro-mcp-server.log
+  mcp-server "bro:$CW_BRO" --http --port "$CW_BRO_MCP_PORT" \
+    --bearer-token "$CW_BRO_MCP_TOKEN" > "$bro_mcp_log" 2>&1 &
+  bro_mcp_pid=$!
+  bro_mcp_ready=0
+  for _ in $(seq 1 300); do
+    if ! kill -0 "$bro_mcp_pid" 2>/dev/null; then
+      echo "error: bro MCP server exited during startup; $bro_mcp_log:" >&2
+      cat "$bro_mcp_log" >&2
+      exit 1
+    fi
+    if curl -fsS -o /dev/null "http://127.0.0.1:$CW_BRO_MCP_PORT/health" 2>/dev/null; then
+      bro_mcp_ready=1
+      break
+    fi
+    sleep 0.2
+  done
+  if [ "$bro_mcp_ready" != "1" ]; then
+    echo "error: bro MCP server not ready after 60s; $bro_mcp_log:" >&2
+    cat "$bro_mcp_log" >&2
+    exit 1
+  fi
+fi
+
 exec "$@"

@@ -3,13 +3,13 @@ import os
 import subprocess
 import sys
 import tempfile
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Optional
 
 from base import credentials, log
-from cw.bro import _bro_claude_argv, _populate_bro_skills
+from cw.bro import _bro_launch, _populate_bro_skills
 from cw.constants import _CW_MODEL
 from cw.containers import _replace_container_resume_hint, run_in_container
 from cw.git import git_out
@@ -219,13 +219,14 @@ def start_session(spec: SessionSpec) -> int:
 
   if spec.bro is not None:
     # CW_BRO themes the container session (banner, statusLine). the bro's skills
-    # reach a `--bro` session through its `skill` MCP tool (mounted by
-    # `mcp-server bro:<name>`), not `.claude/skills/` slash commands — `claude
-    # --bare` skips skills auto-discovery. host-mode `--bro` is unsupported (the
-    # --bare flow needs the container entrypoint to wire MCP and the api-key
-    # helper).
+    # reach a `--bro` session through its `skill` MCP tool (served by the
+    # session-local bro MCP server), not `.claude/skills/` slash commands —
+    # `claude --bare` skips skills auto-discovery. host-mode `--bro` is
+    # unsupported (the --bare flow needs the container entrypoint to start that
+    # server and wire the api-key helper).
     os.environ['CW_BRO'] = spec.bro
-    bro_argv = _bro_claude_argv(spec.bro)
+    launch = _bro_launch(spec.bro)
+    bro_argv = launch.claude_argv
     _set_session_context(
       spec,
       bro_argv[bro_argv.index('--system-prompt') + 1],
@@ -250,6 +251,7 @@ def start_session(spec: SessionSpec) -> int:
       secrets=required,
       optional_secrets=scoped.optional,
       docker_sock=scoped.docker_sock,
+      extra_env=launch.extra_env,
     )
 
   fast_mode_settings = json.dumps({'fastMode': spec.fast})
@@ -320,16 +322,24 @@ def cw(
   secrets: Collection[str] = (),
   optional_secrets: Collection[str] = (),
   docker_sock: bool = True,
+  extra_env: Optional[Mapping[str, str]] = None,
 ) -> int:
   container = spec.container
   if container and os.environ.get('CW_IN_CONTAINER') is not None:
+    if spec.bro is not None:
+      # a --bro session depends on the container entrypoint (bro MCP server
+      # start + apiKeyHelper wiring), so it cannot degrade to host mode
+      log.error('--bro sessions cannot nest inside a container')
+      return 1
     log.info('already inside a container; falling back to host mode')
     container = False
 
   if container:
-    # the entrypoint reads CW_BASE_REF to base the fresh clone's worktree branch
-    # (the sha's objects are already shared from /host-repo via clone alternates)
-    extra_env = {'CW_BASE_REF': base_ref} if base_ref is not None else None
+    env = dict(extra_env) if extra_env is not None else {}
+    if base_ref is not None:
+      # the entrypoint reads CW_BASE_REF to base the fresh clone's worktree branch
+      # (the sha's objects are already shared from /host-repo via clone alternates)
+      env['CW_BASE_REF'] = base_ref
     code = run_in_container(
       spec.name,
       ['claude', *claude_args],
@@ -337,7 +347,7 @@ def cw(
       secrets=secrets,
       optional_secrets=optional_secrets,
       docker_sock=docker_sock,
-      extra_env=extra_env,
+      extra_env=env if len(env) > 0 else None,
     )
     if not spec.drop and code == 0:
       _replace_container_resume_hint(spec.name)

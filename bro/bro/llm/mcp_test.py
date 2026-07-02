@@ -278,7 +278,7 @@ class TestInProcessMCPServer:
     tools = await server.list_tools()
     assert len(tools) == 2
     # the server's own list_tools returns the local (in-namespace) names; the
-    # namespacing happens at the assembling layer (ToolRegistry / _Aggregate).
+    # namespacing happens at the assembling layer (ToolRegistry).
     assert tools[0].name == 'tool_a'
     assert tools[1].name == 'tool_b'
 

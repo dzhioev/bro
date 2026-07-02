@@ -92,7 +92,7 @@ def _container_secrets(bro_name: str, *, mcp: Optional[str], bro_mode: bool) -> 
   except KeyError as e:
     # unknown bro (registry KeyError) only — other failures propagate rather than
     # collapse into a silently under-scoped session. a native session still gets
-    # the socket; a --bro fallback does not (moot anyway — _bro_claude_argv
+    # the socket; a --bro fallback does not (moot anyway — _bro_launch
     # re-raises the same KeyError downstream).
     log.warning('could not resolve bro %r for credential scoping: %s', bro_name, e)
     return ScopedSecrets(required=secrets, optional=optional, docker_sock=not bro_mode)

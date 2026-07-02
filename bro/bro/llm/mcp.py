@@ -192,10 +192,10 @@ class MCPServer(ABC):
   # absent one is skipped, not a launch failure. mirrors `needed_secrets`.
   optional_secrets: tuple[str, ...] = ()
   # the flat namespace this server's tools live in (`flow`, `dev`, `infra`,
-  # `bro`, `<name>-source`). the assembling layer (`ToolRegistry` /
-  # `mcp_server._Aggregate`) reads it to form `namespace__tool` wire names and to
-  # keep two sources' identically-named tools (e.g. `search`) distinct. set by
-  # whatever builds the server.
+  # `bro`, `<name>-source`). the assembling layer reads it to keep two sources'
+  # identically-named tools (e.g. `search`) distinct — `ToolRegistry` forms
+  # `namespace__tool` wire names; a per-namespace server host mounts it as the
+  # endpoint. set by whatever builds the server.
   namespace: str
 
   @abstractmethod
@@ -327,8 +327,8 @@ class _NamespacedTool(Tool):
 
   @property
   def description(self) -> str:
-    # render any `has_cred` blocks against live credential availability — the
-    # one place that covers every assembled tool (bro LLM + deployed MCP servers).
+    # render any `has_cred` blocks against live credential availability (the
+    # serving layers that skip this wrapper render them the same way).
     return render_has_cred(self._tool.description, credentials.available, self._declared_secrets)
 
   @property
@@ -344,11 +344,11 @@ class _NamespacedTool(Tool):
 
 
 async def namespaced_tools(server: MCPServer) -> list[Tool]:
-  # a server's tools wrapped with their `namespace__tool` wire names — the shared
-  # step for every layer that assembles tools across servers for a harness
-  # (`ToolRegistry`, `mcp_server._Aggregate`). each caller adds its own
-  # collision policy on top. the server's declared secrets (needed + optional)
-  # ride along so each tool's description can resolve its `has_cred` blocks.
+  # a server's tools wrapped with their `namespace__tool` wire names — the
+  # assembling step for a harness that flattens tools across servers into one
+  # list (`ToolRegistry`), which adds its own collision policy on top. the
+  # server's declared secrets (needed + optional) ride along so each tool's
+  # description can resolve its `has_cred` blocks.
   declared = set(server.needed_secrets) | set(server.optional_secrets)
   return [_NamespacedTool(server.namespace, tool, declared) for tool in await server.list_tools()]
 

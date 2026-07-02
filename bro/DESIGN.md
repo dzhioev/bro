@@ -65,7 +65,7 @@ The same Bro runs from many launchers:
 
 - **Console** — `bro run <name> <input>`, `bro list`, `bro show <name>`. Backed by `bro/run.py`.
 - **HTTP** — `bro/server/server.py` serves the `assistant` Bro on `POST /v1/chat/completions` (OpenAI-compatible). The iOS chat app speaks to this endpoint.
-- **Claude Code** — `cw ss --bro <name>` launches a bare Claude Code session whose system prompt and MCP servers come from the named Bro. Tools are wired through the `mcp-server bro:<name>` stdio shim, which exposes the union of the Bro's declared MCP servers and data-source tools. Useful when the user wants a chat UI over the Bro's policy + toolkit.
+- **Claude Code** — `cw ss --bro <name>` launches a bare Claude Code session whose system prompt and MCP servers come from the named Bro. Tools are served by a session-local HTTP MCP server (`mcp-server bro:<name> --http`) exposing the union of the Bro's declared MCP servers and data-source tools, one endpoint per namespace. Useful when the user wants a chat UI over the Bro's policy + toolkit.
 - **`ask` / `do-task`** — one-shot launchers for autonomous runs; see `do/CLAUDE.md`.
 
 A given Bro need not support every surface — `pm` is consumed by both `cw ss --bro pm` and the `process-inbox` TUI; `librorian` runs from the console. `assistant` (which declares `mcp_servers=[flow.MCPServer()]`) is reachable from every surface — `bro run`/`bro show`, `cw ss --bro assistant`, and the HTTP server — but it is only the HTTP server's *default* bro, so the iOS app reaches it without naming it.

@@ -27,7 +27,7 @@ Launch + lifecycle:
 - `worktrees.py` — host worktree create / provision / finish
 - `listing.py` — `cw list` (one loop over `Workspace.all(proj)`; keeps the `ThreadPoolExecutor` fan-out — mounts fetched concurrently with the per-workspace subject/last_active reads)
 - `clean.py` — `cw clean` (one `_assess` over `Workspace.all(proj)`; keeps the fan-out — host worktrees assessed concurrently with the `docker ps` mounts fetch, containers once it resolves)
-- `bro.py` — `_populate_bro_skills` (skill-symlink surfacing) + `_bro_claude_argv` (the `claude --bare` argv for `--bro`)
+- `bro.py` — `_populate_bro_skills` (skill-symlink surfacing) + `_bro_launch` (the `claude --bare` argv and bro-MCP-server env for `--bro`)
 - `session.py` — the `SessionSpec` dataclass (the parsed session parameters; `to_command_argv` builds `CW_COMMAND` / the resume hint, `resume_variant` clears the create-only inputs) threaded through `start_session` → `cw`, plus `_resolve_base_ref` / `_mcp_config_argv`: the session-parameter plumbing both modes share
 - `cli.py` — `build_parser` + `main`; `__cli_name__ = 'cw'` registers the `cw` alias on top of the canonical `cw.cli` script
 

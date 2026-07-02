@@ -1,11 +1,17 @@
 import json
 import os
+import secrets
+from dataclasses import dataclass
 from pathlib import Path
 
 from base import log
 from cw.constants import _CW_MODEL
 
-_BRO_MCP_SERVER_NAME = 'bro'
+# the port the session's bro MCP server listens on inside the container. fixed:
+# the container network namespace is private, so there is nothing to collide
+# with. the value crosses the host/container boundary via CW_BRO_MCP_PORT (cw
+# builds the claude-config URLs host-side; the entrypoint starts the server).
+_BRO_MCP_PORT = 8300
 # path inside the container; /host-repo is the host project bind mount (see
 # _docker_create_argv). passed as claude code's apiKeyHelper so claude reads the
 # api key from the `anthropic` secret without the "Detected a custom API key"
@@ -56,14 +62,31 @@ def _populate_bro_skills(proj: Path, bro_name: str) -> None:
     log.info('populated .claude/skills/%s/SKILL.md → %s', name, rel)
 
 
-def _bro_claude_argv(bro_name: str) -> list[str]:
-  """build the clean claude argv for `cw ss --bro <bro_name>`.
+@dataclass(frozen=True)
+class _BroLaunch:
+  """the two halves of a `cw ss --bro` launch: the claude argv, and the container
+  env (`CW_BRO_MCP_TOKEN` / `CW_BRO_MCP_PORT`) the entrypoint reads to start the
+  bro MCP server the argv's mcp-config points at."""
 
-  resolves the bro to extract its system prompt (no shared/base prepend), wires
-  its declared MCP servers + data sources through the `mcp-server bro:<name>`
-  stdio shim, and uses `--bare` + `--strict-mcp-config` + `--tools ""` to start
-  claude with no project/user CLAUDE.md, no host MCP servers, no built-in
-  skills, and only the bro's MCP tools. supplies apiKeyHelper via `--settings`
+  claude_argv: list[str]
+  extra_env: dict[str, str]
+
+
+def _bro_launch(bro_name: str) -> _BroLaunch:
+  """build the clean claude argv + container env for `cw ss --bro <bro_name>`.
+
+  resolves the bro to extract its system prompt (no shared/base prepend) and
+  enumerate its MCP namespaces. the bro's tools are served by a session-local
+  HTTP MCP server (`mcp-server bro:<name> --http`) that the container entrypoint
+  starts and health-gates before launching claude, so the heavy bro import
+  happens off claude's critical path and the first turn — which a seeded `-p`
+  prompt fires the moment the REPL is up — already has every tool connected.
+  the mcp-config carries one `{type: http}` entry per namespace, mounted under
+  the namespace as the server key, so tools surface as `mcp__<namespace>__<tool>`
+  (the convention in prompts/tool_names.md); a per-session bearer token guards
+  the endpoints. `--bare` + `--strict-mcp-config` + `--tools ""` start claude
+  with no project/user CLAUDE.md, no host MCP servers, no built-in skills, and
+  only the bro's MCP tools. supplies apiKeyHelper via `--settings`
   (flagSettings, not project/local) so claude executes it without a workspace
   trust gate.
 
@@ -74,16 +97,23 @@ def _bro_claude_argv(bro_name: str) -> list[str]:
   from bro.registry import create_bro
 
   bro = create_bro(bro_name)
+  token = secrets.token_urlsafe(32)
+  namespaces = list(dict.fromkeys(s.namespace for s in bro.claude_bro_mcp_servers()))
   mcp_config = json.dumps(
     {
       'mcpServers': {
-        _BRO_MCP_SERVER_NAME: {'command': 'mcp-server', 'args': [f'bro:{bro_name}']},
+        ns: {
+          'type': 'http',
+          'url': f'http://127.0.0.1:{_BRO_MCP_PORT}/{ns}',
+          'headers': {'Authorization': f'Bearer {token}'},
+        }
+        for ns in namespaces
       },
     },
     separators=(',', ':'),
   )
   settings = json.dumps({'apiKeyHelper': _BRO_API_KEY_HELPER}, separators=(',', ':'))
-  return [
+  claude_argv = [
     '--model',
     _CW_MODEL,
     '--bare',
@@ -97,5 +127,9 @@ def _bro_claude_argv(bro_name: str) -> list[str]:
     '--tools',
     '',
     '--allowed-tools',
-    f'mcp__{_BRO_MCP_SERVER_NAME}__*',
+    ','.join(f'mcp__{ns}__*' for ns in namespaces),
   ]
+  return _BroLaunch(
+    claude_argv=claude_argv,
+    extra_env={'CW_BRO_MCP_TOKEN': token, 'CW_BRO_MCP_PORT': str(_BRO_MCP_PORT)},
+  )

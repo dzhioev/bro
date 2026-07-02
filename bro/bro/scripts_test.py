@@ -6,9 +6,15 @@ import pytest
 import cw.bro
 
 
-class TestBroClaudeArgv:
+def _pm_namespaces() -> list[str]:
+  from bro.registry import create_bro
+
+  return list(dict.fromkeys(s.namespace for s in create_bro('pm').claude_bro_mcp_servers()))
+
+
+class TestBroLaunch:
   def test_basic_shape(self):
-    argv = cw.bro._bro_claude_argv('pm')
+    argv = cw.bro._bro_launch('pm').claude_argv
     assert '--bare' in argv
     assert '--strict-mcp-config' in argv
     # slash commands must stay enabled so the bro's skills (populated as
@@ -17,29 +23,44 @@ class TestBroClaudeArgv:
     # tools disabled (empty string follows --tools)
     i = argv.index('--tools')
     assert argv[i + 1] == ''
-    # allowlist scoped to bro:
-    i = argv.index('--allowed-tools')
-    assert argv[i + 1] == 'mcp__bro__*'
 
-  def test_mcp_config_points_at_shim(self):
-    argv = cw.bro._bro_claude_argv('pm')
+  def test_allowed_tools_cover_each_namespace(self):
+    argv = cw.bro._bro_launch('pm').claude_argv
+    i = argv.index('--allowed-tools')
+    assert argv[i + 1] == ','.join(f'mcp__{ns}__*' for ns in _pm_namespaces())
+
+  def test_mcp_config_one_http_entry_per_namespace(self):
+    launch = cw.bro._bro_launch('pm')
+    argv = launch.claude_argv
     i = argv.index('--mcp-config')
     cfg = json.loads(argv[i + 1])
-    bro_server = cfg['mcpServers']['bro']
-    assert bro_server['command'] == 'mcp-server'
-    assert bro_server['args'] == ['bro:pm']
+    namespaces = _pm_namespaces()
+    # the service server's `skill` tool rides the `bro` namespace
+    assert 'bro' in namespaces
+    assert list(cfg['mcpServers']) == namespaces
+    token = launch.extra_env['CW_BRO_MCP_TOKEN']
+    port = launch.extra_env['CW_BRO_MCP_PORT']
+    for ns, entry in cfg['mcpServers'].items():
+      assert entry['type'] == 'http'
+      assert entry['url'] == f'http://127.0.0.1:{port}/{ns}'
+      assert entry['headers'] == {'Authorization': f'Bearer {token}'}
+
+  def test_token_is_per_launch(self):
+    first = cw.bro._bro_launch('pm').extra_env['CW_BRO_MCP_TOKEN']
+    second = cw.bro._bro_launch('pm').extra_env['CW_BRO_MCP_TOKEN']
+    assert first != second
 
   def test_system_prompt_is_bros_own(self):
     from bro.registry import create_bro
 
     bro = create_bro('pm')
-    argv = cw.bro._bro_claude_argv('pm')
+    argv = cw.bro._bro_launch('pm').claude_argv
     i = argv.index('--system-prompt')
     assert argv[i + 1] == bro.system_prompt
 
   def test_unknown_bro_raises(self):
     with pytest.raises(KeyError, match='unknown bro'):
-      cw.bro._bro_claude_argv('does-not-exist')
+      cw.bro._bro_launch('does-not-exist')
 
 
 class TestPopulateBroSkills:
