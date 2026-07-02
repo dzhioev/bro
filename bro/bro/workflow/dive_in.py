@@ -56,7 +56,7 @@ def _prefetch_task(task_id: str) -> tuple[str, str]:
 
   Fetches the task metadata + page body here, in dive-in, so the seeded `/fix`
   message can carry them and the agent's first turn doesn't call get_task_info /
-  get_page_content. The flow MCP server is not yet connected on the session's
+  read_page_content. The flow MCP server is not yet connected on the session's
   first turn, so an in-session call would race the connection and error.
   """
   import dataclasses
@@ -76,7 +76,7 @@ def _prefetch_task(task_id: str) -> tuple[str, str]:
   block = (
     'Task metadata and page body were pre-fetched at launch (the flow MCP server '
     'is not yet connected on the first turn) — use them as your initial read; do '
-    'not call get_task_info / get_page_content for this task.\n\n'
+    'not call get_task_info / read_page_content for this task.\n\n'
     f'## Task metadata\n```json\n{meta}\n```\n\n## Task page\n{page}'
   )
   return task.name, block

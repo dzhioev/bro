@@ -14,13 +14,13 @@ This document explains the modes, slug derivation, the `/fix`-seeding rules, and
 
 ### Focused mode (`--focus`)
 
-`dive-in --focus` (no `-t`, no `--new`) reads the currently focused task from the focus client (`flow/focus/client/client.py`). If nothing is focused, it logs an error and exits 1 — there is no implicit fallback to "any task". The first user message becomes `/fix --focus`, which tells the `fix` skill to call `get_focused_task` → `get_task_info` → `get_page_content`.
+`dive-in --focus` (no `-t`, no `--new`) reads the currently focused task from the focus client (`flow/focus/client/client.py`). If nothing is focused, it logs an error and exits 1 — there is no implicit fallback to "any task". The first user message becomes `/fix --focus`, which tells the `fix` skill to call `get_focused_task` → `get_task_info` → `read_page_content`.
 
 ### Task mode (`-t / --task <ref>`)
 
 `-t` accepts either a Notion URL or a UUID (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`). URL forms accepted: `https://[www.|app.]notion.{so,com,site}/[<path>/][<slug>-]<32hex>(?:\?…)?` — the slug prefix and the workspace/path prefix are both optional, so root-level (`notion.so/<hex>`), workspace-prefixed without slug (`notion.so/<ws>/<hex>`), and share URLs (`app.notion.com/p/<ws>/<slug>-<hex>`) all parse. URLs get normalised to UUIDs by `_resolve_task_id` — the 32-hex tail is split into the canonical 8-4-4-4-12 layout. A bare 32-hex string (no URL prefix) is **not** accepted (would be ambiguous with a future ref shape). Backslash-escaped query strings (e.g. shell-pasted `\?source\=copy_link`) are tolerated.
 
-The first user message becomes `/fix <original-task-ref>` — the URL or UUID exactly as the user typed it. The skill body resolves it and calls `get_task_info` / `get_page_content` itself.
+The first user message becomes `/fix <original-task-ref>` — the URL or UUID exactly as the user typed it. The skill body resolves it and calls `get_task_info` / `read_page_content` itself.
 
 If `--focus` is combined with `-t`, the focus client is also told to focus the resolved task before the session starts — this is the canonical way to "switch to this task and dive in" in one command. In that case the first message becomes `/fix --focus` instead (focus was just set, so the focused form is equivalent and slightly cleaner).
 
@@ -30,7 +30,7 @@ If `--focus` is combined with `-t`, the focus client is also told to focus the r
 
 1. Collect any missing properties (name, importance, project, tags, deadline, content) from the user.
 2. Call `add_task` and treat the returned id as the target.
-3. Continue with the normal `get_task_info` / `get_page_content` flow on that new id.
+3. Continue with the normal `get_task_info` / `read_page_content` flow on that new id.
 4. If `--focus` was passed, call `set_focus` on the newly created task's id.
 
 `-t` and `--new` are mutually exclusive (argparse-enforced); `--focus` is orthogonal and combines with either or stands alone.
