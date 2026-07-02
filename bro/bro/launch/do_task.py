@@ -24,9 +24,9 @@ async def do_task(bro: BaseBro, task: str, observer: Optional[Observer] = None) 
 def main(argv: list[str]) -> Optional[int]:
   return run(
     cli_name='do-task',
-    parser_desc='run a bro on a flow task',
-    arg_name='task',
-    arg_help='flow task reference: id, dashed UUID, Notion URL, or description',
-    run_fn=do_task,
+    parser_description='run a bro on a flow task',
+    argument_name='task',
+    argument_help='flow task reference: id, dashed UUID, Notion URL, or description',
+    run_function=do_task,
     argv=argv,
   )

@@ -22,8 +22,8 @@ def _read_jsonl(path: Path) -> list[dict]:
   return [json.loads(line) for line in path.read_text().splitlines() if len(line) > 0]
 
 
-def _req_payload(req: tuple[str, str, Optional[bytes], dict[str, str]]) -> dict:
-  body = req[2]
+def _request_payload(request: tuple[str, str, Optional[bytes], dict[str, str]]) -> dict:
+  body = request[2]
   assert body is not None
   return json.loads(body)
 
@@ -265,7 +265,7 @@ class _FakeResponse:
     return self._body
 
 
-class _FakeConn:
+class _FakeConnection:
   """programmable stand-in for `http.client.HTTPSConnection`.
 
   each entry queued via `queue(...)` represents one round-trip and is consumed
@@ -302,9 +302,9 @@ class _FakeConn:
     self.closes += 1
 
 
-def _install_fake_conn(monkeypatch: pytest.MonkeyPatch) -> _FakeConn:
-  fake = _FakeConn()
-  # the tracker re-opens after every drop_conn; tests use a single shared fake
+def _install_fake_connection(monkeypatch: pytest.MonkeyPatch) -> _FakeConnection:
+  fake = _FakeConnection()
+  # the tracker re-opens after every drop_connection; tests use a single shared fake
   # because the queued response semantics already capture the per-attempt state.
   monkeypatch.setattr(http.client, 'HTTPSConnection', lambda *args, **kwargs: fake)
   # the retry loop sleeps between attempts; skip the wall-clock wait so tests
@@ -325,7 +325,7 @@ class TestHTTPTrackerConstructor:
 
 class TestHTTPTrackerStartTrail:
   def test_posts_v1_trails_and_returns_server_trail_id(self, monkeypatch):
-    fake = _install_fake_conn(monkeypatch)
+    fake = _install_fake_connection(monkeypatch)
     fake.queue((201, b'{"trail_id": "T-server"}'))
     tracker = HTTPTracker('https://trails.example', 'tok')
     trail_id = tracker.start_trail(
@@ -354,7 +354,7 @@ class TestHTTPTrackerStartTrail:
     assert payload['entry_point'] == 'cli:bro_run'
 
   def test_serializes_parent_on_forks(self, monkeypatch):
-    fake = _install_fake_conn(monkeypatch)
+    fake = _install_fake_connection(monkeypatch)
     fake.queue((201, b'{"trail_id": "T1"}'))
     tracker = HTTPTracker('https://trails.example', 'tok')
     parent = Parent(trail_id='abc', step_id='def', relationship='fork')
@@ -372,7 +372,7 @@ class TestHTTPTrackerStartTrail:
     assert payload['parent'] == {'trail_id': 'abc', 'step_id': 'def', 'relationship': 'fork'}
 
   def test_fail_fast_no_retries_on_transport_error(self, monkeypatch):
-    fake = _install_fake_conn(monkeypatch)
+    fake = _install_fake_connection(monkeypatch)
     fake.queue(ConnectionError('boom'))
     tracker = HTTPTracker('https://trails.example', 'tok')
     with pytest.raises(ConnectionError):
@@ -387,7 +387,7 @@ class TestHTTPTrackerStartTrail:
     assert len(fake.requests) == 1
 
   def test_fail_fast_no_retries_on_http_error(self, monkeypatch):
-    fake = _install_fake_conn(monkeypatch)
+    fake = _install_fake_connection(monkeypatch)
     fake.queue((500, b'oops'))
     tracker = HTTPTracker('https://trails.example', 'tok')
     with pytest.raises(HTTPStatusError) as exc_info:
@@ -404,8 +404,8 @@ class TestHTTPTrackerStartTrail:
 
 
 class TestHTTPTrackerStep:
-  def _ready(self, monkeypatch) -> tuple[HTTPTracker, _FakeConn]:
-    fake = _install_fake_conn(monkeypatch)
+  def _ready(self, monkeypatch) -> tuple[HTTPTracker, _FakeConnection]:
+    fake = _install_fake_connection(monkeypatch)
     fake.queue((201, b'{"trail_id": "T1"}'))
     tracker = HTTPTracker('https://trails.example', 'tok')
     tracker.start_trail(
@@ -419,7 +419,7 @@ class TestHTTPTrackerStep:
     return tracker, fake
 
   def test_step_before_start_trail_raises(self, monkeypatch):
-    _install_fake_conn(monkeypatch)
+    _install_fake_connection(monkeypatch)
     tracker = HTTPTracker('https://trails.example', 'tok')
     with pytest.raises(RuntimeError):
       tracker.step('reasoning', 'thinking')
@@ -475,7 +475,7 @@ class TestHTTPTrackerStep:
     fake.queue(ConnectionError('blip'))
     fake.queue((204, b''))
     tracker.step('reasoning', 'thinking', turn_index=1)
-    # one start_trail conn open + at least one drop after the blip.
+    # one start_trail connection open + at least one drop after the blip.
     assert fake.closes >= 1
 
   def test_retry_reuses_the_same_step_id(self, monkeypatch):
@@ -485,7 +485,7 @@ class TestHTTPTrackerStep:
     tracker.step('reasoning', 'thinking', turn_index=1)
     step_requests = [r for r in fake.requests if r[1].endswith('/steps')]
     assert len(step_requests) == 2
-    ids = [_req_payload(r)['step_id'] for r in step_requests]
+    ids = [_request_payload(r)['step_id'] for r in step_requests]
     # both attempts of the same POST carry one id — that is what lets the server
     # treat the retry as an idempotent no-op rather than a duplicate row.
     assert ids[0] == ids[1]
@@ -496,7 +496,7 @@ class TestHTTPTrackerStep:
     fake.queue((204, b''))
     tracker.step('reasoning', 'a', turn_index=1)
     tracker.step('reasoning', 'b', turn_index=2)
-    ids = [_req_payload(r)['step_id'] for r in fake.requests if r[1].endswith('/steps')]
+    ids = [_request_payload(r)['step_id'] for r in fake.requests if r[1].endswith('/steps')]
     assert len(ids) == 2 and ids[0] != ids[1]
 
   def test_deterministic_4xx_is_not_retried(self, monkeypatch):
@@ -530,8 +530,8 @@ class TestHTTPTrackerStep:
 
 
 class TestHTTPTrackerEndTrail:
-  def _ready(self, monkeypatch) -> tuple[HTTPTracker, _FakeConn]:
-    fake = _install_fake_conn(monkeypatch)
+  def _ready(self, monkeypatch) -> tuple[HTTPTracker, _FakeConnection]:
+    fake = _install_fake_connection(monkeypatch)
     fake.queue((201, b'{"trail_id": "T1"}'))
     tracker = HTTPTracker('https://trails.example', 'tok')
     tracker.start_trail(

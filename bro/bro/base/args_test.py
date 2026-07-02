@@ -262,8 +262,8 @@ class TestEnvBooleans:
     parser.add_argument('--flag', action='store_true')
     with pytest.raises(SystemExit):
       parser.parse_args(['--allow-env'])
-    err = capsys.readouterr().err
-    assert re.search(r'invalid value for env FLAG', err)
+    error = capsys.readouterr().err
+    assert re.search(r'invalid value for env FLAG', error)
 
   def test_store_false_env_1_yields_false(self, monkeypatch):
     # store_false default is True; passing the flag sets to False.
@@ -555,13 +555,13 @@ class TestReconstruct:
     args = parser.parse(['cmd', '-c'])
     assert parser.reconstruct(args) == [parser.prog, '-c']
 
-  def test_value_arg_included_when_set(self):
+  def test_value_argument_included_when_set(self):
     parser = Parser()
     parser.add_argument('--name', default=None)
     args = parser.parse(['cmd', '--name', 'foo'])
     assert parser.reconstruct(args) == [parser.prog, '--name', 'foo']
 
-  def test_value_arg_omitted_when_default(self):
+  def test_value_argument_omitted_when_default(self):
     parser = Parser()
     parser.add_argument('--name', default='team')
     args = parser.parse(['cmd'])
@@ -672,7 +672,7 @@ class TestDispatch:
   def test_routes_with_kwargs(self):
     assert self._build().dispatch(['prog', 'create', '--title', 'hi']) == ('create', 'hi')
 
-  def test_routes_no_arg_subcommand(self):
+  def test_routes_no_argument_subcommand(self):
     assert self._build().dispatch(['prog', 'list']) == 'listed'
 
   def test_no_subcommand_prints_help_returns_1(self, capsys):

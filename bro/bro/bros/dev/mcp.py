@@ -213,7 +213,7 @@ def bash(
   command: str, limit: int = DEFAULT_LIMIT, timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS
 ) -> str:
   try:
-    proc = spawn.run(
+    process = spawn.run(
       ['bash', '-c', command],
       capture_output=True,
       text=True,
@@ -224,14 +224,16 @@ def bash(
       f'TIMED OUT after {timeout_seconds}s — killed. Re-run with a larger '
       'timeout_seconds if the command needs more time.'
     )
-  combined = proc.stdout
-  if len(proc.stderr) > 0:
-    combined = f'{combined}\n--- stderr ---\n{proc.stderr}' if len(combined) > 0 else proc.stderr
+  combined = process.stdout
+  if len(process.stderr) > 0:
+    combined = (
+      f'{combined}\n--- stderr ---\n{process.stderr}' if len(combined) > 0 else process.stderr
+    )
   capped = _apply_limit(combined, limit, keep='tail')
   return (
-    f'exit_code: {proc.returncode}\n{capped}'
+    f'exit_code: {process.returncode}\n{capped}'
     if len(capped) > 0
-    else f'exit_code: {proc.returncode}'
+    else f'exit_code: {process.returncode}'
   )
 
 
@@ -254,24 +256,24 @@ def grep(
 ) -> str:
   # -D skip: never read a device, FIFO, or socket (recursion or named directly), so
   # the tool can't block forever on a pipe — the timeout is only a huge-tree backstop.
-  cmd = ['grep', '-rnE', '-D', 'skip']
+  command = ['grep', '-rnE', '-D', 'skip']
   if case_insensitive:
-    cmd.append('-i')
+    command.append('-i')
   if glob is not None:
-    cmd.extend(['--include', glob])
-  cmd.extend(['--', pattern, path])
+    command.extend(['--include', glob])
+  command.extend(['--', pattern, path])
   try:
-    proc = spawn.run(cmd, capture_output=True, text=True, timeout=timeout_seconds)
+    process = spawn.run(command, capture_output=True, text=True, timeout=timeout_seconds)
   except subprocess.TimeoutExpired:
     return (
       f'TIMED OUT after {timeout_seconds}s — killed. Re-run with a larger '
       'timeout_seconds if the search needs more time.'
     )
-  if proc.returncode == 1:
+  if process.returncode == 1:
     return 'no matches'
-  if proc.returncode != 0:
-    return f'grep exit {proc.returncode}: {proc.stderr.strip()}'
-  return _apply_limit(proc.stdout, limit, keep='head')
+  if process.returncode != 0:
+    return f'grep exit {process.returncode}: {process.stderr.strip()}'
+  return _apply_limit(process.stdout, limit, keep='head')
 
 
 describe(
@@ -303,7 +305,7 @@ describe(
 
 
 _TOOL_FUNCTIONS = [read_reference, read_file, write_file, edit_file, bash, grep, glob]
-TOOLS: list[Tool] = [FunctionTool(fn) for fn in _TOOL_FUNCTIONS]
+TOOLS: list[Tool] = [FunctionTool(function) for function in _TOOL_FUNCTIONS]
 
 
 class MCPServer(InProcessMCPServer):

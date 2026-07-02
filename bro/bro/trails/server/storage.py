@@ -491,8 +491,8 @@ class Storage:
     head = await asyncio.to_thread(self._s3.head_object, Bucket=self._bucket, Key=key)
     size = int(head.get('ContentLength', 0))
     if size <= INLINE_RESPONSE_THRESHOLD_BYTES:
-      obj = await asyncio.to_thread(self._s3.get_object, Bucket=self._bucket, Key=key)
-      raw = obj['Body'].read()
+      s3_object = await asyncio.to_thread(self._s3.get_object, Bucket=self._bucket, Key=key)
+      raw = s3_object['Body'].read()
       try:
         item['body'] = json.loads(raw)
       except json.JSONDecodeError:

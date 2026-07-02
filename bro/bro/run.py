@@ -7,14 +7,14 @@ import base.args
 __cli_name__ = 'bro'
 
 
-def _cmd_list() -> None:
+def _command_list() -> None:
   from bro.registry import list_classes
 
   for cls in list_classes():
     print(f'{cls.name}: {cls.description}')
 
 
-def _cmd_run(name: str, input: str, rich: bool) -> Optional[int]:
+def _command_run(name: str, input: str, rich: bool) -> Optional[int]:
   from bro.bro import BroRaised
   from bro.registry import create_bro
 
@@ -32,7 +32,7 @@ def _cmd_run(name: str, input: str, rich: bool) -> Optional[int]:
   print(result)
 
 
-def _cmd_show(name: str, system_prompt: bool) -> None:
+def _command_show(name: str, system_prompt: bool) -> None:
   from bro.registry import create_bro
   from bro.show import format_card
 
@@ -53,9 +53,9 @@ def main(argv: list[str]) -> Optional[int]:
     action='store_true',
     help='render the trace as colored rich panels instead of plain log lines',
   )
-  run_parser.set_handler(_cmd_run)
+  run_parser.set_handler(_command_run)
 
-  subparser.add_parser('list', help='list registered bros').set_handler(_cmd_list)
+  subparser.add_parser('list', help='list registered bros').set_handler(_command_list)
 
   show_parser = subparser.add_parser('show', help='print an info card for a bro')
   show_parser.add_argument('name', help='bro name')
@@ -64,6 +64,6 @@ def main(argv: list[str]) -> Optional[int]:
     action='store_true',
     help='also include the full assembled system prompt',
   )
-  show_parser.set_handler(_cmd_show)
+  show_parser.set_handler(_command_show)
 
   return parser.dispatch(argv)

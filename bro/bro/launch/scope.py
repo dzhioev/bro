@@ -125,8 +125,8 @@ def _ppp_tarball(files: dict[str, bytes]) -> bytes:
   no clock needed.
   """
   uid, gid = os.getuid(), os.getgid()
-  buf = io.BytesIO()
-  with tarfile.open(fileobj=buf, mode='w') as tar:
+  buffer = io.BytesIO()
+  with tarfile.open(fileobj=buffer, mode='w') as tar:
     root = tarfile.TarInfo('.ppp')
     root.type = tarfile.DIRTYPE
     root.mode = 0o700
@@ -139,4 +139,4 @@ def _ppp_tarball(files: dict[str, bytes]) -> bytes:
       info.mode = 0o600
       info.uid, info.gid = uid, gid
       tar.addfile(info, io.BytesIO(data))
-  return buf.getvalue()
+  return buffer.getvalue()

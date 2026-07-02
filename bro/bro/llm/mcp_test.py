@@ -34,9 +34,9 @@ class _Item:
 
 
 class TestReturnShape:
-  def _schema(self, fn) -> dict:
-    describe(fn, 'd')
-    schema = FunctionTool(fn).output_schema
+  def _schema(self, function) -> dict:
+    describe(function, 'd')
+    schema = FunctionTool(function).output_schema
     assert schema is not None
     return schema
 
@@ -84,9 +84,9 @@ class _Pair:
 
 
 class TestOutputValidation:
-  def _tool(self, fn) -> FunctionTool:
-    describe(fn, 'd')
-    return FunctionTool(fn)
+  def _tool(self, function) -> FunctionTool:
+    describe(function, 'd')
+    return FunctionTool(function)
 
   def test_validate_output_accepts_conforming(self):
     def make() -> _Pair:

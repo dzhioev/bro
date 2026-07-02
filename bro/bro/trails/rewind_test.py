@@ -313,12 +313,12 @@ class TestCmdList:
   def test_no_trails_returns_zero(self, capsys):
     client = MagicMock()
     client.iter_trails.return_value = iter([])
-    rc = cli._cmd_list(
+    rc = cli._command_list(
       client, {'bro': None, 'parent': None, 'since': None, 'until': None, 'limit': 10}, NO_COLOR
     )
     assert rc == 0
-    err = capsys.readouterr().err
-    assert '(no trails)' in err
+    error = capsys.readouterr().err
+    assert '(no trails)' in error
 
 
 class TestMain:

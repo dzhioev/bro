@@ -26,19 +26,19 @@ _BASE_BACKOFF = 1.0  # seconds; doubled per attempt
 _MAX_BACKOFF = 30.0  # ceiling for both exponential backoff and server-hinted waits
 
 
-def _is_transient(err: urllib.error.URLError) -> bool:
+def _is_transient(error: urllib.error.URLError) -> bool:
   """whether a failed GitHub call is a blip worth retrying vs a genuine error.
 
   HTTPError is a subclass of URLError; a bare URLError is a network/transport
   failure, which is always transient. genuine client errors (404, malformed
   request) surface immediately.
   """
-  if isinstance(err, urllib.error.HTTPError):
-    return err.code in _RETRYABLE_STATUSES or err.code in _TRANSIENT_AUTH_STATUSES
+  if isinstance(error, urllib.error.HTTPError):
+    return error.code in _RETRYABLE_STATUSES or error.code in _TRANSIENT_AUTH_STATUSES
   return True
 
 
-def _retry_delay(err: urllib.error.URLError, attempt: int) -> float:
+def _retry_delay(error: urllib.error.URLError, attempt: int) -> float:
   """seconds to wait before the next attempt (0-indexed), honoring server hints.
 
   prefers the server's own `Retry-After` (secondary rate limits) or
@@ -46,9 +46,9 @@ def _retry_delay(err: urllib.error.URLError, attempt: int) -> float:
   exponential backoff. all waits are capped at `_MAX_BACKOFF`.
   """
   backoff = min(_MAX_BACKOFF, _BASE_BACKOFF * (2**attempt))
-  if not isinstance(err, urllib.error.HTTPError):
+  if not isinstance(error, urllib.error.HTTPError):
     return backoff
-  headers = err.headers
+  headers = error.headers
   retry_after = headers.get('Retry-After')
   if retry_after is not None:
     hinted = _parse_retry_after(retry_after)
@@ -76,7 +76,7 @@ def _parse_retry_after(value: str) -> Optional[float]:
 
 
 def _gh_get(url: str, token: str) -> Any:
-  req = urllib.request.Request(
+  request = urllib.request.Request(
     url,
     headers={
       'Authorization': f'Bearer {token}',
@@ -86,13 +86,13 @@ def _gh_get(url: str, token: str) -> Any:
   )
   for attempt in range(_MAX_ATTEMPTS):
     try:
-      with urllib.request.urlopen(req) as resp:
-        return json.loads(resp.read())
-    except urllib.error.URLError as err:
-      if not _is_transient(err) or attempt == _MAX_ATTEMPTS - 1:
+      with urllib.request.urlopen(request) as response:
+        return json.loads(response.read())
+    except urllib.error.URLError as error:
+      if not _is_transient(error) or attempt == _MAX_ATTEMPTS - 1:
         raise
-      delay = _retry_delay(err, attempt)
-      reason = f'HTTP {err.code}' if isinstance(err, urllib.error.HTTPError) else err.reason
+      delay = _retry_delay(error, attempt)
+      reason = f'HTTP {error.code}' if isinstance(error, urllib.error.HTTPError) else error.reason
       _log.warning(
         f'{reason} from {url}; retrying in {delay:.1f}s (attempt {attempt + 1}/{_MAX_ATTEMPTS})'
       )
@@ -279,17 +279,17 @@ def poll_pr(
         owner, repo, pr, token, seen_comment_ids, seen_review_ids, is_actionable
       ):
         print(json.dumps(event), flush=True)
-    except urllib.error.URLError as err:
-      if not _is_transient(err):
+    except urllib.error.URLError as error:
+      if not _is_transient(error):
         raise
-      reason = f'HTTP {err.code}' if isinstance(err, urllib.error.HTTPError) else err.reason
+      reason = f'HTTP {error.code}' if isinstance(error, urllib.error.HTTPError) else error.reason
       _log.warning(f'{reason} during poll cycle; continuing after {interval}s')
 
     time.sleep(interval)
 
 
-def _owner_repo(arg: str) -> tuple[str, str]:
-  parts = arg.split('/')
+def _owner_repo(argument: str) -> tuple[str, str]:
+  parts = argument.split('/')
   if len(parts) != 2:
     raise ArgumentTypeError('repo must be in owner/repo format')
   return parts[0], parts[1]

@@ -102,8 +102,8 @@ def create_input(prompt: str, *args: Content) -> ResponseInputParam:
   result.append({'role': 'system', 'content': prompt})
   content = []
   result.append({'role': 'user', 'content': content})
-  for arg in args:
-    content.append(arg.dump())
+  for argument in args:
+    content.append(argument.dump())
   return result
 
 

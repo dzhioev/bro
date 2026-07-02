@@ -37,13 +37,13 @@ def _default_factory() -> Tracker:
   # - tests: `conftest.py`'s `set_default_tracker_factory(NullTracker)`.
   # - one-shot exploration: `bro.run(..., tracker=NullTracker())`.
   try:
-    cfg = credentials.get_json('trails')
+    config = credentials.get_json('trails')
   except credentials.SecretNotFound as e:
     raise RuntimeError(
       'trails: secret not found; run setup/bootstrap_trails.sh to enable '
       'recording, or pass tracker=NullTracker() to skip explicitly'
     ) from e
-  return HTTPTracker(cfg['base_url'], cfg['token'])
+  return HTTPTracker(config['base_url'], config['token'])
 
 
 # default factory for the per-run `Tracker` an unconfigured bro uses. swap with
@@ -182,8 +182,8 @@ def _render_skills(skills: list[tuple[str, str]]) -> str:
     'which you then execute.',
     '',
   ]
-  for name, desc in skills:
-    lines.append(f'- **{name}** — {_first_sentence(desc)}')
+  for name, description in skills:
+    lines.append(f'- **{name}** — {_first_sentence(description)}')
   return '\n'.join(lines)
 
 
@@ -259,18 +259,18 @@ def _materialize(entry: McpServerEntry) -> llm.mcp.MCPServer:
   return entry if isinstance(entry, llm.mcp.MCPServer) else entry()
 
 
-def _component_needed_secrets(obj: llm.mcp.MCPServer | DataSource) -> set[str]:
+def _component_needed_secrets(component: llm.mcp.MCPServer | DataSource) -> set[str]:
   # a component declares its credentials as a class attribute
   # (`needed_secrets = (...)`) or a computed instance property (flow's server
   # derives it from the tools it holds); both surface through a plain instance
   # read. no real component extends a non-empty base's declaration, so an MRO
   # union would be identical.
-  return set(obj.needed_secrets)
+  return set(component.needed_secrets)
 
 
-def _component_optional_secrets(obj: llm.mcp.MCPServer | DataSource) -> set[str]:
+def _component_optional_secrets(component: llm.mcp.MCPServer | DataSource) -> set[str]:
   # mirror of `_component_needed_secrets` for the best-effort tier (`optional_secrets`).
-  return set(obj.optional_secrets)
+  return set(component.optional_secrets)
 
 
 class BaseBro(ABC):

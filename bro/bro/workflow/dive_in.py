@@ -100,7 +100,9 @@ def _pick_fresh_name(base: str) -> str:
       return name
 
 
-def _fix_command(task_arg: Optional[str], focus: bool, new: bool, command: Optional[str]) -> str:
+def _fix_command(
+  task_argument: Optional[str], focus: bool, new: bool, command: Optional[str]
+) -> str:
   """build the `/fix …` first-user-message for a non-bare dive-in.
 
   Mirrors the CLI: task ref + optional `--focus`; or `--new` + optional seed +
@@ -114,12 +116,12 @@ def _fix_command(task_arg: Optional[str], focus: bool, new: bool, command: Optio
       parts.append(command)
     if focus:
       parts.append('--focus')
-  elif task_arg is not None and focus:
+  elif task_argument is not None and focus:
     # focus was already set on the resolved task; use the focused form so the
     # skill body reads it back from get_focused_task.
     parts.append('--focus')
-  elif task_arg is not None:
-    parts.append(task_arg)
+  elif task_argument is not None:
+    parts.append(task_argument)
   else:
     parts.append('--focus')
   return ' '.join(parts)
@@ -142,7 +144,7 @@ def dive_in(
       base = 'dive-in-new'
     name = _pick_fresh_name(base)
     log.info('workspace: %s', name)
-    prompt = _fix_command(task_arg=None, focus=focus, new=True, command=command)
+    prompt = _fix_command(task_argument=None, focus=focus, new=True, command=command)
   elif task is not None or focus:
     if task is not None:
       task_id = _resolve_task_id(task)
@@ -159,7 +161,7 @@ def dive_in(
     if not resume:
       task_name, task_block = _prefetch_task(task_id)
       log.info('task: %s', task_name)
-      prompt = _fix_command(task_arg=task, focus=focus, new=False, command=None)
+      prompt = _fix_command(task_argument=task, focus=focus, new=False, command=None)
       prompt = f'{prompt}\n\n{task_block}'
       if command is not None:
         prompt = f'{prompt}\n\nOnce you understand the task, {command}'
@@ -199,16 +201,16 @@ def dive_in(
   # --mcp=http (joined form), not a bare --mcp: `cw ss --mcp` is nargs='?', so a bare
   # flag immediately followed by the positional name makes argparse consume the name as
   # its value. dive-in always wants the default http flow MCP.
-  cmd = ['cw', 'ss', '--mcp=http', *forwarded]
+  cw_command = ['cw', 'ss', '--mcp=http', *forwarded]
   if not host:
-    cmd.append('-c')
+    cw_command.append('-c')
   if prompt is not None:
-    cmd.extend(['-p', prompt])
-  cmd.append(name)
+    cw_command.extend(['-p', prompt])
+  cw_command.append(name)
   if dry_run:
-    print(' '.join(_shell_quote(c) for c in cmd))
+    print(' '.join(_shell_quote(c) for c in cw_command))
     return 0
-  return subprocess.run(cmd).returncode
+  return subprocess.run(cw_command).returncode
 
 
 def main(argv: list[str]) -> Optional[int]:

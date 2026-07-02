@@ -589,12 +589,12 @@ def _make_server(*tool_names: str) -> InProcessMCPServer:
   tools = []
   for name in tool_names:
 
-    def fn() -> str:
+    def function() -> str:
       return 'ok'
 
-    fn.__name__ = name
-    describe(fn, f'{name} tool')
-    tools.append(FunctionTool(fn))
+    function.__name__ = name
+    describe(function, f'{name} tool')
+    tools.append(FunctionTool(function))
   return InProcessMCPServer('test', tools)
 
 
@@ -1129,8 +1129,8 @@ class TestSkillDescriptions:
         super().__init__(system_prompt='')
 
     B.__module__ = pkg
-    descs = B().skill_descriptions()
-    assert sorted(descs) == [('a', 'first desc'), ('b', 'second desc')]
+    descriptions = B().skill_descriptions()
+    assert sorted(descriptions) == [('a', 'first desc'), ('b', 'second desc')]
 
   def test_missing_description_becomes_empty_string(self, fake_pkgs):
     pkg = fake_pkgs(

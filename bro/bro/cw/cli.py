@@ -80,14 +80,16 @@ def build_parser() -> Parser:
     help='workspace to check (default: cwd); use c:<name> for container workspaces',
   )
 
-  exec_cmd = subparsers.add_parser(
+  exec_command = subparsers.add_parser(
     'exec',
     help='exec a command in the running container for a workspace (default: interactive bash with .venv activated)',
   )
-  exec_cmd.add_argument(
+  exec_command.add_argument(
     'name', help="container workspace name (the 'c:' prefix is accepted but optional)"
   )
-  exec_cmd.add_argument('command', nargs=REMAINDER, help='command + args to exec (default: bash)')
+  exec_command.add_argument(
+    'command', nargs=REMAINDER, help='command + args to exec (default: bash)'
+  )
 
   populate = subparsers.add_parser(
     'populate-bro-skills',
@@ -111,13 +113,13 @@ def build_parser() -> Parser:
 def main(argv: list[str]) -> Optional[int]:
   parser = build_parser()
   args = parser.parse(argv)
-  cmd = args.pop('cmd')
+  command = args.pop('cmd')
 
-  if cmd == 'list':
+  if command == 'list':
     return list_workspaces()
-  if cmd == 'clean':
+  if command == 'clean':
     return clean_workspaces(force=args['force'], dry_run=args['dry_run'], refs=args['refs'])
-  if cmd == 'check-clean':
+  if command == 'check-clean':
     ref = args['ref']
     if ref is None:
       clean_, reasons = _host_path_is_clean(Path.cwd())
@@ -131,14 +133,14 @@ def main(argv: list[str]) -> Optional[int]:
     for r in reasons:
       print(r, file=sys.stderr)
     return 0 if clean_ else 1
-  if cmd == 'exec':
-    return exec_in_workspace(name=args['name'], cmd=args['command'])
-  if cmd == 'populate-bro-skills':
+  if command == 'exec':
+    return exec_in_workspace(name=args['name'], command=args['command'])
+  if command == 'populate-bro-skills':
     _populate_bro_skills(_project_root(), args['bro_name'])
     return 0
-  if cmd == 'banner':
+  if command == 'banner':
     return banner(llm=args['llm'])
-  assert cmd == 'ss'
+  assert command == 'ss'
   if args['auto'] and not args['container']:
     parser.error('--auto requires --container')
   if args['into'] is not None and args['resume']:

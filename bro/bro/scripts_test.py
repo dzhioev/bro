@@ -24,8 +24,8 @@ class TestBroClaudeArgv:
   def test_mcp_config_points_at_shim(self):
     argv = cw.bro._bro_claude_argv('pm')
     i = argv.index('--mcp-config')
-    cfg = json.loads(argv[i + 1])
-    bro_server = cfg['mcpServers']['bro']
+    config = json.loads(argv[i + 1])
+    bro_server = config['mcpServers']['bro']
     assert bro_server['command'] == 'mcp-server'
     assert bro_server['args'] == ['bro:pm']
 
