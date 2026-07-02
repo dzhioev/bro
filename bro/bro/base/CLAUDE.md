@@ -10,6 +10,7 @@ Low-level shared utilities used across the whole repo. Some modules (`base.args`
 - `log.py` — module-level `logging` to stderr (`debug` / `info` / `warning` / `error` / `exception`), tagging each record with the caller's module as `scope`. Info level on by default; `--verbose` raises it to debug.
 - `time_util.py` — timezone-aware `Moment` / `Duration` (`datetime` / `timedelta` subclasses), parsers (`parse_moment`, ISO, date), and `utc_now`. Local tz is `Europe/Nicosia`. Prints the current time as a CLI.
 - `name_map.py` — `NameMap`: case-insensitive, whitespace-tolerant name → value lookup (strip + casefold, exact match only). For matching a free-form name an LLM or human emits against a known set; collisions and misses raise with the available names listed.
+- `text_window.py` — windowed views over large text for tool output: `apply_limit` caps to a line + byte budget (keeping head or tail) with inline `[...skipped before/after...]` markers and a fat-finger clamp; `numbered_window` layers a cat -n-numbered partial read (0-based `offset`) on top. `DEFAULT_LIMIT` / `MAX_LIMIT` are the shared cap policy.
 - `yesno.py` — `yesno(question, default)` interactive y/n prompt.
 - `project_root.py` — `PROJECT_ROOT`, the repo root as a `Path`.
 
