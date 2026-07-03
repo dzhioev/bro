@@ -32,11 +32,11 @@ def _split_launch_prompt(command: str) -> tuple[str, Optional[str]]:
   follows it.
   """
   for marker in _PROMPT_MARKERS:
-    idx = command.rfind(marker)
-    if idx < 0:
+    index = command.rfind(marker)
+    if index < 0:
       continue
-    head = command[: idx + len(marker)]
-    tail = command[idx + len(marker) :].strip()
+    head = command[: index + len(marker)]
+    tail = command[index + len(marker) :].strip()
     if len(tail) > 0:
       return head, tail
   return command, None
@@ -229,8 +229,8 @@ class SessionFacts:
     if self.cw_command is not None and self.cw_command != self.shell_command:
       pairs.append(('cw_command', 'cw_command'))
     pairs.append(('shell_command', 'launch_command'))
-    for attr, label in pairs:
-      value = getattr(self, attr)
+    for attribute, label in pairs:
+      value = getattr(self, attribute)
       if value is not None:
         lines.append(f'{label}: {value}')
     return '\n'.join(lines)

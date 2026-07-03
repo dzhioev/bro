@@ -36,7 +36,7 @@ class ClaudeLaunch:
 def _deployed_mcp_config() -> str:
   """`--mcp-config` json pointing at the deployed flow MCP server (`--mcp http`)."""
   try:
-    cfg = credentials.get_json('flow_mcp')
+    config = credentials.get_json('flow_mcp')
   except credentials.SecretNotFound:
     raise SystemExit('missing flow_mcp secret — run flow/mcp/server/bootstrap_secrets.sh')
   return json.dumps(
@@ -44,8 +44,8 @@ def _deployed_mcp_config() -> str:
       'mcpServers': {
         'flow': {
           'type': 'http',
-          'url': cfg['url'],
-          'headers': {'Authorization': f'Bearer {cfg["token"]}'},
+          'url': config['url'],
+          'headers': {'Authorization': f'Bearer {config["token"]}'},
         },
       },
     },

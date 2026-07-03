@@ -262,8 +262,8 @@ class TestEnvBooleans:
     parser.add_argument('--flag', action='store_true')
     with pytest.raises(SystemExit):
       parser.parse_args(['--allow-env'])
-    err = capsys.readouterr().err
-    assert re.search(r'invalid value for env FLAG', err)
+    error = capsys.readouterr().err
+    assert re.search(r'invalid value for env FLAG', error)
 
   def test_store_false_env_1_yields_false(self, monkeypatch):
     # store_false default is True; passing the flag sets to False.

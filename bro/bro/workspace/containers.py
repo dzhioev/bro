@@ -59,7 +59,7 @@ def _seed_container_claude_json(claude_dir: Path, host_file: Path) -> Path:
   return seed
 
 
-def exec_in_workspace(name: str, cmd: list[str]) -> int:
+def exec_in_workspace(name: str, command: list[str]) -> int:
   """exec a command in the running container backing the named workspace.
 
   with no command, starts an interactive bash. either way, `/workspace/.venv`
@@ -73,22 +73,24 @@ def exec_in_workspace(name: str, cmd: list[str]) -> int:
   if container_id is None:
     log.error('no running container for workspace %r', name)
     return 1
-  if len(cmd) == 0:
-    docker_cmd = ['bash', '-c', 'source /workspace/.venv/bin/activate 2>/dev/null; exec bash']
+  if len(command) == 0:
+    docker_command = ['bash', '-c', 'source /workspace/.venv/bin/activate 2>/dev/null; exec bash']
   else:
-    docker_cmd = [
+    docker_command = [
       'bash',
       '-c',
       'source /workspace/.venv/bin/activate 2>/dev/null; exec "$@"',
       'cw-exec',
-      *cmd,
+      *command,
     ]
   # run as cw, not the image's default root: docker exec ignores the entrypoint's
   # gosu drop, so without -u every exec'd command runs as root and writes
   # root-owned files into the bind-mounted /workspace that the host user can't
   # later remove. the entrypoint remaps cw to the host uid, so -u cw matches the
   # session user and keeps workspace files host-owned.
-  return subprocess.run(['docker', 'exec', '-it', '-u', 'cw', container_id, *docker_cmd]).returncode
+  return subprocess.run(
+    ['docker', 'exec', '-it', '-u', 'cw', container_id, *docker_command]
+  ).returncode
 
 
 def _replace_container_resume_hint(name: str) -> None:

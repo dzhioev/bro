@@ -113,16 +113,16 @@ class _RingBuffer:
     if cap < 0:
       raise ValueError(f'ring buffer cap must be non-negative, got {cap}')
     self._cap = cap
-    self._buf = bytearray()
+    self._buffer = bytearray()
 
   def write(self, data: bytes) -> None:
-    self._buf += data
-    overflow = len(self._buf) - self._cap
+    self._buffer += data
+    overflow = len(self._buffer) - self._cap
     if overflow > 0:
-      del self._buf[:overflow]
+      del self._buffer[:overflow]
 
   def tail(self) -> bytes:
-    return bytes(self._buf)
+    return bytes(self._buffer)
 
 
 def _workspace_name(channel: str) -> str:
@@ -157,7 +157,7 @@ def _broker_create_argv(
 async def _force_remove(container_id: str) -> None:
   # --rm removes the container on its process's exit; -f also covers a wedged one.
   # best-effort: a teardown race (already gone) is not an error.
-  proc = await asyncio.create_subprocess_exec(
+  process = await asyncio.create_subprocess_exec(
     'docker',
     'rm',
     '-f',
@@ -165,27 +165,27 @@ async def _force_remove(container_id: str) -> None:
     stdout=asyncio.subprocess.DEVNULL,
     stderr=asyncio.subprocess.DEVNULL,
   )
-  await proc.wait()
+  await process.wait()
 
 
 class _DockerChild(ChildHandle):
   def __init__(
     self,
     container_id: str,
-    proc: asyncio.subprocess.Process,
+    process: asyncio.subprocess.Process,
     ring_bytes: int,
     workspace: Optional[ContainerWorkspace],
   ):
     self._container_id = container_id
-    self._proc = proc
+    self._process = process
     self._ring = _RingBuffer(ring_bytes)
     self._drain = asyncio.create_task(self._drain_output())
     self._workspace = workspace  # a derived throwaway workspace, removed once the child ends
 
   async def _drain_output(self) -> None:
-    assert self._proc.stdout is not None  # carries stderr too (merged at spawn)
+    assert self._process.stdout is not None  # carries stderr too (merged at spawn)
     while True:
-      chunk = await self._proc.stdout.read(_DRAIN_CHUNK)
+      chunk = await self._process.stdout.read(_DRAIN_CHUNK)
       if len(chunk) == 0:
         return
       self._ring.write(chunk)
@@ -205,7 +205,7 @@ class _DockerChild(ChildHandle):
       log.warning('could not remove broker child workspace %s: %s', workspace.name, e)
 
   async def wait(self) -> int:
-    code = await self._proc.wait()
+    code = await self._process.wait()
     await self._drain  # let the final output land in the ring before tail() is read
     await self._remove_workspace()
     return code
@@ -230,18 +230,18 @@ class _AttachedHandle(ChildHandle):
   restores default SIGINT handling once the child exits, then runs the subtype's
   `_on_exited` teardown. `output_tail()` is empty — the streams belong to the TTY."""
 
-  def __init__(self, proc: asyncio.subprocess.Process):
-    self._proc = proc
+  def __init__(self, process: asyncio.subprocess.Process):
+    self._process = process
     self._loop = asyncio.get_running_loop()
     self._loop.add_signal_handler(signal.SIGINT, self._forward_sigint)
 
   def _forward_sigint(self) -> None:
-    if self._proc.returncode is None:
-      self._proc.send_signal(signal.SIGINT)
+    if self._process.returncode is None:
+      self._process.send_signal(signal.SIGINT)
 
   async def wait(self) -> int:
     try:
-      return await self._proc.wait()
+      return await self._process.wait()
     finally:
       self._loop.remove_signal_handler(signal.SIGINT)
       await self._on_exited()
@@ -256,8 +256,8 @@ class _AttachedHandle(ChildHandle):
 class _AttachedRoot(_AttachedHandle):
   """handle for the interactive container root: the docker client owns the stdio."""
 
-  def __init__(self, container_id: str, proc: asyncio.subprocess.Process):
-    super().__init__(proc)
+  def __init__(self, container_id: str, process: asyncio.subprocess.Process):
+    super().__init__(process)
     self._container_id = container_id
 
   async def _on_exited(self) -> None:
@@ -275,9 +275,9 @@ class _AttachedProcess(_AttachedHandle):
   """handle for the interactive host root: the child process itself owns the stdio."""
 
   async def kill(self) -> None:
-    if self._proc.returncode is None:
-      self._proc.kill()
-      await self._proc.wait()
+    if self._process.returncode is None:
+      self._process.kill()
+      await self._process.wait()
 
 
 class DockerSpawner(Spawner):
@@ -295,11 +295,11 @@ class DockerSpawner(Spawner):
     container_id = _create_container(argv, _ppp_tarball(store), name)
     if launch.attached:
       # docker start -a -i with inherited stdio: the client owns the host TTY.
-      proc = await asyncio.create_subprocess_exec('docker', 'start', '-a', '-i', container_id)
-      return _AttachedRoot(container_id, proc)
+      process = await asyncio.create_subprocess_exec('docker', 'start', '-a', '-i', container_id)
+      return _AttachedRoot(container_id, process)
     # docker start -a (no -i) attaches stdout+stderr to this subprocess, merged into one
     # pipe (chronological interleave) and drained by an async task into the ring.
-    proc = await asyncio.create_subprocess_exec(
+    process = await asyncio.create_subprocess_exec(
       'docker',
       'start',
       '-a',
@@ -308,7 +308,7 @@ class DockerSpawner(Spawner):
       stderr=asyncio.subprocess.STDOUT,
     )
     workspace = ContainerWorkspace(name, proj) if launch.name is None else None
-    return _DockerChild(container_id, proc, launch.ring_bytes, workspace)
+    return _DockerChild(container_id, process, launch.ring_bytes, workspace)
 
 
 class ProcessSpawner(Spawner):
@@ -316,8 +316,8 @@ class ProcessSpawner(Spawner):
     assert isinstance(launch, ProcessLaunchSpec)
     env = dict(launch.env)
     env['BROKER_CHANNEL'] = f'unix:{channel.host_endpoint}'
-    proc = await asyncio.create_subprocess_exec(*launch.command, cwd=launch.cwd, env=env)
-    return _AttachedProcess(proc)
+    process = await asyncio.create_subprocess_exec(*launch.command, cwd=launch.cwd, env=env)
+    return _AttachedProcess(process)
 
 
 def run_root_via_broker(launch: LaunchSpec, spawner: Spawner, proj: Path) -> int:

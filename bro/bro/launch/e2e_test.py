@@ -429,7 +429,7 @@ class _Driver:
     # of every package) off sys.path: the launcher code under test must resolve from
     # this checkout's editable venv, and scenario D's PYTHONPATH shadow must win the
     # `import broker` lookup
-    self.proc = subprocess.Popen(
+    self.process = subprocess.Popen(
       [sys.executable, '-P', '-c', _DRIVER],
       stdin=slave,
       stdout=slave,
@@ -461,17 +461,17 @@ class _Driver:
 
   def wait(self, timeout: float) -> int:
     try:
-      return self.proc.wait(timeout)
+      return self.process.wait(timeout)
     except subprocess.TimeoutExpired:
       pytest.fail(f'launcher driver still running after {timeout}s\n{self.output()}')
 
   def close(self) -> None:
-    if self.proc.poll() is None:
+    if self.process.poll() is None:
       try:
-        os.killpg(self.proc.pid, signal.SIGKILL)
+        os.killpg(self.process.pid, signal.SIGKILL)
       except ProcessLookupError:
         pass
-      self.proc.wait(10)
+      self.process.wait(10)
     self._reader.join(5)
     os.close(self._master)
 
@@ -521,7 +521,7 @@ def _container_mount_of(container_id: str, source: Path) -> Optional[str]:
 def _wait_ready(env: IsolatedEnv, name: str, driver: _Driver, timeout: float = 240) -> None:
   ready = env.containers_dir / name / '.e2e-ready'
   _wait_until(
-    lambda: ready.exists() or driver.proc.poll() is not None,
+    lambda: ready.exists() or driver.process.poll() is not None,
     timeout,
     f'{name} probe ready file',
     driver.output,
@@ -792,7 +792,7 @@ def scenario_c(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> Liv
   request.addfinalizer(driver.close)
   run = LiveRun(exit_code=-1, output='')
   deadline = time.monotonic() + 240
-  while driver.proc.poll() is None and time.monotonic() < deadline:
+  while driver.process.poll() is None and time.monotonic() < deadline:
     run.max_socks = max(run.max_socks, len(env.socks()))
     time.sleep(0.25)
   run.exit_code = driver.wait(30)
@@ -830,7 +830,7 @@ def scenario_d(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> Liv
   request.addfinalizer(driver.close)
   run = LiveRun(exit_code=-1, output='')
   deadline = time.monotonic() + 240
-  while driver.proc.poll() is None and time.monotonic() < deadline:
+  while driver.process.poll() is None and time.monotonic() < deadline:
     run.max_socks = max(run.max_socks, len(env.socks()))
     time.sleep(0.25)
   run.exit_code = driver.wait(30)
@@ -876,7 +876,7 @@ def scenario_e_targeted(isolated_env: IsolatedEnv, request: pytest.FixtureReques
   request.addfinalizer(driver.close)
   _wait_ready(env, name, driver)
   container_id = find_container_id(env.containers_dir / name)
-  os.kill(driver.proc.pid, signal.SIGINT)  # targeted at the launcher, not the terminal group
+  os.kill(driver.process.pid, signal.SIGINT)  # targeted at the launcher, not the terminal group
   run = LiveRun(exit_code=driver.wait(60), output=driver.output(), container_id=container_id)
   run.socks_after = env.socks()
   run.container_gone_after = _container_gone(env, name, 15)

@@ -20,12 +20,12 @@ __cli_name__ = 'broker'
 
 def _payload(arg: str) -> dict[str, Any]:
   try:
-    obj = json.loads(arg)
+    parsed = json.loads(arg)
   except json.JSONDecodeError as e:
     raise base.args.ArgumentTypeError(f'payload is not valid JSON: {e}')
-  if not isinstance(obj, dict):
-    raise base.args.ArgumentTypeError(f'payload must be a JSON object, got {type(obj).__name__}')
-  return obj
+  if not isinstance(parsed, dict):
+    raise base.args.ArgumentTypeError(f'payload must be a JSON object, got {type(parsed).__name__}')
+  return parsed
 
 
 def _send(type: str, payload: dict[str, Any]) -> int:

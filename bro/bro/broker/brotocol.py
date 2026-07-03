@@ -27,7 +27,7 @@ class Tag:
   STARTED = 'started'  # {trail_id}
   COMPLETED = 'completed'  # {result, end_reason}  end_reason: terminal|raised|error
   FAILED = 'failed'  # {reason: 'exit'|'timeout', exit_code?, output_tail?}
-  REPLY = 'reply'  # generic correlated reply (in_reply_to set); the type ctx.reply emits
+  REPLY = 'reply'  # generic correlated reply (in_reply_to set); the type context.reply emits
   PING = 'ping'  # acceptance round-trip
   SPAWN = 'spawn'  # acceptance: spawn a throwaway child
 
@@ -59,29 +59,29 @@ class Message:
   @classmethod
   def from_bytes(cls, raw: bytes) -> 'Message':
     try:
-      obj = json.loads(raw)
+      parsed = json.loads(raw)
     except (json.JSONDecodeError, UnicodeDecodeError) as e:
       raise ProtocolError(f'malformed message JSON: {e}') from e
-    if not isinstance(obj, dict):
-      raise ProtocolError(f'message must be a JSON object, got {type(obj).__name__}')
-    type_ = _require(obj, 'type', str)
-    id_ = _require(obj, 'id', str)
-    payload = _require(obj, 'payload', dict)
-    in_reply_to = obj.get('in_reply_to')
+    if not isinstance(parsed, dict):
+      raise ProtocolError(f'message must be a JSON object, got {type(parsed).__name__}')
+    type_ = _require(parsed, 'type', str)
+    id_ = _require(parsed, 'id', str)
+    payload = _require(parsed, 'payload', dict)
+    in_reply_to = parsed.get('in_reply_to')
     if in_reply_to is not None and not isinstance(in_reply_to, str):
       raise ProtocolError(
         f"message 'in_reply_to' must be a string or null, got {type(in_reply_to).__name__}"
       )
-    v = obj.get('v', PROTOCOL_VERSION)
+    v = parsed.get('v', PROTOCOL_VERSION)
     if not isinstance(v, int):
       raise ProtocolError(f"message 'v' must be an int, got {type(v).__name__}")
     return cls(type=type_, payload=payload, id=id_, in_reply_to=in_reply_to, v=v)
 
 
-def _require(obj: dict, key: str, kind: type) -> Any:
-  if key not in obj:
+def _require(data: dict, key: str, kind: type) -> Any:
+  if key not in data:
     raise ProtocolError(f'message missing required key {key!r}')
-  value = obj[key]
+  value = data[key]
   if not isinstance(value, kind):
     raise ProtocolError(f'message {key!r} must be {kind.__name__}, got {type(value).__name__}')
   return value

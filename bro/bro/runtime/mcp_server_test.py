@@ -76,9 +76,11 @@ def _rpc(client: TestClient, path: str, method: str, params=None, headers=None) 
   payload = {'jsonrpc': '2.0', 'id': 1, 'method': method}
   if params is not None:
     payload['params'] = params
-  resp = client.post(path, json=payload, headers=headers if headers is not None else _MCP_HEADERS)
-  assert resp.status_code == 200, resp.text
-  return resp.json()
+  response = client.post(
+    path, json=payload, headers=headers if headers is not None else _MCP_HEADERS
+  )
+  assert response.status_code == 200, response.text
+  return response.json()
 
 
 class TestResolveServers:
@@ -132,21 +134,21 @@ class TestHTTPBindBeforeResolve:
 class TestHealth:
   def test_lists_namespaces_without_auth(self):
     with _client(_ShimBro()._live_mcp_servers()) as client:
-      resp = client.get('/health')
-      assert resp.status_code == 200
-      assert resp.json() == {'status': 'ok', 'namespaces': ['noop-source', 'ping']}
+      response = client.get('/health')
+      assert response.status_code == 200
+      assert response.json() == {'status': 'ok', 'namespaces': ['noop-source', 'ping']}
 
 
 class TestBearerAuth:
   def test_missing_token_rejected(self):
     with _client([_create_ping_server()]) as client:
-      resp = client.post('/ping', json={})
-      assert resp.status_code == 401
+      response = client.post('/ping', json={})
+      assert response.status_code == 401
 
   def test_wrong_token_rejected(self):
     with _client([_create_ping_server()]) as client:
-      resp = client.post('/ping', json={}, headers={'Authorization': 'Bearer wrong'})
-      assert resp.status_code == 401
+      response = client.post('/ping', json={}, headers={'Authorization': 'Bearer wrong'})
+      assert response.status_code == 401
 
 
 class TestNamespaceEndpoints:
@@ -172,8 +174,8 @@ class TestNamespaceEndpoints:
 
   def test_unknown_endpoint_404(self):
     with _client([_create_ping_server()]) as client:
-      resp = client.post('/nope', json={}, headers=_MCP_HEADERS)
-      assert resp.status_code == 404
+      response = client.post('/nope', json={}, headers=_MCP_HEADERS)
+      assert response.status_code == 404
 
   def test_tool_call(self):
     with _client([_create_ping_server()]) as client:

@@ -354,8 +354,8 @@ class _FakeApp:
   def __init__(self):
     self.posted: list[str] = []
 
-  def call_from_thread(self, fn, *args, **kwargs):
-    fn(*args, **kwargs)
+  def call_from_thread(self, function, *args, **kwargs):
+    function(*args, **kwargs)
 
   def append_trace_line(self, text: str) -> None:
     self.posted.append(text)

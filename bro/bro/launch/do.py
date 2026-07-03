@@ -33,9 +33,9 @@ async def do(bro: BaseBro, what: str, observer: Optional[Observer] = None) -> st
 def main(argv: list[str]) -> Optional[int]:
   return run(
     cli_name='ask',
-    parser_desc='run a bro on the given input',
+    parser_description='run a bro on the given input',
     arg_name='what',
     arg_help='input to send to the bro',
-    run_fn=do,
+    run_function=do,
     argv=argv,
   )

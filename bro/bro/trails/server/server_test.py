@@ -108,8 +108,8 @@ class FakeStorage:
   async def query_steps(self, trail_id, *, after, limit):
     items = self.steps.get(trail_id, [])
     if after is not None:
-      after_idx = next((i for i, s in enumerate(items) if s['step_id'] == after), -1)
-      items = items[after_idx + 1 :]
+      after_index = next((i for i, s in enumerate(items) if s['step_id'] == after), -1)
+      items = items[after_index + 1 :]
     truncated = items[:limit]
     next_cursor = truncated[-1]['step_id'] if len(items) > limit else None
     return {'steps': truncated, 'next': next_cursor}
@@ -162,49 +162,49 @@ class TestHealth:
   @pytest.mark.asyncio
   async def test_no_auth_required(self, client):
     cli = await client
-    resp = await cli.get('/health')
-    assert resp.status == 200
-    assert (await resp.json()) == {'status': 'ok'}
+    response = await cli.get('/health')
+    assert response.status == 200
+    assert (await response.json()) == {'status': 'ok'}
 
 
 class TestAuth:
   @pytest.mark.asyncio
   async def test_missing_token_rejected(self, client):
     cli = await client
-    resp = await cli.post('/v1/trails', json=_create_payload())
-    assert resp.status == 401
+    response = await cli.post('/v1/trails', json=_create_payload())
+    assert response.status == 401
 
   @pytest.mark.asyncio
   async def test_wrong_token_rejected(self, client):
     cli = await client
-    resp = await cli.post('/v1/trails', json=_create_payload(), headers=_auth('nope'))
-    assert resp.status == 401
+    response = await cli.post('/v1/trails', json=_create_payload(), headers=_auth('nope'))
+    assert response.status == 401
 
   @pytest.mark.asyncio
   async def test_correct_token_accepted(self, client):
     cli = await client
-    resp = await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
-    assert resp.status == 201
+    response = await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
+    assert response.status == 201
 
 
 class TestCreateTrail:
   @pytest.mark.asyncio
   async def test_happy_path_returns_trail_id(self, client, store):
     cli = await client
-    resp = await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
-    assert resp.status == 201
-    data = await resp.json()
+    response = await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
+    assert response.status == 201
+    data = await response.json()
     assert data['trail_id'] in store.trails
 
   @pytest.mark.asyncio
   async def test_system_prompt_emitted_as_first_step(self, client, store):
     cli = await client
-    resp = await cli.post(
+    response = await cli.post(
       '/v1/trails',
       json=_create_payload(system_prompt='you are a bro'),
       headers=_auth(),
     )
-    trail_id = (await resp.json())['trail_id']
+    trail_id = (await response.json())['trail_id']
     steps = store.steps[trail_id]
     assert len(steps) == 1
     assert steps[0]['kind'] == 'system_prompt'
@@ -216,97 +216,97 @@ class TestCreateTrail:
     cli = await client
     payload = _create_payload()
     del payload['bro']
-    resp = await cli.post('/v1/trails', json=payload, headers=_auth())
-    assert resp.status == 400
+    response = await cli.post('/v1/trails', json=payload, headers=_auth())
+    assert response.status == 400
 
   @pytest.mark.asyncio
   async def test_invalid_json_rejected(self, client):
     cli = await client
-    resp = await cli.post(
+    response = await cli.post(
       '/v1/trails',
       data='not json',
       headers={**_auth(), 'Content-Type': 'application/json'},
     )
-    assert resp.status == 400
+    assert response.status == 400
 
   @pytest.mark.asyncio
   async def test_parent_required_fields_validated(self, client):
     cli = await client
     payload = _create_payload(parent={'trail_id': 't1', 'step_id': 's1'})
-    resp = await cli.post('/v1/trails', json=payload, headers=_auth())
-    assert resp.status == 400
+    response = await cli.post('/v1/trails', json=payload, headers=_auth())
+    assert response.status == 400
 
   @pytest.mark.asyncio
   async def test_parent_accepted_when_complete(self, client, store):
     cli = await client
     parent = {'trail_id': 't1', 'step_id': 's1', 'relationship': 'fork'}
-    resp = await cli.post('/v1/trails', json=_create_payload(parent=parent), headers=_auth())
-    assert resp.status == 201
-    trail_id = (await resp.json())['trail_id']
+    response = await cli.post('/v1/trails', json=_create_payload(parent=parent), headers=_auth())
+    assert response.status == 201
+    trail_id = (await response.json())['trail_id']
     assert store.trails[trail_id]['parent'] == parent
 
 
 class TestPutStep:
   async def _make_trail(self, cli) -> str:
-    resp = await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
-    return (await resp.json())['trail_id']
+    response = await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
+    return (await response.json())['trail_id']
 
   @pytest.mark.asyncio
   async def test_happy_path_returns_204(self, client, store):
     cli = await client
     trail_id = await self._make_trail(cli)
-    resp = await cli.post(
+    response = await cli.post(
       f'/v1/trails/{trail_id}/steps',
       json={'kind': 'user_input', 'body': 'hello', 'turn_index': 0},
       headers=_auth(),
     )
-    assert resp.status == 204
+    assert response.status == 204
     assert store.steps[trail_id][-1]['kind'] == 'user_input'
     assert store.steps[trail_id][-1]['body'] == 'hello'
 
   @pytest.mark.asyncio
   async def test_unknown_trail_404(self, client):
     cli = await client
-    resp = await cli.post(
+    response = await cli.post(
       '/v1/trails/missing/steps',
       json={'kind': 'user_input', 'body': 'hi'},
       headers=_auth(),
     )
-    assert resp.status == 404
+    assert response.status == 404
 
   @pytest.mark.asyncio
   async def test_body_too_large_returns_413(self, client, store):
     cli = await client
     trail_id = await self._make_trail(cli)
     store.raise_body_too_large = True
-    resp = await cli.post(
+    response = await cli.post(
       f'/v1/trails/{trail_id}/steps',
       json={'kind': 'assistant', 'body': 'x'},
       headers=_auth(),
     )
-    assert resp.status == 413
+    assert response.status == 413
 
   @pytest.mark.asyncio
   async def test_invalid_kind_rejected(self, client):
     cli = await client
     trail_id = await self._make_trail(await client) if False else await self._make_trail(cli)
-    resp = await cli.post(
+    response = await cli.post(
       f'/v1/trails/{trail_id}/steps',
       json={'kind': 'system_prompt', 'body': 'x'},
       headers=_auth(),
     )
-    assert resp.status == 400
+    assert response.status == 400
 
   @pytest.mark.asyncio
   async def test_end_kind_rejected(self, client):
     cli = await client
     trail_id = await self._make_trail(cli)
-    resp = await cli.post(
+    response = await cli.post(
       f'/v1/trails/{trail_id}/steps',
       json={'kind': 'end', 'body': {}},
       headers=_auth(),
     )
-    assert resp.status == 400
+    assert response.status == 400
 
   @pytest.mark.asyncio
   async def test_extras_passed_through(self, client, store):
@@ -348,29 +348,29 @@ class TestPutStep:
   async def test_non_string_step_id_rejected(self, client):
     cli = await client
     trail_id = await self._make_trail(cli)
-    resp = await cli.post(
+    response = await cli.post(
       f'/v1/trails/{trail_id}/steps',
       json={'kind': 'user_input', 'body': 'hi', 'step_id': 123},
       headers=_auth(),
     )
-    assert resp.status == 400
+    assert response.status == 400
 
 
 class TestEndTrail:
   async def _make_trail(self, cli) -> str:
-    resp = await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
-    return (await resp.json())['trail_id']
+    response = await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
+    return (await response.json())['trail_id']
 
   @pytest.mark.asyncio
   async def test_happy_path_updates_header(self, client, store):
     cli = await client
     trail_id = await self._make_trail(cli)
-    resp = await cli.post(
+    response = await cli.post(
       f'/v1/trails/{trail_id}/end',
       json={'reason': 'terminal'},
       headers=_auth(),
     )
-    assert resp.status == 204
+    assert response.status == 204
     assert store.trails[trail_id]['end_reason'] == 'terminal'
     assert store.trails[trail_id]['ended_at'] is not None
 
@@ -379,91 +379,91 @@ class TestEndTrail:
     cli = await client
     trail_id = await self._make_trail(cli)
     cont = {'provider': 'openai', 'response_id': 'resp_xyz'}
-    resp = await cli.post(
+    response = await cli.post(
       f'/v1/trails/{trail_id}/end',
       json={'reason': 'terminal', 'continuation': cont},
       headers=_auth(),
     )
-    assert resp.status == 204
+    assert response.status == 204
     assert store.trails[trail_id]['continuation'] == cont
 
   @pytest.mark.asyncio
   async def test_invalid_reason_rejected(self, client):
     cli = await client
     trail_id = await self._make_trail(cli)
-    resp = await cli.post(
+    response = await cli.post(
       f'/v1/trails/{trail_id}/end',
       json={'reason': 'whatever'},
       headers=_auth(),
     )
-    assert resp.status == 400
+    assert response.status == 400
 
   @pytest.mark.asyncio
   async def test_unknown_trail_404(self, client):
     cli = await client
-    resp = await cli.post(
+    response = await cli.post(
       '/v1/trails/missing/end',
       json={'reason': 'terminal'},
       headers=_auth(),
     )
-    assert resp.status == 404
+    assert response.status == 404
 
 
 class TestGetTrail:
   @pytest.mark.asyncio
   async def test_returns_header(self, client):
     cli = await client
-    resp = await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
-    trail_id = (await resp.json())['trail_id']
-    resp = await cli.get(f'/v1/trails/{trail_id}', headers=_auth())
-    assert resp.status == 200
-    data = await resp.json()
+    response = await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
+    trail_id = (await response.json())['trail_id']
+    response = await cli.get(f'/v1/trails/{trail_id}', headers=_auth())
+    assert response.status == 200
+    data = await response.json()
     assert data['trail_id'] == trail_id
     assert data['bro'] == 'ppp-dev'
 
   @pytest.mark.asyncio
   async def test_unknown_trail_404(self, client):
     cli = await client
-    resp = await cli.get('/v1/trails/missing', headers=_auth())
-    assert resp.status == 404
+    response = await cli.get('/v1/trails/missing', headers=_auth())
+    assert response.status == 404
 
 
 class TestGetSteps:
   @pytest.mark.asyncio
   async def test_returns_steps_in_order(self, client):
     cli = await client
-    resp = await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
-    trail_id = (await resp.json())['trail_id']
+    response = await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
+    trail_id = (await response.json())['trail_id']
     for i, kind in enumerate(['user_input', 'reasoning', 'assistant']):
       await cli.post(
         f'/v1/trails/{trail_id}/steps',
         json={'kind': kind, 'body': f'step {i}', 'turn_index': 1},
         headers=_auth(),
       )
-    resp = await cli.get(f'/v1/trails/{trail_id}/steps', headers=_auth())
-    data = await resp.json()
+    response = await cli.get(f'/v1/trails/{trail_id}/steps', headers=_auth())
+    data = await response.json()
     kinds = [s['kind'] for s in data['steps']]
     assert kinds == ['system_prompt', 'user_input', 'reasoning', 'assistant']
 
   @pytest.mark.asyncio
   async def test_pagination(self, client):
     cli = await client
-    resp = await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
-    trail_id = (await resp.json())['trail_id']
+    response = await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
+    trail_id = (await response.json())['trail_id']
     for i in range(5):
       await cli.post(
         f'/v1/trails/{trail_id}/steps',
         json={'kind': 'user_input', 'body': f'm{i}', 'turn_index': i},
         headers=_auth(),
       )
-    resp = await cli.get(f'/v1/trails/{trail_id}/steps?limit=2', headers=_auth())
-    data = await resp.json()
+    response = await cli.get(f'/v1/trails/{trail_id}/steps?limit=2', headers=_auth())
+    data = await response.json()
     assert len(data['steps']) == 2
     assert data['next'] is not None
-    resp = await cli.get(
+    response = await cli.get(
       f'/v1/trails/{trail_id}/steps?limit=10&after={data["next"]}', headers=_auth()
     )
-    data2 = await resp.json()
+    data2 = await response.json()
     assert len(data2['steps']) == 4
 
 
@@ -473,16 +473,16 @@ class TestListTrails:
     cli = await client
     await cli.post('/v1/trails', json=_create_payload(bro='a'), headers=_auth())
     await cli.post('/v1/trails', json=_create_payload(bro='b'), headers=_auth())
-    resp = await cli.get('/v1/trails?bro=a', headers=_auth())
-    data = await resp.json()
+    response = await cli.get('/v1/trails?bro=a', headers=_auth())
+    data = await response.json()
     assert all(t['bro'] == 'a' for t in data['trails'])
     assert len(data['trails']) == 1
 
   @pytest.mark.asyncio
   async def test_bro_and_parent_mutex(self, client):
     cli = await client
-    resp = await cli.get('/v1/trails?bro=a&parent=p', headers=_auth())
-    assert resp.status == 400
+    response = await cli.get('/v1/trails?bro=a&parent=p', headers=_auth())
+    assert response.status == 400
 
 
 class TestResolveAuth:

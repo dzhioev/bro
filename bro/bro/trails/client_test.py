@@ -23,7 +23,7 @@ class _FakeResponse:
     return self._body
 
 
-class _FakeConn:
+class _FakeConnection:
   """programmable stand-in for `http.client.HTTPSConnection`. each entry
   queued via `queue(...)` is consumed on a `request`/`getresponse` pair.
   exceptions simulate transport failures; tuples are HTTP responses.
@@ -57,8 +57,8 @@ class _FakeConn:
     self.closes += 1
 
 
-def _install_fake_conn(monkeypatch) -> _FakeConn:
-  fake = _FakeConn()
+def _install_fake_connection(monkeypatch) -> _FakeConnection:
+  fake = _FakeConnection()
   monkeypatch.setattr(http.client, 'HTTPSConnection', lambda *a, **k: fake)
   return fake
 
@@ -75,7 +75,7 @@ class TestConstructor:
 
 class TestGetTrail:
   def test_get_trail_sends_authed_request(self, monkeypatch):
-    fake = _install_fake_conn(monkeypatch)
+    fake = _install_fake_connection(monkeypatch)
     fake.queue((200, b'{"trail_id": "T1", "bro": "dev"}'))
     c = _client()
     result = c.get_trail('T1')
@@ -86,7 +86,7 @@ class TestGetTrail:
     assert body is None
 
   def test_http_error_propagates(self, monkeypatch):
-    fake = _install_fake_conn(monkeypatch)
+    fake = _install_fake_connection(monkeypatch)
     # one failed response + one retry: the client retries once on any failure
     # (transport or HTTP error), and stops after the second attempt.
     fake.queue((404, b'not found'))
@@ -98,7 +98,7 @@ class TestGetTrail:
 
 class TestGetSteps:
   def test_includes_after_and_limit(self, monkeypatch):
-    fake = _install_fake_conn(monkeypatch)
+    fake = _install_fake_connection(monkeypatch)
     fake.queue((200, b'{"steps": [], "next": null}'))
     c = _client()
     c.get_steps('T1', after='s5', limit=20)
@@ -108,7 +108,7 @@ class TestGetSteps:
     assert 'limit=20' in path
 
   def test_returns_steps_and_next(self, monkeypatch):
-    fake = _install_fake_conn(monkeypatch)
+    fake = _install_fake_connection(monkeypatch)
     fake.queue(
       (
         200,
@@ -125,7 +125,7 @@ class TestGetSteps:
 
 class TestIterSteps:
   def test_paginates_until_next_is_none(self, monkeypatch):
-    fake = _install_fake_conn(monkeypatch)
+    fake = _install_fake_connection(monkeypatch)
     fake.queue((200, json.dumps({'steps': [{'step_id': 's1'}], 'next': 's1'}).encode()))
     fake.queue((200, json.dumps({'steps': [{'step_id': 's2'}], 'next': None}).encode()))
     c = _client()
@@ -137,7 +137,7 @@ class TestIterSteps:
 
 class TestListTrails:
   def test_passes_all_filters(self, monkeypatch):
-    fake = _install_fake_conn(monkeypatch)
+    fake = _install_fake_connection(monkeypatch)
     fake.queue((200, b'{"trails": [], "next": null}'))
     c = _client()
     c.list_trails(bro='dev', since='2026-06-01', until='2026-06-30', cursor='c1', limit=10)
@@ -149,7 +149,7 @@ class TestListTrails:
     assert 'limit=10' in path
 
   def test_parent_and_bro_independent(self, monkeypatch):
-    fake = _install_fake_conn(monkeypatch)
+    fake = _install_fake_connection(monkeypatch)
     fake.queue((200, b'{"trails": [], "next": null}'))
     c = _client()
     c.list_trails(parent='T-parent')
@@ -159,7 +159,7 @@ class TestListTrails:
 
 class TestIterTrails:
   def test_max_items_caps_total(self, monkeypatch):
-    fake = _install_fake_conn(monkeypatch)
+    fake = _install_fake_connection(monkeypatch)
     fake.queue(
       (200, json.dumps({'trails': [{'trail_id': 'T1'}, {'trail_id': 'T2'}], 'next': 'c1'}).encode())
     )
@@ -169,7 +169,7 @@ class TestIterTrails:
     assert [t['trail_id'] for t in out] == ['T1', 'T2']
 
   def test_walks_across_pages(self, monkeypatch):
-    fake = _install_fake_conn(monkeypatch)
+    fake = _install_fake_connection(monkeypatch)
     fake.queue((200, json.dumps({'trails': [{'trail_id': 'T1'}], 'next': 'c1'}).encode()))
     fake.queue((200, json.dumps({'trails': [{'trail_id': 'T2'}], 'next': None}).encode()))
     c = _client()
@@ -180,7 +180,7 @@ class TestIterTrails:
 
 class TestRetryBehavior:
   def test_one_transport_blip_recovered(self, monkeypatch):
-    fake = _install_fake_conn(monkeypatch)
+    fake = _install_fake_connection(monkeypatch)
     fake.queue(ConnectionError('blip'))
     fake.queue((200, b'{"trail_id": "T1"}'))
     c = _client()
@@ -189,7 +189,7 @@ class TestRetryBehavior:
     assert fake.closes >= 1
 
   def test_second_failure_propagates(self, monkeypatch):
-    fake = _install_fake_conn(monkeypatch)
+    fake = _install_fake_connection(monkeypatch)
     fake.queue(ConnectionError('blip 1'))
     fake.queue(ConnectionError('blip 2'))
     c = _client()

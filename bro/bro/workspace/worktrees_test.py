@@ -67,26 +67,34 @@ class TestEnsureHostWorktree:
     monkeypatch.setattr(cw.worktrees.subprocess, 'run', fake_run)
     return calls
 
-  def _add_cmd(self, calls):
+  def _add_command(self, calls):
     return next(c for c in calls if c[:3] == ['git', 'worktree', 'add'])
 
   def test_new_branch_uses_base_ref(self, monkeypatch, tmp_path):
     calls = self._recorder(monkeypatch)
     wt = tmp_path / 'wt'
     assert cw.worktrees._ensure_host_worktree(wt, 'worktree-x', 'sha123') is True
-    assert self._add_cmd(calls) == ['git', 'worktree', 'add', str(wt), '-b', 'worktree-x', 'sha123']
+    assert self._add_command(calls) == [
+      'git',
+      'worktree',
+      'add',
+      str(wt),
+      '-b',
+      'worktree-x',
+      'sha123',
+    ]
 
   def test_new_branch_defaults_to_head(self, monkeypatch, tmp_path):
     calls = self._recorder(monkeypatch)
     wt = tmp_path / 'wt'
     assert cw.worktrees._ensure_host_worktree(wt, 'worktree-x') is True
-    assert self._add_cmd(calls) == ['git', 'worktree', 'add', str(wt), '-b', 'worktree-x']
+    assert self._add_command(calls) == ['git', 'worktree', 'add', str(wt), '-b', 'worktree-x']
 
   def test_existing_branch_ignores_base_ref(self, monkeypatch, tmp_path):
     calls = self._recorder(monkeypatch, branch_exists=True)
     wt = tmp_path / 'wt'
     assert cw.worktrees._ensure_host_worktree(wt, 'worktree-x', 'sha123') is True
-    assert self._add_cmd(calls) == ['git', 'worktree', 'add', str(wt), 'worktree-x']
+    assert self._add_command(calls) == ['git', 'worktree', 'add', str(wt), 'worktree-x']
 
   def test_existing_dir_is_noop(self, monkeypatch, tmp_path):
     calls = self._recorder(monkeypatch)

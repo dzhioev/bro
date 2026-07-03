@@ -110,12 +110,12 @@ class TestBroLaunch:
 
   def test_mcp_config_one_http_entry_per_namespace(self):
     argv = self._launch().argv
-    cfg = json.loads(argv[argv.index('--mcp-config') + 1])
+    config = json.loads(argv[argv.index('--mcp-config') + 1])
     namespaces = _pm_namespaces()
     # the service server's `skill` tool rides the `bro` namespace
     assert 'bro' in namespaces
-    assert list(cfg['mcpServers']) == namespaces
-    for ns, entry in cfg['mcpServers'].items():
+    assert list(config['mcpServers']) == namespaces
+    for ns, entry in config['mcpServers'].items():
       assert entry['type'] == 'http'
       assert entry['url'] == f'http://127.0.0.1:1234/{ns}'
       assert entry['headers'] == {'Authorization': 'Bearer tok'}

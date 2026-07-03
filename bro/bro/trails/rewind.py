@@ -91,14 +91,14 @@ def _should_color(mode: str, stream=sys.stdout) -> bool:
 
 
 def _page(text: str) -> None:
-  pager_cmd = os.environ.get('PAGER')
-  if pager_cmd is None or len(pager_cmd.strip()) == 0:
-    pager_cmd = 'less -FRX' if shutil.which('less') is not None else None
-  if pager_cmd is None:
+  pager_command = os.environ.get('PAGER')
+  if pager_command is None or len(pager_command.strip()) == 0:
+    pager_command = 'less -FRX' if shutil.which('less') is not None else None
+  if pager_command is None:
     sys.stdout.write(text)
     return
   try:
-    p = subprocess.Popen(pager_cmd, shell=True, stdin=subprocess.PIPE)
+    p = subprocess.Popen(pager_command, shell=True, stdin=subprocess.PIPE)
   except FileNotFoundError:
     sys.stdout.write(text)
     return
@@ -267,7 +267,7 @@ def _format_trail_header(trail: dict, col: _Colors) -> str:
   return '\n'.join(lines)
 
 
-def _cmd_list(client: TrailsClient, args: dict, col: _Colors) -> int:
+def _command_list(client: TrailsClient, args: dict, col: _Colors) -> int:
   trails_iter = client.iter_trails(
     bro=args.get('bro'),
     parent=args.get('parent'),
@@ -288,7 +288,7 @@ def _cmd_list(client: TrailsClient, args: dict, col: _Colors) -> int:
   return 0
 
 
-def _cmd_show(client: TrailsClient, args: dict, col: _Colors) -> int:
+def _command_show(client: TrailsClient, args: dict, col: _Colors) -> int:
   trail_id = args['trail_id']
   header = client.get_trail(trail_id)
   out: list[str] = [_format_trail_header(header, col)]
@@ -303,7 +303,7 @@ def _cmd_show(client: TrailsClient, args: dict, col: _Colors) -> int:
   return 0
 
 
-def _cmd_tree(client: TrailsClient, args: dict, col: _Colors) -> int:
+def _command_tree(client: TrailsClient, args: dict, col: _Colors) -> int:
   trail_id = args['trail_id']
   start = client.get_trail(trail_id)
 
@@ -361,7 +361,7 @@ def _render_tree(
     )
 
 
-def _cmd_fork(client: TrailsClient, args: dict, col: _Colors) -> int:
+def _command_fork(client: TrailsClient, args: dict, col: _Colors) -> int:
   trail_id = args['trail_id']
   step_id = args['step_id']
   initial = args.get('initial')
@@ -459,13 +459,13 @@ def main(argv: list[str]) -> Optional[int]:
   client = default_client()
   try:
     if command == 'list':
-      return _cmd_list(client, args, col)
+      return _command_list(client, args, col)
     if command == 'show':
-      return _cmd_show(client, args, col)
+      return _command_show(client, args, col)
     if command == 'tree':
-      return _cmd_tree(client, args, col)
+      return _command_tree(client, args, col)
     if command == 'fork':
-      return _cmd_fork(client, args, col)
+      return _command_fork(client, args, col)
   finally:
     client.close()
   parser.print_help(sys.stderr)

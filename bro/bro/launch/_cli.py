@@ -135,13 +135,13 @@ def maybe_containerize(
 def run(
   *,
   cli_name: str,
-  parser_desc: str,
+  parser_description: str,
   arg_name: str,
   arg_help: str,
-  run_fn: Callable[[Bro, str, Optional[Observer]], Coroutine[None, None, str]],
+  run_function: Callable[[Bro, str, Optional[Observer]], Coroutine[None, None, str]],
   argv: list[str],
 ) -> Optional[int]:
-  parser = base.args.Parser(description=parser_desc)
+  parser = base.args.Parser(description=parser_description)
   parser.add_argument('bro', help='bro name')
   parser.add_argument(arg_name, help=arg_help)
   parser.add_argument(
@@ -184,7 +184,7 @@ def run(
 
     observer = RichConsoleRenderer(prefix=bro.name)
   try:
-    result = asyncio.run(run_fn(bro, args[arg_name], observer))
+    result = asyncio.run(run_function(bro, args[arg_name], observer))
   except BroRaised as e:
     print(f'raised: {e.reason}', file=sys.stderr)
     return 1

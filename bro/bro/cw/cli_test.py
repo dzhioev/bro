@@ -44,8 +44,8 @@ class TestInPlace:
   def test_rejects_machinery_flags(self, capsys):
     with pytest.raises(SystemExit):
       cw.cli.main(['cw', 'ss', '--in-place', '-c', '--drop', 'w'])
-    err = capsys.readouterr().err
-    assert '--in-place cannot be combined with -c, --drop' in err
+    error = capsys.readouterr().err
+    assert '--in-place cannot be combined with -c, --drop' in error
 
   def test_skips_the_auto_container_gate(self):
     # the inner argv carries --auto but never -c; the outer validated the pairing

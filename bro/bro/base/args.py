@@ -46,7 +46,7 @@ def list_parser(arg: str) -> list[str]:
   return [item.strip() for item in arg.split(',')]
 
 
-def trigger(fn: Callable) -> type[argparse.Action]:
+def trigger(function: Callable) -> type[argparse.Action]:
   class TriggerAction(argparse.Action):
     def __init__(self, option_strings, dest, **kwargs):
       kwargs.setdefault('nargs', 0)
@@ -54,7 +54,7 @@ def trigger(fn: Callable) -> type[argparse.Action]:
 
     def __call__(self, parser, namespace, values, option_string=None):
       del parser, namespace, values, option_string
-      fn()
+      function()
 
   return TriggerAction
 
@@ -258,8 +258,8 @@ class Parser(argparse.ArgumentParser):
     for dest, info in self._env_info.items():
       action = info['action']
       env_name = info['env_name']
-      env_val = os.environ.get(env_name)
-      if env_val is None:
+      env_value = os.environ.get(env_name)
+      if env_value is None:
         continue
       if not info['supported']:
         raise NotImplementedError(
@@ -269,14 +269,14 @@ class Parser(argparse.ArgumentParser):
       if self._cli_provided(action, argv):
         continue
       if _is_nargs_zero(action):
-        if self._parse_bool_env(env_name, env_val):
+        if self._parse_bool_env(env_name, env_value):
           mutated.append(action.option_strings[0])
       else:
         converter = action.type if action.type is not None else (lambda x: x)
         try:
-          converted = converter(env_val)
+          converted = converter(env_value)
         except (ValueError, argparse.ArgumentTypeError) as e:
-          self.error(f'invalid value for env {env_name}: {env_val!r} ({e})')
+          self.error(f'invalid value for env {env_name}: {env_value!r} ({e})')
         action.default = converted
         action.required = False
     return mutated
@@ -370,33 +370,33 @@ class Parser(argparse.ArgumentParser):
       else:
         positionals.append(action)
     for action in flags:
-      val = get(action.dest)
+      value = get(action.dest)
       if isinstance(action, (argparse._StoreTrueAction, argparse._StoreFalseAction)):
-        if val != action.default:
+        if value != action.default:
           parts.append(action.option_strings[0])
       elif isinstance(action, argparse._AppendAction):
-        for item in val if val is not None else []:
+        for item in value if value is not None else []:
           parts.extend([action.option_strings[0], str(item)])
-      elif val is not None and val != action.default:
-        parts.extend([action.option_strings[0], str(val)])
+      elif value is not None and value != action.default:
+        parts.extend([action.option_strings[0], str(value)])
     for action in positionals:
-      val = get(action.dest)
-      if isinstance(val, list):
-        parts.extend(str(v) for v in val)
-      elif val is not None:
-        parts.append(str(val))
+      value = get(action.dest)
+      if isinstance(value, list):
+        parts.extend(str(v) for v in value)
+      elif value is not None:
+        parts.append(str(value))
     return parts
 
-  def set_handler(self, fn: Callable) -> 'Parser':
+  def set_handler(self, function: Callable) -> 'Parser':
     """register the handler dispatch() calls when this (sub)parser is selected; it
     is invoked with the parsed args as keyword arguments."""
-    self.set_defaults(**{_HANDLER_DEST: fn})
+    self.set_defaults(**{_HANDLER_DEST: function})
     return self
 
   def dispatch(self, argv: list[str]):
     """parse argv and invoke the selected subcommand's handler.
 
-    each subparser registers a handler with set_handler(fn); dispatch pops the
+    each subparser registers a handler with set_handler(function); dispatch pops the
     subcommand dest and the handler and calls handler(**remaining_args), returning
     its value. with no subcommand given (optional subparsers) it prints help to
     stderr and returns 1."""

@@ -47,7 +47,7 @@ STEP_KINDS = (
 # keys on it — a query there returns all trails by started_at (global newest-first
 # + since/until range). one logical partition suffices at this write volume; shard
 # the constant value if write throughput ever grows.
-GSI_PK_ATTR = 'gsi_pk'
+GSI_PK_ATTRIBUTE = 'gsi_pk'
 GSI_PK_VALUE = 'trail'
 
 
@@ -179,7 +179,7 @@ class Storage:
       'aggregates': aggregates,
     }
     # constant PK for the all-index GSI (global newest-first list).
-    trail_item[GSI_PK_ATTR] = GSI_PK_VALUE
+    trail_item[GSI_PK_ATTRIBUTE] = GSI_PK_VALUE
     if parent is not None:
       # surface parent.trail_id as a top-level attribute so the sparse
       # parent-trail-id GSI picks this trail up. trails without a parent omit
@@ -459,7 +459,7 @@ class Storage:
         **_range_query(
           table=self._trails_table,
           index='all-index',
-          pk_name=GSI_PK_ATTR,
+          pk_name=GSI_PK_ATTRIBUTE,
           pk_value=GSI_PK_VALUE,
           sk_name='started_at',
           sk_low=since,
@@ -483,7 +483,7 @@ class Storage:
     return {'trails': items, 'next': next_cursor}
 
   async def _resolve_body(self, item: dict) -> dict:
-    # body_s3 is a server-internal helper attr marking a spilled body; pop it so
+    # body_s3 is a server-internal helper attribute marking a spilled body; pop it so
     # it never leaks into the step row returned to clients.
     key = item.pop('body_s3', None)
     if key is None:
@@ -491,8 +491,8 @@ class Storage:
     head = await asyncio.to_thread(self._s3.head_object, Bucket=self._bucket, Key=key)
     size = int(head.get('ContentLength', 0))
     if size <= INLINE_RESPONSE_THRESHOLD_BYTES:
-      obj = await asyncio.to_thread(self._s3.get_object, Bucket=self._bucket, Key=key)
-      raw = obj['Body'].read()
+      s3_object = await asyncio.to_thread(self._s3.get_object, Bucket=self._bucket, Key=key)
+      raw = s3_object['Body'].read()
       try:
         item['body'] = json.loads(raw)
       except json.JSONDecodeError:

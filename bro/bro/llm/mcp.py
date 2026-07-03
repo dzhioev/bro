@@ -9,9 +9,9 @@ from typing import Any, ClassVar, Optional, get_origin
 from base import credentials
 
 
-def describe[F: Callable[..., Any]](fn: F, text: str) -> F:
-  fn.description = text  # type: ignore[attr-defined]
-  return fn
+def describe[F: Callable[..., Any]](function: F, text: str) -> F:
+  function.description = text  # type: ignore[attr-defined]
+  return function
 
 
 # `{{#has_cred <name>}}present{{else}}absent{{/has_cred}}` (and inverted `^`)
@@ -76,7 +76,7 @@ def render_return_shape(output_schema: dict[str, Any]) -> str:
 
 def _unwrap_structured(schema: dict[str, Any]) -> dict[str, Any]:
   # func_metadata wraps a non-object return (list / Optional / scalar) in a synthetic
-  # `{result: X}` object titled `<fn>Output`; peel it so the shape reflects the real
+  # `{result: X}` object titled `<function>Output`; peel it so the shape reflects the real
   # return type rather than the wrapper.
   props = schema.get('properties')
   if (
@@ -144,10 +144,10 @@ class Context[T]:
   state: T
 
 
-def _context_param(fn: Callable[..., Any]) -> Optional[str]:
-  """name of fn's `Context`-annotated parameter, or None. detected by annotation
-  (not by parameter name) so a rename can't silently stop the injection."""
-  for name, param in inspect.signature(fn, eval_str=True).parameters.items():
+def _context_param(function: Callable[..., Any]) -> Optional[str]:
+  """name of the function's `Context`-annotated parameter, or None. detected by
+  annotation (not by parameter name) so a rename can't silently stop the injection."""
+  for name, param in inspect.signature(function, eval_str=True).parameters.items():
     ann = param.annotation
     if ann is Context or get_origin(ann) is Context:
       return name
@@ -259,7 +259,7 @@ class MCPServerSpec:
 class FunctionTool(Tool):
   def __init__(
     self,
-    fn: Callable[..., Any],
+    function: Callable[..., Any],
     *,
     name: Optional[str] = None,
     description: Optional[str] = None,
@@ -268,25 +268,25 @@ class FunctionTool(Tool):
     from mcp.server.fastmcp.utilities.func_metadata import func_metadata
 
     resolved_description = (
-      description if description is not None else getattr(fn, 'description', None)
+      description if description is not None else getattr(function, 'description', None)
     )
     if resolved_description is None:
       raise ValueError(
-        f'tool {fn.__name__!r} has no description attribute and no description argument'
+        f'tool {function.__name__!r} has no description attribute and no description argument'
       )
-    self._name = name if name is not None else fn.__name__
+    self._name = name if name is not None else function.__name__
     self._description = resolved_description
-    self.fn = fn
-    # `state` is the hosting server's per-server object; a fn that declares a
+    self.function = function
+    # `state` is the hosting server's per-server object; a function that declares a
     # Context parameter gets it injected (wrapped in a fresh Context) on every
     # call, and the parameter is excluded from the derived input schema.
     self.state = state
-    self.context_param = _context_param(fn)
+    self.context_param = _context_param(function)
 
     skip = (self.context_param,) if self.context_param is not None else ()
-    ret = inspect.signature(fn).return_annotation
+    ret = inspect.signature(function).return_annotation
     structured = ret is not inspect.Signature.empty and ret is not str
-    self._metadata = func_metadata(fn, skip_names=skip, structured_output=structured)
+    self._metadata = func_metadata(function, skip_names=skip, structured_output=structured)
     self._output_schema = self._metadata.output_schema
     self._parameters = self._metadata.arg_model.model_json_schema(by_alias=True)
     self._return_shape = (
@@ -318,7 +318,7 @@ class FunctionTool(Tool):
     kwargs = validated.model_dump_one_level()
     if self.context_param is not None:
       kwargs[self.context_param] = Context(state=self.state)
-    result = self.fn(**kwargs)
+    result = self.function(**kwargs)
     if inspect.isawaitable(result):
       result = await result
     return self._coerce_output(result)
@@ -357,14 +357,14 @@ def validated_callable(tool: FunctionTool) -> Callable[..., Any]:
   adds the in-process path's fail-fast check that the backend result matches the declared
   output shape. The result is returned unchanged for the framework to serialize.
   """
-  fn = tool.fn
+  function = tool.function
   context_param = tool.context_param
 
-  @functools.wraps(fn)
+  @functools.wraps(function)
   async def validating(**kwargs: Any) -> Any:
     if context_param is not None:
       kwargs[context_param] = Context(state=tool.state)
-    result = fn(**kwargs)
+    result = function(**kwargs)
     if inspect.isawaitable(result):
       result = await result
     tool.validate_output(result)
@@ -373,7 +373,7 @@ def validated_callable(tool: FunctionTool) -> Callable[..., Any]:
   if context_param is not None:
     # hide the injected parameter from the framework's schema derivation: an
     # explicit __signature__ wins over the __wrapped__ chain functools.wraps sets up.
-    sig = inspect.signature(fn)
+    sig = inspect.signature(function)
     validating.__signature__ = sig.replace(  # pyright: ignore[reportAttributeAccessIssue]
       parameters=[p for p in sig.parameters.values() if p.name != context_param]
     )
@@ -470,11 +470,11 @@ class Toolset[T]:
     tools as plain functions). a duplicate name raises.
     """
 
-    def register(fn: F) -> F:
-      if fn.__name__ in self._by_name:
-        raise ValueError(f'duplicate {self.namespace} tool: {fn.__name__!r}')
-      self._by_name[fn.__name__] = describe(fn, description)
-      return fn
+    def register(function: F) -> F:
+      if function.__name__ in self._by_name:
+        raise ValueError(f'duplicate {self.namespace} tool: {function.__name__!r}')
+      self._by_name[function.__name__] = describe(function, description)
+      return function
 
     return register
 
@@ -499,7 +499,7 @@ class Toolset[T]:
 
   def tools(self, state: T) -> list[Tool]:
     """the full tool list bound to `state` — the seam tests inject fakes through."""
-    return [FunctionTool(fn, state=state) for fn in self._by_name.values()]
+    return [FunctionTool(function, state=state) for function in self._by_name.values()]
 
   def build(self, *tool_names: str) -> InProcessMCPServer:
     """the live server: per-server state built once, shared by every call through it."""

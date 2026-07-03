@@ -16,7 +16,7 @@ import pytest
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 
 from trails.server.storage import (
-  GSI_PK_ATTR,
+  GSI_PK_ATTRIBUTE,
   GSI_PK_VALUE,
   SPILLOVER_THRESHOLD_BYTES,
   Storage,
@@ -26,11 +26,11 @@ from trails.server.storage import (
 _serializer = TypeSerializer()
 _deserializer = TypeDeserializer()
 
-# IndexName -> (index PK attr, index SK attr); mirrors the GSIs storage queries.
+# IndexName -> (index PK attribute, index SK attribute); mirrors the GSIs storage queries.
 _INDEXES = {
   'bro-started_at-index': ('bro', 'started_at'),
   'parent-trail-id-index': ('parent_trail_id', 'started_at'),
-  'all-index': (GSI_PK_ATTR, 'started_at'),
+  'all-index': (GSI_PK_ATTRIBUTE, 'started_at'),
 }
 
 
@@ -53,21 +53,21 @@ class FakeDynamo:
     self._items = list(items)
 
   def query(self, **kwargs) -> dict:
-    pk_attr, sk_attr = _INDEXES[kwargs['IndexName']]
+    pk_attribute, sk_attribute = _INDEXES[kwargs['IndexName']]
     values = {
       k: _deserializer.deserialize(v) for k, v in kwargs['ExpressionAttributeValues'].items()
     }
-    matched = [it for it in self._items if it.get(pk_attr) == values[':pk']]
+    matched = [it for it in self._items if it.get(pk_attribute) == values[':pk']]
     if ':lo' in values:
-      matched = [it for it in matched if it[sk_attr] >= values[':lo']]
+      matched = [it for it in matched if it[sk_attribute] >= values[':lo']]
     if ':hi' in values:
-      matched = [it for it in matched if it[sk_attr] <= values[':hi']]
+      matched = [it for it in matched if it[sk_attribute] <= values[':hi']]
     # storage passes ScanIndexForward=False -> descending on the SK.
     forward = kwargs.get('ScanIndexForward', True)
-    ordered = sorted(matched, key=lambda it: it[sk_attr], reverse=not forward)
-    return self._page(ordered, kwargs, key_attrs=['trail_id', pk_attr, sk_attr])
+    ordered = sorted(matched, key=lambda it: it[sk_attribute], reverse=not forward)
+    return self._page(ordered, kwargs, key_attributes=['trail_id', pk_attribute, sk_attribute])
 
-  def _page(self, ordered: list[dict], kwargs: dict, *, key_attrs: list[str]) -> dict:
+  def _page(self, ordered: list[dict], kwargs: dict, *, key_attributes: list[str]) -> dict:
     start = 0
     start_key = kwargs.get('ExclusiveStartKey')
     if start_key is not None:
@@ -78,18 +78,20 @@ class FakeDynamo:
     response: dict = {'Items': [_ser(it) for it in page]}
     if start + limit < len(ordered):
       last = page[-1]
-      response['LastEvaluatedKey'] = _ser({attr: last[attr] for attr in key_attrs})
+      response['LastEvaluatedKey'] = _ser(
+        {attribute: last[attribute] for attribute in key_attributes}
+      )
     return response
 
 
-def _trail(idx: int, *, bro: str, parent: Optional[str], indexed: bool = True) -> dict:
+def _trail(index: int, *, bro: str, parent: Optional[str], indexed: bool = True) -> dict:
   item = {
-    'trail_id': f'trail-{idx:03d}',
+    'trail_id': f'trail-{index:03d}',
     'bro': bro,
-    'started_at': f'2026-06-07T00:00:{idx:02d}.000000Z',
+    'started_at': f'2026-06-07T00:00:{index:02d}.000000Z',
   }
   if indexed:
-    item[GSI_PK_ATTR] = GSI_PK_VALUE
+    item[GSI_PK_ATTRIBUTE] = GSI_PK_VALUE
   if parent is not None:
     item['parent_trail_id'] = parent
   return item
@@ -224,7 +226,7 @@ async def test_all_index_cursor_is_a_json_object():
   )
   decoded = json.loads(page['next'])
   # the all-index LEK is the same triple shape, keyed on the constant gsi_pk.
-  assert set(decoded) == {'trail_id', GSI_PK_ATTR, 'started_at'}
+  assert set(decoded) == {'trail_id', GSI_PK_ATTRIBUTE, 'started_at'}
   assert decoded['trail_id'] == 'trail-004'
 
 
@@ -345,7 +347,7 @@ async def test_spilled_body_resolves_via_body_s3():
   assert stored['body_s3'] in s3.objects
   page = await store.query_steps('T1', after=None, limit=100)
   step = page['steps'][0]
-  # under the 1MB inline cap, so it comes back as content, and the helper attr
+  # under the 1MB inline cap, so it comes back as content, and the helper attribute
   # never leaks into the row.
   assert step['body'] == big
   assert 'body_s3' not in step

@@ -39,21 +39,21 @@ class LandError(Exception):
   """a failed precondition or step; aborts the land with a clean message."""
 
 
-def _run(cmd: list[str], *, capture: bool) -> str:
+def _run(command: list[str], *, capture: bool) -> str:
   """run a command with stderr passing through; return stripped stdout when capture."""
   stdout = subprocess.PIPE if capture else None
-  result = spawn.run(cmd, stdout=stdout, text=True)
+  result = spawn.run(command, stdout=stdout, text=True)
   if result.returncode != 0:
-    raise LandError(f'`{" ".join(cmd[:3])}` failed with exit {result.returncode}')
+    raise LandError(f'`{" ".join(command[:3])}` failed with exit {result.returncode}')
   return result.stdout.strip() if capture else ''
 
 
 def _pr_view(fields: list[str], number: Optional[int] = None) -> dict[str, Any]:
-  cmd = ['gh', 'pr', 'view']
+  command = ['gh', 'pr', 'view']
   if number is not None:
-    cmd.append(str(number))
-  cmd += ['--json', ','.join(fields)]
-  return json.loads(_run(cmd, capture=True))
+    command.append(str(number))
+  command += ['--json', ','.join(fields)]
+  return json.loads(_run(command, capture=True))
 
 
 def _unchecked_boxes(body: str) -> list[str]:
@@ -153,8 +153,8 @@ def _land(no_review: bool, allow_unchecked: bool) -> dict[str, Any]:
 def land_pr(no_review: bool, allow_unchecked: bool) -> Optional[int]:
   try:
     result = _land(no_review, allow_unchecked)
-  except LandError as err:
-    _log.error(str(err))
+  except LandError as error:
+    _log.error(str(error))
     return 1
   print(json.dumps(result))
   return None

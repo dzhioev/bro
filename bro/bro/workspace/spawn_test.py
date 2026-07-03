@@ -141,17 +141,17 @@ class TestAttachedRoot:
     return removed
 
   async def _spawn_interruptible(self) -> asyncio.subprocess.Process:
-    proc = await asyncio.create_subprocess_exec(
+    process = await asyncio.create_subprocess_exec(
       sys.executable, '-c', _INTERRUPTIBLE, stdout=asyncio.subprocess.PIPE
     )
-    assert proc.stdout is not None
-    await proc.stdout.readline()  # handler installed
-    return proc
+    assert process.stdout is not None
+    await process.stdout.readline()  # handler installed
+    return process
 
   @pytest.mark.asyncio
   async def test_forwards_sigint_and_restores_handler(self):
-    proc = await self._spawn_interruptible()
-    root = cw.spawn._AttachedRoot('cid', proc)
+    process = await self._spawn_interruptible()
+    root = cw.spawn._AttachedRoot('cid', process)
     assert signal.getsignal(signal.SIGINT) is not signal.default_int_handler
     root._forward_sigint()
     assert await root.wait() == 42
@@ -159,8 +159,8 @@ class TestAttachedRoot:
 
   @pytest.mark.asyncio
   async def test_forward_after_exit_is_noop(self):
-    proc = await asyncio.create_subprocess_exec(sys.executable, '-c', 'pass')
-    root = cw.spawn._AttachedRoot('cid', proc)
+    process = await asyncio.create_subprocess_exec(sys.executable, '-c', 'pass')
+    root = cw.spawn._AttachedRoot('cid', process)
     assert await root.wait() == 0
     root._forward_sigint()  # process gone; must not raise
 
@@ -168,15 +168,15 @@ class TestAttachedRoot:
   async def test_wait_removes_the_container(self, removed):
     # the client can die while the container lives (sig-proxy is off on a tty attach),
     # so client exit must always be followed by container teardown
-    proc = await asyncio.create_subprocess_exec(sys.executable, '-c', 'pass')
-    root = cw.spawn._AttachedRoot('cid', proc)
+    process = await asyncio.create_subprocess_exec(sys.executable, '-c', 'pass')
+    root = cw.spawn._AttachedRoot('cid', process)
     await root.wait()
     assert removed == ['cid']
 
   @pytest.mark.asyncio
   async def test_output_tail_is_empty(self):
-    proc = await asyncio.create_subprocess_exec(sys.executable, '-c', 'pass')
-    root = cw.spawn._AttachedRoot('cid', proc)
+    process = await asyncio.create_subprocess_exec(sys.executable, '-c', 'pass')
+    root = cw.spawn._AttachedRoot('cid', process)
     await root.wait()
     assert root.output_tail() == ''
 
@@ -184,14 +184,14 @@ class TestAttachedRoot:
 class TestDockerChildCapture:
   async def _child(self, code: str, ring_bytes: int) -> cw.spawn._DockerChild:
     # the same stream wiring DockerSpawner uses: stderr merged into the stdout pipe
-    proc = await asyncio.create_subprocess_exec(
+    process = await asyncio.create_subprocess_exec(
       sys.executable,
       '-c',
       code,
       stdout=asyncio.subprocess.PIPE,
       stderr=asyncio.subprocess.STDOUT,
     )
-    return cw.spawn._DockerChild('cid', proc, ring_bytes, workspace=None)
+    return cw.spawn._DockerChild('cid', process, ring_bytes, workspace=None)
 
   @pytest.mark.asyncio
   async def test_tail_combines_stdout_and_stderr(self):
@@ -217,14 +217,14 @@ class TestDockerChildWorkspaceCleanup:
     return workspace
 
   async def _child(self, workspace) -> cw.spawn._DockerChild:
-    proc = await asyncio.create_subprocess_exec(
+    process = await asyncio.create_subprocess_exec(
       sys.executable,
       '-c',
       'pass',
       stdout=asyncio.subprocess.PIPE,
       stderr=asyncio.subprocess.STDOUT,
     )
-    return cw.spawn._DockerChild('cid', proc, cw.spawn.DEFAULT_RING_BYTES, workspace)
+    return cw.spawn._DockerChild('cid', process, cw.spawn.DEFAULT_RING_BYTES, workspace)
 
   @pytest.mark.asyncio
   async def test_wait_removes_throwaway_workspace(self, monkeypatch, tmp_path):
@@ -264,12 +264,12 @@ class TestDockerChildWorkspaceCleanup:
 
 class TestAttachedProcess:
   async def _interruptible(self) -> asyncio.subprocess.Process:
-    proc = await asyncio.create_subprocess_exec(
+    process = await asyncio.create_subprocess_exec(
       sys.executable, '-c', _INTERRUPTIBLE, stdout=asyncio.subprocess.PIPE
     )
-    assert proc.stdout is not None
-    await proc.stdout.readline()  # handler installed
-    return proc
+    assert process.stdout is not None
+    await process.stdout.readline()  # handler installed
+    return process
 
   @pytest.mark.asyncio
   async def test_forwards_sigint_and_restores_handler(self):
@@ -281,22 +281,24 @@ class TestAttachedProcess:
 
   @pytest.mark.asyncio
   async def test_kill_terminates_a_live_process(self):
-    proc = await asyncio.create_subprocess_exec(sys.executable, '-c', 'import time; time.sleep(30)')
-    handle = cw.spawn._AttachedProcess(proc)
+    process = await asyncio.create_subprocess_exec(
+      sys.executable, '-c', 'import time; time.sleep(30)'
+    )
+    handle = cw.spawn._AttachedProcess(process)
     await handle.kill()
     assert await handle.wait() == -signal.SIGKILL
 
   @pytest.mark.asyncio
   async def test_kill_after_exit_is_noop(self):
-    proc = await asyncio.create_subprocess_exec(sys.executable, '-c', 'pass')
-    handle = cw.spawn._AttachedProcess(proc)
+    process = await asyncio.create_subprocess_exec(sys.executable, '-c', 'pass')
+    handle = cw.spawn._AttachedProcess(process)
     assert await handle.wait() == 0
     await handle.kill()  # process gone; must not raise
 
   @pytest.mark.asyncio
   async def test_output_tail_is_empty(self):
-    proc = await asyncio.create_subprocess_exec(sys.executable, '-c', 'pass')
-    handle = cw.spawn._AttachedProcess(proc)
+    process = await asyncio.create_subprocess_exec(sys.executable, '-c', 'pass')
+    handle = cw.spawn._AttachedProcess(process)
     await handle.wait()
     assert handle.output_tail() == ''
 

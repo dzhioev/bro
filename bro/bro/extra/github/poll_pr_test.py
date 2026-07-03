@@ -39,7 +39,7 @@ class _FakeUrlopen:
     self._steps = steps
     self.call_count = 0
 
-  def __call__(self, req, *args, **kwargs):
+  def __call__(self, request, *args, **kwargs):
     step = self._steps[self.call_count]
     self.call_count += 1
     if isinstance(step, BaseException):
@@ -264,22 +264,22 @@ class TestGhGetRetry:
 
 class TestRetryDelay:
   def test_honors_retry_after_seconds(self):
-    err = _http_error(429, {'Retry-After': '7'})
-    assert poll_pr._retry_delay(err, 0) == 7.0
+    error = _http_error(429, {'Retry-After': '7'})
+    assert poll_pr._retry_delay(error, 0) == 7.0
 
   def test_honors_rate_limit_reset_when_exhausted(self, monkeypatch):
     monkeypatch.setattr(poll_pr.time, 'time', lambda: 1000.0)
-    err = _http_error(403, {'X-RateLimit-Remaining': '0', 'X-RateLimit-Reset': '1012'})
-    assert poll_pr._retry_delay(err, 0) == 12.0
+    error = _http_error(403, {'X-RateLimit-Remaining': '0', 'X-RateLimit-Reset': '1012'})
+    assert poll_pr._retry_delay(error, 0) == 12.0
 
   def test_falls_back_to_exponential_backoff(self):
-    err = _http_error(503)
-    assert poll_pr._retry_delay(err, 0) == poll_pr._BASE_BACKOFF
-    assert poll_pr._retry_delay(err, 2) == poll_pr._BASE_BACKOFF * 4
+    error = _http_error(503)
+    assert poll_pr._retry_delay(error, 0) == poll_pr._BASE_BACKOFF
+    assert poll_pr._retry_delay(error, 2) == poll_pr._BASE_BACKOFF * 4
 
   def test_caps_server_hint_at_max_backoff(self):
-    err = _http_error(429, {'Retry-After': '9999'})
-    assert poll_pr._retry_delay(err, 0) == poll_pr._MAX_BACKOFF
+    error = _http_error(429, {'Retry-After': '9999'})
+    assert poll_pr._retry_delay(error, 0) == poll_pr._MAX_BACKOFF
 
 
 class TestPollLoopResilience:

@@ -16,7 +16,9 @@ FOOTER_RAW_SLUG = '> created with Claude Code 2.1.181 | claude-experimental-99-1
 # an old single-number footer (pre four-class redesign) — must no longer parse
 OLD_FOOTER = "> created with Claude Code 2.1.114 | Opus 4.8: 45'231\n> session(s): abc12345"
 # the previous four-class shape (`↑ a / b (c) ↓ d`) — must no longer parse
-PREV_FOOTER = "> created with Claude Code 2.1.181 | Opus 4.8: ↑ 4'812 / 18'903 (1'204'556) ↓ 12'905"
+PREVIOUS_FOOTER = (
+  "> created with Claude Code 2.1.181 | Opus 4.8: ↑ 4'812 / 18'903 (1'204'556) ↓ 12'905"
+)
 COMMIT_WITH_FOOTER = f"""fix(server): tighten input validation
 
 ensure trailing slashes are normalised before lookup.
@@ -58,8 +60,8 @@ class TestParseFooter:
   def test_old_single_number_footer_is_not_parsed(self):
     assert _parse_footer(OLD_FOOTER) is None
 
-  def test_prev_slash_parens_footer_is_not_parsed(self):
-    assert _parse_footer(PREV_FOOTER) is None
+  def test_previous_slash_parens_footer_is_not_parsed(self):
+    assert _parse_footer(PREVIOUS_FOOTER) is None
 
   def test_no_footer_returns_none(self):
     assert _parse_footer(COMMIT_NO_FOOTER) is None

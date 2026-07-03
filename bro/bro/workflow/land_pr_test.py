@@ -82,26 +82,26 @@ class TestPreconditionError:
 
 
 def _fake_run(merge_calls: list[list[str]], pr: dict[str, Any]):
-  def run(cmd: list[str], *, capture: bool) -> str:
-    assert capture == (cmd[:3] != ['gh', 'pr', 'merge'])
-    if cmd[:3] == ['gh', 'pr', 'view'] and 'mergeCommit' in cmd[-1]:
+  def run(command: list[str], *, capture: bool) -> str:
+    assert capture == (command[:3] != ['gh', 'pr', 'merge'])
+    if command[:3] == ['gh', 'pr', 'view'] and 'mergeCommit' in command[-1]:
       merged = {
         'state': 'MERGED',
         'mergeCommit': {'oid': 'abc123'},
         'mergedAt': '2026-07-03T10:41:02Z',
       }
       return json.dumps(merged)
-    if cmd[:3] == ['gh', 'pr', 'view']:
+    if command[:3] == ['gh', 'pr', 'view']:
       return json.dumps(pr)
-    if cmd[:3] == ['git', 'rev-parse', '--show-toplevel']:
+    if command[:3] == ['git', 'rev-parse', '--show-toplevel']:
       return '/repo'
-    if cmd[0] == '/repo/setup/claude_commit_footer.py':
-      assert cmd[1:] == ['--squash', 'origin/master..HEAD']
+    if command[0] == '/repo/setup/claude_commit_footer.py':
+      assert command[1:] == ['--squash', 'origin/master..HEAD']
       return '> created with Claude Code …'
-    if cmd[:3] == ['gh', 'pr', 'merge']:
-      merge_calls.append(cmd)
+    if command[:3] == ['gh', 'pr', 'merge']:
+      merge_calls.append(command)
       return ''
-    raise AssertionError(f'unexpected command: {cmd}')
+    raise AssertionError(f'unexpected command: {command}')
 
   return run
 

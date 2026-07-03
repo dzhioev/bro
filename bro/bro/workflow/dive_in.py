@@ -198,16 +198,16 @@ def dive_in(
   # --mcp=http (joined form), not a bare --mcp: `cw ss --mcp` is nargs='?', so a bare
   # flag immediately followed by the positional name makes argparse consume the name as
   # its value. dive-in always wants the default http flow MCP.
-  cmd = ['cw', 'ss', '--mcp=http', *forwarded]
+  cw_command = ['cw', 'ss', '--mcp=http', *forwarded]
   if not host:
-    cmd.append('-c')
+    cw_command.append('-c')
   if prompt is not None:
-    cmd.extend(['-p', prompt])
-  cmd.append(name)
+    cw_command.extend(['-p', prompt])
+  cw_command.append(name)
   if dry_run:
-    print(' '.join(_shell_quote(c) for c in cmd))
+    print(' '.join(_shell_quote(c) for c in cw_command))
     return 0
-  return subprocess.run(cmd).returncode
+  return subprocess.run(cw_command).returncode
 
 
 def main(argv: list[str]) -> Optional[int]:

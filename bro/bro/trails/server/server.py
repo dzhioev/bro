@@ -51,7 +51,7 @@ async def _read_json(request: web.Request) -> Any:
     return None
 
 
-def _err(message: str, status: int) -> web.Response:
+def _error(message: str, status: int) -> web.Response:
   return web.json_response({'error': message}, status=status)
 
 
@@ -62,29 +62,29 @@ async def _handle_health(_: web.Request) -> web.Response:
 async def _handle_create_trail(request: web.Request) -> web.Response:
   payload = await _read_json(request)
   if not isinstance(payload, dict):
-    return _err('invalid json', 400)
+    return _error('invalid json', 400)
   for key in ('bro', 'bro_version', 'llm_spec', 'system_prompt', 'interactive', 'entry_point'):
     if key not in payload:
-      return _err(f'missing field: {key}', 400)
+      return _error(f'missing field: {key}', 400)
   if not isinstance(payload['bro'], str):
-    return _err('bro must be a string', 400)
+    return _error('bro must be a string', 400)
   if not isinstance(payload['bro_version'], int) or isinstance(payload['bro_version'], bool):
-    return _err('bro_version must be an int', 400)
+    return _error('bro_version must be an int', 400)
   if not isinstance(payload['llm_spec'], dict):
-    return _err('llm_spec must be an object', 400)
+    return _error('llm_spec must be an object', 400)
   if not isinstance(payload['system_prompt'], str):
-    return _err('system_prompt must be a string', 400)
+    return _error('system_prompt must be a string', 400)
   if not isinstance(payload['interactive'], bool):
-    return _err('interactive must be a bool', 400)
+    return _error('interactive must be a bool', 400)
   if not isinstance(payload['entry_point'], str):
-    return _err('entry_point must be a string', 400)
+    return _error('entry_point must be a string', 400)
   parent = payload.get('parent')
   if parent is not None and not isinstance(parent, dict):
-    return _err('parent must be an object or null', 400)
+    return _error('parent must be an object or null', 400)
   if isinstance(parent, dict):
     for k in ('trail_id', 'step_id', 'relationship'):
       if k not in parent:
-        return _err(f'parent.{k} required', 400)
+        return _error(f'parent.{k} required', 400)
 
   store: storage.Storage = request.app['storage']
   result = await store.create_trail(
@@ -103,23 +103,23 @@ async def _handle_put_step(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
   payload = await _read_json(request)
   if not isinstance(payload, dict):
-    return _err('invalid json', 400)
+    return _error('invalid json', 400)
   kind = payload.get('kind')
   if not isinstance(kind, str) or kind not in VALID_STEP_KINDS:
-    return _err(f'kind must be one of {sorted(VALID_STEP_KINDS)}', 400)
+    return _error(f'kind must be one of {sorted(VALID_STEP_KINDS)}', 400)
   body = payload.get('body')
   step_id = payload.get('step_id')
   if step_id is not None and not isinstance(step_id, str):
-    return _err('step_id must be a string', 400)
+    return _error('step_id must be a string', 400)
   extras = {k: v for k, v in payload.items() if k not in ('kind', 'body', 'step_id')}
 
   store: storage.Storage = request.app['storage']
   try:
     await store.put_step(trail_id=trail_id, kind=kind, body=body, extras=extras, step_id=step_id)
   except storage.BodyTooLarge as e:
-    return _err(str(e), 413)
+    return _error(str(e), 413)
   except storage.TrailNotFound:
-    return _err(f'trail not found: {trail_id}', 404)
+    return _error(f'trail not found: {trail_id}', 404)
   return web.Response(status=204)
 
 
@@ -127,16 +127,16 @@ async def _handle_end_trail(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
   payload = await _read_json(request)
   if not isinstance(payload, dict):
-    return _err('invalid json', 400)
+    return _error('invalid json', 400)
   reason = payload.get('reason')
   if reason not in VALID_END_REASONS:
-    return _err(f'reason must be one of {sorted(VALID_END_REASONS)}', 400)
+    return _error(f'reason must be one of {sorted(VALID_END_REASONS)}', 400)
   continuation = payload.get('continuation')
   if continuation is not None and not isinstance(continuation, dict):
-    return _err('continuation must be an object or null', 400)
+    return _error('continuation must be an object or null', 400)
   step_id = payload.get('step_id')
   if step_id is not None and not isinstance(step_id, str):
-    return _err('step_id must be a string', 400)
+    return _error('step_id must be a string', 400)
 
   store: storage.Storage = request.app['storage']
   try:
@@ -144,7 +144,7 @@ async def _handle_end_trail(request: web.Request) -> web.Response:
       trail_id=trail_id, reason=reason, continuation=continuation, step_id=step_id
     )
   except storage.TrailNotFound:
-    return _err(f'trail not found: {trail_id}', 404)
+    return _error(f'trail not found: {trail_id}', 404)
   return web.Response(status=204)
 
 
@@ -153,7 +153,7 @@ async def _handle_get_trail(request: web.Request) -> web.Response:
   store: storage.Storage = request.app['storage']
   trail = await store.get_trail(trail_id)
   if trail is None:
-    return _err(f'trail not found: {trail_id}', 404)
+    return _error(f'trail not found: {trail_id}', 404)
   return web.json_response(trail)
 
 
@@ -174,7 +174,7 @@ async def _handle_list_trails(request: web.Request) -> web.Response:
   cursor = request.query.get('cursor')
   limit = _parse_limit(request.query.get('limit'), default=20, ceiling=100)
   if bro is not None and parent is not None:
-    return _err('only one of bro/parent may be set', 400)
+    return _error('only one of bro/parent may be set', 400)
   store: storage.Storage = request.app['storage']
   result = await store.list_trails(
     bro=bro, parent=parent, since=since, until=until, cursor=cursor, limit=limit
@@ -247,8 +247,8 @@ def main(argv: list[str]) -> Optional[int]:
     bucket=args['spillover_bucket'],
   )
 
-  auth_desc = 'bearer auth' if bearer_token is not None else 'NO AUTH'
-  log.info(f'starting trails server on {args["host"]}:{args["port"]} ({auth_desc})')
+  auth_description = 'bearer auth' if bearer_token is not None else 'NO AUTH'
+  log.info(f'starting trails server on {args["host"]}:{args["port"]} ({auth_description})')
   web.run_app(create_app(store, bearer_token), host=args['host'], port=args['port'])
 
 
