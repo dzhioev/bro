@@ -109,7 +109,10 @@ while read -r _ local_sha remote_ref remote_sha; do
       fi
       ;;
   esac
+  # creation (zero remote sha) and deletion (zero local sha) pushes have no
+  # ancestry to fast-forward-check
   [ "$remote_sha" = "0000000000000000000000000000000000000000" ] && continue
+  [ "$local_sha" = "0000000000000000000000000000000000000000" ] && continue
   if ! git merge-base --is-ancestor "$remote_sha" "$local_sha"; then
     echo "error: non-fast-forward push to $remote_ref is blocked" >&2
     exit 1
