@@ -43,13 +43,13 @@ class MessageBubble(Static):
 
   def __init__(self, text: RenderableType, *, by_user: bool, when: datetime):
     classes = 'user' if by_user else 'bro'
-    ts = when.strftime('%H:%M')
+    timestamp = when.strftime('%H:%M')
     if isinstance(text, str):
-      super().__init__(f'{rich_escape(text)}\n[dim]{ts}[/dim]', classes=classes, markup=True)
+      super().__init__(f'{rich_escape(text)}\n[dim]{timestamp}[/dim]', classes=classes, markup=True)
     else:
       # pre-rendered content (e.g. the ANSI-decoded cw banner); append the
       # timestamp as a dim line without running it through markup parsing
-      super().__init__(Group(text, Text(ts, style='dim')), classes=classes)
+      super().__init__(Group(text, Text(timestamp, style='dim')), classes=classes)
 
 
 class SystemBubble(Static):

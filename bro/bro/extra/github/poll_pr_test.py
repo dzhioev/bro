@@ -23,7 +23,7 @@ class _FakeResp:
   def __enter__(self):
     return self
 
-  def __exit__(self, *exc):
+  def __exit__(self, *exception):
     return False
 
   def read(self) -> bytes:
@@ -241,9 +241,9 @@ class TestGhGetRetry:
     fake = _FakeUrlopen([_http_error(404), {'ok': True}])
     monkeypatch.setattr(poll_pr.urllib.request, 'urlopen', fake)
     monkeypatch.setattr(poll_pr.time, 'sleep', lambda _: None)
-    with pytest.raises(urllib.error.HTTPError) as exc:
+    with pytest.raises(urllib.error.HTTPError) as exception:
       poll_pr._gh_get('https://api.github.com/x', 't')
-    assert exc.value.code == 404
+    assert exception.value.code == 404
     assert fake.call_count == 1
 
   def test_retries_network_error(self, monkeypatch):
@@ -313,6 +313,6 @@ class TestPollLoopResilience:
       raise _http_error(404)
 
     monkeypatch.setattr(poll_pr, '_fetch_pr', fake_fetch_pr)
-    with pytest.raises(urllib.error.HTTPError) as exc:
+    with pytest.raises(urllib.error.HTTPError) as exception:
       poll_pr.poll_pr('o', 'r', 1, 't', interval=0, self_login=None)
-    assert exc.value.code == 404
+    assert exception.value.code == 404

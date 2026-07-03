@@ -69,7 +69,7 @@ def find_container_id(session: Path) -> Optional[str]:
 
   filters `docker ps` by the workspace's host mount path, which is unique per
   workspace. returns the container short id, or None if no running container
-  is bound to that mount. takes the mount path (not name+proj) so this stays a
+  is bound to that mount. takes the mount path (not name+project) so this stays a
   dependency-free leaf — the caller resolves the path.
   """
   if not session.is_dir():
@@ -89,8 +89,8 @@ def find_container_id(session: Path) -> Optional[str]:
 
 def _image_tag() -> str:
   h = hashlib.sha256()
-  proj = _project_root()
-  inputs = sorted(CONTAINER_DIR.iterdir()) + [proj / 'pyproject.toml', proj / 'uv.lock']
+  project = _project_root()
+  inputs = sorted(CONTAINER_DIR.iterdir()) + [project / 'pyproject.toml', project / 'uv.lock']
   for path in inputs:
     if path.is_file():
       h.update(path.name.encode())
@@ -116,7 +116,7 @@ def _ensure_image(tag: str) -> None:
       '--build-arg',
       f'CLAUDE_CODE_VERSION={version}',
       '--build-context',
-      f'proj={_project_root()}',
+      f'project={_project_root()}',
       str(CONTAINER_DIR),
     ],
     check=True,
@@ -150,7 +150,7 @@ def _create_container(argv: list[str], store_tarball: bytes, name: str) -> str:
 def _docker_create_argv(
   tag: str,
   name: str,
-  proj: Path,
+  project: Path,
   session: Path,
   command: list[str],
   *,
@@ -204,7 +204,7 @@ def _docker_create_argv(
     '-v',
     f'{session}:/workspace',
     '-v',
-    f'{proj}:/host-repo:ro',
+    f'{project}:/host-repo:ro',
     '-v',
     f'{claude_json}:/home/cw/.claude.json',
     '-v',

@@ -232,11 +232,11 @@ def main(argv: list[str]) -> Optional[int]:
   # (--port-file) milliseconds in and is never released between discovery and
   # serving, and a client connect that lands mid-import sits in the TCP backlog
   # until uvicorn accepts on the pre-bound socket.
-  sock = socket.create_server((args['host'], int(args['port'])))
+  server_socket = socket.create_server((args['host'], int(args['port'])))
   if args['port_file'] is not None:
-    _write_port_file(args['port_file'], sock.getsockname()[1])
+    _write_port_file(args['port_file'], server_socket.getsockname()[1])
   app = create_http_app(_resolve_servers(args['server']), args['bearer_token'])
   import uvicorn
 
-  uvicorn.Server(uvicorn.Config(app, log_level='info')).run(sockets=[sock])
+  uvicorn.Server(uvicorn.Config(app, log_level='info')).run(sockets=[server_socket])
   return None

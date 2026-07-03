@@ -71,7 +71,7 @@ def build_claude_launch(
 
   the bro flavor (`--bare --strict-mcp-config --tools ''`) runs claude with no
   project/user CLAUDE.md, no host MCP servers, no built-in tools, and only the
-  bro's MCP namespaces (`mcp__<ns>__*`); its system prompt is the bro's
+  bro's MCP namespaces (`mcp__<namespace>__*`); its system prompt is the bro's
   claude_system_prompt (the composition whose tool-name rule matches those
   mounts). auth comes from the `anthropic` secret via the workspace's own
   `setup/print_anthropic_key.sh`, wired as apiKeyHelper in the merged
@@ -103,7 +103,7 @@ def build_claude_launch(
       '--tools',
       '',
       '--allowed-tools',
-      ','.join(f'mcp__{ns}__*' for ns in namespaces),
+      ','.join(f'mcp__{namespace}__*' for namespace in namespaces),
     ]
   else:
     system_prompt = _session_append_prompt(spec.auto, os.environ.get('CW_BRO'))

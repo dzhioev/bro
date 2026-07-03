@@ -75,19 +75,26 @@ class FakeStorage:
     if trail_id not in self.trails:
       raise storage.TrailNotFound(trail_id)
     step_id = step_id if step_id is not None else self._new_id()
-    ts = self._now()
+    timestamp = self._now()
     self.steps[trail_id].append(
-      {'trail_id': trail_id, 'step_id': step_id, 'ts': ts, 'kind': kind, 'body': body, **extras}
+      {
+        'trail_id': trail_id,
+        'step_id': step_id,
+        'ts': timestamp,
+        'kind': kind,
+        'body': body,
+        **extras,
+      }
     )
     counts = self.trails[trail_id]['aggregates']['step_counts_by_kind']
     counts[kind] = counts.get(kind, 0) + 1
-    return {'step_id': step_id, 'ts': ts}
+    return {'step_id': step_id, 'ts': timestamp}
 
   async def end_trail(self, *, trail_id, reason, continuation, step_id=None):
     if trail_id not in self.trails:
       raise storage.TrailNotFound(trail_id)
-    ts = self._now()
-    self.trails[trail_id]['ended_at'] = ts
+    timestamp = self._now()
+    self.trails[trail_id]['ended_at'] = timestamp
     self.trails[trail_id]['end_reason'] = reason
     if continuation is not None:
       self.trails[trail_id]['continuation'] = continuation
@@ -95,12 +102,12 @@ class FakeStorage:
       {
         'trail_id': trail_id,
         'step_id': step_id if step_id is not None else self._new_id(),
-        'ts': ts,
+        'ts': timestamp,
         'kind': 'end',
         'body': {'reason': reason},
       }
     )
-    return {'ended_at': ts}
+    return {'ended_at': timestamp}
 
   async def get_trail(self, trail_id):
     return self.trails.get(trail_id)

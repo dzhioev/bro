@@ -4,11 +4,11 @@ from pathlib import Path
 from base import log
 
 
-def _populate_bro_skills(proj: Path, bro_name: str) -> None:
-  """populate <proj>/.claude/skills/<name>/SKILL.md as relative symlinks into the
+def _populate_bro_skills(project: Path, bro_name: str) -> None:
+  """populate <project>/.claude/skills/<name>/SKILL.md as relative symlinks into the
   named bro's `bro/bros/<bro>/skills/<name>.md` files.
 
-  called by the in-place session runner (`cw ss --in-place`): `proj` is a
+  called by the in-place session runner (`cw ss --in-place`): `project` is a
   per-session `tempfile.mkdtemp` directory passed to claude via `--add-dir`, so
   concurrent sessions on the same repo don't share `.claude/skills/`.
 
@@ -19,7 +19,7 @@ def _populate_bro_skills(proj: Path, bro_name: str) -> None:
   from bro.registry import create_bro
 
   bro = create_bro(bro_name)
-  skills_dir = proj / '.claude' / 'skills'
+  skills_dir = project / '.claude' / 'skills'
   skills_dir.mkdir(parents=True, exist_ok=True)
   for child in skills_dir.iterdir():
     if not child.is_dir():

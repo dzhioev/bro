@@ -4,15 +4,15 @@
 # uses CW_SKIP_VENV=1 to skip the slow `uv sync` step.
 
 DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
-PROJ="$(cd "$DIR" && realpath "$(git rev-parse --git-common-dir)/..")"
+PROJECT="$(cd "$DIR" && realpath "$(git rev-parse --git-common-dir)/..")"
 
 TAG="ppp-cw:smoke-test"
 echo "building image" >&2
-docker build -t "$TAG" -f "$DIR/Dockerfile" --build-context "proj=$PROJ" "$DIR" >&2
+docker build -t "$TAG" -f "$DIR/Dockerfile" --build-context "project=$PROJECT" "$DIR" >&2
 
 # colima only shares /Users; mktemp uses /var/folders which is invisible
 # inside the container. create temp dir under the project tree instead.
-SMOKE_TMP="$(mktemp -d "$PROJ/.smoke-XXXXXX")"
+SMOKE_TMP="$(mktemp -d "$PROJECT/.smoke-XXXXXX")"
 trap 'rm -rf "$SMOKE_TMP"' EXIT
 mkdir -p "$SMOKE_TMP/workspace" "$SMOKE_TMP/claude"
 
@@ -44,7 +44,7 @@ echo "running entrypoint" >&2
 # breaks out of the quote and corrupts the script.
 docker run --rm -i \
   -v "$SMOKE_TMP/workspace:/workspace" \
-  -v "$PROJ:/host-repo:ro" \
+  -v "$PROJECT:/host-repo:ro" \
   -v "$SMOKE_TMP/gitconfig:/host-gitconfig:ro" \
   -v "$SMOKE_TMP/claude:/home/cw/.claude" \
   -v "$SMOKE_TMP/claude/.claude.json:/home/cw/.claude.json" \

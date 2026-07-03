@@ -55,7 +55,7 @@ class TextRenderer(Observer):
     self._emit(f'· thinking: {truncate(oneline(text), _REASONING_LIMIT)}')
 
   def on_assistant_message(self, text: str, terminal: bool) -> None:
-    # skip terminal — call_text prints the reply itself as `[ts] bro: <reply>`,
+    # skip terminal — call_text prints the reply itself as `[timestamp] bro: <reply>`,
     # so emitting here would double-render.
     if terminal:
       return
@@ -86,8 +86,8 @@ async def call_text(
   effective_observer: Observer = observer if observer is not None else TextRenderer(prefix=bro.name)
 
   def emit(reply: str) -> None:
-    ts = now().strftime('%H:%M:%S')
-    print(f'[{ts}] {bro.name}: {reply}')
+    timestamp = now().strftime('%H:%M:%S')
+    print(f'[{timestamp}] {bro.name}: {reply}')
 
   # opening bro message: the cw banner (session environment facts), before the
   # first user message is sent. visual form — its ANSI renders in the terminal.

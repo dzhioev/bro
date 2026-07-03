@@ -80,9 +80,9 @@ def test_expand_passes_non_slash_input_through():
 
 def test_expand_unknown_skill_raises_key_error():
   bro = RecordBro(skills={'fix': 'FIX BODY'})
-  with pytest.raises(KeyError) as exc:
+  with pytest.raises(KeyError) as exception:
     _expand_skill_invocation(bro, '/nope something')
-  msg = str(exc.value)
+  msg = str(exception.value)
   assert 'nope' in msg
   assert 'fix' in msg
 

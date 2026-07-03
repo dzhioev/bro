@@ -111,9 +111,9 @@ class TestBrokerCreateArgv:
     assert '-it' in build_argv(attached=True)
 
   def test_docker_sock_follows_spec(self, build_argv):
-    sock = '/var/run/docker.sock:/var/run/docker.sock'
-    assert sock not in build_argv()
-    assert sock in build_argv(docker_sock=True)
+    mount = '/var/run/docker.sock:/var/run/docker.sock'
+    assert mount not in build_argv()
+    assert mount in build_argv(docker_sock=True)
 
   def test_forward_bro_forwards_ambient_cw_bro(self, build_argv, monkeypatch):
     monkeypatch.setenv('CW_BRO', 'ppp-dev')

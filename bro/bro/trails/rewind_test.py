@@ -201,7 +201,7 @@ class TestRenderTree:
       '',
       is_last=True,
       lines=lines,
-      col=NO_COLOR,
+      colors=NO_COLOR,
       highlight='TROOT',
     )
     assert len(lines) == 1
@@ -239,13 +239,13 @@ class TestRenderTree:
       '',
       is_last=True,
       lines=lines,
-      col=NO_COLOR,
+      colors=NO_COLOR,
       highlight='T-a',
     )
     assert 'TROOT' in lines[0]
     assert '<-- here' in '\n'.join(lines)
-    assert any('T-a' in ln for ln in lines)
-    assert any('T-b' in ln for ln in lines)
+    assert any('T-a' in line for line in lines)
+    assert any('T-b' in line for line in lines)
 
 
 class TestForkRepl:

@@ -390,7 +390,7 @@ class TestHTTPTrackerStartTrail:
     fake = _install_fake_connection(monkeypatch)
     fake.queue((500, b'oops'))
     tracker = HTTPTracker('https://trails.example', 'tok')
-    with pytest.raises(HTTPStatusError) as exc_info:
+    with pytest.raises(HTTPStatusError) as exception_info:
       tracker.start_trail(
         bro='b',
         llm_spec={},
@@ -399,7 +399,7 @@ class TestHTTPTrackerStartTrail:
         interactive=False,
         entry_point='x',
       )
-    assert exc_info.value.status == 500
+    assert exception_info.value.status == 500
     assert len(fake.requests) == 1
 
 
@@ -503,9 +503,9 @@ class TestHTTPTrackerStep:
     tracker, fake = self._ready(monkeypatch)
     # 413 (body too large) is deterministic — retrying can't help.
     fake.queue((413, b'too large'))
-    with pytest.raises(HTTPStatusError) as exc_info:
+    with pytest.raises(HTTPStatusError) as exception_info:
       tracker.step('llm_call', 'x', turn_index=1)
-    assert exc_info.value.status == 413
+    assert exception_info.value.status == 413
     step_requests = [r for r in fake.requests if r[1].endswith('/steps')]
     assert len(step_requests) == 1
 
@@ -513,9 +513,9 @@ class TestHTTPTrackerStep:
     tracker, fake = self._ready(monkeypatch)
     for _ in range(4):
       fake.queue((503, b'unavailable'))
-    with pytest.raises(HTTPStatusError) as exc_info:
+    with pytest.raises(HTTPStatusError) as exception_info:
       tracker.step('reasoning', 'thinking', turn_index=1)
-    assert exc_info.value.status == 503
+    assert exception_info.value.status == 503
     step_requests = [r for r in fake.requests if r[1].endswith('/steps')]
     # initial + 3 retries (5xx is transient).
     assert len(step_requests) == 4

@@ -73,7 +73,7 @@ class TestRunInContainerInjection:
   def harness(self, monkeypatch, tmp_path):
     # pin the broker-less direct path; the broker gate and root launch have their own tests
     monkeypatch.setenv('BROKER_DISABLED', '1')
-    monkeypatch.setattr(cw.containers, '_project_root', lambda: tmp_path / 'proj')
+    monkeypatch.setattr(cw.containers, '_project_root', lambda: tmp_path / 'project')
     monkeypatch.setattr(cw.containers, '_image_tag', lambda: 'tag')
     monkeypatch.setattr(cw.containers, '_ensure_image', lambda tag: None)
     monkeypatch.setattr(cw.containers.Path, 'home', lambda: tmp_path / 'home')
@@ -135,11 +135,11 @@ class TestBrokerGate:
 
   def test_run_in_container_routes_through_broker(self, monkeypatch, tmp_path):
     monkeypatch.delenv('BROKER_DISABLED', raising=False)
-    monkeypatch.setattr(cw.containers, '_project_root', lambda: tmp_path / 'proj')
+    monkeypatch.setattr(cw.containers, '_project_root', lambda: tmp_path / 'project')
     roots: list = []
 
-    def fake_root(name, command, proj, **kwargs):
-      roots.append({'name': name, 'command': command, 'proj': proj, **kwargs})
+    def fake_root(name, command, project, **kwargs):
+      roots.append({'name': name, 'command': command, 'project': project, **kwargs})
       return 5
 
     monkeypatch.setattr(cw.containers, '_run_root_via_broker', fake_root)
@@ -149,7 +149,7 @@ class TestBrokerGate:
       {
         'name': 'ws',
         'command': ['claude'],
-        'proj': tmp_path / 'proj',
+        'project': tmp_path / 'project',
         'secrets': (),
         'optional_secrets': (),
         'docker_sock': False,
@@ -163,17 +163,17 @@ class TestRunRootViaBroker:
   def test_builds_the_attached_launch_and_delegates(self, monkeypatch, tmp_path):
     captured: dict = {}
 
-    def fake_run_root(launch, spawner, proj):
+    def fake_run_root(launch, spawner, project):
       captured['launch'] = launch
       captured['spawner'] = spawner
-      captured['proj'] = proj
+      captured['project'] = project
       return 3
 
     monkeypatch.setattr(cw.spawn, 'run_root_via_broker', fake_run_root)
     code = cw.containers._run_root_via_broker(
       'ws',
       ['claude', '--auto'],
-      tmp_path / 'proj',
+      tmp_path / 'project',
       secrets=('github',),
       optional_secrets=('openai',),
       docker_sock=True,
@@ -182,7 +182,7 @@ class TestRunRootViaBroker:
     )
     assert code == 3
     assert isinstance(captured['spawner'], cw.spawn.DockerSpawner)
-    assert captured['proj'] == tmp_path / 'proj'
+    assert captured['project'] == tmp_path / 'project'
     assert captured['launch'] == cw.spawn.DockerLaunchSpec(
       command=['claude', '--auto'],
       env={'CW_BASE_REF': 'deadbeef'},

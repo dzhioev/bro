@@ -388,14 +388,14 @@ def _fake_usage(*, input_tokens=10, output_tokens=20, reasoning_tokens=0):
 
 
 def _fake_response(*, output: list, response_id: str = 'resp_fork', dump_payload=None) -> Response:
-  ns = SimpleNamespace(
+  namespace = SimpleNamespace(
     id=response_id,
     output=output,
     usage=_fake_usage(),
   )
   payload = dump_payload if dump_payload is not None else {'id': response_id, 'output': []}
-  ns.model_dump = lambda mode='json': payload
-  return cast(Response, ns)
+  namespace.model_dump = lambda mode='json': payload
+  return cast(Response, namespace)
 
 
 def _message_item(text: str):
@@ -406,11 +406,11 @@ def _message_item(text: str):
 
 
 def _install_responses(gpt: chat_gpt_module.ChatGPT, sequence: list, captured: list[dict]) -> None:
-  it = iter(sequence)
+  iterator = iter(sequence)
 
   def create(**kwargs):
     captured.append(kwargs)
-    return next(it)
+    return next(iterator)
 
   gpt.client = cast(Any, SimpleNamespace(responses=SimpleNamespace(create=create)))
 

@@ -25,11 +25,11 @@ def _parse_ref(ref: str) -> tuple[str, bool]:
   return ref, False
 
 
-def _host_pidfile(proj: Path, name: str) -> Path:
+def _host_pidfile(project: Path, name: str) -> Path:
   # per-worktree git admin dir (outside the working tree, so it never shows up in
   # `git status` and is cleaned up with the worktree). `cw` writes its own pid here
   # for the session's duration.
-  return proj / '.git' / 'worktrees' / name / 'cw-session.pid'
+  return project / '.git' / 'worktrees' / name / 'cw-session.pid'
 
 
 def _read_subject(projects_dir: Path) -> Optional[str]:
@@ -282,9 +282,9 @@ class Workspace(ABC):
   (worktrees.py / containers.py) and only consumes a Workspace for the post-run finish.
   """
 
-  def __init__(self, name: str, proj: Path):
+  def __init__(self, name: str, project: Path):
     self.name = name
-    self.proj = proj
+    self.project = project
 
   @property
   @abstractmethod
@@ -319,32 +319,34 @@ class Workspace(ABC):
     return _last_active(self.path)
 
   @classmethod
-  def from_ref(cls, ref: str, proj: Path) -> 'Workspace':
+  def from_ref(cls, ref: str, project: Path) -> 'Workspace':
     name, is_container = _parse_ref(ref)
-    ws: Workspace = ContainerWorkspace(name, proj) if is_container else HostWorktree(name, proj)
-    if not ws.path.is_dir():
+    workspace: Workspace = (
+      ContainerWorkspace(name, project) if is_container else HostWorktree(name, project)
+    )
+    if not workspace.path.is_dir():
       kind = 'container workspace' if is_container else 'workspace'
       raise ValueError(f'{kind} not found: {ref}')
-    return ws
+    return workspace
 
   @classmethod
-  def all(cls, proj: Path) -> list['Workspace']:
+  def all(cls, project: Path) -> list['Workspace']:
     # enumeration only (cheap): the per-workspace I/O (subject/last_active/is_clean)
     # is left to the parallelized loops in listing.py / clean.py.
     result: list[Workspace] = []
-    worktrees = _worktrees_dir(proj)
+    worktrees = _worktrees_dir(project)
     if worktrees.is_dir():
-      result.extend(HostWorktree(p.name, proj) for p in worktrees.iterdir() if p.is_dir())
-    containers = _containers_dir(proj)
+      result.extend(HostWorktree(p.name, project) for p in worktrees.iterdir() if p.is_dir())
+    containers = _containers_dir(project)
     if containers.is_dir():
-      result.extend(ContainerWorkspace(p.name, proj) for p in containers.iterdir() if p.is_dir())
+      result.extend(ContainerWorkspace(p.name, project) for p in containers.iterdir() if p.is_dir())
     return result
 
 
 class HostWorktree(Workspace):
   @property
   def path(self) -> Path:
-    return _worktrees_dir(self.proj) / self.name
+    return _worktrees_dir(self.project) / self.name
 
   @property
   def ref(self) -> str:
@@ -352,7 +354,7 @@ class HostWorktree(Workspace):
 
   @property
   def pidfile(self) -> Path:
-    return _host_pidfile(self.proj, self.name)
+    return _host_pidfile(self.project, self.name)
 
   def claude_projects_dir(self) -> Path:
     return _claude_projects_dir(self.path)
@@ -387,7 +389,7 @@ class HostWorktree(Workspace):
 class ContainerWorkspace(Workspace):
   @property
   def path(self) -> Path:
-    return _containers_dir(self.proj) / self.name
+    return _containers_dir(self.project) / self.name
 
   @property
   def ref(self) -> str:
@@ -406,7 +408,7 @@ class ContainerWorkspace(Workspace):
   def _git_runner(self) -> Optional[_GitRunner]:
     # the clone's own remotes are unreachable from the host (origin = HTTPS GitHub
     # without creds, host remote = /host-repo bind mount), so the ancestry checks
-    # run in the shared host repo (self.proj) with the two stores cross-exposed as
+    # run in the shared host repo (self.project) with the two stores cross-exposed as
     # alternates: the host repo's objects to the clone's status read, and the
     # clone's objects to the shared repo's ancestry walk — so the walk reaches the
     # container's local commits without writing them into the shared repo (which
@@ -416,7 +418,7 @@ class ContainerWorkspace(Workspace):
     git_env = no_prompt_env()
     status_env = {
       **git_env,
-      'GIT_ALTERNATE_OBJECT_DIRECTORIES': str(self.proj / '.git' / 'objects'),
+      'GIT_ALTERNATE_OBJECT_DIRECTORIES': str(self.project / '.git' / 'objects'),
     }
     ancestry_env = {
       **git_env,
@@ -437,7 +439,7 @@ class ContainerWorkspace(Workspace):
 
     return _GitRunner(
       path=self.path,
-      check_root=self.proj,
+      check_root=self.project,
       status_env=status_env,
       ancestry_env=ancestry_env,
       read_head=read_head,

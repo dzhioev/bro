@@ -37,8 +37,8 @@ class WebSearch(SearchableDataSource):
     return self._api_key
 
   async def search(self, query: str, limit: int = 5) -> list[Hit]:
-    params = {'q': query, 'count': str(limit)}
-    data = await _get_json(_SEARCH_URL, params, headers=self._auth_headers())
+    parameters = {'q': query, 'count': str(limit)}
+    data = await _get_json(_SEARCH_URL, parameters, headers=self._auth_headers())
     results = data.get('web', {}).get('results', [])
     hits: list[Hit] = []
     for result in results[:limit]:
@@ -67,8 +67,8 @@ class WebSearch(SearchableDataSource):
     }
 
 
-async def _get_json(url: str, params: dict[str, str], headers: dict[str, str]) -> dict:
-  full_url = f'{url}?{urllib.parse.urlencode(params)}'
+async def _get_json(url: str, parameters: dict[str, str], headers: dict[str, str]) -> dict:
+  full_url = f'{url}?{urllib.parse.urlencode(parameters)}'
   request_headers = {'User-Agent': _USER_AGENT, **headers}
   async with aiohttp.ClientSession(headers=request_headers) as session:
     async with session.get(full_url) as response:

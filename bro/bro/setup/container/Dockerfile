@@ -90,9 +90,9 @@ RUN gosu cw bash -ec '\
 # be probed.
 ENV UV_CACHE_DIR=/opt/uv-cache
 ENV UV_LINK_MODE=copy
-RUN --mount=type=bind,from=proj,target=/proj-src \
+RUN --mount=type=bind,from=project,target=/project-src \
     mkdir -p /workspace \
- && tar -C /proj-src --exclude=./.git --exclude=./.venv --exclude=./var \
+ && tar -C /project-src --exclude=./.git --exclude=./.venv --exclude=./var \
       --exclude=./node_modules --exclude=./.configs -cf - . | tar -C /workspace -xf - \
  && cd /workspace \
  && UV_PROJECT_ENVIRONMENT=/opt/cw-venv uv sync --frozen --all-groups \

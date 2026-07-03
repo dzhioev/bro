@@ -8,7 +8,7 @@ import cw.claude_argv
 from cw.mcp import MCPEndpoint
 from cw.session_test import _spec
 
-_WS = Path('/ws')
+_WORKSPACE = Path('/ws')
 _ENDPOINT = MCPEndpoint(port=1234, token='tok')
 
 
@@ -20,7 +20,7 @@ def _pm_namespaces() -> list[str]:
 
 def _native_launch(spec, **kwargs) -> cw.claude_argv.ClaudeLaunch:
   with patch('cw.claude_argv._session_append_prompt', return_value='append text'):
-    return cw.claude_argv.build_claude_launch(spec, workspace=_WS, **kwargs)
+    return cw.claude_argv.build_claude_launch(spec, workspace=_WORKSPACE, **kwargs)
 
 
 def _settings(argv: list[str]) -> dict:
@@ -89,7 +89,7 @@ class TestBroLaunch:
   def _launch(self, **kwargs) -> cw.claude_argv.ClaudeLaunch:
     spec = _spec(bro='pm', **kwargs)
     return cw.claude_argv.build_claude_launch(
-      spec, workspace=_WS, claude_args=[], endpoint=_ENDPOINT
+      spec, workspace=_WORKSPACE, claude_args=[], endpoint=_ENDPOINT
     )
 
   def test_basic_shape(self):
@@ -105,7 +105,7 @@ class TestBroLaunch:
   def test_allowed_tools_cover_each_namespace(self):
     argv = self._launch().argv
     assert argv[argv.index('--allowed-tools') + 1] == ','.join(
-      f'mcp__{ns}__*' for ns in _pm_namespaces()
+      f'mcp__{namespace}__*' for namespace in _pm_namespaces()
     )
 
   def test_mcp_config_one_http_entry_per_namespace(self):
@@ -115,9 +115,9 @@ class TestBroLaunch:
     # the service server's `skill` tool rides the `bro` namespace
     assert 'bro' in namespaces
     assert list(config['mcpServers']) == namespaces
-    for ns, entry in config['mcpServers'].items():
+    for namespace, entry in config['mcpServers'].items():
       assert entry['type'] == 'http'
-      assert entry['url'] == f'http://127.0.0.1:1234/{ns}'
+      assert entry['url'] == f'http://127.0.0.1:1234/{namespace}'
       assert entry['headers'] == {'Authorization': 'Bearer tok'}
 
   def test_settings_merge_fast_mode_and_api_key_helper(self):
@@ -137,15 +137,15 @@ class TestBroLaunch:
     prompt = argv[argv.index('--system-prompt') + 1]
     assert prompt == create_bro('pm').claude_system_prompt
     assert launch.system_prompt == prompt
-    # the flavor whose tool-name rule matches the mcp__<ns>__<tool> mounts
+    # the flavor whose tool-name rule matches the mcp__<namespace>__<tool> mounts
     assert '`mcp__namespace__tool`' in prompt
 
   def test_without_endpoint_raises(self):
     with pytest.raises(ValueError, match='session-local MCP endpoint'):
-      cw.claude_argv.build_claude_launch(_spec(bro='pm'), workspace=_WS, claude_args=[])
+      cw.claude_argv.build_claude_launch(_spec(bro='pm'), workspace=_WORKSPACE, claude_args=[])
 
   def test_unknown_bro_raises(self):
     with pytest.raises(KeyError, match='unknown bro'):
       cw.claude_argv.build_claude_launch(
-        _spec(bro='does-not-exist'), workspace=_WS, claude_args=[], endpoint=_ENDPOINT
+        _spec(bro='does-not-exist'), workspace=_WORKSPACE, claude_args=[], endpoint=_ENDPOINT
       )

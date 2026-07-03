@@ -70,11 +70,11 @@ def run(
       kill_group(process)
       process.wait()
       raise
-    retcode = process.poll()
-  assert retcode is not None  # communicate returned, so the child has exited
-  if check and retcode != 0:
-    raise subprocess.CalledProcessError(retcode, process.args, output=stdout, stderr=stderr)
-  return subprocess.CompletedProcess(process.args, retcode, stdout, stderr)
+    return_code = process.poll()
+  assert return_code is not None  # communicate returned, so the child has exited
+  if check and return_code != 0:
+    raise subprocess.CalledProcessError(return_code, process.args, output=stdout, stderr=stderr)
+  return subprocess.CompletedProcess(process.args, return_code, stdout, stderr)
 
 
 def popen(command, **kwargs) -> subprocess.Popen:

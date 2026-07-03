@@ -68,7 +68,7 @@ def _extract_metadata(path: Path) -> dict:
   subject: Optional[str] = None
   model: Optional[str] = None
   version: Optional[str] = None
-  first_ts: Optional[str] = None
+  first_timestamp: Optional[str] = None
   line_count = 0
 
   with path.open() as f:
@@ -79,10 +79,10 @@ def _extract_metadata(path: Path) -> dict:
       except json.JSONDecodeError:
         continue
 
-      if first_ts is None:
-        ts = entry.get('timestamp')
-        if isinstance(ts, str):
-          first_ts = ts
+      if first_timestamp is None:
+        timestamp = entry.get('timestamp')
+        if isinstance(timestamp, str):
+          first_timestamp = timestamp
 
       if subject is None and entry.get('type') == 'user' and entry.get('isSidechain') is not True:
         content = entry.get('message', {}).get('content')
@@ -114,7 +114,7 @@ def _extract_metadata(path: Path) -> dict:
     'subject': subject,
     'model': model,
     'version': version,
-    'started_at': first_ts,
+    'started_at': first_timestamp,
     'line_count': line_count,
   }
 
@@ -187,8 +187,8 @@ def _build_item(path: Path, workspace: str, s3_key: str) -> dict:
   return item
 
 
-def _exc_summary(exc: BaseException) -> str:
-  return f'{type(exc).__name__}: {exc}'
+def _exception_summary(exception: BaseException) -> str:
+  return f'{type(exception).__name__}: {exception}'
 
 
 def _sync_once(path: Path, workspace: str, bucket: str, s3, dynamo, table_name: str) -> None:
@@ -232,7 +232,7 @@ def _watch(interval: int, workspace: str, bucket: str, s3, dynamo, table_name: s
           log.info('session log disappeared, skipping')
         except Exception as e:
           log.exception('sync failed')
-          session_log_health.write('error', _exc_summary(e))
+          session_log_health.write('error', _exception_summary(e))
     stop.wait(interval)
 
   path = _latest_jsonl(projects_dir)
@@ -244,7 +244,7 @@ def _watch(interval: int, workspace: str, bucket: str, s3, dynamo, table_name: s
       log.info('session log disappeared during final sync, skipping')
     except Exception as e:
       log.exception('final sync failed')
-      session_log_health.write('error', _exc_summary(e))
+      session_log_health.write('error', _exception_summary(e))
 
 
 def sync_session_log(
@@ -253,8 +253,8 @@ def sync_session_log(
   workspace: Optional[str] = None,
   projects_dir: Optional[Path] = None,
 ) -> int:
-  ws = workspace if workspace is not None else _workspace_name()
-  if ws is None:
+  workspace_name = workspace if workspace is not None else _workspace_name()
+  if workspace_name is None:
     log.error('cannot determine workspace name; pass --workspace or set CW_COMMAND/CW_NAME')
     return 1
 
@@ -271,8 +271,8 @@ def sync_session_log(
   dynamo = session.client('dynamodb')
 
   if watch:
-    log.info('watching for changes (interval=%ds, workspace=%s)', interval, ws)
-    _watch(interval, ws, bucket, s3, dynamo, table_name)
+    log.info('watching for changes (interval=%ds, workspace=%s)', interval, workspace_name)
+    _watch(interval, workspace_name, bucket, s3, dynamo, table_name)
     return 0
 
   src = projects_dir if projects_dir is not None else _projects_dir()
@@ -282,9 +282,9 @@ def sync_session_log(
     return 1
 
   try:
-    _sync_once(path, ws, bucket, s3, dynamo, table_name)
+    _sync_once(path, workspace_name, bucket, s3, dynamo, table_name)
   except Exception as e:
-    session_log_health.write('error', _exc_summary(e))
+    session_log_health.write('error', _exception_summary(e))
     raise
   session_log_health.write('ok')
   return 0

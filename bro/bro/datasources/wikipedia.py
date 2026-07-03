@@ -5,8 +5,8 @@ import aiohttp
 from base import log
 from bro.datasources.searchable import Hit, SearchableDataSource
 
-_SEARCH_URL = 'https://{lang}.wikipedia.org/w/rest.php/v1/search/page'
-_EXTRACT_URL = 'https://{lang}.wikipedia.org/w/api.php'
+_SEARCH_URL = 'https://{language}.wikipedia.org/w/rest.php/v1/search/page'
+_EXTRACT_URL = 'https://{language}.wikipedia.org/w/api.php'
 _USER_AGENT = 'bro-librorian/1.0 (https://github.com/dzhioev/ppp)'
 
 
@@ -17,13 +17,13 @@ class Wikipedia(SearchableDataSource):
     'organisations, science, and culture. Use for established facts; not for breaking news.'
   )
 
-  def __init__(self, lang: str = 'en'):
-    self._lang = lang
+  def __init__(self, language: str = 'en'):
+    self._language = language
 
   async def search(self, query: str, limit: int = 5) -> list[Hit]:
-    url = _SEARCH_URL.format(lang=self._lang)
-    params = {'q': query, 'limit': str(limit)}
-    data = await _get_json(url, params)
+    url = _SEARCH_URL.format(language=self._language)
+    parameters = {'q': query, 'limit': str(limit)}
+    data = await _get_json(url, parameters)
     pages = data.get('pages', [])
     return [
       Hit(
@@ -40,8 +40,8 @@ class Wikipedia(SearchableDataSource):
     return extract
 
   async def _fetch_extract(self, id: str) -> tuple[str, str]:
-    url = _EXTRACT_URL.format(lang=self._lang)
-    params = {
+    url = _EXTRACT_URL.format(language=self._language)
+    parameters = {
       'action': 'query',
       'format': 'json',
       'prop': 'extracts',
@@ -49,7 +49,7 @@ class Wikipedia(SearchableDataSource):
       'redirects': '1',
       'titles': id.replace('_', ' '),
     }
-    data = await _get_json(url, params)
+    data = await _get_json(url, parameters)
     pages = data.get('query', {}).get('pages', {})
     if len(pages) == 0:
       raise LookupError(f'wikipedia: no page for id {id!r}')
@@ -61,8 +61,8 @@ class Wikipedia(SearchableDataSource):
     return title, extract
 
 
-async def _get_json(url: str, params: dict[str, str]) -> dict:
-  full_url = f'{url}?{urllib.parse.urlencode(params)}'
+async def _get_json(url: str, parameters: dict[str, str]) -> dict:
+  full_url = f'{url}?{urllib.parse.urlencode(parameters)}'
   async with aiohttp.ClientSession(headers={'User-Agent': _USER_AGENT}) as session:
     async with session.get(full_url) as response:
       response.raise_for_status()

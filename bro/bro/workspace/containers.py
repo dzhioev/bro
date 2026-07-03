@@ -68,8 +68,8 @@ def exec_in_workspace(name: str, command: list[str]) -> int:
   but VIRTUAL_ENV and PATH survive.
   """
   name, _ = _parse_ref(name)
-  proj = _project_root()
-  container_id = find_container_id(_containers_dir(proj) / name)
+  project = _project_root()
+  container_id = find_container_id(_containers_dir(project) / name)
   if container_id is None:
     log.error('no running container for workspace %r', name)
     return 1
@@ -142,7 +142,7 @@ def _broker_enabled() -> bool:
 def _run_root_via_broker(
   name: str,
   command: list[str],
-  proj: Path,
+  project: Path,
   *,
   secrets: Collection[str],
   optional_secrets: Collection[str],
@@ -167,7 +167,7 @@ def _run_root_via_broker(
     docker_sock=docker_sock,
     forward_bro=forward_bro,
   )
-  return run_root_via_broker(launch, DockerSpawner(), proj)
+  return run_root_via_broker(launch, DockerSpawner(), project)
 
 
 def run_in_container(
@@ -213,7 +213,7 @@ def run_in_container(
   # GitHub themselves before rebasing (the container's origin points upstream), so
   # a launch-time refresh here would buy nothing they don't redo. the lone reader of
   # a possibly-stale ref, infra's git_changes diff, is informational.
-  proj = _project_root()
+  project = _project_root()
   names = sorted(set(secrets))
   log.info('scoped secrets for %s: %s', name, ', '.join(names) if len(names) > 0 else '(none)')
   optional_names = sorted(set(optional_secrets) - set(secrets))
@@ -223,7 +223,7 @@ def run_in_container(
     code = _run_root_via_broker(
       name,
       command,
-      proj,
+      project,
       secrets=secrets,
       optional_secrets=optional_secrets,
       docker_sock=docker_sock,
@@ -231,7 +231,7 @@ def run_in_container(
       forward_bro=forward_bro,
     )
   else:
-    session = _containers_dir(proj) / name
+    session = _containers_dir(project) / name
     session.mkdir(parents=True, exist_ok=True)
     tag = _image_tag()
     _ensure_image(tag)
@@ -242,7 +242,7 @@ def run_in_container(
     argv = _docker_create_argv(
       tag,
       name,
-      proj,
+      project,
       session,
       command,
       docker_sock=docker_sock,
@@ -255,7 +255,7 @@ def run_in_container(
     code = subprocess.run(['docker', 'start', '-a', '-i', container_id]).returncode
   if drop:
     try:
-      ContainerWorkspace(name, proj).remove()
+      ContainerWorkspace(name, project).remove()
       log.info('removed container workspace %s', name)
     except RuntimeError as e:
       log.warning('could not fully remove container workspace %s: %s', name, e)

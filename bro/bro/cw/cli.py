@@ -123,11 +123,11 @@ def main(argv: list[str]) -> Optional[int]:
       clean_, reasons = _host_path_is_clean(Path.cwd())
     else:
       try:
-        ws = Workspace.from_ref(ref, _project_root())
+        workspace = Workspace.from_ref(ref, _project_root())
       except ValueError as e:
         print(str(e), file=sys.stderr)
         return 1
-      clean_, reasons = ws.is_clean()
+      clean_, reasons = workspace.is_clean()
     for r in reasons:
       print(r, file=sys.stderr)
     return 0 if clean_ else 1

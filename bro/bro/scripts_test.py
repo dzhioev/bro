@@ -26,10 +26,10 @@ class TestPopulateBroSkills:
     # would be off by one level and the skill symlink would dangle.
     real = tmp_path / 'private' / 'var'
     real.mkdir(parents=True)
-    proj = tmp_path / 'var'
-    proj.symlink_to(real)
-    cw.bro._populate_bro_skills(proj, 'ppp-dev')
-    link = proj / '.claude' / 'skills' / 'pr' / 'SKILL.md'
+    project = tmp_path / 'var'
+    project.symlink_to(real)
+    cw.bro._populate_bro_skills(project, 'ppp-dev')
+    link = project / '.claude' / 'skills' / 'pr' / 'SKILL.md'
     assert link.is_symlink()
     assert not link.readlink().is_absolute()
     assert os.path.exists(link)

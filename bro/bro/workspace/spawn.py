@@ -130,7 +130,7 @@ def _workspace_name(channel: str) -> str:
 
 
 def _broker_create_argv(
-  launch: DockerLaunchSpec, host_socket: str, name: str, proj: Path, session: Path, tag: str
+  launch: DockerLaunchSpec, host_socket: str, name: str, project: Path, session: Path, tag: str
 ) -> list[str]:
   """`docker create` argv for a broker peer: the channel socket bind-mounted to
   `/run/broker.sock`, `BROKER_CHANNEL` pointed at it, and the bro-role (when set)
@@ -143,7 +143,7 @@ def _broker_create_argv(
   return _docker_create_argv(
     tag,
     name,
-    proj,
+    project,
     session,
     launch.command,
     tty=launch.attached,
@@ -283,15 +283,15 @@ class _AttachedProcess(_AttachedHandle):
 class DockerSpawner(Spawner):
   async def spawn(self, launch: LaunchSpec, channel: Provisioned) -> ChildHandle:
     assert isinstance(launch, DockerLaunchSpec)
-    proj = _project_root()
+    project = _project_root()
     name = launch.name if launch.name is not None else _workspace_name(channel.channel)
-    session = _containers_dir(proj) / name
+    session = _containers_dir(project) / name
     session.mkdir(parents=True, exist_ok=True)
     tag = _image_tag()
     _ensure_image(tag)
     # strict: a missing required secret raises here, before the container is created.
     store = credentials.build_scoped_store(launch.secrets, optional=launch.optional_secrets)
-    argv = _broker_create_argv(launch, str(channel.host_endpoint), name, proj, session, tag)
+    argv = _broker_create_argv(launch, str(channel.host_endpoint), name, project, session, tag)
     container_id = _create_container(argv, _ppp_tarball(store), name)
     if launch.attached:
       # docker start -a -i with inherited stdio: the client owns the host TTY.
@@ -307,7 +307,7 @@ class DockerSpawner(Spawner):
       stdout=asyncio.subprocess.PIPE,
       stderr=asyncio.subprocess.STDOUT,
     )
-    workspace = ContainerWorkspace(name, proj) if launch.name is None else None
+    workspace = ContainerWorkspace(name, project) if launch.name is None else None
     return _DockerChild(container_id, process, launch.ring_bytes, workspace)
 
 
@@ -320,12 +320,12 @@ class ProcessSpawner(Spawner):
     return _AttachedProcess(process)
 
 
-def run_root_via_broker(launch: LaunchSpec, spawner: Spawner, proj: Path) -> int:
+def run_root_via_broker(launch: LaunchSpec, spawner: Spawner, project: Path) -> int:
   """run `launch` as the root peer of a broker over the host control dir
   (`var/cw/broker`), supervise it on the broker loop until it exits, and return its
   exit code. The broker answers the substrate's built-in ping, so a session can
   verify its channel (`broker request ping '{}'`); consumers register further
   request types on top."""
-  facade = Broker(UnixServerTransport(str(_broker_dir(proj))), spawner)
+  facade = Broker(UnixServerTransport(str(_broker_dir(project))), spawner)
   facade.on(Tag.PING, ping_handler)
   return facade.run(launch)

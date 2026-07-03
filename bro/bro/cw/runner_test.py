@@ -42,9 +42,9 @@ class _Harness:
     self.populate = entered[6]
     return self
 
-  def __exit__(self, *exc):
+  def __exit__(self, *exception):
     for p in reversed(self._patches):
-      p.__exit__(*exc)
+      p.__exit__(*exception)
     return False
 
 

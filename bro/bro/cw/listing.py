@@ -22,16 +22,16 @@ def _truncate(s: str, n: int) -> str:
 
 
 def list_workspaces() -> int:
-  proj = _project_root()
-  workspaces = Workspace.all(proj)
-  containers = [ws for ws in workspaces if isinstance(ws, ContainerWorkspace)]
+  project = _project_root()
+  workspaces = Workspace.all(project)
+  containers = [workspace for workspace in workspaces if isinstance(workspace, ContainerWorkspace)]
 
-  def _read(ws: Workspace) -> tuple[Workspace, Optional[str], Optional[float]]:
-    return ws, ws.subject(), ws.last_active()
+  def _read(workspace: Workspace) -> tuple[Workspace, Optional[str], Optional[float]]:
+    return workspace, workspace.subject(), workspace.last_active()
 
   with concurrent.futures.ThreadPoolExecutor() as pool:
     mounts_future = pool.submit(running_mounts) if len(containers) > 0 else None
-    read_futures = [pool.submit(_read, ws) for ws in workspaces]
+    read_futures = [pool.submit(_read, workspace) for workspace in workspaces]
     mounts = mounts_future.result() if mounts_future is not None else set()
     reads = [f.result() for f in read_futures]
 
@@ -39,21 +39,21 @@ def list_workspaces() -> int:
     return 0
 
   entries: list[tuple[str, Workspace, Optional[str], Optional[float]]] = []
-  for ws, subject, last in reads:
-    active = 'C' if isinstance(ws, ContainerWorkspace) else 'L'
-    kind = active if ws.is_active(mounts) else 'X'
-    entries.append((kind, ws, subject, last))
+  for workspace, subject, last in reads:
+    active = 'C' if isinstance(workspace, ContainerWorkspace) else 'L'
+    kind = active if workspace.is_active(mounts) else 'X'
+    entries.append((kind, workspace, subject, last))
 
   entries.sort(key=lambda e: (_KIND_ORDER[e[0]], isinstance(e[1], ContainerWorkspace), e[1].name))
-  displays = [ws.ref for _, ws, _, _ in entries]
-  name_w = max(len(d) for d in displays)
+  displays = [workspace.ref for _, workspace, _, _ in entries]
+  name_width = max(len(d) for d in displays)
   ages = [_format_age(mtime) if mtime is not None else '' for _, _, _, mtime in entries]
-  age_w = max(len(a) for a in ages) if len(ages) > 0 else 0
-  for (kind, ws, subject, _), age in zip(entries, ages, strict=True):
+  age_width = max(len(a) for a in ages) if len(ages) > 0 else 0
+  for (kind, workspace, subject, _), age in zip(entries, ages, strict=True):
     badge = _BADGES[kind]
-    age_col = f'  {age:<{age_w}}' if len(age) > 0 else ' ' * (age_w + 2)
+    age_column = f'  {age:<{age_width}}' if len(age) > 0 else ' ' * (age_width + 2)
     if subject is None:
-      print(f'{badge} {ws.ref:<{name_w}}{age_col}')
+      print(f'{badge} {workspace.ref:<{name_width}}{age_column}')
     else:
-      print(f'{badge} {ws.ref:<{name_w}}{age_col}  {_truncate(subject, 80)}')
+      print(f'{badge} {workspace.ref:<{name_width}}{age_column}  {_truncate(subject, 80)}')
   return 0

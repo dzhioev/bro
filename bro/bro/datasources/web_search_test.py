@@ -5,7 +5,7 @@ from unittest.mock import patch
 import pytest
 
 from base import credentials
-from bro.datasources import web_search as ws
+from bro.datasources import web_search as web_search
 
 
 @pytest.fixture
@@ -19,9 +19,9 @@ def brave_store(tmp_path: Path, monkeypatch) -> credentials.Store:
 async def test_search_parses_hits(brave_store):
   captured: dict = {}
 
-  async def fake_get_json(url, params, headers):
+  async def fake_get_json(url, parameters, headers):
     captured['url'] = url
-    captured['params'] = params
+    captured['parameters'] = parameters
     captured['headers'] = headers
     return {
       'web': {
@@ -40,9 +40,9 @@ async def test_search_parses_hits(brave_store):
       }
     }
 
-  with patch.object(ws, '_get_json', side_effect=fake_get_json):
-    hits = await ws.WebSearch(store=brave_store).search('weapons 2025 horror', limit=2)
-  assert captured['params'] == {'q': 'weapons 2025 horror', 'count': '2'}
+  with patch.object(web_search, '_get_json', side_effect=fake_get_json):
+    hits = await web_search.WebSearch(store=brave_store).search('weapons 2025 horror', limit=2)
+  assert captured['parameters'] == {'q': 'weapons 2025 horror', 'count': '2'}
   assert captured['headers']['X-Subscription-Token'] == 'k'
   assert len(hits) == 2
   assert hits[0].id == 'https://www.imdb.com/title/tt26581740/'
@@ -53,7 +53,7 @@ async def test_search_parses_hits(brave_store):
 
 @pytest.mark.asyncio
 async def test_search_respects_limit(brave_store):
-  async def fake_get_json(url, params, headers):
+  async def fake_get_json(url, parameters, headers):
     return {
       'web': {
         'results': [
@@ -63,14 +63,14 @@ async def test_search_respects_limit(brave_store):
       }
     }
 
-  with patch.object(ws, '_get_json', side_effect=fake_get_json):
-    hits = await ws.WebSearch(store=brave_store).search('q', limit=3)
+  with patch.object(web_search, '_get_json', side_effect=fake_get_json):
+    hits = await web_search.WebSearch(store=brave_store).search('q', limit=3)
   assert len(hits) == 3
 
 
 @pytest.mark.asyncio
 async def test_search_skips_results_without_url(brave_store):
-  async def fake_get_json(url, params, headers):
+  async def fake_get_json(url, parameters, headers):
     return {
       'web': {
         'results': [
@@ -81,8 +81,8 @@ async def test_search_skips_results_without_url(brave_store):
       }
     }
 
-  with patch.object(ws, '_get_json', side_effect=fake_get_json):
-    hits = await ws.WebSearch(store=brave_store).search('q')
+  with patch.object(web_search, '_get_json', side_effect=fake_get_json):
+    hits = await web_search.WebSearch(store=brave_store).search('q')
   assert len(hits) == 1
   assert hits[0].id == 'https://example.com/ok'
 
@@ -95,10 +95,10 @@ async def test_fetch_content_returns_extracted_text(brave_store):
     return '<html><body><article>Main article text.</article></body></html>'
 
   with (
-    patch.object(ws, '_get_text', side_effect=fake_get_text),
-    patch.object(ws.trafilatura, 'extract', return_value='Main article text.'),
+    patch.object(web_search, '_get_text', side_effect=fake_get_text),
+    patch.object(web_search.trafilatura, 'extract', return_value='Main article text.'),
   ):
-    text = await ws.WebSearch(store=brave_store)._fetch_content('https://example.com/x')
+    text = await web_search.WebSearch(store=brave_store)._fetch_content('https://example.com/x')
   assert text == 'Main article text.'
 
 
@@ -108,16 +108,16 @@ async def test_fetch_content_raises_when_extraction_empty(brave_store):
     return '<html></html>'
 
   with (
-    patch.object(ws, '_get_text', side_effect=fake_get_text),
-    patch.object(ws.trafilatura, 'extract', return_value=''),
+    patch.object(web_search, '_get_text', side_effect=fake_get_text),
+    patch.object(web_search.trafilatura, 'extract', return_value=''),
   ):
     with pytest.raises(LookupError, match='no extractable text'):
-      await ws.WebSearch(store=brave_store)._fetch_content('https://example.com/empty')
+      await web_search.WebSearch(store=brave_store)._fetch_content('https://example.com/empty')
 
 
 def test_api_key_loaded_lazily(tmp_path: Path, monkeypatch):
   # ctor should not read the credential — needed so `bro list` / `bro show` work
   # without the key present
   monkeypatch.setattr(credentials, 'CONFIGS_DIR', str(tmp_path))
-  source = ws.WebSearch(store=credentials.Store(credentials.default_registry()))
+  source = web_search.WebSearch(store=credentials.Store(credentials.default_registry()))
   assert source._api_key is None

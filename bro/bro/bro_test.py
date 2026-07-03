@@ -871,9 +871,9 @@ class TestRaise:
   async def test_raise_tool_raises_bro_raised(self):
     bro = EchoBro()
     tool = await _find_raise_tool(bro)
-    with pytest.raises(BroRaised) as exc:
+    with pytest.raises(BroRaised) as exception:
       await tool.call({'reason': 'missing api key'})
-    assert exc.value.reason == 'missing api key'
+    assert exception.value.reason == 'missing api key'
 
   def test_non_interactive_system_prompt_includes_note(self):
     bro = EchoBro()
@@ -935,19 +935,19 @@ class TestRaise:
 
 
 @pytest.fixture
-def fake_pkgs(tmp_path):
+def fake_packages(tmp_path):
   # synthesize ad-hoc packages on disk + sys.modules so test classes can point
   # their `__module__` at one and exercise the skills FS walk without polluting
   # the real `bro/bros/` tree.
   added: list[str] = []
 
   def make(name: str, skills: Optional[dict[str, str]] = None) -> str:
-    pkg_dir = tmp_path / name
-    pkg_dir.mkdir()
-    init_path = pkg_dir / '__init__.py'
+    package_dir = tmp_path / name
+    package_dir.mkdir()
+    init_path = package_dir / '__init__.py'
     init_path.write_text('')
     if skills is not None:
-      skills_dir = pkg_dir / 'skills'
+      skills_dir = package_dir / 'skills'
       skills_dir.mkdir()
       for skill_name, content in skills.items():
         (skills_dir / f'{skill_name}.md').write_text(content)
@@ -965,13 +965,13 @@ def fake_pkgs(tmp_path):
 
 def _skill(description: str = 'a skill', body: str = 'do the thing') -> str:
   # omit `name:` from the frontmatter — `_load_skill` validates it against the
-  # filename stem, and each caller picks its own stem via fake_pkgs.
+  # filename stem, and each caller picks its own stem via fake_packages.
   return f'---\ndescription: {description}\nversion: 1.0\n---\n\n{body}'
 
 
 class TestSkillsDiscovery:
-  def test_finds_skills_in_class_pkg(self, fake_pkgs):
-    pkg = fake_pkgs('_skills_a', {'pr': _skill('open a PR', 'pr body')})
+  def test_finds_skills_in_class_package(self, fake_packages):
+    package = fake_packages('_skills_a', {'pr': _skill('open a PR', 'pr body')})
 
     class SkillBro(BaseBro):
       name = 'sb'
@@ -980,13 +980,13 @@ class TestSkillsDiscovery:
       def __init__(self):
         super().__init__(system_prompt='')
 
-    SkillBro.__module__ = pkg
+    SkillBro.__module__ = package
     bro = SkillBro()
     assert set(bro.skills) == {'pr'}
     assert bro.skills['pr'].read_text().endswith('pr body')
 
-  def test_no_skills_when_pkg_has_no_skills_dir(self, fake_pkgs):
-    pkg = fake_pkgs('_skills_b')
+  def test_no_skills_when_package_has_no_skills_dir(self, fake_packages):
+    package = fake_packages('_skills_b')
 
     class EmptyBro(BaseBro):
       name = 'eb'
@@ -995,15 +995,15 @@ class TestSkillsDiscovery:
       def __init__(self):
         super().__init__(system_prompt='')
 
-    EmptyBro.__module__ = pkg
+    EmptyBro.__module__ = package
     bro = EmptyBro()
     assert bro.skills == {}
 
-  def test_claude_bro_servers_carry_skill_tool(self, fake_pkgs):
+  def test_claude_bro_servers_carry_skill_tool(self, fake_packages):
     # the `cw ss --bro` surface reaches skills through the `skill` tool (--bare
     # gives no slash commands), so claude_bro_mcp_servers must carry it — and not
     # `raise`, since a human drives the session.
-    pkg = fake_pkgs('_skills_claude', {'epic': _skill('drive an epic', 'epic body')})
+    package = fake_packages('_skills_claude', {'epic': _skill('drive an epic', 'epic body')})
 
     class SkillBro(BaseBro):
       name = 'csb'
@@ -1012,13 +1012,13 @@ class TestSkillsDiscovery:
       def __init__(self):
         super().__init__(system_prompt='')
 
-    SkillBro.__module__ = pkg
+    SkillBro.__module__ = package
     names = asyncio.run(_collect_tool_names(SkillBro().claude_bro_mcp_servers()))
     assert 'skill' in names
     assert 'raise' not in names
 
-  def test_claude_bro_servers_omit_skill_without_skills(self, fake_pkgs):
-    pkg = fake_pkgs('_skills_claude_empty')
+  def test_claude_bro_servers_omit_skill_without_skills(self, fake_packages):
+    package = fake_packages('_skills_claude_empty')
 
     class EmptyBro(BaseBro):
       name = 'ceb'
@@ -1027,7 +1027,7 @@ class TestSkillsDiscovery:
       def __init__(self):
         super().__init__(system_prompt='')
 
-    EmptyBro.__module__ = pkg
+    EmptyBro.__module__ = package
     names = asyncio.run(_collect_tool_names(EmptyBro().claude_bro_mcp_servers()))
     assert 'skill' not in names
 
@@ -1044,15 +1044,15 @@ class TestSkillsDiscovery:
     bro = LocalBro()
     assert bro.skills == {}
 
-  def test_mro_merge_derived_overrides_parent(self, fake_pkgs):
-    parent_pkg = fake_pkgs(
+  def test_mro_merge_derived_overrides_parent(self, fake_packages):
+    parent_package = fake_packages(
       '_skills_parent',
       {
         'pr': _skill('parent pr', 'PARENT_PR_BODY'),
         'land': _skill('land', 'LAND_BODY'),
       },
     )
-    child_pkg = fake_pkgs(
+    child_package = fake_packages(
       '_skills_child',
       {
         'pr': _skill('child pr', 'CHILD_PR_BODY'),
@@ -1067,13 +1067,13 @@ class TestSkillsDiscovery:
       def __init__(self):
         super().__init__(system_prompt='')
 
-    ParentBro.__module__ = parent_pkg
+    ParentBro.__module__ = parent_package
 
     class ChildBro(ParentBro):
       name = 'c'
       description = 'd'
 
-    ChildBro.__module__ = child_pkg
+    ChildBro.__module__ = child_package
 
     bro = ChildBro()
     skills = bro.skills
@@ -1084,8 +1084,8 @@ class TestSkillsDiscovery:
 
 
 class TestGetSkillBody:
-  def test_strips_frontmatter(self, fake_pkgs):
-    pkg = fake_pkgs(
+  def test_strips_frontmatter(self, fake_packages):
+    package = fake_packages(
       '_get_body',
       {'thing': '---\nname: thing\ndescription: d\nversion: 1\n---\n\n# Head\n\nthe body'},
     )
@@ -1097,15 +1097,15 @@ class TestGetSkillBody:
       def __init__(self):
         super().__init__(system_prompt='')
 
-    B.__module__ = pkg
+    B.__module__ = package
     body = B().get_skill_body('thing')
     assert body.startswith('# Head')
     assert 'the body' in body
     assert 'description' not in body
     assert '---' not in body
 
-  def test_no_frontmatter_returns_text_as_is(self, fake_pkgs):
-    pkg = fake_pkgs('_get_body_plain', {'plain': 'just text\n'})
+  def test_no_frontmatter_returns_text_as_is(self, fake_packages):
+    package = fake_packages('_get_body_plain', {'plain': 'just text\n'})
 
     class B(BaseBro):
       name = 'b'
@@ -1114,11 +1114,11 @@ class TestGetSkillBody:
       def __init__(self):
         super().__init__(system_prompt='')
 
-    B.__module__ = pkg
+    B.__module__ = package
     assert B().get_skill_body('plain') == 'just text'
 
-  def test_raises_on_unknown_name(self, fake_pkgs):
-    pkg = fake_pkgs('_get_body_unknown', {'known': _skill()})
+  def test_raises_on_unknown_name(self, fake_packages):
+    package = fake_packages('_get_body_unknown', {'known': _skill()})
 
     class B(BaseBro):
       name = 'b'
@@ -1127,17 +1127,17 @@ class TestGetSkillBody:
       def __init__(self):
         super().__init__(system_prompt='')
 
-    B.__module__ = pkg
-    with pytest.raises(KeyError) as exc:
+    B.__module__ = package
+    with pytest.raises(KeyError) as exception:
       B().get_skill_body('missing')
-    msg = str(exc.value)
+    msg = str(exception.value)
     assert 'missing' in msg
     assert 'known' in msg
 
 
 class TestSkillDescriptions:
-  def test_returns_name_description_pairs(self, fake_pkgs):
-    pkg = fake_pkgs(
+  def test_returns_name_description_pairs(self, fake_packages):
+    package = fake_packages(
       '_descs',
       {
         'a': _skill('first desc'),
@@ -1152,12 +1152,12 @@ class TestSkillDescriptions:
       def __init__(self):
         super().__init__(system_prompt='')
 
-    B.__module__ = pkg
+    B.__module__ = package
     descriptions = B().skill_descriptions()
     assert sorted(descriptions) == [('a', 'first desc'), ('b', 'second desc')]
 
-  def test_missing_description_becomes_empty_string(self, fake_pkgs):
-    pkg = fake_pkgs(
+  def test_missing_description_becomes_empty_string(self, fake_packages):
+    package = fake_packages(
       '_descs_missing',
       {'lone': '---\nname: lone\n---\nbody'},
     )
@@ -1169,13 +1169,13 @@ class TestSkillDescriptions:
       def __init__(self):
         super().__init__(system_prompt='')
 
-    B.__module__ = pkg
+    B.__module__ = package
     assert B().skill_descriptions() == [('lone', '')]
 
 
 class TestSkillsInSystemPrompt:
-  def test_section_present_with_skills(self, fake_pkgs):
-    pkg = fake_pkgs('_prompt_yes', {'foo': _skill('do foo thing')})
+  def test_section_present_with_skills(self, fake_packages):
+    package = fake_packages('_prompt_yes', {'foo': _skill('do foo thing')})
 
     class B(BaseBro):
       name = 'b'
@@ -1184,14 +1184,14 @@ class TestSkillsInSystemPrompt:
       def __init__(self):
         super().__init__(system_prompt='base prompt')
 
-    B.__module__ = pkg
+    B.__module__ = package
     prompt = B().system_prompt
     assert '## Available skills' in prompt
     assert '**foo** — do foo thing' in prompt
     assert '`bro::skill` tool' in prompt
 
-  def test_section_omitted_without_skills(self, fake_pkgs):
-    pkg = fake_pkgs('_prompt_no')
+  def test_section_omitted_without_skills(self, fake_packages):
+    package = fake_packages('_prompt_no')
 
     class B(BaseBro):
       name = 'b'
@@ -1200,12 +1200,12 @@ class TestSkillsInSystemPrompt:
       def __init__(self):
         super().__init__(system_prompt='base prompt')
 
-    B.__module__ = pkg
+    B.__module__ = package
     assert '## Available skills' not in B().system_prompt
 
-  def test_description_truncated_to_first_sentence(self, fake_pkgs):
+  def test_description_truncated_to_first_sentence(self, fake_packages):
     long = 'Trigger here. Second sentence with detail. Third sentence.'
-    pkg = fake_pkgs('_prompt_trunc', {'foo': _skill(long)})
+    package = fake_packages('_prompt_trunc', {'foo': _skill(long)})
 
     class B(BaseBro):
       name = 'b'
@@ -1214,7 +1214,7 @@ class TestSkillsInSystemPrompt:
       def __init__(self):
         super().__init__(system_prompt='')
 
-    B.__module__ = pkg
+    B.__module__ = package
     prompt = B().system_prompt
     assert '**foo** — Trigger here.' in prompt
     assert 'Second sentence' not in prompt
@@ -1222,8 +1222,8 @@ class TestSkillsInSystemPrompt:
 
 
 class TestSkillNameValidation:
-  def test_mismatched_name_raises(self, fake_pkgs):
-    pkg = fake_pkgs('_name_drift', {'real': '---\nname: wrong\n---\n\nbody'})
+  def test_mismatched_name_raises(self, fake_packages):
+    package = fake_packages('_name_drift', {'real': '---\nname: wrong\n---\n\nbody'})
 
     class B(BaseBro):
       name = 'b'
@@ -1232,15 +1232,15 @@ class TestSkillNameValidation:
       def __init__(self):
         super().__init__(system_prompt='')
 
-    B.__module__ = pkg
-    with pytest.raises(ValueError) as exc:
+    B.__module__ = package
+    with pytest.raises(ValueError) as exception:
       B()
-    msg = str(exc.value)
+    msg = str(exception.value)
     assert 'wrong' in msg
     assert 'real' in msg
 
-  def test_matching_name_accepted(self, fake_pkgs):
-    pkg = fake_pkgs('_name_ok', {'real': '---\nname: real\ndescription: d\n---\n\nbody'})
+  def test_matching_name_accepted(self, fake_packages):
+    package = fake_packages('_name_ok', {'real': '---\nname: real\ndescription: d\n---\n\nbody'})
 
     class B(BaseBro):
       name = 'b'
@@ -1249,12 +1249,12 @@ class TestSkillNameValidation:
       def __init__(self):
         super().__init__(system_prompt='')
 
-    B.__module__ = pkg
+    B.__module__ = package
     bro = B()
     assert bro.skill_descriptions() == [('real', 'd')]
 
-  def test_missing_name_accepted(self, fake_pkgs):
-    pkg = fake_pkgs('_name_absent', {'real': '---\ndescription: d\n---\n\nbody'})
+  def test_missing_name_accepted(self, fake_packages):
+    package = fake_packages('_name_absent', {'real': '---\ndescription: d\n---\n\nbody'})
 
     class B(BaseBro):
       name = 'b'
@@ -1263,7 +1263,7 @@ class TestSkillNameValidation:
       def __init__(self):
         super().__init__(system_prompt='')
 
-    B.__module__ = pkg
+    B.__module__ = package
     assert B().skill_descriptions() == [('real', 'd')]
 
   def test_mismatch_caught_by_load_skill_helper(self, tmp_path):
@@ -1274,17 +1274,17 @@ class TestSkillNameValidation:
 
     path = tmp_path / 'real.md'
     path.write_text('---\nname: wrong\n---\n\nbody')
-    with pytest.raises(ValueError) as exc:
+    with pytest.raises(ValueError) as exception:
       _load_skill('real', path)
-    msg = str(exc.value)
+    msg = str(exception.value)
     assert 'wrong' in msg
     assert 'real' in msg
 
 
 class TestSkillServiceTool:
   @pytest.mark.asyncio
-  async def test_skill_tool_present_when_bro_has_skills(self, fake_pkgs):
-    pkg = fake_pkgs('_svc_yes', {'foo': _skill('do foo', 'foo body')})
+  async def test_skill_tool_present_when_bro_has_skills(self, fake_packages):
+    package = fake_packages('_svc_yes', {'foo': _skill('do foo', 'foo body')})
 
     class B(BaseBro):
       name = 'b'
@@ -1293,15 +1293,15 @@ class TestSkillServiceTool:
       def __init__(self):
         super().__init__(system_prompt='')
 
-    B.__module__ = pkg
+    B.__module__ = package
     tools = await B()._service_server.list_tools()
     names = {t.name for t in tools}
     assert 'raise' in names
     assert 'skill' in names
 
   @pytest.mark.asyncio
-  async def test_skill_tool_absent_when_bro_has_no_skills(self, fake_pkgs):
-    pkg = fake_pkgs('_svc_no')
+  async def test_skill_tool_absent_when_bro_has_no_skills(self, fake_packages):
+    package = fake_packages('_svc_no')
 
     class B(BaseBro):
       name = 'b'
@@ -1310,16 +1310,16 @@ class TestSkillServiceTool:
       def __init__(self):
         super().__init__(system_prompt='')
 
-    B.__module__ = pkg
+    B.__module__ = package
     tools = await B()._service_server.list_tools()
     names = {t.name for t in tools}
     assert names == {'raise'}
 
   @pytest.mark.asyncio
-  async def test_skill_tool_survives_interactive_mode(self, fake_pkgs):
+  async def test_skill_tool_survives_interactive_mode(self, fake_packages):
     # interactive runs drop `raise` (no caller to abort to) but must KEEP `skill`
     # — a skill-having bro driven via `call` still needs to load its skills.
-    pkg = fake_pkgs('_svc_interactive', {'foo': _skill()})
+    package = fake_packages('_svc_interactive', {'foo': _skill()})
 
     class B(BaseBro):
       name = 'b'
@@ -1328,7 +1328,7 @@ class TestSkillServiceTool:
       def __init__(self):
         super().__init__(system_prompt='')
 
-    B.__module__ = pkg
+    B.__module__ = package
     bro = B()
     interactive = await _collect_tool_names(bro._mcp_servers_for(interactive=True))
     non_interactive = await _collect_tool_names(bro._mcp_servers_for(interactive=False))
@@ -1337,8 +1337,8 @@ class TestSkillServiceTool:
     assert {'skill', 'raise'} <= non_interactive
 
   @pytest.mark.asyncio
-  async def test_skill_tool_returns_body(self, fake_pkgs):
-    pkg = fake_pkgs(
+  async def test_skill_tool_returns_body(self, fake_packages):
+    package = fake_packages(
       '_svc_call',
       {'foo': '---\ndescription: do foo\n---\n\nthe foo body text'},
     )
@@ -1350,7 +1350,7 @@ class TestSkillServiceTool:
       def __init__(self):
         super().__init__(system_prompt='')
 
-    B.__module__ = pkg
+    B.__module__ = package
     bro = B()
     tools = await bro._service_server.list_tools()
     skill_tool = next(t for t in tools if t.name == 'skill')
@@ -1358,11 +1358,11 @@ class TestSkillServiceTool:
     assert result == 'the foo body text'
 
   @pytest.mark.asyncio
-  async def test_skill_tool_failure_surfaces_as_string(self, fake_pkgs):
+  async def test_skill_tool_failure_surfaces_as_string(self, fake_packages):
     # FunctionTool's caller (the agent loop) catches generic exceptions and
     # feeds them back as the tool result. KeyError on unknown name must NOT
     # derive from ToolControlSignal — otherwise it would escape the loop.
-    pkg = fake_pkgs('_svc_fail', {'known': _skill()})
+    package = fake_packages('_svc_fail', {'known': _skill()})
 
     class B(BaseBro):
       name = 'b'
@@ -1371,7 +1371,7 @@ class TestSkillServiceTool:
       def __init__(self):
         super().__init__(system_prompt='')
 
-    B.__module__ = pkg
+    B.__module__ = package
     bro = B()
     tools = await bro._service_server.list_tools()
     skill_tool = next(t for t in tools if t.name == 'skill')

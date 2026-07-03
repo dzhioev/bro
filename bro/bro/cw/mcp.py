@@ -40,17 +40,17 @@ class MCPEndpoint:
 
 def _http_mcp_config(namespaces: list[str], *, port: int, token: str) -> str:
   """claude `--mcp-config` json: one `{type: http}` entry per namespace, mounted
-  under the namespace as the server key so tools surface as `mcp__<ns>__<tool>`
+  under the namespace as the server key so tools surface as `mcp__<namespace>__<tool>`
   (the convention in prompts/tool_names.md)."""
   return json.dumps(
     {
       'mcpServers': {
-        ns: {
+        namespace: {
           'type': 'http',
-          'url': f'http://127.0.0.1:{port}/{ns}',
+          'url': f'http://127.0.0.1:{port}/{namespace}',
           'headers': {'Authorization': f'Bearer {token}'},
         }
-        for ns in namespaces
+        for namespace in namespaces
       },
     },
     separators=(',', ':'),

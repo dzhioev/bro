@@ -12,9 +12,9 @@ class TestHTTPMCPConfig:
   def test_one_entry_per_namespace(self):
     config = json.loads(cw.mcp._http_mcp_config(['flow', 'bro'], port=1234, token='tok'))
     assert list(config['mcpServers']) == ['flow', 'bro']
-    for ns, entry in config['mcpServers'].items():
+    for namespace, entry in config['mcpServers'].items():
       assert entry['type'] == 'http'
-      assert entry['url'] == f'http://127.0.0.1:1234/{ns}'
+      assert entry['url'] == f'http://127.0.0.1:1234/{namespace}'
       assert entry['headers'] == {'Authorization': 'Bearer tok'}
 
 

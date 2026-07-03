@@ -301,9 +301,9 @@ class _FakeStepsDynamo:
       else:
         reasons.append({'Code': 'None'})
     if failed:
-      exc = self.exceptions.TransactionCanceledException('cancelled')
-      exc.response = {'CancellationReasons': reasons}  # type: ignore[attr-defined]
-      raise exc
+      exception = self.exceptions.TransactionCanceledException('cancelled')
+      exception.response = {'CancellationReasons': reasons}  # type: ignore[attr-defined]
+      raise exception
     self._steps.extend(staged)
 
   def query(self, **kwargs):

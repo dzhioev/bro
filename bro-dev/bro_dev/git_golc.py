@@ -108,7 +108,7 @@ def _render(git_args: list[str], use_color: bool) -> str:
     return ''
   width = max(len(text) for text in credits.values())
   color_args = ['--color=always'] if use_color else ['--color=never']
-  fmt = 'tformat:%C(auto)%h CREDITS:%H%d %s'
+  log_format = 'tformat:%C(auto)%h CREDITS:%H%d %s'
   out = subprocess.check_output(
     [
       'git',
@@ -117,17 +117,17 @@ def _render(git_args: list[str], use_color: bool) -> str:
       *color_args,
       '--decorate',
       '--date=format:%Y-%m-%dT%H:%M:%S',
-      f'--format={fmt}',
+      f'--format={log_format}',
       *git_args,
     ],
     text=True,
   )
 
-  def _sub(m: re.Match[str]) -> str:
+  def _replace(m: re.Match[str]) -> str:
     text = credits.get(m.group(1), '—')
     return f'{text:<{width}}'
 
-  return _SENTINEL_RE.sub(_sub, out)
+  return _SENTINEL_RE.sub(_replace, out)
 
 
 def _maybe_page(text: str) -> None:

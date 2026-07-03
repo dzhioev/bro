@@ -71,10 +71,10 @@ class TestSessionFacts:
     assert facts.prompt == 'I want X'
 
   def test_host_worktree_with_derived_path(self, monkeypatch, tmp_path):
-    proj = tmp_path / 'proj'
-    worktree = proj / 'var' / 'cw' / 'worktrees' / 'feature'
+    project = tmp_path / 'project'
+    worktree = project / 'var' / 'cw' / 'worktrees' / 'feature'
     worktree.mkdir(parents=True)
-    monkeypatch.setattr(cw.banner, '_project_root', lambda: proj)
+    monkeypatch.setattr(cw.banner, '_project_root', lambda: project)
     monkeypatch.setenv('CW_NAME', 'feature')
     monkeypatch.setenv('CW_COMMAND', 'cw ss feature')
     facts = SessionFacts.collect()
@@ -203,7 +203,7 @@ class TestRenderBanner:
     out = _facts(
       in_container=False,
       name='feature',
-      host_workspace='/proj/var/cw/worktrees/feature',
+      host_workspace='/project/var/cw/worktrees/feature',
       container_workspace=None,
       exec_command=None,
     ).render_visual()
@@ -220,11 +220,11 @@ class TestRenderBanner:
     out = _facts(
       in_container=False,
       name='feature',
-      host_workspace='/proj/var/cw/worktrees/feature',
+      host_workspace='/project/var/cw/worktrees/feature',
       container_workspace=None,
       exec_command=None,
     ).render_visual()
-    assert '\033[31m/proj/var/cw/worktrees/feature\033[0m' in out
+    assert '\033[31m/project/var/cw/worktrees/feature\033[0m' in out
 
   def test_visual_does_not_paint_container_path_red(self):
     out = _facts(host_workspace='/host/var/cw/containers/task').render_visual()

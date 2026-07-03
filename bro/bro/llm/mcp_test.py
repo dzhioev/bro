@@ -410,9 +410,11 @@ class TestToolRegistry:
   @pytest.mark.asyncio
   async def test_call_unknown_raises(self):
     registry = ToolRegistry([InProcessMCPServer('test', [])])
-    with pytest.raises(UnknownToolError, match="unknown or disallowed tool: 'nonexistent'") as exc:
+    with pytest.raises(
+      UnknownToolError, match="unknown or disallowed tool: 'nonexistent'"
+    ) as exception:
       await registry.call('nonexistent', {})
-    assert exc.value.name == 'nonexistent'
+    assert exception.value.name == 'nonexistent'
 
   @pytest.mark.asyncio
   async def test_empty_registry(self):
@@ -423,25 +425,25 @@ class TestToolRegistry:
 
 class TestRenderHasCred:
   @staticmethod
-  def _avail(*present: str):
+  def _availability(*present: str):
     return lambda name: name in set(present)
 
   def test_present_branch_when_available(self):
-    tmpl = 'base{{#has_cred openai}} yes{{else}} no{{/has_cred}}'
-    assert render_has_cred(tmpl, self._avail('openai'), ['openai']) == 'base yes'
+    template = 'base{{#has_cred openai}} yes{{else}} no{{/has_cred}}'
+    assert render_has_cred(template, self._availability('openai'), ['openai']) == 'base yes'
 
   def test_else_branch_when_absent(self):
-    tmpl = 'base{{#has_cred openai}} yes{{else}} no{{/has_cred}}'
-    assert render_has_cred(tmpl, self._avail(), ['openai']) == 'base no'
+    template = 'base{{#has_cred openai}} yes{{else}} no{{/has_cred}}'
+    assert render_has_cred(template, self._availability(), ['openai']) == 'base no'
 
   def test_no_else_yields_empty_when_absent(self):
-    tmpl = 'base{{#has_cred openai}} yes{{/has_cred}}'
-    assert render_has_cred(tmpl, self._avail(), ['openai']) == 'base'
+    template = 'base{{#has_cred openai}} yes{{/has_cred}}'
+    assert render_has_cred(template, self._availability(), ['openai']) == 'base'
 
   def test_inverted_renders_only_when_absent(self):
-    tmpl = 'x{{^has_cred openai}} (no key){{/has_cred}}'
-    assert render_has_cred(tmpl, self._avail(), ['openai']) == 'x (no key)'
-    assert render_has_cred(tmpl, self._avail('openai'), ['openai']) == 'x'
+    template = 'x{{^has_cred openai}} (no key){{/has_cred}}'
+    assert render_has_cred(template, self._availability(), ['openai']) == 'x (no key)'
+    assert render_has_cred(template, self._availability('openai'), ['openai']) == 'x'
 
   def test_no_marker_returned_unchanged_without_reading_availability(self):
     def boom(name: str) -> bool:
@@ -451,7 +453,7 @@ class TestRenderHasCred:
 
   def test_undeclared_name_raises(self):
     with pytest.raises(ValueError, match='undeclared secret'):
-      render_has_cred('{{#has_cred typo}}x{{/has_cred}}', self._avail(), ['openai'])
+      render_has_cred('{{#has_cred typo}}x{{/has_cred}}', self._availability(), ['openai'])
 
   @pytest.mark.asyncio
   async def test_namespaced_tool_renders_description_against_availability(self, monkeypatch):

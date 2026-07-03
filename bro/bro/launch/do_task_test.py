@@ -98,9 +98,9 @@ async def test_raises_helpful_error_when_bro_has_no_fix():
   # `do-task` only makes sense for bros that expose `/fix`; surface a usable
   # hint instead of the generic "no skill named 'fix'" KeyError.
   bro = RecordBro(skills={'pr': 'PR BODY'})
-  with pytest.raises(KeyError) as exc:
+  with pytest.raises(KeyError) as exception:
     await do_task(bro, 'some-task-ref')
-  msg = str(exc.value.args[0])
+  msg = str(exception.value.args[0])
   assert "'fix'" in msg
   assert "'record'" in msg
   assert "'ask'" in msg

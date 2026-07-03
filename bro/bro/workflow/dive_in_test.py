@@ -140,7 +140,7 @@ class TestPrefetchTask:
       status='Live',
       importance=Importance.NORMAL,
       driver=None,
-      project='proj-1',
+      project='project-1',
       tags=['infra'],
       links=[],
       blocks=[],
@@ -174,6 +174,6 @@ class TestPrefetchTask:
     # metadata embedded as json, enums rendered by value
     assert '"status": "Live"' in block
     assert '"importance": "Normal"' in block
-    assert '"project": "proj-1"' in block
+    assert '"project": "project-1"' in block
     # instruction to skip the in-session fetch
     assert 'do not call get_task_info / read_page_content' in block

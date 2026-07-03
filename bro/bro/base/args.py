@@ -103,12 +103,12 @@ class _Formatter(argparse.HelpFormatter):
   def _format_usage(self, usage, actions, groups, prefix):  # type: ignore[override]
     global_ids = self._global_ids
     script = [a for a in actions if id(a) not in global_ids]
-    glob = [a for a in actions if id(a) in global_ids]
+    global_actions = [a for a in actions if id(a) in global_ids]
     result = super()._format_usage(usage, script, groups, prefix)
-    if len(glob) == 0:
+    if len(global_actions) == 0:
       return result
-    glob_str = self._format_actions_usage(glob, []).strip()  # type: ignore[attr-defined]
-    if glob_str == '':
+    global_usage = self._format_actions_usage(global_actions, []).strip()  # type: ignore[attr-defined]
+    if global_usage == '':
       return result
     body = result.rstrip('\n')
     lines = body.split('\n')
@@ -118,7 +118,7 @@ class _Formatter(argparse.HelpFormatter):
       actual_prefix = prefix if prefix is not None else 'usage: '
       indent_len = len(actual_prefix) + len(self._prog) + 1
     indent = ' ' * indent_len
-    return f'{body}\n{indent}({glob_str})\n'
+    return f'{body}\n{indent}({global_usage})\n'
 
 
 class Parser(argparse.ArgumentParser):
@@ -225,11 +225,11 @@ class Parser(argparse.ArgumentParser):
       lines.append(f'  {formatted}  (mutually exclusive)')
     return help_text + '\n'.join(lines) + '\n'
 
-  def _check_exclusive_groups(self, ns: argparse.Namespace) -> None:
+  def _check_exclusive_groups(self, namespace: argparse.Namespace) -> None:
     for groups in self._exclusive_groups:
       set_groups: list[list[str]] = []
       for group in groups:
-        set_args = [arg for arg in group if bool(getattr(ns, arg, None))]
+        set_args = [arg for arg in group if bool(getattr(namespace, arg, None))]
         if len(set_args) > 0:
           set_groups.append(set_args)
       if len(set_groups) > 1:
@@ -290,8 +290,8 @@ class Parser(argparse.ArgumentParser):
       return ','.join(str(v) for v in value)
     return str(value)
 
-  def _print_env_table(self, ns: argparse.Namespace, argv: list[str]) -> None:
-    allow_env = getattr(ns, 'allow_env', False)
+  def _print_env_table(self, namespace: argparse.Namespace, argv: list[str]) -> None:
+    allow_env = getattr(namespace, 'allow_env', False)
     rows: list[tuple[str, str, str, str]] = []
     for dest, info in self._env_info.items():
       if not info['supported']:
@@ -307,7 +307,7 @@ class Parser(argparse.ArgumentParser):
         src = 'E'
       else:
         src = 'D'
-      current = getattr(ns, dest, None)
+      current = getattr(namespace, dest, None)
       current_str = self._format_value(current)
       env_str = env_raw if env_was_set else '(not set)'
       if info['secret']:
@@ -335,20 +335,20 @@ class Parser(argparse.ArgumentParser):
     allow_env = '--allow-env' in argv_list
     print_env = '--print-env' in argv_list
     parse_argv = self._apply_env(argv_list) if allow_env else argv_list
-    ns = super().parse_args(parse_argv, namespace)  # pyright: ignore[reportArgumentType]
-    assert isinstance(ns, argparse.Namespace)
+    parsed = super().parse_args(parse_argv, namespace)  # pyright: ignore[reportArgumentType]
+    assert isinstance(parsed, argparse.Namespace)
     if print_env:
-      self._print_env_table(ns, argv_list)
+      self._print_env_table(parsed, argv_list)
       sys.exit(0)
-    self._check_exclusive_groups(ns)
+    self._check_exclusive_groups(parsed)
     if ic is not None:
-      delattr(ns, 'ic')
-    delattr(ns, 'verbose')
-    delattr(ns, 'print_env')
-    delattr(ns, 'allow_env')
-    return ns
+      delattr(parsed, 'ic')
+    delattr(parsed, 'verbose')
+    delattr(parsed, 'print_env')
+    delattr(parsed, 'allow_env')
+    return parsed
 
-  def reconstruct(self, ns, *, prog=None, exclude=()):
+  def reconstruct(self, namespace, *, prog=None, exclude=()):
     """Reconstruct canonical argv from a parsed namespace.
 
     Iterates over the parser's actions and builds the command line from the
@@ -356,7 +356,7 @@ class Parser(argparse.ArgumentParser):
     and help are always excluded. Flags appear in definition order; positionals
     follow.
     """
-    get = ns.get if isinstance(ns, dict) else lambda d: getattr(ns, d, None)
+    get = namespace.get if isinstance(namespace, dict) else lambda d: getattr(namespace, d, None)
     parts = [prog] if isinstance(prog, str) else list(prog if prog is not None else [self.prog])
     global_dests = {a.dest for a in self._global_group._group_actions}
     skip = global_dests | set(exclude)
@@ -401,11 +401,13 @@ class Parser(argparse.ArgumentParser):
     its value. with no subcommand given (optional subparsers) it prints help to
     stderr and returns 1."""
     args = self.parse(argv)
-    sub = next((a for a in self._actions if isinstance(a, argparse._SubParsersAction)), None)
-    if sub is None:
+    subparsers_action = next(
+      (a for a in self._actions if isinstance(a, argparse._SubParsersAction)), None
+    )
+    if subparsers_action is None:
       raise RuntimeError('dispatch() requires add_subparsers()')
-    if sub.dest != argparse.SUPPRESS:
-      args.pop(sub.dest, None)
+    if subparsers_action.dest != argparse.SUPPRESS:
+      args.pop(subparsers_action.dest, None)
     handler = args.pop(_HANDLER_DEST, None)
     if handler is None:
       self.print_help(sys.stderr)

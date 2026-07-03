@@ -221,7 +221,7 @@ class Storage:
     # send no id fall back to a server-minted ULID (no dedup, but harmless — a
     # fresh id never collides).
     step_id = step_id if step_id is not None else _new_id()
-    ts = _now_iso()
+    timestamp = _now_iso()
 
     spilled_key: Optional[str] = None
     if size_bytes >= SPILLOVER_THRESHOLD_BYTES:
@@ -240,7 +240,7 @@ class Storage:
     step_item = {
       'trail_id': trail_id,
       'step_id': step_id,
-      'ts': ts,
+      'ts': timestamp,
       'kind': kind,
       **extras,
     }
@@ -305,12 +305,12 @@ class Storage:
       # so the aggregate was not double-incremented. report idempotent success.
       codes = _cancellation_codes(e)
       if len(codes) > 0 and codes[0] == 'ConditionalCheckFailed':
-        return {'step_id': step_id, 'ts': ts, 'duplicate': True}
+        return {'step_id': step_id, 'ts': timestamp, 'duplicate': True}
       # item 1 is the trail Update: a failed attribute_exists means no such trail.
       if _conditional_check_failed(e):
         raise TrailNotFound(trail_id) from e
       raise
-    return {'step_id': step_id, 'ts': ts}
+    return {'step_id': step_id, 'ts': timestamp}
 
   async def end_trail(
     self,
@@ -321,11 +321,11 @@ class Storage:
     step_id: Optional[str] = None,
   ) -> dict:
     step_id = step_id if step_id is not None else _new_id()
-    ts = _now_iso()
+    timestamp = _now_iso()
     step_item = {
       'trail_id': trail_id,
       'step_id': step_id,
-      'ts': ts,
+      'ts': timestamp,
       'kind': 'end',
       'body': {'reason': reason},
     }
@@ -335,7 +335,7 @@ class Storage:
       'aggregates.step_counts_by_kind.#k = aggregates.step_counts_by_kind.#k + :one'
     )
     expr_values: dict = {
-      ':ts': _ddb(ts),
+      ':ts': _ddb(timestamp),
       ':reason': _ddb(reason),
       ':one': _ddb(1),
     }
@@ -372,11 +372,11 @@ class Storage:
       # (the end count was not double-incremented).
       codes = _cancellation_codes(e)
       if len(codes) > 0 and codes[0] == 'ConditionalCheckFailed':
-        return {'ended_at': ts, 'duplicate': True}
+        return {'ended_at': timestamp, 'duplicate': True}
       if _conditional_check_failed(e):
         raise TrailNotFound(trail_id) from e
       raise
-    return {'ended_at': ts}
+    return {'ended_at': timestamp}
 
   async def get_trail(self, trail_id: str) -> Optional[dict]:
     response = await asyncio.to_thread(
@@ -548,13 +548,13 @@ def _range_query(
   return kwargs
 
 
-def _conditional_check_failed(exc) -> bool:
-  reasons = getattr(exc, 'response', {}).get('CancellationReasons', [])
+def _conditional_check_failed(exception) -> bool:
+  reasons = getattr(exception, 'response', {}).get('CancellationReasons', [])
   return any(r.get('Code') == 'ConditionalCheckFailed' for r in reasons)
 
 
-def _cancellation_codes(exc) -> list[str]:
+def _cancellation_codes(exception) -> list[str]:
   # per-item failure codes, positionally aligned with the TransactItems list —
   # lets a caller tell which leg of the transaction tripped its condition.
-  reasons = getattr(exc, 'response', {}).get('CancellationReasons', [])
+  reasons = getattr(exception, 'response', {}).get('CancellationReasons', [])
   return [r.get('Code', 'None') for r in reasons]

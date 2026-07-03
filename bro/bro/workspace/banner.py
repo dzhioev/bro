@@ -95,11 +95,11 @@ class SessionFacts:
     if not in_container and host_workspace is None and name is not None:
       # host worktree case — derive path from the project root + worktree name
       try:
-        proj = _project_root()
+        project = _project_root()
       except subprocess.CalledProcessError:
-        proj = None
-      if proj is not None:
-        candidate = _worktrees_dir(proj) / name
+        project = None
+      if project is not None:
+        candidate = _worktrees_dir(project) / name
         if candidate.is_dir():
           host_workspace = str(candidate)
 

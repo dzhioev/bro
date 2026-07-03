@@ -318,10 +318,10 @@ class ChatGPT(llm.llm.LLM):
         output = await self.tools.call(item.name, kwargs)
       except ToolControlSignal:
         raise
-      except Exception as exc:
+      except Exception as exception:
         # surface the failure back to the model as the tool result so the agent
         # can react (retry, switch source, raise) instead of crashing the loop.
-        output = f'tool {item.name!r} failed: {type(exc).__name__}: {exc}'
+        output = f'tool {item.name!r} failed: {type(exception).__name__}: {exception}'
         is_error = True
       self.observer.on_tool_result(item.name, output)
       # tracker body keeps the raw tool output (dict or str) — the JSON encoding

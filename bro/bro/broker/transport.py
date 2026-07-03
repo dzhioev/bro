@@ -77,8 +77,8 @@ class ClientTransport(ABC):
 
 
 def connect(address: Address) -> ClientTransport:
-  scheme, sep, rest = address.partition(':')
-  if sep == '':
+  scheme, separator, rest = address.partition(':')
+  if separator == '':
     raise ValueError(f'broker address missing scheme: {address!r}')
   if scheme == 'unix':
     from broker.transports.unix import UnixClientTransport

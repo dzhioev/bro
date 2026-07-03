@@ -373,11 +373,11 @@ class HTTPTracker(Tracker):
         payload,
         retry_delays=_STEP_RETRY_DELAYS_SECONDS,
       )
-    except Exception as exc:
+    except Exception as exception:
       # work is already done; the server reaps trails missing ended_at, so we
       # log loudly and let the run return normally rather than masking the
       # outcome with a tracker failure.
-      logging.warning('trails end_trail failed for trail %s: %s', self._trail_id, exc)
+      logging.warning('trails end_trail failed for trail %s: %s', self._trail_id, exception)
     finally:
       self._trail_id = None
       self._drop_connection()
@@ -391,7 +391,7 @@ class HTTPTracker(Tracker):
       'Authorization': f'Bearer {self._token}',
       'Content-Type': 'application/json',
     }
-    last_exc: Optional[Exception] = None
+    last_exception: Optional[Exception] = None
     # initial attempt has no preceding sleep; each retry sleeps its delay
     # before attempting. the loop falls through after the last failure and
     # raises the captured exception.
@@ -401,20 +401,20 @@ class HTTPTracker(Tracker):
         time.sleep(delay)
       try:
         return self._request('POST', path, headers, body)
-      except HTTPStatusError as exc:
+      except HTTPStatusError as exception:
         # drop the persistent connection so the next attempt opens a fresh one.
         self._drop_connection()
         # deterministic 4xx won't change on a retry — propagate immediately
         # rather than sleeping through the rest of the schedule.
-        if not _is_retryable_status(exc.status):
+        if not _is_retryable_status(exception.status):
           raise
-        last_exc = exc
-      except Exception as exc:
-        last_exc = exc
+        last_exception = exception
+      except Exception as exception:
+        last_exception = exception
         # transient blips often leave the socket half-open; reopen next attempt.
         self._drop_connection()
-    assert last_exc is not None
-    raise last_exc
+    assert last_exception is not None
+    raise last_exception
 
   def _request(self, method: str, path: str, headers: dict, body: bytes) -> dict:
     connection = self._get_connection()
@@ -494,4 +494,4 @@ def read_local_file(path: Path | str) -> list[RecordedTrail]:
           extras=extras,
         )
       )
-  return [RecordedTrail(header=headers[tid], steps=steps[tid]) for tid in order]
+  return [RecordedTrail(header=headers[trail_id], steps=steps[trail_id]) for trail_id in order]

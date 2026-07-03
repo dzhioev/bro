@@ -16,19 +16,19 @@ def _project_root() -> Path:
   return Path(git_out('rev-parse', '--git-common-dir')).resolve().parent
 
 
-def _worktrees_dir(proj: Path) -> Path:
-  return proj / 'var' / 'cw' / 'worktrees'
+def _worktrees_dir(project: Path) -> Path:
+  return project / 'var' / 'cw' / 'worktrees'
 
 
-def _containers_dir(proj: Path) -> Path:
-  return proj / 'var' / 'cw' / 'containers'
+def _containers_dir(project: Path) -> Path:
+  return project / 'var' / 'cw' / 'containers'
 
 
-def _broker_dir(proj: Path) -> Path:
+def _broker_dir(project: Path) -> Path:
   # the broker's control dir (one socket file per peer). deliberately shallow: the
   # host bind path must fit sun_path (~108 bytes), and a workspace-relative path
   # would land inside every container's /workspace mount.
-  return proj / 'var' / 'cw' / 'broker'
+  return project / 'var' / 'cw' / 'broker'
 
 
 def _in_container() -> bool:

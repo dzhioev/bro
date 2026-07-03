@@ -103,9 +103,9 @@ class _ContainerHarness:
     self.run_in_container = entered[2]
     return self
 
-  def __exit__(self, *exc):
+  def __exit__(self, *exception):
     for p in reversed(self._patches):
-      p.__exit__(*exc)
+      p.__exit__(*exception)
     return False
 
 
@@ -303,7 +303,7 @@ class TestConcurrentSessionGuard:
     monkeypatch.setattr(cw.session.os, 'chdir', lambda p: None)
 
     class _FakeHost:
-      def __init__(self, name, proj):
+      def __init__(self, name, project):
         self.path = pathlib.Path('/wt')
         self.pidfile = pathlib.Path('/wt.pid')
 
@@ -323,7 +323,7 @@ class TestConcurrentSessionGuard:
     monkeypatch.setattr(cw.session.os, 'chdir', lambda p: None)
 
     class _FakeHost:
-      def __init__(self, name, proj):
+      def __init__(self, name, project):
         self.path = pathlib.Path('/wt')
         self.pidfile = pathlib.Path('/wt.pid')
 
@@ -348,7 +348,7 @@ class TestHostSession:
       (projects / 'abc.jsonl').write_text('{}')
 
     class _FakeHost:
-      def __init__(self, name, proj):
+      def __init__(self, name, project):
         self.path = worktree
         self.pidfile = tmp_path / 'wt.pid'
 
@@ -381,8 +381,8 @@ class TestHostSession:
     monkeypatch.setattr(cw.session, '_broker_enabled', lambda: True)
     roots: list = []
 
-    def fake_root(command, worktree_arg, proj):
-      roots.append({'command': command, 'worktree': worktree_arg, 'proj': proj})
+    def fake_root(command, worktree_arg, project):
+      roots.append({'command': command, 'worktree': worktree_arg, 'project': project})
       return 5
 
     monkeypatch.setattr(cw.session, '_run_host_root_via_broker', fake_root)
@@ -402,7 +402,7 @@ class TestHostSession:
           '--foo',
         ],  # fmt: skip
         'worktree': worktree,
-        'proj': tmp_path,
+        'project': tmp_path,
       }
     ]
 
@@ -462,7 +462,7 @@ class TestHostBrokerPingRoundTrip:
 
   def test_broker_request_ping_from_a_host_session(self, monkeypatch, capfd):
     # a short root directly under the system temp dir: the channel socket lives at
-    # <proj>/var/cw/broker/<ulid>.sock and must fit sun_path (~108 bytes), which a
+    # <project>/var/cw/broker/<ulid>.sock and must fit sun_path (~108 bytes), which a
     # pytest tmp_path can exceed
     root = pathlib.Path(tempfile.mkdtemp(prefix='cw-hb-'))
     try:
@@ -475,7 +475,7 @@ class TestHostBrokerPingRoundTrip:
       cw_bin.chmod(0o755)
 
       class _FakeHost:
-        def __init__(self, name, proj):
+        def __init__(self, name, project):
           self.path = worktree
           self.pidfile = root / 'wt.pid'
 

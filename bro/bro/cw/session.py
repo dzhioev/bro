@@ -171,12 +171,12 @@ def _container_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
   in-place runner host mode spawns crosses the docker boundary as the container
   command (`cw ss --in-place …`, resolved from the clone's venv after the
   entrypoint prepares the tree, so the session runs its workspace's code)."""
-  proj = _project_root()
+  project = _project_root()
 
   # one session per worktree: refuse if a container is already bound to this
   # workspace's mount. a second concurrent session would share /workspace — and
   # its gitignored token-accounting state — and corrupt it.
-  if find_container_id(ContainerWorkspace(spec.name, proj).path) is not None:
+  if find_container_id(ContainerWorkspace(spec.name, project).path) is not None:
     log.error(
       'session already active in the container for workspace %r; refusing to start a second',
       spec.name,
@@ -187,7 +187,7 @@ def _container_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
   # container is created. the runner resolves the actual session id from the
   # same dir (derived from its in-container cwd).
   if spec.resume:
-    projects_dir = ContainerWorkspace(spec.name, proj).claude_projects_dir()
+    projects_dir = ContainerWorkspace(spec.name, project).claude_projects_dir()
     if _latest_jsonl(projects_dir) is None:
       log.error('no claude session found for %s in %s', spec.name, projects_dir)
       return 1
@@ -229,7 +229,7 @@ def _container_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
   return code
 
 
-def _run_host_root_via_broker(command: list[str], worktree: Path, proj: Path) -> int:
+def _run_host_root_via_broker(command: list[str], worktree: Path, project: Path) -> int:
   """run the host session as the broker's root peer: provision its channel socket
   under `var/cw/broker`, point `BROKER_CHANNEL` at it in the runner's env, and
   supervise the runner process on the broker loop until it exits."""
@@ -238,7 +238,7 @@ def _run_host_root_via_broker(command: list[str], worktree: Path, proj: Path) ->
   from cw.spawn import ProcessLaunchSpec, ProcessSpawner, run_root_via_broker
 
   launch = ProcessLaunchSpec(command=command, cwd=str(worktree), env=_venv_env(worktree / '.venv'))
-  return run_root_via_broker(launch, ProcessSpawner(), proj)
+  return run_root_via_broker(launch, ProcessSpawner(), project)
 
 
 def _host_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
@@ -249,29 +249,29 @@ def _host_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
   `BROKER_DISABLED` short-circuits it (see `_broker_enabled`), the runner is
   supervised as the root peer of a broker, so the session gets its channel
   (`BROKER_CHANNEL` in claude's env) exactly like container mode."""
-  proj = _project_root()
-  os.chdir(proj)
-  ws = HostWorktree(spec.name, proj)
-  worktree = ws.path
+  project = _project_root()
+  os.chdir(project)
+  workspace = HostWorktree(spec.name, project)
+  worktree = workspace.path
   branch = f'worktree-{spec.name}'
 
   # one session per worktree: refuse if a live cw session already owns it (a
   # second concurrent claude would mutate the same files and share the
   # token-accounting state). releases on exit, so re-entry / --resume after a
   # session ends is unaffected.
-  if ws.is_active(set()):
+  if workspace.is_active(set()):
     log.error(
       'session already active on host worktree %r (pid in %s); refusing to start a second',
       spec.name,
-      ws.pidfile,
+      workspace.pidfile,
     )
     return 1
 
   # cheap --resume existence guard, before the worktree auto-create below could
   # manufacture an empty workspace for a mistyped name. the runner resolves the
   # actual session id from the same dir (derived from its cwd).
-  if spec.resume and _latest_jsonl(ws.claude_projects_dir()) is None:
-    log.error('no claude session found for %s in %s', spec.name, ws.claude_projects_dir())
+  if spec.resume and _latest_jsonl(workspace.claude_projects_dir()) is None:
+    log.error('no claude session found for %s in %s', spec.name, workspace.claude_projects_dir())
     return 1
 
   if not _ensure_host_worktree(worktree, branch, base_ref):
@@ -293,12 +293,12 @@ def _host_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
     return 1
 
   command = [str(cw_bin), *spec.to_in_place_argv()]
-  pidfile = ws.pidfile
+  pidfile = workspace.pidfile
   pidfile.parent.mkdir(parents=True, exist_ok=True)
   pidfile.write_text(str(os.getpid()))
   try:
     if _broker_enabled():
-      code = _run_host_root_via_broker(command, worktree, proj)
+      code = _run_host_root_via_broker(command, worktree, project)
     else:
       code = subprocess.run(
         command, cwd=str(worktree), env=_venv_env(worktree / '.venv')
@@ -307,7 +307,7 @@ def _host_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
     pidfile.unlink(missing_ok=True)
 
   if spec.drop:
-    ws.remove()
+    workspace.remove()
   else:
-    _finish_host_worktree(ws, interactive=not spec.auto and sys.stdin.isatty())
+    _finish_host_worktree(workspace, interactive=not spec.auto and sys.stdin.isatty())
   return code

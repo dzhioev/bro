@@ -31,7 +31,7 @@ __cli_name__ = 'usage-report'
 
 _THOUSANDS = "'"
 _CLASSES = ('input', 'cache_write', 'cache_read', 'output')
-_COL_HEADER = {
+_COLUMN_HEADER = {
   'input': 'input',
   'cache_write': 'cache-write',
   'cache_read': 'cache-read',
@@ -61,7 +61,7 @@ def _add(a: Counts, b: Counts) -> Counts:
   return {c: a.get(c, 0) + b.get(c, 0) for c in _CLASSES}
 
 
-def _fmt_int(n: int) -> str:
+def _format_int(n: int) -> str:
   return f'{n:,}'.replace(',', _THOUSANDS)
 
 
@@ -109,20 +109,22 @@ def _format_table(totals: dict[str, Counts], commit_count: int, summed_count: in
   for c in totals.values():
     grand = _add(grand, c)
 
-  name_w = max([len(m) for m in models] + [len('model'), len('total')])
-  col_w = {
+  name_width = max([len(m) for m in models] + [len('model'), len('total')])
+  column_widths = {
     c: max(
-      [len(_fmt_int(totals[m].get(c, 0))) for m in models]
-      + [len(_fmt_int(grand[c])), len(_COL_HEADER[c])]
+      [len(_format_int(totals[m].get(c, 0))) for m in models]
+      + [len(_format_int(grand[c])), len(_COLUMN_HEADER[c])]
     )
     for c in _CLASSES
   }
 
   def _row(label: str, counts: Counts) -> str:
-    cells = '  '.join(f'{_fmt_int(counts.get(c, 0)):>{col_w[c]}}' for c in _CLASSES)
-    return f'{label:<{name_w}}  {cells}'
+    cells = '  '.join(f'{_format_int(counts.get(c, 0)):>{column_widths[c]}}' for c in _CLASSES)
+    return f'{label:<{name_width}}  {cells}'
 
-  header = f'{"model":<{name_w}}  ' + '  '.join(f'{_COL_HEADER[c]:>{col_w[c]}}' for c in _CLASSES)
+  header = f'{"model":<{name_width}}  ' + '  '.join(
+    f'{_COLUMN_HEADER[c]:>{column_widths[c]}}' for c in _CLASSES
+  )
   lines = [
     f'commits scanned: {commit_count}',
     f'footers summed: {summed_count}',

@@ -58,8 +58,8 @@ class TestCreateContainer:
       return _FakeProc(returncode=0)
 
     calls = self._patch_run(monkeypatch, results)
-    cid = cw.docker._create_container(['docker', 'create', 'ARGS'], b'TARBALL', 'ws')
-    assert cid == 'cid123'
+    container_id = cw.docker._create_container(['docker', 'create', 'ARGS'], b'TARBALL', 'ws')
+    assert container_id == 'cid123'
     cp = next(c for c in calls if c['argv'][:3] == ['docker', 'cp', '-'])
     assert cp['argv'][3] == 'cid123:/home/cw'
     assert cp['input'] == b'TARBALL'

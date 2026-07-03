@@ -138,9 +138,9 @@ def _ppp_tarball(files: dict[str, bytes]) -> bytes:
     root.mode = 0o700
     root.uid, root.gid = uid, gid
     tar.addfile(root)
-    for fname in sorted(files):
-      data = files[fname]
-      info = tarfile.TarInfo(f'.ppp/{fname}')
+    for filename in sorted(files):
+      data = files[filename]
+      info = tarfile.TarInfo(f'.ppp/{filename}')
       info.size = len(data)
       info.mode = 0o600
       info.uid, info.gid = uid, gid

@@ -83,9 +83,9 @@ class TestStore:
     assert store.get('notion') == '{"token": "t"}'
 
   def test_unknown_name_raises(self):
-    with pytest.raises(credentials.SecretNotFound) as exc:
+    with pytest.raises(credentials.SecretNotFound) as exception:
       credentials.Store({}).get('nope')
-    assert exc.value.name == 'nope'
+    assert exception.value.name == 'nope'
 
   def test_try_get_returns_value_when_resolvable(self, configs_dir: Path):
     _write(configs_dir, 'notion.json', {'token': 't'})
@@ -113,9 +113,9 @@ class TestStore:
 
   def test_no_source_has_value_raises(self, configs_dir: Path):
     store = self._store(credentials.Secret('notion', [credentials.LocalSource('notion.json')]))
-    with pytest.raises(credentials.SecretNotFound) as exc:
+    with pytest.raises(credentials.SecretNotFound) as exception:
       store.get('notion')
-    assert exc.value.name == 'notion'
+    assert exception.value.name == 'notion'
 
   def test_get_json_parses_to_dict(self, configs_dir: Path):
     _write(configs_dir, 'notion.json', {'token': 't'})
@@ -353,8 +353,8 @@ class TestBuildScopedStore:
     _write(configs_dir, 'tmdb.json', {'api_key': 'k'})
     dest = tmp_path / 'scoped'
     dest.mkdir()
-    for fname, data in credentials.build_scoped_store(['notion']).items():
-      (dest / fname).write_bytes(data)
+    for filename, data in credentials.build_scoped_store(['notion']).items():
+      (dest / filename).write_bytes(data)
     # resolve as the container would: scoped dir is its ~/.ppp (and there is no
     # <project>/.configs). the scoped credentials.json bounds the registry.
     monkeypatch.setattr(credentials, 'CONFIGS_DIR', str(tmp_path / 'absent'))

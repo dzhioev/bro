@@ -119,7 +119,7 @@ def _short(trail_id: str) -> str:
   return trail_id[:_SHORT_ID_CHARS]
 
 
-def _format_ts(iso: Optional[str]) -> str:
+def _format_timestamp(iso: Optional[str]) -> str:
   if iso is None:
     return '-'
   # 2026-06-07T22:14:03.123456Z -> 2026-06-07 22:14:03
@@ -154,17 +154,17 @@ def _spilled_body(body: Any) -> Optional[dict]:
   return body
 
 
-def _format_step_summary(step: dict, col: _Colors) -> str:
+def _format_step_summary(step: dict, colors: _Colors) -> str:
   kind = step.get('kind', '?')
   # the full step ULID leads the line so the user can copy it straight into
   # `trails fork <trail_id> <step_id>` — the server doesn't accept prefixes.
   step_id = step.get('step_id', '?')
-  ts = _format_ts(step.get('ts'))
+  timestamp = _format_timestamp(step.get('ts'))
   turn = step.get('turn_index')
   turn_str = f't{turn} ' if turn is not None else ''
   prefix = (
-    f'{col.yellow}{step_id}{col.reset}  '
-    f'{col.dim}{ts}{col.reset}  {col.yellow}{turn_str}{kind:<14}{col.reset}'
+    f'{colors.yellow}{step_id}{colors.reset}  '
+    f'{colors.dim}{timestamp}{colors.reset}  {colors.yellow}{turn_str}{kind:<14}{colors.reset}'
   )
 
   body = step.get('body')
@@ -172,7 +172,7 @@ def _format_step_summary(step: dict, col: _Colors) -> str:
   if spilled is not None:
     size = spilled.get('size', '?')
     url = spilled.get('url', '-')
-    summary = f'{col.dim}<{size} bytes spilled>{col.reset} {url}'
+    summary = f'{colors.dim}<{size} bytes spilled>{colors.reset} {url}'
   else:
     summary = _truncate_oneline(body)
 
@@ -188,10 +188,10 @@ def _format_step_summary(step: dict, col: _Colors) -> str:
     'where',
   ):
     if key in step:
-      extras_parts.append(f'{col.cyan}{key}{col.reset}={step[key]}')
+      extras_parts.append(f'{colors.cyan}{key}{colors.reset}={step[key]}')
   arguments = step.get('arguments')
   if arguments is not None:
-    extras_parts.append(f'{col.cyan}args{col.reset}={_truncate_oneline(arguments, 80)}')
+    extras_parts.append(f'{colors.cyan}args{colors.reset}={_truncate_oneline(arguments, 80)}')
 
   parts = [prefix]
   if len(summary) > 0:
@@ -201,58 +201,58 @@ def _format_step_summary(step: dict, col: _Colors) -> str:
   return '  '.join(parts)
 
 
-def _format_trail_row(trail: dict, col: _Colors) -> str:
-  tid = trail.get('trail_id', '?')
+def _format_trail_row(trail: dict, colors: _Colors) -> str:
+  trail_id = trail.get('trail_id', '?')
   bro = trail.get('bro', '?')
   spec = trail.get('llm_spec', {})
   model = spec.get('model', '?')
-  started = _format_ts(trail.get('started_at'))
+  started = _format_timestamp(trail.get('started_at'))
   ended_raw = trail.get('ended_at')
   end_reason = trail.get('end_reason')
   status = (
-    f'{col.green}done:{end_reason}{col.reset}'
+    f'{colors.green}done:{end_reason}{colors.reset}'
     if ended_raw is not None
-    else f'{col.yellow}live{col.reset}'
+    else f'{colors.yellow}live{colors.reset}'
   )
   parent = trail.get('parent')
   parent_tag = ''
   if parent is not None:
-    parent_tag = f'  {col.dim}fork-of {parent["trail_id"]}{col.reset}'
+    parent_tag = f'  {colors.dim}fork-of {parent["trail_id"]}{colors.reset}'
   # the full ULID is on the line so the user can copy it straight into
   # `trails show / tree / fork` — the server doesn't accept prefixes.
   return (
-    f'{col.yellow}{tid}{col.reset}  '
-    f'{col.dim}{started}{col.reset}  '
-    f'{col.cyan}{bro:<10}{col.reset}  '
-    f'{col.dim}{model:<10}{col.reset}  '
+    f'{colors.yellow}{trail_id}{colors.reset}  '
+    f'{colors.dim}{started}{colors.reset}  '
+    f'{colors.cyan}{bro:<10}{colors.reset}  '
+    f'{colors.dim}{model:<10}{colors.reset}  '
     f'{status}{parent_tag}'
   )
 
 
-def _format_trail_header(trail: dict, col: _Colors) -> str:
+def _format_trail_header(trail: dict, colors: _Colors) -> str:
   spec = trail.get('llm_spec', {})
   aggregates = trail.get('aggregates', {})
   parent = trail.get('parent')
   lines = [
-    f'{col.bold}trail     {col.reset} {trail.get("trail_id")}',
-    f'{col.dim}bro       {col.reset} {trail.get("bro")} (version {trail.get("bro_version")})',
-    f'{col.dim}llm_spec  {col.reset} {json.dumps(spec, ensure_ascii=False)}',
-    f'{col.dim}started   {col.reset} {_format_ts(trail.get("started_at"))}',
-    f'{col.dim}ended     {col.reset} {_format_ts(trail.get("ended_at"))}  '
+    f'{colors.bold}trail     {colors.reset} {trail.get("trail_id")}',
+    f'{colors.dim}bro       {colors.reset} {trail.get("bro")} (version {trail.get("bro_version")})',
+    f'{colors.dim}llm_spec  {colors.reset} {json.dumps(spec, ensure_ascii=False)}',
+    f'{colors.dim}started   {colors.reset} {_format_timestamp(trail.get("started_at"))}',
+    f'{colors.dim}ended     {colors.reset} {_format_timestamp(trail.get("ended_at"))}  '
     f'({trail.get("end_reason")})',
-    f'{col.dim}interactive{col.reset} {trail.get("interactive")}  '
-    f'{col.dim}entry_point{col.reset} {trail.get("entry_point")}',
+    f'{colors.dim}interactive{colors.reset} {trail.get("interactive")}  '
+    f'{colors.dim}entry_point{colors.reset} {trail.get("entry_point")}',
   ]
   if parent is not None:
     lines.append(
-      f'{col.dim}parent    {col.reset} {parent.get("relationship")} '
+      f'{colors.dim}parent    {colors.reset} {parent.get("relationship")} '
       f'{parent.get("trail_id")} @ step {parent.get("step_id")}'
     )
   continuation = trail.get('continuation')
   if continuation is not None:
-    lines.append(f'{col.dim}continuation{col.reset} {json.dumps(continuation)}')
+    lines.append(f'{colors.dim}continuation{colors.reset} {json.dumps(continuation)}')
   lines.append(
-    f'{col.dim}aggregates{col.reset} '
+    f'{colors.dim}aggregates{colors.reset} '
     f'turns={aggregates.get("turn_count")} '
     f'tools={aggregates.get("tool_call_count")} '
     f'tokens_in={aggregates.get("tokens_in")} '
@@ -262,12 +262,12 @@ def _format_trail_header(trail: dict, col: _Colors) -> str:
   counts = aggregates.get('step_counts_by_kind')
   if counts is not None:
     parts = ', '.join(f'{k}={v}' for k, v in counts.items() if v > 0)
-    lines.append(f'{col.dim}step kinds{col.reset} {parts}')
-  lines.append(col.dim + ('─' * 78) + col.reset)
+    lines.append(f'{colors.dim}step kinds{colors.reset} {parts}')
+  lines.append(colors.dim + ('─' * 78) + colors.reset)
   return '\n'.join(lines)
 
 
-def _command_list(client: TrailsClient, args: dict, col: _Colors) -> int:
+def _command_list(client: TrailsClient, args: dict, colors: _Colors) -> int:
   trails_iter = client.iter_trails(
     bro=args.get('bro'),
     parent=args.get('parent'),
@@ -279,7 +279,7 @@ def _command_list(client: TrailsClient, args: dict, col: _Colors) -> int:
   if len(trails_list) == 0:
     print('(no trails)', file=sys.stderr)
     return 0
-  text = '\n'.join(_format_trail_row(t, col) for t in trails_list) + '\n'
+  text = '\n'.join(_format_trail_row(t, colors) for t in trails_list) + '\n'
   will_page = sys.stdout.isatty() and not args.get('no_pager', False)
   if will_page:
     _page(text)
@@ -288,12 +288,12 @@ def _command_list(client: TrailsClient, args: dict, col: _Colors) -> int:
   return 0
 
 
-def _command_show(client: TrailsClient, args: dict, col: _Colors) -> int:
+def _command_show(client: TrailsClient, args: dict, colors: _Colors) -> int:
   trail_id = args['trail_id']
   header = client.get_trail(trail_id)
-  out: list[str] = [_format_trail_header(header, col)]
+  out: list[str] = [_format_trail_header(header, colors)]
   for row in client.iter_steps(trail_id):
-    out.append(_format_step_summary(row, col))
+    out.append(_format_step_summary(row, colors))
   text = '\n'.join(out) + '\n'
   will_page = sys.stdout.isatty() and not args.get('no_pager', False)
   if will_page:
@@ -303,7 +303,7 @@ def _command_show(client: TrailsClient, args: dict, col: _Colors) -> int:
   return 0
 
 
-def _command_tree(client: TrailsClient, args: dict, col: _Colors) -> int:
+def _command_tree(client: TrailsClient, args: dict, colors: _Colors) -> int:
   trail_id = args['trail_id']
   start = client.get_trail(trail_id)
 
@@ -319,7 +319,7 @@ def _command_tree(client: TrailsClient, args: dict, col: _Colors) -> int:
 
   highlight = trail_id
   lines: list[str] = []
-  _render_tree(client, root, '', is_last=True, lines=lines, col=col, highlight=highlight)
+  _render_tree(client, root, '', is_last=True, lines=lines, colors=colors, highlight=highlight)
   sys.stdout.write('\n'.join(lines) + '\n')
   return 0
 
@@ -331,25 +331,25 @@ def _render_tree(
   *,
   is_last: bool,
   lines: list[str],
-  col: _Colors,
+  colors: _Colors,
   highlight: str,
 ) -> None:
-  tid = trail['trail_id']
+  trail_id = trail['trail_id']
   connector = '└── ' if is_last else '├── '
-  marker = f' {col.bold}<-- here{col.reset}' if tid == highlight else ''
+  marker = f' {colors.bold}<-- here{colors.reset}' if trail_id == highlight else ''
   spec = trail.get('llm_spec', {})
   model = spec.get('model', '?')
   bro = trail.get('bro', '?')
   parent_step = ''
   parent = trail.get('parent')
   if parent is not None:
-    parent_step = f' {col.dim}@step {_short(parent["step_id"])}{col.reset}'
+    parent_step = f' {colors.dim}@step {_short(parent["step_id"])}{colors.reset}'
   lines.append(
-    f'{prefix}{connector}{col.yellow}{_short(tid)}{col.reset}  '
-    f'{col.cyan}{bro}{col.reset}/{col.dim}{model}{col.reset}'
+    f'{prefix}{connector}{colors.yellow}{_short(trail_id)}{colors.reset}  '
+    f'{colors.cyan}{bro}{colors.reset}/{colors.dim}{model}{colors.reset}'
     f'{parent_step}{marker}'
   )
-  children = list(client.iter_trails(parent=tid))
+  children = list(client.iter_trails(parent=trail_id))
   # iter_trails returns newest-first; reverse so the tree reads oldest-first
   # under each node, matching how a reader would build it up mentally.
   children.reverse()
@@ -357,11 +357,11 @@ def _render_tree(
   for i, child in enumerate(children):
     last = i == len(children) - 1
     _render_tree(
-      client, child, child_prefix, is_last=last, lines=lines, col=col, highlight=highlight
+      client, child, child_prefix, is_last=last, lines=lines, colors=colors, highlight=highlight
     )
 
 
-def _command_fork(client: TrailsClient, args: dict, col: _Colors) -> int:
+def _command_fork(client: TrailsClient, args: dict, colors: _Colors) -> int:
   trail_id = args['trail_id']
   step_id = args['step_id']
   initial = args.get('initial')
@@ -373,12 +373,14 @@ def _command_fork(client: TrailsClient, args: dict, col: _Colors) -> int:
 
   bro = fork(parent_trail, step_id, record=not no_record)
   new_trail_id = getattr(bro._tracker, '_trail_id', None)
-  fork_banner = f'forked {_short(trail_id)}@{_short(step_id)} as {col.yellow}{bro.name}{col.reset}'
+  fork_banner = (
+    f'forked {_short(trail_id)}@{_short(step_id)} as {colors.yellow}{bro.name}{colors.reset}'
+  )
   if new_trail_id is not None and len(new_trail_id) > 0:
-    fork_banner += f'  new trail: {col.yellow}{new_trail_id}{col.reset}'
+    fork_banner += f'  new trail: {colors.yellow}{new_trail_id}{colors.reset}'
   print(fork_banner, file=sys.stderr)
   if no_record:
-    print(f'{col.dim}(recording disabled){col.reset}', file=sys.stderr)
+    print(f'{colors.dim}(recording disabled){colors.reset}', file=sys.stderr)
 
   try:
     asyncio.run(_fork_repl(bro, initial))
@@ -455,17 +457,17 @@ def main(argv: list[str]) -> Optional[int]:
     parser.print_help(sys.stderr)
     return 1
 
-  col = _Colors(_should_color(args['color']))
+  colors = _Colors(_should_color(args['color']))
   client = default_client()
   try:
     if command == 'list':
-      return _command_list(client, args, col)
+      return _command_list(client, args, colors)
     if command == 'show':
-      return _command_show(client, args, col)
+      return _command_show(client, args, colors)
     if command == 'tree':
-      return _command_tree(client, args, col)
+      return _command_tree(client, args, colors)
     if command == 'fork':
-      return _command_fork(client, args, col)
+      return _command_fork(client, args, colors)
   finally:
     client.close()
   parser.print_help(sys.stderr)

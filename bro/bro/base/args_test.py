@@ -434,9 +434,9 @@ class TestPrintEnv:
   def test_print_env_exits(self):
     parser = Parser()
     parser.add_argument('--foo')
-    with pytest.raises(SystemExit) as exc_info:
+    with pytest.raises(SystemExit) as exception_info:
       parser.parse_args(['--print-env'])
-    assert exc_info.value.code == 0
+    assert exception_info.value.code == 0
 
   def test_print_env_includes_verbose_and_ic(self, capsys):
     parser = Parser()
@@ -609,8 +609,8 @@ class TestReconstruct:
   def test_namespace_input(self):
     parser = Parser()
     parser.add_argument('--flag', action='store_true')
-    ns = parser.parse_args(['--flag'])
-    result = parser.reconstruct(ns)
+    namespace = parser.parse_args(['--flag'])
+    result = parser.reconstruct(namespace)
     assert result == [parser.prog, '--flag']
 
   def test_empty_remainder(self):
@@ -634,14 +634,14 @@ class TestReconstruct:
 
   def test_subparser_reconstruct(self):
     parser = Parser()
-    subs = parser.add_subparsers(dest='cmd')
-    sub = subs.add_parser('ss')
-    sub.add_argument('-c', '--container', action='store_true')
-    sub.add_argument('--mcp', action='store_true')
-    sub.add_argument('name')
-    sub.add_argument('extra', nargs=REMAINDER)
+    subparsers = parser.add_subparsers(dest='cmd')
+    subparser = subparsers.add_parser('ss')
+    subparser.add_argument('-c', '--container', action='store_true')
+    subparser.add_argument('--mcp', action='store_true')
+    subparser.add_argument('name')
+    subparser.add_argument('extra', nargs=REMAINDER)
     args = parser.parse(['cmd', 'ss', '-c', '--mcp', 'myname', '--foo'])
-    result = sub.reconstruct(args, prog=['cw', 'ss'])
+    result = subparser.reconstruct(args, prog=['cw', 'ss'])
     assert result == ['cw', 'ss', '-c', '--mcp', 'myname', '--foo']
 
 
@@ -662,11 +662,11 @@ class TestParseArgvBoundary:
 class TestDispatch:
   def _build(self) -> Parser:
     parser = Parser()
-    sub = parser.add_subparsers(dest='cmd')
-    create = sub.add_parser('create')
+    subparsers = parser.add_subparsers(dest='cmd')
+    create = subparsers.add_parser('create')
     create.add_argument('--title')
     create.set_handler(lambda title=None: ('create', title))
-    sub.add_parser('list').set_handler(lambda: 'listed')
+    subparsers.add_parser('list').set_handler(lambda: 'listed')
     return parser
 
   def test_routes_with_kwargs(self):
@@ -686,8 +686,8 @@ class TestDispatch:
 
   def test_set_handler_returns_parser(self):
     parser = Parser()
-    sub = parser.add_subparsers(dest='cmd')
-    p = sub.add_parser('x')
+    subparsers = parser.add_subparsers(dest='cmd')
+    p = subparsers.add_parser('x')
     assert p.set_handler(lambda: None) is p
 
 
@@ -701,8 +701,8 @@ class TestStdlibOnlyImport:
     code = (
       "import sys; sys.modules['icecream'] = None; "
       'import base.args; '
-      "ns = base.args.Parser().parse(['prog']); "
-      "assert 'ic' not in ns and '--ic' not in base.args.Parser().format_help(); "
+      "namespace = base.args.Parser().parse(['prog']); "
+      "assert 'ic' not in namespace and '--ic' not in base.args.Parser().format_help(); "
       "print('ok')"
     )
     result = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True)

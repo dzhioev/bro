@@ -36,7 +36,7 @@ class NameMap[V]:
     """
     entry = self._by_normalized.get(_normalize(query))
     if entry is None:
-      available = ', '.join(sorted(orig for orig, _ in self._by_normalized.values()))
+      available = ', '.join(sorted(original for original, _ in self._by_normalized.values()))
       raise LookupError(f'no match for "{query}" (available: {available})')
     return entry[1]
 
@@ -53,7 +53,7 @@ class NameMap[V]:
     return len(self._by_normalized)
 
   def __iter__(self) -> Iterator[str]:
-    return (orig for orig, _ in self._by_normalized.values())
+    return (original for original, _ in self._by_normalized.values())
 
   def names(self) -> list[str]:
-    return [orig for orig, _ in self._by_normalized.values()]
+    return [original for original, _ in self._by_normalized.values()]

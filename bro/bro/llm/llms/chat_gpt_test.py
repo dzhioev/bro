@@ -12,7 +12,7 @@ from llm.tracker import Tracker
 # the registry advertises namespaced wire names, so a tool whose local name is
 # `ping` in this namespace surfaces to the LLM as `svc__ping`. the emit helpers
 # below wrap the local name the same way, modeling what the model calls back.
-_TEST_NS = 'svc'
+_TEST_NAMESPACE = 'svc'
 
 
 class _StaticTool(Tool):
@@ -47,7 +47,7 @@ def _function_call_response(name: str) -> Response:
       output=[
         SimpleNamespace(
           type='function_call',
-          name=wire_name(_TEST_NS, name),
+          name=wire_name(_TEST_NAMESPACE, name),
           arguments='{}',
           call_id='call_1',
         )
@@ -58,7 +58,7 @@ def _function_call_response(name: str) -> Response:
 
 def _make_chat_gpt(tools: list[Tool]) -> ChatGPT:
   gpt = ChatGPT(api_key='dummy')
-  gpt.tools = ToolRegistry([InProcessMCPServer(_TEST_NS, tools)])
+  gpt.tools = ToolRegistry([InProcessMCPServer(_TEST_NAMESPACE, tools)])
   return gpt
 
 
@@ -102,14 +102,14 @@ def _fake_response(*, output, response_id='resp_1', usage=None, dump_payload=Non
   # `output` is the list of duck-typed items _emit_response_steps walks.
   # `dump_payload` becomes the response.model_dump() result captured into
   # the llm_call body — tests can pass a sentinel dict to verify it lands.
-  ns = SimpleNamespace(
+  namespace = SimpleNamespace(
     id=response_id,
     output=output,
     usage=usage if usage is not None else _fake_usage(),
   )
   payload = dump_payload if dump_payload is not None else {'id': response_id}
-  ns.model_dump = lambda mode='json': payload
-  return cast(Response, ns)
+  namespace.model_dump = lambda mode='json': payload
+  return cast(Response, namespace)
 
 
 def _reasoning_item(*texts: str):
@@ -128,7 +128,10 @@ def _message_item(text: str):
 
 def _function_call_item(name: str, *, call_id: str, arguments='{}'):
   return SimpleNamespace(
-    type='function_call', name=wire_name(_TEST_NS, name), arguments=arguments, call_id=call_id
+    type='function_call',
+    name=wire_name(_TEST_NAMESPACE, name),
+    arguments=arguments,
+    call_id=call_id,
   )
 
 
@@ -142,7 +145,9 @@ def _make_chat_gpt_with_tracker(
   to whatever stub sequence they need.
   """
   gpt = ChatGPT(api_key='dummy', reasoning_effort=reasoning_effort)
-  gpt.tools = ToolRegistry([InProcessMCPServer(_TEST_NS, tools)] if tools is not None else [])
+  gpt.tools = ToolRegistry(
+    [InProcessMCPServer(_TEST_NAMESPACE, tools)] if tools is not None else []
+  )
   # bypass the real openai schema conversion path — tests don't care about it.
   gpt._openai_tools = []
   tracker = _RecordingTracker()
@@ -152,11 +157,11 @@ def _make_chat_gpt_with_tracker(
 
 
 def _install_responses(gpt: ChatGPT, sequence: list, captured: list[dict]) -> None:
-  it = iter(sequence)
+  iterator = iter(sequence)
 
   def create(**kwargs):
     captured.append(kwargs)
-    return next(it)
+    return next(iterator)
 
   # OpenAI client exposes `responses` as a cached_property — write through to
   # a duck-typed namespace instead by replacing `gpt.client` wholesale. cast

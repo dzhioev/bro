@@ -293,24 +293,24 @@ sys.exit(code)
 @dataclass(frozen=True)
 class IsolatedEnv:
   root: Path
-  proj: Path
+  project: Path
   home: Path
   real_cw_sessions: Path
   real_residue_before: list[str]
 
   @property
   def broker_dir(self) -> Path:
-    return self.proj / 'var' / 'cw' / 'broker'
+    return self.project / 'var' / 'cw' / 'broker'
 
   @property
   def containers_dir(self) -> Path:
-    return self.proj / 'var' / 'cw' / 'containers'
+    return self.project / 'var' / 'cw' / 'containers'
 
   @property
   def cw_sessions(self) -> Path:
     return self.home / '.claude' / 'cw-sessions'
 
-  def socks(self) -> list[Path]:
+  def sockets(self) -> list[Path]:
     if not self.broker_dir.is_dir():
       return []
     return sorted(self.broker_dir.glob('*.sock'))
@@ -359,8 +359,8 @@ def isolated_env() -> Iterator[IsolatedEnv]:
       check=True,
     ).stdout.strip()
   )
-  proj = root / 'proj'
-  subprocess.run(['git', 'clone', '--quiet', str(checkout), str(proj)], check=True)
+  project = root / 'project'
+  subprocess.run(['git', 'clone', '--quiet', str(checkout), str(project)], check=True)
   home = root / 'home'
   home.mkdir()
   (home / '.claude.json').write_text(
@@ -371,12 +371,12 @@ def isolated_env() -> Iterator[IsolatedEnv]:
   )
   # the clone's pyproject/uv.lock are identical to the checkout's, so this resolves to
   # the image real sessions already built; builds only on a host that never launched one
-  with pytest.MonkeyPatch.context() as mp:
-    mp.setattr(cw.docker, '_project_root', lambda: proj)
+  with pytest.MonkeyPatch.context() as monkeypatch:
+    monkeypatch.setattr(cw.docker, '_project_root', lambda: project)
     cw.docker._ensure_image(cw.docker._image_tag())
   env = IsolatedEnv(
     root=root,
-    proj=proj,
+    project=project,
     home=home,
     real_cw_sessions=real_cw_sessions,
     real_residue_before=residue_before,
@@ -434,7 +434,7 @@ class _Driver:
       stdin=slave,
       stdout=slave,
       stderr=slave,
-      cwd=env.proj,
+      cwd=env.project,
       env=driver_env,
       start_new_session=True,
     )
@@ -482,13 +482,13 @@ class LiveRun:
 
   exit_code: int
   output: str
-  socks_during: list[Path] = field(default_factory=list)
-  sock_mode: Optional[int] = None
+  sockets_during: list[Path] = field(default_factory=list)
+  socket_mode: Optional[int] = None
   broker_dir_mode: Optional[int] = None
   container_id: Optional[str] = None
-  sock_mounted_at: Optional[str] = None
-  max_socks: int = 0
-  socks_after: list[Path] = field(default_factory=list)
+  socket_mounted_at: Optional[str] = None
+  max_sockets: int = 0
+  sockets_after: list[Path] = field(default_factory=list)
   container_gone_after: bool = False
 
   @property
@@ -544,32 +544,32 @@ def scenario_a(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> Liv
   driver = _Driver(env, name, ['python', '-c', _PROBE_A], extra_env={})
   request.addfinalizer(driver.close)
   _wait_ready(env, name, driver)
-  socks = env.socks()
-  run = LiveRun(exit_code=-1, output='', socks_during=socks)
-  if len(socks) == 1:
-    run.sock_mode = stat.S_IMODE(socks[0].stat().st_mode)
+  sockets = env.sockets()
+  run = LiveRun(exit_code=-1, output='', sockets_during=sockets)
+  if len(sockets) == 1:
+    run.socket_mode = stat.S_IMODE(sockets[0].stat().st_mode)
     run.broker_dir_mode = stat.S_IMODE(env.broker_dir.stat().st_mode)
     run.container_id = find_container_id(env.containers_dir / name)
     if run.container_id is not None:
-      run.sock_mounted_at = _container_mount_of(run.container_id, socks[0])
+      run.socket_mounted_at = _container_mount_of(run.container_id, sockets[0])
   (env.containers_dir / name / '.e2e-continue').touch()
   run.exit_code = driver.wait(120)
   run.output = driver.output()
-  run.socks_after = env.socks()
+  run.sockets_after = env.sockets()
   run.container_gone_after = _container_gone(env, name, 15)
   return run
 
 
 class TestBrokerEnabledLaunch:
   def test_channel_provisioned_and_bind_mounted(self, scenario_a: LiveRun) -> None:
-    assert len(scenario_a.socks_during) == 1, scenario_a.socks_during
+    assert len(scenario_a.sockets_during) == 1, scenario_a.sockets_during
     assert scenario_a.broker_dir_mode == 0o700
-    assert scenario_a.sock_mode == 0o600
+    assert scenario_a.socket_mode == 0o600
     assert scenario_a.container_id is not None
-    assert scenario_a.sock_mounted_at == '/run/broker.sock'
+    assert scenario_a.socket_mounted_at == '/run/broker.sock'
 
   def test_teardown_after_root_exit(self, scenario_a: LiveRun) -> None:
-    assert scenario_a.socks_after == [], 'channel socket not unlinked after the root exited'
+    assert scenario_a.sockets_after == [], 'channel socket not unlinked after the root exited'
     assert scenario_a.container_gone_after, 'session container survived the root exit'
 
   def test_ping_round_trip_over_live_channel(self, scenario_a: LiveRun) -> None:
@@ -590,9 +590,9 @@ class BrokerRun:
   report: dict
   root_peer: Optional[Peer]
   observed_pings: list[tuple[Peer, dict]]
-  max_socks: int
+  max_sockets: int
   max_live: int
-  socks_after: list[Path]
+  sockets_after: list[Path]
   live_after: list[str]
   workspace_leaks: list[str]
   session_leaks: list[str]
@@ -630,17 +630,17 @@ def _run_broker_scenario(
   facade.on('spawn', spawn_test_handler(child))
 
   result: dict[str, int] = {}
-  with pytest.MonkeyPatch.context() as mp:
-    mp.setenv('HOME', str(env.home))
-    mp.setattr(cw.spawn, '_project_root', lambda: env.proj)
-    mp.setattr(cw.docker, '_project_root', lambda: env.proj)
+  with pytest.MonkeyPatch.context() as monkeypatch:
+    monkeypatch.setenv('HOME', str(env.home))
+    monkeypatch.setattr(cw.spawn, '_project_root', lambda: env.project)
+    monkeypatch.setattr(cw.docker, '_project_root', lambda: env.project)
     thread = threading.Thread(target=lambda: result.update(code=facade.run(root)))
     thread.start()
-    max_socks = 0
+    max_sockets = 0
     max_live = 0
     deadline = time.monotonic() + budget
     while thread.is_alive() and time.monotonic() < deadline:
-      max_socks = max(max_socks, len(env.socks()))
+      max_sockets = max(max_sockets, len(env.sockets()))
       max_live = max(max_live, len(env.live_containers()))
       time.sleep(0.25)
     if thread.is_alive():
@@ -656,9 +656,9 @@ def _run_broker_scenario(
     report=report,
     root_peer=facade._dispatcher._root,
     observed_pings=observed_pings,
-    max_socks=max_socks,
+    max_sockets=max_sockets,
     max_live=max_live,
-    socks_after=env.socks(),
+    sockets_after=env.sockets(),
     live_after=env.live_containers(),
     workspace_leaks=env.leaked_dirs(env.containers_dir),
     session_leaks=env.leaked_dirs(env.cw_sessions),
@@ -732,9 +732,9 @@ class TestChildLifecycle:
     assert started['payload'] == {'trail_id': 'e2e-trail'}
     assert completed['in_reply_to'] == request_id
     assert completed['payload'] == {'result': 'child-ok', 'end_reason': 'terminal'}
-    assert b_clean.max_socks == 2
+    assert b_clean.max_sockets == 2
     assert b_clean.max_live == 2
-    assert b_clean.socks_after == []
+    assert b_clean.sockets_after == []
     assert b_clean.live_after == []
 
   def test_no_workspace_dirs_leaked_after_parent_exit(self, b_clean: BrokerRun) -> None:
@@ -755,7 +755,7 @@ class TestChildLifecycle:
     # stdout and stderr are merged into the one output tail
     assert 'e2e-stdout-marker' in failed['payload']['output_tail']
     assert 'e2e-stderr-marker' in failed['payload']['output_tail']
-    assert b_early_exit.socks_after == []
+    assert b_early_exit.sockets_after == []
     assert b_early_exit.live_after == []
 
   def test_wedged_child_times_out_at_default_timeout(self, b_timeout: BrokerRun) -> None:
@@ -768,14 +768,14 @@ class TestChildLifecycle:
     # the timer starts once the child is spawned, strictly after the request went out,
     # and fires at exactly default_timeout; the slack above covers the spawn overhead
     assert 30 <= failed['elapsed'] <= 60, failed['elapsed']
-    assert b_timeout.socks_after == []
+    assert b_timeout.sockets_after == []
     assert b_timeout.live_after == [], 'timed-out child container not killed'
 
   def test_children_torn_down_on_root_exit(self, b_teardown: BrokerRun) -> None:
     assert b_teardown.code == 0
     types = [m['type'] for m in b_teardown.report['messages']]
     assert types == ['started'], b_teardown.report['messages']
-    assert b_teardown.socks_after == []
+    assert b_teardown.sockets_after == []
     assert b_teardown.live_after == [], 'live child container survived the root exit'
 
 
@@ -793,11 +793,11 @@ def scenario_c(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> Liv
   run = LiveRun(exit_code=-1, output='')
   deadline = time.monotonic() + 240
   while driver.process.poll() is None and time.monotonic() < deadline:
-    run.max_socks = max(run.max_socks, len(env.socks()))
+    run.max_sockets = max(run.max_sockets, len(env.sockets()))
     time.sleep(0.25)
   run.exit_code = driver.wait(30)
   run.output = driver.output()
-  run.socks_after = env.socks()
+  run.sockets_after = env.sockets()
   return run
 
 
@@ -810,8 +810,8 @@ class TestKillSwitch:
     assert scenario_c.broker_modules == []
 
   def test_no_socket_provisioned(self, scenario_c: LiveRun) -> None:
-    assert scenario_c.max_socks == 0
-    assert scenario_c.socks_after == []
+    assert scenario_c.max_sockets == 0
+    assert scenario_c.sockets_after == []
 
 
 # --- D: broker unimportable in the launcher -----------------------------------
@@ -831,11 +831,11 @@ def scenario_d(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> Liv
   run = LiveRun(exit_code=-1, output='')
   deadline = time.monotonic() + 240
   while driver.process.poll() is None and time.monotonic() < deadline:
-    run.max_socks = max(run.max_socks, len(env.socks()))
+    run.max_sockets = max(run.max_sockets, len(env.sockets()))
     time.sleep(0.25)
   run.exit_code = driver.wait(30)
   run.output = driver.output()
-  run.socks_after = env.socks()
+  run.sockets_after = env.sockets()
   return run
 
 
@@ -847,8 +847,8 @@ class TestBrokerUnimportable:
     assert scenario_d.broker_modules == []
 
   def test_no_socket_provisioned(self, scenario_d: LiveRun) -> None:
-    assert scenario_d.max_socks == 0
-    assert scenario_d.socks_after == []
+    assert scenario_d.max_sockets == 0
+    assert scenario_d.sockets_after == []
 
 
 # --- E: SIGINT through the attached root --------------------------------------
@@ -863,7 +863,7 @@ def scenario_e_ctrl_c(isolated_env: IsolatedEnv, request: pytest.FixtureRequest)
   _wait_ready(env, name, driver)
   driver.write(b'\x03')  # ^C on the session terminal, forwarded raw into the container tty
   run = LiveRun(exit_code=driver.wait(60), output=driver.output())
-  run.socks_after = env.socks()
+  run.sockets_after = env.sockets()
   run.container_gone_after = _container_gone(env, name, 15)
   return run
 
@@ -878,7 +878,7 @@ def scenario_e_targeted(isolated_env: IsolatedEnv, request: pytest.FixtureReques
   container_id = find_container_id(env.containers_dir / name)
   os.kill(driver.process.pid, signal.SIGINT)  # targeted at the launcher, not the terminal group
   run = LiveRun(exit_code=driver.wait(60), output=driver.output(), container_id=container_id)
-  run.socks_after = env.socks()
+  run.sockets_after = env.sockets()
   run.container_gone_after = _container_gone(env, name, 15)
   if not run.container_gone_after and container_id is not None:
     subprocess.run(['docker', 'rm', '-f', container_id], capture_output=True)
@@ -890,13 +890,13 @@ class TestSigintHandling:
     assert 'CW_E2E_SIGINT_CAUGHT' in scenario_e_ctrl_c.output
     assert scenario_e_ctrl_c.exit_code == 0, scenario_e_ctrl_c.output
     assert 'Traceback' not in scenario_e_ctrl_c.output
-    assert scenario_e_ctrl_c.socks_after == []
+    assert scenario_e_ctrl_c.sockets_after == []
     assert scenario_e_ctrl_c.container_gone_after
 
   def test_targeted_sigint_does_not_unwind_the_loop(self, scenario_e_targeted: LiveRun) -> None:
     assert 'KeyboardInterrupt' not in scenario_e_targeted.output, scenario_e_targeted.output
     assert 'Traceback' not in scenario_e_targeted.output, scenario_e_targeted.output
-    assert scenario_e_targeted.socks_after == [], 'teardown did not unlink the channel socket'
+    assert scenario_e_targeted.sockets_after == [], 'teardown did not unlink the channel socket'
 
   def test_targeted_sigint_tears_down_the_container(self, scenario_e_targeted: LiveRun) -> None:
     assert scenario_e_targeted.container_gone_after, (

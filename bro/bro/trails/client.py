@@ -185,7 +185,7 @@ class TrailsClient:
     headers: dict,
     body: Optional[bytes],
   ) -> dict:
-    last_exc: Optional[Exception] = None
+    last_exception: Optional[Exception] = None
     # transient blips often leave the persistent socket half-open; one retry on
     # a fresh connection is enough to cover that without dragging in a full
     # backoff schedule (the read path is non-mutating and idempotent).
@@ -202,13 +202,13 @@ class TrailsClient:
         if response.status == 204 or len(raw) == 0:
           return {}
         return json.loads(raw)
-      except Exception as exc:
-        last_exc = exc
+      except Exception as exception:
+        last_exception = exception
         self._drop_connection()
         if attempt == 1:
           break
-    assert last_exc is not None
-    raise last_exc
+    assert last_exception is not None
+    raise last_exception
 
   def _get_connection(self) -> http.client.HTTPSConnection:
     if self._connection is not None:

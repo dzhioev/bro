@@ -304,13 +304,13 @@ def main(argv: list[str]) -> Optional[int]:
   parser.add_argument('--token', required=True, secret=True, help='GitHub token')
   parser.add_argument('--interval', type=int, default=10, help='poll interval in seconds')
   parser.add_argument('--self', dest='self_login', help='login to filter out (your own comments)')
-  ns = parser.parse(argv)
-  owner, repo = ns['repo']
+  namespace = parser.parse(argv)
+  owner, repo = namespace['repo']
   return poll_pr(
     owner=owner,
     repo=repo,
-    pr=ns['pr'],
-    token=ns['token'],
-    interval=ns['interval'],
-    self_login=ns['self_login'],
+    pr=namespace['pr'],
+    token=namespace['token'],
+    interval=namespace['interval'],
+    self_login=namespace['self_login'],
   )

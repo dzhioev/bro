@@ -144,11 +144,11 @@ class Context[T]:
   state: T
 
 
-def _context_param(function: Callable[..., Any]) -> Optional[str]:
+def _context_parameter(function: Callable[..., Any]) -> Optional[str]:
   """name of the function's `Context`-annotated parameter, or None. detected by
   annotation (not by parameter name) so a rename can't silently stop the injection."""
-  for name, param in inspect.signature(function, eval_str=True).parameters.items():
-    ann = param.annotation
+  for name, parameter in inspect.signature(function, eval_str=True).parameters.items():
+    ann = parameter.annotation
     if ann is Context or get_origin(ann) is Context:
       return name
   return None
@@ -281,9 +281,9 @@ class FunctionTool(Tool):
     # Context parameter gets it injected (wrapped in a fresh Context) on every
     # call, and the parameter is excluded from the derived input schema.
     self.state = state
-    self.context_param = _context_param(function)
+    self.context_parameter = _context_parameter(function)
 
-    skip = (self.context_param,) if self.context_param is not None else ()
+    skip = (self.context_parameter,) if self.context_parameter is not None else ()
     ret = inspect.signature(function).return_annotation
     structured = ret is not inspect.Signature.empty and ret is not str
     self._metadata = func_metadata(function, skip_names=skip, structured_output=structured)
@@ -316,8 +316,8 @@ class FunctionTool(Tool):
   async def call(self, arguments: dict[str, Any]) -> dict[str, Any] | str:
     validated = self._metadata.arg_model.model_validate(self._metadata.pre_parse_json(arguments))
     kwargs = validated.model_dump_one_level()
-    if self.context_param is not None:
-      kwargs[self.context_param] = Context(state=self.state)
+    if self.context_parameter is not None:
+      kwargs[self.context_parameter] = Context(state=self.state)
     result = self.function(**kwargs)
     if inspect.isawaitable(result):
       result = await result
@@ -358,24 +358,24 @@ def validated_callable(tool: FunctionTool) -> Callable[..., Any]:
   output shape. The result is returned unchanged for the framework to serialize.
   """
   function = tool.function
-  context_param = tool.context_param
+  context_parameter = tool.context_parameter
 
   @functools.wraps(function)
   async def validating(**kwargs: Any) -> Any:
-    if context_param is not None:
-      kwargs[context_param] = Context(state=tool.state)
+    if context_parameter is not None:
+      kwargs[context_parameter] = Context(state=tool.state)
     result = function(**kwargs)
     if inspect.isawaitable(result):
       result = await result
     tool.validate_output(result)
     return result
 
-  if context_param is not None:
+  if context_parameter is not None:
     # hide the injected parameter from the framework's schema derivation: an
     # explicit __signature__ wins over the __wrapped__ chain functools.wraps sets up.
-    sig = inspect.signature(function)
-    validating.__signature__ = sig.replace(  # pyright: ignore[reportAttributeAccessIssue]
-      parameters=[p for p in sig.parameters.values() if p.name != context_param]
+    signature = inspect.signature(function)
+    validating.__signature__ = signature.replace(  # pyright: ignore[reportAttributeAccessIssue]
+      parameters=[p for p in signature.parameters.values() if p.name != context_parameter]
     )
   return validating
 

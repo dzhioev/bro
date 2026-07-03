@@ -133,7 +133,7 @@ class TestContainerWorkspaceRemove:
   # the mkdir/remove below would touch the real ~/.claude/cw-sessions
   def test_removes_dir_with_cleanup_image_and_session_state(self, monkeypatch, tmp_path):
     monkeypatch.setenv('HOME', str(tmp_path / 'home'))
-    monkeypatch.setattr(cw.workspace, '_containers_dir', lambda proj: tmp_path / 'containers')
+    monkeypatch.setattr(cw.workspace, '_containers_dir', lambda project: tmp_path / 'containers')
     monkeypatch.setattr(cw.workspace, '_cleanup_image', lambda: 'ppp-cw:img')
     removed = {}
     monkeypatch.setattr(
@@ -141,95 +141,95 @@ class TestContainerWorkspaceRemove:
       '_remove_container_dir',
       lambda path, image: removed.update(path=path, image=image),
     )
-    ws = ContainerWorkspace('ws', tmp_path / 'proj')
-    ws.session_dir.mkdir(parents=True)
-    ws.remove()
-    assert removed == {'path': ws.path, 'image': 'ppp-cw:img'}
-    assert not ws.session_dir.exists()  # session state cleaned
+    workspace = ContainerWorkspace('ws', tmp_path / 'project')
+    workspace.session_dir.mkdir(parents=True)
+    workspace.remove()
+    assert removed == {'path': workspace.path, 'image': 'ppp-cw:img'}
+    assert not workspace.session_dir.exists()  # session state cleaned
 
   def test_session_state_cleaned_even_when_dir_removal_raises(self, monkeypatch, tmp_path):
     monkeypatch.setenv('HOME', str(tmp_path / 'home'))
-    monkeypatch.setattr(cw.workspace, '_containers_dir', lambda proj: tmp_path / 'containers')
+    monkeypatch.setattr(cw.workspace, '_containers_dir', lambda project: tmp_path / 'containers')
     monkeypatch.setattr(cw.workspace, '_cleanup_image', lambda: None)
 
     def boom(path, image):
       raise RuntimeError('no image')
 
     monkeypatch.setattr(cw.workspace, '_remove_container_dir', boom)
-    ws = ContainerWorkspace('ws', tmp_path / 'proj')
-    ws.session_dir.mkdir(parents=True)
+    workspace = ContainerWorkspace('ws', tmp_path / 'project')
+    workspace.session_dir.mkdir(parents=True)
     with pytest.raises(RuntimeError, match='no image'):
-      ws.remove()
-    assert not ws.session_dir.exists()
+      workspace.remove()
+    assert not workspace.session_dir.exists()
 
 
 class TestHostIsClean:
-  def _ws(self, tmp_path, monkeypatch, name='repo'):
-    monkeypatch.setattr(cw.workspace, '_worktrees_dir', lambda proj: tmp_path)
-    ws = HostWorktree(name, tmp_path)
-    _init_repo(ws.path)
-    _git(ws.path, 'update-ref', 'refs/remotes/origin/master', 'HEAD')
-    return ws
+  def _make_workspace(self, tmp_path, monkeypatch, name='repo'):
+    monkeypatch.setattr(cw.workspace, '_worktrees_dir', lambda project: tmp_path)
+    workspace = HostWorktree(name, tmp_path)
+    _init_repo(workspace.path)
+    _git(workspace.path, 'update-ref', 'refs/remotes/origin/master', 'HEAD')
+    return workspace
 
   def test_clean_when_head_matches_origin_master(self, tmp_path, monkeypatch):
-    ws = self._ws(tmp_path, monkeypatch)
-    safe, reasons = ws.is_clean(refresh_origin=False)
+    workspace = self._make_workspace(tmp_path, monkeypatch)
+    safe, reasons = workspace.is_clean(refresh_origin=False)
     assert safe is True
     assert reasons == []
 
   def test_counts_unpushed_commits(self, tmp_path, monkeypatch):
-    ws = self._ws(tmp_path, monkeypatch)
-    (ws.path / 'f').write_text('b')
-    _git(ws.path, 'commit', '-am', 'c2')
-    safe, reasons = ws.is_clean(refresh_origin=False)
+    workspace = self._make_workspace(tmp_path, monkeypatch)
+    (workspace.path / 'f').write_text('b')
+    _git(workspace.path, 'commit', '-am', 'c2')
+    safe, reasons = workspace.is_clean(refresh_origin=False)
     assert safe is False
     assert reasons == ['1 commit(s) not on origin/master']
 
   def test_flags_uncommitted_changes(self, tmp_path, monkeypatch):
-    ws = self._ws(tmp_path, monkeypatch)
-    (ws.path / 'untracked').write_text('x')
-    safe, reasons = ws.is_clean(refresh_origin=False)
+    workspace = self._make_workspace(tmp_path, monkeypatch)
+    (workspace.path / 'untracked').write_text('x')
+    safe, reasons = workspace.is_clean(refresh_origin=False)
     assert safe is False
     assert 'uncommitted or untracked changes' in reasons
 
   def test_missing_origin_master_is_not_clean(self, tmp_path, monkeypatch):
-    monkeypatch.setattr(cw.workspace, '_worktrees_dir', lambda proj: tmp_path)
-    ws = HostWorktree('repo', tmp_path)
-    _init_repo(ws.path)  # no origin/master ref set
-    safe, reasons = ws.is_clean(refresh_origin=False)
+    monkeypatch.setattr(cw.workspace, '_worktrees_dir', lambda project: tmp_path)
+    workspace = HostWorktree('repo', tmp_path)
+    _init_repo(workspace.path)  # no origin/master ref set
+    safe, reasons = workspace.is_clean(refresh_origin=False)
     assert safe is False
     assert 'origin/master not found' in reasons
 
 
 class TestContainerIsClean:
-  def _ws(self, tmp_path, monkeypatch):
+  def _make_workspace(self, tmp_path, monkeypatch):
     # a shared "host" repo (the ancestry check's check_root) and a clone of it
     # standing in for the container workspace, exercising the alternate-objects
     # dance: the clone's local commits are reachable from the shared repo only
     # via GIT_ALTERNATE_OBJECT_DIRECTORIES.
-    proj = tmp_path / 'proj'
-    _init_repo(proj)
-    _git(proj, 'update-ref', 'refs/remotes/origin/master', 'HEAD')
+    project = tmp_path / 'project'
+    _init_repo(project)
+    _git(project, 'update-ref', 'refs/remotes/origin/master', 'HEAD')
     containers = tmp_path / 'containers'
     containers.mkdir()
     monkeypatch.setattr(cw.workspace, '_containers_dir', lambda p: containers)
-    ws = ContainerWorkspace('ws', proj)
-    _git(tmp_path, 'clone', '--quiet', str(proj), str(ws.path))
-    _git(ws.path, 'config', 'user.email', 't@t')
-    _git(ws.path, 'config', 'user.name', 't')
-    return ws
+    workspace = ContainerWorkspace('ws', project)
+    _git(tmp_path, 'clone', '--quiet', str(project), str(workspace.path))
+    _git(workspace.path, 'config', 'user.email', 't@t')
+    _git(workspace.path, 'config', 'user.name', 't')
+    return workspace
 
   def test_clean_when_clone_head_matches_origin_master(self, tmp_path, monkeypatch):
-    ws = self._ws(tmp_path, monkeypatch)
-    safe, reasons = ws.is_clean(refresh_origin=False)
+    workspace = self._make_workspace(tmp_path, monkeypatch)
+    safe, reasons = workspace.is_clean(refresh_origin=False)
     assert safe is True
     assert reasons == []
 
   def test_counts_unpushed_clone_commits_via_alternate(self, tmp_path, monkeypatch):
-    ws = self._ws(tmp_path, monkeypatch)
-    (ws.path / 'f').write_text('b')
-    _git(ws.path, 'commit', '-am', 'c2')
-    safe, reasons = ws.is_clean(refresh_origin=False)
+    workspace = self._make_workspace(tmp_path, monkeypatch)
+    (workspace.path / 'f').write_text('b')
+    _git(workspace.path, 'commit', '-am', 'c2')
+    safe, reasons = workspace.is_clean(refresh_origin=False)
     assert safe is False
     assert reasons == ['1 commit(s) not on origin/master']
 
@@ -237,50 +237,50 @@ class TestContainerIsClean:
     containers = tmp_path / 'containers'
     (containers / 'ws').mkdir(parents=True)  # no .git
     monkeypatch.setattr(cw.workspace, '_containers_dir', lambda p: containers)
-    ws = ContainerWorkspace('ws', tmp_path / 'proj')
-    safe, reasons = ws.is_clean(refresh_origin=False)
+    workspace = ContainerWorkspace('ws', tmp_path / 'project')
+    safe, reasons = workspace.is_clean(refresh_origin=False)
     assert safe is False
     assert reasons == ['not a git repository']
 
 
 class TestIsActive:
-  def _ws(self, tmp_path, name='feat'):
+  def _make_workspace(self, tmp_path, name='feat'):
     return HostWorktree(name, tmp_path)
 
-  def _seed(self, ws):
-    ws.pidfile.parent.mkdir(parents=True, exist_ok=True)
-    return ws.pidfile
+  def _seed(self, workspace):
+    workspace.pidfile.parent.mkdir(parents=True, exist_ok=True)
+    return workspace.pidfile
 
   def test_host_false_when_no_pidfile(self, tmp_path):
-    assert self._ws(tmp_path).is_active(set()) is False
+    assert self._make_workspace(tmp_path).is_active(set()) is False
 
   def test_host_true_for_live_pid(self, tmp_path):
-    ws = self._ws(tmp_path)
-    self._seed(ws).write_text(str(os.getpid()))
-    assert ws.is_active(set()) is True
+    workspace = self._make_workspace(tmp_path)
+    self._seed(workspace).write_text(str(os.getpid()))
+    assert workspace.is_active(set()) is True
 
   def test_host_false_for_dead_pid(self, tmp_path):
     process = subprocess.Popen(['true'])
     process.wait()
-    ws = self._ws(tmp_path)
-    self._seed(ws).write_text(str(process.pid))
-    assert ws.is_active(set()) is False
+    workspace = self._make_workspace(tmp_path)
+    self._seed(workspace).write_text(str(process.pid))
+    assert workspace.is_active(set()) is False
 
   def test_host_false_for_garbage(self, tmp_path):
-    ws = self._ws(tmp_path)
-    self._seed(ws).write_text('not-a-pid')
-    assert ws.is_active(set()) is False
+    workspace = self._make_workspace(tmp_path)
+    self._seed(workspace).write_text('not-a-pid')
+    assert workspace.is_active(set()) is False
 
   def test_host_ignores_mounts(self, tmp_path):
-    ws = self._ws(tmp_path)
-    self._seed(ws).write_text(str(os.getpid()))
-    assert ws.is_active({str(ws.path)}) is True  # mounts are irrelevant to a worktree
+    workspace = self._make_workspace(tmp_path)
+    self._seed(workspace).write_text(str(os.getpid()))
+    assert workspace.is_active({str(workspace.path)}) is True  # mounts are irrelevant to a worktree
 
   def test_container_active_when_path_in_mounts(self, tmp_path, monkeypatch):
-    monkeypatch.setattr(cw.workspace, '_containers_dir', lambda proj: tmp_path)
-    ws = ContainerWorkspace('feat', tmp_path)
-    assert ws.is_active({str(ws.path)}) is True
-    assert ws.is_active(set()) is False
+    monkeypatch.setattr(cw.workspace, '_containers_dir', lambda project: tmp_path)
+    workspace = ContainerWorkspace('feat', tmp_path)
+    assert workspace.is_active({str(workspace.path)}) is True
+    assert workspace.is_active(set()) is False
 
 
 class TestWorkspaceRefsAndEnumeration:
@@ -289,16 +289,16 @@ class TestWorkspaceRefsAndEnumeration:
     containers = tmp_path / 'ct'
     (worktrees / 'h').mkdir(parents=True)
     (containers / 'c').mkdir(parents=True)
-    monkeypatch.setattr(cw.workspace, '_worktrees_dir', lambda proj: worktrees)
-    monkeypatch.setattr(cw.workspace, '_containers_dir', lambda proj: containers)
+    monkeypatch.setattr(cw.workspace, '_worktrees_dir', lambda project: worktrees)
+    monkeypatch.setattr(cw.workspace, '_containers_dir', lambda project: containers)
     host = Workspace.from_ref('h', tmp_path)
     container = Workspace.from_ref('c:c', tmp_path)
     assert isinstance(host, HostWorktree) and host.ref == 'h'
     assert isinstance(container, ContainerWorkspace) and container.ref == 'c:c'
 
   def test_from_ref_raises_with_kind_specific_message(self, tmp_path, monkeypatch):
-    monkeypatch.setattr(cw.workspace, '_worktrees_dir', lambda proj: tmp_path / 'wt')
-    monkeypatch.setattr(cw.workspace, '_containers_dir', lambda proj: tmp_path / 'ct')
+    monkeypatch.setattr(cw.workspace, '_worktrees_dir', lambda project: tmp_path / 'wt')
+    monkeypatch.setattr(cw.workspace, '_containers_dir', lambda project: tmp_path / 'ct')
     with pytest.raises(ValueError, match='^workspace not found: gone$'):
       Workspace.from_ref('gone', tmp_path)
     with pytest.raises(ValueError, match='^container workspace not found: c:gone$'):
@@ -310,7 +310,7 @@ class TestWorkspaceRefsAndEnumeration:
     (worktrees / 'h1').mkdir(parents=True)
     (worktrees / 'h2').mkdir(parents=True)
     (containers / 'c1').mkdir(parents=True)
-    monkeypatch.setattr(cw.workspace, '_worktrees_dir', lambda proj: worktrees)
-    monkeypatch.setattr(cw.workspace, '_containers_dir', lambda proj: containers)
-    refs = {ws.ref for ws in Workspace.all(tmp_path)}
+    monkeypatch.setattr(cw.workspace, '_worktrees_dir', lambda project: worktrees)
+    monkeypatch.setattr(cw.workspace, '_containers_dir', lambda project: containers)
+    refs = {workspace.ref for workspace in Workspace.all(tmp_path)}
     assert refs == {'h1', 'h2', 'c:c1'}
