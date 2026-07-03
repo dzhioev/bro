@@ -1,12 +1,12 @@
-"""DockerSpawner — cw's adapter for broker's `Spawner` port (non-TTY child mode).
+"""cw's adapters for broker's `Spawner` port, plus the root-peer launch both use.
 
-Pairs with `UnixServerTransport`: the broker provisions a per-peer host socket, and
-this spawner bind-mounts it into the child at the fixed `/run/broker.sock` and points
-`BROKER_CHANNEL` at it, so the child's `broker` client connects back over the channel
-the host supervises.
+`DockerSpawner` pairs with `UnixServerTransport` across the container boundary: the
+broker provisions a per-peer host socket, and this spawner bind-mounts it into the
+child at the fixed `/run/broker.sock` and points `BROKER_CHANNEL` at it, so the
+child's `broker` client connects back over the channel the host supervises.
 
-Two launch modes, keyed by `launch.attached` — stdio wiring only; supervision by the
-broker's Runtime is uniform:
+Two docker launch modes, keyed by `launch.attached` — stdio wiring only; supervision
+by the broker's Runtime is uniform:
 
 - Non-TTY (`attached == False`, a spawned child): `docker create` without `-it` (a
   headless child gets no pty) → `docker start -a` as an asyncio subprocess with
@@ -24,6 +24,15 @@ broker's Runtime is uniform:
 
 Either way the exit code is the attached process's returncode and `kill()`
 force-removes the container.
+
+`ProcessSpawner` is the host-mode sibling: the peer is a plain subprocess with
+inherited stdio (the interactive root of a host session), and the provisioned socket
+path is directly reachable from it, so `BROKER_CHANNEL` points straight at the host
+endpoint — no bind-mount hop.
+
+`run_root_via_broker` is the launch shape both modes share: one broker over the
+`var/cw/broker` control dir, the built-in ping handler, supervise until the root
+exits.
 """
 
 import asyncio
@@ -34,10 +43,13 @@ from pathlib import Path
 from typing import Optional
 
 from base import credentials, log
+from broker.brotocol import Tag
+from broker.dispatcher import Broker, ping_handler
 from broker.spawn import ChildHandle, LaunchSpec, Spawner
 from broker.transport import Provisioned
+from broker.transports.unix import UnixServerTransport
 from cw.docker import _create_container, _docker_create_argv, _ensure_image, _image_tag
-from cw.paths import _containers_dir, _project_root
+from cw.paths import _broker_dir, _containers_dir, _project_root
 from cw.secrets import _ppp_tarball
 from cw.workspace import ContainerWorkspace
 
@@ -77,6 +89,21 @@ class DockerLaunchSpec(LaunchSpec):
   optional_secrets: Collection[str] = ()
   docker_sock: bool = False
   forward_bro: bool = False
+
+
+@dataclass(frozen=True)
+class ProcessLaunchSpec(LaunchSpec):
+  """the concrete launch description `ProcessSpawner` reads: an interactive host
+  subprocess run in `cwd` with inherited stdio (the launcher's TTY).
+
+  `env` is the child's full environment — an explicit snapshot, never a live
+  `os.environ` read (the same purity rule as `DockerLaunchSpec.env`); the spawner
+  sets `BROKER_CHANNEL` on top, pointing at the provisioned socket.
+  """
+
+  command: list[str]
+  cwd: str
+  env: dict[str, str]
 
 
 class _RingBuffer:
@@ -191,19 +218,19 @@ class _DockerChild(ChildHandle):
     return self._ring.tail().decode('utf-8', errors='replace')
 
 
-class _AttachedRoot(ChildHandle):
-  """handle for the interactive root: the docker client owns the inherited stdio.
+class _AttachedHandle(ChildHandle):
+  """base handle for an interactive root: the child owns the inherited stdio.
 
-  While attached, SIGINT is forwarded to the docker client rather than left to raise
+  While attached, SIGINT is forwarded to the child rather than left to raise
   KeyboardInterrupt inside the event loop — an interrupt is meant for the session, and
-  unwinding the loop would tear down the broker under it. The docker client and this
-  process share the foreground process group (the client must keep reading the
-  controlling TTY), so on a group-wide TTY interrupt the client may also receive the
-  signal directly; the forward only matters for a signal targeted at the launcher.
-  `wait()` restores default SIGINT handling once the client exits."""
+  unwinding the loop would tear down the broker under it. The child and this process
+  share the foreground process group (the child must keep reading the controlling
+  TTY), so on a group-wide TTY interrupt the child may also receive the signal
+  directly; the forward only matters for a signal targeted at the launcher. `wait()`
+  restores default SIGINT handling once the child exits, then runs the subtype's
+  `_on_exited` teardown. `output_tail()` is empty — the streams belong to the TTY."""
 
-  def __init__(self, container_id: str, proc: asyncio.subprocess.Process):
-    self._container_id = container_id
+  def __init__(self, proc: asyncio.subprocess.Process):
     self._proc = proc
     self._loop = asyncio.get_running_loop()
     self._loop.add_signal_handler(signal.SIGINT, self._forward_sigint)
@@ -217,17 +244,40 @@ class _AttachedRoot(ChildHandle):
       return await self._proc.wait()
     finally:
       self._loop.remove_signal_handler(signal.SIGINT)
-      # a tty attach runs with docker's sig-proxy off, so the client can die (e.g. a
-      # SIGINT targeted at it) while the container lives on. Client exit ends the
-      # session either way; force-remove so the container follows — a no-op on the
-      # normal path, where the container already exited and --rm is removing it.
-      await _force_remove(self._container_id)
+      await self._on_exited()
+
+  async def _on_exited(self) -> None:
+    """subtype teardown, run after the child exits and before `wait()` returns."""
+
+  def output_tail(self) -> str:
+    return ''
+
+
+class _AttachedRoot(_AttachedHandle):
+  """handle for the interactive container root: the docker client owns the stdio."""
+
+  def __init__(self, container_id: str, proc: asyncio.subprocess.Process):
+    super().__init__(proc)
+    self._container_id = container_id
+
+  async def _on_exited(self) -> None:
+    # a tty attach runs with docker's sig-proxy off, so the client can die (e.g. a
+    # SIGINT targeted at it) while the container lives on. Client exit ends the
+    # session either way; force-remove so the container follows — a no-op on the
+    # normal path, where the container already exited and --rm is removing it.
+    await _force_remove(self._container_id)
 
   async def kill(self) -> None:
     await _force_remove(self._container_id)
 
-  def output_tail(self) -> str:
-    return ''
+
+class _AttachedProcess(_AttachedHandle):
+  """handle for the interactive host root: the child process itself owns the stdio."""
+
+  async def kill(self) -> None:
+    if self._proc.returncode is None:
+      self._proc.kill()
+      await self._proc.wait()
 
 
 class DockerSpawner(Spawner):
@@ -259,3 +309,23 @@ class DockerSpawner(Spawner):
     )
     workspace = ContainerWorkspace(name, proj) if launch.name is None else None
     return _DockerChild(container_id, proc, launch.ring_bytes, workspace)
+
+
+class ProcessSpawner(Spawner):
+  async def spawn(self, launch: LaunchSpec, channel: Provisioned) -> ChildHandle:
+    assert isinstance(launch, ProcessLaunchSpec)
+    env = dict(launch.env)
+    env['BROKER_CHANNEL'] = f'unix:{channel.host_endpoint}'
+    proc = await asyncio.create_subprocess_exec(*launch.command, cwd=launch.cwd, env=env)
+    return _AttachedProcess(proc)
+
+
+def run_root_via_broker(launch: LaunchSpec, spawner: Spawner, proj: Path) -> int:
+  """run `launch` as the root peer of a broker over the host control dir
+  (`var/cw/broker`), supervise it on the broker loop until it exits, and return its
+  exit code. The broker answers the substrate's built-in ping, so a session can
+  verify its channel (`broker request ping '{}'`); consumers register further
+  request types on top."""
+  facade = Broker(UnixServerTransport(str(_broker_dir(proj))), spawner)
+  facade.on(Tag.PING, ping_handler)
+  return facade.run(launch)

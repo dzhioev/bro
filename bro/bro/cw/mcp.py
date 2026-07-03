@@ -1,10 +1,9 @@
 """session-local HTTP MCP serving.
 
 `--bro` and `--mcp local` sessions get their MCP tools from an
-`mcp-server <spec> --http` instance the session owns — started by the container
-entrypoint (fixed port, private netns) or by cw itself in host mode
-(OS-assigned port, shared netns) — with claude pointed at it via a generated
-`--mcp-config`.
+`mcp-server <spec> --http` instance the in-place session runner owns —
+OS-assigned port published via a port file, per-session bearer token — with
+claude pointed at it via a generated `--mcp-config`.
 """
 
 import json
@@ -12,22 +11,31 @@ import secrets
 import subprocess
 import tempfile
 import time
+import urllib.error
+import urllib.request
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 from base import spawn
 
-# the port a session-local MCP server listens on inside a container. fixed: the
-# container network namespace is private, so there is nothing to collide with.
-# the value crosses the host/container boundary via CW_MCP_HTTP_PORT (cw builds
-# the claude-config URLs host-side; the entrypoint starts the server).
-_MCP_HTTP_PORT = 8300
-
-# how long a host-mode server may take to bind. the bind needs only mcp-server's
-# cheap module imports (the heavy ones are deferred past it), so this is
-# generous headroom, not expected latency.
+# how long a runner-owned server may take to bind. the bind needs only
+# mcp-server's cheap module imports (the heavy ones are deferred past it), so
+# this is generous headroom, not expected latency.
 _BIND_TIMEOUT = 30.0
+
+# how long /health may take to answer after the bind: the full tool import
+# (bro graph → flow → notion → boto3) runs behind it, seconds in practice.
+_HEALTH_TIMEOUT = 60.0
+
+
+@dataclass(frozen=True)
+class MCPEndpoint:
+  """where a session-local MCP server listens; the claude `--mcp-config` (one URL
+  per namespace) is built from it by `cw.claude_argv`."""
+
+  port: int
+  token: str
 
 
 def _http_mcp_config(namespaces: list[str], *, port: int, token: str) -> str:
@@ -49,32 +57,41 @@ def _http_mcp_config(namespaces: list[str], *, port: int, token: str) -> str:
   )
 
 
-def _container_mcp_launch(spec: str, namespaces: list[str]) -> tuple[dict[str, str], str]:
-  """(entrypoint env, claude mcp-config) for a session-local server in a container.
-
-  the entrypoint reads CW_MCP_HTTP_SPEC / PORT / TOKEN to start
-  `mcp-server <spec> --http` before it execs claude; the config points claude at
-  the same port with the same per-session bearer token, one entry per namespace.
-  """
-  token = secrets.token_urlsafe(32)
-  env = {
-    'CW_MCP_HTTP_SPEC': spec,
-    'CW_MCP_HTTP_PORT': str(_MCP_HTTP_PORT),
-    'CW_MCP_HTTP_TOKEN': token,
-  }
-  return env, _http_mcp_config(namespaces, port=_MCP_HTTP_PORT, token=token)
-
-
 @dataclass
-class _HostMCPServer:
-  """a session-local `mcp-server flow --http` owned by a host `--mcp local` session."""
+class _SessionMCPServer:
+  """a session-local `mcp-server <spec> --http` owned by the launching session."""
 
   process: subprocess.Popen
-  port: int
-  token: str
+  endpoint: MCPEndpoint
+  log_path: Path
 
-  def mcp_config(self) -> str:
-    return _http_mcp_config(['flow'], port=self.port, token=self.token)
+  def wait_healthy(self) -> None:
+    """block until /health answers 200 — every namespace endpoint ready to serve.
+
+    `bro:*` sessions gate the claude launch on this: their seeded `-p` prompt
+    fires the moment the REPL is up, so the multi-second bro import must be paid
+    here, off claude's critical path, for the first turn to have every tool
+    connected. raises RuntimeError when the server dies or the deadline passes.
+    """
+    url = f'http://127.0.0.1:{self.endpoint.port}/health'
+    deadline = time.monotonic() + _HEALTH_TIMEOUT
+    while True:
+      if self.process.poll() is not None:
+        raise RuntimeError(
+          f'mcp-server exited with code {self.process.returncode} before /health; '
+          f'log: {self.log_path}'
+        )
+      try:
+        with urllib.request.urlopen(url, timeout=1) as response:
+          if response.status == 200:
+            return
+      except (urllib.error.URLError, TimeoutError):
+        pass
+      if time.monotonic() >= deadline:
+        raise RuntimeError(
+          f'mcp-server not healthy within {_HEALTH_TIMEOUT:.0f}s; log: {self.log_path}'
+        )
+      time.sleep(0.2)
 
   def stop(self) -> None:
     self.process.terminate()
@@ -85,19 +102,20 @@ class _HostMCPServer:
       self.process.wait()
 
 
-def _start_host_mcp_server(worktree: Path, env: Mapping[str, str]) -> _HostMCPServer:
-  """start `mcp-server flow --http` on an OS-assigned port for a host session.
+def _start_session_mcp_server(spec: str, cwd: Path, env: Mapping[str, str]) -> _SessionMCPServer:
+  """start `mcp-server <spec> --http` on an OS-assigned port for a session.
 
-  `env` must carry the worktree venv's PATH: "local" means this checkout's flow
-  code, so the console script — and the flow package it imports — resolve from
-  the worktree, not the main repo. an OS-assigned port (`--port 0`) avoids
-  collisions with concurrent host sessions in the shared netns; the server
-  binds it before its heavy imports and publishes it via `--port-file`, so the
-  wait here is milliseconds and a claude connect that lands mid-import sits in
-  the TCP backlog until uvicorn accepts. runs in its own session (spawn.popen),
-  outside the terminal's process group, so a Ctrl-C aimed at claude doesn't
-  kill it; the caller stops it once claude exits. raises RuntimeError when the
-  server dies or fails to bind in time.
+  `env` must carry the workspace venv's PATH: the tools serve this workspace's
+  code, so the console script — and the packages it imports — resolve from the
+  workspace, not the launching repo. an OS-assigned port (`--port 0`) avoids
+  collisions with concurrent sessions in a shared netns; the server binds it
+  before its heavy imports and publishes it via `--port-file`, so the wait here
+  is milliseconds and a claude connect that lands mid-import sits in the TCP
+  backlog until uvicorn accepts. runs in its own session (spawn.popen), outside
+  the terminal's process group, so a Ctrl-C aimed at claude doesn't kill it; the
+  caller stops it once claude exits and, for `bro:*` specs, gates the launch on
+  `wait_healthy`. raises RuntimeError when the server dies or fails to bind in
+  time.
   """
   token = secrets.token_urlsafe(32)
   state = Path(tempfile.mkdtemp(prefix='cw-mcp-'))
@@ -107,7 +125,7 @@ def _start_host_mcp_server(worktree: Path, env: Mapping[str, str]) -> _HostMCPSe
     process = spawn.popen(
       [
         'mcp-server',
-        'flow',
+        spec,
         '--http',
         '--port',
         '0',
@@ -116,7 +134,7 @@ def _start_host_mcp_server(worktree: Path, env: Mapping[str, str]) -> _HostMCPSe
         '--bearer-token',
         token,
       ],
-      cwd=str(worktree),
+      cwd=str(cwd),
       env=dict(env),
       stdout=log_file,
       stderr=subprocess.STDOUT,
@@ -128,7 +146,8 @@ def _start_host_mcp_server(worktree: Path, env: Mapping[str, str]) -> _HostMCPSe
         f'mcp-server exited with code {process.returncode} during startup; log: {log_path}'
       )
     if port_file.exists():
-      return _HostMCPServer(process, int(port_file.read_text()), token)
+      endpoint = MCPEndpoint(port=int(port_file.read_text()), token=token)
+      return _SessionMCPServer(process, endpoint, log_path)
     if time.monotonic() >= deadline:
       process.terminate()
       raise RuntimeError(f'mcp-server did not bind within {_BIND_TIMEOUT:.0f}s; log: {log_path}')

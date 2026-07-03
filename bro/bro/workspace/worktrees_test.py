@@ -34,6 +34,24 @@ class TestFinishHostWorktree:
     assert removed == []
 
 
+class TestProvisionHostWorktree:
+  def test_strips_cw_venv_baked_from_the_provision_env(self, monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    (tmp_path / 'setup').mkdir()
+    (tmp_path / 'setup' / 'provision_repo.sh').write_text('#!/bin/sh\n')
+    monkeypatch.setenv('CW_VENV_BAKED', '1')
+    captured: dict = {}
+
+    def fake_run(args, **kwargs):
+      captured.update(kwargs)
+      return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(cw.worktrees.subprocess, 'run', fake_run)
+    assert cw.worktrees._provision_host_worktree(tmp_path) is True
+    assert 'CW_VENV_BAKED' not in captured['env']
+
+
 class TestEnsureHostWorktree:
   def _recorder(self, monkeypatch, *, branch_exists=False):
     from types import SimpleNamespace

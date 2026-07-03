@@ -177,10 +177,9 @@ def dive_in(
     name = _pick_fresh_name('dive-in')
     log.info('workspace: %s', name)
 
-  # surface ppp-dev's skills (/fix, /pr, /land) via .claude/skills/ symlinks.
-  # in container mode the entrypoint reads CW_BRO and runs `cw populate-bro-skills`;
-  # in host mode start_session (cw/session.py) populates a per-session skills dir and
-  # passes it to claude via --add-dir.
+  # surface ppp-dev's skills (/fix, /pr, /land): the in-place session runner
+  # (cw/runner.py) reads CW_BRO, populates a per-session skills dir, and passes
+  # it to claude via --add-dir.
   os.environ['CW_BRO'] = 'ppp-dev'
 
   ppp_parts = ['dive-in', *forwarded]

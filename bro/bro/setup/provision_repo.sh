@@ -6,7 +6,7 @@
 #   - cw (host mode)       host worktrees, every launch
 #   - container entrypoint the cloned /workspace
 # tree creation (clone / worktree / pre-existing) and surface-specific wiring
-# (credentials, bro-skills) stay with the callers; only the steps below are shared.
+# (credentials) stay with the callers; only the steps below are shared.
 
 DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 cd "$DIR/.."

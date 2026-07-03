@@ -14,7 +14,6 @@ CONTAINER_DIR = Path(__file__).resolve().parent.parent / 'setup' / 'container'
 _DOCKER_FORWARD_ENV = (
   'CW_BRO',
   'CW_COMMAND',
-  'CW_SESSION_CONTEXT',
   'CW_TASK_ID',
   'GIT_AUTHOR_NAME',
   'GIT_AUTHOR_EMAIL',
@@ -177,10 +176,9 @@ def _docker_create_argv(
   `_DOCKER_FORWARD_ENV` loop, which forwards a host var by name.
 
   `forward_bro=False` drops `CW_BRO` from that forward set: the container uses it
-  to theme `cw banner` and, for non-`--bare` themed sessions, to drive `cw
-  populate-bro-skills` — both Claude-Code-only. an LLM-process container
-  (`ask`/`do-task`/`call`) runs neither, so it must not inherit the calling
-  session's ambient `CW_BRO` and pay for a pointless skills populate.
+  to theme `cw banner` and, in the in-place session runner, to pick the bro whose
+  skills to surface. an LLM-process container (`ask`/`do-task`/`call`) runs its
+  own named bro, so it must not inherit the calling session's ambient `CW_BRO`.
   """
   # function-local to break the docker <-> containers import cycle: containers.py
   # imports the docker helpers at module level, so docker.py keeps no top-level

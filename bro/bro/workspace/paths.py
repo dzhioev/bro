@@ -36,6 +36,15 @@ def _in_container() -> bool:
   return Path('/.dockerenv').is_file()
 
 
+def _claude_projects_dir(workspace: Path) -> Path:
+  """claude code's per-project state dir for a workspace, by claude's own path
+  encoding: the absolute path with '/' and '.' replaced by '-'. one derivation
+  covers both modes — host worktree → `<encoded-worktree-path>`, container clone
+  (`/workspace`) → `-workspace`."""
+  encoded = str(workspace).replace('/', '-').replace('.', '-')
+  return Path.home() / '.claude' / 'projects' / encoded
+
+
 def _latest_jsonl(projects_dir: Path) -> Optional[Path]:
   if not projects_dir.is_dir():
     return None

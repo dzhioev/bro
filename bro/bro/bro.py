@@ -372,7 +372,7 @@ class BaseBro(ABC):
 
     self.system_prompt = compose(_TOOL_NAMES_BLOCK)
     # the same prompt with the Claude-Code tool-name rule — what a `cw ss --bro`
-    # session passes as --system-prompt (cw/bro.py:_bro_launch).
+    # session passes as --system-prompt (cw/claude_argv.py).
     self.claude_system_prompt = compose(_load_claude_tool_names())
 
   @property

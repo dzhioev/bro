@@ -3,7 +3,6 @@ import sys
 
 import pytest
 
-import broker.dispatcher
 import cw.containers
 import cw.spawn
 
@@ -118,25 +117,6 @@ class TestRunInContainerInjection:
     # last call is the run-equivalent `docker start -a -i <id>`
     assert harness[-1]['argv'] == ['docker', 'start', '-a', '-i', 'cid123']
 
-  def test_bare_session_synced_host_side(self, harness, monkeypatch):
-    # `--bare` (the --bro flow) runs hooks-free, so cw uploads the transcript
-    # itself after the container exits
-    synced: list = []
-    monkeypatch.setattr(
-      cw.containers, '_sync_container_log', lambda name, proj: synced.append(name)
-    )
-    cw.containers.run_in_container('ws', ['claude', '--bare'])
-    assert synced == ['ws']
-
-  def test_native_session_not_synced_host_side(self, harness, monkeypatch):
-    # native sessions self-upload via their in-container hooks; no host-side sync
-    synced: list = []
-    monkeypatch.setattr(
-      cw.containers, '_sync_container_log', lambda name, proj: synced.append(name)
-    )
-    cw.containers.run_in_container('ws', ['claude'])
-    assert synced == []
-
 
 class TestBrokerGate:
   def test_disabled_by_env(self, monkeypatch):
@@ -180,23 +160,16 @@ class TestBrokerGate:
 
 
 class TestRunRootViaBroker:
-  def test_wires_control_dir_spawner_and_launch(self, monkeypatch, tmp_path):
+  def test_builds_the_attached_launch_and_delegates(self, monkeypatch, tmp_path):
     captured: dict = {}
 
-    class FakeBroker:
-      def __init__(self, transport, spawner, **kwargs):
-        captured['transport'] = transport
-        captured['spawner'] = spawner
-        captured['handlers'] = {}
+    def fake_run_root(launch, spawner, proj):
+      captured['launch'] = launch
+      captured['spawner'] = spawner
+      captured['proj'] = proj
+      return 3
 
-      def on(self, message_type, handler):
-        captured['handlers'][message_type] = handler
-
-      def run(self, launch):
-        captured['launch'] = launch
-        return 3
-
-    monkeypatch.setattr(broker.dispatcher, 'Broker', FakeBroker)
+    monkeypatch.setattr(cw.spawn, 'run_root_via_broker', fake_run_root)
     code = cw.containers._run_root_via_broker(
       'ws',
       ['claude', '--auto'],
@@ -208,11 +181,9 @@ class TestRunRootViaBroker:
       forward_bro=True,
     )
     assert code == 3
-    assert captured['transport']._dir == tmp_path / 'proj' / 'var' / 'cw' / 'broker'
     assert isinstance(captured['spawner'], cw.spawn.DockerSpawner)
-    assert captured['handlers'] == {'ping': broker.dispatcher.ping_handler}
-    launch = captured['launch']
-    assert launch == cw.spawn.DockerLaunchSpec(
+    assert captured['proj'] == tmp_path / 'proj'
+    assert captured['launch'] == cw.spawn.DockerLaunchSpec(
       command=['claude', '--auto'],
       env={'CW_BASE_REF': 'deadbeef'},
       secrets=('github',),

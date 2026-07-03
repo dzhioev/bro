@@ -10,7 +10,7 @@ from typing import Optional
 
 from cw.docker import _image_tag
 from cw.git import git_run, no_prompt_env
-from cw.paths import _containers_dir, _latest_jsonl, _worktrees_dir
+from cw.paths import _claude_projects_dir, _containers_dir, _latest_jsonl, _worktrees_dir
 
 _CONTAINER_PREFIX = 'c:'
 
@@ -355,8 +355,7 @@ class HostWorktree(Workspace):
     return _host_pidfile(self.proj, self.name)
 
   def claude_projects_dir(self) -> Path:
-    encoded = str(self.path).replace('/', '-').replace('.', '-')
-    return Path.home() / '.claude' / 'projects' / encoded
+    return _claude_projects_dir(self.path)
 
   def is_active(self, mounts: set[str]) -> bool:
     # host sessions run plain `claude` (no `-w`), so cw is the worktree's owner for

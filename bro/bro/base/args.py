@@ -24,6 +24,7 @@ except ImportError:  # icecream is a venv dep; base.args must import without it
 
 # re-exported so base.args is the only module in the repo that imports argparse
 REMAINDER = argparse.REMAINDER
+SUPPRESS = argparse.SUPPRESS
 ArgumentTypeError = argparse.ArgumentTypeError
 
 if TYPE_CHECKING:

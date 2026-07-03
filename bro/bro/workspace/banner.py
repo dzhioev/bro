@@ -81,8 +81,8 @@ class SessionFacts:
 
     read-only; never raises. bro_override forces the `bro` fact regardless of
     `CW_BRO` — used by `call`, which knows its bro but runs in a container that
-    deliberately doesn't forward `CW_BRO` (forwarding it would re-trigger
-    populate-bro-skills).
+    deliberately doesn't forward `CW_BRO` (the calling session's theming must
+    not leak in).
     """
     in_container = _in_container()
     name = os.environ.get('CW_NAME') or None

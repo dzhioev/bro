@@ -126,9 +126,8 @@ def maybe_containerize(
     optional_secrets=optional,
     docker_sock=bro.needs_docker,
     extra_env=extra_env,
-    # this container runs the bro as an LLM process, not Claude Code, so the
-    # calling session's ambient CW_BRO must not leak in and trigger a pointless
-    # `cw populate-bro-skills` in the entrypoint.
+    # this container runs its own named bro, so the calling session's ambient
+    # CW_BRO must not leak in and mis-theme it.
     forward_bro=False,
   )
 

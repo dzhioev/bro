@@ -3,10 +3,11 @@
 host mode (default): cw owns the worktree lifecycle — it creates the worktree
 (`var/cw/worktrees/<name>`, `worktree-<name>` branch + submodule alternates),
 provisions it with the shared setup/provision_repo.sh (same as the container
-entrypoint), then runs plain `claude` from inside it (not `claude -w`, so no
-claude-side worktree/provisioning hooks). On exit it drops the worktree (`--drop`)
-or, interactively, offers to. cw writes its pid to the per-worktree git admin dir
-so `cw list`/`clean` can tell a session is live.
+entrypoint), then spawns the worktree's own `cw ss --in-place` (the in-place
+session runner, cw/runner.py), which runs plain `claude` from inside it (not
+`claude -w`, so no claude-side worktree/provisioning hooks). On exit it drops the
+worktree (`--drop`) or, interactively, offers to. cw writes its pid to the
+per-worktree git admin dir so `cw list`/`clean` can tell a session is live.
 
 container mode (--container): /workspace is a fresh clone, not a worktree — the
 gitfile-based worktree layout doesn't survive the container boundary, and this

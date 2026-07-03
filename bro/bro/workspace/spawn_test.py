@@ -1,4 +1,5 @@
 import asyncio
+import json
 import signal
 import sys
 import textwrap
@@ -259,6 +260,101 @@ class TestDockerChildWorkspaceCleanup:
     child = await self._child(workspace)
     assert await child.wait() == 0
     assert warnings == ['could not remove broker child workspace broker-CH: root-owned files']
+
+
+class TestAttachedProcess:
+  async def _interruptible(self) -> asyncio.subprocess.Process:
+    proc = await asyncio.create_subprocess_exec(
+      sys.executable, '-c', _INTERRUPTIBLE, stdout=asyncio.subprocess.PIPE
+    )
+    assert proc.stdout is not None
+    await proc.stdout.readline()  # handler installed
+    return proc
+
+  @pytest.mark.asyncio
+  async def test_forwards_sigint_and_restores_handler(self):
+    handle = cw.spawn._AttachedProcess(await self._interruptible())
+    assert signal.getsignal(signal.SIGINT) is not signal.default_int_handler
+    handle._forward_sigint()
+    assert await handle.wait() == 42
+    assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
+
+  @pytest.mark.asyncio
+  async def test_kill_terminates_a_live_process(self):
+    proc = await asyncio.create_subprocess_exec(sys.executable, '-c', 'import time; time.sleep(30)')
+    handle = cw.spawn._AttachedProcess(proc)
+    await handle.kill()
+    assert await handle.wait() == -signal.SIGKILL
+
+  @pytest.mark.asyncio
+  async def test_kill_after_exit_is_noop(self):
+    proc = await asyncio.create_subprocess_exec(sys.executable, '-c', 'pass')
+    handle = cw.spawn._AttachedProcess(proc)
+    assert await handle.wait() == 0
+    await handle.kill()  # process gone; must not raise
+
+  @pytest.mark.asyncio
+  async def test_output_tail_is_empty(self):
+    proc = await asyncio.create_subprocess_exec(sys.executable, '-c', 'pass')
+    handle = cw.spawn._AttachedProcess(proc)
+    await handle.wait()
+    assert handle.output_tail() == ''
+
+
+class TestProcessSpawner:
+  async def _spawn(self, command, cwd, env) -> cw.spawn.ChildHandle:
+    launch = cw.spawn.ProcessLaunchSpec(command=command, cwd=cwd, env=env)
+    provisioned = cw.spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
+    return await cw.spawn.ProcessSpawner().spawn(launch, provisioned)
+
+  @pytest.mark.asyncio
+  async def test_env_is_the_spec_snapshot_plus_broker_channel(self, monkeypatch, tmp_path):
+    monkeypatch.setenv('CW_AMBIENT_CANARY', 'leak')
+    out = tmp_path / 'env.json'
+    code = 'import json, os, sys; json.dump(dict(os.environ), open(sys.argv[1], "w"))'
+    handle = await self._spawn(
+      [sys.executable, '-c', code, str(out)], str(tmp_path), {'MARKER': 'x'}
+    )
+    assert await handle.wait() == 0
+    env = json.loads(out.read_text())
+    assert env['MARKER'] == 'x'
+    assert env['BROKER_CHANNEL'] == 'unix:/host/CH.sock'
+    # a spawn is a pure function of its LaunchSpec: nothing ambient leaks in
+    assert 'CW_AMBIENT_CANARY' not in env
+
+  @pytest.mark.asyncio
+  async def test_runs_in_cwd_and_propagates_exit_code(self, tmp_path):
+    code = 'open("here", "w"); raise SystemExit(7)'
+    handle = await self._spawn([sys.executable, '-c', code], str(tmp_path), {})
+    assert await handle.wait() == 7
+    assert (tmp_path / 'here').is_file()
+
+
+class TestRunRootViaBroker:
+  def test_wires_control_dir_ping_and_run(self, monkeypatch, tmp_path):
+    captured: dict = {}
+
+    class FakeBroker:
+      def __init__(self, transport, spawner, **kwargs):
+        captured['transport'] = transport
+        captured['spawner'] = spawner
+        captured['handlers'] = {}
+
+      def on(self, message_type, handler):
+        captured['handlers'][message_type] = handler
+
+      def run(self, launch):
+        captured['launch'] = launch
+        return 3
+
+    monkeypatch.setattr(cw.spawn, 'Broker', FakeBroker)
+    spawner = cw.spawn.ProcessSpawner()
+    launch = cw.spawn.ProcessLaunchSpec(command=['x'], cwd='/', env={})
+    assert cw.spawn.run_root_via_broker(launch, spawner, tmp_path / 'proj') == 3
+    assert captured['transport']._dir == tmp_path / 'proj' / 'var' / 'cw' / 'broker'
+    assert captured['spawner'] is spawner
+    assert captured['handlers'] == {'ping': cw.spawn.ping_handler}
+    assert captured['launch'] is launch
 
 
 class TestDockerSpawnerModes:

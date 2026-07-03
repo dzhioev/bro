@@ -137,14 +137,14 @@ class TestDockerCreateArgv:
     assert argv[argv.index('TERM') - 1] == '-e'
 
   def test_cw_bro_forwarded_by_default(self, build_argv, monkeypatch):
-    # the Claude Code session path relies on CW_BRO reaching the container so the
-    # entrypoint runs `cw populate-bro-skills`.
+    # the in-place runner reads CW_BRO to theme the session and surface skills,
+    # so a themed native session needs it to reach the container.
     monkeypatch.setenv('CW_BRO', 'ppp-dev')
     assert 'CW_BRO' in build_argv()
 
   def test_cw_bro_dropped_when_forward_bro_false(self, build_argv, monkeypatch):
-    # the ask/do/call hop runs the bro as an LLM process (no Claude Code), so the
-    # calling session's ambient CW_BRO must not leak in and trigger a skills populate.
+    # the ask/do/call hop runs its own named bro, so the calling session's
+    # ambient CW_BRO must not leak in and mis-theme it.
     monkeypatch.setenv('CW_BRO', 'ppp-dev')
     assert 'CW_BRO' not in build_argv(forward_bro=False)
 

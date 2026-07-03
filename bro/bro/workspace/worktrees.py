@@ -1,3 +1,4 @@
+import os
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -42,11 +43,15 @@ def _provision_host_worktree(worktree: Path) -> bool:
   # run the worktree's own provision_repo.sh against itself (idempotent: skips the
   # uv sync when the venv is current, always refreshes the console-script bridge +
   # git hooks). shared with host setup_repo.sh and the container entrypoint.
+  # CW_VENV_BAKED is stripped: the container entrypoint exports it for the baked
+  # /workspace venv, but a worktree venv (the in-container nesting fallback) is
+  # freshly synced and still needs its console-script bridge generated.
   script = worktree / 'setup' / 'provision_repo.sh'
   if not script.is_file():
     log.warning('%s not found (worktree on an old base?); skipping provisioning', script)
     return True
-  if subprocess.run([str(script)], cwd=str(worktree)).returncode != 0:
+  env = {k: v for k, v in os.environ.items() if k != 'CW_VENV_BAKED'}
+  if subprocess.run([str(script)], cwd=str(worktree), env=env).returncode != 0:
     log.error('failed to provision worktree %s', worktree)
     return False
   return True

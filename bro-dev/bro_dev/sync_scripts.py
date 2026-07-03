@@ -15,8 +15,9 @@ shim whose zero-arg functions feed sys.argv to the CLI's main:
 
 `_entrypoints.py` is written into the venv's site-packages (gitignored, since all
 of .venv is) and regenerated on every provision by `setup/provision_repo.sh` -- the
-shared provisioner the three surfaces (setup_repo.sh, the session-start hook, the
-container entrypoint) call. So it is NOT committed, unlike the pyproject tables.
+shared provisioner the three surfaces (setup_repo.sh, cw's host-mode worktree
+launch, the container entrypoint) call. So it is NOT committed, unlike the
+pyproject tables.
 That shim is the single place the process reads the global argv.
 
 modes:

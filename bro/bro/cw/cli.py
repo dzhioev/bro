@@ -3,14 +3,14 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from base.args import REMAINDER, Parser
+from base.args import REMAINDER, SUPPRESS, Parser
 from cw.banner import banner
-from cw.bro import _populate_bro_skills
 from cw.clean import clean_workspaces
 from cw.containers import exec_in_workspace
 from cw.flags import add_forwarded_flags
 from cw.listing import list_workspaces
 from cw.paths import _project_root
+from cw.runner import run_in_place
 from cw.secrets import _load_anthropic_key
 from cw.session import SessionSpec, start_session
 from cw.workspace import Workspace, _host_path_is_clean
@@ -29,6 +29,10 @@ def build_parser() -> Parser:
   ss.add_argument(
     '--drop', action='store_true', help='remove the workspace on exit without prompting'
   )
+  # internal seam, not a user surface: the outer `cw ss` spawns `cw ss --in-place`
+  # in a prepared workspace (the workspace's own cw), which runs the session from
+  # its cwd — see cw/runner.py
+  ss.add_argument('--in-place', action='store_true', env=False, help=SUPPRESS)
   add_forwarded_flags(ss)
   ss.add_argument(
     '--mcp',
@@ -89,12 +93,6 @@ def build_parser() -> Parser:
   )
   exec_cmd.add_argument('command', nargs=REMAINDER, help='command + args to exec (default: bash)')
 
-  populate = subparsers.add_parser(
-    'populate-bro-skills',
-    help="symlink the named bro's skills into .claude/skills/ for Claude Code slash-command discovery (run from the --bro container entrypoint)",
-  )
-  populate.add_argument('bro_name', help='registered bro name (e.g. ppp-dev)')
-
   banner_parser = subparsers.add_parser(
     'banner',
     help='print the banner; auto-run by the container .bashrc on `cw exec` shells',
@@ -133,30 +131,45 @@ def main(argv: list[str]) -> Optional[int]:
     return 0 if clean_ else 1
   if cmd == 'exec':
     return exec_in_workspace(name=args['name'], cmd=args['command'])
-  if cmd == 'populate-bro-skills':
-    _populate_bro_skills(_project_root(), args['bro_name'])
-    return 0
   if cmd == 'banner':
     return banner(llm=args['llm'])
   assert cmd == 'ss'
-  if args['auto'] and not args['container']:
+  in_place = args.pop('in_place')
+  if in_place:
+    # the inner-argv contract: the outer consumed the machinery flags, so any of
+    # them here means a broken outer serialization, not a user mistake
+    machinery = {
+      '-c': args['container'],
+      '--drop': args['drop'],
+      '--grant': args['grant'] is not None,
+      '--revoke': args['revoke'] is not None,
+      '--into': args['into'] is not None,
+    }
+    offending = [flag for flag, present in machinery.items() if present]
+    if len(offending) > 0:
+      parser.error(f'--in-place cannot be combined with {", ".join(offending)}')
+  # the outer-only policy gates (--auto × -c, --bro × -c, the anthropic-key
+  # probe) are skipped under --in-place: the outer validated them once, and the
+  # inner argv carries --auto but never -c
+  if not in_place and args['auto'] and not args['container']:
     parser.error('--auto requires --container')
   if args['into'] is not None and args['resume']:
     parser.error(
       '--into cannot be combined with --resume (it only applies when creating a workspace)'
     )
   if args['bro'] is not None:
-    if not args['container']:
-      parser.error('--bro requires --container')
     if args['auto']:
       parser.error('--bro cannot be combined with --auto')
     if args['mcp'] is not None:
       parser.error('--bro cannot be combined with --mcp (the bro defines its own MCP servers)')
-    if _load_anthropic_key() is None:
-      parser.error(
-        '--bro requires the `anthropic` secret to provide an api_key '
-        '({"api_key": "..."}); claude --bare does not use OAuth or keychain'
-      )
+    if not in_place:
+      if not args['container']:
+        parser.error('--bro requires --container')
+      if _load_anthropic_key() is None:
+        parser.error(
+          '--bro requires the `anthropic` secret to provide an api_key '
+          '({"api_key": "..."}); claude --bare does not use OAuth or keychain'
+        )
   if args['resume']:
     if args['drop']:
       parser.error('--resume cannot be combined with --drop')
@@ -169,4 +182,7 @@ def main(argv: list[str]) -> Optional[int]:
       '--grant/--revoke require -c/--container: host mode is unscoped, so a revoke '
       'could not actually restrict the session'
     )
-  return start_session(SessionSpec(**args))
+  spec = SessionSpec(**args)
+  if in_place:
+    return run_in_place(spec)
+  return start_session(spec)

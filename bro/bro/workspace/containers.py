@@ -14,7 +14,7 @@ from cw.docker import (
   _image_tag,
   find_container_id,
 )
-from cw.paths import _broker_dir, _containers_dir, _latest_jsonl, _project_root
+from cw.paths import _containers_dir, _latest_jsonl, _project_root
 from cw.secrets import _ppp_tarball
 from cw.workspace import ContainerWorkspace, _parse_ref
 
@@ -116,33 +116,13 @@ def _replace_container_resume_hint(name: str) -> None:
   print(f'  {resume_command}')
 
 
-def _sync_container_log(name: str, proj: Path) -> None:
-  """upload a finished `--bro` container session's transcript from the host.
-
-  `claude --bare` (the `--bro` flow) runs hooks-free, so the in-container
-  `sync-session-log` SessionStart/SessionEnd hooks never fire and the session
-  would never reach S3/DynamoDB. cw owns the lifecycle and the transcript is
-  bind-mounted to the host at the workspace's `claude_projects_dir`, so it does
-  the one-shot upload itself after the container exits (and flushed the jsonl).
-  best-effort: a sync failure warns rather than failing session teardown.
-  """
-  import sync_session_log
-
-  projects_dir = ContainerWorkspace(name, proj).claude_projects_dir()
-  if _latest_jsonl(projects_dir) is None:
-    return
-  try:
-    sync_session_log.sync_session_log(workspace=name, projects_dir=projects_dir)
-  except Exception as e:
-    log.warning('host-side session-log sync for %s failed: %s', name, e)
-
-
 def _broker_enabled() -> bool:
-  """whether this launch runs under the broker (a channel for every container session).
+  """whether this launch runs under the broker (a channel for every session, host
+  and container alike).
 
   `BROKER_DISABLED` is the presence-checked kill-switch (parallel to `TRAILS_DISABLED`):
-  the broker sits on the critical launch path of every container session, so a broker
-  defect needs an escape valve that works without touching code. It is checked before
+  the broker sits on the critical launch path of every session, so a broker defect
+  needs an escape valve that works without touching code. It is checked before
   any broker import, and an unimportable broker package (an environment provisioned
   before broker existed) degrades to the broker-less path with a warning — the gate
   itself can never break a launch.
@@ -173,10 +153,7 @@ def _run_root_via_broker(
   it on the broker loop until it exits. Returns the container's exit code."""
   # imported here, not at module level: _broker_enabled() must be able to short-circuit
   # a launch before anything touches the broker package (see its docstring).
-  from broker.brotocol import Tag
-  from broker.dispatcher import Broker, ping_handler
-  from broker.transports.unix import UnixServerTransport
-  from cw.spawn import DockerLaunchSpec, DockerSpawner
+  from cw.spawn import DockerLaunchSpec, DockerSpawner, run_root_via_broker
 
   launch = DockerLaunchSpec(
     command=command,
@@ -188,12 +165,7 @@ def _run_root_via_broker(
     docker_sock=docker_sock,
     forward_bro=forward_bro,
   )
-  facade = Broker(UnixServerTransport(str(_broker_dir(proj))), DockerSpawner())
-  # the substrate's acceptance round-trip: every live channel answers ping, so a
-  # session can verify its channel (`broker request ping '{}'`). Consumers register
-  # their own request types on top.
-  facade.on(Tag.PING, ping_handler)
-  return facade.run(launch)
+  return run_root_via_broker(launch, DockerSpawner(), proj)
 
 
 def run_in_container(
@@ -230,8 +202,8 @@ def run_in_container(
   drops the docker socket mount (shell-less bros). `extra_env` sets explicit
   `-e KEY=VALUE` vars in the container (see `_docker_create_argv`). `forward_bro=False`
   keeps the calling session's ambient `CW_BRO` out of the container — used by the
-  `ask`/`do-task`/`call` hop, whose LLM-process container never runs Claude Code and
-  so must not trigger a `cw populate-bro-skills` (see `_docker_create_argv`).
+  `ask`/`do-task`/`call` hop, whose container runs its own named bro, so the calling
+  session's theming must not leak in (see `_docker_create_argv`).
   """
   # the container starts with origin/master only as fresh as the host's last fetch
   # (the entrypoint copies the ref from /host-repo, no network). that is fine: the
@@ -279,11 +251,6 @@ def run_in_container(
     # `docker start -a -i` reattaches the TTY/stdin and returns the exit code; --rm
     # (set at create) removes the container — and its scoped secrets — on exit.
     code = subprocess.run(['docker', 'start', '-a', '-i', container_id]).returncode
-  # `--bare` (the `--bro` flow) runs claude hooks-free, so the in-container
-  # session-log hooks never upload the transcript — sync it host-side now, before
-  # any `drop` removes it. native sessions keep self-uploading via their hooks.
-  if '--bare' in command:
-    _sync_container_log(name, proj)
   if drop:
     try:
       ContainerWorkspace(name, proj).remove()

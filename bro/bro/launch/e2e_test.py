@@ -11,7 +11,10 @@ The matrix: A — broker-enabled default launch (socket provisioning, live
 channel, ping round-trip); B — child lifecycle over the real ports (spawn
 routing, early exit, timeout, teardown, channel-pinned identity); C — the
 `BROKER_DISABLED` kill-switch; D — degrade when broker is unimportable in the
-launcher; E — SIGINT handling through the attached root.
+launcher; E — SIGINT handling through the attached root; F — the in-place
+session runner as the container command (exit-code propagation, in-container
+argv build: merged --settings, skills via --add-dir, CW_SESSION_CONTEXT);
+G — SIGTERM forwarding, so `docker stop` lands in claude.
 
 Isolation: every launch runs under a throwaway HOME and project root, so no
 scenario touches the real `~/.claude/cw-sessions` or the repo's `var/cw`. The
@@ -227,6 +230,46 @@ signal.signal(signal.SIGINT, _handle)
 Path('/workspace/.e2e-ready').touch()
 time.sleep(90)
 sys.exit(5)
+"""
+
+# scenarios F/G: a wrapper the entrypoint execs in place of the session command.
+# it drops a fake `claude` onto PATH — the in-place runner resolves it instead of
+# the image's real one — then execs the runner itself ("$@", the same
+# `cw ss --in-place …` invocation `_container_session` sends). the fake records
+# its argv/env to the report file, proving the argv was built in-container by the
+# workspace's own code; under CW_E2E_LINGER it traps SIGTERM (exit 7) so the
+# harness can assert `docker stop` reaches claude through tini → runner.
+_INPLACE_WRAPPER = """
+mkdir -p /tmp/e2e-bin
+cat > /tmp/e2e-bin/claude <<'FAKE'
+#!/usr/bin/env python3
+import json, os, signal, sys, time
+from pathlib import Path
+
+report = {
+  'argv': sys.argv[1:],
+  'session_context_set': os.environ.get('CW_SESSION_CONTEXT') is not None,
+}
+argv = sys.argv[1:]
+if '--settings' in argv:
+  report['settings'] = json.loads(argv[argv.index('--settings') + 1])
+if '--add-dir' in argv:
+  skills_root = Path(argv[argv.index('--add-dir') + 1])
+  links = sorted(skills_root.glob('.claude/skills/*/SKILL.md'))
+  report['skills'] = [p.parent.name for p in links]
+  # the populated symlinks must resolve from the tmpdir into /workspace
+  report['skills_resolve'] = all(len(p.read_text()) > 0 for p in links)
+Path('/workspace/.e2e-report.json').write_text(json.dumps(report))
+if os.environ.get('CW_E2E_LINGER') == '1':
+  signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(7))
+  Path('/workspace/.e2e-ready').touch()
+  time.sleep(90)
+  sys.exit(5)
+sys.exit(12)
+FAKE
+chmod +x /tmp/e2e-bin/claude
+export PATH="/tmp/e2e-bin:$PATH"
+exec "$@"
 """
 
 # the launcher driver: one subprocess per live-path scenario, running the exact
@@ -860,6 +903,99 @@ class TestSigintHandling:
       'session container orphaned: the attach client died on the forwarded SIGINT but the '
       'container kept running — the launch must tear it down when the attached root dies'
     )
+
+
+# --- F: the in-place session runner as the container command ------------------
+
+
+def _inplace_command(*inner: str) -> list[str]:
+  return ['bash', '-ec', _INPLACE_WRAPPER, 'cw-e2e-wrapper', *inner]
+
+
+def _report(env: IsolatedEnv, name: str) -> dict:
+  path = env.containers_dir / name / '.e2e-report.json'
+  assert path.is_file(), f'no report from the fake claude at {path}'
+  return json.loads(path.read_text())
+
+
+@pytest.fixture(scope='module')
+def scenario_f(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> LiveRun:
+  env = isolated_env
+  name = f'{_NAME_PREFIX}f-root'
+  # CW_BRO reaches the container via _DOCKER_FORWARD_ENV (a themed native
+  # session, as dive-in launches); the runner surfaces that bro's skills
+  driver = _Driver(
+    env,
+    name,
+    _inplace_command('cw', 'ss', '--in-place', '--fast', name),
+    extra_env={'CW_BRO': 'ppp-dev'},
+  )
+  request.addfinalizer(driver.close)
+  run = LiveRun(exit_code=driver.wait(300), output=driver.output())
+  run.container_gone_after = _container_gone(env, name, 15)
+  return run
+
+
+class TestInPlaceContainerCommand:
+  def test_claude_exit_code_propagates_to_the_launcher(self, scenario_f: LiveRun) -> None:
+    # fake claude exits 12: runner → entrypoint → container → docker start → launcher
+    assert scenario_f.reported_exit == '12', scenario_f.output
+    assert scenario_f.exit_code == 12
+
+  def test_argv_built_in_container(self, scenario_f: LiveRun, isolated_env: IsolatedEnv) -> None:
+    report = _report(isolated_env, f'{_NAME_PREFIX}f-root')
+    argv = report['argv']
+    assert '--append-system-prompt' in argv, argv
+    assert report['session_context_set'] is True
+
+  def test_fast_mode_reaches_the_merged_settings(
+    self, scenario_f: LiveRun, isolated_env: IsolatedEnv
+  ) -> None:
+    report = _report(isolated_env, f'{_NAME_PREFIX}f-root')
+    assert report['settings']['fastMode'] is True
+
+  def test_skills_surfaced_via_add_dir_and_resolve(
+    self, scenario_f: LiveRun, isolated_env: IsolatedEnv
+  ) -> None:
+    report = _report(isolated_env, f'{_NAME_PREFIX}f-root')
+    # ppp-dev owns /fix and inherits /pr + /land from dev via the MRO walk
+    assert {'fix', 'pr', 'land'} <= set(report.get('skills', [])), report
+    assert report['skills_resolve'] is True
+
+
+# --- G: SIGTERM forwarding — `docker stop` lands in claude ---------------------
+
+
+@pytest.fixture(scope='module')
+def scenario_g(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> LiveRun:
+  env = isolated_env
+  name = f'{_NAME_PREFIX}g-root'
+  driver = _Driver(
+    env,
+    name,
+    _inplace_command('env', 'CW_E2E_LINGER=1', 'cw', 'ss', '--in-place', name),
+    extra_env={},
+  )
+  request.addfinalizer(driver.close)
+  _wait_ready(env, name, driver)
+  container_id = find_container_id(env.containers_dir / name)
+  assert container_id is not None
+  subprocess.run(['docker', 'stop', container_id], capture_output=True, check=True)
+  run = LiveRun(exit_code=driver.wait(60), output=driver.output(), container_id=container_id)
+  run.container_gone_after = _container_gone(env, name, 15)
+  return run
+
+
+class TestDockerStopReachesClaude:
+  def test_sigterm_forwarded_and_exit_code_propagated(self, scenario_g: LiveRun) -> None:
+    # docker stop SIGTERMs pid 1 (tini), which forwards to the exec'd runner,
+    # which forwards to claude — whose TERM handler exits 7. anything else
+    # (SIGKILL after the grace period) would surface as 137/143.
+    assert scenario_g.reported_exit == '7', scenario_g.output
+    assert scenario_g.exit_code == 7
+
+  def test_container_torn_down(self, scenario_g: LiveRun) -> None:
+    assert scenario_g.container_gone_after
 
 
 # --- the harness itself must not touch the real HOME --------------------------
