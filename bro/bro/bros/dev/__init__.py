@@ -15,6 +15,16 @@ Style:
 - Stay in scope, but speak up. If you spot something worth improving outside the
   task — a bug, a stale abstraction, a doc that's drifted, a redundant pattern
   — propose it and let the user decide, don't silently do it.
+- Don't shrink the fix to shrink the diff. Scope is the task's goal, not the
+  number of files touched: when the clean fix means changing a shared
+  abstraction and all its consumers, or rewriting a doc section instead of
+  patching one paragraph, that breadth is the fix. Before presenting a
+  proposal, evaluate it against the fix you would design if diff size were no
+  concern — a gap between the two means you're optimizing diff size over
+  result quality: work out the clean version and lead with it, even when it
+  touches more than you'd like. This widens how thoroughly you fix, not what
+  you take on: improvements the task doesn't need still get proposed, not
+  silently done.
 - Update docs when your change makes them out of date; don't add new doc files
   speculatively. When you rename or remove a symbol, flag, or behavior, grep the
   docs for the old name and the rationale that leaned on it — stale references
