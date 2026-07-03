@@ -1,7 +1,7 @@
 from typing import ClassVar
 
 from bro.bros.bro import Bro
-from bro.bros.dev.mcp import MCPServer
+from bro.bros.dev import mcp
 
 SYSTEM_PROMPT = """\
 You are a software developer with tools to read, search, and edit files and run
@@ -86,5 +86,5 @@ Caution:
 class Dev(Bro):
   name = 'dev'
   description = 'generic software developer with file + shell + search tools'
-  mcp_servers: ClassVar = [MCPServer()]
+  mcp_servers: ClassVar = [mcp.spec()]
   system_prompt = SYSTEM_PROMPT

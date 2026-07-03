@@ -27,9 +27,9 @@ _BRO_PREFIX = 'bro:'
 
 
 def _flow_server() -> 'MCPServer':
-  import flow
+  import flow.mcp
 
-  return flow.MCPServer()
+  return flow.mcp.spec().build()
 
 
 # lazy factories: a spec pays its import only when resolved, never at parser

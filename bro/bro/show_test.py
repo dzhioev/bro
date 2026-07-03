@@ -6,7 +6,7 @@ import llm.llms.chat_gpt
 from bro.bro import BaseBro
 from bro.datasources.searchable import Hit, SearchableDataSource
 from bro.show import format_card
-from llm.mcp import FunctionTool, InProcessMCPServer, describe
+from llm.mcp import FunctionTool, InProcessMCPServer, MCPServerSpec, describe
 
 
 def _make_tools(*tool_names: str) -> list[FunctionTool]:
@@ -58,7 +58,7 @@ class _FullBro(BaseBro):
   description = 'has a data source and two MCP servers'
   llm_spec = llm.llms.chat_gpt.LLMSpec(reasoning_effort='medium')
   data_sources: ClassVar = [_StubSource()]
-  mcp_servers: ClassVar = [ServerAB(), ServerXZ()]
+  mcp_servers: ClassVar = [MCPServerSpec.of(ServerAB), MCPServerSpec.of(ServerXZ)]
 
   def __init__(self):
     super().__init__(system_prompt='YOU ARE FULL')
@@ -231,7 +231,7 @@ class TestFormatCard:
     class _LongBro(BaseBro):
       name = 'long'
       description = 'd'
-      mcp_servers: ClassVar = [LongServer()]
+      mcp_servers: ClassVar = [MCPServerSpec.of(LongServer)]
 
       def __init__(self):
         super().__init__(system_prompt='')

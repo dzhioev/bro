@@ -10,7 +10,7 @@ from bro.bro import BaseBro, BroRaised, set_default_tracker_factory
 from bro.bros.ppp_dev import PPPDev
 from bro.datasources.searchable import Hit, SearchableDataSource
 from llm.llm import LLM
-from llm.mcp import FunctionTool, InProcessMCPServer, MCPServer, describe
+from llm.mcp import FunctionTool, InProcessMCPServer, MCPServer, MCPServerSpec, describe
 from llm.observer import NullObserver, Observer
 from llm.tracker import NullTracker, Tracker
 
@@ -482,7 +482,7 @@ class TestBroDataSources:
         super().__init__(system_prompt='hi')
 
     bro = SourceBro()
-    servers = bro._mcp_servers
+    servers = bro._live_mcp_servers()
     assert len(servers) == 1
     assert servers[0].namespace == 'stub-source'
     tools = await servers[0].list_tools()
@@ -548,7 +548,7 @@ class TestToolNamesBlock:
     class ToolBro(BaseBro):
       name = 'tooled'
       description = 'd'
-      mcp_servers: ClassVar = [_make_server('a')]
+      mcp_servers: ClassVar = [_make_spec('a')]
 
       def __init__(self):
         super().__init__(system_prompt='base')
@@ -577,7 +577,7 @@ class TestToolNamesBlock:
     class ToolBro(BaseBro):
       name = 'tooled'
       description = 'd'
-      mcp_servers: ClassVar = [_make_server('a')]
+      mcp_servers: ClassVar = [_make_spec('a')]
 
       def __init__(self):
         super().__init__(system_prompt='base')
@@ -617,29 +617,29 @@ def _make_server(*tool_names: str) -> InProcessMCPServer:
   return InProcessMCPServer('test', tools)
 
 
+def _make_spec(*tool_names: str) -> MCPServerSpec:
+  return MCPServerSpec(build=lambda: _make_server(*tool_names))
+
+
 class TestBroMCPServers:
   @pytest.mark.asyncio
-  async def test_instance_entry_exposes_its_tools(self):
-    server = _make_server('a', 'b', 'c')
-
-    class InstanceBro(BaseBro):
-      name = 'instance'
+  async def test_spec_entry_exposes_its_tools(self):
+    class SpecBro(BaseBro):
+      name = 'spec'
       description = 'd'
-      mcp_servers: ClassVar = [server]
+      mcp_servers: ClassVar = [_make_spec('a', 'b', 'c')]
 
       def __init__(self):
         super().__init__(system_prompt='')
 
-    bro = InstanceBro()
-    assert bro._mcp_servers == [server]
-    tools = await bro._mcp_servers[0].list_tools()
+    bro = SpecBro()
+    tools = await bro._live_mcp_servers()[0].list_tools()
     assert {t.name for t in tools} == {'a', 'b', 'c'}
 
-  @pytest.mark.asyncio
-  async def test_factory_entry_called_once_per_instance(self):
+  def test_spec_built_lazily_and_once(self):
     calls = 0
 
-    def factory():
+    def build():
       nonlocal calls
       calls += 1
       return _make_server('a')
@@ -647,14 +647,19 @@ class TestBroMCPServers:
     class CountBro(BaseBro):
       name = 'count'
       description = 'd'
-      mcp_servers: ClassVar = [factory]
+      mcp_servers: ClassVar = [MCPServerSpec(build=build)]
 
       def __init__(self):
         super().__init__(system_prompt='')
 
-    CountBro()
-    CountBro()
-    assert calls == 2
+    bro = CountBro()
+    # metadata surfaces never build the live server
+    bro.needed_secrets()
+    assert calls == 0
+    first = bro._live_mcp_servers()
+    assert calls == 1
+    assert bro._live_mcp_servers() is first
+    assert calls == 1
 
 
 class _SecretServer(InProcessMCPServer):
@@ -681,7 +686,7 @@ class TestNeededSecrets:
     class ManifestBro(BaseBro):
       name = 'manifest'
       description = 'd'
-      mcp_servers: ClassVar = [_SecretServer()]
+      mcp_servers: ClassVar = [MCPServerSpec.of(_SecretServer)]
       data_sources: ClassVar = [_SecretSource()]
       extra_secrets = ('delta',)
 
@@ -770,7 +775,7 @@ class TestOptionalSecrets:
     class OptBro(BaseBro):
       name = 'opt'
       description = 'd'
-      mcp_servers: ClassVar = [_OptionalServer()]
+      mcp_servers: ClassVar = [MCPServerSpec.of(_OptionalServer)]
       data_sources: ClassVar = [_OptionalSource()]
 
       def __init__(self):
@@ -802,7 +807,7 @@ class TestOptionalSecrets:
     class BothBro(BaseBro):
       name = 'both'
       description = 'd'
-      mcp_servers: ClassVar = [_BothServer()]
+      mcp_servers: ClassVar = [MCPServerSpec.of(_BothServer)]
       data_sources: ClassVar = [_OptShared()]
 
       def __init__(self):

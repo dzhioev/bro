@@ -7,7 +7,7 @@ This document is the conceptual model. Operational details (layout, how to add a
 ## Principles
 
 - **One capability per Bro.** A Bro is named, described, and prompted for exactly one job. Composition happens externally — an orchestrator Bro delegates to specialists via the same abstractions used everywhere else.
-- **Declarative tool composition.** A Bro lists its tool sources on the class (`data_sources`, `mcp_servers`); the base class materialises and mounts them. No per-Bro wiring code.
+- **Declarative tool composition.** A Bro lists its tool sources on the class (`data_sources`, `mcp_servers`); the base class mounts them, materialising live servers lazily on first tool use. No per-Bro wiring code.
 - **Stateless by default.** `run()` is a fresh agent loop per call — no history carried over, no hidden state. `send()` opts into multi-turn continuity when the surface needs it.
 - **Delivery-agnostic.** The same Bro instance is invoked from a CLI, an HTTP server, a Claude Code session, or a scheduled job. The launcher picks the entry point; the Bro does not care.
 - **Policy lives in the system prompt.** What the Bro decides is in `system_prompt`; how it acts is in its tools. There is no third place. Consumers of the policy (other surfaces, documentation) reference the Bro, they do not restate it.
@@ -22,8 +22,8 @@ class PM(Bro):
   description = '...'                  # one line, shown in tool listings
   system_prompt = SYSTEM_PROMPT        # class-level; MRO-concatenated base→derived
   llm_spec = llm.llms.chat_gpt.LLMSpec(model='gpt-5.4-mini', reasoning_effort='medium')
-  mcp_servers = [flow.MCPServer()]     # full flow toolset
-  # or: flow.MCPServer('add_task', 'list_tasks')  # subset, validated at construction
+  mcp_servers = [flow.mcp.spec()]          # full flow toolset
+  # or: flow.mcp.spec('add_task', 'list_tasks')  # subset, validated at declaration
   data_sources = [Wikipedia()]         # read-only connectors
 ```
 
@@ -31,7 +31,7 @@ Everything is a class attribute — there is no custom `__init__`. The LLM recip
 
 The base class, on instantiation:
 
-- materialises any `mcp_servers` entry that is a factory (callable) — instances pass through unchanged
+- keeps the `mcp_servers` specs as declared; live servers are built once, lazily, when the bro first runs tools
 - auto-prepends every `prompts/shared/*.md` to the system prompt (conventions that must hold across every surface live there)
 - appends a `## Data sources` block describing each declared `DataSource`
 - on non-interactive runs, exposes a built-in `raise` service tool (see below)
@@ -46,7 +46,7 @@ The base class, on instantiation:
 A Bro's behaviour comes from three sources, all declared on the class:
 
 - **`system_prompt`** — the specialisation. Triage policies, output protocol, voice. The single source of truth for what the Bro knows and decides.
-- **`mcp_servers`** — sets of stateful tools. Each entry is either an `MCPServer` instance (typically `flow.MCPServer(*tool_names)` or `infra.MCPServer(*tool_names)`; no args = full toolset, with args = a validated subset built directly with only those tools) or a `() -> MCPServer` factory for the rare server that needs per-instance materialisation.
+- **`mcp_servers`** — sets of stateful tools. Each entry is an `llm.mcp.MCPServerSpec`: a pure-metadata manifest (`needed_secrets` / `optional_secrets` plus a `build()` factory), produced by calling a server module's `Toolset` — typically `flow.mcp.spec(*tool_names)` or `infra.spec(*tool_names)` (no args = full toolset, with args = a validated subset). The declaration/runtime split lets hosts read a bro's credential manifest without constructing live servers — a live server is free to hold real resources (flow's shared `System`) because it only ever exists in a serving process.
 - **`data_sources`** — read-only connectors (Wikipedia, TMDb, Open Library, web search). Each implements `search(query, limit)` and `fetch(id, query=None)`. The base class exposes them as `search` / `fetch` MCP tools inside the source's own `<name>-source` namespace (wire name `<name>-source__search`) and injects each source's `summary` into the system prompt so the LLM knows what is available without enumerating raw tool names.
 
 The split between `mcp_servers` and `data_sources` is a contract: data sources never mutate state, so they are safe to bind to any Bro. MCP servers may mutate state and are chosen per Bro.
@@ -68,7 +68,7 @@ The same Bro runs from many launchers:
 - **Claude Code** — `cw ss --bro <name>` launches a bare Claude Code session whose system prompt and MCP servers come from the named Bro. Tools are served by a session-local HTTP MCP server (`mcp-server bro:<name> --http`) exposing the union of the Bro's declared MCP servers and data-source tools, one endpoint per namespace. Useful when the user wants a chat UI over the Bro's policy + toolkit.
 - **`ask` / `do-task`** — one-shot launchers for autonomous runs; see `do/CLAUDE.md`.
 
-A given Bro need not support every surface — `pm` is consumed by both `cw ss --bro pm` and the `process-inbox` TUI; `librorian` runs from the console. `assistant` (which declares `mcp_servers=[flow.MCPServer()]`) is reachable from every surface — `bro run`/`bro show`, `cw ss --bro assistant`, and the HTTP server — but it is only the HTTP server's *default* bro, so the iOS app reaches it without naming it.
+A given Bro need not support every surface — `pm` is consumed by both `cw ss --bro pm` and the `process-inbox` TUI; `librorian` runs from the console. `assistant` (which declares `mcp_servers=[flow.mcp.spec()]`) is reachable from every surface — `bro run`/`bro show`, `cw ss --bro assistant`, and the HTTP server — but it is only the HTTP server's *default* bro, so the iOS app reaches it without naming it.
 
 ## Registry
 

@@ -2,8 +2,9 @@ import functools
 import inspect
 import re
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterable
-from typing import Any, Optional
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass
+from typing import Any, ClassVar, Optional, get_origin
 
 from base import credentials
 
@@ -129,6 +130,30 @@ def _render_shape(
   return 'any'
 
 
+@dataclass(frozen=True)
+class Context[T]:
+  """per-call context a tool opts into by declaring a `Context`-annotated parameter.
+
+  the envelope is built fresh for every call; `state` is the hosting server's
+  long-lived per-server object (flow: its shared `System`), so tools reach
+  persistent resources without global state. servers without state inject
+  `Context[None]`. per-request fields (request id, timing) land here when the
+  first consumer does.
+  """
+
+  state: T
+
+
+def _context_param(fn: Callable[..., Any]) -> Optional[str]:
+  """name of fn's `Context`-annotated parameter, or None. detected by annotation
+  (not by parameter name) so a rename can't silently stop the injection."""
+  for name, param in inspect.signature(fn, eval_str=True).parameters.items():
+    ann = param.annotation
+    if ann is Context or get_origin(ann) is Context:
+      return name
+  return None
+
+
 class ToolControlSignal(Exception):
   """tool exception that must escape the LLM agent loop.
 
@@ -202,6 +227,35 @@ class MCPServer(ABC):
   async def list_tools(self) -> list[Tool]: ...
 
 
+@dataclass(frozen=True)
+class MCPServerSpec:
+  """declarative manifest for an MCP server: its credential needs plus a builder.
+
+  the declaration/runtime split: a spec is pure metadata — hosts read
+  `needed_secrets` / `optional_secrets` from it before any credential exists
+  (a bro's manifest, cw's container scoping) — while `build()` produces the
+  live server and runs only in a serving process, so a server's constructor
+  is free to hold real resources (e.g. flow's shared `System`).
+  """
+
+  build: Callable[[], MCPServer]
+  needed_secrets: tuple[str, ...] = ()
+  optional_secrets: tuple[str, ...] = ()
+
+  @staticmethod
+  def of(server_cls: type[MCPServer], *args: Any, **kwargs: Any) -> 'MCPServerSpec':
+    """spec for a server class that declares its secrets as class attributes.
+
+    the escape hatch for irregularly-shaped servers; roster-based servers
+    (a module-level list of tool functions) declare a `Toolset` instead.
+    """
+    return MCPServerSpec(
+      build=functools.partial(server_cls, *args, **kwargs),
+      needed_secrets=tuple(server_cls.needed_secrets),
+      optional_secrets=tuple(server_cls.optional_secrets),
+    )
+
+
 class FunctionTool(Tool):
   def __init__(
     self,
@@ -209,6 +263,7 @@ class FunctionTool(Tool):
     *,
     name: Optional[str] = None,
     description: Optional[str] = None,
+    state: Any = None,
   ):
     from mcp.server.fastmcp.utilities.func_metadata import func_metadata
 
@@ -222,10 +277,16 @@ class FunctionTool(Tool):
     self._name = name if name is not None else fn.__name__
     self._description = resolved_description
     self.fn = fn
+    # `state` is the hosting server's per-server object; a fn that declares a
+    # Context parameter gets it injected (wrapped in a fresh Context) on every
+    # call, and the parameter is excluded from the derived input schema.
+    self.state = state
+    self.context_param = _context_param(fn)
 
+    skip = (self.context_param,) if self.context_param is not None else ()
     ret = inspect.signature(fn).return_annotation
     structured = ret is not inspect.Signature.empty and ret is not str
-    self._metadata = func_metadata(fn, structured_output=structured)
+    self._metadata = func_metadata(fn, skip_names=skip, structured_output=structured)
     self._output_schema = self._metadata.output_schema
     self._parameters = self._metadata.arg_model.model_json_schema(by_alias=True)
     self._return_shape = (
@@ -255,6 +316,8 @@ class FunctionTool(Tool):
   async def call(self, arguments: dict[str, Any]) -> dict[str, Any] | str:
     validated = self._metadata.arg_model.model_validate(self._metadata.pre_parse_json(arguments))
     kwargs = validated.model_dump_one_level()
+    if self.context_param is not None:
+      kwargs[self.context_param] = Context(state=self.state)
     result = self.fn(**kwargs)
     if inspect.isawaitable(result):
       result = await result
@@ -295,15 +358,25 @@ def validated_callable(tool: FunctionTool) -> Callable[..., Any]:
   output shape. The result is returned unchanged for the framework to serialize.
   """
   fn = tool.fn
+  context_param = tool.context_param
 
   @functools.wraps(fn)
   async def validating(**kwargs: Any) -> Any:
+    if context_param is not None:
+      kwargs[context_param] = Context(state=tool.state)
     result = fn(**kwargs)
     if inspect.isawaitable(result):
       result = await result
     tool.validate_output(result)
     return result
 
+  if context_param is not None:
+    # hide the injected parameter from the framework's schema derivation: an
+    # explicit __signature__ wins over the __wrapped__ chain functools.wraps sets up.
+    sig = inspect.signature(fn)
+    validating.__signature__ = sig.replace(  # pyright: ignore[reportAttributeAccessIssue]
+      parameters=[p for p in sig.parameters.values() if p.name != context_param]
+    )
   return validating
 
 
@@ -363,6 +436,89 @@ class InProcessMCPServer(MCPServer):
 
   async def list_tools(self) -> list[Tool]:
     return list(self._tools)
+
+
+class Toolset[T]:
+  """declarative definition of a roster-based in-process tool server.
+
+  one instance per server module, conventionally named `spec` and defined above
+  its tools, which register on it with the `@spec.tool('description')`
+  decorator. Call sites read `flow.mcp.spec('add_task')` / `infra.spec()`: calling
+  the instance validates the tool subset immediately (declaration time) and
+  returns the frozen `MCPServerSpec` manifest; `build()` runs later, in the
+  serving process, constructing the per-server state once (`state` factory) and
+  injecting it into every selected tool that declares a `Context` parameter.
+
+  secrets: the base `get_secrets` returns the static `secrets` class var;
+  subclass and override it when the credential set depends on the selected
+  tools (flow's notion/focus split).
+  """
+
+  # credentials the toolset's tools read through the store when the set is
+  # independent of the tool subset; the `get_secrets` default returns it.
+  secrets: ClassVar[tuple[str, ...]] = ()
+
+  def __init__(self, namespace: str, *, state: Callable[[], T] = lambda: None):
+    self.namespace = namespace
+    self._by_name: dict[str, Callable[..., Any]] = {}
+    self._state_factory = state
+
+  def tool[F: Callable[..., Any]](self, description: str) -> Callable[[F], F]:
+    """register the decorated function as a tool and attach its description.
+
+    returns the function unchanged, so it stays directly callable (tests call
+    tools as plain functions). a duplicate name raises.
+    """
+
+    def register(fn: F) -> F:
+      if fn.__name__ in self._by_name:
+        raise ValueError(f'duplicate {self.namespace} tool: {fn.__name__!r}')
+      self._by_name[fn.__name__] = describe(fn, description)
+      return fn
+
+    return register
+
+  @property
+  def tool_names(self) -> tuple[str, ...]:
+    return tuple(self._by_name)
+
+  def get_secrets(self, tool_names: Sequence[str]) -> tuple[str, ...]:
+    """credentials needed by a server scoped to `tool_names`; default: the class var."""
+    return self.secrets
+
+  def _resolve(self, tool_names: tuple[str, ...]) -> tuple[str, ...]:
+    """the full roster for no names; otherwise the given names, validated."""
+    if len(tool_names) == 0:
+      return tuple(self._by_name)
+    unknown = [n for n in tool_names if n not in self._by_name]
+    if len(unknown) > 0:
+      raise ValueError(
+        f'unknown {self.namespace} tools: {unknown}; available: {sorted(self._by_name)}'
+      )
+    return tool_names
+
+  def tools(self, state: T) -> list[Tool]:
+    """the full tool list bound to `state` — the seam tests inject fakes through."""
+    return [FunctionTool(fn, state=state) for fn in self._by_name.values()]
+
+  def build(self, *tool_names: str) -> InProcessMCPServer:
+    """the live server: per-server state built once, shared by every call through it."""
+    names = self._resolve(tool_names)
+    state = self._state_factory()
+    server = InProcessMCPServer(
+      self.namespace, [FunctionTool(self._by_name[n], state=state) for n in names]
+    )
+    # instance attribute over the writable class-attr default: the has_cred
+    # renderers (namespaced_tools, mcp-server) read secrets off the live server.
+    server.needed_secrets = self.get_secrets(names)
+    return server
+
+  def __call__(self, *tool_names: str) -> MCPServerSpec:
+    names = self._resolve(tool_names)
+    return MCPServerSpec(
+      build=lambda: self.build(*names),
+      needed_secrets=self.get_secrets(names),
+    )
 
 
 class UnknownToolError(Exception):

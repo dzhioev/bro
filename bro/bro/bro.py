@@ -264,23 +264,15 @@ _INTERACTIVE_NOTE = (
 )
 
 
-McpServerEntry = llm.mcp.MCPServer | Callable[[], llm.mcp.MCPServer]
-
-
-def _materialize(entry: McpServerEntry) -> llm.mcp.MCPServer:
-  return entry if isinstance(entry, llm.mcp.MCPServer) else entry()
-
-
-def _component_needed_secrets(obj: llm.mcp.MCPServer | DataSource) -> set[str]:
-  # a component declares its credentials as a class attribute
-  # (`needed_secrets = (...)`) or a computed instance property (flow's server
-  # derives it from the tools it holds); both surface through a plain instance
-  # read. no real component extends a non-empty base's declaration, so an MRO
+def _component_needed_secrets(obj: llm.mcp.MCPServerSpec | DataSource) -> set[str]:
+  # a component declares its credentials as plain metadata (a spec field, or a
+  # DataSource class attribute), so reading the manifest never builds a live
+  # server. no real component extends a non-empty base's declaration, so an MRO
   # union would be identical.
   return set(obj.needed_secrets)
 
 
-def _component_optional_secrets(obj: llm.mcp.MCPServer | DataSource) -> set[str]:
+def _component_optional_secrets(obj: llm.mcp.MCPServerSpec | DataSource) -> set[str]:
   # mirror of `_component_needed_secrets` for the best-effort tier (`optional_secrets`).
   return set(obj.optional_secrets)
 
@@ -290,7 +282,7 @@ class BaseBro(ABC):
   description: str
   llm_spec: LLMSpec = DEFAULT_LLM_SPEC
   data_sources: ClassVar[list[DataSource]] = []
-  mcp_servers: ClassVar[list[McpServerEntry]] = []
+  mcp_servers: ClassVar[list[llm.mcp.MCPServerSpec]] = []
   # credentials no component expresses — the escape hatch for a bro's environment
   # needs (ppp-dev → `github`; devoops → `aws`). MRO-walked and unioned like
   # `mcp_servers`, so a subclass declares only what it adds. folded into
@@ -317,7 +309,7 @@ class BaseBro(ABC):
   _llm: Optional[LLM] = None
 
   def __init__(self, system_prompt: Optional[str] = None):
-    mcp_entries: list[McpServerEntry] = []
+    mcp_entries: list[llm.mcp.MCPServerSpec] = []
     prompt_parts: list[str] = []
     extra_secret_names: list[str] = []
     for cls in reversed(type(self).__mro__):
@@ -331,10 +323,10 @@ class BaseBro(ABC):
       if raw_extra is not None:
         extra_secret_names.extend(raw_extra)
     self._extra_secrets: tuple[str, ...] = tuple(extra_secret_names)
-    self._declared_mcp: list[llm.mcp.MCPServer] = [_materialize(e) for e in mcp_entries]
-    self._mcp_servers: list[llm.mcp.MCPServer] = list(self._declared_mcp)
-    for ds in self.data_sources:
-      self._mcp_servers.append(ds.as_mcp_server())
+    self._mcp_specs: list[llm.mcp.MCPServerSpec] = mcp_entries
+    # built lazily by _live_mcp_servers(): metadata surfaces (needed_secrets on
+    # hosts, prompt composition) never construct live servers.
+    self._live_mcp: Optional[list[llm.mcp.MCPServer]] = None
     self._service_server: llm.mcp.MCPServer = _build_service_server(self, include_raise=True)
     self._llm = None
     # default to no-op; BaseBro.run() swaps in a real observer per invocation so the
@@ -362,7 +354,7 @@ class BaseBro(ABC):
       parts.extend(prompt_parts)
       # the namespaced-tool convention only matters once the bro actually has
       # tools or skills (which reference tools by their `ns::tool` name).
-      if len(self._mcp_servers) > 0 or len(descriptions) > 0:
+      if len(self._mcp_specs) > 0 or len(self.data_sources) > 0 or len(descriptions) > 0:
         parts.append(tool_names_block)
       if len(self.data_sources) > 0:
         parts.append(_render_data_sources(self.data_sources))
@@ -412,8 +404,8 @@ class BaseBro(ABC):
     # the host hydrates the per-surface set into a scoped store; a secret used but
     # not declared surfaces as SecretNotFound — an under-declaration to fix.
     names: set[str] = set()
-    for server in self._declared_mcp:
-      names.update(_component_needed_secrets(server))
+    for spec in self._mcp_specs:
+      names.update(_component_needed_secrets(spec))
     for ds in self.data_sources:
       names.update(_component_needed_secrets(ds))
     names.update(self._extra_secrets)
@@ -427,8 +419,8 @@ class BaseBro(ABC):
     # `build_scoped_store(optional=...)`, so an absent one degrades the
     # component instead of failing the launch.
     names: set[str] = set()
-    for server in self._declared_mcp:
-      names.update(_component_optional_secrets(server))
+    for spec in self._mcp_specs:
+      names.update(_component_optional_secrets(spec))
     for ds in self.data_sources:
       names.update(_component_optional_secrets(ds))
     return tuple(sorted(names - set(self.needed_secrets())))
@@ -524,6 +516,15 @@ class BaseBro(ABC):
       messages = [{'role': 'user', 'content': message}]
     return await self._llm.send(messages, request_timeout=request_timeout)
 
+  def _live_mcp_servers(self) -> list[llm.mcp.MCPServer]:
+    # specs materialize here, on first tool use — always in a serving process,
+    # post-secrets — and are built once: a live server may hold real resources
+    # (flow's shared System), so every run through this bro reuses the same set.
+    if self._live_mcp is None:
+      self._live_mcp = [spec.build() for spec in self._mcp_specs]
+      self._live_mcp.extend(ds.as_mcp_server() for ds in self.data_sources)
+    return self._live_mcp
+
   def _mcp_servers_for(self, *, interactive: bool) -> list[llm.mcp.MCPServer]:
     # the `raise` service tool only makes sense in non-interactive runs — when no
     # human is in the loop to negotiate, the agent needs a way to abort. In
@@ -531,8 +532,8 @@ class BaseBro(ABC):
     # `skill`, however, is needed in both modes, so interactive rebuilds the
     # service server without `raise` rather than dropping it wholesale.
     if interactive:
-      return [*self._mcp_servers, _build_service_server(self, include_raise=False)]
-    return [*self._mcp_servers, self._service_server]
+      return [*self._live_mcp_servers(), _build_service_server(self, include_raise=False)]
+    return [*self._live_mcp_servers(), self._service_server]
 
   def claude_bro_mcp_servers(self) -> list[llm.mcp.MCPServer]:
     # the MCP servers a `cw ss --bro` Claude Code session mounts (through

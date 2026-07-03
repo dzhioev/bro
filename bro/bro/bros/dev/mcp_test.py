@@ -5,13 +5,13 @@ import pytest
 
 from base.text_window import DEFAULT_LIMIT
 from bro.bros.dev.mcp import (
-  MCPServer,
   bash,
   edit_file,
   glob,
   grep,
   read_file,
   read_reference,
+  spec,
   write_file,
 )
 
@@ -234,10 +234,10 @@ def test_glob_no_matches():
     assert glob('*.nonexistent', path=d) == 'no matches'
 
 
-def test_mcpserver_no_args_lists_all_tools():
+def test_spec_no_args_lists_all_tools():
   import asyncio
 
-  server = MCPServer()
+  server = spec().build()
   tools = asyncio.run(server.list_tools())
   names = {t.name for t in tools}
   assert names == {
@@ -261,15 +261,15 @@ def test_read_reference_returns_file_contents():
   assert 'Fat-finger clamp' in ref
 
 
-def test_mcpserver_subset_filters_tools():
+def test_spec_subset_filters_tools():
   import asyncio
 
-  server = MCPServer('read_file', 'bash')
+  server = spec('read_file', 'bash').build()
   tools = asyncio.run(server.list_tools())
   names = {t.name for t in tools}
   assert names == {'read_file', 'bash'}
 
 
-def test_mcpserver_unknown_tool_raises():
+def test_spec_unknown_tool_raises():
   with pytest.raises(ValueError, match='unknown dev tools'):
-    MCPServer('nope')
+    spec('nope')

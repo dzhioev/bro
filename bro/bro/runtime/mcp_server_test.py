@@ -6,7 +6,7 @@ from starlette.testclient import TestClient
 import mcp_server
 from bro.bro import BaseBro
 from bro.datasources.searchable import Hit, SearchableDataSource
-from llm.mcp import FunctionTool, InProcessMCPServer, MCPServer, describe
+from llm.mcp import FunctionTool, InProcessMCPServer, MCPServer, MCPServerSpec, describe
 from mcp_server import _resolve_servers, create_http_app
 
 TOKEN = 'test-bearer-token'
@@ -42,7 +42,7 @@ class _ShimBro(BaseBro):
   name = 'shim-test'
   description = 'composes a ping server and a data source'
   data_sources: ClassVar = [_NoopSource()]
-  mcp_servers: ClassVar = [_create_ping_server]
+  mcp_servers: ClassVar = [MCPServerSpec(build=_create_ping_server)]
 
   def __init__(self):
     super().__init__(system_prompt='test')
@@ -131,7 +131,7 @@ class TestHTTPBindBeforeResolve:
 
 class TestHealth:
   def test_lists_namespaces_without_auth(self):
-    with _client(_ShimBro()._mcp_servers) as client:
+    with _client(_ShimBro()._live_mcp_servers()) as client:
       resp = client.get('/health')
       assert resp.status_code == 200
       assert resp.json() == {'status': 'ok', 'namespaces': ['noop-source', 'ping']}
@@ -153,19 +153,19 @@ class TestNamespaceEndpoints:
   def test_tools_keep_local_names(self):
     # the namespace reaches the client through the endpoint, so the listing
     # carries bare local names (`_ping`), not `ping___ping` wire names.
-    with _client(_ShimBro()._mcp_servers) as client:
+    with _client(_ShimBro()._live_mcp_servers()) as client:
       body = _rpc(client, '/ping', 'tools/list')
       assert [t['name'] for t in body['result']['tools']] == ['_ping']
 
   def test_data_source_served_on_own_endpoint(self):
-    with _client(_ShimBro()._mcp_servers) as client:
+    with _client(_ShimBro()._live_mcp_servers()) as client:
       body = _rpc(client, '/noop-source', 'tools/list')
       assert {t['name'] for t in body['result']['tools']} == {'search', 'fetch'}
 
   def test_multiple_searchable_sources_do_not_collide(self):
     # two searchable sources both expose bare `search` / `fetch`; each lives on
     # its own `<name>-source` endpoint (the `cw ss --bro librorian` case).
-    with _client(_TwoSourceBro()._mcp_servers) as client:
+    with _client(_TwoSourceBro()._live_mcp_servers()) as client:
       for path in ('/noop-source', '/second-source'):
         body = _rpc(client, path, 'tools/list')
         assert {t['name'] for t in body['result']['tools']} == {'search', 'fetch'}
@@ -200,7 +200,7 @@ class TestHasCredRendering:
     import mcp_server
 
     monkeypatch.setattr(mcp_server.credentials, 'available', lambda name: False)
-    with _client(_ShimBro()._mcp_servers) as client:
+    with _client(_ShimBro()._live_mcp_servers()) as client:
       body = _rpc(client, '/noop-source', 'tools/list')
       fetch = next(t for t in body['result']['tools'] if t['name'] == 'fetch')
       # SearchableDataSource's fetch description carries a has_cred block on the

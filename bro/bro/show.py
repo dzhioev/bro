@@ -1,6 +1,6 @@
 from base import credentials
 from bro.bro import BaseBro
-from llm.mcp import MCPServer, render_has_cred
+from llm.mcp import MCPServerSpec, render_has_cred
 
 
 async def format_card(bro: BaseBro, *, include_system_prompt: bool = False) -> str:
@@ -14,10 +14,10 @@ async def format_card(bro: BaseBro, *, include_system_prompt: bool = False) -> s
       summary = render_has_cred(ds.summary, credentials.available, declared)
       parts.append(f'- **{ds.name}** — {summary}')
 
-  if len(bro._declared_mcp) > 0:
+  if len(bro._mcp_specs) > 0:
     parts.extend(['', '## MCP servers', ''])
-    for server in bro._declared_mcp:
-      parts.extend(await _format_mcp_entry(server))
+    for spec in bro._mcp_specs:
+      parts.extend(await _format_mcp_entry(spec))
 
   manifest = bro.needed_secrets()
   optional = bro.optional_secrets()
@@ -59,7 +59,13 @@ def _identity_lines(bro: BaseBro) -> list[str]:
   return lines
 
 
-async def _format_mcp_entry(server: MCPServer) -> list[str]:
+async def _format_mcp_entry(spec: MCPServerSpec) -> list[str]:
+  # the card lists the live server's tools, so the spec is materialized here;
+  # `bro show` runs on the host where that is cheap.
+  try:
+    server = spec.build()
+  except Exception as e:
+    return [f'- failed to build server: {e}']
   label = f'{type(server).__module__}.{type(server).__qualname__}'
   try:
     tools = await server.list_tools()
