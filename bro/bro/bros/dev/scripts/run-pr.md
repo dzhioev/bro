@@ -189,6 +189,8 @@ Use `date '+%Y-%m-%d %H:%M'` for the timestamp — do not invent it. Build commi
 
 **MUST launch via the `Monitor` tool with `persistent: true`. Do NOT use Bash `run_in_background`** — that only notifies on process exit, so review/comment events sit silently in the output file and approvals never trigger the auto-chain.
 
+If the `Monitor` schema needs a `ToolSearch` fetch, load `TaskStop` in the same query (`select:Monitor,TaskStop`) — the APPROVED handler needs it and shouldn't spend a round trip on it later.
+
 `--self` filters out your own bot identity. `$GITHUB_ACTOR` is unset in dive-in containers, so derive it from `gh api user` instead.
 
 ```bash
@@ -225,7 +227,7 @@ Unconditional approval. Stop polling and surface:
 
 > PR approved — ready to merge. Invoke `/land` to squash and close.
 
-**In `--auto` sessions** (detect via `launch_command` from `cw banner --llm` containing `--auto`), immediately invoke `/land` to chain into the merge. **In manual sessions**, wait for the user's `/land` (or "land it") trigger.
+**In `--auto` sessions** (detect via `launch_command` from `cw banner --llm` containing `--auto`), chain into the merge immediately — and batch it: call `TaskStop` (the watcher) and `Skill(land)` **in the same response**, then follow `/land` (its merge step is a single `land-pr` command). **In manual sessions**, wait for the user's `/land` (or "land it") trigger.
 
 **`review` with `state: "COMMENTED"` or `"DISMISSED"`**: informational; the actionable feedback (if any) is in this event's `comments` array or arrives via accompanying `comment` events.
 

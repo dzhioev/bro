@@ -1,89 +1,55 @@
 ---
 name: land
-description: This skill should be used when the user signals that an open PR should be merged into master — "land it", "land", "merge it", "merge the PR", "merge to master". Squash-merges the open PR for the current branch via `gh pr merge --squash --delete-branch`, reusing the original commit's subject and body and injecting an aggregated token footer (`claude-commit-footer --squash`) so the session spend survives the squash. Appends a `### Merged` entry to the task page and closes the task to Done unless the user explicitly said to keep it open. In `--auto` sessions, `/pr` chains into this skill automatically on APPROVED. Direct push to master (no PR) is a one-liner (`git fetch origin && git rebase origin/master && git push origin HEAD:master`) — not this skill.
-version: 1.0.0
+description: This skill should be used when the user signals that an open PR should be merged into master — "land it", "land", "merge it", "merge the PR", "merge to master". Runs `land-pr`, which squash-merges the open PR for the current branch in one shot (precondition checks, aggregated token footer injected into the squash body, remote branch cleanup), then appends a `### Merged` entry to the task page and closes the task to Done unless the user explicitly said to keep it open. In `--auto` sessions, `/pr` chains into this skill automatically on APPROVED. Direct push to master (no PR) is a one-liner (`git fetch origin && git rebase origin/master && git push origin HEAD:master`) — not this skill.
+version: 1.1.0
 ---
 
 # /land
 
 Merge an approved PR for the current branch into master. The terminal action of a dev session.
 
-## Preconditions
+The mechanical work is one command (`land-pr`); your job is the judgment calls around it — waivers, task closure — and doing the whole thing in as few responses as possible. Post-approval latency is model round trips, so batch aggressively: never spend a turn on a single call that can share a response with another.
 
-- You are in a worktree on a non-master branch.
-- A PR exists for the current branch (`gh pr view --json number` returns one).
-- The PR's `reviewDecision` is `APPROVED`, OR the user has explicitly said to merge despite missing approval.
-- **Test plan fully checked (auto-chain).** When `/land` is reached via the `--auto` APPROVED chain rather than a direct user "land it", the PR's `## Test plan` has no unchecked boxes (`- [ ]`). An unchecked box means you couldn't verify that item yourself — stop, surface the unchecked items, and wait for the user to verify them or say to land anyway.
-
-If any precondition fails, stop and report — do not invent state.
-
-## Workflow
-
-### 1. Resolve the PR
+## Step 1 — merge: run `land-pr`
 
 ```bash
-gh pr view --json number,title,body,state,reviewDecision,baseRefName
+land-pr
 ```
 
-`baseRefName` is the branch the PR merges into — `master` unless the PR was opened against another base. Step 2 scopes the footer range to it.
+One shot, in order:
 
-- If `state` is not `OPEN`, report (`MERGED` / `CLOSED`) and stop.
-- If `reviewDecision` is not `APPROVED` and the user has not explicitly waived it, stop and surface:
-  > PR not approved (state=<X>). Use `/pr` to continue review, or override with explicit "merge anyway".
+1. Resolves the PR for the current branch and enforces the preconditions — fails with a message and a nonzero exit when the PR is not `OPEN`, not `APPROVED`, or its body has unchecked `- [ ]` test-plan boxes.
+2. Aggregates the branch commits' token footers over the PR's actual base (`setup/claude_commit_footer.py --squash`) and appends the result to the PR body, so the server-side squash commit keeps the session spend. Footerless-commit warnings pass through on stderr — relay them to the user.
+3. Squash-merges with the PR's own title and body as the commit subject/body, then deletes the remote feature branch (local branch and worktree stay untouched).
+4. Prints a JSON result: `pr`, `url`, `title`, `base`, `squash_sha`, `merged_at`, `merged_at_minutes`, `branch_deleted`.
 
-### 2. Recover the commit message and aggregate the token footer
+Waiver flags map to explicit user statements from this session — never pass them on the `--auto` APPROVED chain:
 
-Use the PR's title and body as the squash subject and body. Pull from `gh pr view --json title,body`.
+- `--no-review` — the user said to merge without waiting for approval. A `CHANGES_REQUESTED` review is refused regardless; that needs the review resolved, not a waiver.
+- `--allow-unchecked` — the user said to land despite unchecked test-plan boxes. Otherwise an unchecked box means nobody verified that item: surface the failure output (it lists the boxes) and wait.
 
-GitHub builds the squash commit server-side from the PR title + `--body`, so the per-commit token footers on the branch commits are discarded with those commits. To keep the session spend on the squash commit, generate an **aggregated** footer over the PR's commits and append it to the body:
+If `land-pr` exits nonzero, surface its stderr and stop — do not hand-roll the merge with raw `gh` commands, do not invent state. If the PR description has materially drifted from what shipped (the user pushed content between `/pr` and `/land`), surface it *before* running — the PR body is what becomes the squash commit body.
 
-```bash
-./setup/claude_commit_footer.py --squash origin/<baseRefName>..HEAD
-```
+## Step 2 — task bookkeeping + report: one response
 
-Use the `baseRefName` from step 1 (`master` unless the PR targets another base) — the range must be relative to the PR's actual base, or the footer would miscount. This emits the single-line footer summing every branch commit's per-class deltas (with the union of their Claude Code versions) plus this land session's own uncommitted work. Append that line to the PR body, below the `Task:` line. If it warns about footerless commits in the range, surface that — those commits' tokens are not captured.
+First decide task closure. Don't close if either holds:
 
-If the worktree has multiple commits, the PR title/body should already reflect the full scope (step 12 of `/pr` enforced this).
-
-### 3. Squash-merge
-
-Merge with the recovered subject and the body that now carries the aggregated footer:
-
-```bash
-gh pr merge <n> --squash --delete-branch \
-  --subject "<orig PR title>" \
-  --body "<orig PR body, with the aggregated footer appended>"
-```
-
-`--delete-branch` removes the remote feature branch after merge.
-
-### 4. Log "Merged" to the task (dive-in sessions only)
-
-If this session was launched via `dive-in` (check `launch_command` from `cw banner --llm`):
-
-```
-### Merged — @YYYY-MM-DD HH:MM
-<pr-url> merged to master
-```
-
-Use `date '+%Y-%m-%d %H:%M'` for the timestamp — do not invent it.
-
-### 5. Close the task — conditionally
-
-Don't close if either holds:
-
-- **The change needs a deploy or migration to take effect.** If it touches code/config that runs in a deployed service (the ECS services / emails pipeline — see `infra/CLAUDE.md`) or adds a migration/backfill, the merge alone doesn't make it live. Leave the task in its current status and **propose** the rollout as a terse `call devoops "deploy <service or feature>"` — name the target, not the steps. devoops infers the commit, scripts, and sequence itself, so don't spell out targets/commands/health checks. Don't run it yourself; the task closes only after the deploy succeeds.
+- **The change needs a deploy or migration to take effect.** If it touches code/config that runs in a deployed service (the ECS services / emails pipeline — see `infra/CLAUDE.md`) or adds a migration/backfill, the merge alone doesn't make it live. Leave the task in its current status and **propose** the rollout as a terse `call devoops "deploy <service or feature>"` — name the target, not the steps. devoops infers the commit, scripts, and sequence itself. Don't run it yourself; the task closes only after the deploy succeeds.
 - **The user said to keep it open.** Phrases in the initial prompt like "keep this Live", "leave open with notes", or "only landing a subset" mean the task stays in its current status; note it in your report.
 
-Otherwise: `flow::update_task(task_id, status='Done')`.
+Then emit everything in a single response — the report text plus, for `dive-in` sessions with a task, both flow calls in parallel:
 
-### 6. Report to the user
+- `flow::append_page_content(task_id, ...)` with (the `@` timestamp comes from `merged_at_minutes` — flow parses it as UTC; don't shell out to `date`):
 
-One line: PR URL, "merged to master", and task status — closed-to-Done, left open per instruction, or left open pending deploy (in which case include the proposed `call devoops "…"` command).
+  ```
+  ### Merged — @<merged_at_minutes>
+  <pr-url> merged to master
+  ```
+
+- `flow::update_task(task_id, status='Done')` — unless a bullet above said to keep it open.
+- The report, one line: PR URL, "merged to master", and task status — closed-to-Done, left open per instruction, or left open pending deploy (then include the proposed `call devoops "…"` command).
 
 ## Safety rules
 
-- Never bypass GitHub merge requirements (failing checks, missing approval) unless the user explicitly waived them in this session.
+- Never bypass GitHub merge requirements beyond the two explicit waiver flags, and only with the user's say-so from this session.
 - Never `--admin` your way past branch protections.
-- Never force-merge a PR with unresolved `CHANGES_REQUESTED` reviews.
-- If the PR description has materially drifted from what shipped (the user committed new content between `/pr` and `/land`), surface it before merging so the squash body can be rewritten.
