@@ -181,6 +181,32 @@ class TestReplayMessages:
       },
     ]
 
+  def test_drops_compaction_items_from_output(self):
+    # a run that crossed the compact_threshold records a `compaction` item in
+    # that turn's response.output. replay carries the full verbatim history the
+    # summary stands for, so the item must not be re-sent as input.
+    compaction = {'type': 'compaction', 'id': 'cmp_1', 'encrypted_content': 'opaque'}
+    assistant_msg = _output_message('hi back')
+    trail = RecordedTrail(
+      header=_trail_header(),
+      steps=[
+        _step('system_prompt', _SYS_TEXT, step_id='s0', turn_index=0),
+        _step('user_input', 'hello', step_id='u0', turn_index=0),
+        _step(
+          'llm_call',
+          _llm_call_body(compaction, assistant_msg),
+          step_id='c1',
+          turn_index=1,
+          response_id='r1',
+        ),
+      ],
+    )
+    assert replay_messages(trail, 'c1') == [
+      {'role': 'system', 'content': _SYS_TEXT},
+      {'role': 'user', 'content': 'hello'},
+      assistant_msg,
+    ]
+
   def test_appends_function_call_output_for_tool_result(self):
     call_item = _output_function_call('add', call_id='c1')
     trail = RecordedTrail(
@@ -518,6 +544,7 @@ class TestForkSpec:
       'model': 'gpt-5',
       'reasoning_effort': None,
       'service_tier': None,
+      'compact_threshold': None,
     }
 
   def test_cross_model_spec_override(self):

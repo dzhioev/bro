@@ -46,7 +46,8 @@ def replay_messages(trail: RecordedTrail, up_to_step_id: str) -> list[dict]:
   - `{'role': 'user', 'content': <text>}` for each `user_input`.
   - each `llm_call`'s `response.output` items appended in order — these carry
     intact `call_id`s on `function_call` items, which is what makes correct
-    replay possible.
+    replay possible. `compaction` items are dropped: the replayed verbatim
+    history subsumes what they summarize.
   - `{'type': 'function_call_output', 'call_id': ..., 'output': ...}` for each
     `tool_result`. dict outputs are JSON-encoded to match the wire format
     `ChatGPT._execute_tool_calls` uses.
@@ -234,11 +235,14 @@ def _response_output_items(llm_call_body: Any) -> list[dict]:
   # response-only `status` field and null-valued optionals (e.g.
   # `encrypted_content: null` on reasoning items), so strip both. reasoning
   # items replay as-is even cross-model — OpenAI requires a function_call's
-  # paired reasoning item when the call carries its id.
+  # paired reasoning item when the call carries its id. `compaction` items
+  # (emitted when server-side compaction triggered mid-run) are dropped
+  # entirely: replay carries the full verbatim history the summary stands for,
+  # so keeping the item would duplicate that context in encrypted form.
   return [
     {k: v for k, v in item.items() if k != 'status' and v is not None}
     for item in output
-    if isinstance(item, dict)
+    if isinstance(item, dict) and item.get('type') != 'compaction'
   ]
 
 

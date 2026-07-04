@@ -42,6 +42,16 @@ class LLMSpec(llm.llm.LLMSpec):
   service_tier='priority' is the analog of Claude Code's /fast — same model
   and quality, higher per-token price, faster and more consistent generation.
   Toggle it through `.fast()` rather than constructing a new spec by hand.
+
+  compact_threshold (opt-in) bounds context growth in long runs: when the
+  chained conversation crosses it, the server compacts the context in-band
+  (see `ChatGPT._context_management_kwargs`). None (the default) leaves growth
+  unbounded. GPT-5-family models take at most 272k input tokens (400k window
+  minus the 128k output reservation), so a value like 200_000 leaves tool-loop
+  turns room to grow between the threshold crossing and the compaction pass.
+  Size it far above per-turn growth: with the threshold near the working
+  context size the server recompacts repeatedly within one response (observed
+  live: 10 passes per call, ~5x billed input, minutes of latency).
   """
 
   TYPE: ClassVar[str] = 'chat_gpt'
@@ -49,6 +59,7 @@ class LLMSpec(llm.llm.LLMSpec):
   model: str = 'gpt-5'
   reasoning_effort: Optional[ReasoningEffort] = None
   service_tier: Optional[ServiceTier] = None
+  compact_threshold: Optional[int] = None
 
   def __post_init__(self):
     if self.service_tier is not None and self.service_tier not in _VALID_SERVICE_TIERS:
@@ -60,6 +71,10 @@ class LLMSpec(llm.llm.LLMSpec):
       raise ValueError(
         f'invalid reasoning_effort {self.reasoning_effort!r}; expected one of '
         f'{sorted(_VALID_REASONING_EFFORTS)} or None'
+      )
+    if self.compact_threshold is not None and self.compact_threshold <= 0:
+      raise ValueError(
+        f'invalid compact_threshold {self.compact_threshold!r}; expected a positive int or None'
       )
 
   def fast(self) -> Self:
@@ -78,6 +93,7 @@ class LLMSpec(llm.llm.LLMSpec):
       model=self.model,
       reasoning_effort=self.reasoning_effort,
       service_tier=self.service_tier,
+      compact_threshold=self.compact_threshold,
       mcp_servers=mcp_servers,
       observer=observer,
       tracker=tracker,
@@ -89,6 +105,7 @@ class LLMSpec(llm.llm.LLMSpec):
       'model': self.model,
       'reasoning_effort': self.reasoning_effort,
       'service_tier': self.service_tier,
+      'compact_threshold': self.compact_threshold,
     }
 
   @classmethod
@@ -100,6 +117,7 @@ class LLMSpec(llm.llm.LLMSpec):
       model=data['model'],
       reasoning_effort=cast(Optional[ReasoningEffort], data.get('reasoning_effort')),
       service_tier=cast(Optional[ServiceTier], data.get('service_tier')),
+      compact_threshold=data.get('compact_threshold'),
     )
 
 
@@ -219,6 +237,7 @@ class ChatGPT(llm.llm.LLM):
     mcp_servers: Optional[list[MCPServer]] = None,
     reasoning_effort: Optional[ReasoningEffort] = None,
     service_tier: Optional[str] = None,
+    compact_threshold: Optional[int] = None,
     observer: Optional[Observer] = None,
     tracker: Optional[Tracker] = None,
   ):
@@ -229,6 +248,7 @@ class ChatGPT(llm.llm.LLM):
       mcp_servers=mcp_servers,
       reasoning_effort=reasoning_effort,
       service_tier=service_tier,
+      compact_threshold=compact_threshold,
       observer=observer,
       tracker=tracker,
     )
@@ -240,6 +260,7 @@ class ChatGPT(llm.llm.LLM):
     mcp_servers: Optional[list[MCPServer]] = None,
     reasoning_effort: Optional[ReasoningEffort] = None,
     service_tier: Optional[str] = None,
+    compact_threshold: Optional[int] = None,
     observer: Optional[Observer] = None,
     tracker: Optional[Tracker] = None,
   ):
@@ -250,6 +271,7 @@ class ChatGPT(llm.llm.LLM):
     self._last_response_id: Optional[str] = None
     self._reasoning_effort = reasoning_effort
     self._service_tier = service_tier
+    self._compact_threshold = compact_threshold
     # round-trip counter shared across the whole trail: turn 0 holds the
     # framework's system_prompt step (auto-emitted by tracker.start_trail) and
     # the user_input we emit at the top of send(); each subsequent
@@ -360,6 +382,19 @@ class ChatGPT(llm.llm.LLM):
       return {}
     return {'service_tier': self._service_tier}
 
+  def _context_management_kwargs(self) -> dict:
+    # declarative server-side compaction — what bounds context growth in long
+    # tool-loop runs. When the chained conversation crosses the threshold, the
+    # server compacts it in-band (the response carries a `compaction` output
+    # item with the encrypted summary) and `previous_response_id` chaining
+    # continues on the compacted state; no client bookkeeping. None sends
+    # nothing and leaves growth unbounded.
+    if self._compact_threshold is None:
+      return {}
+    return {
+      'context_management': [{'type': 'compaction', 'compact_threshold': self._compact_threshold}]
+    }
+
   def _record_llm_call(self, request: dict, response: Response, *, turn_index: int) -> None:
     # raw request + response payload lands inline in the trail step body. for
     # LocalFileTracker that's a fat JSONL line; HTTPTracker will spill anything
@@ -394,6 +429,7 @@ class ChatGPT(llm.llm.LLM):
       'tools': openai_tools,
       **self._reasoning_kwargs(),
       **self._service_tier_kwargs(),
+      **self._context_management_kwargs(),
     }
     if previous_response_id is not None:
       kwargs['previous_response_id'] = previous_response_id

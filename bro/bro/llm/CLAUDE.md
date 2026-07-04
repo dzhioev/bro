@@ -9,7 +9,7 @@ Provider-agnostic LLM abstraction and MCP tooling that the `bro/` agent system a
 - `observer.py` — `Observer` ABC streaming run events (reasoning, assistant text, tool call / result) with renderers: `RichConsoleRenderer` (colored panels), `BoringRenderer` (plain text), `NullObserver` (no-op). `rich` is imported lazily so deployed images that never render need not ship it.
 - `tracker.py` — `Tracker` ABC, the durable sibling of `Observer`: it ships the same event stream (as a *trail* of *steps*) to a sink. `NullTracker` (default), `LocalFileTracker` (JSONL), `HTTPTracker` (the production sink, POSTing to the deployed `trails-server`). The trail model, server, and reader CLI are owned by `trails/CLAUDE.md` — read that, not this, for the recording subsystem.
 - `llms/` — provider specs / implementations, each pairing an `LLMSpec` subclass with its `LLM`:
-  - `chat_gpt.py` — `ChatGPT` over the OpenAI Responses API (the real provider; `needed_secrets` → `openai`, `.fast()` → `service_tier='priority'`).
+  - `chat_gpt.py` — `ChatGPT` over the OpenAI Responses API (the real provider; `needed_secrets` → `openai`, `.fast()` → `service_tier='priority'`). Long runs can be bounded by server-side compaction: the spec's opt-in `compact_threshold` (default off) flows to `responses.create` as `context_management`, so the server compacts the chained context in-band once it crosses the threshold.
   - `echo.py` — `Echo`, returns the last user message verbatim; the dependency-free default for tests and the `llm` CLI.
 
 ## Conventions

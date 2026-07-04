@@ -139,12 +139,15 @@ def _make_chat_gpt_with_tracker(
   tools: Optional[list[Tool]] = None,
   *,
   reasoning_effort=None,
+  compact_threshold: Optional[int] = None,
 ) -> tuple[ChatGPT, _RecordingTracker, list[dict]]:
   """build a ChatGPT instance with mocked tool registry + tracker + a captured-
   kwargs sink for responses.create. callers wire `gpt.client.responses.create`
   to whatever stub sequence they need.
   """
-  gpt = ChatGPT(api_key='dummy', reasoning_effort=reasoning_effort)
+  gpt = ChatGPT(
+    api_key='dummy', reasoning_effort=reasoning_effort, compact_threshold=compact_threshold
+  )
   gpt.tools = ToolRegistry(
     [InProcessMCPServer(_TEST_NAMESPACE, tools)] if tools is not None else []
   )
@@ -464,12 +467,48 @@ class TestReasoningKwargs:
     assert captured[0]['reasoning'] == {'effort': 'medium', 'summary': 'auto'}
 
 
+class TestContextManagementKwargs:
+  def test_kwargs_present_when_threshold_set(self):
+    gpt = ChatGPT(api_key='dummy', compact_threshold=50_000)
+    assert gpt._context_management_kwargs() == {
+      'context_management': [{'type': 'compaction', 'compact_threshold': 50_000}]
+    }
+
+  def test_no_kwargs_when_threshold_absent(self):
+    gpt = ChatGPT(api_key='dummy')
+    assert gpt._context_management_kwargs() == {}
+
+  @pytest.mark.asyncio
+  async def test_send_passes_context_management_on_every_create(self):
+    # the tool loop's follow-up create must carry the param too — compaction
+    # most plausibly triggers mid-loop, where the context grows fastest.
+    gpt, _, captured = _make_chat_gpt_with_tracker([_StaticTool('ping')], compact_threshold=1_000)
+    first = _fake_response(output=[_function_call_item('ping', call_id='c1')])
+    second = _fake_response(output=[_message_item('done')])
+    _install_responses(gpt, [first, second], captured)
+
+    await gpt.send([{'role': 'user', 'content': 'go'}])
+
+    expected = [{'type': 'compaction', 'compact_threshold': 1_000}]
+    assert [kwargs['context_management'] for kwargs in captured] == [expected, expected]
+
+  @pytest.mark.asyncio
+  async def test_send_omits_context_management_when_disabled(self):
+    gpt, _, captured = _make_chat_gpt_with_tracker()
+    _install_responses(gpt, [_fake_response(output=[_message_item('hi')])], captured)
+
+    await gpt.send([{'role': 'user', 'content': 'go'}])
+
+    assert 'context_management' not in captured[0]
+
+
 class TestLLMSpec:
   def test_default_spec_has_no_optional_knobs(self):
     spec = LLMSpec()
     assert spec.model == 'gpt-5'
     assert spec.reasoning_effort is None
     assert spec.service_tier is None
+    assert spec.compact_threshold is None
 
   def test_invalid_service_tier_rejected(self):
     with pytest.raises(ValueError, match='invalid service_tier'):
@@ -479,8 +518,13 @@ class TestLLMSpec:
     with pytest.raises(ValueError, match='invalid reasoning_effort'):
       LLMSpec(reasoning_effort='ludicrous')  # type: ignore[arg-type]
 
+  @pytest.mark.parametrize('threshold', [0, -1])
+  def test_invalid_compact_threshold_rejected(self, threshold: int):
+    with pytest.raises(ValueError, match='invalid compact_threshold'):
+      LLMSpec(compact_threshold=threshold)
+
   def test_fast_returns_new_spec_with_priority_tier(self):
-    spec = LLMSpec(model='gpt-5.4-mini', reasoning_effort='medium')
+    spec = LLMSpec(model='gpt-5.4-mini', reasoning_effort='medium', compact_threshold=50_000)
     fast = spec.fast()
     assert fast.service_tier == 'priority'
     # original untouched (frozen) and a distinct instance
@@ -489,6 +533,7 @@ class TestLLMSpec:
     # other fields preserved
     assert fast.model == 'gpt-5.4-mini'
     assert fast.reasoning_effort == 'medium'
+    assert fast.compact_threshold == 50_000
 
   def test_frozen_rejects_mutation(self):
     spec = LLMSpec()
@@ -497,7 +542,12 @@ class TestLLMSpec:
       spec.service_tier = 'priority'  # type: ignore[misc]
 
   def test_dump_round_trips_through_base_from_dict(self):
-    spec = LLMSpec(model='gpt-5.4-mini', reasoning_effort='medium', service_tier='priority')
+    spec = LLMSpec(
+      model='gpt-5.4-mini',
+      reasoning_effort='medium',
+      service_tier='priority',
+      compact_threshold=50_000,
+    )
     restored = llm.llm.LLMSpec.from_dict(spec.dump())
     # frozen dataclass auto-generates __eq__ — single assertion covers every field
     assert restored == spec
