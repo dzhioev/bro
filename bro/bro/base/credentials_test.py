@@ -3,6 +3,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Optional
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -50,6 +51,76 @@ class TestLocalSource:
 
   def test_fetch_returns_none_when_absent(self, configs_dir: Path):
     assert credentials.LocalSource('missing.json').fetch() is None
+
+
+class _ParameterNotFound(Exception):
+  pass
+
+
+class TestSSMSource:
+  def _client(self, monkeypatch) -> MagicMock:
+    client = MagicMock()
+    client.exceptions.ParameterNotFound = _ParameterNotFound
+    monkeypatch.setattr('boto3.client', MagicMock(return_value=client))
+    return client
+
+  def test_fetch_returns_decrypted_parameter_value(self, monkeypatch):
+    client = self._client(monkeypatch)
+    client.get_parameter.return_value = {'Parameter': {'Value': '{"token": "t"}'}}
+    assert credentials.SSMSource('/email-pipeline/notion').fetch() == '{"token": "t"}'
+    client.get_parameter.assert_called_once_with(Name='/email-pipeline/notion', WithDecryption=True)
+
+  def test_fetch_returns_none_when_parameter_missing(self, monkeypatch):
+    client = self._client(monkeypatch)
+    client.get_parameter.side_effect = _ParameterNotFound()
+    assert credentials.SSMSource('/email-pipeline/notion').fetch() is None
+
+  def test_fetch_propagates_other_errors(self, monkeypatch):
+    client = self._client(monkeypatch)
+    client.get_parameter.side_effect = RuntimeError('access denied')
+    with pytest.raises(RuntimeError, match='access denied'):
+      credentials.SSMSource('/email-pipeline/notion').fetch()
+
+  def test_registry_parses_local_then_ssm_sources(self, configs_dir: Path):
+    _write(
+      configs_dir,
+      credentials.REGISTRY_FILE,
+      {
+        'notion': {
+          'sources': [
+            {'file': 'notion.json'},
+            {'type': 'ssm', 'parameter': '/email-pipeline/notion'},
+          ]
+        }
+      },
+    )
+    registry = credentials._load_registry()
+    local, ssm = registry['notion'].sources
+    assert isinstance(local, credentials.LocalSource)
+    assert isinstance(ssm, credentials.SSMSource)
+    assert ssm.parameter == '/email-pipeline/notion'
+
+  def test_local_file_wins_before_ssm(self, configs_dir: Path, monkeypatch):
+    _write(configs_dir, 'notion.json', {'token': 'local'})
+    monkeypatch.setattr(
+      'boto3.client', MagicMock(side_effect=AssertionError('ssm must not be reached'))
+    )
+    sources = [
+      credentials.LocalSource('notion.json'),
+      credentials.SSMSource('/email-pipeline/notion'),
+    ]
+    store = credentials.Store({'notion': credentials.Secret('notion', sources)})
+    assert store.get_json('notion') == {'token': 'local'}
+
+  def test_falls_through_to_ssm_when_no_local_file(self, configs_dir: Path, monkeypatch):
+    client = self._client(monkeypatch)
+    client.get_parameter.return_value = {'Parameter': {'Value': '{"token": "remote"}'}}
+    sources = [
+      credentials.LocalSource('notion.json'),
+      credentials.SSMSource('/email-pipeline/notion'),
+    ]
+    store = credentials.Store({'notion': credentials.Secret('notion', sources)})
+    assert store.get_json('notion') == {'token': 'remote'}
 
 
 class TestStore:

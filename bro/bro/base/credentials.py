@@ -7,12 +7,14 @@ on which surface it runs. both are thin aliases over `default_store()`.
 resolution walks an ordered list of `Source`s per secret; the first source that
 has the value wins.
 
-the one source type so far, `local`, searches `<project>/.configs/<file>` then
+two source types: `local` searches `<project>/.configs/<file>` then
 `~/.ppp/<file>` — the deployed services synthesize `<project>/.configs` at
-runtime; on the host secrets live only in `~/.ppp`. a generated `credentials.json`
-in either search dir overrides the built-in registry; `build_scoped_store` emits
-a scoped one (in memory) that `cw` `docker cp`s into a container's `~/.ppp` to
-bound it to a chosen set of secrets.
+runtime; on the host secrets live only in `~/.ppp`. `ssm` reads an AWS SSM
+parameter, for deployed surfaces that resolve secrets from Parameter Store at
+runtime instead of carrying files. a generated `credentials.json` in either
+search dir overrides the built-in registry; `build_scoped_store` emits a scoped
+one (in memory) that `cw` `docker cp`s into a container's `~/.ppp` to bound it
+to a chosen set of secrets.
 """
 
 from __future__ import annotations
@@ -85,6 +87,33 @@ class LocalSource:
     return cls(data['file'])
 
 
+class SSMSource:
+  """reads an AWS SSM parameter (decrypted). the region and credentials come from
+  the ambient AWS configuration. a missing parameter falls through to the next
+  source; credential or permission errors propagate — a surface that is supposed
+  to reach SSM but can't is a loud failure, not a silent fallthrough."""
+
+  TYPE = 'ssm'
+
+  def __init__(self, parameter: str):
+    self.parameter = parameter
+
+  def fetch(self) -> Optional[str]:
+    # deferred so surfaces that never resolve an ssm-backed secret don't need boto3
+    import boto3
+
+    client = boto3.client('ssm')
+    try:
+      response = client.get_parameter(Name=self.parameter, WithDecryption=True)
+    except client.exceptions.ParameterNotFound:
+      return None
+    return response['Parameter']['Value']
+
+  @classmethod
+  def from_dict(cls, data: dict) -> SSMSource:
+    return cls(data['parameter'])
+
+
 def _search_dirs() -> list[str]:
   return [CONFIGS_DIR, PPP_DIR]
 
@@ -95,6 +124,8 @@ def _source_from_dict(data: dict) -> Source:
   type_name = data.get('type', LocalSource.TYPE)
   if type_name == LocalSource.TYPE:
     return LocalSource.from_dict(data)
+  if type_name == SSMSource.TYPE:
+    return SSMSource.from_dict(data)
   raise ValueError(f'unknown credential source type: {type_name!r}')
 
 
