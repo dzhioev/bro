@@ -10,16 +10,18 @@ has the value wins.
 two source types: `local` searches `<project>/.configs/<file>` then
 `~/.ppp/<file>` — the deployed services synthesize `<project>/.configs` at
 runtime; on the host secrets live only in `~/.ppp`. `ssm` reads an AWS SSM
-parameter, for deployed surfaces that resolve secrets from Parameter Store at
-runtime instead of carrying files. a generated `credentials.json` in either
-search dir overrides the built-in registry; `build_scoped_store` emits a scoped
-one (in memory) that `cw` `docker cp`s into a container's `~/.ppp` to bound it
-to a chosen set of secrets.
+parameter from the region the source names, for surfaces that resolve secrets
+from Parameter Store at runtime instead of carrying files. a generated
+`credentials.json` in either search dir overrides the built-in registry
+(`CREDENTIALS_REGISTRY=<file>` overrides both, process-scoped);
+`build_scoped_store` emits a scoped one (in memory) that `cw` `docker cp`s into
+a container's `~/.ppp` to bound it to a chosen set of secrets.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import sys
 import threading
 from collections.abc import Iterable, Sequence
@@ -88,21 +90,25 @@ class LocalSource:
 
 
 class SSMSource:
-  """reads an AWS SSM parameter (decrypted). the region and credentials come from
-  the ambient AWS configuration. a missing parameter falls through to the next
-  source; credential or permission errors propagate — a surface that is supposed
-  to reach SSM but can't is a loud failure, not a silent fallthrough."""
+  """reads an AWS SSM parameter (decrypted) from the region the source names.
+  the region is required: SSM is a regional service, and a non-AWS surface (e.g.
+  a cw container holding only static credentials) has no ambient region to
+  discover, so the registry states it. credentials come from the ambient AWS
+  configuration. a missing parameter falls through to the next source; credential
+  or permission errors propagate — a surface that is supposed to reach SSM but
+  can't is a loud failure, not a silent fallthrough."""
 
   TYPE = 'ssm'
 
-  def __init__(self, parameter: str):
+  def __init__(self, parameter: str, region: str):
     self.parameter = parameter
+    self.region = region
 
   def fetch(self) -> Optional[str]:
     # deferred so surfaces that never resolve an ssm-backed secret don't need boto3
     import boto3
 
-    client = boto3.client('ssm')
+    client = boto3.client('ssm', region_name=self.region)
     try:
       response = client.get_parameter(Name=self.parameter, WithDecryption=True)
     except client.exceptions.ParameterNotFound:
@@ -111,7 +117,7 @@ class SSMSource:
 
   @classmethod
   def from_dict(cls, data: dict) -> SSMSource:
-    return cls(data['parameter'])
+    return cls(data['parameter'], data['region'])
 
 
 def _search_dirs() -> list[str]:
@@ -268,6 +274,15 @@ def default_registry() -> dict[str, Secret]:
 
 
 def _load_registry() -> dict[str, Secret]:
+  # CREDENTIALS_REGISTRY points the process at an explicit registry file, above
+  # every other source of one — for a run that must resolve against a specific
+  # registry (e.g. emails/run_e2e_tests.sh pointing the harness at the pipeline's
+  # ssm-backed registry). a bad path raises rather than falling through: an
+  # explicit override that silently degraded to the built-in would resolve
+  # against the wrong secret set.
+  override = os.environ.get('CREDENTIALS_REGISTRY')
+  if override is not None and override != '':
+    return _registry_from_dict(json.loads(Path(override).read_text()))
   # a generated registry file in either search dir (`<project>/.configs` for the
   # deployed services, `~/.ppp` for a scoped per-container store) overrides the
   # built-in default; the first dir that has it wins, absent everywhere → built-in.
