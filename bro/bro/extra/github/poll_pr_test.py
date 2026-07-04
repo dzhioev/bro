@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 import email.message
+import http.client
 import json
 import urllib.error
 from typing import Any, Optional
@@ -253,6 +254,13 @@ class TestGhGetRetry:
     assert poll_pr._gh_get('https://api.github.com/x', 't') == {'ok': True}
     assert fake.call_count == 2
 
+  def test_retries_remote_disconnected(self, monkeypatch):
+    fake = _FakeUrlopen([http.client.RemoteDisconnected('server closed connection'), {'ok': True}])
+    monkeypatch.setattr(poll_pr.urllib.request, 'urlopen', fake)
+    monkeypatch.setattr(poll_pr.time, 'sleep', lambda _: None)
+    assert poll_pr._gh_get('https://api.github.com/x', 't') == {'ok': True}
+    assert fake.call_count == 2
+
   def test_gives_up_after_max_attempts(self, monkeypatch):
     fake = _FakeUrlopen([_http_error(503)] * poll_pr._MAX_ATTEMPTS)
     monkeypatch.setattr(poll_pr.urllib.request, 'urlopen', fake)
@@ -316,3 +324,22 @@ class TestPollLoopResilience:
     with pytest.raises(urllib.error.HTTPError) as exception:
       poll_pr.poll_pr('o', 'r', 1, 't', interval=0, self_login=None)
     assert exception.value.code == 404
+
+  def test_remote_disconnected_cycle_error_is_swallowed(self, monkeypatch):
+    self._baseline(monkeypatch)
+    pr_steps: list[Any] = [
+      http.client.RemoteDisconnected('server closed connection'),
+      {'merged': True},
+    ]
+    calls: list[int] = []
+
+    def fake_fetch_pr(*a):
+      step = pr_steps[len(calls)]
+      calls.append(1)
+      if isinstance(step, BaseException):
+        raise step
+      return step
+
+    monkeypatch.setattr(poll_pr, '_fetch_pr', fake_fetch_pr)
+    assert poll_pr.poll_pr('o', 'r', 1, 't', interval=0, self_login=None) == 0
+    assert len(calls) == 2

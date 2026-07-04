@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 """poll a GitHub PR for merge status, new comments, and new reviews."""
 
+import http.client
 import json
 import logging
 import time
@@ -88,11 +89,17 @@ def _gh_get(url: str, token: str) -> Any:
     try:
       with urllib.request.urlopen(request) as response:
         return json.loads(response.read())
-    except urllib.error.URLError as error:
-      if not _is_transient(error) or attempt == _MAX_ATTEMPTS - 1:
+    except (http.client.HTTPException, OSError) as error:
+      if isinstance(error, urllib.error.URLError):
+        if not _is_transient(error):
+          raise
+        delay = _retry_delay(error, attempt)
+        reason = f'HTTP {error.code}' if isinstance(error, urllib.error.HTTPError) else error.reason
+      else:
+        delay = min(_MAX_BACKOFF, _BASE_BACKOFF * (2**attempt))
+        reason = f'{type(error).__name__}: {error}'
+      if attempt == _MAX_ATTEMPTS - 1:
         raise
-      delay = _retry_delay(error, attempt)
-      reason = f'HTTP {error.code}' if isinstance(error, urllib.error.HTTPError) else error.reason
       _log.warning(
         f'{reason} from {url}; retrying in {delay:.1f}s (attempt {attempt + 1}/{_MAX_ATTEMPTS})'
       )
@@ -279,10 +286,15 @@ def poll_pr(
         owner, repo, pr, token, seen_comment_ids, seen_review_ids, is_actionable
       ):
         print(json.dumps(event), flush=True)
-    except urllib.error.URLError as error:
-      if not _is_transient(error):
+    except (http.client.HTTPException, OSError) as error:
+      if isinstance(error, urllib.error.URLError) and not _is_transient(error):
         raise
-      reason = f'HTTP {error.code}' if isinstance(error, urllib.error.HTTPError) else error.reason
+      if isinstance(error, urllib.error.HTTPError):
+        reason = f'HTTP {error.code}'
+      elif isinstance(error, urllib.error.URLError):
+        reason = str(error.reason)
+      else:
+        reason = f'{type(error).__name__}: {error}'
       _log.warning(f'{reason} during poll cycle; continuing after {interval}s')
 
     time.sleep(interval)
