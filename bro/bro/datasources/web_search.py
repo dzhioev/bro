@@ -1,14 +1,12 @@
-import urllib.parse
 from typing import Optional
 
-import aiohttp
 import trafilatura
 
 from base import credentials, log
+from bro.datasources.http import get_json, get_text
 from bro.datasources.searchable import Hit, SearchableDataSource
 
 _SEARCH_URL = 'https://api.search.brave.com/res/v1/web/search'
-_USER_AGENT = 'bro-librorian/1.0 (https://github.com/dzhioev/ppp)'
 _MAX_EXTRACT_CHARS = 60_000
 
 
@@ -38,7 +36,7 @@ class WebSearch(SearchableDataSource):
 
   async def search(self, query: str, limit: int = 5) -> list[Hit]:
     parameters = {'q': query, 'count': str(limit)}
-    data = await _get_json(_SEARCH_URL, parameters, headers=self._auth_headers())
+    data = await get_json(_SEARCH_URL, parameters, headers=self._auth_headers())
     results = data.get('web', {}).get('results', [])
     hits: list[Hit] = []
     for result in results[:limit]:
@@ -51,7 +49,7 @@ class WebSearch(SearchableDataSource):
     return hits
 
   async def _fetch_content(self, id: str) -> str:
-    html = await _get_text(id)
+    html = await get_text(id)
     raw_extracted = trafilatura.extract(html)
     extracted = raw_extracted if raw_extracted is not None else ''
     if len(extracted) == 0:
@@ -65,19 +63,3 @@ class WebSearch(SearchableDataSource):
       'X-Subscription-Token': self._resolve_api_key(),
       'Accept': 'application/json',
     }
-
-
-async def _get_json(url: str, parameters: dict[str, str], headers: dict[str, str]) -> dict:
-  full_url = f'{url}?{urllib.parse.urlencode(parameters)}'
-  request_headers = {'User-Agent': _USER_AGENT, **headers}
-  async with aiohttp.ClientSession(headers=request_headers) as session:
-    async with session.get(full_url) as response:
-      response.raise_for_status()
-      return await response.json()
-
-
-async def _get_text(url: str) -> str:
-  async with aiohttp.ClientSession(headers={'User-Agent': _USER_AGENT}) as session:
-    async with session.get(url) as response:
-      response.raise_for_status()
-      return await response.text()

@@ -40,7 +40,7 @@ async def test_search_parses_hits(brave_store):
       }
     }
 
-  with patch.object(web_search, '_get_json', side_effect=fake_get_json):
+  with patch.object(web_search, 'get_json', side_effect=fake_get_json):
     hits = await web_search.WebSearch(store=brave_store).search('weapons 2025 horror', limit=2)
   assert captured['parameters'] == {'q': 'weapons 2025 horror', 'count': '2'}
   assert captured['headers']['X-Subscription-Token'] == 'k'
@@ -63,7 +63,7 @@ async def test_search_respects_limit(brave_store):
       }
     }
 
-  with patch.object(web_search, '_get_json', side_effect=fake_get_json):
+  with patch.object(web_search, 'get_json', side_effect=fake_get_json):
     hits = await web_search.WebSearch(store=brave_store).search('q', limit=3)
   assert len(hits) == 3
 
@@ -81,7 +81,7 @@ async def test_search_skips_results_without_url(brave_store):
       }
     }
 
-  with patch.object(web_search, '_get_json', side_effect=fake_get_json):
+  with patch.object(web_search, 'get_json', side_effect=fake_get_json):
     hits = await web_search.WebSearch(store=brave_store).search('q')
   assert len(hits) == 1
   assert hits[0].id == 'https://example.com/ok'
@@ -95,7 +95,7 @@ async def test_fetch_content_returns_extracted_text(brave_store):
     return '<html><body><article>Main article text.</article></body></html>'
 
   with (
-    patch.object(web_search, '_get_text', side_effect=fake_get_text),
+    patch.object(web_search, 'get_text', side_effect=fake_get_text),
     patch.object(web_search.trafilatura, 'extract', return_value='Main article text.'),
   ):
     text = await web_search.WebSearch(store=brave_store)._fetch_content('https://example.com/x')
@@ -108,7 +108,7 @@ async def test_fetch_content_raises_when_extraction_empty(brave_store):
     return '<html></html>'
 
   with (
-    patch.object(web_search, '_get_text', side_effect=fake_get_text),
+    patch.object(web_search, 'get_text', side_effect=fake_get_text),
     patch.object(web_search.trafilatura, 'extract', return_value=''),
   ):
     with pytest.raises(LookupError, match='no extractable text'):

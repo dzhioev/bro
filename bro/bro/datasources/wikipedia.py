@@ -1,13 +1,9 @@
-import urllib.parse
-
-import aiohttp
-
 from base import log
+from bro.datasources.http import get_json
 from bro.datasources.searchable import Hit, SearchableDataSource
 
 _SEARCH_URL = 'https://{language}.wikipedia.org/w/rest.php/v1/search/page'
 _EXTRACT_URL = 'https://{language}.wikipedia.org/w/api.php'
-_USER_AGENT = 'bro-librorian/1.0 (https://github.com/dzhioev/ppp)'
 
 
 class Wikipedia(SearchableDataSource):
@@ -23,7 +19,7 @@ class Wikipedia(SearchableDataSource):
   async def search(self, query: str, limit: int = 5) -> list[Hit]:
     url = _SEARCH_URL.format(language=self._language)
     parameters = {'q': query, 'limit': str(limit)}
-    data = await _get_json(url, parameters)
+    data = await get_json(url, parameters)
     pages = data.get('pages', [])
     return [
       Hit(
@@ -49,7 +45,7 @@ class Wikipedia(SearchableDataSource):
       'redirects': '1',
       'titles': id.replace('_', ' '),
     }
-    data = await _get_json(url, parameters)
+    data = await get_json(url, parameters)
     pages = data.get('query', {}).get('pages', {})
     if len(pages) == 0:
       raise LookupError(f'wikipedia: no page for id {id!r}')
@@ -59,11 +55,3 @@ class Wikipedia(SearchableDataSource):
     title = page.get('title', id)
     extract = page.get('extract', '')
     return title, extract
-
-
-async def _get_json(url: str, parameters: dict[str, str]) -> dict:
-  full_url = f'{url}?{urllib.parse.urlencode(parameters)}'
-  async with aiohttp.ClientSession(headers={'User-Agent': _USER_AGENT}) as session:
-    async with session.get(full_url) as response:
-      response.raise_for_status()
-      return await response.json()

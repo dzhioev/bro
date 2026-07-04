@@ -17,7 +17,7 @@ async def test_search_parses_hits():
       ]
     }
 
-  with patch.object(wikipedia, '_get_json', side_effect=fake_get_json):
+  with patch.object(wikipedia, 'get_json', side_effect=fake_get_json):
     hits = await wikipedia.Wikipedia().search('turing', limit=3)
   assert len(hits) == 2
   assert hits[0].id == 'Alan_Turing'
@@ -37,7 +37,7 @@ async def test_fetch_content_returns_raw_extract():
       }
     }
 
-  with patch.object(wikipedia, '_get_json', side_effect=fake_get_json):
+  with patch.object(wikipedia, 'get_json', side_effect=fake_get_json):
     extract = await wikipedia.Wikipedia()._fetch_content('Alan_Turing')
   assert extract == 'Alan Turing was a mathematician.'
 
@@ -47,7 +47,7 @@ async def test_fetch_content_raises_on_missing_page():
   async def fake_get_json(url, parameters):
     return {'query': {'pages': {'-1': {'missing': ''}}}}
 
-  with patch.object(wikipedia, '_get_json', side_effect=fake_get_json):
+  with patch.object(wikipedia, 'get_json', side_effect=fake_get_json):
     with pytest.raises(LookupError, match='does not exist'):
       await wikipedia.Wikipedia()._fetch_content('Nonexistent_Page')
 
@@ -60,6 +60,6 @@ async def test_search_uses_configured_language():
     captured_urls.append(url)
     return {'pages': []}
 
-  with patch.object(wikipedia, '_get_json', side_effect=fake_get_json):
+  with patch.object(wikipedia, 'get_json', side_effect=fake_get_json):
     await wikipedia.Wikipedia(language='ru').search('Москва')
   assert captured_urls[0].startswith('https://ru.wikipedia.org/')
