@@ -23,7 +23,7 @@ from cw.constants import _BRO_GIT_EMAIL, _BRO_GIT_NAME
 from cw.git import git_out
 from cw.mcp import _SessionMCPServer, _start_session_mcp_server
 from cw.paths import _claude_projects_dir, _latest_jsonl
-from cw.secrets import _claude_code_token_env
+from cw.secrets import _apply_claude_auth
 from cw.session_context import (
   CW_SESSION_CONTEXT_ENV,
   build_session_context,
@@ -155,7 +155,7 @@ def run_in_place(spec: 'SessionSpec') -> int:
         return 1
 
     env = {**os.environ}
-    env.update(_claude_code_token_env())
+    _apply_claude_auth(env, warn_when_missing=spec.bro is None)
     code = _run_claude(launch.argv, env)
   finally:
     if server is not None:

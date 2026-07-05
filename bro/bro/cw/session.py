@@ -9,7 +9,7 @@ from base import log
 from cw.containers import _broker_enabled, _replace_container_resume_hint, run_in_container
 from cw.docker import find_container_id
 from cw.paths import _latest_jsonl, _project_root, _venv_env
-from cw.secrets import _DEFAULT_CW_BRO, _container_secrets, _finalize_secrets
+from cw.secrets import _DEFAULT_CW_BRO, _apply_claude_auth, _container_secrets, _finalize_secrets
 from cw.workspace import ContainerWorkspace, HostWorktree
 from cw.worktrees import _ensure_host_worktree, _finish_host_worktree, _provision_host_worktree
 
@@ -229,7 +229,9 @@ def _container_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
   return code
 
 
-def _run_host_root_via_broker(command: list[str], worktree: Path, project: Path) -> int:
+def _run_host_root_via_broker(
+  command: list[str], worktree: Path, project: Path, env: dict[str, str]
+) -> int:
   """run the host session as the broker's root peer: provision its channel socket
   under `var/cw/broker`, point `BROKER_CHANNEL` at it in the runner's env, and
   supervise the runner process on the broker loop until it exits."""
@@ -237,7 +239,7 @@ def _run_host_root_via_broker(command: list[str], worktree: Path, project: Path)
   # a launch before anything touches the broker package (see its docstring).
   from cw.spawn import ProcessLaunchSpec, ProcessSpawner, run_root_via_broker
 
-  launch = ProcessLaunchSpec(command=command, cwd=str(worktree), env=_venv_env(worktree / '.venv'))
+  launch = ProcessLaunchSpec(command=command, cwd=str(worktree), env=env)
   return run_root_via_broker(launch, ProcessSpawner(), project)
 
 
@@ -293,16 +295,19 @@ def _host_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
     return 1
 
   command = [str(cw_bin), *spec.to_in_place_argv()]
+  # the auth transform is applied here as well as in the runner: the runner is
+  # the worktree's own code, which may predate it — the inherited env keeps such
+  # a session on the setup-token instead of the rotating-OAuth /login churn.
+  runner_env = _venv_env(worktree / '.venv')
+  _apply_claude_auth(runner_env)
   pidfile = workspace.pidfile
   pidfile.parent.mkdir(parents=True, exist_ok=True)
   pidfile.write_text(str(os.getpid()))
   try:
     if _broker_enabled():
-      code = _run_host_root_via_broker(command, worktree, project)
+      code = _run_host_root_via_broker(command, worktree, project, runner_env)
     else:
-      code = subprocess.run(
-        command, cwd=str(worktree), env=_venv_env(worktree / '.venv')
-      ).returncode
+      code = subprocess.run(command, cwd=str(worktree), env=runner_env).returncode
   finally:
     pidfile.unlink(missing_ok=True)
 

@@ -30,7 +30,7 @@ class _Harness:
       patch('cw.runner._run_claude', return_value=0),
       patch('cw.runner._sync_bare_session_log'),
       patch('cw.runner._populate_bro_skills'),
-      patch('cw.runner._claude_code_token_env', return_value={}),
+      patch('cw.runner._apply_claude_auth'),
     ]
     entered = [p.__enter__() for p in self._patches]
     self.env = entered[0]
@@ -40,6 +40,7 @@ class _Harness:
     self.run_claude = entered[4]
     self.sync = entered[5]
     self.populate = entered[6]
+    self.apply_auth = entered[7]
     return self
 
   def __exit__(self, *exception):
@@ -138,6 +139,20 @@ class TestRunInPlace:
     with _Harness(tmp_path) as h:
       h.run_claude.return_value = 42
       assert cw.runner.run_in_place(_spec()) == 42
+
+  def test_native_session_applies_auth_with_warning(self, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    with _Harness(tmp_path) as h:
+      assert cw.runner.run_in_place(_spec(mcp='http')) == 0
+      assert h.apply_auth.call_args.kwargs == {'warn_when_missing': True}
+      # the transformed env is the one claude is spawned with
+      assert h.apply_auth.call_args.args[0] is h.run_claude.call_args.args[1]
+
+  def test_bro_session_applies_auth_without_warning(self, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    with _Harness(tmp_path) as h:
+      assert cw.runner.run_in_place(_spec(bro='pm')) == 0
+      assert h.apply_auth.call_args.kwargs == {'warn_when_missing': False}
 
 
 class TestRunClaude:

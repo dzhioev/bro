@@ -40,20 +40,40 @@ def _load_anthropic_key() -> Optional[str]:
   return key
 
 
-def _claude_code_token_env() -> dict[str, str]:
-  """CLAUDE_CODE_OAUTH_TOKEN overlay for a host-mode claude session, or empty.
+# auth env vars that outrank CLAUDE_CODE_OAUTH_TOKEN in claude's credential
+# precedence: a value inherited from the launching shell would silently hijack
+# the session's auth (an invalid one surfaces as a login/API-key error at the
+# first call), so the launch scrubs them.
+_OUTRANKING_AUTH_VARS = ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN')
 
-  resolves the long-lived `claude setup-token` credential (`claude_code`)
+
+def _apply_claude_auth(env: dict[str, str], *, warn_when_missing: bool = False) -> None:
+  """align a claude session env with the session auth model (reference/cw.md).
+
+  scrubs the inherited vars that outrank the session's designated auth, then
+  overlays the long-lived `claude setup-token` credential (`claude_code`)
   best-effort: present → export it so claude prefers this stable subscription
   bearer over the rotating OAuth in ~/.claude/.credentials.json (whose
   cross-session refresh-token rotation forces the periodic re-login); absent →
-  empty, and claude falls back to that file. containers get the same var from
-  the secret's registry install hook, not here.
+  no overlay, and claude falls back to that file. containers get the same var
+  from the secret's registry install hook as well; re-applying it here is
+  idempotent. `warn_when_missing` surfaces the fallback for sessions whose only
+  intended auth is the token (native sessions — a `--bro` session authenticates
+  via apiKeyHelper and resolves no token by design).
   """
+  for var in _OUTRANKING_AUTH_VARS:
+    if env.pop(var, None) is not None:
+      log.info('scrubbed inherited %s from the claude session env', var)
   token = credentials.try_get('claude_code')
   if token is None:
-    return {}
-  return {'CLAUDE_CODE_OAUTH_TOKEN': token}
+    if warn_when_missing:
+      log.warning(
+        'claude_code secret not resolvable; claude falls back to the rotating '
+        '~/.claude/.credentials.json OAuth and may ask to /login — mint a token with '
+        '`claude setup-token` and store it in ~/.ppp/claude_code_oauth_token'
+      )
+    return
+  env['CLAUDE_CODE_OAUTH_TOKEN'] = token
 
 
 def _finalize_secrets(secrets: set[str], *, grant: list[str], revoke: list[str]) -> set[str]:

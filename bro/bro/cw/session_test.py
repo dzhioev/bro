@@ -374,6 +374,9 @@ class TestHostSession:
     monkeypatch.setattr(cw.session, '_ensure_host_worktree', lambda *_a: True)
     monkeypatch.setattr(cw.session, '_provision_host_worktree', lambda *_a: True)
     monkeypatch.setattr(cw.session, '_finish_host_worktree', lambda *_a, **_k: None)
+    # keep the launch tests off the real credential store; the auth-transform
+    # test overrides this with its own fake
+    monkeypatch.setattr(cw.session, '_apply_claude_auth', lambda env, **_k: None)
     return cw_bin, worktree
 
   def test_broker_supervises_the_worktrees_own_in_place_runner(self, monkeypatch, tmp_path):
@@ -381,30 +384,19 @@ class TestHostSession:
     monkeypatch.setattr(cw.session, '_broker_enabled', lambda: True)
     roots: list = []
 
-    def fake_root(command, worktree_arg, project):
-      roots.append({'command': command, 'worktree': worktree_arg, 'project': project})
+    def fake_root(command, worktree_arg, project, env):
+      roots.append({'command': command, 'worktree': worktree_arg, 'project': project, 'env': env})
       return 5
 
     monkeypatch.setattr(cw.session, '_run_host_root_via_broker', fake_root)
     spec = _spec(container=False, auto=True, effort='xhigh', prompt='go', claude_args=['--foo'])
     assert cw.session._host_session(spec, None) == 5
-    assert roots == [
-      {
-        'command': [
-          str(cw_bin),
-          'ss',
-          '--in-place',
-          '--auto',
-          '--effort',
-          'xhigh',
-          '--prompt=go',
-          'w',
-          '--foo',
-        ],  # fmt: skip
-        'worktree': worktree,
-        'project': tmp_path,
-      }
-    ]
+    assert roots[0]['command'] == [
+      str(cw_bin), 'ss', '--in-place', '--auto', '--effort', 'xhigh', '--prompt=go', 'w', '--foo',
+    ]  # fmt: skip
+    assert roots[0]['worktree'] == worktree
+    assert roots[0]['project'] == tmp_path
+    assert roots[0]['env']['VIRTUAL_ENV'] == str(worktree / '.venv')
 
   def test_direct_spawn_when_broker_disabled(self, monkeypatch, tmp_path):
     cw_bin, worktree = self._prepare_launch(monkeypatch, tmp_path)
@@ -426,6 +418,28 @@ class TestHostSession:
     ]  # fmt: skip
     assert kwargs['cwd'] == str(worktree)
     assert kwargs['env']['VIRTUAL_ENV'] == str(worktree / '.venv')
+
+  def test_runner_env_gets_the_claude_auth_transform(self, monkeypatch, tmp_path):
+    # the outer applies _apply_claude_auth to the runner env it spawns, so a
+    # worktree whose own runner predates the transform still inherits the token
+    cw_bin, worktree = self._prepare_launch(monkeypatch, tmp_path)
+    monkeypatch.setattr(cw.session, '_broker_enabled', lambda: False)
+
+    def fake_apply(env, **_kwargs):
+      env['CLAUDE_CODE_OAUTH_TOKEN'] = 'applied'
+
+    monkeypatch.setattr(cw.session, '_apply_claude_auth', fake_apply)
+    runs: list = []
+
+    def fake_run(argv, **kwargs):
+      runs.append((argv, kwargs))
+      from types import SimpleNamespace
+
+      return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(cw.session.subprocess, 'run', fake_run)
+    assert cw.session._host_session(_spec(container=False), None) == 0
+    assert runs[0][1]['env']['CLAUDE_CODE_OAUTH_TOKEN'] == 'applied'
 
   def test_missing_inner_cw_fails_before_spawn(self, monkeypatch, tmp_path):
     fake_host, worktree = self._fake_host(tmp_path, has_session=False)
