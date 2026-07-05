@@ -11,7 +11,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from ulid import ULID
+from base.lulid import lulid
 
 PROTOCOL_VERSION = 1
 MAX_FRAME_BYTES = 1 << 20  # 1 MiB; result is model-bounded text, so generous but capped
@@ -32,15 +32,11 @@ class Tag:
   SPAWN = 'spawn'  # acceptance: spawn a throwaway child
 
 
-def _new_id() -> str:
-  return str(ULID())
-
-
 @dataclass(frozen=True)
 class Message:
   type: str  # message-type tag; consumers add tags, not transports
   payload: dict[str, Any]
-  id: str = field(default_factory=_new_id)  # this message's id (ULID), minted unless supplied
+  id: str = field(default_factory=lulid)  # this message's id (a lulid), minted unless supplied
   in_reply_to: Optional[str] = None  # request id this replies to; None for a fresh send
   v: int = PROTOCOL_VERSION
 

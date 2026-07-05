@@ -19,7 +19,6 @@ import json
 import logging
 import ssl
 import time
-import uuid
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -27,9 +26,8 @@ from pathlib import Path
 from typing import Any, Literal, Optional, TextIO
 from urllib.parse import urlparse
 
-from ulid import ULID
-
 import configs
+from base.lulid import lulid
 
 # delays before each retry attempt for transient blips on per-step POSTs and
 # end-trail POSTs (an empty tuple means "fail-fast, no retries", used by
@@ -179,19 +177,13 @@ def _now_iso() -> str:
   return datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
 
 
-def _new_id() -> str:
-  # LocalFileTracker readers walk in file order, so step_id only needs to be
-  # unique — not sortable. hex uuid satisfies that without a new dep.
-  return uuid.uuid4().hex
-
-
 def _new_step_id() -> str:
-  # HTTPTracker mints the step_id client-side (ULID, matching the server's own
-  # id format) and reuses it across retries of the same POST: the server Puts it
-  # with attribute_not_exists, so a retried write is an idempotent no-op rather
-  # than a duplicate row + double-counted aggregate. ULID (not _new_id's uuid)
-  # because the steps-table sort key relies on the ordering.
-  return str(ULID())
+  # HTTPTracker mints the step_id client-side (a lulid, matching the server's
+  # own id format) and reuses it across retries of the same POST: the server
+  # Puts it with attribute_not_exists, so a retried write is an idempotent
+  # no-op rather than a duplicate row + double-counted aggregate. a lulid (not
+  # a plain uuid) because the steps-table sort key relies on the ordering.
+  return lulid()
 
 
 class LocalFileTracker(Tracker):
@@ -219,7 +211,7 @@ class LocalFileTracker(Tracker):
     interactive: bool,
     entry_point: str,
   ) -> str:
-    self._trail_id = _new_id()
+    self._trail_id = lulid()
     header = {
       'record_type': 'trail',
       'trail_id': self._trail_id,
@@ -244,7 +236,7 @@ class LocalFileTracker(Tracker):
     record = {
       'record_type': 'step',
       'trail_id': self._trail_id,
-      'step_id': _new_id(),
+      'step_id': lulid(),
       'ts': _now_iso(),
       'kind': kind,
       'body': body,

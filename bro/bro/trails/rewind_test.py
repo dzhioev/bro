@@ -133,7 +133,7 @@ class TestFormatTrailRow:
       },
       NO_COLOR,
     )
-    assert 'T1234567890ABCDEF' in out  # full ULID surfaced so user can copy
+    assert 'T1234567890ABCDEF' in out  # full id surfaced so user can copy
     assert 'gpt-5' in out
     assert 'live' in out
     assert 'fork-of' not in out

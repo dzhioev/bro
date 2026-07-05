@@ -156,7 +156,7 @@ def _spilled_body(body: Any) -> Optional[dict]:
 
 def _format_step_summary(step: dict, colors: _Colors) -> str:
   kind = step.get('kind', '?')
-  # the full step ULID leads the line so the user can copy it straight into
+  # the full step id leads the line so the user can copy it straight into
   # `trails fork <trail_id> <step_id>` — the server doesn't accept prefixes.
   step_id = step.get('step_id', '?')
   timestamp = _format_timestamp(step.get('ts'))
@@ -218,7 +218,7 @@ def _format_trail_row(trail: dict, colors: _Colors) -> str:
   parent_tag = ''
   if parent is not None:
     parent_tag = f'  {colors.dim}fork-of {parent["trail_id"]}{colors.reset}'
-  # the full ULID is on the line so the user can copy it straight into
+  # the full trail id is on the line so the user can copy it straight into
   # `trails show / tree / fork` — the server doesn't accept prefixes.
   return (
     f'{colors.yellow}{trail_id}{colors.reset}  '

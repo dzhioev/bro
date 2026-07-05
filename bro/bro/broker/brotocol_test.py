@@ -14,7 +14,7 @@ def test_round_trip():
 def test_id_auto_minted_and_unique():
   a = Message(type='ping', payload={})
   b = Message(type='ping', payload={})
-  assert len(a.id) == 26  # ULID
+  assert len(a.id) == 28  # lulid: 26 ULID chars + 2 dashes
   assert a.id != b.id
 
 

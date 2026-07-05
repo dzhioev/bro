@@ -462,7 +462,7 @@ class TestHostBrokerPingRoundTrip:
 
   def test_broker_request_ping_from_a_host_session(self, monkeypatch, capfd):
     # a short root directly under the system temp dir: the channel socket lives at
-    # <project>/var/cw/broker/<ulid>.sock and must fit sun_path (~108 bytes), which a
+    # <project>/var/cw/broker/<channel>.sock and must fit sun_path (~108 bytes), which a
     # pytest tmp_path can exceed
     root = pathlib.Path(tempfile.mkdtemp(prefix='cw-hb-'))
     try:

@@ -2,7 +2,7 @@
 
 This adapter owns *framing*: NDJSON (`Message.to_bytes() + '\\n'`), on top of
 brotocol's encoding. One bound socket file per peer under the control dir
-(`<control_dir>/<ulid>.sock`), passed in by the constructor rather than hardcoded.
+(`<control_dir>/<channel>.sock`), passed in by the constructor rather than hardcoded.
 
 Concurrency — one event loop, no locks. The server is asyncio-native: `provision()`
 starts one `asyncio.start_unix_server` per channel; each accepted connection fires
@@ -31,9 +31,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from ulid import ULID
-
 from base import log
+from base.lulid import lulid
 from broker.brotocol import MAX_FRAME_BYTES, Message, ProtocolError
 from broker.transport import ChannelID, ClientTransport, Provisioned, ServerTransport, Sink
 
@@ -60,7 +59,7 @@ class UnixServerTransport(ServerTransport):
   async def provision(self) -> Provisioned:
     self._dir.mkdir(parents=True, exist_ok=True)
     os.chmod(self._dir, 0o700)
-    channel = str(ULID())
+    channel = lulid()
     path = self._dir / f'{channel}.sock'
     path.unlink(missing_ok=True)  # stale socket from a crashed prior run
     server = await asyncio.start_unix_server(

@@ -209,7 +209,7 @@ async def test_parent_pagination_round_trips():
 @pytest.mark.asyncio
 async def test_gsi_cursor_is_a_json_object():
   # the regression: the GSI decode path does json.loads(cursor), so the encode
-  # side must emit the full LEK triple as a JSON object — not a bare ULID.
+  # side must emit the full LEK triple as a JSON object — not a bare trail id.
   store = _store()
   page = await store.list_trails(
     bro='dev', parent=None, since=None, until=None, cursor=None, limit=2

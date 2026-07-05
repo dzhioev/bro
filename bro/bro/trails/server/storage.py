@@ -4,7 +4,7 @@ Two DynamoDB tables and one S3 bucket back every operation:
 - `trails`: PK=`trail_id`. Header row, incrementally updated aggregates, a
   constant `gsi_pk` for the global newest-first GSI, sparse `parent_trail_id`
   for the parent GSI.
-- `trail_steps`: PK=`trail_id`, SK=`step_id`. Append-only, ULID-keyed step rows.
+- `trail_steps`: PK=`trail_id`, SK=`step_id`. Append-only, lulid-keyed step rows.
 - `cw-trails-{account}` bucket: spillover for step bodies ≥ `SPILLOVER_THRESHOLD_BYTES`.
 
 `Storage` is an async facade — every method `await`s the blocking boto3 calls
@@ -21,7 +21,8 @@ from datetime import UTC, datetime
 from typing import Any, Optional
 
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
-from ulid import ULID
+
+from base.lulid import lulid
 
 SPILLOVER_THRESHOLD_BYTES = 50 * 1024
 MAX_BODY_BYTES = 10 * 1024 * 1024
@@ -65,10 +66,6 @@ _deserializer = TypeDeserializer()
 
 def _now_iso() -> str:
   return datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
-
-
-def _new_id() -> str:
-  return str(ULID())
 
 
 def _normalise_float(value: Any) -> Any:
@@ -152,8 +149,8 @@ class Storage:
     interactive: bool,
     entry_point: str,
   ) -> dict:
-    trail_id = _new_id()
-    step_id = _new_id()
+    trail_id = lulid()
+    step_id = lulid()
     started_at = _now_iso()
 
     aggregates = {
@@ -218,9 +215,9 @@ class Storage:
       raise BodyTooLarge(f'body size {size_bytes} exceeds {MAX_BODY_BYTES}')
     # the client mints the step_id and reuses it across retries; the conditional
     # Put below turns a retried POST into an idempotent no-op. older clients that
-    # send no id fall back to a server-minted ULID (no dedup, but harmless — a
+    # send no id fall back to a server-minted lulid (no dedup, but harmless — a
     # fresh id never collides).
-    step_id = step_id if step_id is not None else _new_id()
+    step_id = step_id if step_id is not None else lulid()
     timestamp = _now_iso()
 
     spilled_key: Optional[str] = None
@@ -320,7 +317,7 @@ class Storage:
     continuation: Optional[dict],
     step_id: Optional[str] = None,
   ) -> dict:
-    step_id = step_id if step_id is not None else _new_id()
+    step_id = step_id if step_id is not None else lulid()
     timestamp = _now_iso()
     step_item = {
       'trail_id': trail_id,

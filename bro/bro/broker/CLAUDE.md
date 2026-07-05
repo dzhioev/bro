@@ -13,7 +13,7 @@ The one structural rule to keep straight:
 
 ## Modules
 
-- `brotocol.py` — `Message` (frozen; `type` / `payload` required, `id` auto-minted ULID, `in_reply_to` / `v` defaulted), the `Tag` built-in message types, the codec, `ProtocolError`.
+- `brotocol.py` — `Message` (frozen; `type` / `payload` required, `id` auto-minted lulid (`base/lulid.py`), `in_reply_to` / `v` defaulted), the `Tag` built-in message types, the codec, `ProtocolError`.
 - `transport.py` — the ports: `ServerTransport` (async — its methods and the `Sink` callbacks run on the broker's event loop) / `ClientTransport` (synchronous — a peer is its own process) ABCs, `Sink` (the async Protocol the Runtime implements: `on_connect` at accept, `on_message` per frame, `on_disconnect` on a peer drop), `Provisioned`, the `Address` / `ChannelID` aliases, and `connect(address)` (URI scheme → client adapter).
 - `transports/unix.py` — the v1 unix-socket adapter: an asyncio unix server on the host side, the synchronous socket client on the peer side. One bound socket file per peer under a constructor-supplied control dir (so broker stays cw-free).
 - `spawn.py` — the spawn port: `Spawner` / `ChildHandle` (ABCs; `spawn` / `wait` / `kill` async, `output_tail` sync) + the `LaunchSpec` marker.

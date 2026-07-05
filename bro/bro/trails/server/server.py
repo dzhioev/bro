@@ -3,7 +3,7 @@
 
 Frames the storage layer for HTTP: bearer-token auth on every `/v1/*` route,
 body validation, mapping of storage exceptions to HTTP statuses. Step ids are
-minted client-side (a ULID, reused across retries) so the conditional step Put
+minted client-side (a lulid, reused across retries) so the conditional step Put
 makes a retried POST idempotent; older clients that omit `step_id` fall back to
 a server-minted id. Schema and write semantics live in the parent `save bros
 logs` design doc (the schema-locking gate was stage 3).

@@ -1,6 +1,6 @@
 # trails/CLAUDE.md
 
-Trails is the recording pipeline for bro runs: every `BaseBro.run()` / `.send()` ships its event stream (system prompt, user input, reasoning summaries, assistant text, tool calls/results, raw LLM payloads) to the deployed `trails-server`, where it becomes a *trail* — one recorded run — made of ULID-ordered *steps*. Recorded trails feed offline analysis, A/B comparison across specs, and forking (replay a prefix, continue differently). The canonical schema and design rationale live in the design doc on the `save bros logs` Flow task; this file covers the code, the deployed service, and the schema-evolution rules. Run any script with `--help` for flags.
+Trails is the recording pipeline for bro runs: every `BaseBro.run()` / `.send()` ships its event stream (system prompt, user input, reasoning summaries, assistant text, tool calls/results, raw LLM payloads) to the deployed `trails-server`, where it becomes a *trail* — one recorded run — made of *steps* ordered by lulid (`base/lulid.py`). Recorded trails feed offline analysis, A/B comparison across specs, and forking (replay a prefix, continue differently). The canonical schema and design rationale live in the design doc on the `save bros logs` Flow task; this file covers the code, the deployed service, and the schema-evolution rules. Run any script with `--help` for flags.
 
 ## Architecture
 
@@ -15,10 +15,10 @@ Trails is the recording pipeline for bro runs: every `BaseBro.run()` / `.send()`
             ▼                ▼                 ▼
      DynamoDB `trails`  DynamoDB         S3 `cw-trails-{account}`
      header + aggs      `trail_steps`    bodies ≥ 50KB (spillover)
-                        ULID-keyed steps
+                        lulid-keyed steps
 ```
 
-- Write side lives in `llm/tracker.py` (`Tracker` ABC, `HTTPTracker`); plumbing through `BaseBro` and `ChatGPT` is documented in `bro/CLAUDE.md`. Writes are synchronous and crash-on-failure: `start_trail` fail-fast, `step` retries 100ms / 500ms / 2s then propagates, `end_trail` logs and never raises. Retries cover only transient failures (network errors, 5xx, 429); a deterministic 4xx (400 / 404 / 413) propagates immediately rather than sleeping through the schedule. The retried writes are idempotent: `HTTPTracker` mints each step's id client-side (a ULID) and reuses it across retries, so the server's conditional `attribute_not_exists(step_id)` Put turns a re-sent POST into a no-op — no duplicate step row, no double-counted token/step aggregate. The server auto-emits the `system_prompt` step inside trail creation.
+- Write side lives in `llm/tracker.py` (`Tracker` ABC, `HTTPTracker`); plumbing through `BaseBro` and `ChatGPT` is documented in `bro/CLAUDE.md`. Writes are synchronous and crash-on-failure: `start_trail` fail-fast, `step` retries 100ms / 500ms / 2s then propagates, `end_trail` logs and never raises. Retries cover only transient failures (network errors, 5xx, 429); a deterministic 4xx (400 / 404 / 413) propagates immediately rather than sleeping through the schedule. The retried writes are idempotent: `HTTPTracker` mints each step's id client-side (a lulid) and reuses it across retries, so the server's conditional `attribute_not_exists(step_id)` Put turns a re-sent POST into a no-op — no duplicate step row, no double-counted token/step aggregate. The server auto-emits the `system_prompt` step inside trail creation.
 - Recording is mandatory for bros: the default tracker factory raises when the `trails` secret is missing; `NullTracker` is opt-in (env-var kill switch `TRAILS_DISABLED=1`, tests via `conftest.py`, one-offs via `tracker=`).
 - Read side is this package: `TrailsClient` for code, the `trails` CLI for humans, `fetch_recorded_trail` → `bro.fork.fork()` for forking.
 - Bros never touch DynamoDB or S3 — only the server holds those credentials; clients hold one bearer token.
@@ -34,7 +34,7 @@ Trails is the recording pipeline for bro runs: every `BaseBro.run()` / `.send()`
 ## Reader CLI
 
 - `trails list [--bro | --parent] [--since --until --limit]` — newest first, paged through `$PAGER`; `--parent <trail_id>` lists a trail's forks
-- `trails show <trail_id>` — header + step listing; each step line starts with the step's full ULID (that is the id `fork` takes), inline bodies truncate with `... <N more chars>`, spilled bodies render as size + URL
+- `trails show <trail_id>` — header + step listing; each step line starts with the step's full id (that is the id `fork` takes), inline bodies truncate with `... <N more chars>`, spilled bodies render as size + URL
 - `trails tree <trail_id>` — walks parent pointers up to the root, then renders the full fork hierarchy
 - `trails fork <trail_id> <step_id> [--initial <msg>] [--no-record]` — forks at the step and drops into a `.send()` REPL
 
