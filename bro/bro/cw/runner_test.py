@@ -173,14 +173,14 @@ class TestSessionBroxy:
       assert env['BROKER_CHANNEL'] == h.broxy.address
       h.broxy.stop.assert_called_once()
 
-  def test_keeps_the_direct_channel_when_the_broxy_cannot_start(self, monkeypatch, tmp_path):
+  def test_unsets_the_channel_when_the_broxy_cannot_start(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
       h.env['BROKER_CHANNEL'] = 'unix:/up.sock'
       h.start_broxy.return_value = None
       assert cw.runner.run_in_place(_spec()) == 0
       env = h.run_claude.call_args.args[1]
-      assert env['BROKER_CHANNEL'] == 'unix:/up.sock'
+      assert 'BROKER_CHANNEL' not in env
 
   def test_container_mode_keeps_the_entrypoint_owned_channel(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)

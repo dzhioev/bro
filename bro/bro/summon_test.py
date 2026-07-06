@@ -290,9 +290,10 @@ async def test_check_unknown_id_exits_1(tmp_path, monkeypatch, capsys, caplog):
 
 
 @pytest.mark.asyncio
-async def test_check_without_a_broxy_fails_with_a_hint(tmp_path, monkeypatch, capsys, caplog):
-  # a bare channel (no broxy) never answers a check — rule 4 refuses silently —
-  # so the bounded wait must turn that into a clean failure naming the broxy
+async def test_check_that_nothing_answers_fails_with_a_hint(tmp_path, monkeypatch, capsys, caplog):
+  # a channel with no broxy behind it never answers a check — rule 4 refuses
+  # silently — so the bounded wait must turn that silence into a clean failure
+  # naming the broxy
   async with running_server(tmp_path, monkeypatch):
     monkeypatch.setattr(summon, 'CHECK_TIMEOUT', 0.1)
     assert await asyncio.to_thread(summon.main, ['summon', 'check', 'REQ-1']) == 1

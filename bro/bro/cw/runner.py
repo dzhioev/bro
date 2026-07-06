@@ -110,16 +110,19 @@ def run_in_place(spec: 'SessionSpec') -> int:
     # inherits it from the outer environment instead (dive-in sets ppp-dev)
     os.environ['CW_BRO'] = spec.bro
 
-  # host mode owns the session broxy (in a container the entrypoint started one
-  # and BROKER_CHANNEL already points at it), rewriting BROKER_CHANNEL before
-  # the MCP server and claude inherit the environment. best-effort: on a failed
-  # start the session keeps the direct channel.
+  # host mode launches the session broxy (in a container the entrypoint started
+  # one and BROKER_CHANNEL already points at it), rewriting BROKER_CHANNEL
+  # before the MCP server and claude inherit the environment. a set
+  # BROKER_CHANNEL always names a broxy socket: when the broxy cannot run the
+  # channel is unset — the session runs without one — and the launch proceeds.
   broxy: Optional[_SessionBroxy] = None
   upstream = os.environ.get('BROKER_CHANNEL')
   if upstream is not None and not _in_container():
     broxy = _start_session_broxy(upstream, os.environ)
     if broxy is not None:
       os.environ['BROKER_CHANNEL'] = broxy.address
+    else:
+      del os.environ['BROKER_CHANNEL']
 
   # session-local MCP serving, one mechanism for both flavors: OS-assigned port
   # published via a port file, per-session bearer token. the tools serve this

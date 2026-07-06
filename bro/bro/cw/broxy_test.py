@@ -1,7 +1,7 @@
 """live test of the host-mode session broxy helper (`cw.broxy`): a real
 `broxy serve` subprocess — the console script resolved from the active venv —
-against a real provisioned upstream socket, plus the degrade path that keeps a
-launch alive without one."""
+against a real provisioned upstream socket, plus the no-channel degrade paths
+that keep a launch alive without one."""
 
 import asyncio
 import contextlib
@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+import cw.broxy
 from broker.brotocol import Message
 from broker.client import Client
 from broker.transport import ChannelID
@@ -90,6 +91,14 @@ async def test_session_broxy_serves_the_rewritten_channel():
       broxy.stop()
 
 
-def test_start_degrades_when_the_upstream_is_unreachable(tmp_path):
+def test_start_returns_none_when_the_upstream_is_unreachable(tmp_path, monkeypatch):
+  monkeypatch.setattr(cw.broxy, '_READY_TIMEOUT', 1.0)
   broxy = _start_session_broxy('unix:' + str(tmp_path / 'missing.sock'), os.environ)
+  assert broxy is None
+
+
+def test_start_returns_none_without_the_console_script(tmp_path):
+  # a venv without broxy (a workspace based on a pre-broxy ref): the serve
+  # spawn itself fails, and the caller is left to unset BROKER_CHANNEL
+  broxy = _start_session_broxy('unix:' + str(tmp_path / 'upstream.sock'), {'PATH': str(tmp_path)})
   assert broxy is None

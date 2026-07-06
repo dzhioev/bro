@@ -50,11 +50,16 @@ sending connection's own read task — so by the time a local half-close is
 answered, everything that connection sent has reached the host (the guarantee
 `ClientTransport.close(confirm=True)` rides on).
 
-`serve` exits 0 on SIGTERM/SIGINT and 1 on a lost or unreachable upstream — the
-restart signal for the lifecycle owner's wrapper loop (a fresh broxy reconnects
-cleanly under supersede-on-accept; the mailbox is lost with it — durability is
-deliberately out of scope). `await` blocks until the local socket accepts a
-connection: the readiness gate a launcher degrades on.
+`serve` runs one proxy and fails loudly — no restart. The upstream is the
+session's own host broker over a local unix socket: it never comes back within
+a session, so a lost upstream is unrecoverable, and any other failure is a code
+bug to surface, not ride through (the in-memory mailbox dies with the process
+either way — durability is deliberately out of scope). Exit 0 means
+SIGTERM/SIGINT — the launcher's own teardown, the one expected end; anything
+else exits 1, the socket unlinked, so the session's channel disappears cleanly.
+`await` blocks until the local socket accepts a connection: the readiness gate
+a launcher rewrites `BROKER_CHANNEL` behind — when it fails, the session gets
+no channel at all.
 """
 
 import asyncio
@@ -203,7 +208,7 @@ class Broxy:
       log.warning('broxy: dropping uncorrelated upstream message %s (%s)', message.id, message.type)
       return
     route = self._routes.get(message.in_reply_to)
-    if route is None:  # e.g. the request predates a broxy restart
+    if route is None:  # e.g. the route was evicted, or its mailbox entry dropped
       log.warning('broxy: dropping upstream message for unknown request %s', message.in_reply_to)
       return
     terminal = message.type != Tag.STARTED  # the terminal rule, mirroring Client.call
@@ -433,7 +438,9 @@ def main(argv: list[str]) -> Optional[int]:
   subparsers = parser.add_subparsers(dest='command')
 
   serve_parser = subparsers.add_parser(
-    'serve', help='run the proxy daemon (exit 0 on SIGTERM/SIGINT, 1 on a lost upstream)'
+    'serve',
+    help='run the proxy daemon (exit 0 on SIGTERM/SIGINT, 1 on a lost upstream; '
+    'no restart — it fails loudly)',
   )
   serve_parser.add_argument('socket_path', metavar='SOCKET', help='local unix socket to listen on')
   serve_parser.add_argument(

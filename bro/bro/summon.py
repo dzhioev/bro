@@ -25,8 +25,8 @@ result nor a live waiter — safe to poll a backgrounded summon. `summon check
 --wait <request-id>` collects for real (the broxy's `claim`): it blocks like the
 original call and consumes the result; the wait is a lock, so while another
 waiter is alive it fails fast instead of stealing the result from under it —
-only a killed or detached wait is collectable. Both forms need the session broxy;
-blocking mode also works on a bare channel. Waits bound silence, not the run: the
+only a killed or detached wait is collectable. Every mode rides the session broxy
+— a set `BROKER_CHANNEL` always names one. Waits bound silence, not the run: the
 deadline opens at max(effective timeout, `LAUNCH_TIMEOUT`) — the prepare phase
 (image build, worktree seeding) runs before the host arms its request-lifecycle
 timer, so only the backstop bounds it, and a claim that never sees a `started`
@@ -70,7 +70,7 @@ DEFAULT_TIMEOUT = 1800.0
 # wait re-arms to the effective timeout (see the module docstring)
 LAUNCH_TIMEOUT = 1800.0
 # a check is answered by the session broxy locally and immediately — this bound only
-# turns a missing broxy (degraded channel) into a clean failure instead of a hang
+# turns a wedged or unanswering broxy into a clean failure instead of a hang
 CHECK_TIMEOUT = 10.0
 # `summon check` exit code while the result is not in yet (0 = answer relayed,
 # 1 = failure, 2 = argparse usage error)
@@ -228,8 +228,7 @@ def check_summon(request_id: str) -> SummonStatus:
       terminal = client.await_reply(check, CHECK_TIMEOUT, on_started=_started)
     except TimeoutError:
       raise SummonError(
-        f'no check reply within {CHECK_TIMEOUT:.0f}s — a summon check needs the '
-        'session broxy (degraded or bare channel?)'
+        f'no check reply within {CHECK_TIMEOUT:.0f}s — the session broxy is not answering'
       ) from None
     except ConnectionError as e:
       raise SummonError(f'broker channel closed awaiting the check reply: {e}') from None
