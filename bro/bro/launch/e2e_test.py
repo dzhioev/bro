@@ -1,9 +1,10 @@
 """live integration test of the broker-supervised container launch seam.
 
 Drives the real launcher against the real docker daemon — the seam the fake
-Transport/Spawner unit suites never touch. Host-only (needs the host daemon;
-skipped inside a container) and, like every live integration test, run
-separately from the default suite:
+Transport/Spawner unit suites never touch. Host- and linux-only (needs the host
+daemon; skipped inside a container, and on macOS, where container sessions are
+pinned to the broker-less path — see `_container_broker_enabled`) and, like
+every live integration test, run separately from the default suite:
 
   pytest cw/e2e_test.py [-k <scenario>]
 
@@ -25,8 +26,7 @@ image, and the container's baked venv serves this branch's committed
 `broker`/`bro` code to the in-container probes (launcher code comes from this
 checkout's editable venv, uncommitted changes included). The tree lives under
 a short `mkdtemp` dir directly in the system temp dir: the broker socket path
-must fit `sun_path` (~108 bytes), which rules out deeper roots. On a VM-backed
-docker (colima), export `TMPDIR` to a short VM-shared path first.
+must fit `sun_path` (~108 bytes), which rules out deeper roots.
 
 Scenario containers synchronize with the harness through files on the shared
 `/workspace` mount (`.e2e-ready` / `.e2e-continue` / `.e2e-report.json`) —
@@ -74,6 +74,9 @@ pytestmark = [
     Path('/.dockerenv').is_file(), reason='host-only: drives the host docker daemon'
   ),
   pytest.mark.skipif(not _docker_available(), reason='no reachable docker daemon'),
+  # the seam under test is linux-only: a VM-backed daemon can't bind-mount the host
+  # channel socket, so `_container_broker_enabled` pins macOS to the broker-less path
+  pytest.mark.skipif(sys.platform == 'darwin', reason='broker container seam is linux-only'),
   # a peer killed at broker teardown leaves its docker attach client un-awaited; the
   # subprocess transport's __del__ then runs after its loop closed and raises the benign
   # 'Event loop is closed', which GC surfaces in whatever test happens to run next

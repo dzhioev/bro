@@ -139,6 +139,25 @@ def _broker_enabled() -> bool:
   return True
 
 
+def _container_broker_enabled() -> bool:
+  """`_broker_enabled`, plus the container flavor's docker-daemon constraint.
+
+  the container's channel is the host socket bind-mounted at `/run/broker.sock`,
+  which requires a docker daemon that shares the host filesystem. on macOS the
+  daemon runs in a VM (Docker Desktop / colima) whose file sharing cannot project
+  a host unix socket: the mount is unappliable — which breaks container creation
+  outright, because the scoped store's `docker cp` stats its destination by
+  mounting the whole container filesystem — and even a mounted socket file could
+  not carry connections across the VM boundary. container sessions there run
+  broker-less; the host flavor keeps its channel (its socket is reached
+  in-process, no daemon in between).
+  """
+  if sys.platform == 'darwin':
+    log.info('no broker channel: the macOS docker daemon cannot bind-mount host unix sockets')
+    return False
+  return _broker_enabled()
+
+
 def _run_root_via_broker(
   name: str,
   command: list[str],
@@ -200,10 +219,11 @@ def run_in_container(
   optionally the docker socket, …). When `drop=True`, removes the workspace dir
   and per-session claude state on exit. Returns the container's exit code.
 
-  Unless `BROKER_DISABLED` short-circuits it (see `_broker_enabled`), the session runs
-  as the root peer of a broker whose loop supervises it: the per-peer channel socket is
-  provisioned before `docker create`, bind-mounted at `/run/broker.sock`, and pointed at
-  by `BROKER_CHANNEL`. The post-exit finish below runs after `Broker.run()` returns.
+  Unless the gate degrades it (see `_container_broker_enabled`: `BROKER_DISABLED`,
+  an unimportable broker, or a macOS host), the session runs as the root peer of a
+  broker whose loop supervises it: the per-peer channel socket is provisioned before
+  `docker create`, bind-mounted at `/run/broker.sock`, and pointed at by
+  `BROKER_CHANNEL`. The post-exit finish below runs after `Broker.run()` returns.
 
   `secrets` is the required scoped credential set hydrated into the container's
   ~/.ppp (see `credentials.build_scoped_store`); a missing secret raises (strict).
@@ -232,7 +252,7 @@ def run_in_container(
   optional_names = sorted(set(optional_secrets) - set(secrets))
   if len(optional_names) > 0:
     log.info('optional (best-effort) secrets for %s: %s', name, ', '.join(optional_names))
-  if _broker_enabled():
+  if _container_broker_enabled():
     code = _run_root_via_broker(
       name,
       command,

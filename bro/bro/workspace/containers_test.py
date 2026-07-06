@@ -134,8 +134,20 @@ class TestBrokerGate:
     monkeypatch.delenv('BROKER_DISABLED', raising=False)
     assert cw.containers._broker_enabled() is True
 
+  def test_container_gate_degrades_on_macos(self, monkeypatch):
+    # the daemon runs in a VM there — the channel socket can't be bind-mounted
+    monkeypatch.delenv('BROKER_DISABLED', raising=False)
+    monkeypatch.setattr(sys, 'platform', 'darwin')
+    assert cw.containers._container_broker_enabled() is False
+
+  def test_container_gate_delegates_off_macos(self, monkeypatch):
+    monkeypatch.delenv('BROKER_DISABLED', raising=False)
+    monkeypatch.setattr(sys, 'platform', 'linux')
+    assert cw.containers._container_broker_enabled() is True
+
   def test_run_in_container_routes_through_broker(self, monkeypatch, tmp_path):
     monkeypatch.delenv('BROKER_DISABLED', raising=False)
+    monkeypatch.setattr(sys, 'platform', 'linux')
     monkeypatch.setattr(cw.containers, '_project_root', lambda: tmp_path / 'project')
     roots: list = []
 
