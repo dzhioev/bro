@@ -6,9 +6,9 @@ import cw.cli
 
 
 class TestSsValidation:
-  def test_ss_grant_without_container_errors(self, capsys):
+  def test_ss_grant_cred_without_container_errors(self, capsys):
     with pytest.raises(SystemExit):
-      cw.cli.main(['cw', 'ss', '--grant', 'gmail_creds', 'wsname'])
+      cw.cli.main(['cw', 'ss', '--grant-cred', 'gmail_creds', 'wsname'])
     assert 'require -c' in capsys.readouterr().err
 
   def test_bro_with_resume_is_accepted(self):
@@ -21,13 +21,23 @@ class TestSsValidation:
     assert fake_start.call_count == 1
 
   def test_ss_builds_spec_with_grant_revoke_normalized_to_lists(self):
-    # the --grant/--revoke parser defaults are None; the SessionSpec the cli
+    # the grant/revoke parser defaults are None; the SessionSpec the cli
     # builds must carry [] so to_command_argv can iterate them
     with patch('cw.cli.start_session', return_value=0) as fake_start:
       cw.cli.main(['cw', 'ss', '-c', 'w'])
     spec = fake_start.call_args[0][0]
-    assert spec.grant == []
-    assert spec.revoke == []
+    assert spec.grant_cred == []
+    assert spec.revoke_cred == []
+    assert spec.grant_summon == []
+    assert spec.revoke_summon == []
+
+  def test_ss_summon_flags_do_not_require_container(self):
+    # a host session has a broker root too, so the summon pair is mode-agnostic —
+    # unlike --grant-cred/--revoke-cred
+    with patch('cw.cli.start_session', return_value=0) as fake_start:
+      rc = cw.cli.main(['cw', 'ss', '--grant-summon', 'devoops', 'w'])
+    assert rc == 0
+    assert fake_start.call_args[0][0].grant_summon == ['devoops']
 
 
 class TestInPlace:
@@ -46,6 +56,12 @@ class TestInPlace:
       cw.cli.main(['cw', 'ss', '--in-place', '-c', '--drop', 'w'])
     error = capsys.readouterr().err
     assert '--in-place cannot be combined with -c, --drop' in error
+
+  def test_rejects_summon_flags(self, capsys):
+    # the outer consumed them; the inner argv never carries them
+    with pytest.raises(SystemExit):
+      cw.cli.main(['cw', 'ss', '--in-place', '--grant-summon', 'devoops', 'w'])
+    assert '--in-place cannot be combined with --grant-summon' in capsys.readouterr().err
 
   def test_skips_the_auto_container_gate(self):
     # the inner argv carries --auto but never -c; the outer validated the pairing

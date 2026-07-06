@@ -24,7 +24,7 @@ class FakeClientTransport(ClientTransport):
   def receive(self, timeout: Optional[float]) -> Optional[Message]:
     return None
 
-  def close(self) -> None:
+  def close(self, confirm: bool = False) -> None:
     self.closed = True
 
 

@@ -20,18 +20,32 @@ def add_forwarded_flags(parser: Parser) -> None:
     help='enable fast mode for the session (disabled by default regardless of host settings)',
   )
   parser.add_argument(
-    '--grant',
+    '--grant-cred',
     action='append',
     default=None,
     metavar='SECRET',
     help='grant a secret to the container scoped set on top of the computed set (repeatable); requires -c; errors if already in the set or unknown to the registry',
   )
   parser.add_argument(
-    '--revoke',
+    '--revoke-cred',
     action='append',
     default=None,
     metavar='SECRET',
     help='revoke a secret from the container scoped set (repeatable); requires -c; errors if not in the set',
+  )
+  parser.add_argument(
+    '--grant-summon',
+    action='append',
+    default=None,
+    metavar='BRO',
+    help="allow the session to summon the named bro, on top of its bro's may_summon defaults (repeatable); errors if already allowed or not a registered bro",
+  )
+  parser.add_argument(
+    '--revoke-summon',
+    action='append',
+    default=None,
+    metavar='BRO',
+    help='disallow summoning the named bro for this session (repeatable); errors if not in the allow-list',
   )
   parser.add_argument(
     '--effort',
@@ -48,7 +62,7 @@ def add_forwarded_flags(parser: Parser) -> None:
     '--into',
     default=None,
     metavar='REF',
-    help="base a new session on git REF (branch/tag/sha) instead of the default (the host repo's current HEAD, in both container and host mode). a REF that only exists on origin is fetched automatically. ignored once the workspace exists",
+    help="base a new session on git REF (branch/tag/sha) instead of the host checkout's current HEAD (the default in both container and host mode). a REF that only exists on origin is fetched automatically. ignored once the workspace exists",
   )
 
 

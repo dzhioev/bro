@@ -40,6 +40,18 @@ class RecordBro(Bro):
     return self.mock_llm
 
 
+class _SkillfulBro(RecordBro):
+  def __init__(self, skills: dict[str, str]):
+    super().__init__()
+    self._fake_skills = skills
+
+  def get_skill_body(self, name: str) -> str:
+    if name in self._fake_skills:
+      return self._fake_skills[name]
+    available = ', '.join(sorted(self._fake_skills))
+    raise KeyError(f'no skill named {name!r}; available: {available}')
+
+
 class _ScriptedLines:
   """callable that yields each scripted line in turn, then raises EOFError."""
 
@@ -345,6 +357,43 @@ def test_call_skips_container_with_no_container_flag(monkeypatch):
   assert rc is None
   assert run.call_count == 0
   assert len(built) == 1
+
+
+def test_initial_slash_skill_expands_before_send(monkeypatch):
+  captured: list[str] = []
+
+  async def fake_call_text(bro, initial):
+    captured.append(initial)
+
+  monkeypatch.setenv('CW_IN_CONTAINER', '1')
+  monkeypatch.setattr('bro.registry.create_bro', lambda name: _SkillfulBro({'ask': 'ASK BODY'}))
+  monkeypatch.setattr('do.call.call_text', fake_call_text)
+  monkeypatch.setattr('do.call._tty_supported', lambda: False)
+
+  # the initial message gets the ask/do-task slash expansion, so a skill body
+  # reaches the bro instead of the literal `/ask …` line
+  rc = main(['call', 'record', '/ask devoops to ping', '--slow'])
+  assert rc is None
+  assert captured == ['ASK BODY\n\nARGUMENTS: devoops to ping']
+
+
+def test_initial_unknown_skill_exits_1(monkeypatch, capsys):
+  captured: list[str] = []
+
+  async def fake_call_text(bro, initial):
+    captured.append(initial)
+
+  monkeypatch.setenv('CW_IN_CONTAINER', '1')
+  monkeypatch.setattr('bro.registry.create_bro', lambda name: _SkillfulBro({'fix': 'FIX BODY'}))
+  monkeypatch.setattr('do.call.call_text', fake_call_text)
+  monkeypatch.setattr('do.call._tty_supported', lambda: False)
+
+  rc = main(['call', 'record', '/nope thing', '--slow'])
+  assert rc == 1
+  assert captured == []
+  error_output = capsys.readouterr().err
+  assert 'nope' in error_output
+  assert 'fix' in error_output
 
 
 class _FakeApp:

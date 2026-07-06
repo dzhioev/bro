@@ -51,4 +51,6 @@ class BroChannel:
     self._client.send(Tag.COMPLETED, {'result': result, 'end_reason': end_reason})
 
   def close(self) -> None:
-    self._client.close()
+    # the lifecycle terminal is typically this process's last act before exit;
+    # confirm it was consumed rather than racing the exit (ClientTransport.close)
+    self._client.close(confirm=True)

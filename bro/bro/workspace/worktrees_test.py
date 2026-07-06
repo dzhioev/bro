@@ -85,10 +85,19 @@ class TestEnsureHostWorktree:
     ]
 
   def test_new_branch_defaults_to_head(self, monkeypatch, tmp_path):
+    # the launcher's-HEAD rule: a new worktree bases on the checkout as it stands
     calls = self._recorder(monkeypatch)
     worktree = tmp_path / 'worktree'
     assert cw.worktrees._ensure_host_worktree(worktree, 'worktree-x') is True
-    assert self._add_command(calls) == ['git', 'worktree', 'add', str(worktree), '-b', 'worktree-x']
+    assert self._add_command(calls) == [
+      'git',
+      'worktree',
+      'add',
+      str(worktree),
+      '-b',
+      'worktree-x',
+      'HEAD',
+    ]
 
   def test_existing_branch_ignores_base_ref(self, monkeypatch, tmp_path):
     calls = self._recorder(monkeypatch, branch_exists=True)

@@ -148,6 +148,15 @@ class TestDockerCreateArgv:
     monkeypatch.setenv('CW_BRO', 'ppp-dev')
     assert 'CW_BRO' not in build_argv(forward_bro=False)
 
+  def test_forward_env_false_switches_the_forward_loop_off(self, build_argv, monkeypatch):
+    # a broker-spawned child's environment is its LaunchSpec snapshot (extra_env)
+    # only; none of the ambient _DOCKER_FORWARD_ENV vars may reach it
+    for var in cw.docker._DOCKER_FORWARD_ENV:
+      monkeypatch.setenv(var, 'ambient')
+    argv = build_argv(forward_env=False, extra_env={'MARKER': 'x'})
+    assert not any(var in argv for var in cw.docker._DOCKER_FORWARD_ENV)
+    assert 'MARKER=x' in argv
+
   def test_extra_env_injected_as_explicit_key_value(self, build_argv, monkeypatch):
     # extra_env sets the value here (`-e KEY=VALUE`), unlike _DOCKER_FORWARD_ENV which
     # forwards a host var by name — so it works even with no such var on the host.

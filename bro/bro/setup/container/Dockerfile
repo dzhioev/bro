@@ -80,14 +80,14 @@ RUN gosu cw bash -ec '\
 # exact path the entrypoint clones into at runtime — and resolves against the live
 # clone. also bake the `_entrypoints.py` console-script bridge into the venv so the
 # entrypoint can skip the ~1s `sync-scripts --entrypoints` regen too: the bridge is
-# a pure function of the `[project.scripts]` table, which the tag pins, so the baked
-# copy matches any session whose clone produced this image. only the venv is kept:
-# the build-time source is a bind mount removed in the same layer, so nothing is
-# duplicated. correctness holds for the life of the image because the tag pins
-# pyproject.toml + uv.lock (see cw/docker.py:_image_tag), so a session's clone always
-# carries the same deps and the same launcher set the bake produced. UV_LINK_MODE=copy:
-# /opt is on the image overlay, a different fs from any bind mount, so hardlinks can't
-# be probed.
+# a pure function of the `[project.scripts]` table. only the venv is kept from the
+# tree: the build-time source is a bind mount removed in the same layer, so nothing
+# is duplicated. the baked env matches a clone only when the clone's dependency
+# manifests equal the ones this build ran from — CW_BASE_REF can base the clone on
+# any ref — so the manifests are staged below and the entrypoint compares before
+# reusing; a mismatch falls through to a normal sync from the clone's own
+# manifests. UV_LINK_MODE=copy: /opt is on the image overlay, a different fs from
+# any bind mount, so hardlinks can't be probed.
 ENV UV_CACHE_DIR=/opt/uv-cache
 ENV UV_LINK_MODE=copy
 RUN --mount=type=bind,from=project,target=/project-src \
@@ -99,6 +99,13 @@ RUN --mount=type=bind,from=project,target=/project-src \
  && /opt/cw-venv/bin/python -m sync_scripts --entrypoints \
  && find /workspace -mindepth 1 -delete \
  && chmod -R a+rwX /opt/uv-cache /opt/cw-venv
+
+# stage the manifests the venv bake ran from — the entrypoint's reuse gate
+# compares the clone's copies against these. a separate layer so a gate-only
+# change never invalidates the expensive venv layer above
+RUN --mount=type=bind,from=project,target=/project-src \
+    mkdir -p /opt/cw-venv-manifest \
+ && cp /project-src/pyproject.toml /project-src/uv.lock /opt/cw-venv-manifest/
 
 WORKDIR /workspace
 ENV CW_IN_CONTAINER=1

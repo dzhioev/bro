@@ -7,8 +7,9 @@ separately from the default suite:
 
   pytest cw/e2e_test.py [-k <scenario>]
 
-The matrix: A — broker-enabled default launch (socket provisioning, live
-channel, ping round-trip); B — child lifecycle over the real ports (spawn
+The matrix: A — broker-enabled default launch (socket provisioning, the
+entrypoint-owned broxy on the channel, ping round-trip through it); B — child
+lifecycle over the real ports (spawn
 routing, early exit, timeout, teardown, channel-pinned identity); C — the
 `BROKER_DISABLED` kill-switch; D — degrade when broker is unimportable in the
 launcher; E — SIGINT handling through the attached root; F — the in-place
@@ -87,14 +88,17 @@ _LEAK_PREFIXES = ('broker-', _NAME_PREFIX)
 
 # --- in-container probes (source for `python -c`; repo code comes from the baked venv) ---
 
-# scenario A root: verify the live channel, hand mid-run control to the harness,
-# then run the ping round-trip over the exact live-path broker
+# scenario A root: verify the live channel (BROKER_CHANNEL rewritten by the
+# entrypoint to its broxy's local socket, the upstream socket bind-mounted
+# next to it), hand mid-run control to the harness, then run the ping
+# round-trip over the exact live path — through the broxy
 _PROBE_A = """
 import os, sys, time
 from pathlib import Path
 
-assert os.environ.get('BROKER_CHANNEL') == 'unix:/run/broker.sock', os.environ.get('BROKER_CHANNEL')
+assert os.environ.get('BROKER_CHANNEL') == 'unix:/tmp/broxy.sock', os.environ.get('BROKER_CHANNEL')
 assert Path('/run/broker.sock').is_socket()
+assert Path('/tmp/broxy.sock').is_socket()
 from bro.channel import BroChannel
 channel = BroChannel.from_env()
 assert channel is not None

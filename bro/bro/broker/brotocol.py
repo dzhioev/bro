@@ -26,8 +26,12 @@ class Tag:
 
   STARTED = 'started'  # {trail_id}
   COMPLETED = 'completed'  # {result, end_reason}  end_reason: terminal|raised|error
-  FAILED = 'failed'  # {reason: 'exit'|'timeout', exit_code?, output_tail?}
+  FAILED = 'failed'  # {reason: 'exit'|'timeout'|'launch', exit_code?, output_tail?, error?}
   REPLY = 'reply'  # generic correlated reply (in_reply_to set); the type context.reply emits
+  CLAIM = 'claim'  # {id}: broxy-local claim of a pending/buffered request; never on the host wire
+  CHECK = (
+    'check'  # {id}: broxy-local non-consuming peek at a request's state; never on the host wire
+  )
   PING = 'ping'  # acceptance round-trip
   SPAWN = 'spawn'  # acceptance: spawn a throwaway child
 

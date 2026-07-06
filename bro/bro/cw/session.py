@@ -8,37 +8,12 @@ from typing import Optional
 from base import log
 from cw.containers import _broker_enabled, _replace_container_resume_hint, run_in_container
 from cw.docker import find_container_id
+from cw.git import resolve_ref
 from cw.paths import _latest_jsonl, _project_root, _venv_env
-from cw.secrets import _DEFAULT_CW_BRO, _apply_claude_auth, _container_secrets, _finalize_secrets
+from cw.secrets import _apply_claude_auth, _container_secrets, _finalize_secrets, _session_bro_name
+from cw.summon import summon_allow_list
 from cw.workspace import ContainerWorkspace, HostWorktree
 from cw.worktrees import _ensure_host_worktree, _finish_host_worktree, _provision_host_worktree
-
-
-def _resolve_base_ref(into: str) -> Optional[str]:
-  # resolve --into (branch/tag/sha) to a commit sha in the host repo. when the
-  # ref isn't host-local, fetch it from origin and resolve FETCH_HEAD: a feature
-  # branch pushed to origin from a container has no host-local ref, so basing a
-  # later workspace on it (the `/feature` per-stage flow) would otherwise fail. the
-  # container reaches the fetched objects via /host-repo's shared store. returns
-  # None when neither the local lookup nor the origin fetch resolves.
-  root = _project_root()
-  local = subprocess.run(
-    ['git', 'rev-parse', '--verify', f'{into}^{{commit}}'],
-    cwd=root,
-    capture_output=True,
-    text=True,
-  )
-  if local.returncode == 0:
-    return local.stdout.strip()
-  if subprocess.run(['git', 'fetch', 'origin', into], cwd=root).returncode != 0:
-    return None
-  fetched = subprocess.run(
-    ['git', 'rev-parse', '--verify', 'FETCH_HEAD^{commit}'],
-    cwd=root,
-    capture_output=True,
-    text=True,
-  )
-  return fetched.stdout.strip() if fetched.returncode == 0 else None
 
 
 @dataclass(frozen=True)
@@ -46,8 +21,9 @@ class SessionSpec:
   """the parameters of a `cw ss` session, as parsed from its argv.
 
   one object replaces the positional soup threaded through the launch layers;
-  credential scoping and the CW_COMMAND / resume-hint env both read off it.
-  grant / revoke are normalized to [] (the parser leaves them None when unset).
+  credential scoping, the summon allow-list, and the CW_COMMAND / resume-hint env
+  all read off it. the grant/revoke lists are normalized to [] (the parser leaves
+  them None when unset).
   """
 
   name: str
@@ -55,8 +31,10 @@ class SessionSpec:
   drop: bool
   auto: bool
   fast: bool
-  grant: list[str]
-  revoke: list[str]
+  grant_cred: list[str]
+  revoke_cred: list[str]
+  grant_summon: list[str]
+  revoke_summon: list[str]
   effort: Optional[str]
   resume: bool
   into: Optional[str]
@@ -66,17 +44,16 @@ class SessionSpec:
   claude_args: list[str]
 
   def __post_init__(self) -> None:
-    if self.grant is None:
-      object.__setattr__(self, 'grant', [])
-    if self.revoke is None:
-      object.__setattr__(self, 'revoke', [])
+    for field in ('grant_cred', 'revoke_cred', 'grant_summon', 'revoke_summon'):
+      if getattr(self, field) is None:
+        object.__setattr__(self, field, [])
 
   def to_command_argv(self) -> list[str]:
     """reconstruct this session as `cw ss` argv tokens.
 
     used for CW_COMMAND (the session as launched) and, via resume_variant, the
-    exit resume hint — so both carry the same forwarded flags (--auto, --grant,
-    --effort, ...).
+    exit resume hint — so both carry the same forwarded flags (--auto,
+    --grant-cred, --effort, ...).
     """
     flags = {
       '-c': self.container,
@@ -94,10 +71,14 @@ class SessionSpec:
       parts.append(f'--mcp={self.mcp}')
     if self.bro is not None:
       parts.extend(['--bro', self.bro])
-    for g in self.grant:
-      parts.extend(['--grant', g])
-    for r in self.revoke:
-      parts.extend(['--revoke', r])
+    for g in self.grant_cred:
+      parts.extend(['--grant-cred', g])
+    for r in self.revoke_cred:
+      parts.extend(['--revoke-cred', r])
+    for g in self.grant_summon:
+      parts.extend(['--grant-summon', g])
+    for r in self.revoke_summon:
+      parts.extend(['--revoke-summon', r])
     if self.into is not None:
       parts.extend(['--into', self.into])
     parts.extend([self.name, *self.claude_args])
@@ -109,8 +90,9 @@ class SessionSpec:
 
     a second serialization, distinct from to_command_argv: it carries the prompt
     and the forwarded claude args (which to_command_argv deliberately omits) and
-    drops the flags the outer already consumed (-c --drop --grant --revoke
-    --into). the prompt and mcp values use the joined `=` form so a prompt
+    drops the flags the outer already consumed (-c --drop --grant-cred
+    --revoke-cred --grant-summon --revoke-summon --into). the prompt and mcp
+    values use the joined `=` form so a prompt
     starting with `-` can't be mistaken for a flag and the nargs='?' --mcp can't
     swallow the name positional."""
     flags = {'--auto': self.auto, '--fast': self.fast, '--resume': self.resume}
@@ -149,13 +131,16 @@ def start_session(spec: SessionSpec) -> int:
     log.info('already inside a container; falling back to host mode')
     container = False
 
-  # resolve --into to a commit sha now (a branch/tag/sha → a sha). the container
-  # reaches it via /host-repo's shared objects; the host worktree bases its new
-  # branch on it. only meaningful at creation — resume reuses the existing
-  # workspace, so the two are mutually exclusive (checked in main).
+  # resolve --into to a commit sha now (a branch/tag/sha → a sha, fetched from
+  # origin when not host-local). the container reaches it via /host-repo's shared
+  # objects; the host worktree bases its new branch on it. when --into is absent,
+  # a new workspace bases on the host checkout's current HEAD — the entrypoint's
+  # fallback in container mode, `git worktree add … HEAD` on host — so no default
+  # path touches the network. only meaningful at creation — resume reuses the
+  # existing workspace, so the two are mutually exclusive (checked in main).
   base_ref: Optional[str] = None
   if spec.into is not None:
-    base_ref = _resolve_base_ref(spec.into)
+    base_ref = resolve_ref(_project_root(), spec.into)
     if base_ref is None:
       log.error('cannot resolve --into ref: %s', spec.into)
       return 1
@@ -172,11 +157,12 @@ def _container_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
   command (`cw ss --in-place …`, resolved from the clone's venv after the
   entrypoint prepares the tree, so the session runs its workspace's code)."""
   project = _project_root()
+  workspace = ContainerWorkspace(spec.name, project)
 
   # one session per worktree: refuse if a container is already bound to this
   # workspace's mount. a second concurrent session would share /workspace — and
   # its gitignored token-accounting state — and corrupt it.
-  if find_container_id(ContainerWorkspace(spec.name, project).path) is not None:
+  if find_container_id(workspace.path) is not None:
     log.error(
       'session already active in the container for workspace %r; refusing to start a second',
       spec.name,
@@ -187,7 +173,7 @@ def _container_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
   # container is created. the runner resolves the actual session id from the
   # same dir (derived from its in-container cwd).
   if spec.resume:
-    projects_dir = ContainerWorkspace(spec.name, project).claude_projects_dir()
+    projects_dir = workspace.claude_projects_dir()
     if _latest_jsonl(projects_dir) is None:
       log.error('no claude session found for %s in %s', spec.name, projects_dir)
       return 1
@@ -197,15 +183,11 @@ def _container_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
     # shells render the bro banner); the runner re-sets it next to claude.
     os.environ['CW_BRO'] = spec.bro
 
-  # scope credentials to the session's bro: `--bro` uses its bro directly; a
-  # native session themes as CW_BRO (dive-in sets ppp-dev; a manual `cw ss -c`
-  # defaults to it too).
-  bro_name = spec.bro
-  if bro_name is None:
-    bro_name = os.environ.get('CW_BRO', _DEFAULT_CW_BRO)
+  bro_name = _session_bro_name(spec.bro)
   scoped = _container_secrets(bro_name, mcp=spec.mcp, bro_mode=spec.bro is not None)
   try:
-    secrets = _finalize_secrets(scoped.required, grant=spec.grant, revoke=spec.revoke)
+    secrets = _finalize_secrets(scoped.required, grant=spec.grant_cred, revoke=spec.revoke_cred)
+    may_summon = summon_allow_list(bro_name, grant=spec.grant_summon, revoke=spec.revoke_summon)
   except ValueError as e:
     log.error('%s', e)
     return 1
@@ -213,7 +195,8 @@ def _container_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
   env: dict[str, str] = {}
   if base_ref is not None:
     # the entrypoint reads CW_BASE_REF to base the fresh clone's worktree branch
-    # (the sha's objects are already shared from /host-repo via clone alternates)
+    # (the sha's objects are already shared from /host-repo via clone alternates);
+    # without it the clone bases on HEAD — the host checkout as cloned.
     env['CW_BASE_REF'] = base_ref
   code = run_in_container(
     spec.name,
@@ -223,6 +206,7 @@ def _container_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
     optional_secrets=scoped.optional,
     docker_sock=scoped.docker_sock,
     extra_env=env if len(env) > 0 else None,
+    may_summon=may_summon,
   )
   if not spec.drop and code == 0:
     _replace_container_resume_hint(spec.name)
@@ -230,17 +214,27 @@ def _container_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
 
 
 def _run_host_root_via_broker(
-  command: list[str], worktree: Path, project: Path, env: dict[str, str]
+  name: str,
+  command: list[str],
+  worktree: Path,
+  project: Path,
+  env: dict[str, str],
+  may_summon: set[str],
 ) -> int:
   """run the host session as the broker's root peer: provision its channel socket
   under `var/cw/broker`, point `BROKER_CHANNEL` at it in the runner's env, and
   supervise the runner process on the broker loop until it exits."""
   # imported here, not at module level: _broker_enabled() must be able to short-circuit
   # a launch before anything touches the broker package (see its docstring).
-  from cw.spawn import ProcessLaunchSpec, ProcessSpawner, run_root_via_broker
+  from cw.spawn import ProcessLaunchSpec, run_root_via_broker
+  from cw.summon import STATUS_ENV, summon_status_file
 
+  # a host session reads the summon-status file the host-side SummonControl
+  # writes, straight at its host path; the session key is the bare workspace
+  # name — container mode prefixes `c:` (see cw/summon.py)
+  env[STATUS_ENV] = str(summon_status_file(project, name))
   launch = ProcessLaunchSpec(command=command, cwd=str(worktree), env=env)
-  return run_root_via_broker(launch, ProcessSpawner(), project)
+  return run_root_via_broker(launch, project, session=name, may_summon=may_summon)
 
 
 def _host_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
@@ -276,6 +270,17 @@ def _host_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
     log.error('no claude session found for %s in %s', spec.name, workspace.claude_projects_dir())
     return 1
 
+  # the session's summon allow-list, computed before the worktree exists so a bad
+  # --grant-summon/--revoke-summon fails without creating anything. host mode is
+  # covered like container mode — its broker root enforces the same policy.
+  try:
+    may_summon = summon_allow_list(
+      _session_bro_name(spec.bro), grant=spec.grant_summon, revoke=spec.revoke_summon
+    )
+  except ValueError as e:
+    log.error('%s', e)
+    return 1
+
   if not _ensure_host_worktree(worktree, branch, base_ref):
     return 1
   if not _provision_host_worktree(worktree):
@@ -305,7 +310,9 @@ def _host_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
   pidfile.write_text(str(os.getpid()))
   try:
     if _broker_enabled():
-      code = _run_host_root_via_broker(command, worktree, project, runner_env)
+      code = _run_host_root_via_broker(
+        spec.name, command, worktree, project, runner_env, may_summon
+      )
     else:
       code = subprocess.run(command, cwd=str(worktree), env=runner_env).returncode
   finally:

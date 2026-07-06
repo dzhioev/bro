@@ -8,15 +8,19 @@ import base.args
 from bro.bro import BroRaised
 from bro.bros.bro import Bro
 from do._cli import (
-  GRANT_HELP,
+  GRANT_CRED_HELP,
+  GRANT_SUMMON_HELP,
+  INTO_HELP,
   NO_CONTAINER_HELP,
   NO_TRAILS_HELP,
-  REVOKE_HELP,
+  REVOKE_CRED_HELP,
+  REVOKE_SUMMON_HELP,
   SLOW_HELP,
   create_bro_for_run,
   maybe_containerize,
 )
 from do._trace_format import compact_value, oneline, truncate
+from do.do import expand_skill_invocation
 from llm.observer import Observer
 
 __cli_name__ = 'call'
@@ -129,8 +133,19 @@ def main(argv: list[str]) -> Optional[int]:
   parser.add_argument('--no-trails', dest='no_trails', action='store_true', help=NO_TRAILS_HELP)
   # --no-trails acts only on the container hop; --no-container has no hop to act on.
   parser.add_exclusive_groups(['no_container'], ['no_trails'])
-  parser.add_argument('--grant', action='append', default=None, metavar='SECRET', help=GRANT_HELP)
-  parser.add_argument('--revoke', action='append', default=None, metavar='SECRET', help=REVOKE_HELP)
+  parser.add_argument(
+    '--grant-cred', action='append', default=None, metavar='SECRET', help=GRANT_CRED_HELP
+  )
+  parser.add_argument(
+    '--revoke-cred', action='append', default=None, metavar='SECRET', help=REVOKE_CRED_HELP
+  )
+  parser.add_argument(
+    '--grant-summon', action='append', default=None, metavar='BRO', help=GRANT_SUMMON_HELP
+  )
+  parser.add_argument(
+    '--revoke-summon', action='append', default=None, metavar='BRO', help=REVOKE_SUMMON_HELP
+  )
+  parser.add_argument('--into', metavar='REF', help=INTO_HELP)
   args = parser.parse(argv)
 
   # decide TUI-vs-text on the host, before the hop: `run_in_container` always
@@ -149,22 +164,33 @@ def main(argv: list[str]) -> Optional[int]:
     inner_args=inner_args,
     no_container=args['no_container'],
     no_trails=args['no_trails'],
-    grant=args['grant'],
-    revoke=args['revoke'],
+    grant_cred=args['grant_cred'],
+    revoke_cred=args['revoke_cred'],
+    grant_summon=args['grant_summon'],
+    revoke_summon=args['revoke_summon'],
+    into=args['into'],
   )
   if hopped is not None:
     return hopped
 
   bro = create_bro_for_run(args['bro'], fast=not args['slow'])
+  # the initial message gets the same slash expansion as `ask`/`do-task` input,
+  # so `call pm '/ask …'` invokes the skill deterministically. later REPL turns
+  # are passed through verbatim.
+  try:
+    initial = expand_skill_invocation(bro, args['what'])
+  except KeyError as e:
+    print(str(e.args[0]) if len(e.args) > 0 else str(e), file=sys.stderr)
+    return 1
   use_tui = not args['text'] and _tty_supported()
 
   try:
     if use_tui:
       from do.call_tui import ChatApp
 
-      ChatApp(bro, args['what']).run()
+      ChatApp(bro, initial).run()
     else:
-      asyncio.run(call_text(bro, args['what']))
+      asyncio.run(call_text(bro, initial))
   except BroRaised as e:
     print(f'raised: {e.reason}', file=sys.stderr)
     return 1

@@ -3,9 +3,9 @@
 The `Runtime` (mechanism) reports raw, symmetric lifecycle up to this `Dispatcher`
 (logic), which owns everything protocol: the peer graph (`parent`/`children`), the
 correlation state (`origin[peer]`, `pending[in_reply_to]`), the `finalized` set, the
-handler registry, the four routing rules, and the synthesis of `failed`. It runs only
-inside `Runtime` callbacks, all on the one event loop, so it is a plain synchronous
-object with no lock.
+handler registry, the delivery observers, the four routing rules, and the synthesis of
+`failed`. It runs only inside `Runtime` callbacks, all on the one event loop, so it is
+a plain synchronous object with no lock.
 
 Two invariants carry the design:
 
@@ -15,9 +15,10 @@ Two invariants carry the design:
   whichever of `completed` / exit / timeout is processed first wins and the rest are
   dropped — closing the completed-vs-exit and timeout-vs-completed double-terminal races.
 - **`failed` is the only synthesized event.** Children emit `started` / `completed`; the
-  Dispatcher never fabricates those. `failed` is reserved for process-level death a child
-  never got to report — an `on_exit` without a preceding `completed` (`reason='exit'`) or
-  an `on_timeout` (`reason='timeout'`, after the Runtime already killed the peer).
+  Dispatcher never fabricates those. `failed` is reserved for a child that could not report
+  its own end — an `on_exit` without a preceding `completed` (`reason='exit'`), an
+  `on_timeout` (`reason='timeout'`, after the Runtime already killed the peer), or a
+  `spawn` whose launch raised (`reason='launch'`, before any peer existed).
 
 The root is a uniform peer: `run(root)` spawns it like any other and awaits its `on_exit`.
 Its only residual specialness is that its exit ends the session (it has no origin, so no
@@ -40,6 +41,10 @@ DEFAULT_TIMEOUT = 600.0
 
 # a handler receives the Dispatcher as its `context` and drives the routing primitives.
 RequestHandler = Callable[['Dispatcher', Peer, Message], None]
+
+# a delivery observer taps correlated deliveries as (source, target, delivered message);
+# source is None when no child ever existed (a launch failure).
+DeliveryObserver = Callable[[Optional[Peer], Peer, Message], None]
 
 # messages a spawned child emits over its own lifecycle; rule 2 routes these to its parent.
 _LIFECYCLE_TAGS = frozenset({Tag.STARTED, Tag.COMPLETED})
@@ -66,6 +71,7 @@ class Dispatcher:
     self.pending: dict[str, Peer] = {}  # request id -> the peer awaiting its reply
     self.finalized: set[Peer] = set()
     self._handlers: dict[str, RequestHandler] = {}
+    self._delivery_observers: list[DeliveryObserver] = []
     self._active: Optional[Message] = None  # the request currently being handled (for reply/spawn)
     self._root: Optional[Peer] = None
     self._root_exit: Optional[asyncio.Future[int]] = None
@@ -84,6 +90,18 @@ class Dispatcher:
   def on(self, message_type: str, handler: RequestHandler) -> None:
     self._handlers[message_type] = handler
 
+  def add_delivery_observer(self, observer: DeliveryObserver) -> None:
+    """register a tap on the correlated deliveries that bypass handlers — rule-1/2 routing
+    and synthesized `failed` — so a consumer sees child lifecycle (trail ids, outcomes)
+    without sitting in the message path. Handler-driven `reply` and rule-4 refusals are
+    not deliveries it reports."""
+    self._delivery_observers.append(observer)
+
+  @property
+  def root(self) -> Optional[Peer]:
+    """the root peer's channel once `run()` has spawned it — the key for root-aware policy checks."""
+    return self._root
+
   # --- routing primitives (used by the rules; a handler drives the same set) ----
 
   def deliver(self, peer: Peer, message: Message) -> None:
@@ -101,7 +119,8 @@ class Dispatcher:
   def spawn(self, launch: LaunchSpec, parent: Peer, *, timeout: Optional[float] = None) -> None:
     """spawn `launch` as a child of `parent`, correlated to the in-flight request. Schedules
     the async `Runtime.spawn` and registers topology when it resolves — the child cannot send
-    a frame until it has been launched and has connected, both strictly after registration."""
+    a frame until it has been launched and has connected, both strictly after registration.
+    A launch failure synthesizes `failed{reason: 'launch'}` back to `parent` instead."""
     in_reply_to = self._request_id()
     effective_timeout = timeout if timeout is not None else self._default_timeout
     task = asyncio.ensure_future(self.runtime.spawn(launch, timeout=effective_timeout))
@@ -112,6 +131,12 @@ class Dispatcher:
       error = finished.exception()
       if error is not None:
         log.warning(f'broker dispatcher: spawn failed: {error!r}')
+        failed = Message(
+          type=Tag.FAILED,
+          payload={'reason': 'launch', 'error': str(error)},
+          in_reply_to=in_reply_to,
+        )
+        self._deliver_observed(None, parent, failed)
         return
       self._register_child(finished.result(), parent, in_reply_to)
 
@@ -159,12 +184,12 @@ class Dispatcher:
     onward (rules 1-2), False when it was invoked or refused (rules 3-4)."""
     awaiter = self.pending.get(message.in_reply_to) if message.in_reply_to is not None else None
     if awaiter is not None:  # rule 1: a reply to an awaited request -> its requester, as-is
-      self.deliver(awaiter, message)
+      self._deliver_observed(peer, awaiter, message)
       return True
     origin = self.origin.get(peer)
     if origin is not None and message.type in _LIFECYCLE_TAGS:  # rule 2: child lifecycle -> parent
       parent, in_reply_to = origin
-      self.deliver(parent, replace(message, in_reply_to=in_reply_to))
+      self._deliver_observed(peer, parent, replace(message, in_reply_to=in_reply_to))
       return True
     if message.in_reply_to is None and message.type in self._handlers:  # rule 3: fresh request
       self.invoke(peer, message)
@@ -206,6 +231,13 @@ class Dispatcher:
     self.origin[peer] = (parent, in_reply_to)
     self.pending[in_reply_to] = parent
 
+  def _deliver_observed(self, source: Optional[Peer], target: Peer, message: Message) -> None:
+    """deliver + fire the delivery tap — the seam for the correlated deliveries handlers
+    never see (rules 1-2 and synthesized `failed`)."""
+    self.deliver(target, message)
+    for observer in self._delivery_observers:
+      observer(source, target, message)
+
   def _fail(self, peer: Peer, payload: dict) -> None:
     """synthesize a `failed` to the peer's origin parent; a peer with no origin (the root) has
     nobody to notify, so its death is silent to the graph."""
@@ -213,7 +245,9 @@ class Dispatcher:
     if origin is None:
       return
     parent, in_reply_to = origin
-    self.deliver(parent, Message(type=Tag.FAILED, payload=payload, in_reply_to=in_reply_to))
+    self._deliver_observed(
+      peer, parent, Message(type=Tag.FAILED, payload=payload, in_reply_to=in_reply_to)
+    )
 
   def _cleanup(self, peer: Peer) -> None:
     """drop the peer from the graph, correlation state, and the Runtime's bookkeeping."""
@@ -242,6 +276,9 @@ class Broker:
 
   def on(self, message_type: str, handler: RequestHandler) -> None:
     self._dispatcher.on(message_type, handler)
+
+  def add_delivery_observer(self, observer: DeliveryObserver) -> None:
+    self._dispatcher.add_delivery_observer(observer)
 
   def run(self, root: LaunchSpec) -> int:
     return asyncio.run(self._dispatcher.run(root))

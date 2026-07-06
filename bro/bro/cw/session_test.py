@@ -15,8 +15,10 @@ def _spec(
   drop: bool = False,
   auto: bool = False,
   fast: bool = False,
-  grant: Optional[list[str]] = None,
-  revoke: Optional[list[str]] = None,
+  grant_cred: Optional[list[str]] = None,
+  revoke_cred: Optional[list[str]] = None,
+  grant_summon: Optional[list[str]] = None,
+  revoke_summon: Optional[list[str]] = None,
   effort: Optional[str] = None,
   resume: bool = False,
   into: Optional[str] = None,
@@ -31,8 +33,10 @@ def _spec(
     drop=drop,
     auto=auto,
     fast=fast,
-    grant=grant if grant is not None else [],
-    revoke=revoke if revoke is not None else [],
+    grant_cred=grant_cred if grant_cred is not None else [],
+    revoke_cred=revoke_cred if revoke_cred is not None else [],
+    grant_summon=grant_summon if grant_summon is not None else [],
+    revoke_summon=revoke_summon if revoke_summon is not None else [],
     effort=effort,
     resume=resume,
     into=into,
@@ -41,41 +45,6 @@ def _spec(
     prompt=prompt,
     claude_args=claude_args if claude_args is not None else [],
   )
-
-
-class TestResolveBaseRef:
-  def _patch(self, monkeypatch, *, local_rc, fetch_rc=1, fetched_sha='deadbeef'):
-    from types import SimpleNamespace
-
-    monkeypatch.setattr(cw.session, '_project_root', lambda: pathlib.Path('/repo'))
-    calls: list = []
-
-    def fake_run(args, **kwargs):
-      calls.append(args)
-      if args[:3] == ['git', 'rev-parse', '--verify'] and args[3] == 'FETCH_HEAD^{commit}':
-        return SimpleNamespace(returncode=0, stdout=f'{fetched_sha}\n')
-      if args[:3] == ['git', 'rev-parse', '--verify']:
-        return SimpleNamespace(returncode=local_rc, stdout='localsha\n' if local_rc == 0 else '')
-      if args[:2] == ['git', 'fetch']:
-        return SimpleNamespace(returncode=fetch_rc, stdout='')
-      raise AssertionError(f'unexpected command {args}')
-
-    monkeypatch.setattr(cw.session.subprocess, 'run', fake_run)
-    return calls
-
-  def test_resolves_host_local_ref_without_fetching(self, monkeypatch):
-    calls = self._patch(monkeypatch, local_rc=0)
-    assert cw.session._resolve_base_ref('master') == 'localsha'
-    assert not any(c[:2] == ['git', 'fetch'] for c in calls)
-
-  def test_fetches_origin_when_ref_not_host_local(self, monkeypatch):
-    calls = self._patch(monkeypatch, local_rc=1, fetch_rc=0, fetched_sha='abc123')
-    assert cw.session._resolve_base_ref('worktree-feature') == 'abc123'
-    assert ['git', 'fetch', 'origin', 'worktree-feature'] in calls
-
-  def test_returns_none_when_neither_resolves(self, monkeypatch):
-    self._patch(monkeypatch, local_rc=1, fetch_rc=1)
-    assert cw.session._resolve_base_ref('nope') is None
 
 
 class _ContainerHarness:
@@ -95,12 +64,15 @@ class _ContainerHarness:
         return_value=ScopedSecrets(set(self.secrets), set(), True),
       ),
       patch('cw.session._replace_container_resume_hint'),
+      # keep the bro-registry import out; threading is asserted per-test
+      patch('cw.session.summon_allow_list', return_value=set()),
     ]
     entered = [p.__enter__() for p in self._patches]
     self.env = entered[0]
     self.env.pop('CW_BRO', None)
     self.env.pop('CW_IN_CONTAINER', None)
     self.run_in_container = entered[2]
+    self.summon_allow_list = entered[5]
     return self
 
   def __exit__(self, *exception):
@@ -112,7 +84,9 @@ class _ContainerHarness:
 class TestGrantRevoke:
   def test_start_session_applies_grant_and_revoke(self):
     with _ContainerHarness(secrets={'notion', 'trails', 'github'}) as h:
-      rc = cw.session.start_session(_spec(drop=True, grant=['gmail_creds'], revoke=['notion']))
+      rc = cw.session.start_session(
+        _spec(drop=True, grant_cred=['gmail_creds'], revoke_cred=['notion'])
+      )
     assert rc == 0
     _, kwargs = h.run_in_container.call_args
     assert 'gmail_creds' in kwargs['secrets']
@@ -120,7 +94,7 @@ class TestGrantRevoke:
 
   def test_start_session_grant_already_present_returns_1(self):
     with _ContainerHarness() as h:
-      rc = cw.session.start_session(_spec(drop=True, grant=['github']))
+      rc = cw.session.start_session(_spec(drop=True, grant_cred=['github']))
     assert rc == 1
     assert h.run_in_container.call_count == 0
 
@@ -130,6 +104,34 @@ class TestGrantRevoke:
     assert rc == 0
     command = h.run_in_container.call_args[0][1]
     assert command[command.index('--effort') + 1] == 'xhigh'
+
+
+class TestSummonAllowList:
+  def test_container_session_threads_the_allow_list(self):
+    with _ContainerHarness() as h:
+      h.summon_allow_list.return_value = {'devoops'}
+      rc = cw.session.start_session(_spec(drop=True, grant_summon=['devoops']))
+    assert rc == 0
+    # identity: no --bro and no ambient CW_BRO → the ppp-dev default
+    assert h.summon_allow_list.call_args == (
+      ('ppp-dev',),
+      {'grant': ['devoops'], 'revoke': []},
+    )
+    _, kwargs = h.run_in_container.call_args
+    assert kwargs['may_summon'] == {'devoops'}
+
+  def test_container_session_keys_identity_on_the_bro(self):
+    with _ContainerHarness() as h:
+      rc = cw.session.start_session(_spec(drop=True, bro='pm'))
+    assert rc == 0
+    assert h.summon_allow_list.call_args[0] == ('pm',)
+
+  def test_bad_summon_flag_fails_the_launch(self):
+    with _ContainerHarness() as h:
+      h.summon_allow_list.side_effect = ValueError('unknown summon target(s): devoop')
+      rc = cw.session.start_session(_spec(drop=True, grant_summon=['devoop']))
+    assert rc == 1
+    assert h.run_in_container.call_count == 0
 
 
 class TestContainerCommand:
@@ -156,12 +158,30 @@ class TestContainerCommand:
     assert command == ['cw', 'ss', '--in-place', '--bro', 'pm', 'w']
     assert forwarded_bro == 'pm'
 
-  def test_no_extra_env_without_into(self):
+  def test_default_base_is_left_to_the_entrypoint_head_fallback(self):
+    # no CW_BASE_REF by default: the clone bases on HEAD — the host checkout as
+    # cloned — with no network touched on the way
     with _ContainerHarness() as h:
       rc = cw.session.start_session(_spec(mcp=None, drop=True))
     assert rc == 0
     _, kwargs = h.run_in_container.call_args
     assert kwargs['extra_env'] is None
+
+  def test_into_threads_the_resolved_base_into_the_container_env(self):
+    with _ContainerHarness() as h:
+      with patch('cw.session.resolve_ref', return_value='intosha') as resolve:
+        rc = cw.session.start_session(_spec(mcp=None, drop=True, into='feature'))
+    assert rc == 0
+    assert resolve.call_args[0][1] == 'feature'
+    _, kwargs = h.run_in_container.call_args
+    assert kwargs['extra_env'] == {'CW_BASE_REF': 'intosha'}
+
+  def test_unresolvable_into_fails_launch(self):
+    with _ContainerHarness() as h:
+      with patch('cw.session.resolve_ref', return_value=None):
+        rc = cw.session.start_session(_spec(mcp=None, drop=True, into='nope'))
+    assert rc == 1
+    assert h.run_in_container.call_count == 0
 
   def test_resume_guard_fails_fast_without_a_session(self, tmp_path):
     with _ContainerHarness() as h:
@@ -191,20 +211,20 @@ class TestResumeCommand:
       drop=True,
       effort='xhigh',
       mcp='http',
-      grant=['gmail_creds'],
-      revoke=['notion'],
+      grant_cred=['gmail_creds'],
+      revoke_cred=['notion'],
       into='feature',
       claude_args=['--foo'],
     ).to_command_argv()
     assert parts == [
       'cw', 'ss', '-c', '--auto', '--fast', '--drop',
-      '--effort', 'xhigh', '--mcp=http', '--grant', 'gmail_creds',
-      '--revoke', 'notion', '--into', 'feature', 'w', '--foo',
+      '--effort', 'xhigh', '--mcp=http', '--grant-cred', 'gmail_creds',
+      '--revoke-cred', 'notion', '--into', 'feature', 'w', '--foo',
     ]  # fmt: skip
 
   def test_resume_variant_carries_forwarded_flags_and_clears_create_only(self):
-    # resume_variant keeps --auto/--effort/--mcp/--grant and adds --resume, while
-    # clearing the create-only --drop/--into/prompt/claude args
+    # resume_variant keeps --auto/--effort/--mcp/--grant-cred and adds --resume,
+    # while clearing the create-only --drop/--into/prompt/claude args
     parts = (
       _spec(
         container=True,
@@ -212,7 +232,7 @@ class TestResumeCommand:
         drop=True,
         effort='xhigh',
         mcp='http',
-        grant=['gmail_creds'],
+        grant_cred=['gmail_creds'],
         into='feature',
         prompt='do it',
         claude_args=['--foo'],
@@ -222,7 +242,7 @@ class TestResumeCommand:
     )
     assert parts == [
       'cw', 'ss', '-c', '--auto', '--resume',
-      '--effort', 'xhigh', '--mcp=http', '--grant', 'gmail_creds', 'w',
+      '--effort', 'xhigh', '--mcp=http', '--grant-cred', 'gmail_creds', 'w',
     ]  # fmt: skip
 
   def test_start_session_records_resume_command(self):
@@ -233,12 +253,18 @@ class TestResumeCommand:
       env.pop('CW_IN_CONTAINER', None)
       cw.session.start_session(
         _spec(
-          container=True, drop=True, auto=True, grant=['gmail_creds'], effort='xhigh', mcp='http'
+          container=True,
+          drop=True,
+          auto=True,
+          grant_cred=['gmail_creds'],
+          effort='xhigh',
+          mcp='http',
         )
       )
       resume_command = env['CW_RESUME_COMMAND']
     assert (
-      resume_command == 'cw ss -c --auto --resume --effort xhigh --mcp=http --grant gmail_creds w'
+      resume_command
+      == 'cw ss -c --auto --resume --effort xhigh --mcp=http --grant-cred gmail_creds w'
     )
 
 
@@ -251,8 +277,8 @@ class TestInPlaceArgv:
       drop=True,
       effort='xhigh',
       mcp='local',
-      grant=['gmail_creds'],
-      revoke=['notion'],
+      grant_cred=['gmail_creds'],
+      revoke_cred=['notion'],
       into='feature',
       prompt='do it',
       claude_args=['--foo'],
@@ -292,6 +318,7 @@ class TestConcurrentSessionGuard:
       '_container_secrets',
       lambda *_a, **_k: ScopedSecrets(set(), set(), True),
     )
+    monkeypatch.setattr(cw.session, 'summon_allow_list', lambda *_a, **_k: set())
     called: list = []
     monkeypatch.setattr(cw.session, 'run_in_container', lambda *_a, **_k: called.append(True) or 0)
     monkeypatch.setattr(cw.session, '_replace_container_resume_hint', lambda name: None)
@@ -331,6 +358,7 @@ class TestConcurrentSessionGuard:
         return False
 
     monkeypatch.setattr(cw.session, 'HostWorktree', _FakeHost)
+    monkeypatch.setattr(cw.session, 'summon_allow_list', lambda *_a, **_k: set())
     called: list = []
     monkeypatch.setattr(
       cw.session, '_ensure_host_worktree', lambda *_a: called.append(True) or False
@@ -377,26 +405,55 @@ class TestHostSession:
     # keep the launch tests off the real credential store; the auth-transform
     # test overrides this with its own fake
     monkeypatch.setattr(cw.session, '_apply_claude_auth', lambda env, **_k: None)
+    monkeypatch.setattr(cw.session, 'summon_allow_list', lambda *_a, **_k: set())
     return cw_bin, worktree
 
   def test_broker_supervises_the_worktrees_own_in_place_runner(self, monkeypatch, tmp_path):
     cw_bin, worktree = self._prepare_launch(monkeypatch, tmp_path)
     monkeypatch.setattr(cw.session, '_broker_enabled', lambda: True)
+    monkeypatch.setattr(cw.session, 'summon_allow_list', lambda *_a, **_k: {'devoops'})
     roots: list = []
 
-    def fake_root(command, worktree_arg, project, env):
-      roots.append({'command': command, 'worktree': worktree_arg, 'project': project, 'env': env})
+    def fake_root(name, command, worktree_arg, project, env, may_summon):
+      roots.append(
+        {
+          'name': name,
+          'command': command,
+          'worktree': worktree_arg,
+          'project': project,
+          'env': env,
+          'may_summon': may_summon,
+        }
+      )
       return 5
 
     monkeypatch.setattr(cw.session, '_run_host_root_via_broker', fake_root)
     spec = _spec(container=False, auto=True, effort='xhigh', prompt='go', claude_args=['--foo'])
     assert cw.session._host_session(spec, None) == 5
+    assert roots[0]['name'] == 'w'
     assert roots[0]['command'] == [
       str(cw_bin), 'ss', '--in-place', '--auto', '--effort', 'xhigh', '--prompt=go', 'w', '--foo',
     ]  # fmt: skip
     assert roots[0]['worktree'] == worktree
     assert roots[0]['project'] == tmp_path
     assert roots[0]['env']['VIRTUAL_ENV'] == str(worktree / '.venv')
+    # the host root gets the session's summon allow-list like container mode
+    assert roots[0]['may_summon'] == {'devoops'}
+
+  def test_bad_summon_flag_fails_before_the_worktree_is_ensured(self, monkeypatch, tmp_path):
+    self._prepare_launch(monkeypatch, tmp_path)
+
+    def bad_allow_list(*_a, **_k):
+      raise ValueError('unknown summon target(s): devoop')
+
+    monkeypatch.setattr(cw.session, 'summon_allow_list', bad_allow_list)
+
+    def boom(*_a, **_k):
+      raise AssertionError('must not ensure a worktree when the summon flags are bad')
+
+    monkeypatch.setattr(cw.session, '_ensure_host_worktree', boom)
+    spec = _spec(container=False, grant_summon=['devoop'])
+    assert cw.session._host_session(spec, None) == 1
 
   def test_direct_spawn_when_broker_disabled(self, monkeypatch, tmp_path):
     cw_bin, worktree = self._prepare_launch(monkeypatch, tmp_path)
@@ -448,6 +505,7 @@ class TestHostSession:
     monkeypatch.setattr(cw.session, 'HostWorktree', fake_host)
     monkeypatch.setattr(cw.session, '_ensure_host_worktree', lambda *_a: True)
     monkeypatch.setattr(cw.session, '_provision_host_worktree', lambda *_a: True)
+    monkeypatch.setattr(cw.session, 'summon_allow_list', lambda *_a, **_k: set())
 
     def boom(*_a, **_k):
       raise AssertionError('must not spawn without the inner cw')
@@ -502,6 +560,7 @@ class TestHostBrokerPingRoundTrip:
       monkeypatch.setattr(cw.session, '_ensure_host_worktree', lambda *_a: True)
       monkeypatch.setattr(cw.session, '_provision_host_worktree', lambda *_a: True)
       monkeypatch.setattr(cw.session, '_finish_host_worktree', lambda *_a, **_k: None)
+      monkeypatch.setattr(cw.session, 'summon_allow_list', lambda *_a, **_k: set())
       monkeypatch.delenv('BROKER_DISABLED', raising=False)
       assert cw.session._host_session(_spec(container=False), None) == 0
       # the CLI printed the correlated reply's wire JSON

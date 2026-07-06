@@ -18,11 +18,12 @@ from typing import TYPE_CHECKING, Optional
 
 from base import log
 from cw.bro import _populate_bro_skills
+from cw.broxy import _SessionBroxy, _start_session_broxy
 from cw.claude_argv import build_claude_launch
 from cw.constants import _BRO_GIT_EMAIL, _BRO_GIT_NAME
 from cw.git import git_out
 from cw.mcp import _SessionMCPServer, _start_session_mcp_server
-from cw.paths import _claude_projects_dir, _latest_jsonl
+from cw.paths import _claude_projects_dir, _in_container, _latest_jsonl
 from cw.secrets import _apply_claude_auth
 from cw.session_context import (
   CW_SESSION_CONTEXT_ENV,
@@ -109,23 +110,34 @@ def run_in_place(spec: 'SessionSpec') -> int:
     # inherits it from the outer environment instead (dive-in sets ppp-dev)
     os.environ['CW_BRO'] = spec.bro
 
+  # host mode owns the session broxy (in a container the entrypoint started one
+  # and BROKER_CHANNEL already points at it), rewriting BROKER_CHANNEL before
+  # the MCP server and claude inherit the environment. best-effort: on a failed
+  # start the session keeps the direct channel.
+  broxy: Optional[_SessionBroxy] = None
+  upstream = os.environ.get('BROKER_CHANNEL')
+  if upstream is not None and not _in_container():
+    broxy = _start_session_broxy(upstream, os.environ)
+    if broxy is not None:
+      os.environ['BROKER_CHANNEL'] = broxy.address
+
   # session-local MCP serving, one mechanism for both flavors: OS-assigned port
   # published via a port file, per-session bearer token. the tools serve this
   # workspace's code (the runner's cwd and venv).
   server: Optional[_SessionMCPServer] = None
-  mcp_spec: Optional[str] = None
-  if spec.bro is not None:
-    mcp_spec = f'bro:{spec.bro}'
-  elif spec.mcp == 'local':
-    mcp_spec = 'flow'
-  if mcp_spec is not None:
-    try:
-      server = _start_session_mcp_server(mcp_spec, workspace, os.environ)
-    except RuntimeError as e:
-      log.error('%s', e)
-      return 1
-
   try:
+    mcp_spec: Optional[str] = None
+    if spec.bro is not None:
+      mcp_spec = f'bro:{spec.bro}'
+    elif spec.mcp == 'local':
+      mcp_spec = 'flow'
+    if mcp_spec is not None:
+      try:
+        server = _start_session_mcp_server(mcp_spec, workspace, os.environ)
+      except RuntimeError as e:
+        log.error('%s', e)
+        return 1
+
     skills_dir: Optional[Path] = None
     bro_env = os.environ.get('CW_BRO')
     if spec.bro is None and bro_env is not None:
@@ -160,6 +172,8 @@ def run_in_place(spec: 'SessionSpec') -> int:
   finally:
     if server is not None:
       server.stop()
+    if broxy is not None:
+      broxy.stop()
 
   if spec.bro is not None:
     _sync_bare_session_log(spec.name, workspace)

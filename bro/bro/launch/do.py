@@ -10,12 +10,13 @@ __cli_name__ = 'ask'
 _SKILL_INVOCATION = re.compile(r'^/([a-zA-Z][\w-]*)(?:\s+(.*))?\Z', re.DOTALL)
 
 
-def _expand_skill_invocation(bro: BaseBro, what: str) -> str:
+def expand_skill_invocation(bro: BaseBro, what: str) -> str:
   # `/<skill-name> <args>` in input → swap in the skill's markdown body and
   # surface the rest as `ARGUMENTS:`. Same shape Claude Code uses for slash
   # commands, so a body authored for either surface works on both. Unknown
   # `/<name>` raises KeyError (with the available-skill list) from
-  # bro.get_skill_body — the CLI catches it.
+  # bro.get_skill_body — the CLIs (`ask`/`do-task` here, `call` for its initial
+  # message) catch it.
   match = _SKILL_INVOCATION.match(what)
   if match is None:
     return what
@@ -27,7 +28,7 @@ def _expand_skill_invocation(bro: BaseBro, what: str) -> str:
 
 
 async def do(bro: BaseBro, what: str, observer: Optional[Observer] = None) -> str:
-  return await bro.run(_expand_skill_invocation(bro, what), observer=observer)
+  return await bro.run(expand_skill_invocation(bro, what), observer=observer)
 
 
 def main(argv: list[str]) -> Optional[int]:

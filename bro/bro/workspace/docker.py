@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from base import log
-from cw.paths import _project_root
+from cw.paths import _project_root, _session_claude_dir
 
 CONTAINER_DIR = Path(__file__).resolve().parent.parent / 'setup' / 'container'
 
@@ -31,18 +31,14 @@ _DOCKER_FORWARD_ENV = (
 
 # the global ~/.claude/settings.json for container sessions: UX prefs only,
 # built from scratch so host settings (permissions, hooks, model/effort) don't
-# leak in. the repo's /workspace/.claude/settings.json layers on top.
+# leak in. the repo's /workspace/.claude/settings.json layers on top — that is
+# where the statusLine command comes from, in containers and on host alike.
 _CONTAINER_SETTINGS_JSON: dict = {
   'spinnerVerbs': {'mode': 'replace', 'verbs': ['Thinking']},
   'spinnerTipsEnabled': False,
   'prefersReducedMotion': True,
   'feedbackSurveyRate': 0,
   'tui': 'fullscreen',
-  # silent when healthy (Claude's default bar); a red warning pinned on-screen
-  # when session-log sync is failing — the one channel Claude doesn't hide
-  # behind its alternate-screen buffer (the entrypoint can't print a banner that
-  # survives the session)
-  'statusLine': {'type': 'command', 'command': 'session-log-statusline'},
   # enable the pyright-lsp Python language server. the plugin itself is installed
   # at image-build time and seeded into ~/.claude/plugins by the entrypoint;
   # enabling alone is not enough (claude would prompt to install it on .py files).
@@ -157,6 +153,7 @@ def _docker_create_argv(
   docker_sock: bool = True,
   extra_env: Optional[Mapping[str, str]] = None,
   forward_bro: bool = True,
+  forward_env: bool = True,
   tty: bool = True,
   extra_mounts: Optional[list[str]] = None,
 ) -> list[str]:
@@ -175,6 +172,12 @@ def _docker_create_argv(
   `extra_env` adds explicit `-e KEY=VALUE` entries (value set here) — distinct from the
   `_DOCKER_FORWARD_ENV` loop, which forwards a host var by name.
 
+  `forward_env=False` switches that forward loop off entirely: a broker-spawned
+  child's environment is the explicit snapshot its launcher assembled (`extra_env`)
+  — forwarding the launching process's task/session identity, git author identity,
+  and terminal facts would bake the launcher's values into the child
+  (mis-attributed commits, wrong banner facts).
+
   `forward_bro=False` drops `CW_BRO` from that forward set: the container uses it
   to theme `cw banner` and, in the in-place session runner, to pick the bro whose
   skills to surface. an LLM-process container (`ask`/`do-task`/`call`) runs its
@@ -186,7 +189,7 @@ def _docker_create_argv(
   from cw.containers import _seed_container_claude_json
 
   home = Path.home()
-  claude_dir = home / '.claude' / 'cw-sessions' / name
+  claude_dir = _session_claude_dir(name)
   claude_dir.mkdir(parents=True, exist_ok=True)
   # seed-once container-private ~/.claude.json (see module docstring)
   claude_json = _seed_container_claude_json(claude_dir, home / '.claude.json')
@@ -237,11 +240,12 @@ def _docker_create_argv(
   # scoped boundary intact against prompt-injection exfiltration.
   if docker_sock:
     argv += ['-v', '/var/run/docker.sock:/var/run/docker.sock']
-  for var in _DOCKER_FORWARD_ENV:
-    if var == 'CW_BRO' and not forward_bro:
-      continue
-    if os.environ.get(var) is not None:
-      argv += ['-e', var]
+  if forward_env:
+    for var in _DOCKER_FORWARD_ENV:
+      if var == 'CW_BRO' and not forward_bro:
+        continue
+      if os.environ.get(var) is not None:
+        argv += ['-e', var]
   if extra_mounts is not None:
     for mount in extra_mounts:
       argv += ['-v', mount]

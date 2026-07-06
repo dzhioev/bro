@@ -173,6 +173,25 @@ async def test_timeout_synthesizes_failed_and_the_later_exit_dedupes():
 
 
 @pytest.mark.asyncio
+async def test_spawn_failure_synthesizes_failed_launch():
+  # a launch that raises feeds back as failed{reason: 'launch'} correlated to the origin
+  # request instead of leaving the requester to hang to its timeout.
+  dispatcher, runtime = make_dispatcher()
+  runtime.spawn_error = RuntimeError('image build exploded')
+  dispatcher.on(Tag.SPAWN, spawn_test_handler(_LAUNCH))
+  dispatcher.on_message('parent', Message(type=Tag.SPAWN, id='R', payload={}))
+  await _settle()
+  assert len(runtime.sent) == 1
+  target, failed = runtime.sent[0]
+  assert target == 'parent'
+  assert failed.type == Tag.FAILED
+  assert failed.in_reply_to == 'R'
+  assert failed.payload == {'reason': 'launch', 'error': 'image build exploded'}
+  assert dispatcher.origin == {}  # no topology was registered for the never-launched child
+  assert dispatcher.pending == {}
+
+
+@pytest.mark.asyncio
 async def test_reply_to_an_awaited_request_is_delivered_as_is():
   # rule 1: a message whose in_reply_to a peer awaits goes to that requester, unchanged.
   dispatcher, runtime = make_dispatcher()
@@ -193,13 +212,74 @@ async def test_unroutable_messages_are_refused():
   assert runtime.sent == []
 
 
+def make_tap(dispatcher: Dispatcher) -> list[tuple[Optional[Peer], Peer, Message]]:
+  observed: list[tuple[Optional[Peer], Peer, Message]] = []
+  dispatcher.add_delivery_observer(
+    lambda source, target, message: observed.append((source, target, message))
+  )
+  return observed
+
+
+@pytest.mark.asyncio
+async def test_delivery_tap_observes_rule_1_and_2_deliveries():
+  dispatcher, runtime = make_dispatcher()
+  observed = make_tap(dispatcher)
+  child = await spawn_child(dispatcher, runtime)
+  dispatcher.on_message(child, Message(type=Tag.STARTED, payload={'trail_id': 't'}))  # rule 2
+  dispatcher.on_message(
+    child, Message(type=Tag.REPLY, in_reply_to='R', payload={'ok': 1})
+  )  # rule 1
+  assert [(source, target, message.type) for source, target, message in observed] == [
+    (child, 'parent', Tag.STARTED),
+    (child, 'parent', Tag.REPLY),
+  ]
+  assert observed[0][2].in_reply_to == 'R'  # the tap sees the delivered (re-tagged) message
+
+
+@pytest.mark.asyncio
+async def test_delivery_tap_observes_synthesized_failed():
+  dispatcher, runtime = make_dispatcher()
+  observed = make_tap(dispatcher)
+  child = await spawn_child(dispatcher, runtime)
+  dispatcher.on_exit(child, 3, 'tail')
+  [(source, target, failed)] = observed
+  assert (source, target, failed.type) == (child, 'parent', Tag.FAILED)
+  assert failed.payload['reason'] == 'exit'
+
+
+@pytest.mark.asyncio
+async def test_delivery_tap_observes_launch_failure_with_no_source_peer():
+  dispatcher, runtime = make_dispatcher()
+  observed = make_tap(dispatcher)
+  runtime.spawn_error = RuntimeError('boom')
+  dispatcher.on(Tag.SPAWN, spawn_test_handler(_LAUNCH))
+  dispatcher.on_message('parent', Message(type=Tag.SPAWN, id='R', payload={}))
+  await _settle()
+  [(source, target, failed)] = observed
+  assert source is None  # the child never existed
+  assert (target, failed.type, failed.payload['reason']) == ('parent', Tag.FAILED, 'launch')
+
+
+@pytest.mark.asyncio
+async def test_delivery_tap_ignores_handler_replies_and_refusals():
+  dispatcher, runtime = make_dispatcher()
+  observed = make_tap(dispatcher)
+  dispatcher.on(Tag.PING, ping_handler)
+  dispatcher.on_message('caller', Message(type=Tag.PING, id='Q', payload={}))  # rule 3 + reply()
+  dispatcher.on_message('stranger', Message(type='mystery', payload={}))  # rule 4
+  assert observed == []
+  assert len(runtime.sent) == 1  # the ping reply itself was still delivered
+
+
 @pytest.mark.asyncio
 async def test_run_spawns_root_uniformly_and_returns_its_exit_code():
   dispatcher, runtime = make_dispatcher()
   runtime.next_peers.append('root')
+  assert dispatcher.root is None  # unset until run() spawns it
   run_task = asyncio.ensure_future(dispatcher.run(_LAUNCH))
   await _settle()
   assert runtime.spawns == [(_LAUNCH, None)]  # the root carries no request-lifecycle timeout
+  assert dispatcher.root == 'root'
   dispatcher.on_exit('root', 7, '')
   assert await asyncio.wait_for(run_task, 5) == 7
   assert all(m.type != Tag.FAILED for _, m in runtime.sent)  # root has no origin -> no synthesis

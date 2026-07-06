@@ -4,7 +4,7 @@ from unittest.mock import patch
 import pytest
 
 from bro.bro import BaseBro
-from do.do import _expand_skill_invocation, do, main
+from do.do import do, expand_skill_invocation, main
 from llm.llm import LLM
 from llm.mcp import MCPServer
 from llm.observer import NullObserver, Observer
@@ -71,17 +71,17 @@ async def test_slash_skill_without_arguments_omits_arguments_line():
 
 def test_expand_passes_non_slash_input_through():
   bro = RecordBro(skills={'fix': 'FIX BODY'})
-  assert _expand_skill_invocation(bro, 'plain text') == 'plain text'
-  assert _expand_skill_invocation(bro, '  / leading space is not a skill') == (
+  assert expand_skill_invocation(bro, 'plain text') == 'plain text'
+  assert expand_skill_invocation(bro, '  / leading space is not a skill') == (
     '  / leading space is not a skill'
   )
-  assert _expand_skill_invocation(bro, '// double slash') == '// double slash'
+  assert expand_skill_invocation(bro, '// double slash') == '// double slash'
 
 
 def test_expand_unknown_skill_raises_key_error():
   bro = RecordBro(skills={'fix': 'FIX BODY'})
   with pytest.raises(KeyError) as exception:
-    _expand_skill_invocation(bro, '/nope something')
+    expand_skill_invocation(bro, '/nope something')
   msg = str(exception.value)
   assert 'nope' in msg
   assert 'fix' in msg
@@ -89,7 +89,7 @@ def test_expand_unknown_skill_raises_key_error():
 
 def test_expand_multiline_arguments_preserved():
   bro = RecordBro(skills={'fix': 'FIX BODY'})
-  expanded = _expand_skill_invocation(bro, '/fix line one\nline two\nline three')
+  expanded = expand_skill_invocation(bro, '/fix line one\nline two\nline three')
   assert expanded == 'FIX BODY\n\nARGUMENTS: line one\nline two\nline three'
 
 

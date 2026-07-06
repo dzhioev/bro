@@ -1,3 +1,4 @@
+import asyncio
 import os
 import sys
 from abc import ABC
@@ -230,9 +231,84 @@ _SKILL_DESCRIPTION = (
 )
 
 
+_SUMMON_DESCRIPTION = (
+  'summon another bro: it runs your prompt in its own isolated container with its '
+  'own credentials and this call blocks — typically for minutes — until its answer '
+  'comes back. pass `target` (a bro name; you have your own summon allow-list, and '
+  'a target outside it — or a summon nested past the depth cap — fails immediately '
+  'with the reason) and `prompt` (the full request, self-contained — the target '
+  'shares no context with you). optional `timeout` (seconds, default 1800) bounds '
+  "the run; optional `into` bases the child on a git ref instead of your workspace's "
+  'current HEAD (uncommitted changes never transfer). fails with the reason when the run raises, errors out, '
+  'or dies. `detach: true` returns the request id right after the send instead of '
+  'blocking — poll or collect it with `summon_check`.'
+)
+
+
+_SUMMON_CHECK_DESCRIPTION = (
+  'check on a detached or interrupted summon by its request id. by default a '
+  'non-blocking peek: returns `{state: completed, answer}` once the result is in, '
+  '`{state: pending, trail_id?}` while the child still runs — it consumes nothing '
+  'and disturbs no concurrent waiter, so polling is safe and repeatable. '
+  '`wait: true` blocks until the answer and consumes the result; the wait is a '
+  'lock, so it fails right away when another process is already waiting on the id. '
+  'optional `timeout` (seconds, only with `wait`) bounds that wait. fails with the '
+  'reason when the id is unknown or already consumed, or when the summon failed.'
+)
+
+
+def _summon_tool() -> llm.mcp.Tool:
+  # a fresh channel client per call, and the blocking wait runs off-loop so an
+  # interactive surface stays responsive under a long summon.
+  import summon as summon_client
+
+  async def _summon(
+    target: str,
+    prompt: str,
+    timeout: Optional[float] = None,
+    into: Optional[str] = None,
+    detach: bool = False,
+  ) -> str:
+    if detach:
+      return await asyncio.to_thread(
+        summon_client.summon_detached, target, prompt, timeout=timeout, into=into
+      )
+    return await asyncio.to_thread(
+      summon_client.summon_and_wait, target, prompt, timeout=timeout, into=into
+    )
+
+  return llm.mcp.FunctionTool(_summon, name='summon', description=_SUMMON_DESCRIPTION)
+
+
+def _summon_check_tool() -> llm.mcp.Tool:
+  import summon as summon_client
+
+  async def _summon_check(
+    request_id: str,
+    wait: bool = False,
+    timeout: Optional[float] = None,
+  ) -> dict[str, str]:
+    if wait:
+      answer = await asyncio.to_thread(summon_client.collect_summon, request_id, timeout=timeout)
+      return {'state': 'completed', 'answer': answer}
+    if timeout is not None:
+      raise ValueError('timeout only bounds a wait; a plain check never blocks')
+    status = await asyncio.to_thread(summon_client.check_summon, request_id)
+    if status.pending:
+      pending = {'state': 'pending'}
+      if status.trail_id is not None:
+        pending['trail_id'] = status.trail_id
+      return pending
+    return {'state': 'completed', 'answer': status.answer if status.answer is not None else ''}
+
+  return llm.mcp.FunctionTool(
+    _summon_check, name='summon_check', description=_SUMMON_CHECK_DESCRIPTION
+  )
+
+
 def _build_service_server(bro: 'BaseBro', *, include_raise: bool) -> llm.mcp.MCPServer:
-  # `raise` only makes sense non-interactively (a caller to abort to); `skill` is
-  # needed in both modes. interactive callers pass include_raise=False.
+  # `raise` only makes sense non-interactively (a caller to abort to); `skill` and
+  # `summon` are needed in both modes. interactive callers pass include_raise=False.
   tools: list[llm.mcp.Tool] = []
   if include_raise:
     tools.append(llm.mcp.FunctionTool(_raise, name='raise', description=_RAISE_DESCRIPTION))
@@ -242,6 +318,9 @@ def _build_service_server(bro: 'BaseBro', *, include_raise: bool) -> llm.mcp.MCP
       return bro.get_skill_body(name)
 
     tools.append(llm.mcp.FunctionTool(skill, name='skill', description=_SKILL_DESCRIPTION))
+  if os.environ.get('BROKER_CHANNEL') is not None:
+    tools.append(_summon_tool())
+    tools.append(_summon_check_tool())
   return llm.mcp.InProcessMCPServer('bro', tools)
 
 
@@ -288,6 +367,13 @@ class BaseBro(ABC):
   # `mcp_servers`, so a subclass declares only what it adds. folded into
   # `needed_secrets()`.
   extra_secrets: tuple[str, ...] = ()
+  # bros this bro may summon — its static outgoing allow-list. root sessions get
+  # it adjusted per session by --grant-summon/--revoke-summon; a summoned child
+  # follows the bare seeds, so summons chain transitively through seeded bros
+  # under the host's depth cap (see cw/summon.py). MRO-walked and unioned like
+  # `extra_secrets`. ppp-dev seeds `devoops`; everyone else is empty (grows by
+  # precedent).
+  may_summon: tuple[str, ...] = ()
   # whether the bro does docker work (building/pushing images for deploys) and so
   # needs the host docker socket. an explicit capability, inherited normally. the
   # host grants `/var/run/docker.sock` to a `--bro`/`ask` container only when this
@@ -312,6 +398,7 @@ class BaseBro(ABC):
     mcp_entries: list[llm.mcp.MCPServerSpec] = []
     prompt_parts: list[str] = []
     extra_secret_names: list[str] = []
+    may_summon_names: list[str] = []
     for cls in reversed(type(self).__mro__):
       raw_mcp = cls.__dict__.get('mcp_servers')
       if raw_mcp is not None:
@@ -322,7 +409,11 @@ class BaseBro(ABC):
       raw_extra = cls.__dict__.get('extra_secrets')
       if raw_extra is not None:
         extra_secret_names.extend(raw_extra)
+      raw_summon = cls.__dict__.get('may_summon')
+      if raw_summon is not None:
+        may_summon_names.extend(raw_summon)
     self._extra_secrets: tuple[str, ...] = tuple(extra_secret_names)
+    self._may_summon: tuple[str, ...] = tuple(may_summon_names)
     self._mcp_specs: list[llm.mcp.MCPServerSpec] = mcp_entries
     # built lazily by _live_mcp_servers(): metadata surfaces (needed_secrets on
     # hosts, prompt composition) never construct live servers.

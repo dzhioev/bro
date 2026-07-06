@@ -221,5 +221,16 @@ class UnixClientTransport(ClientTransport):
       raise ProtocolError(f'inbound frame over {MAX_FRAME_BYTES} bytes')
     return Message.from_bytes(frame)
 
-  def close(self) -> None:
+  def close(self, confirm: bool = False) -> None:
+    if confirm:
+      # half-close handshake (see ClientTransport.close): signal EOF, then wait
+      # for the receiver to close back. Late inbound is discarded — the caller is
+      # closing, only the EOF matters.
+      try:
+        self._sock.shutdown(socket.SHUT_WR)
+        self._sock.settimeout(None)
+        while len(self._sock.recv(_READ_CHUNK)) > 0:
+          pass
+      except OSError:
+        pass  # receiver already gone — nothing left to confirm
     self._sock.close()

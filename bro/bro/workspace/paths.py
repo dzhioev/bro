@@ -31,6 +31,18 @@ def _broker_dir(project: Path) -> Path:
   return project / 'var' / 'cw' / 'broker'
 
 
+def _summon_dir(project: Path) -> Path:
+  # per-session summon audit and live-status files. outside the workspace dirs on
+  # purpose: the audit must survive a workspace drop.
+  return project / 'var' / 'cw' / 'summon'
+
+
+def _session_claude_dir(name: str) -> Path:
+  """the per-session claude state dir on the host — mounted as a container
+  session's ~/.claude overlay."""
+  return Path.home() / '.claude' / 'cw-sessions' / name
+
+
 def _in_container() -> bool:
   """detect a container by /.dockerenv presence. extracted so tests can stub it."""
   return Path('/.dockerenv').is_file()

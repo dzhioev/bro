@@ -10,7 +10,13 @@ from typing import Optional
 
 from cw.docker import _image_tag
 from cw.git import git_run, no_prompt_env
-from cw.paths import _claude_projects_dir, _containers_dir, _latest_jsonl, _worktrees_dir
+from cw.paths import (
+  _claude_projects_dir,
+  _containers_dir,
+  _latest_jsonl,
+  _session_claude_dir,
+  _worktrees_dir,
+)
 
 _CONTAINER_PREFIX = 'c:'
 
@@ -397,7 +403,7 @@ class ContainerWorkspace(Workspace):
 
   @property
   def session_dir(self) -> Path:
-    return Path.home() / '.claude' / 'cw-sessions' / self.name
+    return _session_claude_dir(self.name)
 
   def claude_projects_dir(self) -> Path:
     return self.session_dir / 'projects' / '-workspace'

@@ -713,6 +713,33 @@ class TestNeededSecrets:
 
     assert {'one', 'two'} <= set(Derived().needed_secrets())
 
+
+class TestMaySummon:
+  def test_defaults_to_empty(self):
+    class Plain(BaseBro):
+      name = 'plain'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    assert Plain()._may_summon == ()
+
+  def test_mro_unioned(self):
+    class Base(BaseBro):
+      name = 'base'
+      description = 'd'
+      may_summon = ('one',)
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    class Derived(Base):
+      name = 'derived'
+      may_summon = ('two',)
+
+    assert Derived()._may_summon == ('one', 'two')
+
   def test_empty_when_no_components_and_keyless_llm(self):
     import llm.llms.echo
 
@@ -847,6 +874,13 @@ async def _collect_tool_names(servers):
   return names
 
 
+async def _find_tool(bro: BaseBro, name: str):
+  for candidate in await bro._service_server.list_tools():
+    if candidate.name == name:
+      return candidate
+  raise AssertionError(f'no {name!r} tool on the service server')
+
+
 async def _find_raise_tool(bro: BaseBro):
   for tool in await bro._service_server.list_tools():
     if tool.name == 'raise':
@@ -896,6 +930,127 @@ class TestRaise:
     assert 'interactive mode' in prompt
     assert 'clarifying question' in prompt
     assert bro.system_prompt in prompt
+
+
+class TestSummonTool:
+  @pytest.mark.asyncio
+  async def test_absent_without_a_channel(self):
+    # conftest drops BROKER_CHANNEL, so the plain construction has no channel
+    bro = EchoBro()
+    names = await _collect_tool_names([bro._service_server])
+    assert 'summon' not in names
+    assert 'summon_check' not in names
+
+  @pytest.mark.asyncio
+  async def test_present_on_both_service_builds_when_a_channel_is_set(self, monkeypatch):
+    monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
+    bro = EchoBro()
+    non_interactive = await _collect_tool_names(bro._mcp_servers_for(interactive=False))
+    interactive = await _collect_tool_names(bro._mcp_servers_for(interactive=True))
+    # interactive surfaces (`call`) summon too — only `raise` is non-interactive-only
+    assert {'summon', 'summon_check'} <= set(non_interactive)
+    assert {'summon', 'summon_check'} <= set(interactive)
+
+  @pytest.mark.asyncio
+  async def test_calls_summon_and_wait_off_loop(self, monkeypatch):
+    import summon as summon_module
+
+    monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
+    calls: list = []
+
+    def fake_summon_and_wait(target, prompt, *, timeout=None, into=None):
+      calls.append({'target': target, 'prompt': prompt, 'timeout': timeout, 'into': into})
+      return 'the answer'
+
+    monkeypatch.setattr(summon_module, 'summon_and_wait', fake_summon_and_wait)
+    bro = EchoBro()
+    tool = None
+    for candidate in await bro._service_server.list_tools():
+      if candidate.name == 'summon':
+        tool = candidate
+    assert tool is not None
+    result = await tool.call({'target': 'devoops', 'prompt': 'deploy', 'timeout': 60})
+    assert result == 'the answer'
+    assert calls == [{'target': 'devoops', 'prompt': 'deploy', 'timeout': 60, 'into': None}]
+
+  @pytest.mark.asyncio
+  async def test_detach_returns_the_request_id_without_waiting(self, monkeypatch):
+    import summon as summon_module
+
+    monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
+    calls: list = []
+
+    def fake_summon_detached(target, prompt, *, timeout=None, into=None):
+      calls.append({'target': target, 'prompt': prompt, 'timeout': timeout, 'into': into})
+      return 'REQ-ID'
+
+    def fail_summon_and_wait(*args, **kwargs):
+      raise AssertionError('detach must not block on summon_and_wait')
+
+    monkeypatch.setattr(summon_module, 'summon_detached', fake_summon_detached)
+    monkeypatch.setattr(summon_module, 'summon_and_wait', fail_summon_and_wait)
+    tool = await _find_tool(EchoBro(), 'summon')
+    result = await tool.call({'target': 'devoops', 'prompt': 'deploy', 'detach': True})
+    assert result == 'REQ-ID'
+    assert calls == [{'target': 'devoops', 'prompt': 'deploy', 'timeout': None, 'into': None}]
+
+  @pytest.mark.asyncio
+  async def test_check_reports_pending_and_completed(self, monkeypatch):
+    import summon as summon_module
+
+    monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
+    statuses = [
+      summon_module.SummonStatus(pending=True, trail_id='T1'),
+      summon_module.SummonStatus(pending=False, answer='pong', trail_id='T1'),
+    ]
+    monkeypatch.setattr(summon_module, 'check_summon', lambda request_id: statuses.pop(0))
+    tool = await _find_tool(EchoBro(), 'summon_check')
+    assert await tool.call({'request_id': 'REQ-1'}) == {'state': 'pending', 'trail_id': 'T1'}
+    assert await tool.call({'request_id': 'REQ-1'}) == {'state': 'completed', 'answer': 'pong'}
+
+  @pytest.mark.asyncio
+  async def test_check_wait_collects(self, monkeypatch):
+    import summon as summon_module
+
+    monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
+    calls: list = []
+
+    def fake_collect_summon(request_id, *, timeout=None, on_started=None):
+      calls.append({'request_id': request_id, 'timeout': timeout})
+      return 'collected'
+
+    monkeypatch.setattr(summon_module, 'collect_summon', fake_collect_summon)
+    tool = await _find_tool(EchoBro(), 'summon_check')
+    result = await tool.call({'request_id': 'REQ-1', 'wait': True, 'timeout': 60})
+    assert result == {'state': 'completed', 'answer': 'collected'}
+    assert calls == [{'request_id': 'REQ-1', 'timeout': 60}]
+
+  @pytest.mark.asyncio
+  async def test_check_timeout_without_wait_is_an_error(self, monkeypatch):
+    monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
+    tool = await _find_tool(EchoBro(), 'summon_check')
+    with pytest.raises(ValueError, match='wait'):
+      await tool.call({'request_id': 'REQ-1', 'timeout': 60})
+
+  @pytest.mark.asyncio
+  async def test_summon_failure_propagates_as_the_tool_error(self, monkeypatch):
+    import summon as summon_module
+
+    monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
+
+    def fake_summon_and_wait(target, prompt, *, timeout=None, into=None):
+      raise summon_module.SummonError('summon denied: no')
+
+    monkeypatch.setattr(summon_module, 'summon_and_wait', fake_summon_and_wait)
+    bro = EchoBro()
+    tool = None
+    for candidate in await bro._service_server.list_tools():
+      if candidate.name == 'summon':
+        tool = candidate
+    assert tool is not None
+    # a generic exception is the agent-loop tool-error contract (vs ToolControlSignal)
+    with pytest.raises(summon_module.SummonError, match='summon denied'):
+      await tool.call({'target': 'devoops', 'prompt': 'deploy'})
 
   @pytest.mark.asyncio
   async def test_run_creates_llm_in_non_interactive_mode(self):

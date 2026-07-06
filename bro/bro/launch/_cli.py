@@ -28,12 +28,24 @@ NO_TRAILS_HELP = (
   'disable trails recording: set TRAILS_DISABLED in the container and drop the '
   'trails secret from the scoped set'
 )
-GRANT_HELP = (
+GRANT_CRED_HELP = (
   "grant a secret to the container's scoped set on top of the bro's manifest "
   '(repeatable); errors if it is already in the set or unknown to the registry'
 )
-REVOKE_HELP = (
+REVOKE_CRED_HELP = (
   "revoke a secret from the container's scoped set (repeatable); errors if it is not in the set"
+)
+GRANT_SUMMON_HELP = (
+  'allow the bro to summon the named bro during this run, on top of its may_summon '
+  'defaults (repeatable); errors if already allowed or not a registered bro'
+)
+REVOKE_SUMMON_HELP = (
+  'disallow summoning the named bro during this run (repeatable); '
+  'errors if it is not in the allow-list'
+)
+INTO_HELP = (
+  "base the container's workspace clone on this git ref instead of the host "
+  "checkout's current HEAD (fetched from origin when not local)"
 )
 
 
@@ -62,8 +74,11 @@ def maybe_containerize(
   inner_args: list[str],
   no_container: bool,
   no_trails: bool = False,
-  grant: Optional[list[str]] = None,
-  revoke: Optional[list[str]] = None,
+  grant_cred: Optional[list[str]] = None,
+  revoke_cred: Optional[list[str]] = None,
+  grant_summon: Optional[list[str]] = None,
+  revoke_summon: Optional[list[str]] = None,
+  into: Optional[str] = None,
 ) -> Optional[int]:
   """re-exec `<cli_name> <bro_name> <inner_args...>` inside a scoped throwaway
   container and return its exit code, or return None so the caller runs in the
@@ -72,50 +87,69 @@ def maybe_containerize(
   the hop is skipped when already inside a container (`CW_IN_CONTAINER`, set by the
   container) or when `--no-container` was passed — that is how the inner process
   avoids re-hopping and runs the bro in-process. otherwise the container is scoped
-  to the bro's manifest: the bro runs as an LLM process here (not claude code), so
-  add its llm key (`needed_secrets()` omits it) and `trails` (recording is mandatory
-  for bro runs); the docker socket is granted only when the bro does docker work.
-  an interactive surface (`call`) renders inside it just as claude code does.
+  to `cw.bro_run_secrets(bro_name)` — the LLM-process credential scope (see its
+  docstring). an interactive surface (`call`) renders inside it just as claude
+  code does.
+
+  the container's workspace clone bases on the host checkout's current HEAD (the
+  entrypoint's default, shared with `cw ss` — the bro sees the code the caller
+  sees, minus uncommitted changes); `into` (`--into <ref>`) bases it on any
+  branch/tag/sha instead, resolved with an origin fetch when the ref isn't
+  local, and an unresolvable explicit ref fails fast.
 
   `no_trails` drops `trails` from the scoped set and sets `TRAILS_DISABLED` in the
   container (the in-container tracker factory then returns `NullTracker`).
 
-  `grant`/`revoke` adjust that scoped set per `credentials.apply_grant_revoke`
-  (strict: see its rules). they are host-side only — not threaded into the inner
-  command — so passing them when the hop is skipped (`--no-container` / already
-  in-container) is a no-op the caller didn't get, hence an error: host mode is
-  unscoped and a revoke there would not actually restrict anything. returns 1
-  (printing to stderr) on any grant/revoke misuse so the caller exits non-zero."""
-  grant = grant if grant is not None else []
-  revoke = revoke if revoke is not None else []
+  `grant_cred`/`revoke_cred` adjust that scoped set per
+  `credentials.apply_grant_revoke` (strict: see its rules); `grant_summon`/
+  `revoke_summon` adjust the bro's summon allow-list the same way
+  (`cw.summon_allow_list` over its `may_summon` defaults). those four and `into`
+  are host-side only — not threaded into the inner command — so passing any when
+  the hop is skipped (`--no-container` / already in-container) is a no-op the
+  caller didn't get, hence an error: host mode is unscoped, has no broker root,
+  and runs no clone. returns 1 (printing to stderr) on any misuse so the caller
+  exits non-zero."""
+  grant_cred = grant_cred if grant_cred is not None else []
+  revoke_cred = revoke_cred if revoke_cred is not None else []
+  grant_summon = grant_summon if grant_summon is not None else []
+  revoke_summon = revoke_summon if revoke_summon is not None else []
   if no_container or os.environ.get('CW_IN_CONTAINER') is not None:
-    if len(grant) > 0 or len(revoke) > 0:
+    if (
+      len(grant_cred) > 0
+      or len(revoke_cred) > 0
+      or len(grant_summon) > 0
+      or len(revoke_summon) > 0
+      or into is not None
+    ):
       print(
-        '--grant/--revoke require containerization (not valid with --no-container)',
+        '--grant-cred/--revoke-cred/--grant-summon/--revoke-summon/--into require '
+        'containerization (not valid with --no-container)',
         file=sys.stderr,
       )
       return 1
     return None
-  from bro.registry import create_bro
-  from cw import run_in_container
+  from cw import _project_root, bro_run_secrets, resolve_ref, run_in_container, summon_allow_list
 
-  bro = create_bro(bro_name)
-  needed = set(bro.needed_secrets()) | set(bro.llm_spec.needed_secrets())
-  # the bro's best-effort tier (e.g. a data source's query-focused fetch summary).
-  # a no-op for a bro whose optional secret is already its required LLM key, but
-  # correct in general — a component that degrades without a secret still gets it
-  # when the host can resolve it.
-  optional = set(bro.optional_secrets())
+  scoped = bro_run_secrets(bro_name)
+  needed = set(scoped.required)
   extra_env: dict[str, str] = {}
   if no_trails:
+    needed.remove('trails')
     extra_env['TRAILS_DISABLED'] = '1'
-  else:
-    needed |= {'trails'}
   try:
-    needed = credentials.apply_grant_revoke(needed, grant=grant, revoke=revoke)
+    needed = credentials.apply_grant_revoke(
+      needed, grant=grant_cred, revoke=revoke_cred, subject='scoped credential set'
+    )
+    may_summon = summon_allow_list(bro_name, grant=grant_summon, revoke=revoke_summon)
   except ValueError as e:
     print(str(e), file=sys.stderr)
     return 1
+  if into is not None:
+    base_ref = resolve_ref(_project_root(), into)
+    if base_ref is None:
+      print(f'cannot resolve --into ref: {into}', file=sys.stderr)
+      return 1
+    extra_env['CW_BASE_REF'] = base_ref
   workspace = f'{cli_name}-{bro_name}-{secrets.token_hex(4)}'
   command = [cli_name, bro_name, *inner_args]
   return run_in_container(
@@ -123,12 +157,13 @@ def maybe_containerize(
     command,
     drop=True,
     secrets=needed,
-    optional_secrets=optional,
-    docker_sock=bro.needs_docker,
-    extra_env=extra_env,
+    optional_secrets=scoped.optional,
+    docker_sock=scoped.docker_sock,
+    extra_env=extra_env if len(extra_env) > 0 else None,
     # this container runs its own named bro, so the calling session's ambient
     # CW_BRO must not leak in and mis-theme it.
     forward_bro=False,
+    may_summon=may_summon,
   )
 
 
@@ -156,8 +191,19 @@ def run(
   parser.add_argument('--no-trails', dest='no_trails', action='store_true', help=NO_TRAILS_HELP)
   # --no-trails acts only on the container hop; --no-container has no hop to act on.
   parser.add_exclusive_groups(['no_container'], ['no_trails'])
-  parser.add_argument('--grant', action='append', default=None, metavar='SECRET', help=GRANT_HELP)
-  parser.add_argument('--revoke', action='append', default=None, metavar='SECRET', help=REVOKE_HELP)
+  parser.add_argument(
+    '--grant-cred', action='append', default=None, metavar='SECRET', help=GRANT_CRED_HELP
+  )
+  parser.add_argument(
+    '--revoke-cred', action='append', default=None, metavar='SECRET', help=REVOKE_CRED_HELP
+  )
+  parser.add_argument(
+    '--grant-summon', action='append', default=None, metavar='BRO', help=GRANT_SUMMON_HELP
+  )
+  parser.add_argument(
+    '--revoke-summon', action='append', default=None, metavar='BRO', help=REVOKE_SUMMON_HELP
+  )
+  parser.add_argument('--into', metavar='REF', help=INTO_HELP)
   args = parser.parse(argv)
 
   inner_args = [args[arg_name]]
@@ -171,8 +217,11 @@ def run(
     inner_args=inner_args,
     no_container=args['no_container'],
     no_trails=args['no_trails'],
-    grant=args['grant'],
-    revoke=args['revoke'],
+    grant_cred=args['grant_cred'],
+    revoke_cred=args['revoke_cred'],
+    grant_summon=args['grant_summon'],
+    revoke_summon=args['revoke_summon'],
+    into=args['into'],
   )
   if hopped is not None:
     return hopped

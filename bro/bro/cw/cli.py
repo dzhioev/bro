@@ -143,8 +143,10 @@ def main(argv: list[str]) -> Optional[int]:
     machinery = {
       '-c': args['container'],
       '--drop': args['drop'],
-      '--grant': args['grant'] is not None,
-      '--revoke': args['revoke'] is not None,
+      '--grant-cred': args['grant_cred'] is not None,
+      '--revoke-cred': args['revoke_cred'] is not None,
+      '--grant-summon': args['grant_summon'] is not None,
+      '--revoke-summon': args['revoke_summon'] is not None,
       '--into': args['into'] is not None,
     }
     offending = [flag for flag, present in machinery.items() if present]
@@ -179,9 +181,9 @@ def main(argv: list[str]) -> Optional[int]:
       parser.error(
         '--resume cannot be combined with -p/--prompt (the initial prompt is ignored on resume)'
       )
-  if (args['grant'] is not None or args['revoke'] is not None) and not args['container']:
+  if (args['grant_cred'] is not None or args['revoke_cred'] is not None) and not args['container']:
     parser.error(
-      '--grant/--revoke require -c/--container: host mode is unscoped, so a revoke '
+      '--grant-cred/--revoke-cred require -c/--container: host mode is unscoped, so a revoke '
       'could not actually restrict the session'
     )
   spec = SessionSpec(**args)

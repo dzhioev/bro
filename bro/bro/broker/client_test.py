@@ -127,6 +127,193 @@ async def test_request_raises_on_channel_close(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_call_surfaces_started_and_returns_terminal(tmp_path):
+  async with running_server(tmp_path) as server:
+    provisioned = await server.transport.provision()
+    client = Client(UnixClientTransport(provisioned.host_endpoint))
+    interims: list[Message] = []
+    call_task = asyncio.create_task(
+      asyncio.to_thread(
+        client.call, 'summon', {'target': 'devoops'}, TIMEOUT, on_started=interims.append
+      )
+    )
+
+    channel, request_message = await _next(server.sink.messages)
+    assert request_message.type == 'summon'
+    await server.transport.send(
+      channel, Message(type='started', payload={'trail_id': 't1'}, in_reply_to=request_message.id)
+    )
+    unrelated = Message(type='status', payload={'note': 'unrelated'})
+    await server.transport.send(channel, unrelated)
+    await server.transport.send(
+      channel,
+      Message(
+        type='completed',
+        payload={'result': 'ok', 'end_reason': 'terminal'},
+        in_reply_to=request_message.id,
+      ),
+    )
+
+    terminal = await asyncio.wait_for(call_task, TIMEOUT)
+    assert terminal.type == 'completed'
+    assert terminal.payload == {'result': 'ok', 'end_reason': 'terminal'}
+    assert [interim.payload for interim in interims] == [{'trail_id': 't1'}]
+
+    # the uncorrelated message call() read past was set aside, not dropped
+    set_aside = await asyncio.to_thread(client.receive, 0.2)
+    assert set_aside is not None
+    assert set_aside.id == unrelated.id
+    client.close()
+
+
+@pytest.mark.asyncio
+async def test_call_without_callback_skips_started_and_returns_failed(tmp_path):
+  async with running_server(tmp_path) as server:
+    provisioned = await server.transport.provision()
+    client = Client(UnixClientTransport(provisioned.host_endpoint))
+    call_task = asyncio.create_task(asyncio.to_thread(client.call, 'summon', {}, TIMEOUT))
+
+    channel, request_message = await _next(server.sink.messages)
+    await server.transport.send(
+      channel, Message(type='started', payload={'trail_id': 't'}, in_reply_to=request_message.id)
+    )
+    await server.transport.send(
+      channel, Message(type='failed', payload={'reason': 'exit'}, in_reply_to=request_message.id)
+    )
+
+    terminal = await asyncio.wait_for(call_task, TIMEOUT)
+    assert terminal.type == 'failed'
+    assert terminal.payload == {'reason': 'exit'}
+    client.close()
+
+
+@pytest.mark.asyncio
+async def test_call_deadline_spans_interim_started(tmp_path):
+  # `timeout` bounds the whole call: an interim started does not extend the terminal wait.
+  async with running_server(tmp_path) as server:
+    provisioned = await server.transport.provision()
+    client = Client(UnixClientTransport(provisioned.host_endpoint))
+    call_task = asyncio.create_task(asyncio.to_thread(client.call, 'summon', {}, 0.3))
+
+    channel, request_message = await _next(server.sink.messages)
+    await server.transport.send(
+      channel, Message(type='started', payload={}, in_reply_to=request_message.id)
+    )
+    with pytest.raises(TimeoutError):
+      await asyncio.wait_for(call_task, TIMEOUT)
+    client.close()
+
+
+@pytest.mark.asyncio
+async def test_send_returns_the_sent_message(tmp_path):
+  async with running_server(tmp_path) as server:
+    provisioned = await server.transport.provision()
+    client = Client(UnixClientTransport(provisioned.host_endpoint))
+    sent = await asyncio.to_thread(client.send, 'summon', {'target': 'devoops'})
+
+    _, received = await _next(server.sink.messages)
+    # the id is minted client-side, so the caller holds it before any reply exists
+    assert received.id == sent.id
+    assert received.type == 'summon'
+    client.close()
+
+
+@pytest.mark.asyncio
+async def test_await_reply_reattaches_to_a_sent_request(tmp_path):
+  # send + await_reply is call() split in two: the id is exposed between them
+  async with running_server(tmp_path) as server:
+    provisioned = await server.transport.provision()
+    client = Client(UnixClientTransport(provisioned.host_endpoint))
+    sent = await asyncio.to_thread(client.send, 'summon', {'target': 'devoops'})
+    interims: list[Message] = []
+    await_task = asyncio.create_task(
+      asyncio.to_thread(client.await_reply, sent, TIMEOUT, on_started=interims.append)
+    )
+
+    channel, request_message = await _next(server.sink.messages)
+    await server.transport.send(
+      channel, Message(type='started', payload={'trail_id': 't1'}, in_reply_to=request_message.id)
+    )
+    await server.transport.send(
+      channel,
+      Message(
+        type='completed',
+        payload={'result': 'ok', 'end_reason': 'terminal'},
+        in_reply_to=request_message.id,
+      ),
+    )
+
+    terminal = await asyncio.wait_for(await_task, TIMEOUT)
+    assert terminal.type == 'completed'
+    assert [interim.payload for interim in interims] == [{'trail_id': 't1'}]
+    client.close()
+
+
+@pytest.mark.asyncio
+async def test_await_reply_started_rearms_the_deadline(tmp_path):
+  # timeout_after_started opts out of the whole-wait bound: the interim started
+  # re-arms the deadline, so a terminal past the initial bound still lands
+  async with running_server(tmp_path) as server:
+    provisioned = await server.transport.provision()
+    client = Client(UnixClientTransport(provisioned.host_endpoint))
+    sent = await asyncio.to_thread(client.send, 'summon', {})
+    await_task = asyncio.create_task(
+      asyncio.to_thread(client.await_reply, sent, 0.3, timeout_after_started=TIMEOUT)
+    )
+
+    channel, request_message = await _next(server.sink.messages)
+    await server.transport.send(
+      channel, Message(type='started', payload={}, in_reply_to=request_message.id)
+    )
+    await asyncio.sleep(0.5)  # outlive the initial 0.3s bound; the re-armed deadline holds
+    await server.transport.send(
+      channel,
+      Message(
+        type='completed',
+        payload={'result': 'ok', 'end_reason': 'terminal'},
+        in_reply_to=request_message.id,
+      ),
+    )
+
+    terminal = await asyncio.wait_for(await_task, TIMEOUT)
+    assert terminal.type == 'completed'
+    client.close()
+
+
+@pytest.mark.asyncio
+async def test_await_reply_started_rearm_shortens_a_longer_bound(tmp_path):
+  # the re-arm is to exactly now + timeout_after_started, shortening a still-long
+  # initial bound too, so post-started silence is caught at the tighter bound
+  async with running_server(tmp_path) as server:
+    provisioned = await server.transport.provision()
+    client = Client(UnixClientTransport(provisioned.host_endpoint))
+    sent = await asyncio.to_thread(client.send, 'summon', {})
+    await_task = asyncio.create_task(
+      asyncio.to_thread(client.await_reply, sent, TIMEOUT * 4, timeout_after_started=0.2)
+    )
+
+    channel, request_message = await _next(server.sink.messages)
+    await server.transport.send(
+      channel, Message(type='started', payload={}, in_reply_to=request_message.id)
+    )
+    with pytest.raises(TimeoutError, match='within 0.2s'):
+      await asyncio.wait_for(await_task, TIMEOUT)
+    client.close()
+
+
+@pytest.mark.asyncio
+async def test_close_confirm_returns_after_the_host_consumed_everything(tmp_path):
+  async with running_server(tmp_path) as server:
+    provisioned = await server.transport.provision()
+    client = Client(UnixClientTransport(provisioned.host_endpoint))
+    await asyncio.to_thread(client.send, 'completed', {'result': 'ok'})
+    await asyncio.wait_for(asyncio.to_thread(client.close, True), TIMEOUT)
+    # the host closes back only after its read loop consumed the frame, so the
+    # message must already be here — no await
+    assert server.sink.messages.qsize() == 1
+
+
+@pytest.mark.asyncio
 async def test_receive_returns_none_on_timeout(tmp_path):
   async with running_server(tmp_path) as server:
     provisioned = await server.transport.provision()

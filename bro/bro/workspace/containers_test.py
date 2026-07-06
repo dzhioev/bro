@@ -5,6 +5,7 @@ import pytest
 
 import cw.containers
 import cw.spawn
+import cw.summon
 
 
 class _FakeProc:
@@ -143,7 +144,9 @@ class TestBrokerGate:
       return 5
 
     monkeypatch.setattr(cw.containers, '_run_root_via_broker', fake_root)
-    code = cw.containers.run_in_container('ws', ['claude'], docker_sock=False)
+    code = cw.containers.run_in_container(
+      'ws', ['claude'], docker_sock=False, may_summon={'devoops'}
+    )
     assert code == 5
     assert roots == [
       {
@@ -155,6 +158,7 @@ class TestBrokerGate:
         'docker_sock': False,
         'extra_env': None,
         'forward_bro': True,
+        'may_summon': {'devoops'},
       }
     ]
 
@@ -163,10 +167,11 @@ class TestRunRootViaBroker:
   def test_builds_the_attached_launch_and_delegates(self, monkeypatch, tmp_path):
     captured: dict = {}
 
-    def fake_run_root(launch, spawner, project):
+    def fake_run_root(launch, project, *, session, may_summon):
       captured['launch'] = launch
-      captured['spawner'] = spawner
       captured['project'] = project
+      captured['session'] = session
+      captured['may_summon'] = may_summon
       return 3
 
     monkeypatch.setattr(cw.spawn, 'run_root_via_broker', fake_run_root)
@@ -179,13 +184,22 @@ class TestRunRootViaBroker:
       docker_sock=True,
       extra_env={'CW_BASE_REF': 'deadbeef'},
       forward_bro=True,
+      may_summon={'devoops'},
     )
     assert code == 3
-    assert isinstance(captured['spawner'], cw.spawn.DockerSpawner)
     assert captured['project'] == tmp_path / 'project'
+    # the session key carries the container-mode prefix, so a same-name host
+    # session keeps its own summon state files
+    assert captured['session'] == 'c:ws'
+    assert captured['may_summon'] == {'devoops'}
     assert captured['launch'] == cw.spawn.DockerLaunchSpec(
       command=['claude', '--auto'],
-      env={'CW_BASE_REF': 'deadbeef'},
+      # the summon-status env rides in next to the caller's env: the container
+      # reads the file the host writes through its read-only /host-repo mount
+      env={
+        'CW_BASE_REF': 'deadbeef',
+        cw.summon.STATUS_ENV: '/host-repo/var/cw/summon/c:ws.status.json',
+      },
       secrets=('github',),
       attached=True,
       name='ws',

@@ -17,6 +17,8 @@ class _Harness:
     self.projects_dir = tmp_path / 'projects'
     self.server = MagicMock()
     self.server.endpoint = MCPEndpoint(port=1234, token='tok')
+    self.broxy = MagicMock()
+    self.broxy.address = 'unix:/tmp/broxy-test.sock'
 
   def __enter__(self):
     self._patches = [
@@ -31,16 +33,21 @@ class _Harness:
       patch('cw.runner._sync_bare_session_log'),
       patch('cw.runner._populate_bro_skills'),
       patch('cw.runner._apply_claude_auth'),
+      patch('cw.runner._start_session_broxy', return_value=self.broxy),
+      patch('cw.runner._in_container', return_value=False),
     ]
     entered = [p.__enter__() for p in self._patches]
     self.env = entered[0]
     self.env.pop('CW_BRO', None)
+    self.env.pop('BROKER_CHANNEL', None)
     self.start_server = entered[2]
     self.build = entered[3]
     self.run_claude = entered[4]
     self.sync = entered[5]
     self.populate = entered[6]
     self.apply_auth = entered[7]
+    self.start_broxy = entered[8]
+    self.in_container = entered[9]
     return self
 
   def __exit__(self, *exception):
@@ -153,6 +160,43 @@ class TestRunInPlace:
     with _Harness(tmp_path) as h:
       assert cw.runner.run_in_place(_spec(bro='pm')) == 0
       assert h.apply_auth.call_args.kwargs == {'warn_when_missing': False}
+
+
+class TestSessionBroxy:
+  def test_rewrites_the_channel_and_stops_the_broxy(self, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    with _Harness(tmp_path) as h:
+      h.env['BROKER_CHANNEL'] = 'unix:/up.sock'
+      assert cw.runner.run_in_place(_spec()) == 0
+      assert h.start_broxy.call_args.args[0] == 'unix:/up.sock'
+      env = h.run_claude.call_args.args[1]
+      assert env['BROKER_CHANNEL'] == h.broxy.address
+      h.broxy.stop.assert_called_once()
+
+  def test_keeps_the_direct_channel_when_the_broxy_cannot_start(self, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    with _Harness(tmp_path) as h:
+      h.env['BROKER_CHANNEL'] = 'unix:/up.sock'
+      h.start_broxy.return_value = None
+      assert cw.runner.run_in_place(_spec()) == 0
+      env = h.run_claude.call_args.args[1]
+      assert env['BROKER_CHANNEL'] == 'unix:/up.sock'
+
+  def test_container_mode_keeps_the_entrypoint_owned_channel(self, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    with _Harness(tmp_path) as h:
+      h.in_container.return_value = True
+      h.env['BROKER_CHANNEL'] = 'unix:/tmp/broxy.sock'
+      assert cw.runner.run_in_place(_spec()) == 0
+      h.start_broxy.assert_not_called()
+      env = h.run_claude.call_args.args[1]
+      assert env['BROKER_CHANNEL'] == 'unix:/tmp/broxy.sock'
+
+  def test_no_channel_starts_no_broxy(self, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    with _Harness(tmp_path) as h:
+      assert cw.runner.run_in_place(_spec()) == 0
+      h.start_broxy.assert_not_called()
 
 
 class TestRunClaude:

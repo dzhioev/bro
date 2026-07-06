@@ -82,6 +82,10 @@ docker run --rm -i \
     grep -q /workspace /opt/cw-venv/lib/python*/site-packages/__editable___ppp*_finder.py
     # the _entrypoints.py bridge is baked too (so provision can skip the regen)
     test -f /opt/cw-venv/lib/python*/site-packages/_entrypoints.py
+    # the manifests the bake ran from are staged for the entrypoint's reuse gate,
+    # and match this clone (based on the same tree the image was built from)
+    cmp -s /workspace/pyproject.toml /opt/cw-venv-manifest/pyproject.toml
+    cmp -s /workspace/uv.lock /opt/cw-venv-manifest/uv.lock
     # /home/cw/.claude.json reflects the container-private seed and is writable
     grep -q smoke_seed /home/cw/.claude.json
     echo '{"modified_by_container":true}' > /home/cw/.claude.json

@@ -391,32 +391,39 @@ def build_scoped_store(names: Iterable[str], *, optional: Iterable[str] = ()) ->
 
 
 def apply_grant_revoke(
-  computed: Iterable[str], *, grant: Iterable[str] = (), revoke: Iterable[str] = ()
+  computed: Iterable[str],
+  *,
+  grant: Iterable[str] = (),
+  revoke: Iterable[str] = (),
+  subject: str = 'set',
 ) -> set[str]:
-  """layer per-session grant/revoke overrides onto a computed scoped credential set.
+  """layer per-session grant/revoke overrides onto a computed name set (a scoped
+  credential set, a summon allow-list, ...).
 
   returns `(computed | grant) - revoke`. every override must change the set:
-  granting a secret already present, or revoking one absent, raises `ValueError`
+  granting a name already present, or revoking one absent, raises `ValueError`
   and stops — a redundant grant/revoke is a mistake to surface, not silently
   swallow (a no-op revoke especially: it would read as "tightened" while changing
   nothing). granting or revoking the same name twice trips the same checks, and a
-  name in both lists is rejected outright. unknown grant names are not validated
-  here — `build_scoped_store` is strict on the registry and rejects them loudly on
-  the host. does not mutate the inputs.
+  name in both lists is rejected outright. `subject` names the set in the error
+  messages so a caller's flag misuse reads in its own terms. unknown grant names
+  are not validated here — each caller owns its registry check (for credentials,
+  `build_scoped_store` rejects them loudly on the host). does not mutate the
+  inputs.
   """
   result = set(computed)
   grant = list(grant)
   revoke = list(revoke)
   both = sorted(set(grant) & set(revoke))
   if len(both) > 0:
-    raise ValueError(f'cannot grant and revoke the same secret: {", ".join(both)}')
+    raise ValueError(f'cannot grant and revoke the same name: {", ".join(both)}')
   for name in grant:
     if name in result:
-      raise ValueError(f'cannot grant {name!r}: already in the scoped credential set')
+      raise ValueError(f'cannot grant {name!r}: already in the {subject}')
     result.add(name)
   for name in revoke:
     if name not in result:
-      raise ValueError(f'cannot revoke {name!r}: not in the scoped credential set')
+      raise ValueError(f'cannot revoke {name!r}: not in the {subject}')
     result.remove(name)
   return result
 

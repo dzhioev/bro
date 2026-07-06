@@ -15,9 +15,18 @@ _CW_SESSION_BASELINE = ('session_log', 'trails')
 _DEFAULT_CW_BRO = 'ppp-dev'
 
 
+def _session_bro_name(bro: Optional[str]) -> str:
+  """the bro a `cw ss` session runs as — its identity for credential scoping and
+  the summon allow-list. `--bro` names it directly; a native session themes as the
+  ambient CW_BRO (dive-in sets ppp-dev; a plain `cw ss` defaults to it too)."""
+  if bro is not None:
+    return bro
+  return os.environ.get('CW_BRO', _DEFAULT_CW_BRO)
+
+
 @dataclass(frozen=True)
 class ScopedSecrets:
-  """the credential scope `_container_secrets` computes for a container session.
+  """a container launch's credential scope.
 
   required is hydrated strictly (a missing secret fails launch); optional is the
   best-effort tier (skipped when unresolvable); docker_sock decides the socket mount.
@@ -26,6 +35,26 @@ class ScopedSecrets:
   required: set[str]
   optional: set[str]
   docker_sock: bool
+
+
+def bro_run_secrets(bro_name: str) -> ScopedSecrets:
+  """the credential scope of a bro run as an LLM process in its own container —
+  one computation for every surface that spawns one (the `ask`/`do-task`/`call`
+  hop, broker-spawned bro children), so they cannot drift.
+
+  required: the bro's manifest plus its LLM key (`needed_secrets()` omits it) and
+  `trails` (recording is mandatory for bro runs). optional: the bro's best-effort
+  tier — a no-op for a bro whose optional secret is already its required LLM key,
+  but correct in general: a component that degrades without a secret still gets it
+  when the host can resolve it. docker socket only when the bro does docker work.
+  """
+  from bro.registry import create_bro
+
+  bro = create_bro(bro_name)
+  required = set(bro.needed_secrets()) | set(bro.llm_spec.needed_secrets()) | {'trails'}
+  return ScopedSecrets(
+    required=required, optional=set(bro.optional_secrets()), docker_sock=bro.needs_docker
+  )
 
 
 def _load_anthropic_key() -> Optional[str]:
@@ -77,10 +106,12 @@ def _apply_claude_auth(env: dict[str, str], *, warn_when_missing: bool = False) 
 
 
 def _finalize_secrets(secrets: set[str], *, grant: list[str], revoke: list[str]) -> set[str]:
-  """layer the per-session `--grant` / `--revoke` overrides onto a computed scoped
-  set. grant/revoke apply strictly — a grant/revoke that doesn't change the set
-  raises `ValueError` (`credentials.apply_grant_revoke`)."""
-  return credentials.apply_grant_revoke(secrets, grant=grant, revoke=revoke)
+  """layer the per-session `--grant-cred` / `--revoke-cred` overrides onto a
+  computed scoped set. grant/revoke apply strictly — a grant/revoke that doesn't
+  change the set raises `ValueError` (`credentials.apply_grant_revoke`)."""
+  return credentials.apply_grant_revoke(
+    secrets, grant=grant, revoke=revoke, subject='scoped credential set'
+  )
 
 
 def _container_secrets(bro_name: str, *, mcp: Optional[str], bro_mode: bool) -> ScopedSecrets:

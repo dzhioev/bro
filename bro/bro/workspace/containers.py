@@ -16,7 +16,7 @@ from cw.docker import (
 )
 from cw.paths import _containers_dir, _latest_jsonl, _project_root
 from cw.secrets import _ppp_tarball
-from cw.workspace import ContainerWorkspace, _parse_ref
+from cw.workspace import ContainerWorkspace, _format_ref, _parse_ref
 
 # explicit container-side ~/.claude.json config (installMethod matches the
 # image's npm-global claude; the project entry pre-accepts the trust dialog).
@@ -149,17 +149,26 @@ def _run_root_via_broker(
   docker_sock: bool,
   extra_env: Optional[Mapping[str, str]],
   forward_bro: bool,
+  may_summon: Collection[str],
 ) -> int:
   """run the session as the broker's root peer: provision its channel socket under
   `var/cw/broker`, bind-mount it at `/run/broker.sock`, launch attached, and supervise
   it on the broker loop until it exits. Returns the container's exit code."""
   # imported here, not at module level: _broker_enabled() must be able to short-circuit
   # a launch before anything touches the broker package (see its docstring).
-  from cw.spawn import DockerLaunchSpec, DockerSpawner, run_root_via_broker
+  from cw.spawn import DockerLaunchSpec, run_root_via_broker
+  from cw.summon import STATUS_ENV, container_status_path
 
+  # the summon session key is the mode-prefixed workspace name — a same-name host
+  # session must not share the state files (see cw/summon.py)
+  session = _format_ref(name, True)
+  env = dict(extra_env) if extra_env is not None else {}
+  # the summon-status file the host-side SummonControl writes, as seen through
+  # the container's read-only /host-repo mount of the project root
+  env[STATUS_ENV] = container_status_path(project, session)
   launch = DockerLaunchSpec(
     command=command,
-    env=dict(extra_env) if extra_env is not None else {},
+    env=env,
     secrets=secrets,
     attached=True,
     name=name,
@@ -167,7 +176,7 @@ def _run_root_via_broker(
     docker_sock=docker_sock,
     forward_bro=forward_bro,
   )
-  return run_root_via_broker(launch, DockerSpawner(), project)
+  return run_root_via_broker(launch, project, session=session, may_summon=may_summon)
 
 
 def run_in_container(
@@ -180,6 +189,7 @@ def run_in_container(
   docker_sock: bool = True,
   extra_env: Optional[Mapping[str, str]] = None,
   forward_bro: bool = True,
+  may_summon: Collection[str] = (),
 ) -> int:
   """run `command` inside a fresh cw-style container backed by workspace `name`.
 
@@ -205,7 +215,10 @@ def run_in_container(
   `-e KEY=VALUE` vars in the container (see `_docker_create_argv`). `forward_bro=False`
   keeps the calling session's ambient `CW_BRO` out of the container — used by the
   `ask`/`do-task`/`call` hop, whose container runs its own named bro, so the calling
-  session's theming must not leak in (see `_docker_create_argv`).
+  session's theming must not leak in (see `_docker_create_argv`). `may_summon` is
+  the session's outgoing summon allow-list — the bro names it may summon, computed
+  per `cw/summon.py` — handed to the broker root; defaults to deny-all (and is
+  moot on the broker-less fallback path, which has no channel to summon over).
   """
   # the container starts with origin/master only as fresh as the host's last fetch
   # (the entrypoint copies the ref from /host-repo, no network). that is fine: the
@@ -229,6 +242,7 @@ def run_in_container(
       docker_sock=docker_sock,
       extra_env=extra_env,
       forward_bro=forward_bro,
+      may_summon=may_summon,
     )
   else:
     session = _containers_dir(project) / name

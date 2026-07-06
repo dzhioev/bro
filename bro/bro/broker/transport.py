@@ -73,7 +73,19 @@ class ClientTransport(ABC):
   def receive(self, timeout: Optional[float]) -> Optional[Message]: ...
 
   @abstractmethod
-  def close(self) -> None: ...
+  def close(self, confirm: bool = False) -> None:
+    """close the channel. With `confirm`, first block for the receiver to confirm
+    — by closing back — that everything sent was consumed. Both receivers consume
+    frames strictly in order before they see the sender's EOF (the host adapter's
+    read loop; the broxy forwards each frame upstream, drained, before the next
+    read), so the close-back is that guarantee. A peer whose last send precedes
+    its own exit needs it: without the handshake, frames still buffered in an
+    intermediary (the broxy, killed with the container's pid namespace) can die
+    with the sender. The wait is deliberately unbounded — a deadline that lets
+    close() return unconfirmed would reintroduce the race it exists to remove;
+    bounding a wedged receiver is the supervisor's job (the host kills a
+    timed-out child), not the sender's. A receiver already gone closes the
+    socket, ending the wait immediately."""
 
 
 def connect(address: Address) -> ClientTransport:

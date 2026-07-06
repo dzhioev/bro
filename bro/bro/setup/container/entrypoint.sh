@@ -71,11 +71,14 @@ if [ ! -d /workspace/.git ]; then
   # local copy) so later ancestry/clean checks and rebases compare against the real
   # upstream. ref-only — objects are already shared via alternates, no token needed.
   git fetch host '+refs/remotes/origin/master:refs/remotes/origin/master' >&2
-  # branch worktree-<CW_NAME> from CW_BASE_REF: the host's current HEAD by default
-  # (the clone is already checked out there, matching host-mode worktrees), or the
-  # sha `cw ss --into <ref>` resolved on the host. -B resets if a stale
-  # worktree-<CW_NAME> branch came through with the clone. either base's objects are
-  # shared from /host-repo via the clone's alternates, so no extra fetch is needed.
+  # branch worktree-<CW_NAME> from CW_BASE_REF — a sha the host resolved for an
+  # explicit base (--into <ref>) or a summoned child's inherited summoner HEAD.
+  # the HEAD fallback (the clone's checkout, i.e. the host checkout's current
+  # commit) is the default: a workspace bases on what its launcher has checked
+  # out. -B resets if a stale worktree-<CW_NAME> branch came through with the
+  # clone. either base's objects are shared from /host-repo via the clone's
+  # alternates (the host resolution transfers foreign objects into the host repo
+  # first), so no extra fetch is needed.
   git checkout -B "worktree-$CW_NAME" "${CW_BASE_REF:-HEAD}" >&2
   # init submodules from host-local paths — .gitmodules uses ssh URLs and the
   # container has no ssh keys. skip any submodule the host hasn't initialized.
@@ -138,17 +141,20 @@ fi
 # reuse the venv baked into the image (deps + editable project already installed,
 # its module finder pointing at /workspace — see the Dockerfile) instead of a fresh
 # `uv sync` (~3.4s). symlink it in and stamp provision_repo.sh's skip marker newer
-# than the just-cloned uv.lock/pyproject so the sync is skipped: the image tag pins
-# both, so the baked env always matches this clone's deps. provision still runs to
-# regenerate the console-script bridge + git hooks. absent /opt/cw-venv (older
-# image) or a pre-existing /workspace/.venv (reused workspace) falls through to a
-# normal sync.
-if [ "${CW_SKIP_VENV:-}" != "1" ] && [ -d /opt/cw-venv ] && [ ! -e /workspace/.venv ]; then
+# than the just-cloned uv.lock/pyproject so the sync is skipped. valid only when
+# the clone's dependency manifests equal the ones the image was built from —
+# CW_BASE_REF can base the clone on any ref, so equality is checked against the
+# staged /opt/cw-venv-manifest copies, not assumed. a mismatch (or an older image
+# without the staged manifests, or a pre-existing /workspace/.venv from a reused
+# workspace) falls through to a normal sync from the clone's own manifests.
+if [ "${CW_SKIP_VENV:-}" != "1" ] && [ -d /opt/cw-venv ] && [ ! -e /workspace/.venv ] \
+    && cmp -s /workspace/pyproject.toml /opt/cw-venv-manifest/pyproject.toml \
+    && cmp -s /workspace/uv.lock /opt/cw-venv-manifest/uv.lock; then
   ln -s /opt/cw-venv /workspace/.venv
   touch /workspace/.venv/.provision-stamp
-  # the baked venv also carries a `_entrypoints.py` bridge generated from this
-  # image's [project.scripts]; the tag pins that table, so it matches this clone.
-  # tell provision_repo.sh to skip the regen (the only other thing it does is the
+  # the baked venv also carries a `_entrypoints.py` bridge generated from the
+  # [project.scripts] of the same manifests the gate above just matched. tell
+  # provision_repo.sh to skip the regen (the only other thing it does is the
   # console-script bridge + git hooks).
   export CW_VENV_BAKED=1
 fi
@@ -175,6 +181,36 @@ fi
 if [ "${CW_SKIP_VENV:-}" != "1" ]; then
   install_hooks="$(credentials install-hooks)"
   eval "$install_hooks"
+fi
+
+# broxy: the peer-side broker proxy (broker/broxy.py) — one long-lived upstream
+# connection per session, a local socket for the in-container client swarm.
+# started from the workspace venv activated above; a wrapper loop restarts a
+# crashed daemon (nonzero exit; a fresh broxy reconnects cleanly upstream).
+# BROKER_CHANNEL is rewritten to the local socket only once `broxy await`
+# confirms readiness — otherwise the session degrades to the direct upstream
+# channel with a warning (the gate must never break a launch).
+if [ -n "${BROKER_CHANNEL:-}" ] && [ "${CW_SKIP_VENV:-}" != "1" ] \
+    && command -v broxy > /dev/null; then
+  broxy_upstream="$BROKER_CHANNEL"
+  broxy_socket=/tmp/broxy.sock
+  (
+    set +e
+    while true; do
+      broxy serve "$broxy_socket" --upstream "$broxy_upstream" >> /tmp/broxy.log 2>&1
+      code=$?
+      if [ "$code" -eq 0 ]; then
+        break
+      fi
+      echo "broxy exited with code $code; restarting" >> /tmp/broxy.log
+      sleep 1
+    done
+  ) &
+  if broxy await "$broxy_socket" >> /tmp/broxy.log 2>&1; then
+    export BROKER_CHANNEL="unix:$broxy_socket"
+  else
+    echo 'warning: broxy did not start; using the direct broker channel' >&2
+  fi
 fi
 
 # the tree is prepared; the command (for a `cw ss -c` session: the same

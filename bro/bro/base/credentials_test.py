@@ -542,21 +542,27 @@ class TestApplyGrantRevoke:
     assert computed == {'a'}
 
   def test_grant_already_present_raises(self):
-    with pytest.raises(ValueError, match='already in the scoped'):
+    with pytest.raises(ValueError, match='already in the set'):
       credentials.apply_grant_revoke({'a'}, grant=['a'])
 
   def test_revoke_absent_raises(self):
-    with pytest.raises(ValueError, match='not in the scoped'):
+    with pytest.raises(ValueError, match='not in the set'):
       credentials.apply_grant_revoke({'a'}, revoke=['b'])
 
   def test_duplicate_grant_raises(self):
     # the second grant of the same name sees it already present
-    with pytest.raises(ValueError, match='already in the scoped'):
+    with pytest.raises(ValueError, match='already in the set'):
       credentials.apply_grant_revoke({'a'}, grant=['b', 'b'])
 
   def test_duplicate_revoke_raises(self):
-    with pytest.raises(ValueError, match='not in the scoped'):
+    with pytest.raises(ValueError, match='not in the set'):
       credentials.apply_grant_revoke({'a', 'b'}, revoke=['b', 'b'])
+
+  def test_subject_names_the_set_in_errors(self):
+    with pytest.raises(ValueError, match='already in the summon allow-list'):
+      credentials.apply_grant_revoke({'a'}, grant=['a'], subject='summon allow-list')
+    with pytest.raises(ValueError, match='not in the summon allow-list'):
+      credentials.apply_grant_revoke({'a'}, revoke=['b'], subject='summon allow-list')
 
   def test_grant_and_revoke_same_name_raises(self):
     with pytest.raises(ValueError, match='grant and revoke the same'):
