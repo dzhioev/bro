@@ -9,10 +9,11 @@ installed.
 """
 
 import argparse
+import contextlib
 import logging
 import os
 import sys
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Generator, Iterable, Sequence
 from typing import TYPE_CHECKING, Optional, TypeVar, overload
 
 from base import log
@@ -195,7 +196,11 @@ class Parser(argparse.ArgumentParser):
       formatter._global_ids = frozenset(id(a) for a in group._group_actions)
     return formatter
 
-  def format_help(self) -> str:
+  @contextlib.contextmanager
+  def _env_help_suffixed(self) -> Generator[None]:
+    """append `(env: NAME)` to each env-supported action's help for the block —
+    only when the last parsed argv carried --allow-env — restoring the originals
+    on exit."""
     argv = self._last_argv if self._last_argv is not None else []
     show_env = '--allow-env' in argv
     originals: dict[str, Optional[str]] = {}
@@ -213,10 +218,14 @@ class Parser(argparse.ArgumentParser):
         else:
           action.help = f'(env: {env_name})'
     try:
-      help_text = super().format_help()
+      yield
     finally:
       for dest, original in originals.items():
         self._env_info[dest]['action'].help = original
+
+  def format_help(self) -> str:
+    with self._env_help_suffixed():
+      help_text = super().format_help()
     if len(self._exclusive_groups) == 0:
       return help_text
     lines = ['', 'Constraints:']

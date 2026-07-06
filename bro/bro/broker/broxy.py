@@ -417,14 +417,12 @@ async def _serve_until_signalled(broxy: Broxy) -> int:
 def _await_ready(socket_path: str, timeout: float) -> int:
   deadline = time.monotonic() + timeout
   while True:
-    probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    try:
-      probe.connect(socket_path)
-      return 0
-    except OSError:
-      pass
-    finally:
-      probe.close()
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+      try:
+        probe.connect(socket_path)
+        return 0
+      except OSError:
+        pass
     if time.monotonic() >= deadline:
       log.error('broxy socket %s not accepting within %.0fs', socket_path, timeout)
       return 1

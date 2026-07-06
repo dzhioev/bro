@@ -72,6 +72,17 @@ Style:
   Reserve graceful handling for genuinely expected conditions (optional input,
   known-transient errors); recovering from an impossible case only hides the bug
   and moves the failure far from its cause.
+- Teardown goes through a context manager, not an inline `try:`/`finally:`.
+  When cleanup must pair with setup — close what was opened, restore what was
+  patched, cancel what was started — scope it with `with`: use the stdlib
+  managers (`closing`, `ExitStack`, …) or write a small custom one
+  (`@contextlib.contextmanager` makes it a few lines), so the pairing is
+  named, reusable, and impossible to forget at the next call site. `finally:`
+  is reserved for the shapes a `with` cannot express: the inside of the
+  context manager (or teardown helper) that owns the release; an epilogue
+  that consumes values computed inside the block (`__exit__` sees the
+  exception, not the block's results); and sequencing within teardown itself,
+  where a later cleanup step must run even when an earlier one raises.
 - Diagnose before you patch. State the upstream cause of a failure before
   reaching for a workaround — a patch you can't trace to a root cause is a
   guess, and a workaround over one you do understand is debt to flag, not hide.

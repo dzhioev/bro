@@ -16,14 +16,12 @@ comes from the `trails` secret (the same one `HTTPTracker` reads).
 import asyncio
 import json
 import os
-import shutil
-import subprocess
 import sys
 from collections.abc import Callable
 from typing import Any, Optional
 
 import base.args
-from base import log
+from base import log, pager
 from bro.fork import fork
 from llm.tracker import RecordedTrail, Step
 from trails.client import (
@@ -88,31 +86,6 @@ def _should_color(mode: str, stream=sys.stdout) -> bool:
   if os.environ.get('NO_COLOR') is not None:
     return False
   return stream.isatty()
-
-
-def _page(text: str) -> None:
-  pager_command = os.environ.get('PAGER')
-  if pager_command is None or len(pager_command.strip()) == 0:
-    pager_command = 'less -FRX' if shutil.which('less') is not None else None
-  if pager_command is None:
-    sys.stdout.write(text)
-    return
-  try:
-    p = subprocess.Popen(pager_command, shell=True, stdin=subprocess.PIPE)
-  except FileNotFoundError:
-    sys.stdout.write(text)
-    return
-  assert p.stdin is not None
-  try:
-    p.stdin.write(text.encode('utf-8'))
-  except BrokenPipeError:
-    pass
-  finally:
-    try:
-      p.stdin.close()
-    except BrokenPipeError:
-      pass
-  p.wait()
 
 
 def _short(trail_id: str) -> str:
@@ -282,7 +255,7 @@ def _command_list(client: TrailsClient, args: dict, colors: _Colors) -> int:
   text = '\n'.join(_format_trail_row(t, colors) for t in trails_list) + '\n'
   will_page = sys.stdout.isatty() and not args.get('no_pager', False)
   if will_page:
-    _page(text)
+    pager.page(text)
   else:
     sys.stdout.write(text)
   return 0
@@ -297,7 +270,7 @@ def _command_show(client: TrailsClient, args: dict, colors: _Colors) -> int:
   text = '\n'.join(out) + '\n'
   will_page = sys.stdout.isatty() and not args.get('no_pager', False)
   if will_page:
-    _page(text)
+    pager.page(text)
   else:
     sys.stdout.write(text)
   return 0
@@ -458,8 +431,7 @@ def main(argv: list[str]) -> Optional[int]:
     return 1
 
   colors = _Colors(_should_color(args['color']))
-  client = default_client()
-  try:
+  with default_client() as client:
     if command == 'list':
       return _command_list(client, args, colors)
     if command == 'show':
@@ -468,8 +440,6 @@ def main(argv: list[str]) -> Optional[int]:
       return _command_tree(client, args, colors)
     if command == 'fork':
       return _command_fork(client, args, colors)
-  finally:
-    client.close()
   parser.print_help(sys.stderr)
   return 1
 

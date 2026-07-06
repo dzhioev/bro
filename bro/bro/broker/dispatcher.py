@@ -26,7 +26,8 @@ Its only residual specialness is that its exit ends the session (it has no origi
 """
 
 import asyncio
-from collections.abc import Callable
+import contextlib
+from collections.abc import Callable, Generator
 from dataclasses import replace
 from typing import Optional, Protocol
 
@@ -142,16 +143,21 @@ class Dispatcher:
 
     task.add_done_callback(_registered)
 
+  @contextlib.contextmanager
+  def _as_active(self, message: Message) -> Generator[None]:
+    previous = self._active
+    self._active = message
+    try:
+      yield
+    finally:
+      self._active = previous
+
   def invoke(self, peer: Peer, message: Message) -> None:
     """dispatch a fresh typed request to its registered handler (rule 3), exposing the request
     to `reply` / `spawn` as the in-flight one for the duration of the call."""
     handler = self._handlers[message.type]
-    previous = self._active
-    self._active = message
-    try:
+    with self._as_active(message):
       handler(self, peer, message)
-    finally:
-      self._active = previous
 
   # --- Runtime listener (all on the loop) ---------------------------------
 

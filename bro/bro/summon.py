@@ -178,14 +178,11 @@ def summon_and_wait(
 ) -> str:
   """send one summon over a fresh channel client and block for the answer — the
   bro `summon` tool's default path. Raises `SummonError` on any failure."""
-  client = _open_client()
-  try:
+  with _open_client() as client:
     request = client.send(SUMMON, _payload(target, prompt, timeout, into))
     return _await_answer(
       client, request, timeout=timeout if timeout is not None else DEFAULT_TIMEOUT
     )
-  finally:
-    client.close()
 
 
 def summon_detached(
@@ -193,11 +190,8 @@ def summon_detached(
 ) -> str:
   """send one summon and return its request id without waiting — the bro `summon`
   tool's detach path. Collect with `collect_summon`, poll with `check_summon`."""
-  client = _open_client()
-  try:
+  with _open_client() as client:
     return client.send(SUMMON, _payload(target, prompt, timeout, into)).id
-  finally:
-    client.close()
 
 
 @dataclass(frozen=True)
@@ -215,8 +209,7 @@ def check_summon(request_id: str) -> SummonStatus:
   already consumed, when the summon failed, or when no broxy answers."""
   from broker.brotocol import Tag
 
-  client = _open_client()
-  try:
+  with _open_client() as client:
     check = client.send(Tag.CHECK, {'id': request_id})
     trail_id: Optional[str] = None
 
@@ -244,8 +237,6 @@ def check_summon(request_id: str) -> SummonStatus:
     return SummonStatus(
       pending=False, answer=_interpret_terminal(terminal, trail_id), trail_id=trail_id
     )
-  finally:
-    client.close()
 
 
 def collect_summon(
@@ -259,8 +250,7 @@ def collect_summon(
   killed or detached wait is collectable. Raises `SummonError` on any failure."""
   from broker.brotocol import Tag
 
-  client = _open_client()
-  try:
+  with _open_client() as client:
     claim = client.send(Tag.CLAIM, {'id': request_id})
     return _await_answer(
       client,
@@ -268,8 +258,6 @@ def collect_summon(
       timeout=timeout if timeout is not None else DEFAULT_TIMEOUT,
       on_started=on_started,
     )
-  finally:
-    client.close()
 
 
 # --- CLI ------------------------------------------------------------------------
@@ -293,7 +281,7 @@ def _summon(
   except SummonError as e:
     log.error('%s', e)
     return 1
-  try:
+  with client:
     request = client.send(SUMMON, _payload(target, prompt, timeout, into))
     if detach:
       print(request.id)
@@ -308,8 +296,6 @@ def _summon(
         on_started=lambda trail_id: log.info('summon started: trail %s', trail_id),
       )
     )
-  finally:
-    client.close()
 
 
 def _check(request_id: str, wait: bool, timeout: Optional[float]) -> int:

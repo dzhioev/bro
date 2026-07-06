@@ -27,6 +27,7 @@ import json
 import ssl
 import urllib.request
 from collections.abc import Iterator
+from types import TracebackType
 from typing import Any, Optional
 from urllib.parse import urlencode, urlparse
 
@@ -158,6 +159,17 @@ class TrailsClient:
 
   def close(self) -> None:
     self._drop_connection()
+
+  def __enter__(self) -> 'TrailsClient':
+    return self
+
+  def __exit__(
+    self,
+    exception_type: Optional[type[BaseException]],
+    exception: Optional[BaseException],
+    traceback: Optional[TracebackType],
+  ) -> None:
+    self.close()
 
   def fetch_spilled_body(self, url: str) -> Any:
     """download a spilled step body from its presigned S3 URL and parse it the

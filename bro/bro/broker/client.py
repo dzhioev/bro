@@ -22,6 +22,7 @@ import os
 import time
 from collections import deque
 from collections.abc import Callable
+from types import TracebackType
 from typing import Any, Optional
 
 from broker.brotocol import Message, Tag
@@ -131,3 +132,14 @@ class Client:
   def close(self, confirm: bool = False) -> None:
     """close the channel; `confirm` semantics per `ClientTransport.close`."""
     self._transport.close(confirm)
+
+  def __enter__(self) -> 'Client':
+    return self
+
+  def __exit__(
+    self,
+    exception_type: Optional[type[BaseException]],
+    exception: Optional[BaseException],
+    traceback: Optional[TracebackType],
+  ) -> None:
+    self.close()

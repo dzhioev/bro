@@ -33,10 +33,8 @@ def _send(type: str, payload: dict[str, Any]) -> int:
   if client is None:
     log.info(f'broker: {CHANNEL_ENV} unset, message not sent')
     return 0
-  try:
+  with client:
     client.send(type, payload)
-  finally:
-    client.close()
   return 0
 
 
@@ -45,13 +43,12 @@ def _request(type: str, payload: dict[str, Any], timeout: Optional[float]) -> in
   if client is None:
     log.info(f'broker: {CHANNEL_ENV} unset, request not sent')
     return 0
-  try:
-    reply = client.request(type, payload, timeout)
-  except (TimeoutError, ConnectionError) as e:
-    log.error(str(e))
-    return 1
-  finally:
-    client.close()
+  with client:
+    try:
+      reply = client.request(type, payload, timeout)
+    except (TimeoutError, ConnectionError) as e:
+      log.error(str(e))
+      return 1
   sys.stdout.write(reply.to_bytes().decode('utf-8') + '\n')
   return 0
 
@@ -61,10 +58,8 @@ def _receive(timeout: Optional[float]) -> int:
   if client is None:
     log.info(f'broker: {CHANNEL_ENV} unset, nothing to receive')
     return 0
-  try:
+  with client:
     message = client.receive(timeout)
-  finally:
-    client.close()
   if message is None:
     return 1
   sys.stdout.write(message.to_bytes().decode('utf-8') + '\n')

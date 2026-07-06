@@ -9,16 +9,18 @@ by nature: worktree ensure / container machinery) validates policy once and
 spawns this runner in the workspace, so it re-runs no policy gates.
 """
 
+import contextlib
 import os
 import signal
 import subprocess
 import tempfile
+from collections.abc import Generator
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from base import log
 from cw.bro import _populate_bro_skills
-from cw.broxy import _SessionBroxy, _start_session_broxy
+from cw.broxy import _start_session_broxy
 from cw.claude_argv import build_claude_launch
 from cw.constants import _BRO_GIT_EMAIL, _BRO_GIT_NAME
 from cw.git import git_out
@@ -57,17 +59,23 @@ def _set_session_context(spec: 'SessionSpec', system_prompt: str, workspace: Pat
   os.environ[CW_SESSION_CONTEXT_ENV] = encode_session_context(records)
 
 
+@contextlib.contextmanager
+def _sigterm_forwarded_to(process: subprocess.Popen) -> Generator[None]:
+  previous = signal.signal(signal.SIGTERM, lambda signum, frame: process.terminate())
+  try:
+    yield
+  finally:
+    signal.signal(signal.SIGTERM, previous)
+
+
 def _run_claude(argv: list[str], env: dict[str, str]) -> int:
   """spawn claude and wait, forwarding SIGTERM to it — claude's raw-mode TTY
   already absorbs Ctrl-C, but a SIGTERM aimed at the runner (docker stop, kill)
   would otherwise strand claude. the runner keeps waiting after forwarding, so
   the post-exit work still runs."""
   process = subprocess.Popen(['claude', *argv], env=env)
-  previous = signal.signal(signal.SIGTERM, lambda signum, frame: process.terminate())
-  try:
+  with _sigterm_forwarded_to(process):
     return process.wait()
-  finally:
-    signal.signal(signal.SIGTERM, previous)
 
 
 def _sync_bare_session_log(name: str, workspace: Path) -> None:
@@ -110,25 +118,25 @@ def run_in_place(spec: 'SessionSpec') -> int:
     # inherits it from the outer environment instead (dive-in sets ppp-dev)
     os.environ['CW_BRO'] = spec.bro
 
-  # host mode launches the session broxy (in a container the entrypoint started
-  # one and BROKER_CHANNEL already points at it), rewriting BROKER_CHANNEL
-  # before the MCP server and claude inherit the environment. a set
-  # BROKER_CHANNEL always names a broxy socket: when the broxy cannot run the
-  # channel is unset — the session runs without one — and the launch proceeds.
-  broxy: Optional[_SessionBroxy] = None
-  upstream = os.environ.get('BROKER_CHANNEL')
-  if upstream is not None and not _in_container():
-    broxy = _start_session_broxy(upstream, os.environ)
-    if broxy is not None:
-      os.environ['BROKER_CHANNEL'] = broxy.address
-    else:
-      del os.environ['BROKER_CHANNEL']
+  with contextlib.ExitStack() as teardown:
+    # host mode launches the session broxy (in a container the entrypoint started
+    # one and BROKER_CHANNEL already points at it), rewriting BROKER_CHANNEL
+    # before the MCP server and claude inherit the environment. a set
+    # BROKER_CHANNEL always names a broxy socket: when the broxy cannot run the
+    # channel is unset — the session runs without one — and the launch proceeds.
+    upstream = os.environ.get('BROKER_CHANNEL')
+    if upstream is not None and not _in_container():
+      broxy = _start_session_broxy(upstream, os.environ)
+      if broxy is not None:
+        teardown.callback(broxy.stop)
+        os.environ['BROKER_CHANNEL'] = broxy.address
+      else:
+        del os.environ['BROKER_CHANNEL']
 
-  # session-local MCP serving, one mechanism for both flavors: OS-assigned port
-  # published via a port file, per-session bearer token. the tools serve this
-  # workspace's code (the runner's cwd and venv).
-  server: Optional[_SessionMCPServer] = None
-  try:
+    # session-local MCP serving, one mechanism for both flavors: OS-assigned port
+    # published via a port file, per-session bearer token. the tools serve this
+    # workspace's code (the runner's cwd and venv).
+    server: Optional[_SessionMCPServer] = None
     mcp_spec: Optional[str] = None
     if spec.bro is not None:
       mcp_spec = f'bro:{spec.bro}'
@@ -140,6 +148,7 @@ def run_in_place(spec: 'SessionSpec') -> int:
       except RuntimeError as e:
         log.error('%s', e)
         return 1
+      teardown.callback(server.stop)
 
     skills_dir: Optional[Path] = None
     bro_env = os.environ.get('CW_BRO')
@@ -172,11 +181,6 @@ def run_in_place(spec: 'SessionSpec') -> int:
     env = {**os.environ}
     _apply_claude_auth(env, warn_when_missing=spec.bro is None)
     code = _run_claude(launch.argv, env)
-  finally:
-    if server is not None:
-      server.stop()
-    if broxy is not None:
-      broxy.stop()
 
   if spec.bro is not None:
     _sync_bare_session_log(spec.name, workspace)

@@ -1,6 +1,8 @@
+import contextlib
 import os
 import subprocess
 import sys
+from collections.abc import Generator
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Optional
@@ -264,6 +266,18 @@ def _run_host_root_via_broker(
   return run_root_via_broker(launch, project, session=name, may_summon=may_summon)
 
 
+@contextlib.contextmanager
+def _held_pidfile(pidfile: Path) -> Generator[None]:
+  """hold this process's pid in `pidfile` for the block — the liveness marker
+  `Workspace.is_active` reads."""
+  pidfile.parent.mkdir(parents=True, exist_ok=True)
+  pidfile.write_text(str(os.getpid()))
+  try:
+    yield
+  finally:
+    pidfile.unlink(missing_ok=True)
+
+
 def _host_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
   """launch the session in a host worktree: ensure + provision it, then spawn the
   worktree's own `cw ss --in-place` (the in-place runner) inside it — so a session
@@ -332,18 +346,13 @@ def _host_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
   # a session on the setup-token instead of the rotating-OAuth /login churn.
   runner_env = _venv_env(worktree / '.venv')
   _apply_claude_auth(runner_env)
-  pidfile = workspace.pidfile
-  pidfile.parent.mkdir(parents=True, exist_ok=True)
-  pidfile.write_text(str(os.getpid()))
-  try:
+  with _held_pidfile(workspace.pidfile):
     if _broker_enabled():
       code = _run_host_root_via_broker(
         spec.name, command, worktree, project, runner_env, may_summon
       )
     else:
       code = subprocess.run(command, cwd=str(worktree), env=runner_env).returncode
-  finally:
-    pidfile.unlink(missing_ok=True)
 
   if spec.drop:
     workspace.remove()
