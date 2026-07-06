@@ -54,11 +54,6 @@ def add_forwarded_flags(parser: Parser) -> None:
     help='thinking effort level (forwarded to claude --effort); defaults to xhigh',
   )
   parser.add_argument(
-    '--resume',
-    action='store_true',
-    help='resume the latest claude session in the named workspace; skips the initial prompt',
-  )
-  parser.add_argument(
     '--into',
     default=None,
     metavar='REF',

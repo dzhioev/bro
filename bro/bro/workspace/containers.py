@@ -14,7 +14,7 @@ from cw.docker import (
   _image_tag,
   find_container_id,
 )
-from cw.paths import _containers_dir, _latest_jsonl, _project_root
+from cw.paths import _containers_dir, _project_root
 from cw.secrets import _ppp_tarball
 from cw.workspace import ContainerWorkspace, _format_ref, _parse_ref
 
@@ -91,31 +91,6 @@ def exec_in_workspace(name: str, command: list[str]) -> int:
   return subprocess.run(
     ['docker', 'exec', '-it', '-u', 'cw', container_id, *docker_command]
   ).returncode
-
-
-def _replace_container_resume_hint(name: str) -> None:
-  """overwrite claude's misleading `claude --resume <id>` hint with a host-side one.
-
-  claude prints a two-line resume hint on exit, but the `claude --resume <id>`
-  command it suggests only works inside the container — the session jsonl
-  lives at ~/.claude/cw-sessions/<name>/projects/-workspace/ on the host, not
-  where a bare host-side `claude` would look. We replace it with the cw-side
-  resume command that actually works, carrying this session's own flags
-  (CW_RESUME_COMMAND, set by start_session) so it reproduces the session.
-
-  Only meaningful when stdout is a TTY (otherwise the ANSI escape is junk in
-  a log) and a session jsonl exists (otherwise claude didn't print a hint).
-  """
-  if not sys.stdout.isatty():
-    return
-  if _latest_jsonl(ContainerWorkspace(name, _project_root()).claude_projects_dir()) is None:
-    return
-  resume_command = os.environ.get('CW_RESUME_COMMAND', f'cw ss -c --resume {name}')
-  # \033[2A: move cursor up 2 lines (over claude's hint).
-  # \033[J:  clear from cursor to end of screen.
-  sys.stdout.write('\033[2A\033[J')
-  print('Resume this session with:')
-  print(f'  {resume_command}')
 
 
 def _broker_enabled() -> bool:

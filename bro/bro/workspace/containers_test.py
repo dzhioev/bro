@@ -57,18 +57,6 @@ class TestSeedContainerClaudeJSON:
     assert json.loads(again.read_text()) == {'container': 'wrote-this'}
 
 
-class TestReplaceContainerResumeHint:
-  def test_replace_container_resume_hint_prints_recorded_command(
-    self, monkeypatch, capsys, tmp_path
-  ):
-    monkeypatch.setenv('CW_RESUME_COMMAND', 'cw ss -c --auto --resume w')
-    monkeypatch.setattr(cw.containers, '_project_root', lambda: tmp_path)
-    monkeypatch.setattr(cw.containers, '_latest_jsonl', lambda d: 'session.jsonl')
-    monkeypatch.setattr('sys.stdout.isatty', lambda: True)
-    cw.containers._replace_container_resume_hint('w')
-    assert 'cw ss -c --auto --resume w' in capsys.readouterr().out
-
-
 class TestRunInContainerInjection:
   @pytest.fixture
   def harness(self, monkeypatch, tmp_path):

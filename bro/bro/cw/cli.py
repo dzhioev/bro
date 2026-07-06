@@ -35,6 +35,11 @@ def build_parser() -> Parser:
   ss.add_argument('--in-place', action='store_true', env=False, help=SUPPRESS)
   add_forwarded_flags(ss)
   ss.add_argument(
+    '--resume',
+    action='store_true',
+    help='resume the latest claude session in the named workspace; skips the initial prompt',
+  )
+  ss.add_argument(
     '--mcp',
     nargs='?',
     const='http',

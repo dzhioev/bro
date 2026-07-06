@@ -63,7 +63,7 @@ class _ContainerHarness:
         'cw.session._container_secrets',
         return_value=ScopedSecrets(set(self.secrets), set(), True),
       ),
-      patch('cw.session._replace_container_resume_hint'),
+      patch('cw.session._replace_resume_hint'),
       # keep the bro-registry import out; threading is asserted per-test
       patch('cw.session.summon_allow_list', return_value=set()),
     ]
@@ -268,6 +268,22 @@ class TestResumeCommand:
     )
 
 
+class TestReplaceResumeHint:
+  def test_prints_recorded_command_over_claudes_hint(self, monkeypatch, capsys, tmp_path):
+    monkeypatch.setenv('CW_RESUME_COMMAND', 'cw ss --auto --resume w')
+    monkeypatch.setattr(cw.session, '_latest_jsonl', lambda directory: 'session.jsonl')
+    monkeypatch.setattr('sys.stdout.isatty', lambda: True)
+    cw.session._replace_resume_hint(cw.session.HostWorktree('w', tmp_path))
+    assert 'cw ss --auto --resume w' in capsys.readouterr().out
+
+  def test_silent_without_a_session_jsonl(self, monkeypatch, capsys, tmp_path):
+    monkeypatch.setenv('CW_RESUME_COMMAND', 'cw ss --resume w')
+    monkeypatch.setattr(cw.session, '_latest_jsonl', lambda directory: None)
+    monkeypatch.setattr('sys.stdout.isatty', lambda: True)
+    cw.session._replace_resume_hint(cw.session.HostWorktree('w', tmp_path))
+    assert capsys.readouterr().out == ''
+
+
 class TestInPlaceArgv:
   def test_drops_machinery_flags_and_carries_the_rest(self):
     parts = _spec(
@@ -321,7 +337,7 @@ class TestConcurrentSessionGuard:
     monkeypatch.setattr(cw.session, 'summon_allow_list', lambda *_a, **_k: set())
     called: list = []
     monkeypatch.setattr(cw.session, 'run_in_container', lambda *_a, **_k: called.append(True) or 0)
-    monkeypatch.setattr(cw.session, '_replace_container_resume_hint', lambda name: None)
+    monkeypatch.setattr(cw.session, '_replace_resume_hint', lambda workspace: None)
     assert cw.session._container_session(_spec(container=True), None) == 0
     assert called == [True]
 
@@ -475,6 +491,38 @@ class TestHostSession:
     ]  # fmt: skip
     assert kwargs['cwd'] == str(worktree)
     assert kwargs['env']['VIRTUAL_ENV'] == str(worktree / '.venv')
+
+  def test_resume_hint_precedes_the_keep_or_drop_offer(self, monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    self._prepare_launch(monkeypatch, tmp_path)
+    monkeypatch.setattr(cw.session, '_broker_enabled', lambda: False)
+    monkeypatch.setattr(
+      cw.session.subprocess, 'run', lambda *_a, **_k: SimpleNamespace(returncode=0)
+    )
+    events: list = []
+    monkeypatch.setattr(cw.session, '_replace_resume_hint', lambda workspace: events.append('hint'))
+    monkeypatch.setattr(
+      cw.session, '_finish_host_worktree', lambda *_a, **_k: events.append('finish')
+    )
+    assert cw.session._host_session(_spec(container=False), None) == 0
+    assert events == ['hint', 'finish']
+
+  def test_resume_hint_skipped_when_the_session_failed(self, monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    self._prepare_launch(monkeypatch, tmp_path)
+    monkeypatch.setattr(cw.session, '_broker_enabled', lambda: False)
+    monkeypatch.setattr(
+      cw.session.subprocess, 'run', lambda *_a, **_k: SimpleNamespace(returncode=3)
+    )
+    events: list = []
+    monkeypatch.setattr(cw.session, '_replace_resume_hint', lambda workspace: events.append('hint'))
+    monkeypatch.setattr(
+      cw.session, '_finish_host_worktree', lambda *_a, **_k: events.append('finish')
+    )
+    assert cw.session._host_session(_spec(container=False), None) == 3
+    assert events == ['finish']
 
   def test_runner_env_gets_the_claude_auth_transform(self, monkeypatch, tmp_path):
     # the outer applies _apply_claude_auth to the runner env it spawns, so a

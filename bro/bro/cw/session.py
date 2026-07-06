@@ -6,13 +6,13 @@ from pathlib import Path
 from typing import Optional
 
 from base import log
-from cw.containers import _broker_enabled, _replace_container_resume_hint, run_in_container
+from cw.containers import _broker_enabled, run_in_container
 from cw.docker import find_container_id
 from cw.git import resolve_ref
 from cw.paths import _latest_jsonl, _project_root, _venv_env
 from cw.secrets import _apply_claude_auth, _container_secrets, _finalize_secrets, _session_bro_name
 from cw.summon import summon_allow_list
-from cw.workspace import ContainerWorkspace, HostWorktree
+from cw.workspace import ContainerWorkspace, HostWorktree, Workspace
 from cw.worktrees import _ensure_host_worktree, _finish_host_worktree, _provision_host_worktree
 
 
@@ -115,6 +115,33 @@ class SessionSpec:
     return replace(self, drop=False, resume=True, into=None, prompt=None, claude_args=[])
 
 
+def _replace_resume_hint(workspace: Workspace) -> None:
+  """overwrite claude's misleading `claude --resume <id>` hint with a cw-side one.
+
+  claude prints a two-line resume hint on exit, but the `claude --resume <id>`
+  command it suggests doesn't reproduce the session: for a container workspace
+  the session jsonl lives at ~/.claude/cw-sessions/<name>/projects/-workspace/
+  on the host, not where a bare host-side `claude` would look, and for a host
+  worktree it only resolves from inside the worktree and bypasses cw's session
+  machinery. We replace it with the cw-side resume command that actually works,
+  carrying this session's own flags (CW_RESUME_COMMAND, set by start_session)
+  so it reproduces the session.
+
+  Only meaningful when stdout is a TTY (otherwise the ANSI escape is junk in
+  a log) and a session jsonl exists (otherwise claude didn't print a hint).
+  """
+  if not sys.stdout.isatty():
+    return
+  if _latest_jsonl(workspace.claude_projects_dir()) is None:
+    return
+  resume_command = os.environ['CW_RESUME_COMMAND']
+  # \033[2A: move cursor up 2 lines (over claude's hint).
+  # \033[J:  clear from cursor to end of screen.
+  sys.stdout.write('\033[2A\033[J')
+  print('Resume this session with:')
+  print(f'  {resume_command}')
+
+
 def start_session(spec: SessionSpec) -> int:
   os.environ['CW_COMMAND'] = ' '.join(spec.to_command_argv())
   os.environ['CW_NAME'] = spec.name
@@ -209,7 +236,7 @@ def _container_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
     may_summon=may_summon,
   )
   if not spec.drop and code == 0:
-    _replace_container_resume_hint(spec.name)
+    _replace_resume_hint(workspace)
   return code
 
 
@@ -321,5 +348,9 @@ def _host_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
   if spec.drop:
     workspace.remove()
   else:
+    # the hint first, while claude's own exit hint is still the last two lines
+    # on screen; the keep-or-drop offer prints below it
+    if code == 0:
+      _replace_resume_hint(workspace)
     _finish_host_worktree(workspace, interactive=not spec.auto and sys.stdin.isatty())
   return code

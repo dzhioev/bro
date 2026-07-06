@@ -130,6 +130,26 @@ class TestLaunchCommand:
     assert len(args['claude_args']) == 0  # nothing leaked into the forwarded REMAINDER
 
 
+class TestTaskModeName:
+  def test_every_launch_picks_a_fresh_workspace_name(self, fake_proj, monkeypatch, capsys):
+    monkeypatch.setattr(dive_in, '_prefetch_task', lambda task_id: ('My Task!', 'task block'))
+    rc = dive_in.dive_in(forwarded=[], dry_run=True, task=UUID)
+    assert rc == 0
+    name = shlex.split(capsys.readouterr().out.strip())[-1]
+    assert re.fullmatch(r'my-task-[0-9a-f]{8}', name) is not None
+
+  def test_empty_slug_falls_back_to_dive_in(self, fake_proj, monkeypatch, capsys):
+    monkeypatch.setattr(dive_in, '_prefetch_task', lambda task_id: ('!!!', 'task block'))
+    rc = dive_in.dive_in(forwarded=[], dry_run=True, task=UUID)
+    assert rc == 0
+    name = shlex.split(capsys.readouterr().out.strip())[-1]
+    assert re.fullmatch(r'dive-in-[0-9a-f]{8}', name) is not None
+
+  def test_resume_flag_is_rejected(self):
+    with pytest.raises(SystemExit):
+      dive_in.main(['dive-in', '--resume', '-t', UUID])
+
+
 class TestPrefetchTask:
   def test_returns_name_and_embeds_metadata_and_page(self, monkeypatch):
     from flow.model import Importance, Task

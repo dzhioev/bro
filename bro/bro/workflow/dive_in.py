@@ -43,14 +43,6 @@ def _resolve_task_id(task_ref: str) -> str:
   raise ValueError(f'--task must be a Notion URL or a UUID task ID: {task_ref}')
 
 
-def _resolve_task_name(task_id: str) -> str:
-  from flow.system import default_system
-
-  system = default_system()
-  task = system.get_task_info(task_id)
-  return task.name
-
-
 def _prefetch_task(task_id: str) -> tuple[str, str]:
   """return (task_name, prompt_block) for a task ref.
 
@@ -83,7 +75,7 @@ def _prefetch_task(task_id: str) -> tuple[str, str]:
 
 
 def _pick_fresh_name(base: str) -> str:
-  """return base-<rand> — a unique slug for a --new or bare dive-in.
+  """return base-<rand> — a unique workspace name; every launch gets a fresh one.
 
   The session commits to a worktree-<slug> branch. A random suffix makes that
   branch unique by construction, so a later session never reuses a slug whose
@@ -133,7 +125,6 @@ def dive_in(
   task: Optional[str] = None,
   new: bool = False,
   focus: bool = False,
-  resume: bool = False,
 ) -> int:
   prompt: Optional[str] = None
   if new:
@@ -156,20 +147,18 @@ def dive_in(
         return 1
       task_id = state.task.id
 
-    if not resume:
-      task_name, task_block = _prefetch_task(task_id)
-      log.info('task: %s', task_name)
-      prompt = _fix_command(task_arg=task, focus=focus, new=False, command=None)
-      prompt = f'{prompt}\n\n{task_block}'
-      if command is not None:
-        prompt = f'{prompt}\n\nOnce you understand the task, {command}'
-    else:
-      task_name = _resolve_task_name(task_id)
-      log.info('task: %s', task_name)
+    task_name, task_block = _prefetch_task(task_id)
+    log.info('task: %s', task_name)
+    prompt = _fix_command(task_arg=task, focus=focus, new=False, command=None)
+    prompt = f'{prompt}\n\n{task_block}'
+    if command is not None:
+      prompt = f'{prompt}\n\nOnce you understand the task, {command}'
 
-    name = _slugify(task_name)
-    if len(name) == 0:
-      name = 'dive-in'
+    base = _slugify(task_name)
+    if len(base) == 0:
+      base = 'dive-in'
+    name = _pick_fresh_name(base)
+    log.info('workspace: %s', name)
 
     os.environ['CW_TASK_ID'] = task_id
   else:
@@ -240,15 +229,5 @@ def main(argv: list[str]) -> Optional[int]:
     help='initial command for the session (with no task flag, used as the entire prompt; with --new, used as the seed idea for the task; otherwise appended to the prompt)',
   )
   args = parser.parse(argv)
-  if args['resume']:
-    if args['new']:
-      parser.error('--resume cannot be combined with --new')
-    if args['task'] is None and not args['focus']:
-      parser.error('--resume requires a task — pass -t <task> or --focus')
-    if args['command'] is not None:
-      parser.error(
-        '--resume cannot be combined with a positional command (it is ignored on resume)'
-      )
-  resume = args['resume']
   forwarded = cw.extract_forwarded_argv(args)
-  return dive_in(forwarded=forwarded, resume=resume, **args)
+  return dive_in(forwarded=forwarded, **args)
