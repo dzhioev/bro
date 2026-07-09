@@ -212,6 +212,53 @@ async def test_unroutable_messages_are_refused():
   assert runtime.sent == []
 
 
+@pytest.mark.asyncio
+async def test_root_lifecycle_is_dropped_without_refusal_or_finalizing(caplog):
+  # the root has no parent to notify: its started/completed are dropped (no refusal
+  # warning) and its completed is not a terminal — the channel keeps serving the session.
+  dispatcher, runtime = make_dispatcher()
+  runtime.next_peers.append('root')
+  run_task = asyncio.ensure_future(dispatcher.run(_LAUNCH))
+  await _settle()
+  dispatcher.on_message('root', Message(type=Tag.STARTED, payload={'trail_id': 't'}))
+  dispatcher.on_message(
+    'root', Message(type=Tag.COMPLETED, payload={'result': 'ok', 'end_reason': 'terminal'})
+  )
+  assert runtime.sent == []
+  assert not any('refused' in record.message for record in caplog.records)
+  assert 'root' not in dispatcher.finalized
+  dispatcher.on(Tag.PING, ping_handler)
+  dispatcher.on_message('root', Message(type=Tag.PING, id='Q', payload={}))
+  assert runtime.sent[-1][1].type == Tag.REPLY  # not drop-gated: requests still served
+  dispatcher.stop()
+  await asyncio.wait_for(run_task, 5)
+
+
+@pytest.mark.asyncio
+async def test_root_lifecycle_invokes_registered_handlers_but_child_lifecycle_still_routes():
+  # rule 3 precedes the drop: a consumer can mount started/completed handlers to surface
+  # the root's lifecycle. A spawned child's lifecycle keeps rule-2 routing to its parent.
+  dispatcher, runtime = make_dispatcher()
+  handled: list[tuple[Peer, str]] = []
+  dispatcher.on(Tag.STARTED, lambda context, peer, message: handled.append((peer, message.type)))
+  dispatcher.on(Tag.COMPLETED, lambda context, peer, message: handled.append((peer, message.type)))
+  runtime.next_peers.append('root')
+  run_task = asyncio.ensure_future(dispatcher.run(_LAUNCH))
+  await _settle()
+  dispatcher.on_message('root', Message(type=Tag.STARTED, payload={'trail_id': 't'}))
+  dispatcher.on_message(
+    'root', Message(type=Tag.COMPLETED, payload={'result': 'ok', 'end_reason': 'terminal'})
+  )
+  assert handled == [('root', Tag.STARTED), ('root', Tag.COMPLETED)]
+  assert 'root' not in dispatcher.finalized
+  child = await spawn_child(dispatcher, runtime, parent='root')
+  dispatcher.on_message(child, Message(type=Tag.STARTED, payload={}))
+  assert handled == [('root', Tag.STARTED), ('root', Tag.COMPLETED)]
+  assert runtime.sent[-1][0] == 'root'  # the child's started routed to its parent
+  dispatcher.stop()
+  await asyncio.wait_for(run_task, 5)
+
+
 def make_tap(dispatcher: Dispatcher) -> list[tuple[Optional[Peer], Peer, Message]]:
   observed: list[tuple[Optional[Peer], Peer, Message]] = []
   dispatcher.add_delivery_observer(

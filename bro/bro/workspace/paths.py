@@ -37,6 +37,13 @@ def _summon_dir(project: Path) -> Path:
   return project / 'var' / 'cw' / 'summon'
 
 
+def _host_log_dir(project: Path) -> Path:
+  # per-session host logs: where the outer cw process's mid-session output goes
+  # while an interactive root owns the terminal (see cw/spawn.py). outside the
+  # workspace dirs so the file never lands inside a /workspace mount.
+  return project / 'var' / 'cw' / 'log'
+
+
 def _session_claude_dir(name: str) -> Path:
   """the per-session claude state dir on the host — mounted as a container
   session's ~/.claude overlay."""

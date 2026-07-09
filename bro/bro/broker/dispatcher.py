@@ -21,8 +21,10 @@ Two invariants carry the design:
   `spawn` whose launch raised (`reason='launch'`, before any peer existed).
 
 The root is a uniform peer: `run(root)` spawns it like any other and awaits its `on_exit`.
-Its only residual specialness is that its exit ends the session (it has no origin, so no
-`failed` is synthesized for it — there is no parent to notify).
+Its only residual specialness is that it has no parent to notify: its exit ends the session
+(no origin, so no `failed` is synthesized for it), and the lifecycle it emits itself goes to
+registered `started` / `completed` handlers when the consumer mounts them (rule 3) and is
+otherwise dropped — never routed or refused.
 """
 
 import asyncio
@@ -187,7 +189,8 @@ class Dispatcher:
 
   def _route(self, peer: Peer, message: Message) -> bool:
     """apply the routing rules; return True when the source's own message was delivered
-    onward (rules 1-2), False when it was invoked or refused (rules 3-4)."""
+    onward (rules 1-2), False when it was invoked, dropped, or refused (rules 3-4 and the
+    root-lifecycle drop)."""
     awaiter = self.pending.get(message.in_reply_to) if message.in_reply_to is not None else None
     if awaiter is not None:  # rule 1: a reply to an awaited request -> its requester, as-is
       self._deliver_observed(peer, awaiter, message)
@@ -199,6 +202,13 @@ class Dispatcher:
       return True
     if message.in_reply_to is None and message.type in self._handlers:  # rule 3: fresh request
       self.invoke(peer, message)
+      return False
+    if peer == self._root and message.type in _LIFECYCLE_TAGS:
+      # rule 2's no-parent case: the root's lifecycle has nobody to notify — dropped, not
+      # refused (a consumer that wants it registers `started`/`completed` handlers, which
+      # rule 3 then catches first). Deliberately not finalized either way: the root's
+      # terminal is its exit, and a `completed` over its long-lived channel must not arm
+      # drop-after-terminal against the session's later traffic.
       return False
     self.refuse(peer, message)  # rule 4
     return False

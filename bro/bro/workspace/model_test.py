@@ -143,9 +143,13 @@ class TestContainerWorkspaceRemove:
     )
     workspace = ContainerWorkspace('ws', tmp_path / 'project')
     workspace.session_dir.mkdir(parents=True)
+    host_log = tmp_path / 'project' / 'var' / 'cw' / 'log' / 'c:ws.log'
+    host_log.parent.mkdir(parents=True)
+    host_log.write_text('mid-session line\n')
     workspace.remove()
     assert removed == {'path': workspace.path, 'image': 'ppp-cw:img'}
     assert not workspace.session_dir.exists()  # session state cleaned
+    assert not host_log.exists()  # the session host log goes with the workspace
 
   def test_session_state_cleaned_even_when_dir_removal_raises(self, monkeypatch, tmp_path):
     monkeypatch.setenv('HOME', str(tmp_path / 'home'))
@@ -161,6 +165,27 @@ class TestContainerWorkspaceRemove:
     with pytest.raises(RuntimeError, match='no image'):
       workspace.remove()
     assert not workspace.session_dir.exists()
+
+
+class TestHostWorktreeRemove:
+  def test_removes_worktree_branch_and_host_log(self, monkeypatch, tmp_path):
+    calls = []
+
+    def fake_git_run(*args, **kwargs):
+      calls.append(args)
+      return _FakeProc()
+
+    monkeypatch.setattr(cw.workspace, 'git_run', fake_git_run)
+    workspace = HostWorktree('ws', tmp_path / 'project')
+    host_log = tmp_path / 'project' / 'var' / 'cw' / 'log' / 'ws.log'
+    host_log.parent.mkdir(parents=True)
+    host_log.write_text('mid-session line\n')
+    workspace.remove()
+    assert calls == [
+      ('worktree', 'remove', '--force', str(workspace.path)),
+      ('branch', '-D', 'worktree-ws'),
+    ]
+    assert not host_log.exists()
 
 
 class TestHostIsClean:

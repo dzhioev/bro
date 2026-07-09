@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import signal
 import sys
 import textwrap
@@ -140,6 +141,55 @@ class TestBrokerCreateArgv:
     assert 'CW_TASK_ID' in build_argv(attached=True)
 
 
+class TestHostLogRedirect:
+  def test_noop_when_stderr_is_not_a_tty(self, tmp_path):
+    # pytest's captured fds are pipes, so the gate sees no terminal
+    redirect = cw.spawn._HostLogRedirect(tmp_path / 'log' / 's.log')
+    redirect.flip()
+    os.write(2, b'stays on stderr\n')
+    redirect.restore()
+    assert not (tmp_path / 'log' / 's.log').exists()
+
+  def test_flip_routes_both_fds_and_restore_returns_them(self, tmp_path, monkeypatch, caplog):
+    monkeypatch.setattr(os, 'isatty', lambda fd: True)
+    host_log = tmp_path / 'log' / 'c:ws.log'
+    redirect = cw.spawn._HostLogRedirect(host_log)
+    redirect.flip()
+    os.write(1, b'stdout line\n')
+    os.write(2, b'stderr line\n')
+    redirect.restore()
+    os.write(2, b'after restore\n')
+    content = host_log.read_text()
+    assert 'stdout line' in content
+    assert 'stderr line' in content
+    assert 'after restore' not in content
+    # the post-restore pointer names the file and counts only this span's lines
+    assert any(
+      f'session host log: {host_log} (2 lines this session)' in record.message
+      for record in caplog.records
+    )
+
+  def test_no_pointer_line_when_nothing_was_written(self, tmp_path, monkeypatch, caplog):
+    monkeypatch.setattr(os, 'isatty', lambda fd: True)
+    redirect = cw.spawn._HostLogRedirect(tmp_path / 's.log')
+    redirect.flip()
+    redirect.restore()
+    assert not any('session host log' in record.message for record in caplog.records)
+
+  def test_pointer_line_counts_only_the_current_span(self, tmp_path, monkeypatch, caplog):
+    monkeypatch.setattr(os, 'isatty', lambda fd: True)
+    host_log = tmp_path / 's.log'
+    host_log.write_text('previous session line\n')
+    redirect = cw.spawn._HostLogRedirect(host_log)
+    redirect.flip()
+    os.write(2, b'fresh line\n')
+    redirect.restore()
+    assert any('(1 line this session)' in record.message for record in caplog.records)
+
+  def test_restore_without_flip_is_a_noop(self, tmp_path):
+    cw.spawn._HostLogRedirect(tmp_path / 's.log').restore()
+
+
 # a stand-in for the attached docker client: exits 42 on SIGINT, 0 on a timeout
 _INTERRUPTIBLE = textwrap.dedent("""
   import signal, sys, time
@@ -199,6 +249,19 @@ class TestAttachedRoot:
     root = cw.spawn._AttachedRoot('cid', process)
     await root.wait()
     assert root.output_tail() == ''
+
+  @pytest.mark.asyncio
+  async def test_host_output_redirected_for_the_attached_span(self, tmp_path, monkeypatch):
+    monkeypatch.setattr(os, 'isatty', lambda fd: True)
+    host_log = tmp_path / 'c:ws.log'
+    process = await asyncio.create_subprocess_exec(sys.executable, '-c', 'pass')
+    root = cw.spawn._AttachedRoot('cid', process, host_log=host_log)
+    os.write(2, b'mid-session line\n')
+    await root.wait()
+    os.write(2, b'post-session line\n')
+    content = host_log.read_text()
+    assert 'mid-session line' in content
+    assert 'post-session line' not in content
 
 
 class TestDockerChildCapture:
@@ -506,11 +569,20 @@ class TestRunRootViaBroker:
     # spawn docker children, summons included
     spawner = captured['spawner']
     assert isinstance(spawner, cw.spawn.CompositeSpawner)
-    assert isinstance(spawner._spawners[cw.spawn.DockerLaunchSpec], cw.spawn.DockerSpawner)
-    assert isinstance(spawner._spawners[cw.spawn.ProcessLaunchSpec], cw.spawn.ProcessSpawner)
+    docker_spawner = spawner._spawners[cw.spawn.DockerLaunchSpec]
+    process_spawner = spawner._spawners[cw.spawn.ProcessLaunchSpec]
+    assert isinstance(docker_spawner, cw.spawn.DockerSpawner)
+    assert isinstance(process_spawner, cw.spawn.ProcessSpawner)
     assert isinstance(spawner._spawners[cw.spawn.SummonLaunchSpec], cw.spawn.SummonSpawner)
-    assert set(captured['handlers']) == {'ping', 'summon'}
+    # both attached-capable spawners point at the same per-session host log
+    host_log = tmp_path / 'proj' / 'var' / 'cw' / 'log' / 'ws.log'
+    assert docker_spawner._host_log == host_log
+    assert process_spawner._host_log == host_log
+    assert set(captured['handlers']) == {'ping', 'started', 'completed', 'summon'}
     assert captured['handlers']['ping'] is cw.spawn.ping_handler
+    # the root's own run lifecycle has no parent peer; the host logs it as the parent
+    assert captured['handlers']['started'] is cw.spawn._log_root_started
+    assert captured['handlers']['completed'] is cw.spawn._log_root_completed
     # the summon handler and the delivery tap belong to the same per-root control
     control = captured['handlers']['summon'].__self__
     assert isinstance(control, cw.summon.SummonControl)
@@ -520,6 +592,22 @@ class TestRunRootViaBroker:
     assert control._status_file == summon_dir / 'ws.status.json'
     assert control._audit_file == summon_dir / 'ws.jsonl'
     assert captured['launch'] is launch
+
+  def test_root_lifecycle_handlers_log_trail_and_end_reason(self, caplog):
+    from broker.brotocol import Message, Tag
+    from broker.dispatcher import Dispatcher
+
+    dispatcher = Dispatcher()
+    cw.spawn._log_root_started(
+      dispatcher, 'root', Message(type=Tag.STARTED, payload={'trail_id': 't-1'})
+    )
+    cw.spawn._log_root_completed(
+      dispatcher,
+      'root',
+      Message(type=Tag.COMPLETED, payload={'result': 'ok', 'end_reason': 'terminal'}),
+    )
+    assert any('root run started (trail t-1)' in record.message for record in caplog.records)
+    assert any('root run ended: terminal' in record.message for record in caplog.records)
 
 
 class TestDockerSpawnerModes:

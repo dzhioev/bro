@@ -13,6 +13,7 @@ from cw.git import git_run, no_prompt_env
 from cw.paths import (
   _claude_projects_dir,
   _containers_dir,
+  _host_log_dir,
   _latest_jsonl,
   _session_claude_dir,
   _worktrees_dir,
@@ -318,6 +319,12 @@ class Workspace(ABC):
       return False, ['not a git repository']
     return _check_clean(runner, refresh_origin)
 
+  def _remove_host_log(self) -> None:
+    # the session host log (cw/spawn.py:_HostLogRedirect) is keyed by `ref`, the
+    # same mode-prefixed key the launch surfaces pass to run_root_via_broker.
+    # diagnostics, not audit — unlike var/cw/summon/, it does not survive removal
+    (_host_log_dir(self.project) / f'{self.ref}.log').unlink(missing_ok=True)
+
   def subject(self) -> Optional[str]:
     return _read_subject(self.claude_projects_dir())
 
@@ -390,6 +397,7 @@ class HostWorktree(Workspace):
   def remove(self) -> None:
     git_run('worktree', 'remove', '--force', str(self.path))
     git_run('branch', '-D', f'worktree-{self.name}')
+    self._remove_host_log()
 
 
 class ContainerWorkspace(Workspace):
@@ -453,10 +461,12 @@ class ContainerWorkspace(Workspace):
     )
 
   def remove(self) -> None:
-    # the session-state dir is cleaned in a finally so it never outlives the
-    # workspace, even when the workspace dir removal escalates and then fails.
+    # the session state (claude dir, host log) is cleaned in a finally so it never
+    # outlives the workspace, even when the workspace dir removal escalates and
+    # then fails.
     try:
       _remove_container_dir(self.path, _cleanup_image())
     finally:
       if self.session_dir.is_dir():
         shutil.rmtree(self.session_dir, ignore_errors=True)
+      self._remove_host_log()

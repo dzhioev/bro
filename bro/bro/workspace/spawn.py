@@ -23,7 +23,10 @@ by the broker's Runtime is uniform:
   `docker start -a -i` as an asyncio subprocess with inherited stdio (the host TTY),
   plus a SIGINT forwarder — an interrupt of the launcher must reach the attached
   docker client, not unwind the broker loop out from under the running session.
-  `output_tail()` is empty (the streams belong to the TTY).
+  While the child owns the terminal, this process's own output is redirected to the
+  session host log (`_HostLogRedirect`) so mid-session host lines and spawner
+  shell-out chatter cannot paint over a raw-mode UI. `output_tail()` is empty (the
+  streams belong to the TTY).
 
 Either way the exit code is the attached process's returncode and `kill()`
 force-removes the container.
@@ -35,9 +38,11 @@ endpoint — no bind-mount hop.
 
 `run_root_via_broker` is the launch shape both modes share: one broker over the
 `var/cw/broker` control dir, the `CompositeSpawner` over both launch modes plus the
-summon lowering (so any root can spawn docker children), the built-in ping handler
-and the root's `SummonControl` (handler + delivery tap + teardown log, see
-`cw/summon.py`), supervise until the root exits.
+summon lowering (so any root can spawn docker children), the built-in ping handler,
+the root-lifecycle log handlers (the host process is the root's parent, so a root
+run's `started`/`completed` land in the host log), and the root's `SummonControl`
+(handler + delivery tap + teardown log, see `cw/summon.py`), supervise until the
+root exits.
 
 `SummonSpawner` turns an authorized summon into a docker child: `_lower_summon`
 (off-loop) computes the launch a host-side `ask <target>` would get — the target's
@@ -47,21 +52,24 @@ the docker path above.
 """
 
 import asyncio
+import os
 import signal
+import sys
 from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 from base import credentials, log
-from broker.brotocol import Tag
-from broker.dispatcher import Broker, ping_handler
+from broker.brotocol import Message, Tag
+from broker.dispatcher import Broker, Dispatcher, ping_handler
+from broker.runtime import Peer
 from broker.spawn import ChildHandle, LaunchSpec, Spawner
 from broker.transport import Provisioned
 from broker.transports.unix import UnixServerTransport
 from cw.docker import _create_container, _docker_create_argv, _ensure_image, _image_tag
 from cw.git import resolve_head, resolve_ref
-from cw.paths import _broker_dir, _containers_dir, _project_root, _summon_dir
+from cw.paths import _broker_dir, _containers_dir, _host_log_dir, _project_root, _summon_dir
 from cw.secrets import _ppp_tarball, bro_run_secrets
 from cw.summon import SummonControl, summon_status_file
 from cw.workspace import ContainerWorkspace
@@ -252,6 +260,61 @@ class _DockerChild(ChildHandle):
     return self._ring.tail().decode('utf-8', errors='replace')
 
 
+class _HostLogRedirect:
+  """point this process's stdout/stderr fds at the session host log while an
+  interactive child owns the terminal.
+
+  The child inherits the real terminal fds at spawn, so only this process's later
+  output moves: mid-session host lines (summon lifecycle, broker warnings) and the
+  inherited-fd output of spawner shell-outs (a mid-session `docker build` for a
+  spawned child) land in the file instead of painting over the child's raw-mode UI.
+  Both fds move because a shell-out is free to write progress to either. When
+  stderr is not a terminal the flip is a no-op — headless consumers read those
+  lines from stderr, and there is no screen to corrupt. When anything was written
+  during the span, `restore()` points at it with one line (path + line count) on
+  the restored terminal."""
+
+  def __init__(self, path: Path):
+    self._path = path
+    self._saved: Optional[tuple[int, int]] = None
+    self._file_fd = -1
+    self._start_size = 0
+
+  def flip(self) -> None:
+    if not os.isatty(2):
+      return
+    sys.stdout.flush()
+    sys.stderr.flush()
+    self._path.parent.mkdir(parents=True, exist_ok=True)
+    # kept open until restore(), and O_RDWR rather than O_WRONLY: the post-session
+    # line count fstat+preads through this fd — valid even if the file is unlinked
+    # meanwhile
+    self._file_fd = os.open(self._path, os.O_RDWR | os.O_CREAT | os.O_APPEND, 0o600)
+    self._start_size = os.fstat(self._file_fd).st_size
+    self._saved = (os.dup(1), os.dup(2))
+    os.dup2(self._file_fd, 1)
+    os.dup2(self._file_fd, 2)
+
+  def restore(self) -> None:
+    if self._saved is None:
+      return
+    saved_stdout, saved_stderr = self._saved
+    self._saved = None
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os.dup2(saved_stdout, 1)
+    os.dup2(saved_stderr, 2)
+    os.close(saved_stdout)
+    os.close(saved_stderr)
+    appended = os.fstat(self._file_fd).st_size - self._start_size
+    if appended > 0:
+      line_count = os.pread(self._file_fd, appended, self._start_size).count(b'\n')
+      noun = 'line' if line_count == 1 else 'lines'
+      log.info('session host log: %s (%d %s this session)', self._path, line_count, noun)
+    os.close(self._file_fd)
+    self._file_fd = -1
+
+
 class _AttachedHandle(ChildHandle):
   """base handle for an interactive root: the child owns the inherited stdio.
 
@@ -260,14 +323,19 @@ class _AttachedHandle(ChildHandle):
   unwinding the loop would tear down the broker under it. The child and this process
   share the foreground process group (the child must keep reading the controlling
   TTY), so on a group-wide TTY interrupt the child may also receive the signal
-  directly; the forward only matters for a signal targeted at the launcher. `wait()`
-  restores default SIGINT handling once the child exits, then runs the subtype's
-  `_on_exited` teardown. `output_tail()` is empty — the streams belong to the TTY."""
+  directly; the forward only matters for a signal targeted at the launcher. For the
+  same span — child spawn to child exit — host output is redirected to `host_log`
+  (`_HostLogRedirect`). `wait()` restores default SIGINT handling and the real fds
+  once the child exits, then runs the subtype's `_on_exited` teardown.
+  `output_tail()` is empty — the streams belong to the TTY."""
 
-  def __init__(self, process: asyncio.subprocess.Process):
+  def __init__(self, process: asyncio.subprocess.Process, host_log: Optional[Path] = None):
     self._process = process
     self._loop = asyncio.get_running_loop()
     self._loop.add_signal_handler(signal.SIGINT, self._forward_sigint)
+    self._redirect = _HostLogRedirect(host_log) if host_log is not None else None
+    if self._redirect is not None:
+      self._redirect.flip()
 
   def _forward_sigint(self) -> None:
     if self._process.returncode is None:
@@ -278,6 +346,8 @@ class _AttachedHandle(ChildHandle):
       return await self._process.wait()
     finally:
       self._loop.remove_signal_handler(signal.SIGINT)
+      if self._redirect is not None:
+        self._redirect.restore()
       await self._on_exited()
 
   async def _on_exited(self) -> None:
@@ -290,8 +360,13 @@ class _AttachedHandle(ChildHandle):
 class _AttachedRoot(_AttachedHandle):
   """handle for the interactive container root: the docker client owns the stdio."""
 
-  def __init__(self, container_id: str, process: asyncio.subprocess.Process):
-    super().__init__(process)
+  def __init__(
+    self,
+    container_id: str,
+    process: asyncio.subprocess.Process,
+    host_log: Optional[Path] = None,
+  ):
+    super().__init__(process, host_log)
     self._container_id = container_id
 
   async def _on_exited(self) -> None:
@@ -337,13 +412,16 @@ def _prepare_container(
 
 
 class DockerSpawner(Spawner):
+  def __init__(self, host_log: Optional[Path] = None):
+    self._host_log = host_log
+
   async def spawn(self, launch: LaunchSpec, channel: Provisioned) -> ChildHandle:
     assert isinstance(launch, DockerLaunchSpec)
     container_id, workspace = await asyncio.to_thread(_prepare_container, launch, channel)
     if launch.attached:
       # docker start -a -i with inherited stdio: the client owns the host TTY.
       process = await asyncio.create_subprocess_exec('docker', 'start', '-a', '-i', container_id)
-      return _AttachedRoot(container_id, process)
+      return _AttachedRoot(container_id, process, host_log=self._host_log)
     # docker start -a (no -i) attaches stdout+stderr to this subprocess, merged into one
     # pipe (chronological interleave) and drained by an async task into the ring.
     process = await asyncio.create_subprocess_exec(
@@ -358,12 +436,15 @@ class DockerSpawner(Spawner):
 
 
 class ProcessSpawner(Spawner):
+  def __init__(self, host_log: Optional[Path] = None):
+    self._host_log = host_log
+
   async def spawn(self, launch: LaunchSpec, channel: Provisioned) -> ChildHandle:
     assert isinstance(launch, ProcessLaunchSpec)
     env = dict(launch.env)
     env['BROKER_CHANNEL'] = f'unix:{channel.host_endpoint}'
     process = await asyncio.create_subprocess_exec(*launch.command, cwd=launch.cwd, env=env)
-    return _AttachedProcess(process)
+    return _AttachedProcess(process, self._host_log)
 
 
 def _lower_summon(launch: SummonLaunchSpec) -> DockerLaunchSpec:
@@ -427,6 +508,16 @@ class CompositeSpawner(Spawner):
     return await spawner.spawn(launch, channel)
 
 
+def _log_root_started(context: Dispatcher, peer: Peer, message: Message) -> None:
+  del context, peer
+  log.info('root run started (trail %s)', message.payload.get('trail_id'))
+
+
+def _log_root_completed(context: Dispatcher, peer: Peer, message: Message) -> None:
+  del context, peer
+  log.info('root run ended: %s', message.payload.get('end_reason'))
+
+
 def run_root_via_broker(
   launch: LaunchSpec, project: Path, *, session: str, may_summon: Collection[str] = ()
 ) -> int:
@@ -435,7 +526,10 @@ def run_root_via_broker(
   exit code. The spawner is the composite over both cw launch modes plus the summon
   lowering, so any root — host process or container — can spawn docker children.
   The broker answers the substrate's built-in ping, so a session can verify its
-  channel (`broker request ping '{}'`).
+  channel (`broker request ping '{}'`), and logs the root's own run lifecycle
+  (`started`/`completed`) as its parent. While an interactive root owns the
+  terminal, host output goes to `var/cw/log/<session>.log` instead of the shared
+  TTY (see `_HostLogRedirect`); headless runs keep it on stderr.
 
   `session` is the session key — the workspace name, mode-prefixed by the launch
   surface (see `cw/summon.py`) — the root's identity in the summon audit and the
@@ -449,11 +543,12 @@ def run_root_via_broker(
   targets = sorted(set(may_summon))
   if len(targets) > 0:
     log.info('session may summon: %s', ', '.join(targets))
-  docker_spawner = DockerSpawner()
+  host_log = _host_log_dir(project) / f'{session}.log'
+  docker_spawner = DockerSpawner(host_log=host_log)
   spawner = CompositeSpawner(
     {
       DockerLaunchSpec: docker_spawner,
-      ProcessLaunchSpec: ProcessSpawner(),
+      ProcessLaunchSpec: ProcessSpawner(host_log=host_log),
       SummonLaunchSpec: SummonSpawner(docker_spawner),
     }
   )
@@ -466,6 +561,10 @@ def run_root_via_broker(
   )
   facade = Broker(UnixServerTransport(str(_broker_dir(project))), spawner)
   facade.on(Tag.PING, ping_handler)
+  # the root's own lifecycle (a bro run at the session root) has no parent peer to
+  # route to; this host process is its parent, so it lands in the host log
+  facade.on(Tag.STARTED, _log_root_started)
+  facade.on(Tag.COMPLETED, _log_root_completed)
   facade.on(SUMMON, control.handle)
   facade.add_delivery_observer(control.observe_delivery)
   try:
