@@ -11,6 +11,7 @@ import cw
 from base import log
 from base.args import Parser
 from flow.focus.client.client import default_client
+from notion import parse_page_ref
 
 
 def _slugify(name: str) -> str:
@@ -24,23 +25,6 @@ def _shell_quote(s: str) -> str:
   if re.fullmatch(r'[A-Za-z0-9_./:@=-]+', s):
     return s
   return "'" + s.replace("'", "'\\''") + "'"
-
-
-_NOTION_URL_RE = re.compile(
-  r'https?://(?:[\w-]+\.)?notion\.(?:so|site|com)/(?:[^?\s]*[/-])?([0-9a-f]{32})(?:\?.*)?$'
-)
-_UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
-
-
-def _resolve_task_id(task_ref: str) -> str:
-  task_ref = task_ref.replace('\\', '')
-  m = _NOTION_URL_RE.match(task_ref)
-  if m is not None:
-    raw = m.group(1)
-    return f'{raw[:8]}-{raw[8:12]}-{raw[12:16]}-{raw[16:20]}-{raw[20:]}'
-  if _UUID_RE.match(task_ref) is not None:
-    return task_ref
-  raise ValueError(f'--task must be a Notion URL or a UUID task ID: {task_ref}')
 
 
 def _prefetch_task(task_id: str) -> tuple[str, str]:
@@ -136,7 +120,7 @@ def dive_in(
     prompt = _fix_command(task_arg=None, focus=focus, new=True, command=command)
   elif task is not None or focus:
     if task is not None:
-      task_id = _resolve_task_id(task)
+      task_id = parse_page_ref(task)
       if focus:
         default_client().set_focus(task_id)
         log.info('focused task: %s', task_id)
