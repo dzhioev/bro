@@ -170,7 +170,13 @@ EOF
 )"
 ```
 
-Report the PR URL `gh` prints to the user.
+Report the PR to the user as a **review link**: a markdown hyperlink titled `#<n>` (the PR number) whose target is the review section — the PR URL with `/files` appended (the Files changed tab, where the review UI lives) — not the main PR page. `gh pr create` prints the PR URL; `<n>` is its last path segment.
+
+```markdown
+[#<n>](https://github.com/<owner>/<repo>/pull/<n>/files)
+```
+
+Surface this link every time the PR enters review-pending: here at creation, and again after each push of review-fix commits (step 15).
 
 ### 13. Log "PR opened" to the task (dive-in sessions only)
 
@@ -220,6 +226,7 @@ A non-empty `comments` array on an APPROVED review counts as actionable feedback
      ```bash
      gh api -X POST repos/<owner>/<repo>/pulls/<n>/comments/<comment_id>/replies -f body="..."
      ```
+7. Surface the review link again (step 12's `[#<n>](<pr-url>/files)` format) — the pushed commits put the PR back into review-pending.
 
 **`review` with `state: "APPROVED"` and empty `comments`**:
 
