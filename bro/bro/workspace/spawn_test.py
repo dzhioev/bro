@@ -10,7 +10,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import cw.containers
 import cw.docker
 import cw.paths
 import cw.secrets
@@ -71,9 +70,7 @@ class TestBrokerCreateArgv:
   @pytest.fixture
   def build_argv(self, monkeypatch, tmp_path):
     monkeypatch.setattr(cw.docker.Path, 'home', lambda: tmp_path)
-    monkeypatch.setattr(
-      cw.containers, '_seed_container_claude_json', lambda d, h: tmp_path / '.claude.json'
-    )
+    monkeypatch.setattr(cw.docker, '_seed_claude_json', lambda d, h, **k: tmp_path / '.claude.json')
 
     def build(**launch_kwargs):
       launch_kwargs.setdefault('attached', False)

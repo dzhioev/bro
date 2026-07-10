@@ -183,11 +183,6 @@ def main(argv: list[str]) -> Optional[int]:
       parser.error(
         '--resume cannot be combined with -p/--prompt (the initial prompt is ignored on resume)'
       )
-  if (args['grant_cred'] is not None or args['revoke_cred'] is not None) and args['host']:
-    parser.error(
-      '--grant-cred/--revoke-cred cannot be combined with --host: host mode is unscoped, '
-      'so a revoke could not actually restrict the session'
-    )
   spec = SessionSpec(**args)
   if in_place:
     return run_in_place(spec)

@@ -1,4 +1,3 @@
-import json
 import os
 import subprocess
 import sys
@@ -17,46 +16,6 @@ from cw.docker import (
 from cw.paths import _containers_dir, _project_root
 from cw.secrets import _ppp_tarball
 from cw.workspace import ContainerWorkspace, _format_ref, _parse_ref
-
-# explicit container-side ~/.claude.json config (installMethod matches the
-# image's npm-global claude; the project entry pre-accepts the trust dialog).
-_CONTAINER_CLAUDE_JSON: dict = {
-  'installMethod': 'global',
-  'autoUpdates': False,
-  'hasCompletedOnboarding': True,
-  # the pyright-lsp plugin + official marketplace are baked into the image and
-  # seeded by the entrypoint; mark the auto-install done so claude doesn't re-run
-  # the network fetch (and never prompts) at session start.
-  'officialMarketplaceAutoInstallAttempted': True,
-  'officialMarketplaceAutoInstalled': True,
-  'projects': {'/workspace': {'hasTrustDialogAccepted': True}},
-}
-# account-identity keys carried over from the host so the session starts logged
-# in (the OAuth bearer itself arrives via CLAUDE_CODE_OAUTH_TOKEN; these hold the
-# matching account metadata claude renders the logged-in account from).
-_CLAUDE_JSON_IDENTITY_KEYS = ('oauthAccount', 'userID')
-
-
-def _seed_container_claude_json(claude_dir: Path, host_file: Path) -> Path:
-  """seed-once per-workspace container-private ~/.claude.json.
-
-  built from the explicit container config plus the host's account-identity
-  fields — no host machine state copied. missing identity is fatal. subsequent
-  runs keep whatever the container last wrote.
-  """
-  seed = claude_dir / '.claude.json'
-  if not seed.exists():
-    if not host_file.is_file():
-      raise SystemExit(f'missing {host_file} — log in with claude on the host first')
-    host = json.loads(host_file.read_text())
-    data = dict(_CONTAINER_CLAUDE_JSON)
-    for key in _CLAUDE_JSON_IDENTITY_KEYS:
-      if key not in host:
-        raise SystemExit(f'{host_file} has no {key!r} — log in with claude on the host first')
-      data[key] = host[key]
-    seed.write_text(json.dumps(data))
-    seed.chmod(0o600)
-  return seed
 
 
 def exec_in_workspace(name: str, command: list[str]) -> int:

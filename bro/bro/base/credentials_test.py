@@ -158,6 +158,18 @@ class TestRegistryOverride:
     with pytest.raises(credentials.SecretNotFound):
       credentials.default_store().get('notion')
 
+  def test_override_directory_joins_the_search_path(self, configs_dir: Path, tmp_path, monkeypatch):
+    # a materialized scoped store is a registry plus its sibling `.cred` files in
+    # one dir (outside the standard search dirs on host) — the override's own
+    # directory must be searched for the store to resolve
+    store_dir = tmp_path / 'scoped-store'
+    store_dir.mkdir()
+    (store_dir / 'notion.cred').write_text('scoped-value')
+    registry_path = store_dir / credentials.REGISTRY_FILE
+    registry_path.write_text(json.dumps({'notion': {'sources': [{'file': 'notion.cred'}]}}))
+    monkeypatch.setenv('CREDENTIALS_REGISTRY', str(registry_path))
+    assert credentials.default_store().get('notion') == 'scoped-value'
+
   def test_bad_override_path_raises(self, configs_dir: Path, monkeypatch):
     monkeypatch.setenv('CREDENTIALS_REGISTRY', str(configs_dir / 'absent_registry.json'))
     with pytest.raises(FileNotFoundError):

@@ -36,7 +36,12 @@ def _encode_cwd(cwd: str) -> str:
 
 
 def _projects_dir() -> Path:
-  projects_root = Path.home() / '.claude' / 'projects'
+  # a host cw session points CLAUDE_CONFIG_DIR at its private per-session state
+  # dir (reference/cw.md, "Host claude-state isolation"); its transcripts live
+  # under that dir's projects/, not the host ~/.claude's
+  config_dir = os.environ.get('CLAUDE_CONFIG_DIR')
+  claude_dir = Path(config_dir) if config_dir is not None else Path.home() / '.claude'
+  projects_root = claude_dir / 'projects'
   pwd = os.environ.get('PWD')
   cwd = Path(pwd if pwd is not None else os.getcwd()).resolve()
   for candidate in [cwd, *cwd.parents]:

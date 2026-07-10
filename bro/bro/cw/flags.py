@@ -29,14 +29,14 @@ def add_forwarded_flags(parser: Parser) -> None:
     action='append',
     default=None,
     metavar='SECRET',
-    help='grant a secret to the container scoped set on top of the computed set (repeatable); container only, rejected with --host; errors if already in the set or unknown to the registry',
+    help='grant a secret to the session scoped set on top of the computed set (repeatable); errors if already in the set or unknown to the registry',
   )
   parser.add_argument(
     '--revoke-cred',
     action='append',
     default=None,
     metavar='SECRET',
-    help='revoke a secret from the container scoped set (repeatable); container only, rejected with --host; errors if not in the set',
+    help='revoke a secret from the session scoped set (repeatable); errors if not in the set',
   )
   parser.add_argument(
     '--grant-summon',

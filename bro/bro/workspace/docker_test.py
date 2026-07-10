@@ -1,6 +1,6 @@
 import pytest
 
-import cw.containers
+import cw.claude_config
 import cw.docker
 
 
@@ -12,17 +12,18 @@ class TestPluginSeedContract:
   _SEED_DIR = '/opt/claude-plugins-seed'
 
   def test_settings_enables_pyright_lsp(self):
-    assert cw.docker._CONTAINER_SETTINGS_JSON['enabledPlugins'] == {
+    assert cw.claude_config._SESSION_SETTINGS_JSON['enabledPlugins'] == {
       'pyright-lsp@claude-plugins-official': True
     }
 
   def test_claude_json_suppresses_marketplace_autoinstall(self):
     # the marketplace is baked into the image, so the runtime auto-install (a
     # network fetch that can also prompt) must be marked already-done.
-    assert cw.containers._CONTAINER_CLAUDE_JSON['officialMarketplaceAutoInstallAttempted'] is True
+    session_json = cw.claude_config._SESSION_CLAUDE_JSON
+    assert session_json['officialMarketplaceAutoInstallAttempted'] is True
 
   def test_dockerfile_installs_and_stages_the_enabled_plugin(self):
-    plugin = next(iter(cw.docker._CONTAINER_SETTINGS_JSON['enabledPlugins']))
+    plugin = next(iter(cw.claude_config._SESSION_SETTINGS_JSON['enabledPlugins']))
     dockerfile = (cw.docker.CONTAINER_DIR / 'Dockerfile').read_text()
     assert f'claude plugin install {plugin}' in dockerfile
     assert self._SEED_DIR in dockerfile
@@ -87,9 +88,7 @@ class TestDockerCreateArgv:
   @pytest.fixture
   def build_argv(self, monkeypatch, tmp_path):
     monkeypatch.setattr(cw.docker.Path, 'home', lambda: tmp_path)
-    monkeypatch.setattr(
-      cw.containers, '_seed_container_claude_json', lambda d, h: tmp_path / '.claude.json'
-    )
+    monkeypatch.setattr(cw.docker, '_seed_claude_json', lambda d, h, **k: tmp_path / '.claude.json')
 
     def build(**kwargs):
       return cw.docker._docker_create_argv(

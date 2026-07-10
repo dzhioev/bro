@@ -7,12 +7,19 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Optional
 
-from base import log
+from base import credentials, log
+from cw.claude_config import _provision_host_claude_dir
 from cw.containers import _broker_enabled, run_in_container
 from cw.docker import find_container_id
 from cw.git import resolve_ref
 from cw.paths import _latest_jsonl, _project_root, _venv_env
-from cw.secrets import _apply_claude_auth, _container_secrets, _finalize_secrets, _session_bro_name
+from cw.secrets import (
+  _apply_claude_auth,
+  _finalize_secrets,
+  _materialize_scoped_store,
+  _session_bro_name,
+  _session_secrets,
+)
 from cw.summon import summon_allow_list
 from cw.workspace import ContainerWorkspace, HostWorktree, Workspace
 from cw.worktrees import _ensure_host_worktree, _finish_host_worktree, _provision_host_worktree
@@ -213,7 +220,7 @@ def _container_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
     os.environ['CW_BRO'] = spec.bro
 
   bro_name = _session_bro_name(spec.bro)
-  scoped = _container_secrets(bro_name, mcp=spec.mcp, bro_mode=spec.bro is not None)
+  scoped = _session_secrets(bro_name, mcp=spec.mcp, bro_mode=spec.bro is not None)
   try:
     secrets = _finalize_secrets(scoped.required, grant=spec.grant_cred, revoke=spec.revoke_cred)
     may_summon = summon_allow_list(bro_name, grant=spec.grant_summon, revoke=spec.revoke_summon)
@@ -314,11 +321,36 @@ def _host_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
   # the session's summon allow-list, computed before the worktree exists so a bad
   # --grant-summon/--revoke-summon fails without creating anything. host mode is
   # covered like container mode — its broker root enforces the same policy.
+  bro_name = _session_bro_name(spec.bro)
   try:
-    may_summon = summon_allow_list(
-      _session_bro_name(spec.bro), grant=spec.grant_summon, revoke=spec.revoke_summon
-    )
+    may_summon = summon_allow_list(bro_name, grant=spec.grant_summon, revoke=spec.revoke_summon)
   except ValueError as e:
+    log.error('%s', e)
+    return 1
+
+  # a native session's sole auth is the claude_code setup-token; its private
+  # claude state carries no OAuth file to fall back on. gated ahead of the
+  # general hydration below for the actionable message.
+  if spec.bro is None and credentials.try_get('claude_code') is None:
+    log.error(
+      'claude_code secret not resolvable — a native session authenticates with the '
+      'setup-token; mint one with `claude setup-token` and store it in '
+      '~/.ppp/claude_code_oauth_token'
+    )
+    return 1
+
+  # the same scoped-store hydration as container mode — strict, before anything
+  # is created; a convenience scope on host, not a boundary (reference/cw.md,
+  # "Scoped credential hydration")
+  scoped = _session_secrets(bro_name, mcp=spec.mcp, bro_mode=spec.bro is not None)
+  try:
+    secrets = _finalize_secrets(scoped.required, grant=spec.grant_cred, revoke=spec.revoke_cred)
+  except ValueError as e:
+    log.error('%s', e)
+    return 1
+  try:
+    store = credentials.build_scoped_store(secrets, optional=scoped.optional)
+  except (ValueError, credentials.SecretNotFound) as e:
     log.error('%s', e)
     return 1
 
@@ -341,10 +373,14 @@ def _host_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
     return 1
 
   command = [str(cw_bin), *spec.to_in_place_argv()]
-  # the auth transform is applied here as well as in the runner: the runner is
-  # the worktree's own code, which may predate it — the inherited env keeps such
-  # a session on the setup-token instead of the rotating-OAuth /login churn.
+  # the auth transform and the private claude state dir are applied here as well
+  # as in the runner: the runner is the worktree's own code, which may predate
+  # them — the inherited env keeps such a session on the setup-token, isolated
+  # from the host's rotating-OAuth /login churn.
   runner_env = _venv_env(worktree / '.venv')
+  claude_dir = _provision_host_claude_dir(spec.name, worktree, project)
+  runner_env['CLAUDE_CONFIG_DIR'] = str(claude_dir)
+  runner_env['CREDENTIALS_REGISTRY'] = str(_materialize_scoped_store(store, claude_dir / '.ppp'))
   _apply_claude_auth(runner_env)
   with _held_pidfile(workspace.pidfile):
     if _broker_enabled():

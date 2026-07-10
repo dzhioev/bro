@@ -6,10 +6,15 @@ import cw.cli
 
 
 class TestSsValidation:
-  def test_ss_grant_cred_with_host_errors(self, capsys):
-    with pytest.raises(SystemExit):
-      cw.cli.main(['cw', 'ss', '--host', '--grant-cred', 'gmail_creds', 'wsname'])
-    assert 'cannot be combined with --host' in capsys.readouterr().err
+  def test_ss_grant_cred_with_host_is_accepted(self):
+    # host sessions hydrate the same scoped store as containers (a convenience
+    # scope, not a boundary), so the grant/revoke pair applies to both modes
+    with patch('cw.cli.start_session', return_value=0) as fake_start:
+      rc = cw.cli.main(['cw', 'ss', '--host', '--grant-cred', 'gmail_creds', 'wsname'])
+    assert rc == 0
+    spec = fake_start.call_args[0][0]
+    assert spec.host
+    assert spec.grant_cred == ['gmail_creds']
 
   def test_ss_auto_with_host_is_accepted(self):
     # host sessions may run autonomously; the container default is the sandbox,

@@ -168,7 +168,8 @@ class TestContainerWorkspaceRemove:
 
 
 class TestHostWorktreeRemove:
-  def test_removes_worktree_branch_and_host_log(self, monkeypatch, tmp_path):
+  def test_removes_worktree_branch_session_state_and_host_log(self, monkeypatch, tmp_path):
+    monkeypatch.setenv('HOME', str(tmp_path / 'home'))
     calls = []
 
     def fake_git_run(*args, **kwargs):
@@ -177,6 +178,7 @@ class TestHostWorktreeRemove:
 
     monkeypatch.setattr(cw.workspace, 'git_run', fake_git_run)
     workspace = HostWorktree('ws', tmp_path / 'project')
+    workspace.session_dir.mkdir(parents=True)
     host_log = tmp_path / 'project' / 'var' / 'cw' / 'log' / 'ws.log'
     host_log.parent.mkdir(parents=True)
     host_log.write_text('mid-session line\n')
@@ -185,7 +187,36 @@ class TestHostWorktreeRemove:
       ('worktree', 'remove', '--force', str(workspace.path)),
       ('branch', '-D', 'worktree-ws'),
     ]
+    assert not workspace.session_dir.exists()
     assert not host_log.exists()
+
+
+class TestHostWorktreeClaudeProjectsDir:
+  def _workspace(self, monkeypatch, tmp_path):
+    monkeypatch.setenv('HOME', str(tmp_path / 'home'))
+    monkeypatch.setattr(cw.workspace, '_worktrees_dir', lambda project: tmp_path / 'worktrees')
+    return HostWorktree('ws', tmp_path / 'project')
+
+  def _encoded(self, workspace):
+    return str(workspace.path).replace('/', '-').replace('.', '-')
+
+  def test_prefers_the_private_session_projects_dir(self, monkeypatch, tmp_path):
+    workspace = self._workspace(monkeypatch, tmp_path)
+    private = workspace.session_dir / 'projects' / self._encoded(workspace)
+    private.mkdir(parents=True)
+    assert workspace.claude_projects_dir() == private
+
+  def test_falls_back_to_legacy_host_projects_dir(self, monkeypatch, tmp_path):
+    # sessions recorded before the private config dir live under ~/.claude/projects
+    workspace = self._workspace(monkeypatch, tmp_path)
+    legacy = tmp_path / 'home' / '.claude' / 'projects' / self._encoded(workspace)
+    legacy.mkdir(parents=True)
+    assert workspace.claude_projects_dir() == legacy
+
+  def test_neither_present_names_the_private_dir(self, monkeypatch, tmp_path):
+    workspace = self._workspace(monkeypatch, tmp_path)
+    private = workspace.session_dir / 'projects' / self._encoded(workspace)
+    assert workspace.claude_projects_dir() == private
 
 
 class TestHostIsClean:

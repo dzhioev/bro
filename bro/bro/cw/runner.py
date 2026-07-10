@@ -22,10 +22,11 @@ from base import log
 from cw.bro import _populate_bro_skills
 from cw.broxy import _start_session_broxy
 from cw.claude_argv import build_claude_launch
+from cw.claude_config import _provision_host_claude_dir
 from cw.constants import _BRO_GIT_EMAIL, _BRO_GIT_NAME
 from cw.git import git_out
 from cw.mcp import _SessionMCPServer, _start_session_mcp_server
-from cw.paths import _claude_projects_dir, _in_container, _latest_jsonl
+from cw.paths import _claude_projects_dir, _in_container, _latest_jsonl, _project_root
 from cw.secrets import _apply_claude_auth
 from cw.session_context import (
   CW_SESSION_CONTEXT_ENV,
@@ -96,6 +97,16 @@ def _sync_bare_session_log(name: str, workspace: Path) -> None:
 
 def run_in_place(spec: 'SessionSpec') -> int:
   workspace = Path.cwd()
+
+  if not _in_container():
+    # a host session's claude state lives in the private per-session config dir
+    # (the container-equivalent isolation — reference/cw.md, "Host claude-state
+    # isolation"). provisioning is idempotent and the outer launch also applies
+    # it, so a runner spawned by an outer cw that predates the config dir still
+    # provisions its own. set before anything derives paths or spawns children:
+    # the resume resolution below, the hooks, and claude itself all read it.
+    claude_dir = _provision_host_claude_dir(spec.name, workspace, _project_root())
+    os.environ['CLAUDE_CONFIG_DIR'] = str(claude_dir)
 
   claude_args = list(spec.claude_args)
   if spec.resume:

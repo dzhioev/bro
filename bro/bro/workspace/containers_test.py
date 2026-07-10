@@ -1,4 +1,3 @@
-import json
 import sys
 
 import pytest
@@ -13,48 +12,6 @@ class _FakeProc:
     self.returncode = returncode
     self.stdout = stdout
     self.stderr = stderr
-
-
-class TestSeedContainerClaudeJSON:
-  def _host(self, tmp_path, **extra):
-    path = tmp_path / 'host.json'
-    path.write_text(json.dumps({'oauthAccount': {'id': 'acct'}, 'userID': 'uid', **extra}))
-    return path
-
-  def _seed_dir(self, tmp_path):
-    d = tmp_path / 'seed'
-    d.mkdir()
-    return d
-
-  def test_constructs_explicit_config_plus_identity(self, tmp_path):
-    host = self._host(tmp_path, projects={'/x': {}}, numStartups=42)
-    seed = cw.containers._seed_container_claude_json(self._seed_dir(tmp_path), host)
-    data = json.loads(seed.read_text())
-    assert data['installMethod'] == 'global'
-    assert data['hasCompletedOnboarding'] is True
-    assert data['projects']['/workspace']['hasTrustDialogAccepted'] is True
-    assert data['oauthAccount'] == {'id': 'acct'}
-    assert data['userID'] == 'uid'
-    # host machine state must not leak in
-    assert '/x' not in data['projects']
-    assert 'numStartups' not in data
-
-  def test_missing_host_file_is_fatal(self, tmp_path):
-    with pytest.raises(SystemExit):
-      cw.containers._seed_container_claude_json(self._seed_dir(tmp_path), tmp_path / 'absent.json')
-
-  def test_missing_identity_key_is_fatal(self, tmp_path):
-    host = tmp_path / 'host.json'
-    host.write_text(json.dumps({'userID': 'uid'}))
-    with pytest.raises(SystemExit):
-      cw.containers._seed_container_claude_json(self._seed_dir(tmp_path), host)
-
-  def test_seed_is_not_overwritten_on_second_call(self, tmp_path):
-    seed_dir = self._seed_dir(tmp_path)
-    seed = cw.containers._seed_container_claude_json(seed_dir, self._host(tmp_path))
-    seed.write_text(json.dumps({'container': 'wrote-this'}))
-    again = cw.containers._seed_container_claude_json(seed_dir, self._host(tmp_path))
-    assert json.loads(again.read_text()) == {'container': 'wrote-this'}
 
 
 class TestRunInContainerInjection:

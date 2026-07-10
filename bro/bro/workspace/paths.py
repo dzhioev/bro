@@ -55,13 +55,27 @@ def _in_container() -> bool:
   return Path('/.dockerenv').is_file()
 
 
+def _encode_claude_path(path: Path) -> str:
+  """claude code's project-dir encoding of an absolute path: '/' and '.'
+  replaced by '-'."""
+  return str(path).replace('/', '-').replace('.', '-')
+
+
+def _claude_config_dir() -> Path:
+  """the claude config root of the current process's session: CLAUDE_CONFIG_DIR
+  when set (a host session points it at its private per-session state dir), else
+  the default ~/.claude (a container session's, via the cw-sessions mount)."""
+  override = os.environ.get('CLAUDE_CONFIG_DIR')
+  if override is not None:
+    return Path(override)
+  return Path.home() / '.claude'
+
+
 def _claude_projects_dir(workspace: Path) -> Path:
-  """claude code's per-project state dir for a workspace, by claude's own path
-  encoding: the absolute path with '/' and '.' replaced by '-'. one derivation
-  covers both modes — host worktree → `<encoded-worktree-path>`, container clone
-  (`/workspace`) → `-workspace`."""
-  encoded = str(workspace).replace('/', '-').replace('.', '-')
-  return Path.home() / '.claude' / 'projects' / encoded
+  """claude code's per-project state dir for a workspace, under the session's
+  config root. one derivation covers both modes — host worktree →
+  `<encoded-worktree-path>`, container clone (`/workspace`) → `-workspace`."""
+  return _claude_config_dir() / 'projects' / _encode_claude_path(workspace)
 
 
 def _latest_jsonl(projects_dir: Path) -> Optional[Path]:

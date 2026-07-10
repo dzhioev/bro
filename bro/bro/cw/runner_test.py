@@ -15,6 +15,7 @@ class _Harness:
 
   def __init__(self, tmp_path: Path):
     self.projects_dir = tmp_path / 'projects'
+    self.claude_config_dir = tmp_path / 'claude-config'
     self.server = MagicMock()
     self.server.endpoint = MCPEndpoint(port=1234, token='tok')
     self.broxy = MagicMock()
@@ -35,11 +36,14 @@ class _Harness:
       patch('cw.runner._apply_claude_auth'),
       patch('cw.runner._start_session_broxy', return_value=self.broxy),
       patch('cw.runner._in_container', return_value=False),
+      patch('cw.runner._provision_host_claude_dir', return_value=self.claude_config_dir),
+      patch('cw.runner._project_root', return_value=Path('/main-repo')),
     ]
     entered = [p.__enter__() for p in self._patches]
     self.env = entered[0]
     self.env.pop('CW_BRO', None)
     self.env.pop('BROKER_CHANNEL', None)
+    self.env.pop('CLAUDE_CONFIG_DIR', None)
     self.start_server = entered[2]
     self.build = entered[3]
     self.run_claude = entered[4]
@@ -48,6 +52,7 @@ class _Harness:
     self.apply_auth = entered[7]
     self.start_broxy = entered[8]
     self.in_container = entered[9]
+    self.provision_claude_dir = entered[10]
     return self
 
   def __exit__(self, *exception):
@@ -160,6 +165,22 @@ class TestRunInPlace:
     with _Harness(tmp_path) as h:
       assert cw.runner.run_in_place(_spec(bro='pm')) == 0
       assert h.apply_auth.call_args.kwargs == {'warn_when_missing': False}
+
+  def test_host_session_provisions_and_exports_the_claude_config_dir(self, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    with _Harness(tmp_path) as h:
+      assert cw.runner.run_in_place(_spec()) == 0
+      h.provision_claude_dir.assert_called_once_with('w', tmp_path, Path('/main-repo'))
+      env = h.run_claude.call_args.args[1]
+      assert env['CLAUDE_CONFIG_DIR'] == str(h.claude_config_dir)
+
+  def test_container_session_keeps_the_default_claude_config(self, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    with _Harness(tmp_path) as h:
+      h.in_container.return_value = True
+      assert cw.runner.run_in_place(_spec()) == 0
+      h.provision_claude_dir.assert_not_called()
+      assert 'CLAUDE_CONFIG_DIR' not in h.run_claude.call_args.args[1]
 
 
 class TestSessionBroxy:

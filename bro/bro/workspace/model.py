@@ -11,8 +11,8 @@ from typing import Optional
 from cw.docker import _image_tag
 from cw.git import git_run, no_prompt_env
 from cw.paths import (
-  _claude_projects_dir,
   _containers_dir,
+  _encode_claude_path,
   _host_log_dir,
   _latest_jsonl,
   _session_claude_dir,
@@ -294,6 +294,13 @@ class Workspace(ABC):
     self.project = project
 
   @property
+  def session_dir(self) -> Path:
+    """the session's private claude state dir — a container session's ~/.claude
+    overlay (mounted), a host session's CLAUDE_CONFIG_DIR target (provisioned by
+    cw/claude_config.py)."""
+    return _session_claude_dir(self.name)
+
+  @property
   @abstractmethod
   def path(self) -> Path: ...
 
@@ -370,7 +377,17 @@ class HostWorktree(Workspace):
     return _host_pidfile(self.project, self.name)
 
   def claude_projects_dir(self) -> Path:
-    return _claude_projects_dir(self.path)
+    # transcripts live in the session's private state dir; a worktree whose
+    # sessions were recorded before the dir existed (against the host ~/.claude)
+    # is read from the legacy location until a launch migrates it
+    # (cw/claude_config.py:_migrate_legacy_transcripts)
+    private = self.session_dir / 'projects' / _encode_claude_path(self.path)
+    if private.is_dir():
+      return private
+    legacy = Path.home() / '.claude' / 'projects' / _encode_claude_path(self.path)
+    if legacy.is_dir():
+      return legacy
+    return private
 
   def is_active(self, mounts: set[str]) -> bool:
     # host sessions run plain `claude` (no `-w`), so cw is the worktree's owner for
@@ -397,6 +414,8 @@ class HostWorktree(Workspace):
   def remove(self) -> None:
     git_run('worktree', 'remove', '--force', str(self.path))
     git_run('branch', '-D', f'worktree-{self.name}')
+    if self.session_dir.is_dir():
+      shutil.rmtree(self.session_dir, ignore_errors=True)
     self._remove_host_log()
 
 
@@ -408,10 +427,6 @@ class ContainerWorkspace(Workspace):
   @property
   def ref(self) -> str:
     return _format_ref(self.name, True)
-
-  @property
-  def session_dir(self) -> Path:
-    return _session_claude_dir(self.name)
 
   def claude_projects_dir(self) -> Path:
     return self.session_dir / 'projects' / '-workspace'

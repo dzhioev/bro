@@ -1,13 +1,15 @@
 import io
 import os
+import shutil
 import tarfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 from base import credentials, log
 
-# secrets every containerized claude code session resolves regardless of bro: the
-# sync-session-log hooks run in-container, and an in-session bro run records to trails.
+# secrets every claude code session resolves regardless of bro: the
+# sync-session-log hooks run in-session, and an in-session bro run records to trails.
 _CW_SESSION_BASELINE = ('session_log', 'trails')
 
 # the bro a no-`--bro` container session themes as (dive-in already sets CW_BRO to
@@ -26,10 +28,11 @@ def _session_bro_name(bro: Optional[str]) -> str:
 
 @dataclass(frozen=True)
 class ScopedSecrets:
-  """a container launch's credential scope.
+  """a session launch's credential scope.
 
   required is hydrated strictly (a missing secret fails launch); optional is the
-  best-effort tier (skipped when unresolvable); docker_sock decides the socket mount.
+  best-effort tier (skipped when unresolvable); docker_sock decides the socket
+  mount (container launches only — a host session has the host daemon anyway).
   """
 
   required: set[str]
@@ -80,15 +83,14 @@ def _apply_claude_auth(env: dict[str, str], *, warn_when_missing: bool = False) 
   """align a claude session env with the session auth model (reference/cw.md).
 
   scrubs the inherited vars that outrank the session's designated auth, then
-  overlays the long-lived `claude setup-token` credential (`claude_code`)
-  best-effort: present → export it so claude prefers this stable subscription
-  bearer over the rotating OAuth in ~/.claude/.credentials.json (whose
-  cross-session refresh-token rotation forces the periodic re-login); absent →
-  no overlay, and claude falls back to that file. containers get the same var
-  from the secret's registry install hook as well; re-applying it here is
-  idempotent. `warn_when_missing` surfaces the fallback for sessions whose only
-  intended auth is the token (native sessions — a `--bro` session authenticates
-  via apiKeyHelper and resolves no token by design).
+  overlays the long-lived `claude setup-token` credential (`claude_code`). the
+  session's private claude state (cw/claude_config.py) carries no OAuth
+  credentials file, so the token is a native session's whole auth — both
+  launch surfaces gate on it before anything is created, and `warn_when_missing`
+  surfaces the remaining unauthenticated path (a runner spawned by an outer cw
+  that predates the gate). a `--bro` session authenticates via apiKeyHelper and
+  resolves no token by design. containers get the same var from the secret's
+  registry install hook as well; re-applying it here is idempotent.
   """
   for var in _OUTRANKING_AUTH_VARS:
     if env.pop(var, None) is not None:
@@ -97,9 +99,8 @@ def _apply_claude_auth(env: dict[str, str], *, warn_when_missing: bool = False) 
   if token is None:
     if warn_when_missing:
       log.warning(
-        'claude_code secret not resolvable; claude falls back to the rotating '
-        '~/.claude/.credentials.json OAuth and may ask to /login — mint a token with '
-        '`claude setup-token` and store it in ~/.ppp/claude_code_oauth_token'
+        'claude_code secret not resolvable; the session starts unauthenticated — mint a '
+        'token with `claude setup-token` and store it in ~/.ppp/claude_code_oauth_token'
       )
     return
   env['CLAUDE_CODE_OAUTH_TOKEN'] = token
@@ -114,10 +115,11 @@ def _finalize_secrets(secrets: set[str], *, grant: list[str], revoke: list[str])
   )
 
 
-def _container_secrets(bro_name: str, *, mcp: Optional[str], bro_mode: bool) -> ScopedSecrets:
+def _session_secrets(bro_name: str, *, mcp: Optional[str], bro_mode: bool) -> ScopedSecrets:
   """scoped credential sets (required, optional) + docker-socket decision for a
-  container session themed as `bro_name`. the two surfaces request different sets
-  (required hydration is strict, so each requests only what it actually uses):
+  `cw ss` session themed as `bro_name` — one computation for both launch modes.
+  the two surfaces request different sets (required hydration is strict, so each
+  requests only what it actually uses):
 
   - `--bro` (`claude --bare` serving the bro's own in-process MCP servers): the
     bro's full `needed_secrets()` + `anthropic` for the apiKeyHelper, plus the
@@ -129,8 +131,8 @@ def _container_secrets(bro_name: str, *, mcp: Optional[str], bro_mode: bool) -> 
     not the bro's in-process MCP / data-source toolset — so `extra_secrets`
     + the flow MCP secrets (`--mcp http` → `flow_mcp` for the deployed server;
     `--mcp local` → whatever `flow.mcp.spec()` declares, since the session-local
-    server runs inside the container) + `claude_code` (required: the long-lived
-    OAuth token it exports as CLAUDE_CODE_OAUTH_TOKEN is a native session's only
+    server runs in-session) + `claude_code` (required: the long-lived OAuth
+    token it exports as CLAUDE_CODE_OAUTH_TOKEN is a native session's only
     auth). always keeps the socket (it has a Bash tool).
 
   both add the session baseline (sync-log + trails) to the required set.
@@ -162,13 +164,31 @@ def _container_secrets(bro_name: str, *, mcp: Optional[str], bro_mode: bool) -> 
       import flow.mcp
 
       secrets.update(flow.mcp.spec().needed_secrets)
-    # required, not best-effort: this secret's CLAUDE_CODE_OAUTH_TOKEN (registry
-    # install hook) is a native session's sole credential, so a missing token
-    # must fail loudly on the host before the container starts rather than as a
-    # turn-1 401 inside it. `--bro` (claude --bare) omits it — bare ignores the
-    # var and authenticates with the anthropic key.
+    # required, not best-effort: this secret's CLAUDE_CODE_OAUTH_TOKEN is a
+    # native session's sole credential, so a missing token must fail loudly
+    # before the session starts rather than as a turn-1 401 inside it. `--bro`
+    # (claude --bare) omits it — bare ignores the var and authenticates with
+    # the anthropic key.
     secrets.add('claude_code')
   return ScopedSecrets(required=secrets, optional=optional, docker_sock=docker_sock)
+
+
+def _materialize_scoped_store(files: dict[str, bytes], directory: Path) -> Path:
+  """write a scoped credential store (`credentials.build_scoped_store`) to
+  `directory` and return its registry file — the value a host session's
+  CREDENTIALS_REGISTRY points at (the registry's directory joins the resolver's
+  search path). the directory is recreated from scratch so a secret dropped from
+  the scope (e.g. a lapsed `--grant-cred`) does not linger from an earlier
+  launch."""
+  if directory.exists():
+    shutil.rmtree(directory)
+  directory.mkdir(parents=True)
+  directory.chmod(0o700)
+  for filename, data in files.items():
+    file = directory / filename
+    file.write_bytes(data)
+    file.chmod(0o600)
+  return directory / 'credentials.json'
 
 
 def _ppp_tarball(files: dict[str, bytes]) -> bytes:

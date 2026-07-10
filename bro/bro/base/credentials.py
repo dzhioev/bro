@@ -13,9 +13,11 @@ runtime; on the host secrets live only in `~/.ppp`. `ssm` reads an AWS SSM
 parameter from the region the source names, for surfaces that resolve secrets
 from Parameter Store at runtime instead of carrying files. a generated
 `credentials.json` in either search dir overrides the built-in registry
-(`CREDENTIALS_REGISTRY=<file>` overrides both, process-scoped);
-`build_scoped_store` emits a scoped one (in memory) that `cw` `docker cp`s into
-a container's `~/.ppp` to bound it to a chosen set of secrets.
+(`CREDENTIALS_REGISTRY=<file>` overrides both, process-scoped, and its directory
+joins the local search path first — so a materialized scoped store resolves
+wherever it lands); `build_scoped_store` emits a scoped one (in memory) that
+`cw` `docker cp`s into a container's `~/.ppp` — or materializes into a host
+session's state dir — to bound the resolver to a chosen set of secrets.
 """
 
 from __future__ import annotations
@@ -121,6 +123,14 @@ class SSMSource:
 
 
 def _search_dirs() -> list[str]:
+  # an explicit CREDENTIALS_REGISTRY carries its sibling files: a scoped store is
+  # a registry plus the `{name}.cred` files it points at, materialized in one dir
+  # (`build_scoped_store`), so that dir must be searched first for the store to
+  # resolve wherever it lands — the container's ~/.ppp needs no override, a host
+  # session's store lives outside the standard dirs.
+  override = os.environ.get('CREDENTIALS_REGISTRY')
+  if override is not None and override != '':
+    return [str(Path(override).parent), CONFIGS_DIR, PPP_DIR]
   return [CONFIGS_DIR, PPP_DIR]
 
 

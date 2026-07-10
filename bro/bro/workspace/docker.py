@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from base import log
+from cw.claude_config import _SESSION_SETTINGS_JSON, _seed_claude_json
 from cw.paths import _project_root, _session_claude_dir
 
 CONTAINER_DIR = Path(__file__).resolve().parent.parent / 'setup' / 'container'
@@ -28,22 +29,6 @@ _DOCKER_FORWARD_ENV = (
   'COLORTERM',
   'VTE_VERSION',
 )
-
-# the global ~/.claude/settings.json for container sessions: UX prefs only,
-# built from scratch so host settings (permissions, hooks, model/effort) don't
-# leak in. the repo's /workspace/.claude/settings.json layers on top — that is
-# where the statusLine command comes from, in containers and on host alike.
-_CONTAINER_SETTINGS_JSON: dict = {
-  'spinnerVerbs': {'mode': 'replace', 'verbs': ['Thinking']},
-  'spinnerTipsEnabled': False,
-  'prefersReducedMotion': True,
-  'feedbackSurveyRate': 0,
-  'tui': 'fullscreen',
-  # enable the pyright-lsp Python language server. the plugin itself is installed
-  # at image-build time and seeded into ~/.claude/plugins by the entrypoint;
-  # enabling alone is not enough (claude would prompt to install it on .py files).
-  'enabledPlugins': {'pyright-lsp@claude-plugins-official': True},
-}
 
 
 def running_mounts() -> set[str]:
@@ -183,17 +168,15 @@ def _docker_create_argv(
   skills to surface. an LLM-process container (`ask`/`do-task`/`call`) runs its
   own named bro, so it must not inherit the calling session's ambient `CW_BRO`.
   """
-  # function-local to break the docker <-> containers import cycle: containers.py
-  # imports the docker helpers at module level, so docker.py keeps no top-level
-  # containers import and defers this one reference to call time.
-  from cw.containers import _seed_container_claude_json
-
   home = Path.home()
   claude_dir = _session_claude_dir(name)
   claude_dir.mkdir(parents=True, exist_ok=True)
-  # seed-once container-private ~/.claude.json (see module docstring)
-  claude_json = _seed_container_claude_json(claude_dir, home / '.claude.json')
-  (claude_dir / 'settings.json').write_text(json.dumps(_CONTAINER_SETTINGS_JSON))
+  # seed-once container-private ~/.claude.json: installMethod matches the image's
+  # npm-global claude; the trusted project entry is the clone's mount point
+  claude_json = _seed_claude_json(
+    claude_dir, home / '.claude.json', install_method='global', trusted_paths=['/workspace']
+  )
+  (claude_dir / 'settings.json').write_text(json.dumps(_SESSION_SETTINGS_JSON))
   argv = ['docker', 'create']
   if tty:
     argv.append('-it')

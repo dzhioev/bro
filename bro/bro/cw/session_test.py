@@ -60,7 +60,7 @@ class _ContainerHarness:
       patch('cw.session.find_container_id', return_value=None),
       patch('cw.session.run_in_container', return_value=0),
       patch(
-        'cw.session._container_secrets',
+        'cw.session._session_secrets',
         return_value=ScopedSecrets(set(self.secrets), set(), True),
       ),
       patch('cw.session._replace_resume_hint'),
@@ -331,7 +331,7 @@ class TestConcurrentSessionGuard:
     monkeypatch.setattr(cw.session, 'find_container_id', lambda path: None)
     monkeypatch.setattr(
       cw.session,
-      '_container_secrets',
+      '_session_secrets',
       lambda *_a, **_k: ScopedSecrets(set(), set(), True),
     )
     monkeypatch.setattr(cw.session, 'summon_allow_list', lambda *_a, **_k: set())
@@ -421,6 +421,19 @@ class TestHostSession:
     # keep the launch tests off the real credential store; the auth-transform
     # test overrides this with its own fake
     monkeypatch.setattr(cw.session, '_apply_claude_auth', lambda env, **_k: None)
+    monkeypatch.setattr(cw.session.credentials, 'try_get', lambda name: 'tok')
+    monkeypatch.setattr(
+      cw.session, '_provision_host_claude_dir', lambda name, wt, project: tmp_path / 'claude-config'
+    )
+    monkeypatch.setattr(
+      cw.session, '_session_secrets', lambda *_a, **_k: ScopedSecrets({'github'}, set(), True)
+    )
+    monkeypatch.setattr(cw.session.credentials, 'build_scoped_store', lambda names, optional=(): {})
+    monkeypatch.setattr(
+      cw.session,
+      '_materialize_scoped_store',
+      lambda store, directory: directory / 'credentials.json',
+    )
     monkeypatch.setattr(cw.session, 'summon_allow_list', lambda *_a, **_k: set())
     return cw_bin, worktree
 
@@ -546,6 +559,112 @@ class TestHostSession:
     assert cw.session._host_session(_spec(host=True), None) == 0
     assert runs[0][1]['env']['CLAUDE_CODE_OAUTH_TOKEN'] == 'applied'
 
+  def test_runner_env_points_at_the_private_claude_config_dir(self, monkeypatch, tmp_path):
+    # the outer provisions the per-session state dir and exports CLAUDE_CONFIG_DIR
+    # itself, so a worktree whose own runner predates the config dir is covered too
+    self._prepare_launch(monkeypatch, tmp_path)
+    monkeypatch.setattr(cw.session, '_broker_enabled', lambda: False)
+    runs: list = []
+
+    def fake_run(argv, **kwargs):
+      runs.append((argv, kwargs))
+      from types import SimpleNamespace
+
+      return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(cw.session.subprocess, 'run', fake_run)
+    assert cw.session._host_session(_spec(host=True), None) == 0
+    assert runs[0][1]['env']['CLAUDE_CONFIG_DIR'] == str(tmp_path / 'claude-config')
+
+  def test_missing_claude_code_fails_a_native_launch_before_the_worktree(
+    self, monkeypatch, tmp_path
+  ):
+    self._prepare_launch(monkeypatch, tmp_path)
+    monkeypatch.setattr(cw.session.credentials, 'try_get', lambda name: None)
+
+    def boom(*_a, **_k):
+      raise AssertionError('must not ensure a worktree without the setup-token')
+
+    monkeypatch.setattr(cw.session, '_ensure_host_worktree', boom)
+    assert cw.session._host_session(_spec(host=True), None) == 1
+
+  def test_missing_claude_code_does_not_gate_a_bro_launch(self, monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    self._prepare_launch(monkeypatch, tmp_path)
+    monkeypatch.setattr(cw.session.credentials, 'try_get', lambda name: None)
+    monkeypatch.setattr(cw.session, '_broker_enabled', lambda: False)
+    monkeypatch.setattr(
+      cw.session.subprocess, 'run', lambda *_a, **_k: SimpleNamespace(returncode=0)
+    )
+    assert cw.session._host_session(_spec(host=True, bro='devoops'), None) == 0
+
+  def test_runner_env_points_at_the_scoped_store_registry(self, monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    self._prepare_launch(monkeypatch, tmp_path)
+    monkeypatch.setattr(cw.session, '_broker_enabled', lambda: False)
+    materialized: dict = {}
+
+    def fake_materialize(store, directory):
+      materialized.update(store=store, directory=directory)
+      return directory / 'credentials.json'
+
+    monkeypatch.setattr(cw.session, '_materialize_scoped_store', fake_materialize)
+    monkeypatch.setattr(
+      cw.session.credentials, 'build_scoped_store', lambda names, optional=(): {'x.cred': b'v'}
+    )
+    runs: list = []
+
+    def fake_run(argv, **kwargs):
+      runs.append((argv, kwargs))
+      return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(cw.session.subprocess, 'run', fake_run)
+    assert cw.session._host_session(_spec(host=True), None) == 0
+    registry = tmp_path / 'claude-config' / '.ppp' / 'credentials.json'
+    assert runs[0][1]['env']['CREDENTIALS_REGISTRY'] == str(registry)
+    assert materialized['store'] == {'x.cred': b'v'}
+    assert materialized['directory'] == registry.parent
+
+  def test_grant_and_revoke_shape_the_hydrated_set(self, monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    self._prepare_launch(monkeypatch, tmp_path)
+    monkeypatch.setattr(cw.session, '_broker_enabled', lambda: False)
+    monkeypatch.setattr(
+      cw.session,
+      '_session_secrets',
+      lambda *_a, **_k: ScopedSecrets({'github', 'notion'}, set(), True),
+    )
+    hydrated: dict = {}
+
+    def fake_build(names, optional=()):
+      hydrated.update(names=set(names), optional=set(optional))
+      return {}
+
+    monkeypatch.setattr(cw.session.credentials, 'build_scoped_store', fake_build)
+    monkeypatch.setattr(
+      cw.session.subprocess, 'run', lambda *_a, **_k: SimpleNamespace(returncode=0)
+    )
+    spec = _spec(host=True, grant_cred=['gmail_creds'], revoke_cred=['notion'])
+    assert cw.session._host_session(spec, None) == 0
+    assert hydrated['names'] == {'github', 'gmail_creds'}
+
+  def test_unresolvable_secret_fails_before_the_worktree(self, monkeypatch, tmp_path):
+    self._prepare_launch(monkeypatch, tmp_path)
+
+    def missing(names, optional=()):
+      raise cw.session.credentials.SecretNotFound('github')
+
+    monkeypatch.setattr(cw.session.credentials, 'build_scoped_store', missing)
+
+    def boom(*_a, **_k):
+      raise AssertionError('must not ensure a worktree when hydration fails')
+
+    monkeypatch.setattr(cw.session, '_ensure_host_worktree', boom)
+    assert cw.session._host_session(_spec(host=True), None) == 1
+
   def test_missing_inner_cw_fails_before_spawn(self, monkeypatch, tmp_path):
     fake_host, worktree = self._fake_host(tmp_path, has_session=False)
     monkeypatch.setattr(cw.session, '_project_root', lambda: tmp_path)
@@ -553,6 +672,14 @@ class TestHostSession:
     monkeypatch.setattr(cw.session, 'HostWorktree', fake_host)
     monkeypatch.setattr(cw.session, '_ensure_host_worktree', lambda *_a: True)
     monkeypatch.setattr(cw.session, '_provision_host_worktree', lambda *_a: True)
+    monkeypatch.setattr(cw.session.credentials, 'try_get', lambda name: 'tok')
+    monkeypatch.setattr(
+      cw.session, '_provision_host_claude_dir', lambda name, wt, project: tmp_path / 'claude-config'
+    )
+    monkeypatch.setattr(
+      cw.session, '_session_secrets', lambda *_a, **_k: ScopedSecrets(set(), set(), True)
+    )
+    monkeypatch.setattr(cw.session.credentials, 'build_scoped_store', lambda names, optional=(): {})
     monkeypatch.setattr(cw.session, 'summon_allow_list', lambda *_a, **_k: set())
 
     def boom(*_a, **_k):
