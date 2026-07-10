@@ -1,37 +1,4 @@
 import cw.worktrees
-from cw.worktrees import HostWorktree
-
-
-class TestFinishHostWorktree:
-  def _make_workspace(self, monkeypatch, tmp_path, *, clean):
-    workspace = HostWorktree('feat', tmp_path)
-    reasons = [] if clean else ['1 commit(s) not on origin/master']
-    monkeypatch.setattr(workspace, 'is_clean', lambda refresh_origin=True: (clean, reasons))
-    removed: list = []
-    monkeypatch.setattr(workspace, 'remove', lambda: removed.append(workspace.name))
-    return workspace, removed
-
-  def test_interactive_drops_on_yes(self, monkeypatch, tmp_path):
-    workspace, removed = self._make_workspace(monkeypatch, tmp_path, clean=True)
-    monkeypatch.setattr(cw.worktrees, 'yesno', lambda q: True)
-    cw.worktrees._finish_host_worktree(workspace, interactive=True)
-    assert removed == ['feat']
-
-  def test_interactive_keeps_on_no(self, monkeypatch, tmp_path):
-    workspace, removed = self._make_workspace(monkeypatch, tmp_path, clean=True)
-    monkeypatch.setattr(cw.worktrees, 'yesno', lambda q: False)
-    cw.worktrees._finish_host_worktree(workspace, interactive=True)
-    assert removed == []
-
-  def test_non_interactive_keeps_and_never_prompts(self, monkeypatch, tmp_path):
-    workspace, removed = self._make_workspace(monkeypatch, tmp_path, clean=False)
-
-    def boom(q):
-      raise AssertionError('must not prompt in a non-interactive session')
-
-    monkeypatch.setattr(cw.worktrees, 'yesno', boom)
-    cw.worktrees._finish_host_worktree(workspace, interactive=False)
-    assert removed == []
 
 
 class TestProvisionHostWorktree:

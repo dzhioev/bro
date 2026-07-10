@@ -417,7 +417,6 @@ class TestHostSession:
     monkeypatch.setattr(cw.session, 'HostWorktree', fake_host)
     monkeypatch.setattr(cw.session, '_ensure_host_worktree', lambda *_a: True)
     monkeypatch.setattr(cw.session, '_provision_host_worktree', lambda *_a: True)
-    monkeypatch.setattr(cw.session, '_finish_host_worktree', lambda *_a, **_k: None)
     # keep the launch tests off the real credential store; the auth-transform
     # test overrides this with its own fake
     monkeypatch.setattr(cw.session, '_apply_claude_auth', lambda env, **_k: None)
@@ -505,7 +504,7 @@ class TestHostSession:
     assert kwargs['cwd'] == str(worktree)
     assert kwargs['env']['VIRTUAL_ENV'] == str(worktree / '.venv')
 
-  def test_resume_hint_precedes_the_keep_or_drop_offer(self, monkeypatch, tmp_path):
+  def test_resume_hint_is_the_last_step_on_success(self, monkeypatch, tmp_path):
     from types import SimpleNamespace
 
     self._prepare_launch(monkeypatch, tmp_path)
@@ -515,11 +514,8 @@ class TestHostSession:
     )
     events: list = []
     monkeypatch.setattr(cw.session, '_replace_resume_hint', lambda workspace: events.append('hint'))
-    monkeypatch.setattr(
-      cw.session, '_finish_host_worktree', lambda *_a, **_k: events.append('finish')
-    )
     assert cw.session._host_session(_spec(host=True), None) == 0
-    assert events == ['hint', 'finish']
+    assert events == ['hint']
 
   def test_resume_hint_skipped_when_the_session_failed(self, monkeypatch, tmp_path):
     from types import SimpleNamespace
@@ -531,11 +527,22 @@ class TestHostSession:
     )
     events: list = []
     monkeypatch.setattr(cw.session, '_replace_resume_hint', lambda workspace: events.append('hint'))
-    monkeypatch.setattr(
-      cw.session, '_finish_host_worktree', lambda *_a, **_k: events.append('finish')
-    )
     assert cw.session._host_session(_spec(host=True), None) == 3
-    assert events == ['finish']
+    assert events == []
+
+  def test_drop_removes_the_worktree_and_skips_the_hint(self, monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    self._prepare_launch(monkeypatch, tmp_path)
+    monkeypatch.setattr(cw.session, '_broker_enabled', lambda: False)
+    monkeypatch.setattr(
+      cw.session.subprocess, 'run', lambda *_a, **_k: SimpleNamespace(returncode=0)
+    )
+    events: list = []
+    monkeypatch.setattr(cw.session, '_replace_resume_hint', lambda workspace: events.append('hint'))
+    monkeypatch.setattr(cw.session.HostWorktree, 'remove', lambda self: events.append('remove'))
+    assert cw.session._host_session(_spec(host=True, drop=True), None) == 0
+    assert events == ['remove']
 
   def test_runner_env_gets_the_claude_auth_transform(self, monkeypatch, tmp_path):
     # the outer applies _apply_claude_auth to the runner env it spawns, so a
@@ -734,7 +741,6 @@ class TestHostBrokerPingRoundTrip:
       monkeypatch.setattr(cw.session, 'HostWorktree', _FakeHost)
       monkeypatch.setattr(cw.session, '_ensure_host_worktree', lambda *_a: True)
       monkeypatch.setattr(cw.session, '_provision_host_worktree', lambda *_a: True)
-      monkeypatch.setattr(cw.session, '_finish_host_worktree', lambda *_a, **_k: None)
       monkeypatch.setattr(cw.session, 'summon_allow_list', lambda *_a, **_k: set())
       monkeypatch.delenv('BROKER_DISABLED', raising=False)
       assert cw.session._host_session(_spec(host=True), None) == 0

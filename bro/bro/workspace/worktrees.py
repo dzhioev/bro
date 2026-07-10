@@ -4,8 +4,6 @@ from pathlib import Path
 from typing import Optional
 
 from base import log
-from base.yesno import yesno
-from cw.workspace import HostWorktree
 
 
 def _ensure_host_worktree(worktree: Path, branch: str, base_ref: Optional[str] = None) -> bool:
@@ -55,18 +53,3 @@ def _provision_host_worktree(worktree: Path) -> bool:
     log.error('failed to provision worktree %s', worktree)
     return False
   return True
-
-
-def _finish_host_worktree(workspace: HostWorktree, *, interactive: bool) -> None:
-  # on exit, warn if the worktree isn't landed on origin/master, then (interactive
-  # only) offer to drop it. non-interactive sessions — --auto included — keep it;
-  # `cw clean` removes it later.
-  _, reasons = workspace.is_clean()
-  if len(reasons) > 0:
-    log.warning('worktree %s not landed on origin/master:', workspace.name)
-    for reason in reasons:
-      log.warning('  - %s', reason)
-  if not interactive:
-    return
-  if yesno(f'drop worktree {workspace.name}?'):
-    workspace.remove()

@@ -23,9 +23,7 @@ def build_parser() -> Parser:
   subparsers = parser.add_subparsers(dest='cmd', required=True)
 
   ss = subparsers.add_parser('ss', help='start a claude session in a worktree')
-  ss.add_argument(
-    '--drop', action='store_true', help='remove the workspace on exit without prompting'
-  )
+  ss.add_argument('--drop', action='store_true', help='remove the workspace on exit')
   # internal seam, not a user surface: the outer `cw ss` spawns `cw ss --in-place`
   # in a prepared workspace (the workspace's own cw), which runs the session from
   # its cwd — see cw/runner.py

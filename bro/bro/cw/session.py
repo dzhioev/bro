@@ -22,7 +22,7 @@ from cw.secrets import (
 )
 from cw.summon import summon_allow_list
 from cw.workspace import ContainerWorkspace, HostWorktree, Workspace
-from cw.worktrees import _ensure_host_worktree, _finish_host_worktree, _provision_host_worktree
+from cw.worktrees import _ensure_host_worktree, _provision_host_worktree
 
 
 @dataclass(frozen=True)
@@ -392,10 +392,6 @@ def _host_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
 
   if spec.drop:
     workspace.remove()
-  else:
-    # the hint first, while claude's own exit hint is still the last two lines
-    # on screen; the keep-or-drop offer prints below it
-    if code == 0:
-      _replace_resume_hint(workspace)
-    _finish_host_worktree(workspace, interactive=not spec.auto and sys.stdin.isatty())
+  elif code == 0:
+    _replace_resume_hint(workspace)
   return code
