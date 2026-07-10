@@ -46,17 +46,18 @@ class TestLaunchCommand:
 
   regression: dive-in passed a bare `--mcp` immediately before the positional name.
   `cw ss --mcp` is nargs='?' (const http), so with nothing between the flag and the
-  name argparse consumed the name as --mcp's value and failed the choices check. The
-  plain `dive-in --host` path (no -c, no forwarded flags, no -p) was the only one not
-  masked by an intervening token.
+  name argparse consumed the name as --mcp's value and failed the choices check. A
+  plain `dive-in` (no forwarded flags, no -p) is the path where nothing else sits
+  between the flag and the name to mask the crash.
   """
 
   @pytest.mark.parametrize(
     'kwargs',
     [
-      {'host': True},  # the path that crashed: nothing sits between --mcp and name
-      {'host': True, 'forwarded': ['--auto']},
-      {'host': False, 'command': 'do a thing', 'new': True},
+      {},  # the path that crashed: nothing sits between --mcp and name
+      {'forwarded': ['--host']},
+      {'forwarded': ['--host', '--auto']},
+      {'command': 'do a thing', 'new': True},
     ],
   )
   def test_emitted_command_parses_with_mcp_http(self, kwargs, fake_proj, capsys):

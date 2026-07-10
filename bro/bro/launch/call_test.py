@@ -335,12 +335,12 @@ def test_call_no_trails_disables_recording_in_container():
     assert kwargs['extra_env'] == {'TRAILS_DISABLED': '1'}
 
 
-def test_call_no_trails_with_no_container_is_an_error():
+def test_call_no_trails_with_host_is_an_error():
   with pytest.raises(SystemExit):
-    main(['call', 'ppp-dev', 'hey', '--no-trails', '--no-container'])
+    main(['call', 'ppp-dev', 'hey', '--no-trails', '--host'])
 
 
-def test_call_skips_container_with_no_container_flag(monkeypatch):
+def test_call_skips_container_with_host_flag(monkeypatch):
   built: list[Bro] = []
 
   async def fake_call_text(bro, initial):
@@ -353,7 +353,7 @@ def test_call_skips_container_with_no_container_flag(monkeypatch):
   with patch('cw.run_in_container') as run:
     # --slow routes through the patched create_bro; the container-skip behavior
     # under test is independent of fast/slow.
-    rc = main(['call', 'record', 'hi', '--no-container', '--slow'])
+    rc = main(['call', 'record', 'hi', '--host', '--slow'])
   assert rc is None
   assert run.call_count == 0
   assert len(built) == 1

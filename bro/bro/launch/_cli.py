@@ -15,7 +15,7 @@ from bro.bro import BroRaised
 from bro.bros.bro import Bro
 from llm.observer import Observer
 
-# shared flag help so all three CLIs describe `--slow` / `--no-container` identically.
+# shared flag help so all three CLIs describe `--slow` / `--host` identically.
 # fast mode is the default for these CLIs; --slow opts back out to the plain spec.
 SLOW_HELP = (
   "disable the bro's fast-mode LLM knob, which is on by default here "
@@ -23,7 +23,7 @@ SLOW_HELP = (
   'same model and quality, faster and more consistent generation at a higher '
   'per-token price)'
 )
-NO_CONTAINER_HELP = 'skip the auto-container hop and run in the calling process'
+HOST_HELP = 'skip the auto-container hop and run in the calling host process'
 NO_TRAILS_HELP = (
   'disable trails recording: set TRAILS_DISABLED in the container and drop the '
   'trails secret from the scoped set'
@@ -72,7 +72,7 @@ def maybe_containerize(
   cli_name: str,
   bro_name: str,
   inner_args: list[str],
-  no_container: bool,
+  host: bool,
   no_trails: bool = False,
   grant_cred: Optional[list[str]] = None,
   revoke_cred: Optional[list[str]] = None,
@@ -85,7 +85,7 @@ def maybe_containerize(
   calling process.
 
   the hop is skipped when already inside a container (`CW_IN_CONTAINER`, set by the
-  container) or when `--no-container` was passed — that is how the inner process
+  container) or when `--host` was passed — that is how the inner process
   avoids re-hopping and runs the bro in-process. otherwise the container is scoped
   to `cw.bro_run_secrets(bro_name)` — the LLM-process credential scope (see its
   docstring). an interactive surface (`call`) renders inside it just as claude
@@ -105,7 +105,7 @@ def maybe_containerize(
   `revoke_summon` adjust the bro's summon allow-list the same way
   (`cw.summon_allow_list` over its `may_summon` defaults). those four and `into`
   are host-side only — not threaded into the inner command — so passing any when
-  the hop is skipped (`--no-container` / already in-container) is a no-op the
+  the hop is skipped (`--host` / already in-container) is a no-op the
   caller didn't get, hence an error: host mode is unscoped, has no broker root,
   and runs no clone. returns 1 (printing to stderr) on any misuse so the caller
   exits non-zero."""
@@ -113,7 +113,7 @@ def maybe_containerize(
   revoke_cred = revoke_cred if revoke_cred is not None else []
   grant_summon = grant_summon if grant_summon is not None else []
   revoke_summon = revoke_summon if revoke_summon is not None else []
-  if no_container or os.environ.get('CW_IN_CONTAINER') is not None:
+  if host or os.environ.get('CW_IN_CONTAINER') is not None:
     if (
       len(grant_cred) > 0
       or len(revoke_cred) > 0
@@ -123,7 +123,7 @@ def maybe_containerize(
     ):
       print(
         '--grant-cred/--revoke-cred/--grant-summon/--revoke-summon/--into require '
-        'containerization (not valid with --no-container)',
+        'containerization (not valid with --host)',
         file=sys.stderr,
       )
       return 1
@@ -185,12 +185,10 @@ def run(
     help='render the trace as colored rich panels instead of plain log lines',
   )
   parser.add_argument('--slow', action='store_true', help=SLOW_HELP)
-  parser.add_argument(
-    '--no-container', dest='no_container', action='store_true', help=NO_CONTAINER_HELP
-  )
+  parser.add_argument('--host', action='store_true', help=HOST_HELP)
   parser.add_argument('--no-trails', dest='no_trails', action='store_true', help=NO_TRAILS_HELP)
-  # --no-trails acts only on the container hop; --no-container has no hop to act on.
-  parser.add_exclusive_groups(['no_container'], ['no_trails'])
+  # --no-trails acts only on the container hop; --host has no hop to act on.
+  parser.add_exclusive_groups(['host'], ['no_trails'])
   parser.add_argument(
     '--grant-cred', action='append', default=None, metavar='SECRET', help=GRANT_CRED_HELP
   )
@@ -215,7 +213,7 @@ def run(
     cli_name=cli_name,
     bro_name=args['bro'],
     inner_args=inner_args,
-    no_container=args['no_container'],
+    host=args['host'],
     no_trails=args['no_trails'],
     grant_cred=args['grant_cred'],
     revoke_cred=args['revoke_cred'],

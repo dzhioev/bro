@@ -11,7 +11,7 @@ from base import credentials, log
 _CW_SESSION_BASELINE = ('session_log', 'trails')
 
 # the bro a no-`--bro` container session themes as (dive-in already sets CW_BRO to
-# this); bounds a manual `cw ss -c` session's scoped credentials.
+# this); bounds a manual `cw ss` session's scoped credentials.
 _DEFAULT_CW_BRO = 'ppp-dev'
 
 

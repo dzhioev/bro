@@ -11,7 +11,7 @@ from cw.secrets import ScopedSecrets
 def _spec(
   *,
   name: str = 'w',
-  container: bool = True,
+  host: bool = False,
   drop: bool = False,
   auto: bool = False,
   fast: bool = False,
@@ -29,7 +29,7 @@ def _spec(
 ) -> cw.session.SessionSpec:
   return cw.session.SessionSpec(
     name=name,
-    container=container,
+    host=host,
     drop=drop,
     auto=auto,
     fast=fast,
@@ -205,7 +205,6 @@ class TestContainerCommand:
 class TestResumeCommand:
   def test_create_command_includes_drop_into_and_claude_args(self):
     parts = _spec(
-      container=True,
       auto=True,
       fast=True,
       drop=True,
@@ -217,17 +216,20 @@ class TestResumeCommand:
       claude_args=['--foo'],
     ).to_command_argv()
     assert parts == [
-      'cw', 'ss', '-c', '--auto', '--fast', '--drop',
+      'cw', 'ss', '--auto', '--fast', '--drop',
       '--effort', 'xhigh', '--mcp=http', '--grant-cred', 'gmail_creds',
       '--revoke-cred', 'notion', '--into', 'feature', 'w', '--foo',
     ]  # fmt: skip
+
+  def test_host_session_carries_the_host_flag(self):
+    parts = _spec(host=True, auto=True).to_command_argv()
+    assert parts == ['cw', 'ss', '--host', '--auto', 'w']
 
   def test_resume_variant_carries_forwarded_flags_and_clears_create_only(self):
     # resume_variant keeps --auto/--effort/--mcp/--grant-cred and adds --resume,
     # while clearing the create-only --drop/--into/prompt/claude args
     parts = (
       _spec(
-        container=True,
         auto=True,
         drop=True,
         effort='xhigh',
@@ -241,7 +243,7 @@ class TestResumeCommand:
       .to_command_argv()
     )
     assert parts == [
-      'cw', 'ss', '-c', '--auto', '--resume',
+      'cw', 'ss', '--auto', '--resume',
       '--effort', 'xhigh', '--mcp=http', '--grant-cred', 'gmail_creds', 'w',
     ]  # fmt: skip
 
@@ -253,7 +255,6 @@ class TestResumeCommand:
       env.pop('CW_IN_CONTAINER', None)
       cw.session.start_session(
         _spec(
-          container=True,
           drop=True,
           auto=True,
           grant_cred=['gmail_creds'],
@@ -263,8 +264,7 @@ class TestResumeCommand:
       )
       resume_command = env['CW_RESUME_COMMAND']
     assert (
-      resume_command
-      == 'cw ss -c --auto --resume --effort xhigh --mcp=http --grant-cred gmail_creds w'
+      resume_command == 'cw ss --auto --resume --effort xhigh --mcp=http --grant-cred gmail_creds w'
     )
 
 
@@ -287,7 +287,7 @@ class TestReplaceResumeHint:
 class TestInPlaceArgv:
   def test_drops_machinery_flags_and_carries_the_rest(self):
     parts = _spec(
-      container=True,
+      host=True,
       auto=True,
       fast=True,
       drop=True,
@@ -324,7 +324,7 @@ class TestConcurrentSessionGuard:
       raise AssertionError('must not launch a second container session')
 
     monkeypatch.setattr(cw.session, 'run_in_container', boom)
-    assert cw.session._container_session(_spec(container=True), None) == 1
+    assert cw.session._container_session(_spec(), None) == 1
 
   def test_container_proceeds_when_inactive(self, monkeypatch, tmp_path):
     monkeypatch.setattr(cw.session, '_project_root', lambda: tmp_path)
@@ -338,7 +338,7 @@ class TestConcurrentSessionGuard:
     called: list = []
     monkeypatch.setattr(cw.session, 'run_in_container', lambda *_a, **_k: called.append(True) or 0)
     monkeypatch.setattr(cw.session, '_replace_resume_hint', lambda workspace: None)
-    assert cw.session._container_session(_spec(container=True), None) == 0
+    assert cw.session._container_session(_spec(), None) == 0
     assert called == [True]
 
   def test_host_refuses_when_active(self, monkeypatch, tmp_path):
@@ -359,7 +359,7 @@ class TestConcurrentSessionGuard:
       raise AssertionError('must not provision when a session is already active')
 
     monkeypatch.setattr(cw.session, '_ensure_host_worktree', boom)
-    assert cw.session._host_session(_spec(container=False), None) == 1
+    assert cw.session._host_session(_spec(host=True), None) == 1
 
   def test_host_proceeds_when_inactive(self, monkeypatch, tmp_path):
     monkeypatch.setattr(cw.session, '_project_root', lambda: tmp_path)
@@ -379,7 +379,7 @@ class TestConcurrentSessionGuard:
     monkeypatch.setattr(
       cw.session, '_ensure_host_worktree', lambda *_a: called.append(True) or False
     )
-    assert cw.session._host_session(_spec(container=False), None) == 1
+    assert cw.session._host_session(_spec(host=True), None) == 1
     assert called == [True]
 
 
@@ -444,7 +444,7 @@ class TestHostSession:
       return 5
 
     monkeypatch.setattr(cw.session, '_run_host_root_via_broker', fake_root)
-    spec = _spec(container=False, auto=True, effort='xhigh', prompt='go', claude_args=['--foo'])
+    spec = _spec(host=True, auto=True, effort='xhigh', prompt='go', claude_args=['--foo'])
     assert cw.session._host_session(spec, None) == 5
     assert roots[0]['name'] == 'w'
     assert roots[0]['command'] == [
@@ -468,7 +468,7 @@ class TestHostSession:
       raise AssertionError('must not ensure a worktree when the summon flags are bad')
 
     monkeypatch.setattr(cw.session, '_ensure_host_worktree', boom)
-    spec = _spec(container=False, grant_summon=['devoop'])
+    spec = _spec(host=True, grant_summon=['devoop'])
     assert cw.session._host_session(spec, None) == 1
 
   def test_direct_spawn_when_broker_disabled(self, monkeypatch, tmp_path):
@@ -483,7 +483,7 @@ class TestHostSession:
       return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(cw.session.subprocess, 'run', fake_run)
-    spec = _spec(container=False, auto=True, effort='xhigh', prompt='go', claude_args=['--foo'])
+    spec = _spec(host=True, auto=True, effort='xhigh', prompt='go', claude_args=['--foo'])
     assert cw.session._host_session(spec, None) == 0
     argv, kwargs = runs[0]
     assert argv == [
@@ -505,7 +505,7 @@ class TestHostSession:
     monkeypatch.setattr(
       cw.session, '_finish_host_worktree', lambda *_a, **_k: events.append('finish')
     )
-    assert cw.session._host_session(_spec(container=False), None) == 0
+    assert cw.session._host_session(_spec(host=True), None) == 0
     assert events == ['hint', 'finish']
 
   def test_resume_hint_skipped_when_the_session_failed(self, monkeypatch, tmp_path):
@@ -521,7 +521,7 @@ class TestHostSession:
     monkeypatch.setattr(
       cw.session, '_finish_host_worktree', lambda *_a, **_k: events.append('finish')
     )
-    assert cw.session._host_session(_spec(container=False), None) == 3
+    assert cw.session._host_session(_spec(host=True), None) == 3
     assert events == ['finish']
 
   def test_runner_env_gets_the_claude_auth_transform(self, monkeypatch, tmp_path):
@@ -543,7 +543,7 @@ class TestHostSession:
       return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(cw.session.subprocess, 'run', fake_run)
-    assert cw.session._host_session(_spec(container=False), None) == 0
+    assert cw.session._host_session(_spec(host=True), None) == 0
     assert runs[0][1]['env']['CLAUDE_CODE_OAUTH_TOKEN'] == 'applied'
 
   def test_missing_inner_cw_fails_before_spawn(self, monkeypatch, tmp_path):
@@ -559,7 +559,7 @@ class TestHostSession:
       raise AssertionError('must not spawn without the inner cw')
 
     monkeypatch.setattr(cw.session.subprocess, 'run', boom)
-    assert cw.session._host_session(_spec(container=False), None) == 1
+    assert cw.session._host_session(_spec(host=True), None) == 1
 
   def test_resume_guard_fails_fast_before_worktree_create(self, monkeypatch, tmp_path):
     fake_host, _ = self._fake_host(tmp_path, has_session=False)
@@ -571,7 +571,7 @@ class TestHostSession:
       raise AssertionError('must not create a worktree for a resume with no session')
 
     monkeypatch.setattr(cw.session, '_ensure_host_worktree', boom)
-    assert cw.session._host_session(_spec(container=False, resume=True), None) == 1
+    assert cw.session._host_session(_spec(host=True, resume=True), None) == 1
 
 
 class TestHostBrokerPingRoundTrip:
@@ -610,7 +610,7 @@ class TestHostBrokerPingRoundTrip:
       monkeypatch.setattr(cw.session, '_finish_host_worktree', lambda *_a, **_k: None)
       monkeypatch.setattr(cw.session, 'summon_allow_list', lambda *_a, **_k: set())
       monkeypatch.delenv('BROKER_DISABLED', raising=False)
-      assert cw.session._host_session(_spec(container=False), None) == 0
+      assert cw.session._host_session(_spec(host=True), None) == 0
       # the CLI printed the correlated reply's wire JSON
       assert '"pong"' in capfd.readouterr().out
       # the channel socket is unlinked once the root exits

@@ -25,7 +25,7 @@ For container workspaces the ancestry checks run against the host project's `.gi
 
 ## The launch stack
 
-Every `cw ss` session launches through the same three-layer stack. `-c` changes only the outer machinery; `--bro` changes only the argv flavor (and the credential policy the outer computes):
+Every `cw ss` session launches through the same three-layer stack. `--host` changes only the outer machinery; `--bro` changes only the argv flavor (and the credential policy the outer computes):
 
 - **the outer `cw ss`** (`cw/session.py:start_session`) — mode-specific by nature: policy validation, workspace preparation, session supervision, post-exit UX. See "The outer layer".
 - **the in-place session runner** (`cw ss --in-place` → `cw/runner.py`) — one code path for every flag combination, spawned by the outer from the workspace's own venv so a session always runs its workspace's code, not the launching repo's. It runs where claude runs and owns everything next to it. See "The in-place session runner".
@@ -35,16 +35,16 @@ A new session-shaping flag lands once — in the runner or the builder — and a
 
 ## The outer layer
 
-Host mode is the default; `-c` / `--container` selects the container. Whatever the mode, the outer:
+Container mode is the default; `--host` selects a same-machine git worktree instead. Whatever the mode, the outer:
 
-- validates policy once — the `--auto` × `-c` and `--bro` × `-c` gates and the anthropic-key probe run only here, never in the runner (the inner argv carries `--auto` but never `-c`, so re-running them would reject it);
+- validates policy once — the `--bro` × `--host` and `--grant-cred`/`--revoke-cred` × `--host` gates and the anthropic-key probe run only here, never in the runner (the inner argv never carries `--host`, so the runner has no mode to re-validate);
 - sets `CW_COMMAND` / `CW_RESUME_COMMAND` and resolves `--into` against the host repo to a sha;
 - refuses to start when a session is already active on the target workspace — a live `cw-session.pid` (host) or a running bound container (container). One session per workspace: a second concurrent claude would mutate the same files and share the gitignored token-accounting state. The lock releases on exit, so re-entry / `--resume` after a session ends is unaffected;
 - with `--resume`, fails fast when the workspace has no recorded claude session — a cheap existence check, run before the workspace auto-create could manufacture an empty workspace for a mistyped name (the runner resolves the actual session id later, from its cwd);
-- prepares the workspace (the two mode sections below), then spawns the runner from the workspace's own venv with the machinery flags it consumed stripped from the inner argv (`-c --drop --grant-cred --revoke-cred --grant-summon --revoke-summon --into`);
+- prepares the workspace (the two mode sections below), then spawns the runner from the workspace's own venv with the machinery flags it consumed stripped from the inner argv (`--host --drop --grant-cred --revoke-cred --grant-summon --revoke-summon --into`);
 - owns the post-exit UX — resume-hint replacement in both modes (on host it prints before the keep-or-drop offer, while claude's own hint is still the last two lines on screen), keep-or-drop offer (host), `--drop` removal in both.
 
-### Host mode (`cw ss <name>`)
+### Host mode (`cw ss --host <name>`)
 
 `cw` owns the worktree lifecycle directly: it prepares the worktree, then spawns the worktree's own `cw ss --in-place` as a subprocess inside it, which runs plain `claude` (not `claude -w`, so no Claude Code worktree/provisioning hooks are involved). On launch:
 
@@ -62,7 +62,7 @@ Layout on disk:
 - `<project>/var/cw/worktrees/<name>/.venv` — per-worktree virtualenv created on first launch by `cw` (via `setup/provision_repo.sh`).
 - `~/.claude/projects/<encoded-worktree-path>/` — Claude Code's own per-project state, including the session JSONL files. The encoded path is the worktree path with `/` and `.` replaced by `-`.
 
-### Container mode (`cw ss -c <name>`)
+### Container mode (`cw ss <name>` — the default)
 
 `/workspace` inside the container is a **fresh clone**, not a worktree. The gitfile-based worktree layout doesn't survive the container boundary (the gitfile points at a host absolute path), and a clone keeps the container's git state genuinely isolated. Layout:
 
@@ -83,13 +83,13 @@ Inside the container, the entrypoint (running as root first):
 6. Installs a `pre-push` hook that blocks non-fast-forward pushes, and blocks direct pushes to `master`/`main` when running as the bro identity (`GIT_AUTHOR_EMAIL=dzhioev+bro@gmail.com`).
 7. Reuses the venv baked into the image: symlinks `/workspace/.venv` to `/opt/cw-venv` (deps + editable project + the `_entrypoints.py` console-script bridge, all installed at build time, the module finder pointing at `/workspace`) and stamps `provision_repo.sh`'s skip marker plus `CW_VENV_BAKED=1`, so both the slow `uv sync --all-groups` and the `sync-scripts --entrypoints` regen are avoided on every launch. The reuse is gated on the clone's `pyproject.toml` + `uv.lock` matching the copies staged at `/opt/cw-venv-manifest` (the manifests the bake ran from) — `CW_BASE_REF` can base the clone on any ref, so equality is checked, not assumed. `provision_repo.sh` then only installs git hooks + the `git golc` alias. Falls back to a fresh `uv sync` + regen from the clone's own manifests when the gate fails: a diverging base ref, `/opt/cw-venv` or the staged manifests absent (older image), or `/workspace/.venv` already existing (reused workspace). See `setup/container/Dockerfile`.
 8. Activates the venv so child processes (hooks, MCP servers, Bash tool) inherit it.
-9. Execs the container command — for a `cw ss -c` session, `cw ss --in-place …`, the same in-place session runner host mode spawns, resolved from the venv activated above; everything from here is the runner's, identically to host mode. The entrypoint itself is flavor-blind — no MCP or skills logic.
+9. Execs the container command — for a `cw ss` session, `cw ss --in-place …`, the same in-place session runner host mode spawns, resolved from the venv activated above; everything from here is the runner's, identically to host mode. The entrypoint itself is flavor-blind — no MCP or skills logic.
 
 The container image is built lazily — `cw/docker.py:_image_tag()` hashes `setup/container/` plus `pyproject.toml` and `uv.lock`, and `_ensure_image` rebuilds when the tag is missing. Tag format: `ppp-cw:<12-char-sha>`.
 
 Network is not restricted by design.
 
-When `cw ss -c` exits, the workspace directory and the per-session host-side state stay on disk for the next session, unless `--drop` was passed (in which case `var/cw/containers/<name>`, `~/.claude/cw-sessions/<name>`, and the session host log `var/cw/log/c:<name>.log` are removed).
+When a container session exits, the workspace directory and the per-session host-side state stay on disk for the next session, unless `--drop` was passed (in which case `var/cw/containers/<name>`, `~/.claude/cw-sessions/<name>`, and the session host log `var/cw/log/c:<name>.log` are removed).
 
 #### Container credential isolation
 
@@ -121,7 +121,7 @@ This means each container session has its own private `~/.claude.json` (so MCP s
 
 #### "Already in a container" fallback
 
-If `cw ss -c` is invoked from inside an already-containerised session (`CW_IN_CONTAINER=1` is set by the Dockerfile), `cw/session.py:cw` falls back to host mode rather than trying to nest containers. `--bro` sessions are the exception: they are fenced to the container (the scoped `anthropic` secret is their auth model), so nesting one errors out instead of degrading.
+If a container-mode `cw ss` (the default) is invoked from inside an already-containerised session (`CW_IN_CONTAINER=1` is set by the Dockerfile), `cw/session.py:cw` falls back to host mode rather than trying to nest containers. `--bro` sessions are the exception: they are fenced to the container (the scoped `anthropic` secret is their auth model), so nesting one errors out instead of degrading.
 
 ### The broker channel
 
@@ -188,9 +188,9 @@ A bro's skills (`bro/bros/<bro>/skills/*.md`, MRO-merged) reach the session two 
 
 ## Flags that shape the session
 
-These flags apply to `cw ss` and (with the exception of `-c` / `--drop` / `--resume` / `--mcp` / `--bro` / `-p`) are also exported via `cw.add_forwarded_flags` so the `dive-in` wrapper can pass them straight through without per-flag plumbing.
+These flags apply to `cw ss` and (with the exception of `--drop` / `--resume` / `--mcp` / `--bro` / `-p`) are also exported via `cw.add_forwarded_flags` so the `dive-in` wrapper can pass them straight through without per-flag plumbing.
 
-- **`-c`, `--container`** — container mode (see above). Defaults off; host mode is the default.
+- **`--host`** — host mode (see above): a same-machine git worktree instead of the default isolated docker container.
 - **`--drop`** — remove the workspace on exit without prompting.
 
   In host mode this means `git worktree remove --force` and deleting the `worktree-<name>` branch (skipping the keep-or-drop offer `cw` makes otherwise); in container mode it means `rm -rf var/cw/containers/<name>` and `~/.claude/cw-sessions/<name>`. Either way the session host log (`var/cw/log/<session-key>.log`) is removed with the workspace.
@@ -203,10 +203,10 @@ These flags apply to `cw ss` and (with the exception of `-c` / `--drop` / `--res
   Without `--mcp`, no flow MCP is connected — Claude doesn't see task/project tools.
 - **`--bro <name>`** — launch a clean session under a chosen bro persona (system prompt, MCP servers, tools) using `claude --bare` and only the bro's MCP tools: the bro flavor of "The claude argv", served by "Session-local MCP serving", with skills via the `bro::skill` tool ("Bro skills").
 
-  **Requires `-c`** (the bro flow uses an Anthropic Console API key, not the user OAuth, and is fenced to the container). **Requires the `anthropic` secret**. Mutually exclusive with `--mcp` and `--auto`.
+  **Container only — rejected with `--host`** (the bro flow uses an Anthropic Console API key, not the user OAuth, and is fenced to the container). **Requires the `anthropic` secret**. Mutually exclusive with `--mcp` and `--auto`.
 - **`--auto`** — autonomous mode: passes `--dangerously-skip-permissions` to claude and switches the git identity to bro (`Bro <dzhioev+bro@gmail.com>`).
 
-  **Requires `-c`** (a sandbox is mandatory for skip-permissions). Adds a `Land mode: PR` line to the system prompt. Cannot be combined with `--bro`.
+  Adds a `Land mode: PR` line to the system prompt. Cannot be combined with `--bro`. Works in both modes: the container default is the sandbox, and an explicit `--host --auto` runs skip-permissions unsandboxed on the host — reserve it for work that genuinely needs host access. A host `--auto` session skips the interactive keep-or-drop offer at exit (the worktree is kept; `cw clean` removes it later).
 - **`--fast`** — enables fast mode for the session, carried in the session's one merged `--settings` (fastMode plus, under `--bro`, the apiKeyHelper). Off by default regardless of host settings, so individual `cw ss` invocations are predictable.
 - **`--grant-cred <secret>` / `--revoke-cred <secret>`** (repeatable) — per-session override of the computed scoped set: the final set is `(computed | granted) - revoked`, applied by `credentials.apply_grant_revoke`.
 
@@ -214,12 +214,12 @@ These flags apply to `cw ss` and (with the exception of `-c` / `--drop` / `--res
 
   Strict, and the launch stops on misuse: granting a secret already in the set, or revoking one not in it (including granting/revoking the same name twice, or naming it in both lists), is an error — a no-op flag is a mistake to surface, not swallow.
 
-  **Requires `-c`**: host mode is unscoped (the process reads `~/.ppp` directly), so a revoke there couldn't actually restrict the session — passing them without `-c` errors rather than silently no-op.
+  **Container only — rejected with `--host`**: host mode is unscoped (the process reads `~/.ppp` directly), so a revoke there couldn't actually restrict the session — combining them with `--host` errors rather than silently no-op.
 - **`--grant-summon <bro>` / `--revoke-summon <bro>`** (repeatable) — per-session override of the summon allow-list: which bros this session may summon. The effective list is `(may_summon ∪ granted) − revoked` (`cw/summon.py:summon_allow_list`), where `may_summon` is the session bro's static default (`BaseBro.may_summon`, MRO-unioned; ppp-dev seeds `devoops`, so a dive-in summons it flagless). The session's identity is its themed bro: `--bro` names it directly, otherwise `CW_BRO` (ppp-dev for dive-in and plain `cw ss` alike); the same policy applies to interactive and `--auto` sessions.
 
   Same strictness as the credential pair, plus every name — seed or override — must be a registered bro (a `BRO_SPECS` key), so a typo fails the launch immediately rather than minutes later as a denied summon. `do` (ask / call / do-task) takes the same two flags and applies them to the run bro's defaults before the hop. The flags shape only this session's list: a summoned child's own summons follow its bro's bare `may_summon` seeds — there is no grant passthrough (see "Summoning another bro").
 
-  Unlike the credential pair, works without `-c`: the allow-list belongs to the session's broker root, which a host session has too. The computed list is threaded to `run_root_via_broker` in both modes (see "The broker channel").
+  Unlike the credential pair, works with `--host` too: the allow-list belongs to the session's broker root, which a host session has too. The computed list is threaded to `run_root_via_broker` in both modes (see "The broker channel").
 - **`--effort {low|medium|high|xhigh|max}`** — forwarded as `claude --effort` (thinking effort). Defaults to `xhigh`; pass an explicit level to override.
 - **`--resume`** — resume the latest Claude session in this workspace.
 

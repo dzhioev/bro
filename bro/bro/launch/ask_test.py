@@ -153,9 +153,9 @@ def test_main_no_trails_disables_recording_in_container():
     assert kwargs['extra_env'] == {'TRAILS_DISABLED': '1'}
 
 
-def test_main_no_trails_with_no_container_is_an_error():
+def test_main_no_trails_with_host_is_an_error():
   with pytest.raises(SystemExit):
-    main(['ask', 'ppp-dev', 'hello', '--no-trails', '--no-container'])
+    main(['ask', 'ppp-dev', 'hello', '--no-trails', '--host'])
 
 
 def test_main_skips_container_when_inside():
@@ -171,14 +171,14 @@ def test_main_skips_container_when_inside():
     assert run.call_count == 0
 
 
-def test_main_skips_container_with_no_container_flag():
+def test_main_skips_container_with_host_flag():
   with (
     patch.dict('os.environ', {}, clear=False) as env,
     patch('cw.run_in_container') as run,
     patch('bro.registry.create_bro', return_value=RecordBro(response='ok')),
   ):
     env.pop('CW_IN_CONTAINER', None)
-    rc = main(['ask', 'record', 'hi', '--no-container', '--slow'])
+    rc = main(['ask', 'record', 'hi', '--host', '--slow'])
     assert rc is None
     assert run.call_count == 0
 

@@ -10,7 +10,7 @@ This document explains the modes, workspace naming, the `/fix`-seeding rules, an
 
 ### Bare mode (default — no task flag, no `--focus`)
 
-`dive-in` with no task-selecting flags falls through to "open a clean session, unattached to any task". The positional `command` (if any) becomes the entire initial prompt; otherwise the session starts with no prompt at all. This is the same as `cw ss --mcp -c <slug>` and is handy when you have a request to make but no task to attach to. The environment-awareness rule in `prompts/environment.md` tells Claude to ask what to work on in this case.
+`dive-in` with no task-selecting flags falls through to "open a clean session, unattached to any task". The positional `command` (if any) becomes the entire initial prompt; otherwise the session starts with no prompt at all. This is the same as `cw ss --mcp=http <slug>` and is handy when you have a request to make but no task to attach to. The environment-awareness rule in `prompts/environment.md` tells Claude to ask what to work on in this case.
 
 ### Focused mode (`--focus`)
 
@@ -51,9 +51,7 @@ The suffix also makes each session's `worktree-<slug>` branch **unique by constr
 
 ## Host vs container
 
-By default `dive-in` runs in container mode (it appends `-c` when calling `cw ss`). `--host` flips this off and runs as a same-machine git worktree instead.
-
-The reason this isn't just "pass `-c` through" is that container is the safer / more isolated default for an unattended task-focused workflow (especially with `--auto`), so the wrapper inverts the polarity. If you need the host worktree (e.g. you want to use the host's docker daemon directly without the bind-mounted socket, or you want filesystem access to your dotfiles), `--host` opts out.
+Like `cw ss` itself, `dive-in` runs in container mode by default; `--host` (a forwarded `cw ss` flag — see "Forwarded flags") opts out into a same-machine git worktree. Reach for it when the session needs the host itself — e.g. the host's docker daemon directly instead of the bind-mounted socket, or filesystem access to your dotfiles.
 
 ## Base ref (`--into`)
 
@@ -84,7 +82,7 @@ Known gap: `CW_TASK_ID` lives only in the launching `dive-in` process's environm
 
 ## Forwarded flags
 
-`dive-in` accepts all the flags `cw.add_forwarded_flags` registers (`--auto`, `--fast`, `--grant-cred`, `--revoke-cred`, `--grant-summon`, `--revoke-summon`, `--effort`, `--into`) and forwards them straight through into `cw ss`. Adding a new pass-through flag in `cw/flags.py` makes it available to `dive-in` for free — no per-flag plumbing in this file. `--grant-cred`/`--revoke-cred` (repeatable) require container mode, so they are unusable with `dive-in --host`; the summon pair works in both modes (a host session's broker root enforces the same allow-list).
+`dive-in` accepts all the flags `cw.add_forwarded_flags` registers (`--host`, `--auto`, `--fast`, `--grant-cred`, `--revoke-cred`, `--grant-summon`, `--revoke-summon`, `--effort`, `--into`) and forwards them straight through into `cw ss`. Adding a new pass-through flag in `cw/flags.py` makes it available to `dive-in` for free — no per-flag plumbing in this file. `--grant-cred`/`--revoke-cred` (repeatable) require container mode, so they are unusable with `dive-in --host`; the summon pair works in both modes (a host session's broker root enforces the same allow-list).
 
 `-n / --dry-run` prints the final `cw ss …` invocation (shell-quoted) without running it.
 

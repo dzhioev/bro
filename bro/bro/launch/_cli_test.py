@@ -10,20 +10,20 @@ def test_maybe_containerize_skips_when_inside_container():
     patch('cw.run_in_container') as run,
   ):
     rc = maybe_containerize(
-      cli_name='call', bro_name='ppp-dev', inner_args=['hi'], no_container=False, no_trails=False
+      cli_name='call', bro_name='ppp-dev', inner_args=['hi'], host=False, no_trails=False
     )
   assert rc is None
   assert run.call_count == 0
 
 
-def test_maybe_containerize_skips_with_no_container():
+def test_maybe_containerize_skips_with_host():
   with (
     patch.dict('os.environ', {}, clear=False) as env,
     patch('cw.run_in_container') as run,
   ):
     env.pop('CW_IN_CONTAINER', None)
     rc = maybe_containerize(
-      cli_name='call', bro_name='ppp-dev', inner_args=['hi'], no_container=True, no_trails=False
+      cli_name='call', bro_name='ppp-dev', inner_args=['hi'], host=True, no_trails=False
     )
   assert rc is None
   assert run.call_count == 0
@@ -39,7 +39,7 @@ def test_maybe_containerize_hops_and_scopes_to_bro():
       cli_name='call',
       bro_name='ppp-dev',
       inner_args=['hi', '--slow'],
-      no_container=False,
+      host=False,
       no_trails=False,
     )
   assert rc == 7
@@ -72,7 +72,7 @@ def test_maybe_containerize_no_trails_drops_secret_and_disables_recording():
       cli_name='call',
       bro_name='ppp-dev',
       inner_args=['hi'],
-      no_container=False,
+      host=False,
       no_trails=True,
     )
   (_workspace, command), kwargs = run.call_args
@@ -92,7 +92,7 @@ def test_maybe_containerize_grant_adds_secret():
       cli_name='call',
       bro_name='ppp-dev',
       inner_args=['hi'],
-      no_container=False,
+      host=False,
       grant_cred=['gmail_creds'],
     )
   assert rc == 0
@@ -110,7 +110,7 @@ def test_maybe_containerize_revoke_removes_secret():
       cli_name='call',
       bro_name='ppp-dev',
       inner_args=['hi'],
-      no_container=False,
+      host=False,
       revoke_cred=['github'],
     )
   assert rc == 0
@@ -130,7 +130,7 @@ def test_maybe_containerize_grant_already_present_errors(capsys):
       cli_name='call',
       bro_name='ppp-dev',
       inner_args=['hi'],
-      no_container=False,
+      host=False,
       grant_cred=['trails'],
     )
   assert rc == 1
@@ -148,7 +148,7 @@ def test_maybe_containerize_revoke_absent_errors(capsys):
       cli_name='call',
       bro_name='ppp-dev',
       inner_args=['hi'],
-      no_container=False,
+      host=False,
       revoke_cred=['nonexistent'],
     )
   assert rc == 1
@@ -166,7 +166,7 @@ def test_maybe_containerize_grant_summon_extends_the_allow_list():
       cli_name='call',
       bro_name='ppp-dev',
       inner_args=['hi'],
-      no_container=False,
+      host=False,
       grant_summon=['pm'],
       revoke_summon=['devoops'],
     )
@@ -185,7 +185,7 @@ def test_maybe_containerize_summon_grant_already_allowed_errors(capsys):
       cli_name='call',
       bro_name='ppp-dev',
       inner_args=['hi'],
-      no_container=False,
+      host=False,
       grant_summon=['devoops'],
     )
   assert rc == 1
@@ -203,7 +203,7 @@ def test_maybe_containerize_unregistered_summon_target_errors(capsys):
       cli_name='call',
       bro_name='ppp-dev',
       inner_args=['hi'],
-      no_container=False,
+      host=False,
       grant_summon=['devoop'],
     )
   assert rc == 1
@@ -211,7 +211,7 @@ def test_maybe_containerize_unregistered_summon_target_errors(capsys):
   assert 'unknown summon target' in capsys.readouterr().err
 
 
-def test_maybe_containerize_grant_summon_with_no_container_errors(capsys):
+def test_maybe_containerize_grant_summon_with_host_errors(capsys):
   with (
     patch.dict('os.environ', {}, clear=False) as env,
     patch('cw.run_in_container') as run,
@@ -221,7 +221,7 @@ def test_maybe_containerize_grant_summon_with_no_container_errors(capsys):
       cli_name='call',
       bro_name='ppp-dev',
       inner_args=['hi'],
-      no_container=True,
+      host=True,
       grant_summon=['devoops'],
     )
   assert rc == 1
@@ -229,7 +229,7 @@ def test_maybe_containerize_grant_summon_with_no_container_errors(capsys):
   assert 'require containerization' in capsys.readouterr().err
 
 
-def test_maybe_containerize_grant_with_no_container_errors(capsys):
+def test_maybe_containerize_grant_with_host_errors(capsys):
   with (
     patch.dict('os.environ', {}, clear=False) as env,
     patch('cw.run_in_container') as run,
@@ -239,7 +239,7 @@ def test_maybe_containerize_grant_with_no_container_errors(capsys):
       cli_name='call',
       bro_name='ppp-dev',
       inner_args=['hi'],
-      no_container=True,
+      host=True,
       grant_cred=['gmail_creds'],
     )
   assert rc == 1
@@ -256,7 +256,7 @@ def test_maybe_containerize_grant_inside_container_errors(capsys):
       cli_name='call',
       bro_name='ppp-dev',
       inner_args=['hi'],
-      no_container=False,
+      host=False,
       revoke_cred=['github'],
     )
   assert rc == 1
@@ -275,7 +275,7 @@ def test_maybe_containerize_into_bases_the_clone_on_the_ref():
       cli_name='call',
       bro_name='ppp-dev',
       inner_args=['hi'],
-      no_container=False,
+      host=False,
       into='feature-branch',
     )
   assert rc == 0
@@ -295,7 +295,7 @@ def test_maybe_containerize_unresolvable_into_errors(capsys):
       cli_name='call',
       bro_name='ppp-dev',
       inner_args=['hi'],
-      no_container=False,
+      host=False,
       into='no-such-ref',
     )
   assert rc == 1
@@ -303,7 +303,7 @@ def test_maybe_containerize_unresolvable_into_errors(capsys):
   assert 'cannot resolve --into ref: no-such-ref' in capsys.readouterr().err
 
 
-def test_maybe_containerize_into_with_no_container_errors(capsys):
+def test_maybe_containerize_into_with_host_errors(capsys):
   with (
     patch.dict('os.environ', {}, clear=False) as env,
     patch('cw.run_in_container') as run,
@@ -313,7 +313,7 @@ def test_maybe_containerize_into_with_no_container_errors(capsys):
       cli_name='call',
       bro_name='ppp-dev',
       inner_args=['hi'],
-      no_container=True,
+      host=True,
       into='feature-branch',
     )
   assert rc == 1

@@ -29,7 +29,7 @@ class SessionSpec:
   """
 
   name: str
-  container: bool
+  host: bool
   drop: bool
   auto: bool
   fast: bool
@@ -58,7 +58,7 @@ class SessionSpec:
     --grant-cred, --effort, ...).
     """
     flags = {
-      '-c': self.container,
+      '--host': self.host,
       '--auto': self.auto,
       '--fast': self.fast,
       '--drop': self.drop,
@@ -92,7 +92,7 @@ class SessionSpec:
 
     a second serialization, distinct from to_command_argv: it carries the prompt
     and the forwarded claude args (which to_command_argv deliberately omits) and
-    drops the flags the outer already consumed (-c --drop --grant-cred
+    drops the flags the outer already consumed (--host --drop --grant-cred
     --revoke-cred --grant-summon --revoke-summon --into). the prompt and mcp
     values use the joined `=` form so a prompt
     starting with `-` can't be mistaken for a flag and the nargs='?' --mcp can't
@@ -150,7 +150,7 @@ def start_session(spec: SessionSpec) -> int:
   os.environ.setdefault('PPP_SHELL_COMMAND', os.environ['CW_COMMAND'])
   os.environ['CW_RESUME_COMMAND'] = ' '.join(spec.resume_variant().to_command_argv())
 
-  container = spec.container
+  container = not spec.host
   if container and os.environ.get('CW_IN_CONTAINER') is not None:
     if spec.bro is not None:
       # a --bro session is fenced to the container (the scoped anthropic secret

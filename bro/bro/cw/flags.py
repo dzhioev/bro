@@ -10,9 +10,14 @@ def add_forwarded_flags(parser: Parser) -> None:
   calls this helper — no per-flag plumbing in each wrapper.
   """
   parser.add_argument(
+    '--host',
+    action='store_true',
+    help='run on the host in a same-machine git worktree instead of the default isolated docker container',
+  )
+  parser.add_argument(
     '--auto',
     action='store_true',
-    help='let claude run autonomously, skipping most permissions (allowed only with -c)',
+    help='let claude run autonomously, skipping most permissions (unsandboxed when combined with --host)',
   )
   parser.add_argument(
     '--fast',
@@ -24,14 +29,14 @@ def add_forwarded_flags(parser: Parser) -> None:
     action='append',
     default=None,
     metavar='SECRET',
-    help='grant a secret to the container scoped set on top of the computed set (repeatable); requires -c; errors if already in the set or unknown to the registry',
+    help='grant a secret to the container scoped set on top of the computed set (repeatable); container only, rejected with --host; errors if already in the set or unknown to the registry',
   )
   parser.add_argument(
     '--revoke-cred',
     action='append',
     default=None,
     metavar='SECRET',
-    help='revoke a secret from the container scoped set (repeatable); requires -c; errors if not in the set',
+    help='revoke a secret from the container scoped set (repeatable); container only, rejected with --host; errors if not in the set',
   )
   parser.add_argument(
     '--grant-summon',

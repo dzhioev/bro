@@ -24,9 +24,6 @@ def build_parser() -> Parser:
 
   ss = subparsers.add_parser('ss', help='start a claude session in a worktree')
   ss.add_argument(
-    '-c', '--container', action='store_true', help='run claude inside an isolated docker container'
-  )
-  ss.add_argument(
     '--drop', action='store_true', help='remove the workspace on exit without prompting'
   )
   # internal seam, not a user surface: the outer `cw ss` spawns `cw ss --in-place`
@@ -50,7 +47,7 @@ def build_parser() -> Parser:
   ss.add_argument(
     '--bro',
     default=None,
-    help="start a clean claude session with the named bro's persona (system prompt, MCP servers, tools); requires -c and the `anthropic` secret; mutually exclusive with --mcp, --auto",
+    help="start a clean claude session with the named bro's persona (system prompt, MCP servers, tools); container only (rejected with --host), requires the `anthropic` secret; mutually exclusive with --mcp, --auto",
   )
   ss.add_argument(
     '-p', '--prompt', default=None, help='initial prompt (prepended with base prompt)'
@@ -146,7 +143,7 @@ def main(argv: list[str]) -> Optional[int]:
     # the inner-argv contract: the outer consumed the machinery flags, so any of
     # them here means a broken outer serialization, not a user mistake
     machinery = {
-      '-c': args['container'],
+      '--host': args['host'],
       '--drop': args['drop'],
       '--grant-cred': args['grant_cred'] is not None,
       '--revoke-cred': args['revoke_cred'] is not None,
@@ -157,11 +154,9 @@ def main(argv: list[str]) -> Optional[int]:
     offending = [flag for flag, present in machinery.items() if present]
     if len(offending) > 0:
       parser.error(f'--in-place cannot be combined with {", ".join(offending)}')
-  # the outer-only policy gates (--auto × -c, --bro × -c, the anthropic-key
-  # probe) are skipped under --in-place: the outer validated them once, and the
-  # inner argv carries --auto but never -c
-  if not in_place and args['auto'] and not args['container']:
-    parser.error('--auto requires --container')
+  # the outer-only policy gates (--bro × --host, the anthropic-key probe) are
+  # skipped under --in-place: the outer validated them once, and the inner argv
+  # never carries --host
   if args['into'] is not None and args['resume']:
     parser.error(
       '--into cannot be combined with --resume (it only applies when creating a workspace)'
@@ -172,8 +167,10 @@ def main(argv: list[str]) -> Optional[int]:
     if args['mcp'] is not None:
       parser.error('--bro cannot be combined with --mcp (the bro defines its own MCP servers)')
     if not in_place:
-      if not args['container']:
-        parser.error('--bro requires --container')
+      if args['host']:
+        parser.error(
+          '--bro cannot be combined with --host (the bro flow is fenced to the container)'
+        )
       if _load_anthropic_key() is None:
         parser.error(
           '--bro requires the `anthropic` secret to provide an api_key '
@@ -186,10 +183,10 @@ def main(argv: list[str]) -> Optional[int]:
       parser.error(
         '--resume cannot be combined with -p/--prompt (the initial prompt is ignored on resume)'
       )
-  if (args['grant_cred'] is not None or args['revoke_cred'] is not None) and not args['container']:
+  if (args['grant_cred'] is not None or args['revoke_cred'] is not None) and args['host']:
     parser.error(
-      '--grant-cred/--revoke-cred require -c/--container: host mode is unscoped, so a revoke '
-      'could not actually restrict the session'
+      '--grant-cred/--revoke-cred cannot be combined with --host: host mode is unscoped, '
+      'so a revoke could not actually restrict the session'
     )
   spec = SessionSpec(**args)
   if in_place:

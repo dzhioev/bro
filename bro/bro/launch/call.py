@@ -10,8 +10,8 @@ from bro.bros.bro import Bro
 from do._cli import (
   GRANT_CRED_HELP,
   GRANT_SUMMON_HELP,
+  HOST_HELP,
   INTO_HELP,
-  NO_CONTAINER_HELP,
   NO_TRAILS_HELP,
   REVOKE_CRED_HELP,
   REVOKE_SUMMON_HELP,
@@ -127,12 +127,10 @@ def main(argv: list[str]) -> Optional[int]:
     help='force text mode (timestamped lines) instead of the Textual chat UI',
   )
   parser.add_argument('--slow', action='store_true', help=SLOW_HELP)
-  parser.add_argument(
-    '--no-container', dest='no_container', action='store_true', help=NO_CONTAINER_HELP
-  )
+  parser.add_argument('--host', action='store_true', help=HOST_HELP)
   parser.add_argument('--no-trails', dest='no_trails', action='store_true', help=NO_TRAILS_HELP)
-  # --no-trails acts only on the container hop; --no-container has no hop to act on.
-  parser.add_exclusive_groups(['no_container'], ['no_trails'])
+  # --no-trails acts only on the container hop; --host has no hop to act on.
+  parser.add_exclusive_groups(['host'], ['no_trails'])
   parser.add_argument(
     '--grant-cred', action='append', default=None, metavar='SECRET', help=GRANT_CRED_HELP
   )
@@ -162,7 +160,7 @@ def main(argv: list[str]) -> Optional[int]:
     cli_name='call',
     bro_name=args['bro'],
     inner_args=inner_args,
-    no_container=args['no_container'],
+    host=args['host'],
     no_trails=args['no_trails'],
     grant_cred=args['grant_cred'],
     revoke_cred=args['revoke_cred'],

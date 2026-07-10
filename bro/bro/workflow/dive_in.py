@@ -104,7 +104,6 @@ def _fix_command(task_arg: Optional[str], focus: bool, new: bool, command: Optio
 def dive_in(
   forwarded: list[str],
   dry_run: bool = False,
-  host: bool = False,
   command: Optional[str] = None,
   task: Optional[str] = None,
   new: bool = False,
@@ -156,8 +155,6 @@ def dive_in(
   os.environ['CW_BRO'] = 'ppp-dev'
 
   ppp_parts = ['dive-in', *forwarded]
-  if host:
-    ppp_parts.append('--host')
   if new:
     ppp_parts.append('--new')
   if focus:
@@ -172,8 +169,6 @@ def dive_in(
   # flag immediately followed by the positional name makes argparse consume the name as
   # its value. dive-in always wants the default http flow MCP.
   cw_command = ['cw', 'ss', '--mcp=http', *forwarded]
-  if not host:
-    cw_command.append('-c')
   if prompt is not None:
     cw_command.extend(['-p', prompt])
   cw_command.append(name)
@@ -189,11 +184,6 @@ def main(argv: list[str]) -> Optional[int]:
     '-n', '--dry-run', action='store_true', help='print the command without running it'
   )
   cw.add_forwarded_flags(parser)
-  parser.add_argument(
-    '--host',
-    action='store_true',
-    help='run on the host in a same-machine worktree instead of a container',
-  )
   group = parser.add_mutually_exclusive_group()
   group.add_argument('-t', '--task', default=None, help='task ID or Notion URL to dive into')
   group.add_argument(

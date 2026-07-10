@@ -59,8 +59,8 @@ def _provision_host_worktree(worktree: Path) -> bool:
 
 def _finish_host_worktree(workspace: HostWorktree, *, interactive: bool) -> None:
   # on exit, warn if the worktree isn't landed on origin/master, then (interactive
-  # only) offer to drop it. non-interactive sessions keep it — safe default, and the
-  # path stays correct if --auto/--bro ever run on host. `cw clean` removes it later.
+  # only) offer to drop it. non-interactive sessions — --auto included — keep it;
+  # `cw clean` removes it later.
   _, reasons = workspace.is_clean()
   if len(reasons) > 0:
     log.warning('worktree %s not landed on origin/master:', workspace.name)

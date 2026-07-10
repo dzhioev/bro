@@ -108,7 +108,7 @@ To verify a new test catches a bug (revert-and-rerun), use `git stash push <path
 
 Before pushing the main repo, check whether any submodules have commits that aren't on their remote. For each submodule with changes:
 
-1. **Pre-flight remote writability.** Check the submodule's remote is writable (read-only `/host-repo` bind mounts in `cw -c` containers will silently fail at push time):
+1. **Pre-flight remote writability.** Check the submodule's remote is writable (read-only `/host-repo` bind mounts in cw containers will silently fail at push time):
    ```bash
    git -C <submodule> remote get-url origin
    # if the URL points at a local path, `test -w <path>` to confirm writability

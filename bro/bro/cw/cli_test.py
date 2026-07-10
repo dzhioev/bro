@@ -6,17 +6,32 @@ import cw.cli
 
 
 class TestSsValidation:
-  def test_ss_grant_cred_without_container_errors(self, capsys):
+  def test_ss_grant_cred_with_host_errors(self, capsys):
     with pytest.raises(SystemExit):
-      cw.cli.main(['cw', 'ss', '--grant-cred', 'gmail_creds', 'wsname'])
-    assert 'require -c' in capsys.readouterr().err
+      cw.cli.main(['cw', 'ss', '--host', '--grant-cred', 'gmail_creds', 'wsname'])
+    assert 'cannot be combined with --host' in capsys.readouterr().err
+
+  def test_ss_auto_with_host_is_accepted(self):
+    # host sessions may run autonomously; the container default is the sandbox,
+    # an explicit --host opts out of it
+    with patch('cw.cli.start_session', return_value=0) as fake_start:
+      rc = cw.cli.main(['cw', 'ss', '--host', '--auto', 'w'])
+    assert rc == 0
+    spec = fake_start.call_args[0][0]
+    assert spec.host
+    assert spec.auto
+
+  def test_ss_bro_with_host_errors(self, capsys):
+    with pytest.raises(SystemExit):
+      cw.cli.main(['cw', 'ss', '--host', '--bro', 'pm', 'w'])
+    assert '--bro cannot be combined with --host' in capsys.readouterr().err
 
   def test_bro_with_resume_is_accepted(self):
     with (
       patch('cw.cli._load_anthropic_key', return_value={'api_key': 'k'}),
       patch('cw.cli.start_session', return_value=0) as fake_start,
     ):
-      rc = cw.cli.main(['cw', 'ss', '-c', '--bro', 'ppp-dev', '--resume', 'w'])
+      rc = cw.cli.main(['cw', 'ss', '--bro', 'ppp-dev', '--resume', 'w'])
     assert rc == 0
     assert fake_start.call_count == 1
 
@@ -24,7 +39,7 @@ class TestSsValidation:
     # the grant/revoke parser defaults are None; the SessionSpec the cli
     # builds must carry [] so to_command_argv can iterate them
     with patch('cw.cli.start_session', return_value=0) as fake_start:
-      cw.cli.main(['cw', 'ss', '-c', 'w'])
+      cw.cli.main(['cw', 'ss', 'w'])
     spec = fake_start.call_args[0][0]
     assert spec.grant_cred == []
     assert spec.revoke_cred == []
@@ -53,9 +68,9 @@ class TestInPlace:
 
   def test_rejects_machinery_flags(self, capsys):
     with pytest.raises(SystemExit):
-      cw.cli.main(['cw', 'ss', '--in-place', '-c', '--drop', 'w'])
+      cw.cli.main(['cw', 'ss', '--in-place', '--host', '--drop', 'w'])
     error = capsys.readouterr().err
-    assert '--in-place cannot be combined with -c, --drop' in error
+    assert '--in-place cannot be combined with --host, --drop' in error
 
   def test_rejects_summon_flags(self, capsys):
     # the outer consumed them; the inner argv never carries them
@@ -63,17 +78,17 @@ class TestInPlace:
       cw.cli.main(['cw', 'ss', '--in-place', '--grant-summon', 'devoops', 'w'])
     assert '--in-place cannot be combined with --grant-summon' in capsys.readouterr().err
 
-  def test_skips_the_auto_container_gate(self):
-    # the inner argv carries --auto but never -c; the outer validated the pairing
+  def test_auto_carried_in_the_inner_argv(self):
+    # the inner argv carries --auto but never --host; the outer consumed the mode
     with patch('cw.cli.run_in_place', return_value=0) as fake_run:
       rc = cw.cli.main(['cw', 'ss', '--in-place', '--auto', 'w'])
     assert rc == 0
     spec = fake_run.call_args[0][0]
     assert spec.auto
-    assert not spec.container
+    assert not spec.host
 
   def test_skips_the_bro_gates(self):
-    # no -c requirement and no anthropic-key probe (deliberately unpatched here)
+    # no anthropic-key probe (deliberately unpatched here)
     with patch('cw.cli.run_in_place', return_value=0) as fake_run:
       rc = cw.cli.main(['cw', 'ss', '--in-place', '--bro', 'pm', 'w'])
     assert rc == 0
