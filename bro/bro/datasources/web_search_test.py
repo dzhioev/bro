@@ -3,6 +3,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+import trafilatura
 
 from base import credentials
 from bro.datasources import web_search as web_search
@@ -96,7 +97,8 @@ async def test_fetch_content_returns_extracted_text(brave_store):
 
   with (
     patch.object(web_search, 'get_text', side_effect=fake_get_text),
-    patch.object(web_search.trafilatura, 'extract', return_value='Main article text.'),
+    # the source imports trafilatura at fetch time, so patch the real module
+    patch.object(trafilatura, 'extract', return_value='Main article text.'),
   ):
     text = await web_search.WebSearch(store=brave_store)._fetch_content('https://example.com/x')
   assert text == 'Main article text.'
@@ -109,7 +111,7 @@ async def test_fetch_content_raises_when_extraction_empty(brave_store):
 
   with (
     patch.object(web_search, 'get_text', side_effect=fake_get_text),
-    patch.object(web_search.trafilatura, 'extract', return_value=''),
+    patch.object(trafilatura, 'extract', return_value=''),
   ):
     with pytest.raises(LookupError, match='no extractable text'):
       await web_search.WebSearch(store=brave_store)._fetch_content('https://example.com/empty')

@@ -425,9 +425,10 @@ class BaseBro(ABC):
     # built lazily by _live_mcp_servers(): metadata surfaces (needed_secrets on
     # hosts, prompt composition) never construct live servers.
     self._live_mcp: Optional[list[llm.mcp.MCPServer]] = None
-    self._service_server: llm.mcp.MCPServer = _build_service_server(
-      self, include_raise=True, wire='bare'
-    )
+    # lazy for the same reason: building service FunctionTools derives their
+    # schemas, which imports the mcp/fastmcp stack (~1s) — metadata surfaces
+    # never pay it.
+    self._service_server_cache: Optional[llm.mcp.MCPServer] = None
     self._llm = None
     # default to no-op; BaseBro.run() swaps in a real observer per invocation so the
     # LLM construction path picks it up via self._observer.
@@ -631,6 +632,12 @@ class BaseBro(ABC):
     else:
       messages = [{'role': 'user', 'content': message}]
     return await self._llm.send(messages, request_timeout=request_timeout)
+
+  @property
+  def _service_server(self) -> llm.mcp.MCPServer:
+    if self._service_server_cache is None:
+      self._service_server_cache = _build_service_server(self, include_raise=True, wire='bare')
+    return self._service_server_cache
 
   def _live_mcp_servers(self) -> list[llm.mcp.MCPServer]:
     # specs materialize here, on first tool use — always in a serving process,

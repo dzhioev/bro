@@ -1,7 +1,5 @@
 from typing import Optional
 
-import trafilatura
-
 from base import credentials, log
 from bro.datasources.http import get_json, get_text
 from bro.datasources.searchable import Hit, SearchableDataSource
@@ -49,6 +47,10 @@ class WebSearch(SearchableDataSource):
     return hits
 
   async def _fetch_content(self, id: str) -> str:
+    # deferred: trafilatura costs ~1s to import, and every bro declaring this
+    # source pays the module import at construction — only fetch needs it
+    import trafilatura
+
     html = await get_text(id)
     raw_extracted = trafilatura.extract(html)
     extracted = raw_extracted if raw_extracted is not None else ''

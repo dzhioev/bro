@@ -1,24 +1,16 @@
+# importing this module is cheap by design: every bro module constructs an
+# `LLMSpec` at class-definition time, so the spec side must not pay for the
+# multi-hundred-millisecond openai package. openai is imported inside the
+# functions that touch the API (client construction, message/tool conversion);
+# annotations resolve through the TYPE_CHECKING block.
+
+from __future__ import annotations
+
 import base64
 import dataclasses
 import json
 from dataclasses import dataclass
-from typing import ClassVar, Literal, Optional, Self, cast, get_args
-
-from openai import OpenAI
-from openai.types.responses import (
-  Response,
-  ResponseInputItemParam,
-  ResponseOutputItem,
-  ResponseOutputMessage,
-  ToolParam,
-)
-from openai.types.responses.easy_input_message_param import EasyInputMessageParam
-from openai.types.responses.function_tool_param import FunctionToolParam
-from openai.types.responses.response_input_content_param import ResponseInputContentParam
-from openai.types.responses.response_input_file_param import ResponseInputFileParam
-from openai.types.responses.response_input_image_param import ResponseInputImageParam
-from openai.types.responses.response_input_text_param import ResponseInputTextParam
-from openai.types.shared import ReasoningEffort
+from typing import TYPE_CHECKING, ClassVar, Literal, Optional, Self, cast, get_args
 
 import llm.llm
 import usage
@@ -27,13 +19,27 @@ from llm.mcp import MCPServer, Tool, ToolControlSignal
 from llm.observer import Observer
 from llm.tracker import Tracker
 
-ResponseInputContentPart = ResponseInputContentParam
+if TYPE_CHECKING:
+  from openai.types.responses import (
+    Response,
+    ResponseInputItemParam,
+    ResponseOutputItem,
+    ResponseOutputMessage,
+    ToolParam,
+  )
+  from openai.types.responses.easy_input_message_param import EasyInputMessageParam
+  from openai.types.responses.response_input_content_param import ResponseInputContentParam
+  from openai.types.responses.response_input_file_param import ResponseInputFileParam
+  from openai.types.responses.response_input_image_param import ResponseInputImageParam
+  from openai.types.responses.response_input_text_param import ResponseInputTextParam
 
 ServiceTier = Literal['auto', 'default', 'flex', 'priority']
 _VALID_SERVICE_TIERS: frozenset[str] = frozenset(get_args(ServiceTier))
-# openai exports ReasoningEffort as Optional[Literal[...]], so unwrap the inner
-# Literal before flattening to a set of valid string values.
-_VALID_REASONING_EFFORTS: frozenset[str] = frozenset(get_args(get_args(ReasoningEffort)[0]))
+# local mirror of the Literal inside openai's `ReasoningEffort` (which the SDK
+# wraps in Optional); spelled out so spec validation needs no openai import. a
+# sync test asserts the values against the SDK's type.
+ReasoningEffort = Literal['none', 'minimal', 'low', 'medium', 'high', 'xhigh']
+_VALID_REASONING_EFFORTS: frozenset[str] = frozenset(get_args(ReasoningEffort))
 
 # neutral effort level (`LLMSpec.with_effort`) → Responses API reasoning_effort.
 # the shared levels map through; max (above the API's scale) caps at its top.
@@ -130,7 +136,7 @@ class LLMSpec(llm.llm.LLMSpec):
     }
 
   @classmethod
-  def _from_dict_impl(cls, data: dict) -> 'LLMSpec':
+  def _from_dict_impl(cls, data: dict) -> LLMSpec:
     # __post_init__ revalidates these against the Literal types; the cast keeps
     # the static checker happy on the JSON-derived path where pyright sees
     # `str | None`.
@@ -148,6 +154,8 @@ def encode_file(path: str) -> str:
 
 
 def image_to_content(data: bytes, mime_type: str) -> ResponseInputImageParam:
+  from openai.types.responses.response_input_image_param import ResponseInputImageParam
+
   encoded = base64.b64encode(data).decode('utf-8')
   image_url = f'data:{mime_type};base64,{encoded}'
   return ResponseInputImageParam(type='input_image', image_url=image_url, detail='high')
@@ -165,6 +173,8 @@ def image_file_to_content(image_path: str) -> ResponseInputImageParam:
 
 
 def pdf_to_content(data: bytes, filename: str) -> ResponseInputFileParam:
+  from openai.types.responses.response_input_file_param import ResponseInputFileParam
+
   encoded = base64.b64encode(data).decode('utf-8')
   # OpenAI's input_file rejects filenames containing path separators (e.g.
   # "Payslip4/2026.pdf" comes back as 400 "badly formatted or corrupted").
@@ -175,6 +185,8 @@ def pdf_to_content(data: bytes, filename: str) -> ResponseInputFileParam:
 
 
 def text_to_content(text: str) -> ResponseInputTextParam:
+  from openai.types.responses.response_input_text_param import ResponseInputTextParam
+
   return ResponseInputTextParam(type='input_text', text=text)
 
 
@@ -215,6 +227,8 @@ def tools_to_openai_format(tools: list[Tool]) -> list[ToolParam]:
   # into clobbering them with default-looking values on every call. With
   # strict=False the schema flows through as pydantic generated it and optional
   # fields stay genuinely optional.
+  from openai.types.responses.function_tool_param import FunctionToolParam
+
   result: list[ToolParam] = []
   for tool in tools:
     result.append(
@@ -229,7 +243,9 @@ def tools_to_openai_format(tools: list[Tool]) -> list[ToolParam]:
   return result
 
 
-def convert_content_part(part: dict) -> ResponseInputContentPart:
+def convert_content_part(part: dict) -> ResponseInputContentParam:
+  from openai.types.responses.response_input_image_param import ResponseInputImageParam
+
   if part.get('type') == 'text':
     return text_to_content(part['text'])
   if part.get('type') == 'image_url':
@@ -241,6 +257,8 @@ def convert_content_part(part: dict) -> ResponseInputContentPart:
 
 
 def convert_message(msg: dict) -> EasyInputMessageParam:
+  from openai.types.responses.easy_input_message_param import EasyInputMessageParam
+
   role = msg.get('role', 'user')
   content = msg.get('content', '')
   if isinstance(content, list):
@@ -295,6 +313,8 @@ class ChatGPT(llm.llm.LLM):
     tracker: Optional[Tracker] = None,
     agent: Optional[str] = None,
   ):
+    from openai import OpenAI
+
     super().__init__(mcp_servers, observer=observer, tracker=tracker, agent=agent)
     self.model = model
     self.client = OpenAI(api_key=api_key)

@@ -15,5 +15,6 @@ Provider-agnostic LLM abstraction and MCP tooling that the `bro/` agent system a
 ## Conventions
 
 - A new provider lives in `llms/`, subclasses `LLMSpec` with a unique `TYPE`, and is added to `_ensure_providers_loaded` / `_spec_for_type` in `llm.py` so `from_dict` and the CLI can find it.
+- Importing a provider module must stay cheap: every bro module constructs its `LLMSpec` at class-definition time, so the provider SDK (openai, …) is imported inside the functions that touch the API, never at module level. `chat_gpt.py` is the pattern — annotations resolve through a `TYPE_CHECKING` block, and the SDK enums a spec validates against are mirrored locally with a sync test pinning them to the SDK.
 - A `Tool`'s `call` returns `str` for an unstructured tool or a JSON-ready `dict` for a structured one; raising `ToolControlSignal` (vs. a generic exception) escapes the agent loop instead of being fed back to the model as the tool result.
 - Acronyms stay all-caps in identifiers (`LLMSpec`, `MCPServer`, `HTTPTracker`); `TYPE` discriminator strings are lowercase snake_case (`chat_gpt`, `echo`).

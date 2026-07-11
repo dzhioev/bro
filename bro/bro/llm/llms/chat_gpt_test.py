@@ -617,6 +617,38 @@ class TestLLMSpec:
     )
     assert result.returncode == 0, f'stderr: {result.stderr}'
 
+  def test_reasoning_effort_values_match_openai(self):
+    # the module mirrors openai's ReasoningEffort values locally so spec
+    # validation needs no openai import; catch the mirror drifting on SDK bumps
+    from typing import get_args
+
+    import openai.types.shared
+
+    import llm.llms.chat_gpt
+
+    openai_values = get_args(get_args(openai.types.shared.ReasoningEffort)[0])
+    assert frozenset(get_args(llm.llms.chat_gpt.ReasoningEffort)) == frozenset(openai_values)
+
+  def test_importing_module_does_not_import_openai(self):
+    # every bro module constructs an LLMSpec at class-definition time, so the
+    # spec side must stay decoupled from the heavyweight openai package. Fresh
+    # interpreter: in-process, other tests would already have openai loaded.
+    import subprocess
+    import sys
+
+    from base.project_root import PROJECT_ROOT
+
+    script = (
+      'import sys; '
+      'import llm.llms.chat_gpt; '
+      "llm.llms.chat_gpt.LLMSpec(reasoning_effort='medium'); "
+      "assert 'openai' not in sys.modules"
+    )
+    result = subprocess.run(
+      [sys.executable, '-c', script], capture_output=True, text=True, cwd=PROJECT_ROOT
+    )
+    assert result.returncode == 0, f'stderr: {result.stderr}'
+
 
 class TestUsageAccounting:
   @pytest.mark.asyncio

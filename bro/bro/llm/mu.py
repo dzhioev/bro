@@ -8,12 +8,12 @@ from typing import Any, Optional
 
 from icecream import ic
 from openai.types.responses import ResponseInputParam
+from openai.types.responses.response_input_content_param import ResponseInputContentParam
 from openai.types.shared.reasoning_effort import ReasoningEffort
 from pydantic import BaseModel
 
 from llm.llms import ChatGPT
 from llm.llms.chat_gpt import (
-  ResponseInputContentPart,
   image_file_to_content,
   image_to_content,
   pdf_to_content,
@@ -28,14 +28,14 @@ class Markdown(BaseModel):
 
 class Content(ABC):
   @abstractmethod
-  def dump(self) -> ResponseInputContentPart: ...
+  def dump(self) -> ResponseInputContentParam: ...
 
 
 @dataclass
 class ImageFile(Content):
   image_path: str
 
-  def dump(self) -> ResponseInputContentPart:
+  def dump(self) -> ResponseInputContentParam:
     return image_file_to_content(self.image_path)
 
 
@@ -43,7 +43,7 @@ class ImageFile(Content):
 class PngImage(Content):
   image: bytes
 
-  def dump(self) -> ResponseInputContentPart:
+  def dump(self) -> ResponseInputContentParam:
     return png_to_content(self.image)
 
 
@@ -52,7 +52,7 @@ class Image(Content):
   data: bytes
   mime_type: str
 
-  def dump(self) -> ResponseInputContentPart:
+  def dump(self) -> ResponseInputContentParam:
     return image_to_content(self.data, self.mime_type)
 
 
@@ -61,7 +61,7 @@ class PDFFile(Content):
   data: bytes
   filename: str
 
-  def dump(self) -> ResponseInputContentPart:
+  def dump(self) -> ResponseInputContentParam:
     return pdf_to_content(self.data, self.filename)
 
 
@@ -69,7 +69,7 @@ class PDFFile(Content):
 class Text(Content):
   text: str
 
-  def dump(self) -> ResponseInputContentPart:
+  def dump(self) -> ResponseInputContentParam:
     return text_to_content(self.text)
 
 
@@ -85,7 +85,7 @@ class JSON(Content):
   json: dict[str, Any]
   encoder: Optional[type[JSONEncoder]] = None
 
-  def dump(self) -> ResponseInputContentPart:
+  def dump(self) -> ResponseInputContentParam:
     return text_to_content(json.dumps(self.json, indent=4, cls=self.encoder))
 
 
@@ -93,7 +93,7 @@ class JSON(Content):
 class JSONList(Content):
   items: list[BaseModel]
 
-  def dump(self) -> ResponseInputContentPart:
+  def dump(self) -> ResponseInputContentParam:
     return text_to_content(json.dumps([item.model_dump() for item in self.items], indent=2))
 
 

@@ -3,8 +3,8 @@
 # module import stays cheap by design: every heavy dependency (mcp, starlette,
 # uvicorn, llm.mcp, flow / the bro graph) is imported inside the function that
 # needs it, so the --http path can bind its socket — and publish the port via
-# --port-file — milliseconds after process start, before the multi-second tool
-# resolution (see main's bind-before-import ordering).
+# --port-file — milliseconds after process start, before the import-dominated
+# tool resolution (see main's bind-before-import ordering).
 
 import asyncio
 import contextlib
