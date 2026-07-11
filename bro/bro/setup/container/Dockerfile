@@ -75,21 +75,36 @@ RUN gosu cw bash -ec '\
 # bake the project venv at /opt/cw-venv at image-build time so per-session
 # containers reuse it instead of running `uv sync` (~3.4s) on every launch (the
 # entrypoint symlinks /workspace/.venv to it and stamps provision_repo.sh's skip
-# marker). the sync runs with the project tree at /workspace, so the editable
-# install's module finder records each top-level module under /workspace — the
-# exact path the entrypoint clones into at runtime — and resolves against the live
-# clone. also bake the `_entrypoints.py` console-script bridge into the venv so the
-# entrypoint can skip the ~1s `sync-scripts --entrypoints` regen too: the bridge is
-# a pure function of the `[project.scripts]` table. only the venv is kept from the
-# tree: the build-time source is a bind mount removed in the same layer, so nothing
-# is duplicated. the baked env matches a clone only when the clone's dependency
-# manifests equal the ones this build ran from — CW_BASE_REF can base the clone on
-# any ref — so the manifests are staged below and the entrypoint compares before
-# reusing; a mismatch falls through to a normal sync from the clone's own
-# manifests. UV_LINK_MODE=copy: /opt is on the image overlay, a different fs from
-# any bind mount, so hardlinks can't be probed.
+# marker). the bake is split into two layers so the expensive part survives source
+# churn: the dependency install below mounts only the two manifests, keying its
+# cache on exactly their content, while the project install after it keys on the
+# full `project` context (filtered by the repo-root .dockerignore) and re-runs
+# cheaply on any source change. the baked env matches a clone only when the
+# clone's dependency manifests equal the ones this build ran from — CW_BASE_REF
+# can base the clone on any ref — so the manifests are staged below and the
+# entrypoint compares before reusing; a mismatch falls through to a normal sync
+# from the clone's own manifests. UV_LINK_MODE=copy: /opt is on the image overlay,
+# a different fs from any bind mount, so hardlinks can't be probed.
 ENV UV_CACHE_DIR=/opt/uv-cache
 ENV UV_LINK_MODE=copy
+RUN --mount=type=bind,from=project,source=pyproject.toml,target=/workspace/pyproject.toml \
+    --mount=type=bind,from=project,source=uv.lock,target=/workspace/uv.lock \
+    cd /workspace \
+ && UV_PROJECT_ENVIRONMENT=/opt/cw-venv uv sync --frozen --all-groups --no-install-project \
+ && chmod -R a+rwX /opt/uv-cache /opt/cw-venv
+
+# editable-install the project and bake the `_entrypoints.py` console-script
+# bridge into the venv (the bridge is a pure function of the `[project.scripts]`
+# table, letting the entrypoint skip the ~1s `sync-scripts --entrypoints` regen).
+# the sync runs with the project tree at /workspace, so the editable install's
+# module finder records each top-level module under /workspace — the exact path
+# the entrypoint clones into at runtime — and resolves against the live clone.
+# only the venv is kept from the tree: the build-time source is a bind mount
+# removed in the same layer, so nothing is duplicated. the tar excludes are a
+# fallback for builders that don't apply the repo-root .dockerignore to named
+# contexts. the closing find opens up only the files this layer created —
+# everything older is already a+rwX from the layer above, and a blanket chmod -R
+# here would copy the whole venv up into this layer
 RUN --mount=type=bind,from=project,target=/project-src \
     mkdir -p /workspace \
  && tar -C /project-src --exclude=./.git --exclude=./.venv --exclude=./var \
@@ -98,7 +113,8 @@ RUN --mount=type=bind,from=project,target=/project-src \
  && UV_PROJECT_ENVIRONMENT=/opt/cw-venv uv sync --frozen --all-groups \
  && /opt/cw-venv/bin/python -m sync_scripts --entrypoints \
  && find /workspace -mindepth 1 -delete \
- && chmod -R a+rwX /opt/uv-cache /opt/cw-venv
+ && find /opt/cw-venv /opt/uv-cache \( -type f -o -type d \) ! -perm -o+w \
+      -exec chmod a+rwX {} +
 
 # stage the manifests the venv bake ran from — the entrypoint's reuse gate
 # compares the clone's copies against these. a separate layer so a gate-only

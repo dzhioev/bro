@@ -84,6 +84,58 @@ class TestCreateContainer:
     assert calls[-1]['argv'] == ['docker', 'rm', '-f', 'cid123']
 
 
+class TestPruneSupersededImages:
+  def _patch_run(self, monkeypatch, listing: _FakeProc, remove_result=None):
+    calls: list = []
+
+    def fake_run(argv, *a, **k):
+      calls.append(argv)
+      if argv[:2] == ['docker', 'images']:
+        return listing
+      if remove_result is not None:
+        return remove_result(argv)
+      return _FakeProc(returncode=0)
+
+    monkeypatch.setattr(cw.docker.subprocess, 'run', fake_run)
+    return calls
+
+  def test_removes_all_but_current_smoke_test_and_untagged(self, monkeypatch):
+    listing = _FakeProc(
+      returncode=0,
+      stdout='ppp-cw:cur\nppp-cw:smoke-test\nppp-cw:<none>\nppp-cw:old1\nppp-cw:old2\n',
+    )
+    calls = self._patch_run(monkeypatch, listing)
+    cw.docker._prune_superseded_images('ppp-cw:cur')
+    removals = [argv for argv in calls if argv[:3] == ['docker', 'image', 'rm']]
+    assert removals == [
+      ['docker', 'image', 'rm', 'ppp-cw:old1'],
+      ['docker', 'image', 'rm', 'ppp-cw:old2'],
+    ]
+
+  def test_refused_removal_is_tolerated(self, monkeypatch):
+    # `docker image rm` without -f refuses images a container still references;
+    # that refusal keeps live sessions' images and must not abort the prune
+    listing = _FakeProc(returncode=0, stdout='ppp-cw:cur\nppp-cw:in-use\nppp-cw:old\n')
+
+    def remove_result(argv):
+      if argv[-1] == 'ppp-cw:in-use':
+        return _FakeProc(returncode=1, stderr='image is being used')
+      return _FakeProc(returncode=0)
+
+    calls = self._patch_run(monkeypatch, listing, remove_result)
+    cw.docker._prune_superseded_images('ppp-cw:cur')
+    removals = [argv for argv in calls if argv[:3] == ['docker', 'image', 'rm']]
+    assert removals == [
+      ['docker', 'image', 'rm', 'ppp-cw:in-use'],
+      ['docker', 'image', 'rm', 'ppp-cw:old'],
+    ]
+
+  def test_listing_failure_skips_pruning(self, monkeypatch):
+    calls = self._patch_run(monkeypatch, _FakeProc(returncode=1, stderr='daemon down'))
+    cw.docker._prune_superseded_images('ppp-cw:cur')
+    assert [argv for argv in calls if argv[:3] == ['docker', 'image', 'rm']] == []
+
+
 class TestDockerCreateArgv:
   @pytest.fixture
   def build_argv(self, monkeypatch, tmp_path):

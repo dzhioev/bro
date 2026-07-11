@@ -8,7 +8,9 @@ PROJECT="$(cd "$DIR" && realpath "$(git rev-parse --git-common-dir)/..")"
 
 TAG="ppp-cw:smoke-test"
 echo "building image" >&2
-docker build -t "$TAG" -f "$DIR/Dockerfile" --build-context "project=$PROJECT" "$DIR" >&2
+docker build -t "$TAG" -f "$DIR/Dockerfile" \
+  --build-arg CLAUDE_CODE_VERSION="$(cat "$DIR/claude-code-version")" \
+  --build-context "project=$PROJECT" "$DIR" >&2
 
 # colima only shares /Users; mktemp uses /var/folders which is invisible
 # inside the container. create temp dir under the project tree instead.

@@ -68,6 +68,11 @@ def find_container_id(session: Path) -> Optional[str]:
   return ids[0]
 
 
+_IMAGE_REPOSITORY = 'ppp-cw'
+# tagged by setup/container/test_smoke.sh, which owns its lifecycle
+_SMOKE_TEST_TAG = f'{_IMAGE_REPOSITORY}:smoke-test'
+
+
 def _image_tag() -> str:
   h = hashlib.sha256()
   project = _project_root()
@@ -77,7 +82,30 @@ def _image_tag() -> str:
       h.update(path.name.encode())
       h.update(b'\0')
       h.update(path.read_bytes())
-  return f'ppp-cw:{h.hexdigest()[:12]}'
+  return f'{_IMAGE_REPOSITORY}:{h.hexdigest()[:12]}'
+
+
+def _prune_superseded_images(current: str) -> None:
+  """untag `ppp-cw` images superseded by the just-built `current`.
+
+  every Dockerfile/manifest change mints a new content-hash tag, and the old
+  image would otherwise linger forever (~2.6 GB each). plain `docker image rm`
+  (no -f) refuses images that any container — running or stopped — still
+  references, so live sessions keep theirs and only orphaned tags go.
+  """
+  listed = subprocess.run(
+    ['docker', 'images', _IMAGE_REPOSITORY, '--format', '{{.Repository}}:{{.Tag}}'],
+    capture_output=True,
+    text=True,
+  )
+  if listed.returncode != 0:
+    return
+  for image in listed.stdout.split():
+    if image in (current, _SMOKE_TEST_TAG) or image.endswith(':<none>'):
+      continue
+    removed = subprocess.run(['docker', 'image', 'rm', image], capture_output=True, text=True)
+    if removed.returncode == 0:
+      log.info('pruned superseded image %s', image)
 
 
 def _ensure_image(tag: str) -> None:
@@ -102,6 +130,7 @@ def _ensure_image(tag: str) -> None:
     ],
     check=True,
   )
+  _prune_superseded_images(tag)
 
 
 def _create_container(argv: list[str], store_tarball: bytes, name: str) -> str:
