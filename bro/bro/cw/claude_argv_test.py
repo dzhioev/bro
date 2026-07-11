@@ -61,6 +61,7 @@ class TestNativeLaunch:
       'type': 'http',
       'url': 'https://flow.example',
       'headers': {'Authorization': 'Bearer T'},
+      'alwaysLoad': True,
     }
 
   def test_mcp_local_uses_endpoint(self):
@@ -119,6 +120,7 @@ class TestBroLaunch:
       assert entry['type'] == 'http'
       assert entry['url'] == f'http://127.0.0.1:1234/{namespace}'
       assert entry['headers'] == {'Authorization': 'Bearer tok'}
+      assert entry['alwaysLoad'] is True
 
   def test_settings_merge_fast_mode_and_api_key_helper(self):
     # the merged --settings is what lets --fast reach a --bro session; the

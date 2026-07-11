@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Optional
 
 from base import credentials
 from cw.constants import _CW_MODEL
-from cw.mcp import MCPEndpoint, _http_mcp_config
+from cw.mcp import MCPEndpoint, _http_mcp_config, _server_entry
 from cw.system_prompt import _mode_prompt, _session_append_prompt
 
 if TYPE_CHECKING:
@@ -40,15 +40,7 @@ def _deployed_mcp_config() -> str:
   except credentials.SecretNotFound:
     raise SystemExit('missing flow_mcp secret — run flow/mcp/server/bootstrap_secrets.sh')
   return json.dumps(
-    {
-      'mcpServers': {
-        'flow': {
-          'type': 'http',
-          'url': config['url'],
-          'headers': {'Authorization': f'Bearer {config["token"]}'},
-        },
-      },
-    },
+    {'mcpServers': {'flow': _server_entry(config['url'], config['token'])}},
     separators=(',', ':'),
   )
 

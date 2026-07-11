@@ -16,6 +16,7 @@ class TestHTTPMCPConfig:
       assert entry['type'] == 'http'
       assert entry['url'] == f'http://127.0.0.1:1234/{namespace}'
       assert entry['headers'] == {'Authorization': 'Bearer tok'}
+      assert entry['alwaysLoad'] is True
 
 
 def _fake_mcp_server(tmp_path: Path, body: str) -> dict[str, str]:

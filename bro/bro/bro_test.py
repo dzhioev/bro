@@ -561,8 +561,11 @@ class TestToolNamesBlock:
     assert '# Tool names' in prompt
     assert '`namespace::tool`' in prompt
     assert '`namespace__tool`' in prompt
-    # generic wording: nothing about a repo/codebase (reaches repo-unaware bros)
-    assert 'repo' not in prompt.lower()
+    # generic wording: nothing about a repo/codebase (reaches repo-unaware bros).
+    # scoped to the block — the shared prompts ahead of it legitimately contain
+    # words like "report" that a bare substring scan would trip on
+    tool_names_block = prompt[prompt.index('# Tool names') :]
+    assert 'repo' not in tool_names_block.lower()
 
   def test_absent_when_bro_has_no_tools_or_skills(self):
     class BareBro(BaseBro):

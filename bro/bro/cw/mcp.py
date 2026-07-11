@@ -38,6 +38,20 @@ class MCPEndpoint:
   token: str
 
 
+def _server_entry(url: str, token: str) -> dict:
+  """one server entry of a claude `--mcp-config`. `alwaysLoad` makes claude block
+  startup until the server is connected: its MCP connects are otherwise async and
+  don't block an immediately-submitted prompt, so without it the first API request
+  can be built with no tools attached — leaving the model to act on a system
+  prompt full of tools it cannot call."""
+  return {
+    'type': 'http',
+    'url': url,
+    'headers': {'Authorization': f'Bearer {token}'},
+    'alwaysLoad': True,
+  }
+
+
 def _http_mcp_config(namespaces: list[str], *, port: int, token: str) -> str:
   """claude `--mcp-config` json: one `{type: http}` entry per namespace, mounted
   under the namespace as the server key so tools surface as `mcp__<namespace>__<tool>`
@@ -45,11 +59,7 @@ def _http_mcp_config(namespaces: list[str], *, port: int, token: str) -> str:
   return json.dumps(
     {
       'mcpServers': {
-        namespace: {
-          'type': 'http',
-          'url': f'http://127.0.0.1:{port}/{namespace}',
-          'headers': {'Authorization': f'Bearer {token}'},
-        }
+        namespace: _server_entry(f'http://127.0.0.1:{port}/{namespace}', token)
         for namespace in namespaces
       },
     },
@@ -68,10 +78,11 @@ class _SessionMCPServer:
   def wait_healthy(self) -> None:
     """block until /health answers 200 — every namespace endpoint ready to serve.
 
-    `bro:*` sessions gate the claude launch on this: their seeded `-p` prompt
-    fires the moment the REPL is up, so the multi-second bro import must be paid
-    here, off claude's critical path, for the first turn to have every tool
-    connected. raises RuntimeError when the server dies or the deadline passes.
+    `bro:*` sessions gate the claude launch on this so the multi-second bro
+    import is paid here, off claude's critical path: claude itself blocks
+    startup on the server's connect (the `alwaysLoad` config entries), and that
+    block must not spend its connect timeout waiting out our import. raises
+    RuntimeError when the server dies or the deadline passes.
     """
     url = f'http://127.0.0.1:{self.endpoint.port}/health'
     deadline = time.monotonic() + _HEALTH_TIMEOUT
