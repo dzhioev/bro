@@ -380,7 +380,7 @@ def _host_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
   runner_env = _venv_env(worktree / '.venv')
   claude_dir = _provision_host_claude_dir(spec.name, worktree, project)
   runner_env['CLAUDE_CONFIG_DIR'] = str(claude_dir)
-  runner_env['CREDENTIALS_REGISTRY'] = str(_materialize_scoped_store(store, claude_dir / '.ppp'))
+  runner_env[credentials.REGISTRY_ENV] = str(_materialize_scoped_store(store, claude_dir / '.ppp'))
   _apply_claude_auth(runner_env)
   with _held_pidfile(workspace.pidfile):
     if _broker_enabled():

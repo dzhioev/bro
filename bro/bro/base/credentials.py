@@ -47,6 +47,9 @@ PPP_DIR = configs.DEFAULT_PPP_DIR
 # built-in default when present; absent, resolution falls through to the built-in.
 REGISTRY_FILE = 'credentials.json'
 
+# the process-scoped registry override described in the module docstring.
+REGISTRY_ENV = 'CREDENTIALS_REGISTRY'
+
 
 class SecretNotFound(Exception):
   """no source yielded a value for the named secret."""
@@ -128,7 +131,7 @@ def _search_dirs() -> list[str]:
   # (`build_scoped_store`), so that dir must be searched first for the store to
   # resolve wherever it lands — the container's ~/.ppp needs no override, a host
   # session's store lives outside the standard dirs.
-  override = os.environ.get('CREDENTIALS_REGISTRY')
+  override = os.environ.get(REGISTRY_ENV)
   if override is not None and override != '':
     return [str(Path(override).parent), CONFIGS_DIR, PPP_DIR]
   return [CONFIGS_DIR, PPP_DIR]
@@ -290,7 +293,7 @@ def _load_registry() -> dict[str, Secret]:
   # ssm-backed registry). a bad path raises rather than falling through: an
   # explicit override that silently degraded to the built-in would resolve
   # against the wrong secret set.
-  override = os.environ.get('CREDENTIALS_REGISTRY')
+  override = os.environ.get(REGISTRY_ENV)
   if override is not None and override != '':
     return _registry_from_dict(json.loads(Path(override).read_text()))
   # a generated registry file in either search dir (`<project>/.configs` for the
