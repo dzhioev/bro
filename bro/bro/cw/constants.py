@@ -2,6 +2,11 @@
 # builder). its own module so consumers share it without a heavier import.
 _CW_MODEL = 'claude-fable-5'
 
+# the bro a session that names no --bro themes as: dive-in exports it as CW_BRO
+# for the native harness (skills + persona), and credential scoping falls back
+# to it for a plain `cw ss`.
+DEFAULT_SESSION_BRO = 'ppp-dev'
+
 # the git identity every cw-launched session commits as — agent commits are
 # attributed to bro, not the user; the container pre-push hook fences this
 # identity from pushing to master/main.

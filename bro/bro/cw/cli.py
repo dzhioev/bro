@@ -43,11 +43,6 @@ def build_parser() -> Parser:
     help='connect flow MCP tools: http (default) uses the deployed server, local serves this checkout via a session-local HTTP server',
   )
   ss.add_argument(
-    '--bro',
-    default=None,
-    help="start a clean claude session with the named bro's persona (system prompt, MCP servers, tools); container only (rejected with --host), requires the `anthropic` secret; mutually exclusive with --mcp",
-  )
-  ss.add_argument(
     '-p', '--prompt', default=None, help='initial prompt (prepended with base prompt)'
   )
   ss.add_argument('name', help='worktree name')

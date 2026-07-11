@@ -103,12 +103,17 @@ def _fix_command(task_arg: Optional[str], focus: bool, new: bool, command: Optio
 
 def dive_in(
   forwarded: list[str],
+  bro: Optional[str] = None,
   dry_run: bool = False,
   command: Optional[str] = None,
   task: Optional[str] = None,
   new: bool = False,
   focus: bool = False,
 ) -> int:
+  """launch the session. `bro` is the forwarded `--bro` value (already spliced
+  into `forwarded`), passed separately because dive-in's own policy branches on
+  it: a `--bro` session serves its own MCP tools and names its own persona, so
+  dive-in adds neither `--mcp=http` nor `CW_BRO`."""
   prompt: Optional[str] = None
   if new:
     base = _slugify(command) if command is not None else ''
@@ -149,26 +154,19 @@ def dive_in(
     name = _pick_fresh_name('dive-in')
     log.info('workspace: %s', name)
 
-  # surface ppp-dev's skills (/fix, /pr, /land): the in-place session runner
-  # (cw/runner.py) reads CW_BRO, populates a per-session skills dir, and passes
-  # it to claude via --add-dir.
-  os.environ['CW_BRO'] = 'ppp-dev'
-
-  ppp_parts = ['dive-in', *forwarded]
-  if new:
-    ppp_parts.append('--new')
-  if focus:
-    ppp_parts.append('--focus')
-  if task is not None:
-    ppp_parts.extend(['-t', task])
-  if command is not None:
-    ppp_parts.append(command)
-  os.environ.setdefault('PPP_SHELL_COMMAND', ' '.join(ppp_parts))
-
-  # --mcp=http (joined form), not a bare --mcp: `cw ss --mcp` is nargs='?', so a bare
-  # flag immediately followed by the positional name makes argparse consume the name as
-  # its value. dive-in always wants the default http flow MCP.
-  cw_command = ['cw', 'ss', '--mcp=http', *forwarded]
+  cw_command = ['cw', 'ss', *forwarded]
+  if bro is None:
+    # surface the default bro's skills (/fix, /pr, /land): the in-place session
+    # runner (cw/runner.py) reads CW_BRO, populates a per-session skills dir, and
+    # passes it to claude via --add-dir. under --bro the runner exports CW_BRO
+    # itself and serves skills through the `bro::skill` tool.
+    os.environ['CW_BRO'] = cw.DEFAULT_SESSION_BRO
+    # a native session gets flow tools from the deployed MCP server; a --bro
+    # session serves its own (`cw ss` rejects the combination). --mcp=http
+    # (joined form), not a bare --mcp: `cw ss --mcp` is nargs='?', so a bare flag
+    # immediately followed by the positional name makes argparse consume the name
+    # as its value.
+    cw_command.append('--mcp=http')
   if prompt is not None:
     cw_command.extend(['-p', prompt])
   cw_command.append(name)
@@ -203,5 +201,14 @@ def main(argv: list[str]) -> Optional[int]:
     help='initial command for the session (with no task flag, used as the entire prompt; with --new, used as the seed idea for the task; otherwise appended to the prompt)',
   )
   args = parser.parse(argv)
+  # the user-facing launch reconstruction, consumed by `cw banner` as
+  # launch_command: built from dive-in's own parser so env-detection sees
+  # `dive-in …`, not the underlying `cw ss`; setdefault keeps an outer wrapper's
+  # value.
+  os.environ.setdefault(
+    'PPP_SHELL_COMMAND',
+    ' '.join(parser.reconstruct(args, prog=['dive-in'], exclude=('dry_run',))),
+  )
+  bro = args['bro']
   forwarded = cw.extract_forwarded_argv(args)
-  return dive_in(forwarded=forwarded, **args)
+  return dive_in(forwarded=forwarded, bro=bro, **args)

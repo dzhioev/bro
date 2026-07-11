@@ -1,6 +1,6 @@
 # dive-in
 
-`dive-in` is a thin wrapper around `cw ss` that turns "I want to work on this task" into a ready-to-go Claude Code session: it picks the workspace name from the task, seeds `/fix <task-ref>` as the first user message (so the `ppp-dev` bro's `fix` skill orients Claude toward the task), and forwards into `cw ss --mcp` with the right flags.
+`dive-in` is a thin wrapper around `cw ss` that turns "I want to work on this task" into a ready-to-go Claude Code session: it picks the workspace name from the task, seeds `/fix <task-ref>` as the first user message (so the `ppp-dev` bro's `fix` skill orients Claude toward the task), and forwards into `cw ss` with the right flags.
 
 This document explains the modes, workspace naming, the `/fix`-seeding rules, and the rules around `--host`. The source of truth is `dive_in.py` (which also has unit tests in `dive_in_test.py`).
 
@@ -72,7 +72,7 @@ If a positional `command` is present alongside a task scope (`-t` or bare `--foc
 
 For bare mode, the prompt is just the `command` string verbatim — no `/fix` wrapping.
 
-For the skill to be discoverable by Claude Code's slash-command resolution, `dive-in` sets `CW_BRO=ppp-dev` in the environment. The in-place session runner (`cw/runner.py`) reads it in both execution modes: it copies the bro's skills, rendered for the claude harness — the MRO-walked set: ppp-dev's own `/fix`, `/pr`, `/land` (`bro/bros/ppp_dev/skills/`) plus inherited ones such as `/audit` (dev) and the shared `/ask` (summon) — into a per-session `tempfile.mkdtemp` directory and passes it to claude via `--add-dir <tmp>`, so concurrent dive-in sessions on the same repo don't share `.claude/skills/`. Beyond skills, the bro's `persona` (its own MRO-concatenated class `system_prompt`(s), without the shared / data-source / skills blocks) is appended to the session's `--append-system-prompt` by `cw/system_prompt.py:_session_append_prompt`, so the dive-in session carries ppp-dev's policies even though it runs the native Claude Code harness rather than `--bro`. This is the bridge toward making `dive-in` a `cw ss --bro ppp-dev` session outright.
+For the skill to be discoverable by Claude Code's slash-command resolution, a no-`--bro` `dive-in` sets `CW_BRO=ppp-dev` (`cw.constants.DEFAULT_SESSION_BRO`) in the environment. The in-place session runner (`cw/runner.py`) reads it in both execution modes: it copies the bro's skills, rendered for the claude harness — the MRO-walked set: ppp-dev's own `/fix`, `/pr`, `/land` (`bro/bros/ppp_dev/skills/`) plus inherited ones such as `/audit` (dev) and the shared `/ask` (summon) — into a per-session `tempfile.mkdtemp` directory and passes it to claude via `--add-dir <tmp>`, so concurrent dive-in sessions on the same repo don't share `.claude/skills/`. Beyond skills, the bro's `persona` (its own MRO-concatenated class `system_prompt`(s), without the shared / data-source / skills blocks) is appended to the session's `--append-system-prompt` by `cw/system_prompt.py:_session_append_prompt`, so the dive-in session carries ppp-dev's policies even though it runs the native Claude Code harness rather than `--bro`. To run the bro flavor outright, forward `--bro` (see "Forwarded flags").
 
 ## Resuming
 
@@ -82,14 +82,16 @@ Known gap: `CW_TASK_ID` lives only in the launching `dive-in` process's environm
 
 ## Forwarded flags
 
-`dive-in` accepts all the flags `cw.add_forwarded_flags` registers (`--host`, `--auto`, `--fast`, `--grant-cred`, `--revoke-cred`, `--grant-summon`, `--revoke-summon`, `--effort`, `--into`) and forwards them straight through into `cw ss`. Adding a new pass-through flag in `cw/flags.py` makes it available to `dive-in` for free — no per-flag plumbing in this file. `--grant-cred`/`--revoke-cred` (repeatable) require container mode, so they are unusable with `dive-in --host`; the summon pair works in both modes (a host session's broker root enforces the same allow-list).
+`dive-in` accepts all the flags `cw.add_forwarded_flags` registers (`--host`, `--auto`, `--fast`, `--grant-cred`, `--revoke-cred`, `--grant-summon`, `--revoke-summon`, `--effort`, `--into`, `--bro`) and forwards them straight through into `cw ss`. Adding a new pass-through flag in `cw/flags.py` makes it available to `dive-in` for free — no per-flag plumbing in this file. `--grant-cred`/`--revoke-cred` (repeatable) require container mode, so they are unusable with `dive-in --host`; the summon pair works in both modes (a host session's broker root enforces the same allow-list).
+
+`--bro <name>` is the one forwarded flag `dive-in` also branches on: it makes the session the bro flavor of `cw ss` — `claude --bare` under the named bro's persona, serving the bro's own MCP tools (see `reference/cw.md`, "`--bro`") — so `dive-in` omits its default `--mcp=http` (`cw ss` rejects the combination) and leaves `CW_BRO` for the runner to export. The seeded `/fix …` message still works there — a bro session resolves `/<name>` messages through its `bro::skill` tool — provided the named bro carries the fix/pr/land skills and the flow toolset (ppp-dev does). Like any `--bro` session it is fenced to the container (rejected with `--host`) and requires the `anthropic` secret.
 
 `-n / --dry-run` prints the final `cw ss …` invocation (shell-quoted) without running it.
 
 ## Env-var handoff
 
 - `CW_TASK_ID` — set to the resolved task id in any mode that has one (focused, `-t`, `-t --focus`). Picked up by `setup/claude_commit_footer.py` to insert `Task: <notion-url>` into commit messages, and by the `/pr` skill to build the commit footer.
-- `CW_BRO` — set unconditionally to `ppp-dev` so the bro's skills are surfaced to Claude Code's slash-command resolution by the in-place session runner (see "Initial-prompt composition").
+- `CW_BRO` — set to `ppp-dev` (`cw.constants.DEFAULT_SESSION_BRO`) when no `--bro` is forwarded, so the bro's skills are surfaced to Claude Code's slash-command resolution by the in-place session runner (see "Initial-prompt composition"); under `--bro` the runner exports it itself.
 - `PPP_SHELL_COMMAND` — set (if not already set) to the user-facing reconstruction of the dive-in invocation. Consumed by `cw banner` and surfaced as `launch_command` in `cw banner --llm`, which is what Claude reads at session start (see `prompts/environment.md`) to self-detect that it was launched via `dive-in` (and whether `-t` / `--focus` / `--new` was used).
 
-The user-facing `dive-in` reconstruction is built explicitly in `dive_in.py` (not via `cw.add_forwarded_flags`'s reconstruct) so that env-detection sees `dive-in`, not the underlying `cw ss`.
+The user-facing `dive-in` reconstruction is rebuilt from dive-in's own parser (`Parser.reconstruct` with prog `dive-in`) so that env-detection sees `dive-in`, not the underlying `cw ss`.

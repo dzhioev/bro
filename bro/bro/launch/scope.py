@@ -7,14 +7,11 @@ from pathlib import Path
 from typing import Optional
 
 from base import credentials, log
+from cw.constants import DEFAULT_SESSION_BRO
 
 # secrets every claude code session resolves regardless of bro: the
 # sync-session-log hooks run in-session, and an in-session bro run records to trails.
 _CW_SESSION_BASELINE = ('session_log', 'trails')
-
-# the bro a no-`--bro` container session themes as (dive-in already sets CW_BRO to
-# this); bounds a manual `cw ss` session's scoped credentials.
-_DEFAULT_CW_BRO = 'ppp-dev'
 
 
 def _session_bro_name(bro: Optional[str]) -> str:
@@ -23,7 +20,7 @@ def _session_bro_name(bro: Optional[str]) -> str:
   ambient CW_BRO (dive-in sets ppp-dev; a plain `cw ss` defaults to it too)."""
   if bro is not None:
     return bro
-  return os.environ.get('CW_BRO', _DEFAULT_CW_BRO)
+  return os.environ.get('CW_BRO', DEFAULT_SESSION_BRO)
 
 
 @dataclass(frozen=True)

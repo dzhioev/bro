@@ -64,6 +64,11 @@ def add_forwarded_flags(parser: Parser) -> None:
     metavar='REF',
     help="base a new session on git REF (branch/tag/sha) instead of the host checkout's current HEAD (the default in both container and host mode). a REF that only exists on origin is fetched automatically. ignored once the workspace exists",
   )
+  parser.add_argument(
+    '--bro',
+    default=None,
+    help="run a clean claude session as the named bro's persona (system prompt, MCP servers, tools); container only (rejected with --host), requires the `anthropic` secret; mutually exclusive with --mcp",
+  )
 
 
 def extract_forwarded_argv(args: dict) -> list[str]:

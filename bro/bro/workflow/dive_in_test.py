@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+import os
 import re
 import shlex
 
@@ -72,6 +73,41 @@ class TestLaunchCommand:
     assert args['mcp'] == 'http'
     assert len(args['name']) > 0
     assert len(args['claude_args']) == 0  # nothing leaked into the forwarded REMAINDER
+
+  def test_bro_mode_forwards_bro_and_drops_mcp(self, fake_proj, capsys, monkeypatch):
+    monkeypatch.delenv('CW_BRO', raising=False)
+    rc = dive_in.dive_in(forwarded=['--bro', 'ppp-dev'], bro='ppp-dev', dry_run=True)
+    assert rc == 0
+    args = cw.build_parser().parse(shlex.split(capsys.readouterr().out.strip()))
+    assert args['bro'] == 'ppp-dev'
+    assert args['mcp'] is None
+    assert len(args['claude_args']) == 0
+    # the runner exports CW_BRO for a --bro session; dive-in must not preempt it
+    assert 'CW_BRO' not in os.environ
+
+  def test_native_mode_exports_default_cw_bro(self, fake_proj, monkeypatch):
+    monkeypatch.delenv('CW_BRO', raising=False)
+    rc = dive_in.dive_in(forwarded=[], dry_run=True)
+    assert rc == 0
+    assert os.environ['CW_BRO'] == 'ppp-dev'
+
+
+class TestShellCommandReconstruction:
+  """PPP_SHELL_COMMAND is rebuilt from dive-in's own parser (prog `dive-in`), so
+  env-detection sees the wrapper invocation, not the underlying `cw ss`."""
+
+  def test_forwarded_flags_appear_in_the_reconstruction(self, fake_proj, monkeypatch):
+    monkeypatch.delenv('PPP_SHELL_COMMAND', raising=False)
+    rc = dive_in.main(['dive-in', '-n', '--auto', '--bro', 'ppp-dev'])
+    assert rc == 0
+    assert os.environ['PPP_SHELL_COMMAND'] == 'dive-in --auto --bro ppp-dev'
+
+  def test_new_seed_keeps_the_prompt_marker_tail(self, fake_proj, monkeypatch):
+    monkeypatch.delenv('PPP_SHELL_COMMAND', raising=False)
+    rc = dive_in.main(['dive-in', '-n', '--new', 'do a thing'])
+    assert rc == 0
+    # `cw banner` splits the user prompt off at the last ` --new ` marker
+    assert os.environ['PPP_SHELL_COMMAND'] == 'dive-in --new do a thing'
 
 
 class TestTaskModeName:
