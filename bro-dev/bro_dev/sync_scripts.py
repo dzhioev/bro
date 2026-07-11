@@ -34,6 +34,7 @@ the same reason.
 
 import ast
 import logging
+import os
 import re
 import sys
 import sysconfig
@@ -48,15 +49,22 @@ SKIP_DIRS = {'.venv', 'build', '.claude', 'setup', '__pycache__', 'var'}
 
 
 def _iter_py_files():
-  for path in sorted(ROOT.rglob('*.py')):
-    rel = path.relative_to(ROOT)
-    if any(p in SKIP_DIRS or p.endswith('.egg-info') for p in rel.parts):
-      continue
-    if path.name == '__init__.py':
-      continue
-    if path.name == 'test.py' or path.name.endswith('_test.py'):
-      continue
-    yield rel
+  # os.walk with in-place pruning: rglob would physically descend into the
+  # skipped trees before any filter could discard them — under the main repo
+  # that means walking every worktree venv in var/ (~10s per --check)
+  collected = []
+  for directory, dir_names, file_names in os.walk(ROOT):
+    dir_names[:] = [d for d in dir_names if d not in SKIP_DIRS and not d.endswith('.egg-info')]
+    rel_dir = Path(directory).relative_to(ROOT)
+    for file_name in file_names:
+      if not file_name.endswith('.py'):
+        continue
+      if file_name == '__init__.py':
+        continue
+      if file_name == 'test.py' or file_name.endswith('_test.py'):
+        continue
+      collected.append(rel_dir / file_name)
+  yield from sorted(collected)
 
 
 def _module_name(rel: Path) -> str:
