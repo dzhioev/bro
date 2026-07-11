@@ -239,6 +239,26 @@ _SUMMON_CHECK_DESCRIPTION = (
 )
 
 
+_BANNER_DESCRIPTION = (
+  "return this session's environment facts as `key: value` lines: `kind` "
+  '(docker container vs host worktree), workspace name and paths, the bro '
+  'persona, and the launch command. call it once at session start to detect '
+  'your environment.'
+)
+
+
+def _banner_tool(bro_name: str) -> llm.mcp.Tool:
+  # the same facts `cw banner --llm` prints, rendered in-process. the bro name is
+  # passed explicitly because bro-run containers deliberately drop `CW_BRO`. the
+  # cw hub import stays function-local so `import bro` stays cheap.
+  def _banner() -> str:
+    from cw import render_banner
+
+    return render_banner(llm=True, bro=bro_name)
+
+  return llm.mcp.FunctionTool(_banner, name='banner', description=_BANNER_DESCRIPTION)
+
+
 def _summon_tool() -> llm.mcp.Tool:
   # a fresh channel client per call, and the blocking wait runs off-loop so an
   # interactive surface stays responsive under a long summon.
@@ -291,11 +311,12 @@ def _summon_check_tool() -> llm.mcp.Tool:
 def _build_service_server(
   bro: 'BaseBro', *, include_raise: bool, wire: llm.mcp.Wire
 ) -> llm.mcp.MCPServer:
-  # `raise` only makes sense non-interactively (a caller to abort to); `skill` and
-  # `summon` are needed in both modes. interactive callers pass include_raise=False.
-  # served skills always render for the bro harness — every consumer of this
-  # server works through the bro toolset — over the caller's wire scheme.
-  tools: list[llm.mcp.Tool] = []
+  # `raise` only makes sense non-interactively (a caller to abort to); `banner`,
+  # `skill` and `summon` are needed in both modes. interactive callers pass
+  # include_raise=False. served skills always render for the bro harness — every
+  # consumer of this server works through the bro toolset — over the caller's
+  # wire scheme.
+  tools: list[llm.mcp.Tool] = [_banner_tool(bro.name)]
   if include_raise:
     tools.append(llm.mcp.FunctionTool(_raise, name='raise', description=_RAISE_DESCRIPTION))
   if len(bro.skills) > 0:

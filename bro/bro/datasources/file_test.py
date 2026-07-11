@@ -29,6 +29,12 @@ def test_read_picks_up_file_edits(env_file):
   assert src.read() == 'replaced'
 
 
+def test_read_renders_directives_for_the_bro_harness(env_file):
+  env_file.write_text('{{if #harness = bro}}call the tool{{else}}run the CLI{{endif}}')
+  src = FileSource('environment', summary='x', path=env_file)
+  assert src.read() == 'call the tool'
+
+
 @pytest.mark.asyncio
 async def test_as_mcp_server_exposes_single_read_tool(env_file):
   server = FileSource('environment', summary='x', path=env_file).as_mcp_server()

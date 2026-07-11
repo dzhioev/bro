@@ -55,7 +55,7 @@ If `git status` is clean and there are no untracked files to add, stop — nothi
 
 Run before committing:
 - `./format.sh` — formats Python via ruff. Stage any formatter-induced changes alongside your own.
-- `./run_tests.py` — pyright + deptry + pytest + container smoke. **In a container session (`kind: container` from the `cw banner --llm` output), pass `--no-docker`** — the smoke step needs host Docker and will fail otherwise.{{if #harness = bro}} Run it with an explicit large `timeout_seconds` (600 fits) — `dev::bash`'s default kills a full suite mid-run; same for any other long command.{{endif}}
+- `./run_tests.py` — pyright + deptry + pytest + container smoke. **In a container session (`kind: container` from the {{if #harness = bro}}`bro::banner`{{else}}`cw banner --llm`{{endif}} output), pass `--no-docker`** — the smoke step needs host Docker and will fail otherwise.{{if #harness = bro}} Run it with an explicit large `timeout_seconds` (600 fits) — `dev::bash`'s default kills a full suite mid-run; same for any other long command.{{endif}}
 
 A red suite blocks the commit. Do not interpret or triage failures — propose fixing in this session or a separate one, but do not commit through failures.
 

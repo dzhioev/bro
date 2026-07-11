@@ -2,7 +2,7 @@
 
 At session start, detect your environment. Do not produce any visible output — silently incorporate this context into your planning.
 
-Run `cw banner --llm` once via Bash. It prints the structured session facts on stdout (`kind`, `name`, `bro`, `workspace_host_path`, `workspace_container_path`, `docker_shell_command`, `cw_command`, `launch_command`). Interpret them as follows:
+{{if #harness = bro}}Call the `bro::banner` tool once. It returns{{else}}{{assert #harness = claude}}Run `cw banner --llm` once via Bash. It prints{{endif}} the structured session facts as `key: value` lines (`kind`, `name`, `bro`, `workspace_host_path`, `workspace_container_path`, `docker_shell_command`, `cw_command`, `launch_command`). Interpret them as follows:
 
 1. `launch_command` tells you how this session was launched:
    - Starts with `dive-in` with `-t <id>` or `--focus`: scoped to a specific task (`-t` names it directly; `--focus` uses whatever is currently focused)

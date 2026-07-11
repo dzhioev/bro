@@ -239,9 +239,10 @@ class SessionFacts:
 def render_banner(llm: bool = False, bro: Optional[str] = None) -> str:
   """render the banner string for the current session. visual (ANSI + logo) by
   default; --llm for plain key:value text. exposed so in-process callers (e.g.
-  `call`, which shows it as the opening bro message) can render without a shell-out.
-  bro overrides the `bro` fact (so `call` gets its logo even though a `call`
-  container doesn't forward `CW_BRO`); None falls back to the env."""
+  `call`'s opening bro message, the `bro::banner` service tool) can render
+  without a shell-out. bro overrides the `bro` fact (so those callers stay
+  correct even though `call` and bro-run containers don't forward `CW_BRO`);
+  None falls back to the env."""
   facts = SessionFacts.collect(bro_override=bro)
   return facts.render_llm() if llm else facts.render_visual()
 

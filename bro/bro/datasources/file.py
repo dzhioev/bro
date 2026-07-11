@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from bro.datasources.base import DataSource
-from llm.mcp import FunctionTool, InProcessMCPServer, MCPServer
+from llm.mcp import FunctionTool, InProcessMCPServer, MCPServer, render_text
 
 
 class FileSource(DataSource):
@@ -12,6 +12,11 @@ class FileSource(DataSource):
   `<name>-source__read`) that returns the file body. Use for canonical reference
   docs the bro should consult on demand — e.g. a playbook that's shared between a
   Claude Code session prompt and a bro.
+
+  The body renders `base.template` `#harness` directives for the bro harness —
+  every consumer of this tool works through the bro toolset, mirroring served
+  skill bodies (a native claude session reads the same file through its own
+  injection, rendered `claude`).
   """
 
   def __init__(self, name: str, summary: str, path: Path):
@@ -32,4 +37,4 @@ class FileSource(DataSource):
     )
 
   def read(self) -> str:
-    return self._path.read_text()
+    return render_text(self._path.read_text(), harness='bro')

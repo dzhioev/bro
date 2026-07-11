@@ -942,6 +942,32 @@ class TestRaise:
     assert '# Autonomous session' not in prompt
 
 
+class TestBannerTool:
+  @pytest.mark.asyncio
+  async def test_present_on_both_service_builds(self):
+    bro = EchoBro()
+    non_interactive = await _collect_tool_names(bro._mcp_servers_for(interactive=False))
+    interactive = await _collect_tool_names(bro._mcp_servers_for(interactive=True))
+    assert 'banner' in non_interactive
+    assert 'banner' in interactive
+
+  @pytest.mark.asyncio
+  async def test_renders_the_llm_banner_with_the_bro_name(self, monkeypatch):
+    import cw
+
+    captured: dict = {}
+
+    def fake_render_banner(llm=False, bro=None):
+      captured['llm'] = llm
+      captured['bro'] = bro
+      return 'kind: container'
+
+    monkeypatch.setattr(cw, 'render_banner', fake_render_banner)
+    tool = await _find_tool(EchoBro(), 'banner')
+    assert await tool.call({}) == 'kind: container'
+    assert captured == {'llm': True, 'bro': 'echo'}
+
+
 class TestSummonTool:
   @pytest.mark.asyncio
   async def test_absent_without_a_channel(self):
@@ -1551,7 +1577,7 @@ class TestSkillServiceTool:
     B.__module__ = package
     tools = await B()._service_server.list_tools()
     names = {t.name for t in tools}
-    assert names == {'raise'}
+    assert names == {'banner', 'raise'}
 
   @pytest.mark.asyncio
   async def test_skill_tool_survives_interactive_mode(self, fake_packages):

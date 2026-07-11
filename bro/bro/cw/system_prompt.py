@@ -8,7 +8,8 @@ _PROMPTS_DIR = Path(__file__).resolve().parent.parent / 'prompts'
 # directives (`#harness`/`#wire`/`#creds`) — the whole append text renders once
 # in `_session_append_prompt` with this surface's facts. Top-level files here
 # are Claude-Code-only:
-# - `environment.md` is the single source of truth for the cw-banner playbook —
+# - `environment.md` is the single source of truth for the session-banner
+#   playbook (forked on `#harness`: `bro::banner` tool vs `cw banner --llm`) —
 #   same file is reachable from bros via `FileSource` (bro/bros/ppp_dev).
 # - `tool_names.md` is the tool-name resolution rule, templated on `#wire`;
 #   `--bro` sessions run `--bare` and skip this injection but get the same file

@@ -7,7 +7,9 @@ Centralised prompt store. Four loading conventions: auto-inject into every bro +
 - `*.prompt` — plain text, used as-is. Loaded with `prompts.get_prompt('name.prompt')`
 - `*.prompt.template` — Python `str.format` template. Requires kwargs at load time; `get_prompt` enforces "template ↔ kwargs" symmetry — passing kwargs to a non-template, or omitting kwargs for a template, raises
 
-Prompt content may carry `base.template` directives (`#harness`/`#wire`/`#creds`): every composed surface renders its assembled text once with its own facts via `llm.mcp.render_text` — `BaseBro.__init__` for the two bro flavors, `cw/system_prompt.py:_session_append_prompt` for native claude sessions — so a directive works in `shared/`, top-level files, and bro class prompts alike.
+Prompt content may carry `base.template` directives (`#harness`/`#wire`/`#creds`): every rendering surface renders its text once with its own facts via `llm.mcp.render_text` — `BaseBro.__init__` for the two bro flavors, `cw/system_prompt.py:_session_append_prompt` for native claude sessions, `FileSource.read` for a bro reading a top-level doc on demand (always the bro harness, mirroring served skill bodies) — so a directive works in `shared/`, top-level files, and bro class prompts alike.
+
+Harness-specific conditioning is expressed with these directives, never as prose that addresses both surfaces and leaves the reader to pick: fork the text with `{{if #harness = bro}}…{{else}}{{assert #harness = claude}}…{{endif}}` so each surface reads only its own instruction (see `environment.md` for the pattern).
 
 `prompts.py` (repo root) is the loader. Keep it the single entry point — do not `open()` prompts ad-hoc from elsewhere. `get_prompt_path(name)` returns the `Path` if a caller needs to hand the file off to something that wants a path rather than the body (e.g. `bro.datasources.file.FileSource`).
 
@@ -17,13 +19,13 @@ Prompt content may carry `base.template` directives (`#harness`/`#wire`/`#creds`
 
 ## Top-level `*.md` reference docs
 
-Top-level markdown files in `prompts/` are auto-injected into every `cw ss` Claude Code session via `cw/system_prompt.py:_load_base_prompts` (the file name must be listed in `_BASE_PROMPT_FILES`). Each can optionally also be exposed to a specific bro via a `FileSource` declaration in `data_sources` (see `bro/bros/ppp_dev/__init__.py` for the `environment.md` example — the bro framework auto-lists the source in the `## Data sources` block and mounts a `read` tool that returns the file body).
+Top-level markdown files in `prompts/` are auto-injected into every `cw ss` Claude Code session via `cw/system_prompt.py:_load_base_prompts` (the file name must be listed in `_BASE_PROMPT_FILES`). Each can optionally also be exposed to a specific bro via a `FileSource` declaration in `data_sources` (see `bro/bros/ppp_dev/__init__.py` for the `environment.md` example — the bro framework auto-lists the source in the `## Data sources` block and mounts a `read` tool that returns the file body, rendered for the bro harness).
 
 Use a top-level file when content must hold in a `cw ss` Claude Code session — optionally shared with a specific bro via `FileSource`, but **not** pushed onto every bro the way `shared/` would. A file is Claude-Code-only precisely when no bro declares a `FileSource` for it.
 
 Current top-level reference docs:
 
-- `environment.md` — `cw banner` playbook; loaded into every `cw ss` session and exposed to `ppp-dev` via `FileSource('environment', ...)`
+- `environment.md` — session-banner playbook, forked on `#harness` (the `bro::banner` service tool on bro surfaces, `cw banner --llm` via Bash in native sessions); loaded into every `cw ss` session and exposed to `ppp-dev` via `FileSource('environment', ...)`
 - `tool_names.md` — the tool-name resolution rule, templated on the `#wire` scheme; one file serves every surface. Claude sessions get the `mcp` rendering (`ns::tool` → `mcp__ns__tool`): injected here for non-bro sessions, composed into `BaseBro.claude_system_prompt` for `cw ss --bro` ones. Bro-native LLM runs compose the `bare` rendering (`ns::tool` → `ns__tool`) into `BaseBro.system_prompt`. Deliberately no `FileSource`
 
 ## Session-mode fragments
