@@ -38,6 +38,7 @@ echo "Setting up dev environment on ${PLATFORM}"
 
 SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 STOW_MIN_VERSION="2.4.0"
+TMUX_MIN_VERSION="3.5"
 
 check_brew() {
   if ! command -v brew &> /dev/null; then
@@ -71,6 +72,34 @@ install_stow() {
     brew install stow
   else
     "$SCRIPT_DIR/ubuntu/install_stow.sh"
+  fi
+}
+
+check_tmux_version() {
+  if ! command -v tmux &> /dev/null; then
+    return 1
+  fi
+  # strip the patch-letter suffix (3.5a -> 3.5) for the numeric comparison
+  TMUX_VERSION=$(tmux -V | awk '{print $2}' | sed 's/[a-z]*$//')
+  if ! version_gte "$TMUX_VERSION" "$TMUX_MIN_VERSION"; then
+    echo "tmux version $TMUX_VERSION is lower than required $TMUX_MIN_VERSION"
+    return 1
+  fi
+  echo "tmux version: $TMUX_VERSION"
+  return 0
+}
+
+install_tmux() {
+  if check_tmux_version; then
+    return
+  fi
+
+  echo "Installing tmux"
+  if [ "$PLATFORM" = "macOS" ]; then
+    check_brew
+    brew install tmux
+  else
+    "$SCRIPT_DIR/ubuntu/install_tmux.sh"
   fi
 }
 
@@ -170,6 +199,7 @@ install_uv() {
 }
 
 install_stow
+install_tmux
 install_claude_code
 install_docker
 install_awscli

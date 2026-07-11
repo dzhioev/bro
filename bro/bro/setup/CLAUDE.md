@@ -21,7 +21,7 @@ Worktrees get their own `.venv`. `cw` (host mode) creates the worktree and runs 
 
 ## Files
 
-- `setup_env.sh` — installs system tools (stow, claude-code, docker via colima on macOS, awscli, uv). macOS and Ubuntu only
+- `setup_env.sh` — installs system tools (stow, tmux, claude-code, docker via colima on macOS, awscli, uv). macOS and Ubuntu only
 - `setup_repo.sh` — host repo setup: calls `provision_repo.sh`, then runs the `~/.ppp` presence check
 - `provision_repo.sh` — the shared, idempotent "provision a checked-out repo" step: `uv sync` (skipped when the venv is already current) + regenerates the `_entrypoints.py` console-script bridge (skipped when `CW_VENV_BAKED=1`, i.e. the container reused the image's baked venv whose bridge already matches) + installs the `post-commit` git hook + registers the repo-local `git golc` alias. Called by all three surfaces that need a provisioned repo — `setup_repo.sh` (host main repo), `cw` host mode (host worktrees), and the container entrypoint. Tree creation (clone / worktree) and surface-specific wiring (credentials) stay with the callers
 - `bootstrap_session_log.sh` — one-time IAM/SSM setup for session-log sync (creates `cw-session-log-sync` IAM user + key, writes `~/.ppp/session_log.json`). Run once after deploying `SessionLogStack`
@@ -38,7 +38,7 @@ Worktrees get their own `.venv`. `cw` (host mode) creates the worktree and runs 
 - `container/` — Dockerfile + entrypoint for the cw container image; `bump-claude-code.sh` rebuilds with the pinned `claude-code-version`. Image bundles the docker CLI; `cw/docker.py` bind-mounts the host docker socket so deploy scripts inside the container can build + push against the host daemon.
 
   The Dockerfile bakes the project venv at `/opt/cw-venv` (deps + editable project + the `_entrypoints.py` console-script bridge, the editable module finder pointing at `/workspace`) so the entrypoint can symlink it in and skip both `uv sync` (~3.4s) and `sync-scripts --entrypoints` (~1s) on every launch. The reuse is gated on the clone's `pyproject.toml` + `uv.lock` matching the copies staged at `/opt/cw-venv-manifest` — a clone can base on any ref via `CW_BASE_REF`, and a diverging manifest falls through to a normal sync from the clone's own files. The entrypoint signals the skip to `provision_repo.sh` via `CW_VENV_BAKED=1`. `test_smoke.sh` validates the image + entrypoint postconditions (run on the host by `run_tests.py`, skipped with `--no-docker` or inside a container)
-- `ubuntu/` — Ubuntu-only install helpers (currently `install_stow.sh`)
+- `ubuntu/` — Ubuntu-only install helpers (`install_stow.sh`, `install_tmux.sh` — the latter builds from source into `~/.local` since apt's tmux trails upstream and no maintained PPA carries current builds)
 
 ## Configuration
 
