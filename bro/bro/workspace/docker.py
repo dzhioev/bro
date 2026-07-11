@@ -11,6 +11,7 @@ from cw.claude_config import _SESSION_SETTINGS_JSON, _seed_claude_json
 from cw.paths import _project_root, _session_claude_dir
 
 CONTAINER_DIR = Path(__file__).resolve().parent.parent / 'setup' / 'container'
+BASE_IMAGE_DIR = Path(__file__).resolve().parent.parent / 'setup' / 'base_image'
 
 _DOCKER_FORWARD_ENV = (
   'CW_BRO',
@@ -76,7 +77,11 @@ _SMOKE_TEST_TAG = f'{_IMAGE_REPOSITORY}:smoke-test'
 def _image_tag() -> str:
   h = hashlib.sha256()
   project = _project_root()
-  inputs = sorted(CONTAINER_DIR.iterdir()) + [project / 'pyproject.toml', project / 'uv.lock']
+  inputs = (
+    sorted(BASE_IMAGE_DIR.iterdir())
+    + sorted(CONTAINER_DIR.iterdir())
+    + [project / 'pyproject.toml', project / 'uv.lock']
+  )
   for path in inputs:
     if path.is_file():
       h.update(path.name.encode())
@@ -114,6 +119,8 @@ def _ensure_image(tag: str) -> None:
     return
   version = (CONTAINER_DIR / 'claude-code-version').read_text().strip()
   log.info('building %s (claude-code %s)', tag, version)
+  # the image builds FROM the local-only ppp-base, so refresh that first
+  subprocess.run([str(BASE_IMAGE_DIR / 'build.sh')], check=True)
   subprocess.run(
     [
       'docker',

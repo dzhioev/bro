@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM python:3.12-slim
+FROM ppp-base
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
@@ -24,8 +24,6 @@ RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -
  && unzip -q /tmp/awscli.zip -d /tmp \
  && /tmp/aws/install \
  && rm -rf /tmp/awscli.zip /tmp/aws
-
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 ARG CLAUDE_CODE_VERSION
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}

@@ -23,6 +23,7 @@ smoke_build() {
   local dockerfile=$1
   _SMOKE_IMAGE="smoke-test-$$"
 
+  ensure_server_base "$dockerfile"
   echo "=== $OCI_CMD build ==="
   "$OCI_CMD" build -f "$dockerfile" -t "$_SMOKE_IMAGE" .
 }

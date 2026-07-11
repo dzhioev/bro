@@ -8,6 +8,7 @@ PROJECT="$(cd "$DIR" && realpath "$(git rev-parse --git-common-dir)/..")"
 
 TAG="ppp-cw:smoke-test"
 echo "building image" >&2
+"$DIR/../base_image/build.sh" >&2
 docker build -t "$TAG" -f "$DIR/Dockerfile" \
   --build-arg CLAUDE_CODE_VERSION="$(cat "$DIR/claude-code-version")" \
   --build-context "project=$PROJECT" "$DIR" >&2
