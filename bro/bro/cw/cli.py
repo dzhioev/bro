@@ -45,7 +45,7 @@ def build_parser() -> Parser:
   ss.add_argument(
     '--bro',
     default=None,
-    help="start a clean claude session with the named bro's persona (system prompt, MCP servers, tools); container only (rejected with --host), requires the `anthropic` secret; mutually exclusive with --mcp, --auto",
+    help="start a clean claude session with the named bro's persona (system prompt, MCP servers, tools); container only (rejected with --host), requires the `anthropic` secret; mutually exclusive with --mcp",
   )
   ss.add_argument(
     '-p', '--prompt', default=None, help='initial prompt (prepended with base prompt)'
@@ -160,8 +160,6 @@ def main(argv: list[str]) -> Optional[int]:
       '--into cannot be combined with --resume (it only applies when creating a workspace)'
     )
   if args['bro'] is not None:
-    if args['auto']:
-      parser.error('--bro cannot be combined with --auto')
     if args['mcp'] is not None:
       parser.error('--bro cannot be combined with --mcp (the bro defines its own MCP servers)')
     if not in_place:

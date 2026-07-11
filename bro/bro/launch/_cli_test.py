@@ -1,6 +1,10 @@
 from unittest.mock import patch
 
+import pytest
+
 import llm.llms.chat_gpt
+import llm.llms.echo
+from cw import EFFORT_LEVELS, bro_git_identity_env
 from do._cli import create_bro_for_run, maybe_containerize
 
 
@@ -57,9 +61,9 @@ def test_maybe_containerize_hops_and_scopes_to_bro():
   assert kwargs['forward_bro'] is False
   # the bro's may_summon seed reaches the broker root unchanged when no flags adjust it
   assert kwargs['may_summon'] == {'devoops'}
-  # recording on and no --into: nothing to put in the env — the clone bases on
-  # the entrypoint's HEAD fallback
-  assert kwargs['extra_env'] is None
+  # recording on and no --into: the bro git identity is all the env carries —
+  # the clone bases on the entrypoint's HEAD fallback
+  assert kwargs['extra_env'] == bro_git_identity_env()
 
 
 def test_maybe_containerize_no_trails_drops_secret_and_disables_recording():
@@ -79,7 +83,7 @@ def test_maybe_containerize_no_trails_drops_secret_and_disables_recording():
   # the env var carries the effect in, so --no-trails isn't forwarded into the inner argv
   assert command == ['call', 'ppp-dev', 'hi']
   assert 'trails' not in kwargs['secrets']
-  assert kwargs['extra_env'] == {'TRAILS_DISABLED': '1'}
+  assert kwargs['extra_env'] == {'TRAILS_DISABLED': '1', **bro_git_identity_env()}
 
 
 def test_maybe_containerize_grant_adds_secret():
@@ -281,7 +285,7 @@ def test_maybe_containerize_into_bases_the_clone_on_the_ref():
   assert rc == 0
   assert resolve.call_args[0][1] == 'feature-branch'
   _, kwargs = run.call_args
-  assert kwargs['extra_env'] == {'CW_BASE_REF': 'REF-SHA'}
+  assert kwargs['extra_env'] == {'CW_BASE_REF': 'REF-SHA', **bro_git_identity_env()}
 
 
 def test_maybe_containerize_unresolvable_into_errors(capsys):
@@ -349,6 +353,61 @@ def test_create_bro_for_run_with_fast_applies_fast_spec(monkeypatch):
   assert spec.service_tier == 'priority'
   # class default untouched — fast() returns a fresh spec
   assert _Cls.llm_spec.service_tier is None
+
+
+def test_create_bro_for_run_effort_composes_with_fast(monkeypatch):
+  class _Cls:
+    llm_spec = llm.llms.chat_gpt.LLMSpec(model='gpt-5.4-mini')
+
+    @classmethod
+    def create(cls, spec):
+      return spec
+
+  monkeypatch.setattr('bro.registry.get_class', lambda name: _Cls)
+  spec = create_bro_for_run('x', fast=True, effort='max')
+  assert isinstance(spec, llm.llms.chat_gpt.LLMSpec)
+  assert spec.service_tier == 'priority'
+  # max caps at the provider top
+  assert spec.reasoning_effort == 'xhigh'
+  # class default untouched
+  assert _Cls.llm_spec.reasoning_effort is None
+
+
+def test_create_bro_for_run_effort_applies_without_fast(monkeypatch):
+  class _Cls:
+    llm_spec = llm.llms.chat_gpt.LLMSpec(model='gpt-5.4-mini')
+
+    @classmethod
+    def create(cls, spec):
+      return spec
+
+  monkeypatch.setattr('bro.registry.get_class', lambda name: _Cls)
+  spec = create_bro_for_run('x', fast=False, effort='low')
+  assert isinstance(spec, llm.llms.chat_gpt.LLMSpec)
+  assert spec.reasoning_effort == 'low'
+  assert spec.service_tier is None
+
+
+def test_create_bro_for_run_effort_unsupported_provider_raises(monkeypatch):
+  # --effort is an explicit ask — unlike implicit fast, a provider without the
+  # knob must raise, not silently fall back to the plain spec.
+  class _Cls:
+    llm_spec = llm.llms.echo.LLMSpec()
+
+    @classmethod
+    def create(cls, spec):
+      raise AssertionError('create() should not run when effort is unsupported')
+
+  monkeypatch.setattr('bro.registry.get_class', lambda name: _Cls)
+  with pytest.raises(NotImplementedError, match='does not support an effort override'):
+    create_bro_for_run('x', fast=True, effort='high')
+
+
+def test_chat_gpt_accepts_every_cli_effort_level():
+  # the --effort choices come from cw's EFFORT_LEVELS; the chat_gpt mapping must
+  # cover the full vocabulary so no accepted flag value fails at spec build.
+  for level in EFFORT_LEVELS:
+    llm.llms.chat_gpt.LLMSpec().with_effort(level)
 
 
 def test_create_bro_for_run_unsupported_fast_falls_back_to_plain(monkeypatch):

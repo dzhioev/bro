@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Optional
 from base import credentials
 from cw.constants import _CW_MODEL
 from cw.mcp import MCPEndpoint, _http_mcp_config
-from cw.system_prompt import _session_append_prompt
+from cw.system_prompt import _mode_prompt, _session_append_prompt
 
 if TYPE_CHECKING:
   from cw.session import SessionSpec
@@ -90,7 +90,7 @@ def build_claude_launch(
     if endpoint is None:
       raise ValueError('--bro requires a session-local MCP endpoint')
     settings['apiKeyHelper'] = str(workspace / 'setup' / 'print_anthropic_key.sh')
-    system_prompt = bro.claude_system_prompt
+    system_prompt = f'{bro.claude_system_prompt}\n\n{_mode_prompt(spec.auto)}'
     argv += [
       '--bare',
       '--strict-mcp-config',
@@ -119,9 +119,9 @@ def build_claude_launch(
       if endpoint is None:
         raise ValueError('--mcp local requires a session-local MCP endpoint')
       argv += ['--mcp-config', _http_mcp_config(['flow'], port=endpoint.port, token=endpoint.token)]
-    if spec.auto:
-      argv.append('--dangerously-skip-permissions')
     argv += ['--append-system-prompt', system_prompt]
+  if spec.auto:
+    argv.append('--dangerously-skip-permissions')
   if spec.effort is not None:
     argv += ['--effort', spec.effort]
   argv += claude_args

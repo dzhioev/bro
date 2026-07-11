@@ -1,7 +1,7 @@
 ---
 name: pr
-description: This skill should be used when the user signals that the worktree's changes are ready for review and a PR should be opened — "open a PR", "send for review", "PR it", "ship it", "ready for review", "finalize". Covers commit hygiene (CLAUDE.md sync, Dockerfile audit, policy audit, commit splitting), the project's commit-message style, footer generation via `./setup/claude_commit_footer.py`, submodule landing, rebase onto the base branch (master by default), opens the PR via `gh pr create`, then launches `Monitor` + `poll-pr` to handle review comments and APPROVED events. In `--auto` mode, chains into `/land` automatically on approval. For the post-approval merge step, use `/land`.
-version: 1.0.0
+description: This skill should be used when the user signals that the worktree's changes are ready for review and a PR should be opened — "open a PR", "send for review", "PR it", "ship it", "ready for review", "finalize". Covers commit hygiene (CLAUDE.md sync, Dockerfile audit, policy audit, commit splitting), the project's commit-message style, footer generation via `./setup/claude_commit_footer.py`, submodule landing, rebase onto the base branch (master by default), opens the PR via `gh pr create`, then launches the `poll-pr` review watcher to handle review comments and APPROVED events. On approval, chains into `/land` for the merge step. Also the re-entry point for a PR that is already open — "/pr <pr-url-or-number>", "resume the PR", "pick up the review" — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
+version: 1.1.0
 ---
 
 # /pr
@@ -11,11 +11,34 @@ Take worktree changes from "work is finished" to "PR open and through review". S
 ## Arguments
 
 - `--base <branch>` — base the PR on `<branch>` instead of `master`: rebase onto it (step 9), scope the commit list against it (steps 5, 10), and pass `--base <branch>` to `gh pr create` (step 12). Default `master`. The `/feature` per-stage flow passes the feature integration branch here so each stage opens its PR into the feature branch rather than master. Below, `<base>` means this value (`master` when the flag is absent).
+- `<pr-url-or-number>` — re-entry mode: the PR is already open (typically a previous session died mid-review). Skip the workflow and follow "Re-entry: PR already open" below.
 
 ## Preconditions
 
+Normal flow only — re-entry has its own entry conditions:
+
 - You are in a worktree (under `var/cw/worktrees/` or otherwise on a non-master branch). Do NOT run this against the main repo's working copy — the user's global CLAUDE.md forbids touching it.
 - The work looks finished. If tests are failing, edits look WIP, or a refactor is half-done, confirm with the user before proceeding.
+
+## Re-entry: PR already open
+
+Invoked as `/pr <pr-url-or-number>` — e.g. `do-task ppp-dev "/pr <pr-url>"` after the session that opened the PR died. The PR exists; restore the state that session had, reconcile what happened while nobody watched, then rejoin the normal flow at the watcher (step 14).
+
+1. **Check out the PR's head branch first**: `gh pr checkout <number-or-url>`. A fresh clone sits on a `worktree-<name>` branch at the base ref — the PR's head branch is not checked out locally; `gh pr checkout` fetches it and sets up tracking so later pushes go to the right branch.
+2. **Recover the context** the environment no longer carries (`CW_TASK_ID` is unset here):
+   ```bash
+   gh pr view <number> --json number,url,state,baseRefName,title,body
+   ```
+   - The task link is the `Task:` line in the PR body — use it for the task-logging steps (13, and `/land`'s bookkeeping). No `Task:` line → proceed without task logging.
+   - `<base>` is `baseRefName`.
+3. **Handle a terminal PR**: `state: MERGED` → run `/land`'s post-merge bookkeeping (`### Merged` entry, task closure) and stop; `state: CLOSED` → report it and stop.
+4. **Reconcile unaddressed feedback from `gh` state — never trust a lost watcher.** The dead session may have died before, during, or after handling any event, and a restarted `poll-pr` baselines all existing events as already seen — feedback left unhandled now would be silently skipped forever. Pull the full review state:
+   ```bash
+   gh pr view <number> --json reviews,comments
+   gh api repos/<owner>/<repo>/pulls/<number>/comments   # inline review comments
+   ```
+   Treat as actionable any repo-owner feedback per step 15's rules that has no later reply from the PR author and no later commit addressing it; handle each per step 15. If the latest owner review is APPROVED and nothing actionable is pending, chain straight into `/land` — no watcher needed.
+5. **Resume watching**: continue at step 14.
 
 ## Workflow
 
@@ -32,7 +55,7 @@ If `git status` is clean and there are no untracked files to add, stop — nothi
 
 Run before committing:
 - `./format.sh` — formats Python via ruff. Stage any formatter-induced changes alongside your own.
-- `./run_tests.py` — pyright + deptry + pytest + container smoke. **In a container session (`kind: container` from the `cw banner --llm` output), pass `--no-docker`** — the smoke step needs host Docker and will fail otherwise.
+- `./run_tests.py` — pyright + deptry + pytest + container smoke. **In a container session (`kind: container` from the `cw banner --llm` output), pass `--no-docker`** — the smoke step needs host Docker and will fail otherwise.{{if #harness = bro}} Run it with an explicit large `timeout_seconds` (600 fits) — `dev::bash`'s default kills a full suite mid-run; same for any other long command.{{endif}}
 
 A red suite blocks the commit. Do not interpret or triage failures — propose fixing in this session or a separate one, but do not commit through failures.
 
@@ -66,7 +89,7 @@ Match recent-log style:
 
 - **Title**: `<area>: <imperative lowercase summary>`, under ~70 chars. `<area>` is a module path or file stem — `cw`, `flow/mcp`, `.claude/settings`, `CLAUDE.md`, `sync-scripts`, etc.
 - **Body**: terse — itemised bullets over prose, cap ~10 lines, often skipped entirely. Only context a reader can't recover from the code (motivation, constraint, non-obvious tradeoff).
-- **Footer**: one blank line, then a `Task: <url>` line (resolve via `flow::get_task_info(task_id).address` — task id comes from `CW_TASK_ID` env var or a `flow::add_task` call earlier in this session), then the single-line output of `./setup/claude_commit_footer.py` (the per-commit token delta, split into the four billed classes). Example:
+- **Footer**: one blank line, then a `Task: <url>` line (resolve via `flow::get_task_info(task_id).address` — task id comes from `CW_TASK_ID` env var or a `flow::add_task` call earlier in this session; in re-entry the PR body's `Task:` line already carries the URL), then the single-line output of `./setup/claude_commit_footer.py` (the per-commit token delta, split into the four billed classes). Example:
   ```
   Task: https://www.notion.so/my-task-abc123
   <single-line output of ./setup/claude_commit_footer.py>
@@ -178,9 +201,9 @@ Report the PR to the user as a **review link**: a markdown hyperlink titled `#<n
 
 Surface this link every time the PR enters review-pending: here at creation, and again after each push of review-fix commits (step 15).
 
-### 13. Log "PR opened" to the task (dive-in sessions only)
+### 13. Log "PR opened" to the task (sessions with a task)
 
-If this session was launched via `dive-in` (check `launch_command` from `cw banner --llm`) and you have access to flow MCP tools:
+If the session has a task (`CW_TASK_ID` — `dive-in` sets it — or a task resolved earlier in this session) and flow MCP tools are available:
 
 ```
 ### PR opened — @YYYY-MM-DD HH:MM
@@ -193,11 +216,7 @@ Use `date '+%Y-%m-%d %H:%M'` for the timestamp — do not invent it. Build commi
 
 ### 14. Launch the review watcher
 
-**MUST launch via the `Monitor` tool with `persistent: true`. Do NOT use Bash `run_in_background`** — that only notifies on process exit, so review/comment events sit silently in the output file and approvals never trigger the auto-chain.
-
-If the `Monitor` schema needs a `ToolSearch` fetch, load `TaskStop` in the same query (`select:Monitor,TaskStop`) — the APPROVED handler needs it and shouldn't spend a round trip on it later.
-
-`--self` filters out your own bot identity. `$GITHUB_ACTOR` is unset in dive-in containers, so derive it from `gh api user` instead.
+The watcher is one long-lived `poll-pr` process. `--self` filters out your own bot identity; `$GITHUB_ACTOR` is unset in these sessions, so derive it from `gh api user`:
 
 ```bash
 poll-pr <owner>/<repo> <pr_number> --token "$GH_TOKEN" --self "$(gh api user --jq '.login')" --allow-env
@@ -209,6 +228,29 @@ poll-pr <owner>/<repo> <pr_number> --token "$GH_TOKEN" --self "$(gh api user --j
 - `{"event": "comment", "id": N, "user": "...", "body": "...", "path": "...", "url": "..."}` — new comment from the repo owner (bot and self filtered out). Standalone inline review comments (replies to existing review threads) fire here; inline comments attached to a fresh review are bundled into the `review` event instead.
 - `{"event": "review", "id": N, "user": "...", "state": "APPROVED|CHANGES_REQUESTED|COMMENTED|DISMISSED", "body": "...", "url": "...", "comments": [{"id": N, "path": "...", "line": N, "body": "...", "url": "..."}]}` — new review. `comments` is the array of inline comments attached to this review at the moment `poll-pr` saw it (typically all of them; rarely empty if the inline-comments endpoint lags the reviews endpoint — late arrivals then fire as standalone `comment` events on a later cycle).
 
+How to run it:
+
+{{if #harness = bro}}
+Run it as a background job and read it iteratively — a plain `dev::bash` call would kill it at its timeout:
+
+1. `dev::job("poll-pr …")` → note the job id.
+2. Loop on `dev::watch(job_id, wait_seconds=1500)`. Each return is one iteration:
+   - new output → react to every JSON line per step 15, then watch again;
+   - a bare `running` state line (quiet window) → watch again;
+   - `exited` right after a `merged`/`closed` event → the PR is terminal; react per step 15, stop looping;
+   - `exited` with no terminal event → the watcher died. Do not just restart it — a fresh `poll-pr` baselines all existing events as seen; reconcile first (re-entry step 4), then start a new `dev::job`.
+3. When chaining into `/land`, stop the watcher with `dev::kill(job_id)`.
+
+The large `wait_seconds` keeps the run idling inside the tool call between events; don't shorten it to poll — every quiet return costs a full model round trip.
+
+**The watch loop is the rest of the run.** Your terminal answer comes only after the PR reaches a terminal state — merged (typically via the `/land` chain on APPROVED) or closed. Until then, keep calling `dev::watch` iteration after iteration, however quiet the PR stays; that idling is the run working as designed, not a stall to wrap up. Do not kill the job and end the run with a "waiting for review" report — an ended run watches nothing, and every later review event goes unhandled.
+{{else}}
+{{assert #harness = claude}}
+**MUST launch via the `Monitor` tool with `persistent: true`. Do NOT use Bash `run_in_background`** — that only notifies on process exit, so review/comment events sit silently in the output file and approvals never trigger the auto-chain. The harness wakes you on each output event; react per step 15. Stop the watcher with `TaskStop` when chaining into `/land`.
+
+If the `Monitor` schema needs a `ToolSearch` fetch, load `TaskStop` in the same query (`select:Monitor,TaskStop`) — the APPROVED handler needs it and shouldn't spend a round trip on it later.
+{{endif}}
+
 ### 15. React to review events
 
 **`comment` event** or **`review` with `state: "CHANGES_REQUESTED"` or non-empty `comments`**:
@@ -217,7 +259,7 @@ A non-empty `comments` array on an APPROVED review counts as actionable feedback
 
 1. Read and understand the feedback (review body + every `comments[]` entry).
 2. Make the requested code changes locally.
-3. Re-run tests (`./run_tests.py --no-docker` inside a container).
+3. Re-run the pre-commit gates (step 2).
 4. Commit (a **new** commit, not `--amend`) with the same conventions as step 6–7.
 5. Push: `git push origin HEAD`.
 6. Reply on the PR confirming the fix (reference the commit SHA):
@@ -230,15 +272,11 @@ A non-empty `comments` array on an APPROVED review counts as actionable feedback
 
 **`review` with `state: "APPROVED"` and empty `comments`**:
 
-Unconditional approval. Stop polling and surface:
-
-> PR approved — ready to merge. Invoke `/land` to squash and close.
-
-**In `--auto` sessions** (detect via `launch_command` from `cw banner --llm` containing `--auto`), chain into the merge immediately — and batch it: call `TaskStop` (the watcher) and `Skill(land)` **in the same response**, then follow `/land` (its merge step is a single `land-pr` command). **In manual sessions**, wait for the user's `/land` (or "land it") trigger.
+Unconditional approval — the PR is ready to merge. Chain into the merge, and batch it: stop the watcher ({{if #harness = bro}}`dev::kill(job_id)`{{else}}`TaskStop`{{endif}}) and load `/land` ({{if #harness = bro}}`bro::skill`{{else}}`Skill(land)`{{endif}}) **in the same response**, then follow `/land` (its merge step is a single `land-pr` command).
 
 **`review` with `state: "COMMENTED"` or `"DISMISSED"`**: informational; the actionable feedback (if any) is in this event's `comments` array or arrives via accompanying `comment` events.
 
-**`merged` / `closed`**: someone (the user, `/land`, or external action) terminated the PR. If `merged`, hand off to `/land`'s post-merge steps — append `### Merged` entry and propose closing the task. If `closed` without merge, log it and ask the user.
+**`merged` / `closed`**: someone (the user, `/land`, or external action) terminated the PR. If `merged`, run `/land`'s post-merge bookkeeping — the `### Merged` entry and task closure. If `closed` without merge, log it and report to the user.
 
 ## Safety rules
 

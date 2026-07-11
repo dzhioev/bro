@@ -1,7 +1,7 @@
 ---
 name: land
-description: This skill should be used when the user signals that an open PR should be merged into master — "land it", "land", "merge it", "merge the PR", "merge to master". Runs `land-pr`, which squash-merges the open PR for the current branch in one shot (precondition checks, aggregated token footer injected into the squash body, remote branch cleanup), then appends a `### Merged` entry to the task page and closes the task to Done unless the user explicitly said to keep it open. In `--auto` sessions, `/pr` chains into this skill automatically on APPROVED. Direct push to master (no PR) is a one-liner (`git fetch origin && git rebase origin/master && git push origin HEAD:master`) — not this skill.
-version: 1.1.0
+description: This skill should be used when the user signals that an open PR should be merged into master — "land it", "land", "merge it", "merge the PR", "merge to master". Runs `land-pr`, which squash-merges the open PR for the current branch in one shot (precondition checks, aggregated token footer injected into the squash body, remote branch cleanup), then appends a `### Merged` entry to the task page and closes the task to Done unless the user explicitly said to keep it open. On APPROVED, `/pr` chains into this skill. Direct push to master (no PR) is a one-liner (`git fetch origin && git rebase origin/master && git push origin HEAD:master`) — not this skill, and host-only: agent sessions commit as the bro identity, and in a container a pre-push fence blocks that identity from pushing to master, so even a manual container session lands through a PR (`land-pr`'s server-side `gh pr merge` never runs the hook).
+version: 1.2.0
 ---
 
 # /land
@@ -23,7 +23,7 @@ One shot, in order:
 3. Squash-merges with the PR's own title and body as the commit subject/body, then deletes the remote feature branch (local branch and worktree stay untouched).
 4. Prints a JSON result: `pr`, `url`, `title`, `base`, `squash_sha`, `merged_at`, `merged_at_minutes`, `branch_deleted`.
 
-Waiver flags map to explicit user statements from this session — never pass them on the `--auto` APPROVED chain:
+Waiver flags map to explicit user statements from this session — never pass them when `/pr`'s APPROVED event chained into this skill:
 
 - `--no-review` — the user said to merge without waiting for approval. A `CHANGES_REQUESTED` review is refused regardless; that needs the review resolved, not a waiver.
 - `--allow-unchecked` — the user said to land despite unchecked test-plan boxes. Otherwise an unchecked box means nobody verified that item: surface the failure output (it lists the boxes) and wait.
@@ -32,9 +32,12 @@ If `land-pr` exits nonzero, surface its stderr and stop — do not hand-roll the
 
 ## Step 2 — task bookkeeping + report: one response
 
-First decide task closure. Don't close if either holds:
+First decide task closure. Two cases block or defer the close:
 
-- **The change needs a deploy or migration to take effect.** If it touches code/config that runs in a deployed service (the ECS services / emails pipeline — see `infra/CLAUDE.md`) or adds a migration/backfill, the merge alone doesn't make it live. Leave the task in its current status and **propose** the rollout as a terse `call devoops "deploy <service or feature>"` — name the target, not the steps. devoops infers the commit, scripts, and sequence itself. Don't run it yourself; the task closes only after the deploy succeeds.
+- **The change needs a deploy or migration to take effect.** If it touches code/config that runs in a deployed service (the ECS services / emails pipeline — see `infra/CLAUDE.md`) or adds a migration/backfill, the merge alone doesn't make it live — the task closes only after the deploy succeeds. An explicit instruction in the initial request or task body to close without holding for the deploy (the `/feature` stage flow's "the feature deploys once after integration") overrides this whole case: close as instructed and note the deferred deploy in the report. Otherwise hand the rollout to devoops: summon it (per `/ask`) with a terse deploy request — `deploy <service or feature>`, naming the target, not the steps; devoops infers the commit, scripts, and sequence itself — and a timeout adequate for the rollout (the 1800s default is sized for a typical deploy; raise it when the target plausibly needs longer). Then:
+  - deploy succeeded → close the task Done as usual and include devoops's answer in the report;
+  - deploy failed (raised / error / timeout) → leave the task Live and report the failure and its reason;
+  - no summon client in the session (no broker channel) → leave the task Live and report the pending deploy, naming the exact `call devoops "…"` command.
 - **The user said to keep it open.** Phrases in the initial prompt like "keep this Live", "leave open with notes", or "only landing a subset" mean the task stays in its current status; note it in your report.
 
 Then emit everything in a single response — the report text plus, for `dive-in` sessions with a task, both flow calls in parallel:
@@ -47,7 +50,7 @@ Then emit everything in a single response — the report text plus, for `dive-in
   ```
 
 - `flow::update_task(task_id, status='Done')` — unless a bullet above said to keep it open.
-- The report, one line: PR URL, "merged to master", and task status — closed-to-Done, left open per instruction, or left open pending deploy (then include the proposed `call devoops "…"` command).
+- The report, one line: PR URL, "merged to master", and task status — closed-to-Done (after a successful deploy handoff when one was needed), left open per instruction, or left Live on a failed or pending deploy (with the reason, or the `call devoops "…"` command when the deploy is pending).
 
 ## Safety rules
 

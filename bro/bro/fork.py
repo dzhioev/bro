@@ -140,6 +140,7 @@ def fork(
     mcp_servers=bro._mcp_servers_for(interactive=True),
     observer=bro._observer,
     tracker=bro._tracker,
+    agent=bro.agent,
   )
   if use_server_side:
     _seed_response_id(inner_llm, fork_step.extras['response_id'])

@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import cw.constants
 import cw.docker
 import cw.paths
 import cw.secrets
@@ -474,7 +475,7 @@ class TestSummonLowering:
     lowered = cw.spawn._lower_summon(launch)
     assert lowered == cw.spawn.DockerLaunchSpec(
       command=['ask', 'devoops', 'deploy the thing'],
-      env={'CW_BASE_REF': 'PARENT-SHA'},
+      env={'CW_BASE_REF': 'PARENT-SHA', **cw.constants.bro_git_identity_env()},
       secrets={'aws', 'trails'},
       attached=False,
       optional_secrets={'openai'},
@@ -488,7 +489,10 @@ class TestSummonLowering:
     launch = cw.spawn.SummonLaunchSpec(
       target='devoops', prompt='p', parent_workspace=PARENT_WORKSPACE, into='summon'
     )
-    assert cw.spawn._lower_summon(launch).env == {'CW_BASE_REF': 'REF-SHA'}
+    assert cw.spawn._lower_summon(launch).env == {
+      'CW_BASE_REF': 'REF-SHA',
+      **cw.constants.bro_git_identity_env(),
+    }
 
   def test_unresolvable_into_fails_the_spawn(self, lowering_harness):
     launch = cw.spawn.SummonLaunchSpec(

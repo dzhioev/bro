@@ -17,6 +17,7 @@ class LLM(ABC):
     mcp_servers: Optional[list[MCPServer]] = None,
     observer: Optional[Observer] = None,
     tracker: Optional[Tracker] = None,
+    agent: Optional[str] = None,
   ):
     self.tools = ToolRegistry(mcp_servers if mcp_servers is not None else [])
     self.observer: Observer = observer if observer is not None else NullObserver()
@@ -24,9 +25,18 @@ class LLM(ABC):
     # rendering it to stderr. swapped in via LLMSpec.create_llm by BaseBro so
     # the bro and the LLM share one Tracker per trail.
     self.tracker: Tracker = tracker if tracker is not None else NullTracker()
+    # the surface identity (e.g. the bro name) stamped on published usage
+    # snapshots; None disables publishing to the env-pointed usage file.
+    self.agent = agent
 
   @abstractmethod
   async def send(self, messages: list[dict], *, request_timeout: Optional[float] = None) -> str: ...
+
+  def cumulative_usage(self) -> Optional[dict[str, dict[str, int]]]:
+    """per-model counts in the four billed token classes (`usage.CLASSES`),
+    summed over this instance's lifetime; None when the provider doesn't
+    track usage."""
+    return None
 
 
 @dataclass(frozen=True)
@@ -57,6 +67,16 @@ class LLMSpec(ABC):
     """
     raise NotImplementedError(f'{type(self).__name__} does not support fast mode')
 
+  def with_effort(self, effort: str) -> Self:
+    """return a copy of self with the provider's reasoning-effort knob set to the
+    given neutral level ('low'/'medium'/'high'/'xhigh'/'max'); each provider maps
+    the neutral vocabulary onto its own scale.
+
+    raises NotImplementedError when the provider has no effort equivalent, and
+    ValueError on a level outside the neutral vocabulary.
+    """
+    raise NotImplementedError(f'{type(self).__name__} does not support an effort override')
+
   def needed_secrets(self) -> tuple[str, ...]:
     """credentials this spec's provider resolves through the store (e.g. chat_gpt
     → `openai`). folded into a bro's hydration set on surfaces that run the bro as
@@ -69,6 +89,7 @@ class LLMSpec(ABC):
     mcp_servers: Optional[list[MCPServer]] = None,
     observer: Optional[Observer] = None,
     tracker: Optional[Tracker] = None,
+    agent: Optional[str] = None,
   ) -> LLM: ...
 
   @abstractmethod

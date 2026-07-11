@@ -1,19 +1,25 @@
+import asyncio
 import os
 import tempfile
 
 import pytest
 
 from base.text_window import DEFAULT_LIMIT
+from bro.bros.dev import jobs
 from bro.bros.dev.mcp import (
   bash,
   edit_file,
   glob,
   grep,
+  job,
+  kill,
   read_file,
   read_reference,
   spec,
+  watch,
   write_file,
 )
+from llm.mcp import Context
 
 
 def test_read_file_returns_numbered_lines():
@@ -234,9 +240,29 @@ def test_glob_no_matches():
     assert glob('*.nonexistent', path=d) == 'no matches'
 
 
-def test_spec_no_args_lists_all_tools():
-  import asyncio
+def test_job_watch_kill_round_trip():
+  context = Context(state=jobs.Registry())
 
+  async def round_trip():
+    started = job(context, 'echo out; echo err >&2')
+    assert started.startswith('started job-1 (pid ')
+    collected = await watch(context, 'job-1', wait_seconds=10, tail=True)
+    assert collected.startswith('exited (code 0)\n')
+    assert 'out\nerr' in collected
+    long_running = job(context, 'sleep 30')
+    assert long_running.startswith('started job-2')
+    assert (await kill(context, 'job-2')).startswith('job-2 exited')
+
+  asyncio.run(round_trip())
+
+
+def test_watch_unknown_job_raises():
+  context = Context(state=jobs.Registry())
+  with pytest.raises(ValueError, match='unknown job id'):
+    asyncio.run(watch(context, 'job-1'))
+
+
+def test_spec_no_args_lists_all_tools():
   server = spec().build()
   tools = asyncio.run(server.list_tools())
   names = {t.name for t in tools}
@@ -248,6 +274,9 @@ def test_spec_no_args_lists_all_tools():
     'bash',
     'grep',
     'glob',
+    'job',
+    'watch',
+    'kill',
   }
 
 
@@ -259,11 +288,10 @@ def test_read_reference_returns_file_contents():
   assert 'Skipped-content markers' in ref
   assert 'Timeout (`timeout_seconds`)' in ref
   assert 'Fat-finger clamp' in ref
+  assert 'Background jobs (`job`, `watch`, `kill`)' in ref
 
 
 def test_spec_subset_filters_tools():
-  import asyncio
-
   server = spec('read_file', 'bash').build()
   tools = asyncio.run(server.list_tools())
   names = {t.name for t in tools}

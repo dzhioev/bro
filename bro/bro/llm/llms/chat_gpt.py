@@ -21,6 +21,7 @@ from openai.types.responses.response_input_text_param import ResponseInputTextPa
 from openai.types.shared import ReasoningEffort
 
 import llm.llm
+import usage
 from base import credentials
 from llm.mcp import MCPServer, Tool, ToolControlSignal
 from llm.observer import Observer
@@ -33,6 +34,16 @@ _VALID_SERVICE_TIERS: frozenset[str] = frozenset(get_args(ServiceTier))
 # openai exports ReasoningEffort as Optional[Literal[...]], so unwrap the inner
 # Literal before flattening to a set of valid string values.
 _VALID_REASONING_EFFORTS: frozenset[str] = frozenset(get_args(get_args(ReasoningEffort)[0]))
+
+# neutral effort level (`LLMSpec.with_effort`) → Responses API reasoning_effort.
+# the shared levels map through; max (above the API's scale) caps at its top.
+_EFFORT_TO_REASONING_EFFORT: dict[str, ReasoningEffort] = {
+  'low': 'low',
+  'medium': 'medium',
+  'high': 'high',
+  'xhigh': 'xhigh',
+  'max': 'xhigh',
+}
 
 
 @dataclass(frozen=True)
@@ -80,6 +91,14 @@ class LLMSpec(llm.llm.LLMSpec):
   def fast(self) -> Self:
     return dataclasses.replace(self, service_tier='priority')
 
+  def with_effort(self, effort: str) -> Self:
+    reasoning_effort = _EFFORT_TO_REASONING_EFFORT.get(effort)
+    if reasoning_effort is None:
+      raise ValueError(
+        f'unknown effort level {effort!r}; expected one of {list(_EFFORT_TO_REASONING_EFFORT)}'
+      )
+    return dataclasses.replace(self, reasoning_effort=reasoning_effort)
+
   def needed_secrets(self) -> tuple[str, ...]:
     return ('openai',)
 
@@ -88,6 +107,7 @@ class LLMSpec(llm.llm.LLMSpec):
     mcp_servers: Optional[list[MCPServer]] = None,
     observer: Optional[Observer] = None,
     tracker: Optional[Tracker] = None,
+    agent: Optional[str] = None,
   ) -> llm.llm.LLM:
     return ChatGPT.create(
       model=self.model,
@@ -97,6 +117,7 @@ class LLMSpec(llm.llm.LLMSpec):
       mcp_servers=mcp_servers,
       observer=observer,
       tracker=tracker,
+      agent=agent,
     )
 
   def dump(self) -> dict:
@@ -230,6 +251,13 @@ def convert_message(msg: dict) -> EasyInputMessageParam:
   )
 
 
+def _cached_tokens(response_usage: Optional[object]) -> int:
+  input_details = (
+    getattr(response_usage, 'input_tokens_details', None) if response_usage is not None else None
+  )
+  return getattr(input_details, 'cached_tokens', 0) if input_details is not None else 0
+
+
 class ChatGPT(llm.llm.LLM):
   @staticmethod
   def create(
@@ -240,6 +268,7 @@ class ChatGPT(llm.llm.LLM):
     compact_threshold: Optional[int] = None,
     observer: Optional[Observer] = None,
     tracker: Optional[Tracker] = None,
+    agent: Optional[str] = None,
   ):
     config = credentials.get_json('openai')
     return ChatGPT(
@@ -251,6 +280,7 @@ class ChatGPT(llm.llm.LLM):
       compact_threshold=compact_threshold,
       observer=observer,
       tracker=tracker,
+      agent=agent,
     )
 
   def __init__(
@@ -263,8 +293,9 @@ class ChatGPT(llm.llm.LLM):
     compact_threshold: Optional[int] = None,
     observer: Optional[Observer] = None,
     tracker: Optional[Tracker] = None,
+    agent: Optional[str] = None,
   ):
-    super().__init__(mcp_servers, observer=observer, tracker=tracker)
+    super().__init__(mcp_servers, observer=observer, tracker=tracker, agent=agent)
     self.model = model
     self.client = OpenAI(api_key=api_key)
     self._openai_tools: Optional[list[ToolParam]] = None
@@ -272,6 +303,10 @@ class ChatGPT(llm.llm.LLM):
     self._reasoning_effort = reasoning_effort
     self._service_tier = service_tier
     self._compact_threshold = compact_threshold
+    # cumulative per-model counts in the four billed classes, accumulated from
+    # every response's `usage` (see _publish_usage). keyed by the response's
+    # resolved model slug (e.g. gpt-5-2025-08-07).
+    self._usage_totals: dict[str, usage.Counts] = {}
     # round-trip counter shared across the whole trail: turn 0 holds the
     # framework's system_prompt step (auto-emitted by tracker.start_trail) and
     # the user_input we emit at the top of send(); each subsequent
@@ -401,11 +436,15 @@ class ChatGPT(llm.llm.LLM):
     # over the inline threshold to S3 server-side and replace the body with
     # `{"s3": <key>}` — the bro doesn't know the difference.
     body = {'request': request, 'response': response.model_dump(mode='json')}
-    usage = getattr(response, 'usage', None)
-    tokens_in = getattr(usage, 'input_tokens', 0) if usage is not None else 0
-    tokens_out = getattr(usage, 'output_tokens', 0) if usage is not None else 0
-    details = getattr(usage, 'output_tokens_details', None) if usage is not None else None
-    tokens_reasoning = getattr(details, 'reasoning_tokens', 0) if details is not None else 0
+    response_usage = getattr(response, 'usage', None)
+    tokens_in = getattr(response_usage, 'input_tokens', 0) if response_usage is not None else 0
+    tokens_out = getattr(response_usage, 'output_tokens', 0) if response_usage is not None else 0
+    output_details = (
+      getattr(response_usage, 'output_tokens_details', None) if response_usage is not None else None
+    )
+    tokens_reasoning = (
+      getattr(output_details, 'reasoning_tokens', 0) if output_details is not None else 0
+    )
     self.tracker.step(
       'llm_call',
       body,
@@ -414,7 +453,34 @@ class ChatGPT(llm.llm.LLM):
       tokens_in=tokens_in,
       tokens_out=tokens_out,
       tokens_reasoning=tokens_reasoning,
+      tokens_cached=_cached_tokens(response_usage),
     )
+
+  def _publish_usage(self, response: Response) -> None:
+    # fold the response's usage into the instance's cumulative per-model totals
+    # and publish the snapshot to the env-pointed usage file, so a commit footer
+    # generated by a tool subprocess credits the run's spend. OpenAI reports
+    # cached input as a subset of input_tokens: the cached part maps to
+    # cache_read, the remainder to input, cache_write stays 0, and reasoning
+    # tokens stay inside output.
+    response_usage = getattr(response, 'usage', None)
+    if response_usage is None:
+      return
+    input_tokens = getattr(response_usage, 'input_tokens', 0)
+    cached = _cached_tokens(response_usage)
+    counts = {
+      'input': input_tokens - cached,
+      'cache_write': 0,
+      'cache_read': cached,
+      'output': getattr(response_usage, 'output_tokens', 0),
+    }
+    model = response.model
+    self._usage_totals[model] = usage.add(self._usage_totals.get(model, usage.zero()), counts)
+    if self.agent is not None:
+      usage.publish(self.agent, self._usage_totals)
+
+  def cumulative_usage(self) -> Optional[dict[str, usage.Counts]]:
+    return self._usage_totals
 
   def _build_request_kwargs(
     self,
@@ -477,6 +543,7 @@ class ChatGPT(llm.llm.LLM):
     self._turn_index += 1
     response = self._create(request_kwargs, request_timeout)
     self._record_llm_call(request_kwargs, response, turn_index=self._turn_index)
+    self._publish_usage(response)
     self._emit_response_steps(
       response, is_terminal=not has_tool_calls(response), turn_index=self._turn_index
     )
@@ -489,6 +556,7 @@ class ChatGPT(llm.llm.LLM):
       self._turn_index += 1
       response = self._create(request_kwargs, request_timeout)
       self._record_llm_call(request_kwargs, response, turn_index=self._turn_index)
+      self._publish_usage(response)
       self._emit_response_steps(
         response, is_terminal=not has_tool_calls(response), turn_index=self._turn_index
       )

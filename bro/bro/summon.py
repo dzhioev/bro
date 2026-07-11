@@ -354,7 +354,9 @@ def main(argv: list[str]) -> Optional[int]:
   parser.add_argument(
     '--timeout',
     type=float,
-    help=f'seconds before the host kills the child (default: {DEFAULT_TIMEOUT:.0f})',
+    help=f'seconds before the host kills the child (default: {DEFAULT_TIMEOUT:.0f}; '
+    'an open-ended run — e.g. a dev child watching a PR through review — outlives '
+    'the default and needs hours)',
   )
   parser.add_argument(
     '--into', help="base the child on this git ref instead of this workspace's current HEAD"

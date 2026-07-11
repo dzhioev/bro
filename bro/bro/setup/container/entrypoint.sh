@@ -98,7 +98,8 @@ if [ ! -d /workspace/.git ]; then
   fi
 fi
 
-# block non-fast-forward pushes and (for bro sessions) direct pushes to master
+# block non-fast-forward pushes and, under the bro identity every cw-launched
+# session commits as, direct pushes to master
 hooks_dir="$(git -C /workspace rev-parse --git-dir)/hooks"
 mkdir -p "$hooks_dir"
 cat > "$hooks_dir/pre-push" << 'HOOK'

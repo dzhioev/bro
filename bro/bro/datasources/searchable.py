@@ -71,7 +71,7 @@ class SearchableDataSource(DataSource):
     server = InProcessMCPServer(self.namespace, [_SearchTool(self), _FetchTool(self)])
     # stamp the source's secrets onto the vanilla server (writable class-attr
     # defaults, no property clash) so the assembling layer can read them and
-    # resolve the fetch tool's `has_cred` description block.
+    # resolve the fetch tool's credential description directive.
     server.needed_secrets = self.needed_secrets
     server.optional_secrets = self.optional_secrets
     return server
@@ -114,15 +114,15 @@ class _SearchTool(Tool):
 
 class _FetchTool(Tool):
   # `<source>` is interpolated via str.replace (NOT str.format — that would
-  # unescape the `{{ }}` has_cred fences). the has_cred block is rendered against
-  # live credential availability by the assembling layer (`_NamespacedTool`).
+  # unescape the `{{ }}` template fences). the credential directive is rendered
+  # against live availability by the assembling layer (`_NamespacedTool`).
   _DESCRIPTION = (
     'fetch a record from the <source> data source by id. The optional `query` is '
     'the question you are investigating; given one, the record is summarised to '
     'focus on it'
-    '{{#has_cred openai}} (omit it for the raw record).{{else}} — but '
+    '{{if openai ∈ #creds}} (omit it for the raw record).{{else}} — but '
     'summarisation is unavailable this session (no `openai` secret), so you '
-    'should omit `query`; fetch returns the raw record.{{/has_cred}}'
+    'should omit `query`; fetch returns the raw record.{{endif}}'
   )
 
   def __init__(self, source: SearchableDataSource):

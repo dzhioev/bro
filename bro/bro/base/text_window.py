@@ -1,11 +1,15 @@
 """Windowed views over large text for tool output.
 
-Two entry points share one cap policy: `apply_limit` caps free-form output
+Three entry points share one cap policy: `apply_limit` caps free-form output
 (keeping the head or tail) and announces what was dropped via inline
 `[...skipped before/after...]` markers; `numbered_window` layers an oriented
 partial read on top — skip `offset` lines, prefix the rest with 1-based
-line numbers (cat -n style), then cap.
+line numbers (cat -n style), then cap; `take_head` returns the budget-bounded
+prefix raw, for callers that paginate over a cursor instead of dropping the
+excess.
 """
+
+from typing import Literal
 
 # default cap on output lines. Callers can pass `limit=N` to extend, up to
 # MAX_LIMIT (silently clamped beyond). The byte budget is `limit * _BYTES_PER_LINE`,
@@ -16,7 +20,7 @@ MAX_LIMIT = 2000
 _BYTES_PER_LINE = 150
 
 
-def _format_size(byte_count: int) -> str:
+def format_size(byte_count: int) -> str:
   if byte_count >= 1_000_000:
     return f'{byte_count / 1_000_000:.1f} MB'
   if byte_count >= 1_000:
@@ -29,7 +33,7 @@ def _marker(side: str, lines: int, byte_count: int, *, note: str = '') -> str:
   if lines > 0:
     segments.append(f'{lines:,} lines')
   if byte_count > 0:
-    segments.append(_format_size(byte_count))
+    segments.append(format_size(byte_count))
   if len(segments) == 0:
     # nothing was actually skipped — the marker exists only to surface `note`
     # (e.g., a clamp warning). Drop the "skipped X: 0" framing entirely.
@@ -47,11 +51,22 @@ def _clamp(limit: int) -> tuple[int, str]:
   return limit, ''
 
 
+def _take(lines: list[str], effective: int, byte_budget: int) -> list[str]:
+  kept: list[str] = []
+  kept_bytes = 0
+  for line in lines:
+    if len(kept) >= effective or kept_bytes + len(line) > byte_budget:
+      break
+    kept.append(line)
+    kept_bytes += len(line)
+  return kept
+
+
 def apply_limit(
   content: str,
   limit: int,
   *,
-  keep: str = 'head',
+  keep: Literal['head', 'tail'] = 'head',
   skipped_before_lines: int = 0,
   skipped_before_bytes: int = 0,
 ) -> str:
@@ -66,13 +81,8 @@ def apply_limit(
   total_bytes = len(content)
 
   source = list(reversed(lines)) if keep == 'tail' else lines
-  kept: list[str] = []
-  kept_bytes = 0
-  for line in source:
-    if len(kept) >= effective or kept_bytes + len(line) > byte_budget:
-      break
-    kept.append(line)
-    kept_bytes += len(line)
+  kept = _take(source, effective, byte_budget)
+  kept_bytes = sum(len(line) for line in kept)
   if keep == 'tail':
     kept.reverse()
 
@@ -98,6 +108,21 @@ def apply_limit(
   if after_lines > 0 or after_bytes > 0 or len(after_note) > 0:
     pieces.append(_marker('after', after_lines, after_bytes, note=after_note))
   return '\n'.join(pieces)
+
+
+def take_head(content: str, limit: int) -> tuple[str, str]:
+  """the head of `content` within the `limit` line + byte budget (clamped), returned
+  as a raw prefix for cursor-style pagination: the caller advances a cursor by the
+  returned length and serves the remainder on later calls, so unlike `apply_limit`
+  nothing is dropped. Keeps whole lines while they fit; when the first line alone
+  exceeds the byte budget it is cut mid-line so the cursor always makes progress.
+  Returns (kept_prefix, clamp_note)."""
+  effective, clamp_note = _clamp(limit)
+  byte_budget = effective * _BYTES_PER_LINE
+  kept = _take(content.splitlines(keepends=True), effective, byte_budget)
+  if len(kept) == 0 and len(content) > 0:
+    return content[:byte_budget], clamp_note
+  return ''.join(kept), clamp_note
 
 
 def numbered_window(content: str, offset: int = 0, limit: int = DEFAULT_LIMIT) -> str:

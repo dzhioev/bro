@@ -418,6 +418,7 @@ def _fake_response(*, output: list, response_id: str = 'resp_fork', dump_payload
     id=response_id,
     output=output,
     usage=_fake_usage(),
+    model='gpt-5',
   )
   payload = dump_payload if dump_payload is not None else {'id': response_id, 'output': []}
   namespace.model_dump = lambda mode='json': payload
@@ -448,7 +449,7 @@ def _patch_chat_gpt_create_llm(stub_responses):
   captured_kwargs: list[dict] = []
   created: list[chat_gpt_module.ChatGPT] = []
 
-  def _create(self, mcp_servers=None, observer=None, tracker=None):
+  def _create(self, mcp_servers=None, observer=None, tracker=None, agent=None):
     gpt = chat_gpt_module.ChatGPT(
       api_key='dummy',
       model=self.model,

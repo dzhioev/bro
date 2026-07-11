@@ -98,6 +98,23 @@ def test_run_check_raises_on_nonzero() -> None:
     spawn.run(['false'], check=True)
 
 
+def test_terminate_group_signals_the_whole_group(tmp_path) -> None:
+  # same shape as the timeout test: the pipeline's left side must receive the
+  # SIGTERM too, not just the direct bash child.
+  pidfile = tmp_path / 'pid'
+  process = spawn.popen(['bash', '-c', f'(echo $BASHPID > {pidfile}; sleep 60) | cat'])
+  deadline = time.time() + 5
+  while time.time() < deadline and (not pidfile.exists() or len(pidfile.read_text()) == 0):
+    time.sleep(0.05)
+  pid = int(pidfile.read_text())
+  spawn.terminate_group(process)
+  assert process.wait(timeout=10) == -15
+  deadline = time.time() + 5
+  while time.time() < deadline and _running(pid):
+    time.sleep(0.05)
+  assert not _running(pid), 'grandchild survived terminate_group'
+
+
 def test_popen_streams_and_detaches() -> None:
   process = spawn.popen(
     ['python3', '-c', 'import os; print(os.getsid(0) == os.getpid())'],

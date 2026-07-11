@@ -1,45 +1,33 @@
-import os
-
 import cw.bro
+import llm.mcp
+from base import credentials
+from bro.registry import create_bro
 
 
 class TestPopulateBroSkills:
-  def test_creates_symlinks_for_each_skill(self, tmp_path):
-    # ppp-dev inherits /pr and /land from dev via the MRO walk
+  def test_renders_file_for_each_skill(self, tmp_path):
+    # ppp-dev inherits /pr and /land from its own package via the MRO walk
     cw.bro._populate_bro_skills(tmp_path, 'ppp-dev')
     skills_dir = tmp_path / '.claude' / 'skills'
     for name in ('pr', 'land'):
-      link = skills_dir / name / 'SKILL.md'
-      assert link.is_symlink()
-      assert link.resolve().name == f'{name}.md'
+      skill_md = skills_dir / name / 'SKILL.md'
+      assert skill_md.is_file()
+      assert not skill_md.is_symlink()
 
-  def test_symlinks_are_relative(self, tmp_path):
+  def test_content_is_source_rendered_for_native_claude_surface(self, tmp_path):
     cw.bro._populate_bro_skills(tmp_path, 'ppp-dev')
-    link = tmp_path / '.claude' / 'skills' / 'pr' / 'SKILL.md'
-    target = link.readlink()
-    assert not target.is_absolute()
+    src = create_bro('ppp-dev').skills['pr']
+    written = (tmp_path / '.claude' / 'skills' / 'pr' / 'SKILL.md').read_text()
+    assert written == llm.mcp.render_text(
+      src.read_text(), harness='claude', wire='mcp', creds=credentials.known_names()
+    )
 
-  def test_relative_symlinks_resolve_through_var_style_symlink(self, tmp_path):
-    # macOS tempfile.mkdtemp() returns /var/folders/… where /var → /private/var,
-    # so the symlink target sits one dir deeper than its logical path. mirror that
-    # with a `var` → `private/var` indirection: a relpath against the logical path
-    # would be off by one level and the skill symlink would dangle.
-    real = tmp_path / 'private' / 'var'
-    real.mkdir(parents=True)
-    project = tmp_path / 'var'
-    project.symlink_to(real)
-    cw.bro._populate_bro_skills(project, 'ppp-dev')
-    link = project / '.claude' / 'skills' / 'pr' / 'SKILL.md'
-    assert link.is_symlink()
-    assert not link.readlink().is_absolute()
-    assert os.path.exists(link)
-    assert len(link.read_text()) > 0
-
-  def test_wipes_stale_symlinks_before_recreating(self, tmp_path):
+  def test_wipes_stale_rendered_skills_before_recreating(self, tmp_path):
     skills_dir = tmp_path / '.claude' / 'skills'
     stale = skills_dir / 'stale'
     stale.mkdir(parents=True)
-    (stale / 'SKILL.md').symlink_to('/nonexistent')
+    (stale / 'SKILL.md').write_text('rendered by a previous populate')
+    (skills_dir / cw.bro._RENDERED_MANIFEST).write_text('stale\n')
     cw.bro._populate_bro_skills(tmp_path, 'ppp-dev')
     assert not stale.exists()
 
@@ -51,7 +39,6 @@ class TestPopulateBroSkills:
     skill_md.write_text('static content')
     cw.bro._populate_bro_skills(tmp_path, 'ppp-dev')
     assert skill_md.is_file()
-    assert not skill_md.is_symlink()
     assert skill_md.read_text() == 'static content'
 
   def test_creates_skills_dir_if_missing(self, tmp_path):
@@ -60,6 +47,13 @@ class TestPopulateBroSkills:
 
   def test_idempotent(self, tmp_path):
     cw.bro._populate_bro_skills(tmp_path, 'ppp-dev')
+    first = (tmp_path / '.claude' / 'skills' / 'pr' / 'SKILL.md').read_text()
     cw.bro._populate_bro_skills(tmp_path, 'ppp-dev')
-    link = tmp_path / '.claude' / 'skills' / 'pr' / 'SKILL.md'
-    assert link.is_symlink()
+    assert (tmp_path / '.claude' / 'skills' / 'pr' / 'SKILL.md').read_text() == first
+
+  def test_manifest_names_written_skills(self, tmp_path):
+    cw.bro._populate_bro_skills(tmp_path, 'ppp-dev')
+    manifest = tmp_path / '.claude' / 'skills' / cw.bro._RENDERED_MANIFEST
+    names = manifest.read_text().splitlines()
+    assert 'pr' in names
+    assert 'land' in names

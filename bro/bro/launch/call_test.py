@@ -8,6 +8,7 @@ import pytest
 
 import llm.llms.chat_gpt
 from bro.bros.bro import Bro
+from cw import bro_git_identity_env
 from do.call import TextRenderer, call_text, main
 from llm.llm import LLM, LLMSpec
 from llm.mcp import MCPServer
@@ -38,18 +39,6 @@ class RecordBro(Bro):
 
   def _create_llm(self, *, interactive: bool) -> LLM:
     return self.mock_llm
-
-
-class _SkillfulBro(RecordBro):
-  def __init__(self, skills: dict[str, str]):
-    super().__init__()
-    self._fake_skills = skills
-
-  def get_skill_body(self, name: str) -> str:
-    if name in self._fake_skills:
-      return self._fake_skills[name]
-    available = ', '.join(sorted(self._fake_skills))
-    raise KeyError(f'no skill named {name!r}; available: {available}')
 
 
 class _ScriptedLines:
@@ -175,7 +164,7 @@ class _FastlessSpec(LLMSpec):
 
   model: str = 'whatever'
 
-  def create_llm(self, mcp_servers=None, observer=None, tracker=None) -> LLM:
+  def create_llm(self, mcp_servers=None, observer=None, tracker=None, agent=None) -> LLM:
     raise NotImplementedError('not constructible in tests')
 
   def dump(self) -> dict:
@@ -319,6 +308,53 @@ def test_call_forwards_text_when_host_not_a_tty():
     assert command == ['call', 'ppp-dev', 'hey', '--text']
 
 
+def test_call_forwards_effort_into_container():
+  with (
+    patch.dict('os.environ', {}, clear=False) as env,
+    patch('cw.run_in_container', return_value=0) as run,
+    patch('do.call._tty_supported', return_value=True),
+  ):
+    env.pop('CW_IN_CONTAINER', None)
+    rc = main(['call', 'ppp-dev', 'hey', '--effort', 'high'])
+    assert rc == 0
+    (_workspace, command), _kwargs = run.call_args
+    # --effort is forwarded like --slow; the in-container run applies with_effort
+    assert command == ['call', 'ppp-dev', 'hey', '--effort', 'high']
+
+
+def test_effort_flag_overrides_spec_effort(monkeypatch):
+  built: list[Bro] = []
+
+  async def fake_call_text(bro, initial):
+    built.append(bro)
+
+  monkeypatch.setenv('CW_IN_CONTAINER', '1')
+  monkeypatch.setattr('bro.registry.get_class', lambda name: _ChatBro)
+  monkeypatch.setattr('do.call.call_text', fake_call_text)
+  monkeypatch.setattr('do.call._tty_supported', lambda: False)
+
+  rc = main(['call', 'record', 'hi', '--effort', 'max'])
+  assert rc is None
+  assert len(built) == 1
+  spec = built[0].llm_spec
+  assert isinstance(spec, llm.llms.chat_gpt.LLMSpec)
+  # max caps at the provider top, on top of the implicit fast()
+  assert spec.reasoning_effort == 'xhigh'
+  assert spec.service_tier == 'priority'
+
+
+def test_effort_flag_on_effortless_provider_exits_1(monkeypatch, capsys):
+  monkeypatch.setenv('CW_IN_CONTAINER', '1')
+  monkeypatch.setattr('bro.registry.get_class', lambda name: _FastlessBro)
+  monkeypatch.setattr('do.call._tty_supported', lambda: False)
+
+  # --effort is an explicit ask — a provider without the knob errors instead of
+  # falling back the way implicit fast does.
+  rc = main(['call', 'fastless', 'hi', '--effort', 'high'])
+  assert rc == 1
+  assert 'does not support an effort override' in capsys.readouterr().err
+
+
 def test_call_no_trails_disables_recording_in_container():
   with (
     patch.dict('os.environ', {}, clear=False) as env,
@@ -332,7 +368,7 @@ def test_call_no_trails_disables_recording_in_container():
     # the env var carries the effect in, so --no-trails isn't forwarded into the inner argv
     assert command == ['call', 'ppp-dev', 'hey']
     assert 'trails' not in kwargs['secrets']
-    assert kwargs['extra_env'] == {'TRAILS_DISABLED': '1'}
+    assert kwargs['extra_env'] == {'TRAILS_DISABLED': '1', **bro_git_identity_env()}
 
 
 def test_call_no_trails_with_host_is_an_error():
@@ -359,41 +395,22 @@ def test_call_skips_container_with_host_flag(monkeypatch):
   assert len(built) == 1
 
 
-def test_initial_slash_skill_expands_before_send(monkeypatch):
+def test_initial_slash_invocation_passes_through_verbatim(monkeypatch):
   captured: list[str] = []
 
   async def fake_call_text(bro, initial):
     captured.append(initial)
 
   monkeypatch.setenv('CW_IN_CONTAINER', '1')
-  monkeypatch.setattr('bro.registry.create_bro', lambda name: _SkillfulBro({'ask': 'ASK BODY'}))
+  monkeypatch.setattr('bro.registry.create_bro', lambda name: RecordBro())
   monkeypatch.setattr('do.call.call_text', fake_call_text)
   monkeypatch.setattr('do.call._tty_supported', lambda: False)
 
-  # the initial message gets the ask/do-task slash expansion, so a skill body
-  # reaches the bro instead of the literal `/ask …` line
+  # no client-side expansion: the bro's system prompt describes the /-syntax and
+  # the model loads the skill body itself via the `bro::skill` tool.
   rc = main(['call', 'record', '/ask devoops to ping', '--slow'])
   assert rc is None
-  assert captured == ['ASK BODY\n\nARGUMENTS: devoops to ping']
-
-
-def test_initial_unknown_skill_exits_1(monkeypatch, capsys):
-  captured: list[str] = []
-
-  async def fake_call_text(bro, initial):
-    captured.append(initial)
-
-  monkeypatch.setenv('CW_IN_CONTAINER', '1')
-  monkeypatch.setattr('bro.registry.create_bro', lambda name: _SkillfulBro({'fix': 'FIX BODY'}))
-  monkeypatch.setattr('do.call.call_text', fake_call_text)
-  monkeypatch.setattr('do.call._tty_supported', lambda: False)
-
-  rc = main(['call', 'record', '/nope thing', '--slow'])
-  assert rc == 1
-  assert captured == []
-  error_output = capsys.readouterr().err
-  assert 'nope' in error_output
-  assert 'fix' in error_output
+  assert captured == ['/ask devoops to ping']
 
 
 class _FakeApp:

@@ -8,6 +8,7 @@ import base.args
 from bro.bro import BroRaised
 from bro.bros.bro import Bro
 from do._cli import (
+  EFFORT_HELP,
   GRANT_CRED_HELP,
   GRANT_SUMMON_HELP,
   HOST_HELP,
@@ -20,7 +21,6 @@ from do._cli import (
   maybe_containerize,
 )
 from do._trace_format import compact_value, oneline, truncate
-from do.do import expand_skill_invocation
 from llm.observer import Observer
 
 __cli_name__ = 'call'
@@ -118,6 +118,8 @@ def _tty_supported() -> bool:
 
 
 def main(argv: list[str]) -> Optional[int]:
+  from cw import EFFORT_LEVELS
+
   parser = base.args.Parser(description='open an interactive session with a bro')
   parser.add_argument('bro', help='bro name')
   parser.add_argument('what', help='first message to send to the bro')
@@ -127,6 +129,7 @@ def main(argv: list[str]) -> Optional[int]:
     help='force text mode (timestamped lines) instead of the Textual chat UI',
   )
   parser.add_argument('--slow', action='store_true', help=SLOW_HELP)
+  parser.add_argument('--effort', choices=EFFORT_LEVELS, default=None, help=EFFORT_HELP)
   parser.add_argument('--host', action='store_true', help=HOST_HELP)
   parser.add_argument('--no-trails', dest='no_trails', action='store_true', help=NO_TRAILS_HELP)
   # --no-trails acts only on the container hop; --host has no hop to act on.
@@ -156,6 +159,8 @@ def main(argv: list[str]) -> Optional[int]:
     inner_args.append('--text')
   if args['slow']:
     inner_args.append('--slow')
+  if args['effort'] is not None:
+    inner_args.extend(['--effort', args['effort']])
   hopped = maybe_containerize(
     cli_name='call',
     bro_name=args['bro'],
@@ -171,15 +176,14 @@ def main(argv: list[str]) -> Optional[int]:
   if hopped is not None:
     return hopped
 
-  bro = create_bro_for_run(args['bro'], fast=not args['slow'])
-  # the initial message gets the same slash expansion as `ask`/`do-task` input,
-  # so `call pm '/ask …'` invokes the skill deterministically. later REPL turns
-  # are passed through verbatim.
   try:
-    initial = expand_skill_invocation(bro, args['what'])
-  except KeyError as e:
-    print(str(e.args[0]) if len(e.args) > 0 else str(e), file=sys.stderr)
+    bro = create_bro_for_run(args['bro'], fast=not args['slow'], effort=args['effort'])
+  except NotImplementedError as e:
+    # --effort on a provider without the knob — an explicit ask, so a clean
+    # error instead of fast mode's silent fallback.
+    print(str(e), file=sys.stderr)
     return 1
+  initial = args['what']
   use_tui = not args['text'] and _tty_supported()
 
   try:

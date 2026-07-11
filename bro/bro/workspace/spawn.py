@@ -67,6 +67,7 @@ from broker.runtime import Peer
 from broker.spawn import ChildHandle, LaunchSpec, Spawner
 from broker.transport import Provisioned
 from broker.transports.unix import UnixServerTransport
+from cw.constants import bro_git_identity_env
 from cw.docker import _create_container, _docker_create_argv, _ensure_image, _image_tag
 from cw.git import resolve_head, resolve_ref
 from cw.paths import _broker_dir, _containers_dir, _host_log_dir, _project_root, _summon_dir
@@ -470,7 +471,7 @@ def _lower_summon(launch: SummonLaunchSpec) -> DockerLaunchSpec:
       raise ValueError(f"cannot read the summoner's HEAD at {launch.parent_workspace}")
   return DockerLaunchSpec(
     command=['ask', launch.target, launch.prompt],
-    env={'CW_BASE_REF': base_ref},
+    env={'CW_BASE_REF': base_ref, **bro_git_identity_env()},
     secrets=scoped.required,
     attached=False,
     optional_secrets=scoped.optional,

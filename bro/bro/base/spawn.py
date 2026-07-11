@@ -16,7 +16,19 @@ only the direct child.
 import os
 import signal
 import subprocess
+from collections.abc import Callable
 from typing import Optional
+
+
+def _signal_group(
+  process: subprocess.Popen, signal_number: int, fallback: Callable[[], None]
+) -> None:
+  try:
+    os.killpg(process.pid, signal_number)
+  except (ProcessLookupError, PermissionError):
+    # group already gone, or the leader exited and its pgid was recycled — fall
+    # back to signalling just the direct child (a no-op if already reaped).
+    fallback()
 
 
 def kill_group(process: subprocess.Popen) -> None:
@@ -24,12 +36,13 @@ def kill_group(process: subprocess.Popen) -> None:
   (`start_new_session=True`), so this also reaps grandchildren. `run` calls it on
   timeout; streaming callers that drive their own read loop (e.g. infra's deploy
   runner with a watchdog timer) call it directly."""
-  try:
-    os.killpg(process.pid, signal.SIGKILL)
-  except (ProcessLookupError, PermissionError):
-    # group already gone, or the leader exited and its pgid was recycled — fall
-    # back to signalling just the direct child (a no-op if already reaped).
-    process.kill()
+  _signal_group(process, signal.SIGKILL, process.kill)
+
+
+def terminate_group(process: subprocess.Popen) -> None:
+  """SIGTERM the child's whole process group — the graceful sibling of `kill_group`,
+  for callers that give the child a chance to clean up and escalate themselves."""
+  _signal_group(process, signal.SIGTERM, process.terminate)
 
 
 def run(

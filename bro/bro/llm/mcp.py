@@ -1,12 +1,11 @@
 import functools
 import inspect
-import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
-from typing import Any, ClassVar, Optional, get_origin
+from typing import Any, ClassVar, Literal, Optional, get_args, get_origin
 
-from base import credentials
+from base import credentials, template
 
 
 def describe[F: Callable[..., Any]](function: F, text: str) -> F:
@@ -14,41 +13,59 @@ def describe[F: Callable[..., Any]](function: F, text: str) -> F:
   return function
 
 
-# `{{#has_cred <name>}}present{{else}}absent{{/has_cred}}` (and inverted `^`)
-# blocks in a static description string. block-delimited and non-nested (the
-# `.*?` is lazy and a body may not itself contain another block), so the `{{ }}`
-# fences can't collide with literal text. rendered by `render_has_cred`.
-_HAS_CRED_RE = re.compile(
-  r'\{\{(?P<kind>[#^])has_cred\s+(?P<name>[A-Za-z0-9_]+)\}\}(?P<body>.*?)\{\{/has_cred\}\}',
-  re.DOTALL,
-)
+# the agent harness a rendered text is consumed under — which toolset drives the
+# work: `bro` is the bro toolset (native LLM runs and `--bro` claude sessions,
+# where `--bare` strips claude's built-ins), `claude` is the native Claude Code
+# harness with its built-in tools.
+Harness = Literal['bro', 'claude']
+_HARNESSES = frozenset(get_args(Harness))
+
+# how a surface's tool list spells the canonical `namespace::tool` names: `bare`
+# is the bro-native LLM loop's `namespace__tool`; `mcp` is any claude session's
+# `mcp__namespace__tool` (each namespace mounted as an MCP server). orthogonal to
+# `Harness` — a `--bro` session runs the bro harness over mcp wire names.
+Wire = Literal['bare', 'mcp']
+_WIRES = frozenset(get_args(Wire))
 
 
-def render_has_cred(text: str, available: Callable[[str], bool], declared: Iterable[str]) -> str:
-  """render `{{#has_cred <name>}}…{{else}}…{{/has_cred}}` blocks in a description.
+def render_text(
+  text: str,
+  *,
+  harness: Optional[Harness] = None,
+  wire: Optional[Wire] = None,
+  creds: Optional[Iterable[str]] = None,
+) -> str:
+  """render `base.template` directives in static agent-facing text (system
+  prompts, skill bodies, tool descriptions) against the surface facts the call
+  site knows; a fact left None defines no variable, so a directive referencing
+  it raises.
 
-  a `#` block keeps its present branch when `available(name)`, else its `{{else}}`
-  branch (empty when there is no `{{else}}`); an inverted `^` block keeps its body
-  only when the secret is NOT available (no `{{else}}`). a string with no block is
-  returned unchanged and `available` is never consulted. `name` must be one of
-  `declared` (the component's needed + optional secrets) — a typo would otherwise
-  silently render the absent branch forever, so it raises.
+  - `harness` → `#harness`, a string over the `Harness` values —
+    `{{if #harness = bro}}…{{else}}{{assert #harness = claude}}…{{endif}}`;
+  - `wire` → `#wire`, a string over the `Wire` values —
+    `{{if #wire = bare}}…{{else}}{{assert #wire = mcp}}…{{endif}}`;
+  - `creds` → `#creds`, the set of secrets the rendering environment resolves —
+    `{{if openai ∈ #creds}}…{{else}}…{{endif}}`. the argument is the universe:
+    a component's declared secrets for a tool description, the registry's known
+    names for session-level text; testing a name outside it raises. membership
+    probes `credentials.available` lazily, so only tested names are resolved —
+    render in the process that consumes the text, where the store is the
+    session's own.
   """
-  declared_set = set(declared)
-
-  def replace(m: re.Match) -> str:
-    name = m.group('name')
-    if name not in declared_set:
-      listing = ', '.join(sorted(declared_set)) if len(declared_set) > 0 else '(none)'
-      raise ValueError(f'has_cred references undeclared secret {name!r}; declared: {listing}')
-    is_available = available(name)
-    if m.group('kind') == '^':
-      # inverted: the whole body renders only when the secret is absent; no else.
-      return '' if is_available else m.group('body')
-    present, _, otherwise = m.group('body').partition('{{else}}')
-    return present if is_available else otherwise
-
-  return _HAS_CRED_RE.sub(replace, text)
+  if '{{' not in text:
+    return text
+  variables: dict[str, template.StringVariable | template.SetVariable | bool] = {}
+  if harness is not None:
+    if harness not in _HARNESSES:
+      raise ValueError(f'unknown harness {harness!r}; known: {", ".join(sorted(_HARNESSES))}')
+    variables['harness'] = template.StringVariable(harness, domain=_HARNESSES)
+  if wire is not None:
+    if wire not in _WIRES:
+      raise ValueError(f'unknown wire scheme {wire!r}; known: {", ".join(sorted(_WIRES))}')
+    variables['wire'] = template.StringVariable(wire, domain=_WIRES)
+  if creds is not None:
+    variables['creds'] = template.SetVariable(credentials.available, universe=frozenset(creds))
+  return template.render(text, variables)
 
 
 _PRIMITIVE_SHAPE = {
@@ -400,9 +417,9 @@ class _NamespacedTool(Tool):
 
   @property
   def description(self) -> str:
-    # render any `has_cred` blocks against live credential availability (the
-    # serving layers that skip this wrapper render them the same way).
-    return render_has_cred(self._tool.description, credentials.available, self._declared_secrets)
+    # render credential directives against live availability (the serving
+    # layers that skip this wrapper render them the same way).
+    return render_text(self._tool.description, creds=self._declared_secrets)
 
   @property
   def parameters(self) -> dict[str, Any]:
@@ -421,7 +438,7 @@ async def namespaced_tools(server: MCPServer) -> list[Tool]:
   # assembling step for a harness that flattens tools across servers into one
   # list (`ToolRegistry`), which adds its own collision policy on top. the
   # server's declared secrets (needed + optional) ride along so each tool's
-  # description can resolve its `has_cred` blocks.
+  # description can resolve its credential directives.
   declared = set(server.needed_secrets) | set(server.optional_secrets)
   return [_NamespacedTool(server.namespace, tool, declared) for tool in await server.list_tools()]
 
@@ -508,7 +525,7 @@ class Toolset[T]:
     server = InProcessMCPServer(
       self.namespace, [FunctionTool(self._by_name[n], state=state) for n in names]
     )
-    # instance attribute over the writable class-attr default: the has_cred
+    # instance attribute over the writable class-attr default: the credential-directive
     # renderers (namespaced_tools, mcp-server) read secrets off the live server.
     server.needed_secrets = self.get_secrets(names)
     return server

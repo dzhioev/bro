@@ -1,38 +1,47 @@
-"""MCP tools for the dev Bro: file ops, shell, and search.
+"""MCP tools for the dev Bro: file ops, shell, search, and background jobs.
 
 Each tool wraps a primitive a Claude Code session would normally reach as a
-built-in (Read / Write / Edit / Bash / Grep / Glob). Exposing them via MCP
-keeps the Bro abstraction declarative — the dev Bro picks the tool set, the
-LLM (chat_gpt) reaches them through the same ToolRegistry that wraps the flow
-and infra toolsets. Same shape as `infra/mcp.py`.
+built-in (Read / Write / Edit / Bash / Grep / Glob / run_in_background +
+TaskOutput / TaskStop). Exposing them via MCP keeps the Bro abstraction
+declarative — the dev Bro picks the tool set, the LLM (chat_gpt) reaches them
+through the same ToolRegistry that wraps the flow and infra toolsets. Same
+shape as `infra/mcp.py`.
 
-Shared behaviour (output `limit`, skipped-content markers, fat-finger clamp)
-lives in sibling `REFERENCE.md` so per-tool `describe()` text stays terse and the
-LLM can call `read_reference` once to learn the rules. Add new shared concepts
-there, not in each tool's description.
+Shared behaviour (output `limit`, skipped-content markers, fat-finger clamp,
+the background-job model) lives in sibling `REFERENCE.md` so per-tool
+`describe()` text stays terse and the LLM can call `read_reference` once to
+learn the rules. Add new shared concepts there, not in each tool's description.
 """
 
+import asyncio
 import subprocess
 from pathlib import Path
 from typing import Optional
 
 from base import spawn
 from base.text_window import DEFAULT_LIMIT, apply_limit, numbered_window
-from llm.mcp import Toolset
+from bro.bros.dev import jobs
+from llm.mcp import Context, Toolset
 
 # default wall-clock cap for the shell-out tools (bash, grep). On expiry the whole
 # process group is killed and the tool returns a TIMED OUT result; callers can raise
 # their `timeout_seconds` to retry. See REFERENCE.md.
 DEFAULT_TIMEOUT_SECONDS = 45
 
+# default window a watch blocks for when the job has no pending output — short so
+# an unparameterized call can't stall an interactive surface; iterative watchers
+# pass an explicitly large value. See REFERENCE.md.
+DEFAULT_WAIT_SECONDS = 10
+
 _REFERENCE_PATH = Path(__file__).parent / 'REFERENCE.md'
 
 # the dev server definition, conventionally reached as `mcp.spec` (`from
 # bro.bros.dev import mcp`): tools register below via `@spec.tool`;
 # `spec(*tool_names)` is the declarative manifest bros hold (all tools when
-# empty, validated at declaration time); `build()` runs in the serving process.
+# empty, validated at declaration time); `build()` runs in the serving process,
+# constructing the per-server state — the background-job registry — once.
 # no secrets — every tool is local file/shell work.
-spec = Toolset('dev')
+spec = Toolset('dev', state=jobs.Registry)
 
 
 def _require_regular_file(path: Path) -> None:
@@ -185,3 +194,46 @@ def glob(pattern: str, path: Optional[str] = None, limit: int = DEFAULT_LIMIT) -
   if len(matches) == 0:
     return 'no matches'
   return apply_limit('\n'.join(str(p) for p in matches), limit, keep='head')
+
+
+@spec.tool(
+  'start command as a background job (bash -c, stdout+stderr merged into one '
+  'chronological stream, spooled continuously so the process never blocks on unread '
+  'output) and return its job id immediately. No timeout — the job runs until it '
+  'exits or is killed. Read output with watch; terminate with kill. See '
+  'read_reference for the full background-job rules.'
+)
+def job(context: Context[jobs.Registry], command: str) -> str:
+  started = context.state.start(command)
+  return f'started {started.id} (pid {started.process.pid})'
+
+
+@spec.tool(
+  'read new output from a background job, oldest-first from the per-job cursor; '
+  'every return opens with a state line (running / exited (code N)). Blocks up to '
+  'wait_seconds when nothing is pending (0 = non-blocking poll); tail=true waits '
+  'for exit instead and returns the last limit lines. Exclusive per job — a '
+  'concurrent watch on the same job fails immediately. limit: shared output cap. '
+  'See read_reference for the full background-job rules.'
+)
+async def watch(
+  context: Context[jobs.Registry],
+  job_id: str,
+  wait_seconds: float = DEFAULT_WAIT_SECONDS,
+  limit: int = DEFAULT_LIMIT,
+  tail: bool = False,
+) -> str:
+  target = context.state.get(job_id)
+  # the wait blocks; run it off-loop so concurrent tool calls — other jobs'
+  # watches included — stay serviceable.
+  return await asyncio.to_thread(target.watch, wait_seconds=wait_seconds, limit=limit, tail=tail)
+
+
+@spec.tool(
+  'terminate a background job: SIGTERM its whole process group, escalating to '
+  'SIGKILL after a short grace. The record and spooled output stay readable via '
+  'watch for a final collect. Reports when the job had already exited.'
+)
+async def kill(context: Context[jobs.Registry], job_id: str) -> str:
+  target = context.state.get(job_id)
+  return await asyncio.to_thread(target.kill)

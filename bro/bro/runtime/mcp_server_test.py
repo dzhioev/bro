@@ -197,15 +197,15 @@ class TestNamespaceEndpoints:
       create_http_app([_create_ping_server(), _create_ping_server()], TOKEN)
 
 
-class TestHasCredRendering:
+class TestCredsRendering:
   def test_description_renders_against_availability(self, monkeypatch):
-    import mcp_server
+    from base import credentials
 
-    monkeypatch.setattr(mcp_server.credentials, 'available', lambda name: False)
+    monkeypatch.setattr(credentials, 'available', lambda name: False)
     with _client(_ShimBro()._live_mcp_servers()) as client:
       body = _rpc(client, '/noop-source', 'tools/list')
       fetch = next(t for t in body['result']['tools'] if t['name'] == 'fetch')
-      # SearchableDataSource's fetch description carries a has_cred block on the
+      # SearchableDataSource's fetch description carries a credential directive on the
       # summary LLM key; with the secret absent the listing advertises raw-only mode
       assert '{{' not in fetch['description']
       assert 'summarisation is unavailable' in fetch['description']

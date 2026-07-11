@@ -23,6 +23,12 @@ SLOW_HELP = (
   'same model and quality, faster and more consistent generation at a higher '
   'per-token price)'
 )
+EFFORT_HELP = (
+  "override the reasoning-effort knob of the bro's LLM spec with this neutral level, "
+  "mapped onto the provider's own scale (for ChatGPT, xhigh maps through and max caps "
+  "at xhigh); without the flag the bro's own spec stands. errors when the provider "
+  'has no effort knob'
+)
 HOST_HELP = 'skip the auto-container hop and run in the calling host process'
 NO_TRAILS_HELP = (
   'disable trails recording: set TRAILS_DISABLED in the container and drop the '
@@ -49,20 +55,30 @@ INTO_HELP = (
 )
 
 
-def create_bro_for_run(bro_name: str, *, fast: bool) -> Bro:
+def create_bro_for_run(bro_name: str, *, fast: bool, effort: Optional[str] = None) -> Bro:
   """instantiate the bro for an in-process run. fast mode (the provider's fast knob)
   is the default for these CLIs; pass fast=False (`--slow`) for the plain spec.
   fast being implicit, a provider with no fast mode (e.g. echo) falls back to the
-  normal spec rather than raising — the user never explicitly asked for fast."""
+  normal spec rather than raising — the user never explicitly asked for fast.
+  effort (`--effort`) overrides the spec's reasoning-effort knob via
+  `LLMSpec.with_effort`; being an explicit ask, a provider without the knob raises
+  NotImplementedError instead of falling back."""
   from bro.registry import create_bro, get_class
 
-  if not fast:
+  if not fast and effort is None:
     return create_bro(bro_name)
   cls = get_class(bro_name)
-  try:
-    spec = cls.llm_spec.fast()
-  except NotImplementedError:
-    logging.getLogger(__name__).debug('%s has no fast mode; running with the normal spec', bro_name)
+  spec = cls.llm_spec
+  if fast:
+    try:
+      spec = spec.fast()
+    except NotImplementedError:
+      logging.getLogger(__name__).debug(
+        '%s has no fast mode; running with the normal spec', bro_name
+      )
+  if effort is not None:
+    spec = spec.with_effort(effort)
+  if spec is cls.llm_spec:
     return create_bro(bro_name)
   return cls.create(spec)
 
@@ -128,11 +144,20 @@ def maybe_containerize(
       )
       return 1
     return None
-  from cw import _project_root, bro_run_secrets, resolve_ref, run_in_container, summon_allow_list
+  from cw import (
+    _project_root,
+    bro_git_identity_env,
+    bro_run_secrets,
+    resolve_ref,
+    run_in_container,
+    summon_allow_list,
+  )
 
   scoped = bro_run_secrets(bro_name)
   needed = set(scoped.required)
-  extra_env: dict[str, str] = {}
+  # every cw-launched session commits as bro; a native bro run gets no in-place
+  # session runner to export the identity, so the hop sets it in the container
+  extra_env: dict[str, str] = dict(bro_git_identity_env())
   if no_trails:
     needed.remove('trails')
     extra_env['TRAILS_DISABLED'] = '1'
@@ -159,7 +184,7 @@ def maybe_containerize(
     secrets=needed,
     optional_secrets=scoped.optional,
     docker_sock=scoped.docker_sock,
-    extra_env=extra_env if len(extra_env) > 0 else None,
+    extra_env=extra_env,
     # this container runs its own named bro, so the calling session's ambient
     # CW_BRO must not leak in and mis-theme it.
     forward_bro=False,
@@ -175,7 +200,14 @@ def run(
   arg_help: str,
   run_function: Callable[[Bro, str, Optional[Observer]], Coroutine[None, None, str]],
   argv: list[str],
+  export_task_id: bool = False,
 ) -> Optional[int]:
+  """shared `ask`/`do-task` main. `export_task_id` (do-task) parses the task
+  positional as a Notion page ref and exports it as CW_TASK_ID, so the run's
+  commit footer resolves its `Task:` line without a flow lookup; input that is
+  no page ref (a description, a slash invocation) exports nothing."""
+  from cw import EFFORT_LEVELS
+
   parser = base.args.Parser(description=parser_description)
   parser.add_argument('bro', help='bro name')
   parser.add_argument(arg_name, help=arg_help)
@@ -185,6 +217,7 @@ def run(
     help='render the trace as colored rich panels instead of plain log lines',
   )
   parser.add_argument('--slow', action='store_true', help=SLOW_HELP)
+  parser.add_argument('--effort', choices=EFFORT_LEVELS, default=None, help=EFFORT_HELP)
   parser.add_argument('--host', action='store_true', help=HOST_HELP)
   parser.add_argument('--no-trails', dest='no_trails', action='store_true', help=NO_TRAILS_HELP)
   # --no-trails acts only on the container hop; --host has no hop to act on.
@@ -204,11 +237,24 @@ def run(
   parser.add_argument('--into', metavar='REF', help=INTO_HELP)
   args = parser.parse(argv)
 
+  if export_task_id:
+    from notion import parse_page_ref
+
+    try:
+      # before the hop: the container create captures CW_TASK_ID from this
+      # process's environment; on the hop-less paths it stays for the bro's
+      # tool subprocesses.
+      os.environ['CW_TASK_ID'] = parse_page_ref(args[arg_name])
+    except ValueError:
+      pass
+
   inner_args = [args[arg_name]]
   if args['rich']:
     inner_args.append('--rich')
   if args['slow']:
     inner_args.append('--slow')
+  if args['effort'] is not None:
+    inner_args.extend(['--effort', args['effort']])
   hopped = maybe_containerize(
     cli_name=cli_name,
     bro_name=args['bro'],
@@ -224,7 +270,13 @@ def run(
   if hopped is not None:
     return hopped
 
-  bro = create_bro_for_run(args['bro'], fast=not args['slow'])
+  try:
+    bro = create_bro_for_run(args['bro'], fast=not args['slow'], effort=args['effort'])
+  except NotImplementedError as e:
+    # --effort on a provider without the knob — an explicit ask, so a clean
+    # error instead of fast mode's silent fallback.
+    print(str(e), file=sys.stderr)
+    return 1
   observer: Optional[Observer] = None
   if args['rich']:
     from llm.observer import RichConsoleRenderer
@@ -234,10 +286,5 @@ def run(
     result = asyncio.run(run_function(bro, args[arg_name], observer))
   except BroRaised as e:
     print(f'raised: {e.reason}', file=sys.stderr)
-    return 1
-  except KeyError as e:
-    # raised by bro.get_skill_body when the `/<name>` prefix in input names
-    # a skill the bro does not expose; the message includes the available list.
-    print(str(e.args[0]) if len(e.args) > 0 else str(e), file=sys.stderr)
     return 1
   print(result)

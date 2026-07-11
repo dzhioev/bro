@@ -133,11 +133,12 @@ class TestRunInPlace:
       assert bro_name == 'ppp-dev'
       assert h.build.call_args.kwargs['skills_dir'] == skills_dir
 
-  def test_auto_exports_bro_git_identity(self, monkeypatch, tmp_path):
+  def test_exports_bro_git_identity_unconditionally(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert cw.runner.run_in_place(_spec(auto=True)) == 0
-      assert h.env['GIT_AUTHOR_NAME'] == 'Bro'
+      # no --auto: every session commits as bro, autonomy-independent
+      assert cw.runner.run_in_place(_spec()) == 0
+      assert h.env['GIT_AUTHOR_NAME'] == 'bro'
       assert h.env['GIT_COMMITTER_EMAIL'] == 'dzhioev+bro@gmail.com'
 
   def test_session_context_set_next_to_claude(self, monkeypatch, tmp_path):

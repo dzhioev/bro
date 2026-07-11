@@ -158,6 +158,7 @@ def _format_step_summary(step: dict, colors: _Colors) -> str:
     'tokens_in',
     'tokens_out',
     'tokens_reasoning',
+    'tokens_cached',
     'where',
   ):
     if key in step:

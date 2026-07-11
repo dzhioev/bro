@@ -13,8 +13,8 @@ from llm.mcp import (
   UnknownToolError,
   describe,
   namespaced_tools,
-  render_has_cred,
   render_return_shape,
+  render_text,
   validated_callable,
   wire_name,
 )
@@ -423,44 +423,76 @@ class TestToolRegistry:
     assert tools == []
 
 
-class TestRenderHasCred:
-  @staticmethod
-  def _availability(*present: str):
-    return lambda name: name in set(present)
+class TestRenderText:
+  def test_harness_branches(self):
+    text = (
+      'watch: {{if #harness = bro}}job/watch{{else}}{{assert #harness = claude}}Monitor{{endif}}'
+    )
+    assert render_text(text, harness='bro') == 'watch: job/watch'
+    assert render_text(text, harness='claude') == 'watch: Monitor'
 
-  def test_present_branch_when_available(self):
-    template = 'base{{#has_cred openai}} yes{{else}} no{{/has_cred}}'
-    assert render_has_cred(template, self._availability('openai'), ['openai']) == 'base yes'
+  def test_wire_branches(self):
+    text = 'call {{if #wire = bare}}ns__tool{{else}}{{assert #wire = mcp}}mcp__ns__tool{{endif}}'
+    assert render_text(text, wire='bare') == 'call ns__tool'
+    assert render_text(text, wire='mcp') == 'call mcp__ns__tool'
 
-  def test_else_branch_when_absent(self):
-    template = 'base{{#has_cred openai}} yes{{else}} no{{/has_cred}}'
-    assert render_has_cred(template, self._availability(), ['openai']) == 'base no'
+  def test_creds_membership_probes_availability(self, monkeypatch):
+    monkeypatch.setattr(mcp_mod.credentials, 'available', lambda name: name == 'openai')
+    text = '{{if openai ∈ #creds}}summarized{{else}}raw{{endif}}'
+    assert render_text(text, creds=['openai']) == 'summarized'
+    text = '{{if github ∈ #creds}}push{{else}}no push{{endif}}'
+    assert render_text(text, creds=['openai', 'github']) == 'no push'
 
-  def test_no_else_yields_empty_when_absent(self):
-    template = 'base{{#has_cred openai}} yes{{/has_cred}}'
-    assert render_has_cred(template, self._availability(), ['openai']) == 'base'
+  def test_creds_outside_universe_raises(self, monkeypatch):
+    monkeypatch.setattr(mcp_mod.credentials, 'available', lambda name: True)
+    with pytest.raises(ValueError, match='universe'):
+      render_text('{{if typo ∈ #creds}}x{{endif}}', creds=['openai'])
 
-  def test_inverted_renders_only_when_absent(self):
-    template = 'x{{^has_cred openai}} (no key){{/has_cred}}'
-    assert render_has_cred(template, self._availability(), ['openai']) == 'x (no key)'
-    assert render_has_cred(template, self._availability('openai'), ['openai']) == 'x'
+  def test_creds_probed_lazily(self, monkeypatch):
+    # only the tested name resolves — a large universe costs nothing extra.
+    probed: list[str] = []
 
-  def test_no_marker_returned_unchanged_without_reading_availability(self):
+    def available(name: str) -> bool:
+      probed.append(name)
+      return True
+
+    monkeypatch.setattr(mcp_mod.credentials, 'available', available)
+    render_text('{{if openai ∈ #creds}}x{{endif}}', creds=['openai', 'github', 'notion'])
+    assert probed == ['openai']
+
+  def test_absent_fact_raises_on_reference(self):
+    with pytest.raises(ValueError, match='unknown variable #wire'):
+      render_text('{{if #wire = bare}}x{{endif}}', harness='bro')
+
+  def test_facts_combine(self):
+    text = '{{if #harness = bro}}B{{endif}}{{if #wire = mcp}}M{{endif}}'
+    assert render_text(text, harness='bro', wire='mcp') == 'BM'
+
+  def test_plain_text_unchanged_without_consulting_availability(self, monkeypatch):
     def boom(name: str) -> bool:
-      raise AssertionError('availability must not be consulted with no block')
+      raise AssertionError('availability must not be consulted with no directive')
 
-    assert render_has_cred('plain text', boom, []) == 'plain text'
+    monkeypatch.setattr(mcp_mod.credentials, 'available', boom)
+    assert render_text('plain text', creds=[]) == 'plain text'
 
-  def test_undeclared_name_raises(self):
-    with pytest.raises(ValueError, match='undeclared secret'):
-      render_has_cred('{{#has_cred typo}}x{{/has_cred}}', self._availability(), ['openai'])
+  def test_unknown_literal_raises(self):
+    with pytest.raises(ValueError, match='domain'):
+      render_text('{{if #harness = claud}}x{{endif}}', harness='claude')
+
+  def test_unknown_harness_argument_raises(self):
+    with pytest.raises(ValueError, match='unknown harness'):
+      render_text('{{if a = a}}x{{endif}}', harness='gemini')  # type: ignore[arg-type]
+
+  def test_unknown_wire_argument_raises(self):
+    with pytest.raises(ValueError, match='unknown wire'):
+      render_text('{{if a = a}}x{{endif}}', wire='grpc')  # type: ignore[arg-type]
 
   @pytest.mark.asyncio
   async def test_namespaced_tool_renders_description_against_availability(self, monkeypatch):
     def fetch(id: Annotated[str, Field(description='id')]) -> str:
       return id
 
-    describe(fetch, 'fetch a record{{#has_cred openai}}; summarized{{else}}; raw only{{/has_cred}}')
+    describe(fetch, 'fetch a record{{if openai ∈ #creds}}; summarized{{else}}; raw only{{endif}}')
 
     class Srv(InProcessMCPServer):
       optional_secrets = ('openai',)

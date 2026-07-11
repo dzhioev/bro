@@ -21,8 +21,9 @@ class LLMSpec(llm.llm.LLMSpec):
     mcp_servers: Optional[list[MCPServer]] = None,
     observer: Optional[Observer] = None,
     tracker: Optional[Tracker] = None,
+    agent: Optional[str] = None,
   ) -> llm.llm.LLM:
-    return Echo.create(mcp_servers=mcp_servers, observer=observer, tracker=tracker)
+    return Echo.create(mcp_servers=mcp_servers, observer=observer, tracker=tracker, agent=agent)
 
   def dump(self) -> dict:
     return {'type': self.TYPE, 'model': self.model}
@@ -38,16 +39,18 @@ class Echo(llm.llm.LLM):
     mcp_servers: Optional[list[MCPServer]] = None,
     observer: Optional[Observer] = None,
     tracker: Optional[Tracker] = None,
+    agent: Optional[str] = None,
   ):
-    return Echo(mcp_servers=mcp_servers, observer=observer, tracker=tracker)
+    return Echo(mcp_servers=mcp_servers, observer=observer, tracker=tracker, agent=agent)
 
   def __init__(
     self,
     mcp_servers: Optional[list[MCPServer]] = None,
     observer: Optional[Observer] = None,
     tracker: Optional[Tracker] = None,
+    agent: Optional[str] = None,
   ):
-    super().__init__(mcp_servers, observer=observer, tracker=tracker)
+    super().__init__(mcp_servers, observer=observer, tracker=tracker, agent=agent)
 
   async def send(self, messages: list[dict], *, request_timeout: Optional[float] = None) -> str:
     if len(messages) == 0:

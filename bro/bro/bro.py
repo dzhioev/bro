@@ -72,37 +72,14 @@ def _load_shared_prompts() -> str:
   return '\n\n'.join(parts)
 
 
-# bro-facing tool-name rule, appended to a bro's system prompt when it has any
-# namespaced tools or skills. this is the bro-native half of the per-harness
-# rule — a bro LLM run resolves `::` to `ns__tool` (no `mcp__`). the Claude-Code
-# half is prompts/tool_names.md (`ns::tool` → `mcp__ns__tool`): non-bro `cw ss`
-# sessions get it via cw/system_prompt.py, and `cw ss --bro` sessions via
-# `claude_system_prompt`, which composes it in place of this block.
-_TOOL_NAMES_BLOCK = (
-  '## Tool names\n'
-  '\n'
-  "Your tools are namespaced. `namespace::tool` is a tool's canonical name; it "
-  'can appear anywhere — a skill, a doc, a tool description, a user message. In '
-  'your tool list it is `namespace__tool` (replace `::` with `__`); call that '
-  'wire name directly.'
-)
-
-
-def _load_claude_tool_names() -> str:
-  # a `cw ss --bro` session mounts each namespace as an MCP server, so its wire
-  # names carry the `mcp__` prefix — the bro-native block above would teach the
-  # wrong form there.
-  return get_prompt('tool_names.md').strip()
-
-
 def _render_data_sources(sources: list[DataSource]) -> str:
   lines = ['## Data sources', '', 'You have access to the following read-only data sources:', '']
   for ds in sources:
-    # resolve any `has_cred` blocks in the summary against live credential
+    # resolve any credential-availability directives in the summary against live
     # availability (e.g. a source advertising query-focused fetch only when its
     # LLM key is present), validated against the source's declared secrets.
     declared = set(ds.needed_secrets) | set(ds.optional_secrets)
-    summary = llm.mcp.render_has_cred(ds.summary, credentials.available, declared)
+    summary = llm.mcp.render_text(ds.summary, creds=declared)
     lines.append(f'- **{ds.name}** — {summary}')
   lines.append('')
   lines.append(
@@ -194,6 +171,9 @@ def _render_skills(skills: list[tuple[str, str]]) -> str:
     "`bro::skill` tool with its name — the tool returns the skill's markdown "
     'body, which you then execute.',
     '',
+    'A user message starting with `/<name>` is an invocation of the skill '
+    'named `<name>`; the rest of the message is its arguments.',
+    '',
   ]
   for name, description in skills:
     lines.append(f'- **{name}** — {_first_sentence(description)}')
@@ -238,7 +218,9 @@ _SUMMON_DESCRIPTION = (
   'a target outside it — or a summon nested past the depth cap — fails immediately '
   'with the reason) and `prompt` (the full request, self-contained — the target '
   'shares no context with you). optional `timeout` (seconds, default 1800) bounds '
-  "the run; optional `into` bases the child on a git ref instead of your workspace's "
+  'the run — an open-ended child (e.g. a dev run watching a PR through review) '
+  'outlives the default and needs an explicit value sized in hours; optional '
+  "`into` bases the child on a git ref instead of your workspace's "
   'current HEAD (uncommitted changes never transfer). fails with the reason when the run raises, errors out, '
   'or dies. `detach: true` returns the request id right after the send instead of '
   'blocking — poll or collect it with `summon_check`.'
@@ -306,16 +288,20 @@ def _summon_check_tool() -> llm.mcp.Tool:
   )
 
 
-def _build_service_server(bro: 'BaseBro', *, include_raise: bool) -> llm.mcp.MCPServer:
+def _build_service_server(
+  bro: 'BaseBro', *, include_raise: bool, wire: llm.mcp.Wire
+) -> llm.mcp.MCPServer:
   # `raise` only makes sense non-interactively (a caller to abort to); `skill` and
   # `summon` are needed in both modes. interactive callers pass include_raise=False.
+  # served skills always render for the bro harness — every consumer of this
+  # server works through the bro toolset — over the caller's wire scheme.
   tools: list[llm.mcp.Tool] = []
   if include_raise:
     tools.append(llm.mcp.FunctionTool(_raise, name='raise', description=_RAISE_DESCRIPTION))
   if len(bro.skills) > 0:
 
     def skill(name: str) -> str:
-      return bro.get_skill_body(name)
+      return bro.get_skill_body(name, harness='bro', wire=wire)
 
     tools.append(llm.mcp.FunctionTool(skill, name='skill', description=_SKILL_DESCRIPTION))
   if os.environ.get('BROKER_CHANNEL') is not None:
@@ -328,10 +314,10 @@ _NON_INTERACTIVE_NOTE = (
   'You are running in non-interactive mode — this is a one-shot invocation '
   'with no follow-up turn. If you cannot fulfill the request (missing '
   'credentials, no appropriate tool or data source, contradictory '
-  'constraints, the input is unclear or cannot be understood, or any other '
-  'blocker), call the `raise` tool with a clear reason instead of producing '
-  'a partial or speculative answer or asking a clarifying question — there '
-  'is no one to answer it.'
+  'constraints, genuinely ambiguous scope, the input is unclear or cannot '
+  'be understood, or any other blocker), call the `raise` tool with a clear '
+  'reason instead of producing a partial or speculative answer or asking a '
+  'clarifying question — there is no one to answer it.'
 )
 
 _INTERACTIVE_NOTE = (
@@ -418,7 +404,9 @@ class BaseBro(ABC):
     # built lazily by _live_mcp_servers(): metadata surfaces (needed_secrets on
     # hosts, prompt composition) never construct live servers.
     self._live_mcp: Optional[list[llm.mcp.MCPServer]] = None
-    self._service_server: llm.mcp.MCPServer = _build_service_server(self, include_raise=True)
+    self._service_server: llm.mcp.MCPServer = _build_service_server(
+      self, include_raise=True, wire='bare'
+    )
     self._llm = None
     # default to no-op; BaseBro.run() swaps in a real observer per invocation so the
     # LLM construction path picks it up via self._observer.
@@ -438,7 +426,7 @@ class BaseBro(ABC):
     shared = _load_shared_prompts()
     descriptions = self.skill_descriptions()
 
-    def compose(tool_names_block: str) -> str:
+    def compose(wire: llm.mcp.Wire) -> str:
       parts = []
       if len(shared) > 0:
         parts.append(shared)
@@ -446,17 +434,29 @@ class BaseBro(ABC):
       # the namespaced-tool convention only matters once the bro actually has
       # tools or skills (which reference tools by their `ns::tool` name).
       if len(self._mcp_specs) > 0 or len(self.data_sources) > 0 or len(descriptions) > 0:
-        parts.append(tool_names_block)
+        parts.append(get_prompt('tool_names.md').strip())
       if len(self.data_sources) > 0:
         parts.append(_render_data_sources(self.data_sources))
       if len(descriptions) > 0:
         parts.append(_render_skills(descriptions))
-      return '\n\n'.join(parts)
+      # both composed flavors serve the bro harness — the only per-flavor fact is
+      # the wire scheme. native themed claude sessions never see these prompts;
+      # they get the raw `persona` rendered by cw with its own surface facts.
+      return llm.mcp.render_text(
+        '\n\n'.join(parts), harness='bro', wire=wire, creds=credentials.known_names()
+      )
 
-    self.system_prompt = compose(_TOOL_NAMES_BLOCK)
-    # the same prompt with the Claude-Code tool-name rule — what a `cw ss --bro`
-    # session passes as --system-prompt (cw/claude_argv.py).
-    self.claude_system_prompt = compose(_load_claude_tool_names())
+    self.system_prompt = compose('bare')
+    # the same prompt over mcp wire names — what a `cw ss --bro` session passes
+    # as --system-prompt (cw/claude_argv.py).
+    self.claude_system_prompt = compose('mcp')
+
+  @property
+  def agent(self) -> str:
+    # the surface identity stamped on published usage (the usage file and, from
+    # there, commit footers): bro runs are namespaced under bro// so the token
+    # reads as a bro surface next to identities like 'Claude Code <version>'.
+    return f'bro//{self.name}'
 
   @property
   def skills(self) -> dict[str, Path]:
@@ -465,16 +465,20 @@ class BaseBro(ABC):
     # is cheap and avoids stale state if a skill file is added at runtime.
     return _collect_skills(list(reversed(type(self).__mro__)))
 
-  def get_skill_body(self, name: str) -> str:
-    # return the markdown body of the named skill with frontmatter stripped.
-    # raises KeyError if the name is not one of `self.skills`.
+  def get_skill_body(self, name: str, *, harness: llm.mcp.Harness, wire: llm.mcp.Wire) -> str:
+    # return the markdown body of the named skill with frontmatter stripped and
+    # template directives rendered for the consuming surface — each surface
+    # sees only its own procedure. raises KeyError if the name is not one of
+    # `self.skills`.
     skills = self.skills
     path = skills.get(name)
     if path is None:
       available = ', '.join(sorted(skills)) if len(skills) > 0 else '(none)'
       raise KeyError(f'no skill named {name!r}; available: {available}')
     _, body = _load_skill(name, path)
-    return body.strip()
+    return llm.mcp.render_text(
+      body, harness=harness, wire=wire, creds=credentials.known_names()
+    ).strip()
 
   def skill_descriptions(self) -> list[tuple[str, str]]:
     # return (name, description) pairs for each available skill, in the same
@@ -616,27 +620,40 @@ class BaseBro(ABC):
       self._live_mcp.extend(ds.as_mcp_server() for ds in self.data_sources)
     return self._live_mcp
 
-  def _mcp_servers_for(self, *, interactive: bool) -> list[llm.mcp.MCPServer]:
+  def _mcp_servers_for(
+    self, *, interactive: bool, wire: llm.mcp.Wire = 'bare'
+  ) -> list[llm.mcp.MCPServer]:
     # the `raise` service tool only makes sense in non-interactive runs — when no
     # human is in the loop to negotiate, the agent needs a way to abort. In
     # interactive sessions the agent describes any blocker in its reply instead.
     # `skill`, however, is needed in both modes, so interactive rebuilds the
     # service server without `raise` rather than dropping it wholesale.
     if interactive:
-      return [*self._live_mcp_servers(), _build_service_server(self, include_raise=False)]
+      return [
+        *self._live_mcp_servers(),
+        _build_service_server(self, include_raise=False, wire=wire),
+      ]
     return [*self._live_mcp_servers(), self._service_server]
 
   def claude_bro_mcp_servers(self) -> list[llm.mcp.MCPServer]:
     # the MCP servers a `cw ss --bro` Claude Code session mounts (through
     # mcp_server.py's `bro:<name>` surface): the same interactive set `send()`
-    # gets — declared servers plus the `skill` tool, no `raise` (a human drives
-    # the session). without it the `--bro` surface exposes only the declared
-    # servers, leaving the bro's skills unreachable there.
-    return self._mcp_servers_for(interactive=True)
+    # gets — declared servers plus the `skill` tool, no `raise` (it aborts
+    # `bro.run()`, which a claude session never enters). without it the `--bro`
+    # surface exposes only the declared servers, leaving the bro's skills
+    # unreachable there. skills serve the bro branch (`--bare` strips claude's
+    # built-ins, so the session drives work through the bro toolset, not
+    # Monitor/Bash) over mcp wire names.
+    return self._mcp_servers_for(interactive=True, wire='mcp')
 
   def _system_prompt_for(self, *, interactive: bool) -> str:
+    # the run mode is known here, at run start, so the matching session-mode
+    # fragment is injected rather than detected by the agent: interactive runs
+    # are manual sessions, non-interactive ones autonomous (the fragment pair
+    # is documented in prompts/CLAUDE.md).
     note = _INTERACTIVE_NOTE if interactive else _NON_INTERACTIVE_NOTE
-    return f'{self.system_prompt}\n\n{note}'
+    mode = get_prompt('manual_session.md' if interactive else 'autonomous_session.md').strip()
+    return f'{self.system_prompt}\n\n{note}\n\n{mode}'
 
   def _make_observer(self) -> Observer:
     return BoringRenderer(prefix=self.name)
@@ -653,4 +670,7 @@ class BaseBro(ABC):
       mcp_servers=self._mcp_servers_for(interactive=interactive),
       observer=self._observer,
       tracker=self._tracker,
+      # the LLM publishes cumulative usage under the bro's surface identity (the
+      # usage file must be self-describing — bro-run containers drop CW_BRO).
+      agent=self.agent,
     )

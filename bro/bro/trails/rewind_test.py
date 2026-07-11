@@ -110,6 +110,7 @@ class TestFormatStepSummary:
         'tokens_in': 12,
         'tokens_out': 8,
         'tokens_reasoning': 4,
+        'tokens_cached': 6,
       },
       NO_COLOR,
     )
@@ -117,6 +118,7 @@ class TestFormatStepSummary:
     assert 'tokens_in=12' in out
     assert 'tokens_out=8' in out
     assert 'tokens_reasoning=4' in out
+    assert 'tokens_cached=6' in out
 
 
 class TestFormatTrailRow:

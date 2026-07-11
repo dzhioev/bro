@@ -1,10 +1,11 @@
 #!/usr/bin/env python
-"""aggregate Claude Code token usage across a git commit range.
+"""aggregate LLM token usage across a git commit range.
 
 Walks `git log <range>`, parses the footer emitted by
-`setup/claude_commit_footer.py`, and sums the per-model, per-class *deltas* across
-every commit in the range — which, under the squash-merge workflow, equals the true
-total spent producing that range (each session counted once).
+`setup/claude_commit_footer.py` (format owned by the `usage` module), and sums
+the per-model, per-class *deltas* across every commit in the range — which,
+under the squash-merge workflow, equals the true total spent producing that
+range (each session counted once).
 
 The four token classes (input / cache-write / cache-read / output) are reported
 separately: they differ in price by up to ~50x, so a single summed number would be
@@ -19,73 +20,22 @@ Example:
 
 from __future__ import annotations
 
-import re
 import subprocess
-from dataclasses import dataclass
 from typing import Optional
 
+import usage
 from base import log
 from base.args import Parser
+from usage import Counts
 
 __cli_name__ = 'usage-report'
 
-_THOUSANDS = "'"
-_CLASSES = ('input', 'cache_write', 'cache_read', 'output')
 _COLUMN_HEADER = {
   'input': 'input',
   'cache_write': 'cache-write',
   'cache_read': 'cache-read',
   'output': 'output',
 }
-
-Counts = dict[str, int]
-
-# footer parser (owned by setup/claude_commit_footer.py; duplicated here because
-# sharing would require making setup/ a Python package, which is out of scope).
-_FOOTER_RE = re.compile(
-  r'^>\s*created with Claude Code\s+(?P<versions>.+?)\s*\|\s*(?P<tokens>.+?)\s*$',
-  re.MULTILINE,
-)
-_PART_RE = re.compile(
-  r'^(?P<model>.*?):\s*'
-  r'↑\s*\(\s*(?P<input>[\d\']+)\s+(?P<cache_write>[\d\']+)\s+(?P<cache_read>[\d\']+)\s*\)\s*'
-  r'↓\s*(?P<output>[\d\']+)$'
-)
-
-
-def _zero() -> Counts:
-  return dict.fromkeys(_CLASSES, 0)
-
-
-def _add(a: Counts, b: Counts) -> Counts:
-  return {c: a.get(c, 0) + b.get(c, 0) for c in _CLASSES}
-
-
-def _format_int(n: int) -> str:
-  return f'{n:,}'.replace(',', _THOUSANDS)
-
-
-@dataclass
-class CommitUsage:
-  per_model: dict[str, Counts]
-
-
-def _parse_footer(commit_msg: str) -> Optional[CommitUsage]:
-  """parse the four-class footer; returns None if it is absent or unparseable."""
-  m = _FOOTER_RE.search(commit_msg)
-  if m is None:
-    return None
-  per_model: dict[str, Counts] = {}
-  for chunk in m.group('tokens').split(', '):
-    pm = _PART_RE.match(chunk.strip())
-    if pm is None:
-      continue
-    model = pm.group('model').strip()
-    counts = {c: int(pm.group(c).replace(_THOUSANDS, '')) for c in _CLASSES}
-    per_model[model] = _add(per_model.get(model, _zero()), counts)
-  if len(per_model) == 0:
-    return None
-  return CommitUsage(per_model=per_model)
 
 
 def _git_log(git_range: str) -> list[tuple[str, str]]:
@@ -105,25 +55,27 @@ def _git_log(git_range: str) -> list[tuple[str, str]]:
 
 def _format_table(totals: dict[str, Counts], commit_count: int, summed_count: int) -> str:
   models = sorted(totals.keys())
-  grand = _zero()
+  grand = usage.zero()
   for c in totals.values():
-    grand = _add(grand, c)
+    grand = usage.add(grand, c)
 
   name_width = max([len(m) for m in models] + [len('model'), len('total')])
   column_widths = {
     c: max(
-      [len(_format_int(totals[m].get(c, 0))) for m in models]
-      + [len(_format_int(grand[c])), len(_COLUMN_HEADER[c])]
+      [len(usage.format_int(totals[m].get(c, 0))) for m in models]
+      + [len(usage.format_int(grand[c])), len(_COLUMN_HEADER[c])]
     )
-    for c in _CLASSES
+    for c in usage.CLASSES
   }
 
   def _row(label: str, counts: Counts) -> str:
-    cells = '  '.join(f'{_format_int(counts.get(c, 0)):>{column_widths[c]}}' for c in _CLASSES)
+    cells = '  '.join(
+      f'{usage.format_int(counts.get(c, 0)):>{column_widths[c]}}' for c in usage.CLASSES
+    )
     return f'{label:<{name_width}}  {cells}'
 
   header = f'{"model":<{name_width}}  ' + '  '.join(
-    f'{_COLUMN_HEADER[c]:>{column_widths[c]}}' for c in _CLASSES
+    f'{_COLUMN_HEADER[c]:>{column_widths[c]}}' for c in usage.CLASSES
   )
   lines = [
     f'commits scanned: {commit_count}',
@@ -148,18 +100,18 @@ def usage_report(git_range: str) -> int:
   totals: dict[str, Counts] = {}
   summed_count = 0
   for _, body in commits:
-    parsed = _parse_footer(body)
+    parsed = usage.parse_footer(body)
     if parsed is not None:
       summed_count += 1
-      for model, c in parsed.per_model.items():
-        totals[model] = _add(totals.get(model, _zero()), c)
+      for model, c in parsed.delta.items():
+        totals[model] = usage.add(totals.get(model, usage.zero()), c)
 
   print(_format_table(totals, len(commits), summed_count))
   return 0
 
 
 def main(argv: list[str]) -> Optional[int]:
-  parser = Parser(description='aggregate Claude Code token usage across a git commit range')
+  parser = Parser(description='aggregate LLM token usage across a git commit range')
   parser.add_argument(
     'git_range',
     help='git range, e.g. master..HEAD or HEAD~10..HEAD',

@@ -1,3 +1,4 @@
+import os
 from types import SimpleNamespace
 from typing import Any, Optional, cast
 
@@ -5,6 +6,7 @@ import pytest
 from openai.types.responses import Response
 
 import llm.llm
+import usage
 from llm.llms.chat_gpt import ChatGPT, LLMSpec
 from llm.mcp import InProcessMCPServer, Tool, ToolControlSignal, ToolRegistry, wire_name
 from llm.tracker import Tracker
@@ -90,15 +92,18 @@ class _RecordingTracker(Tracker):
     self.ended.append(reason)
 
 
-def _fake_usage(*, input_tokens=10, output_tokens=20, reasoning_tokens=5):
+def _fake_usage(*, input_tokens=10, output_tokens=20, reasoning_tokens=5, cached_tokens=0):
   return SimpleNamespace(
     input_tokens=input_tokens,
     output_tokens=output_tokens,
     output_tokens_details=SimpleNamespace(reasoning_tokens=reasoning_tokens),
+    input_tokens_details=SimpleNamespace(cached_tokens=cached_tokens),
   )
 
 
-def _fake_response(*, output, response_id='resp_1', usage=None, dump_payload=None) -> Response:
+def _fake_response(
+  *, output, response_id='resp_1', usage=None, dump_payload=None, model='gpt-5'
+) -> Response:
   # `output` is the list of duck-typed items _emit_response_steps walks.
   # `dump_payload` becomes the response.model_dump() result captured into
   # the llm_call body — tests can pass a sentinel dict to verify it lands.
@@ -106,6 +111,7 @@ def _fake_response(*, output, response_id='resp_1', usage=None, dump_payload=Non
     id=response_id,
     output=output,
     usage=usage if usage is not None else _fake_usage(),
+    model=model,
   )
   payload = dump_payload if dump_payload is not None else {'id': response_id}
   namespace.model_dump = lambda mode='json': payload
@@ -140,13 +146,17 @@ def _make_chat_gpt_with_tracker(
   *,
   reasoning_effort=None,
   compact_threshold: Optional[int] = None,
+  agent: Optional[str] = None,
 ) -> tuple[ChatGPT, _RecordingTracker, list[dict]]:
   """build a ChatGPT instance with mocked tool registry + tracker + a captured-
   kwargs sink for responses.create. callers wire `gpt.client.responses.create`
   to whatever stub sequence they need.
   """
   gpt = ChatGPT(
-    api_key='dummy', reasoning_effort=reasoning_effort, compact_threshold=compact_threshold
+    api_key='dummy',
+    reasoning_effort=reasoning_effort,
+    compact_threshold=compact_threshold,
+    agent=agent,
   )
   gpt.tools = ToolRegistry(
     [InProcessMCPServer(_TEST_NAMESPACE, tools)] if tools is not None else []
@@ -305,7 +315,7 @@ class TestSendTrackerEmission:
     response = _fake_response(
       output=[_message_item('reply')],
       response_id='resp_xyz',
-      usage=_fake_usage(input_tokens=11, output_tokens=22, reasoning_tokens=33),
+      usage=_fake_usage(input_tokens=11, output_tokens=22, reasoning_tokens=33, cached_tokens=7),
       dump_payload={'id': 'resp_xyz', 'output': ['…']},
     )
     _install_responses(gpt, [response], captured)
@@ -325,6 +335,7 @@ class TestSendTrackerEmission:
       'tokens_in': 11,
       'tokens_out': 22,
       'tokens_reasoning': 33,
+      'tokens_cached': 7,
     }
 
   @pytest.mark.asyncio
@@ -535,6 +546,30 @@ class TestLLMSpec:
     assert fast.reasoning_effort == 'medium'
     assert fast.compact_threshold == 50_000
 
+  @pytest.mark.parametrize('level', ['low', 'medium', 'high', 'xhigh'])
+  def test_with_effort_maps_shared_levels_through(self, level: str):
+    assert LLMSpec().with_effort(level).reasoning_effort == level
+
+  def test_with_effort_caps_max_at_the_provider_top(self):
+    assert LLMSpec().with_effort('max').reasoning_effort == 'xhigh'
+
+  def test_with_effort_rejects_a_level_outside_the_neutral_vocabulary(self):
+    # 'minimal' is a valid reasoning_effort but not a neutral level — with_effort
+    # speaks only the neutral vocabulary
+    with pytest.raises(ValueError, match='unknown effort level'):
+      LLMSpec().with_effort('minimal')
+
+  def test_with_effort_returns_new_spec_preserving_other_knobs(self):
+    spec = LLMSpec(model='gpt-5.4-mini', service_tier='priority')
+    with_effort = spec.with_effort('high')
+    assert with_effort.reasoning_effort == 'high'
+    # original untouched (frozen) and a distinct instance
+    assert spec.reasoning_effort is None
+    assert with_effort is not spec
+    # other fields preserved — composes with fast()'s service_tier
+    assert with_effort.model == 'gpt-5.4-mini'
+    assert with_effort.service_tier == 'priority'
+
   def test_frozen_rejects_mutation(self):
     spec = LLMSpec()
     # frozen dataclass raises FrozenInstanceError, a subclass of AttributeError
@@ -581,3 +616,77 @@ class TestLLMSpec:
       [sys.executable, '-c', script], capture_output=True, text=True, cwd=PROJECT_ROOT
     )
     assert result.returncode == 0, f'stderr: {result.stderr}'
+
+
+class TestUsageAccounting:
+  @pytest.mark.asyncio
+  async def test_cumulative_usage_maps_openai_classes(self):
+    # cached input lands in cache_read, the uncached remainder in input,
+    # cache_write stays 0, output keeps reasoning inside.
+    gpt, _, captured = _make_chat_gpt_with_tracker()
+    response = _fake_response(
+      output=[_message_item('ok')],
+      usage=_fake_usage(input_tokens=100, output_tokens=22, cached_tokens=30),
+    )
+    _install_responses(gpt, [response], captured)
+
+    await gpt.send([{'role': 'user', 'content': 'hi'}])
+
+    assert gpt.cumulative_usage() == {
+      'gpt-5': {'input': 70, 'cache_write': 0, 'cache_read': 30, 'output': 22}
+    }
+
+  @pytest.mark.asyncio
+  async def test_cumulative_usage_sums_across_calls_keyed_by_response_model(self):
+    gpt, _, captured = _make_chat_gpt_with_tracker([_StaticTool('ping')])
+    first = _fake_response(
+      output=[_function_call_item('ping', call_id='c1')],
+      usage=_fake_usage(input_tokens=10, output_tokens=5, cached_tokens=0),
+      model='gpt-5-2025-08-07',
+    )
+    second = _fake_response(
+      output=[_message_item('done')],
+      usage=_fake_usage(input_tokens=40, output_tokens=6, cached_tokens=25),
+      model='gpt-5-2025-08-07',
+    )
+    _install_responses(gpt, [first, second], captured)
+
+    await gpt.send([{'role': 'user', 'content': 'go'}])
+
+    assert gpt.cumulative_usage() == {
+      'gpt-5-2025-08-07': {'input': 25, 'cache_write': 0, 'cache_read': 25, 'output': 11}
+    }
+
+  @pytest.mark.asyncio
+  async def test_agent_publishes_usage_file_after_every_call(self, tmp_path, monkeypatch):
+    pointer = tmp_path / 'usage.json'
+    monkeypatch.setenv(usage.USAGE_FILE_VARIABLE, str(pointer))
+    gpt, _, captured = _make_chat_gpt_with_tracker([_StaticTool('ping')], agent='bro//ppp-dev')
+    first = _fake_response(
+      output=[_function_call_item('ping', call_id='c1')],
+      usage=_fake_usage(input_tokens=10, output_tokens=5, cached_tokens=0),
+    )
+    second = _fake_response(
+      output=[_message_item('done')],
+      usage=_fake_usage(input_tokens=20, output_tokens=7, cached_tokens=4),
+    )
+    _install_responses(gpt, [first, second], captured)
+
+    await gpt.send([{'role': 'user', 'content': 'go'}])
+
+    published = usage.read_usage_file(pointer)
+    assert published.agent == 'bro//ppp-dev'
+    assert published.per_model == {
+      'gpt-5': {'input': 26, 'cache_write': 0, 'cache_read': 4, 'output': 12}
+    }
+
+  @pytest.mark.asyncio
+  async def test_no_agent_publishes_nothing(self, monkeypatch):
+    monkeypatch.delenv(usage.USAGE_FILE_VARIABLE, raising=False)
+    gpt, _, captured = _make_chat_gpt_with_tracker()
+    _install_responses(gpt, [_fake_response(output=[_message_item('ok')])], captured)
+
+    await gpt.send([{'role': 'user', 'content': 'hi'}])
+
+    # publishing is gated on the agent identity; without it no pointer is minted
+    assert usage.USAGE_FILE_VARIABLE not in os.environ

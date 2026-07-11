@@ -17,6 +17,7 @@ FOOTER_MULTI = (
   '> created with Claude Code 2.1.114, 2.1.120 | '
   "Opus 4.8: ↑(0 0 0) ↓1'275'432, Sonnet 4.6: ↑(0 0 0) ↓12'345"
 )
+FOOTER_BRO = '> created with bro//ppp-dev | gpt-5: ↑(70 0 30) ↓22'
 # an old single-number footer (pre four-class redesign) — must no longer parse
 OLD_SINGLE = "> created with Claude Code 2.1.114 | Opus 4.8: 275'432\n> session(s): abc12345"
 # the previous four-class shape (`↑ a / b (c) ↓ d`) — must no longer parse
@@ -66,6 +67,9 @@ class TestParseFooter:
 
   def test_multi_model_output(self):
     assert _parse_footer(FOOTER_MULTI) == {'Opus 4.8': 1275432, 'Sonnet 4.6': 12345}
+
+  def test_bro_agent_footer(self):
+    assert _parse_footer(FOOTER_BRO) == {'gpt-5': 22}
 
   def test_old_single_number_footer_is_not_parsed(self):
     assert _parse_footer(OLD_SINGLE) is None

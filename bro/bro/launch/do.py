@@ -1,4 +1,3 @@
-import re
 from typing import Optional
 
 from bro.bro import BaseBro
@@ -7,28 +6,12 @@ from llm.observer import Observer
 
 __cli_name__ = 'ask'
 
-_SKILL_INVOCATION = re.compile(r'^/([a-zA-Z][\w-]*)(?:\s+(.*))?\Z', re.DOTALL)
-
-
-def expand_skill_invocation(bro: BaseBro, what: str) -> str:
-  # `/<skill-name> <args>` in input → swap in the skill's markdown body and
-  # surface the rest as `ARGUMENTS:`. Same shape Claude Code uses for slash
-  # commands, so a body authored for either surface works on both. Unknown
-  # `/<name>` raises KeyError (with the available-skill list) from
-  # bro.get_skill_body — the CLIs (`ask`/`do-task` here, `call` for its initial
-  # message) catch it.
-  match = _SKILL_INVOCATION.match(what)
-  if match is None:
-    return what
-  name, args = match.group(1), match.group(2)
-  body = bro.get_skill_body(name)
-  if args is None or len(args.strip()) == 0:
-    return body
-  return f'{body}\n\nARGUMENTS: {args.strip()}'
-
 
 async def do(bro: BaseBro, what: str, observer: Optional[Observer] = None) -> str:
-  return await bro.run(expand_skill_invocation(bro, what), observer=observer)
+  # input passes through verbatim, `/skill` invocations included: the bro's
+  # system prompt describes the /-syntax and the model loads the body itself
+  # via the `bro::skill` tool (an unknown name fails there and the bro raises).
+  return await bro.run(what, observer=observer)
 
 
 def main(argv: list[str]) -> Optional[int]:

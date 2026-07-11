@@ -15,7 +15,6 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Optional
 
 import base.args
-from base import credentials
 
 if TYPE_CHECKING:
   from mcp.server.lowlevel import Server
@@ -51,15 +50,14 @@ def _resolve_servers(spec: str) -> list['MCPServer']:
 
 
 async def _server_tools(server: 'MCPServer') -> list[tuple['Tool', str]]:
-  # (tool, description) pairs, with `has_cred` blocks in each description resolved
+  # (tool, description) pairs, with credential directives in each description resolved
   # against live credential availability — the serving-side counterpart of the
   # rendering the bro-LLM assembling layer does (llm.mcp `_NamespacedTool`).
-  from llm.mcp import render_has_cred
+  from llm.mcp import render_text
 
   declared = set(server.needed_secrets) | set(server.optional_secrets)
   return [
-    (tool, render_has_cred(tool.description, credentials.available, declared))
-    for tool in await server.list_tools()
+    (tool, render_text(tool.description, creds=declared)) for tool in await server.list_tools()
   ]
 
 

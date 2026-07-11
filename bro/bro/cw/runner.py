@@ -23,7 +23,7 @@ from cw.bro import _populate_bro_skills
 from cw.broxy import _start_session_broxy
 from cw.claude_argv import build_claude_launch
 from cw.claude_config import _provision_host_claude_dir
-from cw.constants import _BRO_GIT_EMAIL, _BRO_GIT_NAME
+from cw.constants import bro_git_identity_env
 from cw.git import git_out
 from cw.mcp import _SessionMCPServer, _start_session_mcp_server
 from cw.paths import _claude_projects_dir, _in_container, _latest_jsonl, _project_root
@@ -118,11 +118,7 @@ def run_in_place(spec: 'SessionSpec') -> int:
     log.info('resuming session %s', latest.stem)
     claude_args = ['--resume', latest.stem, *claude_args]
 
-  if spec.auto:
-    os.environ['GIT_AUTHOR_NAME'] = _BRO_GIT_NAME
-    os.environ['GIT_AUTHOR_EMAIL'] = _BRO_GIT_EMAIL
-    os.environ['GIT_COMMITTER_NAME'] = _BRO_GIT_NAME
-    os.environ['GIT_COMMITTER_EMAIL'] = _BRO_GIT_EMAIL
+  os.environ.update(bro_git_identity_env())
 
   if spec.bro is not None:
     # CW_BRO themes the session (banner, statusLine); a native themed session

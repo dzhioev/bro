@@ -12,9 +12,9 @@ cache-read lives in the full footer, not here). Commits with no parseable footer
 render `—`.
 
 Repo-local — wired by setup/setup_repo.sh via `git config --local alias.golc`.
-The footer format is owned by setup/claude_commit_footer.py; the small parser
-here is a duplicate of usage_report.py's (sharing would require making setup/ a
-Python package, which is out of scope).
+The footer format is owned by the root usage module; the small parser here is a
+deliberate dependency-free duplicate so `git golc` works without the project
+venv active.
 """
 
 from __future__ import annotations
@@ -26,9 +26,10 @@ import subprocess
 import sys
 from typing import Optional
 
-# footer parser (owned by setup/claude_commit_footer.py)
+# footer parser (format owned by the root usage module); the agents part is a
+# surface identity list — 'Claude Code <version>' or a bro name like 'ppp-dev'
 _FOOTER_RE = re.compile(
-  r'^>\s*created with Claude Code\s+(?P<versions>.+?)\s*\|\s*(?P<tokens>.+?)\s*$',
+  r'^>\s*created with\s+(?P<agents>.+?)\s*\|\s*(?P<tokens>.+?)\s*$',
   re.MULTILINE,
 )
 _PART_RE = re.compile(

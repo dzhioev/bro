@@ -2,10 +2,14 @@ import asyncio
 import json
 import sys
 import types
-from typing import ClassVar, Optional
+from pathlib import Path
+from typing import ClassVar, Optional, get_args
 
 import pytest
 
+import bro.bro
+import llm.mcp
+from base import credentials
 from bro.bro import BaseBro, BroRaised, set_default_tracker_factory
 from bro.bros.ppp_dev import PPPDev
 from bro.datasources.searchable import Hit, SearchableDataSource
@@ -461,7 +465,7 @@ class _StubSource(SearchableDataSource):
 
 class _MarkerSource(SearchableDataSource):
   name = 'marker'
-  summary = 'base{{#has_cred openai}} query summary on{{else}} no key{{/has_cred}}'
+  summary = 'base{{if openai ∈ #creds}} query summary on{{else}} no key{{endif}}'
 
   async def search(self, query: str, limit: int = 5) -> list[Hit]:
     return []
@@ -507,7 +511,7 @@ class TestBroDataSources:
     # canonical `::` in the data-source block, resolved by the tool-names rule
     assert 'wikipedia-source::search' in bro.system_prompt
 
-  def test_summary_has_cred_rendered_present(self, monkeypatch):
+  def test_summary_cred_directive_rendered_present(self, monkeypatch):
     from base import credentials
 
     monkeypatch.setattr(credentials, 'available', lambda name: True)
@@ -525,7 +529,7 @@ class TestBroDataSources:
     assert 'no key' not in prompt
     assert '{{' not in prompt  # markers fully resolved, never leak raw
 
-  def test_summary_has_cred_rendered_absent(self, monkeypatch):
+  def test_summary_cred_directive_rendered_absent(self, monkeypatch):
     from base import credentials
 
     monkeypatch.setattr(credentials, 'available', lambda name: False)
@@ -554,7 +558,7 @@ class TestToolNamesBlock:
         super().__init__(system_prompt='base')
 
     prompt = ToolBro().system_prompt
-    assert '## Tool names' in prompt
+    assert '# Tool names' in prompt
     assert '`namespace::tool`' in prompt
     assert '`namespace__tool`' in prompt
     # generic wording: nothing about a repo/codebase (reaches repo-unaware bros)
@@ -569,7 +573,7 @@ class TestToolNamesBlock:
         super().__init__(system_prompt='base')
 
     bro = BareBro()
-    assert '## Tool names' not in bro.system_prompt
+    assert '# Tool names' not in bro.system_prompt
     # without a tool-names block the two flavors have nothing to differ on
     assert bro.claude_system_prompt == bro.system_prompt
 
@@ -587,7 +591,7 @@ class TestToolNamesBlock:
     assert '`mcp__namespace__tool`' not in bro.system_prompt
     assert '`namespace__tool`' in bro.system_prompt
     # everything but the tool-names rule is shared between the flavors
-    assert bro.claude_system_prompt.startswith(bro.system_prompt.split('## Tool names')[0])
+    assert bro.claude_system_prompt.startswith(bro.system_prompt.split('# Tool names')[0])
 
   @pytest.mark.asyncio
   async def test_data_source_search_and_fetch_calls(self):
@@ -916,6 +920,9 @@ class TestRaise:
     assert '`raise`' in prompt
     assert 'unclear' in prompt
     assert bro.system_prompt in prompt
+    # the launch-time session-mode fragment rides along with the note
+    assert '# Autonomous session' in prompt
+    assert '# Manual session' not in prompt
 
   @pytest.mark.asyncio
   async def test_raise_tool_description_covers_unclear_input(self):
@@ -930,6 +937,9 @@ class TestRaise:
     assert 'interactive mode' in prompt
     assert 'clarifying question' in prompt
     assert bro.system_prompt in prompt
+    # the launch-time session-mode fragment rides along with the note
+    assert '# Manual session' in prompt
+    assert '# Autonomous session' not in prompt
 
 
 class TestSummonTool:
@@ -1172,6 +1182,30 @@ class TestSkillsDiscovery:
     assert 'skill' in names
     assert 'raise' not in names
 
+  @pytest.mark.asyncio
+  async def test_claude_bro_skill_tool_serves_bro_branch(self, fake_packages):
+    # a `--bro` session runs `--bare`: no claude built-ins, so its work goes
+    # through the bro toolset — the mounted skill tool must serve the bro
+    # procedures, not the claude ones.
+    body = '{{if #harness = bro}}BRO WAY{{else}}CLAUDE WAY{{endif}}'
+    package = fake_packages('_skills_bro_branch', {'watch': _skill('watch', body)})
+
+    class SkillBro(BaseBro):
+      name = 'sbb'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    SkillBro.__module__ = package
+    skill_tool = None
+    for server in SkillBro().claude_bro_mcp_servers():
+      for tool in await server.list_tools():
+        if tool.name == 'skill':
+          skill_tool = tool
+    assert skill_tool is not None
+    assert await skill_tool.call({'name': 'watch'}) == 'BRO WAY'
+
   def test_claude_bro_servers_omit_skill_without_skills(self, fake_packages):
     package = fake_packages('_skills_claude_empty')
 
@@ -1253,7 +1287,7 @@ class TestGetSkillBody:
         super().__init__(system_prompt='')
 
     B.__module__ = package
-    body = B().get_skill_body('thing')
+    body = B().get_skill_body('thing', harness='bro', wire='bare')
     assert body.startswith('# Head')
     assert 'the body' in body
     assert 'description' not in body
@@ -1270,7 +1304,7 @@ class TestGetSkillBody:
         super().__init__(system_prompt='')
 
     B.__module__ = package
-    assert B().get_skill_body('plain') == 'just text'
+    assert B().get_skill_body('plain', harness='bro', wire='bare') == 'just text'
 
   def test_raises_on_unknown_name(self, fake_packages):
     package = fake_packages('_get_body_unknown', {'known': _skill()})
@@ -1284,10 +1318,55 @@ class TestGetSkillBody:
 
     B.__module__ = package
     with pytest.raises(KeyError) as exception:
-      B().get_skill_body('missing')
+      B().get_skill_body('missing', harness='bro', wire='bare')
     msg = str(exception.value)
     assert 'missing' in msg
     assert 'known' in msg
+
+  def test_renders_harness_blocks_per_harness(self, fake_packages):
+    body = 'always {{if #harness = bro}}BRO WAY{{else}}CLAUDE WAY{{endif}}'
+    package = fake_packages('_get_body_harness', {'watch': _skill('watch', body)})
+
+    class B(BaseBro):
+      name = 'b'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    B.__module__ = package
+    claude_body = B().get_skill_body('watch', harness='claude', wire='mcp')
+    assert claude_body == 'always CLAUDE WAY'
+    bro_body = B().get_skill_body('watch', harness='bro', wire='bare')
+    assert bro_body == 'always BRO WAY'
+
+  def test_unknown_harness_block_raises_on_load(self, fake_packages):
+    body = '{{if #harness = claud}}typo{{endif}}'
+    package = fake_packages('_get_body_bad_harness', {'bad': _skill('bad', body)})
+
+    class B(BaseBro):
+      name = 'b'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    B.__module__ = package
+    with pytest.raises(ValueError, match='claud'):
+      B().get_skill_body('bad', harness='claude', wire='mcp')
+
+
+class TestCheckedInSkillFiles:
+  def test_every_skill_renders_under_both_harnesses(self):
+    # a malformed harness directive in a checked-in skill would otherwise
+    # surface only when a session loads that skill.
+    skill_files = sorted((Path(bro.bro.__file__).parent / 'bros').glob('*/skills/*.md'))
+    assert len(skill_files) > 0
+    for path in skill_files:
+      _, body = bro.bro._load_skill(path.stem, path)
+      for harness in get_args(llm.mcp.Harness):
+        for wire in get_args(llm.mcp.Wire):
+          llm.mcp.render_text(body, harness=harness, wire=wire, creds=credentials.known_names())
 
 
 class TestSkillDescriptions:
@@ -1344,6 +1423,10 @@ class TestSkillsInSystemPrompt:
     assert '## Available skills' in prompt
     assert '**foo** — do foo thing' in prompt
     assert '`bro::skill` tool' in prompt
+    # the /-syntax is taught here — the ask/do-task/call CLIs pass `/skill args`
+    # input through verbatim, and without the description the model has no way
+    # to bind a leading `/<name>` to the skill of that name
+    assert 'starting with `/<name>`' in prompt
 
   def test_section_omitted_without_skills(self, fake_packages):
     package = fake_packages('_prompt_no')
@@ -1562,3 +1645,21 @@ class TestPersona:
 
   def test_persona_honors_explicit_override(self):
     assert EchoBro().persona == 'you echo'
+
+
+class TestAgentIdentity:
+  def test_agent_namespaces_the_bro_name(self):
+    assert EchoBro().agent == 'bro//echo'
+
+  def test_create_llm_threads_the_agent_identity(self):
+    from llm.llms.echo import LLMSpec as EchoSpec
+
+    class PlainBro(BaseBro):
+      name = 'plain'
+      description = 'd'
+      llm_spec = EchoSpec()
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    assert PlainBro()._create_llm(interactive=False).agent == 'bro//plain'

@@ -1,6 +1,5 @@
-from base import credentials
 from bro.bro import BaseBro
-from llm.mcp import MCPServerSpec, render_has_cred
+from llm.mcp import MCPServerSpec, render_text
 
 
 async def format_card(bro: BaseBro, *, include_system_prompt: bool = False) -> str:
@@ -11,7 +10,7 @@ async def format_card(bro: BaseBro, *, include_system_prompt: bool = False) -> s
     parts.extend(['', '## Data sources', ''])
     for ds in bro.data_sources:
       declared = set(ds.needed_secrets) | set(ds.optional_secrets)
-      summary = render_has_cred(ds.summary, credentials.available, declared)
+      summary = render_text(ds.summary, creds=declared)
       parts.append(f'- **{ds.name}** — {summary}')
 
   if len(bro._mcp_specs) > 0:

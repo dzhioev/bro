@@ -5,6 +5,7 @@ from base.text_window import (
   _marker,
   apply_limit,
   numbered_window,
+  take_head,
 )
 
 # ─── apply_limit / _marker / _clamp ──────────────────────────────────────────
@@ -96,6 +97,42 @@ def test_marker_collapses_to_note_when_nothing_skipped():
   # clamp note fires even when nothing was actually dropped — bare "skipped X: 0"
   # would read broken, so the marker collapses to just the note.
   assert _marker('after', 0, 0, note='limit 9 clamped to 8') == '[...limit 9 clamped to 8...]'
+
+
+# ─── take_head ───────────────────────────────────────────────────────────────
+
+
+def test_take_head_returns_whole_content_within_budget():
+  kept, clamp_note = take_head('a\nb\nc\n', limit=10)
+  assert kept == 'a\nb\nc\n'
+  assert clamp_note == ''
+
+
+def test_take_head_keeps_whole_lines_up_to_limit():
+  content = ''.join(f'L{i}\n' for i in range(10))
+  kept, _ = take_head(content, limit=3)
+  assert kept == 'L0\nL1\nL2\n'
+  # the caller paginates: the remainder is exactly what a cursor advance exposes next
+  assert content[len(kept) :].startswith('L3\n')
+
+
+def test_take_head_cuts_giant_first_line_mid_line():
+  content = 'x' * 1000 + '\n'
+  kept, _ = take_head(content, limit=1)  # byte budget = 150
+  assert kept == 'x' * 150
+  # successive calls over the remainder still make progress
+  rest, _ = take_head(content[len(kept) :], limit=1)
+  assert rest == 'x' * 150
+
+
+def test_take_head_clamps_and_reports():
+  kept, clamp_note = take_head('a\n', limit=MAX_LIMIT + 5)
+  assert kept == 'a\n'
+  assert clamp_note == f'limit {MAX_LIMIT + 5:,} clamped to {MAX_LIMIT:,}'
+
+
+def test_take_head_empty_content():
+  assert take_head('', limit=10) == ('', '')
 
 
 # ─── numbered_window ─────────────────────────────────────────────────────────

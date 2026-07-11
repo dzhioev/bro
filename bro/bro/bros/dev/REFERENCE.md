@@ -1,11 +1,11 @@
 # dev tools reference
 
-Shared behaviour for the dev MCP server tools (`read_file`, `write_file`, `edit_file`, `bash`, `grep`, `glob`, `read_reference`).
+Shared behaviour for the dev MCP server tools (`read_file`, `write_file`, `edit_file`, `bash`, `grep`, `glob`, `job`, `watch`, `kill`, `read_reference`).
 Per-tool descriptions are intentionally terse and point here for the shared rules.
 
 ## Output cap (`limit`)
 
-Tools that return variable-length output (`read_file`, `grep`, `glob`, `bash`) take a `limit: int` parameter.
+Tools that return variable-length output (`read_file`, `grep`, `glob`, `bash`, `watch`) take a `limit: int` parameter.
 
 - **Default**: 100 lines / ~15 KB. Fits most useful results without wasting tokens.
 - **Maximum**: 2,000 lines / ~300 KB. Larger values are silently clamped.
@@ -54,3 +54,21 @@ If nothing was actually dropped, the marker collapses to just:
 ```
 [...limit 50,000 clamped to 2,000...]
 ```
+
+## Background jobs (`job`, `watch`, `kill`)
+
+For long processes that outlive a `bash` call's timeout — test suites, PR watchers — run them as background jobs and read them iteratively.
+
+`job(command)` starts `command` in the background (`bash -c`, stdout+stderr merged into one chronological stream) and returns a job id immediately. The stream spools continuously — a reader drains the pipe, so the job never blocks on unread output — and the record survives exit, so re-checks are repeatable. Jobs have no timeout; they run until they exit or are killed.
+
+`watch(job_id, wait_seconds, limit, tail)` reads the job. Every return opens with a state line — `running` or `exited (code N)`. Two modes read through one per-job cursor, picked per call:
+
+- **Incremental** (default): oldest-first pagination from the cursor. Pending output → returns immediately with the oldest `limit` lines; the cursor advances only past what was returned, and a `[...pending: N lines / X KB...]` marker announces the remainder — repeat `watch` to drain, nothing is dropped. Nothing pending and the job unfinished → blocks up to `wait_seconds` for new output or exit; a quiet window returns a bare state line as a heartbeat. Exited and fully drained → returns immediately.
+
+- **Tail** (`tail=true`): for run-to-completion jobs. Wakes only on exit or the window's end, jumps the cursor to the spool end, and returns the last `limit` lines of the jumped-over section with a `[...skipped before...]` marker for its discarded middle — on exit the final diagnostics, on timeout a progress glimpse.
+
+`wait_seconds` defaults to 10; `0` is a non-blocking poll. There is no upper bound — an iterative watcher (e.g. a PR watch loop) passes a large window explicitly and handles each return as one iteration.
+
+`watch` is exclusive per job: the call holds the job's watch lock for its whole wait, and a second concurrent `watch` on the same job fails immediately with the reason. Watches on different jobs run concurrently.
+
+`kill(job_id)` terminates the job's whole process group — SIGTERM, escalating to SIGKILL after a 5s grace. It takes no lock: the exit it forces wakes a blocked `watch`. The record and spool stay readable afterwards for a final collect. Any jobs still running when the server process exits are group-killed.

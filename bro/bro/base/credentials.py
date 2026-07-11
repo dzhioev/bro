@@ -214,8 +214,12 @@ class Store:
 
   def available(self, name: str) -> bool:
     """whether `name` resolves in this store. the predicate behind both the
-    runtime capability gate and the `has_cred` description renderer."""
+    runtime capability gate and the credential template directives (llm/mcp.py)."""
     return self.try_get(name) is not None
+
+  def known_names(self) -> frozenset[str]:
+    """every secret name this store's registry knows, resolvable or not."""
+    return frozenset(self._registry)
 
   def get_json(self, name: str) -> dict:
     """resolve a secret and parse it as a json object. raises if the text isn't
@@ -340,6 +344,11 @@ def get_json(name: str) -> dict:
 def available(name: str) -> bool:
   """whether `name` resolves in the process-wide default store, without raising."""
   return default_store().available(name)
+
+
+def known_names() -> frozenset[str]:
+  """every secret name the process-wide default store's registry knows."""
+  return default_store().known_names()
 
 
 def build_scoped_store(names: Iterable[str], *, optional: Iterable[str] = ()) -> dict[str, bytes]:

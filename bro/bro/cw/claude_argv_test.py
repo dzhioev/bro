@@ -135,10 +135,19 @@ class TestBroLaunch:
     launch = self._launch()
     argv = launch.argv
     prompt = argv[argv.index('--system-prompt') + 1]
-    assert prompt == create_bro('pm').claude_system_prompt
+    assert prompt.startswith(create_bro('pm').claude_system_prompt)
     assert launch.system_prompt == prompt
     # the flavor whose tool-name rule matches the mcp__<namespace>__<tool> mounts
     assert '`mcp__namespace__tool`' in prompt
+
+  def test_mode_fragment_follows_auto(self):
+    manual = self._launch().system_prompt
+    assert '# Manual session' in manual
+    assert '# Autonomous session' not in manual
+    auto = self._launch(auto=True)
+    assert '# Autonomous session' in auto.system_prompt
+    assert 'Land mode: PR' in auto.system_prompt
+    assert '--dangerously-skip-permissions' in auto.argv
 
   def test_without_endpoint_raises(self):
     with pytest.raises(ValueError, match='session-local MCP endpoint'):
