@@ -1,10 +1,11 @@
 #!/usr/bin/env -S bash -e
 
-TMUX_VERSION="3.7b"
+SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+source "$SCRIPT_DIR/../versions.sh"
+
 TMUX_TARBALL="tmux-${TMUX_VERSION}.tar.gz"
 TMUX_URL="https://github.com/tmux/tmux/releases/download/${TMUX_VERSION}/${TMUX_TARBALL}"
 
-SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 BUILD_DIR="${SCRIPT_DIR}/.tmux_build"
 PREFIX="${HOME}/.local"
 

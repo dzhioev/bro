@@ -1,7 +1,24 @@
 #!/usr/bin/env -S bash -e
 
+# compares versions of the form N.N[letter]... (3.7 < 3.7a < 3.7b < 3.8)
 version_gte() {
-  python -c "exit(0 if tuple(map(int, '$1'.split('.'))) >= tuple(map(int, '$2'.split('.'))) else 1)"
+  python3 - "$1" "$2" <<'EOF'
+import re
+import sys
+
+
+def parse(version):
+  components = []
+  for component in version.split('.'):
+    match = re.fullmatch(r'(\d+)([a-z]?)', component)
+    if match is None:
+      sys.exit(f'unparseable version: {version!r}')
+    components.append((int(match.group(1)), match.group(2)))
+  return components
+
+
+sys.exit(0 if parse(sys.argv[1]) >= parse(sys.argv[2]) else 1)
+EOF
 }
 
 detect_platform() {
@@ -37,8 +54,7 @@ fi
 echo "Setting up dev environment on ${PLATFORM}"
 
 SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
-STOW_MIN_VERSION="2.4.0"
-TMUX_MIN_VERSION="3.5"
+source "$SCRIPT_DIR/versions.sh"
 
 check_brew() {
   if ! command -v brew &> /dev/null; then
@@ -52,12 +68,13 @@ check_stow_version() {
   if ! command -v stow &> /dev/null; then
     return 1
   fi
-  STOW_VERSION=$(stow --version | head -n1 | awk '{print $NF}')
-  if ! version_gte "$STOW_VERSION" "$STOW_MIN_VERSION"; then
-    echo "stow version $STOW_VERSION is lower than required $STOW_MIN_VERSION"
+  local installed_version
+  installed_version=$(stow --version | head -n1 | awk '{print $NF}')
+  if ! version_gte "$installed_version" "$STOW_VERSION"; then
+    echo "stow version $installed_version is older than pinned $STOW_VERSION"
     return 1
   fi
-  echo "stow version: $STOW_VERSION"
+  echo "stow version: $installed_version"
   return 0
 }
 
@@ -66,12 +83,16 @@ install_stow() {
     return
   fi
 
-  echo "Installing stow..."
+  echo "Installing stow ${STOW_VERSION}"
   if [ "$PLATFORM" = "macOS" ]; then
     check_brew
     brew install stow
   else
     "$SCRIPT_DIR/ubuntu/install_stow.sh"
+  fi
+  if ! check_stow_version; then
+    echo "stow is still older than pinned ${STOW_VERSION} after install" >&2
+    exit 1
   fi
 }
 
@@ -79,13 +100,13 @@ check_tmux_version() {
   if ! command -v tmux &> /dev/null; then
     return 1
   fi
-  # strip the patch-letter suffix (3.5a -> 3.5) for the numeric comparison
-  TMUX_VERSION=$(tmux -V | awk '{print $2}' | sed 's/[a-z]*$//')
-  if ! version_gte "$TMUX_VERSION" "$TMUX_MIN_VERSION"; then
-    echo "tmux version $TMUX_VERSION is lower than required $TMUX_MIN_VERSION"
+  local installed_version
+  installed_version=$(tmux -V | awk '{print $2}')
+  if ! version_gte "$installed_version" "$TMUX_VERSION"; then
+    echo "tmux version $installed_version is older than pinned $TMUX_VERSION"
     return 1
   fi
-  echo "tmux version: $TMUX_VERSION"
+  echo "tmux version: $installed_version"
   return 0
 }
 
@@ -94,12 +115,16 @@ install_tmux() {
     return
   fi
 
-  echo "Installing tmux"
+  echo "Installing tmux ${TMUX_VERSION}"
   if [ "$PLATFORM" = "macOS" ]; then
     check_brew
     brew install tmux
   else
     "$SCRIPT_DIR/ubuntu/install_tmux.sh"
+  fi
+  if ! check_tmux_version; then
+    echo "tmux is still older than pinned ${TMUX_VERSION} after install" >&2
+    exit 1
   fi
 }
 

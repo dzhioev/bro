@@ -1,13 +1,14 @@
 #!/usr/bin/env -S bash -e
 
-STOW_VERSION="2.4.1-2"
-STOW_DEB="stow_${STOW_VERSION}_all.deb"
+SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+source "$SCRIPT_DIR/../versions.sh"
+
+STOW_DEB="stow_${STOW_DEB_VERSION}_all.deb"
 MIRROR="http://mirrors.kernel.org/ubuntu/pool/universe/s/stow"
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DOWNLOAD_DIR="${SCRIPT_DIR}/.stow_download"
 
-echo "Installing stow ${STOW_VERSION} from Ubuntu repository..."
+echo "Installing stow ${STOW_DEB_VERSION} from Ubuntu repository..."
 
 rm -rf "$DOWNLOAD_DIR"
 mkdir -p "$DOWNLOAD_DIR"
@@ -19,4 +20,4 @@ sudo dpkg -i "$STOW_DEB"
 cd "$SCRIPT_DIR"
 rm -rf "$DOWNLOAD_DIR"
 
-echo "stow ${STOW_VERSION} installed successfully"
+echo "stow ${STOW_DEB_VERSION} installed successfully"

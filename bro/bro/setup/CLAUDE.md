@@ -22,6 +22,7 @@ Worktrees get their own `.venv`. `cw` (host mode) creates the worktree and runs 
 ## Files
 
 - `setup_env.sh` — installs system tools (stow, tmux, claude-code, docker via colima on macOS, awscli, uv). macOS and Ubuntu only
+- `versions.sh` — single source of truth for the pinned system-tool versions (tmux, stow), sourced by both `setup_env.sh`'s version checks and the `ubuntu/` installers' build targets
 - `setup_repo.sh` — host repo setup: calls `provision_repo.sh`, then runs the `~/.ppp` presence check
 - `provision_repo.sh` — the shared, idempotent "provision a checked-out repo" step: `uv sync` (skipped when the venv is already current) + regenerates the `_entrypoints.py` console-script bridge (skipped when `CW_VENV_BAKED=1`, i.e. the container reused the image's baked venv whose bridge already matches) + installs the `post-commit` git hook + registers the repo-local `git golc` alias. Called by all three surfaces that need a provisioned repo — `setup_repo.sh` (host main repo), `cw` host mode (host worktrees), and the container entrypoint. Tree creation (clone / worktree) and surface-specific wiring (credentials) stay with the callers
 - `bootstrap_session_log.sh` — one-time IAM/SSM setup for session-log sync (creates `cw-session-log-sync` IAM user + key, writes `~/.ppp/session_log.json`). Run once after deploying `SessionLogStack`
