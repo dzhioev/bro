@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 import cw.claude_config
@@ -153,6 +155,15 @@ class TestDockerCreateArgv:
     # `docker create -it --rm` is the unstarted half of `docker run -it --rm`;
     # run_in_container pairs it with `docker start -a -i`.
     assert build_argv()[:4] == ['docker', 'create', '-it', '--rm']
+
+  def test_settings_preaccept_the_bypass_permissions_dialog(self, build_argv, tmp_path):
+    # the container workspace is an isolated clone, so --dangerously-skip-permissions
+    # needs no interactive acknowledgement (container sessions only — the host
+    # provision keeps the dialog, see claude_config_test)
+    build_argv()
+    settings_file = tmp_path / '.claude' / 'cw-sessions' / 'ws' / 'settings.json'
+    settings = json.loads(settings_file.read_text())
+    assert settings['skipDangerousModePermissionPrompt'] is True
 
   def test_docker_sock_mounted_by_default(self, build_argv):
     assert '/var/run/docker.sock:/var/run/docker.sock' in build_argv()

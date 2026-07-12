@@ -16,8 +16,9 @@ from typing import Optional
 
 from cw.paths import _encode_claude_path, _session_claude_dir
 
-# the session ~/.claude/settings.json: UX prefs only, written fresh each launch;
-# the repo's own .claude/settings.json layers on top.
+# the shared base of the session ~/.claude/settings.json, written fresh each
+# launch by _write_session_settings: UX prefs only; the repo's own
+# .claude/settings.json layers on top.
 _SESSION_SETTINGS_JSON: dict = {
   'spinnerVerbs': {'mode': 'replace', 'verbs': ['Thinking']},
   'spinnerTipsEnabled': False,
@@ -49,6 +50,13 @@ _SESSION_CLAUDE_JSON: dict = {
 # in (the OAuth bearer itself arrives via CLAUDE_CODE_OAUTH_TOKEN; these hold the
 # matching account metadata claude renders the logged-in account from).
 _CLAUDE_JSON_IDENTITY_KEYS = ('oauthAccount', 'userID')
+
+
+def _write_session_settings(claude_dir: Path, *, container: bool) -> None:
+  settings = dict(_SESSION_SETTINGS_JSON)
+  if container:
+    settings['skipDangerousModePermissionPrompt'] = True
+  (claude_dir / 'settings.json').write_text(json.dumps(settings))
 
 
 def _seed_claude_json(
@@ -135,7 +143,7 @@ def _provision_host_claude_dir(name: str, worktree: Path, project: Path) -> Path
   _seed_claude_json(
     claude_dir, Path.home() / '.claude.json', install_method=None, trusted_paths=trusted_paths
   )
-  (claude_dir / 'settings.json').write_text(json.dumps(_SESSION_SETTINGS_JSON))
+  _write_session_settings(claude_dir, container=False)
   _seed_host_plugins(claude_dir)
   _migrate_legacy_transcripts(claude_dir, worktree)
   return claude_dir

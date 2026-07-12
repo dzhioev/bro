@@ -1,5 +1,4 @@
 import hashlib
-import json
 import os
 import subprocess
 from collections.abc import Mapping
@@ -7,7 +6,7 @@ from pathlib import Path
 from typing import Optional
 
 from base import log
-from cw.claude_config import _SESSION_SETTINGS_JSON, _seed_claude_json
+from cw.claude_config import _seed_claude_json, _write_session_settings
 from cw.paths import _project_root, _session_claude_dir
 
 CONTAINER_DIR = Path(__file__).resolve().parent.parent / 'setup' / 'container'
@@ -212,7 +211,7 @@ def _docker_create_argv(
   claude_json = _seed_claude_json(
     claude_dir, home / '.claude.json', install_method='global', trusted_paths=['/workspace']
   )
-  (claude_dir / 'settings.json').write_text(json.dumps(_SESSION_SETTINGS_JSON))
+  _write_session_settings(claude_dir, container=True)
   argv = ['docker', 'create']
   if tty:
     argv.append('-it')

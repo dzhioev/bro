@@ -115,6 +115,13 @@ class TestProvisionHostClaudeDir:
     assert not (claude_dir / '.credentials.json').exists()
     assert not (claude_dir / 'CLAUDE.md').exists()
 
+  def test_settings_do_not_preaccept_the_bypass_permissions_dialog(self, home):
+    # only container sessions pre-accept it; on a host worktree
+    # --dangerously-skip-permissions can touch the host, so the dialog stays
+    claude_dir, _ = self._provision(home)
+    settings = json.loads((claude_dir / 'settings.json').read_text())
+    assert 'skipDangerousModePermissionPrompt' not in settings
+
   def test_settings_rewritten_each_provision(self, home):
     claude_dir, _ = self._provision(home)
     (claude_dir / 'settings.json').write_text('{"stale": true}')
