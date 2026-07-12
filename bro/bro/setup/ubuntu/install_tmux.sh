@@ -1,6 +1,6 @@
 #!/usr/bin/env -S bash -e
 
-TMUX_VERSION="3.5a"
+TMUX_VERSION="3.7b"
 TMUX_TARBALL="tmux-${TMUX_VERSION}.tar.gz"
 TMUX_URL="https://github.com/tmux/tmux/releases/download/${TMUX_VERSION}/${TMUX_TARBALL}"
 
