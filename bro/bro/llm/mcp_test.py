@@ -5,6 +5,7 @@ from typing import Annotated, Optional
 import pytest
 from pydantic import Field, ValidationError
 
+from base.condition import ConditionError, when
 from llm import mcp as mcp_mod
 from llm.mcp import (
   FunctionTool,
@@ -15,6 +16,7 @@ from llm.mcp import (
   namespaced_tools,
   render_return_shape,
   render_text,
+  select,
   validated_callable,
   wire_name,
 )
@@ -425,28 +427,26 @@ class TestToolRegistry:
 
 class TestRenderText:
   def test_harness_branches(self):
-    text = (
-      'watch: {{if #harness = bro}}job/watch{{else}}{{assert #harness = claude}}Monitor{{endif}}'
-    )
+    text = 'watch: {{iff #harness = bro}}job/watch{{eliff #harness = claude}}Monitor{{end}}'
     assert render_text(text, harness='bro') == 'watch: job/watch'
     assert render_text(text, harness='claude') == 'watch: Monitor'
 
   def test_wire_branches(self):
-    text = 'call {{if #wire = bare}}ns__tool{{else}}{{assert #wire = mcp}}mcp__ns__tool{{endif}}'
+    text = 'call {{iff #wire = bare}}ns__tool{{eliff #wire = mcp}}mcp__ns__tool{{end}}'
     assert render_text(text, wire='bare') == 'call ns__tool'
     assert render_text(text, wire='mcp') == 'call mcp__ns__tool'
 
   def test_creds_membership_probes_availability(self, monkeypatch):
     monkeypatch.setattr(mcp_mod.credentials, 'available', lambda name: name == 'openai')
-    text = '{{if openai ∈ #creds}}summarized{{else}}raw{{endif}}'
+    text = '{{iff #creds contains openai}}summarized{{else}}raw{{end}}'
     assert render_text(text, creds=['openai']) == 'summarized'
-    text = '{{if github ∈ #creds}}push{{else}}no push{{endif}}'
+    text = '{{iff #creds contains github}}push{{else}}no push{{end}}'
     assert render_text(text, creds=['openai', 'github']) == 'no push'
 
   def test_creds_outside_universe_raises(self, monkeypatch):
     monkeypatch.setattr(mcp_mod.credentials, 'available', lambda name: True)
     with pytest.raises(ValueError, match='universe'):
-      render_text('{{if typo ∈ #creds}}x{{endif}}', creds=['openai'])
+      render_text('{{iff #creds contains typo}}x{{else}}y{{end}}', creds=['openai'])
 
   def test_creds_probed_lazily(self, monkeypatch):
     # only the tested name resolves — a large universe costs nothing extra.
@@ -457,15 +457,15 @@ class TestRenderText:
       return True
 
     monkeypatch.setattr(mcp_mod.credentials, 'available', available)
-    render_text('{{if openai ∈ #creds}}x{{endif}}', creds=['openai', 'github', 'notion'])
+    render_text('{{when #creds contains openai}}x{{end}}', creds=['openai', 'github', 'notion'])
     assert probed == ['openai']
 
   def test_absent_fact_raises_on_reference(self):
     with pytest.raises(ValueError, match='unknown variable #wire'):
-      render_text('{{if #wire = bare}}x{{endif}}', harness='bro')
+      render_text('{{when #wire = bare}}x{{end}}', harness='bro')
 
   def test_facts_combine(self):
-    text = '{{if #harness = bro}}B{{endif}}{{if #wire = mcp}}M{{endif}}'
+    text = '{{when #harness = bro}}B{{end}}{{when #wire = mcp}}M{{end}}'
     assert render_text(text, harness='bro', wire='mcp') == 'BM'
 
   def test_plain_text_unchanged_without_consulting_availability(self, monkeypatch):
@@ -477,22 +477,24 @@ class TestRenderText:
 
   def test_unknown_literal_raises(self):
     with pytest.raises(ValueError, match='domain'):
-      render_text('{{if #harness = claud}}x{{endif}}', harness='claude')
+      render_text('{{when #harness = claud}}x{{end}}', harness='claude')
 
   def test_unknown_harness_argument_raises(self):
     with pytest.raises(ValueError, match='unknown harness'):
-      render_text('{{if a = a}}x{{endif}}', harness='gemini')  # type: ignore[arg-type]
+      render_text('{{iff a = a}}x{{end}}', harness='gemini')  # type: ignore[arg-type]
 
   def test_unknown_wire_argument_raises(self):
     with pytest.raises(ValueError, match='unknown wire'):
-      render_text('{{if a = a}}x{{endif}}', wire='grpc')  # type: ignore[arg-type]
+      render_text('{{iff a = a}}x{{end}}', wire='grpc')  # type: ignore[arg-type]
 
   @pytest.mark.asyncio
   async def test_namespaced_tool_renders_description_against_availability(self, monkeypatch):
     def fetch(id: Annotated[str, Field(description='id')]) -> str:
       return id
 
-    describe(fetch, 'fetch a record{{if openai ∈ #creds}}; summarized{{else}}; raw only{{endif}}')
+    describe(
+      fetch, 'fetch a record{{iff #creds contains openai}}; summarized{{else}}; raw only{{end}}'
+    )
 
     class Srv(InProcessMCPServer):
       optional_secrets = ('openai',)
@@ -504,6 +506,28 @@ class TestRenderText:
     tools = await namespaced_tools(Srv())
     assert tools[0].name == 'src__fetch'
     assert tools[0].description == 'fetch a record; raw only'
+
+
+class TestSelect:
+  def test_harness_condition_filters_entries(self):
+    entries = ['plain', when(mcp_mod.harness == 'bro', 'devtools')]
+    assert select(entries, harness='bro') == ['plain', 'devtools']
+    assert select(entries, harness='claude') == ['plain']
+
+  def test_creds_fact_probes_availability(self, monkeypatch):
+    monkeypatch.setattr(mcp_mod.credentials, 'available', lambda name: name == 'openai')
+    entries = [when(mcp_mod.creds.contains('openai'), 'summary')]
+    assert select(entries, creds=['openai']) == ['summary']
+    monkeypatch.setattr(mcp_mod.credentials, 'available', lambda name: False)
+    assert select(entries, creds=['openai']) == []
+
+  def test_absent_fact_raises_on_reference(self):
+    with pytest.raises(ConditionError, match='unknown variable #wire'):
+      select([when(mcp_mod.wire == 'bare', 'x')], harness='bro')
+
+  def test_unknown_harness_argument_raises(self):
+    with pytest.raises(ValueError, match='unknown harness'):
+      select([], harness='gemini')  # type: ignore[arg-type]
 
 
 class TestWireName:

@@ -10,6 +10,7 @@ import pytest
 import bro.bro
 import llm.mcp
 from base import credentials
+from base.condition import when
 from bro.bro import BaseBro, BroRaised, set_default_tracker_factory
 from bro.bros.ppp_dev import PPPDev
 from bro.datasources.searchable import Hit, SearchableDataSource
@@ -465,7 +466,7 @@ class _StubSource(SearchableDataSource):
 
 class _MarkerSource(SearchableDataSource):
   name = 'marker'
-  summary = 'base{{if openai ∈ #creds}} query summary on{{else}} no key{{endif}}'
+  summary = 'base{{iff #creds contains openai}} query summary on{{else}} no key{{end}}'
 
   async def search(self, query: str, limit: int = 5) -> list[Hit]:
     return []
@@ -494,6 +495,22 @@ class TestBroDataSources:
     # local (in-namespace) names; the `stub-source` namespace is applied when the
     # registry forms wire names (`stub-source__search`).
     assert tool_names == {'search', 'fetch'}
+
+  def test_data_sources_concatenate_along_mro(self):
+    class ParentSourceBro(BaseBro):
+      name = 'parent-sources'
+      description = 'd'
+      data_sources: ClassVar = [_StubSource()]
+
+      def __init__(self):
+        super().__init__(system_prompt='base')
+
+    class ChildSourceBro(ParentSourceBro):
+      name = 'child-sources'
+      data_sources: ClassVar = [_MarkerSource()]
+
+    bro = ChildSourceBro()
+    assert [ds.name for ds in bro._data_sources] == ['stub', 'marker']
 
   def test_data_source_summary_in_system_prompt(self):
     class SourceBro(BaseBro):
@@ -667,6 +684,121 @@ class TestBroMCPServers:
     assert calls == 1
     assert bro._live_mcp_servers() is first
     assert calls == 1
+
+
+class TestToolPackEntries:
+  @pytest.mark.asyncio
+  async def test_bare_toolset_entry_is_the_full_roster(self):
+    toolset = llm.mcp.Toolset('bare-roster')
+
+    @toolset.tool('ping tool')
+    def ping() -> str:
+      return 'pong'
+
+    class ToolsetBro(BaseBro):
+      name = 'toolset-entry'
+      description = 'd'
+      mcp_servers: ClassVar = [when(llm.mcp.harness == 'bro', toolset)]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    bro = ToolsetBro()
+    assert len(bro._mcp_specs) == 1
+    tools = await bro._live_mcp_servers()[0].list_tools()
+    assert {t.name for t in tools} == {'ping'}
+
+  @pytest.mark.asyncio
+  async def test_module_entry_resolves_through_its_spec_toolset(self):
+    toolset = llm.mcp.Toolset('fake-pack')
+
+    @toolset.tool('ping tool')
+    def ping() -> str:
+      return 'pong'
+
+    pack = types.ModuleType('_fake_pack')
+    vars(pack)['spec'] = toolset
+
+    class ModuleBro(BaseBro):
+      name = 'module-entry'
+      description = 'd'
+      mcp_servers: ClassVar = [pack]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    bro = ModuleBro()
+    tools = await bro._live_mcp_servers()[0].list_tools()
+    assert {t.name for t in tools} == {'ping'}
+
+  def test_module_without_spec_toolset_raises(self):
+    class BadPackBro(BaseBro):
+      name = 'bad-pack'
+      description = 'd'
+      mcp_servers: ClassVar = [types.ModuleType('_spec_less')]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    with pytest.raises(TypeError, match='no Toolset named spec'):
+      BadPackBro()
+
+
+class TestConditionalComponents:
+  # a bro instance composes for the bro harness, so `when`-wrapped entries are
+  # decided against `#harness = bro` at construction.
+  def test_off_harness_server_excluded_and_never_built(self):
+    def build():
+      raise AssertionError('an unmatched spec must never build')
+
+    class CondBro(BaseBro):
+      name = 'cond'
+      description = 'd'
+      mcp_servers: ClassVar = [when(llm.mcp.harness == 'claude', MCPServerSpec(build=build))]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    bro = CondBro()
+    assert bro._mcp_specs == []
+    assert bro._live_mcp_servers() == []
+
+  def test_matching_condition_included(self):
+    class MatchBro(BaseBro):
+      name = 'match'
+      description = 'd'
+      mcp_servers: ClassVar = [when(llm.mcp.harness == 'bro', _make_spec('a'))]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    assert len(MatchBro()._mcp_specs) == 1
+
+  def test_bool_condition_is_a_constant(self):
+    class BoolBro(BaseBro):
+      name = 'bool'
+      description = 'd'
+      mcp_servers: ClassVar = [when(False, _make_spec('a')), _make_spec('b')]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    assert len(BoolBro()._mcp_specs) == 1
+
+  def test_off_harness_data_source_excluded_everywhere(self):
+    class CondSourceBro(BaseBro):
+      name = 'cond-source'
+      description = 'd'
+      data_sources: ClassVar = [when(llm.mcp.harness == 'claude', _SecretSource())]
+
+      def __init__(self):
+        super().__init__(system_prompt='base')
+
+    bro = CondSourceBro()
+    assert bro._data_sources == []
+    assert '## Data sources' not in bro.system_prompt
+    assert bro.needed_secrets() == ()
+    assert bro._live_mcp_servers() == []
 
 
 class _SecretServer(InProcessMCPServer):
@@ -1216,7 +1348,7 @@ class TestSkillsDiscovery:
     # a `--bro` session runs `--bare`: no claude built-ins, so its work goes
     # through the bro toolset — the mounted skill tool must serve the bro
     # procedures, not the claude ones.
-    body = '{{if #harness = bro}}BRO WAY{{else}}CLAUDE WAY{{endif}}'
+    body = '{{iff #harness = bro}}BRO WAY{{else}}CLAUDE WAY{{end}}'
     package = fake_packages('_skills_bro_branch', {'watch': _skill('watch', body)})
 
     class SkillBro(BaseBro):
@@ -1353,7 +1485,7 @@ class TestGetSkillBody:
     assert 'known' in msg
 
   def test_renders_harness_blocks_per_harness(self, fake_packages):
-    body = 'always {{if #harness = bro}}BRO WAY{{else}}CLAUDE WAY{{endif}}'
+    body = 'always {{iff #harness = bro}}BRO WAY{{else}}CLAUDE WAY{{end}}'
     package = fake_packages('_get_body_harness', {'watch': _skill('watch', body)})
 
     class B(BaseBro):
@@ -1370,7 +1502,7 @@ class TestGetSkillBody:
     assert bro_body == 'always BRO WAY'
 
   def test_unknown_harness_block_raises_on_load(self, fake_packages):
-    body = '{{if #harness = claud}}typo{{endif}}'
+    body = '{{when #harness = claud}}typo{{end}}'
     package = fake_packages('_get_body_bad_harness', {'bad': _skill('bad', body)})
 
     class B(BaseBro):
@@ -1581,6 +1713,27 @@ class TestSkillServiceTool:
     tools = await B()._service_server.list_tools()
     names = {t.name for t in tools}
     assert names == {'banner', 'raise'}
+
+  @pytest.mark.asyncio
+  async def test_skill_tool_only_mounts_on_the_bro_harness(self, fake_packages):
+    # the claude harness gets skills as rendered SKILL.md files, so its service
+    # build carries no `skill` tool; `banner` stays unconditional.
+    package = fake_packages('_svc_harness', {'foo': _skill()})
+
+    class B(BaseBro):
+      name = 'b'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    B.__module__ = package
+    claude_build = bro.bro._build_service_server(
+      B(), include_raise=False, harness='claude', wire='mcp'
+    )
+    names = {t.name for t in await claude_build.list_tools()}
+    assert 'skill' not in names
+    assert 'banner' in names
 
   @pytest.mark.asyncio
   async def test_skill_tool_survives_interactive_mode(self, fake_packages):

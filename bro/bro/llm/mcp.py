@@ -3,9 +3,11 @@ import inspect
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
+from types import ModuleType
 from typing import Any, ClassVar, Literal, Optional, get_args, get_origin
 
-from base import credentials, template
+from base import condition, credentials, template
+from base.condition import var
 
 
 def describe[F: Callable[..., Any]](function: F, text: str) -> F:
@@ -27,6 +29,12 @@ _HARNESSES = frozenset(get_args(Harness))
 Wire = Literal['bare', 'mcp']
 _WIRES = frozenset(get_args(Wire))
 
+# the facts triple as ready-made condition variables, so declarations read
+# `harness == 'bro'` / `creds.contains('openai')`.
+harness = var('harness')
+wire = var('wire')
+creds = var('creds')
+
 
 def render_text(
   text: str,
@@ -37,35 +45,46 @@ def render_text(
 ) -> str:
   """render `base.template` directives in static agent-facing text (system
   prompts, skill bodies, tool descriptions) against the surface facts the call
-  site knows; a fact left None defines no variable, so a directive referencing
-  it raises.
-
-  - `harness` → `#harness`, a string over the `Harness` values —
-    `{{if #harness = bro}}…{{else}}{{assert #harness = claude}}…{{endif}}`;
-  - `wire` → `#wire`, a string over the `Wire` values —
-    `{{if #wire = bare}}…{{else}}{{assert #wire = mcp}}…{{endif}}`;
-  - `creds` → `#creds`, the set of secrets the rendering environment resolves —
-    `{{if openai ∈ #creds}}…{{else}}…{{endif}}`. the argument is the universe:
-    a component's declared secrets for a tool description, the registry's known
-    names for session-level text; testing a name outside it raises. membership
-    probes `credentials.available` lazily, so only tested names are resolved —
-    render in the process that consumes the text, where the store is the
-    session's own.
+  site knows: `harness` → `#harness`, `wire` → `#wire`, `creds` → `#creds`
+  (the closed universe; membership probes `credentials.available` lazily, so
+  render in the process that consumes the text, where the store is the
+  session's own). A fact left None defines no variable, so a directive
+  referencing it raises. The directive reference is `reference/template.md`.
   """
   if '{{' not in text:
     return text
-  variables: dict[str, template.StringVariable | template.SetVariable | bool] = {}
+  return template.render(text, _surface_variables(harness, wire, creds))
+
+
+def select[T](
+  entries: Iterable[condition.Entry[T]],
+  *,
+  harness: Optional[Harness] = None,
+  wire: Optional[Wire] = None,
+  creds: Optional[Iterable[str]] = None,
+) -> list[T]:
+  """resolve the `base.condition` wrappers (`when` / `iff`) in a declarative
+  list against the same surface facts `render_text` renders with. a fact left
+  None defines no variable, so a condition referencing it raises. The
+  conditioning reference is `reference/conditions.md`."""
+  return condition.select(entries, _surface_variables(harness, wire, creds))
+
+
+def _surface_variables(
+  harness: Optional[Harness], wire: Optional[Wire], creds: Optional[Iterable[str]]
+) -> dict[str, condition.StringVariable | condition.SetVariable | bool]:
+  variables: dict[str, condition.StringVariable | condition.SetVariable | bool] = {}
   if harness is not None:
     if harness not in _HARNESSES:
       raise ValueError(f'unknown harness {harness!r}; known: {", ".join(sorted(_HARNESSES))}')
-    variables['harness'] = template.StringVariable(harness, domain=_HARNESSES)
+    variables['harness'] = condition.StringVariable(harness, domain=_HARNESSES)
   if wire is not None:
     if wire not in _WIRES:
       raise ValueError(f'unknown wire scheme {wire!r}; known: {", ".join(sorted(_WIRES))}')
-    variables['wire'] = template.StringVariable(wire, domain=_WIRES)
+    variables['wire'] = condition.StringVariable(wire, domain=_WIRES)
   if creds is not None:
-    variables['creds'] = template.SetVariable(credentials.available, universe=frozenset(creds))
-  return template.render(text, variables)
+    variables['creds'] = condition.SetVariable(credentials.available, universe=frozenset(creds))
+  return variables
 
 
 _PRIMITIVE_SHAPE = {
@@ -460,7 +479,7 @@ class Toolset[T]:
 
   one instance per server module, conventionally named `spec` and defined above
   its tools, which register on it with the `@spec.tool('description')`
-  decorator. Call sites read `flow.mcp.spec('add_task')` / `infra.spec()`: calling
+  decorator. Call sites read `flow.mcp.spec('add_task')` / `infra.mcp.spec()`: calling
   the instance validates the tool subset immediately (declaration time) and
   returns the frozen `MCPServerSpec` manifest; `build()` runs later, in the
   serving process, constructing the per-server state once (`state` factory) and
@@ -536,6 +555,20 @@ class Toolset[T]:
       build=lambda: self.build(*names),
       needed_secrets=self.get_secrets(names),
     )
+
+
+def as_spec(entry: 'MCPServerSpec | Toolset[Any] | ModuleType') -> MCPServerSpec:
+  """a declaration entry normalized to its manifest: a tool-pack module is its
+  conventional `spec` Toolset, a bare Toolset is its full roster, a spec passes
+  through. Scoped subsets call the toolset instead (`flow.mcp.spec('add_task')`)."""
+  if isinstance(entry, ModuleType):
+    toolset = getattr(entry, 'spec', None)
+    if not isinstance(toolset, Toolset):
+      raise TypeError(f'module {entry.__name__!r} declares no Toolset named spec')
+    return toolset()
+  if isinstance(entry, Toolset):
+    return entry()
+  return entry
 
 
 class UnknownToolError(Exception):

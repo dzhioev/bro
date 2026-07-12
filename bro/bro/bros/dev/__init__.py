@@ -1,7 +1,12 @@
-from typing import ClassVar
+from base.condition import when
 
+# a self-reference (resolved through sys.modules mid-initialization) plus the
+# submodule import that binds `mcp` on the package — so the declaration below
+# spells its entry by qualified pack path, readable without this header
+from bro.bros import dev
 from bro.bros.bro import Bro
 from bro.bros.dev import mcp
+from llm.mcp import harness
 
 SYSTEM_PROMPT = """\
 You are a software developer with tools to read, search, and edit files and run
@@ -101,5 +106,6 @@ Caution:
 class Dev(Bro):
   name = 'dev'
   description = 'generic software developer with file + shell + search tools'
-  mcp_servers: ClassVar = [mcp.spec()]
+  # the dev toolset duplicates the claude harness's native file/shell tools
+  mcp_servers = [when(harness == 'bro', dev.mcp)]
   system_prompt = SYSTEM_PROMPT

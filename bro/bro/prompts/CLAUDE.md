@@ -7,9 +7,9 @@ Centralised prompt store. Four loading conventions: auto-inject into every bro +
 - `*.prompt` — plain text, used as-is. Loaded with `prompts.get_prompt('name.prompt')`
 - `*.prompt.template` — Python `str.format` template. Requires kwargs at load time; `get_prompt` enforces "template ↔ kwargs" symmetry — passing kwargs to a non-template, or omitting kwargs for a template, raises
 
-Prompt content may carry `base.template` directives (`#harness`/`#wire`/`#creds`): every rendering surface renders its text once with its own facts via `llm.mcp.render_text` — `BaseBro.__init__` for the two bro flavors, `cw/system_prompt.py:_session_append_prompt` for native claude sessions, `FileSource.read` for a bro reading a top-level doc on demand (always the bro harness, mirroring served skill bodies) — so a directive works in `shared/`, top-level files, and bro class prompts alike.
+Prompt content may carry `base.template` directives (`#harness`/`#wire`/`#creds`; grammar and semantics: `reference/template.md`): every rendering surface renders its text once with its own facts via `llm.mcp.render_text` — `BaseBro.__init__` for the two bro flavors, `cw/system_prompt.py:_session_append_prompt` for native claude sessions, `FileSource.read` for a bro reading a top-level doc on demand (always the bro harness, mirroring served skill bodies) — so a directive works in `shared/`, top-level files, and bro class prompts alike.
 
-Harness-specific conditioning is expressed with these directives, never as prose that addresses both surfaces and leaves the reader to pick: fork the text with `{{if #harness = bro}}…{{else}}{{assert #harness = claude}}…{{endif}}` so each surface reads only its own instruction (see `environment.md` for the pattern).
+Harness-specific conditioning is expressed with these directives, never as prose that addresses both surfaces and leaves the reader to pick: fork the text with `{{iff #harness = bro}}…{{eliff #harness = claude}}…{{end}}` — the chain raises when no branch matches, so the fork is self-guarding — and each surface reads only its own instruction (see `environment.md` for the pattern).
 
 `prompts.py` (repo root) is the loader. Keep it the single entry point — do not `open()` prompts ad-hoc from elsewhere. `get_prompt_path(name)` returns the `Path` if a caller needs to hand the file off to something that wants a path rather than the body (e.g. `bro.datasources.file.FileSource`).
 
@@ -19,7 +19,7 @@ Harness-specific conditioning is expressed with these directives, never as prose
 
 ## Top-level `*.md` reference docs
 
-Top-level markdown files in `prompts/` are auto-injected into every `cw ss` Claude Code session via `cw/system_prompt.py:_load_base_prompts` (the file name must be listed in `_BASE_PROMPT_FILES`). Each can optionally also be exposed to a specific bro via a `FileSource` declaration in `data_sources` (see `bro/bros/ppp_dev/__init__.py` for the `environment.md` example — the bro framework auto-lists the source in the `## Data sources` block and mounts a `read` tool that returns the file body, rendered for the bro harness).
+Top-level markdown files in `prompts/` are auto-injected into every `cw ss` Claude Code session via `cw/system_prompt.py:_load_base_prompts` (the file name must be listed in `_BASE_PROMPT_FILES`). Each can optionally also be exposed to a specific bro via a `FileSource` declaration in `data_sources` (see `bro/datasources/references.py` for the `environment.md` example — the bro framework auto-lists the source in the `## Data sources` block and mounts a `read` tool that returns the file body, rendered for the bro harness).
 
 Use a top-level file when content must hold in a `cw ss` Claude Code session — optionally shared with a specific bro via `FileSource`, but **not** pushed onto every bro the way `shared/` would. A file is Claude-Code-only precisely when no bro declares a `FileSource` for it.
 

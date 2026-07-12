@@ -4,11 +4,13 @@ import sys
 from abc import ABC
 from collections.abc import Callable
 from pathlib import Path
-from typing import ClassVar, Optional, Self
+from types import ModuleType
+from typing import Any, ClassVar, Optional, Self
 
 import llm.llms.chat_gpt
 import llm.mcp
 from base import credentials
+from base.condition import Entry, when
 from bro.channel import BroChannel
 from bro.datasources.base import DataSource
 from llm.llm import LLM, LLMSpec
@@ -309,25 +311,36 @@ def _summon_check_tool() -> llm.mcp.Tool:
 
 
 def _build_service_server(
-  bro: 'BaseBro', *, include_raise: bool, wire: llm.mcp.Wire
+  bro: 'BaseBro', *, include_raise: bool, harness: llm.mcp.Harness, wire: llm.mcp.Wire
 ) -> llm.mcp.MCPServer:
-  # `raise` only makes sense non-interactively (a caller to abort to); `banner`,
-  # `skill` and `summon` are needed in both modes. interactive callers pass
-  # include_raise=False. served skills always render for the bro harness — every
-  # consumer of this server works through the bro toolset — over the caller's
-  # wire scheme.
-  tools: list[llm.mcp.Tool] = [_banner_tool(bro.name)]
-  if include_raise:
-    tools.append(llm.mcp.FunctionTool(_raise, name='raise', description=_RAISE_DESCRIPTION))
+  # a declarative roster selected against the caller's surface facts: `banner`
+  # is unconditional; `raise` only makes sense non-interactively (a caller to
+  # abort to — interactive callers pass include_raise=False); `skill` mounts
+  # only on the bro harness (the claude harness gets skills as rendered
+  # SKILL.md files, cw/bro.py); `summon` needs a broker channel — process
+  # state, not a surface fact.
+  entries: list[Entry[llm.mcp.Tool]] = [_banner_tool(bro.name)]
+  entries.append(
+    when(include_raise, llm.mcp.FunctionTool(_raise, name='raise', description=_RAISE_DESCRIPTION))
+  )
   if len(bro.skills) > 0:
 
     def skill(name: str) -> str:
-      return bro.get_skill_body(name, harness='bro', wire=wire)
+      return bro.get_skill_body(name, harness=harness, wire=wire)
 
-    tools.append(llm.mcp.FunctionTool(skill, name='skill', description=_SKILL_DESCRIPTION))
+    entries.append(
+      when(
+        # the fact variable, not this function's same-named parameter: the
+        # condition defers to the select below, which supplies the parameter
+        # as the fact.
+        llm.mcp.harness == 'bro',
+        llm.mcp.FunctionTool(skill, name='skill', description=_SKILL_DESCRIPTION),
+      )
+    )
   if os.environ.get('BROKER_CHANNEL') is not None:
-    tools.append(_summon_tool())
-    tools.append(_summon_check_tool())
+    entries.append(_summon_tool())
+    entries.append(_summon_check_tool())
+  tools = llm.mcp.select(entries, harness=harness, wire=wire, creds=credentials.known_names())
   return llm.mcp.InProcessMCPServer('bro', tools)
 
 
@@ -367,8 +380,15 @@ class BaseBro(ABC):
   name: str
   description: str
   llm_spec: LLMSpec = DEFAULT_LLM_SPEC
-  data_sources: ClassVar[list[DataSource]] = []
-  mcp_servers: ClassVar[list[llm.mcp.MCPServerSpec]] = []
+  # an entry may be wrapped with `base.condition.when(...)` / grouped with
+  # `iff(...)` to gate it on the assembling surface's facts (`#harness`,
+  # `#creds`); a wrapped entry whose condition does not hold never mounts and
+  # its spec never builds. an `mcp_servers` entry is a tool-pack module
+  # (`flow.mcp` — its conventional `spec` Toolset, the full roster), a bare
+  # `Toolset`, or an `MCPServerSpec` from a scoping call
+  # (`flow.mcp.spec('add_task')`); see `llm.mcp.as_spec`.
+  data_sources: ClassVar[list[Entry[DataSource]]] = []
+  mcp_servers: ClassVar[list[Entry[llm.mcp.MCPServerSpec | llm.mcp.Toolset[Any] | ModuleType]]] = []
   # credentials no component expresses — the escape hatch for a bro's environment
   # needs (ppp-dev → `github`; devoops → `aws`). MRO-walked and unioned like
   # `mcp_servers`, so a subclass declares only what it adds. folded into
@@ -390,8 +410,8 @@ class BaseBro(ABC):
   # `__init__` walks the MRO from base to derived and concatenates each class's
   # own contribution. so `PPPDev(Dev)` only needs to declare what PPPDev adds —
   # Dev's prompt (and Bro's) are picked up automatically. same for
-  # `mcp_servers`. inherit directly from BaseBro to opt out of the concrete
-  # `Bro`'s shared defaults.
+  # `mcp_servers` and `data_sources`. inherit directly from BaseBro to opt out
+  # of the concrete `Bro`'s shared defaults.
   system_prompt: str = ''
   # the bro's own class prompts (MRO-concatenated); set in __init__
   persona: str
@@ -402,7 +422,8 @@ class BaseBro(ABC):
   _llm: Optional[LLM] = None
 
   def __init__(self, system_prompt: Optional[str] = None):
-    mcp_entries: list[llm.mcp.MCPServerSpec] = []
+    mcp_entries: list[Entry[llm.mcp.MCPServerSpec | llm.mcp.Toolset[Any] | ModuleType]] = []
+    data_source_entries: list[Entry[DataSource]] = []
     prompt_parts: list[str] = []
     extra_secret_names: list[str] = []
     may_summon_names: list[str] = []
@@ -410,6 +431,9 @@ class BaseBro(ABC):
       raw_mcp = cls.__dict__.get('mcp_servers')
       if raw_mcp is not None:
         mcp_entries.extend(raw_mcp)
+      raw_sources = cls.__dict__.get('data_sources')
+      if raw_sources is not None:
+        data_source_entries.extend(raw_sources)
       raw_prompt = cls.__dict__.get('system_prompt')
       if isinstance(raw_prompt, str) and len(raw_prompt) > 0:
         prompt_parts.append(raw_prompt)
@@ -421,7 +445,18 @@ class BaseBro(ABC):
         may_summon_names.extend(raw_summon)
     self._extra_secrets: tuple[str, ...] = tuple(extra_secret_names)
     self._may_summon: tuple[str, ...] = tuple(may_summon_names)
-    self._mcp_specs: list[llm.mcp.MCPServerSpec] = mcp_entries
+    # component conditions evaluate here, where composition happens: every
+    # consumer of this instance serves the bro harness (a `--bro` claude
+    # session included). wire is not a fact — component inclusion is
+    # wire-independent (the wire only spells tool names).
+    surface_creds = credentials.known_names()
+    self._mcp_specs: list[llm.mcp.MCPServerSpec] = [
+      llm.mcp.as_spec(entry)
+      for entry in llm.mcp.select(mcp_entries, harness='bro', creds=surface_creds)
+    ]
+    self._data_sources: list[DataSource] = llm.mcp.select(
+      data_source_entries, harness='bro', creds=surface_creds
+    )
     # built lazily by _live_mcp_servers(): metadata surfaces (needed_secrets on
     # hosts, prompt composition) never construct live servers.
     self._live_mcp: Optional[list[llm.mcp.MCPServer]] = None
@@ -455,10 +490,10 @@ class BaseBro(ABC):
       parts.extend(prompt_parts)
       # the namespaced-tool convention only matters once the bro actually has
       # tools or skills (which reference tools by their `ns::tool` name).
-      if len(self._mcp_specs) > 0 or len(self.data_sources) > 0 or len(descriptions) > 0:
+      if len(self._mcp_specs) > 0 or len(self._data_sources) > 0 or len(descriptions) > 0:
         parts.append(get_prompt('tool_names.md').strip())
-      if len(self.data_sources) > 0:
-        parts.append(_render_data_sources(self.data_sources))
+      if len(self._data_sources) > 0:
+        parts.append(_render_data_sources(self._data_sources))
       if len(descriptions) > 0:
         parts.append(_render_skills(descriptions))
       # both composed flavors serve the bro harness — the only per-flavor fact is
@@ -523,7 +558,7 @@ class BaseBro(ABC):
     names: set[str] = set()
     for spec in self._mcp_specs:
       names.update(_component_needed_secrets(spec))
-    for ds in self.data_sources:
+    for ds in self._data_sources:
       names.update(_component_needed_secrets(ds))
     names.update(self._extra_secrets)
     return tuple(sorted(names))
@@ -538,7 +573,7 @@ class BaseBro(ABC):
     names: set[str] = set()
     for spec in self._mcp_specs:
       names.update(_component_optional_secrets(spec))
-    for ds in self.data_sources:
+    for ds in self._data_sources:
       names.update(_component_optional_secrets(ds))
     return tuple(sorted(names - set(self.needed_secrets())))
 
@@ -636,7 +671,9 @@ class BaseBro(ABC):
   @property
   def _service_server(self) -> llm.mcp.MCPServer:
     if self._service_server_cache is None:
-      self._service_server_cache = _build_service_server(self, include_raise=True, wire='bare')
+      self._service_server_cache = _build_service_server(
+        self, include_raise=True, harness='bro', wire='bare'
+      )
     return self._service_server_cache
 
   def _live_mcp_servers(self) -> list[llm.mcp.MCPServer]:
@@ -645,7 +682,7 @@ class BaseBro(ABC):
     # (flow's shared System), so every run through this bro reuses the same set.
     if self._live_mcp is None:
       self._live_mcp = [spec.build() for spec in self._mcp_specs]
-      self._live_mcp.extend(ds.as_mcp_server() for ds in self.data_sources)
+      self._live_mcp.extend(ds.as_mcp_server() for ds in self._data_sources)
     return self._live_mcp
 
   def _mcp_servers_for(
@@ -659,7 +696,7 @@ class BaseBro(ABC):
     if interactive:
       return [
         *self._live_mcp_servers(),
-        _build_service_server(self, include_raise=False, wire=wire),
+        _build_service_server(self, include_raise=False, harness='bro', wire=wire),
       ]
     return [*self._live_mcp_servers(), self._service_server]
 

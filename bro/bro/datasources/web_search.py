@@ -16,8 +16,8 @@ class WebSearch(SearchableDataSource):
     'Use for finding canonical URLs, ids, or pages when a structured source has no '
     'direct entry. Search returns URLs; fetch downloads a URL and returns its main '
     'text'
-    '{{if openai ∈ #creds}}, summarized for your query when you pass one{{else}} '
-    '(raw text; the `query` parameter is unavailable this session){{endif}}.'
+    '{{iff #creds contains openai}}, summarized for your query when you pass one{{else}} '
+    '(raw text; the `query` parameter is unavailable this session){{end}}.'
   )
 
   def __init__(self, store: Optional[credentials.Store] = None):

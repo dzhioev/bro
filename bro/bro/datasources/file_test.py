@@ -30,9 +30,18 @@ def test_read_picks_up_file_edits(env_file):
 
 
 def test_read_renders_directives_for_the_bro_harness(env_file):
-  env_file.write_text('{{if #harness = bro}}call the tool{{else}}run the CLI{{endif}}')
+  env_file.write_text('{{iff #harness = bro}}call the tool{{else}}run the CLI{{end}}')
   src = FileSource('environment', summary='x', path=env_file)
   assert src.read() == 'call the tool'
+
+
+def test_read_verbatim_serves_directive_payload_raw(env_file):
+  # a doc about the directive syntax carries examples that rendering would
+  # execute (or crash on — #wire is not a fact FileSource supplies)
+  body = 'grammar: {{iff #harness = bro}}…{{end}} and {{assert #wire = bare}}'
+  env_file.write_text(body)
+  src = FileSource('conditions', summary='x', path=env_file, render=False)
+  assert src.read() == body
 
 
 @pytest.mark.asyncio

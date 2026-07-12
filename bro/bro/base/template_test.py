@@ -1,6 +1,7 @@
 import pytest
 
-from base.template import SetVariable, StringVariable, TemplateError, render
+from base.condition import SetVariable, StringVariable
+from base.template import TemplateError, render
 
 
 def _harness(value: str) -> dict:
@@ -11,68 +12,95 @@ def _creds(*present: str, declared: tuple[str, ...] = ('openai', 'github')) -> d
   return {'creds': SetVariable(frozenset(present), universe=frozenset(declared))}
 
 
-class TestIf:
-  def test_taken_branch_emits(self):
-    text = 'a{{if #harness = bro}}B{{endif}}c'
+class TestWhen:
+  def test_taken_body_emits_and_untaken_drops(self):
+    text = 'a{{when #harness = bro}}B{{end}}c'
     assert render(text, _harness('bro')) == 'aBc'
     assert render(text, _harness('claude')) == 'ac'
 
+  def test_branch_directive_inside_when_raises(self):
+    with pytest.raises(TemplateError, match='no branches'):
+      render('{{when #harness = bro}}B{{else}}C{{end}}', _harness('bro'))
+
+  def test_nested_when_in_untaken_body_stays_balanced(self):
+    text = '{{when #harness = bro}}{{when #true = #true}}deep{{end}}{{end}}after'
+    assert render(text, _harness('claude')) == 'after'
+
+  def test_missing_end_raises(self):
+    with pytest.raises(TemplateError, match='missing its'):
+      render('{{when #harness = bro}}B', _harness('bro'))
+
+
+class TestIf:
   def test_else_branch(self):
-    text = '{{if #harness = bro}}B{{else}}C{{endif}}'
+    text = '{{iff #harness = bro}}B{{else}}C{{end}}'
     assert render(text, _harness('bro')) == 'B'
     assert render(text, _harness('claude')) == 'C'
 
-  def test_elif_chain_takes_first_true(self):
-    text = '{{if #harness = bro}}B{{elif #harness = claude}}C{{else}}X{{endif}}'
+  def test_eliff_chain_takes_first_true(self):
+    text = '{{iff #harness = bro}}B{{eliff #harness = claude}}C{{else}}X{{end}}'
     assert render(text, _harness('bro')) == 'B'
     assert render(text, _harness('claude')) == 'C'
+
+  def test_exhausted_chain_without_else_raises(self):
+    text = '{{iff #harness = claude}}C{{end}}'
+    assert render(text, _harness('claude')) == 'C'
+    with pytest.raises(TemplateError, match='no branch'):
+      render(text, _harness('bro'))
+
+  def test_exhaustive_fork_needs_no_assert(self):
+    text = '{{iff #harness = bro}}B{{eliff #harness = claude}}C{{end}}'
+    assert render(text, _harness('bro')) == 'B'
+    assert render(text, _harness('claude')) == 'C'
+
+  def test_exhausted_chain_in_untaken_branch_does_not_raise(self):
+    # the outer else is not emitted under bro, so the inner fall-through
+    # cannot fire — mirroring assert's non-taken behavior.
+    text = '{{iff #harness = bro}}B{{else}}{{iff #true = #false}}x{{end}}{{end}}'
+    assert render(text, _harness('bro')) == 'B'
 
   def test_reversed_operands(self):
-    assert render('{{if bro = #harness}}B{{endif}}', _harness('bro')) == 'B'
+    assert render('{{iff bro = #harness}}B{{end}}', _harness('bro')) == 'B'
 
   def test_literal_equality(self):
-    assert render('{{if a = a}}yes{{endif}}', {}) == 'yes'
-    assert render('{{if a = b}}yes{{else}}no{{endif}}', {}) == 'no'
+    assert render('{{iff a = a}}yes{{end}}', {}) == 'yes'
+    assert render('{{iff a = b}}yes{{else}}no{{end}}', {}) == 'no'
 
   def test_boolean_builtins(self):
-    assert render('{{if #true = #true}}yes{{endif}}', {}) == 'yes'
-    assert render('{{if #flag = #true}}on{{else}}off{{endif}}', {'flag': False}) == 'off'
+    assert render('{{iff #true = #true}}yes{{end}}', {}) == 'yes'
+    assert render('{{iff #flag = #true}}on{{else}}off{{end}}', {'flag': False}) == 'off'
 
   def test_nested_blocks(self):
-    text = '{{if #harness = bro}}outer {{if #true = #true}}inner{{endif}}{{endif}}'
+    text = '{{iff #harness = bro}}outer {{iff #true = #true}}inner{{end}}{{else}}other{{end}}'
     assert render(text, _harness('bro')) == 'outer inner'
-    assert render(text, _harness('claude')) == ''
-
-  def test_nested_block_in_skipped_branch_stays_balanced(self):
-    text = '{{if #harness = bro}}{{if #true = #true}}deep{{endif}}{{else}}other{{endif}}'
     assert render(text, _harness('claude')) == 'other'
 
   def test_multiline_bodies(self):
-    text = 'head\n{{if #harness = bro}}line one\nline two\n{{endif}}tail'
+    text = 'head\n{{iff #harness = bro}}line one\nline two\n{{else}}alt\n{{end}}tail'
     assert render(text, _harness('bro')) == 'head\nline one\nline two\ntail'
-    assert render(text, _harness('claude')) == 'head\ntail'
+    assert render(text, _harness('claude')) == 'head\nalt\ntail'
 
   def test_whitespace_inside_braces(self):
-    assert render('{{ if  #harness = bro }}B{{ endif }}', _harness('bro')) == 'B'
+    assert render('{{ iff  #harness = bro }}B{{ end }}', _harness('bro')) == 'B'
 
 
 class TestMembership:
   def test_membership(self):
-    text = '{{if openai ∈ #creds}}summarized{{else}}raw{{endif}}'
+    text = '{{iff #creds contains openai}}summarized{{else}}raw{{end}}'
     assert render(text, _creds('openai')) == 'summarized'
     assert render(text, _creds()) == 'raw'
 
   def test_variable_element(self):
     variables = {**_harness('bro'), 'creds': SetVariable(frozenset({'bro'}), universe=None)}
-    assert render('{{if #harness ∈ #creds}}yes{{endif}}', variables) == 'yes'
+    assert render('{{iff #creds contains #harness}}yes{{end}}', variables) == 'yes'
 
   def test_outside_universe_raises(self):
     with pytest.raises(TemplateError, match='universe'):
-      render('{{if typo ∈ #creds}}x{{endif}}', _creds('openai'))
+      render('{{iff #creds contains typo}}x{{end}}', _creds('openai'))
 
   def test_open_universe_allows_any_element(self):
     variables = {'creds': SetVariable(frozenset({'a'}), universe=None)}
-    assert render('{{if zzz ∈ #creds}}yes{{else}}no{{endif}}', variables) == 'no'
+    assert render('{{iff #creds contains zzz}}yes{{else}}no{{end}}', variables) == 'no'
 
   def test_predicate_members_probe_only_tested_names(self):
     probed: list[str] = []
@@ -82,13 +110,17 @@ class TestMembership:
       return name == 'openai'
 
     variables = {'creds': SetVariable(membership, universe=frozenset({'openai', 'github'}))}
-    text = '{{if openai ∈ #creds}}yes{{endif}}'
+    text = '{{iff #creds contains openai}}yes{{end}}'
     assert render(text, variables) == 'yes'
     assert probed == ['openai']
 
-  def test_non_set_right_side_raises(self):
+  def test_non_set_container_raises(self):
     with pytest.raises(TemplateError, match='not a set'):
-      render('{{if openai ∈ #harness}}x{{endif}}', _harness('bro'))
+      render('{{iff #harness contains openai}}x{{else}}y{{end}}', _harness('bro'))
+
+  def test_contains_requires_surrounding_whitespace(self):
+    with pytest.raises(TemplateError, match='malformed condition'):
+      render('{{iff acontainsb}}x{{end}}', {})
 
 
 class TestAssert:
@@ -100,51 +132,62 @@ class TestAssert:
       render('{{assert #harness = claude}}', _harness('bro'))
 
   def test_in_untaken_branch_does_not_fire(self):
-    text = '{{if #harness = bro}}B{{else}}{{assert #harness = claude}}C{{endif}}'
+    text = '{{iff #harness = bro}}B{{else}}{{assert #true = #false}}C{{end}}'
     assert render(text, _harness('bro')) == 'B'
-    assert render(text, _harness('claude')) == 'C'
 
 
 class TestValidation:
   def test_unknown_variable_raises(self):
     with pytest.raises(TemplateError, match='unknown variable #nope'):
-      render('{{if #nope = x}}y{{endif}}', {})
+      render('{{iff #nope = x}}y{{end}}', {})
 
   def test_literal_outside_domain_raises(self):
     with pytest.raises(TemplateError, match='domain'):
-      render('{{if #harness = bor}}y{{endif}}', _harness('bro'))
+      render('{{iff #harness = bor}}y{{end}}', _harness('bro'))
 
   def test_untaken_branch_condition_still_validated(self):
     with pytest.raises(TemplateError, match='domain'):
-      render('{{if #harness = bro}}B{{elif #harness = claud}}C{{endif}}', _harness('bro'))
+      render('{{iff #harness = bro}}B{{eliff #harness = claud}}C{{end}}', _harness('bro'))
 
   def test_set_in_equality_raises(self):
-    with pytest.raises(TemplateError, match='use ∈'):
-      render('{{if #creds = openai}}y{{endif}}', _creds())
+    with pytest.raises(TemplateError, match='use contains'):
+      render('{{iff #creds = openai}}y{{end}}', _creds())
 
   def test_boolean_against_string_raises(self):
     with pytest.raises(TemplateError, match='boolean'):
-      render('{{if #true = bro}}y{{endif}}', {})
+      render('{{iff #true = bro}}y{{end}}', {})
 
   def test_malformed_condition_raises(self):
     with pytest.raises(TemplateError, match='malformed condition'):
-      render('{{if harness}}y{{endif}}', {})
+      render('{{iff harness}}y{{end}}', {})
 
-  def test_missing_endif_raises(self):
+  def test_retired_membership_symbol_is_malformed(self):
+    with pytest.raises(TemplateError, match='malformed condition'):
+      render('{{iff openai ∈ #creds}}x{{end}}', _creds('openai'))
+
+  def test_missing_end_raises(self):
     with pytest.raises(TemplateError, match='missing its'):
-      render('{{if a = a}}y', {})
+      render('{{iff a = a}}y', {})
 
-  def test_stray_endif_raises(self):
+  def test_retired_endif_is_not_a_terminator(self):
+    with pytest.raises(TemplateError, match='missing its'):
+      render('{{iff a = a}}y{{endif}}', {})
+
+  def test_stray_end_raises(self):
     with pytest.raises(TemplateError, match='without a matching'):
-      render('y{{endif}}', {})
+      render('y{{end}}', {})
 
-  def test_elif_after_else_raises(self):
+  def test_eliff_after_else_raises(self):
     with pytest.raises(TemplateError, match='after'):
-      render('{{if a = b}}x{{else}}y{{elif a = a}}z{{endif}}', {})
+      render('{{iff a = b}}x{{else}}y{{eliff a = a}}z{{end}}', {})
 
   def test_else_with_argument_raises(self):
     with pytest.raises(TemplateError, match='takes no argument'):
-      render('{{if a = a}}x{{else garbage}}y{{endif}}', {})
+      render('{{iff a = a}}x{{else garbage}}y{{end}}', {})
+
+  def test_end_with_argument_raises(self):
+    with pytest.raises(TemplateError, match='takes no argument'):
+      render('{{when a = a}}x{{end garbage}}', {})
 
   def test_shadowing_builtins_raises(self):
     with pytest.raises(TemplateError, match='shadow'):

@@ -10,7 +10,7 @@ _PROMPTS_DIR = Path(__file__).resolve().parent.parent / 'prompts'
 # are Claude-Code-only:
 # - `environment.md` is the single source of truth for the session-banner
 #   playbook (forked on `#harness`: `bro::banner` tool vs `cw banner --llm`) —
-#   same file is reachable from bros via `FileSource` (bro/bros/ppp_dev).
+#   same file is reachable from bros via `FileSource` (bro/datasources/references.py).
 # - `tool_names.md` is the tool-name resolution rule, templated on `#wire`;
 #   `--bro` sessions run `--bare` and skip this injection but get the same file
 #   through `BaseBro.claude_system_prompt`, and bro-native LLM runs compose its

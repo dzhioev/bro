@@ -6,9 +6,9 @@ async def format_card(bro: BaseBro, *, include_system_prompt: bool = False) -> s
   parts = [f'# {bro.name}', '', bro.description, '']
   parts.extend(_identity_lines(bro))
 
-  if len(bro.data_sources) > 0:
+  if len(bro._data_sources) > 0:
     parts.extend(['', '## Data sources', ''])
-    for ds in bro.data_sources:
+    for ds in bro._data_sources:
       declared = set(ds.needed_secrets) | set(ds.optional_secrets)
       summary = render_text(ds.summary, creds=declared)
       parts.append(f'- **{ds.name}** — {summary}')

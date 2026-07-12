@@ -120,9 +120,9 @@ class _FetchTool(Tool):
     'fetch a record from the <source> data source by id. The optional `query` is '
     'the question you are investigating; given one, the record is summarised to '
     'focus on it'
-    '{{if openai ∈ #creds}} (omit it for the raw record).{{else}} — but '
+    '{{iff #creds contains openai}} (omit it for the raw record).{{else}} — but '
     'summarisation is unavailable this session (no `openai` secret), so you '
-    'should omit `query`; fetch returns the raw record.{{endif}}'
+    'should omit `query`; fetch returns the raw record.{{end}}'
   )
 
   def __init__(self, source: SearchableDataSource):

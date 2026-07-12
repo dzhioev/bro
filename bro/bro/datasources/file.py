@@ -16,13 +16,16 @@ class FileSource(DataSource):
   The body renders `base.template` `#harness` directives for the bro harness —
   every consumer of this tool works through the bro toolset, mirroring served
   skill bodies (a native claude session reads the same file through its own
-  injection, rendered `claude`).
+  injection, rendered `claude`). Pass `render=False` to serve the file verbatim
+  — for a doc whose payload is the directive syntax itself, where rendering
+  would execute the examples.
   """
 
-  def __init__(self, name: str, summary: str, path: Path):
+  def __init__(self, name: str, summary: str, path: Path, render: bool = True):
     self.name = name
     self.summary = summary
     self._path = path
+    self._render = render
 
   def as_mcp_server(self) -> MCPServer:
     return InProcessMCPServer(
@@ -37,4 +40,7 @@ class FileSource(DataSource):
     )
 
   def read(self) -> str:
-    return render_text(self._path.read_text(), harness='bro')
+    text = self._path.read_text()
+    if self._render:
+      return render_text(text, harness='bro')
+    return text

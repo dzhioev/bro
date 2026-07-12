@@ -55,7 +55,7 @@ If `git status` is clean and there are no untracked files to add, stop — nothi
 
 Run before committing:
 - `./format.sh` — formats Python via ruff. Stage any formatter-induced changes alongside your own.
-- `./run_tests.py` — pyright + deptry + pytest + container smoke. **In a container session (`kind: container` from the {{if #harness = bro}}`bro::banner`{{else}}`cw banner --llm`{{endif}} output), pass `--no-docker`** — the smoke step needs host Docker and will fail otherwise.{{if #harness = bro}} Run it with an explicit large `timeout_seconds` (600 fits) — `dev::bash`'s default kills a full suite mid-run; same for any other long command.{{endif}}
+- `./run_tests.py` — pyright + deptry + pytest + container smoke. **In a container session (`kind: container` from the {{iff #harness = bro}}`bro::banner`{{else}}`cw banner --llm`{{end}} output), pass `--no-docker`** — the smoke step needs host Docker and will fail otherwise.{{when #harness = bro}} Run it with an explicit large `timeout_seconds` (600 fits) — `dev::bash`'s default kills a full suite mid-run; same for any other long command.{{end}}
 
 A red suite blocks the commit. Do not interpret or triage failures — propose fixing in this session or a separate one, but do not commit through failures.
 
@@ -230,7 +230,7 @@ poll-pr <owner>/<repo> <pr_number> --token "$GH_TOKEN" --self "$(gh api user --j
 
 How to run it:
 
-{{if #harness = bro}}
+{{iff #harness = bro}}
 Run it as a background job and read it iteratively — a plain `dev::bash` call would kill it at its timeout:
 
 1. `dev::job("poll-pr …")` → note the job id.
@@ -244,12 +244,11 @@ Run it as a background job and read it iteratively — a plain `dev::bash` call 
 The large `wait_seconds` keeps the run idling inside the tool call between events; don't shorten it to poll — every quiet return costs a full model round trip.
 
 **The watch loop is the rest of the run.** Your terminal answer comes only after the PR reaches a terminal state — merged (typically via the `/land` chain on APPROVED) or closed. Until then, keep calling `dev::watch` iteration after iteration, however quiet the PR stays; that idling is the run working as designed, not a stall to wrap up. Do not kill the job and end the run with a "waiting for review" report — an ended run watches nothing, and every later review event goes unhandled.
-{{else}}
-{{assert #harness = claude}}
+{{eliff #harness = claude}}
 **MUST launch via the `Monitor` tool with `persistent: true`. Do NOT use Bash `run_in_background`** — that only notifies on process exit, so review/comment events sit silently in the output file and approvals never trigger the auto-chain. The harness wakes you on each output event; react per step 15. Stop the watcher with `TaskStop` when chaining into `/land`.
 
 If the `Monitor` schema needs a `ToolSearch` fetch, load `TaskStop` in the same query (`select:Monitor,TaskStop`) — the APPROVED handler needs it and shouldn't spend a round trip on it later.
-{{endif}}
+{{end}}
 
 ### 15. React to review events
 
@@ -272,7 +271,7 @@ A non-empty `comments` array on an APPROVED review counts as actionable feedback
 
 **`review` with `state: "APPROVED"` and empty `comments`**:
 
-Unconditional approval — the PR is ready to merge. Chain into the merge, and batch it: stop the watcher ({{if #harness = bro}}`dev::kill(job_id)`{{else}}`TaskStop`{{endif}}) and load `/land` ({{if #harness = bro}}`bro::skill`{{else}}`Skill(land)`{{endif}}) **in the same response**, then follow `/land` (its merge step is a single `land-pr` command).
+Unconditional approval — the PR is ready to merge. Chain into the merge, and batch it: stop the watcher ({{iff #harness = bro}}`dev::kill(job_id)`{{else}}`TaskStop`{{end}}) and load `/land` ({{iff #harness = bro}}`bro::skill`{{else}}`Skill(land)`{{end}}) **in the same response**, then follow `/land` (its merge step is a single `land-pr` command).
 
 **`review` with `state: "COMMENTED"` or `"DISMISSED"`**: informational; the actionable feedback (if any) is in this event's `comments` array or arrives via accompanying `comment` events.
 
