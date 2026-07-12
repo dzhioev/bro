@@ -100,22 +100,40 @@ class TestFormatCard:
   @pytest.mark.asyncio
   async def test_mcp_section_omitted_when_empty(self):
     card = await format_card(_MinimalBro())
-    assert '## MCP servers' not in card
+    assert '## MCP tools' not in card
 
   @pytest.mark.asyncio
-  async def test_mcp_section_renders_server_type_and_tools(self):
+  async def test_mcp_section_renders_namespace_and_tools(self):
     card = await format_card(_FullBro())
-    assert '## MCP servers' in card
-    assert '`bro.show_test.ServerAB` — 2 tools' in card
+    assert '## MCP tools' in card
+    assert '- `ab` — 2 tools' in card
     assert '  - `a` — a tool description' in card
     assert '  - `b` — b tool description' in card
 
   @pytest.mark.asyncio
-  async def test_mcp_second_server_rendered(self):
+  async def test_mcp_second_namespace_rendered(self):
     card = await format_card(_FullBro())
-    assert '`bro.show_test.ServerXZ` — 2 tools' in card
+    assert '- `xz` — 2 tools' in card
     assert '  - `x` — x tool description' in card
     assert '  - `z` — z tool description' in card
+
+  @pytest.mark.asyncio
+  async def test_mcp_servers_sharing_a_namespace_grouped(self):
+    class ServerAB2(InProcessMCPServer):
+      def __init__(self):
+        super().__init__('ab', _make_tools('c'))
+
+    class _SharedBro(BaseBro):
+      name = 'shared'
+      description = 'two servers in one namespace'
+      mcp_servers: ClassVar = [MCPServerSpec.of(ServerAB), MCPServerSpec.of(ServerAB2)]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    card = await format_card(_SharedBro())
+    assert '- `ab` — 3 tools' in card
+    assert '  - `c` — c tool description' in card
 
   @pytest.mark.asyncio
   async def test_secrets_section_lists_manifest(self):

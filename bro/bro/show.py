@@ -14,9 +14,8 @@ async def format_card(bro: BaseBro, *, include_system_prompt: bool = False) -> s
       parts.append(f'- **{ds.name}** — {summary}')
 
   if len(bro._mcp_specs) > 0:
-    parts.extend(['', '## MCP servers', ''])
-    for spec in bro._mcp_specs:
-      parts.extend(await _format_mcp_entry(spec))
+    parts.extend(['', '## MCP tools', ''])
+    parts.extend(await _mcp_tool_lines(bro._mcp_specs))
 
   manifest = bro.needed_secrets()
   optional = bro.optional_secrets()
@@ -58,24 +57,34 @@ def _identity_lines(bro: BaseBro) -> list[str]:
   return lines
 
 
-async def _format_mcp_entry(spec: MCPServerSpec) -> list[str]:
-  # the card lists the live server's tools, so the spec is materialized here;
-  # `bro show` runs on the host where that is cheap.
-  try:
-    server = spec.build()
-  except Exception as e:
-    return [f'- failed to build server: {e}']
-  label = f'{type(server).__module__}.{type(server).__qualname__}'
-  try:
-    tools = await server.list_tools()
-  except Exception as e:
-    return [f'- `{label}` — failed to list tools: {e}']
-
-  noun = 'tool' if len(tools) == 1 else 'tools'
-  lines = [f'- `{label}` — {len(tools)} {noun}']
-  for tool in tools:
-    lines.append(f'  - `{tool.name}` — {_one_line(tool.description)}')
-  return lines
+async def _mcp_tool_lines(specs: list[MCPServerSpec]) -> list[str]:
+  # the card lists the live servers' tools, so the specs are materialized here;
+  # `bro show` runs on the host where that is cheap. tools are grouped under the
+  # namespace their wire names carry, not under the server that serves them.
+  tool_lines_by_namespace: dict[str, list[str]] = {}
+  failures = []
+  for spec in specs:
+    try:
+      server = spec.build()
+    except Exception as e:
+      failures.append(f'- failed to build server: {e}')
+      continue
+    try:
+      tools = await server.list_tools()
+    except Exception as e:
+      failures.append(f'- `{server.namespace}` — failed to list tools: {e}')
+      continue
+    declared = set(server.needed_secrets) | set(server.optional_secrets)
+    tool_lines_by_namespace.setdefault(server.namespace, []).extend(
+      f'  - `{tool.name}` — {_one_line(render_text(tool.description, creds=declared))}'
+      for tool in tools
+    )
+  lines = []
+  for namespace, tool_lines in tool_lines_by_namespace.items():
+    noun = 'tool' if len(tool_lines) == 1 else 'tools'
+    lines.append(f'- `{namespace}` — {len(tool_lines)} {noun}')
+    lines.extend(tool_lines)
+  return lines + failures
 
 
 def _one_line(text: str, max_len: int = 120) -> str:
