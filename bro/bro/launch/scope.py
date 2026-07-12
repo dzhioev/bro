@@ -132,12 +132,14 @@ def _session_secrets(bro_name: str, *, mcp: Optional[str], bro_mode: bool) -> Sc
     token it exports as CLAUDE_CODE_OAUTH_TOKEN is a native session's only
     auth). always keeps the socket (it has a Bash tool).
 
-  both add the session baseline (sync-log + trails) to the required set.
+  both add the session baseline (sync-log + trails) to the required set, and
+  `openai` to the optional tier — the Stop-hook listener's tool_use guard LLM
+  key (cw/listen.py; the guard abstains when it is missing).
   """
   from bro.registry import create_bro
 
   secrets: set[str] = set(_CW_SESSION_BASELINE)
-  optional: set[str] = set()
+  optional: set[str] = {'openai'}
   docker_sock = True
   try:
     bro = create_bro(bro_name)

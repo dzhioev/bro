@@ -3,9 +3,9 @@
 The native/bro fork is confined to here: `--bro` selects a `--bare` claude wired
 to the bro's session-local MCP namespaces and api-key auth, native gets the full
 harness with the cw-injected append prompt. Everything else — model, the merged
-`--settings` (fastMode + apiKeyHelper), `--effort`, the forwarded claude args,
-skill surfacing, prompt seeding — is handled once, identically wherever the
-session runs.
+`--settings` (fastMode + apiKeyHelper + the Stop-hook listener), `--effort`, the
+forwarded claude args, skill surfacing, prompt seeding — is handled once,
+identically wherever the session runs.
 """
 
 import json
@@ -45,6 +45,27 @@ def _deployed_mcp_config() -> str:
   )
 
 
+def _listen_hook_config(workspace: Path) -> dict:
+  """hooks for the merged `--settings`: `cw.listen` on Stop, by absolute path
+  into the workspace's venv (hook commands run with no venv on PATH). riding
+  flagSettings binds the hook in both flavors — `--bare` skips project settings
+  — and executes it without a workspace trust gate. the timeout bounds a hung
+  classifier call; a timed-out or failing hook is non-blocking for claude."""
+  return {
+    'Stop': [
+      {
+        'hooks': [
+          {
+            'type': 'command',
+            'command': str(workspace / '.venv' / 'bin' / 'cw.listen'),
+            'timeout': 60,
+          }
+        ]
+      }
+    ]
+  }
+
+
 def build_claude_launch(
   spec: 'SessionSpec',
   *,
@@ -72,7 +93,7 @@ def build_claude_launch(
   (flagSettings, not project/local) means claude executes it without a
   workspace trust gate.
   """
-  settings: dict = {'fastMode': spec.fast}
+  settings: dict = {'fastMode': spec.fast, 'hooks': _listen_hook_config(workspace)}
   argv = ['--model', _CW_MODEL]
   if spec.bro is not None:
     from bro.registry import create_bro

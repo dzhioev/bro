@@ -39,8 +39,14 @@ class TestNativeLaunch:
     assert '--foo' in argv
 
   def test_fast_mode_lands_in_settings(self):
-    assert _settings(_native_launch(_spec(fast=True), claude_args=[]).argv) == {'fastMode': True}
-    assert _settings(_native_launch(_spec(), claude_args=[]).argv) == {'fastMode': False}
+    assert _settings(_native_launch(_spec(fast=True), claude_args=[]).argv)['fastMode'] is True
+    assert _settings(_native_launch(_spec(), claude_args=[]).argv)['fastMode'] is False
+
+  def test_stop_listen_hook_in_settings(self):
+    hooks = _settings(_native_launch(_spec(), claude_args=[]).argv)['hooks']
+    (entry,) = hooks['Stop'][0]['hooks']
+    # the workspace's own venv script, absolute — hook commands run with no venv on PATH
+    assert entry == {'type': 'command', 'command': '/ws/.venv/bin/cw.listen', 'timeout': 60}
 
   def test_effort_injected(self):
     argv = _native_launch(_spec(effort='xhigh'), claude_args=[]).argv
@@ -125,11 +131,17 @@ class TestBroLaunch:
   def test_settings_merge_fast_mode_and_api_key_helper(self):
     # the merged --settings is what lets --fast reach a --bro session; the
     # apiKeyHelper is the workspace's own copy, mode-neutral
-    assert _settings(self._launch(fast=True).argv) == {
-      'fastMode': True,
-      'apiKeyHelper': '/ws/setup/print_anthropic_key.sh',
-    }
+    settings = _settings(self._launch(fast=True).argv)
+    assert settings['fastMode'] is True
+    assert settings['apiKeyHelper'] == '/ws/setup/print_anthropic_key.sh'
     assert _settings(self._launch().argv)['fastMode'] is False
+
+  def test_stop_listen_hook_in_settings(self):
+    # flagSettings is the only settings source a --bare session loads, so the
+    # listener must ride it to reach the bro flavor
+    hooks = _settings(self._launch().argv)['hooks']
+    (entry,) = hooks['Stop'][0]['hooks']
+    assert entry['command'] == '/ws/.venv/bin/cw.listen'
 
   def test_system_prompt_is_bros_claude_flavor(self):
     from bro.registry import create_bro
