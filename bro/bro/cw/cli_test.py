@@ -99,10 +99,10 @@ class TestInPlace:
     assert rc == 0
     assert fake_run.call_args[0][0].bro == 'pm'
 
-  def test_bro_mcp_exclusivity_still_enforced(self, capsys):
+  def test_bro_persona_exclusivity_still_enforced(self, capsys):
     with pytest.raises(SystemExit):
-      cw.cli.main(['cw', 'ss', '--in-place', '--bro', 'pm', '--mcp', 'local', 'w'])
-    assert 'cannot be combined with --mcp' in capsys.readouterr().err
+      cw.cli.main(['cw', 'ss', '--in-place', '--bro', 'pm', '--persona', 'ppp-dev', 'w'])
+    assert 'cannot be combined with --persona' in capsys.readouterr().err
 
   def test_hidden_from_help(self, capsys):
     with pytest.raises(SystemExit):

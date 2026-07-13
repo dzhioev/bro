@@ -9,16 +9,17 @@ class FileSource(DataSource):
 
   The framework auto-lists the source in the bro's `## Data sources` block
   (using `summary`), and `as_mcp_server()` mounts a `read` tool (wire name
-  `<name>-source__read`) that returns the file body. Use for canonical reference
-  docs the bro should consult on demand — e.g. a playbook that's shared between a
-  Claude Code session prompt and a bro.
+  `<name>-source__read`) that returns the file body; the tool description
+  carries `summary` too, so a surface without the data-sources block (a
+  cw-session's tool listing) still sees what the doc is and when to read it.
+  Use for canonical reference docs the agent should consult on demand.
 
-  The body renders `base.template` `#harness` directives for the bro harness —
-  every consumer of this tool works through the bro toolset, mirroring served
-  skill bodies (a native claude session reads the same file through its own
-  injection, rendered `claude`). Pass `render=False` to serve the file verbatim
+  One rendering of the body is read by every harness, so the file must be
+  surface-neutral: `read` renders `base.template` directives with no surface
+  facts — a `#harness`/`#wire`/`#creds` directive raises at read time instead
+  of silently picking a branch. Pass `render=False` to serve the file verbatim
   — for a doc whose payload is the directive syntax itself, where rendering
-  would execute the examples.
+  would choke on the examples.
   """
 
   def __init__(self, name: str, summary: str, path: Path, render: bool = True):
@@ -34,7 +35,9 @@ class FileSource(DataSource):
         FunctionTool(
           self.read,
           name='read',
-          description=f'return the full contents of the {self.name} reference document',
+          description=(
+            f'return the full contents of the {self.name} reference document — {self.summary}'
+          ),
         )
       ],
     )
@@ -42,5 +45,5 @@ class FileSource(DataSource):
   def read(self) -> str:
     text = self._path.read_text()
     if self._render:
-      return render_text(text, harness='bro')
+      return render_text(text)
     return text

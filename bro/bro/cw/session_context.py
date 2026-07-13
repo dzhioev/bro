@@ -18,37 +18,36 @@ from typing import Optional
 CW_SESSION_CONTEXT_ENV = 'CW_SESSION_CONTEXT'
 
 
-def _mcp_record(mcp: Optional[str], bro: Optional[str]) -> dict:
+def _mcp_record(bro: Optional[str], persona: Optional[str]) -> dict:
   if bro is not None:
     fields = {'mode': 'bro', 'servers': [f'bro:{bro}']}
-  elif mcp is not None:
-    fields = {'mode': mcp, 'servers': ['flow']}
+  elif persona is not None:
+    fields = {'mode': 'persona', 'servers': [f'persona:{persona}']}
   else:
-    fields = {'mode': 'none', 'servers': []}
+    raise ValueError('a session serves either a bro or a persona')
   return {'kind': 'mcp', 'subtype': 'servers', 'title': 'MCP servers', 'fields': fields}
 
 
 def build_session_context(
   *,
   system_prompt: str,
-  bro_mode: bool,
   branch: str,
   base_sha: Optional[str],
   base_ref: Optional[str],
-  mcp: Optional[str],
   bro: Optional[str],
+  persona: Optional[str],
   proj_root: Path,
 ) -> list[dict]:
   """the launch-context records for a session.
 
-  `bro_mode` selects the system-prompt record's shape: a `--bro` session passes
-  the whole prompt via --system-prompt (replaces the base), a themed/native
-  session passes only its --append-system-prompt addition on top of claude's
-  base + CLAUDE.md.
+  exactly one of `bro` / `persona` names the session's bro; it selects the
+  system-prompt record's shape too: a `--bro` session passes the whole prompt
+  via --system-prompt (replaces the base), a cw-session passes only its
+  --append-system-prompt addition on top of claude's base + CLAUDE.md.
   """
   records: list[dict] = []
 
-  if bro_mode:
+  if bro is not None:
     sp_subtype, sp_title = 'bro', 'bro system prompt (--system-prompt, replaces base)'
   else:
     sp_subtype, sp_title = 'cw_injected', 'cw-injected system prompt (--append-system-prompt)'
@@ -65,7 +64,7 @@ def build_session_context(
     {'kind': 'git', 'subtype': 'state', 'title': 'git state at launch', 'fields': git_fields}
   )
 
-  records.append(_mcp_record(mcp, bro))
+  records.append(_mcp_record(bro, persona))
 
   claude_md = proj_root / 'CLAUDE.md'
   if claude_md.is_file():

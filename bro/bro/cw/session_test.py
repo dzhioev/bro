@@ -22,7 +22,7 @@ def _spec(
   effort: Optional[str] = None,
   resume: bool = False,
   into: Optional[str] = None,
-  mcp: Optional[str] = None,
+  persona: Optional[str] = None,
   bro: Optional[str] = None,
   prompt: Optional[str] = None,
   claude_args: Optional[list[str]] = None,
@@ -40,7 +40,7 @@ def _spec(
     effort=effort,
     resume=resume,
     into=into,
-    mcp=mcp,
+    persona=persona,
     bro=bro,
     prompt=prompt,
     claude_args=claude_args if claude_args is not None else [],
@@ -126,6 +126,12 @@ class TestSummonAllowList:
     assert rc == 0
     assert h.summon_allow_list.call_args[0] == ('pm',)
 
+  def test_container_session_keys_identity_on_the_persona(self):
+    with _ContainerHarness() as h:
+      rc = cw.session.start_session(_spec(drop=True, persona='pm'))
+    assert rc == 0
+    assert h.summon_allow_list.call_args[0] == ('pm',)
+
   def test_bad_summon_flag_fails_the_launch(self):
     with _ContainerHarness() as h:
       h.summon_allow_list.side_effect = ValueError('unknown summon target(s): devoop')
@@ -140,12 +146,12 @@ class TestContainerCommand:
     # argv/MCP/skills work happens inside the container, next to claude
     with _ContainerHarness() as h:
       rc = cw.session.start_session(
-        _spec(drop=True, fast=True, mcp='local', effort='xhigh', prompt='go')
+        _spec(drop=True, fast=True, persona='pm', effort='xhigh', prompt='go')
       )
     assert rc == 0
     command = h.run_in_container.call_args[0][1]
     assert command == [
-      'cw', 'ss', '--in-place', '--fast', '--effort', 'xhigh', '--mcp=local', '--prompt=go', 'w',
+      'cw', 'ss', '--in-place', '--fast', '--effort', 'xhigh', '--persona', 'pm', '--prompt=go', 'w',
     ]  # fmt: skip
 
   def test_bro_carried_in_command_and_cw_bro_forwarded(self):
@@ -158,11 +164,18 @@ class TestContainerCommand:
     assert command == ['cw', 'ss', '--in-place', '--bro', 'pm', 'w']
     assert forwarded_bro == 'pm'
 
+  def test_cw_session_forwards_the_default_persona_as_cw_bro(self):
+    with _ContainerHarness() as h:
+      rc = cw.session.start_session(_spec(drop=True))
+      forwarded_bro = h.env.get('CW_BRO')
+    assert rc == 0
+    assert forwarded_bro == 'ppp-dev'
+
   def test_default_base_is_left_to_the_entrypoint_head_fallback(self):
     # no CW_BASE_REF by default: the clone bases on HEAD — the host checkout as
     # cloned — with no network touched on the way
     with _ContainerHarness() as h:
-      rc = cw.session.start_session(_spec(mcp=None, drop=True))
+      rc = cw.session.start_session(_spec(drop=True))
     assert rc == 0
     _, kwargs = h.run_in_container.call_args
     assert kwargs['extra_env'] is None
@@ -170,7 +183,7 @@ class TestContainerCommand:
   def test_into_threads_the_resolved_base_into_the_container_env(self):
     with _ContainerHarness() as h:
       with patch('cw.session.resolve_ref', return_value='intosha') as resolve:
-        rc = cw.session.start_session(_spec(mcp=None, drop=True, into='feature'))
+        rc = cw.session.start_session(_spec(drop=True, into='feature'))
     assert rc == 0
     assert resolve.call_args[0][1] == 'feature'
     _, kwargs = h.run_in_container.call_args
@@ -179,7 +192,7 @@ class TestContainerCommand:
   def test_unresolvable_into_fails_launch(self):
     with _ContainerHarness() as h:
       with patch('cw.session.resolve_ref', return_value=None):
-        rc = cw.session.start_session(_spec(mcp=None, drop=True, into='nope'))
+        rc = cw.session.start_session(_spec(drop=True, into='nope'))
     assert rc == 1
     assert h.run_in_container.call_count == 0
 
@@ -209,7 +222,7 @@ class TestResumeCommand:
       fast=True,
       drop=True,
       effort='xhigh',
-      mcp='http',
+      persona='pm',
       grant_cred=['gmail_creds'],
       revoke_cred=['notion'],
       into='feature',
@@ -217,7 +230,7 @@ class TestResumeCommand:
     ).to_command_argv()
     assert parts == [
       'cw', 'ss', '--auto', '--fast', '--drop',
-      '--effort', 'xhigh', '--mcp=http', '--grant-cred', 'gmail_creds',
+      '--effort', 'xhigh', '--persona', 'pm', '--grant-cred', 'gmail_creds',
       '--revoke-cred', 'notion', '--into', 'feature', 'w', '--foo',
     ]  # fmt: skip
 
@@ -226,14 +239,14 @@ class TestResumeCommand:
     assert parts == ['cw', 'ss', '--host', '--auto', 'w']
 
   def test_resume_variant_carries_forwarded_flags_and_clears_create_only(self):
-    # resume_variant keeps --auto/--effort/--mcp/--grant-cred and adds --resume,
-    # while clearing the create-only --drop/--into/prompt/claude args
+    # resume_variant keeps --auto/--effort/--persona/--grant-cred and adds
+    # --resume, while clearing the create-only --drop/--into/prompt/claude args
     parts = (
       _spec(
         auto=True,
         drop=True,
         effort='xhigh',
-        mcp='http',
+        persona='pm',
         grant_cred=['gmail_creds'],
         into='feature',
         prompt='do it',
@@ -244,7 +257,7 @@ class TestResumeCommand:
     )
     assert parts == [
       'cw', 'ss', '--auto', '--resume',
-      '--effort', 'xhigh', '--mcp=http', '--grant-cred', 'gmail_creds', 'w',
+      '--effort', 'xhigh', '--persona', 'pm', '--grant-cred', 'gmail_creds', 'w',
     ]  # fmt: skip
 
   def test_start_session_records_resume_command(self):
@@ -259,12 +272,13 @@ class TestResumeCommand:
           auto=True,
           grant_cred=['gmail_creds'],
           effort='xhigh',
-          mcp='http',
+          persona='pm',
         )
       )
       resume_command = env['CW_RESUME_COMMAND']
     assert (
-      resume_command == 'cw ss --auto --resume --effort xhigh --mcp=http --grant-cred gmail_creds w'
+      resume_command
+      == 'cw ss --auto --resume --effort xhigh --persona pm --grant-cred gmail_creds w'
     )
 
 
@@ -292,7 +306,7 @@ class TestInPlaceArgv:
       fast=True,
       drop=True,
       effort='xhigh',
-      mcp='local',
+      persona='pm',
       grant_cred=['gmail_creds'],
       revoke_cred=['notion'],
       into='feature',
@@ -301,18 +315,23 @@ class TestInPlaceArgv:
     ).to_in_place_argv()
     assert parts == [
       'ss', '--in-place', '--auto', '--fast',
-      '--effort', 'xhigh', '--mcp=local', '--prompt=do it', 'w', '--foo',
+      '--effort', 'xhigh', '--persona', 'pm', '--prompt=do it', 'w', '--foo',
     ]  # fmt: skip
 
   def test_resume_and_bro_carried(self):
     parts = _spec(resume=True, bro='pm').to_in_place_argv()
     assert parts == ['ss', '--in-place', '--resume', '--bro', 'pm', 'w']
 
-  def test_mcp_joined_so_the_name_cannot_be_its_value(self):
-    # a bare `--mcp` directly followed by the name would make the nargs='?'
-    # parser swallow the name as the choice value
-    parts = _spec(mcp='http').to_in_place_argv()
-    assert parts == ['ss', '--in-place', '--mcp=http', 'w']
+
+class TestSessionBro:
+  def test_bro_names_the_identity_directly(self):
+    assert _spec(bro='pm', persona=None).session_bro == 'pm'
+
+  def test_cw_session_runs_as_its_persona(self):
+    assert _spec(persona='pm').session_bro == 'pm'
+
+  def test_cw_session_defaults_to_ppp_dev(self):
+    assert _spec().session_bro == 'ppp-dev'
 
 
 class TestConcurrentSessionGuard:
@@ -375,6 +394,11 @@ class TestConcurrentSessionGuard:
 
     monkeypatch.setattr(cw.session, 'HostWorktree', _FakeHost)
     monkeypatch.setattr(cw.session, 'summon_allow_list', lambda *_a, **_k: set())
+    monkeypatch.setattr(cw.session.credentials, 'try_get', lambda name: 'tok')
+    monkeypatch.setattr(
+      cw.session, '_session_secrets', lambda *_a, **_k: ScopedSecrets(set(), set(), True)
+    )
+    monkeypatch.setattr(cw.session.credentials, 'build_scoped_store', lambda names, optional=(): {})
     called: list = []
     monkeypatch.setattr(
       cw.session, '_ensure_host_worktree', lambda *_a: called.append(True) or False
@@ -583,7 +607,7 @@ class TestHostSession:
     assert cw.session._host_session(_spec(host=True), None) == 0
     assert runs[0][1]['env']['CLAUDE_CONFIG_DIR'] == str(tmp_path / 'claude-config')
 
-  def test_missing_claude_code_fails_a_native_launch_before_the_worktree(
+  def test_missing_claude_code_fails_a_cw_session_launch_before_the_worktree(
     self, monkeypatch, tmp_path
   ):
     self._prepare_launch(monkeypatch, tmp_path)
@@ -742,6 +766,13 @@ class TestHostBrokerPingRoundTrip:
       monkeypatch.setattr(cw.session, '_ensure_host_worktree', lambda *_a: True)
       monkeypatch.setattr(cw.session, '_provision_host_worktree', lambda *_a: True)
       monkeypatch.setattr(cw.session, 'summon_allow_list', lambda *_a, **_k: set())
+      monkeypatch.setattr(cw.session.credentials, 'try_get', lambda name: 'tok')
+      monkeypatch.setattr(
+        cw.session, '_session_secrets', lambda *_a, **_k: ScopedSecrets(set(), set(), True)
+      )
+      monkeypatch.setattr(
+        cw.session.credentials, 'build_scoped_store', lambda names, optional=(): {}
+      )
       monkeypatch.delenv('BROKER_DISABLED', raising=False)
       assert cw.session._host_session(_spec(host=True), None) == 0
       # the CLI printed the correlated reply's wire JSON

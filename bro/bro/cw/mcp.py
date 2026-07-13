@@ -1,9 +1,9 @@
 """session-local HTTP MCP serving.
 
-`--bro` and `--mcp local` sessions get their MCP tools from an
-`mcp-server <spec> --http` instance the in-place session runner owns —
-OS-assigned port published via a port file, per-session bearer token — with
-claude pointed at it via a generated `--mcp-config`.
+Every `cw ss` session gets its MCP tools from an `mcp-server <spec> --http`
+instance the in-place session runner owns — OS-assigned port published via a
+port file, per-session bearer token — with claude pointed at it via a generated
+`--mcp-config`.
 """
 
 import json
@@ -78,11 +78,11 @@ class _SessionMCPServer:
   def wait_healthy(self) -> None:
     """block until /health answers 200 — every namespace endpoint ready to serve.
 
-    `bro:*` sessions gate the claude launch on this so the multi-second bro
-    import is paid here, off claude's critical path: claude itself blocks
-    startup on the server's connect (the `alwaysLoad` config entries), and that
-    block must not spend its connect timeout waiting out our import. raises
-    RuntimeError when the server dies or the deadline passes.
+    the runner gates the claude launch on this so the multi-second bro import
+    is paid here, off claude's critical path: claude itself blocks startup on
+    the server's connect (the `alwaysLoad` config entries), and that block must
+    not spend its connect timeout waiting out our import. raises RuntimeError
+    when the server dies or the deadline passes.
     """
     url = f'http://127.0.0.1:{self.endpoint.port}/health'
     deadline = time.monotonic() + _HEALTH_TIMEOUT
@@ -124,9 +124,8 @@ def _start_session_mcp_server(spec: str, cwd: Path, env: Mapping[str, str]) -> _
   is milliseconds and a claude connect that lands mid-import sits in the TCP
   backlog until uvicorn accepts. runs in its own session (spawn.popen), outside
   the terminal's process group, so a Ctrl-C aimed at claude doesn't kill it; the
-  caller stops it once claude exits and, for `bro:*` specs, gates the launch on
-  `wait_healthy`. raises RuntimeError when the server dies or fails to bind in
-  time.
+  caller stops it once claude exits and gates the launch on `wait_healthy`.
+  raises RuntimeError when the server dies or fails to bind in time.
   """
   token = secrets.token_urlsafe(32)
   state = Path(tempfile.mkdtemp(prefix='cw-mcp-'))

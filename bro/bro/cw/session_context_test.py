@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from cw.session_context import build_session_context, encode_session_context
 
 
@@ -13,49 +15,58 @@ def _by_kind(records: list[dict]) -> dict:
 
 
 class TestBuildSessionContext:
-  def test_themed_session_records(self, tmp_path):
+  def test_cw_session_records(self, tmp_path):
     records = build_session_context(
       system_prompt='injected text',
-      bro_mode=False,
       branch='worktree-foo',
       base_sha='abc123',
       base_ref=None,
-      mcp='http',
       bro=None,
+      persona='ppp-dev',
       proj_root=_proj_with_claude_md(tmp_path),
     )
     by = _by_kind(records)
     assert by['system_prompt']['subtype'] == 'cw_injected'
     assert by['system_prompt']['content'] == 'injected text'
     assert by['git']['fields'] == {'branch': 'worktree-foo', 'base_sha': 'abc123'}
-    assert by['mcp']['fields'] == {'mode': 'http', 'servers': ['flow']}
+    assert by['mcp']['fields'] == {'mode': 'persona', 'servers': ['persona:ppp-dev']}
     assert by['claude_md']['subtype'] == 'root'
     assert 'rules' in by['claude_md']['content']
 
   def test_bro_session_system_prompt_subtype(self, tmp_path):
     records = build_session_context(
       system_prompt='full bro prompt',
-      bro_mode=True,
       branch='worktree-foo',
       base_sha=None,
       base_ref=None,
-      mcp=None,
       bro='ppp-dev',
+      persona=None,
       proj_root=_proj_with_claude_md(tmp_path),
     )
     by = _by_kind(records)
     assert by['system_prompt']['subtype'] == 'bro'
     assert by['mcp']['fields'] == {'mode': 'bro', 'servers': ['bro:ppp-dev']}
 
+  def test_no_bro_and_no_persona_raises(self, tmp_path):
+    with pytest.raises(ValueError, match='bro or a persona'):
+      build_session_context(
+        system_prompt='x',
+        branch='worktree-foo',
+        base_sha=None,
+        base_ref=None,
+        bro=None,
+        persona=None,
+        proj_root=_proj_with_claude_md(tmp_path),
+      )
+
   def test_base_ref_included_when_set(self, tmp_path):
     records = build_session_context(
       system_prompt='x',
-      bro_mode=False,
       branch='worktree-foo',
       base_sha='sha',
       base_ref='origin/master',
-      mcp=None,
       bro=None,
+      persona='ppp-dev',
       proj_root=_proj_with_claude_md(tmp_path),
     )
     assert _by_kind(records)['git']['fields']['base_ref'] == 'origin/master'
@@ -63,12 +74,11 @@ class TestBuildSessionContext:
   def test_claude_md_omitted_when_absent(self, tmp_path):
     records = build_session_context(
       system_prompt='x',
-      bro_mode=False,
       branch='worktree-foo',
       base_sha='sha',
       base_ref=None,
-      mcp=None,
       bro=None,
+      persona='ppp-dev',
       proj_root=tmp_path,
     )
     assert 'claude_md' not in _by_kind(records)
@@ -78,12 +88,11 @@ class TestBuildSessionContext:
 
     records = build_session_context(
       system_prompt='x',
-      bro_mode=False,
       branch='worktree-foo',
       base_sha='sha',
       base_ref=None,
-      mcp='local',
       bro=None,
+      persona='ppp-dev',
       proj_root=_proj_with_claude_md(tmp_path),
     )
     assert json.loads(encode_session_context(records)) == records

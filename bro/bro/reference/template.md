@@ -38,9 +38,9 @@ value     := '#' name | name            name: [A-Za-z0-9_-]+
 `llm.mcp.render_text(text, harness=…, wire=…, creds=…)` renders directives against the facts the call site knows (the facts triple is documented in `reference/conditions.md`). Each surface renders its copy once, with its own facts:
 
 - `BaseBro.__init__` — the two bro prompt flavors (harness `bro`; wire `bare` / `mcp`)
-- `cw/system_prompt.py` — a native `cw ss` session's append prompt, the injected persona included (harness `claude`, wire `mcp`)
-- skill bodies — the `bro::skill` service tool serves harness `bro`; `cw` populates a native themed session with `claude`-rendered `SKILL.md` copies
+- `cw/system_prompt.py` — a cw-session's append prompt, the injected persona included (harness `claude`, wire `mcp`)
+- skill bodies — the `bro::skill` service tool serves harness `bro`; `cw` populates a cw-session with `claude`-rendered `SKILL.md` copies
 - tool descriptions and data-source summaries — rendered against the component's declared secrets at the assembling layer (`llm.mcp` `_NamespacedTool`, `mcp-server`, `bro show`)
-- `FileSource.read` — harness `bro`; `render=False` opts a source out, for a doc whose payload is the directive syntax itself (this reference and `reference/conditions.md`)
+- `FileSource.read` — no facts: one rendering is read by every harness, so a served doc must be surface-neutral and a `#harness`/`#wire`/`#creds` directive raises; `render=False` opts a source out entirely, for a doc whose payload is the directive syntax itself (this reference and `reference/conditions.md`)
 
 Authoring rule for prompt files — fork with directives rather than writing dual-surface prose — lives in `prompts/CLAUDE.md`.

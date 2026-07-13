@@ -801,6 +801,67 @@ class TestConditionalComponents:
     assert bro._live_mcp_servers() == []
 
 
+class TestClaudePersonaServers:
+  def _bro(self):
+    class PersonaBro(BaseBro):
+      name = 'persona'
+      description = 'd'
+      mcp_servers: ClassVar = [
+        when(llm.mcp.harness == 'bro', MCPServerSpec.of(_SecretServer)),
+        _make_spec('a'),
+      ]
+      data_sources: ClassVar = [when(llm.mcp.harness == 'bro', _SecretSource())]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    return PersonaBro()
+
+  def test_serves_only_claude_harness_components(self):
+    servers = self._bro().claude_persona_mcp_servers()
+    assert [s.namespace for s in servers] == ['test', 'bro']
+
+  def test_service_server_carries_banner_but_not_skill_or_raise(self, fake_packages):
+    package = fake_packages('_skills_persona', {'pr': _skill('open a PR', 'pr body')})
+
+    class SkillBro(BaseBro):
+      name = 'nsb'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    SkillBro.__module__ = package
+    names = asyncio.run(_collect_tool_names(SkillBro().claude_persona_mcp_servers()))
+    # skills reach a cw-session as slash commands, and `raise` only aborts
+    # bro.run(); the environment facts stay available as `banner`
+    assert 'banner' in names
+    assert 'skill' not in names
+    assert 'raise' not in names
+
+  def test_manifest_is_harness_aware(self):
+    bro = self._bro()
+    # alpha/beta (the bro-gated server) and gamma (the bro-gated source) are
+    # invisible to the claude-harness manifest
+    assert set(bro.needed_secrets()) == {'alpha', 'beta', 'gamma'}
+    assert bro.needed_secrets(harness='claude') == ()
+
+  def test_real_bro_persona_surfaces(self):
+    from bro.bros.dev import Dev
+
+    # the dev toolset is bro-harness-only — claude's built-in tools cover it —
+    # while the reference FileSources serve every harness
+    assert [s.namespace for s in Dev().claude_persona_mcp_servers()] == ['bro']
+    assert [s.namespace for s in PPPDev().claude_persona_mcp_servers()] == [
+      'flow',
+      'environment-source',
+      'template-source',
+      'conditions-source',
+      'bro',
+    ]
+    assert set(PPPDev().needed_secrets(harness='claude')) == {'github', 'notion', 'focus'}
+
+
 class _SecretServer(InProcessMCPServer):
   needed_secrets = ('alpha', 'beta')
 

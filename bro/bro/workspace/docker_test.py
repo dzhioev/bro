@@ -200,7 +200,7 @@ class TestDockerCreateArgv:
 
   def test_cw_bro_forwarded_by_default(self, build_argv, monkeypatch):
     # the in-place runner reads CW_BRO to theme the session and surface skills,
-    # so a themed native session needs it to reach the container.
+    # so a cw-session (persona-themed) needs it to reach the container.
     monkeypatch.setenv('CW_BRO', 'ppp-dev')
     assert 'CW_BRO' in build_argv()
 

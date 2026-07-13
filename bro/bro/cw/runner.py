@@ -25,7 +25,7 @@ from cw.claude_argv import build_claude_launch
 from cw.claude_config import _provision_host_claude_dir
 from cw.constants import bro_git_identity_env
 from cw.git import git_out
-from cw.mcp import _SessionMCPServer, _start_session_mcp_server
+from cw.mcp import _start_session_mcp_server
 from cw.paths import _claude_projects_dir, _in_container, _latest_jsonl, _project_root
 from cw.secrets import _apply_claude_auth
 from cw.session_context import (
@@ -49,12 +49,11 @@ def _set_session_context(spec: 'SessionSpec', system_prompt: str, workspace: Pat
     base_sha = None
   records = build_session_context(
     system_prompt=system_prompt,
-    bro_mode=spec.bro is not None,
     branch=f'worktree-{spec.name}',
     base_sha=base_sha,
     base_ref=spec.into,
-    mcp=spec.mcp,
     bro=spec.bro,
+    persona=spec.session_bro if spec.bro is None else None,
     proj_root=workspace,
   )
   os.environ[CW_SESSION_CONTEXT_ENV] = encode_session_context(records)
@@ -120,10 +119,9 @@ def run_in_place(spec: 'SessionSpec') -> int:
 
   os.environ.update(bro_git_identity_env())
 
-  if spec.bro is not None:
-    # CW_BRO themes the session (banner, statusLine); a native themed session
-    # inherits it from the outer environment instead (dive-in sets ppp-dev)
-    os.environ['CW_BRO'] = spec.bro
+  # CW_BRO themes the session (banner, statusLine): --bro names it, a
+  # cw-session runs as its persona
+  os.environ['CW_BRO'] = spec.session_bro
 
   with contextlib.ExitStack() as teardown:
     # host mode launches the session broxy (in a container the entrypoint started
@@ -142,48 +140,44 @@ def run_in_place(spec: 'SessionSpec') -> int:
 
     # session-local MCP serving, one mechanism for both flavors: OS-assigned port
     # published via a port file, per-session bearer token. the tools serve this
-    # workspace's code (the runner's cwd and venv).
-    server: Optional[_SessionMCPServer] = None
-    mcp_spec: Optional[str] = None
+    # workspace's code (the runner's cwd and venv) — the bro's own toolset under
+    # --bro, the persona's claude-harness namespaces for a cw-session.
     if spec.bro is not None:
       mcp_spec = f'bro:{spec.bro}'
-    elif spec.mcp == 'local':
-      mcp_spec = 'flow'
-    if mcp_spec is not None:
-      try:
-        server = _start_session_mcp_server(mcp_spec, workspace, os.environ)
-      except RuntimeError as e:
-        log.error('%s', e)
-        return 1
-      teardown.callback(server.stop)
+    else:
+      mcp_spec = f'persona:{spec.session_bro}'
+    try:
+      server = _start_session_mcp_server(mcp_spec, workspace, os.environ)
+    except RuntimeError as e:
+      log.error('%s', e)
+      return 1
+    teardown.callback(server.stop)
 
     skills_dir: Optional[Path] = None
-    bro_env = os.environ.get('CW_BRO')
-    if spec.bro is None and bro_env is not None:
-      # native themed session: surface the bro's skills as slash commands from a
+    if spec.bro is None:
+      # cw-session: surface the persona's skills as slash commands from a
       # per-session tmp dir via --add-dir, so concurrent sessions on the same
       # repo don't share `.claude/skills/`. a --bro session reaches its skills
       # through the `bro::skill` MCP tool instead (--bare skips discovery).
-      skills_dir = Path(tempfile.mkdtemp(prefix=f'cw-skills-{bro_env}-'))
-      _populate_bro_skills(skills_dir, bro_env)
+      skills_dir = Path(tempfile.mkdtemp(prefix=f'cw-skills-{spec.session_bro}-'))
+      _populate_bro_skills(skills_dir, spec.session_bro)
 
     launch = build_claude_launch(
       spec,
       workspace=workspace,
       claude_args=claude_args,
-      endpoint=server.endpoint if server is not None else None,
+      endpoint=server.endpoint,
       skills_dir=skills_dir,
     )
     _set_session_context(spec, launch.system_prompt, workspace)
 
-    if server is not None and spec.bro is not None:
-      # gate the launch on full tool readiness: the argv build above overlapped
-      # the server's own bro import, so much of the wait is already paid
-      try:
-        server.wait_healthy()
-      except RuntimeError as e:
-        log.error('%s', e)
-        return 1
+    # gate the launch on full tool readiness: the argv build above overlapped
+    # the server's own bro import, so much of the wait is already paid
+    try:
+      server.wait_healthy()
+    except RuntimeError as e:
+      log.error('%s', e)
+      return 1
 
     env = {**os.environ}
     _apply_claude_auth(env, warn_when_missing=spec.bro is None)

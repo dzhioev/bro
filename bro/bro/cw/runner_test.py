@@ -93,27 +93,29 @@ class TestRunInPlace:
       assert h.populate.call_count == 0
       assert h.build.call_args.kwargs['skills_dir'] is None
 
-  def test_mcp_local_serves_flow_without_health_gate(self, monkeypatch, tmp_path):
+  def test_cw_session_serves_the_persona_and_health_gates(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert cw.runner.run_in_place(_spec(mcp='local')) == 0
-      assert h.start_server.call_args[0][0] == 'flow'
-      assert h.server.wait_healthy.call_count == 0
+      assert cw.runner.run_in_place(_spec(persona='pm')) == 0
+      assert h.start_server.call_args[0][0] == 'persona:pm'
+      assert h.server.wait_healthy.call_count == 1
       assert h.server.stop.call_count == 1
       assert h.sync.call_count == 0
+      assert h.env['CW_BRO'] == 'pm'
+      assert h.build.call_args.kwargs['endpoint'] == h.server.endpoint
 
-  def test_native_session_starts_no_server(self, monkeypatch, tmp_path):
+  def test_cw_session_defaults_to_the_ppp_dev_persona(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert cw.runner.run_in_place(_spec(mcp='http')) == 0
-      assert h.start_server.call_count == 0
-      assert h.build.call_args.kwargs['endpoint'] is None
+      assert cw.runner.run_in_place(_spec()) == 0
+      assert h.start_server.call_args[0][0] == 'persona:ppp-dev'
+      assert h.env['CW_BRO'] == 'ppp-dev'
 
   def test_server_start_failure_returns_1(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
       h.start_server.side_effect = RuntimeError('did not bind')
-      assert cw.runner.run_in_place(_spec(mcp='local')) == 1
+      assert cw.runner.run_in_place(_spec()) == 1
       assert h.run_claude.call_count == 0
 
   def test_health_gate_failure_stops_server_and_returns_1(self, monkeypatch, tmp_path):
@@ -124,13 +126,12 @@ class TestRunInPlace:
       assert h.run_claude.call_count == 0
       assert h.server.stop.call_count == 1
 
-  def test_themed_native_session_populates_skills(self, monkeypatch, tmp_path):
+  def test_cw_session_populates_the_personas_skills(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      h.env['CW_BRO'] = 'ppp-dev'
-      assert cw.runner.run_in_place(_spec()) == 0
+      assert cw.runner.run_in_place(_spec(persona='pm')) == 0
       skills_dir, bro_name = h.populate.call_args[0]
-      assert bro_name == 'ppp-dev'
+      assert bro_name == 'pm'
       assert h.build.call_args.kwargs['skills_dir'] == skills_dir
 
   def test_exports_bro_git_identity_unconditionally(self, monkeypatch, tmp_path):
@@ -153,10 +154,10 @@ class TestRunInPlace:
       h.run_claude.return_value = 42
       assert cw.runner.run_in_place(_spec()) == 42
 
-  def test_native_session_applies_auth_with_warning(self, monkeypatch, tmp_path):
+  def test_cw_session_applies_auth_with_warning(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert cw.runner.run_in_place(_spec(mcp='http')) == 0
+      assert cw.runner.run_in_place(_spec()) == 0
       assert h.apply_auth.call_args.kwargs == {'warn_when_missing': True}
       # the transformed env is the one claude is spawned with
       assert h.apply_auth.call_args.args[0] is h.run_claude.call_args.args[1]

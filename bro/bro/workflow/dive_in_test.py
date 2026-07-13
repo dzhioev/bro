@@ -43,25 +43,18 @@ class TestPickFreshName:
 
 
 class TestLaunchCommand:
-  """the emitted `cw ss ...` command must parse cleanly under cw's own ss parser.
-
-  regression: dive-in passed a bare `--mcp` immediately before the positional name.
-  `cw ss --mcp` is nargs='?' (const http), so with nothing between the flag and the
-  name argparse consumed the name as --mcp's value and failed the choices check. A
-  plain `dive-in` (no forwarded flags, no -p) is the path where nothing else sits
-  between the flag and the name to mask the crash.
-  """
+  """the emitted `cw ss ...` command must parse cleanly under cw's own ss parser."""
 
   @pytest.mark.parametrize(
     'kwargs',
     [
-      {},  # the path that crashed: nothing sits between --mcp and name
+      {},
       {'forwarded': ['--host']},
       {'forwarded': ['--host', '--auto']},
       {'command': 'do a thing', 'new': True},
     ],
   )
-  def test_emitted_command_parses_with_mcp_http(self, kwargs, fake_proj, capsys):
+  def test_emitted_command_parses(self, kwargs, fake_proj, capsys):
     forwarded = kwargs.pop('forwarded', [])
     rc = dive_in.dive_in(forwarded=forwarded, dry_run=True, **kwargs)
     assert rc == 0
@@ -70,26 +63,27 @@ class TestLaunchCommand:
     # Parser.parse strips argv[0] as the program name, mirroring cw.main(['cw', ...])
     args = cw.build_parser().parse(tokens)
     assert args['cmd'] == 'ss'
-    assert args['mcp'] == 'http'
     assert len(args['name']) > 0
     assert len(args['claude_args']) == 0  # nothing leaked into the forwarded REMAINDER
 
-  def test_bro_mode_forwards_bro_and_drops_mcp(self, fake_proj, capsys, monkeypatch):
+  def test_forwarded_flags_ride_verbatim(self, fake_proj, capsys, monkeypatch):
     monkeypatch.delenv('CW_BRO', raising=False)
-    rc = dive_in.dive_in(forwarded=['--bro', 'ppp-dev'], bro='ppp-dev', dry_run=True)
+    rc = dive_in.dive_in(forwarded=['--bro', 'ppp-dev'], dry_run=True)
     assert rc == 0
     args = cw.build_parser().parse(shlex.split(capsys.readouterr().out.strip()))
     assert args['bro'] == 'ppp-dev'
-    assert args['mcp'] is None
     assert len(args['claude_args']) == 0
-    # the runner exports CW_BRO for a --bro session; dive-in must not preempt it
+    # cw owns the session theming (persona default, CW_BRO export); dive-in
+    # must not preempt it
     assert 'CW_BRO' not in os.environ
 
-  def test_native_mode_exports_default_cw_bro(self, fake_proj, monkeypatch):
+  def test_persona_rides_the_forwarded_flags(self, fake_proj, capsys, monkeypatch):
     monkeypatch.delenv('CW_BRO', raising=False)
-    rc = dive_in.dive_in(forwarded=[], dry_run=True)
+    rc = dive_in.dive_in(forwarded=['--persona', 'pm'], dry_run=True)
     assert rc == 0
-    assert os.environ['CW_BRO'] == 'ppp-dev'
+    args = cw.build_parser().parse(shlex.split(capsys.readouterr().out.strip()))
+    assert args['persona'] == 'pm'
+    assert 'CW_BRO' not in os.environ
 
 
 class TestShellCommandReconstruction:

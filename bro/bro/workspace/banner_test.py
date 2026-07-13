@@ -52,7 +52,7 @@ class TestSessionFacts:
     monkeypatch.setenv('CW_BRO', 'ppp-dev')
     monkeypatch.setenv('CW_HOST_WORKSPACE', '/host/var/cw/containers/my-task')
     monkeypatch.setenv('PPP_SHELL_COMMAND', 'dive-in -t abc')
-    monkeypatch.setenv('CW_COMMAND', 'cw ss --auto --mcp=http my-task')
+    monkeypatch.setenv('CW_COMMAND', 'cw ss --auto my-task')
     facts = SessionFacts.collect()
     assert facts.in_container is True
     assert facts.name == 'my-task'
@@ -61,7 +61,7 @@ class TestSessionFacts:
     assert facts.container_workspace == '/workspace'
     assert facts.exec_command == 'cw exec my-task'
     assert facts.shell_command == 'dive-in -t abc'
-    assert facts.cw_command == 'cw ss --auto --mcp=http my-task'
+    assert facts.cw_command == 'cw ss --auto my-task'
     assert facts.prompt is None
 
   def test_extracts_prompt_from_dive_in_new(self, monkeypatch):
@@ -136,7 +136,7 @@ class TestRenderBanner:
   def test_llm_emits_plain_key_value(self):
     out = _facts(
       bro='ppp-dev',
-      cw_command='cw ss --mcp=http task',
+      cw_command='cw ss --persona pm task',
       shell_command='dive-in -t x',
     ).render_llm()
     assert '\033[' not in out  # no ANSI
@@ -147,7 +147,7 @@ class TestRenderBanner:
     assert 'workspace_host_path: /h/ws' in out
     assert 'workspace_container_path: /workspace' in out
     assert 'docker_shell_command: cw exec task' in out
-    assert 'cw_command: cw ss --mcp=http task' in out
+    assert 'cw_command: cw ss --persona pm task' in out
     assert 'launch_command: dive-in -t x' in out
 
   def test_llm_excludes_prompt_to_save_context(self):
@@ -241,9 +241,9 @@ class TestRenderBanner:
     assert '(unknown' in out
 
   def test_visual_shows_cw_command_when_distinct(self):
-    out = _facts(cw_command='cw ss --mcp=http task', shell_command='dive-in -t x').render_visual()
+    out = _facts(cw_command='cw ss --persona pm task', shell_command='dive-in -t x').render_visual()
     assert 'cw command:' in out
-    assert 'cw ss --mcp=http task' in out
+    assert 'cw ss --persona pm task' in out
 
   def test_visual_suppresses_cw_command_when_equal(self):
     out = _facts(cw_command='cw ss feature', shell_command='cw ss feature').render_visual()

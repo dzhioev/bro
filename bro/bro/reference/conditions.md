@@ -4,7 +4,7 @@ How PPP gates component declarations and static text on the facts of the surface
 
 ## Why
 
-Component declarations (a bro's `mcp_servers` / `data_sources`) and static text (system prompts, skill bodies, tool descriptions) are written once but consumed by different surfaces — the bro-native LLM loop, `--bro` claude sessions, native Claude Code sessions — with different toolsets, wire-name spellings, and credentials. Conditioning derives each surface's variant from one declaration, and fails fast on a typo instead of silently deciding one way forever.
+Component declarations (a bro's `mcp_servers` / `data_sources`) and static text (system prompts, skill bodies, tool descriptions) are written once but consumed by different surfaces — the bro-native LLM loop, `--bro` claude sessions, cw-sessions — with different toolsets, wire-name spellings, and credentials. Conditioning derives each surface's variant from one declaration, and fails fast on a typo instead of silently deciding one way forever.
 
 ## Variables
 
@@ -48,14 +48,14 @@ Three declaration-time guards close off the Python operators that cannot build d
 
 Consumers:
 
-- a bro's `mcp_servers` / `data_sources` entries may be `when`-wrapped or `iff`-grouped; `BaseBro.__init__` selects at harness `bro`, so an unmatched entry never mounts and its spec never builds. E.g. the dev toolset mounts only on the bro harness (claude has native file/shell tools): `mcp_servers = [when(harness == 'bro', dev.mcp)]`
+- a bro's `mcp_servers` / `data_sources` entries may be `when`-wrapped or `iff`-grouped; `BaseBro.__init__` selects at harness `bro`, so an unmatched entry never mounts and its spec never builds. E.g. the dev toolset mounts only on the bro harness (claude has built-in file/shell tools): `mcp_servers = [when(harness == 'bro', dev.mcp)]`
 - the `bro` service-tool roster: `banner` unconditional, `raise` non-interactive-only (a bool `when`), `skill` bro-harness-only
 
 ## Facts
 
 The facts triple a conditioning surface knows, exported by `llm/mcp.py` as ready-made placeholders (`from llm.mcp import creds, harness, wire`):
 
-- `harness` — which toolset drives the work: `bro` (bro-native LLM runs and `--bro` claude sessions) or `claude` (the native Claude Code harness with its built-in tools)
+- `harness` — which toolset drives the work: `bro` (bro-native LLM runs and `--bro` claude sessions) or `claude` (Claude Code's own harness with its built-in tools)
 
 - `wire` — how the surface spells canonical `namespace::tool` names: `bare` (`namespace__tool`, the bro-native LLM loop) or `mcp` (`mcp__namespace__tool`, any claude session). Orthogonal to `harness` — a `--bro` session runs the bro harness over mcp wire names
 

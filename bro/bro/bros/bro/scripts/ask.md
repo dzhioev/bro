@@ -23,7 +23,7 @@ Exception — set the timeout unprompted when the child's run is open-ended: a f
 
 Use whichever the session has — they speak the same mechanism:
 
-- **Bash available** (a native claude session): the `summon` CLI — `summon <target> '<prompt>'` (`--timeout <s>`, `--into <ref>`). It prints the request id and the started trail id to stderr, then blocks until the answer lands on stdout; non-zero exit + stderr on failure.
+- **Bash available** (a cw-session): the `summon` CLI — `summon <target> '<prompt>'` (`--timeout <s>`, `--into <ref>`). It prints the request id and the started trail id to stderr, then blocks until the answer lands on stdout; non-zero exit + stderr on failure.
 - **No Bash, the `summon` tools present** (`bro::summon` / `bro::summon_check` — `mcp__bro__summon` / `mcp__bro__summon_check` in a `--bro` claude session): call `summon` with `target` and `prompt` (optional `timeout`, `into`). It blocks and returns the answer; failures come back as the tool error with the reason. `detach: true` returns the request id right away instead; `summon_check(request_id)` peeks non-blockingly (`{state: pending|completed, …}`) and `summon_check(request_id, wait: true)` blocks and collects.
 - **Neither** — this session can't summon; say so instead of improvising.
 

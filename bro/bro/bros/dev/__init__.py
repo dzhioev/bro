@@ -106,6 +106,6 @@ Caution:
 class Dev(Bro):
   name = 'dev'
   description = 'generic software developer with file + shell + search tools'
-  # the dev toolset duplicates the claude harness's native file/shell tools
+  # the dev toolset duplicates the claude harness's built-in file/shell tools
   mcp_servers = [when(harness == 'bro', dev.mcp)]
   system_prompt = SYSTEM_PROMPT

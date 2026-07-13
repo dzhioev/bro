@@ -103,17 +103,15 @@ def _fix_command(task_arg: Optional[str], focus: bool, new: bool, command: Optio
 
 def dive_in(
   forwarded: list[str],
-  bro: Optional[str] = None,
   dry_run: bool = False,
   command: Optional[str] = None,
   task: Optional[str] = None,
   new: bool = False,
   focus: bool = False,
 ) -> int:
-  """launch the session. `bro` is the forwarded `--bro` value (already spliced
-  into `forwarded`), passed separately because dive-in's own policy branches on
-  it: a `--bro` session serves its own MCP tools and names its own persona, so
-  dive-in adds neither `--mcp=http` nor `CW_BRO`."""
+  """launch the session. session shaping — the persona (prompt, skills, MCP
+  namespaces; ppp-dev by default) or the `--bro` flavor — rides the forwarded
+  flags; dive-in adds nothing of its own."""
   prompt: Optional[str] = None
   if new:
     base = _slugify(command) if command is not None else ''
@@ -155,18 +153,6 @@ def dive_in(
     log.info('workspace: %s', name)
 
   cw_command = ['cw', 'ss', *forwarded]
-  if bro is None:
-    # surface the default bro's skills (/fix, /pr, /land): the in-place session
-    # runner (cw/runner.py) reads CW_BRO, populates a per-session skills dir, and
-    # passes it to claude via --add-dir. under --bro the runner exports CW_BRO
-    # itself and serves skills through the `bro::skill` tool.
-    os.environ['CW_BRO'] = cw.DEFAULT_SESSION_BRO
-    # a native session gets flow tools from the deployed MCP server; a --bro
-    # session serves its own (`cw ss` rejects the combination). --mcp=http
-    # (joined form), not a bare --mcp: `cw ss --mcp` is nargs='?', so a bare flag
-    # immediately followed by the positional name makes argparse consume the name
-    # as its value.
-    cw_command.append('--mcp=http')
   if prompt is not None:
     cw_command.extend(['-p', prompt])
   cw_command.append(name)
@@ -209,6 +195,5 @@ def main(argv: list[str]) -> Optional[int]:
     'PPP_SHELL_COMMAND',
     ' '.join(parser.reconstruct(args, prog=['dive-in'], exclude=('dry_run',))),
   )
-  bro = args['bro']
   forwarded = cw.extract_forwarded_argv(args)
-  return dive_in(forwarded=forwarded, bro=bro, **args)
+  return dive_in(forwarded=forwarded, **args)

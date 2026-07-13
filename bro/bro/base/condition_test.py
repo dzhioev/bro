@@ -133,16 +133,16 @@ class TestSelect:
 
 class TestIff:
   def test_first_holding_condition_wins(self):
-    entry = iff(var('harness') == 'bro', 'toolset', var('harness') == 'claude', 'native')
+    entry = iff(var('harness') == 'bro', 'toolset', var('harness') == 'claude', 'builtin')
     assert select([entry], _harness('bro')) == ['toolset']
-    assert select([entry], _harness('claude')) == ['native']
+    assert select([entry], _harness('claude')) == ['builtin']
 
   def test_else_item_selected_when_nothing_holds(self):
-    entry = iff(var('harness') == 'claude', 'native', 'fallback')
+    entry = iff(var('harness') == 'claude', 'builtin', 'fallback')
     assert select([entry], _harness('bro')) == ['fallback']
 
   def test_exhausted_without_else_raises_listing_conditions(self):
-    entry = iff(var('harness') == 'claude', 'native')
+    entry = iff(var('harness') == 'claude', 'builtin')
     with pytest.raises(ConditionError, match=r'iff\(#harness = claude\).*no else'):
       select([entry], _harness('bro'))
 

@@ -445,10 +445,13 @@ class BaseBro(ABC):
         may_summon_names.extend(raw_summon)
     self._extra_secrets: tuple[str, ...] = tuple(extra_secret_names)
     self._may_summon: tuple[str, ...] = tuple(may_summon_names)
-    # component conditions evaluate here, where composition happens: every
-    # consumer of this instance serves the bro harness (a `--bro` claude
-    # session included). wire is not a fact — component inclusion is
-    # wire-independent (the wire only spells tool names).
+    # the raw declaration entries, kept for per-harness selection
+    # (_components_for); the bro-harness selection is materialized eagerly —
+    # the prompt compositions below and the live-server cache read it. wire is
+    # not a fact — component inclusion is wire-independent (the wire only
+    # spells tool names).
+    self._mcp_entries = mcp_entries
+    self._data_source_entries = data_source_entries
     surface_creds = credentials.known_names()
     self._mcp_specs: list[llm.mcp.MCPServerSpec] = [
       llm.mcp.as_spec(entry)
@@ -497,7 +500,7 @@ class BaseBro(ABC):
       if len(descriptions) > 0:
         parts.append(_render_skills(descriptions))
       # both composed flavors serve the bro harness — the only per-flavor fact is
-      # the wire scheme. native themed claude sessions never see these prompts;
+      # the wire scheme. cw-sessions never see these prompts;
       # they get the raw `persona` rendered by cw with its own surface facts.
       return llm.mcp.render_text(
         '\n\n'.join(parts), harness='bro', wire=wire, creds=credentials.known_names()
@@ -547,35 +550,58 @@ class BaseBro(ABC):
       result.append((name, fm.get('description', '')))
     return result
 
-  def needed_secrets(self) -> tuple[str, ...]:
-    # the bro's component credential manifest: the union of each declared MCP
-    # server's + data source's `needed_secrets` (each walked along its own MRO)
-    # and the bro's MRO-collected `extra_secrets`. NOT the LLM key — that is added
-    # only by surfaces that run the bro as an LLM process (ask / do-task); a
-    # claude-code session themed as the bro uses its own auth, not the bro's spec.
-    # the host hydrates the per-surface set into a scoped store; a secret used but
-    # not declared surfaces as SecretNotFound — an under-declaration to fix.
+  def _components_for(
+    self, harness: llm.mcp.Harness
+  ) -> tuple[list[llm.mcp.MCPServerSpec], list[DataSource]]:
+    # the declared components that hold on `harness`. the bro-harness selection
+    # is the one materialized in __init__ (prompt composition and the
+    # live-server cache read it); any other harness selects on demand from the
+    # raw entries.
+    if harness == 'bro':
+      return self._mcp_specs, self._data_sources
+    surface_creds = credentials.known_names()
+    specs = [
+      llm.mcp.as_spec(entry)
+      for entry in llm.mcp.select(self._mcp_entries, harness=harness, creds=surface_creds)
+    ]
+    sources: list[DataSource] = llm.mcp.select(
+      self._data_source_entries, harness=harness, creds=surface_creds
+    )
+    return specs, sources
+
+  def needed_secrets(self, harness: llm.mcp.Harness = 'bro') -> tuple[str, ...]:
+    # the bro's component credential manifest for a consuming harness: the union
+    # of each declared MCP server's + data source's `needed_secrets`, over only
+    # the components that hold on `harness` — a surface never hydrates a secret
+    # of a component it doesn't mount — plus the bro's MRO-collected
+    # `extra_secrets`. NOT the LLM key — that is added only by surfaces that run
+    # the bro as an LLM process (ask / do-task); a claude-code session themed as
+    # the bro uses its own auth, not the bro's spec. the host hydrates the
+    # per-surface set into a scoped store; a secret used but not declared
+    # surfaces as SecretNotFound — an under-declaration to fix.
+    specs, sources = self._components_for(harness)
     names: set[str] = set()
-    for spec in self._mcp_specs:
+    for spec in specs:
       names.update(_component_needed_secrets(spec))
-    for ds in self._data_sources:
+    for ds in sources:
       names.update(_component_needed_secrets(ds))
     names.update(self._extra_secrets)
     return tuple(sorted(names))
 
-  def optional_secrets(self) -> tuple[str, ...]:
+  def optional_secrets(self, harness: llm.mcp.Harness = 'bro') -> tuple[str, ...]:
     # the bro's best-effort credential tier: the union of each declared MCP
-    # server's + data source's `optional_secrets`, minus anything already in
-    # `needed_secrets()` — a secret that is a hard requirement of any component
-    # is never downgraded to best-effort. the host hydrates these via
-    # `build_scoped_store(optional=...)`, so an absent one degrades the
-    # component instead of failing the launch.
+    # server's + data source's `optional_secrets` over the same per-harness
+    # component set as `needed_secrets`, minus anything already in it — a secret
+    # that is a hard requirement of any component is never downgraded to
+    # best-effort. the host hydrates these via `build_scoped_store(optional=...)`,
+    # so an absent one degrades the component instead of failing the launch.
+    specs, sources = self._components_for(harness)
     names: set[str] = set()
-    for spec in self._mcp_specs:
+    for spec in specs:
       names.update(_component_optional_secrets(spec))
-    for ds in self._data_sources:
+    for ds in sources:
       names.update(_component_optional_secrets(ds))
-    return tuple(sorted(names - set(self.needed_secrets())))
+    return tuple(sorted(names - set(self.needed_secrets(harness))))
 
   @classmethod
   def create(cls, llm_spec: LLMSpec) -> Self:
@@ -710,6 +736,21 @@ class BaseBro(ABC):
     # built-ins, so the session drives work through the bro toolset, not
     # Monitor/Bash) over mcp wire names.
     return self._mcp_servers_for(interactive=True, wire='mcp')
+
+  def claude_persona_mcp_servers(self) -> list[llm.mcp.MCPServer]:
+    # the MCP servers a cw-session themed as this bro mounts — claude's full
+    # harness with the bro as its persona, served through mcp_server.py's
+    # `persona:<name>` surface: the declared servers and data sources that hold
+    # on the claude harness — an entry gated to the bro harness (the dev
+    # toolset, the reference FileSources) never mounts, claude's built-in tools
+    # cover it — plus the service server (`banner` and the summon pair; no
+    # `skill`, a cw-session gets skills as slash commands; no `raise`, which
+    # only aborts `bro.run()`).
+    specs, sources = self._components_for('claude')
+    servers: list[llm.mcp.MCPServer] = [spec.build() for spec in specs]
+    servers.extend(ds.as_mcp_server() for ds in sources)
+    servers.append(_build_service_server(self, include_raise=False, harness='claude', wire='mcp'))
+    return servers
 
   def _system_prompt_for(self, *, interactive: bool) -> str:
     # the run mode is known here, at run start, so the matching session-mode

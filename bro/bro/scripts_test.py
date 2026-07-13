@@ -14,7 +14,7 @@ class TestPopulateBroSkills:
       assert skill_md.is_file()
       assert not skill_md.is_symlink()
 
-  def test_content_is_source_rendered_for_native_claude_surface(self, tmp_path):
+  def test_content_is_rendered_for_the_claude_harness(self, tmp_path):
     cw.bro._populate_bro_skills(tmp_path, 'ppp-dev')
     src = create_bro('ppp-dev').skills['pr']
     written = (tmp_path / '.claude' / 'skills' / 'pr' / 'SKILL.md').read_text()

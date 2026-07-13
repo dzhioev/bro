@@ -1,5 +1,6 @@
 import pytest
 
+from base.template import TemplateError
 from bro.datasources.file import FileSource
 
 
@@ -29,10 +30,13 @@ def test_read_picks_up_file_edits(env_file):
   assert src.read() == 'replaced'
 
 
-def test_read_renders_directives_for_the_bro_harness(env_file):
+def test_read_raises_on_a_surface_directive(env_file):
+  # one rendering is read by every harness, so the body must be surface-neutral;
+  # a harness fork fails loudly instead of silently picking a branch
   env_file.write_text('{{iff #harness = bro}}call the tool{{else}}run the CLI{{end}}')
   src = FileSource('environment', summary='x', path=env_file)
-  assert src.read() == 'call the tool'
+  with pytest.raises(TemplateError, match='#harness'):
+    src.read()
 
 
 def test_read_verbatim_serves_directive_payload_raw(env_file):
@@ -60,7 +64,10 @@ async def test_read_tool_returns_file_body(env_file):
 
 
 @pytest.mark.asyncio
-async def test_read_tool_description_mentions_source_name(env_file):
-  server = FileSource('environment', summary='x', path=env_file).as_mcp_server()
+async def test_read_tool_description_carries_name_and_summary(env_file):
+  # the summary must reach surfaces that see only the tool listing (a
+  # cw-session has no `## Data sources` block)
+  server = FileSource('environment', summary='session playbook', path=env_file).as_mcp_server()
   tool = (await server.list_tools())[0]
   assert 'environment' in tool.description
+  assert 'session playbook' in tool.description

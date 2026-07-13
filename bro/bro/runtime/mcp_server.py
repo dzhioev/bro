@@ -23,6 +23,7 @@ if TYPE_CHECKING:
   from llm.mcp import MCPServer, Tool
 
 _BRO_PREFIX = 'bro:'
+_PERSONA_PREFIX = 'persona:'
 
 
 def _flow_server() -> 'MCPServer':
@@ -41,10 +42,15 @@ def _resolve_servers(spec: str) -> list['MCPServer']:
     from bro.registry import create_bro
 
     return create_bro(spec[len(_BRO_PREFIX) :]).claude_bro_mcp_servers()
+  if spec.startswith(_PERSONA_PREFIX):
+    from bro.registry import create_bro
+
+    return create_bro(spec[len(_PERSONA_PREFIX) :]).claude_persona_mcp_servers()
   factory = _STATIC_SERVERS.get(spec)
   if factory is None:
     raise SystemExit(
-      f'unknown server {spec!r}; expected one of {sorted(_STATIC_SERVERS)} or bro:<name>'
+      f'unknown server {spec!r}; expected one of {sorted(_STATIC_SERVERS)}, '
+      'bro:<name>, or persona:<name>'
     )
   return [factory()]
 
@@ -192,7 +198,7 @@ def main(argv: list[str]) -> Optional[int]:
   parser = base.args.Parser(description='generic MCP server: stdio by default, HTTP with --http')
   parser.add_argument(
     'server',
-    help=f'server to serve: {sorted(_STATIC_SERVERS)} or bro:<name>',
+    help=f'server to serve: {sorted(_STATIC_SERVERS)}, bro:<name>, or persona:<name>',
   )
   parser.add_argument(
     '--http',
@@ -219,8 +225,10 @@ def main(argv: list[str]) -> Optional[int]:
       args['port'] is not None or args['port_file'] is not None or args['bearer_token'] is not None
     ):
       raise SystemExit('--port/--port-file/--bearer-token only apply with --http')
-    if args['server'].startswith(_BRO_PREFIX):
-      raise SystemExit('bro:<name> serves one endpoint per namespace; run it with --http')
+    if args['server'].startswith((_BRO_PREFIX, _PERSONA_PREFIX)):
+      raise SystemExit(
+        'bro:<name> and persona:<name> serve one endpoint per namespace; run them with --http'
+      )
     asyncio.run(run(_resolve_servers(args['server'])[0]))
     return None
 

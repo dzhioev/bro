@@ -7,20 +7,10 @@ from pathlib import Path
 from typing import Optional
 
 from base import credentials, log
-from cw.constants import DEFAULT_SESSION_BRO
 
 # secrets every claude code session resolves regardless of bro: the
 # sync-session-log hooks run in-session, and an in-session bro run records to trails.
 _CW_SESSION_BASELINE = ('session_log', 'trails')
-
-
-def _session_bro_name(bro: Optional[str]) -> str:
-  """the bro a `cw ss` session runs as — its identity for credential scoping and
-  the summon allow-list. `--bro` names it directly; a native session themes as the
-  ambient CW_BRO (dive-in sets ppp-dev; a plain `cw ss` defaults to it too)."""
-  if bro is not None:
-    return bro
-  return os.environ.get('CW_BRO', DEFAULT_SESSION_BRO)
 
 
 @dataclass(frozen=True)
@@ -82,7 +72,7 @@ def _apply_claude_auth(env: dict[str, str], *, warn_when_missing: bool = False) 
   scrubs the inherited vars that outrank the session's designated auth, then
   overlays the long-lived `claude setup-token` credential (`claude_code`). the
   session's private claude state (cw/claude_config.py) carries no OAuth
-  credentials file, so the token is a native session's whole auth — both
+  credentials file, so the token is a cw-session's whole auth — both
   launch surfaces gate on it before anything is created, and `warn_when_missing`
   surfaces the remaining unauthenticated path (a runner spawned by an outer cw
   that predates the gate). a `--bro` session authenticates via apiKeyHelper and
@@ -112,10 +102,10 @@ def _finalize_secrets(secrets: set[str], *, grant: list[str], revoke: list[str])
   )
 
 
-def _session_secrets(bro_name: str, *, mcp: Optional[str], bro_mode: bool) -> ScopedSecrets:
+def _session_secrets(bro_name: str, *, bro_mode: bool) -> ScopedSecrets:
   """scoped credential sets (required, optional) + docker-socket decision for a
   `cw ss` session themed as `bro_name` — one computation for both launch modes.
-  the two surfaces request different sets (required hydration is strict, so each
+  the two flavors request different sets (required hydration is strict, so each
   requests only what it actually uses):
 
   - `--bro` (`claude --bare` serving the bro's own in-process MCP servers): the
@@ -123,14 +113,15 @@ def _session_secrets(bro_name: str, *, mcp: Optional[str], bro_mode: bool) -> Sc
     bro's `optional_secrets()` hydrated best-effort (e.g. the LLM key behind a
     data source's query-focused fetch summary). docker socket only if
     `bro.needs_docker`.
-  - a native claude code session themed as the bro (dive-in / plain `cw ss`): it
-    drives the bro's *skills* (bash → `extra_secrets`) and its flow via `--mcp`,
-    not the bro's in-process MCP / data-source toolset — so `extra_secrets`
-    + the flow MCP secrets (`--mcp http` → `flow_mcp` for the deployed server;
-    `--mcp local` → whatever `flow.mcp.spec()` declares, since the session-local
-    server runs in-session) + `claude_code` (required: the long-lived OAuth
-    token it exports as CLAUDE_CODE_OAUTH_TOKEN is a native session's only
-    auth). always keeps the socket (it has a Bash tool).
+  - a cw-session themed as the bro (dive-in / plain `cw ss`): the
+    claude-harness manifest — `needed_secrets(harness='claude')`, covering
+    exactly the components the session-local `persona:<name>` server mounts (a
+    component gated to the bro harness contributes nothing) plus the bro's
+    `extra_secrets` — the matching optional tier, and `claude_code` (required:
+    the long-lived OAuth token it exports as CLAUDE_CODE_OAUTH_TOKEN is a
+    cw-session's only auth; `--bro` runs claude --bare, which ignores the
+    var and authenticates with the anthropic key). always keeps the socket (it
+    has a Bash tool).
 
   both add the session baseline (sync-log + trails) to the required set, and
   `openai` to the optional tier — the Stop-hook listener's tool_use guard LLM
@@ -145,7 +136,7 @@ def _session_secrets(bro_name: str, *, mcp: Optional[str], bro_mode: bool) -> Sc
     bro = create_bro(bro_name)
   except KeyError as e:
     # unknown bro (registry KeyError) only — other failures propagate rather than
-    # collapse into a silently under-scoped session. a native session still gets
+    # collapse into a silently under-scoped session. a cw-session still gets
     # the socket; a --bro fallback does not (moot anyway — the argv builder
     # re-raises the same KeyError downstream).
     log.warning('could not resolve bro %r for credential scoping: %s', bro_name, e)
@@ -156,18 +147,10 @@ def _session_secrets(bro_name: str, *, mcp: Optional[str], bro_mode: bool) -> Sc
     optional.update(bro.optional_secrets())
     docker_sock = bro.needs_docker
   else:
-    secrets.update(bro._extra_secrets)
-    if mcp == 'http':
-      secrets.add('flow_mcp')
-    if mcp == 'local':
-      import flow.mcp
-
-      secrets.update(flow.mcp.spec().needed_secrets)
-    # required, not best-effort: this secret's CLAUDE_CODE_OAUTH_TOKEN is a
-    # native session's sole credential, so a missing token must fail loudly
-    # before the session starts rather than as a turn-1 401 inside it. `--bro`
-    # (claude --bare) omits it — bare ignores the var and authenticates with
-    # the anthropic key.
+    secrets.update(bro.needed_secrets(harness='claude'))
+    optional.update(bro.optional_secrets(harness='claude'))
+    # required, not best-effort: a missing token must fail loudly before the
+    # session starts rather than as a turn-1 401 inside it.
     secrets.add('claude_code')
   return ScopedSecrets(required=secrets, optional=optional, docker_sock=docker_sock)
 

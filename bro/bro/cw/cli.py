@@ -35,14 +35,6 @@ def build_parser() -> Parser:
     help='resume the latest claude session in the named workspace; skips the initial prompt',
   )
   ss.add_argument(
-    '--mcp',
-    nargs='?',
-    const='http',
-    default=None,
-    choices=['http', 'local'],
-    help='connect flow MCP tools: http (default) uses the deployed server, local serves this checkout via a session-local HTTP server',
-  )
-  ss.add_argument(
     '-p', '--prompt', default=None, help='initial prompt (prepended with base prompt)'
   )
   ss.add_argument('name', help='worktree name')
@@ -155,8 +147,8 @@ def main(argv: list[str]) -> Optional[int]:
       '--into cannot be combined with --resume (it only applies when creating a workspace)'
     )
   if args['bro'] is not None:
-    if args['mcp'] is not None:
-      parser.error('--bro cannot be combined with --mcp (the bro defines its own MCP servers)')
+    if args['persona'] is not None:
+      parser.error('--bro cannot be combined with --persona (the bro is the session persona)')
     if not in_place:
       if args['host']:
         parser.error(

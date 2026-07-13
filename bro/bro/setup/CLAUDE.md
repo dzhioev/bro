@@ -49,7 +49,7 @@ Credentials live in the standalone `~/.ppp` store (the GNU Stow target of `dot-p
 - `notion.json` — Notion token + database IDs (`tasks_db_id`, `events_db_id`, `projects_db_id`, `media_db_id`)
 - `google_api.json` — Google OAuth client config
 - `gmail_creds.json` — cached Gmail OAuth token (JSON-serialised)
-- `flow_mcp.json` — `{ "url": "https://flow.<delegated_subdomain>", "token": "<bearer-token>" }` for the deployed flow MCP server (`cw --mcp http` and external MCP clients)
+- `flow_mcp.json` — `{ "url": "https://flow.<delegated_subdomain>", "token": "<bearer-token>" }` for the deployed flow MCP server (external MCP clients — Claude apps, agents on other hosts)
 - `focus.json` — `{ "url": ..., "token": ... }` for the focus HTTP client
 - `infra.json` — `{ "apex": ..., "delegated_subdomain": ... }` consumed by `infra/cdk/config.py`
 - `session_log.json` — `{ "aws_access_key_id", "aws_secret_access_key", "region", "bucket", "table" }` for `sync-session-log` (created by `bootstrap_session_log.sh`).

@@ -17,7 +17,7 @@ def describe[F: Callable[..., Any]](function: F, text: str) -> F:
 
 # the agent harness a rendered text is consumed under — which toolset drives the
 # work: `bro` is the bro toolset (native LLM runs and `--bro` claude sessions,
-# where `--bare` strips claude's built-ins), `claude` is the native Claude Code
+# where `--bare` strips claude's built-ins), `claude` is Claude Code's own
 # harness with its built-in tools.
 Harness = Literal['bro', 'claude']
 _HARNESSES = frozenset(get_args(Harness))

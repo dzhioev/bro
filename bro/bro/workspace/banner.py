@@ -49,7 +49,8 @@ class SessionFacts:
   The fields are the documentation — what each renderer may show:
     - in_container — /.dockerenv presence
     - name — workspace name (CW_NAME)
-    - bro — bro persona (CW_BRO), only set under `cw ss --bro`
+    - bro — the bro the session runs as (CW_BRO): the `--bro` bro, or a
+      cw-session's persona
     - host_workspace — host-side path to the workspace dir
     - container_workspace — '/workspace' inside a container, else None
     - exec_command — `cw exec <name>` for container sessions

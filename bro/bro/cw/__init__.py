@@ -35,7 +35,7 @@ keeps the container's git state genuinely isolated. layout:
     --rm exit (or by `cw clean`), so plaintext secrets never linger on the host.
     github, aws, and the claude_code OAuth token arrive as declared secrets in
     this store, each wired into its consumer by an install hook (git / the aws
-    CLI / the CLAUDE_CODE_OAUTH_TOKEN env a native claude code session
+    CLI / the CLAUDE_CODE_OAUTH_TOKEN env a cw-session
     authenticates with). So there is no out-of-band github-token bind-mount, no
     ~/.aws mount, and no OAuth credentials file: one stable bearer per session
     means no token to refresh or sync between sessions. (`--bro` / `do`

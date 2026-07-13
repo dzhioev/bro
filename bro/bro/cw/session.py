@@ -9,6 +9,7 @@ from typing import Optional
 
 from base import credentials, log
 from cw.claude_config import _provision_host_claude_dir
+from cw.constants import DEFAULT_SESSION_BRO
 from cw.containers import _broker_enabled, run_in_container
 from cw.docker import find_container_id
 from cw.git import resolve_ref
@@ -17,7 +18,6 @@ from cw.secrets import (
   _apply_claude_auth,
   _finalize_secrets,
   _materialize_scoped_store,
-  _session_bro_name,
   _session_secrets,
 )
 from cw.summon import summon_allow_list
@@ -47,7 +47,7 @@ class SessionSpec:
   effort: Optional[str]
   resume: bool
   into: Optional[str]
-  mcp: Optional[str]
+  persona: Optional[str]
   bro: Optional[str]
   prompt: Optional[str]
   claude_args: list[str]
@@ -56,6 +56,15 @@ class SessionSpec:
     for field in ('grant_cred', 'revoke_cred', 'grant_summon', 'revoke_summon'):
       if getattr(self, field) is None:
         object.__setattr__(self, field, [])
+
+  @property
+  def session_bro(self) -> str:
+    """the bro this session runs as — its identity for credential scoping, the
+    summon allow-list, and a cw-session's persona deliveries. `--bro` names it
+    directly; a cw-session runs as its `--persona`, ppp-dev by default."""
+    if self.bro is not None:
+      return self.bro
+    return self.persona if self.persona is not None else DEFAULT_SESSION_BRO
 
   def to_command_argv(self) -> list[str]:
     """reconstruct this session as `cw ss` argv tokens.
@@ -74,10 +83,8 @@ class SessionSpec:
     parts = ['cw', 'ss', *(f for f, v in flags.items() if v)]
     if self.effort is not None:
       parts.extend(['--effort', self.effort])
-    if self.mcp is not None:
-      # joined form: --mcp is nargs='?', so a bare flag directly followed by the
-      # name positional would swallow the name as its value
-      parts.append(f'--mcp={self.mcp}')
+    if self.persona is not None:
+      parts.extend(['--persona', self.persona])
     if self.bro is not None:
       parts.extend(['--bro', self.bro])
     for g in self.grant_cred:
@@ -100,16 +107,14 @@ class SessionSpec:
     a second serialization, distinct from to_command_argv: it carries the prompt
     and the forwarded claude args (which to_command_argv deliberately omits) and
     drops the flags the outer already consumed (--host --drop --grant-cred
-    --revoke-cred --grant-summon --revoke-summon --into). the prompt and mcp
-    values use the joined `=` form so a prompt
-    starting with `-` can't be mistaken for a flag and the nargs='?' --mcp can't
-    swallow the name positional."""
+    --revoke-cred --grant-summon --revoke-summon --into). the prompt uses the
+    joined `=` form so a prompt starting with `-` can't be mistaken for a flag."""
     flags = {'--auto': self.auto, '--fast': self.fast, '--resume': self.resume}
     parts = ['ss', '--in-place', *(f for f, v in flags.items() if v)]
     if self.effort is not None:
       parts.extend(['--effort', self.effort])
-    if self.mcp is not None:
-      parts.append(f'--mcp={self.mcp}')
+    if self.persona is not None:
+      parts.extend(['--persona', self.persona])
     if self.bro is not None:
       parts.extend(['--bro', self.bro])
     if self.prompt is not None:
@@ -156,6 +161,11 @@ def start_session(spec: SessionSpec) -> int:
   os.environ['CW_NAME'] = spec.name
   os.environ.setdefault('PPP_SHELL_COMMAND', os.environ['CW_COMMAND'])
   os.environ['CW_RESUME_COMMAND'] = ' '.join(spec.resume_variant().to_command_argv())
+  # CW_BRO themes the session beyond the runner's own process tree (`cw exec`
+  # shells render the bro banner; the statusLine reads it): every session runs
+  # as a bro — --bro names it, a cw-session runs as its persona. the runner
+  # re-sets it next to claude.
+  os.environ['CW_BRO'] = spec.session_bro
 
   container = not spec.host
   if container and os.environ.get('CW_IN_CONTAINER') is not None:
@@ -214,13 +224,8 @@ def _container_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
       log.error('no claude session found for %s in %s', spec.name, projects_dir)
       return 1
 
-  if spec.bro is not None:
-    # CW_BRO themes the container beyond the runner's own process tree (`cw exec`
-    # shells render the bro banner); the runner re-sets it next to claude.
-    os.environ['CW_BRO'] = spec.bro
-
-  bro_name = _session_bro_name(spec.bro)
-  scoped = _session_secrets(bro_name, mcp=spec.mcp, bro_mode=spec.bro is not None)
+  bro_name = spec.session_bro
+  scoped = _session_secrets(bro_name, bro_mode=spec.bro is not None)
   try:
     secrets = _finalize_secrets(scoped.required, grant=spec.grant_cred, revoke=spec.revoke_cred)
     may_summon = summon_allow_list(bro_name, grant=spec.grant_summon, revoke=spec.revoke_summon)
@@ -321,19 +326,19 @@ def _host_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
   # the session's summon allow-list, computed before the worktree exists so a bad
   # --grant-summon/--revoke-summon fails without creating anything. host mode is
   # covered like container mode — its broker root enforces the same policy.
-  bro_name = _session_bro_name(spec.bro)
+  bro_name = spec.session_bro
   try:
     may_summon = summon_allow_list(bro_name, grant=spec.grant_summon, revoke=spec.revoke_summon)
   except ValueError as e:
     log.error('%s', e)
     return 1
 
-  # a native session's sole auth is the claude_code setup-token; its private
+  # a cw-session's sole auth is the claude_code setup-token; its private
   # claude state carries no OAuth file to fall back on. gated ahead of the
   # general hydration below for the actionable message.
   if spec.bro is None and credentials.try_get('claude_code') is None:
     log.error(
-      'claude_code secret not resolvable — a native session authenticates with the '
+      'claude_code secret not resolvable — a cw-session authenticates with the '
       'setup-token; mint one with `claude setup-token` and store it in '
       '~/.ppp/claude_code_oauth_token'
     )
@@ -342,7 +347,7 @@ def _host_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
   # the same scoped-store hydration as container mode — strict, before anything
   # is created; a convenience scope on host, not a boundary (reference/cw.md,
   # "Scoped credential hydration")
-  scoped = _session_secrets(bro_name, mcp=spec.mcp, bro_mode=spec.bro is not None)
+  scoped = _session_secrets(bro_name, bro_mode=spec.bro is not None)
   try:
     secrets = _finalize_secrets(scoped.required, grant=spec.grant_cred, revoke=spec.revoke_cred)
   except ValueError as e:

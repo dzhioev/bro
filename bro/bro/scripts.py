@@ -11,8 +11,8 @@ _RENDERED_MANIFEST = '.cw-rendered'
 def _populate_bro_skills(project: Path, bro_name: str) -> None:
   """populate <project>/.claude/skills/<name>/SKILL.md with the named bro's
   `bro/bros/<bro>/skills/<name>.md` files, template directives rendered for
-  the native claude surface (`llm.mcp.render_text`) — a native themed session reads
-  these as slash commands, so it must see the claude-side procedures.
+  the claude harness (`llm.mcp.render_text`) — a cw-session reads these as
+  slash commands, so it must see the claude-side procedures.
 
   called by the in-place session runner (`cw ss --in-place`): `project` is a
   per-session `tempfile.mkdtemp` directory passed to claude via `--add-dir`, so

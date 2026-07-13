@@ -1,22 +1,21 @@
 """the claude argv for a `cw ss` session — one builder for both flavors.
 
-The native/bro fork is confined to here: `--bro` selects a `--bare` claude wired
-to the bro's session-local MCP namespaces and api-key auth, native gets the full
-harness with the cw-injected append prompt. Everything else — model, the merged
-`--settings` (fastMode + apiKeyHelper + the Stop-hook listener), `--effort`, the
-forwarded claude args, skill surfacing, prompt seeding — is handled once,
-identically wherever the session runs.
+The cw-session/bro fork is confined to here: `--bro` selects a `--bare` claude
+with api-key auth and the bro's own system prompt, a cw-session keeps the full
+harness with the cw-injected append prompt. Both mount their bro's session-local
+MCP namespaces. Everything else — model, the merged `--settings` (fastMode +
+apiKeyHelper + the Stop-hook listener), `--effort`, the forwarded claude args,
+skill surfacing, prompt seeding — is handled once, identically wherever the
+session runs.
 """
 
 import json
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
-from base import credentials
 from cw.constants import _CW_MODEL
-from cw.mcp import MCPEndpoint, _http_mcp_config, _server_entry
+from cw.mcp import MCPEndpoint, _http_mcp_config
 from cw.system_prompt import _mode_prompt, _session_append_prompt
 
 if TYPE_CHECKING:
@@ -27,22 +26,10 @@ if TYPE_CHECKING:
 class ClaudeLaunch:
   """a built claude invocation: the argv (everything after the `claude` program
   token) plus the session-shaping prompt text (`--system-prompt` for bro,
-  `--append-system-prompt` for native) that CW_SESSION_CONTEXT captures."""
+  `--append-system-prompt` for a cw-session) that CW_SESSION_CONTEXT captures."""
 
   argv: list[str]
   system_prompt: str
-
-
-def _deployed_mcp_config() -> str:
-  """`--mcp-config` json pointing at the deployed flow MCP server (`--mcp http`)."""
-  try:
-    config = credentials.get_json('flow_mcp')
-  except credentials.SecretNotFound:
-    raise SystemExit('missing flow_mcp secret — run flow/mcp/server/bootstrap_secrets.sh')
-  return json.dumps(
-    {'mcpServers': {'flow': _server_entry(config['url'], config['token'])}},
-    separators=(',', ':'),
-  )
 
 
 def _listen_hook_config(workspace: Path) -> dict:
@@ -71,16 +58,18 @@ def build_claude_launch(
   *,
   workspace: Path,
   claude_args: list[str],
-  endpoint: Optional[MCPEndpoint] = None,
+  endpoint: MCPEndpoint,
   skills_dir: Optional[Path] = None,
 ) -> ClaudeLaunch:
   """build the claude argv for a session running in `workspace`.
 
   `claude_args` is the forwarded tail (the user's extra args, plus any resolved
   `--resume <id>` — resolution is the caller's, since it differs per launch
-  layer). `endpoint` is the session-local MCP server's, required for `--bro` and
-  `--mcp local` (the caller owns the server lifecycle). `skills_dir` adds
-  `--add-dir` for a native themed session's populated skills root.
+  layer). `endpoint` is the session-local MCP server's (the caller owns the
+  server lifecycle); every session mounts its bro's namespaces from it — the
+  bro's own toolset under `--bro`, the persona's claude-harness set in a
+  cw-session. `skills_dir` adds `--add-dir` for a cw-session's populated
+  skills root.
 
   the bro flavor (`--bare --strict-mcp-config --tools ''`) runs claude with no
   project/user CLAUDE.md, no host MCP servers, no built-in tools, and only the
@@ -93,22 +82,24 @@ def build_claude_launch(
   (flagSettings, not project/local) means claude executes it without a
   workspace trust gate.
   """
+  from bro.registry import create_bro
+
   settings: dict = {'fastMode': spec.fast, 'hooks': _listen_hook_config(workspace)}
   argv = ['--model', _CW_MODEL]
+  bro = create_bro(spec.session_bro)
+  servers = (
+    bro.claude_bro_mcp_servers() if spec.bro is not None else bro.claude_persona_mcp_servers()
+  )
+  namespaces = list(dict.fromkeys(s.namespace for s in servers))
+  mcp_config = _http_mcp_config(namespaces, port=endpoint.port, token=endpoint.token)
   if spec.bro is not None:
-    from bro.registry import create_bro
-
-    bro = create_bro(spec.bro)
-    namespaces = list(dict.fromkeys(s.namespace for s in bro.claude_bro_mcp_servers()))
-    if endpoint is None:
-      raise ValueError('--bro requires a session-local MCP endpoint')
     settings['apiKeyHelper'] = str(workspace / 'setup' / 'print_anthropic_key.sh')
     system_prompt = f'{bro.claude_system_prompt}\n\n{_mode_prompt(spec.auto)}'
     argv += [
       '--bare',
       '--strict-mcp-config',
       '--mcp-config',
-      _http_mcp_config(namespaces, port=endpoint.port, token=endpoint.token),
+      mcp_config,
       '--settings',
       json.dumps(settings, separators=(',', ':')),
       '--system-prompt',
@@ -119,20 +110,17 @@ def build_claude_launch(
       ','.join(f'mcp__{namespace}__*' for namespace in namespaces),
     ]
   else:
-    system_prompt = _session_append_prompt(spec.auto, os.environ.get('CW_BRO'))
+    system_prompt = _session_append_prompt(spec.auto, spec.session_bro)
     argv += [
       '--disallowed-tools',
       'mcp__claude_ai_*',
       '--settings',
       json.dumps(settings, separators=(',', ':')),
+      '--mcp-config',
+      mcp_config,
+      '--append-system-prompt',
+      system_prompt,
     ]
-    if spec.mcp == 'http':
-      argv += ['--mcp-config', _deployed_mcp_config()]
-    elif spec.mcp == 'local':
-      if endpoint is None:
-        raise ValueError('--mcp local requires a session-local MCP endpoint')
-      argv += ['--mcp-config', _http_mcp_config(['flow'], port=endpoint.port, token=endpoint.token)]
-    argv += ['--append-system-prompt', system_prompt]
   if spec.auto:
     argv.append('--dangerously-skip-permissions')
   if spec.effort is not None:
