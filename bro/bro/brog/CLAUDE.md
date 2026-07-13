@@ -26,4 +26,4 @@ Each backend is a `System` implementation; how brog concepts map onto the tracke
 
 ## Testing
 
-`system_test.py` (config validation), `flow_proxy_test.py` (proxy logic over a fake transport; http transport over mocked urllib, including the SSE error path; local transport over a mocked flow System), `github_test.py` (the GitHub backend over a fake `github.api`), `mcp_test.py` (tool round-trips against a fake `System`). All in `run_tests.py` `PYTEST_FILES`.
+`system_test.py` (config validation), `flow_proxy_test.py` (proxy logic over a fake transport; http transport over mocked urllib, including the SSE error path; local transport over a mocked flow System), `github_test.py` (the GitHub backend over a fake `github.api`), `mcp_test.py` (tool round-trips against a fake `System`). All in `run_tests.py` `PYTEST_FILES`. `test_e2e.py` (`brog.test-e2e`) is the live counterpart: the whole System surface over one `HTTPTransport` against a deployed flow MCP server, self-cleaning, run separately per the root CLAUDE.md live-test convention.
