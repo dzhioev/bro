@@ -384,6 +384,13 @@ class TestModuleAliases:
 
 
 class TestCLI:
+  def test_list_prints_sorted_available_names(self, configs_dir: Path, capsys):
+    _write(configs_dir, 'notion.json', {'token': 't'})
+    _write(configs_dir, 'cw_github_token_bro', 'ghp_abc')
+
+    assert credentials.main(['credentials', 'list']) is None
+    assert capsys.readouterr().out == 'github\nnotion\n'
+
   def test_get_json_prints_json(self, configs_dir: Path, capsys):
     _write(configs_dir, 'notion.json', {'token': 't'})
     assert credentials.main(['credentials', 'get', 'notion']) is None

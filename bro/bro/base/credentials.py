@@ -489,6 +489,13 @@ def _get(name: str, field: Optional[str], as_json: bool) -> Optional[int]:
   return None
 
 
+def _list_available() -> None:
+  store = default_store()
+  for name in sorted(store.known_names()):
+    if store.available(name):
+      print(name)
+
+
 def _print_hooks() -> None:
   print(install_hooks())
 
@@ -503,6 +510,9 @@ def main(argv: list[str]) -> Optional[int]:
     '--json', dest='as_json', action='store_true', help='parse as json and pretty-print (indent=2)'
   )
   get_parser.set_handler(_get)
+  subparser.add_parser(
+    'list', help='list credential names that resolve in the default store'
+  ).set_handler(_list_available)
   subparser.add_parser(
     'install-hooks', help='print shell install hooks for the container entrypoint to eval'
   ).set_handler(_print_hooks)
