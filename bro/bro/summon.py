@@ -19,14 +19,20 @@ right after the send.
 
 Any summon is reclaimable by the request id both modes print — detached or a
 blocking wait that was killed mid-flight. `summon check <request-id>` peeks
-without blocking: the answer when the result already landed, `still running` on
-stderr with exit 3 while it hasn't, exit 1 on an id the broxy doesn't know. The
-peek rides the broxy's non-consuming `check`, so it disturbs neither the buffered
-result nor a live waiter — safe to poll a backgrounded summon. `summon check
---wait <request-id>` collects for real (the broxy's `claim`): it blocks like the
-original call and consumes the result; the wait is a lock, so while another
-waiter is alive it fails fast instead of stealing the result from under it —
-only a killed or detached wait is collectable. Every mode rides the session broxy
+without blocking: the answer when an unread result is in, `still running` on
+stderr with exit 3 while it hasn't landed, exit 1 on an id the broxy doesn't
+know. The peek rides the broxy's non-marking `check`, so it disturbs neither the
+retained result nor a live waiter — safe to poll a backgrounded summon. `summon
+check --wait <request-id>` collects for real (the broxy's `claim`): it blocks
+like the original call did; the wait is a lock, so while another waiter is alive
+it fails fast instead of stealing the result from under it, and once a result
+was collected a further --wait errors. The broxy retains delivered conversations,
+so a collected result is still readable: `summon check <request-id> --last-seen N`
+is the cursor read — it replays the conversation from sequence N (0 = the start)
+regardless of read status, the recovery path when the result was read by a wait
+whose reply never arrived (an abandoned MCP tool call, a killed collect); a
+`last_seen` ahead of what was actually read fails with "from the future". Every
+mode rides the session broxy
 — a set `BROKER_CHANNEL` always names one. Waits bound silence, not the run: the
 deadline opens at max(effective timeout, `LAUNCH_TIMEOUT`) — the prepare phase
 (image build, worktree seeding) runs before the host arms its request-lifecycle
@@ -39,14 +45,22 @@ sent while the broxy was down) or the launch wedged, and the failure message nam
 which phase went silent — no `started` points at the session's summon status/audit
 (`var/cw/summon/`), a lost terminal after `started` points at trails.
 
+`summon list` (`list_summons`) reads the session's summon-status file
+(`CW_SUMMON_STATUS`, written host-side by `cw/summon.py`) and reports the active
+summons and the last finished one, each with its request id — the rediscovery
+surface when a request id was lost with a dead client.
+
 Unlike the substrate `broker` CLI, an unset `BROKER_CHANNEL` is an error, not
 inert — a summon that silently does nothing is a failure. Broker imports are
 deferred to call time so importers of the module-level constants (`cw/summon.py`,
 on the pre-gate launch path) never pull the broker package in.
 """
 
+import json
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 import base.args
@@ -174,16 +188,33 @@ def _await_answer(
   return _interpret_terminal(terminal, trail_id)
 
 
+def open_client() -> 'Client':
+  """a connected channel client for a caller that owns the lifecycle itself. The
+  bro service tools open one outside their worker thread so a cancelled tool call
+  can close it and unblock the blocking wait — the broxy sees the waiter go and
+  the terminal buffers for a later check/collect (`ClientTransport.close`
+  documents the cross-thread abort guarantee this rides on). Raises `SummonError`
+  when the session has no channel."""
+  return _open_client()
+
+
 def summon_and_wait(
-  target: str, prompt: str, *, timeout: Optional[float] = None, into: Optional[str] = None
+  target: str,
+  prompt: str,
+  *,
+  timeout: Optional[float] = None,
+  into: Optional[str] = None,
+  client: Optional['Client'] = None,
 ) -> str:
-  """send one summon over a fresh channel client and block for the answer — the
-  bro `summon` tool's default path. Raises `SummonError` on any failure."""
-  with _open_client() as client:
-    request = client.send(SUMMON, _payload(target, prompt, timeout, into))
-    return _await_answer(
-      client, request, timeout=timeout if timeout is not None else DEFAULT_TIMEOUT
-    )
+  """send one summon and block for the answer — the bro `summon` tool's default
+  path. With `client` the caller owns the connection's lifecycle (closing it from
+  another thread aborts the wait); without, a fresh one is opened and closed per
+  call. Raises `SummonError` on any failure."""
+  if client is None:
+    with _open_client() as owned:
+      return summon_and_wait(target, prompt, timeout=timeout, into=into, client=owned)
+  request = client.send(SUMMON, _payload(target, prompt, timeout, into))
+  return _await_answer(client, request, timeout=timeout if timeout is not None else DEFAULT_TIMEOUT)
 
 
 def summon_detached(
@@ -197,26 +228,42 @@ def summon_detached(
 
 @dataclass(frozen=True)
 class SummonStatus:
-  """a `check_summon` outcome: the answer once the result is in, else pending."""
+  """a `check_summon` outcome: the answer once a result was readable, `pending`
+  while the child runs, or `collected` — the conversation ended and its result
+  was already read (re-read it with `last_seen`). `seq` is the conversation's
+  highest retained sequence; after a cursor read it is also the new cursor."""
 
   pending: bool
   answer: Optional[str] = None
   trail_id: Optional[str] = None
+  collected: bool = False
+  seq: Optional[int] = None
 
 
-def check_summon(request_id: str) -> SummonStatus:
-  """non-blocking, non-consuming peek at a summon by request id (the broxy's
-  `check`). Returns the status; raises `SummonError` when the id is unknown or
-  already consumed, when the summon failed, or when no broxy answers."""
+def check_summon(request_id: str, *, last_seen: Optional[int] = None) -> SummonStatus:
+  """non-blocking check on a summon by request id (the broxy's `check`). Without
+  `last_seen`: a non-marking peek — the answer when an unread result is in, else
+  the pending/collected state. With `last_seen` (0 = the start): a cursor read —
+  replays the conversation from that sequence regardless of read status, the
+  recovery path when a result was read by a wait whose reply never arrived; the
+  returned `seq` is the new cursor. Raises `SummonError` when the id is unknown,
+  the summon failed, `last_seen` is ahead of what was read, or no broxy
+  answers."""
   from broker.brotocol import Tag
 
+  payload: dict[str, Any] = {'id': request_id}
+  if last_seen is not None:
+    payload['last_seen'] = last_seen
   with _open_client() as client:
-    check = client.send(Tag.CHECK, {'id': request_id})
+    check = client.send(Tag.CHECK, payload)
     trail_id: Optional[str] = None
+    interim_count = 0
 
     def _started(message: 'Message') -> None:
-      nonlocal trail_id
-      trail_id = message.payload.get('trail_id')
+      nonlocal trail_id, interim_count
+      interim_count += 1
+      if message.payload.get('trail_id') is not None:
+        trail_id = message.payload.get('trail_id')
 
     try:
       terminal = client.await_reply(check, CHECK_TIMEOUT, on_started=_started)
@@ -229,14 +276,23 @@ def check_summon(request_id: str) -> SummonStatus:
     # the broxy's own state replies carry 'state'; every real summon message
     # (completed / failed / the handler's reply{error}) does not
     state = terminal.payload.get('state')
-    if state == 'pending':
-      return SummonStatus(pending=True, trail_id=terminal.payload.get('trail_id'))
+    if state == 'pending' or state == 'collected':
+      return SummonStatus(
+        pending=state == 'pending',
+        collected=state == 'collected',
+        trail_id=terminal.payload.get('trail_id', trail_id),
+        seq=terminal.payload.get('seq'),
+      )
     if state == 'unknown':
       raise SummonError(
-        f'unknown or already-consumed request id {request_id}; {_trails_hint(None)}'
+        f'unknown request id {request_id} (not sent through this session, or evicted); '
+        f'{_trails_hint(None)}'
       )
+    # a real terminal closed the reply: with a cursor, the contiguous window
+    # gives each message's sequence by counting from last_seen
+    seq = last_seen + interim_count + 1 if last_seen is not None else None
     return SummonStatus(
-      pending=False, answer=_interpret_terminal(terminal, trail_id), trail_id=trail_id
+      pending=False, answer=_interpret_terminal(terminal, trail_id), trail_id=trail_id, seq=seq
     )
 
 
@@ -245,20 +301,45 @@ def collect_summon(
   *,
   timeout: Optional[float] = None,
   on_started: Optional[Callable[[str], None]] = None,
+  client: Optional['Client'] = None,
 ) -> str:
-  """claim a summon by request id and block for its answer (the broxy's `claim`,
-  consuming). The wait is a lock: fails fast while another waiter is alive; a
-  killed or detached wait is collectable. Raises `SummonError` on any failure."""
+  """claim a summon by request id and block for its answer (the broxy's `claim`).
+  The wait is a lock: fails fast while another waiter is alive, and errors once
+  the result was already collected — re-read that with `check_summon(last_seen=…)`.
+  With `client` the caller owns the connection's lifecycle (closing it from
+  another thread aborts the wait); without, a fresh one is opened and closed per
+  call. Raises `SummonError` on any failure."""
   from broker.brotocol import Tag
 
-  with _open_client() as client:
-    claim = client.send(Tag.CLAIM, {'id': request_id})
-    return _await_answer(
-      client,
-      claim,
-      timeout=timeout if timeout is not None else DEFAULT_TIMEOUT,
-      on_started=on_started,
+  if client is None:
+    with _open_client() as owned:
+      return collect_summon(request_id, timeout=timeout, on_started=on_started, client=owned)
+  claim = client.send(Tag.CLAIM, {'id': request_id})
+  return _await_answer(
+    client,
+    claim,
+    timeout=timeout if timeout is not None else DEFAULT_TIMEOUT,
+    on_started=on_started,
+  )
+
+
+def list_summons() -> dict[str, Any]:
+  """the session's summons as the host recorded them: `{'active': [...], 'last': …}`
+  from the status file `CW_SUMMON_STATUS` points at, each entry carrying its
+  `request_id` — the reattach handle for `check_summon` / `collect_summon`. The
+  host writes the file with the session's first summon; before that the state is
+  empty. Raises `SummonError` when the environment carries no status file (only
+  cw-launched sessions track summon status)."""
+  status_path = os.environ.get(STATUS_ENV)
+  if status_path is None:
+    raise SummonError(
+      f'no summon status file ({STATUS_ENV} unset); only cw-launched sessions track summon status'
     )
+  try:
+    raw = Path(status_path).read_text()
+  except FileNotFoundError:
+    return {'active': [], 'last': None}  # no summon ever ran in this session
+  return json.loads(raw)
 
 
 def relay_summon(
@@ -316,7 +397,20 @@ def _summon(
     return 0
 
 
-def _check(request_id: str, wait: bool, timeout: Optional[float]) -> int:
+def _list() -> int:
+  try:
+    status = list_summons()
+  except SummonError as e:
+    log.error('%s', e)
+    return 1
+  print(json.dumps(status, indent=2, ensure_ascii=False))
+  return 0
+
+
+def _check(request_id: str, wait: bool, timeout: Optional[float], last_seen: Optional[int]) -> int:
+  if wait and last_seen is not None:
+    log.error('--last-seen is a cursor read; it does not combine with --wait')
+    return 1
   if timeout is not None and not wait:
     log.error('--timeout only bounds a --wait; a plain check never blocks')
     return 1
@@ -329,18 +423,35 @@ def _check(request_id: str, wait: bool, timeout: Optional[float]) -> int:
       )
     )
   try:
-    status = check_summon(request_id)
+    status = check_summon(request_id, last_seen=last_seen)
   except SummonError as e:
     log.error('%s', e)
     return 1
   if status.pending:
     log.info('summon still running; %s', _trails_hint(status.trail_id))
     return PENDING_EXIT_CODE
+  if status.answer is None:  # collected: the conversation ended, its result was read
+    through = f' (read through seq {status.seq})' if status.seq is not None else ''
+    log.info(
+      'summon result was already read%s; re-read the conversation with '
+      '`summon check %s --last-seen 0`',
+      through,
+      request_id,
+    )
+    return 1
   print(status.answer)
   return 0
 
 
 def main(argv: list[str]) -> Optional[int]:
+  if len(argv) > 1 and argv[1] == 'list':
+    parser = base.args.Parser(
+      prog='summon list',
+      description="list this session's summons as the host recorded them: the "
+      'active ones and the last finished one, each with the request id — the '
+      'reattach handle for `summon check`',
+    )
+    return _list(**parser.parse(argv[1:]))
   if len(argv) > 1 and argv[1] == 'check':
     parser = base.args.Parser(
       prog='summon check',
@@ -362,10 +473,18 @@ def main(argv: list[str]) -> Optional[int]:
       help='with --wait: seconds the summon was given (bounds the wait from the '
       "child's start; default: the summon default)",
     )
+    parser.add_argument(
+      '--last-seen',
+      type=int,
+      help='cursor read: replay the conversation from this sequence (0 = the '
+      'start) regardless of read status — recovers a result that was already '
+      'read by a dead wait; not combinable with --wait',
+    )
     return _check(**parser.parse(argv[1:]))
   parser = base.args.Parser(
     description='summon a bro over the session broker channel and print its answer; '
-    '`summon check <request-id>` checks on a detached or interrupted summon'
+    '`summon check <request-id>` checks on a detached or interrupted summon; '
+    "`summon list` lists this session's summons with their request ids"
   )
   parser.add_argument('target', help='bro to summon (must be in the session summon allow-list)')
   parser.add_argument('prompt', help='the request the summoned bro answers')

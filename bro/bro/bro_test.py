@@ -1244,6 +1244,17 @@ class TestBannerTool:
     assert captured == {'llm': True, 'bro': 'echo'}
 
 
+class _FakeSummonClient:
+  """stands in for summon.open_client(): records the close the tool owes it."""
+
+  def __init__(self):
+    self.closed = False
+
+  def close(self, confirm: bool = False) -> None:
+    del confirm
+    self.closed = True
+
+
 class TestSummonTool:
   @pytest.mark.asyncio
   async def test_absent_without_a_channel(self):
@@ -1264,16 +1275,43 @@ class TestSummonTool:
     assert {'summon', 'summon_check'} <= set(interactive)
 
   @pytest.mark.asyncio
+  async def test_summon_list_needs_the_status_file_env(self, monkeypatch):
+    import summon as summon_module
+
+    monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
+    monkeypatch.delenv(summon_module.STATUS_ENV, raising=False)
+    names = await _collect_tool_names(EchoBro()._mcp_servers_for(interactive=False))
+    assert 'summon_list' not in names
+    monkeypatch.setenv(summon_module.STATUS_ENV, '/anywhere/ws.status.json')
+    names = await _collect_tool_names(EchoBro()._mcp_servers_for(interactive=False))
+    assert 'summon_list' in names
+
+  @pytest.mark.asyncio
+  async def test_summon_list_returns_the_recorded_status(self, monkeypatch):
+    import summon as summon_module
+
+    monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
+    monkeypatch.setenv(summon_module.STATUS_ENV, '/anywhere/ws.status.json')
+    status = {'active': [], 'last': {'request_id': 'R1', 'outcome': 'terminal'}}
+    monkeypatch.setattr(summon_module, 'list_summons', lambda: status)
+    tool = await _find_tool(EchoBro(), 'summon_list')
+    assert await tool.call({}) == status
+
+  @pytest.mark.asyncio
   async def test_calls_summon_and_wait_off_loop(self, monkeypatch):
     import summon as summon_module
 
     monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
     calls: list = []
+    client = _FakeSummonClient()
 
-    def fake_summon_and_wait(target, prompt, *, timeout=None, into=None):
-      calls.append({'target': target, 'prompt': prompt, 'timeout': timeout, 'into': into})
+    def fake_summon_and_wait(target, prompt, *, timeout=None, into=None, client=None):
+      calls.append(
+        {'target': target, 'prompt': prompt, 'timeout': timeout, 'into': into, 'client': client}
+      )
       return 'the answer'
 
+    monkeypatch.setattr(summon_module, 'open_client', lambda: client)
     monkeypatch.setattr(summon_module, 'summon_and_wait', fake_summon_and_wait)
     bro = EchoBro()
     tool = None
@@ -1283,7 +1321,10 @@ class TestSummonTool:
     assert tool is not None
     result = await tool.call({'target': 'devoops', 'prompt': 'deploy', 'timeout': 60})
     assert result == 'the answer'
-    assert calls == [{'target': 'devoops', 'prompt': 'deploy', 'timeout': 60, 'into': None}]
+    assert calls == [
+      {'target': 'devoops', 'prompt': 'deploy', 'timeout': 60, 'into': None, 'client': client}
+    ]
+    assert client.closed  # the per-call client is closed on the way out
 
   @pytest.mark.asyncio
   async def test_detach_returns_the_request_id_without_waiting(self, monkeypatch):
@@ -1315,10 +1356,103 @@ class TestSummonTool:
       summon_module.SummonStatus(pending=True, trail_id='T1'),
       summon_module.SummonStatus(pending=False, answer='pong', trail_id='T1'),
     ]
-    monkeypatch.setattr(summon_module, 'check_summon', lambda request_id: statuses.pop(0))
+    monkeypatch.setattr(
+      summon_module, 'check_summon', lambda request_id, *, last_seen=None: statuses.pop(0)
+    )
     tool = await _find_tool(EchoBro(), 'summon_check')
     assert await tool.call({'request_id': 'REQ-1'}) == {'state': 'pending', 'trail_id': 'T1'}
     assert await tool.call({'request_id': 'REQ-1'}) == {'state': 'completed', 'answer': 'pong'}
+
+  @pytest.mark.asyncio
+  async def test_check_passes_last_seen_and_reports_the_cursor(self, monkeypatch):
+    import summon as summon_module
+
+    monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
+    calls: list = []
+
+    def fake_check_summon(request_id, *, last_seen=None):
+      calls.append({'request_id': request_id, 'last_seen': last_seen})
+      return summon_module.SummonStatus(pending=False, answer='ok', trail_id='T1', seq=2)
+
+    monkeypatch.setattr(summon_module, 'check_summon', fake_check_summon)
+    tool = await _find_tool(EchoBro(), 'summon_check')
+    result = await tool.call({'request_id': 'REQ-1', 'last_seen': 0})
+    assert result == {'state': 'completed', 'answer': 'ok', 'seq': 2}
+    assert calls == [{'request_id': 'REQ-1', 'last_seen': 0}]
+
+  @pytest.mark.asyncio
+  async def test_check_reports_collected_with_a_reread_hint(self, monkeypatch):
+    import summon as summon_module
+
+    monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
+    status = summon_module.SummonStatus(pending=False, collected=True, seq=2)
+    monkeypatch.setattr(summon_module, 'check_summon', lambda request_id, *, last_seen=None: status)
+    tool = await _find_tool(EchoBro(), 'summon_check')
+    result = await tool.call({'request_id': 'REQ-1'})
+    assert isinstance(result, dict)
+    assert result['state'] == 'collected'
+    assert result['seq'] == 2
+    assert 'last_seen' in result['hint']
+
+  @pytest.mark.asyncio
+  async def test_check_wait_with_last_seen_is_an_error(self, monkeypatch):
+    monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
+    tool = await _find_tool(EchoBro(), 'summon_check')
+    with pytest.raises(ValueError, match='last_seen'):
+      await tool.call({'request_id': 'REQ-1', 'wait': True, 'last_seen': 0})
+
+  @pytest.mark.asyncio
+  async def test_cancelled_blocking_summon_closes_its_client(self, monkeypatch):
+    # the client-side abort path: cancelling the tool call (the MCP client timed
+    # out or aborted) must close the per-call channel client, which unblocks the
+    # worker thread and detaches the broxy route
+    import threading
+
+    import summon as summon_module
+
+    monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
+    client = _FakeSummonClient()
+    entered = threading.Event()
+    release = threading.Event()
+
+    def fake_summon_and_wait(target, prompt, *, timeout=None, into=None, client=None):
+      entered.set()
+      release.wait(timeout=5)
+      raise summon_module.SummonError('broker channel closed awaiting the summon result')
+
+    def fake_close(confirm: bool = False) -> None:
+      del confirm
+      client.closed = True
+      release.set()
+
+    monkeypatch.setattr(client, 'close', fake_close)
+    monkeypatch.setattr(summon_module, 'open_client', lambda: client)
+    monkeypatch.setattr(summon_module, 'summon_and_wait', fake_summon_and_wait)
+    tool = await _find_tool(EchoBro(), 'summon')
+    task = asyncio.create_task(tool.call({'target': 'devoops', 'prompt': 'deploy'}))
+    await asyncio.to_thread(entered.wait, 5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+      await task
+    assert client.closed
+
+  @pytest.mark.asyncio
+  async def test_transport_caution_only_on_the_mcp_wire(self, monkeypatch):
+    # wire 'mcp' builds are consumed over an MCP transport with a client-side
+    # call budget; their summon descriptions carry the timeout caution
+    monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
+    bro_instance = EchoBro()
+    mcp_build = bro.bro._build_service_server(
+      bro_instance, include_raise=False, harness='bro', wire='mcp'
+    )
+    bare_build = bro.bro._build_service_server(
+      bro_instance, include_raise=False, harness='bro', wire='bare'
+    )
+    mcp_tools = {t.name: t for t in await mcp_build.list_tools()}
+    bare_tools = {t.name: t for t in await bare_build.list_tools()}
+    for name in ('summon', 'summon_check'):
+      assert 'CAUTION' in mcp_tools[name].description
+      assert 'CAUTION' not in bare_tools[name].description
 
   @pytest.mark.asyncio
   async def test_check_wait_collects(self, monkeypatch):
@@ -1326,16 +1460,19 @@ class TestSummonTool:
 
     monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
     calls: list = []
+    client = _FakeSummonClient()
 
-    def fake_collect_summon(request_id, *, timeout=None, on_started=None):
-      calls.append({'request_id': request_id, 'timeout': timeout})
+    def fake_collect_summon(request_id, *, timeout=None, on_started=None, client=None):
+      calls.append({'request_id': request_id, 'timeout': timeout, 'client': client})
       return 'collected'
 
+    monkeypatch.setattr(summon_module, 'open_client', lambda: client)
     monkeypatch.setattr(summon_module, 'collect_summon', fake_collect_summon)
     tool = await _find_tool(EchoBro(), 'summon_check')
     result = await tool.call({'request_id': 'REQ-1', 'wait': True, 'timeout': 60})
     assert result == {'state': 'completed', 'answer': 'collected'}
-    assert calls == [{'request_id': 'REQ-1', 'timeout': 60}]
+    assert calls == [{'request_id': 'REQ-1', 'timeout': 60, 'client': client}]
+    assert client.closed
 
   @pytest.mark.asyncio
   async def test_check_timeout_without_wait_is_an_error(self, monkeypatch):
@@ -1350,9 +1487,10 @@ class TestSummonTool:
 
     monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
 
-    def fake_summon_and_wait(target, prompt, *, timeout=None, into=None):
+    def fake_summon_and_wait(target, prompt, *, timeout=None, into=None, client=None):
       raise summon_module.SummonError('summon denied: no')
 
+    monkeypatch.setattr(summon_module, 'open_client', lambda: _FakeSummonClient())
     monkeypatch.setattr(summon_module, 'summon_and_wait', fake_summon_and_wait)
     bro = EchoBro()
     tool = None

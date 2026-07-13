@@ -298,6 +298,7 @@ class TestSummonLedger:
     control.observe_delivery(CHILD, ROOT, completed)
     status = _status(tmp_path)
     assert status['active'] == []
+    assert status['last']['request_id'] == request.id
     assert status['last']['target'] == 'devoops'
     assert status['last']['trail_id'] == 'T1'
     assert status['last']['summoner'] == {'session': 'ws'}

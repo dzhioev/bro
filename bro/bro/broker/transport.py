@@ -85,7 +85,14 @@ class ClientTransport(ABC):
     close() return unconfirmed would reintroduce the race it exists to remove;
     bounding a wedged receiver is the supervisor's job (the host kills a
     timed-out child), not the sender's. A receiver already gone closes the
-    socket, ending the wait immediately."""
+    socket, ending the wait immediately.
+
+    A plain close (no `confirm`) also aborts a concurrent `receive` blocked on
+    the same transport from another thread — the blocked call returns as if the
+    channel reached EOF. This is how a controller cancels an off-thread wait it
+    abandoned (the summon service tools ride on it); an adapter must implement
+    close so that wake-up is reliable, not incidental (a bare fd close is not —
+    the unix adapter shuts the socket down first)."""
 
 
 def connect(address: Address) -> ClientTransport:

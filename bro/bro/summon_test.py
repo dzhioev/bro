@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import json
 from dataclasses import dataclass
 
 import pytest
@@ -217,14 +218,14 @@ async def test_check_wait_unknown_claim_fails_fast(tmp_path, monkeypatch, capsys
       channel,
       Message(
         type='reply',
-        payload={'error': 'unknown or already-consumed request id NOPE'},
+        payload={'error': 'unknown request id NOPE (not sent through this session, or evicted)'},
         in_reply_to=claim.id,
       ),
     )
 
     assert await asyncio.wait_for(main_task, TIMEOUT) == 1
     assert capsys.readouterr().out == ''
-    assert any('already-consumed' in record.getMessage() for record in caplog.records)
+    assert any('unknown request id' in record.getMessage() for record in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -284,9 +285,63 @@ async def test_check_unknown_id_exits_1(tmp_path, monkeypatch, capsys, caplog):
 
     assert await asyncio.wait_for(main_task, TIMEOUT) == 1
     assert capsys.readouterr().out == ''
-    assert any(
-      'already-consumed request id NOPE' in record.getMessage() for record in caplog.records
+    assert any('unknown request id NOPE' in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_check_last_seen_forwards_the_cursor_and_relays(tmp_path, monkeypatch, capsys):
+  async with running_server(tmp_path, monkeypatch) as server:
+    main_task = asyncio.create_task(
+      asyncio.to_thread(summon.main, ['summon', 'check', 'REQ-1', '--last-seen', '0'])
     )
+
+    # the broxy replays the whole conversation re-tagged to the cursor check
+    channel, check = await _next(server.sink.messages)
+    assert check.type == 'check'
+    assert check.payload == {'id': 'REQ-1', 'last_seen': 0}
+    await server.transport.send(
+      channel, Message(type='started', payload={'trail_id': 'T1'}, in_reply_to=check.id)
+    )
+    await server.transport.send(
+      channel,
+      Message(
+        type='completed',
+        payload={'result': 'recovered answer', 'end_reason': 'terminal'},
+        in_reply_to=check.id,
+      ),
+    )
+
+    assert await asyncio.wait_for(main_task, TIMEOUT) == 0
+    assert capsys.readouterr().out == 'recovered answer\n'
+
+
+@pytest.mark.asyncio
+async def test_check_collected_reports_the_cursor_hint(tmp_path, monkeypatch, capsys, caplog):
+  async with running_server(tmp_path, monkeypatch) as server:
+    main_task = asyncio.create_task(asyncio.to_thread(summon.main, ['summon', 'check', 'REQ-1']))
+
+    channel, check = await _next(server.sink.messages)
+    await server.transport.send(
+      channel,
+      Message(type='reply', payload={'state': 'collected', 'seq': 2}, in_reply_to=check.id),
+    )
+
+    assert await asyncio.wait_for(main_task, TIMEOUT) == 1
+    assert capsys.readouterr().out == ''
+    messages = [
+      record.getMessage() for record in caplog.records if 'already read' in record.getMessage()
+    ]
+    assert len(messages) == 1
+    assert 'seq 2' in messages[0]
+    assert '--last-seen 0' in messages[0]
+
+
+def test_check_last_seen_with_wait_errors(monkeypatch, capsys, caplog):
+  monkeypatch.setenv(CHANNEL_ENV, 'unix:/nonexistent')
+  argv = ['summon', 'check', 'REQ-1', '--wait', '--last-seen', '0']
+  assert summon.main(argv) == 1
+  assert capsys.readouterr().out == ''
+  assert any('--wait' in record.getMessage() for record in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -299,6 +354,33 @@ async def test_check_that_nothing_answers_fails_with_a_hint(tmp_path, monkeypatc
     assert await asyncio.to_thread(summon.main, ['summon', 'check', 'REQ-1']) == 1
     assert capsys.readouterr().out == ''
     assert any('broxy' in record.getMessage() for record in caplog.records)
+
+
+def test_list_errors_without_a_status_file_env(monkeypatch, capsys, caplog):
+  monkeypatch.delenv(summon.STATUS_ENV, raising=False)
+  assert summon.main(['summon', 'list']) == 1
+  assert capsys.readouterr().out == ''
+  assert any(summon.STATUS_ENV in record.getMessage() for record in caplog.records)
+
+
+def test_list_reports_empty_before_any_summon(tmp_path, monkeypatch, capsys):
+  # the host writes the status file with the session's first summon; before that
+  # the pointed-at path does not exist and the state is simply empty
+  monkeypatch.setenv(summon.STATUS_ENV, str(tmp_path / 'ws.status.json'))
+  assert summon.main(['summon', 'list']) == 0
+  assert json.loads(capsys.readouterr().out) == {'active': [], 'last': None}
+
+
+def test_list_prints_the_recorded_status(tmp_path, monkeypatch, capsys):
+  status = {
+    'active': [{'request_id': 'R1', 'target': 'devoops', 'trail_id': 'T1', 'started_at': 1.0}],
+    'last': {'request_id': 'R0', 'target': 'pm', 'outcome': 'terminal'},
+  }
+  status_file = tmp_path / 'ws.status.json'
+  status_file.write_text(json.dumps(status))
+  monkeypatch.setenv(summon.STATUS_ENV, str(status_file))
+  assert summon.main(['summon', 'list']) == 0
+  assert json.loads(capsys.readouterr().out) == status
 
 
 def test_check_timeout_without_wait_errors(monkeypatch, capsys, caplog):

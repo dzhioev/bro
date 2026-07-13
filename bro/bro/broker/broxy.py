@@ -15,33 +15,48 @@ both sides, like `transport.connect`.
 
 Sticky routing: outbound frames are deframed to learn which local connection
 sent which request id; correlated inbound is routed to exactly that connection.
-A route survives interim messages and retires on the terminal — any correlated
-type but `started`, mirroring `Client.call`.
+A route survives interim messages; the terminal — any correlated type but
+`started`, mirroring `Client.call` — ends the live exchange (the waiter
+detaches), and the conversation stays retained for cursor reads until evicted.
 
-Mailbox: a correlated message whose waiter connection is gone lands in a bounded
-in-memory mailbox keyed by request id, all messages kept in order (so a later
-claim replays `started` before the terminal). Over the byte bound, whole oldest
-entries are dropped — their claim then fails fast instead of replaying a gapped
-sequence.
+Mailbox: every correlated inbound message is retained in arrival order under its
+request id — the conversation — numbered by a 1-based sequence. Alongside it the
+route tracks `read_up_to`, the highest sequence handed to a consumer (delivered
+live, replayed through a claim, or covered by a cursor read). Retention is what
+makes a result survive its own delivery: a waiter that died mid-collect, or a
+transport that abandoned the call, no longer destroys the last copy. Over the
+byte bound, whole conversations drop — collected ones first (terminal read),
+then detached unread ones, never a live in-flight wait; a dropped conversation's
+claim or cursor read then fails fast instead of replaying a gapped sequence.
 
 Claim: the local-only `claim{id}` control message (`Tag.CLAIM`, never forwarded
-upstream) collects or re-awaits a request's messages. The claim acts as a
-stand-in request: buffered messages are replayed — and future ones delivered —
+upstream) collects or re-awaits a request's unread messages. The claim acts as a
+stand-in request: unread messages are replayed — and future ones delivered —
 re-tagged to correlate to the claim message itself, so `Client.call('claim',
 {'id': ...})` rides an interim `started` and returns the terminal exactly like
-the original call did. An unknown or already-consumed id gets an immediate
-`reply{error}` (fail fast, not hang). The wait is a lock: while the current
-waiter's connection is alive, a competing claim gets an immediate `reply{error}`
-rather than stealing the route; only a detached route — the waiter exited or was
-killed — is claimable, which is the recovery path.
+the original call did. An unknown id — never sent through this session, or
+evicted — and a collected conversation (terminal already read; re-read it with a
+cursor check) get an immediate `reply{error}` (fail fast, not hang). The wait is
+a lock: while the current waiter's connection is alive, a competing claim gets
+an immediate `reply{error}` rather than stealing the route; only a detached
+route — the waiter exited, was killed, or had the terminal delivered — is
+claimable.
 
-Check: the local-only `check{id}` sibling (`Tag.CHECK`) — a non-consuming,
-non-superseding peek, always answered immediately. A buffered terminal replays
-copies of the request's messages re-tagged to the check id (the route is left
-untouched, so a later check or claim still finds it); anything still in flight
-gets `reply{state: 'pending'}` (plus the trail id when a buffered `started`
-carries it) with any live waiter's route undisturbed — the property claim cannot
-give a poller; an id the broxy doesn't know gets `reply{state: 'unknown'}`.
+Check: the local-only `check{id, last_seen?}` sibling (`Tag.CHECK`) — always
+answered immediately, never superseding a live waiter. Without `last_seen` it is
+the non-marking peek: an unread terminal replays copies of the unread messages
+re-tagged to the check id (nothing is marked read, so a later check or claim
+still finds them); a conversation still in flight gets `reply{state: 'pending',
+seq}` (plus the trail id when a retained `started` carries one), a collected one
+`reply{state: 'collected', seq}`, and an id the broxy doesn't know
+`reply{state: 'unknown'}`. With `last_seen: N` it is the cursor read: it replays
+every retained message from sequence N+1 regardless of read status — the
+recovery path for a result whose delivery was lost — and marks the window read.
+The window is contiguous from N+1, so the reader recovers each message's
+sequence by counting; when no terminal closes the window, a trailing
+`reply{state: 'pending'|'collected', seq}` marks its end. `last_seen` must name
+an already-read sequence (0 = the start): reading from beyond `read_up_to` would
+acknowledge messages nobody has seen, so it fails with "from the future".
 
 Delivery to a local waiter is write-only, no drain: frames per request are few
 and model-bounded, and a drain there would let one stalled local reader stall
@@ -69,7 +84,7 @@ import socket
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import base.args
 from base import log
@@ -82,7 +97,7 @@ _LISTEN_BACKLOG = 16
 # readline needs headroom over the frame cap to see a max-size frame's delimiter
 _STREAM_LIMIT = MAX_FRAME_BYTES + 2
 
-MAILBOX_MAX_BYTES = 8 << 20  # buffered undelivered messages, totalled across requests
+MAILBOX_MAX_BYTES = 8 << 20  # retained conversation messages, totalled across requests
 MAX_ROUTES = 4096  # request ids remembered for correlation (every outbound send mints one)
 
 DEFAULT_AWAIT_TIMEOUT = 10.0
@@ -112,13 +127,30 @@ class _Connection:
 
 @dataclass
 class _Route:
-  """correlation state for one outbound request id."""
+  """correlation state for one outbound request id: the live waiter (if any) plus
+  the retained conversation."""
 
-  waiter: Optional[_Connection]  # None once the sending (or last claiming) connection is gone
+  # None once the sending (or last claiming) connection is gone, or the terminal
+  # was delivered — the live exchange is over; the conversation stays retained
+  waiter: Optional[_Connection]
   reply_to: str  # correlation id stamped on delivery: the request id, or the latest claim's id
-  buffered: list[Message] = field(default_factory=list)
-  buffered_bytes: int = 0
-  terminal_buffered: bool = False
+  messages: list[Message] = field(default_factory=list)  # the conversation; messages[i] has seq i+1
+  message_bytes: int = 0
+  read_up_to: int = 0  # highest seq delivered live, replayed through a claim, or cursor-covered
+  terminal_seq: Optional[int] = None
+
+  @property
+  def collected(self) -> bool:
+    """the terminal was read: the collect path is spent, cursor reads still work."""
+    return self.terminal_seq is not None and self.read_up_to >= self.terminal_seq
+
+
+def _trail_id(route: _Route) -> Optional[Any]:
+  """the trail id of the conversation's `started`, read or not, when one carries it."""
+  for message in route.messages:
+    if message.type == Tag.STARTED and message.payload.get('trail_id') is not None:
+      return message.payload['trail_id']
+  return None
 
 
 class Broxy:
@@ -138,7 +170,7 @@ class Broxy:
     self._mailbox_bytes = mailbox_bytes
     self._max_routes = max_routes
     self._routes: dict[str, _Route] = {}  # insertion order = mint order, oldest first
-    self._buffered_total = 0
+    self._retained_total = 0
     self._upstream_writer: Optional[asyncio.StreamWriter] = None
     self._local_tasks: set[asyncio.Task] = set()
     self._stopped = asyncio.Event()
@@ -216,17 +248,17 @@ class Broxy:
     if waiter is not None and waiter.writer.is_closing():
       route.waiter = None
       waiter = None
-    if waiter is None:
-      route.buffered.append(message)
-      route.buffered_bytes += len(frame)
-      self._buffered_total += len(frame)
-      if terminal:
-        route.terminal_buffered = True
-      self._enforce_mailbox_bound()
-      return
-    self._deliver(waiter, message, route.reply_to)
+    route.messages.append(message)
+    route.message_bytes += len(frame)
+    self._retained_total += len(frame)
     if terminal:
-      self._drop_route(message.in_reply_to)
+      route.terminal_seq = len(route.messages)
+    if waiter is not None:
+      self._deliver(waiter, message, route.reply_to)
+      route.read_up_to = len(route.messages)
+      if terminal:
+        route.waiter = None  # the live exchange is over; the conversation stays retained
+    self._enforce_mailbox_bound()
 
   def _deliver(self, connection: _Connection, message: Message, reply_to: str) -> None:
     if message.in_reply_to != reply_to:
@@ -289,7 +321,9 @@ class Broxy:
     if route is None:
       error = Message(
         type=Tag.REPLY,
-        payload={'error': f'unknown or already-consumed request id {claimed_id}'},
+        payload={
+          'error': f'unknown request id {claimed_id} (not sent through this session, or evicted)'
+        },
         in_reply_to=claim.id,
       )
       self._deliver(connection, error, claim.id)
@@ -308,16 +342,25 @@ class Broxy:
       )
       self._deliver(connection, error, claim.id)
       return
+    if route.collected:
+      error = Message(
+        type=Tag.REPLY,
+        payload={
+          'error': f'request {claimed_id} was already collected; '
+          're-read it with a check carrying last_seen'
+        },
+        in_reply_to=claim.id,
+      )
+      self._deliver(connection, error, claim.id)
+      return
     route.waiter = connection
     route.reply_to = claim.id
-    buffered = route.buffered
-    self._buffered_total -= route.buffered_bytes
-    route.buffered = []
-    route.buffered_bytes = 0
-    for message in buffered:
+    unread = route.messages[route.read_up_to :]
+    route.read_up_to = len(route.messages)
+    for message in unread:  # replay copies; the retained conversation stays
       self._deliver(connection, message, claim.id)
-    if route.terminal_buffered:
-      self._drop_route(claimed_id)  # replayed through the terminal: consumed
+    if route.terminal_seq is not None:
+      route.waiter = None  # replayed through the terminal; the conversation stays retained
 
   def _handle_check(self, connection: _Connection, check: Message) -> None:
     checked_id = check.payload.get('id')
@@ -329,24 +372,63 @@ class Broxy:
       )
       self._deliver(connection, error, check.id)
       return
+    last_seen = check.payload.get('last_seen')
+    if last_seen is not None and (
+      isinstance(last_seen, bool) or not isinstance(last_seen, int) or last_seen < 0
+    ):
+      error = Message(
+        type=Tag.REPLY,
+        payload={'error': "check 'last_seen' must be a non-negative integer"},
+        in_reply_to=check.id,
+      )
+      self._deliver(connection, error, check.id)
+      return
     route = self._routes.get(checked_id)
     if route is None:
       state = Message(type=Tag.REPLY, payload={'state': 'unknown'}, in_reply_to=check.id)
       self._deliver(connection, state, check.id)
       return
-    if route.terminal_buffered:
-      # replay copies re-tagged to the check; the route (waiter, reply_to, buffer)
-      # is untouched, so the peek consumes nothing and a later check/claim still works
-      for message in route.buffered:
+    if last_seen is not None:
+      self._cursor_read(connection, check, route, last_seen)
+      return
+    if route.terminal_seq is not None and route.terminal_seq > route.read_up_to:
+      # an unread terminal: replay the unread window as copies, marking nothing —
+      # the peek consumes nothing and a later check or claim still finds it
+      for message in route.messages[route.read_up_to :]:
         self._deliver(connection, message, check.id)
       return
-    payload: dict = {'state': 'pending'}
-    for message in route.buffered:
-      if message.type == Tag.STARTED and message.payload.get('trail_id') is not None:
-        payload['trail_id'] = message.payload['trail_id']
-        break
-    state = Message(type=Tag.REPLY, payload=payload, in_reply_to=check.id)
-    self._deliver(connection, state, check.id)
+    self._deliver_state(connection, check, route)
+
+  def _cursor_read(self, connection: _Connection, check: Message, route: _Route, last_seen: int) -> None:  # fmt: skip
+    """replay the conversation from `last_seen + 1` regardless of read status and
+    mark the window read; the window is contiguous, so the reader recovers each
+    sequence by counting from `last_seen`."""
+    if last_seen > route.read_up_to:
+      error = Message(
+        type=Tag.REPLY,
+        payload={
+          'error': f'last_seen {last_seen} is from the future (read up to {route.read_up_to})'
+        },
+        in_reply_to=check.id,
+      )
+      self._deliver(connection, error, check.id)
+      return
+    for message in route.messages[last_seen:]:
+      self._deliver(connection, message, check.id)
+    route.read_up_to = len(route.messages)
+    if route.terminal_seq is None or route.terminal_seq <= last_seen:
+      # no terminal closed the window: a trailing state reply marks its end
+      self._deliver_state(connection, check, route)
+
+  def _deliver_state(self, connection: _Connection, check: Message, route: _Route) -> None:
+    payload: dict = {
+      'state': 'collected' if route.collected else 'pending',
+      'seq': len(route.messages),
+    }
+    trail_id = _trail_id(route)
+    if trail_id is not None:
+      payload['trail_id'] = trail_id
+    self._deliver(connection, Message(type=Tag.REPLY, payload=payload, in_reply_to=check.id), check.id)  # fmt: skip
 
   # --- route table -----------------------------------------------------------
 
@@ -361,33 +443,52 @@ class Broxy:
   def _drop_route(self, request_id: str) -> None:
     route = self._routes.pop(request_id, None)
     if route is not None:
-      self._buffered_total -= route.buffered_bytes
+      self._retained_total -= route.message_bytes
 
   def _evict_route(self) -> None:
-    """make room: drop the oldest detached route, preferring one with nothing buffered."""
-    fallback: Optional[str] = None
+    """make room: drop the oldest detached route — an empty one first, then a
+    collected conversation (its result was read), then any detached one."""
+    collected_fallback: Optional[str] = None
+    detached_fallback: Optional[str] = None
     for request_id, route in self._routes.items():
       if route.waiter is not None:
         continue
-      if route.buffered_bytes == 0:
+      if route.message_bytes == 0:
         self._drop_route(request_id)
         return
-      if fallback is None:
-        fallback = request_id
+      if route.collected:
+        if collected_fallback is None:
+          collected_fallback = request_id
+      elif detached_fallback is None:
+        detached_fallback = request_id
+    fallback = collected_fallback if collected_fallback is not None else detached_fallback
     if fallback is not None:
-      log.warning('broxy: over %d routes, dropping buffered request %s', self._max_routes, fallback)
+      log.warning('broxy: over %d routes, dropping request %s', self._max_routes, fallback)
       self._drop_route(fallback)
     # otherwise every route has a live waiter: exceed the cap rather than break one
 
   def _enforce_mailbox_bound(self) -> None:
-    while self._buffered_total > self._mailbox_bytes:
-      request_id = next(id for id, route in self._routes.items() if route.buffered_bytes > 0)
+    while self._retained_total > self._mailbox_bytes:
+      request_id = self._mailbox_eviction_candidate()
+      if request_id is None:
+        return  # everything retained belongs to live waits: exceed rather than break one
       log.warning(
-        'broxy: mailbox over %d bytes, dropping buffered request %s',
-        self._mailbox_bytes,
-        request_id,
+        'broxy: mailbox over %d bytes, dropping conversation %s', self._mailbox_bytes, request_id
       )
       self._drop_route(request_id)
+
+  def _mailbox_eviction_candidate(self) -> Optional[str]:
+    """the oldest collected conversation, else the oldest detached unread one; a
+    live in-flight wait is never a candidate."""
+    fallback: Optional[str] = None
+    for request_id, route in self._routes.items():
+      if route.message_bytes == 0:
+        continue
+      if route.collected:
+        return request_id
+      if fallback is None and route.waiter is None:
+        fallback = request_id
+    return fallback
 
 
 # --- CLI ----------------------------------------------------------------------

@@ -314,6 +314,22 @@ async def test_close_confirm_returns_after_the_host_consumed_everything(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_close_aborts_a_blocked_wait_from_another_thread(tmp_path):
+  # the cross-thread abort guarantee (ClientTransport.close): a controller that
+  # abandoned an off-thread wait closes the client, and the blocked receive
+  # returns as channel EOF instead of hanging until traffic arrives
+  async with running_server(tmp_path) as server:
+    provisioned = await server.transport.provision()
+    client = Client(UnixClientTransport(provisioned.host_endpoint))
+    request_task = asyncio.create_task(asyncio.to_thread(client.request, 'ping', {}, TIMEOUT))
+    await _next(server.sink.messages)  # the request reached the host; the wait is blocked
+
+    await asyncio.to_thread(client.close)
+    with pytest.raises(ConnectionError):
+      await asyncio.wait_for(request_task, TIMEOUT)
+
+
+@pytest.mark.asyncio
 async def test_receive_returns_none_on_timeout(tmp_path):
   async with running_server(tmp_path) as server:
     provisioned = await server.transport.provision()

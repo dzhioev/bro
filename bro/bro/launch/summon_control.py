@@ -360,6 +360,7 @@ class SummonControl:
   def _finish(self, record: _ActiveSummon, outcome: str) -> None:
     del self._active[record.request_id]
     self._last = {
+      'request_id': record.request_id,  # the reattach handle (`summon check` / `summon list`)
       'target': record.target,
       'trail_id': record.trail_id,
       'summoner': record.summoner,

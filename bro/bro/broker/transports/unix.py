@@ -200,10 +200,15 @@ class UnixClientTransport(ClientTransport):
       message = self._take_frame()
       if message is not None:
         return message
-      self._sock.settimeout(timeout)
       try:
+        self._sock.settimeout(timeout)
         data = self._sock.recv(_READ_CHUNK)
       except TimeoutError:
+        return None
+      except OSError:
+        # the socket died under us — a concurrent close() aborting this wait
+        # (see ClientTransport.close), or the peer tearing the channel down
+        # mid-read; either way the channel is gone, which is EOF to the caller
         return None
       if len(data) == 0:  # clean EOF, no in-flight frame
         return None
@@ -233,4 +238,12 @@ class UnixClientTransport(ClientTransport):
           pass
       except OSError:
         pass  # receiver already gone — nothing left to confirm
+    else:
+      # full shutdown before close: a bare fd close does not wake a thread
+      # blocked in recv on this socket, the shutdown EOF does — the cross-thread
+      # abort guarantee ClientTransport.close documents
+      try:
+        self._sock.shutdown(socket.SHUT_RDWR)
+      except OSError:
+        pass  # already shut down, or the peer is gone
     self._sock.close()

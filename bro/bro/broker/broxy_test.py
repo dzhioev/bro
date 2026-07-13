@@ -211,7 +211,7 @@ async def test_claim_replays_buffered_messages_in_order():
       ),
     )
     await _wait_until(
-      lambda: harness.broxy._routes[request.id].terminal_buffered,
+      lambda: harness.broxy._routes[request.id].terminal_seq is not None,
       'the terminal never reached the mailbox',
     )
 
@@ -226,11 +226,13 @@ async def test_claim_replays_buffered_messages_in_order():
     assert terminal.in_reply_to != request.id  # re-tagged to correlate to the claim
     claimer.close()
 
-    # the replay consumed the mailbox entry: a second claim fails fast
+    # the replay read the conversation through its terminal: the collect path is
+    # spent, and a second claim fails fast pointing at the cursor re-read
     late = _local_client(harness)
     reply = await asyncio.to_thread(late.request, 'claim', {'id': request.id}, TIMEOUT)
     assert reply.type == Tag.REPLY
     assert request.id in reply.payload['error']
+    assert 'already collected' in reply.payload['error']
     late.close()
 
 
@@ -268,6 +270,7 @@ async def test_claim_after_live_terminal_replies_error():
     reply = await asyncio.to_thread(client.request, 'claim', {'id': request.id}, TIMEOUT)
     assert reply.type == Tag.REPLY
     assert request.id in reply.payload['error']
+    assert 'already collected' in reply.payload['error']
     client.close()
 
 
@@ -365,19 +368,19 @@ async def test_check_pending_reports_state_and_buffered_trail_id():
     request = await _detached_request(harness, 'summon')
     checker = _local_client(harness)
 
-    # nothing buffered yet: pending without a trail id
+    # nothing retained yet: pending without a trail id
     reply = await asyncio.to_thread(checker.request, 'check', {'id': request.id}, TIMEOUT)
-    assert reply.payload == {'state': 'pending'}
+    assert reply.payload == {'state': 'pending', 'seq': 0}
 
     await harness.transport.send(
       harness.channel, Message(type='started', payload={'trail_id': 't1'}, in_reply_to=request.id)
     )
     await _wait_until(
-      lambda: len(harness.broxy._routes[request.id].buffered) > 0,
+      lambda: len(harness.broxy._routes[request.id].messages) > 0,
       'the started interim never reached the mailbox',
     )
     reply = await asyncio.to_thread(checker.request, 'check', {'id': request.id}, TIMEOUT)
-    assert reply.payload == {'state': 'pending', 'trail_id': 't1'}
+    assert reply.payload == {'state': 'pending', 'seq': 1, 'trail_id': 't1'}
     checker.close()
 
 
@@ -395,7 +398,7 @@ async def test_check_replays_a_buffered_terminal_without_consuming():
       ),
     )
     await _wait_until(
-      lambda: harness.broxy._routes[request.id].terminal_buffered,
+      lambda: harness.broxy._routes[request.id].terminal_seq is not None,
       'the terminal never reached the mailbox',
     )
 
@@ -428,7 +431,7 @@ async def test_check_does_not_disturb_a_live_waiter():
 
     checker = _local_client(harness)
     reply = await asyncio.to_thread(checker.request, 'check', {'id': request.id}, TIMEOUT)
-    assert reply.payload == {'state': 'pending'}
+    assert reply.payload == {'state': 'pending', 'seq': 0}
     checker.close()
 
     # the waiter's route survived the peek: the terminal still reaches it
@@ -463,7 +466,7 @@ async def test_mailbox_bound_evicts_the_oldest_buffered_request():
       harness.channel, Message(type='completed', payload={'result': filler}, in_reply_to=first.id)
     )
     await _wait_until(
-      lambda: harness.broxy._routes[first.id].buffered_bytes > 0,
+      lambda: harness.broxy._routes[first.id].message_bytes > 0,
       'the first terminal never reached the mailbox',
     )
     await harness.transport.send(
@@ -482,6 +485,214 @@ async def test_mailbox_bound_evicts_the_oldest_buffered_request():
     assert kept.type == 'completed'
     assert kept.payload == {'result': filler}
     client.close()
+
+
+@pytest.mark.asyncio
+async def test_live_delivered_terminal_stays_readable_through_a_cursor():
+  # delivery no longer destroys the result: after a live request/reply exchange,
+  # a plain check reports collected and a cursor read replays the conversation
+  async with running_broxy() as harness:
+    client = _local_client(harness)
+    request_task = asyncio.create_task(asyncio.to_thread(client.request, 'summon', {}, TIMEOUT))
+    _, request = await _next(harness.sink.messages)
+    await harness.transport.send(
+      harness.channel,
+      Message(
+        type='completed', payload={'result': 'ok', 'end_reason': 'terminal'}, in_reply_to=request.id
+      ),
+    )
+    await asyncio.wait_for(request_task, TIMEOUT)
+
+    reply = await asyncio.to_thread(client.request, 'check', {'id': request.id}, TIMEOUT)
+    assert reply.payload == {'state': 'collected', 'seq': 1}
+    for _ in range(2):  # cursor reads are idempotent
+      replayed = await asyncio.to_thread(
+        client.call, 'check', {'id': request.id, 'last_seen': 0}, TIMEOUT
+      )
+      assert replayed.type == 'completed'
+      assert replayed.payload == {'result': 'ok', 'end_reason': 'terminal'}
+    client.close()
+
+
+@pytest.mark.asyncio
+async def test_cursor_read_marks_read_and_spends_the_collect():
+  async with running_broxy() as harness:
+    request = await _detached_request(harness, 'summon')
+    await harness.transport.send(
+      harness.channel, Message(type='started', payload={'trail_id': 't1'}, in_reply_to=request.id)
+    )
+    await harness.transport.send(
+      harness.channel,
+      Message(
+        type='completed', payload={'result': 'ok', 'end_reason': 'terminal'}, in_reply_to=request.id
+      ),
+    )
+    await _wait_until(
+      lambda: harness.broxy._routes[request.id].terminal_seq is not None,
+      'the terminal never reached the mailbox',
+    )
+
+    reader = _local_client(harness)
+    interims: list[Message] = []
+    terminal = await asyncio.to_thread(
+      reader.call, 'check', {'id': request.id, 'last_seen': 0}, TIMEOUT, on_started=interims.append
+    )
+    assert [interim.payload for interim in interims] == [{'trail_id': 't1'}]
+    assert terminal.payload == {'result': 'ok', 'end_reason': 'terminal'}
+
+    # the cursor read acknowledged the window through its terminal: collect is spent
+    reply = await asyncio.to_thread(reader.request, 'claim', {'id': request.id}, TIMEOUT)
+    assert reply.type == Tag.REPLY
+    assert 'already collected' in reply.payload['error']
+    reader.close()
+
+
+@pytest.mark.asyncio
+async def test_cursor_read_pending_window_ends_with_a_state_reply():
+  async with running_broxy() as harness:
+    request = await _detached_request(harness, 'summon')
+    await harness.transport.send(
+      harness.channel, Message(type='started', payload={'trail_id': 't1'}, in_reply_to=request.id)
+    )
+    await _wait_until(
+      lambda: len(harness.broxy._routes[request.id].messages) > 0,
+      'the started interim never reached the mailbox',
+    )
+
+    reader = _local_client(harness)
+    interims: list[Message] = []
+    marker = await asyncio.to_thread(
+      reader.call, 'check', {'id': request.id, 'last_seen': 0}, TIMEOUT, on_started=interims.append
+    )
+    assert [interim.payload for interim in interims] == [{'trail_id': 't1'}]
+    assert marker.type == Tag.REPLY
+    assert marker.payload == {'state': 'pending', 'seq': 1, 'trail_id': 't1'}
+    reader.close()
+
+
+@pytest.mark.asyncio
+async def test_cursor_read_from_the_future_errors():
+  # reading from beyond read_up_to would acknowledge messages nobody has seen
+  async with running_broxy() as harness:
+    request = await _detached_request(harness, 'summon')
+    await harness.transport.send(
+      harness.channel, Message(type='started', payload={'trail_id': 't1'}, in_reply_to=request.id)
+    )
+    await _wait_until(
+      lambda: len(harness.broxy._routes[request.id].messages) > 0,
+      'the started interim never reached the mailbox',
+    )
+
+    reader = _local_client(harness)
+    reply = await asyncio.to_thread(
+      reader.request, 'check', {'id': request.id, 'last_seen': 1}, TIMEOUT
+    )
+    assert reply.type == Tag.REPLY
+    assert 'from the future' in reply.payload['error']
+    reader.close()
+
+
+@pytest.mark.asyncio
+async def test_check_malformed_last_seen_replies_error():
+  async with running_broxy() as harness:
+    client = _local_client(harness)
+    reply = await asyncio.to_thread(
+      client.request, 'check', {'id': 'whatever', 'last_seen': -1}, TIMEOUT
+    )
+    assert reply.type == Tag.REPLY
+    assert 'non-negative' in reply.payload['error']
+    client.close()
+
+
+@pytest.mark.asyncio
+async def test_check_reports_collected_after_a_claim():
+  async with running_broxy() as harness:
+    request = await _detached_request(harness, 'summon')
+    await harness.transport.send(
+      harness.channel, Message(type='started', payload={'trail_id': 't1'}, in_reply_to=request.id)
+    )
+    await harness.transport.send(
+      harness.channel,
+      Message(
+        type='completed', payload={'result': 'ok', 'end_reason': 'terminal'}, in_reply_to=request.id
+      ),
+    )
+    await _wait_until(
+      lambda: harness.broxy._routes[request.id].terminal_seq is not None,
+      'the terminal never reached the mailbox',
+    )
+
+    claimer = _local_client(harness)
+    await asyncio.to_thread(claimer.call, 'claim', {'id': request.id}, TIMEOUT)
+    reply = await asyncio.to_thread(claimer.request, 'check', {'id': request.id}, TIMEOUT)
+    assert reply.payload == {'state': 'collected', 'seq': 2, 'trail_id': 't1'}
+    # the conversation is still there for cursor re-reads
+    terminal = await asyncio.to_thread(
+      claimer.call, 'check', {'id': request.id, 'last_seen': 0}, TIMEOUT
+    )
+    assert terminal.payload == {'result': 'ok', 'end_reason': 'terminal'}
+    claimer.close()
+
+
+@pytest.mark.asyncio
+async def test_mailbox_bound_prefers_evicting_a_collected_conversation():
+  # the bound fits one filler frame but not both conversations: the collected one
+  # goes first even though the unread one is older
+  async with running_broxy(mailbox_bytes=500) as harness:
+    unread = await _detached_request(harness, 'summon')  # older, must survive
+    collected = await _detached_request(harness, 'summon')
+    await harness.transport.send(
+      harness.channel,
+      Message(type='completed', payload={'result': 'small'}, in_reply_to=collected.id),
+    )
+    collector = _local_client(harness)
+    terminal = await asyncio.to_thread(collector.call, 'claim', {'id': collected.id}, TIMEOUT)
+    assert terminal.payload == {'result': 'small'}
+    collector.close()
+
+    filler = 'x' * 300
+    await harness.transport.send(
+      harness.channel, Message(type='completed', payload={'result': filler}, in_reply_to=unread.id)
+    )
+    await _wait_until(
+      lambda: collected.id not in harness.broxy._routes,
+      'the over-bound mailbox never evicted the collected conversation',
+    )
+    assert unread.id in harness.broxy._routes
+
+    client = _local_client(harness)
+    kept = await asyncio.to_thread(client.request, 'claim', {'id': unread.id}, TIMEOUT)
+    assert kept.payload == {'result': filler}
+    client.close()
+
+
+@pytest.mark.asyncio
+async def test_mailbox_bound_never_evicts_a_live_wait():
+  # an oversized interim on a live wait: no eviction candidate, so the bound is
+  # exceeded rather than the wait broken
+  async with running_broxy(mailbox_bytes=100) as harness:
+    waiter = _local_client(harness)
+    interims: list[Message] = []
+    waiter_task = asyncio.create_task(
+      asyncio.to_thread(waiter.call, 'summon', {}, TIMEOUT, on_started=interims.append)
+    )
+    _, request = await _next(harness.sink.messages)
+    await harness.transport.send(
+      harness.channel,
+      Message(type='started', payload={'trail_id': 'x' * 200}, in_reply_to=request.id),
+    )
+    await _wait_until(
+      lambda: harness.broxy._retained_total > 100, 'the oversized interim never landed'
+    )
+    assert request.id in harness.broxy._routes
+
+    await harness.transport.send(
+      harness.channel, Message(type='completed', payload={'result': 'ok'}, in_reply_to=request.id)
+    )
+    terminal = await asyncio.wait_for(waiter_task, TIMEOUT)
+    assert terminal.payload == {'result': 'ok'}
+    assert len(interims) == 1
+    waiter.close()
 
 
 @pytest.mark.asyncio
