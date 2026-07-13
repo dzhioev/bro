@@ -7,11 +7,12 @@ import secrets
 import subprocess
 from typing import Optional
 
+import brog.model
+import brog.system
 import cw
 from base import log
 from base.args import Parser
 from flow.focus.client.client import default_client
-from notion import parse_page_ref
 
 
 def _slugify(name: str) -> str:
@@ -27,35 +28,42 @@ def _shell_quote(s: str) -> str:
   return "'" + s.replace("'", "'\\''") + "'"
 
 
-def _prefetch_task(task_id: str) -> tuple[str, str]:
-  """return (task_name, prompt_block) for a task ref.
+def _is_flow_backend(system: brog.system.System) -> bool:
+  import brog.flow_proxy
 
-  Fetches the task metadata + page body here, in dive-in, so the seeded `/fix`
-  message can carry them and the agent's first turn doesn't call get_task_info /
-  read_page_content. The flow MCP server is not yet connected on the session's
-  first turn, so an in-session call would race the connection and error.
+  return isinstance(system, brog.flow_proxy.System)
+
+
+def _prefetch_task(system: brog.system.System, task_ref: str) -> tuple[brog.model.Task, str]:
+  """return (task, prompt_block) for a task ref.
+
+  Resolves the ref and fetches the task metadata + description + comments here,
+  in dive-in, so the seeded `/fix` message can carry them and the agent's first
+  turn doesn't call get_task / read_task / read_comments. The brog MCP server is
+  not yet connected on the session's first turn, so an in-session call would
+  race the connection and error.
   """
   import dataclasses
-  import enum
   import json
 
-  from flow.system import default_system
-
-  system = default_system()
-  task = system.get_task_info(task_id)
-  page = system.get_page_content(task_id)
-  meta = json.dumps(
-    dataclasses.asdict(task),
-    default=lambda o: o.value if isinstance(o, enum.Enum) else str(o),
-    indent=2,
+  task = system.get_task(task_ref)
+  description = system.get_task_description(task.id)
+  comments = system.get_task_comments(task.id)
+  meta = json.dumps(dataclasses.asdict(task), indent=2)
+  # Comment timestamps are datetimes; everything else is JSON-native
+  comments_json = json.dumps(
+    [dataclasses.asdict(comment) for comment in comments], default=str, indent=2
   )
   block = (
-    'Task metadata and page body were pre-fetched at launch (the flow MCP server '
-    'is not yet connected on the first turn) — use them as your initial read; do '
-    'not call get_task_info / read_page_content for this task.\n\n'
-    f'## Task metadata\n```json\n{meta}\n```\n\n## Task page\n{page}'
+    'Task metadata, description, and comments were pre-fetched at launch (the '
+    'brog MCP server is not yet connected on the first turn) — use them as your '
+    'initial read; do not call get_task / read_task / read_comments for this '
+    'task.\n\n'
+    f'## Task metadata\n```json\n{meta}\n```\n\n'
+    f'## Task description\n{description}\n\n'
+    f'## Task comments\n```json\n{comments_json}\n```'
   )
-  return task.name, block
+  return task, block
 
 
 def _pick_fresh_name(base: str) -> str:
@@ -76,31 +84,6 @@ def _pick_fresh_name(base: str) -> str:
       return name
 
 
-def _fix_command(task_arg: Optional[str], focus: bool, new: bool, command: Optional[str]) -> str:
-  """build the `/fix …` first-user-message for a non-bare dive-in.
-
-  Mirrors the CLI: task ref + optional `--focus`; or `--new` + optional seed +
-  optional `--focus`; or bare `--focus`. The `/fix` skill body interprets the
-  args.
-  """
-  parts = ['/fix']
-  if new:
-    parts.append('--new')
-    if command is not None:
-      parts.append(command)
-    if focus:
-      parts.append('--focus')
-  elif task_arg is not None and focus:
-    # focus was already set on the resolved task; use the focused form so the
-    # skill body reads it back from get_focused_task.
-    parts.append('--focus')
-  elif task_arg is not None:
-    parts.append(task_arg)
-  else:
-    parts.append('--focus')
-  return ' '.join(parts)
-
-
 def dive_in(
   forwarded: list[str],
   dry_run: bool = False,
@@ -119,34 +102,38 @@ def dive_in(
       base = 'dive-in-new'
     name = _pick_fresh_name(base)
     log.info('workspace: %s', name)
-    prompt = _fix_command(task_arg=None, focus=focus, new=True, command=command)
+    prompt = '/fix --new' if command is None else f'/fix --new {command}'
   elif task is not None or focus:
+    system = brog.system.default_system()
+    if focus and not _is_flow_backend(system):
+      log.error('--focus requires the flow brog backend (the focus service stores flow task ids)')
+      return 1
     if task is not None:
-      task_id = parse_page_ref(task)
-      if focus:
-        default_client().set_focus(task_id)
-        log.info('focused task: %s', task_id)
+      task_ref = task
     else:
       state = default_client().get_focus()
       if state is None:
         log.error('no task is currently focused')
         return 1
-      task_id = state.task.id
+      task_ref = state.task.id
 
-    task_name, task_block = _prefetch_task(task_id)
-    log.info('task: %s', task_name)
-    prompt = _fix_command(task_arg=task, focus=focus, new=False, command=None)
-    prompt = f'{prompt}\n\n{task_block}'
+    brog_task, task_block = _prefetch_task(system, task_ref)
+    if task is not None and focus:
+      default_client().set_focus(brog_task.id)
+      log.info('focused task: %s', brog_task.id)
+    log.info('task: %s', brog_task.name)
+    # the ref exactly as given — the prefetch block carries the canonical form
+    prompt = f'/fix {task_ref}\n\n{task_block}'
     if command is not None:
       prompt = f'{prompt}\n\nOnce you understand the task, {command}'
 
-    base = _slugify(task_name)
+    base = _slugify(brog_task.name)
     if len(base) == 0:
       base = 'dive-in'
     name = _pick_fresh_name(base)
     log.info('workspace: %s', name)
 
-    os.environ['CW_TASK_ID'] = task_id
+    os.environ['CW_TASK_ID'] = brog_task.id
   else:
     prompt = command
     name = _pick_fresh_name('dive-in')
@@ -169,7 +156,7 @@ def main(argv: list[str]) -> Optional[int]:
   )
   cw.add_forwarded_flags(parser)
   group = parser.add_mutually_exclusive_group()
-  group.add_argument('-t', '--task', default=None, help='task ID or Notion URL to dive into')
+  group.add_argument('-t', '--task', default=None, help='task id, URL, or issue ref to dive into')
   group.add_argument(
     '--new',
     action='store_true',
@@ -178,8 +165,10 @@ def main(argv: list[str]) -> Optional[int]:
   parser.add_argument(
     '--focus',
     action='store_true',
-    help='dive into the currently focused task; with -t, set focus to that task first; with --new, focus the newly created task',
+    help='dive into the currently focused task; with -t, set focus to that task first (flow backend only)',
   )
+  # focus cannot attach to a task that does not exist yet at launch
+  parser.add_exclusive_groups(['new'], ['focus'])
   parser.add_argument(
     'command',
     nargs='?',

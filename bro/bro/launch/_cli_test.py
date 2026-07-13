@@ -51,8 +51,8 @@ def test_maybe_containerize_hops_and_scopes_to_bro():
   assert workspace.startswith('call-ppp-dev-')
   assert command == ['call', 'ppp-dev', 'hi', '--slow', '--host']
   assert kwargs['drop'] is True
-  # ppp-dev's manifest (github + notion via flow) + its llm key + the mandatory trails sink
-  assert {'github', 'notion', 'trails'} <= kwargs['secrets']
+  # ppp-dev's manifest (github + brog) + its llm key + the mandatory trails sink
+  assert {'github', 'brog', 'trails'} <= kwargs['secrets']
   # ppp-dev doesn't deploy → no docker socket
   assert kwargs['docker_sock'] is False
   # LLM-process container, not Claude Code: the ambient CW_BRO must not leak in

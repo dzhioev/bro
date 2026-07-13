@@ -243,6 +243,7 @@ _BUILTIN_REGISTRY: dict = {
   'notion': {'sources': [{'file': 'notion.json'}]},
   'focus': {'sources': [{'file': 'focus.json'}]},
   'flow_mcp': {'sources': [{'file': 'flow_mcp.json'}]},
+  'brog': {'sources': [{'file': 'brog.json'}]},
   'infra': {'sources': [{'file': 'infra.json'}]},
   'trails': {'sources': [{'file': 'trails.json'}]},
   'session_log': {'sources': [{'file': 'session_log.json'}]},

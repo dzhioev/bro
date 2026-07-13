@@ -1,7 +1,7 @@
 ---
 name: pr
 description: This skill should be used when the user signals that the worktree's changes are ready for review and a PR should be opened — "open a PR", "send for review", "PR it", "ship it", "ready for review", "finalize". Covers commit hygiene (CLAUDE.md sync, Dockerfile audit, policy audit, commit splitting), the project's commit-message style, footer generation via `./setup/claude_commit_footer.py`, submodule landing, rebase onto the base branch (master by default), opens the PR via `gh pr create`, then launches the `poll-pr` review watcher to handle review comments and APPROVED events. On approval, chains into `/land` for the merge step. Also the re-entry point for a PR that is already open — "/pr <pr-url-or-number>", "resume the PR", "pick up the review" — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
-version: 1.1.0
+version: 1.2.0
 ---
 
 # /pr
@@ -31,7 +31,7 @@ Invoked as `/pr <pr-url-or-number>` — e.g. `do-task ppp-dev "/pr <pr-url>"` af
    ```
    - The task link is the `Task:` line in the PR body — use it for the task-logging steps (13, and `/land`'s bookkeeping). No `Task:` line → proceed without task logging.
    - `<base>` is `baseRefName`.
-3. **Handle a terminal PR**: `state: MERGED` → run `/land`'s post-merge bookkeeping (`### Merged` entry, task closure) and stop; `state: CLOSED` → report it and stop.
+3. **Handle a terminal PR**: `state: MERGED` → run `/land`'s post-merge bookkeeping (`merged` comment, task closure) and stop; `state: CLOSED` → report it and stop.
 4. **Reconcile unaddressed feedback from `gh` state — never trust a lost watcher.** The dead session may have died before, during, or after handling any event, and a restarted `poll-pr` baselines all existing events as already seen — feedback left unhandled now would be silently skipped forever. Pull the full review state:
    ```bash
    gh pr view <number> --json reviews,comments
@@ -89,7 +89,7 @@ Match recent-log style:
 
 - **Title**: `<area>: <imperative lowercase summary>`, under ~70 chars. `<area>` is a module path or file stem — `cw`, `flow/mcp`, `.claude/settings`, `CLAUDE.md`, `sync-scripts`, etc.
 - **Body**: terse — itemised bullets over prose, cap ~10 lines, often skipped entirely. Only context a reader can't recover from the code (motivation, constraint, non-obvious tradeoff).
-- **Footer**: one blank line, then a `Task: <url>` line (resolve via `flow::get_task_info(task_id).address` — task id comes from `CW_TASK_ID` env var or a `flow::add_task` call earlier in this session; in re-entry the PR body's `Task:` line already carries the URL), then the single-line output of `./setup/claude_commit_footer.py` (the per-commit token delta, split into the four billed classes). Example:
+- **Footer**: one blank line, then a `Task: <url>` line (resolve via `brog::get_task(task_id).url` — task id comes from `CW_TASK_ID` env var or a `brog::create_task` call earlier in this session; in re-entry the PR body's `Task:` line already carries the URL), then the single-line output of `./setup/claude_commit_footer.py` (the per-commit token delta, split into the four billed classes). Example:
   ```
   Task: https://www.notion.so/my-task-abc123
   <single-line output of ./setup/claude_commit_footer.py>
@@ -203,16 +203,15 @@ Surface this link every time the PR enters review-pending: here at creation, and
 
 ### 13. Log "PR opened" to the task (sessions with a task)
 
-If the session has a task (`CW_TASK_ID` — `dive-in` sets it — or a task resolved earlier in this session) and flow MCP tools are available:
+If the session has a task (`CW_TASK_ID` — `dive-in` sets it — or a task resolved earlier in this session) and the brog tools are available, record the event with `brog::add_comment(task_id, topic='PR opened', body=...)`:
 
 ```
-### PR opened — @YYYY-MM-DD HH:MM
 <pr-url>
 - [`<short-hash>`](<repo-url>/commit/<full-hash>) <commit title>
 - [`<short-hash>`](<repo-url>/commit/<full-hash>) <commit title>
 ```
 
-Use `date '+%Y-%m-%d %H:%M'` for the timestamp — do not invent it. Build commit links from `git remote get-url origin` (strip trailing `.git`).
+Build commit links from `git remote get-url origin` (strip trailing `.git`).
 
 ### 14. Launch the review watcher
 
@@ -275,7 +274,7 @@ Unconditional approval — the PR is ready to merge. Chain into the merge, and b
 
 **`review` with `state: "COMMENTED"` or `"DISMISSED"`**: informational; the actionable feedback (if any) is in this event's `comments` array or arrives via accompanying `comment` events.
 
-**`merged` / `closed`**: someone (the user, `/land`, or external action) terminated the PR. If `merged`, run `/land`'s post-merge bookkeeping — the `### Merged` entry and task closure. If `closed` without merge, log it and report to the user.
+**`merged` / `closed`**: someone (the user, `/land`, or external action) terminated the PR. If `merged`, run `/land`'s post-merge bookkeeping — the `merged` comment and task closure. If `closed` without merge, log it and report to the user.
 
 ## Safety rules
 

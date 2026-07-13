@@ -2,15 +2,34 @@
 import os
 import re
 import shlex
+import types
+from datetime import UTC
+from typing import cast
 
 import pytest
 
+import brog.system
 import cw
 import dive_in
 from dive_in import _pick_fresh_name
 
 UUID = '35ad38d8-5a6d-81ea-bce6-e4caf17ece7f'
 HEX = '35ad38d85a6d81eabce6e4caf17ece7f'
+URL = f'https://app.notion.com/p/my-task-{HEX}'
+
+
+def _brog_task(name: str = 'my task'):
+  from brog.model import Task
+
+  return Task(
+    id=UUID,
+    name=name,
+    status='open',
+    url=URL,
+    tags=[],
+    project=None,
+    blocked_by=[],
+  )
 
 
 @pytest.fixture
@@ -104,20 +123,85 @@ class TestShellCommandReconstruction:
     assert os.environ['PPP_SHELL_COMMAND'] == 'dive-in --new do a thing'
 
 
-class TestTaskModeName:
+class TestTaskMode:
+  @pytest.fixture(autouse=True)
+  def fake_backend(self, monkeypatch):
+    monkeypatch.setattr('brog.system.default_system', lambda: object())
+
   def test_every_launch_picks_a_fresh_workspace_name(self, fake_proj, monkeypatch, capsys):
-    monkeypatch.setattr(dive_in, '_prefetch_task', lambda task_id: ('My Task!', 'task block'))
+    monkeypatch.setattr(
+      dive_in, '_prefetch_task', lambda system, ref: (_brog_task('My Task!'), 'task block')
+    )
     rc = dive_in.dive_in(forwarded=[], dry_run=True, task=UUID)
     assert rc == 0
     name = shlex.split(capsys.readouterr().out.strip())[-1]
     assert re.fullmatch(r'my-task-[0-9a-f]{8}', name) is not None
 
   def test_empty_slug_falls_back_to_dive_in(self, fake_proj, monkeypatch, capsys):
-    monkeypatch.setattr(dive_in, '_prefetch_task', lambda task_id: ('!!!', 'task block'))
+    monkeypatch.setattr(
+      dive_in, '_prefetch_task', lambda system, ref: (_brog_task('!!!'), 'task block')
+    )
     rc = dive_in.dive_in(forwarded=[], dry_run=True, task=UUID)
     assert rc == 0
     name = shlex.split(capsys.readouterr().out.strip())[-1]
     assert re.fullmatch(r'dive-in-[0-9a-f]{8}', name) is not None
+
+  def test_seeds_fix_with_the_original_ref_and_exports_the_canonical_id(
+    self, fake_proj, monkeypatch, capsys
+  ):
+    monkeypatch.setattr(dive_in, '_prefetch_task', lambda system, ref: (_brog_task(), 'task block'))
+    rc = dive_in.dive_in(forwarded=[], dry_run=True, task=URL)
+    assert rc == 0
+    tokens = shlex.split(capsys.readouterr().out.strip())
+    prompt = tokens[tokens.index('-p') + 1]
+    # the ref rides as typed; the prefetch block follows
+    assert prompt.startswith(f'/fix {URL}\n\ntask block')
+    # CW_TASK_ID carries the backend's canonical id, not the raw ref
+    assert os.environ['CW_TASK_ID'] == UUID
+
+  def test_focus_with_task_sets_focus_to_the_canonical_id(self, fake_proj, monkeypatch, capsys):
+    focused = {}
+
+    class FakeClient:
+      def set_focus(self, task_id):
+        focused['id'] = task_id
+
+    monkeypatch.setattr(dive_in, '_is_flow_backend', lambda system: True)
+    monkeypatch.setattr(dive_in, '_prefetch_task', lambda system, ref: (_brog_task(), 'task block'))
+    monkeypatch.setattr(dive_in, 'default_client', lambda: FakeClient())
+    rc = dive_in.dive_in(forwarded=[], dry_run=True, task=URL, focus=True)
+    assert rc == 0
+    assert focused['id'] == UUID
+    # /fix has no focus form: the first message is the plain task-ref form
+    tokens = shlex.split(capsys.readouterr().out.strip())
+    prompt = tokens[tokens.index('-p') + 1]
+    assert prompt.startswith(f'/fix {URL}')
+
+  def test_bare_focus_seeds_fix_with_the_focused_id(self, fake_proj, monkeypatch, capsys):
+    state = types.SimpleNamespace(task=types.SimpleNamespace(id=UUID))
+
+    class FakeClient:
+      def get_focus(self):
+        return state
+
+    monkeypatch.setattr(dive_in, '_is_flow_backend', lambda system: True)
+    monkeypatch.setattr(dive_in, '_prefetch_task', lambda system, ref: (_brog_task(), 'task block'))
+    monkeypatch.setattr(dive_in, 'default_client', lambda: FakeClient())
+    rc = dive_in.dive_in(forwarded=[], dry_run=True, focus=True)
+    assert rc == 0
+    tokens = shlex.split(capsys.readouterr().out.strip())
+    prompt = tokens[tokens.index('-p') + 1]
+    assert prompt.startswith(f'/fix {UUID}')
+
+  def test_focus_on_a_non_flow_backend_fails_at_launch(self, fake_proj):
+    # the fake backend is a plain object — not the flow proxy — so --focus
+    # must fail before any focus-client call
+    rc = dive_in.dive_in(forwarded=[], dry_run=True, focus=True)
+    assert rc == 1
+
+  def test_new_and_focus_are_mutually_exclusive(self, fake_proj):
+    with pytest.raises(SystemExit):
+      dive_in.main(['dive-in', '-n', '--new', '--focus'])
 
   def test_resume_flag_is_rejected(self):
     with pytest.raises(SystemExit):
@@ -125,49 +209,50 @@ class TestTaskModeName:
 
 
 class TestPrefetchTask:
-  def test_returns_name_and_embeds_metadata_and_page(self, monkeypatch):
-    from flow.model import Importance, Task
+  def test_returns_task_and_embeds_metadata_description_and_comments(self):
+    from datetime import datetime
+
+    from brog.model import Comment, Project, Task
 
     task = Task(
       id=UUID,
       name='my task',
-      status='Live',
-      importance=Importance.NORMAL,
-      driver=None,
-      project='project-1',
+      status='open',
+      url=URL,
       tags=['infra'],
-      links=[],
-      blocks=[],
+      project=Project(id='project-1', name='proj', summary='the project'),
       blocked_by=[],
-      created_time='2026-01-01',
-      last_edited='2026-01-02',
-      sender=None,
-      received=None,
-      date=None,
-      deadline=None,
-      today=False,
-      last_done=None,
-      address=f'https://app.notion.com/p/my-task-{HEX}',
     )
 
     class FakeSystem:
-      def get_task_info(self, task_id):
-        assert task_id == UUID
+      def get_task(self, task_ref):
+        assert task_ref == URL
         return task
 
-      def get_page_content(self, page_id):
-        assert page_id == UUID
+      def get_task_description(self, task_id):
+        assert task_id == UUID
         return '## Goal\nDo the thing.'
 
-    monkeypatch.setattr('flow.system.default_system', lambda: FakeSystem())
+      def get_task_comments(self, task_id):
+        assert task_id == UUID
+        return [
+          Comment(
+            topic='plan',
+            author='ppp-dev',
+            timestamp=datetime(2026, 1, 1, 12, 0, tzinfo=UTC),
+            body='the plan',
+          )
+        ]
 
-    name, block = dive_in._prefetch_task(UUID)
-    assert name == 'my task'
-    # page body embedded verbatim
+    got, block = dive_in._prefetch_task(cast(brog.system.System, FakeSystem()), URL)
+    assert got is task
+    # description embedded verbatim
     assert '## Goal\nDo the thing.' in block
-    # metadata embedded as json, enums rendered by value
-    assert '"status": "Live"' in block
-    assert '"importance": "Normal"' in block
-    assert '"project": "project-1"' in block
+    # metadata embedded as json, nested project included
+    assert '"status": "open"' in block
+    assert '"name": "proj"' in block
+    # comments embedded as json, datetimes stringified
+    assert '"topic": "plan"' in block
+    assert '2026-01-01 12:00:00+00:00' in block
     # instruction to skip the in-session fetch
-    assert 'do not call get_task_info / read_page_content' in block
+    assert 'do not call get_task / read_task / read_comments' in block

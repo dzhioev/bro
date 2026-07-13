@@ -50,6 +50,11 @@ Credentials live in the standalone `~/.ppp` store; the repo no longer carries th
 - `google_api.json` — Google OAuth client config
 - `gmail_creds.json` — cached Gmail OAuth token (JSON-serialised)
 - `flow_mcp.json` — `{ "url": "https://flow.<delegated_subdomain>", "token": "<bearer-token>" }` for the deployed flow MCP server (external MCP clients — Claude apps, agents on other hosts)
+- `brog.json` — the brog task-tracker backend selection, self-contained: every credential the active backend needs is embedded, so brog makes no assumption about other secrets being granted. One of:
+
+  - `{ "backend": "flow", "transport": "http", "url": ..., "token": ... }` — url + token as in `flow_mcp.json` (bootstrap by copying)
+  - `{ "backend": "flow", "transport": "local", "notion": { ...notion.json shape... } }`
+  - `{ "backend": "github", "token": ..., "repo": "owner/name"? }` — the token's account is the acting identity (issues and comments are created under it); `repo` omitted derives owner/name from the workspace's `origin` remote at server start
 - `focus.json` — `{ "url": ..., "token": ... }` for the focus HTTP client
 - `infra.json` — `{ "apex": ..., "delegated_subdomain": ... }` consumed by `infra/cdk/config.py`
 - `session_log.json` — `{ "aws_access_key_id", "aws_secret_access_key", "region", "bucket", "table" }` for `sync-session-log` (created by `bootstrap_session_log.sh`).

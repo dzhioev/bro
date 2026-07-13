@@ -6,125 +6,35 @@ import json
 import logging
 import time
 import urllib.error
-import urllib.request
 from collections.abc import Callable
-from email.utils import parsedate_to_datetime
 from typing import Any, Optional
 
 from base.args import ArgumentTypeError, Parser
+from github import api
 
 __cli_name__ = 'poll-pr'
 
 _log = logging.getLogger(__name__)
 
-# transient HTTP statuses worth retrying: server errors, rate limiting, and
-# 401/403 — GitHub returns these for token-propagation and secondary-rate-limit
-# blips that clear within seconds (observed on PR #169: a lone 401 then 200).
-_RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
-_TRANSIENT_AUTH_STATUSES = frozenset({401, 403})
-_MAX_ATTEMPTS = 5
-_BASE_BACKOFF = 1.0  # seconds; doubled per attempt
-_MAX_BACKOFF = 30.0  # ceiling for both exponential backoff and server-hinted waits
-
-
-def _is_transient(error: urllib.error.URLError) -> bool:
-  """whether a failed GitHub call is a blip worth retrying vs a genuine error.
-
-  HTTPError is a subclass of URLError; a bare URLError is a network/transport
-  failure, which is always transient. genuine client errors (404, malformed
-  request) surface immediately.
-  """
-  if isinstance(error, urllib.error.HTTPError):
-    return error.code in _RETRYABLE_STATUSES or error.code in _TRANSIENT_AUTH_STATUSES
-  return True
-
-
-def _retry_delay(error: urllib.error.URLError, attempt: int) -> float:
-  """seconds to wait before the next attempt (0-indexed), honoring server hints.
-
-  prefers the server's own `Retry-After` (secondary rate limits) or
-  `X-RateLimit-Reset` (when the remaining quota is exhausted); falls back to
-  exponential backoff. all waits are capped at `_MAX_BACKOFF`.
-  """
-  backoff = min(_MAX_BACKOFF, _BASE_BACKOFF * (2**attempt))
-  if not isinstance(error, urllib.error.HTTPError):
-    return backoff
-  headers = error.headers
-  retry_after = headers.get('Retry-After')
-  if retry_after is not None:
-    hinted = _parse_retry_after(retry_after)
-    if hinted is not None:
-      return min(_MAX_BACKOFF, hinted)
-  reset = headers.get('X-RateLimit-Reset')
-  if reset is not None and headers.get('X-RateLimit-Remaining') == '0':
-    try:
-      return min(_MAX_BACKOFF, max(0.0, float(reset) - time.time()))
-    except ValueError:
-      pass
-  return backoff
-
-
-def _parse_retry_after(value: str) -> Optional[float]:
-  """parse a Retry-After header (delta-seconds or HTTP-date) into seconds."""
-  try:
-    return float(value)
-  except ValueError:
-    pass
-  try:
-    return max(0.0, parsedate_to_datetime(value).timestamp() - time.time())
-  except (TypeError, ValueError):
-    return None
-
-
-def _gh_get(url: str, token: str) -> Any:
-  request = urllib.request.Request(
-    url,
-    headers={
-      'Authorization': f'Bearer {token}',
-      'Accept': 'application/vnd.github+json',
-      'X-GitHub-Api-Version': '2022-11-28',
-    },
-  )
-  for attempt in range(_MAX_ATTEMPTS):
-    try:
-      with urllib.request.urlopen(request) as response:
-        return json.loads(response.read())
-    except (http.client.HTTPException, OSError) as error:
-      if isinstance(error, urllib.error.URLError):
-        if not _is_transient(error):
-          raise
-        delay = _retry_delay(error, attempt)
-        reason = f'HTTP {error.code}' if isinstance(error, urllib.error.HTTPError) else error.reason
-      else:
-        delay = min(_MAX_BACKOFF, _BASE_BACKOFF * (2**attempt))
-        reason = f'{type(error).__name__}: {error}'
-      if attempt == _MAX_ATTEMPTS - 1:
-        raise
-      _log.warning(
-        f'{reason} from {url}; retrying in {delay:.1f}s (attempt {attempt + 1}/{_MAX_ATTEMPTS})'
-      )
-      time.sleep(delay)
-  raise AssertionError('unreachable: final attempt returns or raises')
-
 
 def _fetch_pr(owner: str, repo: str, pr: int, token: str) -> dict[str, Any]:
   url = f'https://api.github.com/repos/{owner}/{repo}/pulls/{pr}'
-  return _gh_get(url, token)
+  return api.get(url, token)
 
 
 def _fetch_issue_comments(owner: str, repo: str, pr: int, token: str) -> list[dict[str, Any]]:
   url = f'https://api.github.com/repos/{owner}/{repo}/issues/{pr}/comments?per_page=100'
-  return _gh_get(url, token)
+  return api.get(url, token)
 
 
 def _fetch_review_comments(owner: str, repo: str, pr: int, token: str) -> list[dict[str, Any]]:
   url = f'https://api.github.com/repos/{owner}/{repo}/pulls/{pr}/comments?per_page=100'
-  return _gh_get(url, token)
+  return api.get(url, token)
 
 
 def _fetch_reviews(owner: str, repo: str, pr: int, token: str) -> list[dict[str, Any]]:
   url = f'https://api.github.com/repos/{owner}/{repo}/pulls/{pr}/reviews?per_page=100'
-  return _gh_get(url, token)
+  return api.get(url, token)
 
 
 def _fetch_review_inline_comments(
@@ -134,12 +44,12 @@ def _fetch_review_inline_comments(
     f'https://api.github.com/repos/{owner}/{repo}/pulls/{pr}/reviews/'
     f'{review_id}/comments?per_page=100'
   )
-  return _gh_get(url, token)
+  return api.get(url, token)
 
 
 def _owner_login(owner: str, repo: str, token: str) -> str:
   url = f'https://api.github.com/repos/{owner}/{repo}'
-  data: dict[str, Any] = _gh_get(url, token)
+  data: dict[str, Any] = api.get(url, token)
   return data['owner']['login']
 
 
@@ -266,7 +176,7 @@ def poll_pr(
     return login == repo_owner_login
 
   while True:
-    # `_gh_get` already retries transient blips per call; this guard is the
+    # `github.api` already retries transient blips per call; this guard is the
     # second layer — if a whole cycle still fails on a transient error (a longer
     # outage), log and poll again next interval instead of exiting, preserving
     # the seen-id baselines. a non-transient error (404 — PR/repo gone) is fatal
@@ -287,7 +197,7 @@ def poll_pr(
       ):
         print(json.dumps(event), flush=True)
     except (http.client.HTTPException, OSError) as error:
-      if isinstance(error, urllib.error.URLError) and not _is_transient(error):
+      if isinstance(error, urllib.error.URLError) and not api.is_transient(error):
         raise
       if isinstance(error, urllib.error.HTTPError):
         reason = f'HTTP {error.code}'

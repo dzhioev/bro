@@ -32,9 +32,18 @@ def _flow_server() -> 'MCPServer':
   return flow.mcp.spec().build()
 
 
+def _brog_server() -> 'MCPServer':
+  import brog.mcp
+
+  return brog.mcp.spec().build()
+
+
 # lazy factories: a spec pays its import only when resolved, never at parser
 # construction
-_STATIC_SERVERS: dict[str, Callable[[], 'MCPServer']] = {'flow': _flow_server}
+_STATIC_SERVERS: dict[str, Callable[[], 'MCPServer']] = {
+  'flow': _flow_server,
+  'brog': _brog_server,
+}
 
 
 def _resolve_servers(spec: str) -> list['MCPServer']:

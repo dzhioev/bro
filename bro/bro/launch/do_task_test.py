@@ -57,12 +57,12 @@ async def test_wraps_url_as_fix_invocation():
 
 @pytest.mark.asyncio
 async def test_passes_through_leading_slash_invocation():
-  # `do-task ppp-dev "/fix --focus"` must not become `/fix /fix --focus`, and an
-  # alternate skill (`/pr …`) is a deliberate override left untouched.
+  # `do-task ppp-dev "/fix --new idea"` must not become `/fix /fix --new idea`,
+  # and an alternate skill (`/pr …`) is a deliberate override left untouched.
   bro = RecordBro(response='ok')
-  await do_task(bro, '/fix --focus')
+  await do_task(bro, '/fix --new idea')
   await do_task(bro, '/pr')
-  assert bro.mock_llm.send_calls[0][-1]['content'] == '/fix --focus'
+  assert bro.mock_llm.send_calls[0][-1]['content'] == '/fix --new idea'
   assert bro.mock_llm.send_calls[1][-1] == {'role': 'user', 'content': '/pr'}
 
 
@@ -88,7 +88,7 @@ def test_main_re_execs_into_container_when_outside():
     assert workspace.startswith('do-task-ppp-dev-')
     assert command == ['do-task', 'ppp-dev', 'abc-123', '--host']
     assert kwargs['drop'] is True
-    assert {'github', 'notion', 'trails'} <= kwargs['secrets']
+    assert {'github', 'brog', 'trails'} <= kwargs['secrets']
     assert kwargs['docker_sock'] is False
 
 
@@ -137,7 +137,7 @@ def test_main_exports_task_id_for_dashed_uuid():
     assert os.environ.get('CW_TASK_ID') == '369d38d8-5a6d-818c-af91-c12a203b17e1'
 
 
-@pytest.mark.parametrize('task', ['fix the frobnicator', '/fix --focus'])
+@pytest.mark.parametrize('task', ['fix the frobnicator', '/fix --new idea'])
 def test_main_exports_nothing_for_non_page_ref_input(task: str):
   # a description or slash invocation names no page — the bro resolves the task
   # itself, and any ambient CW_TASK_ID is left as-is.

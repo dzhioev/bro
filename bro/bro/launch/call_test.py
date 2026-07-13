@@ -287,8 +287,8 @@ def test_call_re_execs_into_container_when_outside():
     # default so no --slow either
     assert command == ['call', 'ppp-dev', 'hey', '--host']
     assert kwargs['drop'] is True
-    # ppp-dev's manifest (github + notion via flow) plus the mandatory trails sink
-    assert {'github', 'notion', 'trails'} <= kwargs['secrets']
+    # ppp-dev's manifest (github + brog) plus the mandatory trails sink
+    assert {'github', 'brog', 'trails'} <= kwargs['secrets']
     # ppp-dev doesn't deploy → no docker socket
     assert kwargs['docker_sock'] is False
 

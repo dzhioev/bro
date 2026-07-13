@@ -89,14 +89,36 @@ class TestResolveServers:
     assert len(servers) == 1
     assert servers[0].namespace == 'flow'
 
+  def test_static_brog(self, monkeypatch):
+    # brog's state factory reads the self-contained config at build time
+    from base import credentials
+
+    monkeypatch.setattr(
+      credentials,
+      'get_json',
+      lambda name: {'backend': 'flow', 'transport': 'http', 'url': 'https://x', 'token': 't'},
+    )
+    servers = _resolve_servers('brog')
+    assert len(servers) == 1
+    assert servers[0].namespace == 'brog'
+
   def test_unknown(self):
     with pytest.raises(SystemExit, match='unknown server'):
       _resolve_servers('does-not-exist')
 
-  def test_bro_spec_includes_service_namespace(self):
+  def test_bro_spec_includes_service_namespace(self, monkeypatch):
+    from base import credentials
+
+    # pm declares brog.mcp, whose state factory reads the `brog` secret at build
+    monkeypatch.setattr(
+      credentials,
+      'get_json',
+      lambda name: {'backend': 'flow', 'transport': 'http', 'url': 'https://x', 'token': 't'},
+    )
     namespaces = {s.namespace for s in _resolve_servers('bro:pm')}
     assert 'bro' in namespaces
     assert 'flow' in namespaces
+    assert 'brog' in namespaces
 
 
 class TestHTTPBindBeforeResolve:

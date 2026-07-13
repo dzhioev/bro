@@ -12,6 +12,17 @@ _WORKSPACE = Path('/ws')
 _ENDPOINT = MCPEndpoint(port=1234, token='tok')
 
 
+@pytest.fixture(autouse=True)
+def _brog_config(monkeypatch):
+  # the launch builder constructs the session bro's live servers to enumerate
+  # namespaces, and brog's state factory reads the self-contained `brog` secret
+  # at build; pin a fake so launches build hermetically
+  monkeypatch.setattr(
+    'base.credentials.get_json',
+    lambda name: {'backend': 'flow', 'transport': 'http', 'url': 'https://x', 'token': 't'},
+  )
+
+
 def _pm_namespaces() -> list[str]:
   from bro.registry import create_bro
 

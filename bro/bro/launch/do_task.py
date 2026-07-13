@@ -11,7 +11,7 @@ __cli_name__ = 'do-task'
 def fix_invocation(task: str) -> str:
   # the `/fix` wrapping that makes `do-task <bro> <ref>` shorthand for
   # `ask <bro> /fix <ref>`. An already-slash-prefixed input passes straight
-  # through so users can override (e.g. `do-task ppp-dev "/fix --focus"`); the
+  # through so users can override (e.g. `do-task ppp-dev "/pr <pr-url>"`); the
   # check is on the first character, so leading whitespace before `/` gets
   # wrapped like any other ref.
   if task.startswith('/'):

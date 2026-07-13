@@ -921,20 +921,25 @@ class TestClaudePersonaServers:
     assert set(bro.needed_secrets()) == {'alpha', 'beta', 'gamma'}
     assert bro.needed_secrets(harness='claude') == ()
 
-  def test_real_bro_persona_surfaces(self):
+  def test_real_bro_persona_surfaces(self, monkeypatch):
     from bro.bros.dev import Dev
 
+    # brog's state factory reads the self-contained `brog` secret at build
+    monkeypatch.setattr(
+      'base.credentials.get_json',
+      lambda name: {'backend': 'flow', 'transport': 'http', 'url': 'https://x', 'token': 't'},
+    )
     # the dev toolset is bro-harness-only — claude's built-in tools cover it —
     # while the reference FileSources serve every harness
     assert [s.namespace for s in Dev().claude_persona_mcp_servers()] == ['bro']
     assert [s.namespace for s in PPPDev().claude_persona_mcp_servers()] == [
-      'flow',
+      'brog',
       'environment-source',
       'template-source',
       'conditions-source',
       'bro',
     ]
-    assert set(PPPDev().needed_secrets(harness='claude')) == {'github', 'notion', 'focus'}
+    assert set(PPPDev().needed_secrets(harness='claude')) == {'github', 'brog'}
 
 
 class _SecretServer(InProcessMCPServer):
@@ -1037,11 +1042,11 @@ class TestMaySummon:
     # component manifest only (no llm key). the full-toolset flow bros hold the
     # focus tools, so `focus` must be present — exact-set checks (not `<=`) so an
     # under-declaration like B1 can't slip through.
-    assert set(PPPDev().needed_secrets()) == {'github', 'notion', 'focus'}
+    assert set(PPPDev().needed_secrets()) == {'github', 'brog'}
     assert set(Assistant().needed_secrets()) == {'notion', 'focus'}
     # PM carries the WebSearch source (brave) for triage lookups; its query-focused
     # fetch summary makes openai an optional (best-effort) secret, not required.
-    assert set(PM().needed_secrets()) == {'notion', 'focus', 'brave'}
+    assert set(PM().needed_secrets()) == {'notion', 'focus', 'brave', 'brog'}
     assert PM().optional_secrets() == ('openai',)
     # librorian scopes flow to non-focus tools, so it must NOT pull in `focus`.
     assert 'focus' not in set(Librorian().needed_secrets())
