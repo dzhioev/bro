@@ -31,7 +31,7 @@ class _Harness:
         return_value=ClaudeLaunch(argv=['built'], system_prompt='sp'),
       ),
       patch('cw.runner._run_claude', return_value=0),
-      patch('cw.runner._sync_bare_session_log'),
+      patch('cw.runner._start_session_log_sync'),
       patch('cw.runner._populate_bro_skills'),
       patch('cw.runner._apply_claude_auth'),
       patch('cw.runner._start_session_broxy', return_value=self.broxy),
@@ -47,7 +47,7 @@ class _Harness:
     self.start_server = entered[2]
     self.build = entered[3]
     self.run_claude = entered[4]
-    self.sync = entered[5]
+    self.start_sync = entered[5]
     self.populate = entered[6]
     self.apply_auth = entered[7]
     self.start_broxy = entered[8]
@@ -78,6 +78,24 @@ class TestRunInPlace:
       (h.projects_dir / 'newer.jsonl').write_text('{}')
       assert cw.runner.run_in_place(_spec(resume=True, claude_args=['--foo'])) == 0
       assert h.build.call_args.kwargs['claude_args'] == ['--resume', 'newer', '--foo']
+      assert h.start_sync.call_args.kwargs['resume_segment'] == 'newer'
+
+  def test_session_log_sync_runs_for_the_session_and_stops_after(self, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    with _Harness(tmp_path) as h:
+      assert cw.runner.run_in_place(_spec()) == 0
+      assert h.start_sync.call_args.args[0] == 'w'
+      assert h.start_sync.call_args.kwargs['resume_segment'] is None
+      # spawned after the session context is set, so the daemon inherits it
+      assert 'CW_SESSION_CONTEXT' in h.start_sync.call_args.args[2]
+      assert h.start_sync.return_value.stop.call_count == 1
+
+  def test_session_log_sync_start_failure_does_not_block_the_launch(self, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    with _Harness(tmp_path) as h:
+      h.start_sync.return_value = None
+      assert cw.runner.run_in_place(_spec()) == 0
+      assert h.run_claude.call_count == 1
 
   def test_bro_session_serves_health_gates_and_syncs(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
@@ -86,7 +104,7 @@ class TestRunInPlace:
       assert h.start_server.call_args[0][0] == 'bro:pm'
       assert h.server.wait_healthy.call_count == 1
       assert h.server.stop.call_count == 1
-      assert h.sync.call_count == 1
+      assert h.start_sync.call_count == 1
       assert h.env['CW_BRO'] == 'pm'
       assert h.build.call_args.kwargs['endpoint'] == h.server.endpoint
       # a --bro session reaches skills via the bro::skill tool, not --add-dir
@@ -100,7 +118,7 @@ class TestRunInPlace:
       assert h.start_server.call_args[0][0] == 'persona:pm'
       assert h.server.wait_healthy.call_count == 1
       assert h.server.stop.call_count == 1
-      assert h.sync.call_count == 0
+      assert h.start_sync.call_count == 1
       assert h.env['CW_BRO'] == 'pm'
       assert h.build.call_args.kwargs['endpoint'] == h.server.endpoint
 

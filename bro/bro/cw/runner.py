@@ -4,9 +4,9 @@ The inner layer of the launch stack: it assumes its cwd is a prepared workspace
 (host worktree or container clone) with the workspace venv active, and owns
 everything that runs next to claude — resume resolution, the claude argv, the
 session-local MCP server, bro-skill surfacing, CW_SESSION_CONTEXT, and the
-post-exit transcript sync for `--bare` sessions. The outer `cw ss` (mode-specific
-by nature: worktree ensure / container machinery) validates policy once and
-spawns this runner in the workspace, so it re-runs no policy gates.
+session-log sync daemon. The outer `cw ss` (mode-specific by nature: worktree
+ensure / container machinery) validates policy once and spawns this runner in
+the workspace, so it re-runs no policy gates.
 """
 
 import contextlib
@@ -33,6 +33,7 @@ from cw.session_context import (
   build_session_context,
   encode_session_context,
 )
+from cw.session_log import _start_session_log_sync
 
 if TYPE_CHECKING:
   from cw.session import SessionSpec
@@ -40,9 +41,9 @@ if TYPE_CHECKING:
 
 def _set_session_context(spec: 'SessionSpec', system_prompt: str, workspace: Path) -> None:
   """capture the session's launch context into CW_SESSION_CONTEXT for the
-  session-log sync (set in os.environ: claude's hooks and the runner's own
-  `--bare` one-shot both read it). the git base is the workspace's HEAD — for a
-  fresh workspace the ref the outer based it on, for a resume the branch tip."""
+  session-log sync daemon (set in os.environ, which the daemon's spawn
+  snapshots). the git base is the workspace's HEAD — for a fresh workspace the
+  ref the outer based it on, for a resume the branch tip."""
   try:
     base_sha = git_out('rev-parse', 'HEAD', cwd=str(workspace))
   except subprocess.CalledProcessError:
@@ -78,22 +79,6 @@ def _run_claude(argv: list[str], env: dict[str, str]) -> int:
     return process.wait()
 
 
-def _sync_bare_session_log(name: str, workspace: Path) -> None:
-  """one-shot transcript upload for a `--bare` session: minimal mode runs no
-  hooks, so the SessionStart/SessionEnd sync pair never fires and the session
-  would stay invisible to `sessions` / `rewind`. best-effort — a sync failure
-  warns rather than failing session teardown."""
-  import sync_session_log
-
-  projects_dir = _claude_projects_dir(workspace)
-  if _latest_jsonl(projects_dir) is None:
-    return
-  try:
-    sync_session_log.sync_session_log(workspace=name, projects_dir=projects_dir)
-  except Exception as e:
-    log.warning('session-log sync for %s failed: %s', name, e)
-
-
 def run_in_place(spec: 'SessionSpec') -> int:
   workspace = Path.cwd()
 
@@ -108,6 +93,7 @@ def run_in_place(spec: 'SessionSpec') -> int:
     os.environ['CLAUDE_CONFIG_DIR'] = str(claude_dir)
 
   claude_args = list(spec.claude_args)
+  resumed_segment: Optional[str] = None
   if spec.resume:
     projects_dir = _claude_projects_dir(workspace)
     latest = _latest_jsonl(projects_dir)
@@ -115,6 +101,7 @@ def run_in_place(spec: 'SessionSpec') -> int:
       log.error('no claude session found in %s', projects_dir)
       return 1
     log.info('resuming session %s', latest.stem)
+    resumed_segment = latest.stem
     claude_args = ['--resume', latest.stem, *claude_args]
 
   os.environ.update(bro_git_identity_env())
@@ -171,6 +158,14 @@ def run_in_place(spec: 'SessionSpec') -> int:
     )
     _set_session_context(spec, launch.system_prompt, workspace)
 
+    # after the session context: the daemon's spawn snapshots os.environ, and
+    # CW_SESSION_CONTEXT lands on every item it uploads
+    session_log_sync = _start_session_log_sync(
+      spec.name, workspace, os.environ, resume_segment=resumed_segment
+    )
+    if session_log_sync is not None:
+      teardown.callback(session_log_sync.stop)
+
     # gate the launch on full tool readiness: the argv build above overlapped
     # the server's own bro import, so much of the wait is already paid
     try:
@@ -183,6 +178,4 @@ def run_in_place(spec: 'SessionSpec') -> int:
     _apply_claude_auth(env, warn_when_missing=spec.bro is None)
     code = _run_claude(launch.argv, env)
 
-  if spec.bro is not None:
-    _sync_bare_session_log(spec.name, workspace)
   return code

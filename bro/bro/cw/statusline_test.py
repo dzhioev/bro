@@ -7,7 +7,7 @@ import session_log_statusline
 
 
 def _run(monkeypatch, tmp_path, status=None, summon_status=None) -> str:
-  monkeypatch.setattr(session_log_health, 'HEALTH_PATH', tmp_path / 'health.json')
+  monkeypatch.setattr(session_log_health, 'health_path', lambda: tmp_path / 'health.json')
   if status is not None:
     session_log_health.write(status)
   monkeypatch.delenv(session_log_statusline.STATUS_ENV, raising=False)
@@ -103,7 +103,7 @@ class TestSummonSection:
 
   def test_missing_file_prints_nothing(self, monkeypatch, tmp_path):
     monkeypatch.setenv(session_log_statusline.STATUS_ENV, str(tmp_path / 'nope.json'))
-    monkeypatch.setattr(session_log_health, 'HEALTH_PATH', tmp_path / 'health.json')
+    monkeypatch.setattr(session_log_health, 'health_path', lambda: tmp_path / 'health.json')
     monkeypatch.setattr('sys.stdin', io.StringIO('{}'))
     out = io.StringIO()
     monkeypatch.setattr('sys.stdout', out)

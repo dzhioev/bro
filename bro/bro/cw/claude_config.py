@@ -30,6 +30,9 @@ _SESSION_SETTINGS_JSON: dict = {
   # install's plugins dir on host); enabling alone is not enough (claude would
   # prompt to install it on .py files).
   'enabledPlugins': {'pyright-lsp@claude-plugins-official': True},
+  # keep transcripts forever (no disable value exists); they back the
+  # session-log sync
+  'cleanupPeriodDays': 36500,
 }
 
 # the explicit per-session ~/.claude.json base: no onboarding prompts, no
