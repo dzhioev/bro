@@ -49,9 +49,7 @@ def test_maybe_containerize_hops_and_scopes_to_bro():
   assert rc == 7
   (workspace, command), kwargs = run.call_args
   assert workspace.startswith('call-ppp-dev-')
-  # the container re-runs the same CLI with CW_IN_CONTAINER set, which short-circuits
-  # the re-hop so the inner process runs the bro in-process
-  assert command == ['call', 'ppp-dev', 'hi', '--slow']
+  assert command == ['call', 'ppp-dev', 'hi', '--slow', '--host']
   assert kwargs['drop'] is True
   # ppp-dev's manifest (github + notion via flow) + its llm key + the mandatory trails sink
   assert {'github', 'notion', 'trails'} <= kwargs['secrets']
@@ -81,7 +79,7 @@ def test_maybe_containerize_no_trails_drops_secret_and_disables_recording():
     )
   (_workspace, command), kwargs = run.call_args
   # the env var carries the effect in, so --no-trails isn't forwarded into the inner argv
-  assert command == ['call', 'ppp-dev', 'hi']
+  assert command == ['call', 'ppp-dev', 'hi', '--host']
   assert 'trails' not in kwargs['secrets']
   assert kwargs['extra_env'] == {'TRAILS_DISABLED': '1', **bro_git_identity_env()}
 

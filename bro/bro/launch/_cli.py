@@ -10,7 +10,8 @@ from collections.abc import Callable, Coroutine
 from typing import Optional
 
 import base.args
-from base import credentials
+import summon as summon_client
+from base import credentials, log
 from bro.bro import BroRaised
 from bro.bros.bro import Bro
 from llm.observer import Observer
@@ -29,7 +30,15 @@ EFFORT_HELP = (
   "at xhigh); without the flag the bro's own spec stands. errors when the provider "
   'has no effort knob'
 )
-HOST_HELP = 'skip the auto-container hop and run in the calling host process'
+HOST_HELP = (
+  'run the bro in the calling process: skip the scoped-container hop (on the '
+  'host) or the host-relayed full launch (inside a container)'
+)
+TIMEOUT_HELP = (
+  'seconds before the host kills a relayed run — a container invocation without '
+  f'--host relays through the host summon path (default: {summon_client.DEFAULT_TIMEOUT:.0f}); '
+  'errors when the run is not relayed'
+)
 NO_TRAILS_HELP = (
   'disable trails recording: set TRAILS_DISABLED in the container and drop the '
   'trails secret from the scoped set'
@@ -100,9 +109,12 @@ def maybe_containerize(
   container and return its exit code, or return None so the caller runs in the
   calling process.
 
-  the hop is skipped when already inside a container (`CW_IN_CONTAINER`, set by the
-  container) or when `--host` was passed — that is how the inner process
-  avoids re-hopping and runs the bro in-process. otherwise the container is scoped
+  the hop is skipped when `--host` was passed or when already inside a container
+  (`CW_IN_CONTAINER`, set by the container). the hopped command itself carries
+  `--host`, pinning the inner run in-process — without it an in-container
+  `ask`/`do-task` would relay itself back to the host (the relay branch in
+  `run()`); `call` has no relay, so its in-container invocations land here and
+  skip via `CW_IN_CONTAINER`. otherwise the container is scoped
   to `cw.bro_run_secrets(bro_name)` — the LLM-process credential scope (see its
   docstring). an interactive surface (`call`) renders inside it just as claude
   code does.
@@ -176,7 +188,7 @@ def maybe_containerize(
       return 1
     extra_env['CW_BASE_REF'] = base_ref
   workspace = f'{cli_name}-{bro_name}-{secrets.token_hex(4)}'
-  command = [cli_name, bro_name, *inner_args]
+  command = [cli_name, bro_name, *inner_args, '--host']
   return run_in_container(
     workspace,
     command,
@@ -192,6 +204,49 @@ def maybe_containerize(
   )
 
 
+def _relay_blocked_flags(args: dict) -> list[str]:
+  """the flags a host-relayed run cannot honor: the host launches the target
+  with its own defaults (`ask <target> "<prompt>"`), so local trace rendering
+  and per-run spec/scope adjustments have nothing to act on."""
+  blocked: list[str] = []
+  if args['rich']:
+    blocked.append('--rich')
+  if args['slow']:
+    blocked.append('--slow')
+  if args['effort'] is not None:
+    blocked.append('--effort')
+  if args['no_trails']:
+    blocked.append('--no-trails')
+  if args['grant_cred'] is not None:
+    blocked.append('--grant-cred')
+  if args['revoke_cred'] is not None:
+    blocked.append('--revoke-cred')
+  if args['grant_summon'] is not None:
+    blocked.append('--grant-summon')
+  if args['revoke_summon'] is not None:
+    blocked.append('--revoke-summon')
+  return blocked
+
+
+def _relay_through_host(
+  *, bro_name: str, prompt: str, timeout: Optional[float], into: Optional[str]
+) -> int:
+  """run the bro through the host's summon path — the in-container counterpart
+  of the container hop, so the run gets the full launch flow instead of an
+  in-process run against this container's credentials: the host spawns a sibling
+  container with the target's own scoped credential set, git identity, trails
+  recording, and workspace clone, subject to the session's summon allow-list and
+  depth cap. blocks and relays the answer (`summon.relay_summon`)."""
+  if os.environ.get('BROKER_CHANNEL') is None:
+    print(
+      'no broker channel to relay through; pass --host to run the bro in this process',
+      file=sys.stderr,
+    )
+    return 1
+  log.info('inside a container: relaying to the host for a scoped %s run', bro_name)
+  return summon_client.relay_summon(bro_name, prompt, timeout=timeout, into=into)
+
+
 def run(
   *,
   cli_name: str,
@@ -201,11 +256,14 @@ def run(
   run_function: Callable[[Bro, str, Optional[Observer]], Coroutine[None, None, str]],
   argv: list[str],
   export_task_id: bool = False,
+  relay_prompt: Optional[Callable[[str], str]] = None,
 ) -> Optional[int]:
   """shared `ask`/`do-task` main. `export_task_id` (do-task) parses the task
   positional as a Notion page ref and exports it as CW_TASK_ID, so the run's
   commit footer resolves its `Task:` line without a flow lookup; input that is
-  no page ref (a description, a slash invocation) exports nothing."""
+  no page ref (a description, a slash invocation) exports nothing. a host-relayed
+  run sends `relay_prompt(<positional>)` as the summon prompt (do-task's `/fix`
+  wrapping — the relayed child runs plain `ask`); None sends it verbatim."""
   from cw import EFFORT_LEVELS
 
   parser = base.args.Parser(description=parser_description)
@@ -235,6 +293,7 @@ def run(
     '--revoke-summon', action='append', default=None, metavar='BRO', help=REVOKE_SUMMON_HELP
   )
   parser.add_argument('--into', metavar='REF', help=INTO_HELP)
+  parser.add_argument('--timeout', type=float, metavar='SECONDS', help=TIMEOUT_HELP)
   args = parser.parse(argv)
 
   if export_task_id:
@@ -247,6 +306,26 @@ def run(
       os.environ['CW_TASK_ID'] = parse_page_ref(args[arg_name])
     except ValueError:
       pass
+
+  if os.environ.get('CW_IN_CONTAINER') is not None and not args['host']:
+    blocked = _relay_blocked_flags(args)
+    if len(blocked) > 0:
+      print(
+        f'{"/".join(blocked)} cannot ride a host-relayed run (the host launches '
+        f'{args["bro"]} with its own defaults); pass --host to run in this process',
+        file=sys.stderr,
+      )
+      return 1
+    prompt = args[arg_name] if relay_prompt is None else relay_prompt(args[arg_name])
+    return _relay_through_host(
+      bro_name=args['bro'], prompt=prompt, timeout=args['timeout'], into=args['into']
+    )
+  if args['timeout'] is not None:
+    print(
+      '--timeout only bounds a host-relayed run (a container invocation without --host)',
+      file=sys.stderr,
+    )
+    return 1
 
   inner_args = [args[arg_name]]
   if args['rich']:

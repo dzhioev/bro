@@ -444,6 +444,81 @@ class TestBroSend:
     assert len(llm_instances) == 2
 
 
+class GatedBro(BaseBro):
+  name = 'gated'
+  description = 'declares secrets for credential-gate tests'
+  # two manifest names on top of the default chat_gpt spec's `openai`
+  extra_secrets = ('alpha', 'beta')
+
+  def __init__(self):
+    super().__init__(system_prompt='gated')
+    self.mock_llm = MockLLM(response='ran')
+
+  def _make_observer(self) -> Observer:
+    return NullObserver()
+
+  def _create_llm(self, *, interactive: bool) -> LLM:
+    return self.mock_llm
+
+
+@pytest.mark.credential_gate
+class TestCredentialGate:
+  """the run-start credential gate: every name in `needed_secrets()` plus
+  `llm_spec.needed_secrets()` must resolve before any machinery runs."""
+
+  @pytest.mark.asyncio
+  async def test_run_refuses_listing_every_missing_name(self, monkeypatch):
+    monkeypatch.setattr(credentials, 'available', lambda name: False)
+    gated = GatedBro()
+    with pytest.raises(BroRaised, match='missing credentials: alpha, beta, openai'):
+      await gated.run('hi')
+    assert len(gated.mock_llm.send_calls) == 0
+
+  @pytest.mark.asyncio
+  async def test_run_proceeds_when_all_resolve(self, monkeypatch):
+    monkeypatch.setattr(credentials, 'available', lambda name: True)
+    gated = GatedBro()
+    assert await gated.run('hi') == 'ran'
+
+  @pytest.mark.asyncio
+  async def test_send_reports_missing_names_in_reply(self, monkeypatch):
+    available = {'beta', 'openai'}
+    monkeypatch.setattr(credentials, 'available', lambda name: name in available)
+    gated = GatedBro()
+    reply = await gated.send('hi')
+    assert reply == 'gated cannot start: missing credentials: alpha'
+    assert len(gated.mock_llm.send_calls) == 0
+    # the LLM stays unbuilt, so a later send re-checks the store
+    available.add('alpha')
+    assert await gated.send('hi') == 'ran'
+
+  def test_missing_secrets_ignores_the_optional_tier(self, monkeypatch):
+    import llm.llms.echo
+
+    monkeypatch.setattr(credentials, 'available', lambda name: False)
+
+    class OptionalSource(SearchableDataSource):
+      name = 'opt'
+      summary = 'declares only an optional secret'
+      optional_secrets = ('gamma',)
+
+      async def search(self, query: str, limit: int = 5) -> list[Hit]:
+        return []
+
+      async def _fetch_content(self, id: str) -> str:
+        return ''
+
+    class OptionalBro(BaseBro):
+      name = 'optional'
+      description = 'no required secrets'
+      llm_spec = llm.llms.echo.LLMSpec()
+      data_sources: ClassVar = [OptionalSource()]
+
+    optional_bro = OptionalBro()
+    assert optional_bro.optional_secrets() == ('gamma',)
+    assert optional_bro.missing_secrets() == ()
+
+
 class _StubSource(SearchableDataSource):
   name = 'stub'
   summary = 'a stub data source for tests'

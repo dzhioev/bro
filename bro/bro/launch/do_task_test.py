@@ -86,10 +86,22 @@ def test_main_re_execs_into_container_when_outside():
     assert rc == 0
     (workspace, command), kwargs = run.call_args
     assert workspace.startswith('do-task-ppp-dev-')
-    assert command == ['do-task', 'ppp-dev', 'abc-123']
+    assert command == ['do-task', 'ppp-dev', 'abc-123', '--host']
     assert kwargs['drop'] is True
     assert {'github', 'notion', 'trails'} <= kwargs['secrets']
     assert kwargs['docker_sock'] is False
+
+
+def test_main_relay_wraps_the_task_as_a_fix_invocation():
+  # a relayed child runs plain `ask`, so the `/fix` wrapping happens before the
+  # summon request is sent.
+  with (
+    patch.dict('os.environ', {'CW_IN_CONTAINER': '1', 'BROKER_CHANNEL': 'unix:/tmp/x.sock'}),
+    patch('summon.relay_summon', return_value=0) as relay,
+  ):
+    rc = main(['do-task', 'ppp-dev', 'abc-123'])
+  assert rc == 0
+  relay.assert_called_once_with('ppp-dev', '/fix abc-123', timeout=None, into=None)
 
 
 def test_main_exports_task_id_before_the_hop():

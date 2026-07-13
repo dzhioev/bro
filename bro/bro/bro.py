@@ -183,7 +183,8 @@ def _render_skills(skills: list[tuple[str, str]]) -> str:
 
 
 class BroRaised(llm.mcp.ToolControlSignal):
-  """raised by the `raise` service tool to abort a Bro run."""
+  """aborts a Bro run: raised by the `raise` service tool, and by the run-start
+  credential gate when required secrets don't resolve."""
 
   def __init__(self, reason: str):
     super().__init__(reason)
@@ -603,6 +604,56 @@ class BaseBro(ABC):
       names.update(_component_optional_secrets(ds))
     return tuple(sorted(names - set(self.needed_secrets(harness))))
 
+  def missing_secrets(self) -> tuple[str, ...]:
+    # every required name — the component manifest plus the LLM key, since
+    # run()/send() execute the bro as an LLM process — that does not resolve in
+    # this process's credential store. the optional tier is never gated.
+    required = set(self.needed_secrets()) | set(self.llm_spec.needed_secrets())
+    return tuple(sorted(name for name in required if not credentials.available(name)))
+
+  def _start_refusal(self) -> Optional[str]:
+    # the run-start credential gate: the refusal listing every missing secret,
+    # or None to start. checked before any machinery (tracker, LLM, live
+    # servers) so a missing secret surfaces at start, not mid-run at first use;
+    # each surface delivers it per its mode — run() raises, send() and the
+    # assistant server reply.
+    missing = self.missing_secrets()
+    if len(missing) == 0:
+      return None
+    return f'{self.name} cannot start: missing credentials: {", ".join(missing)}'
+
+  def _start(
+    self,
+    input: str,
+    *,
+    interactive: bool,
+    observer: Optional[Observer],
+    tracker: Optional[Tracker],
+    entry_point: str,
+  ) -> tuple[LLM, list[dict], str]:
+    # the shared start sequence of run() and send(): lock in observer/tracker —
+    # caller-supplied ones win (CLIs use this to force --boring or to pass a
+    # LocalFileTracker for dev capture), set on self before _create_llm so the
+    # LLM construction path picks them up — then build the LLM, compose the
+    # mode prompt, open the trail, and seed the message list.
+    self._observer = observer if observer is not None else self._make_observer()
+    self._tracker = tracker if tracker is not None else self._make_tracker()
+    llm = self._create_llm(interactive=interactive)
+    system_prompt = self._system_prompt_for(interactive=interactive)
+    trail_id = self._tracker.start_trail(
+      bro=self.name,
+      llm_spec=self.llm_spec.dump(),
+      system_prompt=system_prompt,
+      parent=None,
+      interactive=interactive,
+      entry_point=entry_point,
+    )
+    messages = [
+      {'role': 'system', 'content': system_prompt},
+      {'role': 'user', 'content': input},
+    ]
+    return llm, messages, trail_id
+
   @classmethod
   def create(cls, llm_spec: LLMSpec) -> Self:
     # factory for a construction-time LLMSpec override — applied after the bro's
@@ -621,29 +672,15 @@ class BaseBro(ABC):
     tracker: Optional[Tracker] = None,
     request_timeout: Optional[float] = None,
   ) -> str:
-    # caller-supplied observer / tracker win (CLIs use this to force --boring
-    # or to pass a LocalFileTracker for dev capture); otherwise _make_observer()
-    # / _make_tracker() pick the defaults. set on self before _create_llm so the
-    # LLM construction path can pick them up.
-    self._observer = observer if observer is not None else self._make_observer()
-    self._tracker = tracker if tracker is not None else self._make_tracker()
-    llm = self._create_llm(interactive=False)
-    system_prompt = self._system_prompt_for(interactive=False)
-    channel = self._make_channel()
-    trail_id = self._tracker.start_trail(
-      bro=self.name,
-      llm_spec=self.llm_spec.dump(),
-      system_prompt=system_prompt,
-      parent=None,
-      interactive=False,
-      entry_point='cli:bro_run',
+    refusal = self._start_refusal()
+    if refusal is not None:
+      raise BroRaised(refusal)
+    llm, messages, trail_id = self._start(
+      input, interactive=False, observer=observer, tracker=tracker, entry_point='cli:bro_run'
     )
+    channel = self._make_channel()
     if channel is not None:
       channel.started(trail_id)
-    messages = [
-      {'role': 'system', 'content': system_prompt},
-      {'role': 'user', 'content': input},
-    ]
     end_reason: EndReason = 'terminal'
     result: Optional[str] = None
     try:
@@ -671,25 +708,16 @@ class BaseBro(ABC):
     request_timeout: Optional[float] = None,
   ) -> str:
     if self._llm is None:
+      refusal = self._start_refusal()
+      if refusal is not None:
+        # in-reply report; the LLM stays unbuilt, so a later send re-checks
+        return refusal
       # observer / tracker are locked in on first send (the LLM is constructed
       # once and holds onto whatever was set on self at that moment); later
-      # calls can't swap them. Mirrors BaseBro.run().
-      self._observer = observer if observer is not None else self._make_observer()
-      self._tracker = tracker if tracker is not None else self._make_tracker()
-      self._llm = self._create_llm(interactive=True)
-      system_prompt = self._system_prompt_for(interactive=True)
-      self._tracker.start_trail(
-        bro=self.name,
-        llm_spec=self.llm_spec.dump(),
-        system_prompt=system_prompt,
-        parent=None,
-        interactive=True,
-        entry_point='http',
+      # calls can't swap them.
+      self._llm, messages, _ = self._start(
+        message, interactive=True, observer=observer, tracker=tracker, entry_point='http'
       )
-      messages = [
-        {'role': 'system', 'content': system_prompt},
-        {'role': 'user', 'content': message},
-      ]
     else:
       messages = [{'role': 'user', 'content': message}]
     return await self._llm.send(messages, request_timeout=request_timeout)

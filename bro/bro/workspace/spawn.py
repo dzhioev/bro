@@ -470,7 +470,8 @@ def _lower_summon(launch: SummonLaunchSpec) -> DockerLaunchSpec:
     if base_ref is None:
       raise ValueError(f"cannot read the summoner's HEAD at {launch.parent_workspace}")
   return DockerLaunchSpec(
-    command=['ask', launch.target, launch.prompt],
+    # --host: the child is already the relayed, scoped run (do/CLAUDE.md)
+    command=['ask', launch.target, launch.prompt, '--host'],
     env={'CW_BASE_REF': base_ref, **bro_git_identity_env()},
     secrets=scoped.required,
     attached=False,

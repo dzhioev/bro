@@ -285,7 +285,7 @@ def test_call_re_execs_into_container_when_outside():
     assert workspace.startswith('call-ppp-dev-')
     # host is a tty → the TUI runs in-container, so no --text is forwarded; fast is the
     # default so no --slow either
-    assert command == ['call', 'ppp-dev', 'hey']
+    assert command == ['call', 'ppp-dev', 'hey', '--host']
     assert kwargs['drop'] is True
     # ppp-dev's manifest (github + notion via flow) plus the mandatory trails sink
     assert {'github', 'notion', 'trails'} <= kwargs['secrets']
@@ -305,7 +305,7 @@ def test_call_forwards_text_when_host_not_a_tty():
     (_workspace, command), _kwargs = run.call_args
     # host can't back the TUI → force text mode inside the container (the container's
     # PTY always reports a TTY, so the decision has to be made here on the host)
-    assert command == ['call', 'ppp-dev', 'hey', '--text']
+    assert command == ['call', 'ppp-dev', 'hey', '--text', '--host']
 
 
 def test_call_forwards_effort_into_container():
@@ -319,7 +319,7 @@ def test_call_forwards_effort_into_container():
     assert rc == 0
     (_workspace, command), _kwargs = run.call_args
     # --effort is forwarded like --slow; the in-container run applies with_effort
-    assert command == ['call', 'ppp-dev', 'hey', '--effort', 'high']
+    assert command == ['call', 'ppp-dev', 'hey', '--effort', 'high', '--host']
 
 
 def test_effort_flag_overrides_spec_effort(monkeypatch):
@@ -366,7 +366,7 @@ def test_call_no_trails_disables_recording_in_container():
     assert rc == 0
     (_workspace, command), kwargs = run.call_args
     # the env var carries the effect in, so --no-trails isn't forwarded into the inner argv
-    assert command == ['call', 'ppp-dev', 'hey']
+    assert command == ['call', 'ppp-dev', 'hey', '--host']
     assert 'trails' not in kwargs['secrets']
     assert kwargs['extra_env'] == {'TRAILS_DISABLED': '1', **bro_git_identity_env()}
 

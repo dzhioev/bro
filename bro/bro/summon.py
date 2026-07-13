@@ -5,10 +5,11 @@ The peer side of the summon mechanism: a `summon{target, prompt, timeout?, into?
 request on the session channel, answered by the host-side handler (`cw/summon.py`)
 with `started{trail_id}` and exactly one terminal (`completed` / `failed` /
 `reply{error}`). This module owns the request's wire contract — the type tag, the
-payload keys, the 1800s default timeout — for both its consumers: the `summon`
-console script (blocking / `--detach` / `check` modes) and the bro service tools
+payload keys, the 1800s default timeout — for all its consumers: the `summon`
+console script (blocking / `--detach` / `check` modes), the bro service tools
 (`summon` / `summon_check`, over the library functions `summon_and_wait`,
-`summon_detached`, `check_summon`, `collect_summon`).
+`summon_detached`, `check_summon`, `collect_summon`), and the in-container
+`ask` / `do-task` relay (`relay_summon`, the blocking CLI mode as a function).
 
 Blocking mode sends, prints the request id and the `started` trail id to stderr,
 and relays the terminal: the answer on stdout (exit 0), everything else as a
@@ -260,6 +261,33 @@ def collect_summon(
     )
 
 
+def relay_summon(
+  target: str, prompt: str, *, timeout: Optional[float] = None, into: Optional[str] = None
+) -> int:
+  """send one summon and relay its outcome as a CLI would: the request id and
+  the started trail id to stderr, the answer to stdout, any failure as an error
+  log line. Returns the exit code — the blocking `summon` CLI mode, exposed for
+  surfaces that relay a whole run through the host (in-container `ask` /
+  `do-task`)."""
+  try:
+    client = _open_client()
+  except SummonError as e:
+    log.error('%s', e)
+    return 1
+  with client:
+    request = client.send(SUMMON, _payload(target, prompt, timeout, into))
+    log.info('summon request %s', request.id)
+    effective = timeout if timeout is not None else DEFAULT_TIMEOUT
+    return _relay(
+      lambda: _await_answer(
+        client,
+        request,
+        timeout=effective,
+        on_started=lambda trail_id: log.info('summon started: trail %s', trail_id),
+      )
+    )
+
+
 # --- CLI ------------------------------------------------------------------------
 
 
@@ -276,26 +304,16 @@ def _relay(await_answer: Callable[[], str]) -> int:
 def _summon(
   target: str, prompt: str, timeout: Optional[float], into: Optional[str], detach: bool
 ) -> int:
+  if not detach:
+    return relay_summon(target, prompt, timeout=timeout, into=into)
   try:
     client = _open_client()
   except SummonError as e:
     log.error('%s', e)
     return 1
   with client:
-    request = client.send(SUMMON, _payload(target, prompt, timeout, into))
-    if detach:
-      print(request.id)
-      return 0
-    log.info('summon request %s', request.id)
-    effective = timeout if timeout is not None else DEFAULT_TIMEOUT
-    return _relay(
-      lambda: _await_answer(
-        client,
-        request,
-        timeout=effective,
-        on_started=lambda trail_id: log.info('summon started: trail %s', trail_id),
-      )
-    )
+    print(client.send(SUMMON, _payload(target, prompt, timeout, into)).id)
+    return 0
 
 
 def _check(request_id: str, wait: bool, timeout: Optional[float]) -> int:
