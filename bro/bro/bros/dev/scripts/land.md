@@ -1,7 +1,7 @@
 ---
 name: land
 description: This skill should be used when the user signals that an open PR should be merged into master — "land it", "land", "merge it", "merge the PR", "merge to master". Runs `land-pr`, which squash-merges the open PR for the current branch in one shot (precondition checks, aggregated token footer injected into the squash body, remote branch cleanup), then records a `merged` comment on the task and closes it to done unless the user explicitly said to keep it open. On APPROVED, `/pr` chains into this skill. Direct push to master (no PR) is a one-liner (`git fetch origin && git rebase origin/master && git push origin HEAD:master`) — not this skill, and host-only: agent sessions commit as the bro identity, and in a container a pre-push fence blocks that identity from pushing to master, so even a manual container session lands through a PR (`land-pr`'s server-side `gh pr merge` never runs the hook).
-version: 1.3.0
+version: 1.4.0
 ---
 
 # /land
@@ -42,7 +42,7 @@ First decide task closure. Two cases block or defer the close:
 
 Then emit everything in a single response — the report text plus, for `dive-in` sessions with a task, both brog calls in parallel:
 
-- `brog::add_comment(task_id, topic='merged', body='<pr-url> merged to master')`
+- `brog::add_comment(task_id, topic='merged', body='[PR:<n>](<pr-url>) merged to master')` — `<n>` and `<pr-url>` are the `pr` and `url` fields of `land-pr`'s JSON result.
 - `brog::update_task(task_id, status='done')` — unless a bullet above said to keep it open.
 - The report, one line: PR URL, "merged to master", and task status — closed-to-Done (after a successful deploy handoff when one was needed), left open per instruction, or left Live on a failed or pending deploy (with the reason, or the `call devoops "…"` command when the deploy is pending).
 

@@ -1,7 +1,7 @@
 ---
 name: pr
 description: This skill should be used when the user signals that the worktree's changes are ready for review and a PR should be opened — "open a PR", "send for review", "PR it", "ship it", "ready for review", "finalize". Covers commit hygiene (CLAUDE.md sync, Dockerfile audit, policy audit, commit splitting), the project's commit-message style, footer generation via `./setup/claude_commit_footer.py`, submodule landing, rebase onto the base branch (master by default), opens the PR via `gh pr create`, then launches the `poll-pr` review watcher to handle review comments and APPROVED events. On approval, chains into `/land` for the merge step. Also the re-entry point for a PR that is already open — "/pr <pr-url-or-number>", "resume the PR", "pick up the review" — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
-version: 1.2.0
+version: 1.3.0
 ---
 
 # /pr
@@ -206,7 +206,7 @@ Surface this link every time the PR enters review-pending: here at creation, and
 If the session has a task (`CW_TASK_ID` — `dive-in` sets it — or a task resolved earlier in this session) and the brog tools are available, record the event with `brog::add_comment(task_id, topic='PR opened', body=...)`:
 
 ```
-<pr-url>
+[PR:<n>](<pr-url>)
 - [`<short-hash>`](<repo-url>/commit/<full-hash>) <commit title>
 - [`<short-hash>`](<repo-url>/commit/<full-hash>) <commit title>
 ```
