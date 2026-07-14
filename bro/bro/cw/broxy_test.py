@@ -49,9 +49,10 @@ class Harness:
 
 @contextlib.asynccontextmanager
 async def running_server():
-  # sockets live in a short mkdtemp dir, not pytest's tmp_path: the lulid-named
-  # channel socket under the deep per-test dirs exceeds the ~108-byte sun_path cap
-  socket_dir = Path(tempfile.mkdtemp(prefix='broxy-'))
+  # sockets live in a short /tmp mkdtemp dir, not pytest's tmp_path: the lulid-named
+  # channel socket must fit sun_path (~104 bytes on macOS), which the deep per-test
+  # dirs — and even the resolved system temp dir — exceed
+  socket_dir = Path(tempfile.mkdtemp(prefix='broxy-', dir='/tmp'))
   transport = UnixServerTransport(str(socket_dir / 'upstream'))
   sink = StubSink()
   serve_task = asyncio.create_task(transport.serve(sink))

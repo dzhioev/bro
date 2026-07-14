@@ -39,8 +39,8 @@ class Harness:
 
 
 @contextlib.asynccontextmanager
-async def running_server(tmp_path):
-  transport = UnixServerTransport(str(tmp_path / 'broker'))
+async def running_server(socket_dir):
+  transport = UnixServerTransport(str(socket_dir))
   sink = StubSink()
   serve_task = asyncio.create_task(transport.serve(sink))
   await asyncio.sleep(0)  # let serve install the sink before any connection is accepted
@@ -72,8 +72,8 @@ def test_payload_must_be_a_json_object(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_send_reaches_the_host(tmp_path, monkeypatch):
-  async with running_server(tmp_path) as server:
+async def test_send_reaches_the_host(socket_dir, monkeypatch):
+  async with running_server(socket_dir) as server:
     provisioned = await server.transport.provision()
     monkeypatch.setenv(CHANNEL_ENV, 'unix:' + provisioned.host_endpoint)
     argv = ['broker', 'send', 'started', '{"trail_id": "t1"}']
@@ -86,8 +86,8 @@ async def test_send_reaches_the_host(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_request_prints_the_correlated_reply(tmp_path, monkeypatch, capsys):
-  async with running_server(tmp_path) as server:
+async def test_request_prints_the_correlated_reply(socket_dir, monkeypatch, capsys):
+  async with running_server(socket_dir) as server:
     provisioned = await server.transport.provision()
     monkeypatch.setenv(CHANNEL_ENV, 'unix:' + provisioned.host_endpoint)
     argv = ['broker', 'request', 'ping', '--timeout', str(TIMEOUT)]
@@ -106,8 +106,8 @@ async def test_request_prints_the_correlated_reply(tmp_path, monkeypatch, capsys
 
 
 @pytest.mark.asyncio
-async def test_request_timeout_exits_nonzero(tmp_path, monkeypatch, capsys):
-  async with running_server(tmp_path) as server:
+async def test_request_timeout_exits_nonzero(socket_dir, monkeypatch, capsys):
+  async with running_server(socket_dir) as server:
     provisioned = await server.transport.provision()
     monkeypatch.setenv(CHANNEL_ENV, 'unix:' + provisioned.host_endpoint)
     argv = ['broker', 'request', 'ping', '--timeout', '0.2']
@@ -116,8 +116,8 @@ async def test_request_timeout_exits_nonzero(tmp_path, monkeypatch, capsys):
 
 
 @pytest.mark.asyncio
-async def test_receive_prints_one_message(tmp_path, monkeypatch, capsys):
-  async with running_server(tmp_path) as server:
+async def test_receive_prints_one_message(socket_dir, monkeypatch, capsys):
+  async with running_server(socket_dir) as server:
     provisioned = await server.transport.provision()
     monkeypatch.setenv(CHANNEL_ENV, 'unix:' + provisioned.host_endpoint)
     argv = ['broker', 'receive', '--timeout', str(TIMEOUT)]
@@ -133,8 +133,8 @@ async def test_receive_prints_one_message(tmp_path, monkeypatch, capsys):
 
 
 @pytest.mark.asyncio
-async def test_receive_nothing_exits_nonzero(tmp_path, monkeypatch, capsys):
-  async with running_server(tmp_path) as server:
+async def test_receive_nothing_exits_nonzero(socket_dir, monkeypatch, capsys):
+  async with running_server(socket_dir) as server:
     provisioned = await server.transport.provision()
     monkeypatch.setenv(CHANNEL_ENV, 'unix:' + provisioned.host_endpoint)
     argv = ['broker', 'receive', '--timeout', '0.2']

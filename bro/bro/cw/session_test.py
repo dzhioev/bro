@@ -739,10 +739,10 @@ class TestHostBrokerPingRoundTrip:
   worktree git plumbing is stubbed (covered by its own tests)."""
 
   def test_broker_request_ping_from_a_host_session(self, monkeypatch, capfd):
-    # a short root directly under the system temp dir: the channel socket lives at
-    # <project>/var/cw/broker/<channel>.sock and must fit sun_path (~108 bytes), which a
-    # pytest tmp_path can exceed
-    root = pathlib.Path(tempfile.mkdtemp(prefix='cw-hb-'))
+    # a short root directly under /tmp: the channel socket lives at
+    # <project>/var/cw/broker/<channel>.sock and must fit sun_path (~104 bytes on
+    # macOS), which a pytest tmp_path — and even the resolved system temp dir — exceeds
+    root = pathlib.Path(tempfile.mkdtemp(prefix='cw-hb-', dir='/tmp'))
     try:
       worktree = root / 'wt'
       cw_bin = worktree / '.venv' / 'bin' / 'cw'

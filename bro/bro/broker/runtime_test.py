@@ -109,8 +109,8 @@ class Env:
 
 
 @contextlib.asynccontextmanager
-async def runtime_harness(tmp_path):
-  control_dir = str(tmp_path / 'broker')
+async def runtime_harness(socket_dir):
+  control_dir = str(socket_dir)
   transport = UnixServerTransport(control_dir)
   spawner = LocalSpawner()
   listener = FakeListener()
@@ -185,10 +185,10 @@ sys.exit(2)
 
 
 @pytest.mark.asyncio
-async def test_connect_message_and_clean_exit_after_drain(tmp_path):
+async def test_connect_message_and_clean_exit_after_drain(socket_dir):
   # the canonical acceptance ordering: a completed the child writes just before exiting
   # is delivered as on_message *before* on_exit (drain-before-decide).
-  async with runtime_harness(tmp_path) as env:
+  async with runtime_harness(socket_dir) as env:
     peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_COMPLETE), timeout=None)
 
     assert await next_event(env.listener) == ('connect', peer)
@@ -201,8 +201,8 @@ async def test_connect_message_and_clean_exit_after_drain(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_early_exit_reports_code_and_output_tail(tmp_path):
-  async with runtime_harness(tmp_path) as env:
+async def test_early_exit_reports_code_and_output_tail(socket_dir):
+  async with runtime_harness(socket_dir) as env:
     peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_FAIL), timeout=None)
 
     assert await next_event(env.listener) == ('connect', peer)
@@ -213,8 +213,8 @@ async def test_early_exit_reports_code_and_output_tail(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_timeout_kills_then_reports_timeout_and_exit(tmp_path):
-  async with runtime_harness(tmp_path) as env:
+async def test_timeout_kills_then_reports_timeout_and_exit(socket_dir):
+  async with runtime_harness(socket_dir) as env:
     peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_HANG), timeout=0.3)
 
     assert await next_event(env.listener) == ('connect', peer)
@@ -226,8 +226,8 @@ async def test_timeout_kills_then_reports_timeout_and_exit(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_send_delivers_message_to_peer(tmp_path):
-  async with runtime_harness(tmp_path) as env:
+async def test_send_delivers_message_to_peer(socket_dir):
+  async with runtime_harness(socket_dir) as env:
     peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_ECHO), timeout=None)
 
     assert await next_event(env.listener) == ('connect', peer)
@@ -239,8 +239,8 @@ async def test_send_delivers_message_to_peer(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_kill_reaps_the_process(tmp_path):
-  async with runtime_harness(tmp_path) as env:
+async def test_kill_reaps_the_process(socket_dir):
+  async with runtime_harness(socket_dir) as env:
     peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_HANG), timeout=None)
 
     assert await next_event(env.listener) == ('connect', peer)
@@ -252,8 +252,8 @@ async def test_kill_reaps_the_process(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_forget_drops_channel_without_exit(tmp_path):
-  async with runtime_harness(tmp_path) as env:
+async def test_forget_drops_channel_without_exit(socket_dir):
+  async with runtime_harness(socket_dir) as env:
     peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_HANG), timeout=None)
 
     assert await next_event(env.listener) == ('connect', peer)
@@ -265,8 +265,8 @@ async def test_forget_drops_channel_without_exit(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_exit_before_connect_reports_without_birth(tmp_path):
-  async with runtime_harness(tmp_path) as env:
+async def test_exit_before_connect_reports_without_birth(socket_dir):
+  async with runtime_harness(socket_dir) as env:
     peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_EXIT_BEFORE_CONNECT), timeout=None)
 
     exited = await next_event(env.listener)  # no on_connect: the child never attached
@@ -274,8 +274,8 @@ async def test_exit_before_connect_reports_without_birth(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_launch_failure_rolls_back_registration(tmp_path):
-  async with runtime_harness(tmp_path) as env:
+async def test_launch_failure_rolls_back_registration(socket_dir):
+  async with runtime_harness(socket_dir) as env:
     env.spawner.raise_on_spawn = True
     with pytest.raises(RuntimeError):
       await env.runtime.spawn(LocalLaunchSpec(_CHILD_COMPLETE), timeout=None)

@@ -37,8 +37,8 @@ class Harness:
 
 
 @contextlib.asynccontextmanager
-async def running_server(tmp_path):
-  transport = UnixServerTransport(str(tmp_path / 'broker'))
+async def running_server(socket_dir):
+  transport = UnixServerTransport(str(socket_dir))
   sink = StubSink()
   serve_task = asyncio.create_task(transport.serve(sink))
   await asyncio.sleep(0)  # let serve install the sink before any connection is accepted
@@ -59,8 +59,8 @@ def test_from_env_returns_none_when_unset(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_from_env_connects_and_sends(tmp_path, monkeypatch):
-  async with running_server(tmp_path) as server:
+async def test_from_env_connects_and_sends(socket_dir, monkeypatch):
+  async with running_server(socket_dir) as server:
     provisioned = await server.transport.provision()
     monkeypatch.setenv(CHANNEL_ENV, 'unix:' + provisioned.host_endpoint)
     client = Client.from_env()
@@ -76,8 +76,8 @@ async def test_from_env_connects_and_sends(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_request_correlates_and_sets_unrelated_aside(tmp_path):
-  async with running_server(tmp_path) as server:
+async def test_request_correlates_and_sets_unrelated_aside(socket_dir):
+  async with running_server(socket_dir) as server:
     provisioned = await server.transport.provision()
     client = Client(UnixClientTransport(provisioned.host_endpoint))
     request_task = asyncio.create_task(asyncio.to_thread(client.request, 'ping', {'n': 1}, TIMEOUT))
@@ -103,8 +103,8 @@ async def test_request_correlates_and_sets_unrelated_aside(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_request_times_out_without_reply(tmp_path):
-  async with running_server(tmp_path) as server:
+async def test_request_times_out_without_reply(socket_dir):
+  async with running_server(socket_dir) as server:
     provisioned = await server.transport.provision()
     client = Client(UnixClientTransport(provisioned.host_endpoint))
     with pytest.raises(TimeoutError):
@@ -113,8 +113,8 @@ async def test_request_times_out_without_reply(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_request_raises_on_channel_close(tmp_path):
-  async with running_server(tmp_path) as server:
+async def test_request_raises_on_channel_close(socket_dir):
+  async with running_server(socket_dir) as server:
     provisioned = await server.transport.provision()
     client = Client(UnixClientTransport(provisioned.host_endpoint))
     request_task = asyncio.create_task(asyncio.to_thread(client.request, 'ping', {}, TIMEOUT))
@@ -127,8 +127,8 @@ async def test_request_raises_on_channel_close(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_call_surfaces_started_and_returns_terminal(tmp_path):
-  async with running_server(tmp_path) as server:
+async def test_call_surfaces_started_and_returns_terminal(socket_dir):
+  async with running_server(socket_dir) as server:
     provisioned = await server.transport.provision()
     client = Client(UnixClientTransport(provisioned.host_endpoint))
     interims: list[Message] = []
@@ -167,8 +167,8 @@ async def test_call_surfaces_started_and_returns_terminal(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_call_without_callback_skips_started_and_returns_failed(tmp_path):
-  async with running_server(tmp_path) as server:
+async def test_call_without_callback_skips_started_and_returns_failed(socket_dir):
+  async with running_server(socket_dir) as server:
     provisioned = await server.transport.provision()
     client = Client(UnixClientTransport(provisioned.host_endpoint))
     call_task = asyncio.create_task(asyncio.to_thread(client.call, 'summon', {}, TIMEOUT))
@@ -188,9 +188,9 @@ async def test_call_without_callback_skips_started_and_returns_failed(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_call_deadline_spans_interim_started(tmp_path):
+async def test_call_deadline_spans_interim_started(socket_dir):
   # `timeout` bounds the whole call: an interim started does not extend the terminal wait.
-  async with running_server(tmp_path) as server:
+  async with running_server(socket_dir) as server:
     provisioned = await server.transport.provision()
     client = Client(UnixClientTransport(provisioned.host_endpoint))
     call_task = asyncio.create_task(asyncio.to_thread(client.call, 'summon', {}, 0.3))
@@ -205,8 +205,8 @@ async def test_call_deadline_spans_interim_started(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_send_returns_the_sent_message(tmp_path):
-  async with running_server(tmp_path) as server:
+async def test_send_returns_the_sent_message(socket_dir):
+  async with running_server(socket_dir) as server:
     provisioned = await server.transport.provision()
     client = Client(UnixClientTransport(provisioned.host_endpoint))
     sent = await asyncio.to_thread(client.send, 'summon', {'target': 'devoops'})
@@ -219,9 +219,9 @@ async def test_send_returns_the_sent_message(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_await_reply_reattaches_to_a_sent_request(tmp_path):
+async def test_await_reply_reattaches_to_a_sent_request(socket_dir):
   # send + await_reply is call() split in two: the id is exposed between them
-  async with running_server(tmp_path) as server:
+  async with running_server(socket_dir) as server:
     provisioned = await server.transport.provision()
     client = Client(UnixClientTransport(provisioned.host_endpoint))
     sent = await asyncio.to_thread(client.send, 'summon', {'target': 'devoops'})
@@ -250,10 +250,10 @@ async def test_await_reply_reattaches_to_a_sent_request(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_await_reply_started_rearms_the_deadline(tmp_path):
+async def test_await_reply_started_rearms_the_deadline(socket_dir):
   # timeout_after_started opts out of the whole-wait bound: the interim started
   # re-arms the deadline, so a terminal past the initial bound still lands
-  async with running_server(tmp_path) as server:
+  async with running_server(socket_dir) as server:
     provisioned = await server.transport.provision()
     client = Client(UnixClientTransport(provisioned.host_endpoint))
     sent = await asyncio.to_thread(client.send, 'summon', {})
@@ -281,10 +281,10 @@ async def test_await_reply_started_rearms_the_deadline(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_await_reply_started_rearm_shortens_a_longer_bound(tmp_path):
+async def test_await_reply_started_rearm_shortens_a_longer_bound(socket_dir):
   # the re-arm is to exactly now + timeout_after_started, shortening a still-long
   # initial bound too, so post-started silence is caught at the tighter bound
-  async with running_server(tmp_path) as server:
+  async with running_server(socket_dir) as server:
     provisioned = await server.transport.provision()
     client = Client(UnixClientTransport(provisioned.host_endpoint))
     sent = await asyncio.to_thread(client.send, 'summon', {})
@@ -302,8 +302,8 @@ async def test_await_reply_started_rearm_shortens_a_longer_bound(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_close_confirm_returns_after_the_host_consumed_everything(tmp_path):
-  async with running_server(tmp_path) as server:
+async def test_close_confirm_returns_after_the_host_consumed_everything(socket_dir):
+  async with running_server(socket_dir) as server:
     provisioned = await server.transport.provision()
     client = Client(UnixClientTransport(provisioned.host_endpoint))
     await asyncio.to_thread(client.send, 'completed', {'result': 'ok'})
@@ -314,11 +314,11 @@ async def test_close_confirm_returns_after_the_host_consumed_everything(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_close_aborts_a_blocked_wait_from_another_thread(tmp_path):
+async def test_close_aborts_a_blocked_wait_from_another_thread(socket_dir):
   # the cross-thread abort guarantee (ClientTransport.close): a controller that
   # abandoned an off-thread wait closes the client, and the blocked receive
   # returns as channel EOF instead of hanging until traffic arrives
-  async with running_server(tmp_path) as server:
+  async with running_server(socket_dir) as server:
     provisioned = await server.transport.provision()
     client = Client(UnixClientTransport(provisioned.host_endpoint))
     request_task = asyncio.create_task(asyncio.to_thread(client.request, 'ping', {}, TIMEOUT))
@@ -330,8 +330,8 @@ async def test_close_aborts_a_blocked_wait_from_another_thread(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_receive_returns_none_on_timeout(tmp_path):
-  async with running_server(tmp_path) as server:
+async def test_receive_returns_none_on_timeout(socket_dir):
+  async with running_server(socket_dir) as server:
     provisioned = await server.transport.provision()
     client = Client(UnixClientTransport(provisioned.host_endpoint))
     assert await asyncio.to_thread(client.receive, 0.2) is None

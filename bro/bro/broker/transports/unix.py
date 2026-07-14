@@ -26,7 +26,9 @@ loop of its own.
 
 import asyncio
 import os
+import select
 import socket
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -188,6 +190,11 @@ class UnixClientTransport(ClientTransport):
     self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     self._sock.connect(path)
     self._read_buffer = bytearray()
+    # self-pipe pair: close() sends a byte to wake a receive() blocked in select
+    # on another thread — the cross-thread abort ClientTransport.close guarantees.
+    # A shutdown() alone is not enough: macOS does not reliably wake a parked
+    # poll/select when the socket is shut down from another thread
+    self._abort_receive, self._abort_send = socket.socketpair()
 
   def send(self, message: Message) -> None:
     frame = message.to_bytes()
@@ -196,19 +203,30 @@ class UnixClientTransport(ClientTransport):
     self._sock.sendall(frame + b'\n')
 
   def receive(self, timeout: Optional[float]) -> Optional[Message]:
+    deadline = time.monotonic() + timeout if timeout is not None else None
     while True:
       message = self._take_frame()
       if message is not None:
         return message
+      remaining = None
+      if deadline is not None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+          return None
       try:
-        self._sock.settimeout(timeout)
-        data = self._sock.recv(_READ_CHUNK)
-      except TimeoutError:
-        return None
+        readable, _, _ = select.select([self._sock, self._abort_receive], [], [], remaining)
       except OSError:
         # the socket died under us — a concurrent close() aborting this wait
         # (see ClientTransport.close), or the peer tearing the channel down
         # mid-read; either way the channel is gone, which is EOF to the caller
+        return None
+      if self._abort_receive in readable:  # close() aborted this wait
+        return None
+      if len(readable) == 0:  # timeout
+        return None
+      try:
+        data = self._sock.recv(_READ_CHUNK)
+      except OSError:
         return None
       if len(data) == 0:  # clean EOF, no in-flight frame
         return None
@@ -227,6 +245,10 @@ class UnixClientTransport(ClientTransport):
     return Message.from_bytes(frame)
 
   def close(self, confirm: bool = False) -> None:
+    try:
+      self._abort_send.send(b'x')  # wake any receive() blocked on another thread
+    except OSError:
+      pass  # already closed
     if confirm:
       # half-close handshake (see ClientTransport.close): signal EOF, then wait
       # for the receiver to close back. Late inbound is discarded — the caller is
@@ -239,11 +261,10 @@ class UnixClientTransport(ClientTransport):
       except OSError:
         pass  # receiver already gone — nothing left to confirm
     else:
-      # full shutdown before close: a bare fd close does not wake a thread
-      # blocked in recv on this socket, the shutdown EOF does — the cross-thread
-      # abort guarantee ClientTransport.close documents
       try:
         self._sock.shutdown(socket.SHUT_RDWR)
       except OSError:
         pass  # already shut down, or the peer is gone
     self._sock.close()
+    self._abort_send.close()
+    self._abort_receive.close()

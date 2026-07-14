@@ -39,8 +39,8 @@ class Harness:
 
 
 @contextlib.asynccontextmanager
-async def running_server(tmp_path):
-  control_dir = str(tmp_path / 'broker')
+async def running_server(socket_dir):
+  control_dir = str(socket_dir)
   transport = UnixServerTransport(control_dir)
   sink = StubSink()
   serve_task = asyncio.create_task(transport.serve(sink))
@@ -57,8 +57,8 @@ async def _next(queue: asyncio.Queue):
 
 
 @pytest.mark.asyncio
-async def test_delivery_and_channel_authenticity(tmp_path):
-  async with running_server(tmp_path) as server:
+async def test_delivery_and_channel_authenticity(socket_dir):
+  async with running_server(socket_dir) as server:
     provisioned_a = await server.transport.provision()
     provisioned_b = await server.transport.provision()
     client_a = UnixClientTransport(provisioned_a.host_endpoint)
@@ -83,8 +83,8 @@ async def test_delivery_and_channel_authenticity(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_accept_fires_on_connect_before_any_message(tmp_path):
-  async with running_server(tmp_path) as server:
+async def test_accept_fires_on_connect_before_any_message(socket_dir):
+  async with running_server(socket_dir) as server:
     provisioned = await server.transport.provision()
     client = UnixClientTransport(provisioned.host_endpoint)
     assert await _next(server.sink.connects) == provisioned.channel
@@ -97,8 +97,8 @@ async def test_accept_fires_on_connect_before_any_message(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_server_reply_reaches_only_its_channel(tmp_path):
-  async with running_server(tmp_path) as server:
+async def test_server_reply_reaches_only_its_channel(socket_dir):
+  async with running_server(socket_dir) as server:
     provisioned_a = await server.transport.provision()
     provisioned_b = await server.transport.provision()
     client_a = UnixClientTransport(provisioned_a.host_endpoint)
@@ -120,8 +120,8 @@ async def test_server_reply_reaches_only_its_channel(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_ndjson_framing_coalesced_and_split(tmp_path):
-  async with running_server(tmp_path) as server:
+async def test_ndjson_framing_coalesced_and_split(socket_dir):
+  async with running_server(socket_dir) as server:
     provisioned = await server.transport.provision()
     _, writer = await asyncio.open_unix_connection(provisioned.host_endpoint)
 
@@ -146,8 +146,8 @@ async def test_ndjson_framing_coalesced_and_split(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_oversize_frame_rejected_and_channel_dropped(tmp_path):
-  async with running_server(tmp_path) as server:
+async def test_oversize_frame_rejected_and_channel_dropped(socket_dir):
+  async with running_server(socket_dir) as server:
     provisioned = await server.transport.provision()
     _, writer = await asyncio.open_unix_connection(provisioned.host_endpoint)
     writer.write(b'x' * (MAX_FRAME_BYTES + 1) + b'\n')  # the loop flushes as the server drains
@@ -159,8 +159,8 @@ async def test_oversize_frame_rejected_and_channel_dropped(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_peer_disconnect_notifies_sink(tmp_path):
-  async with running_server(tmp_path) as server:
+async def test_peer_disconnect_notifies_sink(socket_dir):
+  async with running_server(socket_dir) as server:
     provisioned = await server.transport.provision()
     client = UnixClientTransport(provisioned.host_endpoint)
     await asyncio.to_thread(client.send, Message(type='ping', payload={}))
@@ -170,8 +170,8 @@ async def test_peer_disconnect_notifies_sink(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_socket_lifecycle_perms_and_teardown(tmp_path):
-  async with running_server(tmp_path) as server:
+async def test_socket_lifecycle_perms_and_teardown(socket_dir):
+  async with running_server(socket_dir) as server:
     provisioned = await server.transport.provision()
     sock_path = provisioned.host_endpoint
     assert stat.S_ISSOCK(os.stat(sock_path).st_mode)
@@ -183,8 +183,8 @@ async def test_socket_lifecycle_perms_and_teardown(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_host_close_channel_drops_connection(tmp_path):
-  async with running_server(tmp_path) as server:
+async def test_host_close_channel_drops_connection(socket_dir):
+  async with running_server(socket_dir) as server:
     provisioned = await server.transport.provision()
     client = UnixClientTransport(provisioned.host_endpoint)
     await asyncio.to_thread(client.send, Message(type='ping', payload={}))

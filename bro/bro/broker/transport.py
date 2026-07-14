@@ -92,7 +92,7 @@ class ClientTransport(ABC):
     channel reached EOF. This is how a controller cancels an off-thread wait it
     abandoned (the summon service tools ride on it); an adapter must implement
     close so that wake-up is reliable, not incidental (a bare fd close is not —
-    the unix adapter shuts the socket down first)."""
+    the unix adapter wakes the reader through a self-pipe)."""
 
 
 def connect(address: Address) -> ClientTransport:

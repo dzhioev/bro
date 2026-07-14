@@ -51,9 +51,10 @@ async def running_broxy(**broxy_kwargs):
   """an upstream broker transport (with a stub sink) plus a Broxy proxying one
   provisioned channel onto a local socket, both live on the test's loop.
 
-  sockets live in a short mkdtemp dir, not pytest's tmp_path: the lulid-named
-  channel socket under the deep per-test dirs exceeds the ~108-byte sun_path cap."""
-  socket_dir = Path(tempfile.mkdtemp(prefix='broxy-'))
+  sockets live in a short /tmp mkdtemp dir, not pytest's tmp_path: the lulid-named
+  channel socket must fit sun_path (~104 bytes on macOS), which the deep per-test
+  dirs — and even the resolved system temp dir — exceed."""
+  socket_dir = Path(tempfile.mkdtemp(prefix='broxy-', dir='/tmp'))
   transport = UnixServerTransport(str(socket_dir / 'upstream'))
   sink = StubSink()
   serve_task = asyncio.create_task(transport.serve(sink))
@@ -741,8 +742,8 @@ def test_serve_rejects_a_non_unix_upstream(tmp_path):
   assert broker.broxy.main(argv) == 1
 
 
-def test_await_succeeds_on_a_listening_socket(tmp_path):
-  path = tmp_path / 'ready.sock'
+def test_await_succeeds_on_a_listening_socket(socket_dir):
+  path = socket_dir / 'ready.sock'
   listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
   listener.bind(str(path))
   listener.listen(1)
@@ -752,6 +753,6 @@ def test_await_succeeds_on_a_listening_socket(tmp_path):
     listener.close()
 
 
-def test_await_times_out_on_a_missing_socket(tmp_path):
-  argv = ['broxy', 'await', str(tmp_path / 'missing.sock'), '--timeout', '0.3']
+def test_await_times_out_on_a_missing_socket(socket_dir):
+  argv = ['broxy', 'await', str(socket_dir / 'missing.sock'), '--timeout', '0.3']
   assert broker.broxy.main(argv) == 1
