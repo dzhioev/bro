@@ -1,16 +1,20 @@
+import enum
 import io
 import os
 import shutil
 import tarfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from base import credentials, log
 
+if TYPE_CHECKING:
+  import llm.mcp
+
 # secrets every claude code session resolves regardless of bro: the
 # sync-session-log hooks run in-session, and an in-session bro run records to trails.
-_CW_SESSION_BASELINE = ('session_log', 'trails')
+_SESSION_BASELINE = frozenset({'session_log', 'trails'})
 
 
 @dataclass(frozen=True)
@@ -27,24 +31,102 @@ class ScopedSecrets:
   docker_sock: bool
 
 
-def bro_run_secrets(bro_name: str) -> ScopedSecrets:
-  """the credential scope of a bro run as an LLM process in its own container —
-  one computation for every surface that spawns one (the `ask`/`do-task`/`call`
-  hop, broker-spawned bro children), so they cannot drift.
+class Surface(enum.Enum):
+  """the launch surface a credential scope is computed for."""
 
-  required: the bro's manifest plus its LLM key (`needed_secrets()` omits it) and
-  `trails` (recording is mandatory for bro runs). optional: the bro's best-effort
-  tier — a no-op for a bro whose optional secret is already its required LLM key,
-  but correct in general: a component that degrades without a secret still gets it
-  when the host can resolve it. docker socket only when the bro does docker work.
+  CW_SESSION = 'cw-session'  # dive-in / plain `cw ss`, themed as its persona bro
+  BRO_SESSION = 'bro-session'  # `cw ss --bro`: claude --bare serving the bro's own MCP servers
+  BRO_RUN = 'bro-run'  # the bro as an LLM process: the ask/do-task/call hop, summon children
+
+
+@dataclass(frozen=True)
+class _Recipe:
+  """a surface's row in the per-surface scope table (`_RECIPES`).
+
+  `baseline`/`optional_baseline` are the bro-independent tiers; `harness` selects
+  the component set the bro's manifest counts; `auth_secret` is the surface's
+  fixed session-auth secret; `llm_key` adds the bro's own LLM-provider key
+  (`llm_spec.needed_secrets()`, which the manifest omits); `docker_sock` pins the
+  socket decision (None → the bro's `needs_docker`); `unknown_bro_fallback`
+  degrades an unknown bro to the baseline scope with a warning instead of raising.
+  """
+
+  baseline: frozenset[str]
+  optional_baseline: frozenset[str]
+  harness: 'llm.mcp.Harness'
+  auth_secret: Optional[str]
+  llm_key: bool
+  docker_sock: Optional[bool]
+  unknown_bro_fallback: bool
+
+
+# the per-surface recipes; reference/cw.md ("Scoped credential hydration" →
+# per-surface sets) documents each set's rationale, bullet-per-row.
+_RECIPES: dict[Surface, _Recipe] = {
+  Surface.CW_SESSION: _Recipe(
+    baseline=_SESSION_BASELINE,
+    optional_baseline=frozenset({'openai'}),
+    harness='claude',
+    auth_secret='claude_code',
+    llm_key=False,
+    docker_sock=True,
+    unknown_bro_fallback=True,
+  ),
+  Surface.BRO_SESSION: _Recipe(
+    baseline=_SESSION_BASELINE,
+    optional_baseline=frozenset({'openai'}),
+    harness='bro',
+    auth_secret='anthropic',
+    llm_key=False,
+    docker_sock=None,
+    unknown_bro_fallback=True,
+  ),
+  Surface.BRO_RUN: _Recipe(
+    baseline=frozenset({'trails'}),
+    optional_baseline=frozenset(),
+    harness='bro',
+    auth_secret=None,
+    llm_key=True,
+    docker_sock=None,
+    unknown_bro_fallback=False,
+  ),
+}
+
+
+def scoped_secrets(bro_name: str, surface: Surface) -> ScopedSecrets:
+  """the credential scope of a launch running as `bro_name` on `surface` — one
+  computation for every launch surface, so they cannot drift. the per-surface
+  recipe is the `_RECIPES` row; required hydration is strict, so each surface
+  requests only what it actually uses.
   """
   from bro.registry import create_bro
 
-  bro = create_bro(bro_name)
-  required = set(bro.needed_secrets()) | set(bro.llm_spec.needed_secrets()) | {'trails'}
-  return ScopedSecrets(
-    required=required, optional=set(bro.optional_secrets()), docker_sock=bro.needs_docker
-  )
+  recipe = _RECIPES[surface]
+  required = set(recipe.baseline)
+  optional = set(recipe.optional_baseline)
+  try:
+    bro = create_bro(bro_name)
+  except KeyError as e:
+    # unknown bro (registry KeyError) only — other failures propagate rather
+    # than collapse into a silently under-scoped session
+    if not recipe.unknown_bro_fallback:
+      raise
+    log.warning('could not resolve bro %r for credential scoping: %s', bro_name, e)
+    # no bro to consult, so the per-bro socket rule degrades to no socket (moot
+    # anyway — the argv builder re-raises the same KeyError downstream)
+    docker_sock = recipe.docker_sock if recipe.docker_sock is not None else False
+    return ScopedSecrets(required=required, optional=optional, docker_sock=docker_sock)
+  required.update(bro.needed_secrets(harness=recipe.harness))
+  if recipe.auth_secret is not None:
+    required.add(recipe.auth_secret)
+  if recipe.llm_key:
+    required.update(bro.llm_spec.needed_secrets())
+  optional.update(bro.optional_secrets(harness=recipe.harness))
+  if recipe.docker_sock is not None:
+    docker_sock = recipe.docker_sock
+  else:
+    docker_sock = bro.needs_docker
+  return ScopedSecrets(required=required, optional=optional, docker_sock=docker_sock)
 
 
 def _load_anthropic_key() -> Optional[str]:
@@ -100,59 +182,6 @@ def _finalize_secrets(secrets: set[str], *, grant: list[str], revoke: list[str])
   return credentials.apply_grant_revoke(
     secrets, grant=grant, revoke=revoke, subject='scoped credential set'
   )
-
-
-def _session_secrets(bro_name: str, *, bro_mode: bool) -> ScopedSecrets:
-  """scoped credential sets (required, optional) + docker-socket decision for a
-  `cw ss` session themed as `bro_name` — one computation for both launch modes.
-  the two flavors request different sets (required hydration is strict, so each
-  requests only what it actually uses):
-
-  - `--bro` (`claude --bare` serving the bro's own in-process MCP servers): the
-    bro's full `needed_secrets()` + `anthropic` for the apiKeyHelper, plus the
-    bro's `optional_secrets()` hydrated best-effort (e.g. the LLM key behind a
-    data source's query-focused fetch summary). docker socket only if
-    `bro.needs_docker`.
-  - a cw-session themed as the bro (dive-in / plain `cw ss`): the
-    claude-harness manifest — `needed_secrets(harness='claude')`, covering
-    exactly the components the session-local `persona:<name>` server mounts (a
-    component gated to the bro harness contributes nothing) plus the bro's
-    `extra_secrets` — the matching optional tier, and `claude_code` (required:
-    the long-lived OAuth token it exports as CLAUDE_CODE_OAUTH_TOKEN is a
-    cw-session's only auth; `--bro` runs claude --bare, which ignores the
-    var and authenticates with the anthropic key). always keeps the socket (it
-    has a Bash tool).
-
-  both add the session baseline (sync-log + trails) to the required set, and
-  `openai` to the optional tier — the Stop-hook listener's tool_use guard LLM
-  key (cw/listen.py; the guard abstains when it is missing).
-  """
-  from bro.registry import create_bro
-
-  secrets: set[str] = set(_CW_SESSION_BASELINE)
-  optional: set[str] = {'openai'}
-  docker_sock = True
-  try:
-    bro = create_bro(bro_name)
-  except KeyError as e:
-    # unknown bro (registry KeyError) only — other failures propagate rather than
-    # collapse into a silently under-scoped session. a cw-session still gets
-    # the socket; a --bro fallback does not (moot anyway — the argv builder
-    # re-raises the same KeyError downstream).
-    log.warning('could not resolve bro %r for credential scoping: %s', bro_name, e)
-    return ScopedSecrets(required=secrets, optional=optional, docker_sock=not bro_mode)
-  if bro_mode:
-    secrets.update(bro.needed_secrets())
-    secrets.add('anthropic')
-    optional.update(bro.optional_secrets())
-    docker_sock = bro.needs_docker
-  else:
-    secrets.update(bro.needed_secrets(harness='claude'))
-    optional.update(bro.optional_secrets(harness='claude'))
-    # required, not best-effort: a missing token must fail loudly before the
-    # session starts rather than as a turn-1 401 inside it.
-    secrets.add('claude_code')
-  return ScopedSecrets(required=secrets, optional=optional, docker_sock=docker_sock)
 
 
 def _materialize_scoped_store(files: dict[str, bytes], directory: Path) -> Path:

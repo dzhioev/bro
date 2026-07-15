@@ -127,8 +127,8 @@ def maybe_containerize(
   `--host`, pinning the inner run in-process — without it an in-container
   `ask`/`do-task` would relay itself back to the host (the relay branch in
   `run()`); `call` has no relay, so its in-container invocations land here and
-  skip via `CW_IN_CONTAINER`. otherwise the container is scoped
-  to `cw.bro_run_secrets(bro_name)` — the LLM-process credential scope (see its
+  skip via `CW_IN_CONTAINER`. otherwise the container is scoped to the bro-run
+  set of `cw.scoped_secrets` — the LLM-process credential scope (see its
   docstring). an interactive surface (`call`) renders inside it just as claude
   code does.
 
@@ -170,15 +170,16 @@ def maybe_containerize(
       return 1
     return None
   from cw import (
+    Surface,
     _project_root,
     bro_git_identity_env,
-    bro_run_secrets,
     resolve_ref,
     run_in_container,
+    scoped_secrets,
     summon_allow_list,
   )
 
-  scoped = bro_run_secrets(bro_name)
+  scoped = scoped_secrets(bro_name, Surface.BRO_RUN)
   needed = set(scoped.required)
   # every cw-launched session commits as bro; a native bro run gets no in-place
   # session runner to export the identity, so the hop sets it in the container

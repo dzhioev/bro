@@ -454,8 +454,8 @@ class TestSummonLowering:
     monkeypatch.setattr(cw.spawn, '_project_root', lambda: tmp_path / 'proj')
     monkeypatch.setattr(
       cw.spawn,
-      'bro_run_secrets',
-      lambda name: cw.secrets.ScopedSecrets(
+      'scoped_secrets',
+      lambda name, surface: cw.secrets.ScopedSecrets(
         required={'aws', 'trails'}, optional={'openai'}, docker_sock=True
       ),
     )

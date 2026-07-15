@@ -71,7 +71,7 @@ from cw.constants import bro_git_identity_env
 from cw.docker import _create_container, _docker_create_argv, _ensure_image, _image_tag
 from cw.git import resolve_head, resolve_ref
 from cw.paths import _broker_dir, _containers_dir, _host_log_dir, _project_root, _summon_dir
-from cw.secrets import _ppp_tarball, bro_run_secrets
+from cw.secrets import Surface, _ppp_tarball, scoped_secrets
 from cw.summon import SummonControl, summon_status_file
 from cw.workspace import ContainerWorkspace
 from summon import SUMMON
@@ -450,8 +450,8 @@ class ProcessSpawner(Spawner):
 
 def _lower_summon(launch: SummonLaunchSpec) -> DockerLaunchSpec:
   """the blocking half of a summon spawn: compute the docker launch a host-side
-  `ask <target>` would get. Privileges are exactly the target's own scope
-  (`bro_run_secrets` — nothing inherited from the summoner, no grant passthrough);
+  `ask <target>` would get. Privileges are exactly the target's own bro-run scope
+  (`scoped_secrets` — nothing inherited from the summoner, no grant passthrough);
   the base is the summoner's workspace HEAD, read live here (`resolve_head` —
   which also transfers the commit's objects into the host repo when they live
   only in the summoner's own store), unless the request's `into` names a ref
@@ -459,7 +459,7 @@ def _lower_summon(launch: SummonLaunchSpec) -> DockerLaunchSpec:
   unresolvable ref fails the spawn rather than falling back). Raises on any
   unresolvable input — the spawner surfaces that as the correlated
   `failed{reason: 'launch'}`."""
-  scoped = bro_run_secrets(launch.target)
+  scoped = scoped_secrets(launch.target, Surface.BRO_RUN)
   project = _project_root()
   if launch.into is not None:
     base_ref = resolve_ref(project, launch.into)

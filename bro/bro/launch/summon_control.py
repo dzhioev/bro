@@ -107,7 +107,7 @@ def summon_allow_list(bro_name: str, *, grant: list[str], revoke: list[str]) -> 
   override — must be a registered bro, checked against the `BRO_SPECS` keys
   without importing any target module, so a typo fails the launch immediately
   rather than minutes later as a denied summon. an unknown `bro_name` degrades to
-  empty seeds with a warning, mirroring credential scoping (`_session_secrets`):
+  empty seeds with a warning, mirroring credential scoping (`scoped_secrets`):
   an ambient CW_BRO this checkout doesn't know must not break the launch."""
   # imported here, not at module level: keeps `import cw` free of the bro graph
   # (see cw/CLAUDE.md, "Lazy bro import")

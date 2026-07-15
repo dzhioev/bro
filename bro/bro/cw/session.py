@@ -15,10 +15,11 @@ from cw.docker import find_container_id
 from cw.git import resolve_ref
 from cw.paths import _latest_jsonl, _project_root, _venv_env
 from cw.secrets import (
+  Surface,
   _apply_claude_auth,
   _finalize_secrets,
   _materialize_scoped_store,
-  _session_secrets,
+  scoped_secrets,
 )
 from cw.summon import summon_allow_list
 from cw.workspace import ContainerWorkspace, HostWorktree, Workspace
@@ -65,6 +66,11 @@ class SessionSpec:
     if self.bro is not None:
       return self.bro
     return self.persona if self.persona is not None else DEFAULT_SESSION_BRO
+
+  @property
+  def surface(self) -> Surface:
+    """the credential-scoping surface this session launches (`cw.secrets.scoped_secrets`)."""
+    return Surface.BRO_SESSION if self.bro is not None else Surface.CW_SESSION
 
   def to_command_argv(self) -> list[str]:
     """reconstruct this session as `cw ss` argv tokens.
@@ -228,7 +234,7 @@ def _container_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
       return 1
 
   bro_name = spec.session_bro
-  scoped = _session_secrets(bro_name, bro_mode=spec.bro is not None)
+  scoped = scoped_secrets(bro_name, spec.surface)
   try:
     secrets = _finalize_secrets(scoped.required, grant=spec.grant_cred, revoke=spec.revoke_cred)
     may_summon = summon_allow_list(bro_name, grant=spec.grant_summon, revoke=spec.revoke_summon)
@@ -350,7 +356,7 @@ def _host_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
   # the same scoped-store hydration as container mode — strict, before anything
   # is created; a convenience scope on host, not a boundary (reference/cw.md,
   # "Scoped credential hydration")
-  scoped = _session_secrets(bro_name, bro_mode=spec.bro is not None)
+  scoped = scoped_secrets(bro_name, spec.surface)
   try:
     secrets = _finalize_secrets(scoped.required, grant=spec.grant_cred, revoke=spec.revoke_cred)
   except ValueError as e:

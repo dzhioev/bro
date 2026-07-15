@@ -60,7 +60,7 @@ class _ContainerHarness:
       patch('cw.session.find_container_id', return_value=None),
       patch('cw.session.run_in_container', return_value=0),
       patch(
-        'cw.session._session_secrets',
+        'cw.session.scoped_secrets',
         return_value=ScopedSecrets(set(self.secrets), set(), True),
       ),
       patch('cw.session._replace_resume_hint'),
@@ -355,7 +355,7 @@ class TestConcurrentSessionGuard:
     monkeypatch.setattr(cw.session, 'find_container_id', lambda path: None)
     monkeypatch.setattr(
       cw.session,
-      '_session_secrets',
+      'scoped_secrets',
       lambda *_a, **_k: ScopedSecrets(set(), set(), True),
     )
     monkeypatch.setattr(cw.session, 'summon_allow_list', lambda *_a, **_k: set())
@@ -401,7 +401,7 @@ class TestConcurrentSessionGuard:
     monkeypatch.setattr(cw.session, 'summon_allow_list', lambda *_a, **_k: set())
     monkeypatch.setattr(cw.session.credentials, 'try_get', lambda name: 'tok')
     monkeypatch.setattr(
-      cw.session, '_session_secrets', lambda *_a, **_k: ScopedSecrets(set(), set(), True)
+      cw.session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set(), True)
     )
     monkeypatch.setattr(cw.session.credentials, 'build_scoped_store', lambda names, optional=(): {})
     called: list = []
@@ -454,7 +454,7 @@ class TestHostSession:
       cw.session, '_provision_host_claude_dir', lambda name, wt, project: tmp_path / 'claude-config'
     )
     monkeypatch.setattr(
-      cw.session, '_session_secrets', lambda *_a, **_k: ScopedSecrets({'github'}, set(), True)
+      cw.session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets({'github'}, set(), True)
     )
     monkeypatch.setattr(cw.session.credentials, 'build_scoped_store', lambda names, optional=(): {})
     monkeypatch.setattr(
@@ -670,7 +670,7 @@ class TestHostSession:
     monkeypatch.setattr(cw.session, '_broker_enabled', lambda: False)
     monkeypatch.setattr(
       cw.session,
-      '_session_secrets',
+      'scoped_secrets',
       lambda *_a, **_k: ScopedSecrets({'github', 'notion'}, set(), True),
     )
     hydrated: dict = {}
@@ -713,7 +713,7 @@ class TestHostSession:
       cw.session, '_provision_host_claude_dir', lambda name, wt, project: tmp_path / 'claude-config'
     )
     monkeypatch.setattr(
-      cw.session, '_session_secrets', lambda *_a, **_k: ScopedSecrets(set(), set(), True)
+      cw.session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set(), True)
     )
     monkeypatch.setattr(cw.session.credentials, 'build_scoped_store', lambda names, optional=(): {})
     monkeypatch.setattr(cw.session, 'summon_allow_list', lambda *_a, **_k: set())
@@ -773,7 +773,7 @@ class TestHostBrokerPingRoundTrip:
       monkeypatch.setattr(cw.session, 'summon_allow_list', lambda *_a, **_k: set())
       monkeypatch.setattr(cw.session.credentials, 'try_get', lambda name: 'tok')
       monkeypatch.setattr(
-        cw.session, '_session_secrets', lambda *_a, **_k: ScopedSecrets(set(), set(), True)
+        cw.session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set(), True)
       )
       monkeypatch.setattr(
         cw.session.credentials, 'build_scoped_store', lambda names, optional=(): {}
