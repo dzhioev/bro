@@ -76,6 +76,7 @@ SUMMON = 'summon'  # the request's message-type tag (a consumer tag; not in brok
 # points a session at its summon-status file — set by the launch surfaces
 # (cw/summon.py owns the writer), read by `session-log-statusline`
 STATUS_ENV = 'CW_SUMMON_STATUS'
+SUMMONER_ENV = 'CW_SUMMONER'
 # request-lifecycle bound for a summoned child — sized so the flagship deploy
 # workload survives the default; the substrate's generic 600s default is untouched
 DEFAULT_TIMEOUT = 1800.0

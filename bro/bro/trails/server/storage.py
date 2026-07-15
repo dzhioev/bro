@@ -148,6 +148,7 @@ class Storage:
     parent: Optional[dict],
     interactive: bool,
     entry_point: str,
+    summoner: Optional[dict],
   ) -> dict:
     trail_id = lulid()
     step_id = lulid()
@@ -175,6 +176,8 @@ class Storage:
       'continuation': None,
       'aggregates': aggregates,
     }
+    if summoner is not None:
+      trail_item['summoner'] = summoner
     # constant PK for the all-index GSI (global newest-first list).
     trail_item[GSI_PK_ATTRIBUTE] = GSI_PK_VALUE
     if parent is not None:

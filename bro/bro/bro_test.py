@@ -138,7 +138,9 @@ class TestBroRun:
     calls: list[tuple[str, dict]] = []
 
     class RecordingTracker(NullTracker):
-      def start_trail(self, bro, llm_spec, system_prompt, parent, interactive, entry_point) -> str:
+      def start_trail(
+        self, bro, llm_spec, system_prompt, parent, interactive, entry_point, summoner=None
+      ) -> str:
         calls.append(
           (
             'start',
@@ -149,6 +151,7 @@ class TestBroRun:
               'interactive': interactive,
               'entry_point': entry_point,
               'parent': parent,
+              'summoner': summoner,
             },
           )
         )
@@ -174,8 +177,34 @@ class TestBroRun:
     assert start_kwargs['interactive'] is False
     assert start_kwargs['entry_point'] == 'cli:bro_run'
     assert start_kwargs['parent'] is None
+    assert start_kwargs['summoner'] is None
     assert 'base prompt' in start_kwargs['system_prompt']
     assert calls[1][1]['reason'] == 'terminal'
+
+  @pytest.mark.asyncio
+  async def test_run_passes_summoner_from_the_launch_env(self, monkeypatch):
+    captured: list[Optional[dict]] = []
+
+    class RecordingTracker(NullTracker):
+      def start_trail(
+        self, bro, llm_spec, system_prompt, parent, interactive, entry_point, summoner=None
+      ) -> str:
+        captured.append(summoner)
+        return 'tid'
+
+    class TraceBro(BaseBro):
+      name = 'trace-bro'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='base prompt')
+
+      def _create_llm(self, *, interactive: bool):
+        return MockLLM(response='ok')
+
+    monkeypatch.setenv('CW_SUMMONER', '{"target":"pm","trail_id":"T-parent"}')
+    await TraceBro().run('hello', tracker=RecordingTracker())
+    assert captured == [{'target': 'pm', 'trail_id': 'T-parent'}]
 
   @pytest.mark.asyncio
   async def test_run_end_reason_is_raised_on_bro_raised(self):
@@ -374,7 +403,9 @@ class TestBroSend:
     calls: list[tuple[str, dict]] = []
 
     class RecordingTracker(NullTracker):
-      def start_trail(self, bro, llm_spec, system_prompt, parent, interactive, entry_point) -> str:
+      def start_trail(
+        self, bro, llm_spec, system_prompt, parent, interactive, entry_point, summoner=None
+      ) -> str:
         calls.append(
           (
             'start',
@@ -408,7 +439,9 @@ class TestBroSend:
     calls: list[str] = []
 
     class RecordingTracker(NullTracker):
-      def start_trail(self, bro, llm_spec, system_prompt, parent, interactive, entry_point) -> str:
+      def start_trail(
+        self, bro, llm_spec, system_prompt, parent, interactive, entry_point, summoner=None
+      ) -> str:
         calls.append(entry_point)
         return 'tid'
 

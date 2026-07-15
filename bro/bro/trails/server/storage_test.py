@@ -312,6 +312,14 @@ class _FakeStepsDynamo:
     return {'Items': [_ser(it) for it in items]}
 
 
+class _CreateDynamo:
+  def __init__(self):
+    self.transaction_items: list[dict] = []
+
+  def transact_write_items(self, *, TransactItems):
+    self.transaction_items = TransactItems
+
+
 def _spill_store(
   existing_trails: Optional[set[str]] = None,
 ) -> tuple[Storage, _FakeStepsDynamo, _FakeS3]:
@@ -321,6 +329,39 @@ def _spill_store(
     dynamo=dynamo, s3=s3, trails_table='trails', steps_table='trail_steps', bucket='bucket'
   )
   return store, dynamo, s3
+
+
+@pytest.mark.asyncio
+async def test_create_trail_stores_summoner_only_when_present():
+  dynamo = _CreateDynamo()
+  store = Storage(
+    dynamo=dynamo, s3=None, trails_table='trails', steps_table='trail_steps', bucket='bucket'
+  )
+  await store.create_trail(
+    bro='dev',
+    bro_version=1,
+    llm_spec={},
+    system_prompt='prompt',
+    parent=None,
+    interactive=False,
+    entry_point='cli:bro_run',
+    summoner={'session': 'c:root'},
+  )
+  item = _des(dynamo.transaction_items[0]['Put']['Item'])
+  assert item['summoner'] == {'session': 'c:root'}
+
+  await store.create_trail(
+    bro='dev',
+    bro_version=1,
+    llm_spec={},
+    system_prompt='prompt',
+    parent=None,
+    interactive=False,
+    entry_point='cli:bro_run',
+    summoner=None,
+  )
+  item = _des(dynamo.transaction_items[0]['Put']['Item'])
+  assert 'summoner' not in item
 
 
 @pytest.mark.asyncio

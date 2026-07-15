@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import sys
 from abc import ABC
@@ -17,11 +18,30 @@ from llm.llm import LLM, LLMSpec
 from llm.observer import BoringRenderer, NullObserver, Observer
 from llm.tracker import EndReason, HTTPTracker, NullTracker, Tracker
 from prompts import get_prompt, mode_fragment
+from summon import SUMMONER_ENV
 
 DEFAULT_LLM_SPEC: LLMSpec = llm.llms.chat_gpt.LLMSpec()
 
 
 _TRAILS_DISABLED_ENV = 'TRAILS_DISABLED'
+
+
+def _summoner_from_env() -> Optional[dict[str, Any]]:
+  raw = os.environ.get(SUMMONER_ENV)
+  if raw is None:
+    return None
+  summoner = json.loads(raw)
+  if not isinstance(summoner, dict):
+    raise ValueError(f'{SUMMONER_ENV} must be a JSON object')
+  if set(summoner) == {'session'} and isinstance(summoner['session'], str):
+    return summoner
+  if (
+    set(summoner) == {'target', 'trail_id'}
+    and isinstance(summoner['target'], str)
+    and isinstance(summoner['trail_id'], str)
+  ):
+    return summoner
+  raise ValueError(f'{SUMMONER_ENV} has an invalid summoner shape')
 
 
 def _default_factory() -> Tracker:
@@ -769,6 +789,7 @@ class BaseBro(ABC):
     observer: Optional[Observer],
     tracker: Optional[Tracker],
     entry_point: str,
+    summoner: Optional[dict[str, Any]],
   ) -> tuple[LLM, list[dict], str]:
     # the shared start sequence of run() and send(): lock in observer/tracker —
     # caller-supplied ones win (CLIs use this to force --boring or to pass a
@@ -786,6 +807,7 @@ class BaseBro(ABC):
       parent=None,
       interactive=interactive,
       entry_point=entry_point,
+      summoner=summoner,
     )
     self.trail_id = trail_id if len(trail_id) > 0 else None
     messages = [
@@ -816,7 +838,12 @@ class BaseBro(ABC):
     if refusal is not None:
       raise BroRaised(refusal)
     llm, messages, trail_id = self._start(
-      input, interactive=False, observer=observer, tracker=tracker, entry_point='cli:bro_run'
+      input,
+      interactive=False,
+      observer=observer,
+      tracker=tracker,
+      entry_point='cli:bro_run',
+      summoner=_summoner_from_env(),
     )
     channel = self._make_channel()
     if channel is not None:
@@ -857,7 +884,12 @@ class BaseBro(ABC):
       # records one trail); later calls can't swap it. entry_point labels that
       # trail's header — surfaces name themselves (`call`, `process-inbox`).
       self._llm, messages, _ = self._start(
-        message, interactive=True, observer=observer, tracker=tracker, entry_point=entry_point
+        message,
+        interactive=True,
+        observer=observer,
+        tracker=tracker,
+        entry_point=entry_point,
+        summoner=None,
       )
     else:
       if observer is not None:

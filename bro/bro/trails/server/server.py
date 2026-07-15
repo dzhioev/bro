@@ -82,9 +82,21 @@ async def _handle_create_trail(request: web.Request) -> web.Response:
   if parent is not None and not isinstance(parent, dict):
     return _error('parent must be an object or null', 400)
   if isinstance(parent, dict):
-    for k in ('trail_id', 'step_id', 'relationship'):
-      if k not in parent:
-        return _error(f'parent.{k} required', 400)
+    for key in ('trail_id', 'step_id', 'relationship'):
+      if key not in parent:
+        return _error(f'parent.{key} required', 400)
+  summoner = payload.get('summoner')
+  if summoner is not None and not isinstance(summoner, dict):
+    return _error('summoner must be an object or null', 400)
+  if isinstance(summoner, dict):
+    session_shape = set(summoner) == {'session'} and isinstance(summoner['session'], str)
+    trail_shape = (
+      set(summoner) == {'target', 'trail_id'}
+      and isinstance(summoner['target'], str)
+      and isinstance(summoner['trail_id'], str)
+    )
+    if not session_shape and not trail_shape:
+      return _error('summoner must identify a session or trail', 400)
 
   store: storage.Storage = request.app['storage']
   result = await store.create_trail(
@@ -95,6 +107,7 @@ async def _handle_create_trail(request: web.Request) -> web.Response:
     parent=parent,
     interactive=payload['interactive'],
     entry_point=payload['entry_point'],
+    summoner=summoner,
   )
   return web.json_response({'trail_id': result['trail_id']}, status=201)
 

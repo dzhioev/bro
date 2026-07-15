@@ -542,7 +542,9 @@ class _RecordingTracker(Tracker):
     self.steps: list[tuple[str, Any, dict]] = []
     self.ended: list[str] = []
 
-  def start_trail(self, bro, llm_spec, system_prompt, parent, interactive, entry_point) -> str:
+  def start_trail(
+    self, bro, llm_spec, system_prompt, parent, interactive, entry_point, summoner=None
+  ) -> str:
     self.headers.append(
       {
         'bro': bro,

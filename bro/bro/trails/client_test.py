@@ -238,6 +238,7 @@ class TestTrailFromHeader:
     assert trail.bro == 'dev'
     assert trail.bro_version == 7
     assert trail.parent is None
+    assert trail.summoner is None
     assert isinstance(trail, Trail)
 
   def test_parent_present(self):
@@ -251,12 +252,14 @@ class TestTrailFromHeader:
         'interactive': True,
         'entry_point': 'fork',
         'parent': {'trail_id': 'T1', 'step_id': 'S5', 'relationship': 'fork'},
+        'summoner': {'session': 'c:root'},
       }
     )
     assert isinstance(trail.parent, Parent)
     assert trail.parent.trail_id == 'T1'
     assert trail.parent.step_id == 'S5'
     assert trail.parent.relationship == 'fork'
+    assert trail.summoner == {'session': 'c:root'}
 
 
 class TestStepFromRow:

@@ -32,7 +32,7 @@ class FakeStorage:
     return f'2026-06-07T00:00:{self._counter:02d}.000000Z'
 
   async def create_trail(
-    self, *, bro, bro_version, llm_spec, system_prompt, parent, interactive, entry_point
+    self, *, bro, bro_version, llm_spec, system_prompt, parent, interactive, entry_point, summoner
   ):
     trail_id = self._new_id()
     started_at = self._now()
@@ -57,6 +57,8 @@ class FakeStorage:
         'step_counts_by_kind': dict.fromkeys(storage.STEP_KINDS, 0) | {'system_prompt': 1},
       },
     }
+    if summoner is not None:
+      self.trails[trail_id]['summoner'] = summoner
     self.steps[trail_id] = [
       {
         'trail_id': trail_id,
@@ -252,6 +254,34 @@ class TestCreateTrail:
     trail_id = (await response.json())['trail_id']
     assert store.trails[trail_id]['parent'] == parent
 
+  @pytest.mark.asyncio
+  async def test_summoner_is_stored_on_the_header(self, client, store):
+    cli = await client
+    summoner = {'target': 'pm', 'trail_id': 'T-parent'}
+    response = await cli.post(
+      '/v1/trails', json=_create_payload(summoner=summoner), headers=_auth()
+    )
+    assert response.status == 201
+    trail_id = (await response.json())['trail_id']
+    assert store.trails[trail_id]['summoner'] == summoner
+
+  @pytest.mark.asyncio
+  @pytest.mark.parametrize(
+    'summoner',
+    [
+      'session',
+      {'session': 1},
+      {'target': 'pm'},
+      {'target': 'pm', 'trail_id': 'T-parent', 'extra': True},
+    ],
+  )
+  async def test_invalid_summoner_is_rejected(self, client, summoner):
+    cli = await client
+    response = await cli.post(
+      '/v1/trails', json=_create_payload(summoner=summoner), headers=_auth()
+    )
+    assert response.status == 400
+
 
 class TestPutStep:
   async def _make_trail(self, cli) -> str:
@@ -420,13 +450,17 @@ class TestGetTrail:
   @pytest.mark.asyncio
   async def test_returns_header(self, client):
     cli = await client
-    response = await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
+    summoner = {'session': 'c:root'}
+    response = await cli.post(
+      '/v1/trails', json=_create_payload(summoner=summoner), headers=_auth()
+    )
     trail_id = (await response.json())['trail_id']
     response = await cli.get(f'/v1/trails/{trail_id}', headers=_auth())
     assert response.status == 200
     data = await response.json()
     assert data['trail_id'] == trail_id
     assert data['bro'] == 'ppp-dev'
+    assert data['summoner'] == summoner
 
   @pytest.mark.asyncio
   async def test_unknown_trail_404(self, client):

@@ -15,6 +15,7 @@ from llm.tracker import (
   NullTracker,
   Parent,
   Tracker,
+  read_local_file,
 )
 
 
@@ -57,6 +58,7 @@ class TestLocalFileTrackerStartTrail:
       parent=None,
       interactive=False,
       entry_point='cli:bro_run',
+      summoner={'session': 'c:root'},
     )
     tracker.close()
     records = _read_jsonl(path)
@@ -71,7 +73,10 @@ class TestLocalFileTrackerStartTrail:
     assert header['interactive'] is False
     assert header['entry_point'] == 'cli:bro_run'
     assert header['parent'] is None
+    assert header['summoner'] == {'session': 'c:root'}
     assert 'started_at' in header
+    [recorded] = read_local_file(path)
+    assert recorded.header.summoner == {'session': 'c:root'}
 
   def test_auto_emits_system_prompt_as_first_step(self, tmp_path: Path):
     path = tmp_path / 'trail.jsonl'
@@ -110,6 +115,7 @@ class TestLocalFileTrackerStartTrail:
     tracker.close()
     header = _read_jsonl(path)[0]
     assert header['parent'] == {'trail_id': 'abc', 'step_id': 'def', 'relationship': 'fork'}
+    assert 'summoner' not in header
 
   def test_bro_version_comes_from_configs(self, tmp_path: Path, monkeypatch):
     monkeypatch.setattr(configs, 'VERSION', 42)
@@ -335,6 +341,7 @@ class TestHTTPTrackerStartTrail:
       parent=None,
       interactive=False,
       entry_point='cli:bro_run',
+      summoner={'target': 'pm', 'trail_id': 'T-parent'},
     )
     assert trail_id == 'T-server'
     assert tracker._trail_id == 'T-server'
@@ -352,6 +359,7 @@ class TestHTTPTrackerStartTrail:
     assert payload['parent'] is None
     assert payload['interactive'] is False
     assert payload['entry_point'] == 'cli:bro_run'
+    assert payload['summoner'] == {'target': 'pm', 'trail_id': 'T-parent'}
 
   def test_serializes_parent_on_forks(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
@@ -370,6 +378,7 @@ class TestHTTPTrackerStartTrail:
     assert body is not None
     payload = json.loads(body)
     assert payload['parent'] == {'trail_id': 'abc', 'step_id': 'def', 'relationship': 'fork'}
+    assert 'summoner' not in payload
 
   def test_fail_fast_no_retries_on_transport_error(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)

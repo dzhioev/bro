@@ -249,6 +249,7 @@ class SummonControl:
         target=target,
         prompt=prompt,
         parent_workspace=requester.workspace,
+        summoner=requester.summoner,
         into=payload.get('into'),
       ),
       peer,

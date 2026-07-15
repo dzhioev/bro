@@ -124,6 +124,7 @@ class TestSummonHandler:
       # the root's base-ref inheritance source: the bare session key names a host
       # worktree
       parent_workspace=tmp_path / 'var' / 'cw' / 'worktrees' / 'ws',
+      summoner={'session': 'ws'},
     )
     assert peer == ROOT
     assert timeout == 1800.0
@@ -172,6 +173,7 @@ class TestSummonHandler:
       prompt='deploy the thing',
       # a child summoner's base-ref inheritance source: its broker-<channel> clone
       parent_workspace=tmp_path / 'var' / 'cw' / 'containers' / f'broker-{CHILD}',
+      summoner={'target': 'ppp-dev', 'trail_id': 'T1'},
     )
     assert peer == CHILD
     spawn_record = _audit(tmp_path)[-1]

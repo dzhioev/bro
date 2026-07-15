@@ -225,6 +225,9 @@ def _format_trail_header(trail: dict, colors: _Colors) -> str:
       f'{colors.dim}parent    {colors.reset} {parent.get("relationship")} '
       f'{parent.get("trail_id")} @ step {parent.get("step_id")}'
     )
+  summoner = trail.get('summoner')
+  if summoner is not None:
+    lines.append(f'{colors.dim}summoner  {colors.reset} {json.dumps(summoner, ensure_ascii=False)}')
   continuation = trail.get('continuation')
   if continuation is not None:
     lines.append(f'{colors.dim}continuation{colors.reset} {json.dumps(continuation)}')

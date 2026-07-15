@@ -175,6 +175,7 @@ class TestFormatTrailHeader:
         'interactive': False,
         'entry_point': 'cli:bro_run',
         'parent': {'trail_id': 'T-p', 'step_id': 'S5', 'relationship': 'fork'},
+        'summoner': {'target': 'pm', 'trail_id': 'T-summoner'},
         'continuation': {'provider': 'openai', 'response_id': 'r1'},
         'aggregates': {
           'turn_count': 3,
@@ -192,6 +193,7 @@ class TestFormatTrailHeader:
     assert 'turns=3' in out
     assert 'tokens_in=100' in out
     assert 'fork T-p' in out
+    assert 'summoner   {"target": "pm", "trail_id": "T-summoner"}' in out
     assert 'reasoning=3' in out
     assert 'end=0' not in out  # zero counts pruned
 

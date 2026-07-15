@@ -411,6 +411,7 @@ class TestCompositeSpawner:
 
 
 PARENT_WORKSPACE = Path('/var/cw/worktrees/parent')
+SUMMONER = {'session': 'ws'}
 
 
 class TestSummonLowering:
@@ -435,7 +436,10 @@ class TestSummonLowering:
 
   def test_lowers_to_the_ask_docker_launch(self, lowering_harness):
     launch = cw.spawn.SummonLaunchSpec(
-      target='devoops', prompt='deploy the thing', parent_workspace=PARENT_WORKSPACE
+      target='devoops',
+      prompt='deploy the thing',
+      parent_workspace=PARENT_WORKSPACE,
+      summoner=SUMMONER,
     )
     lowered = cw.spawn._lower_summon(launch, 'broker-CH')
     assert lowered == cw.spawn.DockerLaunchSpec(
@@ -445,6 +449,7 @@ class TestSummonLowering:
         env={
           'CW_BASE_REF': 'PARENT-SHA',
           'CW_BRO': 'devoops',
+          'CW_SUMMONER': '{"session":"ws"}',
           **cw.constants.bro_git_identity_env(),
         },
         secrets={'aws', 'trails'},
@@ -458,7 +463,7 @@ class TestSummonLowering:
 
   def test_lowering_logs_the_scope_like_any_container_launch(self, lowering_harness, caplog):
     launch = cw.spawn.SummonLaunchSpec(
-      target='devoops', prompt='p', parent_workspace=PARENT_WORKSPACE
+      target='devoops', prompt='p', parent_workspace=PARENT_WORKSPACE, summoner=SUMMONER
     )
     with caplog.at_level('INFO'):
       cw.spawn._lower_summon(launch, 'broker-CH')
@@ -466,23 +471,34 @@ class TestSummonLowering:
 
   def test_into_overrides_the_inherited_base_ref(self, lowering_harness):
     launch = cw.spawn.SummonLaunchSpec(
-      target='devoops', prompt='p', parent_workspace=PARENT_WORKSPACE, into='summon'
+      target='devoops',
+      prompt='p',
+      parent_workspace=PARENT_WORKSPACE,
+      summoner=SUMMONER,
+      into='summon',
     )
     assert cw.spawn._lower_summon(launch, 'broker-CH').launch.env == {
       'CW_BASE_REF': 'REF-SHA',
       'CW_BRO': 'devoops',
+      'CW_SUMMONER': '{"session":"ws"}',
       **cw.constants.bro_git_identity_env(),
     }
 
   def test_unresolvable_into_fails_the_spawn(self, lowering_harness):
     launch = cw.spawn.SummonLaunchSpec(
-      target='devoops', prompt='p', parent_workspace=PARENT_WORKSPACE, into='nope'
+      target='devoops',
+      prompt='p',
+      parent_workspace=PARENT_WORKSPACE,
+      summoner=SUMMONER,
+      into='nope',
     )
     with pytest.raises(ValueError, match='nope'):
       cw.spawn._lower_summon(launch, 'broker-CH')
 
   def test_unreadable_parent_head_fails_the_spawn(self, lowering_harness):
-    launch = cw.spawn.SummonLaunchSpec(target='devoops', prompt='p', parent_workspace=Path('/gone'))
+    launch = cw.spawn.SummonLaunchSpec(
+      target='devoops', prompt='p', parent_workspace=Path('/gone'), summoner=SUMMONER
+    )
     with pytest.raises(ValueError, match="summoner's HEAD"):
       cw.spawn._lower_summon(launch, 'broker-CH')
 
@@ -500,7 +516,7 @@ class TestSummonLowering:
     spawner = cw.spawn.SummonSpawner(docker)
     channel = cw.spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
     launch = cw.spawn.SummonLaunchSpec(
-      target='devoops', prompt='p', parent_workspace=PARENT_WORKSPACE
+      target='devoops', prompt='p', parent_workspace=PARENT_WORKSPACE, summoner=SUMMONER
     )
     await spawner.spawn(launch, channel)
     [(lowered, lowered_channel)] = docker.spawned
@@ -514,7 +530,11 @@ class TestSummonLowering:
     spawner = cw.spawn.SummonSpawner(cw.spawn.DockerSpawner())
     channel = cw.spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
     launch = cw.spawn.SummonLaunchSpec(
-      target='devoops', prompt='p', parent_workspace=PARENT_WORKSPACE, into='nope'
+      target='devoops',
+      prompt='p',
+      parent_workspace=PARENT_WORKSPACE,
+      summoner=SUMMONER,
+      into='nope',
     )
     # the raise crosses to_thread back onto the loop: Dispatcher.spawn turns it
     # into the correlated failed{reason: 'launch'}

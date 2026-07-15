@@ -26,7 +26,7 @@ import sys
 from collections.abc import Collection
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import bro_run
 from base import log
@@ -72,6 +72,7 @@ class SummonLaunchSpec(LaunchSpec):
   target: str
   prompt: str
   parent_workspace: Path
+  summoner: dict[str, Any]
   into: Optional[str] = None
 
 
@@ -387,6 +388,7 @@ def _lower_summon(launch: SummonLaunchSpec, workspace_name: str) -> DockerLaunch
     base_ref=base_ref,
     tty=False,
     forward_env=False,
+    summoner=launch.summoner,
   )
   log_scoped_secrets(f'summoned {launch.target}', run.secrets, run.optional_secrets)
   return DockerLaunchSpec(run, remove_workspace=True)

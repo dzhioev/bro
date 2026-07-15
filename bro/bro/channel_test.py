@@ -103,7 +103,9 @@ class _ChannelBro(BaseBro):
 
 
 class _TrailIDTracker(NullTracker):
-  def start_trail(self, bro, llm_spec, system_prompt, parent, interactive, entry_point) -> str:
+  def start_trail(
+    self, bro, llm_spec, system_prompt, parent, interactive, entry_point, summoner=None
+  ) -> str:
     return 'trail-42'
 
 
@@ -144,7 +146,9 @@ class TestRunLifecycle:
     events: list[str] = []
 
     class OrderTracker(NullTracker):
-      def start_trail(self, bro, llm_spec, system_prompt, parent, interactive, entry_point) -> str:
+      def start_trail(
+        self, bro, llm_spec, system_prompt, parent, interactive, entry_point, summoner=None
+      ) -> str:
         events.append('start_trail')
         return 'tid'
 

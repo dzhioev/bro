@@ -9,14 +9,16 @@ one computes it identically; executing the launch (attached TTY, supervised
 non-TTY child) is the caller's.
 """
 
+import json
 import secrets
 from collections.abc import Sequence
-from typing import Optional
+from typing import Any, Optional
 
 from cw.constants import bro_git_identity_env
 from cw.docker import Launch
 from cw.paths import _containers_dir, _project_root, _worktrees_dir
 from cw.secrets import Surface, scoped_secrets
+from summon import SUMMONER_ENV
 
 
 def describe(
@@ -29,6 +31,7 @@ def describe(
   trails: bool = True,
   tty: bool = True,
   forward_env: bool = True,
+  summoner: Optional[dict[str, Any]] = None,
 ) -> Launch:
   """describe the launch of `<cli_name> <bro_name> <inner_args…> --in-place`.
 
@@ -46,6 +49,8 @@ def describe(
   if not trails:
     required.remove('trails')
     env['TRAILS_DISABLED'] = '1'
+  if summoner is not None:
+    env[SUMMONER_ENV] = json.dumps(summoner, ensure_ascii=False, separators=(',', ':'))
   return Launch(
     name=workspace_name,
     command=[cli_name, bro_name, *inner_args, '--in-place'],

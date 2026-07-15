@@ -82,6 +82,7 @@ class Trail:
   interactive: bool
   entry_point: str
   parent: Optional[Parent]
+  summoner: Optional[dict[str, Any]] = None
 
 
 @dataclass(frozen=True)
@@ -127,11 +128,13 @@ class Tracker(ABC):
     parent: Optional[Parent],
     interactive: bool,
     entry_point: str,
+    summoner: Optional[dict[str, Any]] = None,
   ) -> str:
     """open a new trail. returns the assigned `trail_id`.
 
     the prompt is recorded as the first step (kind=`system_prompt`, turn 0);
-    everything else goes on the trail header.
+    everything else goes on the trail header. `summoner` is optional provenance
+    for a summoned run and is unrelated to the fork-lineage `parent` pointer.
     """
     ...
 
@@ -163,6 +166,7 @@ class NullTracker(Tracker):
     parent: Optional[Parent],
     interactive: bool,
     entry_point: str,
+    summoner: Optional[dict[str, Any]] = None,
   ) -> str:
     return ''
 
@@ -210,6 +214,7 @@ class LocalFileTracker(Tracker):
     parent: Optional[Parent],
     interactive: bool,
     entry_point: str,
+    summoner: Optional[dict[str, Any]] = None,
   ) -> str:
     self._trail_id = lulid()
     header = {
@@ -223,6 +228,8 @@ class LocalFileTracker(Tracker):
       'entry_point': entry_point,
       'parent': asdict(parent) if parent is not None else None,
     }
+    if summoner is not None:
+      header['summoner'] = summoner
     self._write(header)
     # the system prompt is the trail's first step rather than a header field —
     # keeps the header lean and lets a fork swap the prompt without rewriting
@@ -328,6 +335,7 @@ class HTTPTracker(Tracker):
     parent: Optional[Parent],
     interactive: bool,
     entry_point: str,
+    summoner: Optional[dict[str, Any]] = None,
   ) -> str:
     payload = {
       'bro': bro,
@@ -338,6 +346,8 @@ class HTTPTracker(Tracker):
       'interactive': interactive,
       'entry_point': entry_point,
     }
+    if summoner is not None:
+      payload['summoner'] = summoner
     response = self._post('/v1/trails', payload, retry_delays=())
     trail_id: str = response['trail_id']
     self._trail_id = trail_id
@@ -471,6 +481,7 @@ def read_local_file(path: Path | str) -> list[RecordedTrail]:
         interactive=record['interactive'],
         entry_point=record['entry_point'],
         parent=parent,
+        summoner=record.get('summoner'),
       )
       steps[trail_id] = []
       order.append(trail_id)

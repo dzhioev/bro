@@ -305,6 +305,7 @@ def trail_from_header(data: dict) -> Trail:
     interactive=data['interactive'],
     entry_point=data['entry_point'],
     parent=parent,
+    summoner=data.get('summoner'),
   )
 
 

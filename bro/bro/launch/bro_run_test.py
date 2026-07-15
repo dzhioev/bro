@@ -29,6 +29,11 @@ def test_describe_base_ref_rides_cw_base_ref():
   assert launch.env['CW_BASE_REF'] == 'REF-SHA'
 
 
+def test_describe_encodes_summoner_as_compact_json():
+  launch = _describe('ppp-dev', ['hi'], summoner={'target': 'pm', 'trail_id': 'trail-123'})
+  assert launch.env['CW_SUMMONER'] == '{"target":"pm","trail_id":"trail-123"}'
+
+
 def test_describe_no_trails_drops_secret_and_disables_recording():
   launch = _describe('ppp-dev', ['hi'], trails=False)
   assert 'trails' not in launch.secrets
