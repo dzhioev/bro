@@ -4,10 +4,11 @@ import asyncio
 from datetime import date, datetime
 from typing import Any, ClassVar, Optional
 
-from rich.console import Console, ConsoleOptions, Group, RenderResult
+from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderResult
 from rich.markdown import Markdown
 from rich.markup import escape as rich_escape
 from rich.measure import Measurement
+from rich.segment import Segment
 from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
@@ -15,6 +16,9 @@ from textual.binding import Binding
 from textual.containers import Container, VerticalScroll
 from textual.screen import ModalScreen
 from textual.selection import Selection
+from textual.strip import Strip
+from textual.style import Style
+from textual.visual import RenderOptions, RichVisual
 from textual.widgets import Input, Static
 
 from bro.bros.bro import Bro
@@ -38,13 +42,59 @@ class ChatMarkdown:
   """
 
   def __init__(self, text: str):
-    self.source = text
+    self._text = text
 
   def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
-    yield Markdown(self.source)
+    yield Markdown(self._text)
 
   def __rich_measure__(self, console: Console, options: ConsoleOptions) -> Measurement:
-    return Measurement.get(console, options, Text(self.source))
+    return Measurement.get(console, options, Text(self._text))
+
+
+class SelectableRichVisual(RichVisual):
+  """`RichVisual` that participates in text selection.
+
+  plain `RichVisual` ignores selection entirely: its strips carry no offset
+  meta (so mouse hit-testing finds no text and a drag inside the widget
+  selects nothing), the selection highlight is never painted, and there is no
+  text to extract. stamp the offsets, paint the selected span, and keep the
+  rendered text for the owning widget's `get_selection`.
+  """
+
+  rendered_text: Optional[str] = None
+
+  def render_strips(
+    self, width: int, height: Optional[int], style: Style, options: RenderOptions
+  ) -> list[Strip]:
+    strips = super().render_strips(width, height, style, options)
+    self.rendered_text = '\n'.join(strip.text for strip in strips)
+    return [
+      self._highlight(strip, y, options).apply_offsets(0, y) for y, strip in enumerate(strips)
+    ]
+
+  def _highlight(self, strip: Strip, y: int, options: RenderOptions) -> Strip:
+    if options.selection is None or options.selection_style is None:
+      return strip
+    span = options.selection.get_span(y)
+    if span is None:
+      return strip
+    start, end = span
+    if end == -1 or end > strip.cell_length:
+      end = strip.cell_length
+    if start >= end:
+      return strip
+    before, selected, after = strip.divide([start, end, strip.cell_length])
+    # overlay, not Strip.apply_style: that applies the style as a base, and the
+    # widget background baked into the segments would keep overriding it
+    highlight = options.selection_style.rich_style
+    highlighted = Strip(
+      [
+        Segment(text, highlight if style is None else style + highlight)
+        for text, style, _control in selected
+      ],
+      selected.cell_length,
+    )
+    return Strip.join([before, highlighted, after])
 
 
 class MessageBubble(Static):
@@ -66,23 +116,27 @@ class MessageBubble(Static):
   }
   """
 
-  def __init__(self, text: ChatMarkdown | Text | str, *, by_user: bool, when: datetime):
+  def __init__(self, text: RenderableType, *, by_user: bool, when: datetime):
     classes = 'user' if by_user else 'bro'
     timestamp = when.strftime('%H:%M')
+    self._visual: Optional[SelectableRichVisual] = None
     if isinstance(text, str):
       super().__init__(f'{rich_escape(text)}\n[dim]{timestamp}[/dim]', classes=classes, markup=True)
-      plain = text
     else:
-      # pre-rendered content (e.g. the ANSI-decoded cw banner); append the
-      # timestamp as a dim line without running it through markup parsing
-      super().__init__(Group(text, Text(timestamp, style='dim')), classes=classes)
-      plain = text.source if isinstance(text, ChatMarkdown) else text.plain
-    self._copy_text = f'{plain}\n{timestamp}'
+      # pre-rendered content (e.g. a ChatMarkdown reply, the ANSI-decoded cw
+      # banner); append the timestamp as a dim line without running it through
+      # markup parsing
+      self._visual = SelectableRichVisual(self, Group(text, Text(timestamp, style='dim')))
+      super().__init__(self._visual, classes=classes)
 
-  def get_selection(self, selection: Selection) -> tuple[str, str]:
-    # the default extraction yields None for rich renderables (markdown
-    # replies, the banner), dropping them from the copied text
-    return selection.extract(self._copy_text), '\n'
+  def get_selection(self, selection: Selection) -> Optional[tuple[str, str]]:
+    # a rich-renderable bubble extracts from the text its visual rendered;
+    # the plain-string case is Static's default (Content) extraction
+    if self._visual is None:
+      return super().get_selection(selection)
+    if self._visual.rendered_text is None:
+      return None
+    return selection.extract(self._visual.rendered_text), '\n'
 
 
 class SystemBubble(Static):

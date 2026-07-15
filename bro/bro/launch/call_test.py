@@ -562,23 +562,6 @@ def test_chat_markdown_measurement_hugs_short_text():
   assert measurement.maximum == 2
 
 
-def test_message_bubble_selection_extracts_markdown_source():
-  from textual.selection import SELECT_ALL
-
-  from do.call_tui import ChatMarkdown, MessageBubble
-
-  bubble = MessageBubble(
-    ChatMarkdown('**bold** and [docs](https://example.com/x)'),
-    by_user=False,
-    when=datetime(2026, 5, 28, 12, 34, 56),
-  )
-  # the default Widget extraction returns None for rich renderables, dropping
-  # the bubble from copied text — the override extracts the authored source
-  text, ending = bubble.get_selection(SELECT_ALL)
-  assert text == '**bold** and [docs](https://example.com/x)\n12:34'
-  assert ending == '\n'
-
-
 def test_message_bubble_selection_honors_offsets():
   from textual.geometry import Offset
   from textual.selection import Selection
@@ -586,8 +569,44 @@ def test_message_bubble_selection_honors_offsets():
   from do.call_tui import MessageBubble
 
   bubble = MessageBubble('first\nsecond', by_user=True, when=datetime(2026, 5, 28, 12, 34, 56))
-  text, _ending = bubble.get_selection(Selection(Offset(0, 1), None))
-  assert text == 'second\n12:34'
+  extraction = bubble.get_selection(Selection(Offset(0, 1), None))
+  assert extraction is not None
+  assert extraction[0] == 'second\n12:34'
+
+
+@pytest.mark.asyncio
+async def test_tui_drag_inside_markdown_bubble_selects_rendered_text(monkeypatch):
+  from do.call_tui import ChatApp, MessageBubble
+
+  monkeypatch.setattr('cw.render_banner', lambda llm=False, bro=None: 'BANNER')
+  app = ChatApp(RecordBro(), None)
+  async with app.run_test(size=(100, 40)) as pilot:
+    app._append_bro_message('a **bold** reply')
+    await pilot.pause()
+    bubble = app.query(MessageBubble).last()
+    region = bubble.content_region
+    # drag across the first rendered line, strictly inside the bubble — this is
+    # the gesture that used to select nothing (rich renderables carry no offset
+    # meta, so hit-testing found no text)
+    await pilot.mouse_down(offset=(region.x + 2, region.y))
+    await pilot.hover(offset=(region.x + 5, region.y))
+    await pilot.mouse_up(offset=(region.x + 5, region.y))
+    await pilot.pause()
+    selection = app.screen.selections.get(bubble)
+    assert selection is not None
+    # a precise span, not a whole-widget fallback
+    assert selection.start is not None
+    # markdown renders '**bold**' as 'bold': the drag covers chars 2-5 of the
+    # rendered 'a bold reply', release cell included
+    assert app.screen.get_selected_text() == 'bold'
+    assert app.clipboard == 'bold'
+    # the selected span paints the selection background; the rest keeps the base
+    backgrounds = {
+      segment.text: segment.style.bgcolor
+      for segment in bubble.render_line(0)
+      if segment.style is not None and segment.style.bgcolor is not None
+    }
+    assert backgrounds['bold'] != backgrounds['a ']
 
 
 @pytest.mark.asyncio
