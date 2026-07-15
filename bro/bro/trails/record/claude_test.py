@@ -589,6 +589,63 @@ class TestCompose:
     assert len(lines) == 3
 
 
+class TestRaisedScan:
+  """the `raised` extraction: a raise tool call marks the conversation aborted
+  with its reason; a later real user message (a resume moving past the abort)
+  clears the mark."""
+
+  def _raise_record(self, reason: str) -> dict:
+    return {
+      'type': 'assistant',
+      'message': {
+        'content': [
+          {'type': 'tool_use', 'name': 'mcp__bro__raise', 'input': {'reason': reason}},
+        ],
+      },
+    }
+
+  def test_raise_call_sets_the_reason(self):
+    scan = sync_session_log._MetadataScan()
+    scan.feed({'type': 'user', 'message': {'content': 'do the thing'}})
+    scan.feed(self._raise_record('missing api key'))
+    assert scan.raised == 'missing api key'
+
+  def test_other_tool_calls_do_not_mark(self):
+    scan = sync_session_log._MetadataScan()
+    scan.feed(
+      {
+        'type': 'assistant',
+        'message': {'content': [{'type': 'tool_use', 'name': 'mcp__flow__add_task', 'input': {}}]},
+      }
+    )
+    assert scan.raised is None
+
+  def test_a_real_user_message_clears_the_mark(self):
+    scan = sync_session_log._MetadataScan()
+    scan.feed(self._raise_record('missing api key'))
+    scan.feed({'type': 'user', 'message': {'content': 'resumed: key added, carry on'}})
+    assert scan.raised is None
+
+  def test_a_tool_result_record_does_not_clear_the_mark(self):
+    # the raise call's own result comes back as a user-type record with only a
+    # tool_result block — it must not read as the conversation moving on
+    scan = sync_session_log._MetadataScan()
+    scan.feed(self._raise_record('missing api key'))
+    scan.feed(
+      {
+        'type': 'user',
+        'message': {'content': [{'type': 'tool_result', 'tool_use_id': 't1', 'content': 'ok'}]},
+      }
+    )
+    assert scan.raised == 'missing api key'
+
+  def test_raised_survives_the_snapshot_round_trip(self):
+    scan = sync_session_log._MetadataScan()
+    scan.feed(self._raise_record('missing api key'))
+    restored = sync_session_log._MetadataScan.from_snapshot(scan.to_snapshot())
+    assert restored.raised == 'missing api key'
+
+
 class TestState:
   def test_round_trips_the_timeline(self, tmp_path):
     path = tmp_path / 'state.json'
@@ -659,6 +716,32 @@ class TestBuildItem:
     monkeypatch.delenv('CW_SESSION_CONTEXT', raising=False)
     item = self._composed_item(tmp_path, monkeypatch)
     assert 'context' not in item
+
+  def test_raised_into_item(self, tmp_path):
+    projects_dir = tmp_path / 'projects'
+    projects_dir.mkdir()
+    _write_segment(
+      projects_dir,
+      'seg',
+      [
+        {'type': 'user', 'timestamp': '2026-07-01T10:00:00Z', 'message': {'content': 'do it'}},
+        {
+          'type': 'assistant',
+          'message': {
+            'content': [
+              {'type': 'tool_use', 'name': 'mcp__bro__raise', 'input': {'reason': 'no api key'}},
+            ],
+          },
+        },
+      ],
+      _STALE,
+    )
+    state = ConversationState('conv', [Chunk('seg', 0, None)])
+    scan = sync_session_log._MetadataScan()
+    lines = sync_session_log._compose_items(projects_dir, state.timeline, scan)
+    composed = sync_session_log._Composed(sync_session_log._encode_lines(lines), scan, len(lines))
+    item = sync_session_log._build_item(state, 'ws', 'logs/ws/conv.jsonl', composed)
+    assert item['raised'] == 'no api key'
 
 
 class TestHealthOnOneShot:

@@ -60,6 +60,13 @@ def _set_session_context(spec: 'SessionSpec', system_prompt: str, workspace: Pat
   os.environ[CW_SESSION_CONTEXT_ENV] = encode_session_context(records)
 
 
+def terminate_session() -> None:
+  """end the running session from a session-owned process: SIGTERM the in-place
+  runner (CW_RUNNER_PID, exported by run_in_place), which forwards the signal to
+  claude and survives to run its teardown. raises when no runner pid is set."""
+  os.kill(int(os.environ['CW_RUNNER_PID']), signal.SIGTERM)
+
+
 @contextlib.contextmanager
 def _sigterm_forwarded_to(process: subprocess.Popen) -> Generator[None]:
   previous = signal.signal(signal.SIGTERM, lambda signum, frame: process.terminate())
@@ -71,9 +78,9 @@ def _sigterm_forwarded_to(process: subprocess.Popen) -> Generator[None]:
 
 def _run_claude(argv: list[str], env: dict[str, str]) -> int:
   """spawn claude and wait, forwarding SIGTERM to it — claude's raw-mode TTY
-  already absorbs Ctrl-C, but a SIGTERM aimed at the runner (docker stop, kill)
-  would otherwise strand claude. the runner keeps waiting after forwarding, so
-  the post-exit work still runs."""
+  already absorbs Ctrl-C, but a SIGTERM aimed at the runner (docker stop, kill,
+  terminate_session) would otherwise strand claude. the runner keeps waiting
+  after forwarding, so the post-exit work still runs."""
   process = subprocess.Popen(['claude', *argv], env=env)
   with _sigterm_forwarded_to(process):
     return process.wait()
@@ -109,6 +116,15 @@ def run_in_place(spec: 'SessionSpec') -> int:
   # CW_BRO themes the session (banner, statusLine): --bro names it, a
   # cw-session runs as its persona
   os.environ['CW_BRO'] = spec.session_bro
+
+  # mode and kill wiring for the `raise` service tool's mounts (bro/bro.py).
+  # both overwrite any ambient value: a session launched from inside another
+  # must not inherit its mode or kill target.
+  if spec.auto:
+    os.environ['CW_AUTO'] = '1'
+  else:
+    os.environ.pop('CW_AUTO', None)
+  os.environ['CW_RUNNER_PID'] = str(os.getpid())
 
   with contextlib.ExitStack() as teardown:
     # host mode launches the session broxy (in a container the entrypoint started

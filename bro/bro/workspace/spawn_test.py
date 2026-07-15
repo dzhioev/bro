@@ -607,8 +607,15 @@ class TestRunRootViaBroker:
       'root',
       Message(type=Tag.COMPLETED, payload={'result': 'ok', 'end_reason': 'terminal'}),
     )
+    # a raised run surfaces its reason — the result is the failure cause
+    cw.spawn._log_root_completed(
+      dispatcher,
+      'root',
+      Message(type=Tag.COMPLETED, payload={'result': 'no api key', 'end_reason': 'raised'}),
+    )
     assert any('root run started (trail t-1)' in record.message for record in caplog.records)
     assert any('root run ended: terminal' in record.message for record in caplog.records)
+    assert any('root run raised: no api key' in record.message for record in caplog.records)
 
 
 class TestDockerSpawnerModes:

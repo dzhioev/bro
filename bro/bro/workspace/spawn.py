@@ -517,6 +517,10 @@ def _log_root_started(context: Dispatcher, peer: Peer, message: Message) -> None
 
 def _log_root_completed(context: Dispatcher, peer: Peer, message: Message) -> None:
   del context, peer
+  if message.payload.get('end_reason') == 'raised':
+    # a raised run's result is the abort reason — surface it
+    log.warning('root run raised: %s', message.payload.get('result'))
+    return
   log.info('root run ended: %s', message.payload.get('end_reason'))
 
 

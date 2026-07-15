@@ -1,9 +1,12 @@
 import asyncio
 import json
+import os
+import signal
 import sys
 import types
 from pathlib import Path
 from typing import ClassVar, Optional, get_args
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -959,8 +962,9 @@ class TestClaudePersonaServers:
 
     SkillBro.__module__ = package
     names = asyncio.run(_collect_tool_names(SkillBro().claude_persona_mcp_servers()))
-    # skills reach a cw-session as slash commands, and `raise` only aborts
-    # bro.run(); the environment facts stay available as `banner`
+    # skills reach a cw-session as slash commands, and `raise` is gated on the
+    # session mode (attended here — no CW_AUTO); the environment facts stay
+    # available as `banner`
     assert 'banner' in names
     assert 'skill' not in names
     assert 'raise' not in names
@@ -1240,6 +1244,79 @@ class TestRaise:
       await tool.call({'reason': 'missing api key'})
     assert exception.value.reason == 'missing api key'
 
+
+class TestClaudeRaise:
+  """the mcp flavor of `raise`: mounted for unattended claude sessions, records
+  the abort over the broker channel and terminates the session through the
+  runner (no exception can abort the consuming harness)."""
+
+  def test_unattended_claude_builds_mount_raise(self, monkeypatch):
+    monkeypatch.setenv('CW_AUTO', '1')
+    monkeypatch.setenv('CW_RUNNER_PID', '4242')
+    bro = EchoBro()
+    assert 'raise' in asyncio.run(_collect_tool_names(bro.claude_persona_mcp_servers()))
+    assert 'raise' in asyncio.run(_collect_tool_names(bro.claude_bro_mcp_servers()))
+
+  def test_mode_alone_does_not_mount_raise(self, monkeypatch):
+    # no runner pid means nothing to terminate — no tool
+    monkeypatch.setenv('CW_AUTO', '1')
+    names = asyncio.run(_collect_tool_names(EchoBro().claude_persona_mcp_servers()))
+    assert 'raise' not in names
+
+  async def _mcp_raise_tool(self):
+    server = bro.bro._build_service_server(
+      EchoBro(), include_raise=True, harness='claude', wire='mcp'
+    )
+    for tool in await server.list_tools():
+      if tool.name == 'raise':
+        return tool
+    raise AssertionError('raise tool not found on the mcp service build')
+
+  @pytest.mark.asyncio
+  async def test_mcp_raise_records_channel_and_kills_the_runner(self, monkeypatch):
+    monkeypatch.setenv('CW_RUNNER_PID', '4242')
+    channel = MagicMock()
+    monkeypatch.setattr('bro.bro.BroChannel.from_env', lambda: channel)
+    kills: list[tuple[int, int]] = []
+    monkeypatch.setattr(os, 'kill', lambda pid, sig: kills.append((pid, sig)))
+    tool = await self._mcp_raise_tool()
+    await tool.call({'reason': 'missing api key'})
+    channel.completed.assert_called_once_with('missing api key', 'raised')
+    channel.close.assert_called_once_with()
+    assert kills == [(4242, signal.SIGTERM)]
+
+  @pytest.mark.asyncio
+  async def test_mcp_raise_kills_without_a_channel(self, monkeypatch):
+    monkeypatch.setenv('CW_RUNNER_PID', '4242')
+    monkeypatch.setattr('bro.bro.BroChannel.from_env', lambda: None)
+    kills: list[tuple[int, int]] = []
+    monkeypatch.setattr(os, 'kill', lambda pid, sig: kills.append((pid, sig)))
+    tool = await self._mcp_raise_tool()
+    await tool.call({'reason': 'no tool fits'})
+    assert kills == [(4242, signal.SIGTERM)]
+
+  @pytest.mark.asyncio
+  async def test_mcp_raise_kills_even_when_the_channel_emission_fails(self, monkeypatch):
+    monkeypatch.setenv('CW_RUNNER_PID', '4242')
+    channel = MagicMock()
+    channel.completed.side_effect = ConnectionError('channel closed')
+    monkeypatch.setattr('bro.bro.BroChannel.from_env', lambda: channel)
+    kills: list[tuple[int, int]] = []
+    monkeypatch.setattr(os, 'kill', lambda pid, sig: kills.append((pid, sig)))
+    tool = await self._mcp_raise_tool()
+    with pytest.raises(ConnectionError):
+      await tool.call({'reason': 'broker down'})
+    assert kills == [(4242, signal.SIGTERM)]
+
+  @pytest.mark.asyncio
+  async def test_raise_description_forks_on_wire(self):
+    mcp_tool = await self._mcp_raise_tool()
+    bare_tool = await _find_raise_tool(EchoBro())
+    assert 'terminates the session' in mcp_tool.description
+    assert 'terminates the session' not in bare_tool.description
+
+
+class TestSessionModePrompts:
   def test_non_interactive_system_prompt_includes_note(self):
     bro = EchoBro()
     prompt = bro._system_prompt_for(interactive=False)
@@ -1658,7 +1735,7 @@ class TestSkillsDiscovery:
   def test_claude_bro_servers_carry_skill_tool(self, fake_packages):
     # the `cw ss --bro` surface reaches skills through the `skill` tool (--bare
     # gives no slash commands), so claude_bro_mcp_servers must carry it — and not
-    # `raise`, since a human drives the session.
+    # `raise`, since this session is attended (no CW_AUTO).
     package = fake_packages('_skills_claude', {'epic': _skill('drive an epic', 'epic body')})
 
     class SkillBro(BaseBro):

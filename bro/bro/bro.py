@@ -9,7 +9,7 @@ from typing import Any, ClassVar, Optional, Self
 
 import llm.llms.chat_gpt
 import llm.mcp
-from base import credentials
+from base import credentials, log
 from base.condition import Entry, when
 from bro.channel import BroChannel
 from bro.datasources.base import DataSource
@@ -195,6 +195,28 @@ def _raise(reason: str) -> str:
   raise BroRaised(reason)
 
 
+async def _claude_raise(reason: str) -> str:
+  # no exception can abort the consuming claude session, so record the abort
+  # over the broker channel where one exists, then terminate the session (cw
+  # owns the mechanics). blocking ops, so off-loop; the finally keeps the kill
+  # unconditional.
+  from cw import terminate_session
+
+  def record_and_kill() -> None:
+    log.warning('raise: %s', reason)
+    try:
+      channel = BroChannel.from_env()
+      if channel is not None:
+        channel.completed(reason, 'raised')
+        channel.close()
+    finally:
+      terminate_session()
+
+  await asyncio.to_thread(record_and_kill)
+  # unreachable in practice — claude dies awaiting this result
+  return 'the abort is recorded and the session is being terminated. Stop working now.'
+
+
 _RAISE_DESCRIPTION = (
   'abort the run because the request cannot be fulfilled. Call this when '
   'required credentials or API keys are missing, no appropriate tool or data '
@@ -204,7 +226,16 @@ _RAISE_DESCRIPTION = (
   'task. Do NOT reply with a clarifying question — there is no follow-up turn; '
   'raise instead. Pass a clear, specific reason — it surfaces to the caller as '
   'the failure cause.'
+  '{{when #wire = mcp}} The call records the abort and terminates the session; '
+  'nothing after it will run, so make the reason self-contained.{{end}}'
 )
+
+
+def _raise_tool(wire: llm.mcp.Wire) -> llm.mcp.Tool:
+  target = _raise if wire == 'bare' else _claude_raise
+  return llm.mcp.FunctionTool(
+    target, name='raise', description=llm.mcp.render_text(_RAISE_DESCRIPTION, wire=wire)
+  )
 
 
 _SKILL_DESCRIPTION = (
@@ -401,9 +432,7 @@ def _build_service_server(
   # `summon_list` the session's summon-status file — process state, not
   # surface facts.
   entries: list[Entry[llm.mcp.Tool]] = [_banner_tool(bro.name)]
-  entries.append(
-    when(include_raise, llm.mcp.FunctionTool(_raise, name='raise', description=_RAISE_DESCRIPTION))
-  )
+  entries.append(when(include_raise, _raise_tool(wire)))
   if len(bro.skills) > 0:
 
     def skill(name: str) -> str:
@@ -429,6 +458,12 @@ def _build_service_server(
       entries.append(_summon_list_tool())
   tools = llm.mcp.select(entries, harness=harness, wire=wire, creds=credentials.known_names())
   return llm.mcp.InProcessMCPServer('bro', tools)
+
+
+def _unattended_claude_session() -> bool:
+  # CW_AUTO marks the session unattended, CW_RUNNER_PID makes it terminatable
+  # (both exported by cw's in-place runner); `raise` needs both.
+  return os.environ.get('CW_AUTO') is not None and os.environ.get('CW_RUNNER_PID') is not None
 
 
 _NON_INTERACTIVE_NOTE = (
@@ -838,31 +873,34 @@ class BaseBro(ABC):
       self._live_mcp.extend(ds.as_mcp_server() for ds in self._data_sources)
     return self._live_mcp
 
-  def _mcp_servers_for(
-    self, *, interactive: bool, wire: llm.mcp.Wire = 'bare'
-  ) -> list[llm.mcp.MCPServer]:
-    # the `raise` service tool only makes sense in non-interactive runs — when no
-    # human is in the loop to negotiate, the agent needs a way to abort. In
-    # interactive sessions the agent describes any blocker in its reply instead.
-    # `skill`, however, is needed in both modes, so interactive rebuilds the
-    # service server without `raise` rather than dropping it wholesale.
+  def _mcp_servers_for(self, *, interactive: bool) -> list[llm.mcp.MCPServer]:
+    # the in-process LLM builds (always bare wire): the `raise` service tool
+    # only makes sense in non-interactive runs — when no human is in the loop to
+    # negotiate, the agent needs a way to abort. In interactive sessions the
+    # agent describes any blocker in its reply instead. `skill`, however, is
+    # needed in both modes, so interactive rebuilds the service server without
+    # `raise` rather than dropping it wholesale.
     if interactive:
       return [
         *self._live_mcp_servers(),
-        _build_service_server(self, include_raise=False, harness='bro', wire=wire),
+        _build_service_server(self, include_raise=False, harness='bro', wire='bare'),
       ]
     return [*self._live_mcp_servers(), self._service_server]
 
   def claude_bro_mcp_servers(self) -> list[llm.mcp.MCPServer]:
     # the MCP servers a `cw ss --bro` Claude Code session mounts (through
-    # mcp_server.py's `bro:<name>` surface): the same interactive set `send()`
-    # gets — declared servers plus the `skill` tool, no `raise` (it aborts
-    # `bro.run()`, which a claude session never enters). without it the `--bro`
-    # surface exposes only the declared servers, leaving the bro's skills
-    # unreachable there. skills serve the bro branch (`--bare` strips claude's
-    # built-ins, so the session drives work through the bro toolset, not
-    # Monitor/Bash) over mcp wire names.
-    return self._mcp_servers_for(interactive=True, wire='mcp')
+    # mcp_server.py's `bro:<name>` surface): declared servers plus the `skill`
+    # tool — without it the `--bro` surface exposes only the declared servers,
+    # leaving the bro's skills unreachable there. skills serve the bro branch
+    # (`--bare` strips claude's built-ins, so the session drives work through
+    # the bro toolset, not Monitor/Bash) over mcp wire names. `raise` mounts
+    # only for an unattended session.
+    return [
+      *self._live_mcp_servers(),
+      _build_service_server(
+        self, include_raise=_unattended_claude_session(), harness='bro', wire='mcp'
+      ),
+    ]
 
   def claude_persona_mcp_servers(self) -> list[llm.mcp.MCPServer]:
     # the MCP servers a cw-session themed as this bro mounts — claude's full
@@ -871,12 +909,16 @@ class BaseBro(ABC):
     # on the claude harness — an entry gated to the bro harness (the dev
     # toolset, the reference FileSources) never mounts, claude's built-in tools
     # cover it — plus the service server (`banner` and the summon pair; no
-    # `skill`, a cw-session gets skills as slash commands; no `raise`, which
-    # only aborts `bro.run()`).
+    # `skill`, a cw-session gets skills as slash commands; `raise` only for an
+    # unattended session).
     specs, sources = self._components_for('claude')
     servers: list[llm.mcp.MCPServer] = [spec.build() for spec in specs]
     servers.extend(ds.as_mcp_server() for ds in sources)
-    servers.append(_build_service_server(self, include_raise=False, harness='claude', wire='mcp'))
+    servers.append(
+      _build_service_server(
+        self, include_raise=_unattended_claude_session(), harness='claude', wire='mcp'
+      )
+    )
     return servers
 
   def _system_prompt_for(self, *, interactive: bool) -> str:

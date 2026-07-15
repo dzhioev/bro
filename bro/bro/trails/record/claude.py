@@ -343,17 +343,22 @@ def _fork_cuts(old_path: Path, new_path: Path) -> _ForkCuts:
   )
 
 
+# the bro service `raise` tool's wire name in a claude session's transcript
+_RAISE_TOOL = 'mcp__bro__raise'
+
+
 class _MetadataScan:
-  """subject / model / version / start-time extraction over the record stream,
-  fed one parsed record at a time while the artifact is composed. Snapshots
-  let the scan over the cached prefix persist in the state file, so an upload
-  resumes it over the live tail only."""
+  """subject / model / version / start-time / raise extraction over the record
+  stream, fed one parsed record at a time while the artifact is composed.
+  Snapshots let the scan over the cached prefix persist in the state file, so
+  an upload resumes it over the live tail only."""
 
   def __init__(self) -> None:
     self.subject: Optional[str] = None
     self.model: Optional[str] = None
     self.version: Optional[str] = None
     self.started_at: Optional[str] = None
+    self.raised: Optional[str] = None
 
   def to_snapshot(self) -> dict:
     return {
@@ -361,6 +366,7 @@ class _MetadataScan:
       'model': self.model,
       'version': self.version,
       'started_at': self.started_at,
+      'raised': self.raised,
     }
 
   @classmethod
@@ -370,7 +376,19 @@ class _MetadataScan:
     scan.model = snapshot.get('model')
     scan.version = snapshot.get('version')
     scan.started_at = snapshot.get('started_at')
+    scan.raised = snapshot.get('raised')
     return scan
+
+  @staticmethod
+  def _content_text(entry: dict) -> Optional[str]:
+    content = entry.get('message', {}).get('content')
+    if isinstance(content, str):
+      return content
+    if isinstance(content, list):
+      for c in content:
+        if isinstance(c, dict) and c.get('type') == 'text':
+          return c.get('text')
+    return None
 
   def feed(self, entry: dict) -> None:
     if self.started_at is None:
@@ -381,15 +399,7 @@ class _MetadataScan:
     if (
       self.subject is None and entry.get('type') == 'user' and entry.get('isSidechain') is not True
     ):
-      content = entry.get('message', {}).get('content')
-      text: Optional[str] = None
-      if isinstance(content, str):
-        text = content
-      elif isinstance(content, list):
-        for c in content:
-          if isinstance(c, dict) and c.get('type') == 'text':
-            text = c.get('text')
-            break
+      text = self._content_text(entry)
       if text is not None:
         stripped = text.lstrip()
         if not stripped.startswith('<'):
@@ -405,6 +415,24 @@ class _MetadataScan:
       version = entry.get('version')
       if isinstance(version, str):
         self.version = version
+
+    # a raise tool call marks the conversation aborted with its reason; a later
+    # real user message (a resume moving past the abort) clears the mark —
+    # tool-result user records don't count as one.
+    if entry.get('type') == 'assistant':
+      content = entry.get('message', {}).get('content')
+      if isinstance(content, list):
+        for block in content:
+          if (
+            isinstance(block, dict)
+            and block.get('type') == 'tool_use'
+            and block.get('name') == _RAISE_TOOL
+          ):
+            reason = block.get('input', {}).get('reason')
+            self.raised = reason if isinstance(reason, str) else ''
+    elif self.raised is not None and entry.get('type') == 'user':
+      if self._content_text(entry) is not None:
+        self.raised = None
 
 
 @dataclasses.dataclass
@@ -496,6 +524,7 @@ def _build_item(state: ConversationState, workspace: str, s3_key: str, composed:
     ('model', scan.model),
     ('claude_code_version', scan.version),
     ('started_at', scan.started_at),
+    ('raised', scan.raised),
   ):
     if value is not None:
       item[attribute] = value

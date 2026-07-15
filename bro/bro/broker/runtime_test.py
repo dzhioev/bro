@@ -217,9 +217,14 @@ async def test_timeout_kills_then_reports_timeout_and_exit(socket_dir):
   async with runtime_harness(socket_dir) as env:
     peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_HANG), timeout=0.3)
 
-    assert await next_event(env.listener) == ('connect', peer)
-    assert (await next_event(env.listener))[0] == 'message'  # started
-    assert await next_event(env.listener) == ('timeout', peer)  # emitted after the kill
+    # the child's connect/started may or may not land before the timer fires —
+    # interpreter cold start races the 0.3s timeout on a loaded machine. the
+    # contract is the tail: a timeout event, then the kill's exit, nonzero.
+    while True:
+      event = await next_event(env.listener)
+      if event[0] not in ('connect', 'message'):
+        break
+    assert event == ('timeout', peer)  # emitted after the kill
     kind, exited_peer, code, _ = await next_event(env.listener)
     assert (kind, exited_peer) == ('exit', peer)
     assert code != 0  # reaped after the kill signal

@@ -12,7 +12,9 @@ so importing `bro` never depends on broker being installed.
 
 Wired into `BaseBro.run` only (LLM-process children). A claude-code `--bro`
 session never calls `BaseBro.run` — it has no in-process return value — so it
-auto-emits no lifecycle, by design.
+auto-emits no lifecycle, by design. The one claude-session emission is the
+`raise` service tool's `completed{raised}`, sent mid-session; the dispatcher
+deliberately leaves the root un-finalized on it, so the channel keeps serving.
 """
 
 from typing import TYPE_CHECKING, Optional
