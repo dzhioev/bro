@@ -16,16 +16,6 @@ _BASE_PROMPT_DIRS = ['shared']
 _BASE_PROMPT_FILES = ['tool_names.md']
 
 
-def _mode_prompt(auto: bool) -> str:
-  """the session-mode tail injected at launch: the autonomous or manual fragment
-  (the pick-one pair documented in prompts/CLAUDE.md), plus the land-mode hint
-  for autonomous sessions."""
-  if auto:
-    fragment = (_PROMPTS_DIR / 'autonomous_session.md').read_text().strip()
-    return f'{fragment}\n\nLand mode: PR'
-  return (_PROMPTS_DIR / 'manual_session.md').read_text().strip()
-
-
 def _load_base_prompts() -> str:
   parts = []
   for subdir in _BASE_PROMPT_DIRS:
@@ -39,7 +29,7 @@ def _load_base_prompts() -> str:
   return '\n\n'.join(parts)
 
 
-def _session_append_prompt(auto: bool, bro_name: str) -> str:
+def _session_append_prompt(mode: str, bro_name: str) -> str:
   """--append-system-prompt text for a cw-session (the non --bro flavor).
 
   base prompts plus the session persona's own prompts (`bro_name`, the
@@ -48,17 +38,23 @@ def _session_append_prompt(auto: bool, bro_name: str) -> str:
   once with this surface's facts: the claude harness over mcp wire names, with
   the session environment's credentials (this composes in the session's own
   process — in-container for container sessions — so the store is the scoped
-  one).
+  one). the session-mode fragment renders separately through
+  `prompts.mode_fragment` — the `#mode` fact is supplied only there, so the
+  base and persona prompts stay mode-neutral.
   """
   # llm.mcp and bro.registry are imported lazily — the hub aggregates every cw
   # submodule, so a module-level import here would tax every `import cw`.
   import llm.mcp
+  import prompts
   from base import credentials
   from bro.registry import create_bro
 
   parts = [_load_base_prompts()]
   parts.append(create_bro(bro_name).persona)
-  parts.append(_mode_prompt(auto))
-  return llm.mcp.render_text(
+  rendered = llm.mcp.render_text(
     '\n\n'.join(parts), harness='claude', wire='mcp', creds=credentials.known_names()
   )
+  fragment = prompts.mode_fragment(
+    mode, harness='claude', wire='mcp', creds=credentials.known_names()
+  )
+  return f'{rendered}\n\n{fragment}'

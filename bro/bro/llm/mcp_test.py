@@ -487,6 +487,21 @@ class TestRenderText:
     with pytest.raises(ValueError, match='unknown wire'):
       render_text('{{iff a = a}}x{{end}}', wire='grpc')  # type: ignore[arg-type]
 
+  def test_mode_fact_selects_a_branch(self):
+    text = '{{iff #mode = unattended}}U{{else}}other{{end}}'
+    assert render_text(text, mode='unattended') == 'U'
+    assert render_text(text, mode='guided') == 'other'
+
+  def test_mode_undefined_outside_mode_text(self):
+    # the mode fact is supplied only when rendering the session-mode text, so a
+    # stray #mode directive in mode-neutral text fails instead of picking a side
+    with pytest.raises(ValueError, match='unknown variable #mode'):
+      render_text('{{when #mode = unattended}}x{{end}}', harness='claude', wire='mcp')
+
+  def test_unknown_mode_argument_raises(self):
+    with pytest.raises(ValueError, match='unknown session mode'):
+      render_text('{{iff a = a}}x{{end}}', mode='automatic')
+
   def test_include_resolves_through_prompts_loader(self, monkeypatch):
     import prompts
 

@@ -205,10 +205,10 @@ def fork(
   )
   parent_system_prompt = _extract_system_prompt(parent_trail)
   effective_system_prompt = system_prompt if system_prompt is not None else parent_system_prompt
-  # `bro.system_prompt` is the raw prompt without the interactive-mode note;
-  # forks reuse the parent's exact text and skip BaseBro's note-appending path
-  # (the parent's prompt — recorded in the trail — already has the note baked
-  # in from its original run).
+  # `bro.system_prompt` is the raw prompt without the session-mode fragment;
+  # forks reuse the parent's exact text and skip BaseBro's fragment-appending
+  # path (the parent's prompt — recorded in the trail — already has the
+  # fragment baked in from its original run).
   bro.system_prompt = effective_system_prompt
 
   bro._tracker = (

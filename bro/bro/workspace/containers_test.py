@@ -134,7 +134,7 @@ class TestRunRootViaBroker:
     monkeypatch.setattr(cw.spawn, 'run_root_via_broker', fake_run_root)
     code = cw.containers._run_root_via_broker(
       'ws',
-      ['claude', '--auto'],
+      ['claude', '--verbose'],
       tmp_path / 'project',
       secrets=('github',),
       optional_secrets=('openai',),
@@ -150,7 +150,7 @@ class TestRunRootViaBroker:
     assert captured['session'] == 'c:ws'
     assert captured['may_summon'] == {'devoops'}
     assert captured['launch'] == cw.spawn.DockerLaunchSpec(
-      command=['claude', '--auto'],
+      command=['claude', '--verbose'],
       # the summon-status env rides in next to the caller's env: the container
       # reads the file the host writes through its read-only /host-repo mount
       env={

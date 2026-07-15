@@ -43,3 +43,20 @@ class TestForwardedFlags:
     parser = Parser(add_help=False)
     cw.flags.add_forwarded_flags(parser)
     assert parser.parse_args([]).effort == 'xhigh'
+
+  def test_mode_defaults_to_guided(self):
+    parser = Parser(add_help=False)
+    cw.flags.add_forwarded_flags(parser)
+    assert parser.parse_args([]).mode == 'guided'
+
+  def test_extract_forwarded_argv_round_trips_mode(self):
+    parser = Parser(add_help=False)
+    cw.flags.add_forwarded_flags(parser)
+    args = vars(parser.parse_args(['--mode', 'attended']))
+    assert cw.flags.extract_forwarded_argv(args) == ['--mode', 'attended']
+
+  def test_extract_forwarded_argv_elides_the_default_mode(self):
+    parser = Parser(add_help=False)
+    cw.flags.add_forwarded_flags(parser)
+    args = vars(parser.parse_args([]))
+    assert '--mode' not in cw.flags.extract_forwarded_argv(args)

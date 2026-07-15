@@ -61,6 +61,8 @@ The facts triple a conditioning surface knows, exported by `llm/mcp.py` as ready
 
 - `creds` — the set of secrets the environment resolves. The supplied universe is closed (a component's declared secrets for a tool description, the registry's known names for session-level text) and membership probes `base.credentials.available` lazily
 
+One more fact sits outside the triple: `mode` — the session's user-involvement level (`unattended | detached | attended | guided`, the domain is `llm.mcp.MODES`). It is supplied only when rendering the session-mode text (`prompts.mode_fragment` → `render_text(mode=…)`), never by the general conditioning surfaces, so mode-neutral text — skills, procedure docs — fails fast on a stray `#mode` directive. No ready-made placeholder is exported.
+
 `llm.mcp.select(entries, harness=…, wire=…, creds=…)` owns the facts-to-variables mapping for declarative lists (`llm.mcp.render_text` is its sibling for text — see `reference/template.md`). A fact the surface doesn't know defines no variable, so a condition referencing it raises. Select in the process that consumes the result, where the credential store is the session's own.
 
 ## Code map

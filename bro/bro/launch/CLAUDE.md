@@ -13,7 +13,7 @@ Bros launching and managing layer — thin helpers that drive a `Bro` toward a s
 
   By default opens the Textual chat UI in `call_tui.py` (IM-style: scrollable history, left/right bubbles, timestamp + date separators, animated "Typing…", mouse selection copies straight to the system clipboard, Ctrl+D to quit, backtick (`) opens a stats modal). Falls back to text mode (`[HH:MM:SS] bro: <reply>` lines + `> ` prompt) when stdin/stdout isn't a TTY; `--text` forces it. The text REPL helper `call_text(bro, initial)` is library-callable.
 
-  The Bro's `interactive=True` machinery picks up automatically in both modes: no `raise` tool, symmetric interactive-mode note injected into the system prompt.
+  The Bro's `interactive=True` machinery picks up automatically in both modes: no `raise` tool, the guided session-mode fragment injected into the system prompt.
 
   **Opening banner.** Both modes render the `cw banner` (visual form, via `cw.render_banner`) as the first bro message, before the user's initial message — so the session's environment facts (container, workspace, host path, launch command) are visible up front. Display-only: it is not part of the bro's LLM conversation. Text mode prints the ANSI banner directly; the TUI decodes it with `rich.text.Text.from_ansi` and mounts it as a bro bubble (`MessageBubble` accepts a Rich renderable, not just a markup string, for this). The bro name is passed to `render_banner(bro=…)` so the logo renders even though a `call` container deliberately doesn't forward `CW_BRO`.
 

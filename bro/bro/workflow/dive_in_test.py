@@ -69,7 +69,7 @@ class TestLaunchCommand:
     [
       {},
       {'forwarded': ['--host']},
-      {'forwarded': ['--host', '--auto']},
+      {'forwarded': ['--host', '--mode', 'attended']},
       {'command': 'do a thing', 'new': True},
     ],
   )
@@ -111,9 +111,9 @@ class TestShellCommandReconstruction:
 
   def test_forwarded_flags_appear_in_the_reconstruction(self, fake_proj, monkeypatch):
     monkeypatch.delenv('PPP_SHELL_COMMAND', raising=False)
-    rc = dive_in.main(['dive-in', '-n', '--auto', '--bro', 'ppp-dev'])
+    rc = dive_in.main(['dive-in', '-n', '--mode', 'attended', '--bro', 'ppp-dev'])
     assert rc == 0
-    assert os.environ['PPP_SHELL_COMMAND'] == 'dive-in --auto --bro ppp-dev'
+    assert os.environ['PPP_SHELL_COMMAND'] == 'dive-in --mode attended --bro ppp-dev'
 
   def test_new_seed_keeps_the_prompt_marker_tail(self, fake_proj, monkeypatch):
     monkeypatch.delenv('PPP_SHELL_COMMAND', raising=False)

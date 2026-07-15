@@ -120,10 +120,7 @@ def run_in_place(spec: 'SessionSpec') -> int:
   # mode and kill wiring for the `raise` service tool's mounts (bro/bro.py).
   # both overwrite any ambient value: a session launched from inside another
   # must not inherit its mode or kill target.
-  if spec.auto:
-    os.environ['CW_AUTO'] = '1'
-  else:
-    os.environ.pop('CW_AUTO', None)
+  os.environ['CW_MODE'] = spec.mode
   os.environ['CW_RUNNER_PID'] = str(os.getpid())
 
   with contextlib.ExitStack() as teardown:

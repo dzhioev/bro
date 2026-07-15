@@ -29,6 +29,14 @@ _HARNESSES = frozenset(get_args(Harness))
 Wire = Literal['bare', 'mcp']
 _WIRES = frozenset(get_args(Wire))
 
+# a session's user-involvement level, ordered from no human channel to
+# human-driven. unlike the other facts it is supplied only when rendering the
+# session-mode text (`prompts.mode_fragment`), so mode-neutral text — skills,
+# procedure docs — fails fast on a stray `#mode` directive.
+Mode = Literal['unattended', 'detached', 'attended', 'guided']
+MODES: tuple[str, ...] = get_args(Mode)
+_MODES = frozenset(MODES)
+
 # the facts triple as ready-made condition variables, so declarations read
 # `harness == 'bro'` / `creds.contains('openai')`.
 harness = var('harness')
@@ -42,19 +50,22 @@ def render_text(
   harness: Optional[Harness] = None,
   wire: Optional[Wire] = None,
   creds: Optional[Iterable[str]] = None,
+  mode: Optional[str] = None,
 ) -> str:
   """render `base.template` directives in static agent-facing text (system
   prompts, skill bodies, tool descriptions) against the surface facts the call
   site knows: `harness` → `#harness`, `wire` → `#wire`, `creds` → `#creds`
   (the closed universe; membership probes `credentials.available` lazily, so
   render in the process that consumes the text, where the store is the
-  session's own). A fact left None defines no variable, so a directive
-  referencing it raises. `{{include <name>}}` targets resolve through the
-  `prompts` loader. The directive reference is `reference/template.md`.
+  session's own), `mode` → `#mode` (session-mode text only — supplied by
+  `prompts.mode_fragment`, no other call site). A fact left None defines no
+  variable, so a directive referencing it raises. `{{include <name>}}` targets
+  resolve through the `prompts` loader. The directive reference is
+  `reference/template.md`.
   """
   if '{{' not in text:
     return text
-  return template.render(text, _surface_variables(harness, wire, creds), _load_prompt)
+  return template.render(text, _surface_variables(harness, wire, creds, mode), _load_prompt)
 
 
 def _load_prompt(name: str) -> str:
@@ -78,7 +89,10 @@ def select[T](
 
 
 def _surface_variables(
-  harness: Optional[Harness], wire: Optional[Wire], creds: Optional[Iterable[str]]
+  harness: Optional[Harness],
+  wire: Optional[Wire],
+  creds: Optional[Iterable[str]],
+  mode: Optional[str] = None,
 ) -> dict[str, condition.StringVariable | condition.SetVariable | bool]:
   variables: dict[str, condition.StringVariable | condition.SetVariable | bool] = {}
   if harness is not None:
@@ -91,6 +105,10 @@ def _surface_variables(
     variables['wire'] = condition.StringVariable(wire, domain=_WIRES)
   if creds is not None:
     variables['creds'] = condition.SetVariable(credentials.available, universe=frozenset(creds))
+  if mode is not None:
+    if mode not in _MODES:
+      raise ValueError(f'unknown session mode {mode!r}; known: {", ".join(MODES)}')
+    variables['mode'] = condition.StringVariable(mode, domain=_MODES)
   return variables
 
 

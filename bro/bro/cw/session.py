@@ -38,7 +38,7 @@ class SessionSpec:
   name: str
   host: bool
   drop: bool
-  auto: bool
+  mode: str
   fast: bool
   grant_cred: list[str]
   revoke_cred: list[str]
@@ -70,17 +70,18 @@ class SessionSpec:
     """reconstruct this session as `cw ss` argv tokens.
 
     used for CW_COMMAND (the session as launched) and, via resume_variant, the
-    exit resume hint — so both carry the same forwarded flags (--auto,
+    exit resume hint — so both carry the same forwarded flags (--mode,
     --grant-cred, --effort, ...).
     """
     flags = {
       '--host': self.host,
-      '--auto': self.auto,
       '--fast': self.fast,
       '--drop': self.drop,
       '--resume': self.resume,
     }
     parts = ['cw', 'ss', *(f for f, v in flags.items() if v)]
+    if self.mode != 'guided':
+      parts.extend(['--mode', self.mode])
     if self.effort is not None:
       parts.extend(['--effort', self.effort])
     if self.persona is not None:
@@ -109,8 +110,10 @@ class SessionSpec:
     drops the flags the outer already consumed (--host --drop --grant-cred
     --revoke-cred --grant-summon --revoke-summon --into). the prompt uses the
     joined `=` form so a prompt starting with `-` can't be mistaken for a flag."""
-    flags = {'--auto': self.auto, '--fast': self.fast, '--resume': self.resume}
+    flags = {'--fast': self.fast, '--resume': self.resume}
     parts = ['ss', '--in-place', *(f for f, v in flags.items() if v)]
+    if self.mode != 'guided':
+      parts.extend(['--mode', self.mode])
     if self.effort is not None:
       parts.extend(['--effort', self.effort])
     if self.persona is not None:

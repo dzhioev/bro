@@ -70,10 +70,12 @@ class TestCwSessionLaunch:
     argv = _cw_session_launch(_spec(effort='xhigh'), claude_args=[]).argv
     assert argv[argv.index('--effort') + 1] == 'xhigh'
 
-  def test_auto_skips_permissions(self):
-    assert (
-      '--dangerously-skip-permissions' in _cw_session_launch(_spec(auto=True), claude_args=[]).argv
-    )
+  @pytest.mark.parametrize('mode', ['unattended', 'detached', 'attended'])
+  def test_non_guided_modes_skip_permissions(self, mode):
+    argv = _cw_session_launch(_spec(mode=mode), claude_args=[]).argv
+    assert '--dangerously-skip-permissions' in argv
+
+  def test_guided_mode_keeps_permission_prompts(self):
     assert '--dangerously-skip-permissions' not in _cw_session_launch(_spec(), claude_args=[]).argv
 
   def test_mcp_config_covers_the_personas_namespaces(self):
@@ -170,14 +172,16 @@ class TestBroLaunch:
     # the flavor whose tool-name rule matches the mcp__<namespace>__<tool> mounts
     assert '`mcp__namespace__tool`' in prompt
 
-  def test_mode_fragment_follows_auto(self):
-    manual = self._launch().system_prompt
-    assert '# Manual session' in manual
-    assert '# Autonomous session' not in manual
-    auto = self._launch(auto=True)
-    assert '# Autonomous session' in auto.system_prompt
-    assert 'Land mode: PR' in auto.system_prompt
-    assert '--dangerously-skip-permissions' in auto.argv
+  def test_mode_fragment_follows_the_mode(self):
+    guided = self._launch().system_prompt
+    assert '# Guided session' in guided
+    assert 'Land mode: PR' not in guided
+    attended = self._launch(mode='attended')
+    assert '# Attended session' in attended.system_prompt
+    assert 'Land mode: PR' in attended.system_prompt
+    # the fragment renders at build — no directive may leak into the prompt
+    assert '{{' not in attended.system_prompt
+    assert '--dangerously-skip-permissions' in attended.argv
 
   def test_unknown_bro_raises(self):
     with pytest.raises(KeyError, match='unknown bro'):

@@ -44,7 +44,7 @@ class _Harness:
     entered = [p.__enter__() for p in self._patches]
     self.env = entered[0]
     self.env.pop('CW_BRO', None)
-    self.env.pop('CW_AUTO', None)
+    self.env.pop('CW_MODE', None)
     self.env.pop('CW_RUNNER_PID', None)
     self.env.pop('BROKER_CHANNEL', None)
     self.env.pop('CLAUDE_CONFIG_DIR', None)
@@ -159,25 +159,25 @@ class TestRunInPlace:
   def test_exports_bro_git_identity_unconditionally(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      # no --auto: every session commits as bro, autonomy-independent
+      # a guided session: every session commits as bro, mode-independent
       assert cw.runner.run_in_place(_spec()) == 0
       assert h.env['GIT_AUTHOR_NAME'] == 'bro'
       assert h.env['GIT_COMMITTER_EMAIL'] == 'dzhioev+bro@gmail.com'
 
-  def test_exports_cw_auto_for_auto_sessions(self, monkeypatch, tmp_path):
+  def test_exports_the_session_mode(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert cw.runner.run_in_place(_spec(auto=True)) == 0
-      assert h.env['CW_AUTO'] == '1'
+      assert cw.runner.run_in_place(_spec(mode='unattended')) == 0
+      assert h.env['CW_MODE'] == 'unattended'
 
-  def test_clears_ambient_cw_auto_for_manual_sessions(self, monkeypatch, tmp_path):
-    # a manual session launched from inside an --auto one must not inherit the
-    # mode (the MCP server would mount `raise` for an attended session)
+  def test_overwrites_the_ambient_mode(self, monkeypatch, tmp_path):
+    # a session launched from inside an unattended one must not inherit the
+    # mode (the MCP server would mount `raise` for a guided session)
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      h.env['CW_AUTO'] = '1'
+      h.env['CW_MODE'] = 'unattended'
       assert cw.runner.run_in_place(_spec()) == 0
-      assert 'CW_AUTO' not in h.env
+      assert h.env['CW_MODE'] == 'guided'
 
   def test_exports_its_own_pid_as_the_raise_kill_target(self, monkeypatch, tmp_path):
     # overwriting the ambient value: an inherited pid would name a foreign runner

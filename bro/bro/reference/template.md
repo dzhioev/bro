@@ -40,10 +40,11 @@ file      := prompt file name           file: [A-Za-z0-9._/-]+
 
 ## Rendering surfaces
 
-`llm.mcp.render_text(text, harness=…, wire=…, creds=…)` renders directives against the facts the call site knows (the facts triple is documented in `reference/conditions.md`) and resolves `{{include}}` targets through the `prompts.py` loader. Each surface renders its copy once, with its own facts:
+`llm.mcp.render_text(text, harness=…, wire=…, creds=…, mode=…)` renders directives against the facts the call site knows (the facts, `#mode`'s single-purpose supply rule included, are documented in `reference/conditions.md`) and resolves `{{include}}` targets through the `prompts.py` loader. Each surface renders its copy once, with its own facts:
 
 - `BaseBro.__init__` — the two bro prompt flavors (harness `bro`; wire `bare` / `mcp`)
 - `cw/system_prompt.py` — a cw-session's append prompt, the injected persona included (harness `claude`, wire `mcp`)
+- `prompts.mode_fragment` — the session-mode text (`prompts/session_mode.md` selecting over `prompts/session_modes/`), the only surface that supplies `#mode`
 - skill bodies — the `bro::skill` service tool serves harness `bro`; `cw` populates a cw-session with `claude`-rendered `SKILL.md` copies
 - tool descriptions and data-source summaries — rendered against the component's declared secrets at the assembling layer (`llm.mcp` `_NamespacedTool`, `mcp-server`, `bro show`)
 - `FileSource.read` — no facts: one rendering is read by every harness, so a served doc must be surface-neutral and a `#harness`/`#wire`/`#creds` directive raises; `render=False` opts a source out entirely, for a doc whose payload is the directive syntax itself (this reference and `reference/conditions.md`)

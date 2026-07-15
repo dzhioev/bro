@@ -1,4 +1,10 @@
 from pathlib import Path
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+  from collections.abc import Iterable
+
+  from llm.mcp import Harness, Wire
 
 _PROMPTS_DIR = (Path(__file__).parent / 'prompts').resolve()
 
@@ -30,3 +36,23 @@ def get_prompt(file_name: str, **kwargs) -> str:
   if is_template:
     return text.format(**kwargs)
   return text
+
+
+def mode_fragment(
+  mode: str,
+  *,
+  harness: Optional['Harness'] = None,
+  wire: Optional['Wire'] = None,
+  creds: Optional['Iterable[str]'] = None,
+) -> str:
+  """render the session-mode fragment for `mode` — the one rendering path every
+  injection site uses, so the `{{…}}` directives in the mode text never leak
+  unrendered. `session_mode.md` selects the per-level file on the `#mode` fact,
+  which only this call supplies: everything else renders mode-neutrally and a
+  stray `#mode` directive there raises.
+  """
+  import llm.mcp  # lazy: keeps the loader importable without the llm layer
+
+  return llm.mcp.render_text(
+    get_prompt('session_mode.md'), mode=mode, harness=harness, wire=wire, creds=creds
+  ).strip()

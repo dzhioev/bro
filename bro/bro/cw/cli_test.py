@@ -16,15 +16,26 @@ class TestSsValidation:
     assert spec.host
     assert spec.grant_cred == ['gmail_creds']
 
-  def test_ss_auto_with_host_is_accepted(self):
-    # host sessions may run autonomously; the container default is the sandbox,
-    # an explicit --host opts out of it
+  def test_ss_non_guided_mode_with_host_is_accepted(self):
+    # host sessions may skip permission prompts; the container default is the
+    # sandbox, an explicit --host opts out of it
     with patch('cw.cli.start_session', return_value=0) as fake_start:
-      rc = cw.cli.main(['cw', 'ss', '--host', '--auto', 'w'])
+      rc = cw.cli.main(['cw', 'ss', '--host', '--mode', 'attended', 'w'])
     assert rc == 0
     spec = fake_start.call_args[0][0]
     assert spec.host
-    assert spec.auto
+    assert spec.mode == 'attended'
+
+  def test_ss_mode_defaults_to_guided(self):
+    with patch('cw.cli.start_session', return_value=0) as fake_start:
+      rc = cw.cli.main(['cw', 'ss', 'w'])
+    assert rc == 0
+    assert fake_start.call_args[0][0].mode == 'guided'
+
+  def test_ss_rejects_an_unknown_mode(self, capsys):
+    with pytest.raises(SystemExit):
+      cw.cli.main(['cw', 'ss', '--mode', 'automatic', 'w'])
+    assert 'invalid choice' in capsys.readouterr().err
 
   def test_ss_bro_with_host_errors(self, capsys):
     with pytest.raises(SystemExit):
@@ -83,13 +94,14 @@ class TestInPlace:
       cw.cli.main(['cw', 'ss', '--in-place', '--grant-summon', 'devoops', 'w'])
     assert '--in-place cannot be combined with --grant-summon' in capsys.readouterr().err
 
-  def test_auto_carried_in_the_inner_argv(self):
-    # the inner argv carries --auto but never --host; the outer consumed the mode
+  def test_mode_carried_in_the_inner_argv(self):
+    # the inner argv carries --mode but never --host; the outer consumed the
+    # execution mode
     with patch('cw.cli.run_in_place', return_value=0) as fake_run:
-      rc = cw.cli.main(['cw', 'ss', '--in-place', '--auto', 'w'])
+      rc = cw.cli.main(['cw', 'ss', '--in-place', '--mode', 'attended', 'w'])
     assert rc == 0
     spec = fake_run.call_args[0][0]
-    assert spec.auto
+    assert spec.mode == 'attended'
     assert not spec.host
 
   def test_skips_the_bro_gates(self):

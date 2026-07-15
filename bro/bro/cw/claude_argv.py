@@ -14,9 +14,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
+import prompts
+from base import credentials
 from cw.constants import _CW_MODEL
 from cw.mcp import MCPEndpoint, _http_mcp_config
-from cw.system_prompt import _mode_prompt, _session_append_prompt
+from cw.system_prompt import _session_append_prompt
 
 if TYPE_CHECKING:
   from cw.session import SessionSpec
@@ -94,7 +96,12 @@ def build_claude_launch(
   mcp_config = _http_mcp_config(namespaces, port=endpoint.port, token=endpoint.token)
   if spec.bro is not None:
     settings['apiKeyHelper'] = str(workspace / 'setup' / 'print_anthropic_key.sh')
-    system_prompt = f'{bro.claude_system_prompt}\n\n{_mode_prompt(spec.auto)}'
+    # the mode fragment renders here — appending the raw file would leak its
+    # directives — with the --bro surface's facts: bro harness over mcp wire
+    fragment = prompts.mode_fragment(
+      spec.mode, harness='bro', wire='mcp', creds=credentials.known_names()
+    )
+    system_prompt = f'{bro.claude_system_prompt}\n\n{fragment}'
     argv += [
       '--bare',
       '--strict-mcp-config',
@@ -110,7 +117,7 @@ def build_claude_launch(
       ','.join(f'mcp__{namespace}__*' for namespace in namespaces),
     ]
   else:
-    system_prompt = _session_append_prompt(spec.auto, spec.session_bro)
+    system_prompt = _session_append_prompt(spec.mode, spec.session_bro)
     argv += [
       '--disallowed-tools',
       'mcp__claude_ai_*',
@@ -121,7 +128,7 @@ def build_claude_launch(
       '--append-system-prompt',
       system_prompt,
     ]
-  if spec.auto:
+  if spec.mode != 'guided':
     argv.append('--dangerously-skip-permissions')
   if spec.effort is not None:
     argv += ['--effort', spec.effort]

@@ -14,10 +14,18 @@ def add_forwarded_flags(parser: Parser) -> None:
     action='store_true',
     help='run on the host in a same-machine git worktree instead of the default isolated docker container',
   )
+  # imported here, not at module level: llm pulls asyncio (~150ms) and this
+  # module sits on every `import cw`
+  from llm.mcp import MODES
+
   parser.add_argument(
-    '--auto',
-    action='store_true',
-    help='let claude run autonomously, skipping most permissions (unsandboxed when combined with --host)',
+    '--mode',
+    default='guided',
+    choices=MODES,
+    help='user-involvement level: unattended = no human channel, detached = launched and left, '
+    'attended = human watching while the work runs autonomously, guided = human drives each step '
+    '(default). every level but guided skips permission prompts (unsandboxed when combined with '
+    '--host)',
   )
   parser.add_argument(
     '--fast',

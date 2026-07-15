@@ -16,7 +16,7 @@ from bro.datasources.base import DataSource
 from llm.llm import LLM, LLMSpec
 from llm.observer import BoringRenderer, NullObserver, Observer
 from llm.tracker import EndReason, HTTPTracker, NullTracker, Tracker
-from prompts import get_prompt
+from prompts import get_prompt, mode_fragment
 
 DEFAULT_LLM_SPEC: LLMSpec = llm.llms.chat_gpt.LLMSpec()
 
@@ -461,28 +461,10 @@ def _build_service_server(
 
 
 def _unattended_claude_session() -> bool:
-  # CW_AUTO marks the session unattended, CW_RUNNER_PID makes it terminatable
-  # (both exported by cw's in-place runner); `raise` needs both.
-  return os.environ.get('CW_AUTO') is not None and os.environ.get('CW_RUNNER_PID') is not None
-
-
-_NON_INTERACTIVE_NOTE = (
-  'You are running in non-interactive mode — this is a one-shot invocation '
-  'with no follow-up turn. If you cannot fulfill the request (missing '
-  'credentials, no appropriate tool or data source, contradictory '
-  'constraints, genuinely ambiguous scope, the input is unclear or cannot '
-  'be understood, or any other blocker), call the `raise` tool with a clear '
-  'reason instead of producing a partial or speculative answer or asking a '
-  'clarifying question — there is no one to answer it.'
-)
-
-_INTERACTIVE_NOTE = (
-  'You are running in interactive mode — there is a human on the other end '
-  'of the conversation and your reply will be followed by further turns. '
-  'When the request is unclear, ambiguous, or missing context, ask a '
-  'clarifying question instead of guessing. There is no `raise` tool here; '
-  'just describe any blocker in your reply.'
-)
+  # CW_MODE carries the session's user-involvement level, CW_RUNNER_PID makes
+  # it terminatable (both exported by cw's in-place runner); `raise` needs an
+  # unattended session and a runner to signal.
+  return os.environ.get('CW_MODE') == 'unattended' and os.environ.get('CW_RUNNER_PID') is not None
 
 
 def _component_needed_secrets(component: llm.mcp.MCPServerSpec | DataSource) -> set[str]:
@@ -922,13 +904,17 @@ class BaseBro(ABC):
     return servers
 
   def _system_prompt_for(self, *, interactive: bool) -> str:
-    # the run mode is known here, at run start, so the matching session-mode
+    # the run mode is pinned here, at run start, so the matching session-mode
     # fragment is injected rather than detected by the agent: interactive runs
-    # are manual sessions, non-interactive ones autonomous (the fragment pair
-    # is documented in prompts/CLAUDE.md).
-    note = _INTERACTIVE_NOTE if interactive else _NON_INTERACTIVE_NOTE
-    mode = get_prompt('manual_session.md' if interactive else 'autonomous_session.md').strip()
-    return f'{self.system_prompt}\n\n{note}\n\n{mode}'
+    # (send(), the assistant server, `call`) are guided, non-interactive ones
+    # (run()) unattended (the level files are documented in prompts/CLAUDE.md).
+    fragment = mode_fragment(
+      'guided' if interactive else 'unattended',
+      harness='bro',
+      wire='bare',
+      creds=credentials.known_names(),
+    )
+    return f'{self.system_prompt}\n\n{fragment}'
 
   def _make_observer(self) -> Observer:
     return BoringRenderer(prefix=self.name)

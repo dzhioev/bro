@@ -963,8 +963,8 @@ class TestClaudePersonaServers:
     SkillBro.__module__ = package
     names = asyncio.run(_collect_tool_names(SkillBro().claude_persona_mcp_servers()))
     # skills reach a cw-session as slash commands, and `raise` is gated on the
-    # session mode (attended here — no CW_AUTO); the environment facts stay
-    # available as `banner`
+    # session mode (not unattended here — no CW_MODE); the environment facts
+    # stay available as `banner`
     assert 'banner' in names
     assert 'skill' not in names
     assert 'raise' not in names
@@ -1252,7 +1252,7 @@ class TestClaudeRaise:
   runner (no exception can abort the consuming harness)."""
 
   def test_unattended_claude_builds_mount_raise(self, monkeypatch):
-    monkeypatch.setenv('CW_AUTO', '1')
+    monkeypatch.setenv('CW_MODE', 'unattended')
     monkeypatch.setenv('CW_RUNNER_PID', '4242')
     bro = EchoBro()
     assert 'raise' in asyncio.run(_collect_tool_names(bro.claude_persona_mcp_servers()))
@@ -1260,9 +1260,17 @@ class TestClaudeRaise:
 
   def test_mode_alone_does_not_mount_raise(self, monkeypatch):
     # no runner pid means nothing to terminate — no tool
-    monkeypatch.setenv('CW_AUTO', '1')
+    monkeypatch.setenv('CW_MODE', 'unattended')
     names = asyncio.run(_collect_tool_names(EchoBro().claude_persona_mcp_servers()))
     assert 'raise' not in names
+
+  def test_other_skip_permission_modes_do_not_mount_raise(self, monkeypatch):
+    # detached and attended sessions have a human to report to — no abort tool
+    monkeypatch.setenv('CW_RUNNER_PID', '4242')
+    for mode in ('detached', 'attended', 'guided'):
+      monkeypatch.setenv('CW_MODE', mode)
+      names = asyncio.run(_collect_tool_names(EchoBro().claude_persona_mcp_servers()))
+      assert 'raise' not in names
 
   async def _mcp_raise_tool(self):
     server = bro.bro._build_service_server(
@@ -1318,16 +1326,16 @@ class TestClaudeRaise:
 
 
 class TestSessionModePrompts:
-  def test_non_interactive_system_prompt_includes_note(self):
+  def test_non_interactive_runs_pin_the_unattended_mode(self):
     bro = EchoBro()
     prompt = bro._system_prompt_for(interactive=False)
-    assert 'non-interactive' in prompt
     assert '`raise`' in prompt
     assert 'unclear' in prompt
     assert bro.system_prompt in prompt
-    # the launch-time session-mode fragment rides along with the note
-    assert '# Autonomous session' in prompt
-    assert '# Manual session' not in prompt
+    assert '# Unattended session' in prompt
+    assert '# Guided session' not in prompt
+    # the fragment renders at run start — no directive may leak
+    assert '{{' not in prompt
 
   @pytest.mark.asyncio
   async def test_raise_tool_description_covers_unclear_input(self):
@@ -1335,16 +1343,13 @@ class TestSessionModePrompts:
     tool = await _find_raise_tool(bro)
     assert 'unclear' in tool.description
 
-  def test_interactive_system_prompt_includes_note(self):
+  def test_interactive_runs_pin_the_guided_mode(self):
     bro = EchoBro()
     prompt = bro._system_prompt_for(interactive=True)
-    assert 'non-interactive' not in prompt
-    assert 'interactive mode' in prompt
     assert 'clarifying question' in prompt
     assert bro.system_prompt in prompt
-    # the launch-time session-mode fragment rides along with the note
-    assert '# Manual session' in prompt
-    assert '# Autonomous session' not in prompt
+    assert '# Guided session' in prompt
+    assert '# Unattended session' not in prompt
 
 
 class TestBannerTool:
@@ -1736,7 +1741,7 @@ class TestSkillsDiscovery:
   def test_claude_bro_servers_carry_skill_tool(self, fake_packages):
     # the `cw ss --bro` surface reaches skills through the `skill` tool (--bare
     # gives no slash commands), so claude_bro_mcp_servers must carry it — and not
-    # `raise`, since this session is attended (no CW_AUTO).
+    # `raise`, since this session is not unattended (no CW_MODE).
     package = fake_packages('_skills_claude', {'epic': _skill('drive an epic', 'epic body')})
 
     class SkillBro(BaseBro):
