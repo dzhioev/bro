@@ -129,6 +129,14 @@ async def next_event(listener: FakeListener):
   return await asyncio.wait_for(listener.events.get(), TIMEOUT)
 
 
+async def until(predicate) -> None:
+  """yield to the loop until |predicate| holds; TIMEOUT bounds only a genuine hang"""
+  deadline = asyncio.get_running_loop().time() + TIMEOUT
+  while not predicate():
+    assert asyncio.get_running_loop().time() < deadline, 'condition not met within TIMEOUT'
+    await asyncio.sleep(0)
+
+
 def _sock_files(control_dir: str) -> list[str]:
   if not os.path.isdir(control_dir):
     return []
@@ -215,16 +223,18 @@ async def test_early_exit_reports_code_and_output_tail(socket_dir):
 @pytest.mark.asyncio
 async def test_timeout_kills_then_reports_timeout_and_exit(socket_dir):
   async with runtime_harness(socket_dir) as env:
-    peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_HANG), timeout=0.3)
+    peer = await env.runtime.spawn(LocalLaunchSpec(_CHILD_HANG), timeout=3600.0)
 
-    # the child's connect/started may or may not land before the timer fires —
-    # interpreter cold start races the 0.3s timeout on a loaded machine. the
-    # contract is the tail: a timeout event, then the kill's exit, nonzero.
-    while True:
-      event = await next_event(env.listener)
-      if event[0] not in ('connect', 'message'):
-        break
-    assert event == ('timeout', peer)  # emitted after the kill
+    assert await next_event(env.listener) == ('connect', peer)
+    assert (await next_event(env.listener))[0] == 'message'  # started
+    # fire the timeout deterministically: the timer runs from spawn, so any real
+    # duration races child startup; scheduling itself is call_later's contract,
+    # what's ours to test is the fire path — kill, then the event sequence
+    timer = env.runtime._peers[peer].timer
+    assert timer is not None  # spawn wired the timeout
+    timer.cancel()
+    env.runtime._fire_timeout(peer)
+    assert await next_event(env.listener) == ('timeout', peer)  # emitted after the kill
     kind, exited_peer, code, _ = await next_event(env.listener)
     assert (kind, exited_peer) == ('exit', peer)
     assert code != 0  # reaped after the kill signal
@@ -264,8 +274,7 @@ async def test_forget_drops_channel_without_exit(socket_dir):
     assert await next_event(env.listener) == ('connect', peer)
     assert (await next_event(env.listener))[0] == 'message'  # started
     env.runtime.forget(peer)
-    await asyncio.sleep(0.1)  # let the scheduled transport.close run
-    assert _sock_files(env.control_dir) == []
+    await until(lambda: _sock_files(env.control_dir) == [])  # the scheduled transport.close ran
     assert env.listener.events.empty()  # a forgotten peer's exit is not reported
 
 
@@ -285,6 +294,5 @@ async def test_launch_failure_rolls_back_registration(socket_dir):
     with pytest.raises(RuntimeError):
       await env.runtime.spawn(LocalLaunchSpec(_CHILD_COMPLETE), timeout=None)
 
-    await asyncio.sleep(0.05)  # let the rollback's transport.close run
-    assert _sock_files(env.control_dir) == []
+    await until(lambda: _sock_files(env.control_dir) == [])  # the rollback's transport.close ran
     assert env.listener.events.empty()

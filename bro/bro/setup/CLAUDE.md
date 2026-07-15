@@ -46,7 +46,7 @@ Worktrees get their own `.venv`. `cw` (host mode) creates the worktree and runs 
 
 Credentials live in the standalone `~/.ppp` store; the repo no longer carries them. Readers resolve them through `base.credentials` — `credentials.default_store().get_json(name)` — which searches `<repo>/.configs` (where the deployed services synthesize their configs at runtime) then `~/.ppp`. The built-in registry maps each secret name below to its `<file>`. The `credentials get <name> [--field <key>]` CLI exposes the same resolver to non-Python callers (e.g. the Anthropic apiKeyHelper), while `credentials list` prints the names that resolve in the current store; host scripts that write new secrets write directly to `~/.ppp`.
 
-- `notion.json` — Notion token + database IDs (`tasks_db_id`, `events_db_id`, `projects_db_id`, `media_db_id`)
+- `notion.json` — Notion token + database IDs (`tasks_db_id`, `events_db_id`, `projects_db_id`, `media_db_id`) + `root_page_id`, the fixed parent page all `create_page` pages land under
 - `google_api.json` — Google OAuth client config
 - `gmail_creds.json` — cached Gmail OAuth token (JSON-serialised)
 - `flow_mcp.json` — `{ "url": "https://flow.<delegated_subdomain>", "token": "<bearer-token>" }` for the deployed flow MCP server (external MCP clients — Claude apps, agents on other hosts)
