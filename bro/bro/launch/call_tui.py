@@ -6,7 +6,6 @@ from typing import Any, ClassVar, Optional
 
 import rich.markdown
 from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderResult
-from rich.markup import escape as rich_escape
 from rich.measure import Measurement
 from rich.segment import Segment
 from rich.syntax import Syntax
@@ -15,6 +14,7 @@ from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, VerticalScroll
+from textual.content import Content
 from textual.screen import ModalScreen
 from textual.selection import Selection
 from textual.strip import Strip
@@ -156,7 +156,10 @@ class MessageBubble(Static):
     timestamp = when.strftime('%H:%M')
     self._visual: Optional[SelectableRichVisual] = None
     if isinstance(text, str):
-      super().__init__(f'{rich_escape(text)}\n[dim]{timestamp}[/dim]', classes=classes, markup=True)
+      # never parse chat text as content markup: Textual's grammar reads any
+      # bare `[` as a tag opener and `markup.escape` doesn't cover its full
+      # grammar, so escaped text can still crash the compositor (MarkupError)
+      super().__init__(Content.assemble(text, '\n', (timestamp, 'dim')), classes=classes)
     else:
       # pre-rendered content (e.g. a ChatMarkdown reply, the ANSI-decoded cw
       # banner); append the timestamp as a dim line without running it through
@@ -193,7 +196,9 @@ class SystemBubble(Static):
   """
 
   def __init__(self, text: str):
-    super().__init__(rich_escape(text), markup=True)
+    # markup=False for the reason on MessageBubble: escaping can't make
+    # arbitrary trace text safe for the content-markup parser
+    super().__init__(text, markup=False)
 
 
 class BubbleRow(Container):
@@ -281,7 +286,7 @@ class StatsScreen(ModalScreen):
 
   def compose(self) -> ComposeResult:
     with Container():
-      yield Static(self._card)
+      yield Static(self._card, markup=False)
 
   def on_key(self, event) -> None:
     self.dismiss()

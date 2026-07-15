@@ -648,6 +648,42 @@ async def test_tui_markdown_bubble_copy_reflows_to_logical_lines(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_tui_survives_markup_like_text(monkeypatch):
+  from textual.selection import SELECT_ALL
+
+  from do.call_tui import ChatApp, MessageBubble, StatsScreen, SystemBubble
+
+  monkeypatch.setattr('cw.render_banner', lambda llm=False, bro=None: 'BANNER')
+  # the shape that crashed the compositor: a bare `[` opens what Textual's
+  # content-markup grammar reads as a tag with key=value pairs inside, and
+  # rich.markup.escape does not neutralize it
+  trace = "→ flow::list_tasks [x=1, statuses=['done', 'dropped'], input=3]"
+  message = "please retry [a=b, statuses=['done', 'dropped']]"
+  app = ChatApp(RecordBro(), None)
+  async with app.run_test(size=(120, 40)) as pilot:
+    app.append_trace_line(trace)
+    app._append_user_message(message, when=datetime(2026, 5, 28, 12, 34, 56))
+    # reflow renders every bubble — where the MarkupError used to raise
+    await pilot.pause()
+    system = app.query(SystemBubble).last()
+    app.screen.selections = {system: SELECT_ALL}
+    assert app.screen.get_selected_text() == trace
+    user = app.query(MessageBubble).last()
+    app.screen.selections = {user: SELECT_ALL}
+    assert app.screen.get_selected_text() == f'{message}\n12:34'
+    # the timestamp line keeps its dim style without a markup parse
+    timestamp_styles = {
+      segment.text.strip(): segment.style
+      for segment in user.render_line(1)
+      if segment.style is not None
+    }
+    assert timestamp_styles['12:34'].dim is True
+    # the stats card is arbitrary text too
+    await app.push_screen(StatsScreen(f'card {trace}'))
+    await pilot.pause()
+
+
+@pytest.mark.asyncio
 async def test_tui_copies_selection_to_clipboard_on_mouse_up(monkeypatch):
   from textual.events import TextSelected
   from textual.selection import SELECT_ALL
