@@ -4,11 +4,12 @@ import asyncio
 from datetime import date, datetime
 from typing import Any, ClassVar, Optional
 
+import rich.markdown
 from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderResult
-from rich.markdown import Markdown
 from rich.markup import escape as rich_escape
 from rich.measure import Measurement
 from rich.segment import Segment
+from rich.syntax import Syntax
 from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
@@ -19,10 +20,12 @@ from textual.selection import Selection
 from textual.strip import Strip
 from textual.style import Style
 from textual.visual import RenderOptions, RichVisual
+from textual.widget import Widget
 from textual.widgets import Input, Static
 
 from bro.bros.bro import Bro
 from bro.show import format_card
+from do._reflow import Reflow
 from do._trace_format import compact_value, oneline, truncate
 from do.call import DATE_FORMAT
 from do.resume import HistoryMessage
@@ -31,8 +34,16 @@ from llm.observer import Observer
 _TRACE_VALUE_LIMIT = 200
 
 
-class ChatMarkdown:
-  """`rich.markdown.Markdown` with content-hugging width measurement.
+class UnpaddedCodeBlock(rich.markdown.CodeBlock):
+  """`rich.markdown.CodeBlock` without its decorative padding — the pad column would
+  put an invented leading space (and blank pad lines) into every copied code line."""
+
+  def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+    yield Syntax(str(self.text).rstrip(), self.lexer_name, theme=self.theme, word_wrap=True)
+
+
+class ChatMarkdown(rich.markdown.Markdown):
+  """rich Markdown with content-hugging width measurement and unpadded code blocks.
 
   rich's Markdown reports no measurement of its own, so a `width: auto` widget
   gives it the full available width and every bubble stretches to its
@@ -41,14 +52,18 @@ class ChatMarkdown:
   keep tight bubbles.
   """
 
-  def __init__(self, text: str):
-    self._text = text
-
-  def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
-    yield Markdown(self._text)
+  elements: ClassVar[dict[str, type[rich.markdown.MarkdownElement]]] = {
+    **rich.markdown.Markdown.elements,
+    'fence': UnpaddedCodeBlock,
+    'code_block': UnpaddedCodeBlock,
+  }
 
   def __rich_measure__(self, console: Console, options: ConsoleOptions) -> Measurement:
-    return Measurement.get(console, options, Text(self._text))
+    return Measurement.get(console, options, Text(self.markup))
+
+
+# render width at which nothing soft-wraps, so only explicit line breaks remain
+_LOGICAL_RENDER_WIDTH = 16384
 
 
 class SelectableRichVisual(RichVisual):
@@ -57,19 +72,39 @@ class SelectableRichVisual(RichVisual):
   plain `RichVisual` ignores selection entirely: its strips carry no offset
   meta (so mouse hit-testing finds no text and a drag inside the widget
   selects nothing), the selection highlight is never painted, and there is no
-  text to extract. stamp the offsets, paint the selected span, and keep the
-  rendered text for the owning widget's `get_selection`.
+  text to extract. stamp the offsets, paint the selected span, and extract
+  copies through `Reflow` — the display lines aligned with a second, unwrapped
+  render — so copied text keeps the content's own line breaks instead of the
+  wrap points and padding of the on-screen rectangle.
   """
 
-  rendered_text: Optional[str] = None
+  def __init__(self, widget: Widget, renderable: RenderableType):
+    super().__init__(widget, renderable)
+    self._logical_lines: Optional[list[str]] = None
+    self._reflow: Optional[Reflow] = None
 
   def render_strips(
     self, width: int, height: Optional[int], style: Style, options: RenderOptions
   ) -> list[Strip]:
     strips = super().render_strips(width, height, style, options)
-    self.rendered_text = '\n'.join(strip.text for strip in strips)
+    if self._logical_lines is None:
+      self._logical_lines = self._render_logical_lines()
+    self._reflow = Reflow([strip.text for strip in strips], self._logical_lines)
     return [
       self._highlight(strip, y, options).apply_offsets(0, y) for y, strip in enumerate(strips)
+    ]
+
+  def extract_selection(self, selection: Selection) -> Optional[str]:
+    if self._reflow is None:
+      return None
+    return self._reflow.extract(selection.get_span)
+
+  def _render_logical_lines(self) -> list[str]:
+    app = self._widget.app
+    options = app.console_options.update(highlight=False, width=_LOGICAL_RENDER_WIDTH, height=None)
+    segments = app.console.render(self._renderable, options)
+    return [
+      ''.join(segment.text for segment in line).rstrip() for line in Segment.split_lines(segments)
     ]
 
   def _highlight(self, strip: Strip, y: int, options: RenderOptions) -> Strip:
@@ -130,13 +165,14 @@ class MessageBubble(Static):
       super().__init__(self._visual, classes=classes)
 
   def get_selection(self, selection: Selection) -> Optional[tuple[str, str]]:
-    # a rich-renderable bubble extracts from the text its visual rendered;
+    # a rich-renderable bubble extracts through its visual's reflow;
     # the plain-string case is Static's default (Content) extraction
     if self._visual is None:
       return super().get_selection(selection)
-    if self._visual.rendered_text is None:
+    extracted = self._visual.extract_selection(selection)
+    if extracted is None:
       return None
-    return selection.extract(self._visual.rendered_text), '\n'
+    return extracted, '\n'
 
 
 class SystemBubble(Static):

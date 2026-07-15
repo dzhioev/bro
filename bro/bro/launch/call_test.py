@@ -615,6 +615,39 @@ async def test_tui_drag_inside_markdown_bubble_selects_rendered_text(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_tui_markdown_bubble_copy_reflows_to_logical_lines(monkeypatch):
+  from textual.selection import SELECT_ALL
+
+  from do.call_tui import ChatApp, MessageBubble
+
+  monkeypatch.setattr('cw.render_banner', lambda llm=False, bro=None: 'BANNER')
+  command = (
+    'dive-in --auto --grant-cred notion -t "https://example.com/x" '
+    '"a long quoted argument that certainly wraps across the bubble width"'
+  )
+  paragraph = 'Great — moving to the verification phase next, with the notion grant in place.'
+  reply = f'{paragraph}\n\n```\n{command}\n```\n\n```python\ndef f():\n    return 1\n```'
+  app = ChatApp(RecordBro(), None)
+  async with app.run_test(size=(80, 40)) as pilot:
+    app._append_bro_message(reply)
+    await pilot.pause()
+    bubble = app.query(MessageBubble).last()
+    app.screen.selections = {bubble: SELECT_ALL}
+    copied = app.screen.get_selected_text()
+    assert copied is not None
+    lines = copied.split('\n')
+    # wrap points and padding never reach the copy: the paragraph and the fenced
+    # command each come back as the single line they were authored as, and the
+    # python block keeps its indentation
+    assert lines[0] == paragraph
+    assert lines[1] == ''
+    assert lines[2] == command
+    assert lines[3] == ''
+    assert lines[4:6] == ['def f():', '    return 1']
+    assert all(line == line.rstrip() for line in lines)
+
+
+@pytest.mark.asyncio
 async def test_tui_copies_selection_to_clipboard_on_mouse_up(monkeypatch):
   from textual.events import TextSelected
   from textual.selection import SELECT_ALL
