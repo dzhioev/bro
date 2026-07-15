@@ -27,7 +27,10 @@ _TRAILS_DISABLED_ENV = 'TRAILS_DISABLED'
 
 
 def _summoner_from_env() -> Optional[dict[str, Any]]:
-  raw = os.environ.get(SUMMONER_ENV)
+  # consumed on read: tool subprocesses inherit this process's environment, so a
+  # nested in-place run inside the summoned child's container must not re-stamp
+  # the parent's summoner on its own trail — it was not itself summoned
+  raw = os.environ.pop(SUMMONER_ENV, None)
   if raw is None:
     return None
   summoner = json.loads(raw)

@@ -205,6 +205,11 @@ class TestBroRun:
     monkeypatch.setenv('CW_SUMMONER', '{"target":"pm","trail_id":"T-parent"}')
     await TraceBro().run('hello', tracker=RecordingTracker())
     assert captured == [{'target': 'pm', 'trail_id': 'T-parent'}]
+    # consumed on read: a nested in-place run spawned by this process's tools
+    # must not inherit the marker and re-stamp the parent's summoner
+    assert 'CW_SUMMONER' not in os.environ
+    await TraceBro().run('again', tracker=RecordingTracker())
+    assert captured == [{'target': 'pm', 'trail_id': 'T-parent'}, None]
 
   @pytest.mark.asyncio
   async def test_run_end_reason_is_raised_on_bro_raised(self):
