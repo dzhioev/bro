@@ -4,7 +4,7 @@ import asyncio
 from datetime import date, datetime
 from typing import Any, ClassVar, Optional
 
-from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderResult
+from rich.console import Console, ConsoleOptions, Group, RenderResult
 from rich.markdown import Markdown
 from rich.markup import escape as rich_escape
 from rich.measure import Measurement
@@ -14,6 +14,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, VerticalScroll
 from textual.screen import ModalScreen
+from textual.selection import Selection
 from textual.widgets import Input, Static
 
 from bro.bros.bro import Bro
@@ -37,13 +38,13 @@ class ChatMarkdown:
   """
 
   def __init__(self, text: str):
-    self._text = text
+    self.source = text
 
   def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
-    yield Markdown(self._text)
+    yield Markdown(self.source)
 
   def __rich_measure__(self, console: Console, options: ConsoleOptions) -> Measurement:
-    return Measurement.get(console, options, Text(self._text))
+    return Measurement.get(console, options, Text(self.source))
 
 
 class MessageBubble(Static):
@@ -65,15 +66,23 @@ class MessageBubble(Static):
   }
   """
 
-  def __init__(self, text: RenderableType, *, by_user: bool, when: datetime):
+  def __init__(self, text: ChatMarkdown | Text | str, *, by_user: bool, when: datetime):
     classes = 'user' if by_user else 'bro'
     timestamp = when.strftime('%H:%M')
     if isinstance(text, str):
       super().__init__(f'{rich_escape(text)}\n[dim]{timestamp}[/dim]', classes=classes, markup=True)
+      plain = text
     else:
       # pre-rendered content (e.g. the ANSI-decoded cw banner); append the
       # timestamp as a dim line without running it through markup parsing
       super().__init__(Group(text, Text(timestamp, style='dim')), classes=classes)
+      plain = text.source if isinstance(text, ChatMarkdown) else text.plain
+    self._copy_text = f'{plain}\n{timestamp}'
+
+  def get_selection(self, selection: Selection) -> tuple[str, str]:
+    # the default extraction yields None for rich renderables (markdown
+    # replies, the banner), dropping them from the copied text
+    return selection.extract(self._copy_text), '\n'
 
 
 class SystemBubble(Static):
@@ -266,6 +275,13 @@ class ChatApp(App):
       return
     event.input.value = ''
     await self._submit(text)
+
+  def on_text_selected(self) -> None:
+    # copy-on-select (OSC 52); posted on every mouse-up, so a plain click
+    # must leave the clipboard alone
+    selected = self.screen.get_selected_text()
+    if selected is not None:
+      self.copy_to_clipboard(selected)
 
   def _append_user_message(self, text: str, when: Optional[datetime] = None) -> None:
     when = when if when is not None else datetime.now()

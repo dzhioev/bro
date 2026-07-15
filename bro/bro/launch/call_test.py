@@ -562,6 +562,57 @@ def test_chat_markdown_measurement_hugs_short_text():
   assert measurement.maximum == 2
 
 
+def test_message_bubble_selection_extracts_markdown_source():
+  from textual.selection import SELECT_ALL
+
+  from do.call_tui import ChatMarkdown, MessageBubble
+
+  bubble = MessageBubble(
+    ChatMarkdown('**bold** and [docs](https://example.com/x)'),
+    by_user=False,
+    when=datetime(2026, 5, 28, 12, 34, 56),
+  )
+  # the default Widget extraction returns None for rich renderables, dropping
+  # the bubble from copied text — the override extracts the authored source
+  text, ending = bubble.get_selection(SELECT_ALL)
+  assert text == '**bold** and [docs](https://example.com/x)\n12:34'
+  assert ending == '\n'
+
+
+def test_message_bubble_selection_honors_offsets():
+  from textual.geometry import Offset
+  from textual.selection import Selection
+
+  from do.call_tui import MessageBubble
+
+  bubble = MessageBubble('first\nsecond', by_user=True, when=datetime(2026, 5, 28, 12, 34, 56))
+  text, _ending = bubble.get_selection(Selection(Offset(0, 1), None))
+  assert text == 'second\n12:34'
+
+
+@pytest.mark.asyncio
+async def test_tui_copies_selection_to_clipboard_on_mouse_up(monkeypatch):
+  from textual.events import TextSelected
+  from textual.selection import SELECT_ALL
+
+  from do.call_tui import ChatApp, MessageBubble
+
+  monkeypatch.setattr('cw.render_banner', lambda llm=False, bro=None: 'BANNER')
+  app = ChatApp(RecordBro(), None)
+  async with app.run_test() as pilot:
+    # a plain click also posts TextSelected; with nothing selected the
+    # clipboard must stay untouched
+    app.screen.post_message(TextSelected())
+    await pilot.pause()
+    assert app.clipboard == ''
+    banner_bubble = app.query_one(MessageBubble)
+    app.screen.selections = {banner_bubble: SELECT_ALL}
+    app.screen.post_message(TextSelected())
+    await pilot.pause()
+    # the banner bubble's copy text is the plain banner plus its timestamp line
+    assert app.clipboard.startswith('BANNER\n')
+
+
 def test_tui_renderer_posts_one_line_per_event():
   from do.call_tui import TUIRenderer
 
