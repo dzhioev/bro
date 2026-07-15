@@ -46,7 +46,7 @@ Bearer token, mandatory by default; the no-auth escape hatch (`TRAILS_ALLOW_NO_A
 
 ## Deployment
 
-ECS Fargate behind the shared ALB at `trails.<apex>`; CDK stacks `TrailsEcrStack` + `TrailsServerStack` in `infra/cdk/trails_stack.py` (stack table in `infra/CLAUDE.md`). Both DynamoDB tables and the S3 bucket are `RETAIN` — trails outlive the stack.
+ECS Fargate behind the shared ALB at `trails.<apex>`; CDK stacks `TrailsECRStack` + `TrailsServerStack` in `infra/cdk/trails_stack.py` (stack table in `infra/CLAUDE.md`). Both DynamoDB tables and the S3 bucket are `RETAIN` — trails outlive the stack.
 
 First-time ordering: `bootstrap_secrets.sh` → `deploy.sh` → `setup/bootstrap_trails.sh` on each client machine.
 
