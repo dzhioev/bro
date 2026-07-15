@@ -138,6 +138,37 @@ class TestAssert:
     assert render(text, _harness('bro')) == 'B'
 
 
+class TestInsert:
+  def test_emits_the_string_variable_value(self):
+    assert render('from {{insert #source}}!', {'source': StringVariable('tmdb')}) == 'from tmdb!'
+
+  def test_emits_only_in_taken_branch(self):
+    text = '{{iff #harness = bro}}B{{else}}{{insert #harness}}{{end}}'
+    assert render(text, _harness('bro')) == 'B'
+    assert render(text, _harness('claude')) == 'claude'
+
+  def test_unknown_variable_raises_even_in_non_taken_branch(self):
+    with pytest.raises(TemplateError, match='unknown variable #nope'):
+      render('{{iff #harness = bro}}B{{else}}{{insert #nope}}{{end}}', _harness('bro'))
+
+  def test_set_variable_raises(self):
+    with pytest.raises(TemplateError, match='no text form'):
+      render('{{insert #creds}}', _creds('openai'))
+
+  def test_boolean_raises(self):
+    with pytest.raises(TemplateError, match='no text form'):
+      render('{{insert #true}}', {})
+
+  def test_literal_argument_raises(self):
+    with pytest.raises(TemplateError, match='takes a variable reference'):
+      render('{{insert source}}', {'source': StringVariable('tmdb')})
+
+  def test_inside_unevaluated_include_does_not_resolve(self):
+    files = {'x': '{{insert #foreign}}'}
+    text = '{{iff #harness = bro}}B{{else}}{{include x}}{{end}}'
+    assert render(text, _harness('bro'), _resolver(files)) == 'B'
+
+
 class TestValidation:
   def test_unknown_variable_raises(self):
     with pytest.raises(TemplateError, match='unknown variable #nope'):

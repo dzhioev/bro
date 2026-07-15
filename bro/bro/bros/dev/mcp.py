@@ -112,9 +112,12 @@ def edit_file(file_path: str, old_string: str, new_string: str, replace_all: boo
 
 @spec.tool(
   'run a bash command, capture stdout and stderr, and return exit code + combined '
-  'output. bash keeps the tail (shell diagnostics live at the end). limit and '
-  'timeout_seconds: see read_reference for the shared output cap and timeout '
-  'policies. use for shell work (git, sed, awk, find, …) that has no dedicated tool.'
+  'output. bash keeps the tail (shell diagnostics live at the end). '
+  '{{iff #tools contains read_reference}}limit and timeout_seconds: see read_reference '
+  'for the shared output cap and timeout policies.{{else}}output beyond `limit` is '
+  'trimmed to the tail with a skipped-content marker; on timeout_seconds expiry the '
+  'whole process group is killed and the tool returns TIMED OUT.{{end}} '
+  'use for shell work (git, sed, awk, find, …) that has no dedicated tool.'
 )
 def bash(
   command: str, limit: int = DEFAULT_LIMIT, timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS
@@ -148,8 +151,8 @@ def bash(
   'recursively search for pattern (extended regex) in files under path. glob filters '
   'which files to match (e.g. "*.py"). case_insensitive lowers the comparison. '
   'limit and timeout_seconds: see read_reference for the shared output cap and '
-  'timeout policies. backed by GNU grep — gitignore is NOT honored (unlike Claude '
-  "Code's ripgrep-backed Grep); pass a glob or narrower path to scope."
+  'timeout policies. backed by GNU grep — gitignore is NOT honored; pass a glob or '
+  'narrower path to scope.'
 )
 def grep(
   pattern: str,

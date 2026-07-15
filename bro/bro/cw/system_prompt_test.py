@@ -5,11 +5,11 @@ class TestSessionAppendPrompt:
   def test_includes_base_prompts(self):
     out = cw.system_prompt._session_append_prompt('guided', 'bro')
     assert 'Interaction policy' in out
-    assert 'Land mode: PR' not in out
+    assert 'full authorization' not in out
 
-  def test_non_guided_modes_add_land_mode(self):
+  def test_non_guided_modes_add_the_authorization_block(self):
     for mode in ('unattended', 'detached', 'attended'):
-      assert 'Land mode: PR' in cw.system_prompt._session_append_prompt(mode, 'bro')
+      assert 'full authorization' in cw.system_prompt._session_append_prompt(mode, 'bro')
 
   def test_guided_fragment(self):
     out = cw.system_prompt._session_append_prompt('guided', 'bro')

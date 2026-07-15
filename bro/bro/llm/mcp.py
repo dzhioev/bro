@@ -53,19 +53,23 @@ def render_text(
   mode: Optional[str] = None,
 ) -> str:
   """render `base.template` directives in static agent-facing text (system
-  prompts, skill bodies, tool descriptions) against the surface facts the call
-  site knows: `harness` → `#harness`, `wire` → `#wire`, `creds` → `#creds`
-  (the closed universe; membership probes `credentials.available` lazily, so
-  render in the process that consumes the text, where the store is the
-  session's own), `mode` → `#mode` (session-mode text only — supplied by
+  prompts, skill bodies, service-tool descriptions) against the surface facts
+  the call site knows: `harness` → `#harness`, `wire` → `#wire`, `creds` →
+  `#creds` (the closed universe; membership probes `credentials.available`
+  lazily, so render in the process that consumes the text, where the store is
+  the session's own), `mode` → `#mode` (session-mode text only — supplied by
   `prompts.mode_fragment`, no other call site). A fact left None defines no
   variable, so a directive referencing it raises. `{{include <name>}}` targets
   resolve through the `prompts` loader. The directive reference is
-  `reference/template.md`.
+  `reference/template.md`. Ordinary MCP-server tool text does not use these
+  facts: a server renders its own descriptions at build time against its own
+  vocabulary (`FunctionTool`'s `variables`, e.g. the `#tools` roster).
   """
   if '{{' not in text:
     return text
-  return template.render(text, _surface_variables(harness, wire, creds, mode), _load_prompt)
+  return template.render(
+    text, surface_variables(harness=harness, wire=wire, creds=creds, mode=mode), _load_prompt
+  )
 
 
 def _load_prompt(name: str) -> str:
@@ -85,15 +89,20 @@ def select[T](
   list against the same surface facts `render_text` renders with. a fact left
   None defines no variable, so a condition referencing it raises. The
   conditioning reference is `reference/conditions.md`."""
-  return condition.select(entries, _surface_variables(harness, wire, creds))
+  return condition.select(entries, surface_variables(harness=harness, wire=wire, creds=creds))
 
 
-def _surface_variables(
-  harness: Optional[Harness],
-  wire: Optional[Wire],
-  creds: Optional[Iterable[str]],
+def surface_variables(
+  *,
+  harness: Optional[Harness] = None,
+  wire: Optional[Wire] = None,
+  creds: Optional[Iterable[str]] = None,
   mode: Optional[str] = None,
 ) -> dict[str, condition.StringVariable | condition.SetVariable | bool]:
+  """the harness facts as a `Variables` mapping — what `render_text` / `select`
+  evaluate against. Public for the one tool surface allowed to condition on
+  system facts: the bro service-tool build injects these (plus its roster
+  vocabulary) into its tools' rendering variables."""
   variables: dict[str, condition.StringVariable | condition.SetVariable | bool] = {}
   if harness is not None:
     if harness not in _HARNESSES:
@@ -225,6 +234,33 @@ class ToolControlSignal(Exception):
   """
 
 
+def render_tool_text(text: str, variables: condition.Variables) -> str:
+  """render `base.template` directives in a tool's static text against the
+  owning server's rendering vocabulary (e.g. the `#tools` roster, a data
+  source's `#features`). Servers render at build time, so no unprocessed
+  directive ever leaves a server — with an empty vocabulary any directive that
+  references a variable raises instead of leaking."""
+  if '{{' not in text:
+    return text
+  return template.render(text, variables)
+
+
+def render_schema_text(node: Any, variables: condition.Variables) -> Any:
+  """`render_tool_text` over every `description` string of a JSON schema —
+  parameter annotations are agent-facing text and render like the tool
+  description they accompany."""
+  if isinstance(node, dict):
+    return {
+      key: render_tool_text(value, variables)
+      if key == 'description' and isinstance(value, str)
+      else render_schema_text(value, variables)
+      for key, value in node.items()
+    }
+  if isinstance(node, list):
+    return [render_schema_text(item, variables) for item in node]
+  return node
+
+
 class Tool(ABC):
   @property
   @abstractmethod
@@ -283,6 +319,11 @@ class MCPServer(ABC):
   # `namespace__tool` wire names; a per-namespace server host mounts it as the
   # endpoint. set by whatever builds the server.
   namespace: str
+  # the full tool roster of the definition this server was built from, when the
+  # build can scope to a subset (`Toolset.build`, the bro service server) — the
+  # closed `#tools` universe its descriptions rendered against. None: the
+  # server serves its whole definition.
+  tool_universe: Optional[tuple[str, ...]] = None
 
   @abstractmethod
   async def list_tools(self) -> list[Tool]: ...
@@ -325,6 +366,7 @@ class FunctionTool(Tool):
     name: Optional[str] = None,
     description: Optional[str] = None,
     state: Any = None,
+    variables: Optional[condition.Variables] = None,
   ):
     from mcp.server.fastmcp.utilities.func_metadata import func_metadata
 
@@ -335,8 +377,12 @@ class FunctionTool(Tool):
       raise ValueError(
         f'tool {function.__name__!r} has no description attribute and no description argument'
       )
+    # `variables` is the owning server's rendering vocabulary; the description
+    # and the parameter annotations render here, at construction, so the tool's
+    # text leaves the server fully resolved.
+    rendering_variables = variables if variables is not None else {}
     self._name = name if name is not None else function.__name__
-    self._description = resolved_description
+    self._description = render_tool_text(resolved_description, rendering_variables)
     self.function = function
     # `state` is the hosting server's per-server object; a function that declares a
     # Context parameter gets it injected (wrapped in a fresh Context) on every
@@ -349,10 +395,14 @@ class FunctionTool(Tool):
     structured = ret is not inspect.Signature.empty and ret is not str
     self._metadata = func_metadata(function, skip_names=skip, structured_output=structured)
     self._output_schema = self._metadata.output_schema
-    self._parameters = self._metadata.arg_model.model_json_schema(by_alias=True)
-    self._return_shape = (
-      render_return_shape(self._output_schema) if self._output_schema is not None else None
+    self._parameters = render_schema_text(
+      self._metadata.arg_model.model_json_schema(by_alias=True), rendering_variables
     )
+    shape = render_return_shape(self._output_schema) if self._output_schema is not None else None
+    # a shapeless `dict[str, Any]` return renders as a bare '{}' — it tells the
+    # LLM nothing and reads as contradicting prose that describes the payload,
+    # so the description carries no Returns line for it.
+    self._return_shape = shape if shape != '{}' else None
 
   @property
   def name(self) -> str:
@@ -450,10 +500,9 @@ class _NamespacedTool(Tool):
   and calls back with, the namespaced wire name.
   """
 
-  def __init__(self, namespace: str, tool: Tool, declared_secrets: Iterable[str] = ()):
+  def __init__(self, namespace: str, tool: Tool):
     self._wire_name = wire_name(namespace, tool.name)
     self._tool = tool
-    self._declared_secrets = tuple(declared_secrets)
 
   @property
   def name(self) -> str:
@@ -461,9 +510,7 @@ class _NamespacedTool(Tool):
 
   @property
   def description(self) -> str:
-    # render credential directives against live availability (the serving
-    # layers that skip this wrapper render them the same way).
-    return render_text(self._tool.description, creds=self._declared_secrets)
+    return self._tool.description
 
   @property
   def parameters(self) -> dict[str, Any]:
@@ -480,11 +527,8 @@ class _NamespacedTool(Tool):
 async def namespaced_tools(server: MCPServer) -> list[Tool]:
   # a server's tools wrapped with their `namespace__tool` wire names — the
   # assembling step for a harness that flattens tools across servers into one
-  # list (`ToolRegistry`), which adds its own collision policy on top. the
-  # server's declared secrets (needed + optional) ride along so each tool's
-  # description can resolve its credential directives.
-  declared = set(server.needed_secrets) | set(server.optional_secrets)
-  return [_NamespacedTool(server.namespace, tool, declared) for tool in await server.list_tools()]
+  # list (`ToolRegistry`), which adds its own collision policy on top.
+  return [_NamespacedTool(server.namespace, tool) for tool in await server.list_tools()]
 
 
 class InProcessMCPServer(MCPServer):
@@ -558,20 +602,35 @@ class Toolset[T]:
       )
     return tool_names
 
+  def _variables(self, selected: tuple[str, ...]) -> condition.Variables:
+    # the toolset's rendering vocabulary: `#tools` — membership is this build's
+    # selection, universe the full roster, so a description that tests an
+    # unknown sibling raises at build.
+    return {'tools': condition.SetVariable(frozenset(selected), universe=frozenset(self._by_name))}
+
   def tools(self, state: T) -> list[Tool]:
     """the full tool list bound to `state` — the seam tests inject fakes through."""
-    return [FunctionTool(function, state=state) for function in self._by_name.values()]
+    names = tuple(self._by_name)
+    variables = self._variables(names)
+    return [
+      FunctionTool(function, state=state, variables=variables)
+      for function in self._by_name.values()
+    ]
 
   def build(self, *tool_names: str) -> InProcessMCPServer:
     """the live server: per-server state built once, shared by every call through it."""
     names = self._resolve(tool_names)
     state = self._state_factory()
+    variables = self._variables(names)
     server = InProcessMCPServer(
-      self.namespace, [FunctionTool(self._by_name[n], state=state) for n in names]
+      self.namespace,
+      [FunctionTool(self._by_name[n], state=state, variables=variables) for n in names],
     )
-    # instance attribute over the writable class-attr default: the credential-directive
-    # renderers (namespaced_tools, mcp-server) read secrets off the live server.
+    # instance attributes over the writable class-attr defaults: the live
+    # server stays self-describing — its scoped credential needs and the
+    # definition roster it was built from.
     server.needed_secrets = self.get_secrets(names)
+    server.tool_universe = tuple(self._by_name)
     return server
 
   def __call__(self, *tool_names: str) -> MCPServerSpec:

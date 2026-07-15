@@ -1,6 +1,6 @@
 # prompts/CLAUDE.md
 
-Centralised prompt store. Four loading conventions: auto-inject into every bro + `cw ss` session (`shared/`); serve as a reference doc — injected into `cw ss` sessions or mounted as a `FileSource` tool (`*.md`, top level or a subdirectory like `dev/`); inject the session-mode fragment at launch (`session_mode.md` composing `session_modes/`); load explicitly by name (top-level `*.prompt` / `*.prompt.template`).
+Centralised prompt store. Five loading conventions: auto-inject into every bro + `cw ss` session (`shared/`); serve as a reference doc — injected into `cw ss` sessions or mounted as a `FileSource` tool (`*.md`, top level or a subdirectory like `dev/`); inject the session-mode fragment at launch (`session_mode.md` composing `session_modes/`); splice into an opting-in text via `{{include}}` (`fragments/`); load explicitly by name (top-level `*.prompt` / `*.prompt.template`).
 
 ## Files
 
@@ -38,7 +38,7 @@ A session's user-involvement level is one of `unattended | detached | attended |
 - `cw ss` picks by its `--mode` flag for both claude flavors — the cw-session append prompt and the `--bro` `--system-prompt` (flag semantics: `reference/cw.md`)
 - `bro/bro.py:_system_prompt_for` pins the level for bro-native LLM runs — `run()` → unattended, `send()` (and every interactive surface on it) → guided
 
-`session_mode.md` (top level, not in `_BASE_PROMPT_FILES`) selects the per-level file in `session_modes/` via an exhaustive `{{iff #mode = …}}` chain and `{{include}}`s it; the three non-guided level files share `session_modes/authorization.md`, the full-authorization block (`Land mode: PR` line included). `prompts.mode_fragment(mode, …facts)` is the one rendering path — every injection site uses it (`cw/system_prompt.py:_session_append_prompt`, `cw/claude_argv.py` for `--bro`, `bro/bro.py:_system_prompt_for`), and it is the only call that supplies the `#mode` fact, so all other text stays mode-neutral mechanically: a stray `#mode` directive in a skill or procedure doc raises.
+`session_mode.md` (top level, not in `_BASE_PROMPT_FILES`) selects the per-level file in `session_modes/` via an exhaustive `{{iff #mode = …}}` chain and `{{include}}`s it; the three non-guided level files share `session_modes/authorization.md`, the full-authorization block. `prompts.mode_fragment(mode, …facts)` is the one rendering path — every injection site uses it (`cw/system_prompt.py:_session_append_prompt`, `cw/claude_argv.py` for `--bro`, `bro/bro.py:_system_prompt_for`), and it is the only call that supplies the `#mode` fact, so all other text stays mode-neutral mechanically: a stray `#mode` directive in a skill or procedure doc raises.
 
 The level files are the single place the modes differ: unattended carries the never-ask + `raise` convention, detached the carry-questions-into-the-report convention, attended the end-the-turn-at-pivotal-points convention, guided the confirm-each-significant-step convention.
 
@@ -50,4 +50,5 @@ The level files are the single place the modes differ: unattended carries the ne
 
 - **One-shot**: drop `<name>.prompt` (or `<name>.prompt.template` for `str.format` slots) at the top level. Load with `get_prompt('<name>.prompt'[, **kwargs])`
 - **Auto-injected into bros and `cw ss` sessions**: drop a `*.md` in `shared/`. Conventions that must hold for both surfaces (interaction policy, tone) belong here
+- **Include fragment**: drop a `*.md` in `fragments/` and splice it with `{{include fragments/<name>.md}}` from each opting-in text. For a convention that applies only where a capability exists — e.g. `task_tracker.md`, included by every persona that mounts task-tracker tools rather than injected everywhere
 - **Reference doc**: drop a `*.md` at top level or in a subdirectory (e.g. `dev/style.md`), then either add its filename to `cw/system_prompt.py:_BASE_PROMPT_FILES` (injected into every `cw ss` session) or declare a `FileSource` for it in `bro/datasources/references.py` and mount it on a bro (tool-served on demand, every harness — e.g. `environment.md`)

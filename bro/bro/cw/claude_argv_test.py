@@ -176,11 +176,11 @@ class TestBroLaunch:
   def test_mode_fragment_follows_the_mode(self):
     attended = self._launch()
     assert '# Attended session' in attended.system_prompt
-    assert 'Land mode: PR' in attended.system_prompt
+    assert 'full authorization' in attended.system_prompt
     assert '--dangerously-skip-permissions' in attended.argv
     guided = self._launch(mode='guided').system_prompt
     assert '# Guided session' in guided
-    assert 'Land mode: PR' not in guided
+    assert 'full authorization' not in guided
     # the fragment renders at build — no directive may leak into the prompt
     assert '{{' not in guided
 

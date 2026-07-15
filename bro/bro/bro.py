@@ -10,7 +10,7 @@ from typing import Any, ClassVar, Optional, Self
 import llm.llms.chat_gpt
 import llm.mcp
 from base import credentials, log
-from base.condition import Entry, when
+from base.condition import Entry, SetVariable, Variables
 from bro.channel import BroChannel
 from bro.datasources.base import DataSource
 from llm.llm import LLM, LLMSpec
@@ -77,16 +77,13 @@ def _load_shared_prompts() -> str:
 def _render_data_sources(sources: list[DataSource]) -> str:
   lines = ['## Data sources', '', 'You have access to the following read-only data sources:', '']
   for ds in sources:
-    # resolve any credential-availability directives in the summary against live
-    # availability (e.g. a source advertising query-focused fetch only when its
-    # LLM key is present), validated against the source's declared secrets.
-    declared = set(ds.needed_secrets) | set(ds.optional_secrets)
-    summary = llm.mcp.render_text(ds.summary, creds=declared)
-    lines.append(f'- **{ds.name}** — {summary}')
+    lines.append(f'- **{ds.name}** — {ds.rendered_summary()}')
   lines.append('')
+  # the namespace example uses a source this bro actually mounts, so it never
+  # points at a tool the session lacks
   lines.append(
-    "Each source's tools live in its own `<name>-source` namespace — e.g. "
-    '`wikipedia-source::search`, `current-time-source::get_time`. See the tool '
+    "Each source's tools live in its own `<name>-source` namespace — the "
+    f'`{sources[0].name}` tools are `{sources[0].namespace}::…`. See the tool '
     'listings for what each source exposes.'
   )
   return '\n'.join(lines)
@@ -231,10 +228,10 @@ _RAISE_DESCRIPTION = (
 )
 
 
-def _raise_tool(wire: llm.mcp.Wire) -> llm.mcp.Tool:
+def _raise_tool(wire: llm.mcp.Wire, variables: Variables) -> llm.mcp.Tool:
   target = _raise if wire == 'bare' else _claude_raise
   return llm.mcp.FunctionTool(
-    target, name='raise', description=llm.mcp.render_text(_RAISE_DESCRIPTION, wire=wire)
+    target, name='raise', description=_RAISE_DESCRIPTION, variables=variables
   )
 
 
@@ -250,6 +247,8 @@ _SKILL_DESCRIPTION = (
 # where the harness bounds a silent tool call at about a minute — far under a
 # real child's runtime, so the blocking modes are a trap there); the in-process
 # builds (wire 'bare') have no transport to die on and render the plain text.
+# the lost-request-id recovery path forks on `#tools`: `summon_list` mounts
+# only when the session tracks summon status.
 _SUMMON_DESCRIPTION = (
   'summon another bro: it runs your prompt in its own isolated container with its '
   'own credentials and this call blocks — typically for minutes — until its answer '
@@ -269,9 +268,12 @@ _SUMMON_DESCRIPTION = (
   'client-side with a transport timeout while the child keeps running, and the '
   'reply (with the request id) is lost with the call. for anything but a quick '
   'ask, pass `detach: true` and poll with summon_check. if a blocking call did '
-  'time out, do NOT re-summon: recover the request id with summon_list and '
-  'reattach via summon_check (`last_seen: 0` re-reads a result that was already '
-  'delivered to the dead call).{{end}}'
+  'time out, do NOT re-summon — the child keeps running'
+  '{{iff #tools contains summon_list}}: recover the request id with summon_list '
+  'and reattach via summon_check (`last_seen: 0` re-reads a result that was '
+  'already delivered to the dead call){{else}}; this session tracks no summon '
+  'status, so a lost request id cannot be rediscovered — if you no longer have '
+  'it, surface the timeout instead of retrying{{end}}.{{end}}'
 )
 
 
@@ -313,7 +315,7 @@ _BANNER_DESCRIPTION = (
 )
 
 
-def _banner_tool(bro_name: str) -> llm.mcp.Tool:
+def _banner_tool(bro_name: str, variables: Variables) -> llm.mcp.Tool:
   # the same facts `cw banner --llm` prints, rendered in-process. the bro name is
   # passed explicitly because an in-process run's environment carries the
   # launcher's CW_BRO (or none), not this bro's. the cw hub import stays
@@ -323,10 +325,12 @@ def _banner_tool(bro_name: str) -> llm.mcp.Tool:
 
     return render_banner(llm=True, bro=bro_name)
 
-  return llm.mcp.FunctionTool(_banner, name='banner', description=_BANNER_DESCRIPTION)
+  return llm.mcp.FunctionTool(
+    _banner, name='banner', description=_BANNER_DESCRIPTION, variables=variables
+  )
 
 
-def _summon_tool(wire: llm.mcp.Wire) -> llm.mcp.Tool:
+def _summon_tool(variables: Variables) -> llm.mcp.Tool:
   # a fresh channel client per call, opened on the loop and closed in `finally`
   # so a cancelled tool call (the MCP client timed out or aborted) unblocks the
   # off-loop wait: the broxy sees the waiter go, and the terminal buffers for a
@@ -354,22 +358,22 @@ def _summon_tool(wire: llm.mcp.Wire) -> llm.mcp.Tool:
       client.close()
 
   return llm.mcp.FunctionTool(
-    _summon, name='summon', description=llm.mcp.render_text(_SUMMON_DESCRIPTION, wire=wire)
+    _summon, name='summon', description=_SUMMON_DESCRIPTION, variables=variables
   )
 
 
-def _summon_list_tool() -> llm.mcp.Tool:
+def _summon_list_tool(variables: Variables) -> llm.mcp.Tool:
   import summon as summon_client
 
   async def _summon_list() -> dict[str, Any]:
     return await asyncio.to_thread(summon_client.list_summons)
 
   return llm.mcp.FunctionTool(
-    _summon_list, name='summon_list', description=_SUMMON_LIST_DESCRIPTION
+    _summon_list, name='summon_list', description=_SUMMON_LIST_DESCRIPTION, variables=variables
   )
 
 
-def _summon_check_tool(wire: llm.mcp.Wire) -> llm.mcp.Tool:
+def _summon_check_tool(variables: Variables) -> llm.mcp.Tool:
   # the wait path owns its client like _summon_tool, for the same cancellation
   # abort; the plain peek is answered locally and immediately, so it keeps the
   # per-call client inside the worker thread.
@@ -416,49 +420,69 @@ def _summon_check_tool(wire: llm.mcp.Wire) -> llm.mcp.Tool:
     return completed
 
   return llm.mcp.FunctionTool(
-    _summon_check,
-    name='summon_check',
-    description=llm.mcp.render_text(_SUMMON_CHECK_DESCRIPTION, wire=wire),
+    _summon_check, name='summon_check', description=_SUMMON_CHECK_DESCRIPTION, variables=variables
   )
+
+
+# the service roster's tool names — the closed `#tools` universe the service
+# descriptions render against
+_SERVICE_TOOL_NAMES = ('banner', 'raise', 'skill', 'summon', 'summon_check', 'summon_list')
 
 
 def _build_service_server(
   bro: 'BaseBro', *, include_raise: bool, harness: llm.mcp.Harness, wire: llm.mcp.Wire
 ) -> llm.mcp.MCPServer:
-  # a declarative roster selected against the caller's surface facts: `banner`
-  # is unconditional; `raise` only makes sense non-interactively (a caller to
-  # abort to — interactive callers pass include_raise=False); `skill` mounts
-  # only on the bro harness (the claude harness gets skills as rendered
-  # SKILL.md files, cw/bro.py); `summon` needs a broker channel and
-  # `summon_list` the session's summon-status file — process state, not
-  # surface facts.
-  entries: list[Entry[llm.mcp.Tool]] = [_banner_tool(bro.name)]
-  entries.append(when(include_raise, _raise_tool(wire)))
-  if len(bro.skills) > 0:
+  # the roster is decided by the caller's surface and local process state:
+  # `banner` is unconditional; `raise` only makes sense non-interactively (a
+  # caller to abort to — interactive callers pass include_raise=False); `skill`
+  # mounts only on the bro harness (the claude harness gets skills as rendered
+  # SKILL.md files, cw/bro.py); `summon`/`summon_check` need a broker channel
+  # and `summon_list` the session's summon-status file on top. the decided
+  # roster then feeds the tools' rendering vocabulary: service tools are
+  # harness features, the one tool surface that conditions on system facts, so
+  # `#wire` is injected next to the `#tools` roster.
+  has_skill = len(bro.skills) > 0 and harness == 'bro'
+  has_broker = os.environ.get('BROKER_CHANNEL') is not None
+  has_summon_list = False
+  if has_broker:
+    import summon as summon_module
+
+    has_summon_list = os.environ.get(summon_module.STATUS_ENV) is not None
+
+  mounted = ['banner']
+  if include_raise:
+    mounted.append('raise')
+  if has_skill:
+    mounted.append('skill')
+  if has_broker:
+    mounted.extend(['summon', 'summon_check'])
+  if has_summon_list:
+    mounted.append('summon_list')
+  variables: Variables = {
+    **llm.mcp.surface_variables(wire=wire),
+    'tools': SetVariable(frozenset(mounted), universe=frozenset(_SERVICE_TOOL_NAMES)),
+  }
+
+  tools: list[llm.mcp.Tool] = [_banner_tool(bro.name, variables)]
+  if include_raise:
+    tools.append(_raise_tool(wire, variables))
+  if has_skill:
 
     def skill(name: str) -> str:
       return bro.get_skill_body(name, harness=harness, wire=wire)
 
-    entries.append(
-      when(
-        # the fact variable, not this function's same-named parameter: the
-        # condition defers to the select below, which supplies the parameter
-        # as the fact.
-        llm.mcp.harness == 'bro',
-        llm.mcp.FunctionTool(skill, name='skill', description=_SKILL_DESCRIPTION),
-      )
+    tools.append(
+      llm.mcp.FunctionTool(skill, name='skill', description=_SKILL_DESCRIPTION, variables=variables)
     )
-  if os.environ.get('BROKER_CHANNEL') is not None:
-    import summon as summon_module
-
-    # the summon descriptions carry {{when #wire = mcp}} transport-caution
-    # blocks, rendered here — the layer that knows the build's wire fact
-    entries.append(_summon_tool(wire))
-    entries.append(_summon_check_tool(wire))
-    if os.environ.get(summon_module.STATUS_ENV) is not None:
-      entries.append(_summon_list_tool())
-  tools = llm.mcp.select(entries, harness=harness, wire=wire, creds=credentials.known_names())
-  return llm.mcp.InProcessMCPServer('bro', tools)
+  if has_broker:
+    tools.append(_summon_tool(variables))
+    tools.append(_summon_check_tool(variables))
+    if has_summon_list:
+      tools.append(_summon_list_tool(variables))
+  assert [tool.name for tool in tools] == mounted
+  server = llm.mcp.InProcessMCPServer('bro', tools)
+  server.tool_universe = _SERVICE_TOOL_NAMES
+  return server
 
 
 def _unattended_claude_session() -> bool:
@@ -589,10 +613,15 @@ class BaseBro(ABC):
     # for callers that need a dynamic prompt (e.g. PM injects current time).
     if system_prompt is not None:
       prompt_parts = [system_prompt] if len(system_prompt) > 0 else []
-    # the bro's own persona: MRO-concatenated class system_prompt(s) without the
-    # shared / data-source / skills blocks. injected into dive-in Claude Code
-    # sessions (cw/system_prompt.py) so they carry the bro's policies outside --bro mode.
-    self.persona = '\n\n'.join(prompt_parts)
+    # the bro's own persona: MRO-concatenated class system_prompt(s) under a
+    # `# Persona: <name>` heading — the segment lands inside larger composed
+    # prompts (below, and cw's append prompt), where headingless identity text
+    # reads as a stray fragment. no shared / data-source / skills blocks here;
+    # injected into dive-in Claude Code sessions (cw/system_prompt.py) so they
+    # carry the bro's policies outside --bro mode.
+    self.persona = (
+      '\n\n'.join([f'# Persona: {self.name}', *prompt_parts]) if len(prompt_parts) > 0 else ''
+    )
     shared = _load_shared_prompts()
     descriptions = self.skill_descriptions()
 
@@ -600,7 +629,8 @@ class BaseBro(ABC):
       parts = []
       if len(shared) > 0:
         parts.append(shared)
-      parts.extend(prompt_parts)
+      if len(self.persona) > 0:
+        parts.append(self.persona)
       # the namespaced-tool convention only matters once the bro actually has
       # tools or skills (which reference tools by their `ns::tool` name).
       if len(self._mcp_specs) > 0 or len(self._data_sources) > 0 or len(descriptions) > 0:

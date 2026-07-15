@@ -1,5 +1,5 @@
 from bro.bro import BaseBro
-from llm.mcp import MCPServerSpec, render_text
+from llm.mcp import MCPServerSpec
 
 
 async def format_card(bro: BaseBro, *, include_system_prompt: bool = False) -> str:
@@ -9,9 +9,7 @@ async def format_card(bro: BaseBro, *, include_system_prompt: bool = False) -> s
   if len(bro._data_sources) > 0:
     parts.extend(['', '## Data sources', ''])
     for ds in bro._data_sources:
-      declared = set(ds.needed_secrets) | set(ds.optional_secrets)
-      summary = render_text(ds.summary, creds=declared)
-      parts.append(f'- **{ds.name}** — {summary}')
+      parts.append(f'- **{ds.name}** — {ds.rendered_summary()}')
 
   if len(bro._mcp_specs) > 0:
     parts.extend(['', '## MCP tools', ''])
@@ -74,10 +72,8 @@ async def _mcp_tool_lines(specs: list[MCPServerSpec]) -> list[str]:
     except Exception as e:
       failures.append(f'- `{server.namespace}` — failed to list tools: {e}')
       continue
-    declared = set(server.needed_secrets) | set(server.optional_secrets)
     tool_lines_by_namespace.setdefault(server.namespace, []).extend(
-      f'  - `{tool.name}` — {_one_line(render_text(tool.description, creds=declared))}'
-      for tool in tools
+      f'  - `{tool.name}` — {_one_line(tool.description)}' for tool in tools
     )
   lines = []
   for namespace, tool_lines in tool_lines_by_namespace.items():

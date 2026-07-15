@@ -5,7 +5,7 @@ from typing import Annotated, Optional
 import pytest
 from pydantic import Field, ValidationError
 
-from base.condition import ConditionError, when
+from base.condition import ConditionError, SetVariable, when
 from llm import mcp as mcp_mod
 from llm.mcp import (
   FunctionTool,
@@ -77,6 +77,17 @@ class TestReturnShape:
     describe(make, 'make an item')
     description = FunctionTool(make).description
     assert description.startswith('make an item\n\nReturns: {')
+
+  def test_shapeless_dict_return_omits_the_returns_line(self):
+    from typing import Any
+
+    def status() -> dict[str, Any]:
+      return {}
+
+    describe(status, 'returns `{state, answer}`')
+    tool = FunctionTool(status)
+    assert tool.description == 'returns `{state, answer}`'
+    assert tool.output_schema is not None  # only the description line is dropped
 
 
 @dataclass
@@ -515,24 +526,97 @@ class TestRenderText:
       render_text('{{include ../CLAUDE.md}}', harness='bro')
 
   @pytest.mark.asyncio
-  async def test_namespaced_tool_renders_description_against_availability(self, monkeypatch):
+  async def test_namespaced_tool_passes_rendered_description_through(self):
+    # tool text leaves its server fully rendered; the assembling wrapper only
+    # rewrites the name
     def fetch(id: Annotated[str, Field(description='id')]) -> str:
       return id
 
-    describe(
-      fetch, 'fetch a record{{iff #creds contains openai}}; summarized{{else}}; raw only{{end}}'
-    )
-
-    class Srv(InProcessMCPServer):
-      optional_secrets = ('openai',)
-
-      def __init__(self):
-        super().__init__('src', [FunctionTool(fetch)])
-
-    monkeypatch.setattr(mcp_mod.credentials, 'available', lambda name: False)
-    tools = await namespaced_tools(Srv())
+    describe(fetch, 'fetch a record; raw only')
+    tools = await namespaced_tools(InProcessMCPServer('src', [FunctionTool(fetch)]))
     assert tools[0].name == 'src__fetch'
     assert tools[0].description == 'fetch a record; raw only'
+
+
+class TestToolVariables:
+  def _variables(self, *selected: str, universe: tuple[str, ...] = ()) -> dict:
+    names = universe if len(universe) > 0 else selected
+    return {'tools': SetVariable(frozenset(selected), universe=frozenset(names))}
+
+  def test_description_renders_against_the_vocabulary(self):
+    def helper(x: str) -> str:
+      return x
+
+    describe(helper, 'help{{when #tools contains sibling}}; see sibling{{end}}')
+    with_sibling = self._variables('helper', 'sibling')
+    without = self._variables('helper', universe=('helper', 'sibling'))
+    assert FunctionTool(helper, variables=with_sibling).description == 'help; see sibling'
+    assert FunctionTool(helper, variables=without).description == 'help'
+
+  def test_parameter_annotations_render_too(self):
+    def helper(
+      x: Annotated[str, Field(description='x{{when #tools contains sibling}}; via sibling{{end}}')],
+    ) -> str:
+      return x
+
+    describe(helper, 'help')
+    tool = FunctionTool(helper, variables=self._variables('helper', 'sibling'))
+    assert tool.parameters['properties']['x']['description'] == 'x; via sibling'
+
+  def test_unknown_sibling_raises_at_construction(self):
+    def helper(x: str) -> str:
+      return x
+
+    describe(helper, 'help{{when #tools contains sibilng}}; see it{{end}}')
+    with pytest.raises(ValueError, match='outside the set universe'):
+      FunctionTool(helper, variables=self._variables('helper', 'sibling'))
+
+  def test_directive_without_vocabulary_raises_instead_of_leaking(self):
+    def helper(x: str) -> str:
+      return x
+
+    describe(helper, 'help{{when #tools contains sibling}}; see sibling{{end}}')
+    with pytest.raises(ValueError, match='unknown variable #tools'):
+      FunctionTool(helper)
+
+
+class TestToolsetRendering:
+  def _toolset(self) -> mcp_mod.Toolset:
+    spec = mcp_mod.Toolset('pack')
+
+    @spec.tool('read stuff{{when #tools contains manual}}; rules in manual{{end}}')
+    def read(x: str) -> str:
+      return x
+
+    @spec.tool('the shared rules')
+    def manual() -> str:
+      return 'rules'
+
+    return spec
+
+  @pytest.mark.asyncio
+  async def test_full_build_keeps_the_cross_reference(self):
+    server = self._toolset().build()
+    tools = {tool.name: tool for tool in await server.list_tools()}
+    assert tools['read'].description == 'read stuff; rules in manual'
+    assert server.tool_universe == ('read', 'manual')
+
+  @pytest.mark.asyncio
+  async def test_scoped_build_drops_the_cross_reference(self):
+    server = self._toolset().build('read')
+    tools = {tool.name: tool for tool in await server.list_tools()}
+    assert tools['read'].description == 'read stuff'
+    assert server.tool_universe == ('read', 'manual')
+
+  def test_reference_outside_the_roster_raises_at_build(self):
+    spec = mcp_mod.Toolset('pack')
+
+    @spec.tool('read stuff{{when #tools contains manaul}}; typo{{end}}')
+    def read(x: str) -> str:
+      return x
+
+    with pytest.raises(ValueError, match='outside the set universe'):
+      spec.build()
 
 
 class TestSelect:

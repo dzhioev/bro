@@ -50,11 +50,10 @@ class TestModeFragment:
     for mode in ('unattended', 'detached', 'attended'):
       fragment = mode_fragment(mode, harness='claude', wire='mcp')
       assert 'full authorization' in fragment
-      assert 'Land mode: PR' in fragment
 
   def test_guided_carries_no_authorization_block(self):
     fragment = mode_fragment('guided', harness='claude', wire='mcp')
-    assert 'Land mode: PR' not in fragment
+    assert 'full authorization' not in fragment
 
   def test_unknown_mode_raises(self):
     with pytest.raises(ValueError, match='unknown session mode'):

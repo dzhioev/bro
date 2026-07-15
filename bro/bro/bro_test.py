@@ -595,7 +595,7 @@ class _StubSource(SearchableDataSource):
 
 class _MarkerSource(SearchableDataSource):
   name = 'marker'
-  summary = 'base{{iff #creds contains openai}} query summary on{{else}} no key{{end}}'
+  summary = 'base{{iff #features contains summary}} query summary on{{else}} no key{{end}}'
 
   async def search(self, query: str, limit: int = 5) -> list[Hit]:
     return []
@@ -654,10 +654,11 @@ class TestBroDataSources:
     assert '## Data sources' in bro.system_prompt
     assert '**stub**' in bro.system_prompt
     assert 'a stub data source for tests' in bro.system_prompt
-    # canonical `::` in the data-source block, resolved by the tool-names rule
-    assert 'wikipedia-source::search' in bro.system_prompt
+    # canonical `::` in the data-source block, resolved by the tool-names rule;
+    # the example derives from the bro's own first source
+    assert 'stub-source::' in bro.system_prompt
 
-  def test_summary_cred_directive_rendered_present(self, monkeypatch):
+  def test_summary_feature_directive_rendered_present(self, monkeypatch):
     from base import credentials
 
     monkeypatch.setattr(credentials, 'available', lambda name: True)
@@ -675,7 +676,7 @@ class TestBroDataSources:
     assert 'no key' not in prompt
     assert '{{' not in prompt  # markers fully resolved, never leak raw
 
-  def test_summary_cred_directive_rendered_absent(self, monkeypatch):
+  def test_summary_feature_directive_rendered_absent(self, monkeypatch):
     from base import credentials
 
     monkeypatch.setattr(credentials, 'available', lambda name: False)
@@ -1329,7 +1330,7 @@ class TestSessionModePrompts:
   def test_non_interactive_runs_pin_the_unattended_mode(self):
     bro = EchoBro()
     prompt = bro._system_prompt_for(interactive=False)
-    assert '`raise`' in prompt
+    assert '`bro::raise`' in prompt
     assert 'unclear' in prompt
     assert bro.system_prompt in prompt
     assert '# Unattended session' in prompt
@@ -2228,7 +2229,9 @@ class TestPPPDevSkillsMRO:
 class TestPersona:
   def test_persona_is_class_prompts_without_shared(self):
     bro = PPPDev()
-    # MRO-concatenated class prompts: Dev's contribution + PPPDev's own
+    # a heading names the segment, then the MRO-concatenated class prompts:
+    # Dev's contribution + PPPDev's own
+    assert bro.persona.startswith('# Persona: ppp-dev')
     assert 'software developer' in bro.persona
     assert '## PPP project' in bro.persona
     assert 'dev-style-source::read' in bro.persona
@@ -2239,7 +2242,7 @@ class TestPersona:
     assert 'Interaction policy' in bro.system_prompt
 
   def test_persona_honors_explicit_override(self):
-    assert EchoBro().persona == 'you echo'
+    assert EchoBro().persona == '# Persona: echo\n\nyou echo'
 
 
 class TestAgentIdentity:

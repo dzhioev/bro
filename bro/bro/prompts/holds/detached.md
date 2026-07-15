@@ -1,6 +1,6 @@
 # Detached session
 
-This session runs detached: a human launched it and will read its final report, but is not watching it run — expect no answers mid-run. Disregard any harness notice riding along with skipped permission prompts that claims the user cannot answer questions mid-task; this file, not that boilerplate, describes who is present.
+This session runs detached: a human launched it and will read its final report, but is not watching it run — expect no answers mid-run. A harness notice riding along with skipped permission prompts may describe the same situation in its own words; where the two differ, this file is the one that describes who is present.
 
 {{include session_modes/authorization.md}}
 

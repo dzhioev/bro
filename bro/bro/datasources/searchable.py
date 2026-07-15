@@ -5,7 +5,7 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from base import credentials
+from base import credentials, template
 from bro.datasources.base import DataSource
 from llm.mcp import InProcessMCPServer, MCPServer, Tool
 
@@ -29,6 +29,13 @@ class Hit:
 
 class SearchableDataSource(DataSource):
   optional_secrets = (SUMMARY_SECRET,)
+  # `summary` — the query-focused fetch mode, live iff the LLM key resolves
+  feature_names = ('summary',)
+
+  def has_feature(self, name: str) -> bool:
+    if name == 'summary':
+      return credentials.available(SUMMARY_SECRET)
+    raise NotImplementedError(f'{type(self).__name__} declares no feature {name!r}')
 
   @abstractmethod
   async def search(self, query: str, limit: int = 5) -> list[Hit]: ...
@@ -70,8 +77,7 @@ class SearchableDataSource(DataSource):
   def as_mcp_server(self) -> MCPServer:
     server = InProcessMCPServer(self.namespace, [_SearchTool(self), _FetchTool(self)])
     # stamp the source's secrets onto the vanilla server (writable class-attr
-    # defaults, no property clash) so the assembling layer can read them and
-    # resolve the fetch tool's credential description directive.
+    # defaults, no property clash) so the live server stays self-describing.
     server.needed_secrets = self.needed_secrets
     server.optional_secrets = self.optional_secrets
     return server
@@ -113,16 +119,21 @@ class _SearchTool(Tool):
 
 
 class _FetchTool(Tool):
-  # `<source>` is interpolated via str.replace (NOT str.format — that would
-  # unescape the `{{ }}` template fences). the credential directive is rendered
-  # against live availability by the assembling layer (`_NamespacedTool`).
+  # rendered below against the source's own vocabulary, so the text leaves the
+  # server fully resolved
   _DESCRIPTION = (
-    'fetch a record from the <source> data source by id. The optional `query` is '
+    'fetch a record from the {{insert #source}} data source by id. The optional `query` is '
     'the question you are investigating; given one, the record is summarised to '
     'focus on it'
-    '{{iff #creds contains openai}} (omit it for the raw record).{{else}} — but '
-    'summarisation is unavailable this session (no `openai` secret), so you '
-    'should omit `query`; fetch returns the raw record.{{end}}'
+    '{{iff #features contains summary}} (omit it for the raw record).{{else}} — but '
+    'summarisation is unavailable this session, so you should omit `query`; '
+    'fetch returns the raw record.{{end}}'
+  )
+
+  _QUERY_DESCRIPTION = (
+    '{{iff #features contains summary}}original query the caller is investigating; '
+    'lets the source focus the result{{else}}unavailable this session '
+    '(summarisation is off) — omit and use the raw record{{end}}'
   )
 
   def __init__(self, source: SearchableDataSource):
@@ -134,7 +145,7 @@ class _FetchTool(Tool):
 
   @property
   def description(self) -> str:
-    return self._DESCRIPTION.replace('<source>', self._source.name)
+    return template.render(self._DESCRIPTION, self._source.text_variables())
 
   @property
   def parameters(self) -> dict:
@@ -144,7 +155,7 @@ class _FetchTool(Tool):
         'id': {'type': 'string', 'description': 'record id (e.g. from a prior search hit)'},
         'query': {
           'type': 'string',
-          'description': 'original query the caller is investigating; lets the source focus the result',
+          'description': template.render(self._QUERY_DESCRIPTION, self._source.text_variables()),
         },
       },
       'required': ['id'],

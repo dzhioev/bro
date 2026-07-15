@@ -66,24 +66,14 @@ def _resolve_servers(spec: str) -> list['MCPServer']:
   return [factory()]
 
 
-async def _server_tools(server: 'MCPServer') -> list[tuple['Tool', str]]:
-  # (tool, description) pairs, with credential directives in each description resolved
-  # against live credential availability — the serving-side counterpart of the
-  # rendering the bro-LLM assembling layer does (llm.mcp `_NamespacedTool`).
-  from llm.mcp import render_text
-
-  declared = set(server.needed_secrets) | set(server.optional_secrets)
-  return [
-    (tool, render_text(tool.description, creds=declared)) for tool in await server.list_tools()
-  ]
-
-
-def _lowlevel_server(label: str, entries: list[tuple['Tool', str]]) -> 'Server':
+def _lowlevel_server(label: str, entries: list['Tool']) -> 'Server':
+  # tool text (descriptions, parameter annotations) arrives fully rendered —
+  # each server renders its own at build time (llm.mcp `FunctionTool`).
   import mcp.types as types
   from mcp.server.lowlevel import Server
 
   tools_by_name: dict[str, Tool] = {}
-  for tool, _ in entries:
+  for tool in entries:
     if tool.name in tools_by_name:
       raise SystemExit(f'duplicate tool name {tool.name!r} in {label!r}')
     tools_by_name[tool.name] = tool
@@ -95,11 +85,11 @@ def _lowlevel_server(label: str, entries: list[tuple['Tool', str]]) -> 'Server':
     return [
       types.Tool(
         name=tool.name,
-        description=description,
+        description=tool.description,
         inputSchema=tool.parameters,
         outputSchema=tool.output_schema,
       )
-      for tool, description in entries
+      for tool in entries
     ]
 
   @server.call_tool()
@@ -157,10 +147,10 @@ def create_http_app(servers: list['MCPServer'], bearer_token: str) -> _BearerAut
   from starlette.responses import JSONResponse, Response
   from starlette.routing import Route
 
-  async def collect() -> dict[str, list[tuple['Tool', str]]]:
-    by_namespace: dict[str, list[tuple[Tool, str]]] = {}
+  async def collect() -> dict[str, list['Tool']]:
+    by_namespace: dict[str, list[Tool]] = {}
     for server in servers:
-      by_namespace.setdefault(server.namespace, []).extend(await _server_tools(server))
+      by_namespace.setdefault(server.namespace, []).extend(await server.list_tools())
     return by_namespace
 
   by_namespace = asyncio.run(collect())
@@ -192,7 +182,7 @@ def create_http_app(servers: list['MCPServer'], bearer_token: str) -> _BearerAut
 async def run(mcp_server: 'MCPServer'):
   from mcp.server.stdio import stdio_server
 
-  server = _lowlevel_server('mcp', await _server_tools(mcp_server))
+  server = _lowlevel_server('mcp', await mcp_server.list_tools())
   async with stdio_server() as (read_stream, write_stream):
     await server.run(read_stream, write_stream, server.create_initialization_options())
 

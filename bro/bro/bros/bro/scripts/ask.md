@@ -1,6 +1,6 @@
 ---
 name: ask
-description: This skill should be used when the user asks to relay a question or job to another bro — "/ask devoops to list the deploy targets", "ask the pm bro whether…", "have devoops deploy flow-mcp", "summon devoops". Turns the phrasing into a summon (an isolated one-shot run of the target bro with its own credentials), picks whichever summon client the session has, decides foreground vs background, and relays the answer with the failure modes handled.
+description: This skill should be used when the user asks to relay a question or job to another bro — "/ask librorian to add Dune to the library", "ask the pm bro whether the inbox holds anything urgent", "have devoops deploy flow-mcp", "summon ppp-dev". Turns the phrasing into a summon (an isolated one-shot run of the target bro with its own credentials), picks whichever summon client the session has, decides foreground vs background, and relays the answer with the failure modes handled. A summon succeeds only when the target is in the session's allow-list — most bros seed none, and grants come from the launch surface — so a denial is a normal outcome the skill relays.
 version: 1.0.0
 ---
 

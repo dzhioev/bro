@@ -1,5 +1,7 @@
 from abc import ABC, abstractmethod
 
+from base import template
+from base.condition import SetVariable, StringVariable, Variables
 from llm.mcp import MCPServer
 
 
@@ -30,6 +32,33 @@ class DataSource(ABC):
   # `bro.optional_secrets()`, hydrated best-effort by the host. mirrors
   # `needed_secrets`.
   optional_secrets: tuple[str, ...] = ()
+  # the source's own rendering vocabulary: feature names its static text (the
+  # summary, tool descriptions and parameter annotations) may test with a
+  # `#features contains <name>` directive — capabilities, not the credentials
+  # or harness facts behind them, so the text reads the same served standalone.
+  # `has_feature` reports which currently hold; it is probed lazily at render
+  # time, so declaring a source stays an import-time constant.
+  feature_names: tuple[str, ...] = ()
+
+  def has_feature(self, name: str) -> bool:
+    """whether the named feature currently holds; probed only for names in
+    `feature_names` (the closed universe), so a source that declares features
+    must override this."""
+    raise NotImplementedError(f'{type(self).__name__} declares no feature {name!r}')
+
+  def text_variables(self) -> Variables:
+    """the variables this source's static text renders against: `#features`
+    plus `#source` — the source's own name, for `{{insert #source}}`."""
+    return {
+      'features': SetVariable(self.has_feature, universe=frozenset(self.feature_names)),
+      'source': StringVariable(self.name),
+    }
+
+  def rendered_summary(self) -> str:
+    """`summary` with its directives rendered against the live vocabulary."""
+    if '{{' not in self.summary:
+      return self.summary
+    return template.render(self.summary, self.text_variables())
 
   @property
   def namespace(self) -> str:

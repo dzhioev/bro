@@ -5,7 +5,8 @@ Conditional rendering for static agent-facing text — system prompts, skill bod
 ## Grammar
 
 ```
-template  := (text | block | 'when'-block | '{{assert' condition '}}' | '{{include' file '}}')*
+template  := (text | block | 'when'-block | '{{assert' condition '}}'
+              | '{{include' file '}}' | '{{insert' '#'name '}}')*
 block     := '{{iff' condition '}}' template
              ('{{eliff' condition '}}' template)*
              ('{{else}}' template)?
@@ -30,11 +31,13 @@ file      := prompt file name           file: [A-Za-z0-9._/-]+
 
 - `{{include <file>}}` splices another prompt file into the output, rendered recursively against the includer's own variables — same facts, same fail-fast semantics. resolution goes through the rendering surface's resolver (`render` takes an `include_resolver` callback; `render_text` wires the `prompts.py` loader); a render with no resolver raises on any include it parses, and an include chain that revisits a file raises
 
+- `{{insert #name}}` emits the referenced string variable's value — substitution for text parameterized by a fact (e.g. a data source's own name in its tool descriptions). only a string variable has a text form: referencing a set or boolean variable raises, as does an unknown name — even in a non-taken branch, mirroring condition evaluation
+
 - conditions in non-taken branches are still evaluated (a typo fails every render, not just the unlucky branch), while `{{assert}}` directives and fall-through guards in non-taken branches do not fire; blocks nest
 
 - an include in a non-taken branch follows the same rule: the file is loaded and structurally parsed — a broken name or malformed file fails every render — but it is not emitted and directives inside it do not evaluate (its facts may be foreign to this surface)
 
-- only `{{` groups whose first token is a directive keyword (`when` / `iff` / `eliff` / `else` / `end` / `assert` / `include`) are parsed; any other `{{…}}` is literal text, so braces in code samples survive rendering
+- only `{{` groups whose first token is a directive keyword (`when` / `iff` / `eliff` / `else` / `end` / `assert` / `include` / `insert`) are parsed; any other `{{…}}` is literal text, so braces in code samples survive rendering
 
 - `true` and `false` are built-in boolean variables
 
@@ -46,7 +49,8 @@ file      := prompt file name           file: [A-Za-z0-9._/-]+
 - `cw/system_prompt.py` — a cw-session's append prompt, the injected persona included (harness `claude`, wire `mcp`)
 - `prompts.mode_fragment` — the session-mode text (`prompts/session_mode.md` selecting over `prompts/session_modes/`), the only surface that supplies `#mode`
 - skill bodies — the `bro::skill` service tool serves harness `bro`; `cw` populates a cw-session with `claude`-rendered `SKILL.md` copies
-- tool descriptions and data-source summaries — rendered against the component's declared secrets at the assembling layer (`llm.mcp` `_NamespacedTool`, `mcp-server`, `bro show`)
+- tool descriptions and parameter annotations — rendered by the owning server at build time against its own vocabulary, not the harness facts (`#tools` for a `Toolset`'s roster, a data source's `#features` + `#source`; the bro service-tool build additionally injects `#wire`), so no unprocessed directive leaves a server and a standalone server serves final text — see `reference/conditions.md` "Server-domain vocabularies"
+- data-source summaries — `DataSource.rendered_summary()`, the source's vocabulary again, rendered where the prompt composes
 - `FileSource.read` — no facts: one rendering is read by every harness, so a served doc must be surface-neutral and a `#harness`/`#wire`/`#creds` directive raises; `render=False` opts a source out entirely, for a doc whose payload is the directive syntax itself (this reference and `reference/conditions.md`)
 
 Authoring rule for prompt files — fork with directives rather than writing dual-surface prose — lives in `prompts/CLAUDE.md`.

@@ -49,7 +49,6 @@ Three declaration-time guards close off the Python operators that cannot build d
 Consumers:
 
 - a bro's `mcp_servers` / `data_sources` entries may be `when`-wrapped or `iff`-grouped; `BaseBro.__init__` selects at harness `bro`, so an unmatched entry never mounts and its spec never builds. E.g. the dev toolset mounts only on the bro harness (claude has built-in file/shell tools): `mcp_servers = [when(harness == 'bro', dev.mcp)]`
-- the `bro` service-tool roster: `banner` unconditional, `raise` non-interactive-only (a bool `when`), `skill` bro-harness-only
 
 ## Facts
 
@@ -59,11 +58,20 @@ The facts triple a conditioning surface knows, exported by `llm/mcp.py` as ready
 
 - `wire` — how the surface spells canonical `namespace::tool` names: `bare` (`namespace__tool`, the bro-native LLM loop) or `mcp` (`mcp__namespace__tool`, any claude session). Orthogonal to `harness` — a `--bro` session runs the bro harness over mcp wire names
 
-- `creds` — the set of secrets the environment resolves. The supplied universe is closed (a component's declared secrets for a tool description, the registry's known names for session-level text) and membership probes `base.credentials.available` lazily
+- `creds` — the set of secrets the environment resolves. The supplied universe is closed (the registry's known names) and membership probes `base.credentials.available` lazily
 
 One more fact sits outside the triple: `mode` — the session's user-involvement level (`unattended | detached | attended | guided`, the domain is `llm.mcp.MODES`). It is supplied only when rendering the session-mode text (`prompts.mode_fragment` → `render_text(mode=…)`), never by the general conditioning surfaces, so mode-neutral text — skills, procedure docs — fails fast on a stray `#mode` directive. No ready-made placeholder is exported.
 
 `llm.mcp.select(entries, harness=…, wire=…, creds=…)` owns the facts-to-variables mapping for declarative lists (`llm.mcp.render_text` is its sibling for text — see `reference/template.md`). A fact the surface doesn't know defines no variable, so a condition referencing it raises. Select in the process that consumes the result, where the credential store is the session's own.
+
+## Server-domain vocabularies
+
+The harness facts above condition *session-level* text — prompts, skill bodies. An MCP server's own tool text (descriptions, parameter annotations) deliberately does not use them: a server must read the same served standalone, so it renders at build time against its own vocabulary, and no unprocessed directive ever leaves a server (`llm.mcp.FunctionTool`'s `variables`):
+
+- `tools` — a `Toolset` build's selected roster; universe is the full definition, so a description can test an excluded sibling (`{{when #tools contains read_reference}}…{{end}}`) and a typo'd name fails the build
+- `features` — a data source's capability set (e.g. a searchable source's `summary`, live iff its LLM key resolves); membership probes lazily at render, universe is the source's declared `feature_names`. The source's own name rides along as `source` (for `{{insert #source}}`)
+
+The one exception is the `bro` service-tool build: service tools are harness features, so it injects the system `#wire` fact (`llm.mcp.surface_variables`) next to its `#tools` roster.
 
 ## Code map
 

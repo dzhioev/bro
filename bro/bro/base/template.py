@@ -4,7 +4,8 @@ terminated by `{{end}}`, their conditions lowered onto `base.condition`
 objects — one evaluator and one fail-fast semantics shared with code-built
 conditions, any violation surfacing as `TemplateError` — plus `{{include}}`
 splices loaded through a caller-supplied resolver and rendered recursively
-with the includer's own variables. The grammar and full semantics live in
+with the includer's own variables, and `{{insert #name}}` emitting a string
+variable's value. The grammar and full semantics live in
 `reference/template.md`.
 
 Only `{{` groups whose first token is a directive keyword are parsed; any other
@@ -16,15 +17,26 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Optional
 
-from base.condition import Condition, ConditionError, Contains, Equals, Operand, Variable, Variables
+from base.condition import (
+  Condition,
+  ConditionError,
+  Contains,
+  Equals,
+  Operand,
+  StringVariable,
+  Variable,
+  Variables,
+)
 
 _NAME = r'[A-Za-z0-9_-]+'
 
 _DIRECTIVE_RE = re.compile(
-  r'\{\{\s*(?P<keyword>when|iff|eliff|else|end|assert|include)\b(?P<argument>[^}]*)\}\}'
+  r'\{\{\s*(?P<keyword>when|iff|eliff|else|end|assert|include|insert)\b(?P<argument>[^}]*)\}\}'
 )
 
 _INCLUDE_NAME_RE = re.compile(r'^\s*(?P<name>[A-Za-z0-9._/-]+)\s*$')
+
+_INSERT_REFERENCE_RE = re.compile(rf'^\s*#(?P<name>{_NAME})\s*$')
 
 _CONDITION_RE = re.compile(
   rf'^\s*(?P<left>\#?{_NAME})'
@@ -129,6 +141,8 @@ class _Renderer:
           self._assert(directive)
       elif directive.keyword == 'include':
         parts.append(self._include(directive, emit))
+      elif directive.keyword == 'insert':
+        parts.append(self._insert(directive, emit))
       else:
         raise TemplateError(f'{{{{{directive.keyword}}}}} without a matching {{{{iff}}}}')
 
@@ -191,6 +205,29 @@ class _Renderer:
   def _assert(self, directive: _Directive) -> None:
     if not self._evaluate(directive):
       raise TemplateError(f'assertion failed: {directive.argument.strip()}')
+
+  def _insert(self, directive: _Directive, emit: bool) -> str:
+    """emit the referenced string variable's value. the reference is resolved
+    even in a non-taken branch — a typo fails every render, like conditions —
+    but only an emitted directive contributes text; inside a non-emitted
+    include nothing resolves (the included file's facts may be foreign)."""
+    match = _INSERT_REFERENCE_RE.match(directive.argument)
+    if match is None:
+      raise TemplateError(
+        f'{{{{insert}}}} takes a variable reference: {directive.argument.strip()!r}'
+      )
+    if not self._evaluating:
+      return ''
+    name = match.group('name')
+    if name not in self._variables:
+      known = ', '.join(sorted(self._variables))
+      raise TemplateError(f'unknown variable #{name} in {{{{insert}}}}; known: {known}')
+    value = self._variables[name]
+    if not isinstance(value, StringVariable):
+      raise TemplateError(
+        f'#{name} in {{{{insert}}}} is not a string variable; it has no text form'
+      )
+    return value.value if emit else ''
 
   def _include(self, directive: _Directive, emit: bool) -> str:
     """splice the named text, resolved and structurally parsed regardless of
