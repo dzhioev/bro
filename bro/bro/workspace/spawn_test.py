@@ -21,16 +21,44 @@ import cw.workspace
 
 
 class TestDockerLaunchSpec:
-  def test_default_ring_bytes_is_64_kib(self):
-    assert cw.spawn.DEFAULT_RING_BYTES == 64 * 1024
-
   def test_defaults(self):
-    launch = cw.spawn.DockerLaunchSpec(command=['x'], env={}, secrets=(), attached=False)
-    assert launch.ring_bytes == cw.spawn.DEFAULT_RING_BYTES
-    assert launch.name is None
-    assert launch.optional_secrets == ()
-    # child-safe default: no host docker socket
-    assert launch.docker_sock is False
+    launch = cw.docker.Launch(
+      name='broker-X',
+      command=['x'],
+      env={},
+      secrets=(),
+      docker_sock=False,
+      tty=False,
+      forward_env=False,
+    )
+    spec = cw.spawn.DockerLaunchSpec(launch)
+    assert spec.ring_bytes == cw.spawn.DEFAULT_RING_BYTES == 64 * 1024
+    assert spec.remove_workspace is False
+
+
+class TestBrokerLaunch:
+  def test_adds_channel_without_changing_the_neutral_launch(self):
+    launch = cw.docker.Launch(
+      name='broker-X',
+      command=['broker', 'recv'],
+      env={'CW_BRO': 'pm'},
+      secrets=(),
+      docker_sock=False,
+      tty=False,
+      forward_env=False,
+      extra_mounts=('/existing:/mount',),
+    )
+    channel = cw.spawn.Provisioned(channel='X', host_endpoint='/host/sock.sock')
+    adapted = cw.spawn._broker_launch(launch, channel)
+    assert adapted.env == {'CW_BRO': 'pm', 'BROKER_CHANNEL': 'unix:/run/broker.sock'}
+    assert adapted.extra_mounts == (
+      '/existing:/mount',
+      '/host/sock.sock:/run/broker.sock',
+    )
+    assert adapted.tty is False
+    assert adapted.forward_env is False
+    assert launch.env == {'CW_BRO': 'pm'}
+    assert launch.extra_mounts == ('/existing:/mount',)
 
 
 class TestRingBuffer:
@@ -64,71 +92,6 @@ class TestRingBuffer:
   def test_negative_cap_rejected(self):
     with pytest.raises(ValueError):
       cw.spawn._RingBuffer(-1)
-
-
-class TestBrokerCreateArgv:
-  @pytest.fixture
-  def build_argv(self, monkeypatch, tmp_path):
-    monkeypatch.setattr(cw.docker.Path, 'home', lambda: tmp_path)
-    monkeypatch.setattr(cw.docker, '_seed_claude_json', lambda d, h, **k: tmp_path / '.claude.json')
-
-    def build(**launch_kwargs):
-      launch_kwargs.setdefault('attached', False)
-      launch_kwargs.setdefault('env', {})
-      launch = cw.spawn.DockerLaunchSpec(command=['broker', 'recv'], secrets=(), **launch_kwargs)
-      return cw.spawn._broker_create_argv(
-        launch, '/host/sock.sock', 'broker-X', tmp_path / 'proj', tmp_path / 'sess', 'tag'
-      )
-
-    return build
-
-  def test_non_tty(self, build_argv):
-    # no -it: a headless supervised child gets no pty
-    argv = build_argv()
-    assert '-it' not in argv
-    assert argv[:2] == ['docker', 'create']
-
-  def test_socket_bind_mounted(self, build_argv):
-    argv = build_argv()
-    assert '/host/sock.sock:/run/broker.sock' in argv
-    assert argv[argv.index('/host/sock.sock:/run/broker.sock') - 1] == '-v'
-
-  def test_broker_channel_env(self, build_argv):
-    argv = build_argv()
-    assert 'BROKER_CHANNEL=unix:/run/broker.sock' in argv
-    assert argv[argv.index('BROKER_CHANNEL=unix:/run/broker.sock') - 1] == '-e'
-
-  def test_env_snapshot_carries_cw_bro(self, build_argv):
-    assert 'CW_BRO=pm' in build_argv(env={'CW_BRO': 'pm'})
-
-  def test_ambient_cw_bro_never_forwarded(self, build_argv, monkeypatch):
-    # CW_BRO travels only in the launch env snapshot — the launcher's own
-    # theming must not leak into any spawned container, attached or not.
-    monkeypatch.setenv('CW_BRO', 'ppp-dev')
-    assert 'CW_BRO' not in build_argv()
-    assert 'CW_BRO' not in build_argv(attached=True)
-
-  def test_attached_allocates_tty(self, build_argv):
-    assert '-it' in build_argv(attached=True)
-
-  def test_docker_sock_follows_spec(self, build_argv):
-    mount = '/var/run/docker.sock:/var/run/docker.sock'
-    assert mount not in build_argv()
-    assert mount in build_argv(docker_sock=True)
-
-  def test_child_gets_no_ambient_env_forwards(self, build_argv, monkeypatch):
-    # a spawned child's environment is the LaunchSpec snapshot only — forwarding
-    # would bake the launcher's task/git/terminal facts into it
-    monkeypatch.setenv('CW_TASK_ID', 'task-1')
-    monkeypatch.setenv('TERM', 'tmux-256color')
-    argv = build_argv()
-    assert 'CW_TASK_ID' not in argv
-    assert 'TERM' not in argv
-
-  def test_attached_root_keeps_ambient_env_forwards(self, build_argv, monkeypatch):
-    # the attached root is the launcher's own session, so the forwards are its own
-    monkeypatch.setenv('CW_TASK_ID', 'task-1')
-    assert 'CW_TASK_ID' in build_argv(attached=True)
 
 
 class TestHostLogRedirect:
@@ -421,7 +384,17 @@ class TestCompositeSpawner:
       {cw.spawn.DockerLaunchSpec: docker, cw.spawn.ProcessLaunchSpec: process}
     )
     channel = cw.spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
-    docker_launch = cw.spawn.DockerLaunchSpec(command=['x'], env={}, secrets=(), attached=False)
+    docker_launch = cw.spawn.DockerLaunchSpec(
+      cw.docker.Launch(
+        name='broker-CH',
+        command=['x'],
+        env={},
+        secrets=(),
+        docker_sock=False,
+        tty=False,
+        forward_env=False,
+      )
+    )
     process_launch = cw.spawn.ProcessLaunchSpec(command=['x'], cwd='/', env={})
     await composite.spawn(docker_launch, channel)
     await composite.spawn(process_launch, channel)
@@ -464,35 +437,38 @@ class TestSummonLowering:
     launch = cw.spawn.SummonLaunchSpec(
       target='devoops', prompt='deploy the thing', parent_workspace=PARENT_WORKSPACE
     )
-    lowered = cw.spawn._lower_summon(launch)
+    lowered = cw.spawn._lower_summon(launch, 'broker-CH')
     assert lowered == cw.spawn.DockerLaunchSpec(
-      command=['ask', 'devoops', 'deploy the thing', '--in-place'],
-      env={
-        'CW_BASE_REF': 'PARENT-SHA',
-        'CW_BRO': 'devoops',
-        **cw.constants.bro_git_identity_env(),
-      },
-      secrets={'aws', 'trails'},
-      attached=False,
-      optional_secrets={'openai'},
-      docker_sock=True,
+      cw.docker.Launch(
+        name='broker-CH',
+        command=['ask', 'devoops', 'deploy the thing', '--in-place'],
+        env={
+          'CW_BASE_REF': 'PARENT-SHA',
+          'CW_BRO': 'devoops',
+          **cw.constants.bro_git_identity_env(),
+        },
+        secrets={'aws', 'trails'},
+        optional_secrets={'openai'},
+        docker_sock=True,
+        tty=False,
+        forward_env=False,
+      ),
+      remove_workspace=True,
     )
-    # child-safe default holds: throwaway workspace, env snapshot only
-    assert lowered.name is None
 
   def test_lowering_logs_the_scope_like_any_container_launch(self, lowering_harness, caplog):
     launch = cw.spawn.SummonLaunchSpec(
       target='devoops', prompt='p', parent_workspace=PARENT_WORKSPACE
     )
     with caplog.at_level('INFO'):
-      cw.spawn._lower_summon(launch)
+      cw.spawn._lower_summon(launch, 'broker-CH')
     assert 'scoped secrets for summoned devoops: aws, trails' in caplog.text
 
   def test_into_overrides_the_inherited_base_ref(self, lowering_harness):
     launch = cw.spawn.SummonLaunchSpec(
       target='devoops', prompt='p', parent_workspace=PARENT_WORKSPACE, into='summon'
     )
-    assert cw.spawn._lower_summon(launch).env == {
+    assert cw.spawn._lower_summon(launch, 'broker-CH').launch.env == {
       'CW_BASE_REF': 'REF-SHA',
       'CW_BRO': 'devoops',
       **cw.constants.bro_git_identity_env(),
@@ -503,12 +479,12 @@ class TestSummonLowering:
       target='devoops', prompt='p', parent_workspace=PARENT_WORKSPACE, into='nope'
     )
     with pytest.raises(ValueError, match='nope'):
-      cw.spawn._lower_summon(launch)
+      cw.spawn._lower_summon(launch, 'broker-CH')
 
   def test_unreadable_parent_head_fails_the_spawn(self, lowering_harness):
     launch = cw.spawn.SummonLaunchSpec(target='devoops', prompt='p', parent_workspace=Path('/gone'))
     with pytest.raises(ValueError, match="summoner's HEAD"):
-      cw.spawn._lower_summon(launch)
+      cw.spawn._lower_summon(launch, 'broker-CH')
 
   @pytest.mark.asyncio
   async def test_spawner_lowers_off_loop_and_delegates_to_docker(self, lowering_harness):
@@ -529,7 +505,8 @@ class TestSummonLowering:
     await spawner.spawn(launch, channel)
     [(lowered, lowered_channel)] = docker.spawned
     assert isinstance(lowered, cw.spawn.DockerLaunchSpec)
-    assert lowered.command == ['ask', 'devoops', 'p', '--in-place']
+    assert lowered.launch.command == ['ask', 'devoops', 'p', '--in-place']
+    assert lowered.launch.name == 'broker-CH'
     assert lowered_channel is channel
 
   @pytest.mark.asyncio
@@ -625,29 +602,36 @@ class TestRunRootViaBroker:
 class TestDockerSpawnerModes:
   @pytest.fixture
   def spawn_harness(self, monkeypatch, tmp_path):
-    monkeypatch.setattr(cw.spawn, '_project_root', lambda: tmp_path / 'proj')
-    monkeypatch.setattr(cw.spawn, '_image_tag', lambda: 'tag')
-    monkeypatch.setattr(cw.spawn, '_ensure_image', lambda tag: None)
-    monkeypatch.setattr(cw.spawn, '_ppp_tarball', lambda store: b'TARBALL')
-    stores: list = []
+    project = tmp_path / 'proj'
+    project_threads: list[int] = []
+    prepare_threads: list[int] = []
+    workspace_threads: list[int] = []
 
-    def fake_store(names, optional=()):
-      stores.append({'names': names, 'optional': optional})
-      return {}
+    def project_root():
+      project_threads.append(threading.get_ident())
+      return project
 
-    monkeypatch.setattr(cw.spawn.credentials, 'build_scoped_store', fake_store)
-    monkeypatch.setattr(
-      cw.spawn, '_broker_create_argv', lambda *a, **k: ['docker', 'create', 'ARGS']
-    )
-    created: list = []
-    threads: list = []
+    monkeypatch.setattr(cw.spawn, '_project_root', project_root)
+    prepared: list = []
 
-    def fake_create(argv, tarball, name):
-      created.append({'argv': argv, 'tarball': tarball, 'name': name})
-      threads.append(threading.get_ident())
+    def fake_prepare(launch, prepared_project):
+      prepared.append((launch, prepared_project))
+      prepare_threads.append(threading.get_ident())
+      (project / 'var' / 'cw' / 'containers' / launch.name).mkdir(parents=True)
       return 'cid123'
 
-    monkeypatch.setattr(cw.spawn, '_create_container', fake_create)
+    monkeypatch.setattr(cw.spawn, 'prepare_container', fake_prepare)
+
+    class FakeWorkspace:
+      def __init__(self, name, workspace_project):
+        self.name = name
+        workspace_threads.append(threading.get_ident())
+        assert workspace_project == project
+
+      def remove(self):
+        pass
+
+    monkeypatch.setattr(cw.spawn, 'ContainerWorkspace', FakeWorkspace)
 
     async def fake_remove(container_id):
       pass
@@ -658,62 +642,79 @@ class TestDockerSpawnerModes:
 
     def fake_exec(*argv, **kwargs):
       starts.append(list(argv))
-      # a real (trivial) child process stands in for the docker client
       return real_exec(sys.executable, '-c', 'pass', **kwargs)
 
     monkeypatch.setattr(asyncio, 'create_subprocess_exec', fake_exec)
     return {
-      'stores': stores,
-      'created': created,
+      'prepared': prepared,
       'starts': starts,
-      'threads': threads,
-      'tmp': tmp_path,
+      'project': project,
+      'project_threads': project_threads,
+      'prepare_threads': prepare_threads,
+      'workspace_threads': workspace_threads,
     }
 
   @pytest.mark.asyncio
   async def test_attached_root_mode(self, spawn_harness):
-    launch = cw.spawn.DockerLaunchSpec(
+    docker_launch = cw.docker.Launch(
+      name='ws',
       command=['claude'],
       env={},
       secrets=('github',),
-      attached=True,
-      name='ws',
+      docker_sock=True,
+      tty=True,
+      forward_env=True,
       optional_secrets=('openai',),
     )
+    launch = cw.spawn.DockerLaunchSpec(docker_launch)
     provisioned = cw.spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
     handle = await cw.spawn.DockerSpawner().spawn(launch, provisioned)
     try:
       assert isinstance(handle, cw.spawn._AttachedRoot)
       assert handle.output_tail() == ''
-      # the named workspace backs the container; no broker-<channel> throwaway
-      assert (spawn_harness['tmp'] / 'proj' / 'var' / 'cw' / 'containers' / 'ws').is_dir()
-      assert spawn_harness['created'] == [
-        {'argv': ['docker', 'create', 'ARGS'], 'tarball': b'TARBALL', 'name': 'ws'}
-      ]
-      assert spawn_harness['stores'] == [{'names': ('github',), 'optional': ('openai',)}]
+      prepared, project = spawn_harness['prepared'][0]
+      assert project == spawn_harness['project']
+      assert prepared.env['BROKER_CHANNEL'] == 'unix:/run/broker.sock'
+      assert '/host/CH.sock:/run/broker.sock' in prepared.extra_mounts
       assert spawn_harness['starts'] == [['docker', 'start', '-a', '-i', 'cid123']]
     finally:
-      await handle.wait()  # reap + restore the SIGINT handler
+      await handle.wait()
 
   @pytest.mark.asyncio
-  async def test_child_mode_derives_workspace_from_channel(self, spawn_harness):
-    launch = cw.spawn.DockerLaunchSpec(
-      command=['broker', 'recv'], env={}, secrets=(), attached=False
+  async def test_child_mode_uses_the_described_workspace(self, spawn_harness):
+    docker_launch = cw.docker.Launch(
+      name='broker-CH',
+      command=['broker', 'recv'],
+      env={},
+      secrets=(),
+      docker_sock=False,
+      tty=False,
+      forward_env=False,
     )
+    launch = cw.spawn.DockerLaunchSpec(docker_launch)
     provisioned = cw.spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
     handle = await cw.spawn.DockerSpawner().spawn(launch, provisioned)
     assert isinstance(handle, cw.spawn._DockerChild)
-    assert (spawn_harness['tmp'] / 'proj' / 'var' / 'cw' / 'containers' / 'broker-CH').is_dir()
+    assert spawn_harness['prepared'][0][0].name == 'broker-CH'
     assert spawn_harness['starts'] == [['docker', 'start', '-a', 'cid123']]
     assert await handle.wait() == 0
 
   @pytest.mark.asyncio
   async def test_blocking_prepare_runs_off_the_loop_thread(self, spawn_harness):
-    # image ensure / store build / docker create can block for minutes (a mid-session
-    # image rebuild); they must run via to_thread, not on the broker loop
-    launch = cw.spawn.DockerLaunchSpec(command=['x'], env={}, secrets=(), attached=False)
+    docker_launch = cw.docker.Launch(
+      name='broker-CH',
+      command=['x'],
+      env={},
+      secrets=(),
+      docker_sock=False,
+      tty=False,
+      forward_env=False,
+    )
+    launch = cw.spawn.DockerLaunchSpec(docker_launch, remove_workspace=True)
     provisioned = cw.spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
     handle = await cw.spawn.DockerSpawner().spawn(launch, provisioned)
-    assert len(spawn_harness['threads']) == 1
-    assert spawn_harness['threads'][0] != threading.get_ident()
+    loop_thread = threading.get_ident()
+    assert spawn_harness['project_threads'][0] != loop_thread
+    assert spawn_harness['prepare_threads'][0] != loop_thread
+    assert spawn_harness['workspace_threads'][0] != loop_thread
     assert await handle.wait() == 0

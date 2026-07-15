@@ -1,4 +1,3 @@
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -7,6 +6,7 @@ import llm.llms.chat_gpt
 import llm.llms.echo
 from cw import EFFORT_LEVELS
 from cw.constants import bro_git_identity_env
+from cw.docker import Launch
 from do._cli import create_bro_for_run, maybe_containerize
 
 # the run bro's own CW_BRO rides in explicitly (never as an ambient forward), so
@@ -58,19 +58,19 @@ def test_maybe_containerize_hops_and_scopes_to_bro():
       no_trails=False,
     )
   assert rc == 7
-  (workspace, command), kwargs = run.call_args
-  assert workspace.startswith('call-ppp-dev-')
-  assert command == ['call', 'ppp-dev', 'hi', '--slow', '--in-place']
-  assert kwargs['drop'] is True
+  launch = run.call_args.args[0]
+  assert launch.name.startswith('call-ppp-dev-')
+  assert launch.command == ['call', 'ppp-dev', 'hi', '--slow', '--in-place']
+  assert run.call_args.kwargs['drop'] is True
   # ppp-dev's manifest (github + brog) + its llm key + the mandatory trails sink
-  assert {'github', 'brog', 'trails'} <= kwargs['secrets']
+  assert {'github', 'brog', 'trails'} <= launch.secrets
   # ppp-dev doesn't deploy → no docker socket
-  assert kwargs['docker_sock'] is False
+  assert launch.docker_sock is False
   # the bro's may_summon seed reaches the broker root unchanged when no flags adjust it
-  assert kwargs['may_summon'] == {'devoops'}
+  assert run.call_args.kwargs['may_summon'] == {'devoops'}
   # recording on and no --into: identity + the run bro's CW_BRO is all the env
   # carries — the clone bases on the entrypoint's HEAD fallback
-  assert kwargs['extra_env'] == _RUN_ENV
+  assert launch.env == _RUN_ENV
 
 
 def test_maybe_containerize_no_trails_drops_secret_and_disables_recording():
@@ -86,11 +86,11 @@ def test_maybe_containerize_no_trails_drops_secret_and_disables_recording():
       in_place=False,
       no_trails=True,
     )
-  (_workspace, command), kwargs = run.call_args
+  launch = run.call_args.args[0]
   # the env var carries the effect in, so --no-trails isn't forwarded into the inner argv
-  assert command == ['call', 'ppp-dev', 'hi', '--in-place']
-  assert 'trails' not in kwargs['secrets']
-  assert kwargs['extra_env'] == {'TRAILS_DISABLED': '1', **_RUN_ENV}
+  assert launch.command == ['call', 'ppp-dev', 'hi', '--in-place']
+  assert 'trails' not in launch.secrets
+  assert launch.env == {'TRAILS_DISABLED': '1', **_RUN_ENV}
 
 
 def test_maybe_containerize_grant_adds_secret():
@@ -107,8 +107,7 @@ def test_maybe_containerize_grant_adds_secret():
       grant_cred=['gmail_creds'],
     )
   assert rc == 0
-  _, kwargs = run.call_args
-  assert 'gmail_creds' in kwargs['secrets']
+  assert 'gmail_creds' in run.call_args.args[0].secrets
 
 
 def test_maybe_containerize_revoke_removes_secret():
@@ -125,18 +124,20 @@ def test_maybe_containerize_revoke_removes_secret():
       revoke_cred=['github'],
     )
   assert rc == 0
-  _, kwargs = run.call_args
   # github is in ppp-dev's manifest; the revoke drops it from the scoped set
-  assert 'github' not in kwargs['secrets']
+  assert 'github' not in run.call_args.args[0].secrets
 
 
 def test_maybe_containerize_revoke_removes_optional_secret():
-  launch = SimpleNamespace(
-    secrets={'github'},
-    optional_secrets={'openai'},
-    docker_sock=False,
+  launch = Launch(
+    name='call-ppp-dev-test',
     command=['call', 'ppp-dev', 'hi', '--in-place'],
     env=_RUN_ENV,
+    secrets={'github'},
+    docker_sock=False,
+    tty=True,
+    forward_env=True,
+    optional_secrets={'openai'},
   )
   with (
     patch.dict('os.environ', {}, clear=False) as env,
@@ -152,9 +153,9 @@ def test_maybe_containerize_revoke_removes_optional_secret():
       revoke_cred=['openai'],
     )
   assert rc == 0
-  _, kwargs = run.call_args
-  assert kwargs['secrets'] == {'github'}
-  assert kwargs['optional_secrets'] == set()
+  launched = run.call_args.args[0]
+  assert launched.secrets == {'github'}
+  assert launched.optional_secrets == set()
 
 
 def test_maybe_containerize_missing_secret_fails_before_launch(monkeypatch, capsys):
@@ -225,8 +226,7 @@ def test_maybe_containerize_grant_summon_extends_the_allow_list():
       revoke_summon=['devoops'],
     )
   assert rc == 0
-  _, kwargs = run.call_args
-  assert kwargs['may_summon'] == {'pm'}
+  assert run.call_args.kwargs['may_summon'] == {'pm'}
 
 
 def test_maybe_containerize_summon_grant_already_allowed_errors(capsys):
@@ -334,8 +334,7 @@ def test_maybe_containerize_into_bases_the_clone_on_the_ref():
     )
   assert rc == 0
   assert resolve.call_args[0][1] == 'feature-branch'
-  _, kwargs = run.call_args
-  assert kwargs['extra_env'] == {'CW_BASE_REF': 'REF-SHA', **_RUN_ENV}
+  assert run.call_args.args[0].env == {'CW_BASE_REF': 'REF-SHA', **_RUN_ENV}
 
 
 def test_maybe_containerize_unresolvable_into_errors(capsys):

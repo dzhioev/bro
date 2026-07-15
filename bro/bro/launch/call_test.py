@@ -284,16 +284,16 @@ def test_call_re_execs_into_container_when_outside():
     assert rc == 0
     assert env['PPP_SHELL_COMMAND'] == 'call ppp-dev hey'
     assert run.call_count == 1
-    (workspace, command), kwargs = run.call_args
-    assert workspace.startswith('call-ppp-dev-')
+    launch = run.call_args.args[0]
+    assert launch.name.startswith('call-ppp-dev-')
     # host is a tty → the TUI runs in-container, so no --text is forwarded; fast is the
     # default so no --slow either
-    assert command == ['call', 'ppp-dev', 'hey', '--in-place']
-    assert kwargs['drop'] is True
+    assert launch.command == ['call', 'ppp-dev', 'hey', '--in-place']
+    assert run.call_args.kwargs['drop'] is True
     # ppp-dev's manifest (github + brog) plus the mandatory trails sink
-    assert {'github', 'brog', 'trails'} <= kwargs['secrets']
+    assert {'github', 'brog', 'trails'} <= launch.secrets
     # ppp-dev doesn't deploy → no docker socket
-    assert kwargs['docker_sock'] is False
+    assert launch.docker_sock is False
 
 
 def test_call_forwards_text_when_host_not_a_tty():
@@ -305,7 +305,7 @@ def test_call_forwards_text_when_host_not_a_tty():
     env.pop('CW_IN_CONTAINER', None)
     rc = main(['call', 'ppp-dev', 'hey'])
     assert rc == 0
-    (_workspace, command), _kwargs = run.call_args
+    command = run.call_args.args[0].command
     # host can't back the TUI → force text mode inside the container (the container's
     # PTY always reports a TTY, so the decision has to be made here on the host)
     assert command == ['call', 'ppp-dev', 'hey', '--text', '--in-place']
@@ -320,7 +320,7 @@ def test_call_forwards_effort_into_container():
     env.pop('CW_IN_CONTAINER', None)
     rc = main(['call', 'ppp-dev', 'hey', '--effort', 'high'])
     assert rc == 0
-    (_workspace, command), _kwargs = run.call_args
+    command = run.call_args.args[0].command
     # --effort is forwarded like --slow; the in-container run applies with_effort
     assert command == ['call', 'ppp-dev', 'hey', '--effort', 'high', '--in-place']
 
@@ -367,11 +367,11 @@ def test_call_no_trails_disables_recording_in_container():
     env.pop('CW_IN_CONTAINER', None)
     rc = main(['call', 'ppp-dev', 'hey', '--no-trails'])
     assert rc == 0
-    (_workspace, command), kwargs = run.call_args
+    launch = run.call_args.args[0]
     # the env var carries the effect in, so --no-trails isn't forwarded into the inner argv
-    assert command == ['call', 'ppp-dev', 'hey', '--in-place']
-    assert 'trails' not in kwargs['secrets']
-    assert kwargs['extra_env'] == {
+    assert launch.command == ['call', 'ppp-dev', 'hey', '--in-place']
+    assert 'trails' not in launch.secrets
+    assert launch.env == {
       'CW_BRO': 'ppp-dev',
       'TRAILS_DISABLED': '1',
       **bro_git_identity_env(),
@@ -410,7 +410,7 @@ def test_call_forwards_resume_into_container():
     # the in-container run resolves the trail itself
     rc = main(['call', 'ppp-dev', '--resume'])
     assert rc == 0
-    (_workspace, command), _kwargs = run.call_args
+    command = run.call_args.args[0].command
     assert command == ['call', 'ppp-dev', '--resume', 'latest', '--in-place']
 
 
@@ -423,7 +423,7 @@ def test_call_forwards_resume_trail_id_with_message():
     env.pop('CW_IN_CONTAINER', None)
     rc = main(['call', 'ppp-dev', 'and then?', '--resume', 'trail-id-1'])
     assert rc == 0
-    (_workspace, command), _kwargs = run.call_args
+    command = run.call_args.args[0].command
     assert command == ['call', 'ppp-dev', 'and then?', '--resume', 'trail-id-1', '--in-place']
 
 

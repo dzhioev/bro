@@ -68,14 +68,14 @@ def test_main_re_execs_into_container_when_outside():
     assert rc == 0
     assert env['PPP_SHELL_COMMAND'] == 'ask --rich ppp-dev hello world'
     assert run.call_count == 1
-    (workspace, command), kwargs = run.call_args
-    assert workspace.startswith('ask-ppp-dev-')
-    assert command == ['ask', 'ppp-dev', 'hello world', '--rich', '--in-place']
-    assert kwargs['drop'] is True
+    launch = run.call_args.args[0]
+    assert launch.name.startswith('ask-ppp-dev-')
+    assert launch.command == ['ask', 'ppp-dev', 'hello world', '--rich', '--in-place']
+    assert run.call_args.kwargs['drop'] is True
     # ppp-dev's manifest (github + brog) plus the mandatory trails sink
-    assert {'github', 'brog', 'trails'} <= kwargs['secrets']
+    assert {'github', 'brog', 'trails'} <= launch.secrets
     # ppp-dev doesn't deploy → no docker socket
-    assert kwargs['docker_sock'] is False
+    assert launch.docker_sock is False
 
 
 def test_main_default_forwards_no_slow_into_container():
@@ -86,7 +86,7 @@ def test_main_default_forwards_no_slow_into_container():
     env.pop('CW_IN_CONTAINER', None)
     rc = main(['ask', 'ppp-dev', 'hello'])
     assert rc == 0
-    (_workspace, command), _kwargs = run.call_args
+    command = run.call_args.args[0].command
     # fast is the default, so nothing extra is forwarded; the in-container run applies fast()
     assert command == ['ask', 'ppp-dev', 'hello', '--in-place']
 
@@ -99,7 +99,7 @@ def test_main_forwards_slow_into_container():
     env.pop('CW_IN_CONTAINER', None)
     rc = main(['ask', 'ppp-dev', 'hello', '--slow'])
     assert rc == 0
-    (_workspace, command), _kwargs = run.call_args
+    command = run.call_args.args[0].command
     # --slow is forwarded like --rich; the in-container run builds the plain spec
     assert command == ['ask', 'ppp-dev', 'hello', '--slow', '--in-place']
 
@@ -112,7 +112,7 @@ def test_main_forwards_effort_into_container():
     env.pop('CW_IN_CONTAINER', None)
     rc = main(['ask', 'ppp-dev', 'hello', '--effort', 'low'])
     assert rc == 0
-    (_workspace, command), _kwargs = run.call_args
+    command = run.call_args.args[0].command
     # --effort is forwarded like --slow; the in-container run applies with_effort
     assert command == ['ask', 'ppp-dev', 'hello', '--effort', 'low', '--in-place']
 
@@ -125,11 +125,11 @@ def test_main_no_trails_disables_recording_in_container():
     env.pop('CW_IN_CONTAINER', None)
     rc = main(['ask', 'ppp-dev', 'hello', '--no-trails'])
     assert rc == 0
-    (_workspace, command), kwargs = run.call_args
+    launch = run.call_args.args[0]
     # the env var carries the effect in, so --no-trails isn't forwarded into the inner argv
-    assert command == ['ask', 'ppp-dev', 'hello', '--in-place']
-    assert 'trails' not in kwargs['secrets']
-    assert kwargs['extra_env'] == {
+    assert launch.command == ['ask', 'ppp-dev', 'hello', '--in-place']
+    assert 'trails' not in launch.secrets
+    assert launch.env == {
       'CW_BRO': 'ppp-dev',
       'TRAILS_DISABLED': '1',
       **bro_git_identity_env(),

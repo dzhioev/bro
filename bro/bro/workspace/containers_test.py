@@ -1,8 +1,7 @@
 import sys
 
-import pytest
-
 import cw.containers
+import cw.docker
 import cw.spawn
 import cw.summon
 
@@ -15,53 +14,34 @@ class _FakeProc:
 
 
 class TestRunInContainerInjection:
-  @pytest.fixture
-  def harness(self, monkeypatch, tmp_path):
-    # pin the broker-less direct path; the broker gate and root launch have their own tests
+  def test_prepare_then_start_sequence(self, monkeypatch, tmp_path):
     monkeypatch.setenv('BROKER_DISABLED', '1')
     monkeypatch.setattr(cw.containers, '_project_root', lambda: tmp_path / 'project')
-    monkeypatch.setattr(cw.containers, '_image_tag', lambda: 'tag')
-    monkeypatch.setattr(cw.containers, '_ensure_image', lambda tag: None)
-    monkeypatch.setattr(cw.containers.Path, 'home', lambda: tmp_path / 'home')
+    prepared: list = []
     monkeypatch.setattr(
-      cw.containers, '_docker_create_argv', lambda *a, **k: ['docker', 'create', 'ARGS']
+      cw.containers,
+      'prepare_container',
+      lambda launch, project: prepared.append((launch, project)) or 'cid123',
     )
-    monkeypatch.setattr(
-      cw.containers.credentials,
-      'build_scoped_store',
-      lambda names, optional=(): {'credentials.json': b'{}'},
-    )
-    calls: list = []
+    calls: list[list[str]] = []
 
-    def fake_run(argv, *a, **k):
-      calls.append({'argv': argv, 'input': k.get('input')})
-      if argv[0] == 'git':
-        return _FakeProc(returncode=0)
-      if argv[:2] == ['docker', 'create']:
-        return _FakeProc(returncode=0, stdout='cid123\n')
-      if argv[:2] == ['docker', 'start']:
-        return _FakeProc(returncode=7)
-      return _FakeProc(returncode=0)  # cp, rm
+    def fake_run(argv, *args, **kwargs):
+      calls.append(argv)
+      return _FakeProc(returncode=7)
 
     monkeypatch.setattr(cw.containers.subprocess, 'run', fake_run)
-    return calls
-
-  def test_create_cp_start_sequence(self, harness):
-    import io
-    import tarfile
-
-    code = cw.containers.run_in_container('ws', ['claude'])
-    assert code == 7  # propagates `docker start` exit code
-    docker_calls = [c for c in harness if c['argv'][0] == 'docker']
-    assert docker_calls[0]['argv'][:2] == ['docker', 'create']
-    # the scoped store is cp'd into the pre-start container as a tar on stdin
-    cp = next(c for c in harness if c['argv'][:3] == ['docker', 'cp', '-'])
-    assert cp['argv'][3] == 'cid123:/home/cw'
-    assert isinstance(cp['input'], bytes)
-    with tarfile.open(fileobj=io.BytesIO(cp['input']), mode='r') as tar:
-      assert '.ppp/credentials.json' in tar.getnames()
-    # last call is the run-equivalent `docker start -a -i <id>`
-    assert harness[-1]['argv'] == ['docker', 'start', '-a', '-i', 'cid123']
+    launch = cw.docker.Launch(
+      name='ws',
+      command=['claude'],
+      env={},
+      secrets=(),
+      docker_sock=True,
+      tty=True,
+      forward_env=True,
+    )
+    assert cw.containers.run_in_container(launch) == 7
+    assert prepared == [(launch, tmp_path / 'project')]
+    assert calls == [['docker', 'start', '-a', '-i', 'cid123']]
 
 
 class TestBrokerGate:
@@ -96,24 +76,26 @@ class TestBrokerGate:
     monkeypatch.setattr(cw.containers, '_project_root', lambda: tmp_path / 'project')
     roots: list = []
 
-    def fake_root(name, command, project, **kwargs):
-      roots.append({'name': name, 'command': command, 'project': project, **kwargs})
+    def fake_root(launch, project, **kwargs):
+      roots.append({'launch': launch, 'project': project, **kwargs})
       return 5
 
     monkeypatch.setattr(cw.containers, '_run_root_via_broker', fake_root)
-    code = cw.containers.run_in_container(
-      'ws', ['claude'], docker_sock=False, may_summon={'devoops'}
+    launch = cw.docker.Launch(
+      name='ws',
+      command=['claude'],
+      env={},
+      secrets=(),
+      docker_sock=False,
+      tty=True,
+      forward_env=True,
     )
+    code = cw.containers.run_in_container(launch, may_summon={'devoops'})
     assert code == 5
     assert roots == [
       {
-        'name': 'ws',
-        'command': ['claude'],
+        'launch': launch,
         'project': tmp_path / 'project',
-        'secrets': (),
-        'optional_secrets': (),
-        'docker_sock': False,
-        'extra_env': None,
         'may_summon': {'devoops'},
       }
     ]
@@ -131,16 +113,17 @@ class TestRunRootViaBroker:
       return 3
 
     monkeypatch.setattr(cw.spawn, 'run_root_via_broker', fake_run_root)
-    code = cw.containers._run_root_via_broker(
-      'ws',
-      ['claude', '--verbose'],
-      tmp_path / 'project',
+    launch = cw.docker.Launch(
+      name='ws',
+      command=['claude', '--verbose'],
+      env={'CW_BASE_REF': 'deadbeef'},
       secrets=('github',),
       optional_secrets=('openai',),
       docker_sock=True,
-      extra_env={'CW_BASE_REF': 'deadbeef'},
-      may_summon={'devoops'},
+      tty=True,
+      forward_env=True,
     )
+    code = cw.containers._run_root_via_broker(launch, tmp_path / 'project', may_summon={'devoops'})
     assert code == 3
     assert captured['project'] == tmp_path / 'project'
     # the session key carries the container-mode prefix, so a same-name host
@@ -148,16 +131,17 @@ class TestRunRootViaBroker:
     assert captured['session'] == 'c:ws'
     assert captured['may_summon'] == {'devoops'}
     assert captured['launch'] == cw.spawn.DockerLaunchSpec(
-      command=['claude', '--verbose'],
-      # the summon-status env rides in next to the caller's env: the container
-      # reads the file the host writes through its read-only /host-repo mount
-      env={
-        'CW_BASE_REF': 'deadbeef',
-        cw.summon.STATUS_ENV: '/host-repo/var/cw/summon/c:ws.status.json',
-      },
-      secrets=('github',),
-      attached=True,
-      name='ws',
-      optional_secrets=('openai',),
-      docker_sock=True,
+      cw.docker.Launch(
+        name='ws',
+        command=['claude', '--verbose'],
+        env={
+          'CW_BASE_REF': 'deadbeef',
+          cw.summon.STATUS_ENV: '/host-repo/var/cw/summon/c:ws.status.json',
+        },
+        secrets=('github',),
+        optional_secrets=('openai',),
+        docker_sock=True,
+        tty=True,
+        forward_env=True,
+      )
     )

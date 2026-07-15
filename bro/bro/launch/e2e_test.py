@@ -284,9 +284,12 @@ exec "$@"
 _DRIVER = """
 import json, os, sys
 from cw.containers import run_in_container
+from cw.docker import Launch
 
-code = run_in_container(os.environ['CW_E2E_NAME'], json.loads(os.environ['CW_E2E_COMMAND']),
-                        secrets=())
+launch = Launch(name=os.environ['CW_E2E_NAME'],
+                command=json.loads(os.environ['CW_E2E_COMMAND']), env={}, secrets=(),
+                docker_sock=True, tty=True, forward_env=True)
+code = run_in_container(launch)
 loaded = sorted(m for m in sys.modules if m == 'broker' or m.startswith('broker.'))
 print(f'CW_E2E_EXIT:{code}', flush=True)
 print('CW_E2E_BROKER_MODULES:' + json.dumps(loaded), flush=True)
@@ -617,13 +620,28 @@ def _run_broker_scenario(
 ) -> BrokerRun:
   name = f'{_NAME_PREFIX}b-{case}-root'
   root = DockerLaunchSpec(
-    command=['python', '-c', _PROBE_B_ROOT],
-    env={'CW_E2E_DEADLINE': str(probe_deadline), 'CW_E2E_EXIT_AFTER': exit_after},
-    secrets=(),
-    attached=False,
-    name=name,
+    cw.docker.Launch(
+      name=name,
+      command=['python', '-c', _PROBE_B_ROOT],
+      env={'CW_E2E_DEADLINE': str(probe_deadline), 'CW_E2E_EXIT_AFTER': exit_after},
+      secrets=(),
+      docker_sock=False,
+      tty=False,
+      forward_env=False,
+    )
   )
-  child = DockerLaunchSpec(command=child_command, env={}, secrets=(), attached=False)
+  child = DockerLaunchSpec(
+    cw.docker.Launch(
+      name=f'{name}-child',
+      command=child_command,
+      env={},
+      secrets=(),
+      docker_sock=False,
+      tty=False,
+      forward_env=False,
+    ),
+    remove_workspace=True,
+  )
   facade = Broker(
     UnixServerTransport(str(env.broker_dir)), DockerSpawner(), default_timeout=default_timeout
   )

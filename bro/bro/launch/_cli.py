@@ -6,6 +6,7 @@ import logging
 import os
 import sys
 from collections.abc import Callable, Coroutine
+from dataclasses import replace
 from typing import Optional
 
 import base.args
@@ -186,7 +187,12 @@ def maybe_containerize(
       print(f'cannot resolve --into ref: {into}', file=sys.stderr)
       return 1
   launch = bro_run.describe(
-    bro_name, inner_args, cli_name=cli_name, base_ref=base_ref, trails=not no_trails
+    bro_name,
+    inner_args,
+    workspace_name=bro_run.fresh_workspace_name(f'{cli_name}-{bro_name}'),
+    cli_name=cli_name,
+    base_ref=base_ref,
+    trails=not no_trails,
   )
   try:
     scoped = finalize_scoped_secrets(
@@ -201,16 +207,8 @@ def maybe_containerize(
   except (ValueError, credentials.SecretNotFound) as e:
     print(str(e), file=sys.stderr)
     return 1
-  return run_in_container(
-    bro_run.fresh_workspace_name(f'{cli_name}-{bro_name}'),
-    launch.command,
-    drop=True,
-    secrets=scoped.required,
-    optional_secrets=scoped.optional,
-    docker_sock=launch.docker_sock,
-    extra_env=launch.env,
-    may_summon=may_summon,
-  )
+  launch = replace(launch, secrets=scoped.required, optional_secrets=scoped.optional)
+  return run_in_container(launch, drop=True, may_summon=may_summon)
 
 
 def _relay_blocked_flags(args: dict) -> list[str]:

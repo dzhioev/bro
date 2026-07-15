@@ -11,40 +11,24 @@ non-TTY child) is the caller's.
 
 import secrets
 from collections.abc import Sequence
-from dataclasses import dataclass
 from typing import Optional
 
 from cw.constants import bro_git_identity_env
+from cw.docker import Launch
 from cw.paths import _containers_dir, _project_root, _worktrees_dir
 from cw.secrets import Surface, scoped_secrets
-
-
-@dataclass(frozen=True)
-class Launch:
-  """description of one bro-run container launch.
-
-  `command` is the in-container argv (`<cli> <bro> … --in-place` — the inner run is
-  already the scoped one, so it must not hop or relay itself again). `env` is
-  the explicit container environment: the bro git identity, `CW_BRO` naming the
-  running bro, plus `CW_BASE_REF` / `TRAILS_DISABLED` when set. The remaining
-  fields are the bro's own credential scope (`cw.secrets.scoped_secrets`, the
-  bro-run surface).
-  """
-
-  command: list[str]
-  env: dict[str, str]
-  secrets: set[str]
-  optional_secrets: set[str]
-  docker_sock: bool
 
 
 def describe(
   bro_name: str,
   inner_args: Sequence[str],
   *,
+  workspace_name: str,
   cli_name: str = 'ask',
   base_ref: Optional[str] = None,
   trails: bool = True,
+  tty: bool = True,
+  forward_env: bool = True,
 ) -> Launch:
   """describe the launch of `<cli_name> <bro_name> <inner_args…> --in-place`.
 
@@ -63,11 +47,14 @@ def describe(
     required.remove('trails')
     env['TRAILS_DISABLED'] = '1'
   return Launch(
+    name=workspace_name,
     command=[cli_name, bro_name, *inner_args, '--in-place'],
     env=env,
     secrets=required,
     optional_secrets=set(scoped.optional),
     docker_sock=scoped.docker_sock,
+    tty=tty,
+    forward_env=forward_env,
   )
 
 

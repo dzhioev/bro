@@ -1,20 +1,14 @@
 import os
 import subprocess
 import sys
-from collections.abc import Collection, Mapping
+from collections.abc import Collection
+from dataclasses import replace
 from pathlib import Path
-from typing import Optional
 
-from base import credentials, log
-from cw.docker import (
-  _create_container,
-  _docker_create_argv,
-  _ensure_image,
-  _image_tag,
-  find_container_id,
-)
+from base import log
+from cw.docker import Launch, find_container_id, prepare_container
 from cw.paths import _containers_dir, _project_root
-from cw.secrets import _ppp_tarball, log_scoped_secrets
+from cw.secrets import log_scoped_secrets
 from cw.workspace import ContainerWorkspace, _format_ref, _parse_ref
 
 
@@ -92,128 +86,46 @@ def _container_broker_enabled() -> bool:
   return _broker_enabled()
 
 
-def _run_root_via_broker(
-  name: str,
-  command: list[str],
-  project: Path,
-  *,
-  secrets: Collection[str],
-  optional_secrets: Collection[str],
-  docker_sock: bool,
-  extra_env: Optional[Mapping[str, str]],
-  may_summon: Collection[str],
-) -> int:
-  """run the session as the broker's root peer: provision its channel socket under
-  `var/cw/broker`, bind-mount it at `/run/broker.sock`, launch attached, and supervise
-  it on the broker loop until it exits. Returns the container's exit code."""
+def _run_root_via_broker(launch: Launch, project: Path, *, may_summon: Collection[str]) -> int:
+  """run the container launch as the broker's supervised root peer."""
   # imported here, not at module level: _broker_enabled() must be able to short-circuit
   # a launch before anything touches the broker package (see its docstring).
   from cw.spawn import DockerLaunchSpec, run_root_via_broker
   from cw.summon import STATUS_ENV, container_status_path
 
-  # the summon session key is the mode-prefixed workspace name — a same-name host
-  # session must not share the state files (see cw/summon.py)
-  session = _format_ref(name, True)
-  env = dict(extra_env) if extra_env is not None else {}
-  # the summon-status file the host-side SummonControl writes, as seen through
-  # the container's read-only /host-repo mount of the project root
+  session = _format_ref(launch.name, True)
+  env = dict(launch.env)
   env[STATUS_ENV] = container_status_path(project, session)
-  launch = DockerLaunchSpec(
-    command=command,
-    env=env,
-    secrets=secrets,
-    attached=True,
-    name=name,
-    optional_secrets=optional_secrets,
-    docker_sock=docker_sock,
-  )
-  return run_root_via_broker(launch, project, session=session, may_summon=may_summon)
+  broker_launch = DockerLaunchSpec(replace(launch, env=env))
+  return run_root_via_broker(broker_launch, project, session=session, may_summon=may_summon)
 
 
 def run_in_container(
-  name: str,
-  command: list[str],
-  *,
-  drop: bool = False,
-  secrets: Collection[str] = (),
-  optional_secrets: Collection[str] = (),
-  docker_sock: bool = True,
-  extra_env: Optional[Mapping[str, str]] = None,
-  may_summon: Collection[str] = (),
+  launch: Launch, *, drop: bool = False, may_summon: Collection[str] = ()
 ) -> int:
-  """run `command` inside a fresh cw-style container backed by workspace `name`.
+  """run a prepared launch directly or as the root peer of a broker.
 
-  builds/reuses the image, creates `var/cw/containers/<name>/`, runs the container
-  (`docker create` + `docker cp` scoped secrets in + `docker start -a -i`, the
-  run-equivalent split that lets us inject the store into the pre-start container)
-  with the standard bind mounts (`/workspace`, `/host-repo:ro`, `.claude` overlay,
-  optionally the docker socket, …). When `drop=True`, removes the workspace dir
-  and per-session claude state on exit. Returns the container's exit code.
-
-  Unless the gate degrades it (see `_container_broker_enabled`: `BROKER_DISABLED`,
-  an unimportable broker, or a macOS host), the session runs as the root peer of a
-  broker whose loop supervises it: the per-peer channel socket is provisioned before
-  `docker create`, bind-mounted at `/run/broker.sock`, and pointed at by
-  `BROKER_CHANNEL`. The post-exit finish below runs after `Broker.run()` returns.
-
-  `secrets` is the required scoped credential set hydrated into the container's
-  ~/.ppp (see `credentials.build_scoped_store`); a missing secret raises (strict).
-  `optional_secrets` is the best-effort tier — hydrated when resolvable, silently
-  skipped when not, so a component that uses a secret only when present (e.g. a
-  query-focused fetch summary) degrades instead of failing launch. AWS is
-  just one of the required ones (`aws`), wired in by its install hook. `docker_sock=False`
-  drops the docker socket mount (shell-less bros). `extra_env` sets explicit
-  `-e KEY=VALUE` vars in the container (see `_docker_create_argv`) — the
-  container's `CW_BRO` travels here, set by every launch surface. `may_summon` is
-  the session's outgoing summon allow-list — the bro names it may summon, computed
-  per `cw/summon.py` — handed to the broker root; defaults to deny-all (and is
-  moot on the broker-less fallback path, which has no channel to summon over).
+  The launch description is supervision-neutral. The broker path wraps it only
+  after the lazy import gate; the fallback uses the same container prepare and
+  attaches with plain `docker start`. `drop` removes the caller-owned workspace
+  after exit, and `may_summon` configures the broker root's outgoing allow-list.
   """
-  # the container starts with origin/master only as fresh as the host's last fetch
-  # (the entrypoint copies the ref from /host-repo, no network). that is fine: the
-  # only operations that decide on master ancestry — /pr and /land — fetch from
-  # GitHub themselves before rebasing (the container's origin points upstream), so
-  # a launch-time refresh here would buy nothing they don't redo. the lone reader of
-  # a possibly-stale ref, infra's git_changes diff, is informational.
+  # the container starts with origin/master only as fresh as the host's last fetch.
+  # ancestry-changing workflows fetch again before acting; the remaining reader is informational.
   project = _project_root()
-  log_scoped_secrets(name, secrets, optional_secrets)
+  log_scoped_secrets(launch.name, launch.secrets, launch.optional_secrets)
   if _container_broker_enabled():
-    code = _run_root_via_broker(
-      name,
-      command,
-      project,
-      secrets=secrets,
-      optional_secrets=optional_secrets,
-      docker_sock=docker_sock,
-      extra_env=extra_env,
-      may_summon=may_summon,
-    )
+    code = _run_root_via_broker(launch, project, may_summon=may_summon)
   else:
-    session = _containers_dir(project) / name
-    session.mkdir(parents=True, exist_ok=True)
-    tag = _image_tag()
-    _ensure_image(tag)
-    # build the scoped store in memory (strict: a missing secret raises before the
-    # container is created), then inject it into the pre-start container's writable
-    # layer via `docker cp`. nothing plaintext touches the host disk.
-    store = credentials.build_scoped_store(secrets, optional=optional_secrets)
-    argv = _docker_create_argv(
-      tag,
-      name,
-      project,
-      session,
-      command,
-      docker_sock=docker_sock,
-      extra_env=extra_env,
-    )
-    container_id = _create_container(argv, _ppp_tarball(store), name)
-    # `docker start -a -i` reattaches the TTY/stdin and returns the exit code; --rm
-    # (set at create) removes the container — and its scoped secrets — on exit.
-    code = subprocess.run(['docker', 'start', '-a', '-i', container_id]).returncode
+    container_id = prepare_container(launch, project)
+    start = ['docker', 'start', '-a']
+    if launch.tty:
+      start.append('-i')
+    code = subprocess.run([*start, container_id]).returncode
   if drop:
     try:
-      ContainerWorkspace(name, project).remove()
-      log.info('removed container workspace %s', name)
+      ContainerWorkspace(launch.name, project).remove()
+      log.info('removed container workspace %s', launch.name)
     except RuntimeError as e:
-      log.warning('could not fully remove container workspace %s: %s', name, e)
+      log.warning('could not fully remove container workspace %s: %s', launch.name, e)
   return code

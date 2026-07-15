@@ -1,55 +1,22 @@
-"""cw's adapters for broker's `Spawner` port, plus the root-peer launch both use.
+"""broker spawner adapters for container and host-process launches.
 
-`DockerSpawner` pairs with `UnixServerTransport` across the container boundary: the
-broker provisions a per-peer host socket, and this spawner bind-mounts it into the
-child at the fixed `/run/broker.sock` and points `BROKER_CHANNEL` at it, so the
-child's `broker` client connects back over the channel the host supervises.
+`DockerSpawner` unwraps a broker-free `cw.docker.Launch`, adds the provisioned
+channel socket mount and `BROKER_CHANNEL`, and runs the shared blocking container
+prepare off-loop. A TTY launch attaches with inherited stdio and host-log
+redirection; a headless launch captures merged output in a bounded ring and can
+remove its caller-marked throwaway workspace after exit. The neutral launch owns
+the complete docker inputs, including the explicit env snapshot and whether
+ambient forwarding is allowed.
 
-Two docker launch modes, keyed by `launch.attached` — stdio wiring only; supervision
-by the broker's Runtime is uniform:
+`ProcessSpawner` runs the host-session root with inherited stdio and adds the
+provisioned host socket directly to its explicit environment.
 
-- Non-TTY (`attached == False`, a spawned child): `docker create` without `-it` (a
-  headless child gets no pty) → `docker start -a` as an asyncio subprocess with
-  stdout and stderr merged into one pipe and drained by an async task into a bounded
-  ring buffer for `failed{output_tail}` — the streams are diagnostics for a child
-  that dies without reporting; its result is channel-native (`completed{result}`).
-  Attaching (rather than detaching + `docker wait` + `docker logs`) is deliberate:
-  detached `--rm` removal races the log read. A derived `broker-<channel>` workspace
-  is removed (both host dirs) once the child ends; a named one stays caller-owned.
-  The child's environment is the `LaunchSpec` snapshot only — the ambient
-  `_DOCKER_FORWARD_ENV` forwards apply solely to the attached root (see
-  `_broker_create_argv`).
-- Interactive (`attached == True`, e.g. a cw session root): `docker create -it` →
-  `docker start -a -i` as an asyncio subprocess with inherited stdio (the host TTY),
-  plus a SIGINT forwarder — an interrupt of the launcher must reach the attached
-  docker client, not unwind the broker loop out from under the running session.
-  While the child owns the terminal, this process's own output is redirected to the
-  session host log (`_HostLogRedirect`) so mid-session host lines and spawner
-  shell-out chatter cannot paint over a raw-mode UI. `output_tail()` is empty (the
-  streams belong to the TTY).
+`SummonSpawner` resolves the requested base ref off-loop, asks `bro_run.describe`
+to construct the target's neutral headless launch, wraps it for the docker
+spawner, and marks its channel-named workspace for teardown.
 
-Either way the exit code is the attached process's returncode and `kill()`
-force-removes the container.
-
-`ProcessSpawner` is the host-mode sibling: the peer is a plain subprocess with
-inherited stdio (the interactive root of a host session), and the provisioned socket
-path is directly reachable from it, so `BROKER_CHANNEL` points straight at the host
-endpoint — no bind-mount hop.
-
-`run_root_via_broker` is the launch shape both modes share: one broker over the
-`var/cw/broker` control dir, the `CompositeSpawner` over both launch modes plus the
-summon lowering (so any root can spawn docker children), the built-in ping handler,
-the root-lifecycle log handlers (the host process is the root's parent, so a root
-run's `started`/`completed` land in the host log), and the root's `SummonControl`
-(handler + delivery tap + teardown log, see `cw/summon.py`), supervise until the
-root exits.
-
-`SummonSpawner` turns an authorized summon into a docker child: `_lower_summon`
-(off-loop) computes the launch a host-side `ask <target>` would get — the shared
-bro-run description (`bro_run.describe`: the target's own credential scope,
-`ask <target> "<prompt>"` non-TTY), based on the summoner's workspace HEAD (or
-the request's `into` ref) via `CW_BASE_REF` — and delegates to the docker path
-above.
+`run_root_via_broker` composes both launch modes and summon lowering under one
+broker, then supervises the root until exit.
 """
 
 import asyncio
@@ -57,22 +24,22 @@ import os
 import signal
 import sys
 from collections.abc import Collection
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Optional
 
 import bro_run
-from base import credentials, log
+from base import log
 from broker.brotocol import Message, Tag
 from broker.dispatcher import Broker, Dispatcher, ping_handler
 from broker.runtime import Peer
 from broker.spawn import ChildHandle, LaunchSpec, Spawner
 from broker.transport import Provisioned
 from broker.transports.unix import UnixServerTransport
-from cw.docker import _create_container, _docker_create_argv, _ensure_image, _image_tag
+from cw.docker import Launch as DockerLaunch, prepare_container
 from cw.git import resolve_head, resolve_ref
-from cw.paths import _broker_dir, _containers_dir, _host_log_dir, _project_root, _summon_dir
-from cw.secrets import _ppp_tarball, log_scoped_secrets
+from cw.paths import _broker_dir, _host_log_dir, _project_root, _summon_dir
+from cw.secrets import log_scoped_secrets
 from cw.summon import SummonControl, summon_status_file
 from cw.workspace import ContainerWorkspace
 from summon import SUMMON
@@ -86,30 +53,11 @@ _DRAIN_CHUNK = 65536
 
 @dataclass(frozen=True)
 class DockerLaunchSpec(LaunchSpec):
-  """the concrete launch description `DockerSpawner` reads.
+  """broker adapter around a supervision-neutral container launch."""
 
-  `env` is an explicit snapshot the constructor assembles, never a live `os.environ`
-  read, so a spawn is a pure function of its `LaunchSpec` — reproducible and
-  independent of whatever ambient environment the launcher holds when the loop reaches
-  this peer. Only an attached root gets the ambient `_DOCKER_FORWARD_ENV` forwards on
-  top; a spawned child's environment is this snapshot alone (see
-  `_broker_create_argv`).
-
-  `name` is the workspace backing the container (`var/cw/containers/<name>`); `None`
-  derives a throwaway `broker-<channel>` one, removed when the child ends. `secrets`
-  hydrate strictly, `optional_secrets` best-effort (`credentials.build_scoped_store`).
-  `docker_sock` mirrors the `_docker_create_argv` knob: an attached cw session root
-  gets the host docker socket; a spawned child defaults to none.
-  """
-
-  command: list[str]
-  env: dict[str, str]
-  secrets: Collection[str]
-  attached: bool
+  launch: DockerLaunch
   ring_bytes: int = DEFAULT_RING_BYTES
-  name: Optional[str] = None
-  optional_secrets: Collection[str] = ()
-  docker_sock: bool = False
+  remove_workspace: bool = False
 
 
 @dataclass(frozen=True)
@@ -165,29 +113,14 @@ def _workspace_name(channel: str) -> str:
   return f'broker-{channel}'
 
 
-def _broker_create_argv(
-  launch: DockerLaunchSpec, host_socket: str, name: str, project: Path, session: Path, tag: str
-) -> list[str]:
-  """`docker create` argv for a broker peer: the channel socket bind-mounted to
-  `/run/broker.sock` and `BROKER_CHANNEL` pointed at it. TTY allocation and
-  ambient env forwarding both follow `launch.attached` — the root is the
-  launcher's own session, so it owns the host TTY and inherits the
-  `_DOCKER_FORWARD_ENV` set; a supervised child is headless and gets the
-  `LaunchSpec` env snapshot only (forwarding would bake the launcher's values
-  into it: mis-attributed commits, wrong banner facts)."""
-  peer_env = dict(launch.env)
-  peer_env['BROKER_CHANNEL'] = _BROKER_ADDRESS
-  return _docker_create_argv(
-    tag,
-    name,
-    project,
-    session,
-    launch.command,
-    tty=launch.attached,
-    docker_sock=launch.docker_sock,
-    extra_env=peer_env,
-    extra_mounts=[f'{host_socket}:{_IN_CONTAINER_SOCK}'],
-    forward_env=launch.attached,
+def _broker_launch(launch: DockerLaunch, channel: Provisioned) -> DockerLaunch:
+  """add the provisioned broker channel to a neutral container launch."""
+  env = dict(launch.env)
+  env['BROKER_CHANNEL'] = _BROKER_ADDRESS
+  return replace(
+    launch,
+    env=env,
+    extra_mounts=(*launch.extra_mounts, f'{channel.host_endpoint}:{_IN_CONTAINER_SOCK}'),
   )
 
 
@@ -384,25 +317,13 @@ class _AttachedProcess(_AttachedHandle):
       await self._process.wait()
 
 
-def _prepare_container(
+def _prepare_docker_spawn(
   launch: DockerLaunchSpec, channel: Provisioned
 ) -> tuple[str, Optional[ContainerWorkspace]]:
-  """the blocking prefix of a docker spawn: image ensure (a rebuild can take
-  minutes), scoped-store build, `docker create` + store cp. Synchronous — `spawn`
-  runs it via `asyncio.to_thread` so it never stalls the broker loop. Returns the
-  created container id plus the derived throwaway workspace (None when the launch
-  names a caller-owned one)."""
+  docker_launch = _broker_launch(launch.launch, channel)
   project = _project_root()
-  name = launch.name if launch.name is not None else _workspace_name(channel.channel)
-  session = _containers_dir(project) / name
-  session.mkdir(parents=True, exist_ok=True)
-  tag = _image_tag()
-  _ensure_image(tag)
-  # strict: a missing required secret raises here, before the container is created.
-  store = credentials.build_scoped_store(launch.secrets, optional=launch.optional_secrets)
-  argv = _broker_create_argv(launch, str(channel.host_endpoint), name, project, session, tag)
-  container_id = _create_container(argv, _ppp_tarball(store), name)
-  workspace = ContainerWorkspace(name, project) if launch.name is None else None
+  container_id = prepare_container(docker_launch, project)
+  workspace = ContainerWorkspace(docker_launch.name, project) if launch.remove_workspace else None
   return container_id, workspace
 
 
@@ -412,13 +333,10 @@ class DockerSpawner(Spawner):
 
   async def spawn(self, launch: LaunchSpec, channel: Provisioned) -> ChildHandle:
     assert isinstance(launch, DockerLaunchSpec)
-    container_id, workspace = await asyncio.to_thread(_prepare_container, launch, channel)
-    if launch.attached:
-      # docker start -a -i with inherited stdio: the client owns the host TTY.
+    container_id, workspace = await asyncio.to_thread(_prepare_docker_spawn, launch, channel)
+    if launch.launch.tty:
       process = await asyncio.create_subprocess_exec('docker', 'start', '-a', '-i', container_id)
       return _AttachedRoot(container_id, process, host_log=self._host_log)
-    # docker start -a (no -i) attaches stdout+stderr to this subprocess, merged into one
-    # pipe (chronological interleave) and drained by an async task into the ring.
     process = await asyncio.create_subprocess_exec(
       'docker',
       'start',
@@ -442,7 +360,7 @@ class ProcessSpawner(Spawner):
     return _AttachedProcess(process, self._host_log)
 
 
-def _lower_summon(launch: SummonLaunchSpec) -> DockerLaunchSpec:
+def _lower_summon(launch: SummonLaunchSpec, workspace_name: str) -> DockerLaunchSpec:
   """the blocking half of a summon spawn: compute the docker launch a host-side
   `ask <target>` would get — the shared bro-run description (`bro_run.describe`:
   exactly the target's own scope, nothing inherited from the summoner, no grant
@@ -462,16 +380,16 @@ def _lower_summon(launch: SummonLaunchSpec) -> DockerLaunchSpec:
     base_ref = resolve_head(project, launch.parent_workspace)
     if base_ref is None:
       raise ValueError(f"cannot read the summoner's HEAD at {launch.parent_workspace}")
-  run = bro_run.describe(launch.target, [launch.prompt], base_ref=base_ref)
-  log_scoped_secrets(f'summoned {launch.target}', run.secrets, run.optional_secrets)
-  return DockerLaunchSpec(
-    command=run.command,
-    env=run.env,
-    secrets=run.secrets,
-    attached=False,
-    optional_secrets=run.optional_secrets,
-    docker_sock=run.docker_sock,
+  run = bro_run.describe(
+    launch.target,
+    [launch.prompt],
+    workspace_name=workspace_name,
+    base_ref=base_ref,
+    tty=False,
+    forward_env=False,
   )
+  log_scoped_secrets(f'summoned {launch.target}', run.secrets, run.optional_secrets)
+  return DockerLaunchSpec(run, remove_workspace=True)
 
 
 class SummonSpawner(Spawner):
@@ -483,7 +401,7 @@ class SummonSpawner(Spawner):
 
   async def spawn(self, launch: LaunchSpec, channel: Provisioned) -> ChildHandle:
     assert isinstance(launch, SummonLaunchSpec)
-    lowered = await asyncio.to_thread(_lower_summon, launch)
+    lowered = await asyncio.to_thread(_lower_summon, launch, _workspace_name(channel.channel))
     return await self._docker.spawn(lowered, channel)
 
 

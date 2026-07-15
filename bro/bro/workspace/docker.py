@@ -1,16 +1,34 @@
 import hashlib
 import os
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from base import log
+from base import credentials, log
 from cw.claude_config import _seed_claude_json, _write_session_settings
-from cw.paths import _project_root, _session_claude_dir
+from cw.paths import _containers_dir, _project_root, _session_claude_dir
+from cw.secrets import _ppp_tarball
 
 CONTAINER_DIR = Path(__file__).resolve().parent.parent / 'setup' / 'container'
 BASE_IMAGE_DIR = Path(__file__).resolve().parent.parent / 'setup' / 'base_image'
+
+
+@dataclass(frozen=True)
+class Launch:
+  """complete description of a cw-style container before supervision is chosen."""
+
+  name: str
+  command: list[str]
+  env: Mapping[str, str]
+  secrets: Collection[str]
+  docker_sock: bool
+  tty: bool
+  forward_env: bool
+  optional_secrets: Collection[str] = ()
+  extra_mounts: Collection[str] = ()
+
 
 _DOCKER_FORWARD_ENV = (
   'CW_COMMAND',
@@ -160,6 +178,28 @@ def _create_container(argv: list[str], store_tarball: bytes, name: str) -> str:
       f'docker cp of scoped store into {name} failed: {cp.stderr.decode().strip()}'
     )
   return container_id
+
+
+def prepare_container(launch: Launch, project: Path) -> str:
+  """create the workspace and unstarted container described by `launch`."""
+  session = _containers_dir(project) / launch.name
+  session.mkdir(parents=True, exist_ok=True)
+  tag = _image_tag()
+  _ensure_image(tag)
+  store = credentials.build_scoped_store(launch.secrets, optional=launch.optional_secrets)
+  argv = _docker_create_argv(
+    tag,
+    launch.name,
+    project,
+    session,
+    launch.command,
+    docker_sock=launch.docker_sock,
+    extra_env=launch.env,
+    forward_env=launch.forward_env,
+    tty=launch.tty,
+    extra_mounts=list(launch.extra_mounts),
+  )
+  return _create_container(argv, _ppp_tarball(store), launch.name)
 
 
 def _docker_create_argv(

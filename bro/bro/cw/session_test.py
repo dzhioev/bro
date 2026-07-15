@@ -96,16 +96,16 @@ class TestGrantRevoke:
         _spec(drop=True, grant_cred=['gmail_creds'], revoke_cred=['notion'])
       )
     assert rc == 0
-    _, kwargs = h.run_in_container.call_args
-    assert 'gmail_creds' in kwargs['secrets']
-    assert 'notion' not in kwargs['secrets']
+    launch = h.run_in_container.call_args.args[0]
+    assert 'gmail_creds' in launch.secrets
+    assert 'notion' not in launch.secrets
 
   def test_start_session_can_revoke_an_optional_secret(self):
     with _ContainerHarness(optional_secrets={'openai'}) as harness:
       rc = cw.session.start_session(_spec(drop=True, revoke_cred=['openai']))
     assert rc == 0
-    _, kwargs = harness.run_in_container.call_args
-    assert kwargs['optional_secrets'] == set()
+    launch = harness.run_in_container.call_args.args[0]
+    assert launch.optional_secrets == set()
 
   def test_missing_secret_fails_cleanly_before_container_launch(self, caplog):
     with _ContainerHarness() as harness:
@@ -133,7 +133,7 @@ class TestGrantRevoke:
     with _ContainerHarness() as h:
       rc = cw.session.start_session(_spec(drop=True, effort='xhigh'))
     assert rc == 0
-    command = h.run_in_container.call_args[0][1]
+    command = h.run_in_container.call_args.args[0].command
     assert command[command.index('--effort') + 1] == 'xhigh'
 
 
@@ -148,8 +148,7 @@ class TestSummonAllowList:
       ('ppp-dev',),
       {'grant': ['devoops'], 'revoke': []},
     )
-    _, kwargs = h.run_in_container.call_args
-    assert kwargs['may_summon'] == {'devoops'}
+    assert h.run_in_container.call_args.kwargs['may_summon'] == {'devoops'}
 
   def test_container_session_keys_identity_on_the_bro(self):
     with _ContainerHarness() as h:
@@ -180,7 +179,7 @@ class TestContainerCommand:
         _spec(drop=True, fast=True, persona='pm', effort='xhigh', prompt='go')
       )
     assert rc == 0
-    command = h.run_in_container.call_args[0][1]
+    command = h.run_in_container.call_args.args[0].command
     assert command == [
       'cw', 'ss', '--in-place', '--fast', '--effort', 'xhigh', '--persona', 'pm', '--prompt=go', 'w',
     ]  # fmt: skip
@@ -189,19 +188,19 @@ class TestContainerCommand:
     with _ContainerHarness() as h:
       rc = cw.session.start_session(_spec(drop=True, bro='pm'))
     assert rc == 0
-    command = h.run_in_container.call_args[0][1]
+    command = h.run_in_container.call_args.args[0].command
     assert command == ['cw', 'ss', '--in-place', '--bro', 'pm', 'w']
     # CW_BRO themes the whole container (cw exec shells), set explicitly in the
     # container env — never forwarded from the launcher's environment
-    _, kwargs = h.run_in_container.call_args
-    assert kwargs['extra_env']['CW_BRO'] == 'pm'
+    launch = h.run_in_container.call_args.args[0]
+    assert launch.env['CW_BRO'] == 'pm'
 
   def test_cw_session_stamps_the_default_persona_as_cw_bro(self):
     with _ContainerHarness() as h:
       rc = cw.session.start_session(_spec(drop=True))
     assert rc == 0
-    _, kwargs = h.run_in_container.call_args
-    assert kwargs['extra_env']['CW_BRO'] == 'ppp-dev'
+    launch = h.run_in_container.call_args.args[0]
+    assert launch.env['CW_BRO'] == 'ppp-dev'
 
   def test_default_base_is_left_to_the_entrypoint_head_fallback(self):
     # no CW_BASE_REF by default: the clone bases on HEAD — the host checkout as
@@ -209,8 +208,8 @@ class TestContainerCommand:
     with _ContainerHarness() as h:
       rc = cw.session.start_session(_spec(drop=True))
     assert rc == 0
-    _, kwargs = h.run_in_container.call_args
-    assert 'CW_BASE_REF' not in kwargs['extra_env']
+    launch = h.run_in_container.call_args.args[0]
+    assert 'CW_BASE_REF' not in launch.env
 
   def test_into_threads_the_resolved_base_into_the_container_env(self):
     with _ContainerHarness() as h:
@@ -218,8 +217,8 @@ class TestContainerCommand:
         rc = cw.session.start_session(_spec(drop=True, into='feature'))
     assert rc == 0
     assert resolve.call_args[0][1] == 'feature'
-    _, kwargs = h.run_in_container.call_args
-    assert kwargs['extra_env']['CW_BASE_REF'] == 'intosha'
+    launch = h.run_in_container.call_args.args[0]
+    assert launch.env['CW_BASE_REF'] == 'intosha'
 
   def test_unresolvable_into_fails_launch(self):
     with _ContainerHarness() as h:
@@ -243,7 +242,7 @@ class TestContainerCommand:
         projects.return_value = tmp_path
         rc = cw.session.start_session(_spec(resume=True))
     assert rc == 0
-    command = h.run_in_container.call_args[0][1]
+    command = h.run_in_container.call_args.args[0].command
     assert command == ['cw', 'ss', '--in-place', '--resume', 'w']
 
 

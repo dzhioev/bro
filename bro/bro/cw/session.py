@@ -11,7 +11,7 @@ from base import credentials, log
 from cw.claude_config import _provision_host_claude_dir
 from cw.constants import DEFAULT_SESSION_BRO
 from cw.containers import _broker_enabled, run_in_container
-from cw.docker import find_container_id
+from cw.docker import Launch, find_container_id
 from cw.flags import DEFAULT_SESSION_MODE
 from cw.git import resolve_ref
 from cw.paths import _latest_jsonl, _project_root, _venv_env
@@ -264,16 +264,17 @@ def _container_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
     # (the sha's objects are already shared from /host-repo via clone alternates);
     # without it the clone bases on HEAD — the host checkout as cloned.
     env['CW_BASE_REF'] = base_ref
-  code = run_in_container(
-    spec.name,
-    ['cw', *spec.to_in_place_argv()],
-    drop=spec.drop,
+  launch = Launch(
+    name=spec.name,
+    command=['cw', *spec.to_in_place_argv()],
+    env=env,
     secrets=scoped.required,
-    optional_secrets=scoped.optional,
     docker_sock=scoped.docker_sock,
-    extra_env=env,
-    may_summon=may_summon,
+    tty=True,
+    forward_env=True,
+    optional_secrets=scoped.optional,
   )
+  code = run_in_container(launch, drop=spec.drop, may_summon=may_summon)
   if not spec.drop and code == 0:
     _replace_resume_hint(workspace)
   return code

@@ -138,6 +138,65 @@ class TestPruneSupersededImages:
     assert [argv for argv in calls if argv[:3] == ['docker', 'image', 'rm']] == []
 
 
+class TestPrepareContainer:
+  def test_runs_the_shared_prepare_sequence_from_the_launch(self, monkeypatch, tmp_path):
+    project = tmp_path / 'project'
+    events: list = []
+    monkeypatch.setattr(cw.docker, '_image_tag', lambda: events.append('tag') or 'image')
+    monkeypatch.setattr(cw.docker, '_ensure_image', lambda tag: events.append(('ensure', tag)))
+    monkeypatch.setattr(
+      cw.docker.credentials,
+      'build_scoped_store',
+      lambda secrets, optional=(): events.append(('store', secrets, optional)) or {'x': b'y'},
+    )
+    monkeypatch.setattr(cw.docker, '_ppp_tarball', lambda store: b'TARBALL')
+    monkeypatch.setattr(
+      cw.docker,
+      '_docker_create_argv',
+      lambda *args, **kwargs: events.append(('argv', args, kwargs)) or ['docker', 'create'],
+    )
+    monkeypatch.setattr(
+      cw.docker,
+      '_create_container',
+      lambda argv, tarball, name: events.append(('create', argv, tarball, name)) or 'cid',
+    )
+    launch = cw.docker.Launch(
+      name='ws',
+      command=['claude'],
+      env={'MARKER': 'x'},
+      secrets=('github',),
+      docker_sock=False,
+      tty=False,
+      forward_env=False,
+      optional_secrets=('openai',),
+      extra_mounts=('/host:/container',),
+    )
+    assert cw.docker.prepare_container(launch, project) == 'cid'
+    assert (project / 'var' / 'cw' / 'containers' / 'ws').is_dir()
+    assert events[0:3] == [
+      'tag',
+      ('ensure', 'image'),
+      ('store', ('github',), ('openai',)),
+    ]
+    argv_event = events[3]
+    assert argv_event[0] == 'argv'
+    assert argv_event[1] == (
+      'image',
+      'ws',
+      project,
+      project / 'var' / 'cw' / 'containers' / 'ws',
+      ['claude'],
+    )
+    assert argv_event[2] == {
+      'docker_sock': False,
+      'extra_env': {'MARKER': 'x'},
+      'forward_env': False,
+      'tty': False,
+      'extra_mounts': ['/host:/container'],
+    }
+    assert events[4] == ('create', ['docker', 'create'], b'TARBALL', 'ws')
+
+
 class TestDockerCreateArgv:
   @pytest.fixture
   def build_argv(self, monkeypatch, tmp_path):

@@ -2,31 +2,35 @@ import bro_run
 from cw.constants import bro_git_identity_env
 
 
+def _describe(*args, **kwargs):
+  return bro_run.describe(*args, workspace_name='ws', **kwargs)
+
+
 def test_describe_composes_the_in_place_pinned_command():
-  launch = bro_run.describe('ppp-dev', ['hi', '--slow'], cli_name='call')
+  launch = _describe('ppp-dev', ['hi', '--slow'], cli_name='call')
   assert launch.command == ['call', 'ppp-dev', 'hi', '--slow', '--in-place']
 
 
 def test_describe_env_carries_identity_and_bro():
-  launch = bro_run.describe('ppp-dev', ['hi'])
+  launch = _describe('ppp-dev', ['hi'])
   assert launch.env == {'CW_BRO': 'ppp-dev', **bro_git_identity_env()}
 
 
 def test_describe_scopes_to_the_bro():
-  launch = bro_run.describe('ppp-dev', ['hi'])
+  launch = _describe('ppp-dev', ['hi'])
   # ppp-dev's manifest (github + brog) + its llm key + the mandatory trails sink
-  assert {'github', 'brog', 'trails'} <= launch.secrets
+  assert {'github', 'brog', 'trails'} <= set(launch.secrets)
   # ppp-dev doesn't deploy → no docker socket
   assert launch.docker_sock is False
 
 
 def test_describe_base_ref_rides_cw_base_ref():
-  launch = bro_run.describe('ppp-dev', ['hi'], base_ref='REF-SHA')
+  launch = _describe('ppp-dev', ['hi'], base_ref='REF-SHA')
   assert launch.env['CW_BASE_REF'] == 'REF-SHA'
 
 
 def test_describe_no_trails_drops_secret_and_disables_recording():
-  launch = bro_run.describe('ppp-dev', ['hi'], trails=False)
+  launch = _describe('ppp-dev', ['hi'], trails=False)
   assert 'trails' not in launch.secrets
   assert launch.env['TRAILS_DISABLED'] == '1'
 
