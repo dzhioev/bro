@@ -11,7 +11,6 @@ from typing import Optional
 import base.args
 import cw.bro_run
 import summon as summon_client
-from base import credentials
 from bro.bro import BroRaised
 from bro.bros.bro import Bro
 from llm.llm import LLMSpec
@@ -141,15 +140,15 @@ def maybe_containerize(
   `no_trails` drops `trails` from the scoped set and sets `TRAILS_DISABLED` in the
   container (the in-container tracker factory then returns `NullTracker`).
 
-  `grant_cred`/`revoke_cred` adjust both tiers of that scoped set per
-  `cw.finalize_scoped_secrets` (strict: see its rules); `grant_summon`/
-  `revoke_summon` adjust the bro's summon allow-list the same way
-  (`cw.summon_allow_list` over its `may_summon` defaults). those four and `into`
-  are host-side only — not threaded into the inner command — so passing any when
-  the hop is skipped (`--in-place` / already in-container) is a no-op the
-  caller didn't get, hence an error: the in-place path creates no credential scope or
-  broker root and runs no clone. returns 1 (printing to stderr) on any misuse so the
-  caller exits non-zero."""
+  `grant_cred`/`revoke_cred` adjust both tiers of that scoped set and
+  `grant_summon`/`revoke_summon` adjust the bro's summon allow-list over its
+  `may_summon` defaults — both strict, applied by the launch-scope preflight
+  (`cw.preflight_scoped_launch`). those four and `into` are host-side only — not
+  threaded into the inner command — so passing any when the hop is skipped
+  (`--in-place` / already in-container) is a no-op the caller didn't get, hence
+  an error: the in-place path creates no credential scope or broker root and
+  runs no clone. returns 1 (printing to stderr) on any misuse so the caller
+  exits non-zero."""
   grant_cred = grant_cred if grant_cred is not None else []
   revoke_cred = revoke_cred if revoke_cred is not None else []
   grant_summon = grant_summon if grant_summon is not None else []
@@ -170,13 +169,13 @@ def maybe_containerize(
       return 1
     return None
   from cw import (
+    LaunchScopeError,
     ScopedSecrets,
     _project_root,
-    finalize_scoped_secrets,
     fresh_workspace_name,
+    preflight_scoped_launch,
     resolve_ref,
     run_in_container,
-    summon_allow_list,
   )
 
   base_ref: Optional[str] = None
@@ -194,16 +193,15 @@ def maybe_containerize(
     trails=not no_trails,
   )
   try:
-    scoped = finalize_scoped_secrets(
+    scoped, may_summon, _ = preflight_scoped_launch(
       ScopedSecrets(set(launch.secrets), set(launch.optional_secrets), launch.docker_sock),
-      grant=grant_cred,
-      revoke=revoke_cred,
+      bro_name,
+      grant_cred=grant_cred,
+      revoke_cred=revoke_cred,
+      grant_summon=grant_summon,
+      revoke_summon=revoke_summon,
     )
-    may_summon = summon_allow_list(bro_name, grant=grant_summon, revoke=revoke_summon)
-    # the container launch path repeats this build before create; the preflight
-    # keeps missing-secret failures on the invoking CLI's error surface.
-    credentials.build_scoped_store(scoped.required, optional=scoped.optional)
-  except (ValueError, credentials.SecretNotFound) as e:
+  except LaunchScopeError as e:
     print(str(e), file=sys.stderr)
     return 1
   launch = replace(launch, secrets=scoped.required, optional_secrets=scoped.optional)

@@ -16,14 +16,14 @@ from cw.flags import DEFAULT_SESSION_MODE
 from cw.git import resolve_ref
 from cw.paths import _latest_jsonl, _project_root, _venv_env
 from cw.secrets import (
+  LaunchScopeError,
   Surface,
   _apply_claude_auth,
   _materialize_scoped_store,
-  finalize_scoped_secrets,
   log_scoped_secrets,
+  preflight_scoped_launch,
   scoped_secrets,
 )
-from cw.summon import summon_allow_list
 from cw.workspace import ContainerWorkspace, HostWorktree, Workspace
 from cw.worktrees import _ensure_host_worktree, _provision_host_worktree
 
@@ -245,14 +245,16 @@ def _container_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
     return 1
 
   bro_name = spec.session_bro
-  scoped = scoped_secrets(bro_name, spec.surface)
   try:
-    scoped = finalize_scoped_secrets(scoped, grant=spec.grant_cred, revoke=spec.revoke_cred)
-    may_summon = summon_allow_list(bro_name, grant=spec.grant_summon, revoke=spec.revoke_summon)
-    # the container launch path repeats this strict build before create;
-    # resolving here keeps launch failures on this CLI's clean error surface.
-    credentials.build_scoped_store(scoped.required, optional=scoped.optional)
-  except (ValueError, credentials.SecretNotFound) as e:
+    scoped, may_summon, _ = preflight_scoped_launch(
+      scoped_secrets(bro_name, spec.surface),
+      bro_name,
+      grant_cred=spec.grant_cred,
+      revoke_cred=spec.revoke_cred,
+      grant_summon=spec.grant_summon,
+      revoke_summon=spec.revoke_summon,
+    )
+  except LaunchScopeError as e:
     log.error('%s', e)
     return 1
 
@@ -349,27 +351,25 @@ def _host_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
     log.error('no claude session found for %s in %s', spec.name, workspace.claude_projects_dir())
     return 1
 
-  # the session's summon allow-list, computed before the worktree exists so a bad
-  # --grant-summon/--revoke-summon fails without creating anything. host mode is
-  # covered like container mode — its broker root enforces the same policy.
-  bro_name = spec.session_bro
-  try:
-    may_summon = summon_allow_list(bro_name, grant=spec.grant_summon, revoke=spec.revoke_summon)
-  except ValueError as e:
-    log.error('%s', e)
-    return 1
-
   if not _preflight_cw_session_auth(spec):
     return 1
 
-  # the same scoped-store hydration as container mode — strict, before anything
-  # is created; a convenience scope on host, not a boundary (reference/cw.md,
-  # "Scoped credential hydration")
-  scoped = scoped_secrets(bro_name, spec.surface)
+  # the same preflight as container mode, before the worktree exists so a bad
+  # override or missing secret fails without creating anything. the allow-list is
+  # enforced by host mode's broker root like container mode's; the store is a
+  # convenience scope on host, not a boundary (reference/cw.md, "Scoped
+  # credential hydration")
+  bro_name = spec.session_bro
   try:
-    scoped = finalize_scoped_secrets(scoped, grant=spec.grant_cred, revoke=spec.revoke_cred)
-    store = credentials.build_scoped_store(scoped.required, optional=scoped.optional)
-  except (ValueError, credentials.SecretNotFound) as e:
+    scoped, may_summon, store = preflight_scoped_launch(
+      scoped_secrets(bro_name, spec.surface),
+      bro_name,
+      grant_cred=spec.grant_cred,
+      revoke_cred=spec.revoke_cred,
+      grant_summon=spec.grant_summon,
+      revoke_summon=spec.revoke_summon,
+    )
+  except LaunchScopeError as e:
     log.error('%s', e)
     return 1
   log_scoped_secrets(spec.name, scoped.required, scoped.optional)

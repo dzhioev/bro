@@ -16,7 +16,7 @@ _RUN_ENV = {'CW_BRO': 'ppp-dev', **bro_git_identity_env()}
 
 @pytest.fixture(autouse=True)
 def scoped_store_preflight(monkeypatch):
-  monkeypatch.setattr('do._cli.credentials.build_scoped_store', lambda names, optional=(): {})
+  monkeypatch.setattr('cw.secrets.credentials.build_scoped_store', lambda names, optional=(): {})
 
 
 def test_maybe_containerize_skips_when_inside_container():
@@ -162,7 +162,7 @@ def test_maybe_containerize_missing_secret_fails_before_launch(monkeypatch, caps
   def missing(names, optional=()):
     raise ValueError("unknown secret 'github' declared in manifest")
 
-  monkeypatch.setattr('do._cli.credentials.build_scoped_store', missing)
+  monkeypatch.setattr('cw.secrets.credentials.build_scoped_store', missing)
   with (
     patch.dict('os.environ', {}, clear=False) as env,
     patch('cw.run_in_container') as run,

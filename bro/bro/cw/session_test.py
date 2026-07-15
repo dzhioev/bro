@@ -4,7 +4,9 @@ import tempfile
 from typing import Optional
 from unittest.mock import patch
 
+import cw.secrets
 import cw.session
+import cw.summon
 from cw.flags import DEFAULT_SESSION_MODE
 from cw.secrets import ScopedSecrets
 
@@ -68,10 +70,10 @@ class _ContainerHarness:
         return_value=ScopedSecrets(set(self.secrets), set(self.optional_secrets), True),
       ),
       patch('cw.session.credentials.try_get', return_value='tok'),
-      patch('cw.session.credentials.build_scoped_store', return_value={}),
+      patch('cw.secrets.credentials.build_scoped_store', return_value={}),
       patch('cw.session._replace_resume_hint'),
       # keep the bro-registry import out; threading is asserted per-test
-      patch('cw.session.summon_allow_list', return_value=set()),
+      patch('cw.summon.summon_allow_list', return_value=set()),
     ]
     entered = [p.__enter__() for p in self._patches]
     self.env = entered[0]
@@ -388,9 +390,9 @@ class TestConcurrentSessionGuard:
       'scoped_secrets',
       lambda *_a, **_k: ScopedSecrets(set(), set(), True),
     )
-    monkeypatch.setattr(cw.session, 'summon_allow_list', lambda *_a, **_k: set())
+    monkeypatch.setattr(cw.summon, 'summon_allow_list', lambda *_a, **_k: set())
     monkeypatch.setattr(cw.session.credentials, 'try_get', lambda name: 'tok')
-    monkeypatch.setattr(cw.session.credentials, 'build_scoped_store', lambda names, optional=(): {})
+    monkeypatch.setattr(cw.secrets.credentials, 'build_scoped_store', lambda names, optional=(): {})
     called: list = []
     monkeypatch.setattr(cw.session, 'run_in_container', lambda *_a, **_k: called.append(True) or 0)
     monkeypatch.setattr(cw.session, '_replace_resume_hint', lambda workspace: None)
@@ -430,12 +432,12 @@ class TestConcurrentSessionGuard:
         return False
 
     monkeypatch.setattr(cw.session, 'HostWorktree', _FakeHost)
-    monkeypatch.setattr(cw.session, 'summon_allow_list', lambda *_a, **_k: set())
+    monkeypatch.setattr(cw.summon, 'summon_allow_list', lambda *_a, **_k: set())
     monkeypatch.setattr(cw.session.credentials, 'try_get', lambda name: 'tok')
     monkeypatch.setattr(
       cw.session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set(), True)
     )
-    monkeypatch.setattr(cw.session.credentials, 'build_scoped_store', lambda names, optional=(): {})
+    monkeypatch.setattr(cw.secrets.credentials, 'build_scoped_store', lambda names, optional=(): {})
     called: list = []
     monkeypatch.setattr(
       cw.session, '_ensure_host_worktree', lambda *_a: called.append(True) or False
@@ -488,19 +490,19 @@ class TestHostSession:
     monkeypatch.setattr(
       cw.session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets({'github'}, set(), True)
     )
-    monkeypatch.setattr(cw.session.credentials, 'build_scoped_store', lambda names, optional=(): {})
+    monkeypatch.setattr(cw.secrets.credentials, 'build_scoped_store', lambda names, optional=(): {})
     monkeypatch.setattr(
       cw.session,
       '_materialize_scoped_store',
       lambda store, directory: directory / 'credentials.json',
     )
-    monkeypatch.setattr(cw.session, 'summon_allow_list', lambda *_a, **_k: set())
+    monkeypatch.setattr(cw.summon, 'summon_allow_list', lambda *_a, **_k: set())
     return cw_bin, worktree
 
   def test_broker_supervises_the_worktrees_own_in_place_runner(self, monkeypatch, tmp_path):
     cw_bin, worktree = self._prepare_launch(monkeypatch, tmp_path)
     monkeypatch.setattr(cw.session, '_broker_enabled', lambda: True)
-    monkeypatch.setattr(cw.session, 'summon_allow_list', lambda *_a, **_k: {'devoops'})
+    monkeypatch.setattr(cw.summon, 'summon_allow_list', lambda *_a, **_k: {'devoops'})
     roots: list = []
 
     def fake_root(name, command, worktree_arg, project, env, may_summon):
@@ -535,7 +537,7 @@ class TestHostSession:
     def bad_allow_list(*_a, **_k):
       raise ValueError('unknown summon target(s): devoop')
 
-    monkeypatch.setattr(cw.session, 'summon_allow_list', bad_allow_list)
+    monkeypatch.setattr(cw.summon, 'summon_allow_list', bad_allow_list)
 
     def boom(*_a, **_k):
       raise AssertionError('must not ensure a worktree when the summon flags are bad')
@@ -680,7 +682,7 @@ class TestHostSession:
 
     monkeypatch.setattr(cw.session, '_materialize_scoped_store', fake_materialize)
     monkeypatch.setattr(
-      cw.session.credentials, 'build_scoped_store', lambda names, optional=(): {'x.cred': b'v'}
+      cw.secrets.credentials, 'build_scoped_store', lambda names, optional=(): {'x.cred': b'v'}
     )
     runs: list = []
 
@@ -711,7 +713,7 @@ class TestHostSession:
       hydrated.update(names=set(names), optional=set(optional))
       return {}
 
-    monkeypatch.setattr(cw.session.credentials, 'build_scoped_store', fake_build)
+    monkeypatch.setattr(cw.secrets.credentials, 'build_scoped_store', fake_build)
     monkeypatch.setattr(
       cw.session.subprocess, 'run', lambda *_a, **_k: SimpleNamespace(returncode=0)
     )
@@ -731,7 +733,7 @@ class TestHostSession:
     def missing(names, optional=()):
       raise cw.session.credentials.SecretNotFound('github')
 
-    monkeypatch.setattr(cw.session.credentials, 'build_scoped_store', missing)
+    monkeypatch.setattr(cw.secrets.credentials, 'build_scoped_store', missing)
 
     def boom(*_a, **_k):
       raise AssertionError('must not ensure a worktree when hydration fails')
@@ -753,8 +755,8 @@ class TestHostSession:
     monkeypatch.setattr(
       cw.session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set(), True)
     )
-    monkeypatch.setattr(cw.session.credentials, 'build_scoped_store', lambda names, optional=(): {})
-    monkeypatch.setattr(cw.session, 'summon_allow_list', lambda *_a, **_k: set())
+    monkeypatch.setattr(cw.secrets.credentials, 'build_scoped_store', lambda names, optional=(): {})
+    monkeypatch.setattr(cw.summon, 'summon_allow_list', lambda *_a, **_k: set())
 
     def boom(*_a, **_k):
       raise AssertionError('must not spawn without the inner cw')
@@ -808,13 +810,13 @@ class TestHostBrokerPingRoundTrip:
       monkeypatch.setattr(cw.session, 'HostWorktree', _FakeHost)
       monkeypatch.setattr(cw.session, '_ensure_host_worktree', lambda *_a: True)
       monkeypatch.setattr(cw.session, '_provision_host_worktree', lambda *_a: True)
-      monkeypatch.setattr(cw.session, 'summon_allow_list', lambda *_a, **_k: set())
+      monkeypatch.setattr(cw.summon, 'summon_allow_list', lambda *_a, **_k: set())
       monkeypatch.setattr(cw.session.credentials, 'try_get', lambda name: 'tok')
       monkeypatch.setattr(
         cw.session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set(), True)
       )
       monkeypatch.setattr(
-        cw.session.credentials, 'build_scoped_store', lambda names, optional=(): {}
+        cw.secrets.credentials, 'build_scoped_store', lambda names, optional=(): {}
       )
       monkeypatch.delenv('BROKER_DISABLED', raising=False)
       assert cw.session._host_session(_spec(host=True), None) == 0

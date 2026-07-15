@@ -205,6 +205,44 @@ def finalize_scoped_secrets(
   return ScopedSecrets(required=required, optional=optional, docker_sock=scoped.docker_sock)
 
 
+class LaunchScopeError(Exception):
+  """a launch failed its scope preflight: a no-op grant/revoke override, an
+  unknown summon target, or an unknown/unresolvable required secret."""
+
+
+def preflight_scoped_launch(
+  scoped: ScopedSecrets,
+  bro_name: str,
+  *,
+  grant_cred: list[str],
+  revoke_cred: list[str],
+  grant_summon: list[str],
+  revoke_summon: list[str],
+) -> tuple[ScopedSecrets, set[str], dict[str, bytes]]:
+  """the scope preflight every launch surface runs before creating anything
+  (worktree, container, workspace dir): finalize the credential scope
+  (`finalize_scoped_secrets`), compute the summon allow-list of a launch running
+  as `bro_name` (`cw.summon.summon_allow_list`), and hydrate the scoped store
+  (`credentials.build_scoped_store`) — any failure raised as a single
+  `LaunchScopeError` for the caller to render on its own error surface.
+
+  returns (scope, allow-list, store). the container launch path rebuilds the
+  store at create, so container callers drop it — the build is the preflight
+  itself; a host session materializes the returned one.
+  """
+  # imported here, not at module level: cw.summon reaches back into this module
+  # through cw.workspace → cw.docker
+  from cw.summon import summon_allow_list
+
+  try:
+    scoped = finalize_scoped_secrets(scoped, grant=grant_cred, revoke=revoke_cred)
+    may_summon = summon_allow_list(bro_name, grant=grant_summon, revoke=revoke_summon)
+    store = credentials.build_scoped_store(scoped.required, optional=scoped.optional)
+  except (ValueError, credentials.SecretNotFound) as e:
+    raise LaunchScopeError(str(e)) from e
+  return scoped, may_summon, store
+
+
 def _materialize_scoped_store(files: dict[str, bytes], directory: Path) -> Path:
   """write a scoped credential store (`credentials.build_scoped_store`) to
   `directory` and return its registry file — the value a host session's
