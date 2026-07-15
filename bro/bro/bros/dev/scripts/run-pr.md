@@ -1,7 +1,7 @@
 ---
 name: pr
 description: This skill should be used when the user signals that the worktree's changes are ready for review and a PR should be opened — "open a PR", "send for review", "PR it", "ship it", "ready for review", "finalize". Covers commit hygiene (CLAUDE.md sync, Dockerfile audit, policy audit, commit splitting), the project's commit-message style, footer generation via `./setup/claude_commit_footer.py`, submodule landing, rebase onto the base branch (master by default), opens the PR via `gh pr create`, then launches the `poll-pr` review watcher to handle review comments and APPROVED events. On approval, chains into `/land` for the merge step. Also the re-entry point for a PR that is already open — "/pr <pr-url-or-number>", "resume the PR", "pick up the review" — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
-version: 1.3.0
+version: 1.4.0
 ---
 
 # /pr
@@ -59,7 +59,7 @@ Run before committing:
 
 A red suite blocks the commit. Do not interpret or triage failures — propose fixing in this session or a separate one, but do not commit through failures.
 
-**Policy audit**: before each commit, re-read your Style guidance and audit that commit's `git diff` against it. The policies carry their own specifics, so this gate just re-applies all of them.
+**Policy audit**: before each commit, call `dev-style-source::read` and audit that commit's `git diff` against the returned policy text. The tool read is part of the gate — it puts the policy fresh in context instead of relying on recall of a read far behind. The policies carry their own specifics, so this gate just re-applies all of them.
 
 Treat it as a precondition of the `git commit`, run at the moment of committing — not an intention you form earlier and carry across other steps. **State the verdict as visible output before the commit**: a one-line `clean`, or the violation(s) you found and how you fixed them. An audit done only in your head is indistinguishable from one skipped, so an interruption (a `[Request interrupted]`, a "continue") can silently drop it; a written verdict can't be dropped unnoticed. It's the cheapest place to catch a violation — the alternative is a review round-trip.
 

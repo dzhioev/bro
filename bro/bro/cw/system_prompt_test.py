@@ -23,7 +23,7 @@ class TestSessionAppendPrompt:
   def test_persona_prompts_injected(self):
     out = cw.system_prompt._session_append_prompt(False, 'ppp-dev')
     assert '## PPP project' in out
-    assert "wasn't in the room" in out
+    assert 'dev-style-source::read' in out
 
   def test_other_personas_carry_their_own_prompts_only(self):
     assert '## PPP project' not in cw.system_prompt._session_append_prompt(False, 'bro')

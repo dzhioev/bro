@@ -986,9 +986,10 @@ class TestClaudePersonaServers:
     )
     # the dev toolset is bro-harness-only — claude's built-in tools cover it —
     # while the reference FileSources serve every harness
-    assert [s.namespace for s in Dev().claude_persona_mcp_servers()] == ['bro']
+    assert [s.namespace for s in Dev().claude_persona_mcp_servers()] == ['dev-style-source', 'bro']
     assert [s.namespace for s in PPPDev().claude_persona_mcp_servers()] == [
       'brog',
+      'dev-style-source',
       'environment-source',
       'template-source',
       'conditions-source',
@@ -2225,7 +2226,7 @@ class TestPersona:
     # MRO-concatenated class prompts: Dev's contribution + PPPDev's own
     assert 'software developer' in bro.persona
     assert '## PPP project' in bro.persona
-    assert "wasn't in the room" in bro.persona
+    assert 'dev-style-source::read' in bro.persona
     # shared prompts and the skills block are excluded from persona but present
     # in the full composed system prompt
     assert 'Interaction policy' not in bro.persona

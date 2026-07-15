@@ -71,3 +71,14 @@ async def test_read_tool_description_carries_name_and_summary(env_file):
   tool = (await server.list_tools())[0]
   assert 'environment' in tool.description
   assert 'session playbook' in tool.description
+
+
+def test_reference_sources_resolve_and_read():
+  # every ready-made instance must point at a live repo file; a moved or
+  # renamed doc would otherwise surface only at tool-call time
+  from bro.datasources import references
+
+  sources = [value for value in vars(references).values() if isinstance(value, FileSource)]
+  assert len(sources) >= 4
+  for source in sources:
+    assert len(source.read()) > 0

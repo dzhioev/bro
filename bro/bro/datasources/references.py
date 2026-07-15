@@ -40,3 +40,13 @@ conditions = FileSource(
   # carries directive examples; rendering would execute them
   render=False,
 )
+
+dev_style = FileSource(
+  'dev-style',
+  summary=(
+    'the development style policy: naming, scope, comments and docs, '
+    'fail-fast, teardown, verification. Read at session start; re-read '
+    'when auditing a diff against policy.'
+  ),
+  path=prompts.get_prompt_path('dev/style.md'),
+)
