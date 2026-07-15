@@ -106,8 +106,8 @@ class TestSessionFacts:
     assert facts.prompt is None
 
   def test_bro_override_takes_precedence_over_env(self, monkeypatch):
-    # `call` passes its bro explicitly even though CW_BRO isn't forwarded into a
-    # call container; the override wins over whatever (if anything) is in the env
+    # an in-process caller passes its bro explicitly — its environment carries
+    # the launcher's CW_BRO (or none); the override wins either way
     monkeypatch.delenv('CW_BRO', raising=False)
     assert SessionFacts.collect(bro_override='librorian').bro == 'librorian'
     monkeypatch.setenv('CW_BRO', 'pm')

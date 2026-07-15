@@ -4,7 +4,7 @@ from unittest.mock import patch
 import pytest
 
 from bro.bro import BaseBro
-from cw import bro_git_identity_env
+from cw.constants import bro_git_identity_env
 from do.do import do, main
 from llm.llm import LLM
 from llm.mcp import MCPServer
@@ -127,7 +127,11 @@ def test_main_no_trails_disables_recording_in_container():
     # the env var carries the effect in, so --no-trails isn't forwarded into the inner argv
     assert command == ['ask', 'ppp-dev', 'hello', '--host']
     assert 'trails' not in kwargs['secrets']
-    assert kwargs['extra_env'] == {'TRAILS_DISABLED': '1', **bro_git_identity_env()}
+    assert kwargs['extra_env'] == {
+      'CW_BRO': 'ppp-dev',
+      'TRAILS_DISABLED': '1',
+      **bro_git_identity_env(),
+    }
 
 
 def test_main_no_trails_with_host_is_an_error():

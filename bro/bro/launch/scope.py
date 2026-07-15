@@ -3,6 +3,7 @@ import io
 import os
 import shutil
 import tarfile
+from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
@@ -127,6 +128,16 @@ def scoped_secrets(bro_name: str, surface: Surface) -> ScopedSecrets:
   else:
     docker_sock = bro.needs_docker
   return ScopedSecrets(required=required, optional=optional, docker_sock=docker_sock)
+
+
+def log_scoped_secrets(subject: str, required: Collection[str], optional: Collection[str]) -> None:
+  """log a launch's credential scope — the launch-time record of what the
+  container gets, emitted by every path that spawns one."""
+  names = sorted(set(required))
+  log.info('scoped secrets for %s: %s', subject, ', '.join(names) if len(names) > 0 else '(none)')
+  optional_names = sorted(set(optional) - set(required))
+  if len(optional_names) > 0:
+    log.info('optional (best-effort) secrets for %s: %s', subject, ', '.join(optional_names))
 
 
 def _load_anthropic_key() -> Optional[str]:

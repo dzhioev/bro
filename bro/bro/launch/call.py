@@ -126,8 +126,8 @@ async def call_text(
 
   # opening bro message: the cw banner (session environment facts), before the
   # first user message is sent. visual form — its ANSI renders in the terminal.
-  # pass the bro name so the logo shows even though a `call` container doesn't
-  # forward CW_BRO.
+  # pass the bro name so the logo shows on an in-process (--host) run, whose
+  # environment doesn't carry this bro's CW_BRO.
   print(f'[{now().strftime("%H:%M:%S")}] {bro.name}:')
   print(render_banner(llm=False, bro=bro.name))
 

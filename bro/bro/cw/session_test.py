@@ -155,22 +155,23 @@ class TestContainerCommand:
       'cw', 'ss', '--in-place', '--fast', '--effort', 'xhigh', '--persona', 'pm', '--prompt=go', 'w',
     ]  # fmt: skip
 
-  def test_bro_carried_in_command_and_cw_bro_forwarded(self):
+  def test_bro_carried_in_command_and_stamped_into_the_container_env(self):
     with _ContainerHarness() as h:
       rc = cw.session.start_session(_spec(drop=True, bro='pm'))
-      # CW_BRO themes the container beyond the runner's process tree (cw exec)
-      forwarded_bro = h.env.get('CW_BRO')
     assert rc == 0
     command = h.run_in_container.call_args[0][1]
     assert command == ['cw', 'ss', '--in-place', '--bro', 'pm', 'w']
-    assert forwarded_bro == 'pm'
+    # CW_BRO themes the whole container (cw exec shells), set explicitly in the
+    # container env — never forwarded from the launcher's environment
+    _, kwargs = h.run_in_container.call_args
+    assert kwargs['extra_env']['CW_BRO'] == 'pm'
 
-  def test_cw_session_forwards_the_default_persona_as_cw_bro(self):
+  def test_cw_session_stamps_the_default_persona_as_cw_bro(self):
     with _ContainerHarness() as h:
       rc = cw.session.start_session(_spec(drop=True))
-      forwarded_bro = h.env.get('CW_BRO')
     assert rc == 0
-    assert forwarded_bro == 'ppp-dev'
+    _, kwargs = h.run_in_container.call_args
+    assert kwargs['extra_env']['CW_BRO'] == 'ppp-dev'
 
   def test_default_base_is_left_to_the_entrypoint_head_fallback(self):
     # no CW_BASE_REF by default: the clone bases on HEAD — the host checkout as
@@ -179,7 +180,7 @@ class TestContainerCommand:
       rc = cw.session.start_session(_spec(drop=True))
     assert rc == 0
     _, kwargs = h.run_in_container.call_args
-    assert kwargs['extra_env'] is None
+    assert 'CW_BASE_REF' not in kwargs['extra_env']
 
   def test_into_threads_the_resolved_base_into_the_container_env(self):
     with _ContainerHarness() as h:
@@ -188,7 +189,7 @@ class TestContainerCommand:
     assert rc == 0
     assert resolve.call_args[0][1] == 'feature'
     _, kwargs = h.run_in_container.call_args
-    assert kwargs['extra_env'] == {'CW_BASE_REF': 'intosha'}
+    assert kwargs['extra_env']['CW_BASE_REF'] == 'intosha'
 
   def test_unresolvable_into_fails_launch(self):
     with _ContainerHarness() as h:

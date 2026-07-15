@@ -114,7 +114,6 @@ class TestBrokerGate:
         'optional_secrets': (),
         'docker_sock': False,
         'extra_env': None,
-        'forward_bro': True,
         'may_summon': {'devoops'},
       }
     ]
@@ -140,7 +139,6 @@ class TestRunRootViaBroker:
       optional_secrets=('openai',),
       docker_sock=True,
       extra_env={'CW_BASE_REF': 'deadbeef'},
-      forward_bro=True,
       may_summon={'devoops'},
     )
     assert code == 3
@@ -162,5 +160,4 @@ class TestRunRootViaBroker:
       name='ws',
       optional_secrets=('openai',),
       docker_sock=True,
-      forward_bro=True,
     )

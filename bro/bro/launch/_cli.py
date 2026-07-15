@@ -4,12 +4,12 @@ fast-mode bro construction, and the `ask`/`do-task` main()."""
 import asyncio
 import logging
 import os
-import secrets
 import sys
 from collections.abc import Callable, Coroutine
 from typing import Optional
 
 import base.args
+import bro_run
 import summon as summon_client
 from base import credentials, log
 from bro.bro import BroRaised
@@ -127,10 +127,10 @@ def maybe_containerize(
   `--host`, pinning the inner run in-process — without it an in-container
   `ask`/`do-task` would relay itself back to the host (the relay branch in
   `run()`); `call` has no relay, so its in-container invocations land here and
-  skip via `CW_IN_CONTAINER`. otherwise the container is scoped to the bro-run
-  set of `cw.scoped_secrets` — the LLM-process credential scope (see its
-  docstring). an interactive surface (`call`) renders inside it just as claude
-  code does.
+  skip via `CW_IN_CONTAINER`. otherwise the launch is the shared bro-run
+  description (`bro_run.describe`): a fresh workspace, the bro's own credential
+  scope, the bro git identity + `CW_BRO` in the container env. an interactive
+  surface (`call`) renders inside it just as claude code does.
 
   the container's workspace clone bases on the host checkout's current HEAD (the
   entrypoint's default, shared with `cw ss` — the bro sees the code the caller
@@ -169,51 +169,33 @@ def maybe_containerize(
       )
       return 1
     return None
-  from cw import (
-    Surface,
-    _project_root,
-    bro_git_identity_env,
-    resolve_ref,
-    run_in_container,
-    scoped_secrets,
-    summon_allow_list,
-  )
+  from cw import _project_root, resolve_ref, run_in_container, summon_allow_list
 
-  scoped = scoped_secrets(bro_name, Surface.BRO_RUN)
-  needed = set(scoped.required)
-  # every cw-launched session commits as bro; a native bro run gets no in-place
-  # session runner to export the identity, so the hop sets it in the container
-  extra_env: dict[str, str] = dict(bro_git_identity_env())
-  if no_trails:
-    needed.remove('trails')
-    extra_env['TRAILS_DISABLED'] = '1'
-  try:
-    needed = credentials.apply_grant_revoke(
-      needed, grant=grant_cred, revoke=revoke_cred, subject='scoped credential set'
-    )
-    may_summon = summon_allow_list(bro_name, grant=grant_summon, revoke=revoke_summon)
-  except ValueError as e:
-    print(str(e), file=sys.stderr)
-    return 1
+  base_ref: Optional[str] = None
   if into is not None:
     base_ref = resolve_ref(_project_root(), into)
     if base_ref is None:
       print(f'cannot resolve --into ref: {into}', file=sys.stderr)
       return 1
-    extra_env['CW_BASE_REF'] = base_ref
-  workspace = f'{cli_name}-{bro_name}-{secrets.token_hex(4)}'
-  command = [cli_name, bro_name, *inner_args, '--host']
+  launch = bro_run.describe(
+    bro_name, inner_args, cli_name=cli_name, base_ref=base_ref, trails=not no_trails
+  )
+  try:
+    needed = credentials.apply_grant_revoke(
+      launch.secrets, grant=grant_cred, revoke=revoke_cred, subject='scoped credential set'
+    )
+    may_summon = summon_allow_list(bro_name, grant=grant_summon, revoke=revoke_summon)
+  except ValueError as e:
+    print(str(e), file=sys.stderr)
+    return 1
   return run_in_container(
-    workspace,
-    command,
+    bro_run.fresh_workspace_name(cli_name, bro_name),
+    launch.command,
     drop=True,
     secrets=needed,
-    optional_secrets=scoped.optional,
-    docker_sock=scoped.docker_sock,
-    extra_env=extra_env,
-    # this container runs its own named bro, so the calling session's ambient
-    # CW_BRO must not leak in and mis-theme it.
-    forward_bro=False,
+    optional_secrets=launch.optional_secrets,
+    docker_sock=launch.docker_sock,
+    extra_env=launch.env,
     may_summon=may_summon,
   )
 

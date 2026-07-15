@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import bro_run
 import cw.constants
 import cw.docker
 import cw.paths
@@ -26,12 +27,10 @@ class TestDockerLaunchSpec:
   def test_defaults(self):
     launch = cw.spawn.DockerLaunchSpec(command=['x'], env={}, secrets=(), attached=False)
     assert launch.ring_bytes == cw.spawn.DEFAULT_RING_BYTES
-    assert launch.bro is None
     assert launch.name is None
     assert launch.optional_secrets == ()
-    # child-safe defaults: no host docker socket, no ambient CW_BRO leak
+    # child-safe default: no host docker socket
     assert launch.docker_sock is False
-    assert launch.forward_bro is False
 
 
 class TestRingBuffer:
@@ -75,9 +74,8 @@ class TestBrokerCreateArgv:
 
     def build(**launch_kwargs):
       launch_kwargs.setdefault('attached', False)
-      launch = cw.spawn.DockerLaunchSpec(
-        command=['broker', 'recv'], env={}, secrets=(), **launch_kwargs
-      )
+      launch_kwargs.setdefault('env', {})
+      launch = cw.spawn.DockerLaunchSpec(command=['broker', 'recv'], secrets=(), **launch_kwargs)
       return cw.spawn._broker_create_argv(
         launch, '/host/sock.sock', 'broker-X', tmp_path / 'proj', tmp_path / 'sess', 'tag'
       )
@@ -100,17 +98,15 @@ class TestBrokerCreateArgv:
     assert 'BROKER_CHANNEL=unix:/run/broker.sock' in argv
     assert argv[argv.index('BROKER_CHANNEL=unix:/run/broker.sock') - 1] == '-e'
 
-  def test_bro_role_stamped_into_cw_bro(self, build_argv):
-    assert 'CW_BRO=pm' in build_argv(bro='pm')
+  def test_env_snapshot_carries_cw_bro(self, build_argv):
+    assert 'CW_BRO=pm' in build_argv(env={'CW_BRO': 'pm'})
 
-  def test_no_cw_bro_when_role_absent(self, build_argv):
-    assert not any(a.startswith('CW_BRO=') for a in build_argv())
-
-  def test_host_cw_bro_not_forwarded(self, build_argv, monkeypatch):
-    # forward_bro=False: the calling session's ambient CW_BRO must not leak into a
-    # spawned child — the role arrives only via launch.bro.
+  def test_ambient_cw_bro_never_forwarded(self, build_argv, monkeypatch):
+    # CW_BRO travels only in the launch env snapshot — the launcher's own
+    # theming must not leak into any spawned container, attached or not.
     monkeypatch.setenv('CW_BRO', 'ppp-dev')
     assert 'CW_BRO' not in build_argv()
+    assert 'CW_BRO' not in build_argv(attached=True)
 
   def test_attached_allocates_tty(self, build_argv):
     assert '-it' in build_argv(attached=True)
@@ -119,10 +115,6 @@ class TestBrokerCreateArgv:
     mount = '/var/run/docker.sock:/var/run/docker.sock'
     assert mount not in build_argv()
     assert mount in build_argv(docker_sock=True)
-
-  def test_forward_bro_forwards_ambient_cw_bro(self, build_argv, monkeypatch):
-    monkeypatch.setenv('CW_BRO', 'ppp-dev')
-    assert 'CW_BRO' in build_argv(attached=True, forward_bro=True)
 
   def test_child_gets_no_ambient_env_forwards(self, build_argv, monkeypatch):
     # a spawned child's environment is the LaunchSpec snapshot only — forwarding
@@ -453,7 +445,7 @@ class TestSummonLowering:
   def lowering_harness(self, monkeypatch, tmp_path):
     monkeypatch.setattr(cw.spawn, '_project_root', lambda: tmp_path / 'proj')
     monkeypatch.setattr(
-      cw.spawn,
+      bro_run,
       'scoped_secrets',
       lambda name, surface: cw.secrets.ScopedSecrets(
         required={'aws', 'trails'}, optional={'openai'}, docker_sock=True
@@ -475,15 +467,26 @@ class TestSummonLowering:
     lowered = cw.spawn._lower_summon(launch)
     assert lowered == cw.spawn.DockerLaunchSpec(
       command=['ask', 'devoops', 'deploy the thing', '--host'],
-      env={'CW_BASE_REF': 'PARENT-SHA', **cw.constants.bro_git_identity_env()},
+      env={
+        'CW_BASE_REF': 'PARENT-SHA',
+        'CW_BRO': 'devoops',
+        **cw.constants.bro_git_identity_env(),
+      },
       secrets={'aws', 'trails'},
       attached=False,
       optional_secrets={'openai'},
       docker_sock=True,
     )
-    # child-safe defaults hold: throwaway workspace, no CW_BRO leak, env snapshot only
+    # child-safe default holds: throwaway workspace, env snapshot only
     assert lowered.name is None
-    assert lowered.forward_bro is False
+
+  def test_lowering_logs_the_scope_like_any_container_launch(self, lowering_harness, caplog):
+    launch = cw.spawn.SummonLaunchSpec(
+      target='devoops', prompt='p', parent_workspace=PARENT_WORKSPACE
+    )
+    with caplog.at_level('INFO'):
+      cw.spawn._lower_summon(launch)
+    assert 'scoped secrets for summoned devoops: aws, trails' in caplog.text
 
   def test_into_overrides_the_inherited_base_ref(self, lowering_harness):
     launch = cw.spawn.SummonLaunchSpec(
@@ -491,6 +494,7 @@ class TestSummonLowering:
     )
     assert cw.spawn._lower_summon(launch).env == {
       'CW_BASE_REF': 'REF-SHA',
+      'CW_BRO': 'devoops',
       **cw.constants.bro_git_identity_env(),
     }
 

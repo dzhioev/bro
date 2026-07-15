@@ -51,11 +51,10 @@ hub — partial-init hazard); see cw/CLAUDE.md.
 
 from cw.banner import render_banner
 from cw.cli import build_parser
-from cw.constants import DEFAULT_SESSION_BRO, bro_git_identity_env
+from cw.constants import DEFAULT_SESSION_BRO
 from cw.containers import run_in_container
 from cw.flags import EFFORT_LEVELS, add_forwarded_flags, extract_forwarded_argv
 from cw.git import resolve_ref
 from cw.paths import _containers_dir, _project_root, _worktrees_dir
 from cw.runner import terminate_session
-from cw.secrets import Surface, scoped_secrets
 from cw.summon import summon_allow_list

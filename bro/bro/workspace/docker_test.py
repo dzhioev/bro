@@ -198,17 +198,13 @@ class TestDockerCreateArgv:
     assert 'TERM' in argv
     assert argv[argv.index('TERM') - 1] == '-e'
 
-  def test_cw_bro_forwarded_by_default(self, build_argv, monkeypatch):
-    # the in-place runner reads CW_BRO to theme the session and surface skills,
-    # so a cw-session (persona-themed) needs it to reach the container.
+  def test_ambient_cw_bro_never_forwarded(self, build_argv, monkeypatch):
+    # every container runs its own bro, set explicitly via extra_env by the
+    # launch surface — the caller's ambient CW_BRO must not leak in and
+    # mis-theme it.
     monkeypatch.setenv('CW_BRO', 'ppp-dev')
-    assert 'CW_BRO' in build_argv()
-
-  def test_cw_bro_dropped_when_forward_bro_false(self, build_argv, monkeypatch):
-    # the ask/do/call hop runs its own named bro, so the calling session's
-    # ambient CW_BRO must not leak in and mis-theme it.
-    monkeypatch.setenv('CW_BRO', 'ppp-dev')
-    assert 'CW_BRO' not in build_argv(forward_bro=False)
+    assert 'CW_BRO' not in build_argv()
+    assert 'CW_BRO=pm' in build_argv(extra_env={'CW_BRO': 'pm'})
 
   def test_forward_env_false_switches_the_forward_loop_off(self, build_argv, monkeypatch):
     # a broker-spawned child's environment is its LaunchSpec snapshot (extra_env)

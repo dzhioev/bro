@@ -81,9 +81,9 @@ class SessionFacts:
     """collect session facts from env + /.dockerenv for `cw banner`.
 
     read-only; never raises. bro_override forces the `bro` fact regardless of
-    `CW_BRO` — used by `call`, which knows its bro but runs in a container that
-    deliberately doesn't forward `CW_BRO` (the calling session's theming must
-    not leak in).
+    `CW_BRO` — for in-process callers that know the bro they run: an in-process
+    run (e.g. `ask <bro> --host`) reads the launching environment, whose
+    `CW_BRO` is the launcher's own persona or absent.
     """
     in_container = _in_container()
     name = os.environ.get('CW_NAME') or None
@@ -241,9 +241,9 @@ def render_banner(llm: bool = False, bro: Optional[str] = None) -> str:
   """render the banner string for the current session. visual (ANSI + logo) by
   default; --llm for plain key:value text. exposed so in-process callers (e.g.
   `call`'s opening bro message, the `bro::banner` service tool) can render
-  without a shell-out. bro overrides the `bro` fact (so those callers stay
-  correct even though `call` and bro-run containers don't forward `CW_BRO`);
-  None falls back to the env."""
+  without a shell-out. bro overrides the `bro` fact — an in-process run's
+  environment carries the launcher's `CW_BRO` (or none), not the running
+  bro's; None falls back to the env."""
   facts = SessionFacts.collect(bro_override=bro)
   return facts.render_llm() if llm else facts.render_visual()
 

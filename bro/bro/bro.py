@@ -315,8 +315,9 @@ _BANNER_DESCRIPTION = (
 
 def _banner_tool(bro_name: str) -> llm.mcp.Tool:
   # the same facts `cw banner --llm` prints, rendered in-process. the bro name is
-  # passed explicitly because bro-run containers deliberately drop `CW_BRO`. the
-  # cw hub import stays function-local so `import bro` stays cheap.
+  # passed explicitly because an in-process run's environment carries the
+  # launcher's CW_BRO (or none), not this bro's. the cw hub import stays
+  # function-local so `import bro` stays cheap.
   def _banner() -> str:
     from cw import render_banner
 
@@ -932,6 +933,7 @@ class BaseBro(ABC):
       observer=self._observer,
       tracker=self._tracker,
       # the LLM publishes cumulative usage under the bro's surface identity (the
-      # usage file must be self-describing — bro-run containers drop CW_BRO).
+      # usage file must be self-describing — an in-process run's CW_BRO is the
+      # launcher's, not this bro's).
       agent=self.agent,
     )

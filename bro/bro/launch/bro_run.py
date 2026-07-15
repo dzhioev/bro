@@ -1,0 +1,75 @@
+"""a bro run as a container launch, described once.
+
+A bro run is the bro's LLM process in its own throwaway cw-style container:
+`<cli> <bro> … --host` executing against the bro's own credential scope,
+committing as the bro git identity, based on a caller-resolved git ref. This
+module owns that description — inner command, container environment, credential
+scope, docker-socket decision, workspace naming — so every surface that spawns
+one computes it identically; executing the launch (attached TTY, supervised
+non-TTY child) is the caller's.
+"""
+
+import secrets
+from collections.abc import Sequence
+from dataclasses import dataclass
+from typing import Optional
+
+from cw.constants import bro_git_identity_env
+from cw.secrets import Surface, scoped_secrets
+
+
+@dataclass(frozen=True)
+class Launch:
+  """description of one bro-run container launch.
+
+  `command` is the in-container argv (`<cli> <bro> … --host` — the inner run is
+  already the scoped one, so it must not hop or relay itself again). `env` is
+  the explicit container environment: the bro git identity, `CW_BRO` naming the
+  running bro, plus `CW_BASE_REF` / `TRAILS_DISABLED` when set. The remaining
+  fields are the bro's own credential scope (`cw.secrets.scoped_secrets`, the
+  bro-run surface).
+  """
+
+  command: list[str]
+  env: dict[str, str]
+  secrets: set[str]
+  optional_secrets: set[str]
+  docker_sock: bool
+
+
+def describe(
+  bro_name: str,
+  inner_args: Sequence[str],
+  *,
+  cli_name: str = 'ask',
+  base_ref: Optional[str] = None,
+  trails: bool = True,
+) -> Launch:
+  """describe the launch of `<cli_name> <bro_name> <inner_args…> --host`.
+
+  `base_ref` is a caller-resolved commit sha the container's workspace clone
+  bases on (`CW_BASE_REF`); None leaves the entrypoint's HEAD fallback — the
+  host checkout's current commit. `trails=False` disables run recording: the
+  `trails` secret leaves the scope and `TRAILS_DISABLED` rides in the env.
+  """
+  scoped = scoped_secrets(bro_name, Surface.BRO_RUN)
+  required = set(scoped.required)
+  env = dict(bro_git_identity_env())
+  env['CW_BRO'] = bro_name
+  if base_ref is not None:
+    env['CW_BASE_REF'] = base_ref
+  if not trails:
+    required.remove('trails')
+    env['TRAILS_DISABLED'] = '1'
+  return Launch(
+    command=[cli_name, bro_name, *inner_args, '--host'],
+    env=env,
+    secrets=required,
+    optional_secrets=set(scoped.optional),
+    docker_sock=scoped.docker_sock,
+  )
+
+
+def fresh_workspace_name(cli_name: str, bro_name: str) -> str:
+  """mint a workspace name for a launch that owns its container dir."""
+  return f'{cli_name}-{bro_name}-{secrets.token_hex(4)}'

@@ -4,8 +4,13 @@ import pytest
 
 import llm.llms.chat_gpt
 import llm.llms.echo
-from cw import EFFORT_LEVELS, bro_git_identity_env
+from cw import EFFORT_LEVELS
+from cw.constants import bro_git_identity_env
 from do._cli import create_bro_for_run, maybe_containerize
+
+# the run bro's own CW_BRO rides in explicitly (never as an ambient forward), so
+# a calling session's theming cannot leak into the container
+_RUN_ENV = {'CW_BRO': 'ppp-dev', **bro_git_identity_env()}
 
 
 def test_maybe_containerize_skips_when_inside_container():
@@ -55,13 +60,11 @@ def test_maybe_containerize_hops_and_scopes_to_bro():
   assert {'github', 'brog', 'trails'} <= kwargs['secrets']
   # ppp-dev doesn't deploy → no docker socket
   assert kwargs['docker_sock'] is False
-  # LLM-process container, not Claude Code: the ambient CW_BRO must not leak in
-  assert kwargs['forward_bro'] is False
   # the bro's may_summon seed reaches the broker root unchanged when no flags adjust it
   assert kwargs['may_summon'] == {'devoops'}
-  # recording on and no --into: the bro git identity is all the env carries —
-  # the clone bases on the entrypoint's HEAD fallback
-  assert kwargs['extra_env'] == bro_git_identity_env()
+  # recording on and no --into: identity + the run bro's CW_BRO is all the env
+  # carries — the clone bases on the entrypoint's HEAD fallback
+  assert kwargs['extra_env'] == _RUN_ENV
 
 
 def test_maybe_containerize_no_trails_drops_secret_and_disables_recording():
@@ -81,7 +84,7 @@ def test_maybe_containerize_no_trails_drops_secret_and_disables_recording():
   # the env var carries the effect in, so --no-trails isn't forwarded into the inner argv
   assert command == ['call', 'ppp-dev', 'hi', '--host']
   assert 'trails' not in kwargs['secrets']
-  assert kwargs['extra_env'] == {'TRAILS_DISABLED': '1', **bro_git_identity_env()}
+  assert kwargs['extra_env'] == {'TRAILS_DISABLED': '1', **_RUN_ENV}
 
 
 def test_maybe_containerize_grant_adds_secret():
@@ -283,7 +286,7 @@ def test_maybe_containerize_into_bases_the_clone_on_the_ref():
   assert rc == 0
   assert resolve.call_args[0][1] == 'feature-branch'
   _, kwargs = run.call_args
-  assert kwargs['extra_env'] == {'CW_BASE_REF': 'REF-SHA', **bro_git_identity_env()}
+  assert kwargs['extra_env'] == {'CW_BASE_REF': 'REF-SHA', **_RUN_ENV}
 
 
 def test_maybe_containerize_unresolvable_into_errors(capsys):

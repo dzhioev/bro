@@ -14,7 +14,7 @@ from cw.docker import (
   find_container_id,
 )
 from cw.paths import _containers_dir, _project_root
-from cw.secrets import _ppp_tarball
+from cw.secrets import _ppp_tarball, log_scoped_secrets
 from cw.workspace import ContainerWorkspace, _format_ref, _parse_ref
 
 
@@ -101,7 +101,6 @@ def _run_root_via_broker(
   optional_secrets: Collection[str],
   docker_sock: bool,
   extra_env: Optional[Mapping[str, str]],
-  forward_bro: bool,
   may_summon: Collection[str],
 ) -> int:
   """run the session as the broker's root peer: provision its channel socket under
@@ -127,7 +126,6 @@ def _run_root_via_broker(
     name=name,
     optional_secrets=optional_secrets,
     docker_sock=docker_sock,
-    forward_bro=forward_bro,
   )
   return run_root_via_broker(launch, project, session=session, may_summon=may_summon)
 
@@ -141,7 +139,6 @@ def run_in_container(
   optional_secrets: Collection[str] = (),
   docker_sock: bool = True,
   extra_env: Optional[Mapping[str, str]] = None,
-  forward_bro: bool = True,
   may_summon: Collection[str] = (),
 ) -> int:
   """run `command` inside a fresh cw-style container backed by workspace `name`.
@@ -166,10 +163,8 @@ def run_in_container(
   query-focused fetch summary) degrades instead of failing launch. AWS is
   just one of the required ones (`aws`), wired in by its install hook. `docker_sock=False`
   drops the docker socket mount (shell-less bros). `extra_env` sets explicit
-  `-e KEY=VALUE` vars in the container (see `_docker_create_argv`). `forward_bro=False`
-  keeps the calling session's ambient `CW_BRO` out of the container — used by the
-  `ask`/`do-task`/`call` hop, whose container runs its own named bro, so the calling
-  session's theming must not leak in (see `_docker_create_argv`). `may_summon` is
+  `-e KEY=VALUE` vars in the container (see `_docker_create_argv`) — the
+  container's `CW_BRO` travels here, set by every launch surface. `may_summon` is
   the session's outgoing summon allow-list — the bro names it may summon, computed
   per `cw/summon.py` — handed to the broker root; defaults to deny-all (and is
   moot on the broker-less fallback path, which has no channel to summon over).
@@ -181,11 +176,7 @@ def run_in_container(
   # a launch-time refresh here would buy nothing they don't redo. the lone reader of
   # a possibly-stale ref, infra's git_changes diff, is informational.
   project = _project_root()
-  names = sorted(set(secrets))
-  log.info('scoped secrets for %s: %s', name, ', '.join(names) if len(names) > 0 else '(none)')
-  optional_names = sorted(set(optional_secrets) - set(secrets))
-  if len(optional_names) > 0:
-    log.info('optional (best-effort) secrets for %s: %s', name, ', '.join(optional_names))
+  log_scoped_secrets(name, secrets, optional_secrets)
   if _container_broker_enabled():
     code = _run_root_via_broker(
       name,
@@ -195,7 +186,6 @@ def run_in_container(
       optional_secrets=optional_secrets,
       docker_sock=docker_sock,
       extra_env=extra_env,
-      forward_bro=forward_bro,
       may_summon=may_summon,
     )
   else:
@@ -215,7 +205,6 @@ def run_in_container(
       command,
       docker_sock=docker_sock,
       extra_env=extra_env,
-      forward_bro=forward_bro,
     )
     container_id = _create_container(argv, _ppp_tarball(store), name)
     # `docker start -a -i` reattaches the TTY/stdin and returns the exit code; --rm

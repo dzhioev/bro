@@ -929,8 +929,8 @@ def _report(env: IsolatedEnv, name: str) -> dict:
 def scenario_f(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> LiveRun:
   env = isolated_env
   name = f'{_NAME_PREFIX}f-root'
-  # CW_BRO reaches the container via _DOCKER_FORWARD_ENV (a persona-themed
-  # cw-session, as dive-in launches); the runner surfaces that bro's skills
+  # CW_BRO is set explicitly in the container env, as every launch surface does
+  # for a persona-themed cw-session; the runner surfaces that bro's skills
   driver = _Driver(
     env,
     name,

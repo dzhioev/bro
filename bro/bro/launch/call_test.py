@@ -8,7 +8,7 @@ import pytest
 
 import llm.llms.chat_gpt
 from bro.bros.bro import Bro
-from cw import bro_git_identity_env
+from cw.constants import bro_git_identity_env
 from do.call import TextRenderer, call_text, main
 from llm.llm import LLM, LLMSpec
 from llm.mcp import MCPServer
@@ -85,7 +85,8 @@ async def test_text_emits_banner_before_first_reply(capsys, monkeypatch):
   )
   out = capsys.readouterr().out
   # banner is the opening bro message, before the first reply line; the bro name
-  # is passed through so the logo renders despite the unforwarded CW_BRO
+  # is passed through so the logo renders on an in-process run, whose
+  # environment doesn't carry this bro's CW_BRO
   assert out.index('BANNER[record]') < out.index('[12:34:56] record: reply')
   assert '[12:34:56] record:\nBANNER[record]' in out
 
@@ -368,7 +369,11 @@ def test_call_no_trails_disables_recording_in_container():
     # the env var carries the effect in, so --no-trails isn't forwarded into the inner argv
     assert command == ['call', 'ppp-dev', 'hey', '--host']
     assert 'trails' not in kwargs['secrets']
-    assert kwargs['extra_env'] == {'TRAILS_DISABLED': '1', **bro_git_identity_env()}
+    assert kwargs['extra_env'] == {
+      'CW_BRO': 'ppp-dev',
+      'TRAILS_DISABLED': '1',
+      **bro_git_identity_env(),
+    }
 
 
 def test_call_no_trails_with_host_is_an_error():

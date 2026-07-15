@@ -308,8 +308,8 @@ class ChatApp(App):
     from cw import render_banner
 
     self._maybe_add_date_separator(date.today())
-    # pass the bro name so the logo shows even though a `call` container doesn't
-    # forward CW_BRO.
+    # pass the bro name so the logo shows on an in-process (--host) run, whose
+    # environment doesn't carry this bro's CW_BRO.
     bubble = MessageBubble(
       Text.from_ansi(render_banner(llm=False, bro=self._bro.name)),
       by_user=False,

@@ -171,11 +171,6 @@ def start_session(spec: SessionSpec) -> int:
   os.environ['CW_NAME'] = spec.name
   os.environ.setdefault('PPP_SHELL_COMMAND', os.environ['CW_COMMAND'])
   os.environ['CW_RESUME_COMMAND'] = ' '.join(spec.resume_variant().to_command_argv())
-  # CW_BRO themes the session beyond the runner's own process tree (`cw exec`
-  # shells render the bro banner; the statusLine reads it): every session runs
-  # as a bro — --bro names it, a cw-session runs as its persona. the runner
-  # re-sets it next to claude.
-  os.environ['CW_BRO'] = spec.session_bro
 
   container = not spec.host
   if container and os.environ.get('CW_IN_CONTAINER') is not None:
@@ -243,7 +238,9 @@ def _container_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
     log.error('%s', e)
     return 1
 
-  env: dict[str, str] = {}
+  # CW_BRO themes the whole container (`cw exec` shells render the bro banner),
+  # not just the runner's process tree — the runner re-exports it next to claude.
+  env: dict[str, str] = {'CW_BRO': bro_name}
   if base_ref is not None:
     # the entrypoint reads CW_BASE_REF to base the fresh clone's worktree branch
     # (the sha's objects are already shared from /host-repo via clone alternates);
@@ -256,7 +253,7 @@ def _container_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
     secrets=secrets,
     optional_secrets=scoped.optional,
     docker_sock=scoped.docker_sock,
-    extra_env=env if len(env) > 0 else None,
+    extra_env=env,
     may_summon=may_summon,
   )
   if not spec.drop and code == 0:

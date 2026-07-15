@@ -45,10 +45,11 @@ run's `started`/`completed` land in the host log), and the root's `SummonControl
 root exits.
 
 `SummonSpawner` turns an authorized summon into a docker child: `_lower_summon`
-(off-loop) computes the launch a host-side `ask <target>` would get — the target's
-own credential scope, `ask <target> "<prompt>"` non-TTY, based on the summoner's
-workspace HEAD (or the request's `into` ref) via `CW_BASE_REF` — and delegates to
-the docker path above.
+(off-loop) computes the launch a host-side `ask <target>` would get — the shared
+bro-run description (`bro_run.describe`: the target's own credential scope,
+`ask <target> "<prompt>"` non-TTY), based on the summoner's workspace HEAD (or
+the request's `into` ref) via `CW_BASE_REF` — and delegates to the docker path
+above.
 """
 
 import asyncio
@@ -60,6 +61,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+import bro_run
 from base import credentials, log
 from broker.brotocol import Message, Tag
 from broker.dispatcher import Broker, Dispatcher, ping_handler
@@ -67,11 +69,10 @@ from broker.runtime import Peer
 from broker.spawn import ChildHandle, LaunchSpec, Spawner
 from broker.transport import Provisioned
 from broker.transports.unix import UnixServerTransport
-from cw.constants import bro_git_identity_env
 from cw.docker import _create_container, _docker_create_argv, _ensure_image, _image_tag
 from cw.git import resolve_head, resolve_ref
 from cw.paths import _broker_dir, _containers_dir, _host_log_dir, _project_root, _summon_dir
-from cw.secrets import Surface, _ppp_tarball, scoped_secrets
+from cw.secrets import _ppp_tarball, log_scoped_secrets
 from cw.summon import SummonControl, summon_status_file
 from cw.workspace import ContainerWorkspace
 from summon import SUMMON
@@ -92,15 +93,13 @@ class DockerLaunchSpec(LaunchSpec):
   independent of whatever ambient environment the launcher holds when the loop reaches
   this peer. Only an attached root gets the ambient `_DOCKER_FORWARD_ENV` forwards on
   top; a spawned child's environment is this snapshot alone (see
-  `_broker_create_argv`). `bro` is the role stamped into `CW_BRO` (theming + secret
-  scoping), `None` for a substrate-native peer with no bro.
+  `_broker_create_argv`).
 
   `name` is the workspace backing the container (`var/cw/containers/<name>`); `None`
   derives a throwaway `broker-<channel>` one, removed when the child ends. `secrets`
   hydrate strictly, `optional_secrets` best-effort (`credentials.build_scoped_store`).
-  `docker_sock` and `forward_bro` mirror the `_docker_create_argv` knobs: an attached
-  cw session root gets the host docker socket and its ambient `CW_BRO` forwarded; a
-  spawned child defaults to neither.
+  `docker_sock` mirrors the `_docker_create_argv` knob: an attached cw session root
+  gets the host docker socket; a spawned child defaults to none.
   """
 
   command: list[str]
@@ -108,11 +107,9 @@ class DockerLaunchSpec(LaunchSpec):
   secrets: Collection[str]
   attached: bool
   ring_bytes: int = DEFAULT_RING_BYTES
-  bro: Optional[str] = None
   name: Optional[str] = None
   optional_secrets: Collection[str] = ()
   docker_sock: bool = False
-  forward_bro: bool = False
 
 
 @dataclass(frozen=True)
@@ -172,16 +169,14 @@ def _broker_create_argv(
   launch: DockerLaunchSpec, host_socket: str, name: str, project: Path, session: Path, tag: str
 ) -> list[str]:
   """`docker create` argv for a broker peer: the channel socket bind-mounted to
-  `/run/broker.sock`, `BROKER_CHANNEL` pointed at it, and the bro-role (when set)
-  stamped into `CW_BRO`. TTY allocation and ambient env forwarding both follow
-  `launch.attached` — the root is the launcher's own session, so it owns the host
-  TTY and inherits the `_DOCKER_FORWARD_ENV` set; a supervised child is headless
-  and gets the `LaunchSpec` env snapshot only (forwarding would bake the
-  launcher's values into it: mis-attributed commits, wrong banner facts)."""
+  `/run/broker.sock` and `BROKER_CHANNEL` pointed at it. TTY allocation and
+  ambient env forwarding both follow `launch.attached` — the root is the
+  launcher's own session, so it owns the host TTY and inherits the
+  `_DOCKER_FORWARD_ENV` set; a supervised child is headless and gets the
+  `LaunchSpec` env snapshot only (forwarding would bake the launcher's values
+  into it: mis-attributed commits, wrong banner facts)."""
   peer_env = dict(launch.env)
   peer_env['BROKER_CHANNEL'] = _BROKER_ADDRESS
-  if launch.bro is not None:
-    peer_env['CW_BRO'] = launch.bro
   return _docker_create_argv(
     tag,
     name,
@@ -192,7 +187,6 @@ def _broker_create_argv(
     docker_sock=launch.docker_sock,
     extra_env=peer_env,
     extra_mounts=[f'{host_socket}:{_IN_CONTAINER_SOCK}'],
-    forward_bro=launch.forward_bro,
     forward_env=launch.attached,
   )
 
@@ -450,16 +444,15 @@ class ProcessSpawner(Spawner):
 
 def _lower_summon(launch: SummonLaunchSpec) -> DockerLaunchSpec:
   """the blocking half of a summon spawn: compute the docker launch a host-side
-  `ask <target>` would get. Privileges are exactly the target's own bro-run scope
-  (`scoped_secrets` — nothing inherited from the summoner, no grant passthrough);
-  the base is the summoner's workspace HEAD, read live here (`resolve_head` —
-  which also transfers the commit's objects into the host repo when they live
-  only in the summoner's own store), unless the request's `into` names a ref
-  (resolved with the same fetch-if-unresolvable rule as `cw ss --into`, but an
-  unresolvable ref fails the spawn rather than falling back). Raises on any
-  unresolvable input — the spawner surfaces that as the correlated
+  `ask <target>` would get — the shared bro-run description (`bro_run.describe`:
+  exactly the target's own scope, nothing inherited from the summoner, no grant
+  passthrough). The base is the summoner's workspace HEAD, read live here
+  (`resolve_head` — which also transfers the commit's objects into the host repo
+  when they live only in the summoner's own store), unless the request's `into`
+  names a ref (resolved with the same fetch-if-unresolvable rule as `cw ss
+  --into`, but an unresolvable ref fails the spawn rather than falling back).
+  Raises on any unresolvable input — the spawner surfaces that as the correlated
   `failed{reason: 'launch'}`."""
-  scoped = scoped_secrets(launch.target, Surface.BRO_RUN)
   project = _project_root()
   if launch.into is not None:
     base_ref = resolve_ref(project, launch.into)
@@ -469,14 +462,15 @@ def _lower_summon(launch: SummonLaunchSpec) -> DockerLaunchSpec:
     base_ref = resolve_head(project, launch.parent_workspace)
     if base_ref is None:
       raise ValueError(f"cannot read the summoner's HEAD at {launch.parent_workspace}")
+  run = bro_run.describe(launch.target, [launch.prompt], base_ref=base_ref)
+  log_scoped_secrets(f'summoned {launch.target}', run.secrets, run.optional_secrets)
   return DockerLaunchSpec(
-    # --host: the child is already the relayed, scoped run (do/CLAUDE.md)
-    command=['ask', launch.target, launch.prompt, '--host'],
-    env={'CW_BASE_REF': base_ref, **bro_git_identity_env()},
-    secrets=scoped.required,
+    command=run.command,
+    env=run.env,
+    secrets=run.secrets,
     attached=False,
-    optional_secrets=scoped.optional,
-    docker_sock=scoped.docker_sock,
+    optional_secrets=run.optional_secrets,
+    docker_sock=run.docker_sock,
   )
 
 

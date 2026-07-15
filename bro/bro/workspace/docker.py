@@ -13,7 +13,6 @@ CONTAINER_DIR = Path(__file__).resolve().parent.parent / 'setup' / 'container'
 BASE_IMAGE_DIR = Path(__file__).resolve().parent.parent / 'setup' / 'base_image'
 
 _DOCKER_FORWARD_ENV = (
-  'CW_BRO',
   'CW_COMMAND',
   'CW_TASK_ID',
   'GIT_AUTHOR_NAME',
@@ -172,7 +171,6 @@ def _docker_create_argv(
   *,
   docker_sock: bool = True,
   extra_env: Optional[Mapping[str, str]] = None,
-  forward_bro: bool = True,
   forward_env: bool = True,
   tty: bool = True,
   extra_mounts: Optional[list[str]] = None,
@@ -196,12 +194,9 @@ def _docker_create_argv(
   child's environment is the explicit snapshot its launcher assembled (`extra_env`)
   — forwarding the launching process's task/session identity, git author identity,
   and terminal facts would bake the launcher's values into the child
-  (mis-attributed commits, wrong banner facts).
-
-  `forward_bro=False` drops `CW_BRO` from that forward set: the container uses it
-  to theme `cw banner` and, in the in-place session runner, to pick the bro whose
-  skills to surface. an LLM-process container (`ask`/`do-task`/`call`) runs its
-  own named bro, so it must not inherit the calling session's ambient `CW_BRO`.
+  (mis-attributed commits, wrong banner facts). `CW_BRO` is deliberately not in
+  the forward set: every launch surface sets the container's bro in `extra_env`,
+  so an ambient value — the calling session's own theming — never leaks in.
   """
   home = Path.home()
   claude_dir = _session_claude_dir(name)
@@ -260,8 +255,6 @@ def _docker_create_argv(
     argv += ['-v', '/var/run/docker.sock:/var/run/docker.sock']
   if forward_env:
     for var in _DOCKER_FORWARD_ENV:
-      if var == 'CW_BRO' and not forward_bro:
-        continue
       if os.environ.get(var) is not None:
         argv += ['-e', var]
   if extra_mounts is not None:

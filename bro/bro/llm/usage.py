@@ -23,9 +23,10 @@ Two cumulative-usage sources, unified by `current_usage()`:
 - the usage file — the env-pointed (`PPP_USAGE_FILE`) JSON snapshot a native bro
   run's LLM loop publishes after every API call (`publish`). Written atomically
   (temp + rename) and self-describing (`{"agent": ..., "models": {slug: counts}}`):
-  the reader cannot learn the agent from the environment because bro-run
-  containers deliberately drop `CW_BRO`. The first publish mints the path and
-  exports the pointer, so tool subprocesses spawned afterwards inherit it.
+  the reader cannot trust the environment for the agent — an in-process bro run
+  inherits the launcher's `CW_BRO`, not its own. The first publish mints the
+  path and exports the pointer, so tool subprocesses spawned afterwards inherit
+  it.
 - the Claude Code session transcript — discovered under `~/.claude/projects/`
   from the working directory (`find_session_jsonl`), summed per model across
   every billed assistant message (`transcript_usage`).
