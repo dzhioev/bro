@@ -146,53 +146,47 @@ def test_main_rejects_removed_host_flag():
     main(['ask', 'ppp-dev', 'hello', '--host'])
 
 
-def test_main_relays_through_host_when_inside_container():
+def test_main_refuses_implicit_run_inside_container(capsys):
   with (
     patch.dict('os.environ', {'CW_IN_CONTAINER': '1', 'BROKER_CHANNEL': 'unix:/tmp/x.sock'}),
     patch('cw.run_in_container') as run,
-    patch('summon.relay_summon', return_value=0) as relay,
+    patch('summon.relay_summon') as relay,
   ):
     rc = main(['ask', 'ppp-dev', 'hi'])
-  assert rc == 0
+  assert rc == 1
   assert run.call_count == 0
-  relay.assert_called_once_with('ppp-dev', 'hi', timeout=None, into=None)
+  assert relay.call_count == 0
+  error = capsys.readouterr().err
+  assert '--summon' in error
+  assert '--in-place' in error
 
 
-def test_main_relay_forwards_timeout_and_into():
-  with (
-    patch.dict('os.environ', {'CW_IN_CONTAINER': '1', 'BROKER_CHANNEL': 'unix:/tmp/x.sock'}),
-    patch('summon.relay_summon', return_value=0) as relay,
-  ):
-    rc = main(['ask', 'ppp-dev', 'hi', '--timeout', '7200', '--into', 'feature-branch'])
+def test_main_summon_forwards_timeout_and_into():
+  with patch('summon.relay_summon', return_value=0) as relay:
+    rc = main(['ask', 'ppp-dev', 'hi', '--summon', '--timeout', '7200', '--into', 'feature-branch'])
   assert rc == 0
   relay.assert_called_once_with('ppp-dev', 'hi', timeout=7200.0, into='feature-branch')
 
 
-def test_main_relay_without_channel_errors(capsys):
-  with patch.dict('os.environ', {'CW_IN_CONTAINER': '1'}, clear=False) as env:
-    env.pop('BROKER_CHANNEL', None)
-    rc = main(['ask', 'ppp-dev', 'hi'])
-  assert rc == 1
-  assert 'no broker channel' in capsys.readouterr().err
+def test_main_summon_detaches(capsys):
+  with patch('summon.summon_detached', return_value='REQUEST-ID') as detached:
+    rc = main(['ask', 'ppp-dev', 'hi', '--summon', '--detach'])
+  assert rc == 0
+  detached.assert_called_once_with('ppp-dev', 'hi', timeout=None, into=None)
+  assert capsys.readouterr().out == 'REQUEST-ID\n'
 
 
-def test_main_relay_rejects_host_side_flags(capsys):
-  with (
-    patch.dict('os.environ', {'CW_IN_CONTAINER': '1', 'BROKER_CHANNEL': 'unix:/tmp/x.sock'}),
-    patch('summon.relay_summon') as relay,
-  ):
-    rc = main(['ask', 'ppp-dev', 'hi', '--rich', '--effort', 'low'])
-  assert rc == 1
-  assert relay.call_count == 0
-  assert '--rich/--effort cannot ride a host-relayed run' in capsys.readouterr().err
+def test_main_summon_statically_rejects_local_flags():
+  with pytest.raises(SystemExit):
+    main(['ask', 'ppp-dev', 'hi', '--summon', '--rich'])
 
 
-def test_main_timeout_without_relay_errors(capsys):
+def test_main_timeout_without_summon_errors(capsys):
   with patch.dict('os.environ', {}, clear=False) as env:
     env.pop('CW_IN_CONTAINER', None)
     rc = main(['ask', 'ppp-dev', 'hi', '--timeout', '60'])
   assert rc == 1
-  assert 'host-relayed run' in capsys.readouterr().err
+  assert 'require --summon' in capsys.readouterr().err
 
 
 def test_main_in_place_inside_container_runs_in_process():

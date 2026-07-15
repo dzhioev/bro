@@ -5,11 +5,11 @@ The peer side of the summon mechanism: a `summon{target, prompt, timeout?, into?
 request on the session channel, answered by the host-side handler (`cw/summon.py`)
 with `started{trail_id}` and exactly one terminal (`completed` / `failed` /
 `reply{error}`). This module owns the request's wire contract — the type tag, the
-payload keys, the 1800s default timeout — for all its consumers: the `summon`
-console script (blocking / `--detach` / `check` modes), the bro service tools
-(`summon` / `summon_check`, over the library functions `summon_and_wait`,
-`summon_detached`, `check_summon`, `collect_summon`), and the in-container
-`ask` / `do-task` relay (`relay_summon`, the blocking CLI mode as a function).
+payload keys, the 1800s default timeout — for all its consumers: `bro run
+--summon` and its bare `summon` alias, the bro service tools (`summon` /
+`summon_check`, over the library functions `summon_and_wait`, `summon_detached`,
+`check_summon`, `collect_summon`), and the blocking CLI relay helper
+`relay_summon`.
 
 Blocking mode sends, prints the request id and the `started` trail id to stderr,
 and relays the terminal: the answer on stdout (exit 0), everything else as a
@@ -382,21 +382,6 @@ def _relay(await_answer: Callable[[], str]) -> int:
   return 0
 
 
-def _summon(
-  target: str, prompt: str, timeout: Optional[float], into: Optional[str], detach: bool
-) -> int:
-  if not detach:
-    return relay_summon(target, prompt, timeout=timeout, into=into)
-  try:
-    client = _open_client()
-  except SummonError as e:
-    log.error('%s', e)
-    return 1
-  with client:
-    print(client.send(SUMMON, _payload(target, prompt, timeout, into)).id)
-    return 0
-
-
 def _list() -> int:
   try:
     status = list_summons()
@@ -481,27 +466,12 @@ def main(argv: list[str]) -> Optional[int]:
       'read by a dead wait; not combinable with --wait',
     )
     return _check(**parser.parse(argv[1:]))
-  parser = base.args.Parser(
-    description='summon a bro over the session broker channel and print its answer; '
-    '`summon check <request-id>` checks on a detached or interrupted summon; '
-    "`summon list` lists this session's summons with their request ids"
+  from do._cli import run_main
+
+  return run_main(
+    argv,
+    program=['summon'],
+    description='summon a bro over the session channel; use `summon check` to reattach '
+    'to a request and `summon list` to rediscover request ids',
+    force_summon=True,
   )
-  parser.add_argument('target', help='bro to summon (must be in the session summon allow-list)')
-  parser.add_argument('prompt', help='the request the summoned bro answers')
-  parser.add_argument(
-    '--timeout',
-    type=float,
-    help=f'seconds before the host kills the child (default: {DEFAULT_TIMEOUT:.0f}; '
-    'an open-ended run — e.g. a dev child watching a PR through review — outlives '
-    'the default and needs hours)',
-  )
-  parser.add_argument(
-    '--into', help="base the child on this git ref instead of this workspace's current HEAD"
-  )
-  parser.add_argument(
-    '--detach',
-    action='store_true',
-    help='print the request id on stdout and exit right after the send; '
-    'collect the result later with `summon check`',
-  )
-  return _summon(**parser.parse(argv))

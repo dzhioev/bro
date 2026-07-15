@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import json
+import os
 from dataclasses import dataclass
 
 import pytest
@@ -55,6 +56,28 @@ async def running_server(socket_dir, monkeypatch):
 
 async def _next(queue: asyncio.Queue):
   return await asyncio.wait_for(queue.get(), TIMEOUT)
+
+
+def test_bare_summon_help_names_check_and_list(capsys):
+  with pytest.raises(SystemExit):
+    summon.main(['summon', '--help'])
+  output = capsys.readouterr().out
+  assert 'summon check' in output
+  assert 'summon list' in output
+
+
+def test_bare_summon_forwards_with_its_own_shell_command(monkeypatch):
+  calls: list[tuple] = []
+  monkeypatch.delenv('PPP_SHELL_COMMAND', raising=False)
+  monkeypatch.setattr(
+    summon,
+    'relay_summon',
+    lambda target, prompt, *, timeout, into: calls.append((target, prompt, timeout, into)) or 0,
+  )
+
+  assert summon.main(['summon', '--timeout', '60', 'devoops', 'deploy']) == 0
+  assert calls == [('devoops', 'deploy', 60.0, None)]
+  assert os.environ['PPP_SHELL_COMMAND'] == 'summon --timeout 60.0 devoops deploy'
 
 
 def test_errors_without_a_channel(monkeypatch, capsys, caplog):

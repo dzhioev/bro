@@ -150,10 +150,12 @@ def _tty_supported() -> bool:
   return sys.stdin.isatty() and sys.stdout.isatty()
 
 
-def main(argv: list[str]) -> Optional[int]:
+def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
   from cw import EFFORT_LEVELS
 
-  parser = base.args.Parser(description='open an interactive session with a bro')
+  parser = base.args.Parser(
+    prog=' '.join(program), description='open an interactive session with a bro'
+  )
   parser.add_argument('bro', help='bro name')
   parser.add_argument(
     'what', nargs='?', help='first message to send to the bro (optional with --resume)'
@@ -189,10 +191,17 @@ def main(argv: list[str]) -> Optional[int]:
   )
   parser.add_argument('--into', metavar='REF', help=INTO_HELP)
   args = parser.parse(argv)
-  os.environ.setdefault('PPP_SHELL_COMMAND', ' '.join(parser.reconstruct(args, prog=['call'])))
+  os.environ.setdefault('PPP_SHELL_COMMAND', ' '.join(parser.reconstruct(args, prog=program)))
 
   if args['what'] is None and args['resume'] is None:
     print('what is required unless --resume is given', file=sys.stderr)
+    return 1
+  if os.environ.get('CW_IN_CONTAINER') is not None and not args['in_place']:
+    print(
+      'bro chat refuses an implicit in-container run; pass --in-place to use this '
+      "container's scope",
+      file=sys.stderr,
+    )
     return 1
 
   # decide TUI-vs-text on the host, before the hop: `run_in_container` always
@@ -210,8 +219,9 @@ def main(argv: list[str]) -> Optional[int]:
   if args['effort'] is not None:
     inner_args.extend(['--effort', args['effort']])
   hopped = maybe_containerize(
-    cli_name='call',
+    cli_name='bro-chat' if program == ['bro', 'chat'] else program[0],
     bro_name=args['bro'],
+    inner_cli_name='call',
     inner_args=inner_args,
     in_place=args['in_place'],
     no_trails=args['no_trails'],
@@ -281,7 +291,11 @@ def main(argv: list[str]) -> Optional[int]:
     # the conversation survives as its trail — point the user at the pickup
     if bro.trail_id is not None:
       print(
-        f'conversation recorded as trail {bro.trail_id}; '
-        f'continue it with: call {args["bro"]} --resume {bro.trail_id}',
+        f'conversation recorded as trail {bro.trail_id}; continue it with: '
+        f'{" ".join(program)} {args["bro"]} --resume {bro.trail_id}',
         file=sys.stderr,
       )
+
+
+def main(argv: list[str]) -> Optional[int]:
+  return chat_main(argv, program=['call'])

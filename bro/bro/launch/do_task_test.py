@@ -88,20 +88,18 @@ def test_main_re_execs_into_container_when_outside():
     assert env['PPP_SHELL_COMMAND'] == 'do-task ppp-dev abc-123'
     launch = run.call_args.args[0]
     assert launch.name.startswith('do-task-ppp-dev-')
-    assert launch.command == ['do-task', 'ppp-dev', 'abc-123', '--in-place']
+    assert launch.command == ['ask', 'ppp-dev', '/fix abc-123', '--in-place']
     assert run.call_args.kwargs['drop'] is True
     assert {'github', 'brog', 'trails'} <= launch.secrets
     assert launch.docker_sock is False
 
 
-def test_main_relay_wraps_the_task_as_a_fix_invocation():
-  # a relayed child runs plain `ask`, so the `/fix` wrapping happens before the
-  # summon request is sent.
+def test_main_summon_wraps_the_task_as_a_fix_invocation():
   with (
     patch.dict('os.environ', {'CW_IN_CONTAINER': '1', 'BROKER_CHANNEL': 'unix:/tmp/x.sock'}),
     patch('summon.relay_summon', return_value=0) as relay,
   ):
-    rc = main(['do-task', 'ppp-dev', 'abc-123'])
+    rc = main(['do-task', 'ppp-dev', 'abc-123', '--summon'])
   assert rc == 0
   relay.assert_called_once_with('ppp-dev', '/fix abc-123', timeout=None, into=None)
 

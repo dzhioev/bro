@@ -23,7 +23,7 @@ Exception — set the timeout unprompted when the child's run is open-ended: a f
 
 Use whichever the session has — they speak the same mechanism:
 
-- **Bash available** (a cw-session): the `summon` CLI — `summon <target> '<prompt>'` (`--timeout <s>`, `--into <ref>`). It prints the request id and the started trail id to stderr, then blocks until the answer lands on stdout; non-zero exit + stderr on failure.
+- **Bash available** (a cw-session): `bro run --summon <target> '<prompt>'` (`--timeout <s>`, `--into <ref>`); bare `summon <target> '<prompt>'` is the thin alias. It prints the request id and the started trail id to stderr, then blocks until the answer lands on stdout; non-zero exit + stderr on failure.
 - **No Bash, the `summon` tools present** (`bro::summon` / `bro::summon_check` — `mcp__bro__summon` / `mcp__bro__summon_check` in a `--bro` claude session): call `summon` with `target` and `prompt` (optional `timeout`, `into`). It blocks and returns the answer; failures come back as the tool error with the reason. `detach: true` returns the request id right away instead; `summon_check(request_id)` peeks non-blockingly (`{state: pending|completed, …}`) and `summon_check(request_id, wait: true)` blocks and collects.
 - **Neither** — this session can't summon; say so instead of improvising.
 
@@ -43,7 +43,7 @@ The stdout / tool result is the target's terminal reply. Relay it to the user, a
 
 ## Failure modes
 
-- **Denied** — the target isn't in the summoner's allow-list, or the summon would nest past the depth cap. Immediate, no child spawned; the error names the reason. For the session itself the list is fixed at launch: the fix is relaunching with `--grant-summon <target>` (on `cw ss` / `dive-in` / `ask` / `call` / `do-task`) — tell the user that; nothing in-session can widen it. A summoned bro follows its own static `may_summon` seeds instead — grants don't reach it, so its denials are fixed by seeding the bro in code.
+- **Denied** — the target isn't in the summoner's allow-list, or the summon would nest past the depth cap. Immediate, no child spawned; the error names the reason. For the session itself the list is fixed at launch: the fix is relaunching with `--grant-summon <target>` (on `cw ss` / `dive-in` / `bro run` / `bro chat` or their aliases) — tell the user that; nothing in-session can widen it. A summoned bro follows its own static `may_summon` seeds instead — grants don't reach it, so its denials are fixed by seeding the bro in code.
 - **Raised / error** — the target ran but couldn't fulfill the request; the reason is the failure text. Relay it — rephrasing the prompt or picking another target is a user decision.
 - **Failed (launch / exit / timeout)** — the child never started, died, or was killed at the timeout. The message carries the reason and a trails hint; `trails show <trail-id>` has the full trace.
 - **Wait expired with no terminal** — the result was lost or the child is still running; the error says which trail to inspect. A killed or detached wait is recoverable: `summon check <request-id>` polls, `summon check --wait <request-id>` collects the buffered result (the `summon_check` tool does the same for tool-only sessions).

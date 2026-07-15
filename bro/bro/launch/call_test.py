@@ -221,7 +221,7 @@ def test_default_invokes_spec_fast(monkeypatch):
   monkeypatch.setattr('do.call._tty_supported', lambda: False)
 
   # no flag — fast is the default for these CLIs
-  rc = main(['call', 'record', 'hi'])
+  rc = main(['call', 'record', 'hi', '--in-place'])
   assert rc is None
   assert len(built) == 1
   spec = built[0].llm_spec
@@ -244,7 +244,7 @@ def test_slow_flag_builds_plain_spec(monkeypatch):
   monkeypatch.setattr('do.call.call_text', fake_call_text)
   monkeypatch.setattr('do.call._tty_supported', lambda: False)
 
-  rc = main(['call', 'record', 'hi', '--slow'])
+  rc = main(['call', 'record', 'hi', '--slow', '--in-place'])
   assert rc is None
   assert len(built) == 1
   spec = built[0].llm_spec
@@ -266,7 +266,7 @@ def test_default_falls_back_to_plain_when_no_fast_mode(monkeypatch):
 
   # fast is implicit, so a provider with no fast mode degrades to the plain spec
   # instead of erroring out.
-  rc = main(['call', 'fastless', 'hi'])
+  rc = main(['call', 'fastless', 'hi', '--in-place'])
   assert rc is None
   assert len(built) == 1
   assert isinstance(built[0], _FastlessBro)
@@ -336,7 +336,7 @@ def test_effort_flag_overrides_spec_effort(monkeypatch):
   monkeypatch.setattr('do.call.call_text', fake_call_text)
   monkeypatch.setattr('do.call._tty_supported', lambda: False)
 
-  rc = main(['call', 'record', 'hi', '--effort', 'max'])
+  rc = main(['call', 'record', 'hi', '--effort', 'max', '--in-place'])
   assert rc is None
   assert len(built) == 1
   spec = built[0].llm_spec
@@ -353,7 +353,7 @@ def test_effort_flag_on_effortless_provider_exits_1(monkeypatch, capsys):
 
   # --effort is an explicit ask — a provider without the knob errors instead of
   # falling back the way implicit fast does.
-  rc = main(['call', 'fastless', 'hi', '--effort', 'high'])
+  rc = main(['call', 'fastless', 'hi', '--effort', 'high', '--in-place'])
   assert rc == 1
   assert 'does not support an effort override' in capsys.readouterr().err
 
@@ -455,7 +455,7 @@ def test_call_resume_runs_the_resumed_bro(monkeypatch, capsys):
   monkeypatch.setattr('do.call.call_text', fake_call_text)
   monkeypatch.setattr('do.call._tty_supported', lambda: False)
 
-  rc = main(['call', 'record', '--resume'])
+  rc = main(['call', 'record', '--resume', '--in-place'])
   assert rc is None
   assert captured['trail_ref'] == 'latest'
   # fast is the default, so the continuation runs the class spec's fast variant
@@ -479,7 +479,7 @@ def test_call_prints_resume_hint_when_a_trail_was_recorded(monkeypatch, capsys):
   monkeypatch.setattr('do.call.call_text', fake_call_text)
   monkeypatch.setattr('do.call._tty_supported', lambda: False)
 
-  rc = main(['call', 'record', 'hi', '--slow'])
+  rc = main(['call', 'record', 'hi', '--slow', '--in-place'])
   assert rc is None
   err = capsys.readouterr().err
   assert 'conversation recorded as trail trail-xyz' in err
@@ -495,7 +495,7 @@ def test_call_skips_resume_hint_without_a_trail(monkeypatch, capsys):
   monkeypatch.setattr('do.call.call_text', fake_call_text)
   monkeypatch.setattr('do.call._tty_supported', lambda: False)
 
-  rc = main(['call', 'record', 'hi', '--slow'])
+  rc = main(['call', 'record', 'hi', '--slow', '--in-place'])
   assert rc is None
   assert 'conversation recorded' not in capsys.readouterr().err
 
@@ -532,7 +532,7 @@ def test_initial_slash_invocation_passes_through_verbatim(monkeypatch):
 
   # no client-side expansion: the bro's system prompt describes the /-syntax and
   # the model loads the skill body itself via the `bro::skill` tool.
-  rc = main(['call', 'record', '/ask devoops to ping', '--slow'])
+  rc = main(['call', 'record', '/ask devoops to ping', '--slow', '--in-place'])
   assert rc is None
   assert captured == ['/ask devoops to ping']
 

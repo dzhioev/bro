@@ -1,18 +1,17 @@
-"""shared CLI plumbing for `ask` / `do-task` / `call`: the scoped-container hop,
-fast-mode bro construction, and the `ask`/`do-task` main()."""
+"""shared bro launcher plumbing: container hops, one-shot runs, and bro construction."""
 
 import asyncio
 import logging
 import os
 import sys
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable
 from dataclasses import replace
 from typing import Optional
 
 import base.args
 import bro_run
 import summon as summon_client
-from base import credentials, log
+from base import credentials
 from bro.bro import BroRaised
 from bro.bros.bro import Bro
 from llm.llm import LLMSpec
@@ -32,14 +31,14 @@ EFFORT_HELP = (
   "at xhigh); without the flag the bro's own spec stands. errors when the provider "
   'has no effort knob'
 )
-IN_PLACE_HELP = (
-  'run the bro in the calling process: skip the scoped-container hop (on the '
-  'host) or the host-relayed full launch (inside a container)'
-)
+IN_PLACE_HELP = 'run the bro in the calling process instead of creating an isolated container'
+SUMMON_HELP = 'run through the session summon channel in a separate scoped container'
 TIMEOUT_HELP = (
-  'seconds before the host kills a relayed run — a container invocation without '
-  f'--in-place relays through the host summon path (default: {summon_client.DEFAULT_TIMEOUT:.0f}); '
-  'errors when the run is not relayed'
+  f'summon mode: seconds before the host kills the child (default: '
+  f'{summon_client.DEFAULT_TIMEOUT:.0f})'
+)
+DETACH_HELP = (
+  'summon mode: print the request id and exit after sending; collect it with summon check'
 )
 NO_TRAILS_HELP = (
   'disable trails recording: set TRAILS_DISABLED in the container and drop the '
@@ -62,8 +61,8 @@ REVOKE_SUMMON_HELP = (
   'errors if it is not in the allow-list'
 )
 INTO_HELP = (
-  "base the container's workspace clone on this git ref instead of the host "
-  "checkout's current HEAD (fetched from origin when not local)"
+  "base the new workspace clone on this git ref instead of the launcher's current HEAD "
+  '(fetched from origin when not local)'
 )
 
 
@@ -112,6 +111,7 @@ def maybe_containerize(
   cli_name: str,
   bro_name: str,
   inner_args: list[str],
+  inner_cli_name: Optional[str] = None,
   in_place: bool,
   no_trails: bool = False,
   grant_cred: Optional[list[str]] = None,
@@ -125,11 +125,9 @@ def maybe_containerize(
   calling process.
 
   the hop is skipped when `--in-place` was passed or when already inside a container
-  (`CW_IN_CONTAINER`, set by the container). the hopped command itself carries
-  `--in-place`, pinning the inner run in-process — without it an in-container
-  `ask`/`do-task` would relay itself back to the host (the relay branch in
-  `run()`); `call` has no relay, so its in-container invocations land here and
-  skip via `CW_IN_CONTAINER`. otherwise the launch is the shared bro-run
+  (`CW_IN_CONTAINER`, set by the container). Callers reject an implicit in-container
+  run before reaching this helper; the hopped command carries `--in-place`, pinning
+  the already-scoped inner run in-process. Otherwise the launch is the shared bro-run
   description (`bro_run.describe`): a fresh workspace, the bro's own credential
   scope, the bro git identity + `CW_BRO` in the container env. an interactive
   surface (`call`) renders inside it just as claude code does.
@@ -190,7 +188,7 @@ def maybe_containerize(
     bro_name,
     inner_args,
     workspace_name=bro_run.fresh_workspace_name(f'{cli_name}-{bro_name}'),
-    cli_name=cli_name,
+    cli_name=inner_cli_name if inner_cli_name is not None else cli_name,
     base_ref=base_ref,
     trails=not no_trails,
   )
@@ -211,131 +209,133 @@ def maybe_containerize(
   return run_in_container(launch, drop=True, may_summon=may_summon)
 
 
-def _relay_blocked_flags(args: dict) -> list[str]:
-  """the flags a host-relayed run cannot honor: the host launches the target
-  with its own defaults (`ask <target> "<prompt>"`), so local trace rendering
-  and per-run spec/scope adjustments have nothing to act on."""
-  blocked: list[str] = []
-  if args['rich']:
-    blocked.append('--rich')
-  if args['slow']:
-    blocked.append('--slow')
-  if args['effort'] is not None:
-    blocked.append('--effort')
-  if args['no_trails']:
-    blocked.append('--no-trails')
-  if args['grant_cred'] is not None:
-    blocked.append('--grant-cred')
-  if args['revoke_cred'] is not None:
-    blocked.append('--revoke-cred')
-  if args['grant_summon'] is not None:
-    blocked.append('--grant-summon')
-  if args['revoke_summon'] is not None:
-    blocked.append('--revoke-summon')
-  return blocked
-
-
-def _relay_through_host(
-  *, bro_name: str, prompt: str, timeout: Optional[float], into: Optional[str]
-) -> int:
-  """run the bro through the host's summon path — the in-container counterpart
-  of the container hop, so the run gets the full launch flow instead of an
-  in-process run against this container's credentials: the host spawns a sibling
-  container with the target's own scoped credential set, git identity, trails
-  recording, and workspace clone, subject to the session's summon allow-list and
-  depth cap. blocks and relays the answer (`summon.relay_summon`)."""
-  if os.environ.get('BROKER_CHANNEL') is None:
-    print(
-      'no broker channel to relay through; pass --in-place to run the bro in this process',
-      file=sys.stderr,
-    )
-    return 1
-  log.info('inside a container: relaying to the host for a scoped %s run', bro_name)
-  return summon_client.relay_summon(bro_name, prompt, timeout=timeout, into=into)
-
-
-def run(
+def _run_summoned(
+  bro_name: str,
+  input_text: str,
   *,
-  cli_name: str,
-  parser_description: str,
-  arg_name: str,
-  arg_help: str,
-  run_function: Callable[[Bro, str, Optional[Observer]], Coroutine[None, None, str]],
+  timeout: Optional[float],
+  into: Optional[str],
+  detach: bool,
+) -> int:
+  if not detach:
+    return summon_client.relay_summon(bro_name, input_text, timeout=timeout, into=into)
+  try:
+    request_id = summon_client.summon_detached(bro_name, input_text, timeout=timeout, into=into)
+  except summon_client.SummonError as error:
+    print(str(error), file=sys.stderr)
+    return 1
+  print(request_id)
+  return 0
+
+
+def run_main(
   argv: list[str],
+  *,
+  program: list[str],
+  description: str = 'run a bro on the given input',
+  input_transform: Optional[Callable[[str], str]] = None,
   export_task_id: bool = False,
-  relay_prompt: Optional[Callable[[str], str]] = None,
+  force_summon: bool = False,
 ) -> Optional[int]:
-  """shared `ask`/`do-task` main. `export_task_id` (do-task) parses the task
-  positional as a Notion page ref and exports it as CW_TASK_ID, so the run's
-  commit footer resolves its `Task:` line without a flow lookup; input that is
-  no page ref (a description, a slash invocation) exports nothing. a host-relayed
-  run sends `relay_prompt(<positional>)` as the summon prompt (do-task's `/fix`
-  wrapping — the relayed child runs plain `ask`); None sends it verbatim."""
+  """run the canonical one-shot launcher under `program`.
+
+  aliases share this parser and execution path. `input_transform` supplies do-task's
+  `/fix` wrapping, and `force_summon` supplies bare summon's implicit mode.
+  """
   from cw import EFFORT_LEVELS
 
-  parser = base.args.Parser(description=parser_description)
-  parser.add_argument('bro', help='bro name')
-  parser.add_argument(arg_name, help=arg_help)
-  parser.add_argument(
-    '--rich',
-    action='store_true',
-    help='render the trace as colored rich panels instead of plain log lines',
-  )
-  parser.add_argument('--slow', action='store_true', help=SLOW_HELP)
-  parser.add_argument('--effort', choices=EFFORT_LEVELS, default=None, help=EFFORT_HELP)
-  parser.add_argument('--in-place', action='store_true', help=IN_PLACE_HELP)
-  parser.add_argument('--no-trails', dest='no_trails', action='store_true', help=NO_TRAILS_HELP)
-  # --no-trails acts only on the container hop; --in-place has no hop to act on.
-  parser.add_exclusive_groups(['in_place'], ['no_trails'])
-  parser.add_argument(
-    '--grant-cred', action='append', default=None, metavar='SECRET', help=GRANT_CRED_HELP
-  )
-  parser.add_argument(
-    '--revoke-cred', action='append', default=None, metavar='SECRET', help=REVOKE_CRED_HELP
-  )
-  parser.add_argument(
-    '--grant-summon', action='append', default=None, metavar='BRO', help=GRANT_SUMMON_HELP
-  )
-  parser.add_argument(
-    '--revoke-summon', action='append', default=None, metavar='BRO', help=REVOKE_SUMMON_HELP
-  )
+  parser = base.args.Parser(prog=' '.join(program), description=description)
+  if force_summon:
+    parser.add_argument('bro', metavar='target', help='bro to summon')
+    parser.add_argument('input', metavar='prompt', help='request the summoned bro answers')
+  else:
+    parser.add_argument('bro', help='bro name')
+    parser.add_argument('input', help='input to send to the bro')
+  if not force_summon:
+    parser.add_argument(
+      '--rich',
+      action='store_true',
+      help='render the trace as colored rich panels instead of plain log lines',
+    )
+    parser.add_argument('--slow', action='store_true', help=SLOW_HELP)
+    parser.add_argument('--effort', choices=EFFORT_LEVELS, default=None, help=EFFORT_HELP)
+    parser.add_argument('--summon', action='store_true', help=SUMMON_HELP)
+    parser.add_argument('--in-place', action='store_true', help=IN_PLACE_HELP)
+    parser.add_argument('--no-trails', dest='no_trails', action='store_true', help=NO_TRAILS_HELP)
+    parser.add_exclusive_groups(['in_place'], ['no_trails'])
+    parser.add_exclusive_groups(
+      ['summon'],
+      [
+        'rich',
+        'slow',
+        'effort',
+        'in_place',
+        'no_trails',
+        'grant_cred',
+        'revoke_cred',
+        'grant_summon',
+        'revoke_summon',
+      ],
+    )
+    parser.add_argument(
+      '--grant-cred', action='append', default=None, metavar='SECRET', help=GRANT_CRED_HELP
+    )
+    parser.add_argument(
+      '--revoke-cred', action='append', default=None, metavar='SECRET', help=REVOKE_CRED_HELP
+    )
+    parser.add_argument(
+      '--grant-summon', action='append', default=None, metavar='BRO', help=GRANT_SUMMON_HELP
+    )
+    parser.add_argument(
+      '--revoke-summon', action='append', default=None, metavar='BRO', help=REVOKE_SUMMON_HELP
+    )
   parser.add_argument('--into', metavar='REF', help=INTO_HELP)
   parser.add_argument('--timeout', type=float, metavar='SECONDS', help=TIMEOUT_HELP)
-  args = parser.parse(argv)
-  os.environ.setdefault('PPP_SHELL_COMMAND', ' '.join(parser.reconstruct(args, prog=[cli_name])))
+  parser.add_argument('--detach', action='store_true', help=DETACH_HELP)
 
+  args = parser.parse(argv)
+  if force_summon:
+    args.update(
+      summon=True,
+      rich=False,
+      slow=False,
+      effort=None,
+      in_place=False,
+      no_trails=False,
+      grant_cred=None,
+      revoke_cred=None,
+      grant_summon=None,
+      revoke_summon=None,
+    )
+  shell_command = parser.reconstruct(args, prog=program)
+  os.environ.setdefault('PPP_SHELL_COMMAND', ' '.join(shell_command))
+
+  original_input = args['input']
   if export_task_id:
     from notion import parse_page_ref
 
     try:
-      # before the hop: the container create captures CW_TASK_ID from this
-      # process's environment; on the hop-less paths it stays for the bro's
-      # tool subprocesses.
-      os.environ['CW_TASK_ID'] = parse_page_ref(args[arg_name])
+      os.environ['CW_TASK_ID'] = parse_page_ref(original_input)
     except ValueError:
       pass
+  input_text = original_input if input_transform is None else input_transform(original_input)
 
-  if os.environ.get('CW_IN_CONTAINER') is not None and not args['in_place']:
-    blocked = _relay_blocked_flags(args)
-    if len(blocked) > 0:
-      print(
-        f'{"/".join(blocked)} cannot ride a host-relayed run (the host launches '
-        f'{args["bro"]} with its own defaults); pass --in-place to run in this process',
-        file=sys.stderr,
-      )
-      return 1
-    prompt = args[arg_name] if relay_prompt is None else relay_prompt(args[arg_name])
-    return _relay_through_host(
-      bro_name=args['bro'], prompt=prompt, timeout=args['timeout'], into=args['into']
+  if args['summon']:
+    return _run_summoned(
+      args['bro'], input_text, timeout=args['timeout'], into=args['into'], detach=args['detach']
     )
-  if args['timeout'] is not None:
+  if args['timeout'] is not None or args['detach']:
+    print('--timeout/--detach require --summon', file=sys.stderr)
+    return 1
+  if os.environ.get('CW_IN_CONTAINER') is not None and not args['in_place']:
     print(
-      '--timeout only bounds a host-relayed run (a container invocation without --in-place)',
+      'bro run refuses an implicit in-container run; pass --summon for an isolated run '
+      "or --in-place to use this container's scope",
       file=sys.stderr,
     )
     return 1
 
-  inner_args = [args[arg_name]]
+  inner_args = [input_text]
   if args['rich']:
     inner_args.append('--rich')
   if args['slow']:
@@ -343,9 +343,10 @@ def run(
   if args['effort'] is not None:
     inner_args.extend(['--effort', args['effort']])
   hopped = maybe_containerize(
-    cli_name=cli_name,
+    cli_name='bro-run' if program == ['bro', 'run'] else program[0],
     bro_name=args['bro'],
     inner_args=inner_args,
+    inner_cli_name='ask',
     in_place=args['in_place'],
     no_trails=args['no_trails'],
     grant_cred=args['grant_cred'],
@@ -359,10 +360,8 @@ def run(
 
   try:
     bro = create_bro_for_run(args['bro'], fast=not args['slow'], effort=args['effort'])
-  except NotImplementedError as e:
-    # --effort on a provider without the knob — an explicit ask, so a clean
-    # error instead of fast mode's silent fallback.
-    print(str(e), file=sys.stderr)
+  except NotImplementedError as error:
+    print(str(error), file=sys.stderr)
     return 1
   observer: Optional[Observer] = None
   if args['rich']:
@@ -370,8 +369,8 @@ def run(
 
     observer = RichConsoleRenderer(prefix=bro.name)
   try:
-    result = asyncio.run(run_function(bro, args[arg_name], observer))
-  except BroRaised as e:
-    print(f'raised: {e.reason}', file=sys.stderr)
+    result = asyncio.run(bro.run(input_text, observer=observer))
+  except BroRaised as error:
+    print(f'raised: {error.reason}', file=sys.stderr)
     return 1
   print(result)
