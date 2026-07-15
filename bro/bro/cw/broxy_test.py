@@ -1,7 +1,6 @@
-"""live test of the host-mode session broxy helper (`cw.broxy`): a real
-`broxy serve` subprocess — the console script resolved from the active venv —
-against a real provisioned upstream socket, plus the no-channel degrade paths
-that keep a launch alive without one."""
+"""live test of the host-mode `broxy launch` wrapper against a real
+provisioned upstream socket, plus the no-channel degrade paths that keep a
+launch alive without one."""
 
 import asyncio
 import contextlib
@@ -93,7 +92,7 @@ async def test_session_broxy_serves_the_rewritten_channel():
 
 
 def test_start_returns_none_when_the_upstream_is_unreachable(tmp_path, monkeypatch):
-  monkeypatch.setattr(cw.broxy, '_READY_TIMEOUT', 1.0)
+  monkeypatch.setattr(cw.broxy, '_LAUNCH_TIMEOUT', 1.0)
   broxy = _start_session_broxy('unix:' + str(tmp_path / 'missing.sock'), os.environ)
   assert broxy is None
 

@@ -2,9 +2,11 @@ import asyncio
 import contextlib
 import shutil
 import socket
+import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -730,6 +732,55 @@ async def test_upstream_eof_exits_nonzero_and_closes_local_connections():
     assert await asyncio.wait_for(harness.run_task, TIMEOUT) == 1
     assert await asyncio.to_thread(client.receive, TIMEOUT) is None  # EOF
     client.close()
+
+
+def test_launch_starts_serve_and_prints_address_and_pid(tmp_path, monkeypatch, capsys):
+  process = MagicMock(pid=123)
+  popen = MagicMock(return_value=process)
+  monkeypatch.setattr(broker.broxy.spawn, 'popen', popen)
+  monkeypatch.setattr(broker.broxy, '_await_ready', MagicMock(return_value=0))
+  socket_path = tmp_path / 'broxy.sock'
+  log_path = tmp_path / 'broxy.log'
+
+  argv = [
+    'broxy',
+    'launch',
+    str(socket_path),
+    '--upstream',
+    'unix:/upstream.sock',
+    '--log',
+    str(log_path),
+  ]
+  assert broker.broxy.main(argv) == 0
+  assert capsys.readouterr().out == f'unix:{socket_path}\t123\n'
+  call = popen.call_args
+  assert call.args[0] == [
+    'broxy',
+    'serve',
+    str(socket_path),
+    '--upstream',
+    'unix:/upstream.sock',
+  ]
+  assert call.kwargs['stderr'] == subprocess.STDOUT
+
+
+def test_launch_stops_serve_when_readiness_fails(tmp_path, monkeypatch):
+  process = MagicMock(pid=123)
+  monkeypatch.setattr(broker.broxy.spawn, 'popen', MagicMock(return_value=process))
+  monkeypatch.setattr(broker.broxy, '_await_ready', MagicMock(return_value=1))
+
+  argv = [
+    'broxy',
+    'launch',
+    str(tmp_path / 'broxy.sock'),
+    '--upstream',
+    'unix:/upstream.sock',
+    '--log',
+    str(tmp_path / 'broxy.log'),
+  ]
+  assert broker.broxy.main(argv) == 1
+  process.terminate.assert_called_once_with()
+  process.wait.assert_called_once_with(timeout=10)
 
 
 def test_serve_requires_an_upstream(tmp_path, monkeypatch):

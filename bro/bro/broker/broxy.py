@@ -72,22 +72,23 @@ bug to surface, not ride through (the in-memory mailbox dies with the process
 either way — durability is deliberately out of scope). Exit 0 means
 SIGTERM/SIGINT — the launcher's own teardown, the one expected end; anything
 else exits 1, the socket unlinked, so the session's channel disappears cleanly.
-`await` blocks until the local socket accepts a connection: the readiness gate
-a launcher rewrites `BROKER_CHANNEL` behind — when it fails, the session gets
-no channel at all.
+`launch` owns daemon spawn, log redirection, the `await` readiness gate, and
+failure cleanup; it prints the ready address and daemon pid for launch-policy
+callers. `await` remains the standalone readiness probe.
 """
 
 import asyncio
 import os
 import signal
 import socket
+import subprocess
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Optional
 
 import base.args
-from base import log
+from base import log, spawn
 from broker.brotocol import MAX_FRAME_BYTES, Message, ProtocolError, Tag
 from broker.client import CHANNEL_ENV
 
@@ -530,11 +531,64 @@ def _await_ready(socket_path: str, timeout: float) -> int:
     time.sleep(0.05)
 
 
+def _stop_launched_process(process: subprocess.Popen) -> None:
+  process.terminate()
+  try:
+    process.wait(timeout=10)
+  except subprocess.TimeoutExpired:
+    process.kill()
+    process.wait()
+
+
+def _launch(socket_path: str, log_path: str, upstream: Optional[str], timeout: float) -> int:
+  if upstream is None:
+    upstream = os.environ.get(CHANNEL_ENV)
+  if upstream is None:
+    log.error('no upstream channel: pass --upstream or set %s', CHANNEL_ENV)
+    return 1
+
+  try:
+    with open(log_path, 'a') as log_file:
+      process = spawn.popen(
+        ['broxy', 'serve', socket_path, '--upstream', upstream],
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+      )
+  except OSError as error:
+    log.error('cannot start broxy: %s', error)
+    return 1
+
+  if _await_ready(socket_path, timeout) != 0:
+    _stop_launched_process(process)
+    return 1
+
+  print(f'unix:{socket_path}\t{process.pid}')
+  return 0
+
+
 def main(argv: list[str]) -> Optional[int]:
   parser = base.args.Parser(
     description='peer-side broker proxy: one upstream channel, a local socket for the session swarm'
   )
   subparsers = parser.add_subparsers(dest='command')
+
+  launch_parser = subparsers.add_parser(
+    'launch', help='start a detached proxy, gate on readiness, and print ADDRESS<TAB>PID'
+  )
+  launch_parser.add_argument('socket_path', metavar='SOCKET', help='local unix socket to listen on')
+  launch_parser.add_argument(
+    '--log', dest='log_path', required=True, help='serve stdout and stderr log file'
+  )
+  launch_parser.add_argument(
+    '--upstream', help=f'upstream channel address (default: ${CHANNEL_ENV})'
+  )
+  launch_parser.add_argument(
+    '--timeout',
+    type=float,
+    default=DEFAULT_AWAIT_TIMEOUT,
+    help='seconds to wait for readiness (default: %(default)s)',
+  )
+  launch_parser.set_handler(_launch)
 
   serve_parser = subparsers.add_parser(
     'serve',

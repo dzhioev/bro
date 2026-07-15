@@ -184,24 +184,18 @@ if [ "${CW_SKIP_VENV:-}" != "1" ]; then
   eval "$install_hooks"
 fi
 
-# broxy: the peer-side broker proxy (broker/broxy.py) — one long-lived upstream
-# connection per session, a local socket for the in-container client swarm.
-# the launch here is the same thin sequence the host runner performs
-# (cw/broxy.py): start serve, gate on `broxy await`, rewrite BROKER_CHANNEL.
-# no restart wrapper — serve fails loudly and takes the session's channel with
-# it (broker/broxy.py owns that policy). a set BROKER_CHANNEL always names a
-# broxy socket — when the broxy cannot run, the session gets no channel at all
-# (BROKER_CHANNEL unset) and the launch proceeds with a warning.
+# broxy: one long-lived upstream connection and a local socket for the
+# in-container client swarm. `broxy launch` owns spawn, readiness, and failure
+# cleanup; this entrypoint owns the fail-open launch policy.
 if [ -n "${BROKER_CHANNEL:-}" ]; then
   if [ "${CW_SKIP_VENV:-}" != "1" ] && command -v broxy > /dev/null; then
-    broxy_socket=/tmp/broxy.sock
-    broxy serve "$broxy_socket" --upstream "$BROKER_CHANNEL" >> /tmp/broxy.log 2>&1 &
-    broxy_pid=$!
-    if broxy await "$broxy_socket" >> /tmp/broxy.log 2>&1; then
-      export BROKER_CHANNEL="unix:$broxy_socket"
+    if broxy_launch="$(
+      broxy launch /tmp/broxy.sock --upstream "$BROKER_CHANNEL" --log /tmp/broxy.log
+    )"; then
+      IFS=$'\t' read -r BROKER_CHANNEL _ <<< "$broxy_launch"
+      export BROKER_CHANNEL
     else
-      kill "$broxy_pid" 2> /dev/null || true
-      echo 'warning: broxy not ready (log: /tmp/broxy.log); the session gets no broker channel' >&2
+      echo 'warning: broxy launch failed (log: /tmp/broxy.log); the session gets no broker channel' >&2
       unset BROKER_CHANNEL
     fi
   else
