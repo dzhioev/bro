@@ -45,7 +45,7 @@ def add_forwarded_flags(parser: Parser) -> None:
     action='append',
     default=None,
     metavar='SECRET',
-    help='revoke a secret from the session scoped set (repeatable); errors if not in the set',
+    help='revoke a required or optional secret from the session scoped set (repeatable); errors if not in either tier',
   )
   parser.add_argument(
     '--grant-summon',

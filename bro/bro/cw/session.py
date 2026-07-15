@@ -18,8 +18,9 @@ from cw.paths import _latest_jsonl, _project_root, _venv_env
 from cw.secrets import (
   Surface,
   _apply_claude_auth,
-  _finalize_secrets,
   _materialize_scoped_store,
+  finalize_scoped_secrets,
+  log_scoped_secrets,
   scoped_secrets,
 )
 from cw.summon import summon_allow_list
@@ -201,6 +202,17 @@ def start_session(spec: SessionSpec) -> int:
   return _host_session(spec, base_ref)
 
 
+def _preflight_cw_session_auth(spec: SessionSpec) -> bool:
+  if spec.bro is not None or credentials.try_get('claude_code') is not None:
+    return True
+  log.error(
+    'claude_code secret not resolvable — a cw-session authenticates with the '
+    'setup-token; mint one with `claude setup-token` and store it in '
+    '~/.ppp/claude_code_oauth_token'
+  )
+  return False
+
+
 def _container_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
   """launch the session in a container: only machinery — session guard, scoped
   secrets, claude-state seeding, broker channel, mounts/env — then the same
@@ -229,12 +241,18 @@ def _container_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
       log.error('no claude session found for %s in %s', spec.name, projects_dir)
       return 1
 
+  if not _preflight_cw_session_auth(spec):
+    return 1
+
   bro_name = spec.session_bro
   scoped = scoped_secrets(bro_name, spec.surface)
   try:
-    secrets = _finalize_secrets(scoped.required, grant=spec.grant_cred, revoke=spec.revoke_cred)
+    scoped = finalize_scoped_secrets(scoped, grant=spec.grant_cred, revoke=spec.revoke_cred)
     may_summon = summon_allow_list(bro_name, grant=spec.grant_summon, revoke=spec.revoke_summon)
-  except ValueError as e:
+    # the container launch path repeats this strict build before create;
+    # resolving here keeps launch failures on this CLI's clean error surface.
+    credentials.build_scoped_store(scoped.required, optional=scoped.optional)
+  except (ValueError, credentials.SecretNotFound) as e:
     log.error('%s', e)
     return 1
 
@@ -250,7 +268,7 @@ def _container_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
     spec.name,
     ['cw', *spec.to_in_place_argv()],
     drop=spec.drop,
-    secrets=secrets,
+    secrets=scoped.required,
     optional_secrets=scoped.optional,
     docker_sock=scoped.docker_sock,
     extra_env=env,
@@ -340,15 +358,7 @@ def _host_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
     log.error('%s', e)
     return 1
 
-  # a cw-session's sole auth is the claude_code setup-token; its private
-  # claude state carries no OAuth file to fall back on. gated ahead of the
-  # general hydration below for the actionable message.
-  if spec.bro is None and credentials.try_get('claude_code') is None:
-    log.error(
-      'claude_code secret not resolvable — a cw-session authenticates with the '
-      'setup-token; mint one with `claude setup-token` and store it in '
-      '~/.ppp/claude_code_oauth_token'
-    )
+  if not _preflight_cw_session_auth(spec):
     return 1
 
   # the same scoped-store hydration as container mode — strict, before anything
@@ -356,15 +366,12 @@ def _host_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
   # "Scoped credential hydration")
   scoped = scoped_secrets(bro_name, spec.surface)
   try:
-    secrets = _finalize_secrets(scoped.required, grant=spec.grant_cred, revoke=spec.revoke_cred)
-  except ValueError as e:
-    log.error('%s', e)
-    return 1
-  try:
-    store = credentials.build_scoped_store(secrets, optional=scoped.optional)
+    scoped = finalize_scoped_secrets(scoped, grant=spec.grant_cred, revoke=spec.revoke_cred)
+    store = credentials.build_scoped_store(scoped.required, optional=scoped.optional)
   except (ValueError, credentials.SecretNotFound) as e:
     log.error('%s', e)
     return 1
+  log_scoped_secrets(spec.name, scoped.required, scoped.optional)
 
   if not _ensure_host_worktree(worktree, branch, base_ref):
     return 1

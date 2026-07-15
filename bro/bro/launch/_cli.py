@@ -49,7 +49,8 @@ GRANT_CRED_HELP = (
   '(repeatable); errors if it is already in the set or unknown to the registry'
 )
 REVOKE_CRED_HELP = (
-  "revoke a secret from the container's scoped set (repeatable); errors if it is not in the set"
+  "revoke a required or optional secret from the container's scoped set (repeatable); "
+  'errors if it is not in either tier'
 )
 GRANT_SUMMON_HELP = (
   'allow the bro to summon the named bro during this run, on top of its may_summon '
@@ -141,8 +142,8 @@ def maybe_containerize(
   `no_trails` drops `trails` from the scoped set and sets `TRAILS_DISABLED` in the
   container (the in-container tracker factory then returns `NullTracker`).
 
-  `grant_cred`/`revoke_cred` adjust that scoped set per
-  `credentials.apply_grant_revoke` (strict: see its rules); `grant_summon`/
+  `grant_cred`/`revoke_cred` adjust both tiers of that scoped set per
+  `cw.finalize_scoped_secrets` (strict: see its rules); `grant_summon`/
   `revoke_summon` adjust the bro's summon allow-list the same way
   (`cw.summon_allow_list` over its `may_summon` defaults). those four and `into`
   are host-side only — not threaded into the inner command — so passing any when
@@ -169,7 +170,14 @@ def maybe_containerize(
       )
       return 1
     return None
-  from cw import _project_root, resolve_ref, run_in_container, summon_allow_list
+  from cw import (
+    ScopedSecrets,
+    _project_root,
+    finalize_scoped_secrets,
+    resolve_ref,
+    run_in_container,
+    summon_allow_list,
+  )
 
   base_ref: Optional[str] = None
   if into is not None:
@@ -181,19 +189,24 @@ def maybe_containerize(
     bro_name, inner_args, cli_name=cli_name, base_ref=base_ref, trails=not no_trails
   )
   try:
-    needed = credentials.apply_grant_revoke(
-      launch.secrets, grant=grant_cred, revoke=revoke_cred, subject='scoped credential set'
+    scoped = finalize_scoped_secrets(
+      ScopedSecrets(set(launch.secrets), set(launch.optional_secrets), launch.docker_sock),
+      grant=grant_cred,
+      revoke=revoke_cred,
     )
     may_summon = summon_allow_list(bro_name, grant=grant_summon, revoke=revoke_summon)
-  except ValueError as e:
+    # the container launch path repeats this build before create; the preflight
+    # keeps missing-secret failures on the invoking CLI's error surface.
+    credentials.build_scoped_store(scoped.required, optional=scoped.optional)
+  except (ValueError, credentials.SecretNotFound) as e:
     print(str(e), file=sys.stderr)
     return 1
   return run_in_container(
     bro_run.fresh_workspace_name(f'{cli_name}-{bro_name}'),
     launch.command,
     drop=True,
-    secrets=needed,
-    optional_secrets=launch.optional_secrets,
+    secrets=scoped.required,
+    optional_secrets=scoped.optional,
     docker_sock=launch.docker_sock,
     extra_env=launch.env,
     may_summon=may_summon,

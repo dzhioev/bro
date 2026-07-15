@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from base import spawn
+from mcp_server import BEARER_TOKEN_ENV
 
 # how long a runner-owned server may take to bind. the bind needs only
 # mcp-server's cheap module imports (the heavy ones are deferred past it), so
@@ -131,6 +132,8 @@ def _start_session_mcp_server(spec: str, cwd: Path, env: Mapping[str, str]) -> _
   state = Path(tempfile.mkdtemp(prefix='cw-mcp-'))
   port_file = state / 'port'
   log_path = state / 'server.log'
+  server_env = dict(env)
+  server_env[BEARER_TOKEN_ENV] = token
   with open(log_path, 'w') as log_file:
     process = spawn.popen(
       [
@@ -141,11 +144,9 @@ def _start_session_mcp_server(spec: str, cwd: Path, env: Mapping[str, str]) -> _
         '0',
         '--port-file',
         str(port_file),
-        '--bearer-token',
-        token,
       ],
       cwd=str(cwd),
-      env=dict(env),
+      env=server_env,
       stdout=log_file,
       stderr=subprocess.STDOUT,
     )

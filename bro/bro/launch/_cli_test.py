@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -11,6 +12,11 @@ from do._cli import create_bro_for_run, maybe_containerize
 # the run bro's own CW_BRO rides in explicitly (never as an ambient forward), so
 # a calling session's theming cannot leak into the container
 _RUN_ENV = {'CW_BRO': 'ppp-dev', **bro_git_identity_env()}
+
+
+@pytest.fixture(autouse=True)
+def scoped_store_preflight(monkeypatch):
+  monkeypatch.setattr('do._cli.credentials.build_scoped_store', lambda names, optional=(): {})
 
 
 def test_maybe_containerize_skips_when_inside_container():
@@ -122,6 +128,49 @@ def test_maybe_containerize_revoke_removes_secret():
   _, kwargs = run.call_args
   # github is in ppp-dev's manifest; the revoke drops it from the scoped set
   assert 'github' not in kwargs['secrets']
+
+
+def test_maybe_containerize_revoke_removes_optional_secret():
+  launch = SimpleNamespace(
+    secrets={'github'},
+    optional_secrets={'openai'},
+    docker_sock=False,
+    command=['call', 'ppp-dev', 'hi', '--in-place'],
+    env=_RUN_ENV,
+  )
+  with (
+    patch.dict('os.environ', {}, clear=False) as env,
+    patch('do._cli.bro_run.describe', return_value=launch),
+    patch('cw.run_in_container', return_value=0) as run,
+  ):
+    env.pop('CW_IN_CONTAINER', None)
+    rc = maybe_containerize(
+      cli_name='call',
+      bro_name='ppp-dev',
+      inner_args=['hi'],
+      in_place=False,
+      revoke_cred=['openai'],
+    )
+  assert rc == 0
+  _, kwargs = run.call_args
+  assert kwargs['secrets'] == {'github'}
+  assert kwargs['optional_secrets'] == set()
+
+
+def test_maybe_containerize_missing_secret_fails_before_launch(monkeypatch, capsys):
+  def missing(names, optional=()):
+    raise ValueError("unknown secret 'github' declared in manifest")
+
+  monkeypatch.setattr('do._cli.credentials.build_scoped_store', missing)
+  with (
+    patch.dict('os.environ', {}, clear=False) as env,
+    patch('cw.run_in_container') as run,
+  ):
+    env.pop('CW_IN_CONTAINER', None)
+    rc = maybe_containerize(cli_name='call', bro_name='ppp-dev', inner_args=['hi'], in_place=False)
+  assert rc == 1
+  assert run.call_count == 0
+  assert "unknown secret 'github'" in capsys.readouterr().err
 
 
 def test_maybe_containerize_grant_already_present_errors(capsys):

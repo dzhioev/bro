@@ -148,6 +148,25 @@ class TestHTTPBindBeforeResolve:
     # --port 0 resolved to a real OS-assigned port
     assert 0 < int(port_file.read_text()) < 65536
 
+  def test_http_bearer_token_can_come_from_environment(self, monkeypatch):
+    captured: dict[str, str] = {}
+    monkeypatch.setenv(mcp_server.BEARER_TOKEN_ENV, 'env-token')
+    monkeypatch.setattr(mcp_server, '_resolve_servers', lambda spec: [])
+
+    def capture_app(servers, token):
+      captured['token'] = token
+      raise RuntimeError('captured token')
+
+    monkeypatch.setattr(mcp_server, 'create_http_app', capture_app)
+    with pytest.raises(RuntimeError, match='captured token'):
+      mcp_server.main(['mcp-server', 'flow', '--http', '--port', '0'])
+    assert captured['token'] == 'env-token'
+
+  def test_http_requires_a_bearer_token_source(self, monkeypatch):
+    monkeypatch.delenv(mcp_server.BEARER_TOKEN_ENV, raising=False)
+    with pytest.raises(SystemExit, match='requires --port and --bearer-token or'):
+      mcp_server.main(['mcp-server', 'flow', '--http', '--port', '0'])
+
   def test_port_file_requires_http(self):
     with pytest.raises(SystemExit, match='only apply with --http'):
       mcp_server.main(['mcp-server', 'flow', '--port-file', '/tmp/port'])

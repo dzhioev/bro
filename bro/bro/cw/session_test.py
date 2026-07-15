@@ -52,8 +52,11 @@ class _ContainerHarness:
   """patches for driving start_session through the container path without docker,
   bro imports, or git side effects."""
 
-  def __init__(self, secrets: Optional[set[str]] = None):
+  def __init__(
+    self, secrets: Optional[set[str]] = None, optional_secrets: Optional[set[str]] = None
+  ):
     self.secrets = secrets if secrets is not None else {'github'}
+    self.optional_secrets = optional_secrets if optional_secrets is not None else set()
 
   def __enter__(self):
     self._patches = [
@@ -62,8 +65,10 @@ class _ContainerHarness:
       patch('cw.session.run_in_container', return_value=0),
       patch(
         'cw.session.scoped_secrets',
-        return_value=ScopedSecrets(set(self.secrets), set(), True),
+        return_value=ScopedSecrets(set(self.secrets), set(self.optional_secrets), True),
       ),
+      patch('cw.session.credentials.try_get', return_value='tok'),
+      patch('cw.session.credentials.build_scoped_store', return_value={}),
       patch('cw.session._replace_resume_hint'),
       # keep the bro-registry import out; threading is asserted per-test
       patch('cw.session.summon_allow_list', return_value=set()),
@@ -73,7 +78,9 @@ class _ContainerHarness:
     self.env.pop('CW_BRO', None)
     self.env.pop('CW_IN_CONTAINER', None)
     self.run_in_container = entered[2]
-    self.summon_allow_list = entered[5]
+    self.try_get = entered[4]
+    self.build_scoped_store = entered[5]
+    self.summon_allow_list = entered[7]
     return self
 
   def __exit__(self, *exception):
@@ -92,6 +99,29 @@ class TestGrantRevoke:
     _, kwargs = h.run_in_container.call_args
     assert 'gmail_creds' in kwargs['secrets']
     assert 'notion' not in kwargs['secrets']
+
+  def test_start_session_can_revoke_an_optional_secret(self):
+    with _ContainerHarness(optional_secrets={'openai'}) as harness:
+      rc = cw.session.start_session(_spec(drop=True, revoke_cred=['openai']))
+    assert rc == 0
+    _, kwargs = harness.run_in_container.call_args
+    assert kwargs['optional_secrets'] == set()
+
+  def test_missing_secret_fails_cleanly_before_container_launch(self, caplog):
+    with _ContainerHarness() as harness:
+      harness.build_scoped_store.side_effect = cw.session.credentials.SecretNotFound('github')
+      rc = cw.session.start_session(_spec(drop=True))
+    assert rc == 1
+    assert harness.run_in_container.call_count == 0
+    assert 'github' in caplog.text
+
+  def test_missing_setup_token_has_actionable_container_error(self, caplog):
+    with _ContainerHarness() as harness:
+      harness.try_get.return_value = None
+      rc = cw.session.start_session(_spec(drop=True))
+    assert rc == 1
+    assert harness.run_in_container.call_count == 0
+    assert 'mint one with `claude setup-token`' in caplog.text
 
   def test_start_session_grant_already_present_returns_1(self):
     with _ContainerHarness() as h:
@@ -360,6 +390,8 @@ class TestConcurrentSessionGuard:
       lambda *_a, **_k: ScopedSecrets(set(), set(), True),
     )
     monkeypatch.setattr(cw.session, 'summon_allow_list', lambda *_a, **_k: set())
+    monkeypatch.setattr(cw.session.credentials, 'try_get', lambda name: 'tok')
+    monkeypatch.setattr(cw.session.credentials, 'build_scoped_store', lambda names, optional=(): {})
     called: list = []
     monkeypatch.setattr(cw.session, 'run_in_container', lambda *_a, **_k: called.append(True) or 0)
     monkeypatch.setattr(cw.session, '_replace_resume_hint', lambda workspace: None)
@@ -664,7 +696,7 @@ class TestHostSession:
     assert materialized['store'] == {'x.cred': b'v'}
     assert materialized['directory'] == registry.parent
 
-  def test_grant_and_revoke_shape_the_hydrated_set(self, monkeypatch, tmp_path):
+  def test_grant_and_revoke_shape_and_log_the_hydrated_scope(self, monkeypatch, tmp_path, caplog):
     from types import SimpleNamespace
 
     self._prepare_launch(monkeypatch, tmp_path)
@@ -672,7 +704,7 @@ class TestHostSession:
     monkeypatch.setattr(
       cw.session,
       'scoped_secrets',
-      lambda *_a, **_k: ScopedSecrets({'github', 'notion'}, set(), True),
+      lambda *_a, **_k: ScopedSecrets({'github', 'notion'}, {'openai'}, True),
     )
     hydrated: dict = {}
 
@@ -685,8 +717,14 @@ class TestHostSession:
       cw.session.subprocess, 'run', lambda *_a, **_k: SimpleNamespace(returncode=0)
     )
     spec = _spec(host=True, grant_cred=['gmail_creds'], revoke_cred=['notion'])
-    assert cw.session._host_session(spec, None) == 0
-    assert hydrated['names'] == {'github', 'gmail_creds'}
+    with caplog.at_level('INFO'):
+      assert cw.session._host_session(spec, None) == 0
+    assert hydrated == {
+      'names': {'github', 'gmail_creds'},
+      'optional': {'openai'},
+    }
+    assert 'scoped secrets for w: github, gmail_creds' in caplog.text
+    assert 'optional (best-effort) secrets for w: openai' in caplog.text
 
   def test_unresolvable_secret_fails_before_the_worktree(self, monkeypatch, tmp_path):
     self._prepare_launch(monkeypatch, tmp_path)

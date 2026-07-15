@@ -131,8 +131,7 @@ def scoped_secrets(bro_name: str, surface: Surface) -> ScopedSecrets:
 
 
 def log_scoped_secrets(subject: str, required: Collection[str], optional: Collection[str]) -> None:
-  """log a launch's credential scope — the launch-time record of what the
-  container gets, emitted by every path that spawns one."""
+  """log a launch's credential scope at every scoped-store launch path."""
   names = sorted(set(required))
   log.info('scoped secrets for %s: %s', subject, ', '.join(names) if len(names) > 0 else '(none)')
   optional_names = sorted(set(optional) - set(required))
@@ -186,13 +185,24 @@ def _apply_claude_auth(env: dict[str, str], *, warn_when_missing: bool = False) 
   env['CLAUDE_CODE_OAUTH_TOKEN'] = token
 
 
-def _finalize_secrets(secrets: set[str], *, grant: list[str], revoke: list[str]) -> set[str]:
-  """layer the per-session `--grant-cred` / `--revoke-cred` overrides onto a
-  computed scoped set. grant/revoke apply strictly — a grant/revoke that doesn't
-  change the set raises `ValueError` (`credentials.apply_grant_revoke`)."""
-  return credentials.apply_grant_revoke(
-    secrets, grant=grant, revoke=revoke, subject='scoped credential set'
+def finalize_scoped_secrets(
+  scoped: ScopedSecrets, *, grant: list[str], revoke: list[str]
+) -> ScopedSecrets:
+  """layer strict per-session overrides across both credential tiers.
+
+  grants join the required tier. a revoke removes the name from whichever tier
+  contains it; a name in neither tier remains an error, as do all other no-op
+  overrides enforced by `credentials.apply_grant_revoke`.
+  """
+  final_names = credentials.apply_grant_revoke(
+    scoped.required | scoped.optional,
+    grant=grant,
+    revoke=revoke,
+    subject='scoped credential set',
   )
+  required = (scoped.required | set(grant)) & final_names
+  optional = final_names - required
+  return ScopedSecrets(required=required, optional=optional, docker_sock=scoped.docker_sock)
 
 
 def _materialize_scoped_store(files: dict[str, bytes], directory: Path) -> Path:

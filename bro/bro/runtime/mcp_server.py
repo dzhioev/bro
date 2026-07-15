@@ -22,6 +22,8 @@ if TYPE_CHECKING:
 
   from llm.mcp import MCPServer, Tool
 
+BEARER_TOKEN_ENV = 'MCP_SERVER_BEARER_TOKEN'
+
 _BRO_PREFIX = 'bro:'
 _PERSONA_PREFIX = 'persona:'
 
@@ -225,7 +227,7 @@ def main(argv: list[str]) -> Optional[int]:
   parser.add_argument(
     '--bearer-token',
     secret=True,
-    help='token required on every HTTP request except /health (required with --http)',
+    help=f'token required on every HTTP request except /health (defaults to {BEARER_TOKEN_ENV})',
   )
   args = parser.parse(argv)
 
@@ -241,8 +243,11 @@ def main(argv: list[str]) -> Optional[int]:
     asyncio.run(run(_resolve_servers(args['server'])[0]))
     return None
 
-  if args['port'] is None or args['bearer_token'] is None:
-    raise SystemExit('--http requires --port and --bearer-token')
+  bearer_token = args['bearer_token']
+  if bearer_token is None:
+    bearer_token = os.environ.get(BEARER_TOKEN_ENV)
+  if args['port'] is None or bearer_token is None:
+    raise SystemExit(f'--http requires --port and --bearer-token or {BEARER_TOKEN_ENV}')
   # bind before the heavy import/tool resolution: the port is discoverable
   # (--port-file) milliseconds in and is never released between discovery and
   # serving, and a client connect that lands mid-import sits in the TCP backlog
@@ -250,7 +255,7 @@ def main(argv: list[str]) -> Optional[int]:
   server_socket = socket.create_server((args['host'], int(args['port'])))
   if args['port_file'] is not None:
     _write_port_file(args['port_file'], server_socket.getsockname()[1])
-  app = create_http_app(_resolve_servers(args['server']), args['bearer_token'])
+  app = create_http_app(_resolve_servers(args['server']), bearer_token)
   import uvicorn
 
   uvicorn.Server(uvicorn.Config(app, log_level='info')).run(sockets=[server_socket])

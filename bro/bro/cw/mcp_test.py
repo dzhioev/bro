@@ -22,8 +22,8 @@ class TestHTTPMCPConfig:
 def _fake_mcp_server(tmp_path: Path, body: str) -> dict[str, str]:
   """drop a fake `mcp-server` script on a private PATH and return the env for it.
 
-  the script sees the real argv (`<spec> --http --port 0 --port-file <path>
-  --bearer-token <token>`); `body` runs with $@ available.
+  the script sees the real argv (`<spec> --http --port 0 --port-file <path>`)
+  and inherited bearer-token environment; `body` runs with $@ available.
   """
   bin_dir = tmp_path / 'bin'
   bin_dir.mkdir()
@@ -76,11 +76,12 @@ class TestStartSessionMCPServer:
       server.stop()
     assert server.process.poll() is not None
 
-  def test_passes_spec_as_first_arg(self, tmp_path):
+  def test_passes_spec_on_argv_and_token_in_environment(self, tmp_path):
     env = _fake_mcp_server(
       tmp_path,
       f"""
-      echo "$1" > {tmp_path}/spec
+      printf '%s\n' "$@" > {tmp_path}/argv
+      printf '%s' "$MCP_SERVER_BEARER_TOKEN" > {tmp_path}/token
       while [ "$1" != "--port-file" ]; do shift; done
       echo 1 > "$2.tmp" && mv "$2.tmp" "$2"
       exec sleep 60
@@ -88,7 +89,11 @@ class TestStartSessionMCPServer:
     )
     server = cw.mcp._start_session_mcp_server('bro:pm', tmp_path, env)
     server.stop()
-    assert (tmp_path / 'spec').read_text().strip() == 'bro:pm'
+    argv = (tmp_path / 'argv').read_text().splitlines()
+    assert argv[0] == 'bro:pm'
+    assert '--bearer-token' not in argv
+    assert server.endpoint.token not in argv
+    assert (tmp_path / 'token').read_text() == server.endpoint.token
 
   def test_startup_crash_raises(self, tmp_path):
     env = _fake_mcp_server(tmp_path, 'exit 3')
