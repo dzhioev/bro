@@ -427,6 +427,29 @@ class _FakeApp:
     self.posted.append(text)
 
 
+def test_chat_markdown_carries_bold_and_link_styles():
+  from rich.console import Console
+
+  from do.call_tui import ChatMarkdown
+
+  console = Console(width=80)
+  segments = console.render(ChatMarkdown('**bold** and [docs](https://example.com/x)'))
+  styles = [segment.style for segment in segments if segment.style is not None]
+  assert any(style.bold is True for style in styles)
+  assert any(style.link == 'https://example.com/x' for style in styles)
+
+
+def test_chat_markdown_measurement_hugs_short_text():
+  from rich.console import Console
+  from rich.measure import Measurement
+
+  from do.call_tui import ChatMarkdown
+
+  console = Console(width=80)
+  measurement = Measurement.get(console, console.options, ChatMarkdown('ok'))
+  assert measurement.maximum == 2
+
+
 def test_tui_renderer_posts_one_line_per_event():
   from do.call_tui import TUIRenderer
 

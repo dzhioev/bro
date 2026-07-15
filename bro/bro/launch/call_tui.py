@@ -4,8 +4,10 @@ import asyncio
 from datetime import date, datetime
 from typing import Any, ClassVar, Optional
 
-from rich.console import Group, RenderableType
+from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderResult
+from rich.markdown import Markdown
 from rich.markup import escape as rich_escape
+from rich.measure import Measurement
 from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
@@ -20,6 +22,26 @@ from do._trace_format import compact_value, oneline, truncate
 from llm.observer import Observer
 
 _TRACE_VALUE_LIMIT = 200
+
+
+class ChatMarkdown:
+  """`rich.markdown.Markdown` with content-hugging width measurement.
+
+  rich's Markdown reports no measurement of its own, so a `width: auto` widget
+  gives it the full available width and every bubble stretches to its
+  max-width. measure the raw text instead — an upper bound, since markdown
+  syntax and link targets render narrower than they read — so short messages
+  keep tight bubbles.
+  """
+
+  def __init__(self, text: str):
+    self._text = text
+
+  def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+    yield Markdown(self._text)
+
+  def __rich_measure__(self, console: Console, options: ConsoleOptions) -> Measurement:
+    return Measurement.get(console, options, Text(self._text))
 
 
 class MessageBubble(Static):
@@ -241,7 +263,9 @@ class ChatApp(App):
 
   def _append_bro_message(self, text: str) -> None:
     self._maybe_add_date_separator()
-    bubble = MessageBubble(text, by_user=False, when=datetime.now())
+    # replies are markdown-authored — render them (bold, lists, fenced code,
+    # hyperlinks) instead of showing the raw syntax.
+    bubble = MessageBubble(ChatMarkdown(text), by_user=False, when=datetime.now())
     self.query_one('#history', VerticalScroll).mount(BubbleRow(bubble, by_user=False))
     self._scroll_to_end()
 
