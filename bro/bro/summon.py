@@ -467,7 +467,7 @@ def main(argv: list[str]) -> Optional[int]:
       'read by a dead wait; not combinable with --wait',
     )
     return _check(**parser.parse(argv[1:]))
-  from do._cli import run_main
+  from bro.launch._cli import run_main
 
   return run_main(
     argv,

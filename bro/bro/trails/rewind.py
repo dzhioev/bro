@@ -8,7 +8,7 @@ four subcommands:
   and renders new steps as they land, like `tail -f`.
 - `trails tree <id>` — render the parent/fork hierarchy reachable from a trail.
 - `trails fork <id> <step_id>` — call `bro.fork.fork()` and drop the user into
-  an interactive `.send()` loop, similar in spirit to `do.call.call_text`.
+  an interactive `.send()` loop, similar in spirit to `bro.launch.call.call_text`.
 
 All commands talk to the deployed `trails-server` via `TrailsClient`; config
 comes from the `trails` secret (the same one `HTTPTracker` reads).

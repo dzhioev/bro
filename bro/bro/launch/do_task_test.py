@@ -4,76 +4,29 @@ from unittest.mock import patch
 
 import pytest
 
-from bro.bro import BaseBro
-from do.do_task import do_task, main
-from llm.llm import LLM
-from llm.mcp import MCPServer
-from llm.observer import NullObserver, Observer
+from bro.launch.do_task import fix_invocation, main
 
 
-class MockLLM(LLM):
-  def __init__(self, response: str = 'mock', mcp_servers: Optional[list[MCPServer]] = None):
-    super().__init__(mcp_servers)
-    self.response = response
-    self.send_calls: list[list[dict]] = []
-
-  async def send(self, messages: list[dict], *, request_timeout: Optional[float] = None) -> str:
-    self.send_calls.append(messages)
-    return self.response
+def test_wraps_raw_ref_as_fix_invocation():
+  assert fix_invocation('abc-123') == '/fix abc-123'
 
 
-class RecordBro(BaseBro):
-  name = 'record'
-  description = 'records inputs'
-
-  def __init__(self, response: str = 'done'):
-    super().__init__(system_prompt='record')
-    self.mock_llm = MockLLM(response=response)
-
-  def _make_observer(self) -> Observer:
-    return NullObserver()
-
-  def _create_llm(self, *, interactive: bool) -> LLM:
-    return self.mock_llm
-
-
-@pytest.mark.asyncio
-async def test_wraps_raw_ref_as_fix_invocation():
-  bro = RecordBro(response='fixed')
-  result = await do_task(bro, 'abc-123')
-  assert result == 'fixed'
-  messages = bro.mock_llm.send_calls[0]
-  assert messages[-1] == {'role': 'user', 'content': '/fix abc-123'}
-
-
-@pytest.mark.asyncio
-async def test_wraps_url_as_fix_invocation():
-  bro = RecordBro(response='ok')
+def test_wraps_url_as_fix_invocation():
   url = 'https://www.notion.so/foo/add-X-369d38d85a6d818caf91c12a203b17e1?source=copy_link'
-  await do_task(bro, url)
-  messages = bro.mock_llm.send_calls[0]
-  assert messages[-1]['content'] == f'/fix {url}'
+  assert fix_invocation(url) == f'/fix {url}'
 
 
-@pytest.mark.asyncio
-async def test_passes_through_leading_slash_invocation():
+def test_passes_through_leading_slash_invocation():
   # `do-task ppp-dev "/fix --new idea"` must not become `/fix /fix --new idea`,
   # and an alternate skill (`/pr …`) is a deliberate override left untouched.
-  bro = RecordBro(response='ok')
-  await do_task(bro, '/fix --new idea')
-  await do_task(bro, '/pr')
-  assert bro.mock_llm.send_calls[0][-1]['content'] == '/fix --new idea'
-  assert bro.mock_llm.send_calls[1][-1] == {'role': 'user', 'content': '/pr'}
+  assert fix_invocation('/fix --new idea') == '/fix --new idea'
+  assert fix_invocation('/pr') == '/pr'
 
 
-@pytest.mark.asyncio
-async def test_leading_whitespace_is_wrapped_not_passed_through():
+def test_leading_whitespace_is_wrapped_not_passed_through():
   # the pass-through rule keys on the first character, so a leading-whitespace
   # input is wrapped like any other ref rather than treated as an invocation.
-  bro = RecordBro(response='ok')
-  await do_task(bro, '  /pr')
-  messages = bro.mock_llm.send_calls[0]
-  assert messages[-1]['content'] == '/fix   /pr'
+  assert fix_invocation('  /pr') == '/fix   /pr'
 
 
 def test_main_re_execs_into_container_when_outside():

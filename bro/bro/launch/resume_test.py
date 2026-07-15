@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
-from do.resume import (
+from bro.launch.resume import (
   RESUME_LATEST,
   HistoryMessage,
   conversation_history,
@@ -234,7 +234,7 @@ class TestResume:
 
   def test_resumes_the_latest_call_trail_at_its_latest_fork_point(self):
     spec = LLMSpec(model='gpt-5', service_tier='priority')
-    with patch('do.resume.fork') as fork_stub:
+    with patch('bro.launch.resume.fork') as fork_stub:
       resumed = resume(cast(Any, self._client()), 'record', RESUME_LATEST, llm_spec=spec)
     assert resumed.trail_id == 'trail-1'
     assert [(m.by_user, m.text) for m in resumed.history] == [

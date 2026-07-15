@@ -10,7 +10,7 @@ import base.args
 from base import log
 from bro.bro import BroRaised
 from bro.bros.bro import Bro
-from do._cli import (
+from bro.launch._cli import (
   EFFORT_HELP,
   GRANT_CRED_HELP,
   GRANT_SUMMON_HELP,
@@ -24,8 +24,8 @@ from do._cli import (
   maybe_containerize,
   run_llm_spec,
 )
-from do._trace_format import compact_value, oneline, truncate
-from do.resume import RESUME_LATEST, HistoryMessage
+from bro.launch._trace_format import compact_value, oneline, truncate
+from bro.launch.resume import RESUME_LATEST, HistoryMessage
 from llm.observer import Observer
 
 __cli_name__ = 'call'
@@ -236,8 +236,8 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
 
   history: Optional[list[HistoryMessage]] = None
   if args['resume'] is not None:
+    from bro.launch.resume import resume
     from bro.registry import get_class
-    from do.resume import resume
     from trails.client import default_client
 
     bro_class = get_class(args['bro'])
@@ -277,7 +277,7 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
 
   try:
     if use_tui:
-      from do.call_tui import ChatApp
+      from bro.launch.call_tui import ChatApp
 
       ChatApp(bro, initial, history=history).run()
     else:

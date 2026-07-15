@@ -8,8 +8,8 @@ import pytest
 
 import llm.llms.chat_gpt
 from bro.bros.bro import Bro
+from bro.launch.call import TextRenderer, call_text, main
 from cw.constants import bro_git_identity_env
-from do.call import TextRenderer, call_text, main
 from llm.llm import LLM, LLMSpec
 from llm.mcp import MCPServer
 from llm.observer import NullObserver, Observer
@@ -217,8 +217,8 @@ def test_default_invokes_spec_fast(monkeypatch):
   # exercise the in-process path: outside a container, main() would re-exec into one.
   monkeypatch.setenv('CW_IN_CONTAINER', '1')
   monkeypatch.setattr('bro.registry.get_class', lambda name: _ChatBro)
-  monkeypatch.setattr('do.call.call_text', fake_call_text)
-  monkeypatch.setattr('do.call._tty_supported', lambda: False)
+  monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
+  monkeypatch.setattr('bro.launch.call._tty_supported', lambda: False)
 
   # no flag — fast is the default for these CLIs
   rc = main(['call', 'record', 'hi', '--in-place'])
@@ -241,8 +241,8 @@ def test_slow_flag_builds_plain_spec(monkeypatch):
 
   monkeypatch.setenv('CW_IN_CONTAINER', '1')
   monkeypatch.setattr('bro.registry.get_class', lambda name: _ChatBro)
-  monkeypatch.setattr('do.call.call_text', fake_call_text)
-  monkeypatch.setattr('do.call._tty_supported', lambda: False)
+  monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
+  monkeypatch.setattr('bro.launch.call._tty_supported', lambda: False)
 
   rc = main(['call', 'record', 'hi', '--slow', '--in-place'])
   assert rc is None
@@ -261,8 +261,8 @@ def test_default_falls_back_to_plain_when_no_fast_mode(monkeypatch):
   monkeypatch.setenv('CW_IN_CONTAINER', '1')
   monkeypatch.setattr('bro.registry.get_class', lambda name: _FastlessBro)
   monkeypatch.setattr('bro.registry.create_bro', lambda name: _FastlessBro())
-  monkeypatch.setattr('do.call.call_text', fake_call_text)
-  monkeypatch.setattr('do.call._tty_supported', lambda: False)
+  monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
+  monkeypatch.setattr('bro.launch.call._tty_supported', lambda: False)
 
   # fast is implicit, so a provider with no fast mode degrades to the plain spec
   # instead of erroring out.
@@ -276,7 +276,7 @@ def test_call_re_execs_into_container_when_outside():
   with (
     patch.dict('os.environ', {}, clear=False) as env,
     patch('cw.run_in_container', return_value=0) as run,
-    patch('do.call._tty_supported', return_value=True),
+    patch('bro.launch.call._tty_supported', return_value=True),
   ):
     env.pop('CW_IN_CONTAINER', None)
     env.pop('PPP_SHELL_COMMAND', None)
@@ -300,7 +300,7 @@ def test_call_forwards_text_when_host_not_a_tty():
   with (
     patch.dict('os.environ', {}, clear=False) as env,
     patch('cw.run_in_container', return_value=0) as run,
-    patch('do.call._tty_supported', return_value=False),
+    patch('bro.launch.call._tty_supported', return_value=False),
   ):
     env.pop('CW_IN_CONTAINER', None)
     rc = main(['call', 'ppp-dev', 'hey'])
@@ -315,7 +315,7 @@ def test_call_forwards_effort_into_container():
   with (
     patch.dict('os.environ', {}, clear=False) as env,
     patch('cw.run_in_container', return_value=0) as run,
-    patch('do.call._tty_supported', return_value=True),
+    patch('bro.launch.call._tty_supported', return_value=True),
   ):
     env.pop('CW_IN_CONTAINER', None)
     rc = main(['call', 'ppp-dev', 'hey', '--effort', 'high'])
@@ -333,8 +333,8 @@ def test_effort_flag_overrides_spec_effort(monkeypatch):
 
   monkeypatch.setenv('CW_IN_CONTAINER', '1')
   monkeypatch.setattr('bro.registry.get_class', lambda name: _ChatBro)
-  monkeypatch.setattr('do.call.call_text', fake_call_text)
-  monkeypatch.setattr('do.call._tty_supported', lambda: False)
+  monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
+  monkeypatch.setattr('bro.launch.call._tty_supported', lambda: False)
 
   rc = main(['call', 'record', 'hi', '--effort', 'max', '--in-place'])
   assert rc is None
@@ -349,7 +349,7 @@ def test_effort_flag_overrides_spec_effort(monkeypatch):
 def test_effort_flag_on_effortless_provider_exits_1(monkeypatch, capsys):
   monkeypatch.setenv('CW_IN_CONTAINER', '1')
   monkeypatch.setattr('bro.registry.get_class', lambda name: _FastlessBro)
-  monkeypatch.setattr('do.call._tty_supported', lambda: False)
+  monkeypatch.setattr('bro.launch.call._tty_supported', lambda: False)
 
   # --effort is an explicit ask — a provider without the knob errors instead of
   # falling back the way implicit fast does.
@@ -362,7 +362,7 @@ def test_call_no_trails_disables_recording_in_container():
   with (
     patch.dict('os.environ', {}, clear=False) as env,
     patch('cw.run_in_container', return_value=0) as run,
-    patch('do.call._tty_supported', return_value=True),
+    patch('bro.launch.call._tty_supported', return_value=True),
   ):
     env.pop('CW_IN_CONTAINER', None)
     rc = main(['call', 'ppp-dev', 'hey', '--no-trails'])
@@ -403,7 +403,7 @@ def test_call_forwards_resume_into_container():
   with (
     patch.dict('os.environ', {}, clear=False) as env,
     patch('cw.run_in_container', return_value=0) as run,
-    patch('do.call._tty_supported', return_value=True),
+    patch('bro.launch.call._tty_supported', return_value=True),
   ):
     env.pop('CW_IN_CONTAINER', None)
     # the bare flag resolves to the 'latest' sentinel, forwarded explicitly so
@@ -418,7 +418,7 @@ def test_call_forwards_resume_trail_id_with_message():
   with (
     patch.dict('os.environ', {}, clear=False) as env,
     patch('cw.run_in_container', return_value=0) as run,
-    patch('do.call._tty_supported', return_value=True),
+    patch('bro.launch.call._tty_supported', return_value=True),
   ):
     env.pop('CW_IN_CONTAINER', None)
     rc = main(['call', 'ppp-dev', 'and then?', '--resume', 'trail-id-1'])
@@ -430,7 +430,7 @@ def test_call_forwards_resume_trail_id_with_message():
 def test_call_resume_runs_the_resumed_bro(monkeypatch, capsys):
   from datetime import datetime
 
-  from do.resume import HistoryMessage, ResumedCall
+  from bro.launch.resume import HistoryMessage, ResumedCall
 
   captured: dict = {}
 
@@ -450,10 +450,10 @@ def test_call_resume_runs_the_resumed_bro(monkeypatch, capsys):
 
   monkeypatch.setenv('CW_IN_CONTAINER', '1')
   monkeypatch.setattr('bro.registry.get_class', lambda name: _ChatBro)
-  monkeypatch.setattr('do.resume.resume', fake_resume)
+  monkeypatch.setattr('bro.launch.resume.resume', fake_resume)
   monkeypatch.setattr('trails.client.default_client', lambda: MagicMock())
-  monkeypatch.setattr('do.call.call_text', fake_call_text)
-  monkeypatch.setattr('do.call._tty_supported', lambda: False)
+  monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
+  monkeypatch.setattr('bro.launch.call._tty_supported', lambda: False)
 
   rc = main(['call', 'record', '--resume', '--in-place'])
   assert rc is None
@@ -476,8 +476,8 @@ def test_call_prints_resume_hint_when_a_trail_was_recorded(monkeypatch, capsys):
 
   monkeypatch.setenv('CW_IN_CONTAINER', '1')
   monkeypatch.setattr('bro.registry.create_bro', lambda name: RecordBro())
-  monkeypatch.setattr('do.call.call_text', fake_call_text)
-  monkeypatch.setattr('do.call._tty_supported', lambda: False)
+  monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
+  monkeypatch.setattr('bro.launch.call._tty_supported', lambda: False)
 
   rc = main(['call', 'record', 'hi', '--slow', '--in-place'])
   assert rc is None
@@ -492,8 +492,8 @@ def test_call_skips_resume_hint_without_a_trail(monkeypatch, capsys):
 
   monkeypatch.setenv('CW_IN_CONTAINER', '1')
   monkeypatch.setattr('bro.registry.create_bro', lambda name: RecordBro())
-  monkeypatch.setattr('do.call.call_text', fake_call_text)
-  monkeypatch.setattr('do.call._tty_supported', lambda: False)
+  monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
+  monkeypatch.setattr('bro.launch.call._tty_supported', lambda: False)
 
   rc = main(['call', 'record', 'hi', '--slow', '--in-place'])
   assert rc is None
@@ -508,8 +508,8 @@ def test_call_skips_container_with_in_place_flag(monkeypatch):
 
   monkeypatch.delenv('CW_IN_CONTAINER', raising=False)
   monkeypatch.setattr('bro.registry.create_bro', lambda name: _ChatBro())
-  monkeypatch.setattr('do.call.call_text', fake_call_text)
-  monkeypatch.setattr('do.call._tty_supported', lambda: False)
+  monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
+  monkeypatch.setattr('bro.launch.call._tty_supported', lambda: False)
   with patch('cw.run_in_container') as run:
     # --slow routes through the patched create_bro; the container-skip behavior
     # under test is independent of fast/slow.
@@ -527,8 +527,8 @@ def test_initial_slash_invocation_passes_through_verbatim(monkeypatch):
 
   monkeypatch.setenv('CW_IN_CONTAINER', '1')
   monkeypatch.setattr('bro.registry.create_bro', lambda name: RecordBro())
-  monkeypatch.setattr('do.call.call_text', fake_call_text)
-  monkeypatch.setattr('do.call._tty_supported', lambda: False)
+  monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
+  monkeypatch.setattr('bro.launch.call._tty_supported', lambda: False)
 
   # no client-side expansion: the bro's system prompt describes the /-syntax and
   # the model loads the skill body itself via the `bro::skill` tool.
@@ -554,7 +554,7 @@ class _FakeApp:
 def test_chat_markdown_carries_bold_and_link_styles():
   from rich.console import Console
 
-  from do.call_tui import ChatMarkdown
+  from bro.launch.call_tui import ChatMarkdown
 
   console = Console(width=80)
   segments = console.render(ChatMarkdown('**bold** and [docs](https://example.com/x)'))
@@ -567,7 +567,7 @@ def test_chat_markdown_measurement_hugs_short_text():
   from rich.console import Console
   from rich.measure import Measurement
 
-  from do.call_tui import ChatMarkdown
+  from bro.launch.call_tui import ChatMarkdown
 
   console = Console(width=80)
   measurement = Measurement.get(console, console.options, ChatMarkdown('ok'))
@@ -578,7 +578,7 @@ def test_message_bubble_selection_honors_offsets():
   from textual.geometry import Offset
   from textual.selection import Selection
 
-  from do.call_tui import MessageBubble
+  from bro.launch.call_tui import MessageBubble
 
   bubble = MessageBubble('first\nsecond', by_user=True, when=datetime(2026, 5, 28, 12, 34, 56))
   extraction = bubble.get_selection(Selection(Offset(0, 1), None))
@@ -588,7 +588,7 @@ def test_message_bubble_selection_honors_offsets():
 
 @pytest.mark.asyncio
 async def test_tui_drag_inside_markdown_bubble_selects_rendered_text(monkeypatch):
-  from do.call_tui import ChatApp, MessageBubble
+  from bro.launch.call_tui import ChatApp, MessageBubble
 
   monkeypatch.setattr('cw.render_banner', lambda llm=False, bro=None: 'BANNER')
   app = ChatApp(RecordBro(), None)
@@ -625,7 +625,7 @@ async def test_tui_drag_inside_markdown_bubble_selects_rendered_text(monkeypatch
 async def test_tui_markdown_bubble_copy_reflows_to_logical_lines(monkeypatch):
   from textual.selection import SELECT_ALL
 
-  from do.call_tui import ChatApp, MessageBubble
+  from bro.launch.call_tui import ChatApp, MessageBubble
 
   monkeypatch.setattr('cw.render_banner', lambda llm=False, bro=None: 'BANNER')
   command = (
@@ -658,7 +658,7 @@ async def test_tui_markdown_bubble_copy_reflows_to_logical_lines(monkeypatch):
 async def test_tui_survives_markup_like_text(monkeypatch):
   from textual.selection import SELECT_ALL
 
-  from do.call_tui import ChatApp, MessageBubble, StatsScreen, SystemBubble
+  from bro.launch.call_tui import ChatApp, MessageBubble, StatsScreen, SystemBubble
 
   monkeypatch.setattr('cw.render_banner', lambda llm=False, bro=None: 'BANNER')
   # the shape that crashed the compositor: a bare `[` opens what Textual's
@@ -695,7 +695,7 @@ async def test_tui_copies_selection_to_clipboard_on_mouse_up(monkeypatch):
   from textual.events import TextSelected
   from textual.selection import SELECT_ALL
 
-  from do.call_tui import ChatApp, MessageBubble
+  from bro.launch.call_tui import ChatApp, MessageBubble
 
   monkeypatch.setattr('cw.render_banner', lambda llm=False, bro=None: 'BANNER')
   app = ChatApp(RecordBro(), None)
@@ -714,7 +714,7 @@ async def test_tui_copies_selection_to_clipboard_on_mouse_up(monkeypatch):
 
 
 def test_tui_renderer_posts_one_line_per_event():
-  from do.call_tui import TUIRenderer
+  from bro.launch.call_tui import TUIRenderer
 
   app = _FakeApp()
   renderer = TUIRenderer(app)  # type: ignore[arg-type]

@@ -51,7 +51,7 @@ def test_chat_uses_canonical_container_launch():
   with (
     patch.dict('os.environ', {}, clear=False) as environment,
     patch('cw.run_in_container', return_value=0) as run,
-    patch('do.call._tty_supported', return_value=True),
+    patch('bro.launch.call._tty_supported', return_value=True),
   ):
     environment.pop('CW_IN_CONTAINER', None)
     environment.pop('PPP_SHELL_COMMAND', None)

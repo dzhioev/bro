@@ -34,11 +34,11 @@ def _launcher_invocation(argv: list[str]) -> Optional[tuple[str, list[str]]]:
 def main(argv: list[str]) -> Optional[int]:
   launcher = _launcher_invocation(argv)
   if launcher is not None and launcher[0] == 'run':
-    from do._cli import run_main
+    from bro.launch._cli import run_main
 
     return run_main(launcher[1], program=['bro', 'run'])
   if launcher is not None and launcher[0] == 'chat':
-    from do.call import chat_main
+    from bro.launch.call import chat_main
 
     return chat_main(launcher[1], program=['bro', 'chat'])
 

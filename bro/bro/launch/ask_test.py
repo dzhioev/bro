@@ -4,8 +4,8 @@ from unittest.mock import patch
 import pytest
 
 from bro.bro import BaseBro
+from bro.launch.ask import main
 from cw.constants import bro_git_identity_env
-from do.do import do, main
 from llm.llm import LLM
 from llm.mcp import MCPServer
 from llm.observer import NullObserver, Observer
@@ -35,26 +35,6 @@ class RecordBro(BaseBro):
 
   def _create_llm(self, *, interactive: bool) -> LLM:
     return self.mock_llm
-
-
-@pytest.mark.asyncio
-async def test_forwards_to_bro_run():
-  bro = RecordBro(response='ok')
-  result = await do(bro, 'hello')
-  assert result == 'ok'
-  assert len(bro.mock_llm.send_calls) == 1
-  messages = bro.mock_llm.send_calls[0]
-  assert messages[-1] == {'role': 'user', 'content': 'hello'}
-
-
-@pytest.mark.asyncio
-async def test_slash_invocation_passes_through_verbatim():
-  # no client-side expansion: the bro's system prompt describes the /-syntax and
-  # the model loads the skill body itself via the `bro::skill` tool.
-  bro = RecordBro(response='ok')
-  await do(bro, '/fix https://example.com/x')
-  messages = bro.mock_llm.send_calls[0]
-  assert messages[-1]['content'] == '/fix https://example.com/x'
 
 
 def test_main_re_execs_into_container_when_outside():

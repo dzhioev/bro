@@ -1,17 +1,17 @@
-# do/CLAUDE.md
+# bro/launch/CLAUDE.md
 
 Bros launching and managing layer. It owns the shared launch machinery behind the canonical `bro run` / `bro chat` verbs and their compatibility aliases.
 
 ## Files
 
-- `do.py` (`ask`) — `async do(bro, what)` forwards to `bro.run(what)`; the `ask` console script is a thin alias of `bro run`.
+- `ask.py` (`ask`) — the `ask` console script, a thin alias of `bro run`.
 
   Input passes through verbatim, `/skill` invocations included: the bro's system prompt (`bro/bro.py:_render_skills`) describes the /-syntax — a message starting with `/<name>` invokes the skill of that name, the rest is its arguments — and the model loads the body itself via the `bro::skill` tool. There is no client-side expansion or validation; an unknown `/<name>` fails at the tool (which lists the available skills) and the bro raises.
 - `call.py` (`call`) — the canonical `bro chat` implementation and its thin `call` alias; drives an interactive `bro.send()` conversation.
 
-  The initial message passes through verbatim like every later REPL turn — a leading `/ask devoops …` reaches the bro as-is and resolves through the /-syntax described in its system prompt (see `do.py`).
+  The initial message passes through verbatim like every later REPL turn — a leading `/ask devoops …` reaches the bro as-is and resolves through the /-syntax described in its system prompt (see `ask.py`).
 
-  By default opens the Textual chat UI in `call_tui.py` (IM-style: scrollable history, left/right bubbles, timestamp + date separators, animated "Typing…", mouse selection copies straight to the system clipboard, Ctrl+D to quit, backtick (`) opens a stats modal). Falls back to text mode (`[HH:MM:SS] bro: <reply>` lines + `> ` prompt) when stdin/stdout isn't a TTY; `--text` forces it. The text REPL helper `call_text(bro, initial)` is library-callable.
+  By default opens the Textual chat UI in `call_tui.py` (IM-style: scrollable history, left/right bubbles, timestamp + date separators, animated "Typing…", mouse selection copies straight to the system clipboard, Ctrl+D to quit, backtick (`) opens a stats modal). Falls back to text mode (`[HH:MM:SS] bro: <reply>` lines + `> ` prompt) when stdin/stdout isn't a TTY; `--text` forces it.
 
   The Bro's `interactive=True` machinery picks up automatically in both modes: no `raise` tool, the guided session-mode fragment injected into the system prompt.
 
@@ -24,11 +24,11 @@ Bros launching and managing layer. It owns the shared launch machinery behind th
   Flags: `--text` and `--resume` belong only to `bro chat` / `call`; the launch, LLM-spec, scope, and trail flags parallel `bro run`. Fast mode is the default for both canonical verbs; `--slow` opts back out to the plain spec, and `--effort` applies an explicit provider-neutral effort override. A bro whose spec has no fast equivalent falls back to the plain spec because fast is implicit; an unsupported explicit effort override fails.
 - `resume.py` — `call --resume` machinery: latest-call-trail lookup, `conversation_history` (the prior exchanges across the fork ancestor chain, as `HistoryMessage`s both UIs render), and `resume()` orchestrating the fork.
 - `call_tui.py` — Textual `ChatApp` plus its widgets (`MessageBubble`, `BubbleRow`, `DateSeparator`, `TypingIndicator`, `StatsScreen`). Mounts an `Input` on the bottom and a `VerticalScroll` of bubbles above. `bro.send()` runs in a Textual `@work(exclusive=True)` so the UI stays responsive while the LLM responds. Bro replies render as markdown through `ChatMarkdown` — rich's `Markdown` with a content-hugging width measurement (so short bubbles don't stretch to their max-width) and unpadded code blocks. Rich markdown (rather than Textual's `Markdown` widget) is deliberate: Textual composites rich `link` styles into OSC 8 hyperlinks that the *host* terminal resolves (modifier-click). Copy-on-select rides Textual's built-in mouse selection (`ChatApp.on_text_selected`); `SelectableRichVisual` gives rich-renderable bubbles the selection support plain `RichVisual` lacks — hit-test offsets, highlight, and copy extraction through `_reflow.py`, which aligns the wrapped display lines with a second, unwrapped render so copied text keeps the message's own line breaks rather than the wrap points and padding of the on-screen rectangle
-- `do_task.py` (`do-task`) — `async do_task(bro, task)` and the thin `do-task` alias of `bro run`; wraps a non-slash input as `/fix <task>`, while an explicit slash invocation passes through. A bro without the named skill raises in-run.
+- `do_task.py` (`do-task`) — the thin `do-task` alias of `bro run`; wraps a non-slash input as `/fix <task>` (`fix_invocation`), while an explicit slash invocation passes through. A bro without the named skill raises in-run.
 
   When the task argument is a Notion page ref (URL or dashed UUID), `do-task` exports it as `CW_TASK_ID` before the launch so a containerized run's `/pr` step can add the task footer. Input that names no page exports nothing; an explicit summon carries only the wrapped prompt, so its child resolves the task itself.
 
-The library surfaces remain importable (`do`, `call_text`, `do_task`). `bro/run.py` dispatches the canonical verbs here with function-local imports so metadata commands such as `bro list` do not import the launcher stack.
+`bro/run.py` dispatches the canonical verbs here with function-local imports so metadata commands such as `bro list` do not import the launcher stack.
 
 ## Container isolation
 
