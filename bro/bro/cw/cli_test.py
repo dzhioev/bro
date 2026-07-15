@@ -26,11 +26,11 @@ class TestSsValidation:
     assert spec.host
     assert spec.mode == 'attended'
 
-  def test_ss_mode_defaults_to_guided(self):
+  def test_ss_mode_defaults_to_attended(self):
     with patch('cw.cli.start_session', return_value=0) as fake_start:
       rc = cw.cli.main(['cw', 'ss', 'w'])
     assert rc == 0
-    assert fake_start.call_args[0][0].mode == 'guided'
+    assert fake_start.call_args[0][0].mode == 'attended'
 
   def test_ss_rejects_an_unknown_mode(self, capsys):
     with pytest.raises(SystemExit):
@@ -98,10 +98,10 @@ class TestInPlace:
     # the inner argv carries --mode but never --host; the outer consumed the
     # execution mode
     with patch('cw.cli.run_in_place', return_value=0) as fake_run:
-      rc = cw.cli.main(['cw', 'ss', '--in-place', '--mode', 'attended', 'w'])
+      rc = cw.cli.main(['cw', 'ss', '--in-place', '--mode', 'guided', 'w'])
     assert rc == 0
     spec = fake_run.call_args[0][0]
-    assert spec.mode == 'attended'
+    assert spec.mode == 'guided'
     assert not spec.host
 
   def test_skips_the_bro_gates(self):

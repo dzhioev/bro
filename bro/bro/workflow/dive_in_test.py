@@ -69,7 +69,7 @@ class TestLaunchCommand:
     [
       {},
       {'forwarded': ['--host']},
-      {'forwarded': ['--host', '--mode', 'attended']},
+      {'forwarded': ['--host', '--mode', 'guided']},
       {'command': 'do a thing', 'new': True},
     ],
   )
@@ -84,6 +84,14 @@ class TestLaunchCommand:
     assert args['cmd'] == 'ss'
     assert len(args['name']) > 0
     assert len(args['claude_args']) == 0  # nothing leaked into the forwarded REMAINDER
+
+  def test_defaults_to_attended(self, fake_proj, capsys):
+    rc = dive_in.main(['dive-in', '-n'])
+    assert rc == 0
+    tokens = shlex.split(capsys.readouterr().out.strip())
+    assert '--mode' not in tokens
+    args = cw.build_parser().parse(tokens)
+    assert args['mode'] == 'attended'
 
   def test_forwarded_flags_ride_verbatim(self, fake_proj, capsys, monkeypatch):
     monkeypatch.delenv('CW_BRO', raising=False)
@@ -111,9 +119,9 @@ class TestShellCommandReconstruction:
 
   def test_forwarded_flags_appear_in_the_reconstruction(self, fake_proj, monkeypatch):
     monkeypatch.delenv('PPP_SHELL_COMMAND', raising=False)
-    rc = dive_in.main(['dive-in', '-n', '--mode', 'attended', '--bro', 'ppp-dev'])
+    rc = dive_in.main(['dive-in', '-n', '--mode', 'guided', '--bro', 'ppp-dev'])
     assert rc == 0
-    assert os.environ['PPP_SHELL_COMMAND'] == 'dive-in --mode attended --bro ppp-dev'
+    assert os.environ['PPP_SHELL_COMMAND'] == 'dive-in --mode guided --bro ppp-dev'
 
   def test_new_seed_keeps_the_prompt_marker_tail(self, fake_proj, monkeypatch):
     monkeypatch.delenv('PPP_SHELL_COMMAND', raising=False)

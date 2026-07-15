@@ -76,7 +76,8 @@ class TestCwSessionLaunch:
     assert '--dangerously-skip-permissions' in argv
 
   def test_guided_mode_keeps_permission_prompts(self):
-    assert '--dangerously-skip-permissions' not in _cw_session_launch(_spec(), claude_args=[]).argv
+    argv = _cw_session_launch(_spec(mode='guided'), claude_args=[]).argv
+    assert '--dangerously-skip-permissions' not in argv
 
   def test_mcp_config_covers_the_personas_namespaces(self):
     argv = _cw_session_launch(_spec(persona='pm'), claude_args=[]).argv
@@ -173,15 +174,15 @@ class TestBroLaunch:
     assert '`mcp__namespace__tool`' in prompt
 
   def test_mode_fragment_follows_the_mode(self):
-    guided = self._launch().system_prompt
-    assert '# Guided session' in guided
-    assert 'Land mode: PR' not in guided
-    attended = self._launch(mode='attended')
+    attended = self._launch()
     assert '# Attended session' in attended.system_prompt
     assert 'Land mode: PR' in attended.system_prompt
-    # the fragment renders at build — no directive may leak into the prompt
-    assert '{{' not in attended.system_prompt
     assert '--dangerously-skip-permissions' in attended.argv
+    guided = self._launch(mode='guided').system_prompt
+    assert '# Guided session' in guided
+    assert 'Land mode: PR' not in guided
+    # the fragment renders at build — no directive may leak into the prompt
+    assert '{{' not in guided
 
   def test_unknown_bro_raises(self):
     with pytest.raises(KeyError, match='unknown bro'):

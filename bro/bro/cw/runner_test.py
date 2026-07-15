@@ -159,7 +159,7 @@ class TestRunInPlace:
   def test_exports_bro_git_identity_unconditionally(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      # a guided session: every session commits as bro, mode-independent
+      # every session commits as bro, mode-independent
       assert cw.runner.run_in_place(_spec()) == 0
       assert h.env['GIT_AUTHOR_NAME'] == 'bro'
       assert h.env['GIT_COMMITTER_EMAIL'] == 'dzhioev+bro@gmail.com'
@@ -172,12 +172,12 @@ class TestRunInPlace:
 
   def test_overwrites_the_ambient_mode(self, monkeypatch, tmp_path):
     # a session launched from inside an unattended one must not inherit the
-    # mode (the MCP server would mount `raise` for a guided session)
+    # mode (the MCP server would otherwise mount `raise` for an attended session)
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
       h.env['CW_MODE'] = 'unattended'
       assert cw.runner.run_in_place(_spec()) == 0
-      assert h.env['CW_MODE'] == 'guided'
+      assert h.env['CW_MODE'] == 'attended'
 
   def test_exports_its_own_pid_as_the_raise_kill_target(self, monkeypatch, tmp_path):
     # overwriting the ambient value: an inherited pid would name a foreign runner

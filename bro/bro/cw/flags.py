@@ -1,6 +1,7 @@
 from base.args import Parser
 
 EFFORT_LEVELS = ('low', 'medium', 'high', 'xhigh', 'max')
+DEFAULT_SESSION_MODE = 'attended'
 
 
 def add_forwarded_flags(parser: Parser) -> None:
@@ -20,11 +21,11 @@ def add_forwarded_flags(parser: Parser) -> None:
 
   parser.add_argument(
     '--mode',
-    default='guided',
+    default=DEFAULT_SESSION_MODE,
     choices=MODES,
     help='user-involvement level: unattended = no human channel, detached = launched and left, '
-    'attended = human watching while the work runs autonomously, guided = human drives each step '
-    '(default). every level but guided skips permission prompts (unsandboxed when combined with '
+    'attended = human watching while the work runs autonomously (default), guided = human drives '
+    'each step. every level but guided skips permission prompts (unsandboxed when combined with '
     '--host)',
   )
   parser.add_argument(

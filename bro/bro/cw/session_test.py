@@ -5,6 +5,7 @@ from typing import Optional
 from unittest.mock import patch
 
 import cw.session
+from cw.flags import DEFAULT_SESSION_MODE
 from cw.secrets import ScopedSecrets
 
 
@@ -13,7 +14,7 @@ def _spec(
   name: str = 'w',
   host: bool = False,
   drop: bool = False,
-  mode: str = 'guided',
+  mode: str = DEFAULT_SESSION_MODE,
   fast: bool = False,
   grant_cred: Optional[list[str]] = None,
   revoke_cred: Optional[list[str]] = None,
@@ -218,7 +219,7 @@ class TestContainerCommand:
 class TestResumeCommand:
   def test_create_command_includes_drop_into_and_claude_args(self):
     parts = _spec(
-      mode='attended',
+      mode='guided',
       fast=True,
       drop=True,
       effort='xhigh',
@@ -229,7 +230,7 @@ class TestResumeCommand:
       claude_args=['--foo'],
     ).to_command_argv()
     assert parts == [
-      'cw', 'ss', '--fast', '--drop', '--mode', 'attended',
+      'cw', 'ss', '--fast', '--drop', '--mode', 'guided',
       '--effort', 'xhigh', '--persona', 'pm', '--grant-cred', 'gmail_creds',
       '--revoke-cred', 'notion', '--into', 'feature', 'w', '--foo',
     ]  # fmt: skip
@@ -239,8 +240,7 @@ class TestResumeCommand:
     assert parts == ['cw', 'ss', '--host', '--mode', 'detached', 'w']
 
   def test_default_mode_is_elided(self):
-    # the parser defaults --mode to guided, so the reconstructed command stays
-    # what the user typed
+    # the parser's default mode stays implicit in the reconstructed command
     assert _spec().to_command_argv() == ['cw', 'ss', 'w']
 
   def test_resume_variant_carries_forwarded_flags_and_clears_create_only(self):
@@ -248,7 +248,7 @@ class TestResumeCommand:
     # --resume, while clearing the create-only --drop/--into/prompt/claude args
     parts = (
       _spec(
-        mode='attended',
+        mode='guided',
         drop=True,
         effort='xhigh',
         persona='pm',
@@ -261,7 +261,7 @@ class TestResumeCommand:
       .to_command_argv()
     )
     assert parts == [
-      'cw', 'ss', '--resume', '--mode', 'attended',
+      'cw', 'ss', '--resume', '--mode', 'guided',
       '--effort', 'xhigh', '--persona', 'pm', '--grant-cred', 'gmail_creds', 'w',
     ]  # fmt: skip
 
@@ -274,7 +274,7 @@ class TestResumeCommand:
       cw.session.start_session(
         _spec(
           drop=True,
-          mode='attended',
+          mode='guided',
           grant_cred=['gmail_creds'],
           effort='xhigh',
           persona='pm',
@@ -283,17 +283,17 @@ class TestResumeCommand:
       resume_command = env['CW_RESUME_COMMAND']
     assert (
       resume_command
-      == 'cw ss --resume --mode attended --effort xhigh --persona pm --grant-cred gmail_creds w'
+      == 'cw ss --resume --mode guided --effort xhigh --persona pm --grant-cred gmail_creds w'
     )
 
 
 class TestReplaceResumeHint:
   def test_prints_recorded_command_over_claudes_hint(self, monkeypatch, capsys, tmp_path):
-    monkeypatch.setenv('CW_RESUME_COMMAND', 'cw ss --mode attended --resume w')
+    monkeypatch.setenv('CW_RESUME_COMMAND', 'cw ss --mode guided --resume w')
     monkeypatch.setattr(cw.session, '_latest_jsonl', lambda directory: 'session.jsonl')
     monkeypatch.setattr('sys.stdout.isatty', lambda: True)
     cw.session._replace_resume_hint(cw.session.HostWorktree('w', tmp_path))
-    assert 'cw ss --mode attended --resume w' in capsys.readouterr().out
+    assert 'cw ss --mode guided --resume w' in capsys.readouterr().out
 
   def test_silent_without_a_session_jsonl(self, monkeypatch, capsys, tmp_path):
     monkeypatch.setenv('CW_RESUME_COMMAND', 'cw ss --resume w')
@@ -307,7 +307,7 @@ class TestInPlaceArgv:
   def test_drops_machinery_flags_and_carries_the_rest(self):
     parts = _spec(
       host=True,
-      mode='attended',
+      mode='guided',
       fast=True,
       drop=True,
       effort='xhigh',
@@ -319,7 +319,7 @@ class TestInPlaceArgv:
       claude_args=['--foo'],
     ).to_in_place_argv()
     assert parts == [
-      'ss', '--in-place', '--fast', '--mode', 'attended',
+      'ss', '--in-place', '--fast', '--mode', 'guided',
       '--effort', 'xhigh', '--persona', 'pm', '--prompt=do it', 'w', '--foo',
     ]  # fmt: skip
 
@@ -485,11 +485,11 @@ class TestHostSession:
       return 5
 
     monkeypatch.setattr(cw.session, '_run_host_root_via_broker', fake_root)
-    spec = _spec(host=True, mode='attended', effort='xhigh', prompt='go', claude_args=['--foo'])
+    spec = _spec(host=True, mode='guided', effort='xhigh', prompt='go', claude_args=['--foo'])
     assert cw.session._host_session(spec, None) == 5
     assert roots[0]['name'] == 'w'
     assert roots[0]['command'] == [
-      str(cw_bin), 'ss', '--in-place', '--mode', 'attended', '--effort', 'xhigh', '--prompt=go', 'w', '--foo',
+      str(cw_bin), 'ss', '--in-place', '--mode', 'guided', '--effort', 'xhigh', '--prompt=go', 'w', '--foo',
     ]  # fmt: skip
     assert roots[0]['worktree'] == worktree
     assert roots[0]['project'] == tmp_path
@@ -524,11 +524,11 @@ class TestHostSession:
       return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(cw.session.subprocess, 'run', fake_run)
-    spec = _spec(host=True, mode='attended', effort='xhigh', prompt='go', claude_args=['--foo'])
+    spec = _spec(host=True, mode='guided', effort='xhigh', prompt='go', claude_args=['--foo'])
     assert cw.session._host_session(spec, None) == 0
     argv, kwargs = runs[0]
     assert argv == [
-      str(cw_bin), 'ss', '--in-place', '--mode', 'attended', '--effort', 'xhigh', '--prompt=go', 'w', '--foo',
+      str(cw_bin), 'ss', '--in-place', '--mode', 'guided', '--effort', 'xhigh', '--prompt=go', 'w', '--foo',
     ]  # fmt: skip
     assert kwargs['cwd'] == str(worktree)
     assert kwargs['env']['VIRTUAL_ENV'] == str(worktree / '.venv')

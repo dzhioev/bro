@@ -12,6 +12,7 @@ from cw.claude_config import _provision_host_claude_dir
 from cw.constants import DEFAULT_SESSION_BRO
 from cw.containers import _broker_enabled, run_in_container
 from cw.docker import find_container_id
+from cw.flags import DEFAULT_SESSION_MODE
 from cw.git import resolve_ref
 from cw.paths import _latest_jsonl, _project_root, _venv_env
 from cw.secrets import (
@@ -86,7 +87,7 @@ class SessionSpec:
       '--resume': self.resume,
     }
     parts = ['cw', 'ss', *(f for f, v in flags.items() if v)]
-    if self.mode != 'guided':
+    if self.mode != DEFAULT_SESSION_MODE:
       parts.extend(['--mode', self.mode])
     if self.effort is not None:
       parts.extend(['--effort', self.effort])
@@ -118,7 +119,7 @@ class SessionSpec:
     joined `=` form so a prompt starting with `-` can't be mistaken for a flag."""
     flags = {'--fast': self.fast, '--resume': self.resume}
     parts = ['ss', '--in-place', *(f for f, v in flags.items() if v)]
-    if self.mode != 'guided':
+    if self.mode != DEFAULT_SESSION_MODE:
       parts.extend(['--mode', self.mode])
     if self.effort is not None:
       parts.extend(['--effort', self.effort])
