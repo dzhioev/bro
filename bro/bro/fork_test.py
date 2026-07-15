@@ -8,7 +8,7 @@ import pytest
 from openai.types.responses import Response
 
 import llm.llms.chat_gpt as chat_gpt_module
-from bro.fork import fork, replay_messages
+from bro.fork import fork, latest_fork_point, replay_messages
 from llm.tracker import (
   LocalFileTracker,
   NullTracker,
@@ -300,6 +300,163 @@ class TestReplayMessages:
     assert all(isinstance(item, dict) for item in result)
 
 
+class TestReplayMessagesAcrossForkChain:
+  def _parent(self) -> RecordedTrail:
+    return _simple_trail()
+
+  def _child(self) -> RecordedTrail:
+    # a fork of trail-1 at its terminal llm_call, with one exchange of its own
+    return RecordedTrail(
+      header=Trail(
+        trail_id='trail-2',
+        bro='bro',
+        bro_version=1,
+        llm_spec={'type': 'chat_gpt', 'model': 'gpt-5'},
+        started_at='2026-06-08T00:00:00.000000Z',
+        interactive=True,
+        entry_point='call',
+        parent=Parent(trail_id='trail-1', step_id='c1', relationship='fork'),
+      ),
+      steps=[
+        _step('system_prompt', _SYS_TEXT, step_id='s0', trail_id='trail-2', turn_index=0),
+        _step('user_input', 'continue', step_id='u0', trail_id='trail-2', turn_index=0),
+        _step(
+          'llm_call',
+          _llm_call_body(_output_message('continued')),
+          step_id='c1',
+          trail_id='trail-2',
+          turn_index=1,
+          response_id='r2',
+        ),
+      ],
+    )
+
+  def test_prepends_ancestor_prefix_via_fetch_parent(self):
+    parents = {'trail-1': self._parent()}
+    result = replay_messages(self._child(), 'c1', fetch_parent=lambda tid: parents[tid])
+    assert result == [
+      {'role': 'system', 'content': _SYS_TEXT},
+      {'role': 'user', 'content': 'hello'},
+      _output_message('hi back'),
+      {'role': 'user', 'content': 'continue'},
+      _output_message('continued'),
+    ]
+
+  def test_raises_on_fork_trail_without_fetch_parent(self):
+    with pytest.raises(ValueError, match='fetch_parent'):
+      replay_messages(self._child(), 'c1')
+
+  def test_fork_at_system_prompt_step_replays_only_the_ancestor_prefix(self):
+    # an empty continuation (a fork with no exchanges of its own) resumes as
+    # exactly the ancestor conversation
+    parents = {'trail-1': self._parent()}
+    child = self._child()
+    empty_child = RecordedTrail(header=child.header, steps=child.steps[:1])
+    result = replay_messages(empty_child, 's0', fetch_parent=lambda tid: parents[tid])
+    assert result == [
+      {'role': 'system', 'content': _SYS_TEXT},
+      {'role': 'user', 'content': 'hello'},
+      _output_message('hi back'),
+    ]
+
+
+class TestLatestForkPoint:
+  def test_picks_the_terminal_llm_call(self):
+    trail = _simple_trail()
+    assert latest_fork_point(trail) == 'c1'
+
+  def test_picks_a_trailing_user_input(self):
+    # killed after the user sent a message but before the model replied
+    trail = RecordedTrail(
+      header=_trail_header(),
+      steps=[
+        _step('system_prompt', _SYS_TEXT, step_id='s0', turn_index=0),
+        _step('user_input', 'hello', step_id='u0', turn_index=0),
+        _step(
+          'llm_call',
+          _llm_call_body(_output_message('hi back')),
+          step_id='c1',
+          turn_index=1,
+          response_id='r1',
+        ),
+        _step('user_input', 'follow up', step_id='u1', turn_index=2),
+      ],
+    )
+    assert latest_fork_point(trail) == 'u1'
+
+  def test_skips_an_llm_call_with_unanswered_function_calls(self):
+    # killed mid-tool-loop: the last llm_call's function_call has no
+    # tool_result, so the resume point falls back to the last consistent step
+    trail = RecordedTrail(
+      header=_trail_header(),
+      steps=[
+        _step('system_prompt', _SYS_TEXT, step_id='s0', turn_index=0),
+        _step('user_input', 'go', step_id='u0', turn_index=0),
+        _step(
+          'llm_call',
+          _llm_call_body(_output_function_call('lookup', call_id='call-1')),
+          step_id='c1',
+          turn_index=1,
+          response_id='r1',
+        ),
+        _step('tool_call', None, step_id='tc', turn_index=1, tool_name='lookup', call_id='call-1'),
+      ],
+    )
+    assert latest_fork_point(trail) == 'u0'
+
+  def test_picks_the_tool_result_that_completes_the_turn(self):
+    trail = RecordedTrail(
+      header=_trail_header(),
+      steps=[
+        _step('system_prompt', _SYS_TEXT, step_id='s0', turn_index=0),
+        _step('user_input', 'go', step_id='u0', turn_index=0),
+        _step(
+          'llm_call',
+          _llm_call_body(
+            _output_function_call('lookup', call_id='call-1'),
+            _output_function_call('lookup', call_id='call-2'),
+          ),
+          step_id='c1',
+          turn_index=1,
+          response_id='r1',
+        ),
+        _step('tool_result', 'a', step_id='t1', turn_index=1, tool_name='lookup', call_id='call-1'),
+        _step('tool_result', 'b', step_id='t2', turn_index=1, tool_name='lookup', call_id='call-2'),
+      ],
+    )
+    assert latest_fork_point(trail) == 't2'
+
+  def test_raises_on_a_trail_with_nothing_to_resume(self):
+    trail = RecordedTrail(
+      header=_trail_header(),
+      steps=[_step('system_prompt', _SYS_TEXT, step_id='s0', turn_index=0)],
+    )
+    with pytest.raises(ValueError, match='no step to resume from'):
+      latest_fork_point(trail)
+
+  def test_fork_trail_falls_back_to_its_system_prompt_step(self):
+    # an empty continuation still resumes — through the ancestor prefix its
+    # parent pointer carries
+    trail = RecordedTrail(
+      header=_trail_header(),
+      steps=[_step('system_prompt', _SYS_TEXT, step_id='s0', turn_index=0)],
+    )
+    forked = RecordedTrail(
+      header=Trail(
+        trail_id='trail-2',
+        bro='bro',
+        bro_version=1,
+        llm_spec={'type': 'chat_gpt', 'model': 'gpt-5'},
+        started_at='2026-06-08T00:00:00.000000Z',
+        interactive=True,
+        entry_point='call',
+        parent=Parent(trail_id='trail-1', step_id='c1', relationship='fork'),
+      ),
+      steps=trail.steps,
+    )
+    assert latest_fork_point(forked) == 's0'
+
+
 class TestReadLocalFile:
   def test_round_trips_a_trail_through_jsonl(self, tmp_path: Path):
     path = tmp_path / 'trail.jsonl'
@@ -492,6 +649,17 @@ class TestForkLinkage:
     assert header['entry_point'] == 'fork'
     assert header['interactive'] is True
     assert header['bro'] == 'bro'
+
+  def test_entry_point_override_labels_the_new_trail(self):
+    # `call --resume` labels its continuations 'call' so they are themselves
+    # picked up by the next resume-latest lookup
+    parent_trail = _simple_trail()
+    tracker = _RecordingTracker()
+    context, _, _ = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('ok')])])
+    with context:
+      bro = fork(parent_trail, 'c1', tracker=tracker, entry_point='call')
+    assert tracker.headers[0]['entry_point'] == 'call'
+    assert bro.trail_id == 'forked-trail-id'
 
   def test_records_resolved_system_prompt(self):
     parent_trail = _simple_trail()

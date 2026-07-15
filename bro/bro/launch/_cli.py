@@ -14,6 +14,7 @@ import summon as summon_client
 from base import credentials, log
 from bro.bro import BroRaised
 from bro.bros.bro import Bro
+from llm.llm import LLMSpec
 from llm.observer import Observer
 
 # shared flag help so all three CLIs describe `--slow` / `--host` identically.
@@ -64,32 +65,44 @@ INTO_HELP = (
 )
 
 
-def create_bro_for_run(bro_name: str, *, fast: bool, effort: Optional[str] = None) -> Bro:
-  """instantiate the bro for an in-process run. fast mode (the provider's fast knob)
-  is the default for these CLIs; pass fast=False (`--slow`) for the plain spec.
-  fast being implicit, a provider with no fast mode (e.g. echo) falls back to the
-  normal spec rather than raising — the user never explicitly asked for fast.
-  effort (`--effort`) overrides the spec's reasoning-effort knob via
-  `LLMSpec.with_effort`; being an explicit ask, a provider without the knob raises
-  NotImplementedError instead of falling back."""
-  from bro.registry import create_bro, get_class
-
+def run_llm_spec(
+  bro_class: type[Bro], *, fast: bool, effort: Optional[str] = None
+) -> Optional[LLMSpec]:
+  """the per-run LLM spec these CLIs run the bro with, or None when the class
+  default stands. fast mode (the provider's fast knob) is the default; pass
+  fast=False (`--slow`) for the plain spec. fast being implicit, a provider
+  with no fast mode (e.g. echo) falls back to the normal spec rather than
+  raising — the user never explicitly asked for fast. effort (`--effort`)
+  overrides the spec's reasoning-effort knob via `LLMSpec.with_effort`; being
+  an explicit ask, a provider without the knob raises NotImplementedError
+  instead of falling back."""
   if not fast and effort is None:
-    return create_bro(bro_name)
-  cls = get_class(bro_name)
-  spec = cls.llm_spec
+    return None
+  spec = bro_class.llm_spec
   if fast:
     try:
       spec = spec.fast()
     except NotImplementedError:
       logging.getLogger(__name__).debug(
-        '%s has no fast mode; running with the normal spec', bro_name
+        '%s has no fast mode; running with the normal spec', bro_class.__name__
       )
   if effort is not None:
     spec = spec.with_effort(effort)
-  if spec is cls.llm_spec:
+  return None if spec is bro_class.llm_spec else spec
+
+
+def create_bro_for_run(bro_name: str, *, fast: bool, effort: Optional[str] = None) -> Bro:
+  """instantiate the bro for an in-process run, with the `run_llm_spec`
+  override applied when one is needed."""
+  from bro.registry import create_bro, get_class
+
+  if not fast and effort is None:
     return create_bro(bro_name)
-  return cls.create(spec)
+  bro_class = get_class(bro_name)
+  spec = run_llm_spec(bro_class, fast=fast, effort=effort)
+  if spec is None:
+    return create_bro(bro_name)
+  return bro_class.create(spec)
 
 
 def maybe_containerize(

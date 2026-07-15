@@ -394,12 +394,18 @@ def _command_fork(client: TrailsClient, args: dict, colors: _Colors) -> int:
   parent_trail = fetch_recorded_trail(client, trail_id)
   log.info('forking at step %s (%d steps in prefix)', step_id, len(parent_trail.steps))
 
-  bro = fork(parent_trail, step_id, record=not no_record)
-  new_trail_id = getattr(bro._tracker, '_trail_id', None)
+  bro = fork(
+    parent_trail,
+    step_id,
+    record=not no_record,
+    # a fork of a fork replays its ancestor prefix through the same reader
+    fetch_parent=lambda parent_id: fetch_recorded_trail(client, parent_id),
+  )
+  new_trail_id = bro.trail_id
   fork_banner = (
     f'forked {_short(trail_id)}@{_short(step_id)} as {colors.yellow}{bro.name}{colors.reset}'
   )
-  if new_trail_id is not None and len(new_trail_id) > 0:
+  if new_trail_id is not None:
     fork_banner += f'  new trail: {colors.yellow}{new_trail_id}{colors.reset}'
   print(fork_banner, file=sys.stderr)
   if no_record:

@@ -19,6 +19,8 @@ from textual.widgets import Input, Static
 from bro.bros.bro import Bro
 from bro.show import format_card
 from do._trace_format import compact_value, oneline, truncate
+from do.call import DATE_FORMAT
+from do.resume import HistoryMessage
 from llm.observer import Observer
 
 _TRACE_VALUE_LIMIT = 200
@@ -129,7 +131,7 @@ class DateSeparator(Static):
   """
 
   def __init__(self, when: date):
-    super().__init__(when.strftime('%a, %b %-d, %Y'))
+    super().__init__(when.strftime(DATE_FORMAT))
 
 
 class TypingIndicator(Container):
@@ -207,10 +209,13 @@ class ChatApp(App):
     Binding('grave_accent', 'show_stats', show=False, priority=True),
   ]
 
-  def __init__(self, bro: Bro, initial: str):
+  def __init__(
+    self, bro: Bro, initial: Optional[str], history: Optional[list[HistoryMessage]] = None
+  ):
     super().__init__()
     self._bro = bro
     self._initial = initial
+    self._history = history if history is not None else []
     self._last_date: Optional[date] = None
     self._typing: Optional[TypingIndicator] = None
     self._typing_step = 0
@@ -222,8 +227,15 @@ class ChatApp(App):
   async def on_mount(self) -> None:
     self.query_one('#input-bar', Input).focus()
     self.set_interval(0.4, self._tick_typing, pause=False)
+    # a resumed conversation's prior exchanges come first, under their own
+    # date separators; the banner then opens the live session
+    for message in self._history:
+      if message.by_user:
+        self._append_user_message(message.text, when=message.when)
+      else:
+        self._append_bro_message(message.text, when=message.when)
     self._append_banner()
-    if len(self._initial) > 0:
+    if self._initial is not None and len(self._initial) > 0:
       await self._submit(self._initial)
 
   def _append_banner(self) -> None:
@@ -232,7 +244,7 @@ class ChatApp(App):
     conversation. the visual banner carries ANSI, decoded for Rich here."""
     from cw import render_banner
 
-    self._maybe_add_date_separator()
+    self._maybe_add_date_separator(date.today())
     # pass the bro name so the logo shows even though a `call` container doesn't
     # forward CW_BRO.
     bubble = MessageBubble(
@@ -255,17 +267,19 @@ class ChatApp(App):
     event.input.value = ''
     await self._submit(text)
 
-  def _append_user_message(self, text: str) -> None:
-    self._maybe_add_date_separator()
-    bubble = MessageBubble(text, by_user=True, when=datetime.now())
+  def _append_user_message(self, text: str, when: Optional[datetime] = None) -> None:
+    when = when if when is not None else datetime.now()
+    self._maybe_add_date_separator(when.date())
+    bubble = MessageBubble(text, by_user=True, when=when)
     self.query_one('#history', VerticalScroll).mount(BubbleRow(bubble, by_user=True))
     self._scroll_to_end()
 
-  def _append_bro_message(self, text: str) -> None:
-    self._maybe_add_date_separator()
+  def _append_bro_message(self, text: str, when: Optional[datetime] = None) -> None:
+    when = when if when is not None else datetime.now()
+    self._maybe_add_date_separator(when.date())
     # replies are markdown-authored — render them (bold, lists, fenced code,
     # hyperlinks) instead of showing the raw syntax.
-    bubble = MessageBubble(ChatMarkdown(text), by_user=False, when=datetime.now())
+    bubble = MessageBubble(ChatMarkdown(text), by_user=False, when=when)
     self.query_one('#history', VerticalScroll).mount(BubbleRow(bubble, by_user=False))
     self._scroll_to_end()
 
@@ -278,11 +292,10 @@ class ChatApp(App):
     )
     self._scroll_to_end()
 
-  def _maybe_add_date_separator(self) -> None:
-    today = date.today()
-    if self._last_date != today:
-      self.query_one('#history', VerticalScroll).mount(DateSeparator(today))
-      self._last_date = today
+  def _maybe_add_date_separator(self, day: date) -> None:
+    if self._last_date != day:
+      self.query_one('#history', VerticalScroll).mount(DateSeparator(day))
+      self._last_date = day
 
   def _scroll_to_end(self) -> None:
     self.call_after_refresh(
@@ -316,7 +329,7 @@ class ChatApp(App):
     # animation). bridge UI updates back via call_from_thread.
     observer = TUIRenderer(self)
     try:
-      reply = asyncio.run(self._bro.send(text, observer=observer))
+      reply = asyncio.run(self._bro.send(text, observer=observer, entry_point='call'))
     except Exception as e:
       reply = f'[error] {type(e).__name__}: {e}'
     self.call_from_thread(self._on_reply, reply)

@@ -190,6 +190,15 @@ class TrailsClient:
     except json.JSONDecodeError:
       return raw.decode('utf-8')
 
+  def resolve_body(self, body: Any) -> Any:
+    """return a step body's full content: the body itself when inline, the
+    fetched content when it is a spill descriptor (`{'s3', 'url', 'size'}`).
+    """
+    url = _spill_url(body)
+    if url is None:
+      return body
+    return self.fetch_spilled_body(url)
+
   def _get(self, path: str, query: dict[str, str]) -> dict:
     if len(query) > 0:
       path = f'{path}?{urlencode(query)}'
@@ -324,10 +333,7 @@ def fetch_recorded_trail(client: TrailsClient, trail_id: str) -> RecordedTrail:
   header = trail_from_header(client.get_trail(trail_id))
   steps = []
   for row in client.iter_steps(trail_id):
-    url = _spill_url(row.get('body'))
-    if url is not None:
-      # follow the descriptor so the rehydrated step carries the full body;
-      # large `llm_call.response.output`s would otherwise be lost from replay.
-      row = {**row, 'body': client.fetch_spilled_body(url)}
-    steps.append(step_from_row(row))
+    # follow any spill descriptor so the rehydrated step carries the full body;
+    # large `llm_call.response.output`s would otherwise be lost from replay.
+    steps.append(step_from_row({**row, 'body': client.resolve_body(row.get('body'))}))
   return RecordedTrail(header=header, steps=steps)

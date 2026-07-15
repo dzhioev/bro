@@ -396,8 +396,59 @@ class TestBroSend:
     # start_trail fires once — interactive trails span the whole conversation.
     assert [c[0] for c in calls] == ['start']
     assert calls[0][1]['interactive'] is True
-    assert calls[0][1]['entry_point'] == 'http'
+    assert calls[0][1]['entry_point'] == 'send'
     assert calls[0][1]['bro'] == 'send-bro'
+    assert bro.trail_id == 'tid'
+
+  @pytest.mark.asyncio
+  async def test_send_labels_trail_with_callers_entry_point(self):
+    calls: list[str] = []
+
+    class RecordingTracker(NullTracker):
+      def start_trail(self, bro, llm_spec, system_prompt, parent, interactive, entry_point) -> str:
+        calls.append(entry_point)
+        return 'tid'
+
+    class SendBro(BaseBro):
+      name = 'send-bro'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+      def _create_llm(self, *, interactive: bool):
+        return MockLLM()
+
+    bro = SendBro()
+    await bro.send('first', tracker=RecordingTracker(), entry_point='call')
+    # entry_point labels the trail header, so only the opening send matters
+    await bro.send('second', entry_point='ignored')
+    assert calls == ['call']
+
+  @pytest.mark.asyncio
+  async def test_send_rebinds_observer_on_later_sends(self):
+    # a preseeded bro (bro.fork) builds its LLM before the interactive surface
+    # exists; the surface's renderer must take effect when attached later.
+    class MarkerObserver(NullObserver):
+      pass
+
+    class WireBro(BaseBro):
+      name = 'wire-send'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+      def _create_llm(self, *, interactive: bool):
+        return MockLLM()
+
+    bro = WireBro()
+    await bro.send('first')
+    assert bro._llm is not None
+    attached = MarkerObserver()
+    await bro.send('second', observer=attached)
+    assert bro._observer is attached
+    assert bro._llm.observer is attached
 
   @pytest.mark.asyncio
   async def test_send_subsequent_calls_only_user(self):

@@ -27,6 +27,7 @@ model wouldn't have used the prior model's thinking anyway.
 """
 
 import json
+from collections.abc import Callable
 from typing import Any, Optional, cast
 
 import llm.llms.chat_gpt
@@ -36,13 +37,24 @@ from llm.llm import LLM, LLMSpec
 from llm.tracker import NullTracker, Parent, RecordedTrail, Step, Tracker
 
 
-def replay_messages(trail: RecordedTrail, up_to_step_id: str) -> list[dict]:
+def replay_messages(
+  trail: RecordedTrail,
+  up_to_step_id: str,
+  *,
+  fetch_parent: Optional[Callable[[str], RecordedTrail]] = None,
+) -> list[dict]:
   """walk the trail's steps up to (and including) `up_to_step_id` and rebuild
   the OpenAI input list needed to resume the conversation from that point.
 
   layout of the returned list:
   - `{'role': 'system', 'content': <prompt>}` at index 0, taken from the
     trail's `system_prompt` step.
+  - the ancestor prefix, when the trail is itself a fork: a fork trail's own
+    steps carry only the post-fork suffix, so the prefix is rebuilt by
+    recursing through `fetch_parent(trail_id)` (each parent replayed up to its
+    fork step, its system message dropped — the youngest trail's recorded
+    prompt stands for the whole conversation). a fork trail replayed without
+    `fetch_parent` raises rather than silently truncating the conversation.
   - `{'role': 'user', 'content': <text>}` for each `user_input`.
   - each `llm_call`'s `response.output` items appended in order — these carry
     intact `call_id`s on `function_call` items, which is what makes correct
@@ -52,20 +64,22 @@ def replay_messages(trail: RecordedTrail, up_to_step_id: str) -> list[dict]:
     `tool_result`. dict outputs are JSON-encoded to match the wire format
     `ChatGPT._execute_tool_calls` uses.
 
-  legal fork points (the caller is responsible for picking one): right after
-  the first `user_input`, right after any terminal `llm_call`, right after any
-  later `user_input`. forking mid-tool-loop (right after an `llm_call` whose
-  outputs include unanswered `function_call`s) produces an input the model
-  cannot consume.
+  legal fork points (the caller is responsible for picking one — or asking
+  `latest_fork_point` for the trail's newest one): right after the first
+  `user_input`, right after any terminal `llm_call`, right after any later
+  `user_input`, right after a `tool_result` that completes its turn's calls,
+  or the `system_prompt` step of a fork trail (an empty continuation — the
+  replay is exactly the ancestor prefix). forking mid-tool-loop (right after
+  an `llm_call` whose outputs include unanswered `function_call`s) produces an
+  input the model cannot consume.
 
   raises `ValueError` if the trail has no `system_prompt` step or if
   `up_to_step_id` does not appear in it.
   """
   system_text = _extract_system_prompt(trail)
   result: list[dict] = [{'role': 'system', 'content': system_text}]
+  result.extend(_ancestor_items(trail, fetch_parent))
   for step in trail.steps:
-    if step.kind == 'system_prompt':
-      continue
     if step.kind == 'user_input':
       result.append({'role': 'user', 'content': step.body})
     elif step.kind == 'llm_call':
@@ -78,12 +92,70 @@ def replay_messages(trail: RecordedTrail, up_to_step_id: str) -> list[dict]:
           'output': _encode_tool_output(step.body),
         }
       )
-    # reasoning, assistant, tool_call, end, error: not separately appended —
-    # the `llm_call` step's `response.output` already carries the canonical
-    # output items (reasoning / message / function_call) for that turn.
+    # system_prompt, reasoning, assistant, tool_call, end, error: not
+    # separately appended — the prompt is already at index 0, and the
+    # `llm_call` step's `response.output` carries the canonical output items
+    # (reasoning / message / function_call) for its turn.
     if step.step_id == up_to_step_id:
       return result
   raise ValueError(f'step_id {up_to_step_id!r} not found in trail {trail.header.trail_id!r}')
+
+
+def _ancestor_items(
+  trail: RecordedTrail, fetch_parent: Optional[Callable[[str], RecordedTrail]]
+) -> list[dict]:
+  parent = trail.header.parent
+  if parent is None:
+    return []
+  if fetch_parent is None:
+    raise ValueError(
+      f'trail {trail.header.trail_id!r} is a fork of {parent.trail_id!r}; '
+      'pass fetch_parent to rebuild the ancestor prefix'
+    )
+  parent_trail = fetch_parent(parent.trail_id)
+  # drop the parent's leading system message — the child's own recorded prompt
+  # (already at index 0 of the caller's list) stands for the conversation.
+  return replay_messages(parent_trail, parent.step_id, fetch_parent=fetch_parent)[1:]
+
+
+def latest_fork_point(trail: RecordedTrail) -> str:
+  """the step id of the newest legal fork point — where a resume continues from.
+
+  walks the steps tracking the turn's unanswered `function_call`s; a step
+  qualifies when nothing is pending after it: a `user_input`, an `llm_call`
+  with no function calls in its output, or the `tool_result` that answers its
+  turn's last call. a trail killed mid-tool-loop thus resumes from the last
+  consistent point before the unanswered call. for a fork trail the
+  `system_prompt` step qualifies as the floor — an empty continuation still
+  resumes, through the ancestor prefix its parent pointer carries.
+
+  raises `ValueError` when the trail has no step to resume from (a parentless
+  trail with no user input recorded).
+  """
+  last_good: Optional[str] = None
+  pending: set[str] = set()
+  for step in trail.steps:
+    if step.kind == 'system_prompt':
+      if trail.header.parent is not None and last_good is None:
+        last_good = step.step_id
+    elif step.kind == 'user_input':
+      if len(pending) == 0:
+        last_good = step.step_id
+    elif step.kind == 'llm_call':
+      pending = {
+        item['call_id']
+        for item in _response_output_items(step.body)
+        if item.get('type') == 'function_call' and 'call_id' in item
+      }
+      if len(pending) == 0:
+        last_good = step.step_id
+    elif step.kind == 'tool_result':
+      pending.discard(step.extras.get('call_id'))
+      if len(pending) == 0:
+        last_good = step.step_id
+  if last_good is None:
+    raise ValueError(f'trail {trail.header.trail_id!r} has no step to resume from')
+  return last_good
 
 
 def fork(
@@ -94,6 +166,8 @@ def fork(
   system_prompt: Optional[str] = None,
   record: bool = True,
   tracker: Optional[Tracker] = None,
+  entry_point: str = 'fork',
+  fetch_parent: Optional[Callable[[str], RecordedTrail]] = None,
 ) -> Bro:
   """spin up a fresh `Bro` preseeded with the parent trail's prefix up to
   `up_to_step_id`. call `.send(next_message)` on the returned bro to continue
@@ -106,12 +180,17 @@ def fork(
 
   the replay path is picked automatically: same-provider + same-model + fork
   at an `llm_call` step + no `system_prompt` override → server-side via
-  `previous_response_id`. otherwise → client-side message replay.
+  `previous_response_id`. otherwise → client-side message replay, which needs
+  `fetch_parent` when the parent trail is itself a fork (see
+  `replay_messages`).
 
   `record=False` pins the new bro to a `NullTracker` — handy for one-shot
   exploration where the fork's trail is not worth keeping. `record=True` (the
   default) uses the explicit `tracker` if given, otherwise the bro's default
   factory (production: `HTTPTracker`; tests: `NullTracker` via `conftest.py`).
+  `entry_point` labels the new trail's header — the default suits the generic
+  `trails fork`; a surface with its own resume flow passes its own label
+  (`call --resume` passes 'call' so the continuation is itself resumable).
   """
   bro = create_bro(parent_trail.header.bro)
   spec = llm_spec if llm_spec is not None else LLMSpec.from_dict(parent_trail.header.llm_spec)
@@ -145,7 +224,7 @@ def fork(
   if use_server_side:
     _seed_response_id(inner_llm, fork_step.extras['response_id'])
   else:
-    prefix = replay_messages(parent_trail, up_to_step_id)
+    prefix = replay_messages(parent_trail, up_to_step_id, fetch_parent=fetch_parent)
     if system_prompt is not None:
       prefix[0] = {'role': 'system', 'content': system_prompt}
     _preseed(inner_llm, prefix)
@@ -160,14 +239,15 @@ def fork(
     step_id=up_to_step_id,
     relationship='fork',
   )
-  bro._tracker.start_trail(
+  trail_id = bro._tracker.start_trail(
     bro=bro.name,
     llm_spec=spec.dump(),
     system_prompt=effective_system_prompt,
     parent=parent,
     interactive=True,
-    entry_point='fork',
+    entry_point=entry_point,
   )
+  bro.trail_id = trail_id if len(trail_id) > 0 else None
   return bro
 
 

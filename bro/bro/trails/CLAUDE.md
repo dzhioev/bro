@@ -25,7 +25,7 @@ Trails is the recording pipeline for bro runs: every `BaseBro.run()` / `.send()`
 
 ## Layout
 
-- `client.py` — `TrailsClient` over the read endpoints (`list_trails` / `get_trail` / `get_steps` + `iter_*` cursor helpers); `default_client()` resolves the `trails` secret; `fetch_recorded_trail(client, trail_id)` rehydrates a header + steps into the `llm.tracker` dataclasses that `bro.fork.fork()` consumes — following the server's `{s3,url,size}` presigned-URL descriptor for any spilled body so fork replay gets the full `llm_call.response.output` (the CLI's `list`/`show` keep the lazy descriptor)
+- `client.py` — `TrailsClient` over the read endpoints (`list_trails` / `get_trail` / `get_steps` + `iter_*` cursor helpers); `default_client()` resolves the `trails` secret; `fetch_recorded_trail(client, trail_id)` rehydrates a header + steps into the `llm.tracker` dataclasses that `bro.fork.fork()` consumes — following the server's `{s3,url,size}` presigned-URL descriptor for any spilled body (via `resolve_body`, also exposed for callers that resolve selectively, like `call --resume`'s history extraction) so fork replay gets the full `llm_call.response.output` (the CLI's `list`/`show` keep the lazy descriptor)
 - `cli.py` (`trails`) — `list` / `show` / `tree` / `fork` subcommands; counterpart to `sessions` / `rewind` for recorded bros
 - `server/server.py` (`trails-server`) — aiohttp HTTP API: bearer-token auth middleware, request validation, storage exceptions → HTTP statuses
 - `server/storage.py` — DynamoDB + S3 mechanics: step write + header-aggregate update are one `TransactWriteItems`; bodies ≥ 50KB spill to S3, > 10MB rejected with 413; reads resolve spilled bodies transparently (inline < 1MB, presigned URL above); floats convert to Decimal on write and back on read (DynamoDB numbers are Decimal)
@@ -36,7 +36,7 @@ Trails is the recording pipeline for bro runs: every `BaseBro.run()` / `.send()`
 - `trails list [--bro | --parent] [--since --until --limit]` — newest first, paged through `$PAGER`; `--parent <trail_id>` lists a trail's forks
 - `trails show <trail_id> [-f] [--interval <seconds>]` — header + step listing; each step line starts with the step's full id (that is the id `fork` takes), inline bodies truncate with `... <N more chars>`, spilled bodies render as size + URL. `-f`/`--follow` streams instead of paging: it keeps polling for new steps (`--interval` seconds apart) and renders them as they land, `tail -f`-style, exiting once the trail ends (the `end` step, or `ended_at` on the header for a trail that never got one); transient server errors are logged and retried on the next tick
 - `trails tree <trail_id>` — walks parent pointers up to the root, then renders the full fork hierarchy
-- `trails fork <trail_id> <step_id> [--initial <msg>] [--no-record]` — forks at the step and drops into a `.send()` REPL
+- `trails fork <trail_id> <step_id> [--initial <msg>] [--no-record]` — forks at the step (chaining through ancestor trails when the target is itself a fork) and drops into a `.send()` REPL. For continuing a `call` conversation prefer `call <bro> --resume` (`do/CLAUDE.md`), which picks the fork point and renders the history itself
 
 The CLI keeps the parent's spec and prompt; for cross-model / cross-prompt forks call `bro.fork.fork(trail, step_id, llm_spec=…, system_prompt=…)` directly with a trail from `fetch_recorded_trail`. Fork-path selection (server-side `previous_response_id` vs client-side replay) is automatic — see `bro/fork.py`.
 

@@ -562,6 +562,11 @@ class BaseBro(ABC):
     # rather than rendering it to stderr. swapped in BaseBro.run() / .send() the
     # same way _observer is.
     self._tracker: Tracker = NullTracker()
+    # the id of the trail the current run records to — set when the trail opens
+    # (first send / run start, or by bro.fork on a preseeded bro); None until
+    # then and when recording is off. surfaces read it to point the user at the
+    # recorded conversation (e.g. `call`'s resume hint).
+    self.trail_id: Optional[str] = None
     # explicit `system_prompt=...` arg overrides MRO collection — escape hatch
     # for callers that need a dynamic prompt (e.g. PM injects current time).
     if system_prompt is not None:
@@ -734,6 +739,7 @@ class BaseBro(ABC):
       interactive=interactive,
       entry_point=entry_point,
     )
+    self.trail_id = trail_id if len(trail_id) > 0 else None
     messages = [
       {'role': 'system', 'content': system_prompt},
       {'role': 'user', 'content': input},
@@ -792,19 +798,26 @@ class BaseBro(ABC):
     observer: Optional[Observer] = None,
     tracker: Optional[Tracker] = None,
     request_timeout: Optional[float] = None,
+    entry_point: str = 'send',
   ) -> str:
     if self._llm is None:
       refusal = self._start_refusal()
       if refusal is not None:
         # in-reply report; the LLM stays unbuilt, so a later send re-checks
         return refusal
-      # observer / tracker are locked in on first send (the LLM is constructed
-      # once and holds onto whatever was set on self at that moment); later
-      # calls can't swap them.
+      # the tracker is locked in on first send (the LLM is constructed once and
+      # records one trail); later calls can't swap it. entry_point labels that
+      # trail's header — surfaces name themselves (`call`, `process-inbox`).
       self._llm, messages, _ = self._start(
-        message, interactive=True, observer=observer, tracker=tracker, entry_point='http'
+        message, interactive=True, observer=observer, tracker=tracker, entry_point=entry_point
       )
     else:
+      if observer is not None:
+        # unlike the tracker, the observer is rebindable mid-conversation: a
+        # preseeded bro (bro.fork) built its LLM before the interactive surface
+        # existed, so the surface attaches its renderer on its first send.
+        self._observer = observer
+        self._llm.observer = observer
       messages = [{'role': 'user', 'content': message}]
     return await self._llm.send(messages, request_timeout=request_timeout)
 

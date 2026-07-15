@@ -2,7 +2,7 @@ import io
 from dataclasses import dataclass
 from datetime import datetime
 from typing import ClassVar, Optional
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -210,7 +210,7 @@ class _FastlessBro(Bro):
 def test_default_invokes_spec_fast(monkeypatch):
   built: list[Bro] = []
 
-  async def fake_call_text(bro, initial):
+  async def fake_call_text(bro, initial, history=None):
     built.append(bro)
 
   # exercise the in-process path: outside a container, main() would re-exec into one.
@@ -235,7 +235,7 @@ def test_default_invokes_spec_fast(monkeypatch):
 def test_slow_flag_builds_plain_spec(monkeypatch):
   built: list[Bro] = []
 
-  async def fake_call_text(bro, initial):
+  async def fake_call_text(bro, initial, history=None):
     built.append(bro)
 
   monkeypatch.setenv('CW_IN_CONTAINER', '1')
@@ -254,7 +254,7 @@ def test_slow_flag_builds_plain_spec(monkeypatch):
 def test_default_falls_back_to_plain_when_no_fast_mode(monkeypatch):
   built: list[Bro] = []
 
-  async def fake_call_text(bro, initial):
+  async def fake_call_text(bro, initial, history=None):
     built.append(bro)
 
   monkeypatch.setenv('CW_IN_CONTAINER', '1')
@@ -325,7 +325,7 @@ def test_call_forwards_effort_into_container():
 def test_effort_flag_overrides_spec_effort(monkeypatch):
   built: list[Bro] = []
 
-  async def fake_call_text(bro, initial):
+  async def fake_call_text(bro, initial, history=None):
     built.append(bro)
 
   monkeypatch.setenv('CW_IN_CONTAINER', '1')
@@ -376,10 +376,122 @@ def test_call_no_trails_with_host_is_an_error():
     main(['call', 'ppp-dev', 'hey', '--no-trails', '--host'])
 
 
+def test_call_without_message_requires_resume(capsys):
+  rc = main(['call', 'ppp-dev'])
+  assert rc == 1
+  assert 'what is required unless --resume' in capsys.readouterr().err
+
+
+def test_call_resume_with_no_trails_is_an_error():
+  with pytest.raises(SystemExit):
+    main(['call', 'ppp-dev', '--resume', '--no-trails'])
+
+
+def test_call_forwards_resume_into_container():
+  with (
+    patch.dict('os.environ', {}, clear=False) as env,
+    patch('cw.run_in_container', return_value=0) as run,
+    patch('do.call._tty_supported', return_value=True),
+  ):
+    env.pop('CW_IN_CONTAINER', None)
+    # the bare flag resolves to the 'latest' sentinel, forwarded explicitly so
+    # the in-container run resolves the trail itself
+    rc = main(['call', 'ppp-dev', '--resume'])
+    assert rc == 0
+    (_workspace, command), _kwargs = run.call_args
+    assert command == ['call', 'ppp-dev', '--resume', 'latest', '--host']
+
+
+def test_call_forwards_resume_trail_id_with_message():
+  with (
+    patch.dict('os.environ', {}, clear=False) as env,
+    patch('cw.run_in_container', return_value=0) as run,
+    patch('do.call._tty_supported', return_value=True),
+  ):
+    env.pop('CW_IN_CONTAINER', None)
+    rc = main(['call', 'ppp-dev', 'and then?', '--resume', 'trail-id-1'])
+    assert rc == 0
+    (_workspace, command), _kwargs = run.call_args
+    assert command == ['call', 'ppp-dev', 'and then?', '--resume', 'trail-id-1', '--host']
+
+
+def test_call_resume_runs_the_resumed_bro(monkeypatch, capsys):
+  from datetime import datetime
+
+  from do.resume import HistoryMessage, ResumedCall
+
+  captured: dict = {}
+
+  async def fake_call_text(bro, initial, history=None):
+    captured['bro'] = bro
+    captured['initial'] = initial
+    captured['history'] = history
+
+  resumed_bro = RecordBro()
+  resumed_bro.trail_id = 'new-trail'
+  history = [HistoryMessage(by_user=True, text='hello', when=datetime(2026, 5, 27, 9, 0, 0))]
+
+  def fake_resume(client, bro_name, trail_ref, *, llm_spec):
+    captured['trail_ref'] = trail_ref
+    captured['llm_spec'] = llm_spec
+    return ResumedCall(bro=resumed_bro, history=history, trail_id='old-trail')
+
+  monkeypatch.setenv('CW_IN_CONTAINER', '1')
+  monkeypatch.setattr('bro.registry.get_class', lambda name: _ChatBro)
+  monkeypatch.setattr('do.resume.resume', fake_resume)
+  monkeypatch.setattr('trails.client.default_client', lambda: MagicMock())
+  monkeypatch.setattr('do.call.call_text', fake_call_text)
+  monkeypatch.setattr('do.call._tty_supported', lambda: False)
+
+  rc = main(['call', 'record', '--resume'])
+  assert rc is None
+  assert captured['trail_ref'] == 'latest'
+  # fast is the default, so the continuation runs the class spec's fast variant
+  spec = captured['llm_spec']
+  assert isinstance(spec, llm.llms.chat_gpt.LLMSpec)
+  assert spec.service_tier == 'priority'
+  assert captured['bro'] is resumed_bro
+  assert captured['initial'] is None
+  assert captured['history'] is history
+  # the exit hint points at the continuation's own trail
+  err = capsys.readouterr().err
+  assert 'call record --resume new-trail' in err
+
+
+def test_call_prints_resume_hint_when_a_trail_was_recorded(monkeypatch, capsys):
+  async def fake_call_text(bro, initial, history=None):
+    bro.trail_id = 'trail-xyz'
+
+  monkeypatch.setenv('CW_IN_CONTAINER', '1')
+  monkeypatch.setattr('bro.registry.create_bro', lambda name: RecordBro())
+  monkeypatch.setattr('do.call.call_text', fake_call_text)
+  monkeypatch.setattr('do.call._tty_supported', lambda: False)
+
+  rc = main(['call', 'record', 'hi', '--slow'])
+  assert rc is None
+  err = capsys.readouterr().err
+  assert 'conversation recorded as trail trail-xyz' in err
+  assert 'call record --resume trail-xyz' in err
+
+
+def test_call_skips_resume_hint_without_a_trail(monkeypatch, capsys):
+  async def fake_call_text(bro, initial, history=None):
+    pass
+
+  monkeypatch.setenv('CW_IN_CONTAINER', '1')
+  monkeypatch.setattr('bro.registry.create_bro', lambda name: RecordBro())
+  monkeypatch.setattr('do.call.call_text', fake_call_text)
+  monkeypatch.setattr('do.call._tty_supported', lambda: False)
+
+  rc = main(['call', 'record', 'hi', '--slow'])
+  assert rc is None
+  assert 'conversation recorded' not in capsys.readouterr().err
+
+
 def test_call_skips_container_with_host_flag(monkeypatch):
   built: list[Bro] = []
 
-  async def fake_call_text(bro, initial):
+  async def fake_call_text(bro, initial, history=None):
     built.append(bro)
 
   monkeypatch.delenv('CW_IN_CONTAINER', raising=False)
@@ -398,7 +510,7 @@ def test_call_skips_container_with_host_flag(monkeypatch):
 def test_initial_slash_invocation_passes_through_verbatim(monkeypatch):
   captured: list[str] = []
 
-  async def fake_call_text(bro, initial):
+  async def fake_call_text(bro, initial, history=None):
     captured.append(initial)
 
   monkeypatch.setenv('CW_IN_CONTAINER', '1')
