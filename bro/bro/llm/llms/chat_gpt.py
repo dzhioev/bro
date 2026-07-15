@@ -190,31 +190,32 @@ def text_to_content(text: str) -> ResponseInputTextParam:
   return ResponseInputTextParam(type='input_text', text=text)
 
 
-def extract_only_message(output: list[ResponseOutputItem]) -> ResponseOutputMessage:
-  result = None
-  for item in output:
-    if item.type == 'message':
-      if result is not None:
-        raise NotImplementedError(
-          f'output contains more then one output messages. output: {output}'
-        )
-      result = item
-  if result is None:
+def extract_reply_messages(output: list[ResponseOutputItem]) -> list[ResponseOutputMessage]:
+  messages = [item for item in output if item.type == 'message']
+  if len(messages) == 0:
     raise RuntimeError(f"output doesn't contain output messages. output: {output}")
-  return result
+  # gpt-5.6 models can emit auxiliary messages tagged with a `phase` field (a
+  # 'commentary' progress note preceding the 'final_answer' reply); the field
+  # is not in the SDK's ResponseOutputMessage, hence the getattr.
+  final_answers = [m for m in messages if getattr(m, 'phase', None) == 'final_answer']
+  return final_answers if len(final_answers) > 0 else messages
 
 
 def parse_response(response: Response) -> str:
-  message = extract_only_message(response.output)
-  chunks = []
-  for item in message.content:
-    if item.type == 'refusal':
-      raise RuntimeError('got refusal: {item.refusal}')
-    assert item.type == 'output_text'
-    chunks.append(item.text)
-  if len(chunks) == 0:
-    raise RuntimeError('no output texts in message: {response.message}')
-  return ''.join(chunks)
+  messages = extract_reply_messages(response.output)
+  texts = []
+  for message in messages:
+    chunks = []
+    for item in message.content:
+      if item.type == 'refusal':
+        raise RuntimeError(f'got refusal: {item.refusal}')
+      assert item.type == 'output_text'
+      chunks.append(item.text)
+    if len(chunks) > 0:
+      texts.append(''.join(chunks))
+  if len(texts) == 0:
+    raise RuntimeError(f'no output texts in messages: {messages}')
+  return '\n\n'.join(texts)
 
 
 def has_tool_calls(response: Response) -> bool:

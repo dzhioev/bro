@@ -7,7 +7,7 @@ from openai.types.responses import Response
 
 import llm.llm
 import usage
-from llm.llms.chat_gpt import ChatGPT, LLMSpec
+from llm.llms.chat_gpt import ChatGPT, LLMSpec, parse_response
 from llm.mcp import InProcessMCPServer, Tool, ToolControlSignal, ToolRegistry, wire_name
 from llm.tracker import Tracker
 
@@ -125,11 +125,16 @@ def _reasoning_item(*texts: str):
   )
 
 
-def _message_item(text: str):
-  return SimpleNamespace(
+def _message_item(text: str, *, phase: Optional[str] = None):
+  # the default carries no `phase` attribute at all, matching the SDK's
+  # ResponseOutputMessage; gpt-5.6 payloads add it as an extra field.
+  item = SimpleNamespace(
     type='message',
     content=[SimpleNamespace(type='output_text', text=text)],
   )
+  if phase is not None:
+    item.phase = phase
+  return item
 
 
 def _function_call_item(name: str, *, call_id: str, arguments='{}'):
@@ -456,6 +461,44 @@ class TestSendTrackerEmission:
     # llm_call at 3 — so user_input and llm_call never collide on a turn_index.
     assert user_turns == [0, 2]
     assert llm_turns == [1, 3]
+
+
+class TestParseResponse:
+  def test_single_message_text_returned(self):
+    response = _fake_response(output=[_message_item('hello')])
+    assert parse_response(response) == 'hello'
+
+  def test_final_answer_phase_preferred_over_commentary(self):
+    # the gpt-5.6 multi-message shape: a commentary-phase progress note, a
+    # reasoning item, then the final_answer-phase reply
+    response = _fake_response(
+      output=[
+        _message_item('closing the task out', phase='commentary'),
+        _reasoning_item('finalizing'),
+        _message_item('PR merged; task closed', phase='final_answer'),
+      ]
+    )
+    assert parse_response(response) == 'PR merged; task closed'
+
+  def test_multiple_messages_without_phase_concatenated_in_order(self):
+    response = _fake_response(output=[_message_item('part one'), _message_item('part two')])
+    assert parse_response(response) == 'part one\n\npart two'
+
+  def test_no_message_items_raises(self):
+    response = _fake_response(output=[_reasoning_item('only thinking')])
+    with pytest.raises(RuntimeError, match="doesn't contain output messages"):
+      parse_response(response)
+
+  def test_messages_without_text_raise(self):
+    response = _fake_response(output=[SimpleNamespace(type='message', content=[])])
+    with pytest.raises(RuntimeError, match='no output texts'):
+      parse_response(response)
+
+  def test_refusal_raises_with_refusal_text(self):
+    refusal = SimpleNamespace(type='refusal', refusal='cannot help with that')
+    response = _fake_response(output=[SimpleNamespace(type='message', content=[refusal])])
+    with pytest.raises(RuntimeError, match='cannot help with that'):
+      parse_response(response)
 
 
 class TestReasoningKwargs:
