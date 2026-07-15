@@ -14,7 +14,7 @@ from do._cli import (
   EFFORT_HELP,
   GRANT_CRED_HELP,
   GRANT_SUMMON_HELP,
-  HOST_HELP,
+  IN_PLACE_HELP,
   INTO_HELP,
   NO_TRAILS_HELP,
   REVOKE_CRED_HELP,
@@ -127,7 +127,7 @@ async def call_text(
 
   # opening bro message: the cw banner (session environment facts), before the
   # first user message is sent. visual form — its ANSI renders in the terminal.
-  # pass the bro name so the logo shows on an in-process (--host) run, whose
+  # pass the bro name so the logo shows on an in-process (--in-place) run, whose
   # environment doesn't carry this bro's CW_BRO.
   print(f'[{now().strftime("%H:%M:%S")}] {bro.name}:')
   print(render_banner(llm=False, bro=bro.name))
@@ -168,10 +168,10 @@ def main(argv: list[str]) -> Optional[int]:
   )
   parser.add_argument('--slow', action='store_true', help=SLOW_HELP)
   parser.add_argument('--effort', choices=EFFORT_LEVELS, default=None, help=EFFORT_HELP)
-  parser.add_argument('--host', action='store_true', help=HOST_HELP)
+  parser.add_argument('--in-place', action='store_true', help=IN_PLACE_HELP)
   parser.add_argument('--no-trails', dest='no_trails', action='store_true', help=NO_TRAILS_HELP)
-  # --no-trails acts only on the container hop; --host has no hop to act on.
-  parser.add_exclusive_groups(['host'], ['no_trails'])
+  # --no-trails acts only on the container hop; --in-place has no hop to act on.
+  parser.add_exclusive_groups(['in_place'], ['no_trails'])
   # a resume reads the recorded trail and records the continuation — both need
   # the trails sink --no-trails turns off.
   parser.add_exclusive_groups(['resume'], ['no_trails'])
@@ -213,7 +213,7 @@ def main(argv: list[str]) -> Optional[int]:
     cli_name='call',
     bro_name=args['bro'],
     inner_args=inner_args,
-    host=args['host'],
+    in_place=args['in_place'],
     no_trails=args['no_trails'],
     grant_cred=args['grant_cred'],
     revoke_cred=args['revoke_cred'],

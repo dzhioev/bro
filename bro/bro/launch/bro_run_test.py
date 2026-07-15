@@ -2,9 +2,9 @@ import bro_run
 from cw.constants import bro_git_identity_env
 
 
-def test_describe_composes_the_host_pinned_command():
+def test_describe_composes_the_in_place_pinned_command():
   launch = bro_run.describe('ppp-dev', ['hi', '--slow'], cli_name='call')
-  assert launch.command == ['call', 'ppp-dev', 'hi', '--slow', '--host']
+  assert launch.command == ['call', 'ppp-dev', 'hi', '--slow', '--in-place']
 
 
 def test_describe_env_carries_identity_and_bro():

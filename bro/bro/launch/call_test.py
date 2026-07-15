@@ -288,7 +288,7 @@ def test_call_re_execs_into_container_when_outside():
     assert workspace.startswith('call-ppp-dev-')
     # host is a tty → the TUI runs in-container, so no --text is forwarded; fast is the
     # default so no --slow either
-    assert command == ['call', 'ppp-dev', 'hey', '--host']
+    assert command == ['call', 'ppp-dev', 'hey', '--in-place']
     assert kwargs['drop'] is True
     # ppp-dev's manifest (github + brog) plus the mandatory trails sink
     assert {'github', 'brog', 'trails'} <= kwargs['secrets']
@@ -308,7 +308,7 @@ def test_call_forwards_text_when_host_not_a_tty():
     (_workspace, command), _kwargs = run.call_args
     # host can't back the TUI → force text mode inside the container (the container's
     # PTY always reports a TTY, so the decision has to be made here on the host)
-    assert command == ['call', 'ppp-dev', 'hey', '--text', '--host']
+    assert command == ['call', 'ppp-dev', 'hey', '--text', '--in-place']
 
 
 def test_call_forwards_effort_into_container():
@@ -322,7 +322,7 @@ def test_call_forwards_effort_into_container():
     assert rc == 0
     (_workspace, command), _kwargs = run.call_args
     # --effort is forwarded like --slow; the in-container run applies with_effort
-    assert command == ['call', 'ppp-dev', 'hey', '--effort', 'high', '--host']
+    assert command == ['call', 'ppp-dev', 'hey', '--effort', 'high', '--in-place']
 
 
 def test_effort_flag_overrides_spec_effort(monkeypatch):
@@ -369,7 +369,7 @@ def test_call_no_trails_disables_recording_in_container():
     assert rc == 0
     (_workspace, command), kwargs = run.call_args
     # the env var carries the effect in, so --no-trails isn't forwarded into the inner argv
-    assert command == ['call', 'ppp-dev', 'hey', '--host']
+    assert command == ['call', 'ppp-dev', 'hey', '--in-place']
     assert 'trails' not in kwargs['secrets']
     assert kwargs['extra_env'] == {
       'CW_BRO': 'ppp-dev',
@@ -378,9 +378,14 @@ def test_call_no_trails_disables_recording_in_container():
     }
 
 
-def test_call_no_trails_with_host_is_an_error():
+def test_call_no_trails_with_in_place_is_an_error():
   with pytest.raises(SystemExit):
-    main(['call', 'ppp-dev', 'hey', '--no-trails', '--host'])
+    main(['call', 'ppp-dev', 'hey', '--no-trails', '--in-place'])
+
+
+def test_call_rejects_removed_host_flag():
+  with pytest.raises(SystemExit):
+    main(['call', 'ppp-dev', 'hey', '--host'])
 
 
 def test_call_without_message_requires_resume(capsys):
@@ -406,7 +411,7 @@ def test_call_forwards_resume_into_container():
     rc = main(['call', 'ppp-dev', '--resume'])
     assert rc == 0
     (_workspace, command), _kwargs = run.call_args
-    assert command == ['call', 'ppp-dev', '--resume', 'latest', '--host']
+    assert command == ['call', 'ppp-dev', '--resume', 'latest', '--in-place']
 
 
 def test_call_forwards_resume_trail_id_with_message():
@@ -419,7 +424,7 @@ def test_call_forwards_resume_trail_id_with_message():
     rc = main(['call', 'ppp-dev', 'and then?', '--resume', 'trail-id-1'])
     assert rc == 0
     (_workspace, command), _kwargs = run.call_args
-    assert command == ['call', 'ppp-dev', 'and then?', '--resume', 'trail-id-1', '--host']
+    assert command == ['call', 'ppp-dev', 'and then?', '--resume', 'trail-id-1', '--in-place']
 
 
 def test_call_resume_runs_the_resumed_bro(monkeypatch, capsys):
@@ -495,7 +500,7 @@ def test_call_skips_resume_hint_without_a_trail(monkeypatch, capsys):
   assert 'conversation recorded' not in capsys.readouterr().err
 
 
-def test_call_skips_container_with_host_flag(monkeypatch):
+def test_call_skips_container_with_in_place_flag(monkeypatch):
   built: list[Bro] = []
 
   async def fake_call_text(bro, initial, history=None):
@@ -508,7 +513,7 @@ def test_call_skips_container_with_host_flag(monkeypatch):
   with patch('cw.run_in_container') as run:
     # --slow routes through the patched create_bro; the container-skip behavior
     # under test is independent of fast/slow.
-    rc = main(['call', 'record', 'hi', '--host', '--slow'])
+    rc = main(['call', 'record', 'hi', '--in-place', '--slow'])
   assert rc is None
   assert run.call_count == 0
   assert len(built) == 1

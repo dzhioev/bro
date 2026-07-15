@@ -17,7 +17,7 @@ from bro.bros.bro import Bro
 from llm.llm import LLMSpec
 from llm.observer import Observer
 
-# shared flag help so all three CLIs describe `--slow` / `--host` identically.
+# shared flag help so all three CLIs describe `--slow` / `--in-place` identically.
 # fast mode is the default for these CLIs; --slow opts back out to the plain spec.
 SLOW_HELP = (
   "disable the bro's fast-mode LLM knob, which is on by default here "
@@ -31,13 +31,13 @@ EFFORT_HELP = (
   "at xhigh); without the flag the bro's own spec stands. errors when the provider "
   'has no effort knob'
 )
-HOST_HELP = (
+IN_PLACE_HELP = (
   'run the bro in the calling process: skip the scoped-container hop (on the '
   'host) or the host-relayed full launch (inside a container)'
 )
 TIMEOUT_HELP = (
   'seconds before the host kills a relayed run — a container invocation without '
-  f'--host relays through the host summon path (default: {summon_client.DEFAULT_TIMEOUT:.0f}); '
+  f'--in-place relays through the host summon path (default: {summon_client.DEFAULT_TIMEOUT:.0f}); '
   'errors when the run is not relayed'
 )
 NO_TRAILS_HELP = (
@@ -110,7 +110,7 @@ def maybe_containerize(
   cli_name: str,
   bro_name: str,
   inner_args: list[str],
-  host: bool,
+  in_place: bool,
   no_trails: bool = False,
   grant_cred: Optional[list[str]] = None,
   revoke_cred: Optional[list[str]] = None,
@@ -122,9 +122,9 @@ def maybe_containerize(
   container and return its exit code, or return None so the caller runs in the
   calling process.
 
-  the hop is skipped when `--host` was passed or when already inside a container
+  the hop is skipped when `--in-place` was passed or when already inside a container
   (`CW_IN_CONTAINER`, set by the container). the hopped command itself carries
-  `--host`, pinning the inner run in-process — without it an in-container
+  `--in-place`, pinning the inner run in-process — without it an in-container
   `ask`/`do-task` would relay itself back to the host (the relay branch in
   `run()`); `call` has no relay, so its in-container invocations land here and
   skip via `CW_IN_CONTAINER`. otherwise the launch is the shared bro-run
@@ -146,15 +146,15 @@ def maybe_containerize(
   `revoke_summon` adjust the bro's summon allow-list the same way
   (`cw.summon_allow_list` over its `may_summon` defaults). those four and `into`
   are host-side only — not threaded into the inner command — so passing any when
-  the hop is skipped (`--host` / already in-container) is a no-op the
-  caller didn't get, hence an error: host mode is unscoped, has no broker root,
-  and runs no clone. returns 1 (printing to stderr) on any misuse so the caller
-  exits non-zero."""
+  the hop is skipped (`--in-place` / already in-container) is a no-op the
+  caller didn't get, hence an error: the in-place path creates no credential scope or
+  broker root and runs no clone. returns 1 (printing to stderr) on any misuse so the
+  caller exits non-zero."""
   grant_cred = grant_cred if grant_cred is not None else []
   revoke_cred = revoke_cred if revoke_cred is not None else []
   grant_summon = grant_summon if grant_summon is not None else []
   revoke_summon = revoke_summon if revoke_summon is not None else []
-  if host or os.environ.get('CW_IN_CONTAINER') is not None:
+  if in_place or os.environ.get('CW_IN_CONTAINER') is not None:
     if (
       len(grant_cred) > 0
       or len(revoke_cred) > 0
@@ -164,7 +164,7 @@ def maybe_containerize(
     ):
       print(
         '--grant-cred/--revoke-cred/--grant-summon/--revoke-summon/--into require '
-        'containerization (not valid with --host)',
+        'containerization (not valid with --in-place)',
         file=sys.stderr,
       )
       return 1
@@ -235,7 +235,7 @@ def _relay_through_host(
   depth cap. blocks and relays the answer (`summon.relay_summon`)."""
   if os.environ.get('BROKER_CHANNEL') is None:
     print(
-      'no broker channel to relay through; pass --host to run the bro in this process',
+      'no broker channel to relay through; pass --in-place to run the bro in this process',
       file=sys.stderr,
     )
     return 1
@@ -272,10 +272,10 @@ def run(
   )
   parser.add_argument('--slow', action='store_true', help=SLOW_HELP)
   parser.add_argument('--effort', choices=EFFORT_LEVELS, default=None, help=EFFORT_HELP)
-  parser.add_argument('--host', action='store_true', help=HOST_HELP)
+  parser.add_argument('--in-place', action='store_true', help=IN_PLACE_HELP)
   parser.add_argument('--no-trails', dest='no_trails', action='store_true', help=NO_TRAILS_HELP)
-  # --no-trails acts only on the container hop; --host has no hop to act on.
-  parser.add_exclusive_groups(['host'], ['no_trails'])
+  # --no-trails acts only on the container hop; --in-place has no hop to act on.
+  parser.add_exclusive_groups(['in_place'], ['no_trails'])
   parser.add_argument(
     '--grant-cred', action='append', default=None, metavar='SECRET', help=GRANT_CRED_HELP
   )
@@ -304,12 +304,12 @@ def run(
     except ValueError:
       pass
 
-  if os.environ.get('CW_IN_CONTAINER') is not None and not args['host']:
+  if os.environ.get('CW_IN_CONTAINER') is not None and not args['in_place']:
     blocked = _relay_blocked_flags(args)
     if len(blocked) > 0:
       print(
         f'{"/".join(blocked)} cannot ride a host-relayed run (the host launches '
-        f'{args["bro"]} with its own defaults); pass --host to run in this process',
+        f'{args["bro"]} with its own defaults); pass --in-place to run in this process',
         file=sys.stderr,
       )
       return 1
@@ -319,7 +319,7 @@ def run(
     )
   if args['timeout'] is not None:
     print(
-      '--timeout only bounds a host-relayed run (a container invocation without --host)',
+      '--timeout only bounds a host-relayed run (a container invocation without --in-place)',
       file=sys.stderr,
     )
     return 1
@@ -335,7 +335,7 @@ def run(
     cli_name=cli_name,
     bro_name=args['bro'],
     inner_args=inner_args,
-    host=args['host'],
+    in_place=args['in_place'],
     no_trails=args['no_trails'],
     grant_cred=args['grant_cred'],
     revoke_cred=args['revoke_cred'],

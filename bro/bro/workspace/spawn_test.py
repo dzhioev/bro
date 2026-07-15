@@ -466,7 +466,7 @@ class TestSummonLowering:
     )
     lowered = cw.spawn._lower_summon(launch)
     assert lowered == cw.spawn.DockerLaunchSpec(
-      command=['ask', 'devoops', 'deploy the thing', '--host'],
+      command=['ask', 'devoops', 'deploy the thing', '--in-place'],
       env={
         'CW_BASE_REF': 'PARENT-SHA',
         'CW_BRO': 'devoops',
@@ -529,7 +529,7 @@ class TestSummonLowering:
     await spawner.spawn(launch, channel)
     [(lowered, lowered_channel)] = docker.spawned
     assert isinstance(lowered, cw.spawn.DockerLaunchSpec)
-    assert lowered.command == ['ask', 'devoops', 'p', '--host']
+    assert lowered.command == ['ask', 'devoops', 'p', '--in-place']
     assert lowered_channel is channel
 
   @pytest.mark.asyncio
