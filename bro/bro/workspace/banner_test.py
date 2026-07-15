@@ -148,21 +148,19 @@ class TestRenderBanner:
     assert 'workspace_container_path: /workspace' in out
     assert 'docker_shell_command: cw exec task' in out
     assert 'cw_command: cw ss --persona pm task' in out
-    assert 'launch_command: dive-in -t x' in out
+    assert 'launch_command:' not in out
+    assert 'dive-in -t x' not in out
 
-  def test_llm_excludes_prompt_to_save_context(self):
-    # the LLM already has the prompt as its first message — re-emitting it
-    # would just burn tokens. launch_command keeps the trailing marker as the
-    # signal that a seed prompt exists, but the body itself is omitted.
+  def test_llm_excludes_launch_prompt(self):
     out = _facts(shell_command='dive-in --new ', prompt='I want X').render_llm()
     assert 'I want X' not in out
     assert 'prompt:' not in out
-    assert 'launch_command: dive-in --new' in out
+    assert 'launch_command:' not in out
 
-  def test_llm_suppresses_cw_command_when_equal_to_shell_command(self):
+  def test_llm_emits_cw_command_for_direct_session(self):
     out = _facts(cw_command='cw ss feature', shell_command='cw ss feature').render_llm()
-    assert 'cw_command:' not in out
-    assert 'launch_command: cw ss feature' in out
+    assert 'cw_command: cw ss feature' in out
+    assert 'launch_command:' not in out
 
   def test_llm_omits_none_fields(self):
     out = _facts(

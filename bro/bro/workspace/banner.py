@@ -206,14 +206,7 @@ class SessionFacts:
     return '\n'.join(lines)
 
   def render_llm(self) -> str:
-    """render the banner as plain key:value lines for an LLM Bash tool result.
-
-    cw_command is suppressed when it equals launch_command (no wrapper involved).
-    The user prompt is deliberately *not* emitted — the LLM already has it as
-    the first message of the conversation, so re-printing it would just burn
-    context. launch_command keeps its trailing marker (e.g. `dive-in --new `)
-    as the signal that a seed prompt exists.
-    """
+    """render the agent-facing session facts as plain key:value lines."""
     lines: list[str] = []
     if self.sync_warning is not None:
       # first line so it lands in Claude's collapsed tool-output preview without
@@ -227,9 +220,8 @@ class SessionFacts:
       ('container_workspace', 'workspace_container_path'),
       ('exec_command', 'docker_shell_command'),
     ]
-    if self.cw_command is not None and self.cw_command != self.shell_command:
+    if self.cw_command is not None:
       pairs.append(('cw_command', 'cw_command'))
-    pairs.append(('shell_command', 'launch_command'))
     for attribute, label in pairs:
       value = getattr(self, attribute)
       if value is not None:

@@ -279,8 +279,10 @@ def test_call_re_execs_into_container_when_outside():
     patch('do.call._tty_supported', return_value=True),
   ):
     env.pop('CW_IN_CONTAINER', None)
+    env.pop('PPP_SHELL_COMMAND', None)
     rc = main(['call', 'ppp-dev', 'hey'])
     assert rc == 0
+    assert env['PPP_SHELL_COMMAND'] == 'call ppp-dev hey'
     assert run.call_count == 1
     (workspace, command), kwargs = run.call_args
     assert workspace.startswith('call-ppp-dev-')

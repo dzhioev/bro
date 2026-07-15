@@ -63,8 +63,10 @@ def test_main_re_execs_into_container_when_outside():
     patch('cw.run_in_container', return_value=0) as run,
   ):
     env.pop('CW_IN_CONTAINER', None)
+    env.pop('PPP_SHELL_COMMAND', None)
     rc = main(['ask', 'ppp-dev', 'hello world', '--rich'])
     assert rc == 0
+    assert env['PPP_SHELL_COMMAND'] == 'ask --rich ppp-dev hello world'
     assert run.call_count == 1
     (workspace, command), kwargs = run.call_args
     assert workspace.startswith('ask-ppp-dev-')

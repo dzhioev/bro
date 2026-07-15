@@ -12,7 +12,7 @@ environment = FileSource(
   'environment',
   summary=(
     'session-banner playbook: how to interpret the `bro::banner` session '
-    'facts (`launch_command` / `kind` / `name`). Read at session start.'
+    'facts (`kind` / `name` / workspace paths). Read at session start.'
   ),
   path=prompts.get_prompt_path('environment.md'),
 )

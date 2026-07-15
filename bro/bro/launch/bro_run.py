@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from cw.constants import bro_git_identity_env
+from cw.paths import _containers_dir, _project_root, _worktrees_dir
 from cw.secrets import Surface, scoped_secrets
 
 
@@ -70,6 +71,12 @@ def describe(
   )
 
 
-def fresh_workspace_name(cli_name: str, bro_name: str) -> str:
-  """mint a workspace name for a launch that owns its container dir."""
-  return f'{cli_name}-{bro_name}-{secrets.token_hex(4)}'
+def fresh_workspace_name(base: str) -> str:
+  """mint a workspace name absent from both local workspace namespaces."""
+  project = _project_root()
+  worktrees = _worktrees_dir(project)
+  containers = _containers_dir(project)
+  while True:
+    name = f'{base}-{secrets.token_hex(4)}'
+    if not (worktrees / name).exists() and not (containers / name).exists():
+      return name

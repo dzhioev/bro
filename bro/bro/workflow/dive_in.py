@@ -3,10 +3,10 @@
 
 import os
 import re
-import secrets
 import subprocess
 from typing import Optional
 
+import bro_run
 import brog.model
 import brog.system
 import cw
@@ -66,24 +66,6 @@ def _prefetch_task(system: brog.system.System, task_ref: str) -> tuple[brog.mode
   return task, block
 
 
-def _pick_fresh_name(base: str) -> str:
-  """return base-<rand> — a unique workspace name; every launch gets a fresh one.
-
-  The session commits to a worktree-<slug> branch. A random suffix makes that
-  branch unique by construction, so a later session never reuses a slug whose
-  remote branch still holds unmerged work — the remote needs no consulting.
-  Only the local dirs are checked (no network); the loop just regenerates on the
-  vanishingly rare clash with a live workspace.
-  """
-  project = cw._project_root()
-  worktrees = cw._worktrees_dir(project)
-  containers = cw._containers_dir(project)
-  while True:
-    name = f'{base}-{secrets.token_hex(4)}'
-    if not (worktrees / name).exists() and not (containers / name).exists():
-      return name
-
-
 def dive_in(
   forwarded: list[str],
   dry_run: bool = False,
@@ -100,7 +82,7 @@ def dive_in(
     base = _slugify(command) if command is not None else ''
     if len(base) == 0:
       base = 'dive-in-new'
-    name = _pick_fresh_name(base)
+    name = bro_run.fresh_workspace_name(base)
     log.info('workspace: %s', name)
     prompt = '/fix --new' if command is None else f'/fix --new {command}'
   elif task is not None or focus:
@@ -130,13 +112,13 @@ def dive_in(
     base = _slugify(brog_task.name)
     if len(base) == 0:
       base = 'dive-in'
-    name = _pick_fresh_name(base)
+    name = bro_run.fresh_workspace_name(base)
     log.info('workspace: %s', name)
 
     os.environ['CW_TASK_ID'] = brog_task.id
   else:
     prompt = command
-    name = _pick_fresh_name('dive-in')
+    name = bro_run.fresh_workspace_name('dive-in')
     log.info('workspace: %s', name)
 
   cw_command = ['cw', 'ss', *forwarded]
@@ -176,10 +158,6 @@ def main(argv: list[str]) -> Optional[int]:
     help='initial command for the session (with no task flag, used as the entire prompt; with --new, used as the seed idea for the task; otherwise appended to the prompt)',
   )
   args = parser.parse(argv)
-  # the user-facing launch reconstruction, consumed by `cw banner` as
-  # launch_command: built from dive-in's own parser so env-detection sees
-  # `dive-in …`, not the underlying `cw ss`; setdefault keeps an outer wrapper's
-  # value.
   os.environ.setdefault(
     'PPP_SHELL_COMMAND',
     ' '.join(parser.reconstruct(args, prog=['dive-in'], exclude=('dry_run',))),

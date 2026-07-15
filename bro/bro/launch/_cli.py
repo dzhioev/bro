@@ -189,7 +189,7 @@ def maybe_containerize(
     print(str(e), file=sys.stderr)
     return 1
   return run_in_container(
-    bro_run.fresh_workspace_name(cli_name, bro_name),
+    bro_run.fresh_workspace_name(f'{cli_name}-{bro_name}'),
     launch.command,
     drop=True,
     secrets=needed,
@@ -291,6 +291,7 @@ def run(
   parser.add_argument('--into', metavar='REF', help=INTO_HELP)
   parser.add_argument('--timeout', type=float, metavar='SECONDS', help=TIMEOUT_HELP)
   args = parser.parse(argv)
+  os.environ.setdefault('PPP_SHELL_COMMAND', ' '.join(parser.reconstruct(args, prog=[cli_name])))
 
   if export_task_id:
     from notion import parse_page_ref

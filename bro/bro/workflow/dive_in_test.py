@@ -8,10 +8,10 @@ from typing import cast
 
 import pytest
 
+import bro_run
 import brog.system
 import cw
 import dive_in
-from dive_in import _pick_fresh_name
 
 UUID = '35ad38d8-5a6d-81ea-bce6-e4caf17ece7f'
 HEX = '35ad38d85a6d81eabce6e4caf17ece7f'
@@ -34,31 +34,12 @@ def _brog_task(name: str = 'my task'):
 
 @pytest.fixture
 def fake_proj(monkeypatch, tmp_path):
-  monkeypatch.setattr(cw, '_project_root', lambda: tmp_path)
+  monkeypatch.setattr(bro_run, '_project_root', lambda: tmp_path)
   worktrees = tmp_path / 'var' / 'cw' / 'worktrees'
   containers = tmp_path / 'var' / 'cw' / 'containers'
   worktrees.mkdir(parents=True)
   containers.mkdir(parents=True)
   return worktrees, containers
-
-
-class TestPickFreshName:
-  def test_appends_random_suffix(self, fake_proj):
-    assert re.fullmatch(r'idea-[0-9a-f]{8}', _pick_fresh_name('idea')) is not None
-
-  def test_regenerates_on_worktree_collision(self, fake_proj, monkeypatch):
-    worktrees, _ = fake_proj
-    suffixes = iter(['aaaaaa', 'bbbbbb'])
-    monkeypatch.setattr(dive_in.secrets, 'token_hex', lambda _: next(suffixes))
-    (worktrees / 'idea-aaaaaa').mkdir()
-    assert _pick_fresh_name('idea') == 'idea-bbbbbb'
-
-  def test_regenerates_on_container_collision(self, fake_proj, monkeypatch):
-    _, containers = fake_proj
-    suffixes = iter(['aaaaaa', 'bbbbbb'])
-    monkeypatch.setattr(dive_in.secrets, 'token_hex', lambda _: next(suffixes))
-    (containers / 'idea-aaaaaa').mkdir()
-    assert _pick_fresh_name('idea') == 'idea-bbbbbb'
 
 
 class TestLaunchCommand:
@@ -114,8 +95,7 @@ class TestLaunchCommand:
 
 
 class TestShellCommandReconstruction:
-  """PPP_SHELL_COMMAND is rebuilt from dive-in's own parser (prog `dive-in`), so
-  env-detection sees the wrapper invocation, not the underlying `cw ss`."""
+  """the visual banner receives the wrapper invocation, not the underlying `cw ss`."""
 
   def test_forwarded_flags_appear_in_the_reconstruction(self, fake_proj, monkeypatch):
     monkeypatch.delenv('PPP_SHELL_COMMAND', raising=False)

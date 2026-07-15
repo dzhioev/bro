@@ -1,5 +1,6 @@
 import asyncio
 import http.client
+import os
 import sys
 from collections.abc import Callable
 from datetime import date, datetime
@@ -188,6 +189,7 @@ def main(argv: list[str]) -> Optional[int]:
   )
   parser.add_argument('--into', metavar='REF', help=INTO_HELP)
   args = parser.parse(argv)
+  os.environ.setdefault('PPP_SHELL_COMMAND', ' '.join(parser.reconstruct(args, prog=['call'])))
 
   if args['what'] is None and args['resume'] is None:
     print('what is required unless --resume is given', file=sys.stderr)

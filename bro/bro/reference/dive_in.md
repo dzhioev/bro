@@ -10,7 +10,7 @@ This document explains the modes, workspace naming, the `/fix`-seeding rules, an
 
 ### Bare mode (default — no task flag, no `--focus`)
 
-`dive-in` with no task-selecting flags falls through to "open a clean session, unattached to any task". The positional `command` (if any) becomes the entire initial prompt; otherwise the session starts with no prompt at all. This is the same as `cw ss <slug>` and is handy when you have a request to make but no task to attach to. The environment playbook (`prompts/environment.md`, read through the `environment` source) tells Claude to ask what to work on in this case.
+`dive-in` with no task-selecting flags falls through to "open a clean session, unattached to any task". The positional `command` (if any) becomes the entire initial prompt; otherwise the session starts with no prompt at all. This is the same as `cw ss <slug>` and is handy when you have a request to make but no task to attach to.
 
 ### Focused mode (`--focus`)
 
@@ -38,7 +38,7 @@ If `--focus` is combined with `-t`, the focus client is also told to focus the r
 
 ## Workspace naming
 
-Every launch gets a **fresh workspace**: the name is always `base-<8 hex>` — `_pick_fresh_name` appends a `secrets.token_hex(4)` suffix (e.g. `my-task-a3f9c2b1`), retrying until neither `var/cw/worktrees/<name>` (host) nor `var/cw/containers/<name>` (container) exists. The base is derived from whatever the session is *about*:
+Every launch gets a **fresh workspace**: the name is always `base-<8 hex>` — `bro_run.fresh_workspace_name` appends a `secrets.token_hex(4)` suffix (e.g. `my-task-a3f9c2b1`), retrying until neither `var/cw/worktrees/<name>` (host) nor `var/cw/containers/<name>` (container) exists. The base is derived from whatever the session is *about*:
 
 - **Task / focused mode** — `_slugify(task_name)`. `_slugify` lowercases, replaces any run of non-alphanumerics with `-`, trims leading/trailing `-`, and truncates to 40 chars (re-trimming a trailing `-` if the truncation produced one). If the slug ends up empty (e.g. all-CJK task name), it falls back to `dive-in`.
 - **`--new` mode** — `_slugify(command)` if a seed command is present, otherwise `dive-in-new`.
@@ -46,7 +46,7 @@ Every launch gets a **fresh workspace**: the name is always `base-<8 hex>` — `
 
 A fresh name means a fresh clone/worktree on the intended base (the host checkout's `HEAD`, or `--into`) by construction. In particular, task mode never reuses a workspace an earlier session on the same task created — silent reuse would ignore `--into` and could land the session on a tree predating the work it is meant to build on. Two accepted side effects: concurrent sessions on one task are possible (there is no implicit one-live-session-per-task lock), and workspaces accumulate per launch — containers are cheap (shared objects + baked venv), and `cw clean` reclaims landed workspaces in both modes.
 
-The suffix also makes each session's `worktree-<slug>` branch **unique by construction**, which is what prevents the remote-branch collision: local cleanup (`cw clean` / `--drop`) deletes only the *local* `worktree-<slug>` branch, so an un-merged session leaves `origin/worktree-<slug>` behind — but the next session picks a different suffix, so it never reuses a slug whose pushed branch still holds unmerged work. Because uniqueness is structural, the remote is never consulted (no `git ls-remote`, no network); the two local `.exists()` checks only guard against the vanishingly rare clash with a live workspace, regenerating the suffix if one hits. `dive_in_test.py:TestPickFreshName` covers the cases.
+The suffix also makes each session's `worktree-<slug>` branch **unique by construction**, which is what prevents the remote-branch collision: local cleanup (`cw clean` / `--drop`) deletes only the *local* `worktree-<slug>` branch, so an un-merged session leaves `origin/worktree-<slug>` behind — but the next session picks a different suffix, so it never reuses a slug whose pushed branch still holds unmerged work. Because uniqueness is structural, the remote is never consulted (no `git ls-remote`, no network); the two local `.exists()` checks only guard against the vanishingly rare clash with a live workspace, regenerating the suffix if one hits. `bro_run_test.py` covers the collision cases.
 
 `dive-in` logs `workspace: <name>` after picking, so the generated name is visible — you need it to reattach via `cw exec <name>` or to resume via `cw ss --resume <name>` (see "Resuming").
 
@@ -93,6 +93,6 @@ Known gap: `CW_TASK_ID` lives only in the launching `dive-in` process's environm
 ## Env-var handoff
 
 - `CW_TASK_ID` — set to the resolved task's canonical brog id in any mode that has one (focused, `-t`, `-t --focus`). Read by the `/pr` skill to build the commit footer's `Task: <url>` line (via `brog::get_task(id).url`).
-- `PPP_SHELL_COMMAND` — set (if not already set) to the user-facing reconstruction of the dive-in invocation. Consumed by `cw banner` and surfaced as `launch_command` in `cw banner --llm`, which is what Claude reads at session start (see `prompts/environment.md`) to self-detect that it was launched via `dive-in` (and whether `-t` / `--focus` / `--new` was used).
+- `PPP_SHELL_COMMAND` — set (if not already set) to the user-facing reconstruction of the dive-in invocation. The visual `cw banner` shows it as the outer launch command and extracts the user prompt from it; the agent-facing `cw banner --llm` omits it.
 
-The user-facing `dive-in` reconstruction is rebuilt from dive-in's own parser (`Parser.reconstruct` with prog `dive-in`) so that env-detection sees `dive-in`, not the underlying `cw ss`.
+The user-facing `dive-in` reconstruction is rebuilt from dive-in's own parser (`Parser.reconstruct` with prog `dive-in`) so the visual banner shows `dive-in`, not the underlying `cw ss`.
