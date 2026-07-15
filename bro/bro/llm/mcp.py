@@ -49,11 +49,18 @@ def render_text(
   (the closed universe; membership probes `credentials.available` lazily, so
   render in the process that consumes the text, where the store is the
   session's own). A fact left None defines no variable, so a directive
-  referencing it raises. The directive reference is `reference/template.md`.
+  referencing it raises. `{{include <name>}}` targets resolve through the
+  `prompts` loader. The directive reference is `reference/template.md`.
   """
   if '{{' not in text:
     return text
-  return template.render(text, _surface_variables(harness, wire, creds))
+  return template.render(text, _surface_variables(harness, wire, creds), _load_prompt)
+
+
+def _load_prompt(name: str) -> str:
+  import prompts  # lazy: keeps this layer import-free of the repo-root prompt store
+
+  return prompts.get_prompt(name)
 
 
 def select[T](

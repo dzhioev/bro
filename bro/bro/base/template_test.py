@@ -1,3 +1,5 @@
+from typing import Optional
+
 import pytest
 
 from base.condition import SetVariable, StringVariable
@@ -194,6 +196,113 @@ class TestValidation:
       render('x', {'true': True})
 
 
+def _resolver(files: dict[str, str], loaded: Optional[list[str]] = None):
+  def resolve(name: str) -> str:
+    if loaded is not None:
+      loaded.append(name)
+    if name not in files:
+      raise FileNotFoundError(name)
+    return files[name]
+
+  return resolve
+
+
+class TestInclude:
+  def test_splices_rendered_with_includer_variables(self):
+    files = {'x': '{{iff #harness = bro}}B{{else}}C{{end}}'}
+    text = 'a {{include x}} c'
+    assert render(text, _harness('bro'), _resolver(files)) == 'a B c'
+    assert render(text, _harness('claude'), _resolver(files)) == 'a C c'
+
+  def test_nested_includes(self):
+    files = {'a': 'a[{{include b}}]', 'b': 'b'}
+    assert render('{{include a}}', {}, _resolver(files)) == 'a[b]'
+
+  def test_dotted_and_slashed_names(self):
+    files = {'shared/00-block.md': 'block'}
+    assert render('{{include shared/00-block.md}}', {}, _resolver(files)) == 'block'
+
+  def test_untaken_branch_loads_but_does_not_emit(self):
+    loaded: list[str] = []
+    files = {'x': 'body'}
+    text = '{{when #harness = bro}}{{include x}}{{end}}after'
+    assert render(text, _harness('claude'), _resolver(files, loaded)) == 'after'
+    assert loaded == ['x']
+
+  def test_untaken_include_directives_do_not_evaluate(self):
+    # the included file references a variable this surface never defines and
+    # carries a failing assert; neither fires while the include is not emitted.
+    files = {'x': '{{iff #foreign = y}}z{{end}}{{assert #true = #false}}'}
+    text = '{{when #harness = bro}}{{include x}}{{end}}'
+    assert render(text, _harness('claude'), _resolver(files)) == ''
+    with pytest.raises(TemplateError, match='unknown variable #foreign'):
+      render(text, _harness('bro'), _resolver(files))
+
+  def test_untaken_include_still_structurally_parsed(self):
+    files = {'x': '{{when a = a}}unterminated'}
+    text = '{{when #harness = bro}}{{include x}}{{end}}'
+    with pytest.raises(TemplateError, match='missing its'):
+      render(text, _harness('claude'), _resolver(files))
+
+  def test_untaken_include_condition_still_syntax_checked(self):
+    files = {'x': '{{iff nonsense}}y{{end}}'}
+    text = '{{when #harness = bro}}{{include x}}{{end}}'
+    with pytest.raises(TemplateError, match='malformed condition'):
+      render(text, _harness('claude'), _resolver(files))
+
+  def test_transitive_load_through_untaken_include(self):
+    loaded: list[str] = []
+    files = {'a': '{{include b}}', 'b': 'deep'}
+    text = '{{when #harness = bro}}{{include a}}{{end}}'
+    assert render(text, _harness('claude'), _resolver(files, loaded)) == ''
+    assert loaded == ['a', 'b']
+
+  def test_unknown_name_raises(self):
+    with pytest.raises(TemplateError, match='failed to load'):
+      render('{{include missing}}', {}, _resolver({}))
+
+  def test_unknown_name_in_untaken_branch_raises(self):
+    text = '{{when #harness = bro}}{{include missing}}{{end}}'
+    with pytest.raises(TemplateError, match='failed to load'):
+      render(text, _harness('claude'), _resolver({}))
+
+  def test_error_names_the_include(self):
+    files = {'x': '{{iff a = a}}unterminated'}
+    with pytest.raises(TemplateError, match='in .*include x'):
+      render('{{include x}}', {}, _resolver(files))
+
+  def test_cycle_raises(self):
+    files = {'a': '{{include b}}', 'b': '{{include a}}'}
+    with pytest.raises(TemplateError, match='include cycle: a -> b -> a'):
+      render('{{include a}}', {}, _resolver(files))
+
+  def test_self_include_raises(self):
+    files = {'a': '{{include a}}'}
+    with pytest.raises(TemplateError, match='include cycle: a -> a'):
+      render('{{include a}}', {}, _resolver(files))
+
+  def test_diamond_is_not_a_cycle(self):
+    files = {'a': '{{include c}}', 'b': '{{include c}}', 'c': 'C'}
+    assert render('{{include a}}{{include b}}', {}, _resolver(files)) == 'CC'
+
+  def test_no_resolver_raises(self):
+    with pytest.raises(TemplateError, match='no include resolver'):
+      render('{{include x}}', {})
+
+  def test_no_resolver_raises_in_untaken_branch(self):
+    text = '{{when #harness = bro}}{{include x}}{{end}}'
+    with pytest.raises(TemplateError, match='no include resolver'):
+      render(text, _harness('claude'))
+
+  def test_missing_name_raises(self):
+    with pytest.raises(TemplateError, match='takes a name'):
+      render('{{include}}', {}, _resolver({}))
+
+  def test_multi_token_argument_raises(self):
+    with pytest.raises(TemplateError, match='takes a name'):
+      render('{{include two names}}', {}, _resolver({}))
+
+
 class TestLiteralText:
   def test_plain_text_unchanged(self):
     assert render('no directives here', {}) == 'no directives here'
@@ -201,3 +310,6 @@ class TestLiteralText:
   def test_non_directive_braces_pass_through(self):
     text = 'code sample: f"{{x}}" and {{ not_a_keyword }}'
     assert render(text, {}) == text
+
+  def test_keyword_prefixed_word_stays_literal(self):
+    assert render('{{includes x}}', {}) == '{{includes x}}'

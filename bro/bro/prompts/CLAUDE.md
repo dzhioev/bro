@@ -11,7 +11,7 @@ Prompt content may carry `base.template` directives (`#harness`/`#wire`/`#creds`
 
 Harness-specific conditioning is expressed with these directives, never as prose that addresses both surfaces and leaves the reader to pick: fork the text with `{{iff #harness = bro}}…{{eliff #harness = claude}}…{{end}}` — the chain raises when no branch matches, so the fork is self-guarding — and each surface reads only its own instruction (see the ppp-dev persona prompt in `bro/bros/ppp_dev/__init__.py` for the pattern).
 
-`prompts.py` (repo root) is the loader. Keep it the single entry point — do not `open()` prompts ad-hoc from elsewhere. `get_prompt_path(name)` returns the `Path` if a caller needs to hand the file off to something that wants a path rather than the body (e.g. `bro.datasources.file.FileSource`).
+`prompts.py` (repo root) is the loader. Keep it the single entry point — do not `open()` prompts ad-hoc from elsewhere. Names are contained to `prompts/`: a name that resolves outside it (`..` traversal, absolute path) raises. `get_prompt_path(name)` returns the `Path` if a caller needs to hand the file off to something that wants a path rather than the body (e.g. `bro.datasources.file.FileSource`). `{{include <name>}}` directives resolve through it too — `llm.mcp.render_text` wires `get_prompt` as the template engine's include resolver, so a spliced prompt loads exactly like a directly-requested one.
 
 ## Auto-injected `shared/` directory
 

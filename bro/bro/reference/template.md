@@ -5,7 +5,7 @@ Conditional rendering for static agent-facing text — system prompts, skill bod
 ## Grammar
 
 ```
-template  := (text | block | 'when'-block | '{{assert' condition '}}')*
+template  := (text | block | 'when'-block | '{{assert' condition '}}' | '{{include' file '}}')*
 block     := '{{iff' condition '}}' template
              ('{{eliff' condition '}}' template)*
              ('{{else}}' template)?
@@ -13,6 +13,7 @@ block     := '{{iff' condition '}}' template
 when-block:= '{{when' condition '}}' template '{{end}}'
 condition := value ('=' value | 'contains' value)
 value     := '#' name | name            name: [A-Za-z0-9_-]+
+file      := prompt file name           file: [A-Za-z0-9._/-]+
 ```
 
 ## Semantics
@@ -27,15 +28,19 @@ value     := '#' name | name            name: [A-Za-z0-9_-]+
 
 - `{{assert}}` renders to nothing when its condition holds and raises when it does not — the standalone precondition for text that must only ever render under a known state
 
+- `{{include <file>}}` splices another prompt file into the output, rendered recursively against the includer's own variables — same facts, same fail-fast semantics. resolution goes through the rendering surface's resolver (`render` takes an `include_resolver` callback; `render_text` wires the `prompts.py` loader); a render with no resolver raises on any include it parses, and an include chain that revisits a file raises
+
 - conditions in non-taken branches are still evaluated (a typo fails every render, not just the unlucky branch), while `{{assert}}` directives and fall-through guards in non-taken branches do not fire; blocks nest
 
-- only `{{` groups whose first token is a directive keyword (`when` / `iff` / `eliff` / `else` / `end` / `assert`) are parsed; any other `{{…}}` is literal text, so braces in code samples survive rendering
+- an include in a non-taken branch follows the same rule: the file is loaded and structurally parsed — a broken name or malformed file fails every render — but it is not emitted and directives inside it do not evaluate (its facts may be foreign to this surface)
+
+- only `{{` groups whose first token is a directive keyword (`when` / `iff` / `eliff` / `else` / `end` / `assert` / `include`) are parsed; any other `{{…}}` is literal text, so braces in code samples survive rendering
 
 - `true` and `false` are built-in boolean variables
 
 ## Rendering surfaces
 
-`llm.mcp.render_text(text, harness=…, wire=…, creds=…)` renders directives against the facts the call site knows (the facts triple is documented in `reference/conditions.md`). Each surface renders its copy once, with its own facts:
+`llm.mcp.render_text(text, harness=…, wire=…, creds=…)` renders directives against the facts the call site knows (the facts triple is documented in `reference/conditions.md`) and resolves `{{include}}` targets through the `prompts.py` loader. Each surface renders its copy once, with its own facts:
 
 - `BaseBro.__init__` — the two bro prompt flavors (harness `bro`; wire `bare` / `mcp`)
 - `cw/system_prompt.py` — a cw-session's append prompt, the injected persona included (harness `claude`, wire `mcp`)

@@ -487,6 +487,18 @@ class TestRenderText:
     with pytest.raises(ValueError, match='unknown wire'):
       render_text('{{iff a = a}}x{{end}}', wire='grpc')  # type: ignore[arg-type]
 
+  def test_include_resolves_through_prompts_loader(self, monkeypatch):
+    import prompts
+
+    files = {'x.md': 'spliced {{iff #harness = bro}}B{{eliff #harness = claude}}C{{end}}'}
+    monkeypatch.setattr(prompts, 'get_prompt', lambda name: files[name])
+    assert render_text('root: {{include x.md}}', harness='bro') == 'root: spliced B'
+    assert render_text('root: {{include x.md}}', harness='claude') == 'root: spliced C'
+
+  def test_include_escaping_the_prompts_directory_raises(self):
+    with pytest.raises(ValueError, match='escapes the prompts directory'):
+      render_text('{{include ../CLAUDE.md}}', harness='bro')
+
   @pytest.mark.asyncio
   async def test_namespaced_tool_renders_description_against_availability(self, monkeypatch):
     def fetch(id: Annotated[str, Field(description='id')]) -> str:

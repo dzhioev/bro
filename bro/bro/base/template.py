@@ -2,14 +2,17 @@
 skill bodies): when/iff/eliff/else blocks and assert guards in `{{…}}` groups
 terminated by `{{end}}`, their conditions lowered onto `base.condition`
 objects — one evaluator and one fail-fast semantics shared with code-built
-conditions, any violation surfacing as `TemplateError`. The grammar and full
-semantics live in `reference/template.md`.
+conditions, any violation surfacing as `TemplateError` — plus `{{include}}`
+splices loaded through a caller-supplied resolver and rendered recursively
+with the includer's own variables. The grammar and full semantics live in
+`reference/template.md`.
 
 Only `{{` groups whose first token is a directive keyword are parsed; any other
 `{{…}}` is literal text, so braces in code samples survive rendering.
 """
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Optional
 
@@ -18,8 +21,10 @@ from base.condition import Condition, ConditionError, Contains, Equals, Operand,
 _NAME = r'[A-Za-z0-9_-]+'
 
 _DIRECTIVE_RE = re.compile(
-  r'\{\{\s*(?P<keyword>when|iff|eliff|else|end|assert)\b(?P<argument>[^}]*)\}\}'
+  r'\{\{\s*(?P<keyword>when|iff|eliff|else|end|assert|include)\b(?P<argument>[^}]*)\}\}'
 )
+
+_INCLUDE_NAME_RE = re.compile(r'^\s*(?P<name>[A-Za-z0-9._/-]+)\s*$')
 
 _CONDITION_RE = re.compile(
   rf'^\s*(?P<left>\#?{_NAME})'
@@ -30,7 +35,8 @@ _CONDITION_RE = re.compile(
 
 class TemplateError(ValueError):
   """a malformed template, an unknown variable, a type-mismatched condition, a
-  failed `{{assert}}`, or an iff-chain that no branch matched."""
+  failed `{{assert}}`, an iff-chain that no branch matched, or an `{{include}}`
+  that cannot resolve (no resolver, unknown name, cycle)."""
 
 
 _BUILTINS: Variables = {'true': True, 'false': False}
@@ -44,12 +50,19 @@ class _Directive:
   end: int
 
 
-def render(text: str, variables: Variables) -> str:
-  """render the template against `variables` (plus the built-in `true`/`false`)."""
+def render(
+  text: str,
+  variables: Variables,
+  include_resolver: Optional[Callable[[str], str]] = None,
+) -> str:
+  """render the template against `variables` (plus the built-in `true`/`false`).
+  `{{include <name>}}` targets load through `include_resolver`; without one any
+  include raises."""
   overlap = set(variables) & set(_BUILTINS)
   if len(overlap) > 0:
     raise TemplateError(f'variables shadow built-ins: {", ".join(sorted(overlap))}')
-  return _Renderer(text, {**_BUILTINS, **variables}).render()
+  variables = {**_BUILTINS, **variables}
+  return _Renderer(text, variables, include_resolver, chain=(), evaluating=True).render()
 
 
 def _operand(token: str) -> Operand:
@@ -57,17 +70,27 @@ def _operand(token: str) -> Operand:
 
 
 class _Renderer:
-  def __init__(self, text: str, variables: Variables):
+  def __init__(
+    self,
+    text: str,
+    variables: Variables,
+    include_resolver: Optional[Callable[[str], str]],
+    chain: tuple[str, ...],
+    evaluating: bool,
+  ):
     self._text = text
     self._variables = variables
+    self._include_resolver = include_resolver
+    self._chain = chain
+    self._evaluating = evaluating
     self._directives = [
       _Directive(match.group('keyword'), match.group('argument'), match.start(), match.end())
       for match in _DIRECTIVE_RE.finditer(text)
     ]
     self._position = 0
 
-  def render(self) -> str:
-    output, _ = self._render_until(stops=(), emit=True, cursor=0)
+  def render(self, emit: bool = True) -> str:
+    output, _ = self._render_until(stops=(), emit=emit, cursor=0)
     return output
 
   def _next(self) -> Optional[_Directive]:
@@ -104,6 +127,8 @@ class _Renderer:
       elif directive.keyword == 'assert':
         if emit:
           self._assert(directive)
+      elif directive.keyword == 'include':
+        parts.append(self._include(directive, emit))
       else:
         raise TemplateError(f'{{{{{directive.keyword}}}}} without a matching {{{{iff}}}}')
 
@@ -167,14 +192,42 @@ class _Renderer:
     if not self._evaluate(directive):
       raise TemplateError(f'assertion failed: {directive.argument.strip()}')
 
+  def _include(self, directive: _Directive, emit: bool) -> str:
+    """splice the named text, resolved and structurally parsed regardless of
+    `emit` — a broken include fails every render, like conditions in non-taken
+    branches — but rendered with the includer's variables only when emitted."""
+    match = _INCLUDE_NAME_RE.match(directive.argument)
+    if match is None:
+      raise TemplateError(f'{{{{include}}}} takes a name: {directive.argument.strip()!r}')
+    name = match.group('name')
+    if self._include_resolver is None:
+      raise TemplateError(f'{{{{include {name}}}}} with no include resolver supplied')
+    if name in self._chain:
+      raise TemplateError(f'include cycle: {" -> ".join((*self._chain, name))}')
+    try:
+      text = self._include_resolver(name)
+    except (OSError, ValueError) as error:
+      raise TemplateError(f'{{{{include {name}}}}} failed to load: {error}') from error
+    nested = _Renderer(
+      text, self._variables, self._include_resolver, chain=(*self._chain, name), evaluating=emit
+    )
+    try:
+      return nested.render(emit)
+    except TemplateError as error:
+      raise TemplateError(f'in {{{{include {name}}}}}: {error}') from error
+
   def _evaluate(self, directive: _Directive) -> bool:
     """lower the directive's condition text onto the `base.condition` model and
-    evaluate it, surfacing any semantic violation as `TemplateError`."""
+    evaluate it, surfacing any semantic violation as `TemplateError`. inside a
+    non-emitted include the condition is only syntax-checked, never evaluated —
+    the included file's facts may be foreign to this surface."""
     match = _CONDITION_RE.match(directive.argument)
     if match is None:
       raise TemplateError(
         f'malformed condition {directive.argument.strip()!r} in {{{{{directive.keyword}}}}}'
       )
+    if not self._evaluating:
+      return False
     left = _operand(match.group('left'))
     right = _operand(match.group('right'))
     lowered: Condition = (
