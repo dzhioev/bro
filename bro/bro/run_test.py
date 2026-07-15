@@ -14,7 +14,7 @@ def test_run_uses_canonical_container_launch(capsys):
     shell_command = environment['PPP_SHELL_COMMAND']
   launch = run.call_args.args[0]
   assert launch.name.startswith('bro-run-ppp-dev-')
-  assert launch.command == ['ask', 'ppp-dev', 'hello', '--in-place']
+  assert launch.command == ['bro', 'run', 'ppp-dev', 'hello', '--in-place']
   assert shell_command == 'bro run ppp-dev hello'
   assert capsys.readouterr().out == ''
 
@@ -26,7 +26,7 @@ def test_global_flag_before_run_reaches_the_launcher():
   ):
     environment.pop('CW_IN_CONTAINER', None)
     assert main(['bro', '--verbose', 'run', 'ppp-dev', 'hello']) == 0
-  assert run.call_args.args[0].command == ['ask', 'ppp-dev', 'hello', '--in-place']
+  assert run.call_args.args[0].command == ['bro', 'run', 'ppp-dev', 'hello', '--in-place']
 
 
 def test_run_summon_delegates_to_the_summon_library():
@@ -59,7 +59,7 @@ def test_chat_uses_canonical_container_launch():
     shell_command = environment['PPP_SHELL_COMMAND']
   launch = run.call_args.args[0]
   assert launch.name.startswith('bro-chat-ppp-dev-')
-  assert launch.command == ['call', 'ppp-dev', 'hello', '--in-place']
+  assert launch.command == ['bro', 'chat', 'ppp-dev', 'hello', '--in-place']
   assert shell_command == 'bro chat ppp-dev hello'
 
 

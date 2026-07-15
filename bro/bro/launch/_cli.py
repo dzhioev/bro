@@ -6,7 +6,7 @@ import os
 import sys
 from collections.abc import Callable
 from dataclasses import replace
-from typing import Optional
+from typing import Literal, Optional
 
 import base.args
 import cw.bro_run
@@ -108,9 +108,9 @@ def create_bro_for_run(bro_name: str, *, fast: bool, effort: Optional[str] = Non
 def maybe_containerize(
   *,
   cli_name: str,
+  verb: Literal['run', 'chat'],
   bro_name: str,
   inner_args: list[str],
-  inner_cli_name: Optional[str] = None,
   in_place: bool,
   no_trails: bool = False,
   grant_cred: Optional[list[str]] = None,
@@ -119,9 +119,10 @@ def maybe_containerize(
   revoke_summon: Optional[list[str]] = None,
   into: Optional[str] = None,
 ) -> Optional[int]:
-  """re-exec `<cli_name> <bro_name> <inner_args...>` inside a scoped throwaway
+  """re-exec `bro <verb> <bro_name> <inner_args...>` inside a scoped throwaway
   container and return its exit code, or return None so the caller runs in the
-  calling process.
+  calling process. `cli_name` is the outer spelling the user invoked; it only
+  names the workspace.
 
   the hop is skipped when `--in-place` was passed or when already inside a container
   (`CW_IN_CONTAINER`, set by the container). Callers reject an implicit in-container
@@ -129,7 +130,7 @@ def maybe_containerize(
   the already-scoped inner run in-process. Otherwise the launch is the shared bro-run
   description (`cw.bro_run.describe`): a fresh workspace, the bro's own credential
   scope, the bro git identity + `CW_BRO` in the container env. an interactive
-  surface (`call`) renders inside it just as claude code does.
+  surface (`bro chat`) renders inside it just as claude code does.
 
   the container's workspace clone bases on the host checkout's current HEAD (the
   entrypoint's default, shared with `cw ss` — the bro sees the code the caller
@@ -188,7 +189,7 @@ def maybe_containerize(
     bro_name,
     inner_args,
     workspace_name=fresh_workspace_name(f'{cli_name}-{bro_name}'),
-    cli_name=inner_cli_name if inner_cli_name is not None else cli_name,
+    verb=verb,
     base_ref=base_ref,
     trails=not no_trails,
   )
@@ -343,9 +344,9 @@ def run_main(
     inner_args.extend(['--effort', args['effort']])
   hopped = maybe_containerize(
     cli_name='bro-run' if program == ['bro', 'run'] else program[0],
+    verb='run',
     bro_name=args['bro'],
     inner_args=inner_args,
-    inner_cli_name='ask',
     in_place=args['in_place'],
     no_trails=args['no_trails'],
     grant_cred=args['grant_cred'],

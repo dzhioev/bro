@@ -41,7 +41,7 @@ def test_main_re_execs_into_container_when_outside():
     assert env['PPP_SHELL_COMMAND'] == 'do-task ppp-dev abc-123'
     launch = run.call_args.args[0]
     assert launch.name.startswith('do-task-ppp-dev-')
-    assert launch.command == ['ask', 'ppp-dev', '/fix abc-123', '--in-place']
+    assert launch.command == ['bro', 'run', 'ppp-dev', '/fix abc-123', '--in-place']
     assert run.call_args.kwargs['drop'] is True
     assert {'github', 'brog', 'trails'} <= launch.secrets
     assert launch.docker_sock is False

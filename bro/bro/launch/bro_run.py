@@ -1,17 +1,17 @@
 """a bro run as a container launch, described once.
 
 A bro run is the bro's LLM process in its own throwaway cw-style container:
-`<cli> <bro> … --in-place` executing against the bro's own credential scope,
-committing as the bro git identity, based on a caller-resolved git ref. This
-module owns that description — inner command, container environment, credential
-scope, docker-socket decision — so every surface that spawns one computes it
-identically; executing the launch (attached TTY, supervised non-TTY child) is
-the caller's.
+`bro <verb> <bro> … --in-place` executing against the bro's own credential
+scope, committing as the bro git identity, based on a caller-resolved git ref.
+This module owns that description — inner command, container environment,
+credential scope, docker-socket decision — so every surface that spawns one
+computes it identically; executing the launch (attached TTY, supervised
+non-TTY child) is the caller's.
 """
 
 import json
 from collections.abc import Sequence
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from cw.constants import bro_git_identity_env
 from cw.docker import Launch
@@ -24,14 +24,14 @@ def describe(
   inner_args: Sequence[str],
   *,
   workspace_name: str,
-  cli_name: str = 'ask',
+  verb: Literal['run', 'chat'],
   base_ref: Optional[str] = None,
   trails: bool = True,
   tty: bool = True,
   forward_env: bool = True,
   summoner: Optional[dict[str, Any]] = None,
 ) -> Launch:
-  """describe the launch of `<cli_name> <bro_name> <inner_args…> --in-place`.
+  """describe the launch of `bro <verb> <bro_name> <inner_args…> --in-place`.
 
   `base_ref` is a caller-resolved commit sha the container's workspace clone
   bases on (`CW_BASE_REF`); None leaves the entrypoint's HEAD fallback — the
@@ -51,7 +51,7 @@ def describe(
     env[SUMMONER_ENV] = json.dumps(summoner, ensure_ascii=False, separators=(',', ':'))
   return Launch(
     name=workspace_name,
-    command=[cli_name, bro_name, *inner_args, '--in-place'],
+    command=['bro', verb, bro_name, *inner_args, '--in-place'],
     env=env,
     secrets=required,
     optional_secrets=set(scoped.optional),

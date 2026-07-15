@@ -363,7 +363,7 @@ class ProcessSpawner(Spawner):
 
 def _lower_summon(launch: SummonLaunchSpec, workspace_name: str) -> DockerLaunchSpec:
   """the blocking half of a summon spawn: compute the docker launch a host-side
-  `ask <target>` would get — the shared bro-run description (`bro_run.describe`:
+  `bro run <target>` would get — the shared bro-run description (`bro_run.describe`:
   exactly the target's own scope, nothing inherited from the summoner, no grant
   passthrough). The base is the summoner's workspace HEAD, read live here
   (`resolve_head` — which also transfers the commit's objects into the host repo
@@ -385,6 +385,7 @@ def _lower_summon(launch: SummonLaunchSpec, workspace_name: str) -> DockerLaunch
     launch.target,
     [launch.prompt],
     workspace_name=workspace_name,
+    verb='run',
     base_ref=base_ref,
     tty=False,
     forward_env=False,

@@ -288,7 +288,7 @@ def test_call_re_execs_into_container_when_outside():
     assert launch.name.startswith('call-ppp-dev-')
     # host is a tty → the TUI runs in-container, so no --text is forwarded; fast is the
     # default so no --slow either
-    assert launch.command == ['call', 'ppp-dev', 'hey', '--in-place']
+    assert launch.command == ['bro', 'chat', 'ppp-dev', 'hey', '--in-place']
     assert run.call_args.kwargs['drop'] is True
     # ppp-dev's manifest (github + brog) plus the mandatory trails sink
     assert {'github', 'brog', 'trails'} <= launch.secrets
@@ -308,7 +308,7 @@ def test_call_forwards_text_when_host_not_a_tty():
     command = run.call_args.args[0].command
     # host can't back the TUI → force text mode inside the container (the container's
     # PTY always reports a TTY, so the decision has to be made here on the host)
-    assert command == ['call', 'ppp-dev', 'hey', '--text', '--in-place']
+    assert command == ['bro', 'chat', 'ppp-dev', 'hey', '--text', '--in-place']
 
 
 def test_call_forwards_effort_into_container():
@@ -322,7 +322,7 @@ def test_call_forwards_effort_into_container():
     assert rc == 0
     command = run.call_args.args[0].command
     # --effort is forwarded like --slow; the in-container run applies with_effort
-    assert command == ['call', 'ppp-dev', 'hey', '--effort', 'high', '--in-place']
+    assert command == ['bro', 'chat', 'ppp-dev', 'hey', '--effort', 'high', '--in-place']
 
 
 def test_effort_flag_overrides_spec_effort(monkeypatch):
@@ -369,7 +369,7 @@ def test_call_no_trails_disables_recording_in_container():
     assert rc == 0
     launch = run.call_args.args[0]
     # the env var carries the effect in, so --no-trails isn't forwarded into the inner argv
-    assert launch.command == ['call', 'ppp-dev', 'hey', '--in-place']
+    assert launch.command == ['bro', 'chat', 'ppp-dev', 'hey', '--in-place']
     assert 'trails' not in launch.secrets
     assert launch.env == {
       'CW_BRO': 'ppp-dev',
@@ -411,7 +411,7 @@ def test_call_forwards_resume_into_container():
     rc = main(['call', 'ppp-dev', '--resume'])
     assert rc == 0
     command = run.call_args.args[0].command
-    assert command == ['call', 'ppp-dev', '--resume', 'latest', '--in-place']
+    assert command == ['bro', 'chat', 'ppp-dev', '--resume', 'latest', '--in-place']
 
 
 def test_call_forwards_resume_trail_id_with_message():
@@ -424,7 +424,15 @@ def test_call_forwards_resume_trail_id_with_message():
     rc = main(['call', 'ppp-dev', 'and then?', '--resume', 'trail-id-1'])
     assert rc == 0
     command = run.call_args.args[0].command
-    assert command == ['call', 'ppp-dev', 'and then?', '--resume', 'trail-id-1', '--in-place']
+    assert command == [
+      'bro',
+      'chat',
+      'ppp-dev',
+      'and then?',
+      '--resume',
+      'trail-id-1',
+      '--in-place',
+    ]
 
 
 def test_call_resume_runs_the_resumed_bro(monkeypatch, capsys):

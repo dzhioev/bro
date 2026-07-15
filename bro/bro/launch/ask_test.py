@@ -50,7 +50,7 @@ def test_main_re_execs_into_container_when_outside():
     assert run.call_count == 1
     launch = run.call_args.args[0]
     assert launch.name.startswith('ask-ppp-dev-')
-    assert launch.command == ['ask', 'ppp-dev', 'hello world', '--rich', '--in-place']
+    assert launch.command == ['bro', 'run', 'ppp-dev', 'hello world', '--rich', '--in-place']
     assert run.call_args.kwargs['drop'] is True
     # ppp-dev's manifest (github + brog) plus the mandatory trails sink
     assert {'github', 'brog', 'trails'} <= launch.secrets
@@ -68,7 +68,7 @@ def test_main_default_forwards_no_slow_into_container():
     assert rc == 0
     command = run.call_args.args[0].command
     # fast is the default, so nothing extra is forwarded; the in-container run applies fast()
-    assert command == ['ask', 'ppp-dev', 'hello', '--in-place']
+    assert command == ['bro', 'run', 'ppp-dev', 'hello', '--in-place']
 
 
 def test_main_forwards_slow_into_container():
@@ -81,7 +81,7 @@ def test_main_forwards_slow_into_container():
     assert rc == 0
     command = run.call_args.args[0].command
     # --slow is forwarded like --rich; the in-container run builds the plain spec
-    assert command == ['ask', 'ppp-dev', 'hello', '--slow', '--in-place']
+    assert command == ['bro', 'run', 'ppp-dev', 'hello', '--slow', '--in-place']
 
 
 def test_main_forwards_effort_into_container():
@@ -94,7 +94,7 @@ def test_main_forwards_effort_into_container():
     assert rc == 0
     command = run.call_args.args[0].command
     # --effort is forwarded like --slow; the in-container run applies with_effort
-    assert command == ['ask', 'ppp-dev', 'hello', '--effort', 'low', '--in-place']
+    assert command == ['bro', 'run', 'ppp-dev', 'hello', '--effort', 'low', '--in-place']
 
 
 def test_main_no_trails_disables_recording_in_container():
@@ -107,7 +107,7 @@ def test_main_no_trails_disables_recording_in_container():
     assert rc == 0
     launch = run.call_args.args[0]
     # the env var carries the effect in, so --no-trails isn't forwarded into the inner argv
-    assert launch.command == ['ask', 'ppp-dev', 'hello', '--in-place']
+    assert launch.command == ['bro', 'run', 'ppp-dev', 'hello', '--in-place']
     assert 'trails' not in launch.secrets
     assert launch.env == {
       'CW_BRO': 'ppp-dev',

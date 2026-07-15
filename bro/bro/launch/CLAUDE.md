@@ -32,7 +32,7 @@ Bros launching and managing layer. It owns the shared launch machinery behind th
 
 ## Container isolation
 
-On the host, `bro run` and `bro chat` re-exec the bro into a throwaway cw-style container; `ask`, `do-task`, and `call` forward into the same paths. The shared hop is `maybe_containerize` in `_cli.py`: it computes `cw.bro_run.describe`'s launch and passes it to `cw.run_in_container`. The pinned inner argv uses the compatibility spellings `ask … --in-place` or `call … --in-place`, so workspaces based on older refs still accept it. The launch carries the target bro's scoped credentials, `CW_BRO`, and bro git identity.
+On the host, `bro run` and `bro chat` re-exec the bro into a throwaway cw-style container; `ask`, `do-task`, and `call` forward into the same paths. The shared hop is `maybe_containerize` in `_cli.py`: it computes `cw.bro_run.describe`'s launch and passes it to `cw.run_in_container`. The pinned inner argv uses the canonical verbs — `bro run … --in-place` or `bro chat … --in-place` — so a clone based on a ref that predates them fails loudly at the inner parse rather than running old code (the same policy as `cw ss`'s outer↔inner contract in `reference/cw.md`). The launch carries the target bro's scoped credentials, `CW_BRO`, and bro git identity.
 
 The workspace clone bases on the host checkout's current `HEAD`; `--into <ref>` selects another resolvable commit. Uncommitted changes never transfer. `--into` also rides `--summon`, while an in-place run rejects it because no clone is created.
 

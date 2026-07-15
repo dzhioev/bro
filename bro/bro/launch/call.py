@@ -220,8 +220,8 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
     inner_args.extend(['--effort', args['effort']])
   hopped = maybe_containerize(
     cli_name='bro-chat' if program == ['bro', 'chat'] else program[0],
+    verb='chat',
     bro_name=args['bro'],
-    inner_cli_name='call',
     inner_args=inner_args,
     in_place=args['in_place'],
     no_trails=args['no_trails'],

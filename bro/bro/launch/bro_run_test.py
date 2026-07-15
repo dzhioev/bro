@@ -3,12 +3,18 @@ from cw.constants import bro_git_identity_env
 
 
 def _describe(*args, **kwargs):
+  kwargs.setdefault('verb', 'run')
   return cw.bro_run.describe(*args, workspace_name='ws', **kwargs)
 
 
 def test_describe_composes_the_in_place_pinned_command():
-  launch = _describe('ppp-dev', ['hi', '--slow'], cli_name='call')
-  assert launch.command == ['call', 'ppp-dev', 'hi', '--slow', '--in-place']
+  launch = _describe('ppp-dev', ['hi', '--slow'], verb='run')
+  assert launch.command == ['bro', 'run', 'ppp-dev', 'hi', '--slow', '--in-place']
+
+
+def test_describe_pins_the_chat_verb():
+  launch = _describe('ppp-dev', ['hi'], verb='chat')
+  assert launch.command == ['bro', 'chat', 'ppp-dev', 'hi', '--in-place']
 
 
 def test_describe_env_carries_identity_and_bro():

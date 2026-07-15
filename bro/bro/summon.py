@@ -349,8 +349,8 @@ def relay_summon(
   """send one summon and relay its outcome as a CLI would: the request id and
   the started trail id to stderr, the answer to stdout, any failure as an error
   log line. Returns the exit code — the blocking `summon` CLI mode, exposed for
-  surfaces that relay a whole run through the host (in-container `ask` /
-  `do-task`)."""
+  surfaces that relay a whole run through the host (`bro run --summon` and its
+  aliases)."""
   try:
     client = _open_client()
   except SummonError as e:

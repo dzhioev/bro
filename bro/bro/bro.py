@@ -555,7 +555,7 @@ class BaseBro(ABC):
   may_summon: tuple[str, ...] = ()
   # whether the bro does docker work (building/pushing images for deploys) and so
   # needs the host docker socket. an explicit capability, inherited normally. the
-  # host grants `/var/run/docker.sock` to a `--bro`/`ask` container only when this
+  # host grants `/var/run/docker.sock` to a `--bro`/bro-run container only when this
   # is set (claude code sessions get it unconditionally); see cw/secrets.py.
   needs_docker: bool = False
   # subclasses declare their own `system_prompt = "..."` as a class attribute;

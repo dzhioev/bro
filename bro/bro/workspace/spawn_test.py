@@ -434,7 +434,7 @@ class TestSummonLowering:
       cw.spawn, 'resolve_ref', lambda root, ref: 'REF-SHA' if ref == 'summon' else None
     )
 
-  def test_lowers_to_the_ask_docker_launch(self, lowering_harness):
+  def test_lowers_to_the_bro_run_docker_launch(self, lowering_harness):
     launch = cw.spawn.SummonLaunchSpec(
       target='devoops',
       prompt='deploy the thing',
@@ -445,7 +445,7 @@ class TestSummonLowering:
     assert lowered == cw.spawn.DockerLaunchSpec(
       cw.docker.Launch(
         name='broker-CH',
-        command=['ask', 'devoops', 'deploy the thing', '--in-place'],
+        command=['bro', 'run', 'devoops', 'deploy the thing', '--in-place'],
         env={
           'CW_BASE_REF': 'PARENT-SHA',
           'CW_BRO': 'devoops',
@@ -521,7 +521,7 @@ class TestSummonLowering:
     await spawner.spawn(launch, channel)
     [(lowered, lowered_channel)] = docker.spawned
     assert isinstance(lowered, cw.spawn.DockerLaunchSpec)
-    assert lowered.launch.command == ['ask', 'devoops', 'p', '--in-place']
+    assert lowered.launch.command == ['bro', 'run', 'devoops', 'p', '--in-place']
     assert lowered.launch.name == 'broker-CH'
     assert lowered_channel is channel
 

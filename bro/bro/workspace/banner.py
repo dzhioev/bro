@@ -82,7 +82,7 @@ class SessionFacts:
 
     read-only; never raises. bro_override forces the `bro` fact regardless of
     `CW_BRO` — for in-process callers that know the bro they run: an in-process
-    run (e.g. `ask <bro> --in-place`) reads the launching environment, whose
+    run (e.g. `bro run <bro> --in-place`) reads the launching environment, whose
     `CW_BRO` is the launcher's own persona or absent.
     """
     in_container = _in_container()
