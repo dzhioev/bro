@@ -9,7 +9,7 @@ from dataclasses import replace
 from typing import Optional
 
 import base.args
-import bro_run
+import cw.bro_run
 import summon as summon_client
 from base import credentials
 from bro.bro import BroRaised
@@ -128,7 +128,7 @@ def maybe_containerize(
   (`CW_IN_CONTAINER`, set by the container). Callers reject an implicit in-container
   run before reaching this helper; the hopped command carries `--in-place`, pinning
   the already-scoped inner run in-process. Otherwise the launch is the shared bro-run
-  description (`bro_run.describe`): a fresh workspace, the bro's own credential
+  description (`cw.bro_run.describe`): a fresh workspace, the bro's own credential
   scope, the bro git identity + `CW_BRO` in the container env. an interactive
   surface (`call`) renders inside it just as claude code does.
 
@@ -173,6 +173,7 @@ def maybe_containerize(
     ScopedSecrets,
     _project_root,
     finalize_scoped_secrets,
+    fresh_workspace_name,
     resolve_ref,
     run_in_container,
     summon_allow_list,
@@ -184,10 +185,10 @@ def maybe_containerize(
     if base_ref is None:
       print(f'cannot resolve --into ref: {into}', file=sys.stderr)
       return 1
-  launch = bro_run.describe(
+  launch = cw.bro_run.describe(
     bro_name,
     inner_args,
-    workspace_name=bro_run.fresh_workspace_name(f'{cli_name}-{bro_name}'),
+    workspace_name=fresh_workspace_name(f'{cli_name}-{bro_name}'),
     cli_name=inner_cli_name if inner_cli_name is not None else cli_name,
     base_ref=base_ref,
     trails=not no_trails,

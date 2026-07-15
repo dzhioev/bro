@@ -28,7 +28,6 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Optional
 
-import bro_run
 from base import log
 from broker.brotocol import Message, Tag
 from broker.dispatcher import Broker, Dispatcher, ping_handler
@@ -36,6 +35,7 @@ from broker.runtime import Peer
 from broker.spawn import ChildHandle, LaunchSpec, Spawner
 from broker.transport import Provisioned
 from broker.transports.unix import UnixServerTransport
+from cw.bro_run import describe
 from cw.docker import Launch as DockerLaunch, prepare_container
 from cw.git import resolve_head, resolve_ref
 from cw.paths import _broker_dir, _host_log_dir, _project_root, _summon_dir
@@ -381,7 +381,7 @@ def _lower_summon(launch: SummonLaunchSpec, workspace_name: str) -> DockerLaunch
     base_ref = resolve_head(project, launch.parent_workspace)
     if base_ref is None:
       raise ValueError(f"cannot read the summoner's HEAD at {launch.parent_workspace}")
-  run = bro_run.describe(
+  run = describe(
     launch.target,
     [launch.prompt],
     workspace_name=workspace_name,

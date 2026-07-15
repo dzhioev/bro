@@ -6,7 +6,6 @@ import re
 import subprocess
 from typing import Optional
 
-import bro_run
 import brog.model
 import brog.system
 import cw
@@ -82,7 +81,7 @@ def dive_in(
     base = _slugify(command) if command is not None else ''
     if len(base) == 0:
       base = 'dive-in-new'
-    name = bro_run.fresh_workspace_name(base)
+    name = cw.fresh_workspace_name(base)
     log.info('workspace: %s', name)
     prompt = '/fix --new' if command is None else f'/fix --new {command}'
   elif task is not None or focus:
@@ -112,13 +111,13 @@ def dive_in(
     base = _slugify(brog_task.name)
     if len(base) == 0:
       base = 'dive-in'
-    name = bro_run.fresh_workspace_name(base)
+    name = cw.fresh_workspace_name(base)
     log.info('workspace: %s', name)
 
     os.environ['CW_TASK_ID'] = brog_task.id
   else:
     prompt = command
-    name = bro_run.fresh_workspace_name('dive-in')
+    name = cw.fresh_workspace_name('dive-in')
     log.info('workspace: %s', name)
 
   cw_command = ['cw', 'ss', *forwarded]

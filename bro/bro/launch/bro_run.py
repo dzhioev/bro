@@ -4,19 +4,17 @@ A bro run is the bro's LLM process in its own throwaway cw-style container:
 `<cli> <bro> … --in-place` executing against the bro's own credential scope,
 committing as the bro git identity, based on a caller-resolved git ref. This
 module owns that description — inner command, container environment, credential
-scope, docker-socket decision, workspace naming — so every surface that spawns
-one computes it identically; executing the launch (attached TTY, supervised
-non-TTY child) is the caller's.
+scope, docker-socket decision — so every surface that spawns one computes it
+identically; executing the launch (attached TTY, supervised non-TTY child) is
+the caller's.
 """
 
 import json
-import secrets
 from collections.abc import Sequence
 from typing import Any, Optional
 
 from cw.constants import bro_git_identity_env
 from cw.docker import Launch
-from cw.paths import _containers_dir, _project_root, _worktrees_dir
 from cw.secrets import Surface, scoped_secrets
 from summon import SUMMONER_ENV
 
@@ -61,14 +59,3 @@ def describe(
     tty=tty,
     forward_env=forward_env,
   )
-
-
-def fresh_workspace_name(base: str) -> str:
-  """mint a workspace name absent from both local workspace namespaces."""
-  project = _project_root()
-  worktrees = _worktrees_dir(project)
-  containers = _containers_dir(project)
-  while True:
-    name = f'{base}-{secrets.token_hex(4)}'
-    if not (worktrees / name).exists() and not (containers / name).exists():
-      return name

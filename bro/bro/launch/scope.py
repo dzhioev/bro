@@ -37,7 +37,7 @@ class Surface(enum.Enum):
 
   CW_SESSION = 'cw-session'  # dive-in / plain `cw ss`, themed as its persona bro
   BRO_SESSION = 'bro-session'  # `cw ss --bro`: claude --bare serving the bro's own MCP servers
-  BRO_RUN = 'bro-run'  # the bro as an LLM process: the ask/do-task/call hop, summon children
+  BRO_RUN = 'bro-run'  # the bro as an LLM process: the `bro run` / `bro chat` hop, summon children
 
 
 @dataclass(frozen=True)

@@ -80,7 +80,7 @@ class LLMSpec(ABC):
   def needed_secrets(self) -> tuple[str, ...]:
     """credentials this spec's provider resolves through the store (e.g. chat_gpt
     → `openai`). folded into a bro's hydration set on surfaces that run the bro as
-    an LLM process (ask / do-task). default empty for providers with no key."""
+    an LLM process (`bro run` / `bro chat`). default empty for providers with no key."""
     return ()
 
   @abstractmethod

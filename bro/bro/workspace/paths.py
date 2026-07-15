@@ -1,4 +1,5 @@
 import os
+import secrets
 from pathlib import Path
 from typing import Optional
 
@@ -22,6 +23,17 @@ def _worktrees_dir(project: Path) -> Path:
 
 def _containers_dir(project: Path) -> Path:
   return project / 'var' / 'cw' / 'containers'
+
+
+def fresh_workspace_name(base: str) -> str:
+  """mint a workspace name absent from both local workspace namespaces."""
+  project = _project_root()
+  worktrees = _worktrees_dir(project)
+  containers = _containers_dir(project)
+  while True:
+    name = f'{base}-{secrets.token_hex(4)}'
+    if not (worktrees / name).exists() and not (containers / name).exists():
+      return name
 
 
 def _broker_dir(project: Path) -> Path:

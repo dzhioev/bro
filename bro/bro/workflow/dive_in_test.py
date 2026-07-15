@@ -8,9 +8,9 @@ from typing import cast
 
 import pytest
 
-import bro_run
 import brog.system
 import cw
+import cw.paths
 import dive_in
 
 UUID = '35ad38d8-5a6d-81ea-bce6-e4caf17ece7f'
@@ -34,7 +34,7 @@ def _brog_task(name: str = 'my task'):
 
 @pytest.fixture
 def fake_proj(monkeypatch, tmp_path):
-  monkeypatch.setattr(bro_run, '_project_root', lambda: tmp_path)
+  monkeypatch.setattr(cw.paths, '_project_root', lambda: tmp_path)
   worktrees = tmp_path / 'var' / 'cw' / 'worktrees'
   containers = tmp_path / 'var' / 'cw' / 'containers'
   worktrees.mkdir(parents=True)

@@ -738,7 +738,7 @@ class BaseBro(ABC):
     # the components that hold on `harness` — a surface never hydrates a secret
     # of a component it doesn't mount — plus the bro's MRO-collected
     # `extra_secrets`. NOT the LLM key — that is added only by surfaces that run
-    # the bro as an LLM process (ask / do-task); a claude-code session themed as
+    # the bro as an LLM process (`bro run` / `bro chat`); a claude-code session themed as
     # the bro uses its own auth, not the bro's spec. the host hydrates the
     # per-surface set into a scoped store; a secret used but not declared
     # surfaces as SecretNotFound — an under-declaration to fix.

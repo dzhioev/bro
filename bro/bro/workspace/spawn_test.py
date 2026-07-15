@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import bro_run
+import cw.bro_run
 import cw.constants
 import cw.docker
 import cw.paths
@@ -419,7 +419,7 @@ class TestSummonLowering:
   def lowering_harness(self, monkeypatch, tmp_path):
     monkeypatch.setattr(cw.spawn, '_project_root', lambda: tmp_path / 'proj')
     monkeypatch.setattr(
-      bro_run,
+      cw.bro_run,
       'scoped_secrets',
       lambda name, surface: cw.secrets.ScopedSecrets(
         required={'aws', 'trails'}, optional={'openai'}, docker_sock=True

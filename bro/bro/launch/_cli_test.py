@@ -141,7 +141,7 @@ def test_maybe_containerize_revoke_removes_optional_secret():
   )
   with (
     patch.dict('os.environ', {}, clear=False) as env,
-    patch('do._cli.bro_run.describe', return_value=launch),
+    patch('cw.bro_run.describe', return_value=launch),
     patch('cw.run_in_container', return_value=0) as run,
   ):
     env.pop('CW_IN_CONTAINER', None)
