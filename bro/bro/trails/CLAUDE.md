@@ -34,7 +34,7 @@ Trails is the recording pipeline for bro runs: every `BaseBro.run()` / `.send()`
 ## Reader CLI
 
 - `trails list [--bro | --parent] [--since --until --limit]` — newest first, paged through `$PAGER`; `--parent <trail_id>` lists a trail's forks
-- `trails show <trail_id>` — header + step listing; each step line starts with the step's full id (that is the id `fork` takes), inline bodies truncate with `... <N more chars>`, spilled bodies render as size + URL
+- `trails show <trail_id> [-f] [--interval <seconds>]` — header + step listing; each step line starts with the step's full id (that is the id `fork` takes), inline bodies truncate with `... <N more chars>`, spilled bodies render as size + URL. `-f`/`--follow` streams instead of paging: it keeps polling for new steps (`--interval` seconds apart) and renders them as they land, `tail -f`-style, exiting once the trail ends (the `end` step, or `ended_at` on the header for a trail that never got one); transient server errors are logged and retried on the next tick
 - `trails tree <trail_id>` — walks parent pointers up to the root, then renders the full fork hierarchy
 - `trails fork <trail_id> <step_id> [--initial <msg>] [--no-record]` — forks at the step and drops into a `.send()` REPL
 

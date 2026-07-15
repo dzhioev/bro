@@ -34,10 +34,12 @@ from urllib.parse import urlencode, urlparse
 import configs
 from base import credentials
 from llm.tracker import (
+  HTTPStatusError,
   Parent,
   RecordedTrail,
   Step,
   Trail,
+  is_retryable_status,
 )
 
 DEFAULT_LIST_PAGE_SIZE = 100
@@ -147,9 +149,13 @@ class TrailsClient:
     self,
     trail_id: str,
     *,
+    after: Optional[str] = None,
     page_size: int = DEFAULT_STEPS_PAGE_SIZE,
   ) -> Iterator[dict]:
-    after: Optional[str] = None
+    """walk steps across cursor pages. `after` starts the walk strictly past
+    that step id (the server's exclusive-start cursor), so an incremental
+    caller can resume from the last step it has seen.
+    """
     while True:
       page = self.get_steps(trail_id, after=after, limit=page_size)
       yield from page['steps']
@@ -200,25 +206,30 @@ class TrailsClient:
     last_exception: Optional[Exception] = None
     # transient blips often leave the persistent socket half-open; one retry on
     # a fresh connection is enough to cover that without dragging in a full
-    # backoff schedule (the read path is non-mutating and idempotent).
-    for attempt in range(2):
+    # backoff schedule (the read path is non-mutating and idempotent). a
+    # deterministic 4xx propagates immediately — a retry cannot change it.
+    for _ in range(2):
       connection = self._get_connection()
       try:
         connection.request(method, path, body=body, headers=headers)
         response = connection.getresponse()
         raw = response.read()
         if response.status >= 400:
-          raise http.client.HTTPException(
-            f'{method} {path} -> HTTP {response.status}: {raw.decode(errors="replace")}'
+          raise HTTPStatusError(
+            response.status,
+            f'{method} {path} -> HTTP {response.status}: {raw.decode(errors="replace")}',
           )
         if response.status == 204 or len(raw) == 0:
           return {}
         return json.loads(raw)
+      except HTTPStatusError as exception:
+        self._drop_connection()
+        if not is_retryable_status(exception.status):
+          raise
+        last_exception = exception
       except Exception as exception:
         last_exception = exception
         self._drop_connection()
-        if attempt == 1:
-          break
     assert last_exception is not None
     raise last_exception
 

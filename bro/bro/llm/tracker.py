@@ -277,7 +277,7 @@ class HTTPStatusError(Exception):
     self.status = status
 
 
-def _is_retryable_status(status: int) -> bool:
+def is_retryable_status(status: int) -> bool:
   # transient: 5xx (server-side) and 429 (rate limit) are worth retrying.
   # deterministic 4xx (400 malformed, 404 missing trail, 413 too large) won't
   # change on a retry — fail fast instead of sleeping through the schedule.
@@ -398,7 +398,7 @@ class HTTPTracker(Tracker):
         self._drop_connection()
         # deterministic 4xx won't change on a retry — propagate immediately
         # rather than sleeping through the rest of the schedule.
-        if not _is_retryable_status(exception.status):
+        if not is_retryable_status(exception.status):
           raise
         last_exception = exception
       except Exception as exception:

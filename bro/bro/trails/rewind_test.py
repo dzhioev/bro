@@ -1,9 +1,13 @@
 import asyncio
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+from llm.tracker import HTTPStatusError
 from trails import cli
 from trails.cli import (
   _Colors,
+  _follow_steps,
   _format_step_summary,
   _format_trail_header,
   _format_trail_row,
@@ -309,6 +313,126 @@ class TestForkRepl:
     asyncio.run(cli._fork_repl(bro, None, read_line=read, emit=emitted.append))
     # blank '' is skipped; non-empty '  ' goes through (truthy len)
     assert emitted == ['reply-to-  ', 'reply-to-real']
+
+
+class TestFollowSteps:
+  def test_stops_at_end_step_without_polling_again(self):
+    client = MagicMock()
+    client.iter_steps.return_value = iter(
+      [{'step_id': 's1', 'kind': 'user_input'}, {'step_id': 's2', 'kind': 'end'}]
+    )
+    sleeps: list[float] = []
+    rows = list(_follow_steps(client, 'T1', interval=2.0, sleep=sleeps.append))
+    assert [r['step_id'] for r in rows] == ['s1', 's2']
+    assert sleeps == []
+    client.get_trail.assert_not_called()
+
+  def test_polls_from_the_last_seen_step(self):
+    client = MagicMock()
+    client.iter_steps.side_effect = [
+      iter([{'step_id': 's1', 'kind': 'user_input'}]),
+      iter([]),
+      iter([{'step_id': 's2', 'kind': 'end'}]),
+    ]
+    client.get_trail.return_value = {'ended_at': None}
+    sleeps: list[float] = []
+    rows = list(_follow_steps(client, 'T1', interval=1.5, sleep=sleeps.append))
+    assert [r['step_id'] for r in rows] == ['s1', 's2']
+    assert sleeps == [1.5, 1.5]
+    afters = [call.kwargs['after'] for call in client.iter_steps.call_args_list]
+    assert afters == [None, 's1', 's1']
+
+  def test_ended_header_terminates_a_trail_without_end_step(self):
+    client = MagicMock()
+    client.iter_steps.side_effect = [
+      iter([{'step_id': 's1', 'kind': 'user_input'}]),
+      iter([]),
+      iter([]),
+    ]
+    client.get_trail.side_effect = [
+      {'ended_at': None},
+      {'ended_at': '2026-06-07T00:00:01.000000Z'},
+    ]
+    sleeps: list[float] = []
+    rows = list(_follow_steps(client, 'T1', interval=1.0, sleep=sleeps.append))
+    assert [r['step_id'] for r in rows] == ['s1']
+    assert sleeps == [1.0]
+
+  def test_ended_header_drains_steps_landed_after_the_poll(self):
+    client = MagicMock()
+    client.iter_steps.side_effect = [
+      iter([]),
+      iter([{'step_id': 's9', 'kind': 'end'}]),
+    ]
+    client.get_trail.return_value = {'ended_at': '2026-06-07T00:00:01.000000Z'}
+    rows = list(_follow_steps(client, 'T1', interval=1.0, sleep=lambda _: None))
+    assert [r['step_id'] for r in rows] == ['s9']
+
+  def test_transient_error_retried_on_next_tick(self):
+    client = MagicMock()
+    client.iter_steps.side_effect = [
+      ConnectionError('blip'),
+      iter([{'step_id': 's1', 'kind': 'end'}]),
+    ]
+    sleeps: list[float] = []
+    rows = list(_follow_steps(client, 'T1', interval=1.0, sleep=sleeps.append))
+    assert [r['step_id'] for r in rows] == ['s1']
+    assert sleeps == [1.0]
+
+  def test_retryable_http_status_retried_on_next_tick(self):
+    client = MagicMock()
+    client.iter_steps.side_effect = [
+      HTTPStatusError(503, 'unavailable'),
+      iter([{'step_id': 's1', 'kind': 'end'}]),
+    ]
+    rows = list(_follow_steps(client, 'T1', interval=1.0, sleep=lambda _: None))
+    assert [r['step_id'] for r in rows] == ['s1']
+
+  def test_deterministic_http_status_propagates(self):
+    client = MagicMock()
+    client.iter_steps.side_effect = HTTPStatusError(404, 'not found')
+    with pytest.raises(HTTPStatusError):
+      list(_follow_steps(client, 'T1', interval=1.0, sleep=lambda _: None))
+
+
+class TestCmdShowFollow:
+  def test_streams_header_then_steps_and_exits_on_end(self, capsys):
+    client = MagicMock()
+    client.get_trail.return_value = {
+      'trail_id': 'T1',
+      'bro': 'dev',
+      'bro_version': 1,
+      'llm_spec': {'model': 'gpt-5'},
+      'started_at': '2026-06-07T22:14:03.000000Z',
+      'ended_at': None,
+      'end_reason': None,
+      'interactive': False,
+      'entry_point': 'cli:bro_run',
+      'parent': None,
+      'aggregates': {},
+    }
+    client.iter_steps.return_value = iter(
+      [
+        {
+          'step_id': 'S1',
+          'kind': 'user_input',
+          'body': 'hi',
+          'ts': '2026-06-07T22:14:04.000000Z',
+        },
+        {
+          'step_id': 'S2',
+          'kind': 'end',
+          'body': {'reason': 'terminal'},
+          'ts': '2026-06-07T22:14:05.000000Z',
+        },
+      ]
+    )
+    rc = cli._command_show(client, {'trail_id': 'T1', 'follow': True, 'interval': 2.0}, NO_COLOR)
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert 'T1' in out
+    assert 'user_input' in out
+    assert '"reason": "terminal"' in out
 
 
 class TestCmdList:

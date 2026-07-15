@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from llm.tracker import Parent, RecordedTrail, Step, Trail
+from llm.tracker import HTTPStatusError, Parent, RecordedTrail, Step, Trail
 from trails.client import (
   TrailsClient,
   fetch_recorded_trail,
@@ -85,15 +85,14 @@ class TestGetTrail:
     assert headers['Authorization'] == 'Bearer tok'
     assert body is None
 
-  def test_http_error_propagates(self, monkeypatch):
+  def test_deterministic_http_error_propagates_without_retry(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
-    # one failed response + one retry: the client retries once on any failure
-    # (transport or HTTP error), and stops after the second attempt.
-    fake.queue((404, b'not found'))
     fake.queue((404, b'not found'))
     c = _client()
-    with pytest.raises(http.client.HTTPException):
+    with pytest.raises(HTTPStatusError) as exception_info:
       c.get_trail('missing')
+    assert exception_info.value.status == 404
+    assert len(fake.requests) == 1
 
 
 class TestGetSteps:
@@ -124,6 +123,14 @@ class TestGetSteps:
 
 
 class TestIterSteps:
+  def test_after_starts_past_the_cursor(self, monkeypatch):
+    fake = _install_fake_connection(monkeypatch)
+    fake.queue((200, json.dumps({'steps': [{'step_id': 's2'}], 'next': None}).encode()))
+    c = _client()
+    steps = list(c.iter_steps('T1', after='s1'))
+    assert [s['step_id'] for s in steps] == ['s2']
+    assert 'after=s1' in fake.requests[0][1]
+
   def test_paginates_until_next_is_none(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
     fake.queue((200, json.dumps({'steps': [{'step_id': 's1'}], 'next': 's1'}).encode()))
@@ -195,6 +202,22 @@ class TestRetryBehavior:
     c = _client()
     with pytest.raises(ConnectionError):
       c.get_trail('T1')
+
+  def test_retryable_status_recovered(self, monkeypatch):
+    fake = _install_fake_connection(monkeypatch)
+    fake.queue((503, b'unavailable'))
+    fake.queue((200, b'{"trail_id": "T1"}'))
+    c = _client()
+    assert c.get_trail('T1') == {'trail_id': 'T1'}
+
+  def test_persistent_retryable_status_propagates(self, monkeypatch):
+    fake = _install_fake_connection(monkeypatch)
+    fake.queue((503, b'unavailable 1'))
+    fake.queue((503, b'unavailable 2'))
+    c = _client()
+    with pytest.raises(HTTPStatusError) as exception_info:
+      c.get_trail('T1')
+    assert exception_info.value.status == 503
 
 
 class TestTrailFromHeader:

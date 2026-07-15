@@ -4,7 +4,8 @@ bros recording pipeline.
 
 four subcommands:
 - `trails list` — filtered listing of trail headers, paged through `$PAGER`.
-- `trails show <id>` — header + step listing for one trail.
+- `trails show <id>` — header + step listing for one trail; `-f` keeps polling
+  and renders new steps as they land, like `tail -f`.
 - `trails tree <id>` — render the parent/fork hierarchy reachable from a trail.
 - `trails fork <id> <step_id>` — call `bro.fork.fork()` and drop the user into
   an interactive `.send()` loop, similar in spirit to `do.call.call_text`.
@@ -14,16 +15,18 @@ comes from the `trails` secret (the same one `HTTPTracker` reads).
 """
 
 import asyncio
+import http.client
 import json
 import os
 import sys
-from collections.abc import Callable
+import time
+from collections.abc import Callable, Iterator
 from typing import Any, Optional
 
 import base.args
 from base import log, pager
 from bro.fork import fork
-from llm.tracker import RecordedTrail, Step
+from llm.tracker import HTTPStatusError, RecordedTrail, Step, is_retryable_status
 from trails.client import (
   TrailsClient,
   default_client,
@@ -262,9 +265,55 @@ def _command_list(client: TrailsClient, args: dict, colors: _Colors) -> int:
   return 0
 
 
+def _follow_steps(
+  client: TrailsClient,
+  trail_id: str,
+  *,
+  interval: float,
+  sleep: Callable[[float], None] = time.sleep,
+) -> Iterator[dict]:
+  """yield the trail's existing steps, then keep polling for new ones every
+  `interval` seconds — `tail -f` over a trail's step stream.
+
+  terminates once the `end` step arrives or — for a trail that never got one
+  (`end_trail` is best-effort on the write side) — once an idle poll finds
+  `ended_at` set on the header; a still-live trail is followed until
+  interrupted. transient failures (network blips, 5xx / 429) are logged and
+  retried on the next tick; a deterministic 4xx propagates.
+  """
+  after: Optional[str] = None
+  while True:
+    try:
+      for row in client.iter_steps(trail_id, after=after):
+        after = row['step_id']
+        yield row
+        if row.get('kind') == 'end':
+          return
+      if client.get_trail(trail_id).get('ended_at') is not None:
+        # the end transaction may have committed between the steps poll and
+        # this header read — drain once more so its steps are not dropped.
+        yield from client.iter_steps(trail_id, after=after)
+        return
+    except HTTPStatusError as exception:
+      if not is_retryable_status(exception.status):
+        raise
+      log.warning('transient trails-server error, retrying: %s', exception)
+    except (OSError, http.client.HTTPException) as exception:
+      log.warning('transient trails-server error, retrying: %s', exception)
+    sleep(interval)
+
+
 def _command_show(client: TrailsClient, args: dict, colors: _Colors) -> int:
   trail_id = args['trail_id']
   header = client.get_trail(trail_id)
+  if bool(args.get('follow', False)):
+    print(_format_trail_header(header, colors), flush=True)
+    try:
+      for row in _follow_steps(client, trail_id, interval=args['interval']):
+        print(_format_step_summary(row, colors), flush=True)
+    except KeyboardInterrupt:
+      return 130
+    return 0
   out: list[str] = [_format_trail_header(header, colors)]
   for row in client.iter_steps(trail_id):
     out.append(_format_step_summary(row, colors))
@@ -408,6 +457,16 @@ def main(argv: list[str]) -> Optional[int]:
   show_p = sub.add_parser('show', help='show header + step listing for one trail')
   show_p.add_argument('trail_id')
   show_p.add_argument('--no-pager', action='store_true', help='do not pipe output through a pager')
+  show_p.add_argument(
+    '-f',
+    '--follow',
+    action='store_true',
+    help='keep polling for new steps and render them as they arrive, like tail -f; '
+    'exits once the trail ends (no pager)',
+  )
+  show_p.add_argument(
+    '--interval', type=float, default=2.0, help='seconds between polls with --follow'
+  )
 
   tree_p = sub.add_parser('tree', help='render the parent/fork hierarchy reachable from a trail')
   tree_p.add_argument('trail_id')
