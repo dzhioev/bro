@@ -234,52 +234,9 @@ class Store:
     return value
 
 
-# the built-in registry for every secret the project knows about, in the same
-# shape as a generated `credentials.json` so it is constructed the same way (via
-# `Secret.from_dict`). each secret maps to one local file. an `install` hook wires
-# a secret into a tool that reads it from outside the resolver (git, the aws CLI)
-# — see `install_hooks`.
-_BUILTIN_REGISTRY: dict = {
-  'notion': {'sources': [{'file': 'notion.json'}]},
-  'focus': {'sources': [{'file': 'focus.json'}]},
-  'flow_mcp': {'sources': [{'file': 'flow_mcp.json'}]},
-  'brog': {'sources': [{'file': 'brog.json'}]},
-  'infra': {'sources': [{'file': 'infra.json'}]},
-  'trails': {'sources': [{'file': 'trails.json'}]},
-  'session_log': {'sources': [{'file': 'session_log.json'}]},
-  'process_inbox': {'sources': [{'file': 'process_inbox.json'}]},
-  'openai': {'sources': [{'file': 'openai.json'}]},
-  'anthropic': {'sources': [{'file': 'anthropic.json'}]},
-  'claude_code': {
-    'sources': [{'file': 'claude_code_oauth_token'}],
-    # the long-lived `claude setup-token` OAuth token, exported as the env var
-    # Claude Code reads above its rotating ~/.claude/.credentials.json OAuth.
-    'install': 'export CLAUDE_CODE_OAUTH_TOKEN="$(credentials get claude_code)"',
-  },
-  'tmdb': {'sources': [{'file': 'tmdb.json'}]},
-  'brave': {'sources': [{'file': 'brave.json'}]},
-  'google_api': {'sources': [{'file': 'google_api.json'}]},
-  'gmail_creds': {'sources': [{'file': 'gmail_creds.json'}]},
-  'twitch': {'sources': [{'file': 'twitch.json'}]},
-  'twitch_user_token': {'sources': [{'file': 'twitch_user_token.json'}]},
-  'github': {
-    'sources': [{'file': 'cw_github_token_bro'}],
-    # GH_TOKEN is exported once and read by both gh and the git credential helper
-    # below (which expands it per push).
-    'install': (
-      'export GH_TOKEN="$(credentials get github)"\n'
-      'git config --global credential.helper '
-      '\'!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f\''
-    ),
-  },
-  'aws': {
-    'sources': [{'file': 'aws_credentials'}],
-    # ~/.aws/credentials is where the aws CLI/SDK reads by default, so placing the
-    # value there is the whole install. the subshell confines umask 077 to the
-    # write so the file lands 0600 without the umask persisting into the session.
-    'install': '(umask 077; mkdir -p "$HOME/.aws"; credentials get aws > "$HOME/.aws/credentials")',
-  },
-}
+# every secret the project knows about, in the same shape as a generated
+# `credentials.json` so it is constructed the same way (via `Secret.from_dict`).
+_BUILTIN_REGISTRY_PATH = Path(__file__).with_name('registry.json')
 
 
 def _registry_from_dict(data: dict) -> dict[str, Secret]:
@@ -288,7 +245,7 @@ def _registry_from_dict(data: dict) -> dict[str, Secret]:
 
 def default_registry() -> dict[str, Secret]:
   """the built-in registry (every known secret as a single local source)."""
-  return _registry_from_dict(_BUILTIN_REGISTRY)
+  return _registry_from_dict(json.loads(_BUILTIN_REGISTRY_PATH.read_text()))
 
 
 def _load_registry() -> dict[str, Secret]:

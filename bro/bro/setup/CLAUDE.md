@@ -44,7 +44,7 @@ Worktrees get their own `.venv`. `cw` (host mode) creates the worktree and runs 
 
 ## Configuration
 
-Credentials live in the standalone `~/.ppp` store; the repo no longer carries them. Readers resolve them through `base.credentials` — `credentials.default_store().get_json(name)` — which searches `<repo>/.configs` (where the deployed services synthesize their configs at runtime) then `~/.ppp`. The built-in registry maps each secret name below to its `<file>`. The `credentials get <name> [--field <key>]` CLI exposes the same resolver to non-Python callers (e.g. the Anthropic apiKeyHelper), while `credentials list` prints the names that resolve in the current store; host scripts that write new secrets write directly to `~/.ppp`.
+Credentials live in the standalone `~/.ppp` store; the repo no longer carries them. Readers resolve them through `base.credentials` — `credentials.default_store().get_json(name)` — which searches `<repo>/.configs` (where the deployed services synthesize their configs at runtime) then `~/.ppp`. The built-in registry (`base/registry.json`) maps each secret name below to its `<file>`. The `credentials get <name> [--field <key>]` CLI exposes the same resolver to non-Python callers (e.g. the Anthropic apiKeyHelper), while `credentials list` prints the names that resolve in the current store; host scripts that write new secrets write directly to `~/.ppp`.
 
 - `notion.json` — Notion token + database IDs (`tasks_db_id`, `events_db_id`, `projects_db_id`, `media_db_id`) + `root_page_id`, the fixed parent page all `create_page` pages land under
 - `google_api.json` — Google OAuth client config

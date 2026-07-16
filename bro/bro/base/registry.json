@@ -1,0 +1,30 @@
+{
+  "notion": {"sources": [{"file": "notion.json"}]},
+  "focus": {"sources": [{"file": "focus.json"}]},
+  "flow_mcp": {"sources": [{"file": "flow_mcp.json"}]},
+  "brog": {"sources": [{"file": "brog.json"}]},
+  "infra": {"sources": [{"file": "infra.json"}]},
+  "trails": {"sources": [{"file": "trails.json"}]},
+  "session_log": {"sources": [{"file": "session_log.json"}]},
+  "process_inbox": {"sources": [{"file": "process_inbox.json"}]},
+  "openai": {"sources": [{"file": "openai.json"}]},
+  "anthropic": {"sources": [{"file": "anthropic.json"}]},
+  "claude_code": {
+    "sources": [{"file": "claude_code_oauth_token"}],
+    "install": "export CLAUDE_CODE_OAUTH_TOKEN=\"$(credentials get claude_code)\""
+  },
+  "tmdb": {"sources": [{"file": "tmdb.json"}]},
+  "brave": {"sources": [{"file": "brave.json"}]},
+  "google_api": {"sources": [{"file": "google_api.json"}]},
+  "gmail_creds": {"sources": [{"file": "gmail_creds.json"}]},
+  "twitch": {"sources": [{"file": "twitch.json"}]},
+  "twitch_user_token": {"sources": [{"file": "twitch_user_token.json"}]},
+  "github": {
+    "sources": [{"file": "cw_github_token_bro"}],
+    "install": "export GH_TOKEN=\"$(credentials get github)\"\ngit config --global credential.helper '!f() { echo username=x-access-token; echo \"password=$GH_TOKEN\"; }; f'"
+  },
+  "aws": {
+    "sources": [{"file": "aws_credentials"}],
+    "install": "(umask 077; mkdir -p \"$HOME/.aws\"; credentials get aws > \"$HOME/.aws/credentials\")"
+  }
+}
