@@ -36,7 +36,13 @@ from broker.spawn import ChildHandle, LaunchSpec, Spawner
 from broker.transport import Provisioned
 from broker.transports.unix import UnixServerTransport
 from cw.bro_run import describe
-from cw.docker import Launch as DockerLaunch, prepare_container
+from cw.docker import (
+  DETACH_FLAG,
+  Launch as DockerLaunch,
+  container_running,
+  prepare_container,
+  suspend_until_continued,
+)
 from cw.git import resolve_head, resolve_ref
 from cw.paths import _broker_dir, _host_log_dir, _project_root, _summon_dir
 from cw.secrets import log_scoped_secrets
@@ -260,6 +266,7 @@ class _AttachedHandle(ChildHandle):
 
   def __init__(self, process: asyncio.subprocess.Process, host_log: Optional[Path] = None):
     self._process = process
+    self._interrupt_forwarded = False
     self._loop = asyncio.get_running_loop()
     self._loop.add_signal_handler(signal.SIGINT, self._forward_sigint)
     self._redirect = _HostLogRedirect(host_log) if host_log is not None else None
@@ -268,16 +275,20 @@ class _AttachedHandle(ChildHandle):
 
   def _forward_sigint(self) -> None:
     if self._process.returncode is None:
+      self._interrupt_forwarded = True
       self._process.send_signal(signal.SIGINT)
 
   async def wait(self) -> int:
     try:
-      return await self._process.wait()
+      return await self._wait_child()
     finally:
       self._loop.remove_signal_handler(signal.SIGINT)
       if self._redirect is not None:
         self._redirect.restore()
       await self._on_exited()
+
+  async def _wait_child(self) -> int:
+    return await self._process.wait()
 
   async def _on_exited(self) -> None:
     """subtype teardown, run after the child exits and before `wait()` returns."""
@@ -287,7 +298,14 @@ class _AttachedHandle(ChildHandle):
 
 
 class _AttachedRoot(_AttachedHandle):
-  """handle for the interactive container root: the docker client owns the stdio."""
+  """handle for the interactive container root: the docker client owns the stdio.
+
+  A client exit is ambiguous: the container may have exited (the client's code is its
+  exit code), or the user hit Ctrl+Z — the client's detach key — and the container
+  lives on. `_wait_child` tells them apart by the container's running state (the
+  client exits 0 either way), suspends the session Ctrl+Z-style, and re-attaches on
+  resume. A forwarded SIGINT also exits the client with 0, so ending the session on
+  interrupt rides the remembered forward, not the exit code."""
 
   def __init__(
     self,
@@ -297,6 +315,18 @@ class _AttachedRoot(_AttachedHandle):
   ):
     super().__init__(process, host_log)
     self._container_id = container_id
+
+  async def _wait_child(self) -> int:
+    while True:
+      code = await self._process.wait()
+      if code != 0 or self._interrupt_forwarded:
+        return code
+      if not await asyncio.to_thread(container_running, self._container_id):
+        return code
+      await asyncio.to_thread(suspend_until_continued, self._container_id)
+      self._process = await asyncio.create_subprocess_exec(
+        'docker', 'attach', DETACH_FLAG, self._container_id
+      )
 
   async def _on_exited(self) -> None:
     # a tty attach runs with docker's sig-proxy off, so the client can die (e.g. a
@@ -336,7 +366,9 @@ class DockerSpawner(Spawner):
     assert isinstance(launch, DockerLaunchSpec)
     container_id, workspace = await asyncio.to_thread(_prepare_docker_spawn, launch, channel)
     if launch.launch.tty:
-      process = await asyncio.create_subprocess_exec('docker', 'start', '-a', '-i', container_id)
+      process = await asyncio.create_subprocess_exec(
+        'docker', 'start', '-a', '-i', DETACH_FLAG, container_id
+      )
       return _AttachedRoot(container_id, process, host_log=self._host_log)
     process = await asyncio.create_subprocess_exec(
       'docker',

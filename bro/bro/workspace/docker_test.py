@@ -1,4 +1,5 @@
 import json
+import signal
 
 import pytest
 
@@ -84,6 +85,65 @@ class TestCreateContainer:
     with pytest.raises(RuntimeError, match='docker cp'):
       cw.docker._create_container(['docker', 'create'], b'', 'ws')
     assert calls[-1]['argv'] == ['docker', 'rm', '-f', 'cid123']
+
+
+class TestContainerRunning:
+  def _probe(self, monkeypatch, result: _FakeProc):
+    calls: list = []
+
+    def fake_run(argv, *a, **k):
+      calls.append(argv)
+      return result
+
+    monkeypatch.setattr(cw.docker.subprocess, 'run', fake_run)
+    return calls
+
+  def test_running(self, monkeypatch):
+    calls = self._probe(monkeypatch, _FakeProc(returncode=0, stdout='true\n'))
+    assert cw.docker.container_running('cid123') is True
+    assert calls == [['docker', 'inspect', '--format', '{{.State.Running}}', 'cid123']]
+
+  def test_exited(self, monkeypatch):
+    self._probe(monkeypatch, _FakeProc(returncode=0, stdout='false\n'))
+    assert cw.docker.container_running('cid123') is False
+
+  def test_removed_reads_as_not_running(self, monkeypatch):
+    # --rm removes an exited container, so the inspect error is the common exit shape
+    self._probe(monkeypatch, _FakeProc(returncode=1, stderr='no such object'))
+    assert cw.docker.container_running('cid123') is False
+
+
+class TestSuspendUntilContinued:
+  def _dance(self, monkeypatch, pause_result=None):
+    events: list = []
+
+    def fake_run(argv, *a, **k):
+      events.append(argv)
+      if pause_result is not None and argv[1] == 'pause':
+        return pause_result
+      return _FakeProc(returncode=0)
+
+    monkeypatch.setattr(cw.docker.subprocess, 'run', fake_run)
+    monkeypatch.setattr(cw.docker.os, 'kill', lambda pid, sig: events.append(('kill', pid, sig)))
+    return events
+
+  def test_freezes_stops_own_group_then_thaws(self, monkeypatch):
+    events = self._dance(monkeypatch)
+    cw.docker.suspend_until_continued('cid123')
+    # the stop targets the whole process group (pid 0): the launching shell reports its
+    # job stopped only when every process in it stops, dive-in wrappers included
+    assert events == [
+      ['docker', 'pause', 'cid123'],
+      ('kill', 0, signal.SIGTSTP),
+      ['docker', 'unpause', 'cid123'],
+    ]
+
+  def test_freezer_failure_warns_but_still_suspends(self, monkeypatch, caplog):
+    events = self._dance(monkeypatch, pause_result=_FakeProc(returncode=1, stderr='not running'))
+    cw.docker.suspend_until_continued('cid123')
+    assert ('kill', 0, signal.SIGTSTP) in events
+    assert events[-1] == ['docker', 'unpause', 'cid123']
+    assert 'docker pause cid123 failed: not running' in caplog.text
 
 
 class TestPruneSupersededImages:

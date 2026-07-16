@@ -41,7 +41,70 @@ class TestRunInContainerInjection:
     )
     assert cw.containers.run_in_container(launch) == 7
     assert prepared == [(launch, tmp_path / 'project')]
-    assert calls == [['docker', 'start', '-a', '-i', 'cid123']]
+    assert calls == [['docker', 'start', '-a', '-i', '--detach-keys=ctrl-z', 'cid123']]
+
+  def test_non_tty_launch_attaches_without_detach_keys(self, monkeypatch, tmp_path):
+    monkeypatch.setenv('BROKER_DISABLED', '1')
+    monkeypatch.setattr(cw.containers, '_project_root', lambda: tmp_path / 'project')
+    monkeypatch.setattr(cw.containers, 'prepare_container', lambda launch, project: 'cid123')
+    calls: list[list[str]] = []
+
+    def fake_run(argv, *args, **kwargs):
+      calls.append(argv)
+      return _FakeProc(returncode=0)
+
+    monkeypatch.setattr(cw.containers.subprocess, 'run', fake_run)
+    launch = cw.docker.Launch(
+      name='ws',
+      command=['bro', 'run'],
+      env={},
+      secrets=(),
+      docker_sock=False,
+      tty=False,
+      forward_env=False,
+    )
+    assert cw.containers.run_in_container(launch) == 0
+    # no pty, so no Ctrl+Z to intercept — and a zero exit must not probe the container
+    assert calls == [['docker', 'start', '-a', 'cid123']]
+
+
+class TestAttachInteractive:
+  def _harness(self, monkeypatch, codes: list[int], running: list[bool]):
+    events: list = []
+    code_iterator = iter(codes)
+    running_iterator = iter(running)
+
+    def fake_run(argv, *args, **kwargs):
+      events.append(argv)
+      return _FakeProc(returncode=next(code_iterator))
+
+    monkeypatch.setattr(cw.containers.subprocess, 'run', fake_run)
+    monkeypatch.setattr(cw.containers, 'container_running', lambda cid: next(running_iterator))
+    monkeypatch.setattr(
+      cw.containers, 'suspend_until_continued', lambda cid: events.append(('suspend', cid))
+    )
+    return events
+
+  def test_detach_suspends_and_reattaches(self, monkeypatch):
+    events = self._harness(monkeypatch, codes=[0, 4], running=[True])
+    assert cw.containers._attach_interactive('cid123') == 4
+    assert events == [
+      ['docker', 'start', '-a', '-i', '--detach-keys=ctrl-z', 'cid123'],
+      ('suspend', 'cid123'),
+      ['docker', 'attach', '--detach-keys=ctrl-z', 'cid123'],
+    ]
+
+  def test_container_exit_returns_without_suspend(self, monkeypatch):
+    events = self._harness(monkeypatch, codes=[0], running=[False])
+    assert cw.containers._attach_interactive('cid123') == 0
+    assert events == [['docker', 'start', '-a', '-i', '--detach-keys=ctrl-z', 'cid123']]
+
+  def test_client_death_returns_without_probing_the_container(self, monkeypatch):
+    # a nonzero client exit is never a detach (the detach key exits 0); the running
+    # probe must not even run — the daemon may be the very thing that just failed
+    events = self._harness(monkeypatch, codes=[130], running=[])
+    assert cw.containers._attach_interactive('cid123') == 130
+    assert events == [['docker', 'start', '-a', '-i', '--detach-keys=ctrl-z', 'cid123']]
 
 
 class TestBrokerGate:

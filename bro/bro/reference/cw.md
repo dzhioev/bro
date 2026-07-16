@@ -108,6 +108,12 @@ Network is not restricted by design.
 
 When a container session exits, the workspace directory and the per-session host-side state stay on disk for the next session, unless `--drop` was passed (in which case `var/cw/containers/<name>`, `~/.claude/cw-sessions/<name>`, and the session host log `var/cw/log/c:<name>.log` are removed).
 
+#### Ctrl+Z: suspend and resume
+
+Inside the container no job-control shell sits above the session (`docker-init` is the session leader), so a raw Ctrl+Z byte reaching the container pty would stop claude's foreground group with nothing able to ever resume it — a wedged terminal. Every interactive attach therefore binds Ctrl+Z as the docker client's detach key (`--detach-keys=ctrl-z`, replacing the default `ctrl-p,ctrl-q` sequence — so Ctrl-P passes through to claude): the byte never enters the container, and pressing Ctrl+Z detaches the host-side client instead.
+
+cw tells a detach from a container exit by the container's running state — the client exits 0 either way. On detach it freezes the whole container (`docker pause`, the cgroup freezer) and stops its own process group, so the launching shell reports the job stopped exactly like a host-mode Ctrl+Z; `fg` resumes cw, which thaws the container and re-attaches. The entire session — claude, the MCP server, the session daemons — is frozen while suspended. Both attach paths behave this way (the broker-supervised root and the broker-less fallback); host mode needs none of it — a real shell with job control sits above the session there, so plain job-control suspend already works. With no job-control shell above cw itself (an orphaned process group), the kernel discards the self-stop and Ctrl+Z degrades to a brief pause + re-attach instead of a wedge.
+
 #### Container credential isolation
 
 The container does **not** bind-mount `~/.claude.json` from the host, nor does the host's OAuth credentials file ever enter the container. Instead, `cw/docker.py:_docker_create_argv` seeds a container-private `~/.claude.json` under `~/.claude/cw-sessions/<name>/` and bind-mounts that, while session auth comes from the `claude_code` token (below):

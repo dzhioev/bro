@@ -1,5 +1,6 @@
 import hashlib
 import os
+import signal
 import subprocess
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
@@ -60,6 +61,42 @@ def running_mounts() -> set[str]:
   if inspect.returncode != 0:
     return set()
   return {line for line in inspect.stdout.splitlines() if len(line) > 0}
+
+
+# Ctrl+Z must never reach the container pty: the line discipline there would stop a
+# foreground group that no job-control shell can ever resume (docker-init is the
+# session leader). Binding it as the client's detach key makes it a host-side event
+# instead (`suspend_until_continued`).
+DETACH_FLAG = '--detach-keys=ctrl-z'
+
+
+def container_running(container_id: str) -> bool:
+  """whether the container currently runs (False once it exited or was removed)."""
+  result = subprocess.run(
+    ['docker', 'inspect', '--format', '{{.State.Running}}', container_id],
+    capture_output=True,
+    text=True,
+  )
+  return result.returncode == 0 and result.stdout.strip() == 'true'
+
+
+def _freezer(verb: str, container_id: str) -> None:
+  """pause/unpause, best-effort: a failure (e.g. the container exited just as the user
+  detached) degrades the freeze, never the session."""
+  result = subprocess.run(['docker', verb, container_id], capture_output=True, text=True)
+  if result.returncode != 0:
+    log.warning('docker %s %s failed: %s', verb, container_id, result.stderr.strip())
+
+
+def suspend_until_continued(container_id: str) -> None:
+  """host-parity Ctrl+Z for an attached session: freeze the whole container (cgroup
+  freezer) and stop this process's own group, so the launching shell reports the job
+  stopped; on `fg` (SIGCONT) thaw the container and return, letting the caller
+  re-attach. With no job-control shell above (an orphaned process group) the kernel
+  discards the self-SIGTSTP, degrading Ctrl+Z to an immediate re-attach."""
+  _freezer('pause', container_id)
+  os.kill(0, signal.SIGTSTP)
+  _freezer('unpause', container_id)
 
 
 def find_container_id(session: Path) -> Optional[str]:

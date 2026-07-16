@@ -6,7 +6,14 @@ from dataclasses import replace
 from pathlib import Path
 
 from base import log
-from cw.docker import Launch, find_container_id, prepare_container
+from cw.docker import (
+  DETACH_FLAG,
+  Launch,
+  container_running,
+  find_container_id,
+  prepare_container,
+  suspend_until_continued,
+)
 from cw.paths import _containers_dir, _project_root
 from cw.secrets import log_scoped_secrets
 from cw.workspace import ContainerWorkspace, _format_ref, _parse_ref
@@ -100,6 +107,17 @@ def _run_root_via_broker(launch: Launch, project: Path, *, may_summon: Collectio
   return run_root_via_broker(broker_launch, project, session=session, may_summon=may_summon)
 
 
+def _attach_interactive(container_id: str) -> int:
+  """run the interactive docker client, turning a Ctrl+Z detach into a job-control
+  suspend: a zero client exit with the container still running is the detach key
+  firing — freeze the session until the shell resumes it, then re-attach."""
+  code = subprocess.run(['docker', 'start', '-a', '-i', DETACH_FLAG, container_id]).returncode
+  while code == 0 and container_running(container_id):
+    suspend_until_continued(container_id)
+    code = subprocess.run(['docker', 'attach', DETACH_FLAG, container_id]).returncode
+  return code
+
+
 def run_in_container(
   launch: Launch, *, drop: bool = False, may_summon: Collection[str] = ()
 ) -> int:
@@ -118,10 +136,10 @@ def run_in_container(
     code = _run_root_via_broker(launch, project, may_summon=may_summon)
   else:
     container_id = prepare_container(launch, project)
-    start = ['docker', 'start', '-a']
     if launch.tty:
-      start.append('-i')
-    code = subprocess.run([*start, container_id]).returncode
+      code = _attach_interactive(container_id)
+    else:
+      code = subprocess.run(['docker', 'start', '-a', container_id]).returncode
   if drop:
     try:
       ContainerWorkspace(launch.name, project).remove()

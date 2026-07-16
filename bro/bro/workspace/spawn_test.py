@@ -161,6 +161,9 @@ class TestAttachedRoot:
       removed.append(container_id)
 
     monkeypatch.setattr(cw.spawn, '_force_remove', fake_remove)
+    # default: the container exited with the client — the tests below that model a
+    # detach override this
+    monkeypatch.setattr(cw.spawn, 'container_running', lambda container_id: False)
     return removed
 
   async def _spawn_interruptible(self) -> asyncio.subprocess.Process:
@@ -202,6 +205,73 @@ class TestAttachedRoot:
     root = cw.spawn._AttachedRoot('cid', process)
     await root.wait()
     assert root.output_tail() == ''
+
+  @pytest.mark.asyncio
+  async def test_detach_suspends_and_reattaches(self, removed, monkeypatch):
+    # client exits 0 with the container running: the user hit the detach key. the
+    # session suspends, then re-attaches; the second client exit (container gone)
+    # ends the session with the client's code
+    running = iter([True, False])
+    monkeypatch.setattr(cw.spawn, 'container_running', lambda container_id: next(running))
+    suspended: list = []
+    monkeypatch.setattr(
+      cw.spawn, 'suspend_until_continued', lambda container_id: suspended.append(container_id)
+    )
+    attaches: list = []
+    real_exec = asyncio.create_subprocess_exec
+
+    def fake_exec(*argv, **kwargs):
+      attaches.append(list(argv))
+      return real_exec(sys.executable, '-c', 'raise SystemExit(5)', **kwargs)
+
+    monkeypatch.setattr(asyncio, 'create_subprocess_exec', fake_exec)
+    process = await real_exec(sys.executable, '-c', 'pass')
+    root = cw.spawn._AttachedRoot('cid', process)
+    assert await root.wait() == 5
+    assert suspended == ['cid']
+    assert attaches == [['docker', 'attach', '--detach-keys=ctrl-z', 'cid']]
+    assert removed == ['cid']
+
+  @pytest.mark.asyncio
+  async def test_client_death_ends_the_session_without_suspend(self, removed, monkeypatch):
+    # a nonzero client exit is never a detach (the detach key exits 0), whatever the
+    # container state
+    monkeypatch.setattr(cw.spawn, 'container_running', lambda container_id: True)
+    suspended: list = []
+    monkeypatch.setattr(
+      cw.spawn, 'suspend_until_continued', lambda container_id: suspended.append(container_id)
+    )
+    process = await asyncio.create_subprocess_exec(sys.executable, '-c', 'raise SystemExit(3)')
+    root = cw.spawn._AttachedRoot('cid', process)
+    assert await root.wait() == 3
+    assert suspended == []
+    assert removed == ['cid']
+
+  @pytest.mark.asyncio
+  async def test_forwarded_interrupt_ends_the_session_not_suspends_it(self, removed, monkeypatch):
+    # an interrupted docker client also exits 0 while the container lives on — only
+    # the remembered forward tells this apart from a detach
+    monkeypatch.setattr(cw.spawn, 'container_running', lambda container_id: True)
+    suspended: list = []
+    monkeypatch.setattr(
+      cw.spawn, 'suspend_until_continued', lambda container_id: suspended.append(container_id)
+    )
+    code = textwrap.dedent("""
+      import signal, sys, time
+      signal.signal(signal.SIGINT, lambda *a: sys.exit(0))
+      print('ready', flush=True)
+      time.sleep(30)
+    """)
+    process = await asyncio.create_subprocess_exec(
+      sys.executable, '-c', code, stdout=asyncio.subprocess.PIPE
+    )
+    assert process.stdout is not None
+    await process.stdout.readline()  # handler installed
+    root = cw.spawn._AttachedRoot('cid', process)
+    root._forward_sigint()
+    assert await root.wait() == 0
+    assert suspended == []
+    assert removed == ['cid']
 
   @pytest.mark.asyncio
   async def test_host_output_redirected_for_the_attached_span(self, tmp_path, monkeypatch):
@@ -657,6 +727,7 @@ class TestDockerSpawnerModes:
       pass
 
     monkeypatch.setattr(cw.spawn, '_force_remove', fake_remove)
+    monkeypatch.setattr(cw.spawn, 'container_running', lambda container_id: False)
     starts: list = []
     real_exec = asyncio.create_subprocess_exec
 
@@ -696,7 +767,9 @@ class TestDockerSpawnerModes:
       assert project == spawn_harness['project']
       assert prepared.env['BROKER_CHANNEL'] == 'unix:/run/broker.sock'
       assert '/host/CH.sock:/run/broker.sock' in prepared.extra_mounts
-      assert spawn_harness['starts'] == [['docker', 'start', '-a', '-i', 'cid123']]
+      assert spawn_harness['starts'] == [
+        ['docker', 'start', '-a', '-i', '--detach-keys=ctrl-z', 'cid123']
+      ]
     finally:
       await handle.wait()
 
