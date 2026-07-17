@@ -551,12 +551,19 @@ class _FakeApp:
 
   def __init__(self):
     self.posted: list[str] = []
+    self.tool_events: list[str] = []
 
   def call_from_thread(self, function, *args, **kwargs):
     function(*args, **kwargs)
 
   def append_trace_line(self, text: str) -> None:
     self.posted.append(text)
+
+  def note_tool_call(self, name: str) -> None:
+    self.tool_events.append(f'call {name}')
+
+  def note_tool_result(self) -> None:
+    self.tool_events.append('result')
 
 
 def test_chat_markdown_carries_bold_and_link_styles():
@@ -739,3 +746,45 @@ def test_tui_renderer_posts_one_line_per_event():
     '✎ says: thinking out loud',
     # terminal message is skipped — ChatApp renders the reply itself
   ]
+  assert app.tool_events == ['call web_search', 'result']
+
+
+def test_typing_status_text():
+  from bro.launch.call_tui import _typing_status
+
+  assert _typing_status([], 5) == 'Thinking for 5 seconds'
+  assert _typing_status([], 61) == 'Thinking for a minute'
+  assert _typing_status(['brog__create_task'], 0.5) == 'Calling brog::create_task()'
+  assert _typing_status(['brog__create_task'], 5) == 'Calling brog::create_task for 5 seconds'
+  assert _typing_status(['banner'], 0.5) == 'Calling banner()'
+  assert _typing_status(['a', 'b', 'c'], 5) == 'Calling 3 tools'
+
+
+@pytest.mark.asyncio
+async def test_tui_typing_indicator_tracks_run_state(monkeypatch):
+  from textual.widgets import Static
+
+  from bro.launch.call_tui import ChatApp, TypingIndicator
+
+  monkeypatch.setattr('cw.render_banner', lambda llm=False, bro=None: 'BANNER')
+  app = ChatApp(RecordBro(), None)
+  async with app.run_test() as pilot:
+    app._show_typing()
+    await pilot.pause()
+    indicator = app.query_one(TypingIndicator)
+    label = indicator.query_one(Static)
+    assert str(label.content).startswith('Thinking for')
+    app.note_tool_call('web_search')
+    assert str(label.content).startswith('Calling web_search()')
+    # a call running longer than a second gains its elapsed time
+    indicator._phase_since -= 5
+    indicator.tick()
+    assert str(label.content).startswith('Calling web_search for 5 seconds')
+    app.note_tool_call('flow__list_tasks')
+    assert str(label.content).startswith('Calling 2 tools')
+    app.note_tool_result()
+    assert str(label.content).startswith('Calling flow::list_tasks()')
+    app.note_tool_result()
+    # the batch's results are all in — the next LLM roundtrip starts, so the
+    # thinking clock restarts from zero
+    assert str(label.content).startswith('Thinking for a moment')

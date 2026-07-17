@@ -755,7 +755,6 @@ class TestLogFlag:
   def test_explicit_log_wins_over_verbose_env(self, monkeypatch):
     import logging as _logging
 
-
     monkeypatch.setenv('VERBOSE', '1')
     parser = Parser()
     parser.parse_args(['--allow-env', '--log', 'info'])

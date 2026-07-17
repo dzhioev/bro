@@ -301,6 +301,16 @@ def wire_name(namespace: str, tool: str) -> str:
   return f'{namespace}__{tool}'
 
 
+def canonical_name(wire: str) -> str:
+  # inverse of `wire_name`, for display surfaces; unambiguous because segments
+  # never contain `__`. a name without a separator (an unnamespaced service
+  # tool) passes through unchanged.
+  namespace, separator, tool = wire.partition('__')
+  if separator == '':
+    return wire
+  return f'{namespace}::{tool}'
+
+
 class MCPServer(ABC):
   # credentials this server's tools resolve through the store. unioned across a
   # bro's declared servers (and along each server's own MRO) into

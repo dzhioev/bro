@@ -1,9 +1,11 @@
 """IM-style chat TUI for `call`. Entry point: `ChatApp(bro, initial).run()`."""
 
 import asyncio
+import time
 from datetime import date, datetime
 from typing import Any, ClassVar, Optional
 
+import humanize
 import rich.markdown
 from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderResult
 from rich.measure import Measurement
@@ -29,6 +31,7 @@ from bro.launch._trace_format import compact_value, oneline, truncate
 from bro.launch.call import DATE_FORMAT
 from bro.launch.resume import HistoryMessage
 from bro.show import format_card
+from llm.mcp import canonical_name
 from llm.observer import Observer
 
 _TRACE_VALUE_LIMIT = 200
@@ -238,8 +241,21 @@ class DateSeparator(Static):
     super().__init__(when.strftime(DATE_FORMAT))
 
 
+def _typing_status(pending_tool_calls: list[str], phase_seconds: float) -> str:
+  if len(pending_tool_calls) == 0:
+    return f'Thinking for {humanize.naturaldelta(phase_seconds)}'
+  if len(pending_tool_calls) == 1:
+    name = canonical_name(pending_tool_calls[0])
+    if phase_seconds > 1:
+      return f'Calling {name} for {humanize.naturaldelta(phase_seconds)}'
+    return f'Calling {name}()'
+  return f'Calling {len(pending_tool_calls)} tools'
+
+
 class TypingIndicator(Container):
-  """left-aligned 'Typing.../..' bubble animated by ChatApp's interval."""
+  """left-aligned status bubble animated by ChatApp's interval: 'Thinking for
+  <elapsed>' while an LLM roundtrip runs, 'Calling <tool>' / 'Calling N tools'
+  while tool results are pending."""
 
   DEFAULT_CSS = """
   TypingIndicator {
@@ -255,11 +271,34 @@ class TypingIndicator(Container):
   """
 
   def __init__(self):
-    self._label = Static('Typing')
+    # when the current wait began: the LLM roundtrip's start while no tool call
+    # is pending, the front (executing) tool call's start otherwise
+    self._phase_since = time.monotonic()
+    self._pending_tool_calls: list[str] = []
+    self._animation_step = 0
+    self._label = Static(self._status())
     super().__init__(self._label)
 
-  def set_text(self, text: str) -> None:
-    self._label.update(text)
+  def note_tool_call(self, name: str) -> None:
+    if len(self._pending_tool_calls) == 0:
+      self._phase_since = time.monotonic()
+    self._pending_tool_calls.append(name)
+    self._label.update(self._status())
+
+  def note_tool_result(self) -> None:
+    # results arrive in call order (the provider executes a batch
+    # sequentially), so the finished call is the front of the queue
+    self._pending_tool_calls.pop(0)
+    self._phase_since = time.monotonic()
+    self._label.update(self._status())
+
+  def tick(self) -> None:
+    self._animation_step = (self._animation_step + 1) % 4
+    self._label.update(self._status())
+
+  def _status(self) -> str:
+    status = _typing_status(self._pending_tool_calls, time.monotonic() - self._phase_since)
+    return status + '.' * self._animation_step
 
 
 class StatsScreen(ModalScreen):
@@ -322,7 +361,6 @@ class ChatApp(App):
     self._history = history if history is not None else []
     self._last_date: Optional[date] = None
     self._typing: Optional[TypingIndicator] = None
-    self._typing_step = 0
 
   def compose(self) -> ComposeResult:
     yield VerticalScroll(id='history')
@@ -417,7 +455,6 @@ class ChatApp(App):
     if self._typing is not None:
       return
     self._typing = TypingIndicator()
-    self._typing_step = 0
     self.query_one('#history', VerticalScroll).mount(self._typing)
     self._scroll_to_end()
 
@@ -430,8 +467,17 @@ class ChatApp(App):
   def _tick_typing(self) -> None:
     if self._typing is None:
       return
-    self._typing_step = (self._typing_step + 1) % 4
-    self._typing.set_text('Typing' + ('.' * self._typing_step))
+    self._typing.tick()
+
+  def note_tool_call(self, name: str) -> None:
+    """called from `TUIRenderer` via `call_from_thread`."""
+    if self._typing is not None:
+      self._typing.note_tool_call(name)
+
+  def note_tool_result(self) -> None:
+    """called from `TUIRenderer` via `call_from_thread`."""
+    if self._typing is not None:
+      self._typing.note_tool_result()
 
   @work(thread=True, exclusive=True)
   def _send_to_bro(self, text: str) -> None:
@@ -478,11 +524,13 @@ class TUIRenderer(Observer):
     self._post(f'✎ says: {truncate(oneline(text), _TRACE_VALUE_LIMIT, overflow_marker=False)}')
 
   def on_tool_call(self, name: str, arguments: dict[str, Any]) -> None:
+    self._app.call_from_thread(self._app.note_tool_call, name)
     self._post(
       f'→ {name} {truncate(compact_value(arguments), _TRACE_VALUE_LIMIT, overflow_marker=False)}'
     )
 
   def on_tool_result(self, name: str, result: dict[str, Any] | str) -> None:
+    self._app.call_from_thread(self._app.note_tool_result)
     self._post(
       f'← {name} {truncate(compact_value(result), _TRACE_VALUE_LIMIT, overflow_marker=False)}'
     )
