@@ -11,7 +11,7 @@
   "anthropic": {"sources": [{"file": "anthropic.json"}]},
   "claude_code": {
     "sources": [{"file": "claude_code_oauth_token"}],
-    "install": "export CLAUDE_CODE_OAUTH_TOKEN=\"$(credentials get claude_code)\""
+    "install": "export CLAUDE_CODE_OAUTH_TOKEN=\"$(credentials get '{{insert #name}}')\""
   },
   "tmdb": {"sources": [{"file": "tmdb.json"}]},
   "brave": {"sources": [{"file": "brave.json"}]},
@@ -21,10 +21,10 @@
   "twitch_user_token": {"sources": [{"file": "twitch_user_token.json"}]},
   "github": {
     "sources": [{"file": "cw_github_token_bro"}],
-    "install": "export GH_TOKEN=\"$(credentials get github)\"\ngit config --global credential.helper '!f() { echo username=x-access-token; echo \"password=$GH_TOKEN\"; }; f'"
+    "install": "export GH_TOKEN=\"$(credentials get '{{insert #name}}')\"\ngit config --global credential.helper '!f() { echo username=x-access-token; echo \"password=$GH_TOKEN\"; }; f'"
   },
   "aws": {
     "sources": [{"file": "aws_credentials"}],
-    "install": "(umask 077; mkdir -p \"$HOME/.aws\"; credentials get aws > \"$HOME/.aws/credentials\")"
+    "install": "(umask 077; mkdir -p \"$HOME/.aws\"; credentials get '{{insert #name}}' > \"$HOME/.aws/credentials\")"
   }
 }

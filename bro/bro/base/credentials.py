@@ -18,12 +18,22 @@ joins the local search path first — so a materialized scoped store resolves
 wherever it lands); `build_scoped_store` emits a scoped one (in memory) that
 `cw` `docker cp`s into a container's `~/.ppp` — or materializes into a host
 session's state dir — to bound the resolver to a chosen set of secrets.
+
+absent any of those overrides, resolution uses the host registry: the built-in
+defaults merged per-name with a host-local `registry.json` found along the
+same local search path as the secret files — entries that never enter the
+repo, typically `kind[instance]` variants of a checked-in kind
+(`github[pavel]`). the kind entry (the name up to `[`) owns kind-level
+behavior — notably the install hook, a `base.template` text rendered with
+`#name` bound to each instance's own name — so a variant declares only its
+sources.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import threading
 from collections.abc import Iterable, Sequence
@@ -31,8 +41,9 @@ from pathlib import Path
 from typing import Optional, Protocol
 
 import configs
-from base import log
+from base import log, template
 from base.args import Parser
+from base.condition import StringVariable
 
 __cli_name__ = 'credentials'
 
@@ -49,6 +60,24 @@ REGISTRY_FILE = 'credentials.json'
 
 # the process-scoped registry override described in the module docstring.
 REGISTRY_ENV = 'CREDENTIALS_REGISTRY'
+
+# the host-local additions file, searched along the resolver's local path and
+# merged per-name over the built-in registry (`host_registry`) — unlike a
+# generated REGISTRY_FILE, which replaces the registry wholesale to bound it.
+HOST_REGISTRY_FILE = 'registry.json'
+
+# a secret name: `kind` or `kind[instance]`. the charsets keep every name safe
+# to splice into the single-quoted insert slot of an install-hook template.
+_NAME_GRAMMAR = re.compile(r'([a-z0-9_]+)(?:\[([a-z0-9_-]+)\])?')
+
+
+def _parse_name(name: str) -> tuple[str, Optional[str]]:
+  """split a secret name into (kind, instance); a plain name is its own kind
+  with no instance."""
+  match = _NAME_GRAMMAR.fullmatch(name)
+  if match is None:
+    raise ValueError(f'malformed secret name {name!r}; expected kind or kind[instance]')
+  return match.group(1), match.group(2)
 
 
 class SecretNotFound(Exception):
@@ -68,8 +97,7 @@ class Source(Protocol):
 
 
 class LocalSource:
-  """reads `<dir>/<file>` for each dir in the local search path. per file: the
-  first search dir that has *this* file wins (two paths like `$PATH`)."""
+  """reads `file` from the local search path (`_find_in_search_dirs`)."""
 
   TYPE = 'local'
 
@@ -77,17 +105,16 @@ class LocalSource:
     self.file = file
 
   def fetch(self) -> Optional[str]:
-    for directory in _search_dirs():
-      path = Path(directory) / self.file
-      if path.is_file():
-        try:
-          text = path.read_text()
-        except UnicodeDecodeError:
-          raise ValueError(f'credential file {path} is not valid UTF-8 text')
-        if '\x00' in text:
-          raise ValueError(f'credential file {path} contains null bytes')
-        return text
-    return None
+    path = _find_in_search_dirs(self.file)
+    if path is None:
+      return None
+    try:
+      text = path.read_text()
+    except UnicodeDecodeError:
+      raise ValueError(f'credential file {path} is not valid UTF-8 text')
+    if '\x00' in text:
+      raise ValueError(f'credential file {path} contains null bytes')
+    return text
 
   @classmethod
   def from_dict(cls, data: dict) -> LocalSource:
@@ -137,6 +164,16 @@ def _search_dirs() -> list[str]:
   return [CONFIGS_DIR, PPP_DIR]
 
 
+def _find_in_search_dirs(file: str) -> Optional[Path]:
+  """locate `file` along the local search path; per file, the first search dir
+  that has it wins (dirs like `$PATH`), absent everywhere → None."""
+  for directory in _search_dirs():
+    path = Path(directory) / file
+    if path.is_file():
+      return path
+  return None
+
+
 def _source_from_dict(data: dict) -> Source:
   """reconstruct a Source from its `type` discriminator (mirrors LLMSpec.from_dict);
   `type` defaults to `local` when omitted."""
@@ -153,10 +190,13 @@ class Secret:
   priority). the resolver treats the value as an opaque text blob — callers pick
   the shape, `get()` for the raw text or `get_json()` to parse it as a json object.
 
-  `install` is an optional static shell hook that wires the secret into the tool
-  that consumes it from *outside* the resolver (git, the aws CLI, ...). The
-  container entrypoint `eval`s it after hydration; the hook pulls the value via
-  `credentials get <name>` at eval time, so per-secret wiring lives in the registry
+  `install` is an optional shell hook that wires the secret into the tool that
+  consumes it from *outside* the resolver (git, the aws CLI, ...). The registry
+  declares it as a `base.template` text over the `#name` variable —
+  `credentials get '{{insert #name}}'` — rendered here with the secret's own
+  name, so one kind-level hook serves every instance of the kind. The container
+  entrypoint `eval`s it after hydration; the hook pulls the value via
+  `credentials get` at eval time, so per-secret wiring lives in the registry
   with no interpolated path and the entrypoint stays generic."""
 
   def __init__(self, name: str, sources: Sequence[Source], *, install: Optional[str] = None):
@@ -166,10 +206,13 @@ class Secret:
 
   @classmethod
   def from_dict(cls, name: str, data: dict) -> Secret:
+    install = data.get('install')
+    if install is not None:
+      install = template.render(install, {'name': StringVariable(name)})
     return cls(
       name,
       [_source_from_dict(s) for s in data['sources']],
-      install=data.get('install'),
+      install=install,
     )
 
 
@@ -243,9 +286,46 @@ def _registry_from_dict(data: dict) -> dict[str, Secret]:
   return {name: Secret.from_dict(name, spec) for name, spec in data.items()}
 
 
+def _resolve_kinds(data: dict) -> dict:
+  """validate every name against the grammar and give each `kind[instance]`
+  variant its kind entry's install-hook template (instantiated per-entry by
+  `Secret.from_dict`). the kind owns kind-level behavior, so a variant carrying
+  its own `install` — or naming a kind the registry lacks — is an error. only
+  the built-in/host registries pass through here: a generated registry is
+  self-contained, its variant entries already carrying their materialized hooks.
+  """
+  resolved: dict[str, dict] = {}
+  for name, entry in data.items():
+    kind, instance = _parse_name(name)
+    if instance is None:
+      resolved[name] = entry
+      continue
+    if 'install' in entry:
+      raise ValueError(f'variant {name!r} declares an install hook; the kind entry owns it')
+    kind_entry = data.get(kind)
+    if kind_entry is None:
+      raise ValueError(f'variant {name!r} has no kind entry {kind!r} in the registry')
+    install = kind_entry.get('install')
+    resolved[name] = entry if install is None else {**entry, 'install': install}
+  return resolved
+
+
 def default_registry() -> dict[str, Secret]:
   """the built-in registry (every known secret as a single local source)."""
-  return _registry_from_dict(json.loads(_BUILTIN_REGISTRY_PATH.read_text()))
+  return _registry_from_dict(_resolve_kinds(json.loads(_BUILTIN_REGISTRY_PATH.read_text())))
+
+
+def host_registry() -> dict[str, Secret]:
+  """the built-in registry merged per-name with the host-local additions file —
+  entries that never enter the repo, typically variants of a checked-in kind.
+  the additions file follows the local search path, like any secret file. kind
+  resolution runs after the merge, so a variant picks up its kind's hook even
+  when an addition overrides the kind."""
+  data = json.loads(_BUILTIN_REGISTRY_PATH.read_text())
+  additions_path = _find_in_search_dirs(HOST_REGISTRY_FILE)
+  if additions_path is not None:
+    data.update(json.loads(additions_path.read_text()))
+  return _registry_from_dict(_resolve_kinds(data))
 
 
 def _load_registry() -> dict[str, Secret]:
@@ -260,12 +340,12 @@ def _load_registry() -> dict[str, Secret]:
     return _registry_from_dict(json.loads(Path(override).read_text()))
   # a generated registry file in either search dir (`<project>/.configs` for the
   # deployed services, `~/.ppp` for a scoped per-container store) overrides the
-  # built-in default; the first dir that has it wins, absent everywhere → built-in.
-  for directory in _search_dirs():
-    path = Path(directory) / REGISTRY_FILE
-    if path.is_file():
-      return _registry_from_dict(json.loads(path.read_text()))
-  return default_registry()
+  # host registry wholesale; absent everywhere → the host registry (built-in
+  # defaults + host-local additions).
+  path = _find_in_search_dirs(REGISTRY_FILE)
+  if path is not None:
+    return _registry_from_dict(json.loads(path.read_text()))
+  return host_registry()
 
 
 _default_store: Optional[Store] = None
@@ -309,6 +389,19 @@ def known_names() -> frozenset[str]:
   return default_store().known_names()
 
 
+def _require_one_instance_per_kind(names: Iterable[str]) -> None:
+  by_kind: dict[str, list[str]] = {}
+  for name in sorted(set(names)):
+    kind, _ = _parse_name(name)
+    by_kind.setdefault(kind, []).append(name)
+  for kind, instances in by_kind.items():
+    if len(instances) > 1:
+      raise ValueError(
+        f'secrets {", ".join(map(repr, instances))} are instances of the same kind '
+        f'{kind!r}; a session installs at most one'
+      )
+
+
 def build_scoped_store(names: Iterable[str], *, optional: Iterable[str] = ()) -> dict[str, bytes]:
   """build a per-container scoped credential store in memory.
 
@@ -330,7 +423,13 @@ def build_scoped_store(names: Iterable[str], *, optional: Iterable[str] = ()) ->
   the registry or unresolvable. This is for secrets a component uses if present
   but degrades without (e.g. the LLM key behind a query-focused fetch summary),
   so an absent optional secret degrades the component instead of failing launch.
+
+  a session installs at most one instance of each kind: declaring two —
+  `github` and `github[pavel]`, in whichever tiers — raises `ValueError`. The
+  check runs over the declared union up front, so an unresolvable optional name
+  cannot flap the outcome.
   """
+  _require_one_instance_per_kind(set(names) | set(optional))
   registry = _load_registry()
   store = Store(registry)
   files: dict[str, bytes] = {}

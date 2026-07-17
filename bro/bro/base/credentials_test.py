@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from base import credentials
+from base import credentials, template
 
 
 @pytest.fixture
@@ -319,6 +319,143 @@ class TestDefaultRegistry:
     assert source.file == 'cw_github_token_bro'
     assert 'github_bro' not in registry
 
+  def test_builtin_hooks_render_the_name_template(self):
+    # the checked-in hooks are `{{insert #name}}` templates; a plain kind entry
+    # renders with its own name, single-quoted for shell-glob safety
+    registry = credentials.default_registry()
+    assert registry['github'].install is not None
+    assert "credentials get 'github'" in registry['github'].install
+    assert '{{' not in registry['github'].install
+    # non-directive braces are literal text to the engine — the shell function
+    # body in the credential-helper line survives rendering
+    assert '{ echo username=x-access-token' in registry['github'].install
+
+  def test_hook_with_unknown_template_variable_raises(self):
+    with pytest.raises(template.TemplateError, match='unknown variable'):
+      credentials.Secret.from_dict(
+        'x', {'sources': [{'file': 'f'}], 'install': 'echo {{insert #nope}}'}
+      )
+
+
+class TestNameGrammar:
+  def test_plain_name_is_its_own_kind(self):
+    assert credentials._parse_name('github') == ('github', None)
+
+  def test_variant_name_splits_kind_and_instance(self):
+    assert credentials._parse_name('github[pavel]') == ('github', 'pavel')
+
+  def test_instance_allows_dashes(self):
+    assert credentials._parse_name('github[read-only]') == ('github', 'read-only')
+
+  @pytest.mark.parametrize(
+    'name',
+    ['github[', 'github[]', '[pavel]', 'github[a]b', 'GitHub[a]', 'github[Pavel]', 'git hub', ''],
+  )
+  def test_malformed_name_raises(self, name: str):
+    with pytest.raises(ValueError, match='malformed secret name'):
+      credentials._parse_name(name)
+
+
+class TestHostRegistry:
+  def test_absent_additions_file_yields_builtin(self, ppp_dir: Path):
+    assert set(credentials.host_registry()) == set(credentials.default_registry())
+
+  def test_additions_merge_per_name_over_builtin(self, ppp_dir: Path):
+    _write(
+      ppp_dir,
+      credentials.HOST_REGISTRY_FILE,
+      {'github[pavel]': {'sources': [{'file': 'github_token_pavel'}]}},
+    )
+    registry = credentials.host_registry()
+    assert 'github[pavel]' in registry
+    # the built-in entries survive the merge untouched
+    assert 'github' in registry
+    assert 'notion' in registry
+
+  def test_additions_file_follows_the_search_path_priority(self, configs_dir: Path, ppp_dir: Path):
+    # like any secret file: the first search dir that has it wins — the file in
+    # `<project>/.configs` shadows the one in `~/.ppp`, not merged with it
+    _write(
+      configs_dir,
+      credentials.HOST_REGISTRY_FILE,
+      {'github[work]': {'sources': [{'file': 'a'}]}},
+    )
+    _write(ppp_dir, credentials.HOST_REGISTRY_FILE, {'github[home]': {'sources': [{'file': 'b'}]}})
+    registry = credentials.host_registry()
+    assert 'github[work]' in registry
+    assert 'github[home]' not in registry
+
+  def test_addition_replaces_a_builtin_entry_wholesale(self, ppp_dir: Path):
+    _write(ppp_dir, credentials.HOST_REGISTRY_FILE, {'notion': {'sources': [{'file': 'n2.json'}]}})
+    source = credentials.host_registry()['notion'].sources[0]
+    assert isinstance(source, credentials.LocalSource)
+    assert source.file == 'n2.json'
+
+  def test_variant_inherits_the_kind_hook_instantiated_with_its_name(self, ppp_dir: Path):
+    _write(
+      ppp_dir,
+      credentials.HOST_REGISTRY_FILE,
+      {'github[pavel]': {'sources': [{'file': 'github_token_pavel'}]}},
+    )
+    registry = credentials.host_registry()
+    variant = registry['github[pavel]'].install
+    assert variant is not None
+    assert "credentials get 'github[pavel]'" in variant
+    # the kind's own hook still names the kind
+    kind = registry['github'].install
+    assert kind is not None
+    assert "credentials get 'github'" in kind
+
+  def test_variant_of_hookless_kind_has_no_hook(self, ppp_dir: Path):
+    _write(
+      ppp_dir,
+      credentials.HOST_REGISTRY_FILE,
+      {'notion[work]': {'sources': [{'file': 'notion_work.json'}]}},
+    )
+    assert credentials.host_registry()['notion[work]'].install is None
+
+  def test_variant_declaring_its_own_install_raises(self, ppp_dir: Path):
+    _write(
+      ppp_dir,
+      credentials.HOST_REGISTRY_FILE,
+      {'github[pavel]': {'sources': [{'file': 'f'}], 'install': 'export X=1'}},
+    )
+    with pytest.raises(ValueError, match='the kind entry owns it'):
+      credentials.host_registry()
+
+  def test_variant_of_unknown_kind_raises(self, ppp_dir: Path):
+    _write(ppp_dir, credentials.HOST_REGISTRY_FILE, {'nope[x]': {'sources': [{'file': 'f'}]}})
+    with pytest.raises(ValueError, match="no kind entry 'nope'"):
+      credentials.host_registry()
+
+  def test_malformed_addition_name_raises(self, ppp_dir: Path):
+    _write(ppp_dir, credentials.HOST_REGISTRY_FILE, {'GitHub[pavel]': {'sources': [{'file': 'f'}]}})
+    with pytest.raises(ValueError, match='malformed secret name'):
+      credentials.host_registry()
+
+  def test_default_store_resolves_a_host_local_variant(self, configs_dir: Path, ppp_dir: Path):
+    # end-to-end through _load_registry: a host-local variant resolves like any
+    # other secret
+    _write(
+      ppp_dir,
+      credentials.HOST_REGISTRY_FILE,
+      {'github[pavel]': {'sources': [{'file': 'github_token_pavel'}]}},
+    )
+    _write(ppp_dir, 'github_token_pavel', 'ghp_pavel\n')
+    assert credentials.default_store().get('github[pavel]') == 'ghp_pavel'
+
+  def test_generated_registry_still_replaces_wholesale(self, configs_dir: Path, ppp_dir: Path):
+    # a generated credentials.json bounds the registry to exactly its own set —
+    # host-local additions must not leak through it (the scoped-store bounding
+    # invariant)
+    _write(
+      ppp_dir,
+      credentials.HOST_REGISTRY_FILE,
+      {'github[pavel]': {'sources': [{'file': 'github_token_pavel'}]}},
+    )
+    _write(ppp_dir, credentials.REGISTRY_FILE, {'notion': {'sources': [{'file': 'notion.json'}]}})
+    assert set(credentials._load_registry()) == {'notion'}
+
 
 class TestDefaultStore:
   def test_falls_back_to_builtin_registry(self, configs_dir: Path):
@@ -533,10 +670,46 @@ class TestBuildScopedStore:
 
   def test_optional_also_required_hydrated_once(self, configs_dir: Path):
     # a name in both tiers resolves once via the strict required pass; the optional
-    # pass skips it — required wins, never downgraded to best-effort.
+    # pass skips it — required wins, never downgraded to best-effort. same name =
+    # same instance, so the per-kind rule is not tripped either.
     _write(configs_dir, 'notion.json', {'token': 't'})
     store = credentials.build_scoped_store(['notion'], optional=['notion'])
     assert set(store) == {'notion.cred', credentials.REGISTRY_FILE}
+
+  def test_variant_hydrates_with_its_materialized_hook(self, configs_dir: Path, ppp_dir: Path):
+    _write(
+      ppp_dir,
+      credentials.HOST_REGISTRY_FILE,
+      {'github[pavel]': {'sources': [{'file': 'github_token_pavel'}]}},
+    )
+    _write(ppp_dir, 'github_token_pavel', 'ghp_pavel\n')
+    store = credentials.build_scoped_store(['github[pavel]'])
+    assert store['github[pavel].cred'] == b'ghp_pavel'
+    registry = json.loads(store[credentials.REGISTRY_FILE])
+    assert registry['github[pavel]']['sources'] == [{'file': 'github[pavel].cred'}]
+    # the scoped entry carries the hook already instantiated with the variant
+    # name, so the container needs no kind entry to emit it
+    assert "credentials get 'github[pavel]'" in registry['github[pavel]']['install']
+    rebuilt = credentials._registry_from_dict(registry)
+    assert rebuilt['github[pavel]'].install == registry['github[pavel]']['install']
+
+  def test_two_instances_of_a_kind_raise(self, configs_dir: Path, ppp_dir: Path):
+    _write(
+      ppp_dir,
+      credentials.HOST_REGISTRY_FILE,
+      {'github[pavel]': {'sources': [{'file': 'github_token_pavel'}]}},
+    )
+    _write(ppp_dir, 'github_token_pavel', 'ghp_pavel')
+    _write(configs_dir, 'cw_github_token_bro', 'ghp_bro')
+    with pytest.raises(ValueError, match='installs at most one'):
+      credentials.build_scoped_store(['github', 'github[pavel]'])
+
+  def test_kind_conflict_across_tiers_raises(self, configs_dir: Path):
+    # the check runs over the declared union up front — before resolution — so
+    # it fires even though the optional variant is unknown and unresolvable
+    _write(configs_dir, 'cw_github_token_bro', 'ghp_bro')
+    with pytest.raises(ValueError, match='installs at most one'):
+      credentials.build_scoped_store(['github'], optional=['github[pavel]'])
 
 
 class TestApplyGrantRevoke:
@@ -614,18 +787,20 @@ class TestInstallHooks:
     # path is interpolated, so there's no quoting/injection surface. no files
     # written: presence is no longer a path check.
     out = credentials.install_hooks()
-    # github → git credential helper + GH_TOKEN, pulled via `credentials get github`
+    # github → git credential helper + GH_TOKEN, pulled via `credentials get`
     assert 'credential.helper' in out
     assert 'GH_TOKEN' in out
-    assert 'credentials get github' in out
+    assert "credentials get 'github'" in out
     # aws → materialized to ~/.aws/credentials (the path the CLI reads by default,
-    # so no AWS_SHARED_CREDENTIALS_FILE export needed) via `credentials get aws`
-    assert 'credentials get aws' in out
+    # so no AWS_SHARED_CREDENTIALS_FILE export needed) via `credentials get`
+    assert "credentials get 'aws'" in out
     assert '.aws/credentials' in out
     assert 'AWS_SHARED_CREDENTIALS_FILE' not in out
-    # claude_code → exports CLAUDE_CODE_OAUTH_TOKEN via `credentials get claude_code`
+    # claude_code → exports CLAUDE_CODE_OAUTH_TOKEN via `credentials get`
     assert 'CLAUDE_CODE_OAUTH_TOKEN' in out
-    assert 'credentials get claude_code' in out
+    assert "credentials get 'claude_code'" in out
+    # every template directive is rendered away by emit time
+    assert '{{' not in out
     # no absolute resolver path is interpolated; notion declares no hook
     assert str(configs_dir) not in out
     assert 'notion' not in out
@@ -638,12 +813,12 @@ class TestInstallHooks:
     # hook emits even with no local file present. in a scoped container the
     # registry *is* the hydrated (present) set, so this is the right bound.
     out = credentials.install_hooks()
-    assert 'credentials get github' in out
-    assert 'credentials get aws' in out
+    assert "credentials get 'github'" in out
+    assert "credentials get 'aws'" in out
 
   def test_cli_install_hooks(self, configs_dir: Path, capsys):
     assert credentials.main(['credentials', 'install-hooks']) is None
-    assert 'credentials get aws' in capsys.readouterr().out
+    assert "credentials get 'aws'" in capsys.readouterr().out
 
   def test_cli_get_without_name_errors(self, configs_dir: Path, capsys):
     # the get subparser makes name a required positional, so argparse enforces it

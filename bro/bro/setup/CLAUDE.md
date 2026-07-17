@@ -46,6 +46,14 @@ Worktrees get their own `.venv`. `cw` (host mode) creates the worktree and runs 
 
 Credentials live in the standalone `~/.ppp` store; the repo no longer carries them. Readers resolve them through `base.credentials` — `credentials.default_store().get_json(name)` — which searches `<repo>/.configs` (where the deployed services synthesize their configs at runtime) then `~/.ppp`. The built-in registry (`base/registry.json`) maps each secret name below to its `<file>`. The `credentials get <name> [--field <key>]` CLI exposes the same resolver to non-Python callers (e.g. the Anthropic apiKeyHelper), while `credentials list` prints the names that resolve in the current store; host scripts that write new secrets write directly to `~/.ppp`.
 
+A host-local `registry.json` — searched along the same path as the secret files — merges per-name over the built-in registry: entries that stay out of the repo, typically credential variants of a checked-in kind:
+
+```json
+{"github[pavel]": {"sources": [{"file": "github_token_pavel"}]}}
+```
+
+A `kind[instance]` name declares a variant of the kind named up to the `[` (name grammar owned by `base/credentials.py`). The kind entry owns kind-level behavior — notably the install hook, a template (`reference/template.md`) rendered with `#name` bound to each instance's own name — so a variant declares only its `sources`, and one that carries its own `install` or names a kind the registry lacks fails the load. A session installs at most one instance of each kind: hydrating two (e.g. `github` and `github[pavel]`) fails the launch, so pair a variant grant with a revoke of its sibling (`--grant-cred 'github[pavel]' --revoke-cred github` — quoted only because `[…]` is shell glob syntax). Generated registries (a scoped store's `credentials.json`, `CREDENTIALS_REGISTRY`) replace the registry wholesale, so a scoped session stays bounded to exactly its hydrated set and never sees host-local additions it wasn't granted.
+
 - `notion.json` — Notion token + database IDs (`tasks_db_id`, `events_db_id`, `projects_db_id`, `media_db_id`) + `root_page_id`, the fixed parent page all `create_page` pages land under
 - `google_api.json` — Google OAuth client config
 - `gmail_creds.json` — cached Gmail OAuth token (JSON-serialised)
