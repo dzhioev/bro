@@ -27,6 +27,18 @@ repo, typically `kind[instance]` variants of a checked-in kind
 behavior — notably the install hook, a `base.template` text rendered with
 `#name` bound to each instance's own name — so a variant declares only its
 sources.
+
+a json secret may reference other secrets instead of embedding copies: an
+object node `{"$cred": "<name>"}` anywhere in its tree is replaced at
+resolution time with the referenced secret's value — the parsed object when
+that value is a json object, the raw text as a json string otherwise — and
+`{"$cred": "<name>", "field": "<key>"}` picks one top-level field of a
+json-object secret. expansion runs inside the store's resolve, before caching,
+so every consumer (`get`, `get_json`, the CLI, `build_scoped_store`) sees the
+effective, self-contained value — in particular a scoped store materializes
+expanded text, keeping the container bounded to its declared secrets with no
+knowledge of the references. a reference that does not resolve, a malformed
+node, an absent field, or a reference cycle raises.
 """
 
 from __future__ import annotations
@@ -38,7 +50,7 @@ import sys
 import threading
 from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import Optional, Protocol
+from typing import Any, Optional, Protocol
 
 import configs
 from base import log, template
@@ -69,6 +81,11 @@ HOST_REGISTRY_FILE = 'registry.json'
 # a secret name: `kind` or `kind[instance]`. the charsets keep every name safe
 # to splice into the single-quoted insert slot of an install-hook template.
 _NAME_GRAMMAR = re.compile(r'([a-z0-9_]+)(?:\[([a-z0-9_-]+)\])?')
+
+# the reference-node keys of a json secret (module docstring): `$cred` names the
+# referenced secret, `field` optionally picks one top-level field of its object.
+_REFERENCE_KEY = '$cred'
+_REFERENCE_FIELD = 'field'
 
 
 def _parse_name(name: str) -> tuple[str, Optional[str]]:
@@ -174,6 +191,14 @@ def _find_in_search_dirs(file: str) -> Optional[Path]:
   return None
 
 
+def _contains_reference(node: Any) -> bool:
+  if isinstance(node, dict):
+    return _REFERENCE_KEY in node or any(_contains_reference(value) for value in node.values())
+  if isinstance(node, list):
+    return any(_contains_reference(item) for item in node)
+  return False
+
+
 def _source_from_dict(data: dict) -> Source:
   """reconstruct a Source from its `type` discriminator (mirrors LLMSpec.from_dict);
   `type` defaults to `local` when omitted."""
@@ -217,7 +242,10 @@ class Secret:
 
 
 class Store:
-  """resolves secrets against a registry, caching resolved values for its lifetime."""
+  """resolves secrets against a registry, caching resolved values for its
+  lifetime. a json secret's `{"$cred": ...}` reference nodes are expanded
+  during the resolve (module docstring), so cached and returned values are
+  always the effective, self-contained text."""
 
   def __init__(self, registry: dict[str, Secret]):
     self._registry = registry
@@ -227,25 +255,89 @@ class Store:
   def try_get(self, name: str) -> Optional[str]:
     """resolve a secret to its raw text (stripped), or None when no source yields
     a value — the non-raising primitive, for callers that treat a missing secret
-    as an expected case. `get` is the strict wrapper that raises on None."""
+    as an expected case. `get` is the strict wrapper that raises on None. a
+    malformed value (a broken reference, a non-UTF-8 file) still raises: absence
+    is expected, corruption is not."""
     # one lock around the whole resolve: a secret is fetched at most once even
     # under concurrent callers, and the store is read only a handful of times per
     # process (each value cached on first read), so a lock-free fast path buys
     # nothing.
     with self._lock:
-      cached = self._cache.get(name)
-      if cached is not None:
-        return cached
-      secret = self._registry.get(name)
-      if secret is None:
-        return None
-      for source in secret.sources:
-        raw = source.fetch()
-        if raw is not None:
-          value = raw.strip()
-          self._cache[name] = value
-          return value
+      return self._resolve(name, chain=())
+
+  def _resolve(self, name: str, chain: tuple[str, ...]) -> Optional[str]:
+    """fetch, expand, and cache one secret; `chain` is the stack of secrets whose
+    expansions are in progress, for cycle detection. callers hold the lock."""
+    cached = self._cache.get(name)
+    if cached is not None:
+      return cached
+    secret = self._registry.get(name)
+    if secret is None:
       return None
+    for source in secret.sources:
+      raw = source.fetch()
+      if raw is not None:
+        value = self._expand_references(raw.strip(), (*chain, name))
+        self._cache[name] = value
+        return value
+    return None
+
+  def _expand_references(self, text: str, chain: tuple[str, ...]) -> str:
+    """substitute every reference node in a json secret's tree; text that isn't
+    json, or json with no reference nodes, passes through byte-identical."""
+    try:
+      tree = json.loads(text)
+    except json.JSONDecodeError:
+      return text
+    if not _contains_reference(tree):
+      return text
+    return json.dumps(self._substitute_references(tree, chain))
+
+  def _substitute_references(self, node: Any, chain: tuple[str, ...]) -> Any:
+    if isinstance(node, dict):
+      if _REFERENCE_KEY in node:
+        return self._referenced_value(node, chain)
+      return {key: self._substitute_references(value, chain) for key, value in node.items()}
+    if isinstance(node, list):
+      return [self._substitute_references(item, chain) for item in node]
+    return node
+
+  def _referenced_value(self, node: dict, chain: tuple[str, ...]) -> Any:
+    referrer = chain[-1]
+    unknown = sorted(set(node) - {_REFERENCE_KEY, _REFERENCE_FIELD})
+    if len(unknown) > 0:
+      raise ValueError(
+        f'secret {referrer!r}: reference node has unknown keys: {", ".join(map(repr, unknown))}'
+      )
+    target = node[_REFERENCE_KEY]
+    if not isinstance(target, str):
+      raise ValueError(f'secret {referrer!r}: reference name must be a string, got {target!r}')
+    field = node.get(_REFERENCE_FIELD)
+    if field is not None and not isinstance(field, str):
+      raise ValueError(f'secret {referrer!r}: reference field must be a string, got {field!r}')
+    if target in chain:
+      raise ValueError(f'credential reference cycle: {" -> ".join((*chain, target))}')
+    value = self._resolve(target, chain)
+    if value is None:
+      raise ValueError(f'secret {referrer!r} references {target!r}, which does not resolve')
+    try:
+      parsed = json.loads(value)
+    except json.JSONDecodeError:
+      parsed = None
+    if isinstance(parsed, dict):
+      if field is None:
+        return parsed
+      if field not in parsed:
+        raise ValueError(
+          f'secret {referrer!r}: referenced secret {target!r} has no field {field!r}'
+        )
+      return parsed[field]
+    if field is not None:
+      raise ValueError(
+        f'secret {referrer!r}: referenced secret {target!r} is not a json object; '
+        f'cannot take field {field!r}'
+      )
+    return value
 
   def get(self, name: str) -> str:
     """resolve a secret to its raw text, raising `SecretNotFound` when no source

@@ -143,9 +143,10 @@ def _required(config: dict[str, Any], key: str) -> Any:
 def default_system() -> System:
   """the backend selected by the `brog` config
 
-  The config is self-contained — every credential the active backend needs is embedded —
-  so resolution touches only the `brog` secret. The comment author is the session
-  persona (`CW_BRO`); with no persona, comments carry no author segment.
+  The config is self-contained — every credential the active backend needs is embedded,
+  literally or via `$cred` references the resolver expands — so brog needs no secret
+  granted beyond `brog`. The comment author is the session persona (`CW_BRO`); with no
+  persona, comments carry no author segment.
   """
   author = os.environ.get('CW_BRO')
   if author == '':

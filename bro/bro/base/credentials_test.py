@@ -293,6 +293,190 @@ class TestStore:
     assert len(calls) == 1
 
 
+class TestReferences:
+  def _store(self, configs_dir: Path, secrets: dict[str, object]) -> credentials.Store:
+    """a store over local secrets, each payload written to its own file."""
+    registry = {}
+    for name, payload in secrets.items():
+      file = f'{name}.secret'
+      _write(configs_dir, file, payload)
+      registry[name] = credentials.Secret(name, [credentials.LocalSource(file)])
+    return credentials.Store(registry)
+
+  def test_object_reference_embeds_the_parsed_value(self, configs_dir: Path):
+    store = self._store(
+      configs_dir,
+      {
+        'notion': {'token': 't', 'tasks_db_id': 'd'},
+        'brog': {'backend': 'flow', 'transport': 'local', 'notion': {'$cred': 'notion'}},
+      },
+    )
+    assert store.get_json('brog') == {
+      'backend': 'flow',
+      'transport': 'local',
+      'notion': {'token': 't', 'tasks_db_id': 'd'},
+    }
+
+  def test_field_reference_picks_one_field(self, configs_dir: Path):
+    store = self._store(
+      configs_dir,
+      {
+        'flow_mcp': {'url': 'https://flow.example', 'token': 'tok'},
+        'brog': {
+          'backend': 'flow',
+          'transport': 'http',
+          'url': {'$cred': 'flow_mcp', 'field': 'url'},
+          'token': {'$cred': 'flow_mcp', 'field': 'token'},
+        },
+      },
+    )
+    assert store.get_json('brog') == {
+      'backend': 'flow',
+      'transport': 'http',
+      'url': 'https://flow.example',
+      'token': 'tok',
+    }
+
+  def test_scalar_secret_substitutes_as_string(self, configs_dir: Path):
+    store = self._store(
+      configs_dir,
+      {
+        'github': 'ghp_abc\n',
+        'brog': {'backend': 'github', 'token': {'$cred': 'github'}},
+      },
+    )
+    assert store.get_json('brog') == {'backend': 'github', 'token': 'ghp_abc'}
+
+  def test_numeric_scalar_substitutes_as_string(self, configs_dir: Path):
+    # only a json *object* substitutes parsed; a token that happens to parse as a
+    # json scalar ('12345') must stay a string, not become a number
+    store = self._store(configs_dir, {'pin': '12345', 'config': {'value': {'$cred': 'pin'}}})
+    assert store.get_json('config') == {'value': '12345'}
+
+  def test_variant_target_resolves(self, configs_dir: Path):
+    store = self._store(
+      configs_dir,
+      {
+        'github[pavel]': 'ghp_pavel',
+        'brog': {'backend': 'github', 'token': {'$cred': 'github[pavel]'}},
+      },
+    )
+    assert store.get_json('brog') == {'backend': 'github', 'token': 'ghp_pavel'}
+
+  def test_references_nest_in_arrays_and_objects(self, configs_dir: Path):
+    store = self._store(
+      configs_dir,
+      {
+        'a': 'v',
+        'config': {'outer': {'inner': [{'$cred': 'a'}, 'plain']}},
+      },
+    )
+    assert store.get_json('config') == {'outer': {'inner': ['v', 'plain']}}
+
+  def test_transitive_references_expand(self, configs_dir: Path):
+    store = self._store(
+      configs_dir,
+      {
+        'c': 'v',
+        'b': {'c': {'$cred': 'c'}},
+        'a': {'b': {'$cred': 'b'}},
+      },
+    )
+    assert store.get_json('a') == {'b': {'c': 'v'}}
+
+  def test_no_references_passes_through_byte_identical(self, configs_dir: Path):
+    store = self._store(configs_dir, {'x': '{"a":   1}'})
+    assert store.get('x') == '{"a":   1}'
+
+  def test_non_json_text_is_untouched(self, configs_dir: Path):
+    store = self._store(configs_dir, {'x': 'not json, even with {"$cred": "y"} inside'})
+    assert store.get('x') == 'not json, even with {"$cred": "y"} inside'
+
+  def test_cycle_raises(self, configs_dir: Path):
+    store = self._store(
+      configs_dir,
+      {'a': {'x': {'$cred': 'b'}}, 'b': {'y': {'$cred': 'a'}}},
+    )
+    with pytest.raises(ValueError, match=r'cycle: a -> b -> a'):
+      store.get('a')
+
+  def test_self_reference_raises(self, configs_dir: Path):
+    store = self._store(configs_dir, {'a': {'x': {'$cred': 'a'}}})
+    with pytest.raises(ValueError, match=r'cycle: a -> a'):
+      store.get('a')
+
+  def test_unresolvable_reference_raises(self, configs_dir: Path):
+    store = self._store(configs_dir, {'config': {'token': {'$cred': 'nope'}}})
+    with pytest.raises(ValueError, match="'config' references 'nope', which does not resolve"):
+      store.get('config')
+
+  def test_broken_reference_raises_even_via_try_get(self, configs_dir: Path):
+    # try_get is non-raising for *absent* secrets only; a present secret with a
+    # broken reference is corruption, not absence
+    store = self._store(configs_dir, {'config': {'token': {'$cred': 'nope'}}})
+    with pytest.raises(ValueError, match='does not resolve'):
+      store.try_get('config')
+
+  def test_field_of_scalar_secret_raises(self, configs_dir: Path):
+    store = self._store(
+      configs_dir,
+      {'github': 'ghp_abc', 'config': {'token': {'$cred': 'github', 'field': 'token'}}},
+    )
+    with pytest.raises(ValueError, match='not a json object'):
+      store.get('config')
+
+  def test_missing_field_raises(self, configs_dir: Path):
+    store = self._store(
+      configs_dir,
+      {'flow_mcp': {'url': 'u'}, 'config': {'token': {'$cred': 'flow_mcp', 'field': 'token'}}},
+    )
+    with pytest.raises(ValueError, match="has no field 'token'"):
+      store.get('config')
+
+  def test_unknown_reference_keys_raise(self, configs_dir: Path):
+    store = self._store(
+      configs_dir,
+      {'a': 'v', 'config': {'token': {'$cred': 'a', 'transform': 'upper'}}},
+    )
+    with pytest.raises(ValueError, match="unknown keys: 'transform'"):
+      store.get('config')
+
+  def test_non_string_reference_name_raises(self, configs_dir: Path):
+    store = self._store(configs_dir, {'config': {'token': {'$cred': 7}}})
+    with pytest.raises(ValueError, match='reference name must be a string'):
+      store.get('config')
+
+  def test_non_string_field_raises(self, configs_dir: Path):
+    store = self._store(
+      configs_dir,
+      {'a': {'k': 'v'}, 'config': {'token': {'$cred': 'a', 'field': 1}}},
+    )
+    with pytest.raises(ValueError, match='reference field must be a string'):
+      store.get('config')
+
+  def test_scoped_store_materializes_expanded_text(self, configs_dir: Path, monkeypatch):
+    # hydration resolves through the store, so the materialized `.cred` is the
+    # expanded, self-contained value — the container never sees the references
+    # and needs no grant of the referenced secrets
+    registry = {}
+    for name, payload in {
+      'notion': {'token': 't'},
+      'brog': {'backend': 'flow', 'transport': 'local', 'notion': {'$cred': 'notion'}},
+    }.items():
+      file = f'{name}.secret'
+      _write(configs_dir, file, payload)
+      registry[name] = credentials.Secret(name, [credentials.LocalSource(file)])
+    monkeypatch.setattr(credentials, '_load_registry', lambda: registry)
+    store = credentials.build_scoped_store(['brog'])
+    assert set(store) == {'brog.cred', credentials.REGISTRY_FILE}
+    assert json.loads(store['brog.cred']) == {
+      'backend': 'flow',
+      'transport': 'local',
+      'notion': {'token': 't'},
+    }
+    assert b'$cred' not in store['brog.cred']
+
+
 class TestDefaultRegistry:
   def test_inventory_covers_known_secrets(self):
     registry = credentials.default_registry()

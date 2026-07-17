@@ -54,15 +54,17 @@ A host-local `registry.json` — searched along the same path as the secret file
 
 A `kind[instance]` name declares a variant of the kind named up to the `[` (name grammar owned by `base/credentials.py`). The kind entry owns kind-level behavior — notably the install hook, a template (`reference/template.md`) rendered with `#name` bound to each instance's own name — so a variant declares only its `sources`, and one that carries its own `install` or names a kind the registry lacks fails the load. A session installs at most one instance of each kind: hydrating two (e.g. `github` and `github[pavel]`) fails the launch, so pair a variant grant with a revoke of its sibling (`--grant-cred 'github[pavel]' --revoke-cred github` — quoted only because `[…]` is shell glob syntax). Generated registries (a scoped store's `credentials.json`, `CREDENTIALS_REGISTRY`) replace the registry wholesale, so a scoped session stays bounded to exactly its hydrated set and never sees host-local additions it wasn't granted.
 
+A json secret may reference other secrets instead of embedding copies: `{"$cred": "<name>"}` anywhere in its tree resolves to the referenced secret's value, `{"$cred": "<name>", "field": "<key>"}` to one top-level field (exact semantics in `base/credentials.py`). The resolver expands references before any consumer sees the value, so a scoped store hydrates a granted secret with its references already expanded — self-contained in the container, no grant of the referenced secrets needed.
+
 - `notion.json` — Notion token + database IDs (`tasks_db_id`, `events_db_id`, `projects_db_id`, `media_db_id`) + `root_page_id`, the fixed parent page all `create_page` pages land under
 - `google_api.json` — Google OAuth client config
 - `gmail_creds.json` — cached Gmail OAuth token (JSON-serialised)
 - `flow_mcp.json` — `{ "url": "https://flow.<delegated_subdomain>", "token": "<bearer-token>" }` for the deployed flow MCP server (external MCP clients — Claude apps, agents on other hosts)
-- `brog.json` — the brog task-tracker backend selection, self-contained: every credential the active backend needs is embedded, so brog makes no assumption about other secrets being granted. One of:
+- `brog.json` — the brog task-tracker backend selection, self-contained: every credential the active backend needs is embedded — literally or as `$cred` references — so brog makes no assumption about other secrets being granted. One of:
 
-  - `{ "backend": "flow", "transport": "http", "url": ..., "token": ... }` — url + token as in `flow_mcp.json` (bootstrap by copying)
-  - `{ "backend": "flow", "transport": "local", "notion": { ...notion.json shape... } }`
-  - `{ "backend": "github", "token": ..., "repo": "owner/name"? }` — the token's account is the acting identity (issues and comments are created under it); `repo` omitted derives owner/name from the workspace's `origin` remote at server start
+  - `{ "backend": "flow", "transport": "http", "url": ..., "token": ... }` — url + token as in `flow_mcp.json` (reference it: `"url": {"$cred": "flow_mcp", "field": "url"}, "token": {"$cred": "flow_mcp", "field": "token"}`)
+  - `{ "backend": "flow", "transport": "local", "notion": { ...notion.json shape... } }` — or `"notion": {"$cred": "notion"}`
+  - `{ "backend": "github", "token": ..., "repo": "owner/name"? }` — token e.g. `{"$cred": "github"}` or a `github[...]` variant; the token's account is the acting identity (issues and comments are created under it); `repo` omitted derives owner/name from the workspace's `origin` remote at server start
 - `focus.json` — `{ "url": ..., "token": ... }` for the focus HTTP client
 - `infra.json` — `{ "apex": ..., "delegated_subdomain": ... }` consumed by `infra/cdk/config.py`
 - `session_log.json` — `{ "aws_access_key_id", "aws_secret_access_key", "region", "bucket", "table" }` for `sync-session-log` (created by `bootstrap_session_log.sh`).
