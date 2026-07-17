@@ -1,9 +1,7 @@
 """shared bro launcher plumbing: container hops, one-shot runs, and bro construction."""
 
 import asyncio
-import logging
 import os
-import sys
 from collections.abc import Callable
 from dataclasses import replace
 from typing import Literal, Optional
@@ -11,6 +9,7 @@ from typing import Literal, Optional
 import base.args
 import cw.bro_run
 import summon as summon_client
+from base import log
 from bro.bro import BroRaised
 from bro.bros.bro import Bro
 from llm.llm import LLMSpec
@@ -83,9 +82,7 @@ def run_llm_spec(
     try:
       spec = spec.fast()
     except NotImplementedError:
-      logging.getLogger(__name__).debug(
-        '%s has no fast mode; running with the normal spec', bro_class.__name__
-      )
+      log.verbose('%s has no fast mode; running with the normal spec', bro_class.__name__)
   if effort is not None:
     spec = spec.with_effort(effort)
   return None if spec is bro_class.llm_spec else spec
@@ -162,10 +159,9 @@ def maybe_containerize(
       or len(revoke_summon) > 0
       or into is not None
     ):
-      print(
+      log.error(
         '--grant-cred/--revoke-cred/--grant-summon/--revoke-summon/--into require '
-        'containerization (not valid with --in-place)',
-        file=sys.stderr,
+        'containerization (not valid with --in-place)'
       )
       return 1
     return None
@@ -183,7 +179,7 @@ def maybe_containerize(
   if into is not None:
     base_ref = resolve_ref(_project_root(), into)
     if base_ref is None:
-      print(f'cannot resolve --into ref: {into}', file=sys.stderr)
+      log.error('cannot resolve --into ref: %s', into)
       return 1
   launch = cw.bro_run.describe(
     bro_name,
@@ -203,7 +199,7 @@ def maybe_containerize(
       revoke_summon=revoke_summon,
     )
   except LaunchScopeError as e:
-    print(str(e), file=sys.stderr)
+    log.error('%s', e)
     return 1
   launch = replace(launch, secrets=scoped.required, optional_secrets=scoped.optional)
   return run_in_container(launch, drop=True, may_summon=may_summon)
@@ -222,7 +218,7 @@ def _run_summoned(
   try:
     request_id = summon_client.summon_detached(bro_name, input_text, timeout=timeout, into=into)
   except summon_client.SummonError as error:
-    print(str(error), file=sys.stderr)
+    log.error('%s', error)
     return 1
   print(request_id)
   return 0
@@ -325,13 +321,12 @@ def run_main(
       args['bro'], input_text, timeout=args['timeout'], into=args['into'], detach=args['detach']
     )
   if args['timeout'] is not None or args['detach']:
-    print('--timeout/--detach require --summon', file=sys.stderr)
+    log.error('--timeout/--detach require --summon')
     return 1
   if os.environ.get('CW_IN_CONTAINER') is not None and not args['in_place']:
-    print(
+    log.error(
       'bro run refuses an implicit in-container run; pass --summon for an isolated run '
-      "or --in-place to use this container's scope",
-      file=sys.stderr,
+      "or --in-place to use this container's scope"
     )
     return 1
 
@@ -358,10 +353,11 @@ def run_main(
   if hopped is not None:
     return hopped
 
+  log.verbose('creating bro %s', args['bro'])
   try:
     bro = create_bro_for_run(args['bro'], fast=not args['slow'], effort=args['effort'])
   except NotImplementedError as error:
-    print(str(error), file=sys.stderr)
+    log.error('%s', error)
     return 1
   observer: Optional[Observer] = None
   if args['rich']:
@@ -371,6 +367,6 @@ def run_main(
   try:
     result = asyncio.run(bro.run(input_text, observer=observer))
   except BroRaised as error:
-    print(f'raised: {error.reason}', file=sys.stderr)
+    log.error('raised: %s', error.reason)
     return 1
   print(result)

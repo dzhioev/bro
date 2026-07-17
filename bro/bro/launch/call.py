@@ -194,13 +194,11 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
   os.environ.setdefault('PPP_SHELL_COMMAND', ' '.join(parser.reconstruct(args, prog=program)))
 
   if args['what'] is None and args['resume'] is None:
-    print('what is required unless --resume is given', file=sys.stderr)
+    log.error('what is required unless --resume is given')
     return 1
   if os.environ.get('CW_IN_CONTAINER') is not None and not args['in_place']:
-    print(
-      'bro chat refuses an implicit in-container run; pass --in-place to use this '
-      "container's scope",
-      file=sys.stderr,
+    log.error(
+      "bro chat refuses an implicit in-container run; pass --in-place to use this container's scope"
     )
     return 1
 
@@ -246,7 +244,7 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
     except NotImplementedError as e:
       # --effort on a provider without the knob — an explicit ask, so a clean
       # error instead of fast mode's silent fallback.
-      print(str(e), file=sys.stderr)
+      log.error('%s', e)
       return 1
     with default_client() as client:
       try:
@@ -259,18 +257,19 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
           llm_spec=spec if spec is not None else bro_class.llm_spec,
         )
       except (ValueError, http.client.HTTPException) as e:
-        print(str(e), file=sys.stderr)
+        log.error('%s', e)
         return 1
     bro = resumed.bro
     history = resumed.history
     log.info('resumed trail %s (%d prior messages)', resumed.trail_id, len(history))
   else:
+    log.verbose('creating bro %s', args['bro'])
     try:
       bro = create_bro_for_run(args['bro'], fast=not args['slow'], effort=args['effort'])
     except NotImplementedError as e:
       # --effort on a provider without the knob — an explicit ask, so a clean
       # error instead of fast mode's silent fallback.
-      print(str(e), file=sys.stderr)
+      log.error('%s', e)
       return 1
   initial: Optional[str] = args['what']
   use_tui = not args['text'] and _tty_supported()
@@ -283,17 +282,19 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
     else:
       asyncio.run(call_text(bro, initial, history=history))
   except BroRaised as e:
-    print(f'raised: {e.reason}', file=sys.stderr)
+    log.error('raised: %s', e.reason)
     return 1
   except KeyboardInterrupt:
     return 130
   finally:
     # the conversation survives as its trail — point the user at the pickup
     if bro.trail_id is not None:
-      print(
-        f'conversation recorded as trail {bro.trail_id}; continue it with: '
-        f'{" ".join(program)} {args["bro"]} --resume {bro.trail_id}',
-        file=sys.stderr,
+      log.info(
+        'conversation recorded as trail %s; continue it with: %s %s --resume %s',
+        bro.trail_id,
+        ' '.join(program),
+        args['bro'],
+        bro.trail_id,
       )
 
 

@@ -186,9 +186,11 @@ def run_in_place(spec: 'SessionSpec') -> int:
     except RuntimeError as e:
       log.error('%s', e)
       return 1
+    log.verbose('session MCP server healthy')
 
     env = {**os.environ}
     _apply_claude_auth(env, warn_when_missing=spec.bro is None)
+    log.info('launching claude')
     code = _run_claude(launch.argv, env)
 
   return code

@@ -23,4 +23,4 @@ def _populate_bro_skills(skills_root: Path, bro_name: str) -> None:
         source.read_text(), harness='claude', wire='mcp', creds=credentials.known_names()
       )
     )
-    log.info('populated .claude/skills/%s/SKILL.md from %s', name, source)
+    log.verbose('populated .claude/skills/%s/SKILL.md from %s', name, source)

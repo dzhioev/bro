@@ -17,7 +17,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from base import spawn
+from base import log, spawn
 from mcp_server import BEARER_TOKEN_ENV
 
 # how long a runner-owned server may take to bind. the bind needs only
@@ -158,6 +158,7 @@ def _start_session_mcp_server(spec: str, cwd: Path, env: Mapping[str, str]) -> _
       )
     if port_file.exists():
       endpoint = MCPEndpoint(port=int(port_file.read_text()), token=token)
+      log.verbose('session MCP server (%s) on port %d (log: %s)', spec, endpoint.port, log_path)
       return _SessionMCPServer(process, endpoint, log_path)
     if time.monotonic() >= deadline:
       process.terminate()

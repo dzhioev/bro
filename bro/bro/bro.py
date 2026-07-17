@@ -848,6 +848,7 @@ class BaseBro(ABC):
       entry_point='cli:bro_run',
       summoner=_summoner_from_env(),
     )
+    log.info('run started%s', f' (trail {trail_id})' if len(trail_id) > 0 else '')
     channel = self._make_channel()
     if channel is not None:
       channel.started(trail_id)
@@ -865,6 +866,7 @@ class BaseBro(ABC):
       result = str(error)
       raise
     finally:
+      log.verbose('run ended: %s', end_reason)
       self._tracker.end_trail(end_reason)
       if channel is not None:
         channel.completed(result, end_reason)

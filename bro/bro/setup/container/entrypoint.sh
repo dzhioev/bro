@@ -1,5 +1,7 @@
 #!/usr/bin/env -S bash -e
 
+source /usr/local/lib/ppp-log.sh
+
 # root phase: align container user with host uid/gid, then re-exec as cw
 if [ "$(id -u)" = "0" ] && [ -z "${CW_ENTRYPOINT_REEXEC:-}" ]; then
   TARGET_UID="$(stat -c '%u' /workspace)"
@@ -57,10 +59,12 @@ git config --global --add safe.directory /workspace
 # goes to GitHub, matching host-mode worktrees), and we add `host` as a local
 # remote for fetching commits that haven't been pushed upstream yet.
 if [ ! -d /workspace/.git ]; then
-  echo 'cloning host repo into /workspace' >&2
+  log INFO 'cloning host repo into /workspace'
+  quiet=(-q)
+  if log_enabled VERBOSE; then quiet=(); fi
   git config --global --add safe.directory /host-repo
   cd /
-  git -c protocol.file.allow=always clone --shared /host-repo /workspace >&2
+  git -c protocol.file.allow=always clone --shared "${quiet[@]}" /host-repo /workspace >&2
   cd /workspace
   host_origin="$(git -C /host-repo config --get remote.origin.url)"
   # convert ssh URL to https so the container can push with a token
@@ -70,7 +74,7 @@ if [ ! -d /workspace/.git ]; then
   # refresh refs/remotes/origin/master (the clone copied /host-repo's possibly-stale
   # local copy) so later ancestry/clean checks and rebases compare against the real
   # upstream. ref-only — objects are already shared via alternates, no token needed.
-  git fetch host '+refs/remotes/origin/master:refs/remotes/origin/master' >&2
+  git fetch "${quiet[@]}" host '+refs/remotes/origin/master:refs/remotes/origin/master' >&2
   # branch worktree-<CW_NAME> from CW_BASE_REF — a sha the host resolved for an
   # explicit base (--into <ref>) or a summoned child's inherited summoner HEAD.
   # the HEAD fallback (the clone's checkout, i.e. the host checkout's current
@@ -79,7 +83,7 @@ if [ ! -d /workspace/.git ]; then
   # clone. either base's objects are shared from /host-repo via the clone's
   # alternates (the host resolution transfers foreign objects into the host repo
   # first), so no extra fetch is needed.
-  git checkout -B "worktree-$CW_NAME" "${CW_BASE_REF:-HEAD}" >&2
+  git checkout "${quiet[@]}" -B "worktree-$CW_NAME" "${CW_BASE_REF:-HEAD}" >&2
   # init submodules from host-local paths — .gitmodules uses ssh URLs and the
   # container has no ssh keys. skip any submodule the host hasn't initialized.
   if [ -f .gitmodules ]; then
@@ -87,13 +91,13 @@ if [ ! -d /workspace/.git ]; then
       | while IFS=' ' read -r key path; do
           name="${key#submodule.}"; name="${name%.path}"
           if [ ! -e "/host-repo/$path/.git" ]; then
-            echo "skipping submodule $name: /host-repo/$path not initialized on host" >&2
+            log VERBOSE "skipping submodule $name: /host-repo/$path not initialized on host"
             continue
           fi
-          echo "initializing submodule $name from /host-repo/$path" >&2
+          log VERBOSE "initializing submodule $name from /host-repo/$path"
           git -c "submodule.$name.url=/host-repo/$path" \
               -c protocol.file.allow=always \
-              submodule update --init -- "$path" >&2
+              submodule "${quiet[@]}" update --init -- "$path" >&2
         done
   fi
 fi
@@ -151,6 +155,7 @@ fi
 if [ "${CW_SKIP_VENV:-}" != "1" ] && [ -d /opt/cw-venv ] && [ ! -e /workspace/.venv ] \
     && cmp -s /workspace/pyproject.toml /opt/cw-venv-manifest/pyproject.toml \
     && cmp -s /workspace/uv.lock /opt/cw-venv-manifest/uv.lock; then
+  log VERBOSE 'reusing the venv baked into the image'
   ln -s /opt/cw-venv /workspace/.venv
   touch /workspace/.venv/.provision-stamp
   # the baked venv also carries a `_entrypoints.py` bridge generated from the
@@ -180,6 +185,7 @@ fi
 # set -e never fires, so claude would launch with credentials unwired. a plain
 # assignment propagates the substitution's exit status to set -e, aborting the launch.
 if [ "${CW_SKIP_VENV:-}" != "1" ]; then
+  log VERBOSE 'installing credential hooks'
   install_hooks="$(credentials install-hooks)"
   eval "$install_hooks"
 fi
@@ -190,16 +196,17 @@ fi
 if [ -n "${BROKER_CHANNEL:-}" ]; then
   if [ "${CW_SKIP_VENV:-}" != "1" ] && command -v broxy > /dev/null; then
     if broxy_launch="$(
-      broxy launch /tmp/broxy.sock --upstream "$BROKER_CHANNEL" --log /tmp/broxy.log
+      broxy launch /tmp/broxy.sock --upstream "$BROKER_CHANNEL" --log-file /tmp/broxy.log
     )"; then
       IFS=$'\t' read -r BROKER_CHANNEL _ <<< "$broxy_launch"
       export BROKER_CHANNEL
+      log VERBOSE "broker channel at $BROKER_CHANNEL"
     else
-      echo 'warning: broxy launch failed (log: /tmp/broxy.log); the session gets no broker channel' >&2
+      log WARNING 'broxy launch failed (log: /tmp/broxy.log); the session gets no broker channel'
       unset BROKER_CHANNEL
     fi
   else
-    echo 'warning: broxy unavailable in this workspace; the session gets no broker channel' >&2
+    log WARNING 'broxy unavailable in this workspace; the session gets no broker channel'
     unset BROKER_CHANNEL
   fi
 fi

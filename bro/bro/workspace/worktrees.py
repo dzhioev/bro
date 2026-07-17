@@ -21,11 +21,12 @@ def _ensure_host_worktree(worktree: Path, branch: str, base_ref: Optional[str] =
     ).returncode
     == 0
   )
+  quiet = [] if log.verbose_enabled() else ['-q']
   if branch_exists:
-    add = ['git', 'worktree', 'add', str(worktree), branch]
+    add = ['git', 'worktree', 'add', *quiet, str(worktree), branch]
   else:
     base = base_ref if base_ref is not None else 'HEAD'
-    add = ['git', 'worktree', 'add', str(worktree), '-b', branch, base]
+    add = ['git', 'worktree', 'add', *quiet, str(worktree), '-b', branch, base]
   if subprocess.run(add).returncode != 0:
     log.error('failed to create worktree %s', worktree)
     return False

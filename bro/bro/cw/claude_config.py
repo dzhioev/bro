@@ -14,6 +14,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Optional
 
+from base import log
 from cw.paths import _encode_claude_path, _session_claude_dir
 
 # the shared base of the session ~/.claude/settings.json, written fresh each
@@ -139,6 +140,7 @@ def _provision_host_claude_dir(name: str, worktree: Path, project: Path) -> Path
   both call it, so a runner spawned by an outer cw that predates the config dir
   still provisions its own."""
   claude_dir = _session_claude_dir(name)
+  log.verbose('provisioning the session claude state dir at %s', claude_dir)
   claude_dir.mkdir(parents=True, exist_ok=True)
   trusted_paths = [str(worktree)]
   if str(project) != str(worktree):

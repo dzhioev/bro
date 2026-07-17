@@ -166,6 +166,7 @@ class TestParser:
   def test_global_flags_removed_from_args(self):
     parser = Parser()
     args = parser.parse(['script.py', '--allow-env'])
+    assert 'log' not in args
     assert 'verbose' not in args
     assert 'ic' not in args
     assert 'info' not in args
@@ -290,7 +291,7 @@ class TestEnvBooleans:
     log.set_level(_logging.INFO)
     parser = Parser()
     parser.parse_args(['--allow-env'])
-    assert _logging.getLogger('ppp').level == _logging.DEBUG
+    assert _logging.getLogger('ppp').level == log.VERBOSE
     log.set_level(_logging.INFO)
 
   def test_allow_env_itself_not_env_backed(self, monkeypatch):
@@ -708,3 +709,54 @@ class TestStdlibOnlyImport:
     result = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == 'ok'
+
+
+class TestLogFlag:
+  def test_log_sets_level_and_exports(self):
+    import logging as _logging
+    import os
+
+    from base import log
+
+    parser = Parser()
+    parser.parse_args(['--log', 'warning'])
+    assert _logging.getLogger('ppp').level == _logging.WARNING
+    assert os.environ[log.LEVEL_ENV] == 'WARNING'
+
+  def test_verbose_is_log_verbose_shorthand(self):
+    import logging as _logging
+    import os
+
+    from base import log
+
+    parser = Parser()
+    parser.parse_args(['--verbose'])
+    assert _logging.getLogger('ppp').level == log.VERBOSE
+    assert os.environ[log.LEVEL_ENV] == 'VERBOSE'
+
+  def test_unknown_log_level_rejected(self, capsys):
+    parser = Parser()
+    with pytest.raises(SystemExit):
+      parser.parse_args(['--log', 'chatty'])
+    assert 'invalid choice' in capsys.readouterr().err
+
+  def test_log_and_verbose_are_mutually_exclusive(self, capsys):
+    parser = Parser()
+    with pytest.raises(SystemExit):
+      parser.parse_args(['--log', 'info', '--verbose'])
+    assert 'mutually exclusive' in capsys.readouterr().err
+
+  def test_log_joined_form_and_verbose_are_mutually_exclusive(self, capsys):
+    parser = Parser()
+    with pytest.raises(SystemExit):
+      parser.parse_args(['--verbose', '--log=info'])
+    assert 'mutually exclusive' in capsys.readouterr().err
+
+  def test_explicit_log_wins_over_verbose_env(self, monkeypatch):
+    import logging as _logging
+
+
+    monkeypatch.setenv('VERBOSE', '1')
+    parser = Parser()
+    parser.parse_args(['--allow-env', '--log', 'info'])
+    assert _logging.getLogger('ppp').level == _logging.INFO

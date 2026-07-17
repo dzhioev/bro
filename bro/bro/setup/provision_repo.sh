@@ -9,12 +9,13 @@
 # (credentials) stay with the callers; only the steps below are shared.
 
 DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+source "$DIR/log.sh"
 cd "$DIR/.."
 
 unset VIRTUAL_ENV
 
 if ! command -v uv >/dev/null 2>&1; then
-  echo "uv not found; run setup/setup_env.sh first or install manually" >&2
+  log ERROR "uv not found; run setup/setup_env.sh first or install manually"
   exit 1
 fi
 
@@ -24,8 +25,12 @@ fi
 # can add or remove CLIs without touching uv.lock / pyproject.
 stamp=".venv/.provision-stamp"
 if [ ! -f "$stamp" ] || [ uv.lock -nt "$stamp" ] || [ pyproject.toml -nt "$stamp" ]; then
-  echo "syncing python dependencies" >&2
-  uv sync --all-groups >&2
+  log INFO "syncing python dependencies"
+  if ppp_verbose; then
+    uv sync --all-groups >&2
+  else
+    uv sync -q --all-groups >&2
+  fi
   touch "$stamp"
 fi
 
@@ -37,20 +42,20 @@ fi
 # into the image, whose bridge was generated from the tag-pinned [project.scripts]
 # and so already matches this clone — skip the regen.
 if [ "${CW_VENV_BAKED:-}" = "1" ]; then
-  echo "console-script entrypoints baked into image; skipping regen" >&2
+  log VERBOSE "console-script entrypoints baked into image; skipping regen"
 else
-  echo "generating console-script entrypoints" >&2
+  log VERBOSE "generating console-script entrypoints"
   .venv/bin/python -m sync_scripts --entrypoints >&2
 fi
 
 # promote the staged token-accounting baseline after each commit lands. --git-path
 # hooks (not --git-dir/hooks) resolves to the shared common hooks dir from inside a
 # worktree, which is where git actually runs hooks from.
-echo "installing git hooks" >&2
+log VERBOSE "installing git hooks"
 hooks_dir="$(git rev-parse --git-path hooks)"
 mkdir -p "$hooks_dir"
 cp setup/git_hooks/post-commit "$hooks_dir/post-commit"
 chmod +x "$hooks_dir/post-commit"
 
-echo "registering local git aliases" >&2
+log VERBOSE "registering local git aliases"
 git config --local alias.golc '!./setup/git_golc.py'

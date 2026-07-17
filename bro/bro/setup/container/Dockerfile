@@ -124,5 +124,8 @@ RUN --mount=type=bind,from=project,target=/project-src \
 WORKDIR /workspace
 ENV CW_IN_CONTAINER=1
 
+# the shared shell logging helpers, baked next to the entrypoint: the clone the
+# entrypoint prepares does not exist yet when its early phases log
+COPY --from=project setup/log.sh /usr/local/lib/ppp-log.sh
 COPY entrypoint.sh /usr/local/bin/cw-entrypoint
 ENTRYPOINT ["/usr/local/bin/cw-entrypoint"]

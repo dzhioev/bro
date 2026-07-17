@@ -577,7 +577,7 @@ def main(argv: list[str]) -> Optional[int]:
   )
   launch_parser.add_argument('socket_path', metavar='SOCKET', help='local unix socket to listen on')
   launch_parser.add_argument(
-    '--log', dest='log_path', required=True, help='serve stdout and stderr log file'
+    '--log-file', dest='log_path', required=True, help='serve stdout and stderr log file'
   )
   launch_parser.add_argument(
     '--upstream', help=f'upstream channel address (default: ${CHANNEL_ENV})'

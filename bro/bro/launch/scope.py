@@ -173,7 +173,7 @@ def _apply_claude_auth(env: dict[str, str], *, warn_when_missing: bool = False) 
   """
   for var in _OUTRANKING_AUTH_VARS:
     if env.pop(var, None) is not None:
-      log.info('scrubbed inherited %s from the claude session env', var)
+      log.verbose('scrubbed inherited %s from the claude session env', var)
   token = credentials.try_get('claude_code')
   if token is None:
     if warn_when_missing:
@@ -250,6 +250,7 @@ def _materialize_scoped_store(files: dict[str, bytes], directory: Path) -> Path:
   search path). the directory is recreated from scratch so a secret dropped from
   the scope (e.g. a lapsed `--grant-cred`) does not linger from an earlier
   launch."""
+  log.verbose('materializing the scoped credential store at %s', directory)
   if directory.exists():
     shutil.rmtree(directory)
   directory.mkdir(parents=True)

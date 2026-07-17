@@ -45,6 +45,7 @@ class TestEnsureHostWorktree:
       'git',
       'worktree',
       'add',
+      '-q',
       str(worktree),
       '-b',
       'worktree-x',
@@ -60,6 +61,7 @@ class TestEnsureHostWorktree:
       'git',
       'worktree',
       'add',
+      '-q',
       str(worktree),
       '-b',
       'worktree-x',
@@ -70,7 +72,14 @@ class TestEnsureHostWorktree:
     calls = self._recorder(monkeypatch, branch_exists=True)
     worktree = tmp_path / 'worktree'
     assert cw.worktrees._ensure_host_worktree(worktree, 'worktree-x', 'sha123') is True
-    assert self._add_command(calls) == ['git', 'worktree', 'add', str(worktree), 'worktree-x']
+    assert self._add_command(calls) == [
+      'git',
+      'worktree',
+      'add',
+      '-q',
+      str(worktree),
+      'worktree-x',
+    ]
 
   def test_existing_dir_is_noop(self, monkeypatch, tmp_path):
     calls = self._recorder(monkeypatch)

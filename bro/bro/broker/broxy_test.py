@@ -748,7 +748,7 @@ def test_launch_starts_serve_and_prints_address_and_pid(tmp_path, monkeypatch, c
     str(socket_path),
     '--upstream',
     'unix:/upstream.sock',
-    '--log',
+    '--log-file',
     str(log_path),
   ]
   assert broker.broxy.main(argv) == 0
@@ -775,7 +775,7 @@ def test_launch_stops_serve_when_readiness_fails(tmp_path, monkeypatch):
     str(tmp_path / 'broxy.sock'),
     '--upstream',
     'unix:/upstream.sock',
-    '--log',
+    '--log-file',
     str(tmp_path / 'broxy.log'),
   ]
   assert broker.broxy.main(argv) == 1

@@ -46,7 +46,7 @@ def _start_session_broxy(upstream: str, env: Mapping[str, str]) -> Optional[_Ses
     str(socket_path),
     '--upstream',
     upstream,
-    '--log',
+    '--log-file',
     str(log_path),
     '--timeout',
     str(_LAUNCH_TIMEOUT),
@@ -78,4 +78,5 @@ def _start_session_broxy(upstream: str, env: Mapping[str, str]) -> Optional[_Ses
   except ValueError:
     log.warning('broxy launch returned an invalid pid; the session gets no broker channel')
     return None
+  log.verbose('session broxy at %s (pid %d)', address, pid)
   return _SessionBroxy(pid, address, log_path)

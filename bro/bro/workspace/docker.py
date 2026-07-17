@@ -38,6 +38,7 @@ _DOCKER_FORWARD_ENV = (
   'GIT_AUTHOR_EMAIL',
   'GIT_COMMITTER_NAME',
   'GIT_COMMITTER_EMAIL',
+  'PPP_LOG_LEVEL',
   'PPP_SHELL_COMMAND',
   # docker defaults containers to TERM=xterm (a low color tier that flattens
   # dim/256-color TUIs); forward the host TERM so in-container colors match.
@@ -133,7 +134,7 @@ def _image_tag() -> str:
   inputs = (
     sorted(BASE_IMAGE_DIR.iterdir())
     + sorted(CONTAINER_DIR.iterdir())
-    + [project / 'pyproject.toml', project / 'uv.lock']
+    + [project / 'pyproject.toml', project / 'uv.lock', project / 'setup' / 'log.sh']
   )
   for path in inputs:
     if path.is_file():
@@ -169,6 +170,7 @@ def _prune_superseded_images(current: str) -> None:
 def _ensure_image(tag: str) -> None:
   inspect = subprocess.run(['docker', 'image', 'inspect', tag], capture_output=True, text=True)
   if inspect.returncode == 0:
+    log.verbose('image %s ready', tag)
     return
   version = (CONTAINER_DIR / 'claude-code-version').read_text().strip()
   log.info('building %s (claude-code %s)', tag, version)
@@ -214,15 +216,18 @@ def _create_container(argv: list[str], store_tarball: bytes, name: str) -> str:
     raise RuntimeError(
       f'docker cp of scoped store into {name} failed: {cp.stderr.decode().strip()}'
     )
+  log.verbose('container %s created', container_id[:12])
   return container_id
 
 
 def prepare_container(launch: Launch, project: Path) -> str:
   """create the workspace and unstarted container described by `launch`."""
+  log.info('creating container workspace %s', launch.name)
   session = _containers_dir(project) / launch.name
   session.mkdir(parents=True, exist_ok=True)
   tag = _image_tag()
   _ensure_image(tag)
+  log.verbose('hydrating the scoped credential store')
   store = credentials.build_scoped_store(launch.secrets, optional=launch.optional_secrets)
   argv = _docker_create_argv(
     tag,

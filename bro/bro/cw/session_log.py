@@ -74,4 +74,5 @@ def _start_session_log_sync(
   except OSError as e:
     log.warning('cannot start session-log sync (%s); the session is not uploaded', e)
     return None
+  log.verbose('session-log sync started (log: %s)', log_path)
   return _SessionLogSync(process, log_path)

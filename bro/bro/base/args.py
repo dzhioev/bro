@@ -10,7 +10,6 @@ installed.
 
 import argparse
 import contextlib
-import logging
 import os
 import sys
 from collections.abc import Callable, Generator, Iterable, Sequence
@@ -58,13 +57,6 @@ def trigger(function: Callable) -> type[argparse.Action]:
       function()
 
   return TriggerAction
-
-
-def set_log_level(level: int) -> Callable:
-  def enable() -> None:
-    log.set_level(level)
-
-  return enable
 
 
 def enable_ic() -> None:
@@ -140,8 +132,18 @@ class Parser(argparse.ArgumentParser):
     self._global_group.add_argument(
       '--print-env', action='store_true', help='print env-var summary and exit'
     )
-    self._add_global_argument(
-      '--verbose', action=trigger(set_log_level(logging.DEBUG)), help='enable verbose logging'
+    self._log_action = self._add_global_argument(
+      '--log',
+      env=False,
+      choices=log.LEVEL_NAMES,
+      help='log level threshold (default: info, or the inherited PPP_LOG_LEVEL)',
+    )
+    self._verbose_action = self._add_global_argument(
+      '--verbose',
+      action='store_const',
+      const='verbose',
+      dest='log',
+      help='shorthand for --log verbose',
     )
     if ic is not None:
       self._add_global_argument('--ic', action=trigger(enable_ic), help='enable ic output')
@@ -275,7 +277,9 @@ class Parser(argparse.ArgumentParser):
           f'env-var support not implemented for action on --{dest.replace("_", "-")} '
           f'(env {env_name} is set)'
         )
-      if self._cli_provided(action, argv):
+      # any CLI-provided action on the same dest wins over the env, not just
+      # this one — --log must not be overridden by an injected --verbose
+      if any(self._cli_provided(a, argv) for a in self._actions if a.dest == action.dest):
         continue
       if _is_nargs_zero(action):
         if self._parse_bool_env(env_name, env_value):
@@ -341,18 +345,27 @@ class Parser(argparse.ArgumentParser):
       ic.disable()
     argv_list = list(args)
     self._last_argv = argv_list
+    # sharing the `log` dest keeps --verbose a pure alias, but it also means
+    # _check_exclusive_groups cannot tell the two apart — enforce on the argv
+    if self._cli_provided(self._log_action, argv_list) and self._cli_provided(
+      self._verbose_action, argv_list
+    ):
+      self.error('arguments --log and --verbose are mutually exclusive')
     allow_env = '--allow-env' in argv_list
     print_env = '--print-env' in argv_list
     parse_argv = self._apply_env(argv_list) if allow_env else argv_list
     parsed = super().parse_args(parse_argv, namespace)  # pyright: ignore[reportArgumentType]
     assert isinstance(parsed, argparse.Namespace)
+    level_name = getattr(parsed, 'log', None)
+    if level_name is not None:
+      log.set_level(log.level_number(level_name))
     if print_env:
       self._print_env_table(parsed, argv_list)
       sys.exit(0)
     self._check_exclusive_groups(parsed)
     if ic is not None:
       delattr(parsed, 'ic')
-    delattr(parsed, 'verbose')
+    delattr(parsed, 'log')
     delattr(parsed, 'print_env')
     delattr(parsed, 'allow_env')
     return parsed
@@ -361,8 +374,8 @@ class Parser(argparse.ArgumentParser):
     """Reconstruct canonical argv from a parsed namespace.
 
     Iterates over the parser's actions and builds the command line from the
-    namespace values. Global flags (--verbose, --ic, --allow-env, --print-env)
-    and help are always excluded. Flags appear in definition order; positionals
+    namespace values. Global flags (--log, --verbose, --ic, --allow-env,
+    --print-env) and help are always excluded. Flags appear in definition order; positionals
     follow.
     """
     get = namespace.get if isinstance(namespace, dict) else lambda d: getattr(namespace, d, None)
