@@ -12,10 +12,10 @@ _REGISTRY: dict[str, type[Bro]] = {}
 _autoload = True
 
 # out-of-tree bros register through this entry-point group: a bro-framework
-# user project declares `[project.entry-points."bro.bros"]
+# user project declares `[project.entry-points.bro]
 # <name> = "<module>:<ClassName>"` and its bros resolve wherever that venv is
 # active — no edit to BRO_SPECS.
-_ENTRY_POINT_GROUP = 'bro.bros'
+_ENTRY_POINT_GROUP = 'bro'
 
 
 def _entry_points() -> tuple[importlib.metadata.EntryPoint, ...]:

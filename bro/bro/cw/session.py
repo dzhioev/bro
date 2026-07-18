@@ -69,7 +69,7 @@ class SessionSpec:
     """the bro this session runs as — its identity for credential scoping, the
     summon allow-list, and a cw-session's persona deliveries. `--bro` names it
     directly; a cw-session runs as its `--persona`, defaulting to the operated
-    repo's `[tool.bro] persona` (ppp-dev when undeclared)."""
+    required project default bro."""
     if self.bro is not None:
       return self.bro
     if self.persona is not None:

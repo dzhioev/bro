@@ -169,6 +169,17 @@ class TestExternalSpecs:
   def enable_autoload(self):
     bro.registry._autoload = True
 
+  def test_entry_points_use_the_bro_group(self, monkeypatch):
+    calls: list[dict] = []
+
+    def entry_points(**kwargs):
+      calls.append(kwargs)
+      return ()
+
+    monkeypatch.setattr(importlib.metadata, 'entry_points', entry_points)
+    assert bro.registry._entry_points() == ()
+    assert calls == [{'group': 'bro'}]
+
   def test_get_class_resolves_an_external_entry_point(self, monkeypatch):
     monkeypatch.setattr(
       bro.registry,

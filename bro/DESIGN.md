@@ -66,7 +66,7 @@ The same Bro runs from many launchers:
 - **Console** — `bro run <name> <input>`, `bro list`, `bro show <name>`. Backed by `bro/run.py`.
 - **HTTP** — `bro/server/server.py` serves the `assistant` Bro on `POST /v1/chat/completions` (OpenAI-compatible). The iOS chat app speaks to this endpoint.
 - **Claude Code** — `cw ss --bro <name>` launches a bare Claude Code session whose system prompt and MCP servers come from the named Bro. Tools are served by a session-local HTTP MCP server (`mcp-server bro:<name> --http`) exposing the union of the Bro's declared MCP servers and data-source tools, one endpoint per namespace. Useful when the user wants a chat UI over the Bro's policy + toolkit.
-- **Claude Code persona** — every cw-session (the default non-`--bro` `cw ss` flavor) runs *as* a Bro too (`--persona <name>`, ppp-dev by default): the Bro's persona prompt is injected, its skills become slash commands, and its claude-harness-filtered toolset (`claude_persona_mcp_servers()` via `mcp-server persona:<name> --http`) mounts alongside claude's built-in tools — components gated to the bro harness (the dev toolset) stay out.
+- **Claude Code persona** — every cw-session (the default non-`--bro` `cw ss` flavor) runs *as* a Bro too (`--persona <name>`, defaulting to the project default bro): the Bro's persona prompt is injected, its skills become slash commands, and its claude-harness-filtered toolset (`claude_persona_mcp_servers()` via `mcp-server persona:<name> --http`) mounts alongside claude's built-in tools — components gated to the bro harness (the dev toolset) stay out.
 - **`bro run` / `bro chat`** — canonical one-shot and interactive launchers; `ask` and `call` are aliases. See `bro/launch/CLAUDE.md`.
 
 A given Bro need not support every surface — `pm` is consumed by both `cw ss --bro pm` and the `process-inbox` TUI; `librorian` runs from the console. `assistant` (which declares `mcp_servers=[flow.mcp.spec()]`) is reachable from every surface — `bro run`/`bro show`, `cw ss --bro assistant`, and the HTTP server — but it is only the HTTP server's *default* bro, so the iOS app reaches it without naming it.
@@ -84,6 +84,6 @@ The current set lives in `bros/`:
 - `librorian` — steward of the Flow media library (adds, maintains, recommends)
 - `devoops` — autonomous service deploys (the deploy targets are enumerated in `infra/mcp.py`'s `TARGETS` / `list_targets`) with a dry-run-first safety reflex; tools wrap `infra/mcp.py`
 - `dev` — generic software developer with file + shell + search tools
-- `ppp-dev` — full-stack PPP development (inherits `dev`, adds the flow toolset and the `/fix`, `/pr`, `/land` skills); the bro whose persona `dive-in` sessions run under
+- `ppp-dev` — full-stack PPP development (inherits `dev`, adds the flow toolset and the `/fix`, `/pr`, `/land` skills); this repo's default bro
 
 Adding a new Bro is creating a new subclass and registering it — see `CLAUDE.md` for the operational checklist.

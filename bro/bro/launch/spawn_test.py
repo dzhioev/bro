@@ -20,7 +20,9 @@ class TestSummonLowering:
   def lowering_harness(self, monkeypatch, tmp_path):
     monkeypatch.setattr(bro.launch.spawn, 'project_root', lambda: tmp_path / 'proj')
     monkeypatch.setattr(
-      bro.launch.spawn, 'project_config', lambda: workspace.project.ProjectConfig()
+      bro.launch.spawn,
+      'project_config',
+      lambda: workspace.project.ProjectConfig(persona='foo', image_repository='bro/foo'),
     )
     monkeypatch.setattr(
       bro.launch.bro_run,

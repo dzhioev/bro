@@ -121,7 +121,9 @@ class TestSuspendUntilContinued:
 
 class TestImageTag:
   def test_repository_and_submodule_manifest_come_from_the_project(self, monkeypatch, tmp_path):
-    (tmp_path / 'pyproject.toml').write_text('[tool.bro]\nimage-repository = "custom-images"\n')
+    (tmp_path / 'pyproject.toml').write_text(
+      '[tool.bro]\ndefault = "foo"\nimage-repository = "custom-images"\n'
+    )
     (tmp_path / 'uv.lock').write_text('lock')
     monkeypatch.setattr(workspace.docker, 'project_root', lambda: tmp_path)
     monkeypatch.setattr(workspace.project, 'project_root', lambda: tmp_path)

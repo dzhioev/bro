@@ -4,6 +4,8 @@ import tempfile
 from typing import Optional
 from unittest.mock import patch
 
+import pytest
+
 import bro.launch.scope
 import bro.launch.summon_control
 import cw.session
@@ -47,6 +49,15 @@ def _spec(
   )
 
 
+@pytest.fixture(autouse=True)
+def configured_project(monkeypatch):
+  monkeypatch.setattr(
+    cw.session,
+    'project_config',
+    lambda: workspace.project.ProjectConfig(persona='ppp-dev', image_repository='bro/ppp-dev'),
+  )
+
+
 class _ContainerHarness:
   """patches for driving start_session through the container path without docker,
   bro imports, or git side effects."""
@@ -73,9 +84,6 @@ class _ContainerHarness:
       patch('cw.session._replace_resume_hint'),
       # keep the bro-registry import out; threading is asserted per-test
       patch('bro.launch.summon_control.summon_allow_list', return_value=set()),
-      # session_bro reads the operated repo's [tool.bro]; tests may run outside a
-      # git repo, so anchor the config read to a bare root (no pyproject -> defaults)
-      patch('workspace.project.project_root', return_value=pathlib.Path('/main-repo')),
     ]
     entered = [p.__enter__() for p in self._patches]
     self.env = entered[0]
@@ -147,7 +155,6 @@ class TestSummonAllowList:
       h.summon_allow_list.return_value = {'devoops'}
       rc = cw.session.start_session(_spec(drop=True, grant=['@devoops']))
     assert rc == 0
-    # identity: no --bro and no ambient CW_BRO → the ppp-dev default
     assert h.summon_allow_list.call_args == (
       ('ppp-dev',),
       {'grant': ['devoops'], 'revoke': []},
@@ -369,7 +376,7 @@ class TestSessionBro:
   def test_cw_session_runs_as_its_persona(self):
     assert _spec(persona='pm').session_bro == 'pm'
 
-  def test_cw_session_defaults_to_ppp_dev(self):
+  def test_cw_session_uses_the_project_default(self):
     assert _spec().session_bro == 'ppp-dev'
 
 

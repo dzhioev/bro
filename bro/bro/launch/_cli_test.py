@@ -20,6 +20,10 @@ def scoped_store_preflight(monkeypatch):
   monkeypatch.setattr(
     'bro.launch.scope.credentials.build_scoped_store', lambda names, optional=(): {}
   )
+  monkeypatch.setattr(
+    'workspace.project.project_config',
+    lambda: ProjectConfig(persona='foo', image_repository='bro/foo'),
+  )
 
 
 def test_maybe_containerize_skips_when_inside_container():
@@ -200,7 +204,12 @@ def test_maybe_containerize_creds_mapping_outside_scope_errors(capsys):
   with (
     patch.dict('os.environ', {}, clear=False) as env,
     patch('bro.launch.root.run_in_container') as run,
-    patch('workspace.project.project_config', return_value=ProjectConfig(creds={'nonesuch': 'x'})),
+    patch(
+      'workspace.project.project_config',
+      return_value=ProjectConfig(
+        persona='foo', image_repository='bro/foo', creds={'nonesuch': 'x'}
+      ),
+    ),
   ):
     env.pop('CW_IN_CONTAINER', None)
     rc = maybe_containerize(

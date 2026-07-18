@@ -74,8 +74,8 @@ def dive_in(
   focus: bool = False,
 ) -> int:
   """launch the session. session shaping — the persona (prompt, skills, MCP
-  namespaces; ppp-dev by default) or the `--bro` flavor — rides the forwarded
-  flags; dive-in adds nothing of its own."""
+  namespaces) selected by `--persona` or the project default bro, or the `--bro`
+  flavor — rides the forwarded flags; dive-in adds nothing of its own."""
   prompt: Optional[str] = None
   if new:
     base = _slugify(command) if command is not None else ''

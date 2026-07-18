@@ -7,6 +7,7 @@ import cw.runner
 from cw.claude_argv import ClaudeLaunch
 from cw.mcp import MCPEndpoint
 from cw.session_test import _spec
+from workspace.project import ProjectConfig
 
 
 class _Harness:
@@ -38,10 +39,10 @@ class _Harness:
       patch('cw.runner.in_container', return_value=False),
       patch('cw.runner._provision_host_claude_dir', return_value=self.claude_config_dir),
       patch('cw.runner.project_root', return_value=Path('/main-repo')),
-      # session_bro reads the operated repo's [tool.bro]; the fake workspace is
-      # not a git repo, so anchor the config read to the fake root (no pyproject
-      # there -> defaults)
-      patch('workspace.project.project_root', return_value=Path('/main-repo')),
+      patch(
+        'cw.session.project_config',
+        return_value=ProjectConfig(persona='ppp-dev', image_repository='bro/ppp-dev'),
+      ),
     ]
     entered = [p.__enter__() for p in self._patches]
     self.env = entered[0]
@@ -128,7 +129,7 @@ class TestRunInPlace:
       assert h.env['CW_BRO'] == 'pm'
       assert h.build.call_args.kwargs['endpoint'] == h.server.endpoint
 
-  def test_cw_session_defaults_to_the_ppp_dev_persona(self, monkeypatch, tmp_path):
+  def test_cw_session_uses_the_project_default_persona(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
       assert cw.runner.run_in_place(_spec()) == 0
