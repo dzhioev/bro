@@ -7,8 +7,8 @@ from typing import Literal, Optional
 
 import base.args
 import bro.launch.bro_run
-import summon as summon_client
 from base import log
+from bro import summon as summon_client
 from bro.bro import BroRaised
 from bro.bros.bro import Bro
 from llm.llm import EFFORT_LEVELS, LLMSpec

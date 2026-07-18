@@ -48,7 +48,7 @@ writes both; a container session reads the status file through its read-only
 through the host path (`summon_status_file`).
 
 The wire contract (the `summon` tag, payload keys, the 1800s default timeout) is
-owned by the peer-side `summon` module; this module enforces it host-side. Broker
+owned by the peer-side `bro.summon` module; this module enforces it host-side. Broker
 imports stay function-local: this module sits on the launch path before the
 `_broker_enabled` gate (see cw/CLAUDE.md, "Lazy broker import").
 """
@@ -61,7 +61,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 from base import credentials, log
-from summon import DEFAULT_TIMEOUT, STATUS_ENV
+from bro.summon import DEFAULT_TIMEOUT, STATUS_ENV
 from workspace.model import ContainerWorkspace, HostWorktree, parse_ref
 from workspace.paths import containers_dir, summon_dir
 

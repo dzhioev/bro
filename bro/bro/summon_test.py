@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import pytest
 
-import summon
+from bro import summon
 from broker.brotocol import Message
 from broker.client import CHANNEL_ENV
 from broker.transport import ChannelID

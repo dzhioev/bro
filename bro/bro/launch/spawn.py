@@ -17,13 +17,13 @@ from typing import Any, Optional
 from base import log
 from bro.launch.bro_run import describe
 from bro.launch.summon_control import SummonControl, summon_status_file
+from bro.summon import SUMMON
 from broker.brotocol import Message, Tag
 from broker.dispatcher import Broker, Dispatcher, ping_handler
 from broker.runtime import Peer
 from broker.spawn import ChildHandle, LaunchSpec, Spawner
 from broker.transport import Provisioned
 from broker.transports.unix import UnixServerTransport
-from summon import SUMMON
 from workspace.git import resolve_head, resolve_ref
 from workspace.paths import broker_dir, host_log_dir, project_root, summon_dir
 from workspace.project import project_config

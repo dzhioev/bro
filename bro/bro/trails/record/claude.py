@@ -53,10 +53,10 @@ from typing import Optional
 
 import boto3
 
-import session_log_health
 from base import credentials, log
 from base.args import Parser
 from base.lulid import lulid
+from session_log import health
 
 __cli_name__ = 'sync-session-log'
 
@@ -961,10 +961,10 @@ def _attempt(step: Callable[[], bool]) -> None:
     uploaded = step()
   except Exception as e:
     log.exception('sync failed')
-    session_log_health.write('error', _exception_summary(e))
+    health.write('error', _exception_summary(e))
     return
   if uploaded:
-    session_log_health.write('ok')
+    health.write('ok')
 
 
 def _watch(engine: ConversationSync, interval: int) -> None:
@@ -1003,8 +1003,8 @@ def sync_session_log(
   try:
     config = _load_config()
   except credentials.SecretNotFound:
-    log.error('config not found: session_log (run setup/bootstrap_session_log.sh)')
-    session_log_health.write('error', 'config not found: session_log')
+    log.error('config not found: session_log (run session_log/bootstrap.sh)')
+    health.write('error', 'config not found: session_log')
     return 1
   store = _Store(_create_session(config), config['bucket'], config['table'])
 
@@ -1025,12 +1025,12 @@ def sync_session_log(
   try:
     uploaded = engine.tick()
   except Exception as e:
-    session_log_health.write('error', _exception_summary(e))
+    health.write('error', _exception_summary(e))
     raise
   if not uploaded:
     log.error('no session log found in %s', src)
     return 1
-  session_log_health.write('ok')
+  health.write('ok')
   return 0
 
 

@@ -180,7 +180,7 @@ def test_main_refuses_implicit_run_inside_container(capsys):
   with (
     patch.dict('os.environ', {'CW_IN_CONTAINER': '1', 'BROKER_CHANNEL': 'unix:/tmp/x.sock'}),
     patch('bro.launch.root.run_in_container') as run,
-    patch('summon.relay_summon') as relay,
+    patch('bro.summon.relay_summon') as relay,
   ):
     rc = main(['ask', 'ppp-dev', 'hi'])
   assert rc == 1
@@ -192,14 +192,14 @@ def test_main_refuses_implicit_run_inside_container(capsys):
 
 
 def test_main_summon_forwards_timeout_and_into():
-  with patch('summon.relay_summon', return_value=0) as relay:
+  with patch('bro.summon.relay_summon', return_value=0) as relay:
     rc = main(['ask', 'ppp-dev', 'hi', '--summon', '--timeout', '7200', '--into', 'feature-branch'])
   assert rc == 0
   relay.assert_called_once_with('ppp-dev', 'hi', timeout=7200.0, into='feature-branch', hold=None)
 
 
 def test_main_summon_detaches(capsys):
-  with patch('summon.summon_detached', return_value='REQUEST-ID') as detached:
+  with patch('bro.summon.summon_detached', return_value='REQUEST-ID') as detached:
     rc = main(['ask', 'ppp-dev', 'hi', '--summon', '--detach'])
   assert rc == 0
   detached.assert_called_once_with('ppp-dev', 'hi', timeout=None, into=None, hold=None)

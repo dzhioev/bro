@@ -30,7 +30,7 @@ def test_global_flag_before_run_reaches_the_launcher():
 
 
 def test_run_summon_delegates_to_the_summon_library():
-  with patch('summon.relay_summon', return_value=0) as relay:
+  with patch('bro.summon.relay_summon', return_value=0) as relay:
     assert main(['bro', 'run', '--summon', '--timeout', '60', 'devoops', 'deploy']) == 0
   relay.assert_called_once_with('devoops', 'deploy', timeout=60.0, into=None, hold=None)
 
@@ -38,7 +38,7 @@ def test_run_summon_delegates_to_the_summon_library():
 def test_run_refuses_implicit_in_container_execution(capsys):
   with (
     patch.dict('os.environ', {'CW_IN_CONTAINER': '1'}),
-    patch('summon.relay_summon') as relay,
+    patch('bro.summon.relay_summon') as relay,
   ):
     assert main(['bro', 'run', 'ppp-dev', 'hello']) == 1
   assert relay.call_count == 0

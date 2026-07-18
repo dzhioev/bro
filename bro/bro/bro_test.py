@@ -1444,7 +1444,7 @@ class TestSummonTool:
 
   @pytest.mark.asyncio
   async def test_summon_list_needs_the_status_file_env(self, monkeypatch):
-    import summon as summon_module
+    from bro import summon as summon_module
 
     monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
     monkeypatch.delenv(summon_module.STATUS_ENV, raising=False)
@@ -1456,7 +1456,7 @@ class TestSummonTool:
 
   @pytest.mark.asyncio
   async def test_summon_list_returns_the_recorded_status(self, monkeypatch):
-    import summon as summon_module
+    from bro import summon as summon_module
 
     monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
     monkeypatch.setenv(summon_module.STATUS_ENV, '/anywhere/ws.status.json')
@@ -1467,7 +1467,7 @@ class TestSummonTool:
 
   @pytest.mark.asyncio
   async def test_calls_summon_and_wait_off_loop(self, monkeypatch):
-    import summon as summon_module
+    from bro import summon as summon_module
 
     monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
     calls: list = []
@@ -1496,7 +1496,7 @@ class TestSummonTool:
 
   @pytest.mark.asyncio
   async def test_detach_returns_the_request_id_without_waiting(self, monkeypatch):
-    import summon as summon_module
+    from bro import summon as summon_module
 
     monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
     calls: list = []
@@ -1517,7 +1517,7 @@ class TestSummonTool:
 
   @pytest.mark.asyncio
   async def test_check_reports_pending_and_completed(self, monkeypatch):
-    import summon as summon_module
+    from bro import summon as summon_module
 
     monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
     statuses = [
@@ -1533,7 +1533,7 @@ class TestSummonTool:
 
   @pytest.mark.asyncio
   async def test_check_passes_last_seen_and_reports_the_cursor(self, monkeypatch):
-    import summon as summon_module
+    from bro import summon as summon_module
 
     monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
     calls: list = []
@@ -1550,7 +1550,7 @@ class TestSummonTool:
 
   @pytest.mark.asyncio
   async def test_check_reports_collected_with_a_reread_hint(self, monkeypatch):
-    import summon as summon_module
+    from bro import summon as summon_module
 
     monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
     status = summon_module.SummonStatus(pending=False, collected=True, seq=2)
@@ -1576,7 +1576,7 @@ class TestSummonTool:
     # worker thread and detaches the broxy route
     import threading
 
-    import summon as summon_module
+    from bro import summon as summon_module
 
     monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
     client = _FakeSummonClient()
@@ -1620,7 +1620,7 @@ class TestSummonTool:
 
   @pytest.mark.asyncio
   async def test_check_wait_collects(self, monkeypatch):
-    import summon as summon_module
+    from bro import summon as summon_module
 
     monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
     calls: list = []
@@ -1647,7 +1647,7 @@ class TestSummonTool:
 
   @pytest.mark.asyncio
   async def test_summon_failure_propagates_as_the_tool_error(self, monkeypatch):
-    import summon as summon_module
+    from bro import summon as summon_module
 
     monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
 

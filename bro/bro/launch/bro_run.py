@@ -16,7 +16,7 @@ from typing import Any, Literal, Optional
 from base import credentials
 from bro.launch.identity import bro_git_identity_env
 from bro.launch.scope import Surface, scoped_secrets
-from summon import SUMMONER_ENV
+from bro.summon import SUMMONER_ENV
 from workspace.docker import Launch
 
 

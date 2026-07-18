@@ -3,11 +3,11 @@
 Every session flavor gets continuous transcript upload from one mechanism: the
 runner spawns `sync-session-log --watch` before launching claude and stops it
 after claude exits — the stop is the daemon's final sync (leave event + upload;
-sync_session_log.py owns the conversation model). Deliberately not a Claude
+session_log/sync.py owns the conversation model). Deliberately not a Claude
 Code hook: `--bro` sessions run `claude --bare`, which runs no hooks at all.
 
 The daemon's stderr goes to `<claude config dir>/session-log-sync.log`; its
-durable failure signal is the health file (session_log_health.py) surfaced by
+durable failure signal is the health file (session_log/health.py) surfaced by
 the statusLine and `cw banner`.
 """
 

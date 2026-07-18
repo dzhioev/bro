@@ -4,9 +4,8 @@ from pathlib import Path
 from typing import Optional
 from unittest.mock import MagicMock
 
-import session_log_health
-import sync_session_log
-from sync_session_log import Chunk, ConversationEvent, ConversationState, ConversationSync
+from session_log import health, sync
+from session_log.sync import Chunk, ConversationEvent, ConversationState, ConversationSync
 
 _STALE = 1_000.0
 _LAUNCH = 2_000.0
@@ -14,7 +13,7 @@ _LAUNCH = 2_000.0
 
 def _redirect_health(monkeypatch, tmp_path) -> Path:
   path = tmp_path / 'health.json'
-  monkeypatch.setattr(session_log_health, 'health_path', lambda: path)
+  monkeypatch.setattr(health, 'health_path', lambda: path)
   return path
 
 
@@ -35,7 +34,7 @@ def _write_segment(projects_dir: Path, stem: str, entries: list[dict], mtime: fl
   return path
 
 
-class _FakeStore(sync_session_log._Store):
+class _FakeStore(sync._Store):
   def __init__(self) -> None:
     self.logs: dict[str, bytes] = {}
     self.items: list[dict] = []
@@ -203,7 +202,7 @@ class TestForkTransition:
     assert state.segments == ['seg-b']
 
     old_lines = _uploaded_lines(store, old_conversation)
-    assert old_lines[-1]['type'] == sync_session_log.EVENT_TYPE
+    assert old_lines[-1]['type'] == sync.EVENT_TYPE
     assert old_lines[-1]['subtype'] == 'leave'
 
     new_lines = _uploaded_lines(store, state.conversation_id)
@@ -542,10 +541,7 @@ class TestCompose:
       Chunk('seg-b', 0, None),
     ]
     lines = [
-      json.loads(line)
-      for line in sync_session_log._compose_items(
-        projects_dir, timeline, sync_session_log._MetadataScan()
-      )
+      json.loads(line) for line in sync._compose_items(projects_dir, timeline, sync._MetadataScan())
     ]
     assert lines[0]['subtype'] == 'missing-segment'
     assert lines[0]['sessionId'] == 'seg-a'
@@ -579,8 +575,8 @@ class TestCompose:
       ConversationEvent('resume', '2026-06-30T09:00:00Z', 'seg', verified=False),
       Chunk('seg', 0, None),
     ]
-    scan = sync_session_log._MetadataScan()
-    lines = sync_session_log._compose_items(projects_dir, timeline, scan)
+    scan = sync._MetadataScan()
+    lines = sync._compose_items(projects_dir, timeline, scan)
     assert scan.subject == 'hello'
     assert scan.model == 'claude-opus-4-8'
     assert scan.version == '2.1.195'
@@ -605,13 +601,13 @@ class TestRaisedScan:
     }
 
   def test_raise_call_sets_the_reason(self):
-    scan = sync_session_log._MetadataScan()
+    scan = sync._MetadataScan()
     scan.feed({'type': 'user', 'message': {'content': 'do the thing'}})
     scan.feed(self._raise_record('missing api key'))
     assert scan.raised == 'missing api key'
 
   def test_other_tool_calls_do_not_mark(self):
-    scan = sync_session_log._MetadataScan()
+    scan = sync._MetadataScan()
     scan.feed(
       {
         'type': 'assistant',
@@ -621,7 +617,7 @@ class TestRaisedScan:
     assert scan.raised is None
 
   def test_a_real_user_message_clears_the_mark(self):
-    scan = sync_session_log._MetadataScan()
+    scan = sync._MetadataScan()
     scan.feed(self._raise_record('missing api key'))
     scan.feed({'type': 'user', 'message': {'content': 'resumed: key added, carry on'}})
     assert scan.raised is None
@@ -629,7 +625,7 @@ class TestRaisedScan:
   def test_a_tool_result_record_does_not_clear_the_mark(self):
     # the raise call's own result comes back as a user-type record with only a
     # tool_result block — it must not read as the conversation moving on
-    scan = sync_session_log._MetadataScan()
+    scan = sync._MetadataScan()
     scan.feed(self._raise_record('missing api key'))
     scan.feed(
       {
@@ -640,9 +636,9 @@ class TestRaisedScan:
     assert scan.raised == 'missing api key'
 
   def test_raised_survives_the_snapshot_round_trip(self):
-    scan = sync_session_log._MetadataScan()
+    scan = sync._MetadataScan()
     scan.feed(self._raise_record('missing api key'))
-    restored = sync_session_log._MetadataScan.from_snapshot(scan.to_snapshot())
+    restored = sync._MetadataScan.from_snapshot(scan.to_snapshot())
     assert restored.raised == 'missing api key'
 
 
@@ -697,10 +693,10 @@ class TestBuildItem:
       _STALE,
     )
     state = ConversationState('conv', [Chunk('seg', 0, None)])
-    scan = sync_session_log._MetadataScan()
-    lines = sync_session_log._compose_items(projects_dir, state.timeline, scan)
-    composed = sync_session_log._Composed(sync_session_log._encode_lines(lines), scan, len(lines))
-    return sync_session_log._build_item(state, 'ws', 'logs/ws/conv.jsonl', composed)
+    scan = sync._MetadataScan()
+    lines = sync._compose_items(projects_dir, state.timeline, scan)
+    composed = sync._Composed(sync._encode_lines(lines), scan, len(lines))
+    return sync._build_item(state, 'ws', 'logs/ws/conv.jsonl', composed)
 
   def test_version_and_context_into_item(self, monkeypatch, tmp_path):
     records = [{'kind': 'git', 'subtype': 'state', 'title': 'git', 'fields': {'branch': 'b'}}]
@@ -737,18 +733,18 @@ class TestBuildItem:
       _STALE,
     )
     state = ConversationState('conv', [Chunk('seg', 0, None)])
-    scan = sync_session_log._MetadataScan()
-    lines = sync_session_log._compose_items(projects_dir, state.timeline, scan)
-    composed = sync_session_log._Composed(sync_session_log._encode_lines(lines), scan, len(lines))
-    item = sync_session_log._build_item(state, 'ws', 'logs/ws/conv.jsonl', composed)
+    scan = sync._MetadataScan()
+    lines = sync._compose_items(projects_dir, state.timeline, scan)
+    composed = sync._Composed(sync._encode_lines(lines), scan, len(lines))
+    item = sync._build_item(state, 'ws', 'logs/ws/conv.jsonl', composed)
     assert item['raised'] == 'no api key'
 
 
 class TestHealthOnOneShot:
   def _stub_store(self, monkeypatch, store) -> None:
-    monkeypatch.setattr(sync_session_log, '_load_config', lambda: {'bucket': 'b', 'table': 't'})
-    monkeypatch.setattr(sync_session_log, '_create_session', lambda config: MagicMock())
-    monkeypatch.setattr(sync_session_log, '_Store', lambda session, bucket, table: store)
+    monkeypatch.setattr(sync, '_load_config', lambda: {'bucket': 'b', 'table': 't'})
+    monkeypatch.setattr(sync, '_create_session', lambda config: MagicMock())
+    monkeypatch.setattr(sync, '_Store', lambda session, bucket, table: store)
 
   def test_success_writes_ok(self, monkeypatch, tmp_path):
     _redirect_health(monkeypatch, tmp_path)
@@ -756,8 +752,8 @@ class TestHealthOnOneShot:
     projects_dir = tmp_path / 'config' / 'projects' / '-ws'
     projects_dir.mkdir(parents=True)
     _write_segment(projects_dir, 'seg-a', [_record('u1')], _STALE)
-    assert sync_session_log.sync_session_log(workspace='ws', projects_dir=projects_dir) == 0
-    assert session_log_health.is_failing() is False
+    assert sync.sync_session_log(workspace='ws', projects_dir=projects_dir) == 0
+    assert health.is_failing() is False
 
   def test_failure_writes_error_and_reraises(self, monkeypatch, tmp_path):
     _redirect_health(monkeypatch, tmp_path)
@@ -772,12 +768,12 @@ class TestHealthOnOneShot:
     projects_dir.mkdir(parents=True)
     _write_segment(projects_dir, 'seg-a', [_record('u1')], _STALE)
     try:
-      sync_session_log.sync_session_log(workspace='ws', projects_dir=projects_dir)
+      sync.sync_session_log(workspace='ws', projects_dir=projects_dir)
       raised = False
     except RuntimeError:
       raised = True
     assert raised
-    assert session_log_health.is_failing() is True
+    assert health.is_failing() is True
 
   def test_missing_config_writes_error(self, monkeypatch, tmp_path):
     from base import credentials
@@ -787,13 +783,13 @@ class TestHealthOnOneShot:
     def _missing():
       raise credentials.SecretNotFound('session_log')
 
-    monkeypatch.setattr(sync_session_log, '_load_config', _missing)
-    assert sync_session_log.sync_session_log(workspace='ws') == 1
-    assert session_log_health.is_failing() is True
+    monkeypatch.setattr(sync, '_load_config', _missing)
+    assert sync.sync_session_log(workspace='ws') == 1
+    assert health.is_failing() is True
 
   def test_empty_projects_dir_errors(self, monkeypatch, tmp_path):
     _redirect_health(monkeypatch, tmp_path)
     self._stub_store(monkeypatch, _FakeStore())
     projects_dir = tmp_path / 'config' / 'projects' / '-ws'
     projects_dir.mkdir(parents=True)
-    assert sync_session_log.sync_session_log(workspace='ws', projects_dir=projects_dir) == 1
+    assert sync.sync_session_log(workspace='ws', projects_dir=projects_dir) == 1

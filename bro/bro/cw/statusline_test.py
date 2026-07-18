@@ -2,26 +2,25 @@ import io
 import json
 import time
 
-import session_log_health
-import session_log_statusline
+from session_log import health, statusline
 
 
 def _run(monkeypatch, tmp_path, status=None, summon_status=None) -> str:
-  monkeypatch.setattr(session_log_health, 'health_path', lambda: tmp_path / 'health.json')
+  monkeypatch.setattr(health, 'health_path', lambda: tmp_path / 'health.json')
   if status is not None:
-    session_log_health.write(status)
-  monkeypatch.delenv(session_log_statusline.STATUS_ENV, raising=False)
+    health.write(status)
+  monkeypatch.delenv(statusline.STATUS_ENV, raising=False)
   if summon_status is not None:
     summon_file = tmp_path / 'summon-status.json'
     if isinstance(summon_status, str):
       summon_file.write_text(summon_status)
     else:
       summon_file.write_text(json.dumps(summon_status))
-    monkeypatch.setenv(session_log_statusline.STATUS_ENV, str(summon_file))
+    monkeypatch.setenv(statusline.STATUS_ENV, str(summon_file))
   monkeypatch.setattr('sys.stdin', io.StringIO('{"cwd":"/workspace"}'))
   out = io.StringIO()
   monkeypatch.setattr('sys.stdout', out)
-  assert session_log_statusline.statusline() == 0
+  assert statusline.statusline() == 0
   return out.getvalue()
 
 
@@ -102,12 +101,12 @@ class TestSummonSection:
     assert '⚠ summon status unreadable' in out
 
   def test_missing_file_prints_nothing(self, monkeypatch, tmp_path):
-    monkeypatch.setenv(session_log_statusline.STATUS_ENV, str(tmp_path / 'nope.json'))
-    monkeypatch.setattr(session_log_health, 'health_path', lambda: tmp_path / 'health.json')
+    monkeypatch.setenv(statusline.STATUS_ENV, str(tmp_path / 'nope.json'))
+    monkeypatch.setattr(health, 'health_path', lambda: tmp_path / 'health.json')
     monkeypatch.setattr('sys.stdin', io.StringIO('{}'))
     out = io.StringIO()
     monkeypatch.setattr('sys.stdout', out)
-    assert session_log_statusline.statusline() == 0
+    assert statusline.statusline() == 0
     assert out.getvalue().strip() == ''
 
   def test_sections_join_on_one_line(self, monkeypatch, tmp_path):

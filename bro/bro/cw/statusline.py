@@ -20,8 +20,8 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
-import session_log_health
-from summon import STATUS_ENV
+from bro.summon import STATUS_ENV
+from session_log import health
 
 __cli_name__ = 'session-log-statusline'
 
@@ -82,8 +82,8 @@ def statusline() -> int:
   except OSError:
     pass
   parts = []
-  if session_log_health.is_failing():
-    parts.append(f'{_RED}⚠ session-log sync FAILING — run setup/bootstrap_session_log.sh{_RESET}')
+  if health.is_failing():
+    parts.append(f'{_RED}⚠ session-log sync FAILING — run session_log/bootstrap.sh{_RESET}')
   parts.extend(_summon_parts(time.time()))
   if len(parts) > 0:
     print(' · '.join(parts))

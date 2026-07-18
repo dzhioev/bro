@@ -10,7 +10,7 @@ set — every cw session points it at private per-session state), so concurrent
 sessions don't clobber each other's signal.
 
 Stdlib-only on purpose: the statusline imports this on every render, so it must
-not pull in boto3 (as importing `sync_session_log` would).
+not pull in boto3 (as importing `session_log.sync` would).
 """
 
 import datetime

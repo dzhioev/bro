@@ -260,10 +260,10 @@ class TestRenderBanner:
 
   def test_llm_emits_sync_warning_as_first_line(self):
     out = _facts(
-      sync_warning='session-log sync FAILING — run setup/bootstrap_session_log.sh'
+      sync_warning='session-log sync FAILING — run session_log/bootstrap.sh'
     ).render_llm()
     # first line so it survives Claude's collapsed tool-output preview
-    assert out.splitlines()[0] == 'session_log_sync: FAILING — run setup/bootstrap_session_log.sh'
+    assert out.splitlines()[0] == 'session_log_sync: FAILING — run session_log/bootstrap.sh'
     assert 'kind: container' in out
 
   def test_llm_omits_sync_warning_when_healthy(self):
@@ -272,7 +272,7 @@ class TestRenderBanner:
 
   def test_visual_paints_sync_warning_red_above_logo(self):
     out = _facts(
-      bro='pm', sync_warning='session-log sync FAILING — run setup/bootstrap_session_log.sh'
+      bro='pm', sync_warning='session-log sync FAILING — run session_log/bootstrap.sh'
     ).render_visual()
     first = out.splitlines()[0]
     assert first.startswith('\033[31m\033[1m⚠ ')

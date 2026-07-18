@@ -3,7 +3,7 @@ import subprocess
 from dataclasses import dataclass
 from typing import Optional
 
-import session_log_health
+from session_log import health
 from workspace import paths
 from workspace.model import format_ref
 
@@ -111,8 +111,8 @@ class SessionFacts:
       shell_command, prompt = _split_launch_prompt(shell_command)
 
     sync_warning: Optional[str] = None
-    if session_log_health.is_failing():
-      sync_warning = 'session-log sync FAILING — run setup/bootstrap_session_log.sh'
+    if health.is_failing():
+      sync_warning = 'session-log sync FAILING — run session_log/bootstrap.sh'
 
     return cls(
       in_container=in_container,
@@ -211,7 +211,7 @@ class SessionFacts:
     if self.sync_warning is not None:
       # first line so it lands in Claude's collapsed tool-output preview without
       # needing expansion; the agent should relay it to the user
-      lines.append('session_log_sync: FAILING — run setup/bootstrap_session_log.sh')
+      lines.append('session_log_sync: FAILING — run session_log/bootstrap.sh')
     lines.append(f'kind: {"container" if self.in_container else "host worktree"}')
     pairs: list[tuple[str, str]] = [
       ('name', 'name'),

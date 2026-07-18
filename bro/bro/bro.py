@@ -14,11 +14,11 @@ from base.condition import Entry, SetVariable, Variables
 from bro import scripts as script_store
 from bro.channel import BroChannel
 from bro.datasources.base import DataSource
+from bro.summon import SUMMONER_ENV
 from llm.llm import LLM, LLMSpec
 from llm.observer import BoringRenderer, NullObserver, Observer
 from llm.tracker import EndReason, HTTPTracker, NullTracker, Tracker
 from prompts import get_prompt, hold_fragment
-from summon import SUMMONER_ENV
 
 DEFAULT_LLM_SPEC: LLMSpec = llm.llms.chat_gpt.LLMSpec()
 
@@ -300,7 +300,7 @@ def _summon_tool(variables: Variables) -> llm.mcp.Tool:
   # off-loop wait: the broxy sees the waiter go, and the terminal buffers for a
   # later summon_check instead of feeding an abandoned thread. the blocking wait
   # runs off-loop so an interactive surface stays responsive under a long summon.
-  import summon as summon_client
+  from bro import summon as summon_client
 
   async def _summon(
     target: str,
@@ -334,7 +334,7 @@ def _summon_tool(variables: Variables) -> llm.mcp.Tool:
 
 
 def _summon_list_tool(variables: Variables) -> llm.mcp.Tool:
-  import summon as summon_client
+  from bro import summon as summon_client
 
   async def _summon_list() -> dict[str, Any]:
     return await asyncio.to_thread(summon_client.list_summons)
@@ -348,7 +348,7 @@ def _summon_check_tool(variables: Variables) -> llm.mcp.Tool:
   # the wait path owns its client like _summon_tool, for the same cancellation
   # abort; the plain peek is answered locally and immediately, so it keeps the
   # per-call client inside the worker thread.
-  import summon as summon_client
+  from bro import summon as summon_client
 
   async def _summon_check(
     request_id: str,
@@ -414,7 +414,7 @@ def _build_service_server(
   has_broker = os.environ.get('BROKER_CHANNEL') is not None
   has_summon_list = False
   if has_broker:
-    import summon as summon_module
+    from bro import summon as summon_module
 
     has_summon_list = os.environ.get(summon_module.STATUS_ENV) is not None
 
