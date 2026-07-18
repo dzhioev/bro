@@ -4,6 +4,7 @@ own declarations (manifest, optional tier, `may_summon`, `needs_docker`).
 """
 
 import enum
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
@@ -80,11 +81,46 @@ _RECIPES: dict[Surface, _Recipe] = {
 }
 
 
-def scoped_secrets(bro_name: str, surface: Surface) -> ScopedSecrets:
+def _substitute_credential_instances(
+  scoped: ScopedSecrets, credential_instances: Mapping[str, str]
+) -> ScopedSecrets:
+  """swap each mapped bare kind in either tier for its `kind+instance` variant.
+
+  a mapping whose kind is in neither tier raises — a typo guard: the operated
+  repo's `[tool.bro] creds` selects instances for kinds its launches actually
+  scope, so a name that matches nothing is a config mistake to surface."""
+  unmatched = sorted(set(credential_instances) - (scoped.required | scoped.optional))
+  if len(unmatched) > 0:
+    raise LaunchScopeError(
+      f'[tool.bro] creds maps kind(s) not in the scoped credential set: '
+      f'{", ".join(map(repr, unmatched))}'
+    )
+
+  def substitute(names: set[str]) -> set[str]:
+    return {
+      f'{name}+{credential_instances[name]}' if name in credential_instances else name
+      for name in names
+    }
+
+  return ScopedSecrets(
+    required=substitute(scoped.required),
+    optional=substitute(scoped.optional),
+    docker_sock=scoped.docker_sock,
+  )
+
+
+def scoped_secrets(
+  bro_name: str, surface: Surface, *, credential_instances: Mapping[str, str]
+) -> ScopedSecrets:
   """the credential scope of a launch running as `bro_name` on `surface` — one
   computation for every launch surface, so they cannot drift. the per-surface
   recipe is the `_RECIPES` row; required hydration is strict, so each surface
   requests only what it actually uses.
+
+  `credential_instances` is the operated repo's kind → instance selection
+  (`workspace.project.ProjectConfig.creds`), substituted over both tiers of the
+  computed scope — so later `--grant`/`--revoke` overrides and hydration see
+  the `kind+instance` names, while components keep declaring kinds.
   """
   from bro.registry import create_bro
 
@@ -102,7 +138,10 @@ def scoped_secrets(bro_name: str, surface: Surface) -> ScopedSecrets:
     # no bro to consult, so the per-bro socket rule degrades to no socket (moot
     # anyway — the argv builder re-raises the same KeyError downstream)
     docker_sock = recipe.docker_sock if recipe.docker_sock is not None else False
-    return ScopedSecrets(required=required, optional=optional, docker_sock=docker_sock)
+    return _substitute_credential_instances(
+      ScopedSecrets(required=required, optional=optional, docker_sock=docker_sock),
+      credential_instances,
+    )
   required.update(bro.needed_secrets(harness=recipe.harness))
   if recipe.auth_secret is not None:
     required.add(recipe.auth_secret)
@@ -113,12 +152,16 @@ def scoped_secrets(bro_name: str, surface: Surface) -> ScopedSecrets:
     docker_sock = recipe.docker_sock
   else:
     docker_sock = bro.needs_docker
-  return ScopedSecrets(required=required, optional=optional, docker_sock=docker_sock)
+  return _substitute_credential_instances(
+    ScopedSecrets(required=required, optional=optional, docker_sock=docker_sock),
+    credential_instances,
+  )
 
 
 class LaunchScopeError(Exception):
-  """a launch failed its scope preflight: a malformed or no-op grant/revoke
-  override, an unknown summon target, or an unknown/unresolvable required
+  """a launch failed its scope computation or preflight: a malformed or no-op
+  grant/revoke override, a `[tool.bro] creds` mapping matching nothing in the
+  scope, an unknown summon target, or an unknown/unresolvable required
   secret."""
 
 

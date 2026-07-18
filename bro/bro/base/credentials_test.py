@@ -523,13 +523,13 @@ class TestDefaultRegistry:
 
 class TestNameGrammar:
   def test_plain_name_is_its_own_kind(self):
-    assert credentials._parse_name('github') == ('github', None)
+    assert credentials.parse_name('github') == ('github', None)
 
   def test_variant_name_splits_kind_and_instance(self):
-    assert credentials._parse_name('github+pavel') == ('github', 'pavel')
+    assert credentials.parse_name('github+pavel') == ('github', 'pavel')
 
   def test_instance_allows_dashes(self):
-    assert credentials._parse_name('github+read-only') == ('github', 'read-only')
+    assert credentials.parse_name('github+read-only') == ('github', 'read-only')
 
   @pytest.mark.parametrize(
     'name',
@@ -537,7 +537,7 @@ class TestNameGrammar:
   )
   def test_malformed_name_raises(self, name: str):
     with pytest.raises(ValueError, match='malformed secret name'):
-      credentials._parse_name(name)
+      credentials.parse_name(name)
 
 
 class TestHostRegistry:
@@ -860,7 +860,9 @@ class TestBuildScopedStore:
     store = credentials.build_scoped_store(['notion'], optional=['notion'])
     assert set(store) == {'notion.cred', credentials.REGISTRY_FILE}
 
-  def test_variant_hydrates_with_its_materialized_hook(self, configs_dir: Path, ppp_dir: Path):
+  def test_variant_materializes_under_its_kind_name(self, configs_dir: Path, ppp_dir: Path):
+    # the scoped namespace is kinds-only: the registry entry and its cred file
+    # are named by the kind, hydrated from the variant's sources
     _write(
       ppp_dir,
       credentials.HOST_REGISTRY_FILE,
@@ -868,14 +870,43 @@ class TestBuildScopedStore:
     )
     _write(ppp_dir, 'github_token_pavel', 'ghp_pavel\n')
     store = credentials.build_scoped_store(['github+pavel'])
-    assert store['github+pavel.cred'] == b'ghp_pavel'
+    assert set(store) == {'github.cred', credentials.REGISTRY_FILE}
+    assert store['github.cred'] == b'ghp_pavel'
     registry = json.loads(store[credentials.REGISTRY_FILE])
-    assert registry['github+pavel']['sources'] == [{'file': 'github+pavel.cred'}]
-    # the scoped entry carries the hook already instantiated with the variant
-    # name, so the container needs no kind entry to emit it
-    assert "credentials get 'github+pavel'" in registry['github+pavel']['install']
+    assert set(registry) == {'github'}
+    assert registry['github']['sources'] == [{'file': 'github.cred'}]
+    # the hook is re-rendered for the kind name — in-session `eval` pulls the
+    # value via `credentials get github`, the name the scoped store resolves
+    assert "credentials get 'github'" in registry['github']['install']
+    assert 'github+pavel' not in registry['github']['install']
     rebuilt = credentials._registry_from_dict(registry)
-    assert rebuilt['github+pavel'].install == registry['github+pavel']['install']
+    assert rebuilt['github'].install == registry['github']['install']
+
+  def test_optional_variant_also_materializes_under_its_kind_name(
+    self, configs_dir: Path, ppp_dir: Path
+  ):
+    _write(
+      ppp_dir,
+      credentials.HOST_REGISTRY_FILE,
+      {'openai+work': {'sources': [{'file': 'openai_work.json'}]}},
+    )
+    _write(ppp_dir, 'openai_work.json', '{"api_key": "k"}')
+    store = credentials.build_scoped_store([], optional=['openai+work'])
+    assert set(store) == {'openai.cred', credentials.REGISTRY_FILE}
+    assert set(json.loads(store[credentials.REGISTRY_FILE])) == {'openai'}
+
+  def test_variant_of_hookless_kind_materializes_without_hook(
+    self, configs_dir: Path, ppp_dir: Path
+  ):
+    _write(
+      ppp_dir,
+      credentials.HOST_REGISTRY_FILE,
+      {'notion+work': {'sources': [{'file': 'notion_work.json'}]}},
+    )
+    _write(ppp_dir, 'notion_work.json', '{"token": "t"}')
+    store = credentials.build_scoped_store(['notion+work'])
+    registry = json.loads(store[credentials.REGISTRY_FILE])
+    assert registry['notion'] == {'sources': [{'file': 'notion.cred'}]}
 
   def test_two_instances_of_a_kind_raise(self, configs_dir: Path, ppp_dir: Path):
     _write(

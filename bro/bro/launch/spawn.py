@@ -26,6 +26,7 @@ from broker.transports.unix import UnixServerTransport
 from summon import SUMMON
 from workspace.git import resolve_head, resolve_ref
 from workspace.paths import broker_dir, host_log_dir, project_root, summon_dir
+from workspace.project import project_config
 from workspace.spawn import (
   CompositeSpawner,
   DockerLaunchSpec,
@@ -81,6 +82,7 @@ def _lower_summon(launch: SummonLaunchSpec, workspace_name: str) -> DockerLaunch
     [launch.prompt],
     workspace_name=workspace_name,
     verb='run',
+    credential_instances=project_config().creds,
     base_ref=base_ref,
     tty=False,
     forward_env=False,

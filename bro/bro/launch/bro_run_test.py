@@ -4,6 +4,7 @@ from bro.launch.identity import bro_git_identity_env
 
 def _describe(*args, **kwargs):
   kwargs.setdefault('verb', 'run')
+  kwargs.setdefault('credential_instances', {})
   return bro.launch.bro_run.describe(*args, workspace_name='ws', **kwargs)
 
 
@@ -43,4 +44,16 @@ def test_describe_encodes_summoner_as_compact_json():
 def test_describe_no_trails_drops_secret_and_disables_recording():
   launch = _describe('ppp-dev', ['hi'], trails=False)
   assert 'trails' not in launch.secrets
+  assert launch.env['TRAILS_DISABLED'] == '1'
+
+
+def test_describe_substitutes_credential_instances():
+  launch = _describe('ppp-dev', ['hi'], credential_instances={'brog': 'github'})
+  assert 'brog+github' in launch.secrets
+  assert 'brog' not in launch.secrets
+
+
+def test_describe_no_trails_drops_a_mapped_trails_instance():
+  launch = _describe('ppp-dev', ['hi'], trails=False, credential_instances={'trails': 'eu'})
+  assert 'trails+eu' not in launch.secrets
   assert launch.env['TRAILS_DISABLED'] == '1'

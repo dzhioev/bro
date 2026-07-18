@@ -26,7 +26,9 @@ repo, typically `kind+instance` variants of a checked-in kind
 (`github+pavel`). the kind entry (the name up to `+`) owns kind-level
 behavior — notably the install hook, a `base.template` text rendered with
 `#name` bound to each instance's own name — so a variant declares only its
-sources.
+sources. instance names exist only on the host: `build_scoped_store`
+materializes a variant under its kind name, so a scoped session addresses
+kinds only.
 
 a json secret may reference other secrets instead of embedding copies: an
 object node `{"$cred": "<name>"}` anywhere in its tree is replaced at
@@ -83,19 +85,20 @@ HOST_REGISTRY_FILE = 'registry.json'
 # safe to type unquoted in a shell.
 _NAME_GRAMMAR = re.compile(r'([a-z0-9_]+)(?:\+([a-z0-9_-]+))?')
 
-# the reference-node keys of a json secret (module docstring): `$cred` names the
-# referenced secret, `field` optionally picks one top-level field of its object.
-_REFERENCE_KEY = '$cred'
-_REFERENCE_FIELD = 'field'
 
-
-def _parse_name(name: str) -> tuple[str, Optional[str]]:
+def parse_name(name: str) -> tuple[str, Optional[str]]:
   """split a secret name into (kind, instance); a plain name is its own kind
-  with no instance."""
+  with no instance. raises on a name outside the grammar."""
   match = _NAME_GRAMMAR.fullmatch(name)
   if match is None:
     raise ValueError(f'malformed secret name {name!r}; expected kind or kind+instance')
   return match.group(1), match.group(2)
+
+
+# the reference-node keys of a json secret (module docstring): `$cred` names the
+# referenced secret, `field` optionally picks one top-level field of its object.
+_REFERENCE_KEY = '$cred'
+_REFERENCE_FIELD = 'field'
 
 
 class SecretNotFound(Exception):
@@ -219,27 +222,32 @@ class Secret:
   `install` is an optional shell hook that wires the secret into the tool that
   consumes it from *outside* the resolver (git, the aws CLI, ...). The registry
   declares it as a `base.template` text over the `#name` variable —
-  `credentials get '{{insert #name}}'` — rendered here with the secret's own
-  name, so one kind-level hook serves every instance of the kind. The container
-  entrypoint `eval`s it after hydration; the hook pulls the value via
+  `credentials get '{{insert #name}}'` — so one kind-level hook serves every
+  instance of the kind. The raw template is kept (`install_template`) and
+  rendered per name by `install_for`, because the name an entry resolves under
+  is not always its own: a scoped store materializes a variant under its kind
+  name. `install` is the hook rendered with the secret's own name, computed
+  eagerly so a malformed template fails at registry load. The container
+  entrypoint `eval`s the hook after hydration; it pulls the value via
   `credentials get` at eval time, so per-secret wiring lives in the registry
   with no interpolated path and the entrypoint stays generic."""
 
   def __init__(self, name: str, sources: Sequence[Source], *, install: Optional[str] = None):
     self.name = name
     self.sources = sources
-    self.install = install
+    self.install_template = install
+    self.install = self.install_for(name)
+
+  def install_for(self, name: str) -> Optional[str]:
+    """the install hook rendered with `#name` bound to `name`, or None when the
+    secret declares no hook."""
+    if self.install_template is None:
+      return None
+    return template.render(self.install_template, {'name': StringVariable(name)})
 
   @classmethod
   def from_dict(cls, name: str, data: dict) -> Secret:
-    install = data.get('install')
-    if install is not None:
-      install = template.render(install, {'name': StringVariable(name)})
-    return cls(
-      name,
-      [_source_from_dict(s) for s in data['sources']],
-      install=install,
-    )
+    return cls(name, [_source_from_dict(s) for s in data['sources']], install=data.get('install'))
 
 
 class Store:
@@ -389,7 +397,7 @@ def _resolve_kinds(data: dict) -> dict:
   """
   resolved: dict[str, dict] = {}
   for name, entry in data.items():
-    kind, instance = _parse_name(name)
+    kind, instance = parse_name(name)
     if instance is None:
       resolved[name] = entry
       continue
@@ -485,7 +493,7 @@ def known_names() -> frozenset[str]:
 def _require_one_instance_per_kind(names: Iterable[str]) -> None:
   by_kind: dict[str, list[str]] = {}
   for name in sorted(set(names)):
-    kind, _ = _parse_name(name)
+    kind, _ = parse_name(name)
     by_kind.setdefault(kind, []).append(name)
   for kind, instances in by_kind.items():
     if len(instances) > 1:
@@ -505,6 +513,13 @@ def build_scoped_store(names: Iterable[str], *, optional: Iterable[str] = ()) ->
   `~/.ppp` then bounds the container to this set; any other secret resolves to a
   clean `SecretNotFound`. The bytes never touch a host file — `cw` packs them
   into a tar and `docker cp`s them straight into the container.
+
+  a `kind+instance` name materializes under its kind name: the scoped registry
+  entry and its `.cred` file are named by the kind, hydrated from the variant's
+  sources, with the install hook rendered for the kind name. The scoped
+  namespace is therefore kinds-only by construction — readers, `available()`,
+  `known_names()` all see the kind, and never need to know which instance the
+  launch selected.
 
   `names` is the required tier: hydration is strict — an unknown name (not in the
   host registry) raises `ValueError`, and a declared name whose value can't be
@@ -530,17 +545,19 @@ def build_scoped_store(names: Iterable[str], *, optional: Iterable[str] = ()) ->
 
   def materialize(name: str, value: str, secret: Secret) -> None:
     # resolve generically on the host (a future non-local source uses the host's
-    # own credentials), then materialize under a uniform `{name}.cred`. the scoped
+    # own credentials), then materialize under a uniform `{kind}.cred`. the scoped
     # file is local regardless of the host source type, so the container only ever
     # sees a plain local file and the registry it reads stays local-only by
     # construction — the filename is internal to the scoped store, not borrowed
     # from the source.
-    file = f'{name}.cred'
+    kind, _ = parse_name(name)
+    file = f'{kind}.cred'
     files[file] = value.encode()
     entry: dict = {'sources': [{'file': file}]}
-    if secret.install is not None:
-      entry['install'] = secret.install
-    scoped[name] = entry
+    install = secret.install_for(kind)
+    if install is not None:
+      entry['install'] = install
+    scoped[kind] = entry
 
   for name in sorted(set(names)):
     secret = registry.get(name)

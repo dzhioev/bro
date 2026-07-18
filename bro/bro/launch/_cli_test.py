@@ -8,6 +8,7 @@ from bro.launch._cli import create_bro_for_run, maybe_containerize
 from bro.launch.identity import bro_git_identity_env
 from llm.llm import EFFORT_LEVELS
 from workspace.docker import Launch
+from workspace.project import ProjectConfig
 
 # the run bro's own CW_BRO rides in explicitly (never as an ambient forward), so
 # a calling session's theming cannot leak into the container
@@ -191,6 +192,23 @@ def test_maybe_containerize_missing_secret_fails_before_launch(monkeypatch, caps
   assert rc == 1
   assert run.call_count == 0
   assert "unknown secret 'github'" in capsys.readouterr().err
+
+
+def test_maybe_containerize_creds_mapping_outside_scope_errors(capsys):
+  # the [tool.bro] creds typo guard raises from the scope computation inside
+  # describe; the hop renders it like any other launch-scope failure
+  with (
+    patch.dict('os.environ', {}, clear=False) as env,
+    patch('bro.launch.root.run_in_container') as run,
+    patch('workspace.project.project_config', return_value=ProjectConfig(creds={'nonesuch': 'x'})),
+  ):
+    env.pop('CW_IN_CONTAINER', None)
+    rc = maybe_containerize(
+      cli_name='call', verb='chat', bro_name='ppp-dev', inner_args=['hi'], in_place=False
+    )
+  assert rc == 1
+  assert run.call_count == 0
+  assert 'creds maps kind(s)' in capsys.readouterr().err
 
 
 def test_maybe_containerize_grant_already_present_errors(capsys):

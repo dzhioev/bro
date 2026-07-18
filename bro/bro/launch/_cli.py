@@ -146,6 +146,7 @@ def maybe_containerize(
   from bro.launch.scope import LaunchScopeError, preflight_scoped_launch
   from workspace.git import resolve_ref
   from workspace.paths import fresh_workspace_name, project_root
+  from workspace.project import project_config
   from workspace.store import ScopedSecrets
 
   base_ref: Optional[str] = None
@@ -154,15 +155,16 @@ def maybe_containerize(
     if base_ref is None:
       log.error('cannot resolve --into ref: %s', into)
       return 1
-  launch = bro.launch.bro_run.describe(
-    bro_name,
-    inner_args,
-    workspace_name=fresh_workspace_name(f'{cli_name}-{bro_name}'),
-    verb=verb,
-    base_ref=base_ref,
-    trails=not no_trails,
-  )
   try:
+    launch = bro.launch.bro_run.describe(
+      bro_name,
+      inner_args,
+      workspace_name=fresh_workspace_name(f'{cli_name}-{bro_name}'),
+      verb=verb,
+      credential_instances=project_config().creds,
+      base_ref=base_ref,
+      trails=not no_trails,
+    )
     scoped, may_summon, _ = preflight_scoped_launch(
       ScopedSecrets(set(launch.secrets), set(launch.optional_secrets), launch.docker_sock),
       bro_name,
