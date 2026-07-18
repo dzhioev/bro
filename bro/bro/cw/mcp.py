@@ -40,11 +40,11 @@ class MCPEndpoint:
 
 
 def _server_entry(url: str, token: str) -> dict:
-  """one server entry of a claude `--mcp-config`. `alwaysLoad` makes claude block
-  startup until the server is connected: its MCP connects are otherwise async and
-  don't block an immediately-submitted prompt, so without it the first API request
-  can be built with no tools attached — leaving the model to act on a system
-  prompt full of tools it cannot call."""
+  """one server entry of a claude `--mcp-config`. `alwaysLoad` holds a headless
+  (`-p`) run's first request until the server is connected; an interactive
+  session's argv-seeded first prompt does not wait on it — MCP connects stay
+  async, so that first turn can reach the model with no tools attached (the bare
+  flavor's first-turn launch note in `cw/claude_argv.py` covers that window)."""
   return {
     'type': 'http',
     'url': url,

@@ -53,7 +53,7 @@ class _Recipe:
 _RECIPES: dict[Surface, _Recipe] = {
   Surface.CW_SESSION: _Recipe(
     baseline=_SESSION_BASELINE,
-    optional_baseline=frozenset({'openai'}),
+    optional_baseline=frozenset(),
     harness='claude',
     auth_secret='claude_code',
     llm_key=False,
@@ -62,7 +62,7 @@ _RECIPES: dict[Surface, _Recipe] = {
   ),
   Surface.BRO_SESSION: _Recipe(
     baseline=_SESSION_BASELINE,
-    optional_baseline=frozenset({'openai'}),
+    optional_baseline=frozenset(),
     harness='bro',
     auth_secret='anthropic',
     llm_key=False,

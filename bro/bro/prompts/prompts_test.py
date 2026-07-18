@@ -23,7 +23,7 @@ class TestContainment:
 
 class TestLoading:
   def test_plain_prompt_reads(self):
-    assert len(get_prompt('tool_use_guard.prompt')) > 0
+    assert len(get_prompt('email_to_markdown.prompt')) > 0
 
   def test_template_requires_kwargs(self):
     with pytest.raises(ValueError, match='requires format arguments'):
@@ -31,7 +31,7 @@ class TestLoading:
 
   def test_non_template_rejects_kwargs(self):
     with pytest.raises(ValueError, match='not a template'):
-      get_prompt('tool_use_guard.prompt', unexpected='x')
+      get_prompt('email_to_markdown.prompt', unexpected='x')
 
 
 class TestHoldFragment:

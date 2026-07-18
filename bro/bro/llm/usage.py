@@ -72,7 +72,7 @@ _DOWN = '↓'
 # claude code labels locally-generated assistant turns (interrupts, local errors,
 # injected notices) with this sentinel model — no real API round-trip, so their
 # usage is not billed spend and must not be credited to any commit.
-SYNTHETIC_MODEL = '<synthetic>'
+_SYNTHETIC_MODEL = '<synthetic>'
 
 # the four billed token classes, in footer display order, mapped to their
 # Claude transcript `usage` field names.
@@ -181,7 +181,7 @@ def transcript_usage(path: Path) -> dict[str, Counts]:
       model = msg.get('model')
       if not isinstance(model, str):
         model = 'unknown'
-      if model == SYNTHETIC_MODEL:
+      if model == _SYNTHETIC_MODEL:
         continue
       counts = {c: int(v) for c in CLASSES if (v := u.get(_FIELD_OF[c])) is not None}
       totals[model] = add(totals.get(model, zero()), counts)

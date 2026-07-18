@@ -776,8 +776,13 @@ class TestToolNamesBlock:
     assert '`mcp__namespace__tool`' in bro.claude_system_prompt
     assert '`mcp__namespace__tool`' not in bro.system_prompt
     assert '`namespace__tool`' in bro.system_prompt
-    # everything but the tool-names rule is shared between the flavors
+    # everything before the tool-names rule is shared between the flavors; the
+    # grounding block closes the claude flavor only (mcp wire)
     assert bro.claude_system_prompt.startswith(bro.system_prompt.split('# Tool names')[0])
+    assert '# Tool grounding' not in bro.system_prompt
+    grounding_index = bro.claude_system_prompt.index('# Tool grounding')
+    assert grounding_index > bro.claude_system_prompt.index('# Tool names')
+    assert bro.claude_system_prompt.endswith('as text.')
 
   @pytest.mark.asyncio
   async def test_data_source_search_and_fetch_calls(self):

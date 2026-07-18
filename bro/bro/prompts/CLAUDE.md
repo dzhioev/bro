@@ -42,6 +42,10 @@ A session's hold — its user-involvement level — is one of `unattended | deta
 
 The level files are the single place the levels differ: unattended carries the never-ask + `raise` convention, detached the carry-questions-into-the-report convention, attended the end-the-turn-at-pivotal-points convention, guided the confirm-each-significant-step convention.
 
+## Bare-session grounding fragment
+
+`grounding.md` (top level, not in `_BASE_PROMPT_FILES`) is the tool-grounding rule for `cw ss --bro` sessions: `BaseBro` appends it at the end of both composed bro prompt flavors — last, where instruction recency is strongest — and the file's own directives render its body only for the claude-bare surface (harness `bro`, wire `mcp`), the flavor whose argv-seeded first turn can reach the model before its MCP servers connect (`reference/cw.md` "Session-local MCP serving").
+
 ## Top-level one-shot prompts
 
 `*.prompt` / `*.prompt.template` files at the top level are explicit one-shot prompts loaded by name from their callers (e.g. `email_to_markdown.prompt`).

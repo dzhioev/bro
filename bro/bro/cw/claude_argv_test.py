@@ -61,12 +61,6 @@ class TestCwSessionLaunch:
     assert _settings(_cw_session_launch(_spec(fast=True), claude_args=[]).argv)['fastMode'] is True
     assert _settings(_cw_session_launch(_spec(), claude_args=[]).argv)['fastMode'] is False
 
-  def test_stop_listen_hook_in_settings(self):
-    hooks = _settings(_cw_session_launch(_spec(), claude_args=[]).argv)['hooks']
-    (entry,) = hooks['Stop'][0]['hooks']
-    # the workspace's own venv script, absolute — hook commands run with no venv on PATH
-    assert entry == {'type': 'command', 'command': '/ws/.venv/bin/cw.listen', 'timeout': 60}
-
   def test_effort_injected(self):
     argv = _cw_session_launch(_spec(effort='xhigh'), claude_args=[]).argv
     assert argv[argv.index('--effort') + 1] == 'xhigh'
@@ -123,6 +117,15 @@ class TestBroLaunch:
     # tools disabled (empty string follows --tools)
     assert argv[argv.index('--tools') + 1] == ''
 
+  def test_seeded_prompt_carries_the_launch_note(self):
+    argv = self._launch(prompt='do it').argv
+    seeded = argv[argv.index('--') + 1]
+    assert seeded.startswith('[launch note:')
+    assert seeded.endswith('do it')
+    # cw-sessions keep the seed verbatim (harness reminders cover them)
+    native = _cw_session_launch(_spec(prompt='do it'), claude_args=[]).argv
+    assert native[native.index('--') + 1] == 'do it'
+
   def test_allowed_tools_cover_each_namespace(self):
     argv = self._launch().argv
     assert argv[argv.index('--allowed-tools') + 1] == ','.join(
@@ -149,13 +152,6 @@ class TestBroLaunch:
     assert settings['fastMode'] is True
     assert settings['apiKeyHelper'] == str(PROJECT_ROOT / 'setup' / 'print_anthropic_key.sh')
     assert _settings(self._launch().argv)['fastMode'] is False
-
-  def test_stop_listen_hook_in_settings(self):
-    # flagSettings is the only settings source a --bare session loads, so the
-    # listener must ride it to reach the bro flavor
-    hooks = _settings(self._launch().argv)['hooks']
-    (entry,) = hooks['Stop'][0]['hooks']
-    assert entry['command'] == '/ws/.venv/bin/cw.listen'
 
   def test_system_prompt_is_bros_claude_flavor(self):
     from bro.registry import create_bro

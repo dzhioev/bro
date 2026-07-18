@@ -4,7 +4,7 @@ The cw-session/bro fork is confined to here: `--bro` selects a `--bare` claude
 with api-key auth and the bro's own system prompt, a cw-session keeps the full
 harness with the cw-injected append prompt. Both mount their bro's session-local
 MCP namespaces. Everything else — model, the merged `--settings` (fastMode +
-apiKeyHelper + the Stop-hook listener), `--effort`, the forwarded claude args, and
+apiKeyHelper), `--effort`, the forwarded claude args, and
 prompt seeding is handled once, identically wherever the session runs.
 """
 
@@ -34,25 +34,15 @@ class ClaudeLaunch:
   system_prompt: str
 
 
-def _listen_hook_config(workspace: Path) -> dict:
-  """hooks for the merged `--settings`: `cw.listen` on Stop, by absolute path
-  into the workspace's venv (hook commands run with no venv on PATH). riding
-  flagSettings binds the hook in both flavors — `--bare` skips project settings
-  — and executes it without a workspace trust gate. the timeout bounds a hung
-  classifier call; a timed-out or failing hook is non-blocking for claude."""
-  return {
-    'Stop': [
-      {
-        'hooks': [
-          {
-            'type': 'command',
-            'command': str(workspace / '.venv' / 'bin' / 'cw.listen'),
-            'timeout': 60,
-          }
-        ]
-      }
-    ]
-  }
+# prepended to a bro session's argv-seeded first prompt, which fires before
+# claude's async MCP connects complete (cw/mcp.py:_server_entry); rationale for
+# the turn-local delivery: reference/cw.md "Session-local MCP serving".
+_FIRST_TURN_LAUNCH_NOTE = (
+  '[launch note: MCP tools connect asynchronously and may be missing from your '
+  'tool list on this first turn. If a needed tool is absent, say it has not '
+  'loaded yet and end the turn — the tools arrive within seconds; never write a '
+  'tool call or its result as text.]'
+)
 
 
 def build_claude_launch(
@@ -84,7 +74,7 @@ def build_claude_launch(
   """
   from bro.registry import create_bro
 
-  settings: dict = {'fastMode': spec.fast, 'hooks': _listen_hook_config(workspace)}
+  settings: dict = {'fastMode': spec.fast}
   argv = ['--model', _CW_MODEL]
   bro = create_bro(spec.session_bro)
   servers = (
@@ -135,5 +125,8 @@ def build_claude_launch(
     argv += ['--effort', spec.effort]
   argv += claude_args
   if spec.prompt is not None:
-    argv += ['--', spec.prompt]
+    prompt = spec.prompt
+    if spec.bro is not None:
+      prompt = f'{_FIRST_TURN_LAUNCH_NOTE}\n\n{prompt}'
+    argv += ['--', prompt]
   return ClaudeLaunch(argv=argv, system_prompt=system_prompt)

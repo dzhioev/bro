@@ -98,7 +98,12 @@ def _load_shared_prompts() -> str:
 
 
 def _render_data_sources(sources: list[DataSource]) -> str:
-  lines = ['## Data sources', '', 'You have access to the following read-only data sources:', '']
+  lines = [
+    '## Data sources',
+    '',
+    'The following read-only data sources are mounted for this session:',
+    '',
+  ]
   for ds in sources:
     lines.append(f'- **{ds.name}** — {ds.rendered_summary()}')
   lines.append('')
@@ -591,10 +596,16 @@ class BaseBro(ABC):
       if len(script_instructions) > 0:
         parts.append(script_instructions)
       parts.append(_render_skill_loader())
+      # last, so it sits at the end of the prompt where instruction recency is
+      # strongest; the file's directives scope it to the claude-bare surface.
+      parts.append(get_prompt('grounding.md').strip())
       # both composed flavors serve the bro harness; only the wire scheme differs.
+      # stripped: a fragment whose whole body is a skipped directive block
+      # (grounding.md outside the claude-bare surface) collapses to bare join
+      # separators at the prompt edge.
       return llm.mcp.render_text(
         '\n\n'.join(parts), harness='bro', wire=wire, creds=credentials.known_names()
-      )
+      ).strip()
 
     self.system_prompt = compose('bare')
     # the same prompt over mcp wire names — what a `cw ss --bro` session passes

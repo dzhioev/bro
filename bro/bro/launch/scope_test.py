@@ -18,7 +18,8 @@ class TestScopedSecrets:
     # required (strict), not optional: no .credentials.json fallback in the
     # container, so a missing token must fail loudly on the host
     assert 'claude_code' not in scoped.optional
-    # every session carries the tool_use guard's LLM key best-effort
+    # the persona's own components advertise openai best-effort (searchable-source
+    # query summaries); no session-wide baseline adds anything on top
     assert scoped.optional == {'openai'}
     # a normal claude code session keeps the docker socket
     assert scoped.docker_sock is True
@@ -96,7 +97,7 @@ class TestScopedSecrets:
       'nonexistent-bro', Surface.CW_SESSION, credential_instances={}
     )
     assert scoped.required == set(bro.launch.scope._SESSION_BASELINE)
-    assert scoped.optional == {'openai'}
+    assert scoped.optional == set()
     assert scoped.docker_sock is True
     # a --bro fallback drops the socket: no bro to consult for needs_docker
     assert (
