@@ -2,7 +2,6 @@
 
 import asyncio
 import os
-from collections.abc import Callable
 from dataclasses import replace
 from typing import Literal, Optional
 
@@ -227,16 +226,13 @@ def run_main(
   *,
   program: list[str],
   description: str = 'run a bro on the given input',
-  input_transform: Optional[Callable[[str], str]] = None,
-  export_task_id: bool = False,
   force_summon: bool = False,
   implied_fast: bool = False,
 ) -> Optional[int]:
   """run the canonical one-shot launcher under `program`.
 
-  aliases share this parser and execution path. `input_transform` supplies do-task's
-  `/fix` wrapping, `force_summon` supplies bare summon's implicit mode, and
-  `implied_fast` supplies the ask alias's fast default.
+  aliases share this parser and execution path. `force_summon` supplies bare summon's
+  implicit mode, and `implied_fast` supplies the ask alias's fast default.
   """
   from cw import EFFORT_LEVELS
 
@@ -306,15 +302,7 @@ def run_main(
   shell_command = parser.reconstruct(args, prog=program)
   os.environ.setdefault('PPP_SHELL_COMMAND', ' '.join(shell_command))
 
-  original_input = args['input']
-  if export_task_id:
-    from notion import parse_page_ref
-
-    try:
-      os.environ['CW_TASK_ID'] = parse_page_ref(original_input)
-    except ValueError:
-      pass
-  input_text = original_input if input_transform is None else input_transform(original_input)
+  input_text = args['input']
 
   if args['summon']:
     return _run_summoned(

@@ -2036,7 +2036,7 @@ class TestSkillsInSystemPrompt:
     assert '## Available skills' in prompt
     assert '**foo** — do foo thing' in prompt
     assert '`bro::skill` tool' in prompt
-    # the /-syntax is taught here — the ask/do-task/call CLIs pass `/skill args`
+    # the /-syntax is taught here — the ask/call CLIs pass `/skill args`
     # input through verbatim, and without the description the model has no way
     # to bind a leading `/<name>` to the skill of that name
     assert 'starting with `/<name>`' in prompt

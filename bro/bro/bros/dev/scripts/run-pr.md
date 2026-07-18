@@ -22,7 +22,7 @@ Normal flow only — re-entry has its own entry conditions:
 
 ## Re-entry: PR already open
 
-Invoked as `/pr <pr-url-or-number>` — e.g. `do-task ppp-dev "/pr <pr-url>"` after the session that opened the PR died. The PR exists; restore the state that session had, reconcile what happened while nobody watched, then rejoin the normal flow at the watcher (step 14).
+Invoked as `/pr <pr-url-or-number>` — e.g. `bro run ppp-dev "/pr <pr-url>"` after the session that opened the PR died. The PR exists; restore the state that session had, reconcile what happened while nobody watched, then rejoin the normal flow at the watcher (step 14).
 
 1. **Check out the PR's head branch first**: `gh pr checkout <number-or-url>`. A fresh clone sits on a `worktree-<name>` branch at the base ref — the PR's head branch is not checked out locally; `gh pr checkout` fetches it and sets up tracking so later pushes go to the right branch.
 2. **Recover the context** the environment no longer carries (`CW_TASK_ID` is unset here):
