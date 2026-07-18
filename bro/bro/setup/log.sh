@@ -3,12 +3,13 @@
 #
 #   2026-07-17T17:45:10 INFO[scope] message
 #
-# on stderr, with the sourcing script's file stem as the scope. Messages below
+# on stderr, with the executed script's file stem as the scope. Messages below
 # the PPP_LOG_LEVEL threshold (base/log.py owns the variable; INFO when unset)
 # are dropped; log_enabled exposes the same gate as a predicate, for quieting a
 # subprocess's own output at higher thresholds.
 
-_LOG_SCOPE="$(basename "${BASH_SOURCE[1]}")"
+# the outermost frame: the executed script, however deeply this file is sourced
+_LOG_SCOPE="$(basename "${BASH_SOURCE[${#BASH_SOURCE[@]}-1]}")"
 _LOG_SCOPE="${_LOG_SCOPE%.sh}"
 
 _log_level_number() {

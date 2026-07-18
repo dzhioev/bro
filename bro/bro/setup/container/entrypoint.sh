@@ -1,6 +1,6 @@
 #!/usr/bin/env -S bash -e
 
-source /usr/local/lib/ppp-log.sh
+source /usr/local/lib/ppp-shell/prelude.sh
 
 # root phase: align container user with host uid/gid, then re-exec as cw
 if [ "$(id -u)" = "0" ] && [ -z "${CW_ENTRYPOINT_REEXEC:-}" ]; then

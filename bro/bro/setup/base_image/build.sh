@@ -1,4 +1,5 @@
 #!/usr/bin/env -S bash -e
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../prelude.sh"
 # build the general-purpose ppp-base image from the Dockerfile next to this
 # script. extra args (e.g. --platform) are forwarded to the build. respects a
 # caller-exported $OCI_CMD (docker default).

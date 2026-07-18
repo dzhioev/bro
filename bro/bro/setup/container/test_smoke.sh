@@ -1,4 +1,5 @@
 #!/usr/bin/env -S bash -e
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../prelude.sh"
 # smoke-test the container entrypoint: builds the image, runs the entrypoint
 # with the same mount layout as a cw container session, and verifies key postconditions.
 # uses CW_SKIP_VENV=1 to skip the slow `uv sync` step.

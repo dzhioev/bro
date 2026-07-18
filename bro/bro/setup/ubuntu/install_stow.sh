@@ -1,4 +1,5 @@
 #!/usr/bin/env -S bash -e
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../prelude.sh"
 
 SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 source "$SCRIPT_DIR/../versions.sh"

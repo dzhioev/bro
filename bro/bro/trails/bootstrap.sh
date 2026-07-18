@@ -1,4 +1,5 @@
 #!/usr/bin/env -S bash -e
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/prelude.sh"
 # one-time setup for the trails sink.
 #
 # reads the bearer token from SSM (/trails/bearer-token), derives the trails

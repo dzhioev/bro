@@ -9,7 +9,7 @@
 # (credentials) stay with the callers; only the steps below are shared.
 
 DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
-source "$DIR/log.sh"
+source "$DIR/prelude.sh"
 cd "$DIR/.."
 
 unset VIRTUAL_ENV
@@ -26,7 +26,7 @@ fi
 stamp=".venv/.provision-stamp"
 if [ ! -f "$stamp" ] || [ uv.lock -nt "$stamp" ] || [ pyproject.toml -nt "$stamp" ]; then
   log INFO "syncing python dependencies"
-  if ppp_verbose; then
+  if log_enabled VERBOSE; then
     uv sync --all-groups >&2
   else
     uv sync -q --all-groups >&2

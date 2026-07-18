@@ -1,4 +1,5 @@
 #!/usr/bin/env -S bash -e
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../prelude.sh"
 
 SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 source "$SCRIPT_DIR/../versions.sh"
@@ -32,6 +33,6 @@ echo "tmux ${TMUX_VERSION} installed to ${PREFIX}/bin/tmux"
 if [[ ":$PATH:" != *":${PREFIX}/bin:"* ]]; then
   echo "warning: ${PREFIX}/bin is not on PATH; tmux will not be found" >&2
 fi
-if tmux list-sessions &> /dev/null; then
+if command -v tmux &> /dev/null && tmux list-sessions &> /dev/null; then
   echo "note: a tmux server is still running on the old binary; run 'tmux kill-server' (ends all sessions) to pick up the new version" >&2
 fi

@@ -1,7 +1,7 @@
 #!/usr/bin/env -S bash -e
 
 DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
-source "$DIR/log.sh"
+source "$DIR/prelude.sh"
 
 "$DIR/provision_repo.sh"
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env -S bash -e
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/prelude.sh"
 
 # compares versions of the form N.N[letter]... (3.7 < 3.7a < 3.7b < 3.8)
 version_gte() {
