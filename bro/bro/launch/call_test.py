@@ -7,8 +7,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import llm.llms.chat_gpt
+import llm.llms.echo
 from bro.bros.bro import Bro
-from bro.launch.call import TextRenderer, call_text, main
+from bro.launch.call import TextRenderer, call_text, chat_main, main
 from cw.constants import bro_git_identity_env
 from llm.llm import LLM, LLMSpec
 from llm.mcp import MCPServer
@@ -29,6 +30,9 @@ class MockLLM(LLM):
 class RecordBro(Bro):
   name = 'record'
   description = 'records inputs'
+  # no fast mode on the echo spec: call's implied fast falls back to the plain
+  # spec, so an in-place run resolves through the patchable create_bro path
+  llm_spec = llm.llms.echo.LLMSpec()
 
   def __init__(self, response: str = 'reply'):
     super().__init__(system_prompt='record')
@@ -220,7 +224,7 @@ def test_default_invokes_spec_fast(monkeypatch):
   monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
   monkeypatch.setattr('bro.launch.call._tty_supported', lambda: False)
 
-  # no flag — fast is the default for these CLIs
+  # no flag — the call alias implies fast
   rc = main(['call', 'record', 'hi', '--in-place'])
   assert rc is None
   assert len(built) == 1
@@ -233,7 +237,27 @@ def test_default_invokes_spec_fast(monkeypatch):
   assert default.service_tier is None
 
 
-def test_slow_flag_builds_plain_spec(monkeypatch):
+def test_bro_chat_default_builds_plain_spec(monkeypatch):
+  built: list[Bro] = []
+
+  async def fake_call_text(bro, initial, history=None):
+    built.append(bro)
+
+  monkeypatch.setenv('CW_IN_CONTAINER', '1')
+  monkeypatch.setattr('bro.registry.create_bro', lambda name: _ChatBro())
+  monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
+  monkeypatch.setattr('bro.launch.call._tty_supported', lambda: False)
+
+  # the canonical verb defaults to the plain class spec; fast is opt-in
+  rc = chat_main(['bro', 'record', 'hi', '--in-place'], program=['bro', 'chat'])
+  assert rc is None
+  assert len(built) == 1
+  spec = built[0].llm_spec
+  assert isinstance(spec, llm.llms.chat_gpt.LLMSpec)
+  assert spec.service_tier is None
+
+
+def test_bro_chat_fast_flag_invokes_spec_fast(monkeypatch):
   built: list[Bro] = []
 
   async def fake_call_text(bro, initial, history=None):
@@ -244,12 +268,12 @@ def test_slow_flag_builds_plain_spec(monkeypatch):
   monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
   monkeypatch.setattr('bro.launch.call._tty_supported', lambda: False)
 
-  rc = main(['call', 'record', 'hi', '--slow', '--in-place'])
+  rc = chat_main(['bro', 'record', 'hi', '--fast', '--in-place'], program=['bro', 'chat'])
   assert rc is None
   assert len(built) == 1
   spec = built[0].llm_spec
   assert isinstance(spec, llm.llms.chat_gpt.LLMSpec)
-  assert spec.service_tier is None
+  assert spec.service_tier == 'priority'
 
 
 def test_default_falls_back_to_plain_when_no_fast_mode(monkeypatch):
@@ -286,9 +310,9 @@ def test_call_re_execs_into_container_when_outside():
     assert run.call_count == 1
     launch = run.call_args.args[0]
     assert launch.name.startswith('call-ppp-dev-')
-    # host is a tty → the TUI runs in-container, so no --text is forwarded; fast is the
-    # default so no --slow either
-    assert launch.command == ['bro', 'chat', 'ppp-dev', 'hey', '--in-place']
+    # host is a tty → the TUI runs in-container, so no --text is forwarded; call
+    # implies --fast, which must ride the inner argv (the inner verb defaults plain)
+    assert launch.command == ['bro', 'chat', 'ppp-dev', 'hey', '--fast', '--in-place']
     assert run.call_args.kwargs['drop'] is True
     # ppp-dev's manifest (github + brog) plus the mandatory trails sink
     assert {'github', 'brog', 'trails'} <= launch.secrets
@@ -308,7 +332,7 @@ def test_call_forwards_text_when_host_not_a_tty():
     command = run.call_args.args[0].command
     # host can't back the TUI → force text mode inside the container (the container's
     # PTY always reports a TTY, so the decision has to be made here on the host)
-    assert command == ['bro', 'chat', 'ppp-dev', 'hey', '--text', '--in-place']
+    assert command == ['bro', 'chat', 'ppp-dev', 'hey', '--text', '--fast', '--in-place']
 
 
 def test_call_forwards_effort_into_container():
@@ -321,8 +345,8 @@ def test_call_forwards_effort_into_container():
     rc = main(['call', 'ppp-dev', 'hey', '--effort', 'high'])
     assert rc == 0
     command = run.call_args.args[0].command
-    # --effort is forwarded like --slow; the in-container run applies with_effort
-    assert command == ['bro', 'chat', 'ppp-dev', 'hey', '--effort', 'high', '--in-place']
+    # --effort is forwarded like the implied --fast; the in-container run applies with_effort
+    assert command == ['bro', 'chat', 'ppp-dev', 'hey', '--fast', '--effort', 'high', '--in-place']
 
 
 def test_effort_flag_overrides_spec_effort(monkeypatch):
@@ -369,7 +393,7 @@ def test_call_no_trails_disables_recording_in_container():
     assert rc == 0
     launch = run.call_args.args[0]
     # the env var carries the effect in, so --no-trails isn't forwarded into the inner argv
-    assert launch.command == ['bro', 'chat', 'ppp-dev', 'hey', '--in-place']
+    assert launch.command == ['bro', 'chat', 'ppp-dev', 'hey', '--fast', '--in-place']
     assert 'trails' not in launch.secrets
     assert launch.env == {
       'CW_BRO': 'ppp-dev',
@@ -411,7 +435,7 @@ def test_call_forwards_resume_into_container():
     rc = main(['call', 'ppp-dev', '--resume'])
     assert rc == 0
     command = run.call_args.args[0].command
-    assert command == ['bro', 'chat', 'ppp-dev', '--resume', 'latest', '--in-place']
+    assert command == ['bro', 'chat', 'ppp-dev', '--resume', 'latest', '--fast', '--in-place']
 
 
 def test_call_forwards_resume_trail_id_with_message():
@@ -431,6 +455,7 @@ def test_call_forwards_resume_trail_id_with_message():
       'and then?',
       '--resume',
       'trail-id-1',
+      '--fast',
       '--in-place',
     ]
 
@@ -466,7 +491,7 @@ def test_call_resume_runs_the_resumed_bro(monkeypatch, capsys):
   rc = main(['call', 'record', '--resume', '--in-place'])
   assert rc is None
   assert captured['trail_ref'] == 'latest'
-  # fast is the default, so the continuation runs the class spec's fast variant
+  # call implies fast, so the continuation runs the class spec's fast variant
   spec = captured['llm_spec']
   assert isinstance(spec, llm.llms.chat_gpt.LLMSpec)
   assert spec.service_tier == 'priority'
@@ -483,11 +508,12 @@ def test_call_prints_resume_hint_when_a_trail_was_recorded(monkeypatch, capsys):
     bro.trail_id = 'trail-xyz'
 
   monkeypatch.setenv('CW_IN_CONTAINER', '1')
+  monkeypatch.setattr('bro.registry.get_class', lambda name: RecordBro)
   monkeypatch.setattr('bro.registry.create_bro', lambda name: RecordBro())
   monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
   monkeypatch.setattr('bro.launch.call._tty_supported', lambda: False)
 
-  rc = main(['call', 'record', 'hi', '--slow', '--in-place'])
+  rc = main(['call', 'record', 'hi', '--in-place'])
   assert rc is None
   err = capsys.readouterr().err
   assert 'conversation recorded as trail trail-xyz' in err
@@ -499,11 +525,12 @@ def test_call_skips_resume_hint_without_a_trail(monkeypatch, capsys):
     pass
 
   monkeypatch.setenv('CW_IN_CONTAINER', '1')
+  monkeypatch.setattr('bro.registry.get_class', lambda name: RecordBro)
   monkeypatch.setattr('bro.registry.create_bro', lambda name: RecordBro())
   monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
   monkeypatch.setattr('bro.launch.call._tty_supported', lambda: False)
 
-  rc = main(['call', 'record', 'hi', '--slow', '--in-place'])
+  rc = main(['call', 'record', 'hi', '--in-place'])
   assert rc is None
   assert 'conversation recorded' not in capsys.readouterr().err
 
@@ -515,13 +542,12 @@ def test_call_skips_container_with_in_place_flag(monkeypatch):
     built.append(bro)
 
   monkeypatch.delenv('CW_IN_CONTAINER', raising=False)
-  monkeypatch.setattr('bro.registry.create_bro', lambda name: _ChatBro())
+  monkeypatch.setattr('bro.registry.get_class', lambda name: RecordBro)
+  monkeypatch.setattr('bro.registry.create_bro', lambda name: RecordBro())
   monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
   monkeypatch.setattr('bro.launch.call._tty_supported', lambda: False)
   with patch('cw.run_in_container') as run:
-    # --slow routes through the patched create_bro; the container-skip behavior
-    # under test is independent of fast/slow.
-    rc = main(['call', 'record', 'hi', '--in-place', '--slow'])
+    rc = main(['call', 'record', 'hi', '--in-place'])
   assert rc is None
   assert run.call_count == 0
   assert len(built) == 1
@@ -534,13 +560,14 @@ def test_initial_slash_invocation_passes_through_verbatim(monkeypatch):
     captured.append(initial)
 
   monkeypatch.setenv('CW_IN_CONTAINER', '1')
+  monkeypatch.setattr('bro.registry.get_class', lambda name: RecordBro)
   monkeypatch.setattr('bro.registry.create_bro', lambda name: RecordBro())
   monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
   monkeypatch.setattr('bro.launch.call._tty_supported', lambda: False)
 
   # no client-side expansion: the bro's system prompt describes the /-syntax and
   # the model loads the skill body itself via the `bro::skill` tool.
-  rc = main(['call', 'record', '/ask devoops to ping', '--slow', '--in-place'])
+  rc = main(['call', 'record', '/ask devoops to ping', '--in-place'])
   assert rc is None
   assert captured == ['/ask devoops to ping']
 

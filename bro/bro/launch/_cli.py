@@ -15,13 +15,12 @@ from bro.bros.bro import Bro
 from llm.llm import LLMSpec
 from llm.observer import Observer
 
-# shared flag help so all three CLIs describe `--slow` / `--in-place` identically.
-# fast mode is the default for these CLIs; --slow opts back out to the plain spec.
-SLOW_HELP = (
-  "disable the bro's fast-mode LLM knob, which is on by default here "
-  "(provider-specific; for ChatGPT fast mode is OpenAI's 'priority' service tier — "
-  'same model and quality, faster and more consistent generation at a higher '
-  'per-token price)'
+# shared flag help so all the launcher CLIs describe `--fast` / `--in-place` identically.
+FAST_HELP = (
+  "run with the bro's fast-mode LLM knob (provider-specific; for ChatGPT fast mode is "
+  "OpenAI's 'priority' service tier — same model and quality, faster and more consistent "
+  'generation at a higher per-token price); implied by the ask and call aliases; a provider '
+  'with no fast mode falls back to the plain spec'
 )
 EFFORT_HELP = (
   "override the reasoning-effort knob of the bro's LLM spec with this neutral level, "
@@ -68,13 +67,12 @@ def run_llm_spec(
   bro_class: type[Bro], *, fast: bool, effort: Optional[str] = None
 ) -> Optional[LLMSpec]:
   """the per-run LLM spec these CLIs run the bro with, or None when the class
-  default stands. fast mode (the provider's fast knob) is the default; pass
-  fast=False (`--slow`) for the plain spec. fast being implicit, a provider
-  with no fast mode (e.g. echo) falls back to the normal spec rather than
-  raising — the user never explicitly asked for fast. effort (`--effort`)
-  overrides the spec's reasoning-effort knob via `LLMSpec.with_effort`; being
-  an explicit ask, a provider without the knob raises NotImplementedError
-  instead of falling back."""
+  default stands. fast (`--fast`, implied by the `ask` / `call` aliases) applies
+  the provider's fast knob; a provider with no fast mode (e.g. echo) falls back
+  to the normal spec rather than raising — the aliases imply fast without the
+  user asking for it. effort (`--effort`) overrides the spec's reasoning-effort
+  knob via `LLMSpec.with_effort`; being an explicit ask, a provider without the
+  knob raises NotImplementedError instead of falling back."""
   if not fast and effort is None:
     return None
   spec = bro_class.llm_spec
@@ -232,11 +230,13 @@ def run_main(
   input_transform: Optional[Callable[[str], str]] = None,
   export_task_id: bool = False,
   force_summon: bool = False,
+  implied_fast: bool = False,
 ) -> Optional[int]:
   """run the canonical one-shot launcher under `program`.
 
   aliases share this parser and execution path. `input_transform` supplies do-task's
-  `/fix` wrapping, and `force_summon` supplies bare summon's implicit mode.
+  `/fix` wrapping, `force_summon` supplies bare summon's implicit mode, and
+  `implied_fast` supplies the ask alias's fast default.
   """
   from cw import EFFORT_LEVELS
 
@@ -253,7 +253,7 @@ def run_main(
       action='store_true',
       help='render the trace as colored rich panels instead of plain log lines',
     )
-    parser.add_argument('--slow', action='store_true', help=SLOW_HELP)
+    parser.add_argument('--fast', action='store_true', help=FAST_HELP)
     parser.add_argument('--effort', choices=EFFORT_LEVELS, default=None, help=EFFORT_HELP)
     parser.add_argument('--summon', action='store_true', help=SUMMON_HELP)
     parser.add_argument('--in-place', action='store_true', help=IN_PLACE_HELP)
@@ -263,7 +263,7 @@ def run_main(
       ['summon'],
       [
         'rich',
-        'slow',
+        'fast',
         'effort',
         'in_place',
         'no_trails',
@@ -294,7 +294,7 @@ def run_main(
     args.update(
       summon=True,
       rich=False,
-      slow=False,
+      fast=False,
       effort=None,
       in_place=False,
       no_trails=False,
@@ -330,11 +330,12 @@ def run_main(
     )
     return 1
 
+  fast = args['fast'] or implied_fast
   inner_args = [input_text]
   if args['rich']:
     inner_args.append('--rich')
-  if args['slow']:
-    inner_args.append('--slow')
+  if fast:
+    inner_args.append('--fast')
   if args['effort'] is not None:
     inner_args.extend(['--effort', args['effort']])
   hopped = maybe_containerize(
@@ -355,7 +356,7 @@ def run_main(
 
   log.verbose('creating bro %s', args['bro'])
   try:
-    bro = create_bro_for_run(args['bro'], fast=not args['slow'], effort=args['effort'])
+    bro = create_bro_for_run(args['bro'], fast=fast, effort=args['effort'])
   except NotImplementedError as error:
     log.error('%s', error)
     return 1

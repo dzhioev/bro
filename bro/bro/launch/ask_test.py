@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 import pytest
 
+import llm.llms.echo
 from bro.bro import BaseBro
 from bro.launch.ask import main
 from cw.constants import bro_git_identity_env
@@ -25,6 +26,9 @@ class MockLLM(LLM):
 class RecordBro(BaseBro):
   name = 'record'
   description = 'records inputs'
+  # no fast mode on the echo spec: ask's implied fast falls back to the plain
+  # spec, so an in-place run resolves through the patchable create_bro path
+  llm_spec = llm.llms.echo.LLMSpec()
 
   def __init__(self, response: str = 'done'):
     super().__init__(system_prompt='record')
@@ -50,7 +54,15 @@ def test_main_re_execs_into_container_when_outside():
     assert run.call_count == 1
     launch = run.call_args.args[0]
     assert launch.name.startswith('ask-ppp-dev-')
-    assert launch.command == ['bro', 'run', 'ppp-dev', 'hello world', '--rich', '--in-place']
+    assert launch.command == [
+      'bro',
+      'run',
+      'ppp-dev',
+      'hello world',
+      '--rich',
+      '--fast',
+      '--in-place',
+    ]
     assert run.call_args.kwargs['drop'] is True
     # ppp-dev's manifest (github + brog) plus the mandatory trails sink
     assert {'github', 'brog', 'trails'} <= launch.secrets
@@ -58,7 +70,7 @@ def test_main_re_execs_into_container_when_outside():
     assert launch.docker_sock is False
 
 
-def test_main_default_forwards_no_slow_into_container():
+def test_main_forwards_implied_fast_into_container():
   with (
     patch.dict('os.environ', {}, clear=False) as env,
     patch('cw.run_in_container', return_value=0) as run,
@@ -67,21 +79,9 @@ def test_main_default_forwards_no_slow_into_container():
     rc = main(['ask', 'ppp-dev', 'hello'])
     assert rc == 0
     command = run.call_args.args[0].command
-    # fast is the default, so nothing extra is forwarded; the in-container run applies fast()
-    assert command == ['bro', 'run', 'ppp-dev', 'hello', '--in-place']
-
-
-def test_main_forwards_slow_into_container():
-  with (
-    patch.dict('os.environ', {}, clear=False) as env,
-    patch('cw.run_in_container', return_value=0) as run,
-  ):
-    env.pop('CW_IN_CONTAINER', None)
-    rc = main(['ask', 'ppp-dev', 'hello', '--slow'])
-    assert rc == 0
-    command = run.call_args.args[0].command
-    # --slow is forwarded like --rich; the in-container run builds the plain spec
-    assert command == ['bro', 'run', 'ppp-dev', 'hello', '--slow', '--in-place']
+    # ask implies --fast; the inner bro run defaults to the plain spec, so the
+    # implied fast must ride the inner argv explicitly
+    assert command == ['bro', 'run', 'ppp-dev', 'hello', '--fast', '--in-place']
 
 
 def test_main_forwards_effort_into_container():
@@ -93,8 +93,8 @@ def test_main_forwards_effort_into_container():
     rc = main(['ask', 'ppp-dev', 'hello', '--effort', 'low'])
     assert rc == 0
     command = run.call_args.args[0].command
-    # --effort is forwarded like --slow; the in-container run applies with_effort
-    assert command == ['bro', 'run', 'ppp-dev', 'hello', '--effort', 'low', '--in-place']
+    # --effort is forwarded like the implied --fast; the in-container run applies with_effort
+    assert command == ['bro', 'run', 'ppp-dev', 'hello', '--fast', '--effort', 'low', '--in-place']
 
 
 def test_main_no_trails_disables_recording_in_container():
@@ -107,7 +107,7 @@ def test_main_no_trails_disables_recording_in_container():
     assert rc == 0
     launch = run.call_args.args[0]
     # the env var carries the effect in, so --no-trails isn't forwarded into the inner argv
-    assert launch.command == ['bro', 'run', 'ppp-dev', 'hello', '--in-place']
+    assert launch.command == ['bro', 'run', 'ppp-dev', 'hello', '--fast', '--in-place']
     assert 'trails' not in launch.secrets
     assert launch.env == {
       'CW_BRO': 'ppp-dev',
@@ -173,11 +173,10 @@ def test_main_in_place_inside_container_runs_in_process():
   with (
     patch.dict('os.environ', {'CW_IN_CONTAINER': '1'}),
     patch('cw.run_in_container') as run,
+    patch('bro.registry.get_class', return_value=RecordBro),
     patch('bro.registry.create_bro', return_value=RecordBro(response='ok')),
   ):
-    # --slow routes through the patched create_bro (the plain spec path); the
-    # in-process behavior under test is independent of fast/slow.
-    rc = main(['ask', 'record', 'hi', '--slow', '--in-place'])
+    rc = main(['ask', 'record', 'hi', '--in-place'])
     assert rc is None
     assert run.call_count == 0
 
@@ -186,10 +185,11 @@ def test_main_skips_container_with_in_place_flag():
   with (
     patch.dict('os.environ', {}, clear=False) as env,
     patch('cw.run_in_container') as run,
+    patch('bro.registry.get_class', return_value=RecordBro),
     patch('bro.registry.create_bro', return_value=RecordBro(response='ok')),
   ):
     env.pop('CW_IN_CONTAINER', None)
-    rc = main(['ask', 'record', 'hi', '--in-place', '--slow'])
+    rc = main(['ask', 'record', 'hi', '--in-place'])
     assert rc is None
     assert run.call_count == 0
 
@@ -200,9 +200,10 @@ def test_main_sends_unknown_slash_input_to_the_bro(capsys):
   bro = RecordBro(response='ok')
   with (
     patch.dict('os.environ', {'CW_IN_CONTAINER': '1'}),
+    patch('bro.registry.get_class', return_value=RecordBro),
     patch('bro.registry.create_bro', return_value=bro),
   ):
-    rc = main(['ask', 'record', '/nope something', '--slow', '--in-place'])
+    rc = main(['ask', 'record', '/nope something', '--in-place'])
   assert rc is None
   assert bro.mock_llm.send_calls[0][-1]['content'] == '/nope something'
   assert capsys.readouterr().out.strip() == 'ok'

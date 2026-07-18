@@ -6,4 +6,4 @@ __cli_name__ = 'ask'
 
 
 def main(argv: list[str]) -> Optional[int]:
-  return run_main(argv, program=['ask'])
+  return run_main(argv, program=['ask'], implied_fast=True)

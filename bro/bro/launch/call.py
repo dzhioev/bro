@@ -12,6 +12,7 @@ from bro.bro import BroRaised
 from bro.bros.bro import Bro
 from bro.launch._cli import (
   EFFORT_HELP,
+  FAST_HELP,
   GRANT_CRED_HELP,
   GRANT_SUMMON_HELP,
   IN_PLACE_HELP,
@@ -19,7 +20,6 @@ from bro.launch._cli import (
   NO_TRAILS_HELP,
   REVOKE_CRED_HELP,
   REVOKE_SUMMON_HELP,
-  SLOW_HELP,
   create_bro_for_run,
   maybe_containerize,
   run_llm_spec,
@@ -150,7 +150,7 @@ def _tty_supported() -> bool:
   return sys.stdin.isatty() and sys.stdout.isatty()
 
 
-def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
+def chat_main(argv: list[str], *, program: list[str], implied_fast: bool = False) -> Optional[int]:
   from cw import EFFORT_LEVELS
 
   parser = base.args.Parser(
@@ -168,7 +168,7 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
   parser.add_argument(
     '--resume', nargs='?', const=RESUME_LATEST, default=None, metavar='TRAIL_ID', help=RESUME_HELP
   )
-  parser.add_argument('--slow', action='store_true', help=SLOW_HELP)
+  parser.add_argument('--fast', action='store_true', help=FAST_HELP)
   parser.add_argument('--effort', choices=EFFORT_LEVELS, default=None, help=EFFORT_HELP)
   parser.add_argument('--in-place', action='store_true', help=IN_PLACE_HELP)
   parser.add_argument('--no-trails', dest='no_trails', action='store_true', help=NO_TRAILS_HELP)
@@ -207,13 +207,14 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
   # TUI even for a piped/redirected host invocation. force text mode into the
   # container whenever the host can't back the TUI (or the user asked for it).
   force_text = args['text'] or not _tty_supported()
+  fast = args['fast'] or implied_fast
   inner_args = [args['what']] if args['what'] is not None else []
   if force_text:
     inner_args.append('--text')
   if args['resume'] is not None:
     inner_args.extend(['--resume', args['resume']])
-  if args['slow']:
-    inner_args.append('--slow')
+  if fast:
+    inner_args.append('--fast')
   if args['effort'] is not None:
     inner_args.extend(['--effort', args['effort']])
   hopped = maybe_containerize(
@@ -240,7 +241,7 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
 
     bro_class = get_class(args['bro'])
     try:
-      spec = run_llm_spec(bro_class, fast=not args['slow'], effort=args['effort'])
+      spec = run_llm_spec(bro_class, fast=fast, effort=args['effort'])
     except NotImplementedError as e:
       # --effort on a provider without the knob — an explicit ask, so a clean
       # error instead of fast mode's silent fallback.
@@ -265,7 +266,7 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
   else:
     log.verbose('creating bro %s', args['bro'])
     try:
-      bro = create_bro_for_run(args['bro'], fast=not args['slow'], effort=args['effort'])
+      bro = create_bro_for_run(args['bro'], fast=fast, effort=args['effort'])
     except NotImplementedError as e:
       # --effort on a provider without the knob — an explicit ask, so a clean
       # error instead of fast mode's silent fallback.
@@ -299,4 +300,4 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
 
 
 def main(argv: list[str]) -> Optional[int]:
-  return chat_main(argv, program=['call'])
+  return chat_main(argv, program=['call'], implied_fast=True)

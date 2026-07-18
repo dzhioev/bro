@@ -8,8 +8,8 @@ def _describe(*args, **kwargs):
 
 
 def test_describe_composes_the_in_place_pinned_command():
-  launch = _describe('ppp-dev', ['hi', '--slow'], verb='run')
-  assert launch.command == ['bro', 'run', 'ppp-dev', 'hi', '--slow', '--in-place']
+  launch = _describe('ppp-dev', ['hi', '--fast'], verb='run')
+  assert launch.command == ['bro', 'run', 'ppp-dev', 'hi', '--fast', '--in-place']
 
 
 def test_describe_pins_the_chat_verb():

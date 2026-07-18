@@ -64,14 +64,14 @@ def test_maybe_containerize_hops_and_scopes_to_bro():
       cli_name='call',
       verb='chat',
       bro_name='ppp-dev',
-      inner_args=['hi', '--slow'],
+      inner_args=['hi', '--fast'],
       in_place=False,
       no_trails=False,
     )
   assert rc == 7
   launch = run.call_args.args[0]
   assert launch.name.startswith('call-ppp-dev-')
-  assert launch.command == ['bro', 'chat', 'ppp-dev', 'hi', '--slow', '--in-place']
+  assert launch.command == ['bro', 'chat', 'ppp-dev', 'hi', '--fast', '--in-place']
   assert run.call_args.kwargs['drop'] is True
   # ppp-dev's manifest (github + brog) + its llm key + the mandatory trails sink
   assert {'github', 'brog', 'trails'} <= launch.secrets
