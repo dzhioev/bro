@@ -34,32 +34,18 @@ def add_forwarded_flags(parser: Parser) -> None:
     help='enable fast mode for the session (disabled by default regardless of host settings)',
   )
   parser.add_argument(
-    '--grant-cred',
+    '--grant',
     action='append',
     default=None,
-    metavar='SECRET',
-    help='grant a secret to the session scoped set on top of the computed set (repeatable); errors if already in the set or unknown to the registry',
+    metavar='NAME',
+    help='add a credential (NAME) or a summonable bro (@BRO) to the session scope on top of the computed set (repeatable); errors if already in the scope or unknown',
   )
   parser.add_argument(
-    '--revoke-cred',
+    '--revoke',
     action='append',
     default=None,
-    metavar='SECRET',
-    help='revoke a required or optional secret from the session scoped set (repeatable); errors if not in either tier',
-  )
-  parser.add_argument(
-    '--grant-summon',
-    action='append',
-    default=None,
-    metavar='BRO',
-    help="allow the session to summon the named bro, on top of its bro's may_summon defaults (repeatable); errors if already allowed or not a registered bro",
-  )
-  parser.add_argument(
-    '--revoke-summon',
-    action='append',
-    default=None,
-    metavar='BRO',
-    help='disallow summoning the named bro for this session (repeatable); errors if not in the allow-list',
+    metavar='NAME',
+    help='remove a credential (NAME) or a summonable bro (@BRO) from the session scope (repeatable); errors if not in the scope',
   )
   parser.add_argument(
     '--effort',

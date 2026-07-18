@@ -43,10 +43,8 @@ class SessionSpec:
   drop: bool
   mode: str
   fast: bool
-  grant_cred: list[str]
-  revoke_cred: list[str]
-  grant_summon: list[str]
-  revoke_summon: list[str]
+  grant: list[str]
+  revoke: list[str]
   effort: Optional[str]
   resume: bool
   into: Optional[str]
@@ -56,7 +54,7 @@ class SessionSpec:
   claude_args: list[str]
 
   def __post_init__(self) -> None:
-    for field in ('grant_cred', 'revoke_cred', 'grant_summon', 'revoke_summon'):
+    for field in ('grant', 'revoke'):
       if getattr(self, field) is None:
         object.__setattr__(self, field, [])
 
@@ -82,7 +80,7 @@ class SessionSpec:
 
     used for CW_COMMAND (the session as launched) and, via resume_variant, the
     exit resume hint — so both carry the same forwarded flags (--mode,
-    --grant-cred, --effort, ...).
+    --grant, --effort, ...).
     """
     flags = {
       '--host': self.host,
@@ -99,14 +97,10 @@ class SessionSpec:
       parts.extend(['--persona', self.persona])
     if self.bro is not None:
       parts.extend(['--bro', self.bro])
-    for g in self.grant_cred:
-      parts.extend(['--grant-cred', g])
-    for r in self.revoke_cred:
-      parts.extend(['--revoke-cred', r])
-    for g in self.grant_summon:
-      parts.extend(['--grant-summon', g])
-    for r in self.revoke_summon:
-      parts.extend(['--revoke-summon', r])
+    for g in self.grant:
+      parts.extend(['--grant', g])
+    for r in self.revoke:
+      parts.extend(['--revoke', r])
     if self.into is not None:
       parts.extend(['--into', self.into])
     parts.extend([self.name, *self.claude_args])
@@ -118,8 +112,8 @@ class SessionSpec:
 
     a second serialization, distinct from to_command_argv: it carries the prompt
     and the forwarded claude args (which to_command_argv deliberately omits) and
-    drops the flags the outer already consumed (--host --drop --grant-cred
-    --revoke-cred --grant-summon --revoke-summon --into). the prompt uses the
+    drops the flags the outer already consumed (--host --drop --grant --revoke
+    --into). the prompt uses the
     joined `=` form so a prompt starting with `-` can't be mistaken for a flag."""
     flags = {'--fast': self.fast, '--resume': self.resume}
     parts = ['ss', '--in-place', *(f for f, v in flags.items() if v)]
@@ -252,10 +246,8 @@ def _container_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
     scoped, may_summon, _ = preflight_scoped_launch(
       scoped_secrets(bro_name, spec.surface),
       bro_name,
-      grant_cred=spec.grant_cred,
-      revoke_cred=spec.revoke_cred,
-      grant_summon=spec.grant_summon,
-      revoke_summon=spec.revoke_summon,
+      grant=spec.grant,
+      revoke=spec.revoke,
     )
   except LaunchScopeError as e:
     log.error('%s', e)
@@ -367,10 +359,8 @@ def _host_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
     scoped, may_summon, store = preflight_scoped_launch(
       scoped_secrets(bro_name, spec.surface),
       bro_name,
-      grant_cred=spec.grant_cred,
-      revoke_cred=spec.revoke_cred,
-      grant_summon=spec.grant_summon,
-      revoke_summon=spec.revoke_summon,
+      grant=spec.grant,
+      revoke=spec.revoke,
     )
   except LaunchScopeError as e:
     log.error('%s', e)

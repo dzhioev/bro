@@ -40,21 +40,14 @@ NO_TRAILS_HELP = (
   'disable trails recording: set TRAILS_DISABLED in the container and drop the '
   'trails secret from the scoped set'
 )
-GRANT_CRED_HELP = (
-  "grant a secret to the container's scoped set on top of the bro's manifest "
-  '(repeatable); errors if it is already in the set or unknown to the registry'
+GRANT_HELP = (
+  "add a credential (NAME) or a summonable bro (@BRO) to the run's scope on top of the "
+  "bro's manifest and may_summon defaults (repeatable); errors if already in the scope "
+  'or unknown'
 )
-REVOKE_CRED_HELP = (
-  "revoke a required or optional secret from the container's scoped set (repeatable); "
-  'errors if it is not in either tier'
-)
-GRANT_SUMMON_HELP = (
-  'allow the bro to summon the named bro during this run, on top of its may_summon '
-  'defaults (repeatable); errors if already allowed or not a registered bro'
-)
-REVOKE_SUMMON_HELP = (
-  'disallow summoning the named bro during this run (repeatable); '
-  'errors if it is not in the allow-list'
+REVOKE_HELP = (
+  "remove a credential (NAME) or a summonable bro (@BRO) from the run's scope "
+  '(repeatable); errors if it is not in the scope'
 )
 INTO_HELP = (
   "base the new workspace clone on this git ref instead of the launcher's current HEAD "
@@ -107,10 +100,8 @@ def maybe_containerize(
   inner_args: list[str],
   in_place: bool,
   no_trails: bool = False,
-  grant_cred: Optional[list[str]] = None,
-  revoke_cred: Optional[list[str]] = None,
-  grant_summon: Optional[list[str]] = None,
-  revoke_summon: Optional[list[str]] = None,
+  grant: Optional[list[str]] = None,
+  revoke: Optional[list[str]] = None,
   into: Optional[str] = None,
 ) -> Optional[int]:
   """re-exec `bro <verb> <bro_name> <inner_args...>` inside a scoped throwaway
@@ -135,31 +126,20 @@ def maybe_containerize(
   `no_trails` drops `trails` from the scoped set and sets `TRAILS_DISABLED` in the
   container (the in-container tracker factory then returns `NullTracker`).
 
-  `grant_cred`/`revoke_cred` adjust both tiers of that scoped set and
-  `grant_summon`/`revoke_summon` adjust the bro's summon allow-list over its
-  `may_summon` defaults — both strict, applied by the launch-scope preflight
-  (`cw.preflight_scoped_launch`). those four and `into` are host-side only — not
-  threaded into the inner command — so passing any when the hop is skipped
-  (`--in-place` / already in-container) is a no-op the caller didn't get, hence
-  an error: the in-place path creates no credential scope or broker root and
-  runs no clone. returns 1 (printing to stderr) on any misuse so the caller
-  exits non-zero."""
-  grant_cred = grant_cred if grant_cred is not None else []
-  revoke_cred = revoke_cred if revoke_cred is not None else []
-  grant_summon = grant_summon if grant_summon is not None else []
-  revoke_summon = revoke_summon if revoke_summon is not None else []
+  `grant`/`revoke` adjust the run's launch scope — a plain name a credential
+  across both tiers of the scoped set, `@bro` the summon allow-list over the
+  bro's `may_summon` defaults — both strict, applied by the launch-scope
+  preflight (`cw.preflight_scoped_launch`). those two and `into` are host-side
+  only — not threaded into the inner command — so passing any when the hop is
+  skipped (`--in-place` / already in-container) is a no-op the caller didn't
+  get, hence an error: the in-place path creates no credential scope or broker
+  root and runs no clone. returns 1 (printing to stderr) on any misuse so the
+  caller exits non-zero."""
+  grant = grant if grant is not None else []
+  revoke = revoke if revoke is not None else []
   if in_place or os.environ.get('CW_IN_CONTAINER') is not None:
-    if (
-      len(grant_cred) > 0
-      or len(revoke_cred) > 0
-      or len(grant_summon) > 0
-      or len(revoke_summon) > 0
-      or into is not None
-    ):
-      log.error(
-        '--grant-cred/--revoke-cred/--grant-summon/--revoke-summon/--into require '
-        'containerization (not valid with --in-place)'
-      )
+    if len(grant) > 0 or len(revoke) > 0 or into is not None:
+      log.error('--grant/--revoke/--into require containerization (not valid with --in-place)')
       return 1
     return None
   from cw import (
@@ -190,10 +170,8 @@ def maybe_containerize(
     scoped, may_summon, _ = preflight_scoped_launch(
       ScopedSecrets(set(launch.secrets), set(launch.optional_secrets), launch.docker_sock),
       bro_name,
-      grant_cred=grant_cred,
-      revoke_cred=revoke_cred,
-      grant_summon=grant_summon,
-      revoke_summon=revoke_summon,
+      grant=grant,
+      revoke=revoke,
     )
   except LaunchScopeError as e:
     log.error('%s', e)
@@ -257,30 +235,10 @@ def run_main(
     parser.add_exclusive_groups(['in_place'], ['no_trails'])
     parser.add_exclusive_groups(
       ['summon'],
-      [
-        'rich',
-        'fast',
-        'effort',
-        'in_place',
-        'no_trails',
-        'grant_cred',
-        'revoke_cred',
-        'grant_summon',
-        'revoke_summon',
-      ],
+      ['rich', 'fast', 'effort', 'in_place', 'no_trails', 'grant', 'revoke'],
     )
-    parser.add_argument(
-      '--grant-cred', action='append', default=None, metavar='SECRET', help=GRANT_CRED_HELP
-    )
-    parser.add_argument(
-      '--revoke-cred', action='append', default=None, metavar='SECRET', help=REVOKE_CRED_HELP
-    )
-    parser.add_argument(
-      '--grant-summon', action='append', default=None, metavar='BRO', help=GRANT_SUMMON_HELP
-    )
-    parser.add_argument(
-      '--revoke-summon', action='append', default=None, metavar='BRO', help=REVOKE_SUMMON_HELP
-    )
+    parser.add_argument('--grant', action='append', default=None, metavar='NAME', help=GRANT_HELP)
+    parser.add_argument('--revoke', action='append', default=None, metavar='NAME', help=REVOKE_HELP)
   parser.add_argument('--into', metavar='REF', help=INTO_HELP)
   parser.add_argument('--timeout', type=float, metavar='SECONDS', help=TIMEOUT_HELP)
   parser.add_argument('--detach', action='store_true', help=DETACH_HELP)
@@ -294,10 +252,8 @@ def run_main(
       effort=None,
       in_place=False,
       no_trails=False,
-      grant_cred=None,
-      revoke_cred=None,
-      grant_summon=None,
-      revoke_summon=None,
+      grant=None,
+      revoke=None,
     )
   shell_command = parser.reconstruct(args, prog=program)
   os.environ.setdefault('PPP_SHELL_COMMAND', ' '.join(shell_command))
@@ -333,10 +289,8 @@ def run_main(
     inner_args=inner_args,
     in_place=args['in_place'],
     no_trails=args['no_trails'],
-    grant_cred=args['grant_cred'],
-    revoke_cred=args['revoke_cred'],
-    grant_summon=args['grant_summon'],
-    revoke_summon=args['revoke_summon'],
+    grant=args['grant'],
+    revoke=args['revoke'],
     into=args['into'],
   )
   if hopped is not None:

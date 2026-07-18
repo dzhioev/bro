@@ -102,7 +102,7 @@ def summon_allow_list(bro_name: str, *, grant: list[str], revoke: list[str]) -> 
   `(may_summon ∪ grant) − revoke`.
 
   the seeds are the bro's MRO-collected `may_summon` defaults; `grant`/`revoke`
-  are the per-session `--grant-summon`/`--revoke-summon` overrides, applied
+  are the per-session `--grant @bro`/`--revoke @bro` overrides, applied
   strictly (`credentials.apply_grant_revoke`). every name involved — seed or
   override — must be a registered bro, checked against `registry.known_names()`
   without importing any target module, so a typo fails the launch immediately

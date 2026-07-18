@@ -117,7 +117,7 @@ def test_maybe_containerize_grant_adds_secret():
       bro_name='ppp-dev',
       inner_args=['hi'],
       in_place=False,
-      grant_cred=['gmail_creds'],
+      grant=['gmail_creds'],
     )
   assert rc == 0
   assert 'gmail_creds' in run.call_args.args[0].secrets
@@ -135,7 +135,7 @@ def test_maybe_containerize_revoke_removes_secret():
       bro_name='ppp-dev',
       inner_args=['hi'],
       in_place=False,
-      revoke_cred=['github'],
+      revoke=['github'],
     )
   assert rc == 0
   # github is in ppp-dev's manifest; the revoke drops it from the scoped set
@@ -165,7 +165,7 @@ def test_maybe_containerize_revoke_removes_optional_secret():
       bro_name='ppp-dev',
       inner_args=['hi'],
       in_place=False,
-      revoke_cred=['openai'],
+      revoke=['openai'],
     )
   assert rc == 0
   launched = run.call_args.args[0]
@@ -204,7 +204,7 @@ def test_maybe_containerize_grant_already_present_errors(capsys):
       bro_name='ppp-dev',
       inner_args=['hi'],
       in_place=False,
-      grant_cred=['trails'],
+      grant=['trails'],
     )
   assert rc == 1
   assert run.call_count == 0
@@ -223,14 +223,14 @@ def test_maybe_containerize_revoke_absent_errors(capsys):
       bro_name='ppp-dev',
       inner_args=['hi'],
       in_place=False,
-      revoke_cred=['nonexistent'],
+      revoke=['nonexistent'],
     )
   assert rc == 1
   assert run.call_count == 0
   assert 'not in the scoped' in capsys.readouterr().err
 
 
-def test_maybe_containerize_grant_summon_extends_the_allow_list():
+def test_maybe_containerize_bro_grant_extends_the_allow_list():
   with (
     patch.dict('os.environ', {}, clear=False) as env,
     patch('cw.run_in_container', return_value=0) as run,
@@ -242,8 +242,8 @@ def test_maybe_containerize_grant_summon_extends_the_allow_list():
       bro_name='ppp-dev',
       inner_args=['hi'],
       in_place=False,
-      grant_summon=['pm'],
-      revoke_summon=['devoops'],
+      grant=['@pm'],
+      revoke=['@devoops'],
     )
   assert rc == 0
   assert run.call_args.kwargs['may_summon'] == {'pm'}
@@ -261,7 +261,7 @@ def test_maybe_containerize_summon_grant_already_allowed_errors(capsys):
       bro_name='ppp-dev',
       inner_args=['hi'],
       in_place=False,
-      grant_summon=['devoops'],
+      grant=['@devoops'],
     )
   assert rc == 1
   assert run.call_count == 0
@@ -280,14 +280,14 @@ def test_maybe_containerize_unregistered_summon_target_errors(capsys):
       bro_name='ppp-dev',
       inner_args=['hi'],
       in_place=False,
-      grant_summon=['devoop'],
+      grant=['@devoop'],
     )
   assert rc == 1
   assert run.call_count == 0
   assert 'unknown summon target' in capsys.readouterr().err
 
 
-def test_maybe_containerize_grant_summon_with_in_place_errors(capsys):
+def test_maybe_containerize_bro_grant_with_in_place_errors(capsys):
   with (
     patch.dict('os.environ', {}, clear=False) as env,
     patch('cw.run_in_container') as run,
@@ -299,7 +299,7 @@ def test_maybe_containerize_grant_summon_with_in_place_errors(capsys):
       bro_name='ppp-dev',
       inner_args=['hi'],
       in_place=True,
-      grant_summon=['devoops'],
+      grant=['@devoops'],
     )
   assert rc == 1
   assert run.call_count == 0
@@ -318,7 +318,7 @@ def test_maybe_containerize_grant_with_in_place_errors(capsys):
       bro_name='ppp-dev',
       inner_args=['hi'],
       in_place=True,
-      grant_cred=['gmail_creds'],
+      grant=['gmail_creds'],
     )
   assert rc == 1
   assert run.call_count == 0
@@ -336,7 +336,7 @@ def test_maybe_containerize_grant_inside_container_errors(capsys):
       bro_name='ppp-dev',
       inner_args=['hi'],
       in_place=False,
-      revoke_cred=['github'],
+      revoke=['github'],
     )
   assert rc == 1
   assert run.call_count == 0

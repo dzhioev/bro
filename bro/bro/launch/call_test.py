@@ -671,7 +671,7 @@ async def test_tui_markdown_bubble_copy_reflows_to_logical_lines(monkeypatch):
 
   monkeypatch.setattr('cw.render_banner', lambda llm=False, bro=None: 'BANNER')
   command = (
-    'dive-in --auto --grant-cred notion -t "https://example.com/x" '
+    'dive-in --auto --grant notion -t "https://example.com/x" '
     '"a long quoted argument that certainly wraps across the bubble width"'
   )
   paragraph = 'Great — moving to the verification phase next, with the notion grant in place.'

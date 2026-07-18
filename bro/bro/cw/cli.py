@@ -130,10 +130,8 @@ def main(argv: list[str]) -> Optional[int]:
     machinery = {
       '--host': args['host'],
       '--drop': args['drop'],
-      '--grant-cred': args['grant_cred'] is not None,
-      '--revoke-cred': args['revoke_cred'] is not None,
-      '--grant-summon': args['grant_summon'] is not None,
-      '--revoke-summon': args['revoke_summon'] is not None,
+      '--grant': args['grant'] is not None,
+      '--revoke': args['revoke'] is not None,
       '--into': args['into'] is not None,
     }
     offending = [flag for flag, present in machinery.items() if present]

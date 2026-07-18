@@ -19,10 +19,8 @@ def _spec(
   drop: bool = False,
   mode: str = DEFAULT_SESSION_MODE,
   fast: bool = False,
-  grant_cred: Optional[list[str]] = None,
-  revoke_cred: Optional[list[str]] = None,
-  grant_summon: Optional[list[str]] = None,
-  revoke_summon: Optional[list[str]] = None,
+  grant: Optional[list[str]] = None,
+  revoke: Optional[list[str]] = None,
   effort: Optional[str] = None,
   resume: bool = False,
   into: Optional[str] = None,
@@ -37,10 +35,8 @@ def _spec(
     drop=drop,
     mode=mode,
     fast=fast,
-    grant_cred=grant_cred if grant_cred is not None else [],
-    revoke_cred=revoke_cred if revoke_cred is not None else [],
-    grant_summon=grant_summon if grant_summon is not None else [],
-    revoke_summon=revoke_summon if revoke_summon is not None else [],
+    grant=grant if grant is not None else [],
+    revoke=revoke if revoke is not None else [],
     effort=effort,
     resume=resume,
     into=into,
@@ -98,9 +94,7 @@ class _ContainerHarness:
 class TestGrantRevoke:
   def test_start_session_applies_grant_and_revoke(self):
     with _ContainerHarness(secrets={'notion', 'trails', 'github'}) as h:
-      rc = cw.session.start_session(
-        _spec(drop=True, grant_cred=['gmail_creds'], revoke_cred=['notion'])
-      )
+      rc = cw.session.start_session(_spec(drop=True, grant=['gmail_creds'], revoke=['notion']))
     assert rc == 0
     launch = h.run_in_container.call_args.args[0]
     assert 'gmail_creds' in launch.secrets
@@ -108,7 +102,7 @@ class TestGrantRevoke:
 
   def test_start_session_can_revoke_an_optional_secret(self):
     with _ContainerHarness(optional_secrets={'openai'}) as harness:
-      rc = cw.session.start_session(_spec(drop=True, revoke_cred=['openai']))
+      rc = cw.session.start_session(_spec(drop=True, revoke=['openai']))
     assert rc == 0
     launch = harness.run_in_container.call_args.args[0]
     assert launch.optional_secrets == set()
@@ -131,7 +125,7 @@ class TestGrantRevoke:
 
   def test_start_session_grant_already_present_returns_1(self):
     with _ContainerHarness() as h:
-      rc = cw.session.start_session(_spec(drop=True, grant_cred=['github']))
+      rc = cw.session.start_session(_spec(drop=True, grant=['github']))
     assert rc == 1
     assert h.run_in_container.call_count == 0
 
@@ -147,7 +141,7 @@ class TestSummonAllowList:
   def test_container_session_threads_the_allow_list(self):
     with _ContainerHarness() as h:
       h.summon_allow_list.return_value = {'devoops'}
-      rc = cw.session.start_session(_spec(drop=True, grant_summon=['devoops']))
+      rc = cw.session.start_session(_spec(drop=True, grant=['@devoops']))
     assert rc == 0
     # identity: no --bro and no ambient CW_BRO → the ppp-dev default
     assert h.summon_allow_list.call_args == (
@@ -171,7 +165,7 @@ class TestSummonAllowList:
   def test_bad_summon_flag_fails_the_launch(self):
     with _ContainerHarness() as h:
       h.summon_allow_list.side_effect = ValueError('unknown summon target(s): devoop')
-      rc = cw.session.start_session(_spec(drop=True, grant_summon=['devoop']))
+      rc = cw.session.start_session(_spec(drop=True, grant=['@devoop']))
     assert rc == 1
     assert h.run_in_container.call_count == 0
 
@@ -260,15 +254,15 @@ class TestResumeCommand:
       drop=True,
       effort='xhigh',
       persona='pm',
-      grant_cred=['gmail_creds'],
-      revoke_cred=['notion'],
+      grant=['gmail_creds', '@devoops'],
+      revoke=['notion'],
       into='feature',
       claude_args=['--foo'],
     ).to_command_argv()
     assert parts == [
       'cw', 'ss', '--fast', '--drop', '--mode', 'guided',
-      '--effort', 'xhigh', '--persona', 'pm', '--grant-cred', 'gmail_creds',
-      '--revoke-cred', 'notion', '--into', 'feature', 'w', '--foo',
+      '--effort', 'xhigh', '--persona', 'pm', '--grant', 'gmail_creds',
+      '--grant', '@devoops', '--revoke', 'notion', '--into', 'feature', 'w', '--foo',
     ]  # fmt: skip
 
   def test_host_session_carries_the_host_flag(self):
@@ -280,7 +274,7 @@ class TestResumeCommand:
     assert _spec().to_command_argv() == ['cw', 'ss', 'w']
 
   def test_resume_variant_carries_forwarded_flags_and_clears_create_only(self):
-    # resume_variant keeps --mode/--effort/--persona/--grant-cred and adds
+    # resume_variant keeps --mode/--effort/--persona/--grant and adds
     # --resume, while clearing the create-only --drop/--into/prompt/claude args
     parts = (
       _spec(
@@ -288,7 +282,7 @@ class TestResumeCommand:
         drop=True,
         effort='xhigh',
         persona='pm',
-        grant_cred=['gmail_creds'],
+        grant=['gmail_creds'],
         into='feature',
         prompt='do it',
         claude_args=['--foo'],
@@ -298,7 +292,7 @@ class TestResumeCommand:
     )
     assert parts == [
       'cw', 'ss', '--resume', '--mode', 'guided',
-      '--effort', 'xhigh', '--persona', 'pm', '--grant-cred', 'gmail_creds', 'w',
+      '--effort', 'xhigh', '--persona', 'pm', '--grant', 'gmail_creds', 'w',
     ]  # fmt: skip
 
   def test_start_session_records_resume_command(self):
@@ -311,7 +305,7 @@ class TestResumeCommand:
         _spec(
           drop=True,
           mode='guided',
-          grant_cred=['gmail_creds'],
+          grant=['gmail_creds'],
           effort='xhigh',
           persona='pm',
         )
@@ -319,7 +313,7 @@ class TestResumeCommand:
       resume_command = env['CW_RESUME_COMMAND']
     assert (
       resume_command
-      == 'cw ss --resume --mode guided --effort xhigh --persona pm --grant-cred gmail_creds w'
+      == 'cw ss --resume --mode guided --effort xhigh --persona pm --grant gmail_creds w'
     )
 
 
@@ -348,8 +342,8 @@ class TestInPlaceArgv:
       drop=True,
       effort='xhigh',
       persona='pm',
-      grant_cred=['gmail_creds'],
-      revoke_cred=['notion'],
+      grant=['gmail_creds'],
+      revoke=['notion'],
       into='feature',
       prompt='do it',
       claude_args=['--foo'],
@@ -547,10 +541,10 @@ class TestHostSession:
     monkeypatch.setattr(cw.summon, 'summon_allow_list', bad_allow_list)
 
     def boom(*_a, **_k):
-      raise AssertionError('must not ensure a worktree when the summon flags are bad')
+      raise AssertionError('must not ensure a worktree when the summon grant is bad')
 
     monkeypatch.setattr(cw.session, '_ensure_host_worktree', boom)
-    spec = _spec(host=True, grant_summon=['devoop'])
+    spec = _spec(host=True, grant=['@devoop'])
     assert cw.session._host_session(spec, None) == 1
 
   def test_direct_spawn_when_broker_disabled(self, monkeypatch, tmp_path):
@@ -724,7 +718,7 @@ class TestHostSession:
     monkeypatch.setattr(
       cw.session.subprocess, 'run', lambda *_a, **_k: SimpleNamespace(returncode=0)
     )
-    spec = _spec(host=True, grant_cred=['gmail_creds'], revoke_cred=['notion'])
+    spec = _spec(host=True, grant=['gmail_creds'], revoke=['notion'])
     with caplog.at_level('INFO'):
       assert cw.session._host_session(spec, None) == 0
     assert hydrated == {

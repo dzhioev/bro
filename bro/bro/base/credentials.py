@@ -22,8 +22,8 @@ session's state dir — to bound the resolver to a chosen set of secrets.
 absent any of those overrides, resolution uses the host registry: the built-in
 defaults merged per-name with a host-local `registry.json` found along the
 same local search path as the secret files — entries that never enter the
-repo, typically `kind[instance]` variants of a checked-in kind
-(`github[pavel]`). the kind entry (the name up to `[`) owns kind-level
+repo, typically `kind+instance` variants of a checked-in kind
+(`github+pavel`). the kind entry (the name up to `+`) owns kind-level
 behavior — notably the install hook, a `base.template` text rendered with
 `#name` bound to each instance's own name — so a variant declares only its
 sources.
@@ -78,9 +78,10 @@ REGISTRY_ENV = 'CREDENTIALS_REGISTRY'
 # generated REGISTRY_FILE, which replaces the registry wholesale to bound it.
 HOST_REGISTRY_FILE = 'registry.json'
 
-# a secret name: `kind` or `kind[instance]`. the charsets keep every name safe
-# to splice into the single-quoted insert slot of an install-hook template.
-_NAME_GRAMMAR = re.compile(r'([a-z0-9_]+)(?:\[([a-z0-9_-]+)\])?')
+# a secret name: `kind` or `kind+instance`. the charsets keep every name safe
+# to splice into the single-quoted insert slot of an install-hook template, and
+# safe to type unquoted in a shell.
+_NAME_GRAMMAR = re.compile(r'([a-z0-9_]+)(?:\+([a-z0-9_-]+))?')
 
 # the reference-node keys of a json secret (module docstring): `$cred` names the
 # referenced secret, `field` optionally picks one top-level field of its object.
@@ -93,7 +94,7 @@ def _parse_name(name: str) -> tuple[str, Optional[str]]:
   with no instance."""
   match = _NAME_GRAMMAR.fullmatch(name)
   if match is None:
-    raise ValueError(f'malformed secret name {name!r}; expected kind or kind[instance]')
+    raise ValueError(f'malformed secret name {name!r}; expected kind or kind+instance')
   return match.group(1), match.group(2)
 
 
@@ -379,7 +380,7 @@ def _registry_from_dict(data: dict) -> dict[str, Secret]:
 
 
 def _resolve_kinds(data: dict) -> dict:
-  """validate every name against the grammar and give each `kind[instance]`
+  """validate every name against the grammar and give each `kind+instance`
   variant its kind entry's install-hook template (instantiated per-entry by
   `Secret.from_dict`). the kind owns kind-level behavior, so a variant carrying
   its own `install` — or naming a kind the registry lacks — is an error. only
@@ -517,7 +518,7 @@ def build_scoped_store(names: Iterable[str], *, optional: Iterable[str] = ()) ->
   so an absent optional secret degrades the component instead of failing launch.
 
   a session installs at most one instance of each kind: declaring two —
-  `github` and `github[pavel]`, in whichever tiers — raises `ValueError`. The
+  `github` and `github+pavel`, in whichever tiers — raises `ValueError`. The
   check runs over the declared union up front, so an unresolvable optional name
   cannot flap the outcome.
   """

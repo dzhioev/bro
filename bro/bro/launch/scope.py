@@ -206,21 +206,41 @@ def finalize_scoped_secrets(
 
 
 class LaunchScopeError(Exception):
-  """a launch failed its scope preflight: a no-op grant/revoke override, an
-  unknown summon target, or an unknown/unresolvable required secret."""
+  """a launch failed its scope preflight: a malformed or no-op grant/revoke
+  override, an unknown summon target, or an unknown/unresolvable required
+  secret."""
+
+
+# the unified --grant/--revoke value syntax: a leading `@` marks a bro summon
+# target (`@librorian`), any other value is a credential name.
+_BRO_MARK = '@'
+
+
+def _split_scope_overrides(values: list[str]) -> tuple[list[str], list[str]]:
+  """split unified grant/revoke values into (credential names, bro names)."""
+  credential_names: list[str] = []
+  bro_names: list[str] = []
+  for value in values:
+    if value.startswith(_BRO_MARK):
+      name = value.removeprefix(_BRO_MARK)
+      if name == '':
+        raise ValueError(f'malformed grant/revoke {value!r}: expected {_BRO_MARK}<bro-name>')
+      bro_names.append(name)
+    else:
+      credential_names.append(value)
+  return credential_names, bro_names
 
 
 def preflight_scoped_launch(
   scoped: ScopedSecrets,
   bro_name: str,
   *,
-  grant_cred: list[str],
-  revoke_cred: list[str],
-  grant_summon: list[str],
-  revoke_summon: list[str],
+  grant: list[str],
+  revoke: list[str],
 ) -> tuple[ScopedSecrets, set[str], dict[str, bytes]]:
   """the scope preflight every launch surface runs before creating anything
-  (worktree, container, workspace dir): finalize the credential scope
+  (worktree, container, workspace dir): split the unified grant/revoke overrides
+  (`_split_scope_overrides`), finalize the credential scope
   (`finalize_scoped_secrets`), compute the summon allow-list of a launch running
   as `bro_name` (`cw.summon.summon_allow_list`), and hydrate the scoped store
   (`credentials.build_scoped_store`) — any failure raised as a single
@@ -235,8 +255,10 @@ def preflight_scoped_launch(
   from cw.summon import summon_allow_list
 
   try:
-    scoped = finalize_scoped_secrets(scoped, grant=grant_cred, revoke=revoke_cred)
-    may_summon = summon_allow_list(bro_name, grant=grant_summon, revoke=revoke_summon)
+    grant_credentials, grant_bros = _split_scope_overrides(grant)
+    revoke_credentials, revoke_bros = _split_scope_overrides(revoke)
+    scoped = finalize_scoped_secrets(scoped, grant=grant_credentials, revoke=revoke_credentials)
+    may_summon = summon_allow_list(bro_name, grant=grant_bros, revoke=revoke_bros)
     store = credentials.build_scoped_store(scoped.required, optional=scoped.optional)
   except (ValueError, credentials.SecretNotFound) as e:
     raise LaunchScopeError(str(e)) from e
@@ -248,7 +270,7 @@ def _materialize_scoped_store(files: dict[str, bytes], directory: Path) -> Path:
   `directory` and return its registry file — the value a host session's
   CREDENTIALS_REGISTRY points at (the registry's directory joins the resolver's
   search path). the directory is recreated from scratch so a secret dropped from
-  the scope (e.g. a lapsed `--grant-cred`) does not linger from an earlier
+  the scope (e.g. a lapsed `--grant`) does not linger from an earlier
   launch."""
   log.verbose('materializing the scoped credential store at %s', directory)
   if directory.exists():

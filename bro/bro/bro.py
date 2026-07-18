@@ -547,7 +547,7 @@ class BaseBro(ABC):
   # `needed_secrets()`.
   extra_secrets: tuple[str, ...] = ()
   # bros this bro may summon — its static outgoing allow-list. root sessions get
-  # it adjusted per session by --grant-summon/--revoke-summon; a summoned child
+  # it adjusted per session by `--grant @bro`/`--revoke @bro`; a summoned child
   # follows the bare seeds, so summons chain transitively through seeded bros
   # under the host's depth cap (see cw/summon.py). MRO-walked and unioned like
   # `extra_secrets`. ppp-dev seeds `devoops`; everyone else is empty (grows by

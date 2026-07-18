@@ -6,15 +6,15 @@ import cw.cli
 
 
 class TestSsValidation:
-  def test_ss_grant_cred_with_host_is_accepted(self):
+  def test_ss_grant_with_host_is_accepted(self):
     # host sessions hydrate the same scoped store as containers (a convenience
     # scope, not a boundary), so the grant/revoke pair applies to both modes
     with patch('cw.cli.start_session', return_value=0) as fake_start:
-      rc = cw.cli.main(['cw', 'ss', '--host', '--grant-cred', 'gmail_creds', 'wsname'])
+      rc = cw.cli.main(['cw', 'ss', '--host', '--grant', 'gmail_creds', 'wsname'])
     assert rc == 0
     spec = fake_start.call_args[0][0]
     assert spec.host
-    assert spec.grant_cred == ['gmail_creds']
+    assert spec.grant == ['gmail_creds']
 
   def test_ss_non_guided_mode_with_host_is_accepted(self):
     # host sessions may skip permission prompts; the container default is the
@@ -57,18 +57,15 @@ class TestSsValidation:
     with patch('cw.cli.start_session', return_value=0) as fake_start:
       cw.cli.main(['cw', 'ss', 'w'])
     spec = fake_start.call_args[0][0]
-    assert spec.grant_cred == []
-    assert spec.revoke_cred == []
-    assert spec.grant_summon == []
-    assert spec.revoke_summon == []
+    assert spec.grant == []
+    assert spec.revoke == []
 
-  def test_ss_summon_flags_do_not_require_container(self):
-    # a host session has a broker root too, so the summon pair is mode-agnostic —
-    # unlike --grant-cred/--revoke-cred
+  def test_ss_bro_grant_does_not_require_container(self):
+    # a host session has a broker root too, so a summon grant is mode-agnostic
     with patch('cw.cli.start_session', return_value=0) as fake_start:
-      rc = cw.cli.main(['cw', 'ss', '--grant-summon', 'devoops', 'w'])
+      rc = cw.cli.main(['cw', 'ss', '--grant', '@devoops', 'w'])
     assert rc == 0
-    assert fake_start.call_args[0][0].grant_summon == ['devoops']
+    assert fake_start.call_args[0][0].grant == ['@devoops']
 
 
 class TestInPlace:
@@ -88,11 +85,11 @@ class TestInPlace:
     error = capsys.readouterr().err
     assert '--in-place cannot be combined with --host, --drop' in error
 
-  def test_rejects_summon_flags(self, capsys):
+  def test_rejects_grant_revoke_flags(self, capsys):
     # the outer consumed them; the inner argv never carries them
     with pytest.raises(SystemExit):
-      cw.cli.main(['cw', 'ss', '--in-place', '--grant-summon', 'devoops', 'w'])
-    assert '--in-place cannot be combined with --grant-summon' in capsys.readouterr().err
+      cw.cli.main(['cw', 'ss', '--in-place', '--grant', '@devoops', 'w'])
+    assert '--in-place cannot be combined with --grant' in capsys.readouterr().err
 
   def test_mode_carried_in_the_inner_argv(self):
     # the inner argv carries --mode but never --host; the outer consumed the

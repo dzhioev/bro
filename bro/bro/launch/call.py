@@ -13,13 +13,11 @@ from bro.bros.bro import Bro
 from bro.launch._cli import (
   EFFORT_HELP,
   FAST_HELP,
-  GRANT_CRED_HELP,
-  GRANT_SUMMON_HELP,
+  GRANT_HELP,
   IN_PLACE_HELP,
   INTO_HELP,
   NO_TRAILS_HELP,
-  REVOKE_CRED_HELP,
-  REVOKE_SUMMON_HELP,
+  REVOKE_HELP,
   create_bro_for_run,
   maybe_containerize,
   run_llm_spec,
@@ -177,18 +175,8 @@ def chat_main(argv: list[str], *, program: list[str], implied_fast: bool = False
   # a resume reads the recorded trail and records the continuation — both need
   # the trails sink --no-trails turns off.
   parser.add_exclusive_groups(['resume'], ['no_trails'])
-  parser.add_argument(
-    '--grant-cred', action='append', default=None, metavar='SECRET', help=GRANT_CRED_HELP
-  )
-  parser.add_argument(
-    '--revoke-cred', action='append', default=None, metavar='SECRET', help=REVOKE_CRED_HELP
-  )
-  parser.add_argument(
-    '--grant-summon', action='append', default=None, metavar='BRO', help=GRANT_SUMMON_HELP
-  )
-  parser.add_argument(
-    '--revoke-summon', action='append', default=None, metavar='BRO', help=REVOKE_SUMMON_HELP
-  )
+  parser.add_argument('--grant', action='append', default=None, metavar='NAME', help=GRANT_HELP)
+  parser.add_argument('--revoke', action='append', default=None, metavar='NAME', help=REVOKE_HELP)
   parser.add_argument('--into', metavar='REF', help=INTO_HELP)
   args = parser.parse(argv)
   os.environ.setdefault('PPP_SHELL_COMMAND', ' '.join(parser.reconstruct(args, prog=program)))
@@ -224,10 +212,8 @@ def chat_main(argv: list[str], *, program: list[str], implied_fast: bool = False
     inner_args=inner_args,
     in_place=args['in_place'],
     no_trails=args['no_trails'],
-    grant_cred=args['grant_cred'],
-    revoke_cred=args['revoke_cred'],
-    grant_summon=args['grant_summon'],
-    revoke_summon=args['revoke_summon'],
+    grant=args['grant'],
+    revoke=args['revoke'],
     into=args['into'],
   )
   if hopped is not None:
