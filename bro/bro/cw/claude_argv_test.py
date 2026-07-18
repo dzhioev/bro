@@ -5,6 +5,7 @@ from unittest.mock import patch
 import pytest
 
 import cw.claude_argv
+from base.project_root import PROJECT_ROOT
 from cw.mcp import MCPEndpoint
 from cw.session_test import _spec
 
@@ -149,10 +150,10 @@ class TestBroLaunch:
 
   def test_settings_merge_fast_mode_and_api_key_helper(self):
     # the merged --settings is what lets --fast reach a --bro session; the
-    # apiKeyHelper is the workspace's own copy, mode-neutral
+    # apiKeyHelper is the ppp checkout the runner's venv installs, mode-neutral
     settings = _settings(self._launch(fast=True).argv)
     assert settings['fastMode'] is True
-    assert settings['apiKeyHelper'] == '/ws/setup/print_anthropic_key.sh'
+    assert settings['apiKeyHelper'] == str(PROJECT_ROOT / 'setup' / 'print_anthropic_key.sh')
     assert _settings(self._launch().argv)['fastMode'] is False
 
   def test_stop_listen_hook_in_settings(self):

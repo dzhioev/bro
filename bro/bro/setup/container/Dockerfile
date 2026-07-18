@@ -85,10 +85,15 @@ RUN gosu cw bash -ec '\
 # a different fs from any bind mount, so hardlinks can't be probed.
 ENV UV_CACHE_DIR=/opt/uv-cache
 ENV UV_LINK_MODE=copy
+# --no-install-package ppp: a project that vendors ppp as a path dependency
+# (a submodule) can't satisfy it here — only the two manifests are mounted — so
+# the editable ppp is deferred to the full-context layer below. for the ppp
+# project itself the flag is a no-op (--no-install-project already excludes it).
 RUN --mount=type=bind,from=project,source=pyproject.toml,target=/workspace/pyproject.toml \
     --mount=type=bind,from=project,source=uv.lock,target=/workspace/uv.lock \
     cd /workspace \
  && UV_PROJECT_ENVIRONMENT=/opt/cw-venv uv sync --frozen --all-groups --no-install-project \
+      --no-install-package ppp \
  && chmod -R a+rwX /opt/uv-cache /opt/cw-venv
 
 # editable-install the project and bake the `_entrypoints.py` console-script
@@ -116,16 +121,26 @@ RUN --mount=type=bind,from=project,target=/project-src \
 
 # stage the manifests the venv bake ran from — the entrypoint's reuse gate
 # compares the clone's copies against these. a separate layer so a gate-only
-# change never invalidates the expensive venv layer above
+# change never invalidates the expensive venv layer above. ppp/pyproject.toml
+# exists when the project vendors ppp as a submodule: the baked console-script
+# bridge is a function of its [project.scripts], so a submodule bump that
+# changes it must fail the gate
 RUN --mount=type=bind,from=project,target=/project-src \
     mkdir -p /opt/cw-venv-manifest \
- && cp /project-src/pyproject.toml /project-src/uv.lock /opt/cw-venv-manifest/
+ && cp /project-src/pyproject.toml /project-src/uv.lock /opt/cw-venv-manifest/ \
+ && if [ -f /project-src/ppp/pyproject.toml ]; then \
+      cp /project-src/ppp/pyproject.toml /opt/cw-venv-manifest/ppp-pyproject.toml; fi
 
 WORKDIR /workspace
 ENV CW_IN_CONTAINER=1
 
 # the shared shell logging helpers, baked next to the entrypoint: the clone the
-# entrypoint prepares does not exist yet when its early phases log
-COPY --from=project setup/log.sh /usr/local/lib/ppp-log.sh
+# entrypoint prepares does not exist yet when its early phases log. a project
+# vendoring ppp as a submodule carries the helper at ppp/setup/log.sh
+RUN --mount=type=bind,from=project,target=/project-src \
+    if [ -f /project-src/setup/log.sh ]; then \
+      cp /project-src/setup/log.sh /usr/local/lib/ppp-log.sh; \
+    else \
+      cp /project-src/ppp/setup/log.sh /usr/local/lib/ppp-log.sh; fi
 COPY entrypoint.sh /usr/local/bin/cw-entrypoint
 ENTRYPOINT ["/usr/local/bin/cw-entrypoint"]

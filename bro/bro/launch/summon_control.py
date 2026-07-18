@@ -104,15 +104,14 @@ def summon_allow_list(bro_name: str, *, grant: list[str], revoke: list[str]) -> 
   the seeds are the bro's MRO-collected `may_summon` defaults; `grant`/`revoke`
   are the per-session `--grant-summon`/`--revoke-summon` overrides, applied
   strictly (`credentials.apply_grant_revoke`). every name involved — seed or
-  override — must be a registered bro, checked against the `BRO_SPECS` keys
+  override — must be a registered bro, checked against `registry.known_names()`
   without importing any target module, so a typo fails the launch immediately
   rather than minutes later as a denied summon. an unknown `bro_name` degrades to
   empty seeds with a warning, mirroring credential scoping (`scoped_secrets`):
   an ambient CW_BRO this checkout doesn't know must not break the launch."""
   # imported here, not at module level: keeps `import cw` free of the bro graph
   # (see cw/CLAUDE.md, "Lazy bro import")
-  from bro.bros import BRO_SPECS
-  from bro.registry import create_bro
+  from bro.registry import create_bro, known_names
 
   seeds: tuple[str, ...]
   try:
@@ -120,7 +119,7 @@ def summon_allow_list(bro_name: str, *, grant: list[str], revoke: list[str]) -> 
   except KeyError as e:
     log.warning('could not resolve bro %r for summon scoping: %s', bro_name, e)
     seeds = ()
-  unknown = sorted((set(seeds) | set(grant) | set(revoke)) - set(BRO_SPECS))
+  unknown = sorted((set(seeds) | set(grant) | set(revoke)) - known_names())
   if len(unknown) > 0:
     raise ValueError(f'unknown summon target(s): {", ".join(unknown)}; not in the bro registry')
   return credentials.apply_grant_revoke(
@@ -234,9 +233,9 @@ class SummonControl:
       return
     target = payload['target']
     if target not in requester.allow_list:
-      from bro.bros import BRO_SPECS  # cheap: already imported to compute the allow-list
+      from bro.registry import known_names
 
-      if target not in BRO_SPECS:
+      if target not in known_names():
         error = f'summon denied: unknown bro {target!r}'
       else:
         error = f'summon denied: {target!r} is not in {requester.list_description}'

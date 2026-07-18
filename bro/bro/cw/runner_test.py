@@ -40,6 +40,10 @@ class _Harness:
       patch('cw.runner._in_container', return_value=False),
       patch('cw.runner._provision_host_claude_dir', return_value=self.claude_config_dir),
       patch('cw.runner._project_root', return_value=Path('/main-repo')),
+      # session_bro reads the operated repo's [tool.bro]; the fake workspace is
+      # not a git repo, so anchor the config read to the fake root (no pyproject
+      # there -> defaults)
+      patch('cw.project._project_root', return_value=Path('/main-repo')),
     ]
     entered = [p.__enter__() for p in self._patches]
     self.env = entered[0]

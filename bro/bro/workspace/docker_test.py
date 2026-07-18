@@ -5,6 +5,7 @@ import pytest
 
 import cw.claude_config
 import cw.docker
+import cw.project
 
 
 class TestPluginSeedContract:
@@ -146,6 +147,21 @@ class TestSuspendUntilContinued:
     assert 'docker pause cid123 failed: not running' in caplog.text
 
 
+class TestImageTag:
+  def test_repository_and_submodule_manifest_come_from_the_project(self, monkeypatch, tmp_path):
+    (tmp_path / 'pyproject.toml').write_text('[tool.bro]\nimage-repository = "custom-images"\n')
+    (tmp_path / 'uv.lock').write_text('lock')
+    monkeypatch.setattr(cw.docker, '_project_root', lambda: tmp_path)
+    monkeypatch.setattr(cw.project, '_project_root', lambda: tmp_path)
+    without_submodule = cw.docker._image_tag()
+    assert without_submodule.startswith('custom-images:')
+    (tmp_path / 'ppp').mkdir()
+    (tmp_path / 'ppp' / 'pyproject.toml').write_text('[project.scripts]')
+    with_submodule = cw.docker._image_tag()
+    assert with_submodule.startswith('custom-images:')
+    assert with_submodule != without_submodule
+
+
 class TestPruneSupersededImages:
   def _patch_run(self, monkeypatch, listing: _FakeProc, remove_result=None):
     calls: list = []
@@ -164,37 +180,39 @@ class TestPruneSupersededImages:
   def test_removes_all_but_current_smoke_test_and_untagged(self, monkeypatch):
     listing = _FakeProc(
       returncode=0,
-      stdout='ppp-cw:cur\nppp-cw:smoke-test\nppp-cw:<none>\nppp-cw:old1\nppp-cw:old2\n',
+      stdout='bro/ppp-dev:cur\nbro/ppp-dev:smoke-test\nbro/ppp-dev:<none>\nbro/ppp-dev:old1\nbro/ppp-dev:old2\n',
     )
     calls = self._patch_run(monkeypatch, listing)
-    cw.docker._prune_superseded_images('ppp-cw:cur')
+    cw.docker._prune_superseded_images('bro/ppp-dev:cur')
     removals = [argv for argv in calls if argv[:3] == ['docker', 'image', 'rm']]
     assert removals == [
-      ['docker', 'image', 'rm', 'ppp-cw:old1'],
-      ['docker', 'image', 'rm', 'ppp-cw:old2'],
+      ['docker', 'image', 'rm', 'bro/ppp-dev:old1'],
+      ['docker', 'image', 'rm', 'bro/ppp-dev:old2'],
     ]
 
   def test_refused_removal_is_tolerated(self, monkeypatch):
     # `docker image rm` without -f refuses images a container still references;
     # that refusal keeps live sessions' images and must not abort the prune
-    listing = _FakeProc(returncode=0, stdout='ppp-cw:cur\nppp-cw:in-use\nppp-cw:old\n')
+    listing = _FakeProc(
+      returncode=0, stdout='bro/ppp-dev:cur\nbro/ppp-dev:in-use\nbro/ppp-dev:old\n'
+    )
 
     def remove_result(argv):
-      if argv[-1] == 'ppp-cw:in-use':
+      if argv[-1] == 'bro/ppp-dev:in-use':
         return _FakeProc(returncode=1, stderr='image is being used')
       return _FakeProc(returncode=0)
 
     calls = self._patch_run(monkeypatch, listing, remove_result)
-    cw.docker._prune_superseded_images('ppp-cw:cur')
+    cw.docker._prune_superseded_images('bro/ppp-dev:cur')
     removals = [argv for argv in calls if argv[:3] == ['docker', 'image', 'rm']]
     assert removals == [
-      ['docker', 'image', 'rm', 'ppp-cw:in-use'],
-      ['docker', 'image', 'rm', 'ppp-cw:old'],
+      ['docker', 'image', 'rm', 'bro/ppp-dev:in-use'],
+      ['docker', 'image', 'rm', 'bro/ppp-dev:old'],
     ]
 
   def test_listing_failure_skips_pruning(self, monkeypatch):
     calls = self._patch_run(monkeypatch, _FakeProc(returncode=1, stderr='daemon down'))
-    cw.docker._prune_superseded_images('ppp-cw:cur')
+    cw.docker._prune_superseded_images('bro/ppp-dev:cur')
     assert [argv for argv in calls if argv[:3] == ['docker', 'image', 'rm']] == []
 
 

@@ -81,7 +81,12 @@ class TestPreconditionError:
     assert land_pr._precondition_error(pr, False, True) is None
 
 
-def _fake_run(merge_calls: list[list[str]], pr: dict[str, Any]):
+_FOOTER_SCRIPT = '/repo/setup/claude_commit_footer.py'
+
+
+def _fake_run(
+  merge_calls: list[list[str]], pr: dict[str, Any], footer_script: str = _FOOTER_SCRIPT
+):
   def run(command: list[str], *, capture: bool) -> str:
     assert capture == (command[:3] != ['gh', 'pr', 'merge'])
     if command[:3] == ['gh', 'pr', 'view'] and 'mergeCommit' in command[-1]:
@@ -95,7 +100,7 @@ def _fake_run(merge_calls: list[list[str]], pr: dict[str, Any]):
       return json.dumps(pr)
     if command[:3] == ['git', 'rev-parse', '--show-toplevel']:
       return '/repo'
-    if command[0] == '/repo/setup/claude_commit_footer.py':
+    if command[0] == footer_script:
       assert command[1:] == ['--squash', 'origin/master..HEAD']
       return '> created with Claude Code …'
     if command[:3] == ['gh', 'pr', 'merge']:
@@ -106,10 +111,15 @@ def _fake_run(merge_calls: list[list[str]], pr: dict[str, Any]):
   return run
 
 
+def _fake_isfile(*present: str):
+  return patch.object(land_pr.os.path, 'isfile', side_effect=lambda path: path in present)
+
+
 def test_land_happy_path(capsys):
   merge_calls: list[list[str]] = []
   with (
     patch.object(land_pr, '_run', side_effect=_fake_run(merge_calls, _pr())),
+    _fake_isfile(_FOOTER_SCRIPT),
     patch.object(land_pr.spawn, 'run', return_value=subprocess.CompletedProcess([], 0)) as push,
   ):
     assert land_pr.land_pr(no_review=False, allow_unchecked=False) is None
@@ -147,7 +157,33 @@ def test_land_failed_branch_delete_degrades(capsys):
   merge_calls: list[list[str]] = []
   with (
     patch.object(land_pr, '_run', side_effect=_fake_run(merge_calls, _pr())),
+    _fake_isfile(_FOOTER_SCRIPT),
     patch.object(land_pr.spawn, 'run', return_value=subprocess.CompletedProcess([], 1)),
   ):
     assert land_pr.land_pr(no_review=False, allow_unchecked=False) is None
   assert json.loads(capsys.readouterr().out)['branch_deleted'] is False
+
+
+def test_land_uses_the_vendored_footer_script_when_the_root_copy_is_absent():
+  merge_calls: list[list[str]] = []
+  vendored = '/repo/ppp/setup/claude_commit_footer.py'
+  with (
+    patch.object(
+      land_pr, '_run', side_effect=_fake_run(merge_calls, _pr(), footer_script=vendored)
+    ),
+    _fake_isfile(vendored),
+    patch.object(land_pr.spawn, 'run', return_value=subprocess.CompletedProcess([], 0)),
+  ):
+    assert land_pr.land_pr(no_review=False, allow_unchecked=False) is None
+  assert len(merge_calls) == 1
+
+
+def test_land_fails_without_any_footer_script(capsys):
+  merge_calls: list[list[str]] = []
+  with (
+    patch.object(land_pr, '_run', side_effect=_fake_run(merge_calls, _pr())),
+    _fake_isfile(),
+  ):
+    assert land_pr.land_pr(no_review=False, allow_unchecked=False) == 1
+  assert merge_calls == []
+  assert capsys.readouterr().out == ''

@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Optional
 
 import prompts
 from base import credentials
+from base.project_root import PROJECT_ROOT
 from cw.constants import _CW_MODEL
 from cw.mcp import MCPEndpoint, _http_mcp_config
 from cw.system_prompt import _session_append_prompt
@@ -95,7 +96,10 @@ def build_claude_launch(
   namespaces = list(dict.fromkeys(s.namespace for s in servers))
   mcp_config = _http_mcp_config(namespaces, port=endpoint.port, token=endpoint.token)
   if spec.bro is not None:
-    settings['apiKeyHelper'] = str(workspace / 'setup' / 'print_anthropic_key.sh')
+    # PROJECT_ROOT, not the workspace root: the runner executes from the
+    # workspace's venv, so this is the workspace's own ppp checkout — the
+    # workspace itself for ppp, the ppp submodule for a project vendoring it
+    settings['apiKeyHelper'] = str(PROJECT_ROOT / 'setup' / 'print_anthropic_key.sh')
     # the mode fragment renders here — appending the raw file would leak its
     # directives — with the --bro surface's facts: bro harness over mcp wire
     fragment = prompts.mode_fragment(

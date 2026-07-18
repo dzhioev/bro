@@ -9,12 +9,12 @@ from typing import Optional
 
 from base import credentials, log
 from cw.claude_config import _provision_host_claude_dir
-from cw.constants import DEFAULT_SESSION_BRO
 from cw.containers import _broker_enabled, run_in_container
 from cw.docker import Launch, find_container_id
 from cw.flags import DEFAULT_SESSION_MODE
 from cw.git import resolve_ref
 from cw.paths import _latest_jsonl, _project_root, _venv_env
+from cw.project import project_config
 from cw.secrets import (
   LaunchScopeError,
   Surface,
@@ -64,10 +64,13 @@ class SessionSpec:
   def session_bro(self) -> str:
     """the bro this session runs as — its identity for credential scoping, the
     summon allow-list, and a cw-session's persona deliveries. `--bro` names it
-    directly; a cw-session runs as its `--persona`, ppp-dev by default."""
+    directly; a cw-session runs as its `--persona`, defaulting to the operated
+    repo's `[tool.bro] persona` (ppp-dev when undeclared)."""
     if self.bro is not None:
       return self.bro
-    return self.persona if self.persona is not None else DEFAULT_SESSION_BRO
+    if self.persona is not None:
+      return self.persona
+    return project_config().persona
 
   @property
   def surface(self) -> Surface:

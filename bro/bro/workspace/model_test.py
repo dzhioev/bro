@@ -30,23 +30,23 @@ def _init_repo(d):
 
 class TestCleanupImage:
   def test_prefers_current_tag_when_present(self, monkeypatch):
-    monkeypatch.setattr(cw.workspace, '_image_tag', lambda: 'ppp-cw:cur')
+    monkeypatch.setattr(cw.workspace, '_image_tag', lambda: 'bro/ppp-dev:cur')
     monkeypatch.setattr(cw.workspace.subprocess, 'run', lambda *a, **k: _FakeProc(returncode=0))
-    assert cw.workspace._cleanup_image() == 'ppp-cw:cur'
+    assert cw.workspace._cleanup_image() == 'bro/ppp-dev:cur'
 
   def test_falls_back_to_any_ppp_cw_image(self, monkeypatch):
-    monkeypatch.setattr(cw.workspace, '_image_tag', lambda: 'ppp-cw:cur')
+    monkeypatch.setattr(cw.workspace, '_image_tag', lambda: 'bro/ppp-dev:cur')
 
     def fake_run(argv, *a, **k):
       if argv[1] == 'image':  # docker image inspect -> miss
         return _FakeProc(returncode=1)
-      return _FakeProc(returncode=0, stdout='ppp-cw:<none>\nppp-cw:abc123\n')
+      return _FakeProc(returncode=0, stdout='bro/ppp-dev:<none>\nbro/ppp-dev:abc123\n')
 
     monkeypatch.setattr(cw.workspace.subprocess, 'run', fake_run)
-    assert cw.workspace._cleanup_image() == 'ppp-cw:abc123'
+    assert cw.workspace._cleanup_image() == 'bro/ppp-dev:abc123'
 
   def test_none_when_no_image(self, monkeypatch):
-    monkeypatch.setattr(cw.workspace, '_image_tag', lambda: 'ppp-cw:cur')
+    monkeypatch.setattr(cw.workspace, '_image_tag', lambda: 'bro/ppp-dev:cur')
 
     def fake_run(argv, *a, **k):
       if argv[1] == 'image':
@@ -64,7 +64,7 @@ class TestRemoveContainerDir:
     monkeypatch.setattr(
       cw.workspace.subprocess, 'run', lambda *a, **k: pytest.fail('docker must not be invoked')
     )
-    cw.workspace._remove_container_dir(tmp_path / 'ws', image='ppp-cw:x')
+    cw.workspace._remove_container_dir(tmp_path / 'ws', image='bro/ppp-dev:x')
     assert calls == [tmp_path / 'ws']
 
   def test_missing_dir_is_noop(self, monkeypatch, tmp_path):
@@ -75,7 +75,7 @@ class TestRemoveContainerDir:
     monkeypatch.setattr(
       cw.workspace.subprocess, 'run', lambda *a, **k: pytest.fail('docker must not be invoked')
     )
-    cw.workspace._remove_container_dir(tmp_path / 'gone', image='ppp-cw:x')
+    cw.workspace._remove_container_dir(tmp_path / 'gone', image='bro/ppp-dev:x')
 
   def test_escalates_to_root_container_on_eperm(self, monkeypatch, tmp_path):
     def boom(_):
@@ -90,7 +90,7 @@ class TestRemoveContainerDir:
 
     monkeypatch.setattr(cw.workspace.subprocess, 'run', fake_run)
     target = tmp_path / 'ws'  # never created -> path.exists() is False afterwards
-    cw.workspace._remove_container_dir(target, image='ppp-cw:x')
+    cw.workspace._remove_container_dir(target, image='bro/ppp-dev:x')
     argv = seen['argv']
     assert argv[:5] == ['docker', 'run', '--rm', '-u', '0']
     assert '--entrypoint' in argv and argv[argv.index('--entrypoint') + 1] == 'rm'
@@ -102,7 +102,7 @@ class TestRemoveContainerDir:
       raise PermissionError
 
     monkeypatch.setattr(cw.workspace.shutil, 'rmtree', boom)
-    with pytest.raises(RuntimeError, match='no ppp-cw image'):
+    with pytest.raises(RuntimeError, match='no session image'):
       cw.workspace._remove_container_dir(tmp_path / 'ws', image=None)
 
   def test_raises_when_docker_rm_fails(self, monkeypatch, tmp_path):
@@ -114,7 +114,7 @@ class TestRemoveContainerDir:
       cw.workspace.subprocess, 'run', lambda *a, **k: _FakeProc(returncode=1, stderr='denied')
     )
     with pytest.raises(RuntimeError, match='docker rm failed: denied'):
-      cw.workspace._remove_container_dir(tmp_path / 'ws', image='ppp-cw:x')
+      cw.workspace._remove_container_dir(tmp_path / 'ws', image='bro/ppp-dev:x')
 
   def test_raises_when_dir_survives_docker_rm(self, monkeypatch, tmp_path):
     def boom(_):
@@ -125,7 +125,7 @@ class TestRemoveContainerDir:
     survivor = tmp_path / 'ws'
     survivor.mkdir()  # still present after the mocked docker rm
     with pytest.raises(RuntimeError, match='still present'):
-      cw.workspace._remove_container_dir(survivor, image='ppp-cw:x')
+      cw.workspace._remove_container_dir(survivor, image='bro/ppp-dev:x')
 
 
 class TestContainerWorkspaceRemove:
@@ -134,7 +134,7 @@ class TestContainerWorkspaceRemove:
   def test_removes_dir_with_cleanup_image_and_session_state(self, monkeypatch, tmp_path):
     monkeypatch.setenv('HOME', str(tmp_path / 'home'))
     monkeypatch.setattr(cw.workspace, '_containers_dir', lambda project: tmp_path / 'containers')
-    monkeypatch.setattr(cw.workspace, '_cleanup_image', lambda: 'ppp-cw:img')
+    monkeypatch.setattr(cw.workspace, '_cleanup_image', lambda: 'bro/ppp-dev:img')
     removed = {}
     monkeypatch.setattr(
       cw.workspace,
@@ -147,7 +147,7 @@ class TestContainerWorkspaceRemove:
     host_log.parent.mkdir(parents=True)
     host_log.write_text('mid-session line\n')
     workspace.remove()
-    assert removed == {'path': workspace.path, 'image': 'ppp-cw:img'}
+    assert removed == {'path': workspace.path, 'image': 'bro/ppp-dev:img'}
     assert not workspace.session_dir.exists()  # session state cleaned
     assert not host_log.exists()  # the session host log goes with the workspace
 

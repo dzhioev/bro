@@ -6,7 +6,7 @@
 DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 PROJECT="$(cd "$DIR" && realpath "$(git rev-parse --git-common-dir)/..")"
 
-TAG="ppp-cw:smoke-test"
+TAG="bro/ppp-dev:smoke-test"
 echo "building image" >&2
 "$DIR/../base_image/build.sh" >&2
 docker build -t "$TAG" -f "$DIR/Dockerfile" \

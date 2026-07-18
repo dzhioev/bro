@@ -1,4 +1,6 @@
-# adding a new bro? add it here (name -> "module:ClassName") and nowhere else.
+# bros are defined here (name -> "module:ClassName") for this repo's bros, or
+# outside of the repo by bro-framework users — through the `bro.bros`
+# entry-point group their own pyproject declares (resolved by bro/registry.py).
 # the registry imports a bro's module lazily, on first lookup by name, so
 # `create_bro('pm')` pulls in only PM's dependency graph — not every other bro's
 # (librorian's trafilatura/dateparser, devoops's boto3, ...). the map carries no

@@ -1,3 +1,4 @@
+import importlib.metadata
 from dataclasses import dataclass
 from typing import ClassVar, Optional
 
@@ -52,6 +53,17 @@ class BetaBro(Bro):
 
   def __init__(self):
     super().__init__(system_prompt='beta')
+
+  def _create_llm(self, *, interactive: bool):
+    return MockLLM()
+
+
+class ExternalBro(Bro):
+  name = 'external'
+  description = 'external bro'
+
+  def __init__(self):
+    super().__init__(system_prompt='external')
 
   def _create_llm(self, *, interactive: bool):
     return MockLLM()
@@ -144,3 +156,83 @@ class TestAutoload:
     bro.registry._autoload = False
     with pytest.raises(KeyError, match='unknown bro'):
       get_class('pm')
+
+
+def _entry_point(name: str, value: str) -> importlib.metadata.EntryPoint:
+  return importlib.metadata.EntryPoint(name, value, bro.registry._ENTRY_POINT_GROUP)
+
+
+class TestExternalSpecs:
+  # the autouse fixture disables autoload; the external entry-point path only
+  # exists under autoload, so re-enable it and fake the installed entry points.
+  @pytest.fixture(autouse=True)
+  def enable_autoload(self):
+    bro.registry._autoload = True
+
+  def test_get_class_resolves_an_external_entry_point(self, monkeypatch):
+    monkeypatch.setattr(
+      bro.registry,
+      '_entry_points',
+      lambda: (_entry_point('external', 'bro.registry_test:ExternalBro'),),
+    )
+    assert get_class('external') is ExternalBro
+    assert create_bro('external').name == 'external'
+
+  def test_external_name_mismatch_raises(self, monkeypatch):
+    monkeypatch.setattr(
+      bro.registry,
+      '_entry_points',
+      lambda: (_entry_point('mismatched', 'bro.registry_test:ExternalBro'),),
+    )
+    with pytest.raises(ValueError, match="declares name 'external'"):
+      get_class('mismatched')
+
+  def test_external_shadowing_a_builtin_raises(self, monkeypatch):
+    monkeypatch.setattr(
+      bro.registry,
+      '_entry_points',
+      lambda: (_entry_point('pm', 'bro.registry_test:ExternalBro'),),
+    )
+    with pytest.raises(ValueError, match='shadows a built-in bro'):
+      bro.registry.known_names()
+
+  def test_duplicate_externals_raise(self, monkeypatch):
+    monkeypatch.setattr(
+      bro.registry,
+      '_entry_points',
+      lambda: (
+        _entry_point('external', 'bro.registry_test:ExternalBro'),
+        _entry_point('external', 'other.module:Other'),
+      ),
+    )
+    with pytest.raises(ValueError, match='duplicate external bro'):
+      bro.registry.known_names()
+
+  def test_known_names_unions_builtins_and_externals(self, monkeypatch):
+    from bro.bros import BRO_SPECS
+
+    monkeypatch.setattr(
+      bro.registry,
+      '_entry_points',
+      lambda: (_entry_point('external', 'bro.registry_test:ExternalBro'),),
+    )
+    assert bro.registry.known_names() == set(BRO_SPECS) | {'external'}
+
+  def test_known_names_with_autoload_off_sees_only_hand_registered(self, monkeypatch):
+    def unexpected_read():
+      raise AssertionError('entry points must not be consulted with autoload off')
+
+    monkeypatch.setattr(bro.registry, '_entry_points', unexpected_read)
+    bro.registry._autoload = False
+    register(AlphaBro)
+    assert bro.registry.known_names() == {'alpha'}
+
+  def test_list_classes_includes_externals(self, monkeypatch):
+    from bro.bros import BRO_SPECS
+
+    monkeypatch.setattr(
+      bro.registry,
+      '_entry_points',
+      lambda: (_entry_point('external', 'bro.registry_test:ExternalBro'),),
+    )
+    assert {cls.name for cls in list_classes()} == set(BRO_SPECS) | {'external'}

@@ -10,6 +10,7 @@ from typing import Optional
 from base import credentials, log
 from cw.claude_config import _seed_claude_json, _write_session_settings
 from cw.paths import _containers_dir, _project_root, _session_claude_dir
+from cw.project import project_config
 from cw.secrets import _ppp_tarball
 
 CONTAINER_DIR = Path(__file__).resolve().parent.parent / 'setup' / 'container'
@@ -123,9 +124,10 @@ def find_container_id(session: Path) -> Optional[str]:
   return ids[0]
 
 
-_IMAGE_REPOSITORY = 'ppp-cw'
-# tagged by setup/container/test_smoke.sh, which owns its lifecycle
-_SMOKE_TEST_TAG = f'{_IMAGE_REPOSITORY}:smoke-test'
+# tagged by setup/container/test_smoke.sh, which owns its lifecycle; the smoke
+# test always builds with the ppp checkout as the project context, so the
+# literal repository is correct regardless of the operated repo's config
+_SMOKE_TEST_TAG = 'bro/ppp-dev:smoke-test'
 
 
 def _image_tag() -> str:
@@ -134,26 +136,36 @@ def _image_tag() -> str:
   inputs = (
     sorted(BASE_IMAGE_DIR.iterdir())
     + sorted(CONTAINER_DIR.iterdir())
-    + [project / 'pyproject.toml', project / 'uv.lock', project / 'setup' / 'log.sh']
+    # ppp/pyproject.toml exists when the project vendors ppp as a submodule: the
+    # baked console-script bridge is a function of its [project.scripts] table
+    + [
+      project / 'pyproject.toml',
+      project / 'uv.lock',
+      project / 'setup' / 'log.sh',
+      project / 'ppp' / 'pyproject.toml',
+    ]
   )
   for path in inputs:
     if path.is_file():
       h.update(path.name.encode())
       h.update(b'\0')
       h.update(path.read_bytes())
-  return f'{_IMAGE_REPOSITORY}:{h.hexdigest()[:12]}'
+  return f'{project_config().image_repository}:{h.hexdigest()[:12]}'
 
 
 def _prune_superseded_images(current: str) -> None:
-  """untag `ppp-cw` images superseded by the just-built `current`.
+  """untag session images of `current`'s repository superseded by it.
 
   every Dockerfile/manifest change mints a new content-hash tag, and the old
   image would otherwise linger forever (~2.6 GB each). plain `docker image rm`
   (no -f) refuses images that any container — running or stopped — still
-  references, so live sessions keep theirs and only orphaned tags go.
+  references, so live sessions keep theirs and only orphaned tags go. scoping
+  the listing to `current`'s repository keeps one project's builds from
+  evicting another's ([tool.bro] image-repository).
   """
+  repository = current.split(':')[0]
   listed = subprocess.run(
-    ['docker', 'images', _IMAGE_REPOSITORY, '--format', '{{.Repository}}:{{.Tag}}'],
+    ['docker', 'images', repository, '--format', '{{.Repository}}:{{.Tag}}'],
     capture_output=True,
     text=True,
   )

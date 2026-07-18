@@ -214,16 +214,17 @@ def _host_path_is_clean(path: Path, refresh_origin: bool = True) -> tuple[bool, 
 
 
 def _cleanup_image() -> Optional[str]:
-  """a locally-present ppp-cw image usable to delete root-owned container files.
+  """a locally-present session image usable to delete root-owned container files.
 
-  prefers the current image tag, then any other locally-present ppp-cw image.
-  returns None when none exist (nothing to escalate the removal with).
+  prefers the current image tag, then any other locally-present image of the
+  project's repository. returns None when none exist (nothing to escalate the
+  removal with).
   """
   tag = _image_tag()
   if subprocess.run(['docker', 'image', 'inspect', tag], capture_output=True).returncode == 0:
     return tag
   listed = subprocess.run(
-    ['docker', 'images', '--format', '{{.Repository}}:{{.Tag}}', 'ppp-cw'],
+    ['docker', 'images', '--format', '{{.Repository}}:{{.Tag}}', tag.split(':')[0]],
     capture_output=True,
     text=True,
   )
@@ -252,7 +253,7 @@ def _remove_container_dir(path: Path, image: Optional[str]) -> None:
     pass
   if image is None:
     raise RuntimeError(
-      f'{path}: contains files owned by an in-container uid and no ppp-cw image '
+      f'{path}: contains files owned by an in-container uid and no session image '
       'is available to remove them as root'
     )
   result = subprocess.run(

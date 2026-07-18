@@ -152,9 +152,16 @@ fi
 # staged /opt/cw-venv-manifest copies, not assumed. a mismatch (or an older image
 # without the staged manifests, or a pre-existing /workspace/.venv from a reused
 # workspace) falls through to a normal sync from the clone's own manifests.
+# the third cmp covers a project vendoring ppp as a submodule: the baked
+# console-script bridge derives from ppp/pyproject.toml's [project.scripts], so
+# a clone whose submodule manifest diverges from the staged copy must re-sync
+# (both sides absent — the ppp project itself — passes).
 if [ "${CW_SKIP_VENV:-}" != "1" ] && [ -d /opt/cw-venv ] && [ ! -e /workspace/.venv ] \
     && cmp -s /workspace/pyproject.toml /opt/cw-venv-manifest/pyproject.toml \
-    && cmp -s /workspace/uv.lock /opt/cw-venv-manifest/uv.lock; then
+    && cmp -s /workspace/uv.lock /opt/cw-venv-manifest/uv.lock \
+    && { { [ ! -f /workspace/ppp/pyproject.toml ] \
+        && [ ! -f /opt/cw-venv-manifest/ppp-pyproject.toml ]; } \
+      || cmp -s /workspace/ppp/pyproject.toml /opt/cw-venv-manifest/ppp-pyproject.toml; }; then
   log VERBOSE 'reusing the venv baked into the image'
   ln -s /opt/cw-venv /workspace/.venv
   touch /workspace/.venv/.provision-stamp

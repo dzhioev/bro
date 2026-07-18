@@ -4,6 +4,7 @@ import tempfile
 from typing import Optional
 from unittest.mock import patch
 
+import cw.project
 import cw.secrets
 import cw.session
 import cw.summon
@@ -74,6 +75,9 @@ class _ContainerHarness:
       patch('cw.session._replace_resume_hint'),
       # keep the bro-registry import out; threading is asserted per-test
       patch('cw.summon.summon_allow_list', return_value=set()),
+      # session_bro reads the operated repo's [tool.bro]; tests may run outside a
+      # git repo, so anchor the config read to a bare root (no pyproject -> defaults)
+      patch('cw.project._project_root', return_value=pathlib.Path('/main-repo')),
     ]
     entered = [p.__enter__() for p in self._patches]
     self.env = entered[0]
@@ -401,6 +405,7 @@ class TestConcurrentSessionGuard:
 
   def test_host_refuses_when_active(self, monkeypatch, tmp_path):
     monkeypatch.setattr(cw.session, '_project_root', lambda: tmp_path)
+    monkeypatch.setattr(cw.project, '_project_root', lambda: tmp_path)
     monkeypatch.setattr(cw.session.os, 'chdir', lambda p: None)
 
     class _FakeHost:
@@ -421,6 +426,7 @@ class TestConcurrentSessionGuard:
 
   def test_host_proceeds_when_inactive(self, monkeypatch, tmp_path):
     monkeypatch.setattr(cw.session, '_project_root', lambda: tmp_path)
+    monkeypatch.setattr(cw.project, '_project_root', lambda: tmp_path)
     monkeypatch.setattr(cw.session.os, 'chdir', lambda p: None)
 
     class _FakeHost:
@@ -476,6 +482,7 @@ class TestHostSession:
     cw_bin.parent.mkdir(parents=True)
     cw_bin.write_text('')
     monkeypatch.setattr(cw.session, '_project_root', lambda: tmp_path)
+    monkeypatch.setattr(cw.project, '_project_root', lambda: tmp_path)
     monkeypatch.setattr(cw.session.os, 'chdir', lambda p: None)
     monkeypatch.setattr(cw.session, 'HostWorktree', fake_host)
     monkeypatch.setattr(cw.session, '_ensure_host_worktree', lambda *_a: True)
@@ -744,6 +751,7 @@ class TestHostSession:
   def test_missing_inner_cw_fails_before_spawn(self, monkeypatch, tmp_path):
     fake_host, worktree = self._fake_host(tmp_path, has_session=False)
     monkeypatch.setattr(cw.session, '_project_root', lambda: tmp_path)
+    monkeypatch.setattr(cw.project, '_project_root', lambda: tmp_path)
     monkeypatch.setattr(cw.session.os, 'chdir', lambda p: None)
     monkeypatch.setattr(cw.session, 'HostWorktree', fake_host)
     monkeypatch.setattr(cw.session, '_ensure_host_worktree', lambda *_a: True)
@@ -767,6 +775,7 @@ class TestHostSession:
   def test_resume_guard_fails_fast_before_worktree_create(self, monkeypatch, tmp_path):
     fake_host, _ = self._fake_host(tmp_path, has_session=False)
     monkeypatch.setattr(cw.session, '_project_root', lambda: tmp_path)
+    monkeypatch.setattr(cw.project, '_project_root', lambda: tmp_path)
     monkeypatch.setattr(cw.session.os, 'chdir', lambda p: None)
     monkeypatch.setattr(cw.session, 'HostWorktree', fake_host)
 
