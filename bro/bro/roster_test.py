@@ -27,6 +27,15 @@ _SURFACES = [
 ]
 
 
+@pytest.fixture(autouse=True)
+def brog_config(monkeypatch):
+  # brog's state factory reads the self-contained `brog` secret at build
+  monkeypatch.setattr(
+    'base.credentials.get_json',
+    lambda name: {'backend': 'flow', 'transport': 'http', 'url': 'https://x', 'token': 't'},
+  )
+
+
 def _served_texts(tool: Tool) -> list[str]:
   texts = [tool.description]
 

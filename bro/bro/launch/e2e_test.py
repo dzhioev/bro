@@ -288,7 +288,8 @@ from bro.launch.root import run_in_container
 from workspace.docker import Launch
 
 launch = Launch(name=os.environ['CW_E2E_NAME'],
-                command=json.loads(os.environ['CW_E2E_COMMAND']), env={}, secrets=(),
+                command=json.loads(os.environ['CW_E2E_COMMAND']), env={},
+                secrets=tuple(json.loads(os.environ.get('CW_E2E_SECRETS', '[]'))),
                 docker_sock=True, tty=True, forward_env=True)
 code = run_in_container(launch)
 loaded = sorted(m for m in sys.modules if m == 'broker' or m.startswith('broker.'))
@@ -374,6 +375,17 @@ def isolated_env() -> Iterator[IsolatedEnv]:
   subprocess.run(['git', 'clone', '--quiet', str(checkout), str(project)], check=True)
   home = root / 'home'
   home.mkdir()
+  # scenarios that exec the real runner hydrate `brog` (CW_E2E_SECRETS): the
+  # session MCP server builds brog's backend from that secret at assembly, so
+  # the health gate needs the stub a real session's scoped store would carry.
+  # construction is offline — nothing contacts the url
+  ppp_dir = home / '.ppp'
+  ppp_dir.mkdir()
+  (ppp_dir / 'brog.json').write_text(
+    json.dumps(
+      {'backend': 'flow', 'transport': 'http', 'url': 'https://brog.e2e.invalid', 'token': 'e2e'}
+    )
+  )
   (home / '.claude.json').write_text(
     json.dumps({'oauthAccount': {'emailAddress': 'e2e@invalid'}, 'userID': 'cw-e2e'})
   )
@@ -955,7 +967,7 @@ def scenario_f(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> Liv
     env,
     name,
     _inplace_command('cw', 'ss', '--in-place', '--fast', name),
-    extra_env={'CW_BRO': 'ppp-dev'},
+    extra_env={'CW_BRO': 'ppp-dev', 'CW_E2E_SECRETS': '["brog"]'},
   )
   request.addfinalizer(driver.close)
   run = LiveRun(exit_code=driver.wait(300), output=driver.output())
@@ -1001,7 +1013,7 @@ def scenario_g(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> Liv
     env,
     name,
     _inplace_command('env', 'CW_E2E_LINGER=1', 'cw', 'ss', '--in-place', name),
-    extra_env={},
+    extra_env={'CW_E2E_SECRETS': '["brog"]'},
   )
   request.addfinalizer(driver.close)
   _wait_ready(env, name, driver)
