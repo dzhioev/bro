@@ -3,7 +3,7 @@
 The inner layer of the launch stack: it assumes its cwd is a prepared workspace
 (host worktree or container clone) with the workspace venv active, and owns
 everything that runs next to claude — resume resolution, the claude argv, the
-session-local MCP server, bro-skill surfacing, CW_SESSION_CONTEXT, and the
+session-local MCP server, CW_SESSION_CONTEXT, and the
 session-log sync daemon. The outer `cw ss` (mode-specific by nature: worktree
 ensure / container machinery) validates policy once and spawns this runner in
 the workspace, so it re-runs no policy gates.
@@ -13,14 +13,12 @@ import contextlib
 import os
 import signal
 import subprocess
-import tempfile
 from collections.abc import Generator
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from base import log
 from bro.launch.identity import bro_git_identity_env
-from cw.bro import _populate_bro_skills
 from cw.broxy import _start_session_broxy
 from cw.claude_argv import build_claude_launch
 from cw.claude_auth import _apply_claude_auth
@@ -146,21 +144,11 @@ def run_in_place(spec: 'SessionSpec') -> int:
       return 1
     teardown.callback(server.stop)
 
-    skills_dir: Optional[Path] = None
-    if spec.bro is None:
-      # cw-session: surface the persona's skills as slash commands from a
-      # per-session tmp dir via --add-dir, so concurrent sessions on the same
-      # repo don't share `.claude/skills/`. a --bro session reaches its skills
-      # through the `bro::skill` MCP tool instead (--bare skips discovery).
-      skills_dir = Path(tempfile.mkdtemp(prefix=f'cw-skills-{spec.session_bro}-'))
-      _populate_bro_skills(skills_dir, spec.session_bro)
-
     launch = build_claude_launch(
       spec,
       workspace=workspace,
       claude_args=claude_args,
       endpoint=server.endpoint,
-      skills_dir=skills_dir,
     )
     _set_session_context(spec, launch.system_prompt, workspace)
 

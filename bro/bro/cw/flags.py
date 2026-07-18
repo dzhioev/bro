@@ -65,7 +65,7 @@ def add_forwarded_flags(parser: Parser) -> None:
     '--persona',
     default=None,
     metavar='BRO',
-    help='the bro a cw-session is themed as — persona prompt injection, skills as slash commands, and the session-local MCP namespaces (default: the project default bro); mutually exclusive with --bro',
+    help='the bro a cw-session is themed as — persona and script prompt injection, canonical script tools, and the session-local MCP namespaces (default: the project default bro); mutually exclusive with --bro',
   )
   parser.add_argument(
     '--bro',

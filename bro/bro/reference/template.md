@@ -1,6 +1,6 @@
 # Template directives
 
-Conditional rendering for static agent-facing text — system prompts, skill bodies, tool descriptions. `base/template.py` parses `{{…}}` directive groups and lowers their conditions onto the declarative conditioning model (`reference/conditions.md`), which owns the condition semantics; this file owns the text syntax and where text renders.
+Conditional rendering for static agent-facing text — system prompts, script bodies, tool descriptions. `base/template.py` parses `{{…}}` directive groups and lowers their conditions onto the declarative conditioning model (`reference/conditions.md`), which owns the condition semantics; this file owns the text syntax and where text renders.
 
 ## Grammar
 
@@ -48,7 +48,7 @@ file      := prompt file name           file: [A-Za-z0-9._/-]+
 - `BaseBro.__init__` — the two bro prompt flavors (harness `bro`; wire `bare` / `mcp`)
 - `cw/system_prompt.py` — a cw-session's append prompt, the injected persona included (harness `claude`, wire `mcp`)
 - `prompts.hold_fragment` — the hold text (`prompts/hold.md` selecting over `prompts/holds/`), the only surface that supplies `#hold`
-- skill bodies — the `bro::skill` service tool serves harness `bro`; `cw` populates a cw-session with `claude`-rendered `SKILL.md` copies
+- script bodies — each `@::` tool renders for its serving harness; bro-native and `--bro` use the bro branch, while a cw persona session uses the Claude branch
 - tool descriptions and parameter annotations — rendered by the owning server at build time against its own vocabulary, not the harness facts (`#tools` for a `Toolset`'s roster, a data source's `#features` + `#source`; the bro service-tool build additionally injects `#wire`), so no unprocessed directive leaves a server and a standalone server serves final text — see `reference/conditions.md` "Server-domain vocabularies"
 - data-source summaries — `DataSource.rendered_summary()`, the source's vocabulary again, rendered where the prompt composes
 - credential install hooks — `base.credentials.Secret.from_dict` renders each registry secret's `install` text with `#name` bound to the secret's own name, its own single-variable vocabulary like the server-domain ones

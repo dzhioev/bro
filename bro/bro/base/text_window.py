@@ -1,12 +1,12 @@
 """Windowed views over large text for tool output.
 
-Three entry points share one cap policy: `apply_limit` caps free-form output
+Four entry points share one cap policy: `apply_limit` caps free-form output
 (keeping the head or tail) and announces what was dropped via inline
-`[...skipped before/after...]` markers; `numbered_window` layers an oriented
-partial read on top — skip `offset` lines, prefix the rest with 1-based
-line numbers (cat -n style), then cap; `take_head` returns the budget-bounded
-prefix raw, for callers that paginate over a cursor instead of dropping the
-excess.
+`[...skipped before/after...]` markers; `window` and `numbered_window` layer an
+oriented partial read on top — both skip `offset` lines and cap, while the
+numbered form also prefixes the rest with 1-based line numbers (cat -n style);
+`take_head` returns the budget-bounded prefix raw, for callers that paginate
+over a cursor instead of dropping the excess.
 """
 
 from typing import Literal
@@ -125,15 +125,31 @@ def take_head(content: str, limit: int) -> tuple[str, str]:
   return ''.join(kept), clamp_note
 
 
+def window(content: str, offset: int = 0, limit: int = DEFAULT_LIMIT) -> str:
+  """oriented partial read: skip `offset` lines (0-based) and cap via
+  `apply_limit` — the before marker reports the skipped prefix."""
+  all_lines = content.splitlines(keepends=True)
+  before_count = min(max(offset, 0), len(all_lines))
+  before_bytes = sum(len(line) for line in all_lines[:before_count])
+  return apply_limit(
+    ''.join(all_lines[before_count:]),
+    limit,
+    keep='head',
+    skipped_before_lines=before_count,
+    skipped_before_bytes=before_bytes,
+  )
+
+
 def numbered_window(content: str, offset: int = 0, limit: int = DEFAULT_LIMIT) -> str:
   """oriented partial read: skip `offset` lines (0-based), prefix the rest with
-  1-based line numbers (cat -n style), and cap via `apply_limit` — the before
-  marker reports the skipped prefix."""
+  1-based line numbers (cat -n style), and cap via `apply_limit`."""
   all_lines = content.splitlines(keepends=True)
   before_count = min(max(offset, 0), len(all_lines))
   before_bytes = sum(len(line) for line in all_lines[:before_count])
   visible = all_lines[before_count:]
-  numbered = ''.join(f'{i:>5}\t{line}' for i, line in enumerate(visible, start=before_count + 1))
+  numbered = ''.join(
+    f'{index:>5}\t{line}' for index, line in enumerate(visible, start=before_count + 1)
+  )
   return apply_limit(
     numbered,
     limit,

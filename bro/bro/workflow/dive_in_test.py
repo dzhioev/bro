@@ -124,6 +124,28 @@ class TestShellCommandReconstruction:
     assert os.environ['PPP_SHELL_COMMAND'] == 'dive-in --new do a thing'
 
 
+class TestNewMode:
+  def test_without_seed_uses_dispatcher_command(self, fake_proj, capsys):
+    rc = dive_in.dive_in(forwarded=[], dry_run=True, new=True)
+    assert rc == 0
+    tokens = shlex.split(capsys.readouterr().out.strip())
+    assert tokens[tokens.index('-p') + 1] == '@:fix --new "":@'
+
+  def test_seed_stays_inside_dispatcher_command(self, fake_proj, capsys):
+    rc = dive_in.dive_in(forwarded=[], dry_run=True, new=True, command='do a thing')
+    assert rc == 0
+    tokens = shlex.split(capsys.readouterr().out.strip())
+    assert tokens[tokens.index('-p') + 1] == '@:fix --new do a thing:@'
+
+  def test_bro_flavor_uses_the_same_dispatcher_command(self, fake_proj, capsys):
+    rc = dive_in.dive_in(
+      forwarded=['--bro', 'ppp-dev'], dry_run=True, new=True, command='do a thing'
+    )
+    assert rc == 0
+    tokens = shlex.split(capsys.readouterr().out.strip())
+    assert tokens[tokens.index('-p') + 1] == '@:fix --new do a thing:@'
+
+
 class TestTaskMode:
   @pytest.fixture(autouse=True)
   def fake_backend(self, monkeypatch):
@@ -155,10 +177,25 @@ class TestTaskMode:
     assert rc == 0
     tokens = shlex.split(capsys.readouterr().out.strip())
     prompt = tokens[tokens.index('-p') + 1]
-    # the ref rides as typed; the prefetch block follows
-    assert prompt.startswith(f'/fix {URL}\n\ntask block')
-    # CW_TASK_ID carries the backend's canonical id, not the raw ref
+    assert prompt.startswith(f'@:fix {URL}:@\n\ntask block')
     assert os.environ['CW_TASK_ID'] == UUID
+
+  def test_bro_flavor_keeps_prefetch_and_appended_command_outside_dispatcher_command(
+    self, fake_proj, monkeypatch, capsys
+  ):
+    monkeypatch.setattr(dive_in, '_prefetch_task', lambda system, ref: (_brog_task(), 'task block'))
+    rc = dive_in.dive_in(
+      forwarded=['--bro', 'ppp-dev'],
+      dry_run=True,
+      task=URL,
+      command='run the focused checks',
+    )
+    assert rc == 0
+    tokens = shlex.split(capsys.readouterr().out.strip())
+    prompt = tokens[tokens.index('-p') + 1]
+    assert prompt == (
+      f'@:fix {URL}:@\n\ntask block\n\nOnce you understand the task, run the focused checks'
+    )
 
   def test_focus_with_task_sets_focus_to_the_canonical_id(self, fake_proj, monkeypatch, capsys):
     focused = {}
@@ -173,10 +210,9 @@ class TestTaskMode:
     rc = dive_in.dive_in(forwarded=[], dry_run=True, task=URL, focus=True)
     assert rc == 0
     assert focused['id'] == UUID
-    # /fix has no focus form: the first message is the plain task-ref form
     tokens = shlex.split(capsys.readouterr().out.strip())
     prompt = tokens[tokens.index('-p') + 1]
-    assert prompt.startswith(f'/fix {URL}')
+    assert prompt.startswith(f'@:fix {URL}:@')
 
   def test_bare_focus_seeds_fix_with_the_focused_id(self, fake_proj, monkeypatch, capsys):
     state = types.SimpleNamespace(task=types.SimpleNamespace(id=UUID))
@@ -192,7 +228,7 @@ class TestTaskMode:
     assert rc == 0
     tokens = shlex.split(capsys.readouterr().out.strip())
     prompt = tokens[tokens.index('-p') + 1]
-    assert prompt.startswith(f'/fix {UUID}')
+    assert prompt.startswith(f'@:fix {UUID}:@')
 
   def test_focus_on_a_non_flow_backend_fails_at_launch(self, fake_proj):
     # the fake backend is a plain object — not the flow proxy — so --focus

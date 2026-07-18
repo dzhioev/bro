@@ -2,10 +2,8 @@ import asyncio
 import json
 import os
 import signal
-import sys
 import types
-from pathlib import Path
-from typing import ClassVar, Optional, get_args
+from typing import ClassVar, Optional
 from unittest.mock import MagicMock
 
 import pytest
@@ -752,7 +750,7 @@ class TestToolNamesBlock:
     tool_names_block = prompt[prompt.index('# Tool names') :]
     assert 'repo' not in tool_names_block.lower()
 
-  def test_absent_when_bro_has_no_tools_or_skills(self):
+  def test_present_for_framework_skill_loader(self):
     class BareBro(BaseBro):
       name = 'bare'
       description = 'd'
@@ -761,9 +759,9 @@ class TestToolNamesBlock:
         super().__init__(system_prompt='base')
 
     bro = BareBro()
-    assert '# Tool names' not in bro.system_prompt
-    # without a tool-names block the two flavors have nothing to differ on
-    assert bro.claude_system_prompt == bro.system_prompt
+    assert '# Tool names' in bro.system_prompt
+    assert '`namespace__tool`' in bro.system_prompt
+    assert '`mcp__namespace__tool`' in bro.claude_system_prompt
 
   def test_claude_flavor_teaches_mcp_wire_form(self):
     class ToolBro(BaseBro):
@@ -989,23 +987,11 @@ class TestClaudePersonaServers:
     servers = self._bro().claude_persona_mcp_servers()
     assert [s.namespace for s in servers] == ['test', 'bro']
 
-  def test_service_server_carries_banner_but_not_skill_or_raise(self, fake_packages):
-    package = fake_packages('_skills_persona', {'pr': _skill('open a PR', 'pr body')})
-
-    class SkillBro(BaseBro):
-      name = 'nsb'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    SkillBro.__module__ = package
-    names = asyncio.run(_collect_tool_names(SkillBro().claude_persona_mcp_servers()))
-    # skills reach a cw-session as slash commands, and `raise` is gated on the
-    # session hold (not unattended here — no BRO_HOLD); the environment facts
-    # stay available as `banner`
+  def test_service_server_carries_banner_but_not_raise(self):
+    names = asyncio.run(_collect_tool_names(self._bro().claude_persona_mcp_servers()))
+    # `raise` is gated on the session hold (not unattended here — no BRO_HOLD);
+    # the environment facts stay available as `banner`
     assert 'banner' in names
-    assert 'skill' not in names
     assert 'raise' not in names
 
   def test_manifest_is_harness_aware(self):
@@ -1025,7 +1011,11 @@ class TestClaudePersonaServers:
     )
     # the dev toolset is bro-harness-only — claude's built-in tools cover it —
     # while the reference FileSources serve every harness
-    assert [s.namespace for s in Dev().claude_persona_mcp_servers()] == ['dev-style-source', 'bro']
+    assert [s.namespace for s in Dev().claude_persona_mcp_servers()] == [
+      'dev-style-source',
+      'bro',
+      'at',
+    ]
     assert [s.namespace for s in PPPDev().claude_persona_mcp_servers()] == [
       'brog',
       'dev-style-source',
@@ -1033,6 +1023,7 @@ class TestClaudePersonaServers:
       'template-source',
       'conditions-source',
       'bro',
+      'at',
     ]
     assert set(PPPDev().needed_secrets(harness='claude')) == {'github', 'brog'}
 
@@ -1313,9 +1304,7 @@ class TestClaudeRaise:
       assert 'raise' not in names
 
   async def _mcp_raise_tool(self):
-    server = bro.bro._build_service_server(
-      EchoBro(), include_raise=True, harness='claude', wire='mcp'
-    )
+    server = bro.bro._build_service_server(EchoBro(), include_raise=True, wire='mcp')
     for tool in await server.list_tools():
       if tool.name == 'raise':
         return tool
@@ -1616,12 +1605,8 @@ class TestSummonTool:
     # call budget; their summon descriptions carry the timeout caution
     monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
     bro_instance = EchoBro()
-    mcp_build = bro.bro._build_service_server(
-      bro_instance, include_raise=False, harness='bro', wire='mcp'
-    )
-    bare_build = bro.bro._build_service_server(
-      bro_instance, include_raise=False, harness='bro', wire='bare'
-    )
+    mcp_build = bro.bro._build_service_server(bro_instance, include_raise=False, wire='mcp')
+    bare_build = bro.bro._build_service_server(bro_instance, include_raise=False, wire='bare')
     mcp_tools = {t.name: t for t in await mcp_build.list_tools()}
     bare_tools = {t.name: t for t in await bare_build.list_tools()}
     for name in ('summon', 'summon_check'):
@@ -1731,558 +1716,6 @@ class TestSummonTool:
     assert captured == ['guided']
 
 
-@pytest.fixture
-def fake_packages(tmp_path):
-  # synthesize ad-hoc packages on disk + sys.modules so test classes can point
-  # their `__module__` at one and exercise the skills FS walk without polluting
-  # the real `bro/bros/` tree.
-  added: list[str] = []
-
-  def make(name: str, skills: Optional[dict[str, str]] = None) -> str:
-    package_dir = tmp_path / name
-    package_dir.mkdir()
-    init_path = package_dir / '__init__.py'
-    init_path.write_text('')
-    if skills is not None:
-      skills_dir = package_dir / 'skills'
-      skills_dir.mkdir()
-      for skill_name, content in skills.items():
-        (skills_dir / f'{skill_name}.md').write_text(content)
-    module = types.ModuleType(name)
-    module.__file__ = str(init_path)
-    sys.modules[name] = module
-    added.append(name)
-    return name
-
-  yield make
-
-  for name in added:
-    sys.modules.pop(name, None)
-
-
-def _skill(description: str = 'a skill', body: str = 'do the thing') -> str:
-  # omit `name:` from the frontmatter — `_load_skill` validates it against the
-  # filename stem, and each caller picks its own stem via fake_packages.
-  return f'---\ndescription: {description}\nversion: 1.0\n---\n\n{body}'
-
-
-class TestSkillsDiscovery:
-  def test_finds_skills_in_class_package(self, fake_packages):
-    package = fake_packages('_skills_a', {'pr': _skill('open a PR', 'pr body')})
-
-    class SkillBro(BaseBro):
-      name = 'sb'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    SkillBro.__module__ = package
-    bro = SkillBro()
-    assert set(bro.skills) == {'pr'}
-    assert bro.skills['pr'].read_text().endswith('pr body')
-
-  def test_no_skills_when_package_has_no_skills_dir(self, fake_packages):
-    package = fake_packages('_skills_b')
-
-    class EmptyBro(BaseBro):
-      name = 'eb'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    EmptyBro.__module__ = package
-    bro = EmptyBro()
-    assert bro.skills == {}
-
-  def test_claude_bro_servers_carry_skill_tool(self, fake_packages):
-    # the `cw ss --bro` surface reaches skills through the `skill` tool (--bare
-    # gives no slash commands), so claude_bro_mcp_servers must carry it — and not
-    # `raise`, since this session is not unattended (no BRO_HOLD).
-    package = fake_packages('_skills_claude', {'epic': _skill('drive an epic', 'epic body')})
-
-    class SkillBro(BaseBro):
-      name = 'csb'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    SkillBro.__module__ = package
-    names = asyncio.run(_collect_tool_names(SkillBro().claude_bro_mcp_servers()))
-    assert 'skill' in names
-    assert 'raise' not in names
-
-  @pytest.mark.asyncio
-  async def test_claude_bro_skill_tool_serves_bro_branch(self, fake_packages):
-    # a `--bro` session runs `--bare`: no claude built-ins, so its work goes
-    # through the bro toolset — the mounted skill tool must serve the bro
-    # procedures, not the claude ones.
-    body = '{{iff #harness = bro}}BRO WAY{{else}}CLAUDE WAY{{end}}'
-    package = fake_packages('_skills_bro_branch', {'watch': _skill('watch', body)})
-
-    class SkillBro(BaseBro):
-      name = 'sbb'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    SkillBro.__module__ = package
-    skill_tool = None
-    for server in SkillBro().claude_bro_mcp_servers():
-      for tool in await server.list_tools():
-        if tool.name == 'skill':
-          skill_tool = tool
-    assert skill_tool is not None
-    assert await skill_tool.call({'name': 'watch'}) == 'BRO WAY'
-
-  def test_claude_bro_servers_omit_skill_without_skills(self, fake_packages):
-    package = fake_packages('_skills_claude_empty')
-
-    class EmptyBro(BaseBro):
-      name = 'ceb'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    EmptyBro.__module__ = package
-    names = asyncio.run(_collect_tool_names(EmptyBro().claude_bro_mcp_servers()))
-    assert 'skill' not in names
-
-  def test_ad_hoc_class_in_non_package_module_has_no_skills(self):
-    # tests live in bro/bro_test.py — not an __init__.py — so the walk skips it
-    # and discovers no skills regardless of any sibling `skills/` dir.
-    class LocalBro(BaseBro):
-      name = 'local'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    bro = LocalBro()
-    assert bro.skills == {}
-
-  def test_mro_merge_derived_overrides_parent(self, fake_packages):
-    parent_package = fake_packages(
-      '_skills_parent',
-      {
-        'pr': _skill('parent pr', 'PARENT_PR_BODY'),
-        'land': _skill('land', 'LAND_BODY'),
-      },
-    )
-    child_package = fake_packages(
-      '_skills_child',
-      {
-        'pr': _skill('child pr', 'CHILD_PR_BODY'),
-        'fix': _skill('fix', 'FIX_BODY'),
-      },
-    )
-
-    class ParentBro(BaseBro):
-      name = 'p'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    ParentBro.__module__ = parent_package
-
-    class ChildBro(ParentBro):
-      name = 'c'
-      description = 'd'
-
-    ChildBro.__module__ = child_package
-
-    bro = ChildBro()
-    skills = bro.skills
-    assert set(skills) == {'pr', 'land', 'fix'}
-    assert 'CHILD_PR_BODY' in skills['pr'].read_text()
-    assert 'LAND_BODY' in skills['land'].read_text()
-    assert 'FIX_BODY' in skills['fix'].read_text()
-
-
-class TestGetSkillBody:
-  def test_strips_frontmatter(self, fake_packages):
-    package = fake_packages(
-      '_get_body',
-      {'thing': '---\nname: thing\ndescription: d\nversion: 1\n---\n\n# Head\n\nthe body'},
-    )
-
-    class B(BaseBro):
-      name = 'b'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    B.__module__ = package
-    body = B().get_skill_body('thing', harness='bro', wire='bare')
-    assert body.startswith('# Head')
-    assert 'the body' in body
-    assert 'description' not in body
-    assert '---' not in body
-
-  def test_no_frontmatter_returns_text_as_is(self, fake_packages):
-    package = fake_packages('_get_body_plain', {'plain': 'just text\n'})
-
-    class B(BaseBro):
-      name = 'b'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    B.__module__ = package
-    assert B().get_skill_body('plain', harness='bro', wire='bare') == 'just text'
-
-  def test_raises_on_unknown_name(self, fake_packages):
-    package = fake_packages('_get_body_unknown', {'known': _skill()})
-
-    class B(BaseBro):
-      name = 'b'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    B.__module__ = package
-    with pytest.raises(KeyError) as exception:
-      B().get_skill_body('missing', harness='bro', wire='bare')
-    msg = str(exception.value)
-    assert 'missing' in msg
-    assert 'known' in msg
-
-  def test_renders_harness_blocks_per_harness(self, fake_packages):
-    body = 'always {{iff #harness = bro}}BRO WAY{{else}}CLAUDE WAY{{end}}'
-    package = fake_packages('_get_body_harness', {'watch': _skill('watch', body)})
-
-    class B(BaseBro):
-      name = 'b'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    B.__module__ = package
-    claude_body = B().get_skill_body('watch', harness='claude', wire='mcp')
-    assert claude_body == 'always CLAUDE WAY'
-    bro_body = B().get_skill_body('watch', harness='bro', wire='bare')
-    assert bro_body == 'always BRO WAY'
-
-  def test_unknown_harness_block_raises_on_load(self, fake_packages):
-    body = '{{when #harness = claud}}typo{{end}}'
-    package = fake_packages('_get_body_bad_harness', {'bad': _skill('bad', body)})
-
-    class B(BaseBro):
-      name = 'b'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    B.__module__ = package
-    with pytest.raises(ValueError, match='claud'):
-      B().get_skill_body('bad', harness='claude', wire='mcp')
-
-
-class TestCheckedInSkillFiles:
-  def test_every_skill_renders_under_both_harnesses(self):
-    # a malformed harness directive in a checked-in skill would otherwise
-    # surface only when a session loads that skill.
-    skill_files = sorted((Path(bro.bro.__file__).parent / 'bros').glob('*/skills/*.md'))
-    assert len(skill_files) > 0
-    for path in skill_files:
-      _, body = bro.bro._load_skill(path.stem, path)
-      for harness in get_args(llm.mcp.Harness):
-        for wire in get_args(llm.mcp.Wire):
-          llm.mcp.render_text(body, harness=harness, wire=wire, creds=credentials.known_names())
-
-
-class TestSkillDescriptions:
-  def test_returns_name_description_pairs(self, fake_packages):
-    package = fake_packages(
-      '_descs',
-      {
-        'a': _skill('first desc'),
-        'b': _skill('second desc'),
-      },
-    )
-
-    class B(BaseBro):
-      name = 'b'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    B.__module__ = package
-    descriptions = B().skill_descriptions()
-    assert sorted(descriptions) == [('a', 'first desc'), ('b', 'second desc')]
-
-  def test_missing_description_becomes_empty_string(self, fake_packages):
-    package = fake_packages(
-      '_descs_missing',
-      {'lone': '---\nname: lone\n---\nbody'},
-    )
-
-    class B(BaseBro):
-      name = 'b'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    B.__module__ = package
-    assert B().skill_descriptions() == [('lone', '')]
-
-
-class TestSkillsInSystemPrompt:
-  def test_section_present_with_skills(self, fake_packages):
-    package = fake_packages('_prompt_yes', {'foo': _skill('do foo thing')})
-
-    class B(BaseBro):
-      name = 'b'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='base prompt')
-
-    B.__module__ = package
-    prompt = B().system_prompt
-    assert '## Available skills' in prompt
-    assert '**foo** — do foo thing' in prompt
-    assert '`bro::skill` tool' in prompt
-    # the /-syntax is taught here — the ask/call CLIs pass `/skill args`
-    # input through verbatim, and without the description the model has no way
-    # to bind a leading `/<name>` to the skill of that name
-    assert 'starting with `/<name>`' in prompt
-
-  def test_section_omitted_without_skills(self, fake_packages):
-    package = fake_packages('_prompt_no')
-
-    class B(BaseBro):
-      name = 'b'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='base prompt')
-
-    B.__module__ = package
-    assert '## Available skills' not in B().system_prompt
-
-  def test_description_truncated_to_first_sentence(self, fake_packages):
-    long = 'Trigger here. Second sentence with detail. Third sentence.'
-    package = fake_packages('_prompt_trunc', {'foo': _skill(long)})
-
-    class B(BaseBro):
-      name = 'b'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    B.__module__ = package
-    prompt = B().system_prompt
-    assert '**foo** — Trigger here.' in prompt
-    assert 'Second sentence' not in prompt
-    assert 'Third sentence' not in prompt
-
-
-class TestSkillNameValidation:
-  def test_mismatched_name_raises(self, fake_packages):
-    package = fake_packages('_name_drift', {'real': '---\nname: wrong\n---\n\nbody'})
-
-    class B(BaseBro):
-      name = 'b'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    B.__module__ = package
-    with pytest.raises(ValueError) as exception:
-      B()
-    msg = str(exception.value)
-    assert 'wrong' in msg
-    assert 'real' in msg
-
-  def test_matching_name_accepted(self, fake_packages):
-    package = fake_packages('_name_ok', {'real': '---\nname: real\ndescription: d\n---\n\nbody'})
-
-    class B(BaseBro):
-      name = 'b'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    B.__module__ = package
-    bro = B()
-    assert bro.skill_descriptions() == [('real', 'd')]
-
-  def test_missing_name_accepted(self, fake_packages):
-    package = fake_packages('_name_absent', {'real': '---\ndescription: d\n---\n\nbody'})
-
-    class B(BaseBro):
-      name = 'b'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    B.__module__ = package
-    assert B().skill_descriptions() == [('real', 'd')]
-
-  def test_mismatch_caught_by_load_skill_helper(self, tmp_path):
-    # `_load_skill` is the shared validation point used by both get_skill_body
-    # and skill_descriptions; check it directly so the behavior doesn't depend
-    # on the __init__ path.
-    from bro.bro import _load_skill
-
-    path = tmp_path / 'real.md'
-    path.write_text('---\nname: wrong\n---\n\nbody')
-    with pytest.raises(ValueError) as exception:
-      _load_skill('real', path)
-    msg = str(exception.value)
-    assert 'wrong' in msg
-    assert 'real' in msg
-
-
-class TestSkillServiceTool:
-  @pytest.mark.asyncio
-  async def test_skill_tool_present_when_bro_has_skills(self, fake_packages):
-    package = fake_packages('_svc_yes', {'foo': _skill('do foo', 'foo body')})
-
-    class B(BaseBro):
-      name = 'b'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    B.__module__ = package
-    tools = await B()._service_server.list_tools()
-    names = {t.name for t in tools}
-    assert 'raise' in names
-    assert 'skill' in names
-
-  @pytest.mark.asyncio
-  async def test_skill_tool_absent_when_bro_has_no_skills(self, fake_packages):
-    package = fake_packages('_svc_no')
-
-    class B(BaseBro):
-      name = 'b'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    B.__module__ = package
-    tools = await B()._service_server.list_tools()
-    names = {t.name for t in tools}
-    assert names == {'banner', 'raise'}
-
-  @pytest.mark.asyncio
-  async def test_skill_tool_only_mounts_on_the_bro_harness(self, fake_packages):
-    # the claude harness gets skills as rendered SKILL.md files, so its service
-    # build carries no `skill` tool; `banner` stays unconditional.
-    package = fake_packages('_svc_harness', {'foo': _skill()})
-
-    class B(BaseBro):
-      name = 'b'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    B.__module__ = package
-    claude_build = bro.bro._build_service_server(
-      B(), include_raise=False, harness='claude', wire='mcp'
-    )
-    names = {t.name for t in await claude_build.list_tools()}
-    assert 'skill' not in names
-    assert 'banner' in names
-
-  @pytest.mark.asyncio
-  async def test_skill_tool_survives_interactive_mode(self, fake_packages):
-    # interactive runs drop `raise` (no caller to abort to) but must KEEP `skill`
-    # — a skill-having bro driven via `call` still needs to load its skills.
-    package = fake_packages('_svc_interactive', {'foo': _skill()})
-
-    class B(BaseBro):
-      name = 'b'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    B.__module__ = package
-    bro = B()
-    interactive = await _collect_tool_names(bro._mcp_servers_for(hold='guided'))
-    non_interactive = await _collect_tool_names(bro._mcp_servers_for(hold='unattended'))
-    assert 'skill' in interactive  # the fix: skill is not dropped along with raise
-    assert 'raise' not in interactive  # raise is still dropped interactively
-    assert {'skill', 'raise'} <= non_interactive
-
-  @pytest.mark.asyncio
-  async def test_skill_tool_returns_body(self, fake_packages):
-    package = fake_packages(
-      '_svc_call',
-      {'foo': '---\ndescription: do foo\n---\n\nthe foo body text'},
-    )
-
-    class B(BaseBro):
-      name = 'b'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    B.__module__ = package
-    bro = B()
-    tools = await bro._service_server.list_tools()
-    skill_tool = next(t for t in tools if t.name == 'skill')
-    result = await skill_tool.call({'name': 'foo'})
-    assert result == 'the foo body text'
-
-  @pytest.mark.asyncio
-  async def test_skill_tool_failure_surfaces_as_string(self, fake_packages):
-    # FunctionTool's caller (the agent loop) catches generic exceptions and
-    # feeds them back as the tool result. KeyError on unknown name must NOT
-    # derive from ToolControlSignal — otherwise it would escape the loop.
-    package = fake_packages('_svc_fail', {'known': _skill()})
-
-    class B(BaseBro):
-      name = 'b'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    B.__module__ = package
-    bro = B()
-    tools = await bro._service_server.list_tools()
-    skill_tool = next(t for t in tools if t.name == 'skill')
-    with pytest.raises(KeyError):
-      await skill_tool.call({'name': 'missing'})
-
-
-class TestPPPDevSkillsMRO:
-  def test_inherits_dev_skills_and_adds_own(self):
-    # `audit` comes from `Dev`'s skills/ via the MRO walk; `fix`, `pr`, and
-    # `land` are declared in `PPPDev`'s own skills/. All must surface in the
-    # rendered system prompt.
-    prompt = PPPDev().system_prompt
-    assert '## Available skills' in prompt
-    assert '**audit**' in prompt
-    assert '**fix**' in prompt
-    assert '**pr**' in prompt
-    assert '**land**' in prompt
-
-
 class TestPersona:
   def test_persona_is_class_prompts_without_shared(self):
     bro = PPPDev()
@@ -2292,10 +1725,10 @@ class TestPersona:
     assert 'software developer' in bro.persona
     assert '## PPP project' in bro.persona
     assert 'dev-style-source::read' in bro.persona
-    # shared prompts and the skills block are excluded from persona but present
+    # shared prompts and the scripts block are excluded from persona but present
     # in the full composed system prompt
     assert 'Interaction policy' not in bro.persona
-    assert '## Available skills' not in bro.persona
+    assert '## Scripts' not in bro.persona
     assert 'Interaction policy' in bro.system_prompt
 
   def test_persona_honors_explicit_override(self):

@@ -1,7 +1,7 @@
 ---
 name: ask
-description: This skill should be used when the user asks to relay a question or job to another bro — "/ask librorian to add Dune to the library", "ask the pm bro whether the inbox holds anything urgent", "have devoops deploy flow-mcp", "summon ppp-dev". Turns the phrasing into a summon (an isolated one-shot run of the target bro with its own credentials), picks whichever summon client the session has, decides foreground vs background, and relays the answer with the failure modes handled. A summon succeeds only when the target is in the session's allow-list — most bros seed none, and grants come from the launch surface — so a denial is a normal outcome the skill relays.
-version: 1.0.0
+description: This script should be used when the user asks to relay a question or job to another bro — "@:ask librorian to add Dune to the library:@", "ask the pm bro whether the inbox holds anything urgent", "have devoops deploy flow-mcp", "summon ppp-dev". Turns the phrasing into a summon (an isolated one-shot run of the target bro with its own credentials), picks whichever summon client the session has, decides foreground vs background, and relays the answer with the failure modes handled. A summon succeeds only when the target is in the session's allow-list — most bros seed none, and grants come from the launch surface — so a denial is a normal outcome the script relays.
+version: 1.1.0
 ---
 
 # Ask
@@ -17,7 +17,7 @@ From the user's wording extract:
 
 Optional knobs, normally only when the user asks for them: a per-call timeout in seconds (default 1800 — sized for a deploy), a base git ref for the child (default: this workspace's current HEAD, so the target builds on the code as committed here — uncommitted changes never transfer; deploys included, so pass a ref explicitly when the child must build something other than what you have checked out), and the child's hold — its user-involvement level (default unattended; the child runs isolated with no human channel, so raise it only when the user explicitly wants otherwise).
 
-Exception — set the timeout unprompted when the child's run is open-ended: a full-cycle dev child (a `/fix` that runs through `/pr` and the review watch, or a `/pr` re-entry) idles for human review latency, so the default kills it mid-watch. Size the timeout in hours (e.g. 28800), not minutes.
+Exception — set the timeout unprompted when the child's run is open-ended: a full-cycle dev child (an `@::fix` run through `@::pr` and the review watch, or an `@::pr` re-entry) idles for human review latency, so the default kills it mid-watch. Size the timeout in hours (e.g. 28800), not minutes.
 
 ## Pick the client
 

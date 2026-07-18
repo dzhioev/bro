@@ -32,8 +32,8 @@ def _load_base_prompts() -> str:
 def _session_append_prompt(hold: str, bro_name: str) -> str:
   """--append-system-prompt text for a cw-session (the non --bro flavor).
 
-  base prompts plus the session persona's own prompts (`bro_name`, the
-  `--persona` bro) — so a cw-session carries the bro's policies even though
+  base prompts plus the session persona's own prompts and script instructions
+  (`bro_name`, the `--persona` bro) — so a cw-session carries the bro's policies even though
   it runs the Claude Code harness rather than --bro. the assembled text renders
   once with this surface's facts: the claude harness over mcp wire names, with
   the session environment's credentials (this composes in the session's own
@@ -49,8 +49,11 @@ def _session_append_prompt(hold: str, bro_name: str) -> str:
   from base import credentials
   from bro.registry import create_bro
 
-  parts = [_load_base_prompts()]
-  parts.append(create_bro(bro_name).persona)
+  bro = create_bro(bro_name)
+  parts = [_load_base_prompts(), bro.persona]
+  script_instructions = bro.script_instructions()
+  if len(script_instructions) > 0:
+    parts.append(script_instructions)
   rendered = llm.mcp.render_text(
     '\n\n'.join(parts), harness='claude', wire='mcp', creds=credentials.known_names()
   )

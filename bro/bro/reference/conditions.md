@@ -4,7 +4,7 @@ How PPP gates component declarations and static text on the facts of the surface
 
 ## Why
 
-Component declarations (a bro's `mcp_servers` / `data_sources`) and static text (system prompts, skill bodies, tool descriptions) are written once but consumed by different surfaces — the bro-native LLM loop, `--bro` claude sessions, cw-sessions — with different toolsets, wire-name spellings, and credentials. Conditioning derives each surface's variant from one declaration, and fails fast on a typo instead of silently deciding one way forever.
+Component declarations (a bro's `mcp_servers` / `data_sources`) and static text (system prompts, script bodies, tool descriptions) are written once but consumed by different surfaces — the bro-native LLM loop, `--bro` claude sessions, cw-sessions — with different toolsets, wire-name spellings, and credentials. Conditioning derives each surface's variant from one declaration, and fails fast on a typo instead of silently deciding one way forever.
 
 ## Variables
 
@@ -60,13 +60,13 @@ The facts triple a conditioning surface knows, exported by `llm/mcp.py` as ready
 
 - `creds` — the set of secrets the environment resolves. The supplied universe is closed (the registry's known names) and membership probes `base.credentials.available` lazily
 
-One more fact sits outside the triple: `hold` — the session's user-involvement level (`unattended | detached | attended | guided`, the domain is `llm.mcp.HOLDS`). It is supplied only when rendering the hold text (`prompts.hold_fragment` → `render_text(hold=…)`), never by the general conditioning surfaces, so hold-neutral text — skills, procedure docs — fails fast on a stray `#hold` directive. No ready-made placeholder is exported.
+One more fact sits outside the triple: `hold` — the session's user-involvement level (`unattended | detached | attended | guided`, the domain is `llm.mcp.HOLDS`). It is supplied only when rendering the hold text (`prompts.hold_fragment` → `render_text(hold=…)`), never by the general conditioning surfaces, so hold-neutral text — scripts, procedure docs — fails fast on a stray `#hold` directive. No ready-made placeholder is exported.
 
 `llm.mcp.select(entries, harness=…, wire=…, creds=…)` owns the facts-to-variables mapping for declarative lists (`llm.mcp.render_text` is its sibling for text — see `reference/template.md`). A fact the surface doesn't know defines no variable, so a condition referencing it raises. Select in the process that consumes the result, where the credential store is the session's own.
 
 ## Server-domain vocabularies
 
-The harness facts above condition *session-level* text — prompts, skill bodies. An MCP server's own tool text (descriptions, parameter annotations) deliberately does not use them: a server must read the same served standalone, so it renders at build time against its own vocabulary, and no unprocessed directive ever leaves a server (`llm.mcp.FunctionTool`'s `variables`):
+The harness facts above condition *session-level* text — prompts, script bodies. An MCP server's own tool text (descriptions, parameter annotations) deliberately does not use them: a server must read the same served standalone, so it renders at build time against its own vocabulary, and no unprocessed directive ever leaves a server (`llm.mcp.FunctionTool`'s `variables`):
 
 - `tools` — a `Toolset` build's selected roster; universe is the full definition, so a description can test an excluded sibling (`{{when #tools contains read_reference}}…{{end}}`) and a typo'd name fails the build
 - `features` — a data source's capability set (e.g. a searchable source's `summary`, live iff its LLM key resolves); membership probes lazily at render, universe is the source's declared `feature_names`. The source's own name rides along as `source` (for `{{insert #source}}`)

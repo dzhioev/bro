@@ -37,7 +37,7 @@ def _prefetch_task(system: brog.system.System, task_ref: str) -> tuple[brog.mode
   """return (task, prompt_block) for a task ref.
 
   Resolves the ref and fetches the task metadata + description + comments here,
-  in dive-in, so the seeded `/fix` message can carry them and the agent's first
+  in dive-in, so the seeded `@:fix …:@` message can carry them and the agent's first
   turn doesn't call get_task / read_task / read_comments. The brog MCP server is
   not yet connected on the session's first turn, so an in-session call would
   race the connection and error.
@@ -73,7 +73,7 @@ def dive_in(
   new: bool = False,
   focus: bool = False,
 ) -> int:
-  """launch the session. session shaping — the persona (prompt, skills, MCP
+  """launch the session. session shaping — the persona (prompt, scripts, MCP
   namespaces) selected by `--persona` or the project default bro, or the `--bro`
   flavor — rides the forwarded flags; dive-in adds nothing of its own."""
   prompt: Optional[str] = None
@@ -83,7 +83,7 @@ def dive_in(
       base = 'dive-in-new'
     name = cw.fresh_workspace_name(base)
     log.info('workspace: %s', name)
-    prompt = '/fix --new' if command is None else f'/fix --new {command}'
+    prompt = '@:fix --new "":@' if command is None else f'@:fix --new {command}:@'
   elif task is not None or focus:
     system = brog.system.default_system()
     if focus and not _is_flow_backend(system):
@@ -104,7 +104,7 @@ def dive_in(
       log.info('focused task: %s', brog_task.id)
     log.info('task: %s', brog_task.name)
     # the ref exactly as given — the prefetch block carries the canonical form
-    prompt = f'/fix {task_ref}\n\n{task_block}'
+    prompt = f'@:fix {task_ref}:@\n\n{task_block}'
     if command is not None:
       prompt = f'{prompt}\n\nOnce you understand the task, {command}'
 

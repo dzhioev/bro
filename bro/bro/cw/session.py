@@ -333,7 +333,7 @@ def _host_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
   """launch the session in a host worktree: ensure + provision it, then spawn the
   worktree's own `cw ss --in-place` (the in-place runner) inside it — so a session
   always runs its workspace's code, and everything next to claude (argv, MCP
-  server, skills, session context) is built from the workspace's checkout. Unless
+  server, script delivery, session context) is built from the workspace's checkout. Unless
   `BROKER_DISABLED` short-circuits it (see `_broker_enabled`), the runner is
   supervised as the root peer of a broker, so the session gets its channel
   (`BROKER_CHANNEL` in claude's env) exactly like container mode."""

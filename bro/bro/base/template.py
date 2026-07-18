@@ -1,5 +1,5 @@
 """conditional template engine for static agent-facing text (tool descriptions,
-skill bodies): when/iff/eliff/else blocks and assert guards in `{{…}}` groups
+script bodies): when/iff/eliff/else blocks and assert guards in `{{…}}` groups
 terminated by `{{end}}`, their conditions lowered onto `base.condition`
 objects — one evaluator and one fail-fast semantics shared with code-built
 conditions, any violation surfacing as `TemplateError` — plus `{{include}}`

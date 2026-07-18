@@ -4,15 +4,14 @@ The cw-session/bro fork is confined to here: `--bro` selects a `--bare` claude
 with api-key auth and the bro's own system prompt, a cw-session keeps the full
 harness with the cw-injected append prompt. Both mount their bro's session-local
 MCP namespaces. Everything else — model, the merged `--settings` (fastMode +
-apiKeyHelper + the Stop-hook listener), `--effort`, the forwarded claude args,
-skill surfacing, prompt seeding — is handled once, identically wherever the
-session runs.
+apiKeyHelper + the Stop-hook listener), `--effort`, the forwarded claude args, and
+prompt seeding is handled once, identically wherever the session runs.
 """
 
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import prompts
 from base import credentials
@@ -62,7 +61,6 @@ def build_claude_launch(
   workspace: Path,
   claude_args: list[str],
   endpoint: MCPEndpoint,
-  skills_dir: Optional[Path] = None,
 ) -> ClaudeLaunch:
   """build the claude argv for a session running in `workspace`.
 
@@ -71,8 +69,7 @@ def build_claude_launch(
   layer). `endpoint` is the session-local MCP server's (the caller owns the
   server lifecycle); every session mounts its bro's namespaces from it — the
   bro's own toolset under `--bro`, the persona's claude-harness set in a
-  cw-session. `skills_dir` adds `--add-dir` for a cw-session's populated
-  skills root.
+  cw-session.
 
   the bro flavor (`--bare --strict-mcp-config --tools ''`) runs claude with no
   project/user CLAUDE.md, no host MCP servers, no built-in tools, and only the
@@ -137,8 +134,6 @@ def build_claude_launch(
   if spec.effort is not None:
     argv += ['--effort', spec.effort]
   argv += claude_args
-  if skills_dir is not None:
-    argv += ['--add-dir', str(skills_dir)]
   if spec.prompt is not None:
     argv += ['--', spec.prompt]
   return ClaudeLaunch(argv=argv, system_prompt=system_prompt)

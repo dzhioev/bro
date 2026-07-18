@@ -95,7 +95,7 @@ class TestSummonRecoveryFork:
   # the summon description's lost-request-id recovery path must match the
   # mount: `summon_list` exists only when the session tracks summon status
   def _summon_description(self, bro: BaseBro) -> str:
-    server = bro.claude_bro_mcp_servers()[-1]
+    server = next(server for server in bro.claude_bro_mcp_servers() if server.namespace == 'bro')
     by_name = {tool.name: tool for tool in __import__('asyncio').run(server.list_tools())}
     assert 'summon_list' in (server.tool_universe or ())
     return by_name['summon'].description, 'summon_list' in by_name  # type: ignore[return-value]

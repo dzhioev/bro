@@ -32,7 +32,7 @@ _WIRES = frozenset(get_args(Wire))
 # the session's hold — its user-involvement level, ordered from no human
 # channel to human-driven. unlike the other facts it is supplied only when
 # rendering the hold text (`prompts.hold_fragment`), so hold-neutral text —
-# skills, procedure docs — fails fast on a stray `#hold` directive.
+# scripts, procedure docs — fails fast on a stray `#hold` directive.
 Hold = Literal['unattended', 'detached', 'attended', 'guided']
 HOLDS: tuple[str, ...] = get_args(Hold)
 _HOLDS = frozenset(HOLDS)
@@ -53,7 +53,7 @@ def render_text(
   hold: Optional[str] = None,
 ) -> str:
   """render `base.template` directives in static agent-facing text (system
-  prompts, skill bodies, service-tool descriptions) against the surface facts
+  prompts, script bodies, service-tool descriptions) against the surface facts
   the call site knows: `harness` → `#harness`, `wire` → `#wire`, `creds` →
   `#creds` (the closed universe; membership probes `credentials.available`
   lazily, so render in the process that consumes the text, where the store is
@@ -297,8 +297,10 @@ def _validate_segment(kind: str, value: str) -> None:
 def wire_name(namespace: str, tool: str) -> str:
   # the harness-agnostic canonical name is `namespace::tool`; every harness that
   # actually runs the tool resolves `::` to `__` (Claude Code additionally
-  # prepends `mcp__`). this builds the `__` wire name the bro LLM sees and calls.
-  return f'{namespace}__{tool}'
+  # prepends `mcp__`). `@` is outside provider wire charsets and spells `at` in
+  # either segment.
+  segments = ('at' if segment == '@' else segment for segment in (namespace, tool))
+  return '__'.join(segments)
 
 
 def canonical_name(wire: str) -> str:

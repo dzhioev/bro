@@ -33,7 +33,6 @@ class _Harness:
       ),
       patch('cw.runner._run_claude', return_value=0),
       patch('cw.runner._start_session_log_sync'),
-      patch('cw.runner._populate_bro_skills'),
       patch('cw.runner._apply_claude_auth'),
       patch('cw.runner._start_session_broxy', return_value=self.broxy),
       patch('cw.runner.in_container', return_value=False),
@@ -55,11 +54,10 @@ class _Harness:
     self.build = entered[3]
     self.run_claude = entered[4]
     self.start_sync = entered[5]
-    self.populate = entered[6]
-    self.apply_auth = entered[7]
-    self.start_broxy = entered[8]
-    self.in_container = entered[9]
-    self.provision_claude_dir = entered[10]
+    self.apply_auth = entered[6]
+    self.start_broxy = entered[7]
+    self.in_container = entered[8]
+    self.provision_claude_dir = entered[9]
     return self
 
   def __exit__(self, *exception):
@@ -114,9 +112,6 @@ class TestRunInPlace:
       assert h.start_sync.call_count == 1
       assert h.env['CW_BRO'] == 'pm'
       assert h.build.call_args.kwargs['endpoint'] == h.server.endpoint
-      # a --bro session reaches skills via the bro::skill tool, not --add-dir
-      assert h.populate.call_count == 0
-      assert h.build.call_args.kwargs['skills_dir'] is None
 
   def test_cw_session_serves_the_persona_and_health_gates(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
@@ -150,14 +145,6 @@ class TestRunInPlace:
       assert cw.runner.run_in_place(_spec(bro='pm')) == 1
       assert h.run_claude.call_count == 0
       assert h.server.stop.call_count == 1
-
-  def test_cw_session_populates_the_personas_skills(self, monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
-    with _Harness(tmp_path) as h:
-      assert cw.runner.run_in_place(_spec(persona='pm')) == 0
-      skills_dir, bro_name = h.populate.call_args[0]
-      assert bro_name == 'pm'
-      assert h.build.call_args.kwargs['skills_dir'] == skills_dir
 
   def test_exports_bro_git_identity_unconditionally(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)

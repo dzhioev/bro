@@ -30,11 +30,11 @@ async def format_card(bro: BaseBro, *, include_system_prompt: bool = False) -> s
       '- _session baselines (`trails`, `session_log`; `anthropic` for `--bro`) added per-surface_'
     )
 
-  skills = bro.skill_descriptions()
-  if len(skills) > 0:
-    parts.extend(['', '## Skills', ''])
-    for name, description in skills:
-      parts.append(f'- **{name}** — {_one_line(description)}')
+  scripts = bro.script_descriptions()
+  if len(scripts) > 0:
+    parts.extend(['', '## Scripts', ''])
+    for name, description in scripts:
+      parts.append(f'- **@::{name}** — {_one_line(description)}')
 
   if include_system_prompt:
     parts.extend(['', '## System prompt', '', '```', bro.system_prompt, '```'])

@@ -1,8 +1,8 @@
 # dive-in
 
-`dive-in` is a thin wrapper around `cw ss` that turns "I want to work on this task" into a ready-to-go Claude Code session: it picks the workspace name from the task, seeds `/fix <task-ref>` as the first user message (so the configured persona's `fix` skill orients Claude toward the task), and forwards into `cw ss` with the right flags.
+`dive-in` is a thin wrapper around `cw ss` that turns "I want to work on this task" into a ready-to-go Claude Code session: it picks the workspace name from the task, seeds `@:fix <task-ref>:@` as the first user message (so the session dispatches to the configured persona's parameterized `fix` script), and forwards into `cw ss` with the right flags.
 
-This document explains the modes, workspace naming, the `/fix`-seeding rules, and the rules around `--host`. The source of truth is `dive_in.py` (which also has unit tests in `dive_in_test.py`).
+This document explains the modes, workspace naming, the dispatcher-command seeding rules, and the rules around `--host`. The source of truth is `dive_in.py` (which also has unit tests in `dive_in_test.py`).
 
 ## Modes
 
@@ -14,7 +14,7 @@ This document explains the modes, workspace naming, the `/fix`-seeding rules, an
 
 ### Focused mode (`--focus`)
 
-`dive-in --focus` (no `-t`, no `--new`) reads the currently focused task from the focus client (`flow/focus/client/client.py`). If nothing is focused, it logs an error and exits 1 — there is no implicit fallback to "any task". The first user message becomes `/fix <task-id>` with the focused task's id — the `fix` skill has no focus form of its own.
+`dive-in --focus` (no `-t`, no `--new`) reads the currently focused task from the focus client (`flow/focus/client/client.py`). If nothing is focused, it logs an error and exits 1 — there is no implicit fallback to "any task". The first user message becomes `@:fix <task-id>:@` with the focused task's id — the `fix` script has no focus argument of its own.
 
 Focus is a flow-surface concept (the focus service stores flow task ids), so both `--focus` forms require the flow brog backend; with any other backend the launch fails with a clear error before a session is created.
 
@@ -22,19 +22,19 @@ Focus is a flow-surface concept (the focus service stores flow task ids), so bot
 
 `-t` accepts any task ref the repo's brog backend takes natively (see `brog/CLAUDE.md`): with the flow backend a Notion URL or a dashed UUID, with the GitHub backend an issue number, `#N`, or an issue URL. The ref is resolved host-side through `brog.system.default_system()`, which normalizes it to the backend's canonical id — the value `CW_TASK_ID` carries.
 
-The first user message becomes `/fix <original-task-ref>` — the ref exactly as the user typed it — followed by the pre-fetched task block (see "Initial-prompt composition").
+The first user message becomes `@:fix <original-task-ref>:@` — the ref exactly as the user typed it — followed by the pre-fetched task block (see "Initial-prompt composition").
 
-If `--focus` is combined with `-t`, the focus client is also told to focus the resolved task (its canonical id) before the session starts — this is the canonical way to "switch to this task and dive in" in one command. The first message stays `/fix <original-task-ref>`; only the focus state changes.
+If `--focus` is combined with `-t`, the focus client is also told to focus the resolved task (its canonical id) before the session starts — this is the canonical way to "switch to this task and dive in" in one command. The first message stays `@:fix <original-task-ref>:@`; only the focus state changes.
 
 ### New mode (`--new`)
 
-`--new` starts a session that will *create* the task and then dive into it. The first user message becomes `/fix --new` (optionally `/fix --new <seed>` if a positional `command` is present). The `fix` skill body tells Claude to:
+`--new` starts a session that will *create* the task and then dive into it. The first user message becomes `@:fix --new "":@` (or `@:fix --new <seed>:@` if a positional `command` is present); the explicit empty string preserves new-task intent without inventing seed text. The dispatcher maps that command to the `fix` script's optional `new` argument, whose body tells Claude to:
 
 1. Collect any missing properties (name, tags, body) from the user.
 2. Call `brog::create_task` — the task is born open (workable) — and treat the returned id as the target.
 3. Continue the normal flow on that new id.
 
-`-t` and `--new` are mutually exclusive (argparse-enforced), and so are `--new` and `--focus` — the task to focus doesn't exist at launch, and the skill has no focus form to delegate the set to; `--focus` combines with `-t` or stands alone.
+`-t` and `--new` are mutually exclusive (argparse-enforced), and so are `--new` and `--focus` — the task to focus doesn't exist at launch, and the script has no focus form to delegate the set to; `--focus` combines with `-t` or stands alone.
 
 ## Workspace naming
 
@@ -56,25 +56,25 @@ Like `cw ss` itself, `dive-in` runs in container mode by default; `--host` (a fo
 
 ## Base ref (`--into`)
 
-By default a session is based on the host checkout's current `HEAD` — both in container mode (the clone checks it out) and host mode (the worktree branches from it) — so it builds on what the launcher has checked out, offline included; `HEAD` is the commit, so uncommitted changes never transfer. `dive-in --into <ref>` (a forwarded `cw ss` flag — see `reference/cw.md`) overrides that, basing the new session on any branch/tag/sha instead: the container checks that ref out in its clone, and a `--host` session bases its worktree branch on it. A ref that's resolvable only on origin (e.g. a feature branch pushed from another container — the `/feature` per-stage flow bases each stage on its feature branch this way) is fetched from origin automatically. Every launch creates a fresh workspace (see "Workspace naming"), so `--into` always takes effect.
+By default a session is based on the host checkout's current `HEAD` — both in container mode (the clone checks it out) and host mode (the worktree branches from it) — so it builds on what the launcher has checked out, offline included; `HEAD` is the commit, so uncommitted changes never transfer. `dive-in --into <ref>` (a forwarded `cw ss` flag — see `reference/cw.md`) overrides that, basing the new session on any branch/tag/sha instead: the container checks that ref out in its clone, and a `--host` session bases its worktree branch on it. A ref that's resolvable only on origin (e.g. a feature branch pushed from another container — the `@::feature` per-stage flow bases each stage on its feature branch this way) is fetched from origin automatically. Every launch creates a fresh workspace (see "Workspace naming"), so `--into` always takes effect.
 
 ## Initial-prompt composition
 
-`dive-in` seeds the first user message as a `/fix …` slash command and lets the `fix` skill body (`bro/bros/ppp_dev/skills/fix.md`) carry the workflow — resolve → context → plan → log → implement → verify → hand off to `/pr`. The mapping from CLI form to message is:
+`dive-in` seeds the first user message as an `@:fix …:@` natural-language script command. The session calls `@::@`, then executes the returned `@::fix` call with its typed arguments; the script body (`bro/bros/ppp_dev/scripts/fix.md`) carries the workflow — resolve → context → plan → log → implement → verify → hand off to `@::pr`. Both cw persona and `--bro` sessions mount the `at` server and receive this contract. The mapping from CLI form to message is:
 
-- `dive-in -t <ref>` → `/fix <ref>`
-- `dive-in -t <ref> --focus` → `set_focus(<canonical-id>)` (focus client), then `/fix <ref>`
-- `dive-in --focus` → `/fix <focused-task-id>`
-- `dive-in --new` → `/fix --new`
-- `dive-in --new <seed>` → `/fix --new <seed>`
+- `dive-in -t <ref>` → `@:fix <ref>:@`
+- `dive-in -t <ref> --focus` → `set_focus(<canonical-id>)` (focus client), then `@:fix <ref>:@`
+- `dive-in --focus` → `@:fix <focused-task-id>:@`
+- `dive-in --new` → `@:fix --new "":@`
+- `dive-in --new <seed>` → `@:fix --new <seed>:@`
 
 The task-scoped forms (all but `--new`) also append a pre-fetched task block to the message — the task metadata, description, and comments, fetched host-side via `brog.system.default_system()` — so the session's first turn reads the task without calling the not-yet-connected brog MCP server.
 
 If a positional `command` is present alongside a task scope (`-t` or bare `--focus`), it gets appended as `Once you understand the task, <command>`. This lets you say `dive-in -t URL "draft a PR description"` and have it threaded through the task-orientation flow.
 
-For bare mode, the prompt is just the `command` string verbatim — no `/fix` wrapping.
+For bare mode, the prompt is just the `command` string verbatim — no dispatcher wrapping.
 
-The skill is discoverable by Claude Code's slash-command resolution because every cw-session runs as a persona bro — `--persona`, defaulting to the required project default bro. The in-place session runner (`cw/runner.py`) copies that bro's skills, rendered for the claude harness — the MRO-walked set (for ppp-dev, its own `/fix`, `/pr`, `/land` from `bro/bros/ppp_dev/skills/` plus inherited ones such as `/audit` and `/ask`) — into a per-session `tempfile.mkdtemp` directory and passes it to claude via `--add-dir <tmp>`, so concurrent dive-in sessions on the same repo don't share `.claude/skills/`. Beyond skills, the persona delivers the bro's `persona` prompt (its own MRO-concatenated class `system_prompt`(s), without the shared / data-source / skills blocks) into the session's `--append-system-prompt` (`cw/system_prompt.py:_session_append_prompt`), and its claude-harness-filtered MCP namespaces through the session-local server (see `reference/cw.md`, "Session-local MCP serving") — so the dive-in session carries the selected bro's policies and brog task tools even though it runs the Claude Code harness rather than `--bro`. To run the bro flavor outright, forward `--bro` (see "Forwarded flags").
+Every cw-session runs as a persona bro — `--persona`, defaulting to the required project default bro. Its session-local server mounts the persona's MRO-collected scripts — for ppp-dev, its own `@::fix`, `@::pr`, `@::land` (`bro/bros/ppp_dev/scripts/`) plus inherited ones such as `@::audit` (dev) and `@::ask` (summon) — and `_session_append_prompt` injects the canonical Scripts contract next to the persona prompt. Bro scripts have no generated slash-command copies; Claude's own third-party skill mechanism remains independent. The persona's other claude-harness-filtered MCP namespaces ride the same session-local server (see `reference/cw.md`, "Session-local MCP serving"). To run the bro flavor outright, forward `--bro` (see "Forwarded flags").
 
 ## Resuming
 
@@ -86,13 +86,13 @@ Known gap: `CW_TASK_ID` lives only in the launching `dive-in` process's environm
 
 `dive-in` accepts all the flags `cw.add_forwarded_flags` registers (`--host`, `--hold`, `--fast`, `--grant`, `--revoke`, `--effort`, `--into`, `--persona`, `--bro`) and forwards them straight through into `cw ss`. One flag gets a dive-in-specific default: an omitted `--hold` resolves to `attended` — or `guided` with `--host`, where skipped permission prompts would run unsandboxed — and the resolved value is forwarded explicitly, overriding `cw ss`'s own `guided` default. Adding a new pass-through flag in `cw/flags.py` makes it available to `dive-in` for free — no per-flag plumbing in this file. `--grant`/`--revoke` are repeatable and work in both modes — a plain name adjusts the credential scope (in a host session a materialized convenience scope rather than a security boundary), a `@bro` value the summon allow-list (a host session's broker root enforces the same list).
 
-`--bro <name>` makes the session the bro flavor of `cw ss` — `claude --bare` under the named bro's persona, serving the bro's own MCP tools (see `reference/cw.md`, "`--bro`"). The seeded `/fix …` message still works there — a bro session resolves `/<name>` messages through its `bro::skill` tool — provided the named bro carries the fix/pr/land skills and the brog toolset (ppp-dev does). Like any `--bro` session it is fenced to the container (rejected with `--host`) and requires the `anthropic` secret.
+`--bro <name>` makes the session the bro flavor of `cw ss` — `claude --bare` under the named bro's persona, serving the bro's own MCP tools (see `reference/cw.md`, "`--bro`"). It consumes the same seeded `@:fix …:@` command as a persona session; the named bro must carry the fix/pr/land scripts and the brog toolset (ppp-dev does). Like any `--bro` session it is fenced to the container (rejected with `--host`) and requires the `anthropic` secret.
 
 `-n / --dry-run` prints the final `cw ss …` invocation (shell-quoted) without running it.
 
 ## Env-var handoff
 
-- `CW_TASK_ID` — set to the resolved task's canonical brog id in any mode that has one (focused, `-t`, `-t --focus`). Read by the `/pr` skill to build the commit footer's `Task: <url>` line (via `brog::get_task(id).url`).
+- `CW_TASK_ID` — set to the resolved task's canonical brog id in any mode that has one (focused, `-t`, `-t --focus`). Read by the `@::pr` script to build the commit footer's `Task: <url>` line (via `brog::get_task(id).url`).
 - `PPP_SHELL_COMMAND` — set (if not already set) to the user-facing reconstruction of the dive-in invocation. The visual `cw banner` shows it as the outer launch command and extracts the user prompt from it; the agent-facing `cw banner --llm` omits it.
 
 The user-facing `dive-in` reconstruction is rebuilt from dive-in's own parser (`Parser.reconstruct` with prog `dive-in`) so the visual banner shows `dive-in`, not the underlying `cw ss`.

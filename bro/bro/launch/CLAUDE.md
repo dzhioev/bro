@@ -6,10 +6,10 @@ Bros launching and managing layer. It owns the shared launch machinery behind th
 
 - `ask.py` (`ask`) — the `ask` console script, a thin alias of `bro run`.
 
-  Input passes through verbatim, `/skill` invocations included: the bro's system prompt (`bro/bro.py:_render_skills`) describes the /-syntax — a message starting with `/<name>` invokes the skill of that name, the rest is its arguments — and the model loads the body itself via the `bro::skill` tool. There is no client-side expansion or validation; an unknown `/<name>` fails at the tool (which lists the available skills) and the bro raises.
+  Input passes through verbatim, `/<name>` invocations included: the bro's `## Skills` prompt maps that syntax to the framework `@::skill` loader, with the rest treated as arguments to the returned instructions. There is no client-side expansion or validation; an empty body means the requested skill is unavailable.
 - `call.py` (`call`) — the canonical `bro chat` implementation and its thin `call` alias; drives an interactive `bro.send()` conversation.
 
-  The initial message passes through verbatim like every later REPL turn — a leading `/ask devoops …` reaches the bro as-is and resolves through the /-syntax described in its system prompt (see `ask.py`).
+  The initial message passes through verbatim like every later REPL turn — an `@:ask devoops …:@` command reaches the dispatcher as-is (see `ask.py`).
 
   By default opens the Textual chat UI in `call_tui.py` (IM-style: scrollable history, left/right bubbles, timestamp + date separators, an animated status bubble — "Thinking for \<elapsed\>…" during an LLM roundtrip, "Calling \<tool\>…" / "Calling N tools…" while tool results are pending — mouse selection copies straight to the system clipboard, Ctrl+D to quit, backtick (`) opens a stats modal). Falls back to text mode (`[HH:MM:SS] bro: <reply>` lines + `> ` prompt) when stdin/stdout isn't a TTY; `--text` forces it.
 

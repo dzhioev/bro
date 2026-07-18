@@ -642,7 +642,7 @@ def test_initial_slash_invocation_passes_through_verbatim(monkeypatch):
   monkeypatch.setattr('bro.launch.call._tty_supported', lambda: False)
 
   # no client-side expansion: the bro's system prompt describes the /-syntax and
-  # the model loads the skill body itself via the `bro::skill` tool.
+  # the model loads the script body through its `@::` tool.
   rc = main(['call', 'record', '/ask devoops to ping', '--in-place'])
   assert rc is None
   assert captured == ['/ask devoops to ping']

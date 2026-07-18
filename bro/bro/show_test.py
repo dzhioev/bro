@@ -193,44 +193,39 @@ class TestFormatCard:
     assert card.endswith('\n')
 
   @pytest.mark.asyncio
-  async def test_skills_section_omitted_when_empty(self):
+  async def test_scripts_section_renders_canonical_roster_and_optional_secret(self, tmp_path):
+    script_path = tmp_path / 'do-work.md'
+    script_path.write_text('---\ndescription: develop the named task\n---\n\nbody')
+
+    class _ScriptedBro(_MinimalBro):
+      @property
+      def scripts(self):
+        return {'do-work': script_path}
+
+    card = await format_card(_ScriptedBro())
+    assert '## Scripts' in card
+    assert '- **@::do-work** — develop the named task' in card
+    assert '- `openai` — optional (used if present)' in card
+
+  @pytest.mark.asyncio
+  async def test_scripts_section_omitted_when_empty(self):
     card = await format_card(_MinimalBro())
-    assert '## Skills' not in card
+    assert '## Scripts' not in card
 
   @pytest.mark.asyncio
-  async def test_skills_section_renders_each_skill(self):
-    class _SkillyBro(BaseBro):
-      name = 'skilly'
-      description = 'has skills'
+  async def test_scripts_long_description_truncated(self, tmp_path):
+    long_description = 'x' * 300
+    script_path = tmp_path / 'foo.md'
+    script_path.write_text(f'---\ndescription: {long_description}\n---\n\nbody')
 
-      def __init__(self):
-        super().__init__(system_prompt='hi')
+    class _LongScriptBro(_MinimalBro):
+      @property
+      def scripts(self):
+        return {'foo': script_path}
 
-      def skill_descriptions(self) -> list[tuple[str, str]]:
-        return [('pr', 'open a PR'), ('land', 'merge an approved PR')]
-
-    card = await format_card(_SkillyBro())
-    assert '## Skills' in card
-    assert '- **pr** — open a PR' in card
-    assert '- **land** — merge an approved PR' in card
-
-  @pytest.mark.asyncio
-  async def test_skills_long_description_truncated(self):
-    long = 'x' * 300
-
-    class _LongSkillBro(BaseBro):
-      name = 'longskill'
-      description = 'has a long skill description'
-
-      def __init__(self):
-        super().__init__(system_prompt='hi')
-
-      def skill_descriptions(self) -> list[tuple[str, str]]:
-        return [('foo', long)]
-
-    card = await format_card(_LongSkillBro())
+    card = await format_card(_LongScriptBro())
     assert '…' in card
-    assert long not in card
+    assert long_description not in card
 
   @pytest.mark.asyncio
   async def test_long_tool_description_truncated(self):

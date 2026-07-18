@@ -51,7 +51,7 @@ A Bro's behaviour comes from three sources, all declared on the class:
 
 The split between `mcp_servers` and `data_sources` is a contract: data sources never mutate state, so they are safe to bind to any Bro. MCP servers may mutate state and are chosen per Bro.
 
-A Bro can additionally declare **skills** — named procedures backed by markdown files under `<bro_pkg>/skills/*.md` with YAML frontmatter. Skills compose along the MRO like `mcp_servers` (derived overrides parent on name), the base class auto-appends a `## Available skills` block to the system prompt, and a built-in `skill(name)` service tool returns the named skill's body for the LLM to follow. Skill files use the same `SKILL.md` shape Claude Code consumes, so the same file is the source of truth across surfaces.
+A Bro can additionally declare **scripts** — named procedures backed by markdown files under `<bro_pkg>/scripts/*.md` with flat frontmatter. Scripts compose along the MRO (derived overrides parent) and mount as one tool each in the reserved `@` canonical namespace (`at` on the wire) for bro-native execution and both Claude session flavors. When OpenAI is available, `@::@` interprets free-form commands against that roster and returns a validated script call or an expected error; direct tools remain available without it. The composed Scripts prompt carries the direct and natural-language invocation contracts, while `bro show` exposes the roster and OpenAI is a best-effort secret for any bro with scripts. Native bro and `cw ss --bro` also mount reserved framework tool `@::skill(name)` as the bridge for third-party skills their harness cannot load; an empty body represents an unavailable skill. Ordinary Claude persona sessions use Claude's native skill mechanism and do not adapt bro scripts into skills.
 
 ## The `raise` service tool
 
@@ -65,8 +65,8 @@ The same Bro runs from many launchers:
 
 - **Console** — `bro run <name> <input>`, `bro list`, `bro show <name>`. Backed by `bro/run.py`.
 - **HTTP** — `bro/server/server.py` serves the `assistant` Bro on `POST /v1/chat/completions` (OpenAI-compatible). The iOS chat app speaks to this endpoint.
-- **Claude Code** — `cw ss --bro <name>` launches a bare Claude Code session whose system prompt and MCP servers come from the named Bro. Tools are served by a session-local HTTP MCP server (`mcp-server bro:<name> --http`) exposing the union of the Bro's declared MCP servers and data-source tools, one endpoint per namespace. Useful when the user wants a chat UI over the Bro's policy + toolkit.
-- **Claude Code persona** — every cw-session (the default non-`--bro` `cw ss` flavor) runs *as* a Bro too (`--persona <name>`, defaulting to the project default bro): the Bro's persona prompt is injected, its skills become slash commands, and its claude-harness-filtered toolset (`claude_persona_mcp_servers()` via `mcp-server persona:<name> --http`) mounts alongside claude's built-in tools — components gated to the bro harness (the dev toolset) stay out.
+- **Claude Code** — `cw ss --bro <name>` launches a bare Claude Code session whose system prompt and MCP servers come from the named Bro. Tools are served by a session-local HTTP MCP server (`mcp-server bro:<name> --http`) exposing the union of the Bro's declared MCP servers, data-source tools, scripts, and the framework `@::skill` loader, one endpoint per namespace. Useful when the user wants a chat UI over the Bro's policy + toolkit.
+- **Claude Code persona** — every cw-session (the default non-`--bro` `cw ss` flavor) runs *as* a Bro too (`--persona <name>`, defaulting to the project default bro): the Bro's persona and Scripts prompts are injected, its scripts mount as canonical `@::` tools, Claude retains its native third-party skill mechanism, and the bro's claude-harness-filtered toolset (`claude_persona_mcp_servers()` via `mcp-server persona:<name> --http`) mounts alongside claude's built-in tools — components gated to the bro harness (the dev toolset) stay out.
 - **`bro run` / `bro chat`** — canonical one-shot and interactive launchers; `ask` and `call` are aliases. See `bro/launch/CLAUDE.md`.
 
 A given Bro need not support every surface — `pm` is consumed by both `cw ss --bro pm` and the `process-inbox` TUI; `librorian` runs from the console. `assistant` (which declares `mcp_servers=[flow.mcp.spec()]`) is reachable from every surface — `bro run`/`bro show`, `cw ss --bro assistant`, and the HTTP server — but it is only the HTTP server's *default* bro, so the iOS app reaches it without naming it.
@@ -84,6 +84,6 @@ The current set lives in `bros/`:
 - `librorian` — steward of the Flow media library (adds, maintains, recommends)
 - `devoops` — autonomous service deploys (the deploy targets are enumerated in `infra/mcp.py`'s `TARGETS` / `list_targets`) with a dry-run-first safety reflex; tools wrap `infra/mcp.py`
 - `dev` — generic software developer with file + shell + search tools
-- `ppp-dev` — full-stack PPP development (inherits `dev`, adds the flow toolset and the `/fix`, `/pr`, `/land` skills); this repo's default bro
+- `ppp-dev` — full-stack PPP development (inherits `dev`, adds the brog task-tracker toolset and the `@::fix`, `@::pr`, `@::land` scripts); this repo's default bro
 
 Adding a new Bro is creating a new subclass and registering it — see `CLAUDE.md` for the operational checklist.

@@ -34,6 +34,14 @@ class TestSessionAppendPrompt:
   def test_other_personas_carry_their_own_prompts_only(self):
     assert '## PPP project' not in cw.system_prompt._session_append_prompt('guided', 'bro')
 
+  def test_persona_scripts_include_dispatcher_contract(self, monkeypatch):
+    monkeypatch.setattr('bro.scripts.credentials.available', lambda name: True)
+    out = cw.system_prompt._session_append_prompt('guided', 'ppp-dev')
+    assert '## Scripts' in out
+    assert '@:<free text>:@' in out
+    assert '`@::@`' in out
+    assert '`/<name>`' not in out
+
 
 class TestSurfaceRendering:
   def test_tool_names_rendered_for_mcp_wire(self):

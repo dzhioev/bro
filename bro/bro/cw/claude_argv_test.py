@@ -100,12 +100,6 @@ class TestCwSessionLaunch:
     assert '--strict-mcp-config' not in argv
     assert '--allowed-tools' not in argv
 
-  def test_skills_dir_added_before_prompt_tail(self):
-    argv = _cw_session_launch(
-      _spec(prompt='do it'), claude_args=[], skills_dir=Path('/skills')
-    ).argv
-    assert argv[-4:] == ['--add-dir', '/skills', '--', 'do it']
-
   def test_claude_args_precede_prompt_tail(self):
     argv = _cw_session_launch(_spec(prompt='go'), claude_args=['--x']).argv
     assert argv[-2:] == ['--', 'go']
@@ -123,8 +117,8 @@ class TestBroLaunch:
     argv = self._launch().argv
     assert '--bare' in argv
     assert '--strict-mcp-config' in argv
-    # skills reach a --bro session through the `bro::skill` MCP tool (--bare
-    # skips .claude/skills/ discovery); built-in slash commands stay enabled
+    # --bare skips project/user skill discovery; framework tools provide the
+    # script and skill surfaces while built-in slash commands stay enabled
     assert '--disable-slash-commands' not in argv
     # tools disabled (empty string follows --tools)
     assert argv[argv.index('--tools') + 1] == ''
@@ -139,7 +133,7 @@ class TestBroLaunch:
     argv = self._launch().argv
     config = json.loads(argv[argv.index('--mcp-config') + 1])
     namespaces = _pm_namespaces()
-    # the service server's `skill` tool rides the `bro` namespace
+    # the service tools ride the `bro` namespace
     assert 'bro' in namespaces
     assert list(config['mcpServers']) == namespaces
     for namespace, entry in config['mcpServers'].items():

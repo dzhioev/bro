@@ -245,8 +245,8 @@ def test_main_skips_container_with_in_place_flag():
 
 
 def test_main_sends_unknown_slash_input_to_the_bro(capsys):
-  # no client-side skill validation: `/nope …` reaches the bro verbatim; the
-  # model discovers the missing skill through the `bro::skill` tool and raises.
+  # no client-side script validation: `/nope …` reaches the bro verbatim; the
+  # model follows the script fallback contract and raises when no tool matches.
   bro = RecordBro(response='ok')
   with (
     patch.dict('os.environ', {'CW_IN_CONTAINER': '1'}),

@@ -6,6 +6,7 @@ from base.text_window import (
   apply_limit,
   numbered_window,
   take_head,
+  window,
 )
 
 # ─── apply_limit / _marker / _clamp ──────────────────────────────────────────
@@ -135,7 +136,23 @@ def test_take_head_empty_content():
   assert take_head('', limit=10) == ('', '')
 
 
-# ─── numbered_window ─────────────────────────────────────────────────────────
+# ─── window / numbered_window ────────────────────────────────────────────────
+
+
+def test_window_returns_plain_lines_with_offset_markers():
+  out = window('one\ntwo\nthree\nfour\n', offset=1, limit=2)
+  assert (
+    out == '[...skipped before: 1 lines / 4 B...]\ntwo\nthree\n[...skipped after: 1 lines / 5 B...]'
+  )
+  assert '\t' not in out
+
+
+def test_window_offset_beyond_end_reports_whole_content_skipped():
+  assert window('a\nb\n', offset=10) == '[...skipped before: 2 lines / 4 B...]'
+
+
+def test_window_negative_offset_reads_from_start():
+  assert window('a\nb\n', offset=-2) == 'a\nb'
 
 
 def test_numbered_window_numbers_lines_one_based():

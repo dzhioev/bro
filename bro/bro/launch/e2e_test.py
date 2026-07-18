@@ -15,7 +15,7 @@ routing, early exit, timeout, teardown, channel-pinned identity); C — the
 `BROKER_DISABLED` kill-switch; D — degrade when broker is unimportable in the
 launcher; E — SIGINT handling through the attached root; F — the in-place
 session runner as the container command (exit-code propagation, in-container
-argv build: merged --settings, skills via --add-dir, CW_SESSION_CONTEXT);
+argv build: merged --settings, MCP namespaces, CW_SESSION_CONTEXT);
 G — SIGTERM forwarding, so `docker stop` lands in claude.
 
 Isolation: every launch runs under a throwaway HOME and project root, so no
@@ -261,12 +261,6 @@ report = {
 argv = sys.argv[1:]
 if '--settings' in argv:
   report['settings'] = json.loads(argv[argv.index('--settings') + 1])
-if '--add-dir' in argv:
-  skills_root = Path(argv[argv.index('--add-dir') + 1])
-  links = sorted(skills_root.glob('.claude/skills/*/SKILL.md'))
-  report['skills'] = [p.parent.name for p in links]
-  # the populated symlinks must resolve from the tmpdir into /workspace
-  report['skills_resolve'] = all(len(p.read_text()) > 0 for p in links)
 Path('/workspace/.e2e-report.json').write_text(json.dumps(report))
 if os.environ.get('CW_E2E_LINGER') == '1':
   signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(7))
@@ -962,7 +956,7 @@ def scenario_f(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> Liv
   env = isolated_env
   name = f'{_NAME_PREFIX}f-root'
   # CW_BRO is set explicitly in the container env, as every launch surface does
-  # for a persona-themed cw-session; the runner surfaces that bro's skills
+  # for a persona-themed cw-session; the runner adapts that bro's scripts
   driver = _Driver(
     env,
     name,
@@ -985,6 +979,9 @@ class TestInPlaceContainerCommand:
     report = _report(isolated_env, f'{_NAME_PREFIX}f-root')
     argv = report['argv']
     assert '--append-system-prompt' in argv, argv
+    assert '--add-dir' not in argv
+    mcp_config = json.loads(argv[argv.index('--mcp-config') + 1])
+    assert 'at' in mcp_config['mcpServers']
     assert report['session_context_set'] is True
 
   def test_fast_mode_reaches_the_merged_settings(
@@ -992,14 +989,6 @@ class TestInPlaceContainerCommand:
   ) -> None:
     report = _report(isolated_env, f'{_NAME_PREFIX}f-root')
     assert report['settings']['fastMode'] is True
-
-  def test_skills_surfaced_via_add_dir_and_resolve(
-    self, scenario_f: LiveRun, isolated_env: IsolatedEnv
-  ) -> None:
-    report = _report(isolated_env, f'{_NAME_PREFIX}f-root')
-    # ppp-dev owns /fix and inherits /pr + /land from dev via the MRO walk
-    assert {'fix', 'pr', 'land'} <= set(report.get('skills', [])), report
-    assert report['skills_resolve'] is True
 
 
 # --- G: SIGTERM forwarding — `docker stop` lands in claude ---------------------
