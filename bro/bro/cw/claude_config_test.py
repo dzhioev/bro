@@ -4,6 +4,10 @@ from typing import Optional
 import pytest
 
 import cw.claude_config
+import workspace.docker
+import workspace.model
+import workspace.paths
+from workspace.model import ContainerWorkspace, HostWorktree
 
 
 def _host_file(tmp_path, **extra):
@@ -173,3 +177,125 @@ class TestProvisionHostClaudeDir:
     second, _ = self._provision(home)
     assert second == first
     assert json.loads((first / '.claude.json').read_text()) == {'session': 'state'}
+
+
+class TestContainerClaudeState:
+  def test_returns_the_overlay_mounts_and_claude_env(self, monkeypatch, tmp_path):
+    monkeypatch.setattr(cw.claude_config.Path, 'home', lambda: tmp_path)
+    monkeypatch.setattr(cw.claude_config, '_seed_claude_json', lambda d, h, **k: d / '.claude.json')
+    mounts, env = cw.claude_config.container_claude_state('ws')
+    claude_dir = tmp_path / '.claude' / 'cw-sessions' / 'ws'
+    assert mounts == [
+      f'{claude_dir / ".claude.json"}:/home/cw/.claude.json',
+      f'{claude_dir}:/home/cw/.claude',
+    ]
+    assert env == {'DISABLE_AUTOUPDATER': '1', 'DISABLE_INSTALLATION_CHECKS': '1'}
+
+  def test_settings_preaccept_the_bypass_permissions_dialog(self, monkeypatch, tmp_path):
+    # the container workspace is an isolated clone, so --dangerously-skip-permissions
+    # needs no interactive acknowledgement (container sessions only — the host
+    # provision keeps the dialog, see TestProvisionHostClaudeDir)
+    monkeypatch.setattr(cw.claude_config.Path, 'home', lambda: tmp_path)
+    monkeypatch.setattr(cw.claude_config, '_seed_claude_json', lambda d, h, **k: d / '.claude.json')
+    cw.claude_config.container_claude_state('ws')
+    settings_file = tmp_path / '.claude' / 'cw-sessions' / 'ws' / 'settings.json'
+    settings = json.loads(settings_file.read_text())
+    assert settings['skipDangerousModePermissionPrompt'] is True
+
+
+class TestPluginSeedContract:
+  # the enabled plugin must also be installed: settings.json enables it (cw/claude_config.py),
+  # the Dockerfile installs + stages it, and the entrypoint copies the stage into
+  # the bind-mounted ~/.claude/plugins. enabling without installing is exactly the
+  # regression that reintroduced the "LSP Plugin Recommendation" prompt.
+  _SEED_DIR = '/opt/claude-plugins-seed'
+
+  def test_settings_enables_pyright_lsp(self):
+    assert cw.claude_config._SESSION_SETTINGS_JSON['enabledPlugins'] == {
+      'pyright-lsp@claude-plugins-official': True
+    }
+
+  def test_claude_json_suppresses_marketplace_autoinstall(self):
+    # the marketplace is baked into the image, so the runtime auto-install (a
+    # network fetch that can also prompt) must be marked already-done.
+    session_json = cw.claude_config._SESSION_CLAUDE_JSON
+    assert session_json['officialMarketplaceAutoInstallAttempted'] is True
+
+  def test_dockerfile_installs_and_stages_the_enabled_plugin(self):
+    plugin = next(iter(cw.claude_config._SESSION_SETTINGS_JSON['enabledPlugins']))
+    dockerfile = (workspace.docker.CONTAINER_DIR / 'Dockerfile').read_text()
+    assert f'claude plugin install {plugin}' in dockerfile
+    assert self._SEED_DIR in dockerfile
+
+  def test_entrypoint_copies_the_stage(self):
+    entrypoint = (workspace.docker.CONTAINER_DIR / 'entrypoint.sh').read_text()
+    assert self._SEED_DIR in entrypoint
+    assert '.claude/plugins' in entrypoint
+
+
+class TestWorkspaceProjectsDir:
+  def _worktree(self, monkeypatch, tmp_path):
+    monkeypatch.setenv('HOME', str(tmp_path / 'home'))
+    monkeypatch.setattr(workspace.paths, 'worktrees_dir', lambda project: tmp_path / 'worktrees')
+    return HostWorktree('ws', tmp_path / 'project')
+
+  def _encoded(self, worktree):
+    return str(worktree.path).replace('/', '-').replace('.', '-')
+
+  def _private(self, tmp_path, worktree):
+    return (
+      tmp_path / 'home' / '.claude' / 'cw-sessions' / 'ws' / 'projects' / self._encoded(worktree)
+    )
+
+  def test_container_workspace_uses_the_fixed_encoding(self, monkeypatch, tmp_path):
+    monkeypatch.setenv('HOME', str(tmp_path / 'home'))
+    container = ContainerWorkspace('ws', tmp_path / 'project')
+    expected = tmp_path / 'home' / '.claude' / 'cw-sessions' / 'ws' / 'projects' / '-workspace'
+    assert cw.claude_config.workspace_projects_dir(container) == expected
+
+  def test_prefers_the_private_session_projects_dir(self, monkeypatch, tmp_path):
+    worktree = self._worktree(monkeypatch, tmp_path)
+    private = self._private(tmp_path, worktree)
+    private.mkdir(parents=True)
+    assert cw.claude_config.workspace_projects_dir(worktree) == private
+
+  def test_falls_back_to_legacy_host_projects_dir(self, monkeypatch, tmp_path):
+    # sessions recorded before the private config dir live under ~/.claude/projects
+    worktree = self._worktree(monkeypatch, tmp_path)
+    legacy = tmp_path / 'home' / '.claude' / 'projects' / self._encoded(worktree)
+    legacy.mkdir(parents=True)
+    assert cw.claude_config.workspace_projects_dir(worktree) == legacy
+
+  def test_neither_present_names_the_private_dir(self, monkeypatch, tmp_path):
+    worktree = self._worktree(monkeypatch, tmp_path)
+    assert cw.claude_config.workspace_projects_dir(worktree) == self._private(tmp_path, worktree)
+
+
+class TestDropWorkspace:
+  def _session_dir(self, tmp_path):
+    session_dir = tmp_path / 'home' / '.claude' / 'cw-sessions' / 'ws'
+    session_dir.mkdir(parents=True)
+    return session_dir
+
+  def test_removes_workspace_and_session_state(self, monkeypatch, tmp_path):
+    monkeypatch.setenv('HOME', str(tmp_path / 'home'))
+    session_dir = self._session_dir(tmp_path)
+    removed = []
+    monkeypatch.setattr(
+      workspace.model.ContainerWorkspace, 'remove', lambda self: removed.append(self.name)
+    )
+    cw.claude_config.drop_workspace(ContainerWorkspace('ws', tmp_path / 'project'))
+    assert removed == ['ws']
+    assert not session_dir.exists()
+
+  def test_session_state_removed_even_when_workspace_removal_raises(self, monkeypatch, tmp_path):
+    monkeypatch.setenv('HOME', str(tmp_path / 'home'))
+    session_dir = self._session_dir(tmp_path)
+
+    def boom(self):
+      raise RuntimeError('no image')
+
+    monkeypatch.setattr(workspace.model.ContainerWorkspace, 'remove', boom)
+    with pytest.raises(RuntimeError, match='no image'):
+      cw.claude_config.drop_workspace(ContainerWorkspace('ws', tmp_path / 'project'))
+    assert not session_dir.exists()

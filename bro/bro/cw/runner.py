@@ -19,21 +19,21 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from base import log
+from bro.launch.identity import bro_git_identity_env
 from cw.bro import _populate_bro_skills
 from cw.broxy import _start_session_broxy
 from cw.claude_argv import build_claude_launch
-from cw.claude_config import _provision_host_claude_dir
-from cw.constants import bro_git_identity_env
-from cw.git import git_out
+from cw.claude_auth import _apply_claude_auth
+from cw.claude_config import _claude_projects_dir, _latest_jsonl, _provision_host_claude_dir
 from cw.mcp import _start_session_mcp_server
-from cw.paths import _claude_projects_dir, _in_container, _latest_jsonl, _project_root
-from cw.secrets import _apply_claude_auth
 from cw.session_context import (
   CW_SESSION_CONTEXT_ENV,
   build_session_context,
   encode_session_context,
 )
 from cw.session_log import _start_session_log_sync
+from workspace.git import git_out
+from workspace.paths import in_container, project_root
 
 if TYPE_CHECKING:
   from cw.session import SessionSpec
@@ -60,13 +60,6 @@ def _set_session_context(spec: 'SessionSpec', system_prompt: str, workspace: Pat
   os.environ[CW_SESSION_CONTEXT_ENV] = encode_session_context(records)
 
 
-def terminate_session() -> None:
-  """end the running session from a session-owned process: SIGTERM the in-place
-  runner (CW_RUNNER_PID, exported by run_in_place), which forwards the signal to
-  claude and survives to run its teardown. raises when no runner pid is set."""
-  os.kill(int(os.environ['CW_RUNNER_PID']), signal.SIGTERM)
-
-
 @contextlib.contextmanager
 def _sigterm_forwarded_to(process: subprocess.Popen) -> Generator[None]:
   previous = signal.signal(signal.SIGTERM, lambda signum, frame: process.terminate())
@@ -89,14 +82,14 @@ def _run_claude(argv: list[str], env: dict[str, str]) -> int:
 def run_in_place(spec: 'SessionSpec') -> int:
   workspace = Path.cwd()
 
-  if not _in_container():
+  if not in_container():
     # a host session's claude state lives in the private per-session config dir
     # (the container-equivalent isolation — reference/cw.md, "Host claude-state
     # isolation"). provisioning is idempotent and the outer launch also applies
     # it, so a runner spawned by an outer cw that predates the config dir still
     # provisions its own. set before anything derives paths or spawns children:
     # the resume resolution below, the hooks, and claude itself all read it.
-    claude_dir = _provision_host_claude_dir(spec.name, workspace, _project_root())
+    claude_dir = _provision_host_claude_dir(spec.name, workspace, project_root())
     os.environ['CLAUDE_CONFIG_DIR'] = str(claude_dir)
 
   claude_args = list(spec.claude_args)
@@ -130,7 +123,7 @@ def run_in_place(spec: 'SessionSpec') -> int:
     # BROKER_CHANNEL always names a broxy socket: when the broxy cannot run the
     # channel is unset — the session runs without one — and the launch proceeds.
     upstream = os.environ.get('BROKER_CHANNEL')
-    if upstream is not None and not _in_container():
+    if upstream is not None and not in_container():
       broxy = _start_session_broxy(upstream, os.environ)
       if broxy is not None:
         teardown.callback(broxy.stop)

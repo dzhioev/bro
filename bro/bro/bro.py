@@ -217,10 +217,10 @@ def _raise(reason: str) -> str:
 
 async def _claude_raise(reason: str) -> str:
   # no exception can abort the consuming claude session, so record the abort
-  # over the broker channel where one exists, then terminate the session (cw
-  # owns the mechanics). blocking ops, so off-loop; the finally keeps the kill
-  # unconditional.
-  from cw import terminate_session
+  # over the broker channel where one exists, then terminate the session (the
+  # workspace layer owns the mechanics). blocking ops, so off-loop; the finally
+  # keeps the kill unconditional.
+  from workspace.session import terminate_session
 
   def record_and_kill() -> None:
     log.warning('raise: %s', reason)
@@ -341,10 +341,10 @@ _BANNER_DESCRIPTION = (
 def _banner_tool(bro_name: str, variables: Variables) -> llm.mcp.Tool:
   # the same facts `cw banner --llm` prints, rendered in-process. the bro name is
   # passed explicitly because an in-process run's environment carries the
-  # launcher's CW_BRO (or none), not this bro's. the cw hub import stays
+  # launcher's CW_BRO (or none), not this bro's. the workspace import stays
   # function-local so `import bro` stays cheap.
   def _banner() -> str:
-    from cw import render_banner
+    from workspace.banner import render_banner
 
     return render_banner(llm=True, bro=bro_name)
 
@@ -549,14 +549,14 @@ class BaseBro(ABC):
   # bros this bro may summon — its static outgoing allow-list. root sessions get
   # it adjusted per session by `--grant @bro`/`--revoke @bro`; a summoned child
   # follows the bare seeds, so summons chain transitively through seeded bros
-  # under the host's depth cap (see cw/summon.py). MRO-walked and unioned like
+  # under the host's depth cap (see bro/launch/summon_control.py). MRO-walked and unioned like
   # `extra_secrets`. ppp-dev seeds `devoops`; everyone else is empty (grows by
   # precedent).
   may_summon: tuple[str, ...] = ()
   # whether the bro does docker work (building/pushing images for deploys) and so
   # needs the host docker socket. an explicit capability, inherited normally. the
   # host grants `/var/run/docker.sock` to a `--bro`/bro-run container only when this
-  # is set (claude code sessions get it unconditionally); see cw/secrets.py.
+  # is set (claude code sessions get it unconditionally); see bro/launch/scope.py.
   needs_docker: bool = False
   # subclasses declare their own `system_prompt = "..."` as a class attribute;
   # `__init__` walks the MRO from base to derived and concatenates each class's

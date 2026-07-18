@@ -6,12 +6,12 @@ from dataclasses import replace
 from typing import Literal, Optional
 
 import base.args
-import cw.bro_run
+import bro.launch.bro_run
 import summon as summon_client
 from base import log
 from bro.bro import BroRaised
 from bro.bros.bro import Bro
-from llm.llm import LLMSpec
+from llm.llm import EFFORT_LEVELS, LLMSpec
 from llm.observer import Observer
 
 # shared flag help so all the launcher CLIs describe `--fast` / `--in-place` identically.
@@ -113,7 +113,7 @@ def maybe_containerize(
   (`CW_IN_CONTAINER`, set by the container). Callers reject an implicit in-container
   run before reaching this helper; the hopped command carries `--in-place`, pinning
   the already-scoped inner run in-process. Otherwise the launch is the shared bro-run
-  description (`cw.bro_run.describe`): a fresh workspace, the bro's own credential
+  description (`bro.launch.bro_run.describe`): a fresh workspace, the bro's own credential
   scope, the bro git identity + `CW_BRO` in the container env. an interactive
   surface (`bro chat`) renders inside it just as claude code does.
 
@@ -129,12 +129,12 @@ def maybe_containerize(
   `grant`/`revoke` adjust the run's launch scope — a plain name a credential
   across both tiers of the scoped set, `@bro` the summon allow-list over the
   bro's `may_summon` defaults — both strict, applied by the launch-scope
-  preflight (`cw.preflight_scoped_launch`). those two and `into` are host-side
-  only — not threaded into the inner command — so passing any when the hop is
-  skipped (`--in-place` / already in-container) is a no-op the caller didn't
-  get, hence an error: the in-place path creates no credential scope or broker
-  root and runs no clone. returns 1 (printing to stderr) on any misuse so the
-  caller exits non-zero."""
+  preflight (`bro.launch.scope.preflight_scoped_launch`). those two and `into`
+  are host-side only — not threaded into the inner command — so passing any
+  when the hop is skipped (`--in-place` / already in-container) is a no-op the
+  caller didn't get, hence an error: the in-place path creates no credential
+  scope or broker root and runs no clone. returns 1 (printing to stderr) on any
+  misuse so the caller exits non-zero."""
   grant = grant if grant is not None else []
   revoke = revoke if revoke is not None else []
   if in_place or os.environ.get('CW_IN_CONTAINER') is not None:
@@ -142,23 +142,19 @@ def maybe_containerize(
       log.error('--grant/--revoke/--into require containerization (not valid with --in-place)')
       return 1
     return None
-  from cw import (
-    LaunchScopeError,
-    ScopedSecrets,
-    _project_root,
-    fresh_workspace_name,
-    preflight_scoped_launch,
-    resolve_ref,
-    run_in_container,
-  )
+  from bro.launch.root import run_in_container
+  from bro.launch.scope import LaunchScopeError, preflight_scoped_launch
+  from workspace.git import resolve_ref
+  from workspace.paths import fresh_workspace_name, project_root
+  from workspace.store import ScopedSecrets
 
   base_ref: Optional[str] = None
   if into is not None:
-    base_ref = resolve_ref(_project_root(), into)
+    base_ref = resolve_ref(project_root(), into)
     if base_ref is None:
       log.error('cannot resolve --into ref: %s', into)
       return 1
-  launch = cw.bro_run.describe(
+  launch = bro.launch.bro_run.describe(
     bro_name,
     inner_args,
     workspace_name=fresh_workspace_name(f'{cli_name}-{bro_name}'),
@@ -212,8 +208,6 @@ def run_main(
   aliases share this parser and execution path. `force_summon` supplies bare summon's
   implicit mode, and `implied_fast` supplies the ask alias's fast default.
   """
-  from cw import EFFORT_LEVELS
-
   parser = base.args.Parser(prog=' '.join(program), description=description)
   if force_summon:
     parser.add_argument('bro', metavar='target', help='bro to summon')

@@ -13,10 +13,10 @@ import json
 from collections.abc import Sequence
 from typing import Any, Literal, Optional
 
-from cw.constants import bro_git_identity_env
-from cw.docker import Launch
-from cw.secrets import Surface, scoped_secrets
+from bro.launch.identity import bro_git_identity_env
+from bro.launch.scope import Surface, scoped_secrets
 from summon import SUMMONER_ENV
+from workspace.docker import Launch
 
 
 def describe(

@@ -6,7 +6,7 @@ from typing import Optional
 from base import log
 
 
-def _ensure_host_worktree(worktree: Path, branch: str, base_ref: Optional[str] = None) -> bool:
+def ensure_host_worktree(worktree: Path, branch: str, base_ref: Optional[str] = None) -> bool:
   # create the worktree if new (git ops run in the project root, the cwd): a
   # `worktree-<name>` branch — based on base_ref (`--into`) when given, else on
   # the checkout's current HEAD — plus submodule alternates so `git submodule
@@ -38,7 +38,7 @@ def _ensure_host_worktree(worktree: Path, branch: str, base_ref: Optional[str] =
   return True
 
 
-def _provision_host_worktree(worktree: Path) -> bool:
+def provision_host_worktree(worktree: Path) -> bool:
   # run the worktree's own provision_repo.sh against itself (idempotent: skips the
   # uv sync when the venv is current, always refreshes the console-script bridge +
   # git hooks). shared with host setup_repo.sh and the container entrypoint.

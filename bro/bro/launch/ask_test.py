@@ -6,7 +6,7 @@ import pytest
 import llm.llms.echo
 from bro.bro import BaseBro
 from bro.launch.ask import main
-from cw.constants import bro_git_identity_env
+from bro.launch.identity import bro_git_identity_env
 from llm.llm import LLM
 from llm.mcp import MCPServer
 from llm.observer import NullObserver, Observer
@@ -44,7 +44,7 @@ class RecordBro(BaseBro):
 def test_main_re_execs_into_container_when_outside():
   with (
     patch.dict('os.environ', {}, clear=False) as env,
-    patch('cw.run_in_container', return_value=0) as run,
+    patch('bro.launch.root.run_in_container', return_value=0) as run,
   ):
     env.pop('CW_IN_CONTAINER', None)
     env.pop('PPP_SHELL_COMMAND', None)
@@ -73,7 +73,7 @@ def test_main_re_execs_into_container_when_outside():
 def test_main_forwards_implied_fast_into_container():
   with (
     patch.dict('os.environ', {}, clear=False) as env,
-    patch('cw.run_in_container', return_value=0) as run,
+    patch('bro.launch.root.run_in_container', return_value=0) as run,
   ):
     env.pop('CW_IN_CONTAINER', None)
     rc = main(['ask', 'ppp-dev', 'hello'])
@@ -87,7 +87,7 @@ def test_main_forwards_implied_fast_into_container():
 def test_main_forwards_effort_into_container():
   with (
     patch.dict('os.environ', {}, clear=False) as env,
-    patch('cw.run_in_container', return_value=0) as run,
+    patch('bro.launch.root.run_in_container', return_value=0) as run,
   ):
     env.pop('CW_IN_CONTAINER', None)
     rc = main(['ask', 'ppp-dev', 'hello', '--effort', 'low'])
@@ -100,7 +100,7 @@ def test_main_forwards_effort_into_container():
 def test_main_no_trails_disables_recording_in_container():
   with (
     patch.dict('os.environ', {}, clear=False) as env,
-    patch('cw.run_in_container', return_value=0) as run,
+    patch('bro.launch.root.run_in_container', return_value=0) as run,
   ):
     env.pop('CW_IN_CONTAINER', None)
     rc = main(['ask', 'ppp-dev', 'hello', '--no-trails'])
@@ -129,7 +129,7 @@ def test_main_rejects_removed_host_flag():
 def test_main_refuses_implicit_run_inside_container(capsys):
   with (
     patch.dict('os.environ', {'CW_IN_CONTAINER': '1', 'BROKER_CHANNEL': 'unix:/tmp/x.sock'}),
-    patch('cw.run_in_container') as run,
+    patch('bro.launch.root.run_in_container') as run,
     patch('summon.relay_summon') as relay,
   ):
     rc = main(['ask', 'ppp-dev', 'hi'])
@@ -172,7 +172,7 @@ def test_main_timeout_without_summon_errors(capsys):
 def test_main_in_place_inside_container_runs_in_process():
   with (
     patch.dict('os.environ', {'CW_IN_CONTAINER': '1'}),
-    patch('cw.run_in_container') as run,
+    patch('bro.launch.root.run_in_container') as run,
     patch('bro.registry.get_class', return_value=RecordBro),
     patch('bro.registry.create_bro', return_value=RecordBro(response='ok')),
   ):
@@ -184,7 +184,7 @@ def test_main_in_place_inside_container_runs_in_process():
 def test_main_skips_container_with_in_place_flag():
   with (
     patch.dict('os.environ', {}, clear=False) as env,
-    patch('cw.run_in_container') as run,
+    patch('bro.launch.root.run_in_container') as run,
     patch('bro.registry.get_class', return_value=RecordBro),
     patch('bro.registry.create_bro', return_value=RecordBro(response='ok')),
   ):

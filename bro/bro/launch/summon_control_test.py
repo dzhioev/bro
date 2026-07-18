@@ -3,8 +3,8 @@ from typing import cast
 
 import pytest
 
-import cw.spawn
-import cw.summon
+import bro.launch.spawn
+import bro.launch.summon_control
 from broker.brotocol import Message
 from broker.dispatcher import Dispatcher
 
@@ -12,39 +12,47 @@ from broker.dispatcher import Dispatcher
 class TestSummonAllowList:
   def test_seeds_from_the_bros_may_summon(self):
     # ppp-dev carries the v1 seed; a plain session summons devoops flagless
-    assert cw.summon.summon_allow_list('ppp-dev', grant=[], revoke=[]) == {'devoops'}
+    assert bro.launch.summon_control.summon_allow_list('ppp-dev', grant=[], revoke=[]) == {
+      'devoops'
+    }
 
   def test_defaults_to_empty_for_an_unseeded_bro(self):
-    assert cw.summon.summon_allow_list('bro', grant=[], revoke=[]) == set()
+    assert bro.launch.summon_control.summon_allow_list('bro', grant=[], revoke=[]) == set()
 
   def test_grant_adds_a_registered_bro(self):
-    assert cw.summon.summon_allow_list('bro', grant=['devoops'], revoke=[]) == {'devoops'}
+    assert bro.launch.summon_control.summon_allow_list('bro', grant=['devoops'], revoke=[]) == {
+      'devoops'
+    }
 
   def test_revoke_removes_a_seed(self):
-    assert cw.summon.summon_allow_list('ppp-dev', grant=[], revoke=['devoops']) == set()
+    assert (
+      bro.launch.summon_control.summon_allow_list('ppp-dev', grant=[], revoke=['devoops']) == set()
+    )
 
   def test_grant_already_allowed_raises(self):
     with pytest.raises(ValueError, match='already in the summon allow-list'):
-      cw.summon.summon_allow_list('ppp-dev', grant=['devoops'], revoke=[])
+      bro.launch.summon_control.summon_allow_list('ppp-dev', grant=['devoops'], revoke=[])
 
   def test_revoke_absent_raises(self):
     with pytest.raises(ValueError, match='not in the summon allow-list'):
-      cw.summon.summon_allow_list('bro', grant=[], revoke=['devoops'])
+      bro.launch.summon_control.summon_allow_list('bro', grant=[], revoke=['devoops'])
 
   def test_unregistered_grant_target_raises(self):
     # registry-validated at launch: a typo fails immediately, not as a denied
     # summon minutes later
     with pytest.raises(ValueError, match='unknown summon target'):
-      cw.summon.summon_allow_list('bro', grant=['devoop'], revoke=[])
+      bro.launch.summon_control.summon_allow_list('bro', grant=['devoop'], revoke=[])
 
   def test_unregistered_revoke_target_raises(self):
     with pytest.raises(ValueError, match='unknown summon target'):
-      cw.summon.summon_allow_list('ppp-dev', grant=[], revoke=['devop'])
+      bro.launch.summon_control.summon_allow_list('ppp-dev', grant=[], revoke=['devop'])
 
   def test_unknown_bro_degrades_to_empty_seeds_with_a_warning(self, caplog):
     # mirrors credential scoping: an ambient CW_BRO this checkout doesn't know
     # must not break the launch; explicit grants still apply on top
-    result = cw.summon.summon_allow_list('no-such-bro', grant=['devoops'], revoke=[])
+    result = bro.launch.summon_control.summon_allow_list(
+      'no-such-bro', grant=['devoops'], revoke=[]
+    )
     assert result == {'devoops'}
     assert any('could not resolve bro' in record.message for record in caplog.records)
 
@@ -72,8 +80,8 @@ class FakeContext:
     self.spawned.append((launch, peer, timeout))
 
 
-def _control(tmp_path, allow_list, session='ws') -> cw.summon.SummonControl:
-  return cw.summon.SummonControl(
+def _control(tmp_path, allow_list, session='ws') -> bro.launch.summon_control.SummonControl:
+  return bro.launch.summon_control.SummonControl(
     allow_list=allow_list,
     session=session,
     project=tmp_path,
@@ -118,7 +126,7 @@ class TestSummonHandler:
     control.handle(context, ROOT, message)
     assert context.replies == []
     [(launch, peer, timeout)] = context.spawned
-    assert launch == cw.spawn.SummonLaunchSpec(
+    assert launch == bro.launch.spawn.SummonLaunchSpec(
       target='devoops',
       prompt='deploy the thing',
       # the root's base-ref inheritance source: the bare session key names a host
@@ -168,7 +176,7 @@ class TestSummonHandler:
     control.handle(cast(Dispatcher, context), CHILD, child_request)
     assert context.replies == []
     launch, peer, _ = context.spawned[-1]
-    assert launch == cw.spawn.SummonLaunchSpec(
+    assert launch == bro.launch.spawn.SummonLaunchSpec(
       target='devoops',
       prompt='deploy the thing',
       # a child summoner's base-ref inheritance source: its broker-<channel> clone

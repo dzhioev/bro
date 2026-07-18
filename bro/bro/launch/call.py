@@ -24,6 +24,7 @@ from bro.launch._cli import (
 )
 from bro.launch._trace_format import compact_value, oneline, truncate
 from bro.launch.resume import RESUME_LATEST, HistoryMessage
+from llm.llm import EFFORT_LEVELS
 from llm.observer import Observer
 
 __cli_name__ = 'call'
@@ -100,7 +101,7 @@ async def call_text(
   wherever the day changes; `initial` may be None on a resume — the REPL then
   just prompts.
   """
-  from cw import render_banner
+  from workspace.banner import render_banner
 
   read = read_line if read_line is not None else (lambda: input('> '))
   effective_observer: Observer = observer if observer is not None else TextRenderer(prefix=bro.name)
@@ -149,8 +150,6 @@ def _tty_supported() -> bool:
 
 
 def chat_main(argv: list[str], *, program: list[str], implied_fast: bool = False) -> Optional[int]:
-  from cw import EFFORT_LEVELS
-
   parser = base.args.Parser(
     prog=' '.join(program), description='open an interactive session with a bro'
   )

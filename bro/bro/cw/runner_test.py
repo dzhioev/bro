@@ -3,8 +3,6 @@ import signal
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 import cw.runner
 from cw.claude_argv import ClaudeLaunch
 from cw.mcp import MCPEndpoint
@@ -37,13 +35,13 @@ class _Harness:
       patch('cw.runner._populate_bro_skills'),
       patch('cw.runner._apply_claude_auth'),
       patch('cw.runner._start_session_broxy', return_value=self.broxy),
-      patch('cw.runner._in_container', return_value=False),
+      patch('cw.runner.in_container', return_value=False),
       patch('cw.runner._provision_host_claude_dir', return_value=self.claude_config_dir),
-      patch('cw.runner._project_root', return_value=Path('/main-repo')),
+      patch('cw.runner.project_root', return_value=Path('/main-repo')),
       # session_bro reads the operated repo's [tool.bro]; the fake workspace is
       # not a git repo, so anchor the config read to the fake root (no pyproject
       # there -> defaults)
-      patch('cw.project._project_root', return_value=Path('/main-repo')),
+      patch('workspace.project.project_root', return_value=Path('/main-repo')),
     ]
     entered = [p.__enter__() for p in self._patches]
     self.env = entered[0]
@@ -290,17 +288,3 @@ class TestRunClaude:
     env = {**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}'}
     assert cw.runner._run_claude([], env) == 7
     assert signal.getsignal(signal.SIGTERM) == previous
-
-
-class TestTerminateSession:
-  def test_signals_the_recorded_runner(self, monkeypatch):
-    kills: list[tuple[int, int]] = []
-    monkeypatch.setenv('CW_RUNNER_PID', '4242')
-    monkeypatch.setattr(os, 'kill', lambda pid, sig: kills.append((pid, sig)))
-    cw.runner.terminate_session()
-    assert kills == [(4242, signal.SIGTERM)]
-
-  def test_fails_without_a_runner_pid(self, monkeypatch):
-    monkeypatch.delenv('CW_RUNNER_PID', raising=False)
-    with pytest.raises(KeyError):
-      cw.runner.terminate_session()

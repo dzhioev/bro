@@ -2,7 +2,7 @@
 """summon — request another bro on the session's broker channel and get its answer.
 
 The peer side of the summon mechanism: a `summon{target, prompt, timeout?, into?}`
-request on the session channel, answered by the host-side handler (`cw/summon.py`)
+request on the session channel, answered by the host-side handler (`bro/launch/summon_control.py`)
 with `started{trail_id}` and exactly one terminal (`completed` / `failed` /
 `reply{error}`). This module owns the request's wire contract — the type tag, the
 payload keys, the 1800s default timeout — for all its consumers: `bro run
@@ -46,13 +46,13 @@ which phase went silent — no `started` points at the session's summon status/a
 (`var/cw/summon/`), a lost terminal after `started` points at trails.
 
 `summon list` (`list_summons`) reads the session's summon-status file
-(`CW_SUMMON_STATUS`, written host-side by `cw/summon.py`) and reports the active
+(`CW_SUMMON_STATUS`, written host-side by `bro/launch/summon_control.py`) and reports the active
 summons and the last finished one, each with its request id — the rediscovery
 surface when a request id was lost with a dead client.
 
 Unlike the substrate `broker` CLI, an unset `BROKER_CHANNEL` is an error, not
 inert — a summon that silently does nothing is a failure. Broker imports are
-deferred to call time so importers of the module-level constants (`cw/summon.py`,
+deferred to call time so importers of the module-level constants (`bro/launch/summon_control.py`,
 on the pre-gate launch path) never pull the broker package in.
 """
 
@@ -74,7 +74,7 @@ __cli_name__ = 'summon'
 
 SUMMON = 'summon'  # the request's message-type tag (a consumer tag; not in broker's Tag)
 # points a session at its summon-status file — set by the launch surfaces
-# (cw/summon.py owns the writer), read by `session-log-statusline`
+# (bro/launch/summon_control.py owns the writer), read by `session-log-statusline`
 STATUS_ENV = 'CW_SUMMON_STATUS'
 SUMMONER_ENV = 'CW_SUMMONER'
 # request-lifecycle bound for a summoned child — sized so the flagship deploy

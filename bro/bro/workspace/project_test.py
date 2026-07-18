@@ -1,12 +1,12 @@
 import pytest
 
-import cw.project
-from cw.project import ProjectConfig, project_config
+import workspace.project
+from workspace.project import ProjectConfig, project_config
 
 
 @pytest.fixture
 def project_dir(tmp_path, monkeypatch):
-  monkeypatch.setattr(cw.project, '_project_root', lambda: tmp_path)
+  monkeypatch.setattr(workspace.project, 'project_root', lambda: tmp_path)
   return tmp_path
 
 

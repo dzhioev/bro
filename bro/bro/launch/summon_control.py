@@ -10,7 +10,7 @@ Two layers, both computed per broker root:
   the `summon` request handler (payload validation, per-peer authorization, the
   immediate denial `reply{error}` plus a deny audit entry, the spawn of a
   `SummonLaunchSpec` with the requesting peer as its parent — everything heavy
-  runs off-loop in the spawner, see `cw/spawn.py`), the delivery-tap observer
+  runs off-loop in the spawner, see `bro/launch/spawn.py`), the delivery-tap observer
   that tracks each child's trail id and outcome, and the visibility outputs
   those feed: a host-side log line per event, an append-only JSONL audit file
   (the out-of-band trace a session's own narrative cannot suppress; every entry
@@ -33,11 +33,11 @@ from the session key, a child's from its `broker-<channel>` clone), threaded int
 the spawn as the child's base-ref inheritance source: a summoned child bases on
 its summoner's workspace HEAD unless the request's `into` overrides. The HEAD
 read itself is blocking git work and runs off-loop in the spawner
-(`cw/spawn.py:_lower_summon`); the handler only resolves the path.
+(`bro/launch/spawn.py:_lower_summon`); the handler only resolves the path.
 
-Both state files live under `var/cw/summon/` (`_summon_dir`), keyed by the
+Both state files live under `var/cw/summon/` (`workspace.paths.summon_dir`), keyed by the
 session key the launch surface passes: the workspace name, mode-prefixed for a
-container session (`c:<name>`, the container-ref convention of `cw/workspace.py`)
+container session (`c:<name>`, the container-ref convention of `workspace/model.py`)
 and bare on host — a same-name host worktree and container workspace can run
 concurrently (the one-session guard is per-mode) and must not interleave one
 audit file or clobber one status file. `<key>.jsonl` (audit) and
@@ -61,9 +61,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 from base import credentials, log
-from cw.paths import _containers_dir, _summon_dir
-from cw.workspace import ContainerWorkspace, HostWorktree, _parse_ref
 from summon import DEFAULT_TIMEOUT, STATUS_ENV
+from workspace.model import ContainerWorkspace, HostWorktree, parse_ref
+from workspace.paths import containers_dir, summon_dir
 
 if TYPE_CHECKING:
   from broker.brotocol import Message
@@ -88,7 +88,7 @@ _MAX_SUMMON_DEPTH = 2
 
 def summon_status_file(project: Path, session: str) -> Path:
   """the session's summon-status file, as the host process writes it."""
-  return _summon_dir(project) / f'{session}.status.json'
+  return summon_dir(project) / f'{session}.status.json'
 
 
 def container_status_path(project: Path, session: str) -> str:
@@ -109,8 +109,8 @@ def summon_allow_list(bro_name: str, *, grant: list[str], revoke: list[str]) -> 
   rather than minutes later as a denied summon. an unknown `bro_name` degrades to
   empty seeds with a warning, mirroring credential scoping (`scoped_secrets`):
   an ambient CW_BRO this checkout doesn't know must not break the launch."""
-  # imported here, not at module level: keeps `import cw` free of the bro graph
-  # (see cw/CLAUDE.md, "Lazy bro import")
+  # imported here, not at module level: the registry import pulls the bro class
+  # graph, which the pre-gate launch path must not pay for up front
   from bro.registry import create_bro, known_names
 
   seeds: tuple[str, ...]
@@ -209,7 +209,7 @@ class SummonControl:
   # --- the `summon` request handler (broker loop) -------------------------------
 
   def handle(self, context: 'Dispatcher', peer: 'Peer', message: 'Message') -> None:
-    from cw.spawn import SummonLaunchSpec
+    from bro.launch.spawn import SummonLaunchSpec
 
     payload = message.payload
     requester = self._requester(context, peer)
@@ -280,7 +280,7 @@ class SummonControl:
     `origin` topology and this control's spawn records. None when the peer cannot
     be attributed a bro."""
     if peer == context.root:
-      name, is_container = _parse_ref(self._session)
+      name, is_container = parse_ref(self._session)
       root_workspace = (
         ContainerWorkspace(name, self._project) if is_container else HostWorktree(name, self._project)
       )  # fmt: skip
@@ -297,18 +297,17 @@ class SummonControl:
       return None
     # imported function-locally like the launch-time computation (cw/CLAUDE.md,
     # "Lazy bro import"); cheap here — spawning the child already imported its module
-    from bro.registry import create_bro
-
-    # function-local like SummonLaunchSpec above: cw.spawn imports broker at
+    # function-local like SummonLaunchSpec above: bro.launch.spawn imports broker at
     # module level (cw/CLAUDE.md, "Lazy broker import")
-    from cw.spawn import _workspace_name
+    from bro.launch.spawn import _workspace_name
+    from bro.registry import create_bro
 
     return _Requester(
       allow_list=set(create_bro(record.target)._may_summon),
       summoner={'target': record.target, 'trail_id': record.trail_id},
       depth=record.depth,
       list_description=f"{record.target}'s may_summon seeds",
-      workspace=_containers_dir(self._project) / _workspace_name(peer),
+      workspace=containers_dir(self._project) / _workspace_name(peer),
     )
 
   def _deny(

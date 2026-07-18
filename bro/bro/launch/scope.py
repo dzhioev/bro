@@ -1,14 +1,14 @@
+"""per-surface launch scoping of a bro run: which credentials each launch
+surface hydrates and which bros the session may summon, computed from the bro's
+own declarations (manifest, optional tier, `may_summon`, `needs_docker`).
+"""
+
 import enum
-import io
-import os
-import shutil
-import tarfile
-from collections.abc import Collection
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from base import credentials, log
+from workspace.store import ScopedSecrets, finalize_scoped_secrets
 
 if TYPE_CHECKING:
   import llm.mcp
@@ -16,20 +16,6 @@ if TYPE_CHECKING:
 # secrets every claude code session resolves regardless of bro: the
 # sync-session-log hooks run in-session, and an in-session bro run records to trails.
 _SESSION_BASELINE = frozenset({'session_log', 'trails'})
-
-
-@dataclass(frozen=True)
-class ScopedSecrets:
-  """a session launch's credential scope.
-
-  required is hydrated strictly (a missing secret fails launch); optional is the
-  best-effort tier (skipped when unresolvable); docker_sock decides the socket
-  mount (container launches only — a host session has the host daemon anyway).
-  """
-
-  required: set[str]
-  optional: set[str]
-  docker_sock: bool
 
 
 class Surface(enum.Enum):
@@ -130,81 +116,6 @@ def scoped_secrets(bro_name: str, surface: Surface) -> ScopedSecrets:
   return ScopedSecrets(required=required, optional=optional, docker_sock=docker_sock)
 
 
-def log_scoped_secrets(subject: str, required: Collection[str], optional: Collection[str]) -> None:
-  """log a launch's credential scope at every scoped-store launch path."""
-  names = sorted(set(required))
-  log.info('scoped secrets for %s: %s', subject, ', '.join(names) if len(names) > 0 else '(none)')
-  optional_names = sorted(set(optional) - set(required))
-  if len(optional_names) > 0:
-    log.info('optional (best-effort) secrets for %s: %s', subject, ', '.join(optional_names))
-
-
-def _load_anthropic_key() -> Optional[str]:
-  """return the api_key from the `anthropic` secret, or None if missing/invalid."""
-  try:
-    config = credentials.get_json('anthropic')
-  except credentials.SecretNotFound:
-    return None
-  key = config.get('api_key')
-  if not isinstance(key, str) or len(key) == 0:
-    return None
-  return key
-
-
-# auth env vars that outrank CLAUDE_CODE_OAUTH_TOKEN in claude's credential
-# precedence: a value inherited from the launching shell would silently hijack
-# the session's auth (an invalid one surfaces as a login/API-key error at the
-# first call), so the launch scrubs them.
-_OUTRANKING_AUTH_VARS = ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN')
-
-
-def _apply_claude_auth(env: dict[str, str], *, warn_when_missing: bool = False) -> None:
-  """align a claude session env with the session auth model (reference/cw.md).
-
-  scrubs the inherited vars that outrank the session's designated auth, then
-  overlays the long-lived `claude setup-token` credential (`claude_code`). the
-  session's private claude state (cw/claude_config.py) carries no OAuth
-  credentials file, so the token is a cw-session's whole auth — both
-  launch surfaces gate on it before anything is created, and `warn_when_missing`
-  surfaces the remaining unauthenticated path (a runner spawned by an outer cw
-  that predates the gate). a `--bro` session authenticates via apiKeyHelper and
-  resolves no token by design. containers get the same var from the secret's
-  registry install hook as well; re-applying it here is idempotent.
-  """
-  for var in _OUTRANKING_AUTH_VARS:
-    if env.pop(var, None) is not None:
-      log.verbose('scrubbed inherited %s from the claude session env', var)
-  token = credentials.try_get('claude_code')
-  if token is None:
-    if warn_when_missing:
-      log.warning(
-        'claude_code secret not resolvable; the session starts unauthenticated — mint a '
-        'token with `claude setup-token` and store it in ~/.ppp/claude_code_oauth_token'
-      )
-    return
-  env['CLAUDE_CODE_OAUTH_TOKEN'] = token
-
-
-def finalize_scoped_secrets(
-  scoped: ScopedSecrets, *, grant: list[str], revoke: list[str]
-) -> ScopedSecrets:
-  """layer strict per-session overrides across both credential tiers.
-
-  grants join the required tier. a revoke removes the name from whichever tier
-  contains it; a name in neither tier remains an error, as do all other no-op
-  overrides enforced by `credentials.apply_grant_revoke`.
-  """
-  final_names = credentials.apply_grant_revoke(
-    scoped.required | scoped.optional,
-    grant=grant,
-    revoke=revoke,
-    subject='scoped credential set',
-  )
-  required = (scoped.required | set(grant)) & final_names
-  optional = final_names - required
-  return ScopedSecrets(required=required, optional=optional, docker_sock=scoped.docker_sock)
-
-
 class LaunchScopeError(Exception):
   """a launch failed its scope preflight: a malformed or no-op grant/revoke
   override, an unknown summon target, or an unknown/unresolvable required
@@ -242,7 +153,7 @@ def preflight_scoped_launch(
   (worktree, container, workspace dir): split the unified grant/revoke overrides
   (`_split_scope_overrides`), finalize the credential scope
   (`finalize_scoped_secrets`), compute the summon allow-list of a launch running
-  as `bro_name` (`cw.summon.summon_allow_list`), and hydrate the scoped store
+  as `bro_name` (`summon_control.summon_allow_list`), and hydrate the scoped store
   (`credentials.build_scoped_store`) — any failure raised as a single
   `LaunchScopeError` for the caller to render on its own error surface.
 
@@ -250,9 +161,9 @@ def preflight_scoped_launch(
   store at create, so container callers drop it — the build is the preflight
   itself; a host session materializes the returned one.
   """
-  # imported here, not at module level: cw.summon reaches back into this module
-  # through cw.workspace → cw.docker
-  from cw.summon import summon_allow_list
+  # imported here, not at module level, parallel to every launch-surface import of
+  # summon_control: the module sits on the pre-gate launch path
+  from bro.launch.summon_control import summon_allow_list
 
   try:
     grant_credentials, grant_bros = _split_scope_overrides(grant)
@@ -263,50 +174,3 @@ def preflight_scoped_launch(
   except (ValueError, credentials.SecretNotFound) as e:
     raise LaunchScopeError(str(e)) from e
   return scoped, may_summon, store
-
-
-def _materialize_scoped_store(files: dict[str, bytes], directory: Path) -> Path:
-  """write a scoped credential store (`credentials.build_scoped_store`) to
-  `directory` and return its registry file — the value a host session's
-  CREDENTIALS_REGISTRY points at (the registry's directory joins the resolver's
-  search path). the directory is recreated from scratch so a secret dropped from
-  the scope (e.g. a lapsed `--grant`) does not linger from an earlier
-  launch."""
-  log.verbose('materializing the scoped credential store at %s', directory)
-  if directory.exists():
-    shutil.rmtree(directory)
-  directory.mkdir(parents=True)
-  directory.chmod(0o700)
-  for filename, data in files.items():
-    file = directory / filename
-    file.write_bytes(data)
-    file.chmod(0o600)
-  return directory / 'credentials.json'
-
-
-def _ppp_tarball(files: dict[str, bytes]) -> bytes:
-  """pack a scoped credential store into a tar for `docker cp` into /home/cw.
-
-  entries are prefixed `.ppp/` so extracting at /home/cw lands them at
-  /home/cw/.ppp/<file>. files are 0600, the dir 0700, all owned by the host
-  uid/gid (the same uid the entrypoint remaps `cw` to on Linux); the entrypoint
-  re-owns the tree to `cw` after its remap so the bytes are readable there and on
-  Docker for Mac (where the remap is skipped). mtime defaults to 0 — deterministic,
-  no clock needed.
-  """
-  uid, gid = os.getuid(), os.getgid()
-  buffer = io.BytesIO()
-  with tarfile.open(fileobj=buffer, mode='w') as tar:
-    root = tarfile.TarInfo('.ppp')
-    root.type = tarfile.DIRTYPE
-    root.mode = 0o700
-    root.uid, root.gid = uid, gid
-    tar.addfile(root)
-    for filename in sorted(files):
-      data = files[filename]
-      info = tarfile.TarInfo(f'.ppp/{filename}')
-      info.size = len(data)
-      info.mode = 0o600
-      info.uid, info.gid = uid, gid
-      tar.addfile(info, io.BytesIO(data))
-  return buffer.getvalue()

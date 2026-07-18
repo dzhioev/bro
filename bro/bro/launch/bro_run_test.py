@@ -1,10 +1,10 @@
-import cw.bro_run
-from cw.constants import bro_git_identity_env
+import bro.launch.bro_run
+from bro.launch.identity import bro_git_identity_env
 
 
 def _describe(*args, **kwargs):
   kwargs.setdefault('verb', 'run')
-  return cw.bro_run.describe(*args, workspace_name='ws', **kwargs)
+  return bro.launch.bro_run.describe(*args, workspace_name='ws', **kwargs)
 
 
 def test_describe_composes_the_in_place_pinned_command():

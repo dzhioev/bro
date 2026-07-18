@@ -5,9 +5,9 @@ import pytest
 import llm.llms.chat_gpt
 import llm.llms.echo
 from bro.launch._cli import create_bro_for_run, maybe_containerize
-from cw import EFFORT_LEVELS
-from cw.constants import bro_git_identity_env
-from cw.docker import Launch
+from bro.launch.identity import bro_git_identity_env
+from llm.llm import EFFORT_LEVELS
+from workspace.docker import Launch
 
 # the run bro's own CW_BRO rides in explicitly (never as an ambient forward), so
 # a calling session's theming cannot leak into the container
@@ -16,13 +16,15 @@ _RUN_ENV = {'CW_BRO': 'ppp-dev', **bro_git_identity_env()}
 
 @pytest.fixture(autouse=True)
 def scoped_store_preflight(monkeypatch):
-  monkeypatch.setattr('cw.secrets.credentials.build_scoped_store', lambda names, optional=(): {})
+  monkeypatch.setattr(
+    'bro.launch.scope.credentials.build_scoped_store', lambda names, optional=(): {}
+  )
 
 
 def test_maybe_containerize_skips_when_inside_container():
   with (
     patch.dict('os.environ', {'CW_IN_CONTAINER': '1'}),
-    patch('cw.run_in_container') as run,
+    patch('bro.launch.root.run_in_container') as run,
   ):
     rc = maybe_containerize(
       cli_name='call',
@@ -39,7 +41,7 @@ def test_maybe_containerize_skips_when_inside_container():
 def test_maybe_containerize_skips_with_in_place():
   with (
     patch.dict('os.environ', {}, clear=False) as env,
-    patch('cw.run_in_container') as run,
+    patch('bro.launch.root.run_in_container') as run,
   ):
     env.pop('CW_IN_CONTAINER', None)
     rc = maybe_containerize(
@@ -57,7 +59,7 @@ def test_maybe_containerize_skips_with_in_place():
 def test_maybe_containerize_hops_and_scopes_to_bro():
   with (
     patch.dict('os.environ', {}, clear=False) as env,
-    patch('cw.run_in_container', return_value=7) as run,
+    patch('bro.launch.root.run_in_container', return_value=7) as run,
   ):
     env.pop('CW_IN_CONTAINER', None)
     rc = maybe_containerize(
@@ -87,7 +89,7 @@ def test_maybe_containerize_hops_and_scopes_to_bro():
 def test_maybe_containerize_no_trails_drops_secret_and_disables_recording():
   with (
     patch.dict('os.environ', {}, clear=False) as env,
-    patch('cw.run_in_container', return_value=0) as run,
+    patch('bro.launch.root.run_in_container', return_value=0) as run,
   ):
     env.pop('CW_IN_CONTAINER', None)
     maybe_containerize(
@@ -108,7 +110,7 @@ def test_maybe_containerize_no_trails_drops_secret_and_disables_recording():
 def test_maybe_containerize_grant_adds_secret():
   with (
     patch.dict('os.environ', {}, clear=False) as env,
-    patch('cw.run_in_container', return_value=0) as run,
+    patch('bro.launch.root.run_in_container', return_value=0) as run,
   ):
     env.pop('CW_IN_CONTAINER', None)
     rc = maybe_containerize(
@@ -126,7 +128,7 @@ def test_maybe_containerize_grant_adds_secret():
 def test_maybe_containerize_revoke_removes_secret():
   with (
     patch.dict('os.environ', {}, clear=False) as env,
-    patch('cw.run_in_container', return_value=0) as run,
+    patch('bro.launch.root.run_in_container', return_value=0) as run,
   ):
     env.pop('CW_IN_CONTAINER', None)
     rc = maybe_containerize(
@@ -155,8 +157,8 @@ def test_maybe_containerize_revoke_removes_optional_secret():
   )
   with (
     patch.dict('os.environ', {}, clear=False) as env,
-    patch('cw.bro_run.describe', return_value=launch),
-    patch('cw.run_in_container', return_value=0) as run,
+    patch('bro.launch.bro_run.describe', return_value=launch),
+    patch('bro.launch.root.run_in_container', return_value=0) as run,
   ):
     env.pop('CW_IN_CONTAINER', None)
     rc = maybe_containerize(
@@ -177,10 +179,10 @@ def test_maybe_containerize_missing_secret_fails_before_launch(monkeypatch, caps
   def missing(names, optional=()):
     raise ValueError("unknown secret 'github' declared in manifest")
 
-  monkeypatch.setattr('cw.secrets.credentials.build_scoped_store', missing)
+  monkeypatch.setattr('bro.launch.scope.credentials.build_scoped_store', missing)
   with (
     patch.dict('os.environ', {}, clear=False) as env,
-    patch('cw.run_in_container') as run,
+    patch('bro.launch.root.run_in_container') as run,
   ):
     env.pop('CW_IN_CONTAINER', None)
     rc = maybe_containerize(
@@ -194,7 +196,7 @@ def test_maybe_containerize_missing_secret_fails_before_launch(monkeypatch, caps
 def test_maybe_containerize_grant_already_present_errors(capsys):
   with (
     patch.dict('os.environ', {}, clear=False) as env,
-    patch('cw.run_in_container') as run,
+    patch('bro.launch.root.run_in_container') as run,
   ):
     env.pop('CW_IN_CONTAINER', None)
     # trails is always in the bro-run set, so granting it is a no-op → error
@@ -214,7 +216,7 @@ def test_maybe_containerize_grant_already_present_errors(capsys):
 def test_maybe_containerize_revoke_absent_errors(capsys):
   with (
     patch.dict('os.environ', {}, clear=False) as env,
-    patch('cw.run_in_container') as run,
+    patch('bro.launch.root.run_in_container') as run,
   ):
     env.pop('CW_IN_CONTAINER', None)
     rc = maybe_containerize(
@@ -233,7 +235,7 @@ def test_maybe_containerize_revoke_absent_errors(capsys):
 def test_maybe_containerize_bro_grant_extends_the_allow_list():
   with (
     patch.dict('os.environ', {}, clear=False) as env,
-    patch('cw.run_in_container', return_value=0) as run,
+    patch('bro.launch.root.run_in_container', return_value=0) as run,
   ):
     env.pop('CW_IN_CONTAINER', None)
     rc = maybe_containerize(
@@ -252,7 +254,7 @@ def test_maybe_containerize_bro_grant_extends_the_allow_list():
 def test_maybe_containerize_summon_grant_already_allowed_errors(capsys):
   with (
     patch.dict('os.environ', {}, clear=False) as env,
-    patch('cw.run_in_container') as run,
+    patch('bro.launch.root.run_in_container') as run,
   ):
     env.pop('CW_IN_CONTAINER', None)
     rc = maybe_containerize(
@@ -271,7 +273,7 @@ def test_maybe_containerize_summon_grant_already_allowed_errors(capsys):
 def test_maybe_containerize_unregistered_summon_target_errors(capsys):
   with (
     patch.dict('os.environ', {}, clear=False) as env,
-    patch('cw.run_in_container') as run,
+    patch('bro.launch.root.run_in_container') as run,
   ):
     env.pop('CW_IN_CONTAINER', None)
     rc = maybe_containerize(
@@ -290,7 +292,7 @@ def test_maybe_containerize_unregistered_summon_target_errors(capsys):
 def test_maybe_containerize_bro_grant_with_in_place_errors(capsys):
   with (
     patch.dict('os.environ', {}, clear=False) as env,
-    patch('cw.run_in_container') as run,
+    patch('bro.launch.root.run_in_container') as run,
   ):
     env.pop('CW_IN_CONTAINER', None)
     rc = maybe_containerize(
@@ -309,7 +311,7 @@ def test_maybe_containerize_bro_grant_with_in_place_errors(capsys):
 def test_maybe_containerize_grant_with_in_place_errors(capsys):
   with (
     patch.dict('os.environ', {}, clear=False) as env,
-    patch('cw.run_in_container') as run,
+    patch('bro.launch.root.run_in_container') as run,
   ):
     env.pop('CW_IN_CONTAINER', None)
     rc = maybe_containerize(
@@ -328,7 +330,7 @@ def test_maybe_containerize_grant_with_in_place_errors(capsys):
 def test_maybe_containerize_grant_inside_container_errors(capsys):
   with (
     patch.dict('os.environ', {'CW_IN_CONTAINER': '1'}),
-    patch('cw.run_in_container') as run,
+    patch('bro.launch.root.run_in_container') as run,
   ):
     rc = maybe_containerize(
       cli_name='call',
@@ -346,8 +348,8 @@ def test_maybe_containerize_grant_inside_container_errors(capsys):
 def test_maybe_containerize_into_bases_the_clone_on_the_ref():
   with (
     patch.dict('os.environ', {}, clear=False) as env,
-    patch('cw.run_in_container', return_value=0) as run,
-    patch('cw.resolve_ref', return_value='REF-SHA') as resolve,
+    patch('bro.launch.root.run_in_container', return_value=0) as run,
+    patch('workspace.git.resolve_ref', return_value='REF-SHA') as resolve,
   ):
     env.pop('CW_IN_CONTAINER', None)
     rc = maybe_containerize(
@@ -366,8 +368,8 @@ def test_maybe_containerize_into_bases_the_clone_on_the_ref():
 def test_maybe_containerize_unresolvable_into_errors(capsys):
   with (
     patch.dict('os.environ', {}, clear=False) as env,
-    patch('cw.run_in_container') as run,
-    patch('cw.resolve_ref', return_value=None),
+    patch('bro.launch.root.run_in_container') as run,
+    patch('workspace.git.resolve_ref', return_value=None),
   ):
     env.pop('CW_IN_CONTAINER', None)
     rc = maybe_containerize(
@@ -386,7 +388,7 @@ def test_maybe_containerize_unresolvable_into_errors(capsys):
 def test_maybe_containerize_into_with_in_place_errors(capsys):
   with (
     patch.dict('os.environ', {}, clear=False) as env,
-    patch('cw.run_in_container') as run,
+    patch('bro.launch.root.run_in_container') as run,
   ):
     env.pop('CW_IN_CONTAINER', None)
     rc = maybe_containerize(
@@ -481,7 +483,7 @@ def test_create_bro_for_run_effort_unsupported_provider_raises(monkeypatch):
 
 
 def test_chat_gpt_accepts_every_cli_effort_level():
-  # the --effort choices come from cw's EFFORT_LEVELS; the chat_gpt mapping must
+  # the --effort choices come from llm's EFFORT_LEVELS; the chat_gpt mapping must
   # cover the full vocabulary so no accepted flag value fails at spec build.
   for level in EFFORT_LEVELS:
     llm.llms.chat_gpt.LLMSpec().with_effort(level)

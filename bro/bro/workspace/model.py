@@ -1,4 +1,3 @@
-import json
 import os
 import shutil
 import subprocess
@@ -8,25 +7,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from cw.docker import _image_tag
-from cw.git import git_run, no_prompt_env
-from cw.paths import (
-  _containers_dir,
-  _encode_claude_path,
-  _host_log_dir,
-  _latest_jsonl,
-  _session_claude_dir,
-  _worktrees_dir,
-)
+from workspace.docker import image_tag
+from workspace.git import git_run, no_prompt_env
+from workspace.paths import containers_dir, host_log_dir, worktrees_dir
 
 _CONTAINER_PREFIX = 'c:'
 
 
-def _format_ref(name: str, is_container: bool) -> str:
+def format_ref(name: str, is_container: bool) -> str:
   return f'{_CONTAINER_PREFIX}{name}' if is_container else name
 
 
-def _parse_ref(ref: str) -> tuple[str, bool]:
+def parse_ref(ref: str) -> tuple[str, bool]:
   if ref.startswith(_CONTAINER_PREFIX):
     return ref[len(_CONTAINER_PREFIX) :], True
   return ref, False
@@ -37,42 +29,6 @@ def _host_pidfile(project: Path, name: str) -> Path:
   # `git status` and is cleaned up with the worktree). `cw` writes its own pid here
   # for the session's duration.
   return project / '.git' / 'worktrees' / name / 'cw-session.pid'
-
-
-def _read_subject(projects_dir: Path) -> Optional[str]:
-  latest = _latest_jsonl(projects_dir)
-  if latest is None:
-    return None
-  try:
-    f = latest.open()
-  except OSError:
-    return None
-  with f:
-    for line in f:
-      try:
-        d = json.loads(line)
-      except json.JSONDecodeError:
-        continue
-      if d.get('type') != 'user' or d.get('isSidechain') is True:
-        continue
-      content = d.get('message', {}).get('content')
-      text: Optional[str] = None
-      if isinstance(content, str):
-        text = content
-      elif isinstance(content, list):
-        for c in content:
-          if isinstance(c, dict) and c.get('type') == 'text':
-            text = c.get('text')
-            break
-      if text is None:
-        continue
-      stripped = text.lstrip()
-      if stripped.startswith('<'):
-        continue
-      first_line = stripped.split('\n', 1)[0].strip()
-      if len(first_line) > 0:
-        return first_line
-  return None
 
 
 def _last_active(workspace: Path) -> Optional[float]:
@@ -207,7 +163,7 @@ def _host_git_runner(path: Path) -> _GitRunner:
   )
 
 
-def _host_path_is_clean(path: Path, refresh_origin: bool = True) -> tuple[bool, list[str]]:
+def host_path_is_clean(path: Path, refresh_origin: bool = True) -> tuple[bool, list[str]]:
   """run the host clean policy on an arbitrary path — for `cw check-clean` with no
   ref (the cwd), which isn't a managed Workspace. HostWorktree.is_clean delegates here."""
   return _check_clean(_host_git_runner(path), refresh_origin)
@@ -220,7 +176,7 @@ def _cleanup_image() -> Optional[str]:
   project's repository. returns None when none exist (nothing to escalate the
   removal with).
   """
-  tag = _image_tag()
+  tag = image_tag()
   if subprocess.run(['docker', 'image', 'inspect', tag], capture_output=True).returncode == 0:
     return tag
   listed = subprocess.run(
@@ -286,20 +242,15 @@ class Workspace(ABC):
   """a managed workspace backed by either a host worktree or a container clone.
 
   owns the inspection + teardown surface where the two kinds' duality lives
-  (is_active / is_clean / remove / claude_projects_dir). Launch stays mode-specific
-  (worktrees.py / containers.py) and only consumes a Workspace for the post-run finish.
+  (is_active / is_clean / remove). Launch stays mode-specific (worktrees.py /
+  containers.py) and only consumes a Workspace for the post-run finish. Session
+  state a launch surface attaches to a workspace is that surface's own — its
+  readers and teardown compose around `remove()` there.
   """
 
   def __init__(self, name: str, project: Path):
     self.name = name
     self.project = project
-
-  @property
-  def session_dir(self) -> Path:
-    """the session's private claude state dir — a container session's ~/.claude
-    overlay (mounted), a host session's CLAUDE_CONFIG_DIR target (provisioned by
-    cw/claude_config.py)."""
-    return _session_claude_dir(self.name)
 
   @property
   @abstractmethod
@@ -308,9 +259,6 @@ class Workspace(ABC):
   @property
   @abstractmethod
   def ref(self) -> str: ...
-
-  @abstractmethod
-  def claude_projects_dir(self) -> Path: ...
 
   @abstractmethod
   def is_active(self, mounts: set[str]) -> bool: ...
@@ -328,20 +276,17 @@ class Workspace(ABC):
     return _check_clean(runner, refresh_origin)
 
   def _remove_host_log(self) -> None:
-    # the session host log (cw/spawn.py:_HostLogRedirect) is keyed by `ref`, the
-    # same mode-prefixed key the launch surfaces pass to run_root_via_broker.
+    # the session host log (workspace/spawn.py:_HostLogRedirect) is keyed by `ref`,
+    # the same mode-prefixed key the launch surfaces pass to the broker root.
     # diagnostics, not audit — unlike var/cw/summon/, it does not survive removal
-    (_host_log_dir(self.project) / f'{self.ref}.log').unlink(missing_ok=True)
-
-  def subject(self) -> Optional[str]:
-    return _read_subject(self.claude_projects_dir())
+    (host_log_dir(self.project) / f'{self.ref}.log').unlink(missing_ok=True)
 
   def last_active(self) -> Optional[float]:
     return _last_active(self.path)
 
   @classmethod
   def from_ref(cls, ref: str, project: Path) -> 'Workspace':
-    name, is_container = _parse_ref(ref)
+    name, is_container = parse_ref(ref)
     workspace: Workspace = (
       ContainerWorkspace(name, project) if is_container else HostWorktree(name, project)
     )
@@ -355,10 +300,10 @@ class Workspace(ABC):
     # enumeration only (cheap): the per-workspace I/O (subject/last_active/is_clean)
     # is left to the parallelized loops in listing.py / clean.py.
     result: list[Workspace] = []
-    worktrees = _worktrees_dir(project)
+    worktrees = worktrees_dir(project)
     if worktrees.is_dir():
       result.extend(HostWorktree(p.name, project) for p in worktrees.iterdir() if p.is_dir())
-    containers = _containers_dir(project)
+    containers = containers_dir(project)
     if containers.is_dir():
       result.extend(ContainerWorkspace(p.name, project) for p in containers.iterdir() if p.is_dir())
     return result
@@ -367,7 +312,7 @@ class Workspace(ABC):
 class HostWorktree(Workspace):
   @property
   def path(self) -> Path:
-    return _worktrees_dir(self.project) / self.name
+    return worktrees_dir(self.project) / self.name
 
   @property
   def ref(self) -> str:
@@ -376,19 +321,6 @@ class HostWorktree(Workspace):
   @property
   def pidfile(self) -> Path:
     return _host_pidfile(self.project, self.name)
-
-  def claude_projects_dir(self) -> Path:
-    # transcripts live in the session's private state dir; a worktree whose
-    # sessions were recorded before the dir existed (against the host ~/.claude)
-    # is read from the legacy location until a launch migrates it
-    # (cw/claude_config.py:_migrate_legacy_transcripts)
-    private = self.session_dir / 'projects' / _encode_claude_path(self.path)
-    if private.is_dir():
-      return private
-    legacy = Path.home() / '.claude' / 'projects' / _encode_claude_path(self.path)
-    if legacy.is_dir():
-      return legacy
-    return private
 
   def is_active(self, mounts: set[str]) -> bool:
     # host sessions run plain `claude` (no `-w`), so cw is the worktree's owner for
@@ -415,22 +347,17 @@ class HostWorktree(Workspace):
   def remove(self) -> None:
     git_run('worktree', 'remove', '--force', str(self.path))
     git_run('branch', '-D', f'worktree-{self.name}')
-    if self.session_dir.is_dir():
-      shutil.rmtree(self.session_dir, ignore_errors=True)
     self._remove_host_log()
 
 
 class ContainerWorkspace(Workspace):
   @property
   def path(self) -> Path:
-    return _containers_dir(self.project) / self.name
+    return containers_dir(self.project) / self.name
 
   @property
   def ref(self) -> str:
-    return _format_ref(self.name, True)
-
-  def claude_projects_dir(self) -> Path:
-    return self.session_dir / 'projects' / '-workspace'
+    return format_ref(self.name, True)
 
   def is_active(self, mounts: set[str]) -> bool:
     return str(self.path) in mounts
@@ -477,12 +404,9 @@ class ContainerWorkspace(Workspace):
     )
 
   def remove(self) -> None:
-    # the session state (claude dir, host log) is cleaned in a finally so it never
-    # outlives the workspace, even when the workspace dir removal escalates and
-    # then fails.
+    # the host log is cleaned in a finally so it never outlives the workspace,
+    # even when the workspace dir removal escalates and then fails.
     try:
       _remove_container_dir(self.path, _cleanup_image())
     finally:
-      if self.session_dir.is_dir():
-        shutil.rmtree(self.session_dir, ignore_errors=True)
       self._remove_host_log()

@@ -8,10 +8,9 @@ from pathlib import Path
 from typing import Optional
 
 from base import credentials, log
-from cw.claude_config import _seed_claude_json, _write_session_settings
-from cw.paths import _containers_dir, _project_root, _session_claude_dir
-from cw.project import project_config
-from cw.secrets import _ppp_tarball
+from workspace.paths import containers_dir, project_root
+from workspace.project import project_config
+from workspace.store import _ppp_tarball
 
 CONTAINER_DIR = Path(__file__).resolve().parent.parent / 'setup' / 'container'
 BASE_IMAGE_DIR = Path(__file__).resolve().parent.parent / 'setup' / 'base_image'
@@ -19,7 +18,7 @@ BASE_IMAGE_DIR = Path(__file__).resolve().parent.parent / 'setup' / 'base_image'
 
 @dataclass(frozen=True)
 class Launch:
-  """complete description of a cw-style container before supervision is chosen."""
+  """complete description of a managed container before supervision is chosen."""
 
   name: str
   command: list[str]
@@ -130,9 +129,9 @@ def find_container_id(session: Path) -> Optional[str]:
 _SMOKE_TEST_TAG = 'bro/ppp-dev:smoke-test'
 
 
-def _image_tag() -> str:
+def image_tag() -> str:
   h = hashlib.sha256()
-  project = _project_root()
+  project = project_root()
   inputs = (
     sorted(BASE_IMAGE_DIR.iterdir())
     + sorted(CONTAINER_DIR.iterdir())
@@ -199,7 +198,7 @@ def _ensure_image(tag: str) -> None:
       '--build-arg',
       f'CLAUDE_CODE_VERSION={version}',
       '--build-context',
-      f'project={_project_root()}',
+      f'project={project_root()}',
       str(CONTAINER_DIR),
     ],
     check=True,
@@ -235,9 +234,9 @@ def _create_container(argv: list[str], store_tarball: bytes, name: str) -> str:
 def prepare_container(launch: Launch, project: Path) -> str:
   """create the workspace and unstarted container described by `launch`."""
   log.info('creating container workspace %s', launch.name)
-  session = _containers_dir(project) / launch.name
+  session = containers_dir(project) / launch.name
   session.mkdir(parents=True, exist_ok=True)
-  tag = _image_tag()
+  tag = image_tag()
   _ensure_image(tag)
   log.verbose('hydrating the scoped credential store')
   store = credentials.build_scoped_store(launch.secrets, optional=launch.optional_secrets)
@@ -273,7 +272,7 @@ def _docker_create_argv(
 
   `docker create -it --rm --init …` then `docker start -a -i <id>` reproduces `docker
   run -it --rm --init` exactly (TTY, signals, exit code, auto-remove on exit). Splitting them
-  gives `run_in_container` a window to `docker cp` the scoped credential store into
+  gives `prepare_container` a window to `docker cp` the scoped credential store into
   the pre-start container's writable layer — no host-side store, no bind mount.
 
   `tty=False` is the non-TTY variant the broker's supervised children launch with: a
@@ -293,14 +292,6 @@ def _docker_create_argv(
   so an ambient value — the calling session's own theming — never leaks in.
   """
   home = Path.home()
-  claude_dir = _session_claude_dir(name)
-  claude_dir.mkdir(parents=True, exist_ok=True)
-  # seed-once container-private ~/.claude.json: installMethod matches the image's
-  # npm-global claude; the trusted project entry is the clone's mount point
-  claude_json = _seed_claude_json(
-    claude_dir, home / '.claude.json', install_method='global', trusted_paths=['/workspace']
-  )
-  _write_session_settings(claude_dir, container=True)
   argv = ['docker', 'create']
   if tty:
     argv.append('-it')
@@ -316,10 +307,6 @@ def _docker_create_argv(
     '-v',
     f'{project}:/host-repo:ro',
     '-v',
-    f'{claude_json}:/home/cw/.claude.json',
-    '-v',
-    f'{claude_dir}:/home/cw/.claude',
-    '-v',
     f'{home}/.gitconfig:/host-gitconfig:ro',
     '-e',
     'HOME=/home/cw',
@@ -329,11 +316,6 @@ def _docker_create_argv(
     # can show users where their /workspace mount actually lives on the host
     '-e',
     f'CW_HOST_WORKSPACE={session}',
-    '-e',
-    'DISABLE_AUTOUPDATER=1',
-    # doctor would otherwise flag the absent host-native ~/.local/bin/claude
-    '-e',
-    'DISABLE_INSTALLATION_CHECKS=1',
     '-w',
     '/workspace',
     '--memory=8g',

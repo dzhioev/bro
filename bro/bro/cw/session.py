@@ -8,24 +8,30 @@ from pathlib import Path
 from typing import Optional
 
 from base import credentials, log
-from cw.claude_config import _provision_host_claude_dir
-from cw.containers import _broker_enabled, run_in_container
-from cw.docker import Launch, find_container_id
-from cw.flags import DEFAULT_SESSION_MODE
-from cw.git import resolve_ref
-from cw.paths import _latest_jsonl, _project_root, _venv_env
-from cw.project import project_config
-from cw.secrets import (
+from bro.launch.root import run_in_container
+from bro.launch.scope import (
   LaunchScopeError,
   Surface,
-  _apply_claude_auth,
-  _materialize_scoped_store,
-  log_scoped_secrets,
   preflight_scoped_launch,
   scoped_secrets,
 )
-from cw.workspace import ContainerWorkspace, HostWorktree, Workspace
-from cw.worktrees import _ensure_host_worktree, _provision_host_worktree
+from cw.claude_auth import _apply_claude_auth
+from cw.claude_config import (
+  _latest_jsonl,
+  _provision_host_claude_dir,
+  container_claude_state,
+  drop_workspace,
+  workspace_projects_dir,
+)
+from cw.flags import DEFAULT_SESSION_MODE
+from workspace.containers import broker_enabled
+from workspace.docker import Launch, find_container_id
+from workspace.git import resolve_ref
+from workspace.model import ContainerWorkspace, HostWorktree, Workspace
+from workspace.paths import project_root, venv_env
+from workspace.project import project_config
+from workspace.store import log_scoped_secrets, materialize_scoped_store
+from workspace.worktrees import ensure_host_worktree, provision_host_worktree
 
 
 @dataclass(frozen=True)
@@ -72,7 +78,7 @@ class SessionSpec:
 
   @property
   def surface(self) -> Surface:
-    """the credential-scoping surface this session launches (`cw.secrets.scoped_secrets`)."""
+    """the credential-scoping surface this session launches (`bro.launch.scope.scoped_secrets`)."""
     return Surface.BRO_SESSION if self.bro is not None else Surface.CW_SESSION
 
   def to_command_argv(self) -> list[str]:
@@ -154,7 +160,7 @@ def _replace_resume_hint(workspace: Workspace) -> None:
   """
   if not sys.stdout.isatty():
     return
-  if _latest_jsonl(workspace.claude_projects_dir()) is None:
+  if _latest_jsonl(workspace_projects_dir(workspace)) is None:
     return
   resume_command = os.environ['CW_RESUME_COMMAND']
   # \033[2A: move cursor up 2 lines (over claude's hint).
@@ -189,7 +195,7 @@ def start_session(spec: SessionSpec) -> int:
   # existing workspace, so the two are mutually exclusive (checked in main).
   base_ref: Optional[str] = None
   if spec.into is not None:
-    base_ref = resolve_ref(_project_root(), spec.into)
+    base_ref = resolve_ref(project_root(), spec.into)
     if base_ref is None:
       log.error('cannot resolve --into ref: %s', spec.into)
       return 1
@@ -216,7 +222,7 @@ def _container_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
   in-place runner host mode spawns crosses the docker boundary as the container
   command (`cw ss --in-place …`, resolved from the clone's venv after the
   entrypoint prepares the tree, so the session runs its workspace's code)."""
-  project = _project_root()
+  project = project_root()
   workspace = ContainerWorkspace(spec.name, project)
 
   # one session per worktree: refuse if a container is already bound to this
@@ -233,7 +239,7 @@ def _container_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
   # container is created. the runner resolves the actual session id from the
   # same dir (derived from its in-container cwd).
   if spec.resume:
-    projects_dir = workspace.claude_projects_dir()
+    projects_dir = workspace_projects_dir(workspace)
     if _latest_jsonl(projects_dir) is None:
       log.error('no claude session found for %s in %s', spec.name, projects_dir)
       return 1
@@ -261,6 +267,8 @@ def _container_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
     # (the sha's objects are already shared from /host-repo via clone alternates);
     # without it the clone bases on HEAD — the host checkout as cloned.
     env['CW_BASE_REF'] = base_ref
+  claude_mounts, claude_env = container_claude_state(spec.name)
+  env.update(claude_env)
   launch = Launch(
     name=spec.name,
     command=['cw', *spec.to_in_place_argv()],
@@ -270,9 +278,16 @@ def _container_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
     tty=True,
     forward_env=True,
     optional_secrets=scoped.optional,
+    extra_mounts=claude_mounts,
   )
-  code = run_in_container(launch, drop=spec.drop, may_summon=may_summon)
-  if not spec.drop and code == 0:
+  code = run_in_container(launch, may_summon=may_summon)
+  if spec.drop:
+    try:
+      drop_workspace(workspace)
+      log.info('removed container workspace %s', spec.name)
+    except RuntimeError as e:
+      log.warning('could not fully remove container workspace %s: %s', spec.name, e)
+  elif code == 0:
     _replace_resume_hint(workspace)
   return code
 
@@ -290,12 +305,13 @@ def _run_host_root_via_broker(
   supervise the runner process on the broker loop until it exits."""
   # imported here, not at module level: _broker_enabled() must be able to short-circuit
   # a launch before anything touches the broker package (see its docstring).
-  from cw.spawn import ProcessLaunchSpec, run_root_via_broker
-  from cw.summon import STATUS_ENV, summon_status_file
+  from bro.launch.spawn import run_root_via_broker
+  from bro.launch.summon_control import STATUS_ENV, summon_status_file
+  from workspace.spawn import ProcessLaunchSpec
 
   # a host session reads the summon-status file the host-side SummonControl
   # writes, straight at its host path; the session key is the bare workspace
-  # name — container mode prefixes `c:` (see cw/summon.py)
+  # name — container mode prefixes `c:` (see bro/launch/summon_control.py)
   env[STATUS_ENV] = str(summon_status_file(project, name))
   launch = ProcessLaunchSpec(command=command, cwd=str(worktree), env=env)
   return run_root_via_broker(launch, project, session=name, may_summon=may_summon)
@@ -321,7 +337,7 @@ def _host_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
   `BROKER_DISABLED` short-circuits it (see `_broker_enabled`), the runner is
   supervised as the root peer of a broker, so the session gets its channel
   (`BROKER_CHANNEL` in claude's env) exactly like container mode."""
-  project = _project_root()
+  project = project_root()
   os.chdir(project)
   workspace = HostWorktree(spec.name, project)
   worktree = workspace.path
@@ -342,8 +358,8 @@ def _host_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
   # cheap --resume existence guard, before the worktree auto-create below could
   # manufacture an empty workspace for a mistyped name. the runner resolves the
   # actual session id from the same dir (derived from its cwd).
-  if spec.resume and _latest_jsonl(workspace.claude_projects_dir()) is None:
-    log.error('no claude session found for %s in %s', spec.name, workspace.claude_projects_dir())
+  if spec.resume and _latest_jsonl(workspace_projects_dir(workspace)) is None:
+    log.error('no claude session found for %s in %s', spec.name, workspace_projects_dir(workspace))
     return 1
 
   if not _preflight_cw_session_auth(spec):
@@ -367,9 +383,9 @@ def _host_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
     return 1
   log_scoped_secrets(spec.name, scoped.required, scoped.optional)
 
-  if not _ensure_host_worktree(worktree, branch, base_ref):
+  if not ensure_host_worktree(worktree, branch, base_ref):
     return 1
-  if not _provision_host_worktree(worktree):
+  if not provision_host_worktree(worktree):
     return 1
 
   # the worktree's own cw — the inner runner executes the workspace's code, not
@@ -390,13 +406,13 @@ def _host_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
   # as in the runner: the runner is the worktree's own code, which may predate
   # them — the inherited env keeps such a session on the setup-token, isolated
   # from the host's rotating-OAuth /login churn.
-  runner_env = _venv_env(worktree / '.venv')
+  runner_env = venv_env(worktree / '.venv')
   claude_dir = _provision_host_claude_dir(spec.name, worktree, project)
   runner_env['CLAUDE_CONFIG_DIR'] = str(claude_dir)
-  runner_env[credentials.REGISTRY_ENV] = str(_materialize_scoped_store(store, claude_dir / '.ppp'))
+  runner_env[credentials.REGISTRY_ENV] = str(materialize_scoped_store(store, claude_dir / '.ppp'))
   _apply_claude_auth(runner_env)
   with _held_pidfile(workspace.pidfile):
-    if _broker_enabled():
+    if broker_enabled():
       code = _run_host_root_via_broker(
         spec.name, command, worktree, project, runner_env, may_summon
       )
@@ -404,7 +420,7 @@ def _host_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
       code = subprocess.run(command, cwd=str(worktree), env=runner_env).returncode
 
   if spec.drop:
-    workspace.remove()
+    drop_workspace(workspace)
   elif code == 0:
     _replace_resume_hint(workspace)
   return code

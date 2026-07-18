@@ -2,8 +2,11 @@ import tomllib
 from dataclasses import dataclass, field
 from typing import Optional
 
-from cw.constants import DEFAULT_SESSION_BRO
-from cw.paths import _project_root
+from workspace.paths import project_root
+
+# the `--persona` default — the bro a session runs as when neither --persona
+# nor --bro names one.
+DEFAULT_SESSION_BRO = 'ppp-dev'
 
 
 def _default_image_repository(persona: str) -> str:
@@ -23,10 +26,10 @@ class ProjectConfig:
 
 def project_config() -> ProjectConfig:
   """the `[tool.bro]` table of the operated repo's pyproject.toml, read from
-  `_project_root()` — how a repo that carries another project than ppp declares
+  `project_root()` — how a repo that carries another project than ppp declares
   its own session defaults. an absent file or table means the ppp defaults; an
   unknown key raises rather than being ignored."""
-  pyproject = _project_root() / 'pyproject.toml'
+  pyproject = project_root() / 'pyproject.toml'
   if not pyproject.is_file():
     return ProjectConfig()
   table = tomllib.loads(pyproject.read_text()).get('tool', {}).get('bro', {})

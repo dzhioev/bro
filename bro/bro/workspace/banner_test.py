@@ -1,38 +1,39 @@
 import pytest
 
-import cw.banner
-from cw.banner import SessionFacts
+import workspace.banner
+import workspace.paths
+from workspace.banner import SessionFacts
 
 
 class TestSplitLaunchPrompt:
   def test_new_marker(self):
-    head, prompt = cw.banner._split_launch_prompt('dive-in --mode attended --new I want X')
+    head, prompt = workspace.banner._split_launch_prompt('dive-in --mode attended --new I want X')
     assert head == 'dive-in --mode attended --new '
     assert prompt == 'I want X'
 
   def test_dashdash_marker(self):
-    head, prompt = cw.banner._split_launch_prompt('cw ss name -- run the thing')
+    head, prompt = workspace.banner._split_launch_prompt('cw ss name -- run the thing')
     assert head == 'cw ss name -- '
     assert prompt == 'run the thing'
 
   def test_p_marker(self):
-    head, prompt = cw.banner._split_launch_prompt('cw ss -p hello world')
+    head, prompt = workspace.banner._split_launch_prompt('cw ss -p hello world')
     assert head == 'cw ss -p '
     assert prompt == 'hello world'
 
   def test_long_prompt_marker(self):
-    head, prompt = cw.banner._split_launch_prompt('cw ss --prompt do the thing')
+    head, prompt = workspace.banner._split_launch_prompt('cw ss --prompt do the thing')
     assert head == 'cw ss --prompt '
     assert prompt == 'do the thing'
 
   def test_no_marker_returns_command_unchanged(self):
-    head, prompt = cw.banner._split_launch_prompt('dive-in -t abc123')
+    head, prompt = workspace.banner._split_launch_prompt('dive-in -t abc123')
     assert head == 'dive-in -t abc123'
     assert prompt is None
 
   def test_marker_without_trailing_content_is_not_a_match(self):
     # `dive-in --new ` with no seed should not produce an empty prompt
-    head, prompt = cw.banner._split_launch_prompt('dive-in --mode attended --new ')
+    head, prompt = workspace.banner._split_launch_prompt('dive-in --mode attended --new ')
     assert prompt is None
     assert head == 'dive-in --mode attended --new '
 
@@ -44,10 +45,10 @@ class TestSessionFacts:
     # and stub the /.dockerenv probe so host runs don't accidentally read True
     for v in ('CW_NAME', 'CW_BRO', 'CW_COMMAND', 'PPP_SHELL_COMMAND', 'CW_HOST_WORKSPACE'):
       monkeypatch.delenv(v, raising=False)
-    monkeypatch.setattr(cw.banner, '_in_container', lambda: False)
+    monkeypatch.setattr(workspace.paths, 'in_container', lambda: False)
 
   def test_container_session(self, monkeypatch):
-    monkeypatch.setattr(cw.banner, '_in_container', lambda: True)
+    monkeypatch.setattr(workspace.paths, 'in_container', lambda: True)
     monkeypatch.setenv('CW_NAME', 'my-task')
     monkeypatch.setenv('CW_BRO', 'ppp-dev')
     monkeypatch.setenv('CW_HOST_WORKSPACE', '/host/var/cw/containers/my-task')
@@ -74,7 +75,7 @@ class TestSessionFacts:
     project = tmp_path / 'project'
     worktree = project / 'var' / 'cw' / 'worktrees' / 'feature'
     worktree.mkdir(parents=True)
-    monkeypatch.setattr(cw.banner, '_project_root', lambda: project)
+    monkeypatch.setattr(workspace.paths, 'project_root', lambda: project)
     monkeypatch.setenv('CW_NAME', 'feature')
     monkeypatch.setenv('CW_COMMAND', 'cw ss feature')
     facts = SessionFacts.collect()
@@ -176,7 +177,7 @@ class TestRenderBanner:
     out = _facts(bro='pm').render_visual()
     # logo present (top five lines unchanged); bottom line gets a `// <bro>`
     # signature — dim slashes, bright-white-bold bro name
-    for line in cw.banner._BRO_LOGO.split('\n')[:-1]:
+    for line in workspace.banner._BRO_LOGO.split('\n')[:-1]:
       assert line in out
     assert '\033[2m//\033[0m \033[1;97mpm\033[0m' in out
     # no parens-form kind on the session line — encoded by the c: prefix instead

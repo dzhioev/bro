@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from typing import Optional
 
 import session_log_health
-from cw.paths import _in_container, _project_root, _worktrees_dir
-from cw.workspace import _format_ref
+from workspace import paths
+from workspace.model import format_ref
 
 # six-line block-letter "B R O" rendered with box-drawing characters;
 # shown on top of the `cw banner` output in --bro sessions.
@@ -85,7 +85,7 @@ class SessionFacts:
     run (e.g. `bro run <bro> --in-place`) reads the launching environment, whose
     `CW_BRO` is the launcher's own persona or absent.
     """
-    in_container = _in_container()
+    in_container = paths.in_container()
     name = os.environ.get('CW_NAME') or None
     bro = bro_override if bro_override is not None else (os.environ.get('CW_BRO') or None)
     cw_command = os.environ.get('CW_COMMAND') or None
@@ -96,11 +96,11 @@ class SessionFacts:
     if not in_container and host_workspace is None and name is not None:
       # host worktree case — derive path from the project root + worktree name
       try:
-        project = _project_root()
+        project = paths.project_root()
       except subprocess.CalledProcessError:
         project = None
       if project is not None:
-        candidate = _worktrees_dir(project) / name
+        candidate = paths.worktrees_dir(project) / name
         if candidate.is_dir():
           host_workspace = str(candidate)
 
@@ -131,7 +131,7 @@ class SessionFacts:
   def display_ref(self) -> str:
     """the workspace name with the container `c:` prefix when in a container."""
     name = self.name if self.name is not None else '(unnamed)'
-    return _format_ref(name, self.in_container)
+    return format_ref(name, self.in_container)
 
   def render_visual(self) -> str:
     """render the banner with ANSI colour + the Bro logo for bro sessions."""

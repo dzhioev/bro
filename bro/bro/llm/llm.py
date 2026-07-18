@@ -39,6 +39,11 @@ class LLM(ABC):
     return None
 
 
+# the neutral reasoning-effort vocabulary `LLMSpec.with_effort` accepts; each
+# provider maps these levels onto its own scale.
+EFFORT_LEVELS = ('low', 'medium', 'high', 'xhigh', 'max')
+
+
 @dataclass(frozen=True)
 class LLMSpec(ABC):
   """recipe for an LLM: model + provider-specific knobs.
@@ -69,8 +74,8 @@ class LLMSpec(ABC):
 
   def with_effort(self, effort: str) -> Self:
     """return a copy of self with the provider's reasoning-effort knob set to the
-    given neutral level ('low'/'medium'/'high'/'xhigh'/'max'); each provider maps
-    the neutral vocabulary onto its own scale.
+    given neutral level (`EFFORT_LEVELS`); each provider maps the neutral
+    vocabulary onto its own scale.
 
     raises NotImplementedError when the provider has no effort equivalent, and
     ValueError on a level outside the neutral vocabulary.

@@ -6,7 +6,7 @@ from bro.run import main
 def test_run_uses_canonical_container_launch(capsys):
   with (
     patch.dict('os.environ', {}, clear=False) as environment,
-    patch('cw.run_in_container', return_value=0) as run,
+    patch('bro.launch.root.run_in_container', return_value=0) as run,
   ):
     environment.pop('CW_IN_CONTAINER', None)
     environment.pop('PPP_SHELL_COMMAND', None)
@@ -22,7 +22,7 @@ def test_run_uses_canonical_container_launch(capsys):
 def test_global_flag_before_run_reaches_the_launcher():
   with (
     patch.dict('os.environ', {}, clear=False) as environment,
-    patch('cw.run_in_container', return_value=0) as run,
+    patch('bro.launch.root.run_in_container', return_value=0) as run,
   ):
     environment.pop('CW_IN_CONTAINER', None)
     assert main(['bro', '--verbose', 'run', 'ppp-dev', 'hello']) == 0
@@ -50,7 +50,7 @@ def test_run_refuses_implicit_in_container_execution(capsys):
 def test_chat_uses_canonical_container_launch():
   with (
     patch.dict('os.environ', {}, clear=False) as environment,
-    patch('cw.run_in_container', return_value=0) as run,
+    patch('bro.launch.root.run_in_container', return_value=0) as run,
     patch('bro.launch.call._tty_supported', return_value=True),
   ):
     environment.pop('CW_IN_CONTAINER', None)

@@ -52,14 +52,15 @@ from typing import Optional
 
 import pytest
 
-import cw.docker
-import cw.spawn
+import bro.launch.spawn
+import workspace.docker
+import workspace.spawn
 from broker.brotocol import Message
 from broker.dispatcher import Broker, Dispatcher, ping_handler, spawn_test_handler
 from broker.runtime import Peer
 from broker.transports.unix import UnixServerTransport
-from cw.docker import find_container_id
-from cw.spawn import DockerLaunchSpec, DockerSpawner
+from workspace.docker import find_container_id
+from workspace.spawn import DockerLaunchSpec, DockerSpawner
 
 
 def _docker_available() -> bool:
@@ -283,8 +284,8 @@ exec "$@"
 # `cw ss` seam (`run_in_container`) under the isolated HOME/project root
 _DRIVER = """
 import json, os, sys
-from cw.containers import run_in_container
-from cw.docker import Launch
+from bro.launch.root import run_in_container
+from workspace.docker import Launch
 
 launch = Launch(name=os.environ['CW_E2E_NAME'],
                 command=json.loads(os.environ['CW_E2E_COMMAND']), env={}, secrets=(),
@@ -329,9 +330,9 @@ class IsolatedEnv:
     if not self.containers_dir.is_dir():
       return []
     live = []
-    for workspace in sorted(self.containers_dir.iterdir()):
-      if find_container_id(workspace) is not None:
-        live.append(workspace.name)
+    for workspace_dir in sorted(self.containers_dir.iterdir()):
+      if find_container_id(workspace_dir) is not None:
+        live.append(workspace_dir.name)
     return live
 
   def leaked_dirs(self, parent: Path) -> list[str]:
@@ -349,8 +350,8 @@ def _leak_residue(cw_sessions: Path) -> list[str]:
 def _remove_stray_containers(containers_dir: Path) -> None:
   if not containers_dir.is_dir():
     return
-  for workspace in containers_dir.iterdir():
-    container_id = find_container_id(workspace)
+  for workspace_dir in containers_dir.iterdir():
+    container_id = find_container_id(workspace_dir)
     if container_id is not None:
       subprocess.run(['docker', 'rm', '-f', container_id], capture_output=True)
 
@@ -382,8 +383,8 @@ def isolated_env() -> Iterator[IsolatedEnv]:
   # the clone's pyproject/uv.lock are identical to the checkout's, so this resolves to
   # the image real sessions already built; builds only on a host that never launched one
   with pytest.MonkeyPatch.context() as monkeypatch:
-    monkeypatch.setattr(cw.docker, '_project_root', lambda: project)
-    cw.docker._ensure_image(cw.docker._image_tag())
+    monkeypatch.setattr(workspace.docker, 'project_root', lambda: project)
+    workspace.docker._ensure_image(workspace.docker.image_tag())
   env = IsolatedEnv(
     root=root,
     project=project,
@@ -620,7 +621,7 @@ def _run_broker_scenario(
 ) -> BrokerRun:
   name = f'{_NAME_PREFIX}b-{case}-root'
   root = DockerLaunchSpec(
-    cw.docker.Launch(
+    workspace.docker.Launch(
       name=name,
       command=['python', '-c', _PROBE_B_ROOT],
       env={'CW_E2E_DEADLINE': str(probe_deadline), 'CW_E2E_EXIT_AFTER': exit_after},
@@ -631,7 +632,7 @@ def _run_broker_scenario(
     )
   )
   child = DockerLaunchSpec(
-    cw.docker.Launch(
+    workspace.docker.Launch(
       name=f'{name}-child',
       command=child_command,
       env={},
@@ -657,8 +658,9 @@ def _run_broker_scenario(
   result: dict[str, int] = {}
   with pytest.MonkeyPatch.context() as monkeypatch:
     monkeypatch.setenv('HOME', str(env.home))
-    monkeypatch.setattr(cw.spawn, '_project_root', lambda: env.project)
-    monkeypatch.setattr(cw.docker, '_project_root', lambda: env.project)
+    monkeypatch.setattr(bro.launch.spawn, 'project_root', lambda: env.project)
+    monkeypatch.setattr(workspace.spawn, 'project_root', lambda: env.project)
+    monkeypatch.setattr(workspace.docker, 'project_root', lambda: env.project)
     thread = threading.Thread(target=lambda: result.update(code=facade.run(root)))
     thread.start()
     max_sockets = 0

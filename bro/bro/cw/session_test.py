@@ -4,12 +4,12 @@ import tempfile
 from typing import Optional
 from unittest.mock import patch
 
-import cw.project
-import cw.secrets
+import bro.launch.scope
+import bro.launch.summon_control
 import cw.session
-import cw.summon
+import workspace.project
+from bro.launch.scope import ScopedSecrets
 from cw.flags import DEFAULT_SESSION_MODE
-from cw.secrets import ScopedSecrets
 
 
 def _spec(
@@ -67,13 +67,15 @@ class _ContainerHarness:
         return_value=ScopedSecrets(set(self.secrets), set(self.optional_secrets), True),
       ),
       patch('cw.session.credentials.try_get', return_value='tok'),
-      patch('cw.secrets.credentials.build_scoped_store', return_value={}),
+      patch('bro.launch.scope.credentials.build_scoped_store', return_value={}),
+      patch('cw.session.container_claude_state', return_value=([], {})),
+      patch('cw.session.drop_workspace'),
       patch('cw.session._replace_resume_hint'),
       # keep the bro-registry import out; threading is asserted per-test
-      patch('cw.summon.summon_allow_list', return_value=set()),
+      patch('bro.launch.summon_control.summon_allow_list', return_value=set()),
       # session_bro reads the operated repo's [tool.bro]; tests may run outside a
       # git repo, so anchor the config read to a bare root (no pyproject -> defaults)
-      patch('cw.project._project_root', return_value=pathlib.Path('/main-repo')),
+      patch('workspace.project.project_root', return_value=pathlib.Path('/main-repo')),
     ]
     entered = [p.__enter__() for p in self._patches]
     self.env = entered[0]
@@ -82,7 +84,9 @@ class _ContainerHarness:
     self.run_in_container = entered[2]
     self.try_get = entered[4]
     self.build_scoped_store = entered[5]
-    self.summon_allow_list = entered[7]
+    self.container_claude_state = entered[6]
+    self.drop_workspace = entered[7]
+    self.summon_allow_list = entered[9]
     return self
 
   def __exit__(self, *exception):
@@ -229,7 +233,7 @@ class TestContainerCommand:
 
   def test_resume_guard_fails_fast_without_a_session(self, tmp_path):
     with _ContainerHarness() as h:
-      with patch.object(cw.session.ContainerWorkspace, 'claude_projects_dir') as projects:
+      with patch('cw.session.workspace_projects_dir') as projects:
         projects.return_value = tmp_path
         rc = cw.session.start_session(_spec(resume=True))
     assert rc == 1
@@ -238,7 +242,7 @@ class TestContainerCommand:
   def test_resume_carried_as_bare_flag_the_runner_resolves(self, tmp_path):
     (tmp_path / 'abc.jsonl').write_text('{}')
     with _ContainerHarness() as h:
-      with patch.object(cw.session.ContainerWorkspace, 'claude_projects_dir') as projects:
+      with patch('cw.session.workspace_projects_dir') as projects:
         projects.return_value = tmp_path
         rc = cw.session.start_session(_spec(resume=True))
     assert rc == 0
@@ -371,7 +375,7 @@ class TestSessionBro:
 
 class TestConcurrentSessionGuard:
   def test_container_refuses_when_active(self, monkeypatch, tmp_path):
-    monkeypatch.setattr(cw.session, '_project_root', lambda: tmp_path)
+    monkeypatch.setattr(cw.session, 'project_root', lambda: tmp_path)
     monkeypatch.setattr(cw.session, 'find_container_id', lambda path: 'abc123')
 
     def boom(*_a, **_k):
@@ -381,16 +385,19 @@ class TestConcurrentSessionGuard:
     assert cw.session._container_session(_spec(), None) == 1
 
   def test_container_proceeds_when_inactive(self, monkeypatch, tmp_path):
-    monkeypatch.setattr(cw.session, '_project_root', lambda: tmp_path)
+    monkeypatch.setattr(cw.session, 'project_root', lambda: tmp_path)
     monkeypatch.setattr(cw.session, 'find_container_id', lambda path: None)
     monkeypatch.setattr(
       cw.session,
       'scoped_secrets',
       lambda *_a, **_k: ScopedSecrets(set(), set(), True),
     )
-    monkeypatch.setattr(cw.summon, 'summon_allow_list', lambda *_a, **_k: set())
+    monkeypatch.setattr(bro.launch.summon_control, 'summon_allow_list', lambda *_a, **_k: set())
     monkeypatch.setattr(cw.session.credentials, 'try_get', lambda name: 'tok')
-    monkeypatch.setattr(cw.secrets.credentials, 'build_scoped_store', lambda names, optional=(): {})
+    monkeypatch.setattr(
+      bro.launch.scope.credentials, 'build_scoped_store', lambda names, optional=(): {}
+    )
+    monkeypatch.setattr(cw.session, 'container_claude_state', lambda name: ([], {}))
     called: list = []
     monkeypatch.setattr(cw.session, 'run_in_container', lambda *_a, **_k: called.append(True) or 0)
     monkeypatch.setattr(cw.session, '_replace_resume_hint', lambda workspace: None)
@@ -398,8 +405,8 @@ class TestConcurrentSessionGuard:
     assert called == [True]
 
   def test_host_refuses_when_active(self, monkeypatch, tmp_path):
-    monkeypatch.setattr(cw.session, '_project_root', lambda: tmp_path)
-    monkeypatch.setattr(cw.project, '_project_root', lambda: tmp_path)
+    monkeypatch.setattr(cw.session, 'project_root', lambda: tmp_path)
+    monkeypatch.setattr(workspace.project, 'project_root', lambda: tmp_path)
     monkeypatch.setattr(cw.session.os, 'chdir', lambda p: None)
 
     class _FakeHost:
@@ -415,12 +422,12 @@ class TestConcurrentSessionGuard:
     def boom(*_a, **_k):
       raise AssertionError('must not provision when a session is already active')
 
-    monkeypatch.setattr(cw.session, '_ensure_host_worktree', boom)
+    monkeypatch.setattr(cw.session, 'ensure_host_worktree', boom)
     assert cw.session._host_session(_spec(host=True), None) == 1
 
   def test_host_proceeds_when_inactive(self, monkeypatch, tmp_path):
-    monkeypatch.setattr(cw.session, '_project_root', lambda: tmp_path)
-    monkeypatch.setattr(cw.project, '_project_root', lambda: tmp_path)
+    monkeypatch.setattr(cw.session, 'project_root', lambda: tmp_path)
+    monkeypatch.setattr(workspace.project, 'project_root', lambda: tmp_path)
     monkeypatch.setattr(cw.session.os, 'chdir', lambda p: None)
 
     class _FakeHost:
@@ -432,15 +439,17 @@ class TestConcurrentSessionGuard:
         return False
 
     monkeypatch.setattr(cw.session, 'HostWorktree', _FakeHost)
-    monkeypatch.setattr(cw.summon, 'summon_allow_list', lambda *_a, **_k: set())
+    monkeypatch.setattr(bro.launch.summon_control, 'summon_allow_list', lambda *_a, **_k: set())
     monkeypatch.setattr(cw.session.credentials, 'try_get', lambda name: 'tok')
     monkeypatch.setattr(
       cw.session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set(), True)
     )
-    monkeypatch.setattr(cw.secrets.credentials, 'build_scoped_store', lambda names, optional=(): {})
+    monkeypatch.setattr(
+      bro.launch.scope.credentials, 'build_scoped_store', lambda names, optional=(): {}
+    )
     called: list = []
     monkeypatch.setattr(
-      cw.session, '_ensure_host_worktree', lambda *_a: called.append(True) or False
+      cw.session, 'ensure_host_worktree', lambda *_a: called.append(True) or False
     )
     assert cw.session._host_session(_spec(host=True), None) == 1
     assert called == [True]
@@ -475,12 +484,13 @@ class TestHostSession:
     cw_bin = worktree / '.venv' / 'bin' / 'cw'
     cw_bin.parent.mkdir(parents=True)
     cw_bin.write_text('')
-    monkeypatch.setattr(cw.session, '_project_root', lambda: tmp_path)
-    monkeypatch.setattr(cw.project, '_project_root', lambda: tmp_path)
+    monkeypatch.setattr(cw.session, 'project_root', lambda: tmp_path)
+    monkeypatch.setattr(workspace.project, 'project_root', lambda: tmp_path)
     monkeypatch.setattr(cw.session.os, 'chdir', lambda p: None)
     monkeypatch.setattr(cw.session, 'HostWorktree', fake_host)
-    monkeypatch.setattr(cw.session, '_ensure_host_worktree', lambda *_a: True)
-    monkeypatch.setattr(cw.session, '_provision_host_worktree', lambda *_a: True)
+    monkeypatch.setattr(cw.session, 'workspace_projects_dir', lambda ws: ws.claude_projects_dir())
+    monkeypatch.setattr(cw.session, 'ensure_host_worktree', lambda *_a: True)
+    monkeypatch.setattr(cw.session, 'provision_host_worktree', lambda *_a: True)
     # keep the launch tests off the real credential store; the auth-transform
     # test overrides this with its own fake
     monkeypatch.setattr(cw.session, '_apply_claude_auth', lambda env, **_k: None)
@@ -491,19 +501,23 @@ class TestHostSession:
     monkeypatch.setattr(
       cw.session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets({'github'}, set(), True)
     )
-    monkeypatch.setattr(cw.secrets.credentials, 'build_scoped_store', lambda names, optional=(): {})
+    monkeypatch.setattr(
+      bro.launch.scope.credentials, 'build_scoped_store', lambda names, optional=(): {}
+    )
     monkeypatch.setattr(
       cw.session,
-      '_materialize_scoped_store',
+      'materialize_scoped_store',
       lambda store, directory: directory / 'credentials.json',
     )
-    monkeypatch.setattr(cw.summon, 'summon_allow_list', lambda *_a, **_k: set())
+    monkeypatch.setattr(bro.launch.summon_control, 'summon_allow_list', lambda *_a, **_k: set())
     return cw_bin, worktree
 
   def test_broker_supervises_the_worktrees_own_in_place_runner(self, monkeypatch, tmp_path):
     cw_bin, worktree = self._prepare_launch(monkeypatch, tmp_path)
-    monkeypatch.setattr(cw.session, '_broker_enabled', lambda: True)
-    monkeypatch.setattr(cw.summon, 'summon_allow_list', lambda *_a, **_k: {'devoops'})
+    monkeypatch.setattr(cw.session, 'broker_enabled', lambda: True)
+    monkeypatch.setattr(
+      bro.launch.summon_control, 'summon_allow_list', lambda *_a, **_k: {'devoops'}
+    )
     roots: list = []
 
     def fake_root(name, command, worktree_arg, project, env, may_summon):
@@ -538,18 +552,18 @@ class TestHostSession:
     def bad_allow_list(*_a, **_k):
       raise ValueError('unknown summon target(s): devoop')
 
-    monkeypatch.setattr(cw.summon, 'summon_allow_list', bad_allow_list)
+    monkeypatch.setattr(bro.launch.summon_control, 'summon_allow_list', bad_allow_list)
 
     def boom(*_a, **_k):
       raise AssertionError('must not ensure a worktree when the summon grant is bad')
 
-    monkeypatch.setattr(cw.session, '_ensure_host_worktree', boom)
+    monkeypatch.setattr(cw.session, 'ensure_host_worktree', boom)
     spec = _spec(host=True, grant=['@devoop'])
     assert cw.session._host_session(spec, None) == 1
 
   def test_direct_spawn_when_broker_disabled(self, monkeypatch, tmp_path):
     cw_bin, worktree = self._prepare_launch(monkeypatch, tmp_path)
-    monkeypatch.setattr(cw.session, '_broker_enabled', lambda: False)
+    monkeypatch.setattr(cw.session, 'broker_enabled', lambda: False)
     runs: list = []
 
     def fake_run(argv, **kwargs):
@@ -572,7 +586,7 @@ class TestHostSession:
     from types import SimpleNamespace
 
     self._prepare_launch(monkeypatch, tmp_path)
-    monkeypatch.setattr(cw.session, '_broker_enabled', lambda: False)
+    monkeypatch.setattr(cw.session, 'broker_enabled', lambda: False)
     monkeypatch.setattr(
       cw.session.subprocess, 'run', lambda *_a, **_k: SimpleNamespace(returncode=0)
     )
@@ -585,7 +599,7 @@ class TestHostSession:
     from types import SimpleNamespace
 
     self._prepare_launch(monkeypatch, tmp_path)
-    monkeypatch.setattr(cw.session, '_broker_enabled', lambda: False)
+    monkeypatch.setattr(cw.session, 'broker_enabled', lambda: False)
     monkeypatch.setattr(
       cw.session.subprocess, 'run', lambda *_a, **_k: SimpleNamespace(returncode=3)
     )
@@ -598,13 +612,13 @@ class TestHostSession:
     from types import SimpleNamespace
 
     self._prepare_launch(monkeypatch, tmp_path)
-    monkeypatch.setattr(cw.session, '_broker_enabled', lambda: False)
+    monkeypatch.setattr(cw.session, 'broker_enabled', lambda: False)
     monkeypatch.setattr(
       cw.session.subprocess, 'run', lambda *_a, **_k: SimpleNamespace(returncode=0)
     )
     events: list = []
     monkeypatch.setattr(cw.session, '_replace_resume_hint', lambda workspace: events.append('hint'))
-    monkeypatch.setattr(cw.session.HostWorktree, 'remove', lambda self: events.append('remove'))
+    monkeypatch.setattr(cw.session, 'drop_workspace', lambda ws: events.append('remove'))
     assert cw.session._host_session(_spec(host=True, drop=True), None) == 0
     assert events == ['remove']
 
@@ -612,7 +626,7 @@ class TestHostSession:
     # the outer applies _apply_claude_auth to the runner env it spawns, so a
     # worktree whose own runner predates the transform still inherits the token
     cw_bin, worktree = self._prepare_launch(monkeypatch, tmp_path)
-    monkeypatch.setattr(cw.session, '_broker_enabled', lambda: False)
+    monkeypatch.setattr(cw.session, 'broker_enabled', lambda: False)
 
     def fake_apply(env, **_kwargs):
       env['CLAUDE_CODE_OAUTH_TOKEN'] = 'applied'
@@ -634,7 +648,7 @@ class TestHostSession:
     # the outer provisions the per-session state dir and exports CLAUDE_CONFIG_DIR
     # itself, so a worktree whose own runner predates the config dir is covered too
     self._prepare_launch(monkeypatch, tmp_path)
-    monkeypatch.setattr(cw.session, '_broker_enabled', lambda: False)
+    monkeypatch.setattr(cw.session, 'broker_enabled', lambda: False)
     runs: list = []
 
     def fake_run(argv, **kwargs):
@@ -656,7 +670,7 @@ class TestHostSession:
     def boom(*_a, **_k):
       raise AssertionError('must not ensure a worktree without the setup-token')
 
-    monkeypatch.setattr(cw.session, '_ensure_host_worktree', boom)
+    monkeypatch.setattr(cw.session, 'ensure_host_worktree', boom)
     assert cw.session._host_session(_spec(host=True), None) == 1
 
   def test_missing_claude_code_does_not_gate_a_bro_launch(self, monkeypatch, tmp_path):
@@ -664,7 +678,7 @@ class TestHostSession:
 
     self._prepare_launch(monkeypatch, tmp_path)
     monkeypatch.setattr(cw.session.credentials, 'try_get', lambda name: None)
-    monkeypatch.setattr(cw.session, '_broker_enabled', lambda: False)
+    monkeypatch.setattr(cw.session, 'broker_enabled', lambda: False)
     monkeypatch.setattr(
       cw.session.subprocess, 'run', lambda *_a, **_k: SimpleNamespace(returncode=0)
     )
@@ -674,16 +688,18 @@ class TestHostSession:
     from types import SimpleNamespace
 
     self._prepare_launch(monkeypatch, tmp_path)
-    monkeypatch.setattr(cw.session, '_broker_enabled', lambda: False)
+    monkeypatch.setattr(cw.session, 'broker_enabled', lambda: False)
     materialized: dict = {}
 
     def fake_materialize(store, directory):
       materialized.update(store=store, directory=directory)
       return directory / 'credentials.json'
 
-    monkeypatch.setattr(cw.session, '_materialize_scoped_store', fake_materialize)
+    monkeypatch.setattr(cw.session, 'materialize_scoped_store', fake_materialize)
     monkeypatch.setattr(
-      cw.secrets.credentials, 'build_scoped_store', lambda names, optional=(): {'x.cred': b'v'}
+      bro.launch.scope.credentials,
+      'build_scoped_store',
+      lambda names, optional=(): {'x.cred': b'v'},
     )
     runs: list = []
 
@@ -702,7 +718,7 @@ class TestHostSession:
     from types import SimpleNamespace
 
     self._prepare_launch(monkeypatch, tmp_path)
-    monkeypatch.setattr(cw.session, '_broker_enabled', lambda: False)
+    monkeypatch.setattr(cw.session, 'broker_enabled', lambda: False)
     monkeypatch.setattr(
       cw.session,
       'scoped_secrets',
@@ -714,7 +730,7 @@ class TestHostSession:
       hydrated.update(names=set(names), optional=set(optional))
       return {}
 
-    monkeypatch.setattr(cw.secrets.credentials, 'build_scoped_store', fake_build)
+    monkeypatch.setattr(bro.launch.scope.credentials, 'build_scoped_store', fake_build)
     monkeypatch.setattr(
       cw.session.subprocess, 'run', lambda *_a, **_k: SimpleNamespace(returncode=0)
     )
@@ -734,22 +750,23 @@ class TestHostSession:
     def missing(names, optional=()):
       raise cw.session.credentials.SecretNotFound('github')
 
-    monkeypatch.setattr(cw.secrets.credentials, 'build_scoped_store', missing)
+    monkeypatch.setattr(bro.launch.scope.credentials, 'build_scoped_store', missing)
 
     def boom(*_a, **_k):
       raise AssertionError('must not ensure a worktree when hydration fails')
 
-    monkeypatch.setattr(cw.session, '_ensure_host_worktree', boom)
+    monkeypatch.setattr(cw.session, 'ensure_host_worktree', boom)
     assert cw.session._host_session(_spec(host=True), None) == 1
 
   def test_missing_inner_cw_fails_before_spawn(self, monkeypatch, tmp_path):
     fake_host, worktree = self._fake_host(tmp_path, has_session=False)
-    monkeypatch.setattr(cw.session, '_project_root', lambda: tmp_path)
-    monkeypatch.setattr(cw.project, '_project_root', lambda: tmp_path)
+    monkeypatch.setattr(cw.session, 'project_root', lambda: tmp_path)
+    monkeypatch.setattr(workspace.project, 'project_root', lambda: tmp_path)
     monkeypatch.setattr(cw.session.os, 'chdir', lambda p: None)
     monkeypatch.setattr(cw.session, 'HostWorktree', fake_host)
-    monkeypatch.setattr(cw.session, '_ensure_host_worktree', lambda *_a: True)
-    monkeypatch.setattr(cw.session, '_provision_host_worktree', lambda *_a: True)
+    monkeypatch.setattr(cw.session, 'workspace_projects_dir', lambda ws: ws.claude_projects_dir())
+    monkeypatch.setattr(cw.session, 'ensure_host_worktree', lambda *_a: True)
+    monkeypatch.setattr(cw.session, 'provision_host_worktree', lambda *_a: True)
     monkeypatch.setattr(cw.session.credentials, 'try_get', lambda name: 'tok')
     monkeypatch.setattr(
       cw.session, '_provision_host_claude_dir', lambda name, wt, project: tmp_path / 'claude-config'
@@ -757,8 +774,10 @@ class TestHostSession:
     monkeypatch.setattr(
       cw.session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set(), True)
     )
-    monkeypatch.setattr(cw.secrets.credentials, 'build_scoped_store', lambda names, optional=(): {})
-    monkeypatch.setattr(cw.summon, 'summon_allow_list', lambda *_a, **_k: set())
+    monkeypatch.setattr(
+      bro.launch.scope.credentials, 'build_scoped_store', lambda names, optional=(): {}
+    )
+    monkeypatch.setattr(bro.launch.summon_control, 'summon_allow_list', lambda *_a, **_k: set())
 
     def boom(*_a, **_k):
       raise AssertionError('must not spawn without the inner cw')
@@ -768,15 +787,16 @@ class TestHostSession:
 
   def test_resume_guard_fails_fast_before_worktree_create(self, monkeypatch, tmp_path):
     fake_host, _ = self._fake_host(tmp_path, has_session=False)
-    monkeypatch.setattr(cw.session, '_project_root', lambda: tmp_path)
-    monkeypatch.setattr(cw.project, '_project_root', lambda: tmp_path)
+    monkeypatch.setattr(cw.session, 'project_root', lambda: tmp_path)
+    monkeypatch.setattr(workspace.project, 'project_root', lambda: tmp_path)
     monkeypatch.setattr(cw.session.os, 'chdir', lambda p: None)
     monkeypatch.setattr(cw.session, 'HostWorktree', fake_host)
+    monkeypatch.setattr(cw.session, 'workspace_projects_dir', lambda ws: ws.claude_projects_dir())
 
     def boom(*_a, **_k):
       raise AssertionError('must not create a worktree for a resume with no session')
 
-    monkeypatch.setattr(cw.session, '_ensure_host_worktree', boom)
+    monkeypatch.setattr(cw.session, 'ensure_host_worktree', boom)
     assert cw.session._host_session(_spec(host=True, resume=True), None) == 1
 
 
@@ -808,18 +828,18 @@ class TestHostBrokerPingRoundTrip:
         def is_active(self, mounts):
           return False
 
-      monkeypatch.setattr(cw.session, '_project_root', lambda: root)
+      monkeypatch.setattr(cw.session, 'project_root', lambda: root)
       monkeypatch.setattr(cw.session.os, 'chdir', lambda p: None)
       monkeypatch.setattr(cw.session, 'HostWorktree', _FakeHost)
-      monkeypatch.setattr(cw.session, '_ensure_host_worktree', lambda *_a: True)
-      monkeypatch.setattr(cw.session, '_provision_host_worktree', lambda *_a: True)
-      monkeypatch.setattr(cw.summon, 'summon_allow_list', lambda *_a, **_k: set())
+      monkeypatch.setattr(cw.session, 'ensure_host_worktree', lambda *_a: True)
+      monkeypatch.setattr(cw.session, 'provision_host_worktree', lambda *_a: True)
+      monkeypatch.setattr(bro.launch.summon_control, 'summon_allow_list', lambda *_a, **_k: set())
       monkeypatch.setattr(cw.session.credentials, 'try_get', lambda name: 'tok')
       monkeypatch.setattr(
         cw.session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set(), True)
       )
       monkeypatch.setattr(
-        cw.secrets.credentials, 'build_scoped_store', lambda names, optional=(): {}
+        bro.launch.scope.credentials, 'build_scoped_store', lambda names, optional=(): {}
       )
       monkeypatch.delenv('BROKER_DISABLED', raising=False)
       assert cw.session._host_session(_spec(host=True), None) == 0

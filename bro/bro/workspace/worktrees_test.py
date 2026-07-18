@@ -1,4 +1,4 @@
-import cw.worktrees
+import workspace.worktrees
 
 
 class TestProvisionHostWorktree:
@@ -14,8 +14,8 @@ class TestProvisionHostWorktree:
       captured.update(kwargs)
       return SimpleNamespace(returncode=0)
 
-    monkeypatch.setattr(cw.worktrees.subprocess, 'run', fake_run)
-    assert cw.worktrees._provision_host_worktree(tmp_path) is True
+    monkeypatch.setattr(workspace.worktrees.subprocess, 'run', fake_run)
+    assert workspace.worktrees.provision_host_worktree(tmp_path) is True
     assert 'CW_VENV_BAKED' not in captured['env']
 
 
@@ -31,7 +31,7 @@ class TestEnsureHostWorktree:
       rc = 0 if (branch_exists or not is_show_ref) else 1
       return SimpleNamespace(returncode=rc, stdout='')
 
-    monkeypatch.setattr(cw.worktrees.subprocess, 'run', fake_run)
+    monkeypatch.setattr(workspace.worktrees.subprocess, 'run', fake_run)
     return calls
 
   def _add_command(self, calls):
@@ -40,7 +40,7 @@ class TestEnsureHostWorktree:
   def test_new_branch_uses_base_ref(self, monkeypatch, tmp_path):
     calls = self._recorder(monkeypatch)
     worktree = tmp_path / 'worktree'
-    assert cw.worktrees._ensure_host_worktree(worktree, 'worktree-x', 'sha123') is True
+    assert workspace.worktrees.ensure_host_worktree(worktree, 'worktree-x', 'sha123') is True
     assert self._add_command(calls) == [
       'git',
       'worktree',
@@ -56,7 +56,7 @@ class TestEnsureHostWorktree:
     # the launcher's-HEAD rule: a new worktree bases on the checkout as it stands
     calls = self._recorder(monkeypatch)
     worktree = tmp_path / 'worktree'
-    assert cw.worktrees._ensure_host_worktree(worktree, 'worktree-x') is True
+    assert workspace.worktrees.ensure_host_worktree(worktree, 'worktree-x') is True
     assert self._add_command(calls) == [
       'git',
       'worktree',
@@ -71,7 +71,7 @@ class TestEnsureHostWorktree:
   def test_existing_branch_ignores_base_ref(self, monkeypatch, tmp_path):
     calls = self._recorder(monkeypatch, branch_exists=True)
     worktree = tmp_path / 'worktree'
-    assert cw.worktrees._ensure_host_worktree(worktree, 'worktree-x', 'sha123') is True
+    assert workspace.worktrees.ensure_host_worktree(worktree, 'worktree-x', 'sha123') is True
     assert self._add_command(calls) == [
       'git',
       'worktree',
@@ -85,5 +85,5 @@ class TestEnsureHostWorktree:
     calls = self._recorder(monkeypatch)
     worktree = tmp_path / 'worktree'
     worktree.mkdir()
-    assert cw.worktrees._ensure_host_worktree(worktree, 'worktree-x', 'sha123') is True
+    assert workspace.worktrees.ensure_host_worktree(worktree, 'worktree-x', 'sha123') is True
     assert calls == []

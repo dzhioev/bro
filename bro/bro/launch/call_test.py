@@ -10,7 +10,7 @@ import llm.llms.chat_gpt
 import llm.llms.echo
 from bro.bros.bro import Bro
 from bro.launch.call import TextRenderer, call_text, chat_main, main
-from cw.constants import bro_git_identity_env
+from bro.launch.identity import bro_git_identity_env
 from llm.llm import LLM, LLMSpec
 from llm.mcp import MCPServer
 from llm.observer import NullObserver, Observer
@@ -82,7 +82,9 @@ async def test_text_drives_send_until_eof(capsys):
 
 @pytest.mark.asyncio
 async def test_text_emits_banner_before_first_reply(capsys, monkeypatch):
-  monkeypatch.setattr('cw.render_banner', lambda llm=False, bro=None: f'BANNER[{bro}]')
+  monkeypatch.setattr(
+    'workspace.banner.render_banner', lambda llm=False, bro=None: f'BANNER[{bro}]'
+  )
   bro = RecordBro(response='reply')
   await call_text(
     bro, 'first', observer=NullObserver(), read_line=_ScriptedLines([]), now=_fixed_now
@@ -299,7 +301,7 @@ def test_default_falls_back_to_plain_when_no_fast_mode(monkeypatch):
 def test_call_re_execs_into_container_when_outside():
   with (
     patch.dict('os.environ', {}, clear=False) as env,
-    patch('cw.run_in_container', return_value=0) as run,
+    patch('bro.launch.root.run_in_container', return_value=0) as run,
     patch('bro.launch.call._tty_supported', return_value=True),
   ):
     env.pop('CW_IN_CONTAINER', None)
@@ -323,7 +325,7 @@ def test_call_re_execs_into_container_when_outside():
 def test_call_forwards_text_when_host_not_a_tty():
   with (
     patch.dict('os.environ', {}, clear=False) as env,
-    patch('cw.run_in_container', return_value=0) as run,
+    patch('bro.launch.root.run_in_container', return_value=0) as run,
     patch('bro.launch.call._tty_supported', return_value=False),
   ):
     env.pop('CW_IN_CONTAINER', None)
@@ -338,7 +340,7 @@ def test_call_forwards_text_when_host_not_a_tty():
 def test_call_forwards_effort_into_container():
   with (
     patch.dict('os.environ', {}, clear=False) as env,
-    patch('cw.run_in_container', return_value=0) as run,
+    patch('bro.launch.root.run_in_container', return_value=0) as run,
     patch('bro.launch.call._tty_supported', return_value=True),
   ):
     env.pop('CW_IN_CONTAINER', None)
@@ -385,7 +387,7 @@ def test_effort_flag_on_effortless_provider_exits_1(monkeypatch, capsys):
 def test_call_no_trails_disables_recording_in_container():
   with (
     patch.dict('os.environ', {}, clear=False) as env,
-    patch('cw.run_in_container', return_value=0) as run,
+    patch('bro.launch.root.run_in_container', return_value=0) as run,
     patch('bro.launch.call._tty_supported', return_value=True),
   ):
     env.pop('CW_IN_CONTAINER', None)
@@ -426,7 +428,7 @@ def test_call_resume_with_no_trails_is_an_error():
 def test_call_forwards_resume_into_container():
   with (
     patch.dict('os.environ', {}, clear=False) as env,
-    patch('cw.run_in_container', return_value=0) as run,
+    patch('bro.launch.root.run_in_container', return_value=0) as run,
     patch('bro.launch.call._tty_supported', return_value=True),
   ):
     env.pop('CW_IN_CONTAINER', None)
@@ -441,7 +443,7 @@ def test_call_forwards_resume_into_container():
 def test_call_forwards_resume_trail_id_with_message():
   with (
     patch.dict('os.environ', {}, clear=False) as env,
-    patch('cw.run_in_container', return_value=0) as run,
+    patch('bro.launch.root.run_in_container', return_value=0) as run,
     patch('bro.launch.call._tty_supported', return_value=True),
   ):
     env.pop('CW_IN_CONTAINER', None)
@@ -546,7 +548,7 @@ def test_call_skips_container_with_in_place_flag(monkeypatch):
   monkeypatch.setattr('bro.registry.create_bro', lambda name: RecordBro())
   monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
   monkeypatch.setattr('bro.launch.call._tty_supported', lambda: False)
-  with patch('cw.run_in_container') as run:
+  with patch('bro.launch.root.run_in_container') as run:
     rc = main(['call', 'record', 'hi', '--in-place'])
   assert rc is None
   assert run.call_count == 0
@@ -632,7 +634,7 @@ def test_message_bubble_selection_honors_offsets():
 async def test_tui_drag_inside_markdown_bubble_selects_rendered_text(monkeypatch):
   from bro.launch.call_tui import ChatApp, MessageBubble
 
-  monkeypatch.setattr('cw.render_banner', lambda llm=False, bro=None: 'BANNER')
+  monkeypatch.setattr('workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
   app = ChatApp(RecordBro(), None)
   async with app.run_test(size=(100, 40)) as pilot:
     app._append_bro_message('a **bold** reply')
@@ -669,7 +671,7 @@ async def test_tui_markdown_bubble_copy_reflows_to_logical_lines(monkeypatch):
 
   from bro.launch.call_tui import ChatApp, MessageBubble
 
-  monkeypatch.setattr('cw.render_banner', lambda llm=False, bro=None: 'BANNER')
+  monkeypatch.setattr('workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
   command = (
     'dive-in --auto --grant notion -t "https://example.com/x" '
     '"a long quoted argument that certainly wraps across the bubble width"'
@@ -702,7 +704,7 @@ async def test_tui_survives_markup_like_text(monkeypatch):
 
   from bro.launch.call_tui import ChatApp, MessageBubble, StatsScreen, SystemBubble
 
-  monkeypatch.setattr('cw.render_banner', lambda llm=False, bro=None: 'BANNER')
+  monkeypatch.setattr('workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
   # the shape that crashed the compositor: a bare `[` opens what Textual's
   # content-markup grammar reads as a tag with key=value pairs inside, and
   # rich.markup.escape does not neutralize it
@@ -739,7 +741,7 @@ async def test_tui_copies_selection_to_clipboard_on_mouse_up(monkeypatch):
 
   from bro.launch.call_tui import ChatApp, MessageBubble
 
-  monkeypatch.setattr('cw.render_banner', lambda llm=False, bro=None: 'BANNER')
+  monkeypatch.setattr('workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
   app = ChatApp(RecordBro(), None)
   async with app.run_test() as pilot:
     # a plain click also posts TextSelected; with nothing selected the
@@ -793,7 +795,7 @@ async def test_tui_typing_indicator_tracks_run_state(monkeypatch):
 
   from bro.launch.call_tui import ChatApp, TypingIndicator
 
-  monkeypatch.setattr('cw.render_banner', lambda llm=False, bro=None: 'BANNER')
+  monkeypatch.setattr('workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
   app = ChatApp(RecordBro(), None)
   async with app.run_test() as pilot:
     app._show_typing()

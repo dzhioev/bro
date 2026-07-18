@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 
 from base import log, spawn
-from cw.paths import _claude_config_dir, _claude_projects_dir
+from cw.claude_config import _claude_config_dir, _claude_projects_dir
 
 # a stop bounds the final sync — one transcript upload, seconds even for a
 # large session

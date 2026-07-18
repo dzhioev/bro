@@ -1,6 +1,5 @@
 from base.args import Parser
 
-EFFORT_LEVELS = ('low', 'medium', 'high', 'xhigh', 'max')
 DEFAULT_SESSION_MODE = 'attended'
 
 
@@ -17,6 +16,7 @@ def add_forwarded_flags(parser: Parser) -> None:
   )
   # imported here, not at module level: llm pulls asyncio (~150ms) and this
   # module sits on every `import cw`
+  from llm.llm import EFFORT_LEVELS
   from llm.mcp import MODES
 
   parser.add_argument(

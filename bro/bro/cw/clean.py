@@ -2,16 +2,17 @@ import concurrent.futures
 from typing import Optional
 
 from base import log
-from cw.docker import running_mounts
-from cw.git import git_run, no_prompt_env
-from cw.paths import _project_root
-from cw.workspace import ContainerWorkspace, Workspace
+from cw.claude_config import drop_workspace
+from workspace.docker import running_mounts
+from workspace.git import git_run, no_prompt_env
+from workspace.model import ContainerWorkspace, Workspace
+from workspace.paths import project_root
 
 
 def clean_workspaces(
   force: bool = False, dry_run: bool = False, refs: Optional[list[str]] = None
 ) -> int:
-  project = _project_root()
+  project = project_root()
   workspaces = Workspace.all(project)
 
   filter_refs = set(refs) if refs is not None and len(refs) > 0 else None
@@ -75,7 +76,7 @@ def clean_workspaces(
       log.info('would remove %s', workspace.ref)
     else:
       try:
-        workspace.remove()
+        drop_workspace(workspace)
       except RuntimeError as e:
         log.error('skip %s: %s', workspace.ref, e)
         failed += 1

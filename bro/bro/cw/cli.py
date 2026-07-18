@@ -4,16 +4,16 @@ from pathlib import Path
 from typing import Optional
 
 from base.args import REMAINDER, SUPPRESS, Parser
-from cw.banner import banner
+from cw.claude_auth import _load_anthropic_key
 from cw.clean import clean_workspaces
-from cw.containers import exec_in_workspace
 from cw.flags import add_forwarded_flags
 from cw.listing import list_workspaces
-from cw.paths import _project_root
 from cw.runner import run_in_place
-from cw.secrets import _load_anthropic_key
 from cw.session import SessionSpec, start_session
-from cw.workspace import Workspace, _host_path_is_clean
+from workspace.banner import banner
+from workspace.containers import exec_in_workspace
+from workspace.model import Workspace, host_path_is_clean
+from workspace.paths import project_root
 
 __cli_name__ = 'cw'
 
@@ -107,10 +107,10 @@ def main(argv: list[str]) -> Optional[int]:
   if command == 'check-clean':
     ref = args['ref']
     if ref is None:
-      clean_, reasons = _host_path_is_clean(Path.cwd())
+      clean_, reasons = host_path_is_clean(Path.cwd())
     else:
       try:
-        workspace = Workspace.from_ref(ref, _project_root())
+        workspace = Workspace.from_ref(ref, project_root())
       except ValueError as e:
         print(str(e), file=sys.stderr)
         return 1

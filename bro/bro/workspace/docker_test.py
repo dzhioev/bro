@@ -1,41 +1,9 @@
-import json
 import signal
 
 import pytest
 
-import cw.claude_config
-import cw.docker
-import cw.project
-
-
-class TestPluginSeedContract:
-  # the enabled plugin must also be installed: settings.json enables it (cw/docker.py),
-  # the Dockerfile installs + stages it, and the entrypoint copies the stage into
-  # the bind-mounted ~/.claude/plugins. enabling without installing is exactly the
-  # regression that reintroduced the "LSP Plugin Recommendation" prompt.
-  _SEED_DIR = '/opt/claude-plugins-seed'
-
-  def test_settings_enables_pyright_lsp(self):
-    assert cw.claude_config._SESSION_SETTINGS_JSON['enabledPlugins'] == {
-      'pyright-lsp@claude-plugins-official': True
-    }
-
-  def test_claude_json_suppresses_marketplace_autoinstall(self):
-    # the marketplace is baked into the image, so the runtime auto-install (a
-    # network fetch that can also prompt) must be marked already-done.
-    session_json = cw.claude_config._SESSION_CLAUDE_JSON
-    assert session_json['officialMarketplaceAutoInstallAttempted'] is True
-
-  def test_dockerfile_installs_and_stages_the_enabled_plugin(self):
-    plugin = next(iter(cw.claude_config._SESSION_SETTINGS_JSON['enabledPlugins']))
-    dockerfile = (cw.docker.CONTAINER_DIR / 'Dockerfile').read_text()
-    assert f'claude plugin install {plugin}' in dockerfile
-    assert self._SEED_DIR in dockerfile
-
-  def test_entrypoint_copies_the_stage(self):
-    entrypoint = (cw.docker.CONTAINER_DIR / 'entrypoint.sh').read_text()
-    assert self._SEED_DIR in entrypoint
-    assert '.claude/plugins' in entrypoint
+import workspace.docker
+import workspace.project
 
 
 class _FakeProc:
@@ -53,7 +21,7 @@ class TestCreateContainer:
       calls.append({'argv': argv, 'input': k.get('input')})
       return results(argv)
 
-    monkeypatch.setattr(cw.docker.subprocess, 'run', fake_run)
+    monkeypatch.setattr(workspace.docker.subprocess, 'run', fake_run)
     return calls
 
   def test_creates_then_injects_store(self, monkeypatch):
@@ -63,7 +31,9 @@ class TestCreateContainer:
       return _FakeProc(returncode=0)
 
     calls = self._patch_run(monkeypatch, results)
-    container_id = cw.docker._create_container(['docker', 'create', 'ARGS'], b'TARBALL', 'ws')
+    container_id = workspace.docker._create_container(
+      ['docker', 'create', 'ARGS'], b'TARBALL', 'ws'
+    )
     assert container_id == 'cid123'
     cp = next(c for c in calls if c['argv'][:3] == ['docker', 'cp', '-'])
     assert cp['argv'][3] == 'cid123:/home/cw'
@@ -72,7 +42,7 @@ class TestCreateContainer:
   def test_create_failure_raises(self, monkeypatch):
     self._patch_run(monkeypatch, lambda argv: _FakeProc(returncode=1, stderr='boom'))
     with pytest.raises(RuntimeError, match='docker create'):
-      cw.docker._create_container(['docker', 'create'], b'', 'ws')
+      workspace.docker._create_container(['docker', 'create'], b'', 'ws')
 
   def test_cp_failure_removes_container_and_raises(self, monkeypatch):
     def results(argv):
@@ -84,7 +54,7 @@ class TestCreateContainer:
 
     calls = self._patch_run(monkeypatch, results)
     with pytest.raises(RuntimeError, match='docker cp'):
-      cw.docker._create_container(['docker', 'create'], b'', 'ws')
+      workspace.docker._create_container(['docker', 'create'], b'', 'ws')
     assert calls[-1]['argv'] == ['docker', 'rm', '-f', 'cid123']
 
 
@@ -96,22 +66,22 @@ class TestContainerRunning:
       calls.append(argv)
       return result
 
-    monkeypatch.setattr(cw.docker.subprocess, 'run', fake_run)
+    monkeypatch.setattr(workspace.docker.subprocess, 'run', fake_run)
     return calls
 
   def test_running(self, monkeypatch):
     calls = self._probe(monkeypatch, _FakeProc(returncode=0, stdout='true\n'))
-    assert cw.docker.container_running('cid123') is True
+    assert workspace.docker.container_running('cid123') is True
     assert calls == [['docker', 'inspect', '--format', '{{.State.Running}}', 'cid123']]
 
   def test_exited(self, monkeypatch):
     self._probe(monkeypatch, _FakeProc(returncode=0, stdout='false\n'))
-    assert cw.docker.container_running('cid123') is False
+    assert workspace.docker.container_running('cid123') is False
 
   def test_removed_reads_as_not_running(self, monkeypatch):
     # --rm removes an exited container, so the inspect error is the common exit shape
     self._probe(monkeypatch, _FakeProc(returncode=1, stderr='no such object'))
-    assert cw.docker.container_running('cid123') is False
+    assert workspace.docker.container_running('cid123') is False
 
 
 class TestSuspendUntilContinued:
@@ -124,13 +94,15 @@ class TestSuspendUntilContinued:
         return pause_result
       return _FakeProc(returncode=0)
 
-    monkeypatch.setattr(cw.docker.subprocess, 'run', fake_run)
-    monkeypatch.setattr(cw.docker.os, 'kill', lambda pid, sig: events.append(('kill', pid, sig)))
+    monkeypatch.setattr(workspace.docker.subprocess, 'run', fake_run)
+    monkeypatch.setattr(
+      workspace.docker.os, 'kill', lambda pid, sig: events.append(('kill', pid, sig))
+    )
     return events
 
   def test_freezes_stops_own_group_then_thaws(self, monkeypatch):
     events = self._dance(monkeypatch)
-    cw.docker.suspend_until_continued('cid123')
+    workspace.docker.suspend_until_continued('cid123')
     # the stop targets the whole process group (pid 0): the launching shell reports its
     # job stopped only when every process in it stops, dive-in wrappers included
     assert events == [
@@ -141,7 +113,7 @@ class TestSuspendUntilContinued:
 
   def test_freezer_failure_warns_but_still_suspends(self, monkeypatch, caplog):
     events = self._dance(monkeypatch, pause_result=_FakeProc(returncode=1, stderr='not running'))
-    cw.docker.suspend_until_continued('cid123')
+    workspace.docker.suspend_until_continued('cid123')
     assert ('kill', 0, signal.SIGTSTP) in events
     assert events[-1] == ['docker', 'unpause', 'cid123']
     assert 'docker pause cid123 failed: not running' in caplog.text
@@ -151,13 +123,13 @@ class TestImageTag:
   def test_repository_and_submodule_manifest_come_from_the_project(self, monkeypatch, tmp_path):
     (tmp_path / 'pyproject.toml').write_text('[tool.bro]\nimage-repository = "custom-images"\n')
     (tmp_path / 'uv.lock').write_text('lock')
-    monkeypatch.setattr(cw.docker, '_project_root', lambda: tmp_path)
-    monkeypatch.setattr(cw.project, '_project_root', lambda: tmp_path)
-    without_submodule = cw.docker._image_tag()
+    monkeypatch.setattr(workspace.docker, 'project_root', lambda: tmp_path)
+    monkeypatch.setattr(workspace.project, 'project_root', lambda: tmp_path)
+    without_submodule = workspace.docker.image_tag()
     assert without_submodule.startswith('custom-images:')
     (tmp_path / 'ppp').mkdir()
     (tmp_path / 'ppp' / 'pyproject.toml').write_text('[project.scripts]')
-    with_submodule = cw.docker._image_tag()
+    with_submodule = workspace.docker.image_tag()
     assert with_submodule.startswith('custom-images:')
     assert with_submodule != without_submodule
 
@@ -174,7 +146,7 @@ class TestPruneSupersededImages:
         return remove_result(argv)
       return _FakeProc(returncode=0)
 
-    monkeypatch.setattr(cw.docker.subprocess, 'run', fake_run)
+    monkeypatch.setattr(workspace.docker.subprocess, 'run', fake_run)
     return calls
 
   def test_removes_all_but_current_smoke_test_and_untagged(self, monkeypatch):
@@ -183,7 +155,7 @@ class TestPruneSupersededImages:
       stdout='bro/ppp-dev:cur\nbro/ppp-dev:smoke-test\nbro/ppp-dev:<none>\nbro/ppp-dev:old1\nbro/ppp-dev:old2\n',
     )
     calls = self._patch_run(monkeypatch, listing)
-    cw.docker._prune_superseded_images('bro/ppp-dev:cur')
+    workspace.docker._prune_superseded_images('bro/ppp-dev:cur')
     removals = [argv for argv in calls if argv[:3] == ['docker', 'image', 'rm']]
     assert removals == [
       ['docker', 'image', 'rm', 'bro/ppp-dev:old1'],
@@ -203,7 +175,7 @@ class TestPruneSupersededImages:
       return _FakeProc(returncode=0)
 
     calls = self._patch_run(monkeypatch, listing, remove_result)
-    cw.docker._prune_superseded_images('bro/ppp-dev:cur')
+    workspace.docker._prune_superseded_images('bro/ppp-dev:cur')
     removals = [argv for argv in calls if argv[:3] == ['docker', 'image', 'rm']]
     assert removals == [
       ['docker', 'image', 'rm', 'bro/ppp-dev:in-use'],
@@ -212,7 +184,7 @@ class TestPruneSupersededImages:
 
   def test_listing_failure_skips_pruning(self, monkeypatch):
     calls = self._patch_run(monkeypatch, _FakeProc(returncode=1, stderr='daemon down'))
-    cw.docker._prune_superseded_images('bro/ppp-dev:cur')
+    workspace.docker._prune_superseded_images('bro/ppp-dev:cur')
     assert [argv for argv in calls if argv[:3] == ['docker', 'image', 'rm']] == []
 
 
@@ -220,25 +192,27 @@ class TestPrepareContainer:
   def test_runs_the_shared_prepare_sequence_from_the_launch(self, monkeypatch, tmp_path):
     project = tmp_path / 'project'
     events: list = []
-    monkeypatch.setattr(cw.docker, '_image_tag', lambda: events.append('tag') or 'image')
-    monkeypatch.setattr(cw.docker, '_ensure_image', lambda tag: events.append(('ensure', tag)))
+    monkeypatch.setattr(workspace.docker, 'image_tag', lambda: events.append('tag') or 'image')
     monkeypatch.setattr(
-      cw.docker.credentials,
+      workspace.docker, '_ensure_image', lambda tag: events.append(('ensure', tag))
+    )
+    monkeypatch.setattr(
+      workspace.docker.credentials,
       'build_scoped_store',
       lambda secrets, optional=(): events.append(('store', secrets, optional)) or {'x': b'y'},
     )
-    monkeypatch.setattr(cw.docker, '_ppp_tarball', lambda store: b'TARBALL')
+    monkeypatch.setattr(workspace.docker, '_ppp_tarball', lambda store: b'TARBALL')
     monkeypatch.setattr(
-      cw.docker,
+      workspace.docker,
       '_docker_create_argv',
       lambda *args, **kwargs: events.append(('argv', args, kwargs)) or ['docker', 'create'],
     )
     monkeypatch.setattr(
-      cw.docker,
+      workspace.docker,
       '_create_container',
       lambda argv, tarball, name: events.append(('create', argv, tarball, name)) or 'cid',
     )
-    launch = cw.docker.Launch(
+    launch = workspace.docker.Launch(
       name='ws',
       command=['claude'],
       env={'MARKER': 'x'},
@@ -249,7 +223,7 @@ class TestPrepareContainer:
       optional_secrets=('openai',),
       extra_mounts=('/host:/container',),
     )
-    assert cw.docker.prepare_container(launch, project) == 'cid'
+    assert workspace.docker.prepare_container(launch, project) == 'cid'
     assert (project / 'var' / 'cw' / 'containers' / 'ws').is_dir()
     assert events[0:3] == [
       'tag',
@@ -278,11 +252,10 @@ class TestPrepareContainer:
 class TestDockerCreateArgv:
   @pytest.fixture
   def build_argv(self, monkeypatch, tmp_path):
-    monkeypatch.setattr(cw.docker.Path, 'home', lambda: tmp_path)
-    monkeypatch.setattr(cw.docker, '_seed_claude_json', lambda d, h, **k: tmp_path / '.claude.json')
+    monkeypatch.setattr(workspace.docker.Path, 'home', lambda: tmp_path)
 
     def build(**kwargs):
-      return cw.docker._docker_create_argv(
+      return workspace.docker._docker_create_argv(
         'tag', 'ws', tmp_path / 'proj', tmp_path / 'sess', ['claude'], **kwargs
       )
 
@@ -292,15 +265,6 @@ class TestDockerCreateArgv:
     # `docker create -it --rm` is the unstarted half of `docker run -it --rm`;
     # run_in_container pairs it with `docker start -a -i`.
     assert build_argv()[:4] == ['docker', 'create', '-it', '--rm']
-
-  def test_settings_preaccept_the_bypass_permissions_dialog(self, build_argv, tmp_path):
-    # the container workspace is an isolated clone, so --dangerously-skip-permissions
-    # needs no interactive acknowledgement (container sessions only — the host
-    # provision keeps the dialog, see claude_config_test)
-    build_argv()
-    settings_file = tmp_path / '.claude' / 'cw-sessions' / 'ws' / 'settings.json'
-    settings = json.loads(settings_file.read_text())
-    assert settings['skipDangerousModePermissionPrompt'] is True
 
   def test_docker_sock_mounted_by_default(self, build_argv):
     assert '/var/run/docker.sock:/var/run/docker.sock' in build_argv()
@@ -346,10 +310,10 @@ class TestDockerCreateArgv:
   def test_forward_env_false_switches_the_forward_loop_off(self, build_argv, monkeypatch):
     # a broker-spawned child's environment is its LaunchSpec snapshot (extra_env)
     # only; none of the ambient _DOCKER_FORWARD_ENV vars may reach it
-    for var in cw.docker._DOCKER_FORWARD_ENV:
+    for var in workspace.docker._DOCKER_FORWARD_ENV:
       monkeypatch.setenv(var, 'ambient')
     argv = build_argv(forward_env=False, extra_env={'MARKER': 'x'})
-    assert not any(var in argv for var in cw.docker._DOCKER_FORWARD_ENV)
+    assert not any(var in argv for var in workspace.docker._DOCKER_FORWARD_ENV)
     assert 'MARKER=x' in argv
 
   def test_extra_env_injected_as_explicit_key_value(self, build_argv, monkeypatch):

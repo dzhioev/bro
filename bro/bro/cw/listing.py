@@ -4,9 +4,10 @@ from typing import Optional
 
 import humanize
 
-from cw.docker import running_mounts
-from cw.paths import _project_root
-from cw.workspace import ContainerWorkspace, Workspace
+from cw.claude_config import read_subject
+from workspace.docker import running_mounts
+from workspace.model import ContainerWorkspace, Workspace
+from workspace.paths import project_root
 
 _BADGES = {'L': '[.]', 'C': '[o]', 'X': '[x]'}
 _KIND_ORDER = {'L': 0, 'C': 1, 'X': 2}
@@ -22,12 +23,12 @@ def _truncate(s: str, n: int) -> str:
 
 
 def list_workspaces() -> int:
-  project = _project_root()
+  project = project_root()
   workspaces = Workspace.all(project)
   containers = [workspace for workspace in workspaces if isinstance(workspace, ContainerWorkspace)]
 
   def _read(workspace: Workspace) -> tuple[Workspace, Optional[str], Optional[float]]:
-    return workspace, workspace.subject(), workspace.last_active()
+    return workspace, read_subject(workspace), workspace.last_active()
 
   with concurrent.futures.ThreadPoolExecutor() as pool:
     mounts_future = pool.submit(running_mounts) if len(containers) > 0 else None

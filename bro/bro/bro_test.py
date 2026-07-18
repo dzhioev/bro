@@ -1402,7 +1402,7 @@ class TestBannerTool:
 
   @pytest.mark.asyncio
   async def test_renders_the_llm_banner_with_the_bro_name(self, monkeypatch):
-    import cw
+    import workspace.banner
 
     captured: dict = {}
 
@@ -1411,7 +1411,7 @@ class TestBannerTool:
       captured['bro'] = bro
       return 'kind: container'
 
-    monkeypatch.setattr(cw, 'render_banner', fake_render_banner)
+    monkeypatch.setattr(workspace.banner, 'render_banner', fake_render_banner)
     tool = await _find_tool(EchoBro(), 'banner')
     assert await tool.call({}) == 'kind: container'
     assert captured == {'llm': True, 'bro': 'echo'}

@@ -5,24 +5,20 @@ import signal
 import sys
 import textwrap
 import threading
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
-import cw.bro_run
-import cw.constants
-import cw.docker
-import cw.paths
-import cw.secrets
-import cw.spawn
-import cw.summon
-import cw.workspace
+import workspace.docker
+import workspace.model
+import workspace.paths
+import workspace.spawn
+from workspace.model import ContainerWorkspace
 
 
 class TestDockerLaunchSpec:
   def test_defaults(self):
-    launch = cw.docker.Launch(
+    launch = workspace.docker.Launch(
       name='broker-X',
       command=['x'],
       env={},
@@ -31,14 +27,14 @@ class TestDockerLaunchSpec:
       tty=False,
       forward_env=False,
     )
-    spec = cw.spawn.DockerLaunchSpec(launch)
-    assert spec.ring_bytes == cw.spawn.DEFAULT_RING_BYTES == 64 * 1024
+    spec = workspace.spawn.DockerLaunchSpec(launch)
+    assert spec.ring_bytes == workspace.spawn.DEFAULT_RING_BYTES == 64 * 1024
     assert spec.remove_workspace is False
 
 
 class TestBrokerLaunch:
   def test_adds_channel_without_changing_the_neutral_launch(self):
-    launch = cw.docker.Launch(
+    launch = workspace.docker.Launch(
       name='broker-X',
       command=['broker', 'recv'],
       env={'CW_BRO': 'pm'},
@@ -48,8 +44,8 @@ class TestBrokerLaunch:
       forward_env=False,
       extra_mounts=('/existing:/mount',),
     )
-    channel = cw.spawn.Provisioned(channel='X', host_endpoint='/host/sock.sock')
-    adapted = cw.spawn._broker_launch(launch, channel)
+    channel = workspace.spawn.Provisioned(channel='X', host_endpoint='/host/sock.sock')
+    adapted = workspace.spawn._broker_launch(launch, channel)
     assert adapted.env == {'CW_BRO': 'pm', 'BROKER_CHANNEL': 'unix:/run/broker.sock'}
     assert adapted.extra_mounts == (
       '/existing:/mount',
@@ -63,41 +59,41 @@ class TestBrokerLaunch:
 
 class TestRingBuffer:
   def test_under_cap_keeps_everything(self):
-    ring = cw.spawn._RingBuffer(100)
+    ring = workspace.spawn._RingBuffer(100)
     ring.write(b'hello')
     ring.write(b' world')
     assert ring.tail() == b'hello world'
 
   def test_over_cap_keeps_last_bytes(self):
-    ring = cw.spawn._RingBuffer(4)
+    ring = workspace.spawn._RingBuffer(4)
     ring.write(b'abcdefgh')
     assert ring.tail() == b'efgh'
 
   def test_trims_across_writes(self):
-    ring = cw.spawn._RingBuffer(4)
+    ring = workspace.spawn._RingBuffer(4)
     ring.write(b'abc')
     ring.write(b'de')
     assert ring.tail() == b'bcde'
 
   def test_single_write_larger_than_cap(self):
-    ring = cw.spawn._RingBuffer(3)
+    ring = workspace.spawn._RingBuffer(3)
     ring.write(b'abcdefg')
     assert ring.tail() == b'efg'
 
   def test_exact_cap(self):
-    ring = cw.spawn._RingBuffer(4)
+    ring = workspace.spawn._RingBuffer(4)
     ring.write(b'abcd')
     assert ring.tail() == b'abcd'
 
   def test_negative_cap_rejected(self):
     with pytest.raises(ValueError):
-      cw.spawn._RingBuffer(-1)
+      workspace.spawn._RingBuffer(-1)
 
 
 class TestHostLogRedirect:
   def test_noop_when_stderr_is_not_a_tty(self, tmp_path):
     # pytest's captured fds are pipes, so the gate sees no terminal
-    redirect = cw.spawn._HostLogRedirect(tmp_path / 'log' / 's.log')
+    redirect = workspace.spawn._HostLogRedirect(tmp_path / 'log' / 's.log')
     redirect.flip()
     os.write(2, b'stays on stderr\n')
     redirect.restore()
@@ -106,7 +102,7 @@ class TestHostLogRedirect:
   def test_flip_routes_both_fds_and_restore_returns_them(self, tmp_path, monkeypatch, caplog):
     monkeypatch.setattr(os, 'isatty', lambda fd: True)
     host_log = tmp_path / 'log' / 'c:ws.log'
-    redirect = cw.spawn._HostLogRedirect(host_log)
+    redirect = workspace.spawn._HostLogRedirect(host_log)
     redirect.flip()
     os.write(1, b'stdout line\n')
     os.write(2, b'stderr line\n')
@@ -124,7 +120,7 @@ class TestHostLogRedirect:
 
   def test_no_pointer_line_when_nothing_was_written(self, tmp_path, monkeypatch, caplog):
     monkeypatch.setattr(os, 'isatty', lambda fd: True)
-    redirect = cw.spawn._HostLogRedirect(tmp_path / 's.log')
+    redirect = workspace.spawn._HostLogRedirect(tmp_path / 's.log')
     redirect.flip()
     redirect.restore()
     assert not any('session host log' in record.message for record in caplog.records)
@@ -133,14 +129,14 @@ class TestHostLogRedirect:
     monkeypatch.setattr(os, 'isatty', lambda fd: True)
     host_log = tmp_path / 's.log'
     host_log.write_text('previous session line\n')
-    redirect = cw.spawn._HostLogRedirect(host_log)
+    redirect = workspace.spawn._HostLogRedirect(host_log)
     redirect.flip()
     os.write(2, b'fresh line\n')
     redirect.restore()
     assert any('(1 line this session)' in record.message for record in caplog.records)
 
   def test_restore_without_flip_is_a_noop(self, tmp_path):
-    cw.spawn._HostLogRedirect(tmp_path / 's.log').restore()
+    workspace.spawn._HostLogRedirect(tmp_path / 's.log').restore()
 
 
 # a stand-in for the attached docker client: exits 42 on SIGINT, 0 on a timeout
@@ -160,10 +156,10 @@ class TestAttachedRoot:
     async def fake_remove(container_id):
       removed.append(container_id)
 
-    monkeypatch.setattr(cw.spawn, '_force_remove', fake_remove)
+    monkeypatch.setattr(workspace.spawn, '_force_remove', fake_remove)
     # default: the container exited with the client — the tests below that model a
     # detach override this
-    monkeypatch.setattr(cw.spawn, 'container_running', lambda container_id: False)
+    monkeypatch.setattr(workspace.spawn, 'container_running', lambda container_id: False)
     return removed
 
   async def _spawn_interruptible(self) -> asyncio.subprocess.Process:
@@ -177,7 +173,7 @@ class TestAttachedRoot:
   @pytest.mark.asyncio
   async def test_forwards_sigint_and_restores_handler(self):
     process = await self._spawn_interruptible()
-    root = cw.spawn._AttachedRoot('cid', process)
+    root = workspace.spawn._AttachedRoot('cid', process)
     assert signal.getsignal(signal.SIGINT) is not signal.default_int_handler
     root._forward_sigint()
     assert await root.wait() == 42
@@ -186,7 +182,7 @@ class TestAttachedRoot:
   @pytest.mark.asyncio
   async def test_forward_after_exit_is_noop(self):
     process = await asyncio.create_subprocess_exec(sys.executable, '-c', 'pass')
-    root = cw.spawn._AttachedRoot('cid', process)
+    root = workspace.spawn._AttachedRoot('cid', process)
     assert await root.wait() == 0
     root._forward_sigint()  # process gone; must not raise
 
@@ -195,14 +191,14 @@ class TestAttachedRoot:
     # the client can die while the container lives (sig-proxy is off on a tty attach),
     # so client exit must always be followed by container teardown
     process = await asyncio.create_subprocess_exec(sys.executable, '-c', 'pass')
-    root = cw.spawn._AttachedRoot('cid', process)
+    root = workspace.spawn._AttachedRoot('cid', process)
     await root.wait()
     assert removed == ['cid']
 
   @pytest.mark.asyncio
   async def test_output_tail_is_empty(self):
     process = await asyncio.create_subprocess_exec(sys.executable, '-c', 'pass')
-    root = cw.spawn._AttachedRoot('cid', process)
+    root = workspace.spawn._AttachedRoot('cid', process)
     await root.wait()
     assert root.output_tail() == ''
 
@@ -212,10 +208,12 @@ class TestAttachedRoot:
     # session suspends, then re-attaches; the second client exit (container gone)
     # ends the session with the client's code
     running = iter([True, False])
-    monkeypatch.setattr(cw.spawn, 'container_running', lambda container_id: next(running))
+    monkeypatch.setattr(workspace.spawn, 'container_running', lambda container_id: next(running))
     suspended: list = []
     monkeypatch.setattr(
-      cw.spawn, 'suspend_until_continued', lambda container_id: suspended.append(container_id)
+      workspace.spawn,
+      'suspend_until_continued',
+      lambda container_id: suspended.append(container_id),
     )
     attaches: list = []
     real_exec = asyncio.create_subprocess_exec
@@ -226,7 +224,7 @@ class TestAttachedRoot:
 
     monkeypatch.setattr(asyncio, 'create_subprocess_exec', fake_exec)
     process = await real_exec(sys.executable, '-c', 'pass')
-    root = cw.spawn._AttachedRoot('cid', process)
+    root = workspace.spawn._AttachedRoot('cid', process)
     assert await root.wait() == 5
     assert suspended == ['cid']
     assert attaches == [['docker', 'attach', '--detach-keys=ctrl-z', 'cid']]
@@ -236,13 +234,15 @@ class TestAttachedRoot:
   async def test_client_death_ends_the_session_without_suspend(self, removed, monkeypatch):
     # a nonzero client exit is never a detach (the detach key exits 0), whatever the
     # container state
-    monkeypatch.setattr(cw.spawn, 'container_running', lambda container_id: True)
+    monkeypatch.setattr(workspace.spawn, 'container_running', lambda container_id: True)
     suspended: list = []
     monkeypatch.setattr(
-      cw.spawn, 'suspend_until_continued', lambda container_id: suspended.append(container_id)
+      workspace.spawn,
+      'suspend_until_continued',
+      lambda container_id: suspended.append(container_id),
     )
     process = await asyncio.create_subprocess_exec(sys.executable, '-c', 'raise SystemExit(3)')
-    root = cw.spawn._AttachedRoot('cid', process)
+    root = workspace.spawn._AttachedRoot('cid', process)
     assert await root.wait() == 3
     assert suspended == []
     assert removed == ['cid']
@@ -251,10 +251,12 @@ class TestAttachedRoot:
   async def test_forwarded_interrupt_ends_the_session_not_suspends_it(self, removed, monkeypatch):
     # an interrupted docker client also exits 0 while the container lives on — only
     # the remembered forward tells this apart from a detach
-    monkeypatch.setattr(cw.spawn, 'container_running', lambda container_id: True)
+    monkeypatch.setattr(workspace.spawn, 'container_running', lambda container_id: True)
     suspended: list = []
     monkeypatch.setattr(
-      cw.spawn, 'suspend_until_continued', lambda container_id: suspended.append(container_id)
+      workspace.spawn,
+      'suspend_until_continued',
+      lambda container_id: suspended.append(container_id),
     )
     code = textwrap.dedent("""
       import signal, sys, time
@@ -267,7 +269,7 @@ class TestAttachedRoot:
     )
     assert process.stdout is not None
     await process.stdout.readline()  # handler installed
-    root = cw.spawn._AttachedRoot('cid', process)
+    root = workspace.spawn._AttachedRoot('cid', process)
     root._forward_sigint()
     assert await root.wait() == 0
     assert suspended == []
@@ -278,7 +280,7 @@ class TestAttachedRoot:
     monkeypatch.setattr(os, 'isatty', lambda fd: True)
     host_log = tmp_path / 'c:ws.log'
     process = await asyncio.create_subprocess_exec(sys.executable, '-c', 'pass')
-    root = cw.spawn._AttachedRoot('cid', process, host_log=host_log)
+    root = workspace.spawn._AttachedRoot('cid', process, host_log=host_log)
     os.write(2, b'mid-session line\n')
     await root.wait()
     os.write(2, b'post-session line\n')
@@ -288,7 +290,7 @@ class TestAttachedRoot:
 
 
 class TestDockerChildCapture:
-  async def _child(self, code: str, ring_bytes: int) -> cw.spawn._DockerChild:
+  async def _child(self, code: str, ring_bytes: int) -> workspace.spawn._DockerChild:
     # the same stream wiring DockerSpawner uses: stderr merged into the stdout pipe
     process = await asyncio.create_subprocess_exec(
       sys.executable,
@@ -297,12 +299,12 @@ class TestDockerChildCapture:
       stdout=asyncio.subprocess.PIPE,
       stderr=asyncio.subprocess.STDOUT,
     )
-    return cw.spawn._DockerChild('cid', process, ring_bytes, workspace=None)
+    return workspace.spawn._DockerChild('cid', process, ring_bytes, workspace=None)
 
   @pytest.mark.asyncio
   async def test_tail_combines_stdout_and_stderr(self):
     code = 'import sys; print("out-line"); print("err-line", file=sys.stderr)'
-    child = await self._child(code, cw.spawn.DEFAULT_RING_BYTES)
+    child = await self._child(code, workspace.spawn.DEFAULT_RING_BYTES)
     assert await child.wait() == 0
     tail = child.output_tail()
     assert 'out-line' in tail
@@ -317,12 +319,12 @@ class TestDockerChildCapture:
 
 
 class TestDockerChildWorkspaceCleanup:
-  def _workspace(self, monkeypatch, tmp_path, removed: list) -> cw.workspace.ContainerWorkspace:
-    workspace = cw.workspace.ContainerWorkspace('broker-CH', tmp_path / 'proj')
-    monkeypatch.setattr(workspace, 'remove', lambda: removed.append(workspace.name))
-    return workspace
+  def _workspace(self, monkeypatch, tmp_path, removed: list) -> ContainerWorkspace:
+    child_workspace = ContainerWorkspace('broker-CH', tmp_path / 'proj')
+    monkeypatch.setattr(child_workspace, 'remove', lambda: removed.append(child_workspace.name))
+    return child_workspace
 
-  async def _child(self, workspace) -> cw.spawn._DockerChild:
+  async def _child(self, child_workspace) -> workspace.spawn._DockerChild:
     process = await asyncio.create_subprocess_exec(
       sys.executable,
       '-c',
@@ -330,7 +332,9 @@ class TestDockerChildWorkspaceCleanup:
       stdout=asyncio.subprocess.PIPE,
       stderr=asyncio.subprocess.STDOUT,
     )
-    return cw.spawn._DockerChild('cid', process, cw.spawn.DEFAULT_RING_BYTES, workspace)
+    return workspace.spawn._DockerChild(
+      'cid', process, workspace.spawn.DEFAULT_RING_BYTES, child_workspace
+    )
 
   @pytest.mark.asyncio
   async def test_wait_removes_throwaway_workspace(self, monkeypatch, tmp_path):
@@ -344,7 +348,7 @@ class TestDockerChildWorkspaceCleanup:
     async def fake_remove(container_id):
       pass
 
-    monkeypatch.setattr(cw.spawn, '_force_remove', fake_remove)
+    monkeypatch.setattr(workspace.spawn, '_force_remove', fake_remove)
     removed: list = []
     child = await self._child(self._workspace(monkeypatch, tmp_path, removed))
     await child.kill()
@@ -355,15 +359,17 @@ class TestDockerChildWorkspaceCleanup:
 
   @pytest.mark.asyncio
   async def test_removal_failure_warns_instead_of_raising(self, monkeypatch, tmp_path):
-    workspace = cw.workspace.ContainerWorkspace('broker-CH', tmp_path / 'proj')
+    child_workspace = ContainerWorkspace('broker-CH', tmp_path / 'proj')
 
     def boom():
       raise RuntimeError('root-owned files')
 
-    monkeypatch.setattr(workspace, 'remove', boom)
+    monkeypatch.setattr(child_workspace, 'remove', boom)
     warnings: list = []
-    monkeypatch.setattr(cw.spawn.log, 'warning', lambda msg, *args: warnings.append(msg % args))
-    child = await self._child(workspace)
+    monkeypatch.setattr(
+      workspace.spawn.log, 'warning', lambda msg, *args: warnings.append(msg % args)
+    )
+    child = await self._child(child_workspace)
     assert await child.wait() == 0
     assert warnings == ['could not remove broker child workspace broker-CH: root-owned files']
 
@@ -379,7 +385,7 @@ class TestAttachedProcess:
 
   @pytest.mark.asyncio
   async def test_forwards_sigint_and_restores_handler(self):
-    handle = cw.spawn._AttachedProcess(await self._interruptible())
+    handle = workspace.spawn._AttachedProcess(await self._interruptible())
     assert signal.getsignal(signal.SIGINT) is not signal.default_int_handler
     handle._forward_sigint()
     assert await handle.wait() == 42
@@ -390,30 +396,30 @@ class TestAttachedProcess:
     process = await asyncio.create_subprocess_exec(
       sys.executable, '-c', 'import time; time.sleep(30)'
     )
-    handle = cw.spawn._AttachedProcess(process)
+    handle = workspace.spawn._AttachedProcess(process)
     await handle.kill()
     assert await handle.wait() == -signal.SIGKILL
 
   @pytest.mark.asyncio
   async def test_kill_after_exit_is_noop(self):
     process = await asyncio.create_subprocess_exec(sys.executable, '-c', 'pass')
-    handle = cw.spawn._AttachedProcess(process)
+    handle = workspace.spawn._AttachedProcess(process)
     assert await handle.wait() == 0
     await handle.kill()  # process gone; must not raise
 
   @pytest.mark.asyncio
   async def test_output_tail_is_empty(self):
     process = await asyncio.create_subprocess_exec(sys.executable, '-c', 'pass')
-    handle = cw.spawn._AttachedProcess(process)
+    handle = workspace.spawn._AttachedProcess(process)
     await handle.wait()
     assert handle.output_tail() == ''
 
 
 class TestProcessSpawner:
-  async def _spawn(self, command, cwd, env) -> cw.spawn.ChildHandle:
-    launch = cw.spawn.ProcessLaunchSpec(command=command, cwd=cwd, env=env)
-    provisioned = cw.spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
-    return await cw.spawn.ProcessSpawner().spawn(launch, provisioned)
+  async def _spawn(self, command, cwd, env) -> workspace.spawn.ChildHandle:
+    launch = workspace.spawn.ProcessLaunchSpec(command=command, cwd=cwd, env=env)
+    provisioned = workspace.spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
+    return await workspace.spawn.ProcessSpawner().spawn(launch, provisioned)
 
   @pytest.mark.asyncio
   async def test_env_is_the_spec_snapshot_plus_broker_channel(self, monkeypatch, tmp_path):
@@ -439,23 +445,23 @@ class TestProcessSpawner:
 
 
 class TestCompositeSpawner:
-  class _Recording(cw.spawn.Spawner):
+  class _Recording(workspace.spawn.Spawner):
     def __init__(self):
       self.spawned: list = []
 
-    async def spawn(self, launch, channel) -> cw.spawn.ChildHandle:
+    async def spawn(self, launch, channel) -> workspace.spawn.ChildHandle:
       self.spawned.append(launch)
       return MagicMock()
 
   @pytest.mark.asyncio
   async def test_dispatches_on_launch_spec_type(self):
     docker, process = self._Recording(), self._Recording()
-    composite = cw.spawn.CompositeSpawner(
-      {cw.spawn.DockerLaunchSpec: docker, cw.spawn.ProcessLaunchSpec: process}
+    composite = workspace.spawn.CompositeSpawner(
+      {workspace.spawn.DockerLaunchSpec: docker, workspace.spawn.ProcessLaunchSpec: process}
     )
-    channel = cw.spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
-    docker_launch = cw.spawn.DockerLaunchSpec(
-      cw.docker.Launch(
+    channel = workspace.spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
+    docker_launch = workspace.spawn.DockerLaunchSpec(
+      workspace.docker.Launch(
         name='broker-CH',
         command=['x'],
         env={},
@@ -465,7 +471,7 @@ class TestCompositeSpawner:
         forward_env=False,
       )
     )
-    process_launch = cw.spawn.ProcessLaunchSpec(command=['x'], cwd='/', env={})
+    process_launch = workspace.spawn.ProcessLaunchSpec(command=['x'], cwd='/', env={})
     await composite.spawn(docker_launch, channel)
     await composite.spawn(process_launch, channel)
     assert docker.spawned == [docker_launch]
@@ -473,220 +479,11 @@ class TestCompositeSpawner:
 
   @pytest.mark.asyncio
   async def test_unregistered_type_raises(self):
-    composite = cw.spawn.CompositeSpawner({})
-    channel = cw.spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
-    launch = cw.spawn.ProcessLaunchSpec(command=['x'], cwd='/', env={})
+    composite = workspace.spawn.CompositeSpawner({})
+    channel = workspace.spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
+    launch = workspace.spawn.ProcessLaunchSpec(command=['x'], cwd='/', env={})
     with pytest.raises(ValueError, match='ProcessLaunchSpec'):
       await composite.spawn(launch, channel)
-
-
-PARENT_WORKSPACE = Path('/var/cw/worktrees/parent')
-SUMMONER = {'session': 'ws'}
-
-
-class TestSummonLowering:
-  @pytest.fixture
-  def lowering_harness(self, monkeypatch, tmp_path):
-    monkeypatch.setattr(cw.spawn, '_project_root', lambda: tmp_path / 'proj')
-    monkeypatch.setattr(
-      cw.bro_run,
-      'scoped_secrets',
-      lambda name, surface: cw.secrets.ScopedSecrets(
-        required={'aws', 'trails'}, optional={'openai'}, docker_sock=True
-      ),
-    )
-    monkeypatch.setattr(
-      cw.spawn,
-      'resolve_head',
-      lambda root, repository: 'PARENT-SHA' if repository == PARENT_WORKSPACE else None,
-    )
-    monkeypatch.setattr(
-      cw.spawn, 'resolve_ref', lambda root, ref: 'REF-SHA' if ref == 'summon' else None
-    )
-
-  def test_lowers_to_the_bro_run_docker_launch(self, lowering_harness):
-    launch = cw.spawn.SummonLaunchSpec(
-      target='devoops',
-      prompt='deploy the thing',
-      parent_workspace=PARENT_WORKSPACE,
-      summoner=SUMMONER,
-    )
-    lowered = cw.spawn._lower_summon(launch, 'broker-CH')
-    assert lowered == cw.spawn.DockerLaunchSpec(
-      cw.docker.Launch(
-        name='broker-CH',
-        command=['bro', 'run', 'devoops', 'deploy the thing', '--in-place'],
-        env={
-          'CW_BASE_REF': 'PARENT-SHA',
-          'CW_BRO': 'devoops',
-          'CW_SUMMONER': '{"session":"ws"}',
-          **cw.constants.bro_git_identity_env(),
-        },
-        secrets={'aws', 'trails'},
-        optional_secrets={'openai'},
-        docker_sock=True,
-        tty=False,
-        forward_env=False,
-      ),
-      remove_workspace=True,
-    )
-
-  def test_lowering_logs_the_scope_like_any_container_launch(self, lowering_harness, caplog):
-    launch = cw.spawn.SummonLaunchSpec(
-      target='devoops', prompt='p', parent_workspace=PARENT_WORKSPACE, summoner=SUMMONER
-    )
-    with caplog.at_level('INFO'):
-      cw.spawn._lower_summon(launch, 'broker-CH')
-    assert 'scoped secrets for summoned devoops: aws, trails' in caplog.text
-
-  def test_into_overrides_the_inherited_base_ref(self, lowering_harness):
-    launch = cw.spawn.SummonLaunchSpec(
-      target='devoops',
-      prompt='p',
-      parent_workspace=PARENT_WORKSPACE,
-      summoner=SUMMONER,
-      into='summon',
-    )
-    assert cw.spawn._lower_summon(launch, 'broker-CH').launch.env == {
-      'CW_BASE_REF': 'REF-SHA',
-      'CW_BRO': 'devoops',
-      'CW_SUMMONER': '{"session":"ws"}',
-      **cw.constants.bro_git_identity_env(),
-    }
-
-  def test_unresolvable_into_fails_the_spawn(self, lowering_harness):
-    launch = cw.spawn.SummonLaunchSpec(
-      target='devoops',
-      prompt='p',
-      parent_workspace=PARENT_WORKSPACE,
-      summoner=SUMMONER,
-      into='nope',
-    )
-    with pytest.raises(ValueError, match='nope'):
-      cw.spawn._lower_summon(launch, 'broker-CH')
-
-  def test_unreadable_parent_head_fails_the_spawn(self, lowering_harness):
-    launch = cw.spawn.SummonLaunchSpec(
-      target='devoops', prompt='p', parent_workspace=Path('/gone'), summoner=SUMMONER
-    )
-    with pytest.raises(ValueError, match="summoner's HEAD"):
-      cw.spawn._lower_summon(launch, 'broker-CH')
-
-  @pytest.mark.asyncio
-  async def test_spawner_lowers_off_loop_and_delegates_to_docker(self, lowering_harness):
-    class RecordingDocker(cw.spawn.DockerSpawner):
-      def __init__(self):
-        self.spawned: list = []
-
-      async def spawn(self, launch, channel):
-        self.spawned.append((launch, channel))
-        return MagicMock()
-
-    docker = RecordingDocker()
-    spawner = cw.spawn.SummonSpawner(docker)
-    channel = cw.spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
-    launch = cw.spawn.SummonLaunchSpec(
-      target='devoops', prompt='p', parent_workspace=PARENT_WORKSPACE, summoner=SUMMONER
-    )
-    await spawner.spawn(launch, channel)
-    [(lowered, lowered_channel)] = docker.spawned
-    assert isinstance(lowered, cw.spawn.DockerLaunchSpec)
-    assert lowered.launch.command == ['bro', 'run', 'devoops', 'p', '--in-place']
-    assert lowered.launch.name == 'broker-CH'
-    assert lowered_channel is channel
-
-  @pytest.mark.asyncio
-  async def test_lowering_failure_propagates_out_of_spawn(self, lowering_harness):
-    spawner = cw.spawn.SummonSpawner(cw.spawn.DockerSpawner())
-    channel = cw.spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
-    launch = cw.spawn.SummonLaunchSpec(
-      target='devoops',
-      prompt='p',
-      parent_workspace=PARENT_WORKSPACE,
-      summoner=SUMMONER,
-      into='nope',
-    )
-    # the raise crosses to_thread back onto the loop: Dispatcher.spawn turns it
-    # into the correlated failed{reason: 'launch'}
-    with pytest.raises(ValueError, match='nope'):
-      await spawner.spawn(launch, channel)
-
-
-class TestRunRootViaBroker:
-  def test_wires_control_dir_composite_spawner_handlers_and_run(self, monkeypatch, tmp_path):
-    captured: dict = {}
-
-    class FakeBroker:
-      def __init__(self, transport, spawner, **kwargs):
-        captured['transport'] = transport
-        captured['spawner'] = spawner
-        captured['handlers'] = {}
-        captured['observers'] = []
-
-      def on(self, message_type, handler):
-        captured['handlers'][message_type] = handler
-
-      def add_delivery_observer(self, observer):
-        captured['observers'].append(observer)
-
-      def run(self, launch):
-        captured['launch'] = launch
-        return 3
-
-    monkeypatch.setattr(cw.spawn, 'Broker', FakeBroker)
-    launch = cw.spawn.ProcessLaunchSpec(command=['x'], cwd='/', env={})
-    assert cw.spawn.run_root_via_broker(launch, tmp_path / 'proj', session='ws') == 3
-    assert captured['transport']._dir == tmp_path / 'proj' / 'var' / 'cw' / 'broker'
-    # the composite over both launch modes plus the summon lowering: any root can
-    # spawn docker children, summons included
-    spawner = captured['spawner']
-    assert isinstance(spawner, cw.spawn.CompositeSpawner)
-    docker_spawner = spawner._spawners[cw.spawn.DockerLaunchSpec]
-    process_spawner = spawner._spawners[cw.spawn.ProcessLaunchSpec]
-    assert isinstance(docker_spawner, cw.spawn.DockerSpawner)
-    assert isinstance(process_spawner, cw.spawn.ProcessSpawner)
-    assert isinstance(spawner._spawners[cw.spawn.SummonLaunchSpec], cw.spawn.SummonSpawner)
-    # both attached-capable spawners point at the same per-session host log
-    host_log = tmp_path / 'proj' / 'var' / 'cw' / 'log' / 'ws.log'
-    assert docker_spawner._host_log == host_log
-    assert process_spawner._host_log == host_log
-    assert set(captured['handlers']) == {'ping', 'started', 'completed', 'summon'}
-    assert captured['handlers']['ping'] is cw.spawn.ping_handler
-    # the root's own run lifecycle has no parent peer; the host logs it as the parent
-    assert captured['handlers']['started'] is cw.spawn._log_root_started
-    assert captured['handlers']['completed'] is cw.spawn._log_root_completed
-    # the summon handler and the delivery tap belong to the same per-root control
-    control = captured['handlers']['summon'].__self__
-    assert isinstance(control, cw.summon.SummonControl)
-    assert [observer.__self__ for observer in captured['observers']] == [control]
-    assert control._session == 'ws'
-    summon_dir = tmp_path / 'proj' / 'var' / 'cw' / 'summon'
-    assert control._status_file == summon_dir / 'ws.status.json'
-    assert control._audit_file == summon_dir / 'ws.jsonl'
-    assert captured['launch'] is launch
-
-  def test_root_lifecycle_handlers_log_trail_and_end_reason(self, caplog):
-    from broker.brotocol import Message, Tag
-    from broker.dispatcher import Dispatcher
-
-    dispatcher = Dispatcher()
-    cw.spawn._log_root_started(
-      dispatcher, 'root', Message(type=Tag.STARTED, payload={'trail_id': 't-1'})
-    )
-    cw.spawn._log_root_completed(
-      dispatcher,
-      'root',
-      Message(type=Tag.COMPLETED, payload={'result': 'ok', 'end_reason': 'terminal'}),
-    )
-    # a raised run surfaces its reason — the result is the failure cause
-    cw.spawn._log_root_completed(
-      dispatcher,
-      'root',
-      Message(type=Tag.COMPLETED, payload={'result': 'no api key', 'end_reason': 'raised'}),
-    )
-    assert any('root run started (trail t-1)' in record.message for record in caplog.records)
-    assert any('root run ended: terminal' in record.message for record in caplog.records)
-    assert any('root run raised: no api key' in record.message for record in caplog.records)
 
 
 class TestDockerSpawnerModes:
@@ -701,7 +498,7 @@ class TestDockerSpawnerModes:
       project_threads.append(threading.get_ident())
       return project
 
-    monkeypatch.setattr(cw.spawn, '_project_root', project_root)
+    monkeypatch.setattr(workspace.spawn, 'project_root', project_root)
     prepared: list = []
 
     def fake_prepare(launch, prepared_project):
@@ -710,7 +507,7 @@ class TestDockerSpawnerModes:
       (project / 'var' / 'cw' / 'containers' / launch.name).mkdir(parents=True)
       return 'cid123'
 
-    monkeypatch.setattr(cw.spawn, 'prepare_container', fake_prepare)
+    monkeypatch.setattr(workspace.spawn, 'prepare_container', fake_prepare)
 
     class FakeWorkspace:
       def __init__(self, name, workspace_project):
@@ -721,13 +518,13 @@ class TestDockerSpawnerModes:
       def remove(self):
         pass
 
-    monkeypatch.setattr(cw.spawn, 'ContainerWorkspace', FakeWorkspace)
+    monkeypatch.setattr(workspace.spawn, 'ContainerWorkspace', FakeWorkspace)
 
     async def fake_remove(container_id):
       pass
 
-    monkeypatch.setattr(cw.spawn, '_force_remove', fake_remove)
-    monkeypatch.setattr(cw.spawn, 'container_running', lambda container_id: False)
+    monkeypatch.setattr(workspace.spawn, '_force_remove', fake_remove)
+    monkeypatch.setattr(workspace.spawn, 'container_running', lambda container_id: False)
     starts: list = []
     real_exec = asyncio.create_subprocess_exec
 
@@ -747,7 +544,7 @@ class TestDockerSpawnerModes:
 
   @pytest.mark.asyncio
   async def test_attached_root_mode(self, spawn_harness):
-    docker_launch = cw.docker.Launch(
+    docker_launch = workspace.docker.Launch(
       name='ws',
       command=['claude'],
       env={},
@@ -757,11 +554,11 @@ class TestDockerSpawnerModes:
       forward_env=True,
       optional_secrets=('openai',),
     )
-    launch = cw.spawn.DockerLaunchSpec(docker_launch)
-    provisioned = cw.spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
-    handle = await cw.spawn.DockerSpawner().spawn(launch, provisioned)
+    launch = workspace.spawn.DockerLaunchSpec(docker_launch)
+    provisioned = workspace.spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
+    handle = await workspace.spawn.DockerSpawner().spawn(launch, provisioned)
     try:
-      assert isinstance(handle, cw.spawn._AttachedRoot)
+      assert isinstance(handle, workspace.spawn._AttachedRoot)
       assert handle.output_tail() == ''
       prepared, project = spawn_harness['prepared'][0]
       assert project == spawn_harness['project']
@@ -775,7 +572,7 @@ class TestDockerSpawnerModes:
 
   @pytest.mark.asyncio
   async def test_child_mode_uses_the_described_workspace(self, spawn_harness):
-    docker_launch = cw.docker.Launch(
+    docker_launch = workspace.docker.Launch(
       name='broker-CH',
       command=['broker', 'recv'],
       env={},
@@ -784,17 +581,17 @@ class TestDockerSpawnerModes:
       tty=False,
       forward_env=False,
     )
-    launch = cw.spawn.DockerLaunchSpec(docker_launch)
-    provisioned = cw.spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
-    handle = await cw.spawn.DockerSpawner().spawn(launch, provisioned)
-    assert isinstance(handle, cw.spawn._DockerChild)
+    launch = workspace.spawn.DockerLaunchSpec(docker_launch)
+    provisioned = workspace.spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
+    handle = await workspace.spawn.DockerSpawner().spawn(launch, provisioned)
+    assert isinstance(handle, workspace.spawn._DockerChild)
     assert spawn_harness['prepared'][0][0].name == 'broker-CH'
     assert spawn_harness['starts'] == [['docker', 'start', '-a', 'cid123']]
     assert await handle.wait() == 0
 
   @pytest.mark.asyncio
   async def test_blocking_prepare_runs_off_the_loop_thread(self, spawn_harness):
-    docker_launch = cw.docker.Launch(
+    docker_launch = workspace.docker.Launch(
       name='broker-CH',
       command=['x'],
       env={},
@@ -803,9 +600,9 @@ class TestDockerSpawnerModes:
       tty=False,
       forward_env=False,
     )
-    launch = cw.spawn.DockerLaunchSpec(docker_launch, remove_workspace=True)
-    provisioned = cw.spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
-    handle = await cw.spawn.DockerSpawner().spawn(launch, provisioned)
+    launch = workspace.spawn.DockerLaunchSpec(docker_launch, remove_workspace=True)
+    provisioned = workspace.spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
+    handle = await workspace.spawn.DockerSpawner().spawn(launch, provisioned)
     loop_thread = threading.get_ident()
     assert spawn_harness['project_threads'][0] != loop_thread
     assert spawn_harness['prepare_threads'][0] != loop_thread

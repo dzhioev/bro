@@ -3,8 +3,8 @@ import subprocess
 
 import pytest
 
-import cw.workspace
-from cw.workspace import ContainerWorkspace, HostWorktree, Workspace
+from workspace import model
+from workspace.model import ContainerWorkspace, HostWorktree, Workspace
 
 
 class _FakeProc:
@@ -30,67 +30,67 @@ def _init_repo(d):
 
 class TestCleanupImage:
   def test_prefers_current_tag_when_present(self, monkeypatch):
-    monkeypatch.setattr(cw.workspace, '_image_tag', lambda: 'bro/ppp-dev:cur')
-    monkeypatch.setattr(cw.workspace.subprocess, 'run', lambda *a, **k: _FakeProc(returncode=0))
-    assert cw.workspace._cleanup_image() == 'bro/ppp-dev:cur'
+    monkeypatch.setattr(model, 'image_tag', lambda: 'bro/ppp-dev:cur')
+    monkeypatch.setattr(model.subprocess, 'run', lambda *a, **k: _FakeProc(returncode=0))
+    assert model._cleanup_image() == 'bro/ppp-dev:cur'
 
   def test_falls_back_to_any_ppp_cw_image(self, monkeypatch):
-    monkeypatch.setattr(cw.workspace, '_image_tag', lambda: 'bro/ppp-dev:cur')
+    monkeypatch.setattr(model, 'image_tag', lambda: 'bro/ppp-dev:cur')
 
     def fake_run(argv, *a, **k):
       if argv[1] == 'image':  # docker image inspect -> miss
         return _FakeProc(returncode=1)
       return _FakeProc(returncode=0, stdout='bro/ppp-dev:<none>\nbro/ppp-dev:abc123\n')
 
-    monkeypatch.setattr(cw.workspace.subprocess, 'run', fake_run)
-    assert cw.workspace._cleanup_image() == 'bro/ppp-dev:abc123'
+    monkeypatch.setattr(model.subprocess, 'run', fake_run)
+    assert model._cleanup_image() == 'bro/ppp-dev:abc123'
 
   def test_none_when_no_image(self, monkeypatch):
-    monkeypatch.setattr(cw.workspace, '_image_tag', lambda: 'bro/ppp-dev:cur')
+    monkeypatch.setattr(model, 'image_tag', lambda: 'bro/ppp-dev:cur')
 
     def fake_run(argv, *a, **k):
       if argv[1] == 'image':
         return _FakeProc(returncode=1)
       return _FakeProc(returncode=0, stdout='')
 
-    monkeypatch.setattr(cw.workspace.subprocess, 'run', fake_run)
-    assert cw.workspace._cleanup_image() is None
+    monkeypatch.setattr(model.subprocess, 'run', fake_run)
+    assert model._cleanup_image() is None
 
 
 class TestRemoveContainerDir:
   def test_plain_rmtree_when_host_owned(self, monkeypatch, tmp_path):
     calls = []
-    monkeypatch.setattr(cw.workspace.shutil, 'rmtree', lambda p: calls.append(p))
+    monkeypatch.setattr(model.shutil, 'rmtree', lambda p: calls.append(p))
     monkeypatch.setattr(
-      cw.workspace.subprocess, 'run', lambda *a, **k: pytest.fail('docker must not be invoked')
+      model.subprocess, 'run', lambda *a, **k: pytest.fail('docker must not be invoked')
     )
-    cw.workspace._remove_container_dir(tmp_path / 'ws', image='bro/ppp-dev:x')
+    model._remove_container_dir(tmp_path / 'ws', image='bro/ppp-dev:x')
     assert calls == [tmp_path / 'ws']
 
   def test_missing_dir_is_noop(self, monkeypatch, tmp_path):
     def boom(_):
       raise FileNotFoundError
 
-    monkeypatch.setattr(cw.workspace.shutil, 'rmtree', boom)
+    monkeypatch.setattr(model.shutil, 'rmtree', boom)
     monkeypatch.setattr(
-      cw.workspace.subprocess, 'run', lambda *a, **k: pytest.fail('docker must not be invoked')
+      model.subprocess, 'run', lambda *a, **k: pytest.fail('docker must not be invoked')
     )
-    cw.workspace._remove_container_dir(tmp_path / 'gone', image='bro/ppp-dev:x')
+    model._remove_container_dir(tmp_path / 'gone', image='bro/ppp-dev:x')
 
   def test_escalates_to_root_container_on_eperm(self, monkeypatch, tmp_path):
     def boom(_):
       raise PermissionError
 
-    monkeypatch.setattr(cw.workspace.shutil, 'rmtree', boom)
+    monkeypatch.setattr(model.shutil, 'rmtree', boom)
     seen = {}
 
     def fake_run(argv, *a, **k):
       seen['argv'] = argv
       return _FakeProc(returncode=0)
 
-    monkeypatch.setattr(cw.workspace.subprocess, 'run', fake_run)
+    monkeypatch.setattr(model.subprocess, 'run', fake_run)
     target = tmp_path / 'ws'  # never created -> path.exists() is False afterwards
-    cw.workspace._remove_container_dir(target, image='bro/ppp-dev:x')
+    model._remove_container_dir(target, image='bro/ppp-dev:x')
     argv = seen['argv']
     assert argv[:5] == ['docker', 'run', '--rm', '-u', '0']
     assert '--entrypoint' in argv and argv[argv.index('--entrypoint') + 1] == 'rm'
@@ -101,84 +101,78 @@ class TestRemoveContainerDir:
     def boom(_):
       raise PermissionError
 
-    monkeypatch.setattr(cw.workspace.shutil, 'rmtree', boom)
+    monkeypatch.setattr(model.shutil, 'rmtree', boom)
     with pytest.raises(RuntimeError, match='no session image'):
-      cw.workspace._remove_container_dir(tmp_path / 'ws', image=None)
+      model._remove_container_dir(tmp_path / 'ws', image=None)
 
   def test_raises_when_docker_rm_fails(self, monkeypatch, tmp_path):
     def boom(_):
       raise PermissionError
 
-    monkeypatch.setattr(cw.workspace.shutil, 'rmtree', boom)
+    monkeypatch.setattr(model.shutil, 'rmtree', boom)
     monkeypatch.setattr(
-      cw.workspace.subprocess, 'run', lambda *a, **k: _FakeProc(returncode=1, stderr='denied')
+      model.subprocess, 'run', lambda *a, **k: _FakeProc(returncode=1, stderr='denied')
     )
     with pytest.raises(RuntimeError, match='docker rm failed: denied'):
-      cw.workspace._remove_container_dir(tmp_path / 'ws', image='bro/ppp-dev:x')
+      model._remove_container_dir(tmp_path / 'ws', image='bro/ppp-dev:x')
 
   def test_raises_when_dir_survives_docker_rm(self, monkeypatch, tmp_path):
     def boom(_):
       raise PermissionError
 
-    monkeypatch.setattr(cw.workspace.shutil, 'rmtree', boom)
-    monkeypatch.setattr(cw.workspace.subprocess, 'run', lambda *a, **k: _FakeProc(returncode=0))
+    monkeypatch.setattr(model.shutil, 'rmtree', boom)
+    monkeypatch.setattr(model.subprocess, 'run', lambda *a, **k: _FakeProc(returncode=0))
     survivor = tmp_path / 'ws'
     survivor.mkdir()  # still present after the mocked docker rm
     with pytest.raises(RuntimeError, match='still present'):
-      cw.workspace._remove_container_dir(survivor, image='bro/ppp-dev:x')
+      model._remove_container_dir(survivor, image='bro/ppp-dev:x')
 
 
 class TestContainerWorkspaceRemove:
-  # session_dir resolves through Path.home(), so HOME must point at a tmp dir or
-  # the mkdir/remove below would touch the real ~/.claude/cw-sessions
-  def test_removes_dir_with_cleanup_image_and_session_state(self, monkeypatch, tmp_path):
-    monkeypatch.setenv('HOME', str(tmp_path / 'home'))
-    monkeypatch.setattr(cw.workspace, '_containers_dir', lambda project: tmp_path / 'containers')
-    monkeypatch.setattr(cw.workspace, '_cleanup_image', lambda: 'bro/ppp-dev:img')
+  def test_removes_dir_with_cleanup_image_and_host_log(self, monkeypatch, tmp_path):
+    monkeypatch.setattr(model, 'containers_dir', lambda project: tmp_path / 'containers')
+    monkeypatch.setattr(model, '_cleanup_image', lambda: 'bro/ppp-dev:img')
     removed = {}
     monkeypatch.setattr(
-      cw.workspace,
+      model,
       '_remove_container_dir',
       lambda path, image: removed.update(path=path, image=image),
     )
     workspace = ContainerWorkspace('ws', tmp_path / 'project')
-    workspace.session_dir.mkdir(parents=True)
     host_log = tmp_path / 'project' / 'var' / 'cw' / 'log' / 'c:ws.log'
     host_log.parent.mkdir(parents=True)
     host_log.write_text('mid-session line\n')
     workspace.remove()
     assert removed == {'path': workspace.path, 'image': 'bro/ppp-dev:img'}
-    assert not workspace.session_dir.exists()  # session state cleaned
     assert not host_log.exists()  # the session host log goes with the workspace
 
-  def test_session_state_cleaned_even_when_dir_removal_raises(self, monkeypatch, tmp_path):
-    monkeypatch.setenv('HOME', str(tmp_path / 'home'))
-    monkeypatch.setattr(cw.workspace, '_containers_dir', lambda project: tmp_path / 'containers')
-    monkeypatch.setattr(cw.workspace, '_cleanup_image', lambda: None)
+  def test_host_log_cleaned_even_when_dir_removal_raises(self, monkeypatch, tmp_path):
+    monkeypatch.setattr(model, 'containers_dir', lambda project: tmp_path / 'containers')
+    monkeypatch.setattr(model, '_cleanup_image', lambda: None)
 
     def boom(path, image):
       raise RuntimeError('no image')
 
-    monkeypatch.setattr(cw.workspace, '_remove_container_dir', boom)
+    monkeypatch.setattr(model, '_remove_container_dir', boom)
     workspace = ContainerWorkspace('ws', tmp_path / 'project')
-    workspace.session_dir.mkdir(parents=True)
+    host_log = tmp_path / 'project' / 'var' / 'cw' / 'log' / 'c:ws.log'
+    host_log.parent.mkdir(parents=True)
+    host_log.write_text('mid-session line\n')
     with pytest.raises(RuntimeError, match='no image'):
       workspace.remove()
-    assert not workspace.session_dir.exists()
+    assert not host_log.exists()
 
 
 class TestHostWorktreeRemove:
-  def test_removes_worktree_branch_session_state_and_host_log(self, monkeypatch, tmp_path):
-    monkeypatch.setenv('HOME', str(tmp_path / 'home'))
+  def test_removes_worktree_branch_and_host_log(self, monkeypatch, tmp_path):
     calls = []
 
     def fake_git_run(*args, **kwargs):
       calls.append(args)
       return _FakeProc()
 
-    monkeypatch.setattr(cw.workspace, 'git_run', fake_git_run)
+    monkeypatch.setattr(model, 'git_run', fake_git_run)
     workspace = HostWorktree('ws', tmp_path / 'project')
-    workspace.session_dir.mkdir(parents=True)
     host_log = tmp_path / 'project' / 'var' / 'cw' / 'log' / 'ws.log'
     host_log.parent.mkdir(parents=True)
     host_log.write_text('mid-session line\n')
@@ -187,41 +181,12 @@ class TestHostWorktreeRemove:
       ('worktree', 'remove', '--force', str(workspace.path)),
       ('branch', '-D', 'worktree-ws'),
     ]
-    assert not workspace.session_dir.exists()
     assert not host_log.exists()
-
-
-class TestHostWorktreeClaudeProjectsDir:
-  def _workspace(self, monkeypatch, tmp_path):
-    monkeypatch.setenv('HOME', str(tmp_path / 'home'))
-    monkeypatch.setattr(cw.workspace, '_worktrees_dir', lambda project: tmp_path / 'worktrees')
-    return HostWorktree('ws', tmp_path / 'project')
-
-  def _encoded(self, workspace):
-    return str(workspace.path).replace('/', '-').replace('.', '-')
-
-  def test_prefers_the_private_session_projects_dir(self, monkeypatch, tmp_path):
-    workspace = self._workspace(monkeypatch, tmp_path)
-    private = workspace.session_dir / 'projects' / self._encoded(workspace)
-    private.mkdir(parents=True)
-    assert workspace.claude_projects_dir() == private
-
-  def test_falls_back_to_legacy_host_projects_dir(self, monkeypatch, tmp_path):
-    # sessions recorded before the private config dir live under ~/.claude/projects
-    workspace = self._workspace(monkeypatch, tmp_path)
-    legacy = tmp_path / 'home' / '.claude' / 'projects' / self._encoded(workspace)
-    legacy.mkdir(parents=True)
-    assert workspace.claude_projects_dir() == legacy
-
-  def test_neither_present_names_the_private_dir(self, monkeypatch, tmp_path):
-    workspace = self._workspace(monkeypatch, tmp_path)
-    private = workspace.session_dir / 'projects' / self._encoded(workspace)
-    assert workspace.claude_projects_dir() == private
 
 
 class TestHostIsClean:
   def _make_workspace(self, tmp_path, monkeypatch, name='repo'):
-    monkeypatch.setattr(cw.workspace, '_worktrees_dir', lambda project: tmp_path)
+    monkeypatch.setattr(model, 'worktrees_dir', lambda project: tmp_path)
     workspace = HostWorktree(name, tmp_path)
     _init_repo(workspace.path)
     _git(workspace.path, 'update-ref', 'refs/remotes/origin/master', 'HEAD')
@@ -249,7 +214,7 @@ class TestHostIsClean:
     assert 'uncommitted or untracked changes' in reasons
 
   def test_missing_origin_master_is_not_clean(self, tmp_path, monkeypatch):
-    monkeypatch.setattr(cw.workspace, '_worktrees_dir', lambda project: tmp_path)
+    monkeypatch.setattr(model, 'worktrees_dir', lambda project: tmp_path)
     workspace = HostWorktree('repo', tmp_path)
     _init_repo(workspace.path)  # no origin/master ref set
     safe, reasons = workspace.is_clean(refresh_origin=False)
@@ -268,7 +233,7 @@ class TestContainerIsClean:
     _git(project, 'update-ref', 'refs/remotes/origin/master', 'HEAD')
     containers = tmp_path / 'containers'
     containers.mkdir()
-    monkeypatch.setattr(cw.workspace, '_containers_dir', lambda p: containers)
+    monkeypatch.setattr(model, 'containers_dir', lambda p: containers)
     workspace = ContainerWorkspace('ws', project)
     _git(tmp_path, 'clone', '--quiet', str(project), str(workspace.path))
     _git(workspace.path, 'config', 'user.email', 't@t')
@@ -292,7 +257,7 @@ class TestContainerIsClean:
   def test_not_a_git_repository(self, tmp_path, monkeypatch):
     containers = tmp_path / 'containers'
     (containers / 'ws').mkdir(parents=True)  # no .git
-    monkeypatch.setattr(cw.workspace, '_containers_dir', lambda p: containers)
+    monkeypatch.setattr(model, 'containers_dir', lambda p: containers)
     workspace = ContainerWorkspace('ws', tmp_path / 'project')
     safe, reasons = workspace.is_clean(refresh_origin=False)
     assert safe is False
@@ -333,7 +298,7 @@ class TestIsActive:
     assert workspace.is_active({str(workspace.path)}) is True  # mounts are irrelevant to a worktree
 
   def test_container_active_when_path_in_mounts(self, tmp_path, monkeypatch):
-    monkeypatch.setattr(cw.workspace, '_containers_dir', lambda project: tmp_path)
+    monkeypatch.setattr(model, 'containers_dir', lambda project: tmp_path)
     workspace = ContainerWorkspace('feat', tmp_path)
     assert workspace.is_active({str(workspace.path)}) is True
     assert workspace.is_active(set()) is False
@@ -345,16 +310,16 @@ class TestWorkspaceRefsAndEnumeration:
     containers = tmp_path / 'ct'
     (worktrees / 'h').mkdir(parents=True)
     (containers / 'c').mkdir(parents=True)
-    monkeypatch.setattr(cw.workspace, '_worktrees_dir', lambda project: worktrees)
-    monkeypatch.setattr(cw.workspace, '_containers_dir', lambda project: containers)
+    monkeypatch.setattr(model, 'worktrees_dir', lambda project: worktrees)
+    monkeypatch.setattr(model, 'containers_dir', lambda project: containers)
     host = Workspace.from_ref('h', tmp_path)
     container = Workspace.from_ref('c:c', tmp_path)
     assert isinstance(host, HostWorktree) and host.ref == 'h'
     assert isinstance(container, ContainerWorkspace) and container.ref == 'c:c'
 
   def test_from_ref_raises_with_kind_specific_message(self, tmp_path, monkeypatch):
-    monkeypatch.setattr(cw.workspace, '_worktrees_dir', lambda project: tmp_path / 'wt')
-    monkeypatch.setattr(cw.workspace, '_containers_dir', lambda project: tmp_path / 'ct')
+    monkeypatch.setattr(model, 'worktrees_dir', lambda project: tmp_path / 'wt')
+    monkeypatch.setattr(model, 'containers_dir', lambda project: tmp_path / 'ct')
     with pytest.raises(ValueError, match='^workspace not found: gone$'):
       Workspace.from_ref('gone', tmp_path)
     with pytest.raises(ValueError, match='^container workspace not found: c:gone$'):
@@ -366,7 +331,7 @@ class TestWorkspaceRefsAndEnumeration:
     (worktrees / 'h1').mkdir(parents=True)
     (worktrees / 'h2').mkdir(parents=True)
     (containers / 'c1').mkdir(parents=True)
-    monkeypatch.setattr(cw.workspace, '_worktrees_dir', lambda project: worktrees)
-    monkeypatch.setattr(cw.workspace, '_containers_dir', lambda project: containers)
+    monkeypatch.setattr(model, 'worktrees_dir', lambda project: worktrees)
+    monkeypatch.setattr(model, 'containers_dir', lambda project: containers)
     refs = {workspace.ref for workspace in Workspace.all(tmp_path)}
     assert refs == {'h1', 'h2', 'c:c1'}

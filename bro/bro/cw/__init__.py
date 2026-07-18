@@ -43,18 +43,12 @@ keeps the container's git state genuinely isolated. layout:
 
 network is not restricted by design.
 
-This package re-exports below exactly the cross-package surface that `bro/launch/` and
-`dive_in.py` consume, so those callers keep `import cw` / `from cw import …`
-unchanged. Intra-package code imports submodule → submodule (never through this
-hub — partial-init hazard); see cw/CLAUDE.md.
+This package re-exports below exactly the cross-package surface that `dive_in.py`
+consumes, so that caller keeps `import cw` unchanged. Intra-package code imports
+submodule → submodule (never through this hub — partial-init hazard); see
+cw/CLAUDE.md.
 """
 
-from cw.banner import render_banner
 from cw.cli import build_parser
-from cw.constants import DEFAULT_SESSION_BRO
-from cw.containers import run_in_container
-from cw.flags import EFFORT_LEVELS, add_forwarded_flags, extract_forwarded_argv
-from cw.git import resolve_ref
-from cw.paths import _containers_dir, _project_root, _worktrees_dir, fresh_workspace_name
-from cw.runner import terminate_session
-from cw.secrets import LaunchScopeError, ScopedSecrets, preflight_scoped_launch
+from cw.flags import add_forwarded_flags, extract_forwarded_argv
+from workspace.paths import fresh_workspace_name

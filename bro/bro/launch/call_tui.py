@@ -384,7 +384,7 @@ class ChatApp(App):
     """opening bro bubble: the cw banner (session environment facts), shown
     before the user's first message. display-only — not part of the bro's
     conversation. the visual banner carries ANSI, decoded for Rich here."""
-    from cw import render_banner
+    from workspace.banner import render_banner
 
     self._maybe_add_date_separator(date.today())
     # pass the bro name so the logo shows on an in-process (--in-place) run, whose
