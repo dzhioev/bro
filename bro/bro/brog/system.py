@@ -1,5 +1,6 @@
 import os
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from typing import Any, Optional
 
 from base import credentials
@@ -91,14 +92,22 @@ class System(ABC):
     ...
 
 
-def build_system(config: dict[str, Any], *, author: Optional[str] = None) -> System:
-  """construct the backend the config selects; author is the persona stamped on
-  comments (ignored by backends that record authorship natively)"""
+def build_system(
+  config_provider: Callable[[], dict[str, Any]], *, author: Optional[str] = None
+) -> System:
+  """construct the backend the provided config selects; author is the persona
+  stamped on comments (ignored by backends that record authorship natively)
+
+  Backend selection reads the provider once; a backend whose credential may be
+  minted short-lived (the github token) keeps the provider and re-reads it per
+  operation, observing a fresh expansion instead of the one baked at build.
+  """
+  config = config_provider()
   backend = _required(config, 'backend')
   if backend == 'flow':
     return _flow_system(config, author)
   if backend == 'github':
-    return _github_system(config)
+    return _github_system(config, config_provider)
   raise ValueError(f'unknown brog backend {backend!r}; known: flow, github')
 
 
@@ -123,13 +132,17 @@ def _flow_system(config: dict[str, Any], author: Optional[str]) -> System:
   raise ValueError(f'unknown brog flow transport {transport!r}; known: http, local')
 
 
-def _github_system(config: dict[str, Any]) -> System:
+def _github_system(config: dict[str, Any], config_provider: Callable[[], dict[str, Any]]) -> System:
   import brog.github
 
-  token = _required(config, 'token')
+  _required(config, 'token')  # a config without a token fails at build, not at first use
   repo = config.get('repo')
   if repo is None:
     repo = brog.github.origin_repo()
+
+  def token() -> str:
+    return _required(config_provider(), 'token')
+
   return brog.github.System(token=token, repo=repo)
 
 
@@ -151,4 +164,4 @@ def default_system() -> System:
   author = os.environ.get('CW_BRO')
   if author == '':
     author = None
-  return build_system(credentials.get_json('brog'), author=author)
+  return build_system(lambda: credentials.get_json('brog'), author=author)

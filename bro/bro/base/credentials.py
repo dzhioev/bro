@@ -7,11 +7,18 @@ on which surface it runs. both are thin aliases over `default_store()`.
 resolution walks an ordered list of `Source`s per secret; the first source that
 has the value wins.
 
-two source types: `local` searches `<project>/.configs/<file>` then
-`~/.ppp/<file>` — the deployed services synthesize `<project>/.configs` at
-runtime; on the host secrets live only in `~/.ppp`. `ssm` reads an AWS SSM
-parameter from the region the source names, for surfaces that resolve secrets
-from Parameter Store at runtime instead of carrying files. a generated
+sources are either stored or minting. two stored types: `local` searches
+`<project>/.configs/<file>` then `~/.ppp/<file>` — the deployed services
+synthesize `<project>/.configs` at runtime; on the host secrets live only in
+`~/.ppp`. `ssm` reads an AWS SSM parameter from the region the source names,
+for surfaces that resolve secrets from Parameter Store at runtime instead of
+carrying files. a minting type (a `MintingSource` subclass owned by a domain
+package, e.g. `github_app` in `github/app.py`) derives short-lived values
+from a minting config file found
+along the same local search path; the source keeps the minted value and
+re-mints as expiry nears, and such a secret — like any secret whose references
+reach one — bypasses the store's process-lifetime cache, so every read observes
+a value with usable lifetime left. a generated
 `credentials.json` in either search dir overrides the built-in registry
 (`CREDENTIALS_REGISTRY=<file>` overrides both, process-scoped, and its directory
 joins the local search path first — so a materialized scoped store resolves
@@ -50,9 +57,12 @@ import os
 import re
 import sys
 import threading
+from abc import ABC, abstractmethod
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Optional, Protocol
+from typing import Any, ClassVar, Optional, Protocol
 
 import configs
 from base import log, template
@@ -110,10 +120,29 @@ class SecretNotFound(Exception):
 
 
 class Source(Protocol):
-  """a place a secret's raw text might live."""
+  """a place a secret's raw text might live: the source lifecycle contract.
+
+  a source either stores durable text (its fetch retrieves the value as-is) or
+  derives short-lived values from stored material (`MintingSource`). the
+  contract covers the three lifecycle points the store and the scoped-store
+  build need: producing the value (`fetch`), whether the produced value may be
+  memoized for the process (`CACHEABLE`), and how the source travels into a
+  bounded per-session store (`materialize_scoped`)."""
+
+  # whether the store may cache a fetched value for its lifetime; a source that
+  # mints short-lived values declares False and owns its own refresh instead
+  CACHEABLE: ClassVar[bool]
 
   def fetch(self) -> Optional[str]:
     """return the raw text, or None when this source doesn't have it (try the next)."""
+    ...
+
+  def materialize_scoped(self, file: str, value: str) -> tuple[dict, bytes]:
+    """the source's scoped-store representation: the registry source entry and
+    the bytes of the `file` it points at. `value` is the host-resolved text. a
+    stored source lands as a plain local entry over that value — the session
+    never learns the host source type; a minting source ships its own config
+    instead, so the session derives fresh values on read."""
     ...
 
 
@@ -121,6 +150,7 @@ class LocalSource:
   """reads `file` from the local search path (`_find_in_search_dirs`)."""
 
   TYPE = 'local'
+  CACHEABLE: ClassVar[bool] = True
 
   def __init__(self, file: str):
     self.file = file
@@ -137,6 +167,9 @@ class LocalSource:
       raise ValueError(f'credential file {path} contains null bytes')
     return text
 
+  def materialize_scoped(self, file: str, value: str) -> tuple[dict, bytes]:
+    return {'file': file}, value.encode()
+
   @classmethod
   def from_dict(cls, data: dict) -> LocalSource:
     return cls(data['file'])
@@ -152,6 +185,7 @@ class SSMSource:
   can't is a loud failure, not a silent fallthrough."""
 
   TYPE = 'ssm'
+  CACHEABLE: ClassVar[bool] = True
 
   def __init__(self, parameter: str, region: str):
     self.parameter = parameter
@@ -168,9 +202,81 @@ class SSMSource:
       return None
     return response['Parameter']['Value']
 
+  def materialize_scoped(self, file: str, value: str) -> tuple[dict, bytes]:
+    return {'file': file}, value.encode()
+
   @classmethod
   def from_dict(cls, data: dict) -> SSMSource:
     return cls(data['parameter'], data['region'])
+
+
+@dataclass(frozen=True)
+class Minted:
+  """one minted value with its expiry (timezone-aware)."""
+
+  value: str
+  expires_at: datetime
+
+
+class MintingSource(ABC):
+  """a source that derives short-lived values from a minting config file on the
+  local search path: a self-contained json object holding whatever material the
+  concrete type's `mint` needs. the source keeps the minted value with its
+  expiry and re-mints once less than `EXPIRY_MARGIN` remains, so a caller that
+  just resolved the secret gets at least that window to use the value. scoped
+  stores ship the config file itself (`materialize_scoped`), so a bounded
+  session re-derives fresh values on read.
+
+  a concrete type names its registry `TYPE`, implements `mint` (validating its
+  own config fields), and gets a dispatch branch in `_source_from_dict`."""
+
+  TYPE: ClassVar[str]
+  CACHEABLE: ClassVar[bool] = False
+
+  # re-mint threshold: the remaining lifetime below which the held value is stale
+  EXPIRY_MARGIN = timedelta(minutes=5)
+
+  def __init__(self, file: str):
+    self.file = file
+    self._minted: Optional[Minted] = None
+
+  @abstractmethod
+  def mint(self, config: dict) -> Minted:
+    """derive a fresh value from the parsed minting config."""
+    ...
+
+  def fetch(self) -> Optional[str]:
+    text = self._config_text()
+    if text is None:
+      return None
+    if self._minted is None or datetime.now(UTC) >= self._minted.expires_at - self.EXPIRY_MARGIN:
+      self._minted = self.mint(self._parse_config(text))
+    return self._minted.value
+
+  def materialize_scoped(self, file: str, value: str) -> tuple[dict, bytes]:
+    text = self._config_text()
+    if text is None:
+      raise ValueError(f'{self.TYPE} config {self.file!r} disappeared during hydration')
+    return {'type': self.TYPE, 'file': file}, text.encode()
+
+  def _config_text(self) -> Optional[str]:
+    path = _find_in_search_dirs(self.file)
+    if path is None:
+      return None
+    return path.read_text()
+
+  def _parse_config(self, text: str) -> dict:
+    try:
+      config = json.loads(text)
+    except json.JSONDecodeError as e:
+      raise ValueError(f'{self.TYPE} config {self.file!r} is not valid json') from e
+    if not isinstance(config, dict):
+      raise ValueError(f'{self.TYPE} config {self.file!r} is not a json object')
+    return config
+
+  @classmethod
+  def from_dict(cls, data: dict) -> MintingSource:
+    return cls(data['file'])
 
 
 def _search_dirs() -> list[str]:
@@ -211,6 +317,12 @@ def _source_from_dict(data: dict) -> Source:
     return LocalSource.from_dict(data)
   if type_name == SSMSource.TYPE:
     return SSMSource.from_dict(data)
+  if type_name == 'github_app':
+    # deferred: github.app imports this module (its Source subclasses
+    # MintingSource), so the back reference cannot be module-level
+    import github.app
+
+    return github.app.Source.from_dict(data)
   raise ValueError(f'unknown credential source type: {type_name!r}')
 
 
@@ -247,18 +359,28 @@ class Secret:
 
   @classmethod
   def from_dict(cls, name: str, data: dict) -> Secret:
-    return cls(name, [_source_from_dict(s) for s in data['sources']], install=data.get('install'))
+    install = data.get('install')
+    if install is not None and not isinstance(install, str):
+      raise ValueError(
+        f'secret {name!r}: install must be a string — file references resolve only '
+        'in the built-in registry'
+      )
+    return cls(name, [_source_from_dict(s) for s in data['sources']], install=install)
 
 
 class Store:
   """resolves secrets against a registry, caching resolved values for its
-  lifetime. a json secret's `{"$cred": ...}` reference nodes are expanded
-  during the resolve (module docstring), so cached and returned values are
-  always the effective, self-contained text."""
+  lifetime — except values a source declares un-cacheable (`Source.CACHEABLE`,
+  e.g. a minted short-lived token): those re-fetch on every read, the source
+  owning its own refresh, and a secret whose reference expansion embedded one
+  is re-expanded per read for the same reason. a json secret's `{"$cred": ...}`
+  reference nodes are expanded during the resolve (module docstring), so cached
+  and returned values are always the effective, self-contained text."""
 
   def __init__(self, registry: dict[str, Secret]):
     self._registry = registry
     self._cache: dict[str, str] = {}
+    self._winners: dict[str, Source] = {}
     self._lock = threading.Lock()
 
   def try_get(self, name: str) -> Optional[str]:
@@ -272,46 +394,70 @@ class Store:
     # process (each value cached on first read), so a lock-free fast path buys
     # nothing.
     with self._lock:
-      return self._resolve(name, chain=())
+      resolved = self._resolve(name, chain=())
+      return resolved[0] if resolved is not None else None
 
-  def _resolve(self, name: str, chain: tuple[str, ...]) -> Optional[str]:
+  def _resolve(self, name: str, chain: tuple[str, ...]) -> Optional[tuple[str, bool]]:
     """fetch, expand, and cache one secret; `chain` is the stack of secrets whose
-    expansions are in progress, for cycle detection. callers hold the lock."""
+    expansions are in progress, for cycle detection. returns (value, cacheable) —
+    cacheable is False when the winning source, or any source behind the expanded
+    references, declares its values un-cacheable. callers hold the lock."""
     cached = self._cache.get(name)
     if cached is not None:
-      return cached
+      return cached, True
     secret = self._registry.get(name)
     if secret is None:
       return None
     for source in secret.sources:
       raw = source.fetch()
       if raw is not None:
-        value = self._expand_references(raw.strip(), (*chain, name))
-        self._cache[name] = value
-        return value
+        self._winners[name] = source
+        value, references_cacheable = self._expand_references(raw.strip(), (*chain, name))
+        cacheable = source.CACHEABLE and references_cacheable
+        if cacheable:
+          self._cache[name] = value
+        return value, cacheable
     return None
 
-  def _expand_references(self, text: str, chain: tuple[str, ...]) -> str:
+  def winning_source(self, name: str) -> Source:
+    """the source that produced `name`'s value in this store — recorded by the
+    resolve, so call it only after a successful `get`/`try_get`; raises KeyError
+    before one."""
+    with self._lock:
+      return self._winners[name]
+
+  def _expand_references(self, text: str, chain: tuple[str, ...]) -> tuple[str, bool]:
     """substitute every reference node in a json secret's tree; text that isn't
-    json, or json with no reference nodes, passes through byte-identical."""
+    json, or json with no reference nodes, passes through byte-identical. also
+    returns whether every referenced secret allowed caching (vacuously True for
+    text with no references)."""
     try:
       tree = json.loads(text)
     except json.JSONDecodeError:
-      return text
+      return text, True
     if not _contains_reference(tree):
-      return text
-    return json.dumps(self._substitute_references(tree, chain))
+      return text, True
+    referenced_cacheable: list[bool] = []
+    substituted = self._substitute_references(tree, chain, referenced_cacheable)
+    return json.dumps(substituted), all(referenced_cacheable)
 
-  def _substitute_references(self, node: Any, chain: tuple[str, ...]) -> Any:
+  def _substitute_references(
+    self, node: Any, chain: tuple[str, ...], referenced_cacheable: list[bool]
+  ) -> Any:
     if isinstance(node, dict):
       if _REFERENCE_KEY in node:
-        return self._referenced_value(node, chain)
-      return {key: self._substitute_references(value, chain) for key, value in node.items()}
+        return self._referenced_value(node, chain, referenced_cacheable)
+      return {
+        key: self._substitute_references(value, chain, referenced_cacheable)
+        for key, value in node.items()
+      }
     if isinstance(node, list):
-      return [self._substitute_references(item, chain) for item in node]
+      return [self._substitute_references(item, chain, referenced_cacheable) for item in node]
     return node
 
-  def _referenced_value(self, node: dict, chain: tuple[str, ...]) -> Any:
+  def _referenced_value(
+    self, node: dict, chain: tuple[str, ...], referenced_cacheable: list[bool]
+  ) -> Any:
     referrer = chain[-1]
     unknown = sorted(set(node) - {_REFERENCE_KEY, _REFERENCE_FIELD})
     if len(unknown) > 0:
@@ -326,9 +472,11 @@ class Store:
       raise ValueError(f'secret {referrer!r}: reference field must be a string, got {field!r}')
     if target in chain:
       raise ValueError(f'credential reference cycle: {" -> ".join((*chain, target))}')
-    value = self._resolve(target, chain)
-    if value is None:
+    resolved = self._resolve(target, chain)
+    if resolved is None:
       raise ValueError(f'secret {referrer!r} references {target!r}, which does not resolve')
+    value, cacheable = resolved
+    referenced_cacheable.append(cacheable)
     try:
       parsed = json.loads(value)
     except json.JSONDecodeError:
@@ -383,6 +531,20 @@ class Store:
 _BUILTIN_REGISTRY_PATH = Path(__file__).with_name('registry.json')
 
 
+def _builtin_registry_data() -> dict:
+  """the built-in registry json with install-hook file references inlined: an
+  `install` of the form `{"file": "<path>"}` loads the hook template from that
+  path relative to the registry, so a multi-line hook stays a real shell file
+  instead of an escaped json string. file references are a built-in-registry
+  affordance — every other registry flavor carries hooks as strings."""
+  data = json.loads(_BUILTIN_REGISTRY_PATH.read_text())
+  for entry in data.values():
+    install = entry.get('install')
+    if isinstance(install, dict):
+      entry['install'] = (_BUILTIN_REGISTRY_PATH.parent / install['file']).read_text().rstrip('\n')
+  return data
+
+
 def _registry_from_dict(data: dict) -> dict[str, Secret]:
   return {name: Secret.from_dict(name, spec) for name, spec in data.items()}
 
@@ -413,7 +575,7 @@ def _resolve_kinds(data: dict) -> dict:
 
 def default_registry() -> dict[str, Secret]:
   """the built-in registry (every known secret as a single local source)."""
-  return _registry_from_dict(_resolve_kinds(json.loads(_BUILTIN_REGISTRY_PATH.read_text())))
+  return _registry_from_dict(_resolve_kinds(_builtin_registry_data()))
 
 
 def host_registry() -> dict[str, Secret]:
@@ -422,7 +584,7 @@ def host_registry() -> dict[str, Secret]:
   the additions file follows the local search path, like any secret file. kind
   resolution runs after the merge, so a variant picks up its kind's hook even
   when an addition overrides the kind."""
-  data = json.loads(_BUILTIN_REGISTRY_PATH.read_text())
+  data = _builtin_registry_data()
   additions_path = _find_in_search_dirs(HOST_REGISTRY_FILE)
   if additions_path is not None:
     data.update(json.loads(additions_path.read_text()))
@@ -507,9 +669,10 @@ def build_scoped_store(names: Iterable[str], *, optional: Iterable[str] = ()) ->
   """build a per-container scoped credential store in memory.
 
   returns a map of relative file name to its bytes: one `{name}.cred` entry per
-  hydrated secret holding its resolved raw text, plus a generated
-  `credentials.json` registry covering exactly those secrets and pointing each at
-  its `{name}.cred`. materialising this map as the container's
+  hydrated secret holding its resolved raw text (or, for a github_app-sourced
+  secret, its minting config, so the session mints fresh tokens on read), plus a
+  generated `credentials.json` registry covering exactly those secrets and
+  pointing each at its `{name}.cred`. materialising this map as the container's
   `~/.ppp` then bounds the container to this set; any other secret resolves to a
   clean `SecretNotFound`. The bytes never touch a host file — `cw` packs them
   into a tar and `docker cp`s them straight into the container.
@@ -544,16 +707,14 @@ def build_scoped_store(names: Iterable[str], *, optional: Iterable[str] = ()) ->
   scoped: dict[str, dict] = {}
 
   def materialize(name: str, value: str, secret: Secret) -> None:
-    # resolve generically on the host (a future non-local source uses the host's
-    # own credentials), then materialize under a uniform `{kind}.cred`. the scoped
-    # file is local regardless of the host source type, so the container only ever
-    # sees a plain local file and the registry it reads stays local-only by
-    # construction — the filename is internal to the scoped store, not borrowed
-    # from the source.
+    # resolve generically on the host (doubling as launch-time validation), then
+    # let the winning source pick its scoped representation under a uniform
+    # `{kind}.cred` — Source.materialize_scoped owns the per-source semantics
     kind, _ = parse_name(name)
     file = f'{kind}.cred'
-    files[file] = value.encode()
-    entry: dict = {'sources': [{'file': file}]}
+    entry_source, content = store.winning_source(name).materialize_scoped(file, value)
+    files[file] = content
+    entry: dict = {'sources': [entry_source]}
     install = secret.install_for(kind)
     if install is not None:
       entry['install'] = install

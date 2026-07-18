@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 import email.message
 import http.client
+import itertools
+import json
 import urllib.error
 from typing import Any, Optional
 
@@ -218,7 +220,7 @@ class TestPollLoopResilience:
       return step
 
     monkeypatch.setattr(poll_pr, '_fetch_pr', fake_fetch_pr)
-    assert poll_pr.poll_pr('o', 'r', 1, 't', interval=0, self_login=None) == 0
+    assert poll_pr.poll_pr('o', 'r', 1, lambda: 't', interval=0, self_login=None) == 0
     assert len(calls) == 2
 
   def test_fatal_cycle_error_propagates(self, monkeypatch):
@@ -229,7 +231,7 @@ class TestPollLoopResilience:
 
     monkeypatch.setattr(poll_pr, '_fetch_pr', fake_fetch_pr)
     with pytest.raises(urllib.error.HTTPError) as exception:
-      poll_pr.poll_pr('o', 'r', 1, 't', interval=0, self_login=None)
+      poll_pr.poll_pr('o', 'r', 1, lambda: 't', interval=0, self_login=None)
     assert exception.value.code == 404
 
   def test_remote_disconnected_cycle_error_is_swallowed(self, monkeypatch):
@@ -248,5 +250,80 @@ class TestPollLoopResilience:
       return step
 
     monkeypatch.setattr(poll_pr, '_fetch_pr', fake_fetch_pr)
-    assert poll_pr.poll_pr('o', 'r', 1, 't', interval=0, self_login=None) == 0
+    assert poll_pr.poll_pr('o', 'r', 1, lambda: 't', interval=0, self_login=None) == 0
     assert len(calls) == 2
+
+
+class TestTokenAndSelf:
+  def _baseline(self, monkeypatch):
+    monkeypatch.setattr(poll_pr, '_owner_login', lambda *a: 'alice')
+    monkeypatch.setattr(poll_pr, '_fetch_issue_comments', lambda *a: [])
+    monkeypatch.setattr(poll_pr, '_fetch_review_comments', lambda *a: [])
+    monkeypatch.setattr(poll_pr, '_fetch_reviews', lambda *a: [])
+    monkeypatch.setattr(poll_pr.time, 'sleep', lambda _: None)
+
+  def test_token_provider_is_consulted_every_cycle(self, monkeypatch):
+    self._baseline(monkeypatch)
+    tokens_seen: list[str] = []
+    pr_steps: list[dict[str, Any]] = [{'state': 'open', **_user('alice')}, {'merged': True}]
+
+    def fake_fetch_pr(owner, repo, pr, token):
+      tokens_seen.append(token)
+      return pr_steps[len(tokens_seen) - 1]
+
+    monkeypatch.setattr(poll_pr, '_fetch_pr', fake_fetch_pr)
+    counter = itertools.count(1)
+    provider = lambda: f't{next(counter)}'  # noqa: E731
+    assert poll_pr.poll_pr('o', 'r', 1, provider, interval=0, self_login='x') == 0
+    # each cycle re-reads the provider: two cycles, two distinct tokens
+    assert len(tokens_seen) == 2
+    assert len(set(tokens_seen)) == 2
+
+  def test_self_defaults_to_pr_author(self, monkeypatch, capsys):
+    self._baseline(monkeypatch)
+    author_comment = _issue_comment(50, 'alice', 'my own note')
+    issue_calls: list[int] = []
+
+    def fake_issue_comments(*a):
+      issue_calls.append(1)
+      # absent at the startup baseline scan, appears on the first poll cycle
+      return [] if len(issue_calls) == 1 else [author_comment]
+
+    monkeypatch.setattr(poll_pr, '_fetch_issue_comments', fake_issue_comments)
+    pr_steps: list[dict[str, Any]] = [{'state': 'open', **_user('alice')}, {'merged': True}]
+    pr_calls: list[int] = []
+
+    def fake_fetch_pr(*a):
+      pr_calls.append(1)
+      return pr_steps[len(pr_calls) - 1]
+
+    monkeypatch.setattr(poll_pr, '_fetch_pr', fake_fetch_pr)
+    assert poll_pr.poll_pr('o', 'r', 1, lambda: 't', interval=0, self_login=None) == 0
+    out = capsys.readouterr().out
+    # the repo owner authored the PR; with self defaulted to the PR author their
+    # own comment is filtered rather than emitted
+    assert '"comment"' not in out
+    assert json.loads(out.strip().splitlines()[-1]) == {'event': 'merged', 'pr': 1}
+
+
+class TestMain:
+  def _capture_poll(self, monkeypatch) -> dict:
+    captured = {}
+
+    def fake_poll(owner, repo, pr, token, interval, self_login):
+      captured['token'] = token
+      return 0
+
+    monkeypatch.setattr(poll_pr, 'poll_pr', fake_poll)
+    monkeypatch.setattr(poll_pr.credentials, 'get', lambda name: f'resolved:{name}')
+    return captured
+
+  def test_credential_defaults_to_github(self, monkeypatch):
+    captured = self._capture_poll(monkeypatch)
+    assert poll_pr.main(['poll-pr', 'x/y', '1']) == 0
+    assert captured['token']() == 'resolved:github'
+
+  def test_credential_flag_resolves_per_read(self, monkeypatch):
+    captured = self._capture_poll(monkeypatch)
+    assert poll_pr.main(['poll-pr', 'x/y', '1', '--credential', 'other']) == 0
+    assert captured['token']() == 'resolved:other'

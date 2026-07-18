@@ -177,7 +177,7 @@ git push -u origin HEAD
 
 ### 12. Open the PR
 
-Use `gh` for everything GitHub-related — it's pre-authenticated via `$GH_TOKEN`, auto-detects the repo from the origin remote, and handles JSON encoding. Do not use `curl` against `api.github.com`.
+Use `gh` for everything GitHub-related — it's pre-authenticated, auto-detects the repo from the origin remote, and handles JSON encoding. Do not use `curl` against `api.github.com`.
 
 Build the PR title and body:
 - **Title**: if single commit, use its title. If multiple commits, use the first commit's `<area>:` prefix + a brief summary.
@@ -218,10 +218,10 @@ Build commit links from `git remote get-url origin` (strip trailing `.git`).
 
 ### 14. Launch the review watcher
 
-The watcher is one long-lived `poll-pr` process. `--self` filters out your own bot identity; `$GITHUB_ACTOR` is unset in these sessions, so derive it from `gh api user`:
+The watcher is one long-lived `poll-pr` process. It authenticates through the credential store (`--credential`, default `github`), re-resolved each cycle so the watch survives short-lived minted tokens; your own comments are filtered via `--self`, which defaults to the PR author:
 
 ```bash
-poll-pr <owner>/<repo> <pr_number> --token "$GH_TOKEN" --self "$(gh api user --jq '.login')" --allow-env
+poll-pr <owner>/<repo> <pr_number>
 ```
 
 `poll-pr` outputs JSON-lines to stdout:

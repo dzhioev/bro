@@ -9,6 +9,7 @@ import urllib.error
 from collections.abc import Callable
 from typing import Any, Optional
 
+from base import credentials
 from base.args import ArgumentTypeError, Parser
 from github import api
 
@@ -148,23 +149,24 @@ def poll_pr(
   owner: str,
   repo: str,
   pr: int,
-  token: str,
+  token: Callable[[], str],
   interval: int,
   self_login: Optional[str],
 ) -> int:
   seen_comment_ids: set[int] = set()
   seen_review_ids: set[int] = set()
 
-  repo_owner_login = _owner_login(owner, repo, token)
+  startup_token = token()
+  repo_owner_login = _owner_login(owner, repo, startup_token)
   _log.info(f'repo owner: {repo_owner_login}')
 
   for comments in (
-    _fetch_issue_comments(owner, repo, pr, token),
-    _fetch_review_comments(owner, repo, pr, token),
+    _fetch_issue_comments(owner, repo, pr, startup_token),
+    _fetch_review_comments(owner, repo, pr, startup_token),
   ):
     for c in comments:
       seen_comment_ids.add(c['id'])
-  for r in _fetch_reviews(owner, repo, pr, token):
+  for r in _fetch_reviews(owner, repo, pr, startup_token):
     seen_review_ids.add(r['id'])
   _log.info(f'existing comments: {len(seen_comment_ids)}, existing reviews: {len(seen_review_ids)}')
 
@@ -182,7 +184,10 @@ def poll_pr(
     # the seen-id baselines. a non-transient error (404 — PR/repo gone) is fatal
     # and propagates.
     try:
-      pr_data = _fetch_pr(owner, repo, pr, token)
+      # re-read per cycle so a short-lived minted credential stays fresh across
+      # a watch that outlives it
+      cycle_token = token()
+      pr_data = _fetch_pr(owner, repo, pr, cycle_token)
 
       if pr_data.get('merged'):
         print(json.dumps({'event': 'merged', 'pr': pr}), flush=True)
@@ -192,8 +197,14 @@ def poll_pr(
         print(json.dumps({'event': 'closed', 'pr': pr}), flush=True)
         return 1
 
+      # derived here rather than at startup so the derivation rides the loop's
+      # transient-error tolerance
+      if self_login is None:
+        self_login = pr_data['user']['login']
+        _log.info(f'self: {self_login} (the PR author)')
+
       for event in emit_cycle(
-        owner, repo, pr, token, seen_comment_ids, seen_review_ids, is_actionable
+        owner, repo, pr, cycle_token, seen_comment_ids, seen_review_ids, is_actionable
       ):
         print(json.dumps(event), flush=True)
     except (http.client.HTTPException, OSError) as error:
@@ -217,22 +228,35 @@ def _owner_repo(arg: str) -> tuple[str, str]:
   return parts[0], parts[1]
 
 
+def _token_provider(credential: str) -> Callable[[], str]:
+  return lambda: credentials.get(credential)
+
+
 def main(argv: list[str]) -> Optional[int]:
   parser = Parser(description='poll a GitHub PR for merge status, new comments, and new reviews')
   parser.add_argument(
     'repo', type=_owner_repo, metavar='owner/repo', help='target repo (e.g. dzhioev/ppp)'
   )
   parser.add_argument('pr', type=int, help='PR number')
-  parser.add_argument('--token', required=True, secret=True, help='GitHub token')
+  parser.add_argument(
+    '--credential',
+    default='github',
+    help='credential-store secret resolved into the token at every poll cycle '
+    '(fresh across short-lived minted tokens)',
+  )
   parser.add_argument('--interval', type=int, default=10, help='poll interval in seconds')
-  parser.add_argument('--self', dest='self_login', help='login to filter out (your own comments)')
+  parser.add_argument(
+    '--self',
+    dest='self_login',
+    help='login to filter out (your own comments); defaults to the PR author',
+  )
   namespace = parser.parse(argv)
   owner, repo = namespace['repo']
   return poll_pr(
     owner=owner,
     repo=repo,
     pr=namespace['pr'],
-    token=namespace['token'],
+    token=_token_provider(namespace['credential']),
     interval=namespace['interval'],
     self_login=namespace['self_login'],
   )

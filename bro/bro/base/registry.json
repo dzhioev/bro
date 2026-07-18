@@ -21,7 +21,7 @@
   "twitch_user_token": {"sources": [{"file": "twitch_user_token.json"}]},
   "github": {
     "sources": [{"file": "cw_github_token_bro"}],
-    "install": "export GH_TOKEN=\"$(credentials get '{{insert #name}}')\"\ngit config --global credential.helper '!f() { echo username=x-access-token; echo \"password=$GH_TOKEN\"; }; f'"
+    "install": {"file": "hooks/github.sh"}
   },
   "aws": {
     "sources": [{"file": "aws_credentials"}],

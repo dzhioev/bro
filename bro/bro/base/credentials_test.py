@@ -1,8 +1,9 @@
 import json
 import threading
 import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import ClassVar, Optional
 from unittest.mock import MagicMock
 
 import pytest
@@ -33,6 +34,24 @@ def ppp_dir(configs_dir: Path) -> Path:
 
 def _write(dir: Path, name: str, payload) -> None:
   (dir / name).write_text(payload if isinstance(payload, str) else json.dumps(payload))
+
+
+class _TicketSource(credentials.MintingSource):
+  """concrete minting source for the tests: values `<prefix>_1`, `<prefix>_2`, ...
+  (prefix from the config) with a fixed lifetime per instance."""
+
+  TYPE = 'ticket'
+
+  def __init__(self, file: str, *, expires_in: timedelta = timedelta(hours=1)):
+    super().__init__(file)
+    self.expires_in = expires_in
+    self.mints = 0
+
+  def mint(self, config: dict) -> credentials.Minted:
+    self.mints += 1
+    return credentials.Minted(
+      f'{config["prefix"]}_{self.mints}', datetime.now(UTC) + self.expires_in
+    )
 
 
 class TestLocalSource:
@@ -136,6 +155,45 @@ class TestSSMSource:
     assert store.get_json('notion') == {'token': 'remote'}
 
 
+class TestMintingSource:
+  def _source(self, ppp_dir: Path, config=None, **kwargs) -> _TicketSource:
+    _write(ppp_dir, 'ticket.json', config if config is not None else {'prefix': 'ticket'})
+    return _TicketSource('ticket.json', **kwargs)
+
+  def test_fetch_mints_from_config(self, ppp_dir: Path):
+    assert self._source(ppp_dir).fetch() == 'ticket_1'
+
+  def test_fetch_returns_none_when_config_absent(self, configs_dir: Path):
+    assert _TicketSource('missing.json').fetch() is None
+
+  def test_fetch_reuses_value_until_near_expiry(self, ppp_dir: Path):
+    source = self._source(ppp_dir)
+    assert source.fetch() == 'ticket_1'
+    assert source.fetch() == 'ticket_1'
+    assert source.mints == 1
+
+  def test_fetch_remints_within_expiry_margin(self, ppp_dir: Path):
+    source = self._source(ppp_dir, expires_in=credentials.MintingSource.EXPIRY_MARGIN / 2)
+    assert source.fetch() == 'ticket_1'
+    assert source.fetch() == 'ticket_2'
+
+  def test_config_not_an_object_raises(self, ppp_dir: Path):
+    source = self._source(ppp_dir, config=[1, 2])
+    with pytest.raises(ValueError, match='not a json object'):
+      source.fetch()
+
+  def test_config_not_json_raises(self, ppp_dir: Path):
+    source = self._source(ppp_dir, config='not json')
+    with pytest.raises(ValueError, match='not valid json'):
+      source.fetch()
+
+  def test_materialize_scoped_ships_the_config(self, ppp_dir: Path):
+    source = self._source(ppp_dir)
+    entry, content = source.materialize_scoped('github.cred', 'ticket_1')
+    assert entry == {'type': 'ticket', 'file': 'github.cred'}
+    assert json.loads(content) == {'prefix': 'ticket'}
+
+
 class TestRegistryOverride:
   def test_environment_override_wins_over_search_dirs(self, configs_dir: Path, monkeypatch):
     _write(configs_dir, 'shadowed.json', {'token': 'shadowed'})
@@ -211,6 +269,24 @@ class TestStore:
     path.unlink()
     assert store.get('notion') == '{"token": "t"}'
 
+  def test_uncacheable_source_refetches_every_get(self, configs_dir: Path):
+    # a source that mints short-lived values owns its own refresh; the store
+    # must consult it on every read instead of caching the first mint
+    values = iter(['first', 'second'])
+
+    class _MintingSource:
+      CACHEABLE: ClassVar[bool] = False
+
+      def fetch(self) -> Optional[str]:
+        return next(values)
+
+      def materialize_scoped(self, file: str, value: str) -> tuple[dict, bytes]:
+        return {'file': file}, value.encode()
+
+    store = self._store(credentials.Secret('s', [_MintingSource()]))
+    assert store.get('s') == 'first'
+    assert store.get('s') == 'second'
+
   def test_unknown_name_raises(self):
     with pytest.raises(credentials.SecretNotFound) as exception:
       credentials.Store({}).get('nope')
@@ -272,10 +348,15 @@ class TestStore:
     calls: list[int] = []
 
     class _CountingSource:
+      CACHEABLE: ClassVar[bool] = True
+
       def fetch(self) -> Optional[str]:
         calls.append(1)  # list.append is atomic under the GIL
         time.sleep(0.02)
         return 'v'
+
+      def materialize_scoped(self, file: str, value: str) -> tuple[dict, bytes]:
+        return {'file': file}, value.encode()
 
     store = self._store(credentials.Secret('s', [_CountingSource()]))
     results: list[str] = []
@@ -476,6 +557,30 @@ class TestReferences:
     }
     assert b'$cred' not in store['brog.cred']
 
+  def test_reference_to_uncacheable_secret_reexpands_every_get(self, configs_dir: Path):
+    # a referrer that embedded a minted value must not cache it past the mint's
+    # own refresh — non-cacheability propagates through the expansion
+    tokens = iter(['t1', 't2'])
+
+    class _MintingSource:
+      CACHEABLE: ClassVar[bool] = False
+
+      def fetch(self) -> Optional[str]:
+        return next(tokens)
+
+      def materialize_scoped(self, file: str, value: str) -> tuple[dict, bytes]:
+        return {'file': file}, value.encode()
+
+    _write(configs_dir, 'brog.secret', {'backend': 'github', 'token': {'$cred': 'github'}})
+    store = credentials.Store(
+      {
+        'github': credentials.Secret('github', [_MintingSource()]),
+        'brog': credentials.Secret('brog', [credentials.LocalSource('brog.secret')]),
+      }
+    )
+    assert store.get_json('brog')['token'] == 't1'
+    assert store.get_json('brog')['token'] == 't2'
+
 
 class TestDefaultRegistry:
   def test_inventory_covers_known_secrets(self):
@@ -494,6 +599,17 @@ class TestDefaultRegistry:
     for name in names:
       assert name in registry
 
+  def test_install_file_reference_inlines_the_hook_file(self):
+    # the github entry declares its hook as {"file": ...}; the load inlines the
+    # shell file's text, so the rendered hook carries its content
+    install = credentials.default_registry()['github'].install
+    assert install is not None
+    assert '.local/bin/gh' in install
+
+  def test_install_file_reference_rejected_outside_the_builtin_registry(self):
+    with pytest.raises(ValueError, match='install must be a string'):
+      credentials.Secret.from_dict('x', {'sources': [{'file': 'f'}], 'install': {'file': 'h.sh'}})
+
   def test_github_maps_to_bro_token_file(self):
     # one `github` entry resolves the token bro containers push with; there is no
     # separate human-PAT entry (it is unused by any reader).
@@ -508,7 +624,7 @@ class TestDefaultRegistry:
     # renders with its own name in the single-quoted insert slot
     registry = credentials.default_registry()
     assert registry['github'].install is not None
-    assert "credentials get 'github'" in registry['github'].install
+    assert 'credentials get github' in registry['github'].install
     assert '{{' not in registry['github'].install
     # non-directive braces are literal text to the engine — the shell function
     # body in the credential-helper line survives rendering
@@ -584,11 +700,11 @@ class TestHostRegistry:
     registry = credentials.host_registry()
     variant = registry['github+pavel'].install
     assert variant is not None
-    assert "credentials get 'github+pavel'" in variant
+    assert 'credentials get github+pavel' in variant
     # the kind's own hook still names the kind
     kind = registry['github'].install
     assert kind is not None
-    assert "credentials get 'github'" in kind
+    assert 'credentials get github' in kind
 
   def test_variant_of_hookless_kind_has_no_hook(self, ppp_dir: Path):
     _write(
@@ -779,8 +895,13 @@ class TestBuildScopedStore:
     # a scoped local `{name}.cred`, so the container reads a plain local file with
     # no idea the host source was remote.
     class _StubSource:
+      CACHEABLE: ClassVar[bool] = True
+
       def fetch(self) -> Optional[str]:
         return 'sekret'
+
+      def materialize_scoped(self, file: str, value: str) -> tuple[dict, bytes]:
+        return {'file': file}, value.encode()
 
     registry = {'remote': credentials.Secret('remote', [_StubSource()])}
     monkeypatch.setattr(credentials, '_load_registry', lambda: registry)
@@ -793,6 +914,44 @@ class TestBuildScopedStore:
     # ...and that scoped entry rehydrates as a LocalSource (type defaults to local)
     rebuilt = credentials._registry_from_dict(scoped)
     assert isinstance(rebuilt['remote'].sources[0], credentials.LocalSource)
+
+  def test_minting_secret_ships_the_config(self, ppp_dir: Path, monkeypatch):
+    # the scoped store carries the minting config, not a minted value — the
+    # session re-derives on read; the host-side resolve at build time is the
+    # launch validation of the config
+    _write(ppp_dir, 'ticket.json', {'prefix': 'ticket'})
+    source = _TicketSource('ticket.json')
+    registry = {'github+bot': credentials.Secret('github+bot', [source])}
+    monkeypatch.setattr(credentials, '_load_registry', lambda: registry)
+    store = credentials.build_scoped_store(['github+bot'])
+    assert source.mints == 1
+    # the variant materializes under its kind, keeping the source's own type
+    assert json.loads(store['github.cred']) == {'prefix': 'ticket'}
+    scoped = json.loads(store[credentials.REGISTRY_FILE])
+    assert scoped['github']['sources'] == [{'type': 'ticket', 'file': 'github.cred'}]
+
+  def test_minting_failure_fails_the_build(self, ppp_dir: Path, monkeypatch):
+    class _BrokenSource(_TicketSource):
+      def mint(self, config: dict) -> credentials.Minted:
+        raise ValueError('bad key')
+
+    _write(ppp_dir, 'ticket.json', {'prefix': 'ticket'})
+    registry = {'sekret': credentials.Secret('sekret', [_BrokenSource('ticket.json')])}
+    monkeypatch.setattr(credentials, '_load_registry', lambda: registry)
+    with pytest.raises(ValueError, match='bad key'):
+      credentials.build_scoped_store(['sekret'])
+
+  def test_fallback_list_materializes_the_winning_source(self, ppp_dir: Path, monkeypatch):
+    # an ordered [minting, local] list collapses to whichever source resolves:
+    # with the minting config absent, the local fallback wins and ships its value
+    _write(ppp_dir, 'token_file', 'ghp_static')
+    sources = [_TicketSource('absent.json'), credentials.LocalSource('token_file')]
+    registry = {'github': credentials.Secret('github', sources)}
+    monkeypatch.setattr(credentials, '_load_registry', lambda: registry)
+    store = credentials.build_scoped_store(['github'])
+    assert store['github.cred'] == b'ghp_static'
+    scoped = json.loads(store[credentials.REGISTRY_FILE])
+    assert scoped['github']['sources'] == [{'file': 'github.cred'}]
 
   def test_empty_names_yields_only_registry(self, configs_dir: Path):
     # cw always cps a store in (even a zero-secret session), so the registry
@@ -877,7 +1036,7 @@ class TestBuildScopedStore:
     assert registry['github']['sources'] == [{'file': 'github.cred'}]
     # the hook is re-rendered for the kind name — in-session `eval` pulls the
     # value via `credentials get github`, the name the scoped store resolves
-    assert "credentials get 'github'" in registry['github']['install']
+    assert 'credentials get github' in registry['github']['install']
     assert 'github+pavel' not in registry['github']['install']
     rebuilt = credentials._registry_from_dict(registry)
     assert rebuilt['github'].install == registry['github']['install']
@@ -1002,10 +1161,14 @@ class TestInstallHooks:
     # path is interpolated, so there's no quoting/injection surface. no files
     # written: presence is no longer a path check.
     out = credentials.install_hooks()
-    # github → git credential helper + GH_TOKEN, pulled via `credentials get`
+    # github → git credential helper + a PATH-front gh wrapper, each pulling the
+    # token via `credentials get` at use time (fresh across minted app tokens);
+    # no ambient GH_TOKEN export — the wrapper sets it per invocation
     assert 'credential.helper' in out
+    assert 'credentials get github' in out
+    assert '.local/bin/gh' in out
     assert 'GH_TOKEN' in out
-    assert "credentials get 'github'" in out
+    assert 'export GH_TOKEN' not in out
     # aws → materialized to ~/.aws/credentials (the path the CLI reads by default,
     # so no AWS_SHARED_CREDENTIALS_FILE export needed) via `credentials get`
     assert "credentials get 'aws'" in out
@@ -1028,7 +1191,7 @@ class TestInstallHooks:
     # hook emits even with no local file present. in a scoped container the
     # registry *is* the hydrated (present) set, so this is the right bound.
     out = credentials.install_hooks()
-    assert "credentials get 'github'" in out
+    assert 'credentials get github' in out
     assert "credentials get 'aws'" in out
 
   def test_cli_install_hooks(self, configs_dir: Path, capsys):

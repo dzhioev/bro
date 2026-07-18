@@ -29,70 +29,82 @@ _GITHUB_CONFIG = {'backend': 'github', 'token': 'gh-secret', 'repo': 'octo/scrat
 
 class TestBuildSystem:
   def test_flow_http(self):
-    system = build_system(_HTTP_CONFIG)
+    system = build_system(lambda: _HTTP_CONFIG)
     assert isinstance(system, brog.flow_proxy.System)
     assert isinstance(system._transport, brog.flow_proxy.HTTPTransport)
 
   def test_flow_local(self):
-    system = build_system(_LOCAL_CONFIG)
+    system = build_system(lambda: _LOCAL_CONFIG)
     assert isinstance(system, brog.flow_proxy.System)
     assert isinstance(system._transport, brog.flow_proxy.LocalTransport)
 
   def test_author_threads_through(self):
-    system = build_system(_HTTP_CONFIG, author='ppp-dev')
+    system = build_system(lambda: _HTTP_CONFIG, author='ppp-dev')
     assert isinstance(system, brog.flow_proxy.System)
     assert system._author == 'ppp-dev'
 
   def test_author_defaults_to_none(self):
-    system = build_system(_HTTP_CONFIG)
+    system = build_system(lambda: _HTTP_CONFIG)
     assert isinstance(system, brog.flow_proxy.System)
     assert system._author is None
 
   def test_github(self):
-    system = build_system(_GITHUB_CONFIG)
+    system = build_system(lambda: _GITHUB_CONFIG)
     assert isinstance(system, brog.github.System)
     assert system._repo == 'octo/scratch'
-    assert system._token == 'gh-secret'
+    assert system._token() == 'gh-secret'
+
+  def test_github_token_rereads_the_config_provider(self):
+    configs = iter(
+      [
+        {'backend': 'github', 'token': 't1', 'repo': 'octo/scratch'},
+        {'backend': 'github', 'token': 't2', 'repo': 'octo/scratch'},
+      ]
+    )
+    system = build_system(lambda: next(configs))
+    assert isinstance(system, brog.github.System)
+    # the build consumed the first config; each token read re-consults the provider
+    assert system._token() == 't2'
 
   def test_github_repo_derived_from_origin_when_omitted(self, monkeypatch):
     monkeypatch.setattr(brog.github, 'origin_repo', lambda: 'derived/name')
-    system = build_system({'backend': 'github', 'token': 'gh-secret'})
+    system = build_system(lambda: {'backend': 'github', 'token': 'gh-secret'})
     assert isinstance(system, brog.github.System)
     assert system._repo == 'derived/name'
 
   def test_github_missing_token_rejected(self):
     with pytest.raises(ValueError, match="missing 'token'"):
-      build_system({'backend': 'github', 'repo': 'octo/scratch'})
+      build_system(lambda: {'backend': 'github', 'repo': 'octo/scratch'})
 
   def test_unknown_backend_rejected(self):
     with pytest.raises(ValueError, match="unknown brog backend 'jira'"):
-      build_system({'backend': 'jira', 'token': 't'})
+      build_system(lambda: {'backend': 'jira', 'token': 't'})
 
   def test_missing_backend_rejected(self):
     with pytest.raises(ValueError, match="missing 'backend'"):
-      build_system({'transport': 'http'})
+      build_system(lambda: {'transport': 'http'})
 
   def test_unknown_transport_rejected(self):
     with pytest.raises(ValueError, match="unknown brog flow transport 'stdio'"):
-      build_system({'backend': 'flow', 'transport': 'stdio'})
+      build_system(lambda: {'backend': 'flow', 'transport': 'stdio'})
 
   def test_missing_transport_rejected(self):
     with pytest.raises(ValueError, match="missing 'transport'"):
-      build_system({'backend': 'flow'})
+      build_system(lambda: {'backend': 'flow'})
 
   @pytest.mark.parametrize('key', ['url', 'token'])
   def test_http_missing_key_rejected(self, key):
     config = {k: v for k, v in _HTTP_CONFIG.items() if k != key}
     with pytest.raises(ValueError, match=f"missing '{key}'"):
-      build_system(config)
+      build_system(lambda: config)
 
   def test_local_missing_notion_rejected(self):
     with pytest.raises(ValueError, match="missing 'notion'"):
-      build_system({'backend': 'flow', 'transport': 'local'})
+      build_system(lambda: {'backend': 'flow', 'transport': 'local'})
 
   def test_local_non_object_notion_rejected(self):
     with pytest.raises(ValueError, match='"notion" must be an object'):
-      build_system({'backend': 'flow', 'transport': 'local', 'notion': 'nope'})
+      build_system(lambda: {'backend': 'flow', 'transport': 'local', 'notion': 'nope'})
 
 
 class TestDefaultSystem:

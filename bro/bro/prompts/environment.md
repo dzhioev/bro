@@ -6,8 +6,7 @@ Call the `bro::banner` tool once. It returns the structured session facts as `ke
 
 1. `kind: container` means you are inside an isolated docker container:
    - No direct filesystem access to the host
-   - Git push uses HTTPS with a GitHub token
-   - `gh` CLI is available and pre-authenticated via `GH_TOKEN`
+   - git (push over HTTPS) and the `gh` CLI are pre-authenticated
    - Push your changes; the host cannot see uncommitted work
    - `docker_shell_command` (`cw exec <name>`) is what the user runs from their host shell to drop into a shell inside the container
 

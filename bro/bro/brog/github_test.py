@@ -98,14 +98,24 @@ def api(monkeypatch) -> _FakeAPI:
 
 
 def _system() -> System:
-  return System(token='t', repo=_REPO)
+  return System(token=lambda: 't', repo=_REPO)
 
 
 class TestConstruction:
   @pytest.mark.parametrize('repo', ['no-slash', 'a/b/c', 'a /b', ''])
   def test_malformed_repo_rejected(self, repo):
     with pytest.raises(ValueError, match='must be owner/name'):
-      System(token='t', repo=repo)
+      System(token=lambda: 't', repo=repo)
+
+  def test_token_provider_consulted_per_call(self, api):
+    api.responses[_issue_url(1)] = _issue(number=1)
+    api.responses[_issue_url(2)] = _issue(number=2)
+    tokens = iter(['t1', 't2'])
+    system = System(token=lambda: next(tokens), repo=_REPO)
+    system.get_task('1')
+    system.get_task('2')
+    # each API call reads the provider afresh, so a re-minted token is picked up
+    assert api.tokens == {'t1', 't2'}
 
 
 class TestRefs:

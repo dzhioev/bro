@@ -10,6 +10,7 @@ listings; every op rejects a ref resolving to one.
 
 import re
 import subprocess
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, Optional
 
@@ -80,9 +81,11 @@ class System(brog.system.System):
 
   The token's account is the acting identity: issues and comments are created
   under it, so comments carry no embedded author segment (authorship is native).
+  `token` is a provider consulted per API call, so a short-lived minted credential
+  (a GitHub App installation token) stays fresh for the System's whole lifetime.
   """
 
-  def __init__(self, *, token: str, repo: str):
+  def __init__(self, *, token: Callable[[], str], repo: str):
     if re.fullmatch(r'[^/\s]+/[^/\s]+', repo) is None:
       raise ValueError(f'GitHub repo must be owner/name, got {repo!r}')
     self._token = token
@@ -110,7 +113,7 @@ class System(brog.system.System):
     every op starts here — the issues API happily serves and mutates PRs, which
     brog does not track.
     """
-    issue = api.get(self._url(f'/issues/{self._issue_number(ref)}'), self._token)
+    issue = api.get(self._url(f'/issues/{self._issue_number(ref)}'), self._token())
     if 'pull_request' in issue:
       raise ValueError(f'#{issue["number"]} is a pull request, not an issue')
     return issue
@@ -120,7 +123,7 @@ class System(brog.system.System):
       return []
     blockers = api.get(
       self._url(f'/issues/{issue["number"]}/dependencies/blocked_by?per_page={_PAGE_SIZE}'),
-      self._token,
+      self._token(),
     )
     return [str(blocker['number']) for blocker in blockers if blocker['state'] == 'open']
 
@@ -143,7 +146,7 @@ class System(brog.system.System):
       payload['body'] = body
     if tags is not None:
       payload['labels'] = tags
-    issue = api.post(self._url('/issues'), self._token, payload)
+    issue = api.post(self._url('/issues'), self._token(), payload)
     # a just-created issue is open with no dependencies; no follow-up reads needed
     return Task(
       id=str(issue['number']),
@@ -171,7 +174,7 @@ class System(brog.system.System):
     page = 1
     while True:
       batch = api.get(
-        self._url(f'/issues/{number}/comments?per_page={_PAGE_SIZE}&page={page}'), self._token
+        self._url(f'/issues/{number}/comments?per_page={_PAGE_SIZE}&page={page}'), self._token()
       )
       comments.extend(batch)
       if len(batch) < _PAGE_SIZE:
@@ -196,18 +199,18 @@ class System(brog.system.System):
     if len(payload) == 0:
       return
     issue = self._issue(task_id)
-    api.patch(self._url(f'/issues/{issue["number"]}'), self._token, payload)
+    api.patch(self._url(f'/issues/{issue["number"]}'), self._token(), payload)
 
   def add_comment(self, task_id: str, topic: str, body: str) -> None:
     issue = self._issue(task_id)
     entry = f'### {topic}\n\n{body}'
-    api.post(self._url(f'/issues/{issue["number"]}/comments'), self._token, {'body': entry})
+    api.post(self._url(f'/issues/{issue["number"]}/comments'), self._token(), {'body': entry})
 
   def append_description(self, task_id: str, markdown: str) -> None:
     issue = self._issue(task_id)
     body = issue['body'] if issue['body'] is not None else ''
     combined = markdown if body == '' else f'{body}\n\n{markdown}'
-    api.patch(self._url(f'/issues/{issue["number"]}'), self._token, {'body': combined})
+    api.patch(self._url(f'/issues/{issue["number"]}'), self._token(), {'body': combined})
 
   def edit_description(
     self, task_id: str, old_string: str, new_string: str, replace_all: bool = False
@@ -228,7 +231,7 @@ class System(brog.system.System):
       )
     api.patch(
       self._url(f'/issues/{issue["number"]}'),
-      self._token,
+      self._token(),
       {'body': body.replace(old_string, new_string)},
     )
     return count
@@ -249,7 +252,7 @@ class System(brog.system.System):
     page = 1
     while len(tasks) < limit:
       batch = api.get(
-        self._url(f'/issues?state={state}&per_page={_PAGE_SIZE}&page={page}'), self._token
+        self._url(f'/issues?state={state}&per_page={_PAGE_SIZE}&page={page}'), self._token()
       )
       for issue in batch:
         # the issues listing includes pull requests; brog tracks issues only
