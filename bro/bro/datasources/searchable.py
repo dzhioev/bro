@@ -62,7 +62,7 @@ class SearchableDataSource(DataSource):
       )
     # lazy: keep the openai SDK (via mu) out of every datasource import — only the
     # query path needs it.
-    from mu import Text, mu
+    from llm.mu import Text, mu
     from prompts import get_prompt
 
     prompt = get_prompt(

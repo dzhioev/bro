@@ -365,7 +365,7 @@ class TestDispatcher:
   async def test_success_converts_argument_pairs_and_passes_roster_to_mu(
     self, fake_packages, monkeypatch
   ):
-    import mu as mu_module
+    import llm.mu as mu_module
 
     package = fake_packages(
       '_dispatcher_success',
@@ -422,7 +422,7 @@ class TestDispatcher:
 
   @pytest.mark.asyncio
   async def test_expected_error_passes_through(self, fake_packages, monkeypatch):
-    import mu as mu_module
+    import llm.mu as mu_module
 
     package = fake_packages('_dispatcher_error', {'do-work': _script()})
     monkeypatch.setattr(script_store.credentials, 'available', lambda name: True)
@@ -470,7 +470,7 @@ class TestDispatcher:
   async def test_invalid_model_selection_fails_validation(
     self, fake_packages, monkeypatch, interpretation, match
   ):
-    import mu as mu_module
+    import llm.mu as mu_module
 
     package = fake_packages(
       f'_dispatcher_invalid_{len(sys.modules)}',
@@ -487,7 +487,7 @@ class TestDispatcher:
 
   @pytest.mark.asyncio
   async def test_rejects_empty_expected_error(self, fake_packages, monkeypatch):
-    import mu as mu_module
+    import llm.mu as mu_module
 
     package = fake_packages('_dispatcher_empty_error', {'do-work': _script()})
     monkeypatch.setattr(script_store.credentials, 'available', lambda name: True)

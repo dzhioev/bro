@@ -29,7 +29,7 @@ file      := prompt file name           file: [A-Za-z0-9._/-]+
 
 - `{{assert}}` renders to nothing when its condition holds and raises when it does not — the standalone precondition for text that must only ever render under a known state
 
-- `{{include <file>}}` splices another prompt file into the output, rendered recursively against the includer's own variables — same facts, same fail-fast semantics. resolution goes through the rendering surface's resolver (`render` takes an `include_resolver` callback; `render_text` wires the `prompts.py` loader); a render with no resolver raises on any include it parses, and an include chain that revisits a file raises
+- `{{include <file>}}` splices another prompt file into the output, rendered recursively against the includer's own variables — same facts, same fail-fast semantics. resolution goes through the rendering surface's resolver (`render` takes an `include_resolver` callback; `render_text` wires the `prompts` loader); a render with no resolver raises on any include it parses, and an include chain that revisits a file raises
 
 - `{{insert #name}}` emits the referenced string variable's value — substitution for text parameterized by a fact (e.g. a data source's own name in its tool descriptions). only a string variable has a text form: referencing a set or boolean variable raises, as does an unknown name — even in a non-taken branch, mirroring condition evaluation
 
@@ -43,7 +43,7 @@ file      := prompt file name           file: [A-Za-z0-9._/-]+
 
 ## Rendering surfaces
 
-`llm.mcp.render_text(text, harness=…, wire=…, creds=…, hold=…)` renders directives against the facts the call site knows (the facts, `#hold`'s single-purpose supply rule included, are documented in `reference/conditions.md`) and resolves `{{include}}` targets through the `prompts.py` loader. Each surface renders its copy once, with its own facts:
+`llm.mcp.render_text(text, harness=…, wire=…, creds=…, hold=…)` renders directives against the facts the call site knows (the facts, `#hold`'s single-purpose supply rule included, are documented in `reference/conditions.md`) and resolves `{{include}}` targets through the `prompts` loader. Each surface renders its copy once, with its own facts:
 
 - `BaseBro.__init__` — the two bro prompt flavors (harness `bro`; wire `bare` / `mcp`)
 - `cw/system_prompt.py` — a cw-session's append prompt, the injected persona included (harness `claude`, wire `mcp`)

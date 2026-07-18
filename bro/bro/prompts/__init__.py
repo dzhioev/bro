@@ -6,7 +6,7 @@ if TYPE_CHECKING:
 
   from llm.mcp import Harness, Wire
 
-_PROMPTS_DIR = (Path(__file__).parent / 'prompts').resolve()
+_PROMPTS_DIR = Path(__file__).parent
 
 
 def _resolve(file_name: str) -> Path:

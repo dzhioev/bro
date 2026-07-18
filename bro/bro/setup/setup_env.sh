@@ -189,6 +189,15 @@ with open('$HOME/.docker/config.json', 'w') as f:
   fi
 }
 
+install_tkinter() {
+  if [ "$PLATFORM" != "macOS" ]; then
+    return
+  fi
+
+  check_brew
+  brew install python-tk
+}
+
 install_awscli() {
   if command -v aws &> /dev/null; then
     echo "AWS CLI is already installed"
@@ -226,6 +235,7 @@ install_uv() {
 
 install_stow
 install_tmux
+install_tkinter
 install_claude_code
 install_docker
 install_awscli

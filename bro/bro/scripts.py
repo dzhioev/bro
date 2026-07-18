@@ -178,7 +178,7 @@ def _validated_result(interpretation: _Interpretation, scripts: list[Script]) ->
 
 
 def _interpret(command: str, scripts: list[Script]) -> dict[str, Any]:
-  from mu import JSON, mu
+  from llm.mu import JSON, mu
   from prompts import get_prompt
 
   request = {'command': command, 'scripts': _dispatcher_roster(scripts)}
