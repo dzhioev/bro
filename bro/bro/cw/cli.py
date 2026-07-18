@@ -6,7 +6,7 @@ from typing import Optional
 from base.args import REMAINDER, SUPPRESS, Parser
 from cw.claude_auth import _load_anthropic_key
 from cw.clean import clean_workspaces
-from cw.flags import add_forwarded_flags
+from cw.flags import DEFAULT_HOLD, add_forwarded_flags
 from cw.listing import list_workspaces
 from cw.runner import run_in_place
 from cw.session import SessionSpec, start_session
@@ -164,6 +164,8 @@ def main(argv: list[str]) -> Optional[int]:
       parser.error(
         '--resume cannot be combined with -p/--prompt (the initial prompt is ignored on resume)'
       )
+  if args['hold'] is None:
+    args['hold'] = DEFAULT_HOLD
   spec = SessionSpec(**args)
   if in_place:
     return run_in_place(spec)

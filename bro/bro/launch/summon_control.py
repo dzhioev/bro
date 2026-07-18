@@ -79,7 +79,7 @@ __all__ = [
 ]
 
 _PROMPT_HEAD_CHARS = 120
-_PAYLOAD_KEYS = frozenset({'target', 'prompt', 'timeout', 'into'})
+_PAYLOAD_KEYS = frozenset({'target', 'prompt', 'timeout', 'into', 'hold'})
 # the deepest peer a summon may spawn: the root sits at depth 0, its children at
 # 1, grandchildren at 2; a request that would nest deeper is denied — the guard
 # against seed cycles recursing through real containers (see module docstring).
@@ -135,6 +135,8 @@ def _validate(payload: dict[str, Any]) -> Optional[str]:
   """the request's shape errors, or None when well-formed. Strict: an unknown key
   is rejected rather than ignored — a typo'd `timout` silently falling back to the
   default would hide the caller's bug."""
+  from llm.mcp import HOLDS
+
   unknown = sorted(set(payload) - _PAYLOAD_KEYS)
   if len(unknown) > 0:
     return f'unknown summon field(s): {", ".join(unknown)}'
@@ -148,6 +150,9 @@ def _validate(payload: dict[str, Any]) -> Optional[str]:
   into = payload.get('into')
   if into is not None and (not isinstance(into, str) or len(into) == 0):
     return "summon 'into' must be a non-empty git ref"
+  hold = payload.get('hold')
+  if hold is not None and hold not in HOLDS:
+    return f"summon 'hold' must be one of {', '.join(HOLDS)}"
   return None
 
 
@@ -250,6 +255,7 @@ class SummonControl:
         parent_workspace=requester.workspace,
         summoner=requester.summoner,
         into=payload.get('into'),
+        hold=payload.get('hold'),
       ),
       peer,
       timeout=float(timeout) if timeout is not None else DEFAULT_TIMEOUT,

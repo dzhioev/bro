@@ -71,13 +71,13 @@ class TestCwSessionLaunch:
     argv = _cw_session_launch(_spec(effort='xhigh'), claude_args=[]).argv
     assert argv[argv.index('--effort') + 1] == 'xhigh'
 
-  @pytest.mark.parametrize('mode', ['unattended', 'detached', 'attended'])
-  def test_non_guided_modes_skip_permissions(self, mode):
-    argv = _cw_session_launch(_spec(mode=mode), claude_args=[]).argv
+  @pytest.mark.parametrize('hold', ['unattended', 'detached', 'attended'])
+  def test_non_guided_holds_skip_permissions(self, hold):
+    argv = _cw_session_launch(_spec(hold=hold), claude_args=[]).argv
     assert '--dangerously-skip-permissions' in argv
 
-  def test_guided_mode_keeps_permission_prompts(self):
-    argv = _cw_session_launch(_spec(mode='guided'), claude_args=[]).argv
+  def test_guided_hold_keeps_permission_prompts(self):
+    argv = _cw_session_launch(_spec(hold='guided'), claude_args=[]).argv
     assert '--dangerously-skip-permissions' not in argv
 
   def test_mcp_config_covers_the_personas_namespaces(self):
@@ -150,7 +150,7 @@ class TestBroLaunch:
 
   def test_settings_merge_fast_mode_and_api_key_helper(self):
     # the merged --settings is what lets --fast reach a --bro session; the
-    # apiKeyHelper is the ppp checkout the runner's venv installs, mode-neutral
+    # apiKeyHelper is the ppp checkout the runner's venv installs, hold-neutral
     settings = _settings(self._launch(fast=True).argv)
     assert settings['fastMode'] is True
     assert settings['apiKeyHelper'] == str(PROJECT_ROOT / 'setup' / 'print_anthropic_key.sh')
@@ -174,12 +174,12 @@ class TestBroLaunch:
     # the flavor whose tool-name rule matches the mcp__<namespace>__<tool> mounts
     assert '`mcp__namespace__tool`' in prompt
 
-  def test_mode_fragment_follows_the_mode(self):
-    attended = self._launch()
+  def test_hold_fragment_follows_the_hold(self):
+    attended = self._launch(hold='attended')
     assert '# Attended session' in attended.system_prompt
     assert 'full authorization' in attended.system_prompt
     assert '--dangerously-skip-permissions' in attended.argv
-    guided = self._launch(mode='guided').system_prompt
+    guided = self._launch().system_prompt  # the DEFAULT_HOLD launch
     assert '# Guided session' in guided
     assert 'full authorization' not in guided
     # the fragment renders at build — no directive may leak into the prompt

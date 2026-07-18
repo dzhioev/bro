@@ -161,5 +161,9 @@ def main(argv: list[str]) -> Optional[int]:
     'PPP_SHELL_COMMAND',
     ' '.join(parser.reconstruct(args, prog=['dive-in'], exclude=('dry_run',))),
   )
+  if args['hold'] is None:
+    # host sessions run unsandboxed when they skip permission prompts, so an
+    # unheld host dive keeps them
+    args['hold'] = 'guided' if args['host'] else 'attended'
   forwarded = cw.extract_forwarded_argv(args)
   return dive_in(forwarded=forwarded, **args)

@@ -1,6 +1,6 @@
 # prompts/CLAUDE.md
 
-Centralised prompt store. Five loading conventions: auto-inject into every bro + `cw ss` session (`shared/`); serve as a reference doc — injected into `cw ss` sessions or mounted as a `FileSource` tool (`*.md`, top level or a subdirectory like `dev/`); inject the session-mode fragment at launch (`session_mode.md` composing `session_modes/`); splice into an opting-in text via `{{include}}` (`fragments/`); load explicitly by name (top-level `*.prompt` / `*.prompt.template`).
+Centralised prompt store. Five loading conventions: auto-inject into every bro + `cw ss` session (`shared/`); serve as a reference doc — injected into `cw ss` sessions or mounted as a `FileSource` tool (`*.md`, top level or a subdirectory like `dev/`); inject the hold fragment at launch (`hold.md` composing `holds/`); splice into an opting-in text via `{{include}}` (`fragments/`); load explicitly by name (top-level `*.prompt` / `*.prompt.template`).
 
 ## Files
 
@@ -31,16 +31,16 @@ Current reference docs:
 - `dev/style.md` — the development style policy, tool-served through the `dev-style` `FileSource` mounted on the Dev bro (the persona directs a read at session start and re-reads on demand — e.g. the `/pr` policy audit before each commit's verdict). Not injected
 - `tool_names.md` — the tool-name resolution rule, templated on the `#wire` scheme; one file serves every surface. Claude sessions get the `mcp` rendering (`ns::tool` → `mcp__ns__tool`): injected here for non-bro sessions, composed into `BaseBro.claude_system_prompt` for `cw ss --bro` ones. Bro-native LLM runs compose the `bare` rendering (`ns::tool` → `ns__tool`) into `BaseBro.system_prompt`. Deliberately no `FileSource`
 
-## Session-mode text
+## Hold text
 
-A session's user-involvement level is one of `unattended | detached | attended | guided`, ordered from no human channel to human-driven. Every session gets exactly one level's text, picked by the launching surface at session start — a session is told its mode, never left to detect it at runtime:
+A session's hold — its user-involvement level — is one of `unattended | detached | attended | guided`, ordered from no human channel to human-driven. Every session gets exactly one level's text, picked by the launching surface at session start — a session is told its hold, never left to detect it at runtime:
 
-- `cw ss` picks by its `--mode` flag for both claude flavors — the cw-session append prompt and the `--bro` `--system-prompt` (flag semantics: `reference/cw.md`)
-- `bro/bro.py:_system_prompt_for` pins the level for bro-native LLM runs — `run()` → unattended, `send()` (and every interactive surface on it) → guided
+- `cw ss` picks by its `--hold` flag for both claude flavors — the cw-session append prompt and the `--bro` `--system-prompt` (flag semantics: `reference/cw.md`)
+- the bro-native launch surfaces pick it through `bro/bro.py:_system_prompt_for` — `run()` defaults unattended, `send()` guided, with every launcher's `--hold` overriding (per-surface defaults: `bro/launch/CLAUDE.md`, "Launch holds")
 
-`session_mode.md` (top level, not in `_BASE_PROMPT_FILES`) selects the per-level file in `session_modes/` via an exhaustive `{{iff #mode = …}}` chain and `{{include}}`s it; the three non-guided level files share `session_modes/authorization.md`, the full-authorization block. `prompts.mode_fragment(mode, …facts)` is the one rendering path — every injection site uses it (`cw/system_prompt.py:_session_append_prompt`, `cw/claude_argv.py` for `--bro`, `bro/bro.py:_system_prompt_for`), and it is the only call that supplies the `#mode` fact, so all other text stays mode-neutral mechanically: a stray `#mode` directive in a skill or procedure doc raises.
+`hold.md` (top level, not in `_BASE_PROMPT_FILES`) selects the per-level file in `holds/` via an exhaustive `{{iff #hold = …}}` chain and `{{include}}`s it; the three non-guided level files share `holds/authorization.md`, the full-authorization block. `prompts.hold_fragment(mode, …facts)` is the one rendering path — every injection site uses it (`cw/system_prompt.py:_session_append_prompt`, `cw/claude_argv.py` for `--bro`, `bro/bro.py:_system_prompt_for`), and it is the only call that supplies the `#hold` fact, so all other text stays hold-neutral mechanically: a stray `#hold` directive in a skill or procedure doc raises.
 
-The level files are the single place the modes differ: unattended carries the never-ask + `raise` convention, detached the carry-questions-into-the-report convention, attended the end-the-turn-at-pivotal-points convention, guided the confirm-each-significant-step convention.
+The level files are the single place the levels differ: unattended carries the never-ask + `raise` convention, detached the carry-questions-into-the-report convention, attended the end-the-turn-at-pivotal-points convention, guided the confirm-each-significant-step convention.
 
 ## Top-level one-shot prompts
 

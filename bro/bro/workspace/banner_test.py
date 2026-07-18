@@ -7,8 +7,8 @@ from workspace.banner import SessionFacts
 
 class TestSplitLaunchPrompt:
   def test_new_marker(self):
-    head, prompt = workspace.banner._split_launch_prompt('dive-in --mode attended --new I want X')
-    assert head == 'dive-in --mode attended --new '
+    head, prompt = workspace.banner._split_launch_prompt('dive-in --hold attended --new I want X')
+    assert head == 'dive-in --hold attended --new '
     assert prompt == 'I want X'
 
   def test_dashdash_marker(self):
@@ -33,9 +33,9 @@ class TestSplitLaunchPrompt:
 
   def test_marker_without_trailing_content_is_not_a_match(self):
     # `dive-in --new ` with no seed should not produce an empty prompt
-    head, prompt = workspace.banner._split_launch_prompt('dive-in --mode attended --new ')
+    head, prompt = workspace.banner._split_launch_prompt('dive-in --hold attended --new ')
     assert prompt is None
-    assert head == 'dive-in --mode attended --new '
+    assert head == 'dive-in --hold attended --new '
 
 
 class TestSessionFacts:
@@ -53,7 +53,7 @@ class TestSessionFacts:
     monkeypatch.setenv('CW_BRO', 'ppp-dev')
     monkeypatch.setenv('CW_HOST_WORKSPACE', '/host/var/cw/containers/my-task')
     monkeypatch.setenv('PPP_SHELL_COMMAND', 'dive-in -t abc')
-    monkeypatch.setenv('CW_COMMAND', 'cw ss --mode attended my-task')
+    monkeypatch.setenv('CW_COMMAND', 'cw ss --hold attended my-task')
     facts = SessionFacts.collect()
     assert facts.in_container is True
     assert facts.name == 'my-task'
@@ -62,13 +62,13 @@ class TestSessionFacts:
     assert facts.container_workspace == '/workspace'
     assert facts.exec_command == 'cw exec my-task'
     assert facts.shell_command == 'dive-in -t abc'
-    assert facts.cw_command == 'cw ss --mode attended my-task'
+    assert facts.cw_command == 'cw ss --hold attended my-task'
     assert facts.prompt is None
 
   def test_extracts_prompt_from_dive_in_new(self, monkeypatch):
-    monkeypatch.setenv('PPP_SHELL_COMMAND', 'dive-in --mode attended --new I want X')
+    monkeypatch.setenv('PPP_SHELL_COMMAND', 'dive-in --hold attended --new I want X')
     facts = SessionFacts.collect()
-    assert facts.shell_command == 'dive-in --mode attended --new '
+    assert facts.shell_command == 'dive-in --hold attended --new '
     assert facts.prompt == 'I want X'
 
   def test_host_worktree_with_derived_path(self, monkeypatch, tmp_path):

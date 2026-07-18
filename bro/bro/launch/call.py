@@ -14,6 +14,7 @@ from bro.launch._cli import (
   EFFORT_HELP,
   FAST_HELP,
   GRANT_HELP,
+  HOLD_HELP,
   IN_PLACE_HELP,
   INTO_HELP,
   NO_TRAILS_HELP,
@@ -25,6 +26,7 @@ from bro.launch._cli import (
 from bro.launch._trace_format import compact_value, oneline, truncate
 from bro.launch.resume import RESUME_LATEST, HistoryMessage
 from llm.llm import EFFORT_LEVELS
+from llm.mcp import HOLDS
 from llm.observer import Observer
 
 __cli_name__ = 'call'
@@ -92,6 +94,7 @@ async def call_text(
   read_line: Optional[Callable[[], str]] = None,
   now: Callable[[], datetime] = datetime.now,
   history: Optional[list[HistoryMessage]] = None,
+  hold: str = 'guided',
 ) -> None:
   """text-mode REPL: `[HH:MM:SS] bro: <reply>` lines, plain `> ` prompt.
 
@@ -132,7 +135,7 @@ async def call_text(
   print(render_banner(llm=False, bro=bro.name))
 
   if initial is not None:
-    reply = await bro.send(initial, observer=effective_observer, entry_point='call')
+    reply = await bro.send(initial, observer=effective_observer, entry_point='call', hold=hold)
     emit(reply)
   while True:
     try:
@@ -141,7 +144,7 @@ async def call_text(
       return
     if len(message) == 0:
       continue
-    reply = await bro.send(message, observer=effective_observer, entry_point='call')
+    reply = await bro.send(message, observer=effective_observer, entry_point='call', hold=hold)
     emit(reply)
 
 
@@ -149,7 +152,13 @@ def _tty_supported() -> bool:
   return sys.stdin.isatty() and sys.stdout.isatty()
 
 
-def chat_main(argv: list[str], *, program: list[str], implied_fast: bool = False) -> Optional[int]:
+def chat_main(
+  argv: list[str],
+  *,
+  program: list[str],
+  implied_fast: bool = False,
+  default_hold: str = 'guided',
+) -> Optional[int]:
   parser = base.args.Parser(
     prog=' '.join(program), description='open an interactive session with a bro'
   )
@@ -177,6 +186,7 @@ def chat_main(argv: list[str], *, program: list[str], implied_fast: bool = False
   parser.add_argument('--grant', action='append', default=None, metavar='NAME', help=GRANT_HELP)
   parser.add_argument('--revoke', action='append', default=None, metavar='NAME', help=REVOKE_HELP)
   parser.add_argument('--into', metavar='REF', help=INTO_HELP)
+  parser.add_argument('--hold', choices=HOLDS, default=None, help=HOLD_HELP.format(default_hold))
   args = parser.parse(argv)
   os.environ.setdefault('PPP_SHELL_COMMAND', ' '.join(parser.reconstruct(args, prog=program)))
 
@@ -204,6 +214,10 @@ def chat_main(argv: list[str], *, program: list[str], implied_fast: bool = False
     inner_args.append('--fast')
   if args['effort'] is not None:
     inner_args.extend(['--effort', args['effort']])
+  # always explicit: the alias defaults diverge (call attends, bro chat guides),
+  # so the inner `bro chat` must not fall back to its own default
+  hold = args['hold'] if args['hold'] is not None else default_hold
+  inner_args.extend(['--hold', hold])
   hopped = maybe_containerize(
     cli_name='bro-chat' if program == ['bro', 'chat'] else program[0],
     verb='chat',
@@ -264,9 +278,9 @@ def chat_main(argv: list[str], *, program: list[str], implied_fast: bool = False
     if use_tui:
       from bro.launch.call_tui import ChatApp
 
-      ChatApp(bro, initial, history=history).run()
+      ChatApp(bro, initial, history=history, hold=hold).run()
     else:
-      asyncio.run(call_text(bro, initial, history=history))
+      asyncio.run(call_text(bro, initial, history=history, hold=hold))
   except BroRaised as e:
     log.error('raised: %s', e.reason)
     return 1
@@ -285,4 +299,4 @@ def chat_main(argv: list[str], *, program: list[str], implied_fast: bool = False
 
 
 def main(argv: list[str]) -> Optional[int]:
-  return chat_main(argv, program=['call'], implied_fast=True)
+  return chat_main(argv, program=['call'], implied_fast=True, default_hold='attended')

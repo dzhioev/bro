@@ -16,25 +16,25 @@ class TestSsValidation:
     assert spec.host
     assert spec.grant == ['gmail_creds']
 
-  def test_ss_non_guided_mode_with_host_is_accepted(self):
+  def test_ss_non_guided_hold_with_host_is_accepted(self):
     # host sessions may skip permission prompts; the container default is the
     # sandbox, an explicit --host opts out of it
     with patch('cw.cli.start_session', return_value=0) as fake_start:
-      rc = cw.cli.main(['cw', 'ss', '--host', '--mode', 'attended', 'w'])
+      rc = cw.cli.main(['cw', 'ss', '--host', '--hold', 'attended', 'w'])
     assert rc == 0
     spec = fake_start.call_args[0][0]
     assert spec.host
-    assert spec.mode == 'attended'
+    assert spec.hold == 'attended'
 
-  def test_ss_mode_defaults_to_attended(self):
+  def test_ss_hold_defaults_to_guided(self):
     with patch('cw.cli.start_session', return_value=0) as fake_start:
       rc = cw.cli.main(['cw', 'ss', 'w'])
     assert rc == 0
-    assert fake_start.call_args[0][0].mode == 'attended'
+    assert fake_start.call_args[0][0].hold == 'guided'
 
-  def test_ss_rejects_an_unknown_mode(self, capsys):
+  def test_ss_rejects_an_unknown_hold(self, capsys):
     with pytest.raises(SystemExit):
-      cw.cli.main(['cw', 'ss', '--mode', 'automatic', 'w'])
+      cw.cli.main(['cw', 'ss', '--hold', 'automatic', 'w'])
     assert 'invalid choice' in capsys.readouterr().err
 
   def test_ss_bro_with_host_errors(self, capsys):
@@ -91,14 +91,14 @@ class TestInPlace:
       cw.cli.main(['cw', 'ss', '--in-place', '--grant', '@devoops', 'w'])
     assert '--in-place cannot be combined with --grant' in capsys.readouterr().err
 
-  def test_mode_carried_in_the_inner_argv(self):
-    # the inner argv carries --mode but never --host; the outer consumed the
+  def test_hold_carried_in_the_inner_argv(self):
+    # the inner argv carries --hold but never --host; the outer consumed the
     # execution mode
     with patch('cw.cli.run_in_place', return_value=0) as fake_run:
-      rc = cw.cli.main(['cw', 'ss', '--in-place', '--mode', 'guided', 'w'])
+      rc = cw.cli.main(['cw', 'ss', '--in-place', '--hold', 'guided', 'w'])
     assert rc == 0
     spec = fake_run.call_args[0][0]
-    assert spec.mode == 'guided'
+    assert spec.hold == 'guided'
     assert not spec.host
 
   def test_skips_the_bro_gates(self):

@@ -98,7 +98,7 @@ class _ChannelBro(BaseBro):
   def _make_channel(self) -> Optional[BroChannel]:
     return self._channel
 
-  def _create_llm(self, *, interactive: bool) -> LLM:
+  def _create_llm(self, *, hold: str) -> LLM:
     return self._llm_stub
 
 
@@ -179,7 +179,7 @@ class TestRunLifecycle:
       def _make_observer(self) -> Observer:
         return NullObserver()
 
-      def _create_llm(self, *, interactive: bool) -> LLM:
+      def _create_llm(self, *, hold: str) -> LLM:
         return _StubLLM(response='fine')
 
     assert await DefaultChannelBro().run('input') == 'fine'

@@ -45,7 +45,7 @@ class EchoBro(BaseBro):
   def _make_observer(self) -> Observer:
     return NullObserver()
 
-  def _create_llm(self, *, interactive: bool) -> LLM:
+  def _create_llm(self, *, hold: str) -> LLM:
     return MockLLM(response=self._response)
 
 
@@ -73,7 +73,7 @@ class TestBroRun:
       def _make_observer(self) -> Observer:
         return CapturingObserver()
 
-      def _create_llm(self, *, interactive: bool):
+      def _create_llm(self, *, hold: str):
         captured.append(self._observer)
         return MockLLM()
 
@@ -101,7 +101,7 @@ class TestBroRun:
       def _make_observer(self) -> Observer:
         return MadeObserver()
 
-      def _create_llm(self, *, interactive: bool):
+      def _create_llm(self, *, hold: str):
         captured.append(self._observer)
         return MockLLM()
 
@@ -124,7 +124,7 @@ class TestBroRun:
       def __init__(self):
         super().__init__(system_prompt='hi')
 
-      def _create_llm(self, *, interactive: bool):
+      def _create_llm(self, *, hold: str):
         captured.append(self._tracker)
         return MockLLM()
 
@@ -167,7 +167,7 @@ class TestBroRun:
       def __init__(self):
         super().__init__(system_prompt='base prompt')
 
-      def _create_llm(self, *, interactive: bool):
+      def _create_llm(self, *, hold: str):
         return MockLLM(response='ok')
 
     await TraceBro().run('hello', tracker=RecordingTracker())
@@ -199,7 +199,7 @@ class TestBroRun:
       def __init__(self):
         super().__init__(system_prompt='base prompt')
 
-      def _create_llm(self, *, interactive: bool):
+      def _create_llm(self, *, hold: str):
         return MockLLM(response='ok')
 
     monkeypatch.setenv('CW_SUMMONER', '{"target":"pm","trail_id":"T-parent"}')
@@ -226,7 +226,7 @@ class TestBroRun:
       def __init__(self):
         super().__init__(system_prompt='')
 
-      def _create_llm(self, *, interactive: bool):
+      def _create_llm(self, *, hold: str):
         class Boom(MockLLM):
           async def send(self, messages, *, request_timeout=None):
             raise BroRaised('nope')
@@ -252,7 +252,7 @@ class TestBroRun:
       def __init__(self):
         super().__init__(system_prompt='')
 
-      def _create_llm(self, *, interactive: bool):
+      def _create_llm(self, *, hold: str):
         class Boom(MockLLM):
           async def send(self, messages, *, request_timeout=None):
             raise RuntimeError('kaboom')
@@ -314,7 +314,7 @@ class TestBroRun:
       def __init__(self):
         super().__init__(system_prompt='be helpful')
 
-      def _create_llm(self, *, interactive: bool):
+      def _create_llm(self, *, hold: str):
         return llm
 
     bro = CaptureBro()
@@ -345,7 +345,7 @@ class TestBroSend:
       def __init__(self):
         super().__init__(system_prompt='track')
 
-      def _create_llm(self, *, interactive: bool):
+      def _create_llm(self, *, hold: str):
         llm = MockLLM()
         llm_instances.append(llm)
         return llm
@@ -366,7 +366,7 @@ class TestBroSend:
       def __init__(self):
         super().__init__(system_prompt='be helpful')
 
-      def _create_llm(self, *, interactive: bool):
+      def _create_llm(self, *, hold: str):
         return llm
 
     bro = CaptureBro()
@@ -392,7 +392,7 @@ class TestBroSend:
       def __init__(self):
         super().__init__(system_prompt='')
 
-      def _create_llm(self, *, interactive: bool):
+      def _create_llm(self, *, hold: str):
         captured.append(self._observer)
         return MockLLM()
 
@@ -426,7 +426,7 @@ class TestBroSend:
       def __init__(self):
         super().__init__(system_prompt='')
 
-      def _create_llm(self, *, interactive: bool):
+      def _create_llm(self, *, hold: str):
         return MockLLM()
 
     bro = SendBro()
@@ -457,7 +457,7 @@ class TestBroSend:
       def __init__(self):
         super().__init__(system_prompt='')
 
-      def _create_llm(self, *, interactive: bool):
+      def _create_llm(self, *, hold: str):
         return MockLLM()
 
     bro = SendBro()
@@ -480,7 +480,7 @@ class TestBroSend:
       def __init__(self):
         super().__init__(system_prompt='')
 
-      def _create_llm(self, *, interactive: bool):
+      def _create_llm(self, *, hold: str):
         return MockLLM()
 
     bro = WireBro()
@@ -502,7 +502,7 @@ class TestBroSend:
       def __init__(self):
         super().__init__(system_prompt='be helpful')
 
-      def _create_llm(self, *, interactive: bool):
+      def _create_llm(self, *, hold: str):
         return llm
 
     bro = CaptureBro()
@@ -524,7 +524,7 @@ class TestBroSend:
       def __init__(self):
         super().__init__(system_prompt='track')
 
-      def _create_llm(self, *, interactive: bool):
+      def _create_llm(self, *, hold: str):
         llm = MockLLM()
         llm_instances.append(llm)
         return llm
@@ -549,7 +549,7 @@ class GatedBro(BaseBro):
   def _make_observer(self) -> Observer:
     return NullObserver()
 
-  def _create_llm(self, *, interactive: bool) -> LLM:
+  def _create_llm(self, *, hold: str) -> LLM:
     return self.mock_llm
 
 
@@ -1002,7 +1002,7 @@ class TestClaudePersonaServers:
     SkillBro.__module__ = package
     names = asyncio.run(_collect_tool_names(SkillBro().claude_persona_mcp_servers()))
     # skills reach a cw-session as slash commands, and `raise` is gated on the
-    # session mode (not unattended here — no CW_MODE); the environment facts
+    # session hold (not unattended here — no BRO_HOLD); the environment facts
     # stay available as `banner`
     assert 'banner' in names
     assert 'skill' not in names
@@ -1267,14 +1267,15 @@ class TestRaise:
   @pytest.mark.asyncio
   async def test_raise_tool_included_in_non_interactive_mode(self):
     bro = EchoBro()
-    names = await _collect_tool_names(bro._mcp_servers_for(interactive=False))
+    names = await _collect_tool_names(bro._mcp_servers_for(hold='unattended'))
     assert 'raise' in names
 
   @pytest.mark.asyncio
-  async def test_raise_tool_excluded_in_interactive_mode(self):
+  async def test_raise_tool_excluded_at_every_other_hold(self):
     bro = EchoBro()
-    names = await _collect_tool_names(bro._mcp_servers_for(interactive=True))
-    assert 'raise' not in names
+    for hold in ('detached', 'attended', 'guided'):
+      names = await _collect_tool_names(bro._mcp_servers_for(hold=hold))
+      assert 'raise' not in names
 
   @pytest.mark.asyncio
   async def test_raise_tool_raises_bro_raised(self):
@@ -1291,23 +1292,23 @@ class TestClaudeRaise:
   runner (no exception can abort the consuming harness)."""
 
   def test_unattended_claude_builds_mount_raise(self, monkeypatch):
-    monkeypatch.setenv('CW_MODE', 'unattended')
+    monkeypatch.setenv('BRO_HOLD', 'unattended')
     monkeypatch.setenv('CW_RUNNER_PID', '4242')
     bro = EchoBro()
     assert 'raise' in asyncio.run(_collect_tool_names(bro.claude_persona_mcp_servers()))
     assert 'raise' in asyncio.run(_collect_tool_names(bro.claude_bro_mcp_servers()))
 
-  def test_mode_alone_does_not_mount_raise(self, monkeypatch):
+  def test_hold_alone_does_not_mount_raise(self, monkeypatch):
     # no runner pid means nothing to terminate — no tool
-    monkeypatch.setenv('CW_MODE', 'unattended')
+    monkeypatch.setenv('BRO_HOLD', 'unattended')
     names = asyncio.run(_collect_tool_names(EchoBro().claude_persona_mcp_servers()))
     assert 'raise' not in names
 
-  def test_other_skip_permission_modes_do_not_mount_raise(self, monkeypatch):
+  def test_other_skip_permission_holds_do_not_mount_raise(self, monkeypatch):
     # detached and attended sessions have a human to report to — no abort tool
     monkeypatch.setenv('CW_RUNNER_PID', '4242')
-    for mode in ('detached', 'attended', 'guided'):
-      monkeypatch.setenv('CW_MODE', mode)
+    for hold in ('detached', 'attended', 'guided'):
+      monkeypatch.setenv('BRO_HOLD', hold)
       names = asyncio.run(_collect_tool_names(EchoBro().claude_persona_mcp_servers()))
       assert 'raise' not in names
 
@@ -1365,9 +1366,9 @@ class TestClaudeRaise:
 
 
 class TestSessionModePrompts:
-  def test_non_interactive_runs_pin_the_unattended_mode(self):
+  def test_non_interactive_runs_pin_the_unattended_hold(self):
     bro = EchoBro()
-    prompt = bro._system_prompt_for(interactive=False)
+    prompt = bro._system_prompt_for(hold='unattended')
     assert '`bro::raise`' in prompt
     assert 'unclear' in prompt
     assert bro.system_prompt in prompt
@@ -1382,9 +1383,9 @@ class TestSessionModePrompts:
     tool = await _find_raise_tool(bro)
     assert 'unclear' in tool.description
 
-  def test_interactive_runs_pin_the_guided_mode(self):
+  def test_interactive_runs_pin_the_guided_hold(self):
     bro = EchoBro()
-    prompt = bro._system_prompt_for(interactive=True)
+    prompt = bro._system_prompt_for(hold='guided')
     assert 'clarifying question' in prompt
     assert bro.system_prompt in prompt
     assert '# Guided session' in prompt
@@ -1395,8 +1396,8 @@ class TestBannerTool:
   @pytest.mark.asyncio
   async def test_present_on_both_service_builds(self):
     bro = EchoBro()
-    non_interactive = await _collect_tool_names(bro._mcp_servers_for(interactive=False))
-    interactive = await _collect_tool_names(bro._mcp_servers_for(interactive=True))
+    non_interactive = await _collect_tool_names(bro._mcp_servers_for(hold='unattended'))
+    interactive = await _collect_tool_names(bro._mcp_servers_for(hold='guided'))
     assert 'banner' in non_interactive
     assert 'banner' in interactive
 
@@ -1441,8 +1442,8 @@ class TestSummonTool:
   async def test_present_on_both_service_builds_when_a_channel_is_set(self, monkeypatch):
     monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
     bro = EchoBro()
-    non_interactive = await _collect_tool_names(bro._mcp_servers_for(interactive=False))
-    interactive = await _collect_tool_names(bro._mcp_servers_for(interactive=True))
+    non_interactive = await _collect_tool_names(bro._mcp_servers_for(hold='unattended'))
+    interactive = await _collect_tool_names(bro._mcp_servers_for(hold='guided'))
     # interactive surfaces (`call`) summon too — only `raise` is non-interactive-only
     assert {'summon', 'summon_check'} <= set(non_interactive)
     assert {'summon', 'summon_check'} <= set(interactive)
@@ -1453,10 +1454,10 @@ class TestSummonTool:
 
     monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
     monkeypatch.delenv(summon_module.STATUS_ENV, raising=False)
-    names = await _collect_tool_names(EchoBro()._mcp_servers_for(interactive=False))
+    names = await _collect_tool_names(EchoBro()._mcp_servers_for(hold='unattended'))
     assert 'summon_list' not in names
     monkeypatch.setenv(summon_module.STATUS_ENV, '/anywhere/ws.status.json')
-    names = await _collect_tool_names(EchoBro()._mcp_servers_for(interactive=False))
+    names = await _collect_tool_names(EchoBro()._mcp_servers_for(hold='unattended'))
     assert 'summon_list' in names
 
   @pytest.mark.asyncio
@@ -1478,7 +1479,7 @@ class TestSummonTool:
     calls: list = []
     client = _FakeSummonClient()
 
-    def fake_summon_and_wait(target, prompt, *, timeout=None, into=None, client=None):
+    def fake_summon_and_wait(target, prompt, *, timeout=None, into=None, hold=None, client=None):
       calls.append(
         {'target': target, 'prompt': prompt, 'timeout': timeout, 'into': into, 'client': client}
       )
@@ -1506,7 +1507,7 @@ class TestSummonTool:
     monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
     calls: list = []
 
-    def fake_summon_detached(target, prompt, *, timeout=None, into=None):
+    def fake_summon_detached(target, prompt, *, timeout=None, into=None, hold=None):
       calls.append({'target': target, 'prompt': prompt, 'timeout': timeout, 'into': into})
       return 'REQ-ID'
 
@@ -1588,7 +1589,7 @@ class TestSummonTool:
     entered = threading.Event()
     release = threading.Event()
 
-    def fake_summon_and_wait(target, prompt, *, timeout=None, into=None, client=None):
+    def fake_summon_and_wait(target, prompt, *, timeout=None, into=None, hold=None, client=None):
       entered.set()
       release.wait(timeout=5)
       raise summon_module.SummonError('broker channel closed awaiting the summon result')
@@ -1660,7 +1661,7 @@ class TestSummonTool:
 
     monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
 
-    def fake_summon_and_wait(target, prompt, *, timeout=None, into=None, client=None):
+    def fake_summon_and_wait(target, prompt, *, timeout=None, into=None, hold=None, client=None):
       raise summon_module.SummonError('summon denied: no')
 
     monkeypatch.setattr(summon_module, 'open_client', lambda: _FakeSummonClient())
@@ -1676,8 +1677,8 @@ class TestSummonTool:
       await tool.call({'target': 'devoops', 'prompt': 'deploy'})
 
   @pytest.mark.asyncio
-  async def test_run_creates_llm_in_non_interactive_mode(self):
-    captured: list[bool] = []
+  async def test_run_creates_llm_with_the_unattended_hold(self):
+    captured: list[str] = []
 
     class CaptureBro(BaseBro):
       name = 'capture-mode'
@@ -1686,16 +1687,16 @@ class TestSummonTool:
       def __init__(self):
         super().__init__(system_prompt='')
 
-      def _create_llm(self, *, interactive: bool):
-        captured.append(interactive)
+      def _create_llm(self, *, hold: str):
+        captured.append(hold)
         return MockLLM()
 
     await CaptureBro().run('input')
-    assert captured == [False]
+    assert captured == ['unattended']
 
   @pytest.mark.asyncio
-  async def test_send_creates_llm_in_interactive_mode(self):
-    captured: list[bool] = []
+  async def test_run_hold_override_reaches_the_llm_build(self):
+    captured: list[str] = []
 
     class CaptureBro(BaseBro):
       name = 'capture-mode'
@@ -1704,12 +1705,30 @@ class TestSummonTool:
       def __init__(self):
         super().__init__(system_prompt='')
 
-      def _create_llm(self, *, interactive: bool):
-        captured.append(interactive)
+      def _create_llm(self, *, hold: str):
+        captured.append(hold)
+        return MockLLM()
+
+    await CaptureBro().run('input', hold='attended')
+    assert captured == ['attended']
+
+  @pytest.mark.asyncio
+  async def test_send_creates_llm_with_the_guided_hold(self):
+    captured: list[str] = []
+
+    class CaptureBro(BaseBro):
+      name = 'capture-mode'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+      def _create_llm(self, *, hold: str):
+        captured.append(hold)
         return MockLLM()
 
     await CaptureBro().send('input')
-    assert captured == [True]
+    assert captured == ['guided']
 
 
 @pytest.fixture
@@ -1780,7 +1799,7 @@ class TestSkillsDiscovery:
   def test_claude_bro_servers_carry_skill_tool(self, fake_packages):
     # the `cw ss --bro` surface reaches skills through the `skill` tool (--bare
     # gives no slash commands), so claude_bro_mcp_servers must carry it — and not
-    # `raise`, since this session is not unattended (no CW_MODE).
+    # `raise`, since this session is not unattended (no BRO_HOLD).
     package = fake_packages('_skills_claude', {'epic': _skill('drive an epic', 'epic body')})
 
     class SkillBro(BaseBro):
@@ -2202,8 +2221,8 @@ class TestSkillServiceTool:
 
     B.__module__ = package
     bro = B()
-    interactive = await _collect_tool_names(bro._mcp_servers_for(interactive=True))
-    non_interactive = await _collect_tool_names(bro._mcp_servers_for(interactive=False))
+    interactive = await _collect_tool_names(bro._mcp_servers_for(hold='guided'))
+    non_interactive = await _collect_tool_names(bro._mcp_servers_for(hold='unattended'))
     assert 'skill' in interactive  # the fix: skill is not dropped along with raise
     assert 'raise' not in interactive  # raise is still dropped interactively
     assert {'skill', 'raise'} <= non_interactive
@@ -2298,4 +2317,4 @@ class TestAgentIdentity:
       def __init__(self):
         super().__init__(system_prompt='')
 
-    assert PlainBro()._create_llm(interactive=False).agent == 'bro//plain'
+    assert PlainBro()._create_llm(hold='unattended').agent == 'bro//plain'

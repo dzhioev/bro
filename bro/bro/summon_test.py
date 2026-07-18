@@ -72,7 +72,9 @@ def test_bare_summon_forwards_with_its_own_shell_command(monkeypatch):
   monkeypatch.setattr(
     summon,
     'relay_summon',
-    lambda target, prompt, *, timeout, into: calls.append((target, prompt, timeout, into)) or 0,
+    lambda target, prompt, *, timeout, into, hold: (
+      calls.append((target, prompt, timeout, into)) or 0
+    ),
   )
 
   assert summon.main(['summon', '--timeout', '60', 'devoops', 'deploy']) == 0
@@ -130,6 +132,22 @@ async def test_timeout_and_into_forward_into_the_request(socket_dir, monkeypatch
       'prompt': 'p',
       'timeout': 42.0,
       'into': 'summon',
+    }
+    assert await asyncio.wait_for(main_task, TIMEOUT) == 0
+    capsys.readouterr()
+
+
+@pytest.mark.asyncio
+async def test_hold_forwards_into_the_request(socket_dir, monkeypatch, capsys):
+  async with running_server(socket_dir, monkeypatch) as server:
+    argv = ['summon', '--detach', '--hold', 'attended', 'devoops', 'p']
+    main_task = asyncio.create_task(asyncio.to_thread(summon.main, argv))
+
+    _, request = await _next(server.sink.messages)
+    assert request.payload == {
+      'target': 'devoops',
+      'prompt': 'p',
+      'hold': 'attended',
     }
     assert await asyncio.wait_for(main_task, TIMEOUT) == 0
     # --detach prints the request id as the data output and exits right away

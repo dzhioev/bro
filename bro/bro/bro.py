@@ -17,7 +17,7 @@ from bro.datasources.base import DataSource
 from llm.llm import LLM, LLMSpec
 from llm.observer import BoringRenderer, NullObserver, Observer
 from llm.tracker import EndReason, HTTPTracker, NullTracker, Tracker
-from prompts import get_prompt, mode_fragment
+from prompts import get_prompt, hold_fragment
 from summon import SUMMONER_ENV
 
 DEFAULT_LLM_SPEC: LLMSpec = llm.llms.chat_gpt.LLMSpec()
@@ -282,7 +282,8 @@ _SUMMON_DESCRIPTION = (
   'the run — an open-ended child (e.g. a dev run watching a PR through review) '
   'outlives the default and needs an explicit value sized in hours; optional '
   "`into` bases the child on a git ref instead of your workspace's "
-  'current HEAD (uncommitted changes never transfer). fails with the reason when the run raises, errors out, '
+  'current HEAD (uncommitted changes never transfer); optional `hold` sets the '
+  "child's user-involvement level (default unattended). fails with the reason when the run raises, errors out, "
   'or dies. `detach: true` returns the request id right after the send instead of '
   'blocking — poll or collect it with `summon_check`.'
   '{{when #wire = mcp}} CAUTION: this tool is served over MCP, and the harness '
@@ -367,15 +368,22 @@ def _summon_tool(variables: Variables) -> llm.mcp.Tool:
     timeout: Optional[float] = None,
     into: Optional[str] = None,
     detach: bool = False,
+    hold: Optional[str] = None,
   ) -> str:
     if detach:
       return await asyncio.to_thread(
-        summon_client.summon_detached, target, prompt, timeout=timeout, into=into
+        summon_client.summon_detached, target, prompt, timeout=timeout, into=into, hold=hold
       )
     client = summon_client.open_client()
     try:
       return await asyncio.to_thread(
-        summon_client.summon_and_wait, target, prompt, timeout=timeout, into=into, client=client
+        summon_client.summon_and_wait,
+        target,
+        prompt,
+        timeout=timeout,
+        into=into,
+        hold=hold,
+        client=client,
       )
     finally:
       client.close()
@@ -509,10 +517,10 @@ def _build_service_server(
 
 
 def _unattended_claude_session() -> bool:
-  # CW_MODE carries the session's user-involvement level, CW_RUNNER_PID makes
+  # BRO_HOLD carries the session's user-involvement level, CW_RUNNER_PID makes
   # it terminatable (both exported by cw's in-place runner); `raise` needs an
   # unattended session and a runner to signal.
-  return os.environ.get('CW_MODE') == 'unattended' and os.environ.get('CW_RUNNER_PID') is not None
+  return os.environ.get('BRO_HOLD') == 'unattended' and os.environ.get('CW_RUNNER_PID') is not None
 
 
 def _component_needed_secrets(component: llm.mcp.MCPServerSpec | DataSource) -> set[str]:
@@ -789,6 +797,7 @@ class BaseBro(ABC):
     input: str,
     *,
     interactive: bool,
+    hold: str,
     observer: Optional[Observer],
     tracker: Optional[Tracker],
     entry_point: str,
@@ -798,11 +807,11 @@ class BaseBro(ABC):
     # caller-supplied ones win (CLIs use this to force --boring or to pass a
     # LocalFileTracker for dev capture), set on self before _create_llm so the
     # LLM construction path picks them up — then build the LLM, compose the
-    # mode prompt, open the trail, and seed the message list.
+    # hold prompt, open the trail, and seed the message list.
     self._observer = observer if observer is not None else self._make_observer()
     self._tracker = tracker if tracker is not None else self._make_tracker()
-    llm = self._create_llm(interactive=interactive)
-    system_prompt = self._system_prompt_for(interactive=interactive)
+    llm = self._create_llm(hold=hold)
+    system_prompt = self._system_prompt_for(hold=hold)
     trail_id = self._tracker.start_trail(
       bro=self.name,
       llm_spec=self.llm_spec.dump(),
@@ -836,6 +845,7 @@ class BaseBro(ABC):
     observer: Optional[Observer] = None,
     tracker: Optional[Tracker] = None,
     request_timeout: Optional[float] = None,
+    hold: str = 'unattended',
   ) -> str:
     refusal = self._start_refusal()
     if refusal is not None:
@@ -843,6 +853,7 @@ class BaseBro(ABC):
     llm, messages, trail_id = self._start(
       input,
       interactive=False,
+      hold=hold,
       observer=observer,
       tracker=tracker,
       entry_point='cli:bro_run',
@@ -879,6 +890,7 @@ class BaseBro(ABC):
     tracker: Optional[Tracker] = None,
     request_timeout: Optional[float] = None,
     entry_point: str = 'send',
+    hold: str = 'guided',
   ) -> str:
     if self._llm is None:
       refusal = self._start_refusal()
@@ -886,11 +898,13 @@ class BaseBro(ABC):
         # in-reply report; the LLM stays unbuilt, so a later send re-checks
         return refusal
       # the tracker is locked in on first send (the LLM is constructed once and
-      # records one trail); later calls can't swap it. entry_point labels that
-      # trail's header — surfaces name themselves (`call`, `process-inbox`).
+      # records one trail); later calls can't swap it. entry_point (the trail
+      # header's surface label — `call`, `process-inbox`) and hold are locked
+      # in the same way.
       self._llm, messages, _ = self._start(
         message,
         interactive=True,
+        hold=hold,
         observer=observer,
         tracker=tracker,
         entry_point=entry_point,
@@ -923,14 +937,14 @@ class BaseBro(ABC):
       self._live_mcp.extend(ds.as_mcp_server() for ds in self._data_sources)
     return self._live_mcp
 
-  def _mcp_servers_for(self, *, interactive: bool) -> list[llm.mcp.MCPServer]:
+  def _mcp_servers_for(self, *, hold: str) -> list[llm.mcp.MCPServer]:
     # the in-process LLM builds (always bare wire): the `raise` service tool
-    # only makes sense in non-interactive runs — when no human is in the loop to
-    # negotiate, the agent needs a way to abort. In interactive sessions the
-    # agent describes any blocker in its reply instead. `skill`, however, is
-    # needed in both modes, so interactive rebuilds the service server without
-    # `raise` rather than dropping it wholesale.
-    if interactive:
+    # mounts only at the unattended hold — with no human channel the agent
+    # needs a way to abort; every other level reports blockers in its reply,
+    # as its hold fragment instructs (same gate as the claude assemblies).
+    # `skill` is needed at every level, so the non-unattended build recreates
+    # the service server without `raise` rather than dropping it wholesale.
+    if hold != 'unattended':
       return [
         *self._live_mcp_servers(),
         _build_service_server(self, include_raise=False, harness='bro', wire='bare'),
@@ -971,13 +985,13 @@ class BaseBro(ABC):
     )
     return servers
 
-  def _system_prompt_for(self, *, interactive: bool) -> str:
-    # the run mode is pinned here, at run start, so the matching session-mode
-    # fragment is injected rather than detected by the agent: interactive runs
-    # (send(), the assistant server, `call`) are guided, non-interactive ones
-    # (run()) unattended (the level files are documented in prompts/CLAUDE.md).
-    fragment = mode_fragment(
-      'guided' if interactive else 'unattended',
+  def _system_prompt_for(self, *, hold: str) -> str:
+    # the hold is pinned at run start, so the matching hold fragment is
+    # injected rather than detected by the agent — run() defaults unattended,
+    # send() guided, with the launch surfaces overriding per their --hold flag
+    # (the level files are documented in prompts/CLAUDE.md).
+    fragment = hold_fragment(
+      hold,
       harness='bro',
       wire='bare',
       creds=credentials.known_names(),
@@ -994,9 +1008,9 @@ class BaseBro(ABC):
     # None (no BROKER_CHANNEL in the environment) keeps the lifecycle emission inert
     return BroChannel.from_env()
 
-  def _create_llm(self, *, interactive: bool) -> LLM:
+  def _create_llm(self, *, hold: str) -> LLM:
     return self.llm_spec.create_llm(
-      mcp_servers=self._mcp_servers_for(interactive=interactive),
+      mcp_servers=self._mcp_servers_for(hold=hold),
       observer=self._observer,
       tracker=self._tracker,
       # the LLM publishes cumulative usage under the bro's surface identity (the

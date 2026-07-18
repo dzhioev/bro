@@ -1,6 +1,6 @@
 import pytest
 
-from prompts import get_prompt, get_prompt_path, mode_fragment
+from prompts import get_prompt, get_prompt_path, hold_fragment
 
 
 class TestContainment:
@@ -34,27 +34,27 @@ class TestLoading:
       get_prompt('tool_use_guard.prompt', unexpected='x')
 
 
-class TestModeFragment:
+class TestHoldFragment:
   def test_each_level_selects_its_own_file(self):
-    for mode, heading in (
+    for hold, heading in (
       ('unattended', '# Unattended session'),
       ('detached', '# Detached session'),
       ('attended', '# Attended session'),
       ('guided', '# Guided session'),
     ):
-      fragment = mode_fragment(mode, harness='claude', wire='mcp')
+      fragment = hold_fragment(hold, harness='claude', wire='mcp')
       assert fragment.startswith(heading)
       assert '{{' not in fragment
 
   def test_non_guided_levels_share_the_authorization_block(self):
-    for mode in ('unattended', 'detached', 'attended'):
-      fragment = mode_fragment(mode, harness='claude', wire='mcp')
+    for hold in ('unattended', 'detached', 'attended'):
+      fragment = hold_fragment(hold, harness='claude', wire='mcp')
       assert 'full authorization' in fragment
 
   def test_guided_carries_no_authorization_block(self):
-    fragment = mode_fragment('guided', harness='claude', wire='mcp')
+    fragment = hold_fragment('guided', harness='claude', wire='mcp')
     assert 'full authorization' not in fragment
 
-  def test_unknown_mode_raises(self):
-    with pytest.raises(ValueError, match='unknown session mode'):
-      mode_fragment('automatic', harness='claude', wire='mcp')
+  def test_unknown_hold_raises(self):
+    with pytest.raises(ValueError, match='unknown hold'):
+      hold_fragment('automatic', harness='claude', wire='mcp')

@@ -50,7 +50,7 @@ class TestLaunchCommand:
     [
       {},
       {'forwarded': ['--host']},
-      {'forwarded': ['--host', '--mode', 'guided']},
+      {'forwarded': ['--host', '--hold', 'guided']},
       {'command': 'do a thing', 'new': True},
     ],
   )
@@ -70,9 +70,22 @@ class TestLaunchCommand:
     rc = dive_in.main(['dive-in', '-n'])
     assert rc == 0
     tokens = shlex.split(capsys.readouterr().out.strip())
-    assert '--mode' not in tokens
     args = cw.build_parser().parse(tokens)
-    assert args['mode'] == 'attended'
+    assert args['hold'] == 'attended'
+
+  def test_host_defaults_to_guided(self, fake_proj, capsys):
+    rc = dive_in.main(['dive-in', '-n', '--host'])
+    assert rc == 0
+    tokens = shlex.split(capsys.readouterr().out.strip())
+    args = cw.build_parser().parse(tokens)
+    assert args['hold'] == 'guided'
+
+  def test_explicit_hold_wins_over_the_host_default(self, fake_proj, capsys):
+    rc = dive_in.main(['dive-in', '-n', '--host', '--hold', 'attended'])
+    assert rc == 0
+    tokens = shlex.split(capsys.readouterr().out.strip())
+    args = cw.build_parser().parse(tokens)
+    assert args['hold'] == 'attended'
 
   def test_forwarded_flags_ride_verbatim(self, fake_proj, capsys, monkeypatch):
     monkeypatch.delenv('CW_BRO', raising=False)
@@ -99,9 +112,9 @@ class TestShellCommandReconstruction:
 
   def test_forwarded_flags_appear_in_the_reconstruction(self, fake_proj, monkeypatch):
     monkeypatch.delenv('PPP_SHELL_COMMAND', raising=False)
-    rc = dive_in.main(['dive-in', '-n', '--mode', 'guided', '--bro', 'ppp-dev'])
+    rc = dive_in.main(['dive-in', '-n', '--hold', 'guided', '--bro', 'ppp-dev'])
     assert rc == 0
-    assert os.environ['PPP_SHELL_COMMAND'] == 'dive-in --mode guided --bro ppp-dev'
+    assert os.environ['PPP_SHELL_COMMAND'] == 'dive-in --hold guided --bro ppp-dev'
 
   def test_new_seed_keeps_the_prompt_marker_tail(self, fake_proj, monkeypatch):
     monkeypatch.delenv('PPP_SHELL_COMMAND', raising=False)

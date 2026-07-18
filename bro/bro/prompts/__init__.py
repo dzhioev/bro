@@ -38,21 +38,21 @@ def get_prompt(file_name: str, **kwargs) -> str:
   return text
 
 
-def mode_fragment(
-  mode: str,
+def hold_fragment(
+  hold: str,
   *,
   harness: Optional['Harness'] = None,
   wire: Optional['Wire'] = None,
   creds: Optional['Iterable[str]'] = None,
 ) -> str:
-  """render the session-mode fragment for `mode` — the one rendering path every
-  injection site uses, so the `{{…}}` directives in the mode text never leak
-  unrendered. `session_mode.md` selects the per-level file on the `#mode` fact,
-  which only this call supplies: everything else renders mode-neutrally and a
-  stray `#mode` directive there raises.
+  """render the hold fragment for `hold` — the one rendering path every
+  injection site uses, so the `{{…}}` directives in the hold text never leak
+  unrendered. `hold.md` selects the per-level file on the `#hold` fact,
+  which only this call supplies: everything else renders hold-neutrally and a
+  stray `#hold` directive there raises.
   """
   import llm.mcp  # lazy: keeps the loader importable without the llm layer
 
   return llm.mcp.render_text(
-    get_prompt('session_mode.md'), mode=mode, harness=harness, wire=wire, creds=creds
+    get_prompt('hold.md'), hold=hold, harness=harness, wire=wire, creds=creds
   ).strip()

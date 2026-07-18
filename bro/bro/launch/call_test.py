@@ -41,7 +41,7 @@ class RecordBro(Bro):
   def _make_observer(self) -> Observer:
     return NullObserver()
 
-  def _create_llm(self, *, interactive: bool) -> LLM:
+  def _create_llm(self, *, hold: str) -> LLM:
     return self.mock_llm
 
 
@@ -194,7 +194,7 @@ class _ChatBro(Bro):
   def _make_observer(self) -> Observer:
     return NullObserver()
 
-  def _create_llm(self, *, interactive: bool) -> LLM:
+  def _create_llm(self, *, hold: str) -> LLM:
     return self.mock_llm
 
 
@@ -210,14 +210,14 @@ class _FastlessBro(Bro):
   def _make_observer(self) -> Observer:
     return NullObserver()
 
-  def _create_llm(self, *, interactive: bool) -> LLM:
+  def _create_llm(self, *, hold: str) -> LLM:
     return self.mock_llm
 
 
 def test_default_invokes_spec_fast(monkeypatch):
   built: list[Bro] = []
 
-  async def fake_call_text(bro, initial, history=None):
+  async def fake_call_text(bro, initial, history=None, hold='guided'):
     built.append(bro)
 
   # exercise the in-process path: outside a container, main() would re-exec into one.
@@ -239,10 +239,33 @@ def test_default_invokes_spec_fast(monkeypatch):
   assert default.service_tier is None
 
 
+def test_in_place_hold_defaults_diverge_per_alias(monkeypatch):
+  holds: list[str] = []
+
+  async def fake_call_text(bro, initial, history=None, hold='guided'):
+    holds.append(hold)
+
+  monkeypatch.setenv('CW_IN_CONTAINER', '1')
+  monkeypatch.setattr('bro.registry.get_class', lambda name: _ChatBro)
+  monkeypatch.setattr('bro.registry.create_bro', lambda name: _ChatBro())
+  monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
+  monkeypatch.setattr('bro.launch.call._tty_supported', lambda: False)
+
+  assert main(['call', 'record', 'hi', '--in-place']) is None
+  assert chat_main(['bro', 'record', 'hi', '--in-place'], program=['bro', 'chat']) is None
+  assert (
+    chat_main(
+      ['bro', 'record', 'hi', '--hold', 'unattended', '--in-place'], program=['bro', 'chat']
+    )
+    is None
+  )
+  assert holds == ['attended', 'guided', 'unattended']
+
+
 def test_bro_chat_default_builds_plain_spec(monkeypatch):
   built: list[Bro] = []
 
-  async def fake_call_text(bro, initial, history=None):
+  async def fake_call_text(bro, initial, history=None, hold='guided'):
     built.append(bro)
 
   monkeypatch.setenv('CW_IN_CONTAINER', '1')
@@ -262,7 +285,7 @@ def test_bro_chat_default_builds_plain_spec(monkeypatch):
 def test_bro_chat_fast_flag_invokes_spec_fast(monkeypatch):
   built: list[Bro] = []
 
-  async def fake_call_text(bro, initial, history=None):
+  async def fake_call_text(bro, initial, history=None, hold='guided'):
     built.append(bro)
 
   monkeypatch.setenv('CW_IN_CONTAINER', '1')
@@ -281,7 +304,7 @@ def test_bro_chat_fast_flag_invokes_spec_fast(monkeypatch):
 def test_default_falls_back_to_plain_when_no_fast_mode(monkeypatch):
   built: list[Bro] = []
 
-  async def fake_call_text(bro, initial, history=None):
+  async def fake_call_text(bro, initial, history=None, hold='guided'):
     built.append(bro)
 
   monkeypatch.setenv('CW_IN_CONTAINER', '1')
@@ -314,7 +337,16 @@ def test_call_re_execs_into_container_when_outside():
     assert launch.name.startswith('call-ppp-dev-')
     # host is a tty → the TUI runs in-container, so no --text is forwarded; call
     # implies --fast, which must ride the inner argv (the inner verb defaults plain)
-    assert launch.command == ['bro', 'chat', 'ppp-dev', 'hey', '--fast', '--in-place']
+    assert launch.command == [
+      'bro',
+      'chat',
+      'ppp-dev',
+      'hey',
+      '--fast',
+      '--hold',
+      'attended',
+      '--in-place',
+    ]
     assert run.call_args.kwargs['drop'] is True
     # ppp-dev's manifest (github + brog) plus the mandatory trails sink
     assert {'github', 'brog', 'trails'} <= launch.secrets
@@ -334,7 +366,17 @@ def test_call_forwards_text_when_host_not_a_tty():
     command = run.call_args.args[0].command
     # host can't back the TUI → force text mode inside the container (the container's
     # PTY always reports a TTY, so the decision has to be made here on the host)
-    assert command == ['bro', 'chat', 'ppp-dev', 'hey', '--text', '--fast', '--in-place']
+    assert command == [
+      'bro',
+      'chat',
+      'ppp-dev',
+      'hey',
+      '--text',
+      '--fast',
+      '--hold',
+      'attended',
+      '--in-place',
+    ]
 
 
 def test_call_forwards_effort_into_container():
@@ -348,13 +390,24 @@ def test_call_forwards_effort_into_container():
     assert rc == 0
     command = run.call_args.args[0].command
     # --effort is forwarded like the implied --fast; the in-container run applies with_effort
-    assert command == ['bro', 'chat', 'ppp-dev', 'hey', '--fast', '--effort', 'high', '--in-place']
+    assert command == [
+      'bro',
+      'chat',
+      'ppp-dev',
+      'hey',
+      '--fast',
+      '--effort',
+      'high',
+      '--hold',
+      'attended',
+      '--in-place',
+    ]
 
 
 def test_effort_flag_overrides_spec_effort(monkeypatch):
   built: list[Bro] = []
 
-  async def fake_call_text(bro, initial, history=None):
+  async def fake_call_text(bro, initial, history=None, hold='guided'):
     built.append(bro)
 
   monkeypatch.setenv('CW_IN_CONTAINER', '1')
@@ -395,7 +448,16 @@ def test_call_no_trails_disables_recording_in_container():
     assert rc == 0
     launch = run.call_args.args[0]
     # the env var carries the effect in, so --no-trails isn't forwarded into the inner argv
-    assert launch.command == ['bro', 'chat', 'ppp-dev', 'hey', '--fast', '--in-place']
+    assert launch.command == [
+      'bro',
+      'chat',
+      'ppp-dev',
+      'hey',
+      '--fast',
+      '--hold',
+      'attended',
+      '--in-place',
+    ]
     assert 'trails' not in launch.secrets
     assert launch.env == {
       'CW_BRO': 'ppp-dev',
@@ -437,7 +499,17 @@ def test_call_forwards_resume_into_container():
     rc = main(['call', 'ppp-dev', '--resume'])
     assert rc == 0
     command = run.call_args.args[0].command
-    assert command == ['bro', 'chat', 'ppp-dev', '--resume', 'latest', '--fast', '--in-place']
+    assert command == [
+      'bro',
+      'chat',
+      'ppp-dev',
+      '--resume',
+      'latest',
+      '--fast',
+      '--hold',
+      'attended',
+      '--in-place',
+    ]
 
 
 def test_call_forwards_resume_trail_id_with_message():
@@ -458,6 +530,8 @@ def test_call_forwards_resume_trail_id_with_message():
       '--resume',
       'trail-id-1',
       '--fast',
+      '--hold',
+      'attended',
       '--in-place',
     ]
 
@@ -469,7 +543,7 @@ def test_call_resume_runs_the_resumed_bro(monkeypatch, capsys):
 
   captured: dict = {}
 
-  async def fake_call_text(bro, initial, history=None):
+  async def fake_call_text(bro, initial, history=None, hold='guided'):
     captured['bro'] = bro
     captured['initial'] = initial
     captured['history'] = history
@@ -506,7 +580,7 @@ def test_call_resume_runs_the_resumed_bro(monkeypatch, capsys):
 
 
 def test_call_prints_resume_hint_when_a_trail_was_recorded(monkeypatch, capsys):
-  async def fake_call_text(bro, initial, history=None):
+  async def fake_call_text(bro, initial, history=None, hold='guided'):
     bro.trail_id = 'trail-xyz'
 
   monkeypatch.setenv('CW_IN_CONTAINER', '1')
@@ -523,7 +597,7 @@ def test_call_prints_resume_hint_when_a_trail_was_recorded(monkeypatch, capsys):
 
 
 def test_call_skips_resume_hint_without_a_trail(monkeypatch, capsys):
-  async def fake_call_text(bro, initial, history=None):
+  async def fake_call_text(bro, initial, history=None, hold='guided'):
     pass
 
   monkeypatch.setenv('CW_IN_CONTAINER', '1')
@@ -540,7 +614,7 @@ def test_call_skips_resume_hint_without_a_trail(monkeypatch, capsys):
 def test_call_skips_container_with_in_place_flag(monkeypatch):
   built: list[Bro] = []
 
-  async def fake_call_text(bro, initial, history=None):
+  async def fake_call_text(bro, initial, history=None, hold='guided'):
     built.append(bro)
 
   monkeypatch.delenv('CW_IN_CONTAINER', raising=False)
@@ -558,7 +632,7 @@ def test_call_skips_container_with_in_place_flag(monkeypatch):
 def test_initial_slash_invocation_passes_through_verbatim(monkeypatch):
   captured: list[str] = []
 
-  async def fake_call_text(bro, initial, history=None):
+  async def fake_call_text(bro, initial, history=None, hold='guided'):
     captured.append(initial)
 
   monkeypatch.setenv('CW_IN_CONTAINER', '1')

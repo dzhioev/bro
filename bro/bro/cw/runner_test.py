@@ -47,7 +47,7 @@ class _Harness:
     entered = [p.__enter__() for p in self._patches]
     self.env = entered[0]
     self.env.pop('CW_BRO', None)
-    self.env.pop('CW_MODE', None)
+    self.env.pop('BRO_HOLD', None)
     self.env.pop('CW_RUNNER_PID', None)
     self.env.pop('BROKER_CHANNEL', None)
     self.env.pop('CLAUDE_CONFIG_DIR', None)
@@ -162,25 +162,25 @@ class TestRunInPlace:
   def test_exports_bro_git_identity_unconditionally(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      # every session commits as bro, mode-independent
+      # every session commits as bro, hold-independent
       assert cw.runner.run_in_place(_spec()) == 0
       assert h.env['GIT_AUTHOR_NAME'] == 'bro'
       assert h.env['GIT_COMMITTER_EMAIL'] == 'dzhioev+bro@gmail.com'
 
-  def test_exports_the_session_mode(self, monkeypatch, tmp_path):
+  def test_exports_the_session_hold(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert cw.runner.run_in_place(_spec(mode='unattended')) == 0
-      assert h.env['CW_MODE'] == 'unattended'
+      assert cw.runner.run_in_place(_spec(hold='unattended')) == 0
+      assert h.env['BRO_HOLD'] == 'unattended'
 
-  def test_overwrites_the_ambient_mode(self, monkeypatch, tmp_path):
+  def test_overwrites_the_ambient_hold(self, monkeypatch, tmp_path):
     # a session launched from inside an unattended one must not inherit the
-    # mode (the MCP server would otherwise mount `raise` for an attended session)
+    # hold (the MCP server would otherwise mount `raise` for an attended session)
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      h.env['CW_MODE'] = 'unattended'
+      h.env['BRO_HOLD'] = 'unattended'
       assert cw.runner.run_in_place(_spec()) == 0
-      assert h.env['CW_MODE'] == 'attended'
+      assert h.env['BRO_HOLD'] == 'guided'
 
   def test_exports_its_own_pid_as_the_raise_kill_target(self, monkeypatch, tmp_path):
     # overwriting the ambient value: an inherited pid would name a foreign runner

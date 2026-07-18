@@ -29,13 +29,13 @@ _HARNESSES = frozenset(get_args(Harness))
 Wire = Literal['bare', 'mcp']
 _WIRES = frozenset(get_args(Wire))
 
-# a session's user-involvement level, ordered from no human channel to
-# human-driven. unlike the other facts it is supplied only when rendering the
-# session-mode text (`prompts.mode_fragment`), so mode-neutral text — skills,
-# procedure docs — fails fast on a stray `#mode` directive.
-Mode = Literal['unattended', 'detached', 'attended', 'guided']
-MODES: tuple[str, ...] = get_args(Mode)
-_MODES = frozenset(MODES)
+# the session's hold — its user-involvement level, ordered from no human
+# channel to human-driven. unlike the other facts it is supplied only when
+# rendering the hold text (`prompts.hold_fragment`), so hold-neutral text —
+# skills, procedure docs — fails fast on a stray `#hold` directive.
+Hold = Literal['unattended', 'detached', 'attended', 'guided']
+HOLDS: tuple[str, ...] = get_args(Hold)
+_HOLDS = frozenset(HOLDS)
 
 # the facts triple as ready-made condition variables, so declarations read
 # `harness == 'bro'` / `creds.contains('openai')`.
@@ -50,15 +50,15 @@ def render_text(
   harness: Optional[Harness] = None,
   wire: Optional[Wire] = None,
   creds: Optional[Iterable[str]] = None,
-  mode: Optional[str] = None,
+  hold: Optional[str] = None,
 ) -> str:
   """render `base.template` directives in static agent-facing text (system
   prompts, skill bodies, service-tool descriptions) against the surface facts
   the call site knows: `harness` → `#harness`, `wire` → `#wire`, `creds` →
   `#creds` (the closed universe; membership probes `credentials.available`
   lazily, so render in the process that consumes the text, where the store is
-  the session's own), `mode` → `#mode` (session-mode text only — supplied by
-  `prompts.mode_fragment`, no other call site). A fact left None defines no
+  the session's own), `hold` → `#hold` (hold text only — supplied by
+  `prompts.hold_fragment`, no other call site). A fact left None defines no
   variable, so a directive referencing it raises. `{{include <name>}}` targets
   resolve through the `prompts` loader. The directive reference is
   `reference/template.md`. Ordinary MCP-server tool text does not use these
@@ -68,7 +68,7 @@ def render_text(
   if '{{' not in text:
     return text
   return template.render(
-    text, surface_variables(harness=harness, wire=wire, creds=creds, mode=mode), _load_prompt
+    text, surface_variables(harness=harness, wire=wire, creds=creds, hold=hold), _load_prompt
   )
 
 
@@ -97,7 +97,7 @@ def surface_variables(
   harness: Optional[Harness] = None,
   wire: Optional[Wire] = None,
   creds: Optional[Iterable[str]] = None,
-  mode: Optional[str] = None,
+  hold: Optional[str] = None,
 ) -> dict[str, condition.StringVariable | condition.SetVariable | bool]:
   """the harness facts as a `Variables` mapping — what `render_text` / `select`
   evaluate against. Public for the one tool surface allowed to condition on
@@ -114,10 +114,10 @@ def surface_variables(
     variables['wire'] = condition.StringVariable(wire, domain=_WIRES)
   if creds is not None:
     variables['creds'] = condition.SetVariable(credentials.available, universe=frozenset(creds))
-  if mode is not None:
-    if mode not in _MODES:
-      raise ValueError(f'unknown session mode {mode!r}; known: {", ".join(MODES)}')
-    variables['mode'] = condition.StringVariable(mode, domain=_MODES)
+  if hold is not None:
+    if hold not in _HOLDS:
+      raise ValueError(f'unknown hold {hold!r}; known: {", ".join(HOLDS)}')
+    variables['hold'] = condition.StringVariable(hold, domain=_HOLDS)
   return variables
 
 

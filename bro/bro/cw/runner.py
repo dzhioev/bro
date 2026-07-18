@@ -110,10 +110,10 @@ def run_in_place(spec: 'SessionSpec') -> int:
   # cw-session runs as its persona
   os.environ['CW_BRO'] = spec.session_bro
 
-  # mode and kill wiring for the `raise` service tool's mounts (bro/bro.py).
+  # hold and kill wiring for the `raise` service tool's mounts (bro/bro.py).
   # both overwrite any ambient value: a session launched from inside another
-  # must not inherit its mode or kill target.
-  os.environ['CW_MODE'] = spec.mode
+  # must not inherit its hold or kill target.
+  os.environ['BRO_HOLD'] = spec.hold
   os.environ['CW_RUNNER_PID'] = str(os.getpid())
 
   with contextlib.ExitStack() as teardown:

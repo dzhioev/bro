@@ -7,22 +7,22 @@ class TestSessionAppendPrompt:
     assert 'Interaction policy' in out
     assert 'full authorization' not in out
 
-  def test_non_guided_modes_add_the_authorization_block(self):
-    for mode in ('unattended', 'detached', 'attended'):
-      assert 'full authorization' in cw.system_prompt._session_append_prompt(mode, 'bro')
+  def test_non_guided_holds_add_the_authorization_block(self):
+    for hold in ('unattended', 'detached', 'attended'):
+      assert 'full authorization' in cw.system_prompt._session_append_prompt(hold, 'bro')
 
   def test_guided_fragment(self):
     out = cw.system_prompt._session_append_prompt('guided', 'bro')
     assert '# Guided session' in out
     assert '# Attended session' not in out
 
-  def test_each_mode_gets_its_own_fragment(self):
-    for mode, heading in (
+  def test_each_hold_gets_its_own_fragment(self):
+    for hold, heading in (
       ('unattended', '# Unattended session'),
       ('detached', '# Detached session'),
       ('attended', '# Attended session'),
     ):
-      out = cw.system_prompt._session_append_prompt(mode, 'bro')
+      out = cw.system_prompt._session_append_prompt(hold, 'bro')
       assert heading in out
       assert '# Guided session' not in out
 

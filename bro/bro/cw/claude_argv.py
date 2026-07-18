@@ -100,10 +100,10 @@ def build_claude_launch(
     # workspace's venv, so this is the workspace's own ppp checkout — the
     # workspace itself for ppp, the ppp submodule for a project vendoring it
     settings['apiKeyHelper'] = str(PROJECT_ROOT / 'setup' / 'print_anthropic_key.sh')
-    # the mode fragment renders here — appending the raw file would leak its
+    # the hold fragment renders here — appending the raw file would leak its
     # directives — with the --bro surface's facts: bro harness over mcp wire
-    fragment = prompts.mode_fragment(
-      spec.mode, harness='bro', wire='mcp', creds=credentials.known_names()
+    fragment = prompts.hold_fragment(
+      spec.hold, harness='bro', wire='mcp', creds=credentials.known_names()
     )
     system_prompt = f'{bro.claude_system_prompt}\n\n{fragment}'
     argv += [
@@ -121,7 +121,7 @@ def build_claude_launch(
       ','.join(f'mcp__{namespace}__*' for namespace in namespaces),
     ]
   else:
-    system_prompt = _session_append_prompt(spec.mode, spec.session_bro)
+    system_prompt = _session_append_prompt(spec.hold, spec.session_bro)
     argv += [
       '--disallowed-tools',
       'mcp__claude_ai_*',
@@ -132,7 +132,7 @@ def build_claude_launch(
       '--append-system-prompt',
       system_prompt,
     ]
-  if spec.mode != 'guided':
+  if spec.hold != 'guided':
     argv.append('--dangerously-skip-permissions')
   if spec.effort is not None:
     argv += ['--effort', spec.effort]

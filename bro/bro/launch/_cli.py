@@ -12,6 +12,7 @@ from base import log
 from bro.bro import BroRaised
 from bro.bros.bro import Bro
 from llm.llm import EFFORT_LEVELS, LLMSpec
+from llm.mcp import HOLDS
 from llm.observer import Observer
 
 # shared flag help so all the launcher CLIs describe `--fast` / `--in-place` identically.
@@ -28,6 +29,11 @@ EFFORT_HELP = (
   'has no effort knob'
 )
 IN_PLACE_HELP = 'run the bro in the calling process instead of creating an isolated container'
+HOLD_HELP = (
+  "the run's hold — the user-involvement level whose fragment lands in the system prompt "
+  '(unattended = no human channel, detached = launched and left, attended = human watching, '
+  'guided = human drives each step); default: {}'
+)
 SUMMON_HELP = 'run through the session summon channel in a separate scoped container'
 TIMEOUT_HELP = (
   f'summon mode: seconds before the host kills the child (default: '
@@ -185,11 +191,14 @@ def _run_summoned(
   timeout: Optional[float],
   into: Optional[str],
   detach: bool,
+  hold: Optional[str],
 ) -> int:
   if not detach:
-    return summon_client.relay_summon(bro_name, input_text, timeout=timeout, into=into)
+    return summon_client.relay_summon(bro_name, input_text, timeout=timeout, into=into, hold=hold)
   try:
-    request_id = summon_client.summon_detached(bro_name, input_text, timeout=timeout, into=into)
+    request_id = summon_client.summon_detached(
+      bro_name, input_text, timeout=timeout, into=into, hold=hold
+    )
   except summon_client.SummonError as error:
     log.error('%s', error)
     return 1
@@ -236,6 +245,7 @@ def run_main(
     parser.add_argument('--grant', action='append', default=None, metavar='NAME', help=GRANT_HELP)
     parser.add_argument('--revoke', action='append', default=None, metavar='NAME', help=REVOKE_HELP)
   parser.add_argument('--into', metavar='REF', help=INTO_HELP)
+  parser.add_argument('--hold', choices=HOLDS, default=None, help=HOLD_HELP.format('unattended'))
   parser.add_argument('--timeout', type=float, metavar='SECONDS', help=TIMEOUT_HELP)
   parser.add_argument('--detach', action='store_true', help=DETACH_HELP)
 
@@ -258,7 +268,12 @@ def run_main(
 
   if args['summon']:
     return _run_summoned(
-      args['bro'], input_text, timeout=args['timeout'], into=args['into'], detach=args['detach']
+      args['bro'],
+      input_text,
+      timeout=args['timeout'],
+      into=args['into'],
+      detach=args['detach'],
+      hold=args['hold'],
     )
   if args['timeout'] is not None or args['detach']:
     log.error('--timeout/--detach require --summon')
@@ -278,6 +293,8 @@ def run_main(
     inner_args.append('--fast')
   if args['effort'] is not None:
     inner_args.extend(['--effort', args['effort']])
+  if args['hold'] is not None:
+    inner_args.extend(['--hold', args['hold']])
   hopped = maybe_containerize(
     cli_name='bro-run' if program == ['bro', 'run'] else program[0],
     verb='run',
@@ -303,8 +320,9 @@ def run_main(
     from llm.observer import RichConsoleRenderer
 
     observer = RichConsoleRenderer(prefix=bro.name)
+  hold = args['hold'] if args['hold'] is not None else 'unattended'
   try:
-    result = asyncio.run(bro.run(input_text, observer=observer))
+    result = asyncio.run(bro.run(input_text, observer=observer, hold=hold))
   except BroRaised as error:
     log.error('raised: %s', error.reason)
     return 1

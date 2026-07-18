@@ -353,11 +353,16 @@ class ChatApp(App):
   ]
 
   def __init__(
-    self, bro: Bro, initial: Optional[str], history: Optional[list[HistoryMessage]] = None
+    self,
+    bro: Bro,
+    initial: Optional[str],
+    history: Optional[list[HistoryMessage]] = None,
+    hold: str = 'guided',
   ):
     super().__init__()
     self._bro = bro
     self._initial = initial
+    self._hold = hold
     self._history = history if history is not None else []
     self._last_date: Optional[date] = None
     self._typing: Optional[TypingIndicator] = None
@@ -486,7 +491,9 @@ class ChatApp(App):
     # animation). bridge UI updates back via call_from_thread.
     observer = TUIRenderer(self)
     try:
-      reply = asyncio.run(self._bro.send(text, observer=observer, entry_point='call'))
+      reply = asyncio.run(
+        self._bro.send(text, observer=observer, entry_point='call', hold=self._hold)
+      )
     except Exception as e:
       reply = f'[error] {type(e).__name__}: {e}'
     self.call_from_thread(self._on_reply, reply)

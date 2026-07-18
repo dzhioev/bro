@@ -29,7 +29,7 @@ def _load_base_prompts() -> str:
   return '\n\n'.join(parts)
 
 
-def _session_append_prompt(mode: str, bro_name: str) -> str:
+def _session_append_prompt(hold: str, bro_name: str) -> str:
   """--append-system-prompt text for a cw-session (the non --bro flavor).
 
   base prompts plus the session persona's own prompts (`bro_name`, the
@@ -38,9 +38,9 @@ def _session_append_prompt(mode: str, bro_name: str) -> str:
   once with this surface's facts: the claude harness over mcp wire names, with
   the session environment's credentials (this composes in the session's own
   process — in-container for container sessions — so the store is the scoped
-  one). the session-mode fragment renders separately through
-  `prompts.mode_fragment` — the `#mode` fact is supplied only there, so the
-  base and persona prompts stay mode-neutral.
+  one). the hold fragment renders separately through
+  `prompts.hold_fragment` — the `#hold` fact is supplied only there, so the
+  base and persona prompts stay hold-neutral.
   """
   # llm.mcp and bro.registry are imported lazily — the hub aggregates every cw
   # submodule, so a module-level import here would tax every `import cw`.
@@ -54,7 +54,7 @@ def _session_append_prompt(mode: str, bro_name: str) -> str:
   rendered = llm.mcp.render_text(
     '\n\n'.join(parts), harness='claude', wire='mcp', creds=credentials.known_names()
   )
-  fragment = prompts.mode_fragment(
-    mode, harness='claude', wire='mcp', creds=credentials.known_names()
+  fragment = prompts.hold_fragment(
+    hold, harness='claude', wire='mcp', creds=credentials.known_names()
   )
   return f'{rendered}\n\n{fragment}'

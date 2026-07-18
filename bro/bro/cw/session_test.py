@@ -11,7 +11,7 @@ import bro.launch.summon_control
 import cw.session
 import workspace.project
 from bro.launch.scope import ScopedSecrets
-from cw.flags import DEFAULT_SESSION_MODE
+from cw.flags import DEFAULT_HOLD
 
 
 def _spec(
@@ -19,7 +19,7 @@ def _spec(
   name: str = 'w',
   host: bool = False,
   drop: bool = False,
-  mode: str = DEFAULT_SESSION_MODE,
+  hold: str = DEFAULT_HOLD,
   fast: bool = False,
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
@@ -35,7 +35,7 @@ def _spec(
     name=name,
     host=host,
     drop=drop,
-    mode=mode,
+    hold=hold,
     fast=fast,
     grant=grant if grant is not None else [],
     revoke=revoke if revoke is not None else [],
@@ -260,7 +260,7 @@ class TestContainerCommand:
 class TestResumeCommand:
   def test_create_command_includes_drop_into_and_claude_args(self):
     parts = _spec(
-      mode='guided',
+      hold='attended',
       fast=True,
       drop=True,
       effort='xhigh',
@@ -271,25 +271,25 @@ class TestResumeCommand:
       claude_args=['--foo'],
     ).to_command_argv()
     assert parts == [
-      'cw', 'ss', '--fast', '--drop', '--mode', 'guided',
+      'cw', 'ss', '--fast', '--drop', '--hold', 'attended',
       '--effort', 'xhigh', '--persona', 'pm', '--grant', 'gmail_creds',
       '--grant', '@devoops', '--revoke', 'notion', '--into', 'feature', 'w', '--foo',
     ]  # fmt: skip
 
   def test_host_session_carries_the_host_flag(self):
-    parts = _spec(host=True, mode='detached').to_command_argv()
-    assert parts == ['cw', 'ss', '--host', '--mode', 'detached', 'w']
+    parts = _spec(host=True, hold='detached').to_command_argv()
+    assert parts == ['cw', 'ss', '--host', '--hold', 'detached', 'w']
 
-  def test_default_mode_is_elided(self):
-    # the parser's default mode stays implicit in the reconstructed command
+  def test_default_hold_is_elided(self):
+    # the parser's default hold stays implicit in the reconstructed command
     assert _spec().to_command_argv() == ['cw', 'ss', 'w']
 
   def test_resume_variant_carries_forwarded_flags_and_clears_create_only(self):
-    # resume_variant keeps --mode/--effort/--persona/--grant and adds
+    # resume_variant keeps --hold/--effort/--persona/--grant and adds
     # --resume, while clearing the create-only --drop/--into/prompt/claude args
     parts = (
       _spec(
-        mode='guided',
+        hold='attended',
         drop=True,
         effort='xhigh',
         persona='pm',
@@ -302,7 +302,7 @@ class TestResumeCommand:
       .to_command_argv()
     )
     assert parts == [
-      'cw', 'ss', '--resume', '--mode', 'guided',
+      'cw', 'ss', '--resume', '--hold', 'attended',
       '--effort', 'xhigh', '--persona', 'pm', '--grant', 'gmail_creds', 'w',
     ]  # fmt: skip
 
@@ -315,7 +315,7 @@ class TestResumeCommand:
       cw.session.start_session(
         _spec(
           drop=True,
-          mode='guided',
+          hold='attended',
           grant=['gmail_creds'],
           effort='xhigh',
           persona='pm',
@@ -324,17 +324,17 @@ class TestResumeCommand:
       resume_command = env['CW_RESUME_COMMAND']
     assert (
       resume_command
-      == 'cw ss --resume --mode guided --effort xhigh --persona pm --grant gmail_creds w'
+      == 'cw ss --resume --hold attended --effort xhigh --persona pm --grant gmail_creds w'
     )
 
 
 class TestReplaceResumeHint:
   def test_prints_recorded_command_over_claudes_hint(self, monkeypatch, capsys, tmp_path):
-    monkeypatch.setenv('CW_RESUME_COMMAND', 'cw ss --mode guided --resume w')
+    monkeypatch.setenv('CW_RESUME_COMMAND', 'cw ss --hold guided --resume w')
     monkeypatch.setattr(cw.session, '_latest_jsonl', lambda directory: 'session.jsonl')
     monkeypatch.setattr('sys.stdout.isatty', lambda: True)
     cw.session._replace_resume_hint(cw.session.HostWorktree('w', tmp_path))
-    assert 'cw ss --mode guided --resume w' in capsys.readouterr().out
+    assert 'cw ss --hold guided --resume w' in capsys.readouterr().out
 
   def test_silent_without_a_session_jsonl(self, monkeypatch, capsys, tmp_path):
     monkeypatch.setenv('CW_RESUME_COMMAND', 'cw ss --resume w')
@@ -348,7 +348,7 @@ class TestInPlaceArgv:
   def test_drops_machinery_flags_and_carries_the_rest(self):
     parts = _spec(
       host=True,
-      mode='guided',
+      hold='attended',
       fast=True,
       drop=True,
       effort='xhigh',
@@ -360,7 +360,7 @@ class TestInPlaceArgv:
       claude_args=['--foo'],
     ).to_in_place_argv()
     assert parts == [
-      'ss', '--in-place', '--fast', '--mode', 'guided',
+      'ss', '--in-place', '--fast', '--hold', 'attended',
       '--effort', 'xhigh', '--persona', 'pm', '--prompt=do it', 'w', '--foo',
     ]  # fmt: skip
 
@@ -541,11 +541,11 @@ class TestHostSession:
       return 5
 
     monkeypatch.setattr(cw.session, '_run_host_root_via_broker', fake_root)
-    spec = _spec(host=True, mode='guided', effort='xhigh', prompt='go', claude_args=['--foo'])
+    spec = _spec(host=True, hold='attended', effort='xhigh', prompt='go', claude_args=['--foo'])
     assert cw.session._host_session(spec, None) == 5
     assert roots[0]['name'] == 'w'
     assert roots[0]['command'] == [
-      str(cw_bin), 'ss', '--in-place', '--mode', 'guided', '--effort', 'xhigh', '--prompt=go', 'w', '--foo',
+      str(cw_bin), 'ss', '--in-place', '--hold', 'attended', '--effort', 'xhigh', '--prompt=go', 'w', '--foo',
     ]  # fmt: skip
     assert roots[0]['worktree'] == worktree
     assert roots[0]['project'] == tmp_path
@@ -580,11 +580,11 @@ class TestHostSession:
       return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(cw.session.subprocess, 'run', fake_run)
-    spec = _spec(host=True, mode='guided', effort='xhigh', prompt='go', claude_args=['--foo'])
+    spec = _spec(host=True, hold='attended', effort='xhigh', prompt='go', claude_args=['--foo'])
     assert cw.session._host_session(spec, None) == 0
     argv, kwargs = runs[0]
     assert argv == [
-      str(cw_bin), 'ss', '--in-place', '--mode', 'guided', '--effort', 'xhigh', '--prompt=go', 'w', '--foo',
+      str(cw_bin), 'ss', '--in-place', '--hold', 'attended', '--effort', 'xhigh', '--prompt=go', 'w', '--foo',
     ]  # fmt: skip
     assert kwargs['cwd'] == str(worktree)
     assert kwargs['env']['VIRTUAL_ENV'] == str(worktree / '.venv')

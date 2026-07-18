@@ -1,6 +1,6 @@
 from base.args import Parser
 
-DEFAULT_SESSION_MODE = 'attended'
+DEFAULT_HOLD = 'guided'
 
 
 def add_forwarded_flags(parser: Parser) -> None:
@@ -17,16 +17,18 @@ def add_forwarded_flags(parser: Parser) -> None:
   # imported here, not at module level: llm pulls asyncio (~150ms) and this
   # module sits on every `import cw`
   from llm.llm import EFFORT_LEVELS
-  from llm.mcp import MODES
+  from llm.mcp import HOLDS
 
+  # default None, not DEFAULT_HOLD: each wrapper resolves an omitted flag to
+  # its own default, and reconstruction then always carries the resolved value
   parser.add_argument(
-    '--mode',
-    default=DEFAULT_SESSION_MODE,
-    choices=MODES,
-    help='user-involvement level: unattended = no human channel, detached = launched and left, '
-    'attended = human watching while the work runs autonomously (default), guided = human drives '
-    'each step. every level but guided skips permission prompts (unsandboxed when combined with '
-    '--host)',
+    '--hold',
+    default=None,
+    choices=HOLDS,
+    help='how firmly the human holds the session: unattended = no human channel, detached = launched and left, '
+    'attended = human watching while the work runs autonomously, guided = human drives each step. '
+    'every level but guided skips permission prompts (unsandboxed when combined with --host). '
+    'default: guided for cw ss; attended for dive-in, guided for dive-in --host',
   )
   parser.add_argument(
     '--fast',

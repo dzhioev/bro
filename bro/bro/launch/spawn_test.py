@@ -75,6 +75,19 @@ class TestSummonLowering:
       bro.launch.spawn._lower_summon(launch, 'broker-CH')
     assert 'scoped secrets for summoned devoops: aws, trails' in caplog.text
 
+  def test_hold_rides_the_childs_inner_argv(self, lowering_harness):
+    launch = bro.launch.spawn.SummonLaunchSpec(
+      target='devoops',
+      prompt='deploy the thing',
+      parent_workspace=PARENT_WORKSPACE,
+      summoner=SUMMONER,
+      hold='attended',
+    )
+    lowered = bro.launch.spawn._lower_summon(launch, 'broker-CH')
+    assert lowered.launch.command == [
+      'bro', 'run', 'devoops', 'deploy the thing', '--hold', 'attended', '--in-place',
+    ]  # fmt: skip
+
   def test_into_overrides_the_inherited_base_ref(self, lowering_harness):
     launch = bro.launch.spawn.SummonLaunchSpec(
       target='devoops',

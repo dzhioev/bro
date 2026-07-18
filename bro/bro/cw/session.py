@@ -23,7 +23,7 @@ from cw.claude_config import (
   drop_workspace,
   workspace_projects_dir,
 )
-from cw.flags import DEFAULT_SESSION_MODE
+from cw.flags import DEFAULT_HOLD
 from workspace.containers import broker_enabled
 from workspace.docker import Launch, find_container_id
 from workspace.git import resolve_ref
@@ -47,7 +47,7 @@ class SessionSpec:
   name: str
   host: bool
   drop: bool
-  mode: str
+  hold: str
   fast: bool
   grant: list[str]
   revoke: list[str]
@@ -85,7 +85,7 @@ class SessionSpec:
     """reconstruct this session as `cw ss` argv tokens.
 
     used for CW_COMMAND (the session as launched) and, via resume_variant, the
-    exit resume hint — so both carry the same forwarded flags (--mode,
+    exit resume hint — so both carry the same forwarded flags (--hold,
     --grant, --effort, ...).
     """
     flags = {
@@ -95,8 +95,8 @@ class SessionSpec:
       '--resume': self.resume,
     }
     parts = ['cw', 'ss', *(f for f, v in flags.items() if v)]
-    if self.mode != DEFAULT_SESSION_MODE:
-      parts.extend(['--mode', self.mode])
+    if self.hold != DEFAULT_HOLD:
+      parts.extend(['--hold', self.hold])
     if self.effort is not None:
       parts.extend(['--effort', self.effort])
     if self.persona is not None:
@@ -123,8 +123,8 @@ class SessionSpec:
     joined `=` form so a prompt starting with `-` can't be mistaken for a flag."""
     flags = {'--fast': self.fast, '--resume': self.resume}
     parts = ['ss', '--in-place', *(f for f, v in flags.items() if v)]
-    if self.mode != DEFAULT_SESSION_MODE:
-      parts.extend(['--mode', self.mode])
+    if self.hold != DEFAULT_HOLD:
+      parts.extend(['--hold', self.hold])
     if self.effort is not None:
       parts.extend(['--effort', self.effort])
     if self.persona is not None:

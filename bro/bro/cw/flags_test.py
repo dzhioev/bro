@@ -33,19 +33,19 @@ class TestForwardedFlags:
     cw.flags.add_forwarded_flags(parser)
     assert parser.parse_args([]).effort == 'xhigh'
 
-  def test_mode_defaults_to_attended(self):
+  def test_hold_defaults_to_none_for_the_wrapper_to_resolve(self):
     parser = Parser(add_help=False)
     cw.flags.add_forwarded_flags(parser)
-    assert parser.parse_args([]).mode == 'attended'
+    assert parser.parse_args([]).hold is None
 
-  def test_extract_forwarded_argv_round_trips_mode(self):
+  def test_extract_forwarded_argv_round_trips_hold(self):
     parser = Parser(add_help=False)
     cw.flags.add_forwarded_flags(parser)
-    args = vars(parser.parse_args(['--mode', 'guided']))
-    assert cw.flags.extract_forwarded_argv(args) == ['--mode', 'guided']
+    args = vars(parser.parse_args(['--hold', 'guided']))
+    assert cw.flags.extract_forwarded_argv(args) == ['--hold', 'guided']
 
-  def test_extract_forwarded_argv_elides_the_default_mode(self):
+  def test_extract_forwarded_argv_elides_an_omitted_hold(self):
     parser = Parser(add_help=False)
     cw.flags.add_forwarded_flags(parser)
     args = vars(parser.parse_args([]))
-    assert '--mode' not in cw.flags.extract_forwarded_argv(args)
+    assert '--hold' not in cw.flags.extract_forwarded_argv(args)

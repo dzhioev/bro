@@ -205,7 +205,7 @@ def fork(
   )
   parent_system_prompt = _extract_system_prompt(parent_trail)
   effective_system_prompt = system_prompt if system_prompt is not None else parent_system_prompt
-  # `bro.system_prompt` is the raw prompt without the session-mode fragment;
+  # `bro.system_prompt` is the raw prompt without the hold fragment;
   # forks reuse the parent's exact text and skip BaseBro's fragment-appending
   # path (the parent's prompt — recorded in the trail — already has the
   # fragment baked in from its original run).
@@ -216,7 +216,7 @@ def fork(
   )
   bro._observer = bro._make_observer()
   inner_llm = spec.create_llm(
-    mcp_servers=bro._mcp_servers_for(interactive=True),
+    mcp_servers=bro._mcp_servers_for(hold='guided'),
     observer=bro._observer,
     tracker=bro._tracker,
     agent=bro.agent,

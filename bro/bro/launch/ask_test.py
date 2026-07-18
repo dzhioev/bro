@@ -37,7 +37,7 @@ class RecordBro(BaseBro):
   def _make_observer(self) -> Observer:
     return NullObserver()
 
-  def _create_llm(self, *, interactive: bool) -> LLM:
+  def _create_llm(self, *, hold: str) -> LLM:
     return self.mock_llm
 
 
@@ -97,6 +97,56 @@ def test_main_forwards_effort_into_container():
     assert command == ['bro', 'run', 'ppp-dev', 'hello', '--fast', '--effort', 'low', '--in-place']
 
 
+def test_main_forwards_hold_into_container():
+  with (
+    patch.dict('os.environ', {}, clear=False) as env,
+    patch('bro.launch.root.run_in_container', return_value=0) as run,
+  ):
+    env.pop('CW_IN_CONTAINER', None)
+    rc = main(['ask', 'ppp-dev', 'hello', '--hold', 'attended'])
+    assert rc == 0
+    command = run.call_args.args[0].command
+    assert command == [
+      'bro',
+      'run',
+      'ppp-dev',
+      'hello',
+      '--fast',
+      '--hold',
+      'attended',
+      '--in-place',
+    ]
+
+  # omitted, the flag stays off the inner argv — the run's own unattended default applies
+  with (
+    patch.dict('os.environ', {}, clear=False) as env,
+    patch('bro.launch.root.run_in_container', return_value=0) as run,
+  ):
+    env.pop('CW_IN_CONTAINER', None)
+    assert main(['ask', 'ppp-dev', 'hello']) == 0
+    assert '--hold' not in run.call_args.args[0].command
+
+
+def test_main_in_place_hold_reaches_the_run(monkeypatch):
+  holds: list[str] = []
+
+  class CaptureBro(RecordBro):
+    async def run(
+      self, input, observer=None, tracker=None, request_timeout=None, hold='unattended'
+    ):
+      holds.append(hold)
+      return 'ok'
+
+  with (
+    patch.dict('os.environ', {'CW_IN_CONTAINER': '1'}),
+    patch('bro.registry.get_class', return_value=CaptureBro),
+    patch('bro.registry.create_bro', return_value=CaptureBro()),
+  ):
+    assert main(['ask', 'record', 'hi', '--in-place']) is None
+    assert main(['ask', 'record', 'hi', '--hold', 'detached', '--in-place']) is None
+  assert holds == ['unattended', 'detached']
+
+
 def test_main_no_trails_disables_recording_in_container():
   with (
     patch.dict('os.environ', {}, clear=False) as env,
@@ -145,14 +195,14 @@ def test_main_summon_forwards_timeout_and_into():
   with patch('summon.relay_summon', return_value=0) as relay:
     rc = main(['ask', 'ppp-dev', 'hi', '--summon', '--timeout', '7200', '--into', 'feature-branch'])
   assert rc == 0
-  relay.assert_called_once_with('ppp-dev', 'hi', timeout=7200.0, into='feature-branch')
+  relay.assert_called_once_with('ppp-dev', 'hi', timeout=7200.0, into='feature-branch', hold=None)
 
 
 def test_main_summon_detaches(capsys):
   with patch('summon.summon_detached', return_value='REQUEST-ID') as detached:
     rc = main(['ask', 'ppp-dev', 'hi', '--summon', '--detach'])
   assert rc == 0
-  detached.assert_called_once_with('ppp-dev', 'hi', timeout=None, into=None)
+  detached.assert_called_once_with('ppp-dev', 'hi', timeout=None, into=None, hold=None)
   assert capsys.readouterr().out == 'REQUEST-ID\n'
 
 

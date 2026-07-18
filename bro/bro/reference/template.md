@@ -43,11 +43,11 @@ file      := prompt file name           file: [A-Za-z0-9._/-]+
 
 ## Rendering surfaces
 
-`llm.mcp.render_text(text, harness=…, wire=…, creds=…, mode=…)` renders directives against the facts the call site knows (the facts, `#mode`'s single-purpose supply rule included, are documented in `reference/conditions.md`) and resolves `{{include}}` targets through the `prompts.py` loader. Each surface renders its copy once, with its own facts:
+`llm.mcp.render_text(text, harness=…, wire=…, creds=…, hold=…)` renders directives against the facts the call site knows (the facts, `#hold`'s single-purpose supply rule included, are documented in `reference/conditions.md`) and resolves `{{include}}` targets through the `prompts.py` loader. Each surface renders its copy once, with its own facts:
 
 - `BaseBro.__init__` — the two bro prompt flavors (harness `bro`; wire `bare` / `mcp`)
 - `cw/system_prompt.py` — a cw-session's append prompt, the injected persona included (harness `claude`, wire `mcp`)
-- `prompts.mode_fragment` — the session-mode text (`prompts/session_mode.md` selecting over `prompts/session_modes/`), the only surface that supplies `#mode`
+- `prompts.hold_fragment` — the hold text (`prompts/hold.md` selecting over `prompts/holds/`), the only surface that supplies `#hold`
 - skill bodies — the `bro::skill` service tool serves harness `bro`; `cw` populates a cw-session with `claude`-rendered `SKILL.md` copies
 - tool descriptions and parameter annotations — rendered by the owning server at build time against its own vocabulary, not the harness facts (`#tools` for a `Toolset`'s roster, a data source's `#features` + `#source`; the bro service-tool build additionally injects `#wire`), so no unprocessed directive leaves a server and a standalone server serves final text — see `reference/conditions.md` "Server-domain vocabularies"
 - data-source summaries — `DataSource.rendered_summary()`, the source's vocabulary again, rendered where the prompt composes

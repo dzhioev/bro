@@ -154,6 +154,12 @@ class TestSummonHandler:
     assert launch.into == 'summon'
     assert timeout == 42.0
 
+  def test_hold_forwards_into_the_spawn(self, control):
+    context = FakeContext()
+    control.handle(context, ROOT, _summon_message(hold='attended'))
+    [(launch, _, _)] = context.spawned
+    assert launch.hold == 'attended'
+
   def test_container_session_key_names_the_container_workspace(self, tmp_path):
     control = _control(tmp_path, {'devoops'}, session='c:ws')
     context = FakeContext()
@@ -273,6 +279,7 @@ class TestSummonHandler:
       {'target': 'devoops', 'prompt': 'p', 'timeout': 'soon'},
       {'target': 'devoops', 'prompt': 'p', 'into': ''},
       {'target': 'devoops', 'prompt': 'p', 'timout': 60},  # typo'd key must not pass silently
+      {'target': 'devoops', 'prompt': 'p', 'hold': 'automatic'},
     ],
   )
   def test_malformed_payload_is_denied(self, control, payload):

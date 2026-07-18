@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """summon — request another bro on the session's broker channel and get its answer.
 
-The peer side of the summon mechanism: a `summon{target, prompt, timeout?, into?}`
+The peer side of the summon mechanism: a `summon{target, prompt, timeout?, into?, hold?}`
 request on the session channel, answered by the host-side handler (`bro/launch/summon_control.py`)
 with `started{trail_id}` and exactly one terminal (`completed` / `failed` /
 `reply{error}`). This module owns the request's wire contract — the type tag, the
@@ -108,13 +108,15 @@ def _open_client() -> 'Client':
 
 
 def _payload(
-  target: str, prompt: str, timeout: Optional[float], into: Optional[str]
+  target: str, prompt: str, timeout: Optional[float], into: Optional[str], hold: Optional[str]
 ) -> dict[str, Any]:
   payload: dict[str, Any] = {'target': target, 'prompt': prompt}
   if timeout is not None:
     payload['timeout'] = timeout
   if into is not None:
     payload['into'] = into
+  if hold is not None:
+    payload['hold'] = hold
   return payload
 
 
@@ -205,6 +207,7 @@ def summon_and_wait(
   *,
   timeout: Optional[float] = None,
   into: Optional[str] = None,
+  hold: Optional[str] = None,
   client: Optional['Client'] = None,
 ) -> str:
   """send one summon and block for the answer — the bro `summon` tool's default
@@ -213,18 +216,23 @@ def summon_and_wait(
   call. Raises `SummonError` on any failure."""
   if client is None:
     with _open_client() as owned:
-      return summon_and_wait(target, prompt, timeout=timeout, into=into, client=owned)
-  request = client.send(SUMMON, _payload(target, prompt, timeout, into))
+      return summon_and_wait(target, prompt, timeout=timeout, into=into, hold=hold, client=owned)
+  request = client.send(SUMMON, _payload(target, prompt, timeout, into, hold))
   return _await_answer(client, request, timeout=timeout if timeout is not None else DEFAULT_TIMEOUT)
 
 
 def summon_detached(
-  target: str, prompt: str, *, timeout: Optional[float] = None, into: Optional[str] = None
+  target: str,
+  prompt: str,
+  *,
+  timeout: Optional[float] = None,
+  into: Optional[str] = None,
+  hold: Optional[str] = None,
 ) -> str:
   """send one summon and return its request id without waiting — the bro `summon`
   tool's detach path. Collect with `collect_summon`, poll with `check_summon`."""
   with _open_client() as client:
-    return client.send(SUMMON, _payload(target, prompt, timeout, into)).id
+    return client.send(SUMMON, _payload(target, prompt, timeout, into, hold)).id
 
 
 @dataclass(frozen=True)
@@ -344,7 +352,12 @@ def list_summons() -> dict[str, Any]:
 
 
 def relay_summon(
-  target: str, prompt: str, *, timeout: Optional[float] = None, into: Optional[str] = None
+  target: str,
+  prompt: str,
+  *,
+  timeout: Optional[float] = None,
+  into: Optional[str] = None,
+  hold: Optional[str] = None,
 ) -> int:
   """send one summon and relay its outcome as a CLI would: the request id and
   the started trail id to stderr, the answer to stdout, any failure as an error
@@ -357,7 +370,7 @@ def relay_summon(
     log.error('%s', e)
     return 1
   with client:
-    request = client.send(SUMMON, _payload(target, prompt, timeout, into))
+    request = client.send(SUMMON, _payload(target, prompt, timeout, into, hold))
     log.info('summon request %s', request.id)
     effective = timeout if timeout is not None else DEFAULT_TIMEOUT
     return _relay(

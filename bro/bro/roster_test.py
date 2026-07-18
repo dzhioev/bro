@@ -21,7 +21,7 @@ from llm.mcp import MCPServer, Tool
 # (surface label, server-list builder) — the three consuming harnesses a bro's
 # declared components serve
 _SURFACES = [
-  ('bro-native', lambda bro: bro._mcp_servers_for(interactive=False)),
+  ('bro-native', lambda bro: bro._mcp_servers_for(hold='unattended')),
   ('claude-bro', lambda bro: bro.claude_bro_mcp_servers()),
   ('claude-persona', lambda bro: bro.claude_persona_mcp_servers()),
 ]

@@ -51,6 +51,7 @@ class SummonLaunchSpec(LaunchSpec):
   parent_workspace: Path
   summoner: dict[str, Any]
   into: Optional[str] = None
+  hold: Optional[str] = None
 
 
 def _workspace_name(channel: str) -> str:
@@ -77,9 +78,15 @@ def _lower_summon(launch: SummonLaunchSpec, workspace_name: str) -> DockerLaunch
     base_ref = resolve_head(project, launch.parent_workspace)
     if base_ref is None:
       raise ValueError(f"cannot read the summoner's HEAD at {launch.parent_workspace}")
+  # hold is the request's one child-facing field, so it rides the child's own
+  # `bro run` argv; the other fields are consumed host-side (into → the base
+  # ref above, timeout → the spawner's wait timer)
+  inner_args = [launch.prompt]
+  if launch.hold is not None:
+    inner_args.extend(['--hold', launch.hold])
   run = describe(
     launch.target,
-    [launch.prompt],
+    inner_args,
     workspace_name=workspace_name,
     verb='run',
     credential_instances=project_config().creds,
