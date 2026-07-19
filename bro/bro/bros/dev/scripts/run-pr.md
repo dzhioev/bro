@@ -72,7 +72,7 @@ The user's global `PreToolUse:Bash` hook reminds you of this before each `git co
 
 ### 4. Audit Dockerfiles
 
-If the diff adds, deletes, or renames `.py` files, check every `Dockerfile` in the repo (`find . -name Dockerfile -not -path '*/.venv/*' -not -path '*/node_modules/*'`). For each Dockerfile that selectively copies `.py` files from a directory containing the changed files (e.g. `COPY notion/__init__.py notion/notion.py ... /app/notion/`), verify the COPY line is up to date — add new files, remove deleted files. Fix any discrepancies directly and mention them to the user.
+If the diff adds, deletes, or renames `.py` files, check every `Dockerfile` in the repo (`find . -name Dockerfile -not -path '*/.venv/*' -not -path '*/node_modules/*'`). For each Dockerfile that selectively copies `.py` files from a directory containing the changed files (e.g. `COPY extra/notion/__init__.py extra/notion/notion.py ... /app/extra/notion/`), verify the COPY line is up to date — add new files, remove deleted files. Fix any discrepancies directly and mention them to the user.
 
 ### 5. Decide commit splits
 

@@ -123,8 +123,8 @@ def _flow_system(config: dict[str, Any], author: Optional[str]) -> System:
     notion = _required(config, 'notion')
     if not isinstance(notion, dict):
       raise ValueError('brog config: "notion" must be an object (the notion.json shape)')
+    from flow.notion.api import NotionAPI
     from flow.notion.system import System as NotionSystem
-    from notion.notion import NotionAPI
 
     return brog.flow_proxy.System(
       brog.flow_proxy.LocalTransport(NotionSystem(api=NotionAPI(notion))), author=author
