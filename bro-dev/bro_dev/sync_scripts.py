@@ -3,7 +3,7 @@
 
 scans every .py file for a callable, non-async top-level `main`. each such file
 produces a canonical script entry named after its full module path with the stem
-kebab-cased (e.g. flow/create_report.py -> flow.create-report). a module may
+kebab-cased (e.g. apps/create_report.py -> apps.create-report). a module may
 declare __cli_name__ = 'custom-name' to register an additional alias.
 
 CLIs expose a pure `def main(argv)` (no sys.argv default). a console script can't

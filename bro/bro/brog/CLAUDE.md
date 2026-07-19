@@ -22,7 +22,7 @@ Each backend is a `System` implementation; how brog concepts map onto the tracke
 - `model.py` — `Task` / `Project` / `Comment` / `Status`
 - `system.py` — the `System` ABC (the backend surface, parallel to `flow.System`), config parsing/validation, `build_system` / `default_system` (config given as a provider; author = the session persona from `CW_BRO`)
 - `flow_proxy.py` / `github.py` — the backends (see above)
-- `mcp.py` — the `brog` Toolset (`spec`), registered as a static server in the root `mcp_server.py`
+- `mcp.py` — the `brog` Toolset and its `spec` factory
 
 ## Testing
 

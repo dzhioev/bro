@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from base import log, spawn
-from mcp_server import BEARER_TOKEN_ENV
+from runtime.mcp_server import BEARER_TOKEN_ENV
 
 # how long a runner-owned server may take to bind. the bind needs only
 # mcp-server's cheap module imports (the heavy ones are deferred past it), so

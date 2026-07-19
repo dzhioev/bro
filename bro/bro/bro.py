@@ -893,7 +893,7 @@ class BaseBro(ABC):
 
   def claude_bro_mcp_servers(self) -> list[llm.mcp.MCPServer]:
     # the MCP servers a `cw ss --bro` Claude Code session mounts (through
-    # mcp_server.py's `bro:<name>` surface): declared servers, scripts, and the
+    # the generic server's `bro:<name>` surface): declared servers, scripts, and the
     # service tools. procedures serve the bro branch (`--bare` strips claude's
     # built-ins, so the session drives work through the bro toolset, not
     # Monitor/Bash) over mcp wire names. `raise` mounts only for an unattended
@@ -909,7 +909,7 @@ class BaseBro(ABC):
 
   def claude_persona_mcp_servers(self) -> list[llm.mcp.MCPServer]:
     # the MCP servers a cw-session themed as this bro mounts — claude's full
-    # harness with the bro as its persona, served through mcp_server.py's
+    # harness with the bro as its persona, served through the generic server's
     # `persona:<name>` surface: the declared servers and data sources that hold
     # on the claude harness — an entry gated to the bro harness (the dev
     # toolset, the reference FileSources) never mounts, claude's built-in tools

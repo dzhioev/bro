@@ -22,6 +22,8 @@ if TYPE_CHECKING:
 
   from llm.mcp import MCPServer, Tool
 
+__cli_name__ = 'mcp-server'
+
 BEARER_TOKEN_ENV = 'MCP_SERVER_BEARER_TOKEN'
 
 _BRO_PREFIX = 'bro:'

@@ -3,11 +3,11 @@ from typing import ClassVar
 import pytest
 from starlette.testclient import TestClient
 
-import mcp_server
 from bro.bro import BaseBro
 from bro.datasources.searchable import Hit, SearchableDataSource
 from llm.mcp import FunctionTool, InProcessMCPServer, MCPServer, MCPServerSpec, describe
-from mcp_server import _resolve_servers, create_http_app
+from runtime import mcp_server
+from runtime.mcp_server import _resolve_servers, create_http_app
 
 TOKEN = 'test-bearer-token'
 _MCP_HEADERS = {
