@@ -31,8 +31,7 @@ from types import TracebackType
 from typing import Any, Optional
 from urllib.parse import urlencode, urlparse
 
-import configs
-from base import credentials
+from base import configs, credentials
 from llm.tracker import (
   HTTPStatusError,
   Parent,

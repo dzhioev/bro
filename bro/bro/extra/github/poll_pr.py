@@ -11,7 +11,7 @@ from typing import Any, Optional
 
 from base import credentials
 from base.args import ArgumentTypeError, Parser
-from github import api
+from extra.github import api
 
 __cli_name__ = 'poll-pr'
 
@@ -178,7 +178,7 @@ def poll_pr(
     return login == repo_owner_login
 
   while True:
-    # `github.api` already retries transient blips per call; this guard is the
+    # `extra.github.api` already retries transient blips per call; this guard is the
     # second layer — if a whole cycle still fails on a transient error (a longer
     # outage), log and poll again next interval instead of exiting, preserving
     # the seen-id baselines. a non-transient error (404 — PR/repo gone) is fatal

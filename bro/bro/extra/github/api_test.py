@@ -7,7 +7,7 @@ from typing import Any, Optional
 
 import pytest
 
-from github import api
+from extra.github import api
 
 
 def _http_error(code: int, headers: Optional[dict[str, str]] = None) -> urllib.error.HTTPError:

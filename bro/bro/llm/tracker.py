@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any, Literal, Optional, TextIO
 from urllib.parse import urlparse
 
-import configs
+from base import configs
 from base.lulid import lulid
 
 # delays before each retry attempt for transient blips on per-step POSTs and

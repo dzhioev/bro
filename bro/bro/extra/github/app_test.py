@@ -7,7 +7,7 @@ import jwt
 import pytest
 
 from base import credentials
-from github import app
+from extra.github import app
 
 # throwaway RSA keypair, generated for this test file only
 _PRIVATE_KEY = """-----BEGIN PRIVATE KEY-----

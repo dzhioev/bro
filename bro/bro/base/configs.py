@@ -1,6 +1,6 @@
 import os
 
-DEFAULT_CONFIGS_DIR = os.path.join(os.path.dirname(__file__), '.configs')
+DEFAULT_CONFIGS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), '.configs')
 
 # the standalone host secret store. the credential resolver searches
 # DEFAULT_CONFIGS_DIR (where the deployed services synthesize their configs) then

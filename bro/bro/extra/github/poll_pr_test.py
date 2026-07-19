@@ -8,7 +8,7 @@ from typing import Any, Optional
 
 import pytest
 
-from github import poll_pr
+from extra.github import poll_pr
 
 
 def _http_error(code: int) -> urllib.error.HTTPError:

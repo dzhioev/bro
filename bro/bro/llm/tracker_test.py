@@ -7,7 +7,7 @@ from typing import Any, Optional
 
 import pytest
 
-import configs
+from base import configs
 from llm.tracker import (
   HTTPStatusError,
   HTTPTracker,

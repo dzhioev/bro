@@ -16,7 +16,7 @@ from typing import Any, Optional
 
 import brog.system
 from brog.model import Comment, Status, Task
-from github import api
+from extra.github import api
 
 _PAGE_SIZE = 100
 

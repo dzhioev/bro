@@ -4,7 +4,7 @@ from typing import Any, Optional
 import pytest
 
 import brog.github
-import github.api
+import extra.github.api
 from brog.github import System, origin_repo
 from brog.model import Comment
 
@@ -91,9 +91,9 @@ class _FakeAPI:
 @pytest.fixture
 def api(monkeypatch) -> _FakeAPI:
   fake = _FakeAPI()
-  monkeypatch.setattr(github.api, 'get', fake.get)
-  monkeypatch.setattr(github.api, 'post', fake.post)
-  monkeypatch.setattr(github.api, 'patch', fake.patch)
+  monkeypatch.setattr(extra.github.api, 'get', fake.get)
+  monkeypatch.setattr(extra.github.api, 'post', fake.post)
+  monkeypatch.setattr(extra.github.api, 'patch', fake.patch)
   return fake
 
 

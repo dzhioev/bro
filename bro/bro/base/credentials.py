@@ -13,7 +13,7 @@ synthesize `<project>/.configs` at runtime; on the host secrets live only in
 `~/.ppp`. `ssm` reads an AWS SSM parameter from the region the source names,
 for surfaces that resolve secrets from Parameter Store at runtime instead of
 carrying files. a minting type (a `MintingSource` subclass owned by a domain
-package, e.g. `github_app` in `github/app.py`) derives short-lived values
+package, e.g. `github_app` in `extra/github/app.py`) derives short-lived values
 from a minting config file found
 along the same local search path; the source keeps the minted value and
 re-mints as expiry nears, and such a secret — like any secret whose references
@@ -64,8 +64,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, ClassVar, Optional, Protocol
 
-import configs
-from base import log, template
+from base import configs, log, template
 from base.args import Parser
 from base.condition import StringVariable
 
@@ -318,11 +317,11 @@ def _source_from_dict(data: dict) -> Source:
   if type_name == SSMSource.TYPE:
     return SSMSource.from_dict(data)
   if type_name == 'github_app':
-    # deferred: github.app imports this module (its Source subclasses
+    # deferred: extra.github.app imports this module (its Source subclasses
     # MintingSource), so the back reference cannot be module-level
-    import github.app
+    import extra.github.app
 
-    return github.app.Source.from_dict(data)
+    return extra.github.app.Source.from_dict(data)
   raise ValueError(f'unknown credential source type: {type_name!r}')
 
 
