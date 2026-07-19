@@ -22,8 +22,8 @@ def _minted_github_git_email(store: credentials.Store) -> Optional[str]:
     email = config.get('git_email')
     if not isinstance(email, str):
       raise ValueError(
-        f'{source.TYPE} config {source.file!r} carries no git_email — add the app '
-        "bot's address, <bot-user-id>+<slug>[bot]@users.noreply.github.com"
+        f'{source.TYPE} config {source.file!r} carries no git_email — add the address '
+        'agent commits should carry'
       )
     return email
   return None
@@ -31,8 +31,8 @@ def _minted_github_git_email(store: credentials.Store) -> Optional[str]:
 
 def bro_git_identity_env(store: Optional[credentials.Store] = None) -> dict[str, str]:
   """the GIT_AUTHOR/COMMITTER_* environment carrying the bro git identity: the
-  app bot's address (`git_email` of the minting config backing the `github`
-  credential) when the store carries one, the legacy address otherwise."""
+  `git_email` of the minting config backing the `github` credential when the
+  store carries one, the legacy address otherwise."""
   if store is None:
     store = credentials.default_store()
   email = _minted_github_git_email(store)

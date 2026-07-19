@@ -292,6 +292,20 @@ class TestStore:
       credentials.Store({}).get('nope')
     assert exception.value.name == 'nope'
 
+  def test_resolve_flags_stored_value_cacheable(self, configs_dir: Path):
+    _write(configs_dir, 'notion.json', {'token': 't'})
+    store = self._store(credentials.Secret('notion', [credentials.LocalSource('notion.json')]))
+    assert store.resolve('notion') == ('{"token": "t"}', True)
+
+  def test_resolve_flags_minted_value_uncacheable(self, ppp_dir: Path):
+    _write(ppp_dir, 'ticket.json', {'prefix': 'ticket'})
+    store = self._store(credentials.Secret('sekret', [_TicketSource('ticket.json')]))
+    assert store.resolve('sekret') == ('ticket_1', False)
+
+  def test_resolve_returns_none_when_unresolvable(self, configs_dir: Path):
+    store = self._store(credentials.Secret('notion', [credentials.LocalSource('notion.json')]))
+    assert store.resolve('notion') is None
+
   def test_try_get_returns_value_when_resolvable(self, configs_dir: Path):
     _write(configs_dir, 'notion.json', {'token': 't'})
     store = self._store(credentials.Secret('notion', [credentials.LocalSource('notion.json')]))
@@ -962,6 +976,133 @@ class TestBuildScopedStore:
     assert store['github.cred'] == b'ghp_static'
     scoped = json.loads(store[credentials.REGISTRY_FILE])
     assert scoped['github']['sources'] == [{'file': 'github.cred'}]
+
+  def test_uncacheable_expansion_ships_references_intact(
+    self, configs_dir: Path, ppp_dir: Path, monkeypatch
+  ):
+    # a `$cred` chain reaching a minting source must not freeze the minted value
+    # into the store: the referrer ships its raw text, references intact, so the
+    # session re-expands per read against the scoped registry and mints fresh
+    _write(ppp_dir, 'ticket.json', {'prefix': 'ticket'})
+    _write(configs_dir, 'brog.secret', {'backend': 'github', 'token': {'$cred': 'github'}})
+    source = _TicketSource('ticket.json')
+    registry = {
+      'github': credentials.Secret('github', [source]),
+      'brog': credentials.Secret('brog', [credentials.LocalSource('brog.secret')]),
+    }
+    monkeypatch.setattr(credentials, '_load_registry', lambda: registry)
+    store = credentials.build_scoped_store(['brog', 'github'])
+    # the host-side resolve still validated the chain — and minted exactly once
+    assert source.mints == 1
+    assert b'$cred' in store['brog.cred']
+    assert json.loads(store['brog.cred']) == {'backend': 'github', 'token': {'$cred': 'github'}}
+    assert json.loads(store['github.cred']) == {'prefix': 'ticket'}
+    scoped = json.loads(store[credentials.REGISTRY_FILE])
+    assert scoped['brog']['sources'] == [{'file': 'brog.cred'}]
+    assert scoped['github']['sources'] == [{'type': 'ticket', 'file': 'github.cred'}]
+
+  def test_raw_shipped_secret_mints_fresh_in_session(
+    self, configs_dir: Path, ppp_dir: Path, monkeypatch, tmp_path: Path
+  ):
+    # end-to-end: land the scoped store on disk and resolve as the container
+    # would — each read re-expands the shipped references and observes a fresh
+    # mint from the shipped minting config
+    _write(ppp_dir, 'ticket.json', {'prefix': 'ticket'})
+    _write(configs_dir, 'brog.secret', {'backend': 'github', 'token': {'$cred': 'github'}})
+    registry = {
+      'github': credentials.Secret('github', [_TicketSource('ticket.json')]),
+      'brog': credentials.Secret('brog', [credentials.LocalSource('brog.secret')]),
+    }
+    original_load_registry = credentials._load_registry
+    monkeypatch.setattr(credentials, '_load_registry', lambda: registry)
+    files = credentials.build_scoped_store(['brog', 'github'])
+    dest = tmp_path / 'scoped'
+    dest.mkdir()
+    for filename, data in files.items():
+      (dest / filename).write_bytes(data)
+    monkeypatch.setattr(credentials, 'CONFIGS_DIR', str(tmp_path / 'absent'))
+    monkeypatch.setattr(credentials, 'PPP_DIR', str(dest))
+    monkeypatch.setattr(credentials, '_default_store', None)
+    # back to the real loader: the session resolves via the landed credentials.json
+    monkeypatch.setattr(credentials, '_load_registry', original_load_registry)
+    # give the scoped registry's `ticket` type a dispatch branch; zero lifetime
+    # makes every fetch a fresh mint, exposing whether reads re-expand
+    original_dispatch = credentials._source_from_dict
+
+    def dispatch(data: dict) -> credentials.Source:
+      if data.get('type') == _TicketSource.TYPE:
+        return _TicketSource(data['file'], expires_in=timedelta(0))
+      return original_dispatch(data)
+
+    monkeypatch.setattr(credentials, '_source_from_dict', dispatch)
+    session_store = credentials.default_store()
+    assert session_store.get_json('brog')['token'] == 'ticket_1'
+    assert session_store.get_json('brog')['token'] == 'ticket_2'
+
+  def test_variant_referrer_ships_raw_under_its_kind(
+    self, configs_dir: Path, ppp_dir: Path, monkeypatch
+  ):
+    # the kap topology: the launch selects the `brog+github` variant, whose
+    # config references the `github` kind backed by a minting source — the
+    # variant's raw text lands under `brog.cred`, references intact
+    _write(ppp_dir, 'ticket.json', {'prefix': 'ticket'})
+    _write(ppp_dir, 'brog_github.json', {'backend': 'github', 'token': {'$cred': 'github'}})
+    registry = {
+      'github': credentials.Secret('github', [_TicketSource('ticket.json')]),
+      'brog+github': credentials.Secret(
+        'brog+github', [credentials.LocalSource('brog_github.json')]
+      ),
+    }
+    monkeypatch.setattr(credentials, '_load_registry', lambda: registry)
+    store = credentials.build_scoped_store(['brog+github', 'github'])
+    assert set(store) == {'brog.cred', 'github.cred', credentials.REGISTRY_FILE}
+    assert b'$cred' in store['brog.cred']
+    assert set(json.loads(store[credentials.REGISTRY_FILE])) == {'brog', 'github'}
+
+  def test_shipped_reference_outside_scope_fails(
+    self, configs_dir: Path, ppp_dir: Path, monkeypatch
+  ):
+    # host-side the reference resolves (the host registry has the kind), but the
+    # session couldn't re-expand it — the referenced kind must be hydrated too
+    _write(ppp_dir, 'ticket.json', {'prefix': 'ticket'})
+    _write(configs_dir, 'brog.secret', {'backend': 'github', 'token': {'$cred': 'github'}})
+    registry = {
+      'github': credentials.Secret('github', [_TicketSource('ticket.json')]),
+      'brog': credentials.Secret('brog', [credentials.LocalSource('brog.secret')]),
+    }
+    monkeypatch.setattr(credentials, '_load_registry', lambda: registry)
+    with pytest.raises(ValueError, match="'github' is not in the scoped set"):
+      credentials.build_scoped_store(['brog'])
+
+  def test_optional_shipped_reference_outside_scope_fails(
+    self, configs_dir: Path, ppp_dir: Path, monkeypatch
+  ):
+    # the optional tier forgives absence, not misconfiguration: a resolvable
+    # optional secret whose shipped references escape the scope fails the build
+    _write(ppp_dir, 'ticket.json', {'prefix': 'ticket'})
+    _write(configs_dir, 'brog.secret', {'backend': 'github', 'token': {'$cred': 'github'}})
+    registry = {
+      'github': credentials.Secret('github', [_TicketSource('ticket.json')]),
+      'brog': credentials.Secret('brog', [credentials.LocalSource('brog.secret')]),
+    }
+    monkeypatch.setattr(credentials, '_load_registry', lambda: registry)
+    with pytest.raises(ValueError, match="'github' is not in the scoped set"):
+      credentials.build_scoped_store([], optional=['brog'])
+
+  def test_shipped_reference_must_be_kind_level(
+    self, configs_dir: Path, ppp_dir: Path, monkeypatch
+  ):
+    # an instance-spelled reference can never resolve in the kinds-only scoped
+    # namespace, even when the launch selected exactly that instance
+    _write(ppp_dir, 'ticket.json', {'prefix': 'ticket'})
+    _write(configs_dir, 'brog.secret', {'backend': 'github', 'token': {'$cred': 'github+bot'}})
+    registry = {
+      'github+bot': credentials.Secret('github+bot', [_TicketSource('ticket.json')]),
+      'brog': credentials.Secret('brog', [credentials.LocalSource('brog.secret')]),
+    }
+    monkeypatch.setattr(credentials, '_load_registry', lambda: registry)
+    with pytest.raises(ValueError, match='kind level'):
+      credentials.build_scoped_store(['brog', 'github+bot'])
 
   def test_empty_names_yields_only_registry(self, configs_dir: Path):
     # cw always cps a store in (even a zero-secret session), so the registry

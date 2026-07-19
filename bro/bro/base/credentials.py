@@ -45,9 +45,14 @@ that value is a json object, the raw text as a json string otherwise — and
 json-object secret. expansion runs inside the store's resolve, before caching,
 so every consumer (`get`, `get_json`, the CLI, `build_scoped_store`) sees the
 effective, self-contained value — in particular a scoped store materializes
-expanded text, keeping the container bounded to its declared secrets with no
-knowledge of the references. a reference that does not resolve, a malformed
-node, an absent field, or a reference cycle raises.
+expanded text for a cacheable expansion, keeping the container bounded to its
+declared secrets with no knowledge of the references. an expansion whose
+reference chain reaches a minting source is the exception: freezing it would
+strand the session on an expired value, so the scoped store ships the winning
+source's raw reference-preserving text instead and the session re-expands —
+and re-mints — per read; every referenced name must then be a kind hydrated
+into the scoped set (`build_scoped_store`). a reference that does not resolve,
+a malformed node, an absent field, or a reference cycle raises.
 """
 
 from __future__ import annotations
@@ -138,10 +143,12 @@ class Source(Protocol):
 
   def materialize_scoped(self, file: str, value: str) -> tuple[dict, bytes]:
     """the source's scoped-store representation: the registry source entry and
-    the bytes of the `file` it points at. `value` is the host-resolved text. a
-    stored source lands as a plain local entry over that value — the session
-    never learns the host source type; a minting source ships its own config
-    instead, so the session derives fresh values on read."""
+    the bytes of the `file` it points at. `value` is the text to embed — the
+    expanded host-resolved value, or the source's raw reference-preserving text
+    when the resolve was un-cacheable (`build_scoped_store` picks). a stored
+    source lands as a plain local entry over that value — the session never
+    learns the host source type; a minting source ships its own config instead,
+    so the session derives fresh values on read."""
     ...
 
 
@@ -316,6 +323,26 @@ def _contains_reference(node: Any) -> bool:
   return False
 
 
+def _referenced_names(text: str) -> set[str]:
+  """every `$cred` target named by a json secret's reference nodes; empty for
+  non-json text, which cannot carry references."""
+
+  def walk(node: Any) -> set[str]:
+    if isinstance(node, dict):
+      if _REFERENCE_KEY in node:
+        return {node[_REFERENCE_KEY]}
+      return {name for value in node.values() for name in walk(value)}
+    if isinstance(node, list):
+      return {name for item in node for name in walk(item)}
+    return set()
+
+  try:
+    tree = json.loads(text)
+  except json.JSONDecodeError:
+    return set()
+  return walk(tree)
+
+
 def _source_from_dict(data: dict) -> Source:
   """reconstruct a Source from its `type` discriminator (mirrors LLMSpec.from_dict);
   `type` defaults to `local` when omitted."""
@@ -396,13 +423,21 @@ class Store:
     as an expected case. `get` is the strict wrapper that raises on None. a
     malformed value (a broken reference, a non-UTF-8 file) still raises: absence
     is expected, corruption is not."""
+    resolved = self.resolve(name)
+    return resolved[0] if resolved is not None else None
+
+  def resolve(self, name: str) -> Optional[tuple[str, bool]]:
+    """resolve a secret to (value, cacheable), or None when no source yields a
+    value. cacheable is False when the winning source — or any source behind the
+    expanded references — declares its values un-cacheable, i.e. a later read
+    may observe a different (re-derived) value; `try_get`/`get` are the
+    value-only spellings."""
     # one lock around the whole resolve: a secret is fetched at most once even
     # under concurrent callers, and the store is read only a handful of times per
     # process (each value cached on first read), so a lock-free fast path buys
     # nothing.
     with self._lock:
-      resolved = self._resolve(name, chain=())
-      return resolved[0] if resolved is not None else None
+      return self._resolve(name, chain=())
 
   def _resolve(self, name: str, chain: tuple[str, ...]) -> Optional[tuple[str, bool]]:
     """fetch, expand, and cache one secret; `chain` is the stack of secrets whose
@@ -689,13 +724,24 @@ def build_scoped_store(names: Iterable[str], *, optional: Iterable[str] = ()) ->
   """build a per-container scoped credential store in memory.
 
   returns a map of relative file name to its bytes: one `{name}.cred` entry per
-  hydrated secret holding its resolved raw text (or, for a github_app-sourced
+  hydrated secret holding its resolved raw text (or, for a minting-sourced
   secret, its minting config, so the session mints fresh tokens on read), plus a
   generated `credentials.json` registry covering exactly those secrets and
   pointing each at its `{name}.cred`. materialising this map as the container's
   `~/.ppp` then bounds the container to this set; any other secret resolves to a
   clean `SecretNotFound`. The bytes never touch a host file — `cw` packs them
   into a tar and `docker cp`s them straight into the container.
+
+  every secret resolves fully on the host first — launch-time validation stays
+  strict, and a minting chain mints once here, failing loudly before the session
+  exists. a cacheable resolve embeds the expanded, self-contained value. an
+  un-cacheable one — the winning source, or a `$cred` reference chain, reaching
+  a minting source — must not freeze a short-lived value into the store, so the
+  winning source materializes its raw text with references intact and the
+  session re-expands (and re-mints) per read against the scoped registry. each
+  such reference must be spelled at kind level and land on a kind hydrated into
+  the scoped set (the scoped namespace is kinds-only) — one outside the scope
+  fails the build.
 
   a `kind+instance` name materializes under its kind name: the scoped registry
   entry and its `.cred` file are named by the kind, hydrated from the variant's
@@ -725,14 +771,25 @@ def build_scoped_store(names: Iterable[str], *, optional: Iterable[str] = ()) ->
   store = Store(registry)
   files: dict[str, bytes] = {}
   scoped: dict[str, dict] = {}
+  shipped_references: dict[str, set[str]] = {}
 
-  def materialize(name: str, value: str, secret: Secret) -> None:
+  def materialize(name: str, value: str, cacheable: bool, secret: Secret) -> None:
     # resolve generically on the host (doubling as launch-time validation), then
     # let the winning source pick its scoped representation under a uniform
     # `{kind}.cred` — Source.materialize_scoped owns the per-source semantics
     kind, _ = parse_name(name)
     file = f'{kind}.cred'
-    entry_source, content = store.winning_source(name).materialize_scoped(file, value)
+    source = store.winning_source(name)
+    if not cacheable:
+      # an expansion that reached a minting source: materialize the winning
+      # source's raw text, references intact, so the session re-expands — and
+      # re-mints — per read; _require_references_in_scope covers the references
+      raw = source.fetch()
+      if raw is None:
+        raise ValueError(f'secret {name!r} disappeared during hydration')
+      value = raw.strip()
+      shipped_references[name] = _referenced_names(value)
+    entry_source, content = source.materialize_scoped(file, value)
     files[file] = content
     entry: dict = {'sources': [entry_source]}
     install = secret.install_for(kind)
@@ -744,20 +801,44 @@ def build_scoped_store(names: Iterable[str], *, optional: Iterable[str] = ()) ->
     secret = registry.get(name)
     if secret is None:
       raise ValueError(f'unknown secret {name!r} declared in manifest; not in the registry')
-    value = store.get(name)  # strict: SecretNotFound propagates on a missing value
-    materialize(name, value, secret)
+    resolved = store.resolve(name)
+    if resolved is None:  # strict: a declared name with no value fails the build
+      raise SecretNotFound(name)
+    value, cacheable = resolved
+    materialize(name, value, cacheable, secret)
   for name in sorted(set(optional) - set(names)):
     secret = registry.get(name)
     if secret is None:
       log.debug('optional secret %r not in the registry; skipping', name)
       continue
-    value = store.try_get(name)
-    if value is None:
+    resolved = store.resolve(name)
+    if resolved is None:
       log.debug('optional secret %r unresolvable; skipping', name)
       continue
-    materialize(name, value, secret)
+    value, cacheable = resolved
+    materialize(name, value, cacheable, secret)
+  _require_references_in_scope(shipped_references, set(scoped))
   files[REGISTRY_FILE] = json.dumps(scoped).encode()
   return files
+
+
+def _require_references_in_scope(shipped: dict[str, set[str]], scoped_kinds: set[str]) -> None:
+  """reject a reference-preserving materialization whose in-session expansion
+  could not resolve: every `$cred` target of a raw-shipped secret must name a
+  kind hydrated into the scoped set (the scoped namespace is kinds-only)."""
+  for name in sorted(shipped):
+    for reference in sorted(shipped[name]):
+      kind, instance = parse_name(reference)
+      if instance is not None:
+        raise ValueError(
+          f'secret {name!r} ships reference-preserving text; reference {reference!r} '
+          f'must be spelled at kind level ({kind!r}) — the scoped namespace is kinds-only'
+        )
+      if kind not in scoped_kinds:
+        raise ValueError(
+          f'secret {name!r} ships reference-preserving text; referenced kind '
+          f'{reference!r} is not in the scoped set'
+        )
 
 
 def apply_grant_revoke(
