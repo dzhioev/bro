@@ -15,7 +15,7 @@ Two layers, both computed per broker root:
   those feed: a host-side log line per event, an append-only JSONL audit file
   (the out-of-band trace a session's own narrative cannot suppress; every entry
   names the actual summoner), and the summon-status file the session's
-  statusLine renders (`session-log-statusline` reads it via the
+  statusLine renders (`session-log.statusline` reads it via the
   `CW_SUMMON_STATUS` env var each launch surface points at it).
 
 Authorization is per-peer. The root follows the launch-computed effective list

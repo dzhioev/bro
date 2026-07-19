@@ -74,7 +74,7 @@ __cli_name__ = 'summon'
 
 SUMMON = 'summon'  # the request's message-type tag (a consumer tag; not in broker's Tag)
 # points a session at its summon-status file — set by the launch surfaces
-# (bro/launch/summon_control.py owns the writer), read by `session-log-statusline`
+# (bro/launch/summon_control.py owns the writer), read by `session-log.statusline`
 STATUS_ENV = 'CW_SUMMON_STATUS'
 SUMMONER_ENV = 'CW_SUMMONER'
 # request-lifecycle bound for a summoned child — sized so the flagship deploy

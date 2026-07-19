@@ -1,6 +1,6 @@
 """durable health state for session-log sync.
 
-`sync-session-log` writes this file after every attempt; `session-log-statusline`
+`sync-session-log` writes this file after every attempt; `session-log.statusline`
 and `cw banner` read it (no network) to warn when sync is failing. Without it a
 broken sync is silent — the daemon's stderr goes to a per-session log file
 (`<claude config dir>/session-log-sync.log`) nobody watches live.

@@ -23,8 +23,6 @@ from typing import Any, Optional
 from bro.summon import STATUS_ENV
 from session_log import health
 
-__cli_name__ = 'session-log-statusline'
-
 # how long the last terminal outcome stays on the status line; after that the
 # default status bar comes back
 _LAST_OUTCOME_TTL = 900.0
