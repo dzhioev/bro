@@ -186,11 +186,13 @@ def _format_trail_row(trail: dict, colors: _Colors) -> str:
   started = _format_timestamp(trail.get('started_at'))
   ended_raw = trail.get('ended_at')
   end_reason = trail.get('end_reason')
-  status = (
-    f'{colors.green}done:{end_reason}{colors.reset}'
-    if ended_raw is not None
-    else f'{colors.yellow}live{colors.reset}'
-  )
+  if ended_raw is None:
+    status = f'{colors.yellow}live{colors.reset}'
+  elif end_reason == 'lost':
+    # server-stamped by the sweep: recording went silent without a real end.
+    status = f'{colors.red}lost{colors.reset}'
+  else:
+    status = f'{colors.green}done:{end_reason}{colors.reset}'
   parent = trail.get('parent')
   parent_tag = ''
   if parent is not None:

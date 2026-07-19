@@ -1,12 +1,14 @@
 import http.client
 import json
 import logging
+import threading
 import time
 from pathlib import Path
 from typing import Any, Optional
 
 import pytest
 
+import llm.tracker
 from base import configs
 from llm.tracker import (
   HTTPStatusError,
@@ -316,6 +318,10 @@ def _install_fake_connection(monkeypatch: pytest.MonkeyPatch) -> _FakeConnection
   # the retry loop sleeps between attempts; skip the wall-clock wait so tests
   # finish in microseconds rather than seconds.
   monkeypatch.setattr(time, 'sleep', lambda _: None)
+  # park the keepalive thread of any trail started under this fake: at the
+  # default cadence it would outlive the test's wiring and hit the real
+  # network. keepalive tests override the interval downwards themselves.
+  monkeypatch.setattr(llm.tracker, 'KEEPALIVE_INTERVAL_SECONDS', 3600.0)
   return fake
 
 
@@ -583,3 +589,86 @@ class TestHTTPTrackerEndTrail:
       tracker.end_trail('terminal')
     assert any('end_trail failed' in record.message for record in caplog.records)
     assert tracker._trail_id is None
+
+
+class TestHTTPTrackerKeepalive:
+  def _start(self, monkeypatch, interval: float) -> tuple[HTTPTracker, _FakeConnection]:
+    fake = _install_fake_connection(monkeypatch)
+    monkeypatch.setattr(llm.tracker, 'KEEPALIVE_INTERVAL_SECONDS', interval)
+    fake.queue((201, b'{"trail_id": "T1"}'))
+    tracker = HTTPTracker('https://trails.example', 'tok')
+    tracker.start_trail(
+      bro='b', llm_spec={}, system_prompt='', parent=None, interactive=False, entry_point='x'
+    )
+    return tracker, fake
+
+  def _keepalive_requests(self, fake: _FakeConnection) -> list:
+    return [r for r in fake.requests if r[1] == '/v1/trails/T1/keepalive']
+
+  def test_keepalive_posts_during_a_quiet_stretch(self, monkeypatch):
+    tracker, fake = self._start(monkeypatch, interval=0.02)
+    for _ in range(50):
+      fake.queue((204, b''))
+    deadline = time.monotonic() + 5.0
+    while len(self._keepalive_requests(fake)) == 0 and time.monotonic() < deadline:
+      threading.Event().wait(0.01)
+    requests = self._keepalive_requests(fake)
+    assert len(requests) > 0
+    method, _, _, headers = requests[0]
+    assert method == 'POST'
+    assert headers['Authorization'] == 'Bearer tok'
+    tracker.end_trail('terminal')
+
+  def test_no_keepalive_while_writes_flow(self, monkeypatch):
+    tracker, fake = self._start(monkeypatch, interval=0.5)
+    for _ in range(5):
+      fake.queue((204, b''))
+      tracker.step('assistant', 'x')
+      threading.Event().wait(0.02)
+    fake.queue((204, b''))
+    tracker.end_trail('terminal')
+    thread = tracker._keepalive_thread
+    assert thread is not None
+    thread.join(2.0)
+    assert not thread.is_alive()
+    assert len(self._keepalive_requests(fake)) == 0
+
+  def test_end_trail_stops_the_keepalive_thread(self, monkeypatch):
+    tracker, fake = self._start(monkeypatch, interval=0.02)
+    for _ in range(50):
+      fake.queue((204, b''))
+    thread = tracker._keepalive_thread
+    assert thread is not None and thread.is_alive()
+    tracker.end_trail('terminal')
+    thread.join(2.0)
+    assert not thread.is_alive()
+
+  def test_close_stops_the_keepalive_thread(self, monkeypatch):
+    tracker, _ = self._start(monkeypatch, interval=3600.0)
+    thread = tracker._keepalive_thread
+    assert thread is not None and thread.is_alive()
+    tracker.close()
+    thread.join(2.0)
+    assert not thread.is_alive()
+
+  def test_keepalive_failure_is_swallowed_and_recording_continues(self, monkeypatch, caplog):
+    tracker, fake = self._start(monkeypatch, interval=0.02)
+    # the keepalive POST and its one retry both fail; recording must go on.
+    fake.queue((500, b'oops'))
+    fake.queue((500, b'oops'))
+    deadline = time.monotonic() + 5.0
+    with caplog.at_level(logging.WARNING):
+      while len(self._keepalive_requests(fake)) < 2 and time.monotonic() < deadline:
+        threading.Event().wait(0.01)
+      # park the thread before sharing the response queue with the main
+      # thread again; one straggler wake may still consume a queued response,
+      # so the queue below carries a spare.
+      monkeypatch.setattr(llm.tracker, 'KEEPALIVE_INTERVAL_SECONDS', 3600.0)
+      threading.Event().wait(0.2)
+    assert len(self._keepalive_requests(fake)) >= 2
+    assert any('keepalive failed' in record.message for record in caplog.records)
+    for _ in range(3):
+      fake.queue((204, b''))
+    tracker.step('assistant', 'x')
+    assert any(r[1] == '/v1/trails/T1/steps' for r in fake.requests)
+    tracker.end_trail('terminal')

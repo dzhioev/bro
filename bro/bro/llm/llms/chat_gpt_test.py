@@ -503,6 +503,33 @@ class TestParseResponse:
       parse_response(response)
 
 
+class TestReplyExtractionFallback:
+  # once the tool loop is done every side effect has landed, so send() must
+  # not fail the run over a reply-extraction edge when terminal text exists.
+
+  @pytest.mark.asyncio
+  async def test_send_falls_back_to_message_text_when_extraction_raises(self):
+    gpt, _, captured = _make_chat_gpt_with_tracker()
+    refusal = SimpleNamespace(type='refusal', refusal='cannot help with that')
+    terminal = _fake_response(
+      output=[
+        SimpleNamespace(type='message', content=[refusal]),
+        _message_item('the work landed'),
+      ]
+    )
+    _install_responses(gpt, [terminal], captured)
+    assert await gpt.send([{'role': 'user', 'content': 'hi'}]) == 'the work landed'
+
+  @pytest.mark.asyncio
+  async def test_send_raises_when_terminal_response_has_no_text(self):
+    gpt, _, captured = _make_chat_gpt_with_tracker()
+    refusal = SimpleNamespace(type='refusal', refusal='cannot help with that')
+    terminal = _fake_response(output=[SimpleNamespace(type='message', content=[refusal])])
+    _install_responses(gpt, [terminal], captured)
+    with pytest.raises(RuntimeError, match='cannot help with that'):
+      await gpt.send([{'role': 'user', 'content': 'hi'}])
+
+
 class TestReasoningKwargs:
   def test_include_added_when_reasoning_effort_set(self):
     gpt = ChatGPT(api_key='dummy', reasoning_effort='medium')

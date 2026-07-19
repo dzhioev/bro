@@ -10,6 +10,7 @@ triple `{trail_id, <index PK>, started_at}` the cursor round-trip must survive.
 
 import io
 import json
+from datetime import UTC, datetime, timedelta
 from typing import Optional
 
 import pytest
@@ -18,6 +19,7 @@ from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 from trails.server.storage import (
   GSI_PK_ATTRIBUTE,
   GSI_PK_VALUE,
+  LOST_AFTER_SECONDS,
   SPILLOVER_THRESHOLD_BYTES,
   Storage,
   TrailNotFound,
@@ -267,8 +269,10 @@ class _FakeStepsDynamo:
   def __init__(self, existing_trails: Optional[set[str]] = None):
     self._steps: list[dict] = []
     self._existing_trails = existing_trails
+    self.transactions: list[list[dict]] = []
 
   def transact_write_items(self, *, TransactItems):
+    self.transactions.append(TransactItems)
     reasons: list[dict] = []
     staged: list[dict] = []
     failed = False
@@ -443,3 +447,207 @@ async def test_retried_end_is_idempotent():
   second = await store.end_trail(trail_id='T1', reason='terminal', continuation=None, step_id='E1')
   assert len([s for s in dynamo._steps if s['step_id'] == 'E1']) == 1
   assert second.get('duplicate') is True
+
+
+# liveness: create/put_step/end_trail keep last_alive_at fresh, keepalive
+# refreshes it on demand, and the sweep stamps stale live headers as lost.
+
+
+class _SweepDynamo:
+  """fake for the keepalive + sweep paths: the all-index query (single page),
+  the newest-step lookup, and the two conditional `update_item` shapes storage
+  issues (keepalive refresh, lost stamp)."""
+
+  class exceptions:
+    class ConditionalCheckFailedException(Exception):
+      pass
+
+  def __init__(self, trails: list[dict], steps: Optional[list[dict]] = None):
+    self.trails = {t['trail_id']: dict(t) for t in trails}
+    self.steps = list(steps) if steps is not None else []
+
+  def query(self, **kwargs):
+    values = {
+      k: _deserializer.deserialize(v) for k, v in kwargs['ExpressionAttributeValues'].items()
+    }
+    if kwargs.get('IndexName') == 'all-index':
+      matched = [
+        t
+        for t in self.trails.values()
+        if t.get(GSI_PK_ATTRIBUTE) == values[':pk']
+        and (':lo' not in values or t['started_at'] >= values[':lo'])
+      ]
+      ordered = sorted(matched, key=lambda t: t['started_at'], reverse=True)
+      return {'Items': [_ser(t) for t in ordered]}
+    matched = [s for s in self.steps if s['trail_id'] == values[':tid']]
+    ordered = sorted(matched, key=lambda s: s['step_id'], reverse=True)
+    return {'Items': [_ser(s) for s in ordered[: kwargs['Limit']]]}
+
+  def update_item(self, **kwargs):
+    trail = self.trails.get(_des(kwargs['Key'])['trail_id'])
+    values = {
+      k: _deserializer.deserialize(v) for k, v in kwargs['ExpressionAttributeValues'].items()
+    }
+    expression = kwargs['UpdateExpression']
+    if expression == 'SET last_alive_at = :ts':
+      if trail is None:
+        raise self.exceptions.ConditionalCheckFailedException()
+      trail['last_alive_at'] = values[':ts']
+    elif expression == 'SET ended_at = :ts, end_reason = :reason':
+      if trail is None or trail.get('ended_at') is not None:
+        raise self.exceptions.ConditionalCheckFailedException()
+      trail['ended_at'] = values[':ts']
+      trail['end_reason'] = values[':reason']
+    else:
+      raise AssertionError(f'unexpected update expression: {expression}')
+
+
+def _iso(moment: datetime) -> str:
+  return moment.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+
+
+def _live_header(
+  trail_id: str,
+  *,
+  started_at: str,
+  last_alive_at: Optional[str],
+  ended_at: Optional[str] = None,
+) -> dict:
+  item = {
+    'trail_id': trail_id,
+    'bro': 'dev',
+    'started_at': started_at,
+    'ended_at': ended_at,
+    'end_reason': None if ended_at is None else 'terminal',
+    GSI_PK_ATTRIBUTE: GSI_PK_VALUE,
+  }
+  if last_alive_at is not None:
+    item['last_alive_at'] = last_alive_at
+  return item
+
+
+def _sweep_store(dynamo: _SweepDynamo) -> Storage:
+  return Storage(
+    dynamo=dynamo, s3=None, trails_table='trails', steps_table='trail_steps', bucket='bucket'
+  )
+
+
+_STALE = timedelta(seconds=LOST_AFTER_SECONDS * 2)
+_FRESH = timedelta(seconds=LOST_AFTER_SECONDS // 2)
+
+
+@pytest.mark.asyncio
+async def test_create_trail_seeds_last_alive_at():
+  dynamo = _CreateDynamo()
+  store = Storage(
+    dynamo=dynamo, s3=None, trails_table='trails', steps_table='trail_steps', bucket='bucket'
+  )
+  await store.create_trail(
+    bro='dev',
+    bro_version=1,
+    llm_spec={},
+    system_prompt='prompt',
+    parent=None,
+    interactive=False,
+    entry_point='cli:bro_run',
+    summoner=None,
+  )
+  item = _des(dynamo.transaction_items[0]['Put']['Item'])
+  assert item['last_alive_at'] == item['started_at']
+
+
+@pytest.mark.asyncio
+async def test_put_step_refreshes_last_alive_at():
+  store, dynamo, _ = _spill_store()
+  await store.put_step(trail_id='T1', kind='reasoning', body='x', extras={}, step_id='S1')
+  update = dynamo.transactions[0][1]['Update']
+  assert 'last_alive_at = :alive' in update['UpdateExpression']
+
+
+@pytest.mark.asyncio
+async def test_end_trail_refreshes_last_alive_at():
+  store, dynamo, _ = _spill_store()
+  await store.end_trail(trail_id='T1', reason='terminal', continuation=None, step_id='E1')
+  update = dynamo.transactions[0][1]['Update']
+  assert 'last_alive_at = :ts' in update['UpdateExpression']
+
+
+@pytest.mark.asyncio
+async def test_keepalive_updates_last_alive_at():
+  now = datetime.now(UTC)
+  dynamo = _SweepDynamo([_live_header('T1', started_at=_iso(now), last_alive_at=_iso(now))])
+  store = _sweep_store(dynamo)
+  result = await store.keepalive('T1')
+  assert dynamo.trails['T1']['last_alive_at'] == result['last_alive_at']
+
+
+@pytest.mark.asyncio
+async def test_keepalive_missing_trail_raises():
+  store = _sweep_store(_SweepDynamo([]))
+  with pytest.raises(TrailNotFound):
+    await store.keepalive('ghost')
+
+
+@pytest.mark.asyncio
+async def test_sweep_stamps_stale_live_trail_lost():
+  now = datetime.now(UTC)
+  stale = _iso(now - _STALE)
+  dynamo = _SweepDynamo(
+    [_live_header('T1', started_at=_iso(now - _STALE * 2), last_alive_at=stale)]
+  )
+  swept = await _sweep_store(dynamo).sweep_lost()
+  assert swept == ['T1']
+  assert dynamo.trails['T1']['ended_at'] == stale
+  assert dynamo.trails['T1']['end_reason'] == 'lost'
+
+
+@pytest.mark.asyncio
+async def test_sweep_leaves_fresh_and_ended_trails():
+  now = datetime.now(UTC)
+  fresh = _live_header('T-fresh', started_at=_iso(now - _STALE), last_alive_at=_iso(now - _FRESH))
+  ended = _live_header(
+    'T-ended',
+    started_at=_iso(now - _STALE),
+    last_alive_at=_iso(now - _STALE),
+    ended_at=_iso(now - _FRESH),
+  )
+  dynamo = _SweepDynamo([fresh, ended])
+  swept = await _sweep_store(dynamo).sweep_lost()
+  assert swept == []
+  assert dynamo.trails['T-fresh'].get('ended_at') is None
+  assert dynamo.trails['T-ended']['end_reason'] == 'terminal'
+
+
+@pytest.mark.asyncio
+async def test_sweep_falls_back_to_newest_step_ts():
+  # pre-keepalive header: no last_alive_at, so the newest step is the activity
+  # record — a stale one dates the loss, a fresh one keeps the trail live.
+  now = datetime.now(UTC)
+  stale_ts = _iso(now - _STALE)
+  headers = [
+    _live_header('T-stale', started_at=_iso(now - _STALE * 2), last_alive_at=None),
+    _live_header('T-fresh', started_at=_iso(now - _STALE * 2), last_alive_at=None),
+  ]
+  steps = [
+    {'trail_id': 'T-stale', 'step_id': 'S1', 'ts': _iso(now - _STALE * 2), 'kind': 'user_input'},
+    {'trail_id': 'T-stale', 'step_id': 'S2', 'ts': stale_ts, 'kind': 'assistant'},
+    {'trail_id': 'T-fresh', 'step_id': 'S3', 'ts': _iso(now - _FRESH), 'kind': 'assistant'},
+  ]
+  dynamo = _SweepDynamo(headers, steps)
+  swept = await _sweep_store(dynamo).sweep_lost()
+  assert swept == ['T-stale']
+  # ended_at reflects when the trail actually went silent, not sweep time.
+  assert dynamo.trails['T-stale']['ended_at'] == stale_ts
+  assert dynamo.trails['T-fresh'].get('ended_at') is None
+
+
+@pytest.mark.asyncio
+async def test_sweep_ignores_trails_outside_window():
+  now = datetime.now(UTC)
+  old = _live_header(
+    'T-old', started_at=_iso(now - timedelta(days=90)), last_alive_at=_iso(now - _STALE)
+  )
+  dynamo = _SweepDynamo([old])
+  swept = await _sweep_store(dynamo).sweep_lost()
+  assert swept == []
+  assert dynamo.trails['T-old'].get('ended_at') is None

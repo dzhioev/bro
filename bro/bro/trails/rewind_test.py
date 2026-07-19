@@ -160,6 +160,22 @@ class TestFormatTrailRow:
     assert 'done:terminal' in out
     assert 'fork-of T-parent-xyz' in out
 
+  def test_lost_trail(self):
+    out = _format_trail_row(
+      {
+        'trail_id': 'T-lost',
+        'bro': 'dev',
+        'llm_spec': {'model': 'gpt-5'},
+        'started_at': '2026-06-07T22:14:03.000000Z',
+        'ended_at': '2026-06-07T22:15:00.000000Z',
+        'end_reason': 'lost',
+        'parent': None,
+      },
+      NO_COLOR,
+    )
+    assert 'lost' in out
+    assert 'done:' not in out
+
 
 class TestFormatTrailHeader:
   def test_render_includes_aggregates_and_parent(self):

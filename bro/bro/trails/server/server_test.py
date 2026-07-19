@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from trails.server import storage
@@ -23,6 +25,7 @@ class FakeStorage:
     self.steps: dict[str, list[dict]] = {}
     self._counter = 0
     self.raise_body_too_large = False
+    self.sweep_calls = 0
 
   def _new_id(self) -> str:
     self._counter += 1
@@ -110,6 +113,17 @@ class FakeStorage:
       }
     )
     return {'ended_at': timestamp}
+
+  async def keepalive(self, trail_id):
+    if trail_id not in self.trails:
+      raise storage.TrailNotFound(trail_id)
+    timestamp = self._now()
+    self.trails[trail_id]['last_alive_at'] = timestamp
+    return {'last_alive_at': timestamp}
+
+  async def sweep_lost(self):
+    self.sweep_calls += 1
+    return []
 
   async def get_trail(self, trail_id):
     return self.trails.get(trail_id)
@@ -444,6 +458,60 @@ class TestEndTrail:
       headers=_auth(),
     )
     assert response.status == 404
+
+  @pytest.mark.asyncio
+  async def test_lost_reason_rejected(self, client):
+    # 'lost' is minted only by the server's sweep; a client must not send it.
+    cli = await client
+    trail_id = await self._make_trail(cli)
+    response = await cli.post(
+      f'/v1/trails/{trail_id}/end',
+      json={'reason': 'lost'},
+      headers=_auth(),
+    )
+    assert response.status == 400
+
+
+class TestKeepalive:
+  async def _make_trail(self, cli) -> str:
+    response = await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
+    return (await response.json())['trail_id']
+
+  @pytest.mark.asyncio
+  async def test_happy_path_stamps_last_alive_at(self, client, store):
+    cli = await client
+    trail_id = await self._make_trail(cli)
+    response = await cli.post(f'/v1/trails/{trail_id}/keepalive', json={}, headers=_auth())
+    assert response.status == 204
+    assert store.trails[trail_id]['last_alive_at'] is not None
+
+  @pytest.mark.asyncio
+  async def test_unknown_trail_404(self, client):
+    cli = await client
+    response = await cli.post('/v1/trails/ghost/keepalive', json={}, headers=_auth())
+    assert response.status == 404
+
+  @pytest.mark.asyncio
+  async def test_auth_required(self, client):
+    cli = await client
+    response = await cli.post('/v1/trails/ghost/keepalive', json={})
+    assert response.status == 401
+
+
+class TestSweepLoop:
+  @pytest.mark.asyncio
+  async def test_sweep_runs_periodically(self, aiohttp_client, store):
+    await aiohttp_client(create_app(store, TOKEN, sweep_interval_seconds=0.01))
+    deadline = asyncio.get_running_loop().time() + 2.0
+    while store.sweep_calls < 2 and asyncio.get_running_loop().time() < deadline:
+      await asyncio.sleep(0.01)
+    assert store.sweep_calls >= 2
+
+  @pytest.mark.asyncio
+  async def test_no_sweep_without_interval(self, aiohttp_client, store):
+    await aiohttp_client(create_app(store, TOKEN))
+    await asyncio.sleep(0.05)
+    assert store.sweep_calls == 0
 
 
 class TestGetTrail:

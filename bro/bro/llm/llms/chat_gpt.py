@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, ClassVar, Literal, Optional, Self, cast, get_a
 
 import llm.llm
 import usage
-from base import credentials
+from base import credentials, log
 from llm.mcp import MCPServer, Tool, ToolControlSignal
 from llm.observer import Observer
 from llm.tracker import Tracker
@@ -201,18 +201,23 @@ def extract_reply_messages(output: list[ResponseOutputItem]) -> list[ResponseOut
   return final_answers if len(final_answers) > 0 else messages
 
 
-def parse_response(response: Response) -> str:
-  messages = extract_reply_messages(response.output)
+def _message_texts(messages: list[ResponseOutputMessage]) -> list[str]:
   texts = []
   for message in messages:
-    chunks = []
+    chunks = [item.text for item in message.content if item.type == 'output_text']
+    if len(chunks) > 0:
+      texts.append(''.join(chunks))
+  return texts
+
+
+def parse_response(response: Response) -> str:
+  messages = extract_reply_messages(response.output)
+  for message in messages:
     for item in message.content:
       if item.type == 'refusal':
         raise RuntimeError(f'got refusal: {item.refusal}')
       assert item.type == 'output_text'
-      chunks.append(item.text)
-    if len(chunks) > 0:
-      texts.append(''.join(chunks))
+  texts = _message_texts(messages)
   if len(texts) == 0:
     raise RuntimeError(f'no output texts in messages: {messages}')
   return '\n\n'.join(texts)
@@ -583,7 +588,18 @@ class ChatGPT(llm.llm.LLM):
       )
 
     self._last_response_id = response.id
-    return parse_response(response)
+    try:
+      return parse_response(response)
+    except Exception as error:
+      # by now every tool call has executed and the terminal response is
+      # recorded, so an extraction failure degrades to the plain terminal
+      # message text instead of failing a run whose work is complete; with no
+      # text at all there is no reply to salvage and the failure propagates.
+      texts = _message_texts([item for item in response.output if item.type == 'message'])
+      if len(texts) == 0:
+        raise
+      log.warning('reply extraction failed, falling back to the terminal message text: %s', error)
+      return '\n\n'.join(texts)
 
 
 def _extract_text(msg: dict) -> str:

@@ -17,7 +17,7 @@ trail creation so per-step `SET` updates always hit existing fields.
 import asyncio
 import decimal
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Optional
 
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
@@ -51,6 +51,17 @@ STEP_KINDS = (
 GSI_PK_ATTRIBUTE = 'gsi_pk'
 GSI_PK_VALUE = 'trail'
 
+# lost-trail sweep: a live header (`ended_at` still null) whose `last_alive_at`
+# is older than this is stamped `end_reason='lost'` with `ended_at` set to that
+# last activity. far above the client keepalive cadence
+# (llm/tracker.py KEEPALIVE_INTERVAL_SECONDS), so only a dead or disconnected
+# recorder trips it — and a false stamp self-heals: put_step ignores ended_at
+# and a late end_trail overwrites the stamp with the real outcome. 'lost' is
+# minted only here; the end endpoint never accepts it from clients.
+LOST_AFTER_SECONDS = 3600
+# how far back a sweep pass looks for live headers; bounds the all-index query.
+SWEEP_WINDOW_DAYS = 30
+
 
 class TrailNotFound(Exception):
   pass
@@ -64,8 +75,12 @@ _serializer = TypeSerializer()
 _deserializer = TypeDeserializer()
 
 
+def _format_iso(moment: datetime) -> str:
+  return moment.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+
+
 def _now_iso() -> str:
-  return datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+  return _format_iso(datetime.now(UTC))
 
 
 def _normalise_float(value: Any) -> Any:
@@ -170,6 +185,7 @@ class Storage:
       'started_at': started_at,
       'ended_at': None,
       'end_reason': None,
+      'last_alive_at': started_at,
       'interactive': interactive,
       'entry_point': entry_point,
       'parent': parent,
@@ -272,7 +288,8 @@ class Storage:
         'aggregates.tool_call_count = aggregates.tool_call_count + :d_tc, '
         'aggregates.tokens_in = aggregates.tokens_in + :d_in, '
         'aggregates.tokens_out = aggregates.tokens_out + :d_out, '
-        'aggregates.tokens_reasoning = aggregates.tokens_reasoning + :d_reason'
+        'aggregates.tokens_reasoning = aggregates.tokens_reasoning + :d_reason, '
+        'last_alive_at = :alive'
       ),
       'ExpressionAttributeNames': {'#k': kind},
       'ExpressionAttributeValues': {
@@ -282,6 +299,7 @@ class Storage:
         ':d_in': _ddb(delta_tokens_in),
         ':d_out': _ddb(delta_tokens_out),
         ':d_reason': _ddb(delta_tokens_reasoning),
+        ':alive': _ddb(timestamp),
       },
     }
 
@@ -331,7 +349,7 @@ class Storage:
     }
 
     update_expr = (
-      'SET ended_at = :ts, end_reason = :reason, '
+      'SET ended_at = :ts, end_reason = :reason, last_alive_at = :ts, '
       'aggregates.step_counts_by_kind.#k = aggregates.step_counts_by_kind.#k + :one'
     )
     expr_values: dict = {
@@ -377,6 +395,102 @@ class Storage:
         raise TrailNotFound(trail_id) from e
       raise
     return {'ended_at': timestamp}
+
+  async def keepalive(self, trail_id: str) -> dict:
+    timestamp = _now_iso()
+    try:
+      await asyncio.to_thread(
+        self._dynamo.update_item,
+        TableName=self._trails_table,
+        Key=_ddb_item({'trail_id': trail_id}),
+        ConditionExpression='attribute_exists(trail_id)',
+        UpdateExpression='SET last_alive_at = :ts',
+        ExpressionAttributeValues={':ts': _ddb(timestamp)},
+      )
+    except self._dynamo.exceptions.ConditionalCheckFailedException as e:
+      raise TrailNotFound(trail_id) from e
+    return {'last_alive_at': timestamp}
+
+  async def sweep_lost(self) -> list[str]:
+    """stamp every live trail whose last activity predates `LOST_AFTER_SECONDS`
+    as `end_reason='lost'` / `ended_at=<last activity>`. header-only — the step
+    stream stays the client's own record, no `end` step is fabricated. returns
+    the swept trail ids.
+    """
+    now = datetime.now(UTC)
+    cutoff = _format_iso(now - timedelta(seconds=LOST_AFTER_SECONDS))
+    since = _format_iso(now - timedelta(days=SWEEP_WINDOW_DAYS))
+    swept: list[str] = []
+    start_key: Optional[dict] = None
+    while True:
+      kwargs = _range_query(
+        table=self._trails_table,
+        index='all-index',
+        pk_name=GSI_PK_ATTRIBUTE,
+        pk_value=GSI_PK_VALUE,
+        sk_name='started_at',
+        sk_low=since,
+        sk_high=None,
+        limit=100,
+        cursor=None,
+      )
+      if start_key is not None:
+        kwargs['ExclusiveStartKey'] = start_key
+      response = await asyncio.to_thread(self._dynamo.query, **kwargs)
+      for raw in response.get('Items', []):
+        item = _from_ddb_item(raw)
+        if item is None or item.get('ended_at') is not None:
+          continue
+        trail_id: str = item['trail_id']
+        last_alive = item.get('last_alive_at')
+        if last_alive is None:
+          # pre-keepalive header: the newest step is the only activity record.
+          last_alive = await self._last_step_ts(trail_id)
+        if last_alive is None:
+          last_alive = item['started_at']
+        if last_alive >= cutoff:
+          continue
+        if await self._stamp_lost(trail_id, ended_at=last_alive):
+          swept.append(trail_id)
+      start_key = response.get('LastEvaluatedKey')
+      if start_key is None:
+        return swept
+
+  async def _last_step_ts(self, trail_id: str) -> Optional[str]:
+    response = await asyncio.to_thread(
+      self._dynamo.query,
+      TableName=self._steps_table,
+      KeyConditionExpression='trail_id = :tid',
+      ExpressionAttributeValues={':tid': _ddb(trail_id)},
+      ScanIndexForward=False,
+      Limit=1,
+    )
+    items = response.get('Items', [])
+    if len(items) == 0:
+      return None
+    item = _from_ddb_item(items[0])
+    assert item is not None
+    return item['ts']
+
+  async def _stamp_lost(self, trail_id: str, *, ended_at: str) -> bool:
+    # conditioned on the header still being live, so a race with a real
+    # end_trail resolves in the client's favor.
+    try:
+      await asyncio.to_thread(
+        self._dynamo.update_item,
+        TableName=self._trails_table,
+        Key=_ddb_item({'trail_id': trail_id}),
+        ConditionExpression='attribute_type(ended_at, :null_type)',
+        UpdateExpression='SET ended_at = :ts, end_reason = :reason',
+        ExpressionAttributeValues={
+          ':ts': _ddb(ended_at),
+          ':reason': _ddb('lost'),
+          ':null_type': _ddb('NULL'),
+        },
+      )
+    except self._dynamo.exceptions.ConditionalCheckFailedException:
+      return False
+    return True
 
   async def get_trail(self, trail_id: str) -> Optional[dict]:
     response = await asyncio.to_thread(

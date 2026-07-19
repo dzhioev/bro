@@ -237,11 +237,14 @@ class TestBroRun:
 
   @pytest.mark.asyncio
   async def test_run_end_reason_is_error_on_generic_exception(self):
-    calls: list[str] = []
+    calls: list[tuple] = []
 
     class RecordingTracker(NullTracker):
+      def step(self, kind, body, **extras) -> None:
+        calls.append(('step', kind, body))
+
       def end_trail(self, reason) -> None:
-        calls.append(reason)
+        calls.append(('end', reason))
 
     class BoomBro(BaseBro):
       name = 'boom-bro'
@@ -259,6 +262,41 @@ class TestBroRun:
 
     with pytest.raises(RuntimeError):
       await BoomBro().run('x', tracker=RecordingTracker())
+    # the exception is recorded as an error step before the trail closes, so
+    # the trail carries the failure cause rather than a bare end reason.
+    assert calls == [('step', 'error', calls[0][2]), ('end', 'error')]
+    body = calls[0][2]
+    assert body['message'] == 'kaboom'
+    assert 'RuntimeError: kaboom' in body['traceback']
+    assert 'in send' in body['traceback']
+
+  @pytest.mark.asyncio
+  async def test_run_error_step_failure_does_not_mask_the_run_error(self):
+    calls: list[str] = []
+
+    class BrokenTracker(NullTracker):
+      def step(self, kind, body, **extras) -> None:
+        raise ConnectionError('tracker down')
+
+      def end_trail(self, reason) -> None:
+        calls.append(reason)
+
+    class BoomBro(BaseBro):
+      name = 'boom-bro'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+      def _create_llm(self, *, hold: str):
+        class Boom(MockLLM):
+          async def send(self, messages, *, request_timeout=None):
+            raise RuntimeError('kaboom')
+
+        return Boom()
+
+    with pytest.raises(RuntimeError, match='kaboom'):
+      await BoomBro().run('x', tracker=BrokenTracker())
     assert calls == ['error']
 
   def test_default_tracker_factory_can_be_swapped(self):

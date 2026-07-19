@@ -9,6 +9,8 @@ a server-minted id. Schema and write semantics live in the parent `save bros
 logs` design doc (the schema-locking gate was stage 3).
 """
 
+import asyncio
+import contextlib
 import hmac
 import json
 import os
@@ -28,7 +30,12 @@ DEFAULT_PORT = 8004
 LOOPBACK_HOSTS = frozenset({'127.0.0.1', 'localhost'})
 
 VALID_STEP_KINDS = frozenset(storage.STEP_KINDS) - {'system_prompt', 'end'}
+# what clients may send to the end endpoint; 'lost' is deliberately absent —
+# only the server's own sweep mints it (storage.LOST_AFTER_SECONDS).
 VALID_END_REASONS = frozenset({'terminal', 'raised', 'error'})
+
+# cadence of the in-server lost-trail sweep (storage.sweep_lost).
+SWEEP_INTERVAL_SECONDS = 600.0
 
 
 @web.middleware
@@ -161,6 +168,16 @@ async def _handle_end_trail(request: web.Request) -> web.Response:
   return web.Response(status=204)
 
 
+async def _handle_keepalive(request: web.Request) -> web.Response:
+  trail_id = request.match_info['trail_id']
+  store: storage.Storage = request.app['storage']
+  try:
+    await store.keepalive(trail_id)
+  except storage.TrailNotFound:
+    return _error(f'trail not found: {trail_id}', 404)
+  return web.Response(status=204)
+
+
 async def _handle_get_trail(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
   store: storage.Storage = request.app['storage']
@@ -205,7 +222,23 @@ def _parse_limit(raw: Optional[str], *, default: int, ceiling: int) -> int:
   return max(1, min(ceiling, value))
 
 
-def create_app(store: storage.Storage, bearer_token: Optional[str]) -> web.Application:
+async def _sweep_loop(store: storage.Storage, interval_seconds: float) -> None:
+  while True:
+    await asyncio.sleep(interval_seconds)
+    try:
+      swept = await store.sweep_lost()
+      if len(swept) > 0:
+        log.info('sweep stamped %d trails as lost: %s', len(swept), ', '.join(swept))
+    except Exception as exception:
+      log.warning('lost-trail sweep failed: %s', exception)
+
+
+def create_app(
+  store: storage.Storage,
+  bearer_token: Optional[str],
+  *,
+  sweep_interval_seconds: Optional[float] = None,
+) -> web.Application:
   app = web.Application(
     middlewares=[_auth_middleware], client_max_size=storage.MAX_BODY_BYTES + 64 * 1024
   )
@@ -218,6 +251,17 @@ def create_app(store: storage.Storage, bearer_token: Optional[str]) -> web.Appli
   app.router.add_post('/v1/trails/{trail_id}/steps', _handle_put_step)
   app.router.add_get('/v1/trails/{trail_id}/steps', _handle_get_steps)
   app.router.add_post('/v1/trails/{trail_id}/end', _handle_end_trail)
+  app.router.add_post('/v1/trails/{trail_id}/keepalive', _handle_keepalive)
+  if sweep_interval_seconds is not None:
+
+    async def _sweep_ctx(app: web.Application):
+      task = asyncio.create_task(_sweep_loop(app['storage'], sweep_interval_seconds))
+      yield
+      task.cancel()
+      with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+    app.cleanup_ctx.append(_sweep_ctx)
   return app
 
 
@@ -262,7 +306,11 @@ def main(argv: list[str]) -> Optional[int]:
 
   auth_description = 'bearer auth' if bearer_token is not None else 'NO AUTH'
   log.info(f'starting trails server on {args["host"]}:{args["port"]} ({auth_description})')
-  web.run_app(create_app(store, bearer_token), host=args['host'], port=args['port'])
+  web.run_app(
+    create_app(store, bearer_token, sweep_interval_seconds=SWEEP_INTERVAL_SECONDS),
+    host=args['host'],
+    port=args['port'],
+  )
 
 
 # deployed via `python -m trails.server.server` (Dockerfile), so it keeps its own

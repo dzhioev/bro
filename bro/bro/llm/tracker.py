@@ -18,6 +18,7 @@ import http.client
 import json
 import logging
 import ssl
+import threading
 import time
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass
@@ -34,6 +35,14 @@ from base.lulid import lulid
 # start_trail). format: schedule[i] is the sleep before retry-attempt i; the
 # initial attempt has no preceding sleep.
 _STEP_RETRY_DELAYS_SECONDS = (0.1, 0.5, 2.0)
+
+# cadence of HTTPTracker's liveness heartbeat: while a trail is open, a
+# background thread wakes on this interval and POSTs a keepalive whenever no
+# other write landed within it. sized so the wire never idles longer than two
+# intervals — well under the shared ALB's 300s idle timeout
+# (infra/cdk/shared_stack.py), so the persistent connection stays warm through
+# long blocking tools.
+KEEPALIVE_INTERVAL_SECONDS = 60.0
 
 StepKind = Literal[
   'system_prompt',
@@ -307,7 +316,12 @@ class HTTPTracker(Tracker):
     retries on transient blips, then propagate.
   - `end_trail` (`POST /v1/trails/{id}/end`): same retry schedule, but a
     persistent failure is logged loudly and not re-raised — the trail is
-    already finished, and the server can reap headers missing `ended_at`.
+    already finished, and the server's sweep stamps headers missing `ended_at`
+    as lost.
+  - keepalive (`POST /v1/trails/{id}/keepalive`): best-effort, from a
+    background thread during quiet stretches (`KEEPALIVE_INTERVAL_SECONDS`) —
+    the server's liveness signal for the lost-trail sweep. failures are logged
+    and swallowed; liveness must never take down a healthy run.
 
   the server auto-emits the `system_prompt` step inside `POST /v1/trails`, so
   `HTTPTracker.start_trail` does not mirror `LocalFileTracker`'s extra
@@ -326,6 +340,13 @@ class HTTPTracker(Tracker):
     self._port = parsed.port
     self._connection: Optional[http.client.HTTPSConnection] = None
     self._trail_id: Optional[str] = None
+    # serializes wire access between the caller and the keepalive thread
+    # (http.client connections are not thread-safe); reentrant because _post
+    # drops the connection while already holding it.
+    self._lock = threading.RLock()
+    self._last_write_monotonic = time.monotonic()
+    self._keepalive_stop: Optional[threading.Event] = None
+    self._keepalive_thread: Optional[threading.Thread] = None
 
   def start_trail(
     self,
@@ -351,6 +372,7 @@ class HTTPTracker(Tracker):
     response = self._post('/v1/trails', payload, retry_delays=())
     trail_id: str = response['trail_id']
     self._trail_id = trail_id
+    self._start_keepalive()
     return trail_id
 
   def step(self, kind: StepKind, body: Any, **extras: Any) -> None:
@@ -368,6 +390,7 @@ class HTTPTracker(Tracker):
   def end_trail(self, reason: EndReason) -> None:
     if self._trail_id is None:
       return
+    self._stop_keepalive()
     payload = {'step_id': _new_step_id(), 'reason': reason}
     try:
       self._post(
@@ -376,16 +399,48 @@ class HTTPTracker(Tracker):
         retry_delays=_STEP_RETRY_DELAYS_SECONDS,
       )
     except Exception as exception:
-      # work is already done; the server reaps trails missing ended_at, so we
-      # log loudly and let the run return normally rather than masking the
-      # outcome with a tracker failure.
+      # work is already done; the server's sweep stamps trails missing
+      # ended_at as lost, so we log loudly and let the run return normally
+      # rather than masking the outcome with a tracker failure.
       logging.warning('trails end_trail failed for trail %s: %s', self._trail_id, exception)
     finally:
-      self._trail_id = None
-      self._drop_connection()
+      with self._lock:
+        self._trail_id = None
+        self._drop_connection()
 
   def close(self) -> None:
-    self._drop_connection()
+    self._stop_keepalive()
+    with self._lock:
+      self._drop_connection()
+
+  def _start_keepalive(self) -> None:
+    self._keepalive_stop = threading.Event()
+    self._keepalive_thread = threading.Thread(
+      target=self._keepalive_loop,
+      args=(self._keepalive_stop,),
+      name=f'trails-keepalive-{self._trail_id}',
+      daemon=True,
+    )
+    self._keepalive_thread.start()
+
+  def _stop_keepalive(self) -> None:
+    if self._keepalive_stop is not None:
+      self._keepalive_stop.set()
+      self._keepalive_stop = None
+
+  def _keepalive_loop(self, stop: threading.Event) -> None:
+    while not stop.wait(KEEPALIVE_INTERVAL_SECONDS):
+      with self._lock:
+        trail_id = self._trail_id
+        idle_seconds = time.monotonic() - self._last_write_monotonic
+      if trail_id is None:
+        return
+      if idle_seconds < KEEPALIVE_INTERVAL_SECONDS:
+        continue
+      try:
+        self._post(f'/v1/trails/{trail_id}/keepalive', {}, retry_delays=(0.5,))
+      except Exception as exception:
+        logging.warning('trails keepalive failed for trail %s: %s', trail_id, exception)
 
   def _post(self, path: str, payload: dict, *, retry_delays: tuple[float, ...]) -> dict:
     body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
@@ -398,25 +453,28 @@ class HTTPTracker(Tracker):
     # before attempting. the loop falls through after the last failure and
     # raises the captured exception.
     schedule: tuple[float, ...] = (0.0,) + retry_delays
-    for delay in schedule:
-      if delay > 0:
-        time.sleep(delay)
-      try:
-        return self._request('POST', path, headers, body)
-      except HTTPStatusError as exception:
-        # drop the persistent connection so the next attempt opens a fresh one.
-        self._drop_connection()
-        # deterministic 4xx won't change on a retry — propagate immediately
-        # rather than sleeping through the rest of the schedule.
-        if not is_retryable_status(exception.status):
-          raise
-        last_exception = exception
-      except Exception as exception:
-        last_exception = exception
-        # transient blips often leave the socket half-open; reopen next attempt.
-        self._drop_connection()
-    assert last_exception is not None
-    raise last_exception
+    with self._lock:
+      for delay in schedule:
+        if delay > 0:
+          time.sleep(delay)
+        try:
+          response = self._request('POST', path, headers, body)
+          self._last_write_monotonic = time.monotonic()
+          return response
+        except HTTPStatusError as exception:
+          # drop the persistent connection so the next attempt opens a fresh one.
+          self._drop_connection()
+          # deterministic 4xx won't change on a retry — propagate immediately
+          # rather than sleeping through the rest of the schedule.
+          if not is_retryable_status(exception.status):
+            raise
+          last_exception = exception
+        except Exception as exception:
+          last_exception = exception
+          # transient blips often leave the socket half-open; reopen next attempt.
+          self._drop_connection()
+      assert last_exception is not None
+      raise last_exception
 
   def _request(self, method: str, path: str, headers: dict, body: bytes) -> dict:
     connection = self._get_connection()

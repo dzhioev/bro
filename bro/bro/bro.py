@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import traceback
 from abc import ABC
 from collections.abc import Callable
 from pathlib import Path
@@ -800,6 +801,7 @@ class BaseBro(ABC):
     except Exception as error:
       end_reason = 'error'
       result = str(error)
+      self._record_error_step(error)
       raise
     finally:
       log.verbose('run ended: %s', end_reason)
@@ -933,6 +935,16 @@ class BaseBro(ABC):
       creds=credentials.known_names(),
     )
     return f'{self.system_prompt}\n\n{fragment}'
+
+  def _record_error_step(self, error: BaseException) -> None:
+    # best-effort: recording the failure must never mask it — the tracker may
+    # well be down for the same reason the run is failing.
+    try:
+      self._tracker.step(
+        'error', {'message': str(error), 'traceback': ''.join(traceback.format_exception(error))}
+      )
+    except Exception as step_error:
+      log.warning('failed to record the error step: %s', step_error)
 
   def _make_observer(self) -> Observer:
     return BoringRenderer(prefix=self.name)
