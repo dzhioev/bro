@@ -16,6 +16,15 @@ from llm.mcp import MCPServer
 from llm.observer import NullObserver, Observer
 
 
+@pytest.fixture(autouse=True)
+def _stub_scoped_store(monkeypatch):
+  # the container-hop preflight hydrates the scoped store; stub the build so the
+  # CLI tests never read (or mint from) the developer host's real store
+  monkeypatch.setattr(
+    'bro.launch.scope.credentials.build_scoped_store', lambda names, optional=(): {}
+  )
+
+
 class MockLLM(LLM):
   def __init__(self, response: str = 'mock', mcp_servers: Optional[list[MCPServer]] = None):
     super().__init__(mcp_servers)

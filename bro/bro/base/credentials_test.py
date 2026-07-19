@@ -610,14 +610,12 @@ class TestDefaultRegistry:
     with pytest.raises(ValueError, match='install must be a string'):
       credentials.Secret.from_dict('x', {'sources': [{'file': 'f'}], 'install': {'file': 'h.sh'}})
 
-  def test_github_maps_to_bro_token_file(self):
-    # one `github` entry resolves the token bro containers push with; there is no
-    # separate human-PAT entry (it is unused by any reader).
+  def test_github_declares_no_builtin_source(self):
+    # the github kind's sources are host-local (the app minting config in the
+    # host registry file); the checked-in entry carries only the install hook
     registry = credentials.default_registry()
-    source = registry['github'].sources[0]
-    assert isinstance(source, credentials.LocalSource)
-    assert source.file == 'cw_github_token_bro'
-    assert 'github_bro' not in registry
+    assert registry['github'].sources == []
+    assert registry['github'].install is not None
 
   def test_builtin_hooks_render_the_name_template(self):
     # the checked-in hooks are `{{insert #name}}` templates; a plain kind entry
@@ -690,6 +688,18 @@ class TestHostRegistry:
     source = credentials.host_registry()['notion'].sources[0]
     assert isinstance(source, credentials.LocalSource)
     assert source.file == 'n2.json'
+
+  def test_kind_override_without_install_inherits_the_builtin_hook(self, ppp_dir: Path):
+    _write(
+      ppp_dir,
+      credentials.HOST_REGISTRY_FILE,
+      {'github': {'sources': [{'type': 'github_app', 'file': 'github_app_x.json'}]}},
+    )
+    registry = credentials.host_registry()
+    source = registry['github'].sources[0]
+    assert isinstance(source, credentials.MintingSource)
+    assert source.file == 'github_app_x.json'
+    assert registry['github'].install == credentials.default_registry()['github'].install
 
   def test_variant_inherits_the_kind_hook_instantiated_with_its_name(self, ppp_dir: Path):
     _write(
@@ -801,17 +811,17 @@ class TestModuleAliases:
     assert credentials.get_json('notion') == {'token': 't'}
 
   def test_get_aliases_default_store_raw_text(self, configs_dir: Path):
-    # `github` maps to a raw-text file; the alias returns it stripped, like the store.
-    _write(configs_dir, 'cw_github_token_bro', 'tok\n')
-    assert credentials.get('github') == 'tok'
+    # `claude_code` maps to a raw-text file; the alias returns it stripped, like the store.
+    _write(configs_dir, 'claude_code_oauth_token', 'tok\n')
+    assert credentials.get('claude_code') == 'tok'
 
   def test_get_raises_secret_not_found(self, configs_dir: Path):
     with pytest.raises(credentials.SecretNotFound):
       credentials.get('notion')
 
   def test_try_get_aliases_default_store(self, configs_dir: Path):
-    _write(configs_dir, 'cw_github_token_bro', 'tok\n')
-    assert credentials.try_get('github') == 'tok'
+    _write(configs_dir, 'claude_code_oauth_token', 'tok\n')
+    assert credentials.try_get('claude_code') == 'tok'
     assert credentials.try_get('notion') is None
 
   def test_available_aliases_default_store(self, configs_dir: Path):
@@ -823,10 +833,10 @@ class TestModuleAliases:
 class TestCLI:
   def test_list_prints_sorted_available_names(self, configs_dir: Path, capsys):
     _write(configs_dir, 'notion.json', {'token': 't'})
-    _write(configs_dir, 'cw_github_token_bro', 'ghp_abc')
+    _write(configs_dir, 'claude_code_oauth_token', 'tok-abc')
 
     assert credentials.main(['credentials', 'list']) is None
-    assert capsys.readouterr().out == 'github\nnotion\n'
+    assert capsys.readouterr().out == 'claude_code\nnotion\n'
 
   def test_get_json_prints_json(self, configs_dir: Path, capsys):
     _write(configs_dir, 'notion.json', {'token': 't'})
@@ -839,17 +849,17 @@ class TestCLI:
     assert capsys.readouterr().out.strip() == 'sk-xyz'
 
   def test_get_text_prints_string(self, configs_dir: Path, capsys):
-    _write(configs_dir, 'cw_github_token_bro', 'ghp_abc\n')
-    assert credentials.main(['credentials', 'get', 'github']) is None
-    assert capsys.readouterr().out.strip() == 'ghp_abc'
+    _write(configs_dir, 'claude_code_oauth_token', 'tok-abc\n')
+    assert credentials.main(['credentials', 'get', 'claude_code']) is None
+    assert capsys.readouterr().out.strip() == 'tok-abc'
 
   def test_missing_secret_exits_nonzero(self, configs_dir: Path, capsys):
     assert credentials.main(['credentials', 'get', 'notion']) == 1
     assert 'not found' in capsys.readouterr().err
 
   def test_field_on_non_json_exits_nonzero(self, configs_dir: Path, capsys):
-    _write(configs_dir, 'cw_github_token_bro', 'ghp_abc')
-    assert credentials.main(['credentials', 'get', 'github', '--field', 'api_key']) == 1
+    _write(configs_dir, 'claude_code_oauth_token', 'tok-abc')
+    assert credentials.main(['credentials', 'get', 'claude_code', '--field', 'api_key']) == 1
     assert 'not valid json' in capsys.readouterr().err
 
   def test_missing_field_exits_nonzero(self, configs_dir: Path, capsys):
@@ -865,27 +875,27 @@ class TestCLI:
     assert '\n  ' in out  # indent=2
 
   def test_json_flag_on_non_json_exits_nonzero(self, configs_dir: Path, capsys):
-    _write(configs_dir, 'cw_github_token_bro', 'ghp_abc')
-    assert credentials.main(['credentials', 'get', 'github', '--json']) == 1
+    _write(configs_dir, 'claude_code_oauth_token', 'tok-abc')
+    assert credentials.main(['credentials', 'get', 'claude_code', '--json']) == 1
     assert 'not valid json' in capsys.readouterr().err
 
 
 class TestBuildScopedStore:
   def test_builds_files_and_scoped_registry(self, configs_dir: Path):
     _write(configs_dir, 'notion.json', {'token': 't'})
-    _write(configs_dir, 'cw_github_token_bro', 'ghp_abc\n')
-    store = credentials.build_scoped_store(['notion', 'github'])
+    _write(configs_dir, 'claude_code_oauth_token', 'tok-abc\n')
+    store = credentials.build_scoped_store(['notion', 'claude_code'])
     # one `{name}.cred` entry per secret, plus the scoped registry
-    assert set(store) == {'notion.cred', 'github.cred', credentials.REGISTRY_FILE}
+    assert set(store) == {'notion.cred', 'claude_code.cred', credentials.REGISTRY_FILE}
     # each secret's raw text (stripped) as bytes
     assert json.loads(store['notion.cred']) == {'token': 't'}
-    assert store['github.cred'] == b'ghp_abc'
+    assert store['claude_code.cred'] == b'tok-abc'
     registry = json.loads(store[credentials.REGISTRY_FILE])
-    assert set(registry) == {'notion', 'github'}
+    assert set(registry) == {'notion', 'claude_code'}
     # the install hook rides along so the container can apply it generically; the
     # source omits `type` (local is the default) and points at the scoped file
-    assert registry['github']['sources'] == [{'file': 'github.cred'}]
-    assert 'install' in registry['github']
+    assert registry['claude_code']['sources'] == [{'file': 'claude_code.cred'}]
+    assert 'install' in registry['claude_code']
     # a secret with no install hook carries none
     assert 'install' not in registry['notion']
 

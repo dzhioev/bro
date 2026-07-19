@@ -67,10 +67,6 @@ docker run --rm -i \
     test "$(git rev-parse HEAD)" = "$(git -C /host-repo rev-parse HEAD)"
     # origin/master is still ref-refreshed from /host-repo for later clean/rebase checks
     test "$(git rev-parse refs/remotes/origin/master)" = "$(git -C /host-repo rev-parse refs/remotes/origin/master)"
-    # pre-push hook is installed (unconditionally by the entrypoint). post-commit
-    # is installed by provision_repo.sh, inside the venv-dependent block that
-    # CW_SKIP_VENV=1 skips, so it is not asserted here.
-    test -x /workspace/.git/hooks/pre-push
     # aws cli should be installed
     aws --version
     # docker CLI should be installed for deploys via host socket

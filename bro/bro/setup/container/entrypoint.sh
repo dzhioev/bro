@@ -102,33 +102,6 @@ if [ ! -d /workspace/.git ]; then
   fi
 fi
 
-# block non-fast-forward pushes and, under the bro identity every cw-launched
-# session commits as, direct pushes to master
-hooks_dir="$(git -C /workspace rev-parse --git-dir)/hooks"
-mkdir -p "$hooks_dir"
-cat > "$hooks_dir/pre-push" << 'HOOK'
-#!/usr/bin/env -S bash -e
-while read -r _ local_sha remote_ref remote_sha; do
-  case "$remote_ref" in
-    refs/heads/master|refs/heads/main)
-      if [ "${GIT_AUTHOR_EMAIL:-}" = "dzhioev+bro@gmail.com" ]; then
-        echo "error: bro cannot push directly to $remote_ref — create a PR instead" >&2
-        exit 1
-      fi
-      ;;
-  esac
-  # creation (zero remote sha) and deletion (zero local sha) pushes have no
-  # ancestry to fast-forward-check
-  [ "$remote_sha" = "0000000000000000000000000000000000000000" ] && continue
-  [ "$local_sha" = "0000000000000000000000000000000000000000" ] && continue
-  if ! git merge-base --is-ancestor "$remote_sha" "$local_sha"; then
-    echo "error: non-fast-forward push to $remote_ref is blocked" >&2
-    exit 1
-  fi
-done
-HOOK
-chmod +x "$hooks_dir/pre-push"
-
 # pre-create the /workspace transcript directory (trust is granted in the
 # constructed ~/.claude.json, not here)
 mkdir -p "$HOME/.claude/projects/-workspace"

@@ -245,12 +245,20 @@ class MintingSource(ABC):
     ...
 
   def fetch(self) -> Optional[str]:
+    config = self.config()
+    if config is None:
+      return None
+    if self._minted is None or datetime.now(UTC) >= self._minted.expires_at - self.EXPIRY_MARGIN:
+      self._minted = self.mint(config)
+    return self._minted.value
+
+  def config(self) -> Optional[dict]:
+    """the parsed minting config, or None when the file is absent along the
+    search path. a local read — nothing is minted."""
     text = self._config_text()
     if text is None:
       return None
-    if self._minted is None or datetime.now(UTC) >= self._minted.expires_at - self.EXPIRY_MARGIN:
-      self._minted = self.mint(self._parse_config(text))
-    return self._minted.value
+    return self._parse_config(text)
 
   def materialize_scoped(self, file: str, value: str) -> tuple[dict, bytes]:
     text = self._config_text()
@@ -425,6 +433,12 @@ class Store:
     with self._lock:
       return self._winners[name]
 
+  def sources(self, name: str) -> Sequence[Source]:
+    """the ordered source list registered under `name`, empty when the registry
+    lacks the name. a registry read — nothing is fetched or minted."""
+    secret = self._registry.get(name)
+    return secret.sources if secret is not None else ()
+
   def _expand_references(self, text: str, chain: tuple[str, ...]) -> tuple[str, bool]:
     """substitute every reference node in a json secret's tree; text that isn't
     json, or json with no reference nodes, passes through byte-identical. also
@@ -579,14 +593,21 @@ def default_registry() -> dict[str, Secret]:
 
 def host_registry() -> dict[str, Secret]:
   """the built-in registry merged per-name with the host-local additions file —
-  entries that never enter the repo, typically variants of a checked-in kind.
-  the additions file follows the local search path, like any secret file. kind
-  resolution runs after the merge, so a variant picks up its kind's hook even
-  when an addition overrides the kind."""
+  entries that never enter the repo: variants of a checked-in kind, or the
+  host's sources for a kind whose checked-in entry declares none. an addition
+  that doesn't declare `install` inherits the built-in entry's hook, so a
+  sources-only override keeps the kind's checked-in wiring. the additions file
+  follows the local search path, like any secret file. kind resolution runs
+  after the merge, so a variant picks up its kind's hook even when an addition
+  overrides the kind."""
   data = _builtin_registry_data()
   additions_path = _find_in_search_dirs(HOST_REGISTRY_FILE)
   if additions_path is not None:
-    data.update(json.loads(additions_path.read_text()))
+    for name, entry in json.loads(additions_path.read_text()).items():
+      builtin = data.get(name)
+      if builtin is not None and 'install' in builtin and 'install' not in entry:
+        entry = {**entry, 'install': builtin['install']}
+      data[name] = entry
   return _registry_from_dict(_resolve_kinds(data))
 
 

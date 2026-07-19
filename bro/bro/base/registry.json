@@ -20,7 +20,7 @@
   "twitch": {"sources": [{"file": "twitch.json"}]},
   "twitch_user_token": {"sources": [{"file": "twitch_user_token.json"}]},
   "github": {
-    "sources": [{"file": "cw_github_token_bro"}],
+    "sources": [],
     "install": {"file": "hooks/github.sh"}
   },
   "aws": {

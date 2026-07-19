@@ -1,6 +1,17 @@
 from unittest.mock import patch
 
+import pytest
+
 from bro.run import main
+
+
+@pytest.fixture(autouse=True)
+def _stub_scoped_store(monkeypatch):
+  # the container-hop preflight hydrates the scoped store; stub the build so the
+  # CLI tests never read (or mint from) the developer host's real store
+  monkeypatch.setattr(
+    'bro.launch.scope.credentials.build_scoped_store', lambda names, optional=(): {}
+  )
 
 
 def test_run_uses_canonical_container_launch(capsys):

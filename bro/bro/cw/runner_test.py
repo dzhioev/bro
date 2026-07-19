@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import cw.runner
+from base import credentials
 from cw.claude_argv import ClaudeLaunch
 from cw.mcp import MCPEndpoint
 from cw.session_test import _spec
@@ -42,6 +43,9 @@ class _Harness:
         'cw.session.project_config',
         return_value=ProjectConfig(persona='ppp-dev', image_repository='bro/ppp-dev'),
       ),
+      # an empty credential store pins the derived git identity to the legacy
+      # address regardless of the developer host's real `github` secret
+      patch('base.credentials.default_store', return_value=credentials.Store({})),
     ]
     entered = [p.__enter__() for p in self._patches]
     self.env = entered[0]
