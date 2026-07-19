@@ -1,10 +1,5 @@
 #!/usr/bin/env python
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent))
-
-from git_golc import (  # noqa: E402
+from dev.git_golc import (
   _SENTINEL_RE,
   _format_credits,
   _model_initial,

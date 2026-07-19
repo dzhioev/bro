@@ -3,8 +3,8 @@ import json
 import os
 from pathlib import Path
 
-import usage
-from usage import Footer, Usage
+import llm.usage as usage
+from llm.usage import Footer, Usage
 
 OPUS = 'claude-opus-4-8'
 HAIKU = 'claude-haiku-4-5-20251001'

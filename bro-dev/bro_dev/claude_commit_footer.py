@@ -7,7 +7,7 @@ yields the true total for a range — and stays correct across squash merges.
 
 The four billed token classes, the footer line shape, and the cumulative-usage
 sources (a bro run's env-pointed usage file, the Claude Code session transcript)
-are owned by the root `usage` module; this script owns the per-commit
+are owned by the `llm.usage` module; this script owns the per-commit
 delta/baseline machinery on top of `usage.current_usage()`.
 
 Three modes:
@@ -38,9 +38,9 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-import usage
+import llm.usage as usage
 from base.args import Parser
-from usage import Counts
+from llm.usage import Counts
 
 STATE_FILENAME = '.token_accounting_state.json'
 

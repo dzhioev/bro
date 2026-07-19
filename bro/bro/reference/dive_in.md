@@ -2,7 +2,7 @@
 
 `dive-in` is a thin wrapper around `cw ss` that turns "I want to work on this task" into a ready-to-go Claude Code session: it picks the workspace name from the task, seeds `@:fix <task-ref>:@` as the first user message (so the session dispatches to the configured persona's parameterized `fix` script), and forwards into `cw ss` with the right flags.
 
-This document explains the modes, workspace naming, the dispatcher-command seeding rules, and the rules around `--host`. The source of truth is `dive_in.py` (which also has unit tests in `dive_in_test.py`).
+This document explains the modes, workspace naming, the dispatcher-command seeding rules, and the rules around `--host`. The source of truth is `dev/dive_in.py` (which also has unit tests in `dev/dive_in_test.py`).
 
 ## Modes
 

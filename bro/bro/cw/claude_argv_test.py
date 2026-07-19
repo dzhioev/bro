@@ -150,7 +150,7 @@ class TestBroLaunch:
     # apiKeyHelper is the ppp checkout the runner's venv installs, hold-neutral
     settings = _settings(self._launch(fast=True).argv)
     assert settings['fastMode'] is True
-    assert settings['apiKeyHelper'] == str(PROJECT_ROOT / 'setup' / 'print_anthropic_key.sh')
+    assert settings['apiKeyHelper'] == str(PROJECT_ROOT / 'cw' / 'print_anthropic_key.sh')
     assert _settings(self._launch().argv)['fastMode'] is False
 
   def test_system_prompt_is_bros_claude_flavor(self):

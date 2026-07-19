@@ -26,7 +26,7 @@ modes:
   --check        verify pyproject.toml is up to date; exit 1 if stale (no write)
   (no flags)     run --pyproject and --entrypoints
 
-the provisioner invokes `python -m sync_scripts --entrypoints` (module path, not the
+the provisioner invokes `python -m dev.sync_scripts --entrypoints` (module path, not the
 `sync-scripts` console script) -- the console script routes through the bridge,
 which doesn't exist yet on a fresh venv. main keeps its own `__main__` guard for
 the same reason.
@@ -42,8 +42,11 @@ from pathlib import Path
 from typing import Optional
 
 from base.args import Parser
+from base.project_root import PROJECT_ROOT
 
-ROOT = Path(__file__).resolve().parent
+__cli_name__ = 'sync-scripts'
+
+ROOT = PROJECT_ROOT
 PYPROJECT = ROOT / 'pyproject.toml'
 SKIP_DIRS = {'.venv', 'build', '.claude', 'setup', '__pycache__', 'var'}
 

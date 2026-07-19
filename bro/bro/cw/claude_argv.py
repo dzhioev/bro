@@ -66,7 +66,7 @@ def build_claude_launch(
   bro's MCP namespaces (`mcp__<namespace>__*`); its system prompt is the bro's
   claude_system_prompt (the composition whose tool-name rule matches those
   mounts). auth comes from the `anthropic` secret via the workspace's own
-  `setup/print_anthropic_key.sh`, wired as apiKeyHelper in the merged
+  `cw/print_anthropic_key.sh`, wired as apiKeyHelper in the merged
   `--settings` — reading the key through a helper avoids the "Detected a custom
   API key" prompt that ANTHROPIC_API_KEY would trigger, and `--settings`
   (flagSettings, not project/local) means claude executes it without a
@@ -86,7 +86,7 @@ def build_claude_launch(
     # PROJECT_ROOT, not the workspace root: the runner executes from the
     # workspace's venv, so this is the workspace's own ppp checkout — the
     # workspace itself for ppp, the ppp submodule for a project vendoring it
-    settings['apiKeyHelper'] = str(PROJECT_ROOT / 'setup' / 'print_anthropic_key.sh')
+    settings['apiKeyHelper'] = str(PROJECT_ROOT / 'cw' / 'print_anthropic_key.sh')
     # the hold fragment renders here — appending the raw file would leak its
     # directives — with the --bro surface's facts: bro harness over mcp wire
     fragment = prompts.hold_fragment(

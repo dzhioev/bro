@@ -10,7 +10,7 @@ import pytest
 
 import brog.system
 import cw
-import dive_in
+import dev.dive_in as dive_in
 import workspace.paths
 
 UUID = '35ad38d8-5a6d-81ea-bce6-e4caf17ece7f'

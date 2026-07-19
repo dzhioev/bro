@@ -31,6 +31,7 @@ Trails is the recording pipeline for bro runs: every `BaseBro.run()` / `.send()`
 - `server/server.py` (`trails-server`) — aiohttp HTTP API: bearer-token auth middleware, request validation, storage exceptions → HTTP statuses, the periodic lost-trail sweep task
 - `server/storage.py` — DynamoDB + S3 mechanics: step write + header-aggregate update are one `TransactWriteItems`; bodies ≥ 50KB spill to S3, > 10MB rejected with 413; reads resolve spilled bodies transparently (inline < 1MB, presigned URL above); floats convert to Decimal on write and back on read (DynamoDB numbers are Decimal)
 - `server/` scripts — `deploy.sh`, `restart.sh`, `verify_deps.sh`, `run_local.sh`, `bootstrap_secrets.sh`; mirror `flow/focus/server/`
+- `bootstrap.sh` — writes the client-side `trails` secret from the deployed server's SSM token and the configured delegated subdomain
 
 ## Reader CLI
 
@@ -43,13 +44,13 @@ The CLI keeps the parent's spec and prompt; for cross-model / cross-prompt forks
 
 ## Auth
 
-Bearer token, mandatory by default; the no-auth escape hatch (`TRAILS_ALLOW_NO_AUTH=1`) requires a loopback `HOST` and is opt-in only. `server/run_local.sh` does **not** use it — it runs with bearer auth (`exec trails-server --allow-env` after exporting `TRAILS_BEARER_TOKEN` from the `trails` secret). The deployed token lives in SSM `/trails/bearer-token` (seeded by `server/bootstrap_secrets.sh`); clients resolve the `trails` secret (written by `setup/bootstrap_trails.sh` to `~/.ppp/trails.json`, see `setup/CLAUDE.md`) — read and write sides share that one credential.
+Bearer token, mandatory by default; the no-auth escape hatch (`TRAILS_ALLOW_NO_AUTH=1`) requires a loopback `HOST` and is opt-in only. `server/run_local.sh` does **not** use it — it runs with bearer auth (`exec trails-server --allow-env` after exporting `TRAILS_BEARER_TOKEN` from the `trails` secret). The deployed token lives in SSM `/trails/bearer-token` (seeded by `server/bootstrap_secrets.sh`); clients resolve the `trails` secret (written by `trails/bootstrap.sh` to `~/.ppp/trails.json`, see `setup/CLAUDE.md`) — read and write sides share that one credential.
 
 ## Deployment
 
 ECS Fargate behind the shared ALB at `trails.<apex>`; CDK stacks `TrailsECRStack` + `TrailsServerStack` in `infra/cdk/trails_stack.py` (stack table in `infra/CLAUDE.md`). Both DynamoDB tables and the S3 bucket are `RETAIN` — trails outlive the stack.
 
-First-time ordering: `bootstrap_secrets.sh` → `deploy.sh` → `setup/bootstrap_trails.sh` on each client machine.
+First-time ordering: `bootstrap_secrets.sh` → `deploy.sh` → `trails/bootstrap.sh` on each client machine.
 
 Recording is mandatory and crash-on-failure, so an unhealthy `trails-server` blocks every bro run — including the devoops bro that would deploy the fix. When the server itself is the thing that's broken, run the bro with `--no-trails` (e.g. `bro chat --no-trails devoops "deploy trails"`): it sets `TRAILS_DISABLED` in the container and drops the `trails` secret from the scoped set, so the rollout can't break the bro's own recording mid-deploy. `--no-trails` covers the containerized `bro run` / `bro chat` path and its aliases; an in-place run has no launch hop to set the env, so set `TRAILS_DISABLED=1` in the environment instead. Running `./trails/server/deploy.sh` directly (no bro) sidesteps recording entirely.
 

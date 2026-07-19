@@ -3,7 +3,7 @@
 
 Runs the deterministic tail of a dev session: resolve the PR, enforce the merge
 preconditions, inject the aggregated token footer into the squash body (see
-setup/claude_commit_footer.py for the accounting model), merge, and delete the
+cw/claude_commit_footer.py for the accounting model), merge, and delete the
 remote feature branch.
 
 Preconditions (each failure aborts with a message on stderr and exit 1):
@@ -89,8 +89,8 @@ def _squash_footer(base: str) -> str:
   root = _run(['git', 'rev-parse', '--show-toplevel'], capture=True)
   # the repo's own copy, or the one vendored via the ppp submodule
   candidates = [
-    f'{root}/setup/claude_commit_footer.py',
-    f'{root}/ppp/setup/claude_commit_footer.py',
+    f'{root}/cw/claude_commit_footer.py',
+    f'{root}/ppp/cw/claude_commit_footer.py',
   ]
   footer_scripts = [path for path in candidates if os.path.isfile(path)]
   if len(footer_scripts) == 0:

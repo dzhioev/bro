@@ -37,7 +37,7 @@ fi
 # regenerate the gitignored _entrypoints.py console-script bridge in .venv. the
 # committed [project.scripts] table points at it; it must track the source on
 # every provision. run with the venv's python directly (cwd-independent, and
-# avoids `uv run` re-syncing the env). see sync_scripts.py.
+# avoids `uv run` re-syncing the env). see dev/sync_scripts.py.
 # CW_VENV_BAKED: the container entrypoint sets this when it reuses the venv baked
 # into the image, whose bridge was generated from the tag-pinned [project.scripts]
 # and so already matches this clone — skip the regen.
@@ -45,7 +45,7 @@ if [ "${CW_VENV_BAKED:-}" = "1" ]; then
   log VERBOSE "console-script entrypoints baked into image; skipping regen"
 else
   log VERBOSE "generating console-script entrypoints"
-  .venv/bin/python -m sync_scripts --entrypoints >&2
+  .venv/bin/python -m dev.sync_scripts --entrypoints >&2
 fi
 
 # promote the staged token-accounting baseline after each commit lands. --git-path
@@ -58,4 +58,4 @@ cp setup/git_hooks/post-commit "$hooks_dir/post-commit"
 chmod +x "$hooks_dir/post-commit"
 
 log VERBOSE "registering local git aliases"
-git config --local alias.golc '!./setup/git_golc.py'
+git config --local alias.golc '!./dev/git_golc.py'

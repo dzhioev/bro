@@ -19,7 +19,7 @@ land-pr
 One shot, in order:
 
 1. Resolves the PR for the current branch and enforces the preconditions — fails with a message and a nonzero exit when the PR is not `OPEN`, not `APPROVED`, or its body has unchecked `- [ ]` test-plan boxes.
-2. Aggregates the branch commits' token footers over the PR's actual base (`setup/claude_commit_footer.py --squash`) and appends the result to the PR body, so the server-side squash commit keeps the session spend. Footerless-commit warnings pass through on stderr — relay them to the user.
+2. Aggregates the branch commits' token footers over the PR's actual base (`cw/claude_commit_footer.py --squash`) and appends the result to the PR body, so the server-side squash commit keeps the session spend. Footerless-commit warnings pass through on stderr — relay them to the user.
 3. Squash-merges with the PR's own title and body as the commit subject/body, then deletes the remote feature branch (local branch and worktree stay untouched).
 4. Prints a JSON result: `pr`, `url`, `title`, `base`, `squash_sha`, `merged_at`, `merged_at_minutes`, `branch_deleted`.
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env -S bash -e
-source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/prelude.sh"
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../setup/prelude.sh"
 
 # prints the `anthropic` secret's `api_key` to stdout. used as claude code's
 # `apiKeyHelper` for `cw --bro` sessions so claude reads the api key from the

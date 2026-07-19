@@ -1,9 +1,9 @@
 #!/usr/bin/env -S bash -e
 # promote the staged token-accounting baseline once a commit lands, so the mark
-# only advances after a *successful* commit (setup/claude_commit_footer.py owns
+# only advances after a *successful* commit (cw/claude_commit_footer.py owns
 # the format + state file). it imports base.args, so it surfaces a failure rather
 # than swallowing it — commit with the project venv active.
 root="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
-footer="$root/setup/claude_commit_footer.py"
+footer="$root/cw/claude_commit_footer.py"
 [ -x "$footer" ] || exit 0
 "$footer" --record

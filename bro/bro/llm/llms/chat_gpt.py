@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar, Literal, Optional, Self, cast, get_args
 
 import llm.llm
-import usage
+import llm.usage as usage
 from base import credentials, log
 from llm.mcp import MCPServer, Tool, ToolControlSignal
 from llm.observer import Observer

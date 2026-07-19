@@ -6,7 +6,7 @@ import pytest
 from openai.types.responses import Response
 
 import llm.llm
-import usage
+import llm.usage as usage
 from llm.llms.chat_gpt import ChatGPT, LLMSpec, parse_response
 from llm.mcp import InProcessMCPServer, Tool, ToolControlSignal, ToolRegistry, wire_name
 from llm.tracker import Tracker

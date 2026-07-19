@@ -43,7 +43,7 @@ keeps the container's git state genuinely isolated. layout:
 
 network is not restricted by design.
 
-This package re-exports below exactly the cross-package surface that `dive_in.py`
+This package re-exports below exactly the cross-package surface that `dev/dive_in.py`
 consumes, so that caller keeps `import cw` unchanged. Intra-package code imports
 submodule → submodule (never through this hub — partial-init hazard); see
 cw/CLAUDE.md.

@@ -1,6 +1,6 @@
 ---
 name: pr
-description: This script should be used when the user signals that the worktree's changes are ready for review and a PR should be opened — "open a PR", "send for review", "PR it", "ship it", "ready for review", "finalize". Covers commit hygiene (CLAUDE.md sync, Dockerfile audit, policy audit, commit splitting), the project's commit-message style, footer generation via `./setup/claude_commit_footer.py`, submodule landing, rebase onto the base branch (master by default), opens the PR via `gh pr create`, then launches the `poll-pr` review watcher to handle review comments and APPROVED events. On approval, chains into `@::land` for the merge step. Also the re-entry point for a PR that is already open — "resume PR <pr-url-or-number>", "resume the PR", "pick up the review" — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
+description: This script should be used when the user signals that the worktree's changes are ready for review and a PR should be opened — "open a PR", "send for review", "PR it", "ship it", "ready for review", "finalize". Covers commit hygiene (CLAUDE.md sync, Dockerfile audit, policy audit, commit splitting), the project's commit-message style, footer generation via `./cw/claude_commit_footer.py`, submodule landing, rebase onto the base branch (master by default), opens the PR via `gh pr create`, then launches the `poll-pr` review watcher to handle review comments and APPROVED events. On approval, chains into `@::land` for the merge step. Also the re-entry point for a PR that is already open — "resume PR <pr-url-or-number>", "resume the PR", "pick up the review" — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
 parameters: {"base?": "base branch for the pull request instead of master", "pr?": "existing pull request URL or number to resume"}
 version: 2.0.0
 ---
@@ -92,10 +92,10 @@ Match recent-log style:
 
 - **Title**: `<area>: <imperative lowercase summary>`, under ~70 chars. `<area>` is a module path or file stem — `cw`, `flow/mcp`, `.claude/settings`, `CLAUDE.md`, `sync-scripts`, etc.
 - **Body**: terse — itemised bullets over prose, cap ~10 lines, often skipped entirely. Only context a reader can't recover from the code (motivation, constraint, non-obvious tradeoff).
-- **Footer**: one blank line, then a `Task: <url>` line (resolve via `brog::get_task(task_id).url` — task id comes from `CW_TASK_ID` env var or a `brog::create_task` call earlier in this session; in re-entry the PR body's `Task:` line already carries the URL), then the single-line output of `./setup/claude_commit_footer.py` (the per-commit token delta, split into the four billed classes). Example:
+- **Footer**: one blank line, then a `Task: <url>` line (resolve via `brog::get_task(task_id).url` — task id comes from `CW_TASK_ID` env var or a `brog::create_task` call earlier in this session; in re-entry the PR body's `Task:` line already carries the URL), then the single-line output of `./cw/claude_commit_footer.py` (the per-commit token delta, split into the four billed classes). Example:
   ```
   Task: https://www.notion.so/my-task-abc123
-  <single-line output of ./setup/claude_commit_footer.py>
+  <single-line output of ./cw/claude_commit_footer.py>
   ```
   Omit the `Task:` line if no task ID is available.
 - **Never** include `Co-Authored-By:` lines or "Generated with Claude Code" boilerplate.
@@ -104,7 +104,7 @@ Match recent-log style:
 **Regenerate the footer immediately before every commit — and again before every retry.** It emits the token *delta* since this session's last successful commit (the baseline lives in the gitignored `.token_accounting_state.json`), and the session cumulative grows with each attempt, so a reused footer would misattribute the delta. A `post-commit` git hook advances the baseline only after a commit actually lands, which keeps retries and footerless commits correct — so never reuse an earlier footer.
 
 ```bash
-./setup/claude_commit_footer.py
+./cw/claude_commit_footer.py
 ```
 
 ### 7. Commit
@@ -119,7 +119,7 @@ git commit -m "$(cat <<'EOF'
 <optional terse body>
 
 Task: https://www.notion.so/...
-<single-line output of ./setup/claude_commit_footer.py>
+<single-line output of ./cw/claude_commit_footer.py>
 EOF
 )"
 ```

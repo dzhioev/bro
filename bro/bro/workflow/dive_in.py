@@ -13,6 +13,8 @@ from base import log
 from base.args import Parser
 from flow.focus.client.client import default_client
 
+__cli_name__ = 'dive-in'
+
 
 def _slugify(name: str) -> str:
   s = name.lower().strip()

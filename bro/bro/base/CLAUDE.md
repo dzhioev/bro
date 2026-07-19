@@ -1,6 +1,6 @@
 # base/CLAUDE.md
 
-Low-level shared utilities used across the whole repo. Some modules (`base.args`, `base.log`) happen to import no third-party package at load time, so consumers that run outside the venv (e.g. `setup/claude_commit_footer.py` from the post-commit git hook) can import them. Some modules expose a CLI (`base.credentials`, `base.time-util`); run those with `--help` for flags.
+Low-level shared utilities used across the whole repo. Some modules (`base.args`, `base.log`) happen to import no third-party package at load time, so consumers that run outside the venv (e.g. `cw/claude_commit_footer.py` from the post-commit git hook) can import them. Some modules expose a CLI (`base.credentials`, `base.time-util`); run those with `--help` for flags.
 
 ## Modules
 
@@ -20,4 +20,4 @@ Low-level shared utilities used across the whole repo. Some modules (`base.args`
 
 ## CLI relationship
 
-Every CLI in the repo is a bare `def main(argv)` whose body builds a `base.args.Parser` and ends in `return fn(**parser.parse(argv))` or `return parser.dispatch(argv)`. The global-argv read happens once, in a generated `_entrypoints.py` shim, not in `main` — see the root `CLAUDE.md` "Commands" section and `template.py`.
+Every CLI in the repo is a bare `def main(argv)` whose body builds a `base.args.Parser` and ends in `return fn(**parser.parse(argv))` or `return parser.dispatch(argv)`. The global-argv read happens once, in a generated `_entrypoints.py` shim, not in `main` — see the root `CLAUDE.md` "Commands" section and `dev/template.py`.

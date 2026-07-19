@@ -114,7 +114,7 @@ RUN --mount=type=bind,from=project,target=/project-src \
       --exclude=./node_modules --exclude=./.configs -cf - . | tar -C /workspace -xf - \
  && cd /workspace \
  && UV_PROJECT_ENVIRONMENT=/opt/cw-venv uv sync --frozen --all-groups \
- && /opt/cw-venv/bin/python -m sync_scripts --entrypoints \
+ && /opt/cw-venv/bin/python -m dev.sync_scripts --entrypoints \
  && find /workspace -mindepth 1 -delete \
  && find /opt/cw-venv /opt/uv-cache \( -type f -o -type d \) ! -perm -o+w \
       -exec chmod a+rwX {} +

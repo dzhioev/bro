@@ -4,7 +4,7 @@ import subprocess
 from typing import Any
 from unittest.mock import patch
 
-import land_pr
+import dev.land_pr as land_pr
 
 
 def _pr(**overrides: Any) -> dict[str, Any]:
@@ -81,7 +81,7 @@ class TestPreconditionError:
     assert land_pr._precondition_error(pr, False, True) is None
 
 
-_FOOTER_SCRIPT = '/repo/setup/claude_commit_footer.py'
+_FOOTER_SCRIPT = '/repo/cw/claude_commit_footer.py'
 
 
 def _fake_run(
@@ -166,7 +166,7 @@ def test_land_failed_branch_delete_degrades(capsys):
 
 def test_land_uses_the_vendored_footer_script_when_the_root_copy_is_absent():
   merge_calls: list[list[str]] = []
-  vendored = '/repo/ppp/setup/claude_commit_footer.py'
+  vendored = '/repo/ppp/cw/claude_commit_footer.py'
   with (
     patch.object(
       land_pr, '_run', side_effect=_fake_run(merge_calls, _pr(), footer_script=vendored)

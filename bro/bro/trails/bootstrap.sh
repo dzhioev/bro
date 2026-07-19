@@ -1,5 +1,5 @@
 #!/usr/bin/env -S bash -e
-source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/prelude.sh"
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../setup/prelude.sh"
 # one-time setup for the trails sink.
 #
 # reads the bearer token from SSM (/trails/bearer-token), derives the trails
@@ -14,7 +14,7 @@ source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/prelude.sh"
 #   - the `infra` secret resolvable (~/.ppp/infra.json)
 #
 # run once after deploying the trails CDK stack:
-#   ./setup/bootstrap_trails.sh
+#   ./trails/bootstrap.sh
 #
 # idempotent: if ~/.ppp/trails.json already exists, the script is a no-op.
 

@@ -1,17 +1,11 @@
 #!/usr/bin/env python
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent))
-
-from claude_commit_footer import (  # noqa: E402
+import llm.usage as usage
+from cw.claude_commit_footer import (
   State,
   _effective_baseline,
   _emit_default,
   _emit_squash,
 )
-
-import usage  # noqa: E402
 
 OPUS = 'claude-opus-4-8'
 

@@ -1,13 +1,15 @@
 #!/usr/bin/env python
-from typing import Optional
+"""skeleton for a new console-script module."""
 
-from base.args import Parser
-
-
-def template() -> None:
-  pass
-
-
-def main(argv: list[str]) -> Optional[int]:
-  parser = Parser(description='')
-  return template(**parser.parse(argv))
+# from typing import Optional
+#
+# from base.args import Parser
+#
+#
+# def command() -> None:
+#   pass
+#
+#
+# def main(argv: list[str]) -> Optional[int]:
+#   parser = Parser(description='')
+#   return command(**parser.parse(argv))
