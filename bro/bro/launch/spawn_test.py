@@ -56,7 +56,7 @@ class TestSummonLowering:
           'CW_BASE_REF': 'PARENT-SHA',
           'CW_BRO': 'devoops',
           'CW_SUMMONER': '{"session":"ws"}',
-          **bro.launch.identity.bro_git_identity_env(),
+          **bro.launch.identity.bro_git_identity_env('devoops'),
         },
         secrets={'aws', 'trails'},
         optional_secrets={'openai'},
@@ -100,7 +100,7 @@ class TestSummonLowering:
       'CW_BASE_REF': 'REF-SHA',
       'CW_BRO': 'devoops',
       'CW_SUMMONER': '{"session":"ws"}',
-      **bro.launch.identity.bro_git_identity_env(),
+      **bro.launch.identity.bro_git_identity_env('devoops'),
     }
 
   def test_unresolvable_into_fails_the_spawn(self, lowering_harness):

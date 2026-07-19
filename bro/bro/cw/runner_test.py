@@ -156,7 +156,7 @@ class TestRunInPlace:
       # every session commits as bro, hold-independent
       assert cw.runner.run_in_place(_spec()) == 0
       assert h.env['GIT_AUTHOR_NAME'] == 'bro'
-      assert h.env['GIT_COMMITTER_EMAIL'] == 'dzhioev+bro@gmail.com'
+      assert h.env['GIT_COMMITTER_EMAIL'] == 'ppp-dev@bro'
 
   def test_exports_the_session_hold(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)

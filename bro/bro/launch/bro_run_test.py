@@ -20,7 +20,7 @@ def test_describe_pins_the_chat_verb():
 
 def test_describe_env_carries_identity_and_bro():
   launch = _describe('ppp-dev', ['hi'])
-  assert launch.env == {'CW_BRO': 'ppp-dev', **bro_git_identity_env()}
+  assert launch.env == {'CW_BRO': 'ppp-dev', **bro_git_identity_env('ppp-dev')}
 
 
 def test_describe_scopes_to_the_bro():

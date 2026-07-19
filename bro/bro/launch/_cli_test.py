@@ -12,7 +12,7 @@ from workspace.project import ProjectConfig
 
 # the run bro's own CW_BRO rides in explicitly (never as an ambient forward), so
 # a calling session's theming cannot leak into the container
-_RUN_ENV = {'CW_BRO': 'ppp-dev', **bro_git_identity_env()}
+_RUN_ENV = {'CW_BRO': 'ppp-dev', **bro_git_identity_env('ppp-dev')}
 
 
 @pytest.fixture(autouse=True)

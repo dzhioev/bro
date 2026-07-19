@@ -44,7 +44,7 @@ def describe(
   """
   scoped = scoped_secrets(bro_name, Surface.BRO_RUN, credential_instances=credential_instances)
   required = set(scoped.required)
-  env = dict(bro_git_identity_env())
+  env = dict(bro_git_identity_env(bro_name))
   env['CW_BRO'] = bro_name
   if base_ref is not None:
     env['CW_BASE_REF'] = base_ref

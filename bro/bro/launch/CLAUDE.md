@@ -47,7 +47,7 @@ The modules the launch surfaces share — consumed by `maybe_containerize` here 
 - `bro_run.py` — `describe`, the shared broker-free bro-run launch description: the `workspace.docker.Launch` for `bro <verb> <bro> … --in-place` (inner command, env with bro git identity + `CW_BRO`, the bro's `Surface.BRO_RUN` credential scope, stdio/docker knobs), so every surface that spawns a bro run computes it identically — consumed by `maybe_containerize` and the summon lowering
 - `root.py` — `run_in_container`: run a neutral `Launch` directly or as the broker's supervised root peer, behind `workspace.containers`' lazy-import gates (the fallback prepares + attaches without any broker import)
 - `spawn.py` — the post-gate broker-root composition: `run_root_via_broker` (the composite over both launch modes plus summon lowering, the root-lifecycle log handlers, and the per-root `SummonControl` wiring) and the summon lowering itself (`SummonLaunchSpec` → `bro_run.describe` off-loop, base ref resolved from the summoner's workspace HEAD or the request's `into`). Imports broker at module level, which is why only the gated paths import it
-- `identity.py` — `bro_git_identity_env()`, the git identity every managed session commits as
+- `identity.py` — `bro_git_identity_env(bro_name)`, the git identity every managed session commits as
 - `e2e_test.py` — the launch-stack e2e against the real docker daemon (host-only, isolated HOME/workspace root; kept out of `PYTEST_FILES`)
 
 ## Container isolation

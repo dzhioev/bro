@@ -102,7 +102,7 @@ def run_in_place(spec: 'SessionSpec') -> int:
     resumed_segment = latest.stem
     claude_args = ['--resume', latest.stem, *claude_args]
 
-  os.environ.update(bro_git_identity_env())
+  os.environ.update(bro_git_identity_env(spec.session_bro))
 
   # CW_BRO themes the session (banner, statusLine): --bro names it, a
   # cw-session runs as its persona

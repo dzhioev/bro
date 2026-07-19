@@ -471,7 +471,7 @@ def test_call_no_trails_disables_recording_in_container():
     assert launch.env == {
       'CW_BRO': 'ppp-dev',
       'TRAILS_DISABLED': '1',
-      **bro_git_identity_env(),
+      **bro_git_identity_env('ppp-dev'),
     }
 
 
