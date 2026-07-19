@@ -129,7 +129,14 @@ class TestCredentialInstances:
     assert 'openai+work' in scoped.optional
     assert 'openai' not in scoped.optional
 
-  def test_mapping_outside_the_scope_raises(self):
+  def test_mapping_for_another_persona_is_ignored(self):
+    scoped = bro.launch.scope.scoped_secrets(
+      'bro', Surface.CW_SESSION, credential_instances={'brog': 'github'}
+    )
+    assert 'brog' not in scoped.required
+    assert 'brog+github' not in scoped.required
+
+  def test_mapping_of_an_unknown_kind_raises(self):
     with pytest.raises(
       bro.launch.scope.LaunchScopeError, match=r"creds maps kind\(s\).*'nonesuch'"
     ):

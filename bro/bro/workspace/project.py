@@ -17,8 +17,8 @@ class ProjectConfig:
   neither --persona nor --bro names one, the docker repository its session
   images build under (`bro/<persona>` unless overridden — the derivation lives
   in project_config), and the per-kind credential instances its launches
-  substitute into every computed scope (`creds`, kind → instance; the launch
-  surfaces' scope computation applies it)."""
+  substitute where matching kinds occur in a computed scope (`creds`, kind →
+  instance; the launch surfaces' scope computation applies it)."""
 
   persona: str
   image_repository: str

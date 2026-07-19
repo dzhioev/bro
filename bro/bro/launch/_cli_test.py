@@ -198,7 +198,7 @@ def test_maybe_containerize_missing_secret_fails_before_launch(monkeypatch, caps
   assert "unknown secret 'github'" in capsys.readouterr().err
 
 
-def test_maybe_containerize_creds_mapping_outside_scope_errors(capsys):
+def test_maybe_containerize_unknown_creds_mapping_kind_errors(capsys):
   # the [tool.bro] creds typo guard raises from the scope computation inside
   # describe; the hop renders it like any other launch-scope failure
   with (

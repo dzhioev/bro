@@ -81,20 +81,21 @@ _RECIPES: dict[Surface, _Recipe] = {
 }
 
 
+def _validate_credential_instances(credential_instances: Mapping[str, str]) -> None:
+  """reject mapped kinds absent from the host credential registry."""
+  known_kinds = {credentials.parse_name(name)[0] for name in credentials.host_registry()}
+  unknown = sorted(set(credential_instances) - known_kinds)
+  if len(unknown) > 0:
+    raise LaunchScopeError(
+      f'[tool.bro] creds maps kind(s) not known to the credential registry: '
+      f'{", ".join(map(repr, unknown))}'
+    )
+
+
 def _substitute_credential_instances(
   scoped: ScopedSecrets, credential_instances: Mapping[str, str]
 ) -> ScopedSecrets:
-  """swap each mapped bare kind in either tier for its `kind+instance` variant.
-
-  a mapping whose kind is in neither tier raises — a typo guard: the operated
-  repo's `[tool.bro] creds` selects instances for kinds its launches actually
-  scope, so a name that matches nothing is a config mistake to surface."""
-  unmatched = sorted(set(credential_instances) - (scoped.required | scoped.optional))
-  if len(unmatched) > 0:
-    raise LaunchScopeError(
-      f'[tool.bro] creds maps kind(s) not in the scoped credential set: '
-      f'{", ".join(map(repr, unmatched))}'
-    )
+  """swap mapped bare kinds present in either tier for `kind+instance` variants."""
 
   def substitute(names: set[str]) -> set[str]:
     return {
@@ -118,12 +119,14 @@ def scoped_secrets(
   requests only what it actually uses.
 
   `credential_instances` is the operated repo's kind → instance selection
-  (`workspace.project.ProjectConfig.creds`), substituted over both tiers of the
-  computed scope — so later `--grant`/`--revoke` overrides and hydration see
-  the `kind+instance` names, while components keep declaring kinds.
+  (`workspace.project.ProjectConfig.creds`). mapped kinds are validated against
+  the host credential registry, then matching names are substituted over both
+  tiers of this persona's scope — so later `--grant`/`--revoke` overrides and
+  hydration see the `kind+instance` names, while components keep declaring kinds.
   """
   from bro.registry import create_bro
 
+  _validate_credential_instances(credential_instances)
   recipe = _RECIPES[surface]
   required = set(recipe.baseline)
   optional = set(recipe.optional_baseline)
@@ -160,9 +163,8 @@ def scoped_secrets(
 
 class LaunchScopeError(Exception):
   """a launch failed its scope computation or preflight: a malformed or no-op
-  grant/revoke override, a `[tool.bro] creds` mapping matching nothing in the
-  scope, an unknown summon target, or an unknown/unresolvable required
-  secret."""
+  grant/revoke override, an unknown `[tool.bro] creds` kind, an unknown summon
+  target, or an unknown/unresolvable required secret."""
 
 
 # the unified --grant/--revoke value syntax: a leading `@` marks a bro summon
