@@ -1,7 +1,7 @@
 ---
 name: land
 description: This script should be used when the user signals that an open PR should be merged into master — "land it", "land", "merge it", "merge the PR", "merge to master". Runs `land-pr`, which squash-merges the open PR for the current branch in one shot (precondition checks, aggregated token footer injected into the squash body, remote branch cleanup), then records a `merged` comment on the task and closes it to done unless the user explicitly said to keep it open. On APPROVED, `@::pr` chains into this script. Direct push to master (no PR) is a one-liner (`git fetch origin && git rebase origin/master && git push origin HEAD:master`) — not this script.
-version: 2.0.0
+version: 2.1.0
 ---
 
 # land
@@ -9,6 +9,8 @@ version: 2.0.0
 Merge an approved PR for the current branch into master. The terminal action of a dev session.
 
 The mechanical work is one command (`land-pr`); your job is the judgment calls around it — waivers, task closure — and doing the whole thing in as few responses as possible. Post-approval latency is model round trips, so batch aggressively: never spend a turn on a single call that can share a response with another.
+
+No `run-tests` before the merge: the branch was verified at its last push, the squash-merge is server-side, and the merged result on master is verified anyway by the next session that builds on it — a pre-merge pass adds latency and no evidence.
 
 ## Step 1 — merge: run `land-pr`
 
