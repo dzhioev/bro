@@ -158,6 +158,8 @@ Conflicts → resolve them yourself, in-band: merge each conflict, `git add` the
 
 Escalate only when a resolution is not obvious — the two sides carry contradicting logic or intent that no merged version can honor both of: stop and ask when questions reach the user; raise with the contradiction spelled out when unattended. Never `--abort` or `--skip` silently.
 
+In an **unattended** session there is no user to stop for: rescue your commits per _Rescue committed work before a raise_ below (abort the rebase to restore them, push the branch, name the ref), then `raise` with the conflict as the reason. This preserves the raise-on-conflict policy while making the parked commits recoverable; resolving such a conflict in-band instead is a separate change.
+
 ### 10. Verify PR scope
 
 ```bash
@@ -283,6 +285,10 @@ Unconditional approval — the PR is ready to merge. Chain into the merge, and b
 **`conflicts` event**: rerun step 9 — the rebase, the in-band resolution default, the escalation bar, and the task comment all apply unchanged — then push the rebased branch: `git push --force-with-lease origin HEAD` — the PR branch, never the base.
 
 **`merged` / `closed`**: someone (the user, `@::land`, or external action) terminated the PR. If `merged`, run `@::land`'s post-merge bookkeeping — the `merged` comment and task closure. If `closed` without merge, log it and report to the user.
+
+## Rescue committed work before a raise
+
+{{include fragments/rescue_before_raise.md}}
 
 ## Safety rules
 

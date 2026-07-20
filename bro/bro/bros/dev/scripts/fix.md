@@ -34,6 +34,8 @@ Read the appended `# Arguments` section. Use `task` as the existing task ref, or
 
 **Workability guard.** If `blocked_by` is non-empty, the task has open blockers. Name them and confirm with the user before starting work — a live blocker may make the work premature or moot.
 
+**Rescue-ref guard.** Scan the comment stream for a `rescue`-topic entry from a prior raised attempt — it names a pushed branch ref carrying that attempt's unlanded commits. If one is present, that work is recoverable: fetch the ref (`git fetch origin <ref>`) and build on it — reset or cherry-pick those commits onto the current base so you continue from where it stopped rather than re-implementing from scratch. If they conflict with intervening changes, resolve them as part of the work, and note in your plan that you're resuming from a rescue ref.
+
 ## Step 2 — gather context
 
 - If the task has a project, `get_task().project` already carries its name and summary; `brog::list_tasks(project=<project.id>, status='open')` with a small `limit` shows the open sibling tasks.
@@ -60,6 +62,12 @@ During implementation, add an entry when something non-obvious happens — a des
 Make the change. For anything beyond a small, single-commit edit, **commit completed logical units as you go** rather than leaving the whole change uncommitted until `@::pr` — the session can exhaust its output budget mid-implementation, and uncommitted work is then lost, while committed units survive on the branch as a recoverable checkpoint. Keep each checkpoint green and conventional (run `run-tests`; follow the commit style + footer from the pr script's steps 6-7) so it's landable as-is.
 
 Stop and ask if the approach turns out to need a different direction than you proposed.
+
+### Rescue commits before a raise
+
+Implementing is where the recoverable checkpoints accumulate — so if an unresolvable blocker forces a `raise` here:
+
+{{include fragments/rescue_before_raise.md}}
 
 ## Step 6 — verify
 
