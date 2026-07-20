@@ -2,7 +2,7 @@
 name: pr
 description: This script should be used when the user signals that the worktree's changes are ready for review and a PR should be opened — "open a PR", "send for review", "PR it", "ship it", "ready for review", "finalize". Covers commit hygiene (CLAUDE.md sync, Dockerfile audit, policy audit, commit splitting), the project's commit-message style, footer generation via `./cw/claude_commit_footer.py`, submodule landing, rebase onto the base branch (master by default), opens the PR via `gh pr create`, then launches the `poll-pr` review watcher to handle review comments, merge conflicts, and APPROVED events. On approval, chains into `@::land` for the merge step. Also the re-entry point for a PR that is already open — "resume PR <pr-url-or-number>", "resume the PR", "pick up the review" — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
 parameters: {"base?": "base branch for the pull request instead of master", "pr?": "existing pull request URL or number to resume"}
-version: 2.0.0
+version: 2.1.0
 ---
 
 # pr
@@ -154,7 +154,9 @@ The main repo must not be pushed until all submodules it references are availabl
 git fetch origin <base> && git rebase origin/<base>
 ```
 
-Conflicts → stop and report to the user. Do not `--abort` or `--skip` without asking. Prefer `Edit` over `Write` for resolving conflict markers — re-Read in conflict state, replace each `<<<<<<<...=======...>>>>>>>` block with the merged version. Cheaper than rewriting whole files.
+Conflicts → resolve them yourself, in-band: merge each conflict, `git add` the resolved paths, `git rebase --continue`. Then re-run the pre-commit gates (step 2) and record the resolution on the task (same conditions as step 13): `brog::add_comment(task_id, topic='rebase conflicts', body=...)` naming the conflicted files and the resolution each one took.
+
+Escalate only when a resolution is not obvious — the two sides carry contradicting logic or intent that no merged version can honor both of: stop and ask when questions reach the user; raise with the contradiction spelled out when unattended. Never `--abort` or `--skip` silently.
 
 ### 10. Verify PR scope
 
@@ -278,14 +280,7 @@ Unconditional approval — the PR is ready to merge. Chain into the merge, and b
 
 **`review` with `state: "COMMENTED"` or `"DISMISSED"`**: informational; the actionable feedback (if any) is in this event's `comments` array or arrives via accompanying `comment` events.
 
-**`conflicts` event**: fix immediately — no confirmation, the conflict came from concurrent landings on the base, not from a decision the user still owns:
-
-1. `git fetch origin <base> && git rebase origin/<base>`.
-2. Resolve every conflict in place (prefer `Edit` over `Write`: re-Read the file in conflict state, replace each `<<<<<<<...>>>>>>>` block with the merged version), `git add` the resolved paths, `git rebase --continue`.
-3. Re-run the pre-commit gates (step 2).
-4. Push the rebased branch: `git push --force-with-lease origin HEAD` — the PR branch, never the base.
-
-Only genuine judgment calls interrupt this flow: when both sides changed the same behavior and the merge itself is a design decision, stop and ask instead of guessing.
+**`conflicts` event**: rerun step 9 — the rebase, the in-band resolution default, the escalation bar, and the task comment all apply unchanged — then push the rebased branch: `git push --force-with-lease origin HEAD` — the PR branch, never the base.
 
 **`merged` / `closed`**: someone (the user, `@::land`, or external action) terminated the PR. If `merged`, run `@::land`'s post-merge bookkeeping — the `merged` comment and task closure. If `closed` without merge, log it and report to the user.
 
