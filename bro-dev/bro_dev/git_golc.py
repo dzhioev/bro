@@ -11,7 +11,7 @@ the clearest per-commit glance at generated work (the cheap, volume-dominating
 cache-read lives in the full footer, not here). Commits with no parseable footer
 render `—`.
 
-Repo-local — wired by setup/setup_repo.sh via `git config --local alias.golc`.
+Repo-local — wired by setup/provision_repo.sh via `git config --local alias.golc`.
 The footer format is owned by `llm.usage`; the small parser here is a
 deliberate dependency-free duplicate so `git golc` works without the project
 venv active.

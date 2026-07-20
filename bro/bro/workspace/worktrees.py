@@ -10,8 +10,9 @@ def ensure_host_worktree(worktree: Path, branch: str, base_ref: Optional[str] = 
   # create the worktree if new (git ops run in the project root, the cwd): a
   # `worktree-<name>` branch — based on base_ref (`--into`) when given, else on
   # the checkout's current HEAD — plus submodule alternates so `git submodule
-  # update` reuses the superproject's modules. an already-existing branch defines
-  # its own base, so neither applies there.
+  # update` reuses the superproject's modules, then a submodule init so the tree
+  # is complete even when provisioning is skipped. an already-existing branch
+  # defines its own base, so none of it applies there.
   if worktree.is_dir():
     return True
   log.info('creating worktree %s', worktree)
@@ -35,17 +36,24 @@ def ensure_host_worktree(worktree: Path, branch: str, base_ref: Optional[str] = 
     ('submodule.alternateErrorStrategy', 'info'),
   ):
     subprocess.run(['git', '-C', str(worktree), 'config', key, value], check=False)
+  if (
+    subprocess.run(['git', '-C', str(worktree), 'submodule', 'update', '--init', *quiet]).returncode
+    != 0
+  ):
+    log.error('failed to initialize submodules in %s', worktree)
+    return False
   return True
 
 
 def provision_host_worktree(worktree: Path) -> bool:
-  # run the worktree's own provision_repo.sh against itself (idempotent: skips the
-  # uv sync when the venv is current, always refreshes the console-script bridge +
-  # git hooks). shared with host setup_repo.sh and the container entrypoint.
+  # run the worktree's own setup.sh — the uniform provisioning entry point every
+  # repo cw operates on carries (idempotent: skips the uv sync when the venv is
+  # current, always refreshes the console-script bridge + git hooks). shared
+  # with the container entrypoint.
   # CW_VENV_BAKED is stripped: the container entrypoint exports it for the baked
   # /workspace venv, but a worktree venv (the in-container nesting fallback) is
   # freshly synced and still needs its console-script bridge generated.
-  script = worktree / 'setup' / 'provision_repo.sh'
+  script = worktree / 'setup.sh'
   if not script.is_file():
     log.warning('%s not found (worktree on an old base?); skipping provisioning', script)
     return True

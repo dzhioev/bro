@@ -1,6 +1,48 @@
 #!/usr/bin/env -S bash -e
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/prelude.sh"
 
+SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+
+# a container's environment comes baked into its image
+if [ -f /.dockerenv ]; then
+  log VERBOSE "inside a container; skipping environment setup"
+  exit 0
+fi
+
+FORCE=0
+for arg in "$@"; do
+  case "$arg" in
+    --force) FORCE=1 ;;
+    *)
+      echo "usage: $0 [--force]" >&2
+      exit 2
+      ;;
+  esac
+done
+
+# profile: a checkout vendoring ppp as a submodule needs only the tools cw
+# operates with; ppp development itself needs the full set
+if [ -n "$(git -C "$SCRIPT_DIR/.." rev-parse --show-superproject-working-tree)" ]; then
+  PROFILE=core
+else
+  PROFILE=full
+fi
+
+# skip when nothing that defines the environment changed since the last
+# successful run on this host: the stamp records a hash of this script and the
+# pinned versions it enforces. system drift behind an unchanged stamp is not
+# re-checked — run with --force to re-verify the installed tools.
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/ppp"
+STAMP="$STATE_DIR/setup-env-$PROFILE.stamp"
+INPUTS_HASH="$(
+  cat "$SCRIPT_DIR/setup_env.sh" "$SCRIPT_DIR/versions.sh" "$SCRIPT_DIR"/ubuntu/*.sh \
+    | python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'
+)"
+if [ "$FORCE" != "1" ] && [ -f "$STAMP" ] && [ "$(cat "$STAMP")" = "$INPUTS_HASH" ]; then
+  log VERBOSE "environment current; run with --force to re-verify"
+  exit 0
+fi
+
 # compares versions of the form N.N[letter]... (3.7 < 3.7a < 3.7b < 3.8)
 version_gte() {
   python3 - "$1" "$2" <<'EOF'
@@ -52,9 +94,8 @@ if [ "$PLATFORM" != "macOS" ] && [ "$PLATFORM" != "Ubuntu" ]; then
   exit 1
 fi
 
-echo "Setting up dev environment on ${PLATFORM}"
+echo "Setting up dev environment on ${PLATFORM} ($PROFILE profile)"
 
-SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 source "$SCRIPT_DIR/versions.sh"
 
 check_brew() {
@@ -194,6 +235,10 @@ install_tkinter() {
     return
   fi
 
+  if python3 -c 'import tkinter' > /dev/null 2>&1; then
+    echo "tkinter is already available"
+    return
+  fi
   check_brew
   brew install python-tk
 }
@@ -233,10 +278,15 @@ install_uv() {
   fi
 }
 
-install_stow
-install_tmux
-install_tkinter
 install_claude_code
 install_docker
-install_awscli
 install_uv
+if [ "$PROFILE" = "full" ]; then
+  install_stow
+  install_tmux
+  install_tkinter
+  install_awscli
+fi
+
+mkdir -p "$STATE_DIR"
+printf '%s\n' "$INPUTS_HASH" > "$STAMP"

@@ -131,12 +131,15 @@ if [ "${CW_SKIP_VENV:-}" != "1" ] && [ -d /opt/cw-venv ] && [ ! -e /workspace/.v
   export CW_VENV_BAKED=1
 fi
 
-# provision the cloned repo (venv sync if stale, console-script bridge, post-commit
-# hook, git alias) — shared with host setup_repo.sh and cw's host-mode worktree
-# launch. then activate the venv so child processes (hooks, MCP servers, Bash tool)
-# inherit it. CW_SKIP_VENV (smoke test only) skips the whole venv-dependent block.
+# provision the cloned repo through its root setup.sh — the uniform provisioning
+# entry point every repo cw operates on carries (venv sync if stale, console-script
+# bridge, post-commit hook, git alias; a superproject setup.sh's own submodule init
+# is a no-op — the clone's submodules were already initialized above from
+# host-local clones). then activate the venv so child processes (hooks, MCP
+# servers, Bash tool) inherit it. CW_SKIP_VENV (smoke test only) skips the whole
+# venv-dependent block.
 if [ "${CW_SKIP_VENV:-}" != "1" ]; then
-  /workspace/setup/provision_repo.sh >&2
+  /workspace/setup.sh >&2
   source /workspace/.venv/bin/activate
 fi
 

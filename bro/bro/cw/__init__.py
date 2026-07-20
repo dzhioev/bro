@@ -2,7 +2,7 @@
 
 host mode (--host): cw owns the worktree lifecycle — it creates the worktree
 (`var/cw/worktrees/<name>`, `worktree-<name>` branch + submodule alternates),
-provisions it with the shared setup/provision_repo.sh (same as the container
+provisions it with the worktree's own setup.sh (same as the container
 entrypoint), then spawns the worktree's own `cw ss --in-place` (the in-place
 session runner, cw/runner.py), which runs plain `claude` from inside it (not
 `claude -w`, so no claude-side worktree/provisioning hooks). On exit it drops the

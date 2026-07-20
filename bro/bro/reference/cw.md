@@ -66,8 +66,8 @@ Container mode is the default; `--host` selects a same-machine git worktree inst
 
 1. refuses a cw-session launch when the `claude_code` secret doesn't resolve — the setup-token is a cw-session's sole auth (see "Host claude-state isolation" below), so the failure surfaces before anything is created, with an actionable message ahead of the general hydration strictness;
 2. hydrates the session's scoped credential store — the same computation and strictness as container mode (see "Scoped credential hydration"), still before anything is created;
-3. creates the worktree if new — a `worktree-<name>` branch (based on `--into <ref>` when given, else on the host checkout's current `HEAD` — see `--into` under "Flags that shape the session") plus `submodule.alternateLocation=superproject` so submodule updates reuse the superproject's modules;
-4. runs `setup/provision_repo.sh` against the worktree (the same provisioner the container entrypoint uses — venv sync if stale, console-script bridge, git hooks, `git golc` alias);
+3. creates the worktree if new — a `worktree-<name>` branch (based on `--into <ref>` when given, else on the host checkout's current `HEAD` — see `--into` under "Flags that shape the session") plus `submodule.alternateLocation=superproject` so submodule updates reuse the superproject's modules, then initializes submodules;
+4. runs the worktree's own `setup.sh` (the uniform provisioning entry point, same as the container entrypoint — stamped host-tool check, venv sync if stale, console-script bridge, git hooks, `git golc` alias);
 5. provisions the session's private claude state dir (`cw/claude_config.py` — see "Host claude-state isolation" below), materializes the scoped store into its `.ppp/`, and points `CLAUDE_CONFIG_DIR` + `CREDENTIALS_REGISTRY` at them in the runner env;
 6. writes its own pid to `<project>/.git/worktrees/<name>/cw-session.pid` for the session's duration — the session lock, and how `cw list` / `cw clean` tell the session is live;
 7. spawns `<worktree>/.venv/bin/cw ss --in-place …` with the env extended to activate the worktree's `.venv`.
@@ -78,7 +78,7 @@ Layout on disk:
 
 - `<project>/var/cw/worktrees/<name>/` — the worktree (regular working tree with a `.git` gitfile that points at `<project>/.git/worktrees/<name>/`), a sibling of the container workspaces under `var/cw/`.
 - `<project>/.git/worktrees/<name>/cw-session.pid` — the launching `cw` process's pid, present while a host session is live (drives `cw list`/`clean` active-session detection).
-- `<project>/var/cw/worktrees/<name>/.venv` — per-worktree virtualenv created on first launch by `cw` (via `setup/provision_repo.sh`).
+- `<project>/var/cw/worktrees/<name>/.venv` — per-worktree virtualenv created on first launch by `cw` (via the worktree's `setup.sh`).
 - `~/.claude/cw-sessions/<name>/projects/<encoded-worktree-path>/` — Claude Code's per-project state for the session, including the session JSONL files, inside the session's private claude state dir (below). The encoded path is the worktree path with `/` and `.` replaced by `-`. Sessions recorded before the private dir existed live under `~/.claude/projects/<encoded-worktree-path>/`; a launch copies them into the session dir once, and the `Workspace` readers fall back to the legacy location until then.
 
 #### Host claude-state isolation
