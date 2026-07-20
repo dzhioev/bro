@@ -22,7 +22,7 @@ class TestSummonLowering:
     monkeypatch.setattr(
       bro.launch.spawn,
       'project_config',
-      lambda: workspace.project.ProjectConfig(persona='foo', image_repository='bro/foo'),
+      lambda: workspace.project.ProjectConfig(default_bro='foo', image_repository='bro/foo'),
     )
     monkeypatch.setattr(
       bro.launch.bro_run,

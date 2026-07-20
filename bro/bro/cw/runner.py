@@ -51,8 +51,8 @@ def _set_session_context(spec: 'SessionSpec', system_prompt: str, workspace: Pat
     branch=f'worktree-{spec.name}',
     base_sha=base_sha,
     base_ref=spec.into,
-    bro=spec.bro,
-    persona=spec.session_bro if spec.bro is None else None,
+    bro=spec.session_bro,
+    raw=spec.raw,
     proj_root=workspace,
   )
   os.environ[CW_SESSION_CONTEXT_ENV] = encode_session_context(records)
@@ -104,8 +104,7 @@ def run_in_place(spec: 'SessionSpec') -> int:
 
   os.environ.update(bro_git_identity_env(spec.session_bro))
 
-  # CW_BRO themes the session (banner, statusLine): --bro names it, a
-  # cw-session runs as its persona
+  # CW_BRO themes the session (banner, statusLine)
   os.environ['CW_BRO'] = spec.session_bro
 
   # hold and kill wiring for the `raise` service tool's mounts (bro/bro.py).
@@ -132,9 +131,9 @@ def run_in_place(spec: 'SessionSpec') -> int:
     # session-local MCP serving, one mechanism for both flavors: OS-assigned port
     # published via a port file, per-session bearer token. the tools serve this
     # workspace's code (the runner's cwd and venv) — the bro's own toolset under
-    # --bro, the persona's claude-harness namespaces for a cw-session.
-    if spec.bro is not None:
-      mcp_spec = f'bro:{spec.bro}'
+    # --raw, the persona's claude-harness namespaces for a cw-session.
+    if spec.raw:
+      mcp_spec = f'bro:{spec.session_bro}'
     else:
       mcp_spec = f'persona:{spec.session_bro}'
     try:
@@ -170,7 +169,7 @@ def run_in_place(spec: 'SessionSpec') -> int:
     log.verbose('session MCP server healthy')
 
     env = {**os.environ}
-    _apply_claude_auth(env, warn_when_missing=spec.bro is None)
+    _apply_claude_auth(env, warn_when_missing=not spec.raw)
     log.info('launching claude')
     code = _run_claude(launch.argv, env)
 

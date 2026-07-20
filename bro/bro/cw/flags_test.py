@@ -22,11 +22,11 @@ class TestForwardedFlags:
     args = vars(parser.parse_args(['--into', 'my-branch']))
     assert cw.flags.extract_forwarded_argv(args) == ['--into', 'my-branch']
 
-  def test_extract_forwarded_argv_round_trips_bro(self):
+  def test_extract_forwarded_argv_round_trips_bro_and_raw(self):
     parser = Parser(add_help=False)
     cw.flags.add_forwarded_flags(parser)
-    args = vars(parser.parse_args(['--bro', 'ppp-dev']))
-    assert cw.flags.extract_forwarded_argv(args) == ['--bro', 'ppp-dev']
+    args = vars(parser.parse_args(['--bro', 'ppp-dev', '--raw']))
+    assert cw.flags.extract_forwarded_argv(args) == ['--bro', 'ppp-dev', '--raw']
 
   def test_effort_defaults_to_xhigh(self):
     parser = Parser(add_help=False)

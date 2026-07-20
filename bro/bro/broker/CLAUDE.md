@@ -33,7 +33,7 @@ The one structural rule to keep straight:
 
 - **Death = process exit, not socket EOF.** A connection is transient (an fd can outlive the process, a socket can drop and reconnect while it lives), so EOF is a *channel* fact; the reliable death signal is `await handle.wait()`. A per-peer wait task emits `on_exit(peer, code, output)`.
 - **Drain-before-decide.** On process exit, before emitting `on_exit`, the Runtime waits (bounded, `_DRAIN_TIMEOUT`) for the transport to flush the channel to EOF — reusing `on_disconnect` as the "channel drained" marker — so a `completed` the child wrote just before exiting lands as `on_message` first and the Dispatcher finalizes on it. Skipped when the peer never attached.
-- **Birth = socket accepted** (`Sink.on_connect`), not the first message — a peer is alive from when it attaches, and a `--bro` root may never send a frame. The Runtime dedupes birth per peer.
+- **Birth = socket accepted** (`Sink.on_connect`), not the first message — a peer is alive from when it attaches, and a `--raw` root may never send a frame. The Runtime dedupes birth per peer.
 - **Timeout** fires a `call_later` timer → `kill` + `on_timeout` (already killed); the later `on_exit` is the Dispatcher's to dedupe. **Launch failure** rolls back its own registration (unlinks the provisioned socket). **`forget`** drops the channel + timer + wait task; **`stop`** hard-tears-down every peer (kill + cancel) then shuts the transport down.
 
 ## Dispatcher invariants

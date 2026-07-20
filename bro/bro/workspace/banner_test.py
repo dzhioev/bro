@@ -137,7 +137,7 @@ class TestRenderBanner:
   def test_llm_emits_plain_key_value(self):
     out = _facts(
       bro='ppp-dev',
-      cw_command='cw ss --persona pm task',
+      cw_command='cw ss --bro pm task',
       shell_command='dive-in -t x',
     ).render_llm()
     assert '\033[' not in out  # no ANSI
@@ -148,7 +148,7 @@ class TestRenderBanner:
     assert 'workspace_host_path: /h/ws' in out
     assert 'workspace_container_path: /workspace' in out
     assert 'docker_shell_command: cw exec task' in out
-    assert 'cw_command: cw ss --persona pm task' in out
+    assert 'cw_command: cw ss --bro pm task' in out
     assert 'launch_command:' not in out
     assert 'dive-in -t x' not in out
 
@@ -240,9 +240,9 @@ class TestRenderBanner:
     assert '(unknown' in out
 
   def test_visual_shows_cw_command_when_distinct(self):
-    out = _facts(cw_command='cw ss --persona pm task', shell_command='dive-in -t x').render_visual()
+    out = _facts(cw_command='cw ss --bro pm task', shell_command='dive-in -t x').render_visual()
     assert 'cw command:' in out
-    assert 'cw ss --persona pm task' in out
+    assert 'cw ss --bro pm task' in out
 
   def test_visual_suppresses_cw_command_when_equal(self):
     out = _facts(cw_command='cw ss feature', shell_command='cw ss feature').render_visual()

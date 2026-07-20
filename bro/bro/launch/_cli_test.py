@@ -22,7 +22,7 @@ def scoped_store_preflight(monkeypatch):
   )
   monkeypatch.setattr(
     'workspace.project.project_config',
-    lambda: ProjectConfig(persona='foo', image_repository='bro/foo'),
+    lambda: ProjectConfig(default_bro='foo', image_repository='bro/foo'),
   )
 
 
@@ -207,7 +207,7 @@ def test_maybe_containerize_unknown_creds_mapping_kind_errors(capsys):
     patch(
       'workspace.project.project_config',
       return_value=ProjectConfig(
-        persona='foo', image_repository='bro/foo', creds={'nonesuch': 'x'}
+        default_bro='foo', image_repository='bro/foo', creds={'nonesuch': 'x'}
       ),
     ),
   ):

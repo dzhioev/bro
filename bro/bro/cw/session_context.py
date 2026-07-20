@@ -18,13 +18,11 @@ from typing import Optional
 CW_SESSION_CONTEXT_ENV = 'CW_SESSION_CONTEXT'
 
 
-def _mcp_record(bro: Optional[str], persona: Optional[str]) -> dict:
-  if bro is not None:
+def _mcp_record(bro: str, raw: bool) -> dict:
+  if raw:
     fields = {'mode': 'bro', 'servers': [f'bro:{bro}']}
-  elif persona is not None:
-    fields = {'mode': 'persona', 'servers': [f'persona:{persona}']}
   else:
-    raise ValueError('a session serves either a bro or a persona')
+    fields = {'mode': 'persona', 'servers': [f'persona:{bro}']}
   return {'kind': 'mcp', 'subtype': 'servers', 'title': 'MCP servers', 'fields': fields}
 
 
@@ -34,20 +32,20 @@ def build_session_context(
   branch: str,
   base_sha: Optional[str],
   base_ref: Optional[str],
-  bro: Optional[str],
-  persona: Optional[str],
+  bro: str,
+  raw: bool,
   proj_root: Path,
 ) -> list[dict]:
   """the launch-context records for a session.
 
-  exactly one of `bro` / `persona` names the session's bro; it selects the
-  system-prompt record's shape too: a `--bro` session passes the whole prompt
-  via --system-prompt (replaces the base), a cw-session passes only its
-  --append-system-prompt addition on top of claude's base + CLAUDE.md.
+  `bro` names the session's bro; `raw` selects the system-prompt record's
+  shape: a raw session passes the whole prompt via --system-prompt (replaces
+  the base), a cw-session passes only its --append-system-prompt addition on
+  top of claude's base + CLAUDE.md.
   """
   records: list[dict] = []
 
-  if bro is not None:
+  if raw:
     sp_subtype, sp_title = 'bro', 'bro system prompt (--system-prompt, replaces base)'
   else:
     sp_subtype, sp_title = 'cw_injected', 'cw-injected system prompt (--append-system-prompt)'
@@ -64,7 +62,7 @@ def build_session_context(
     {'kind': 'git', 'subtype': 'state', 'title': 'git state at launch', 'fields': git_fields}
   )
 
-  records.append(_mcp_record(bro, persona))
+  records.append(_mcp_record(bro, raw))
 
   claude_md = proj_root / 'CLAUDE.md'
   if claude_md.is_file():

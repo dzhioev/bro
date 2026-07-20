@@ -2,7 +2,7 @@
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../setup/prelude.sh"
 
 # prints the `anthropic` secret's `api_key` to stdout. used as claude code's
-# `apiKeyHelper` for `cw --bro` sessions so claude reads the api key from the
+# `apiKeyHelper` for `cw ss --raw` sessions so claude reads the api key from the
 # credential resolver instead of from ANTHROPIC_API_KEY (which triggers a
 # one-time "Detected a custom API key" confirmation per ~/.claude.json — and
 # that file is per-workspace in cw containers, so the prompt would fire every

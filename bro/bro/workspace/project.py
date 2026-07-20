@@ -7,20 +7,20 @@ from base import credentials
 from workspace.paths import project_root
 
 
-def _default_image_repository(persona: str) -> str:
-  return f'bro/{persona}'
+def _default_image_repository(default_bro: str) -> str:
+  return f'bro/{default_bro}'
 
 
 @dataclass(frozen=True)
 class ProjectConfig:
   """the operated repo's launch defaults: which bro a session runs as when
-  neither --persona nor --bro names one, the docker repository its session
-  images build under (`bro/<persona>` unless overridden — the derivation lives
-  in project_config), and the per-kind credential instances its launches
+  `--bro` doesn't name one, the docker repository its session images build
+  under (`bro/<default bro>` unless overridden — the derivation lives in
+  project_config), and the per-kind credential instances its launches
   substitute where matching kinds occur in a computed scope (`creds`, kind →
   instance; the launch surfaces' scope computation applies it)."""
 
-  persona: str
+  default_bro: str
   image_repository: str
   creds: dict[str, str] = field(default_factory=dict)
 
@@ -53,14 +53,14 @@ def project_config() -> ProjectConfig:
   unknown = sorted(set(table) - {'default', 'image-repository', 'creds'})
   if len(unknown) > 0:
     raise ValueError(f'unknown [tool.bro] key(s) in {pyproject}: {", ".join(unknown)}')
-  persona = table.get('default')
-  if persona is None:
+  default_bro = table.get('default')
+  if default_bro is None:
     raise ValueError(f'missing [tool.bro] default in {pyproject}')
-  if not isinstance(persona, str):
+  if not isinstance(default_bro, str):
     raise ValueError(f'[tool.bro] default in {pyproject} must be a string')
   override: Optional[str] = table.get('image-repository')
   return ProjectConfig(
-    persona=persona,
-    image_repository=override if override is not None else _default_image_repository(persona),
+    default_bro=default_bro,
+    image_repository=override if override is not None else _default_image_repository(default_bro),
     creds=_parse_creds(table, pyproject),
   )

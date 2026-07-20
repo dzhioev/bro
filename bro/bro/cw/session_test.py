@@ -26,8 +26,8 @@ def _spec(
   effort: Optional[str] = None,
   resume: bool = False,
   into: Optional[str] = None,
-  persona: Optional[str] = None,
   bro: Optional[str] = None,
+  raw: bool = False,
   prompt: Optional[str] = None,
   claude_args: Optional[list[str]] = None,
 ) -> cw.session.SessionSpec:
@@ -42,8 +42,8 @@ def _spec(
     effort=effort,
     resume=resume,
     into=into,
-    persona=persona,
     bro=bro,
+    raw=raw,
     prompt=prompt,
     claude_args=claude_args if claude_args is not None else [],
   )
@@ -54,7 +54,7 @@ def configured_project(monkeypatch):
   monkeypatch.setattr(
     cw.session,
     'project_config',
-    lambda: workspace.project.ProjectConfig(persona='ppp-dev', image_repository='bro/ppp-dev'),
+    lambda: workspace.project.ProjectConfig(default_bro='ppp-dev', image_repository='bro/ppp-dev'),
   )
 
 
@@ -135,6 +135,12 @@ class TestGrantRevoke:
     assert harness.run_in_container.call_count == 0
     assert 'mint one with `claude setup-token`' in caplog.text
 
+  def test_missing_setup_token_does_not_gate_a_raw_launch(self):
+    with _ContainerHarness() as harness:
+      harness.try_get.return_value = None
+      rc = cw.session.start_session(_spec(drop=True, raw=True))
+    assert rc == 0
+
   def test_start_session_grant_already_present_returns_1(self):
     with _ContainerHarness() as h:
       rc = cw.session.start_session(_spec(drop=True, grant=['github']))
@@ -167,12 +173,6 @@ class TestSummonAllowList:
     assert rc == 0
     assert h.summon_allow_list.call_args[0] == ('pm',)
 
-  def test_container_session_keys_identity_on_the_persona(self):
-    with _ContainerHarness() as h:
-      rc = cw.session.start_session(_spec(drop=True, persona='pm'))
-    assert rc == 0
-    assert h.summon_allow_list.call_args[0] == ('pm',)
-
   def test_bad_summon_flag_fails_the_launch(self):
     with _ContainerHarness() as h:
       h.summon_allow_list.side_effect = ValueError('unknown summon target(s): devoop')
@@ -187,12 +187,12 @@ class TestContainerCommand:
     # argv/MCP/script-delivery work happens inside the container, next to claude
     with _ContainerHarness() as h:
       rc = cw.session.start_session(
-        _spec(drop=True, fast=True, persona='pm', effort='xhigh', prompt='go')
+        _spec(drop=True, fast=True, bro='pm', effort='xhigh', prompt='go')
       )
     assert rc == 0
     command = h.run_in_container.call_args.args[0].command
     assert command == [
-      'cw', 'ss', '--in-place', '--fast', '--effort', 'xhigh', '--persona', 'pm', '--prompt=go', 'w',
+      'cw', 'ss', '--in-place', '--fast', '--effort', 'xhigh', '--bro', 'pm', '--prompt=go', 'w',
     ]  # fmt: skip
 
   def test_bro_carried_in_command_and_stamped_into_the_container_env(self):
@@ -206,7 +206,14 @@ class TestContainerCommand:
     launch = h.run_in_container.call_args.args[0]
     assert launch.env['CW_BRO'] == 'pm'
 
-  def test_cw_session_stamps_the_default_persona_as_cw_bro(self):
+  def test_raw_carried_in_the_container_command(self):
+    with _ContainerHarness() as h:
+      rc = cw.session.start_session(_spec(drop=True, bro='pm', raw=True))
+    assert rc == 0
+    command = h.run_in_container.call_args.args[0].command
+    assert command == ['cw', 'ss', '--in-place', '--raw', '--bro', 'pm', 'w']
+
+  def test_cw_session_stamps_the_default_bro_as_cw_bro(self):
     with _ContainerHarness() as h:
       rc = cw.session.start_session(_spec(drop=True))
     assert rc == 0
@@ -264,7 +271,7 @@ class TestResumeCommand:
       fast=True,
       drop=True,
       effort='xhigh',
-      persona='pm',
+      bro='pm',
       grant=['gmail_creds', '@devoops'],
       revoke=['notion'],
       into='feature',
@@ -272,7 +279,7 @@ class TestResumeCommand:
     ).to_command_argv()
     assert parts == [
       'cw', 'ss', '--fast', '--drop', '--hold', 'attended',
-      '--effort', 'xhigh', '--persona', 'pm', '--grant', 'gmail_creds',
+      '--effort', 'xhigh', '--bro', 'pm', '--grant', 'gmail_creds',
       '--grant', '@devoops', '--revoke', 'notion', '--into', 'feature', 'w', '--foo',
     ]  # fmt: skip
 
@@ -285,14 +292,14 @@ class TestResumeCommand:
     assert _spec().to_command_argv() == ['cw', 'ss', 'w']
 
   def test_resume_variant_carries_forwarded_flags_and_clears_create_only(self):
-    # resume_variant keeps --hold/--effort/--persona/--grant and adds
+    # resume_variant keeps --hold/--effort/--bro/--grant and adds
     # --resume, while clearing the create-only --drop/--into/prompt/claude args
     parts = (
       _spec(
         hold='attended',
         drop=True,
         effort='xhigh',
-        persona='pm',
+        bro='pm',
         grant=['gmail_creds'],
         into='feature',
         prompt='do it',
@@ -303,7 +310,7 @@ class TestResumeCommand:
     )
     assert parts == [
       'cw', 'ss', '--resume', '--hold', 'attended',
-      '--effort', 'xhigh', '--persona', 'pm', '--grant', 'gmail_creds', 'w',
+      '--effort', 'xhigh', '--bro', 'pm', '--grant', 'gmail_creds', 'w',
     ]  # fmt: skip
 
   def test_start_session_records_resume_command(self):
@@ -318,13 +325,13 @@ class TestResumeCommand:
           hold='attended',
           grant=['gmail_creds'],
           effort='xhigh',
-          persona='pm',
+          bro='pm',
         )
       )
       resume_command = env['CW_RESUME_COMMAND']
     assert (
       resume_command
-      == 'cw ss --resume --hold attended --effort xhigh --persona pm --grant gmail_creds w'
+      == 'cw ss --resume --hold attended --effort xhigh --bro pm --grant gmail_creds w'
     )
 
 
@@ -352,7 +359,7 @@ class TestInPlaceArgv:
       fast=True,
       drop=True,
       effort='xhigh',
-      persona='pm',
+      bro='pm',
       grant=['gmail_creds'],
       revoke=['notion'],
       into='feature',
@@ -361,23 +368,24 @@ class TestInPlaceArgv:
     ).to_in_place_argv()
     assert parts == [
       'ss', '--in-place', '--fast', '--hold', 'attended',
-      '--effort', 'xhigh', '--persona', 'pm', '--prompt=do it', 'w', '--foo',
+      '--effort', 'xhigh', '--bro', 'pm', '--prompt=do it', 'w', '--foo',
     ]  # fmt: skip
 
-  def test_resume_and_bro_carried(self):
-    parts = _spec(resume=True, bro='pm').to_in_place_argv()
-    assert parts == ['ss', '--in-place', '--resume', '--bro', 'pm', 'w']
+  def test_resume_and_raw_carried(self):
+    parts = _spec(resume=True, bro='pm', raw=True).to_in_place_argv()
+    assert parts == ['ss', '--in-place', '--resume', '--raw', '--bro', 'pm', 'w']
 
 
 class TestSessionBro:
-  def test_bro_names_the_identity_directly(self):
-    assert _spec(bro='pm', persona=None).session_bro == 'pm'
+  def test_bro_names_the_identity(self):
+    assert _spec(bro='pm').session_bro == 'pm'
 
-  def test_cw_session_runs_as_its_persona(self):
-    assert _spec(persona='pm').session_bro == 'pm'
-
-  def test_cw_session_uses_the_project_default(self):
+  def test_session_uses_the_project_default(self):
     assert _spec().session_bro == 'ppp-dev'
+
+  def test_raw_selects_the_raw_surface(self):
+    assert _spec(raw=True).surface == bro.launch.scope.Surface.RAW_SESSION
+    assert _spec().surface == bro.launch.scope.Surface.CW_SESSION
 
 
 class TestConcurrentSessionGuard:
@@ -679,17 +687,6 @@ class TestHostSession:
 
     monkeypatch.setattr(cw.session, 'ensure_host_worktree', boom)
     assert cw.session._host_session(_spec(host=True), None) == 1
-
-  def test_missing_claude_code_does_not_gate_a_bro_launch(self, monkeypatch, tmp_path):
-    from types import SimpleNamespace
-
-    self._prepare_launch(monkeypatch, tmp_path)
-    monkeypatch.setattr(cw.session.credentials, 'try_get', lambda name: None)
-    monkeypatch.setattr(cw.session, 'broker_enabled', lambda: False)
-    monkeypatch.setattr(
-      cw.session.subprocess, 'run', lambda *_a, **_k: SimpleNamespace(returncode=0)
-    )
-    assert cw.session._host_session(_spec(host=True, bro='devoops'), None) == 0
 
   def test_runner_env_points_at_the_scoped_store_registry(self, monkeypatch, tmp_path):
     from types import SimpleNamespace

@@ -1,7 +1,5 @@
 from pathlib import Path
 
-import pytest
-
 from cw.session_context import build_session_context, encode_session_context
 
 
@@ -21,8 +19,8 @@ class TestBuildSessionContext:
       branch='worktree-foo',
       base_sha='abc123',
       base_ref=None,
-      bro=None,
-      persona='ppp-dev',
+      bro='ppp-dev',
+      raw=False,
       proj_root=_proj_with_claude_md(tmp_path),
     )
     by = _by_kind(records)
@@ -33,31 +31,19 @@ class TestBuildSessionContext:
     assert by['claude_md']['subtype'] == 'root'
     assert 'rules' in by['claude_md']['content']
 
-  def test_bro_session_system_prompt_subtype(self, tmp_path):
+  def test_raw_session_system_prompt_subtype(self, tmp_path):
     records = build_session_context(
       system_prompt='full bro prompt',
       branch='worktree-foo',
       base_sha=None,
       base_ref=None,
       bro='ppp-dev',
-      persona=None,
+      raw=True,
       proj_root=_proj_with_claude_md(tmp_path),
     )
     by = _by_kind(records)
     assert by['system_prompt']['subtype'] == 'bro'
     assert by['mcp']['fields'] == {'mode': 'bro', 'servers': ['bro:ppp-dev']}
-
-  def test_no_bro_and_no_persona_raises(self, tmp_path):
-    with pytest.raises(ValueError, match='bro or a persona'):
-      build_session_context(
-        system_prompt='x',
-        branch='worktree-foo',
-        base_sha=None,
-        base_ref=None,
-        bro=None,
-        persona=None,
-        proj_root=_proj_with_claude_md(tmp_path),
-      )
 
   def test_base_ref_included_when_set(self, tmp_path):
     records = build_session_context(
@@ -65,8 +51,8 @@ class TestBuildSessionContext:
       branch='worktree-foo',
       base_sha='sha',
       base_ref='origin/master',
-      bro=None,
-      persona='ppp-dev',
+      bro='ppp-dev',
+      raw=False,
       proj_root=_proj_with_claude_md(tmp_path),
     )
     assert _by_kind(records)['git']['fields']['base_ref'] == 'origin/master'
@@ -77,8 +63,8 @@ class TestBuildSessionContext:
       branch='worktree-foo',
       base_sha='sha',
       base_ref=None,
-      bro=None,
-      persona='ppp-dev',
+      bro='ppp-dev',
+      raw=False,
       proj_root=tmp_path,
     )
     assert 'claude_md' not in _by_kind(records)
@@ -91,8 +77,8 @@ class TestBuildSessionContext:
       branch='worktree-foo',
       base_sha='sha',
       base_ref=None,
-      bro=None,
-      persona='ppp-dev',
+      bro='ppp-dev',
+      raw=False,
       proj_root=_proj_with_claude_md(tmp_path),
     )
     assert json.loads(encode_session_context(records)) == records

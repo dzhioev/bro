@@ -98,12 +98,13 @@ class TestLaunchCommand:
     # must not preempt it
     assert 'CW_BRO' not in os.environ
 
-  def test_persona_rides_the_forwarded_flags(self, fake_proj, capsys, monkeypatch):
+  def test_raw_rides_the_forwarded_flags(self, fake_proj, capsys, monkeypatch):
     monkeypatch.delenv('CW_BRO', raising=False)
-    rc = dive_in.dive_in(forwarded=['--persona', 'pm'], dry_run=True)
+    rc = dive_in.dive_in(forwarded=['--bro', 'pm', '--raw'], dry_run=True)
     assert rc == 0
     args = cw.build_parser().parse(shlex.split(capsys.readouterr().out.strip()))
-    assert args['persona'] == 'pm'
+    assert args['bro'] == 'pm'
+    assert args['raw']
     assert 'CW_BRO' not in os.environ
 
 
@@ -137,9 +138,9 @@ class TestNewMode:
     tokens = shlex.split(capsys.readouterr().out.strip())
     assert tokens[tokens.index('-p') + 1] == '@:fix --new do a thing:@'
 
-  def test_bro_flavor_uses_the_same_dispatcher_command(self, fake_proj, capsys):
+  def test_raw_flavor_uses_the_same_dispatcher_command(self, fake_proj, capsys):
     rc = dive_in.dive_in(
-      forwarded=['--bro', 'ppp-dev'], dry_run=True, new=True, command='do a thing'
+      forwarded=['--raw', '--bro', 'ppp-dev'], dry_run=True, new=True, command='do a thing'
     )
     assert rc == 0
     tokens = shlex.split(capsys.readouterr().out.strip())
@@ -180,12 +181,12 @@ class TestTaskMode:
     assert prompt.startswith(f'@:fix {URL}:@\n\ntask block')
     assert os.environ['CW_TASK_ID'] == UUID
 
-  def test_bro_flavor_keeps_prefetch_and_appended_command_outside_dispatcher_command(
+  def test_raw_flavor_keeps_prefetch_and_appended_command_outside_dispatcher_command(
     self, fake_proj, monkeypatch, capsys
   ):
     monkeypatch.setattr(dive_in, '_prefetch_task', lambda system, ref: (_brog_task(), 'task block'))
     rc = dive_in.dive_in(
-      forwarded=['--bro', 'ppp-dev'],
+      forwarded=['--raw', '--bro', 'ppp-dev'],
       dry_run=True,
       task=URL,
       command='run the focused checks',

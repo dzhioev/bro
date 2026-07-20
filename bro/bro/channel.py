@@ -10,7 +10,7 @@ deferred to runtime and `from_env()` also returns `None` when the `broker`
 package is not importable (an environment provisioned before broker existed),
 so importing `bro` never depends on broker being installed.
 
-Wired into `BaseBro.run` only (LLM-process children). A claude-code `--bro`
+Wired into `BaseBro.run` only (LLM-process children). A claude-code `--raw`
 session never calls `BaseBro.run` — it has no in-process return value — so it
 auto-emits no lifecycle, by design. The one claude-session emission is the
 `raise` service tool's `completed{raised}`, sent mid-session; the dispatcher

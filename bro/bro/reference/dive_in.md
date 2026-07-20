@@ -60,7 +60,7 @@ By default a session is based on the host checkout's current `HEAD` — both in 
 
 ## Initial-prompt composition
 
-`dive-in` seeds the first user message as an `@:fix …:@` natural-language script command. The session calls `@::@`, then executes the returned `@::fix` call with its typed arguments; the script body (`bro/bros/ppp_dev/scripts/fix.md`) carries the workflow — resolve → context → plan → log → implement → verify → hand off to `@::pr`. Both cw persona and `--bro` sessions mount the `at` server and receive this contract. The mapping from CLI form to message is:
+`dive-in` seeds the first user message as an `@:fix …:@` natural-language script command. The session calls `@::@`, then executes the returned `@::fix` call with its typed arguments; the script body (`bro/bros/ppp_dev/scripts/fix.md`) carries the workflow — resolve → context → plan → log → implement → verify → hand off to `@::pr`. Both cw persona and `--raw` sessions mount the `at` server and receive this contract. The mapping from CLI form to message is:
 
 - `dive-in -t <ref>` → `@:fix <ref>:@`
 - `dive-in -t <ref> --focus` → `set_focus(<canonical-id>)` (focus client), then `@:fix <ref>:@`
@@ -74,7 +74,7 @@ If a positional `command` is present alongside a task scope (`-t` or bare `--foc
 
 For bare mode, the prompt is just the `command` string verbatim — no dispatcher wrapping.
 
-Every cw-session runs as a persona bro — `--persona`, defaulting to the required project default bro. Its session-local server mounts the persona's MRO-collected scripts — for ppp-dev, its own `@::fix`, `@::pr`, `@::land` (`bro/bros/ppp_dev/scripts/`) plus inherited ones such as `@::audit` (dev) and `@::ask` (summon) — and `_session_append_prompt` injects the canonical Scripts contract next to the persona prompt. Bro scripts have no generated slash-command copies; Claude's own third-party skill mechanism remains independent. The persona's other claude-harness-filtered MCP namespaces ride the same session-local server (see `reference/cw.md`, "Session-local MCP serving"). To run the bro flavor outright, forward `--bro` (see "Forwarded flags").
+Every cw-session runs as a bro — `--bro`, defaulting to the required project default. Its session-local server mounts the bro's MRO-collected scripts — for ppp-dev, its own `@::fix`, `@::pr`, `@::land` (`bro/bros/ppp_dev/scripts/`) plus inherited ones such as `@::audit` (dev) and `@::ask` (summon) — and `_session_append_prompt` injects the canonical Scripts contract next to the persona prompt. Bro scripts have no generated slash-command copies; Claude's own third-party skill mechanism remains independent. The bro's other claude-harness-filtered MCP namespaces ride the same session-local server (see `reference/cw.md`, "Session-local MCP serving"). To run the raw flavor outright, forward `--raw` (see "Forwarded flags").
 
 ## Resuming
 
@@ -84,9 +84,9 @@ Known gap: `CW_TASK_ID` lives only in the launching `dive-in` process's environm
 
 ## Forwarded flags
 
-`dive-in` accepts all the flags `cw.add_forwarded_flags` registers (`--host`, `--hold`, `--fast`, `--grant`, `--revoke`, `--effort`, `--into`, `--persona`, `--bro`) and forwards them straight through into `cw ss`. One flag gets a dive-in-specific default: an omitted `--hold` resolves to `attended` — or `guided` with `--host`, where skipped permission prompts would run unsandboxed — and the resolved value is forwarded explicitly, overriding `cw ss`'s own `guided` default. Adding a new pass-through flag in `cw/flags.py` makes it available to `dive-in` for free — no per-flag plumbing in this file. `--grant`/`--revoke` are repeatable and work in both modes — a plain name adjusts the credential scope (in a host session a materialized convenience scope rather than a security boundary), a `@bro` value the summon allow-list (a host session's broker root enforces the same list).
+`dive-in` accepts all the flags `cw.add_forwarded_flags` registers (`--host`, `--hold`, `--fast`, `--grant`, `--revoke`, `--effort`, `--into`, `--bro`, `--raw`) and forwards them straight through into `cw ss`. One flag gets a dive-in-specific default: an omitted `--hold` resolves to `attended` — or `guided` with `--host`, where skipped permission prompts would run unsandboxed — and the resolved value is forwarded explicitly, overriding `cw ss`'s own `guided` default. Adding a new pass-through flag in `cw/flags.py` makes it available to `dive-in` for free — no per-flag plumbing in this file. `--grant`/`--revoke` are repeatable and work in both modes — a plain name adjusts the credential scope (in a host session a materialized convenience scope rather than a security boundary), a `@bro` value the summon allow-list (a host session's broker root enforces the same list).
 
-`--bro <name>` makes the session the bro flavor of `cw ss` — `claude --bare` under the named bro's persona, serving the bro's own MCP tools (see `reference/cw.md`, "`--bro`"). It consumes the same seeded `@:fix …:@` command as a persona session; the named bro must carry the fix/pr/land scripts and the brog toolset (ppp-dev does). Like any `--bro` session it is fenced to the container (rejected with `--host`) and requires the `anthropic` secret.
+`--raw` makes the session the raw flavor of `cw ss` — `claude --bare` under the session bro's persona, serving the bro's own MCP tools (see `reference/cw.md`, "`--raw`"). It consumes the same seeded `@:fix …:@` command as a persona session; the session's bro must carry the fix/pr/land scripts and the brog toolset (ppp-dev does). Like any `--raw` session it is fenced to the container (rejected with `--host`) and requires the `anthropic` secret.
 
 `-n / --dry-run` prints the final `cw ss …` invocation (shell-quoted) without running it.
 

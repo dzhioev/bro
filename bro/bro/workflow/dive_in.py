@@ -75,8 +75,8 @@ def dive_in(
   new: bool = False,
   focus: bool = False,
 ) -> int:
-  """launch the session. session shaping — the persona (prompt, scripts, MCP
-  namespaces) selected by `--persona` or the project default bro, or the `--bro`
+  """launch the session. session shaping — the bro (prompt, scripts, MCP
+  namespaces) selected by `--bro` or the project default, or the `--raw`
   flavor — rides the forwarded flags; dive-in adds nothing of its own."""
   prompt: Optional[str] = None
   if new:

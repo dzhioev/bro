@@ -7,7 +7,7 @@ _PROMPTS_DIR = Path(__file__).resolve().parent.parent / 'prompts'
 # directives (`#harness`/`#wire`/`#creds`) — the whole append text renders once
 # in `_session_append_prompt` with this surface's facts. The one top-level file
 # injected here is `tool_names.md` — the tool-name resolution rule, templated
-# on `#wire`; `--bro` sessions run `--bare` and skip this injection but get the
+# on `#wire`; `--raw` sessions run `--bare` and skip this injection but get the
 # same file through `BaseBro.claude_system_prompt`, and bro-native LLM runs
 # compose its bare rendering — do not give a bro a `FileSource` for this file.
 # Other reference docs (`environment.md`, …) reach every harness as `FileSource`
@@ -30,11 +30,11 @@ def _load_base_prompts() -> str:
 
 
 def _session_append_prompt(hold: str, bro_name: str) -> str:
-  """--append-system-prompt text for a cw-session (the non --bro flavor).
+  """--append-system-prompt text for a cw-session (the non --raw flavor).
 
-  base prompts plus the session persona's own prompts and script instructions
-  (`bro_name`, the `--persona` bro) — so a cw-session carries the bro's policies even though
-  it runs the Claude Code harness rather than --bro. the assembled text renders
+  base prompts plus the session bro's own persona prompts and script
+  instructions (`bro_name`, the `--bro` bro) — so a cw-session carries the
+  bro's policies even though it runs the Claude Code harness. the assembled text renders
   once with this surface's facts: the claude harness over mcp wire names, with
   the session environment's credentials (this composes in the session's own
   process — in-container for container sessions — so the store is the scoped

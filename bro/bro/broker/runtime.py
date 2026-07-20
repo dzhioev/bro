@@ -19,7 +19,7 @@ Two invariants carry the design:
   Dispatcher finalizes on it; `on_exit` then finds the peer terminal. No exit⋀EOF join.
 
 Birth is `on_connect` (socket accepted) — a peer is alive from when it attaches, not
-from its first message (a `--bro` root may never send one). The request-lifecycle
+from its first message (a `--raw` root may never send one). The request-lifecycle
 timeout is a `call_later` timer: on fire, the Runtime kills the peer and emits
 `on_timeout` (already killed); the subsequent `on_exit` is the Dispatcher's to dedupe.
 The root is a uniform peer — its only residual specialness (its exit ends the session)

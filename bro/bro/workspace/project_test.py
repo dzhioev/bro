@@ -20,15 +20,15 @@ class TestProjectConfig:
     with pytest.raises(ValueError, match=r'missing \[tool.bro\] default'):
       project_config()
 
-  def test_image_repository_derives_from_persona(self, project_dir):
+  def test_image_repository_derives_from_the_default_bro(self, project_dir):
     (project_dir / 'pyproject.toml').write_text('[tool.bro]\ndefault = "foo"\n')
-    assert project_config() == ProjectConfig(persona='foo', image_repository='bro/foo')
+    assert project_config() == ProjectConfig(default_bro='foo', image_repository='bro/foo')
 
   def test_explicit_image_repository_wins_over_derivation(self, project_dir):
     (project_dir / 'pyproject.toml').write_text(
       '[tool.bro]\ndefault = "foo"\nimage-repository = "custom-images"\n'
     )
-    assert project_config() == ProjectConfig(persona='foo', image_repository='custom-images')
+    assert project_config() == ProjectConfig(default_bro='foo', image_repository='custom-images')
 
   def test_unknown_key_raises(self, project_dir):
     (project_dir / 'pyproject.toml').write_text('[tool.bro]\nimage = "x"\n')

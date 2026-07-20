@@ -38,7 +38,7 @@ keeps the container's git state genuinely isolated. layout:
     CLI / the CLAUDE_CODE_OAUTH_TOKEN env a cw-session
     authenticates with). So there is no out-of-band github-token bind-mount, no
     ~/.aws mount, and no OAuth credentials file: one stable bearer per session
-    means no token to refresh or sync between sessions. (`--bro` / bro-run
+    means no token to refresh or sync between sessions. (`--raw` / bro-run
     containers run claude --bare against the anthropic api key instead.)
 
 network is not restricted by design.

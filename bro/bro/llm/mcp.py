@@ -16,7 +16,7 @@ def describe[F: Callable[..., Any]](function: F, text: str) -> F:
 
 
 # the agent harness a rendered text is consumed under — which toolset drives the
-# work: `bro` is the bro toolset (native LLM runs and `--bro` claude sessions,
+# work: `bro` is the bro toolset (native LLM runs and `--raw` claude sessions,
 # where `--bare` strips claude's built-ins), `claude` is Claude Code's own
 # harness with its built-in tools.
 Harness = Literal['bro', 'claude']
@@ -25,7 +25,7 @@ _HARNESSES = frozenset(get_args(Harness))
 # how a surface's tool list spells the canonical `namespace::tool` names: `bare`
 # is the bro-native LLM loop's `namespace__tool`; `mcp` is any claude session's
 # `mcp__namespace__tool` (each namespace mounted as an MCP server). orthogonal to
-# `Harness` — a `--bro` session runs the bro harness over mcp wire names.
+# `Harness` — a `--raw` session runs the bro harness over mcp wire names.
 Wire = Literal['bare', 'mcp']
 _WIRES = frozenset(get_args(Wire))
 

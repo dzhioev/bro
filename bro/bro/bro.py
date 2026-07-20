@@ -207,7 +207,7 @@ def _raise_tool(wire: llm.mcp.Wire, variables: Variables) -> llm.mcp.Tool:
 
 
 # the {{when #wire = mcp}} blocks render only into the MCP-served builds
-# (persona and --bro claude sessions consume the toolset over streamable HTTP,
+# (persona and --raw claude sessions consume the toolset over streamable HTTP,
 # where the harness bounds a silent tool call at about a minute — far under a
 # real child's runtime, so the blocking modes are a trap there); the in-process
 # builds (wire 'bare') have no transport to die on and render the plain text.
@@ -492,7 +492,7 @@ class BaseBro(ABC):
   may_summon: tuple[str, ...] = ()
   # whether the bro does docker work (building/pushing images for deploys) and so
   # needs the host docker socket. an explicit capability, inherited normally. the
-  # host grants `/var/run/docker.sock` to a `--bro`/bro-run container only when this
+  # host grants `/var/run/docker.sock` to a `--raw`/bro-run container only when this
   # is set (claude code sessions get it unconditionally); see bro/launch/scope.py.
   needs_docker: bool = False
   # subclasses declare their own `system_prompt = "..."` as a class attribute;
@@ -505,7 +505,7 @@ class BaseBro(ABC):
   # the bro's own class prompts (MRO-concatenated); set in __init__
   persona: str
   # `system_prompt` with the Claude-Code tool-name rule in place of the
-  # bro-native one; set in __init__, consumed by `cw ss --bro`
+  # bro-native one; set in __init__, consumed by `cw ss --raw`
   claude_system_prompt: str
 
   _llm: Optional[LLM] = None
@@ -578,7 +578,7 @@ class BaseBro(ABC):
     # prompts (below, and cw's append prompt), where headingless identity text
     # reads as a stray fragment. no shared / data-source / scripts blocks here;
     # injected into dive-in Claude Code sessions (cw/system_prompt.py) so they
-    # carry the bro's policies outside --bro mode.
+    # carry the bro's policies outside --raw mode.
     self.persona = (
       '\n\n'.join([f'# Persona: {self.name}', *prompt_parts]) if len(prompt_parts) > 0 else ''
     )
@@ -609,7 +609,7 @@ class BaseBro(ABC):
       ).strip()
 
     self.system_prompt = compose('bare')
-    # the same prompt over mcp wire names — what a `cw ss --bro` session passes
+    # the same prompt over mcp wire names — what a `cw ss --raw` session passes
     # as --system-prompt (cw/claude_argv.py).
     self.claude_system_prompt = compose('mcp')
 
@@ -892,7 +892,7 @@ class BaseBro(ABC):
     )
 
   def claude_bro_mcp_servers(self) -> list[llm.mcp.MCPServer]:
-    # the MCP servers a `cw ss --bro` Claude Code session mounts (through
+    # the MCP servers a `cw ss --raw` Claude Code session mounts (through
     # the generic server's `bro:<name>` surface): declared servers, scripts, and the
     # service tools. procedures serve the bro branch (`--bare` strips claude's
     # built-ins, so the session drives work through the bro toolset, not

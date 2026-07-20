@@ -54,8 +54,8 @@ class SessionSpec:
   effort: Optional[str]
   resume: bool
   into: Optional[str]
-  persona: Optional[str]
   bro: Optional[str]
+  raw: bool
   prompt: Optional[str]
   claude_args: list[str]
 
@@ -67,19 +67,16 @@ class SessionSpec:
   @property
   def session_bro(self) -> str:
     """the bro this session runs as — its identity for credential scoping, the
-    summon allow-list, and a cw-session's persona deliveries. `--bro` names it
-    directly; a cw-session runs as its `--persona`, defaulting to the operated
-    required project default bro."""
+    summon allow-list, and its persona deliveries. `--bro` names it, defaulting
+    to the operated project's required default bro."""
     if self.bro is not None:
       return self.bro
-    if self.persona is not None:
-      return self.persona
-    return project_config().persona
+    return project_config().default_bro
 
   @property
   def surface(self) -> Surface:
     """the credential-scoping surface this session launches (`bro.launch.scope.scoped_secrets`)."""
-    return Surface.BRO_SESSION if self.bro is not None else Surface.CW_SESSION
+    return Surface.RAW_SESSION if self.raw else Surface.CW_SESSION
 
   def to_command_argv(self) -> list[str]:
     """reconstruct this session as `cw ss` argv tokens.
@@ -93,14 +90,13 @@ class SessionSpec:
       '--fast': self.fast,
       '--drop': self.drop,
       '--resume': self.resume,
+      '--raw': self.raw,
     }
     parts = ['cw', 'ss', *(f for f, v in flags.items() if v)]
     if self.hold != DEFAULT_HOLD:
       parts.extend(['--hold', self.hold])
     if self.effort is not None:
       parts.extend(['--effort', self.effort])
-    if self.persona is not None:
-      parts.extend(['--persona', self.persona])
     if self.bro is not None:
       parts.extend(['--bro', self.bro])
     for g in self.grant:
@@ -121,14 +117,12 @@ class SessionSpec:
     drops the flags the outer already consumed (--host --drop --grant --revoke
     --into). the prompt uses the
     joined `=` form so a prompt starting with `-` can't be mistaken for a flag."""
-    flags = {'--fast': self.fast, '--resume': self.resume}
+    flags = {'--fast': self.fast, '--resume': self.resume, '--raw': self.raw}
     parts = ['ss', '--in-place', *(f for f, v in flags.items() if v)]
     if self.hold != DEFAULT_HOLD:
       parts.extend(['--hold', self.hold])
     if self.effort is not None:
       parts.extend(['--effort', self.effort])
-    if self.persona is not None:
-      parts.extend(['--persona', self.persona])
     if self.bro is not None:
       parts.extend(['--bro', self.bro])
     if self.prompt is not None:
@@ -178,10 +172,10 @@ def start_session(spec: SessionSpec) -> int:
 
   container = not spec.host
   if container and os.environ.get('CW_IN_CONTAINER') is not None:
-    if spec.bro is not None:
-      # a --bro session is fenced to the container (the scoped anthropic secret
+    if spec.raw:
+      # a --raw session is fenced to the container (the scoped anthropic secret
       # is its auth model), so it cannot degrade to host mode
-      log.error('--bro sessions cannot nest inside a container')
+      log.error('--raw sessions cannot nest inside a container')
       return 1
     log.info('already inside a container; falling back to host mode')
     container = False
@@ -206,7 +200,7 @@ def start_session(spec: SessionSpec) -> int:
 
 
 def _preflight_cw_session_auth(spec: SessionSpec) -> bool:
-  if spec.bro is not None or credentials.try_get('claude_code') is not None:
+  if spec.raw or credentials.try_get('claude_code') is not None:
     return True
   log.error(
     'claude_code secret not resolvable — a cw-session authenticates with the '

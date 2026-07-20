@@ -207,7 +207,7 @@ class TestNamespaceEndpoints:
 
   def test_multiple_searchable_sources_do_not_collide(self):
     # two searchable sources both expose bare `search` / `fetch`; each lives on
-    # its own `<name>-source` endpoint (the `cw ss --bro librorian` case).
+    # its own `<name>-source` endpoint (the `cw ss --raw --bro librorian` case).
     with _client(_TwoSourceBro()._live_mcp_servers()) as client:
       for path in ('/noop-source', '/second-source'):
         body = _rpc(client, path, 'tools/list')

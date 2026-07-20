@@ -137,26 +137,23 @@ def main(argv: list[str]) -> Optional[int]:
     offending = [flag for flag, present in machinery.items() if present]
     if len(offending) > 0:
       parser.error(f'--in-place cannot be combined with {", ".join(offending)}')
-  # the outer-only policy gates (--bro × --host, the anthropic-key probe) are
+  # the outer-only policy gates (--raw × --host, the anthropic-key probe) are
   # skipped under --in-place: the outer validated them once, and the inner argv
   # never carries --host
   if args['into'] is not None and args['resume']:
     parser.error(
       '--into cannot be combined with --resume (it only applies when creating a workspace)'
     )
-  if args['bro'] is not None:
-    if args['persona'] is not None:
-      parser.error('--bro cannot be combined with --persona (the bro is the session persona)')
-    if not in_place:
-      if args['host']:
-        parser.error(
-          '--bro cannot be combined with --host (the bro flow is fenced to the container)'
-        )
-      if _load_anthropic_key() is None:
-        parser.error(
-          '--bro requires the `anthropic` secret to provide an api_key '
-          '({"api_key": "..."}); claude --bare does not use OAuth or keychain'
-        )
+  if args['raw'] and not in_place:
+    if args['host']:
+      parser.error(
+        '--raw cannot be combined with --host (the raw flavor is fenced to the container)'
+      )
+    if _load_anthropic_key() is None:
+      parser.error(
+        '--raw requires the `anthropic` secret to provide an api_key '
+        '({"api_key": "..."}); claude --bare does not use OAuth or keychain'
+      )
   if args['resume']:
     if args['drop']:
       parser.error('--resume cannot be combined with --drop')

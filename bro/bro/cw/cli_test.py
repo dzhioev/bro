@@ -37,17 +37,30 @@ class TestSsValidation:
       cw.cli.main(['cw', 'ss', '--hold', 'automatic', 'w'])
     assert 'invalid choice' in capsys.readouterr().err
 
-  def test_ss_bro_with_host_errors(self, capsys):
+  def test_ss_raw_with_host_errors(self, capsys):
     with pytest.raises(SystemExit):
-      cw.cli.main(['cw', 'ss', '--host', '--bro', 'pm', 'w'])
-    assert '--bro cannot be combined with --host' in capsys.readouterr().err
+      cw.cli.main(['cw', 'ss', '--host', '--raw', 'w'])
+    assert '--raw cannot be combined with --host' in capsys.readouterr().err
 
-  def test_bro_with_resume_is_accepted(self):
+  def test_ss_raw_requires_the_anthropic_key(self, capsys):
+    with pytest.raises(SystemExit):
+      with patch('cw.cli._load_anthropic_key', return_value=None):
+        cw.cli.main(['cw', 'ss', '--raw', 'w'])
+    assert '--raw requires the `anthropic` secret' in capsys.readouterr().err
+
+  def test_ss_bro_with_host_is_accepted(self):
+    # --bro only themes the session; host mode fences out --raw, not the bro
+    with patch('cw.cli.start_session', return_value=0) as fake_start:
+      rc = cw.cli.main(['cw', 'ss', '--host', '--bro', 'pm', 'w'])
+    assert rc == 0
+    assert fake_start.call_args[0][0].bro == 'pm'
+
+  def test_raw_with_resume_is_accepted(self):
     with (
       patch('cw.cli._load_anthropic_key', return_value={'api_key': 'k'}),
       patch('cw.cli.start_session', return_value=0) as fake_start,
     ):
-      rc = cw.cli.main(['cw', 'ss', '--bro', 'ppp-dev', '--resume', 'w'])
+      rc = cw.cli.main(['cw', 'ss', '--raw', '--bro', 'ppp-dev', '--resume', 'w'])
     assert rc == 0
     assert fake_start.call_count == 1
 
@@ -101,17 +114,13 @@ class TestInPlace:
     assert spec.hold == 'guided'
     assert not spec.host
 
-  def test_skips_the_bro_gates(self):
+  def test_skips_the_raw_gates(self):
     # no anthropic-key probe (deliberately unpatched here)
     with patch('cw.cli.run_in_place', return_value=0) as fake_run:
-      rc = cw.cli.main(['cw', 'ss', '--in-place', '--bro', 'pm', 'w'])
+      rc = cw.cli.main(['cw', 'ss', '--in-place', '--raw', '--bro', 'pm', 'w'])
     assert rc == 0
+    assert fake_run.call_args[0][0].raw
     assert fake_run.call_args[0][0].bro == 'pm'
-
-  def test_bro_persona_exclusivity_still_enforced(self, capsys):
-    with pytest.raises(SystemExit):
-      cw.cli.main(['cw', 'ss', '--in-place', '--bro', 'pm', '--persona', 'ppp-dev', 'w'])
-    assert 'cannot be combined with --persona' in capsys.readouterr().err
 
   def test_hidden_from_help(self, capsys):
     with pytest.raises(SystemExit):

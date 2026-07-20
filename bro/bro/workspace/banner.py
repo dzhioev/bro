@@ -8,7 +8,7 @@ from workspace import paths
 from workspace.model import format_ref
 
 # six-line block-letter "B R O" rendered with box-drawing characters;
-# shown on top of the `cw banner` output in --bro sessions.
+# shown on top of the `cw banner` output when the session carries a bro (CW_BRO).
 _BRO_LOGO = """\
 ██████╗   ██████╗    ██████╗
 ██╔══██╗  ██╔══██╗  ██╔═══██╗
@@ -49,8 +49,7 @@ class SessionFacts:
   The fields are the documentation — what each renderer may show:
     - in_container — /.dockerenv presence
     - name — workspace name (CW_NAME)
-    - bro — the bro the session runs as (CW_BRO): the `--bro` bro, or a
-      cw-session's persona
+    - bro — the bro the session runs as (CW_BRO)
     - host_workspace — host-side path to the workspace dir
     - container_workspace — '/workspace' inside a container, else None
     - exec_command — `cw exec <name>` for container sessions

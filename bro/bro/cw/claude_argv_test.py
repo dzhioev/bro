@@ -75,7 +75,7 @@ class TestCwSessionLaunch:
     assert '--dangerously-skip-permissions' not in argv
 
   def test_mcp_config_covers_the_personas_namespaces(self):
-    argv = _cw_session_launch(_spec(persona='pm'), claude_args=[]).argv
+    argv = _cw_session_launch(_spec(bro='pm'), claude_args=[]).argv
     config = json.loads(argv[argv.index('--mcp-config') + 1])
     namespaces = _pm_persona_namespaces()
     # the service server's `banner` tool rides the `bro` namespace
@@ -90,7 +90,7 @@ class TestCwSessionLaunch:
   def test_cw_session_keeps_the_full_harness(self):
     # no --strict-mcp-config / --allowed-tools: the persona namespaces mount on
     # top of claude's own tools, not instead of them
-    argv = _cw_session_launch(_spec(persona='pm'), claude_args=[]).argv
+    argv = _cw_session_launch(_spec(bro='pm'), claude_args=[]).argv
     assert '--strict-mcp-config' not in argv
     assert '--allowed-tools' not in argv
 
@@ -100,9 +100,9 @@ class TestCwSessionLaunch:
     assert argv.index('--mcp-config') < argv.index('--x')
 
 
-class TestBroLaunch:
+class TestRawLaunch:
   def _launch(self, **kwargs) -> cw.claude_argv.ClaudeLaunch:
-    spec = _spec(bro='pm', **kwargs)
+    spec = _spec(bro='pm', raw=True, **kwargs)
     return cw.claude_argv.build_claude_launch(
       spec, workspace=_WORKSPACE, claude_args=[], endpoint=_ENDPOINT
     )
@@ -146,7 +146,7 @@ class TestBroLaunch:
       assert entry['alwaysLoad'] is True
 
   def test_settings_merge_fast_mode_and_api_key_helper(self):
-    # the merged --settings is what lets --fast reach a --bro session; the
+    # the merged --settings is what lets --fast reach a --raw session; the
     # apiKeyHelper is the ppp checkout the runner's venv installs, hold-neutral
     settings = _settings(self._launch(fast=True).argv)
     assert settings['fastMode'] is True

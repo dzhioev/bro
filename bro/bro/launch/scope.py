@@ -22,8 +22,8 @@ _SESSION_BASELINE = frozenset({'session_log', 'trails'})
 class Surface(enum.Enum):
   """the launch surface a credential scope is computed for."""
 
-  CW_SESSION = 'cw-session'  # dive-in / plain `cw ss`, themed as its persona bro
-  BRO_SESSION = 'bro-session'  # `cw ss --bro`: claude --bare serving the bro's own MCP servers
+  CW_SESSION = 'cw-session'  # dive-in / plain `cw ss`, themed as its session bro
+  RAW_SESSION = 'raw-session'  # `cw ss --raw`: claude --bare serving the bro's own MCP servers
   BRO_RUN = 'bro-run'  # the bro as an LLM process: the `bro run` / `bro chat` hop, summon children
 
 
@@ -60,7 +60,7 @@ _RECIPES: dict[Surface, _Recipe] = {
     docker_sock=True,
     unknown_bro_fallback=True,
   ),
-  Surface.BRO_SESSION: _Recipe(
+  Surface.RAW_SESSION: _Recipe(
     baseline=_SESSION_BASELINE,
     optional_baseline=frozenset(),
     harness='bro',

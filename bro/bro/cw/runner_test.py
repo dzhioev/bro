@@ -41,7 +41,7 @@ class _Harness:
       patch('cw.runner.project_root', return_value=Path('/main-repo')),
       patch(
         'cw.session.project_config',
-        return_value=ProjectConfig(persona='ppp-dev', image_repository='bro/ppp-dev'),
+        return_value=ProjectConfig(default_bro='ppp-dev', image_repository='bro/ppp-dev'),
       ),
       # an empty credential store pins the derived git identity to the legacy
       # address regardless of the developer host's real `github` secret
@@ -106,10 +106,10 @@ class TestRunInPlace:
       assert cw.runner.run_in_place(_spec()) == 0
       assert h.run_claude.call_count == 1
 
-  def test_bro_session_serves_health_gates_and_syncs(self, monkeypatch, tmp_path):
+  def test_raw_session_serves_health_gates_and_syncs(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert cw.runner.run_in_place(_spec(bro='pm')) == 0
+      assert cw.runner.run_in_place(_spec(bro='pm', raw=True)) == 0
       assert h.start_server.call_args[0][0] == 'bro:pm'
       assert h.server.wait_healthy.call_count == 1
       assert h.server.stop.call_count == 1
@@ -120,7 +120,7 @@ class TestRunInPlace:
   def test_cw_session_serves_the_persona_and_health_gates(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert cw.runner.run_in_place(_spec(persona='pm')) == 0
+      assert cw.runner.run_in_place(_spec(bro='pm')) == 0
       assert h.start_server.call_args[0][0] == 'persona:pm'
       assert h.server.wait_healthy.call_count == 1
       assert h.server.stop.call_count == 1
@@ -128,7 +128,7 @@ class TestRunInPlace:
       assert h.env['CW_BRO'] == 'pm'
       assert h.build.call_args.kwargs['endpoint'] == h.server.endpoint
 
-  def test_cw_session_uses_the_project_default_persona(self, monkeypatch, tmp_path):
+  def test_cw_session_uses_the_project_default_bro(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
       assert cw.runner.run_in_place(_spec()) == 0
@@ -146,7 +146,7 @@ class TestRunInPlace:
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
       h.server.wait_healthy.side_effect = RuntimeError('not healthy')
-      assert cw.runner.run_in_place(_spec(bro='pm')) == 1
+      assert cw.runner.run_in_place(_spec(bro='pm', raw=True)) == 1
       assert h.run_claude.call_count == 0
       assert h.server.stop.call_count == 1
 
@@ -201,10 +201,10 @@ class TestRunInPlace:
       # the transformed env is the one claude is spawned with
       assert h.apply_auth.call_args.args[0] is h.run_claude.call_args.args[1]
 
-  def test_bro_session_applies_auth_without_warning(self, monkeypatch, tmp_path):
+  def test_raw_session_applies_auth_without_warning(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert cw.runner.run_in_place(_spec(bro='pm')) == 0
+      assert cw.runner.run_in_place(_spec(bro='pm', raw=True)) == 0
       assert h.apply_auth.call_args.kwargs == {'warn_when_missing': False}
 
   def test_host_session_provisions_and_exports_the_claude_config_dir(self, monkeypatch, tmp_path):

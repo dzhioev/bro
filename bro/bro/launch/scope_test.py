@@ -32,24 +32,24 @@ class TestScopedSecrets:
     )
     assert {'tmdb', 'brave', 'notion'} <= scoped.required
 
-  def test_bro_session_uses_full_manifest_and_anthropic(self):
-    # --bro serves the bro's own MCP servers, so it gets the full manifest (brog)
+  def test_raw_session_uses_full_manifest_and_anthropic(self):
+    # --raw serves the bro's own MCP servers, so it gets the full manifest (brog)
     # plus anthropic for the apiKeyHelper. ppp-dev doesn't deploy → no docker socket.
     scoped = bro.launch.scope.scoped_secrets(
-      'ppp-dev', Surface.BRO_SESSION, credential_instances={}
+      'ppp-dev', Surface.RAW_SESSION, credential_instances={}
     )
     assert {'brog', 'github', 'anthropic'} <= scoped.required
     assert scoped.docker_sock is False
-    # --bro runs claude --bare, which ignores CLAUDE_CODE_OAUTH_TOKEN, so the token
+    # --raw runs claude --bare, which ignores CLAUDE_CODE_OAUTH_TOKEN, so the token
     # secret is not requested on this surface
     assert 'claude_code' not in scoped.optional
     assert 'claude_code' not in scoped.required
 
-  def test_bro_session_includes_optional_secrets(self):
+  def test_raw_session_includes_optional_secrets(self):
     # a bro with searchable data sources (librorian) advertises openai best-effort
-    # for the query-focused fetch summary; --bro hydrates it as the optional tier.
+    # for the query-focused fetch summary; --raw hydrates it as the optional tier.
     scoped = bro.launch.scope.scoped_secrets(
-      'librorian', Surface.BRO_SESSION, credential_instances={}
+      'librorian', Surface.RAW_SESSION, credential_instances={}
     )
     assert 'openai' in scoped.optional
     assert 'openai' not in scoped.required  # optional, not required
@@ -57,10 +57,10 @@ class TestScopedSecrets:
   def test_docker_socket_only_for_deploy_bros(self):
     # the socket is gated on needs_docker: devoops (deployer) keeps it, librorian doesn't
     devoops = bro.launch.scope.scoped_secrets(
-      'devoops', Surface.BRO_SESSION, credential_instances={}
+      'devoops', Surface.RAW_SESSION, credential_instances={}
     )
     librorian = bro.launch.scope.scoped_secrets(
-      'librorian', Surface.BRO_SESSION, credential_instances={}
+      'librorian', Surface.RAW_SESSION, credential_instances={}
     )
     assert devoops.docker_sock is True
     assert librorian.docker_sock is False
@@ -99,10 +99,10 @@ class TestScopedSecrets:
     assert scoped.required == set(bro.launch.scope._SESSION_BASELINE)
     assert scoped.optional == set()
     assert scoped.docker_sock is True
-    # a --bro fallback drops the socket: no bro to consult for needs_docker
+    # a --raw fallback drops the socket: no bro to consult for needs_docker
     assert (
       bro.launch.scope.scoped_secrets(
-        'nonexistent-bro', Surface.BRO_SESSION, credential_instances={}
+        'nonexistent-bro', Surface.RAW_SESSION, credential_instances={}
       ).docker_sock
       is False
     )
@@ -124,7 +124,7 @@ class TestCredentialInstances:
 
   def test_substitutes_a_mapped_kind_in_the_optional_tier(self):
     scoped = bro.launch.scope.scoped_secrets(
-      'librorian', Surface.BRO_SESSION, credential_instances={'openai': 'work'}
+      'librorian', Surface.RAW_SESSION, credential_instances={'openai': 'work'}
     )
     assert 'openai+work' in scoped.optional
     assert 'openai' not in scoped.optional

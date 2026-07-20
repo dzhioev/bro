@@ -29,22 +29,22 @@ Current reference docs:
 - `environment.md` — session-banner playbook: every surface calls the `bro::banner` service tool and reads this doc through the `environment` `FileSource` (`cw banner --llm` stays as the human CLI). Tool-served only — not injected
 
 - `dev/style.md` — the development style policy, tool-served through the `dev-style` `FileSource` mounted on the Dev bro (the persona directs a read at session start and re-reads on demand — e.g. the `@::pr` policy audit before each commit's verdict). Not injected
-- `tool_names.md` — the tool-name resolution rule, templated on the `#wire` scheme; one file serves every surface. Claude sessions get the `mcp` rendering (`ns::tool` → `mcp__ns__tool`): injected here for non-bro sessions, composed into `BaseBro.claude_system_prompt` for `cw ss --bro` ones. Bro-native LLM runs compose the `bare` rendering (`ns::tool` → `ns__tool`) into `BaseBro.system_prompt`. Deliberately no `FileSource`
+- `tool_names.md` — the tool-name resolution rule, templated on the `#wire` scheme; one file serves every surface. Claude sessions get the `mcp` rendering (`ns::tool` → `mcp__ns__tool`): injected here for non-raw sessions, composed into `BaseBro.claude_system_prompt` for `cw ss --raw` ones. Bro-native LLM runs compose the `bare` rendering (`ns::tool` → `ns__tool`) into `BaseBro.system_prompt`. Deliberately no `FileSource`
 
 ## Hold text
 
 A session's hold — its user-involvement level — is one of `unattended | detached | attended | guided`, ordered from no human channel to human-driven. Every session gets exactly one level's text, picked by the launching surface at session start — a session is told its hold, never left to detect it at runtime:
 
-- `cw ss` picks by its `--hold` flag for both claude flavors — the cw-session append prompt and the `--bro` `--system-prompt` (flag semantics: `reference/cw.md`)
+- `cw ss` picks by its `--hold` flag for both claude flavors — the cw-session append prompt and the `--raw` `--system-prompt` (flag semantics: `reference/cw.md`)
 - the bro-native launch surfaces pick it through `bro/bro.py:_system_prompt_for` — `run()` defaults unattended, `send()` guided, with every launcher's `--hold` overriding (per-surface defaults: `bro/launch/CLAUDE.md`, "Launch holds")
 
-`hold.md` (top level, not in `_BASE_PROMPT_FILES`) selects the per-level file in `holds/` via an exhaustive `{{iff #hold = …}}` chain and `{{include}}`s it; the three non-guided level files share `holds/authorization.md`, the full-authorization block. `prompts.hold_fragment(hold, …facts)` is the one rendering path — every injection site uses it (`cw/system_prompt.py:_session_append_prompt`, `cw/claude_argv.py` for `--bro`, `bro/bro.py:_system_prompt_for`), and it is the only call that supplies the `#hold` fact, so all other text stays hold-neutral mechanically: a stray `#hold` directive in a script or procedure doc raises.
+`hold.md` (top level, not in `_BASE_PROMPT_FILES`) selects the per-level file in `holds/` via an exhaustive `{{iff #hold = …}}` chain and `{{include}}`s it; the three non-guided level files share `holds/authorization.md`, the full-authorization block. `prompts.hold_fragment(hold, …facts)` is the one rendering path — every injection site uses it (`cw/system_prompt.py:_session_append_prompt`, `cw/claude_argv.py` for `--raw`, `bro/bro.py:_system_prompt_for`), and it is the only call that supplies the `#hold` fact, so all other text stays hold-neutral mechanically: a stray `#hold` directive in a script or procedure doc raises.
 
 The level files are the single place the levels differ: unattended carries the never-ask + `raise` convention, detached the carry-questions-into-the-report convention, attended the end-the-turn-at-pivotal-points convention, guided the confirm-each-significant-step convention.
 
 ## Bare-session grounding fragment
 
-`grounding.md` (top level, not in `_BASE_PROMPT_FILES`) is the tool-grounding rule for `cw ss --bro` sessions: `BaseBro` appends it at the end of both composed bro prompt flavors — last, where instruction recency is strongest — and the file's own directives render its body only for the claude-bare surface (harness `bro`, wire `mcp`), the flavor whose argv-seeded first turn can reach the model before its MCP servers connect (`reference/cw.md` "Session-local MCP serving").
+`grounding.md` (top level, not in `_BASE_PROMPT_FILES`) is the tool-grounding rule for `cw ss --raw` sessions: `BaseBro` appends it at the end of both composed bro prompt flavors — last, where instruction recency is strongest — and the file's own directives render its body only for the claude-bare surface (harness `bro`, wire `mcp`), the flavor whose argv-seeded first turn can reach the model before its MCP servers connect (`reference/cw.md` "Session-local MCP serving").
 
 ## Top-level one-shot prompts
 
