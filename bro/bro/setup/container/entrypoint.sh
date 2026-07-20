@@ -1,6 +1,7 @@
 #!/usr/bin/env -S bash -e
 
 source /usr/local/lib/ppp-shell/prelude.sh
+source /usr/local/lib/ppp-shell/container-git.sh
 
 # root phase: align container user with host uid/gid, then re-exec as cw
 if [ "$(id -u)" = "0" ] && [ -z "${CW_ENTRYPOINT_REEXEC:-}" ]; then
@@ -67,8 +68,7 @@ if [ ! -d /workspace/.git ]; then
   git -c protocol.file.allow=always clone --shared "${quiet[@]}" /host-repo /workspace >&2
   cd /workspace
   host_origin="$(git -C /host-repo config --get remote.origin.url)"
-  # convert ssh URL to https so the container can push with a token
-  host_origin="$(echo "$host_origin" | sed 's|^git@github\.com:|https://github.com/|')"
+  host_origin="$(container_git_url "$host_origin")"
   git remote set-url origin "$host_origin"
   git remote add host /host-repo
   # refresh refs/remotes/origin/master (the clone copied /host-repo's possibly-stale
@@ -84,22 +84,8 @@ if [ ! -d /workspace/.git ]; then
   # alternates (the host resolution transfers foreign objects into the host repo
   # first), so no extra fetch is needed.
   git checkout "${quiet[@]}" -B "worktree-$CW_NAME" "${CW_BASE_REF:-HEAD}" >&2
-  # init submodules from host-local paths — .gitmodules uses ssh URLs and the
-  # container has no ssh keys. skip any submodule the host hasn't initialized.
-  if [ -f .gitmodules ]; then
-    git config -f .gitmodules --get-regexp '^submodule\..*\.path$' \
-      | while IFS=' ' read -r key path; do
-          name="${key#submodule.}"; name="${name%.path}"
-          if [ ! -e "/host-repo/$path/.git" ]; then
-            log VERBOSE "skipping submodule $name: /host-repo/$path not initialized on host"
-            continue
-          fi
-          log VERBOSE "initializing submodule $name from /host-repo/$path"
-          git -c "submodule.$name.url=/host-repo/$path" \
-              -c protocol.file.allow=always \
-              submodule "${quiet[@]}" update --init -- "$path" >&2
-        done
-  fi
+  # initialize from host-local clones because the container has no ssh keys
+  initialize_container_submodules /workspace /host-repo
 fi
 
 # pre-create the /workspace transcript directory (trust is granted in the

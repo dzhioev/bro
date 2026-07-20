@@ -143,5 +143,6 @@ RUN --mount=type=bind,from=project,target=/project-src \
  && if [ ! -f "$src/prelude.sh" ]; then src=/project-src/ppp/setup; fi \
  && mkdir -p /usr/local/lib/ppp-shell \
  && cp "$src/prelude.sh" "$src/log.sh" "$src/strict.sh" /usr/local/lib/ppp-shell/
+COPY git.sh /usr/local/lib/ppp-shell/container-git.sh
 COPY entrypoint.sh /usr/local/bin/cw-entrypoint
 ENTRYPOINT ["/usr/local/bin/cw-entrypoint"]
