@@ -254,6 +254,57 @@ class TestPollLoopResilience:
     assert len(calls) == 2
 
 
+class TestConflictDetection:
+  def _baseline(self, monkeypatch):
+    monkeypatch.setattr(poll_pr, '_owner_login', lambda *a: 'owner')
+    monkeypatch.setattr(poll_pr, '_fetch_issue_comments', lambda *a: [])
+    monkeypatch.setattr(poll_pr, '_fetch_review_comments', lambda *a: [])
+    monkeypatch.setattr(poll_pr, '_fetch_reviews', lambda *a: [])
+    monkeypatch.setattr(poll_pr.time, 'sleep', lambda _: None)
+
+  def test_conflict_fires_once_and_rearms_after_clean(self, monkeypatch, capsys):
+    self._baseline(monkeypatch)
+    pr_steps: list[dict[str, Any]] = [
+      {'state': 'open', 'mergeable': False, **_user('alice')},  # fires
+      {'state': 'open', 'mergeable': False, **_user('alice')},  # already fired
+      {'state': 'open', 'mergeable': None, **_user('alice')},  # still computing: no change
+      {'state': 'open', 'mergeable': True, **_user('alice')},  # re-arms
+      {'state': 'open', 'mergeable': False, **_user('alice')},  # fires again
+      {'merged': True},
+    ]
+    pr_calls: list[int] = []
+
+    def fake_fetch_pr(*a):
+      pr_calls.append(1)
+      return pr_steps[len(pr_calls) - 1]
+
+    monkeypatch.setattr(poll_pr, '_fetch_pr', fake_fetch_pr)
+    assert poll_pr.poll_pr('o', 'r', 1, lambda: 't', interval=0, self_login='x') == 0
+    events = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines()]
+    assert events == [
+      {'event': 'conflicts', 'pr': 1},
+      {'event': 'conflicts', 'pr': 1},
+      {'event': 'merged', 'pr': 1},
+    ]
+
+  def test_mergeable_pr_emits_no_conflict_event(self, monkeypatch, capsys):
+    self._baseline(monkeypatch)
+    pr_steps: list[dict[str, Any]] = [
+      {'state': 'open', 'mergeable': True, **_user('alice')},
+      {'merged': True},
+    ]
+    pr_calls: list[int] = []
+
+    def fake_fetch_pr(*a):
+      pr_calls.append(1)
+      return pr_steps[len(pr_calls) - 1]
+
+    monkeypatch.setattr(poll_pr, '_fetch_pr', fake_fetch_pr)
+    assert poll_pr.poll_pr('o', 'r', 1, lambda: 't', interval=0, self_login='x') == 0
+    events = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines()]
+    assert events == [{'event': 'merged', 'pr': 1}]
+
+
 class TestTokenAndSelf:
   def _baseline(self, monkeypatch):
     monkeypatch.setattr(poll_pr, '_owner_login', lambda *a: 'alice')

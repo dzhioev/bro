@@ -2,7 +2,8 @@
 
 `SummonSpawner` resolves the requested base ref off-loop, asks `bro_run.describe`
 to construct the target's neutral headless launch, wraps it for the docker
-spawner, and marks its channel-named workspace for teardown.
+spawner, and marks its channel-named workspace as throwaway (removed after a
+clean exit).
 
 `run_root_via_broker` composes both launch modes and summon lowering under one
 broker, then supervises the root until exit.

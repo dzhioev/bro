@@ -2,14 +2,12 @@ import os
 import shutil
 import subprocess
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 from workspace.docker import image_tag
-from workspace.git import git_run, no_prompt_env
-from workspace.paths import containers_dir, host_log_dir, worktrees_dir
+from workspace.git import git_run
+from workspace.paths import containers_dir, host_log_dir, session_end_dir, worktrees_dir
 
 _CONTAINER_PREFIX = 'c:'
 
@@ -44,129 +42,28 @@ def _last_active(workspace: Path) -> Optional[float]:
   return max(float(line) for line in result.stdout.splitlines() if len(line) > 0)
 
 
-@dataclass(frozen=True)
-class _GitRunner:
-  """the per-workspace git context the shared is_clean policy runs against.
-
-  host and container differ in ways the policy can't hardcode, so each subtype
-  supplies them here:
-  - status_env / ancestry_env: two env overlays. a container clone's own commits
-    live only in its object store, so the ancestry walk (run in the shared host
-    repo) needs the clone's objects exposed as an alternate, while the status read
-    needs the host repo's objects exposed so the clone's /host-repo alternates
-    resolve. on host both are just no_prompt_env().
-  - check_root: where the origin fetch / origin-master / ancestry checks cwd into.
-    host: the worktree itself; container: the shared host repo (the clone's own
-    remotes are unreachable — origin is HTTPS GitHub without creds).
-  - read_head: the ref to compare against origin/master. host: the literal 'HEAD';
-    container: the clone's HEAD sha (read separately so the walk can run in the
-    shared repo). returns (ref, reason) — reason set when the read failed.
-  - bring_in_submodule_head: a per-submodule hook to fetch the container clone's
-    submodule HEAD into the shared repo before the ancestry check. no-op on host.
-  """
-
-  path: Path
-  check_root: Path
-  status_env: Mapping[str, str]
-  ancestry_env: Mapping[str, str]
-  read_head: Callable[[], tuple[Optional[str], Optional[str]]]
-  bring_in_submodule_head: Callable[[str, Path], bool]
+KILLED = 'killed'
 
 
-def _check_clean(runner: _GitRunner, refresh_origin: bool) -> tuple[bool, list[str]]:
-  """the shared policy: status empty ∧ HEAD an ancestor of origin/master ∧ every
-  submodule pushed. returns (safe, reasons) where reasons lists what prevents removal.
-
-  refresh_origin: fetch origin/master before the ancestry check. callers that run
-  many checks concurrently (clean_workspaces) fetch once up front and pass False —
-  a per-check fetch into the shared repo races on the ref lock.
-  """
-  git_env = no_prompt_env()
-  reasons: list[str] = []
-  status = git_run('status', '--porcelain', cwd=runner.path, env=runner.status_env)
-  if status.returncode != 0:
-    return False, ['cannot read git status']
-  if len(status.stdout.strip()) > 0:
-    reasons.append('uncommitted or untracked changes')
-
-  origin_ok = True
-  if refresh_origin:
-    fetch = git_run('fetch', '--quiet', 'origin', 'master', cwd=runner.check_root, env=git_env)
-    origin_ok = fetch.returncode == 0
-    if not origin_ok:
-      reasons.append('could not fetch origin/master')
-  if origin_ok:
-    head_ref, head_reason = runner.read_head()
-    if head_reason is not None:
-      reasons.append(head_reason)
-    if head_ref is not None:
-      master = git_run('rev-parse', '--verify', 'origin/master', cwd=runner.check_root, env=git_env)
-      if master.returncode != 0:
-        reasons.append('origin/master not found')
-      else:
-        ancestor = git_run(
-          'merge-base', '--is-ancestor', head_ref, 'origin/master',
-          cwd=runner.check_root, env=runner.ancestry_env,
-        )  # fmt: skip
-        if ancestor.returncode != 0:
-          ahead = git_run(
-            'rev-list', '--count', head_ref, '^origin/master',
-            cwd=runner.check_root, env=runner.ancestry_env,
-          )  # fmt: skip
-          n = ahead.stdout.strip() if ahead.returncode == 0 else '?'
-          reasons.append(f'{n} commit(s) not on origin/master')
-
-  sub_status = git_run('submodule', 'status', cwd=runner.path, env=runner.status_env)
-  if sub_status.returncode == 0:
-    for line in sub_status.stdout.strip().splitlines():
-      stripped = line.strip()
-      if stripped.startswith('-'):
-        continue
-      parts = stripped.lstrip('+').split()
-      if len(parts) < 2:
-        continue
-      sub_hash, sub_path = parts[0], parts[1]
-      sub_root = runner.check_root / sub_path
-      if git_run('fetch', '--quiet', 'origin', cwd=sub_root, env=git_env).returncode != 0:
-        reasons.append(f'submodule {sub_path}: could not fetch origin')
-        continue
-      if not runner.bring_in_submodule_head(sub_path, sub_root):
-        reasons.append(f"submodule {sub_path}: could not fetch container's HEAD")
-        continue
-      sub_default = git_run('rev-parse', '--verify', 'origin/HEAD', cwd=sub_root, env=git_env)
-      remote_ref = 'origin/HEAD' if sub_default.returncode == 0 else 'origin/master'
-      sub_ancestor = git_run(
-        'merge-base', '--is-ancestor', sub_hash, remote_ref, cwd=sub_root, env=git_env
-      )
-      if sub_ancestor.returncode != 0:
-        reasons.append(f'submodule {sub_path}: commit {sub_hash[:8]} not pushed to remote')
-
-  return len(reasons) == 0, reasons
+def _session_end_file(project: Path, ref: str) -> Path:
+  return session_end_dir(project) / ref
 
 
-def _host_git_runner(path: Path) -> _GitRunner:
-  git_env = no_prompt_env()
-
-  def read_head() -> tuple[Optional[str], Optional[str]]:
-    return 'HEAD', None
-
-  def bring_in_submodule_head(sub_path: str, sub_root: Path) -> bool:
-    return True  # submodules are checked in place; nothing to bring into a shared repo
-
-  return _GitRunner(
-    path=path,
-    check_root=path,
-    status_env=git_env,
-    ancestry_env=git_env,
-    read_head=read_head,
-    bring_in_submodule_head=bring_in_submodule_head,
-  )
+def record_session_end(project: Path, ref: str, code: Optional[int]) -> None:
+  """record how the workspace's session ended: the exit code, or None for a
+  killed child (no exit code at the seam). every launch seam writes this after
+  the session ends; a recorded clean exit is what makes the workspace
+  reclaimable (`Workspace.is_clean`)."""
+  file = _session_end_file(project, ref)
+  file.parent.mkdir(parents=True, exist_ok=True)
+  file.write_text(str(code) if code is not None else KILLED)
 
 
-def host_path_is_clean(path: Path, refresh_origin: bool = True) -> tuple[bool, list[str]]:
-  """run the host clean policy on an arbitrary path — for `cw check-clean` with no
-  ref (the cwd), which isn't a managed Workspace. HostWorktree.is_clean delegates here."""
-  return _check_clean(_host_git_runner(path), refresh_origin)
+def clear_session_end(project: Path, ref: str) -> None:
+  """drop the workspace's session-end record — every launch seam clears it at
+  session start, so a session that dies without reaching its seam's record
+  (a crashed host, a wedged launch) leaves no record and the workspace is kept."""
+  _session_end_file(project, ref).unlink(missing_ok=True)
 
 
 def _cleanup_image() -> Optional[str]:
@@ -266,20 +163,29 @@ class Workspace(ABC):
   @abstractmethod
   def remove(self) -> None: ...
 
-  @abstractmethod
-  def _git_runner(self) -> Optional[_GitRunner]: ...
+  def is_clean(self) -> tuple[bool, list[str]]:
+    """whether the workspace is safe to remove: its last session finished
+    successfully. the recorded session end is the one deciding factor — anything
+    else (a failure, a kill, no record) keeps the workspace for inspection and
+    recovery. returns (safe, reasons)."""
+    file = _session_end_file(self.project, self.ref)
+    try:
+      end = file.read_text().strip()
+    except FileNotFoundError:
+      return False, ['no recorded session end']
+    if end == '0':
+      return True, []
+    if end == KILLED:
+      return False, ['last session was killed']
+    return False, [f'last session exited with code {end}']
 
-  def is_clean(self, refresh_origin: bool = True) -> tuple[bool, list[str]]:
-    runner = self._git_runner()
-    if runner is None:
-      return False, ['not a git repository']
-    return _check_clean(runner, refresh_origin)
-
-  def _remove_host_log(self) -> None:
-    # the session host log (workspace/spawn.py:_HostLogRedirect) is keyed by `ref`,
-    # the same mode-prefixed key the launch surfaces pass to the broker root.
-    # diagnostics, not audit — unlike var/cw/summon/, it does not survive removal
+  def _remove_session_state(self) -> None:
+    # per-session host-side state keyed by `ref` (the mode-prefixed key the launch
+    # surfaces pass to the broker root): the session host log
+    # (workspace/spawn.py:_HostLogRedirect) and the session-end record. neither
+    # survives removal — unlike the var/cw/summon/ audit
     (host_log_dir(self.project) / f'{self.ref}.log').unlink(missing_ok=True)
+    clear_session_end(self.project, self.ref)
 
   def last_active(self) -> Optional[float]:
     return _last_active(self.path)
@@ -341,13 +247,10 @@ class HostWorktree(Workspace):
       return True
     return True
 
-  def _git_runner(self) -> Optional[_GitRunner]:
-    return _host_git_runner(self.path)
-
   def remove(self) -> None:
     git_run('worktree', 'remove', '--force', str(self.path))
     git_run('branch', '-D', f'worktree-{self.name}')
-    self._remove_host_log()
+    self._remove_session_state()
 
 
 class ContainerWorkspace(Workspace):
@@ -362,51 +265,10 @@ class ContainerWorkspace(Workspace):
   def is_active(self, mounts: set[str]) -> bool:
     return str(self.path) in mounts
 
-  def _git_runner(self) -> Optional[_GitRunner]:
-    # the clone's own remotes are unreachable from the host (origin = HTTPS GitHub
-    # without creds, host remote = /host-repo bind mount), so the ancestry checks
-    # run in the shared host repo (self.project) with the two stores cross-exposed as
-    # alternates: the host repo's objects to the clone's status read, and the
-    # clone's objects to the shared repo's ancestry walk — so the walk reaches the
-    # container's local commits without writing them into the shared repo (which
-    # would race on the shared refs across concurrent checks).
-    if not (self.path / '.git').exists():
-      return None
-    git_env = no_prompt_env()
-    status_env = {
-      **git_env,
-      'GIT_ALTERNATE_OBJECT_DIRECTORIES': str(self.project / '.git' / 'objects'),
-    }
-    ancestry_env = {
-      **git_env,
-      'GIT_ALTERNATE_OBJECT_DIRECTORIES': str(self.path / '.git' / 'objects'),
-    }
-
-    def read_head() -> tuple[Optional[str], Optional[str]]:
-      head = git_run('rev-parse', 'HEAD', cwd=self.path, env=status_env)
-      if head.returncode != 0:
-        return None, "could not read container's HEAD"
-      return head.stdout.strip(), None
-
-    def bring_in_submodule_head(sub_path: str, sub_root: Path) -> bool:
-      fetch = git_run(
-        'fetch', '--quiet', str(self.path / sub_path), 'HEAD', cwd=sub_root, env=git_env
-      )
-      return fetch.returncode == 0
-
-    return _GitRunner(
-      path=self.path,
-      check_root=self.project,
-      status_env=status_env,
-      ancestry_env=ancestry_env,
-      read_head=read_head,
-      bring_in_submodule_head=bring_in_submodule_head,
-    )
-
   def remove(self) -> None:
-    # the host log is cleaned in a finally so it never outlives the workspace,
+    # the session state is cleaned in a finally so it never outlives the workspace,
     # even when the workspace dir removal escalates and then fails.
     try:
       _remove_container_dir(self.path, _cleanup_image())
     finally:
-      self._remove_host_log()
+      self._remove_session_state()

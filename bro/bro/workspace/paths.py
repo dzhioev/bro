@@ -48,6 +48,13 @@ def summon_dir(project: Path) -> Path:
   return project / 'var' / 'cw' / 'summon'
 
 
+def session_end_dir(project: Path) -> Path:
+  # per-workspace record of how the last session ended (workspace/model.py:
+  # record_session_end). outside the workspace dirs so the file never lands
+  # inside a /workspace mount; removed with the workspace.
+  return project / 'var' / 'cw' / 'exit'
+
+
 def host_log_dir(project: Path) -> Path:
   # per-session host logs: where the outer launch process's mid-session output goes
   # while an interactive root owns the terminal (see workspace/spawn.py). outside

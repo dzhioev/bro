@@ -4,7 +4,8 @@
 provisioned channel socket mount and `BROKER_CHANNEL`, and runs the shared
 blocking container prepare off-loop. A TTY launch attaches with inherited stdio
 and host-log redirection; a headless launch captures merged output in a bounded
-ring and can remove its caller-marked throwaway workspace after exit. The
+ring and can remove its caller-marked throwaway workspace after a clean exit —
+a failed or killed child's workspace stays on disk for inspection. The
 neutral launch owns the complete docker inputs, including the explicit env
 snapshot and whether ambient forwarding is allowed.
 
@@ -33,7 +34,7 @@ from workspace.docker import (
   prepare_container,
   suspend_until_continued,
 )
-from workspace.model import ContainerWorkspace
+from workspace.model import ContainerWorkspace, clear_session_end, record_session_end
 from workspace.paths import project_root
 
 DEFAULT_RING_BYTES = 1 << 16  # 64 KiB — a full traceback + context, bounded
@@ -123,7 +124,7 @@ class _DockerChild(ChildHandle):
     self._process = process
     self._ring = _RingBuffer(ring_bytes)
     self._drain = asyncio.create_task(self._drain_output())
-    self._workspace = workspace  # a derived throwaway workspace, removed once the child ends
+    self._workspace = workspace  # a derived throwaway workspace, removed on a clean exit
 
   async def _drain_output(self) -> None:
     assert self._process.stdout is not None  # carries stderr too (merged at spawn)
@@ -133,14 +134,16 @@ class _DockerChild(ChildHandle):
         return
       self._ring.write(chunk)
 
-  async def _remove_workspace(self) -> None:
+  def _detach_workspace(self) -> Optional[ContainerWorkspace]:
     # wait() and kill() can both get here (the timeout path kills, then the attach
-    # exits); the swap happens before the first await, on the one loop, so the
-    # workspace is removed exactly once. Best-effort: a child's dirs must never
-    # break lifecycle routing.
-    if self._workspace is None:
-      return
+    # exits); the swap runs synchronously on the one loop, so the workspace is
+    # settled exactly once — a kill's keep decision holds even when the attach
+    # later exits 0.
     workspace, self._workspace = self._workspace, None
+    return workspace
+
+  async def _remove_workspace(self, workspace: ContainerWorkspace) -> None:
+    # best-effort: a child's dirs must never break lifecycle routing
     try:
       # remove() shells out (image discovery, root-escalated rm); keep it off the loop
       await asyncio.to_thread(workspace.remove)
@@ -150,12 +153,21 @@ class _DockerChild(ChildHandle):
   async def wait(self) -> int:
     code = await self._process.wait()
     await self._drain  # let the final output land in the ring before tail() is read
-    await self._remove_workspace()
+    workspace = self._detach_workspace()
+    if workspace is not None:
+      if code == 0:
+        await self._remove_workspace(workspace)
+      else:
+        record_session_end(workspace.project, workspace.ref, code)
+        log.info('child exited with code %d; keeping workspace %s', code, workspace.name)
     return code
 
   async def kill(self) -> None:
     await _force_remove(self._container_id)
-    await self._remove_workspace()
+    workspace = self._detach_workspace()
+    if workspace is not None:
+      record_session_end(workspace.project, workspace.ref, None)
+      log.info('child killed; keeping workspace %s', workspace.name)
 
   def output_tail(self) -> str:
     return self._ring.tail().decode('utf-8', errors='replace')
@@ -320,7 +332,10 @@ def _prepare_docker_spawn(
   docker_launch = _broker_launch(launch.launch, channel)
   project = project_root()
   container_id = prepare_container(docker_launch, project)
-  workspace = ContainerWorkspace(docker_launch.name, project) if launch.remove_workspace else None
+  if not launch.remove_workspace:
+    return container_id, None
+  workspace = ContainerWorkspace(docker_launch.name, project)
+  clear_session_end(project, workspace.ref)
   return container_id, workspace
 
 

@@ -43,6 +43,8 @@ class TestRunInContainerInjection:
     assert bro.launch.root.run_in_container(launch) == 7
     assert prepared == [(launch, tmp_path / 'project')]
     assert calls == [['docker', 'start', '-a', '-i', '--detach-keys=ctrl-z', 'cid123']]
+    # the run's end is recorded under the container-prefixed ref for `cw clean`
+    assert (tmp_path / 'project' / 'var' / 'cw' / 'exit' / 'c:ws').read_text() == '7'
 
   def test_non_tty_launch_attaches_without_detach_keys(self, monkeypatch, tmp_path):
     monkeypatch.setenv('BROKER_DISABLED', '1')
@@ -67,6 +69,44 @@ class TestRunInContainerInjection:
     assert bro.launch.root.run_in_container(launch) == 0
     # no pty, so no Ctrl+Z to intercept — and a zero exit must not probe the container
     assert calls == [['docker', 'start', '-a', 'cid123']]
+
+
+class TestRunInContainerDrop:
+  def _run(self, monkeypatch, tmp_path, *, exit_code: int) -> list:
+    monkeypatch.setenv('BROKER_DISABLED', '1')
+    monkeypatch.setattr(bro.launch.root, 'project_root', lambda: tmp_path / 'project')
+    monkeypatch.setattr(bro.launch.root, 'prepare_container', lambda launch, project: 'cid123')
+    monkeypatch.setattr(
+      bro.launch.root.subprocess, 'run', lambda *_a, **_k: _FakeProc(returncode=exit_code)
+    )
+    removed: list = []
+
+    class _FakeWorkspace:
+      def __init__(self, name, project):
+        self.name = name
+
+      def remove(self):
+        removed.append(self.name)
+
+    monkeypatch.setattr(bro.launch.root, 'ContainerWorkspace', _FakeWorkspace)
+    launch = workspace.docker.Launch(
+      name='ws',
+      command=['bro', 'run'],
+      env={},
+      secrets=(),
+      docker_sock=False,
+      tty=False,
+      forward_env=False,
+    )
+    assert bro.launch.root.run_in_container(launch, drop=True) == exit_code
+    return removed
+
+  def test_drop_removes_the_workspace_after_a_clean_exit(self, monkeypatch, tmp_path):
+    assert self._run(monkeypatch, tmp_path, exit_code=0) == ['ws']
+
+  def test_drop_keeps_the_workspace_of_a_failed_run(self, monkeypatch, tmp_path):
+    assert self._run(monkeypatch, tmp_path, exit_code=7) == []
+    assert (tmp_path / 'project' / 'var' / 'cw' / 'exit' / 'c:ws').read_text() == '7'
 
 
 class TestRunInContainerBrokerRoute:

@@ -14,20 +14,6 @@ class _FakeProc:
     self.stderr = stderr
 
 
-def _git(cwd, *args):
-  subprocess.run(['git', *args], cwd=cwd, check=True, capture_output=True)
-
-
-def _init_repo(d):
-  d.mkdir(parents=True, exist_ok=True)
-  _git(d, 'init', '-b', 'master')
-  _git(d, 'config', 'user.email', 't@t')
-  _git(d, 'config', 'user.name', 't')
-  (d / 'f').write_text('a')
-  _git(d, 'add', '.')
-  _git(d, 'commit', '-m', 'c1')
-
-
 class TestCleanupImage:
   def test_prefers_current_tag_when_present(self, monkeypatch):
     monkeypatch.setattr(model, 'image_tag', lambda: 'bro/ppp-dev:cur')
@@ -142,9 +128,12 @@ class TestContainerWorkspaceRemove:
     host_log = tmp_path / 'project' / 'var' / 'cw' / 'log' / 'c:ws.log'
     host_log.parent.mkdir(parents=True)
     host_log.write_text('mid-session line\n')
+    model.record_session_end(tmp_path / 'project', workspace.ref, 0)
     workspace.remove()
     assert removed == {'path': workspace.path, 'image': 'bro/ppp-dev:img'}
-    assert not host_log.exists()  # the session host log goes with the workspace
+    # the session host log and end record go with the workspace
+    assert not host_log.exists()
+    assert workspace.is_clean() == (False, ['no recorded session end'])
 
   def test_host_log_cleaned_even_when_dir_removal_raises(self, monkeypatch, tmp_path):
     monkeypatch.setattr(model, 'containers_dir', lambda project: tmp_path / 'containers')
@@ -176,92 +165,56 @@ class TestHostWorktreeRemove:
     host_log = tmp_path / 'project' / 'var' / 'cw' / 'log' / 'ws.log'
     host_log.parent.mkdir(parents=True)
     host_log.write_text('mid-session line\n')
+    model.record_session_end(tmp_path / 'project', workspace.ref, 0)
     workspace.remove()
     assert calls == [
       ('worktree', 'remove', '--force', str(workspace.path)),
       ('branch', '-D', 'worktree-ws'),
     ]
     assert not host_log.exists()
+    assert workspace.is_clean() == (False, ['no recorded session end'])
 
 
-class TestHostIsClean:
-  def _make_workspace(self, tmp_path, monkeypatch, name='repo'):
-    monkeypatch.setattr(model, 'worktrees_dir', lambda project: tmp_path)
-    workspace = HostWorktree(name, tmp_path)
-    _init_repo(workspace.path)
-    _git(workspace.path, 'update-ref', 'refs/remotes/origin/master', 'HEAD')
-    return workspace
+class TestSessionEndRecord:
+  def test_record_and_clear_round_trip(self, tmp_path):
+    model.record_session_end(tmp_path, 'ws', 0)
+    assert (tmp_path / 'var' / 'cw' / 'exit' / 'ws').read_text() == '0'
+    model.clear_session_end(tmp_path, 'ws')
+    assert not (tmp_path / 'var' / 'cw' / 'exit' / 'ws').exists()
 
-  def test_clean_when_head_matches_origin_master(self, tmp_path, monkeypatch):
-    workspace = self._make_workspace(tmp_path, monkeypatch)
-    safe, reasons = workspace.is_clean(refresh_origin=False)
-    assert safe is True
-    assert reasons == []
+  def test_clear_of_an_absent_record_is_a_noop(self, tmp_path):
+    model.clear_session_end(tmp_path, 'ws')
 
-  def test_counts_unpushed_commits(self, tmp_path, monkeypatch):
-    workspace = self._make_workspace(tmp_path, monkeypatch)
-    (workspace.path / 'f').write_text('b')
-    _git(workspace.path, 'commit', '-am', 'c2')
-    safe, reasons = workspace.is_clean(refresh_origin=False)
-    assert safe is False
-    assert reasons == ['1 commit(s) not on origin/master']
-
-  def test_flags_uncommitted_changes(self, tmp_path, monkeypatch):
-    workspace = self._make_workspace(tmp_path, monkeypatch)
-    (workspace.path / 'untracked').write_text('x')
-    safe, reasons = workspace.is_clean(refresh_origin=False)
-    assert safe is False
-    assert 'uncommitted or untracked changes' in reasons
-
-  def test_missing_origin_master_is_not_clean(self, tmp_path, monkeypatch):
-    monkeypatch.setattr(model, 'worktrees_dir', lambda project: tmp_path)
-    workspace = HostWorktree('repo', tmp_path)
-    _init_repo(workspace.path)  # no origin/master ref set
-    safe, reasons = workspace.is_clean(refresh_origin=False)
-    assert safe is False
-    assert 'origin/master not found' in reasons
+  def test_a_kill_is_recorded_without_a_code(self, tmp_path):
+    model.record_session_end(tmp_path, 'ws', None)
+    assert (tmp_path / 'var' / 'cw' / 'exit' / 'ws').read_text() == 'killed'
 
 
-class TestContainerIsClean:
-  def _make_workspace(self, tmp_path, monkeypatch):
-    # a shared "host" repo (the ancestry check's check_root) and a clone of it
-    # standing in for the container workspace, exercising the alternate-objects
-    # dance: the clone's local commits are reachable from the shared repo only
-    # via GIT_ALTERNATE_OBJECT_DIRECTORIES.
-    project = tmp_path / 'project'
-    _init_repo(project)
-    _git(project, 'update-ref', 'refs/remotes/origin/master', 'HEAD')
-    containers = tmp_path / 'containers'
-    containers.mkdir()
-    monkeypatch.setattr(model, 'containers_dir', lambda p: containers)
-    workspace = ContainerWorkspace('ws', project)
-    _git(tmp_path, 'clone', '--quiet', str(project), str(workspace.path))
-    _git(workspace.path, 'config', 'user.email', 't@t')
-    _git(workspace.path, 'config', 'user.name', 't')
-    return workspace
+class TestIsClean:
+  def test_clean_after_a_recorded_clean_exit(self, tmp_path):
+    model.record_session_end(tmp_path, 'ws', 0)
+    assert HostWorktree('ws', tmp_path).is_clean() == (True, [])
 
-  def test_clean_when_clone_head_matches_origin_master(self, tmp_path, monkeypatch):
-    workspace = self._make_workspace(tmp_path, monkeypatch)
-    safe, reasons = workspace.is_clean(refresh_origin=False)
-    assert safe is True
-    assert reasons == []
+  def test_not_clean_without_a_record(self, tmp_path):
+    assert HostWorktree('ws', tmp_path).is_clean() == (False, ['no recorded session end'])
 
-  def test_counts_unpushed_clone_commits_via_alternate(self, tmp_path, monkeypatch):
-    workspace = self._make_workspace(tmp_path, monkeypatch)
-    (workspace.path / 'f').write_text('b')
-    _git(workspace.path, 'commit', '-am', 'c2')
-    safe, reasons = workspace.is_clean(refresh_origin=False)
-    assert safe is False
-    assert reasons == ['1 commit(s) not on origin/master']
+  def test_not_clean_after_a_failed_session(self, tmp_path):
+    model.record_session_end(tmp_path, 'ws', 3)
+    assert HostWorktree('ws', tmp_path).is_clean() == (
+      False,
+      ['last session exited with code 3'],
+    )
 
-  def test_not_a_git_repository(self, tmp_path, monkeypatch):
-    containers = tmp_path / 'containers'
-    (containers / 'ws').mkdir(parents=True)  # no .git
-    monkeypatch.setattr(model, 'containers_dir', lambda p: containers)
-    workspace = ContainerWorkspace('ws', tmp_path / 'project')
-    safe, reasons = workspace.is_clean(refresh_origin=False)
-    assert safe is False
-    assert reasons == ['not a git repository']
+  def test_not_clean_after_a_killed_session(self, tmp_path):
+    model.record_session_end(tmp_path, 'ws', None)
+    assert HostWorktree('ws', tmp_path).is_clean() == (False, ['last session was killed'])
+
+  def test_container_record_keyed_by_the_prefixed_ref(self, tmp_path):
+    workspace = ContainerWorkspace('ws', tmp_path)
+    model.record_session_end(tmp_path, workspace.ref, 0)
+    assert workspace.is_clean() == (True, [])
+    # the same-name host worktree keeps its own record
+    assert HostWorktree('ws', tmp_path).is_clean()[0] is False
 
 
 class TestIsActive:

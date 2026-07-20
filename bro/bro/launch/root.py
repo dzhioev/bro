@@ -6,7 +6,7 @@ from pathlib import Path
 from base import log
 from workspace.containers import attach_interactive, container_broker_enabled
 from workspace.docker import Launch, prepare_container
-from workspace.model import ContainerWorkspace, format_ref
+from workspace.model import ContainerWorkspace, clear_session_end, format_ref, record_session_end
 from workspace.paths import project_root
 from workspace.store import log_scoped_secrets
 
@@ -35,12 +35,15 @@ def run_in_container(
   The launch description is supervision-neutral. The broker path wraps it only
   after the lazy import gate; the fallback uses the same container prepare and
   attaches with plain `docker start`. `drop` removes the caller-owned workspace
-  after exit, and `may_summon` configures the broker root's outgoing allow-list.
+  after a clean exit — a failed run keeps it on disk for inspection and
+  recovery — and `may_summon` configures the broker root's outgoing allow-list.
   """
   # the container starts with origin/master only as fresh as the host's last fetch.
   # ancestry-changing workflows fetch again before acting; the remaining reader is informational.
   project = project_root()
   log_scoped_secrets(launch.name, launch.secrets, launch.optional_secrets)
+  ref = format_ref(launch.name, True)
+  clear_session_end(project, ref)
   if container_broker_enabled():
     code = _run_root_via_broker(launch, project, may_summon=may_summon)
   else:
@@ -49,10 +52,14 @@ def run_in_container(
       code = attach_interactive(container_id)
     else:
       code = subprocess.run(['docker', 'start', '-a', container_id]).returncode
+  record_session_end(project, ref, code)
   if drop:
-    try:
-      ContainerWorkspace(launch.name, project).remove()
-      log.info('removed container workspace %s', launch.name)
-    except RuntimeError as e:
-      log.warning('could not fully remove container workspace %s: %s', launch.name, e)
+    if code == 0:
+      try:
+        ContainerWorkspace(launch.name, project).remove()
+        log.info('removed container workspace %s', launch.name)
+      except RuntimeError as e:
+        log.warning('could not fully remove container workspace %s: %s', launch.name, e)
+    else:
+      log.info('run exited with code %d; keeping container workspace %s', code, launch.name)
   return code

@@ -264,6 +264,21 @@ class TestContainerCommand:
     assert command == ['cw', 'ss', '--in-place', '--resume', 'w']
 
 
+class TestContainerDrop:
+  def test_drop_removes_the_workspace_on_clean_exit(self):
+    with _ContainerHarness() as h:
+      rc = cw.session.start_session(_spec(drop=True))
+    assert rc == 0
+    assert h.drop_workspace.call_count == 1
+
+  def test_drop_keeps_the_workspace_when_the_session_failed(self):
+    with _ContainerHarness() as h:
+      h.run_in_container.return_value = 3
+      rc = cw.session.start_session(_spec(drop=True))
+    assert rc == 3
+    assert h.drop_workspace.call_count == 0
+
+
 class TestResumeCommand:
   def test_create_command_includes_drop_into_and_claude_args(self):
     parts = _spec(
@@ -482,6 +497,7 @@ class TestHostSession:
       def __init__(self, name, project):
         self.path = worktree
         self.pidfile = tmp_path / 'wt.pid'
+        self.ref = name
 
       def is_active(self, mounts):
         return False
@@ -636,6 +652,22 @@ class TestHostSession:
     monkeypatch.setattr(cw.session, 'drop_workspace', lambda ws: events.append('remove'))
     assert cw.session._host_session(_spec(host=True, drop=True), None) == 0
     assert events == ['remove']
+
+  def test_drop_keeps_the_worktree_when_the_session_failed(self, monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    self._prepare_launch(monkeypatch, tmp_path)
+    monkeypatch.setattr(cw.session, 'broker_enabled', lambda: False)
+    monkeypatch.setattr(
+      cw.session.subprocess, 'run', lambda *_a, **_k: SimpleNamespace(returncode=3)
+    )
+    events: list = []
+    monkeypatch.setattr(cw.session, '_replace_resume_hint', lambda workspace: events.append('hint'))
+    monkeypatch.setattr(cw.session, 'drop_workspace', lambda ws: events.append('remove'))
+    assert cw.session._host_session(_spec(host=True, drop=True), None) == 3
+    assert events == []
+    # the failed end is recorded, so `cw clean` refuses the kept worktree
+    assert (tmp_path / 'var' / 'cw' / 'exit' / 'w').read_text() == '3'
 
   def test_runner_env_gets_the_claude_auth_transform(self, monkeypatch, tmp_path):
     # the outer applies _apply_claude_auth to the runner env it spawns, so a
@@ -828,6 +860,7 @@ class TestHostBrokerPingRoundTrip:
         def __init__(self, name, project):
           self.path = worktree
           self.pidfile = root / 'wt.pid'
+          self.ref = name
 
         def is_active(self, mounts):
           return False

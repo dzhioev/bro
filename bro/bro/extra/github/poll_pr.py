@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""poll a GitHub PR for merge status, new comments, and new reviews."""
+"""poll a GitHub PR for merge status, merge conflicts, new comments, and new reviews."""
 
 import http.client
 import json
@@ -145,6 +145,24 @@ def emit_cycle(
   return events
 
 
+class ConflictTracker:
+  """edge-triggered merge-conflict detection over the PR's `mergeable` field:
+  `update` returns True once when the PR turns conflicted (False ⇔ GitHub cannot
+  create the merge commit), re-arms when it turns mergeable again, and treats
+  None — GitHub still computing — as no information."""
+
+  def __init__(self):
+    self._conflicted = False
+
+  def update(self, mergeable: Optional[bool]) -> bool:
+    if mergeable is False and not self._conflicted:
+      self._conflicted = True
+      return True
+    if mergeable is True:
+      self._conflicted = False
+    return False
+
+
 def poll_pr(
   owner: str,
   repo: str,
@@ -155,6 +173,7 @@ def poll_pr(
 ) -> int:
   seen_comment_ids: set[int] = set()
   seen_review_ids: set[int] = set()
+  conflicts = ConflictTracker()
 
   startup_token = token()
   repo_owner_login = _owner_login(owner, repo, startup_token)
@@ -203,6 +222,9 @@ def poll_pr(
         self_login = pr_data['user']['login']
         _log.info(f'self: {self_login} (the PR author)')
 
+      if conflicts.update(pr_data.get('mergeable')):
+        print(json.dumps({'event': 'conflicts', 'pr': pr}), flush=True)
+
       for event in emit_cycle(
         owner, repo, pr, cycle_token, seen_comment_ids, seen_review_ids, is_actionable
       ):
@@ -233,7 +255,9 @@ def _token_provider(credential: str) -> Callable[[], str]:
 
 
 def main(argv: list[str]) -> Optional[int]:
-  parser = Parser(description='poll a GitHub PR for merge status, new comments, and new reviews')
+  parser = Parser(
+    description='poll a GitHub PR for merge status, merge conflicts, new comments, and new reviews'
+  )
   parser.add_argument(
     'repo', type=_owner_repo, metavar='owner/repo', help='target repo (e.g. dzhioev/ppp)'
   )

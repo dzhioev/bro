@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 import sys
-from pathlib import Path
 from typing import Optional
 
 from base.args import REMAINDER, SUPPRESS, Parser
@@ -12,7 +11,7 @@ from cw.runner import run_in_place
 from cw.session import SessionSpec, start_session
 from workspace.banner import banner
 from workspace.containers import exec_in_workspace
-from workspace.model import Workspace, host_path_is_clean
+from workspace.model import Workspace
 from workspace.paths import project_root
 
 __cli_name__ = 'cw'
@@ -23,7 +22,11 @@ def build_parser() -> Parser:
   subparsers = parser.add_subparsers(dest='cmd', required=True)
 
   ss = subparsers.add_parser('ss', help='start a claude session in a worktree')
-  ss.add_argument('--drop', action='store_true', help='remove the workspace on exit')
+  ss.add_argument(
+    '--drop',
+    action='store_true',
+    help='remove the workspace after a clean exit (a failed session keeps it for inspection)',
+  )
   # internal seam, not a user surface: the outer `cw ss` spawns `cw ss --in-place`
   # in a prepared workspace (the workspace's own cw), which runs the session from
   # its cwd — see cw/runner.py
@@ -63,12 +66,11 @@ def build_parser() -> Parser:
 
   check_clean = subparsers.add_parser(
     'check-clean',
-    help='check if a workspace is clean (exit 0=clean, 1=not); reasons printed to stderr',
+    help='check if a workspace is safe to remove (exit 0=yes, 1=no); reasons printed to stderr',
   )
   check_clean.add_argument(
     'ref',
-    nargs='?',
-    help='workspace to check (default: cwd); use c:<name> for container workspaces',
+    help='workspace to check; use c:<name> for container workspaces',
   )
 
   exec_command = subparsers.add_parser(
@@ -105,16 +107,12 @@ def main(argv: list[str]) -> Optional[int]:
   if command == 'clean':
     return clean_workspaces(force=args['force'], dry_run=args['dry_run'], refs=args['refs'])
   if command == 'check-clean':
-    ref = args['ref']
-    if ref is None:
-      clean_, reasons = host_path_is_clean(Path.cwd())
-    else:
-      try:
-        workspace = Workspace.from_ref(ref, project_root())
-      except ValueError as e:
-        print(str(e), file=sys.stderr)
-        return 1
-      clean_, reasons = workspace.is_clean()
+    try:
+      workspace = Workspace.from_ref(args['ref'], project_root())
+    except ValueError as e:
+      print(str(e), file=sys.stderr)
+      return 1
+    clean_, reasons = workspace.is_clean()
     for r in reasons:
       print(r, file=sys.stderr)
     return 0 if clean_ else 1

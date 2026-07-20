@@ -324,11 +324,11 @@ class TestDockerChildWorkspaceCleanup:
     monkeypatch.setattr(child_workspace, 'remove', lambda: removed.append(child_workspace.name))
     return child_workspace
 
-  async def _child(self, child_workspace) -> workspace.spawn._DockerChild:
+  async def _child(self, child_workspace, code: str = 'pass') -> workspace.spawn._DockerChild:
     process = await asyncio.create_subprocess_exec(
       sys.executable,
       '-c',
-      'pass',
+      code,
       stdout=asyncio.subprocess.PIPE,
       stderr=asyncio.subprocess.STDOUT,
     )
@@ -337,14 +337,24 @@ class TestDockerChildWorkspaceCleanup:
     )
 
   @pytest.mark.asyncio
-  async def test_wait_removes_throwaway_workspace(self, monkeypatch, tmp_path):
+  async def test_wait_removes_throwaway_workspace_on_clean_exit(self, monkeypatch, tmp_path):
     removed: list = []
     child = await self._child(self._workspace(monkeypatch, tmp_path, removed))
     assert await child.wait() == 0
     assert removed == ['broker-CH']
 
   @pytest.mark.asyncio
-  async def test_kill_removes_throwaway_workspace(self, monkeypatch, tmp_path):
+  async def test_wait_keeps_and_records_the_end_of_a_failed_child(self, monkeypatch, tmp_path):
+    removed: list = []
+    child = await self._child(
+      self._workspace(monkeypatch, tmp_path, removed), code='raise SystemExit(3)'
+    )
+    assert await child.wait() == 3
+    assert removed == []
+    assert (tmp_path / 'proj' / 'var' / 'cw' / 'exit' / 'c:broker-CH').read_text() == '3'
+
+  @pytest.mark.asyncio
+  async def test_kill_keeps_and_records_the_throwaway_workspace(self, monkeypatch, tmp_path):
     async def fake_remove(container_id):
       pass
 
@@ -352,10 +362,13 @@ class TestDockerChildWorkspaceCleanup:
     removed: list = []
     child = await self._child(self._workspace(monkeypatch, tmp_path, removed))
     await child.kill()
-    assert removed == ['broker-CH']
-    # the timeout path kills, then the attach exits: wait() must not remove again
-    await child.wait()
-    assert removed == ['broker-CH']
+    assert removed == []
+    assert (tmp_path / 'proj' / 'var' / 'cw' / 'exit' / 'c:broker-CH').read_text() == 'killed'
+    # the timeout path kills, then the attach exits — here with code 0: the kill's
+    # keep decision must hold anyway
+    assert await child.wait() == 0
+    assert removed == []
+    assert (tmp_path / 'proj' / 'var' / 'cw' / 'exit' / 'c:broker-CH').read_text() == 'killed'
 
   @pytest.mark.asyncio
   async def test_removal_failure_warns_instead_of_raising(self, monkeypatch, tmp_path):
@@ -512,6 +525,8 @@ class TestDockerSpawnerModes:
     class FakeWorkspace:
       def __init__(self, name, workspace_project):
         self.name = name
+        self.project = workspace_project
+        self.ref = f'c:{name}'
         workspace_threads.append(threading.get_ident())
         assert workspace_project == project
 

@@ -27,7 +27,13 @@ from cw.flags import DEFAULT_HOLD
 from workspace.containers import broker_enabled
 from workspace.docker import Launch, find_container_id
 from workspace.git import resolve_ref
-from workspace.model import ContainerWorkspace, HostWorktree, Workspace
+from workspace.model import (
+  ContainerWorkspace,
+  HostWorktree,
+  Workspace,
+  clear_session_end,
+  record_session_end,
+)
 from workspace.paths import project_root, venv_env
 from workspace.project import project_config
 from workspace.store import log_scoped_secrets, materialize_scoped_store
@@ -164,6 +170,24 @@ def _replace_resume_hint(workspace: Workspace) -> None:
   print(f'  {resume_command}')
 
 
+def _finish_session(spec: SessionSpec, workspace: Workspace, code: int) -> int:
+  """the post-exit step shared by both modes: `--drop` is honored only on a clean
+  exit — a failed session's workspace stays on disk for inspection and recovery —
+  and a kept clean exit gets the resume-hint overwrite."""
+  if spec.drop:
+    if code == 0:
+      try:
+        drop_workspace(workspace)
+        log.info('removed workspace %s', workspace.ref)
+      except RuntimeError as e:
+        log.warning('could not fully remove workspace %s: %s', workspace.ref, e)
+    else:
+      log.info('session exited with code %d; keeping workspace %s', code, workspace.ref)
+  elif code == 0:
+    _replace_resume_hint(workspace)
+  return code
+
+
 def start_session(spec: SessionSpec) -> int:
   os.environ['CW_COMMAND'] = ' '.join(spec.to_command_argv())
   os.environ['CW_NAME'] = spec.name
@@ -275,15 +299,7 @@ def _container_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
     extra_mounts=claude_mounts,
   )
   code = run_in_container(launch, may_summon=may_summon)
-  if spec.drop:
-    try:
-      drop_workspace(workspace)
-      log.info('removed container workspace %s', spec.name)
-    except RuntimeError as e:
-      log.warning('could not fully remove container workspace %s: %s', spec.name, e)
-  elif code == 0:
-    _replace_resume_hint(workspace)
-  return code
+  return _finish_session(spec, workspace, code)
 
 
 def _run_host_root_via_broker(
@@ -405,6 +421,7 @@ def _host_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
   runner_env['CLAUDE_CONFIG_DIR'] = str(claude_dir)
   runner_env[credentials.REGISTRY_ENV] = str(materialize_scoped_store(store, claude_dir / '.ppp'))
   _apply_claude_auth(runner_env)
+  clear_session_end(project, workspace.ref)
   with _held_pidfile(workspace.pidfile):
     if broker_enabled():
       code = _run_host_root_via_broker(
@@ -412,9 +429,6 @@ def _host_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
       )
     else:
       code = subprocess.run(command, cwd=str(worktree), env=runner_env).returncode
+  record_session_end(project, workspace.ref, code)
 
-  if spec.drop:
-    drop_workspace(workspace)
-  elif code == 0:
-    _replace_resume_hint(workspace)
-  return code
+  return _finish_session(spec, workspace, code)
