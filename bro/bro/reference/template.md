@@ -43,7 +43,7 @@ file      := prompt file name           file: [A-Za-z0-9._/-]+
 
 ## Rendering surfaces
 
-`llm.mcp.render_text(text, harness=…, wire=…, creds=…, hold=…)` renders directives against the facts the call site knows (the facts, `#hold`'s single-purpose supply rule included, are documented in `reference/conditions.md`) and resolves `{{include}}` targets through the `prompts` loader. Each surface renders its copy once, with its own facts:
+`llm.mcp.render_text(text, harness=…, wire=…, creds=…, hold=…, extra=…)` renders directives against the facts the call site knows (the facts, `#hold`'s single-purpose supply rule included, are documented in `reference/conditions.md`; `extra` merges a caller-owned vocabulary next to them — the bro surfaces pass the owning bro's `#features`) and resolves `{{include}}` targets through the `prompts` loader. Each surface renders its copy once, with its own facts:
 
 - `BaseBro.__init__` — the two bro prompt flavors (harness `bro`; wire `bare` / `mcp`)
 - `cw/system_prompt.py` — a cw-session's append prompt, the injected persona included (harness `claude`, wire `mcp`)

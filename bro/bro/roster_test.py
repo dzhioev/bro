@@ -34,6 +34,9 @@ def brog_config(monkeypatch):
     'base.credentials.get_json',
     lambda name: {'backend': 'flow', 'transport': 'http', 'url': 'https://x', 'token': 't'},
   )
+  # every credential resolves, so feature- and credential-gated components all
+  # mount and the audit covers the maximal roster deterministically
+  monkeypatch.setattr('base.credentials.available', lambda name: True)
 
 
 def _served_texts(tool: Tool) -> list[str]:

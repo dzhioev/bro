@@ -51,6 +51,7 @@ def render_text(
   wire: Optional[Wire] = None,
   creds: Optional[Iterable[str]] = None,
   hold: Optional[str] = None,
+  extra: Optional[condition.Variables] = None,
 ) -> str:
   """render `base.template` directives in static agent-facing text (system
   prompts, script bodies, service-tool descriptions) against the surface facts
@@ -59,17 +60,21 @@ def render_text(
   lazily, so render in the process that consumes the text, where the store is
   the session's own), `hold` → `#hold` (hold text only — supplied by
   `prompts.hold_fragment`, no other call site). A fact left None defines no
-  variable, so a directive referencing it raises. `{{include <name>}}` targets
-  resolve through the `prompts` loader. The directive reference is
-  `reference/template.md`. Ordinary MCP-server tool text does not use these
-  facts: a server renders its own descriptions at build time against its own
-  vocabulary (`FunctionTool`'s `variables`, e.g. the `#tools` roster).
+  variable, so a directive referencing it raises. `extra` merges a
+  caller-owned domain vocabulary next to the facts (same shape as
+  `FunctionTool`'s `variables`); its names shadow same-named facts.
+  `{{include <name>}}` targets resolve through the `prompts` loader. The
+  directive reference is `reference/template.md`. Ordinary MCP-server tool
+  text does not use these facts: a server renders its own descriptions at
+  build time against its own vocabulary (`FunctionTool`'s `variables`, e.g.
+  the `#tools` roster).
   """
   if '{{' not in text:
     return text
-  return template.render(
-    text, surface_variables(harness=harness, wire=wire, creds=creds, hold=hold), _load_prompt
-  )
+  variables = surface_variables(harness=harness, wire=wire, creds=creds, hold=hold)
+  if extra is not None:
+    variables.update(extra)
+  return template.render(text, variables, _load_prompt)
 
 
 def _load_prompt(name: str) -> str:
@@ -84,12 +89,17 @@ def select[T](
   harness: Optional[Harness] = None,
   wire: Optional[Wire] = None,
   creds: Optional[Iterable[str]] = None,
+  extra: Optional[condition.Variables] = None,
 ) -> list[T]:
   """resolve the `base.condition` wrappers (`when` / `iff`) in a declarative
   list against the same surface facts `render_text` renders with. a fact left
-  None defines no variable, so a condition referencing it raises. The
-  conditioning reference is `reference/conditions.md`."""
-  return condition.select(entries, surface_variables(harness=harness, wire=wire, creds=creds))
+  None defines no variable, so a condition referencing it raises. `extra`
+  merges a caller-owned domain vocabulary next to the facts, as in
+  `render_text`. The conditioning reference is `reference/conditions.md`."""
+  variables = surface_variables(harness=harness, wire=wire, creds=creds)
+  if extra is not None:
+    variables.update(extra)
+  return condition.select(entries, variables)
 
 
 def surface_variables(

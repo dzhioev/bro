@@ -11,7 +11,7 @@ from typing import Any, ClassVar, Optional, Self
 import llm.llms.chat_gpt
 import llm.mcp
 from base import credentials, log
-from base.condition import Entry, SetVariable, Variables
+from base.condition import Condition, Entry, SetVariable, Variables, var
 from bro import scripts as script_store
 from bro.channel import BroChannel
 from bro.datasources.base import DataSource
@@ -452,6 +452,23 @@ def _unattended_claude_session() -> bool:
   return os.environ.get('BRO_HOLD') == 'unattended' and os.environ.get('CW_RUNNER_PID') is not None
 
 
+def feature(name: str) -> Condition:
+  """membership condition on the bro's `#features` vocabulary — the code
+  spelling of the `#features contains <name>` directive, for gating
+  `mcp_servers` / `data_sources` entries: `when(feature('brog'), brog.mcp)`."""
+  return var('features').contains(name)
+
+
+def _feature_variables(features: dict[str, tuple[str, ...]]) -> Variables:
+  # membership probes the gating secrets with `available`, deliberately not the
+  # `#creds` fact — see `reference/conditions.md` "Bro features" for why a
+  # scoped store breaks the latter
+  def enabled(name: str) -> bool:
+    return all(credentials.available(secret) for secret in features[name])
+
+  return {'features': SetVariable(enabled, universe=frozenset(features))}
+
+
 def _component_needed_secrets(component: llm.mcp.MCPServerSpec | DataSource) -> set[str]:
   # a component declares its credentials as plain metadata (a spec field, or a
   # DataSource class attribute), so reading the manifest never builds a live
@@ -478,6 +495,15 @@ class BaseBro(ABC):
   # (`flow.mcp.spec('add_task')`); see `llm.mcp.as_spec`.
   data_sources: ClassVar[list[Entry[DataSource]]] = []
   mcp_servers: ClassVar[list[Entry[llm.mcp.MCPServerSpec | llm.mcp.Toolset[Any] | ModuleType]]] = []
+  # named optional capabilities: feature name → the secrets that must all
+  # resolve for the feature to be on (empty tuple = unconditionally on). one
+  # declaration switches every consuming site together: components gate via
+  # `when(feature('<name>'), …)`, static text via `{{iff #features contains
+  # <name>}}` — so a gated component enters the manifest, mounts, and renders
+  # its text only where its gates resolve. MRO-walked like `mcp_servers`, with
+  # derived classes overriding parents per name — `{'<name>': ()}` pins an
+  # inherited feature on, turning its components into hard requirements.
+  features: ClassVar[dict[str, tuple[str, ...]]] = {}
   # credentials no component expresses — the escape hatch for a bro's environment
   # needs (ppp-dev → `github`; devoops → `aws`). MRO-walked and unioned like
   # `mcp_servers`, so a subclass declares only what it adds. folded into
@@ -516,6 +542,7 @@ class BaseBro(ABC):
     prompt_parts: list[str] = []
     extra_secret_names: list[str] = []
     may_summon_names: list[str] = []
+    feature_gates: dict[str, tuple[str, ...]] = {}
     for cls in reversed(type(self).__mro__):
       raw_mcp = cls.__dict__.get('mcp_servers')
       if raw_mcp is not None:
@@ -532,8 +559,15 @@ class BaseBro(ABC):
       raw_summon = cls.__dict__.get('may_summon')
       if raw_summon is not None:
         may_summon_names.extend(raw_summon)
+      raw_features = cls.__dict__.get('features')
+      if raw_features is not None:
+        feature_gates.update(raw_features)
     self._extra_secrets: tuple[str, ...] = tuple(extra_secret_names)
     self._may_summon: tuple[str, ...] = tuple(may_summon_names)
+    self._features: dict[str, tuple[str, ...]] = feature_gates
+    # the membership probe is lazy, so the vocabulary built here stays current
+    # with the store — only selection (below) bakes feature truth in.
+    self._feature_vocabulary: Variables = _feature_variables(feature_gates)
     # the raw declaration entries, kept for per-harness selection
     # (_components_for); the bro-harness selection is materialized eagerly —
     # the prompt compositions below and the live-server cache read it. wire is
@@ -544,10 +578,12 @@ class BaseBro(ABC):
     surface_creds = credentials.known_names()
     self._mcp_specs: list[llm.mcp.MCPServerSpec] = [
       llm.mcp.as_spec(entry)
-      for entry in llm.mcp.select(mcp_entries, harness='bro', creds=surface_creds)
+      for entry in llm.mcp.select(
+        mcp_entries, harness='bro', creds=surface_creds, extra=self._feature_vocabulary
+      )
     ]
     self._data_sources: list[DataSource] = llm.mcp.select(
-      data_source_entries, harness='bro', creds=surface_creds
+      data_source_entries, harness='bro', creds=surface_creds, extra=self._feature_vocabulary
     )
     # built lazily by _live_mcp_servers(): metadata surfaces (needed_secrets on
     # hosts, prompt composition) never construct live servers.
@@ -605,7 +641,11 @@ class BaseBro(ABC):
       # (grounding.md outside the claude-bare surface) collapses to bare join
       # separators at the prompt edge.
       return llm.mcp.render_text(
-        '\n\n'.join(parts), harness='bro', wire=wire, creds=credentials.known_names()
+        '\n\n'.join(parts),
+        harness='bro',
+        wire=wire,
+        creds=credentials.known_names(),
+        extra=self._feature_vocabulary,
       ).strip()
 
     self.system_prompt = compose('bare')
@@ -620,6 +660,14 @@ class BaseBro(ABC):
     # reads as a bro surface next to identities like 'Claude Code <version>'.
     return f'bro//{self.name}'
 
+  def vocabulary(self) -> Variables:
+    """the bro's own rendering vocabulary — `#features` over the declared
+    feature names. merged (as `extra`) next to the surface facts wherever this
+    bro's declarations or text evaluate; the bro counterpart of
+    `DataSource.vocabulary`. Any surface that renders the raw `persona` must
+    pass it too — the class prompts may carry `#features` directives."""
+    return self._feature_vocabulary
+
   @property
   def scripts(self) -> dict[str, Path]:
     return script_store.collect_scripts(list(reversed(type(self).__mro__)))
@@ -631,7 +679,11 @@ class BaseBro(ABC):
       raise KeyError(f'no script named {name!r}; available: {available}')
     script = script_store.load_script(name, path)
     return llm.mcp.render_text(
-      script.body, harness=harness, wire=wire, creds=credentials.known_names()
+      script.body,
+      harness=harness,
+      wire=wire,
+      creds=credentials.known_names(),
+      extra=self._feature_vocabulary,
     ).strip()
 
   def script_descriptions(self) -> list[tuple[str, str]]:
@@ -657,10 +709,15 @@ class BaseBro(ABC):
     surface_creds = credentials.known_names()
     specs = [
       llm.mcp.as_spec(entry)
-      for entry in llm.mcp.select(self._mcp_entries, harness=harness, creds=surface_creds)
+      for entry in llm.mcp.select(
+        self._mcp_entries, harness=harness, creds=surface_creds, extra=self._feature_vocabulary
+      )
     ]
     sources: list[DataSource] = llm.mcp.select(
-      self._data_source_entries, harness=harness, creds=surface_creds
+      self._data_source_entries,
+      harness=harness,
+      creds=surface_creds,
+      extra=self._feature_vocabulary,
     )
     return specs, sources
 

@@ -136,6 +136,43 @@ class TestFormatCard:
     assert '  - `c` — c tool description' in card
 
   @pytest.mark.asyncio
+  async def test_features_section_omitted_when_none_declared(self):
+    card = await format_card(_MinimalBro())
+    assert '## Features' not in card
+
+  @pytest.mark.asyncio
+  async def test_features_section_shows_gates_and_state(self, monkeypatch):
+    class _FeatureBro(BaseBro):
+      name = 'featured'
+      description = 'has a gated feature'
+      features: ClassVar = {'tracker': ('trackerkey',)}
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    monkeypatch.setattr('base.credentials.available', lambda name: name == 'trackerkey')
+    card = await format_card(_FeatureBro())
+    assert '## Features' in card
+    assert '- **tracker** — needs `trackerkey`; on in this environment' in card
+
+    monkeypatch.setattr('base.credentials.available', lambda name: False)
+    card = await format_card(_FeatureBro())
+    assert '- **tracker** — needs `trackerkey`; off in this environment' in card
+
+  @pytest.mark.asyncio
+  async def test_pinned_feature_shows_always_on(self):
+    class _PinnedBro(BaseBro):
+      name = 'pinned'
+      description = 'pins its feature'
+      features: ClassVar = {'tracker': ()}
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    card = await format_card(_PinnedBro())
+    assert '- **tracker** — always on' in card
+
+  @pytest.mark.asyncio
   async def test_secrets_section_lists_manifest(self):
     # ServerAB declares `notion`; needed_secrets() is the component manifest (no llm)
     card = await format_card(_FullBro())

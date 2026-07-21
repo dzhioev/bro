@@ -62,7 +62,13 @@ The facts triple a conditioning surface knows, exported by `llm/mcp.py` as ready
 
 One more fact sits outside the triple: `hold` — the session's user-involvement level (`unattended | detached | attended | guided`, the domain is `llm.mcp.HOLDS`). It is supplied only when rendering the hold text (`prompts.hold_fragment` → `render_text(hold=…)`), never by the general conditioning surfaces, so hold-neutral text — scripts, procedure docs — fails fast on a stray `#hold` directive. No ready-made placeholder is exported.
 
-`llm.mcp.select(entries, harness=…, wire=…, creds=…)` owns the facts-to-variables mapping for declarative lists (`llm.mcp.render_text` is its sibling for text — see `reference/template.md`). A fact the surface doesn't know defines no variable, so a condition referencing it raises. Select in the process that consumes the result, where the credential store is the session's own.
+`llm.mcp.select(entries, harness=…, wire=…, creds=…)` owns the facts-to-variables mapping for declarative lists (`llm.mcp.render_text` is its sibling for text — see `reference/template.md`). Both accept `extra` — a caller-owned vocabulary merged next to the facts (bro features, below). A fact the surface doesn't know defines no variable, so a condition referencing it raises. Select in the process that consumes the result, where the credential store is the session's own.
+
+## Bro features
+
+A bro may declare named optional capabilities: `features = {'brog': ('brog',)}` on the class — feature name → the secrets that must all resolve for the feature to be on (`()` pins it on; the map is MRO-merged, derived classes overriding per name). The declaration adds a `#features` variable (`BaseBro.vocabulary()`, passed as the fronts' `extra`) to everything the bro renders or assembles — `mcp_servers` / `data_sources` selection, prompt composition, script bodies, cw's append prompt. Components gate with `when(feature('brog'), …)` (`from bro.bro import feature`) and text with `{{iff #features contains brog}}`, so one declaration switches every consuming site together, and a gated component enters the credential manifest only where its gates resolve.
+
+The universe is the declared feature names — environment-independent, so a typo'd name fails every render. Membership probes `base.credentials.available` per gating secret, deliberately not the `#creds` fact: `#creds`' closed universe is the store's registry, which in a scoped container omits never-hydrated names — a probe there would raise a universe violation instead of reading as feature-off.
 
 ## Server-domain vocabularies
 

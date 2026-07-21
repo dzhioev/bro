@@ -83,7 +83,7 @@ The current set lives in `bros/`:
 - `pm` — Flow inbox triage; canonical source of triage policy for both the `process-inbox` TUI and `cw ss --bro pm`
 - `librorian` — steward of the Flow media library (adds, maintains, recommends)
 - `devoops` — autonomous service deploys (the deploy targets are enumerated in `infra/mcp.py`'s `TARGETS` / `list_targets`) with a dry-run-first safety reflex; tools wrap `infra/mcp.py`
-- `dev` — generic software developer with file + shell + search tools
-- `ppp-dev` — full-stack PPP development (inherits `dev`, adds the brog task-tracker toolset and the `@::fix`, `@::run-pr`, `@::land` scripts); this repo's default bro
+- `dev` — generic software developer with file + shell + search tools; owns the task-driven workflow scripts (`@::fix`, `@::run-pr`, `@::land`), whose task-tracker side rides the `brog` feature — live wherever a brog config resolves
+- `ppp-dev` — full-stack PPP development (inherits `dev` with the `brog` feature pinned on; carries the PPP repo conventions); this repo's default bro
 
 Adding a new Bro is creating a new subclass and registering it — see `CLAUDE.md` for the operational checklist.

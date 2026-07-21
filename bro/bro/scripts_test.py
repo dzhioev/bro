@@ -7,6 +7,7 @@ from typing import Optional, get_args
 import pytest
 
 import llm.mcp
+from base.condition import SetVariable
 from bro import bro as bro_module, scripts as script_store
 from bro.bro import BaseBro
 from bro.bros.ppp_dev import PPPDev
@@ -108,13 +109,36 @@ class TestScriptStore:
   def test_checked_in_scripts_render_for_every_surface(self):
     script_files = sorted((Path(script_store.__file__).parent / 'bros').glob('*/scripts/*.md'))
     assert len(script_files) > 0
+    # the closed universe of feature names checked-in scripts may condition on;
+    # grow it when a bro declares a new feature
+    feature_names = frozenset({'brog'})
     for path in script_files:
       script = load_script(path.stem, path)
       for harness in get_args(llm.mcp.Harness):
         for wire in get_args(llm.mcp.Wire):
-          llm.mcp.render_text(
-            script.body, harness=harness, wire=wire, creds=script_store.credentials.known_names()
-          )
+          for enabled in (True, False):
+            llm.mcp.render_text(
+              script.body,
+              harness=harness,
+              wire=wire,
+              creds=script_store.credentials.known_names(),
+              extra={'features': SetVariable(lambda name, on=enabled: on, universe=feature_names)},
+            )
+
+  def test_script_body_renders_against_the_bro_features(self, fake_packages, monkeypatch):
+    package = fake_packages(
+      '_script_features',
+      {'gated': _script(body='{{iff #features contains x}}on-branch{{else}}off-branch{{end}}')},
+    )
+    cls = _bro_class(package)
+    cls.features = {'x': ('xkey',)}
+    bro = cls()
+
+    # the probe is live: one instance renders both states as availability moves
+    monkeypatch.setattr(script_store.credentials, 'available', lambda name: name == 'xkey')
+    assert bro.get_script_body('gated', harness='bro', wire='bare') == 'on-branch'
+    monkeypatch.setattr(script_store.credentials, 'available', lambda name: False)
+    assert bro.get_script_body('gated', harness='bro', wire='bare') == 'off-branch'
 
   def test_checked_in_store_has_no_legacy_skill_directories(self):
     skill_directories = list((Path(script_store.__file__).parent / 'bros').glob('*/skills'))

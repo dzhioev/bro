@@ -4,8 +4,9 @@ _PROMPTS_DIR = Path(__file__).resolve().parent.parent / 'prompts'
 # auto-injected into every `cw ss` session via --append-system-prompt. Files in
 # `shared/` also flow into every bro (via bro/bro.py:_load_shared_prompts), so
 # put cross-surface conventions there. Prompt files may carry template
-# directives (`#harness`/`#wire`/`#creds`) — the whole append text renders once
-# in `_session_append_prompt` with this surface's facts. The one top-level file
+# directives (`#harness`/`#wire`/`#creds`, plus the bro's own `#features`) —
+# the whole append text renders once in `_session_append_prompt` with this
+# surface's facts and the session bro's vocabulary. The one top-level file
 # injected here is `tool_names.md` — the tool-name resolution rule, templated
 # on `#wire`; `--raw` sessions run `--bare` and skip this injection but get the
 # same file through `BaseBro.claude_system_prompt`, and bro-native LLM runs
@@ -55,7 +56,11 @@ def _session_append_prompt(hold: str, bro_name: str) -> str:
   if len(script_instructions) > 0:
     parts.append(script_instructions)
   rendered = llm.mcp.render_text(
-    '\n\n'.join(parts), harness='claude', wire='mcp', creds=credentials.known_names()
+    '\n\n'.join(parts),
+    harness='claude',
+    wire='mcp',
+    creds=credentials.known_names(),
+    extra=bro.vocabulary(),
   )
   fragment = prompts.hold_fragment(
     hold, harness='claude', wire='mcp', creds=credentials.known_names()

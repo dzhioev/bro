@@ -1,4 +1,6 @@
+import brog.mcp
 from base.condition import when
+from bro.bro import feature
 
 # a self-reference (resolved through sys.modules mid-initialization) plus the
 # submodule import that binds `mcp` on the package — so the declaration below
@@ -25,13 +27,20 @@ Caution:
 - For state shared beyond the local machine (pushing code, opening PRs, sending
   messages, deploying), confirm before acting unless the user already
   authorized it.
+{{when #features contains brog}}
+{{include fragments/task_tracker.md}}{{end}}
 """
 
 
 class Dev(Bro):
   name = 'dev'
   description = 'generic software developer with file + shell + search tools'
+  # the task-driven workflow (the fix/run-pr/land scripts and their task
+  # bookkeeping) needs the brog task tracker; the feature is on wherever a
+  # brog config resolves and absent otherwise, so a tracker-less environment
+  # still launches a plain developer.
+  features = {'brog': ('brog',)}
   # the dev toolset duplicates the claude harness's built-in file/shell tools
-  mcp_servers = [when(harness == 'bro', dev.mcp)]
+  mcp_servers = [when(harness == 'bro', dev.mcp), when(feature('brog'), brog.mcp)]
   data_sources = [references.dev_style]
   system_prompt = SYSTEM_PROMPT

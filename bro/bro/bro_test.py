@@ -11,8 +11,8 @@ import pytest
 import bro.bro
 import llm.mcp
 from base import credentials
-from base.condition import when
-from bro.bro import BaseBro, BroRaised, set_default_tracker_factory
+from base.condition import ConditionError, when
+from bro.bro import BaseBro, BroRaised, feature, set_default_tracker_factory
 from bro.bros.ppp_dev import PPPDev
 from bro.datasources.searchable import Hit, SearchableDataSource
 from llm.llm import LLM
@@ -1010,6 +1010,69 @@ class TestConditionalComponents:
     assert bro._live_mcp_servers() == []
 
 
+class TestFeatures:
+  def _bro_class(self):
+    class FeatureBro(BaseBro):
+      name = 'feature-bro'
+      description = 'd'
+      features: ClassVar = {'x': ('xkey',)}
+      mcp_servers: ClassVar = [when(feature('x'), MCPServerSpec.of(_SecretServer))]
+      system_prompt = 'base text{{when #features contains x}} FEATURE TEXT{{end}}'
+
+    return FeatureBro
+
+  def test_gated_component_and_text_follow_the_gates(self, monkeypatch):
+    monkeypatch.setattr('base.credentials.available', lambda name: name == 'xkey')
+    on = self._bro_class()()
+    assert len(on._mcp_specs) == 1
+    assert 'FEATURE TEXT' in on.system_prompt
+    assert set(on.needed_secrets()) == {'alpha', 'beta'}
+
+    monkeypatch.setattr('base.credentials.available', lambda name: False)
+    off = self._bro_class()()
+    assert off._mcp_specs == []
+    assert 'FEATURE TEXT' not in off.system_prompt
+    assert off.needed_secrets() == ()
+
+  def test_multi_secret_gate_needs_every_secret(self, monkeypatch):
+    class TwoKeyBro(BaseBro):
+      name = 'two-key'
+      description = 'd'
+      features: ClassVar = {'x': ('xkey', 'ykey')}
+      mcp_servers: ClassVar = [when(feature('x'), _make_spec('a'))]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    monkeypatch.setattr('base.credentials.available', lambda name: name == 'xkey')
+    assert TwoKeyBro()._mcp_specs == []
+    monkeypatch.setattr('base.credentials.available', lambda name: name in {'xkey', 'ykey'})
+    assert len(TwoKeyBro()._mcp_specs) == 1
+
+  def test_derived_pins_parent_feature_on(self, monkeypatch):
+    monkeypatch.setattr('base.credentials.available', lambda name: False)
+
+    class Pinned(self._bro_class()):
+      name = 'feature-child'
+      features: ClassVar = {'x': ()}
+
+    child = Pinned()
+    assert len(child._mcp_specs) == 1
+    assert 'FEATURE TEXT' in child.system_prompt
+
+  def test_undeclared_feature_name_raises(self):
+    class NoFeature(BaseBro):
+      name = 'no-feature'
+      description = 'd'
+      mcp_servers: ClassVar = [when(feature('ghost'), _make_spec('a'))]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    with pytest.raises(ConditionError, match='ghost'):
+      NoFeature()
+
+
 class TestClaudePersonaServers:
   def _bro(self):
     class PersonaBro(BaseBro):
@@ -1052,6 +1115,8 @@ class TestClaudePersonaServers:
       'base.credentials.get_json',
       lambda name: {'backend': 'flow', 'transport': 'http', 'url': 'https://x', 'token': 't'},
     )
+    # dev's brog feature follows the environment: no brog config → no tracker
+    monkeypatch.setattr('base.credentials.available', lambda name: False)
     # the dev toolset is bro-harness-only — claude's built-in tools cover it —
     # while the reference FileSources serve every harness
     assert [s.namespace for s in Dev().claude_persona_mcp_servers()] == [
@@ -1059,6 +1124,15 @@ class TestClaudePersonaServers:
       'bro',
       'at',
     ]
+    monkeypatch.setattr('base.credentials.available', lambda name: name == 'brog')
+    assert [s.namespace for s in Dev().claude_persona_mcp_servers()] == [
+      'brog',
+      'dev-style-source',
+      'bro',
+      'at',
+    ]
+    # ppp-dev pins the feature on, so its surfaces are availability-independent
+    monkeypatch.setattr('base.credentials.available', lambda name: False)
     assert [s.namespace for s in PPPDev().claude_persona_mcp_servers()] == [
       'brog',
       'dev-style-source',

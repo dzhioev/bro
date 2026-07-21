@@ -62,7 +62,7 @@ With `--into` omitted, `dive-in` resolves the base itself: it fetches origin's `
 
 ## Initial-prompt composition
 
-`dive-in` seeds the first user message as an `@:fix …:@` natural-language script command. The session calls `@::@`, then executes the returned `@::fix` call with its typed arguments; the script body (`bro/bros/ppp_dev/scripts/fix.md`) carries the workflow — resolve → context → plan → log → implement → verify → hand off to `@::run-pr`. Both cw persona and `--raw` sessions mount the `at` server and receive this contract. The mapping from CLI form to message is:
+`dive-in` seeds the first user message as an `@:fix …:@` natural-language script command. The session calls `@::@`, then executes the returned `@::fix` call with its typed arguments; the script body (`bro/bros/dev/scripts/fix.md`) carries the workflow — resolve → context → plan → log → implement → verify → hand off to `@::run-pr`. Both cw persona and `--raw` sessions mount the `at` server and receive this contract. The mapping from CLI form to message is:
 
 - `dive-in -t <ref>` → `@:fix <ref>:@`
 - `dive-in -t <ref> --focus` → `set_focus(<canonical-id>)` (focus client), then `@:fix <ref>:@`
@@ -76,7 +76,7 @@ If a positional `command` is present alongside a task scope (`-t` or bare `--foc
 
 For bare mode, the prompt is just the `command` string verbatim — no dispatcher wrapping.
 
-Every cw-session runs as a bro — `--bro`, defaulting to the required project default. Its session-local server mounts the bro's MRO-collected scripts — for ppp-dev, its own `@::fix`, `@::run-pr`, `@::land` (`bro/bros/ppp_dev/scripts/`) plus inherited ones such as `@::audit` (dev) and `@::ask` (summon) — and `_session_append_prompt` injects the canonical Scripts contract next to the persona prompt. Bro scripts have no generated slash-command copies; Claude's own third-party skill mechanism remains independent. The bro's other claude-harness-filtered MCP namespaces ride the same session-local server (see `reference/cw.md`, "Session-local MCP serving"). To run the raw flavor outright, forward `--raw` (see "Forwarded flags").
+Every cw-session runs as a bro — `--bro`, defaulting to the required project default. Its session-local server mounts the bro's MRO-collected scripts — for ppp-dev, the dev-inherited `@::fix`, `@::run-pr`, `@::land`, `@::audit` (`bro/bros/dev/scripts/`) plus `@::ask` (summon) — and `_session_append_prompt` injects the canonical Scripts contract next to the persona prompt. Bro scripts have no generated slash-command copies; Claude's own third-party skill mechanism remains independent. The bro's other claude-harness-filtered MCP namespaces ride the same session-local server (see `reference/cw.md`, "Session-local MCP serving"). To run the raw flavor outright, forward `--raw` (see "Forwarded flags").
 
 ## Resuming
 
