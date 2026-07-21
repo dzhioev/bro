@@ -208,7 +208,7 @@ def _raise_tool(wire: llm.mcp.Wire, variables: Variables) -> llm.mcp.Tool:
 
 # the {{when #wire = mcp}} blocks render only into the MCP-served builds
 # (persona and --raw claude sessions consume the toolset over streamable HTTP,
-# where the harness bounds a silent tool call at about a minute — far under a
+# where the harness bounds a silent tool call at MCP_TOOL_TIMEOUT — short of a
 # real child's runtime, so the blocking modes are a trap there); the in-process
 # builds (wire 'bare') have no transport to die on and render the plain text.
 # the lost-request-id recovery path forks on `#tools`: `summon_list` mounts
@@ -228,12 +228,12 @@ _SUMMON_DESCRIPTION = (
   'or dies. `detach: true` returns the request id right after the send instead of '
   'blocking — poll or collect it with `summon_check`.'
   '{{when #wire = mcp}} CAUTION: this tool is served over MCP, and the harness '
-  'times a silent tool call out after about a minute while a summoned child '
-  'typically runs for many — a blocking summon of a real task usually dies '
-  'client-side with a transport timeout while the child keeps running, and the '
-  'reply (with the request id) is lost with the call. for anything but a quick '
-  'ask, pass `detach: true` and poll with summon_check. if a blocking call did '
-  'time out, do NOT re-summon — the child keeps running'
+  'times a silent tool call out after ten minutes while a child working a real '
+  'task typically runs longer — such a blocking summon dies client-side with a '
+  'transport timeout while the child keeps running, and the reply (with the '
+  'request id) is lost with the call. an ask that answers within the budget '
+  'can block; for a real task, pass `detach: true` and poll with summon_check. '
+  'if a blocking call did time out, do NOT re-summon — the child keeps running'
   '{{iff #tools contains summon_list}}: recover the request id with summon_list '
   'and reattach via summon_check (`last_seen: 0` re-reads a result that was '
   'already delivered to the dead call){{else}}; this session tracks no summon '
@@ -257,7 +257,7 @@ _SUMMON_CHECK_DESCRIPTION = (
   'only with `wait`) bounds that wait. fails with the reason when the id is '
   'unknown or when the summon failed.'
   '{{when #wire = mcp}} CAUTION: this tool is served over MCP, and the harness '
-  'times a silent tool call out after about a minute — a `wait: true` on a long '
+  'times a silent tool call out after ten minutes — a `wait: true` on a longer '
   'run dies client-side the same way; prefer non-blocking polls, and recover '
   'from a died wait with `last_seen: 0`.{{end}}'
 )
