@@ -29,6 +29,11 @@ def _shell_quote(s: str) -> str:
   return "'" + s.replace("'", "'\\''") + "'"
 
 
+def _fresh_origin_head() -> Optional[str]:
+  """origin's default-branch tip, freshly fetched; None when origin is unreachable."""
+  return cw.fetch_ref(cw.project_root(), 'HEAD')
+
+
 def _is_flow_backend(system: brog.system.System) -> bool:
   import brog.flow_proxy
 
@@ -167,5 +172,12 @@ def main(argv: list[str]) -> Optional[int]:
     # host sessions run unsandboxed when they skip permission prompts, so an
     # unheld host dive keeps them
     args['hold'] = 'guided' if args['host'] else 'attended'
+  if args['into'] is None:
+    base_ref = _fresh_origin_head()
+    if base_ref is None:
+      log.warning('cannot fetch origin HEAD; basing the session on the host checkout HEAD')
+    else:
+      log.info('base: origin HEAD %s', base_ref[:12])
+      args['into'] = base_ref
   forwarded = cw.extract_forwarded_argv(args)
   return dive_in(forwarded=forwarded, **args)

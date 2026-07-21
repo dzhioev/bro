@@ -32,7 +32,7 @@ Launch + lifecycle:
 
 ## Invariants
 
-- **Hub re-export.** `__init__.py` re-exports exactly the cross-package surface `dev/dive_in.py` consumes (`build_parser`, `add_forwarded_flags`, `extract_forwarded_argv`, `fresh_workspace_name`), so that caller keeps `import cw` unchanged. Intra-package code imports `from cw.<module> import …`, never through the hub — a partial-init hazard.
+- **Hub re-export.** `__init__.py` re-exports exactly the cross-package surface `dev/dive_in.py` consumes (`build_parser`, `add_forwarded_flags`, `extract_forwarded_argv`, `fresh_workspace_name`, `fetch_ref`, `project_root`), so that caller keeps `import cw` unchanged. Intra-package code imports `from cw.<module> import …`, never through the hub — a partial-init hazard.
 - **Layering.** cw imports `workspace/` (mechanics) and `bro/launch/` (bro-aware launch policy); neither imports cw back. Claude state — paths, seeds, mounts, subject reads, teardown — lives only here (`claude_config.py`) and reaches the lower layers as plain launch data.
 - **Lazy bro import.** `bro.registry` is imported function-locally (in `system_prompt`, `bro`) so `import cw` stays cheap — `dev/dive_in.py` imports `cw` at module top level, so a module-level `bro.registry` import would tax every importer. `session.py`'s module-level `bro.launch` imports are the light policy modules (`scope`, `root`), not the registry.
 - **Lazy broker import.** The broker package is imported function-locally in `session.py` (and behind `bro/launch/root.py`'s own gate): `BROKER_DISABLED` — and an environment whose venv can't import broker — must short-circuit *before* any broker import, or the kill-switch couldn't save a launch that the import itself crashes.

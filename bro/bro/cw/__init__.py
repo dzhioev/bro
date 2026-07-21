@@ -51,4 +51,5 @@ cw/CLAUDE.md.
 
 from cw.cli import build_parser
 from cw.flags import add_forwarded_flags, extract_forwarded_argv
-from workspace.paths import fresh_workspace_name
+from workspace.git import fetch_ref
+from workspace.paths import fresh_workspace_name, project_root

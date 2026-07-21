@@ -49,6 +49,17 @@ def _claim_private_ref(root: Path, private: str) -> Optional[str]:
     git_run('update-ref', '-d', private, cwd=root)
 
 
+def fetch_ref(root: Path, ref: str) -> Optional[str]:
+  """fetch `ref` from origin and return its commit sha in the repo at `root` —
+  origin's current tip, regardless of any same-named local ref. Returns None when
+  origin is unreachable or has no such ref."""
+  private = _private_ref()
+  fetch = git_run('fetch', 'origin', f'+{ref}:{private}', cwd=root, env=no_prompt_env())
+  if fetch.returncode != 0:
+    return None
+  return _claim_private_ref(root, private)
+
+
 def resolve_ref(root: Path, ref: str) -> Optional[str]:
   """resolve a branch/tag/sha to a commit sha in the repo at `root`, fetching it
   from origin when it isn't local — a feature branch pushed from a container has
@@ -57,11 +68,7 @@ def resolve_ref(root: Path, ref: str) -> Optional[str]:
   local = rev_parse_commit(root, ref)
   if local is not None:
     return local
-  private = _private_ref()
-  fetch = git_run('fetch', 'origin', f'+{ref}:{private}', cwd=root, env=no_prompt_env())
-  if fetch.returncode != 0:
-    return None
-  return _claim_private_ref(root, private)
+  return fetch_ref(root, ref)
 
 
 def resolve_head(root: Path, repository: Path) -> Optional[str]:

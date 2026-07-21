@@ -56,6 +56,37 @@ class TestRevParseCommit:
     assert git_helpers.rev_parse_commit(Path('/repo'), 'nope') is None
 
 
+class TestFetchRef:
+  def _origin_and_clone(self, tmp_path) -> tuple[Path, Path]:
+    origin = tmp_path / 'origin'
+    _init_repo(origin)
+    _commit(origin, 'a')
+    local = tmp_path / 'local'
+    _git('clone', '-q', str(origin), str(local), cwd=tmp_path)
+    return origin, local
+
+  def test_fetches_the_origin_tip_over_a_stale_local_ref(self, tmp_path):
+    origin, local = self._origin_and_clone(tmp_path)
+    stale = git_helpers.rev_parse_commit(local, 'master')
+    fresh = _commit(origin, 'b')
+    assert git_helpers.rev_parse_commit(local, 'master') == stale
+    assert git_helpers.fetch_ref(local, 'master') == fresh
+    assert _private_refs(local) == ''
+
+  def test_head_names_the_origin_default_branch(self, tmp_path):
+    origin, local = self._origin_and_clone(tmp_path)
+    tip = _commit(origin, 'b')
+    assert git_helpers.fetch_ref(local, 'HEAD') == tip
+
+  def test_none_when_origin_is_unreachable(self, tmp_path):
+    local = tmp_path / 'local'
+    _init_repo(local)
+    _commit(local, 'a')
+    _git('remote', 'add', 'origin', str(tmp_path / 'no-such-remote'), cwd=local)
+    assert git_helpers.fetch_ref(local, 'master') is None
+    assert _private_refs(local) == ''
+
+
 class TestResolveRef:
   def test_resolves_local_ref_without_fetching(self, tmp_path, monkeypatch):
     repo = tmp_path / 'repo'

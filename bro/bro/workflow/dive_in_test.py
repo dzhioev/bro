@@ -16,6 +16,7 @@ import workspace.paths
 UUID = '35ad38d8-5a6d-81ea-bce6-e4caf17ece7f'
 HEX = '35ad38d85a6d81eabce6e4caf17ece7f'
 URL = f'https://app.notion.com/p/my-task-{HEX}'
+FRESH_SHA = 'a' * 40
 
 
 def _brog_task(name: str = 'my task'):
@@ -35,6 +36,7 @@ def _brog_task(name: str = 'my task'):
 @pytest.fixture
 def fake_proj(monkeypatch, tmp_path):
   monkeypatch.setattr(workspace.paths, 'project_root', lambda: tmp_path)
+  monkeypatch.setattr(dive_in, '_fresh_origin_head', lambda: FRESH_SHA)
   worktrees = tmp_path / 'var' / 'cw' / 'worktrees'
   containers = tmp_path / 'var' / 'cw' / 'containers'
   worktrees.mkdir(parents=True)
@@ -123,6 +125,36 @@ class TestShellCommandReconstruction:
     assert rc == 0
     # `cw banner` splits the user prompt off at the last ` --new ` marker
     assert os.environ['PPP_SHELL_COMMAND'] == 'dive-in --new do a thing'
+
+
+class TestBaseRef:
+  """an omitted --into resolves to origin's fresh HEAD; explicit values pass through."""
+
+  def test_omitted_into_forwards_the_fetched_sha(self, fake_proj, capsys):
+    rc = dive_in.main(['dive-in', '-n'])
+    assert rc == 0
+    args = cw.build_parser().parse(shlex.split(capsys.readouterr().out.strip()))
+    assert args['into'] == FRESH_SHA
+
+  def test_explicit_into_skips_the_fetch(self, fake_proj, capsys, monkeypatch):
+    monkeypatch.setattr(dive_in, '_fresh_origin_head', lambda: pytest.fail('must not fetch'))
+    rc = dive_in.main(['dive-in', '-n', '--into', 'feature'])
+    assert rc == 0
+    args = cw.build_parser().parse(shlex.split(capsys.readouterr().out.strip()))
+    assert args['into'] == 'feature'
+
+  def test_unreachable_origin_falls_back_to_the_host_head(self, fake_proj, capsys, monkeypatch):
+    monkeypatch.setattr(dive_in, '_fresh_origin_head', lambda: None)
+    rc = dive_in.main(['dive-in', '-n'])
+    assert rc == 0
+    args = cw.build_parser().parse(shlex.split(capsys.readouterr().out.strip()))
+    assert args['into'] is None
+
+  def test_resolved_sha_stays_out_of_the_shell_command(self, fake_proj, monkeypatch):
+    monkeypatch.delenv('PPP_SHELL_COMMAND', raising=False)
+    rc = dive_in.main(['dive-in', '-n'])
+    assert rc == 0
+    assert os.environ['PPP_SHELL_COMMAND'] == 'dive-in'
 
 
 class TestNewMode:

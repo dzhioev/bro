@@ -59,7 +59,10 @@ def add_forwarded_flags(parser: Parser) -> None:
     '--into',
     default=None,
     metavar='REF',
-    help="base a new session on git REF (branch/tag/sha) instead of the host checkout's current HEAD (the default in both container and host mode). a REF that only exists on origin is fetched automatically. ignored once the workspace exists",
+    help='base a new session on git REF (branch/tag/sha). a REF that only exists on origin is '
+    'fetched automatically; ignored once the workspace exists. '
+    "default: the host checkout's current HEAD for cw ss; origin's freshly fetched HEAD for "
+    'dive-in, with the host HEAD as the unreachable-origin fallback',
   )
   parser.add_argument(
     '--bro',
