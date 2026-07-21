@@ -1,11 +1,11 @@
 ---
-name: pr
-description: This script should be used when the user signals that the worktree's changes are ready for review and a PR should be opened — "open a PR", "send for review", "PR it", "ship it", "ready for review", "finalize". Covers commit hygiene (CLAUDE.md sync, Dockerfile audit, policy audit, commit splitting), the project's commit-message style, footer generation via `./cw/claude_commit_footer.py`, submodule landing, rebase onto the base branch (master by default), opens the PR via `gh pr create`, then launches the `poll-pr` review watcher to handle review comments, merge conflicts, and APPROVED events. On approval, chains into `@::land` for the merge step. Also the re-entry point for a PR that is already open — "resume PR <pr-url-or-number>", "resume the PR", "pick up the review" — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
+name: run-pr
+description: This script should be used when the user signals that the worktree's changes are ready for review and a PR should be opened — "open a PR", "@:run pr:@", "send for review", "PR it", "ship it", "ready for review", "finalize". Covers commit hygiene (CLAUDE.md sync, Dockerfile audit, policy audit, commit splitting), the project's commit-message style, footer generation via `./cw/claude_commit_footer.py`, submodule landing, rebase onto the base branch (master by default), opens the PR via `gh pr create`, then launches the `poll-pr` review watcher to handle review comments, merge conflicts, and APPROVED events. On approval, chains into `@::land` for the merge step. Also the re-entry point for a PR that is already open — "resume PR <pr-url-or-number>", "resume the PR", "pick up the review" — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
 parameters: {"base?": "base branch for the pull request instead of master", "pr?": "existing pull request URL or number to resume"}
-version: 2.2.0
+version: 3.0.0
 ---
 
-# pr
+# run-pr
 
 Take worktree changes from "work is finished" to "PR open and through review". Stops at APPROVED — `@::land` does the merge.
 
@@ -13,7 +13,7 @@ Take worktree changes from "work is finished" to "PR open and through review". S
 
 Passed values appear in the `# Arguments` section appended by the script tool:
 
-- `base` — base the PR on this branch instead of `master`: rebase onto it (step 9), scope the commit list against it (steps 5, 11), and pass `--base <branch>` to `gh pr create` (step 13). Default `master`. The `@::feature` per-stage flow passes the feature integration branch here so each stage opens its PR into the feature branch rather than master. Below, `<base>` means this value.
+- `base` — base the PR on this branch instead of `master`: rebase onto it (step 9), scope the commit list against it (steps 5, 11), and pass `--base <branch>` to `gh pr create` (step 13). Default `master`. The `@::run-feature` per-stage flow passes the feature integration branch here so each stage opens its PR into the feature branch rather than master. Below, `<base>` means this value.
 - `pr` — re-entry mode for an existing PR URL or number (typically after a previous session died mid-review). Skip the normal workflow and follow "Re-entry: PR already open" below.
 
 ## Preconditions

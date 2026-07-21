@@ -58,11 +58,11 @@ Like `cw ss` itself, `dive-in` runs in container mode by default; `--host` (a fo
 
 With `--into` omitted, `dive-in` resolves the base itself: it fetches origin's `HEAD` (the remote default branch — master) and forwards the resulting sha as `--into`, so a new session builds on fresh master no matter how stale the host checkout is. When origin is unreachable it logs a warning and forwards no `--into`, falling back to `cw ss`'s own default — the host checkout's current `HEAD` — so offline launches still work; `--into HEAD` picks that base explicitly. The base is always a commit, so uncommitted changes never transfer.
 
-`dive-in --into <ref>` (a forwarded `cw ss` flag — see `reference/cw.md`) bases the new session on any branch/tag/sha instead: the container checks that ref out in its clone, and a `--host` session bases its worktree branch on it. A ref that's resolvable only on origin (e.g. a feature branch pushed from another container — the `@::feature` per-stage flow bases each stage on its feature branch this way) is fetched from origin automatically. Every launch creates a fresh workspace (see "Workspace naming"), so the base always takes effect.
+`dive-in --into <ref>` (a forwarded `cw ss` flag — see `reference/cw.md`) bases the new session on any branch/tag/sha instead: the container checks that ref out in its clone, and a `--host` session bases its worktree branch on it. A ref that's resolvable only on origin (e.g. a feature branch pushed from another container — the `@::run-feature` per-stage flow bases each stage on its feature branch this way) is fetched from origin automatically. Every launch creates a fresh workspace (see "Workspace naming"), so the base always takes effect.
 
 ## Initial-prompt composition
 
-`dive-in` seeds the first user message as an `@:fix …:@` natural-language script command. The session calls `@::@`, then executes the returned `@::fix` call with its typed arguments; the script body (`bro/bros/ppp_dev/scripts/fix.md`) carries the workflow — resolve → context → plan → log → implement → verify → hand off to `@::pr`. Both cw persona and `--raw` sessions mount the `at` server and receive this contract. The mapping from CLI form to message is:
+`dive-in` seeds the first user message as an `@:fix …:@` natural-language script command. The session calls `@::@`, then executes the returned `@::fix` call with its typed arguments; the script body (`bro/bros/ppp_dev/scripts/fix.md`) carries the workflow — resolve → context → plan → log → implement → verify → hand off to `@::run-pr`. Both cw persona and `--raw` sessions mount the `at` server and receive this contract. The mapping from CLI form to message is:
 
 - `dive-in -t <ref>` → `@:fix <ref>:@`
 - `dive-in -t <ref> --focus` → `set_focus(<canonical-id>)` (focus client), then `@:fix <ref>:@`
@@ -76,7 +76,7 @@ If a positional `command` is present alongside a task scope (`-t` or bare `--foc
 
 For bare mode, the prompt is just the `command` string verbatim — no dispatcher wrapping.
 
-Every cw-session runs as a bro — `--bro`, defaulting to the required project default. Its session-local server mounts the bro's MRO-collected scripts — for ppp-dev, its own `@::fix`, `@::pr`, `@::land` (`bro/bros/ppp_dev/scripts/`) plus inherited ones such as `@::audit` (dev) and `@::ask` (summon) — and `_session_append_prompt` injects the canonical Scripts contract next to the persona prompt. Bro scripts have no generated slash-command copies; Claude's own third-party skill mechanism remains independent. The bro's other claude-harness-filtered MCP namespaces ride the same session-local server (see `reference/cw.md`, "Session-local MCP serving"). To run the raw flavor outright, forward `--raw` (see "Forwarded flags").
+Every cw-session runs as a bro — `--bro`, defaulting to the required project default. Its session-local server mounts the bro's MRO-collected scripts — for ppp-dev, its own `@::fix`, `@::run-pr`, `@::land` (`bro/bros/ppp_dev/scripts/`) plus inherited ones such as `@::audit` (dev) and `@::ask` (summon) — and `_session_append_prompt` injects the canonical Scripts contract next to the persona prompt. Bro scripts have no generated slash-command copies; Claude's own third-party skill mechanism remains independent. The bro's other claude-harness-filtered MCP namespaces ride the same session-local server (see `reference/cw.md`, "Session-local MCP serving"). To run the raw flavor outright, forward `--raw` (see "Forwarded flags").
 
 ## Resuming
 
@@ -94,7 +94,7 @@ Known gap: `CW_TASK_ID` lives only in the launching `dive-in` process's environm
 
 ## Env-var handoff
 
-- `CW_TASK_ID` — set to the resolved task's canonical brog id in any mode that has one (focused, `-t`, `-t --focus`). Read by the `@::pr` script to build the commit footer's `Task: <url>` line (via `brog::get_task(id).url`).
+- `CW_TASK_ID` — set to the resolved task's canonical brog id in any mode that has one (focused, `-t`, `-t --focus`). Read by the `@::run-pr` script to build the commit footer's `Task: <url>` line (via `brog::get_task(id).url`).
 - `PPP_SHELL_COMMAND` — set (if not already set) to the user-facing reconstruction of the dive-in invocation. The visual `cw banner` shows it as the outer launch command and extracts the user prompt from it; the agent-facing `cw banner --llm` omits it.
 
 The user-facing `dive-in` reconstruction is rebuilt from dive-in's own parser (`Parser.reconstruct` with prog `dive-in`) so the visual banner shows `dive-in`, not the underlying `cw ss`.

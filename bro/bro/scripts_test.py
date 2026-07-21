@@ -122,7 +122,7 @@ class TestScriptStore:
 
   def test_ppp_dev_inherits_shared_and_dev_scripts(self):
     bro = PPPDev()
-    assert set(bro.scripts) == {'ask', 'audit', 'fix', 'land', 'pr'}
+    assert set(bro.scripts) == {'ask', 'audit', 'fix', 'land', 'run-pr'}
     assert '## Scripts' in bro.system_prompt
     assert '## Available skills' not in bro.system_prompt
 
@@ -141,21 +141,21 @@ class TestScriptStore:
       assert '`new` — create a task from this seed' in body
       assert '/fix' not in body
 
-  def test_pr_declares_optional_base_and_reentry_arguments(self):
+  def test_run_pr_declares_optional_base_and_reentry_arguments(self):
     bro = PPPDev()
-    script = load_script('pr', bro.scripts['pr'])
+    script = load_script('run-pr', bro.scripts['run-pr'])
     assert [(parameter.name, parameter.required) for parameter in script.parameters] == [
       ('base', False),
       ('pr', False),
     ]
     bodies = (
-      bro.get_script_body('pr', harness='bro', wire='bare'),
-      bro.get_script_body('pr', harness='claude', wire='mcp'),
+      bro.get_script_body('run-pr', harness='bro', wire='bare'),
+      bro.get_script_body('run-pr', harness='claude', wire='mcp'),
     )
     for body in bodies:
       assert '`base` — base the PR' in body
       assert '`pr` — re-entry mode' in body
-      assert '/pr' not in body
+      assert '/run-pr' not in body
 
   @pytest.mark.asyncio
   async def test_legacy_skill_store_and_service_tool_are_removed(self):

@@ -84,6 +84,6 @@ The current set lives in `bros/`:
 - `librorian` — steward of the Flow media library (adds, maintains, recommends)
 - `devoops` — autonomous service deploys (the deploy targets are enumerated in `infra/mcp.py`'s `TARGETS` / `list_targets`) with a dry-run-first safety reflex; tools wrap `infra/mcp.py`
 - `dev` — generic software developer with file + shell + search tools
-- `ppp-dev` — full-stack PPP development (inherits `dev`, adds the brog task-tracker toolset and the `@::fix`, `@::pr`, `@::land` scripts); this repo's default bro
+- `ppp-dev` — full-stack PPP development (inherits `dev`, adds the brog task-tracker toolset and the `@::fix`, `@::run-pr`, `@::land` scripts); this repo's default bro
 
 Adding a new Bro is creating a new subclass and registering it — see `CLAUDE.md` for the operational checklist.
