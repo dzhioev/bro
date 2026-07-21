@@ -169,6 +169,9 @@ def run_in_place(spec: 'SessionSpec') -> int:
     log.verbose('session MCP server healthy')
 
     env = {**os.environ}
+    # claude's MCP tool-call timeout (ms): the ~1-minute default kills
+    # legitimately slow tools (vision audits, renders)
+    env['MCP_TOOL_TIMEOUT'] = str(10 * 60 * 1000)
     _apply_claude_auth(env, warn_when_missing=not spec.raw)
     log.info('launching claude')
     code = _run_claude(launch.argv, env)

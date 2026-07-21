@@ -207,6 +207,12 @@ class TestRunInPlace:
       assert cw.runner.run_in_place(_spec(bro='pm', raw=True)) == 0
       assert h.apply_auth.call_args.kwargs == {'warn_when_missing': False}
 
+  def test_extends_claudes_mcp_tool_call_timeout(self, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    with _Harness(tmp_path) as h:
+      assert cw.runner.run_in_place(_spec()) == 0
+      assert h.run_claude.call_args.args[1]['MCP_TOOL_TIMEOUT'] == '600000'
+
   def test_host_session_provisions_and_exports_the_claude_config_dir(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
