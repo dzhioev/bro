@@ -27,7 +27,7 @@ from textual.widgets import Input, Static
 
 from bro.bros.bro import Bro
 from bro.launch._reflow import Reflow
-from bro.launch._trace_format import compact_value, oneline, truncate
+from bro.launch._trace_format import format_tool_call, oneline, truncate
 from bro.launch.call import DATE_FORMAT
 from bro.launch.resume import HistoryMessage
 from bro.show import format_card
@@ -555,12 +555,8 @@ class TUIRenderer(Observer):
 
   def on_tool_call(self, name: str, arguments: dict[str, Any]) -> None:
     self._app.call_from_thread(self._app.note_tool_call, name)
-    self._post(
-      f'→ {name} {truncate(compact_value(arguments), _TRACE_VALUE_LIMIT, overflow_marker=False)}'
-    )
+    self._post(f'→ {format_tool_call(name, arguments)}')
 
   def on_tool_result(self, name: str, result: dict[str, Any] | str) -> None:
     self._app.call_from_thread(self._app.note_tool_result)
-    self._post(
-      f'← {name} {truncate(compact_value(result), _TRACE_VALUE_LIMIT, overflow_marker=False)}'
-    )
+    self._post(f'← {canonical_name(name)}')

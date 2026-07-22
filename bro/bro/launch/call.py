@@ -23,10 +23,10 @@ from bro.launch._cli import (
   maybe_containerize,
   run_llm_spec,
 )
-from bro.launch._trace_format import compact_value, oneline, truncate
+from bro.launch._trace_format import format_tool_call, oneline, truncate
 from bro.launch.resume import RESUME_LATEST, HistoryMessage
 from llm.llm import EFFORT_LEVELS
-from llm.mcp import HOLDS
+from llm.mcp import HOLDS, canonical_name
 from llm.observer import Observer
 
 __cli_name__ = 'call'
@@ -43,7 +43,6 @@ DATE_FORMAT = '%a, %b %-d, %Y'
 
 _REASONING_LIMIT = 240
 _MESSAGE_LIMIT = 240
-_VALUE_LIMIT = 240
 
 
 def _now_hms() -> str:
@@ -81,10 +80,10 @@ class TextRenderer(Observer):
     self._emit(f'· says: {truncate(oneline(text), _MESSAGE_LIMIT)}')
 
   def on_tool_call(self, name: str, arguments: dict[str, Any]) -> None:
-    self._emit(f'→ {name} {truncate(compact_value(arguments), _VALUE_LIMIT)}')
+    self._emit(f'→ {format_tool_call(name, arguments)}')
 
   def on_tool_result(self, name: str, result: dict[str, Any] | str) -> None:
-    self._emit(f'← {name} {truncate(compact_value(result), _VALUE_LIMIT)}')
+    self._emit(f'← {canonical_name(name)}')
 
 
 async def call_text(

@@ -1,14 +1,17 @@
 """shared formatting helpers for `call`'s trace renderers.
 
-both `TextRenderer` (in `call.py`) and `TUIRenderer` (in `call_tui.py`)
-render the same kinds of payloads — short reasoning summaries, JSON tool
-arguments, JSON-or-text tool results — into single-line strings. the
-truncation limit is per-caller (text mode runs alongside reply lines, the
-TUI sits inside a narrower bubble column), so it stays on the call site.
+both `TextRenderer` (in `call.py`) and `TUIRenderer` (in `call_tui.py`) render
+the same trace events. tool calls go through `format_tool_call` — one canonical
+`namespace::tool(arg=value, …)` line, identical in both surfaces. reasoning and
+interim assistant text are collapsed onto a single line and capped with
+`truncate`, whose limit is per-caller (text mode runs alongside reply lines, the
+TUI sits inside a narrower bubble column) and so stays on the call site.
 """
 
 import json
 from typing import Any
+
+from llm.mcp import canonical_name
 
 
 def oneline(text: str) -> str:
@@ -46,3 +49,25 @@ def truncate(text: str, limit: int, overflow_marker: bool = True) -> str:
     overflow = len(text) - limit
     return f'{text[:limit]}… <{overflow} more chars>'
   return f'{text[:limit]}…'
+
+
+# an argument value is shown inline only when its compact form is short; a longer
+# one (a file path, a pasted prompt) is replaced with `...` so it can't swamp the
+# single-line trace.
+ARGUMENT_VALUE_LIMIT = 10
+
+
+def format_tool_call(name: str, arguments: dict[str, Any]) -> str:
+  """render a tool call as `namespace::tool(arg=value, …)`: the canonical tool
+  name, every argument named, and each value elided to `...` once its compact
+  form passes ARGUMENT_VALUE_LIMIT chars."""
+  rendered = ', '.join(f'{key}={_argument_value(value)}' for key, value in arguments.items())
+  return f'{canonical_name(name)}({rendered})'
+
+
+def _argument_value(value: Any) -> str:
+  if isinstance(value, (dict, str)):
+    compact = compact_value(value)
+  else:
+    compact = json.dumps(value, ensure_ascii=False, separators=(',', ':'))
+  return compact if len(compact) <= ARGUMENT_VALUE_LIMIT else '...'

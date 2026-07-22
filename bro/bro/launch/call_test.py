@@ -146,16 +146,25 @@ def test_text_renderer_renders_reasoning_one_liner():
   )
 
 
-def test_text_renderer_renders_tool_call_with_compact_json():
+def test_text_renderer_canonicalizes_name_and_elides_long_values():
   renderer, out = _make_text_renderer()
-  renderer.on_tool_call('web_search', {'query': 'sci-fi movies'})
-  assert out.getvalue() == '[12:34:56] bro → web_search {"query":"sci-fi movies"}\n'
+  renderer.on_tool_call('dev__read_file', {'file_path': '/workspace/bro/launch/call.py'})
+  # wire name shown canonical, the argument named, and its long value elided
+  assert out.getvalue() == '[12:34:56] bro → dev::read_file(file_path=...)\n'
 
 
-def test_text_renderer_renders_tool_result_compacts_json_string():
+def test_text_renderer_shows_short_argument_values_inline():
   renderer, out = _make_text_renderer()
-  renderer.on_tool_result('web_search', '[\n  "Arrival",\n  "Annihilation"\n]')
-  assert out.getvalue() == '[12:34:56] bro ← web_search ["Arrival","Annihilation"]\n'
+  renderer.on_tool_call('web_search', {'query': 'sci-fi'})
+  # a value within the limit stays inline; an unnamespaced name passes through
+  assert out.getvalue() == '[12:34:56] bro → web_search(query=sci-fi)\n'
+
+
+def test_text_renderer_renders_tool_result_as_bare_canonical_name():
+  renderer, out = _make_text_renderer()
+  renderer.on_tool_result('flow__list_tasks', '[\n  "Arrival",\n  "Annihilation"\n]')
+  # the result payload is dropped — the bare canonical name marks the return
+  assert out.getvalue() == '[12:34:56] bro ← flow::list_tasks\n'
 
 
 def test_text_renderer_truncates_long_interim_message():
@@ -914,8 +923,8 @@ def test_tui_renderer_posts_one_line_per_event():
   # reasoning becomes a thinking bubble carrying the summary block verbatim
   assert app.thinking == ['user wants\na movie rec']
   assert app.posted == [
-    '→ web_search {"query":"sci-fi"}',
-    '← web_search ["Arrival"]',
+    '→ web_search(query=sci-fi)',
+    '← web_search',
     '✎ says: thinking out loud',
     # terminal message is skipped — ChatApp renders the reply itself
   ]
