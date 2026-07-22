@@ -658,15 +658,19 @@ def test_initial_slash_invocation_passes_through_verbatim(monkeypatch):
 
 
 class _FakeApp:
-  """captures `append_trace_line` calls; stands in for `ChatApp` in TUIRenderer
-  tests so we don't have to spin up a Textual runtime."""
+  """captures `append_thinking` / `append_trace_line` calls; stands in for
+  `ChatApp` in TUIRenderer tests so we don't have to spin up a Textual runtime."""
 
   def __init__(self):
     self.posted: list[str] = []
+    self.thinking: list[str] = []
     self.tool_events: list[str] = []
 
   def call_from_thread(self, function, *args, **kwargs):
     function(*args, **kwargs)
+
+  def append_thinking(self, text: str) -> None:
+    self.thinking.append(text)
 
   def append_trace_line(self, text: str) -> None:
     self.posted.append(text)
@@ -707,10 +711,10 @@ def test_message_bubble_selection_honors_offsets():
 
   from bro.launch.call_tui import MessageBubble
 
-  bubble = MessageBubble('first\nsecond', by_user=True, when=datetime(2026, 5, 28, 12, 34, 56))
+  bubble = MessageBubble('first\nsecond', kind='user')
   extraction = bubble.get_selection(Selection(Offset(0, 1), None))
   assert extraction is not None
-  assert extraction[0] == 'second\n12:34'
+  assert extraction[0] == 'second'
 
 
 @pytest.mark.asyncio
@@ -804,17 +808,72 @@ async def test_tui_survives_markup_like_text(monkeypatch):
     assert app.screen.get_selected_text() == trace
     user = app.query(MessageBubble).last()
     app.screen.selections = {user: SELECT_ALL}
-    assert app.screen.get_selected_text() == f'{message}\n12:34'
-    # the timestamp line keeps its dim style without a markup parse
+    assert app.screen.get_selected_text() == message
+    # the timestamp widget keeps its dim style without a markup parse
+    timestamp = app.query('.timestamp').last()
     timestamp_styles = {
       segment.text.strip(): segment.style
-      for segment in user.render_line(1)
+      for segment in timestamp.render_line(0)
       if segment.style is not None
     }
-    assert timestamp_styles['12:34'].dim is True
+    assert timestamp_styles['12:34:56'].dim is True
     # the stats card is arbitrary text too
     await app.push_screen(StatsScreen(f'card {trace}'))
     await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_tui_thinking_renders_as_muted_bubble_above_typing(monkeypatch):
+  from textual.selection import SELECT_ALL
+
+  from bro.launch.call_tui import BubbleRow, ChatApp, MessageBubble, TypingIndicator
+
+  monkeypatch.setattr('workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  app = ChatApp(RecordBro(), None)
+  async with app.run_test(size=(80, 40)) as pilot:
+    app._show_typing()
+    app.append_thinking('**Planning**\n\nweighing the options')
+    await pilot.pause()
+    row = app.query(BubbleRow).last()
+    assert row.has_class('thinking')
+    bubble = row.query_one(MessageBubble)
+    # the full summary block is in the bubble, markdown-rendered
+    app.screen.selections = {bubble: SELECT_ALL}
+    assert app.screen.get_selected_text() == 'Planning\n\nweighing the options'
+    # lighter theme than a bro bubble: faded bar, muted text
+    banner = app.query(MessageBubble).first()
+    assert bubble.styles.border_left[1].a < banner.styles.border_left[1].a
+    assert bubble.styles.color.a < banner.styles.color.a
+    # mounted into the history stream above the typing indicator
+    children = list(app.query_one('#history').children)
+    assert children.index(row) < children.index(app.query_one(TypingIndicator))
+
+
+@pytest.mark.asyncio
+async def test_tui_timestamp_hugs_the_row_edge_with_seconds(monkeypatch):
+  from bro.launch.call_tui import BubbleRow, ChatApp, MessageBubble
+
+  monkeypatch.setattr('workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  app = ChatApp(RecordBro(), None)
+  async with app.run_test(size=(80, 40)) as pilot:
+    app._append_user_message('a message from the user', when=datetime(2026, 5, 28, 12, 34, 56))
+    app._append_bro_message('a reply', when=datetime(2026, 5, 28, 12, 35, 7))
+    await pilot.pause()
+    user_row = app.query_one('BubbleRow.user', BubbleRow)
+    user_stamp = user_row.query_one('.timestamp')
+    segments = [segment.text for segment in user_stamp.render_line(0)]
+    assert ''.join(segments).strip() == '12:34:56'
+    # the user bubble hugs the right edge and its timestamp hugs it too, below
+    # the bubble — clear of the sender bar, which stops with the bubble
+    user_bubble = user_row.query_one(MessageBubble)
+    assert user_bubble.region.right == user_row.region.right
+    assert user_stamp.region.right == user_row.region.right
+    bro_row = app.query(BubbleRow).last()
+    bro_stamp = bro_row.query_one('.timestamp')
+    bro_bubble = bro_row.query_one(MessageBubble)
+    # a bro-side timestamp starts in the column the sender bar occupies
+    assert bro_bubble.region.x == bro_row.region.x
+    assert bro_stamp.region.x == bro_row.region.x
 
 
 @pytest.mark.asyncio
@@ -836,8 +895,9 @@ async def test_tui_copies_selection_to_clipboard_on_mouse_up(monkeypatch):
     app.screen.selections = {banner_bubble: SELECT_ALL}
     app.screen.post_message(TextSelected())
     await pilot.pause()
-    # the banner bubble's copy text is the plain banner plus its timestamp line
-    assert app.clipboard.startswith('BANNER\n')
+    # the banner bubble's copy text is the plain banner; the timestamp lives in
+    # its own widget below and never rides along
+    assert app.clipboard == 'BANNER'
 
 
 def test_tui_renderer_posts_one_line_per_event():
@@ -851,8 +911,9 @@ def test_tui_renderer_posts_one_line_per_event():
   renderer.on_assistant_message('thinking out loud', terminal=False)
   renderer.on_assistant_message('the final answer', terminal=True)
 
+  # reasoning becomes a thinking bubble carrying the summary block verbatim
+  assert app.thinking == ['user wants\na movie rec']
   assert app.posted == [
-    '✎ thinking: user wants a movie rec',
     '→ web_search {"query":"sci-fi"}',
     '← web_search ["Arrival"]',
     '✎ says: thinking out loud',

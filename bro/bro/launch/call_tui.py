@@ -7,7 +7,7 @@ from typing import Any, ClassVar, Optional
 
 import humanize
 import rich.markdown
-from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderResult
+from rich.console import Console, ConsoleOptions, RenderableType, RenderResult
 from rich.measure import Measurement
 from rich.segment import Segment
 from rich.syntax import Syntax
@@ -15,7 +15,7 @@ from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, VerticalScroll
+from textual.containers import Container, Vertical, VerticalScroll
 from textual.content import Content
 from textual.screen import ModalScreen
 from textual.selection import Selection
@@ -136,7 +136,8 @@ class SelectableRichVisual(RichVisual):
 
 
 class MessageBubble(Static):
-  """one chat bubble; left or right vertical bar per sender, timestamp in corner."""
+  """one chat bubble body; vertical sender bar per kind, `thinking` in a
+  lighter theme (muted text, faded bar) for reasoning events."""
 
   DEFAULT_CSS = """
   MessageBubble {
@@ -152,23 +153,23 @@ class MessageBubble(Static):
   MessageBubble.bro {
     border-left: tall $primary;
   }
+  MessageBubble.thinking {
+    border-left: tall $primary 40%;
+    color: $text-muted;
+  }
   """
 
-  def __init__(self, text: RenderableType, *, by_user: bool, when: datetime):
-    classes = 'user' if by_user else 'bro'
-    timestamp = when.strftime('%H:%M')
+  def __init__(self, text: RenderableType, *, kind: str):
     self._visual: Optional[SelectableRichVisual] = None
     if isinstance(text, str):
       # never parse chat text as content markup: Textual's grammar reads any
       # bare `[` as a tag opener and `markup.escape` doesn't cover its full
       # grammar, so escaped text can still crash the compositor (MarkupError)
-      super().__init__(Content.assemble(text, '\n', (timestamp, 'dim')), classes=classes)
+      super().__init__(Content(text), classes=kind)
     else:
-      # pre-rendered content (e.g. a ChatMarkdown reply, the ANSI-decoded cw
-      # banner); append the timestamp as a dim line without running it through
-      # markup parsing
-      self._visual = SelectableRichVisual(self, Group(text, Text(timestamp, style='dim')))
-      super().__init__(self._visual, classes=classes)
+      # pre-rendered content (e.g. a ChatMarkdown reply, the ANSI-decoded cw banner)
+      self._visual = SelectableRichVisual(self, text)
+      super().__init__(self._visual, classes=kind)
 
   def get_selection(self, selection: Selection) -> Optional[tuple[str, str]]:
     # a rich-renderable bubble extracts through its visual's reflow;
@@ -204,8 +205,13 @@ class SystemBubble(Static):
     super().__init__(text, markup=False)
 
 
-class BubbleRow(Container):
-  """horizontal row containing a single MessageBubble; aligns left or right."""
+class BubbleRow(Vertical):
+  """a MessageBubble stacked over its timestamp line, aligned left or right.
+
+  each sits in its own full-width align container so the bubble and the
+  timestamp hug the row's edge independently — one shared align container
+  would align them as a block, pinning the timestamp to the bubble's width.
+  """
 
   DEFAULT_CSS = """
   BubbleRow {
@@ -213,16 +219,23 @@ class BubbleRow(Container):
     height: auto;
     margin: 0 1 1 1;
   }
-  BubbleRow.user {
-    align: right top;
+  BubbleRow > Container {
+    width: 100%;
+    height: auto;
+    align-horizontal: left;
   }
-  BubbleRow.bro {
-    align: left top;
+  BubbleRow.user > Container {
+    align-horizontal: right;
+  }
+  BubbleRow .timestamp {
+    width: auto;
+    height: 1;
   }
   """
 
-  def __init__(self, bubble: MessageBubble, *, by_user: bool):
-    super().__init__(bubble, classes='user' if by_user else 'bro')
+  def __init__(self, bubble: MessageBubble, *, kind: str, when: datetime):
+    timestamp = Static(Content.assemble((when.strftime('%H:%M:%S'), 'dim')), classes='timestamp')
+    super().__init__(Container(bubble), Container(timestamp), classes=kind)
 
 
 class DateSeparator(Static):
@@ -394,12 +407,10 @@ class ChatApp(App):
     self._maybe_add_date_separator(date.today())
     # pass the bro name so the logo shows on an in-process (--in-place) run, whose
     # environment doesn't carry this bro's CW_BRO.
-    bubble = MessageBubble(
-      Text.from_ansi(render_banner(llm=False, bro=self._bro.name)),
-      by_user=False,
-      when=datetime.now(),
+    bubble = MessageBubble(Text.from_ansi(render_banner(llm=False, bro=self._bro.name)), kind='bro')
+    self.query_one('#history', VerticalScroll).mount(
+      BubbleRow(bubble, kind='bro', when=datetime.now())
     )
-    self.query_one('#history', VerticalScroll).mount(BubbleRow(bubble, by_user=False))
     self._scroll_to_end()
 
   async def _submit(self, text: str) -> None:
@@ -424,8 +435,8 @@ class ChatApp(App):
   def _append_user_message(self, text: str, when: Optional[datetime] = None) -> None:
     when = when if when is not None else datetime.now()
     self._maybe_add_date_separator(when.date())
-    bubble = MessageBubble(text, by_user=True, when=when)
-    self.query_one('#history', VerticalScroll).mount(BubbleRow(bubble, by_user=True))
+    bubble = MessageBubble(text, kind='user')
+    self.query_one('#history', VerticalScroll).mount(BubbleRow(bubble, kind='user', when=when))
     self._scroll_to_end()
 
   def _append_bro_message(self, text: str, when: Optional[datetime] = None) -> None:
@@ -433,8 +444,17 @@ class ChatApp(App):
     self._maybe_add_date_separator(when.date())
     # replies are markdown-authored — render them (bold, lists, fenced code,
     # hyperlinks) instead of showing the raw syntax.
-    bubble = MessageBubble(ChatMarkdown(text), by_user=False, when=when)
-    self.query_one('#history', VerticalScroll).mount(BubbleRow(bubble, by_user=False))
+    bubble = MessageBubble(ChatMarkdown(text), kind='bro')
+    self.query_one('#history', VerticalScroll).mount(BubbleRow(bubble, kind='bro', when=when))
+    self._scroll_to_end()
+
+  def append_thinking(self, text: str) -> None:
+    """mount a thinking bubble; called from `TUIRenderer` via `call_from_thread`."""
+    bubble = MessageBubble(ChatMarkdown(text), kind='thinking')
+    self.query_one('#history', VerticalScroll).mount(
+      BubbleRow(bubble, kind='thinking', when=datetime.now()),
+      before=self._typing if self._typing is not None else None,
+    )
     self._scroll_to_end()
 
   def append_trace_line(self, text: str) -> None:
@@ -508,7 +528,8 @@ class ChatApp(App):
 
 
 class TUIRenderer(Observer):
-  """post observed events into a `ChatApp` as dim `SystemBubble` rows.
+  """post observed events into a `ChatApp` — reasoning as thinking bubbles,
+  everything else as dim `SystemBubble` rows.
 
   the bro runs in a Textual worker thread; each callback hops onto the app
   thread via `call_from_thread` to mount the bubble safely.
@@ -521,7 +542,9 @@ class TUIRenderer(Observer):
     self._app.call_from_thread(self._app.append_trace_line, text)
 
   def on_reasoning(self, text: str) -> None:
-    self._post(f'✎ thinking: {truncate(oneline(text), _TRACE_VALUE_LIMIT, overflow_marker=False)}')
+    # each event carries one complete reasoning-summary block, so it renders
+    # whole in its own bubble, untruncated
+    self._app.call_from_thread(self._app.append_thinking, text)
 
   def on_assistant_message(self, text: str, terminal: bool) -> None:
     # skip terminal — ChatApp mounts the reply as a bro bubble via _on_reply,
