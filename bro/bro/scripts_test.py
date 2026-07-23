@@ -362,8 +362,8 @@ class TestScriptServer:
 
 class TestDispatcher:
   @staticmethod
-  async def _tool(bro: BaseBro):
-    tools = await _script_server(bro).list_tools()
+  async def _tool(bro: BaseBro, *, wire: llm.mcp.Wire = 'bare'):
+    tools = await _script_server(bro, wire=wire).list_tools()
     return next(tool for tool in tools if tool.name == NAMESPACE)
 
   @pytest.mark.asyncio
@@ -421,10 +421,9 @@ class TestDispatcher:
     monkeypatch.setattr(mu_module, 'mu', fake_mu)
     result = await (await self._tool(_bro_class(package)())).call({'command': 'work on T-1'})
 
-    assert result == {
-      'script': '@::do-work',
-      'arguments': {'task': 'T-1', 'notes': 'keep the merge'},
-    }
+    assert result == (
+      'script: @::do-work\n\nprocedure body\n\n# Arguments\n\ntask: T-1\nnotes: keep the merge'
+    )
     assert 'unambiguously applies' in captured['prompt']
     assert captured['reasoning_effort'] == 'low'
     assert captured['request']['command'] == 'work on T-1'
@@ -443,6 +442,27 @@ class TestDispatcher:
         },
       }
     ]
+
+  @pytest.mark.asyncio
+  async def test_renders_instructions_for_the_serving_surface(self, fake_packages, monkeypatch):
+    import llm.mu as mu_module
+
+    package = fake_packages(
+      '_dispatcher_render',
+      {'do-work': _script(body='{{iff #wire = bare}}BARE{{else}}MCP{{end}}')},
+    )
+    monkeypatch.setattr(script_store.credentials, 'available', lambda name: True)
+
+    def fake_mu(prompt, result_class, *contents, reasoning_effort=None):
+      return result_class.model_validate({'script': '@::do-work', 'arguments': [], 'error': None})
+
+    monkeypatch.setattr(mu_module, 'mu', fake_mu)
+    bro = _bro_class(package)()
+
+    bare_result = await (await self._tool(bro)).call({'command': 'do the work'})
+    mcp_result = await (await self._tool(bro, wire='mcp')).call({'command': 'do the work'})
+    assert bare_result == 'script: @::do-work\n\nBARE'
+    assert mcp_result == 'script: @::do-work\n\nMCP'
 
   @pytest.mark.asyncio
   async def test_expected_error_passes_through(self, fake_packages, monkeypatch):
@@ -548,7 +568,7 @@ class TestScriptsPrompt:
       assert '## Scripts' in prompt
       assert '@:<free text>:@' in prompt
       assert '`@::@`' in prompt
-      assert 'returned script with the returned arguments' in prompt
+      assert 'execute the returned script instructions' in prompt
 
   def test_section_is_absent_without_scripts(self, fake_packages):
     package = fake_packages('_script_prompt_empty')

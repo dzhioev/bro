@@ -62,7 +62,7 @@ With `--into` omitted, `dive-in` resolves the base itself: it fetches origin's `
 
 ## Initial-prompt composition
 
-`dive-in` seeds the first user message as an `@:fix …:@` natural-language script command. The session calls `@::@`, then executes the returned `@::fix` call with its typed arguments; the script body (`bro/bros/dev/scripts/fix.md`) carries the workflow — resolve → context → plan → log → implement → verify → hand off to `@::run-pr`. Both cw persona and `--raw` sessions mount the `at` server and receive this contract. The mapping from CLI form to message is:
+`dive-in` seeds the first user message as an `@:fix …:@` natural-language script command. The session calls `@::@`, which resolves it to `@::fix` and returns the script instructions with the typed arguments; the script body (`bro/bros/dev/scripts/fix.md`) carries the workflow — resolve → context → plan → log → implement → verify → hand off to `@::run-pr`. Both cw persona and `--raw` sessions mount the `at` server and receive this contract. The mapping from CLI form to message is:
 
 - `dive-in -t <ref>` → `@:fix <ref>:@`
 - `dive-in -t <ref> --focus` → `set_focus(<canonical-id>)` (focus client), then `@:fix <ref>:@`

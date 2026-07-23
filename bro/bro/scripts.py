@@ -142,12 +142,29 @@ def _dispatcher_roster(scripts: list[Script]) -> list[dict[str, Any]]:
   ]
 
 
-def _validated_result(interpretation: _Interpretation, scripts: list[Script]) -> dict[str, Any]:
-  if interpretation.error is not None:
-    if len(interpretation.error.strip()) == 0:
-      raise ValueError('script dispatcher returned an empty error')
-    return {'error': interpretation.error}
+def _render_script_call(
+  bro: 'BaseBro',
+  script: Script,
+  arguments: dict[str, Any],
+  *,
+  harness: llm.mcp.Harness,
+  wire: llm.mcp.Wire,
+  offset: int = 0,
+) -> str:
+  body = bro.get_script_body(script.name, harness=harness, wire=wire)
+  passed = [
+    f'{parameter.name}: {arguments[parameter.name]}'
+    for parameter in script.parameters
+    if parameter.name in arguments
+  ]
+  if len(passed) > 0:
+    body = f'{body}\n\n# Arguments\n\n' + '\n'.join(passed)
+  return window(body, offset=offset, limit=WINDOW_LIMIT)
 
+
+def _validated_call(
+  interpretation: _Interpretation, scripts: list[Script]
+) -> tuple[Script, dict[str, str]]:
   assert interpretation.script is not None
   assert interpretation.arguments is not None
   scripts_by_name = {_canonical_name(script): script for script in scripts}
@@ -174,10 +191,16 @@ def _validated_result(interpretation: _Interpretation, scripts: list[Script]) ->
     raise ValueError(
       f'script dispatcher omitted required arguments for {interpretation.script}: {missing}'
     )
-  return {'script': interpretation.script, 'arguments': arguments}
+  return script, arguments
 
 
-def _interpret(command: str, scripts: list[Script]) -> dict[str, Any]:
+def _interpret(
+  command: str,
+  scripts: list[Script],
+  bro: 'BaseBro',
+  harness: llm.mcp.Harness,
+  wire: llm.mcp.Wire,
+) -> dict[str, Any] | str:
   from llm.mu import JSON, mu
   from prompts import get_prompt
 
@@ -188,7 +211,13 @@ def _interpret(command: str, scripts: list[Script]) -> dict[str, Any]:
     JSON(request),
     reasoning_effort='low',
   )
-  return _validated_result(interpretation, scripts)
+  if interpretation.error is not None:
+    if len(interpretation.error.strip()) == 0:
+      raise ValueError('script dispatcher returned an empty error')
+    return {'error': interpretation.error}
+  script, arguments = _validated_call(interpretation, scripts)
+  rendered = _render_script_call(bro, script, arguments, harness=harness, wire=wire)
+  return f'script: {_canonical_name(script)}\n\n{rendered}'
 
 
 class ScriptTool(llm.mcp.Tool):
@@ -251,15 +280,9 @@ class ScriptTool(llm.mcp.Tool):
     offset = arguments.get('offset', 0)
     if isinstance(offset, bool) or not isinstance(offset, int):
       raise ValueError('script argument "offset" must be an integer')
-    body = self._bro.get_script_body(self.name, harness=self._harness, wire=self._wire)
-    passed = [
-      f'{parameter.name}: {arguments[parameter.name]}'
-      for parameter in self._script.parameters
-      if parameter.name in arguments
-    ]
-    if len(passed) > 0:
-      body = f'{body}\n\n# Arguments\n\n' + '\n'.join(passed)
-    return window(body, offset=offset, limit=WINDOW_LIMIT)
+    return _render_script_call(
+      self._bro, self._script, arguments, harness=self._harness, wire=self._wire, offset=offset
+    )
 
 
 class SkillTool(llm.mcp.Tool):
@@ -295,8 +318,18 @@ class SkillTool(llm.mcp.Tool):
 
 
 class DispatcherTool(llm.mcp.Tool):
-  def __init__(self, scripts: list[Script]):
+  def __init__(
+    self,
+    bro: 'BaseBro',
+    scripts: list[Script],
+    *,
+    harness: llm.mcp.Harness,
+    wire: llm.mcp.Wire,
+  ):
+    self._bro = bro
     self._scripts = scripts
+    self._harness: llm.mcp.Harness = harness
+    self._wire: llm.mcp.Wire = wire
 
   @property
   def name(self) -> str:
@@ -305,9 +338,10 @@ class DispatcherTool(llm.mcp.Tool):
   @property
   def description(self) -> str:
     return (
-      'interpret a free-form script command. returns an executable '
-      '`{script: "@::…", arguments: {name: value}}` call, or `{error: reason}` when no '
-      'script applies, the command is ambiguous, or a required argument is missing.'
+      "interpret a free-form script command. returns the resolved script's instructions to "
+      'execute — a `script: @::<name>` line, the script body, and the interpreted arguments — '
+      'or `{error: reason}` when no script applies, the command is ambiguous, or a required '
+      'argument is missing.'
     )
 
   @property
@@ -321,13 +355,15 @@ class DispatcherTool(llm.mcp.Tool):
       'additionalProperties': False,
     }
 
-  async def call(self, arguments: dict[str, Any]) -> dict[str, Any]:
+  async def call(self, arguments: dict[str, Any]) -> dict[str, Any] | str:
     if set(arguments) != {'command'}:
       raise ValueError('script dispatcher requires exactly one "command" argument')
     command = arguments['command']
     if not isinstance(command, str) or len(command.strip()) == 0:
       raise ValueError('script dispatcher argument "command" must be a non-empty string')
-    return await asyncio.to_thread(_interpret, command, self._scripts)
+    return await asyncio.to_thread(
+      _interpret, command, self._scripts, self._bro, self._harness, self._wire
+    )
 
 
 def build_server(
@@ -338,7 +374,7 @@ def build_server(
     ScriptTool(bro, script, harness=harness, wire=wire) for script in scripts
   ]
   if len(scripts) > 0 and dispatcher_available():
-    tools.append(DispatcherTool(scripts))
+    tools.append(DispatcherTool(bro, scripts, harness=harness, wire=wire))
   if harness == 'bro':
     tools.append(SkillTool())
   server = llm.mcp.InProcessMCPServer(NAMESPACE, tools)

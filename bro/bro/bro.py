@@ -143,8 +143,7 @@ def _render_scripts(*, include_dispatcher: bool) -> str:
       [
         '',
         'Text enclosed as `@:<free text>:@` is a natural-language script command. Call '
-        '`@::@` with `<free text>`, then call the returned script with the returned arguments '
-        'and execute its instructions.',
+        '`@::@` with `<free text>` and execute the returned script instructions.',
       ]
     )
   return '\n'.join(lines)
