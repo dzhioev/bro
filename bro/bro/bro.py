@@ -27,25 +27,21 @@ DEFAULT_LLM_SPEC: LLMSpec = llm.llms.chat_gpt.LLMSpec()
 _TRAILS_DISABLED_ENV = 'TRAILS_DISABLED'
 
 
-def _summoner_from_env() -> Optional[dict[str, Any]]:
+def _summoned_by_from_env() -> Optional[dict[str, Any]]:
   # consumed on read: tool subprocesses inherit this process's environment, so a
   # nested in-place run inside the summoned child's container must not re-stamp
-  # the parent's summoner on its own trail — it was not itself summoned
+  # the parent's summoned_by on its own trail — it was not itself summoned
   raw = os.environ.pop(SUMMONER_ENV, None)
   if raw is None:
     return None
-  summoner = json.loads(raw)
-  if not isinstance(summoner, dict):
+  summoned_by = json.loads(raw)
+  if not isinstance(summoned_by, dict):
     raise ValueError(f'{SUMMONER_ENV} must be a JSON object')
-  if set(summoner) == {'session'} and isinstance(summoner['session'], str):
-    return summoner
-  if (
-    set(summoner) == {'target', 'trail_id'}
-    and isinstance(summoner['target'], str)
-    and isinstance(summoner['trail_id'], str)
-  ):
-    return summoner
-  raise ValueError(f'{SUMMONER_ENV} has an invalid summoner shape')
+  if set(summoned_by) not in ({'trail_id'}, {'trail_id', 'step_id'}):
+    raise ValueError(f'{SUMMONER_ENV} has an invalid summoned_by shape')
+  if not all(isinstance(value, str) for value in summoned_by.values()):
+    raise ValueError(f'{SUMMONER_ENV} has an invalid summoned_by shape')
+  return summoned_by
 
 
 def _default_factory() -> Tracker:
@@ -64,7 +60,7 @@ def _default_factory() -> Tracker:
   # secret is a setup error, not a fallback path — `NullTracker` is opt-in:
   # - kill switch: `TRAILS_DISABLED` set in the environment.
   # - tests: `conftest.py`'s `set_default_tracker_factory(NullTracker)`.
-  # - one-shot exploration: `bro.run(..., tracker=NullTracker())`.
+  # - one-shot exploration: `bro.run(..., surface='experiment', tracker=NullTracker())`.
   try:
     config = credentials.get_json('trails')
   except credentials.SecretNotFound as e:
@@ -782,8 +778,8 @@ class BaseBro(ABC):
     hold: str,
     observer: Optional[Observer],
     tracker: Optional[Tracker],
-    entry_point: str,
-    summoner: Optional[dict[str, Any]],
+    surface: str,
+    summoned_by: Optional[dict[str, Any]],
   ) -> tuple[LLM, list[dict], str]:
     # the shared start sequence of run() and send(): lock in observer/tracker —
     # caller-supplied ones win (CLIs use this to force --boring or to pass a
@@ -798,10 +794,11 @@ class BaseBro(ABC):
       bro=self.name,
       llm_spec=self.llm_spec.dump(),
       system_prompt=system_prompt,
-      parent=None,
+      forked_from=None,
       interactive=interactive,
-      entry_point=entry_point,
-      summoner=summoner,
+      surface=surface,
+      hold=hold,
+      summoned_by=summoned_by,
     )
     self.trail_id = trail_id if len(trail_id) > 0 else None
     messages = [
@@ -827,6 +824,8 @@ class BaseBro(ABC):
     observer: Optional[Observer] = None,
     tracker: Optional[Tracker] = None,
     request_timeout: Optional[float] = None,
+    *,
+    surface: str,
     hold: str = 'unattended',
   ) -> str:
     refusal = self._start_refusal()
@@ -838,14 +837,14 @@ class BaseBro(ABC):
       hold=hold,
       observer=observer,
       tracker=tracker,
-      entry_point='cli:bro_run',
-      summoner=_summoner_from_env(),
+      surface=surface,
+      summoned_by=_summoned_by_from_env(),
     )
     log.info('run started%s', f' (trail {trail_id})' if len(trail_id) > 0 else '')
     channel = self._make_channel()
     if channel is not None:
       channel.started(trail_id)
-    end_reason: EndReason = 'terminal'
+    end_reason: EndReason = 'ok'
     result: Optional[str] = None
     try:
       result = await llm.send(messages, request_timeout=request_timeout)
@@ -861,7 +860,8 @@ class BaseBro(ABC):
       raise
     finally:
       log.verbose('run ended: %s', end_reason)
-      self._tracker.end_trail(end_reason)
+      detail = result if end_reason in ('raised', 'error') else None
+      self._tracker.end_trail(end_reason, detail=detail)
       if channel is not None:
         channel.completed(result, end_reason)
         channel.close()
@@ -872,7 +872,8 @@ class BaseBro(ABC):
     observer: Optional[Observer] = None,
     tracker: Optional[Tracker] = None,
     request_timeout: Optional[float] = None,
-    entry_point: str = 'send',
+    *,
+    surface: str,
     hold: str = 'guided',
   ) -> str:
     if self._llm is None:
@@ -881,7 +882,7 @@ class BaseBro(ABC):
         # in-reply report; the LLM stays unbuilt, so a later send re-checks
         return refusal
       # the tracker is locked in on first send (the LLM is constructed once and
-      # records one trail); later calls can't swap it. entry_point (the trail
+      # records one trail); later calls can't swap it. surface (the trail
       # header's surface label — `call`, `process-inbox`) and hold are locked
       # in the same way.
       self._llm, messages, _ = self._start(
@@ -890,8 +891,8 @@ class BaseBro(ABC):
         hold=hold,
         observer=observer,
         tracker=tracker,
-        entry_point=entry_point,
-        summoner=None,
+        surface=surface,
+        summoned_by=None,
       )
     else:
       if observer is not None:

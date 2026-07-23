@@ -141,8 +141,16 @@ def test_main_in_place_hold_reaches_the_run(monkeypatch):
 
   class CaptureBro(RecordBro):
     async def run(
-      self, input, observer=None, tracker=None, request_timeout=None, hold='unattended'
+      self,
+      input,
+      observer=None,
+      tracker=None,
+      request_timeout=None,
+      *,
+      surface,
+      hold='unattended',
     ):
+      assert surface == 'ask'
       holds.append(hold)
       return 'ok'
 

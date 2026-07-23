@@ -59,11 +59,11 @@ class TestBroChannel:
 
   def test_completed_sends_result_and_end_reason(self):
     channel, transport = _make_channel()
-    channel.completed('the answer', 'terminal')
+    channel.completed('the answer', 'ok')
     assert len(transport.sent) == 1
     message = transport.sent[0]
     assert message.type == 'completed'
-    assert message.payload == {'result': 'the answer', 'end_reason': 'terminal'}
+    assert message.payload == {'result': 'the answer', 'end_reason': 'ok'}
 
   def test_close_closes_client(self):
     channel, transport = _make_channel()
@@ -104,7 +104,15 @@ class _ChannelBro(BaseBro):
 
 class _TrailIDTracker(NullTracker):
   def start_trail(
-    self, bro, llm_spec, system_prompt, parent, interactive, entry_point, summoner=None
+    self,
+    bro,
+    llm_spec,
+    system_prompt,
+    forked_from,
+    interactive,
+    surface,
+    hold='unattended',
+    summoned_by=None,
   ) -> str:
     return 'trail-42'
 
@@ -114,11 +122,11 @@ class TestRunLifecycle:
   async def test_terminal_run_emits_started_and_completed(self):
     channel, transport = _make_channel()
     bro = _ChannelBro(channel, _StubLLM(response='the result'))
-    result = await bro.run('input', tracker=_TrailIDTracker())
+    result = await bro.run('input', tracker=_TrailIDTracker(), surface='test')
     assert result == 'the result'
     assert [m.type for m in transport.sent] == ['started', 'completed']
     assert transport.sent[0].payload == {'trail_id': 'trail-42'}
-    assert transport.sent[1].payload == {'result': 'the result', 'end_reason': 'terminal'}
+    assert transport.sent[1].payload == {'result': 'the result', 'end_reason': 'ok'}
     assert transport.closed is True
 
   @pytest.mark.asyncio
@@ -126,7 +134,7 @@ class TestRunLifecycle:
     channel, transport = _make_channel()
     bro = _ChannelBro(channel, _StubLLM(error=BroRaised('cannot fulfill')))
     with pytest.raises(BroRaised):
-      await bro.run('input')
+      await bro.run('input', surface='test')
     assert [m.type for m in transport.sent] == ['started', 'completed']
     assert transport.sent[1].payload == {'result': 'cannot fulfill', 'end_reason': 'raised'}
     assert transport.closed is True
@@ -136,7 +144,7 @@ class TestRunLifecycle:
     channel, transport = _make_channel()
     bro = _ChannelBro(channel, _StubLLM(error=RuntimeError('kaboom')))
     with pytest.raises(RuntimeError):
-      await bro.run('input')
+      await bro.run('input', surface='test')
     assert [m.type for m in transport.sent] == ['started', 'completed']
     assert transport.sent[1].payload == {'result': 'kaboom', 'end_reason': 'error'}
     assert transport.closed is True
@@ -147,12 +155,20 @@ class TestRunLifecycle:
 
     class OrderTracker(NullTracker):
       def start_trail(
-        self, bro, llm_spec, system_prompt, parent, interactive, entry_point, summoner=None
+        self,
+        bro,
+        llm_spec,
+        system_prompt,
+        forked_from,
+        interactive,
+        surface,
+        hold='unattended',
+        summoned_by=None,
       ) -> str:
         events.append('start_trail')
         return 'tid'
 
-      def end_trail(self, reason) -> None:
+      def end_trail(self, reason, detail=None) -> None:
         events.append('end_trail')
 
     class OrderTransport(FakeClientTransport):
@@ -162,7 +178,7 @@ class TestRunLifecycle:
 
     transport = OrderTransport()
     bro = _ChannelBro(BroChannel(Client(transport)), _StubLLM())
-    await bro.run('input', tracker=OrderTracker())
+    await bro.run('input', tracker=OrderTracker(), surface='test')
     assert events == ['start_trail', 'started', 'end_trail', 'completed']
 
   @pytest.mark.asyncio
@@ -182,11 +198,11 @@ class TestRunLifecycle:
       def _create_llm(self, *, hold: str) -> LLM:
         return _StubLLM(response='fine')
 
-    assert await DefaultChannelBro().run('input') == 'fine'
+    assert await DefaultChannelBro().run('input', surface='test') == 'fine'
 
   @pytest.mark.asyncio
   async def test_send_does_not_emit_lifecycle(self):
     channel, transport = _make_channel()
     bro = _ChannelBro(channel, _StubLLM(response='chat'))
-    assert await bro.send('hi') == 'chat'
+    assert await bro.send('hi', surface='test') == 'chat'
     assert transport.sent == []

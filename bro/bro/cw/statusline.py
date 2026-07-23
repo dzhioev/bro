@@ -68,8 +68,8 @@ def _summon_parts(now: float) -> list[str]:
   last = status.get('last')
   if last is not None and now - last.get('ended_at', 0) < _LAST_OUTCOME_TTL:
     outcome = last.get('outcome')
-    color = _GREEN if outcome == 'terminal' else _RED
-    mark = '✓' if outcome == 'terminal' else '✗'
+    color = _GREEN if outcome == 'ok' else _RED
+    mark = '✓' if outcome == 'ok' else '✗'
     parts.append(f'{color}{mark} summon {last.get("target")}: {outcome}{_RESET}')
   return parts
 

@@ -50,7 +50,7 @@ class SummonLaunchSpec(LaunchSpec):
   target: str
   prompt: str
   parent_workspace: Path
-  summoner: dict[str, Any]
+  summoner: Optional[dict[str, Any]]
   into: Optional[str] = None
   hold: Optional[str] = None
 

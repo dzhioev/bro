@@ -11,11 +11,11 @@ import pytest
 import llm.tracker
 from base import configs
 from llm.tracker import (
+  ForkedFrom,
   HTTPStatusError,
   HTTPTracker,
   LocalFileTracker,
   NullTracker,
-  Parent,
   Tracker,
   read_local_file,
 )
@@ -35,18 +35,18 @@ class TestNullTracker:
   def test_start_trail_returns_empty_string(self):
     t = NullTracker()
     trail_id = t.start_trail(
-      bro='b', llm_spec={}, system_prompt='', parent=None, interactive=False, entry_point='x'
+      bro='b', llm_spec={}, system_prompt='', forked_from=None, interactive=False, surface='x'
     )
     assert trail_id == ''
 
   def test_methods_are_noops(self):
     t = NullTracker()
     t.start_trail(
-      bro='b', llm_spec={}, system_prompt='p', parent=None, interactive=True, entry_point='x'
+      bro='b', llm_spec={}, system_prompt='p', forked_from=None, interactive=True, surface='x'
     )
     t.step('reasoning', 'r', turn_index=1)
-    t.step('end', {'reason': 'terminal'})
-    t.end_trail('terminal')
+    t.step('end', {'reason': 'ok'})
+    t.end_trail('ok')
 
 
 class TestLocalFileTrackerStartTrail:
@@ -57,10 +57,10 @@ class TestLocalFileTrackerStartTrail:
       bro='echo',
       llm_spec={'type': 'echo', 'model': 'm'},
       system_prompt='do the thing',
-      parent=None,
+      forked_from=None,
       interactive=False,
-      entry_point='cli:bro_run',
-      summoner={'session': 'c:root'},
+      surface='ask',
+      summoned_by={'session': 'c:root'},
     )
     tracker.close()
     records = _read_jsonl(path)
@@ -68,17 +68,17 @@ class TestLocalFileTrackerStartTrail:
     assert len(records) == 2
     header = records[0]
     assert header['record_type'] == 'trail'
-    assert header['trail_id'] == trail_id
+    assert header['id'] == trail_id
     assert header['bro'] == 'echo'
-    assert header['bro_version'] == configs.VERSION
-    assert header['llm_spec'] == {'type': 'echo', 'model': 'm'}
+    assert header['version'] == configs.VERSION
+    assert header['native']['llm'] == {'type': 'echo', 'model': 'm'}
     assert header['interactive'] is False
-    assert header['entry_point'] == 'cli:bro_run'
-    assert header['parent'] is None
-    assert header['summoner'] == {'session': 'c:root'}
+    assert header['surface'] == 'ask'
+    assert header['forked_from'] is None
+    assert header['summoned_by'] == {'session': 'c:root'}
     assert 'started_at' in header
     [recorded] = read_local_file(path)
-    assert recorded.header.summoner == {'session': 'c:root'}
+    assert recorded.header.summoned_by == {'session': 'c:root'}
 
   def test_auto_emits_system_prompt_as_first_step(self, tmp_path: Path):
     path = tmp_path / 'trail.jsonl'
@@ -87,9 +87,9 @@ class TestLocalFileTrackerStartTrail:
       bro='b',
       llm_spec={},
       system_prompt='full prompt text',
-      parent=None,
+      forked_from=None,
       interactive=False,
-      entry_point='cli:bro_run',
+      surface='ask',
     )
     tracker.close()
     records = _read_jsonl(path)
@@ -102,37 +102,40 @@ class TestLocalFileTrackerStartTrail:
     assert 'step_id' in step
     assert 'ts' in step
 
-  def test_parent_is_serialized_when_present(self, tmp_path: Path):
+  def test_forked_from_is_serialized_when_present(self, tmp_path: Path):
     path = tmp_path / 'trail.jsonl'
     tracker = LocalFileTracker(path)
-    parent = Parent(trail_id='abc', step_id='def', relationship='fork')
+    forked_from = ForkedFrom(
+      trail_id='abc',
+      step_id='def',
+    )
     tracker.start_trail(
       bro='b',
       llm_spec={},
       system_prompt='',
-      parent=parent,
+      forked_from=forked_from,
       interactive=False,
-      entry_point='cli:bro_run',
+      surface='ask',
     )
     tracker.close()
     header = _read_jsonl(path)[0]
-    assert header['parent'] == {'trail_id': 'abc', 'step_id': 'def', 'relationship': 'fork'}
-    assert 'summoner' not in header
+    assert header['forked_from'] == {'trail_id': 'abc', 'step_id': 'def'}
+    assert 'summoned_by' not in header
 
   def test_bro_version_comes_from_configs(self, tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(configs, 'VERSION', 42)
+    monkeypatch.setattr(configs, 'VERSION', '42')
     path = tmp_path / 'trail.jsonl'
     tracker = LocalFileTracker(path)
     tracker.start_trail(
       bro='b',
       llm_spec={},
       system_prompt='',
-      parent=None,
+      forked_from=None,
       interactive=False,
-      entry_point='cli:bro_run',
+      surface='ask',
     )
     tracker.close()
-    assert _read_jsonl(path)[0]['bro_version'] == 42
+    assert _read_jsonl(path)[0]['version'] == '42'
 
 
 class TestLocalFileTrackerStep:
@@ -143,9 +146,9 @@ class TestLocalFileTrackerStep:
       bro='b',
       llm_spec={},
       system_prompt='p',
-      parent=None,
+      forked_from=None,
       interactive=False,
-      entry_point='cli:bro_run',
+      surface='ask',
     )
     tracker.step(
       'tool_call',
@@ -179,9 +182,9 @@ class TestLocalFileTrackerStep:
       bro='b',
       llm_spec={},
       system_prompt='p',
-      parent=None,
+      forked_from=None,
       interactive=False,
-      entry_point='cli:bro_run',
+      surface='ask',
     )
     tracker.step('reasoning', 'a')
     tracker.step('reasoning', 'b')
@@ -199,17 +202,17 @@ class TestLocalFileTrackerEndTrail:
       bro='b',
       llm_spec={},
       system_prompt='p',
-      parent=None,
+      forked_from=None,
       interactive=False,
-      entry_point='cli:bro_run',
+      surface='ask',
     )
-    tracker.end_trail('terminal')
+    tracker.end_trail('ok')
     tracker.close()
     records = _read_jsonl(path)
     end = records[-1]
     assert end['record_type'] == 'step'
     assert end['kind'] == 'end'
-    assert end['body'] == {'reason': 'terminal'}
+    assert end['body'] == {'reason': 'ok'}
 
   def test_second_end_trail_is_noop(self, tmp_path: Path):
     path = tmp_path / 'trail.jsonl'
@@ -218,11 +221,11 @@ class TestLocalFileTrackerEndTrail:
       bro='b',
       llm_spec={},
       system_prompt='p',
-      parent=None,
+      forked_from=None,
       interactive=False,
-      entry_point='cli:bro_run',
+      surface='ask',
     )
-    tracker.end_trail('terminal')
+    tracker.end_trail('ok')
     tracker.end_trail('raised')
     tracker.close()
     end_records = [r for r in _read_jsonl(path) if r.get('kind') == 'end']
@@ -237,24 +240,26 @@ class TestLocalFileTrackerAppend:
       bro='a',
       llm_spec={},
       system_prompt='p1',
-      parent=None,
+      forked_from=None,
       interactive=False,
-      entry_point='cli:bro_run',
+      surface='ask',
     )
-    tracker.end_trail('terminal')
+    tracker.end_trail('ok')
     second = tracker.start_trail(
       bro='b',
       llm_spec={},
       system_prompt='p2',
-      parent=None,
+      forked_from=None,
       interactive=False,
-      entry_point='cli:bro_run',
+      surface='ask',
     )
-    tracker.end_trail('terminal')
+    tracker.end_trail('ok')
     tracker.close()
     records = _read_jsonl(path)
-    trail_ids = {r['trail_id'] for r in records}
-    assert trail_ids == {first, second}
+    header_ids = {record['id'] for record in records if record['record_type'] == 'trail'}
+    step_trail_ids = {record['trail_id'] for record in records if record['record_type'] == 'step'}
+    assert header_ids == {first, second}
+    assert step_trail_ids == {first, second}
     assert first != second
 
 
@@ -338,16 +343,16 @@ class TestHTTPTrackerConstructor:
 class TestHTTPTrackerStartTrail:
   def test_posts_v1_trails_and_returns_server_trail_id(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
-    fake.queue((201, b'{"trail_id": "T-server"}'))
+    fake.queue((201, b'{"id": "T-server"}'))
     tracker = HTTPTracker('https://trails.example', 'tok')
     trail_id = tracker.start_trail(
       bro='dev',
       llm_spec={'type': 'chat_gpt', 'model': 'gpt-5'},
       system_prompt='do the thing',
-      parent=None,
+      forked_from=None,
       interactive=False,
-      entry_point='cli:bro_run',
-      summoner={'target': 'pm', 'trail_id': 'T-parent'},
+      surface='ask',
+      summoned_by={'trail_id': 'T-forked_from'},
     )
     assert trail_id == 'T-server'
     assert tracker._trail_id == 'T-server'
@@ -359,32 +364,35 @@ class TestHTTPTrackerStartTrail:
     assert body is not None
     payload = json.loads(body)
     assert payload['bro'] == 'dev'
-    assert payload['bro_version'] == configs.VERSION
-    assert payload['llm_spec'] == {'type': 'chat_gpt', 'model': 'gpt-5'}
-    assert payload['system_prompt'] == 'do the thing'
-    assert payload['parent'] is None
+    assert payload['version'] == configs.VERSION
+    assert payload['native']['llm'] == {'type': 'chat_gpt', 'model': 'gpt-5'}
+    assert payload['body']['system_prompt'] == 'do the thing'
+    assert payload['forked_from'] is None
     assert payload['interactive'] is False
-    assert payload['entry_point'] == 'cli:bro_run'
-    assert payload['summoner'] == {'target': 'pm', 'trail_id': 'T-parent'}
+    assert payload['surface'] == 'ask'
+    assert payload['summoned_by'] == {'trail_id': 'T-forked_from'}
 
-  def test_serializes_parent_on_forks(self, monkeypatch):
+  def test_serializes_forked_from_on_forks(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
-    fake.queue((201, b'{"trail_id": "T1"}'))
+    fake.queue((201, b'{"id": "T1"}'))
     tracker = HTTPTracker('https://trails.example', 'tok')
-    parent = Parent(trail_id='abc', step_id='def', relationship='fork')
+    forked_from = ForkedFrom(
+      trail_id='abc',
+      step_id='def',
+    )
     tracker.start_trail(
       bro='b',
       llm_spec={},
       system_prompt='p',
-      parent=parent,
+      forked_from=forked_from,
       interactive=True,
-      entry_point='fork',
+      surface='fork',
     )
     body = fake.requests[0][2]
     assert body is not None
     payload = json.loads(body)
-    assert payload['parent'] == {'trail_id': 'abc', 'step_id': 'def', 'relationship': 'fork'}
-    assert 'summoner' not in payload
+    assert payload['forked_from'] == {'trail_id': 'abc', 'step_id': 'def'}
+    assert 'summoned_by' not in payload
 
   def test_fail_fast_no_retries_on_transport_error(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
@@ -395,9 +403,9 @@ class TestHTTPTrackerStartTrail:
         bro='b',
         llm_spec={},
         system_prompt='',
-        parent=None,
+        forked_from=None,
         interactive=False,
-        entry_point='x',
+        surface='x',
       )
     assert len(fake.requests) == 1
 
@@ -410,9 +418,9 @@ class TestHTTPTrackerStartTrail:
         bro='b',
         llm_spec={},
         system_prompt='',
-        parent=None,
+        forked_from=None,
         interactive=False,
-        entry_point='x',
+        surface='x',
       )
     assert exception_info.value.status == 500
     assert len(fake.requests) == 1
@@ -421,15 +429,15 @@ class TestHTTPTrackerStartTrail:
 class TestHTTPTrackerStep:
   def _ready(self, monkeypatch) -> tuple[HTTPTracker, _FakeConnection]:
     fake = _install_fake_connection(monkeypatch)
-    fake.queue((201, b'{"trail_id": "T1"}'))
+    fake.queue((201, b'{"id": "T1"}'))
     tracker = HTTPTracker('https://trails.example', 'tok')
     tracker.start_trail(
       bro='b',
       llm_spec={},
       system_prompt='p',
-      parent=None,
+      forked_from=None,
       interactive=False,
-      entry_point='x',
+      surface='x',
     )
     return tracker, fake
 
@@ -547,27 +555,27 @@ class TestHTTPTrackerStep:
 class TestHTTPTrackerEndTrail:
   def _ready(self, monkeypatch) -> tuple[HTTPTracker, _FakeConnection]:
     fake = _install_fake_connection(monkeypatch)
-    fake.queue((201, b'{"trail_id": "T1"}'))
+    fake.queue((201, b'{"id": "T1"}'))
     tracker = HTTPTracker('https://trails.example', 'tok')
     tracker.start_trail(
       bro='b',
       llm_spec={},
       system_prompt='p',
-      parent=None,
+      forked_from=None,
       interactive=False,
-      entry_point='x',
+      surface='x',
     )
     return tracker, fake
 
   def test_posts_v1_end_with_reason(self, monkeypatch):
     tracker, fake = self._ready(monkeypatch)
     fake.queue((204, b''))
-    tracker.end_trail('terminal')
+    tracker.end_trail('ok')
     method, path, body, _ = fake.requests[1]
     assert (method, path) == ('POST', '/v1/trails/T1/end')
     assert body is not None
     payload = json.loads(body)
-    assert payload['reason'] == 'terminal'
+    assert payload['reason'] == 'ok'
     # the end step carries a client-minted id too, so a retried end POST dedups.
     assert isinstance(payload['step_id'], str) and len(payload['step_id']) > 0
     # trail_id cleared so second end_trail is a no-op.
@@ -576,7 +584,7 @@ class TestHTTPTrackerEndTrail:
   def test_second_end_trail_is_noop(self, monkeypatch):
     tracker, fake = self._ready(monkeypatch)
     fake.queue((204, b''))
-    tracker.end_trail('terminal')
+    tracker.end_trail('ok')
     # nothing queued — a second POST would assert; the no-op path proves it
     # never hit the wire.
     tracker.end_trail('raised')
@@ -586,7 +594,7 @@ class TestHTTPTrackerEndTrail:
     for _ in range(4):
       fake.queue(ConnectionError('still down'))
     with caplog.at_level(logging.WARNING):
-      tracker.end_trail('terminal')
+      tracker.end_trail('ok')
     assert any('end_trail failed' in record.message for record in caplog.records)
     assert tracker._trail_id is None
 
@@ -595,10 +603,10 @@ class TestHTTPTrackerKeepalive:
   def _start(self, monkeypatch, interval: float) -> tuple[HTTPTracker, _FakeConnection]:
     fake = _install_fake_connection(monkeypatch)
     monkeypatch.setattr(llm.tracker, 'KEEPALIVE_INTERVAL_SECONDS', interval)
-    fake.queue((201, b'{"trail_id": "T1"}'))
+    fake.queue((201, b'{"id": "T1"}'))
     tracker = HTTPTracker('https://trails.example', 'tok')
     tracker.start_trail(
-      bro='b', llm_spec={}, system_prompt='', parent=None, interactive=False, entry_point='x'
+      bro='b', llm_spec={}, system_prompt='', forked_from=None, interactive=False, surface='x'
     )
     return tracker, fake
 
@@ -617,7 +625,7 @@ class TestHTTPTrackerKeepalive:
     method, _, _, headers = requests[0]
     assert method == 'POST'
     assert headers['Authorization'] == 'Bearer tok'
-    tracker.end_trail('terminal')
+    tracker.end_trail('ok')
 
   def test_no_keepalive_while_writes_flow(self, monkeypatch):
     tracker, fake = self._start(monkeypatch, interval=0.5)
@@ -626,7 +634,7 @@ class TestHTTPTrackerKeepalive:
       tracker.step('assistant', 'x')
       threading.Event().wait(0.02)
     fake.queue((204, b''))
-    tracker.end_trail('terminal')
+    tracker.end_trail('ok')
     thread = tracker._keepalive_thread
     assert thread is not None
     thread.join(2.0)
@@ -639,7 +647,7 @@ class TestHTTPTrackerKeepalive:
       fake.queue((204, b''))
     thread = tracker._keepalive_thread
     assert thread is not None and thread.is_alive()
-    tracker.end_trail('terminal')
+    tracker.end_trail('ok')
     thread.join(2.0)
     assert not thread.is_alive()
 
@@ -671,4 +679,4 @@ class TestHTTPTrackerKeepalive:
       fake.queue((204, b''))
     tracker.step('assistant', 'x')
     assert any(r[1] == '/v1/trails/T1/steps' for r in fake.requests)
-    tracker.end_trail('terminal')
+    tracker.end_trail('ok')

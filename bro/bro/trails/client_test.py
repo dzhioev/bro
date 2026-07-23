@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from llm.tracker import HTTPStatusError, Parent, RecordedTrail, Step, Trail
+from llm.tracker import ForkedFrom, HTTPStatusError, RecordedTrail, Step, Trail
 from trails.client import (
   TrailsClient,
   fetch_recorded_trail,
@@ -155,33 +155,31 @@ class TestListTrails:
     assert 'cursor=c1' in path
     assert 'limit=10' in path
 
-  def test_parent_and_bro_independent(self, monkeypatch):
+  def test_forked_from_and_bro_independent(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
     fake.queue((200, b'{"trails": [], "next": null}'))
     c = _client()
-    c.list_trails(parent='T-parent')
+    c.list_trails(forked_from='T-forked_from')
     _, path, _, _ = fake.requests[0]
-    assert 'parent=T-parent' in path
+    assert 'forked_from=T-forked_from' in path
 
 
 class TestIterTrails:
   def test_max_items_caps_total(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
-    fake.queue(
-      (200, json.dumps({'trails': [{'trail_id': 'T1'}, {'trail_id': 'T2'}], 'next': 'c1'}).encode())
-    )
+    fake.queue((200, json.dumps({'trails': [{'id': 'T1'}, {'id': 'T2'}], 'next': 'c1'}).encode()))
     fake.queue((200, json.dumps({'trails': [{'trail_id': 'T3'}], 'next': None}).encode()))
     c = _client()
     out = list(c.iter_trails(max_items=2))
-    assert [t['trail_id'] for t in out] == ['T1', 'T2']
+    assert [t['id'] for t in out] == ['T1', 'T2']
 
   def test_walks_across_pages(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
-    fake.queue((200, json.dumps({'trails': [{'trail_id': 'T1'}], 'next': 'c1'}).encode()))
-    fake.queue((200, json.dumps({'trails': [{'trail_id': 'T2'}], 'next': None}).encode()))
+    fake.queue((200, json.dumps({'trails': [{'id': 'T1'}], 'next': 'c1'}).encode()))
+    fake.queue((200, json.dumps({'trails': [{'id': 'T2'}], 'next': None}).encode()))
     c = _client()
     out = list(c.iter_trails())
-    assert [t['trail_id'] for t in out] == ['T1', 'T2']
+    assert [t['id'] for t in out] == ['T1', 'T2']
     assert 'cursor=c1' in fake.requests[1][1]
 
 
@@ -189,10 +187,10 @@ class TestRetryBehavior:
   def test_one_transport_blip_recovered(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
     fake.queue(ConnectionError('blip'))
-    fake.queue((200, b'{"trail_id": "T1"}'))
+    fake.queue((200, b'{"id": "T1"}'))
     c = _client()
     result = c.get_trail('T1')
-    assert result == {'trail_id': 'T1'}
+    assert result == {'id': 'T1'}
     assert fake.closes >= 1
 
   def test_second_failure_propagates(self, monkeypatch):
@@ -206,9 +204,9 @@ class TestRetryBehavior:
   def test_retryable_status_recovered(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
     fake.queue((503, b'unavailable'))
-    fake.queue((200, b'{"trail_id": "T1"}'))
+    fake.queue((200, b'{"id": "T1"}'))
     c = _client()
-    assert c.get_trail('T1') == {'trail_id': 'T1'}
+    assert c.get_trail('T1') == {'id': 'T1'}
 
   def test_persistent_retryable_status_propagates(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
@@ -220,46 +218,72 @@ class TestRetryBehavior:
     assert exception_info.value.status == 503
 
 
+class TestMessages:
+  def test_repeated_type_filters(self, monkeypatch):
+    fake = _install_fake_connection(monkeypatch)
+    fake.queue((200, b'{"messages": [], "next": null}'))
+    client = _client()
+    client.get_messages('T1', types={'assistant', 'user_input'}, after='5', limit=20)
+    _, path, _, _ = fake.requests[0]
+    assert path.startswith('/v1/trails/T1/messages?')
+    assert 'type=assistant' in path
+    assert 'type=user_input' in path
+    assert 'after=5' in path
+    assert 'limit=20' in path
+
+  def test_iterator_pages(self, monkeypatch):
+    fake = _install_fake_connection(monkeypatch)
+    fake.queue((200, b'{"messages": [{"type": "user_input"}], "next": "1"}'))
+    fake.queue((200, b'{"messages": [{"type": "assistant"}], "next": null}'))
+    client = _client()
+    assert [message['type'] for message in client.iter_messages('T1')] == [
+      'user_input',
+      'assistant',
+    ]
+    assert 'after=1' in fake.requests[1][1]
+
+
 class TestTrailFromHeader:
   def test_minimal_header(self):
     trail = trail_from_header(
       {
-        'trail_id': 'T1',
+        'id': 'T1',
+        'harness': 'bro',
         'bro': 'dev',
-        'bro_version': 7,
-        'llm_spec': {'type': 'chat_gpt', 'model': 'gpt-5'},
+        'version': str(7),
+        'native': {'llm': {'type': 'chat_gpt', 'model': 'gpt-5'}},
         'started_at': '2026-06-07T00:00:00.000000Z',
         'interactive': False,
-        'entry_point': 'cli:bro_run',
-        'parent': None,
+        'surface': 'ask',
+        'forked_from': None,
       }
     )
-    assert trail.trail_id == 'T1'
+    assert trail.id == 'T1'
     assert trail.bro == 'dev'
-    assert trail.bro_version == 7
-    assert trail.parent is None
-    assert trail.summoner is None
+    assert trail.version == '7'
+    assert trail.forked_from is None
+    assert trail.summoned_by is None
     assert isinstance(trail, Trail)
 
-  def test_parent_present(self):
+  def test_forked_from_present(self):
     trail = trail_from_header(
       {
-        'trail_id': 'T2',
+        'id': 'T2',
+        'harness': 'bro',
         'bro': 'dev',
-        'bro_version': 1,
-        'llm_spec': {},
+        'version': str(1),
+        'native': {'llm': {}},
         'started_at': '2026-06-07T00:00:00.000000Z',
         'interactive': True,
-        'entry_point': 'fork',
-        'parent': {'trail_id': 'T1', 'step_id': 'S5', 'relationship': 'fork'},
-        'summoner': {'session': 'c:root'},
+        'surface': 'fork',
+        'forked_from': {'trail_id': 'T1', 'step_id': 'S5'},
+        'summoned_by': {'trail_id': 'T-root'},
       }
     )
-    assert isinstance(trail.parent, Parent)
-    assert trail.parent.trail_id == 'T1'
-    assert trail.parent.step_id == 'S5'
-    assert trail.parent.relationship == 'fork'
-    assert trail.summoner == {'session': 'c:root'}
+    assert isinstance(trail.forked_from, ForkedFrom)
+    assert trail.forked_from.trail_id == 'T1'
+    assert trail.forked_from.step_id == 'S5'
+    assert trail.summoned_by == {'trail_id': 'T-root'}
 
 
 class TestStepFromRow:
@@ -309,14 +333,15 @@ class TestFetchRecordedTrail:
       patch.object(TrailsClient, 'get_steps') as get_steps,
     ):
       get_trail.return_value = {
-        'trail_id': 'T1',
+        'id': 'T1',
+        'harness': 'bro',
         'bro': 'dev',
-        'bro_version': 1,
-        'llm_spec': {},
+        'version': str(1),
+        'native': {'llm': {}},
         'started_at': '2026-06-07T00:00:00.000000Z',
         'interactive': False,
-        'entry_point': 'cli:bro_run',
-        'parent': None,
+        'surface': 'ask',
+        'forked_from': None,
       }
       get_steps.side_effect = [
         {
@@ -349,7 +374,7 @@ class TestFetchRecordedTrail:
       client = _client()
       trail = fetch_recorded_trail(client, 'T1')
       assert isinstance(trail, RecordedTrail)
-      assert trail.header.trail_id == 'T1'
+      assert trail.header.id == 'T1'
       assert [s.kind for s in trail.steps] == ['system_prompt', 'user_input']
       assert [s.step_id for s in trail.steps] == ['S1', 'S2']
 
@@ -366,14 +391,15 @@ class TestFetchRecordedTrail:
       patch.object(TrailsClient, 'fetch_spilled_body') as fetch_spilled,
     ):
       get_trail.return_value = {
-        'trail_id': 'T1',
+        'id': 'T1',
+        'harness': 'bro',
         'bro': 'dev',
-        'bro_version': 1,
-        'llm_spec': {},
+        'version': str(1),
+        'native': {'llm': {}},
         'started_at': '2026-06-07T00:00:00.000000Z',
         'interactive': False,
-        'entry_point': 'cli:bro_run',
-        'parent': None,
+        'surface': 'ask',
+        'forked_from': None,
       }
       get_steps.return_value = {
         'steps': [
@@ -412,14 +438,15 @@ class TestFetchRecordedTrail:
       patch.object(TrailsClient, 'fetch_spilled_body') as fetch_spilled,
     ):
       get_trail.return_value = {
-        'trail_id': 'T1',
+        'id': 'T1',
+        'harness': 'bro',
         'bro': 'dev',
-        'bro_version': 1,
-        'llm_spec': {},
+        'version': str(1),
+        'native': {'llm': {}},
         'started_at': '2026-06-07T00:00:00.000000Z',
         'interactive': False,
-        'entry_point': 'cli:bro_run',
-        'parent': None,
+        'surface': 'ask',
+        'forked_from': None,
       }
       lookalike = {'s3': 'some/key'}
       get_steps.return_value = {

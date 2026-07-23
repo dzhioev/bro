@@ -188,7 +188,7 @@ from bro.channel import BroChannel
 channel = BroChannel.from_env()
 assert channel is not None
 channel.started('e2e-trail')
-channel.completed('child-ok', 'terminal')
+channel.completed('child-ok', 'ok')
 channel.close()
 """
 
@@ -622,7 +622,7 @@ def _run_broker_scenario(
   *,
   default_timeout: float,
   probe_deadline: float,
-  exit_after: str = 'terminal',
+  exit_after: str = 'ok',
   budget: float = 180,
 ) -> BrokerRun:
   name = f'{_NAME_PREFIX}b-{case}-root'
@@ -764,7 +764,7 @@ class TestChildLifecycle:
     assert started['in_reply_to'] == request_id
     assert started['payload'] == {'trail_id': 'e2e-trail'}
     assert completed['in_reply_to'] == request_id
-    assert completed['payload'] == {'result': 'child-ok', 'end_reason': 'terminal'}
+    assert completed['payload'] == {'result': 'child-ok', 'end_reason': 'ok'}
     assert b_clean.max_sockets == 2
     assert b_clean.max_live == 2
     assert b_clean.sockets_after == []

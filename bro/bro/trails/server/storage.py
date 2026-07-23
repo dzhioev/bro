@@ -1,78 +1,32 @@
-"""DynamoDB + S3 storage for the trails server.
-
-Two DynamoDB tables and one S3 bucket back every operation:
-- `trails`: PK=`trail_id`. Header row, incrementally updated aggregates, a
-  constant `gsi_pk` for the global newest-first GSI, sparse `parent_trail_id`
-  for the parent GSI.
-- `trail_steps`: PK=`trail_id`, SK=`step_id`. Append-only, lulid-keyed step rows.
-- `cw-trails-{account}` bucket: spillover for step bodies ≥ `SPILLOVER_THRESHOLD_BYTES`.
-
-`Storage` is an async facade — every method `await`s the blocking boto3 calls
-through `asyncio.to_thread`, matching the focus-server pattern. The atomic
-"step write + aggregate update" pair is a single `TransactWriteItems`. The
-9-kind step counter map (`aggregates.step_counts_by_kind`) is initialised on
-trail creation so per-step `SET` updates always hit existing fields.
-"""
+"""Universal trail-header registry and harness body-backend dispatch."""
 
 import asyncio
-import decimal
 import json
 from datetime import UTC, datetime, timedelta
 from typing import Any, Optional
 
-from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
+from trails.server import storage_types
+from trails.server.backends import BodyBackend, BroBackend, ClaudeBackend
 
-from base.lulid import lulid
+SPILLOVER_THRESHOLD_BYTES = storage_types.SPILLOVER_THRESHOLD_BYTES
+MAX_BODY_BYTES = storage_types.MAX_BODY_BYTES
+INLINE_RESPONSE_THRESHOLD_BYTES = storage_types.INLINE_RESPONSE_THRESHOLD_BYTES
+PRESIGNED_URL_TTL_SECONDS = storage_types.PRESIGNED_URL_TTL_SECONDS
+STEP_KINDS = storage_types.BRO_STEP_KINDS
+MESSAGE_TYPES = storage_types.MESSAGE_TYPES
+TrailNotFound = storage_types.TrailNotFound
+BodyTooLarge = storage_types.BodyTooLarge
 
-SPILLOVER_THRESHOLD_BYTES = 50 * 1024
-MAX_BODY_BYTES = 10 * 1024 * 1024
-# response-side cap: spilled bodies smaller than this are fetched from S3 and
-# returned inline; larger ones come back as presigned URLs the client follows.
-INLINE_RESPONSE_THRESHOLD_BYTES = 1 * 1024 * 1024
-PRESIGNED_URL_TTL_SECONDS = 3600
-
-STEP_KINDS = (
-  'system_prompt',
-  'user_input',
-  'reasoning',
-  'assistant',
-  'tool_call',
-  'tool_result',
-  'llm_call',
-  'error',
-  'end',
-)
-
-# the no-filter list path can't sort or range a full-table scan by time, so every
-# trail item carries this constant attribute and the `all-index` GSI
-# keys on it — a query there returns all trails by started_at (global newest-first
-# + since/until range). one logical partition suffices at this write volume; shard
-# the constant value if write throughput ever grows.
 GSI_PK_ATTRIBUTE = 'gsi_pk'
 GSI_PK_VALUE = 'trail'
-
-# lost-trail sweep: a live header (`ended_at` still null) whose `last_alive_at`
-# is older than this is stamped `end_reason='lost'` with `ended_at` set to that
-# last activity. far above the client keepalive cadence
-# (llm/tracker.py KEEPALIVE_INTERVAL_SECONDS), so only a dead or disconnected
-# recorder trips it — and a false stamp self-heals: put_step ignores ended_at
-# and a late end_trail overwrites the stamp with the real outcome. 'lost' is
-# minted only here; the end endpoint never accepts it from clients.
 LOST_AFTER_SECONDS = 3600
-# how far back a sweep pass looks for live headers; bounds the all-index query.
 SWEEP_WINDOW_DAYS = 30
 
-
-class TrailNotFound(Exception):
-  pass
-
-
-class BodyTooLarge(Exception):
-  pass
-
-
-_serializer = TypeSerializer()
-_deserializer = TypeDeserializer()
+_ddb = storage_types.ddb
+_ddb_item = storage_types.ddb_item
+_from_ddb = storage_types.from_ddb
+_from_ddb_item = storage_types.from_ddb_item
+_body_size_bytes = storage_types.body_size_bytes
 
 
 def _format_iso(moment: datetime) -> str:
@@ -80,69 +34,7 @@ def _format_iso(moment: datetime) -> str:
 
 
 def _now_iso() -> str:
-  return _format_iso(datetime.now(UTC))
-
-
-def _normalise_float(value: Any) -> Any:
-  # TypeSerializer rejects float (DynamoDB numbers are Decimal), but JSON
-  # payloads carry floats — inline llm_call bodies (temperature, top_p, ...),
-  # tool arguments. convert on the way in; _normalise_decimal is the inverse
-  # on the way out.
-  if isinstance(value, float):
-    return decimal.Decimal(str(value))
-  if isinstance(value, list):
-    return [_normalise_float(v) for v in value]
-  if isinstance(value, dict):
-    return {k: _normalise_float(v) for k, v in value.items()}
-  return value
-
-
-def _ddb(value: Any) -> dict:
-  return _serializer.serialize(_normalise_float(value))
-
-
-def _ddb_item(item: dict) -> dict:
-  return {k: _ddb(v) for k, v in item.items()}
-
-
-def _from_ddb(value: dict) -> Any:
-  out = _deserializer.deserialize(value)
-  return _normalise_decimal(out)
-
-
-def _normalise_decimal(value: Any) -> Any:
-  # boto3's TypeDeserializer returns Decimal for any N attribute. JSON
-  # serialisation barfs on Decimal — convert to int/float here so handlers can
-  # return raw dicts straight to web.json_response.
-  if isinstance(value, decimal.Decimal):
-    return int(value) if value == value.to_integral_value() else float(value)
-  if isinstance(value, list):
-    return [_normalise_decimal(v) for v in value]
-  if isinstance(value, dict):
-    return {k: _normalise_decimal(v) for k, v in value.items()}
-  return value
-
-
-def _from_ddb_item(item: Optional[dict]) -> Optional[dict]:
-  if item is None:
-    return None
-  return {k: _from_ddb(v) for k, v in item.items()}
-
-
-def _body_size_bytes(body: Any) -> int:
-  if body is None:
-    return 0
-  if isinstance(body, str):
-    return len(body.encode('utf-8'))
-  return len(json.dumps(body, ensure_ascii=False).encode('utf-8'))
-
-
-def _spillover_key(trail_id: str, step_id: str) -> str:
-  return f'trails/{trail_id}/steps/{step_id}.json'
-
-
-def _empty_step_counts() -> dict:
-  return dict.fromkeys(STEP_KINDS, 0)
+  return storage_types.now_iso()
 
 
 class Storage:
@@ -152,73 +44,88 @@ class Storage:
     self._trails_table = trails_table
     self._steps_table = steps_table
     self._bucket = bucket
+    self._backends: dict[str, BodyBackend] = {}
+
+  def _backend(self, harness: str) -> BodyBackend:
+    backend = self._backends.get(harness)
+    if backend is not None:
+      return backend
+    if harness == 'bro':
+      backend = BroBackend(
+        dynamo=self._dynamo,
+        s3=self._s3,
+        trails_table=self._trails_table,
+        steps_table=self._steps_table,
+        bucket=self._bucket,
+      )
+    elif harness == 'claude':
+      backend = ClaudeBackend(s3=self._s3, bucket=self._bucket)
+    else:
+      raise ValueError(f'unsupported harness: {harness}')
+    self._backends[harness] = backend
+    return backend
 
   async def create_trail(
     self,
     *,
-    bro: str,
-    bro_version: int,
-    llm_spec: dict,
-    system_prompt: str,
-    parent: Optional[dict],
+    harness: str,
+    version: str,
     interactive: bool,
-    entry_point: str,
-    summoner: Optional[dict],
+    surface: str,
+    body: dict,
+    bro: Optional[str] = None,
+    hold: Optional[str] = None,
+    forked_from: Optional[dict] = None,
+    summoned_by: Optional[dict] = None,
+    subject: Optional[str] = None,
+    location: Optional[dict] = None,
+    native: Optional[dict] = None,
+    trail_id: Optional[str] = None,
   ) -> dict:
-    trail_id = lulid()
-    step_id = lulid()
+    trail_id = trail_id if trail_id is not None else storage_types.new_id()
     started_at = _now_iso()
-
-    aggregates = {
-      'turn_count': 0,
-      'tool_call_count': 0,
-      'tokens_in': 0,
-      'tokens_out': 0,
-      'tokens_reasoning': 0,
-      'step_counts_by_kind': _empty_step_counts() | {'system_prompt': 1},
-    }
-    trail_item: dict = {
-      'trail_id': trail_id,
-      'bro': bro,
-      'bro_version': bro_version,
-      'llm_spec': llm_spec,
+    backend = self._backend(harness)
+    opened_body = await backend.open(
+      trail_id, body, native if native is not None else {}, started_at
+    )
+    item: dict[str, Any] = {
+      'id': trail_id,
+      'harness': harness,
+      'version': version,
       'started_at': started_at,
-      'ended_at': None,
-      'end_reason': None,
+      'end': None,
       'last_alive_at': started_at,
       'interactive': interactive,
-      'entry_point': entry_point,
-      'parent': parent,
-      'continuation': None,
-      'aggregates': aggregates,
+      'surface': surface,
+      'turn_count': 0,
+      'native': opened_body.native,
+      GSI_PK_ATTRIBUTE: GSI_PK_VALUE,
     }
-    if summoner is not None:
-      trail_item['summoner'] = summoner
-    # constant PK for the all-index GSI (global newest-first list).
-    trail_item[GSI_PK_ATTRIBUTE] = GSI_PK_VALUE
-    if parent is not None:
-      # surface parent.trail_id as a top-level attribute so the sparse
-      # parent-trail-id GSI picks this trail up. trails without a parent omit
-      # the attribute entirely (NULL would still pull them into the index).
-      trail_item['parent_trail_id'] = parent['trail_id']
-
-    step_item = {
-      'trail_id': trail_id,
-      'step_id': step_id,
-      'ts': started_at,
-      'kind': 'system_prompt',
-      'body': system_prompt,
-      'turn_index': 0,
+    optional = {
+      'bro': bro,
+      'hold': hold,
+      'forked_from': forked_from,
+      'summoned_by': summoned_by,
+      'subject': subject,
+      'location': location,
     }
-
+    item.update({key: value for key, value in optional.items() if value is not None})
+    if forked_from is not None:
+      item['forked_from_id'] = forked_from['trail_id']
     await asyncio.to_thread(
       self._dynamo.transact_write_items,
       TransactItems=[
-        {'Put': {'TableName': self._trails_table, 'Item': _ddb_item(trail_item)}},
-        {'Put': {'TableName': self._steps_table, 'Item': _ddb_item(step_item)}},
+        {
+          'Put': {
+            'TableName': self._trails_table,
+            'Item': _ddb_item(item),
+            'ConditionExpression': 'attribute_not_exists(id)',
+          }
+        },
+        *opened_body.transaction_items,
       ],
     )
-    return {'trail_id': trail_id, 'started_at': started_at}
+    return {'id': trail_id, 'started_at': started_at}
 
   async def put_step(
     self,
@@ -229,172 +136,111 @@ class Storage:
     extras: dict,
     step_id: Optional[str] = None,
   ) -> dict:
-    size_bytes = _body_size_bytes(body)
-    if size_bytes > MAX_BODY_BYTES:
-      raise BodyTooLarge(f'body size {size_bytes} exceeds {MAX_BODY_BYTES}')
-    # the client mints the step_id and reuses it across retries; the conditional
-    # Put below turns a retried POST into an idempotent no-op. older clients that
-    # send no id fall back to a server-minted lulid (no dedup, but harmless — a
-    # fresh id never collides).
-    step_id = step_id if step_id is not None else lulid()
-    timestamp = _now_iso()
+    header = await self._required_header(trail_id)
+    if header['harness'] != 'bro':
+      raise ValueError('step append is available only for bro trails')
+    return await self._backend('bro').replace_or_append_body(
+      trail_id,
+      body,
+      append=True,
+      metadata={'kind': kind, 'step_id': step_id, **extras},
+    )
 
-    spilled_key: Optional[str] = None
-    if size_bytes >= SPILLOVER_THRESHOLD_BYTES:
-      spilled_key = _spillover_key(trail_id, step_id)
-      payload = body if isinstance(body, (bytes, str)) else json.dumps(body, ensure_ascii=False)
-      if isinstance(payload, str):
-        payload = payload.encode('utf-8')
-      await asyncio.to_thread(
-        self._s3.put_object,
-        Bucket=self._bucket,
-        Key=spilled_key,
-        Body=payload,
-        ContentType='application/json',
-      )
+  async def replace_artifact(self, trail_id: str, artifact: str, metadata: dict) -> dict:
+    header = await self._required_header(trail_id)
+    backend = self._backend(header['harness'])
+    if header['harness'] != 'claude':
+      raise ValueError('artifact replacement is available only for claude trails')
+    unknown = set(metadata) - {'harness_version', 'usage'}
+    if len(unknown) > 0:
+      raise ValueError(f'immutable or unknown native fields: {sorted(unknown)}')
+    updates = await backend.replace_or_append_body(
+      trail_id, artifact, append=False, metadata=metadata
+    )
+    await self.update_header(trail_id, {'native': updates}, allow_server_derived=True)
+    return updates
 
-    step_item = {
-      'trail_id': trail_id,
-      'step_id': step_id,
-      'ts': timestamp,
-      'kind': kind,
-      **extras,
-    }
-    # the spill pointer lives in its own sparse attribute, never inside `body` —
-    # so a genuine body that happens to equal {'s3': key} can't read as spilled.
-    if spilled_key is not None:
-      step_item['body_s3'] = spilled_key
-    else:
-      step_item['body'] = body
+  async def update_header(
+    self, trail_id: str, changes: dict, *, allow_server_derived: bool = False
+  ) -> dict:
+    header = await self._required_header(trail_id)
+    allowed = {'subject', 'last_alive_at', 'turn_count'}
+    unknown = set(changes) - allowed - {'native'}
+    if len(unknown) > 0:
+      raise ValueError(f'immutable or unknown header fields: {sorted(unknown)}')
+    native_changes = changes.get('native', {})
+    if not isinstance(native_changes, dict):
+      raise ValueError('native must be an object')
+    allowed_native = {
+      'bro': set(),
+      'claude': {'harness_version', 'usage'},
+    }[header['harness']]
+    if allow_server_derived and header['harness'] == 'claude':
+      allowed_native.update({'line_count', 'size_bytes'})
+    unknown_native = set(native_changes) - allowed_native
+    if len(unknown_native) > 0:
+      raise ValueError(f'immutable or unknown native fields: {sorted(unknown_native)}')
 
-    delta_turn = 1 if kind == 'llm_call' else 0
-    delta_tool_call = 1 if kind == 'tool_call' else 0
-    if kind == 'llm_call':
-      delta_tokens_in = int(extras.get('tokens_in', 0))
-      delta_tokens_out = int(extras.get('tokens_out', 0))
-      delta_tokens_reasoning = int(extras.get('tokens_reasoning', 0))
-    else:
-      delta_tokens_in = 0
-      delta_tokens_out = 0
-      delta_tokens_reasoning = 0
-
-    update = {
-      'TableName': self._trails_table,
-      'Key': _ddb_item({'trail_id': trail_id}),
-      'ConditionExpression': 'attribute_exists(trail_id)',
-      'UpdateExpression': (
-        'SET aggregates.step_counts_by_kind.#k = aggregates.step_counts_by_kind.#k + :one, '
-        'aggregates.turn_count = aggregates.turn_count + :d_turn, '
-        'aggregates.tool_call_count = aggregates.tool_call_count + :d_tc, '
-        'aggregates.tokens_in = aggregates.tokens_in + :d_in, '
-        'aggregates.tokens_out = aggregates.tokens_out + :d_out, '
-        'aggregates.tokens_reasoning = aggregates.tokens_reasoning + :d_reason, '
-        'last_alive_at = :alive'
-      ),
-      'ExpressionAttributeNames': {'#k': kind},
-      'ExpressionAttributeValues': {
-        ':one': _ddb(1),
-        ':d_turn': _ddb(delta_turn),
-        ':d_tc': _ddb(delta_tool_call),
-        ':d_in': _ddb(delta_tokens_in),
-        ':d_out': _ddb(delta_tokens_out),
-        ':d_reason': _ddb(delta_tokens_reasoning),
-        ':alive': _ddb(timestamp),
-      },
-    }
-
-    try:
-      await asyncio.to_thread(
-        self._dynamo.transact_write_items,
-        TransactItems=[
-          {
-            'Put': {
-              'TableName': self._steps_table,
-              'Item': _ddb_item(step_item),
-              'ConditionExpression': 'attribute_not_exists(step_id)',
-            }
-          },
-          {'Update': update},
-        ],
-      )
-    except self._dynamo.exceptions.TransactionCanceledException as e:
-      # item 0 is the step Put: a failed attribute_not_exists means this step_id
-      # already landed (a retried POST) — the transaction cancelled atomically,
-      # so the aggregate was not double-incremented. report idempotent success.
-      codes = _cancellation_codes(e)
-      if len(codes) > 0 and codes[0] == 'ConditionalCheckFailed':
-        return {'step_id': step_id, 'ts': timestamp, 'duplicate': True}
-      # item 1 is the trail Update: a failed attribute_exists means no such trail.
-      if _conditional_check_failed(e):
-        raise TrailNotFound(trail_id) from e
-      raise
-    return {'step_id': step_id, 'ts': timestamp}
+    names: dict[str, str] = {}
+    values: dict[str, dict] = {}
+    assignments: list[str] = []
+    for index, (key, value) in enumerate(
+      [(key, value) for key, value in changes.items() if key != 'native']
+    ):
+      names[f'#field{index}'] = key
+      values[f':value{index}'] = _ddb(value)
+      assignments.append(f'#field{index} = :value{index}')
+    start = len(assignments)
+    for offset, (key, value) in enumerate(native_changes.items(), start=start):
+      names[f'#field{offset}'] = key
+      values[f':value{offset}'] = _ddb(value)
+      assignments.append(f'native.#field{offset} = :value{offset}')
+    if len(assignments) == 0:
+      return header
+    await asyncio.to_thread(
+      self._dynamo.update_item,
+      TableName=self._trails_table,
+      Key=_ddb_item({'id': trail_id}),
+      ConditionExpression='attribute_exists(id)',
+      UpdateExpression='SET ' + ', '.join(assignments),
+      ExpressionAttributeNames=names,
+      ExpressionAttributeValues=values,
+    )
+    return await self._required_header(trail_id)
 
   async def end_trail(
     self,
     *,
     trail_id: str,
     reason: str,
-    continuation: Optional[dict],
+    detail: Optional[str],
     step_id: Optional[str] = None,
   ) -> dict:
-    step_id = step_id if step_id is not None else lulid()
+    header = await self._required_header(trail_id)
     timestamp = _now_iso()
-    step_item = {
-      'trail_id': trail_id,
-      'step_id': step_id,
-      'ts': timestamp,
-      'kind': 'end',
-      'body': {'reason': reason},
-    }
-
-    update_expr = (
-      'SET ended_at = :ts, end_reason = :reason, last_alive_at = :ts, '
-      'aggregates.step_counts_by_kind.#k = aggregates.step_counts_by_kind.#k + :one'
-    )
-    expr_values: dict = {
-      ':ts': _ddb(timestamp),
-      ':reason': _ddb(reason),
-      ':one': _ddb(1),
-    }
-    if continuation is not None:
-      update_expr += ', continuation = :cont'
-      expr_values[':cont'] = _ddb(continuation)
-
-    update = {
-      'TableName': self._trails_table,
-      'Key': _ddb_item({'trail_id': trail_id}),
-      'ConditionExpression': 'attribute_exists(trail_id)',
-      'UpdateExpression': update_expr,
-      'ExpressionAttributeNames': {'#k': 'end'},
-      'ExpressionAttributeValues': expr_values,
-    }
-
-    try:
-      await asyncio.to_thread(
-        self._dynamo.transact_write_items,
-        TransactItems=[
-          {
-            'Put': {
-              'TableName': self._steps_table,
-              'Item': _ddb_item(step_item),
-              'ConditionExpression': 'attribute_not_exists(step_id)',
-            }
-          },
-          {'Update': update},
-        ],
+    if header['harness'] == 'bro':
+      result = await self._backend('bro').replace_or_append_body(
+        trail_id,
+        {'reason': reason, **({'detail': detail} if detail is not None else {})},
+        append=True,
+        metadata={'kind': 'end', 'step_id': step_id},
       )
-    except self._dynamo.exceptions.TransactionCanceledException as e:
-      # item 0 is the end-step Put: a retried end POST reuses the same step_id,
-      # so a failed condition means it already landed — idempotent success
-      # (the end count was not double-incremented).
-      codes = _cancellation_codes(e)
-      if len(codes) > 0 and codes[0] == 'ConditionalCheckFailed':
-        return {'ended_at': timestamp, 'duplicate': True}
-      if _conditional_check_failed(e):
-        raise TrailNotFound(trail_id) from e
-      raise
-    return {'ended_at': timestamp}
+      duplicate = result.get('duplicate') is True
+    else:
+      duplicate = False
+    end = {'at': timestamp, 'reason': reason}
+    if detail is not None:
+      end['detail'] = detail
+    await asyncio.to_thread(
+      self._dynamo.update_item,
+      TableName=self._trails_table,
+      Key=_ddb_item({'id': trail_id}),
+      ConditionExpression='attribute_exists(id)',
+      UpdateExpression='SET #end = :end, last_alive_at = :timestamp',
+      ExpressionAttributeNames={'#end': 'end'},
+      ExpressionAttributeValues={':end': _ddb(end), ':timestamp': _ddb(timestamp)},
+    )
+    return {'ended_at': timestamp, **({'duplicate': True} if duplicate else {})}
 
   async def keepalive(self, trail_id: str) -> dict:
     timestamp = _now_iso()
@@ -402,89 +248,52 @@ class Storage:
       await asyncio.to_thread(
         self._dynamo.update_item,
         TableName=self._trails_table,
-        Key=_ddb_item({'trail_id': trail_id}),
-        ConditionExpression='attribute_exists(trail_id)',
-        UpdateExpression='SET last_alive_at = :ts',
-        ExpressionAttributeValues={':ts': _ddb(timestamp)},
+        Key=_ddb_item({'id': trail_id}),
+        ConditionExpression='attribute_exists(id)',
+        UpdateExpression='SET last_alive_at = :timestamp',
+        ExpressionAttributeValues={':timestamp': _ddb(timestamp)},
       )
-    except self._dynamo.exceptions.ConditionalCheckFailedException as e:
-      raise TrailNotFound(trail_id) from e
+    except self._dynamo.exceptions.ConditionalCheckFailedException as exception:
+      raise TrailNotFound(trail_id) from exception
     return {'last_alive_at': timestamp}
 
   async def sweep_lost(self) -> list[str]:
-    """stamp every live trail whose last activity predates `LOST_AFTER_SECONDS`
-    as `end_reason='lost'` / `ended_at=<last activity>`. header-only — the step
-    stream stays the client's own record, no `end` step is fabricated. returns
-    the swept trail ids.
-    """
     now = datetime.now(UTC)
     cutoff = _format_iso(now - timedelta(seconds=LOST_AFTER_SECONDS))
     since = _format_iso(now - timedelta(days=SWEEP_WINDOW_DAYS))
     swept: list[str] = []
-    start_key: Optional[dict] = None
+    cursor: Optional[str] = None
     while True:
-      kwargs = _range_query(
-        table=self._trails_table,
-        index='all-index',
-        pk_name=GSI_PK_ATTRIBUTE,
-        pk_value=GSI_PK_VALUE,
-        sk_name='started_at',
-        sk_low=since,
-        sk_high=None,
+      page = await self.list_trails(
+        harness=None,
+        bro=None,
+        forked_from=None,
+        since=since,
+        until=None,
+        cursor=cursor,
         limit=100,
-        cursor=None,
+        project=False,
       )
-      if start_key is not None:
-        kwargs['ExclusiveStartKey'] = start_key
-      response = await asyncio.to_thread(self._dynamo.query, **kwargs)
-      for raw in response.get('Items', []):
-        item = _from_ddb_item(raw)
-        if item is None or item.get('ended_at') is not None:
+      for item in page['trails']:
+        if item.get('end') is not None or item['last_alive_at'] >= cutoff:
           continue
-        trail_id: str = item['trail_id']
-        last_alive = item.get('last_alive_at')
-        if last_alive is None:
-          # pre-keepalive header: the newest step is the only activity record.
-          last_alive = await self._last_step_ts(trail_id)
-        if last_alive is None:
-          last_alive = item['started_at']
-        if last_alive >= cutoff:
-          continue
-        if await self._stamp_lost(trail_id, ended_at=last_alive):
-          swept.append(trail_id)
-      start_key = response.get('LastEvaluatedKey')
-      if start_key is None:
+        if await self._stamp_lost(item['id'], item['last_alive_at']):
+          swept.append(item['id'])
+      cursor = page['next']
+      if cursor is None:
         return swept
 
-  async def _last_step_ts(self, trail_id: str) -> Optional[str]:
-    response = await asyncio.to_thread(
-      self._dynamo.query,
-      TableName=self._steps_table,
-      KeyConditionExpression='trail_id = :tid',
-      ExpressionAttributeValues={':tid': _ddb(trail_id)},
-      ScanIndexForward=False,
-      Limit=1,
-    )
-    items = response.get('Items', [])
-    if len(items) == 0:
-      return None
-    item = _from_ddb_item(items[0])
-    assert item is not None
-    return item['ts']
-
-  async def _stamp_lost(self, trail_id: str, *, ended_at: str) -> bool:
-    # conditioned on the header still being live, so a race with a real
-    # end_trail resolves in the client's favor.
+  async def _stamp_lost(self, trail_id: str, ended_at: str) -> bool:
     try:
       await asyncio.to_thread(
         self._dynamo.update_item,
         TableName=self._trails_table,
-        Key=_ddb_item({'trail_id': trail_id}),
-        ConditionExpression='attribute_type(ended_at, :null_type)',
-        UpdateExpression='SET ended_at = :ts, end_reason = :reason',
+        Key=_ddb_item({'id': trail_id}),
+        ConditionExpression='attribute_type(#end, :null_type)',
+        UpdateExpression='SET #end = :end',
+        ExpressionAttributeNames={'#end': 'end'},
         ExpressionAttributeValues={
-          ':ts': _ddb(ended_at),
-          ':reason': _ddb('lost'),
+          ':end': _ddb({'at': ended_at, 'reason': 'lost'}),
           ':null_type': _ddb('NULL'),
         },
       )
@@ -496,179 +305,133 @@ class Storage:
     response = await asyncio.to_thread(
       self._dynamo.get_item,
       TableName=self._trails_table,
-      Key=_ddb_item({'trail_id': trail_id}),
+      Key=_ddb_item({'id': trail_id}),
     )
-    return _from_ddb_item(response.get('Item'))
+    item = _from_ddb_item(response.get('Item'))
+    return self._project_header(item) if item is not None else None
 
-  async def query_steps(
+  async def _required_header(self, trail_id: str) -> dict:
+    response = await asyncio.to_thread(
+      self._dynamo.get_item,
+      TableName=self._trails_table,
+      Key=_ddb_item({'id': trail_id}),
+      ConsistentRead=True,
+    )
+    item = _from_ddb_item(response.get('Item'))
+    if item is None:
+      raise TrailNotFound(trail_id)
+    return item
+
+  def _project_header(self, item: dict) -> dict:
+    derived = self._backend(item['harness']).derive_aggregates(item.get('native', {}))
+    return {**item, **derived}
+
+  async def query_steps(self, trail_id: str, *, after: Optional[str], limit: int) -> dict:
+    header = await self._required_header(trail_id)
+    return await self._backend(header['harness']).iterate_native_records(
+      trail_id, after=after, limit=limit
+    )
+
+  async def query_messages(
     self,
     trail_id: str,
     *,
     after: Optional[str],
     limit: int,
+    types: Optional[set[str]],
   ) -> dict:
-    kwargs: dict = {
-      'TableName': self._steps_table,
-      'KeyConditionExpression': 'trail_id = :tid',
-      'ExpressionAttributeValues': {':tid': _ddb(trail_id)},
-      'Limit': limit,
-    }
-    if after is not None:
-      kwargs['ExclusiveStartKey'] = _ddb_item({'trail_id': trail_id, 'step_id': after})
-
-    response = await asyncio.to_thread(self._dynamo.query, **kwargs)
-    items = [
-      item if (item := _from_ddb_item(it)) is not None else {} for it in response.get('Items', [])
-    ]
-    resolved = await asyncio.gather(*(self._resolve_body(item) for item in items))
-    next_cursor = None
-    last = response.get('LastEvaluatedKey')
-    if last is not None:
-      next_cursor = _from_ddb(last['step_id'])
-    return {'steps': resolved, 'next': next_cursor}
+    header = await self._required_header(trail_id)
+    backend = self._backend(header['harness'])
+    page = await backend.iterate_native_records(trail_id, after=after, limit=limit)
+    messages = backend.project_messages(page['steps'])
+    if types is not None:
+      messages = [message for message in messages if message['type'] in types]
+    return {'messages': messages, 'next': page['next']}
 
   async def list_trails(
     self,
     *,
+    harness: Optional[str],
     bro: Optional[str],
-    parent: Optional[str],
+    forked_from: Optional[str],
     since: Optional[str],
     until: Optional[str],
     cursor: Optional[str],
     limit: int,
+    project: bool = True,
   ) -> dict:
-    if bro is not None:
-      response = await asyncio.to_thread(
-        self._dynamo.query,
-        **_range_query(
-          table=self._trails_table,
-          index='bro-started_at-index',
-          pk_name='bro',
-          pk_value=bro,
-          sk_name='started_at',
-          sk_low=since,
-          sk_high=until,
-          limit=limit,
-          cursor=cursor,
-        ),
+    selected = [value is not None for value in (harness, bro, forked_from)]
+    if sum(selected) > 1:
+      raise ValueError('only one of harness/bro/forked_from may be set')
+    if harness is not None:
+      index, partition_name, partition_value = (
+        'harness-started_at-index',
+        'harness',
+        harness,
       )
-    elif parent is not None:
-      response = await asyncio.to_thread(
-        self._dynamo.query,
-        **_range_query(
-          table=self._trails_table,
-          index='parent-trail-id-index',
-          pk_name='parent_trail_id',
-          pk_value=parent,
-          sk_name='started_at',
-          sk_low=since,
-          sk_high=until,
-          limit=limit,
-          cursor=cursor,
-        ),
+    elif bro is not None:
+      index, partition_name, partition_value = 'bro-started_at-index', 'bro', bro
+    elif forked_from is not None:
+      index, partition_name, partition_value = (
+        'forked-from-id-index',
+        'forked_from_id',
+        forked_from,
       )
     else:
-      response = await asyncio.to_thread(
-        self._dynamo.query,
-        **_range_query(
-          table=self._trails_table,
-          index='all-index',
-          pk_name=GSI_PK_ATTRIBUTE,
-          pk_value=GSI_PK_VALUE,
-          sk_name='started_at',
-          sk_low=since,
-          sk_high=until,
-          limit=limit,
-          cursor=cursor,
-        ),
-      )
-
-    items = [
-      item if (item := _from_ddb_item(it)) is not None else {} for it in response.get('Items', [])
-    ]
-    next_cursor = None
+      index, partition_name, partition_value = 'all-index', GSI_PK_ATTRIBUTE, GSI_PK_VALUE
+    response = await asyncio.to_thread(
+      self._dynamo.query,
+      **_range_query(
+        table=self._trails_table,
+        index=index,
+        partition_name=partition_name,
+        partition_value=partition_value,
+        since=since,
+        until=until,
+        limit=limit,
+        cursor=cursor,
+      ),
+    )
+    items = [item for raw in response.get('Items', []) if (item := _from_ddb_item(raw)) is not None]
+    if project:
+      items = [self._project_header(item) for item in items]
     last = response.get('LastEvaluatedKey')
-    if last is not None:
-      # every path is a GSI query, so the LEK is a triple (base PK trail_id +
-      # index PK bro/parent_trail_id/gsi_pk + index SK started_at). all attrs are
-      # strings, so the dump is JSON-safe and decodes uniformly via
-      # _ddb_item(json.loads(cursor)) in _range_query.
-      next_cursor = json.dumps(_from_ddb_item(last))
+    next_cursor = json.dumps(_from_ddb_item(last)) if last is not None else None
     return {'trails': items, 'next': next_cursor}
-
-  async def _resolve_body(self, item: dict) -> dict:
-    # body_s3 is a server-internal helper attribute marking a spilled body; pop it so
-    # it never leaks into the step row returned to clients.
-    key = item.pop('body_s3', None)
-    if key is None:
-      return item
-    head = await asyncio.to_thread(self._s3.head_object, Bucket=self._bucket, Key=key)
-    size = int(head.get('ContentLength', 0))
-    if size <= INLINE_RESPONSE_THRESHOLD_BYTES:
-      s3_object = await asyncio.to_thread(self._s3.get_object, Bucket=self._bucket, Key=key)
-      raw = s3_object['Body'].read()
-      try:
-        item['body'] = json.loads(raw)
-      except json.JSONDecodeError:
-        item['body'] = raw.decode('utf-8')
-    else:
-      url = await asyncio.to_thread(
-        self._s3.generate_presigned_url,
-        ClientMethod='get_object',
-        Params={'Bucket': self._bucket, 'Key': key},
-        ExpiresIn=PRESIGNED_URL_TTL_SECONDS,
-      )
-      item['body'] = {'s3': key, 'url': url, 'size': size}
-    return item
 
 
 def _range_query(
   *,
   table: str,
   index: str,
-  pk_name: str,
-  pk_value: str,
-  sk_name: str,
-  sk_low: Optional[str],
-  sk_high: Optional[str],
+  partition_name: str,
+  partition_value: str,
+  since: Optional[str],
+  until: Optional[str],
   limit: int,
   cursor: Optional[str],
 ) -> dict:
-  values: dict = {':pk': _ddb(pk_value)}
-  if sk_low is not None and sk_high is not None:
-    cond = f'{pk_name} = :pk AND {sk_name} BETWEEN :lo AND :hi'
-    values[':lo'] = _ddb(sk_low)
-    values[':hi'] = _ddb(sk_high)
-  elif sk_low is not None:
-    cond = f'{pk_name} = :pk AND {sk_name} >= :lo'
-    values[':lo'] = _ddb(sk_low)
-  elif sk_high is not None:
-    cond = f'{pk_name} = :pk AND {sk_name} <= :hi'
-    values[':hi'] = _ddb(sk_high)
+  values: dict = {':partition': _ddb(partition_value)}
+  if since is not None and until is not None:
+    condition = f'{partition_name} = :partition AND started_at BETWEEN :since AND :until'
+    values[':since'] = _ddb(since)
+    values[':until'] = _ddb(until)
+  elif since is not None:
+    condition = f'{partition_name} = :partition AND started_at >= :since'
+    values[':since'] = _ddb(since)
+  elif until is not None:
+    condition = f'{partition_name} = :partition AND started_at <= :until'
+    values[':until'] = _ddb(until)
   else:
-    cond = f'{pk_name} = :pk'
+    condition = f'{partition_name} = :partition'
   kwargs: dict = {
     'TableName': table,
     'IndexName': index,
-    'KeyConditionExpression': cond,
+    'KeyConditionExpression': condition,
     'ExpressionAttributeValues': values,
     'ScanIndexForward': False,
     'Limit': limit,
   }
   if cursor is not None:
-    # cursor on a GSI must include the base table's PK plus the index's
-    # PK+SK; we encode/decode that triple as a single JSON string.
     kwargs['ExclusiveStartKey'] = _ddb_item(json.loads(cursor))
   return kwargs
-
-
-def _conditional_check_failed(exception) -> bool:
-  reasons = getattr(exception, 'response', {}).get('CancellationReasons', [])
-  return any(r.get('Code') == 'ConditionalCheckFailed' for r in reasons)
-
-
-def _cancellation_codes(exception) -> list[str]:
-  # per-item failure codes, positionally aligned with the TransactItems list —
-  # lets a caller tell which leg of the transaction tripped its condition.
-  reasons = getattr(exception, 'response', {}).get('CancellationReasons', [])
-  return [r.get('Code', 'None') for r in reasons]

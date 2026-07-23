@@ -1,653 +1,439 @@
-"""storage-layer list/pagination tests.
-
-`server_test.FakeStorage` fakes cursors at a high level — a bare `trail_id` for
-every path — so it can neither reproduce the GSI cursor round-trip nor the
-ordering the real index provides. These tests run the real `Storage` against a
-fake DynamoDB that emits correctly-shaped `LastEvaluatedKey`s: every list path is
-a GSI query (`bro` / `parent` / the constant-PK `all` index), and the LEK is the
-triple `{trail_id, <index PK>, started_at}` the cursor round-trip must survive.
-"""
-
 import io
-import json
-from datetime import UTC, datetime, timedelta
-from typing import Optional
+from typing import Any
 
 import pytest
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 
-from trails.server.storage import (
-  GSI_PK_ATTRIBUTE,
-  GSI_PK_VALUE,
-  LOST_AFTER_SECONDS,
-  SPILLOVER_THRESHOLD_BYTES,
-  Storage,
-  TrailNotFound,
+from trails.server import storage
+from trails.server.backends import (
+  BroBackend,
+  ClaudeBackend,
+  add_numeric_maps,
+  claude_artifact_key,
+  claude_context_key,
+  normalise_usage,
 )
 
 _serializer = TypeSerializer()
 _deserializer = TypeDeserializer()
 
-# IndexName -> (index PK attribute, index SK attribute); mirrors the GSIs storage queries.
-_INDEXES = {
-  'bro-started_at-index': ('bro', 'started_at'),
-  'parent-trail-id-index': ('parent_trail_id', 'started_at'),
-  'all-index': (GSI_PK_ATTRIBUTE, 'started_at'),
-}
+
+def _serialize(item: dict) -> dict:
+  return {key: _serializer.serialize(value) for key, value in item.items()}
 
 
-def _ser(item: dict) -> dict:
-  return {k: _serializer.serialize(v) for k, v in item.items()}
+def _deserialize(item: dict) -> dict:
+  return {key: _deserializer.deserialize(value) for key, value in item.items()}
 
 
-def _des(item: dict) -> dict:
-  return {k: _deserializer.deserialize(v) for k, v in item.items()}
-
-
-class FakeDynamo:
-  """minimal DynamoDB stand-in faithful to the contract `Storage` depends on:
-  paged `query` with `ExclusiveStartKey` and a `LastEvaluatedKey` whose shape
-  matches the real service (base PK + index PK/SK for a GSI query). Items are
-  stored deserialized and (de)serialized at the boundary.
-  """
-
-  def __init__(self, items: list[dict]):
-    self._items = list(items)
-
-  def query(self, **kwargs) -> dict:
-    pk_attribute, sk_attribute = _INDEXES[kwargs['IndexName']]
-    values = {
-      k: _deserializer.deserialize(v) for k, v in kwargs['ExpressionAttributeValues'].items()
-    }
-    matched = [it for it in self._items if it.get(pk_attribute) == values[':pk']]
-    if ':lo' in values:
-      matched = [it for it in matched if it[sk_attribute] >= values[':lo']]
-    if ':hi' in values:
-      matched = [it for it in matched if it[sk_attribute] <= values[':hi']]
-    # storage passes ScanIndexForward=False -> descending on the SK.
-    forward = kwargs.get('ScanIndexForward', True)
-    ordered = sorted(matched, key=lambda it: it[sk_attribute], reverse=not forward)
-    return self._page(ordered, kwargs, key_attributes=['trail_id', pk_attribute, sk_attribute])
-
-  def _page(self, ordered: list[dict], kwargs: dict, *, key_attributes: list[str]) -> dict:
-    start = 0
-    start_key = kwargs.get('ExclusiveStartKey')
-    if start_key is not None:
-      last_id = _des(start_key)['trail_id']
-      start = next(i for i, it in enumerate(ordered) if it['trail_id'] == last_id) + 1
-    limit = kwargs['Limit']
-    page = ordered[start : start + limit]
-    response: dict = {'Items': [_ser(it) for it in page]}
-    if start + limit < len(ordered):
-      last = page[-1]
-      response['LastEvaluatedKey'] = _ser(
-        {attribute: last[attribute] for attribute in key_attributes}
-      )
-    return response
-
-
-def _trail(index: int, *, bro: str, parent: Optional[str], indexed: bool = True) -> dict:
-  item = {
-    'trail_id': f'trail-{index:03d}',
-    'bro': bro,
-    'started_at': f'2026-06-07T00:00:{index:02d}.000000Z',
-  }
-  if indexed:
-    item[GSI_PK_ATTRIBUTE] = GSI_PK_VALUE
-  if parent is not None:
-    item['parent_trail_id'] = parent
-  return item
-
-
-# 5 'dev' trails (3 of them forks of P1) + 1 unrelated trail under a different bro.
-_TRAILS = [
-  _trail(0, bro='dev', parent=None),
-  _trail(1, bro='dev', parent='P1'),
-  _trail(2, bro='dev', parent=None),
-  _trail(3, bro='dev', parent='P1'),
-  _trail(4, bro='dev', parent='P1'),
-  _trail(5, bro='other', parent=None),
-]
-
-
-def _store(items: Optional[list[dict]] = None) -> Storage:
-  return Storage(
-    dynamo=FakeDynamo(_TRAILS if items is None else items),
-    s3=None,
-    trails_table='trails',
-    steps_table='trail_steps',
-    bucket='bucket',
-  )
-
-
-async def _collect(
-  store: Storage, *, bro=None, parent=None, since=None, until=None, limit: int
-) -> list[dict]:
-  """paginate to exhaustion, returning the gathered trails — mirrors
-  `TrailsClient.iter_trails`.
-  """
-  trails: list[dict] = []
-  cursor: Optional[str] = None
-  while True:
-    page = await store.list_trails(
-      bro=bro, parent=parent, since=since, until=until, cursor=cursor, limit=limit
-    )
-    trails.extend(page['trails'])
-    cursor = page['next']
-    if cursor is None:
-      break
-  return trails
-
-
-def _ids(trails: list[dict]) -> list[str]:
-  return [t['trail_id'] for t in trails]
-
-
-@pytest.mark.asyncio
-async def test_all_index_newest_first():
-  store = _store()
-  single = await _collect(store, limit=100)
-  # global list: every bro, newest started_at first, nothing dropped.
-  assert _ids(single)[0] == 'trail-005'  # the most recent, regardless of bro
-  started = [t['started_at'] for t in single]
-  assert started == sorted(started, reverse=True)
-  assert len(single) == len(_TRAILS)
-
-
-@pytest.mark.asyncio
-async def test_all_index_pagination_round_trips():
-  store = _store()
-  single = await _collect(store, limit=100)
-  paged = await _collect(store, limit=2)
-  # paging must neither drop, duplicate, nor reorder relative to one big page.
-  assert _ids(paged) == _ids(single)
-
-
-@pytest.mark.asyncio
-async def test_all_index_since_until_between():
-  store = _store()
-  window = await _collect(
-    store,
-    since='2026-06-07T00:00:01.000000Z',
-    until='2026-06-07T00:00:03.000000Z',
-    limit=2,
-  )
-  # BETWEEN bounds are inclusive; result stays newest-first within the window.
-  assert _ids(window) == ['trail-003', 'trail-002', 'trail-001']
-
-
-@pytest.mark.asyncio
-async def test_all_index_skips_rows_without_gsi_pk():
-  # rows created before the gsi_pk stamp (and not yet backfilled) lack the
-  # constant attribute, so the sparse all-index omits them.
-  store = _store(
-    [
-      _trail(0, bro='dev', parent=None, indexed=False),
-      _trail(1, bro='dev', parent=None),
-    ]
-  )
-  assert _ids(await _collect(store, limit=100)) == ['trail-001']
-
-
-@pytest.mark.asyncio
-async def test_bro_pagination_round_trips():
-  store = _store()
-  single = await _collect(store, bro='dev', limit=100)
-  paged = await _collect(store, bro='dev', limit=2)
-  assert _ids(paged) == _ids(single)
-  # newest first, only the 'dev' trails.
-  assert _ids(single) == ['trail-004', 'trail-003', 'trail-002', 'trail-001', 'trail-000']
-
-
-@pytest.mark.asyncio
-async def test_parent_pagination_round_trips():
-  store = _store()
-  single = await _collect(store, parent='P1', limit=100)
-  paged = await _collect(store, parent='P1', limit=2)
-  assert _ids(paged) == _ids(single)
-  assert _ids(single) == ['trail-004', 'trail-003', 'trail-001']
-
-
-@pytest.mark.asyncio
-async def test_gsi_cursor_is_a_json_object():
-  # the regression: the GSI decode path does json.loads(cursor), so the encode
-  # side must emit the full LEK triple as a JSON object — not a bare trail id.
-  store = _store()
-  page = await store.list_trails(
-    bro='dev', parent=None, since=None, until=None, cursor=None, limit=2
-  )
-  decoded = json.loads(page['next'])
-  assert set(decoded) == {'trail_id', 'bro', 'started_at'}
-
-
-@pytest.mark.asyncio
-async def test_all_index_cursor_is_a_json_object():
-  store = _store()
-  page = await store.list_trails(
-    bro=None, parent=None, since=None, until=None, cursor=None, limit=2
-  )
-  decoded = json.loads(page['next'])
-  # the all-index LEK is the same triple shape, keyed on the constant gsi_pk.
-  assert set(decoded) == {'trail_id', GSI_PK_ATTRIBUTE, 'started_at'}
-  assert decoded['trail_id'] == 'trail-004'
-
-
-# spill round-trip: the spill pointer lives in body_s3, so a body that equals the
-# old {'s3': key} sentinel must survive as literal content (the regression), and a
-# genuinely spilled body must resolve back through body_s3.
-
-
-class _FakeS3:
+class FakeS3:
   def __init__(self):
     self.objects: dict[str, bytes] = {}
 
   def put_object(self, *, Key, Body, **_):
-    self.objects[Key] = Body
-
-  def head_object(self, *, Key, **_):
-    return {'ContentLength': len(self.objects[Key])}
+    self.objects[Key] = Body if isinstance(Body, bytes) else Body.encode()
 
   def get_object(self, *, Key, **_):
     return {'Body': io.BytesIO(self.objects[Key])}
 
+  def head_object(self, *, Key, **_):
+    return {'ContentLength': len(self.objects[Key])}
 
-class _FakeStepsDynamo:
-  """faithful enough to exercise the per-step transaction's two conditions: the
-  step Put's `attribute_not_exists(step_id)` (idempotency) and the trail Update's
-  `attribute_exists(trail_id)` (trail-not-found). On a failed condition it raises
-  `TransactionCanceledException` with positional `CancellationReasons` matching
-  the real service — item 0 the step Put, item 1 the trail Update.
-
-  `existing_trails=None` means "every trail exists" (permissive — what the spill
-  round-trip tests want); pass an explicit set to make the Update condition bite.
-  """
-
-  class exceptions:
-    class TransactionCanceledException(Exception):
-      pass
-
-  def __init__(self, existing_trails: Optional[set[str]] = None):
-    self._steps: list[dict] = []
-    self._existing_trails = existing_trails
-    self.transactions: list[list[dict]] = []
-
-  def transact_write_items(self, *, TransactItems):
-    self.transactions.append(TransactItems)
-    reasons: list[dict] = []
-    staged: list[dict] = []
-    failed = False
-    for ti in TransactItems:
-      put = ti.get('Put')
-      update = ti.get('Update')
-      if put is not None and put['TableName'] == 'trail_steps':
-        item = _des(put['Item'])
-        duplicate = put.get('ConditionExpression') == 'attribute_not_exists(step_id)' and any(
-          s['trail_id'] == item['trail_id'] and s['step_id'] == item['step_id'] for s in self._steps
-        )
-        if duplicate:
-          reasons.append({'Code': 'ConditionalCheckFailed'})
-          failed = True
-        else:
-          reasons.append({'Code': 'None'})
-          staged.append(item)
-      elif update is not None:
-        tid = _des(update['Key'])['trail_id']
-        missing = (
-          update.get('ConditionExpression') == 'attribute_exists(trail_id)'
-          and self._existing_trails is not None
-          and tid not in self._existing_trails
-        )
-        if missing:
-          reasons.append({'Code': 'ConditionalCheckFailed'})
-          failed = True
-        else:
-          reasons.append({'Code': 'None'})
-      else:
-        reasons.append({'Code': 'None'})
-    if failed:
-      exception = self.exceptions.TransactionCanceledException('cancelled')
-      exception.response = {'CancellationReasons': reasons}  # type: ignore[attr-defined]
-      raise exception
-    self._steps.extend(staged)
-
-  def query(self, **kwargs):
-    tid = _deserializer.deserialize(kwargs['ExpressionAttributeValues'][':tid'])
-    items = [it for it in self._steps if it['trail_id'] == tid]
-    return {'Items': [_ser(it) for it in items]}
+  def generate_presigned_url(self, **_):
+    return 'https://example.test/spill'
 
 
-class _CreateDynamo:
-  def __init__(self):
-    self.transaction_items: list[dict] = []
-
-  def transact_write_items(self, *, TransactItems):
-    self.transaction_items = TransactItems
-
-
-def _spill_store(
-  existing_trails: Optional[set[str]] = None,
-) -> tuple[Storage, _FakeStepsDynamo, _FakeS3]:
-  dynamo = _FakeStepsDynamo(existing_trails)
-  s3 = _FakeS3()
-  store = Storage(
-    dynamo=dynamo, s3=s3, trails_table='trails', steps_table='trail_steps', bucket='bucket'
-  )
-  return store, dynamo, s3
-
-
-@pytest.mark.asyncio
-async def test_create_trail_stores_summoner_only_when_present():
-  dynamo = _CreateDynamo()
-  store = Storage(
-    dynamo=dynamo, s3=None, trails_table='trails', steps_table='trail_steps', bucket='bucket'
-  )
-  await store.create_trail(
-    bro='dev',
-    bro_version=1,
-    llm_spec={},
-    system_prompt='prompt',
-    parent=None,
-    interactive=False,
-    entry_point='cli:bro_run',
-    summoner={'session': 'c:root'},
-  )
-  item = _des(dynamo.transaction_items[0]['Put']['Item'])
-  assert item['summoner'] == {'session': 'c:root'}
-
-  await store.create_trail(
-    bro='dev',
-    bro_version=1,
-    llm_spec={},
-    system_prompt='prompt',
-    parent=None,
-    interactive=False,
-    entry_point='cli:bro_run',
-    summoner=None,
-  )
-  item = _des(dynamo.transaction_items[0]['Put']['Item'])
-  assert 'summoner' not in item
-
-
-@pytest.mark.asyncio
-async def test_literal_s3_body_round_trips_as_content():
-  store, dynamo, s3 = _spill_store()
-  await store.put_step(trail_id='T1', kind='tool_result', body={'s3': 'x'}, extras={})
-  # small body stays inline: no spill, no S3 object, body untouched.
-  assert len(s3.objects) == 0
-  assert 'body_s3' not in dynamo._steps[0]
-  page = await store.query_steps('T1', after=None, limit=100)
-  step = page['steps'][0]
-  assert step['body'] == {'s3': 'x'}
-  assert 'body_s3' not in step
-
-
-@pytest.mark.asyncio
-async def test_spilled_body_resolves_via_body_s3():
-  store, dynamo, s3 = _spill_store()
-  big = {'big': 'x' * (SPILLOVER_THRESHOLD_BYTES + 1)}
-  await store.put_step(trail_id='T1', kind='llm_call', body=big, extras={})
-  # spilled: pointer is in body_s3, real content omitted from the row.
-  stored = dynamo._steps[0]
-  assert 'body' not in stored
-  assert stored['body_s3'] in s3.objects
-  page = await store.query_steps('T1', after=None, limit=100)
-  step = page['steps'][0]
-  # under the 1MB inline cap, so it comes back as content, and the helper attribute
-  # never leaks into the row.
-  assert step['body'] == big
-  assert 'body_s3' not in step
-
-
-# idempotency: a retried POST reuses the client-minted step_id, so the conditional
-# step Put cancels the whole transaction (step + aggregate increment) atomically.
-
-
-@pytest.mark.asyncio
-async def test_retried_step_id_is_idempotent():
-  store, dynamo, _ = _spill_store()
-  first = await store.put_step(trail_id='T1', kind='llm_call', body='x', extras={}, step_id='S1')
-  second = await store.put_step(trail_id='T1', kind='llm_call', body='x', extras={}, step_id='S1')
-  # the retry writes no second row (so the aggregate increment never re-ran) and
-  # reports success rather than raising.
-  assert len([s for s in dynamo._steps if s['step_id'] == 'S1']) == 1
-  assert first['step_id'] == 'S1'
-  assert second.get('duplicate') is True
-
-
-@pytest.mark.asyncio
-async def test_distinct_step_ids_both_written():
-  store, dynamo, _ = _spill_store()
-  await store.put_step(trail_id='T1', kind='reasoning', body='a', extras={}, step_id='S1')
-  await store.put_step(trail_id='T1', kind='reasoning', body='b', extras={}, step_id='S2')
-  assert {s['step_id'] for s in dynamo._steps} == {'S1', 'S2'}
-
-
-@pytest.mark.asyncio
-async def test_put_step_on_missing_trail_raises_trail_not_found():
-  # empty existing-trails set -> the trail Update's attribute_exists condition
-  # fails (item 1), which must surface as TrailNotFound, not a duplicate.
-  store, _, _ = _spill_store(existing_trails=set())
-  with pytest.raises(TrailNotFound):
-    await store.put_step(trail_id='ghost', kind='reasoning', body='x', extras={}, step_id='S1')
-
-
-@pytest.mark.asyncio
-async def test_server_minted_step_id_when_client_omits():
-  store, dynamo, _ = _spill_store()
-  result = await store.put_step(trail_id='T1', kind='reasoning', body='x', extras={})
-  # older clients send no step_id; the server mints one and the row still lands.
-  assert len(result['step_id']) > 0
-  assert dynamo._steps[0]['step_id'] == result['step_id']
-
-
-@pytest.mark.asyncio
-async def test_retried_end_is_idempotent():
-  store, dynamo, _ = _spill_store()
-  await store.end_trail(trail_id='T1', reason='terminal', continuation=None, step_id='E1')
-  second = await store.end_trail(trail_id='T1', reason='terminal', continuation=None, step_id='E1')
-  assert len([s for s in dynamo._steps if s['step_id'] == 'E1']) == 1
-  assert second.get('duplicate') is True
-
-
-# liveness: create/put_step/end_trail keep last_alive_at fresh, keepalive
-# refreshes it on demand, and the sweep stamps stale live headers as lost.
-
-
-class _SweepDynamo:
-  """fake for the keepalive + sweep paths: the all-index query (single page),
-  the newest-step lookup, and the two conditional `update_item` shapes storage
-  issues (keepalive refresh, lost stamp)."""
-
+class FakeDynamo:
   class exceptions:
     class ConditionalCheckFailedException(Exception):
       pass
 
-  def __init__(self, trails: list[dict], steps: Optional[list[dict]] = None):
-    self.trails = {t['trail_id']: dict(t) for t in trails}
-    self.steps = list(steps) if steps is not None else []
+    class TransactionCanceledException(Exception):
+      pass
+
+  def __init__(self):
+    self.headers: dict[str, dict] = {}
+    self.steps: dict[tuple[str, str], dict] = {}
+
+  def put_item(self, *, TableName, Item, ConditionExpression=None):
+    item = _deserialize(Item)
+    if TableName == 'headers':
+      if ConditionExpression is not None and item['id'] in self.headers:
+        raise self.exceptions.ConditionalCheckFailedException()
+      self.headers[item['id']] = item
+    else:
+      self.steps[(item['trail_id'], item['step_id'])] = item
+
+  def get_item(self, *, TableName, Key, **_):
+    key = _deserialize(Key)
+    item = self.headers.get(key['id']) if TableName == 'headers' else None
+    return {'Item': _serialize(item)} if item is not None else {}
+
+  def transact_write_items(self, *, TransactItems):
+    first_put = TransactItems[0].get('Put')
+    if first_put is not None and first_put['TableName'] == 'headers':
+      header = _deserialize(first_put['Item'])
+      if header['id'] in self.headers:
+        self._cancel(['ConditionalCheckFailed', 'None'])
+      self.headers[header['id']] = header
+      for operation in TransactItems[1:]:
+        step = _deserialize(operation['Put']['Item'])
+        self.steps[(step['trail_id'], step['step_id'])] = step
+      return
+    put = TransactItems[0]['Put']
+    update = TransactItems[1]['Update']
+    step = _deserialize(put['Item'])
+    step_key = (step['trail_id'], step['step_id'])
+    header_id = _deserialize(update['Key'])['id']
+    if step_key in self.steps:
+      self._cancel(['ConditionalCheckFailed', 'None'])
+    header = self.headers.get(header_id)
+    if header is None:
+      self._cancel(['None', 'ConditionalCheckFailed'])
+    assert header is not None
+    names = update['ExpressionAttributeNames']
+    values = {
+      key: _deserializer.deserialize(value)
+      for key, value in update['ExpressionAttributeValues'].items()
+    }
+    kind = names['#kind']
+    header['native']['step_counts_by_kind'][kind] += values[':one']
+    header['last_alive_at'] = values[':alive']
+    if 'turn_count = turn_count + :one' in update['UpdateExpression']:
+      header['turn_count'] += values[':one']
+    model = names.get('#model')
+    if model is not None:
+      header['native']['usage'][model] = values[':usage']
+    self.steps[step_key] = step
+
+  def _cancel(self, codes: list[str]):
+    exception = self.exceptions.TransactionCanceledException('cancelled')
+    exception.response = {'CancellationReasons': [{'Code': code} for code in codes]}  # type: ignore[attr-defined]
+    raise exception
+
+  def update_item(self, *, TableName, Key, UpdateExpression, ExpressionAttributeValues, **kwargs):
+    del TableName
+    trail_id = _deserialize(Key)['id']
+    header = self.headers.get(trail_id)
+    if header is None:
+      raise self.exceptions.ConditionalCheckFailedException()
+    values = {
+      key: _deserializer.deserialize(value) for key, value in ExpressionAttributeValues.items()
+    }
+    names = kwargs.get('ExpressionAttributeNames', {})
+    if UpdateExpression == 'SET last_alive_at = :timestamp':
+      header['last_alive_at'] = values[':timestamp']
+    elif UpdateExpression == 'SET #end = :end, last_alive_at = :timestamp':
+      header['end'] = values[':end']
+      header['last_alive_at'] = values[':timestamp']
+    elif UpdateExpression == 'SET #end = :end':
+      if header.get('end') is not None:
+        raise self.exceptions.ConditionalCheckFailedException()
+      header['end'] = values[':end']
+    else:
+      assignments = UpdateExpression.removeprefix('SET ').split(', ')
+      for assignment in assignments:
+        target, value_name = assignment.split(' = ')
+        field = names[target.removeprefix('native.').strip()]
+        if target.startswith('native.'):
+          header['native'][field] = values[value_name]
+        else:
+          header[field] = values[value_name]
+    return {}
 
   def query(self, **kwargs):
     values = {
-      k: _deserializer.deserialize(v) for k, v in kwargs['ExpressionAttributeValues'].items()
+      key: _deserializer.deserialize(value)
+      for key, value in kwargs['ExpressionAttributeValues'].items()
     }
-    if kwargs.get('IndexName') == 'all-index':
-      matched = [
-        t
-        for t in self.trails.values()
-        if t.get(GSI_PK_ATTRIBUTE) == values[':pk']
-        and (':lo' not in values or t['started_at'] >= values[':lo'])
-      ]
-      ordered = sorted(matched, key=lambda t: t['started_at'], reverse=True)
-      return {'Items': [_ser(t) for t in ordered]}
-    matched = [s for s in self.steps if s['trail_id'] == values[':tid']]
-    ordered = sorted(matched, key=lambda s: s['step_id'], reverse=True)
-    return {'Items': [_ser(s) for s in ordered[: kwargs['Limit']]]}
+    if 'IndexName' not in kwargs:
+      trail_id = values[':trail_id']
+      ordered = sorted(
+        [item for (item_trail_id, _), item in self.steps.items() if item_trail_id == trail_id],
+        key=lambda item: item['step_id'],
+      )
+      start_key = kwargs.get('ExclusiveStartKey')
+      if start_key is not None:
+        after = _deserialize(start_key)['step_id']
+        ordered = [item for item in ordered if item['step_id'] > after]
+      limit = kwargs['Limit']
+      page = ordered[:limit]
+      response: dict[str, Any] = {'Items': [_serialize(item) for item in page]}
+      if len(ordered) > limit:
+        response['LastEvaluatedKey'] = _serialize(
+          {'trail_id': trail_id, 'step_id': page[-1]['step_id']}
+        )
+      return response
+    index = kwargs['IndexName']
+    partition_name = {
+      'all-index': 'gsi_pk',
+      'bro-started_at-index': 'bro',
+      'harness-started_at-index': 'harness',
+      'forked-from-id-index': 'forked_from_id',
+    }[index]
+    items = [
+      item for item in self.headers.values() if item.get(partition_name) == values[':partition']
+    ]
+    if ':since' in values:
+      items = [item for item in items if item['started_at'] >= values[':since']]
+    if ':until' in values:
+      items = [item for item in items if item['started_at'] <= values[':until']]
+    items.sort(key=lambda item: item['started_at'], reverse=True)
+    return {'Items': [_serialize(item) for item in items[: kwargs['Limit']]]}
 
-  def update_item(self, **kwargs):
-    trail = self.trails.get(_des(kwargs['Key'])['trail_id'])
-    values = {
-      k: _deserializer.deserialize(v) for k, v in kwargs['ExpressionAttributeValues'].items()
-    }
-    expression = kwargs['UpdateExpression']
-    if expression == 'SET last_alive_at = :ts':
-      if trail is None:
-        raise self.exceptions.ConditionalCheckFailedException()
-      trail['last_alive_at'] = values[':ts']
-    elif expression == 'SET ended_at = :ts, end_reason = :reason':
-      if trail is None or trail.get('ended_at') is not None:
-        raise self.exceptions.ConditionalCheckFailedException()
-      trail['ended_at'] = values[':ts']
-      trail['end_reason'] = values[':reason']
-    else:
-      raise AssertionError(f'unexpected update expression: {expression}')
+
+@pytest.fixture
+def components():
+  dynamo = FakeDynamo()
+  s3 = FakeS3()
+  store = storage.Storage(
+    dynamo=dynamo,
+    s3=s3,
+    trails_table='headers',
+    steps_table='steps',
+    bucket='bucket',
+  )
+  return store, dynamo, s3
 
 
-def _iso(moment: datetime) -> str:
-  return moment.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
-
-
-def _live_header(
-  trail_id: str,
-  *,
-  started_at: str,
-  last_alive_at: Optional[str],
-  ended_at: Optional[str] = None,
-) -> dict:
-  item = {
-    'trail_id': trail_id,
+async def _create_bro(store: storage.Storage, **overrides) -> str:
+  payload = {
+    'harness': 'bro',
+    'version': '2',
     'bro': 'dev',
-    'started_at': started_at,
-    'ended_at': ended_at,
-    'end_reason': None if ended_at is None else 'terminal',
-    GSI_PK_ATTRIBUTE: GSI_PK_VALUE,
+    'interactive': False,
+    'surface': 'ask',
+    'hold': 'unattended',
+    'native': {'llm': {'type': 'chat_gpt', 'model': 'gpt-5'}},
+    'body': {'system_prompt': 'prompt'},
   }
-  if last_alive_at is not None:
-    item['last_alive_at'] = last_alive_at
-  return item
+  payload.update(overrides)
+  return (await store.create_trail(**payload))['id']
 
 
-def _sweep_store(dynamo: _SweepDynamo) -> Storage:
-  return Storage(
-    dynamo=dynamo, s3=None, trails_table='trails', steps_table='trail_steps', bucket='bucket'
+@pytest.mark.asyncio
+async def test_create_stores_universal_header_and_opens_bro_body(components):
+  store, dynamo, _ = components
+  trail_id = await _create_bro(
+    store,
+    forked_from={'trail_id': 'parent', 'step_id': 'step'},
+    summoned_by={'trail_id': 'summoner'},
   )
-
-
-_STALE = timedelta(seconds=LOST_AFTER_SECONDS * 2)
-_FRESH = timedelta(seconds=LOST_AFTER_SECONDS // 2)
+  header = dynamo.headers[trail_id]
+  assert header['id'] == trail_id
+  assert header['harness'] == 'bro'
+  assert header['version'] == '2'
+  assert header['forked_from_id'] == 'parent'
+  assert header['summoned_by'] == {'trail_id': 'summoner'}
+  assert header['native']['step_counts_by_kind']['system_prompt'] == 1
+  [system_prompt] = dynamo.steps.values()
+  assert system_prompt['kind'] == 'system_prompt'
 
 
 @pytest.mark.asyncio
-async def test_create_trail_seeds_last_alive_at():
-  dynamo = _CreateDynamo()
-  store = Storage(
-    dynamo=dynamo, s3=None, trails_table='trails', steps_table='trail_steps', bucket='bucket'
+async def test_backend_instances_are_cached(components):
+  store, _, _ = components
+  first = store._backend('bro')
+  second = store._backend('bro')
+  assert first is second
+  assert isinstance(first, BroBackend)
+
+
+@pytest.mark.asyncio
+async def test_bro_step_updates_counts_turns_and_exact_raw_usage(components):
+  store, dynamo, _ = components
+  trail_id = await _create_bro(store)
+  await store.put_step(trail_id=trail_id, kind='user_input', body='hello', extras={})
+  response = {
+    'model': 'gpt-5',
+    'usage': {
+      'input_tokens': 100,
+      'input_tokens_details': {'cached_tokens': 40},
+      'output_tokens': 20,
+      'output_tokens_details': {'reasoning_tokens': 7},
+      'total_tokens': 120,
+    },
+  }
+  await store.put_step(
+    trail_id=trail_id,
+    kind='llm_call',
+    body={'request': {}, 'response': response},
+    extras={},
+    step_id='call-1',
   )
-  await store.create_trail(
-    bro='dev',
-    bro_version=1,
-    llm_spec={},
-    system_prompt='prompt',
-    parent=None,
-    interactive=False,
-    entry_point='cli:bro_run',
-    summoner=None,
+  await store.put_step(
+    trail_id=trail_id,
+    kind='llm_call',
+    body={'request': {}, 'response': response},
+    extras={},
+    step_id='call-2',
   )
-  item = _des(dynamo.transaction_items[0]['Put']['Item'])
-  assert item['last_alive_at'] == item['started_at']
+  header = dynamo.headers[trail_id]
+  assert header['turn_count'] == 1
+  assert header['native']['step_counts_by_kind']['llm_call'] == 2
+  assert header['native']['usage']['gpt-5']['input_tokens'] == 200
+  projected = await store.get_trail(trail_id)
+  assert projected['usage']['gpt-5'] == {
+    'input': 120,
+    'cache_write': 0,
+    'cache_read': 80,
+    'output': 40,
+  }
+  assert projected['models'] == ['gpt-5']
 
 
 @pytest.mark.asyncio
-async def test_put_step_refreshes_last_alive_at():
-  store, dynamo, _ = _spill_store()
-  await store.put_step(trail_id='T1', kind='reasoning', body='x', extras={}, step_id='S1')
-  update = dynamo.transactions[0][1]['Update']
-  assert 'last_alive_at = :alive' in update['UpdateExpression']
-
-
-@pytest.mark.asyncio
-async def test_end_trail_refreshes_last_alive_at():
-  store, dynamo, _ = _spill_store()
-  await store.end_trail(trail_id='T1', reason='terminal', continuation=None, step_id='E1')
-  update = dynamo.transactions[0][1]['Update']
-  assert 'last_alive_at = :ts' in update['UpdateExpression']
-
-
-@pytest.mark.asyncio
-async def test_keepalive_updates_last_alive_at():
-  now = datetime.now(UTC)
-  dynamo = _SweepDynamo([_live_header('T1', started_at=_iso(now), last_alive_at=_iso(now))])
-  store = _sweep_store(dynamo)
-  result = await store.keepalive('T1')
-  assert dynamo.trails['T1']['last_alive_at'] == result['last_alive_at']
-
-
-@pytest.mark.asyncio
-async def test_keepalive_missing_trail_raises():
-  store = _sweep_store(_SweepDynamo([]))
-  with pytest.raises(TrailNotFound):
-    await store.keepalive('ghost')
-
-
-@pytest.mark.asyncio
-async def test_sweep_stamps_stale_live_trail_lost():
-  now = datetime.now(UTC)
-  stale = _iso(now - _STALE)
-  dynamo = _SweepDynamo(
-    [_live_header('T1', started_at=_iso(now - _STALE * 2), last_alive_at=stale)]
+async def test_retried_step_id_is_idempotent(components):
+  store, dynamo, _ = components
+  trail_id = await _create_bro(store)
+  await store.put_step(trail_id=trail_id, kind='reasoning', body='first', extras={}, step_id='same')
+  duplicate = await store.put_step(
+    trail_id=trail_id, kind='reasoning', body='first', extras={}, step_id='same'
   )
-  swept = await _sweep_store(dynamo).sweep_lost()
-  assert swept == ['T1']
-  assert dynamo.trails['T1']['ended_at'] == stale
-  assert dynamo.trails['T1']['end_reason'] == 'lost'
+  assert duplicate['duplicate'] is True
+  assert len([key for key in dynamo.steps if key[1] == 'same']) == 1
 
 
 @pytest.mark.asyncio
-async def test_sweep_leaves_fresh_and_ended_trails():
-  now = datetime.now(UTC)
-  fresh = _live_header('T-fresh', started_at=_iso(now - _STALE), last_alive_at=_iso(now - _FRESH))
-  ended = _live_header(
-    'T-ended',
-    started_at=_iso(now - _STALE),
-    last_alive_at=_iso(now - _STALE),
-    ended_at=_iso(now - _FRESH),
+async def test_bro_spillover_round_trip(components):
+  store, _, s3 = components
+  trail_id = await _create_bro(store)
+  body = {'text': 'x' * (storage.SPILLOVER_THRESHOLD_BYTES + 1)}
+  await store.put_step(trail_id=trail_id, kind='tool_result', body=body, extras={})
+  assert len(s3.objects) == 1
+  page = await store.query_steps(trail_id, after=None, limit=100)
+  assert page['steps'][-1]['body'] == body
+
+
+@pytest.mark.asyncio
+async def test_claude_body_keys_snapshot_and_lossless_lines(components):
+  store, dynamo, s3 = components
+  result = await store.create_trail(
+    harness='claude',
+    version='2',
+    interactive=True,
+    surface='cw',
+    body={'artifact': '{"type":"system"}\nnot json\n', 'launch_context': {'cwd': '/x'}},
+    native={'segment': 'uuid', 'llm': {'model': 'opus'}},
   )
-  dynamo = _SweepDynamo([fresh, ended])
-  swept = await _sweep_store(dynamo).sweep_lost()
-  assert swept == []
-  assert dynamo.trails['T-fresh'].get('ended_at') is None
-  assert dynamo.trails['T-ended']['end_reason'] == 'terminal'
+  trail_id = result['id']
+  native = dynamo.headers[trail_id]['native']
+  assert native['s3_key'] == claude_artifact_key(trail_id)
+  assert native['context_s3'] == claude_context_key(trail_id)
+  assert claude_context_key(trail_id) in s3.objects
+  page = await store.query_steps(trail_id, after=None, limit=100)
+  assert page['steps'][0]['record'] == {'type': 'system'}
+  assert page['steps'][1]['record'] is None
+  assert page['steps'][1]['raw'] == 'not json'
+  await store.replace_artifact(
+    trail_id,
+    '{"type":"user","message":{"content":"hello"}}\n',
+    {'harness_version': '2.1.0'},
+  )
+  assert dynamo.headers[trail_id]['native']['line_count'] == 1
+  assert dynamo.headers[trail_id]['native']['harness_version'] == '2.1.0'
 
 
 @pytest.mark.asyncio
-async def test_sweep_falls_back_to_newest_step_ts():
-  # pre-keepalive header: no last_alive_at, so the newest step is the activity
-  # record — a stale one dates the loss, a fresh one keeps the trail live.
-  now = datetime.now(UTC)
-  stale_ts = _iso(now - _STALE)
-  headers = [
-    _live_header('T-stale', started_at=_iso(now - _STALE * 2), last_alive_at=None),
-    _live_header('T-fresh', started_at=_iso(now - _STALE * 2), last_alive_at=None),
+async def test_update_header_rejects_frozen_fields(components):
+  store, _, _ = components
+  trail_id = await _create_bro(store)
+  with pytest.raises(ValueError, match='immutable'):
+    await store.update_header(trail_id, {'surface': 'other'})
+  updated = await store.update_header(trail_id, {'subject': 'new subject'})
+  assert updated['subject'] == 'new subject'
+
+
+@pytest.mark.asyncio
+async def test_end_uses_final_map_and_historical_projection_maps_terminal(components):
+  store, _, _ = components
+  trail_id = await _create_bro(store)
+  await store.end_trail(trail_id=trail_id, reason='raised', detail='blocked', step_id='end')
+  header = await store.get_trail(trail_id)
+  assert header['end']['reason'] == 'raised'
+  assert header['end']['detail'] == 'blocked'
+  backend = store._backend('bro')
+  messages = backend.project_messages(
+    [
+      {
+        'trail_id': trail_id,
+        'step_id': 'old-end',
+        'ts': '2026-01-01T00:00:00Z',
+        'kind': 'end',
+        'body': {'reason': 'terminal'},
+      }
+    ]
+  )
+  assert messages[0]['reason'] == 'ok'
+
+
+@pytest.mark.asyncio
+async def test_list_uses_harness_and_fork_indexes(components):
+  store, _, _ = components
+  root = await _create_bro(store)
+  child = await _create_bro(store, forked_from={'trail_id': root, 'step_id': 'step'})
+  harness_page = await store.list_trails(
+    harness='bro', bro=None, forked_from=None, since=None, until=None, cursor=None, limit=10
+  )
+  assert {item['id'] for item in harness_page['trails']} == {root, child}
+  fork_page = await store.list_trails(
+    harness=None,
+    bro=None,
+    forked_from=root,
+    since=None,
+    until=None,
+    cursor=None,
+    limit=10,
+  )
+  assert [item['id'] for item in fork_page['trails']] == [child]
+
+
+def test_usage_helpers_preserve_raw_shape_and_project_harnesses():
+  assert add_numeric_maps({'a': 1, 'nested': {'x': 2}}, {'a': 3, 'nested': {'x': 4}}) == {
+    'a': 4,
+    'nested': {'x': 6},
+  }
+  assert normalise_usage(
+    'claude',
+    {
+      'opus': {
+        'input_tokens': 1,
+        'cache_creation_input_tokens': 2,
+        'cache_read_input_tokens': 3,
+        'output_tokens': 4,
+      }
+    },
+  ) == {'opus': {'input': 1, 'cache_write': 2, 'cache_read': 3, 'output': 4}}
+
+
+def test_claude_projection_emits_llm_call_once_and_content_events():
+  backend = ClaudeBackend(s3=None, bucket='bucket')
+  messages = backend.project_messages(
+    [
+      {
+        'step_id': '0',
+        'ts': '2026-01-01T00:00:00Z',
+        'raw': '',
+        'record': {
+          'type': 'assistant',
+          'message': {
+            'model': 'opus',
+            'usage': {'input_tokens': 1, 'output_tokens': 2},
+            'content': [
+              {'type': 'thinking', 'thinking': 'hmm'},
+              {'type': 'text', 'text': 'answer'},
+              {'type': 'tool_use', 'id': 'tool-1', 'name': 'read', 'input': {'path': 'x'}},
+            ],
+          },
+        },
+      }
+    ]
+  )
+  assert [message['type'] for message in messages] == [
+    'llm_call',
+    'reasoning',
+    'assistant',
+    'tool_call',
   ]
-  steps = [
-    {'trail_id': 'T-stale', 'step_id': 'S1', 'ts': _iso(now - _STALE * 2), 'kind': 'user_input'},
-    {'trail_id': 'T-stale', 'step_id': 'S2', 'ts': stale_ts, 'kind': 'assistant'},
-    {'trail_id': 'T-fresh', 'step_id': 'S3', 'ts': _iso(now - _FRESH), 'kind': 'assistant'},
-  ]
-  dynamo = _SweepDynamo(headers, steps)
-  swept = await _sweep_store(dynamo).sweep_lost()
-  assert swept == ['T-stale']
-  # ended_at reflects when the trail actually went silent, not sweep time.
-  assert dynamo.trails['T-stale']['ended_at'] == stale_ts
-  assert dynamo.trails['T-fresh'].get('ended_at') is None
-
-
-@pytest.mark.asyncio
-async def test_sweep_ignores_trails_outside_window():
-  now = datetime.now(UTC)
-  old = _live_header(
-    'T-old', started_at=_iso(now - timedelta(days=90)), last_alive_at=_iso(now - _STALE)
-  )
-  dynamo = _SweepDynamo([old])
-  swept = await _sweep_store(dynamo).sweep_lost()
-  assert swept == []
-  assert dynamo.trails['T-old'].get('ended_at') is None
+  assert messages[0]['usage']['output'] == 2
+  assert messages[2]['source'] == {'step_id': '0', 'index': 2}

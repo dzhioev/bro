@@ -11,4 +11,4 @@ DEFAULT_PPP_DIR = os.path.expanduser('~/.ppp')
 # bumped whenever the bro framework changes in a way trails consumers care about
 # (schema additions, semantics shifts, kind enum extensions). recorded on each
 # trail header so an offline reader can tell which framework revision produced it.
-VERSION = 1
+VERSION = '2'

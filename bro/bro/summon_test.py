@@ -107,7 +107,7 @@ async def test_blocking_summon_relays_the_answer(socket_dir, monkeypatch, capsys
       channel,
       Message(
         type='completed',
-        payload={'result': 'alpha, beta', 'end_reason': 'terminal'},
+        payload={'result': 'alpha, beta', 'end_reason': 'ok'},
         in_reply_to=request.id,
       ),
     )
@@ -238,7 +238,7 @@ async def test_check_wait_claims_and_relays_the_buffered_answer(socket_dir, monk
       channel,
       Message(
         type='completed',
-        payload={'result': 'late answer', 'end_reason': 'terminal'},
+        payload={'result': 'late answer', 'end_reason': 'ok'},
         in_reply_to=claim.id,
       ),
     )
@@ -286,7 +286,7 @@ async def test_check_relays_a_ready_answer(socket_dir, monkeypatch, capsys):
       channel,
       Message(
         type='completed',
-        payload={'result': 'ready answer', 'end_reason': 'terminal'},
+        payload={'result': 'ready answer', 'end_reason': 'ok'},
         in_reply_to=check.id,
       ),
     )
@@ -347,7 +347,7 @@ async def test_check_last_seen_forwards_the_cursor_and_relays(socket_dir, monkey
       channel,
       Message(
         type='completed',
-        payload={'result': 'recovered answer', 'end_reason': 'terminal'},
+        payload={'result': 'recovered answer', 'end_reason': 'ok'},
         in_reply_to=check.id,
       ),
     )
@@ -417,7 +417,7 @@ def test_list_reports_empty_before_any_summon(tmp_path, monkeypatch, capsys):
 def test_list_prints_the_recorded_status(tmp_path, monkeypatch, capsys):
   status = {
     'active': [{'request_id': 'R1', 'target': 'devoops', 'trail_id': 'T1', 'started_at': 1.0}],
-    'last': {'request_id': 'R0', 'target': 'pm', 'outcome': 'terminal'},
+    'last': {'request_id': 'R0', 'target': 'pm', 'outcome': 'ok'},
   }
   status_file = tmp_path / 'ws.status.json'
   status_file.write_text(json.dumps(status))

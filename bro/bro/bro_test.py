@@ -51,7 +51,7 @@ class TestBroRun:
   @pytest.mark.asyncio
   async def test_run_returns_response(self):
     bro = EchoBro(response='hello back')
-    result = await bro.run('hello')
+    result = await bro.run('hello', surface='test')
     assert result == 'hello back'
 
   @pytest.mark.asyncio
@@ -75,7 +75,7 @@ class TestBroRun:
         captured.append(self._observer)
         return MockLLM()
 
-    await WireBro().run('hi')
+    await WireBro().run('hi', surface='test')
     assert len(captured) == 1
     assert isinstance(captured[0], CapturingObserver)
 
@@ -104,7 +104,7 @@ class TestBroRun:
         return MockLLM()
 
     explicit = ExplicitObserver()
-    await OverrideBro().run('hi', observer=explicit)
+    await OverrideBro().run('hi', observer=explicit, surface='test')
     assert len(captured) == 1
     assert captured[0] is explicit
 
@@ -127,7 +127,7 @@ class TestBroRun:
         return MockLLM()
 
     explicit = ExplicitTracker()
-    await WireBro().run('input', tracker=explicit)
+    await WireBro().run('input', tracker=explicit, surface='test')
     assert len(captured) == 1
     assert captured[0] is explicit
 
@@ -137,7 +137,15 @@ class TestBroRun:
 
     class RecordingTracker(NullTracker):
       def start_trail(
-        self, bro, llm_spec, system_prompt, parent, interactive, entry_point, summoner=None
+        self,
+        bro,
+        llm_spec,
+        system_prompt,
+        forked_from,
+        interactive,
+        surface,
+        hold='unattended',
+        summoned_by=None,
       ) -> str:
         calls.append(
           (
@@ -147,15 +155,15 @@ class TestBroRun:
               'llm_spec': llm_spec,
               'system_prompt': system_prompt,
               'interactive': interactive,
-              'entry_point': entry_point,
-              'parent': parent,
-              'summoner': summoner,
+              'surface': surface,
+              'forked_from': forked_from,
+              'summoned_by': summoned_by,
             },
           )
         )
         return 'tid'
 
-      def end_trail(self, reason) -> None:
+      def end_trail(self, reason, detail=None) -> None:
         calls.append(('end', {'reason': reason}))
 
     class TraceBro(BaseBro):
@@ -168,26 +176,34 @@ class TestBroRun:
       def _create_llm(self, *, hold: str):
         return MockLLM(response='ok')
 
-    await TraceBro().run('hello', tracker=RecordingTracker())
+    await TraceBro().run('hello', tracker=RecordingTracker(), surface='test')
     assert [c[0] for c in calls] == ['start', 'end']
     start_kwargs = calls[0][1]
     assert start_kwargs['bro'] == 'trace-bro'
     assert start_kwargs['interactive'] is False
-    assert start_kwargs['entry_point'] == 'cli:bro_run'
-    assert start_kwargs['parent'] is None
-    assert start_kwargs['summoner'] is None
+    assert start_kwargs['surface'] == 'test'
+    assert start_kwargs['forked_from'] is None
+    assert start_kwargs['summoned_by'] is None
     assert 'base prompt' in start_kwargs['system_prompt']
-    assert calls[1][1]['reason'] == 'terminal'
+    assert calls[1][1]['reason'] == 'ok'
 
   @pytest.mark.asyncio
-  async def test_run_passes_summoner_from_the_launch_env(self, monkeypatch):
+  async def test_run_passes_summoned_by_from_the_launch_env(self, monkeypatch):
     captured: list[Optional[dict]] = []
 
     class RecordingTracker(NullTracker):
       def start_trail(
-        self, bro, llm_spec, system_prompt, parent, interactive, entry_point, summoner=None
+        self,
+        bro,
+        llm_spec,
+        system_prompt,
+        forked_from,
+        interactive,
+        surface,
+        hold='unattended',
+        summoned_by=None,
       ) -> str:
-        captured.append(summoner)
+        captured.append(summoned_by)
         return 'tid'
 
     class TraceBro(BaseBro):
@@ -200,21 +216,21 @@ class TestBroRun:
       def _create_llm(self, *, hold: str):
         return MockLLM(response='ok')
 
-    monkeypatch.setenv('CW_SUMMONER', '{"target":"pm","trail_id":"T-parent"}')
-    await TraceBro().run('hello', tracker=RecordingTracker())
-    assert captured == [{'target': 'pm', 'trail_id': 'T-parent'}]
+    monkeypatch.setenv('CW_SUMMONER', '{"trail_id":"T-parent"}')
+    await TraceBro().run('hello', tracker=RecordingTracker(), surface='test')
+    assert captured == [{'trail_id': 'T-parent'}]
     # consumed on read: a nested in-place run spawned by this process's tools
-    # must not inherit the marker and re-stamp the parent's summoner
+    # must not inherit the marker and re-stamp the parent's summoned_by
     assert 'CW_SUMMONER' not in os.environ
-    await TraceBro().run('again', tracker=RecordingTracker())
-    assert captured == [{'target': 'pm', 'trail_id': 'T-parent'}, None]
+    await TraceBro().run('again', tracker=RecordingTracker(), surface='test')
+    assert captured == [{'trail_id': 'T-parent'}, None]
 
   @pytest.mark.asyncio
   async def test_run_end_reason_is_raised_on_bro_raised(self):
     calls: list[str] = []
 
     class RecordingTracker(NullTracker):
-      def end_trail(self, reason) -> None:
+      def end_trail(self, reason, detail=None) -> None:
         calls.append(reason)
 
     class RaiseBro(BaseBro):
@@ -232,7 +248,7 @@ class TestBroRun:
         return Boom()
 
     with pytest.raises(BroRaised):
-      await RaiseBro().run('x', tracker=RecordingTracker())
+      await RaiseBro().run('x', tracker=RecordingTracker(), surface='test')
     assert calls == ['raised']
 
   @pytest.mark.asyncio
@@ -243,7 +259,7 @@ class TestBroRun:
       def step(self, kind, body, **extras) -> None:
         calls.append(('step', kind, body))
 
-      def end_trail(self, reason) -> None:
+      def end_trail(self, reason, detail=None) -> None:
         calls.append(('end', reason))
 
     class BoomBro(BaseBro):
@@ -261,7 +277,7 @@ class TestBroRun:
         return Boom()
 
     with pytest.raises(RuntimeError):
-      await BoomBro().run('x', tracker=RecordingTracker())
+      await BoomBro().run('x', tracker=RecordingTracker(), surface='test')
     # the exception is recorded as an error step before the trail closes, so
     # the trail carries the failure cause rather than a bare end reason.
     assert calls == [('step', 'error', calls[0][2]), ('end', 'error')]
@@ -278,7 +294,7 @@ class TestBroRun:
       def step(self, kind, body, **extras) -> None:
         raise ConnectionError('tracker down')
 
-      def end_trail(self, reason) -> None:
+      def end_trail(self, reason, detail=None) -> None:
         calls.append(reason)
 
     class BoomBro(BaseBro):
@@ -296,7 +312,7 @@ class TestBroRun:
         return Boom()
 
     with pytest.raises(RuntimeError, match='kaboom'):
-      await BoomBro().run('x', tracker=BrokenTracker())
+      await BoomBro().run('x', tracker=BrokenTracker(), surface='test')
     assert calls == ['error']
 
   def test_default_tracker_factory_can_be_swapped(self):
@@ -354,7 +370,7 @@ class TestBroRun:
         return llm
 
     bro = CaptureBro()
-    await bro.run('test input')
+    await bro.run('test input', surface='test')
     assert len(llm.send_calls) == 1
     messages = llm.send_calls[0]
     assert len(messages) == 2
@@ -367,7 +383,7 @@ class TestBroSend:
   @pytest.mark.asyncio
   async def test_send_returns_response(self):
     bro = EchoBro(response='hello')
-    result = await bro.send('hi')
+    result = await bro.send('hi', surface='test')
     assert result == 'hello'
 
   @pytest.mark.asyncio
@@ -387,8 +403,8 @@ class TestBroSend:
         return llm
 
     bro = TrackBro()
-    await bro.send('a')
-    await bro.send('b')
+    await bro.send('a', surface='test')
+    await bro.send('b', surface='test')
     assert len(llm_instances) == 1
 
   @pytest.mark.asyncio
@@ -406,7 +422,7 @@ class TestBroSend:
         return llm
 
     bro = CaptureBro()
-    await bro.send('hi')
+    await bro.send('hi', surface='test')
     assert len(llm.send_calls) == 1
     messages = llm.send_calls[0]
     assert len(messages) == 2
@@ -434,8 +450,8 @@ class TestBroSend:
 
     explicit = ExplicitObserver()
     bro = WireBro()
-    await bro.send('hi', observer=explicit)
-    await bro.send('again')
+    await bro.send('hi', observer=explicit, surface='test')
+    await bro.send('again', surface='test')
     assert len(captured) == 1
     assert captured[0] is explicit
 
@@ -445,12 +461,20 @@ class TestBroSend:
 
     class RecordingTracker(NullTracker):
       def start_trail(
-        self, bro, llm_spec, system_prompt, parent, interactive, entry_point, summoner=None
+        self,
+        bro,
+        llm_spec,
+        system_prompt,
+        forked_from,
+        interactive,
+        surface,
+        hold='unattended',
+        summoned_by=None,
       ) -> str:
         calls.append(
           (
             'start',
-            {'interactive': interactive, 'entry_point': entry_point, 'bro': bro},
+            {'interactive': interactive, 'surface': surface, 'hold': hold, 'bro': bro},
           )
         )
         return 'tid'
@@ -466,24 +490,32 @@ class TestBroSend:
         return MockLLM()
 
     bro = SendBro()
-    await bro.send('first', tracker=RecordingTracker())
-    await bro.send('second')
+    await bro.send('first', tracker=RecordingTracker(), surface='test')
+    await bro.send('second', surface='test')
     # start_trail fires once — interactive trails span the whole conversation.
     assert [c[0] for c in calls] == ['start']
     assert calls[0][1]['interactive'] is True
-    assert calls[0][1]['entry_point'] == 'send'
+    assert calls[0][1]['surface'] == 'test'
     assert calls[0][1]['bro'] == 'send-bro'
     assert bro.trail_id == 'tid'
 
   @pytest.mark.asyncio
-  async def test_send_labels_trail_with_callers_entry_point(self):
+  async def test_send_labels_trail_with_callers_surface(self):
     calls: list[str] = []
 
     class RecordingTracker(NullTracker):
       def start_trail(
-        self, bro, llm_spec, system_prompt, parent, interactive, entry_point, summoner=None
+        self,
+        bro,
+        llm_spec,
+        system_prompt,
+        forked_from,
+        interactive,
+        surface,
+        hold='unattended',
+        summoned_by=None,
       ) -> str:
-        calls.append(entry_point)
+        calls.append(surface)
         return 'tid'
 
     class SendBro(BaseBro):
@@ -497,9 +529,9 @@ class TestBroSend:
         return MockLLM()
 
     bro = SendBro()
-    await bro.send('first', tracker=RecordingTracker(), entry_point='call')
-    # entry_point labels the trail header, so only the opening send matters
-    await bro.send('second', entry_point='ignored')
+    await bro.send('first', tracker=RecordingTracker(), surface='call')
+    # surface labels the trail header, so only the opening send matters
+    await bro.send('second', surface='ignored')
     assert calls == ['call']
 
   @pytest.mark.asyncio
@@ -520,10 +552,10 @@ class TestBroSend:
         return MockLLM()
 
     bro = WireBro()
-    await bro.send('first')
+    await bro.send('first', surface='test')
     assert bro._llm is not None
     attached = MarkerObserver()
-    await bro.send('second', observer=attached)
+    await bro.send('second', observer=attached, surface='test')
     assert bro._observer is attached
     assert bro._llm.observer is attached
 
@@ -542,8 +574,8 @@ class TestBroSend:
         return llm
 
     bro = CaptureBro()
-    await bro.send('first')
-    await bro.send('second')
+    await bro.send('first', surface='test')
+    await bro.send('second', surface='test')
     assert len(llm.send_calls) == 2
     messages = llm.send_calls[1]
     assert len(messages) == 1
@@ -566,9 +598,9 @@ class TestBroSend:
         return llm
 
     bro = TrackBro()
-    await bro.run('one-shot')
-    await bro.send('first')
-    await bro.send('second')
+    await bro.run('one-shot', surface='test')
+    await bro.send('first', surface='test')
+    await bro.send('second', surface='test')
     assert len(llm_instances) == 2
 
 
@@ -599,26 +631,26 @@ class TestCredentialGate:
     monkeypatch.setattr(credentials, 'available', lambda name: False)
     gated = GatedBro()
     with pytest.raises(BroRaised, match='missing credentials: alpha, beta, openai'):
-      await gated.run('hi')
+      await gated.run('hi', surface='test')
     assert len(gated.mock_llm.send_calls) == 0
 
   @pytest.mark.asyncio
   async def test_run_proceeds_when_all_resolve(self, monkeypatch):
     monkeypatch.setattr(credentials, 'available', lambda name: True)
     gated = GatedBro()
-    assert await gated.run('hi') == 'ran'
+    assert await gated.run('hi', surface='test') == 'ran'
 
   @pytest.mark.asyncio
   async def test_send_reports_missing_names_in_reply(self, monkeypatch):
     available = {'beta', 'openai'}
     monkeypatch.setattr(credentials, 'available', lambda name: name in available)
     gated = GatedBro()
-    reply = await gated.send('hi')
+    reply = await gated.send('hi', surface='test')
     assert reply == 'gated cannot start: missing credentials: alpha'
     assert len(gated.mock_llm.send_calls) == 0
     # the LLM stays unbuilt, so a later send re-checks the store
     available.add('alpha')
-    assert await gated.send('hi') == 'ran'
+    assert await gated.send('hi', surface='test') == 'ran'
 
   def test_missing_secrets_ignores_the_optional_tier(self, monkeypatch):
     import llm.llms.echo
@@ -1572,7 +1604,7 @@ class TestSummonTool:
 
     monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
     monkeypatch.setenv(summon_module.STATUS_ENV, '/anywhere/ws.status.json')
-    status = {'active': [], 'last': {'request_id': 'R1', 'outcome': 'terminal'}}
+    status = {'active': [], 'last': {'request_id': 'R1', 'outcome': 'ok'}}
     monkeypatch.setattr(summon_module, 'list_summons', lambda: status)
     tool = await _find_tool(EchoBro(), 'summon_list')
     assert await tool.call({}) == status
@@ -1793,7 +1825,7 @@ class TestSummonTool:
         captured.append(hold)
         return MockLLM()
 
-    await CaptureBro().run('input')
+    await CaptureBro().run('input', surface='test')
     assert captured == ['unattended']
 
   @pytest.mark.asyncio
@@ -1811,7 +1843,7 @@ class TestSummonTool:
         captured.append(hold)
         return MockLLM()
 
-    await CaptureBro().run('input', hold='attended')
+    await CaptureBro().run('input', hold='attended', surface='test')
     assert captured == ['attended']
 
   @pytest.mark.asyncio
@@ -1829,7 +1861,7 @@ class TestSummonTool:
         captured.append(hold)
         return MockLLM()
 
-    await CaptureBro().send('input')
+    await CaptureBro().send('input', surface='test')
     assert captured == ['guided']
 
 

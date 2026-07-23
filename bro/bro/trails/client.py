@@ -3,7 +3,7 @@
 counterpart to `llm.tracker.HTTPTracker` (the write-side client). `TrailsClient`
 wraps the read endpoints — `GET /v1/trails`, `GET /v1/trails/{id}`,
 `GET /v1/trails/{id}/steps` — over a persistent HTTPS connection, exposing both
-single-page methods (`list_trails` / `get_steps`) and transparent cursor
+single-page methods (`list_trails` / `get_steps`) and transforked_from cursor
 iterators (`iter_trails` / `iter_steps`) that paginate until exhausted.
 
 `fetch_recorded_trail` rehydrates a header + all of its steps into the
@@ -31,10 +31,10 @@ from types import TracebackType
 from typing import Any, Optional
 from urllib.parse import urlencode, urlparse
 
-from base import configs, credentials
+from base import credentials
 from llm.tracker import (
+  ForkedFrom,
   HTTPStatusError,
-  Parent,
   RecordedTrail,
   Step,
   Trail,
@@ -69,8 +69,9 @@ class TrailsClient:
   def list_trails(
     self,
     *,
+    harness: Optional[str] = None,
     bro: Optional[str] = None,
-    parent: Optional[str] = None,
+    forked_from: Optional[str] = None,
     since: Optional[str] = None,
     until: Optional[str] = None,
     cursor: Optional[str] = None,
@@ -80,10 +81,12 @@ class TrailsClient:
     `next` is the opaque cursor for the next page (or None when exhausted).
     """
     query: dict[str, str] = {}
+    if harness is not None:
+      query['harness'] = harness
     if bro is not None:
       query['bro'] = bro
-    if parent is not None:
-      query['parent'] = parent
+    if forked_from is not None:
+      query['forked_from'] = forked_from
     if since is not None:
       query['since'] = since
     if until is not None:
@@ -97,8 +100,9 @@ class TrailsClient:
   def iter_trails(
     self,
     *,
+    harness: Optional[str] = None,
     bro: Optional[str] = None,
-    parent: Optional[str] = None,
+    forked_from: Optional[str] = None,
     since: Optional[str] = None,
     until: Optional[str] = None,
     page_size: int = DEFAULT_LIST_PAGE_SIZE,
@@ -111,8 +115,9 @@ class TrailsClient:
     cursor: Optional[str] = None
     while True:
       page = self.list_trails(
+        harness=harness,
         bro=bro,
-        parent=parent,
+        forked_from=forked_from,
         since=since,
         until=until,
         cursor=cursor,
@@ -162,6 +167,38 @@ class TrailsClient:
       if after is None:
         return
 
+  def get_messages(
+    self,
+    trail_id: str,
+    *,
+    types: Optional[set[str]] = None,
+    after: Optional[str] = None,
+    limit: Optional[int] = None,
+  ) -> dict:
+    query: list[tuple[str, str]] = []
+    if types is not None:
+      query.extend(('type', message_type) for message_type in sorted(types))
+    if after is not None:
+      query.append(('after', after))
+    if limit is not None:
+      query.append(('limit', str(limit)))
+    return self._get_pairs(f'/v1/trails/{trail_id}/messages', query)
+
+  def iter_messages(
+    self,
+    trail_id: str,
+    *,
+    types: Optional[set[str]] = None,
+    after: Optional[str] = None,
+    page_size: int = DEFAULT_STEPS_PAGE_SIZE,
+  ) -> Iterator[dict]:
+    while True:
+      page = self.get_messages(trail_id, types=types, after=after, limit=page_size)
+      yield from page['messages']
+      after = page.get('next')
+      if after is None:
+        return
+
   def close(self) -> None:
     self._drop_connection()
 
@@ -199,6 +236,9 @@ class TrailsClient:
     return self.fetch_spilled_body(url)
 
   def _get(self, path: str, query: dict[str, str]) -> dict:
+    return self._get_pairs(path, list(query.items()))
+
+  def _get_pairs(self, path: str, query: list[tuple[str, str]]) -> dict:
     if len(query) > 0:
       path = f'{path}?{urlencode(query)}'
     headers = {'Authorization': f'Bearer {self._token}'}
@@ -293,18 +333,19 @@ def trail_from_header(data: dict) -> Trail:
   the full header (nullable fields land as `None`), so a `KeyError` means the
   payload came from somewhere unexpected.
   """
-  parent_data = data.get('parent')
-  parent = Parent(**parent_data) if parent_data is not None else None
+  forked_from_data = data.get('forked_from')
+  forked_from = ForkedFrom(**forked_from_data) if forked_from_data is not None else None
   return Trail(
-    trail_id=data['trail_id'],
-    bro=data['bro'],
-    bro_version=data.get('bro_version', configs.VERSION),
-    llm_spec=data['llm_spec'],
+    id=data['id'],
+    harness=data['harness'],
+    bro=data.get('bro'),
+    version=data['version'],
+    native=data['native'],
     started_at=data['started_at'],
     interactive=data['interactive'],
-    entry_point=data['entry_point'],
-    parent=parent,
-    summoner=data.get('summoner'),
+    surface=data['surface'],
+    forked_from=forked_from,
+    summoned_by=data.get('summoned_by'),
   )
 
 

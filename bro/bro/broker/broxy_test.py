@@ -163,7 +163,7 @@ async def test_call_rides_interim_started_through_the_broxy():
     await harness.transport.send(
       channel,
       Message(
-        type='completed', payload={'result': 'ok', 'end_reason': 'terminal'}, in_reply_to=request.id
+        type='completed', payload={'result': 'ok', 'end_reason': 'ok'}, in_reply_to=request.id
       ),
     )
 
@@ -210,7 +210,7 @@ async def test_claim_replays_buffered_messages_in_order():
     await harness.transport.send(
       harness.channel,
       Message(
-        type='completed', payload={'result': 'ok', 'end_reason': 'terminal'}, in_reply_to=request.id
+        type='completed', payload={'result': 'ok', 'end_reason': 'ok'}, in_reply_to=request.id
       ),
     )
     await _wait_until(
@@ -225,7 +225,7 @@ async def test_claim_replays_buffered_messages_in_order():
     )
     assert [interim.payload for interim in interims] == [{'trail_id': 't1'}]
     assert terminal.type == 'completed'
-    assert terminal.payload == {'result': 'ok', 'end_reason': 'terminal'}
+    assert terminal.payload == {'result': 'ok', 'end_reason': 'ok'}
     assert terminal.in_reply_to != request.id  # re-tagged to correlate to the claim
     claimer.close()
 
@@ -397,7 +397,7 @@ async def test_check_replays_a_buffered_terminal_without_consuming():
     await harness.transport.send(
       harness.channel,
       Message(
-        type='completed', payload={'result': 'ok', 'end_reason': 'terminal'}, in_reply_to=request.id
+        type='completed', payload={'result': 'ok', 'end_reason': 'ok'}, in_reply_to=request.id
       ),
     )
     await _wait_until(
@@ -414,14 +414,14 @@ async def test_check_replays_a_buffered_terminal_without_consuming():
       )
       assert [interim.payload for interim in interims] == [{'trail_id': 't1'}]
       assert terminal.type == 'completed'
-      assert terminal.payload == {'result': 'ok', 'end_reason': 'terminal'}
+      assert terminal.payload == {'result': 'ok', 'end_reason': 'ok'}
       assert terminal.in_reply_to != request.id  # re-tagged to correlate to the check
       checker.close()
 
     # the entry is still claimable for real afterwards
     claimer = _local_client(harness)
     terminal = await asyncio.to_thread(claimer.call, 'claim', {'id': request.id}, TIMEOUT)
-    assert terminal.payload == {'result': 'ok', 'end_reason': 'terminal'}
+    assert terminal.payload == {'result': 'ok', 'end_reason': 'ok'}
     claimer.close()
 
 
@@ -501,7 +501,7 @@ async def test_live_delivered_terminal_stays_readable_through_a_cursor():
     await harness.transport.send(
       harness.channel,
       Message(
-        type='completed', payload={'result': 'ok', 'end_reason': 'terminal'}, in_reply_to=request.id
+        type='completed', payload={'result': 'ok', 'end_reason': 'ok'}, in_reply_to=request.id
       ),
     )
     await asyncio.wait_for(request_task, TIMEOUT)
@@ -513,7 +513,7 @@ async def test_live_delivered_terminal_stays_readable_through_a_cursor():
         client.call, 'check', {'id': request.id, 'last_seen': 0}, TIMEOUT
       )
       assert replayed.type == 'completed'
-      assert replayed.payload == {'result': 'ok', 'end_reason': 'terminal'}
+      assert replayed.payload == {'result': 'ok', 'end_reason': 'ok'}
     client.close()
 
 
@@ -527,7 +527,7 @@ async def test_cursor_read_marks_read_and_spends_the_collect():
     await harness.transport.send(
       harness.channel,
       Message(
-        type='completed', payload={'result': 'ok', 'end_reason': 'terminal'}, in_reply_to=request.id
+        type='completed', payload={'result': 'ok', 'end_reason': 'ok'}, in_reply_to=request.id
       ),
     )
     await _wait_until(
@@ -541,7 +541,7 @@ async def test_cursor_read_marks_read_and_spends_the_collect():
       reader.call, 'check', {'id': request.id, 'last_seen': 0}, TIMEOUT, on_started=interims.append
     )
     assert [interim.payload for interim in interims] == [{'trail_id': 't1'}]
-    assert terminal.payload == {'result': 'ok', 'end_reason': 'terminal'}
+    assert terminal.payload == {'result': 'ok', 'end_reason': 'ok'}
 
     # the cursor read acknowledged the window through its terminal: collect is spent
     reply = await asyncio.to_thread(reader.request, 'claim', {'id': request.id}, TIMEOUT)
@@ -617,7 +617,7 @@ async def test_check_reports_collected_after_a_claim():
     await harness.transport.send(
       harness.channel,
       Message(
-        type='completed', payload={'result': 'ok', 'end_reason': 'terminal'}, in_reply_to=request.id
+        type='completed', payload={'result': 'ok', 'end_reason': 'ok'}, in_reply_to=request.id
       ),
     )
     await _wait_until(
@@ -633,7 +633,7 @@ async def test_check_reports_collected_after_a_claim():
     terminal = await asyncio.to_thread(
       claimer.call, 'check', {'id': request.id, 'last_seen': 0}, TIMEOUT
     )
-    assert terminal.payload == {'result': 'ok', 'end_reason': 'terminal'}
+    assert terminal.payload == {'result': 'ok', 'end_reason': 'ok'}
     claimer.close()
 
 

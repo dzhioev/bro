@@ -25,7 +25,7 @@ class Tag:
   """substrate built-in message-type tags; consumer tags are open strings."""
 
   STARTED = 'started'  # {trail_id}
-  COMPLETED = 'completed'  # {result, end_reason}  end_reason: terminal|raised|error
+  COMPLETED = 'completed'  # {result, end_reason}  end_reason: ok|raised|error
   FAILED = 'failed'  # {reason: 'exit'|'timeout'|'launch', exit_code?, output_tail?, error?}
   REPLY = 'reply'  # generic correlated reply (in_reply_to set); the type context.reply emits
   CLAIM = 'claim'  # {id}: broxy-local claim of a pending/buffered request; never on the host wire

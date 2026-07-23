@@ -180,6 +180,7 @@ class _Requester:
 
   allow_list: set[str]
   summoner: dict[str, Any]
+  summoned_by: Optional[dict[str, Any]]
   depth: int
   list_description: str
   workspace: Path
@@ -253,7 +254,7 @@ class SummonControl:
         target=target,
         prompt=prompt,
         parent_workspace=requester.workspace,
-        summoner=requester.summoner,
+        summoner=requester.summoned_by,
         into=payload.get('into'),
         hold=payload.get('hold'),
       ),
@@ -293,6 +294,7 @@ class SummonControl:
       return _Requester(
         allow_list=self._allow_list,
         summoner={'session': self._session},
+        summoned_by=None,
         depth=0,
         list_description="this session's summon allow-list",
         workspace=root_workspace.path,
@@ -311,6 +313,7 @@ class SummonControl:
     return _Requester(
       allow_list=set(create_bro(record.target)._may_summon),
       summoner={'target': record.target, 'trail_id': record.trail_id},
+      summoned_by={'trail_id': record.trail_id},
       depth=record.depth,
       list_description=f"{record.target}'s may_summon seeds",
       workspace=containers_dir(self._project) / _workspace_name(peer),

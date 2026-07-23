@@ -149,7 +149,7 @@ from broker.transport import connect
 from broker.brotocol import Message
 client = connect(os.environ['BROKER_CHANNEL'])
 client.send(Message(type='started', payload={'trail_id': 't1'}))
-client.send(Message(type='completed', payload={'result': 'ok', 'end_reason': 'terminal'}))
+client.send(Message(type='completed', payload={'result': 'ok', 'end_reason': 'ok'}))
 client.close()
 """
 
@@ -182,7 +182,7 @@ client = connect(os.environ['BROKER_CHANNEL'])
 client.send(Message(type='started', payload={}))
 request = client.receive(5.0)
 payload = request.payload if request is not None else None
-client.send(Message(type='completed', payload={'echo': payload, 'end_reason': 'terminal'}))
+client.send(Message(type='completed', payload={'echo': payload, 'end_reason': 'ok'}))
 client.close()
 """
 

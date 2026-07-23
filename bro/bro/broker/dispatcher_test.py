@@ -107,7 +107,7 @@ async def test_child_lifecycle_routes_to_parent_retagged():
   child = await spawn_child(dispatcher, runtime)
   dispatcher.on_message(child, Message(type=Tag.STARTED, payload={'trail_id': 't'}))
   dispatcher.on_message(
-    child, Message(type=Tag.COMPLETED, payload={'result': 'ok', 'end_reason': 'terminal'})
+    child, Message(type=Tag.COMPLETED, payload={'result': 'ok', 'end_reason': 'ok'})
   )
   started_target, started = runtime.sent[-2]
   completed_target, completed = runtime.sent[-1]
@@ -121,7 +121,7 @@ async def test_drop_after_terminal():
   dispatcher, runtime = make_dispatcher()
   child = await spawn_child(dispatcher, runtime)
   dispatcher.on_message(
-    child, Message(type=Tag.COMPLETED, payload={'result': 'ok', 'end_reason': 'terminal'})
+    child, Message(type=Tag.COMPLETED, payload={'result': 'ok', 'end_reason': 'ok'})
   )
   delivered = len(runtime.sent)
   dispatcher.on_message(child, Message(type=Tag.STARTED, payload={}))  # after terminal
@@ -133,7 +133,7 @@ async def test_completed_then_exit_is_a_single_terminal():
   dispatcher, runtime = make_dispatcher()
   child = await spawn_child(dispatcher, runtime)
   dispatcher.on_message(
-    child, Message(type=Tag.COMPLETED, payload={'result': 'ok', 'end_reason': 'terminal'})
+    child, Message(type=Tag.COMPLETED, payload={'result': 'ok', 'end_reason': 'ok'})
   )
   dispatcher.on_exit(child, 0, '')  # finalized already -> no synthesized failed
   assert [m.type for _, m in runtime.sent].count(Tag.FAILED) == 0
@@ -222,7 +222,7 @@ async def test_root_lifecycle_is_dropped_without_refusal_or_finalizing(caplog):
   await _settle()
   dispatcher.on_message('root', Message(type=Tag.STARTED, payload={'trail_id': 't'}))
   dispatcher.on_message(
-    'root', Message(type=Tag.COMPLETED, payload={'result': 'ok', 'end_reason': 'terminal'})
+    'root', Message(type=Tag.COMPLETED, payload={'result': 'ok', 'end_reason': 'ok'})
   )
   assert runtime.sent == []
   assert not any('refused' in record.message for record in caplog.records)
@@ -247,7 +247,7 @@ async def test_root_lifecycle_invokes_registered_handlers_but_child_lifecycle_st
   await _settle()
   dispatcher.on_message('root', Message(type=Tag.STARTED, payload={'trail_id': 't'}))
   dispatcher.on_message(
-    'root', Message(type=Tag.COMPLETED, payload={'result': 'ok', 'end_reason': 'terminal'})
+    'root', Message(type=Tag.COMPLETED, payload={'result': 'ok', 'end_reason': 'ok'})
   )
   assert handled == [('root', Tag.STARTED), ('root', Tag.COMPLETED)]
   assert 'root' not in dispatcher.finalized

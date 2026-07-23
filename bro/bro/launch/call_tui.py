@@ -535,9 +535,7 @@ class ChatApp(App):
     # animation). bridge UI updates back via call_from_thread.
     observer = TUIRenderer(self)
     try:
-      reply = asyncio.run(
-        self._bro.send(text, observer=observer, entry_point='call', hold=self._hold)
-      )
+      reply = asyncio.run(self._bro.send(text, observer=observer, surface='call', hold=self._hold))
     except Exception as e:
       reply = f'[error] {type(e).__name__}: {e}'
     self.call_from_thread(self._on_reply, reply)

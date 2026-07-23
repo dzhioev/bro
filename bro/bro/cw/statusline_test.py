@@ -64,12 +64,12 @@ class TestSummonSection:
       'last': {
         'target': 'devoops',
         'trail_id': 'T1',
-        'outcome': 'terminal',
+        'outcome': 'ok',
         'ended_at': time.time() - 30,
       },
     }
     out = _run(monkeypatch, tmp_path, summon_status=summon_status)
-    assert '✓ summon devoops: terminal' in out
+    assert '✓ summon devoops: ok' in out
 
   def test_failed_outcome_is_marked_as_failure(self, monkeypatch, tmp_path):
     summon_status = {
@@ -90,7 +90,7 @@ class TestSummonSection:
       'last': {
         'target': 'devoops',
         'trail_id': 'T1',
-        'outcome': 'terminal',
+        'outcome': 'ok',
         'ended_at': time.time() - 2000,
       },
     }

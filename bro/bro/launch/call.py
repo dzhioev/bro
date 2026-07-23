@@ -134,7 +134,7 @@ async def call_text(
   print(render_banner(llm=False, bro=bro.name))
 
   if initial is not None:
-    reply = await bro.send(initial, observer=effective_observer, entry_point='call', hold=hold)
+    reply = await bro.send(initial, observer=effective_observer, surface='call', hold=hold)
     emit(reply)
   while True:
     try:
@@ -143,7 +143,7 @@ async def call_text(
       return
     if len(message) == 0:
       continue
-    reply = await bro.send(message, observer=effective_observer, entry_point='call', hold=hold)
+    reply = await bro.send(message, observer=effective_observer, surface='call', hold=hold)
     emit(reply)
 
 

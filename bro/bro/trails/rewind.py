@@ -6,7 +6,7 @@ four subcommands:
 - `trails list` — filtered listing of trail headers, paged through `$PAGER`.
 - `trails show <id>` — header + step listing for one trail; `-f` keeps polling
   and renders new steps as they land, like `tail -f`.
-- `trails tree <id>` — render the parent/fork hierarchy reachable from a trail.
+- `trails tree <id>` — render the forked_from/fork hierarchy reachable from a trail.
 - `trails fork <id> <step_id>` — call `bro.fork.fork()` and drop the user into
   an interactive `.send()` loop, similar in spirit to `bro.launch.call.call_text`.
 
@@ -179,24 +179,22 @@ def _format_step_summary(step: dict, colors: _Colors) -> str:
 
 
 def _format_trail_row(trail: dict, colors: _Colors) -> str:
-  trail_id = trail.get('trail_id', '?')
+  trail_id = trail.get('id', '?')
   bro = trail.get('bro', '?')
-  spec = trail.get('llm_spec', {})
+  spec = trail.get('native', {}).get('llm', {})
   model = spec.get('model', '?')
   started = _format_timestamp(trail.get('started_at'))
-  ended_raw = trail.get('ended_at')
-  end_reason = trail.get('end_reason')
-  if ended_raw is None:
+  end = trail.get('end')
+  if end is None:
     status = f'{colors.yellow}live{colors.reset}'
-  elif end_reason == 'lost':
-    # server-stamped by the sweep: recording went silent without a real end.
+  elif end.get('reason') == 'lost':
     status = f'{colors.red}lost{colors.reset}'
   else:
-    status = f'{colors.green}done:{end_reason}{colors.reset}'
-  parent = trail.get('parent')
-  parent_tag = ''
-  if parent is not None:
-    parent_tag = f'  {colors.dim}fork-of {parent["trail_id"]}{colors.reset}'
+    status = f'{colors.green}done:{end.get("reason")}{colors.reset}'
+  forked_from = trail.get('forked_from')
+  forked_from_tag = ''
+  if forked_from is not None:
+    forked_from_tag = f'  {colors.dim}fork-of {forked_from["trail_id"]}{colors.reset}'
   # the full trail id is on the line so the user can copy it straight into
   # `trails show / tree / fork` — the server doesn't accept prefixes.
   return (
@@ -204,44 +202,46 @@ def _format_trail_row(trail: dict, colors: _Colors) -> str:
     f'{colors.dim}{started}{colors.reset}  '
     f'{colors.cyan}{bro:<10}{colors.reset}  '
     f'{colors.dim}{model:<10}{colors.reset}  '
-    f'{status}{parent_tag}'
+    f'{status}{forked_from_tag}'
   )
 
 
 def _format_trail_header(trail: dict, colors: _Colors) -> str:
-  spec = trail.get('llm_spec', {})
-  aggregates = trail.get('aggregates', {})
-  parent = trail.get('parent')
+  native = trail.get('native', {})
+  spec = native.get('llm', {})
+  end = trail.get('end')
+  forked_from = trail.get('forked_from')
   lines = [
-    f'{colors.bold}trail     {colors.reset} {trail.get("trail_id")}',
-    f'{colors.dim}bro       {colors.reset} {trail.get("bro")} (version {trail.get("bro_version")})',
-    f'{colors.dim}llm_spec  {colors.reset} {json.dumps(spec, ensure_ascii=False)}',
+    f'{colors.bold}trail     {colors.reset} {trail.get("id")}',
+    f'{colors.dim}harness   {colors.reset} {trail.get("harness")}',
+    f'{colors.dim}bro       {colors.reset} {trail.get("bro")} (version {trail.get("version")})',
+    f'{colors.dim}llm       {colors.reset} {json.dumps(spec, ensure_ascii=False)}',
     f'{colors.dim}started   {colors.reset} {_format_timestamp(trail.get("started_at"))}',
-    f'{colors.dim}ended     {colors.reset} {_format_timestamp(trail.get("ended_at"))}  '
-    f'({trail.get("end_reason")})',
+    f'{colors.dim}ended     {colors.reset} '
+    f'{_format_timestamp(end.get("at") if end is not None else None)}  '
+    f'({end.get("reason") if end is not None else None})',
     f'{colors.dim}interactive{colors.reset} {trail.get("interactive")}  '
-    f'{colors.dim}entry_point{colors.reset} {trail.get("entry_point")}',
+    f'{colors.dim}surface{colors.reset} {trail.get("surface")}',
   ]
-  if parent is not None:
+  if forked_from is not None:
     lines.append(
-      f'{colors.dim}parent    {colors.reset} {parent.get("relationship")} '
-      f'{parent.get("trail_id")} @ step {parent.get("step_id")}'
+      f'{colors.dim}forked from{colors.reset} '
+      f'{forked_from.get("trail_id")} @ step {forked_from.get("step_id")}'
     )
-  summoner = trail.get('summoner')
-  if summoner is not None:
-    lines.append(f'{colors.dim}summoner  {colors.reset} {json.dumps(summoner, ensure_ascii=False)}')
-  continuation = trail.get('continuation')
-  if continuation is not None:
-    lines.append(f'{colors.dim}continuation{colors.reset} {json.dumps(continuation)}')
+  summoned_by = trail.get('summoned_by')
+  if summoned_by is not None:
+    lines.append(
+      f'{colors.dim}summoned_by  {colors.reset} {json.dumps(summoned_by, ensure_ascii=False)}'
+    )
+  lines.append(f'{colors.dim}turns     {colors.reset} {trail.get("turn_count")}')
   lines.append(
-    f'{colors.dim}aggregates{colors.reset} '
-    f'turns={aggregates.get("turn_count")} '
-    f'tools={aggregates.get("tool_call_count")} '
-    f'tokens_in={aggregates.get("tokens_in")} '
-    f'tokens_out={aggregates.get("tokens_out")} '
-    f'tokens_reasoning={aggregates.get("tokens_reasoning")}'
+    f'{colors.dim}usage     {colors.reset} {json.dumps(trail.get("usage", {}), ensure_ascii=False)}'
   )
-  counts = aggregates.get('step_counts_by_kind')
+  lines.append(
+    f'{colors.dim}models    {colors.reset} '
+    f'{json.dumps(trail.get("models", []), ensure_ascii=False)}'
+  )
+  counts = native.get('step_counts_by_kind')
   if counts is not None:
     parts = ', '.join(f'{k}={v}' for k, v in counts.items() if v > 0)
     lines.append(f'{colors.dim}step kinds{colors.reset} {parts}')
@@ -251,8 +251,9 @@ def _format_trail_header(trail: dict, colors: _Colors) -> str:
 
 def _command_list(client: TrailsClient, args: dict, colors: _Colors) -> int:
   trails_iter = client.iter_trails(
+    harness=args.get('harness'),
     bro=args.get('bro'),
-    parent=args.get('parent'),
+    forked_from=args.get('forked_from'),
     since=args.get('since'),
     until=args.get('until'),
     max_items=args.get('limit'),
@@ -294,7 +295,7 @@ def _follow_steps(
         yield row
         if row.get('kind') == 'end':
           return
-      if client.get_trail(trail_id).get('ended_at') is not None:
+      if client.get_trail(trail_id).get('end') is not None:
         # the end transaction may have committed between the steps poll and
         # this header read — drain once more so its steps are not dropped.
         yield from client.iter_steps(trail_id, after=after)
@@ -336,14 +337,14 @@ def _command_tree(client: TrailsClient, args: dict, colors: _Colors) -> int:
   start = client.get_trail(trail_id)
 
   # walk upward to the root so the tree displays the full ancestry rather than
-  # just the children of the named trail. cycles are not possible (parent
+  # just the children of the named trail. cycles are not possible (forked_from
   # pointers are append-only at trail-creation time), so plain ascent is safe.
   root = start
   while True:
-    parent = root.get('parent')
-    if parent is None:
+    forked_from = root.get('forked_from')
+    if forked_from is None:
       break
-    root = client.get_trail(parent['trail_id'])
+    root = client.get_trail(forked_from['trail_id'])
 
   highlight = trail_id
   lines: list[str] = []
@@ -362,22 +363,22 @@ def _render_tree(
   colors: _Colors,
   highlight: str,
 ) -> None:
-  trail_id = trail['trail_id']
+  trail_id = trail['id']
   connector = '└── ' if is_last else '├── '
   marker = f' {colors.bold}<-- here{colors.reset}' if trail_id == highlight else ''
-  spec = trail.get('llm_spec', {})
+  spec = trail.get('native', {}).get('llm', {})
   model = spec.get('model', '?')
   bro = trail.get('bro', '?')
-  parent_step = ''
-  parent = trail.get('parent')
-  if parent is not None:
-    parent_step = f' {colors.dim}@step {_short(parent["step_id"])}{colors.reset}'
+  forked_from_step = ''
+  forked_from = trail.get('forked_from')
+  if forked_from is not None:
+    forked_from_step = f' {colors.dim}@step {_short(forked_from["step_id"])}{colors.reset}'
   lines.append(
     f'{prefix}{connector}{colors.yellow}{_short(trail_id)}{colors.reset}  '
     f'{colors.cyan}{bro}{colors.reset}/{colors.dim}{model}{colors.reset}'
-    f'{parent_step}{marker}'
+    f'{forked_from_step}{marker}'
   )
-  children = list(client.iter_trails(parent=trail_id))
+  children = list(client.iter_trails(forked_from=trail_id))
   # iter_trails returns newest-first; reverse so the tree reads oldest-first
   # under each node, matching how a reader would build it up mentally.
   children.reverse()
@@ -395,16 +396,17 @@ def _command_fork(client: TrailsClient, args: dict, colors: _Colors) -> int:
   initial = args.get('initial')
   no_record = bool(args.get('no_record', False))
 
-  log.info('fetching parent trail %s', trail_id)
-  parent_trail = fetch_recorded_trail(client, trail_id)
-  log.info('forking at step %s (%d steps in prefix)', step_id, len(parent_trail.steps))
+  log.info('fetching forked_from trail %s', trail_id)
+  forked_from_trail = fetch_recorded_trail(client, trail_id)
+  log.info('forking at step %s (%d steps in prefix)', step_id, len(forked_from_trail.steps))
 
   bro = fork(
-    parent_trail,
+    forked_from_trail,
     step_id,
+    surface='call',
     record=not no_record,
     # a fork of a fork replays its ancestor prefix through the same reader
-    fetch_parent=lambda parent_id: fetch_recorded_trail(client, parent_id),
+    fetch_forked_from=lambda forked_from_id: fetch_recorded_trail(client, forked_from_id),
   )
   new_trail_id = bro.trail_id
   fork_banner = (
@@ -434,7 +436,7 @@ async def _fork_repl(
   emit_reply = emit if emit is not None else (lambda r: print(f'{bro.name}: {r}'))
 
   if initial is not None and len(initial) > 0:
-    reply = await bro.send(initial)
+    reply = await bro.send(initial, surface='call')
     emit_reply(reply)
   while True:
     try:
@@ -443,7 +445,7 @@ async def _fork_repl(
       return
     if len(message) == 0:
       continue
-    reply = await bro.send(message)
+    reply = await bro.send(message, surface='call')
     emit_reply(reply)
 
 
@@ -458,10 +460,11 @@ def main(argv: list[str]) -> Optional[int]:
   sub = parser.add_subparsers(dest='command')
 
   list_p = sub.add_parser('list', help='list trail headers, newest first')
+  list_p.add_argument('--harness', help='filter by harness')
   list_p.add_argument('--bro', help='filter by bro name')
   list_p.add_argument('--since', help='ISO timestamp lower bound on started_at')
   list_p.add_argument('--until', help='ISO timestamp upper bound on started_at')
-  list_p.add_argument('--parent', help='list forks of this trail id')
+  list_p.add_argument('--forked-from', help='list forks of this trail id')
   list_p.add_argument('--limit', type=int, default=50, help='max trails to list')
   list_p.add_argument('--no-pager', action='store_true', help='do not pipe output through a pager')
 
@@ -479,7 +482,9 @@ def main(argv: list[str]) -> Optional[int]:
     '--interval', type=float, default=2.0, help='seconds between polls with --follow'
   )
 
-  tree_p = sub.add_parser('tree', help='render the parent/fork hierarchy reachable from a trail')
+  tree_p = sub.add_parser(
+    'tree', help='render the forked_from/fork hierarchy reachable from a trail'
+  )
   tree_p.add_argument('trail_id')
 
   fork_p = sub.add_parser(

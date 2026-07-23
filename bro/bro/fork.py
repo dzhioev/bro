@@ -1,14 +1,13 @@
 """forking of recorded trails.
 
-a *fork* spins up a fresh `Bro` preseeded with a parent trail's prefix and
+a *fork* spins up a fresh `Bro` preseeded with a forked_from trail's prefix and
 lets the caller continue with `.send(next_message)`. the new run gets its own
-trail with `parent={trail_id, step_id, relationship='fork'}` so the parent →
-child edge shows up under the same `parent.trail_id` GSI that sub-bro trails
-will use.
+trail with `forked_from={trail_id, step_id}` so the source → child edge is
+queryable through the fork index.
 
 two replay paths, picked automatically based on the spec / fork-point combo:
 
-- **server-side via ****`previous_response_id`** (cheap, same-provider/model
+- **server-side via `previous_response_id`** (cheap, same-provider/model
   only). when forking right after an `llm_call` step with the same provider,
   the same model, and no `system_prompt` override, set the new LLM's
   `_last_response_id` to that step's `response_id`. the provider holds the
@@ -34,14 +33,14 @@ import llm.llms.chat_gpt
 from bro.bros.bro import Bro
 from bro.registry import create_bro
 from llm.llm import LLM, LLMSpec
-from llm.tracker import NullTracker, Parent, RecordedTrail, Step, Tracker
+from llm.tracker import ForkedFrom, NullTracker, RecordedTrail, Step, Tracker
 
 
 def replay_messages(
   trail: RecordedTrail,
   up_to_step_id: str,
   *,
-  fetch_parent: Optional[Callable[[str], RecordedTrail]] = None,
+  fetch_forked_from: Optional[Callable[[str], RecordedTrail]] = None,
 ) -> list[dict]:
   """walk the trail's steps up to (and including) `up_to_step_id` and rebuild
   the OpenAI input list needed to resume the conversation from that point.
@@ -51,10 +50,10 @@ def replay_messages(
     trail's `system_prompt` step.
   - the ancestor prefix, when the trail is itself a fork: a fork trail's own
     steps carry only the post-fork suffix, so the prefix is rebuilt by
-    recursing through `fetch_parent(trail_id)` (each parent replayed up to its
+    recursing through `fetch_forked_from(trail_id)` (each forked_from replayed up to its
     fork step, its system message dropped — the youngest trail's recorded
     prompt stands for the whole conversation). a fork trail replayed without
-    `fetch_parent` raises rather than silently truncating the conversation.
+    `fetch_forked_from` raises rather than silently truncating the conversation.
   - `{'role': 'user', 'content': <text>}` for each `user_input`.
   - each `llm_call`'s `response.output` items appended in order — these carry
     intact `call_id`s on `function_call` items, which is what makes correct
@@ -78,7 +77,7 @@ def replay_messages(
   """
   system_text = _extract_system_prompt(trail)
   result: list[dict] = [{'role': 'system', 'content': system_text}]
-  result.extend(_ancestor_items(trail, fetch_parent))
+  result.extend(_ancestor_items(trail, fetch_forked_from))
   for step in trail.steps:
     if step.kind == 'user_input':
       result.append({'role': 'user', 'content': step.body})
@@ -98,24 +97,26 @@ def replay_messages(
     # (reasoning / message / function_call) for its turn.
     if step.step_id == up_to_step_id:
       return result
-  raise ValueError(f'step_id {up_to_step_id!r} not found in trail {trail.header.trail_id!r}')
+  raise ValueError(f'step_id {up_to_step_id!r} not found in trail {trail.header.id!r}')
 
 
 def _ancestor_items(
-  trail: RecordedTrail, fetch_parent: Optional[Callable[[str], RecordedTrail]]
+  trail: RecordedTrail, fetch_forked_from: Optional[Callable[[str], RecordedTrail]]
 ) -> list[dict]:
-  parent = trail.header.parent
-  if parent is None:
+  forked_from = trail.header.forked_from
+  if forked_from is None:
     return []
-  if fetch_parent is None:
+  if fetch_forked_from is None:
     raise ValueError(
-      f'trail {trail.header.trail_id!r} is a fork of {parent.trail_id!r}; '
-      'pass fetch_parent to rebuild the ancestor prefix'
+      f'trail {trail.header.id!r} is a fork of {forked_from.trail_id!r}; '
+      'pass fetch_forked_from to rebuild the ancestor prefix'
     )
-  parent_trail = fetch_parent(parent.trail_id)
-  # drop the parent's leading system message — the child's own recorded prompt
+  forked_from_trail = fetch_forked_from(forked_from.trail_id)
+  # drop the forked_from's leading system message — the child's own recorded prompt
   # (already at index 0 of the caller's list) stands for the conversation.
-  return replay_messages(parent_trail, parent.step_id, fetch_parent=fetch_parent)[1:]
+  return replay_messages(
+    forked_from_trail, forked_from.step_id, fetch_forked_from=fetch_forked_from
+  )[1:]
 
 
 def latest_fork_point(trail: RecordedTrail) -> str:
@@ -127,16 +128,16 @@ def latest_fork_point(trail: RecordedTrail) -> str:
   turn's last call. a trail killed mid-tool-loop thus resumes from the last
   consistent point before the unanswered call. for a fork trail the
   `system_prompt` step qualifies as the floor — an empty continuation still
-  resumes, through the ancestor prefix its parent pointer carries.
+  resumes, through the ancestor prefix its forked_from pointer carries.
 
-  raises `ValueError` when the trail has no step to resume from (a parentless
+  raises `ValueError` when the trail has no step to resume from (a forked_fromless
   trail with no user input recorded).
   """
   last_good: Optional[str] = None
   pending: set[str] = set()
   for step in trail.steps:
     if step.kind == 'system_prompt':
-      if trail.header.parent is not None and last_good is None:
+      if trail.header.forked_from is not None and last_good is None:
         last_good = step.step_id
     elif step.kind == 'user_input':
       if len(pending) == 0:
@@ -154,60 +155,64 @@ def latest_fork_point(trail: RecordedTrail) -> str:
       if len(pending) == 0:
         last_good = step.step_id
   if last_good is None:
-    raise ValueError(f'trail {trail.header.trail_id!r} has no step to resume from')
+    raise ValueError(f'trail {trail.header.id!r} has no step to resume from')
   return last_good
 
 
 def fork(
-  parent_trail: RecordedTrail,
+  forked_from_trail: RecordedTrail,
   up_to_step_id: str,
   *,
   llm_spec: Optional[LLMSpec] = None,
   system_prompt: Optional[str] = None,
   record: bool = True,
   tracker: Optional[Tracker] = None,
-  entry_point: str = 'fork',
-  fetch_parent: Optional[Callable[[str], RecordedTrail]] = None,
+  surface: str,
+  fetch_forked_from: Optional[Callable[[str], RecordedTrail]] = None,
 ) -> Bro:
-  """spin up a fresh `Bro` preseeded with the parent trail's prefix up to
+  """spin up a fresh `Bro` preseeded with the forked_from trail's prefix up to
   `up_to_step_id`. call `.send(next_message)` on the returned bro to continue
   the conversation.
 
-  `llm_spec` defaults to the parent's spec (rehydrated via `LLMSpec.from_dict`);
+  `llm_spec` defaults to the forked_from's spec (rehydrated via `LLMSpec.from_dict`);
   pass an override for cross-model / cross-provider forks. `system_prompt`
-  defaults to the prompt recorded on the parent (`system_prompt` step body);
+  defaults to the prompt recorded on the forked_from (`system_prompt` step body);
   pass an override to fork with a swapped prompt.
 
   the replay path is picked automatically: same-provider + same-model + fork
   at an `llm_call` step + no `system_prompt` override → server-side via
   `previous_response_id`. otherwise → client-side message replay, which needs
-  `fetch_parent` when the parent trail is itself a fork (see
+  `fetch_forked_from` when the forked_from trail is itself a fork (see
   `replay_messages`).
 
   `record=False` pins the new bro to a `NullTracker` — handy for one-shot
   exploration where the fork's trail is not worth keeping. `record=True` (the
   default) uses the explicit `tracker` if given, otherwise the bro's default
   factory (production: `HTTPTracker`; tests: `NullTracker` via `conftest.py`).
-  `entry_point` labels the new trail's header — the default suits the generic
-  `trails fork`; a surface with its own resume flow passes its own label
-  (`call --resume` passes 'call' so the continuation is itself resumable).
+  `surface` labels the driving program on the new trail; every caller supplies
+  it explicitly.
   """
-  bro = create_bro(parent_trail.header.bro)
-  spec = llm_spec if llm_spec is not None else LLMSpec.from_dict(parent_trail.header.llm_spec)
+  bro_name = forked_from_trail.header.bro
+  if bro_name is None:
+    raise ValueError(f'trail {forked_from_trail.header.id!r} has no bro persona')
+  bro = create_bro(bro_name)
+  spec = llm_spec if llm_spec is not None else LLMSpec.from_dict(forked_from_trail.header.llm_spec)
   bro.llm_spec = spec
 
-  fork_step = _find_step(parent_trail, up_to_step_id)
+  fork_step = _find_step(forked_from_trail, up_to_step_id)
   use_server_side = _server_side_eligible(
-    parent_spec=parent_trail.header.llm_spec,
+    forked_from_spec=forked_from_trail.header.llm_spec,
     new_spec=spec,
     fork_step=fork_step,
     system_prompt_override=system_prompt,
   )
-  parent_system_prompt = _extract_system_prompt(parent_trail)
-  effective_system_prompt = system_prompt if system_prompt is not None else parent_system_prompt
+  forked_from_system_prompt = _extract_system_prompt(forked_from_trail)
+  effective_system_prompt = (
+    system_prompt if system_prompt is not None else forked_from_system_prompt
+  )
   # `bro.system_prompt` is the raw prompt without the hold fragment;
-  # forks reuse the parent's exact text and skip BaseBro's fragment-appending
-  # path (the parent's prompt — recorded in the trail — already has the
+  # forks reuse the forked_from's exact text and skip BaseBro's fragment-appending
+  # path (the forked_from's prompt — recorded in the trail — already has the
   # fragment baked in from its original run).
   bro.system_prompt = effective_system_prompt
 
@@ -224,7 +229,7 @@ def fork(
   if use_server_side:
     _seed_response_id(inner_llm, fork_step.extras['response_id'])
   else:
-    prefix = replay_messages(parent_trail, up_to_step_id, fetch_parent=fetch_parent)
+    prefix = replay_messages(forked_from_trail, up_to_step_id, fetch_forked_from=fetch_forked_from)
     if system_prompt is not None:
       prefix[0] = {'role': 'system', 'content': system_prompt}
     _preseed(inner_llm, prefix)
@@ -234,18 +239,18 @@ def fork(
   # (client-side) or passes `previous_response_id=<seeded>` (server-side).
   bro._llm = inner_llm
 
-  parent = Parent(
-    trail_id=parent_trail.header.trail_id,
+  forked_from = ForkedFrom(
+    trail_id=forked_from_trail.header.id,
     step_id=up_to_step_id,
-    relationship='fork',
   )
   trail_id = bro._tracker.start_trail(
     bro=bro.name,
     llm_spec=spec.dump(),
     system_prompt=effective_system_prompt,
-    parent=parent,
+    forked_from=forked_from,
     interactive=True,
-    entry_point=entry_point,
+    surface=surface,
+    hold='guided',
   )
   bro.trail_id = trail_id if len(trail_id) > 0 else None
   return bro
@@ -253,7 +258,7 @@ def fork(
 
 def _server_side_eligible(
   *,
-  parent_spec: dict,
+  forked_from_spec: dict,
   new_spec: LLMSpec,
   fork_step: Step,
   system_prompt_override: Optional[str],
@@ -268,9 +273,9 @@ def _server_side_eligible(
   # covers every other case.
   if system_prompt_override is not None:
     return False
-  if parent_spec.get('type') != new_spec.TYPE:
+  if forked_from_spec.get('type') != new_spec.TYPE:
     return False
-  if parent_spec.get('model') != new_spec.model:
+  if forked_from_spec.get('model') != new_spec.model:
     return False
   if fork_step.kind != 'llm_call':
     return False
@@ -281,7 +286,7 @@ def _find_step(trail: RecordedTrail, step_id: str) -> Step:
   for step in trail.steps:
     if step.step_id == step_id:
       return step
-  raise ValueError(f'step_id {step_id!r} not found in trail {trail.header.trail_id!r}')
+  raise ValueError(f'step_id {step_id!r} not found in trail {trail.header.id!r}')
 
 
 def _seed_response_id(inner_llm: LLM, response_id: str) -> None:
@@ -302,7 +307,7 @@ def _extract_system_prompt(trail: RecordedTrail) -> str:
   for step in trail.steps:
     if step.kind == 'system_prompt':
       return step.body
-  raise ValueError(f'trail {trail.header.trail_id!r} has no system_prompt step')
+  raise ValueError(f'trail {trail.header.id!r} has no system_prompt step')
 
 
 def _response_output_items(llm_call_body: Any) -> list[dict]:

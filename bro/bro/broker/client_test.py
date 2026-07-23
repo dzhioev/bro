@@ -149,14 +149,14 @@ async def test_call_surfaces_started_and_returns_terminal(socket_dir):
       channel,
       Message(
         type='completed',
-        payload={'result': 'ok', 'end_reason': 'terminal'},
+        payload={'result': 'ok', 'end_reason': 'ok'},
         in_reply_to=request_message.id,
       ),
     )
 
     terminal = await asyncio.wait_for(call_task, TIMEOUT)
     assert terminal.type == 'completed'
-    assert terminal.payload == {'result': 'ok', 'end_reason': 'terminal'}
+    assert terminal.payload == {'result': 'ok', 'end_reason': 'ok'}
     assert [interim.payload for interim in interims] == [{'trail_id': 't1'}]
 
     # the uncorrelated message call() read past was set aside, not dropped
@@ -238,7 +238,7 @@ async def test_await_reply_reattaches_to_a_sent_request(socket_dir):
       channel,
       Message(
         type='completed',
-        payload={'result': 'ok', 'end_reason': 'terminal'},
+        payload={'result': 'ok', 'end_reason': 'ok'},
         in_reply_to=request_message.id,
       ),
     )
@@ -270,7 +270,7 @@ async def test_await_reply_started_rearms_the_deadline(socket_dir):
       channel,
       Message(
         type='completed',
-        payload={'result': 'ok', 'end_reason': 'terminal'},
+        payload={'result': 'ok', 'end_reason': 'ok'},
         in_reply_to=request_message.id,
       ),
     )

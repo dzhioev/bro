@@ -73,16 +73,24 @@ class _RecordingTracker(Tracker):
     self.ended: list[str] = []
 
   def start_trail(
-    self, bro, llm_spec, system_prompt, parent, interactive, entry_point, summoner=None
+    self,
+    bro,
+    llm_spec,
+    system_prompt,
+    forked_from,
+    interactive,
+    surface,
+    hold='unattended',
+    summoned_by=None,
   ) -> str:
     self.headers.append(
       {
         'bro': bro,
         'llm_spec': llm_spec,
         'system_prompt': system_prompt,
-        'parent': parent,
+        'forked_from': forked_from,
         'interactive': interactive,
-        'entry_point': entry_point,
+        'surface': surface,
       }
     )
     return 'tid'
@@ -90,7 +98,7 @@ class _RecordingTracker(Tracker):
   def step(self, kind, body, **extras) -> None:
     self.steps.append((kind, body, extras))
 
-  def end_trail(self, reason) -> None:
+  def end_trail(self, reason, detail=None) -> None:
     self.ended.append(reason)
 
 

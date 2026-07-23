@@ -132,7 +132,7 @@ class TestSummonHandler:
       # the root's base-ref inheritance source: the bare session key names a host
       # worktree
       parent_workspace=tmp_path / 'var' / 'cw' / 'worktrees' / 'ws',
-      summoner={'session': 'ws'},
+      summoner=None,
     )
     assert peer == ROOT
     assert timeout == 1800.0
@@ -187,7 +187,7 @@ class TestSummonHandler:
       prompt='deploy the thing',
       # a child summoner's base-ref inheritance source: its broker-<channel> clone
       parent_workspace=tmp_path / 'var' / 'cw' / 'containers' / f'broker-{CHILD}',
-      summoner={'target': 'ppp-dev', 'trail_id': 'T1'},
+      summoner={'trail_id': 'T1'},
     )
     assert peer == CHILD
     spawn_record = _audit(tmp_path)[-1]
@@ -310,7 +310,7 @@ class TestSummonLedger:
       CHILD, ROOT, Message(type='started', payload={'trail_id': 'T1'}, in_reply_to=request.id)
     )
     completed = Message(
-      type='completed', payload={'result': 'done', 'end_reason': 'terminal'}, in_reply_to=request.id
+      type='completed', payload={'result': 'done', 'end_reason': 'ok'}, in_reply_to=request.id
     )
     control.observe_delivery(CHILD, ROOT, completed)
     status = _status(tmp_path)
@@ -319,10 +319,10 @@ class TestSummonLedger:
     assert status['last']['target'] == 'devoops'
     assert status['last']['trail_id'] == 'T1'
     assert status['last']['summoner'] == {'session': 'ws'}
-    assert status['last']['outcome'] == 'terminal'
+    assert status['last']['outcome'] == 'ok'
     end_record = _audit(tmp_path)[-1]
     assert end_record['event'] == 'end'
-    assert end_record['outcome'] == 'terminal'
+    assert end_record['outcome'] == 'ok'
     assert end_record['trail_id'] == 'T1'
 
   def test_failed_records_the_failure_reason(self, control, tmp_path):

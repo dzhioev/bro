@@ -1,61 +1,52 @@
 # trails/CLAUDE.md
 
-Trails is the recording pipeline for bro runs: every `BaseBro.run()` / `.send()` ships its event stream (system prompt, user input, reasoning summaries, assistant text, tool calls/results, raw LLM payloads) to the deployed `trails-server`, where it becomes a *trail* — one recorded run — made of *steps* ordered by lulid (`base/lulid.py`). Recorded trails feed offline analysis, A/B comparison across specs, and forking (replay a prefix, continue differently). The canonical schema and design rationale live in the design doc on the `save bros logs` Flow task; this file covers the code, the deployed service, and the schema-evolution rules. Run any script with `--help` for flags.
+Trails is the universal registry and recording pipeline for LLM runs across harnesses. Every run has one header in the `trails-v2` DynamoDB table; its lossless body stays in harness-native storage behind the server-only backend seam. The deployed `trails-server` is the only component with DynamoDB/S3 access; clients use the shared bearer-token secret.
 
 ## Architecture
 
+```text
+bro · future claude daemon                  readers
+          │                                  │
+          └──────── HTTPS ───────┬───────────┘
+                                 ▼
+                         trails-server
+                                 │
+               ┌─────────────────┴─────────────────┐
+               ▼                                   ▼
+       DynamoDB `trails-v2`                 harness body backends
+       universal headers                    bro: `trail_steps` + S3 spill
+                                             claude: one S3 JSONL suffix
 ```
-  write  bro · HTTPTracker            read  trails CLI · TrailsClient
-            │ sync per-step POSTs              │ GET /v1/trails…
-            └────────────────┬─────────────────┘
-                             ▼
-                      trails-server        ECS Fargate · aiohttp · shared ALB
-                             │
-            ┌────────────────┼────────────────┐
-            ▼                ▼                 ▼
-     DynamoDB `trails`  DynamoDB         S3 `cw-trails-{account}`
-     header + aggs      `trail_steps`    bodies ≥ 50KB (spillover)
-                        lulid-keyed steps
-```
 
-- Write side lives in `llm/tracker.py` (`Tracker` ABC, `HTTPTracker`); plumbing through `BaseBro` and `ChatGPT` is documented in `bro/CLAUDE.md`. A summoned run's header may carry `summoner` (`session`, or the summoning bro's `target` + `trail_id`) as provenance; it is separate from the fork-lineage `parent` pointer. Writes are synchronous and crash-on-failure: `start_trail` fail-fast, `step` retries 100ms / 500ms / 2s then propagates, `end_trail` logs and never raises. Retries cover only transient failures (network errors, 5xx, 429); a deterministic 4xx (400 / 404 / 413) propagates immediately rather than sleeping through the schedule. The retried writes are idempotent: `HTTPTracker` mints each step's id client-side (a lulid) and reuses it across retries, so the server's conditional `attribute_not_exists(step_id)` Put turns a re-sent POST into a no-op — no duplicate step row, no double-counted token/step aggregate. The server auto-emits the `system_prompt` step inside trail creation.
-- Liveness: while a trail is open, `HTTPTracker` runs a keepalive thread — after `KEEPALIVE_INTERVAL_SECONDS` without a write it POSTs `/v1/trails/{id}/keepalive`, best-effort (failures logged and swallowed), which also keeps the persistent connection from idling past the shared ALB's timeout during long blocking tools. The server stamps `last_alive_at` on the header for every write, and a periodic in-server sweep (`storage.sweep_lost`) stamps live headers whose last activity predates `LOST_AFTER_SECONDS` with `end_reason='lost'` / `ended_at=<last activity>` (falling back to the newest step's `ts` for pre-keepalive headers). The stamp is header-only (no fabricated `end` step) and server-authored only (`POST …/end` rejects `lost`), and it self-heals: a swept run that was merely blocked keeps recording — `put_step` ignores `ended_at` — and its real `end_trail` overwrites the stamp with the true outcome.
-- Recording is mandatory for bros: the default tracker factory raises when the `trails` secret is missing; `NullTracker` is opt-in (env-var kill switch `TRAILS_DISABLED=1`, tests via `conftest.py`, one-offs via `tracker=`).
-- Read side is this package: `TrailsClient` for code, the `trails` CLI for humans, `fetch_recorded_trail` → `bro.fork.fork()` for forking.
-- Bros never touch DynamoDB or S3 — only the server holds those credentials; clients hold one bearer token.
+- `trails/server/storage.py` owns universal headers, immutable-field enforcement, list indexes, lost-run sweeping, backend dispatch, and serve-time `usage` / `models` projection.
+- `trails/server/backends.py` owns the `BodyBackend` seam and the cached `BroBackend` / `ClaudeBackend` implementations: body open/write, native-record iteration, generalized message projection, and provider-raw usage access.
+- Bro bodies retain the `trail_steps` table and the existing `trails/{id}/steps/{step_id}.json` spillover layout.
+- Claude bodies use `trails/claude/{id}/records.jsonl`; optional launch context uses `trails/claude/{id}/launch-context.json`. Artifacts are complete suffix snapshots replaced atomically with S3 PUT. Native step ids are decimal line indexes; invalid and blank lines remain addressable and are returned with their raw text.
+- Header migrations write reports under `trails/migrations/bro-header-v2/` in the trails bucket.
 
-## Layout
+## Surfaces
 
-- `client.py` — `TrailsClient` over the read endpoints (`list_trails` / `get_trail` / `get_steps` + `iter_*` cursor helpers); `default_client()` resolves the `trails` secret; `fetch_recorded_trail(client, trail_id)` rehydrates a header + steps into the `llm.tracker` dataclasses that `bro.fork.fork()` consumes — following the server's `{s3,url,size}` presigned-URL descriptor for any spilled body (via `resolve_body`, also exposed for callers that resolve selectively, like `call --resume`'s history extraction) so fork replay gets the full `llm_call.response.output` (the CLI's `list`/`show` keep the lazy descriptor)
-- `cli.py` (`trails`) — `list` / `show` / `tree` / `fork` subcommands; counterpart to `sessions` / `rewind` for recorded bros
-- `server/server.py` (`trails-server`) — aiohttp HTTP API: bearer-token auth middleware, request validation, storage exceptions → HTTP statuses, the periodic lost-trail sweep task
-- `server/storage.py` — DynamoDB + S3 mechanics: step write + header-aggregate update are one `TransactWriteItems`; bodies ≥ 50KB spill to S3, > 10MB rejected with 413; reads resolve spilled bodies transparently (inline < 1MB, presigned URL above); floats convert to Decimal on write and back on read (DynamoDB numbers are Decimal)
-- `server/` scripts — `deploy.sh`, `restart.sh`, `verify_deps.sh`, `run_local.sh`, `bootstrap_secrets.sh`; mirror `flow/focus/server/`
-- `bootstrap.sh` — writes the client-side `trails` secret from the deployed server's SSM token and the configured delegated subdomain
+- `llm/tracker.py` is the bro write client. `HTTPTracker` creates a `harness='bro'` trail, appends client-idempotent steps, keeps it alive, and ends it with `ok | raised | error`; the server alone stamps `lost`.
+- `trails/client.py` is the synchronous read client. It exposes paged headers, native steps, and generalized messages through `iter_trails`, `iter_steps`, and `iter_messages`.
+- `GET /v1/trails/{id}/steps` returns the backend's lossless native records. `GET /v1/trails/{id}/messages` returns generalized events and accepts repeated `type` query parameters.
+- `POST /v1/trails` creates a header and opens its body; a Claude create may include `body.launch_context`. `PUT /v1/trails/{id}/artifact` replaces a Claude snapshot. `PATCH /v1/trails/{id}` accepts only the live mutable header/native fields. `POST /v1/trails/{id}/end` finalizes a run.
+- Header responses carry stored fields plus computed `usage` and `models`. Provider-raw per-model counters in `native.usage` are the source of truth.
+- List queries accept exactly one indexed selector: `harness`, `bro`, or `forked_from`, plus the common time range and cursor.
+- `trails/cli.py` remains the bro-oriented reader until `rewind` consolidation lands in the next stage.
 
-## Reader CLI
+## Auth and deployment
 
-- `trails list [--bro | --parent] [--since --until --limit]` — newest first, paged through `$PAGER`; `--parent <trail_id>` lists a trail's forks
-- `trails show <trail_id> [-f] [--interval <seconds>]` — header + step listing; each step line starts with the step's full id (that is the id `fork` takes), inline bodies truncate with `... <N more chars>`, spilled bodies render as size + URL. `-f`/`--follow` streams instead of paging: it keeps polling for new steps (`--interval` seconds apart) and renders them as they land, `tail -f`-style, exiting once the trail ends (the `end` step, or `ended_at` on the header for a trail that never got one); transient server errors are logged and retried on the next tick
-- `trails tree <trail_id>` — walks parent pointers up to the root, then renders the full fork hierarchy
-- `trails fork <trail_id> <step_id> [--initial <msg>] [--no-record]` — forks at the step (chaining through ancestor trails when the target is itself a fork) and drops into a `.send()` REPL. For continuing a `call` conversation prefer `call <bro> --resume` (`bro/launch/CLAUDE.md`), which picks the fork point and renders the history itself
+Bearer auth is mandatory outside an explicit loopback-only `TRAILS_ALLOW_NO_AUTH=1` run. The deployed token lives in SSM `/trails/bearer-token`; `trails/bootstrap.sh` writes the client secret.
 
-The CLI keeps the parent's spec and prompt; for cross-model / cross-prompt forks call `bro.fork.fork(trail, step_id, llm_spec=…, system_prompt=…)` directly with a trail from `fetch_recorded_trail`. Fork-path selection (server-side `previous_response_id` vs client-side replay) is automatic — see `bro/fork.py`.
+The ECS service is defined in `infra/cdk/trails_stack.py`. Both header tables, `trail_steps`, and the bucket use `RETAIN`. The stack keeps the legacy `trails` table beside `trails-v2` for cutover and grants the task role both; `TRAILS_HEADER_TABLE` selects the task's active table at CDK synth, defaulting to `trails-v2`.
 
-## Auth
+Header cutover order:
 
-Bearer token, mandatory by default; the no-auth escape hatch (`TRAILS_ALLOW_NO_AUTH=1`) requires a loopback `HOST` and is opt-in only. `server/run_local.sh` does **not** use it — it runs with bearer auth (`exec trails-server --allow-env` after exporting `TRAILS_BEARER_TOKEN` from the `trails` secret). The deployed token lives in SSM `/trails/bearer-token` (seeded by `server/bootstrap_secrets.sh`); clients resolve the `trails` secret (written by `trails/bootstrap.sh` to `~/.ppp/trails.json`, see `setup/CLAUDE.md`) — read and write sides share that one credential.
+1. Run `trails/server/prepare_header_table.sh` to add `trails-v2` while the existing image and task definition still use `trails`.
+2. Run `trails-migrate-headers --bucket cw-trails-<account> --dry-run`, inspect the report, then run it without `--dry-run` for the bulk copy.
+3. Freeze new bro writes and wait for every active bro trail to end; no bro run may straddle the switch.
+4. Run the same migration command again for the idempotent delta pass.
+5. Deploy every trails-server task from the landed revision with recording disabled for the deployment run (`--no-trails` / `TRAILS_DISABLED=1`). The default CDK selection points the tasks at `trails-v2`.
+6. Verify `/health`, header reads, a new bro run, native steps, and generalized messages before releasing the write freeze. Keep the legacy table intact.
 
-## Deployment
-
-ECS Fargate behind the shared ALB at `trails.<apex>`; CDK stacks `TrailsECRStack` + `TrailsServerStack` in `infra/cdk/trails_stack.py` (stack table in `infra/CLAUDE.md`). Both DynamoDB tables and the S3 bucket are `RETAIN` — trails outlive the stack.
-
-First-time ordering: `bootstrap_secrets.sh` → `deploy.sh` → `trails/bootstrap.sh` on each client machine.
-
-Recording is mandatory and crash-on-failure, so an unhealthy `trails-server` blocks every bro run — including the devoops bro that would deploy the fix. When the server itself is the thing that's broken, run the bro with `--no-trails` (e.g. `bro chat --no-trails devoops "deploy trails"`): it sets `TRAILS_DISABLED` in the container and drops the `trails` secret from the scoped set, so the rollout can't break the bro's own recording mid-deploy. `--no-trails` covers the containerized `bro run` / `bro chat` path and its aliases; an in-place run has no launch hop to set the env, so set `TRAILS_DISABLED=1` in the environment instead. Running `./trails/server/deploy.sh` directly (no bro) sidesteps recording entirely.
-
-Server changes are not live until deployed. The unit suite fakes storage at the HTTP boundary, so a storage-layer change deserves a live re-smoke after deploy: `bro run dev 'list this dir'`, then `trails show <new id>` — the float→Decimal conversion was exactly the kind of gap the fakes miss.
-
-## Schema evolution
-
-The schema evolves additively, never destructively. New fields arrive optional; readers (`trails` CLI, `TrailsClient`, `bro.fork`) tolerate their absence on old rows — including pre-provenance headers without `summoner`; stored rows are never rewritten in place to change existing values (both tables are append-only with indefinite retention). The one sanctioned in-place write is an additive backfill that populates a newly-introduced optional attribute on old rows — idempotent, conditioned on the attribute's absence — when a new GSI needs it present to be complete (this is how the constant-PK `gsi_pk` behind the global newest-first list reached pre-existing rows). Such backfills (and one-off migrations like the `body`→`body_s3` spill-attribute move) ship as throwaway one-time scripts run right after the deploy and removed once done, so they don't live in the tree. Every header carries `bro_version` (= `configs.VERSION` at write time) — a change that cannot be expressed additively bumps `configs.VERSION` and keeps readers working for every prior version, keyed off that field. The reserved-for-v2 sub-bro fields (`parent.relationship='subagent'`, `entry_point='subagent'`, `tool_result.child_trail_id`) follow the same rule: v1 rows simply omit them.
+Server changes are not live until deployed. The unit suite fakes AWS boundaries, so a storage change requires a post-deploy run/read smoke in addition to tests.

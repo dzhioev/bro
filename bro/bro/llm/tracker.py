@@ -56,42 +56,40 @@ StepKind = Literal[
   'end',
 ]
 
-Relationship = Literal['fork', 'subagent']
-
-EndReason = Literal['terminal', 'raised', 'error']
+EndReason = Literal['ok', 'raised', 'error']
 
 
 @dataclass(frozen=True)
-class Parent:
-  """pointer to a parent trail's fork point.
-
-  `relationship='subagent'` is reserved for when sub-bros come back; v1 never
-  emits it.
-  """
+class ForkedFrom:
+  """pointer to a source trail's fork point."""
 
   trail_id: str
   step_id: str
-  relationship: Relationship
 
 
 @dataclass(frozen=True)
 class Trail:
   """trail header — the metadata written once when the trail opens.
 
-  `bro_version` is sourced from `configs.VERSION` inside `start_trail`.
+  `version` is sourced from `configs.VERSION` inside `start_trail`.
   `llm_spec` is the dict returned by `LLMSpec.dump()`. `system_prompt` is
   emitted as the first step rather than carried on the header.
   """
 
-  trail_id: str
-  bro: str
-  bro_version: int
-  llm_spec: dict
+  id: str
+  harness: str
+  bro: Optional[str]
+  version: str
+  native: dict
   started_at: str
   interactive: bool
-  entry_point: str
-  parent: Optional[Parent]
-  summoner: Optional[dict[str, Any]] = None
+  surface: str
+  forked_from: Optional[ForkedFrom]
+  summoned_by: Optional[dict[str, Any]] = None
+
+  @property
+  def llm_spec(self) -> dict:
+    return self.native['llm']
 
 
 @dataclass(frozen=True)
@@ -134,16 +132,17 @@ class Tracker(ABC):
     bro: str,
     llm_spec: dict,
     system_prompt: str,
-    parent: Optional[Parent],
+    forked_from: Optional[ForkedFrom],
     interactive: bool,
-    entry_point: str,
-    summoner: Optional[dict[str, Any]] = None,
+    surface: str,
+    hold: str = 'unattended',
+    summoned_by: Optional[dict[str, Any]] = None,
   ) -> str:
     """open a new trail. returns the assigned `trail_id`.
 
     the prompt is recorded as the first step (kind=`system_prompt`, turn 0);
-    everything else goes on the trail header. `summoner` is optional provenance
-    for a summoned run and is unrelated to the fork-lineage `parent` pointer.
+    everything else goes on the trail header. `summoned_by` is optional provenance
+    for a summoned run and is unrelated to the fork-lineage `forked_from` pointer.
     """
     ...
 
@@ -155,7 +154,7 @@ class Tracker(ABC):
     ...
 
   @abstractmethod
-  def end_trail(self, reason: EndReason) -> None:
+  def end_trail(self, reason: EndReason, detail: Optional[str] = None) -> None:
     """close the current trail. emits a final `kind='end'` step carrying the
     reason. safe to call more than once — extra calls are ignored.
     """
@@ -172,17 +171,18 @@ class NullTracker(Tracker):
     bro: str,
     llm_spec: dict,
     system_prompt: str,
-    parent: Optional[Parent],
+    forked_from: Optional[ForkedFrom],
     interactive: bool,
-    entry_point: str,
-    summoner: Optional[dict[str, Any]] = None,
+    surface: str,
+    hold: str = 'unattended',
+    summoned_by: Optional[dict[str, Any]] = None,
   ) -> str:
     return ''
 
   def step(self, kind: StepKind, body: Any, **extras: Any) -> None:
     pass
 
-  def end_trail(self, reason: EndReason) -> None:
+  def end_trail(self, reason: EndReason, detail: Optional[str] = None) -> None:
     pass
 
 
@@ -220,25 +220,28 @@ class LocalFileTracker(Tracker):
     bro: str,
     llm_spec: dict,
     system_prompt: str,
-    parent: Optional[Parent],
+    forked_from: Optional[ForkedFrom],
     interactive: bool,
-    entry_point: str,
-    summoner: Optional[dict[str, Any]] = None,
+    surface: str,
+    hold: str = 'unattended',
+    summoned_by: Optional[dict[str, Any]] = None,
   ) -> str:
     self._trail_id = lulid()
     header = {
       'record_type': 'trail',
-      'trail_id': self._trail_id,
+      'id': self._trail_id,
+      'harness': 'bro',
       'bro': bro,
-      'bro_version': configs.VERSION,
-      'llm_spec': llm_spec,
+      'version': configs.VERSION,
+      'native': {'llm': llm_spec},
       'started_at': _now_iso(),
       'interactive': interactive,
-      'entry_point': entry_point,
-      'parent': asdict(parent) if parent is not None else None,
+      'surface': surface,
+      'hold': hold,
+      'forked_from': asdict(forked_from) if forked_from is not None else None,
     }
-    if summoner is not None:
-      header['summoner'] = summoner
+    if summoned_by is not None:
+      header['summoned_by'] = summoned_by
     self._write(header)
     # the system prompt is the trail's first step rather than a header field —
     # keeps the header lean and lets a fork swap the prompt without rewriting
@@ -260,12 +263,12 @@ class LocalFileTracker(Tracker):
     }
     self._write(record)
 
-  def end_trail(self, reason: EndReason) -> None:
+  def end_trail(self, reason: EndReason, detail: Optional[str] = None) -> None:
     if self._trail_id is None:
       return
     # a final `end` step is the JSONL equivalent of the server updating
     # `ended_at` / `end_reason` on the trail row.
-    self.step('end', {'reason': reason})
+    self.step('end', {'reason': reason, **({'detail': detail} if detail is not None else {})})
     self._trail_id = None
 
   def close(self) -> None:
@@ -353,24 +356,27 @@ class HTTPTracker(Tracker):
     bro: str,
     llm_spec: dict,
     system_prompt: str,
-    parent: Optional[Parent],
+    forked_from: Optional[ForkedFrom],
     interactive: bool,
-    entry_point: str,
-    summoner: Optional[dict[str, Any]] = None,
+    surface: str,
+    hold: str = 'unattended',
+    summoned_by: Optional[dict[str, Any]] = None,
   ) -> str:
     payload = {
+      'harness': 'bro',
       'bro': bro,
-      'bro_version': configs.VERSION,
-      'llm_spec': llm_spec,
-      'system_prompt': system_prompt,
-      'parent': asdict(parent) if parent is not None else None,
+      'version': configs.VERSION,
+      'native': {'llm': llm_spec},
+      'body': {'system_prompt': system_prompt},
+      'forked_from': asdict(forked_from) if forked_from is not None else None,
       'interactive': interactive,
-      'entry_point': entry_point,
+      'surface': surface,
+      'hold': hold,
     }
-    if summoner is not None:
-      payload['summoner'] = summoner
+    if summoned_by is not None:
+      payload['summoned_by'] = summoned_by
     response = self._post('/v1/trails', payload, retry_delays=())
-    trail_id: str = response['trail_id']
+    trail_id: str = response['id']
     self._trail_id = trail_id
     self._start_keepalive()
     return trail_id
@@ -387,11 +393,13 @@ class HTTPTracker(Tracker):
       retry_delays=_STEP_RETRY_DELAYS_SECONDS,
     )
 
-  def end_trail(self, reason: EndReason) -> None:
+  def end_trail(self, reason: EndReason, detail: Optional[str] = None) -> None:
     if self._trail_id is None:
       return
     self._stop_keepalive()
     payload = {'step_id': _new_step_id(), 'reason': reason}
+    if detail is not None:
+      payload['detail'] = detail
     try:
       self._post(
         f'/v1/trails/{self._trail_id}/end',
@@ -526,20 +534,21 @@ def read_local_file(path: Path | str) -> list[RecordedTrail]:
       continue
     record = json.loads(line)
     record_type = record['record_type']
-    trail_id = record['trail_id']
+    trail_id = record['id'] if record_type == 'trail' else record['trail_id']
     if record_type == 'trail':
-      parent_data = record.get('parent')
-      parent = Parent(**parent_data) if parent_data is not None else None
+      forked_from_data = record.get('forked_from')
+      forked_from = ForkedFrom(**forked_from_data) if forked_from_data is not None else None
       headers[trail_id] = Trail(
-        trail_id=trail_id,
-        bro=record['bro'],
-        bro_version=record['bro_version'],
-        llm_spec=record['llm_spec'],
+        id=trail_id,
+        harness=record['harness'],
+        bro=record.get('bro'),
+        version=record['version'],
+        native=record['native'],
         started_at=record['started_at'],
         interactive=record['interactive'],
-        entry_point=record['entry_point'],
-        parent=parent,
-        summoner=record.get('summoner'),
+        surface=record['surface'],
+        forked_from=forked_from,
+        summoned_by=record.get('summoned_by'),
       )
       steps[trail_id] = []
       order.append(trail_id)

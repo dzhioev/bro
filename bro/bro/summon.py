@@ -134,7 +134,7 @@ def _interpret_terminal(terminal: 'Message', trail_id: Optional[str]) -> str:
   if terminal.type == Tag.COMPLETED:
     end_reason = terminal.payload.get('end_reason')
     result = terminal.payload.get('result')
-    if end_reason == 'terminal':
+    if end_reason == 'ok':
       return result if result is not None else ''
     raise SummonError(f'summon {end_reason}: {result}')
   if terminal.type == Tag.FAILED:

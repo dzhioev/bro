@@ -322,7 +322,7 @@ def run_main(
     observer = RichConsoleRenderer(prefix=bro.name)
   hold = args['hold'] if args['hold'] is not None else 'unattended'
   try:
-    result = asyncio.run(bro.run(input_text, observer=observer, hold=hold))
+    result = asyncio.run(bro.run(input_text, observer=observer, surface='ask', hold=hold))
   except BroRaised as error:
     log.error('raised: %s', error.reason)
     return 1

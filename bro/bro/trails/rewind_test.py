@@ -129,13 +129,12 @@ class TestFormatTrailRow:
   def test_live_trail(self):
     out = _format_trail_row(
       {
-        'trail_id': 'T1234567890ABCDEF',
+        'id': 'T1234567890ABCDEF',
         'bro': 'dev',
-        'llm_spec': {'model': 'gpt-5'},
+        'native': {'llm': {'model': 'gpt-5'}},
         'started_at': '2026-06-07T22:14:03.000000Z',
-        'ended_at': None,
-        'end_reason': None,
-        'parent': None,
+        'end': None,
+        'forked_from': None,
       },
       NO_COLOR,
     )
@@ -144,32 +143,30 @@ class TestFormatTrailRow:
     assert 'live' in out
     assert 'fork-of' not in out
 
-  def test_done_trail_with_parent(self):
+  def test_done_trail_with_forked_from(self):
     out = _format_trail_row(
       {
-        'trail_id': 'T-child',
+        'id': 'T-child',
         'bro': 'dev',
-        'llm_spec': {'model': 'gpt-5'},
+        'native': {'llm': {'model': 'gpt-5'}},
         'started_at': '2026-06-07T22:14:03.000000Z',
-        'ended_at': '2026-06-07T22:15:00.000000Z',
-        'end_reason': 'terminal',
-        'parent': {'trail_id': 'T-parent-xyz'},
+        'end': {'at': '2026-06-07T22:15:00.000000Z', 'reason': 'ok'},
+        'forked_from': {'trail_id': 'T-forked_from-xyz'},
       },
       NO_COLOR,
     )
-    assert 'done:terminal' in out
-    assert 'fork-of T-parent-xyz' in out
+    assert 'done:ok' in out
+    assert 'fork-of T-forked_from-xyz' in out
 
   def test_lost_trail(self):
     out = _format_trail_row(
       {
-        'trail_id': 'T-lost',
+        'id': 'T-lost',
         'bro': 'dev',
-        'llm_spec': {'model': 'gpt-5'},
+        'native': {'llm': {'model': 'gpt-5'}},
         'started_at': '2026-06-07T22:14:03.000000Z',
-        'ended_at': '2026-06-07T22:15:00.000000Z',
-        'end_reason': 'lost',
-        'parent': None,
+        'end': {'at': '2026-06-07T22:15:00.000000Z', 'reason': 'lost'},
+        'forked_from': None,
       },
       NO_COLOR,
     )
@@ -178,38 +175,35 @@ class TestFormatTrailRow:
 
 
 class TestFormatTrailHeader:
-  def test_render_includes_aggregates_and_parent(self):
+  def test_render_includes_aggregates_and_forked_from(self):
     out = _format_trail_header(
       {
-        'trail_id': 'T1',
+        'id': 'T1',
         'bro': 'dev',
-        'bro_version': 1,
-        'llm_spec': {'type': 'chat_gpt', 'model': 'gpt-5'},
-        'started_at': '2026-06-07T22:14:03.000000Z',
-        'ended_at': '2026-06-07T22:15:00.000000Z',
-        'end_reason': 'terminal',
-        'interactive': False,
-        'entry_point': 'cli:bro_run',
-        'parent': {'trail_id': 'T-p', 'step_id': 'S5', 'relationship': 'fork'},
-        'summoner': {'target': 'pm', 'trail_id': 'T-summoner'},
-        'continuation': {'provider': 'openai', 'response_id': 'r1'},
-        'aggregates': {
-          'turn_count': 3,
-          'tool_call_count': 2,
-          'tokens_in': 100,
-          'tokens_out': 50,
-          'tokens_reasoning': 25,
+        'harness': 'bro',
+        'version': '1',
+        'native': {
+          'llm': {'type': 'chat_gpt', 'model': 'gpt-5'},
           'step_counts_by_kind': {'reasoning': 3, 'tool_call': 2, 'user_input': 1, 'end': 0},
         },
+        'started_at': '2026-06-07T22:14:03.000000Z',
+        'end': {'at': '2026-06-07T22:15:00.000000Z', 'reason': 'ok'},
+        'interactive': False,
+        'surface': 'ask',
+        'forked_from': {'trail_id': 'T-p', 'step_id': 'S5'},
+        'summoned_by': {'trail_id': 'T-summoned_by'},
+        'turn_count': 3,
+        'usage': {'gpt-5': {'input': 100, 'cache_write': 0, 'cache_read': 0, 'output': 50}},
+        'models': ['gpt-5'],
       },
       NO_COLOR,
     )
     assert 'T1' in out
     assert 'gpt-5' in out
-    assert 'turns=3' in out
-    assert 'tokens_in=100' in out
-    assert 'fork T-p' in out
-    assert 'summoner   {"target": "pm", "trail_id": "T-summoner"}' in out
+    assert 'turns      3' in out
+    assert '"input": 100' in out
+    assert 'T-p @ step S5' in out
+    assert 'summoned_by   {"trail_id": "T-summoned_by"}' in out
     assert 'reasoning=3' in out
     assert 'end=0' not in out  # zero counts pruned
 
@@ -221,7 +215,7 @@ class TestRenderTree:
     lines: list[str] = []
     _render_tree(
       client,
-      {'trail_id': 'TROOT', 'bro': 'dev', 'llm_spec': {'model': 'gpt-5'}, 'parent': None},
+      {'id': 'TROOT', 'bro': 'dev', 'native': {'llm': {'model': 'gpt-5'}}, 'forked_from': None},
       '',
       is_last=True,
       lines=lines,
@@ -235,21 +229,21 @@ class TestRenderTree:
   def test_renders_children_and_highlight(self):
     client = MagicMock()
 
-    def fake_iter(*, parent):
-      if parent == 'TROOT':
+    def fake_iter(*, forked_from):
+      if forked_from == 'TROOT':
         return iter(
           [
             {
-              'trail_id': 'T-a',
+              'id': 'T-a',
               'bro': 'dev',
-              'llm_spec': {'model': 'gpt-5'},
-              'parent': {'trail_id': 'TROOT', 'step_id': 'S1'},
+              'native': {'llm': {'model': 'gpt-5'}},
+              'forked_from': {'id': 'TROOT', 'step_id': 'S1'},
             },
             {
-              'trail_id': 'T-b',
+              'id': 'T-b',
               'bro': 'dev',
-              'llm_spec': {'model': 'gpt-5'},
-              'parent': {'trail_id': 'TROOT', 'step_id': 'S2'},
+              'native': {'llm': {'model': 'gpt-5'}},
+              'forked_from': {'id': 'TROOT', 'step_id': 'S2'},
             },
           ]
         )
@@ -259,7 +253,7 @@ class TestRenderTree:
     lines: list[str] = []
     _render_tree(
       client,
-      {'trail_id': 'TROOT', 'bro': 'dev', 'llm_spec': {'model': 'gpt-5'}, 'parent': None},
+      {'id': 'TROOT', 'bro': 'dev', 'native': {'llm': {'model': 'gpt-5'}}, 'forked_from': None},
       '',
       is_last=True,
       lines=lines,
@@ -277,7 +271,7 @@ class TestForkRepl:
     bro = MagicMock()
     bro.name = 'dev'
 
-    async def fake_send(msg: str) -> str:
+    async def fake_send(msg: str, *, surface: str) -> str:
       return f'reply-to-{msg}'
 
     bro.send.side_effect = fake_send
@@ -298,7 +292,7 @@ class TestForkRepl:
     bro = MagicMock()
     bro.name = 'dev'
 
-    async def fake_send(msg: str) -> str:
+    async def fake_send(msg: str, *, surface: str) -> str:
       return f'reply-to-{msg}'
 
     bro.send.side_effect = fake_send
@@ -314,7 +308,7 @@ class TestForkRepl:
     bro = MagicMock()
     bro.name = 'dev'
 
-    async def fake_send(msg: str) -> str:
+    async def fake_send(msg: str, *, surface: str) -> str:
       return f'reply-to-{msg}'
 
     bro.send.side_effect = fake_send
@@ -352,7 +346,7 @@ class TestFollowSteps:
       iter([]),
       iter([{'step_id': 's2', 'kind': 'end'}]),
     ]
-    client.get_trail.return_value = {'ended_at': None}
+    client.get_trail.return_value = {'end': None}
     sleeps: list[float] = []
     rows = list(_follow_steps(client, 'T1', interval=1.5, sleep=sleeps.append))
     assert [r['step_id'] for r in rows] == ['s1', 's2']
@@ -368,8 +362,8 @@ class TestFollowSteps:
       iter([]),
     ]
     client.get_trail.side_effect = [
-      {'ended_at': None},
-      {'ended_at': '2026-06-07T00:00:01.000000Z'},
+      {'end': None},
+      {'end': {'at': '2026-06-07T00:00:01.000000Z', 'reason': 'ok'}},
     ]
     sleeps: list[float] = []
     rows = list(_follow_steps(client, 'T1', interval=1.0, sleep=sleeps.append))
@@ -382,7 +376,7 @@ class TestFollowSteps:
       iter([]),
       iter([{'step_id': 's9', 'kind': 'end'}]),
     ]
-    client.get_trail.return_value = {'ended_at': '2026-06-07T00:00:01.000000Z'}
+    client.get_trail.return_value = {'end': {'at': '2026-06-07T00:00:01.000000Z', 'reason': 'ok'}}
     rows = list(_follow_steps(client, 'T1', interval=1.0, sleep=lambda _: None))
     assert [r['step_id'] for r in rows] == ['s9']
 
@@ -417,16 +411,17 @@ class TestCmdShowFollow:
   def test_streams_header_then_steps_and_exits_on_end(self, capsys):
     client = MagicMock()
     client.get_trail.return_value = {
-      'trail_id': 'T1',
+      'id': 'T1',
       'bro': 'dev',
-      'bro_version': 1,
-      'llm_spec': {'model': 'gpt-5'},
+      'harness': 'bro',
+      'version': '1',
+      'native': {'llm': {'model': 'gpt-5'}},
       'started_at': '2026-06-07T22:14:03.000000Z',
       'ended_at': None,
       'end_reason': None,
       'interactive': False,
-      'entry_point': 'cli:bro_run',
-      'parent': None,
+      'surface': 'ask',
+      'forked_from': None,
       'aggregates': {},
     }
     client.iter_steps.return_value = iter(
@@ -458,7 +453,16 @@ class TestCmdList:
     client = MagicMock()
     client.iter_trails.return_value = iter([])
     rc = cli._command_list(
-      client, {'bro': None, 'parent': None, 'since': None, 'until': None, 'limit': 10}, NO_COLOR
+      client,
+      {
+        'harness': None,
+        'bro': None,
+        'forked_from': None,
+        'since': None,
+        'until': None,
+        'limit': 10,
+      },
+      NO_COLOR,
     )
     assert rc == 0
     error = capsys.readouterr().err

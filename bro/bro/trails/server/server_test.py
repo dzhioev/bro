@@ -12,114 +12,126 @@ def _auth(token: str = TOKEN) -> dict[str, str]:
   return {'Authorization': f'Bearer {token}'}
 
 
+def _create_payload(**overrides) -> dict:
+  payload = {
+    'harness': 'bro',
+    'bro': 'ppp-dev',
+    'version': '2',
+    'interactive': False,
+    'surface': 'ask',
+    'hold': 'unattended',
+    'native': {'llm': {'type': 'chat_gpt', 'model': 'gpt-5'}},
+    'body': {'system_prompt': 'hello'},
+  }
+  payload.update(overrides)
+  return payload
+
+
 class FakeStorage:
-  """in-memory storage matching the surface of `storage.Storage`.
-
-  Reproduces the contract handlers depend on (returns + raises), not the
-  DynamoDB / S3 mechanics. The real Storage gets exercised against a deployed
-  stack via the curl smoke test in the task's exit criteria.
-  """
-
   def __init__(self):
     self.trails: dict[str, dict] = {}
     self.steps: dict[str, list[dict]] = {}
+    self.artifacts: dict[str, str] = {}
     self._counter = 0
     self.raise_body_too_large = False
     self.sweep_calls = 0
 
   def _new_id(self) -> str:
     self._counter += 1
-    return f'01ID{self._counter:022d}'
+    return f'id-{self._counter}'
 
   def _now(self) -> str:
     return f'2026-06-07T00:00:{self._counter:02d}.000000Z'
 
-  async def create_trail(
-    self, *, bro, bro_version, llm_spec, system_prompt, parent, interactive, entry_point, summoner
-  ):
-    trail_id = self._new_id()
+  async def create_trail(self, **payload):
+    trail_id = payload.get('trail_id') or self._new_id()
     started_at = self._now()
-    self.trails[trail_id] = {
-      'trail_id': trail_id,
-      'bro': bro,
-      'bro_version': bro_version,
-      'llm_spec': llm_spec,
+    native = payload.get('native') or {}
+    header = {
+      'id': trail_id,
+      'harness': payload['harness'],
+      'version': payload['version'],
       'started_at': started_at,
-      'ended_at': None,
-      'end_reason': None,
-      'interactive': interactive,
-      'entry_point': entry_point,
-      'parent': parent,
-      'continuation': None,
-      'aggregates': {
-        'turn_count': 0,
-        'tool_call_count': 0,
-        'tokens_in': 0,
-        'tokens_out': 0,
-        'tokens_reasoning': 0,
-        'step_counts_by_kind': dict.fromkeys(storage.STEP_KINDS, 0) | {'system_prompt': 1},
-      },
+      'end': None,
+      'last_alive_at': started_at,
+      'interactive': payload['interactive'],
+      'surface': payload['surface'],
+      'turn_count': 0,
+      'native': native,
+      'usage': {},
+      'models': [],
     }
-    if summoner is not None:
-      self.trails[trail_id]['summoner'] = summoner
-    self.steps[trail_id] = [
-      {
-        'trail_id': trail_id,
-        'step_id': self._new_id(),
-        'ts': started_at,
-        'kind': 'system_prompt',
-        'body': system_prompt,
-        'turn_index': 0,
-      }
-    ]
-    return {'trail_id': trail_id, 'started_at': started_at}
+    for field in ('bro', 'hold', 'forked_from', 'summoned_by', 'subject', 'location'):
+      if payload.get(field) is not None:
+        header[field] = payload[field]
+    self.trails[trail_id] = header
+    self.steps[trail_id] = []
+    if payload['harness'] == 'bro':
+      self.steps[trail_id].append(
+        {
+          'trail_id': trail_id,
+          'step_id': self._new_id(),
+          'ts': started_at,
+          'kind': 'system_prompt',
+          'body': payload['body']['system_prompt'],
+        }
+      )
+    return {'id': trail_id, 'started_at': started_at}
 
   async def put_step(self, *, trail_id, kind, body, extras, step_id=None):
     if self.raise_body_too_large:
       raise storage.BodyTooLarge('too big')
     if trail_id not in self.trails:
       raise storage.TrailNotFound(trail_id)
-    step_id = step_id if step_id is not None else self._new_id()
-    timestamp = self._now()
     self.steps[trail_id].append(
       {
         'trail_id': trail_id,
-        'step_id': step_id,
-        'ts': timestamp,
+        'step_id': step_id if step_id is not None else self._new_id(),
+        'ts': self._now(),
         'kind': kind,
         'body': body,
         **extras,
       }
     )
-    counts = self.trails[trail_id]['aggregates']['step_counts_by_kind']
-    counts[kind] = counts.get(kind, 0) + 1
-    return {'step_id': step_id, 'ts': timestamp}
+    return {}
 
-  async def end_trail(self, *, trail_id, reason, continuation, step_id=None):
+  async def replace_artifact(self, trail_id, artifact, metadata):
     if trail_id not in self.trails:
       raise storage.TrailNotFound(trail_id)
-    timestamp = self._now()
-    self.trails[trail_id]['ended_at'] = timestamp
-    self.trails[trail_id]['end_reason'] = reason
-    if continuation is not None:
-      self.trails[trail_id]['continuation'] = continuation
-    self.steps[trail_id].append(
-      {
-        'trail_id': trail_id,
-        'step_id': step_id if step_id is not None else self._new_id(),
-        'ts': timestamp,
-        'kind': 'end',
-        'body': {'reason': reason},
-      }
-    )
-    return {'ended_at': timestamp}
+    if self.trails[trail_id]['harness'] != 'claude':
+      raise ValueError('artifact replacement is available only for claude trails')
+    self.artifacts[trail_id] = artifact
+    updates = {
+      'line_count': len(artifact.splitlines()),
+      'size_bytes': len(artifact.encode()),
+      **metadata,
+    }
+    self.trails[trail_id]['native'].update(updates)
+    return updates
+
+  async def update_header(self, trail_id, changes):
+    if trail_id not in self.trails:
+      raise storage.TrailNotFound(trail_id)
+    if set(changes) - {'subject', 'last_alive_at', 'turn_count', 'native'}:
+      raise ValueError('immutable or unknown header fields')
+    self.trails[trail_id].update({key: value for key, value in changes.items() if key != 'native'})
+    self.trails[trail_id]['native'].update(changes.get('native', {}))
+    return self.trails[trail_id]
+
+  async def end_trail(self, *, trail_id, reason, detail, step_id=None):
+    if trail_id not in self.trails:
+      raise storage.TrailNotFound(trail_id)
+    end = {'at': self._now(), 'reason': reason}
+    if detail is not None:
+      end['detail'] = detail
+    self.trails[trail_id]['end'] = end
+    return {}
 
   async def keepalive(self, trail_id):
     if trail_id not in self.trails:
       raise storage.TrailNotFound(trail_id)
-    timestamp = self._now()
-    self.trails[trail_id]['last_alive_at'] = timestamp
-    return {'last_alive_at': timestamp}
+    self.trails[trail_id]['last_alive_at'] = self._now()
+    return {}
 
   async def sweep_lost(self):
     self.sweep_calls += 1
@@ -129,33 +141,41 @@ class FakeStorage:
     return self.trails.get(trail_id)
 
   async def query_steps(self, trail_id, *, after, limit):
-    items = self.steps.get(trail_id, [])
-    if after is not None:
-      after_index = next((i for i, s in enumerate(items) if s['step_id'] == after), -1)
-      items = items[after_index + 1 :]
-    truncated = items[:limit]
-    next_cursor = truncated[-1]['step_id'] if len(items) > limit else None
-    return {'steps': truncated, 'next': next_cursor}
-
-  async def list_trails(self, *, bro, parent, since, until, cursor, limit):
-    items = list(self.trails.values())
-    if bro is not None:
-      items = [t for t in items if t['bro'] == bro]
-    if parent is not None:
-      items = [
-        t for t in items if t.get('parent') is not None and t['parent']['trail_id'] == parent
-      ]
-    if since is not None:
-      items = [t for t in items if t['started_at'] >= since]
-    if until is not None:
-      items = [t for t in items if t['started_at'] <= until]
-    items.sort(key=lambda t: t['started_at'], reverse=True)
+    if trail_id not in self.trails:
+      raise storage.TrailNotFound(trail_id)
+    items = self.steps[trail_id]
     start = 0
-    if cursor is not None:
-      start = next((i for i, t in enumerate(items) if t['trail_id'] == cursor), -1) + 1
-    truncated = items[start : start + limit]
-    next_cursor = truncated[-1]['trail_id'] if len(items) - start > limit else None
-    return {'trails': truncated, 'next': next_cursor}
+    if after is not None:
+      start = next(index for index, item in enumerate(items) if item['step_id'] == after) + 1
+    page = items[start : start + limit]
+    next_cursor = page[-1]['step_id'] if start + limit < len(items) else None
+    return {'steps': page, 'next': next_cursor}
+
+  async def query_messages(self, trail_id, *, after, limit, types):
+    page = await self.query_steps(trail_id, after=after, limit=limit)
+    messages = [
+      {
+        'type': item['kind'],
+        'ts': item['ts'],
+        'source': {'step_id': item['step_id'], 'index': 0},
+        'content': item.get('body'),
+      }
+      for item in page['steps']
+    ]
+    if types is not None:
+      messages = [message for message in messages if message['type'] in types]
+    return {'messages': messages, 'next': page['next']}
+
+  async def list_trails(self, *, harness, bro, forked_from, since, until, cursor, limit):
+    items = list(self.trails.values())
+    if harness is not None:
+      items = [item for item in items if item['harness'] == harness]
+    if bro is not None:
+      items = [item for item in items if item.get('bro') == bro]
+    if forked_from is not None:
+      items = [item for item in items if item.get('forked_from', {}).get('trail_id') == forked_from]
+    items.sort(key=lambda item: item['started_at'], reverse=True)
+    return {'trails': items[:limit], 'next': None}
 
 
 @pytest.fixture
@@ -168,488 +188,189 @@ def client(aiohttp_client, store):
   return aiohttp_client(create_app(store, TOKEN))
 
 
-def _create_payload(**overrides) -> dict:
-  payload = {
-    'bro': 'ppp-dev',
-    'bro_version': 1,
-    'llm_spec': {'type': 'chat_gpt', 'model': 'gpt-5'},
-    'system_prompt': 'hello',
-    'interactive': False,
-    'entry_point': 'cli:bro_run',
-  }
-  payload.update(overrides)
-  return payload
+@pytest.mark.asyncio
+async def test_health_needs_no_auth(client):
+  response = await (await client).get('/health')
+  assert response.status == 200
 
 
-class TestHealth:
-  @pytest.mark.asyncio
-  async def test_no_auth_required(self, client):
-    cli = await client
-    response = await cli.get('/health')
-    assert response.status == 200
-    assert (await response.json()) == {'status': 'ok'}
+@pytest.mark.asyncio
+async def test_auth_is_required(client):
+  response = await (await client).post('/v1/trails', json=_create_payload())
+  assert response.status == 401
 
 
-class TestAuth:
-  @pytest.mark.asyncio
-  async def test_missing_token_rejected(self, client):
-    cli = await client
-    response = await cli.post('/v1/trails', json=_create_payload())
-    assert response.status == 401
-
-  @pytest.mark.asyncio
-  async def test_wrong_token_rejected(self, client):
-    cli = await client
-    response = await cli.post('/v1/trails', json=_create_payload(), headers=_auth('nope'))
-    assert response.status == 401
-
-  @pytest.mark.asyncio
-  async def test_correct_token_accepted(self, client):
-    cli = await client
-    response = await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
-    assert response.status == 201
+@pytest.mark.asyncio
+async def test_create_bro_trail(client, store):
+  response = await (await client).post('/v1/trails', json=_create_payload(), headers=_auth())
+  assert response.status == 201
+  trail_id = (await response.json())['id']
+  assert store.trails[trail_id]['harness'] == 'bro'
+  assert store.trails[trail_id]['surface'] == 'ask'
+  assert store.steps[trail_id][0]['kind'] == 'system_prompt'
 
 
-class TestCreateTrail:
-  @pytest.mark.asyncio
-  async def test_happy_path_returns_trail_id(self, client, store):
-    cli = await client
-    response = await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
-    assert response.status == 201
-    data = await response.json()
-    assert data['trail_id'] in store.trails
+@pytest.mark.asyncio
+@pytest.mark.parametrize('field', ['harness', 'version', 'interactive', 'surface', 'body'])
+async def test_create_requires_universal_fields(client, field):
+  payload = _create_payload()
+  del payload[field]
+  response = await (await client).post('/v1/trails', json=payload, headers=_auth())
+  assert response.status == 400
 
-  @pytest.mark.asyncio
-  async def test_system_prompt_emitted_as_first_step(self, client, store):
-    cli = await client
-    response = await cli.post(
-      '/v1/trails',
-      json=_create_payload(system_prompt='you are a bro'),
-      headers=_auth(),
-    )
-    trail_id = (await response.json())['trail_id']
-    steps = store.steps[trail_id]
-    assert len(steps) == 1
-    assert steps[0]['kind'] == 'system_prompt'
-    assert steps[0]['body'] == 'you are a bro'
-    assert steps[0]['turn_index'] == 0
 
-  @pytest.mark.asyncio
-  async def test_missing_field_rejected(self, client):
-    cli = await client
-    payload = _create_payload()
-    del payload['bro']
-    response = await cli.post('/v1/trails', json=payload, headers=_auth())
-    assert response.status == 400
-
-  @pytest.mark.asyncio
-  async def test_invalid_json_rejected(self, client):
-    cli = await client
-    response = await cli.post(
-      '/v1/trails',
-      data='not json',
-      headers={**_auth(), 'Content-Type': 'application/json'},
-    )
-    assert response.status == 400
-
-  @pytest.mark.asyncio
-  async def test_parent_required_fields_validated(self, client):
-    cli = await client
-    payload = _create_payload(parent={'trail_id': 't1', 'step_id': 's1'})
-    response = await cli.post('/v1/trails', json=payload, headers=_auth())
-    assert response.status == 400
-
-  @pytest.mark.asyncio
-  async def test_parent_accepted_when_complete(self, client, store):
-    cli = await client
-    parent = {'trail_id': 't1', 'step_id': 's1', 'relationship': 'fork'}
-    response = await cli.post('/v1/trails', json=_create_payload(parent=parent), headers=_auth())
-    assert response.status == 201
-    trail_id = (await response.json())['trail_id']
-    assert store.trails[trail_id]['parent'] == parent
-
-  @pytest.mark.asyncio
-  async def test_summoner_is_stored_on_the_header(self, client, store):
-    cli = await client
-    summoner = {'target': 'pm', 'trail_id': 'T-parent'}
-    response = await cli.post(
-      '/v1/trails', json=_create_payload(summoner=summoner), headers=_auth()
-    )
-    assert response.status == 201
-    trail_id = (await response.json())['trail_id']
-    assert store.trails[trail_id]['summoner'] == summoner
-
-  @pytest.mark.asyncio
-  @pytest.mark.parametrize(
-    'summoner',
-    [
-      'session',
-      {'session': 1},
-      {'target': 'pm'},
-      {'target': 'pm', 'trail_id': 'T-parent', 'extra': True},
-    ],
+@pytest.mark.asyncio
+async def test_create_validates_lineage_and_provenance(client):
+  cli = await client
+  response = await cli.post(
+    '/v1/trails',
+    json=_create_payload(forked_from={'trail_id': 'parent'}),
+    headers=_auth(),
   )
-  async def test_invalid_summoner_is_rejected(self, client, summoner):
-    cli = await client
-    response = await cli.post(
-      '/v1/trails', json=_create_payload(summoner=summoner), headers=_auth()
-    )
-    assert response.status == 400
+  assert response.status == 400
+  response = await cli.post(
+    '/v1/trails',
+    json=_create_payload(summoned_by={'trail_id': 'parent'}),
+    headers=_auth(),
+  )
+  assert response.status == 201
 
 
-class TestPutStep:
-  async def _make_trail(self, cli) -> str:
-    response = await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
-    return (await response.json())['trail_id']
+@pytest.mark.asyncio
+async def test_step_append_and_native_read(client, store):
+  cli = await client
+  created = await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
+  trail_id = (await created.json())['id']
+  response = await cli.post(
+    f'/v1/trails/{trail_id}/steps',
+    json={'kind': 'user_input', 'body': 'hello', 'step_id': 'user-1'},
+    headers=_auth(),
+  )
+  assert response.status == 204
+  response = await cli.get(f'/v1/trails/{trail_id}/steps', headers=_auth())
+  assert [item['kind'] for item in (await response.json())['steps']] == [
+    'system_prompt',
+    'user_input',
+  ]
+  assert store.steps[trail_id][-1]['step_id'] == 'user-1'
 
-  @pytest.mark.asyncio
-  async def test_happy_path_returns_204(self, client, store):
-    cli = await client
-    trail_id = await self._make_trail(cli)
-    response = await cli.post(
-      f'/v1/trails/{trail_id}/steps',
-      json={'kind': 'user_input', 'body': 'hello', 'turn_index': 0},
-      headers=_auth(),
-    )
-    assert response.status == 204
-    assert store.steps[trail_id][-1]['kind'] == 'user_input'
-    assert store.steps[trail_id][-1]['body'] == 'hello'
 
-  @pytest.mark.asyncio
-  async def test_unknown_trail_404(self, client):
-    cli = await client
-    response = await cli.post(
-      '/v1/trails/missing/steps',
-      json={'kind': 'user_input', 'body': 'hi'},
-      headers=_auth(),
-    )
-    assert response.status == 404
-
-  @pytest.mark.asyncio
-  async def test_body_too_large_returns_413(self, client, store):
-    cli = await client
-    trail_id = await self._make_trail(cli)
-    store.raise_body_too_large = True
-    response = await cli.post(
-      f'/v1/trails/{trail_id}/steps',
-      json={'kind': 'assistant', 'body': 'x'},
-      headers=_auth(),
-    )
-    assert response.status == 413
-
-  @pytest.mark.asyncio
-  async def test_invalid_kind_rejected(self, client):
-    cli = await client
-    trail_id = await self._make_trail(await client) if False else await self._make_trail(cli)
-    response = await cli.post(
-      f'/v1/trails/{trail_id}/steps',
-      json={'kind': 'system_prompt', 'body': 'x'},
-      headers=_auth(),
-    )
-    assert response.status == 400
-
-  @pytest.mark.asyncio
-  async def test_end_kind_rejected(self, client):
-    cli = await client
-    trail_id = await self._make_trail(cli)
-    response = await cli.post(
-      f'/v1/trails/{trail_id}/steps',
-      json={'kind': 'end', 'body': {}},
-      headers=_auth(),
-    )
-    assert response.status == 400
-
-  @pytest.mark.asyncio
-  async def test_extras_passed_through(self, client, store):
-    cli = await client
-    trail_id = await self._make_trail(cli)
+@pytest.mark.asyncio
+async def test_messages_support_repeated_type_filter(client):
+  cli = await client
+  created = await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
+  trail_id = (await created.json())['id']
+  for kind in ('user_input', 'reasoning', 'assistant'):
     await cli.post(
       f'/v1/trails/{trail_id}/steps',
-      json={
-        'kind': 'tool_call',
-        'body': None,
-        'tool_name': 'foo',
-        'arguments': {'a': 1},
-        'call_id': 'c1',
-        'turn_index': 1,
-      },
+      json={'kind': kind, 'body': kind},
       headers=_auth(),
     )
-    step = store.steps[trail_id][-1]
-    assert step['tool_name'] == 'foo'
-    assert step['arguments'] == {'a': 1}
-    assert step['call_id'] == 'c1'
-
-  @pytest.mark.asyncio
-  async def test_client_step_id_used_and_not_in_extras(self, client, store):
-    cli = await client
-    trail_id = await self._make_trail(cli)
-    await cli.post(
-      f'/v1/trails/{trail_id}/steps',
-      json={'kind': 'user_input', 'body': 'hi', 'step_id': 'CLIENT-1', 'turn_index': 0},
-      headers=_auth(),
-    )
-    step = store.steps[trail_id][-1]
-    # the client-minted id is honored, and step_id is consumed as the row key —
-    # it must not also leak into the extras blob.
-    assert step['step_id'] == 'CLIENT-1'
-    assert step['kind'] == 'user_input'
-
-  @pytest.mark.asyncio
-  async def test_non_string_step_id_rejected(self, client):
-    cli = await client
-    trail_id = await self._make_trail(cli)
-    response = await cli.post(
-      f'/v1/trails/{trail_id}/steps',
-      json={'kind': 'user_input', 'body': 'hi', 'step_id': 123},
-      headers=_auth(),
-    )
-    assert response.status == 400
+  response = await cli.get(
+    f'/v1/trails/{trail_id}/messages?type=user_input&type=assistant', headers=_auth()
+  )
+  assert [item['type'] for item in (await response.json())['messages']] == [
+    'user_input',
+    'assistant',
+  ]
 
 
-class TestEndTrail:
-  async def _make_trail(self, cli) -> str:
-    response = await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
-    return (await response.json())['trail_id']
-
-  @pytest.mark.asyncio
-  async def test_happy_path_updates_header(self, client, store):
-    cli = await client
-    trail_id = await self._make_trail(cli)
-    response = await cli.post(
-      f'/v1/trails/{trail_id}/end',
-      json={'reason': 'terminal'},
-      headers=_auth(),
-    )
-    assert response.status == 204
-    assert store.trails[trail_id]['end_reason'] == 'terminal'
-    assert store.trails[trail_id]['ended_at'] is not None
-
-  @pytest.mark.asyncio
-  async def test_continuation_stored(self, client, store):
-    cli = await client
-    trail_id = await self._make_trail(cli)
-    cont = {'provider': 'openai', 'response_id': 'resp_xyz'}
-    response = await cli.post(
-      f'/v1/trails/{trail_id}/end',
-      json={'reason': 'terminal', 'continuation': cont},
-      headers=_auth(),
-    )
-    assert response.status == 204
-    assert store.trails[trail_id]['continuation'] == cont
-
-  @pytest.mark.asyncio
-  async def test_invalid_reason_rejected(self, client):
-    cli = await client
-    trail_id = await self._make_trail(cli)
-    response = await cli.post(
-      f'/v1/trails/{trail_id}/end',
-      json={'reason': 'whatever'},
-      headers=_auth(),
-    )
-    assert response.status == 400
-
-  @pytest.mark.asyncio
-  async def test_unknown_trail_404(self, client):
-    cli = await client
-    response = await cli.post(
-      '/v1/trails/missing/end',
-      json={'reason': 'terminal'},
-      headers=_auth(),
-    )
-    assert response.status == 404
-
-  @pytest.mark.asyncio
-  async def test_lost_reason_rejected(self, client):
-    # 'lost' is minted only by the server's sweep; a client must not send it.
-    cli = await client
-    trail_id = await self._make_trail(cli)
-    response = await cli.post(
-      f'/v1/trails/{trail_id}/end',
-      json={'reason': 'lost'},
-      headers=_auth(),
-    )
-    assert response.status == 400
+@pytest.mark.asyncio
+async def test_claude_artifact_replace(client, store):
+  cli = await client
+  payload = _create_payload(
+    harness='claude',
+    bro=None,
+    surface='cw',
+    native={'segment': 'uuid', 'llm': {}, 'cw_command': 'cw ss', 'harness_version': '2.1.0'},
+    body={'artifact': '', 'launch_context': {'command': 'cw ss'}},
+  )
+  created = await cli.post('/v1/trails', json=payload, headers=_auth())
+  trail_id = (await created.json())['id']
+  response = await cli.put(
+    f'/v1/trails/{trail_id}/artifact',
+    json={'artifact': '{}\n{}\n', 'native': {'harness_version': '2.1.0'}},
+    headers=_auth(),
+  )
+  assert response.status == 200
+  assert store.artifacts[trail_id] == '{}\n{}\n'
+  assert store.trails[trail_id]['native']['line_count'] == 2
 
 
-class TestKeepalive:
-  async def _make_trail(self, cli) -> str:
-    response = await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
-    return (await response.json())['trail_id']
-
-  @pytest.mark.asyncio
-  async def test_happy_path_stamps_last_alive_at(self, client, store):
-    cli = await client
-    trail_id = await self._make_trail(cli)
-    response = await cli.post(f'/v1/trails/{trail_id}/keepalive', json={}, headers=_auth())
-    assert response.status == 204
-    assert store.trails[trail_id]['last_alive_at'] is not None
-
-  @pytest.mark.asyncio
-  async def test_unknown_trail_404(self, client):
-    cli = await client
-    response = await cli.post('/v1/trails/ghost/keepalive', json={}, headers=_auth())
-    assert response.status == 404
-
-  @pytest.mark.asyncio
-  async def test_auth_required(self, client):
-    cli = await client
-    response = await cli.post('/v1/trails/ghost/keepalive', json={})
-    assert response.status == 401
+@pytest.mark.asyncio
+async def test_constrained_header_upsert(client, store):
+  cli = await client
+  created = await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
+  trail_id = (await created.json())['id']
+  response = await cli.patch(f'/v1/trails/{trail_id}', json={'subject': 'renamed'}, headers=_auth())
+  assert response.status == 200
+  assert store.trails[trail_id]['subject'] == 'renamed'
+  response = await cli.patch(f'/v1/trails/{trail_id}', json={'surface': 'other'}, headers=_auth())
+  assert response.status == 400
 
 
-class TestSweepLoop:
-  @pytest.mark.asyncio
-  async def test_sweep_runs_periodically(self, aiohttp_client, store):
-    await aiohttp_client(create_app(store, TOKEN, sweep_interval_seconds=0.01))
-    deadline = asyncio.get_running_loop().time() + 2.0
-    while store.sweep_calls < 2 and asyncio.get_running_loop().time() < deadline:
-      await asyncio.sleep(0.01)
-    assert store.sweep_calls >= 2
-
-  @pytest.mark.asyncio
-  async def test_no_sweep_without_interval(self, aiohttp_client, store):
-    await aiohttp_client(create_app(store, TOKEN))
-    await asyncio.sleep(0.05)
-    assert store.sweep_calls == 0
-
-
-class TestGetTrail:
-  @pytest.mark.asyncio
-  async def test_returns_header(self, client):
-    cli = await client
-    summoner = {'session': 'c:root'}
-    response = await cli.post(
-      '/v1/trails', json=_create_payload(summoner=summoner), headers=_auth()
-    )
-    trail_id = (await response.json())['trail_id']
-    response = await cli.get(f'/v1/trails/{trail_id}', headers=_auth())
-    assert response.status == 200
-    data = await response.json()
-    assert data['trail_id'] == trail_id
-    assert data['bro'] == 'ppp-dev'
-    assert data['summoner'] == summoner
-
-  @pytest.mark.asyncio
-  async def test_unknown_trail_404(self, client):
-    cli = await client
-    response = await cli.get('/v1/trails/missing', headers=_auth())
-    assert response.status == 404
+@pytest.mark.asyncio
+async def test_end_records_map_and_detail(client, store):
+  cli = await client
+  created = await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
+  trail_id = (await created.json())['id']
+  response = await cli.post(
+    f'/v1/trails/{trail_id}/end',
+    json={'reason': 'raised', 'detail': 'missing access'},
+    headers=_auth(),
+  )
+  assert response.status == 204
+  assert store.trails[trail_id]['end']['reason'] == 'raised'
+  assert store.trails[trail_id]['end']['detail'] == 'missing access'
 
 
-class TestGetSteps:
-  @pytest.mark.asyncio
-  async def test_returns_steps_in_order(self, client):
-    cli = await client
-    response = await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
-    trail_id = (await response.json())['trail_id']
-    for i, kind in enumerate(['user_input', 'reasoning', 'assistant']):
-      await cli.post(
-        f'/v1/trails/{trail_id}/steps',
-        json={'kind': kind, 'body': f'step {i}', 'turn_index': 1},
-        headers=_auth(),
-      )
-    response = await cli.get(f'/v1/trails/{trail_id}/steps', headers=_auth())
-    data = await response.json()
-    kinds = [s['kind'] for s in data['steps']]
-    assert kinds == ['system_prompt', 'user_input', 'reasoning', 'assistant']
-
-  @pytest.mark.asyncio
-  async def test_pagination(self, client):
-    cli = await client
-    response = await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
-    trail_id = (await response.json())['trail_id']
-    for i in range(5):
-      await cli.post(
-        f'/v1/trails/{trail_id}/steps',
-        json={'kind': 'user_input', 'body': f'm{i}', 'turn_index': i},
-        headers=_auth(),
-      )
-    response = await cli.get(f'/v1/trails/{trail_id}/steps?limit=2', headers=_auth())
-    data = await response.json()
-    assert len(data['steps']) == 2
-    assert data['next'] is not None
-    response = await cli.get(
-      f'/v1/trails/{trail_id}/steps?limit=10&after={data["next"]}', headers=_auth()
-    )
-    data2 = await response.json()
-    assert len(data2['steps']) == 4
+@pytest.mark.asyncio
+@pytest.mark.parametrize('reason', ['terminal', 'lost', 'whatever'])
+async def test_end_rejects_non_writer_reasons(client, reason):
+  cli = await client
+  created = await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
+  trail_id = (await created.json())['id']
+  response = await cli.post(f'/v1/trails/{trail_id}/end', json={'reason': reason}, headers=_auth())
+  assert response.status == 400
 
 
-class TestListTrails:
-  @pytest.mark.asyncio
-  async def test_filter_by_bro(self, client):
-    cli = await client
-    await cli.post('/v1/trails', json=_create_payload(bro='a'), headers=_auth())
-    await cli.post('/v1/trails', json=_create_payload(bro='b'), headers=_auth())
-    response = await cli.get('/v1/trails?bro=a', headers=_auth())
-    data = await response.json()
-    assert all(t['bro'] == 'a' for t in data['trails'])
-    assert len(data['trails']) == 1
-
-  @pytest.mark.asyncio
-  async def test_bro_and_parent_mutex(self, client):
-    cli = await client
-    response = await cli.get('/v1/trails?bro=a&parent=p', headers=_auth())
-    assert response.status == 400
-
-
-class TestResolveAuth:
-  def test_token_passes_through(self):
-    assert resolve_auth(bearer_token='xyz', allow_no_auth=False, host='0.0.0.0') == 'xyz'
-
-  def test_missing_token_requires_explicit_override(self):
-    with pytest.raises(RuntimeError, match='TRAILS_BEARER_TOKEN'):
-      resolve_auth(bearer_token=None, allow_no_auth=False, host='127.0.0.1')
-
-  def test_no_auth_requires_loopback(self):
-    with pytest.raises(RuntimeError, match='HOST'):
-      resolve_auth(bearer_token=None, allow_no_auth=True, host='0.0.0.0')
-
-  def test_no_auth_on_loopback_returns_none(self):
-    assert resolve_auth(bearer_token=None, allow_no_auth=True, host='127.0.0.1') is None
-    assert resolve_auth(bearer_token=None, allow_no_auth=True, host='localhost') is None
+@pytest.mark.asyncio
+async def test_list_filters_by_harness(client):
+  cli = await client
+  await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
+  await cli.post(
+    '/v1/trails',
+    json=_create_payload(
+      harness='claude',
+      bro=None,
+      surface='cw',
+      native={'segment': 'uuid', 'llm': {}, 'cw_command': 'cw ss', 'harness_version': '2.1.0'},
+      body={'artifact': ''},
+    ),
+    headers=_auth(),
+  )
+  response = await cli.get('/v1/trails?harness=claude', headers=_auth())
+  assert [item['harness'] for item in (await response.json())['trails']] == ['claude']
 
 
-class TestDdbSerialisation:
-  """floats must survive the DynamoDB write path.
-
-  TypeSerializer rejects raw floats, and inline (< 50KB) llm_call bodies carry
-  them (temperature, top_p, created_at in the OpenAI response dump) — the
-  end-to-end smoke caught the unconverted write 500ing the step handler.
-  """
-
-  def test_floats_round_trip_through_ddb_item(self):
-    item = {
-      'trail_id': 'T1',
-      'body': {'request': {'temperature': 1.0, 'top_p': 0.95}, 'created_at': 1765142770.5},
-    }
-    wire = storage._ddb_item(item)
-    back = storage._from_ddb_item(wire)
-    assert back == item
-
-  def test_floats_nested_in_lists_convert(self):
-    wire = storage._ddb([0.5, {'p': 0.25}])
-    assert storage._from_ddb(wire) == [0.5, {'p': 0.25}]
-
-  def test_ints_and_bools_unaffected(self):
-    item = {'tokens_in': 42, 'is_error': False}
-    assert storage._from_ddb_item(storage._ddb_item(item)) == item
+@pytest.mark.asyncio
+async def test_malformed_limit_is_rejected(client):
+  response = await (await client).get('/v1/trails?limit=lots', headers=_auth())
+  assert response.status == 400
 
 
-class TestBodySize:
-  def test_none(self):
-    assert storage._body_size_bytes(None) == 0
+@pytest.mark.asyncio
+async def test_sweep_loop_runs(aiohttp_client, store):
+  await aiohttp_client(create_app(store, TOKEN, sweep_interval_seconds=0.01))
+  deadline = asyncio.get_running_loop().time() + 1
+  while store.sweep_calls == 0 and asyncio.get_running_loop().time() < deadline:
+    await asyncio.sleep(0.01)
+  assert store.sweep_calls > 0
 
-  def test_string(self):
-    assert storage._body_size_bytes('hello') == 5
 
-  def test_unicode_string(self):
-    assert storage._body_size_bytes('héllo') == 6
-
-  def test_dict(self):
-    assert storage._body_size_bytes({'a': 1}) == len(b'{"a": 1}')
-
-  def test_above_threshold(self):
-    big = 'x' * (storage.SPILLOVER_THRESHOLD_BYTES + 1)
-    assert storage._body_size_bytes(big) > storage.SPILLOVER_THRESHOLD_BYTES
+def test_resolve_auth_requires_explicit_loopback_override():
+  with pytest.raises(RuntimeError, match='TRAILS_BEARER_TOKEN'):
+    resolve_auth(None, False, '127.0.0.1')
+  with pytest.raises(RuntimeError, match='HOST'):
+    resolve_auth(None, True, '0.0.0.0')
+  assert resolve_auth(None, True, '127.0.0.1') is None

@@ -1,9 +1,9 @@
 """resume machinery for `call`: reopen a recorded conversation.
 
-a `call` conversation is recorded as a trail (entry_point 'call'); `resume`
+a `call` conversation is recorded as a trail (surface 'call'); `resume`
 continues one as a fresh `Bro` preseeded through `bro.fork.fork` at the
 trail's latest consistent step. the continuation is itself recorded as a new
-'call' trail with a `parent` fork pointer, so resumes chain — and
+'call' trail with a `forked_from` fork pointer, so resumes chain — and
 `conversation_history` walks that ancestor chain to rebuild the prior
 exchanges (user messages and terminal replies) for the UI to render.
 """
@@ -42,7 +42,7 @@ class HistoryMessage:
 class ResumedCall:
   bro: Bro
   history: list[HistoryMessage]
-  # the trail the conversation was resumed from (the new trail's parent);
+  # the trail the conversation was resumed from (the new trail's forked_from);
   # the continuation's own id is `bro.trail_id`.
   trail_id: str
 
@@ -51,8 +51,8 @@ def find_latest_call_trail(client: TrailsClient, bro_name: str) -> Optional[str]
   """the bro's newest recorded `call` conversation, or None when none is found
   among its `_LATEST_SCAN_LIMIT` newest trails."""
   for header in client.iter_trails(bro=bro_name, max_items=_LATEST_SCAN_LIMIT):
-    if header.get('entry_point') == _CALL_ENTRY_POINT:
-      return header['trail_id']
+    if header.get('surface') == _CALL_ENTRY_POINT:
+      return header['id']
   return None
 
 
@@ -68,11 +68,11 @@ def conversation_history(client: TrailsClient, trail_id: str) -> list[HistoryMes
   bound: Optional[str] = None
   while True:
     segments.append((current, bound))
-    parent = client.get_trail(current).get('parent')
-    if parent is None:
+    forked_from = client.get_trail(current).get('forked_from')
+    if forked_from is None:
       break
-    current = parent['trail_id']
-    bound = parent['step_id']
+    current = forked_from['trail_id']
+    bound = forked_from['step_id']
   segments.reverse()
   messages: list[HistoryMessage] = []
   for segment_trail_id, segment_bound in segments:
@@ -136,7 +136,7 @@ def resume(
     trail,
     latest_fork_point(trail),
     llm_spec=llm_spec,
-    entry_point=_CALL_ENTRY_POINT,
-    fetch_parent=lambda parent_id: fetch_recorded_trail(client, parent_id),
+    surface=_CALL_ENTRY_POINT,
+    fetch_forked_from=lambda forked_from_id: fetch_recorded_trail(client, forked_from_id),
   )
   return ResumedCall(bro=bro, history=history, trail_id=trail_id)
