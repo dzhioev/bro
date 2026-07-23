@@ -909,6 +909,45 @@ async def test_tui_copies_selection_to_clipboard_on_mouse_up(monkeypatch):
     assert app.clipboard == 'BANNER'
 
 
+@pytest.mark.asyncio
+async def test_tui_shift_enter_breaks_line_and_enter_submits(monkeypatch):
+  from textual.selection import SELECT_ALL
+
+  from bro.launch.call_tui import BubbleRow, ChatApp, MessageBubble, MessageInput
+
+  monkeypatch.setattr('workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  bro = RecordBro()
+  app = ChatApp(bro, None)
+  async with app.run_test() as pilot:
+    field = app.query_one('#input-bar', MessageInput)
+    assert field.region.height == 3
+    await pilot.press('a', 'shift+enter', 'b')
+    await pilot.pause()
+    assert field.text == 'a\nb'
+    # the field grows with its content
+    assert field.region.height == 4
+    await pilot.press('enter')
+    await pilot.pause()
+    assert field.text == ''
+    bubble = app.query_one('BubbleRow.user', BubbleRow).query_one(MessageBubble)
+    app.screen.selections = {bubble: SELECT_ALL}
+    assert app.screen.get_selected_text() == 'a\nb'
+
+
+@pytest.mark.asyncio
+async def test_tui_enter_on_blank_input_submits_nothing(monkeypatch):
+  from bro.launch.call_tui import ChatApp, MessageInput
+
+  monkeypatch.setattr('workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  app = ChatApp(RecordBro(), None)
+  async with app.run_test() as pilot:
+    await pilot.press('enter', 'shift+enter', 'enter')
+    await pilot.pause()
+    # nothing submitted, the field keeps its (blank) content
+    assert len(app.query('BubbleRow.user')) == 0
+    assert app.query_one('#input-bar', MessageInput).text == '\n'
+
+
 def test_tui_renderer_posts_one_line_per_event():
   from bro.launch.call_tui import TUIRenderer
 

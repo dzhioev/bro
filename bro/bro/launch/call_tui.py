@@ -12,18 +12,19 @@ from rich.measure import Measurement
 from rich.segment import Segment
 from rich.syntax import Syntax
 from rich.text import Text
-from textual import work
+from textual import events, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Vertical, VerticalScroll
 from textual.content import Content
+from textual.message import Message
 from textual.screen import ModalScreen
 from textual.selection import Selection
 from textual.strip import Strip
 from textual.style import Style
 from textual.visual import RenderOptions, RichVisual
 from textual.widget import Widget
-from textual.widgets import Input, Static
+from textual.widgets import Static, TextArea
 
 from bro.bros.bro import Bro
 from bro.launch._reflow import Reflow
@@ -344,6 +345,29 @@ class StatsScreen(ModalScreen):
     self.dismiss()
 
 
+class MessageInput(TextArea):
+  """multi-line message field: Enter submits the text as `Submitted`, Shift+Enter
+  breaks the line. Shift+Enter arrives as its own key only from terminals speaking
+  the kitty keyboard protocol; elsewhere it is indistinguishable from Enter and
+  submits."""
+
+  class Submitted(Message):
+    def __init__(self, text: str):
+      super().__init__()
+      self.text = text
+
+  async def _on_key(self, event: events.Key) -> None:
+    if event.key == 'enter':
+      event.stop()
+      event.prevent_default()
+      self.post_message(self.Submitted(self.text))
+    elif event.key == 'shift+enter':
+      event.stop()
+      event.prevent_default()
+      start, end = self.selection
+      self.replace('\n', start, end, maintain_selection_offset=False)
+
+
 class ChatApp(App):
   CSS = """
   Screen {
@@ -355,7 +379,8 @@ class ChatApp(App):
   }
   #input-bar {
     dock: bottom;
-    height: 3;
+    height: auto;
+    max-height: 9;
     border: round $primary;
   }
   """
@@ -382,10 +407,10 @@ class ChatApp(App):
 
   def compose(self) -> ComposeResult:
     yield VerticalScroll(id='history')
-    yield Input(placeholder='message…', id='input-bar')
+    yield MessageInput(placeholder='message…', highlight_cursor_line=False, id='input-bar')
 
   async def on_mount(self) -> None:
-    self.query_one('#input-bar', Input).focus()
+    self.query_one('#input-bar', MessageInput).focus()
     self.set_interval(0.4, self._tick_typing, pause=False)
     # a resumed conversation's prior exchanges come first, under their own
     # date separators; the banner then opens the live session
@@ -418,12 +443,11 @@ class ChatApp(App):
     self._show_typing()
     self._send_to_bro(text)
 
-  async def on_input_submitted(self, event: Input.Submitted) -> None:
-    text = event.value
-    if len(text) == 0:
+  async def on_message_input_submitted(self, event: MessageInput.Submitted) -> None:
+    if len(event.text.strip()) == 0:
       return
-    event.input.value = ''
-    await self._submit(text)
+    self.query_one('#input-bar', MessageInput).clear()
+    await self._submit(event.text)
 
   def on_text_selected(self) -> None:
     # copy-on-select (OSC 52); posted on every mouse-up, so a plain click
