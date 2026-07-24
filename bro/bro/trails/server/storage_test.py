@@ -1,4 +1,6 @@
 import io
+import re
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -43,6 +45,49 @@ class FakeS3:
     return 'https://example.test/spill'
 
 
+_RESERVED_WORDS = frozenset(
+  (Path(__file__).parent / 'dynamodb_reserved_words.txt').read_text().split()
+)
+# uppercase-only, as the expressions in this repo spell them; a lowercase attribute
+# that collides with a keyword still gets flagged through the reserved-word check
+_EXPRESSION_KEYWORDS = frozenset(
+  {'SET', 'REMOVE', 'ADD', 'DELETE', 'AND', 'OR', 'NOT', 'BETWEEN', 'IN'}
+)
+_EXPRESSION_FUNCTIONS = frozenset(
+  {'attribute_exists', 'attribute_not_exists', 'attribute_type', 'begins_with', 'contains', 'size'}
+)
+_EXPRESSION_TOKEN = re.compile(r'[#:]?[A-Za-z_][A-Za-z0-9_]*')
+
+
+def _validate_expressions(operation: dict) -> None:
+  """reject expressions real DynamoDB would: bare reserved words, undefined or
+  unused ExpressionAttributeNames / ExpressionAttributeValues entries."""
+  names = operation.get('ExpressionAttributeNames', {})
+  values = operation.get('ExpressionAttributeValues', {})
+  used_names: set[str] = set()
+  used_values: set[str] = set()
+  for key, expression in operation.items():
+    if not key.endswith('Expression') or expression is None:
+      continue
+    for token in _EXPRESSION_TOKEN.findall(expression):
+      if token.startswith('#'):
+        if token not in names:
+          raise AssertionError(f'{key} references undefined name {token}: {expression}')
+        used_names.add(token)
+      elif token.startswith(':'):
+        if token not in values:
+          raise AssertionError(f'{key} references undefined value {token}: {expression}')
+        used_values.add(token)
+      elif token in _EXPRESSION_KEYWORDS or token in _EXPRESSION_FUNCTIONS:
+        continue
+      elif token.upper() in _RESERVED_WORDS:
+        raise AssertionError(f'{key} uses reserved word {token!r}: {expression}')
+  if used_names != set(names):
+    raise AssertionError(f'unused ExpressionAttributeNames: {sorted(set(names) - used_names)}')
+  if used_values != set(values):
+    raise AssertionError(f'unused ExpressionAttributeValues: {sorted(set(values) - used_values)}')
+
+
 class FakeDynamo:
   class exceptions:
     class ConditionalCheckFailedException(Exception):
@@ -56,6 +101,7 @@ class FakeDynamo:
     self.steps: dict[tuple[str, str], dict] = {}
 
   def put_item(self, *, TableName, Item, ConditionExpression=None):
+    _validate_expressions({'ConditionExpression': ConditionExpression})
     item = _deserialize(Item)
     if TableName == 'headers':
       if ConditionExpression is not None and item['id'] in self.headers:
@@ -70,6 +116,9 @@ class FakeDynamo:
     return {'Item': _serialize(item)} if item is not None else {}
 
   def transact_write_items(self, *, TransactItems):
+    for transact_item in TransactItems:
+      for operation in transact_item.values():
+        _validate_expressions(operation)
     first_put = TransactItems[0].get('Put')
     if first_put is not None and first_put['TableName'] == 'headers':
       header = _deserialize(first_put['Item'])
@@ -112,6 +161,13 @@ class FakeDynamo:
     raise exception
 
   def update_item(self, *, TableName, Key, UpdateExpression, ExpressionAttributeValues, **kwargs):
+    _validate_expressions(
+      {
+        'UpdateExpression': UpdateExpression,
+        'ExpressionAttributeValues': ExpressionAttributeValues,
+        **kwargs,
+      }
+    )
     del TableName
     trail_id = _deserialize(Key)['id']
     header = self.headers.get(trail_id)
@@ -142,6 +198,7 @@ class FakeDynamo:
     return {}
 
   def query(self, **kwargs):
+    _validate_expressions(kwargs)
     values = {
       key: _deserializer.deserialize(value)
       for key, value in kwargs['ExpressionAttributeValues'].items()
@@ -437,3 +494,30 @@ def test_claude_projection_emits_llm_call_once_and_content_events():
   ]
   assert messages[0]['usage']['output'] == 2
   assert messages[2]['source'] == {'step_id': '0', 'index': 2}
+
+
+def test_expression_validation_matches_real_dynamodb_rejections():
+  with pytest.raises(AssertionError, match="reserved word 'usage'"):
+    _validate_expressions(
+      {
+        'UpdateExpression': 'SET native.usage.#model = :usage',
+        'ExpressionAttributeNames': {'#model': 'opus'},
+        'ExpressionAttributeValues': {':usage': {'N': '1'}},
+      }
+    )
+  with pytest.raises(AssertionError, match='undefined name #model'):
+    _validate_expressions({'UpdateExpression': 'SET #model = :value'})
+  with pytest.raises(AssertionError, match='unused ExpressionAttributeValues'):
+    _validate_expressions(
+      {
+        'ConditionExpression': 'attribute_exists(id)',
+        'ExpressionAttributeValues': {':stray': {'N': '1'}},
+      }
+    )
+  _validate_expressions(
+    {
+      'UpdateExpression': 'SET native.#usage.#model = :usage, last_alive_at = :alive',
+      'ExpressionAttributeNames': {'#usage': 'usage', '#model': 'opus'},
+      'ExpressionAttributeValues': {':usage': {'N': '1'}, ':alive': {'S': 't'}},
+    }
+  )

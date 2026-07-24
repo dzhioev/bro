@@ -210,11 +210,12 @@ class BroBackend(BodyBackend):
         old_usage = usage.get(model) if isinstance(usage, dict) else None
         accumulated = add_numeric_maps(old_usage if isinstance(old_usage, dict) else {}, delta)
         names['#model'] = model
+        names['#usage'] = 'usage'
         values[':usage'] = storage_types.ddb(accumulated)
         values[':old_usage'] = storage_types.ddb(old_usage)
-        update_parts.append('native.usage.#model = :usage')
+        update_parts.append('native.#usage.#model = :usage')
         condition += (
-          ' AND (attribute_not_exists(native.usage.#model) OR native.usage.#model = :old_usage)'
+          ' AND (attribute_not_exists(native.#usage.#model) OR native.#usage.#model = :old_usage)'
         )
       update = {
         'TableName': self._trails_table,
