@@ -37,11 +37,16 @@ def _summoned_by_from_env() -> Optional[dict[str, Any]]:
   summoned_by = json.loads(raw)
   if not isinstance(summoned_by, dict):
     raise ValueError(f'{SUMMONER_ENV} must be a JSON object')
-  if set(summoned_by) not in ({'trail_id'}, {'trail_id', 'step_id'}):
-    raise ValueError(f'{SUMMONER_ENV} has an invalid summoned_by shape')
   if not all(isinstance(value, str) for value in summoned_by.values()):
     raise ValueError(f'{SUMMONER_ENV} has an invalid summoned_by shape')
-  return summoned_by
+  keys = set(summoned_by)
+  if keys == {'session'}:
+    return None
+  if keys == {'target', 'trail_id'}:
+    return {'trail_id': summoned_by['trail_id']}
+  if keys in ({'trail_id'}, {'trail_id', 'step_id'}):
+    return summoned_by
+  raise ValueError(f'{SUMMONER_ENV} has an invalid summoned_by shape')
 
 
 def _default_factory() -> Tracker:

@@ -223,7 +223,16 @@ class TestBroRun:
     # must not inherit the marker and re-stamp the parent's summoned_by
     assert 'CW_SUMMONER' not in os.environ
     await TraceBro().run('again', tracker=RecordingTracker(), surface='test')
-    assert captured == [{'trail_id': 'T-parent'}, None]
+    monkeypatch.setenv('CW_SUMMONER', '{"target":"pm","trail_id":"T-legacy"}')
+    await TraceBro().run('legacy direct', tracker=RecordingTracker(), surface='test')
+    monkeypatch.setenv('CW_SUMMONER', '{"session":"c:legacy-root"}')
+    await TraceBro().run('legacy session', tracker=RecordingTracker(), surface='test')
+    assert captured == [
+      {'trail_id': 'T-parent'},
+      None,
+      {'trail_id': 'T-legacy'},
+      None,
+    ]
 
   @pytest.mark.asyncio
   async def test_run_end_reason_is_raised_on_bro_raised(self):
