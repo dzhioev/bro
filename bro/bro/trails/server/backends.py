@@ -389,6 +389,11 @@ class ClaudeBackend(BodyBackend):
     )
     return {'line_count': len(body.splitlines()), 'size_bytes': len(payload), **metadata}
 
+  async def read_context(self, context_key: str) -> Any:
+    """the stored launch-context document at `context_key` (`native.context_s3`)."""
+    response = await asyncio.to_thread(self._s3.get_object, Bucket=self._bucket, Key=context_key)
+    return json.loads(response['Body'].read().decode('utf-8'))
+
   async def iterate_native_records(
     self, trail_id: str, *, after: Optional[str], limit: int
   ) -> dict:
@@ -419,6 +424,10 @@ class ClaudeBackend(BodyBackend):
 
   def project_messages(self, records: list[dict]) -> list[dict]:
     messages: list[dict] = []
+    # claude splits one API message across adjacent records (one per content
+    # block), each repeating the message's id and usage — only a message id's
+    # first record emits the llm_call, so type filters cannot multiply totals
+    last_message_id: Optional[str] = None
     for native in records:
       record = native.get('record')
       if not isinstance(record, dict):
@@ -427,28 +436,38 @@ class ClaudeBackend(BodyBackend):
       record_type = record.get('type')
       message = record.get('message')
       if record_type == 'assistant' and isinstance(message, dict):
-        messages.extend(self._assistant_messages(native, record, message))
+        message_id = message.get('id')
+        first_of_message = not isinstance(message_id, str) or message_id != last_message_id
+        if isinstance(message_id, str):
+          last_message_id = message_id
+        messages.extend(
+          self._assistant_messages(native, record, message, first_of_message=first_of_message)
+        )
       elif record_type == 'user' and isinstance(message, dict):
         messages.extend(self._user_messages(native, record, message))
       else:
         messages.append(_event(native, 'harness_event', raw=record))
     return messages
 
-  def _assistant_messages(self, native: dict, record: dict, message: dict) -> list[dict]:
+  def _assistant_messages(
+    self, native: dict, record: dict, message: dict, *, first_of_message: bool
+  ) -> list[dict]:
     if record.get('isApiErrorMessage') is True:
       return [_event(native, 'error', content=message.get('content'))]
     model = str(message.get('model', 'unknown'))
     raw_usage = message.get('usage')
     if not isinstance(raw_usage, dict) or model == '<synthetic>':
       return [_event(native, 'harness_event', raw=record)]
-    events = [
-      _event(
-        native,
-        'llm_call',
-        model=model,
-        usage=normalise_usage('claude', {model: raw_usage}).get(model, {}),
+    events: list[dict] = []
+    if first_of_message:
+      events.append(
+        _event(
+          native,
+          'llm_call',
+          model=model,
+          usage=normalise_usage('claude', {model: raw_usage}).get(model, {}),
+        )
       )
-    ]
     content = message.get('content')
     if not isinstance(content, list):
       return [*events, _event(native, 'harness_event', 1, raw=record)]

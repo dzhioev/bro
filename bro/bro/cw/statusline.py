@@ -4,7 +4,7 @@
 Prints nothing when there is nothing to say, so Claude keeps its default status
 bar. Two sections, joined into the one line Claude renders:
 
-- a red `⚠ session-log sync FAILING` warning when the health file reports an
+- a red `⚠ session recording FAILING` warning when the health file reports an
   error — the one coloured channel that survives Claude's alternate-screen buffer;
 - the session's summons, read from the status file `CW_SUMMON_STATUS` points at
   (written host-side by `bro/launch/summon_control.py`): each active summon as target, trail id,
@@ -81,7 +81,7 @@ def statusline() -> int:
     pass
   parts = []
   if health.is_failing():
-    parts.append(f'{_RED}⚠ session-log sync FAILING — run session_log/bootstrap.sh{_RESET}')
+    parts.append(f'{_RED}⚠ session recording FAILING — see session-recorder.log{_RESET}')
   parts.extend(_summon_parts(time.time()))
   if len(parts) > 0:
     print(' · '.join(parts))

@@ -196,6 +196,71 @@ class TestSummonHandler:
     [child_active] = [a for a in _status(tmp_path)['active'] if a['request_id'] == child_request.id]
     assert child_active['summoner'] == {'target': 'ppp-dev', 'trail_id': 'T1'}
 
+  def test_child_step_id_lands_on_the_spawned_summoned_by(self, tmp_path):
+    # a summoning bro names its own tool_call step; the grandchild's
+    # summoned_by carries {trail_id, step_id}
+    control = _control(tmp_path, {'ppp-dev'})
+    context = FakeContext()
+    request = _summon_child(control, context, CHILD, 'ppp-dev')
+    control.observe_delivery(
+      CHILD, ROOT, Message(type='started', payload={'trail_id': 'T1'}, in_reply_to=request.id)
+    )
+    control.handle(
+      cast(Dispatcher, context), CHILD, _summon_message(target='devoops', step_id='S7')
+    )
+    launch, _, _ = context.spawned[-1]
+    assert launch.summoner == {'trail_id': 'T1', 'step_id': 'S7'}
+
+  def test_step_id_without_a_requester_trail_is_dropped(self, control, tmp_path):
+    # the root session has no trail pointer here, so a position alone would be
+    # meaningless — no summoned_by is invented for it
+    del tmp_path
+    context = FakeContext()
+    control.handle(context, ROOT, _summon_message(step_id='S7'))
+    [(launch, _, _)] = context.spawned
+    assert launch.summoner is None
+
+  def test_root_trail_pointer_attributes_session_children(self, tmp_path):
+    pointer = tmp_path / 'current-trail.json'
+    pointer.write_text(json.dumps({'trail_id': 'CT9'}))
+    control = bro.launch.summon_control.SummonControl(
+      allow_list={'devoops'},
+      session='ws',
+      project=tmp_path,
+      status_file=tmp_path / 'summon-status.json',
+      audit_file=tmp_path / 'audit' / 'ws.jsonl',
+      trail_pointer=pointer,
+    )
+    context = FakeContext()
+    control.handle(cast(Dispatcher, context), ROOT, _summon_message())
+    [(launch, _, _)] = context.spawned
+    assert launch.summoner == {'trail_id': 'CT9'}
+
+  def test_absent_trail_pointer_degrades_to_no_summoned_by(self, tmp_path):
+    # the early-launch race: the recorder has not adopted a transcript yet, so
+    # the pointer file does not exist — absent provenance, never a legacy shape
+    control = bro.launch.summon_control.SummonControl(
+      allow_list={'devoops'},
+      session='ws',
+      project=tmp_path,
+      status_file=tmp_path / 'summon-status.json',
+      audit_file=tmp_path / 'audit' / 'ws.jsonl',
+      trail_pointer=tmp_path / 'current-trail.json',
+    )
+    context = FakeContext()
+    control.handle(cast(Dispatcher, context), ROOT, _summon_message())
+    [(launch, _, _)] = context.spawned
+    assert launch.summoner is None
+
+  def test_root_started_trail_attributes_a_bro_run_roots_children(self, control):
+    # a bro-run root announced its trail over the broker; its summon children
+    # are attributed to it (with the request's step_id when carried)
+    control.note_root_trail('RT1')
+    context = FakeContext()
+    control.handle(context, ROOT, _summon_message(step_id='S2'))
+    [(launch, _, _)] = context.spawned
+    assert launch.summoner == {'trail_id': 'RT1', 'step_id': 'S2'}
+
   def test_child_summon_outside_its_seeds_is_denied(self, control):
     # devoops seeds no bro, so its child summons nothing — not even a target the
     # root session itself is allowed
@@ -280,6 +345,8 @@ class TestSummonHandler:
       {'target': 'devoops', 'prompt': 'p', 'into': ''},
       {'target': 'devoops', 'prompt': 'p', 'timout': 60},  # typo'd key must not pass silently
       {'target': 'devoops', 'prompt': 'p', 'hold': 'automatic'},
+      {'target': 'devoops', 'prompt': 'p', 'step_id': ''},
+      {'target': 'devoops', 'prompt': 'p', 'step_id': 7},
     ],
   )
   def test_malformed_payload_is_denied(self, control, payload):

@@ -108,7 +108,12 @@ def _open_client() -> 'Client':
 
 
 def _payload(
-  target: str, prompt: str, timeout: Optional[float], into: Optional[str], hold: Optional[str]
+  target: str,
+  prompt: str,
+  timeout: Optional[float],
+  into: Optional[str],
+  hold: Optional[str],
+  step_id: Optional[str],
 ) -> dict[str, Any]:
   payload: dict[str, Any] = {'target': target, 'prompt': prompt}
   if timeout is not None:
@@ -117,13 +122,15 @@ def _payload(
     payload['into'] = into
   if hold is not None:
     payload['hold'] = hold
+  if step_id is not None:
+    payload['step_id'] = step_id
   return payload
 
 
 def _trails_hint(trail_id: Optional[str]) -> str:
   if trail_id is not None:
-    return f'inspect the run with `trails show {trail_id}`'
-  return 'look for the run with `trails list`'
+    return f'inspect the run with `rewind show {trail_id}`'
+  return 'look for the run with `rewind list`'
 
 
 def _interpret_terminal(terminal: 'Message', trail_id: Optional[str]) -> str:
@@ -208,16 +215,21 @@ def summon_and_wait(
   timeout: Optional[float] = None,
   into: Optional[str] = None,
   hold: Optional[str] = None,
+  step_id: Optional[str] = None,
   client: Optional['Client'] = None,
 ) -> str:
   """send one summon and block for the answer — the bro `summon` tool's default
-  path. With `client` the caller owns the connection's lifecycle (closing it from
-  another thread aborts the wait); without, a fresh one is opened and closed per
-  call. Raises `SummonError` on any failure."""
+  path. `step_id` names the summoner's own `tool_call` step so the child's
+  `summoned_by` carries the precise position. With `client` the caller owns the
+  connection's lifecycle (closing it from another thread aborts the wait);
+  without, a fresh one is opened and closed per call. Raises `SummonError` on
+  any failure."""
   if client is None:
     with _open_client() as owned:
-      return summon_and_wait(target, prompt, timeout=timeout, into=into, hold=hold, client=owned)
-  request = client.send(SUMMON, _payload(target, prompt, timeout, into, hold))
+      return summon_and_wait(
+        target, prompt, timeout=timeout, into=into, hold=hold, step_id=step_id, client=owned
+      )
+  request = client.send(SUMMON, _payload(target, prompt, timeout, into, hold, step_id))
   return _await_answer(client, request, timeout=timeout if timeout is not None else DEFAULT_TIMEOUT)
 
 
@@ -228,11 +240,12 @@ def summon_detached(
   timeout: Optional[float] = None,
   into: Optional[str] = None,
   hold: Optional[str] = None,
+  step_id: Optional[str] = None,
 ) -> str:
   """send one summon and return its request id without waiting — the bro `summon`
   tool's detach path. Collect with `collect_summon`, poll with `check_summon`."""
   with _open_client() as client:
-    return client.send(SUMMON, _payload(target, prompt, timeout, into, hold)).id
+    return client.send(SUMMON, _payload(target, prompt, timeout, into, hold, step_id)).id
 
 
 @dataclass(frozen=True)
@@ -370,7 +383,7 @@ def relay_summon(
     log.error('%s', e)
     return 1
   with client:
-    request = client.send(SUMMON, _payload(target, prompt, timeout, into, hold))
+    request = client.send(SUMMON, _payload(target, prompt, timeout, into, hold, None))
     log.info('summon request %s', request.id)
     effective = timeout if timeout is not None else DEFAULT_TIMEOUT
     return _relay(

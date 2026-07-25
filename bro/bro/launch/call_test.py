@@ -530,6 +530,24 @@ def test_call_forwards_resume_into_container():
     ]
 
 
+def test_call_forwards_the_at_fork_point_into_container():
+  with (
+    patch.dict('os.environ', {}, clear=False) as env,
+    patch('bro.launch.root.run_in_container', return_value=0) as run,
+    patch('bro.launch.call._tty_supported', return_value=True),
+  ):
+    env.pop('CW_IN_CONTAINER', None)
+    rc = main(['call', 'ppp-dev', '--resume', 'trail-1', '--at', 'step-7'])
+    assert rc == 0
+    command = run.call_args.args[0].command
+    assert command[command.index('--at') + 1] == 'step-7'
+
+
+def test_call_at_without_resume_is_an_error(capsys):
+  assert main(['call', 'ppp-dev', 'hi', '--at', 'step-7']) == 1
+  assert 'requires --resume' in capsys.readouterr().err
+
+
 def test_call_forwards_resume_trail_id_with_message():
   with (
     patch.dict('os.environ', {}, clear=False) as env,
@@ -570,9 +588,10 @@ def test_call_resume_runs_the_resumed_bro(monkeypatch, capsys):
   resumed_bro.trail_id = 'new-trail'
   history = [HistoryMessage(by_user=True, text='hello', when=datetime(2026, 5, 27, 9, 0, 0))]
 
-  def fake_resume(client, bro_name, trail_ref, *, llm_spec):
+  def fake_resume(client, bro_name, trail_ref, *, llm_spec, at=None):
     captured['trail_ref'] = trail_ref
     captured['llm_spec'] = llm_spec
+    captured['at'] = at
     return ResumedCall(bro=resumed_bro, history=history, trail_id='old-trail')
 
   monkeypatch.setenv('CW_IN_CONTAINER', '1')

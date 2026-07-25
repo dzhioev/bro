@@ -496,6 +496,76 @@ def test_claude_projection_emits_llm_call_once_and_content_events():
   assert messages[2]['source'] == {'step_id': '0', 'index': 2}
 
 
+def _assistant_record(step_id: str, message_id: str, block: dict) -> dict:
+  return {
+    'step_id': step_id,
+    'ts': '2026-01-01T00:00:00Z',
+    'raw': '',
+    'record': {
+      'type': 'assistant',
+      'message': {
+        'id': message_id,
+        'model': 'opus',
+        'usage': {'input_tokens': 1, 'output_tokens': 2},
+        'content': [block],
+      },
+    },
+  }
+
+
+def test_claude_projection_dedups_split_message_records():
+  # claude writes one record per content block of the same API message, each
+  # repeating the message id and usage — only the first record of a message id
+  # may bill, or summing llm_call usage would multiply token totals
+  backend = ClaudeBackend(s3=None, bucket='bucket')
+  messages = backend.project_messages(
+    [
+      _assistant_record('0', 'msg-1', {'type': 'thinking', 'thinking': 'hmm'}),
+      _assistant_record('1', 'msg-1', {'type': 'text', 'text': 'answer'}),
+      _assistant_record('2', 'msg-2', {'type': 'text', 'text': 'more'}),
+    ]
+  )
+  assert [message['type'] for message in messages] == [
+    'llm_call',
+    'reasoning',
+    'assistant',
+    'llm_call',
+    'assistant',
+  ]
+  # block events keep their in-record index even when the llm_call is deduped
+  assert messages[2]['source'] == {'step_id': '1', 'index': 1}
+
+
+@pytest.mark.asyncio
+async def test_launch_context_round_trip(components):
+  store, _, _ = components
+  claude_native = {'segment': 'uuid', 'llm': {}, 'cw_command': 'cw ss', 'harness_version': '2.1.0'}
+  with_context = (
+    await store.create_trail(
+      harness='claude',
+      version='2',
+      interactive=True,
+      surface='cw',
+      native=claude_native,
+      body={'artifact': '', 'launch_context': [{'title': 'git state'}]},
+    )
+  )['id']
+  without_context = (
+    await store.create_trail(
+      harness='claude',
+      version='2',
+      interactive=True,
+      surface='cw',
+      native=claude_native,
+      body={'artifact': ''},
+    )
+  )['id']
+  assert await store.get_launch_context(with_context) == [{'title': 'git state'}]
+  assert await store.get_launch_context(without_context) is None
+  bro_trail = await _create_bro(store)
+  assert await store.get_launch_context(bro_trail) is None
+
+
 def test_expression_validation_matches_real_dynamodb_rejections():
   with pytest.raises(AssertionError, match="reserved word 'usage'"):
     _validate_expressions(

@@ -295,12 +295,17 @@ def _banner_tool(bro_name: str, variables: Variables) -> llm.mcp.Tool:
   )
 
 
-def _summon_tool(variables: Variables) -> llm.mcp.Tool:
+def _summon_tool(
+  variables: Variables, current_tool_step_id: Callable[[], Optional[str]]
+) -> llm.mcp.Tool:
   # a fresh channel client per call, opened on the loop and closed in `finally`
   # so a cancelled tool call (the MCP client timed out or aborted) unblocks the
   # off-loop wait: the broxy sees the waiter go, and the terminal buffers for a
   # later summon_check instead of feeding an abandoned thread. the blocking wait
   # runs off-loop so an interactive surface stays responsive under a long summon.
+  # `current_tool_step_id` names the summon call's own recorded step (None on
+  # surfaces without an in-process tracker), so the child's `summoned_by` can
+  # carry the precise fork position.
   from bro import summon as summon_client
 
   async def _summon(
@@ -311,9 +316,16 @@ def _summon_tool(variables: Variables) -> llm.mcp.Tool:
     detach: bool = False,
     hold: Optional[str] = None,
   ) -> str:
+    step_id = current_tool_step_id()
     if detach:
       return await asyncio.to_thread(
-        summon_client.summon_detached, target, prompt, timeout=timeout, into=into, hold=hold
+        summon_client.summon_detached,
+        target,
+        prompt,
+        timeout=timeout,
+        into=into,
+        hold=hold,
+        step_id=step_id,
       )
     client = summon_client.open_client()
     try:
@@ -324,6 +336,7 @@ def _summon_tool(variables: Variables) -> llm.mcp.Tool:
         timeout=timeout,
         into=into,
         hold=hold,
+        step_id=step_id,
         client=client,
       )
     finally:
@@ -435,7 +448,9 @@ def _build_service_server(
   if include_raise:
     tools.append(_raise_tool(wire, variables))
   if has_broker:
-    tools.append(_summon_tool(variables))
+    # read at call time from the run's live tracker; a serving process where the
+    # bro never runs (the session MCP server) keeps the NullTracker's None
+    tools.append(_summon_tool(variables, lambda: bro._tracker.current_tool_step_id))
     tools.append(_summon_check_tool(variables))
     if has_summon_list:
       tools.append(_summon_list_tool(variables))

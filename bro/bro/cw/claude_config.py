@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Optional
 
 from base import log
+from session_log import trail_pointer
 from workspace.model import ContainerWorkspace, Workspace
 
 
@@ -26,6 +27,13 @@ def _session_claude_dir(name: str) -> Path:
   """the per-session claude state dir on the host — mounted as a container
   session's ~/.claude overlay."""
   return Path.home() / '.claude' / 'cw-sessions' / name
+
+
+def session_trail_pointer(name: str) -> Path:
+  """the host-side path of the session's current-trail pointer — where the
+  recorder publishes the trail id summon control attributes the session's
+  children to (`session_log/trail_pointer.py` owns the file)."""
+  return _session_claude_dir(name) / trail_pointer.FILENAME
 
 
 def _encode_claude_path(path: Path) -> str:
@@ -141,7 +149,7 @@ _SESSION_SETTINGS_JSON: dict = {
   # prompt to install it on .py files).
   'enabledPlugins': {'pyright-lsp@claude-plugins-official': True},
   # keep transcripts forever (no disable value exists); they back the
-  # session-log sync
+  # session recording
   'cleanupPeriodDays': 36500,
 }
 

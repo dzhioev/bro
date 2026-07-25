@@ -194,7 +194,7 @@ async def test_failed_terminal_carries_a_trails_hint(socket_dir, monkeypatch, ca
     assert await asyncio.wait_for(main_task, TIMEOUT) == 1
     assert capsys.readouterr().out == ''
     assert any(
-      'failed (timeout)' in record.getMessage() and 'trails show T9' in record.getMessage()
+      'failed (timeout)' in record.getMessage() and 'rewind show T9' in record.getMessage()
       for record in caplog.records
     )
 
@@ -451,7 +451,7 @@ async def test_wait_after_started_is_bounded_with_a_trails_hint(
     assert await asyncio.wait_for(main_task, TIMEOUT) == 1
     assert capsys.readouterr().out == ''
     assert any(
-      'no summon terminal' in record.getMessage() and 'trails show T7' in record.getMessage()
+      'no summon terminal' in record.getMessage() and 'rewind show T7' in record.getMessage()
       for record in caplog.records
     )
 

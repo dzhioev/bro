@@ -44,7 +44,7 @@ class TestNullTracker:
     t.start_trail(
       bro='b', llm_spec={}, system_prompt='p', forked_from=None, interactive=True, surface='x'
     )
-    t.step('reasoning', 'r', turn_index=1)
+    assert t.step('reasoning', 'r', turn_index=1) is None
     t.step('end', {'reason': 'ok'})
     t.end_trail('ok')
 
@@ -192,6 +192,22 @@ class TestLocalFileTrackerStep:
     records = _read_jsonl(path)
     step_ids = [r['step_id'] for r in records if r['record_type'] == 'step']
     assert len(set(step_ids)) == len(step_ids)
+
+  def test_step_returns_the_written_step_id(self, tmp_path: Path):
+    path = tmp_path / 'trail.jsonl'
+    tracker = LocalFileTracker(path)
+    tracker.start_trail(
+      bro='b',
+      llm_spec={},
+      system_prompt='p',
+      forked_from=None,
+      interactive=False,
+      surface='ask',
+    )
+    returned = tracker.step('reasoning', 'a')
+    tracker.close()
+    records = _read_jsonl(path)
+    assert returned == records[-1]['step_id']
 
 
 class TestLocalFileTrackerEndTrail:
@@ -521,6 +537,13 @@ class TestHTTPTrackerStep:
     tracker.step('reasoning', 'b', turn_index=2)
     ids = [_request_payload(r)['step_id'] for r in fake.requests if r[1].endswith('/steps')]
     assert len(ids) == 2 and ids[0] != ids[1]
+
+  def test_step_returns_the_posted_step_id(self, monkeypatch):
+    tracker, fake = self._ready(monkeypatch)
+    fake.queue((204, b''))
+    returned = tracker.step('reasoning', 'a', turn_index=1)
+    (request,) = [r for r in fake.requests if r[1].endswith('/steps')]
+    assert returned == _request_payload(request)['step_id']
 
   def test_deterministic_4xx_is_not_retried(self, monkeypatch):
     tracker, fake = self._ready(monkeypatch)

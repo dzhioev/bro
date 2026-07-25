@@ -32,6 +32,7 @@ class FakeStorage:
     self.trails: dict[str, dict] = {}
     self.steps: dict[str, list[dict]] = {}
     self.artifacts: dict[str, str] = {}
+    self.contexts: dict[str, object] = {}
     self._counter = 0
     self.raise_body_too_large = False
     self.sweep_calls = 0
@@ -66,6 +67,8 @@ class FakeStorage:
         header[field] = payload[field]
     self.trails[trail_id] = header
     self.steps[trail_id] = []
+    if 'launch_context' in payload.get('body', {}):
+      self.contexts[trail_id] = payload['body']['launch_context']
     if payload['harness'] == 'bro':
       self.steps[trail_id].append(
         {
@@ -132,6 +135,11 @@ class FakeStorage:
       raise storage.TrailNotFound(trail_id)
     self.trails[trail_id]['last_alive_at'] = self._now()
     return {}
+
+  async def get_launch_context(self, trail_id):
+    if trail_id not in self.trails:
+      raise storage.TrailNotFound(trail_id)
+    return self.contexts.get(trail_id)
 
   async def sweep_lost(self):
     self.sweep_calls += 1
@@ -295,6 +303,34 @@ async def test_claude_artifact_replace(client, store):
   assert response.status == 200
   assert store.artifacts[trail_id] == '{}\n{}\n'
   assert store.trails[trail_id]['native']['line_count'] == 2
+
+
+@pytest.mark.asyncio
+async def test_launch_context_read(client):
+  cli = await client
+  payload = _create_payload(
+    harness='claude',
+    bro=None,
+    surface='cw',
+    native={'segment': 'uuid', 'llm': {}, 'cw_command': 'cw ss', 'harness_version': '2.1.0'},
+    body={'artifact': '', 'launch_context': [{'title': 'git state'}]},
+  )
+  created = await cli.post('/v1/trails', json=payload, headers=_auth())
+  trail_id = (await created.json())['id']
+  response = await cli.get(f'/v1/trails/{trail_id}/context', headers=_auth())
+  assert response.status == 200
+  assert await response.json() == {'launch_context': [{'title': 'git state'}]}
+
+
+@pytest.mark.asyncio
+async def test_launch_context_absent_is_404(client):
+  cli = await client
+  created = await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
+  trail_id = (await created.json())['id']
+  response = await cli.get(f'/v1/trails/{trail_id}/context', headers=_auth())
+  assert response.status == 404
+  response = await cli.get('/v1/trails/nope/context', headers=_auth())
+  assert response.status == 404
 
 
 @pytest.mark.asyncio

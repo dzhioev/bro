@@ -251,6 +251,13 @@ class TestResume:
     assert kwargs['fetch_forked_from']('trail-1').header.id == 'trail-1'
     assert resumed.bro is fork_stub.return_value
 
+  def test_an_explicit_at_overrides_the_latest_fork_point(self):
+    spec = LLMSpec(model='gpt-5', service_tier='priority')
+    with patch('bro.launch.resume.fork') as fork_stub:
+      resume(cast(Any, self._client()), 'record', 'trail-1', llm_spec=spec, at='b1')
+    (_, step_id), _ = fork_stub.call_args
+    assert step_id == 'b1'
+
   def test_rejects_a_trail_of_a_different_bro(self):
     client = FakeTrailsClient(
       headers=[_header('trail-1', bro='other')],

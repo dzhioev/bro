@@ -1,6 +1,7 @@
 import hashlib
 import os
 import signal
+import socket
 import subprocess
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
@@ -316,6 +317,9 @@ def _docker_create_argv(
     # can show users where their /workspace mount actually lives on the host
     '-e',
     f'CW_HOST_WORKSPACE={session}',
+    # the host machine's name — a container's own gethostname is the container id
+    '-e',
+    f'CW_HOST={socket.gethostname()}',
     '-w',
     '/workspace',
     '--memory=8g',

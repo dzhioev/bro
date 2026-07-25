@@ -15,7 +15,7 @@ if TYPE_CHECKING:
   import llm.mcp
 
 # secrets every claude code session resolves regardless of bro: the
-# sync-session-log hooks run in-session, and an in-session bro run records to trails.
+# the session recorder runs in-session, and an in-session bro run records to trails.
 _SESSION_BASELINE = frozenset({'session_log', 'trails'})
 
 

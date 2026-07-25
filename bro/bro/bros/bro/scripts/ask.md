@@ -1,7 +1,7 @@
 ---
 name: ask
 description: This script should be used when the user asks to relay a question or job to another bro — "@:ask librorian to add Dune to the library:@", "ask the pm bro whether the inbox holds anything urgent", "have devoops deploy flow-mcp", "summon ppp-dev". Turns the phrasing into a summon (an isolated one-shot run of the target bro with its own credentials), picks whichever summon client the session has, decides foreground vs background, and relays the answer with the failure modes handled. A summon succeeds only when the target is in the session's allow-list — most bros seed none, and grants come from the launch surface — so a denial is a normal outcome the script relays.
-version: 1.2.0
+version: 1.2.1
 ---
 
 # Ask
@@ -31,7 +31,7 @@ Use whichever the session has — they speak the same mechanism:
 
 A summon typically runs **minutes** (container launch + a full LLM run of the target).
 
-With Bash, run anything that isn't trivially quick in the background (claude's foreground Bash cap is ~10 min — shorter than the 1800s summon default, so a foreground wait can be killed mid-run while the child keeps going): use the harness's background run (`run_in_background`), keep working, and collect the output when the completion notification arrives. To peek mid-run, use `trails show <trail-id>` with the trail id from the summon's stderr, or `summon check <request-id>` — non-blocking: prints the answer if the result is already in, says `still running` (exit 3) if not, and never disturbs the backgrounded wait. Alternatively `summon --detach` prints the request id and exits; collect later with `summon check --wait <request-id>`.
+With Bash, run anything that isn't trivially quick in the background (claude's foreground Bash cap is ~10 min — shorter than the 1800s summon default, so a foreground wait can be killed mid-run while the child keeps going): use the harness's background run (`run_in_background`), keep working, and collect the output when the completion notification arrives. To peek mid-run, use `rewind show <trail-id>` with the trail id from the summon's stderr, or `summon check <request-id>` — non-blocking: prints the answer if the result is already in, says `still running` (exit 3) if not, and never disturbs the backgrounded wait. Alternatively `summon --detach` prints the request id and exits; collect later with `summon check --wait <request-id>`.
 
 Every summon prints its request id up front (stderr in blocking mode, stdout with `--detach`) — note it. Any summon is reclaimable by that id, foreground included: if a waiting process is killed mid-flight, the result is buffered, `summon check <id>` polls for it, and `summon check --wait <id>` collects it.
 
@@ -45,7 +45,7 @@ The stdout / tool result is the target's terminal reply. Relay it to the user, a
 
 - **Denied** — the target isn't in the summoner's allow-list, or the summon would nest past the depth cap. Immediate, no child spawned; the error names the reason. For the session itself the list is fixed at launch: the fix is relaunching with `--grant @<target>` (on `cw ss` / `dive-in` / `bro run` / `bro chat` or their aliases) — tell the user that; nothing in-session can widen it. A summoned bro follows its own static `may_summon` seeds instead — grants don't reach it, so its denials are fixed by seeding the bro in code.
 - **Raised / error** — the target ran but couldn't fulfill the request; the reason is the failure text. Relay it — rephrasing the prompt or picking another target is a user decision.
-- **Failed (launch / exit / timeout)** — the child never started, died, or was killed at the timeout. The message carries the reason and a trails hint; `trails show <trail-id>` has the full trace.
+- **Failed (launch / exit / timeout)** — the child never started, died, or was killed at the timeout. The message carries the reason and a trails hint; `rewind show <trail-id>` has the full trace.
 - **Wait expired with no terminal** — the result was lost or the child is still running; the error says which trail to inspect. A killed or detached wait is recoverable: `summon check <request-id>` polls, `summon check --wait <request-id>` collects the buffered result (the `summon_check` tool does the same for tool-only sessions).
 
 ## Do not exit with a summon in flight

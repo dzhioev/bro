@@ -126,6 +126,12 @@ class Tracker(ABC):
   analysis, A/B comparison, and forking.
   """
 
+  # the step id of the `tool_call` whose tool is currently executing — the LLM
+  # implementation sets it around each tool execution so a tool that records
+  # provenance (the summon service tool) can name its own step; None outside a
+  # tool execution or when the sink mints no ids.
+  current_tool_step_id: Optional[str] = None
+
   @abstractmethod
   def start_trail(
     self,
@@ -147,9 +153,10 @@ class Tracker(ABC):
     ...
 
   @abstractmethod
-  def step(self, kind: StepKind, body: Any, **extras: Any) -> None:
+  def step(self, kind: StepKind, body: Any, **extras: Any) -> Optional[str]:
     """append one step to the current trail. extras are passed through to the
-    sink as additional fields on the step record.
+    sink as additional fields on the step record. returns the step's id, or
+    None when the sink mints none.
     """
     ...
 
@@ -179,8 +186,8 @@ class NullTracker(Tracker):
   ) -> str:
     return ''
 
-  def step(self, kind: StepKind, body: Any, **extras: Any) -> None:
-    pass
+  def step(self, kind: StepKind, body: Any, **extras: Any) -> Optional[str]:
+    return None
 
   def end_trail(self, reason: EndReason, detail: Optional[str] = None) -> None:
     pass
@@ -249,19 +256,21 @@ class LocalFileTracker(Tracker):
     self.step('system_prompt', system_prompt, turn_index=0)
     return self._trail_id
 
-  def step(self, kind: StepKind, body: Any, **extras: Any) -> None:
+  def step(self, kind: StepKind, body: Any, **extras: Any) -> Optional[str]:
     if self._trail_id is None:
       raise RuntimeError('step() called before start_trail()')
+    step_id = lulid()
     record = {
       'record_type': 'step',
       'trail_id': self._trail_id,
-      'step_id': lulid(),
+      'step_id': step_id,
       'ts': _now_iso(),
       'kind': kind,
       'body': body,
       **extras,
     }
     self._write(record)
+    return step_id
 
   def end_trail(self, reason: EndReason, detail: Optional[str] = None) -> None:
     if self._trail_id is None:
@@ -381,17 +390,19 @@ class HTTPTracker(Tracker):
     self._start_keepalive()
     return trail_id
 
-  def step(self, kind: StepKind, body: Any, **extras: Any) -> None:
+  def step(self, kind: StepKind, body: Any, **extras: Any) -> Optional[str]:
     if self._trail_id is None:
       raise RuntimeError('step() called before start_trail()')
     # mint the step_id here, outside _post, so every retry of this POST carries
     # the same id — that is what makes the server-side write idempotent.
-    payload = {'step_id': _new_step_id(), 'kind': kind, 'body': body, **extras}
+    step_id = _new_step_id()
+    payload = {'step_id': step_id, 'kind': kind, 'body': body, **extras}
     self._post(
       f'/v1/trails/{self._trail_id}/steps',
       payload,
       retry_delays=_STEP_RETRY_DELAYS_SECONDS,
     )
+    return step_id
 
   def end_trail(self, reason: EndReason, detail: Optional[str] = None) -> None:
     if self._trail_id is None:

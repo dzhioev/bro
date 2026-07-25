@@ -12,4 +12,4 @@ Call the `bro::banner` tool once. It returns the structured session facts as `ke
 
 2. Use the session `name` as a hint about the work scope
 
-3. If a `session_log_sync: FAILING` line appears (always first in the output), the session-log sync is broken — transcripts aren't reaching S3/DynamoDB and this session could be lost on `--drop`. Don't swallow it: tell the user up front and suggest re-running `session_log/bootstrap.sh`. A red statusLine warning also stays pinned for the user, but surface it in your first reply too.
+3. If a `session_recording: FAILING` line appears (always first in the output), session recording is broken — the transcript isn't reaching trails and this session could be lost on `--drop`. Don't swallow it: tell the user up front and point at `<claude config dir>/session-recorder.log` for the cause. A red statusLine warning also stays pinned for the user, but surface it in your first reply too.

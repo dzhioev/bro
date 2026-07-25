@@ -4,7 +4,7 @@ The model's system prompt and the repo policy it ran under are assembled inside
 the claude process and never written to the JSONL transcript. cw knows the
 session-shaping pieces at launch, so it captures them here as a list of typed
 records, hands them to the session via the CW_SESSION_CONTEXT env var, and
-`sync-session-log` stores them on the DynamoDB item for `rewind` to render.
+the session recorder uploads them as the trail's launch-context attachment for `rewind` to render.
 
 A record is `{kind, subtype, title}` plus either `content` (a text block) or
 `fields` (an ordered key/value map). Add a record kind to enrich the inspection

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import dataclasses
 import json
 from dataclasses import dataclass
@@ -333,6 +334,9 @@ class ChatGPT(llm.llm.LLM):
     # every response's `usage` (see _publish_usage). keyed by the response's
     # resolved model slug (e.g. gpt-5-2025-08-07).
     self._usage_totals: dict[str, usage.Counts] = {}
+    # the latest response's tool_call step ids by call_id, so _execute_tool_calls
+    # can expose the executing call's step on tracker.current_tool_step_id
+    self._tool_call_step_ids: dict[str, str] = {}
     # round-trip counter shared across the whole trail: turn 0 holds the
     # framework's system_prompt step (auto-emitted by tracker.start_trail) and
     # the user_input we emit at the top of send(); each subsequent
@@ -362,6 +366,7 @@ class ChatGPT(llm.llm.LLM):
     # can tell mid-stream chatter (between tool calls) apart from the final
     # reply (the same text LLM.send returns) — callers that already render the
     # return value can branch on it; on the trail it lands as an extras field.
+    self._tool_call_step_ids.clear()
     for item in response.output:
       if item.type == 'reasoning':
         for part in item.summary:
@@ -379,7 +384,7 @@ class ChatGPT(llm.llm.LLM):
         except json.JSONDecodeError:
           args = {'_raw_arguments': item.arguments}
         self.observer.on_tool_call(item.name, args)
-        self.tracker.step(
+        step_id = self.tracker.step(
           'tool_call',
           None,
           turn_index=turn_index,
@@ -387,6 +392,16 @@ class ChatGPT(llm.llm.LLM):
           arguments=args,
           call_id=item.call_id,
         )
+        if step_id is not None:
+          self._tool_call_step_ids[item.call_id] = step_id
+
+  @contextlib.contextmanager
+  def _current_tool_step(self, call_id: str):
+    self.tracker.current_tool_step_id = self._tool_call_step_ids.get(call_id)
+    try:
+      yield
+    finally:
+      self.tracker.current_tool_step_id = None
 
   async def _execute_tool_calls(
     self, response: Response, *, turn_index: int
@@ -398,7 +413,8 @@ class ChatGPT(llm.llm.LLM):
       kwargs = json.loads(item.arguments)
       is_error = False
       try:
-        output = await self.tools.call(item.name, kwargs)
+        with self._current_tool_step(item.call_id):
+          output = await self.tools.call(item.name, kwargs)
       except ToolControlSignal:
         raise
       except Exception as exception:

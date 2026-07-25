@@ -60,8 +60,8 @@ class SessionFacts:
     - prompt — the user-typed prompt extracted from shell_command when a
       `--new`/`-p`/`--prompt`/`--` marker is found; shell_command is shown with
       the prompt portion replaced by a placeholder in this case
-    - sync_warning — set when the session-log sync health file reports a failure,
-      so the banner can warn that logs aren't reaching S3
+    - sync_warning — set when the session-recorder health file reports a failure,
+      so the banner can warn that the transcript is not being recorded
   """
 
   in_container: bool
@@ -111,7 +111,7 @@ class SessionFacts:
 
     sync_warning: Optional[str] = None
     if health.is_failing():
-      sync_warning = 'session-log sync FAILING — run session_log/bootstrap.sh'
+      sync_warning = 'session recording FAILING — see session-recorder.log'
 
     return cls(
       in_container=in_container,
@@ -210,7 +210,7 @@ class SessionFacts:
     if self.sync_warning is not None:
       # first line so it lands in Claude's collapsed tool-output preview without
       # needing expansion; the agent should relay it to the user
-      lines.append('session_log_sync: FAILING — run session_log/bootstrap.sh')
+      lines.append('session_recording: FAILING — see session-recorder.log')
     lines.append(f'kind: {"container" if self.in_container else "host worktree"}')
     pairs: list[tuple[str, str]] = [
       ('name', 'name'),

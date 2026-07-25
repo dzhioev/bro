@@ -43,7 +43,7 @@ class TestHealth:
 class TestHealthPath:
   def test_follows_the_session_config_dir(self, monkeypatch, tmp_path):
     monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(tmp_path / 'session-config'))
-    assert health.health_path() == (tmp_path / 'session-config' / 'session-log-sync-health.json')
+    assert health.health_path() == (tmp_path / 'session-config' / 'session-recorder-health.json')
 
   def test_defaults_to_the_home_claude_dir(self, monkeypatch):
     monkeypatch.delenv('CLAUDE_CONFIG_DIR', raising=False)

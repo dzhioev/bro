@@ -113,9 +113,15 @@ class SummonSpawner(Spawner):
     return await self._docker.spawn(lowered, channel)
 
 
-def _log_root_started(context: Dispatcher, peer: Peer, message: Message) -> None:
-  del context, peer
-  log.info('root run started (trail %s)', message.payload.get('trail_id'))
+def _note_root_started(control: SummonControl):
+  def _handle(context: Dispatcher, peer: Peer, message: Message) -> None:
+    del context, peer
+    trail_id = message.payload.get('trail_id')
+    log.info('root run started (trail %s)', trail_id)
+    # a bro-run root's own trail is what its summon children are attributed to
+    control.note_root_trail(trail_id)
+
+  return _handle
 
 
 def _log_root_completed(context: Dispatcher, peer: Peer, message: Message) -> None:
@@ -128,7 +134,12 @@ def _log_root_completed(context: Dispatcher, peer: Peer, message: Message) -> No
 
 
 def run_root_via_broker(
-  launch: LaunchSpec, project: Path, *, session: str, may_summon: Collection[str] = ()
+  launch: LaunchSpec,
+  project: Path,
+  *,
+  session: str,
+  may_summon: Collection[str] = (),
+  trail_pointer: Optional[Path] = None,
 ) -> int:
   """run `launch` as the root peer of a broker over the host control dir
   (`var/cw/broker`), supervise it on the broker loop until it exits, and return its
@@ -144,7 +155,9 @@ def run_root_via_broker(
   surface (see `bro/launch/summon_control.py`) — the root's identity in the summon audit and the
   key of its per-session state files. `may_summon` names the bros the root session
   is authorized to summon — its effective outgoing allow-list (`bro/launch/summon_control.py`);
-  defaults to deny-all. A summoned child follows its own bro's static seeds
+  defaults to deny-all. `trail_pointer` is a claude session's current-trail
+  pointer file (host-side path; `cw` passes it), the control's provenance source
+  for the root's summon children. A summoned child follows its own bro's static seeds
   instead, resolved per request by the control. The summon handler is registered
   either way, so a denied summoner always gets a clean correlated error instead of
   a silent refuse; after the loop ends — cleanly or by an exception unwinding out
@@ -167,12 +180,13 @@ def run_root_via_broker(
     project=project,
     status_file=summon_status_file(project, session),
     audit_file=summon_dir(project) / f'{session}.jsonl',
+    trail_pointer=trail_pointer,
   )
   facade = Broker(UnixServerTransport(str(broker_dir(project))), spawner)
   facade.on(Tag.PING, ping_handler)
   # the root's own lifecycle (a bro run at the session root) has no parent peer to
   # route to; this host process is its parent, so it lands in the host log
-  facade.on(Tag.STARTED, _log_root_started)
+  facade.on(Tag.STARTED, _note_root_started(control))
   facade.on(Tag.COMPLETED, _log_root_completed)
   facade.on(SUMMON, control.handle)
   facade.add_delivery_observer(control.observe_delivery)

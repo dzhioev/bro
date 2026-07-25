@@ -218,6 +218,84 @@ class TestRetryBehavior:
     assert exception_info.value.status == 503
 
 
+class TestLaunchContext:
+  def test_unwraps_the_context_document(self, monkeypatch):
+    fake = _install_fake_connection(monkeypatch)
+    fake.queue((200, b'{"launch_context": [{"title": "git state"}]}'))
+    assert _client().get_launch_context('T1') == [{'title': 'git state'}]
+    method, path, _, _ = fake.requests[0]
+    assert (method, path) == ('GET', '/v1/trails/T1/context')
+
+  def test_absent_context_is_none(self, monkeypatch):
+    fake = _install_fake_connection(monkeypatch)
+    fake.queue((404, b'no launch context'))
+    assert _client().get_launch_context('T1') is None
+
+
+class TestWrites:
+  def test_create_trail_posts_the_payload_verbatim(self, monkeypatch):
+    fake = _install_fake_connection(monkeypatch)
+    fake.queue((201, b'{"id": "T1", "started_at": "2026-01-01T00:00:00Z"}'))
+    payload = {'harness': 'claude', 'body': {'artifact': ''}}
+    result = _client().create_trail(payload)
+    assert result['id'] == 'T1'
+    method, path, body, headers = fake.requests[0]
+    assert (method, path) == ('POST', '/v1/trails')
+    assert headers['Content-Type'] == 'application/json'
+    assert body is not None and json.loads(body) == payload
+
+  def test_create_trail_is_not_retried(self, monkeypatch):
+    # a lost create response must not double-create; the caller's own next
+    # attempt is the retry
+    fake = _install_fake_connection(monkeypatch)
+    fake.queue(ConnectionError('blip'))
+    with pytest.raises(ConnectionError):
+      _client().create_trail({'harness': 'claude'})
+    assert len(fake.requests) == 1
+
+  def test_replace_artifact_puts_snapshot_and_native(self, monkeypatch):
+    fake = _install_fake_connection(monkeypatch)
+    fake.queue((200, b'{"native": {"line_count": 2}}'))
+    result = _client().replace_artifact('T1', '{}\n{}\n', {'harness_version': '2.1.0'})
+    assert result == {'native': {'line_count': 2}}
+    method, path, body, _ = fake.requests[0]
+    assert (method, path) == ('PUT', '/v1/trails/T1/artifact')
+    assert body is not None
+    assert json.loads(body) == {'artifact': '{}\n{}\n', 'native': {'harness_version': '2.1.0'}}
+
+  def test_update_header_patches_changes(self, monkeypatch):
+    fake = _install_fake_connection(monkeypatch)
+    fake.queue((200, b'{"id": "T1", "subject": "s"}'))
+    result = _client().update_header('T1', {'subject': 's'})
+    assert result['subject'] == 's'
+    method, path, body, _ = fake.requests[0]
+    assert (method, path) == ('PATCH', '/v1/trails/T1')
+    assert body is not None and json.loads(body) == {'subject': 's'}
+
+  def test_end_trail_carries_reason_and_detail(self, monkeypatch):
+    fake = _install_fake_connection(monkeypatch)
+    fake.queue((204, b''))
+    _client().end_trail('T1', 'raised', detail='blocked')
+    method, path, body, _ = fake.requests[0]
+    assert (method, path) == ('POST', '/v1/trails/T1/end')
+    assert body is not None and json.loads(body) == {'reason': 'raised', 'detail': 'blocked'}
+
+  def test_keepalive_posts_empty_payload(self, monkeypatch):
+    fake = _install_fake_connection(monkeypatch)
+    fake.queue((204, b''))
+    _client().keepalive('T1')
+    method, path, body, _ = fake.requests[0]
+    assert (method, path) == ('POST', '/v1/trails/T1/keepalive')
+    assert body is not None and json.loads(body) == {}
+
+  def test_idempotent_write_recovers_one_transport_blip(self, monkeypatch):
+    fake = _install_fake_connection(monkeypatch)
+    fake.queue(ConnectionError('blip'))
+    fake.queue((204, b''))
+    _client().keepalive('T1')
+    assert len(fake.requests) == 2
+
+
 class TestMessages:
   def test_repeated_type_filters(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)

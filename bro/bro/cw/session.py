@@ -21,6 +21,7 @@ from cw.claude_config import (
   _provision_host_claude_dir,
   container_claude_state,
   drop_workspace,
+  session_trail_pointer,
   workspace_projects_dir,
 )
 from cw.flags import DEFAULT_HOLD
@@ -298,7 +299,9 @@ def _container_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
     optional_secrets=scoped.optional,
     extra_mounts=claude_mounts,
   )
-  code = run_in_container(launch, may_summon=may_summon)
+  code = run_in_container(
+    launch, may_summon=may_summon, trail_pointer=session_trail_pointer(spec.name)
+  )
   return _finish_session(spec, workspace, code)
 
 
@@ -324,7 +327,13 @@ def _run_host_root_via_broker(
   # name — container mode prefixes `c:` (see bro/launch/summon_control.py)
   env[STATUS_ENV] = str(summon_status_file(project, name))
   launch = ProcessLaunchSpec(command=command, cwd=str(worktree), env=env)
-  return run_root_via_broker(launch, project, session=name, may_summon=may_summon)
+  return run_root_via_broker(
+    launch,
+    project,
+    session=name,
+    may_summon=may_summon,
+    trail_pointer=session_trail_pointer(name),
+  )
 
 
 @contextlib.contextmanager

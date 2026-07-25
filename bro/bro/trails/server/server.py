@@ -308,6 +308,18 @@ async def _handle_get_trail(request: web.Request) -> web.Response:
   return web.json_response(trail)
 
 
+async def _handle_get_context(request: web.Request) -> web.Response:
+  trail_id = request.match_info['trail_id']
+  store: storage.Storage = request.app['storage']
+  try:
+    context = await store.get_launch_context(trail_id)
+  except storage.TrailNotFound:
+    return _error(f'trail not found: {trail_id}', 404)
+  if context is None:
+    return _error(f'no launch context for trail: {trail_id}', 404)
+  return web.json_response({'launch_context': context})
+
+
 async def _handle_get_steps(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
   after = request.query.get('after')
@@ -402,6 +414,7 @@ def create_app(
   app.router.add_post('/v1/trails/{trail_id}/steps', _handle_put_step)
   app.router.add_get('/v1/trails/{trail_id}/steps', _handle_get_steps)
   app.router.add_get('/v1/trails/{trail_id}/messages', _handle_get_messages)
+  app.router.add_get('/v1/trails/{trail_id}/context', _handle_get_context)
   app.router.add_put('/v1/trails/{trail_id}/artifact', _handle_replace_artifact)
   app.router.add_post('/v1/trails/{trail_id}/end', _handle_end_trail)
   app.router.add_post('/v1/trails/{trail_id}/keepalive', _handle_keepalive)

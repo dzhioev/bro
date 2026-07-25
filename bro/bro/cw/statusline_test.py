@@ -27,7 +27,7 @@ def _run(monkeypatch, tmp_path, status=None, summon_status=None) -> str:
 class TestStatusline:
   def test_failing_prints_red_warning(self, monkeypatch, tmp_path):
     out = _run(monkeypatch, tmp_path, status='error')
-    assert '⚠ session-log sync FAILING' in out
+    assert '⚠ session recording FAILING' in out
     assert '\033[1;31m' in out
 
   def test_ok_prints_nothing(self, monkeypatch, tmp_path):
@@ -118,6 +118,6 @@ class TestSummonSection:
     }
     out = _run(monkeypatch, tmp_path, status='error', summon_status=summon_status)
     assert out.count('\n') == 1  # claude renders a single status line
-    assert '⚠ session-log sync FAILING' in out
+    assert '⚠ session recording FAILING' in out
     assert '⚡ summoning devoops' in out
     assert ' · ' in out

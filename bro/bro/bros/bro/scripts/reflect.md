@@ -2,7 +2,7 @@
 name: reflect
 description: This script should be used when the user asks to step back and turn lessons from experience into durable improvements — "@:reflect:@", "reflect on this session", "post-mortem this incident", "what should we learn from this", "how could this have gone better". Analyzes the current session history (or a given situation/incident), separates one-off slips from systemic friction, traces each systemic finding to the durable surface that owns it — a script, the bro's toolset, the bro's system prompt or shared prompt text, a doc — and drafts concrete edit proposals. After presenting the findings it suggests a delivery per proposal: file it as a task that lands through its own session, or fix it in place when the change is small.
 parameters: {"incident?": "the situation or incident to reflect on instead of the whole current session"}
-version: 1.0.0
+version: 1.0.1
 ---
 
 # Reflect
@@ -11,7 +11,7 @@ Turn friction into durable improvements. Reflection mines what happened for less
 
 ## Scope the material
 
-The default material is the whole current session, first user message to now. An `incident` argument (in the appended `# Arguments` section) shifts the focus to that situation instead — gather what this session already knows about it and ask the user for the parts it doesn't. When the incident lives in another bro's recorded run and this session can shell out, `trails show <trail-id>` replays its trace.
+The default material is the whole current session, first user message to now. An `incident` argument (in the appended `# Arguments` section) shifts the focus to that situation instead — gather what this session already knows about it and ask the user for the parts it doesn't. When the incident lives in another bro's recorded run and this session can shell out, `rewind show <trail-id>` replays its trace.
 
 ## Find the friction
 

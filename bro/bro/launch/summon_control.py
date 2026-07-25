@@ -22,7 +22,12 @@ Authorization is per-peer. The root follows the launch-computed effective list
 above; a summoned child follows its own bro's static MRO-collected `may_summon`
 seeds — the control attributes the requesting peer to the bro it spawned for it
 (the dispatcher's `origin` topology plus this control's own spawn records;
-nothing is read from the wire), and a peer it cannot attribute is denied. Grants
+nothing is read from the wire), and a peer it cannot attribute is denied.
+Provenance rides the same attribution: a spawned child's `summoned_by` names the
+requester's trail — the root's from the session's current-trail pointer (the
+claude recorder publishes it; `session_log/trail_pointer.py`) or from the root
+run's `started` event, a summoned child's from its spawn record — plus the
+requester's own `tool_call` step id when the request payload carries one. Grants
 never pass through to children: a child's launch is programmatic, so widening
 stays a root-session surface. Summons therefore chain transitively wherever the
 seeds chain, bounded by `_MAX_SUMMON_DEPTH` — seeds are declared per-bro, so a
@@ -79,7 +84,7 @@ __all__ = [
 ]
 
 _PROMPT_HEAD_CHARS = 120
-_PAYLOAD_KEYS = frozenset({'target', 'prompt', 'timeout', 'into', 'hold'})
+_PAYLOAD_KEYS = frozenset({'target', 'prompt', 'timeout', 'into', 'hold', 'step_id'})
 # the deepest peer a summon may spawn: the root sits at depth 0, its children at
 # 1, grandchildren at 2; a request that would nest deeper is denied — the guard
 # against seed cycles recursing through real containers (see module docstring).
@@ -153,6 +158,9 @@ def _validate(payload: dict[str, Any]) -> Optional[str]:
   hold = payload.get('hold')
   if hold is not None and hold not in HOLDS:
     return f"summon 'hold' must be one of {', '.join(HOLDS)}"
+  step_id = payload.get('step_id')
+  if step_id is not None and (not isinstance(step_id, str) or len(step_id) == 0):
+    return "summon 'step_id' must be a non-empty string"
   return None
 
 
@@ -203,14 +211,27 @@ class SummonControl:
     project: Path,
     status_file: Path,
     audit_file: Path,
+    trail_pointer: Optional[Path] = None,
   ):
     self._allow_list = set(allow_list)
     self._session = session
     self._project = project
     self._status_file = status_file
     self._audit_file = audit_file
+    # the root's trail attribution source: a claude session's recorder publishes
+    # its current trail id at `trail_pointer` (session_log/trail_pointer.py);
+    # a bro-run root announces its trail in the `started` lifecycle event,
+    # noted via note_root_trail
+    self._trail_pointer = trail_pointer
+    self._root_trail_id: Optional[str] = None
     self._active: dict[str, _ActiveSummon] = {}  # request id -> in-flight child
     self._last: Optional[dict[str, Any]] = None  # the most recent terminal outcome
+
+  def note_root_trail(self, trail_id: Optional[str]) -> None:
+    """record the root peer's own trail id (from its `started` lifecycle event)
+    as the trail the root's summon children are attributed to."""
+    if trail_id is not None:
+      self._root_trail_id = trail_id
 
   # --- the `summon` request handler (broker loop) -------------------------------
 
@@ -249,12 +270,18 @@ class SummonControl:
       return
     timeout = payload.get('timeout')
     prompt = payload['prompt']
+    summoned_by = requester.summoned_by
+    step_id = payload.get('step_id')
+    if summoned_by is not None and step_id is not None:
+      # the requester names its own tool_call step; a position without a trail
+      # to anchor it is dropped
+      summoned_by = {**summoned_by, 'step_id': step_id}
     context.spawn(
       SummonLaunchSpec(
         target=target,
         prompt=prompt,
         parent_workspace=requester.workspace,
-        summoner=requester.summoned_by,
+        summoner=summoned_by,
         into=payload.get('into'),
         hold=payload.get('hold'),
       ),
@@ -294,7 +321,7 @@ class SummonControl:
       return _Requester(
         allow_list=self._allow_list,
         summoner={'session': self._session},
-        summoned_by=None,
+        summoned_by=self._root_summoned_by(),
         depth=0,
         list_description="this session's summon allow-list",
         workspace=root_workspace.path,
@@ -313,11 +340,25 @@ class SummonControl:
     return _Requester(
       allow_list=set(create_bro(record.target)._may_summon),
       summoner={'target': record.target, 'trail_id': record.trail_id},
-      summoned_by={'trail_id': record.trail_id},
+      summoned_by={'trail_id': record.trail_id} if record.trail_id is not None else None,
       depth=record.depth,
       list_description=f"{record.target}'s may_summon seeds",
       workspace=containers_dir(self._project) / _workspace_name(peer),
     )
+
+  def _root_summoned_by(self) -> Optional[dict[str, Any]]:
+    # read per request — a claude session's recorder opens a new trail per
+    # recorder lifetime, so the pointer moves. an absent or empty pointer (the
+    # early-launch race before transcript adoption, or no recorder at all)
+    # degrades to no pointer, never a legacy-shaped one.
+    if self._trail_pointer is not None:
+      from session_log.trail_pointer import read
+
+      trail_id = read(self._trail_pointer)
+      return {'trail_id': trail_id} if trail_id is not None else None
+    if self._root_trail_id is not None:
+      return {'trail_id': self._root_trail_id}
+    return None
 
   def _deny(
     self,

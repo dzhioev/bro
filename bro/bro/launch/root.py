@@ -2,6 +2,7 @@ import subprocess
 from collections.abc import Collection
 from dataclasses import replace
 from pathlib import Path
+from typing import Optional
 
 from base import log
 from workspace.containers import attach_interactive, container_broker_enabled
@@ -11,7 +12,13 @@ from workspace.paths import project_root
 from workspace.store import log_scoped_secrets
 
 
-def _run_root_via_broker(launch: Launch, project: Path, *, may_summon: Collection[str]) -> int:
+def _run_root_via_broker(
+  launch: Launch,
+  project: Path,
+  *,
+  may_summon: Collection[str],
+  trail_pointer: Optional[Path],
+) -> int:
   """run the container launch as the broker's supervised root peer."""
   # imported here, not at module level: container_broker_enabled() must be able to
   # short-circuit a launch before anything touches the broker package (see its
@@ -24,11 +31,21 @@ def _run_root_via_broker(launch: Launch, project: Path, *, may_summon: Collectio
   env = dict(launch.env)
   env[STATUS_ENV] = container_status_path(project, session)
   broker_launch = DockerLaunchSpec(replace(launch, env=env))
-  return run_root_via_broker(broker_launch, project, session=session, may_summon=may_summon)
+  return run_root_via_broker(
+    broker_launch,
+    project,
+    session=session,
+    may_summon=may_summon,
+    trail_pointer=trail_pointer,
+  )
 
 
 def run_in_container(
-  launch: Launch, *, drop: bool = False, may_summon: Collection[str] = ()
+  launch: Launch,
+  *,
+  drop: bool = False,
+  may_summon: Collection[str] = (),
+  trail_pointer: Optional[Path] = None,
 ) -> int:
   """run a prepared launch directly or as the root peer of a broker.
 
@@ -45,7 +62,7 @@ def run_in_container(
   ref = format_ref(launch.name, True)
   clear_session_end(project, ref)
   if container_broker_enabled():
-    code = _run_root_via_broker(launch, project, may_summon=may_summon)
+    code = _run_root_via_broker(launch, project, may_summon=may_summon, trail_pointer=trail_pointer)
   else:
     container_id = prepare_container(launch, project)
     if launch.tty:

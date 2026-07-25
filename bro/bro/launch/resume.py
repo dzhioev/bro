@@ -112,12 +112,18 @@ def _message(client: TrailsClient, row: dict, *, by_user: bool) -> HistoryMessag
 
 
 def resume(
-  client: TrailsClient, bro_name: str, trail_ref: str, *, llm_spec: LLMSpec
+  client: TrailsClient,
+  bro_name: str,
+  trail_ref: str,
+  *,
+  llm_spec: LLMSpec,
+  at: Optional[str] = None,
 ) -> ResumedCall:
   """continue a recorded `call` conversation: `trail_ref` is a trail id, or
-  `RESUME_LATEST` for the bro's newest one. raises `ValueError` when there is
-  nothing to resume, or when the trail belongs to a different bro (the run is
-  scoped — credentials, registry class — to the named one).
+  `RESUME_LATEST` for the bro's newest one. `at` names an explicit fork step
+  instead of the trail's latest consistent point. raises `ValueError` when
+  there is nothing to resume, or when the trail belongs to a different bro
+  (the run is scoped — credentials, registry class — to the named one).
   """
   if trail_ref == RESUME_LATEST:
     found = find_latest_call_trail(client, bro_name)
@@ -134,7 +140,7 @@ def resume(
   history = conversation_history(client, trail_id)
   bro = fork(
     trail,
-    latest_fork_point(trail),
+    at if at is not None else latest_fork_point(trail),
     llm_spec=llm_spec,
     surface=_CALL_ENTRY_POINT,
     fetch_forked_from=lambda forked_from_id: fetch_recorded_trail(client, forked_from_id),

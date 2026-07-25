@@ -1,10 +1,12 @@
-"""read-side client for the trails service.
+"""synchronous client for the trails service.
 
-counterpart to `llm.tracker.HTTPTracker` (the write-side client). `TrailsClient`
-wraps the read endpoints — `GET /v1/trails`, `GET /v1/trails/{id}`,
-`GET /v1/trails/{id}/steps` — over a persistent HTTPS connection, exposing both
-single-page methods (`list_trails` / `get_steps`) and transforked_from cursor
-iterators (`iter_trails` / `iter_steps`) that paginate until exhausted.
+`TrailsClient` wraps the read endpoints — `GET /v1/trails`,
+`GET /v1/trails/{id}`, `GET /v1/trails/{id}/steps` — over a persistent HTTPS
+connection, exposing both single-page methods (`list_trails` / `get_steps`) and
+cursor iterators (`iter_trails` / `iter_steps`) that paginate until exhausted,
+plus the claude recorder's write surface (`create_trail` / `replace_artifact` /
+`update_header` / `end_trail` / `keepalive`). Bros do not write through it —
+their streaming per-step writer is `llm.tracker.HTTPTracker`.
 
 `fetch_recorded_trail` rehydrates a header + all of its steps into the
 `Trail` / `Step` / `RecordedTrail` dataclasses defined in `llm.tracker`, the
@@ -46,12 +48,12 @@ DEFAULT_STEPS_PAGE_SIZE = 200
 
 
 class TrailsClient:
-  """synchronous HTTPS client for the trails server's read endpoints.
+  """synchronous HTTPS client for the trails server.
 
   one persistent connection per client; transport blips drop the socket and
-  reopen on the next call. write endpoints (`POST /v1/trails`,
-  `POST /v1/trails/{id}/steps`, `POST /v1/trails/{id}/end`) are intentionally
-  not exposed — bros write through `llm.tracker.HTTPTracker`.
+  reopen on the next call. the write surface covers the claude recorder's
+  endpoints; the bro step-append endpoint is intentionally not exposed — bros
+  write through `llm.tracker.HTTPTracker`.
   """
 
   def __init__(self, base_url: str, token: str, *, timeout: float = 10.0):
@@ -199,6 +201,44 @@ class TrailsClient:
       if after is None:
         return
 
+  def get_launch_context(self, trail_id: str) -> Optional[Any]:
+    """the trail's stored launch-context document, or None when it has none."""
+    try:
+      return self._get(f'/v1/trails/{trail_id}/context', {})['launch_context']
+    except HTTPStatusError as exception:
+      if exception.status == 404:
+        return None
+      raise
+
+  def create_trail(self, payload: dict) -> dict:
+    """open a trail (`POST /v1/trails`, harness-native `body` envelope included);
+    returns `{id, started_at}`. deliberately not retried: creation is the one
+    non-idempotent write, and a duplicate from a lost response would strand an
+    orphan trail — the caller's own next attempt is the retry.
+    """
+    return self._send('POST', '/v1/trails', payload, retry=False)
+
+  def replace_artifact(self, trail_id: str, artifact: str, native: dict) -> dict:
+    """replace the claude trail's artifact with a complete snapshot and advance
+    the mutable native fields; returns the server-derived native updates."""
+    return self._send(
+      'PUT', f'/v1/trails/{trail_id}/artifact', {'artifact': artifact, 'native': native}
+    )
+
+  def update_header(self, trail_id: str, changes: dict) -> dict:
+    """apply a constrained mutable-field upsert (`PATCH /v1/trails/{id}`);
+    returns the updated header."""
+    return self._send('PATCH', f'/v1/trails/{trail_id}', changes)
+
+  def end_trail(self, trail_id: str, reason: str, detail: Optional[str] = None) -> None:
+    payload: dict[str, Any] = {'reason': reason}
+    if detail is not None:
+      payload['detail'] = detail
+    self._send('POST', f'/v1/trails/{trail_id}/end', payload)
+
+  def keepalive(self, trail_id: str) -> None:
+    self._send('POST', f'/v1/trails/{trail_id}/keepalive', {})
+
   def close(self) -> None:
     self._drop_connection()
 
@@ -244,19 +284,30 @@ class TrailsClient:
     headers = {'Authorization': f'Bearer {self._token}'}
     return self._request('GET', path, headers, body=None)
 
+  def _send(self, method: str, path: str, payload: dict, *, retry: bool = True) -> dict:
+    headers = {
+      'Authorization': f'Bearer {self._token}',
+      'Content-Type': 'application/json',
+    }
+    body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
+    return self._request(method, path, headers, body, retry=retry)
+
   def _request(
     self,
     method: str,
     path: str,
     headers: dict,
     body: Optional[bytes],
+    *,
+    retry: bool = True,
   ) -> dict:
     last_exception: Optional[Exception] = None
     # transient blips often leave the persistent socket half-open; one retry on
     # a fresh connection is enough to cover that without dragging in a full
-    # backoff schedule (the read path is non-mutating and idempotent). a
-    # deterministic 4xx propagates immediately — a retry cannot change it.
-    for _ in range(2):
+    # backoff schedule (every retried call is idempotent — snapshot replaces,
+    # header upserts, reads; `create_trail` opts out). a deterministic 4xx
+    # propagates immediately — a retry cannot change it.
+    for _ in range(2 if retry else 1):
       connection = self._get_connection()
       try:
         connection.request(method, path, body=body, headers=headers)

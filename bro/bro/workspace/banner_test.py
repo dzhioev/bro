@@ -259,23 +259,21 @@ class TestRenderBanner:
     assert out.count('I want a banner') == 1
 
   def test_llm_emits_sync_warning_as_first_line(self):
-    out = _facts(
-      sync_warning='session-log sync FAILING — run session_log/bootstrap.sh'
-    ).render_llm()
+    out = _facts(sync_warning='session recording FAILING — see session-recorder.log').render_llm()
     # first line so it survives Claude's collapsed tool-output preview
-    assert out.splitlines()[0] == 'session_log_sync: FAILING — run session_log/bootstrap.sh'
+    assert out.splitlines()[0] == 'session_recording: FAILING — see session-recorder.log'
     assert 'kind: container' in out
 
   def test_llm_omits_sync_warning_when_healthy(self):
     out = _facts().render_llm()
-    assert 'session_log_sync' not in out
+    assert 'session_recording' not in out
 
   def test_visual_paints_sync_warning_red_above_logo(self):
     out = _facts(
-      bro='pm', sync_warning='session-log sync FAILING — run session_log/bootstrap.sh'
+      bro='pm', sync_warning='session recording FAILING — see session-recorder.log'
     ).render_visual()
     first = out.splitlines()[0]
     assert first.startswith('\033[31m\033[1m⚠ ')
-    assert 'session-log sync FAILING' in first
+    assert 'session recording FAILING' in first
     # warning sits above the bro logo
     assert out.index('⚠') < out.index('██')

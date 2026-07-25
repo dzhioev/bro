@@ -173,6 +173,13 @@ def chat_main(
   parser.add_argument(
     '--resume', nargs='?', const=RESUME_LATEST, default=None, metavar='TRAIL_ID', help=RESUME_HELP
   )
+  parser.add_argument(
+    '--at',
+    default=None,
+    metavar='STEP_ID',
+    help='with --resume: fork the conversation at this step of the resumed trail '
+    'instead of its latest consistent point',
+  )
   parser.add_argument('--fast', action='store_true', help=FAST_HELP)
   parser.add_argument('--effort', choices=EFFORT_LEVELS, default=None, help=EFFORT_HELP)
   parser.add_argument('--in-place', action='store_true', help=IN_PLACE_HELP)
@@ -192,6 +199,9 @@ def chat_main(
   if args['what'] is None and args['resume'] is None:
     log.error('what is required unless --resume is given')
     return 1
+  if args['at'] is not None and args['resume'] is None:
+    log.error('--at names a fork point of a resumed trail; it requires --resume')
+    return 1
   if os.environ.get('CW_IN_CONTAINER') is not None and not args['in_place']:
     log.error(
       "bro chat refuses an implicit in-container run; pass --in-place to use this container's scope"
@@ -209,6 +219,8 @@ def chat_main(
     inner_args.append('--text')
   if args['resume'] is not None:
     inner_args.extend(['--resume', args['resume']])
+  if args['at'] is not None:
+    inner_args.extend(['--at', args['at']])
   if fast:
     inner_args.append('--fast')
   if args['effort'] is not None:
@@ -254,6 +266,7 @@ def chat_main(
           args['bro'],
           args['resume'],
           llm_spec=spec if spec is not None else bro_class.llm_spec,
+          at=args['at'],
         )
       except (ValueError, http.client.HTTPException) as e:
         log.error('%s', e)

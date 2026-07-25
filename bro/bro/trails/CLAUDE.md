@@ -5,7 +5,7 @@ Trails is the universal registry and recording pipeline for LLM runs across harn
 ## Architecture
 
 ```text
-bro · future claude daemon                  readers
+bro · claude recorder                       readers
           │                                  │
           └──────── HTTPS ───────┬───────────┘
                                  ▼
@@ -27,12 +27,12 @@ bro · future claude daemon                  readers
 ## Surfaces
 
 - `llm/tracker.py` is the bro write client. `HTTPTracker` creates a `harness='bro'` trail, appends client-idempotent steps, keeps it alive, and ends it with `ok | raised | error`; the server alone stamps `lost`.
-- `trails/client.py` is the synchronous read client. It exposes paged headers, native steps, and generalized messages through `iter_trails`, `iter_steps`, and `iter_messages`.
-- `GET /v1/trails/{id}/steps` returns the backend's lossless native records. `GET /v1/trails/{id}/messages` returns generalized events and accepts repeated `type` query parameters.
+- `trails/client.py` is the synchronous client: paged headers, native steps, and generalized messages through `iter_trails`, `iter_steps`, and `iter_messages`, plus the claude recorder's write surface (`create_trail`, `replace_artifact`, `update_header`, `end_trail`, `keepalive`) and `get_launch_context`. The claude recorder itself is `session_log/recorder.py`.
+- `GET /v1/trails/{id}/steps` returns the backend's lossless native records. `GET /v1/trails/{id}/messages` returns generalized events and accepts repeated `type` query parameters; a claude message id split across records bills its `llm_call` once. `GET /v1/trails/{id}/context` returns the stored launch-context document.
 - `POST /v1/trails` creates a header and opens its body; a Claude create may include `body.launch_context`. `PUT /v1/trails/{id}/artifact` replaces a Claude snapshot. `PATCH /v1/trails/{id}` accepts only the live mutable header/native fields. `POST /v1/trails/{id}/end` finalizes a run.
 - Header responses carry stored fields plus computed `usage` and `models`. Provider-raw per-model counters in `native.usage` are the source of truth.
 - List queries accept exactly one indexed selector: `harness`, `bro`, or `forked_from`, plus the common time range and cursor.
-- `trails/cli.py` remains the bro-oriented reader until `rewind` consolidation lands in the next stage.
+- `trails/rewind.py` (`rewind`) is the reader CLI for every harness: `list`, harness-aware `show` (bro step listing; claude fork-chain conversation render, `-f` follow), `grep`, `tree`. Ids the server doesn't know fall back to the legacy session-log reader until the historical backfill retires it.
 
 ## Auth and deployment
 

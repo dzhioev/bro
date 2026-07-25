@@ -203,8 +203,6 @@ class TestRunRootViaBroker:
     assert process_spawner._host_log == host_log
     assert set(captured['handlers']) == {'ping', 'started', 'completed', 'summon'}
     assert captured['handlers']['ping'] is bro.launch.spawn.ping_handler
-    # the root's own run lifecycle has no parent peer; the host logs it as the parent
-    assert captured['handlers']['started'] is bro.launch.spawn._log_root_started
     assert captured['handlers']['completed'] is bro.launch.spawn._log_root_completed
     # the summon handler and the delivery tap belong to the same per-root control
     control = captured['handlers']['summon'].__self__
@@ -216,14 +214,23 @@ class TestRunRootViaBroker:
     assert control._audit_file == summon_dir / 'ws.jsonl'
     assert captured['launch'] is launch
 
-  def test_root_lifecycle_handlers_log_trail_and_end_reason(self, caplog):
+  def test_root_lifecycle_handlers_log_trail_and_end_reason(self, caplog, tmp_path):
     from broker.brotocol import Message, Tag
     from broker.dispatcher import Dispatcher
 
     dispatcher = Dispatcher()
-    bro.launch.spawn._log_root_started(
+    control = bro.launch.summon_control.SummonControl(
+      allow_list=set(),
+      session='ws',
+      project=tmp_path,
+      status_file=tmp_path / 'status.json',
+      audit_file=tmp_path / 'audit.jsonl',
+    )
+    bro.launch.spawn._note_root_started(control)(
       dispatcher, 'root', Message(type=Tag.STARTED, payload={'trail_id': 't-1'})
     )
+    # the started handler doubles as the bro-run root's provenance source
+    assert control._root_trail_id == 't-1'
     bro.launch.spawn._log_root_completed(
       dispatcher,
       'root',

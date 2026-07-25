@@ -326,6 +326,16 @@ class Storage:
     derived = self._backend(item['harness']).derive_aggregates(item.get('native', {}))
     return {**item, **derived}
 
+  async def get_launch_context(self, trail_id: str) -> Optional[Any]:
+    """the trail's stored launch-context document, or None when it has none."""
+    header = await self._required_header(trail_id)
+    key = header.get('native', {}).get('context_s3')
+    if key is None:
+      return None
+    backend = self._backend(header['harness'])
+    assert isinstance(backend, ClaudeBackend)  # context_s3 is claude-native
+    return await backend.read_context(key)
+
   async def query_steps(self, trail_id: str, *, after: Optional[str], limit: int) -> dict:
     header = await self._required_header(trail_id)
     return await self._backend(header['harness']).iterate_native_records(

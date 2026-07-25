@@ -1,16 +1,17 @@
-"""durable health state for session-log sync.
+"""durable health state for session recording.
 
-`sync-session-log` writes this file after every attempt; `session-log.statusline`
-and `cw banner` read it (no network) to warn when sync is failing. Without it a
-broken sync is silent — the daemon's stderr goes to a per-session log file
-(`<claude config dir>/session-log-sync.log`) nobody watches live.
+`session-log.recorder` writes this file after every attempt;
+`session-log.statusline` and `cw banner` read it (no network) to warn when
+recording is failing. Without it a broken recorder is silent — the daemon's
+stderr goes to a per-session log file (`<claude config dir>/session-recorder.log`)
+nobody watches live.
 
 The file lives under the session's claude config dir (`CLAUDE_CONFIG_DIR` when
 set — every cw session points it at private per-session state), so concurrent
 sessions don't clobber each other's signal.
 
 Stdlib-only on purpose: the statusline imports this on every render, so it must
-not pull in boto3 (as importing `session_log.sync` would).
+stay dependency-free.
 """
 
 import datetime
@@ -26,12 +27,12 @@ _MAX_ERROR = 500
 def health_path() -> Path:
   config_dir = os.environ.get('CLAUDE_CONFIG_DIR')
   root = Path(config_dir) if config_dir is not None else Path.home() / '.claude'
-  return root / 'session-log-sync-health.json'
+  return root / 'session-recorder-health.json'
 
 
 def write(status: str, error: Optional[str] = None) -> None:
-  """atomically record the latest sync outcome. never raises — health
-  reporting must not be able to break the sync it reports on."""
+  """atomically record the latest recording outcome. never raises — health
+  reporting must not be able to break the recording it reports on."""
   payload = {
     'status': status,
     'checked_at': datetime.datetime.now(datetime.UTC).isoformat(),
@@ -48,7 +49,7 @@ def write(status: str, error: Optional[str] = None) -> None:
 
 
 def is_failing() -> bool:
-  """True when the last recorded sync attempt failed; absent/unreadable → False."""
+  """True when the last recording attempt failed; absent/unreadable → False."""
   try:
     data = json.loads(health_path().read_text())
   except (OSError, json.JSONDecodeError):

@@ -4,7 +4,7 @@ The inner layer of the launch stack: it assumes its cwd is a prepared workspace
 (host worktree or container clone) with the workspace venv active, and owns
 everything that runs next to claude — resume resolution, the claude argv, the
 session-local MCP server, CW_SESSION_CONTEXT, and the
-session-log sync daemon. The outer `cw ss` (mode-specific by nature: worktree
+session recorder daemon. The outer `cw ss` (mode-specific by nature: worktree
 ensure / container machinery) validates policy once and spawns this runner in
 the workspace, so it re-runs no policy gates.
 """
@@ -15,7 +15,7 @@ import signal
 import subprocess
 from collections.abc import Generator
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from base import log
 from bro.launch.identity import bro_git_identity_env
@@ -23,13 +23,14 @@ from cw.broxy import _start_session_broxy
 from cw.claude_argv import build_claude_launch
 from cw.claude_auth import _apply_claude_auth
 from cw.claude_config import _claude_projects_dir, _latest_jsonl, _provision_host_claude_dir
+from cw.constants import _CW_MODEL
 from cw.mcp import _start_session_mcp_server
+from cw.recorder import _start_session_recorder
 from cw.session_context import (
   CW_SESSION_CONTEXT_ENV,
   build_session_context,
   encode_session_context,
 )
-from cw.session_log import _start_session_log_sync
 from workspace.git import git_out
 from workspace.paths import in_container, project_root
 
@@ -39,7 +40,7 @@ if TYPE_CHECKING:
 
 def _set_session_context(spec: 'SessionSpec', system_prompt: str, workspace: Path) -> None:
   """capture the session's launch context into CW_SESSION_CONTEXT for the
-  session-log sync daemon (set in os.environ, which the daemon's spawn
+  session recorder daemon (set in os.environ, which the daemon's spawn
   snapshots). the git base is the workspace's HEAD — for a fresh workspace the
   ref the outer based it on, for a resume the branch tip."""
   try:
@@ -91,7 +92,6 @@ def run_in_place(spec: 'SessionSpec') -> int:
     os.environ['CLAUDE_CONFIG_DIR'] = str(claude_dir)
 
   claude_args = list(spec.claude_args)
-  resumed_segment: Optional[str] = None
   if spec.resume:
     projects_dir = _claude_projects_dir(workspace)
     latest = _latest_jsonl(projects_dir)
@@ -99,7 +99,6 @@ def run_in_place(spec: 'SessionSpec') -> int:
       log.error('no claude session found in %s', projects_dir)
       return 1
     log.info('resuming session %s', latest.stem)
-    resumed_segment = latest.stem
     claude_args = ['--resume', latest.stem, *claude_args]
 
   os.environ.update(bro_git_identity_env(spec.session_bro))
@@ -152,12 +151,13 @@ def run_in_place(spec: 'SessionSpec') -> int:
     _set_session_context(spec, launch.system_prompt, workspace)
 
     # after the session context: the daemon's spawn snapshots os.environ, and
-    # CW_SESSION_CONTEXT lands on every item it uploads
-    session_log_sync = _start_session_log_sync(
-      spec.name, workspace, os.environ, resume_segment=resumed_segment
-    )
-    if session_log_sync is not None:
-      teardown.callback(session_log_sync.stop)
+    # CW_SESSION_CONTEXT becomes the trail's launch-context attachment
+    llm_recipe: dict = {'model': _CW_MODEL}
+    if spec.effort is not None:
+      llm_recipe['effort'] = spec.effort
+    recorder = _start_session_recorder(spec.name, workspace, os.environ, llm=llm_recipe)
+    if recorder is not None:
+      teardown.callback(recorder.stop)
 
     # gate the launch on full tool readiness: the argv build above overlapped
     # the server's own bro import, so much of the wait is already paid

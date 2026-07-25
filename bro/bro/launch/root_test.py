@@ -137,6 +137,7 @@ class TestRunInContainerBrokerRoute:
         'launch': launch,
         'project': tmp_path / 'project',
         'may_summon': {'devoops'},
+        'trail_pointer': None,
       }
     ]
 
@@ -145,11 +146,12 @@ class TestRunRootViaBroker:
   def test_builds_the_attached_launch_and_delegates(self, monkeypatch, tmp_path):
     captured: dict = {}
 
-    def fake_run_root(launch, project, *, session, may_summon):
+    def fake_run_root(launch, project, *, session, may_summon, trail_pointer):
       captured['launch'] = launch
       captured['project'] = project
       captured['session'] = session
       captured['may_summon'] = may_summon
+      captured['trail_pointer'] = trail_pointer
       return 3
 
     monkeypatch.setattr(bro.launch.spawn, 'run_root_via_broker', fake_run_root)
@@ -164,7 +166,7 @@ class TestRunRootViaBroker:
       forward_env=True,
     )
     code = bro.launch.root._run_root_via_broker(
-      launch, tmp_path / 'project', may_summon={'devoops'}
+      launch, tmp_path / 'project', may_summon={'devoops'}, trail_pointer=None
     )
     assert code == 3
     assert captured['project'] == tmp_path / 'project'
