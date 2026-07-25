@@ -19,10 +19,6 @@ secret):
 - `rewind tree <trail-id>` — the forked_from/fork hierarchy reachable from a
   trail.
 
-Ids not found in trails fall back to the legacy claude session-log store
-(`session_log/rewind.py`) until the historical backfill lands those logs in
-trails — so pre-trails conversation ids keep resolving.
-
 Historical bro trails recorded before the `terminal`→`ok` end-reason rename
 carry `{reason: 'terminal'}` end steps; the renderer maps the value rather than
 rewriting stored steps.
@@ -577,12 +573,7 @@ def _render_claude_trail(client: TrailsClient, trail: dict, colors: Colors) -> s
 
 def _command_show(client: TrailsClient, args: dict, colors: Colors) -> int:
   trail_id = args['trail_id']
-  try:
-    header = client.get_trail(trail_id)
-  except HTTPStatusError as exception:
-    if exception.status != 404:
-      raise
-    return _legacy_show(trail_id, args)
+  header = client.get_trail(trail_id)
   if header.get('harness') == 'claude':
     return _show_claude(client, header, args, colors)
   return _show_bro(client, header, args, colors)
@@ -632,17 +623,6 @@ def _show_claude(client: TrailsClient, header: dict, args: dict, colors: Colors)
   except KeyboardInterrupt:
     return 130
   return 0
-
-
-def _legacy_show(trail_id: str, args: dict) -> int:
-  """an id the server doesn't know may be a pre-trails conversation or claude
-  session id — read it from the legacy session-log store until the historical
-  backfill retires it. imported lazily: the legacy reader needs boto3 and host
-  AWS credentials."""
-  from session_log import rewind as legacy
-
-  log.info('trail %s not found in trails; trying the legacy session-log store', trail_id)
-  return legacy.show(trail_id, color=args['color'])
 
 
 # --- grep -------------------------------------------------------------------------
@@ -718,16 +698,8 @@ def _command_grep(client: TrailsClient, args: dict, colors: Colors) -> int:
   has_context = before > 0 or after > 0
 
   ids: list[str] = args.get('trails', [])
-  legacy_ids: list[str] = []
-  headers: list[dict] = []
   if len(ids) > 0:
-    for trail_id in ids:
-      try:
-        headers.append(client.get_trail(trail_id))
-      except HTTPStatusError as exception:
-        if exception.status != 404:
-          raise
-        legacy_ids.append(trail_id)
+    headers = [client.get_trail(trail_id) for trail_id in ids]
   else:
     headers = list(client.iter_trails(harness=args.get('harness'), max_items=args.get('limit')))
 
@@ -748,23 +720,6 @@ def _command_grep(client: TrailsClient, args: dict, colors: Colors) -> int:
       found = True
       sys.stdout.write('\n'.join(matches) + '\n')
       sys.stdout.flush()
-  if len(legacy_ids) > 0:
-    from session_log import rewind as legacy
-
-    log.info('%d id(s) not found in trails; trying the legacy session-log store', len(legacy_ids))
-    legacy_found = (
-      legacy.grep(
-        args['pattern'],
-        legacy_ids,
-        ignore_case=args.get('ignore_case', False),
-        after_context=args.get('after_context'),
-        before_context=args.get('before_context'),
-        context=args.get('context'),
-        color=args['color'],
-      )
-      == 0
-    )
-    found = found or legacy_found
   return 0 if found else 1
 
 

@@ -32,7 +32,7 @@ bro · claude recorder                       readers
 - `POST /v1/trails` creates a header and opens its body; a Claude create may include `body.launch_context`. `PUT /v1/trails/{id}/artifact` replaces a Claude snapshot. `PATCH /v1/trails/{id}` accepts only the live mutable header/native fields. `POST /v1/trails/{id}/end` finalizes a run.
 - Header responses carry stored fields plus computed `usage` and `models`. Provider-raw per-model counters in `native.usage` are the source of truth.
 - List queries accept exactly one indexed selector: `harness`, `bro`, or `forked_from`, plus the common time range and cursor.
-- `trails/rewind.py` (`rewind`) is the reader CLI for every harness: `list`, harness-aware `show` (bro step listing; claude fork-chain conversation render, `-f` follow), `grep`, `tree`. Ids the server doesn't know fall back to the legacy session-log reader until the historical backfill retires it.
+- `trails/rewind.py` (`rewind`) is the reader CLI for every harness: `list`, harness-aware `show` (bro step listing; claude fork-chain conversation render, `-f` follow), `grep`, `tree`.
 
 ## Auth and deployment
 
@@ -48,5 +48,7 @@ Header cutover order:
 4. Run the same migration command again for the idempotent delta pass.
 5. Deploy every trails-server task from the landed revision with recording disabled for the deployment run (`--no-trails` / `TRAILS_DISABLED=1`). The default CDK selection points the tasks at `trails-v2`.
 6. Verify `/health`, header reads, a new bro run, native steps, and generalized messages before releasing the write freeze. Keep the legacy table intact.
+
+Historical Claude backfill is an admin operation: `trails-migrate-sessions --dry-run` inventories both legacy stores and plans deterministic lifetime trails; the non-dry run writes an S3 manifest, and `trails-verify-session-migration --report-key <key>` re-inventories sources and verifies every header, artifact, chain, usage total, id, and deferred summoner against it. Both commands use the default AWS credential chain and recount the live stores on every run.
 
 Server changes are not live until deployed. The unit suite fakes AWS boundaries, so a storage change requires a post-deploy run/read smoke in addition to tests.

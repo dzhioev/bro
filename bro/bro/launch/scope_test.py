@@ -14,7 +14,8 @@ class TestScopedSecrets:
     # self-contained backend config — + the claude_code OAuth token (the
     # session's only auth).
     scoped = bro.launch.scope.scoped_secrets('ppp-dev', Surface.CW_SESSION, credential_instances={})
-    assert {'session_log', 'trails', 'github', 'brog', 'claude_code'} <= scoped.required
+    assert {'trails', 'github', 'brog', 'claude_code'} <= scoped.required
+    assert 'session_log' not in scoped.required
     # required (strict), not optional: no .credentials.json fallback in the
     # container, so a missing token must fail loudly on the host
     assert 'claude_code' not in scoped.optional

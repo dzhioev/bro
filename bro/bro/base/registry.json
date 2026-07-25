@@ -5,7 +5,6 @@
   "brog": {"sources": [{"file": "brog.json"}]},
   "infra": {"sources": [{"file": "infra.json"}]},
   "trails": {"sources": [{"file": "trails.json"}]},
-  "session_log": {"sources": [{"file": "session_log.json"}]},
   "process_inbox": {"sources": [{"file": "process_inbox.json"}]},
   "openai": {"sources": [{"file": "openai.json"}]},
   "anthropic": {"sources": [{"file": "anthropic.json"}]},

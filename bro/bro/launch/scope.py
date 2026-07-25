@@ -14,9 +14,9 @@ from workspace.store import ScopedSecrets, finalize_scoped_secrets
 if TYPE_CHECKING:
   import llm.mcp
 
-# secrets every claude code session resolves regardless of bro: the
-# the session recorder runs in-session, and an in-session bro run records to trails.
-_SESSION_BASELINE = frozenset({'session_log', 'trails'})
+# secrets every claude code session resolves regardless of bro: the session
+# recorder and any in-session bro run both record through trails.
+_SESSION_BASELINE = frozenset({'trails'})
 
 
 class Surface(enum.Enum):

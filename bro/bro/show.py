@@ -32,9 +32,7 @@ async def format_card(bro: BaseBro, *, include_system_prompt: bool = False) -> s
       parts.append(f'- `{name}` — optional (used if present)')
     for name in llm_secrets:
       parts.append(f'- `{name}` — LLM key')
-    parts.append(
-      '- _session baselines (`trails`, `session_log`; `anthropic` for `--raw`) added per-surface_'
-    )
+    parts.append('- _session baselines (`trails`; `anthropic` for `--raw`) added per-surface_')
 
   scripts = bro.script_descriptions()
   if len(scripts) > 0:

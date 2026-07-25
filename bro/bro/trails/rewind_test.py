@@ -327,15 +327,11 @@ class TestShow:
     assert 'trail      T1' in out
     assert 'user_input' in out
 
-  def test_unknown_id_falls_back_to_the_legacy_store(self, monkeypatch):
-    calls: list = []
-    monkeypatch.setattr(
-      'session_log.rewind.show', lambda session, color: calls.append((session, color)) or 0
-    )
+  def test_unknown_id_propagates_not_found(self):
     client = FakeClient()
     args = {'trail_id': 'b2249daa', 'color': 'never', 'no_pager': True}
-    assert _command_show(_cast(client), args, NO_COLOR) == 0
-    assert calls == [('b2249daa', 'never')]
+    with pytest.raises(HTTPStatusError, match='trail not found'):
+      _command_show(_cast(client), args, NO_COLOR)
 
 
 class TestGrep:
@@ -360,18 +356,11 @@ class TestGrep:
     assert _command_grep(_cast(client), self._args('absent-pattern'), NO_COLOR) == 1
     del capsys
 
-  def test_explicit_unknown_ids_fall_back_to_the_legacy_store(self, monkeypatch):
-    calls: list = []
-
-    def fake_grep(pattern, sessions, **kwargs):
-      calls.append((pattern, sessions))
-      return 0
-
-    monkeypatch.setattr('session_log.rewind.grep', fake_grep)
+  def test_explicit_unknown_id_propagates_not_found(self):
     client = FakeClient()
     args = self._args('needle', trails=['b2249daa'])
-    assert _command_grep(_cast(client), args, NO_COLOR) == 0
-    assert calls == [('needle', ['b2249daa'])]
+    with pytest.raises(HTTPStatusError, match='trail not found'):
+      _command_grep(_cast(client), args, NO_COLOR)
 
 
 class TestFollowSteps:
