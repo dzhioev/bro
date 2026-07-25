@@ -1,6 +1,5 @@
+import json
 import pathlib
-import shutil
-import tempfile
 from typing import Optional
 from unittest.mock import patch
 
@@ -840,49 +839,55 @@ class TestHostBrokerPingRoundTrip:
   """the host broker channel, live: the runner process a host session spawns gets a
   provisioned channel in its env, and `broker request ping` receives a correlated
   pong over it — real socket, real broker loop, real CLI subprocess. Only the
-  worktree git plumbing is stubbed (covered by its own tests)."""
+  worktree git plumbing is stubbed (covered by its own tests); the claude-state
+  provisioning runs for real against a fake HOME, so the test neither depends on
+  the machine's claude login nor writes into the real ~/.claude."""
 
-  def test_broker_request_ping_from_a_host_session(self, monkeypatch, capfd):
-    # a short root directly under /tmp: the channel socket lives at
-    # <project>/var/cw/broker/<channel>.sock and must fit sun_path (~104 bytes on
-    # macOS), which a pytest tmp_path — and even the resolved system temp dir — exceeds
-    root = pathlib.Path(tempfile.mkdtemp(prefix='cw-hb-', dir='/tmp'))
-    try:
-      worktree = root / 'wt'
-      cw_bin = worktree / '.venv' / 'bin' / 'cw'
-      cw_bin.parent.mkdir(parents=True)
-      # stands in for the in-place runner: the real `broker` CLI resolves from the
-      # ambient venv PATH (retained through _venv_env) and rides BROKER_CHANNEL
-      cw_bin.write_text('#!/bin/sh\nexec broker request ping "{}" --timeout 30\n')
-      cw_bin.chmod(0o755)
+  def test_broker_request_ping_from_a_host_session(self, monkeypatch, capfd, socket_dir):
+    # socket_dir doubles as the project root: the channel socket lands at
+    # <project>/var/cw/broker/<channel>.sock
+    root = socket_dir
+    home = root / 'home'
+    home.mkdir()
+    # the identity fields _seed_claude_json requires from the host ~/.claude.json
+    (home / '.claude.json').write_text(json.dumps({'oauthAccount': {'id': 'acct'}, 'userID': 'u'}))
+    monkeypatch.setenv('HOME', str(home))
+    worktree = root / 'wt'
+    cw_bin = worktree / '.venv' / 'bin' / 'cw'
+    cw_bin.parent.mkdir(parents=True)
+    # stands in for the in-place runner: the real `broker` CLI resolves from the
+    # ambient venv PATH (retained through _venv_env) and rides BROKER_CHANNEL
+    cw_bin.write_text('#!/bin/sh\nexec broker request ping "{}" --timeout 30\n')
+    cw_bin.chmod(0o755)
 
-      class _FakeHost:
-        def __init__(self, name, project):
-          self.path = worktree
-          self.pidfile = root / 'wt.pid'
-          self.ref = name
+    class _FakeHost:
+      def __init__(self, name, project):
+        self.path = worktree
+        self.pidfile = root / 'wt.pid'
+        self.ref = name
 
-        def is_active(self, mounts):
-          return False
+      def is_active(self, mounts):
+        return False
 
-      monkeypatch.setattr(cw.session, 'project_root', lambda: root)
-      monkeypatch.setattr(cw.session.os, 'chdir', lambda p: None)
-      monkeypatch.setattr(cw.session, 'HostWorktree', _FakeHost)
-      monkeypatch.setattr(cw.session, 'ensure_host_worktree', lambda *_a: True)
-      monkeypatch.setattr(cw.session, 'provision_host_worktree', lambda *_a: True)
-      monkeypatch.setattr(bro.launch.summon_control, 'summon_allow_list', lambda *_a, **_k: set())
-      monkeypatch.setattr(cw.session.credentials, 'try_get', lambda name: 'tok')
-      monkeypatch.setattr(
-        cw.session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set(), True)
-      )
-      monkeypatch.setattr(
-        bro.launch.scope.credentials, 'build_scoped_store', lambda names, optional=(): {}
-      )
-      monkeypatch.delenv('BROKER_DISABLED', raising=False)
-      assert cw.session._host_session(_spec(host=True), None) == 0
-      # the CLI printed the correlated reply's wire JSON
-      assert '"pong"' in capfd.readouterr().out
-      # the channel socket is unlinked once the root exits
-      assert list((root / 'var' / 'cw' / 'broker').glob('*.sock')) == []
-    finally:
-      shutil.rmtree(root, ignore_errors=True)
+    monkeypatch.setattr(cw.session, 'project_root', lambda: root)
+    monkeypatch.setattr(cw.session.os, 'chdir', lambda p: None)
+    monkeypatch.setattr(cw.session, 'HostWorktree', _FakeHost)
+    monkeypatch.setattr(cw.session, 'ensure_host_worktree', lambda *_a: True)
+    monkeypatch.setattr(cw.session, 'provision_host_worktree', lambda *_a: True)
+    monkeypatch.setattr(bro.launch.summon_control, 'summon_allow_list', lambda *_a, **_k: set())
+    monkeypatch.setattr(cw.session.credentials, 'try_get', lambda name: 'tok')
+    monkeypatch.setattr(
+      cw.session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set(), True)
+    )
+    monkeypatch.setattr(
+      bro.launch.scope.credentials, 'build_scoped_store', lambda names, optional=(): {}
+    )
+    monkeypatch.delenv('BROKER_DISABLED', raising=False)
+    assert cw.session._host_session(_spec(host=True), None) == 0
+    # the CLI printed the correlated reply's wire JSON
+    assert '"pong"' in capfd.readouterr().out
+    # the channel socket is unlinked once the root exits
+    assert list((root / 'var' / 'cw' / 'broker').glob('*.sock')) == []
+    # the session claude state landed under the fake HOME, seeded from its identity
+    seeded = home / '.claude' / 'cw-sessions' / 'w' / '.claude.json'
+    assert json.loads(seeded.read_text())['userID'] == 'u'
