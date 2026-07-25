@@ -832,6 +832,35 @@ async def test_tui_survives_markup_like_text(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_tui_turn_error_renders_as_error_bubble(monkeypatch):
+  from textual.selection import SELECT_ALL
+
+  from bro.launch.call_tui import BubbleRow, ChatApp, MessageBubble, TypingIndicator
+
+  async def fail(*args, **kwargs):
+    raise RuntimeError("failed [status='down']")
+
+  monkeypatch.setattr('workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  bro = RecordBro()
+  monkeypatch.setattr(bro, 'send', fail)
+  app = ChatApp(bro, None)
+  async with app.run_test(size=(80, 40)) as pilot:
+    app._show_typing()
+    app._send_to_bro('trigger the failure')
+    await app.workers.wait_for_complete()
+    await pilot.pause()
+
+    assert len(app.query(TypingIndicator)) == 0
+    assert len(app.query('BubbleRow.bro')) == 1
+    row = app.query_one('BubbleRow.error', BubbleRow)
+    bubble = row.query_one('MessageBubble.error', MessageBubble)
+    app.screen.selections = {bubble: SELECT_ALL}
+    assert app.screen.get_selected_text() == "RuntimeError: failed [status='down']"
+    assert bubble.styles.border_left[1] == bubble.styles.color
+    assert bubble.styles.border_left[1] != app.query_one('MessageBubble.bro').styles.border_left[1]
+
+
+@pytest.mark.asyncio
 async def test_tui_thinking_renders_as_muted_bubble_above_typing(monkeypatch):
   from textual.selection import SELECT_ALL
 

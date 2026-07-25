@@ -154,6 +154,10 @@ class MessageBubble(Static):
   MessageBubble.bro {
     border-left: tall $primary;
   }
+  MessageBubble.error {
+    border-left: tall $error;
+    color: $error;
+  }
   MessageBubble.thinking {
     border-left: tall $primary 40%;
     color: $text-muted;
@@ -472,6 +476,13 @@ class ChatApp(App):
     self.query_one('#history', VerticalScroll).mount(BubbleRow(bubble, kind='bro', when=when))
     self._scroll_to_end()
 
+  def _append_error_message(self, text: str, when: Optional[datetime] = None) -> None:
+    when = when if when is not None else datetime.now()
+    self._maybe_add_date_separator(when.date())
+    bubble = MessageBubble(text, kind='error')
+    self.query_one('#history', VerticalScroll).mount(BubbleRow(bubble, kind='error', when=when))
+    self._scroll_to_end()
+
   def append_thinking(self, text: str) -> None:
     """mount a thinking bubble; called from `TUIRenderer` via `call_from_thread`."""
     bubble = MessageBubble(ChatMarkdown(text), kind='thinking')
@@ -536,13 +547,18 @@ class ChatApp(App):
     observer = TUIRenderer(self)
     try:
       reply = asyncio.run(self._bro.send(text, observer=observer, surface='call', hold=self._hold))
-    except Exception as e:
-      reply = f'[error] {type(e).__name__}: {e}'
+    except Exception as error:
+      self.call_from_thread(self._on_error, f'{type(error).__name__}: {error}')
+      return
     self.call_from_thread(self._on_reply, reply)
 
   def _on_reply(self, reply: str) -> None:
     self._hide_typing()
     self._append_bro_message(reply)
+
+  def _on_error(self, error: str) -> None:
+    self._hide_typing()
+    self._append_error_message(error)
 
   async def action_show_stats(self) -> None:
     card = await format_card(self._bro, include_system_prompt=False)

@@ -11,7 +11,7 @@ Bros launching and managing layer. It owns the shared launch machinery behind th
 
   The initial message passes through verbatim like every later REPL turn — an `@:ask devoops …:@` command reaches the dispatcher as-is (see `ask.py`).
 
-  By default opens the Textual chat UI in `call_tui.py` (IM-style: scrollable history, left/right bubbles, timestamp + date separators, an animated status bubble — "Thinking for \<elapsed\>…" during an LLM roundtrip, "Calling \<tool\>…" / "Calling N tools…" while tool results are pending — mouse selection copies straight to the system clipboard, Shift+Enter breaks the line in the message field, Ctrl+D to quit, backtick (`) opens a stats modal). Falls back to text mode (`[HH:MM:SS] bro: <reply>` lines + `> ` prompt) when stdin/stdout isn't a TTY; `--text` forces it.
+  By default opens the Textual chat UI in `call_tui.py` (IM-style: scrollable history, left/right bubbles, error-colored bubbles for failed turns, timestamp + date separators, an animated status bubble — "Thinking for \<elapsed\>…" during an LLM roundtrip, "Calling \<tool\>…" / "Calling N tools…" while tool results are pending — mouse selection copies straight to the system clipboard, Shift+Enter breaks the line in the message field, Ctrl+D to quit, backtick (`) opens a stats modal). Falls back to text mode (`[HH:MM:SS] bro: <reply>` lines + `> ` prompt) when stdin/stdout isn't a TTY; `--text` forces it.
 
   The Bro's interactive machinery picks up automatically in both modes: the surface's hold fragment injected into the system prompt (guided for `bro chat`, attended for `call` — see "Launch holds"), with no `raise` tool at either.
 
