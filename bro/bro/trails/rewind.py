@@ -42,18 +42,14 @@ from trails.client import TrailsClient, default_client
 __cli_name__ = 'rewind'
 
 _BODY_TRUNCATE_CHARS = 240
-_SHORT_ID_CHARS = 10
-# id prefix rendered as the grep line name: a lulid's first 8 chars are all
-# mint-time, so 13 keeps a couple of entropy chars visible
-_GREP_ID_WIDTH = 13
+# step ids are truncated for display; trail ids are always rendered in full, so
+# that any id on screen can be pasted into another rewind command — the server
+# does not accept prefixes
+_STEP_ID_DISPLAY_CHARS = 10
 
 # the leave / resume markers the legacy sync daemon injected into stitched
 # artifacts; historical records keep them and render as dim boundary lines
 _LEGACY_EVENT_TYPE = 'cw-conversation-event'
-
-
-def _short(trail_id: str) -> str:
-  return trail_id[:_SHORT_ID_CHARS]
 
 
 def _format_timestamp(iso: Optional[str]) -> str:
@@ -126,8 +122,6 @@ def _format_trail_row(trail: dict, colors: Colors) -> str:
   subject = trail.get('subject')
   if subject is not None:
     tail += f'  {colors.dim}{_truncate_oneline(subject, 60)}{colors.reset}'
-  # the full trail id is on the line so it can be copied straight into
-  # `rewind show / tree` — the server doesn't accept prefixes
   return (
     f'{colors.yellow}{trail_id}{colors.reset}  '
     f'{colors.dim}{started}{colors.reset}  '
@@ -560,7 +554,7 @@ def _render_claude_trail(client: TrailsClient, trail: dict, colors: Colors) -> s
     if header['id'] != segments[0][0]['id']:
       segment_id = str(header.get('native', {}).get('segment', '?'))[:8]
       out.append(
-        f'\n{colors.dim}── resumed as trail {_short(header["id"])} '
+        f'\n{colors.dim}── resumed as trail {header["id"]} '
         f'(segment {segment_id}) · {_format_timestamp(header.get("started_at"))} ──{colors.reset}'
       )
     for entry in entries:
@@ -707,7 +701,7 @@ def _command_grep(client: TrailsClient, args: dict, colors: Colors) -> int:
   found = False
   for header in headers:
     matches = _grep_lines(
-      header['id'][:_GREP_ID_WIDTH],
+      header['id'],
       _render_own_timeline(client, header),
       regex,
       colors,
@@ -767,9 +761,10 @@ def _render_tree(
   forked_from_step = ''
   forked_from = trail.get('forked_from')
   if forked_from is not None:
-    forked_from_step = f' {colors.dim}@step {_short(forked_from["step_id"])}{colors.reset}'
+    step_id = forked_from['step_id'][:_STEP_ID_DISPLAY_CHARS]
+    forked_from_step = f' {colors.dim}@step {step_id}{colors.reset}'
   lines.append(
-    f'{prefix}{connector}{colors.yellow}{_short(trail_id)}{colors.reset}  '
+    f'{prefix}{connector}{colors.yellow}{trail_id}{colors.reset}  '
     f'{colors.cyan}{who}{colors.reset}/{colors.dim}{model}{colors.reset}'
     f'{forked_from_step}{marker}'
   )

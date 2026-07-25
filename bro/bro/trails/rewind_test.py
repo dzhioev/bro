@@ -21,6 +21,7 @@ from trails.rewind import (
 )
 
 NO_COLOR = Colors(enabled=False)
+LULID = '01kydtgppz-y7fdwep2-apw9ag3b'
 
 
 class FakeClient:
@@ -350,6 +351,12 @@ class TestGrep:
     assert 'T-claude:' in out
     assert 'T-bro:' in out
 
+  def test_line_name_is_the_whole_trail_id(self, capsys):
+    client = FakeClient()
+    client.add_claude(LULID, [_user('the needle is here')])
+    assert _command_grep(_cast(client), self._args('needle'), NO_COLOR) == 0
+    assert f'{LULID}:' in capsys.readouterr().out
+
   def test_no_match_exits_1(self, capsys):
     client = FakeClient()
     client.add_claude('T1', [_user('nothing to see')])
@@ -387,7 +394,7 @@ class TestRenderTree:
   def test_renders_children_and_highlight(self):
     client = FakeClient()
     client.add_bro('TROOT', [])
-    client.add_claude('T-child', [_user('x')], forked_from={'trail_id': 'TROOT', 'step_id': 'S1'})
+    client.add_claude(LULID, [_user('x')], forked_from={'trail_id': 'TROOT', 'step_id': 'S1'})
     lines: list[str] = []
     _render_tree(
       _cast(client),
@@ -396,11 +403,11 @@ class TestRenderTree:
       is_last=True,
       lines=lines,
       colors=NO_COLOR,
-      highlight='T-child',
+      highlight=LULID,
     )
     joined = '\n'.join(lines)
     assert 'TROOT' in joined
-    assert 'T-child' in joined
+    assert LULID in joined
     assert 'ws/claude' in joined  # claude nodes label by workspace
     assert '<-- here' in joined
 
