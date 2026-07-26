@@ -181,6 +181,15 @@ class TestAdoption:
     assert recorder.tick() is False
     assert fake.created == []
 
+  def test_a_segment_of_bare_ephemera_is_not_adopted(self, environment):
+    projects = environment
+    fake = FakeTrails()
+    _write_segment(projects, 'seg-1', [json.dumps({'type': 'mode', 'mode': 'normal'})])
+    recorder = _recorder(projects, fake)
+    assert recorder.tick() is False
+    assert recorder.finalize() is False
+    assert fake.created == []
+
   def test_state_and_pointer_track_the_created_trail(self, environment):
     projects = environment
     fake = FakeTrails()
@@ -346,6 +355,29 @@ class TestLifetimeForks:
     assert 'forked_from' not in root
     assert fake.artifacts['T2'] == '\n'.join(cleared) + '\n'
 
+  def test_adoption_waits_until_the_history_copy_is_written(self, environment):
+    projects = environment
+    fake = FakeTrails()
+    lines = [_user('hello', 'u1'), _assistant('hi', 'a1')]
+    self._record_first_lifetime(projects, fake, lines)
+    ephemera = json.dumps({'type': 'mode', 'mode': 'normal'})
+    second = _recorder(projects, fake)
+    # the forked segment arrives in stages: head ephemera, then the history
+    # copy record by record, then the resumed conversation
+    _write_segment(projects, 'seg-2', [ephemera])
+    assert second.tick() is False
+    _write_segment(projects, 'seg-2', [ephemera, _user('hello', 'u1')])
+    assert second.tick() is False
+    _write_segment(projects, 'seg-2', [ephemera, *lines])
+    assert second.tick() is False
+    assert len(fake.created) == 1
+    tail = [_user('resumed', 'u2')]
+    _write_segment(projects, 'seg-2', [ephemera, *lines, *tail])
+    assert second.tick() is True
+    fork = fake.created[-1]
+    assert fork['forked_from'] == {'trail_id': 'T1', 'step_id': '1'}
+    assert fake.artifacts['T2'] == ephemera + '\n' + '\n'.join(tail) + '\n'
+
   def test_copied_history_verifies_through_the_server_when_the_file_is_gone(self, environment):
     projects = environment
     fake = FakeTrails()
@@ -473,6 +505,26 @@ class TestTransitions:
     assert fork['forked_from'] == {'trail_id': 'T1', 'step_id': '1'}
     assert trail_pointer.read(trail_pointer.path()) == 'T2'
 
+  def test_transition_defers_adoption_until_the_copy_lands(self, environment):
+    projects = environment
+    fake = FakeTrails()
+    lines = [_user('hello', 'u1'), _assistant('hi', 'a1')]
+    _write_segment(projects, 'seg-1', lines)
+    recorder = _recorder(projects, fake)
+    recorder.tick()
+    # the forked segment appears with its head ephemera only: seg-1 is over,
+    # but the lineage the new one continues is not visible yet
+    ephemera = json.dumps({'type': 'mode', 'mode': 'normal'})
+    _write_segment(projects, 'seg-2', [ephemera])
+    assert recorder.tick() is True
+    assert fake.ends['T1'] == {'reason': 'ok', 'detail': None}
+    assert len(fake.created) == 1
+    tail = [_user('resumed', 'u2')]
+    _write_segment(projects, 'seg-2', [ephemera, *lines, *tail])
+    assert recorder.tick() is True
+    assert fake.created[-1]['forked_from'] == {'trail_id': 'T1', 'step_id': '1'}
+    assert fake.artifacts['T2'] == ephemera + '\n' + '\n'.join(tail) + '\n'
+
   def test_transition_holds_while_the_active_segment_grows(self, environment):
     projects = environment
     fake = FakeTrails()
@@ -592,7 +644,23 @@ class TestForkCuts:
     # only an early uuid appears: an incomplete copy must not fork
     parent = [(index, f'u{index}') for index in range(40)]
     new_lines = [json.dumps({'type': 'user', 'uuid': 'u1'})]
-    assert _fork_cuts(parent, set(), new_lines).verified is False
+    cuts = _fork_cuts(parent, set(), new_lines)
+    assert cuts.verified is False
+    assert cuts.pending is True
+
+  def test_a_file_ending_inside_the_copy_is_pending(self):
+    parent = [(0, 'u1'), (1, 'a1')]
+    assert _fork_cuts(parent, set(), []).pending is True
+    assert _fork_cuts(parent, set(), [json.dumps({'type': 'mode'})]).pending is True
+    ancestor_only = [json.dumps({'type': 'user', 'uuid': 'anc1'})]
+    assert _fork_cuts(parent, {'anc1'}, ancestor_only).pending is True
+
+  def test_a_record_outside_the_chain_settles_the_decision(self):
+    parent = [(0, 'u1'), (1, 'a1')]
+    new_lines = [json.dumps({'type': 'user', 'uuid': 'z1'})]
+    cuts = _fork_cuts(parent, set(), new_lines)
+    assert cuts.verified is False
+    assert cuts.pending is False
 
 
 class TestScan:

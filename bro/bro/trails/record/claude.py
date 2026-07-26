@@ -24,8 +24,14 @@ trail; a verified continuation is a fork:
   equality because claude's history copy is lossy. The copy is a
   re-serialization of the whole conversation, so its start is the earliest line
   the chain already holds, ancestors of the parent included;
-- `/clear`, an incomplete copy, or failed anchors starts a fresh root (no
-  `forked_from`) rather than inventing lineage.
+- `/clear` or failed anchors starts a fresh root (no `forked_from`) rather than
+  inventing lineage.
+
+Claude writes a forked segment in stages — the head ephemera, then the
+re-serialized history, then the new turns — and a copy read mid-write verifies
+as no copy at all. The lineage decision is made once, on the tick that opens the
+trail, so a segment is not adopted until it holds a record of its own: one whose
+uuid the recorded chain does not already store.
 
 The durable local state (`<config root>/recorder/<projects dir name>.json`)
 maps the active segment to the trail id and the artifact's line ranges in the
@@ -274,9 +280,12 @@ class _ForkCuts:
   """where the parent trail's history copy sits in a forked segment's file:
   the copy spans [copy_start_line, resume_start_line); the new segment's own
   contribution is everything outside it. `anchor_index` is the parent-artifact
-  step index the fork points at — the last copied record found."""
+  step index the fork points at — the last copied record found. `pending` marks
+  a file whose newest record the chain already stores, so nothing of the
+  segment's own is in it yet."""
 
   verified: bool
+  pending: bool = False
   copy_start_line: int = 0
   resume_start_line: int = 0
   anchor_index: int = 0
@@ -293,13 +302,16 @@ def _fork_cuts(
   so the copy starts at the earliest line either of them already holds."""
   if len(parent_uuid_lines) == 0:
     return _ForkCuts(verified=False)
+  new_uuid_lines = _uuid_lines(new_lines)
   line_by_uuid: dict[str, int] = {}
-  for index, uuid in _uuid_lines(new_lines):
+  for index, uuid in new_uuid_lines:
     if uuid not in line_by_uuid:
       line_by_uuid[uuid] = index
+  chain = ancestor_uuids | {uuid for _, uuid in parent_uuid_lines}
+  pending = len(new_uuid_lines) == 0 or new_uuid_lines[-1][1] in chain
   parent_start = line_by_uuid.get(parent_uuid_lines[0][1])
   if parent_start is None:
-    return _ForkCuts(verified=False)
+    return _ForkCuts(verified=False, pending=pending)
   ancestor_lines = [line for uuid, line in line_by_uuid.items() if uuid in ancestor_uuids]
   copy_start = min([parent_start, *ancestor_lines])
   recent = {uuid for _, uuid in parent_uuid_lines[-_VERIFY_TAIL_UUIDS:]}
@@ -307,14 +319,15 @@ def _fork_cuts(
     line = line_by_uuid.get(uuid)
     if line is not None:
       if uuid not in recent:
-        return _ForkCuts(verified=False)
+        return _ForkCuts(verified=False, pending=pending)
       return _ForkCuts(
         verified=True,
+        pending=pending,
         copy_start_line=copy_start,
         resume_start_line=line + 1,
         anchor_index=step_index,
       )
-  return _ForkCuts(verified=False)
+  return _ForkCuts(verified=False, pending=pending)
 
 
 def _first_timestamp(lines: list[str]) -> Optional[str]:
@@ -391,6 +404,18 @@ def _location(workspace: str) -> dict:
 
 def _workspace_name() -> Optional[str]:
   return os.environ.get('CW_NAME')
+
+
+@dataclasses.dataclass(frozen=True)
+class _Continuation:
+  """how an adopted transcript joins the recorded chain: the new trail's
+  `forked_from` plus the segment line ranges it stores. `pending` instead marks
+  a segment whose head claude has not finished writing, whose lineage is
+  therefore not decidable yet."""
+
+  forked_from: Optional[dict] = None
+  chunks: list[list[int]] = dataclasses.field(default_factory=list)
+  pending: bool = False
 
 
 class Recorder:
@@ -480,7 +505,11 @@ class Recorder:
       file_lines = _read_lines(path)
     except OSError:
       return False
-    continuation: Optional[tuple[dict, list[list[int]]]] = None
+    if len(_uuid_lines(file_lines)) == 0:
+      # nothing but head ephemera: a history copy may still land, and the
+      # segment's lineage is settled by the tick that adopts it
+      return False
+    continuation: Optional[_Continuation] = None
     for previous in self._parent_candidates(path.stem, file_lines):
       if previous.segment == path.stem:
         if len(file_lines) == previous.extent:
@@ -492,7 +521,10 @@ class Recorder:
         continuation = self._copied_history_continuation(previous, file_lines)
       if continuation is not None:
         break
-    forked_from, chunks = continuation if continuation is not None else (None, [[0, 0]])
+    if continuation is not None and continuation.pending:
+      return False
+    forked_from = continuation.forked_from if continuation is not None else None
+    chunks = continuation.chunks if continuation is not None else [[0, 0]]
     self._create_trail(path.stem, forked_from, chunks)
     self._snapshot_if_changed()
     return True
@@ -557,13 +589,13 @@ class Recorder:
 
   def _same_segment_continuation(
     self, previous: RecorderState, file_lines: list[str]
-  ) -> Optional[tuple[dict, list[list[int]]]]:
+  ) -> Optional[_Continuation]:
     """claude appended to the recorded segment: the new trail records the lines
     past the saved extent and forks from the prior trail's final line — when
     the boundary anchors around that extent still hold."""
     if self._anchors_hold(previous, file_lines):
       forked_from = {'trail_id': previous.trail_id, 'step_id': str(previous.line_count - 1)}
-      return forked_from, [[previous.extent, previous.extent]]
+      return _Continuation(forked_from=forked_from, chunks=[[previous.extent, previous.extent]])
     log.warning(
       'segment %s does not match trail %s at the recorded extent',
       previous.segment[:12],
@@ -601,7 +633,7 @@ class Recorder:
 
   def _copied_history_continuation(
     self, previous: RecorderState, file_lines: list[str]
-  ) -> Optional[tuple[dict, list[list[int]]]]:
+  ) -> Optional[_Continuation]:
     """claude forked a new segment re-serializing the history: verify the copy
     against the parent trail's uuids and store only the new segment's own
     contribution — the recorded chain is authoritative for the copied part."""
@@ -609,6 +641,9 @@ class Recorder:
     if parent_uuid_lines is None:
       return None
     cuts = _fork_cuts(parent_uuid_lines, self._ancestor_uuids(previous.trail_id), file_lines)
+    if cuts.pending:
+      log.info('segment holds no record past the copy of trail %s yet', previous.trail_id)
+      return _Continuation(pending=True)
     if not cuts.verified:
       log.info('segment does not carry a verified copy of trail %s', previous.trail_id)
       return None
@@ -617,7 +652,7 @@ class Recorder:
     if cuts.copy_start_line > 0:
       chunks.append([0, cuts.copy_start_line])
     chunks.append([cuts.resume_start_line, cuts.resume_start_line])
-    return forked_from, chunks
+    return _Continuation(forked_from=forked_from, chunks=chunks)
 
   def _parent_uuid_lines(self, previous: RecorderState) -> Optional[list[tuple[int, str]]]:
     """the parent trail's (step index, uuid) pairs in step order — from its
