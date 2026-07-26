@@ -483,8 +483,10 @@ class Recorder:
     continuation: Optional[tuple[dict, list[list[int]]]] = None
     for previous in self._parent_candidates(path.stem, file_lines):
       if previous.segment == path.stem:
-        if len(file_lines) <= previous.extent:
+        if len(file_lines) == previous.extent:
           return False  # no new content yet; claude's choice is not visible
+        # only equality is quiet: a shorter file is a mismatch for the anchor
+        # check below to reject
         continuation = self._same_segment_continuation(previous, file_lines)
       else:
         continuation = self._copied_history_continuation(previous, file_lines)

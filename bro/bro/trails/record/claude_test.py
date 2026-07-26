@@ -438,6 +438,21 @@ class TestRecordedChainRecovery:
     assert fake.created[-1]['forked_from'] == {'trail_id': 'T1', 'step_id': '0'}
     assert fake.artifacts['T2'] == '\n'.join(appended) + '\n'
 
+  def test_state_beyond_the_transcript_length_recovers_the_real_extent(self, environment):
+    projects = environment
+    fake = FakeTrails()
+    lines = [_user('hello', 'u1'), _assistant('hi', 'a1')]
+    self._recorded_root(projects, fake, lines)
+    # local state claiming more lines than the transcript holds — a transcript
+    # that shrank under the daemon rather than grew
+    RecorderState(trail_id='T1', segment='seg-1', chunks=[[0, 5]]).save(_state_path(projects))
+    appended = [_user('again', 'u2')]
+    _write_segment(projects, 'seg-1', lines + appended)
+    second = _recorder(projects, fake)
+    assert second.tick() is True
+    assert fake.created[-1]['forked_from'] == {'trail_id': 'T1', 'step_id': '1'}
+    assert fake.artifacts['T2'] == '\n'.join(appended) + '\n'
+
 
 class TestTransitions:
   def test_segment_transition_closes_then_forks(self, environment):
