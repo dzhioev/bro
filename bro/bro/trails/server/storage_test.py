@@ -541,10 +541,18 @@ def test_claude_projection_dedups_split_message_records():
 async def test_claude_message_pages_bill_a_split_message_once():
   s3 = FakeS3()
   backend = ClaudeBackend(s3=s3, bucket='bucket')
+  # claude interleaves a message's records with the tool results they trigger,
+  # so a page can open on a continuation whose previous line is not assistant
+  tool_result = {
+    'type': 'user',
+    'message': {'content': [{'type': 'tool_result', 'tool_use_id': 'tool-1', 'content': 'ok'}]},
+  }
   records = [
     _assistant_record('0', 'msg-1', {'type': 'thinking', 'thinking': 'hmm'})['record'],
-    _assistant_record('1', 'msg-1', {'type': 'text', 'text': 'answer'})['record'],
-    _assistant_record('2', 'msg-2', {'type': 'text', 'text': 'more'})['record'],
+    _assistant_record('1', 'msg-1', {'type': 'tool_use', 'id': 'tool-1', 'name': 'read'})['record'],
+    tool_result,
+    _assistant_record('3', 'msg-1', {'type': 'text', 'text': 'answer'})['record'],
+    _assistant_record('4', 'msg-2', {'type': 'text', 'text': 'more'})['record'],
   ]
   s3.put_object(
     Key=claude_artifact_key('trail'),

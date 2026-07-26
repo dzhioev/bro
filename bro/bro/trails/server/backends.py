@@ -39,6 +39,17 @@ def _assistant_message_id(record: Optional[dict]) -> Optional[str]:
   return message_id if isinstance(message_id, str) else None
 
 
+def _message_id_before(lines: list[str], start: int) -> Optional[str]:
+  """the message id still in flight at line `start`: claude interleaves an
+  assistant message's records with the tool-result records it triggers, so the
+  nearest assistant record carries it, not necessarily the previous line."""
+  for index in range(min(start, len(lines)) - 1, -1, -1):
+    message_id = _assistant_message_id(_parse_line(lines[index]))
+    if message_id is not None:
+      return message_id
+  return None
+
+
 def _source(record: dict, index: int = 0) -> dict:
   return {'step_id': record['step_id'], 'index': index}
 
@@ -435,10 +446,10 @@ class ClaudeBackend(BodyBackend):
   async def project_message_page(self, trail_id: str, *, after: Optional[str], limit: int) -> dict:
     lines = await self._artifact_lines(trail_id)
     page = self._page(trail_id, lines, after=after, limit=limit)
-    start = _page_start(after)
-    preceding = _parse_line(lines[start - 1]) if 0 < start <= len(lines) else None
     return {
-      'messages': self._project(page['steps'], billed=_assistant_message_id(preceding)),
+      'messages': self._project(
+        page['steps'], billed=_message_id_before(lines, _page_start(after))
+      ),
       'next': page['next'],
     }
 
