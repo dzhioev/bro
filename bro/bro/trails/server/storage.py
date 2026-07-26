@@ -352,8 +352,8 @@ class Storage:
   ) -> dict:
     header = await self._required_header(trail_id)
     backend = self._backend(header['harness'])
-    page = await backend.iterate_native_records(trail_id, after=after, limit=limit)
-    messages = backend.project_messages(page['steps'])
+    page = await backend.project_message_page(trail_id, after=after, limit=limit)
+    messages = page['messages']
     if types is not None:
       messages = [message for message in messages if message['type'] in types]
     return {'messages': messages, 'next': page['next']}

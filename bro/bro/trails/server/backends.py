@@ -19,6 +19,26 @@ def claude_context_key(trail_id: str) -> str:
   return f'trails/claude/{trail_id}/launch-context.json'
 
 
+def _parse_line(raw: str) -> Optional[dict]:
+  try:
+    parsed = json.loads(raw)
+  except json.JSONDecodeError:
+    return None
+  return parsed if isinstance(parsed, dict) else None
+
+
+def _page_start(after: Optional[str]) -> int:
+  return int(after) + 1 if after is not None else 0
+
+
+def _assistant_message_id(record: Optional[dict]) -> Optional[str]:
+  if record is None or record.get('type') != 'assistant':
+    return None
+  message = record.get('message')
+  message_id = message.get('id') if isinstance(message, dict) else None
+  return message_id if isinstance(message_id, str) else None
+
+
 def _source(record: dict, index: int = 0) -> dict:
   return {'step_id': record['step_id'], 'index': index}
 
@@ -99,6 +119,13 @@ class BodyBackend(ABC):
 
   @abstractmethod
   def project_messages(self, records: list[dict]) -> list[dict]: ...
+
+  async def project_message_page(self, trail_id: str, *, after: Optional[str], limit: int) -> dict:
+    """one page of generalized events plus the native cursor. Owned by the
+    backend because a projection whose state spans records must carry that
+    state across the page boundary."""
+    page = await self.iterate_native_records(trail_id, after=after, limit=limit)
+    return {'messages': self.project_messages(page['steps']), 'next': page['next']}
 
   def derive_aggregates(self, native: dict) -> dict:
     raw_usage = native.get('usage', {})
@@ -394,22 +421,34 @@ class ClaudeBackend(BodyBackend):
     response = await asyncio.to_thread(self._s3.get_object, Bucket=self._bucket, Key=context_key)
     return json.loads(response['Body'].read().decode('utf-8'))
 
-  async def iterate_native_records(
-    self, trail_id: str, *, after: Optional[str], limit: int
-  ) -> dict:
+  async def _artifact_lines(self, trail_id: str) -> list[str]:
     response = await asyncio.to_thread(
       self._s3.get_object, Bucket=self._bucket, Key=claude_artifact_key(trail_id)
     )
-    text = response['Body'].read().decode('utf-8')
-    lines = text.splitlines()
-    start = int(after) + 1 if after is not None else 0
+    return response['Body'].read().decode('utf-8').splitlines()
+
+  async def iterate_native_records(
+    self, trail_id: str, *, after: Optional[str], limit: int
+  ) -> dict:
+    return self._page(trail_id, await self._artifact_lines(trail_id), after=after, limit=limit)
+
+  async def project_message_page(self, trail_id: str, *, after: Optional[str], limit: int) -> dict:
+    lines = await self._artifact_lines(trail_id)
+    page = self._page(trail_id, lines, after=after, limit=limit)
+    start = _page_start(after)
+    preceding = _parse_line(lines[start - 1]) if 0 < start <= len(lines) else None
+    return {
+      'messages': self._project(page['steps'], billed=_assistant_message_id(preceding)),
+      'next': page['next'],
+    }
+
+  @staticmethod
+  def _page(trail_id: str, lines: list[str], *, after: Optional[str], limit: int) -> dict:
+    start = _page_start(after)
     selected = lines[start : start + limit]
     records = []
     for offset, raw in enumerate(selected, start=start):
-      try:
-        parsed = json.loads(raw)
-      except json.JSONDecodeError:
-        parsed = None
+      parsed = _parse_line(raw)
       records.append(
         {
           'trail_id': trail_id,
@@ -423,11 +462,16 @@ class ClaudeBackend(BodyBackend):
     return {'steps': records, 'next': next_cursor}
 
   def project_messages(self, records: list[dict]) -> list[dict]:
+    return self._project(records, billed=None)
+
+  def _project(self, records: list[dict], *, billed: Optional[str]) -> list[dict]:
+    """`billed` is the message id of the record preceding `records` — claude
+    splits one API message across adjacent records (one per content block),
+    each repeating the message's id and usage, and only a message id's first
+    record emits the llm_call, so neither type filters nor page boundaries can
+    multiply totals."""
     messages: list[dict] = []
-    # claude splits one API message across adjacent records (one per content
-    # block), each repeating the message's id and usage — only a message id's
-    # first record emits the llm_call, so type filters cannot multiply totals
-    last_message_id: Optional[str] = None
+    last_message_id: Optional[str] = billed
     for native in records:
       record = native.get('record')
       if not isinstance(record, dict):

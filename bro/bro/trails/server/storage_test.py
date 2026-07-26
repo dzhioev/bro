@@ -1,4 +1,5 @@
 import io
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -534,6 +535,30 @@ def test_claude_projection_dedups_split_message_records():
   ]
   # block events keep their in-record index even when the llm_call is deduped
   assert messages[2]['source'] == {'step_id': '1', 'index': 1}
+
+
+@pytest.mark.asyncio
+async def test_claude_message_pages_bill_a_split_message_once():
+  s3 = FakeS3()
+  backend = ClaudeBackend(s3=s3, bucket='bucket')
+  records = [
+    _assistant_record('0', 'msg-1', {'type': 'thinking', 'thinking': 'hmm'})['record'],
+    _assistant_record('1', 'msg-1', {'type': 'text', 'text': 'answer'})['record'],
+    _assistant_record('2', 'msg-2', {'type': 'text', 'text': 'more'})['record'],
+  ]
+  s3.put_object(
+    Key=claude_artifact_key('trail'),
+    Body=''.join(json.dumps(record) + '\n' for record in records),
+  )
+  billed: list[dict] = []
+  after: Any = None
+  while True:
+    page = await backend.project_message_page('trail', after=after, limit=1)
+    billed.extend(message for message in page['messages'] if message['type'] == 'llm_call')
+    after = page['next']
+    if after is None:
+      break
+  assert [message['usage']['output'] for message in billed] == [2, 2]
 
 
 @pytest.mark.asyncio

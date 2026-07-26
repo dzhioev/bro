@@ -58,6 +58,18 @@ class FakeTrails:
     next_cursor = str(start + len(selected) - 1) if start + len(selected) < len(lines) else None
     return {'steps': steps, 'next': next_cursor}
 
+  def get_trail(self, trail_id: str) -> dict:
+    header = dict(self.headers[trail_id])
+    header['native'] = {
+      **self.natives[trail_id],
+      'line_count': len(self.artifacts[trail_id].splitlines()),
+    }
+    return header
+
+  def iter_trails(self, *, harness: str, since: Optional[str] = None):
+    for trail_id in reversed(list(self.headers)):
+      yield self.get_trail(trail_id)
+
   def iter_steps(self, trail_id: str):
     after: Optional[str] = None
     while True:
@@ -77,7 +89,7 @@ def _parse(raw: str) -> Optional[dict]:
 
 
 def _record(**fields: Any) -> str:
-  return json.dumps({'version': '2.1.216', **fields})
+  return json.dumps({'version': '2.1.216', 'timestamp': '2026-01-01T00:00:00.000Z', **fields})
 
 
 def _user(text: str, uuid: str, **fields: Any) -> str:
@@ -348,16 +360,83 @@ class TestLifetimeForks:
     fork = fake.created[-1]
     assert fork['forked_from'] == {'trail_id': 'T1', 'step_id': '1'}
 
-  def test_missing_state_starts_a_fresh_root(self, environment):
+  def test_a_new_segment_without_a_recorded_chain_starts_a_fresh_root(self, environment):
+    projects = environment
+    fake = FakeTrails()
+    _write_segment(projects, 'seg-1', [_user('hello', 'u1')])
+    recorder = _recorder(projects, fake)
+    recorder.tick()
+    assert 'forked_from' not in fake.created[-1]
+
+  def test_copied_history_skips_records_the_chain_already_stores(self, environment):
+    projects = environment
+    fake = FakeTrails()
+    root = [_user('hello', 'u1'), _assistant('hi', 'a1')]
+    self._record_first_lifetime(projects, fake, root)
+    appended = [_user('again', 'u2')]
+    _write_segment(projects, 'seg-1', root + appended)
+    second = _recorder(projects, fake)
+    second.tick()
+    second.finalize()
+    # the leave→resume copy re-serializes the whole conversation, root
+    # lifetime included; only the new segment's own lines may be stored
+    ephemera = json.dumps({'type': 'mode', 'mode': 'normal'})
+    tail = [_user('third', 'u3')]
+    _write_segment(projects, 'seg-2', [ephemera, *root, *appended, *tail])
+    third = _recorder(projects, fake)
+    assert third.tick() is True
+    fork = fake.created[-1]
+    assert fork['forked_from'] == {'trail_id': 'T2', 'step_id': '0'}
+    assert fake.artifacts['T3'] == ephemera + '\n' + '\n'.join(tail) + '\n'
+
+
+class TestRecordedChainRecovery:
+  def _recorded_root(self, projects, fake, lines) -> None:
+    _write_segment(projects, 'seg-1', lines)
+    recorder = _recorder(projects, fake)
+    recorder.tick()
+    recorder.finalize()
+
+  def test_missing_state_continues_the_trail_recording_the_segment(self, environment):
     projects = environment
     fake = FakeTrails()
     lines = [_user('hello', 'u1'), _assistant('hi', 'a1')]
-    self._record_first_lifetime(projects, fake, lines)
-    _state_path(projects).unlink()
-    _write_segment(projects, 'seg-1', lines + [_user('again', 'u2')])
+    self._recorded_root(projects, fake, lines)
+    _state_path(projects).unlink()  # a session recorded before this daemon
+    appended = [_user('again', 'u2')]
+    _write_segment(projects, 'seg-1', lines + appended)
     second = _recorder(projects, fake)
     assert second.tick() is True
-    assert 'forked_from' not in fake.created[-1]
+    assert fake.created[-1]['forked_from'] == {'trail_id': 'T1', 'step_id': '1'}
+    assert fake.artifacts['T2'] == '\n'.join(appended) + '\n'
+
+  def test_missing_state_forks_a_copied_history_from_the_origin_segment(self, environment):
+    projects = environment
+    fake = FakeTrails()
+    lines = [_user('hello', 'u1'), _assistant('hi', 'a1')]
+    self._recorded_root(projects, fake, lines)
+    _state_path(projects).unlink()
+    tail = [_user('resumed', 'u2')]
+    _write_segment(projects, 'seg-2', [*lines, *tail])
+    second = _recorder(projects, fake)
+    assert second.tick() is True
+    assert fake.created[-1]['forked_from'] == {'trail_id': 'T1', 'step_id': '1'}
+    assert fake.artifacts['T2'] == '\n'.join(tail) + '\n'
+
+  def test_state_that_outgrew_the_stored_artifact_recovers_the_real_extent(self, environment):
+    projects = environment
+    fake = FakeTrails()
+    lines = [_user('hello', 'u1'), _assistant('hi', 'a1')]
+    self._recorded_root(projects, fake, lines)
+    # the artifact was trimmed under the daemon: the saved chunks now cover
+    # lines the trail no longer stores
+    fake.artifacts['T1'] = lines[1] + '\n'
+    appended = [_user('again', 'u2')]
+    _write_segment(projects, 'seg-1', lines + appended)
+    second = _recorder(projects, fake)
+    assert second.tick() is True
+    assert fake.created[-1]['forked_from'] == {'trail_id': 'T1', 'step_id': '0'}
+    assert fake.artifacts['T2'] == '\n'.join(appended) + '\n'
 
 
 class TestTransitions:
@@ -469,7 +548,7 @@ class TestForkCuts:
       json.dumps({'type': 'user', 'uuid': 'u2'}),
       json.dumps({'type': 'user', 'uuid': 'u3'}),
     ]
-    cuts = _fork_cuts(parent, new_lines)
+    cuts = _fork_cuts(parent, set(), new_lines)
     assert cuts.verified is True
     assert cuts.copy_start_line == 1
     assert cuts.resume_start_line == 4
@@ -484,7 +563,7 @@ class TestForkCuts:
       json.dumps({'type': 'assistant', 'uuid': 'a1'}),
       json.dumps({'type': 'user', 'uuid': 'u2'}),
     ]
-    cuts = _fork_cuts(parent, new_lines)
+    cuts = _fork_cuts(parent, set(), new_lines)
     assert cuts.verified is True
     assert cuts.anchor_index == 1
     assert cuts.resume_start_line == 2
@@ -492,13 +571,13 @@ class TestForkCuts:
   def test_missing_first_uuid_is_unverified(self):
     parent = [(0, 'u1'), (1, 'a1')]
     new_lines = [json.dumps({'type': 'assistant', 'uuid': 'a1'})]
-    assert _fork_cuts(parent, new_lines).verified is False
+    assert _fork_cuts(parent, set(), new_lines).verified is False
 
   def test_stale_anchor_outside_the_recent_tail_is_unverified(self):
     # only an early uuid appears: an incomplete copy must not fork
     parent = [(index, f'u{index}') for index in range(40)]
     new_lines = [json.dumps({'type': 'user', 'uuid': 'u1'})]
-    assert _fork_cuts(parent, new_lines).verified is False
+    assert _fork_cuts(parent, set(), new_lines).verified is False
 
 
 class TestScan:

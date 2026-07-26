@@ -28,7 +28,7 @@ bro · claude recorder                       readers
 
 - `llm/tracker.py` is the bro write client. `HTTPTracker` creates a `harness='bro'` trail, appends client-idempotent steps, keeps it alive, and ends it with `ok | raised | error`; the server alone stamps `lost`.
 - `trails/client.py` is the synchronous client: paged headers, native steps, and generalized messages through `iter_trails`, `iter_steps`, and `iter_messages`, plus the claude recorder's write surface (`create_trail`, `replace_artifact`, `update_header`, `end_trail`, `keepalive`) and `get_launch_context`. The claude recorder itself is `session_log/recorder.py`.
-- `GET /v1/trails/{id}/steps` returns the backend's lossless native records. `GET /v1/trails/{id}/messages` returns generalized events and accepts repeated `type` query parameters; a claude message id split across records bills its `llm_call` once. `GET /v1/trails/{id}/context` returns the stored launch-context document.
+- `GET /v1/trails/{id}/steps` returns the backend's lossless native records. `GET /v1/trails/{id}/messages` returns generalized events and accepts repeated `type` query parameters; a claude message id split across records bills its `llm_call` once, page boundaries included. The `end` event comes from the native stream, so only bro trails carry one — a claude run's end is header state. `GET /v1/trails/{id}/context` returns the stored launch-context document.
 - `POST /v1/trails` creates a header and opens its body; a Claude create may include `body.launch_context`. `PUT /v1/trails/{id}/artifact` replaces a Claude snapshot. `PATCH /v1/trails/{id}` accepts only the live mutable header/native fields. `POST /v1/trails/{id}/end` finalizes a run.
 - Header responses carry stored fields plus computed `usage` and `models`. Provider-raw per-model counters in `native.usage` are the source of truth.
 - List queries accept exactly one indexed selector: `harness`, `bro`, or `forked_from`, plus the common time range and cursor.
@@ -49,6 +49,6 @@ Header cutover order:
 5. Deploy every trails-server task from the landed revision with recording disabled for the deployment run (`--no-trails` / `TRAILS_DISABLED=1`). The default CDK selection points the tasks at `trails-v2`.
 6. Verify `/health`, header reads, a new bro run, native steps, and generalized messages before releasing the write freeze. Keep the legacy table intact.
 
-Historical Claude backfill is an admin operation: `trails-migrate-sessions --dry-run` inventories both legacy stores and plans deterministic lifetime trails; the non-dry run writes an S3 manifest, and `trails-verify-session-migration --report-key <key>` re-inventories sources and verifies every header, artifact, chain, usage total, id, and deferred summoner against it. Both commands use the default AWS credential chain and recount the live stores on every run.
+The historical Claude backfill is done: the 1,119 lifetime trails it produced carry `version = 'legacy-session-log'`, their manifests remain under `trails/migrations/` in the trails bucket, and the legacy `cw-sessions` table and `cw-session-logs-*` bucket they were built from no longer exist.
 
 Server changes are not live until deployed. The unit suite fakes AWS boundaries, so a storage change requires a post-deploy run/read smoke in addition to tests.

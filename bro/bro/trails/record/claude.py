@@ -21,17 +21,23 @@ trail; a verified continuation is a fork:
   stores only the new segment's own contribution (pre-copy ephemera plus the
   post-copy tail): the parent's first record uuid and one of its recent record
   uuids must both appear in the copy — recent-tail rather than full-prefix
-  equality because claude's history copy is lossy. The parent's uuids come from
-  its local segment file when it still covers the recorded extent, else from
-  the server's step stream;
-- missing state, `/clear`, an incomplete copy, or failed anchors starts a
-  fresh root (no `forked_from`) rather than inventing lineage.
+  equality because claude's history copy is lossy. The copy is a
+  re-serialization of the whole conversation, so its start is the earliest line
+  the chain already holds, ancestors of the parent included;
+- `/clear`, an incomplete copy, or failed anchors starts a fresh root (no
+  `forked_from`) rather than inventing lineage.
 
 The durable local state (`<config root>/recorder/<projects dir name>.json`)
 maps the active segment to the trail id and the artifact's line ranges in the
 segment file, saved after every successful snapshot so the recorded extent
 always matches the server's artifact — that equality is what the next
-lifetime's fork verification anchors on.
+lifetime's fork verification anchors on. It is a fast path, not the only
+source: when it is absent or no longer matches what the server stores, the
+parent is the newest trail recording the adopted segment (or the segment a
+history copy came from), with its line range recovered by locating its stored
+artifact in the local file. Without that lookup a transcript the store already
+holds — every session recorded before this daemon existed — would be recorded
+a second time as a fresh root.
 
 Each snapshot refreshes the mutable header fields (`last_alive_at`,
 `turn_count`, the native `harness_version` / `usage`) and conditionally
@@ -55,7 +61,7 @@ import signal
 import socket
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any, Optional
 
@@ -276,23 +282,31 @@ class _ForkCuts:
   anchor_index: int = 0
 
 
-def _fork_cuts(parent_uuid_lines: list[tuple[int, str]], new_lines: list[str]) -> _ForkCuts:
-  """locate the parent trail's history copy in a forked segment and verify it
+def _fork_cuts(
+  parent_uuid_lines: list[tuple[int, str]], ancestor_uuids: set[str], new_lines: list[str]
+) -> _ForkCuts:
+  """locate the recorded chain's history copy in a forked segment and verify it
   is intact: the parent's first uuid and one of its recent uuids must both
   appear in the new file. `parent_uuid_lines` are the parent artifact's
-  (step index, uuid) pairs in step order."""
+  (step index, uuid) pairs in step order; `ancestor_uuids` are the records the
+  parent's own ancestors store — the copy re-serializes the whole conversation,
+  so the copy starts at the earliest line either of them already holds."""
   if len(parent_uuid_lines) == 0:
     return _ForkCuts(verified=False)
   line_by_uuid: dict[str, int] = {}
   for index, uuid in _uuid_lines(new_lines):
     if uuid not in line_by_uuid:
       line_by_uuid[uuid] = index
-  copy_start = line_by_uuid.get(parent_uuid_lines[0][1])
+  parent_start = line_by_uuid.get(parent_uuid_lines[0][1])
+  if parent_start is None:
+    return _ForkCuts(verified=False)
+  ancestor_lines = [line for uuid, line in line_by_uuid.items() if uuid in ancestor_uuids]
+  copy_start = min([parent_start, *ancestor_lines])
   recent = {uuid for _, uuid in parent_uuid_lines[-_VERIFY_TAIL_UUIDS:]}
   for step_index, uuid in reversed(parent_uuid_lines):
     line = line_by_uuid.get(uuid)
     if line is not None:
-      if copy_start is None or uuid not in recent:
+      if uuid not in recent:
         return _ForkCuts(verified=False)
       return _ForkCuts(
         verified=True,
@@ -301,6 +315,34 @@ def _fork_cuts(parent_uuid_lines: list[tuple[int, str]], new_lines: list[str]) -
         anchor_index=step_index,
       )
   return _ForkCuts(verified=False)
+
+
+def _first_timestamp(lines: list[str]) -> Optional[str]:
+  """the earliest record timestamp in a transcript — the lower bound of the
+  window any trail recording it started in."""
+  for raw in lines:
+    entry = _parse_record(raw)
+    timestamp = entry.get('timestamp') if entry is not None else None
+    if isinstance(timestamp, str):
+      return timestamp
+  return None
+
+
+def _locate(lines: list[str], block: list[str]) -> Optional[int]:
+  """the index where `block` sits in `lines` as a contiguous run, or None."""
+  if len(block) == 0:
+    return None
+  for start in range(len(lines) - len(block) + 1):
+    if lines[start] == block[0] and lines[start : start + len(block)] == block:
+      return start
+  return None
+
+
+def _modified_at(path: Path) -> float:
+  try:
+    return path.stat().st_mtime
+  except FileNotFoundError:
+    return 0.0
 
 
 def _compose(file_lines: list[str], chunks: list[list[int]]) -> list[str]:
@@ -438,22 +480,82 @@ class Recorder:
       file_lines = _read_lines(path)
     except OSError:
       return False
-    previous = self.previous
-    if previous is not None and previous.segment == path.stem:
-      if len(file_lines) <= previous.extent:
-        return False  # no new content yet; claude's choice is not visible
-      forked_from, chunks = self._same_segment_continuation(previous, file_lines)
-    elif previous is not None:
-      forked_from, chunks = self._copied_history_continuation(previous, file_lines)
-    else:
-      forked_from, chunks = None, [[0, 0]]
+    continuation: Optional[tuple[dict, list[list[int]]]] = None
+    for previous in self._parent_candidates(path.stem, file_lines):
+      if previous.segment == path.stem:
+        if len(file_lines) <= previous.extent:
+          return False  # no new content yet; claude's choice is not visible
+        continuation = self._same_segment_continuation(previous, file_lines)
+      else:
+        continuation = self._copied_history_continuation(previous, file_lines)
+      if continuation is not None:
+        break
+    forked_from, chunks = continuation if continuation is not None else (None, [[0, 0]])
     self._create_trail(path.stem, forked_from, chunks)
     self._snapshot_if_changed()
     return True
 
+  def _parent_candidates(self, segment: str, file_lines: list[str]) -> Iterator[RecorderState]:
+    """the lifetimes this transcript may continue, best first: the daemon's own
+    durable state, then whatever the server already records for the segment —
+    the adopted one, or the one a history copy was taken from."""
+    if self.previous is not None:
+      yield self.previous
+    for candidate_segment, candidate_lines in self._recorded_segments(segment, file_lines):
+      recorded = self._recorded_state(candidate_segment, candidate_lines)
+      if recorded is not None:
+        yield recorded
+
+  def _recorded_segments(
+    self, segment: str, file_lines: list[str]
+  ) -> Iterator[tuple[str, list[str]]]:
+    """the segments whose recorded trail could parent this transcript: the
+    adopted segment itself, then the segment holding the first record of the
+    history copy it opens with — claude rewrites `sessionId` in a copy, so a
+    record uuid is the only link back to where the conversation was."""
+    yield segment, file_lines
+    uuids = _uuid_lines(file_lines)
+    if len(uuids) == 0:
+      return
+    first_uuid = uuids[0][1]
+    for path in sorted(self.projects_dir.glob('*.jsonl'), key=_modified_at, reverse=True):
+      if path.stem == segment:
+        continue
+      try:
+        lines = _read_lines(path)
+      except OSError:
+        continue
+      if any(uuid == first_uuid for _, uuid in _uuid_lines(lines)):
+        yield path.stem, lines
+        return
+
+  def _recorded_state(self, segment: str, file_lines: list[str]) -> Optional[RecorderState]:
+    """the newest trail recording `segment`, with the line range its stored
+    artifact occupies in that segment's file; None when no trail covers the
+    segment or its artifact is not a contiguous slice of the file."""
+    started_at = _first_timestamp(file_lines)
+    if started_at is None:
+      return None
+    for header in self.client.iter_trails(harness='claude', since=started_at):
+      if header.get('native', {}).get('segment') != segment:
+        continue
+      stored = self._stored_lines(header['id'])
+      start = _locate(file_lines, stored) if stored is not None else None
+      if stored is None or start is None:
+        log.warning(
+          'trail %s records segment %s but its artifact is not in the local file',
+          header['id'],
+          segment[:12],
+        )
+        return None
+      return RecorderState(
+        trail_id=header['id'], segment=segment, chunks=[[start, start + len(stored)]]
+      )
+    return None
+
   def _same_segment_continuation(
     self, previous: RecorderState, file_lines: list[str]
-  ) -> tuple[Optional[dict], list[list[int]]]:
+  ) -> Optional[tuple[dict, list[list[int]]]]:
     """claude appended to the recorded segment: the new trail records the lines
     past the saved extent and forks from the prior trail's final line — when
     the boundary anchors around that extent still hold."""
@@ -461,11 +563,11 @@ class Recorder:
       forked_from = {'trail_id': previous.trail_id, 'step_id': str(previous.line_count - 1)}
       return forked_from, [[previous.extent, previous.extent]]
     log.warning(
-      'segment %s does not match trail %s at the recorded extent; starting a fresh root',
+      'segment %s does not match trail %s at the recorded extent',
       previous.segment[:12],
       previous.trail_id,
     )
-    return None, [[0, 0]]
+    return None
 
   def _anchors_hold(self, previous: RecorderState, file_lines: list[str]) -> bool:
     if previous.line_count == 0 or len(file_lines) < previous.extent:
@@ -497,20 +599,17 @@ class Recorder:
 
   def _copied_history_continuation(
     self, previous: RecorderState, file_lines: list[str]
-  ) -> tuple[Optional[dict], list[list[int]]]:
+  ) -> Optional[tuple[dict, list[list[int]]]]:
     """claude forked a new segment re-serializing the history: verify the copy
     against the parent trail's uuids and store only the new segment's own
-    contribution — the parent trail is authoritative for the copied part."""
+    contribution — the recorded chain is authoritative for the copied part."""
     parent_uuid_lines = self._parent_uuid_lines(previous)
     if parent_uuid_lines is None:
-      return None, [[0, 0]]
-    cuts = _fork_cuts(parent_uuid_lines, file_lines)
+      return None
+    cuts = _fork_cuts(parent_uuid_lines, self._ancestor_uuids(previous.trail_id), file_lines)
     if not cuts.verified:
-      log.info(
-        'segment does not carry a verified copy of trail %s; starting a fresh root',
-        previous.trail_id,
-      )
-      return None, [[0, 0]]
+      log.info('segment does not carry a verified copy of trail %s', previous.trail_id)
+      return None
     forked_from = {'trail_id': previous.trail_id, 'step_id': str(cuts.anchor_index)}
     chunks: list[list[int]] = []
     if cuts.copy_start_line > 0:
@@ -520,27 +619,62 @@ class Recorder:
 
   def _parent_uuid_lines(self, previous: RecorderState) -> Optional[list[tuple[int, str]]]:
     """the parent trail's (step index, uuid) pairs in step order — from its
-    local segment file when it still covers the recorded extent (the fast
-    path), else from the server's step stream; None when the trail is
-    definitively absent."""
-    local = self.projects_dir / (previous.segment + '.jsonl')
+    local segment file when that composition is still the artifact the server
+    holds (the fast path), else from the server's step stream; None when the
+    trail is definitively absent."""
+    header = self._header(previous.trail_id)
+    if header is None:
+      return None
+    if previous.line_count == header.get('native', {}).get('line_count'):
+      try:
+        file_lines = _read_lines(self.projects_dir / (previous.segment + '.jsonl'))
+      except OSError:
+        file_lines = None
+      if file_lines is not None and len(file_lines) >= previous.extent:
+        return _uuid_lines(_compose(file_lines, previous.chunks))
+    stored = self._stored_lines(previous.trail_id)
+    return None if stored is None else _uuid_lines(stored)
+
+  def _ancestor_uuids(self, trail_id: str) -> set[str]:
+    """every record uuid the trail's own ancestors store. Claude's history copy
+    re-serializes the whole conversation, so without them a chain's earlier
+    lifetimes land in the child's pre-copy head and are stored twice."""
+    uuids: set[str] = set()
+    walked = {trail_id}
+    ancestor = self._forked_from(trail_id)
+    while ancestor is not None:
+      if ancestor in walked:
+        raise ValueError(f'fork chain of trail {trail_id} cycles through {ancestor}')
+      walked.add(ancestor)
+      stored = self._stored_lines(ancestor)
+      if stored is None:
+        return uuids
+      uuids.update(uuid for _, uuid in _uuid_lines(stored))
+      ancestor = self._forked_from(ancestor)
+    return uuids
+
+  def _forked_from(self, trail_id: str) -> Optional[str]:
+    header = self._header(trail_id)
+    forked_from = header.get('forked_from') if header is not None else None
+    return forked_from['trail_id'] if isinstance(forked_from, dict) else None
+
+  def _header(self, trail_id: str) -> Optional[dict]:
+    """the trail's header, or None when the server does not know it."""
     try:
-      file_lines = _read_lines(local)
-    except OSError:
-      file_lines = None
-    if file_lines is not None and len(file_lines) >= previous.extent:
-      return _uuid_lines(_compose(file_lines, previous.chunks))
-    pairs: list[tuple[int, str]] = []
-    try:
-      for row in self.client.iter_steps(previous.trail_id):
-        record = row.get('record')
-        if isinstance(record, dict) and isinstance(record.get('uuid'), str):
-          pairs.append((int(row['step_id']), record['uuid']))
+      return self.client.get_trail(trail_id)
     except HTTPStatusError as exception:
       if exception.status == 404:
         return None
       raise
-    return pairs
+
+  def _stored_lines(self, trail_id: str) -> Optional[list[str]]:
+    """the raw native records of a trail's stored artifact, in step order."""
+    try:
+      return [row['raw'] for row in self.client.iter_steps(trail_id)]
+    except HTTPStatusError as exception:
+      if exception.status == 404:
+        return None
+      raise
 
   # --- trail lifecycle ------------------------------------------------------------
 
