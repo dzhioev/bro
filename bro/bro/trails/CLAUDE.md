@@ -44,7 +44,7 @@ The legacy `POST /steps`, `PUT /artifact`, and client aggregate updates accept o
 - `POST /v1/admin/trails/{id}/recompute`, `/v1/admin/trails/check`, and `/v1/admin/trails/{id}/relink` are the aggregate repair, non-mutating verification/audit, and manifested lineage-repair surfaces.
 - Header responses expose provider-raw usage by model. Provider normalization belongs to the provider-aware usage layer, not the harness adapter.
 - List queries accept exactly one indexed selector: `harness`, `bro`, or `forked_from`, plus the common time range and cursor.
-- `trails/rewind.py` (`rewind`) is the reader CLI for every harness: `list`, harness-aware `show`, `grep`, and `tree`.
+- `trails/rewind.py` (`rewind`) is the reader CLI for every harness: `show` and `grep` render the shared `/messages` conversation across its fork chain; `steps` renders one trail's native `/steps` debugging view; `list` and `tree` navigate headers and lineage.
 
 ## Auth and deployment
 

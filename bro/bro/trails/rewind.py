@@ -1,27 +1,26 @@
 #!/usr/bin/env python
 """`rewind` — the single reader over recorded runs, every harness.
 
-Four subcommands against the deployed `trails-server` (config from the `trails`
+Five subcommands against the deployed `trails-server` (config from the `trails`
 secret):
 
 - `rewind list` — cross-harness listing of trail headers, newest first, paged
   through `$PAGER`; filters mirror the server's indexed selectors.
 - `rewind show <trail-id>` — the default command (`rewind <id>` means
-  `rewind show <id>`), harness-aware: a bro trail renders as its header plus
-  the step listing; a claude trail renders as a human-readable conversation —
-  the fork chain is walked through each parent's anchor so the whole
-  conversation reads as one timeline, with the trail's stored launch context as
-  a SESSION CONTEXT preamble. `-f` keeps polling and renders new records as
-  they land, like `tail -f`.
-- `rewind grep <pattern> [trail-id ...]` — greps rendered timelines as if they
-  were files: `<id>:<line>:<text>`. With no ids it searches every trail,
-  newest first (optionally filtered by `--harness`).
+  `rewind show <id>`), renders the generalized `/messages` conversation. The
+  fork chain is walked through each parent's anchor so the whole conversation
+  reads as one timeline, with tool results inlined under their calls and the
+  trail's stored launch context as a SESSION CONTEXT preamble.
+- `rewind steps <trail-id>` — renders one trail's lossless `/steps` native
+  stream for debugging.
+- `rewind grep <pattern> [trail-id ...]` — greps the same conversation render
+  as `show`, as if trails were files: `<id>:<line>:<text>`. With no ids it
+  searches every trail, newest first (optionally filtered by `--harness`).
 - `rewind tree <trail-id>` — the forked_from/fork hierarchy reachable from a
   trail.
 
-Historical bro trails recorded before the `terminal`→`ok` end-reason rename
-carry `{reason: 'terminal'}` end steps; the renderer maps the value rather than
-rewriting stored steps.
+`show` and `steps` both accept `-f` to keep polling and render new records as
+they land, like `tail -f`.
 """
 
 import datetime
@@ -56,13 +55,13 @@ def _format_timestamp(iso: Optional[str]) -> str:
 
 
 def _format_duration(seconds: float) -> str:
-  s = int(seconds)
-  if s < 60:
-    return f'{s}s'
-  if s < 3600:
-    return f'{s // 60}m {s % 60}s'
-  h, remainder = divmod(s, 3600)
-  return f'{h}h {remainder // 60}m'
+  seconds_int = int(seconds)
+  if seconds_int < 60:
+    return f'{seconds_int}s'
+  if seconds_int < 3600:
+    return f'{seconds_int // 60}m {seconds_int % 60}s'
+  hours, remainder = divmod(seconds_int, 3600)
+  return f'{hours}h {remainder // 60}m'
 
 
 def _parse_iso(value: str) -> Optional[datetime.datetime]:
@@ -73,8 +72,7 @@ def _parse_iso(value: str) -> Optional[datetime.datetime]:
 
 
 def _truncate_oneline(body: Any, limit: int = _BODY_TRUNCATE_CHARS) -> str:
-  """render a step body to a single line, capped at `limit` chars with a
-  `... <N more chars>` marker pointing at the part that got dropped."""
+  """Render a value to one line with a marker for content past `limit`."""
   if body is None:
     return ''
   if isinstance(body, str):
@@ -87,8 +85,14 @@ def _truncate_oneline(body: Any, limit: int = _BODY_TRUNCATE_CHARS) -> str:
   return f'{text[:limit]}... <{len(text) - limit} more chars>'
 
 
-def _indent(s: str, prefix: str = '  ') -> str:
-  return '\n'.join(prefix + line for line in s.splitlines())
+def _indent(text: str, prefix: str = '  ') -> str:
+  return '\n'.join(prefix + line for line in text.splitlines())
+
+
+def _who(trail: dict) -> Any:
+  if trail.get('harness') == 'claude':
+    return trail.get('location', {}).get('workspace', '?')
+  return trail.get('bro', '?')
 
 
 # --- listing ----------------------------------------------------------------------
@@ -97,11 +101,8 @@ def _indent(s: str, prefix: str = '  ') -> str:
 def _format_trail_row(trail: dict, colors: Colors) -> str:
   trail_id = trail.get('id', '?')
   harness = trail.get('harness', '?')
-  if harness == 'claude':
-    who = trail.get('location', {}).get('workspace', '?')
-  else:
-    who = trail.get('bro', '?')
-  who = who if who is not None else '?'
+  owner = _who(trail)
+  owner = owner if owner is not None else '?'
   model = trail.get('native', {}).get('llm', {}).get('model', '?')
   started = _format_timestamp(trail.get('started_at'))
   end = trail.get('end')
@@ -122,7 +123,7 @@ def _format_trail_row(trail: dict, colors: Colors) -> str:
     f'{colors.yellow}{trail_id}{colors.reset}  '
     f'{colors.dim}{started}{colors.reset}  '
     f'{colors.magenta}{harness:<6}{colors.reset}  '
-    f'{colors.cyan}{who:<10}{colors.reset}  '
+    f'{colors.cyan}{owner:<10}{colors.reset}  '
     f'{colors.dim}{model:<10}{colors.reset}  '
     f'{status}{tail}'
   )
@@ -146,13 +147,118 @@ def _command_list(client: TrailsClient, args: dict, colors: Colors) -> int:
 
 
 def _emit(text: str, args: dict) -> None:
-  if sys.stdout.isatty() and not args.get('no_pager', False):
+  if sys.stdout.isatty() and not bool(args.get('no_pager', False)):
     pager.page(text)
   else:
     sys.stdout.write(text)
 
 
-# --- bro rendering ----------------------------------------------------------------
+# --- headers ----------------------------------------------------------------------
+
+
+def _bro_native_header_fields(trail: dict) -> list[tuple[str, Any]]:
+  native = trail.get('native', {})
+  fields: list[tuple[str, Any]] = [('llm', native.get('llm', {}))]
+  counts = native.get('step_counts_by_kind')
+  if isinstance(counts, dict):
+    nonzero = {key: value for key, value in counts.items() if value > 0}
+    fields.append(('step kinds', nonzero))
+  return fields
+
+
+def _claude_native_header_fields(trail: dict) -> list[tuple[str, Any]]:
+  native = trail.get('native', {})
+  fields: list[tuple[str, Any]] = [
+    ('llm', native.get('llm', {})),
+    ('claude-code', native.get('harness_version', '?')),
+    ('lines', native.get('line_count', '?')),
+    ('segment', native.get('segment', '?')),
+  ]
+  cw_command = native.get('cw_command')
+  if cw_command is not None:
+    fields.append(('cw', cw_command))
+  return fields
+
+
+_NATIVE_HEADER_FIELDS: dict[str, Callable[[dict], list[tuple[str, Any]]]] = {
+  'bro': _bro_native_header_fields,
+  'claude': _claude_native_header_fields,
+}
+
+
+def _format_end(trail: dict) -> str:
+  end = trail.get('end')
+  if end is None:
+    return 'live'
+  end_at = end.get('at')
+  duration = ''
+  started_at = trail.get('started_at')
+  if isinstance(started_at, str) and isinstance(end_at, str):
+    start_moment = _parse_iso(started_at)
+    end_moment = _parse_iso(end_at)
+    if start_moment is not None and end_moment is not None:
+      duration = f', {_format_duration((end_moment - start_moment).total_seconds())}'
+  return f'{_format_timestamp(end_at)} ({end.get("reason")}{duration})'
+
+
+def _format_pointer(pointer: dict) -> str:
+  rendered = f'{pointer.get("trail_id")} @ step {pointer.get("step_id")}'
+  index = pointer.get('index')
+  if index is not None:
+    rendered += f':{index}'
+  return rendered
+
+
+def _format_header_value(value: Any) -> str:
+  if isinstance(value, str):
+    return value
+  return json.dumps(value, ensure_ascii=False)
+
+
+def _format_header(trail: dict, colors: Colors) -> str:
+  harness = trail['harness']
+  location = trail.get('location', {})
+  fields: list[tuple[str, Any]] = [
+    ('trail', trail.get('id')),
+    ('harness', harness),
+    ('started', _format_timestamp(trail.get('started_at'))),
+    ('ended', _format_end(trail)),
+    ('bro', trail.get('bro')),
+    ('version', trail.get('version')),
+    ('interactive', trail.get('interactive')),
+    ('surface', trail.get('surface')),
+  ]
+  if isinstance(location, dict):
+    for key in ('workspace', 'host'):
+      if key in location:
+        fields.append((key, location[key]))
+  subject = trail.get('subject')
+  if subject is not None:
+    fields.append(('subject', subject))
+  forked_from = trail.get('forked_from')
+  if isinstance(forked_from, dict):
+    fields.append(('forked from', _format_pointer(forked_from)))
+  summoned_by = trail.get('summoned_by')
+  if summoned_by is not None:
+    fields.append(('summoned by', summoned_by))
+  fields.extend(
+    [
+      ('turns', trail.get('turn_count')),
+      ('usage', trail.get('usage', {})),
+      ('models', trail.get('models', [])),
+    ]
+  )
+  fields.extend(_NATIVE_HEADER_FIELDS[harness](trail))
+  width = max(len(label) for label, _ in fields)
+  lines = []
+  for index, (label, value) in enumerate(fields):
+    emphasis = colors.bold if index == 0 else colors.dim
+    lines.append(f'{emphasis}{label:<{width}}{colors.reset} {_format_header_value(value)}')
+  lines.append(colors.dim + ('─' * 78) + colors.reset)
+  return '\n'.join(lines)
+
+
+# --- native steps -----------------------------------------------------------------
 
 
 def _format_step_summary(step: dict, colors: Colors) -> str:
@@ -160,15 +266,14 @@ def _format_step_summary(step: dict, colors: Colors) -> str:
   step_id = step.get('step_id', '?')
   timestamp = _format_timestamp(step.get('ts'))
   turn = step.get('turn_index')
-  turn_str = f't{turn} ' if turn is not None else ''
+  turn_text = f't{turn} ' if turn is not None else ''
   prefix = (
     f'{colors.yellow}{step_id}{colors.reset}  '
-    f'{colors.dim}{timestamp}{colors.reset}  {colors.yellow}{turn_str}{kind:<14}{colors.reset}'
+    f'{colors.dim}{timestamp}{colors.reset}  {colors.yellow}{turn_text}{kind:<14}{colors.reset}'
   )
 
-  body = step.get('body')
+  body = step.get('raw') if 'raw' in step else step.get('body')
   if kind == 'end' and isinstance(body, dict) and body.get('reason') == 'terminal':
-    # historical end steps predate the terminal→ok rename; map at render
     body = {**body, 'reason': 'ok'}
   spilled = spill_descriptor(body)
   if spilled is not None:
@@ -178,102 +283,356 @@ def _format_step_summary(step: dict, colors: Colors) -> str:
   else:
     summary = _truncate_oneline(body)
 
-  extras_parts: list[str] = []
-  for key in (
-    'tool_name',
-    'call_id',
-    'is_error',
-    'response_id',
-    'tokens_in',
-    'tokens_out',
-    'tokens_reasoning',
-    'tokens_cached',
-  ):
-    if key in step:
-      extras_parts.append(f'{colors.cyan}{key}{colors.reset}={step[key]}')
-  arguments = step.get('arguments')
-  if arguments is not None:
-    extras_parts.append(f'{colors.cyan}args{colors.reset}={_truncate_oneline(arguments, 80)}')
+  omitted = {
+    'trail_id',
+    'step_id',
+    'kind',
+    'ts',
+    'turn_index',
+    'body',
+    'raw',
+    'record',
+    'where',
+  }
+  extra_parts = []
+  for key, value in step.items():
+    if key in omitted:
+      continue
+    label = 'args' if key == 'arguments' else key
+    extra_parts.append(f'{colors.cyan}{label}{colors.reset}={_truncate_oneline(value, 80)}')
 
   parts = [prefix]
   if len(summary) > 0:
     parts.append(summary)
-  if len(extras_parts) > 0:
-    parts.append(f'[{" ".join(extras_parts)}]')
+  if len(extra_parts) > 0:
+    parts.append(f'[{" ".join(extra_parts)}]')
   return '  '.join(parts)
 
 
-def _format_bro_header(trail: dict, colors: Colors) -> str:
-  native = trail.get('native', {})
-  spec = native.get('llm', {})
-  end = trail.get('end')
-  forked_from = trail.get('forked_from')
-  lines = [
-    f'{colors.bold}trail     {colors.reset} {trail.get("id")}',
-    f'{colors.dim}harness   {colors.reset} {trail.get("harness")}',
-    f'{colors.dim}bro       {colors.reset} {trail.get("bro")} (version {trail.get("version")})',
-    f'{colors.dim}llm       {colors.reset} {json.dumps(spec, ensure_ascii=False)}',
-    f'{colors.dim}started   {colors.reset} {_format_timestamp(trail.get("started_at"))}',
-    f'{colors.dim}ended     {colors.reset} '
-    f'{_format_timestamp(end.get("at") if end is not None else None)}  '
-    f'({end.get("reason") if end is not None else None})',
-    f'{colors.dim}interactive{colors.reset} {trail.get("interactive")}  '
-    f'{colors.dim}surface{colors.reset} {trail.get("surface")}',
+def _render_native_trail(
+  client: TrailsClient, trail: dict, colors: Colors
+) -> tuple[str, Optional[str | int]]:
+  rows = list(client.iter_steps(trail['id']))
+  output = [_format_header(trail, colors)]
+  output.extend(_format_step_summary(row, colors) for row in rows)
+  after = rows[-1]['step_id'] if len(rows) > 0 else None
+  return '\n'.join(output) + '\n', after
+
+
+# --- conversation -----------------------------------------------------------------
+
+
+def _user_text(content: Any) -> Optional[str]:
+  if isinstance(content, str):
+    stripped = content.strip()
+    return stripped if len(stripped) > 0 else None
+  if not isinstance(content, list):
+    return None
+  parts = [
+    block.get('text', '')
+    for block in content
+    if isinstance(block, dict) and block.get('type') == 'text'
   ]
-  if forked_from is not None:
-    lines.append(
-      f'{colors.dim}forked from{colors.reset} '
-      f'{forked_from.get("trail_id")} @ step {forked_from.get("step_id")}'
-    )
-  summoned_by = trail.get('summoned_by')
-  if summoned_by is not None:
-    lines.append(
-      f'{colors.dim}summoned_by  {colors.reset} {json.dumps(summoned_by, ensure_ascii=False)}'
-    )
-  lines.append(f'{colors.dim}turns     {colors.reset} {trail.get("turn_count")}')
-  lines.append(
-    f'{colors.dim}usage     {colors.reset} {json.dumps(trail.get("usage", {}), ensure_ascii=False)}'
-  )
-  lines.append(
-    f'{colors.dim}models    {colors.reset} '
-    f'{json.dumps(trail.get("models", []), ensure_ascii=False)}'
-  )
-  counts = native.get('step_counts_by_kind')
-  if counts is not None:
-    parts = ', '.join(f'{k}={v}' for k, v in counts.items() if v > 0)
-    lines.append(f'{colors.dim}step kinds{colors.reset} {parts}')
-  lines.append(colors.dim + ('─' * 78) + colors.reset)
-  return '\n'.join(lines)
+  joined = '\n'.join(parts).strip()
+  return joined if len(joined) > 0 else None
 
 
-def _follow_steps(
+def _message_text(content: Any) -> str:
+  if content is None:
+    return ''
+  if isinstance(content, str):
+    return content.strip()
+  user_text = _user_text(content)
+  if user_text is not None:
+    return user_text
+  return _format_header_value(content)
+
+
+def _format_tool_call(message: dict) -> str:
+  name = message.get('tool_name', '?')
+  arguments = message.get('arguments', {})
+  return f'{name}({json.dumps(arguments, ensure_ascii=False, separators=(", ", ": "))})'
+
+
+def _tool_result_text(content: Any) -> str:
+  if isinstance(content, list):
+    text_parts = [
+      block.get('text', '')
+      for block in content
+      if isinstance(block, dict) and block.get('type') == 'text'
+    ]
+    if len(text_parts) > 0:
+      return '\n'.join(text_parts)
+  if isinstance(content, str):
+    return content
+  return _format_header_value(content)
+
+
+def _index_tool_results(messages: list[dict]) -> dict[str, str]:
+  results: dict[str, str] = {}
+  for message in messages:
+    if message.get('type') != 'tool_result':
+      continue
+    call_id = message.get('call_id')
+    if isinstance(call_id, str):
+      results[call_id] = _tool_result_text(message.get('content'))
+  return results
+
+
+def _source_step_id(message: dict) -> str | int:
+  return message['source']['step_id']
+
+
+def _group_messages(messages: list[dict]) -> list[list[dict]]:
+  groups: list[list[dict]] = []
+  for message in messages:
+    if len(groups) == 0 or _source_step_id(groups[-1][0]) != _source_step_id(message):
+      groups.append([message])
+    else:
+      groups[-1].append(message)
+  return groups
+
+
+class _ConversationTimeline:
+  """Render generalized messages while retaining turn and tool-call state."""
+
+  def __init__(self, colors: Colors, tool_results: dict[str, str]):
+    self.colors = colors
+    self.tool_results = tool_results
+    self.rendered_call_ids: set[str] = set()
+    self.turn = 0
+
+  def render(self, messages: list[dict], *, incremental: bool = False) -> list[str]:
+    previously_rendered_calls = set(self.rendered_call_ids)
+    self.tool_results.update(_index_tool_results(messages))
+    output: list[str] = []
+    for group in _group_messages(messages):
+      output.extend(
+        self._render_group(
+          group,
+          incremental=incremental,
+          previously_rendered_calls=previously_rendered_calls,
+        )
+      )
+    return output
+
+  def _render_group(
+    self,
+    messages: list[dict],
+    *,
+    incremental: bool,
+    previously_rendered_calls: set[str],
+  ) -> list[str]:
+    user_messages = [message for message in messages if message.get('type') == 'user_input']
+    if len(user_messages) > 0:
+      output: list[str] = []
+      for message in user_messages:
+        text = _user_text(message.get('content'))
+        if text is not None:
+          output.extend(self._turn('USER', message, [_indent(text)], self.colors.blue))
+      return output
+
+    visible = [
+      message
+      for message in messages
+      if message.get('type') in {'reasoning', 'assistant', 'tool_call', 'error'}
+    ]
+    if len(visible) > 0:
+      blocks = [
+        block for message in visible if (block := self._assistant_block(message)) is not None
+      ]
+      if len(blocks) == 0:
+        return []
+      role = 'ERROR' if all(message.get('type') == 'error' for message in visible) else 'ASSISTANT'
+      role_color = self.colors.red if role == 'ERROR' else self.colors.green
+      return self._turn(role, visible[0], [_indent(block) for block in blocks], role_color)
+
+    if incremental:
+      output = []
+      for message in messages:
+        call_id = message.get('call_id')
+        if message.get('type') == 'tool_result' and call_id in previously_rendered_calls:
+          result = _tool_result_text(message.get('content'))
+          rendered = result if len(result) > 0 else '(empty)'
+          output.append(_indent(f'{self.colors.dim}← {rendered}{self.colors.reset}'))
+      return output
+    return []
+
+  def _assistant_block(self, message: dict) -> Optional[str]:
+    message_type = message.get('type')
+    if message_type == 'reasoning':
+      heading = f'{self.colors.dim}[thinking]{self.colors.reset}'
+      text = _message_text(message.get('content'))
+      if len(text) == 0:
+        return heading
+      lines = [heading]
+      lines.extend(f'{self.colors.dim}  {line}{self.colors.reset}' for line in text.splitlines())
+      return '\n'.join(lines)
+    if message_type == 'assistant':
+      text = _message_text(message.get('content'))
+      return text if len(text) > 0 else None
+    if message_type == 'error':
+      text = _message_text(message.get('content'))
+      return text if len(text) > 0 else '(no detail)'
+    if message_type != 'tool_call':
+      return None
+    call_id = message.get('call_id')
+    if isinstance(call_id, str):
+      self.rendered_call_ids.add(call_id)
+    heading = f'{self.colors.cyan}→ {_format_tool_call(message)}{self.colors.reset}'
+    result = self.tool_results.get(call_id) if isinstance(call_id, str) else None
+    if result is None:
+      return heading
+    lines = [heading]
+    if len(result) == 0:
+      lines.append(f'{self.colors.dim}  (empty){self.colors.reset}')
+    else:
+      lines.extend(f'{self.colors.dim}  {line}{self.colors.reset}' for line in result.splitlines())
+    return '\n'.join(lines)
+
+  def _turn(self, role: str, message: dict, blocks: list[str], role_color: str) -> list[str]:
+    self.turn += 1
+    markers = []
+    if message.get('isSidechain') is True:
+      markers.append('sub')
+    if message.get('isMeta') is True:
+      markers.append('meta')
+    tag = ''.join(f'[{marker}] ' for marker in markers)
+    timestamp = _format_timestamp(message.get('ts'))
+    heading = (
+      f'\n{self.colors.bold}#{self.turn}{self.colors.reset} '
+      f'{role_color}{tag}{role}{self.colors.reset} {self.colors.dim}{timestamp}{self.colors.reset}'
+    )
+    return [heading, *blocks]
+
+
+def _chain(client: TrailsClient, trail: dict) -> list[tuple[dict, Optional[dict]]]:
+  """Return the fork ancestry root-first with each parent's inclusive anchor."""
+  segments: list[tuple[dict, Optional[dict]]] = [(trail, None)]
+  seen = {trail['id']}
+  current = trail
+  while True:
+    forked_from = current.get('forked_from')
+    if forked_from is None:
+      break
+    parent_id = forked_from['trail_id']
+    if parent_id in seen:
+      raise RuntimeError(f'fork cycle at trail {parent_id}')
+    seen.add(parent_id)
+    current = client.get_trail(parent_id)
+    segments.append((current, forked_from))
+  segments.reverse()
+  return segments
+
+
+def _step_is_after(candidate: str | int, bound: str | int) -> bool:
+  try:
+    return int(candidate) > int(bound)
+  except (TypeError, ValueError):
+    return str(candidate) > str(bound)
+
+
+def _segment_messages(client: TrailsClient, trail_id: str, bound: Optional[dict]) -> list[dict]:
+  messages: list[dict] = []
+  if bound is None:
+    return list(client.iter_messages(trail_id))
+  bound_step_id = bound['step_id']
+  bound_index = bound.get('index')
+  reached_step = False
+  for message in client.iter_messages(trail_id):
+    source = message['source']
+    step_id = source['step_id']
+    if str(step_id) == str(bound_step_id):
+      source_index = source.get('index', 0)
+      if bound_index is not None and source_index > bound_index:
+        return messages
+      messages.append(message)
+      reached_step = True
+      continue
+    if reached_step or _step_is_after(step_id, bound_step_id):
+      break
+    messages.append(message)
+  return messages
+
+
+def _format_context(records: Any, colors: Colors) -> Optional[str]:
+  if not isinstance(records, list) or len(records) == 0:
+    return None
+  output = [f'{colors.bold}SESSION CONTEXT{colors.reset}']
+  for record in records:
+    if not isinstance(record, dict):
+      continue
+    title_value = record.get('title')
+    title = (
+      title_value
+      if isinstance(title_value, str) and len(title_value) > 0
+      else f'{record.get("kind", "?")}/{record.get("subtype", "?")}'
+    )
+    output.append(f'{colors.yellow}▸ {title}{colors.reset}')
+    content = record.get('content')
+    fields = record.get('fields')
+    if isinstance(content, str) and len(content) > 0:
+      output.extend(f'{colors.dim}  {line}{colors.reset}' for line in content.splitlines())
+    elif isinstance(fields, dict):
+      for key, value in fields.items():
+        rendered = ', '.join(str(item) for item in value) if isinstance(value, list) else str(value)
+        output.append(f'{colors.dim}  {key}{colors.reset} {rendered}')
+  output.append(colors.dim + ('─' * 78) + colors.reset)
+  return '\n'.join(output)
+
+
+def _render_conversation(
+  client: TrailsClient, trail: dict, colors: Colors
+) -> tuple[str, _ConversationTimeline, Optional[str | int]]:
+  segments = _chain(client, trail)
+  message_lists = [_segment_messages(client, header['id'], bound) for header, bound in segments]
+  all_messages = [message for messages in message_lists for message in messages]
+  timeline = _ConversationTimeline(colors, _index_tool_results(all_messages))
+  output = [_format_header(trail, colors)]
+  context = _format_context(client.get_launch_context(trail['id']), colors)
+  if context is not None:
+    output.append(context)
+  for index, ((header, _), messages) in enumerate(zip(segments, message_lists, strict=True)):
+    if index > 0:
+      segment = str(header.get('native', {}).get('segment', '?'))[:8]
+      output.append(
+        f'\n{colors.dim}── resumed as trail {header["id"]} '
+        f'(segment {segment}) · {_format_timestamp(header.get("started_at"))} ──{colors.reset}'
+      )
+    output.extend(timeline.render(messages))
+  target_messages = message_lists[-1]
+  after = _source_step_id(target_messages[-1]) if len(target_messages) > 0 else None
+  return '\n'.join(output) + '\n', timeline, after
+
+
+# --- follow and views --------------------------------------------------------------
+
+
+def _follow_batches(
   client: TrailsClient,
   trail_id: str,
   *,
+  iterator: Callable[[str, Optional[str | int]], Iterator[dict]],
+  cursor: Callable[[dict], str | int],
+  terminal: Callable[[dict], bool],
   interval: float,
-  after: Optional[str] = None,
+  after: Optional[str | int] = None,
   sleep: Callable[[float], None] = time.sleep,
-) -> Iterator[dict]:
-  """yield the trail's steps past `after`, then keep polling for new ones every
-  `interval` seconds — `tail -f` over a trail's native stream.
-
-  terminates once an `end` step arrives (bro) or — for a harness without end
-  steps, or a trail that never got one — once an idle poll finds `end` set on
-  the header; a still-live trail is followed until interrupted. transient
-  failures (network blips, 5xx / 429) are logged and retried on the next tick;
-  a deterministic 4xx propagates.
-  """
+) -> Iterator[list[dict]]:
   while True:
     try:
-      for row in client.iter_steps(trail_id, after=after):
-        after = row['step_id']
-        yield row
-        if row.get('kind') == 'end':
+      rows = list(iterator(trail_id, after))
+      if len(rows) > 0:
+        terminal_index = next((index for index, row in enumerate(rows) if terminal(row)), None)
+        emitted = rows if terminal_index is None else rows[: terminal_index + 1]
+        after = cursor(emitted[-1])
+        yield emitted
+        if terminal_index is not None:
           return
       if client.get_trail(trail_id).get('end') is not None:
-        # the end may have committed between the steps poll and this header
-        # read — drain once more so its records are not dropped
-        yield from client.iter_steps(trail_id, after=after)
+        drained = list(iterator(trail_id, after))
+        if len(drained) > 0:
+          yield drained
         return
     except HTTPStatusError as exception:
       if not is_retryable_status(exception.status):
@@ -284,307 +643,76 @@ def _follow_steps(
     sleep(interval)
 
 
-# --- claude rendering -------------------------------------------------------------
-
-
-def _index_tool_results(entries: list[dict]) -> dict[str, str]:
-  """tool_use_id → flattened tool_result text."""
-  out: dict[str, str] = {}
-  for entry in entries:
-    if entry.get('type') != 'user':
-      continue
-    content = entry.get('message', {}).get('content')
-    if not isinstance(content, list):
-      continue
-    for block in content:
-      if not isinstance(block, dict) or block.get('type') != 'tool_result':
-        continue
-      tool_use_id = block.get('tool_use_id')
-      if not isinstance(tool_use_id, str):
-        continue
-      body: Any = block.get('content')
-      if isinstance(body, list):
-        body = '\n'.join(
-          x.get('text', '') for x in body if isinstance(x, dict) and x.get('type') == 'text'
-        )
-      out[tool_use_id] = '' if body is None else str(body)
-  return out
-
-
-def _user_text(content: Any) -> Optional[str]:
-  """text of a user turn that isn't a tool_result; None if there is none."""
-  if isinstance(content, str):
-    s = content.strip()
-    return s if len(s) > 0 else None
-  if not isinstance(content, list):
-    return None
-  parts = [c.get('text', '') for c in content if isinstance(c, dict) and c.get('type') == 'text']
-  joined = '\n'.join(parts).strip()
-  return joined if len(joined) > 0 else None
-
-
-def _format_tool_use(block: dict) -> str:
-  name = block.get('name', '?')
-  arguments = block.get('input', {})
-  return f'{name}({json.dumps(arguments, separators=(", ", ": "))})'
-
-
-def _assistant_blocks(content: Any, tool_results: dict[str, str], colors: Colors) -> list[str]:
-  if not isinstance(content, list):
-    return []
-  out: list[str] = []
-  for block in content:
-    if not isinstance(block, dict):
-      continue
-    block_type = block.get('type')
-    if block_type == 'text':
-      text = block.get('text', '').strip()
-      if len(text) > 0:
-        out.append(text)
-    elif block_type == 'thinking':
-      head = f'{colors.dim}[thinking]{colors.reset}'
-      text = block.get('thinking', '').strip()
-      if len(text) == 0:
-        out.append(head)
-      else:
-        lines = [head]
-        for line in text.splitlines():
-          lines.append(f'{colors.dim}  {line}{colors.reset}')
-        out.append('\n'.join(lines))
-    elif block_type == 'tool_use':
-      tool_use_id = block.get('id', '')
-      head = f'{colors.cyan}→ {_format_tool_use(block)}{colors.reset}'
-      result = tool_results.get(tool_use_id)
-      if result is None:
-        out.append(head)
-      else:
-        lines = [head]
-        if len(result) == 0:
-          lines.append(f'{colors.dim}  (empty){colors.reset}')
-        else:
-          for line in result.splitlines():
-            lines.append(f'{colors.dim}  {line}{colors.reset}')
-        out.append('\n'.join(lines))
-  return out
-
-
-def _format_claude_header(trail: dict, colors: Colors) -> str:
-  native = trail.get('native', {})
-  location = trail.get('location', {})
-  started = trail.get('started_at', '')
-  end = trail.get('end')
-  duration = ''
-  start_moment = _parse_iso(started) if len(started) > 0 else None
-  end_moment = _parse_iso(end['at']) if end is not None and 'at' in end else None
-  if start_moment is not None and end_moment is not None:
-    duration = f', {_format_duration((end_moment - start_moment).total_seconds())}'
-  status = 'live' if end is None else f'{end.get("reason")}{duration}'
-  models = trail.get('models', [])
-  model = ', '.join(models) if len(models) > 0 else native.get('llm', {}).get('model', '?')
-  lines = [
-    f'{colors.bold}trail    {colors.reset} {trail.get("id")}',
-    f'{colors.dim}workspace{colors.reset} {location.get("workspace", "?")}'
-    f'    {colors.dim}bro{colors.reset} {trail.get("bro")}'
-    f'    {colors.dim}host{colors.reset} {location.get("host", "?")}',
-    f'{colors.dim}started  {colors.reset} {_format_timestamp(started)}  ({status})',
-    f'{colors.dim}model    {colors.reset} {model}'
-    f'    {colors.dim}claude-code{colors.reset} {native.get("harness_version", "?")}'
-    f'    {colors.dim}lines{colors.reset} {native.get("line_count", "?")}'
-    f'    {colors.dim}turns{colors.reset} {trail.get("turn_count", "?")}',
-    f'{colors.dim}segment  {colors.reset} {native.get("segment", "?")}',
-  ]
-  subject = trail.get('subject')
-  if subject is not None:
-    lines.append(f'{colors.dim}subject  {colors.reset} {subject}')
-  forked_from = trail.get('forked_from')
-  if forked_from is not None:
-    lines.append(
-      f'{colors.dim}forked   {colors.reset} '
-      f'from {forked_from.get("trail_id")} @ line {forked_from.get("step_id")}'
-    )
-  cw_command = native.get('cw_command')
-  if cw_command is not None:
-    lines.append(f'{colors.dim}cw       {colors.reset} {cw_command}')
-  lines.append(colors.dim + ('─' * 78) + colors.reset)
-  return '\n'.join(lines)
-
-
-def _format_context(records: Any, colors: Colors) -> Optional[str]:
-  """render the SESSION CONTEXT preamble from the trail's stored launch-context
-  records (cw/session_context.py: each has a `title` plus either a `content`
-  text block or a `fields` key/value map)."""
-  if not isinstance(records, list) or len(records) == 0:
-    return None
-  out = [f'{colors.bold}SESSION CONTEXT{colors.reset}']
-  for record in records:
-    if not isinstance(record, dict):
-      continue
-    title = record.get('title') or f'{record.get("kind", "?")}/{record.get("subtype", "?")}'
-    out.append(f'{colors.yellow}▸ {title}{colors.reset}')
-    content = record.get('content')
-    fields = record.get('fields')
-    if isinstance(content, str) and len(content) > 0:
-      for line in content.splitlines():
-        out.append(f'{colors.dim}  {line}{colors.reset}')
-    elif isinstance(fields, dict):
-      for key, value in fields.items():
-        rendered = ', '.join(str(v) for v in value) if isinstance(value, list) else str(value)
-        out.append(f'{colors.dim}  {key}{colors.reset} {rendered}')
-  out.append(colors.dim + ('─' * 78) + colors.reset)
-  return '\n'.join(out)
-
-
-class _ClaudeTimeline:
-  """renders parsed claude records into the human-readable timeline, keeping
-  the turn counter and tool-result index across chain segments."""
-
-  def __init__(self, colors: Colors, tool_results: dict[str, str]):
-    self.colors = colors
-    self.tool_results = tool_results
-    self.turn = 0
-
-  def render(self, entry: dict) -> list[str]:
-    colors = self.colors
-    entry_type = entry.get('type')
-    if entry_type not in ('user', 'assistant'):
-      return []
-    content = entry.get('message', {}).get('content')
-
-    if entry_type == 'user' and isinstance(content, list) and len(content) > 0:
-      if all(isinstance(c, dict) and c.get('type') == 'tool_result' for c in content):
-        return []
-
-    timestamp = entry.get('timestamp', '')[:19].replace('T', ' ')
-    markers = []
-    if entry.get('isSidechain') is True:
-      markers.append('sub')
-    if entry.get('isMeta') is True:
-      markers.append('meta')
-    tag = ''.join(f'[{m}] ' for m in markers)
-
-    if entry_type == 'user':
-      text = _user_text(content)
-      if text is None:
-        return []
-      self.turn += 1
-      role = f'{colors.blue}{tag}USER{colors.reset}'
-      head = (
-        f'\n{colors.bold}#{self.turn}{colors.reset} {role} {colors.dim}{timestamp}{colors.reset}'
-      )
-      return [head, _indent(text)]
-    blocks = _assistant_blocks(content, self.tool_results, colors)
-    if len(blocks) == 0:
-      return []
-    self.turn += 1
-    role = f'{colors.green}{tag}ASSISTANT{colors.reset}'
-    head = f'\n{colors.bold}#{self.turn}{colors.reset} {role} {colors.dim}{timestamp}{colors.reset}'
-    return [head, *(_indent(block) for block in blocks)]
-
-
-def _chain(client: TrailsClient, trail: dict) -> list[tuple[dict, Optional[int]]]:
-  """the fork ancestry of `trail`, root first: (header, bound) pairs where
-  `bound` is the last step index the next trail's fork carries (inclusive);
-  the target trail itself is unbounded."""
-  segments: list[tuple[dict, Optional[int]]] = [(trail, None)]
-  current = trail
-  while True:
-    forked_from = current.get('forked_from')
-    if forked_from is None:
-      break
-    current = client.get_trail(forked_from['trail_id'])
-    segments.append((current, int(forked_from['step_id'])))
-  segments.reverse()
-  return segments
-
-
-def _segment_entries(client: TrailsClient, trail_id: str, bound: Optional[int]) -> list[dict]:
-  entries: list[dict] = []
-  for row in client.iter_steps(trail_id):
-    if bound is not None and int(row['step_id']) > bound:
-      break
-    record = row.get('record')
-    if isinstance(record, dict):
-      entries.append(record)
-  return entries
-
-
-def _render_claude_trail(client: TrailsClient, trail: dict, colors: Colors) -> str:
-  out = [_format_claude_header(trail, colors)]
-  context = _format_context(client.get_launch_context(trail['id']), colors)
-  if context is not None:
-    out.append(context)
-  segments = _chain(client, trail)
-  entry_lists = [_segment_entries(client, header['id'], bound) for header, bound in segments]
-  timeline = _ClaudeTimeline(
-    colors, _index_tool_results([entry for entries in entry_lists for entry in entries])
-  )
-  for (header, _), entries in zip(segments, entry_lists, strict=True):
-    if header['id'] != segments[0][0]['id']:
-      segment_id = str(header.get('native', {}).get('segment', '?'))[:8]
-      out.append(
-        f'\n{colors.dim}── resumed as trail {header["id"]} '
-        f'(segment {segment_id}) · {_format_timestamp(header.get("started_at"))} ──{colors.reset}'
-      )
-    for entry in entries:
-      out.extend(timeline.render(entry))
-  return '\n'.join(out) + '\n'
-
-
-# --- show -------------------------------------------------------------------------
-
-
-def _command_show(client: TrailsClient, args: dict, colors: Colors) -> int:
-  trail_id = args['trail_id']
-  header = client.get_trail(trail_id)
-  if header.get('harness') == 'claude':
-    return _show_claude(client, header, args, colors)
-  return _show_bro(client, header, args, colors)
-
-
-def _show_bro(client: TrailsClient, header: dict, args: dict, colors: Colors) -> int:
-  trail_id = header['id']
-  if bool(args.get('follow', False)):
-    print(_format_bro_header(header, colors), flush=True)
-    try:
-      for row in _follow_steps(client, trail_id, interval=args['interval']):
-        print(_format_step_summary(row, colors), flush=True)
-    except KeyboardInterrupt:
-      return 130
-    return 0
-  out: list[str] = [_format_bro_header(header, colors)]
-  for row in client.iter_steps(trail_id):
-    out.append(_format_step_summary(row, colors))
-  _emit('\n'.join(out) + '\n', args)
-  return 0
-
-
-def _show_claude(client: TrailsClient, header: dict, args: dict, colors: Colors) -> int:
-  trail_id = header['id']
+def _show_or_follow(
+  client: TrailsClient,
+  args: dict,
+  initial: str,
+  after: Optional[str | int],
+  *,
+  iterator: Callable[[str, Optional[str | int]], Iterator[dict]],
+  cursor: Callable[[dict], str | int],
+  terminal: Callable[[dict], bool],
+  render_batch: Callable[[list[dict]], str],
+) -> int:
   if not bool(args.get('follow', False)):
-    _emit(_render_claude_trail(client, header, colors), args)
+    _emit(initial, args)
     return 0
-  sys.stdout.write(_render_claude_trail(client, header, colors))
+  sys.stdout.write(initial)
   sys.stdout.flush()
-  # live tail: new records render as they land; tool results that arrive after
-  # their call are shown as standalone dim blocks rather than inlined
-  last = str(header.get('native', {}).get('line_count', 0) - 1)
-  timeline = _ClaudeTimeline(colors, {})
   try:
-    for row in _follow_steps(
-      client, trail_id, interval=args['interval'], after=last if int(last) >= 0 else None
+    for rows in _follow_batches(
+      client,
+      args['trail_id'],
+      iterator=iterator,
+      cursor=cursor,
+      terminal=terminal,
+      interval=args['interval'],
+      after=after,
     ):
-      record = row.get('record')
-      if not isinstance(record, dict):
-        continue
-      for line in timeline.render(record):
-        print(line, flush=True)
-      for tool_use_id, result in _index_tool_results([record]).items():
-        del tool_use_id
-        body = result if len(result) > 0 else '(empty)'
-        print(_indent(f'{colors.dim}← {_truncate_oneline(body)}{colors.reset}'), flush=True)
+      rendered = render_batch(rows)
+      if len(rendered) > 0:
+        sys.stdout.write(rendered)
+        sys.stdout.flush()
   except KeyboardInterrupt:
     return 130
   return 0
+
+
+def _command_show(client: TrailsClient, args: dict, colors: Colors) -> int:
+  trail = client.get_trail(args['trail_id'])
+  initial, timeline, after = _render_conversation(client, trail, colors)
+
+  def render_batch(messages: list[dict]) -> str:
+    lines = timeline.render(messages, incremental=True)
+    return '\n'.join(lines) + ('\n' if len(lines) > 0 else '')
+
+  return _show_or_follow(
+    client,
+    args,
+    initial,
+    after,
+    iterator=lambda trail_id, cursor: client.iter_messages(trail_id, after=cursor),
+    cursor=_source_step_id,
+    terminal=lambda message: False,
+    render_batch=render_batch,
+  )
+
+
+def _command_steps(client: TrailsClient, args: dict, colors: Colors) -> int:
+  trail = client.get_trail(args['trail_id'])
+  initial, after = _render_native_trail(client, trail, colors)
+  return _show_or_follow(
+    client,
+    args,
+    initial,
+    after,
+    iterator=lambda trail_id, cursor: client.iter_steps(trail_id, after=cursor),
+    cursor=lambda step: step['step_id'],
+    terminal=lambda step: step.get('kind') == 'end',
+    render_batch=lambda steps: (
+      '\n'.join(_format_step_summary(step, colors) for step in steps) + '\n'
+    ),
+  )
 
 
 # --- grep -------------------------------------------------------------------------
@@ -593,8 +721,7 @@ def _show_claude(client: TrailsClient, header: dict, args: dict, colors: Colors)
 def _grep_lines(
   name: str, text: str, regex: re.Pattern[str], colors: Colors, before: int = 0, after: int = 0
 ) -> list[str]:
-  """matching lines of `text` in grep -n style: <name>:<line>:<text>, plus
-  `before`/`after` context lines (<name>-<line>-<text>, groups separated by --)."""
+  """Return grep-style matching lines and optional context."""
 
   def highlight(match: re.Match[str]) -> str:
     return f'{colors.bold}{colors.red}{match.group(0)}{colors.reset}'
@@ -606,11 +733,11 @@ def _grep_lines(
     shown.update(range(max(index - before, 0), min(index + after + 1, len(lines))))
 
   has_context = before > 0 or after > 0
-  out: list[str] = []
+  output: list[str] = []
   previous: Optional[int] = None
   for index in sorted(shown):
     if has_context and previous is not None and index > previous + 1:
-      out.append(f'{colors.cyan}--{colors.reset}')
+      output.append(f'{colors.cyan}--{colors.reset}')
     previous = index
     line = lines[index]
     if index in match_indexes:
@@ -619,35 +746,19 @@ def _grep_lines(
         line = regex.sub(highlight, line)
     else:
       separator = f'{colors.cyan}-{colors.reset}'
-    out.append(
+    output.append(
       f'{colors.magenta}{name}{colors.reset}{separator}'
       f'{colors.green}{index + 1}{colors.reset}{separator}{line}'
     )
-  return out
-
-
-def _render_own_timeline(client: TrailsClient, header: dict) -> str:
-  """one trail's own rendered text (no chain walk, no launch context, no
-  colors) — the haystack a grep searches."""
-  plain = Colors(False)
-  if header.get('harness') != 'claude':
-    out = [_format_bro_header(header, plain)]
-    out.extend(_format_step_summary(row, plain) for row in client.iter_steps(header['id']))
-    return '\n'.join(out) + '\n'
-  entries = _segment_entries(client, header['id'], None)
-  timeline = _ClaudeTimeline(plain, _index_tool_results(entries))
-  out = [_format_claude_header(header, plain)]
-  for entry in entries:
-    out.extend(timeline.render(entry))
-  return '\n'.join(out) + '\n'
+  return output
 
 
 def _command_grep(client: TrailsClient, args: dict, colors: Colors) -> int:
-  """exit 0 when at least one line matched, 1 otherwise — like grep."""
+  """Exit 0 when at least one line matched, 1 otherwise — like grep."""
   try:
     regex = re.compile(args['pattern'], re.IGNORECASE if args.get('ignore_case', False) else 0)
-  except re.error as e:
-    raise SystemExit(f'invalid pattern {args["pattern"]!r}: {e}')
+  except re.error as exception:
+    raise SystemExit(f'invalid pattern {args["pattern"]!r}: {exception}') from exception
 
   context_value: Optional[int] = args.get('context')
   default_context: int = context_value if context_value is not None else 0
@@ -659,23 +770,18 @@ def _command_grep(client: TrailsClient, args: dict, colors: Colors) -> int:
     raise SystemExit('context lengths must be non-negative')
   has_context = before > 0 or after > 0
 
-  ids: list[str] = args.get('trails', [])
-  if len(ids) > 0:
-    headers = [client.get_trail(trail_id) for trail_id in ids]
+  trail_ids: list[str] = args.get('trails', [])
+  if len(trail_ids) > 0:
+    headers = [client.get_trail(trail_id) for trail_id in trail_ids]
   else:
     headers = list(client.iter_trails(harness=args.get('harness'), max_items=args.get('limit')))
 
   log.info('searching %d trails', len(headers))
   found = False
+  plain = Colors(False)
   for header in headers:
-    matches = _grep_lines(
-      header['id'],
-      _render_own_timeline(client, header),
-      regex,
-      colors,
-      before=before,
-      after=after,
-    )
+    rendered, _, _ = _render_conversation(client, header, plain)
+    matches = _grep_lines(header['id'], rendered, regex, colors, before=before, after=after)
     if len(matches) > 0:
       if found and has_context:
         sys.stdout.write(f'{colors.cyan}--{colors.reset}\n')
@@ -692,15 +798,17 @@ def _command_tree(client: TrailsClient, args: dict, colors: Colors) -> int:
   trail_id = args['trail_id']
   start = client.get_trail(trail_id)
 
-  # walk upward to the root so the tree displays the full ancestry rather than
-  # just the children of the named trail. cycles are not possible (forked_from
-  # pointers are set only at trail creation), so plain ascent is safe.
   root = start
+  seen = {root['id']}
   while True:
     forked_from = root.get('forked_from')
     if forked_from is None:
       break
-    root = client.get_trail(forked_from['trail_id'])
+    parent_id = forked_from['trail_id']
+    if parent_id in seen:
+      raise RuntimeError(f'fork cycle at trail {parent_id}')
+    seen.add(parent_id)
+    root = client.get_trail(parent_id)
 
   lines: list[str] = []
   _render_tree(client, root, '', is_last=True, lines=lines, colors=colors, highlight=trail_id)
@@ -722,10 +830,7 @@ def _render_tree(
   connector = '└── ' if is_last else '├── '
   marker = f' {colors.bold}<-- here{colors.reset}' if trail_id == highlight else ''
   model = trail.get('native', {}).get('llm', {}).get('model', '?')
-  if trail.get('harness') == 'claude':
-    who = trail.get('location', {}).get('workspace', '?')
-  else:
-    who = trail.get('bro', '?')
+  owner = _who(trail)
   forked_from_step = ''
   forked_from = trail.get('forked_from')
   if forked_from is not None:
@@ -733,36 +838,37 @@ def _render_tree(
     forked_from_step = f' {colors.dim}@step {step_id}{colors.reset}'
   lines.append(
     f'{prefix}{connector}{colors.yellow}{trail_id}{colors.reset}  '
-    f'{colors.cyan}{who}{colors.reset}/{colors.dim}{model}{colors.reset}'
+    f'{colors.cyan}{owner}{colors.reset}/{colors.dim}{model}{colors.reset}'
     f'{forked_from_step}{marker}'
   )
   children = list(client.iter_trails(forked_from=trail_id))
-  # iter_trails returns newest-first; reverse so the tree reads oldest-first
-  # under each node, matching how a reader would build it up mentally.
   children.reverse()
   child_prefix = prefix + ('    ' if is_last else '│   ')
-  for i, child in enumerate(children):
-    last = i == len(children) - 1
+  for index, child in enumerate(children):
+    child_is_last = index == len(children) - 1
     _render_tree(
-      client, child, child_prefix, is_last=last, lines=lines, colors=colors, highlight=highlight
+      client,
+      child,
+      child_prefix,
+      is_last=child_is_last,
+      lines=lines,
+      colors=colors,
+      highlight=highlight,
     )
 
 
 # --- CLI --------------------------------------------------------------------------
 
-_COMMANDS = ('list', 'show', 'grep', 'tree')
+
+_COMMANDS = ('list', 'show', 'steps', 'grep', 'tree')
 
 
 def _with_default_command(argv: list[str]) -> list[str]:
-  """default the subcommand to `show`, so `rewind <trail-id>` keeps working.
-
-  the subcommand must be the first argument (trail and legacy session ids never
-  collide with a command name); help flags pass through so bare `rewind --help`
-  documents every command."""
-  rest = argv[1:]
-  if len(rest) == 0 or rest[0] in _COMMANDS or rest[0] in ('-h', '--help'):
+  """Default the subcommand to `show`, so `rewind <trail-id>` keeps working."""
+  remaining = argv[1:]
+  if len(remaining) == 0 or remaining[0] in _COMMANDS or remaining[0] in ('-h', '--help'):
     return argv
-  return [argv[0], 'show', *rest]
+  return [argv[0], 'show', *remaining]
 
 
 def _add_color_argument(parser: base.args.Parser) -> None:
@@ -774,14 +880,30 @@ def _add_color_argument(parser: base.args.Parser) -> None:
   )
 
 
+def _add_view_arguments(parser: base.args.Parser) -> None:
+  parser.add_argument('trail_id', help='trail id (or a legacy claude session id)')
+  parser.add_argument('--no-pager', action='store_true', help='do not pipe output through a pager')
+  parser.add_argument(
+    '-f',
+    '--follow',
+    action='store_true',
+    help='keep polling and render new records as they arrive, like tail -f; '
+    'exits once the trail ends (no pager)',
+  )
+  parser.add_argument(
+    '--interval', type=float, default=2.0, help='seconds between polls with --follow'
+  )
+  _add_color_argument(parser)
+
+
 def main(argv: list[str]) -> Optional[int]:
   parser = base.args.Parser(
     description='read recorded runs across harnesses; `rewind <trail-id>` means '
     '`rewind show <trail-id>`'
   )
-  sub = parser.add_subparsers(dest='command')
+  subparsers = parser.add_subparsers(dest='command')
 
-  list_parser = sub.add_parser('list', help='list trail headers, newest first')
+  list_parser = subparsers.add_parser('list', help='list trail headers, newest first')
   list_parser.add_argument('--harness', help='filter by harness (bro, claude)')
   list_parser.add_argument('--bro', help='filter by bro name')
   list_parser.add_argument('--since', help='ISO timestamp lower bound on started_at')
@@ -794,30 +916,22 @@ def main(argv: list[str]) -> Optional[int]:
   _add_color_argument(list_parser)
   list_parser.set_handler(lambda **args: _dispatch(_command_list, args))
 
-  show_parser = sub.add_parser('show', help='render one trail (the default command); harness-aware')
-  show_parser.add_argument('trail_id', help='trail id (or a legacy claude session id)')
-  show_parser.add_argument(
-    '--no-pager', action='store_true', help='do not pipe output through a pager'
+  show_parser = subparsers.add_parser(
+    'show', help='render one generalized conversation (the default command)'
   )
-  show_parser.add_argument(
-    '-f',
-    '--follow',
-    action='store_true',
-    help='keep polling and render new records as they arrive, like tail -f; '
-    'exits once the trail ends (no pager)',
-  )
-  show_parser.add_argument(
-    '--interval', type=float, default=2.0, help='seconds between polls with --follow'
-  )
-  _add_color_argument(show_parser)
+  _add_view_arguments(show_parser)
   show_parser.set_handler(lambda **args: _dispatch(_command_show, args))
 
-  grep_parser = sub.add_parser('grep', help='grep rendered trails as files: <id>:<line>:<text>')
+  steps_parser = subparsers.add_parser('steps', help='render one trail native record stream')
+  _add_view_arguments(steps_parser)
+  steps_parser.set_handler(lambda **args: _dispatch(_command_steps, args))
+
+  grep_parser = subparsers.add_parser(
+    'grep', help='grep rendered conversations as files: <id>:<line>:<text>'
+  )
   grep_parser.add_argument('pattern', help='Python regular expression to search for')
   grep_parser.add_argument(
-    'trails',
-    nargs='*',
-    help='trail ids to search (default: every trail, newest first)',
+    'trails', nargs='*', help='trail ids to search (default: every trail, newest first)'
   )
   grep_parser.add_argument('--harness', help='filter by harness when searching every trail')
   grep_parser.add_argument('-i', '--ignore-case', action='store_true', help='ignore case')
@@ -840,7 +954,7 @@ def main(argv: list[str]) -> Optional[int]:
   _add_color_argument(grep_parser)
   grep_parser.set_handler(lambda **args: _dispatch(_command_grep, args))
 
-  tree_parser = sub.add_parser(
+  tree_parser = subparsers.add_parser(
     'tree', help='render the forked_from/fork hierarchy reachable from a trail'
   )
   tree_parser.add_argument('trail_id')

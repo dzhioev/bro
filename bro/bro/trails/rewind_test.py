@@ -1,6 +1,5 @@
 import json
 from typing import Any, Optional, cast
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -9,15 +8,17 @@ from trails.client import HTTPStatusError, TrailsClient
 from trails.rewind import (
   _command_grep,
   _command_show,
-  _follow_steps,
-  _format_bro_header,
+  _command_steps,
+  _follow_batches,
+  _format_header,
   _format_step_summary,
   _format_trail_row,
-  _render_claude_trail,
+  _render_conversation,
   _render_tree,
   _truncate_oneline,
   _with_default_command,
 )
+from trails.server.backends import BACKENDS
 
 NO_COLOR = Colors(enabled=False)
 LULID = '01kydtgppz-y7fdwep2-apw9ag3b'
@@ -69,14 +70,14 @@ class FakeClient:
       raise HTTPStatusError(404, f'trail not found: {trail_id}')
     return self.trails[trail_id]
 
-  def iter_steps(self, trail_id: str, *, after: Optional[str] = None):
+  def iter_steps(self, trail_id: str, *, after: Optional[str | int] = None):
     if trail_id in self.steps:
       rows = self.steps[trail_id]
       started = after is None
       for row in rows:
         if started:
           yield row
-        elif row['step_id'] == after:
+        elif str(row['step_id']) == str(after):
           started = True
       return
     start = int(after) + 1 if after is not None else 0
@@ -86,6 +87,11 @@ class FakeClient:
       except json.JSONDecodeError:
         record = None
       yield {'step_id': str(index), 'ts': None, 'raw': raw, 'record': record}
+
+  def iter_messages(self, trail_id: str, *, after: Optional[str | int] = None):
+    harness = self.trails[trail_id]['harness']
+    for row in self.iter_steps(trail_id, after=after):
+      yield from BACKENDS[harness].project(row)
 
   def iter_trails(self, **filters: Any):
     forked_from = filters.get('forked_from')
@@ -126,7 +132,12 @@ def _assistant(text: str, uuid: str = 'a1') -> str:
       'type': 'assistant',
       'uuid': uuid,
       'timestamp': '2026-01-01T00:00:02Z',
-      'message': {'model': 'claude', 'content': [{'type': 'text', 'text': text}]},
+      'message': {
+        'id': f'm-{uuid}',
+        'model': 'claude',
+        'usage': {},
+        'content': [{'type': 'text', 'text': text}],
+      },
     }
   )
 
@@ -241,9 +252,9 @@ class TestFormatStepSummary:
     assert 'spilled' not in out
 
 
-class TestBroHeader:
-  def test_render_includes_aggregates_and_forked_from(self):
-    out = _format_bro_header(
+class TestHeader:
+  def test_shared_header_includes_universal_and_native_fields(self):
+    out = _format_header(
       {
         'id': 'T1',
         'bro': 'dev',
@@ -264,18 +275,45 @@ class TestBroHeader:
       },
       NO_COLOR,
     )
+    assert 'harness     bro' in out
     assert 'T-p @ step S5' in out
     assert '"input": 100' in out
-    assert 'reasoning=3' in out
-    assert 'end=0' not in out  # zero counts pruned
+    assert '"reasoning": 3' in out
+    assert '"end": 0' not in out
+
+  def test_claude_header_uses_the_same_spine_with_its_native_block(self):
+    out = _format_header(
+      {
+        'id': 'T2',
+        'bro': 'ppp-dev',
+        'harness': 'claude',
+        'version': '1',
+        'native': {
+          'llm': {'model': 'claude'},
+          'harness_version': '2.1.0',
+          'line_count': 4,
+          'segment': 'seg',
+        },
+        'started_at': '2026-06-07T22:14:03.000000Z',
+        'end': None,
+        'interactive': True,
+        'surface': 'cw',
+        'location': {'workspace': 'feature', 'host': 'box'},
+        'turn_count': 2,
+      },
+      NO_COLOR,
+    )
+    assert 'workspace   feature' in out
+    assert 'claude-code 2.1.0' in out
+    assert 'lines       4' in out
 
 
-class TestClaudeRendering:
+class TestConversationRendering:
   def test_renders_conversation_with_context_preamble(self):
     client = FakeClient()
     client.add_claude('T1', [_user('hello'), _assistant('hi there')])
     client.contexts['T1'] = [{'title': 'git state', 'fields': {'branch': 'b'}}]
-    out = _render_claude_trail(_cast(client), client.get_trail('T1'), NO_COLOR)
+    out, _, _ = _render_conversation(_cast(client), client.get_trail('T1'), NO_COLOR)
     assert 'SESSION CONTEXT' in out
     assert '▸ git state' in out
     assert '#1 USER' in out
@@ -291,14 +329,12 @@ class TestClaudeRendering:
       [_user('resumed', 'u3')],
       forked_from={'trail_id': 'T1', 'step_id': '1'},
     )
-    out = _render_claude_trail(_cast(client), client.get_trail('T2'), NO_COLOR)
+    out, _, _ = _render_conversation(_cast(client), client.get_trail('T2'), NO_COLOR)
     assert 'hello' in out
     assert 'hi' in out
-    # past the parent anchor: the fork did not carry this record
     assert 'lost' not in out
     assert 'resumed' in out
     assert '── resumed as trail T2' in out
-    # turn numbering continues across the chain
     assert '#3 USER' in out
 
   def test_tool_results_inline_under_their_call(self):
@@ -307,7 +343,9 @@ class TestClaudeRendering:
         'type': 'assistant',
         'uuid': 'a1',
         'message': {
+          'id': 'm1',
           'model': 'claude',
+          'usage': {},
           'content': [{'type': 'tool_use', 'id': 'tu1', 'name': 'bash', 'input': {'cmd': 'ls'}}],
         },
       }
@@ -323,29 +361,80 @@ class TestClaudeRendering:
     )
     client = FakeClient()
     client.add_claude('T1', [call, result])
-    out = _render_claude_trail(_cast(client), client.get_trail('T1'), NO_COLOR)
+    out, _, _ = _render_conversation(_cast(client), client.get_trail('T1'), NO_COLOR)
     assert '→ bash({"cmd": "ls"})' in out
     assert 'file.txt' in out
 
 
 class TestShow:
-  def test_bro_trail_renders_header_and_steps(self, capsys):
+  def test_bro_trail_renders_the_generalized_conversation(self, capsys):
     client = FakeClient()
     client.add_bro(
       'T1',
-      [{'step_id': 'S1', 'kind': 'user_input', 'body': 'hi', 'ts': '2026-01-01T00:00:00Z'}],
+      [
+        {'step_id': 'S1', 'kind': 'user_input', 'body': 'hi', 'ts': '2026-01-01T00:00:00Z'},
+        {
+          'step_id': 'S2',
+          'kind': 'llm_call',
+          'ts': '2026-01-01T00:00:01Z',
+          'body': {
+            'response': {
+              'model': 'gpt-5',
+              'output': [
+                {'type': 'message', 'content': [{'type': 'output_text', 'text': 'hello'}]}
+              ],
+            }
+          },
+        },
+      ],
     )
     args = {'trail_id': 'T1', 'color': 'never', 'no_pager': True}
     assert _command_show(_cast(client), args, NO_COLOR) == 0
     out = capsys.readouterr().out
-    assert 'trail      T1' in out
-    assert 'user_input' in out
+    assert 'trail' in out and 'T1' in out
+    assert '#1 USER' in out
+    assert 'hi' in out
+    assert '#2 ASSISTANT' in out
+    assert 'hello' in out
+    assert 'user_input' not in out
 
   def test_unknown_id_propagates_not_found(self):
     client = FakeClient()
     args = {'trail_id': 'b2249daa', 'color': 'never', 'no_pager': True}
     with pytest.raises(HTTPStatusError, match='trail not found'):
       _command_show(_cast(client), args, NO_COLOR)
+
+
+class TestSteps:
+  def test_native_view_keeps_bro_step_ids_and_bodies(self, capsys):
+    client = FakeClient()
+    client.add_bro(
+      'T1',
+      [
+        {
+          'step_id': 'S1',
+          'kind': 'llm_call',
+          'body': {'response': {'id': 'r1'}},
+          'response_id': 'r1',
+          'ts': '2026-01-01T00:00:00Z',
+        }
+      ],
+    )
+    args = {'trail_id': 'T1', 'color': 'never', 'no_pager': True}
+    assert _command_steps(_cast(client), args, NO_COLOR) == 0
+    out = capsys.readouterr().out
+    assert 'S1' in out
+    assert 'llm_call' in out
+    assert '"response": {"id": "r1"}' in out
+    assert 'response_id=r1' in out
+
+  def test_native_view_exposes_claude_raw_lines(self, capsys):
+    client = FakeClient()
+    raw = _user('hello')
+    client.add_claude('T1', [raw])
+    args = {'trail_id': 'T1', 'color': 'never', 'no_pager': True}
+    assert _command_steps(_cast(client), args, NO_COLOR) == 0
+    assert raw in capsys.readouterr().out
 
 
 class TestGrep:
@@ -357,7 +446,7 @@ class TestGrep:
     client.add_claude('T-claude', [_user('the needle is here')])
     client.add_bro(
       'T-bro',
-      [{'step_id': 'S1', 'kind': 'assistant', 'body': 'needle too', 'ts': None}],
+      [{'step_id': 'S1', 'kind': 'user_input', 'body': 'needle too', 'ts': None}],
     )
     assert _command_grep(_cast(client), self._args('needle'), NO_COLOR) == 0
     out = capsys.readouterr().out
@@ -369,6 +458,17 @@ class TestGrep:
     client.add_claude(LULID, [_user('the needle is here')])
     assert _command_grep(_cast(client), self._args('needle'), NO_COLOR) == 0
     assert f'{LULID}:' in capsys.readouterr().out
+
+  def test_searches_the_same_fork_chain_as_show(self, capsys):
+    client = FakeClient()
+    client.add_claude('T1', [_user('parent needle'), _assistant('anchor')])
+    client.add_claude(
+      'T2',
+      [_user('child')],
+      forked_from={'trail_id': 'T1', 'step_id': '1'},
+    )
+    assert _command_grep(_cast(client), self._args('parent needle', trails=['T2']), NO_COLOR) == 0
+    assert 'T2:' in capsys.readouterr().out
 
   def test_no_match_exits_1(self, capsys):
     client = FakeClient()
@@ -383,24 +483,45 @@ class TestGrep:
       _command_grep(_cast(client), args, NO_COLOR)
 
 
-class TestFollowSteps:
-  def test_stops_at_the_end_step(self):
-    client = MagicMock()
-    client.iter_steps.return_value = iter(
+class TestFollow:
+  def test_shared_loop_stops_at_a_native_end_step(self):
+    client = FakeClient()
+    client.add_bro(
+      'T1',
       [
         {'step_id': 'S1', 'kind': 'assistant'},
         {'step_id': 'S2', 'kind': 'end'},
         {'step_id': 'S3', 'kind': 'assistant'},
-      ]
+      ],
     )
-    rows = list(_follow_steps(_cast(client), 'T1', interval=0, sleep=lambda _: None))
-    assert [row['step_id'] for row in rows] == ['S1', 'S2']
+    batches = list(
+      _follow_batches(
+        _cast(client),
+        'T1',
+        iterator=lambda trail_id, after: client.iter_steps(trail_id, after=after),
+        cursor=lambda step: step['step_id'],
+        terminal=lambda step: step.get('kind') == 'end',
+        interval=0,
+        sleep=lambda _: None,
+      )
+    )
+    assert [row['step_id'] for batch in batches for row in batch] == ['S1', 'S2']
 
-  def test_header_end_terminates_a_stream_without_end_steps(self):
+  def test_header_end_terminates_a_message_stream_without_end_steps(self):
     client = FakeClient()
     client.add_claude('T1', [_user('hello')], end={'at': 'x', 'reason': 'ok'})
-    rows = list(_follow_steps(_cast(client), 'T1', interval=0, sleep=lambda _: None))
-    assert [row['step_id'] for row in rows] == ['0']
+    batches = list(
+      _follow_batches(
+        _cast(client),
+        'T1',
+        iterator=lambda trail_id, after: client.iter_messages(trail_id, after=after),
+        cursor=lambda message: message['source']['step_id'],
+        terminal=lambda message: False,
+        interval=0,
+        sleep=lambda _: None,
+      )
+    )
+    assert [message['type'] for batch in batches for message in batch] == ['user_input']
 
 
 class TestRenderTree:
@@ -432,6 +553,7 @@ class TestWithDefaultCommand:
   def test_explicit_commands_kept(self):
     assert _with_default_command(['rewind', 'list']) == ['rewind', 'list']
     assert _with_default_command(['rewind', 'grep', 'p']) == ['rewind', 'grep', 'p']
+    assert _with_default_command(['rewind', 'steps', 'T1']) == ['rewind', 'steps', 'T1']
 
   def test_no_args_and_help_kept(self):
     assert _with_default_command(['rewind']) == ['rewind']
