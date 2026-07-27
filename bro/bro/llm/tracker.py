@@ -1,27 +1,22 @@
 """Observer seam for durable LLM run recording."""
 
 from abc import ABC, abstractmethod
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, TypedDict
 
-StepKind = Literal[
-  'system_prompt',
-  'user_input',
-  'reasoning',
-  'assistant',
-  'tool_call',
-  'tool_result',
-  'llm_call',
-  'error',
-  'end',
-]
+StepKind = Literal['system_prompt', 'user_input', 'tool_result', 'llm_call', 'error']
 
 EndReason = Literal['ok', 'raised', 'error']
+
+
+class ToolStepSource(TypedDict):
+  step_id: str | int
+  index: int
 
 
 class Tracker(ABC):
   """Capture the LLM event stream in a durable sink."""
 
-  current_tool_step_id: Optional[str] = None
+  current_tool_step_id: Optional[ToolStepSource] = None
 
   @abstractmethod
   def start_trail(
@@ -39,7 +34,7 @@ class Tracker(ABC):
     ...
 
   @abstractmethod
-  def step(self, kind: StepKind, body: Any, **extras: Any) -> Optional[str]:
+  def step(self, kind: StepKind, body: Any, **extras: Any) -> Optional[str | int]:
     """Append one event and return its sink-assigned id when available."""
     ...
 
@@ -65,7 +60,7 @@ class NullTracker(Tracker):
   ) -> str:
     return ''
 
-  def step(self, kind: StepKind, body: Any, **extras: Any) -> Optional[str]:
+  def step(self, kind: StepKind, body: Any, **extras: Any) -> Optional[str | int]:
     return None
 
   def end_trail(self, reason: EndReason, detail: Optional[str] = None) -> None:

@@ -293,9 +293,7 @@ class TestSummonHandler:
     [child_active] = [a for a in _status(tmp_path)['active'] if a['request_id'] == child_request.id]
     assert child_active['summoner'] == {'target': 'ppp-dev', 'trail_id': 'T1'}
 
-  def test_child_step_id_lands_on_the_spawned_summoned_by(self, tmp_path):
-    # a summoning bro names its own tool_call step; the grandchild's
-    # summoned_by carries {trail_id, step_id}
+  def test_child_source_lands_on_the_spawned_summoned_by(self, tmp_path):
     control = _control(tmp_path, {'ppp-dev'})
     context = FakeContext()
     request = _summon_child(control, context, CHILD, 'ppp-dev')
@@ -303,10 +301,12 @@ class TestSummonHandler:
       CHILD, ROOT, Message(type='started', payload={'trail_id': 'T1'}, in_reply_to=request.id)
     )
     control.handle(
-      cast(Dispatcher, context), CHILD, _summon_message(target='devoops', step_id='S7')
+      cast(Dispatcher, context),
+      CHILD,
+      _summon_message(target='devoops', step_id=7, index=3),
     )
     launch, _, _ = context.spawned[-1]
-    assert launch.summoner == {'trail_id': 'T1', 'step_id': 'S7'}
+    assert launch.summoner == {'trail_id': 'T1', 'step_id': 7, 'index': 3}
 
   def test_step_id_without_a_requester_trail_is_dropped(self, control, tmp_path):
     # the root session has no trail pointer here, so a position alone would be
@@ -443,7 +443,11 @@ class TestSummonHandler:
       {'target': 'devoops', 'prompt': 'p', 'timout': 60},  # typo'd key must not pass silently
       {'target': 'devoops', 'prompt': 'p', 'hold': 'automatic'},
       {'target': 'devoops', 'prompt': 'p', 'step_id': ''},
-      {'target': 'devoops', 'prompt': 'p', 'step_id': 7},
+      {'target': 'devoops', 'prompt': 'p', 'step_id': -1},
+      {'target': 'devoops', 'prompt': 'p', 'step_id': True},
+      {'target': 'devoops', 'prompt': 'p', 'index': 1},
+      {'target': 'devoops', 'prompt': 'p', 'step_id': 7, 'index': -1},
+      {'target': 'devoops', 'prompt': 'p', 'step_id': 7, 'index': True},
       {'target': 'devoops', 'prompt': 'p', 'grant': 'aws'},
       {'target': 'devoops', 'prompt': 'p', 'grant': ['']},
       {'target': 'devoops', 'prompt': 'p', 'grant': None},  # a null cannot default to no override

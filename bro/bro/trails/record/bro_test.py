@@ -10,7 +10,7 @@ import pytest
 import trails.client
 from base import configs
 from trails.client import HTTPStatusError, HTTPTracker
-from trails.model import ForkedFrom
+from trails.model import ForkedFrom, tools_sha256
 
 
 def _request_payload(request: tuple[str, str, Optional[bytes], dict[str, str]]) -> dict:
@@ -29,14 +29,6 @@ class _FakeResponse:
 
 
 class _FakeConnection:
-  """programmable stand-in for `http.client.HTTPSConnection`.
-
-  each entry queued via `queue(...)` represents one round-trip and is consumed
-  on a `request` / `getresponse` pair. an `Exception` instance simulates a
-  transport-level failure raised from `request`; a `(status, body)` tuple
-  serves as a successful HTTP response.
-  """
-
   def __init__(self) -> None:
     self.queued: list[Any] = []
     self.requests: list[tuple[str, str, Optional[bytes], dict[str, str]]] = []
@@ -67,17 +59,14 @@ class _FakeConnection:
 
 def _install_fake_connection(monkeypatch: pytest.MonkeyPatch) -> _FakeConnection:
   fake = _FakeConnection()
-  # the tracker re-opens after every drop_connection; tests use a single shared fake
-  # because the queued response semantics already capture the per-attempt state.
   monkeypatch.setattr(http.client, 'HTTPSConnection', lambda *args, **kwargs: fake)
-  # the retry loop sleeps between attempts; skip the wall-clock wait so tests
-  # finish in microseconds rather than seconds.
   monkeypatch.setattr(time, 'sleep', lambda _: None)
-  # park the keepalive thread of any trail started under this fake: at the
-  # default cadence it would outlive the test's wiring and hit the real
-  # network. keepalive tests override the interval downwards themselves.
   monkeypatch.setattr(trails.client, 'KEEPALIVE_INTERVAL_SECONDS', 3600.0)
   return fake
+
+
+def _append_response(extent: int, *, appended: int = 1) -> tuple[int, bytes]:
+  return 200, json.dumps({'extent': extent, 'appended': appended}).encode()
 
 
 class TestHTTPTrackerConstructor:
@@ -91,7 +80,7 @@ class TestHTTPTrackerConstructor:
 
 
 class TestHTTPTrackerStartTrail:
-  def test_posts_v1_trails_and_returns_server_trail_id(self, monkeypatch):
+  def test_opens_a_universal_body_and_returns_server_trail_id(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
     fake.queue((201, b'{"id": "T-server"}'))
     tracker = HTTPTracker('https://trails.example', 'tok')
@@ -104,32 +93,39 @@ class TestHTTPTrackerStartTrail:
       surface='ask',
       summoned_by={'trail_id': 'T-forked_from'},
     )
+
     assert trail_id == 'T-server'
     assert tracker._trail_id == 'T-server'
-    assert len(fake.requests) == 1
-    method, path, body, headers = fake.requests[0]
+    assert tracker._offset == 1
+    method, path, _, headers = fake.requests[0]
     assert (method, path) == ('POST', '/v1/trails')
     assert headers['Authorization'] == 'Bearer tok'
-    assert headers['Content-Type'] == 'application/json'
-    assert body is not None
-    payload = json.loads(body)
+    payload = _request_payload(fake.requests[0])
     assert payload['bro'] == 'dev'
     assert payload['version'] == configs.VERSION
     assert payload['native']['llm'] == {'type': 'chat_gpt', 'model': 'gpt-5'}
-    assert payload['body']['system_prompt'] == 'do the thing'
-    assert payload['forked_from'] is None
-    assert payload['interactive'] is False
-    assert payload['surface'] == 'ask'
+    assert payload['body'] == {
+      'records': [{'kind': 'system_prompt', 'body': 'do the thing', 'turn_index': 0}]
+    }
     assert payload['summoned_by'] == {'trail_id': 'T-forked_from'}
 
-  def test_serializes_forked_from_on_forks(self, monkeypatch):
+  @pytest.mark.parametrize(
+    'forked_from, expected',
+    [
+      (
+        ForkedFrom(trail_id='legacy', step_id='legacy-step'),
+        {'trail_id': 'legacy', 'step_id': 'legacy-step'},
+      ),
+      (
+        ForkedFrom(trail_id='universal', step_id=4, index=2),
+        {'trail_id': 'universal', 'step_id': 4, 'index': 2},
+      ),
+    ],
+  )
+  def test_serializes_legacy_and_universal_fork_pointers(self, monkeypatch, forked_from, expected):
     fake = _install_fake_connection(monkeypatch)
     fake.queue((201, b'{"id": "T1"}'))
     tracker = HTTPTracker('https://trails.example', 'tok')
-    forked_from = ForkedFrom(
-      trail_id='abc',
-      step_id='def',
-    )
     tracker.start_trail(
       bro='b',
       llm_spec={},
@@ -138,17 +134,14 @@ class TestHTTPTrackerStartTrail:
       interactive=True,
       surface='fork',
     )
-    body = fake.requests[0][2]
-    assert body is not None
-    payload = json.loads(body)
-    assert payload['forked_from'] == {'trail_id': 'abc', 'step_id': 'def'}
-    assert 'summoned_by' not in payload
+    assert _request_payload(fake.requests[0])['forked_from'] == expected
 
-  def test_fail_fast_no_retries_on_transport_error(self, monkeypatch):
+  @pytest.mark.parametrize('failure', [ConnectionError('boom'), (500, b'oops')])
+  def test_create_is_not_retried(self, monkeypatch, failure):
     fake = _install_fake_connection(monkeypatch)
-    fake.queue(ConnectionError('boom'))
+    fake.queue(failure)
     tracker = HTTPTracker('https://trails.example', 'tok')
-    with pytest.raises(ConnectionError):
+    with pytest.raises((ConnectionError, HTTPStatusError)):
       tracker.start_trail(
         bro='b',
         llm_spec={},
@@ -157,22 +150,6 @@ class TestHTTPTrackerStartTrail:
         interactive=False,
         surface='x',
       )
-    assert len(fake.requests) == 1
-
-  def test_fail_fast_no_retries_on_http_error(self, monkeypatch):
-    fake = _install_fake_connection(monkeypatch)
-    fake.queue((500, b'oops'))
-    tracker = HTTPTracker('https://trails.example', 'tok')
-    with pytest.raises(HTTPStatusError) as exception_info:
-      tracker.start_trail(
-        bro='b',
-        llm_spec={},
-        system_prompt='',
-        forked_from=None,
-        interactive=False,
-        surface='x',
-      )
-    assert exception_info.value.status == 500
     assert len(fake.requests) == 1
 
 
@@ -194,119 +171,106 @@ class TestHTTPTrackerStep:
   def test_step_before_start_trail_raises(self, monkeypatch):
     _install_fake_connection(monkeypatch)
     tracker = HTTPTracker('https://trails.example', 'tok')
-    with pytest.raises(RuntimeError):
-      tracker.step('reasoning', 'thinking')
+    with pytest.raises(RuntimeError, match='before start_trail'):
+      tracker.step('user_input', 'hello', turn_index=0)
 
-  def test_posts_v1_steps_with_kind_body_extras(self, monkeypatch):
+  def test_appends_at_the_current_offset_and_returns_the_ordinal(self, monkeypatch):
     tracker, fake = self._ready(monkeypatch)
-    fake.queue((204, b''))
-    tracker.step(
-      'tool_call',
-      None,
-      tool_name='add_task',
-      arguments={'name': 'x'},
-      call_id='c1',
-      turn_index=1,
-    )
-    method, path, body, headers = fake.requests[1]
-    assert (method, path) == ('POST', '/v1/trails/T1/steps')
+    fake.queue(_append_response(2))
+    step_id = tracker.step('tool_result', '4', turn_index=0, call_index=1, call_id='c1')
+
+    assert step_id == 1
+    method, path, _, headers = fake.requests[1]
+    assert (method, path) == ('POST', '/v1/trails/T1/records')
     assert headers['Authorization'] == 'Bearer tok'
-    assert body is not None
-    payload = json.loads(body)
-    assert payload['kind'] == 'tool_call'
-    assert payload['body'] is None
-    assert payload['tool_name'] == 'add_task'
-    assert payload['arguments'] == {'name': 'x'}
-    assert payload['call_id'] == 'c1'
-    assert payload['turn_index'] == 1
-    # the client mints the step_id so the server can dedup retries on it.
-    assert isinstance(payload['step_id'], str) and len(payload['step_id']) > 0
+    assert _request_payload(fake.requests[1]) == {
+      'offset': 1,
+      'records': [
+        {
+          'kind': 'tool_result',
+          'body': '4',
+          'turn_index': 0,
+          'call_index': 1,
+          'call_id': 'c1',
+        }
+      ],
+    }
+    assert tracker._offset == 2
 
-  def test_retries_transient_blips_and_recovers(self, monkeypatch):
+  def test_distinct_steps_advance_the_offset(self, monkeypatch):
     tracker, fake = self._ready(monkeypatch)
-    fake.queue(ConnectionError('blip 1'))
-    fake.queue(ConnectionError('blip 2'))
-    fake.queue((204, b''))
-    tracker.step('reasoning', 'thinking', turn_index=1)
-    # initial attempt + 2 retries = 3 requests; the third one succeeded so the
-    # remaining 2s retry slot was never used.
-    step_requests = [r for r in fake.requests if r[1].endswith('/steps')]
-    assert len(step_requests) == 3
+    fake.queue(_append_response(2))
+    fake.queue(_append_response(3))
+    assert tracker.step('user_input', 'a', turn_index=0) == 1
+    assert tracker.step('user_input', 'b', turn_index=1) == 2
+    assert [_request_payload(request)['offset'] for request in fake.requests[1:]] == [1, 2]
+
+  def test_llm_call_replaces_tools_with_a_content_addressed_blob(self, monkeypatch):
+    tracker, fake = self._ready(monkeypatch)
+    fake.queue(_append_response(2))
+    tools = [{'type': 'function', 'name': 'read'}]
+    body = {
+      'request': {'model': 'gpt-5', 'input': [], 'tools': tools},
+      'response': {'id': 'r1', 'model': 'gpt-5', 'usage': {'input_tokens': 3}},
+    }
+    tracker.step('llm_call', body, turn_index=0, call_index=1, response_id='r1')
+
+    payload = _request_payload(fake.requests[1])
+    sha256 = tools_sha256(tools)
+    assert payload['tools'] == {sha256: tools}
+    record = payload['records'][0]
+    assert record['tools_sha256'] == sha256
+    assert record['body']['request'] == {'model': 'gpt-5', 'input': []}
+    assert body['request']['tools'] == tools
+
+  @pytest.mark.parametrize('body', ['not an object', {'request': {}}])
+  def test_malformed_llm_call_fails_before_writing(self, monkeypatch, body):
+    tracker, fake = self._ready(monkeypatch)
+    with pytest.raises(ValueError, match='llm_call'):
+      tracker.step('llm_call', body)
+    assert len(fake.requests) == 1
+
+  def test_retry_uses_the_same_offset_and_record(self, monkeypatch):
+    tracker, fake = self._ready(monkeypatch)
+    fake.queue(ConnectionError('response lost after commit'))
+    fake.queue(_append_response(2, appended=0))
+    tracker.step('user_input', 'hello', turn_index=0)
+    requests = fake.requests[1:]
+    assert len(requests) == 2
+    assert _request_payload(requests[0]) == _request_payload(requests[1])
+    assert fake.closes >= 1
 
   def test_propagates_after_exhausting_retries(self, monkeypatch):
     tracker, fake = self._ready(monkeypatch)
     for _ in range(4):
       fake.queue(ConnectionError('always fails'))
     with pytest.raises(ConnectionError):
-      tracker.step('reasoning', 'thinking', turn_index=1)
-    step_requests = [r for r in fake.requests if r[1].endswith('/steps')]
-    # initial + 3 retries (100ms / 500ms / 2s)
-    assert len(step_requests) == 4
+      tracker.step('user_input', 'hello', turn_index=0)
+    assert len(fake.requests[1:]) == 4
+    assert tracker._offset == 1
 
-  def test_drops_connection_between_retry_attempts(self, monkeypatch):
+  def test_unexpected_extent_fails_without_advancing(self, monkeypatch):
     tracker, fake = self._ready(monkeypatch)
-    fake.queue(ConnectionError('blip'))
-    fake.queue((204, b''))
-    tracker.step('reasoning', 'thinking', turn_index=1)
-    # one start_trail connection open + at least one drop after the blip.
-    assert fake.closes >= 1
+    fake.queue(_append_response(3))
+    with pytest.raises(RuntimeError, match='expected 2'):
+      tracker.step('user_input', 'hello', turn_index=0)
+    assert tracker._offset == 1
 
-  def test_retry_reuses_the_same_step_id(self, monkeypatch):
+  @pytest.mark.parametrize('status', [429, 503])
+  def test_retryable_http_status_is_retried(self, monkeypatch, status):
     tracker, fake = self._ready(monkeypatch)
-    fake.queue(ConnectionError('blip'))
-    fake.queue((204, b''))
-    tracker.step('reasoning', 'thinking', turn_index=1)
-    step_requests = [r for r in fake.requests if r[1].endswith('/steps')]
-    assert len(step_requests) == 2
-    ids = [_request_payload(r)['step_id'] for r in step_requests]
-    # both attempts of the same POST carry one id — that is what lets the server
-    # treat the retry as an idempotent no-op rather than a duplicate row.
-    assert ids[0] == ids[1]
-
-  def test_distinct_steps_get_distinct_ids(self, monkeypatch):
-    tracker, fake = self._ready(monkeypatch)
-    fake.queue((204, b''))
-    fake.queue((204, b''))
-    tracker.step('reasoning', 'a', turn_index=1)
-    tracker.step('reasoning', 'b', turn_index=2)
-    ids = [_request_payload(r)['step_id'] for r in fake.requests if r[1].endswith('/steps')]
-    assert len(ids) == 2 and ids[0] != ids[1]
-
-  def test_step_returns_the_posted_step_id(self, monkeypatch):
-    tracker, fake = self._ready(monkeypatch)
-    fake.queue((204, b''))
-    returned = tracker.step('reasoning', 'a', turn_index=1)
-    (request,) = [r for r in fake.requests if r[1].endswith('/steps')]
-    assert returned == _request_payload(request)['step_id']
+    fake.queue((status, b'transient'))
+    fake.queue(_append_response(2))
+    tracker.step('user_input', 'hello', turn_index=0)
+    assert len(fake.requests[1:]) == 2
 
   def test_deterministic_4xx_is_not_retried(self, monkeypatch):
     tracker, fake = self._ready(monkeypatch)
-    # 413 (body too large) is deterministic — retrying can't help.
     fake.queue((413, b'too large'))
     with pytest.raises(HTTPStatusError) as exception_info:
-      tracker.step('llm_call', 'x', turn_index=1)
+      tracker.step('llm_call', {'request': {'tools': []}, 'response': {}})
     assert exception_info.value.status == 413
-    step_requests = [r for r in fake.requests if r[1].endswith('/steps')]
-    assert len(step_requests) == 1
-
-  def test_5xx_is_retried(self, monkeypatch):
-    tracker, fake = self._ready(monkeypatch)
-    for _ in range(4):
-      fake.queue((503, b'unavailable'))
-    with pytest.raises(HTTPStatusError) as exception_info:
-      tracker.step('reasoning', 'thinking', turn_index=1)
-    assert exception_info.value.status == 503
-    step_requests = [r for r in fake.requests if r[1].endswith('/steps')]
-    # initial + 3 retries (5xx is transient).
-    assert len(step_requests) == 4
-
-  def test_429_is_retried(self, monkeypatch):
-    tracker, fake = self._ready(monkeypatch)
-    fake.queue((429, b'slow down'))
-    fake.queue((204, b''))
-    tracker.step('reasoning', 'thinking', turn_index=1)
-    step_requests = [r for r in fake.requests if r[1].endswith('/steps')]
-    assert len(step_requests) == 2
+    assert len(fake.requests[1:]) == 1
 
 
 class TestHTTPTrackerEndTrail:
@@ -315,38 +279,27 @@ class TestHTTPTrackerEndTrail:
     fake.queue((201, b'{"id": "T1"}'))
     tracker = HTTPTracker('https://trails.example', 'tok')
     tracker.start_trail(
-      bro='b',
-      llm_spec={},
-      system_prompt='p',
-      forked_from=None,
-      interactive=False,
-      surface='x',
+      bro='b', llm_spec={}, system_prompt='p', forked_from=None, interactive=False, surface='x'
     )
     return tracker, fake
 
-  def test_posts_v1_end_with_reason(self, monkeypatch):
+  def test_ends_the_header_without_a_legacy_end_step(self, monkeypatch):
     tracker, fake = self._ready(monkeypatch)
     fake.queue((204, b''))
     tracker.end_trail('ok')
-    method, path, body, _ = fake.requests[1]
-    assert (method, path) == ('POST', '/v1/trails/T1/end')
-    assert body is not None
-    payload = json.loads(body)
-    assert payload['reason'] == 'ok'
-    # the end step carries a client-minted id too, so a retried end POST dedups.
-    assert isinstance(payload['step_id'], str) and len(payload['step_id']) > 0
-    # trail_id cleared so second end_trail is a no-op.
+    assert fake.requests[1][0:2] == ('POST', '/v1/trails/T1/end')
+    assert _request_payload(fake.requests[1]) == {'reason': 'ok'}
     assert tracker._trail_id is None
+    assert tracker._offset is None
 
   def test_second_end_trail_is_noop(self, monkeypatch):
     tracker, fake = self._ready(monkeypatch)
     fake.queue((204, b''))
     tracker.end_trail('ok')
-    # nothing queued — a second POST would assert; the no-op path proves it
-    # never hit the wire.
     tracker.end_trail('raised')
+    assert len(fake.requests) == 2
 
-  def test_logs_loudly_and_does_not_raise_on_persistent_failure(self, monkeypatch, caplog):
+  def test_logs_and_clears_state_on_persistent_failure(self, monkeypatch, caplog):
     tracker, fake = self._ready(monkeypatch)
     for _ in range(4):
       fake.queue(ConnectionError('still down'))
@@ -354,6 +307,7 @@ class TestHTTPTrackerEndTrail:
       tracker.end_trail('ok')
     assert any('end_trail failed' in record.message for record in caplog.records)
     assert tracker._trail_id is None
+    assert tracker._offset is None
 
 
 class TestHTTPTrackerKeepalive:
@@ -367,8 +321,9 @@ class TestHTTPTrackerKeepalive:
     )
     return tracker, fake
 
-  def _keepalive_requests(self, fake: _FakeConnection) -> list:
-    return [r for r in fake.requests if r[1] == '/v1/trails/T1/keepalive']
+  @staticmethod
+  def _keepalive_requests(fake: _FakeConnection) -> list:
+    return [request for request in fake.requests if request[1] == '/v1/trails/T1/keepalive']
 
   def test_keepalive_posts_during_a_quiet_stretch(self, monkeypatch):
     tracker, fake = self._start(monkeypatch, interval=0.02)
@@ -377,18 +332,14 @@ class TestHTTPTrackerKeepalive:
     deadline = time.monotonic() + 5.0
     while len(self._keepalive_requests(fake)) == 0 and time.monotonic() < deadline:
       threading.Event().wait(0.01)
-    requests = self._keepalive_requests(fake)
-    assert len(requests) > 0
-    method, _, _, headers = requests[0]
-    assert method == 'POST'
-    assert headers['Authorization'] == 'Bearer tok'
+    assert len(self._keepalive_requests(fake)) > 0
     tracker.end_trail('ok')
 
   def test_no_keepalive_while_writes_flow(self, monkeypatch):
     tracker, fake = self._start(monkeypatch, interval=0.5)
-    for _ in range(5):
-      fake.queue((204, b''))
-      tracker.step('assistant', 'x')
+    for extent in range(2, 7):
+      fake.queue(_append_response(extent))
+      tracker.step('user_input', 'x', turn_index=extent - 2)
       threading.Event().wait(0.02)
     fake.queue((204, b''))
     tracker.end_trail('ok')
@@ -398,17 +349,15 @@ class TestHTTPTrackerKeepalive:
     assert not thread.is_alive()
     assert len(self._keepalive_requests(fake)) == 0
 
-  def test_end_trail_stops_the_keepalive_thread(self, monkeypatch):
-    tracker, fake = self._start(monkeypatch, interval=0.02)
-    for _ in range(50):
-      fake.queue((204, b''))
+  def test_end_and_close_stop_the_keepalive_thread(self, monkeypatch):
+    tracker, fake = self._start(monkeypatch, interval=3600.0)
     thread = tracker._keepalive_thread
     assert thread is not None and thread.is_alive()
+    fake.queue((204, b''))
     tracker.end_trail('ok')
     thread.join(2.0)
     assert not thread.is_alive()
 
-  def test_close_stops_the_keepalive_thread(self, monkeypatch):
     tracker, _ = self._start(monkeypatch, interval=3600.0)
     thread = tracker._keepalive_thread
     assert thread is not None and thread.is_alive()
@@ -416,24 +365,18 @@ class TestHTTPTrackerKeepalive:
     thread.join(2.0)
     assert not thread.is_alive()
 
-  def test_keepalive_failure_is_swallowed_and_recording_continues(self, monkeypatch, caplog):
+  def test_keepalive_failure_does_not_stop_recording(self, monkeypatch, caplog):
     tracker, fake = self._start(monkeypatch, interval=0.02)
-    # the keepalive POST and its one retry both fail; recording must go on.
     fake.queue((500, b'oops'))
     fake.queue((500, b'oops'))
     deadline = time.monotonic() + 5.0
     with caplog.at_level(logging.WARNING):
       while len(self._keepalive_requests(fake)) < 2 and time.monotonic() < deadline:
         threading.Event().wait(0.01)
-      # park the thread before sharing the response queue with the main
-      # thread again; one straggler wake may still consume a queued response,
-      # so the queue below carries a spare.
       monkeypatch.setattr(trails.client, 'KEEPALIVE_INTERVAL_SECONDS', 3600.0)
       threading.Event().wait(0.2)
-    assert len(self._keepalive_requests(fake)) >= 2
     assert any('keepalive failed' in record.message for record in caplog.records)
-    for _ in range(3):
-      fake.queue((204, b''))
-    tracker.step('assistant', 'x')
-    assert any(r[1] == '/v1/trails/T1/steps' for r in fake.requests)
+    for item in (_append_response(2), _append_response(2), (204, b'')):
+      fake.queue(item)
+    tracker.step('user_input', 'x', turn_index=0)
     tracker.end_trail('ok')

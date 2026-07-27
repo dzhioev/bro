@@ -24,9 +24,8 @@ from typing import Any, Optional
 from urllib.parse import urlencode, urlparse
 
 from base import configs, credentials
-from base.lulid import lulid
 from llm.tracker import EndReason, StepKind, Tracker
-from trails.model import ForkedFrom, RecordedTrail, Step, Trail, spill_descriptor
+from trails.model import ForkedFrom, RecordedTrail, Step, Trail, spill_descriptor, tools_sha256
 
 DEFAULT_LIST_PAGE_SIZE = 100
 DEFAULT_STEPS_PAGE_SIZE = 200
@@ -436,6 +435,7 @@ class HTTPTracker(Tracker):
   def __init__(self, base_url: str, token: str, *, timeout: float = 5.0):
     self._client = TrailsClient(base_url, token, timeout=timeout)
     self._trail_id: Optional[str] = None
+    self._offset: Optional[int] = None
     self._lock = threading.RLock()
     self._last_write_monotonic = time.monotonic()
     self._keepalive_stop: Optional[threading.Event] = None
@@ -459,7 +459,7 @@ class HTTPTracker(Tracker):
       'bro': bro,
       'version': configs.VERSION,
       'native': {'llm': llm_spec},
-      'body': {'system_prompt': system_prompt},
+      'body': {'records': [{'kind': 'system_prompt', 'body': system_prompt, 'turn_index': 0}]},
       'forked_from': (
         {key: value for key, value in asdict(forked_from).items() if value is not None}
         if forked_from is not None
@@ -475,23 +475,39 @@ class HTTPTracker(Tracker):
     trail_id: str = response['id']
     with self._lock:
       self._trail_id = trail_id
+      self._offset = 1
       self._last_write_monotonic = time.monotonic()
     self._start_keepalive()
     return trail_id
 
-  def step(self, kind: StepKind, body: Any, **extras: Any) -> Optional[str]:
+  def step(self, kind: StepKind, body: Any, **extras: Any) -> Optional[str | int]:
+    record = {'kind': kind, 'body': body, **extras}
+    tool_blobs: Optional[dict[str, Any]] = None
+    if kind == 'llm_call':
+      if not isinstance(body, dict):
+        raise ValueError('llm_call body must be an object')
+      request = body.get('request')
+      if not isinstance(request, dict) or not isinstance(request.get('tools'), list):
+        raise ValueError('llm_call body.request.tools must be a list')
+      tools = request['tools']
+      sha256 = tools_sha256(tools)
+      request_without_tools = {key: value for key, value in request.items() if key != 'tools'}
+      record['body'] = {**body, 'request': request_without_tools}
+      record['tools_sha256'] = sha256
+      tool_blobs = {sha256: tools}
+
     with self._lock:
       trail_id = self._trail_id
-    if trail_id is None:
-      raise RuntimeError('step() called before start_trail()')
-    step_id = lulid()
-    self._client.append_step(
-      trail_id,
-      {'step_id': step_id, 'kind': kind, 'body': body, **extras},
-    )
-    with self._lock:
+      offset = self._offset
+      if trail_id is None or offset is None:
+        raise RuntimeError('step() called before start_trail()')
+      response = self._client.append_records(trail_id, offset, [record], tools=tool_blobs)
+      extent = response.get('extent')
+      if extent != offset + 1:
+        raise RuntimeError(f'append returned extent {extent!r}, expected {offset + 1}')
+      self._offset = extent
       self._last_write_monotonic = time.monotonic()
-    return step_id
+      return offset
 
   def end_trail(self, reason: EndReason, detail: Optional[str] = None) -> None:
     with self._lock:
@@ -504,13 +520,13 @@ class HTTPTracker(Tracker):
         trail_id,
         reason,
         detail,
-        step_id=lulid(),
         retry_delays=_STEP_RETRY_DELAYS_SECONDS,
       )
     except Exception as exception:
       logging.warning('trails end_trail failed for trail %s: %s', trail_id, exception)
     with self._lock:
       self._trail_id = None
+      self._offset = None
     self._client.close()
 
   def close(self) -> None:
@@ -559,8 +575,8 @@ def default_client() -> TrailsClient:
 
 
 # fields the server stamps onto every step row alongside the per-kind extras.
-# everything else goes into `Step.extras` so callers can poke at provider /
-# kind-specific metadata (turn_index, tool_name, call_id, response_id, ...).
+# everything else goes into `Step.extras` so callers can inspect provider- and
+# kind-specific metadata (turn_index, call_index, tool_name, call_id, response_id, ...).
 _STEP_CANONICAL_FIELDS = frozenset(
   {'trail_id', 'step_id', 'ts', 'kind', 'body', 'usage', 'payload_sha256'}
 )
@@ -593,8 +609,8 @@ def step_from_row(data: dict) -> Step:
   """rehydrate a server step row into the typed `Step` dataclass.
 
   splits the canonical step fields off into the dataclass attributes and packs
-  every other key (turn_index, tool_name, arguments, call_id, response_id,
-  tokens_in, ...) into `extras`.
+  every other key (turn_index, call_index, tool_name, arguments, call_id,
+  response_id, ...) into `extras`.
   """
   extras = {k: v for k, v in data.items() if k not in _STEP_CANONICAL_FIELDS}
   return Step(

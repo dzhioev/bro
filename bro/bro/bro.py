@@ -18,7 +18,7 @@ from bro.datasources.base import DataSource
 from bro.summon import SUMMONER_ENV
 from llm.llm import EFFORT_LEVELS, LLM, LLMSpec
 from llm.observer import BoringRenderer, NullObserver, Observer
-from llm.tracker import EndReason, NullTracker, Tracker
+from llm.tracker import EndReason, NullTracker, ToolStepSource, Tracker
 from prompts import get_prompt, hold_fragment
 from trails.client import HTTPTracker
 
@@ -38,16 +38,35 @@ def _summoned_by_from_env() -> Optional[dict[str, Any]]:
   summoned_by = json.loads(raw)
   if not isinstance(summoned_by, dict):
     raise ValueError(f'{SUMMONER_ENV} must be a JSON object')
-  if not all(isinstance(value, str) for value in summoned_by.values()):
-    raise ValueError(f'{SUMMONER_ENV} has an invalid summoned_by shape')
   keys = set(summoned_by)
-  if keys == {'session'}:
+  if keys == {'session'} and isinstance(summoned_by['session'], str):
     return None
-  if keys == {'target', 'trail_id'}:
+  if keys == {'target', 'trail_id'} and all(isinstance(summoned_by[key], str) for key in keys):
     return {'trail_id': summoned_by['trail_id']}
-  if keys in ({'trail_id'}, {'trail_id', 'step_id'}):
-    return summoned_by
-  raise ValueError(f'{SUMMONER_ENV} has an invalid summoned_by shape')
+  if not {'trail_id'}.issubset(keys) or not keys.issubset({'trail_id', 'step_id', 'index'}):
+    raise ValueError(f'{SUMMONER_ENV} has an invalid summoned_by shape')
+  trail_id = summoned_by['trail_id']
+  step_id = summoned_by.get('step_id')
+  index = summoned_by.get('index')
+  if (
+    not isinstance(trail_id, str)
+    or len(trail_id) == 0
+    or (
+      step_id is not None
+      and (
+        not isinstance(step_id, (str, int))
+        or isinstance(step_id, bool)
+        or (isinstance(step_id, str) and len(step_id) == 0)
+        or (isinstance(step_id, int) and step_id < 0)
+      )
+    )
+    or (
+      index is not None
+      and (step_id is None or not isinstance(index, int) or isinstance(index, bool) or index < 0)
+    )
+  ):
+    raise ValueError(f'{SUMMONER_ENV} has an invalid summoned_by shape')
+  return summoned_by
 
 
 def _default_factory() -> Tracker:
@@ -305,14 +324,14 @@ def _banner_tool(bro_name: str, variables: Variables) -> llm.mcp.Tool:
 
 
 def _summon_tool(
-  variables: Variables, current_tool_step_id: Callable[[], Optional[str]]
+  variables: Variables, current_tool_step_id: Callable[[], Optional[ToolStepSource]]
 ) -> llm.mcp.Tool:
   # a fresh channel client per call, opened on the loop and closed in `finally`
   # so a cancelled tool call (the MCP client timed out or aborted) unblocks the
   # off-loop wait: the broxy sees the waiter go, and the terminal buffers for a
   # later summon_check instead of feeding an abandoned thread. the blocking wait
   # runs off-loop so an interactive surface stays responsive under a long summon.
-  # `current_tool_step_id` names the summon call's own recorded step (None on
+  # `current_tool_step_id` names the summon call's projected source (None on
   # surfaces without an in-process tracker), so the child's `summoned_by` can
   # carry the precise fork position.
   from bro import summon as summon_client
@@ -329,7 +348,9 @@ def _summon_tool(
     effort: Optional[str] = None,
     fast: bool = False,
   ) -> str:
-    step_id = current_tool_step_id()
+    source = current_tool_step_id()
+    step_id = source['step_id'] if source is not None else None
+    index = source['index'] if source is not None else None
     if detach:
       return await asyncio.to_thread(
         summon_client.summon_detached,
@@ -343,6 +364,7 @@ def _summon_tool(
         effort=effort,
         fast=fast,
         step_id=step_id,
+        index=index,
       )
     client = summon_client.open_client()
     try:
@@ -358,6 +380,7 @@ def _summon_tool(
         effort=effort,
         fast=fast,
         step_id=step_id,
+        index=index,
         client=client,
       )
     finally:

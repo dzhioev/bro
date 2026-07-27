@@ -121,7 +121,8 @@ def _payload(
   timeout: Optional[float] = None,
   into: Optional[str] = None,
   hold: Optional[str] = None,
-  step_id: Optional[str] = None,
+  step_id: Optional[str | int] = None,
+  index: Optional[int] = None,
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
   effort: Optional[str] = None,
@@ -136,6 +137,8 @@ def _payload(
     payload['hold'] = hold
   if step_id is not None:
     payload['step_id'] = step_id
+  if index is not None:
+    payload['index'] = index
   if grant is not None:
     payload['grant'] = list(grant)
   if revoke is not None:
@@ -250,12 +253,13 @@ def summon_and_wait(
   revoke: Optional[list[str]] = None,
   effort: Optional[str] = None,
   fast: bool = False,
-  step_id: Optional[str] = None,
+  step_id: Optional[str | int] = None,
+  index: Optional[int] = None,
   client: Optional['Client'] = None,
 ) -> str:
   """send one summon and block for the answer — the bro `summon` tool's default
-  path. `step_id` names the summoner's own `tool_call` step so the child's
-  `summoned_by` carries the precise position. With `client` the caller owns the
+  path. `step_id` and `index` name the summoner's projected tool call so the
+  child's `summoned_by` carries the precise position. With `client` the caller owns the
   connection's lifecycle (closing it from another thread aborts the wait);
   without, a fresh one is opened and closed per call. Raises `SummonError` on
   any failure."""
@@ -266,6 +270,7 @@ def summon_and_wait(
     into=into,
     hold=hold,
     step_id=step_id,
+    index=index,
     grant=grant,
     revoke=revoke,
     effort=effort,
@@ -289,7 +294,8 @@ def summon_detached(
   revoke: Optional[list[str]] = None,
   effort: Optional[str] = None,
   fast: bool = False,
-  step_id: Optional[str] = None,
+  step_id: Optional[str | int] = None,
+  index: Optional[int] = None,
 ) -> str:
   """send one summon and return its request id without waiting — the bro `summon`
   tool's detach path. Collect with `collect_summon`, poll with `check_summon`."""
@@ -300,6 +306,7 @@ def summon_detached(
     into=into,
     hold=hold,
     step_id=step_id,
+    index=index,
     grant=grant,
     revoke=revoke,
     effort=effort,

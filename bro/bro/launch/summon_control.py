@@ -101,7 +101,19 @@ __all__ = [
 
 _PROMPT_HEAD_CHARS = 120
 _PAYLOAD_KEYS = frozenset(
-  {'target', 'prompt', 'timeout', 'into', 'hold', 'step_id', 'grant', 'revoke', 'effort', 'fast'}
+  {
+    'target',
+    'prompt',
+    'timeout',
+    'into',
+    'hold',
+    'step_id',
+    'index',
+    'grant',
+    'revoke',
+    'effort',
+    'fast',
+  }
 )
 # the deepest peer a summon may spawn: the root sits at depth 0, its children at
 # 1, grandchildren at 2; a request that would nest deeper is denied — the guard
@@ -178,8 +190,18 @@ def _validate(payload: dict[str, Any]) -> Optional[str]:
   if hold is not None and hold not in HOLDS:
     return f"summon 'hold' must be one of {', '.join(HOLDS)}"
   step_id = payload.get('step_id')
-  if step_id is not None and (not isinstance(step_id, str) or len(step_id) == 0):
-    return "summon 'step_id' must be a non-empty string"
+  if step_id is not None and (
+    not isinstance(step_id, (str, int))
+    or isinstance(step_id, bool)
+    or (isinstance(step_id, str) and len(step_id) == 0)
+    or (isinstance(step_id, int) and step_id < 0)
+  ):
+    return "summon 'step_id' must be a non-empty string or non-negative int"
+  index = payload.get('index')
+  if index is not None and (
+    step_id is None or not isinstance(index, int) or isinstance(index, bool) or index < 0
+  ):
+    return "summon 'index' requires step_id and must be a non-negative int"
   # grant/revoke and fast are checked on presence, not on non-None: unlike the
   # optional fields above they feed a non-optional consumer (the override split,
   # the child's argv), so a null must be a shape error rather than a default
@@ -358,9 +380,9 @@ class SummonControl:
     summoned_by = requester.summoned_by
     step_id = payload.get('step_id')
     if summoned_by is not None and step_id is not None:
-      # the requester names its own tool_call step; a position without a trail
-      # to anchor it is dropped
       summoned_by = {**summoned_by, 'step_id': step_id}
+      if payload.get('index') is not None:
+        summoned_by['index'] = payload['index']
     context.spawn(
       SummonLaunchSpec(
         target=target,

@@ -223,6 +223,10 @@ class TestBroRun:
     # must not inherit the marker and re-stamp the parent's summoned_by
     assert 'CW_SUMMONER' not in os.environ
     await TraceBro().run('again', tracker=RecordingTracker(), surface='test')
+    monkeypatch.setenv('CW_SUMMONER', '{"trail_id":"T-universal","step_id":7,"index":2}')
+    await TraceBro().run('universal pointer', tracker=RecordingTracker(), surface='test')
+    monkeypatch.setenv('CW_SUMMONER', '{"trail_id":"T-live-legacy","step_id":"S7"}')
+    await TraceBro().run('legacy pointer', tracker=RecordingTracker(), surface='test')
     monkeypatch.setenv('CW_SUMMONER', '{"target":"pm","trail_id":"T-legacy"}')
     await TraceBro().run('legacy direct', tracker=RecordingTracker(), surface='test')
     monkeypatch.setenv('CW_SUMMONER', '{"session":"c:legacy-root"}')
@@ -230,6 +234,8 @@ class TestBroRun:
     assert captured == [
       {'trail_id': 'T-parent'},
       None,
+      {'trail_id': 'T-universal', 'step_id': 7, 'index': 2},
+      {'trail_id': 'T-live-legacy', 'step_id': 'S7'},
       {'trail_id': 'T-legacy'},
       None,
     ]
@@ -1638,6 +1644,7 @@ class TestSummonTool:
       effort=None,
       fast=False,
       step_id=None,
+      index=None,
       client=None,
     ):
       calls.append(
@@ -1651,6 +1658,7 @@ class TestSummonTool:
           'effort': effort,
           'fast': fast,
           'step_id': step_id,
+          'index': index,
           'client': client,
         }
       )
@@ -1659,7 +1667,7 @@ class TestSummonTool:
     monkeypatch.setattr(summon_module, 'open_client', lambda: client)
     monkeypatch.setattr(summon_module, 'summon_and_wait', fake_summon_and_wait)
     bro = EchoBro()
-    bro._tracker.current_tool_step_id = 'S-42'
+    bro._tracker.current_tool_step_id = {'step_id': 42, 'index': 3}
     tool = None
     for candidate in await bro._service_server.list_tools():
       if candidate.name == 'summon':
@@ -1688,7 +1696,8 @@ class TestSummonTool:
         'revoke': ['openai'],
         'effort': 'high',
         'fast': True,
-        'step_id': 'S-42',
+        'step_id': 42,
+        'index': 3,
         'client': client,
       }
     ]
@@ -1713,6 +1722,7 @@ class TestSummonTool:
       effort=None,
       fast=False,
       step_id=None,
+      index=None,
     ):
       calls.append({'target': target, 'prompt': prompt, 'timeout': timeout, 'into': into})
       return 'REQ-ID'
@@ -1807,6 +1817,7 @@ class TestSummonTool:
       effort=None,
       fast=False,
       step_id=None,
+      index=None,
       client=None,
     ):
       entered.set()
@@ -1888,6 +1899,7 @@ class TestSummonTool:
       effort=None,
       fast=False,
       step_id=None,
+      index=None,
       client=None,
     ):
       raise summon_module.SummonError('summon denied: no')

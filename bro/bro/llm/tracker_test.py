@@ -16,9 +16,10 @@ class TestNullTracker:
     tracker.start_trail(
       bro='b', llm_spec={}, system_prompt='p', forked_from=None, interactive=True, surface='x'
     )
-    assert tracker.step('reasoning', 'r', turn_index=1) is None
-    tracker.step('end', {'reason': 'ok'})
+    assert tracker.step('user_input', 'hello', turn_index=0) is None
+    tracker.step('llm_call', {'request': {}, 'response': {}}, call_index=1, turn_index=0)
     tracker.end_trail('ok')
+    assert tracker.current_tool_step_id is None
 
 
 class TestTrackerIsABC:
