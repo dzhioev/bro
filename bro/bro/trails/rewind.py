@@ -37,7 +37,7 @@ import base.args
 from base import log, pager
 from base.ansi import Colors, should_color
 from llm.tracker import HTTPStatusError, is_retryable_status
-from trails.client import TrailsClient, default_client
+from trails.client import TrailsClient, default_client, spill_descriptor
 
 __cli_name__ = 'rewind'
 
@@ -46,10 +46,6 @@ _BODY_TRUNCATE_CHARS = 240
 # that any id on screen can be pasted into another rewind command — the server
 # does not accept prefixes
 _STEP_ID_DISPLAY_CHARS = 10
-
-# the leave / resume markers the legacy sync daemon injected into stitched
-# artifacts; historical records keep them and render as dim boundary lines
-_LEGACY_EVENT_TYPE = 'cw-conversation-event'
 
 
 def _format_timestamp(iso: Optional[str]) -> str:
@@ -159,17 +155,6 @@ def _emit(text: str, args: dict) -> None:
 # --- bro rendering ----------------------------------------------------------------
 
 
-def _spilled_body(body: Any) -> Optional[dict]:
-  """the spillover descriptor `{s3, url, size}` if `body` is one; the server
-  inlines smaller bodies and returns this shape above the threshold — surfaced
-  as a one-liner rather than fetched eagerly."""
-  if not isinstance(body, dict):
-    return None
-  if 's3' not in body:
-    return None
-  return body
-
-
 def _format_step_summary(step: dict, colors: Colors) -> str:
   kind = step.get('kind', '?')
   step_id = step.get('step_id', '?')
@@ -185,7 +170,7 @@ def _format_step_summary(step: dict, colors: Colors) -> str:
   if kind == 'end' and isinstance(body, dict) and body.get('reason') == 'terminal':
     # historical end steps predate the terminal→ok rename; map at render
     body = {**body, 'reason': 'ok'}
-  spilled = _spilled_body(body)
+  spilled = spill_descriptor(body)
   if spilled is not None:
     size = spilled.get('size', '?')
     url = spilled.get('url', '-')
@@ -203,7 +188,6 @@ def _format_step_summary(step: dict, colors: Colors) -> str:
     'tokens_out',
     'tokens_reasoning',
     'tokens_cached',
-    'where',
   ):
     if key in step:
       extras_parts.append(f'{colors.cyan}{key}{colors.reset}={step[key]}')
@@ -384,20 +368,6 @@ def _assistant_blocks(content: Any, tool_results: dict[str, str], colors: Colors
   return out
 
 
-def _format_legacy_event(entry: dict, colors: Colors) -> str:
-  """a leave / resume boundary marker the legacy sync daemon injected."""
-  parts = [str(entry.get('subtype', '?')), str(entry.get('sessionId', '?'))[:8]]
-  previous = entry.get('previousSessionId')
-  if isinstance(previous, str) and previous != entry.get('sessionId'):
-    parts.append(f'(from {previous[:8]})')
-  if entry.get('historyVerified') is False:
-    parts.append('· history copy unverified')
-  timestamp = entry.get('timestamp', '')[:19].replace('T', ' ')
-  if len(timestamp) > 0:
-    parts.append(f'· {timestamp}')
-  return f'{colors.dim}── {" ".join(parts)} ──{colors.reset}'
-
-
 def _format_claude_header(trail: dict, colors: Colors) -> str:
   native = trail.get('native', {})
   location = trail.get('location', {})
@@ -476,8 +446,6 @@ class _ClaudeTimeline:
   def render(self, entry: dict) -> list[str]:
     colors = self.colors
     entry_type = entry.get('type')
-    if entry_type == _LEGACY_EVENT_TYPE:
-      return ['\n' + _format_legacy_event(entry, colors)]
     if entry_type not in ('user', 'assistant'):
       return []
     content = entry.get('message', {}).get('content')

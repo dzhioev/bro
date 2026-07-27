@@ -270,10 +270,10 @@ class TrailsClient:
     """return a step body's full content: the body itself when inline, the
     fetched content when it is a spill descriptor (`{'s3', 'url', 'size'}`).
     """
-    url = _spill_url(body)
-    if url is None:
+    descriptor = spill_descriptor(body)
+    if descriptor is None:
       return body
-    return self.fetch_spilled_body(url)
+    return self.fetch_spilled_body(descriptor['url'])
 
   def _get(self, path: str, query: dict[str, str]) -> dict:
     return self._get_pairs(path, list(query.items()))
@@ -371,9 +371,9 @@ _STEP_CANONICAL_FIELDS = frozenset({'trail_id', 'step_id', 'ts', 'kind', 'body'}
 _SPILL_DESCRIPTOR_KEYS = frozenset({'s3', 'url', 'size'})
 
 
-def _spill_url(body: Any) -> Optional[str]:
+def spill_descriptor(body: Any) -> Optional[dict]:
   if isinstance(body, dict) and frozenset(body.keys()) == _SPILL_DESCRIPTOR_KEYS:
-    return body['url']
+    return body
   return None
 
 

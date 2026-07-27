@@ -194,12 +194,14 @@ class TestFormatStepSummary:
         'tool_name': 'add_task',
         'call_id': 'c1',
         'arguments': {'name': 'x'},
+        'where': 'retired-writer',
       },
       NO_COLOR,
     )
     assert out.startswith('S1  ')
     assert 'tool_name=add_task' in out
     assert 'args=' in out
+    assert 'where' not in out
 
   def test_historical_terminal_end_reason_renders_as_ok(self):
     out = _format_step_summary(
@@ -226,6 +228,18 @@ class TestFormatStepSummary:
     )
     assert '<4096 bytes spilled>' in out
     assert 'https://example.com/x' in out
+
+  def test_body_with_only_an_s3_key_is_rendered_inline(self):
+    out = _format_step_summary(
+      {
+        'kind': 'tool_result',
+        'body': {'s3': 'a genuine field'},
+        'ts': '2026-06-07T00:00:00.000000Z',
+      },
+      NO_COLOR,
+    )
+    assert '"s3": "a genuine field"' in out
+    assert 'spilled' not in out
 
 
 class TestBroHeader:

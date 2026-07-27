@@ -22,7 +22,6 @@ bro · claude recorder                       readers
 - `trails/server/backends.py` owns the `BodyBackend` seam and the cached `BroBackend` / `ClaudeBackend` implementations: body open/write, native-record iteration, generalized message projection, and provider-raw usage access.
 - Bro bodies retain the `trail_steps` table and the existing `trails/{id}/steps/{step_id}.json` spillover layout.
 - Claude bodies use `trails/claude/{id}/records.jsonl`; optional launch context uses `trails/claude/{id}/launch-context.json`. Artifacts are complete suffix snapshots replaced atomically with S3 PUT. Native step ids are decimal line indexes; invalid and blank lines remain addressable and are returned with their raw text.
-- Header migrations write reports under `trails/migrations/bro-header-v2/` in the trails bucket.
 
 ## Surfaces
 
@@ -38,16 +37,7 @@ bro · claude recorder                       readers
 
 Bearer auth is mandatory outside an explicit loopback-only `TRAILS_ALLOW_NO_AUTH=1` run. The deployed token lives in SSM `/trails/bearer-token`; `trails/bootstrap.sh` writes the client secret.
 
-The ECS service is defined in `infra/cdk/trails_stack.py`. Both header tables, `trail_steps`, and the bucket use `RETAIN`. The stack keeps the legacy `trails` table beside `trails-v2` for cutover and grants the task role both; `TRAILS_HEADER_TABLE` selects the task's active table at CDK synth, defaulting to `trails-v2`.
-
-Header cutover order:
-
-1. Run `trails/server/prepare_header_table.sh` to add `trails-v2` while the existing image and task definition still use `trails`.
-2. Run `trails-migrate-headers --bucket cw-trails-<account> --dry-run`, inspect the report, then run it without `--dry-run` for the bulk copy.
-3. Freeze new bro writes and wait for every active bro trail to end; no bro run may straddle the switch.
-4. Run the same migration command again for the idempotent delta pass.
-5. Deploy every trails-server task from the landed revision with recording disabled for the deployment run (`--no-trails` / `TRAILS_DISABLED=1`). The default CDK selection points the tasks at `trails-v2`.
-6. Verify `/health`, header reads, a new bro run, native steps, and generalized messages before releasing the write freeze. Keep the legacy table intact.
+The ECS service is defined in `infra/cdk/trails_stack.py`. The header and step tables and the bucket use `RETAIN`.
 
 The historical Claude backfill is done: the 1,119 lifetime trails it produced carry `version = 'legacy-session-log'`, their manifests remain under `trails/migrations/` in the trails bucket, and the legacy `cw-sessions` table and `cw-session-logs-*` bucket they were built from no longer exist.
 
