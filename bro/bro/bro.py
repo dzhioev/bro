@@ -803,8 +803,7 @@ class BaseBro(ABC):
     # the run-start credential gate: the refusal listing every missing secret,
     # or None to start. checked before any machinery (tracker, LLM, live
     # servers) so a missing secret surfaces at start, not mid-run at first use;
-    # each surface delivers it per its mode — run() raises, send() and the
-    # assistant server reply.
+    # each surface delivers it per its mode — run() raises and send() returns it.
     missing = self.missing_secrets()
     if len(missing) == 0:
       return None
