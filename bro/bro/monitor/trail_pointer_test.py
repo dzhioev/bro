@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from session_log import trail_pointer
+from monitor import trail_pointer
 
 
 class TestPath:

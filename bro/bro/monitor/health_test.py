@@ -1,6 +1,6 @@
 import json
 
-from session_log import health
+from monitor import health
 
 
 def _redirect(monkeypatch, tmp_path):

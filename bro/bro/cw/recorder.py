@@ -1,13 +1,13 @@
 """the session recorder daemon the in-place runner starts next to claude.
 
 Every session flavor gets continuous transcript recording to trails from one
-mechanism: the runner spawns `session-log.recorder` before launching claude and
-stops it after claude exits — the stop is the daemon's final snapshot and trail
-end (session_log/recorder.py owns the trail model). Deliberately not a Claude
+mechanism: the runner spawns `trails.record.claude` before launching claude and
+stops it after claude exits — the stop is the daemon's final append and trail
+end (`trails/record/claude.py` owns the trail model). Deliberately not a Claude
 Code hook: `--raw` sessions run `claude --bare`, which runs no hooks at all.
 
 The daemon's stderr goes to `<claude config dir>/session-recorder.log`; its
-durable failure signal is the health file (session_log/health.py) surfaced by
+durable failure signal is the health file (`monitor/health.py`) surfaced by
 the statusLine and `cw banner`.
 """
 
@@ -28,7 +28,7 @@ _STOP_TIMEOUT = 60.0
 
 @dataclass
 class _SessionRecorder:
-  """a session-owned `session-log.recorder` daemon."""
+  """a session-owned `trails.record.claude` daemon."""
 
   process: subprocess.Popen
   log_path: Path
@@ -60,7 +60,7 @@ def _start_session_recorder(
   projects_dir = _claude_projects_dir(workspace)
   log_path = _claude_config_dir() / 'session-recorder.log'
   argv = [
-    'session-log.recorder',
+    'trails.record.claude',
     '--workspace',
     name,
     '--projects-dir',

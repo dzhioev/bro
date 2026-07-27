@@ -22,7 +22,7 @@ from cw.broxy import _start_session_broxy
 from cw.claude_argv import build_claude_launch
 from cw.claude_auth import _apply_claude_auth
 from cw.claude_config import _claude_projects_dir, _latest_jsonl, _provision_host_claude_dir
-from cw.constants import _CW_MODEL
+from cw.constants import _CW_MODEL, CW_RESUMED_SESSION_ENV
 from cw.mcp import _start_session_mcp_server
 from cw.recorder import _start_session_recorder
 from cw.session_context import (
@@ -30,7 +30,6 @@ from cw.session_context import (
   build_session_context,
   encode_session_context,
 )
-from session_log.environment import CW_RESUMED_SESSION_ENV
 from workspace.git import git_out
 from workspace.paths import in_container, project_root
 

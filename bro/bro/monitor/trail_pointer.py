@@ -4,28 +4,27 @@ The recorder daemon publishes the trail id it is currently recording so summon
 control can stamp the session's summoned children with `summoned_by.trail_id`.
 The file lives under the session's claude config dir — host-readable in both
 session modes (a container session's dir is the mounted
-`~/.claude/cw-sessions/<name>`), the same placement as the sync-health file.
+`~/.claude/cw-sessions/<name>`), the same placement as the recording-health file.
 `cw` derives the host-side path and threads it to the broker root
 (`bro/launch/summon_control.py` reads it per summon request); before the
 recorder adopts a transcript the file is absent and a summon degrades to no
 provenance pointer.
 
-Stdlib-only on purpose, like `session_log.health`: the host-side reader must
-not pull in boto3.
+Stdlib-only on purpose: the host-side reader must not pull in service
+dependencies.
 """
 
 import json
-import os
 from pathlib import Path
 from typing import Optional
+
+from monitor import claude_config_dir
 
 FILENAME = 'current-trail.json'
 
 
 def path() -> Path:
-  config_dir = os.environ.get('CLAUDE_CONFIG_DIR')
-  root = Path(config_dir) if config_dir is not None else Path.home() / '.claude'
-  return root / FILENAME
+  return claude_config_dir() / FILENAME
 
 
 def publish(trail_id: str) -> None:

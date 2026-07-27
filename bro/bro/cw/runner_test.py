@@ -6,9 +6,9 @@ from unittest.mock import MagicMock, patch
 import cw.runner
 from base import credentials
 from cw.claude_argv import ClaudeLaunch
+from cw.constants import CW_RESUMED_SESSION_ENV
 from cw.mcp import MCPEndpoint
 from cw.session_test import _spec
-from session_log.environment import CW_RESUMED_SESSION_ENV
 from workspace.project import ProjectConfig
 
 

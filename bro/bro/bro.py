@@ -20,7 +20,7 @@ from llm.llm import EFFORT_LEVELS, LLM, LLMSpec
 from llm.observer import BoringRenderer, NullObserver, Observer
 from llm.tracker import EndReason, NullTracker, ToolStepSource, Tracker
 from prompts import get_prompt, hold_fragment
-from trails.client import HTTPTracker
+from trails.record.bro import Recorder
 
 DEFAULT_LLM_SPEC: LLMSpec = llm.llms.chat_gpt.LLMSpec()
 
@@ -93,7 +93,7 @@ def _default_factory() -> Tracker:
       'trails: secret not found; run trails/bootstrap.sh to enable '
       'recording, or pass tracker=NullTracker() to skip explicitly'
     ) from e
-  return HTTPTracker(config['base_url'], config['token'])
+  return Recorder(config['base_url'], config['token'])
 
 
 # default factory for the per-run `Tracker` an unconfigured bro uses. swap with

@@ -2,7 +2,8 @@ import io
 import json
 import time
 
-from session_log import health, statusline
+from cw import statusline
+from monitor import health
 
 
 def _run(monkeypatch, tmp_path, status=None, summon_status=None) -> str:

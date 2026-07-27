@@ -6,9 +6,9 @@ from typing import Any, Optional
 
 import pytest
 
-from session_log import trail_pointer
-from session_log.environment import CW_RESUMED_SESSION_ENV
-from session_log.recorder import Recorder, RecorderState, _fork_cuts, _state_path
+from cw.constants import CW_RESUMED_SESSION_ENV
+from monitor import trail_pointer
+from trails.record.claude import Recorder, RecorderState, _fork_cuts, _state_path
 
 
 class FakeTrails:
@@ -216,7 +216,7 @@ def environment(tmp_path: Path, monkeypatch):
   monkeypatch.delenv('CW_HOST', raising=False)
   monkeypatch.delenv('CW_HOST_WORKSPACE', raising=False)
   # the suite itself may run inside a container; pin the probe to host mode
-  monkeypatch.setattr('session_log.recorder._in_container', lambda: False)
+  monkeypatch.setattr('trails.record.claude._in_container', lambda: False)
   return projects
 
 
@@ -338,7 +338,8 @@ class TestAppends:
     recorder.tick()
     assert recorder.tick() is False
     assert fake.keepalives == []  # inside the idle window: no traffic
-    recorder._last_write_monotonic = time.monotonic() - 120.0
+    assert recorder._recording is not None
+    recorder._recording._last_write_monotonic = time.monotonic() - 120.0
     assert recorder.tick() is False
     assert fake.keepalives == ['T1']
 

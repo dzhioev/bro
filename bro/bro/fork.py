@@ -196,7 +196,7 @@ def fork(
   `record=False` pins the new bro to a `NullTracker` — handy for one-shot
   exploration where the fork's trail is not worth keeping. `record=True` (the
   default) uses the explicit `tracker` if given, otherwise the bro's default
-  factory (production: `HTTPTracker`; tests: `NullTracker` via `conftest.py`).
+  factory (the production default; tests use `NullTracker` via `conftest.py`).
   `surface` labels the driving program on the new trail; every caller supplies
   it explicitly.
   """

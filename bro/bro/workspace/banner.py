@@ -3,7 +3,7 @@ import subprocess
 from dataclasses import dataclass
 from typing import Optional
 
-from session_log import health
+from monitor import health
 from workspace import paths
 from workspace.model import format_ref
 

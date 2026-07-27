@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 """record a Claude Code session's transcript to the trails service.
 
 Claude Code writes one jsonl *segment* per session id under the project's
@@ -46,7 +45,7 @@ declaration falls through to inference, and failed anchors open a fresh root.
 The append endpoint classifies records and folds usage, turns, harness version,
 and claude's generated title into the header. Quiet ticks keep the trail alive
 for the server's lost-sweep. The current trail id is published to the session's
-trail pointer (`session_log/trail_pointer.py`) for summon provenance.
+trail pointer (`monitor/trail_pointer.py`) for summon provenance.
 
 The daemon is started by the in-place session runner (`cw/recorder.py`) next to
 claude for every session flavor and finalizes on SIGTERM — one last append,
@@ -67,24 +66,19 @@ from typing import Any, Optional
 
 from base import configs, credentials, log
 from base.args import Parser
-from session_log import health, trail_pointer
-from session_log.environment import CW_RESUMED_SESSION_ENV
+from cw.constants import CW_RESUMED_SESSION_ENV
+from monitor import claude_config_dir, health, trail_pointer
 from trails.client import HTTPStatusError, TrailsClient, default_client
 from trails.lineage import walk_header_chain
 from trails.model import UUID_LOOKUP_LIMIT
+from trails.record.spine import Recording
 from trails.server import storage_types
 from trails.server.backends import CLAUDE_ADAPTER
-
-__cli_name__ = 'session-log.recorder'
 
 # how many of the parent trail's trailing record uuids may end a verified fork
 # copy: the copy drops ephemeral records, so the very last uuids can be missing
 # even when the history copy is intact
 _VERIFY_TAIL_UUIDS = 20
-
-# quiet ticks send a keepalive instead of an append, throttled to this idle
-# interval — well inside the server's lost-sweep threshold
-_KEEPALIVE_INTERVAL_SECONDS = 60.0
 
 # the bro service `raise` tool's wire name in a claude session's transcript
 _RAISE_TOOL = 'mcp__bro__raise'
@@ -338,11 +332,11 @@ class Recorder:
     self.state_path = _state_path(projects_dir)
     self.previous: Optional[RecorderState] = RecorderState.load(self.state_path)
     self.active: Optional[RecorderState] = None
+    self._recording: Optional[Recording] = None
     self._consumed: set[str] = set()
     self._recorded_signature: Optional[tuple[str, int, int]] = None
     self._active_signature: Optional[tuple[str, int, int]] = None
     self._active_byte_extent = 0
-    self._last_write_monotonic = time.monotonic()
     # a stale pointer from a previous lifetime must not attribute this
     # session's summons to an ended trail
     trail_pointer.clear()
@@ -680,11 +674,12 @@ class Recorder:
     context = _launch_context()
     if context is not None:
       payload['body']['launch_context'] = context
-    trail_id = self.client.create_trail(payload)['id']
+    recording = Recording.create(self.client, payload)
+    trail_id = recording.trail_id
     self.active = RecorderState(trail_id=trail_id, segment=segment, chunks=chunks)
+    self._recording = recording
     self._recorded_signature = None
     self._active_byte_extent = 0
-    self._last_write_monotonic = time.monotonic()
     self.active.save(self.state_path)
     trail_pointer.publish(trail_id)
     if forked_from is None:
@@ -745,17 +740,16 @@ class Recorder:
       self._recorded_signature = signature
       self._keepalive_if_idle()
       return False
-    expected_extent = offset + len(records)
-    response = self.client.append_records(active.trail_id, offset, records)
-    extent = response.get('extent')
-    if not isinstance(extent, int) or isinstance(extent, bool) or extent != expected_extent:
+    recording = self._recording
+    assert recording is not None
+    if recording.extent != offset:
       raise RuntimeError(
-        f'append for trail {active.trail_id} returned extent {extent!r}, expected {expected_extent}'
+        f'local extent for trail {active.trail_id} is {recording.extent}, expected {offset}'
       )
+    recording.append(records)
     active.chunks = chunks
     self._active_byte_extent = byte_extent
     self._recorded_signature = signature
-    self._last_write_monotonic = time.monotonic()
     active.save(self.state_path)
     log.info(
       'recorded trail %s (%d lines, segment %s)',
@@ -766,12 +760,8 @@ class Recorder:
     return True
 
   def _keepalive_if_idle(self) -> None:
-    if self.active is None:
-      return
-    if time.monotonic() - self._last_write_monotonic < _KEEPALIVE_INTERVAL_SECONDS:
-      return
-    self.client.keepalive(self.active.trail_id)
-    self._last_write_monotonic = time.monotonic()
+    if self._recording is not None:
+      self._recording.keepalive_if_idle()
 
   def _maybe_transition(self, new_path: Path) -> bool:
     active = self.active
@@ -809,19 +799,21 @@ class Recorder:
       if self.active is None:
         return
     active = self.active
-    assert active is not None
+    recording = self._recording
+    assert active is not None and recording is not None
     raised = _terminal_raise_reason(
       self.client.iter_messages(active.trail_id, types={'tool_call', 'user_input'})
     )
     if raised is not None:
       detail = raised if len(raised) > 0 else 'raise reason unavailable'
-      self.client.end_trail(active.trail_id, 'raised', detail=detail)
+      recording.end('raised', detail=detail)
     else:
-      self.client.end_trail(active.trail_id, 'ok')
+      recording.end('ok')
     log.info('trail %s ended (%s)', active.trail_id, 'raised' if raised is not None else 'ok')
     self._consumed.add(active.segment)
     self.previous = active
     self.active = None
+    self._recording = None
     self._recorded_signature = None
     self._active_byte_extent = 0
     trail_pointer.clear()
@@ -867,9 +859,7 @@ def _projects_dir_from_environment() -> Path:
   """a host cw session points CLAUDE_CONFIG_DIR at its private per-session
   state dir (reference/cw.md, "Host claude-state isolation"); its transcripts
   live under that dir's projects/, not the host ~/.claude's."""
-  config_dir = os.environ.get('CLAUDE_CONFIG_DIR')
-  claude_dir = Path(config_dir) if config_dir is not None else Path.home() / '.claude'
-  projects_root = claude_dir / 'projects'
+  projects_root = claude_config_dir() / 'projects'
   pwd = os.environ.get('PWD')
   cwd = Path(pwd if pwd is not None else os.getcwd()).resolve()
   for candidate in [cwd, *cwd.parents]:

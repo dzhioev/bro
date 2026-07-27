@@ -1,10 +1,9 @@
 """durable health state for session recording.
 
-`session-log.recorder` writes this file after every attempt;
-`session-log.statusline` and `cw banner` read it (no network) to warn when
-recording is failing. Without it a broken recorder is silent — the daemon's
-stderr goes to a per-session log file (`<claude config dir>/session-recorder.log`)
-nobody watches live.
+The Claude recorder writes this file after every attempt; `cw.statusline` and
+`cw banner` read it without a network call to warn when recording is failing.
+Without it a broken recorder is silent — the daemon's stderr goes to a
+per-session log file (`<claude config dir>/session-recorder.log`) nobody watches live.
 
 The file lives under the session's claude config dir (`CLAUDE_CONFIG_DIR` when
 set — every cw session points it at private per-session state), so concurrent
@@ -16,18 +15,17 @@ stay dependency-free.
 
 import datetime
 import json
-import os
 from pathlib import Path
 from typing import Optional
+
+from monitor import claude_config_dir
 
 # cap the stored error so a verbose boto traceback can't bloat the file
 _MAX_ERROR = 500
 
 
 def health_path() -> Path:
-  config_dir = os.environ.get('CLAUDE_CONFIG_DIR')
-  root = Path(config_dir) if config_dir is not None else Path.home() / '.claude'
-  return root / 'session-recorder-health.json'
+  return claude_config_dir() / 'session-recorder-health.json'
 
 
 def write(status: str, error: Optional[str] = None) -> None:

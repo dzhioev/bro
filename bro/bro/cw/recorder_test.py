@@ -22,7 +22,7 @@ class TestStart:
     recorder, popen, config_dir, projects_dir = self._start(tmp_path)
     assert recorder is not None
     argv = popen.call_args.args[0]
-    assert argv[0] == 'session-log.recorder'
+    assert argv[0] == 'trails.record.claude'
     assert argv[argv.index('--workspace') + 1] == 'w'
     assert argv[argv.index('--projects-dir') + 1] == str(projects_dir)
     assert argv[argv.index('--llm') + 1] == '{"model": "m"}'
@@ -49,7 +49,7 @@ class TestStop:
 
   def test_kills_when_the_final_snapshot_hangs(self, tmp_path):
     process = MagicMock()
-    process.wait.side_effect = [subprocess.TimeoutExpired('session-log.recorder', 1), None]
+    process.wait.side_effect = [subprocess.TimeoutExpired('trails.record.claude', 1), None]
     _SessionRecorder(process, tmp_path / 'recorder.log').stop()
     process.kill.assert_called_once()
     assert process.wait.call_count == 2

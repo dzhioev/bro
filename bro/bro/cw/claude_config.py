@@ -12,14 +12,13 @@ isolation".
 """
 
 import json
-import os
 import shutil
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Optional
 
 from base import log
-from session_log import trail_pointer
+from monitor import claude_config_dir, trail_pointer
 from workspace.model import ContainerWorkspace, Workspace
 
 
@@ -32,7 +31,7 @@ def _session_claude_dir(name: str) -> Path:
 def session_trail_pointer(name: str) -> Path:
   """the host-side path of the session's current-trail pointer — where the
   recorder publishes the trail id summon control attributes the session's
-  children to (`session_log/trail_pointer.py` owns the file)."""
+  children to (`monitor/trail_pointer.py` owns the file)."""
   return _session_claude_dir(name) / trail_pointer.FILENAME
 
 
@@ -43,13 +42,8 @@ def _encode_claude_path(path: Path) -> str:
 
 
 def _claude_config_dir() -> Path:
-  """the claude config root of the current process's session: CLAUDE_CONFIG_DIR
-  when set (a host session points it at its private per-session state dir), else
-  the default ~/.claude (a container session's, via the cw-sessions mount)."""
-  override = os.environ.get('CLAUDE_CONFIG_DIR')
-  if override is not None:
-    return Path(override)
-  return Path.home() / '.claude'
+  """the Claude config root of the current process's session."""
+  return claude_config_dir()
 
 
 def _claude_projects_dir(workspace: Path) -> Path:

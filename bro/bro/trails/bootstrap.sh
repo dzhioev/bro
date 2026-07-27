@@ -5,7 +5,7 @@ source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../setup/prelude.sh"
 # reads the bearer token from SSM (/trails/bearer-token), derives the trails
 # server base URL from the `infra` secret's delegated_subdomain, and writes
 # ~/.ppp/trails.json. Once this file exists, BaseBro defaults to
-# HTTPTracker via _default_tracker_factory and every bro run gets recorded
+# the default bro recorder factory and every bro run gets recorded
 # end-to-end against the deployed trails-server.
 #
 # prerequisites:

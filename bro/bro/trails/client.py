@@ -2,8 +2,6 @@
 
 `TrailsClient` owns the persistent authenticated HTTPS transport for paged
 headers, steps, messages, launch context, and every recording endpoint.
-`HTTPTracker` adapts bro's `llm.tracker.Tracker` calls onto that client while
-preserving the streaming writer's endpoint-specific retry and liveness policy.
 
 `fetch_recorded_trail` rehydrates the shared `trails.model` records consumed by
 `bro.fork`. It follows spill descriptors and inlines their full bodies because
@@ -12,27 +10,23 @@ fork replay needs the complete provider response rather than a presigned URL.
 
 import http.client
 import json
-import logging
 import ssl
 import threading
 import time
 import urllib.request
 from collections.abc import Iterator
-from dataclasses import asdict
 from types import TracebackType
 from typing import Any, Optional
 from urllib.parse import urlencode, urlparse
 
-from base import configs, credentials
-from llm.tracker import EndReason, StepKind, Tracker
-from trails.model import ForkedFrom, RecordedTrail, Step, Trail, spill_descriptor, tools_sha256
+from base import credentials
+from trails.model import ForkedFrom, RecordedTrail, Step, Trail, spill_descriptor
 
 DEFAULT_LIST_PAGE_SIZE = 100
 DEFAULT_STEPS_PAGE_SIZE = 200
 
 _DEFAULT_RETRY_DELAYS_SECONDS = (0.0,)
-_STEP_RETRY_DELAYS_SECONDS = (0.1, 0.5, 2.0)
-KEEPALIVE_INTERVAL_SECONDS = 60.0
+RECORD_RETRY_DELAYS_SECONDS = (0.1, 0.5, 2.0)
 
 
 class HTTPStatusError(Exception):
@@ -236,7 +230,7 @@ class TrailsClient:
       'POST',
       f'/v1/trails/{trail_id}/steps',
       payload,
-      retry_delays=_STEP_RETRY_DELAYS_SECONDS,
+      retry_delays=RECORD_RETRY_DELAYS_SECONDS,
     )
 
   def append_records(
@@ -254,7 +248,7 @@ class TrailsClient:
       'POST',
       f'/v1/trails/{trail_id}/records',
       payload,
-      retry_delays=_STEP_RETRY_DELAYS_SECONDS,
+      retry_delays=RECORD_RETRY_DELAYS_SECONDS,
     )
 
   def recompute(self, trail_id: str) -> dict:
@@ -429,147 +423,8 @@ class TrailsClient:
     self._connection = None
 
 
-class HTTPTracker(Tracker):
-  """Bro event adapter over the shared trails service client."""
-
-  def __init__(self, base_url: str, token: str, *, timeout: float = 5.0):
-    self._client = TrailsClient(base_url, token, timeout=timeout)
-    self._trail_id: Optional[str] = None
-    self._offset: Optional[int] = None
-    self._lock = threading.RLock()
-    self._last_write_monotonic = time.monotonic()
-    self._keepalive_stop: Optional[threading.Event] = None
-    self._keepalive_thread: Optional[threading.Thread] = None
-
-  def start_trail(
-    self,
-    bro: str,
-    llm_spec: dict,
-    system_prompt: str,
-    forked_from: Optional[Any],
-    interactive: bool,
-    surface: str,
-    hold: str = 'unattended',
-    summoned_by: Optional[dict[str, Any]] = None,
-  ) -> str:
-    if forked_from is not None and not isinstance(forked_from, ForkedFrom):
-      raise TypeError('forked_from must be a ForkedFrom')
-    payload = {
-      'harness': 'bro',
-      'bro': bro,
-      'version': configs.VERSION,
-      'native': {'llm': llm_spec},
-      'body': {'records': [{'kind': 'system_prompt', 'body': system_prompt, 'turn_index': 0}]},
-      'forked_from': (
-        {key: value for key, value in asdict(forked_from).items() if value is not None}
-        if forked_from is not None
-        else None
-      ),
-      'interactive': interactive,
-      'surface': surface,
-      'hold': hold,
-    }
-    if summoned_by is not None:
-      payload['summoned_by'] = summoned_by
-    response = self._client.create_trail(payload)
-    trail_id: str = response['id']
-    with self._lock:
-      self._trail_id = trail_id
-      self._offset = 1
-      self._last_write_monotonic = time.monotonic()
-    self._start_keepalive()
-    return trail_id
-
-  def step(self, kind: StepKind, body: Any, **extras: Any) -> Optional[str | int]:
-    record = {'kind': kind, 'body': body, **extras}
-    tool_blobs: Optional[dict[str, Any]] = None
-    if kind == 'llm_call':
-      if not isinstance(body, dict):
-        raise ValueError('llm_call body must be an object')
-      request = body.get('request')
-      if not isinstance(request, dict) or not isinstance(request.get('tools'), list):
-        raise ValueError('llm_call body.request.tools must be a list')
-      tools = request['tools']
-      sha256 = tools_sha256(tools)
-      request_without_tools = {key: value for key, value in request.items() if key != 'tools'}
-      record['body'] = {**body, 'request': request_without_tools}
-      record['tools_sha256'] = sha256
-      tool_blobs = {sha256: tools}
-
-    with self._lock:
-      trail_id = self._trail_id
-      offset = self._offset
-      if trail_id is None or offset is None:
-        raise RuntimeError('step() called before start_trail()')
-      response = self._client.append_records(trail_id, offset, [record], tools=tool_blobs)
-      extent = response.get('extent')
-      if extent != offset + 1:
-        raise RuntimeError(f'append returned extent {extent!r}, expected {offset + 1}')
-      self._offset = extent
-      self._last_write_monotonic = time.monotonic()
-      return offset
-
-  def end_trail(self, reason: EndReason, detail: Optional[str] = None) -> None:
-    with self._lock:
-      trail_id = self._trail_id
-    if trail_id is None:
-      return
-    self._stop_keepalive()
-    try:
-      self._client.end_trail(
-        trail_id,
-        reason,
-        detail,
-        retry_delays=_STEP_RETRY_DELAYS_SECONDS,
-      )
-    except Exception as exception:
-      logging.warning('trails end_trail failed for trail %s: %s', trail_id, exception)
-    with self._lock:
-      self._trail_id = None
-      self._offset = None
-    self._client.close()
-
-  def close(self) -> None:
-    self._stop_keepalive()
-    self._client.close()
-
-  def _start_keepalive(self) -> None:
-    stop = threading.Event()
-    self._keepalive_stop = stop
-    self._keepalive_thread = threading.Thread(
-      target=self._keepalive_loop,
-      args=(stop,),
-      name=f'trails-keepalive-{self._trail_id}',
-      daemon=True,
-    )
-    self._keepalive_thread.start()
-
-  def _stop_keepalive(self) -> None:
-    if self._keepalive_stop is not None:
-      self._keepalive_stop.set()
-      self._keepalive_stop = None
-
-  def _keepalive_loop(self, stop: threading.Event) -> None:
-    while not stop.wait(KEEPALIVE_INTERVAL_SECONDS):
-      with self._lock:
-        trail_id = self._trail_id
-        idle_seconds = time.monotonic() - self._last_write_monotonic
-      if trail_id is None:
-        return
-      if idle_seconds < KEEPALIVE_INTERVAL_SECONDS:
-        continue
-      try:
-        self._client.keepalive(trail_id, retry_delays=(0.5,))
-        with self._lock:
-          self._last_write_monotonic = time.monotonic()
-      except Exception as exception:
-        logging.warning('trails keepalive failed for trail %s: %s', trail_id, exception)
-
-
 def default_client() -> TrailsClient:
-  """build a `TrailsClient` from the `trails` secret — the same credential the
-  in-bro `HTTPTracker` reads, so the read and write sides share one source.
-  """
+  """build a `TrailsClient` from the shared `trails` secret."""
   config = credentials.get_json('trails')
   return TrailsClient(config['base_url'], config['token'])
 

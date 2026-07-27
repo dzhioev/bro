@@ -15,7 +15,7 @@ Two layers, both computed per broker root:
   those feed: a host-side log line per event, an append-only JSONL audit file
   (the out-of-band trace a session's own narrative cannot suppress; every entry
   names the actual summoner), and the summon-status file the session's
-  statusLine renders (`session-log.statusline` reads it via the
+  statusLine renders (`cw.statusline` reads it via the
   `CW_SUMMON_STATUS` env var each launch surface points at it).
 
 Authorization is per-peer. The root follows the launch-computed effective list
@@ -27,7 +27,7 @@ topology plus this control's own spawn records; nothing is read from the wire),
 and a peer it cannot attribute is denied. Provenance rides the same attribution:
 a spawned child's `summoned_by` names the requester's trail — the root's from the
 session's current-trail pointer (the claude recorder publishes it;
-`session_log/trail_pointer.py`) or from the root run's `started` event, a summoned
+`monitor/trail_pointer.py`) or from the root run's `started` event, a summoned
 child's from its spawn record — plus the requester's own `tool_call` step id when
 the request payload carries one. Summons therefore chain transitively wherever
 the seeds chain, bounded by `_MAX_SUMMON_DEPTH` — seeds are declared per-bro, so
@@ -291,7 +291,7 @@ class SummonControl:
     self._status_file = status_file
     self._audit_file = audit_file
     # the root's trail attribution source: a claude session's recorder publishes
-    # its current trail id at `trail_pointer` (session_log/trail_pointer.py);
+    # its current trail id at `trail_pointer` (monitor/trail_pointer.py);
     # a bro-run root announces its trail in the `started` lifecycle event,
     # noted via note_root_trail
     self._trail_pointer = trail_pointer
@@ -480,7 +480,7 @@ class SummonControl:
     # early-launch race before transcript adoption, or no recorder at all)
     # degrades to no pointer, never a legacy-shaped one.
     if self._trail_pointer is not None:
-      from session_log.trail_pointer import read
+      from monitor.trail_pointer import read
 
       trail_id = read(self._trail_pointer)
       return {'trail_id': trail_id} if trail_id is not None else None
