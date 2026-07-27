@@ -31,6 +31,8 @@ bro · claude recorder                       readers
 
 The legacy sources remain readable until the final retirement stage: bro rows in `trail_steps`, and Claude JSONL at `trails/claude/{id}/records.jsonl`. Reads select `trail_steps_v2` only after the header's migrated marker is set, so body migrations can write and verify a complete target before switching one trail.
 
+`trails-migrate-claude-rows migrate` moves ended Claude artifacts without a write freeze; live trails remain on the compatibility path. It writes each source manifest before target rows or spill objects, verifies joined-line count/hash and aggregates before switching the header marker last, and retains both legacy artifacts and launch-context objects. `verify` repeats those checks store-wide and writes its report under `trails/migrations/claude-rows/` in the trails bucket.
+
 The legacy `POST /steps`, `PUT /artifact`, and client aggregate updates accept only unmigrated trails. They remain as compatibility writers while live clients move to `POST /records`; migrated trails reject them, and universal headers accept no client-written usage or turn totals.
 
 ## Surfaces

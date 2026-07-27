@@ -6,6 +6,7 @@ from typing import Any, Optional
 import pytest
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 
+from trails.migrations import claude_rows
 from trails.model import MESSAGE_TYPES, tools_sha256
 from trails.server import backends, storage, storage_types
 
@@ -21,16 +22,32 @@ def _deserialize(item: dict) -> dict:
   return {key: _deserializer.deserialize(value) for key, value in item.items()}
 
 
+class FakeClientError(Exception):
+  def __init__(self, response: dict, operation: str):
+    super().__init__(f'{operation}: {response}')
+    self.response = response
+
+
 class FakeS3:
+  class exceptions:
+    ClientError = FakeClientError
+
   def __init__(self):
     self.objects: dict[str, bytes] = {}
     self.put_counts: dict[str, int] = {}
 
-  def put_object(self, *, Key, Body, **_):
+  def put_object(self, *, Key, Body, IfNoneMatch=None, **_):
+    if IfNoneMatch == '*' and Key in self.objects:
+      raise FakeClientError(
+        {'Error': {'Code': 'PreconditionFailed', 'Message': 'already exists'}},
+        'PutObject',
+      )
     self.objects[Key] = Body if isinstance(Body, bytes) else Body.encode()
     self.put_counts[Key] = self.put_counts.get(Key, 0) + 1
 
   def get_object(self, *, Key, **_):
+    if Key not in self.objects:
+      raise FakeClientError({'Error': {'Code': 'NoSuchKey', 'Message': 'missing'}}, 'GetObject')
     return {'Body': io.BytesIO(self.objects[Key])}
 
   def head_object(self, *, Key, **_):
@@ -119,6 +136,17 @@ class FakeDynamo:
         and item.get(self._field('#body_storage', operation)) == values[':storage']
         and item.get(self._field('#extent', operation)) == values[':expected_extent']
       )
+    if expression == (
+      '#harness = :claude AND attribute_not_exists(#body_storage) '
+      'AND #native = :source_native AND #end = :source_end'
+    ):
+      return (
+        item is not None
+        and item.get(self._field('#harness', operation)) == values[':claude']
+        and self._field('#body_storage', operation) not in item
+        and item.get(self._field('#native', operation)) == values[':source_native']
+        and item.get(self._field('#end', operation)) == values[':source_end']
+      )
     raise AssertionError(f'unsupported condition: {expression}')
 
   @staticmethod
@@ -180,6 +208,13 @@ class FakeDynamo:
   def update_item(self, *, TableName, **operation):
     self._apply_update(TableName, operation)
     return {}
+
+  def batch_write_item(self, *, RequestItems):
+    for table, requests in RequestItems.items():
+      for request in requests:
+        operation = request['PutRequest']
+        self.put_item(TableName=table, Item=operation['Item'])
+    return {'UnprocessedItems': {}}
 
   def transact_write_items(self, *, TransactItems):
     snapshot = copy.deepcopy(self.tables)
@@ -714,3 +749,116 @@ async def test_list_and_pointer_index_stay_available(components):
     limit=10,
   )
   assert [trail['id'] for trail in page['trails']] == [child]
+
+
+def _claude_rows_migration(store, dynamo, s3) -> claude_rows.ClaudeRowsMigration:
+  return claude_rows.ClaudeRowsMigration(
+    store=store,
+    dynamo=dynamo,
+    s3=s3,
+    trails_table='headers',
+    steps_table='universal',
+    bucket='bucket',
+  )
+
+
+@pytest.mark.asyncio
+async def test_claude_row_migration_manifests_before_writes_and_retains_sources(
+  components, monkeypatch
+):
+  store, dynamo, s3 = components
+  trail_id = await _create_claude(store, universal=False)
+  large_raw_line = 'x' * storage.SPILLOVER_THRESHOLD_BYTES
+  artifact = _claude_assistant('message-1', 'answer', uuid='uuid-1') + f'\n{large_raw_line}\n\n'
+  await store.replace_artifact(trail_id, artifact, {'harness_version': '2.1.0'})
+  await store.end_trail(trail_id=trail_id, reason='ok', detail=None)
+  legacy_context_key = f'trails/claude/{trail_id}/launch-context.json'
+  legacy_context = b'{"workspace":"migration-test"}'
+  s3.put_object(Key=legacy_context_key, Body=legacy_context)
+  dynamo.headers[trail_id]['native']['context_s3'] = legacy_context_key
+  artifact_key = storage_types.legacy_claude_artifact_key(trail_id)
+  original_artifact = s3.objects[artifact_key]
+
+  events: list[str] = []
+  original_put_object = s3.put_object
+  original_batch_write = dynamo.batch_write_item
+
+  def tracked_put_object(**kwargs):
+    events.append(f's3:{kwargs["Key"]}')
+    return original_put_object(**kwargs)
+
+  def tracked_batch_write(**kwargs):
+    events.append('dynamo:rows')
+    return original_batch_write(**kwargs)
+
+  monkeypatch.setattr(s3, 'put_object', tracked_put_object)
+  monkeypatch.setattr(dynamo, 'batch_write_item', tracked_batch_write)
+
+  result = await _claude_rows_migration(store, dynamo, s3).migrate(trail_id=trail_id, limit=None)
+
+  manifest_key = claude_rows._manifest_key(trail_id)
+  assert result['migrated'] == [trail_id]
+  target_spill = next(
+    event for event in events if event.startswith(f's3:trails/steps/{trail_id}/1-')
+  )
+  assert (
+    events.index(f's3:{manifest_key}') < events.index(target_spill) < events.index('dynamo:rows')
+  )
+  assert s3.objects[artifact_key] == original_artifact
+  migrated_steps = (await store.query_steps(trail_id, after=None, limit=10))['steps']
+  assert [step['body'] for step in migrated_steps] == [
+    artifact.split('\n')[0],
+    large_raw_line,
+    '',
+  ]
+  header = dynamo.headers[trail_id]
+  assert header['body_storage'] == storage_types.UNIVERSAL_BODY_STORAGE
+  assert header['extent'] == 3
+  assert header['context_s3'] == storage_types.context_key(trail_id)
+  assert 'context_s3' not in header['native']
+  assert s3.objects[storage_types.context_key(trail_id)] == legacy_context
+  manifest = json.loads(s3.objects[manifest_key])
+  assert manifest['status'] == 'migrated_verified'
+  assert manifest['source']['line_count'] == manifest['target']['row_count'] == 3
+  assert manifest['source']['joined_sha256'] == manifest['target']['joined_sha256']
+  assert manifest['verification']['source_retained'] is True
+  assert (await store.check(trail_id))['ok'] is True
+
+
+@pytest.mark.asyncio
+async def test_claude_row_migration_resumes_after_target_verification(components, monkeypatch):
+  store, dynamo, s3 = components
+  trail_id = await _create_claude(store, universal=False)
+  artifact = _claude_assistant('message-1', 'answer', uuid='uuid-1') + '\n'
+  await store.replace_artifact(trail_id, artifact, {'harness_version': '2.1.0'})
+  await store.end_trail(trail_id=trail_id, reason='ok', detail=None)
+  interrupted = _claude_rows_migration(store, dynamo, s3)
+
+  async def fail_before_switch(*_args, **_kwargs):
+    raise RuntimeError('interrupted before marker')
+
+  monkeypatch.setattr(interrupted, '_switch_header', fail_before_switch)
+  with pytest.raises(RuntimeError, match='interrupted before marker'):
+    await interrupted.migrate(trail_id=trail_id, limit=None)
+
+  assert 'body_storage' not in dynamo.headers[trail_id]
+  assert (trail_id, 0) in dynamo.universal_steps
+  manifest_key = claude_rows._manifest_key(trail_id)
+  assert json.loads(s3.objects[manifest_key])['status'] == 'target_verified'
+
+  resumed = await _claude_rows_migration(store, dynamo, s3).migrate(trail_id=trail_id, limit=None)
+  assert resumed['migrated'] == [trail_id]
+  assert dynamo.headers[trail_id]['body_storage'] == storage_types.UNIVERSAL_BODY_STORAGE
+  assert json.loads(s3.objects[manifest_key])['status'] == 'migrated_verified'
+
+
+@pytest.mark.asyncio
+async def test_claude_row_migration_skips_live_trails(components):
+  store, dynamo, s3 = components
+  trail_id = await _create_claude(store, universal=False)
+
+  result = await _claude_rows_migration(store, dynamo, s3).migrate(trail_id=trail_id, limit=None)
+
+  assert result['skipped_live'] == [trail_id]
+  assert len(dynamo.universal_steps) == 0
+  assert claude_rows._manifest_key(trail_id) not in s3.objects

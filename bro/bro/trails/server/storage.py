@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Optional
 
 from trails.model import canonical_json_bytes
-from trails.server import backends, storage_types
+from trails.server import backends, row_storage, storage_types
 from trails.server.folding import AggregateState
 from trails.server.operations import Operations
 
@@ -138,14 +138,16 @@ class Storage:
       item['extent'] = 0
       state = AggregateState(item)
       seen_billing_keys: set[str] = set()
-      rows = await self._prepare_rows(
-        trail_id,
-        0,
-        opened.records,
-        adapter,
-        started_at,
-        state,
-        seen_billing_keys,
+      rows = await row_storage.prepare_rows(
+        s3=self._s3,
+        bucket=self._bucket,
+        trail_id=trail_id,
+        offset=0,
+        payloads=opened.records,
+        adapter=adapter,
+        default_timestamp=started_at,
+        state=state,
+        seen_billing_keys=seen_billing_keys,
       )
       item.update(self._state_fields(state, len(rows)))
       transaction_items = [
@@ -267,14 +269,16 @@ class Storage:
     while committed < len(records):
       chunk = records[committed : committed + storage_types.MAX_TRANSACTION_RECORDS]
       chunk_offset = offset + committed
-      rows = await self._prepare_rows(
-        trail_id,
-        chunk_offset,
-        chunk,
-        adapter,
-        _now_iso(),
-        state,
-        seen_billing_keys,
+      rows = await row_storage.prepare_rows(
+        s3=self._s3,
+        bucket=self._bucket,
+        trail_id=trail_id,
+        offset=chunk_offset,
+        payloads=chunk,
+        adapter=adapter,
+        default_timestamp=_now_iso(),
+        state=state,
+        seen_billing_keys=seen_billing_keys,
       )
       new_extent = chunk_offset + len(rows)
       update = self._append_header_update(
@@ -333,50 +337,6 @@ class Storage:
     return len(rows) == len(records) and all(
       row.get('payload_sha256') == sha256 for row, sha256 in zip(rows, expected, strict=True)
     )
-
-  async def _prepare_rows(
-    self,
-    trail_id: str,
-    offset: int,
-    payloads: list[Any],
-    adapter: backends.Adapter,
-    default_timestamp: str,
-    state: AggregateState,
-    seen_billing_keys: set[str],
-  ) -> list[dict]:
-    rows: list[dict] = []
-    for index, payload in enumerate(payloads, start=offset):
-      parsed = adapter.parse(payload)
-      classification = adapter.classify(parsed)
-      contribution = state.apply(parsed, classification, seen_billing_keys)
-      row: dict[str, Any] = {
-        'trail_id': trail_id,
-        'step_id': index,
-        'ts': parsed.timestamp if parsed.timestamp is not None else default_timestamp,
-        'kind': parsed.kind,
-        'payload_sha256': storage_types.sha256_hex(canonical_json_bytes(payload)),
-        **parsed.attributes,
-      }
-      if contribution is not None:
-        row['usage'] = contribution
-      body_payload = storage_types.body_bytes(parsed.body)
-      if len(body_payload) > storage_types.MAX_BODY_BYTES:
-        raise BodyTooLarge(f'body size {len(body_payload)} exceeds {storage_types.MAX_BODY_BYTES}')
-      if len(body_payload) >= storage_types.SPILLOVER_THRESHOLD_BYTES:
-        key = storage_types.universal_spillover_key(trail_id, index, body_payload)
-        await asyncio.to_thread(
-          self._s3.put_object,
-          Bucket=self._bucket,
-          Key=key,
-          Body=body_payload,
-          ContentType='application/json',
-        )
-        row['body_s3'] = key
-        row['body_encoding'] = 'text' if isinstance(parsed.body, str) else 'json'
-      else:
-        row['body'] = parsed.body
-      rows.append(row)
-    return rows
 
   async def _store_tools(self, tools: dict[str, Any]) -> None:
     if not isinstance(tools, dict):
