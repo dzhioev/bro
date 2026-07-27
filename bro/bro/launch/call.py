@@ -287,14 +287,15 @@ def chat_main(
   use_tui = not args['text'] and _tty_supported()
 
   try:
-    if use_tui:
-      from bro.launch.call_tui import ChatApp
+    with bro:
+      if use_tui:
+        from bro.launch.call_tui import ChatApp
 
-      ChatApp(bro, initial, history=history, hold=hold).run()
-    else:
-      asyncio.run(call_text(bro, initial, history=history, hold=hold))
-  except BroRaised as e:
-    log.error('raised: %s', e.reason)
+        ChatApp(bro, initial, history=history, hold=hold).run()
+      else:
+        asyncio.run(call_text(bro, initial, history=history, hold=hold))
+  except BroRaised as error:
+    log.error('raised: %s', error.reason)
     return 1
   except KeyboardInterrupt:
     return 130

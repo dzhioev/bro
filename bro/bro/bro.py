@@ -5,7 +5,7 @@ import traceback
 from abc import ABC
 from collections.abc import Callable
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, TracebackType
 from typing import Any, ClassVar, Optional, Self
 
 import llm.llms.chat_gpt
@@ -664,6 +664,9 @@ class BaseBro(ABC):
     # then and when recording is off. surfaces read it to point the user at the
     # recorded conversation (e.g. `call`'s resume hint).
     self.trail_id: Optional[str] = None
+    self._lifetime_active = False
+    self._last_end_reason: Optional[EndReason] = None
+    self._last_end_detail: Optional[str] = None
     # explicit `system_prompt=...` arg overrides MRO collection — escape hatch
     # for callers that need a dynamic prompt (e.g. PM injects current time).
     if system_prompt is not None:
@@ -870,6 +873,41 @@ class BaseBro(ABC):
     ]
     return llm, messages, trail_id
 
+  def __enter__(self) -> Self:
+    if self._lifetime_active:
+      raise RuntimeError('bro lifetime is already active')
+    self._lifetime_active = True
+    self._last_end_reason = None
+    self._last_end_detail = None
+    return self
+
+  def __exit__(
+    self,
+    exception_type: Optional[type[BaseException]],
+    exception: Optional[BaseException],
+    exception_traceback: Optional[TracebackType],
+  ) -> bool:
+    del exception_type, exception_traceback
+    if self._lifetime_active is not True:
+      raise RuntimeError('bro lifetime is not active')
+
+    reason: EndReason = 'ok'
+    detail: Optional[str] = None
+    if isinstance(exception, BroRaised):
+      reason = 'raised'
+      detail = exception.reason
+    elif isinstance(exception, Exception):
+      reason = 'error'
+      detail = str(exception)
+      self._record_error_step(exception)
+
+    self._lifetime_active = False
+    self._last_end_reason = reason
+    self._last_end_detail = detail
+    log.verbose('bro lifetime ended: %s', reason)
+    self._tracker.end_trail(reason, detail=detail)
+    return False
+
   @classmethod
   def create(cls, llm_spec: LLMSpec) -> Self:
     # factory for a construction-time LLMSpec override — applied after the bro's
@@ -907,26 +945,17 @@ class BaseBro(ABC):
     channel = self._make_channel()
     if channel is not None:
       channel.started(trail_id)
-    end_reason: EndReason = 'ok'
     result: Optional[str] = None
     try:
-      result = await llm.send(messages, request_timeout=request_timeout)
-      return result
-    except BroRaised as raised:
-      end_reason = 'raised'
-      result = raised.reason
-      raise
-    except Exception as error:
-      end_reason = 'error'
-      result = str(error)
-      self._record_error_step(error)
-      raise
+      with self:
+        result = await llm.send(messages, request_timeout=request_timeout)
+        return result
     finally:
-      log.verbose('run ended: %s', end_reason)
-      detail = result if end_reason in ('raised', 'error') else None
-      self._tracker.end_trail(end_reason, detail=detail)
       if channel is not None:
-        channel.completed(result, end_reason)
+        if self._last_end_reason is None:
+          raise RuntimeError('run lifetime ended without an outcome')
+        channel_result = result if self._last_end_reason == 'ok' else self._last_end_detail
+        channel.completed(channel_result, self._last_end_reason)
         channel.close()
 
   async def send(

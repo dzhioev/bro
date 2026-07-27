@@ -394,6 +394,67 @@ class TestBroRun:
     assert messages[1] == {'role': 'user', 'content': 'test input'}
 
 
+class TestBroLifetime:
+  def test_exit_without_send_is_safe(self):
+    bro = EchoBro()
+    with bro:
+      pass
+    assert bro.trail_id is None
+
+  @pytest.mark.parametrize(
+    'exception,reason,detail',
+    [
+      (BroRaised('blocked'), 'raised', 'blocked'),
+      (RuntimeError('broken'), 'error', 'broken'),
+    ],
+  )
+  def test_exit_maps_the_lifetime_outcome(self, exception, reason, detail):
+    ends: list[tuple[str, Optional[str]]] = []
+
+    class RecordingTracker(NullTracker):
+      def end_trail(self, reason, detail=None) -> None:
+        ends.append((reason, detail))
+
+    bro = EchoBro()
+    bro._tracker = RecordingTracker()
+    with pytest.raises(type(exception)):
+      with bro:
+        raise exception
+    assert ends == [(reason, detail)]
+
+  def test_keyboard_interrupt_is_a_clean_tui_exit(self):
+    ends: list[str] = []
+
+    class RecordingTracker(NullTracker):
+      def end_trail(self, reason, detail=None) -> None:
+        ends.append(reason)
+
+    bro = EchoBro()
+    bro._tracker = RecordingTracker()
+    with pytest.raises(KeyboardInterrupt):
+      with bro:
+        raise KeyboardInterrupt
+    assert ends == ['ok']
+
+  @pytest.mark.asyncio
+  async def test_context_ends_one_interactive_conversation(self):
+    calls: list[str] = []
+
+    class RecordingTracker(NullTracker):
+      def start_trail(self, *args, **kwargs) -> str:
+        calls.append('start')
+        return 'tid'
+
+      def end_trail(self, reason, detail=None) -> None:
+        calls.append(f'end:{reason}')
+
+    bro = EchoBro()
+    with bro:
+      await bro.send('first', tracker=RecordingTracker(), surface='test')
+      await bro.send('second', surface='test')
+    assert calls == ['start', 'end:ok']
+
+
 class TestBroSend:
   @pytest.mark.asyncio
   async def test_send_returns_response(self):

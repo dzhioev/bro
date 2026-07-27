@@ -191,6 +191,21 @@ class TestFormatTrailRow:
     assert 'fork-of T1' in out
     assert 'fix the recorder' in out
 
+  def test_server_inference_renders_as_unreported(self):
+    out = _format_trail_row(
+      {
+        'id': 'T3',
+        'harness': 'bro',
+        'bro': 'dev',
+        'native': {'llm': {'model': 'gpt-5'}},
+        'started_at': '2026-06-07T22:14:03.000000Z',
+        'end': {'at': '2026-06-07T23:00:00Z', 'inference': 'unreported'},
+      },
+      NO_COLOR,
+    )
+    assert 'unreported' in out
+    assert 'done:' not in out
+
 
 class TestFormatStepSummary:
   def test_inline_body_and_extras(self):

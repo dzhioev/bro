@@ -519,11 +519,11 @@ async def _sweep_loop(store: storage.Storage, interval_seconds: float) -> None:
   while True:
     await asyncio.sleep(interval_seconds)
     try:
-      swept = await store.sweep_lost()
+      swept = await store.sweep_unreported()
       if len(swept) > 0:
-        log.info('sweep stamped %d trails as lost: %s', len(swept), ', '.join(swept))
+        log.info('sweep inferred %d trails as unreported: %s', len(swept), ', '.join(swept))
     except Exception as exception:
-      log.warning('lost-trail sweep failed: %s', exception)
+      log.warning('unreported-trail sweep failed: %s', exception)
 
 
 def create_app(

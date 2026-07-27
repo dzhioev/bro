@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Optional, TypedDict, cast
 
 UUID_LOOKUP_LIMIT = 100
+UNREPORTED_END_INFERENCE = 'unreported'
 
 MESSAGE_TYPES = frozenset(
   {

@@ -20,7 +20,7 @@ bro · claude recorder                       readers
                                       S3 body spill + tool blobs
 ```
 
-- `trails/server/storage.py` owns headers, the extent-conditional append protocol, ordinal storage and spillover, dual reads, UUID projections and point reads, content-addressed tool blobs, list indexes, and lost-run sweeping; `folding.py` is the shared aggregate fold.
+- `trails/server/storage.py` owns headers, the extent-conditional append protocol, ordinal storage and spillover, dual reads, UUID projections and point reads, content-addressed tool blobs, list indexes, and unreported-run inference; `folding.py` is the shared aggregate fold.
 - `trails/server/operations.py` owns recompute, check (including billing and cross-trail UUID audits), and manifested relinking.
 - `trails/server/backends.py` is the harness seam. An adapter supplies exactly `parse`, `classify`, `project`, `open`, and `validate_create`, plus its declared emitted message types; the registry is the complete harness dispatch surface.
 - `trail_steps_v2` uses `(trail_id S, step_id N)` plus a keys-only UUID index for Claude lineage lookup. A migrated header is identified by `body_storage = trail_steps_v2` and carries its current `extent`; append transactions condition on that extent.
@@ -34,6 +34,8 @@ The legacy sources remain readable until the final retirement stage: bro rows in
 `trails-migrate-claude-rows migrate` moves ended Claude artifacts without a write freeze; live trails remain on the compatibility path. It writes each source manifest before target rows or spill objects, verifies joined-line count/hash and aggregates before switching the header marker last, and retains both legacy artifacts and launch-context objects. `verify` repeats those checks store-wide and writes its report under `trails/migrations/claude-rows/` in the trails bucket.
 
 `trails-migrate-bro-rows migrate` moves ended and stale bro streams while dropping response-output decompositions and historical end rows, extracting content-addressed tool schemas, and rewriting lineage/provenance pointers to projected ordinal positions. Per-trail manifests precede target/tool/pointer writes, the source and transformed target carry count/hash checks, and the body marker switches only after rows, blobs, pointers, and aggregates verify; legacy rows and spills remain intact. `verify` rechecks the durable manifests store-wide.
+
+Writer-reported outcomes use `end.reason`; the stale-run sweep instead records `end.inference = unreported`, so absence of a writer verdict is not presented as a failure verdict. `trails-backfill-unreported` manifests and relabels historical trails from surfaces that never reported outcomes, with the two live legacy migration trails excluded explicitly; its durable manifest and verification reports live under `trails/migrations/lost-verdict-backfill/` in the trails bucket.
 
 The legacy `POST /steps`,  `PUT /artifact`, and client aggregate updates accept only unmigrated trails. They remain as compatibility writers while live clients move to `POST /records`; migrated trails reject them, and universal headers accept no client-written usage or turn totals.
 

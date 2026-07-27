@@ -176,7 +176,7 @@ class FakeStorage:
       raise storage.TrailNotFound(trail_id)
     return self.contexts.get(trail_id)
 
-  async def sweep_lost(self):
+  async def sweep_unreported(self):
     self.sweep_calls += 1
     return []
 

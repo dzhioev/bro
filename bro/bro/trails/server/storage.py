@@ -5,7 +5,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import Any, Optional
 
-from trails.model import canonical_json_bytes
+from trails.model import UNREPORTED_END_INFERENCE, canonical_json_bytes
 from trails.server import backends, row_storage, storage_types
 from trails.server.folding import AggregateState
 from trails.server.operations import Operations
@@ -20,7 +20,7 @@ AppendConflict = storage_types.AppendConflict
 
 GSI_PK_ATTRIBUTE = 'gsi_pk'
 GSI_PK_VALUE = 'trail'
-LOST_AFTER_SECONDS = 3600
+UNREPORTED_AFTER_SECONDS = 3600
 SWEEP_WINDOW_DAYS = 30
 CLAUDE_ARTIFACT_CONTENT_TYPE = 'application/x-ndjson'
 _ddb = storage_types.ddb
@@ -635,9 +635,9 @@ class Storage:
       raise TrailNotFound(trail_id) from exception
     return {'last_alive_at': timestamp}
 
-  async def sweep_lost(self) -> list[str]:
+  async def sweep_unreported(self) -> list[str]:
     now = datetime.now(UTC)
-    cutoff = _format_iso(now - timedelta(seconds=LOST_AFTER_SECONDS))
+    cutoff = _format_iso(now - timedelta(seconds=UNREPORTED_AFTER_SECONDS))
     since = _format_iso(now - timedelta(days=SWEEP_WINDOW_DAYS))
     swept: list[str] = []
     cursor: Optional[str] = None
@@ -655,13 +655,13 @@ class Storage:
       for item in page['trails']:
         if item.get('end') is not None or item['last_alive_at'] >= cutoff:
           continue
-        if await self._stamp_lost(item['id'], item['last_alive_at']):
+        if await self._stamp_unreported(item['id'], item['last_alive_at']):
           swept.append(item['id'])
       cursor = page['next']
       if cursor is None:
         return swept
 
-  async def _stamp_lost(self, trail_id: str, ended_at: str) -> bool:
+  async def _stamp_unreported(self, trail_id: str, ended_at: str) -> bool:
     try:
       await asyncio.to_thread(
         self._dynamo.update_item,
@@ -671,7 +671,7 @@ class Storage:
         UpdateExpression='SET #end = :end',
         ExpressionAttributeNames={'#end': 'end'},
         ExpressionAttributeValues={
-          ':end': _ddb({'at': ended_at, 'reason': 'lost'}),
+          ':end': _ddb({'at': ended_at, 'inference': UNREPORTED_END_INFERENCE}),
           ':null_type': _ddb('NULL'),
         },
       )

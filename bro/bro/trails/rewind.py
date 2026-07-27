@@ -37,7 +37,7 @@ from base import log, pager
 from base.ansi import Colors, should_color
 from trails.client import HTTPStatusError, TrailsClient, default_client, is_retryable_status
 from trails.lineage import walk_header_chain
-from trails.model import spill_descriptor
+from trails.model import UNREPORTED_END_INFERENCE, spill_descriptor
 
 __cli_name__ = 'rewind'
 
@@ -109,6 +109,8 @@ def _format_trail_row(trail: dict, colors: Colors) -> str:
   end = trail.get('end')
   if end is None:
     status = f'{colors.yellow}live{colors.reset}'
+  elif end.get('inference') == UNREPORTED_END_INFERENCE:
+    status = f'{colors.yellow}unreported{colors.reset}'
   elif end.get('reason') == 'lost':
     status = f'{colors.red}lost{colors.reset}'
   else:

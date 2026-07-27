@@ -6,8 +6,8 @@ from typing import Any, Optional
 import pytest
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 
-from trails.migrations import bro_rows, claude_rows
-from trails.model import MESSAGE_TYPES, tools_sha256
+from trails.migrations import bro_rows, claude_rows, unreported
+from trails.model import MESSAGE_TYPES, UNREPORTED_END_INFERENCE, tools_sha256
 from trails.server import backends, storage, storage_types
 
 _serializer = TypeSerializer()
@@ -124,6 +124,8 @@ class FakeDynamo:
       return item is not None and self._field('#forked_from', operation) not in item
     if expression == 'attribute_type(#end, :null_type)':
       return item is not None and item.get(self._field('#end', operation)) is None
+    if expression == '#end = :old':
+      return item is not None and item.get(self._field('#end', operation)) == values[':old']
     if expression == '#native = :old_native':
       return (
         item is not None and item.get(self._field('#native', operation)) == values[':old_native']
@@ -799,6 +801,137 @@ async def test_list_and_pointer_index_stay_available(components):
     limit=10,
   )
   assert [trail['id'] for trail in page['trails']] == [child]
+
+
+@pytest.mark.asyncio
+async def test_sweep_marks_stale_trails_as_inferred_unreported(components):
+  store, dynamo, _ = components
+  stale = await _create_bro(store)
+  live = await _create_bro(store)
+  dynamo.headers[stale]['last_alive_at'] = '2020-01-01T00:00:00.000000Z'
+
+  assert await store.sweep_unreported() == [stale]
+  assert dynamo.headers[stale]['end'] == {
+    'at': '2020-01-01T00:00:00.000000Z',
+    'inference': UNREPORTED_END_INFERENCE,
+  }
+  assert dynamo.headers[live]['end'] is None
+
+
+@pytest.mark.asyncio
+async def test_unreported_backfill_manifests_before_relabelling_and_stays_scoped(
+  components, monkeypatch
+):
+  _, dynamo, s3 = components
+  lost = {'at': '2026-06-01T00:00:00.000000Z', 'reason': 'lost'}
+  headers = {
+    'lost-http': {
+      'id': 'lost-http',
+      'harness': 'bro',
+      'surface': 'http',
+      'started_at': '2026-06-01T00:00:00.000000Z',
+      'last_alive_at': '2026-06-01T00:00:01.000000Z',
+      'end': lost,
+    },
+    'aged-call': {
+      'id': 'aged-call',
+      'harness': 'bro',
+      'surface': 'call',
+      'started_at': '2020-01-01T00:00:00.000000Z',
+      'last_alive_at': '2020-01-01T00:00:01.000000Z',
+      'end': None,
+    },
+    'lost-process-inbox': {
+      'id': 'lost-process-inbox',
+      'harness': 'bro',
+      'surface': 'process-inbox',
+      'started_at': '2026-06-01T00:00:00.000000Z',
+      'last_alive_at': '2026-06-01T00:00:01.000000Z',
+      'end': lost,
+    },
+    'lost-ask': {
+      'id': 'lost-ask',
+      'harness': 'bro',
+      'surface': 'ask',
+      'started_at': '2026-06-01T00:00:00.000000Z',
+      'last_alive_at': '2026-06-01T00:00:01.000000Z',
+      'end': lost,
+    },
+    'live-call': {
+      'id': 'live-call',
+      'harness': 'bro',
+      'surface': 'call',
+      'started_at': storage_types.now_iso(),
+      'last_alive_at': storage_types.now_iso(),
+      'end': None,
+    },
+    '01kygtv6g3-atvzpw06-knckz02d': {
+      'id': '01kygtv6g3-atvzpw06-knckz02d',
+      'harness': 'bro',
+      'surface': 'http',
+      'started_at': '2020-01-01T00:00:00.000000Z',
+      'last_alive_at': '2020-01-01T00:00:01.000000Z',
+      'end': lost,
+    },
+    '01kygyx5cf-04x0jpk1-m5kby1bd': {
+      'id': '01kygyx5cf-04x0jpk1-m5kby1bd',
+      'harness': 'bro',
+      'surface': 'call',
+      'started_at': '2020-01-01T00:00:00.000000Z',
+      'last_alive_at': '2020-01-01T00:00:01.000000Z',
+      'end': None,
+    },
+  }
+  dynamo.headers.update(copy.deepcopy(headers))
+  events: list[str] = []
+  original_put_object = s3.put_object
+  original_update_item = dynamo.update_item
+
+  def tracked_put_object(**arguments):
+    events.append(f's3:{arguments["Key"]}')
+    return original_put_object(**arguments)
+
+  def tracked_update_item(**arguments):
+    events.append(f'dynamo:{_deserialize(arguments["Key"])["id"]}')
+    return original_update_item(**arguments)
+
+  monkeypatch.setattr(s3, 'put_object', tracked_put_object)
+  monkeypatch.setattr(dynamo, 'update_item', tracked_update_item)
+  migration = unreported.UnreportedBackfill(
+    dynamo=dynamo,
+    s3=s3,
+    trails_table='headers',
+    steps_table='universal',
+    bucket='bucket',
+  )
+
+  result = await migration.migrate()
+
+  assert result['change_count'] == 3
+  assert events[0] == f's3:{unreported.MANIFEST_KEY}'
+  assert events[1:4] == ['dynamo:aged-call', 'dynamo:lost-http', 'dynamo:lost-process-inbox']
+  manifest = json.loads(s3.objects[unreported.MANIFEST_KEY])
+  assert manifest['status'] == 'applied_verified'
+  assert {(change['trail_id'], change['matching_rule']) for change in manifest['changes']} == {
+    ('aged-call', unreported.AGED_LIVE_RULE),
+    ('lost-http', unreported.SWEPT_LOST_RULE),
+    ('lost-process-inbox', unreported.SWEPT_LOST_RULE),
+  }
+  assert all('old_value' in change and 'new_value' in change for change in manifest['changes'])
+  assert dynamo.headers['aged-call']['end']['inference'] == UNREPORTED_END_INFERENCE
+  assert dynamo.headers['lost-http']['end']['inference'] == UNREPORTED_END_INFERENCE
+  assert dynamo.headers['lost-process-inbox']['end']['inference'] == UNREPORTED_END_INFERENCE
+  for unchanged in (
+    'lost-ask',
+    'live-call',
+    '01kygtv6g3-atvzpw06-knckz02d',
+    '01kygyx5cf-04x0jpk1-m5kby1bd',
+  ):
+    assert dynamo.headers[unchanged]['end'] == headers[unchanged]['end']
+
+  verification = await migration.verify()
+  assert verification['verified_change_count'] == 3
+  assert verification['verification_s3'] in s3.objects
 
 
 def _claude_rows_migration(store, dynamo, s3) -> claude_rows.ClaudeRowsMigration:
