@@ -7,6 +7,7 @@ import hmac
 import json
 import os
 import sys
+from collections.abc import Coroutine
 from typing import Any, Optional
 
 import boto3
@@ -25,6 +26,7 @@ VALID_STEP_KINDS = backends.BRO_STEP_KINDS - {'system_prompt', 'end'}
 VALID_END_REASONS = frozenset({'ok', 'raised', 'error'})
 VALID_HOLDS = frozenset({'guided', 'attended', 'detached', 'unattended'})
 SWEEP_INTERVAL_SECONDS = 600.0
+CHECK_HEARTBEAT_INTERVAL_SECONDS = 5.0
 
 
 @web.middleware
@@ -49,6 +51,28 @@ async def _read_json(request: web.Request) -> Any:
 
 def _error(message: str, status: int) -> web.Response:
   return web.json_response({'error': message}, status=status)
+
+
+async def _stream_json_with_heartbeats(
+  request: web.Request,
+  operation: Coroutine[Any, Any, dict],
+) -> web.StreamResponse:
+  response = web.StreamResponse(status=200)
+  response.content_type = 'application/json'
+  await response.prepare(request)
+  async with asyncio.TaskGroup() as task_group:
+    operation_task = task_group.create_task(operation)
+    while True:
+      try:
+        result = await asyncio.wait_for(
+          asyncio.shield(operation_task), timeout=CHECK_HEARTBEAT_INTERVAL_SECONDS
+        )
+        break
+      except TimeoutError:
+        await response.write(b'\n')
+  await response.write(json.dumps(result, ensure_ascii=False).encode('utf-8'))
+  await response.write_eof()
+  return response
 
 
 def _required(payload: dict, fields: tuple[str, ...]) -> Optional[web.Response]:
@@ -445,7 +469,7 @@ async def _handle_recompute(request: web.Request) -> web.Response:
     return _error(str(exception), 400)
 
 
-async def _handle_check(request: web.Request) -> web.Response:
+async def _handle_check(request: web.Request) -> web.StreamResponse:
   payload = await _read_json(request)
   if payload is None:
     payload = {}
@@ -456,6 +480,8 @@ async def _handle_check(request: web.Request) -> web.Response:
     return _error('trail_id must be a non-empty string', 400)
   store: storage.Storage = request.app['storage']
   try:
+    if trail_id is None:
+      return await _stream_json_with_heartbeats(request, store.check())
     return web.json_response(await store.check(trail_id))
   except storage.TrailNotFound:
     return _error(f'trail not found: {trail_id}', 404)

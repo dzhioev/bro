@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import pytest
 
@@ -35,6 +36,7 @@ class FakeStorage:
     self.contexts: dict[str, object] = {}
     self._counter = 0
     self.raise_body_too_large = False
+    self.check_delay_seconds = 0.0
     self.sweep_calls = 0
 
   def _new_id(self) -> str:
@@ -124,6 +126,7 @@ class FakeStorage:
     return {'trail_id': trail_id, 'extent': len(self.steps[trail_id])}
 
   async def check(self, trail_id=None):
+    await asyncio.sleep(self.check_delay_seconds)
     return {'ok': True, 'trails': [] if trail_id is None else [{'trail_id': trail_id, 'ok': True}]}
 
   async def relink(self, trail_id, forked_from, delete_count):
@@ -359,6 +362,19 @@ async def test_admin_operations_and_indexed_pointer(client):
   assert response.status == 200
   response = await cli.post('/v1/admin/trails/check', json={'trail_id': trail_id}, headers=_auth())
   assert (await response.json())['ok'] is True
+
+
+@pytest.mark.asyncio
+async def test_store_check_streams_heartbeats_then_one_json_verdict(client, store, monkeypatch):
+  monkeypatch.setattr('trails.server.server.CHECK_HEARTBEAT_INTERVAL_SECONDS', 0.001)
+  store.check_delay_seconds = 0.02
+
+  response = await (await client).post('/v1/admin/trails/check', json={}, headers=_auth())
+  body = await response.read()
+
+  assert response.status == 200
+  assert body.startswith(b'\n')
+  assert json.loads(body) == {'ok': True, 'trails': []}
 
 
 @pytest.mark.asyncio
