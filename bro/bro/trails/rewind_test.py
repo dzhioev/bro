@@ -5,8 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from base.ansi import Colors
-from llm.tracker import HTTPStatusError
-from trails.client import TrailsClient
+from trails.client import HTTPStatusError, TrailsClient
 from trails.rewind import (
   _command_grep,
   _command_show,

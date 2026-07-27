@@ -36,8 +36,8 @@ from typing import Any, Optional
 import base.args
 from base import log, pager
 from base.ansi import Colors, should_color
-from llm.tracker import HTTPStatusError, is_retryable_status
-from trails.client import TrailsClient, default_client, spill_descriptor
+from trails.client import HTTPStatusError, TrailsClient, default_client, is_retryable_status
+from trails.model import spill_descriptor
 
 __cli_name__ = 'rewind'
 

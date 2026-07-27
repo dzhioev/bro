@@ -73,9 +73,8 @@ from typing import Any, Optional
 
 from base import configs, credentials, log
 from base.args import Parser
-from llm.tracker import HTTPStatusError
 from session_log import health, trail_pointer
-from trails.client import TrailsClient, default_client
+from trails.client import HTTPStatusError, TrailsClient, default_client
 
 __cli_name__ = 'session-log.recorder'
 

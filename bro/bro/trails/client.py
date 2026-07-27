@@ -1,59 +1,59 @@
-"""synchronous client for the trails service.
+"""Synchronous read and write client for the trails service.
 
-`TrailsClient` wraps the read endpoints — `GET /v1/trails`,
-`GET /v1/trails/{id}`, `GET /v1/trails/{id}/steps` — over a persistent HTTPS
-connection, exposing both single-page methods (`list_trails` / `get_steps`) and
-cursor iterators (`iter_trails` / `iter_steps`) that paginate until exhausted,
-plus the claude recorder's write surface (`create_trail` / `replace_artifact` /
-`update_header` / `end_trail` / `keepalive`). Bros do not write through it —
-their streaming per-step writer is `llm.tracker.HTTPTracker`.
+`TrailsClient` owns the persistent authenticated HTTPS transport for paged
+headers, steps, messages, launch context, and every recording endpoint.
+`HTTPTracker` adapts bro's `llm.tracker.Tracker` calls onto that client while
+preserving the streaming writer's endpoint-specific retry and liveness policy.
 
-`fetch_recorded_trail` rehydrates a header + all of its steps into the
-`Trail` / `Step` / `RecordedTrail` dataclasses defined in `llm.tracker`, the
-same shape `bro.fork.fork()` consumes — so the typical caller flow is
-
-    trail = fetch_recorded_trail(default_client(), trail_id)
-    bro = fork(trail, step_id)
-
-S3 spillover is resolved on the server (`storage._resolve_body`) — step bodies
-come back inline when small, as `{'s3': key, 'url': <presigned>, 'size': N}`
-when large. clients receive whichever shape the server emits; the CLI surfaces
-the spilled form with size + URL rather than fetching multi-MB blobs eagerly.
-`fetch_recorded_trail`, by contrast, follows the presigned URL and inlines the
-full body — fork replay needs the complete `llm_call.response.output`, and a
-bare descriptor would silently drop that turn's output items.
+`fetch_recorded_trail` rehydrates the shared `trails.model` records consumed by
+`bro.fork`. It follows spill descriptors and inlines their full bodies because
+fork replay needs the complete provider response rather than a presigned URL.
 """
 
 import http.client
 import json
+import logging
 import ssl
+import threading
+import time
 import urllib.request
 from collections.abc import Iterator
+from dataclasses import asdict
 from types import TracebackType
 from typing import Any, Optional
 from urllib.parse import urlencode, urlparse
 
-from base import credentials
-from llm.tracker import (
-  ForkedFrom,
-  HTTPStatusError,
-  RecordedTrail,
-  Step,
-  Trail,
-  is_retryable_status,
-)
+from base import configs, credentials
+from base.lulid import lulid
+from llm.tracker import EndReason, StepKind, Tracker
+from trails.model import ForkedFrom, RecordedTrail, Step, Trail, spill_descriptor
 
 DEFAULT_LIST_PAGE_SIZE = 100
 DEFAULT_STEPS_PAGE_SIZE = 200
+
+_DEFAULT_RETRY_DELAYS_SECONDS = (0.0,)
+_STEP_RETRY_DELAYS_SECONDS = (0.1, 0.5, 2.0)
+KEEPALIVE_INTERVAL_SECONDS = 60.0
+
+
+class HTTPStatusError(Exception):
+  """A non-success response carrying its numeric HTTP status."""
+
+  def __init__(self, status: int, message: str):
+    super().__init__(message)
+    self.status = status
+
+
+def is_retryable_status(status: int) -> bool:
+  return status >= 500 or status == 429
 
 
 class TrailsClient:
   """synchronous HTTPS client for the trails server.
 
   one persistent connection per client; transport blips drop the socket and
-  reopen on the next call. the write surface covers the claude recorder's
-  endpoints; the bro step-append endpoint is intentionally not exposed — bros
-  write through `llm.tracker.HTTPTracker`.
+  reopen on the next attempt. the transport lock also lets a recording adapter
+  share the connection safely with its keepalive thread.
   """
 
   def __init__(self, base_url: str, token: str, *, timeout: float = 10.0):
@@ -67,6 +67,7 @@ class TrailsClient:
     self._host: str = hostname if hostname is not None else 'localhost'
     self._port = parsed.port
     self._connection: Optional[http.client.HTTPSConnection] = None
+    self._lock = threading.RLock()
 
   def list_trails(
     self,
@@ -216,7 +217,15 @@ class TrailsClient:
     non-idempotent write, and a duplicate from a lost response would strand an
     orphan trail — the caller's own next attempt is the retry.
     """
-    return self._send('POST', '/v1/trails', payload, retry=False)
+    return self._send('POST', '/v1/trails', payload, retry_delays=())
+
+  def append_step(self, trail_id: str, payload: dict) -> dict:
+    return self._send(
+      'POST',
+      f'/v1/trails/{trail_id}/steps',
+      payload,
+      retry_delays=_STEP_RETRY_DELAYS_SECONDS,
+    )
 
   def replace_artifact(self, trail_id: str, artifact: str, native: dict) -> dict:
     """replace the claude trail's artifact with a complete snapshot and advance
@@ -230,17 +239,33 @@ class TrailsClient:
     returns the updated header."""
     return self._send('PATCH', f'/v1/trails/{trail_id}', changes)
 
-  def end_trail(self, trail_id: str, reason: str, detail: Optional[str] = None) -> None:
+  def end_trail(
+    self,
+    trail_id: str,
+    reason: str,
+    detail: Optional[str] = None,
+    *,
+    step_id: Optional[str] = None,
+    retry_delays: tuple[float, ...] = _DEFAULT_RETRY_DELAYS_SECONDS,
+  ) -> None:
     payload: dict[str, Any] = {'reason': reason}
     if detail is not None:
       payload['detail'] = detail
-    self._send('POST', f'/v1/trails/{trail_id}/end', payload)
+    if step_id is not None:
+      payload['step_id'] = step_id
+    self._send('POST', f'/v1/trails/{trail_id}/end', payload, retry_delays=retry_delays)
 
-  def keepalive(self, trail_id: str) -> None:
-    self._send('POST', f'/v1/trails/{trail_id}/keepalive', {})
+  def keepalive(
+    self,
+    trail_id: str,
+    *,
+    retry_delays: tuple[float, ...] = _DEFAULT_RETRY_DELAYS_SECONDS,
+  ) -> None:
+    self._send('POST', f'/v1/trails/{trail_id}/keepalive', {}, retry_delays=retry_delays)
 
   def close(self) -> None:
-    self._drop_connection()
+    with self._lock:
+      self._drop_connection()
 
   def __enter__(self) -> 'TrailsClient':
     return self
@@ -284,13 +309,20 @@ class TrailsClient:
     headers = {'Authorization': f'Bearer {self._token}'}
     return self._request('GET', path, headers, body=None)
 
-  def _send(self, method: str, path: str, payload: dict, *, retry: bool = True) -> dict:
+  def _send(
+    self,
+    method: str,
+    path: str,
+    payload: dict,
+    *,
+    retry_delays: tuple[float, ...] = _DEFAULT_RETRY_DELAYS_SECONDS,
+  ) -> dict:
     headers = {
       'Authorization': f'Bearer {self._token}',
       'Content-Type': 'application/json',
     }
     body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
-    return self._request(method, path, headers, body, retry=retry)
+    return self._request(method, path, headers, body, retry_delays=retry_delays)
 
   def _request(
     self,
@@ -299,36 +331,35 @@ class TrailsClient:
     headers: dict,
     body: Optional[bytes],
     *,
-    retry: bool = True,
+    retry_delays: tuple[float, ...] = _DEFAULT_RETRY_DELAYS_SECONDS,
   ) -> dict:
     last_exception: Optional[Exception] = None
-    # transient blips often leave the persistent socket half-open; one retry on
-    # a fresh connection is enough to cover that without dragging in a full
-    # backoff schedule (every retried call is idempotent — snapshot replaces,
-    # header upserts, reads; `create_trail` opts out). a deterministic 4xx
-    # propagates immediately — a retry cannot change it.
-    for _ in range(2 if retry else 1):
-      connection = self._get_connection()
-      try:
-        connection.request(method, path, body=body, headers=headers)
-        response = connection.getresponse()
-        raw = response.read()
-        if response.status >= 400:
-          raise HTTPStatusError(
-            response.status,
-            f'{method} {path} -> HTTP {response.status}: {raw.decode(errors="replace")}',
-          )
-        if response.status == 204 or len(raw) == 0:
-          return {}
-        return json.loads(raw)
-      except HTTPStatusError as exception:
-        self._drop_connection()
-        if not is_retryable_status(exception.status):
-          raise
-        last_exception = exception
-      except Exception as exception:
-        last_exception = exception
-        self._drop_connection()
+    schedule = (0.0,) + retry_delays
+    with self._lock:
+      for delay in schedule:
+        if delay > 0:
+          time.sleep(delay)
+        connection = self._get_connection()
+        try:
+          connection.request(method, path, body=body, headers=headers)
+          response = connection.getresponse()
+          raw = response.read()
+          if response.status >= 400:
+            raise HTTPStatusError(
+              response.status,
+              f'{method} {path} -> HTTP {response.status}: {raw.decode(errors="replace")}',
+            )
+          if response.status == 204 or len(raw) == 0:
+            return {}
+          return json.loads(raw)
+        except HTTPStatusError as exception:
+          self._drop_connection()
+          if not is_retryable_status(exception.status):
+            raise
+          last_exception = exception
+        except Exception as exception:
+          last_exception = exception
+          self._drop_connection()
     assert last_exception is not None
     raise last_exception
 
@@ -351,6 +382,122 @@ class TrailsClient:
     self._connection = None
 
 
+class HTTPTracker(Tracker):
+  """Bro event adapter over the shared trails service client."""
+
+  def __init__(self, base_url: str, token: str, *, timeout: float = 5.0):
+    self._client = TrailsClient(base_url, token, timeout=timeout)
+    self._trail_id: Optional[str] = None
+    self._lock = threading.RLock()
+    self._last_write_monotonic = time.monotonic()
+    self._keepalive_stop: Optional[threading.Event] = None
+    self._keepalive_thread: Optional[threading.Thread] = None
+
+  def start_trail(
+    self,
+    bro: str,
+    llm_spec: dict,
+    system_prompt: str,
+    forked_from: Optional[Any],
+    interactive: bool,
+    surface: str,
+    hold: str = 'unattended',
+    summoned_by: Optional[dict[str, Any]] = None,
+  ) -> str:
+    if forked_from is not None and not isinstance(forked_from, ForkedFrom):
+      raise TypeError('forked_from must be a ForkedFrom')
+    payload = {
+      'harness': 'bro',
+      'bro': bro,
+      'version': configs.VERSION,
+      'native': {'llm': llm_spec},
+      'body': {'system_prompt': system_prompt},
+      'forked_from': asdict(forked_from) if forked_from is not None else None,
+      'interactive': interactive,
+      'surface': surface,
+      'hold': hold,
+    }
+    if summoned_by is not None:
+      payload['summoned_by'] = summoned_by
+    response = self._client.create_trail(payload)
+    trail_id: str = response['id']
+    with self._lock:
+      self._trail_id = trail_id
+      self._last_write_monotonic = time.monotonic()
+    self._start_keepalive()
+    return trail_id
+
+  def step(self, kind: StepKind, body: Any, **extras: Any) -> Optional[str]:
+    with self._lock:
+      trail_id = self._trail_id
+    if trail_id is None:
+      raise RuntimeError('step() called before start_trail()')
+    step_id = lulid()
+    self._client.append_step(
+      trail_id,
+      {'step_id': step_id, 'kind': kind, 'body': body, **extras},
+    )
+    with self._lock:
+      self._last_write_monotonic = time.monotonic()
+    return step_id
+
+  def end_trail(self, reason: EndReason, detail: Optional[str] = None) -> None:
+    with self._lock:
+      trail_id = self._trail_id
+    if trail_id is None:
+      return
+    self._stop_keepalive()
+    try:
+      self._client.end_trail(
+        trail_id,
+        reason,
+        detail,
+        step_id=lulid(),
+        retry_delays=_STEP_RETRY_DELAYS_SECONDS,
+      )
+    except Exception as exception:
+      logging.warning('trails end_trail failed for trail %s: %s', trail_id, exception)
+    with self._lock:
+      self._trail_id = None
+    self._client.close()
+
+  def close(self) -> None:
+    self._stop_keepalive()
+    self._client.close()
+
+  def _start_keepalive(self) -> None:
+    stop = threading.Event()
+    self._keepalive_stop = stop
+    self._keepalive_thread = threading.Thread(
+      target=self._keepalive_loop,
+      args=(stop,),
+      name=f'trails-keepalive-{self._trail_id}',
+      daemon=True,
+    )
+    self._keepalive_thread.start()
+
+  def _stop_keepalive(self) -> None:
+    if self._keepalive_stop is not None:
+      self._keepalive_stop.set()
+      self._keepalive_stop = None
+
+  def _keepalive_loop(self, stop: threading.Event) -> None:
+    while not stop.wait(KEEPALIVE_INTERVAL_SECONDS):
+      with self._lock:
+        trail_id = self._trail_id
+        idle_seconds = time.monotonic() - self._last_write_monotonic
+      if trail_id is None:
+        return
+      if idle_seconds < KEEPALIVE_INTERVAL_SECONDS:
+        continue
+      try:
+        self._client.keepalive(trail_id, retry_delays=(0.5,))
+        with self._lock:
+          self._last_write_monotonic = time.monotonic()
+      except Exception as exception:
+        logging.warning('trails keepalive failed for trail %s: %s', trail_id, exception)
+
+
 def default_client() -> TrailsClient:
   """build a `TrailsClient` from the `trails` secret — the same credential the
   in-bro `HTTPTracker` reads, so the read and write sides share one source.
@@ -363,18 +510,6 @@ def default_client() -> TrailsClient:
 # everything else goes into `Step.extras` so callers can poke at provider /
 # kind-specific metadata (turn_index, tool_name, call_id, response_id, ...).
 _STEP_CANONICAL_FIELDS = frozenset({'trail_id', 'step_id', 'ts', 'kind', 'body'})
-
-# exact key set of the spill descriptor the server returns for bodies it leaves
-# in S3 (`storage._resolve_body`, ≥ INLINE_RESPONSE_THRESHOLD_BYTES). matching
-# the full triple — not just `s3` presence — keeps a genuine body that happens
-# to carry an `s3` key from being mistaken for a descriptor.
-_SPILL_DESCRIPTOR_KEYS = frozenset({'s3', 'url', 'size'})
-
-
-def spill_descriptor(body: Any) -> Optional[dict]:
-  if isinstance(body, dict) and frozenset(body.keys()) == _SPILL_DESCRIPTOR_KEYS:
-    return body
-  return None
 
 
 def trail_from_header(data: dict) -> Trail:
@@ -405,7 +540,7 @@ def step_from_row(data: dict) -> Step:
 
   splits the canonical step fields off into the dataclass attributes and packs
   every other key (turn_index, tool_name, arguments, call_id, response_id,
-  tokens_in, ...) into `extras` — mirrors `read_local_file`'s split.
+  tokens_in, ...) into `extras`.
   """
   extras = {k: v for k, v in data.items() if k not in _STEP_CANONICAL_FIELDS}
   return Step(

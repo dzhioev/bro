@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Optional, cast
 from unittest.mock import patch
@@ -9,16 +8,8 @@ from openai.types.responses import Response
 
 import llm.llms.chat_gpt as chat_gpt_module
 from bro.fork import fork, latest_fork_point, replay_messages
-from llm.tracker import (
-  ForkedFrom,
-  LocalFileTracker,
-  NullTracker,
-  RecordedTrail,
-  Step,
-  Tracker,
-  Trail,
-  read_local_file,
-)
+from llm.tracker import NullTracker, Tracker
+from trails.model import ForkedFrom, RecordedTrail, Step, Trail
 
 _SYS_TEXT = 'you are a test bro'
 
@@ -466,89 +457,6 @@ class TestLatestForkPoint:
     assert latest_fork_point(forked) == 's0'
 
 
-class TestReadLocalFile:
-  def test_round_trips_a_trail_through_jsonl(self, tmp_path: Path):
-    path = tmp_path / 'trail.jsonl'
-    writer = LocalFileTracker(path)
-    trail_id = writer.start_trail(
-      bro='bro',
-      llm_spec={'type': 'chat_gpt', 'model': 'gpt-5'},
-      system_prompt=_SYS_TEXT,
-      forked_from=None,
-      interactive=False,
-      surface='ask',
-    )
-    writer.step('user_input', 'hello', turn_index=0)
-    writer.step('tool_call', None, turn_index=1, tool_name='add', arguments={'x': 1}, call_id='c1')
-    writer.end_trail('ok')
-    writer.close()
-
-    trails = read_local_file(path)
-    assert len(trails) == 1
-    trail = trails[0]
-    assert trail.header.id == trail_id
-    assert trail.header.bro == 'bro'
-    assert trail.header.forked_from is None
-    kinds = [s.kind for s in trail.steps]
-    assert kinds == ['system_prompt', 'user_input', 'tool_call', 'end']
-    # extras land in step.extras, sans the canonical fields
-    tool_call_step = trail.steps[2]
-    assert tool_call_step.extras == {
-      'turn_index': 1,
-      'tool_name': 'add',
-      'arguments': {'x': 1},
-      'call_id': 'c1',
-    }
-
-  def test_rehydrates_forked_from_pointer(self, tmp_path: Path):
-    path = tmp_path / 'trail.jsonl'
-    writer = LocalFileTracker(path)
-    writer.start_trail(
-      bro='bro',
-      llm_spec={'type': 'chat_gpt', 'model': 'gpt-5'},
-      system_prompt='',
-      forked_from=ForkedFrom(
-        trail_id='forked_from',
-        step_id='step',
-      ),
-      interactive=True,
-      surface='fork',
-    )
-    writer.end_trail('ok')
-    writer.close()
-    trail = read_local_file(path)[0]
-    assert trail.header.forked_from == ForkedFrom(
-      trail_id='forked_from',
-      step_id='step',
-    )
-
-  def test_demuxes_multiple_trails_in_one_file(self, tmp_path: Path):
-    path = tmp_path / 'trail.jsonl'
-    writer = LocalFileTracker(path)
-    a = writer.start_trail(
-      bro='bro',
-      llm_spec={'type': 'echo', 'model': 'echo'},
-      system_prompt='p1',
-      forked_from=None,
-      interactive=False,
-      surface='ask',
-    )
-    writer.end_trail('ok')
-    b = writer.start_trail(
-      bro='bro',
-      llm_spec={'type': 'echo', 'model': 'echo'},
-      system_prompt='p2',
-      forked_from=None,
-      interactive=False,
-      surface='ask',
-    )
-    writer.end_trail('ok')
-    writer.close()
-    trails = read_local_file(path)
-    assert [t.header.id for t in trails] == [a, b]
-    assert all(t.header.bro == 'bro' for t in trails)
-
-
 class _RecordingTracker(Tracker):
   """captures every tracker call so tests can assert kind/body/extras."""
 
@@ -982,45 +890,3 @@ class TestForkClientSideReplay:
     # user message — the replayed prefix never re-injects
     assert captured[1].get('previous_response_id') == 'resp_a'
     assert captured[1]['input'] == [{'role': 'user', 'content': 'msg two'}]
-
-
-class TestForkAcrossWriteAndRead:
-  def test_fork_uses_jsonl_trail_round_tripped_through_disk(self, tmp_path: Path):
-    # end-to-end-ish: write a forked_from trail with LocalFileTracker, read it back
-    # with read_local_file, fork off it. validates that the JSONL → RecordedTrail
-    # → fork() seam holds together.
-    path = tmp_path / 'forked_from.jsonl'
-    writer = LocalFileTracker(path)
-    trail_id = writer.start_trail(
-      bro='bro',
-      llm_spec={'type': 'chat_gpt', 'model': 'gpt-5'},
-      system_prompt=_SYS_TEXT,
-      forked_from=None,
-      interactive=False,
-      surface='ask',
-    )
-    writer.step('user_input', 'hello', turn_index=0)
-    writer.step(
-      'llm_call',
-      _llm_call_body(_output_message('hi')),
-      turn_index=1,
-      response_id='r1',
-      tokens_in=1,
-      tokens_out=1,
-      tokens_reasoning=0,
-    )
-    writer.end_trail('ok')
-    writer.close()
-
-    forked_from_trail = read_local_file(path)[0]
-    llm_call_step_id = next(s.step_id for s in forked_from_trail.steps if s.kind == 'llm_call')
-
-    fork_tracker = _RecordingTracker()
-    context, _, _ = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('forked')])])
-    with context:
-      bro = fork(forked_from_trail, llm_call_step_id, tracker=fork_tracker, surface='test')
-    assert fork_tracker.headers[0]['forked_from'] == ForkedFrom(
-      trail_id=trail_id,
-      step_id=llm_call_step_id,
-    )
-    assert bro._llm is not None

@@ -473,10 +473,6 @@ class ChatGPT(llm.llm.LLM):
     }
 
   def _record_llm_call(self, request: dict, response: Response, *, turn_index: int) -> None:
-    # raw request + response payload lands inline in the trail step body. for
-    # LocalFileTracker that's a fat JSONL line; HTTPTracker will spill anything
-    # over the inline threshold to S3 server-side and replace the body with
-    # `{"s3": <key>}` — the bro doesn't know the difference.
     body = {'request': request, 'response': response.model_dump(mode='json')}
     response_usage = getattr(response, 'usage', None)
     tokens_in = getattr(response_usage, 'input_tokens', 0) if response_usage is not None else 0

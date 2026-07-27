@@ -12,8 +12,7 @@ from bro.launch.resume import (
   resume,
 )
 from llm.llms.chat_gpt import LLMSpec
-
-_SPILL_KEYS = {'s3', 'url', 'size'}
+from trails.model import spill_descriptor
 
 
 class FakeTrailsClient:
@@ -50,8 +49,9 @@ class FakeTrailsClient:
     yield from self._steps[trail_id]
 
   def resolve_body(self, body: Any) -> Any:
-    if isinstance(body, dict) and set(body.keys()) == _SPILL_KEYS:
-      return self._spilled[body['url']]
+    descriptor = spill_descriptor(body)
+    if descriptor is not None:
+      return self._spilled[descriptor['url']]
     return body
 
 

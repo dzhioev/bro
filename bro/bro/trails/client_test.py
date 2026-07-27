@@ -5,13 +5,14 @@ from unittest.mock import patch
 
 import pytest
 
-from llm.tracker import ForkedFrom, HTTPStatusError, RecordedTrail, Step, Trail
 from trails.client import (
+  HTTPStatusError,
   TrailsClient,
   fetch_recorded_trail,
   step_from_row,
   trail_from_header,
 )
+from trails.model import ForkedFrom, RecordedTrail, Step, Trail
 
 
 class _FakeResponse:

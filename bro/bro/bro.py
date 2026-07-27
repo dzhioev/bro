@@ -18,8 +18,9 @@ from bro.datasources.base import DataSource
 from bro.summon import SUMMONER_ENV
 from llm.llm import EFFORT_LEVELS, LLM, LLMSpec
 from llm.observer import BoringRenderer, NullObserver, Observer
-from llm.tracker import EndReason, HTTPTracker, NullTracker, Tracker
+from llm.tracker import EndReason, NullTracker, Tracker
 from prompts import get_prompt, hold_fragment
+from trails.client import HTTPTracker
 
 DEFAULT_LLM_SPEC: LLMSpec = llm.llms.chat_gpt.LLMSpec()
 
@@ -821,8 +822,8 @@ class BaseBro(ABC):
     summoned_by: Optional[dict[str, Any]],
   ) -> tuple[LLM, list[dict], str]:
     # the shared start sequence of run() and send(): lock in observer/tracker —
-    # caller-supplied ones win (CLIs use this to force --boring or to pass a
-    # LocalFileTracker for dev capture), set on self before _create_llm so the
+    # caller-supplied ones win (CLIs use this to force --boring and tests inject
+    # recording fakes), set on self before _create_llm so the
     # LLM construction path picks them up — then build the LLM, compose the
     # hold prompt, open the trail, and seed the message list.
     self._observer = observer if observer is not None else self._make_observer()

@@ -33,7 +33,8 @@ import llm.llms.chat_gpt
 from bro.bros.bro import Bro
 from bro.registry import create_bro
 from llm.llm import LLM, LLMSpec
-from llm.tracker import ForkedFrom, NullTracker, RecordedTrail, Step, Tracker
+from llm.tracker import NullTracker, Tracker
+from trails.model import ForkedFrom, RecordedTrail, Step
 
 
 def replay_messages(
