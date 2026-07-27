@@ -1,21 +1,13 @@
+import copy
 import io
 import json
-import re
-from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import pytest
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 
-from trails.server import storage
-from trails.server.backends import (
-  BroBackend,
-  ClaudeBackend,
-  add_numeric_maps,
-  claude_artifact_key,
-  claude_context_key,
-  normalise_usage,
-)
+from trails.model import MESSAGE_TYPES, tools_sha256
+from trails.server import backends, storage, storage_types
 
 _serializer = TypeSerializer()
 _deserializer = TypeDeserializer()
@@ -32,9 +24,11 @@ def _deserialize(item: dict) -> dict:
 class FakeS3:
   def __init__(self):
     self.objects: dict[str, bytes] = {}
+    self.put_counts: dict[str, int] = {}
 
   def put_object(self, *, Key, Body, **_):
     self.objects[Key] = Body if isinstance(Body, bytes) else Body.encode()
+    self.put_counts[Key] = self.put_counts.get(Key, 0) + 1
 
   def get_object(self, *, Key, **_):
     return {'Body': io.BytesIO(self.objects[Key])}
@@ -46,49 +40,6 @@ class FakeS3:
     return 'https://example.test/spill'
 
 
-_RESERVED_WORDS = frozenset(
-  (Path(__file__).parent / 'dynamodb_reserved_words.txt').read_text().split()
-)
-# uppercase-only, as the expressions in this repo spell them; a lowercase attribute
-# that collides with a keyword still gets flagged through the reserved-word check
-_EXPRESSION_KEYWORDS = frozenset(
-  {'SET', 'REMOVE', 'ADD', 'DELETE', 'AND', 'OR', 'NOT', 'BETWEEN', 'IN'}
-)
-_EXPRESSION_FUNCTIONS = frozenset(
-  {'attribute_exists', 'attribute_not_exists', 'attribute_type', 'begins_with', 'contains', 'size'}
-)
-_EXPRESSION_TOKEN = re.compile(r'[#:]?[A-Za-z_][A-Za-z0-9_]*')
-
-
-def _validate_expressions(operation: dict) -> None:
-  """reject expressions real DynamoDB would: bare reserved words, undefined or
-  unused ExpressionAttributeNames / ExpressionAttributeValues entries."""
-  names = operation.get('ExpressionAttributeNames', {})
-  values = operation.get('ExpressionAttributeValues', {})
-  used_names: set[str] = set()
-  used_values: set[str] = set()
-  for key, expression in operation.items():
-    if not key.endswith('Expression') or expression is None:
-      continue
-    for token in _EXPRESSION_TOKEN.findall(expression):
-      if token.startswith('#'):
-        if token not in names:
-          raise AssertionError(f'{key} references undefined name {token}: {expression}')
-        used_names.add(token)
-      elif token.startswith(':'):
-        if token not in values:
-          raise AssertionError(f'{key} references undefined value {token}: {expression}')
-        used_values.add(token)
-      elif token in _EXPRESSION_KEYWORDS or token in _EXPRESSION_FUNCTIONS:
-        continue
-      elif token.upper() in _RESERVED_WORDS:
-        raise AssertionError(f'{key} uses reserved word {token!r}: {expression}')
-  if used_names != set(names):
-    raise AssertionError(f'unused ExpressionAttributeNames: {sorted(set(names) - used_names)}')
-  if used_values != set(values):
-    raise AssertionError(f'unused ExpressionAttributeValues: {sorted(set(values) - used_values)}')
-
-
 class FakeDynamo:
   class exceptions:
     class ConditionalCheckFailedException(Exception):
@@ -98,146 +49,213 @@ class FakeDynamo:
       pass
 
   def __init__(self):
-    self.headers: dict[str, dict] = {}
-    self.steps: dict[tuple[str, str], dict] = {}
+    self.tables: dict[str, dict[Any, dict]] = {
+      'headers': {},
+      'legacy': {},
+      'universal': {},
+    }
 
-  def put_item(self, *, TableName, Item, ConditionExpression=None):
-    _validate_expressions({'ConditionExpression': ConditionExpression})
+  @property
+  def headers(self) -> dict[str, dict]:
+    return self.tables['headers']
+
+  @property
+  def legacy_steps(self) -> dict[tuple[str, str], dict]:
+    return self.tables['legacy']
+
+  @property
+  def universal_steps(self) -> dict[tuple[str, int], dict]:
+    return self.tables['universal']
+
+  @staticmethod
+  def _key(table: str, item: dict) -> Any:
+    if table == 'headers':
+      return item['id']
+    return item['trail_id'], item['step_id']
+
+  def _read_key(self, table: str, key: dict) -> Any:
+    return self._key(table, _deserialize(key))
+
+  @staticmethod
+  def _names(operation: dict) -> dict[str, str]:
+    return operation.get('ExpressionAttributeNames') or {}
+
+  @staticmethod
+  def _values(operation: dict) -> dict[str, Any]:
+    return {
+      key: _deserializer.deserialize(value)
+      for key, value in (operation.get('ExpressionAttributeValues') or {}).items()
+    }
+
+  def _field(self, token: str, operation: dict) -> str:
+    return self._names(operation).get(token, token)
+
+  def _condition(self, item: Optional[dict], operation: dict) -> bool:
+    expression = operation.get('ConditionExpression')
+    if expression is None:
+      return True
+    values = self._values(operation)
+    if expression == 'attribute_not_exists(id)':
+      return item is None
+    if expression in {'attribute_not_exists(step_id)', 'attribute_not_exists(trail_id)'}:
+      return item is None
+    if expression == 'attribute_exists(id)':
+      return item is not None
+    if expression == 'attribute_not_exists(#forked_from)':
+      return item is not None and self._field('#forked_from', operation) not in item
+    if expression == 'attribute_type(#end, :null_type)':
+      return item is not None and item.get(self._field('#end', operation)) is None
+    if expression == '#native = :old_native':
+      return (
+        item is not None and item.get(self._field('#native', operation)) == values[':old_native']
+      )
+    if expression == '#body_storage = :storage':
+      return (
+        item is not None and item.get(self._field('#body_storage', operation)) == values[':storage']
+      )
+    if expression == '#body_storage = :storage AND #extent = :expected_extent':
+      return (
+        item is not None
+        and item.get(self._field('#body_storage', operation)) == values[':storage']
+        and item.get(self._field('#extent', operation)) == values[':expected_extent']
+      )
+    raise AssertionError(f'unsupported condition: {expression}')
+
+  @staticmethod
+  def _split_assignments(expression: str) -> list[str]:
+    assignments: list[str] = []
+    depth = 0
+    start = 0
+    for index, character in enumerate(expression):
+      if character == '(':
+        depth += 1
+      elif character == ')':
+        depth -= 1
+      elif character == ',' and depth == 0:
+        assignments.append(expression[start:index].strip())
+        start = index + 1
+    assignments.append(expression[start:].strip())
+    return assignments
+
+  def _apply_update(self, table: str, operation: dict) -> None:
+    key = self._read_key(table, operation['Key'])
+    item = self.tables[table].get(key)
+    if not self._condition(item, operation):
+      raise self.exceptions.ConditionalCheckFailedException()
+    assert item is not None
+    names = self._names(operation)
+    values = self._values(operation)
+    expression = operation['UpdateExpression'].removeprefix('SET ')
+    for assignment in self._split_assignments(expression):
+      target, source = (part.strip() for part in assignment.split('=', 1))
+      target_parts = target.split('.')
+      field = names.get(target_parts[-1], target_parts[-1])
+      if source.startswith('if_not_exists('):
+        if field in item:
+          continue
+        value_name = source.removesuffix(')').split(',')[1].strip()
+      else:
+        value_name = source
+      value = values[value_name]
+      if len(target_parts) == 2 and target_parts[0] == 'native':
+        item['native'][field] = value
+      else:
+        item[field] = value
+
+  def put_item(self, *, TableName, Item, **operation):
     item = _deserialize(Item)
-    if TableName == 'headers':
-      if ConditionExpression is not None and item['id'] in self.headers:
-        raise self.exceptions.ConditionalCheckFailedException()
-      self.headers[item['id']] = item
-    else:
-      self.steps[(item['trail_id'], item['step_id'])] = item
+    key = self._key(TableName, item)
+    current = self.tables[TableName].get(key)
+    if not self._condition(current, operation):
+      raise self.exceptions.ConditionalCheckFailedException()
+    self.tables[TableName][key] = item
+
+  def delete_item(self, *, TableName, Key, **_):
+    self.tables[TableName].pop(self._read_key(TableName, Key), None)
 
   def get_item(self, *, TableName, Key, **_):
-    key = _deserialize(Key)
-    item = self.headers.get(key['id']) if TableName == 'headers' else None
+    item = self.tables[TableName].get(self._read_key(TableName, Key))
     return {'Item': _serialize(item)} if item is not None else {}
 
-  def transact_write_items(self, *, TransactItems):
-    for transact_item in TransactItems:
-      for operation in transact_item.values():
-        _validate_expressions(operation)
-    first_put = TransactItems[0].get('Put')
-    if first_put is not None and first_put['TableName'] == 'headers':
-      header = _deserialize(first_put['Item'])
-      if header['id'] in self.headers:
-        self._cancel(['ConditionalCheckFailed', 'None'])
-      self.headers[header['id']] = header
-      for operation in TransactItems[1:]:
-        step = _deserialize(operation['Put']['Item'])
-        self.steps[(step['trail_id'], step['step_id'])] = step
-      return
-    put = TransactItems[0]['Put']
-    update = TransactItems[1]['Update']
-    step = _deserialize(put['Item'])
-    step_key = (step['trail_id'], step['step_id'])
-    header_id = _deserialize(update['Key'])['id']
-    if step_key in self.steps:
-      self._cancel(['ConditionalCheckFailed', 'None'])
-    header = self.headers.get(header_id)
-    if header is None:
-      self._cancel(['None', 'ConditionalCheckFailed'])
-    assert header is not None
-    names = update['ExpressionAttributeNames']
-    values = {
-      key: _deserializer.deserialize(value)
-      for key, value in update['ExpressionAttributeValues'].items()
-    }
-    kind = names['#kind']
-    header['native']['step_counts_by_kind'][kind] += values[':one']
-    header['last_alive_at'] = values[':alive']
-    if 'turn_count = turn_count + :one' in update['UpdateExpression']:
-      header['turn_count'] += values[':one']
-    model = names.get('#model')
-    if model is not None:
-      header['native']['usage'][model] = values[':usage']
-    self.steps[step_key] = step
-
-  def _cancel(self, codes: list[str]):
-    exception = self.exceptions.TransactionCanceledException('cancelled')
-    exception.response = {'CancellationReasons': [{'Code': code} for code in codes]}  # type: ignore[attr-defined]
-    raise exception
-
-  def update_item(self, *, TableName, Key, UpdateExpression, ExpressionAttributeValues, **kwargs):
-    _validate_expressions(
-      {
-        'UpdateExpression': UpdateExpression,
-        'ExpressionAttributeValues': ExpressionAttributeValues,
-        **kwargs,
-      }
-    )
-    del TableName
-    trail_id = _deserialize(Key)['id']
-    header = self.headers.get(trail_id)
-    if header is None:
-      raise self.exceptions.ConditionalCheckFailedException()
-    values = {
-      key: _deserializer.deserialize(value) for key, value in ExpressionAttributeValues.items()
-    }
-    names = kwargs.get('ExpressionAttributeNames', {})
-    if UpdateExpression == 'SET last_alive_at = :timestamp':
-      header['last_alive_at'] = values[':timestamp']
-    elif UpdateExpression == 'SET #end = :end, last_alive_at = :timestamp':
-      header['end'] = values[':end']
-      header['last_alive_at'] = values[':timestamp']
-    elif UpdateExpression == 'SET #end = :end':
-      if header.get('end') is not None:
-        raise self.exceptions.ConditionalCheckFailedException()
-      header['end'] = values[':end']
-    else:
-      assignments = UpdateExpression.removeprefix('SET ').split(', ')
-      for assignment in assignments:
-        target, value_name = assignment.split(' = ')
-        field = names[target.removeprefix('native.').strip()]
-        if target.startswith('native.'):
-          header['native'][field] = values[value_name]
-        else:
-          header[field] = values[value_name]
+  def update_item(self, *, TableName, **operation):
+    self._apply_update(TableName, operation)
     return {}
 
+  def transact_write_items(self, *, TransactItems):
+    snapshot = copy.deepcopy(self.tables)
+    codes: list[str] = []
+    failed = False
+    for transaction_item in TransactItems:
+      name, operation = next(iter(transaction_item.items()))
+      try:
+        if name == 'Put':
+          self.put_item(
+            TableName=operation['TableName'],
+            Item=operation['Item'],
+            ConditionExpression=operation.get('ConditionExpression'),
+            ExpressionAttributeNames=operation.get('ExpressionAttributeNames'),
+            ExpressionAttributeValues=operation.get('ExpressionAttributeValues'),
+          )
+        elif name == 'Update':
+          self._apply_update(operation['TableName'], operation)
+        else:
+          raise AssertionError(name)
+      except self.exceptions.ConditionalCheckFailedException:
+        codes.append('ConditionalCheckFailed')
+        failed = True
+      else:
+        codes.append('None')
+    if failed:
+      self.tables = snapshot
+      exception = self.exceptions.TransactionCanceledException('cancelled')
+      exception.response = {'CancellationReasons': [{'Code': code} for code in codes]}  # type: ignore[attr-defined]
+      raise exception
+
   def query(self, **kwargs):
-    _validate_expressions(kwargs)
-    values = {
-      key: _deserializer.deserialize(value)
-      for key, value in kwargs['ExpressionAttributeValues'].items()
-    }
-    if 'IndexName' not in kwargs:
+    table = kwargs['TableName']
+    values = self._values(kwargs)
+    if 'IndexName' in kwargs:
+      partition_name = {
+        'all-index': 'gsi_pk',
+        'bro-started_at-index': 'bro',
+        'harness-started_at-index': 'harness',
+        'forked-from-id-index': 'forked_from_id',
+      }[kwargs['IndexName']]
+      items = [
+        item
+        for item in self.tables[table].values()
+        if item.get(partition_name) == values[':partition']
+      ]
+      if ':since' in values:
+        items = [item for item in items if item['started_at'] >= values[':since']]
+      if ':until' in values:
+        items = [item for item in items if item['started_at'] <= values[':until']]
+      items.sort(key=lambda item: item['started_at'], reverse=True)
+    else:
       trail_id = values[':trail_id']
-      ordered = sorted(
-        [item for (item_trail_id, _), item in self.steps.items() if item_trail_id == trail_id],
-        key=lambda item: item['step_id'],
-      )
+      items = [item for item in self.tables[table].values() if item['trail_id'] == trail_id]
+      if 'BETWEEN' in kwargs['KeyConditionExpression']:
+        items = [item for item in items if values[':start'] <= item['step_id'] <= values[':end']]
+      items.sort(key=lambda item: item['step_id'])
       start_key = kwargs.get('ExclusiveStartKey')
       if start_key is not None:
         after = _deserialize(start_key)['step_id']
-        ordered = [item for item in ordered if item['step_id'] > after]
-      limit = kwargs['Limit']
-      page = ordered[:limit]
-      response: dict[str, Any] = {'Items': [_serialize(item) for item in page]}
-      if len(ordered) > limit:
+        items = [item for item in items if item['step_id'] > after]
+    limit = kwargs.get('Limit')
+    page = items if limit is None else items[:limit]
+    response: dict[str, Any] = {'Items': [_serialize(item) for item in page]}
+    if limit is not None and len(items) > limit:
+      last = page[-1]
+      if table == 'headers':
+        response['LastEvaluatedKey'] = _serialize({'id': last['id']})
+      else:
         response['LastEvaluatedKey'] = _serialize(
-          {'trail_id': trail_id, 'step_id': page[-1]['step_id']}
+          {'trail_id': last['trail_id'], 'step_id': last['step_id']}
         )
-      return response
-    index = kwargs['IndexName']
-    partition_name = {
-      'all-index': 'gsi_pk',
-      'bro-started_at-index': 'bro',
-      'harness-started_at-index': 'harness',
-      'forked-from-id-index': 'forked_from_id',
-    }[index]
-    items = [
-      item for item in self.headers.values() if item.get(partition_name) == values[':partition']
-    ]
-    if ':since' in values:
-      items = [item for item in items if item['started_at'] >= values[':since']]
-    if ':until' in values:
-      items = [item for item in items if item['started_at'] <= values[':until']]
-    items.sort(key=lambda item: item['started_at'], reverse=True)
-    return {'Items': [_serialize(item) for item in items[: kwargs['Limit']]]}
+    return response
+
+  def scan(self, *, TableName, **_):
+    return {'Items': [_serialize(item) for item in self.tables[TableName].values()]}
 
 
 @pytest.fixture
@@ -248,13 +266,14 @@ def components():
     dynamo=dynamo,
     s3=s3,
     trails_table='headers',
-    steps_table='steps',
+    steps_table='legacy',
+    universal_steps_table='universal',
     bucket='bucket',
   )
   return store, dynamo, s3
 
 
-async def _create_bro(store: storage.Storage, **overrides) -> str:
+async def _create_bro(store: storage.Storage, *, universal: bool = True, **overrides) -> str:
   payload = {
     'harness': 'bro',
     'version': '2',
@@ -263,178 +282,429 @@ async def _create_bro(store: storage.Storage, **overrides) -> str:
     'surface': 'ask',
     'hold': 'unattended',
     'native': {'llm': {'type': 'chat_gpt', 'model': 'gpt-5'}},
-    'body': {'system_prompt': 'prompt'},
+    'body': (
+      {'records': [{'kind': 'system_prompt', 'body': 'prompt', 'turn_index': 0}]}
+      if universal
+      else {'system_prompt': 'prompt'}
+    ),
   }
   payload.update(overrides)
   return (await store.create_trail(**payload))['id']
 
 
-@pytest.mark.asyncio
-async def test_create_stores_universal_header_and_opens_bro_body(components):
-  store, dynamo, _ = components
-  trail_id = await _create_bro(
-    store,
-    forked_from={'trail_id': 'parent', 'step_id': 'step'},
-    summoned_by={'trail_id': 'summoner'},
-  )
-  header = dynamo.headers[trail_id]
-  assert header['id'] == trail_id
-  assert header['harness'] == 'bro'
-  assert header['version'] == '2'
-  assert header['forked_from_id'] == 'parent'
-  assert header['summoned_by'] == {'trail_id': 'summoner'}
-  assert header['native']['step_counts_by_kind']['system_prompt'] == 1
-  [system_prompt] = dynamo.steps.values()
-  assert system_prompt['kind'] == 'system_prompt'
-
-
-@pytest.mark.asyncio
-async def test_backend_instances_are_cached(components):
-  store, _, _ = components
-  first = store._backend('bro')
-  second = store._backend('bro')
-  assert first is second
-  assert isinstance(first, BroBackend)
-
-
-@pytest.mark.asyncio
-async def test_bro_step_updates_counts_turns_and_exact_raw_usage(components):
-  store, dynamo, _ = components
-  trail_id = await _create_bro(store)
-  await store.put_step(trail_id=trail_id, kind='user_input', body='hello', extras={})
-  response = {
-    'model': 'gpt-5',
-    'usage': {
-      'input_tokens': 100,
-      'input_tokens_details': {'cached_tokens': 40},
-      'output_tokens': 20,
-      'output_tokens_details': {'reasoning_tokens': 7},
-      'total_tokens': 120,
+async def _create_claude(store: storage.Storage, *, universal: bool = True, **overrides) -> str:
+  payload = {
+    'harness': 'claude',
+    'version': '2',
+    'interactive': True,
+    'surface': 'cw',
+    'native': {
+      'llm': {'type': 'claude'},
+      'segment': 'segment',
+      'cw_command': 'cw ss',
+      'harness_version': 'unknown',
     },
+    'body': {'records': []} if universal else {'artifact': ''},
   }
-  await store.put_step(
-    trail_id=trail_id,
-    kind='llm_call',
-    body={'request': {}, 'response': response},
-    extras={},
-    step_id='call-1',
-  )
-  await store.put_step(
-    trail_id=trail_id,
-    kind='llm_call',
-    body={'request': {}, 'response': response},
-    extras={},
-    step_id='call-2',
-  )
-  header = dynamo.headers[trail_id]
-  assert header['turn_count'] == 1
-  assert header['native']['step_counts_by_kind']['llm_call'] == 2
-  assert header['native']['usage']['gpt-5']['input_tokens'] == 200
-  projected = await store.get_trail(trail_id)
-  assert projected['usage']['gpt-5'] == {
-    'input': 120,
-    'cache_write': 0,
-    'cache_read': 80,
-    'output': 40,
+  payload.update(overrides)
+  return (await store.create_trail(**payload))['id']
+
+
+def _bro_call(output: list[dict], *, model: str = 'gpt-5', input_tokens: int = 10) -> dict:
+  return {
+    'kind': 'llm_call',
+    'body': {
+      'request': {},
+      'response': {
+        'model': model,
+        'usage': {'input_tokens': input_tokens, 'output_tokens': 3},
+        'output': output,
+      },
+    },
+    'response_id': 'response-1',
   }
-  assert projected['models'] == ['gpt-5']
+
+
+def _claude_assistant(message_id: str, text: str, *, uuid: str) -> str:
+  return json.dumps(
+    {
+      'type': 'assistant',
+      'uuid': uuid,
+      'timestamp': '2026-01-01T00:00:00Z',
+      'message': {
+        'id': message_id,
+        'model': 'claude-opus',
+        'usage': {'input_tokens': 7, 'output_tokens': 2},
+        'content': [{'type': 'text', 'text': text}],
+      },
+    }
+  )
 
 
 @pytest.mark.asyncio
-async def test_retried_step_id_is_idempotent(components):
+async def test_five_function_registry_and_declared_projection_contract():
+  assert 'end' not in MESSAGE_TYPES
+  assert set(backends.BACKENDS) == {'bro', 'claude'}
+  for adapter in backends.BACKENDS.values():
+    assert {
+      name
+      for name in ('parse', 'classify', 'project', 'open', 'validate_create')
+      if callable(getattr(adapter, name))
+    } == {'parse', 'classify', 'project', 'open', 'validate_create'}
+    assert adapter.emitted_message_types <= MESSAGE_TYPES
+
+
+@pytest.mark.asyncio
+async def test_universal_append_uses_ordinals_folds_raw_usage_and_is_idempotent(components):
   store, dynamo, _ = components
   trail_id = await _create_bro(store)
-  await store.put_step(trail_id=trail_id, kind='reasoning', body='first', extras={}, step_id='same')
-  duplicate = await store.put_step(
-    trail_id=trail_id, kind='reasoning', body='first', extras={}, step_id='same'
+  result = await store.append_records(
+    trail_id,
+    offset=1,
+    records=[
+      {'kind': 'user_input', 'body': 'hello'},
+      _bro_call([{'type': 'message', 'content': [{'type': 'output_text', 'text': 'hi'}]}]),
+    ],
   )
-  assert duplicate['duplicate'] is True
-  assert len([key for key in dynamo.steps if key[1] == 'same']) == 1
+  assert result == {'extent': 3, 'appended': 2}
+  assert sorted(
+    step_id for row_trail, step_id in dynamo.universal_steps if row_trail == trail_id
+  ) == [
+    0,
+    1,
+    2,
+  ]
+  header = dynamo.headers[trail_id]
+  assert header['extent'] == 3
+  assert header['turn_count'] == 1
+  assert header['native']['usage'] == {'gpt-5': {'input_tokens': 10, 'output_tokens': 3}}
+  assert (await store.get_trail(trail_id))['usage'] == header['native']['usage']
+  assert (await store.check(trail_id))['ok'] is True
+
+  duplicate = await store.append_records(
+    trail_id,
+    offset=1,
+    records=[
+      {'kind': 'user_input', 'body': 'hello'},
+      _bro_call([{'type': 'message', 'content': [{'type': 'output_text', 'text': 'hi'}]}]),
+    ],
+  )
+  assert duplicate == {'extent': 3, 'appended': 0, 'duplicate': True}
+  assert dynamo.headers[trail_id]['turn_count'] == 1
+  with pytest.raises(storage.AppendConflict):
+    await store.append_records(
+      trail_id,
+      offset=1,
+      records=[
+        {'kind': 'user_input', 'body': 'different'},
+        {'kind': 'error', 'body': 'competing writer'},
+      ],
+    )
+  with pytest.raises(storage.AppendConflict) as caught:
+    await store.append_records(trail_id, offset=0, records=[{'kind': 'error', 'body': 'x'}])
+  assert caught.value.actual == 3
 
 
 @pytest.mark.asyncio
-async def test_bro_spillover_round_trip(components):
+async def test_append_chunks_without_interleaving(components):
+  store, dynamo, _ = components
+  trail_id = await _create_bro(store)
+  records = [{'kind': 'error', 'body': str(index)} for index in range(51)]
+  assert await store.append_records(trail_id, offset=1, records=records) == {
+    'extent': 52,
+    'appended': 51,
+  }
+  assert dynamo.headers[trail_id]['extent'] == 52
+
+
+@pytest.mark.asyncio
+async def test_bro_projection_derives_output_and_skips_decomposed_rows(components):
+  store, _, _ = components
+  trail_id = await _create_bro(store)
+  await store.append_records(
+    trail_id,
+    offset=1,
+    records=[
+      _bro_call(
+        [
+          {
+            'type': 'reasoning',
+            'summary': [{'type': 'summary_text', 'text': 'think'}],
+          },
+          {'type': 'function_call', 'name': 'read', 'call_id': 'call-1', 'arguments': '{}'},
+        ]
+      ),
+      {'kind': 'reasoning', 'body': 'duplicate'},
+      {'kind': 'tool_call', 'body': None, 'call_id': 'call-1'},
+    ],
+  )
+  page = await store.query_messages(trail_id, after=None, limit=20, types=None)
+  assert [message['type'] for message in page['messages']] == [
+    'system_prompt',
+    'llm_call',
+    'reasoning',
+    'tool_call',
+  ]
+  assert page['messages'][2]['source'] == {'step_id': 1, 'index': 1}
+  assert page['messages'][3]['source'] == {'step_id': 1, 'index': 2}
+
+  await store.append_records(
+    trail_id,
+    offset=4,
+    records=[
+      _bro_call([{'type': 'message', 'content': [{'type': 'output_text', 'text': 'done'}]}])
+    ],
+  )
+  messages = (await store.query_messages(trail_id, after='3', limit=10, types=None))['messages']
+  assistant = next(message for message in messages if message['type'] == 'assistant')
+  assert assistant['terminal'] is True
+
+
+@pytest.mark.asyncio
+async def test_claude_billing_decision_is_stored_across_batches_and_pages(components):
+  store, dynamo, _ = components
+  trail_id = await _create_claude(store)
+  first = _claude_assistant('message-1', 'first', uuid='uuid-1')
+  second = _claude_assistant('message-1', 'second', uuid='uuid-2')
+  third = _claude_assistant('message-1', 'third', uuid='uuid-3')
+  await store.append_records(trail_id, offset=0, records=[first, second])
+  await store.append_records(trail_id, offset=2, records=[third])
+  assert dynamo.universal_steps[(trail_id, 0)]['usage'] == {
+    'input_tokens': 7,
+    'output_tokens': 2,
+  }
+  assert 'usage' not in dynamo.universal_steps[(trail_id, 1)]
+  assert 'usage' not in dynamo.universal_steps[(trail_id, 2)]
+  assert dynamo.headers[trail_id]['native']['usage']['claude-opus']['input_tokens'] == 7
+
+  billed = []
+  after: Optional[str | int] = None
+  while True:
+    page = await store.query_messages(trail_id, after=after, limit=1, types=None)
+    billed.extend(message for message in page['messages'] if message['type'] == 'llm_call')
+    after = page['next']
+    if after is None:
+      break
+  assert len(billed) == 1
+  assert (await store.check(trail_id))['ok'] is True
+
+
+@pytest.mark.asyncio
+async def test_check_detects_non_adjacent_message_billing(components):
+  store, _, _ = components
+  trail_id = await _create_claude(store)
+  await store.append_records(
+    trail_id,
+    offset=0,
+    records=[_claude_assistant('message-a', 'first', uuid='uuid-1')],
+  )
+  await store.append_records(
+    trail_id,
+    offset=1,
+    records=[_claude_assistant('message-b', 'middle', uuid='uuid-2')],
+  )
+  await store.append_records(
+    trail_id,
+    offset=2,
+    records=[_claude_assistant('message-a', 'last', uuid='uuid-3')],
+  )
+  checked = await store.check(trail_id)
+  differences = checked['trails'][0]['differences']
+  assert checked['ok'] is False
+  assert any(
+    difference.get('message_id') == 'message-a' and difference['field'] == 'billing_contributions'
+    for difference in differences
+  )
+
+
+@pytest.mark.asyncio
+async def test_claude_classifier_owns_version_title_and_turns(components):
+  store, dynamo, _ = components
+  trail_id = await _create_claude(store)
+  records = [
+    json.dumps({'type': 'system', 'version': '2.1.0'}),
+    json.dumps({'type': 'ai-title', 'aiTitle': 'A useful title'}),
+    json.dumps({'type': 'user', 'message': {'content': 'hello'}}),
+    json.dumps(
+      {
+        'type': 'user',
+        'message': {
+          'content': [{'type': 'tool_result', 'tool_use_id': 'call-1', 'content': 'result'}]
+        },
+      }
+    ),
+  ]
+  await store.append_records(trail_id, offset=0, records=records)
+  header = dynamo.headers[trail_id]
+  assert header['native']['harness_version'] == '2.1.0'
+  assert header['subject'] == 'A useful title'
+  assert header['turn_count'] == 1
+
+
+@pytest.mark.asyncio
+async def test_spill_and_content_addressed_tools(components):
   store, _, s3 = components
   trail_id = await _create_bro(store)
-  body = {'text': 'x' * (storage.SPILLOVER_THRESHOLD_BYTES + 1)}
-  await store.put_step(trail_id=trail_id, kind='tool_result', body=body, extras={})
-  assert len(s3.objects) == 1
-  page = await store.query_steps(trail_id, after=None, limit=100)
-  assert page['steps'][-1]['body'] == body
-
-
-@pytest.mark.asyncio
-async def test_claude_body_keys_snapshot_and_lossless_lines(components):
-  store, dynamo, s3 = components
-  result = await store.create_trail(
-    harness='claude',
-    version='2',
-    interactive=True,
-    surface='cw',
-    body={'artifact': '{"type":"system"}\nnot json\n', 'launch_context': {'cwd': '/x'}},
-    native={'segment': 'uuid', 'llm': {'model': 'opus'}},
-  )
-  trail_id = result['id']
-  native = dynamo.headers[trail_id]['native']
-  assert native['s3_key'] == claude_artifact_key(trail_id)
-  assert native['context_s3'] == claude_context_key(trail_id)
-  assert claude_context_key(trail_id) in s3.objects
-  page = await store.query_steps(trail_id, after=None, limit=100)
-  assert page['steps'][0]['record'] == {'type': 'system'}
-  assert page['steps'][1]['record'] is None
-  assert page['steps'][1]['raw'] == 'not json'
-  await store.replace_artifact(
+  tool_body = [{'type': 'function', 'name': 'read'}]
+  sha256 = tools_sha256(tool_body)
+  large = 'x' * (storage.SPILLOVER_THRESHOLD_BYTES + 1)
+  await store.append_records(
     trail_id,
-    '{"type":"user","message":{"content":"hello"}}\n',
-    {'harness_version': '2.1.0'},
+    offset=1,
+    records=[{'kind': 'tool_result', 'body': large, 'tools_sha256': sha256}],
+    tools={sha256: tool_body},
   )
-  assert dynamo.headers[trail_id]['native']['line_count'] == 1
-  assert dynamo.headers[trail_id]['native']['harness_version'] == '2.1.0'
+  await store.append_records(trail_id, offset=2, records=[], tools={sha256: tool_body})
+  tool_key = storage_types.tool_blob_key(sha256)
+  assert s3.put_counts[tool_key] == 1
+  row = next(row for row in s3.objects if row.startswith(f'trails/steps/{trail_id}/1-'))
+  assert row in s3.objects
+  assert (await store.query_steps(trail_id, after=None, limit=10))['steps'][1]['body'] == large
+  with pytest.raises(ValueError, match='hash mismatch'):
+    await store.append_records(trail_id, offset=2, records=[], tools={'0' * 64: tool_body})
 
 
 @pytest.mark.asyncio
-async def test_update_header_rejects_frozen_fields(components):
+async def test_spilled_claude_line_keeps_the_native_raw_view(components):
   store, _, _ = components
-  trail_id = await _create_bro(store)
-  with pytest.raises(ValueError, match='immutable'):
-    await store.update_header(trail_id, {'surface': 'other'})
-  updated = await store.update_header(trail_id, {'subject': 'new subject'})
-  assert updated['subject'] == 'new subject'
+  trail_id = await _create_claude(store)
+  raw = json.dumps(
+    {'type': 'system', 'content': 'x' * (storage.INLINE_RESPONSE_THRESHOLD_BYTES + 1)}
+  )
+  await store.append_records(trail_id, offset=0, records=[raw])
+  [step] = (await store.query_steps(trail_id, after=None, limit=10))['steps']
+  assert step['raw'] == raw
+  assert step['record']['type'] == 'system'
 
 
 @pytest.mark.asyncio
-async def test_end_uses_final_map_and_historical_projection_maps_terminal(components):
+async def test_dual_read_keeps_legacy_bro_and_claude_bodies_live(components):
   store, _, _ = components
-  trail_id = await _create_bro(store)
-  await store.end_trail(trail_id=trail_id, reason='raised', detail='blocked', step_id='end')
-  header = await store.get_trail(trail_id)
-  assert header['end']['reason'] == 'raised'
-  assert header['end']['detail'] == 'blocked'
-  backend = store._backend('bro')
-  messages = backend.project_messages(
-    [
+  bro_trail = await _create_bro(store, universal=False)
+  await store.put_step(
+    trail_id=bro_trail,
+    kind='user_input',
+    body='legacy input',
+    extras={},
+    step_id='legacy-user',
+  )
+  bro_steps = await store.query_steps(bro_trail, after=None, limit=10)
+  assert [step['kind'] for step in bro_steps['steps']] == ['system_prompt', 'user_input']
+
+  claude_trail = await _create_claude(store, universal=False)
+  raw = _claude_assistant('legacy-message', 'legacy', uuid='legacy-uuid') + '\n'
+  await store.replace_artifact(claude_trail, raw, {'harness_version': '2.1.0'})
+  claude_steps = await store.query_steps(claude_trail, after=None, limit=10)
+  assert claude_steps['steps'][0]['raw'] == raw.rstrip('\n')
+  messages = await store.query_messages(claude_trail, after=None, limit=10, types=None)
+  assert [message['type'] for message in messages['messages']] == ['llm_call', 'assistant']
+
+
+@pytest.mark.asyncio
+async def test_launch_context_is_harness_neutral_and_end_adds_no_step(components):
+  store, dynamo, s3 = components
+  trail_id = await _create_bro(
+    store,
+    body={
+      'records': [{'kind': 'system_prompt', 'body': 'prompt'}],
+      'launch_context': {'cwd': '/workspace'},
+    },
+  )
+  header = dynamo.headers[trail_id]
+  assert header['context_s3'] == storage_types.context_key(trail_id)
+  assert 'context_s3' not in header['native']
+  assert await store.get_launch_context(trail_id) == {'cwd': '/workspace'}
+  assert storage_types.context_key(trail_id) in s3.objects
+  before = len(dynamo.universal_steps)
+  await store.end_trail(trail_id=trail_id, reason='ok', detail=None, step_id='ignored')
+  assert len(dynamo.universal_steps) == before
+  assert dynamo.headers[trail_id]['end']['reason'] == 'ok'
+
+
+@pytest.mark.asyncio
+async def test_check_detects_corruption_and_recompute_repairs_rows_and_header(components):
+  store, dynamo, _ = components
+  trail_id = await _create_claude(store)
+  await store.append_records(
+    trail_id,
+    offset=0,
+    records=[_claude_assistant('message-1', 'first', uuid='uuid-1')],
+  )
+  dynamo.headers[trail_id]['turn_count'] = 9
+  dynamo.headers[trail_id]['native']['usage'] = {}
+  dynamo.universal_steps[(trail_id, 0)]['uuid'] = 'wrong'
+  dynamo.universal_steps[(trail_id, 0)].pop('usage')
+  checked = await store.check(trail_id)
+  assert checked['ok'] is False
+  fields = {difference['field'] for difference in checked['trails'][0]['differences']}
+  assert {'turn_count', 'native.usage', 'uuid', 'usage', 'billing_contributions'} <= fields
+
+  await store.recompute(trail_id)
+  assert (await store.check(trail_id))['ok'] is True
+  assert dynamo.universal_steps[(trail_id, 0)]['uuid'] == 'uuid-1'
+
+
+@pytest.mark.asyncio
+async def test_store_check_finds_cross_trail_duplicate_uuids(components):
+  store, _, _ = components
+  first = await _create_claude(store)
+  second = await _create_claude(store)
+  await store.append_records(
+    first,
+    offset=0,
+    records=[_claude_assistant('message-1', 'first', uuid='duplicate')],
+  )
+  await store.append_records(
+    second,
+    offset=0,
+    records=[_claude_assistant('message-2', 'second', uuid='duplicate')],
+  )
+  checked = await store.check()
+  assert checked['ok'] is False
+  assert checked['cross_trail_duplicate_uuids'] == [
+    {'uuid': 'duplicate', 'trail_ids': sorted([first, second])}
+  ]
+
+
+@pytest.mark.asyncio
+async def test_relink_manifests_before_trimming_and_recomputes(components):
+  store, dynamo, s3 = components
+  trail_id = await _create_claude(store)
+  records = [
+    json.dumps({'type': 'system', 'uuid': 'copied'}),
+    json.dumps(
       {
-        'trail_id': trail_id,
-        'step_id': 'old-end',
-        'ts': '2026-01-01T00:00:00Z',
-        'kind': 'end',
-        'body': {'reason': 'terminal'},
+        'type': 'user',
+        'uuid': 'own',
+        'message': {'content': 'hello'},
       }
-    ]
+    ),
+  ]
+  await store.append_records(trail_id, offset=0, records=records)
+  result = await store.relink(
+    trail_id,
+    {'trail_id': 'parent', 'step_id': 7, 'index': 2},
+    1,
   )
-  assert messages[0]['reason'] == 'ok'
+  assert result['extent'] == 1
+  assert result['manifest_s3'] in s3.objects
+  manifest = json.loads(s3.objects[result['manifest_s3']])
+  assert manifest['deleted_rows'][0]['uuid'] == 'copied'
+  assert dynamo.headers[trail_id]['forked_from_id'] == 'parent'
+  assert dynamo.headers[trail_id]['turn_count'] == 1
+  assert dynamo.universal_steps[(trail_id, 0)]['uuid'] == 'own'
+  assert (trail_id, 1) not in dynamo.universal_steps
 
 
 @pytest.mark.asyncio
-async def test_list_uses_harness_and_fork_indexes(components):
+async def test_list_and_pointer_index_stay_available(components):
   store, _, _ = components
   root = await _create_bro(store)
-  child = await _create_bro(store, forked_from={'trail_id': root, 'step_id': 'step'})
-  harness_page = await store.list_trails(
-    harness='bro', bro=None, forked_from=None, since=None, until=None, cursor=None, limit=10
+  child = await _create_bro(
+    store,
+    forked_from={'trail_id': root, 'step_id': 0, 'index': 2},
   )
-  assert {item['id'] for item in harness_page['trails']} == {root, child}
-  fork_page = await store.list_trails(
+  page = await store.list_trails(
     harness=None,
     bro=None,
     forked_from=root,
@@ -443,184 +713,4 @@ async def test_list_uses_harness_and_fork_indexes(components):
     cursor=None,
     limit=10,
   )
-  assert [item['id'] for item in fork_page['trails']] == [child]
-
-
-def test_usage_helpers_preserve_raw_shape_and_project_harnesses():
-  assert add_numeric_maps({'a': 1, 'nested': {'x': 2}}, {'a': 3, 'nested': {'x': 4}}) == {
-    'a': 4,
-    'nested': {'x': 6},
-  }
-  assert normalise_usage(
-    'claude',
-    {
-      'opus': {
-        'input_tokens': 1,
-        'cache_creation_input_tokens': 2,
-        'cache_read_input_tokens': 3,
-        'output_tokens': 4,
-      }
-    },
-  ) == {'opus': {'input': 1, 'cache_write': 2, 'cache_read': 3, 'output': 4}}
-
-
-def test_claude_projection_emits_llm_call_once_and_content_events():
-  backend = ClaudeBackend(s3=None, bucket='bucket')
-  messages = backend.project_messages(
-    [
-      {
-        'step_id': '0',
-        'ts': '2026-01-01T00:00:00Z',
-        'raw': '',
-        'record': {
-          'type': 'assistant',
-          'message': {
-            'model': 'opus',
-            'usage': {'input_tokens': 1, 'output_tokens': 2},
-            'content': [
-              {'type': 'thinking', 'thinking': 'hmm'},
-              {'type': 'text', 'text': 'answer'},
-              {'type': 'tool_use', 'id': 'tool-1', 'name': 'read', 'input': {'path': 'x'}},
-            ],
-          },
-        },
-      }
-    ]
-  )
-  assert [message['type'] for message in messages] == [
-    'llm_call',
-    'reasoning',
-    'assistant',
-    'tool_call',
-  ]
-  assert messages[0]['usage']['output'] == 2
-  assert messages[2]['source'] == {'step_id': '0', 'index': 2}
-
-
-def _assistant_record(step_id: str, message_id: str, block: dict) -> dict:
-  return {
-    'step_id': step_id,
-    'ts': '2026-01-01T00:00:00Z',
-    'raw': '',
-    'record': {
-      'type': 'assistant',
-      'message': {
-        'id': message_id,
-        'model': 'opus',
-        'usage': {'input_tokens': 1, 'output_tokens': 2},
-        'content': [block],
-      },
-    },
-  }
-
-
-def test_claude_projection_dedups_split_message_records():
-  # claude writes one record per content block of the same API message, each
-  # repeating the message id and usage — only the first record of a message id
-  # may bill, or summing llm_call usage would multiply token totals
-  backend = ClaudeBackend(s3=None, bucket='bucket')
-  messages = backend.project_messages(
-    [
-      _assistant_record('0', 'msg-1', {'type': 'thinking', 'thinking': 'hmm'}),
-      _assistant_record('1', 'msg-1', {'type': 'text', 'text': 'answer'}),
-      _assistant_record('2', 'msg-2', {'type': 'text', 'text': 'more'}),
-    ]
-  )
-  assert [message['type'] for message in messages] == [
-    'llm_call',
-    'reasoning',
-    'assistant',
-    'llm_call',
-    'assistant',
-  ]
-  # block events keep their in-record index even when the llm_call is deduped
-  assert messages[2]['source'] == {'step_id': '1', 'index': 1}
-
-
-@pytest.mark.asyncio
-async def test_claude_message_pages_bill_a_split_message_once():
-  s3 = FakeS3()
-  backend = ClaudeBackend(s3=s3, bucket='bucket')
-  # claude interleaves a message's records with the tool results they trigger,
-  # so a page can open on a continuation whose previous line is not assistant
-  tool_result = {
-    'type': 'user',
-    'message': {'content': [{'type': 'tool_result', 'tool_use_id': 'tool-1', 'content': 'ok'}]},
-  }
-  records = [
-    _assistant_record('0', 'msg-1', {'type': 'thinking', 'thinking': 'hmm'})['record'],
-    _assistant_record('1', 'msg-1', {'type': 'tool_use', 'id': 'tool-1', 'name': 'read'})['record'],
-    tool_result,
-    _assistant_record('3', 'msg-1', {'type': 'text', 'text': 'answer'})['record'],
-    _assistant_record('4', 'msg-2', {'type': 'text', 'text': 'more'})['record'],
-  ]
-  s3.put_object(
-    Key=claude_artifact_key('trail'),
-    Body=''.join(json.dumps(record) + '\n' for record in records),
-  )
-  billed: list[dict] = []
-  after: Any = None
-  while True:
-    page = await backend.project_message_page('trail', after=after, limit=1)
-    billed.extend(message for message in page['messages'] if message['type'] == 'llm_call')
-    after = page['next']
-    if after is None:
-      break
-  assert [message['usage']['output'] for message in billed] == [2, 2]
-
-
-@pytest.mark.asyncio
-async def test_launch_context_round_trip(components):
-  store, _, _ = components
-  claude_native = {'segment': 'uuid', 'llm': {}, 'cw_command': 'cw ss', 'harness_version': '2.1.0'}
-  with_context = (
-    await store.create_trail(
-      harness='claude',
-      version='2',
-      interactive=True,
-      surface='cw',
-      native=claude_native,
-      body={'artifact': '', 'launch_context': [{'title': 'git state'}]},
-    )
-  )['id']
-  without_context = (
-    await store.create_trail(
-      harness='claude',
-      version='2',
-      interactive=True,
-      surface='cw',
-      native=claude_native,
-      body={'artifact': ''},
-    )
-  )['id']
-  assert await store.get_launch_context(with_context) == [{'title': 'git state'}]
-  assert await store.get_launch_context(without_context) is None
-  bro_trail = await _create_bro(store)
-  assert await store.get_launch_context(bro_trail) is None
-
-
-def test_expression_validation_matches_real_dynamodb_rejections():
-  with pytest.raises(AssertionError, match="reserved word 'usage'"):
-    _validate_expressions(
-      {
-        'UpdateExpression': 'SET native.usage.#model = :usage',
-        'ExpressionAttributeNames': {'#model': 'opus'},
-        'ExpressionAttributeValues': {':usage': {'N': '1'}},
-      }
-    )
-  with pytest.raises(AssertionError, match='undefined name #model'):
-    _validate_expressions({'UpdateExpression': 'SET #model = :value'})
-  with pytest.raises(AssertionError, match='unused ExpressionAttributeValues'):
-    _validate_expressions(
-      {
-        'ConditionExpression': 'attribute_exists(id)',
-        'ExpressionAttributeValues': {':stray': {'N': '1'}},
-      }
-    )
-  _validate_expressions(
-    {
-      'UpdateExpression': 'SET native.#usage.#model = :usage, last_alive_at = :alive',
-      'ExpressionAttributeNames': {'#usage': 'usage', '#model': 'opus'},
-      'ExpressionAttributeValues': {':usage': {'N': '1'}, ':alive': {'S': 't'}},
-    }
-  )
+  assert [trail['id'] for trail in page['trails']] == [child]

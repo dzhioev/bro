@@ -1,7 +1,23 @@
 """Shared trail records and wire vocabulary."""
 
+import hashlib
+import json
 from dataclasses import dataclass
 from typing import Any, Optional, TypedDict, cast
+
+MESSAGE_TYPES = frozenset(
+  {
+    'user_input',
+    'llm_call',
+    'reasoning',
+    'assistant',
+    'tool_call',
+    'tool_result',
+    'system_prompt',
+    'error',
+    'harness_event',
+  }
+)
 
 
 @dataclass(frozen=True)
@@ -9,7 +25,8 @@ class ForkedFrom:
   """Pointer to a source trail's fork point."""
 
   trail_id: str
-  step_id: str
+  step_id: str | int
+  index: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -37,11 +54,12 @@ class Step:
   """One harness-native record in a trail."""
 
   trail_id: str
-  step_id: str
-  ts: str
-  kind: str
+  step_id: str | int
+  ts: Optional[str]
+  kind: Optional[str]
   body: Any
   extras: dict[str, Any]
+  usage: Optional[dict] = None
 
 
 @dataclass(frozen=True)
@@ -61,6 +79,16 @@ class SpillDescriptor(TypedDict):
 
 
 _SPILL_DESCRIPTOR_KEYS = frozenset(SpillDescriptor.__required_keys__)
+
+
+def canonical_json_bytes(value: Any) -> bytes:
+  return json.dumps(
+    value, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False
+  ).encode('utf-8')
+
+
+def tools_sha256(tools: Any) -> str:
+  return hashlib.sha256(canonical_json_bytes(tools)).hexdigest()
 
 
 def spill_descriptor(value: Any) -> Optional[SpillDescriptor]:

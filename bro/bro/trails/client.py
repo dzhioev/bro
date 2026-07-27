@@ -142,12 +142,12 @@ class TrailsClient:
     self,
     trail_id: str,
     *,
-    after: Optional[str] = None,
+    after: Optional[str | int] = None,
     limit: Optional[int] = None,
   ) -> dict:
     query: dict[str, str] = {}
     if after is not None:
-      query['after'] = after
+      query['after'] = str(after)
     if limit is not None:
       query['limit'] = str(limit)
     return self._get(f'/v1/trails/{trail_id}/steps', query)
@@ -156,7 +156,7 @@ class TrailsClient:
     self,
     trail_id: str,
     *,
-    after: Optional[str] = None,
+    after: Optional[str | int] = None,
     page_size: int = DEFAULT_STEPS_PAGE_SIZE,
   ) -> Iterator[dict]:
     """walk steps across cursor pages. `after` starts the walk strictly past
@@ -175,14 +175,14 @@ class TrailsClient:
     trail_id: str,
     *,
     types: Optional[set[str]] = None,
-    after: Optional[str] = None,
+    after: Optional[str | int] = None,
     limit: Optional[int] = None,
   ) -> dict:
     query: list[tuple[str, str]] = []
     if types is not None:
       query.extend(('type', message_type) for message_type in sorted(types))
     if after is not None:
-      query.append(('after', after))
+      query.append(('after', str(after)))
     if limit is not None:
       query.append(('limit', str(limit)))
     return self._get_pairs(f'/v1/trails/{trail_id}/messages', query)
@@ -192,7 +192,7 @@ class TrailsClient:
     trail_id: str,
     *,
     types: Optional[set[str]] = None,
-    after: Optional[str] = None,
+    after: Optional[str | int] = None,
     page_size: int = DEFAULT_STEPS_PAGE_SIZE,
   ) -> Iterator[dict]:
     while True:
@@ -225,6 +225,41 @@ class TrailsClient:
       f'/v1/trails/{trail_id}/steps',
       payload,
       retry_delays=_STEP_RETRY_DELAYS_SECONDS,
+    )
+
+  def append_records(
+    self,
+    trail_id: str,
+    offset: int,
+    records: list[Any],
+    *,
+    tools: Optional[dict[str, Any]] = None,
+  ) -> dict:
+    payload: dict[str, Any] = {'offset': offset, 'records': records}
+    if tools is not None:
+      payload['tools'] = tools
+    return self._send(
+      'POST',
+      f'/v1/trails/{trail_id}/records',
+      payload,
+      retry_delays=_STEP_RETRY_DELAYS_SECONDS,
+    )
+
+  def recompute(self, trail_id: str) -> dict:
+    return self._send('POST', f'/v1/admin/trails/{trail_id}/recompute', {})
+
+  def check(self, trail_id: Optional[str] = None) -> dict:
+    return self._send(
+      'POST',
+      '/v1/admin/trails/check',
+      {'trail_id': trail_id} if trail_id is not None else {},
+    )
+
+  def relink(self, trail_id: str, forked_from: dict, delete_count: int) -> dict:
+    return self._send(
+      'POST',
+      f'/v1/admin/trails/{trail_id}/relink',
+      {'forked_from': forked_from, 'delete_count': delete_count},
     )
 
   def replace_artifact(self, trail_id: str, artifact: str, native: dict) -> dict:
@@ -412,7 +447,11 @@ class HTTPTracker(Tracker):
       'version': configs.VERSION,
       'native': {'llm': llm_spec},
       'body': {'system_prompt': system_prompt},
-      'forked_from': asdict(forked_from) if forked_from is not None else None,
+      'forked_from': (
+        {key: value for key, value in asdict(forked_from).items() if value is not None}
+        if forked_from is not None
+        else None
+      ),
       'interactive': interactive,
       'surface': surface,
       'hold': hold,
@@ -509,7 +548,9 @@ def default_client() -> TrailsClient:
 # fields the server stamps onto every step row alongside the per-kind extras.
 # everything else goes into `Step.extras` so callers can poke at provider /
 # kind-specific metadata (turn_index, tool_name, call_id, response_id, ...).
-_STEP_CANONICAL_FIELDS = frozenset({'trail_id', 'step_id', 'ts', 'kind', 'body'})
+_STEP_CANONICAL_FIELDS = frozenset(
+  {'trail_id', 'step_id', 'ts', 'kind', 'body', 'usage', 'payload_sha256'}
+)
 
 
 def trail_from_header(data: dict) -> Trail:
@@ -550,6 +591,7 @@ def step_from_row(data: dict) -> Step:
     kind=data['kind'],
     body=data.get('body'),
     extras=extras,
+    usage=data.get('usage'),
   )
 
 

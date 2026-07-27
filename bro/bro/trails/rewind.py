@@ -729,7 +729,7 @@ def _render_tree(
   forked_from_step = ''
   forked_from = trail.get('forked_from')
   if forked_from is not None:
-    step_id = forked_from['step_id'][:_STEP_ID_DISPLAY_CHARS]
+    step_id = str(forked_from['step_id'])[:_STEP_ID_DISPLAY_CHARS]
     forked_from_step = f' {colors.dim}@step {step_id}{colors.reset}'
   lines.append(
     f'{prefix}{connector}{colors.yellow}{trail_id}{colors.reset}  '

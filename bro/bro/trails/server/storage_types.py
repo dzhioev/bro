@@ -1,6 +1,7 @@
 """Shared storage constants, DynamoDB conversion, and storage exceptions."""
 
 import decimal
+import hashlib
 import json
 from datetime import UTC, datetime
 from typing import Any, Optional
@@ -13,33 +14,10 @@ SPILLOVER_THRESHOLD_BYTES = 50 * 1024
 MAX_BODY_BYTES = 10 * 1024 * 1024
 INLINE_RESPONSE_THRESHOLD_BYTES = 1 * 1024 * 1024
 PRESIGNED_URL_TTL_SECONDS = 3600
-
-BRO_STEP_KINDS = (
-  'system_prompt',
-  'user_input',
-  'reasoning',
-  'assistant',
-  'tool_call',
-  'tool_result',
-  'llm_call',
-  'error',
-  'end',
-)
-
-MESSAGE_TYPES = frozenset(
-  {
-    'user_input',
-    'llm_call',
-    'reasoning',
-    'assistant',
-    'tool_call',
-    'tool_result',
-    'system_prompt',
-    'error',
-    'end',
-    'harness_event',
-  }
-)
+# keeps both DynamoDB transaction limits: 51 operations and under 4 MB when every inline body
+# is just below the spill threshold.
+MAX_TRANSACTION_RECORDS = 50
+UNIVERSAL_BODY_STORAGE = 'trail_steps_v2'
 
 
 class TrailNotFound(Exception):
@@ -48,6 +26,13 @@ class TrailNotFound(Exception):
 
 class BodyTooLarge(Exception):
   pass
+
+
+class AppendConflict(Exception):
+  def __init__(self, expected: int, actual: int):
+    super().__init__(f'append offset {expected} does not match trail extent {actual}')
+    self.expected = expected
+    self.actual = actual
 
 
 _serializer = TypeSerializer()
@@ -100,21 +85,47 @@ def from_ddb_item(item: Optional[dict]) -> Optional[dict]:
   return {key: from_ddb(value) for key, value in item.items()}
 
 
+def body_bytes(body: Any) -> bytes:
+  if isinstance(body, bytes):
+    return body
+  if isinstance(body, str):
+    return body.encode('utf-8')
+  return json.dumps(body, ensure_ascii=False).encode('utf-8')
+
+
 def body_size_bytes(body: Any) -> int:
   if body is None:
     return 0
-  if isinstance(body, str):
-    return len(body.encode('utf-8'))
-  return len(json.dumps(body, ensure_ascii=False).encode('utf-8'))
+  return len(body_bytes(body))
 
 
-def bro_spillover_key(trail_id: str, step_id: str) -> str:
+def sha256_hex(payload: bytes) -> str:
+  return hashlib.sha256(payload).hexdigest()
+
+
+def legacy_bro_spillover_key(trail_id: str, step_id: str) -> str:
   return f'trails/{trail_id}/steps/{step_id}.json'
 
 
-def conditional_check_failed(exception) -> bool:
-  reasons = getattr(exception, 'response', {}).get('CancellationReasons', [])
-  return any(reason.get('Code') == 'ConditionalCheckFailed' for reason in reasons)
+def universal_spillover_key(trail_id: str, step_id: int, payload: bytes) -> str:
+  return f'trails/steps/{trail_id}/{step_id}-{sha256_hex(payload)}.json'
+
+
+def tool_blob_key(sha256: str) -> str:
+  return f'trails/tools/{sha256}.json'
+
+
+def legacy_claude_artifact_key(trail_id: str) -> str:
+  return f'trails/claude/{trail_id}/records.jsonl'
+
+
+def context_key(trail_id: str) -> str:
+  return f'trails/{trail_id}/context.json'
+
+
+def relink_manifest_key(trail_id: str, timestamp: str) -> str:
+  compact = timestamp.replace(':', '').replace('.', '')
+  return f'trails/migrations/relink/{trail_id}-{compact}.json'
 
 
 def cancellation_codes(exception) -> list[str]:

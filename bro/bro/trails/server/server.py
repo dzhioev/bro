@@ -14,13 +14,14 @@ from aiohttp import web
 
 import base.args
 from base import log
-from trails.server import storage
+from trails.model import MESSAGE_TYPES
+from trails.server import backends, storage
 
 __cli_name__ = 'trails-server'
 
 DEFAULT_PORT = 8004
 LOOPBACK_HOSTS = frozenset({'127.0.0.1', 'localhost'})
-VALID_STEP_KINDS = frozenset(storage.STEP_KINDS) - {'system_prompt', 'end'}
+VALID_STEP_KINDS = backends.BRO_STEP_KINDS - {'system_prompt', 'end'}
 VALID_END_REASONS = frozenset({'ok', 'raised', 'error'})
 VALID_HOLDS = frozenset({'guided', 'attended', 'detached', 'unattended'})
 SWEEP_INTERVAL_SECONDS = 600.0
@@ -70,16 +71,27 @@ def _pointer(payload: dict, field: str, *, step_optional: bool) -> Optional[web.
   value = payload.get(field)
   if value is None:
     return None
-  allowed = {'trail_id', 'step_id'} if step_optional else {'trail_id', 'step_id'}
-  required = {'trail_id'} if step_optional else allowed
+  allowed = {'trail_id', 'step_id', 'index'}
+  required = {'trail_id'} if step_optional else {'trail_id', 'step_id'}
   if (
     not isinstance(value, dict) or not required.issubset(value) or not set(value).issubset(allowed)
   ):
-    suffix = '{trail_id, step_id?}' if step_optional else '{trail_id, step_id}'
+    suffix = '{trail_id, step_id?, index?}' if step_optional else '{trail_id, step_id, index?}'
     return _error(f'{field} must be {suffix}', 400)
-  for key in value:
-    if not isinstance(value[key], str) or len(value[key]) == 0:
-      return _error(f'{field}.{key} must be a non-empty string', 400)
+  trail_id = value.get('trail_id')
+  if not isinstance(trail_id, str) or len(trail_id) == 0:
+    return _error(f'{field}.trail_id must be a non-empty string', 400)
+  step_id = value.get('step_id')
+  if step_id is not None and (
+    not isinstance(step_id, (str, int))
+    or isinstance(step_id, bool)
+    or (isinstance(step_id, str) and len(step_id) == 0)
+    or (isinstance(step_id, int) and step_id < 0)
+  ):
+    return _error(f'{field}.step_id must be a non-empty string or non-negative int', 400)
+  index = value.get('index')
+  if index is not None and (not isinstance(index, int) or isinstance(index, bool) or index < 0):
+    return _error(f'{field}.index must be a non-negative int', 400)
   return None
 
 
@@ -132,22 +144,16 @@ async def _handle_create_trail(request: web.Request) -> web.Response:
   native = payload.get('native')
   if not isinstance(native, dict):
     return _error('native must be an object', 400)
-  if payload['harness'] == 'bro':
-    if not isinstance(payload.get('bro'), str):
-      return _error('bro is required for the bro harness', 400)
-    if not isinstance(native.get('llm'), dict):
-      return _error('native.llm is required for the bro harness', 400)
-  elif payload['harness'] == 'claude':
-    for field, expected_type in (
-      ('llm', dict),
-      ('segment', str),
-      ('cw_command', str),
-      ('harness_version', str),
-    ):
-      if not isinstance(native.get(field), expected_type):
-        return _error(f'native.{field} is required for the claude harness', 400)
-  else:
+  try:
+    adapter = backends.BACKENDS[payload['harness']]
+  except KeyError:
     return _error(f'unsupported harness: {payload["harness"]}', 400)
+  try:
+    adapter.validate_create(native)
+  except ValueError as exception:
+    return _error(str(exception), 400)
+  if payload['harness'] == 'bro' and not isinstance(payload.get('bro'), str):
+    return _error('bro is required for the bro harness', 400)
   location = payload.get('location')
   if location is not None:
     if not isinstance(location, dict) or not set(location).issubset(
@@ -209,6 +215,40 @@ async def _handle_put_step(request: web.Request) -> web.Response:
   except ValueError as exception:
     return _error(str(exception), 400)
   return web.Response(status=204)
+
+
+async def _handle_append_records(request: web.Request) -> web.Response:
+  trail_id = request.match_info['trail_id']
+  payload = await _read_json(request)
+  if not isinstance(payload, dict):
+    return _error('invalid json', 400)
+  unknown = set(payload) - {'offset', 'records', 'tools'}
+  if len(unknown) > 0:
+    return _error(f'unknown fields: {sorted(unknown)}', 400)
+  offset = payload.get('offset')
+  if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
+    return _error('offset must be a non-negative int', 400)
+  records = payload.get('records')
+  if not isinstance(records, list):
+    return _error('records must be a list', 400)
+  tools = payload.get('tools', {})
+  if not isinstance(tools, dict):
+    return _error('tools must be an object', 400)
+  store: storage.Storage = request.app['storage']
+  try:
+    result = await store.append_records(trail_id, offset=offset, records=records, tools=tools)
+  except storage.BodyTooLarge as exception:
+    return _error(str(exception), 413)
+  except storage.TrailNotFound:
+    return _error(f'trail not found: {trail_id}', 404)
+  except storage.AppendConflict as exception:
+    return web.json_response(
+      {'error': str(exception), 'expected': exception.expected, 'extent': exception.actual},
+      status=409,
+    )
+  except ValueError as exception:
+    return _error(str(exception), 400)
+  return web.json_response(result)
 
 
 async def _handle_replace_artifact(request: web.Request) -> web.Response:
@@ -329,6 +369,8 @@ async def _handle_get_steps(request: web.Request) -> web.Response:
     result = await store.query_steps(trail_id, after=after, limit=limit)
   except storage.TrailNotFound:
     return _error(f'trail not found: {trail_id}', 404)
+  except ValueError as exception:
+    return _error(str(exception), 400)
   return web.json_response(result)
 
 
@@ -337,7 +379,7 @@ async def _handle_get_messages(request: web.Request) -> web.Response:
   after = request.query.get('after')
   limit = _parse_limit(request.query.get('limit'), default=100, ceiling=500)
   requested_types = set(request.query.getall('type', []))
-  unknown = requested_types - storage.MESSAGE_TYPES
+  unknown = requested_types - MESSAGE_TYPES
   if len(unknown) > 0:
     return _error(f'unknown message types: {sorted(unknown)}', 400)
   store: storage.Storage = request.app['storage']
@@ -350,7 +392,59 @@ async def _handle_get_messages(request: web.Request) -> web.Response:
     )
   except storage.TrailNotFound:
     return _error(f'trail not found: {trail_id}', 404)
+  except ValueError as exception:
+    return _error(str(exception), 400)
   return web.json_response(result)
+
+
+async def _handle_recompute(request: web.Request) -> web.Response:
+  trail_id = request.match_info['trail_id']
+  store: storage.Storage = request.app['storage']
+  try:
+    return web.json_response(await store.recompute(trail_id))
+  except storage.TrailNotFound:
+    return _error(f'trail not found: {trail_id}', 404)
+  except ValueError as exception:
+    return _error(str(exception), 400)
+
+
+async def _handle_check(request: web.Request) -> web.Response:
+  payload = await _read_json(request)
+  if payload is None:
+    payload = {}
+  if not isinstance(payload, dict) or set(payload) - {'trail_id'}:
+    return _error('body must contain only optional trail_id', 400)
+  trail_id = payload.get('trail_id')
+  if trail_id is not None and (not isinstance(trail_id, str) or len(trail_id) == 0):
+    return _error('trail_id must be a non-empty string', 400)
+  store: storage.Storage = request.app['storage']
+  try:
+    return web.json_response(await store.check(trail_id))
+  except storage.TrailNotFound:
+    return _error(f'trail not found: {trail_id}', 404)
+  except ValueError as exception:
+    return _error(str(exception), 400)
+
+
+async def _handle_relink(request: web.Request) -> web.Response:
+  trail_id = request.match_info['trail_id']
+  payload = await _read_json(request)
+  if not isinstance(payload, dict) or set(payload) != {'forked_from', 'delete_count'}:
+    return _error('body must contain forked_from and delete_count', 400)
+  pointer_payload = {'forked_from': payload['forked_from']}
+  invalid = _pointer(pointer_payload, 'forked_from', step_optional=False)
+  if invalid is not None:
+    return invalid
+  delete_count = payload['delete_count']
+  if not isinstance(delete_count, int) or isinstance(delete_count, bool) or delete_count < 0:
+    return _error('delete_count must be a non-negative int', 400)
+  store: storage.Storage = request.app['storage']
+  try:
+    return web.json_response(await store.relink(trail_id, payload['forked_from'], delete_count))
+  except storage.TrailNotFound:
+    return _error(f'trail not found: {trail_id}', 404)
+  except ValueError as exception:
+    return _error(str(exception), 400)
 
 
 async def _handle_list_trails(request: web.Request) -> web.Response:
@@ -412,12 +506,16 @@ def create_app(
   app.router.add_get('/v1/trails/{trail_id}', _handle_get_trail)
   app.router.add_patch('/v1/trails/{trail_id}', _handle_update_header)
   app.router.add_post('/v1/trails/{trail_id}/steps', _handle_put_step)
+  app.router.add_post('/v1/trails/{trail_id}/records', _handle_append_records)
   app.router.add_get('/v1/trails/{trail_id}/steps', _handle_get_steps)
   app.router.add_get('/v1/trails/{trail_id}/messages', _handle_get_messages)
   app.router.add_get('/v1/trails/{trail_id}/context', _handle_get_context)
   app.router.add_put('/v1/trails/{trail_id}/artifact', _handle_replace_artifact)
   app.router.add_post('/v1/trails/{trail_id}/end', _handle_end_trail)
   app.router.add_post('/v1/trails/{trail_id}/keepalive', _handle_keepalive)
+  app.router.add_post('/v1/admin/trails/check', _handle_check)
+  app.router.add_post('/v1/admin/trails/{trail_id}/recompute', _handle_recompute)
+  app.router.add_post('/v1/admin/trails/{trail_id}/relink', _handle_relink)
   if sweep_interval_seconds is not None:
 
     async def _sweep_context(app: web.Application):
@@ -451,6 +549,7 @@ def main(argv: list[str]) -> Optional[int]:
   parser.add_argument('--trails-allow-no-auth', action='store_true')
   parser.add_argument('--trails-table', required=True)
   parser.add_argument('--steps-table', required=True)
+  parser.add_argument('--universal-steps-table', required=True)
   parser.add_argument('--spillover-bucket', required=True)
   parser.add_argument('--aws-region', default=os.environ.get('AWS_REGION', 'eu-central-1'))
   args = parser.parse(argv)
@@ -465,6 +564,7 @@ def main(argv: list[str]) -> Optional[int]:
     s3=session.client('s3'),
     trails_table=args['trails_table'],
     steps_table=args['steps_table'],
+    universal_steps_table=args['universal_steps_table'],
     bucket=args['spillover_bucket'],
   )
   auth_description = 'bearer auth' if bearer_token is not None else 'NO AUTH'

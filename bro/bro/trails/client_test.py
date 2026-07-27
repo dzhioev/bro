@@ -254,6 +254,39 @@ class TestWrites:
       _client().create_trail({'harness': 'claude'})
     assert len(fake.requests) == 1
 
+  def test_append_records_posts_offset_records_and_tool_blobs(self, monkeypatch):
+    fake = _install_fake_connection(monkeypatch)
+    fake.queue((200, b'{"extent": 2, "appended": 1}'))
+    result = _client().append_records(
+      'T1',
+      1,
+      [{'kind': 'user_input', 'body': 'hello'}],
+      tools={'abc': [{'name': 'read'}]},
+    )
+    assert result == {'extent': 2, 'appended': 1}
+    method, path, body, _ = fake.requests[0]
+    assert (method, path) == ('POST', '/v1/trails/T1/records')
+    assert body is not None and json.loads(body) == {
+      'offset': 1,
+      'records': [{'kind': 'user_input', 'body': 'hello'}],
+      'tools': {'abc': [{'name': 'read'}]},
+    }
+
+  def test_admin_operations_use_the_server_seam(self, monkeypatch):
+    fake = _install_fake_connection(monkeypatch)
+    fake.queue((200, b'{"extent": 2}'))
+    fake.queue((200, b'{"ok": true}'))
+    fake.queue((200, b'{"extent": 1}'))
+    client = _client()
+    assert client.recompute('T1') == {'extent': 2}
+    assert client.check('T1') == {'ok': True}
+    assert client.relink('T1', {'trail_id': 'parent', 'step_id': 4}, 1) == {'extent': 1}
+    assert [request[1] for request in fake.requests] == [
+      '/v1/admin/trails/T1/recompute',
+      '/v1/admin/trails/check',
+      '/v1/admin/trails/T1/relink',
+    ]
+
   def test_replace_artifact_puts_snapshot_and_native(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
     fake.queue((200, b'{"native": {"line_count": 2}}'))
@@ -355,13 +388,14 @@ class TestTrailFromHeader:
         'started_at': '2026-06-07T00:00:00.000000Z',
         'interactive': True,
         'surface': 'fork',
-        'forked_from': {'trail_id': 'T1', 'step_id': 'S5'},
+        'forked_from': {'trail_id': 'T1', 'step_id': 5, 'index': 2},
         'summoned_by': {'trail_id': 'T-root'},
       }
     )
     assert isinstance(trail.forked_from, ForkedFrom)
     assert trail.forked_from.trail_id == 'T1'
-    assert trail.forked_from.step_id == 'S5'
+    assert trail.forked_from.step_id == 5
+    assert trail.forked_from.index == 2
     assert trail.summoned_by == {'trail_id': 'T-root'}
 
 
@@ -378,11 +412,14 @@ class TestStepFromRow:
         'arguments': {'name': 'x'},
         'call_id': 'c1',
         'turn_index': 1,
+        'usage': {'output_tokens': 2},
+        'payload_sha256': 'digest',
       }
     )
     assert isinstance(step, Step)
     assert step.kind == 'tool_call'
     assert step.body is None
+    assert step.usage == {'output_tokens': 2}
     assert step.extras == {
       'tool_name': 'add_task',
       'arguments': {'name': 'x'},

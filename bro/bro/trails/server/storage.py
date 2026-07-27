@@ -1,27 +1,28 @@
-"""Universal trail-header registry and harness body-backend dispatch."""
+"""Universal trail headers, append storage, compatibility writes, and dual reads."""
 
 import asyncio
 import json
 from datetime import UTC, datetime, timedelta
 from typing import Any, Optional
 
-from trails.server import storage_types
-from trails.server.backends import BodyBackend, BroBackend, ClaudeBackend
+from trails.model import canonical_json_bytes
+from trails.server import backends, storage_types
+from trails.server.folding import AggregateState
+from trails.server.operations import Operations
 
 SPILLOVER_THRESHOLD_BYTES = storage_types.SPILLOVER_THRESHOLD_BYTES
 MAX_BODY_BYTES = storage_types.MAX_BODY_BYTES
 INLINE_RESPONSE_THRESHOLD_BYTES = storage_types.INLINE_RESPONSE_THRESHOLD_BYTES
 PRESIGNED_URL_TTL_SECONDS = storage_types.PRESIGNED_URL_TTL_SECONDS
-STEP_KINDS = storage_types.BRO_STEP_KINDS
-MESSAGE_TYPES = storage_types.MESSAGE_TYPES
 TrailNotFound = storage_types.TrailNotFound
 BodyTooLarge = storage_types.BodyTooLarge
+AppendConflict = storage_types.AppendConflict
 
 GSI_PK_ATTRIBUTE = 'gsi_pk'
 GSI_PK_VALUE = 'trail'
 LOST_AFTER_SECONDS = 3600
 SWEEP_WINDOW_DAYS = 30
-
+CLAUDE_ARTIFACT_CONTENT_TYPE = 'application/x-ndjson'
 _ddb = storage_types.ddb
 _ddb_item = storage_types.ddb_item
 _from_ddb = storage_types.from_ddb
@@ -29,41 +30,48 @@ _from_ddb_item = storage_types.from_ddb_item
 _body_size_bytes = storage_types.body_size_bytes
 
 
-def _format_iso(moment: datetime) -> str:
-  return moment.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
-
-
-def _now_iso() -> str:
-  return storage_types.now_iso()
-
-
 class Storage:
-  def __init__(self, *, dynamo, s3, trails_table: str, steps_table: str, bucket: str):
+  def __init__(
+    self,
+    *,
+    dynamo,
+    s3,
+    trails_table: str,
+    steps_table: str,
+    bucket: str,
+    universal_steps_table: Optional[str] = None,
+  ):
     self._dynamo = dynamo
     self._s3 = s3
     self._trails_table = trails_table
-    self._steps_table = steps_table
+    self._legacy_steps_table = steps_table
+    self._steps_table = (
+      universal_steps_table if universal_steps_table is not None else 'trail_steps_v2'
+    )
     self._bucket = bucket
-    self._backends: dict[str, BodyBackend] = {}
+    self._backends = dict(backends.BACKENDS)
+    self._stored_tool_hashes: set[str] = set()
+    self._operations = Operations(
+      dynamo=dynamo,
+      s3=s3,
+      trails_table=trails_table,
+      steps_table=self._steps_table,
+      bucket=bucket,
+      backend=self._backend,
+      required_header=self._required_header,
+      materialize_row=self._materialize_row,
+    )
 
-  def _backend(self, harness: str) -> BodyBackend:
-    backend = self._backends.get(harness)
-    if backend is not None:
-      return backend
-    if harness == 'bro':
-      backend = BroBackend(
-        dynamo=self._dynamo,
-        s3=self._s3,
-        trails_table=self._trails_table,
-        steps_table=self._steps_table,
-        bucket=self._bucket,
-      )
-    elif harness == 'claude':
-      backend = ClaudeBackend(s3=self._s3, bucket=self._bucket)
-    else:
-      raise ValueError(f'unsupported harness: {harness}')
-    self._backends[harness] = backend
-    return backend
+  def _backend(self, harness: str) -> backends.Adapter:
+    try:
+      return self._backends[harness]
+    except KeyError as exception:
+      raise ValueError(f'unsupported harness: {harness}') from exception
+
+  def validate_create(self, harness: str, native: dict) -> None:
+    if not isinstance(native, dict):
+      raise ValueError('native must be an object')
+    self._backend(harness).validate_create(native)
 
   async def create_trail(
     self,
@@ -82,12 +90,23 @@ class Storage:
     native: Optional[dict] = None,
     trail_id: Optional[str] = None,
   ) -> dict:
+    native = native if native is not None else {}
+    self.validate_create(harness, native)
+    if harness == 'bro' and bro is None:
+      raise ValueError('bro is required for the bro harness')
     trail_id = trail_id if trail_id is not None else storage_types.new_id()
     started_at = _now_iso()
-    backend = self._backend(harness)
-    opened_body = await backend.open(
-      trail_id, body, native if native is not None else {}, started_at
-    )
+    adapter = self._backend(harness)
+    universal = 'records' in body
+    launch_context = body.get('launch_context')
+    opened = adapter.open(body, started_at)
+    if universal and len(opened.records) > storage_types.MAX_TRANSACTION_RECORDS:
+      raise ValueError(
+        f'a trail may open with at most {storage_types.MAX_TRANSACTION_RECORDS} records'
+      )
+    if launch_context is not None:
+      await self._store_context(trail_id, launch_context)
+
     item: dict[str, Any] = {
       'id': trail_id,
       'harness': harness,
@@ -98,7 +117,7 @@ class Storage:
       'interactive': interactive,
       'surface': surface,
       'turn_count': 0,
-      'native': opened_body.native,
+      'native': dict(native),
       GSI_PK_ATTRIBUTE: GSI_PK_VALUE,
     }
     optional = {
@@ -108,13 +127,28 @@ class Storage:
       'summoned_by': summoned_by,
       'subject': subject,
       'location': location,
+      'context_s3': storage_types.context_key(trail_id) if launch_context is not None else None,
     }
     item.update({key: value for key, value in optional.items() if value is not None})
     if forked_from is not None:
       item['forked_from_id'] = forked_from['trail_id']
-    await asyncio.to_thread(
-      self._dynamo.transact_write_items,
-      TransactItems=[
+
+    if universal:
+      item['body_storage'] = storage_types.UNIVERSAL_BODY_STORAGE
+      item['extent'] = 0
+      state = AggregateState(item)
+      seen_billing_keys: set[str] = set()
+      rows = await self._prepare_rows(
+        trail_id,
+        0,
+        opened.records,
+        adapter,
+        started_at,
+        state,
+        seen_billing_keys,
+      )
+      item.update(self._state_fields(state, len(rows)))
+      transaction_items = [
         {
           'Put': {
             'TableName': self._trails_table,
@@ -122,10 +156,312 @@ class Storage:
             'ConditionExpression': 'attribute_not_exists(id)',
           }
         },
-        *opened_body.transaction_items,
-      ],
-    )
+        *[
+          {
+            'Put': {
+              'TableName': self._steps_table,
+              'Item': _ddb_item(row),
+              'ConditionExpression': 'attribute_not_exists(trail_id)',
+            }
+          }
+          for row in rows
+        ],
+      ]
+      await asyncio.to_thread(
+        self._dynamo.transact_write_items,
+        TransactItems=transaction_items,
+      )
+    else:
+      transaction_items = await self._open_legacy_body(
+        trail_id, harness, opened.records, item, started_at
+      )
+      await asyncio.to_thread(
+        self._dynamo.transact_write_items,
+        TransactItems=[
+          {
+            'Put': {
+              'TableName': self._trails_table,
+              'Item': _ddb_item(item),
+              'ConditionExpression': 'attribute_not_exists(id)',
+            }
+          },
+          *transaction_items,
+        ],
+      )
     return {'id': trail_id, 'started_at': started_at}
+
+  async def _open_legacy_body(
+    self,
+    trail_id: str,
+    harness: str,
+    records: list[Any],
+    item: dict,
+    started_at: str,
+  ) -> list[dict]:
+    item['native']['usage'] = {}
+    if harness == 'bro':
+      if len(records) != 1:
+        raise ValueError('legacy bro bodies must open with one system prompt')
+      parsed = self._backend(harness).parse(records[0])
+      step_id = storage_types.new_id()
+      step = {
+        'trail_id': trail_id,
+        'step_id': step_id,
+        'ts': parsed.timestamp if parsed.timestamp is not None else started_at,
+        'kind': parsed.kind,
+        'body': parsed.body,
+        **parsed.attributes,
+      }
+      item['native']['step_counts_by_kind'] = dict.fromkeys(backends.BRO_STEP_KINDS, 0)
+      item['native']['step_counts_by_kind']['system_prompt'] = 1
+      return [{'Put': {'TableName': self._legacy_steps_table, 'Item': _ddb_item(step)}}]
+    artifact = ''.join(f'{record}\n' for record in records)
+    payload = artifact.encode('utf-8')
+    key = storage_types.legacy_claude_artifact_key(trail_id)
+    await asyncio.to_thread(
+      self._s3.put_object,
+      Bucket=self._bucket,
+      Key=key,
+      Body=payload,
+      ContentType=CLAUDE_ARTIFACT_CONTENT_TYPE,
+    )
+    item['native'].update({'s3_key': key, 'line_count': len(records), 'size_bytes': len(payload)})
+    return []
+
+  async def _store_context(self, trail_id: str, context: Any) -> None:
+    await asyncio.to_thread(
+      self._s3.put_object,
+      Bucket=self._bucket,
+      Key=storage_types.context_key(trail_id),
+      Body=json.dumps(context, ensure_ascii=False).encode('utf-8'),
+      ContentType='application/json',
+    )
+
+  async def append_records(
+    self,
+    trail_id: str,
+    *,
+    offset: int,
+    records: list[Any],
+    tools: Optional[dict[str, Any]] = None,
+  ) -> dict:
+    if offset < 0:
+      raise ValueError('offset must be non-negative')
+    header = await self._required_header(trail_id)
+    if header.get('body_storage') != storage_types.UNIVERSAL_BODY_STORAGE:
+      raise ValueError('append is available only after the trail body is migrated')
+    actual = self._header_extent(header)
+    expected_end = offset + len(records)
+    if actual != offset:
+      if actual == expected_end and await self._batch_matches(trail_id, offset, records):
+        return {'extent': actual, 'appended': 0, 'duplicate': True}
+      raise AppendConflict(offset, actual)
+    await self._store_tools(tools if tools is not None else {})
+    if len(records) == 0:
+      return {'extent': actual, 'appended': 0}
+
+    adapter = self._backend(header['harness'])
+    state = AggregateState(header)
+    seen_billing_keys: set[str] = set()
+    committed = 0
+    while committed < len(records):
+      chunk = records[committed : committed + storage_types.MAX_TRANSACTION_RECORDS]
+      chunk_offset = offset + committed
+      rows = await self._prepare_rows(
+        trail_id,
+        chunk_offset,
+        chunk,
+        adapter,
+        _now_iso(),
+        state,
+        seen_billing_keys,
+      )
+      new_extent = chunk_offset + len(rows)
+      update = self._append_header_update(
+        trail_id,
+        expected_extent=chunk_offset,
+        state=state,
+        new_extent=new_extent,
+      )
+      transaction_items = [
+        {
+          'Put': {
+            'TableName': self._steps_table,
+            'Item': _ddb_item(row),
+            'ConditionExpression': 'attribute_not_exists(trail_id)',
+          }
+        }
+        for row in rows
+      ]
+      transaction_items.append({'Update': update})
+      try:
+        await asyncio.to_thread(
+          self._dynamo.transact_write_items,
+          TransactItems=transaction_items,
+        )
+      except self._dynamo.exceptions.TransactionCanceledException as exception:
+        refreshed = await self._required_header(trail_id)
+        refreshed_extent = self._header_extent(refreshed)
+        if (
+          committed == 0
+          and refreshed_extent == expected_end
+          and await self._batch_matches(trail_id, offset, records)
+        ):
+          return {'extent': refreshed_extent, 'appended': 0, 'duplicate': True}
+        if refreshed_extent != chunk_offset:
+          raise AppendConflict(chunk_offset, refreshed_extent) from exception
+        raise RuntimeError(
+          f'ordinal {chunk_offset} is already occupied at the trail extent'
+        ) from exception
+      committed += len(rows)
+    return {'extent': offset + committed, 'appended': committed}
+
+  async def _batch_matches(self, trail_id: str, offset: int, records: list[Any]) -> bool:
+    response = await asyncio.to_thread(
+      self._dynamo.query,
+      TableName=self._steps_table,
+      KeyConditionExpression='trail_id = :trail_id AND step_id BETWEEN :start AND :end',
+      ExpressionAttributeValues={
+        ':trail_id': _ddb(trail_id),
+        ':start': _ddb(offset),
+        ':end': _ddb(offset + len(records) - 1),
+      },
+      ConsistentRead=True,
+    )
+    rows = [row for item in response.get('Items', []) if (row := _from_ddb_item(item)) is not None]
+    expected = [storage_types.sha256_hex(canonical_json_bytes(record)) for record in records]
+    return len(rows) == len(records) and all(
+      row.get('payload_sha256') == sha256 for row, sha256 in zip(rows, expected, strict=True)
+    )
+
+  async def _prepare_rows(
+    self,
+    trail_id: str,
+    offset: int,
+    payloads: list[Any],
+    adapter: backends.Adapter,
+    default_timestamp: str,
+    state: AggregateState,
+    seen_billing_keys: set[str],
+  ) -> list[dict]:
+    rows: list[dict] = []
+    for index, payload in enumerate(payloads, start=offset):
+      parsed = adapter.parse(payload)
+      classification = adapter.classify(parsed)
+      contribution = state.apply(parsed, classification, seen_billing_keys)
+      row: dict[str, Any] = {
+        'trail_id': trail_id,
+        'step_id': index,
+        'ts': parsed.timestamp if parsed.timestamp is not None else default_timestamp,
+        'kind': parsed.kind,
+        'payload_sha256': storage_types.sha256_hex(canonical_json_bytes(payload)),
+        **parsed.attributes,
+      }
+      if contribution is not None:
+        row['usage'] = contribution
+      body_payload = storage_types.body_bytes(parsed.body)
+      if len(body_payload) > storage_types.MAX_BODY_BYTES:
+        raise BodyTooLarge(f'body size {len(body_payload)} exceeds {storage_types.MAX_BODY_BYTES}')
+      if len(body_payload) >= storage_types.SPILLOVER_THRESHOLD_BYTES:
+        key = storage_types.universal_spillover_key(trail_id, index, body_payload)
+        await asyncio.to_thread(
+          self._s3.put_object,
+          Bucket=self._bucket,
+          Key=key,
+          Body=body_payload,
+          ContentType='application/json',
+        )
+        row['body_s3'] = key
+        row['body_encoding'] = 'text' if isinstance(parsed.body, str) else 'json'
+      else:
+        row['body'] = parsed.body
+      rows.append(row)
+    return rows
+
+  async def _store_tools(self, tools: dict[str, Any]) -> None:
+    if not isinstance(tools, dict):
+      raise ValueError('tools must be an object keyed by sha256')
+    for sha256, body in tools.items():
+      if not isinstance(sha256, str) or len(sha256) != 64:
+        raise ValueError('tool blob keys must be sha256 hex strings')
+      payload = canonical_json_bytes(body)
+      if storage_types.sha256_hex(payload) != sha256:
+        raise ValueError(f'tool blob hash mismatch: {sha256}')
+      if sha256 in self._stored_tool_hashes:
+        continue
+      await asyncio.to_thread(
+        self._s3.put_object,
+        Bucket=self._bucket,
+        Key=storage_types.tool_blob_key(sha256),
+        Body=payload,
+        ContentType='application/json',
+      )
+      self._stored_tool_hashes.add(sha256)
+
+  @staticmethod
+  def _state_fields(state: AggregateState, extent: int) -> dict:
+    fields: dict[str, Any] = {
+      'extent': extent,
+      'turn_count': state.turn_count,
+      'native': state.native,
+    }
+    if state.last_billed_message_id is not None:
+      fields['last_billed_message_id'] = state.last_billed_message_id
+    if state.subject is not None:
+      fields['subject'] = state.subject
+    return fields
+
+  def _append_header_update(
+    self,
+    trail_id: str,
+    *,
+    expected_extent: int,
+    state: AggregateState,
+    new_extent: int,
+  ) -> dict:
+    names = {
+      '#body_storage': 'body_storage',
+      '#extent': 'extent',
+      '#last_alive_at': 'last_alive_at',
+      '#turn_count': 'turn_count',
+      '#native': 'native',
+      '#last_billed': 'last_billed_message_id',
+    }
+    values = {
+      ':storage': _ddb(storage_types.UNIVERSAL_BODY_STORAGE),
+      ':expected_extent': _ddb(expected_extent),
+      ':extent': _ddb(new_extent),
+      ':alive': _ddb(_now_iso()),
+      ':turn_count': _ddb(state.turn_count),
+      ':native': _ddb(state.native),
+      ':last_billed': _ddb(state.last_billed_message_id),
+    }
+    assignments = [
+      '#extent = :extent',
+      '#last_alive_at = :alive',
+      '#turn_count = :turn_count',
+      '#native = :native',
+      '#last_billed = :last_billed',
+    ]
+    if state.subject is not None:
+      names['#subject'] = 'subject'
+      values[':subject'] = _ddb(state.subject)
+      assignments.append('#subject = if_not_exists(#subject, :subject)')
+    return {
+      'TableName': self._trails_table,
+      'Key': _ddb_item({'id': trail_id}),
+      'ConditionExpression': '#body_storage = :storage AND #extent = :expected_extent',
+      'UpdateExpression': 'SET ' + ', '.join(assignments),
+      'ExpressionAttributeNames': names,
+      'ExpressionAttributeValues': values,
+    }
+
+  @staticmethod
+  def _header_extent(header: dict) -> int:
+    extent = header.get('extent')
+    if not isinstance(extent, int) or isinstance(extent, bool) or extent < 0:
+      raise ValueError('migrated trail header has an invalid extent')
+    return extent
 
   async def put_step(
     self,
@@ -136,27 +472,114 @@ class Storage:
     extras: dict,
     step_id: Optional[str] = None,
   ) -> dict:
+    """Append one step to an unmigrated bro body."""
     header = await self._required_header(trail_id)
     if header['harness'] != 'bro':
       raise ValueError('step append is available only for bro trails')
-    return await self._backend('bro').replace_or_append_body(
-      trail_id,
-      body,
-      append=True,
-      metadata={'kind': kind, 'step_id': step_id, **extras},
-    )
+    if header.get('body_storage') == storage_types.UNIVERSAL_BODY_STORAGE:
+      raise ValueError('legacy step append is unavailable for migrated trails')
+    parsed = self._backend('bro').parse({'kind': kind, 'body': body, **extras})
+    step_id = step_id if step_id is not None else storage_types.new_id()
+    timestamp = _now_iso()
+    size_bytes = _body_size_bytes(body)
+    if size_bytes > storage_types.MAX_BODY_BYTES:
+      raise BodyTooLarge(f'body size {size_bytes} exceeds {storage_types.MAX_BODY_BYTES}')
+    step = {
+      'trail_id': trail_id,
+      'step_id': step_id,
+      'ts': timestamp,
+      'kind': parsed.kind,
+      **parsed.attributes,
+    }
+    if size_bytes >= storage_types.SPILLOVER_THRESHOLD_BYTES:
+      key = storage_types.legacy_bro_spillover_key(trail_id, step_id)
+      await asyncio.to_thread(
+        self._s3.put_object,
+        Bucket=self._bucket,
+        Key=key,
+        Body=storage_types.body_bytes(body),
+        ContentType='application/json',
+      )
+      step['body_s3'] = key
+    else:
+      step['body'] = body
+
+    classification = self._backend('bro').classify(parsed)
+    while True:
+      header = await self._required_header(trail_id)
+      native = dict(header.get('native', {}))
+      counts = dict(native.get('step_counts_by_kind', {}))
+      counts[kind] = int(counts.get(kind, 0)) + 1
+      native['step_counts_by_kind'] = counts
+      turn_count = int(header.get('turn_count', 0)) + classification.turn_delta
+      if classification.usage_model is not None and classification.usage is not None:
+        usage = dict(native.get('usage', {}))
+        old = usage.get(classification.usage_model)
+        usage[classification.usage_model] = backends.add_numeric_maps(
+          old if isinstance(old, dict) else {}, classification.usage
+        )
+        native['usage'] = usage
+      update = {
+        'TableName': self._trails_table,
+        'Key': _ddb_item({'id': trail_id}),
+        'ConditionExpression': '#native = :old_native',
+        'UpdateExpression': (
+          'SET #native = :native, #turn_count = :turn_count, #last_alive_at = :alive'
+        ),
+        'ExpressionAttributeNames': {
+          '#native': 'native',
+          '#turn_count': 'turn_count',
+          '#last_alive_at': 'last_alive_at',
+        },
+        'ExpressionAttributeValues': {
+          ':old_native': _ddb(header.get('native', {})),
+          ':native': _ddb(native),
+          ':turn_count': _ddb(turn_count),
+          ':alive': _ddb(timestamp),
+        },
+      }
+      try:
+        await asyncio.to_thread(
+          self._dynamo.transact_write_items,
+          TransactItems=[
+            {
+              'Put': {
+                'TableName': self._legacy_steps_table,
+                'Item': _ddb_item(step),
+                'ConditionExpression': 'attribute_not_exists(step_id)',
+              }
+            },
+            {'Update': update},
+          ],
+        )
+      except self._dynamo.exceptions.TransactionCanceledException as exception:
+        codes = storage_types.cancellation_codes(exception)
+        if len(codes) > 0 and codes[0] == 'ConditionalCheckFailed':
+          return {'step_id': step_id, 'ts': timestamp, 'duplicate': True}
+        if len(codes) > 1 and codes[1] == 'ConditionalCheckFailed':
+          continue
+        raise
+      return {'step_id': step_id, 'ts': timestamp}
 
   async def replace_artifact(self, trail_id: str, artifact: str, metadata: dict) -> dict:
+    """Replace an unmigrated Claude body with a complete snapshot."""
     header = await self._required_header(trail_id)
-    backend = self._backend(header['harness'])
     if header['harness'] != 'claude':
       raise ValueError('artifact replacement is available only for claude trails')
+    if header.get('body_storage') == storage_types.UNIVERSAL_BODY_STORAGE:
+      raise ValueError('artifact replacement is unavailable for migrated trails')
     unknown = set(metadata) - {'harness_version', 'usage'}
     if len(unknown) > 0:
       raise ValueError(f'immutable or unknown native fields: {sorted(unknown)}')
-    updates = await backend.replace_or_append_body(
-      trail_id, artifact, append=False, metadata=metadata
+    payload = artifact.encode('utf-8')
+    await asyncio.to_thread(
+      self._s3.put_object,
+      Bucket=self._bucket,
+      Key=storage_types.legacy_claude_artifact_key(trail_id),
+      Body=payload,
+      ContentType=CLAUDE_ARTIFACT_CONTENT_TYPE,
     )
+    updates = {'line_count': len(artifact.splitlines()), 'size_bytes': len(payload), **metadata}
     await self.update_header(trail_id, {'native': updates}, allow_server_derived=True)
     return updates
 
@@ -164,17 +587,19 @@ class Storage:
     self, trail_id: str, changes: dict, *, allow_server_derived: bool = False
   ) -> dict:
     header = await self._required_header(trail_id)
-    allowed = {'subject', 'last_alive_at', 'turn_count'}
+    universal = header.get('body_storage') == storage_types.UNIVERSAL_BODY_STORAGE
+    allowed = {'subject', 'last_alive_at'}
+    if not universal:
+      allowed.add('turn_count')
     unknown = set(changes) - allowed - {'native'}
     if len(unknown) > 0:
       raise ValueError(f'immutable or unknown header fields: {sorted(unknown)}')
     native_changes = changes.get('native', {})
     if not isinstance(native_changes, dict):
       raise ValueError('native must be an object')
-    allowed_native = {
-      'bro': set(),
-      'claude': {'harness_version', 'usage'},
-    }[header['harness']]
+    if universal and len(native_changes) > 0:
+      raise ValueError('native fields are server-derived for migrated trails')
+    allowed_native = {'harness_version', 'usage'} if header['harness'] == 'claude' else set()
     if allow_server_derived and header['harness'] == 'claude':
       allowed_native.update({'line_count', 'size_bytes'})
     unknown_native = set(native_changes) - allowed_native
@@ -196,7 +621,7 @@ class Storage:
       values[f':value{offset}'] = _ddb(value)
       assignments.append(f'native.#field{offset} = :value{offset}')
     if len(assignments) == 0:
-      return header
+      return self._project_header(header)
     await asyncio.to_thread(
       self._dynamo.update_item,
       TableName=self._trails_table,
@@ -206,7 +631,7 @@ class Storage:
       ExpressionAttributeNames=names,
       ExpressionAttributeValues=values,
     )
-    return await self._required_header(trail_id)
+    return self._project_header(await self._required_header(trail_id))
 
   async def end_trail(
     self,
@@ -216,18 +641,9 @@ class Storage:
     detail: Optional[str],
     step_id: Optional[str] = None,
   ) -> dict:
-    header = await self._required_header(trail_id)
+    del step_id
+    await self._required_header(trail_id)
     timestamp = _now_iso()
-    if header['harness'] == 'bro':
-      result = await self._backend('bro').replace_or_append_body(
-        trail_id,
-        {'reason': reason, **({'detail': detail} if detail is not None else {})},
-        append=True,
-        metadata={'kind': 'end', 'step_id': step_id},
-      )
-      duplicate = result.get('duplicate') is True
-    else:
-      duplicate = False
     end = {'at': timestamp, 'reason': reason}
     if detail is not None:
       end['detail'] = detail
@@ -240,7 +656,7 @@ class Storage:
       ExpressionAttributeNames={'#end': 'end'},
       ExpressionAttributeValues={':end': _ddb(end), ':timestamp': _ddb(timestamp)},
     )
-    return {'ended_at': timestamp, **({'duplicate': True} if duplicate else {})}
+    return {'ended_at': timestamp}
 
   async def keepalive(self, trail_id: str) -> dict:
     timestamp = _now_iso()
@@ -323,24 +739,39 @@ class Storage:
     return item
 
   def _project_header(self, item: dict) -> dict:
-    derived = self._backend(item['harness']).derive_aggregates(item.get('native', {}))
-    return {**item, **derived}
+    raw_usage = item.get('native', {}).get('usage', {})
+    if not isinstance(raw_usage, dict):
+      raise ValueError('native.usage must be an object')
+    return {**item, 'usage': raw_usage, 'models': sorted(raw_usage)}
 
   async def get_launch_context(self, trail_id: str) -> Optional[Any]:
-    """the trail's stored launch-context document, or None when it has none."""
     header = await self._required_header(trail_id)
-    key = header.get('native', {}).get('context_s3')
+    key = header.get('context_s3')
+    if key is None:
+      key = header.get('native', {}).get('context_s3')
     if key is None:
       return None
-    backend = self._backend(header['harness'])
-    assert isinstance(backend, ClaudeBackend)  # context_s3 is claude-native
-    return await backend.read_context(key)
+    response = await asyncio.to_thread(self._s3.get_object, Bucket=self._bucket, Key=key)
+    return json.loads(response['Body'].read().decode('utf-8'))
 
   async def query_steps(self, trail_id: str, *, after: Optional[str], limit: int) -> dict:
     header = await self._required_header(trail_id)
-    return await self._backend(header['harness']).iterate_native_records(
-      trail_id, after=after, limit=limit
-    )
+    if header.get('body_storage') == storage_types.UNIVERSAL_BODY_STORAGE:
+      parsed_after: Optional[int] = None
+      if after is not None:
+        try:
+          parsed_after = int(after)
+        except ValueError as exception:
+          raise ValueError('after must be an ordinal for a migrated trail') from exception
+      return await self._query_universal_rows(
+        header,
+        after=parsed_after,
+        limit=limit,
+        resolve_large=header['harness'] == 'claude',
+      )
+    if header['harness'] == 'bro':
+      return await self._query_legacy_bro_rows(header, after=after, limit=limit)
+    return await self._query_legacy_claude_rows(header, after=after, limit=limit)
 
   async def query_messages(
     self,
@@ -351,12 +782,179 @@ class Storage:
     types: Optional[set[str]],
   ) -> dict:
     header = await self._required_header(trail_id)
-    backend = self._backend(header['harness'])
-    page = await backend.project_message_page(trail_id, after=after, limit=limit)
-    messages = page['messages']
+    adapter = self._backend(header['harness'])
+    if header.get('body_storage') == storage_types.UNIVERSAL_BODY_STORAGE:
+      parsed_after: Optional[int] = None
+      if after is not None:
+        try:
+          parsed_after = int(after)
+        except ValueError as exception:
+          raise ValueError('after must be an ordinal for a migrated trail') from exception
+      page = await self._query_universal_rows(
+        header, after=parsed_after, limit=limit, resolve_large=True
+      )
+    elif header['harness'] == 'bro':
+      page = await self._query_legacy_bro_rows(header, after=after, limit=limit)
+    else:
+      page = await self._query_legacy_claude_rows(
+        header, after=after, limit=limit, annotate_billing=True
+      )
+    messages = [message for record in page['steps'] for message in adapter.project(record)]
+    undeclared = {message['type'] for message in messages} - adapter.emitted_message_types
+    if len(undeclared) > 0:
+      raise RuntimeError(f'adapter emitted undeclared message types: {sorted(undeclared)}')
     if types is not None:
       messages = [message for message in messages if message['type'] in types]
     return {'messages': messages, 'next': page['next']}
+
+  async def _query_universal_rows(
+    self,
+    header: dict,
+    *,
+    after: Optional[int],
+    limit: int,
+    resolve_large: bool,
+  ) -> dict:
+    kwargs: dict[str, Any] = {
+      'TableName': self._steps_table,
+      'KeyConditionExpression': 'trail_id = :trail_id',
+      'ExpressionAttributeValues': {':trail_id': _ddb(header['id'])},
+      'Limit': limit,
+    }
+    if after is not None:
+      kwargs['ExclusiveStartKey'] = _ddb_item({'trail_id': header['id'], 'step_id': after})
+    response = await asyncio.to_thread(self._dynamo.query, **kwargs)
+    raw_rows = [
+      row for item in response.get('Items', []) if (row := _from_ddb_item(item)) is not None
+    ]
+    rows = await asyncio.gather(
+      *(
+        self._materialize_row(header['harness'], row, resolve_large=resolve_large)
+        for row in raw_rows
+      )
+    )
+    last = response.get('LastEvaluatedKey')
+    next_cursor = _from_ddb(last['step_id']) if last is not None else None
+    return {'steps': rows, 'next': next_cursor}
+
+  async def _materialize_row(self, harness: str, row: dict, *, resolve_large: bool) -> dict:
+    resolved = await self._resolve_body(
+      dict(row), resolve_large=resolve_large, parse_json=harness != 'claude'
+    )
+    if harness == 'claude':
+      resolved.update(self._backend(harness).parse(resolved).native)
+    return resolved
+
+  async def _resolve_body(
+    self, item: dict, *, resolve_large: bool, parse_json: bool = True
+  ) -> dict:
+    key = item.pop('body_s3', None)
+    encoding = item.pop('body_encoding', None)
+    if key is None:
+      return item
+    head = await asyncio.to_thread(self._s3.head_object, Bucket=self._bucket, Key=key)
+    size = int(head.get('ContentLength', 0))
+    if resolve_large or size <= storage_types.INLINE_RESPONSE_THRESHOLD_BYTES:
+      stored = await asyncio.to_thread(self._s3.get_object, Bucket=self._bucket, Key=key)
+      raw = stored['Body'].read()
+      if encoding == 'text' or (encoding is None and not parse_json):
+        item['body'] = raw.decode('utf-8')
+      elif encoding == 'json':
+        item['body'] = json.loads(raw)
+      elif encoding is None:
+        try:
+          item['body'] = json.loads(raw)
+        except json.JSONDecodeError:
+          item['body'] = raw.decode('utf-8')
+      else:
+        raise ValueError(f'unsupported body encoding: {encoding}')
+    else:
+      url = await asyncio.to_thread(
+        self._s3.generate_presigned_url,
+        ClientMethod='get_object',
+        Params={'Bucket': self._bucket, 'Key': key},
+        ExpiresIn=storage_types.PRESIGNED_URL_TTL_SECONDS,
+      )
+      item['body'] = {'s3': key, 'url': url, 'size': size}
+    return item
+
+  async def _query_legacy_bro_rows(self, header: dict, *, after: Optional[str], limit: int) -> dict:
+    kwargs: dict[str, Any] = {
+      'TableName': self._legacy_steps_table,
+      'KeyConditionExpression': 'trail_id = :trail_id',
+      'ExpressionAttributeValues': {':trail_id': _ddb(header['id'])},
+      'Limit': limit,
+    }
+    if after is not None:
+      kwargs['ExclusiveStartKey'] = _ddb_item({'trail_id': header['id'], 'step_id': after})
+    response = await asyncio.to_thread(self._dynamo.query, **kwargs)
+    rows = [row for item in response.get('Items', []) if (row := _from_ddb_item(item)) is not None]
+    resolved = await asyncio.gather(*(self._resolve_body(row, resolve_large=False) for row in rows))
+    last = response.get('LastEvaluatedKey')
+    next_cursor = _from_ddb(last['step_id']) if last is not None else None
+    return {'steps': resolved, 'next': next_cursor}
+
+  async def _legacy_claude_lines(self, trail_id: str) -> list[str]:
+    response = await asyncio.to_thread(
+      self._s3.get_object,
+      Bucket=self._bucket,
+      Key=storage_types.legacy_claude_artifact_key(trail_id),
+    )
+    return response['Body'].read().decode('utf-8').splitlines()
+
+  async def _query_legacy_claude_rows(
+    self,
+    header: dict,
+    *,
+    after: Optional[str],
+    limit: int,
+    annotate_billing: bool = False,
+  ) -> dict:
+    lines = await self._legacy_claude_lines(header['id'])
+    start = int(after) + 1 if after is not None else 0
+    selected = lines[start : start + limit]
+    adapter = self._backend('claude')
+    last_billed: Optional[str] = None
+    if annotate_billing:
+      for raw in lines[:start]:
+        classification = adapter.classify(adapter.parse(raw))
+        if classification.usage is not None and classification.billing_key is not None:
+          last_billed = classification.billing_key
+    seen: set[str] = set()
+    rows: list[dict] = []
+    for index, raw in enumerate(selected, start=start):
+      parsed = adapter.parse(raw)
+      row = {
+        'trail_id': header['id'],
+        'step_id': str(index),
+        'ts': parsed.timestamp,
+        'kind': parsed.kind,
+        'body': raw,
+        **parsed.attributes,
+        **parsed.native,
+      }
+      if annotate_billing:
+        classification = adapter.classify(parsed)
+        billing_key = classification.billing_key
+        if classification.usage is not None and (
+          billing_key is None or (billing_key != last_billed and billing_key not in seen)
+        ):
+          row['usage'] = classification.usage
+          if billing_key is not None:
+            seen.add(billing_key)
+            last_billed = billing_key
+      rows.append(row)
+    next_cursor = str(start + len(selected) - 1) if start + len(selected) < len(lines) else None
+    return {'steps': rows, 'next': next_cursor}
+
+  async def recompute(self, trail_id: str) -> dict:
+    return await self._operations.recompute(trail_id)
+
+  async def check(self, trail_id: Optional[str] = None) -> dict:
+    return await self._operations.check(trail_id)
+
+  async def relink(self, trail_id: str, forked_from: dict, delete_count: int) -> dict:
+    return await self._operations.relink(trail_id, forked_from, delete_count)
 
   async def list_trails(
     self,
@@ -374,11 +972,7 @@ class Storage:
     if sum(selected) > 1:
       raise ValueError('only one of harness/bro/forked_from may be set')
     if harness is not None:
-      index, partition_name, partition_value = (
-        'harness-started_at-index',
-        'harness',
-        harness,
-      )
+      index, partition_name, partition_value = 'harness-started_at-index', 'harness', harness
     elif bro is not None:
       index, partition_name, partition_value = 'bro-started_at-index', 'bro', bro
     elif forked_from is not None:
@@ -408,6 +1002,14 @@ class Storage:
     last = response.get('LastEvaluatedKey')
     next_cursor = json.dumps(_from_ddb_item(last)) if last is not None else None
     return {'trails': items, 'next': next_cursor}
+
+
+def _format_iso(moment: datetime) -> str:
+  return moment.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+
+
+def _now_iso() -> str:
+  return storage_types.now_iso()
 
 
 def _range_query(

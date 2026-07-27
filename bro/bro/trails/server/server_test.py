@@ -98,6 +98,41 @@ class FakeStorage:
     )
     return {}
 
+  async def append_records(self, trail_id, *, offset, records, tools):
+    if trail_id not in self.trails:
+      raise storage.TrailNotFound(trail_id)
+    extent = len(self.steps[trail_id])
+    if extent != offset:
+      if extent == offset + len(records):
+        return {'extent': extent, 'appended': 0, 'duplicate': True}
+      raise storage.AppendConflict(offset, extent)
+    for record in records:
+      self.steps[trail_id].append(
+        {
+          'trail_id': trail_id,
+          'step_id': len(self.steps[trail_id]),
+          'ts': self._now(),
+          **record,
+        }
+      )
+    self.trails[trail_id]['extent'] = len(self.steps[trail_id])
+    return {'extent': len(self.steps[trail_id]), 'appended': len(records)}
+
+  async def recompute(self, trail_id):
+    if trail_id not in self.trails:
+      raise storage.TrailNotFound(trail_id)
+    return {'trail_id': trail_id, 'extent': len(self.steps[trail_id])}
+
+  async def check(self, trail_id=None):
+    return {'ok': True, 'trails': [] if trail_id is None else [{'trail_id': trail_id, 'ok': True}]}
+
+  async def relink(self, trail_id, forked_from, delete_count):
+    if trail_id not in self.trails:
+      raise storage.TrailNotFound(trail_id)
+    self.trails[trail_id]['forked_from'] = forked_from
+    self.steps[trail_id] = self.steps[trail_id][delete_count:]
+    return {'trail_id': trail_id, 'forked_from': forked_from, 'extent': len(self.steps[trail_id])}
+
   async def replace_artifact(self, trail_id, artifact, metadata):
     if trail_id not in self.trails:
       raise storage.TrailNotFound(trail_id)
@@ -261,6 +296,43 @@ async def test_step_append_and_native_read(client, store):
     'user_input',
   ]
   assert store.steps[trail_id][-1]['step_id'] == 'user-1'
+
+
+@pytest.mark.asyncio
+async def test_universal_append_and_extent_conflict(client):
+  cli = await client
+  created = await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
+  trail_id = (await created.json())['id']
+  response = await cli.post(
+    f'/v1/trails/{trail_id}/records',
+    json={'offset': 1, 'records': [{'kind': 'user_input', 'body': 'hello'}]},
+    headers=_auth(),
+  )
+  assert response.status == 200
+  assert await response.json() == {'extent': 2, 'appended': 1}
+  response = await cli.post(
+    f'/v1/trails/{trail_id}/records',
+    json={'offset': 0, 'records': [{'kind': 'error', 'body': 'late'}]},
+    headers=_auth(),
+  )
+  assert response.status == 409
+  assert (await response.json())['extent'] == 2
+
+
+@pytest.mark.asyncio
+async def test_admin_operations_and_indexed_pointer(client):
+  cli = await client
+  created = await cli.post(
+    '/v1/trails',
+    json=_create_payload(forked_from={'trail_id': 'parent', 'step_id': 4, 'index': 2}),
+    headers=_auth(),
+  )
+  assert created.status == 201
+  trail_id = (await created.json())['id']
+  response = await cli.post(f'/v1/admin/trails/{trail_id}/recompute', json={}, headers=_auth())
+  assert response.status == 200
+  response = await cli.post('/v1/admin/trails/check', json={'trail_id': trail_id}, headers=_auth())
+  assert (await response.json())['ok'] is True
 
 
 @pytest.mark.asyncio
