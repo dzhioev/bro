@@ -33,7 +33,9 @@ The legacy sources remain readable until the final retirement stage: bro rows in
 
 `trails-migrate-claude-rows migrate` moves ended Claude artifacts without a write freeze; live trails remain on the compatibility path. It writes each source manifest before target rows or spill objects, verifies joined-line count/hash and aggregates before switching the header marker last, and retains both legacy artifacts and launch-context objects. `verify` repeats those checks store-wide and writes its report under `trails/migrations/claude-rows/` in the trails bucket.
 
-The legacy `POST /steps`, `PUT /artifact`, and client aggregate updates accept only unmigrated trails. They remain as compatibility writers while live clients move to `POST /records`; migrated trails reject them, and universal headers accept no client-written usage or turn totals.
+`trails-migrate-bro-rows migrate` moves ended and stale bro streams while dropping response-output decompositions and historical end rows, extracting content-addressed tool schemas, and rewriting lineage/provenance pointers to projected ordinal positions. Per-trail manifests precede target/tool/pointer writes, the source and transformed target carry count/hash checks, and the body marker switches only after rows, blobs, pointers, and aggregates verify; legacy rows and spills remain intact. `verify` rechecks the durable manifests store-wide.
+
+The legacy `POST /steps`,  `PUT /artifact`, and client aggregate updates accept only unmigrated trails. They remain as compatibility writers while live clients move to `POST /records`; migrated trails reject them, and universal headers accept no client-written usage or turn totals.
 
 ## Surfaces
 

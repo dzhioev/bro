@@ -13,6 +13,7 @@ from bro.launch.resume import (
 )
 from llm.llms.chat_gpt import LLMSpec
 from trails.model import spill_descriptor
+from trails.server import backends
 
 
 class FakeTrailsClient:
@@ -47,6 +48,12 @@ class FakeTrailsClient:
 
   def iter_steps(self, trail_id: str):
     yield from self._steps[trail_id]
+
+  def iter_messages(self, trail_id: str, *, types: set[str]):
+    for row in self._steps[trail_id]:
+      for event in backends.BRO_ADAPTER.project(row):
+        if event['type'] in types:
+          yield event
 
   def resolve_body(self, body: Any) -> Any:
     descriptor = spill_descriptor(body)
@@ -100,16 +107,15 @@ def _output_message(text: str) -> dict:
 
 def _forked_from_steps() -> list[dict]:
   return [
-    _row('trail-1', 's0', 'system_prompt', 'prompt'),
-    _row('trail-1', 'u0', 'user_input', 'hello'),
+    _row('trail-1', '000', 'system_prompt', 'prompt'),
+    _row('trail-1', '001', 'user_input', 'hello'),
     _row(
       'trail-1',
-      'c1',
+      '002',
       'llm_call',
       _llm_call_body(_output_message('hi back')),
       response_id='r1',
     ),
-    _row('trail-1', 'a1', 'assistant', 'hi back', terminal=True),
   ]
 
 
@@ -138,11 +144,20 @@ class TestConversationHistory:
         'trail-1',
         'c2',
         'llm_call',
-        _llm_call_body(_output_message('interim'), _output_message('final')),
+        _llm_call_body(
+          _output_message('interim'),
+          {'type': 'function_call', 'name': 'lookup', 'call_id': 'call-1', 'arguments': '{}'},
+        ),
         response_id='r2',
       ),
-      _row('trail-1', 'a2', 'assistant', 'interim', terminal=False),
-      _row('trail-1', 'a3', 'assistant', 'final', terminal=True),
+      _row('trail-1', 't2', 'tool_result', 'result', call_id='call-1'),
+      _row(
+        'trail-1',
+        'c3',
+        'llm_call',
+        _llm_call_body(_output_message('final')),
+        response_id='r3',
+      ),
     ]
     client = FakeTrailsClient(headers=[_header('trail-1')], steps={'trail-1': steps})
     history = conversation_history(cast(Any, client), 'trail-1')
@@ -185,10 +200,10 @@ class TestConversationHistory:
     # not part of the resumed conversation; the fork turn's own trailing
     # terminal reply ('hi back', recorded after the c1 fork step) is.
     forked_from_steps = _forked_from_steps() + [
-      _row('trail-1', 'u1', 'user_input', 'diverged'),
+      _row('trail-1', '003', 'user_input', 'diverged'),
       _row(
         'trail-1',
-        'c2',
+        '004',
         'llm_call',
         _llm_call_body(_output_message('diverged reply')),
         response_id='r2',
@@ -211,7 +226,7 @@ class TestConversationHistory:
       headers=[
         _header(
           'trail-2',
-          forked_from={'trail_id': 'trail-1', 'step_id': 'c1'},
+          forked_from={'trail_id': 'trail-1', 'step_id': '002'},
         ),
         _header('trail-1'),
       ],
@@ -244,7 +259,7 @@ class TestResume:
     ]
     (trail, step_id), kwargs = fork_stub.call_args
     assert trail.header.id == 'trail-1'
-    assert step_id == 'c1'
+    assert step_id == '002'
     assert kwargs['llm_spec'] is spec
     assert kwargs['surface'] == 'call'
     # the fetch_forked_from seam resolves ancestors through the same client
@@ -257,6 +272,17 @@ class TestResume:
       resume(cast(Any, self._client()), 'record', 'trail-1', llm_spec=spec, at='b1')
     (_, step_id), _ = fork_stub.call_args
     assert step_id == 'b1'
+
+  def test_an_explicit_at_uses_an_ordinal_on_a_migrated_trail(self):
+    client = self._client()
+    client._steps['trail-1'] = [
+      {**row, 'step_id': index} for index, row in enumerate(client._steps['trail-1'])
+    ]
+    spec = LLMSpec(model='gpt-5', service_tier='priority')
+    with patch('bro.launch.resume.fork') as fork_stub:
+      resume(cast(Any, client), 'record', 'trail-1', llm_spec=spec, at='2')
+    (_, step_id), _ = fork_stub.call_args
+    assert step_id == 2
 
   def test_rejects_a_trail_of_a_different_bro(self):
     client = FakeTrailsClient(

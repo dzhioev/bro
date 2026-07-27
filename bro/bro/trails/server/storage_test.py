@@ -6,7 +6,7 @@ from typing import Any, Optional
 import pytest
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 
-from trails.migrations import claude_rows
+from trails.migrations import bro_rows, claude_rows
 from trails.model import MESSAGE_TYPES, tools_sha256
 from trails.server import backends, storage, storage_types
 
@@ -137,6 +137,19 @@ class FakeDynamo:
         item is not None
         and item.get(self._field('#body_storage', operation)) == values[':storage']
         and item.get(self._field('#extent', operation)) == values[':expected_extent']
+      )
+    if expression == '#pointer = :before':
+      return item is not None and item.get(self._field('#pointer', operation)) == values[':before']
+    if expression == (
+      '#harness = :bro AND attribute_not_exists(#body_storage) '
+      'AND #native = :source_native AND #end = :source_end'
+    ):
+      return (
+        item is not None
+        and item.get(self._field('#harness', operation)) == values[':bro']
+        and self._field('#body_storage', operation) not in item
+        and item.get(self._field('#native', operation)) == values[':source_native']
+        and item.get(self._field('#end', operation)) == values[':source_end']
       )
     if expression == (
       '#harness = :claude AND attribute_not_exists(#body_storage) '
@@ -899,3 +912,249 @@ async def test_claude_row_migration_skips_live_trails(components):
   assert result['skipped_live'] == [trail_id]
   assert len(dynamo.universal_steps) == 0
   assert claude_rows._manifest_key(trail_id) not in s3.objects
+
+
+def _bro_rows_migration(store, dynamo, s3) -> bro_rows.BroRowsMigration:
+  return bro_rows.BroRowsMigration(
+    store=store,
+    dynamo=dynamo,
+    s3=s3,
+    trails_table='headers',
+    legacy_steps_table='legacy',
+    steps_table='universal',
+    bucket='bucket',
+  )
+
+
+async def _legacy_bro_migration_fixture(store: storage.Storage, dynamo: FakeDynamo) -> dict:
+  trail_id = await _create_bro(store, universal=False)
+  [system_step_id] = [
+    step_id for row_trail_id, step_id in dynamo.legacy_steps if row_trail_id == trail_id
+  ]
+  step_ids = [storage_types.new_id() for _ in range(7)]
+  user_step_id, call_step_id, reasoning_step_id, tool_step_id = step_ids[:4]
+  tool_result_step_id, assistant_step_id, end_step_id = step_ids[4:]
+  tools = [{'type': 'function', 'name': 'lookup'}]
+  call_body = {
+    'request': {'model': 'gpt-5', 'input': [{'role': 'user', 'content': 'hello'}], 'tools': tools},
+    'response': {
+      'id': 'response-1',
+      'model': 'gpt-5',
+      'usage': {'input_tokens': 10, 'output_tokens': 4},
+      'output': [
+        {'type': 'reasoning', 'summary': [{'type': 'summary_text', 'text': 'think'}]},
+        {'type': 'function_call', 'name': 'lookup', 'call_id': 'call-1', 'arguments': '{}'},
+      ],
+    },
+  }
+  await store.put_step(
+    trail_id=trail_id,
+    kind='user_input',
+    body='hello',
+    extras={'turn_index': 0},
+    step_id=user_step_id,
+  )
+  await store.put_step(
+    trail_id=trail_id,
+    kind='llm_call',
+    body=call_body,
+    extras={'turn_index': 1, 'response_id': 'response-1'},
+    step_id=call_step_id,
+  )
+  await store.put_step(
+    trail_id=trail_id,
+    kind='reasoning',
+    body='think',
+    extras={'turn_index': 1},
+    step_id=reasoning_step_id,
+  )
+  await store.put_step(
+    trail_id=trail_id,
+    kind='tool_call',
+    body=None,
+    extras={'turn_index': 1, 'tool_name': 'lookup', 'call_id': 'call-1', 'arguments': {}},
+    step_id=tool_step_id,
+  )
+  await store.put_step(
+    trail_id=trail_id,
+    kind='tool_result',
+    body='found',
+    extras={'turn_index': 1, 'tool_name': 'lookup', 'call_id': 'call-1', 'is_error': False},
+    step_id=tool_result_step_id,
+  )
+  await store.put_step(
+    trail_id=trail_id,
+    kind='assistant',
+    body='interim',
+    extras={'turn_index': 1, 'terminal': False},
+    step_id=assistant_step_id,
+  )
+  await store.put_step(
+    trail_id=trail_id,
+    kind='end',
+    body={'reason': 'terminal', 'detail': 'completed'},
+    extras={},
+    step_id=end_step_id,
+  )
+  await store.end_trail(trail_id=trail_id, reason='lost', detail=None)
+  summoned_child = await _create_bro(
+    store,
+    universal=False,
+    summoned_by={'trail_id': trail_id, 'step_id': tool_step_id},
+  )
+  forked_child = await _create_bro(
+    store,
+    universal=False,
+    forked_from={'trail_id': trail_id, 'step_id': call_step_id},
+  )
+  return {
+    'trail_id': trail_id,
+    'system_step_id': system_step_id,
+    'call_step_id': call_step_id,
+    'tool_step_id': tool_step_id,
+    'summoned_child': summoned_child,
+    'forked_child': forked_child,
+    'tools': tools,
+  }
+
+
+@pytest.mark.asyncio
+async def test_bro_row_migration_manifests_drops_tools_and_pointers_before_marker(
+  components, monkeypatch
+):
+  store, dynamo, s3 = components
+  fixture = await _legacy_bro_migration_fixture(store, dynamo)
+  trail_id = fixture['trail_id']
+  legacy_rows = copy.deepcopy(
+    {key: row for key, row in dynamo.legacy_steps.items() if key[0] == trail_id}
+  )
+  events: list[str] = []
+  original_put_object = s3.put_object
+  original_batch_write = dynamo.batch_write_item
+
+  def tracked_put_object(**kwargs):
+    events.append(f's3:{kwargs["Key"]}')
+    return original_put_object(**kwargs)
+
+  def tracked_batch_write(**kwargs):
+    events.append('dynamo:rows')
+    return original_batch_write(**kwargs)
+
+  monkeypatch.setattr(s3, 'put_object', tracked_put_object)
+  monkeypatch.setattr(dynamo, 'batch_write_item', tracked_batch_write)
+
+  result = await _bro_rows_migration(store, dynamo, s3).migrate(trail_id=trail_id, limit=None)
+
+  manifest_key = bro_rows._manifest_key(trail_id)
+  tool_sha256 = tools_sha256(fixture['tools'])
+  tool_key = storage_types.tool_blob_key(tool_sha256)
+  assert result['migrated'] == [trail_id]
+  assert events.index(f's3:{manifest_key}') < events.index(f's3:{tool_key}')
+  assert events.index(f's3:{manifest_key}') < events.index('dynamo:rows')
+  assert {key: row for key, row in dynamo.legacy_steps.items() if key[0] == trail_id} == legacy_rows
+
+  header = dynamo.headers[trail_id]
+  assert header['body_storage'] == storage_types.UNIVERSAL_BODY_STORAGE
+  assert header['extent'] == 4
+  assert header['end'] == {
+    'at': header['end']['at'],
+    'reason': 'ok',
+    'detail': 'completed',
+  }
+  rows = [
+    row
+    for (row_trail_id, _), row in sorted(dynamo.universal_steps.items())
+    if row_trail_id == trail_id
+  ]
+  assert [row['kind'] for row in rows] == [
+    'system_prompt',
+    'user_input',
+    'llm_call',
+    'tool_result',
+  ]
+  assert rows[2]['tools_sha256'] == tool_sha256
+  assert 'tools' not in rows[2]['body']['request']
+  assert json.loads(s3.objects[tool_key]) == fixture['tools']
+  assert dynamo.headers[fixture['forked_child']]['forked_from']['step_id'] == 2
+  assert dynamo.headers[fixture['summoned_child']]['summoned_by'] == {
+    'trail_id': trail_id,
+    'step_id': 2,
+    'index': 2,
+  }
+
+  manifest = json.loads(s3.objects[manifest_key])
+  assert manifest['status'] == 'migrated_verified'
+  assert [entry['row']['kind'] for entry in manifest['transformation']['dropped_rows']] == [
+    'reasoning',
+    'tool_call',
+    'assistant',
+    'end',
+  ]
+  assert len(manifest['pointer_rewrites']) == 2
+  assert manifest['verification']['source_retained'] is True
+  assert (await store.check(trail_id))['ok'] is True
+  messages = await store.query_messages(trail_id, after=None, limit=20, types=None)
+  assert [message['type'] for message in messages['messages']] == [
+    'system_prompt',
+    'user_input',
+    'llm_call',
+    'reasoning',
+    'tool_call',
+    'tool_result',
+  ]
+  verification = await _bro_rows_migration(store, dynamo, s3).verify()
+  assert verification['verified_trail_count'] == 1
+  assert verification['legacy_sources_retained'] is True
+
+
+@pytest.mark.asyncio
+async def test_bro_row_migration_resumes_after_target_and_pointer_verification(
+  components, monkeypatch
+):
+  store, dynamo, s3 = components
+  fixture = await _legacy_bro_migration_fixture(store, dynamo)
+  trail_id = fixture['trail_id']
+  interrupted = _bro_rows_migration(store, dynamo, s3)
+
+  async def fail_before_switch(*_args, **_kwargs):
+    raise RuntimeError('interrupted before marker')
+
+  monkeypatch.setattr(interrupted, '_switch_header', fail_before_switch)
+  with pytest.raises(RuntimeError, match='interrupted before marker'):
+    await interrupted.migrate(trail_id=trail_id, limit=None)
+
+  assert 'body_storage' not in dynamo.headers[trail_id]
+  assert (trail_id, 0) in dynamo.universal_steps
+  manifest_key = bro_rows._manifest_key(trail_id)
+  assert json.loads(s3.objects[manifest_key])['status'] == 'target_verified'
+  assert dynamo.headers[fixture['summoned_child']]['summoned_by']['step_id'] == 2
+
+  resumed = await _bro_rows_migration(store, dynamo, s3).migrate(trail_id=trail_id, limit=None)
+  assert resumed['migrated'] == [trail_id]
+  assert dynamo.headers[trail_id]['body_storage'] == storage_types.UNIVERSAL_BODY_STORAGE
+  assert json.loads(s3.objects[manifest_key])['status'] == 'migrated_verified'
+
+
+@pytest.mark.asyncio
+async def test_bro_row_migration_skips_live_trails(components):
+  store, dynamo, s3 = components
+  trail_id = await _create_bro(store, universal=False)
+
+  result = await _bro_rows_migration(store, dynamo, s3).migrate(trail_id=trail_id, limit=None)
+
+  assert result['skipped_live'] == [trail_id]
+  assert len(dynamo.universal_steps) == 0
+  assert bro_rows._manifest_key(trail_id) not in s3.objects
+
+
+@pytest.mark.asyncio
+async def test_bro_row_migration_moves_stale_unended_trails(components):
+  store, dynamo, s3 = components
+  trail_id = await _create_bro(store, universal=False)
+  dynamo.headers[trail_id]['last_alive_at'] = '2020-01-01T00:00:00Z'
+
+  result = await _bro_rows_migration(store, dynamo, s3).migrate(trail_id=trail_id, limit=None)
+
+  assert result['migrated'] == [trail_id]
+  assert dynamo.headers[trail_id]['body_storage'] == storage_types.UNIVERSAL_BODY_STORAGE
+  assert dynamo.headers[trail_id]['end'] is None

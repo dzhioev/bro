@@ -5,7 +5,7 @@ continues one as a fresh `Bro` preseeded through `bro.fork.fork` at the
 trail's latest consistent step. the continuation is itself recorded as a new
 'call' trail with a `forked_from` fork pointer, so resumes chain — and
 `conversation_history` walks that ancestor chain to rebuild the prior
-exchanges (user messages and terminal replies) for the UI to render.
+exchanges (projected user messages and terminal replies) for the UI to render.
 """
 
 from dataclasses import dataclass
@@ -17,6 +17,7 @@ from bro.fork import fork, latest_fork_point
 from llm.llm import LLMSpec
 from trails.client import TrailsClient, fetch_recorded_trail
 from trails.lineage import walk_header_chain
+from trails.model import RecordedTrail
 
 # `--resume` without a trail id: continue the bro's newest recorded `call`
 # conversation.
@@ -58,9 +59,9 @@ def find_latest_call_trail(client: TrailsClient, bro_name: str) -> Optional[str]
 
 
 def conversation_history(client: TrailsClient, trail_id: str) -> list[HistoryMessage]:
-  """the conversation's prior exchanges, oldest first: `user_input` steps and
-  terminal `assistant` steps, collected across the fork ancestor chain (each
-  ancestor contributes its steps up to its child's fork point).
+  """the conversation's projected prior exchanges, oldest first, collected
+  across the fork ancestor chain. each ancestor contributes messages through
+  its child's fork point.
   """
   target = client.get_trail(trail_id)
   segments = walk_header_chain(target, client.get_trail)
@@ -74,32 +75,46 @@ def conversation_history(client: TrailsClient, trail_id: str) -> list[HistoryMes
 def _segment_messages(
   client: TrailsClient, trail_id: str, up_to_step_id: Optional[str | int]
 ) -> list[HistoryMessage]:
-  # collect displayable steps up to the fork point, plus the fork turn's own
-  # trailing emissions — the terminal `assistant` step of an `llm_call` fork
-  # point lands after it in step order but its text is part of the replayed
-  # prefix. the first structural step past the bound (a new user input, llm
-  # call, or tool result) starts content the fork did not carry.
   messages: list[HistoryMessage] = []
-  past_bound = False
-  for row in client.iter_steps(trail_id):
-    kind = row.get('kind')
-    if past_bound and kind in ('user_input', 'llm_call', 'tool_result', 'end', 'error'):
+  for event in client.iter_messages(trail_id, types={'user_input', 'assistant'}):
+    source_step_id = event['source']['step_id']
+    if up_to_step_id is not None and _compare_step_ids(source_step_id, up_to_step_id) > 0:
       break
-    if kind == 'user_input':
-      messages.append(_message(client, row, by_user=True))
-    elif kind == 'assistant' and row.get('terminal') is True:
-      messages.append(_message(client, row, by_user=False))
-    if up_to_step_id is not None and row.get('step_id') == up_to_step_id:
-      past_bound = True
+    event_type = event.get('type')
+    if event_type == 'user_input':
+      messages.append(_message(client, event, by_user=True))
+    elif event_type == 'assistant' and event.get('terminal') is True:
+      messages.append(_message(client, event, by_user=False))
   return messages
 
 
-def _message(client: TrailsClient, row: dict, *, by_user: bool) -> HistoryMessage:
+def _compare_step_ids(left: str | int, right: str | int) -> int:
+  if isinstance(left, str) and isinstance(right, str):
+    return (left > right) - (left < right)
+  if isinstance(left, int) and isinstance(right, int):
+    return (left > right) - (left < right)
+  raise ValueError(f'cannot order mixed step ids {left!r} and {right!r}')
+
+
+def _message(client: TrailsClient, event: dict, *, by_user: bool) -> HistoryMessage:
   return HistoryMessage(
     by_user=by_user,
-    text=client.resolve_body(row.get('body')),
-    when=datetime.fromisoformat(row['ts']).astimezone(),
+    text=client.resolve_body(event.get('content')),
+    when=datetime.fromisoformat(event['ts']).astimezone(),
   )
+
+
+def _fork_step_id(trail: RecordedTrail, at: Optional[str | int]) -> str | int:
+  if at is None:
+    return latest_fork_point(trail)
+  if isinstance(at, int):
+    return at
+  if any(isinstance(step.step_id, int) for step in trail.steps):
+    try:
+      return int(at)
+    except ValueError:
+      return at
+  return at
 
 
 def resume(
@@ -108,7 +123,7 @@ def resume(
   trail_ref: str,
   *,
   llm_spec: LLMSpec,
-  at: Optional[str] = None,
+  at: Optional[str | int] = None,
 ) -> ResumedCall:
   """continue a recorded `call` conversation: `trail_ref` is a trail id, or
   `RESUME_LATEST` for the bro's newest one. `at` names an explicit fork step
@@ -129,9 +144,10 @@ def resume(
   if trail.header.bro != bro_name:
     raise ValueError(f'trail {trail_id} belongs to bro {trail.header.bro!r}, not {bro_name!r}')
   history = conversation_history(client, trail_id)
+  fork_step_id = _fork_step_id(trail, at)
   bro = fork(
     trail,
-    at if at is not None else latest_fork_point(trail),
+    fork_step_id,
     llm_spec=llm_spec,
     surface=_CALL_ENTRY_POINT,
     fetch_forked_from=lambda forked_from_id: fetch_recorded_trail(client, forked_from_id),
