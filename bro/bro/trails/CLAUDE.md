@@ -39,6 +39,8 @@ The legacy sources remain readable until the final retirement stage: bro rows in
 
 `trails-repair-lineage` snapshots every Claude trail's UUID projection through the service, confirms duplicate candidates through the UUID index, and reports any compatibility bodies still on legacy storage. `migrate` writes the exhaustive audit before calling manifested `relink`; `verify` repeats the clean store-wide audit and index lookup.
 
+`trails-watch-soak` scores the soak that precedes retirement. `open` fixes the legacy baselines, derives the cutover from the last write either legacy store took, and records the surfaces coverage requires; `sample` / `watch` store each reading; `report` scores movement against whether every required surface has recorded universally. All of it lands under `trails/migrations/legacy-retirement-soak/` in the trails bucket.
+
 Writer-reported outcomes use `end.reason`; the stale-run sweep instead records `end.inference = unreported`, so absence of a writer verdict is not presented as a failure verdict. `trails-backfill-unreported` manifests and relabels historical trails from surfaces that never reported outcomes, with the two live legacy migration trails excluded explicitly; its durable manifest and verification reports live under `trails/migrations/lost-verdict-backfill/` in the trails bucket.
 
 The legacy `POST /steps`,  `PUT /artifact`, and client aggregate updates accept only unmigrated trails. They remain as compatibility writers while live clients move to `POST /records`; migrated trails reject them, and universal headers accept no client-written usage or turn totals.
