@@ -6,7 +6,7 @@ from typing import Any, Optional
 import pytest
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 
-from trails.migrations import bro_rows, claude_rows, unreported
+from trails.migrations import bro_rows, claude_rows, lineage, unreported
 from trails.model import MESSAGE_TYPES, UNREPORTED_END_INFERENCE, tools_sha256
 from trails.server import backends, storage, storage_types
 
@@ -1009,6 +1009,59 @@ async def test_claude_row_migration_manifests_before_writes_and_retains_sources(
 
 
 @pytest.mark.asyncio
+async def test_claude_row_migration_reconciles_manifested_lineage_deletion(components):
+  store, dynamo, s3 = components
+  trail_id = await _create_claude(store, universal=False)
+  artifact = '\n'.join(
+    _claude_assistant(f'message-{index}', f'answer-{index}', uuid=f'uuid-{index}')
+    for index in range(3)
+  )
+  await store.replace_artifact(trail_id, artifact, {'harness_version': '2.1.0'})
+  await store.end_trail(trail_id=trail_id, reason='ok', detail=None)
+  migration = _claude_rows_migration(store, dynamo, s3)
+  await migration.migrate(trail_id=trail_id, limit=None)
+  row_manifest = json.loads(s3.objects[claude_rows._manifest_key(trail_id)])
+  old_extent = int(dynamo.headers[trail_id]['extent'])
+  forked_from = {'trail_id': 'parent', 'step_id': 2}
+
+  relink_result = await store.relink(trail_id, forked_from, delete_count=1)
+  relink_manifest = json.loads(s3.objects[relink_result['manifest_s3']])
+  repair = {
+    'trail_id': trail_id,
+    'forked_from': forked_from,
+    'delete_count': 1,
+    'old_extent': old_extent,
+    'new_extent': old_extent - 1,
+  }
+  s3.put_object(
+    Key=lineage.MANIFEST_KEY,
+    Body=json.dumps(
+      {
+        'operation': lineage.MIGRATION_NAME,
+        'manifest_version': lineage.MANIFEST_VERSION,
+        'status': 'applied_verified',
+        'manifested_at': relink_manifest['at'],
+        'verified_at': storage_types.now_iso(),
+        'repair': repair,
+        'operation_result': {'relink_manifest_s3': relink_result['manifest_s3']},
+      }
+    ),
+  )
+
+  verification = await migration.verify()
+  rerun = await migration.migrate(trail_id=None, limit=None)
+
+  assert verification['verified_trail_count'] == 1
+  assert rerun['verified_existing'] == [trail_id]
+  assert row_manifest['target']['row_count'] == old_extent
+  assert dynamo.headers[trail_id]['extent'] == old_extent - 1
+
+  dynamo.universal_steps[(trail_id, 0)]['body'] = 'corrupted'
+  with pytest.raises(ValueError, match=f'target rows differ for trail {trail_id}'):
+    await migration.verify()
+
+
+@pytest.mark.asyncio
 async def test_claude_row_migration_resumes_after_target_verification(components, monkeypatch):
   store, dynamo, s3 = components
   trail_id = await _create_claude(store, universal=False)
@@ -1291,3 +1344,37 @@ async def test_bro_row_migration_moves_stale_unended_trails(components):
   assert result['migrated'] == [trail_id]
   assert dynamo.headers[trail_id]['body_storage'] == storage_types.UNIVERSAL_BODY_STORAGE
   assert dynamo.headers[trail_id]['end'] is None
+
+
+@pytest.mark.asyncio
+async def test_bro_row_migration_reconciles_manifested_unreported_end(components):
+  store, dynamo, s3 = components
+  trail_id = await _create_bro(store, universal=False, surface='call')
+  dynamo.headers[trail_id]['started_at'] = '2020-01-01T00:00:00Z'
+  dynamo.headers[trail_id]['last_alive_at'] = '2020-01-01T00:00:01Z'
+  migration = _bro_rows_migration(store, dynamo, s3)
+  await migration.migrate(trail_id=trail_id, limit=None)
+  row_manifest = json.loads(s3.objects[bro_rows._manifest_key(trail_id)])
+  assert row_manifest['transformation']['target_end'] is None
+
+  backfill = unreported.UnreportedBackfill(
+    dynamo=dynamo,
+    s3=s3,
+    trails_table='headers',
+    steps_table='universal',
+    bucket='bucket',
+  )
+  await backfill.migrate()
+
+  verification = await migration.verify()
+  rerun = await migration.migrate(trail_id=None, limit=None)
+
+  assert verification['verified_trail_count'] == 1
+  assert rerun['verified_existing'] == [trail_id]
+  assert dynamo.headers[trail_id]['end']['inference'] == UNREPORTED_END_INFERENCE
+
+  dynamo.headers[trail_id]['end']['at'] = '2020-01-02T00:00:00Z'
+  with pytest.raises(
+    ValueError, match=f'unreported backfill does not account for trail {trail_id}'
+  ):
+    await migration.verify()
