@@ -1,23 +1,23 @@
 """a bro run as a container launch, described once.
 
 A bro run is the bro's LLM process in its own throwaway cw-style container:
-`bro <verb> <bro> … --in-place` executing against the bro's own credential
+`bro <verb> <bro> … --in-place` executing against a caller-resolved credential
 scope, committing as the bro git identity, based on a caller-resolved git ref.
 This module owns that description — inner command, container environment,
-credential scope, docker-socket decision — so every surface that spawns one
-computes it identically; executing the launch (attached TTY, supervised
-non-TTY child) is the caller's.
+stdio and docker knobs — so every surface that spawns one composes it
+identically; resolving the scope and executing the launch (attached TTY,
+supervised non-TTY child) are the caller's.
 """
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from typing import Any, Literal, Optional
 
 from base import credentials
 from bro.launch.identity import bro_git_identity_env
-from bro.launch.scope import Surface, scoped_secrets
 from bro.summon import SUMMONER_ENV
 from workspace.docker import Launch
+from workspace.store import ScopedSecrets
 
 
 def describe(
@@ -26,7 +26,7 @@ def describe(
   *,
   workspace_name: str,
   verb: Literal['run', 'chat'],
-  credential_instances: Mapping[str, str],
+  scoped: ScopedSecrets,
   base_ref: Optional[str] = None,
   trails: bool = True,
   tty: bool = True,
@@ -35,14 +35,13 @@ def describe(
 ) -> Launch:
   """describe the launch of `bro <verb> <bro_name> <inner_args…> --in-place`.
 
-  `credential_instances` is the launching repo's kind → instance selection,
-  threaded into the scope computation (`bro.launch.scope.scoped_secrets`).
-  `base_ref` is a caller-resolved commit sha the container's workspace clone
-  bases on (`CW_BASE_REF`); None leaves the entrypoint's HEAD fallback — the
-  host checkout's current commit. `trails=False` disables run recording: the
-  trails secret leaves the scope and `TRAILS_DISABLED` rides in the env.
+  `scoped` is the run's credential scope, applied as given — the caller resolves
+  it, overrides included. `base_ref` is a caller-resolved commit sha the
+  container's workspace clone bases on (`CW_BASE_REF`); None leaves the
+  entrypoint's HEAD fallback — the host checkout's current commit.
+  `trails=False` disables run recording: the trails secret leaves the scope and
+  `TRAILS_DISABLED` rides in the env.
   """
-  scoped = scoped_secrets(bro_name, Surface.BRO_RUN, credential_instances=credential_instances)
   required = set(scoped.required)
   env = dict(bro_git_identity_env(bro_name))
   env['CW_BRO'] = bro_name

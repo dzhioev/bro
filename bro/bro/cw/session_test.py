@@ -550,7 +550,7 @@ class TestHostSession:
     )
     roots: list = []
 
-    def fake_root(name, command, worktree_arg, project, env, may_summon):
+    def fake_root(name, command, worktree_arg, project, env, may_summon, credential_scope):
       roots.append(
         {
           'name': name,
@@ -559,6 +559,7 @@ class TestHostSession:
           'project': project,
           'env': env,
           'may_summon': may_summon,
+          'credential_scope': credential_scope,
         }
       )
       return 5

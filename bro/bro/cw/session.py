@@ -312,6 +312,7 @@ def _run_host_root_via_broker(
   project: Path,
   env: dict[str, str],
   may_summon: set[str],
+  credential_scope: set[str],
 ) -> int:
   """run the host session as the broker's root peer: provision its channel socket
   under `var/cw/broker`, point `BROKER_CHANNEL` at it in the runner's env, and
@@ -332,6 +333,7 @@ def _run_host_root_via_broker(
     project,
     session=name,
     may_summon=may_summon,
+    credential_scope=credential_scope,
     trail_pointer=session_trail_pointer(name),
   )
 
@@ -434,7 +436,13 @@ def _host_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
   with _held_pidfile(workspace.pidfile):
     if broker_enabled():
       code = _run_host_root_via_broker(
-        spec.name, command, worktree, project, runner_env, may_summon
+        spec.name,
+        command,
+        worktree,
+        project,
+        runner_env,
+        may_summon,
+        scoped.required | scoped.optional,
       )
     else:
       code = subprocess.run(command, cwd=str(worktree), env=runner_env).returncode

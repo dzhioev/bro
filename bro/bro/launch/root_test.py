@@ -146,11 +146,12 @@ class TestRunRootViaBroker:
   def test_builds_the_attached_launch_and_delegates(self, monkeypatch, tmp_path):
     captured: dict = {}
 
-    def fake_run_root(launch, project, *, session, may_summon, trail_pointer):
+    def fake_run_root(launch, project, *, session, may_summon, credential_scope, trail_pointer):
       captured['launch'] = launch
       captured['project'] = project
       captured['session'] = session
       captured['may_summon'] = may_summon
+      captured['credential_scope'] = credential_scope
       captured['trail_pointer'] = trail_pointer
       return 3
 

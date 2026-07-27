@@ -1627,7 +1627,18 @@ class TestSummonTool:
     client = _FakeSummonClient()
 
     def fake_summon_and_wait(
-      target, prompt, *, timeout=None, into=None, hold=None, step_id=None, client=None
+      target,
+      prompt,
+      *,
+      timeout=None,
+      into=None,
+      hold=None,
+      grant=None,
+      revoke=None,
+      effort=None,
+      fast=False,
+      step_id=None,
+      client=None,
     ):
       calls.append(
         {
@@ -1635,6 +1646,10 @@ class TestSummonTool:
           'prompt': prompt,
           'timeout': timeout,
           'into': into,
+          'grant': grant,
+          'revoke': revoke,
+          'effort': effort,
+          'fast': fast,
           'step_id': step_id,
           'client': client,
         }
@@ -1650,7 +1665,17 @@ class TestSummonTool:
       if candidate.name == 'summon':
         tool = candidate
     assert tool is not None
-    result = await tool.call({'target': 'devoops', 'prompt': 'deploy', 'timeout': 60})
+    result = await tool.call(
+      {
+        'target': 'devoops',
+        'prompt': 'deploy',
+        'timeout': 60,
+        'grant': ['aws', '@pm'],
+        'revoke': ['openai'],
+        'effort': 'high',
+        'fast': True,
+      }
+    )
     assert result == 'the answer'
     # the request carries the summon call's own tool_call step for provenance
     assert calls == [
@@ -1659,6 +1684,10 @@ class TestSummonTool:
         'prompt': 'deploy',
         'timeout': 60,
         'into': None,
+        'grant': ['aws', '@pm'],
+        'revoke': ['openai'],
+        'effort': 'high',
+        'fast': True,
         'step_id': 'S-42',
         'client': client,
       }
@@ -1672,7 +1701,19 @@ class TestSummonTool:
     monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
     calls: list = []
 
-    def fake_summon_detached(target, prompt, *, timeout=None, into=None, hold=None, step_id=None):
+    def fake_summon_detached(
+      target,
+      prompt,
+      *,
+      timeout=None,
+      into=None,
+      hold=None,
+      grant=None,
+      revoke=None,
+      effort=None,
+      fast=False,
+      step_id=None,
+    ):
       calls.append({'target': target, 'prompt': prompt, 'timeout': timeout, 'into': into})
       return 'REQ-ID'
 
@@ -1755,7 +1796,18 @@ class TestSummonTool:
     release = threading.Event()
 
     def fake_summon_and_wait(
-      target, prompt, *, timeout=None, into=None, hold=None, step_id=None, client=None
+      target,
+      prompt,
+      *,
+      timeout=None,
+      into=None,
+      hold=None,
+      grant=None,
+      revoke=None,
+      effort=None,
+      fast=False,
+      step_id=None,
+      client=None,
     ):
       entered.set()
       release.wait(timeout=5)
@@ -1825,7 +1877,18 @@ class TestSummonTool:
     monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
 
     def fake_summon_and_wait(
-      target, prompt, *, timeout=None, into=None, hold=None, step_id=None, client=None
+      target,
+      prompt,
+      *,
+      timeout=None,
+      into=None,
+      hold=None,
+      grant=None,
+      revoke=None,
+      effort=None,
+      fast=False,
+      step_id=None,
+      client=None,
     ):
       raise summon_module.SummonError('summon denied: no')
 

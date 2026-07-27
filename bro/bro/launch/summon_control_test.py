@@ -80,9 +80,12 @@ class FakeContext:
     self.spawned.append((launch, peer, timeout))
 
 
-def _control(tmp_path, allow_list, session='ws') -> bro.launch.summon_control.SummonControl:
+def _control(
+  tmp_path, allow_list, session='ws', credential_scope=()
+) -> bro.launch.summon_control.SummonControl:
   return bro.launch.summon_control.SummonControl(
     allow_list=allow_list,
+    credential_scope=credential_scope,
     session=session,
     project=tmp_path,
     status_file=tmp_path / 'summon-status.json',
@@ -159,6 +162,100 @@ class TestSummonHandler:
     control.handle(context, ROOT, _summon_message(hold='attended'))
     [(launch, _, _)] = context.spawned
     assert launch.hold == 'attended'
+
+  def test_spec_flags_forward_into_the_spawn(self, control):
+    context = FakeContext()
+    control.handle(context, ROOT, _summon_message(effort='high', fast=True))
+    [(launch, _, _)] = context.spawned
+    assert (launch.effort, launch.fast) == ('high', True)
+
+  def test_credential_overrides_ride_the_spawn_and_land_in_the_audit(self, tmp_path):
+    # the credential half is applied against the child's own scope in the
+    # lowering; only the `@bro` half resolves here
+    control = _control(tmp_path, {'devoops', 'pm'}, credential_scope={'aws'})
+    context = FakeContext()
+    # cast: FakeContext stands in for the Dispatcher surface structurally
+    control.handle(
+      cast(Dispatcher, context), ROOT, _summon_message(grant=['aws', '@pm'], revoke=['openai'])
+    )
+    [(launch, _, _)] = context.spawned
+    assert launch.grant_credentials == ('aws',)
+    assert launch.revoke_credentials == ('openai',)
+    [spawn_record] = _audit(tmp_path)
+    assert spawn_record['grant'] == ['aws', '@pm']
+    assert spawn_record['revoke'] == ['openai']
+
+  def test_granted_bro_widens_the_childs_own_allow_list(self, tmp_path):
+    # devoops seeds nothing, so only the grant lets its child summon pm
+    control = _control(tmp_path, {'devoops', 'pm'})
+    context = FakeContext()
+    message = _summon_message(target='devoops', grant=['@pm'])
+    # cast: FakeContext stands in for the Dispatcher surface structurally
+    control.handle(cast(Dispatcher, context), ROOT, message)
+    context.origin[CHILD] = (ROOT, message.id)
+    control.handle(cast(Dispatcher, context), CHILD, _summon_message(target='pm'))
+    assert context.replies == []
+    assert [launch.target for launch, _, _ in context.spawned] == ['devoops', 'pm']
+
+  def test_granting_a_bro_the_summoner_may_not_summon_is_denied(self, control):
+    # the fixture session may summon only devoops, so it cannot hand pm down
+    context = FakeContext()
+    control.handle(context, ROOT, _summon_message(grant=['@pm']))
+    assert context.spawned == []
+    [(_, payload)] = context.replies
+    assert 'may not summon itself: pm' in payload['error']
+
+  def test_granting_a_credential_the_summoner_lacks_is_denied(self, tmp_path):
+    control = _control(tmp_path, {'devoops'}, credential_scope={'openai'})
+    context = FakeContext()
+    # cast: FakeContext stands in for the Dispatcher surface structurally
+    control.handle(cast(Dispatcher, context), ROOT, _summon_message(grant=['openai', 'aws']))
+    assert context.spawned == []
+    [(_, payload)] = context.replies
+    assert 'does not hold: aws' in payload['error']
+
+  def test_a_childs_grants_are_bounded_by_its_own_scope(self, tmp_path):
+    # the bound follows the chain: a summoned ppp-dev holds github (its
+    # extra_secrets) and can hand that down, but nothing it never held
+    control = _control(tmp_path, {'ppp-dev'})
+    context = FakeContext()
+    message = _summon_message(target='ppp-dev')
+    control.handle(cast(Dispatcher, context), ROOT, message)
+    context.origin[CHILD] = (ROOT, message.id)
+    control.handle(
+      cast(Dispatcher, context), CHILD, _summon_message(target='devoops', grant=['github'])
+    )
+    assert [launch.target for launch, _, _ in context.spawned] == ['ppp-dev', 'devoops']
+    control.handle(
+      cast(Dispatcher, context), CHILD, _summon_message(target='devoops', grant=['gmail_creds'])
+    )
+    [(_, payload)] = context.replies
+    assert 'does not hold: gmail_creds' in payload['error']
+
+  def test_no_op_bro_override_is_denied(self, tmp_path):
+    # ppp-dev already seeds devoops: the strictness of the launcher flags holds
+    # on the wire too
+    control = _control(tmp_path, {'ppp-dev'})
+    context = FakeContext()
+    # cast: FakeContext stands in for the Dispatcher surface structurally
+    control.handle(cast(Dispatcher, context), ROOT, _summon_message(target='ppp-dev', grant=['@devoops']))  # fmt: skip
+    assert context.spawned == []
+    [(_, payload)] = context.replies
+    assert 'already in the summon allow-list' in payload['error']
+
+  def test_unregistered_bro_override_is_denied(self, control):
+    context = FakeContext()
+    control.handle(context, ROOT, _summon_message(grant=['@nobody']))
+    assert context.spawned == []
+    [(_, payload)] = context.replies
+    assert 'unknown summon target' in payload['error']
+
+  def test_malformed_bro_override_is_denied(self, control):
+    context = FakeContext()
+    control.handle(context, ROOT, _summon_message(grant=['@']))
+    assert context.spawned == []
+    [(_, payload)] = context.replies
+    assert 'malformed grant/revoke' in payload['error']
 
   def test_container_session_key_names_the_container_workspace(self, tmp_path):
     control = _control(tmp_path, {'devoops'}, session='c:ws')
@@ -270,7 +367,7 @@ class TestSummonHandler:
     assert len(context.spawned) == 1  # only the root's spawn
     [(peer, payload)] = context.replies
     assert peer == CHILD
-    assert "not in devoops's may_summon seeds" in payload['error']
+    assert "not in devoops's summon allow-list" in payload['error']
 
   def test_unattributable_peer_is_denied(self, control, tmp_path):
     # a peer with no origin the control can map to a spawned bro has no
@@ -347,6 +444,13 @@ class TestSummonHandler:
       {'target': 'devoops', 'prompt': 'p', 'hold': 'automatic'},
       {'target': 'devoops', 'prompt': 'p', 'step_id': ''},
       {'target': 'devoops', 'prompt': 'p', 'step_id': 7},
+      {'target': 'devoops', 'prompt': 'p', 'grant': 'aws'},
+      {'target': 'devoops', 'prompt': 'p', 'grant': ['']},
+      {'target': 'devoops', 'prompt': 'p', 'grant': None},  # a null cannot default to no override
+      {'target': 'devoops', 'prompt': 'p', 'revoke': [7]},
+      {'target': 'devoops', 'prompt': 'p', 'effort': 'ludicrous'},
+      {'target': 'devoops', 'prompt': 'p', 'fast': 'yes'},
+      {'target': 'devoops', 'prompt': 'p', 'fast': None},
     ],
   )
   def test_malformed_payload_is_denied(self, control, payload):

@@ -161,6 +161,24 @@ def scoped_secrets(
   )
 
 
+def summoned_credential_scope(
+  bro_name: str,
+  *,
+  credential_instances: Mapping[str, str],
+  grant: list[str],
+  revoke: list[str],
+) -> ScopedSecrets:
+  """the credential scope a summoned bro runs with: its own `BRO_RUN` scope under
+  the request's overrides. `grant`/`revoke` are the credential halves of the
+  request's unified values (`split_scope_overrides`) — the `@bro` halves shape the
+  summon allow-list instead. Raises `ValueError` on a no-op override."""
+  return finalize_scoped_secrets(
+    scoped_secrets(bro_name, Surface.BRO_RUN, credential_instances=credential_instances),
+    grant=grant,
+    revoke=revoke,
+  )
+
+
 class LaunchScopeError(Exception):
   """a launch failed its scope computation or preflight: a malformed or no-op
   grant/revoke override, an unknown `[tool.bro] creds` kind, an unknown summon
@@ -172,7 +190,7 @@ class LaunchScopeError(Exception):
 _BRO_MARK = '@'
 
 
-def _split_scope_overrides(values: list[str]) -> tuple[list[str], list[str]]:
+def split_scope_overrides(values: list[str]) -> tuple[list[str], list[str]]:
   """split unified grant/revoke values into (credential names, bro names)."""
   credential_names: list[str] = []
   bro_names: list[str] = []
@@ -196,7 +214,7 @@ def preflight_scoped_launch(
 ) -> tuple[ScopedSecrets, set[str], dict[str, bytes]]:
   """the scope preflight every launch surface runs before creating anything
   (worktree, container, workspace dir): split the unified grant/revoke overrides
-  (`_split_scope_overrides`), finalize the credential scope
+  (`split_scope_overrides`), finalize the credential scope
   (`finalize_scoped_secrets`), compute the summon allow-list of a launch running
   as `bro_name` (`summon_control.summon_allow_list`), and hydrate the scoped store
   (`credentials.build_scoped_store`) — any failure raised as a single
@@ -211,8 +229,8 @@ def preflight_scoped_launch(
   from bro.launch.summon_control import summon_allow_list
 
   try:
-    grant_credentials, grant_bros = _split_scope_overrides(grant)
-    revoke_credentials, revoke_bros = _split_scope_overrides(revoke)
+    grant_credentials, grant_bros = split_scope_overrides(grant)
+    revoke_credentials, revoke_bros = split_scope_overrides(revoke)
     scoped = finalize_scoped_secrets(scoped, grant=grant_credentials, revoke=revoke_credentials)
     may_summon = summon_allow_list(bro_name, grant=grant_bros, revoke=revoke_bros)
     store = credentials.build_scoped_store(scoped.required, optional=scoped.optional)

@@ -19,19 +19,33 @@ Two layers, both computed per broker root:
   `CW_SUMMON_STATUS` env var each launch surface points at it).
 
 Authorization is per-peer. The root follows the launch-computed effective list
-above; a summoned child follows its own bro's static MRO-collected `may_summon`
-seeds — the control attributes the requesting peer to the bro it spawned for it
-(the dispatcher's `origin` topology plus this control's own spawn records;
-nothing is read from the wire), and a peer it cannot attribute is denied.
-Provenance rides the same attribution: a spawned child's `summoned_by` names the
-requester's trail — the root's from the session's current-trail pointer (the
-claude recorder publishes it; `session_log/trail_pointer.py`) or from the root
-run's `started` event, a summoned child's from its spawn record — plus the
-requester's own `tool_call` step id when the request payload carries one. Grants
-never pass through to children: a child's launch is programmatic, so widening
-stays a root-session surface. Summons therefore chain transitively wherever the
-seeds chain, bounded by `_MAX_SUMMON_DEPTH` — seeds are declared per-bro, so a
-seed cycle (a → b → a) would otherwise recurse through real containers.
+above; a summoned child follows the list its own summon request resolved — its
+bro's static MRO-collected `may_summon` seeds under the request's `@bro`
+grant/revoke overrides — recorded at the authorized spawn. The control attributes
+the requesting peer to the bro it spawned for it (the dispatcher's `origin`
+topology plus this control's own spawn records; nothing is read from the wire),
+and a peer it cannot attribute is denied. Provenance rides the same attribution:
+a spawned child's `summoned_by` names the requester's trail — the root's from the
+session's current-trail pointer (the claude recorder publishes it;
+`session_log/trail_pointer.py`) or from the root run's `started` event, a summoned
+child's from its spawn record — plus the requester's own `tool_call` step id when
+the request payload carries one. Summons therefore chain transitively wherever
+the seeds chain, bounded by `_MAX_SUMMON_DEPTH` — seeds are declared per-bro, so
+a seed cycle (a → b → a) would otherwise recurse through real containers.
+
+A widening is per request, never implicit, and never an escalation: a requester's
+own scope is not inherited — only what its `grant` names reaches the child — and
+every granted name must already be in the requester's own scope, so no chain of
+summons reaches authority the session was not launched with. Both bounds are the
+requester's: `allow_list` for `@bro` values, and its credential scope for the
+rest — the root's threaded in at construction from what the launch hydrated, a
+summoned child's recomputed from its own spawn record (`_child_credentials`).
+
+The request's `grant`/`revoke` split by kind: `@bro` values resolve here, on the
+loop, so a malformed or no-op override is denied immediately, while the
+credential half rides the spawn and is applied against the child's own computed
+scope in the lowering (`bro/launch/spawn.py`), where a bad override fails the
+launch. `effort`/`fast` are child-facing and ride its `bro run` argv.
 
 The same per-request attribution also names the requester's workspace (the root's
 from the session key, a child's from its `broker-<channel>` clone), threaded into
@@ -60,12 +74,14 @@ imports stay function-local: this module sits on the launch path before the
 
 import json
 import time
-from collections.abc import Collection
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Optional
 
 from base import credentials, log
+from bro.launch.scope import split_scope_overrides
 from bro.summon import DEFAULT_TIMEOUT, STATUS_ENV
 from workspace.model import ContainerWorkspace, HostWorktree, parse_ref
 from workspace.paths import containers_dir, summon_dir
@@ -84,7 +100,9 @@ __all__ = [
 ]
 
 _PROMPT_HEAD_CHARS = 120
-_PAYLOAD_KEYS = frozenset({'target', 'prompt', 'timeout', 'into', 'hold', 'step_id'})
+_PAYLOAD_KEYS = frozenset(
+  {'target', 'prompt', 'timeout', 'into', 'hold', 'step_id', 'grant', 'revoke', 'effort', 'fast'}
+)
 # the deepest peer a summon may spawn: the root sits at depth 0, its children at
 # 1, grandchildren at 2; a request that would nest deeper is denied — the guard
 # against seed cycles recursing through real containers (see module docstring).
@@ -140,6 +158,7 @@ def _validate(payload: dict[str, Any]) -> Optional[str]:
   """the request's shape errors, or None when well-formed. Strict: an unknown key
   is rejected rather than ignored — a typo'd `timout` silently falling back to the
   default would hide the caller's bug."""
+  from llm.llm import EFFORT_LEVELS
   from llm.mcp import HOLDS
 
   unknown = sorted(set(payload) - _PAYLOAD_KEYS)
@@ -161,6 +180,20 @@ def _validate(payload: dict[str, Any]) -> Optional[str]:
   step_id = payload.get('step_id')
   if step_id is not None and (not isinstance(step_id, str) or len(step_id) == 0):
     return "summon 'step_id' must be a non-empty string"
+  # grant/revoke and fast are checked on presence, not on non-None: unlike the
+  # optional fields above they feed a non-optional consumer (the override split,
+  # the child's argv), so a null must be a shape error rather than a default
+  for key in ('grant', 'revoke'):
+    if key in payload and (
+      not isinstance(payload[key], list)
+      or not all(isinstance(value, str) and len(value) > 0 for value in payload[key])
+    ):
+      return f'summon {key!r} must be a list of non-empty names'
+  effort = payload.get('effort')
+  if effort is not None and effort not in EFFORT_LEVELS:
+    return f"summon 'effort' must be one of {', '.join(EFFORT_LEVELS)}"
+  if 'fast' in payload and not isinstance(payload['fast'], bool):
+    return "summon 'fast' must be a boolean"
   return None
 
 
@@ -172,6 +205,9 @@ class _ActiveSummon:
   started_at: float  # epoch seconds of the authorized spawn
   summoner: dict[str, Any]  # audit/status attribution (see _Requester.summoner)
   depth: int  # the spawned child's summon-nesting depth (the root sits at 0)
+  allow_list: set[str]  # the spawned child's own effective summon allow-list
+  grant: list[str]  # the request's scope overrides, audited as the summoner issued them
+  revoke: list[str]
   trail_id: Optional[str] = None
 
 
@@ -182,11 +218,17 @@ class _Requester:
   `summoner` is the attribution the audit and status entries carry: the root is
   `{'session': <key>}`, a summoned child `{'target': <bro>, 'trail_id': …}`.
   `list_description` names the allow-list in denial messages — the two lists have
-  different widening levers (relaunch flags vs seeding the bro), and the denial
-  reason should point at the right one. `workspace` is the requester's own
-  workspace path — the base-ref inheritance source for the children it summons."""
+  different widening levers (relaunching the session vs the summon that spawned
+  the peer, or seeding its bro), and the denial reason should point at the right
+  one. `workspace` is the requester's own
+  workspace path — the base-ref inheritance source for the children it summons.
+  `credentials` reads the peer's own credential scope, the bound on what it may
+  grant; it is a thunk because computing a summoned peer's scope is real work
+  (bro import + registry read) that only a request carrying a credential grant
+  should pay for on the broker loop."""
 
   allow_list: set[str]
+  credentials: Callable[[], set[str]]
   summoner: dict[str, Any]
   summoned_by: Optional[dict[str, Any]]
   depth: int
@@ -198,8 +240,9 @@ class SummonControl:
   """one broker root's summon authorization + bookkeeping (see module docstring).
 
   `handle` registers as the broker's `summon` handler and `observe_delivery` as a
-  delivery observer; both run on the broker loop and do only cheap synchronous
-  work. `log_killed_in_flight` runs once the broker loop ends, even when it raises
+  delivery observer; both run on the broker loop, so everything heavy belongs in
+  the spawner and what stays here is kept to the authorization decision itself.
+  `log_killed_in_flight` runs once the broker loop ends, even when it raises
   — root teardown kills in-flight children without a terminal, and their loss must
   be loud."""
 
@@ -207,6 +250,8 @@ class SummonControl:
     self,
     *,
     allow_list: Collection[str],
+    credential_scope: Collection[str] = (),
+    credential_instances: Mapping[str, str] = MappingProxyType({}),
     session: str,
     project: Path,
     status_file: Path,
@@ -214,6 +259,11 @@ class SummonControl:
     trail_pointer: Optional[Path] = None,
   ):
     self._allow_list = set(allow_list)
+    # the root session's own two scopes bound what its summons may grant a child;
+    # `credential_instances` is the operated repo's kind → instance selection, the
+    # same input the launch surfaces feed the scope computation
+    self._credential_scope = set(credential_scope)
+    self._credential_instances = credential_instances
     self._session = session
     self._project = project
     self._status_file = status_file
@@ -268,6 +318,41 @@ class SummonControl:
         error = f'summon denied: {target!r} is not in {requester.list_description}'
       self._deny(context, peer, message, requester.summoner, error)
       return
+    grant = payload.get('grant', [])
+    revoke = payload.get('revoke', [])
+    try:
+      grant_credentials, grant_bros = split_scope_overrides(grant)
+      revoke_credentials, revoke_bros = split_scope_overrides(revoke)
+      child_allow_list = summon_allow_list(target, grant=grant_bros, revoke=revoke_bros)
+    except ValueError as e:
+      self._deny(context, peer, message, requester.summoner, f'summon denied: {e}')
+      return
+    # a summoner can only hand down what it holds itself: grants are bounded by the
+    # requesting peer's own two scopes, so no chain of summons reaches authority the
+    # session was not launched with
+    beyond = sorted(set(grant_bros) - requester.allow_list)
+    if len(beyond) > 0:
+      self._deny(
+        context,
+        peer,
+        message,
+        requester.summoner,
+        f'summon denied: cannot grant summon target(s) the summoner may not '
+        f'summon itself: {", ".join(beyond)}',
+      )
+      return
+    if len(grant_credentials) > 0:
+      beyond = sorted(set(grant_credentials) - requester.credentials())
+      if len(beyond) > 0:
+        self._deny(
+          context,
+          peer,
+          message,
+          requester.summoner,
+          f'summon denied: cannot grant credential(s) the summoner does not '
+          f'hold: {", ".join(beyond)}',
+        )
+        return
     timeout = payload.get('timeout')
     prompt = payload['prompt']
     summoned_by = requester.summoned_by
@@ -284,6 +369,10 @@ class SummonControl:
         summoner=summoned_by,
         into=payload.get('into'),
         hold=payload.get('hold'),
+        grant_credentials=tuple(grant_credentials),
+        revoke_credentials=tuple(revoke_credentials),
+        effort=payload.get('effort'),
+        fast=payload.get('fast', False),
       ),
       peer,
       timeout=float(timeout) if timeout is not None else DEFAULT_TIMEOUT,
@@ -295,6 +384,9 @@ class SummonControl:
       started_at=time.time(),
       summoner=requester.summoner,
       depth=requester.depth + 1,
+      allow_list=child_allow_list,
+      grant=list(grant),
+      revoke=list(revoke),
     )
     self._active[message.id] = record
     log.info(
@@ -309,10 +401,10 @@ class SummonControl:
 
   def _requester(self, context: 'Dispatcher', peer: 'Peer') -> Optional['_Requester']:
     """resolve the requesting peer's summon identity: the root follows the
-    session's launch-computed effective allow-list; a summoned child follows its
-    own bro's static `may_summon` seeds, attributed through the dispatcher's
-    `origin` topology and this control's spawn records. None when the peer cannot
-    be attributed a bro."""
+    session's launch-computed effective allow-list; a summoned child follows the
+    list its own summon resolved, attributed through the dispatcher's `origin`
+    topology and this control's spawn records. None when the peer cannot be
+    attributed a bro."""
     if peer == context.root:
       name, is_container = parse_ref(self._session)
       root_workspace = (
@@ -320,6 +412,7 @@ class SummonControl:
       )  # fmt: skip
       return _Requester(
         allow_list=self._allow_list,
+        credentials=lambda: self._credential_scope,
         summoner={'session': self._session},
         summoned_by=self._root_summoned_by(),
         depth=0,
@@ -330,21 +423,34 @@ class SummonControl:
     record = self._active.get(origin[1]) if origin is not None else None
     if record is None:
       return None
-    # imported function-locally like the launch-time computation (cw/CLAUDE.md,
-    # "Lazy bro import"); cheap here — spawning the child already imported its module
     # function-local like SummonLaunchSpec above: bro.launch.spawn imports broker at
     # module level (cw/CLAUDE.md, "Lazy broker import")
     from bro.launch.spawn import _workspace_name
-    from bro.registry import create_bro
 
     return _Requester(
-      allow_list=set(create_bro(record.target)._may_summon),
+      allow_list=set(record.allow_list),
+      credentials=lambda: self._child_credentials(record),
       summoner={'target': record.target, 'trail_id': record.trail_id},
       summoned_by={'trail_id': record.trail_id} if record.trail_id is not None else None,
       depth=record.depth,
-      list_description=f"{record.target}'s may_summon seeds",
+      list_description=f"{record.target}'s summon allow-list",
       workspace=containers_dir(self._project) / _workspace_name(peer),
     )
+
+  def _child_credentials(self, record: _ActiveSummon) -> set[str]:
+    """the credential scope a summoned child runs with, recomputed from its own
+    spawn record through the same helper that lowered its launch."""
+    from bro.launch.scope import summoned_credential_scope
+
+    grant, _ = split_scope_overrides(record.grant)
+    revoke, _ = split_scope_overrides(record.revoke)
+    scoped = summoned_credential_scope(
+      record.target,
+      credential_instances=self._credential_instances,
+      grant=grant,
+      revoke=revoke,
+    )
+    return scoped.required | scoped.optional
 
   def _root_summoned_by(self) -> Optional[dict[str, Any]]:
     # read per request — a claude session's recorder opens a new trail per
@@ -446,6 +552,10 @@ class SummonControl:
       'prompt_head': record.prompt_head,
       'trail_id': record.trail_id,
     }
+    if len(record.grant) > 0:
+      entry['grant'] = record.grant
+    if len(record.revoke) > 0:
+      entry['revoke'] = record.revoke
     if outcome is not None:
       entry['outcome'] = outcome
     self._append_audit(event, entry)

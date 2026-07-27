@@ -1,10 +1,13 @@
 import bro.launch.bro_run
 from bro.launch.identity import bro_git_identity_env
+from workspace.store import ScopedSecrets
+
+_SCOPED = ScopedSecrets(required={'github', 'trails'}, optional={'openai'}, docker_sock=False)
 
 
 def _describe(*args, **kwargs):
   kwargs.setdefault('verb', 'run')
-  kwargs.setdefault('credential_instances', {})
+  kwargs.setdefault('scoped', _SCOPED)
   return bro.launch.bro_run.describe(*args, workspace_name='ws', **kwargs)
 
 
@@ -23,11 +26,10 @@ def test_describe_env_carries_identity_and_bro():
   assert launch.env == {'CW_BRO': 'ppp-dev', **bro_git_identity_env('ppp-dev')}
 
 
-def test_describe_scopes_to_the_bro():
+def test_describe_carries_the_given_scope():
   launch = _describe('ppp-dev', ['hi'])
-  # ppp-dev's manifest (github + brog) + its llm key + the mandatory trails sink
-  assert {'github', 'brog', 'trails'} <= set(launch.secrets)
-  # ppp-dev doesn't deploy → no docker socket
+  assert launch.secrets == {'github', 'trails'}
+  assert launch.optional_secrets == {'openai'}
   assert launch.docker_sock is False
 
 
@@ -47,13 +49,8 @@ def test_describe_no_trails_drops_secret_and_disables_recording():
   assert launch.env['TRAILS_DISABLED'] == '1'
 
 
-def test_describe_substitutes_credential_instances():
-  launch = _describe('ppp-dev', ['hi'], credential_instances={'brog': 'github'})
-  assert 'brog+github' in launch.secrets
-  assert 'brog' not in launch.secrets
-
-
 def test_describe_no_trails_drops_a_mapped_trails_instance():
-  launch = _describe('ppp-dev', ['hi'], trails=False, credential_instances={'trails': 'eu'})
+  scoped = ScopedSecrets(required={'github', 'trails+eu'}, optional=set(), docker_sock=False)
+  launch = _describe('ppp-dev', ['hi'], trails=False, scoped=scoped)
   assert 'trails+eu' not in launch.secrets
   assert launch.env['TRAILS_DISABLED'] == '1'

@@ -5,6 +5,7 @@ import pytest
 
 import bro.launch.bro_run
 import bro.launch.identity
+import bro.launch.scope
 import bro.launch.spawn
 import bro.launch.summon_control
 import workspace.docker
@@ -25,7 +26,7 @@ class TestSummonLowering:
       lambda: workspace.project.ProjectConfig(default_bro='foo', image_repository='bro/foo'),
     )
     monkeypatch.setattr(
-      bro.launch.bro_run,
+      bro.launch.scope,
       'scoped_secrets',
       lambda name, surface, *, credential_instances: workspace.store.ScopedSecrets(
         required={'aws', 'trails'}, optional={'openai'}, docker_sock=True
@@ -87,6 +88,44 @@ class TestSummonLowering:
     assert lowered.launch.command == [
       'bro', 'run', 'devoops', 'deploy the thing', '--hold', 'attended', '--in-place',
     ]  # fmt: skip
+
+  def test_spec_flags_ride_the_childs_inner_argv(self, lowering_harness):
+    launch = bro.launch.spawn.SummonLaunchSpec(
+      target='devoops',
+      prompt='deploy the thing',
+      parent_workspace=PARENT_WORKSPACE,
+      summoner=SUMMONER,
+      effort='high',
+      fast=True,
+    )
+    lowered = bro.launch.spawn._lower_summon(launch, 'broker-CH')
+    assert lowered.launch.command == [
+      'bro', 'run', 'devoops', 'deploy the thing', '--fast', '--effort', 'high', '--in-place',
+    ]  # fmt: skip
+
+  def test_credential_overrides_adjust_the_childs_scope(self, lowering_harness):
+    launch = bro.launch.spawn.SummonLaunchSpec(
+      target='devoops',
+      prompt='p',
+      parent_workspace=PARENT_WORKSPACE,
+      summoner=SUMMONER,
+      grant_credentials=('gmail_creds',),
+      revoke_credentials=('openai',),
+    )
+    lowered = bro.launch.spawn._lower_summon(launch, 'broker-CH')
+    assert lowered.launch.secrets == {'aws', 'trails', 'gmail_creds'}
+    assert lowered.launch.optional_secrets == set()
+
+  def test_no_op_credential_override_fails_the_spawn(self, lowering_harness):
+    launch = bro.launch.spawn.SummonLaunchSpec(
+      target='devoops',
+      prompt='p',
+      parent_workspace=PARENT_WORKSPACE,
+      summoner=SUMMONER,
+      grant_credentials=('aws',),
+    )
+    with pytest.raises(ValueError, match='already in the scoped credential set'):
+      bro.launch.spawn._lower_summon(launch, 'broker-CH')
 
   def test_into_overrides_the_inherited_base_ref(self, lowering_harness):
     launch = bro.launch.spawn.SummonLaunchSpec(

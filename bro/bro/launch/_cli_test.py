@@ -7,7 +7,6 @@ import llm.llms.echo
 from bro.launch._cli import create_bro_for_run, maybe_containerize
 from bro.launch.identity import bro_git_identity_env
 from llm.llm import EFFORT_LEVELS
-from workspace.docker import Launch
 from workspace.project import ProjectConfig
 
 # the run bro's own CW_BRO rides in explicitly (never as an ambient forward), so
@@ -150,19 +149,8 @@ def test_maybe_containerize_revoke_removes_secret():
 
 
 def test_maybe_containerize_revoke_removes_optional_secret():
-  launch = Launch(
-    name='call-ppp-dev-test',
-    command=['bro', 'chat', 'ppp-dev', 'hi', '--in-place'],
-    env=_RUN_ENV,
-    secrets={'github'},
-    docker_sock=False,
-    tty=True,
-    forward_env=True,
-    optional_secrets={'openai'},
-  )
   with (
     patch.dict('os.environ', {}, clear=False) as env,
-    patch('bro.launch.bro_run.describe', return_value=launch),
     patch('bro.launch.root.run_in_container', return_value=0) as run,
   ):
     env.pop('CW_IN_CONTAINER', None)
@@ -175,9 +163,11 @@ def test_maybe_containerize_revoke_removes_optional_secret():
       revoke=['openai'],
     )
   assert rc == 0
+  # openai is in ppp-dev's optional tier, put there by its scripts dispatcher
   launched = run.call_args.args[0]
-  assert launched.secrets == {'github'}
-  assert launched.optional_secrets == set()
+  assert 'openai' not in launched.optional_secrets
+  assert 'openai' not in launched.secrets
+  assert 'github' in launched.secrets
 
 
 def test_maybe_containerize_missing_secret_fails_before_launch(monkeypatch, capsys):
@@ -199,8 +189,8 @@ def test_maybe_containerize_missing_secret_fails_before_launch(monkeypatch, caps
 
 
 def test_maybe_containerize_unknown_creds_mapping_kind_errors(capsys):
-  # the [tool.bro] creds typo guard raises from the scope computation inside
-  # describe; the hop renders it like any other launch-scope failure
+  # the [tool.bro] creds typo guard raises from the scope computation; the hop
+  # renders it like any other launch-scope failure
   with (
     patch.dict('os.environ', {}, clear=False) as env,
     patch('bro.launch.root.run_in_container') as run,

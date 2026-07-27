@@ -43,7 +43,35 @@ def test_global_flag_before_run_reaches_the_launcher():
 def test_run_summon_delegates_to_the_summon_library():
   with patch('bro.summon.relay_summon', return_value=0) as relay:
     assert main(['bro', 'run', '--summon', '--timeout', '60', 'devoops', 'deploy']) == 0
-  relay.assert_called_once_with('devoops', 'deploy', timeout=60.0, into=None, hold=None)
+  relay.assert_called_once_with(
+    'devoops',
+    'deploy',
+    timeout=60.0,
+    into=None,
+    hold=None,
+    grant=None,
+    revoke=None,
+    effort=None,
+    fast=False,
+  )
+
+
+def test_run_summon_forwards_the_scope_and_spec_flags():
+  with patch('bro.summon.relay_summon', return_value=0) as relay:
+    argv = ['bro', 'run', '--summon', '--grant', '@pm', '--revoke', 'openai']
+    argv += ['--effort', 'high', '--fast', 'devoops', 'deploy']
+    assert main(argv) == 0
+  relay.assert_called_once_with(
+    'devoops',
+    'deploy',
+    timeout=None,
+    into=None,
+    hold=None,
+    grant=['@pm'],
+    revoke=['openai'],
+    effort='high',
+    fast=True,
+  )
 
 
 def test_run_refuses_implicit_in_container_execution(capsys):

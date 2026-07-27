@@ -2,7 +2,6 @@
 
 import asyncio
 import os
-from dataclasses import replace
 from typing import Literal, Optional
 
 import base.args
@@ -149,11 +148,15 @@ def maybe_containerize(
       return 1
     return None
   from bro.launch.root import run_in_container
-  from bro.launch.scope import LaunchScopeError, preflight_scoped_launch
+  from bro.launch.scope import (
+    LaunchScopeError,
+    Surface,
+    preflight_scoped_launch,
+    scoped_secrets,
+  )
   from workspace.git import resolve_ref
   from workspace.paths import fresh_workspace_name, project_root
   from workspace.project import project_config
-  from workspace.store import ScopedSecrets
 
   base_ref: Optional[str] = None
   if into is not None:
@@ -162,17 +165,8 @@ def maybe_containerize(
       log.error('cannot resolve --into ref: %s', into)
       return 1
   try:
-    launch = bro.launch.bro_run.describe(
-      bro_name,
-      inner_args,
-      workspace_name=fresh_workspace_name(f'{cli_name}-{bro_name}'),
-      verb=verb,
-      credential_instances=project_config().creds,
-      base_ref=base_ref,
-      trails=not no_trails,
-    )
     scoped, may_summon, _ = preflight_scoped_launch(
-      ScopedSecrets(set(launch.secrets), set(launch.optional_secrets), launch.docker_sock),
+      scoped_secrets(bro_name, Surface.BRO_RUN, credential_instances=project_config().creds),
       bro_name,
       grant=grant,
       revoke=revoke,
@@ -180,7 +174,15 @@ def maybe_containerize(
   except LaunchScopeError as e:
     log.error('%s', e)
     return 1
-  launch = replace(launch, secrets=scoped.required, optional_secrets=scoped.optional)
+  launch = bro.launch.bro_run.describe(
+    bro_name,
+    inner_args,
+    workspace_name=fresh_workspace_name(f'{cli_name}-{bro_name}'),
+    verb=verb,
+    scoped=scoped,
+    base_ref=base_ref,
+    trails=not no_trails,
+  )
   return run_in_container(launch, drop=True, may_summon=may_summon)
 
 
@@ -192,12 +194,34 @@ def _run_summoned(
   into: Optional[str],
   detach: bool,
   hold: Optional[str],
+  grant: Optional[list[str]],
+  revoke: Optional[list[str]],
+  effort: Optional[str],
+  fast: bool,
 ) -> int:
   if not detach:
-    return summon_client.relay_summon(bro_name, input_text, timeout=timeout, into=into, hold=hold)
+    return summon_client.relay_summon(
+      bro_name,
+      input_text,
+      timeout=timeout,
+      into=into,
+      hold=hold,
+      grant=grant,
+      revoke=revoke,
+      effort=effort,
+      fast=fast,
+    )
   try:
     request_id = summon_client.summon_detached(
-      bro_name, input_text, timeout=timeout, into=into, hold=hold
+      bro_name,
+      input_text,
+      timeout=timeout,
+      into=into,
+      hold=hold,
+      grant=grant,
+      revoke=revoke,
+      effort=effort,
+      fast=fast,
     )
   except summon_client.SummonError as error:
     log.error('%s', error)
@@ -232,18 +256,16 @@ def run_main(
       action='store_true',
       help='render the trace as colored rich panels instead of plain log lines',
     )
-    parser.add_argument('--fast', action='store_true', help=FAST_HELP)
-    parser.add_argument('--effort', choices=EFFORT_LEVELS, default=None, help=EFFORT_HELP)
+  parser.add_argument('--fast', action='store_true', help=FAST_HELP)
+  parser.add_argument('--effort', choices=EFFORT_LEVELS, default=None, help=EFFORT_HELP)
+  if not force_summon:
     parser.add_argument('--summon', action='store_true', help=SUMMON_HELP)
     parser.add_argument('--in-place', action='store_true', help=IN_PLACE_HELP)
     parser.add_argument('--no-trails', dest='no_trails', action='store_true', help=NO_TRAILS_HELP)
     parser.add_exclusive_groups(['in_place'], ['no_trails'])
-    parser.add_exclusive_groups(
-      ['summon'],
-      ['rich', 'fast', 'effort', 'in_place', 'no_trails', 'grant', 'revoke'],
-    )
-    parser.add_argument('--grant', action='append', default=None, metavar='NAME', help=GRANT_HELP)
-    parser.add_argument('--revoke', action='append', default=None, metavar='NAME', help=REVOKE_HELP)
+    parser.add_exclusive_groups(['summon'], ['rich', 'in_place', 'no_trails'])
+  parser.add_argument('--grant', action='append', default=None, metavar='NAME', help=GRANT_HELP)
+  parser.add_argument('--revoke', action='append', default=None, metavar='NAME', help=REVOKE_HELP)
   parser.add_argument('--into', metavar='REF', help=INTO_HELP)
   parser.add_argument('--hold', choices=HOLDS, default=None, help=HOLD_HELP.format('unattended'))
   parser.add_argument('--timeout', type=float, metavar='SECONDS', help=TIMEOUT_HELP)
@@ -251,20 +273,12 @@ def run_main(
 
   args = parser.parse(argv)
   if force_summon:
-    args.update(
-      summon=True,
-      rich=False,
-      fast=False,
-      effort=None,
-      in_place=False,
-      no_trails=False,
-      grant=None,
-      revoke=None,
-    )
+    args.update(summon=True, rich=False, in_place=False, no_trails=False)
   shell_command = parser.reconstruct(args, prog=program)
   os.environ.setdefault('PPP_SHELL_COMMAND', ' '.join(shell_command))
 
   input_text = args['input']
+  fast = args['fast'] or implied_fast
 
   if args['summon']:
     return _run_summoned(
@@ -274,6 +288,10 @@ def run_main(
       into=args['into'],
       detach=args['detach'],
       hold=args['hold'],
+      grant=args['grant'],
+      revoke=args['revoke'],
+      effort=args['effort'],
+      fast=fast,
     )
   if args['timeout'] is not None or args['detach']:
     log.error('--timeout/--detach require --summon')
@@ -285,7 +303,6 @@ def run_main(
     )
     return 1
 
-  fast = args['fast'] or implied_fast
   inner_args = [input_text]
   if args['rich']:
     inner_args.append('--rich')

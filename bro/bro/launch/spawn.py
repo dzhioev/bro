@@ -17,6 +17,7 @@ from typing import Any, Optional
 
 from base import log
 from bro.launch.bro_run import describe
+from bro.launch.scope import summoned_credential_scope
 from bro.launch.summon_control import SummonControl, summon_status_file
 from bro.summon import SUMMON
 from broker.brotocol import Message, Tag
@@ -44,8 +45,11 @@ class SummonLaunchSpec(LaunchSpec):
   loop: the request fields plus the summoner's workspace path (resolved by the
   control at request time — the source the child's default base is read from).
   `SummonSpawner` lowers it to a `DockerLaunchSpec` off-loop — the target-bro
-  import, scoped-set computation, and base-ref resolution are all blocking work a
-  handler must not run."""
+  import, scoped-set computation, and base-ref resolution are all blocking work
+  the broker loop should not carry.
+
+  The credential halves of the request's grant/revoke are what reaches here; the
+  control resolved the `@bro` halves into the child's allow-list itself."""
 
   target: str
   prompt: str
@@ -53,6 +57,10 @@ class SummonLaunchSpec(LaunchSpec):
   summoner: Optional[dict[str, Any]]
   into: Optional[str] = None
   hold: Optional[str] = None
+  grant_credentials: tuple[str, ...] = ()
+  revoke_credentials: tuple[str, ...] = ()
+  effort: Optional[str] = None
+  fast: bool = False
 
 
 def _workspace_name(channel: str) -> str:
@@ -62,14 +70,14 @@ def _workspace_name(channel: str) -> str:
 def _lower_summon(launch: SummonLaunchSpec, workspace_name: str) -> DockerLaunchSpec:
   """the blocking half of a summon spawn: compute the docker launch a host-side
   `bro run <target>` would get — the shared bro-run description (`bro_run.describe`:
-  exactly the target's own scope, nothing inherited from the summoner, no grant
-  passthrough). The base is the summoner's workspace HEAD, read live here
-  (`resolve_head` — which also transfers the commit's objects into the host repo
-  when they live only in the summoner's own store), unless the request's `into`
-  names a ref (resolved with the same fetch-if-unresolvable rule as `cw ss
-  --into`, but an unresolvable ref fails the spawn rather than falling back).
-  Raises on any unresolvable input — the spawner surfaces that as the correlated
-  `failed{reason: 'launch'}`."""
+  the target's own scope, nothing inherited from the summoner, plus whatever the
+  request's own grant/revoke names). The base is the summoner's workspace HEAD,
+  read live here (`resolve_head` — which also transfers the commit's objects into
+  the host repo when they live only in the summoner's own store), unless the
+  request's `into` names a ref (resolved with the same fetch-if-unresolvable rule
+  as `cw ss --into`, but an unresolvable ref fails the spawn rather than falling
+  back). Raises on any unresolvable input — the spawner surfaces that as the
+  correlated `failed{reason: 'launch'}`."""
   project = project_root()
   if launch.into is not None:
     base_ref = resolve_ref(project, launch.into)
@@ -79,10 +87,15 @@ def _lower_summon(launch: SummonLaunchSpec, workspace_name: str) -> DockerLaunch
     base_ref = resolve_head(project, launch.parent_workspace)
     if base_ref is None:
       raise ValueError(f"cannot read the summoner's HEAD at {launch.parent_workspace}")
-  # hold is the request's one child-facing field, so it rides the child's own
-  # `bro run` argv; the other fields are consumed host-side (into → the base
-  # ref above, timeout → the spawner's wait timer)
+  # hold, effort and fast are the request's child-facing fields, so they ride the
+  # child's own `bro run` argv; the rest is consumed host-side (into → the base
+  # ref above, timeout → the spawner's wait timer, the credential overrides → the
+  # scope below)
   inner_args = [launch.prompt]
+  if launch.fast:
+    inner_args.append('--fast')
+  if launch.effort is not None:
+    inner_args.extend(['--effort', launch.effort])
   if launch.hold is not None:
     inner_args.extend(['--hold', launch.hold])
   run = describe(
@@ -90,7 +103,12 @@ def _lower_summon(launch: SummonLaunchSpec, workspace_name: str) -> DockerLaunch
     inner_args,
     workspace_name=workspace_name,
     verb='run',
-    credential_instances=project_config().creds,
+    scoped=summoned_credential_scope(
+      launch.target,
+      credential_instances=project_config().creds,
+      grant=list(launch.grant_credentials),
+      revoke=list(launch.revoke_credentials),
+    ),
     base_ref=base_ref,
     tty=False,
     forward_env=False,
@@ -139,6 +157,7 @@ def run_root_via_broker(
   *,
   session: str,
   may_summon: Collection[str] = (),
+  credential_scope: Collection[str] = (),
   trail_pointer: Optional[Path] = None,
 ) -> int:
   """run `launch` as the root peer of a broker over the host control dir
@@ -155,7 +174,9 @@ def run_root_via_broker(
   surface (see `bro/launch/summon_control.py`) — the root's identity in the summon audit and the
   key of its per-session state files. `may_summon` names the bros the root session
   is authorized to summon — its effective outgoing allow-list (`bro/launch/summon_control.py`);
-  defaults to deny-all. `trail_pointer` is a claude session's current-trail
+  defaults to deny-all. `credential_scope` names the secrets the root session
+  was launched with, the bound on what its summons may grant a child; defaults
+  to grant-nothing. `trail_pointer` is a claude session's current-trail
   pointer file (host-side path; `cw` passes it), the control's provenance source
   for the root's summon children. A summoned child follows its own bro's static seeds
   instead, resolved per request by the control. The summon handler is registered
@@ -176,6 +197,8 @@ def run_root_via_broker(
   )
   control = SummonControl(
     allow_list=may_summon,
+    credential_scope=credential_scope,
+    credential_instances=project_config().creds,
     session=session,
     project=project,
     status_file=summon_status_file(project, session),

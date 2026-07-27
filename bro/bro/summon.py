@@ -1,7 +1,8 @@
 #!/usr/bin/env python
 """summon — request another bro on the session's broker channel and get its answer.
 
-The peer side of the summon mechanism: a `summon{target, prompt, timeout?, into?, hold?}`
+The peer side of the summon mechanism: a `summon{target, prompt, timeout?, into?,
+hold?, grant?, revoke?, effort?, fast?}`
 request on the session channel, answered by the host-side handler (`bro/launch/summon_control.py`)
 with `started{trail_id}` and exactly one terminal (`completed` / `failed` /
 `reply{error}`). This module owns the request's wire contract — the type tag, the
@@ -10,6 +11,11 @@ payload keys, the 1800s default timeout — for all its consumers: `bro run
 `summon_check`, over the library functions `summon_and_wait`, `summon_detached`,
 `check_summon`, `collect_summon`), and the blocking CLI relay helper
 `relay_summon`.
+
+`grant` / `revoke` are lists of scope overrides for the child, each value a
+credential name or `@bro` for a summon target of its own; the host bounds a grant
+by the sender's own scope, so a name it does not hold itself comes back denied.
+`effort` / `fast` shape the child's LLM spec.
 
 Blocking mode sends, prints the request id and the `started` trail id to stderr,
 and relays the terminal: the answer on stdout (exit 0), everything else as a
@@ -56,9 +62,10 @@ deferred to call time so importers of the module-level constants (`bro/launch/su
 on the pre-gate launch path) never pull the broker package in.
 """
 
+import contextlib
 import json
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
@@ -110,10 +117,15 @@ def _open_client() -> 'Client':
 def _payload(
   target: str,
   prompt: str,
-  timeout: Optional[float],
-  into: Optional[str],
-  hold: Optional[str],
-  step_id: Optional[str],
+  *,
+  timeout: Optional[float] = None,
+  into: Optional[str] = None,
+  hold: Optional[str] = None,
+  step_id: Optional[str] = None,
+  grant: Optional[list[str]] = None,
+  revoke: Optional[list[str]] = None,
+  effort: Optional[str] = None,
+  fast: bool = False,
 ) -> dict[str, Any]:
   payload: dict[str, Any] = {'target': target, 'prompt': prompt}
   if timeout is not None:
@@ -124,7 +136,26 @@ def _payload(
     payload['hold'] = hold
   if step_id is not None:
     payload['step_id'] = step_id
+  if grant is not None:
+    payload['grant'] = list(grant)
+  if revoke is not None:
+    payload['revoke'] = list(revoke)
+  if effort is not None:
+    payload['effort'] = effort
+  if fast:
+    payload['fast'] = True
   return payload
+
+
+@contextlib.contextmanager
+def _connection(client: Optional['Client']) -> Generator['Client']:
+  """the channel client a call runs on: a caller-owned one passed through with
+  its lifecycle left alone, or a fresh one closed on the way out."""
+  if client is not None:
+    yield client
+    return
+  with _open_client() as owned:
+    yield owned
 
 
 def _trails_hint(trail_id: Optional[str]) -> str:
@@ -215,6 +246,10 @@ def summon_and_wait(
   timeout: Optional[float] = None,
   into: Optional[str] = None,
   hold: Optional[str] = None,
+  grant: Optional[list[str]] = None,
+  revoke: Optional[list[str]] = None,
+  effort: Optional[str] = None,
+  fast: bool = False,
   step_id: Optional[str] = None,
   client: Optional['Client'] = None,
 ) -> str:
@@ -224,13 +259,23 @@ def summon_and_wait(
   connection's lifecycle (closing it from another thread aborts the wait);
   without, a fresh one is opened and closed per call. Raises `SummonError` on
   any failure."""
-  if client is None:
-    with _open_client() as owned:
-      return summon_and_wait(
-        target, prompt, timeout=timeout, into=into, hold=hold, step_id=step_id, client=owned
-      )
-  request = client.send(SUMMON, _payload(target, prompt, timeout, into, hold, step_id))
-  return _await_answer(client, request, timeout=timeout if timeout is not None else DEFAULT_TIMEOUT)
+  payload = _payload(
+    target,
+    prompt,
+    timeout=timeout,
+    into=into,
+    hold=hold,
+    step_id=step_id,
+    grant=grant,
+    revoke=revoke,
+    effort=effort,
+    fast=fast,
+  )
+  with _connection(client) as connection:
+    request = connection.send(SUMMON, payload)
+    return _await_answer(
+      connection, request, timeout=timeout if timeout is not None else DEFAULT_TIMEOUT
+    )
 
 
 def summon_detached(
@@ -240,12 +285,28 @@ def summon_detached(
   timeout: Optional[float] = None,
   into: Optional[str] = None,
   hold: Optional[str] = None,
+  grant: Optional[list[str]] = None,
+  revoke: Optional[list[str]] = None,
+  effort: Optional[str] = None,
+  fast: bool = False,
   step_id: Optional[str] = None,
 ) -> str:
   """send one summon and return its request id without waiting — the bro `summon`
   tool's detach path. Collect with `collect_summon`, poll with `check_summon`."""
+  payload = _payload(
+    target,
+    prompt,
+    timeout=timeout,
+    into=into,
+    hold=hold,
+    step_id=step_id,
+    grant=grant,
+    revoke=revoke,
+    effort=effort,
+    fast=fast,
+  )
   with _open_client() as client:
-    return client.send(SUMMON, _payload(target, prompt, timeout, into, hold, step_id)).id
+    return client.send(SUMMON, payload).id
 
 
 @dataclass(frozen=True)
@@ -333,16 +394,14 @@ def collect_summon(
   call. Raises `SummonError` on any failure."""
   from broker.brotocol import Tag
 
-  if client is None:
-    with _open_client() as owned:
-      return collect_summon(request_id, timeout=timeout, on_started=on_started, client=owned)
-  claim = client.send(Tag.CLAIM, {'id': request_id})
-  return _await_answer(
-    client,
-    claim,
-    timeout=timeout if timeout is not None else DEFAULT_TIMEOUT,
-    on_started=on_started,
-  )
+  with _connection(client) as connection:
+    claim = connection.send(Tag.CLAIM, {'id': request_id})
+    return _await_answer(
+      connection,
+      claim,
+      timeout=timeout if timeout is not None else DEFAULT_TIMEOUT,
+      on_started=on_started,
+    )
 
 
 def list_summons() -> dict[str, Any]:
@@ -371,19 +430,34 @@ def relay_summon(
   timeout: Optional[float] = None,
   into: Optional[str] = None,
   hold: Optional[str] = None,
+  grant: Optional[list[str]] = None,
+  revoke: Optional[list[str]] = None,
+  effort: Optional[str] = None,
+  fast: bool = False,
 ) -> int:
   """send one summon and relay its outcome as a CLI would: the request id and
   the started trail id to stderr, the answer to stdout, any failure as an error
   log line. Returns the exit code — the blocking `summon` CLI mode, exposed for
   surfaces that relay a whole run through the host (`bro run --summon` and its
   aliases)."""
+  payload = _payload(
+    target,
+    prompt,
+    timeout=timeout,
+    into=into,
+    hold=hold,
+    grant=grant,
+    revoke=revoke,
+    effort=effort,
+    fast=fast,
+  )
   try:
     client = _open_client()
   except SummonError as e:
     log.error('%s', e)
     return 1
   with client:
-    request = client.send(SUMMON, _payload(target, prompt, timeout, into, hold, None))
+    request = client.send(SUMMON, payload)
     log.info('summon request %s', request.id)
     effective = timeout if timeout is not None else DEFAULT_TIMEOUT
     return _relay(

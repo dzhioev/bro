@@ -36,6 +36,7 @@ def _run_root_via_broker(
     project,
     session=session,
     may_summon=may_summon,
+    credential_scope=set(launch.secrets) | set(launch.optional_secrets),
     trail_pointer=trail_pointer,
   )
 

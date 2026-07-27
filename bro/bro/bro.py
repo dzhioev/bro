@@ -16,7 +16,7 @@ from bro import scripts as script_store
 from bro.channel import BroChannel
 from bro.datasources.base import DataSource
 from bro.summon import SUMMONER_ENV
-from llm.llm import LLM, LLMSpec
+from llm.llm import EFFORT_LEVELS, LLM, LLMSpec
 from llm.observer import BoringRenderer, NullObserver, Observer
 from llm.tracker import EndReason, HTTPTracker, NullTracker, Tracker
 from prompts import get_prompt, hold_fragment
@@ -224,7 +224,15 @@ _SUMMON_DESCRIPTION = (
   'outlives the default and needs an explicit value sized in hours; optional '
   "`into` bases the child on a git ref instead of your workspace's "
   'current HEAD (uncommitted changes never transfer); optional `hold` sets the '
-  "child's user-involvement level (default unattended). fails with the reason when the run raises, errors out, "
+  "child's user-involvement level (default unattended). the child's run is shaped "
+  'by the optional `effort` (reasoning level: '
+  f'{", ".join(EFFORT_LEVELS)}) and `fast` (the provider fast knob), and its scope by '
+  'the optional `grant` / `revoke` lists — each entry a credential name, or `@bro` '
+  "for a summonable target of the child's own. you can only grant what you hold "
+  'yourself (a credential in your own scope, a bro in your own allow-list), and both '
+  "directions are strict, so naming something the child's scope already has (or, for "
+  'a revoke, lacks) fails the summon. '
+  'fails with the reason when the run raises, errors out, '
   'or dies. `detach: true` returns the request id right after the send instead of '
   'blocking — poll or collect it with `summon_check`.'
   '{{when #wire = mcp}} CAUTION: this tool is served over MCP, and the harness '
@@ -315,6 +323,10 @@ def _summon_tool(
     into: Optional[str] = None,
     detach: bool = False,
     hold: Optional[str] = None,
+    grant: Optional[list[str]] = None,
+    revoke: Optional[list[str]] = None,
+    effort: Optional[str] = None,
+    fast: bool = False,
   ) -> str:
     step_id = current_tool_step_id()
     if detach:
@@ -325,6 +337,10 @@ def _summon_tool(
         timeout=timeout,
         into=into,
         hold=hold,
+        grant=grant,
+        revoke=revoke,
+        effort=effort,
+        fast=fast,
         step_id=step_id,
       )
     client = summon_client.open_client()
@@ -336,6 +352,10 @@ def _summon_tool(
         timeout=timeout,
         into=into,
         hold=hold,
+        grant=grant,
+        revoke=revoke,
+        effort=effort,
+        fast=fast,
         step_id=step_id,
         client=client,
       )
