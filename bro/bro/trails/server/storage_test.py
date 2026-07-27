@@ -71,6 +71,8 @@ class FakeDynamo:
       'legacy': {},
       'universal': {},
     }
+    self.queries: list[dict] = []
+    self.scans: list[dict] = []
 
   @property
   def headers(self) -> dict[str, dict]:
@@ -247,6 +249,7 @@ class FakeDynamo:
       raise exception
 
   def query(self, **kwargs):
+    self.queries.append(kwargs)
     table = kwargs['TableName']
     values = self._values(kwargs)
     if 'IndexName' in kwargs:
@@ -255,22 +258,27 @@ class FakeDynamo:
         'bro-started_at-index': 'bro',
         'harness-started_at-index': 'harness',
         'forked-from-id-index': 'forked_from_id',
+        'uuid-index': 'uuid',
       }[kwargs['IndexName']]
+      partition_value = values.get(':partition', values.get(':uuid'))
       items = [
-        item
-        for item in self.tables[table].values()
-        if item.get(partition_name) == values[':partition']
+        item for item in self.tables[table].values() if item.get(partition_name) == partition_value
       ]
       if ':since' in values:
         items = [item for item in items if item['started_at'] >= values[':since']]
       if ':until' in values:
         items = [item for item in items if item['started_at'] <= values[':until']]
-      items.sort(key=lambda item: item['started_at'], reverse=True)
+      if kwargs['IndexName'] == 'uuid-index':
+        items.sort(key=lambda item: (item['trail_id'], item['step_id']))
+      else:
+        items.sort(key=lambda item: item['started_at'], reverse=True)
     else:
       trail_id = values[':trail_id']
       items = [item for item in self.tables[table].values() if item['trail_id'] == trail_id]
       if 'BETWEEN' in kwargs['KeyConditionExpression']:
         items = [item for item in items if values[':start'] <= item['step_id'] <= values[':end']]
+      elif '<=' in kwargs['KeyConditionExpression']:
+        items = [item for item in items if item['step_id'] <= values[':through']]
       items.sort(key=lambda item: item['step_id'])
       start_key = kwargs.get('ExclusiveStartKey')
       if start_key is not None:
@@ -289,8 +297,14 @@ class FakeDynamo:
         )
     return response
 
-  def scan(self, *, TableName, **_):
-    return {'Items': [_serialize(item) for item in self.tables[TableName].values()]}
+  def scan(self, *, TableName, **kwargs):
+    self.scans.append({'TableName': TableName, **kwargs})
+    items = list(self.tables[TableName].values())
+    if 'FilterExpression' in kwargs:
+      values = self._values(kwargs)
+      requested = set(values.values())
+      items = [item for item in items if item.get('uuid') in requested]
+    return {'Items': [_serialize(item) for item in items]}
 
 
 @pytest.fixture
@@ -304,6 +318,7 @@ def components():
     steps_table='legacy',
     universal_steps_table='universal',
     bucket='bucket',
+    uuid_index='uuid-index',
   )
   return store, dynamo, s3
 
@@ -633,6 +648,28 @@ async def test_dual_read_keeps_legacy_bro_and_claude_bodies_live(components):
   assert claude_steps['steps'][0]['raw'] == raw.rstrip('\n')
   messages = await store.query_messages(claude_trail, after=None, limit=10, types=None)
   assert [message['type'] for message in messages['messages']] == ['llm_call', 'assistant']
+
+
+@pytest.mark.asyncio
+async def test_uuid_projection_and_point_reads_cover_universal_and_legacy_claude(components):
+  store, dynamo, _ = components
+  universal = await _create_claude(store)
+  first = _claude_assistant('message-1', 'first', uuid='uuid-1')
+  second = _claude_assistant('message-2', 'second', uuid='uuid-2')
+  await store.append_records(universal, offset=0, records=[first, second])
+
+  assert await store.find_steps_by_uuid({'uuid-2', 'missing'}) == [
+    {'trail_id': universal, 'step_id': 1, 'uuid': 'uuid-2'}
+  ]
+  assert dynamo.queries[-1]['IndexName'] == 'uuid-index'
+  assert dynamo.queries[-1]['ProjectionExpression'] == 'trail_id, step_id, #uuid'
+  assert (await store.get_step(universal, '1'))['raw'] == second
+  assert await store.query_step_uuids(universal, through='0') == [{'step_id': 0, 'uuid': 'uuid-1'}]
+
+  legacy = await _create_claude(store, universal=False)
+  await store.replace_artifact(legacy, first + '\n' + second + '\n', {})
+  assert (await store.get_step(legacy, '1'))['raw'] == second
+  assert await store.query_step_uuids(legacy, through='0') == [{'step_id': '0', 'uuid': 'uuid-1'}]
 
 
 @pytest.mark.asyncio

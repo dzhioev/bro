@@ -138,6 +138,19 @@ class TrailsClient:
   def get_trail(self, trail_id: str) -> dict:
     return self._get(f'/v1/trails/{trail_id}', {})
 
+  def find_steps_by_uuid(self, uuids: set[str]) -> list[dict]:
+    if len(uuids) == 0:
+      return []
+    query = [('uuid', uuid) for uuid in sorted(uuids)]
+    return self._get_pairs('/v1/steps', query)['steps']
+
+  def get_step(self, trail_id: str, step_id: str | int) -> dict:
+    return self._get(f'/v1/trails/{trail_id}/steps/{step_id}', {})
+
+  def get_step_uuids(self, trail_id: str, *, through: Optional[str | int] = None) -> list[dict]:
+    query = {} if through is None else {'through': str(through)}
+    return self._get(f'/v1/trails/{trail_id}/steps/uuids', query)['steps']
+
   def get_steps(
     self,
     trail_id: str,

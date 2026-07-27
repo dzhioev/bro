@@ -34,6 +34,7 @@ from bro.bros.bro import Bro
 from bro.registry import create_bro
 from llm.llm import LLM, LLMSpec
 from llm.tracker import NullTracker, Tracker
+from trails.lineage import walk_chain
 from trails.model import ForkedFrom, RecordedTrail, Step
 
 
@@ -51,7 +52,7 @@ def replay_messages(
     trail's `system_prompt` step.
   - the ancestor prefix, when the trail is itself a fork: a fork trail's own
     steps carry only the post-fork suffix, so the prefix is rebuilt by
-    recursing through `fetch_forked_from(trail_id)` (each forked_from replayed up to its
+    walking through `fetch_forked_from(trail_id)` (each ancestor replayed up to its
     fork step, its system message dropped — the youngest trail's recorded
     prompt stands for the whole conversation). a fork trail replayed without
     `fetch_forked_from` raises rather than silently truncating the conversation.
@@ -77,47 +78,53 @@ def replay_messages(
   `up_to_step_id` does not appear in it.
   """
   system_text = _extract_system_prompt(trail)
+  if trail.header.forked_from is not None and fetch_forked_from is None:
+    raise ValueError(
+      f'trail {trail.header.id!r} is a fork of {trail.header.forked_from.trail_id!r}; '
+      'pass fetch_forked_from to rebuild the ancestor prefix'
+    )
+
+  def parent(recorded: RecordedTrail) -> Optional[tuple[str, ForkedFrom]]:
+    pointer = recorded.header.forked_from
+    return None if pointer is None else (pointer.trail_id, pointer)
+
+  def fetch_parent(trail_id: str) -> RecordedTrail:
+    assert fetch_forked_from is not None
+    return fetch_forked_from(trail_id)
+
+  chain = walk_chain(
+    trail,
+    identity=lambda recorded: recorded.header.id,
+    parent=parent,
+    fetch_parent=fetch_parent,
+  )
   result: list[dict] = [{'role': 'system', 'content': system_text}]
-  result.extend(_ancestor_items(trail, fetch_forked_from))
+  for recorded, bound in chain:
+    segment_bound = bound.step_id if bound is not None else up_to_step_id
+    result.extend(_replay_step_items(recorded, segment_bound))
+  return result
+
+
+def _replay_step_items(trail: RecordedTrail, up_to_step_id: str | int) -> list[dict]:
+  items: list[dict] = []
   for step in trail.steps:
     if step.kind == 'user_input':
-      result.append({'role': 'user', 'content': step.body})
+      items.append({'role': 'user', 'content': step.body})
     elif step.kind == 'llm_call':
-      result.extend(_response_output_items(step.body))
+      items.extend(_response_output_items(step.body))
     elif step.kind == 'tool_result':
-      result.append(
+      items.append(
         {
           'type': 'function_call_output',
           'call_id': step.extras['call_id'],
           'output': _encode_tool_output(step.body),
         }
       )
-    # system_prompt, reasoning, assistant, tool_call, end, error: not
-    # separately appended — the prompt is already at index 0, and the
-    # `llm_call` step's `response.output` carries the canonical output items
-    # (reasoning / message / function_call) for its turn.
+    # the youngest trail's prompt is already at index 0; decomposed output
+    # records are represented by the canonical llm_call response.
     if step.step_id == up_to_step_id:
-      return result
+      return items
   raise ValueError(f'step_id {up_to_step_id!r} not found in trail {trail.header.id!r}')
-
-
-def _ancestor_items(
-  trail: RecordedTrail, fetch_forked_from: Optional[Callable[[str], RecordedTrail]]
-) -> list[dict]:
-  forked_from = trail.header.forked_from
-  if forked_from is None:
-    return []
-  if fetch_forked_from is None:
-    raise ValueError(
-      f'trail {trail.header.id!r} is a fork of {forked_from.trail_id!r}; '
-      'pass fetch_forked_from to rebuild the ancestor prefix'
-    )
-  forked_from_trail = fetch_forked_from(forked_from.trail_id)
-  # drop the forked_from's leading system message — the child's own recorded prompt
-  # (already at index 0 of the caller's list) stands for the conversation.
-  return replay_messages(
-    forked_from_trail, forked_from.step_id, fetch_forked_from=fetch_forked_from
-  )[1:]
 
 
 def latest_fork_point(trail: RecordedTrail) -> str | int:

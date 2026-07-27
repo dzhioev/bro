@@ -7,6 +7,7 @@ from typing import Any, Optional
 import pytest
 
 from session_log import trail_pointer
+from session_log.environment import CW_RESUMED_SESSION_ENV
 from session_log.recorder import Recorder, RecorderState, _fork_cuts, _state_path
 
 
@@ -21,21 +22,27 @@ class FakeTrails:
     self.appends: list[dict] = []
     self.ends: dict[str, dict] = {}
     self.keepalives: list[str] = []
+    self.uuid_lookups: list[set[str]] = []
+    self.point_reads: list[tuple[str, int]] = []
+    self.uuid_projections: list[tuple[str, Optional[int]]] = []
+    self.history_scans = 0
     self._counter = 0
 
   def create_trail(self, payload: dict) -> dict:
     self._counter += 1
     trail_id = f'T{self._counter}'
     self.created.append(payload)
+    started_at = f'2026-01-01T00:00:{self._counter:02d}Z'
     self.headers[trail_id] = {
       'id': trail_id,
+      'started_at': started_at,
       'subject': payload.get('subject'),
       'body_storage': 'trail_steps_v2',
       **payload,
     }
     records = payload['body']['records']
     self.artifacts[trail_id] = ''.join(f'{record}\n' for record in records)
-    return {'id': trail_id, 'started_at': '2026-01-01T00:00:00Z'}
+    return {'id': trail_id, 'started_at': started_at}
 
   def append_records(self, trail_id: str, offset: int, records: list[str]) -> dict:
     current = self.artifacts[trail_id].splitlines()
@@ -53,6 +60,44 @@ class FakeTrails:
 
   def keepalive(self, trail_id: str) -> None:
     self.keepalives.append(trail_id)
+
+  def find_steps_by_uuid(self, uuids: set[str]) -> list[dict]:
+    self.uuid_lookups.append(uuids)
+    return [
+      {'trail_id': trail_id, 'step_id': step_id, 'uuid': record['uuid']}
+      for trail_id, artifact in self.artifacts.items()
+      if trail_id not in self.legacy_trails
+      for step_id, raw in enumerate(artifact.splitlines())
+      if (record := _parse(raw)) is not None and record.get('uuid') in uuids
+    ]
+
+  def get_step(self, trail_id: str, step_id: str | int) -> dict:
+    ordinal = int(step_id)
+    self.point_reads.append((trail_id, ordinal))
+    steps = self.get_steps(
+      trail_id,
+      after=ordinal - 1 if ordinal > 0 else None,
+      limit=1,
+    )['steps']
+    return steps[0] if len(steps) > 0 else {}
+
+  def get_step_uuids(self, trail_id: str, *, through: Optional[str | int] = None) -> list[dict]:
+    limit = int(through) if through is not None else None
+    self.uuid_projections.append((trail_id, limit))
+    rows: list[dict] = []
+    for step_id, raw in enumerate(self.artifacts[trail_id].splitlines()):
+      if limit is not None and step_id > limit:
+        break
+      record = _parse(raw)
+      uuid = record.get('uuid') if record is not None else None
+      if isinstance(uuid, str):
+        rows.append(
+          {
+            'step_id': str(step_id) if trail_id in self.legacy_trails else step_id,
+            'uuid': uuid,
+          }
+        )
+    return rows
 
   def get_steps(
     self, trail_id: str, *, after: Optional[str | int] = None, limit: int = 100
@@ -83,6 +128,7 @@ class FakeTrails:
     return header
 
   def iter_trails(self, *, harness: str, since: Optional[str] = None):
+    self.history_scans += 1
     del harness, since
     for trail_id in reversed(list(self.headers)):
       yield self.get_trail(trail_id)
@@ -163,6 +209,7 @@ def environment(tmp_path: Path, monkeypatch):
   monkeypatch.setenv('CW_COMMAND', 'cw ss ws')
   monkeypatch.setenv('CW_BRO', 'ppp-dev')
   monkeypatch.setenv('BRO_HOLD', 'attended')
+  monkeypatch.delenv(CW_RESUMED_SESSION_ENV, raising=False)
   monkeypatch.setenv(
     'CW_SESSION_CONTEXT', json.dumps([{'title': 'git state', 'fields': {'branch': 'b'}}])
   )
@@ -440,6 +487,7 @@ class TestLifetimeForks:
     fork = fake.created[-1]
     assert fork['forked_from'] == {'trail_id': 'T2', 'step_id': '0'}
     assert fake.artifacts['T3'] == ephemera + '\n' + '\n'.join(tail) + '\n'
+    assert ('T1', 1) in fake.uuid_projections
 
 
 class TestRecordedChainRecovery:
@@ -454,6 +502,7 @@ class TestRecordedChainRecovery:
     fake = FakeTrails()
     lines = [_user('hello', 'u1'), _assistant('hi', 'a1')]
     self._recorded_root(projects, fake, lines)
+    lookups_before_resume = len(fake.uuid_lookups)
     _state_path(projects).unlink()  # a session recorded before this daemon
     appended = [_user('again', 'u2')]
     _write_segment(projects, 'seg-1', lines + appended)
@@ -461,6 +510,9 @@ class TestRecordedChainRecovery:
     assert second.tick() is True
     assert fake.created[-1]['forked_from'] == {'trail_id': 'T1', 'step_id': '1'}
     assert fake.artifacts['T2'] == '\n'.join(appended) + '\n'
+    assert fake.history_scans == 0
+    assert len(fake.uuid_lookups) == lookups_before_resume + 1
+    assert fake.point_reads[-2:] == [('T1', 0), ('T1', 1)]
 
   def test_missing_state_forks_a_copied_history_from_the_origin_segment(self, environment):
     projects = environment
@@ -474,6 +526,50 @@ class TestRecordedChainRecovery:
     assert second.tick() is True
     assert fake.created[-1]['forked_from'] == {'trail_id': 'T1', 'step_id': '1'}
     assert fake.artifacts['T2'] == '\n'.join(tail) + '\n'
+
+  def test_declared_segment_selects_its_trail_before_inference(self, environment, monkeypatch):
+    projects = environment
+    fake = FakeTrails()
+    lines = [_user('hello', 'u1'), _assistant('hi', 'a1')]
+    self._recorded_root(projects, fake, lines)
+    _state_path(projects).unlink()
+    _write_segment(projects, 'other-segment', lines)
+    other_payload = dict(fake.created[0])
+    other_payload['native'] = {**other_payload['native'], 'segment': 'other-segment'}
+    other_id = fake.create_trail(other_payload)['id']
+    fake.append_records(other_id, 0, lines)
+
+    monkeypatch.setenv(CW_RESUMED_SESSION_ENV, 'seg-1')
+    tail = [_user('resumed', 'u2')]
+    _write_segment(projects, 'seg-2', [*lines, *tail])
+    second = _recorder(projects, fake)
+    assert second.tick() is True
+    assert fake.created[-1]['forked_from'] == {'trail_id': 'T1', 'step_id': '1'}
+
+  def test_malformed_uuid_lookup_fails_fast(self, environment):
+    projects = environment
+    fake = FakeTrails()
+    _write_segment(projects, 'seg-1', [_user('hello', 'u1')])
+    fake.find_steps_by_uuid = lambda uuids: [  # type: ignore[method-assign]
+      {'trail_id': 'T1', 'step_id': 'bad', 'uuid': next(iter(uuids))}
+    ]
+
+    with pytest.raises(ValueError, match='malformed UUID lookup result'):
+      _recorder(projects, fake).tick()
+
+  def test_bad_declaration_falls_back_to_inferred_lineage(self, environment, monkeypatch):
+    projects = environment
+    fake = FakeTrails()
+    lines = [_user('hello', 'u1'), _assistant('hi', 'a1')]
+    self._recorded_root(projects, fake, lines)
+    _state_path(projects).unlink()
+    monkeypatch.setenv(CW_RESUMED_SESSION_ENV, 'missing-segment')
+    tail = [_user('resumed', 'u2')]
+    _write_segment(projects, 'seg-2', [*lines, *tail])
+
+    second = _recorder(projects, fake)
+    assert second.tick() is True
+    assert fake.created[-1]['forked_from'] == {'trail_id': 'T1', 'step_id': '1'}
 
   def test_state_that_outgrew_the_stored_artifact_recovers_the_real_extent(self, environment):
     projects = environment

@@ -16,6 +16,7 @@ from bro.bros.bro import Bro
 from bro.fork import fork, latest_fork_point
 from llm.llm import LLMSpec
 from trails.client import TrailsClient, fetch_recorded_trail
+from trails.lineage import walk_header_chain
 
 # `--resume` without a trail id: continue the bro's newest recorded `call`
 # conversation.
@@ -61,27 +62,17 @@ def conversation_history(client: TrailsClient, trail_id: str) -> list[HistoryMes
   terminal `assistant` steps, collected across the fork ancestor chain (each
   ancestor contributes its steps up to its child's fork point).
   """
-  # walk up to the root collecting (trail_id, fork-point bound); the target
-  # trail itself is unbounded.
-  segments: list[tuple[str, Optional[str]]] = []
-  current = trail_id
-  bound: Optional[str] = None
-  while True:
-    segments.append((current, bound))
-    forked_from = client.get_trail(current).get('forked_from')
-    if forked_from is None:
-      break
-    current = forked_from['trail_id']
-    bound = forked_from['step_id']
-  segments.reverse()
+  target = client.get_trail(trail_id)
+  segments = walk_header_chain(target, client.get_trail)
   messages: list[HistoryMessage] = []
-  for segment_trail_id, segment_bound in segments:
-    messages.extend(_segment_messages(client, segment_trail_id, segment_bound))
+  for header, bound in segments:
+    step_id = bound['step_id'] if bound is not None else None
+    messages.extend(_segment_messages(client, header['id'], step_id))
   return messages
 
 
 def _segment_messages(
-  client: TrailsClient, trail_id: str, up_to_step_id: Optional[str]
+  client: TrailsClient, trail_id: str, up_to_step_id: Optional[str | int]
 ) -> list[HistoryMessage]:
   # collect displayable steps up to the fork point, plus the fork turn's own
   # trailing emissions — the terminal `assistant` step of an `llm_call` fork

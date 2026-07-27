@@ -183,6 +183,32 @@ class FakeStorage:
   async def get_trail(self, trail_id):
     return self.trails.get(trail_id)
 
+  async def find_steps_by_uuid(self, uuids):
+    return [
+      {'trail_id': trail_id, 'step_id': step['step_id'], 'uuid': step['uuid']}
+      for trail_id, steps in self.steps.items()
+      for step in steps
+      if step.get('uuid') in uuids
+    ]
+
+  async def get_step(self, trail_id, step_id):
+    if trail_id not in self.trails:
+      raise storage.TrailNotFound(trail_id)
+    return next(
+      (step for step in self.steps[trail_id] if str(step['step_id']) == str(step_id)),
+      None,
+    )
+
+  async def query_step_uuids(self, trail_id, *, through):
+    if trail_id not in self.trails:
+      raise storage.TrailNotFound(trail_id)
+    limit = int(through) if through is not None else None
+    return [
+      {'step_id': step['step_id'], 'uuid': step['uuid']}
+      for step in self.steps[trail_id]
+      if 'uuid' in step and (limit is None or int(step['step_id']) <= limit)
+    ]
+
   async def query_steps(self, trail_id, *, after, limit):
     if trail_id not in self.trails:
       raise storage.TrailNotFound(trail_id)
@@ -353,6 +379,42 @@ async def test_messages_support_repeated_type_filter(client):
     'user_input',
     'assistant',
   ]
+
+
+@pytest.mark.asyncio
+async def test_uuid_lookup_returns_only_step_identities(client, store):
+  store.steps['trail-1'] = [
+    {'trail_id': 'trail-1', 'step_id': 0, 'uuid': 'wanted', 'body': 'not returned'},
+    {'trail_id': 'trail-1', 'step_id': 1, 'uuid': 'other'},
+  ]
+  response = await (await client).get('/v1/steps?uuid=wanted', headers=_auth())
+  assert response.status == 200
+  assert await response.json() == {
+    'steps': [{'trail_id': 'trail-1', 'step_id': 0, 'uuid': 'wanted'}]
+  }
+
+
+@pytest.mark.asyncio
+async def test_uuid_lookup_requires_a_bounded_nonempty_query(client):
+  cli = await client
+  assert (await cli.get('/v1/steps', headers=_auth())).status == 400
+  assert (await cli.get('/v1/steps?uuid=', headers=_auth())).status == 400
+
+
+@pytest.mark.asyncio
+async def test_point_step_and_uuid_projection_reads(client, store):
+  store.trails['trail-1'] = {'id': 'trail-1'}
+  store.steps['trail-1'] = [
+    {'trail_id': 'trail-1', 'step_id': 0, 'uuid': 'first', 'body': 'one'},
+    {'trail_id': 'trail-1', 'step_id': 1, 'uuid': 'second', 'body': 'two'},
+  ]
+  cli = await client
+  point = await cli.get('/v1/trails/trail-1/steps/1', headers=_auth())
+  assert point.status == 200
+  assert (await point.json())['body'] == 'two'
+  projected = await cli.get('/v1/trails/trail-1/steps/uuids?through=0', headers=_auth())
+  assert projected.status == 200
+  assert await projected.json() == {'steps': [{'step_id': 0, 'uuid': 'first'}]}
 
 
 @pytest.mark.asyncio

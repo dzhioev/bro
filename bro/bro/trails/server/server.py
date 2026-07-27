@@ -14,7 +14,7 @@ from aiohttp import web
 
 import base.args
 from base import log
-from trails.model import MESSAGE_TYPES
+from trails.model import MESSAGE_TYPES, UUID_LOOKUP_LIMIT
 from trails.server import backends, storage
 
 __cli_name__ = 'trails-server'
@@ -360,6 +360,43 @@ async def _handle_get_context(request: web.Request) -> web.Response:
   return web.json_response({'launch_context': context})
 
 
+async def _handle_find_steps(request: web.Request) -> web.Response:
+  requested = request.query.getall('uuid', [])
+  if len(requested) == 0 or len(requested) > UUID_LOOKUP_LIMIT:
+    return _error(f'uuid must be supplied between 1 and {UUID_LOOKUP_LIMIT} times', 400)
+  if any(len(uuid) == 0 for uuid in requested):
+    return _error('uuid must be non-empty', 400)
+  store: storage.Storage = request.app['storage']
+  return web.json_response({'steps': await store.find_steps_by_uuid(set(requested))})
+
+
+async def _handle_get_step(request: web.Request) -> web.Response:
+  trail_id = request.match_info['trail_id']
+  step_id = request.match_info['step_id']
+  store: storage.Storage = request.app['storage']
+  try:
+    step = await store.get_step(trail_id, step_id)
+  except storage.TrailNotFound:
+    return _error(f'trail not found: {trail_id}', 404)
+  except ValueError as exception:
+    return _error(str(exception), 400)
+  if step is None:
+    return _error(f'step not found: {trail_id}/{step_id}', 404)
+  return web.json_response(step)
+
+
+async def _handle_get_step_uuids(request: web.Request) -> web.Response:
+  trail_id = request.match_info['trail_id']
+  store: storage.Storage = request.app['storage']
+  try:
+    steps = await store.query_step_uuids(trail_id, through=request.query.get('through'))
+  except storage.TrailNotFound:
+    return _error(f'trail not found: {trail_id}', 404)
+  except ValueError as exception:
+    return _error(str(exception), 400)
+  return web.json_response({'steps': steps})
+
+
 async def _handle_get_steps(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
   after = request.query.get('after')
@@ -503,11 +540,14 @@ def create_app(
   app.router.add_get('/health', _handle_health)
   app.router.add_post('/v1/trails', _handle_create_trail)
   app.router.add_get('/v1/trails', _handle_list_trails)
+  app.router.add_get('/v1/steps', _handle_find_steps)
   app.router.add_get('/v1/trails/{trail_id}', _handle_get_trail)
   app.router.add_patch('/v1/trails/{trail_id}', _handle_update_header)
   app.router.add_post('/v1/trails/{trail_id}/steps', _handle_put_step)
   app.router.add_post('/v1/trails/{trail_id}/records', _handle_append_records)
   app.router.add_get('/v1/trails/{trail_id}/steps', _handle_get_steps)
+  app.router.add_get('/v1/trails/{trail_id}/steps/uuids', _handle_get_step_uuids)
+  app.router.add_get('/v1/trails/{trail_id}/steps/{step_id}', _handle_get_step)
   app.router.add_get('/v1/trails/{trail_id}/messages', _handle_get_messages)
   app.router.add_get('/v1/trails/{trail_id}/context', _handle_get_context)
   app.router.add_put('/v1/trails/{trail_id}/artifact', _handle_replace_artifact)
@@ -550,6 +590,7 @@ def main(argv: list[str]) -> Optional[int]:
   parser.add_argument('--trails-table', required=True)
   parser.add_argument('--steps-table', required=True)
   parser.add_argument('--universal-steps-table', required=True)
+  parser.add_argument('--uuid-index', required=True)
   parser.add_argument('--spillover-bucket', required=True)
   parser.add_argument('--aws-region', default=os.environ.get('AWS_REGION', 'eu-central-1'))
   args = parser.parse(argv)
@@ -566,6 +607,7 @@ def main(argv: list[str]) -> Optional[int]:
     steps_table=args['steps_table'],
     universal_steps_table=args['universal_steps_table'],
     bucket=args['spillover_bucket'],
+    uuid_index=args['uuid_index'],
   )
   auth_description = 'bearer auth' if bearer_token is not None else 'NO AUTH'
   log.info(f'starting trails server on {args["host"]}:{args["port"]} ({auth_description})')

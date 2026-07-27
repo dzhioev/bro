@@ -36,6 +36,7 @@ import base.args
 from base import log, pager
 from base.ansi import Colors, should_color
 from trails.client import HTTPStatusError, TrailsClient, default_client, is_retryable_status
+from trails.lineage import walk_header_chain
 from trails.model import spill_descriptor
 
 __cli_name__ = 'rewind'
@@ -506,25 +507,6 @@ class _ConversationTimeline:
     return [heading, *blocks]
 
 
-def _chain(client: TrailsClient, trail: dict) -> list[tuple[dict, Optional[dict]]]:
-  """Return the fork ancestry root-first with each parent's inclusive anchor."""
-  segments: list[tuple[dict, Optional[dict]]] = [(trail, None)]
-  seen = {trail['id']}
-  current = trail
-  while True:
-    forked_from = current.get('forked_from')
-    if forked_from is None:
-      break
-    parent_id = forked_from['trail_id']
-    if parent_id in seen:
-      raise RuntimeError(f'fork cycle at trail {parent_id}')
-    seen.add(parent_id)
-    current = client.get_trail(parent_id)
-    segments.append((current, forked_from))
-  segments.reverse()
-  return segments
-
-
 def _step_is_after(candidate: str | int, bound: str | int) -> bool:
   try:
     return int(candidate) > int(bound)
@@ -584,7 +566,7 @@ def _format_context(records: Any, colors: Colors) -> Optional[str]:
 def _render_conversation(
   client: TrailsClient, trail: dict, colors: Colors
 ) -> tuple[str, _ConversationTimeline, Optional[str | int]]:
-  segments = _chain(client, trail)
+  segments = walk_header_chain(trail, client.get_trail)
   message_lists = [_segment_messages(client, header['id'], bound) for header, bound in segments]
   all_messages = [message for messages in message_lists for message in messages]
   timeline = _ConversationTimeline(colors, _index_tool_results(all_messages))
@@ -798,17 +780,7 @@ def _command_tree(client: TrailsClient, args: dict, colors: Colors) -> int:
   trail_id = args['trail_id']
   start = client.get_trail(trail_id)
 
-  root = start
-  seen = {root['id']}
-  while True:
-    forked_from = root.get('forked_from')
-    if forked_from is None:
-      break
-    parent_id = forked_from['trail_id']
-    if parent_id in seen:
-      raise RuntimeError(f'fork cycle at trail {parent_id}')
-    seen.add(parent_id)
-    root = client.get_trail(parent_id)
+  root = walk_header_chain(start, client.get_trail)[0][0]
 
   lines: list[str] = []
   _render_tree(client, root, '', is_last=True, lines=lines, colors=colors, highlight=trail_id)

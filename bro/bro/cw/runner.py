@@ -3,8 +3,7 @@
 The inner layer of the launch stack: it assumes its cwd is a prepared workspace
 (host worktree or container clone) with the workspace venv active, and owns
 everything that runs next to claude — resume resolution, the claude argv, the
-session-local MCP server, CW_SESSION_CONTEXT, and the
-session recorder daemon. The outer `cw ss` (mode-specific by nature: worktree
+session-local MCP server, launch declarations, and the session recorder daemon. The outer `cw ss` (mode-specific by nature: worktree
 ensure / container machinery) validates policy once and spawns this runner in
 the workspace, so it re-runs no policy gates.
 """
@@ -31,6 +30,7 @@ from cw.session_context import (
   build_session_context,
   encode_session_context,
 )
+from session_log.environment import CW_RESUMED_SESSION_ENV
 from workspace.git import git_out
 from workspace.paths import in_container, project_root
 
@@ -92,6 +92,7 @@ def run_in_place(spec: 'SessionSpec') -> int:
     os.environ['CLAUDE_CONFIG_DIR'] = str(claude_dir)
 
   claude_args = list(spec.claude_args)
+  os.environ.pop(CW_RESUMED_SESSION_ENV, None)
   if spec.resume:
     projects_dir = _claude_projects_dir(workspace)
     latest = _latest_jsonl(projects_dir)
@@ -100,6 +101,7 @@ def run_in_place(spec: 'SessionSpec') -> int:
       return 1
     log.info('resuming session %s', latest.stem)
     claude_args = ['--resume', latest.stem, *claude_args]
+    os.environ[CW_RESUMED_SESSION_ENV] = latest.stem
 
   os.environ.update(bro_git_identity_env(spec.session_bro))
 

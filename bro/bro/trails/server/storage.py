@@ -39,6 +39,7 @@ class Storage:
     trails_table: str,
     steps_table: str,
     bucket: str,
+    uuid_index: Optional[str] = None,
     universal_steps_table: Optional[str] = None,
   ):
     self._dynamo = dynamo
@@ -49,6 +50,7 @@ class Storage:
       universal_steps_table if universal_steps_table is not None else 'trail_steps_v2'
     )
     self._bucket = bucket
+    self._uuid_index = uuid_index
     self._backends = dict(backends.BACKENDS)
     self._stored_tool_hashes: set[str] = set()
     self._operations = Operations(
@@ -713,6 +715,136 @@ class Storage:
       return None
     response = await asyncio.to_thread(self._s3.get_object, Bucket=self._bucket, Key=key)
     return json.loads(response['Body'].read().decode('utf-8'))
+
+  async def find_steps_by_uuid(self, uuids: set[str]) -> list[dict]:
+    """Return universal row identities carrying any requested UUID."""
+    if self._uuid_index is None:
+      raise RuntimeError('UUID lookup requires a configured index')
+
+    async def find(uuid: str) -> list[dict]:
+      matches: list[dict] = []
+      exclusive_start_key: Optional[dict] = None
+      while True:
+        kwargs: dict[str, Any] = {
+          'TableName': self._steps_table,
+          'IndexName': self._uuid_index,
+          'KeyConditionExpression': '#uuid = :uuid',
+          'ProjectionExpression': 'trail_id, step_id, #uuid',
+          'ExpressionAttributeNames': {'#uuid': 'uuid'},
+          'ExpressionAttributeValues': {':uuid': _ddb(uuid)},
+        }
+        if exclusive_start_key is not None:
+          kwargs['ExclusiveStartKey'] = exclusive_start_key
+        response = await asyncio.to_thread(self._dynamo.query, **kwargs)
+        for raw in response.get('Items', []):
+          row = _from_ddb_item(raw)
+          if (
+            row is None
+            or not isinstance(row.get('trail_id'), str)
+            or not isinstance(row.get('step_id'), int)
+            or isinstance(row.get('step_id'), bool)
+            or row.get('uuid') != uuid
+          ):
+            raise ValueError(f'UUID index returned malformed row: {row!r}')
+          matches.append({'trail_id': row['trail_id'], 'step_id': row['step_id'], 'uuid': uuid})
+        exclusive_start_key = response.get('LastEvaluatedKey')
+        if exclusive_start_key is None:
+          return matches
+
+    pages = await asyncio.gather(*(find(uuid) for uuid in sorted(uuids)))
+    return sorted(
+      (match for page in pages for match in page),
+      key=lambda row: (row['trail_id'], row['step_id']),
+    )
+
+  async def get_step(self, trail_id: str, step_id: str) -> Optional[dict]:
+    header = await self._required_header(trail_id)
+    if header.get('body_storage') == storage_types.UNIVERSAL_BODY_STORAGE:
+      try:
+        ordinal = int(step_id)
+      except ValueError as exception:
+        raise ValueError('step_id must be an ordinal for a migrated trail') from exception
+      response = await asyncio.to_thread(
+        self._dynamo.get_item,
+        TableName=self._steps_table,
+        Key=_ddb_item({'trail_id': trail_id, 'step_id': ordinal}),
+        ConsistentRead=True,
+      )
+      row = _from_ddb_item(response.get('Item'))
+      if row is None:
+        return None
+      return await self._materialize_row(header['harness'], row, resolve_large=True)
+    if header['harness'] == 'bro':
+      response = await asyncio.to_thread(
+        self._dynamo.get_item,
+        TableName=self._legacy_steps_table,
+        Key=_ddb_item({'trail_id': trail_id, 'step_id': step_id}),
+        ConsistentRead=True,
+      )
+      row = _from_ddb_item(response.get('Item'))
+      return None if row is None else await self._resolve_body(row, resolve_large=True)
+    try:
+      ordinal = int(step_id)
+    except ValueError as exception:
+      raise ValueError('step_id must be an ordinal for a claude trail') from exception
+    if ordinal < 0:
+      return None
+    page = await self._query_legacy_claude_rows(
+      header,
+      after=str(ordinal - 1) if ordinal > 0 else None,
+      limit=1,
+    )
+    if len(page['steps']) == 0 or int(page['steps'][0]['step_id']) != ordinal:
+      return None
+    return page['steps'][0]
+
+  async def query_step_uuids(self, trail_id: str, *, through: Optional[str]) -> list[dict]:
+    header = await self._required_header(trail_id)
+    parsed_through: Optional[int] = None
+    if through is not None:
+      try:
+        parsed_through = int(through)
+      except ValueError as exception:
+        raise ValueError('through must be an ordinal') from exception
+      if parsed_through < 0:
+        return []
+    if header.get('body_storage') != storage_types.UNIVERSAL_BODY_STORAGE:
+      if header['harness'] != 'claude':
+        return []
+      lines = await self._legacy_claude_lines(trail_id)
+      selected = lines if parsed_through is None else lines[: parsed_through + 1]
+      rows: list[dict] = []
+      for step_id, raw in enumerate(selected):
+        uuid = self._backend('claude').parse(raw).attributes.get('uuid')
+        if isinstance(uuid, str):
+          rows.append({'step_id': str(step_id), 'uuid': uuid})
+      return rows
+
+    expression_values = {':trail_id': _ddb(trail_id)}
+    key_condition = 'trail_id = :trail_id'
+    if parsed_through is not None:
+      expression_values[':through'] = _ddb(parsed_through)
+      key_condition += ' AND step_id <= :through'
+    rows = []
+    exclusive_start_key: Optional[dict] = None
+    while True:
+      kwargs: dict[str, Any] = {
+        'TableName': self._steps_table,
+        'KeyConditionExpression': key_condition,
+        'ProjectionExpression': 'trail_id, step_id, #uuid',
+        'ExpressionAttributeNames': {'#uuid': 'uuid'},
+        'ExpressionAttributeValues': expression_values,
+      }
+      if exclusive_start_key is not None:
+        kwargs['ExclusiveStartKey'] = exclusive_start_key
+      response = await asyncio.to_thread(self._dynamo.query, **kwargs)
+      for raw in response.get('Items', []):
+        row = _from_ddb_item(raw)
+        if row is not None and isinstance(row.get('uuid'), str):
+          rows.append({'step_id': row['step_id'], 'uuid': row['uuid']})
+      exclusive_start_key = response.get('LastEvaluatedKey')
+      if exclusive_start_key is None:
+        return rows
 
   async def query_steps(self, trail_id: str, *, after: Optional[str], limit: int) -> dict:
     header = await self._required_header(trail_id)
