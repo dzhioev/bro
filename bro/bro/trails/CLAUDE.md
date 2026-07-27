@@ -38,7 +38,7 @@ The legacy `POST /steps`, `PUT /artifact`, and client aggregate updates accept o
 ## Surfaces
 
 - `trails/model.py` owns the shared trail, step, lineage, and spill-descriptor vocabulary consumed by readers and recorders. Lineage step ids admit legacy strings or universal ordinals, and pointers may carry an event index.
-- `trails/client.py` owns the persistent authenticated HTTPS transport. `TrailsClient` exposes paged headers, native steps, generalized messages, launch context, universal append, and admin operations; its `HTTPTracker` remains the bro compatibility writer until its client migration stage. The Claude compatibility recorder remains in `session_log/recorder.py`.
+- `trails/client.py` owns the persistent authenticated HTTPS transport. `TrailsClient` exposes paged headers, native steps, generalized messages, launch context, universal append, and admin operations; its `HTTPTracker` remains the bro compatibility writer until its client migration stage. The Claude recorder in `session_log/recorder.py` writes through universal append.
 - `POST /v1/trails` opens a legacy body for the old `system_prompt` / `artifact` envelopes, or a universal body when `body.records` is present.
 - `POST /v1/trails/{id}/records` sends records beginning at `offset`. A committed retry returns the current extent without folding again; any other extent mismatch is a conflict.
 - `GET /v1/trails/{id}/steps` returns the lossless native stream. `GET /v1/trails/{id}/messages` returns the generalized projection; billing usage is read from the row selected at append time.

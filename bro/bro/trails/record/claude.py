@@ -9,13 +9,13 @@ before the new turns. A headless resume appends to the existing segment.
 
 One *trail* is the suffix recorded during one recorder lifetime within one
 segment: the daemon creates a claude-harness trail when it adopts a transcript,
-re-PUTs the complete current suffix on every change, and ends the trail on
-segment transition or shutdown. Every process resume therefore opens a new
-trail; a verified continuation is a fork:
+appends each newly completed line, and ends the trail on segment transition or
+shutdown. Every process resume therefore opens a new trail; a verified
+continuation is a fork:
 
 - a same-segment resume starts after the previously recorded line extent and
   forks from the prior trail's final line, verified by boundary anchors — the
-  stored artifact's first and last lines must match the segment file at the
+  stored stream's first and last lines must match the segment file at the
   saved extent;
 - a new-segment resume forks from the matching uuid line in the parent and
   stores only the new segment's own contribution (pre-copy ephemera plus the
@@ -34,33 +34,29 @@ trail, so a segment is not adopted until it holds a record of its own: one whose
 uuid the recorded chain does not already store.
 
 The durable local state (`<config root>/recorder/<projects dir name>.json`)
-maps the active segment to the trail id and the artifact's line ranges in the
-segment file, saved after every successful snapshot so the recorded extent
-always matches the server's artifact — that equality is what the next
+maps the active segment to the trail id and the stored line ranges in the
+segment file, saved after every successful append so the recorded extent
+always matches the server's stream — that equality is what the next
 lifetime's fork verification anchors on. It is a fast path, not the only
 source: when it is absent or no longer matches what the server stores, the
 parent is the newest trail recording the adopted segment (or the segment a
 history copy came from), with its line range recovered by locating its stored
-artifact in the local file. Without that lookup a transcript the store already
+stream in the local file. Without that lookup a transcript the store already
 holds — every session recorded before this daemon existed — would be recorded
 a second time as a fresh root.
 
-Each snapshot refreshes the mutable header fields (`last_alive_at`,
-`turn_count`, the native `harness_version` / `usage`) and conditionally
-initializes `subject` from claude's generated `ai-title` while the server-side
-subject is absent — an explicit rename wins and is never overwritten. Quiet
-ticks keep the trail alive for the server's lost-sweep. The current trail id is
-published to the session's trail pointer (`session_log/trail_pointer.py`) for
-summon provenance.
+The append endpoint classifies records and folds usage, turns, harness version,
+and claude's generated title into the header. Quiet ticks keep the trail alive
+for the server's lost-sweep. The current trail id is published to the session's
+trail pointer (`session_log/trail_pointer.py`) for summon provenance.
 
 The daemon is started by the in-place session runner (`cw/recorder.py`) next to
-claude for every session flavor and finalizes on SIGTERM — one last snapshot,
+claude for every session flavor and finalizes on SIGTERM — one last append,
 then `end` with `ok`, or `raised` plus the reason when the transcript's
 terminal record stream carries a bro `raise` service-tool call.
 """
 
 import dataclasses
-import datetime
 import json
 import os
 import signal
@@ -75,6 +71,7 @@ from base import configs, credentials, log
 from base.args import Parser
 from session_log import health, trail_pointer
 from trails.client import HTTPStatusError, TrailsClient, default_client
+from trails.server.backends import CLAUDE_ADAPTER
 
 __cli_name__ = 'session-log.recorder'
 
@@ -83,7 +80,7 @@ __cli_name__ = 'session-log.recorder'
 # even when the history copy is intact
 _VERIFY_TAIL_UUIDS = 20
 
-# quiet ticks send a keepalive instead of a snapshot, throttled to this idle
+# quiet ticks send a keepalive instead of an append, throttled to this idle
 # interval — well inside the server's lost-sweep threshold
 _KEEPALIVE_INTERVAL_SECONDS = 60.0
 
@@ -91,20 +88,48 @@ _KEEPALIVE_INTERVAL_SECONDS = 60.0
 _RAISE_TOOL = 'mcp__bro__raise'
 
 
-def _utc_now_iso() -> str:
-  return datetime.datetime.now(datetime.UTC).isoformat()
+def _user_content_has_text(content: Any) -> bool:
+  if isinstance(content, str):
+    return True
+  if not isinstance(content, list):
+    return False
+  return any(
+    isinstance(block, dict) and block.get('type') == 'text' and isinstance(block.get('text'), str)
+    for block in content
+  )
+
+
+def _terminal_raise_reason(messages: Iterator[dict]) -> Optional[str]:
+  raised: Optional[str] = None
+  for message in messages:
+    if message.get('type') == 'tool_call' and message.get('tool_name') == _RAISE_TOOL:
+      arguments = message.get('arguments')
+      reason = arguments.get('reason') if isinstance(arguments, dict) else None
+      raised = reason if isinstance(reason, str) else ''
+    elif (
+      raised is not None
+      and message.get('type') == 'user_input'
+      and message.get('isMeta') is not True
+      and _user_content_has_text(message.get('content'))
+    ):
+      raised = None
+  return raised
 
 
 def _read_lines(path: Path) -> list[str]:
-  return path.read_text().splitlines()
+  lines, _ = _read_lines_after(path, 0)
+  return lines
 
 
-def _parse_record(raw: str) -> Optional[dict]:
-  try:
-    parsed = json.loads(raw)
-  except json.JSONDecodeError:
-    return None
-  return parsed if isinstance(parsed, dict) else None
+def _read_lines_after(path: Path, byte_offset: int) -> tuple[list[str], int]:
+  with path.open('rb') as stream:
+    stream.seek(byte_offset)
+    payload = stream.read()
+  complete_size = payload.rfind(b'\n') + 1
+  if complete_size == 0:
+    return [], byte_offset
+  lines = payload[:complete_size].decode('utf-8').split('\n')[:-1]
+  return lines, byte_offset + complete_size
 
 
 def _state_path(projects_dir: Path) -> Path:
@@ -117,7 +142,7 @@ def _state_path(projects_dir: Path) -> Path:
 @dataclasses.dataclass
 class RecorderState:
   """the durable per-projects-dir state: which segment the last trail recorded,
-  which of the segment file's line ranges form its artifact (`chunks`, each
+  which of the segment file's line ranges form its stream (`chunks`, each
   `[start, end)` — at most a pre-copy head plus the tail), and the trail id.
   The final chunk's end is the consumed line extent as uploaded."""
 
@@ -157,115 +182,11 @@ class RecorderState:
     tmp.replace(path)
 
 
-class _Scan:
-  """metadata extraction over one trail's composed record stream: claude-code
-  version, per-model raw usage sums, turn count, the generated title, and the
-  terminal raise reason."""
-
-  def __init__(self) -> None:
-    self.harness_version: Optional[str] = None
-    self.usage: dict[str, dict] = {}
-    self.turn_count = 0
-    self.ai_title: Optional[str] = None
-    self.raised: Optional[str] = None
-    # claude splits one API message across records, each repeating the
-    # message's id and usage — sum a message id once or totals multiply
-    self._billed_message_ids: set[str] = set()
-
-  @staticmethod
-  def _content_text(entry: dict) -> Optional[str]:
-    content = entry.get('message', {}).get('content')
-    if isinstance(content, str):
-      return content
-    if isinstance(content, list):
-      for block in content:
-        if isinstance(block, dict) and block.get('type') == 'text':
-          return block.get('text')
-    return None
-
-  def feed(self, entry: dict) -> None:
-    if self.harness_version is None:
-      version = entry.get('version')
-      if isinstance(version, str):
-        self.harness_version = version
-
-    if entry.get('type') == 'ai-title':
-      title = entry.get('aiTitle')
-      if isinstance(title, str) and len(title) > 0:
-        self.ai_title = title
-
-    if entry.get('type') == 'assistant':
-      self._feed_assistant(entry)
-    elif entry.get('type') == 'user':
-      self._feed_user(entry)
-
-  def _feed_assistant(self, entry: dict) -> None:
-    message = entry.get('message')
-    if not isinstance(message, dict):
-      return
-    usage = message.get('usage')
-    model = str(message.get('model', 'unknown'))
-    if (
-      isinstance(usage, dict)
-      and model != '<synthetic>'
-      and entry.get('isApiErrorMessage') is not True
-    ):
-      message_id = message.get('id')
-      if not isinstance(message_id, str) or message_id not in self._billed_message_ids:
-        if isinstance(message_id, str):
-          self._billed_message_ids.add(message_id)
-        self.usage[model] = _add_numeric_maps(self.usage.get(model, {}), usage)
-    content = message.get('content')
-    if isinstance(content, list):
-      for block in content:
-        if (
-          isinstance(block, dict)
-          and block.get('type') == 'tool_use'
-          and block.get('name') == _RAISE_TOOL
-        ):
-          reason = block.get('input', {}).get('reason')
-          self.raised = reason if isinstance(reason, str) else ''
-
-  def _feed_user(self, entry: dict) -> None:
-    content = entry.get('message', {}).get('content')
-    tool_results_only = isinstance(content, list) and all(
-      isinstance(block, dict) and block.get('type') == 'tool_result' for block in content
-    )
-    if entry.get('isMeta') is not True and not tool_results_only:
-      self.turn_count += 1
-    # a real user message past a raise (a resume moving on) clears the abort
-    if self.raised is not None and self._content_text(entry) is not None:
-      self.raised = None
-
-
-def _add_numeric_maps(left: dict, right: dict) -> dict:
-  """sum `right`'s numeric leaves into `left`, recursing into nested maps;
-  non-numeric values are ignored (raw claude usage mixes counters with
-  service-tier strings)."""
-  result = dict(left)
-  for key, value in right.items():
-    current = result.get(key)
-    if isinstance(value, dict):
-      result[key] = _add_numeric_maps(current if isinstance(current, dict) else {}, value)
-    elif isinstance(value, int) and not isinstance(value, bool):
-      result[key] = int(current) + value if isinstance(current, int) else value
-  return result
-
-
-def _scan_lines(lines: list[str]) -> _Scan:
-  scan = _Scan()
-  for raw in lines:
-    entry = _parse_record(raw)
-    if entry is not None:
-      scan.feed(entry)
-  return scan
-
-
 def _uuid_lines(lines: list[str]) -> list[tuple[int, str]]:
   """(line index, uuid) for every record carrying a uuid, in order."""
   out: list[tuple[int, str]] = []
   for index, raw in enumerate(lines):
-    entry = _parse_record(raw)
+    entry = CLAUDE_ADAPTER.parse(raw).native['record']
     if entry is None:
       continue
     uuid = entry.get('uuid')
@@ -333,8 +254,7 @@ def _first_timestamp(lines: list[str]) -> Optional[str]:
   """the earliest record timestamp in a transcript — the lower bound of the
   window any trail recording it started in."""
   for raw in lines:
-    entry = _parse_record(raw)
-    timestamp = entry.get('timestamp') if entry is not None else None
+    timestamp = CLAUDE_ADAPTER.parse(raw).timestamp
     if isinstance(timestamp, str):
       return timestamp
   return None
@@ -362,12 +282,6 @@ def _compose(file_lines: list[str], chunks: list[list[int]]) -> list[str]:
   for start, end in chunks:
     lines.extend(file_lines[start:end])
   return lines
-
-
-def _encode_lines(lines: list[str]) -> str:
-  if len(lines) == 0:
-    return ''
-  return '\n'.join(lines) + '\n'
 
 
 def _launch_context() -> Optional[Any]:
@@ -442,11 +356,10 @@ class Recorder:
     self.state_path = _state_path(projects_dir)
     self.previous: Optional[RecorderState] = RecorderState.load(self.state_path)
     self.active: Optional[RecorderState] = None
-    self._known_subject: Optional[str] = None
-    self._scan: Optional[_Scan] = None
     self._consumed: set[str] = set()
-    self._uploaded_signature: Optional[tuple[str, int, int]] = None
+    self._recorded_signature: Optional[tuple[str, int, int]] = None
     self._active_signature: Optional[tuple[str, int, int]] = None
+    self._active_byte_extent = 0
     self._last_write_monotonic = time.monotonic()
     # a stale pointer from a previous lifetime must not attribute this
     # session's summons to an ended trail
@@ -461,10 +374,10 @@ class Recorder:
     candidate = self._pick_segment()
     if candidate is not None and candidate.stem != self.active.segment:
       return self._maybe_transition(candidate)
-    return self._snapshot_if_changed()
+    return self._append_if_changed()
 
   def finalize(self) -> bool:
-    """the daemon's shutdown pass: one last snapshot, then end the trail."""
+    """the daemon's shutdown pass: one last append, then end the trail."""
     if self.active is None:
       self._maybe_adopt()
     if self.active is None:
@@ -525,7 +438,7 @@ class Recorder:
     forked_from = continuation.forked_from if continuation is not None else None
     chunks = continuation.chunks if continuation is not None else [[0, 0]]
     self._create_trail(path.stem, forked_from, chunks)
-    self._snapshot_if_changed()
+    self._append_if_changed()
     return True
 
   def _parent_candidates(self, segment: str, file_lines: list[str]) -> Iterator[RecorderState]:
@@ -626,7 +539,7 @@ class Recorder:
         return None
       raise
     for row in page.get('steps', []):
-      if row.get('step_id') == step_id:
+      if str(row.get('step_id')) == step_id:
         return row.get('raw')
     return None
 
@@ -726,10 +639,10 @@ class Recorder:
         'llm': self.llm,
         'segment': segment,
         'cw_command': self.cw_command,
-        'harness_version': 'unknown',  # refreshed from the records per snapshot
+        'harness_version': 'unknown',
       },
       'location': _location(self.workspace),
-      'body': {'artifact': ''},
+      'body': {'records': []},
     }
     bro = os.environ.get('CW_BRO')
     if bro is not None:
@@ -744,9 +657,8 @@ class Recorder:
       payload['body']['launch_context'] = context
     trail_id = self.client.create_trail(payload)['id']
     self.active = RecorderState(trail_id=trail_id, segment=segment, chunks=chunks)
-    self._known_subject = None
-    self._scan = None
-    self._uploaded_signature = None
+    self._recorded_signature = None
+    self._active_byte_extent = 0
     self._last_write_monotonic = time.monotonic()
     self.active.save(self.state_path)
     trail_pointer.publish(trail_id)
@@ -765,7 +677,7 @@ class Recorder:
     assert self.active is not None
     return self.projects_dir / (self.active.segment + '.jsonl')
 
-  def _snapshot_if_changed(self) -> bool:
+  def _append_if_changed(self) -> bool:
     active = self.active
     assert active is not None
     path = self._active_path()
@@ -776,47 +688,57 @@ class Recorder:
       return False
     signature = (active.segment, stat.st_mtime_ns, stat.st_size)
     self._active_signature = signature
-    if signature == self._uploaded_signature:
+    if signature == self._recorded_signature:
       self._keepalive_if_idle()
       return False
-    file_lines = _read_lines(path)
-    if len(file_lines) < active.chunks[-1][0]:
-      # the segment file shrank below the trail's tail start (a transcript
-      # rewrite): close here and let the next tick re-adopt what remains
-      log.warning('segment %s shrank below trail %s; closing', active.segment[:12], active.trail_id)
-      self._close_active()
-      return True
-    self._snapshot(file_lines)
-    self._uploaded_signature = signature
-    return True
 
-  def _snapshot(self, file_lines: list[str]) -> None:
-    active = self.active
-    assert active is not None
-    active.chunks[-1][1] = max(active.chunks[-1][0], len(file_lines))
-    lines = _compose(file_lines, active.chunks)
-    scan = _scan_lines(lines)
-    native: dict[str, Any] = {'usage': scan.usage}
-    if scan.harness_version is not None:
-      native['harness_version'] = scan.harness_version
-    self.client.replace_artifact(active.trail_id, _encode_lines(lines), native)
-    changes: dict[str, Any] = {
-      'last_alive_at': _utc_now_iso(),
-      'turn_count': scan.turn_count,
-    }
-    if self._known_subject is None and scan.ai_title is not None:
-      changes['subject'] = scan.ai_title
-    header = self.client.update_header(active.trail_id, changes)
-    self._known_subject = header.get('subject')
-    self._scan = scan
+    if self._recorded_signature is None:
+      file_lines, byte_extent = _read_lines_after(path, 0)
+      if len(file_lines) < active.chunks[-1][0]:
+        log.warning(
+          'segment %s shrank below trail %s; closing', active.segment[:12], active.trail_id
+        )
+        self._close_active(append=False)
+        return True
+      chunks = [list(chunk) for chunk in active.chunks]
+      chunks[-1][1] = len(file_lines)
+      records = _compose(file_lines, chunks)
+      offset = 0
+    else:
+      if stat.st_size < self._active_byte_extent:
+        log.warning(
+          'segment %s shrank below trail %s; closing', active.segment[:12], active.trail_id
+        )
+        self._close_active(append=False)
+        return True
+      records, byte_extent = _read_lines_after(path, self._active_byte_extent)
+      offset = active.line_count
+      chunks = [list(chunk) for chunk in active.chunks]
+      chunks[-1][1] += len(records)
+
+    if len(records) == 0:
+      self._recorded_signature = signature
+      self._keepalive_if_idle()
+      return False
+    expected_extent = offset + len(records)
+    response = self.client.append_records(active.trail_id, offset, records)
+    extent = response.get('extent')
+    if not isinstance(extent, int) or isinstance(extent, bool) or extent != expected_extent:
+      raise RuntimeError(
+        f'append for trail {active.trail_id} returned extent {extent!r}, expected {expected_extent}'
+      )
+    active.chunks = chunks
+    self._active_byte_extent = byte_extent
+    self._recorded_signature = signature
     self._last_write_monotonic = time.monotonic()
     active.save(self.state_path)
     log.info(
       'recorded trail %s (%d lines, segment %s)',
       active.trail_id,
-      len(lines),
+      active.line_count,
       active.segment[:12],
     )
+    return True
 
   def _keepalive_if_idle(self) -> None:
     if self.active is None:
@@ -837,7 +759,7 @@ class Recorder:
         new_path.stem[:12],
         active.segment[:12],
       )
-      return self._snapshot_if_changed()
+      return self._append_if_changed()
     self._close_active()
     self._maybe_adopt()
     return True
@@ -853,19 +775,19 @@ class Recorder:
     signature = (self.active.segment, stat.st_mtime_ns, stat.st_size)
     return signature == self._active_signature
 
-  def _close_active(self) -> None:
-    """final snapshot, then end the trail — `ok`, or `raised` with the reason
+  def _close_active(self, *, append: bool = True) -> None:
+    """final append, then end the trail — `ok`, or `raised` with the reason
     when the recorded stream's terminal state is a raise call. the closed state
     stays on disk as the parent for the next lifetime's fork verification."""
+    if append:
+      self._append_if_changed()
+      if self.active is None:
+        return
     active = self.active
     assert active is not None
-    try:
-      file_lines = _read_lines(self._active_path())
-    except OSError:
-      file_lines = None
-    if file_lines is not None and len(file_lines) >= active.chunks[-1][0]:
-      self._snapshot(file_lines)
-    raised = self._scan.raised if self._scan is not None else None
+    raised = _terminal_raise_reason(
+      self.client.iter_messages(active.trail_id, types={'tool_call', 'user_input'})
+    )
     if raised is not None:
       detail = raised if len(raised) > 0 else 'raise reason unavailable'
       self.client.end_trail(active.trail_id, 'raised', detail=detail)
@@ -875,8 +797,8 @@ class Recorder:
     self._consumed.add(active.segment)
     self.previous = active
     self.active = None
-    self._scan = None
-    self._uploaded_signature = None
+    self._recorded_signature = None
+    self._active_byte_extent = 0
     trail_pointer.clear()
 
 
@@ -933,7 +855,7 @@ def _projects_dir_from_environment() -> Path:
 
 
 def record_session(
-  interval: int = 15,
+  interval: int = 3,
   workspace: Optional[str] = None,
   projects_dir: Optional[Path] = None,
   llm: Optional[str] = None,
@@ -976,7 +898,7 @@ def record_session(
 def main(argv: list[str]) -> Optional[int]:
   parser = Parser(description='record a Claude Code session transcript to trails')
   parser.add_argument(
-    '--interval', type=int, default=15, help='poll interval in seconds (default: 15)'
+    '--interval', type=int, default=3, help='poll interval in seconds (default: 3)'
   )
   parser.add_argument('--workspace', default=None, help='workspace name (default: from CW_NAME)')
   parser.add_argument(

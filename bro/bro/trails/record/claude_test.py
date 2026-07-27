@@ -7,7 +7,7 @@ from typing import Any, Optional
 import pytest
 
 from session_log import trail_pointer
-from session_log.recorder import Recorder, RecorderState, _fork_cuts, _scan_lines, _state_path
+from session_log.recorder import Recorder, RecorderState, _fork_cuts, _state_path
 
 
 class FakeTrails:
@@ -17,7 +17,8 @@ class FakeTrails:
     self.created: list[dict] = []
     self.headers: dict[str, dict] = {}
     self.artifacts: dict[str, str] = {}
-    self.natives: dict[str, dict] = {}
+    self.legacy_trails: set[str] = set()
+    self.appends: list[dict] = []
     self.ends: dict[str, dict] = {}
     self.keepalives: list[str] = []
     self._counter = 0
@@ -26,20 +27,26 @@ class FakeTrails:
     self._counter += 1
     trail_id = f'T{self._counter}'
     self.created.append(payload)
-    self.headers[trail_id] = {'id': trail_id, 'subject': payload.get('subject'), **payload}
-    self.artifacts[trail_id] = payload['body']['artifact']
-    self.natives[trail_id] = dict(payload['native'])
+    self.headers[trail_id] = {
+      'id': trail_id,
+      'subject': payload.get('subject'),
+      'body_storage': 'trail_steps_v2',
+      **payload,
+    }
+    records = payload['body']['records']
+    self.artifacts[trail_id] = ''.join(f'{record}\n' for record in records)
     return {'id': trail_id, 'started_at': '2026-01-01T00:00:00Z'}
 
-  def replace_artifact(self, trail_id: str, artifact: str, native: dict) -> dict:
-    self.artifacts[trail_id] = artifact
-    self.natives[trail_id].update(native)
-    return {'line_count': len(artifact.splitlines()), **native}
-
-  def update_header(self, trail_id: str, changes: dict) -> dict:
-    header = self.headers[trail_id]
-    header.update(changes)
-    return dict(header)
+  def append_records(self, trail_id: str, offset: int, records: list[str]) -> dict:
+    current = self.artifacts[trail_id].splitlines()
+    expected_end = offset + len(records)
+    if len(current) != offset:
+      if len(current) == expected_end and current[offset:expected_end] == records:
+        return {'extent': len(current), 'appended': 0, 'duplicate': True}
+      raise ValueError(f'append offset {offset} does not match extent {len(current)}')
+    self.appends.append({'trail_id': trail_id, 'offset': offset, 'records': list(records)})
+    self.artifacts[trail_id] += ''.join(f'{record}\n' for record in records)
+    return {'extent': expected_end, 'appended': len(records)}
 
   def end_trail(self, trail_id: str, reason: str, detail: Optional[str] = None) -> None:
     self.ends[trail_id] = {'reason': reason, 'detail': detail}
@@ -47,37 +54,75 @@ class FakeTrails:
   def keepalive(self, trail_id: str) -> None:
     self.keepalives.append(trail_id)
 
-  def get_steps(self, trail_id: str, *, after: Optional[str] = None, limit: int = 100) -> dict:
+  def get_steps(
+    self, trail_id: str, *, after: Optional[str | int] = None, limit: int = 100
+  ) -> dict:
     lines = self.artifacts[trail_id].splitlines()
     start = int(after) + 1 if after is not None else 0
     selected = lines[start : start + limit]
     steps = [
-      {'trail_id': trail_id, 'step_id': str(index), 'raw': raw, 'record': _parse(raw)}
+      {
+        'trail_id': trail_id,
+        'step_id': str(index) if trail_id in self.legacy_trails else index,
+        'raw': raw,
+        'record': _parse(raw),
+      }
       for index, raw in enumerate(selected, start=start)
     ]
-    next_cursor = str(start + len(selected) - 1) if start + len(selected) < len(lines) else None
+    next_cursor = start + len(selected) - 1 if start + len(selected) < len(lines) else None
     return {'steps': steps, 'next': next_cursor}
 
   def get_trail(self, trail_id: str) -> dict:
     header = dict(self.headers[trail_id])
-    header['native'] = {
-      **self.natives[trail_id],
-      'line_count': len(self.artifacts[trail_id].splitlines()),
-    }
+    line_count = len(self.artifacts[trail_id].splitlines())
+    if trail_id in self.legacy_trails:
+      header.pop('body_storage')
+      header['native'] = {**header['native'], 'line_count': line_count}
+    else:
+      header['extent'] = line_count
     return header
 
   def iter_trails(self, *, harness: str, since: Optional[str] = None):
+    del harness, since
     for trail_id in reversed(list(self.headers)):
       yield self.get_trail(trail_id)
 
   def iter_steps(self, trail_id: str):
-    after: Optional[str] = None
+    after: Optional[int] = None
     while True:
       page = self.get_steps(trail_id, after=after)
       yield from page['steps']
       after = page.get('next')
       if after is None:
         return
+
+  def iter_messages(self, trail_id: str, *, types: Optional[set[str]] = None):
+    for raw in self.artifacts[trail_id].splitlines():
+      record = _parse(raw)
+      if record is None:
+        continue
+      message = record.get('message')
+      if record.get('type') == 'assistant' and isinstance(message, dict):
+        content = message.get('content')
+        if isinstance(content, list):
+          for block in content:
+            if isinstance(block, dict) and block.get('type') == 'tool_use':
+              event = {
+                'type': 'tool_call',
+                'tool_name': block.get('name'),
+                'arguments': block.get('input'),
+              }
+              if types is None or event['type'] in types:
+                yield event
+      elif record.get('type') == 'user' and isinstance(message, dict):
+        content = message.get('content')
+        tool_results_only = isinstance(content, list) and all(
+          isinstance(block, dict) and block.get('type') == 'tool_result' for block in content
+        )
+        if not tool_results_only:
+          event = {'type': 'user_input', 'content': content, 'isMeta': record.get('isMeta', False)}
+          if types is None or event['type'] in types:
+            yield event
 
 
 def _parse(raw: str) -> Optional[dict]:
@@ -163,14 +208,12 @@ class TestAdoption:
     assert payload['native']['segment'] == 'seg-1'
     assert payload['native']['cw_command'] == 'cw ss ws'
     assert payload['native']['llm'] == {'model': 'claude-fable-5'}
+    assert payload['body']['records'] == []
     assert payload['body']['launch_context'] == [{'title': 'git state', 'fields': {'branch': 'b'}}]
     assert payload['location']['workspace'] == 'ws'
     assert payload['location']['is_container'] is False
+    assert fake.appends == [{'trail_id': 'T1', 'offset': 0, 'records': lines}]
     assert fake.artifacts['T1'] == '\n'.join(lines) + '\n'
-    assert fake.natives['T1']['harness_version'] == '2.1.216'
-    header = fake.headers['T1']
-    assert header['turn_count'] == 1
-    assert 'last_alive_at' in header
 
   def test_transcripts_older_than_the_launch_are_not_adopted(self, environment):
     projects = environment
@@ -210,18 +253,35 @@ class TestAdoption:
     assert trail_pointer.read(trail_pointer.path()) is None
 
 
-class TestSnapshots:
-  def test_growth_re_puts_the_complete_suffix(self, environment):
+class TestAppends:
+  def test_growth_appends_only_new_lines(self, environment):
     projects = environment
     fake = FakeTrails()
     lines = [_user('hello', 'u1')]
     path = _write_segment(projects, 'seg-1', lines)
     recorder = _recorder(projects, fake)
     recorder.tick()
-    lines.append(_assistant('hi', 'a1'))
+    appended = _assistant('hi', 'a1')
+    lines.append(appended)
     path.write_text('\n'.join(lines) + '\n')
     assert recorder.tick() is True
+    assert fake.appends[-1] == {'trail_id': 'T1', 'offset': 1, 'records': [appended]}
     assert fake.artifacts['T1'] == '\n'.join(lines) + '\n'
+
+  def test_incomplete_line_waits_for_its_newline(self, environment):
+    projects = environment
+    fake = FakeTrails()
+    first = _user('hello', 'u1')
+    path = _write_segment(projects, 'seg-1', [first])
+    recorder = _recorder(projects, fake)
+    recorder.tick()
+    second = _assistant('hi', 'a1')
+    path.write_text(first + '\n' + second)
+    assert recorder.tick() is False
+    assert len(fake.appends) == 1
+    path.write_text(first + '\n' + second + '\n')
+    assert recorder.tick() is True
+    assert fake.appends[-1] == {'trail_id': 'T1', 'offset': 1, 'records': [second]}
 
   def test_quiet_tick_keepalives_after_the_idle_interval(self, environment):
     projects = environment
@@ -234,59 +294,6 @@ class TestSnapshots:
     recorder._last_write_monotonic = time.monotonic() - 120.0
     assert recorder.tick() is False
     assert fake.keepalives == ['T1']
-
-  def test_usage_sums_dedup_claudes_split_records(self, environment):
-    projects = environment
-    fake = FakeTrails()
-    usage = {'input_tokens': 5, 'output_tokens': 7}
-    lines = [
-      _assistant('a', 'a1', message_id='m1', usage=usage),
-      _assistant('b', 'a2', message_id='m1', usage=usage),
-      _assistant('c', 'a3', message_id='m2', usage=usage),
-    ]
-    _write_segment(projects, 'seg-1', lines)
-    recorder = _recorder(projects, fake)
-    recorder.tick()
-    assert fake.natives['T1']['usage'] == {
-      'claude-fable-5': {'input_tokens': 10, 'output_tokens': 14}
-    }
-
-  def test_turn_count_excludes_meta_and_tool_results(self, environment):
-    projects = environment
-    fake = FakeTrails()
-    lines = [
-      _user('real input', 'u1'),
-      _user('injected', 'u2', isMeta=True),
-      _record(
-        type='user',
-        uuid='u3',
-        message={'content': [{'type': 'tool_result', 'tool_use_id': 'x', 'content': 'ok'}]},
-      ),
-      _user('another', 'u4'),
-    ]
-    _write_segment(projects, 'seg-1', lines)
-    recorder = _recorder(projects, fake)
-    recorder.tick()
-    assert fake.headers['T1']['turn_count'] == 2
-
-  def test_subject_initialized_from_ai_title_once(self, environment):
-    projects = environment
-    fake = FakeTrails()
-    lines = [_user('hello', 'u1')]
-    path = _write_segment(projects, 'seg-1', lines)
-    recorder = _recorder(projects, fake)
-    recorder.tick()
-    assert fake.headers['T1'].get('subject') is None
-    lines.append(json.dumps({'type': 'ai-title', 'aiTitle': 'first title'}))
-    path.write_text('\n'.join(lines) + '\n')
-    recorder.tick()
-    assert fake.headers['T1']['subject'] == 'first title'
-    # an explicit rename wins: later ticks never touch the subject again
-    fake.headers['T1']['subject'] = 'my rename'
-    lines.append(json.dumps({'type': 'ai-title', 'aiTitle': 'newer title'}))
-    path.write_text('\n'.join(lines) + '\n')
-    recorder.tick()
-    assert fake.headers['T1']['subject'] == 'my rename'
 
 
 class TestLifetimeForks:
@@ -308,6 +315,19 @@ class TestLifetimeForks:
     assert second.tick() is True
     fork = fake.created[-1]
     assert fork['forked_from'] == {'trail_id': 'T1', 'step_id': '1'}
+    assert fake.artifacts['T2'] == '\n'.join(appended) + '\n'
+
+  def test_same_segment_resume_reads_a_legacy_parent(self, environment):
+    projects = environment
+    fake = FakeTrails()
+    lines = [_user('hello', 'u1'), _assistant('hi', 'a1')]
+    self._record_first_lifetime(projects, fake, lines)
+    fake.legacy_trails.add('T1')
+    appended = [_user('again', 'u2')]
+    _write_segment(projects, 'seg-1', lines + appended)
+    second = _recorder(projects, fake)
+    assert second.tick() is True
+    assert fake.created[-1]['forked_from'] == {'trail_id': 'T1', 'step_id': '1'}
     assert fake.artifacts['T2'] == '\n'.join(appended) + '\n'
 
   def test_failed_anchors_start_a_fresh_root(self, environment):
@@ -543,7 +563,7 @@ class TestTransitions:
 
 
 class TestClose:
-  def test_finalize_snapshots_ends_ok_and_clears_the_pointer(self, environment):
+  def test_finalize_appends_ends_ok_and_clears_the_pointer(self, environment):
     projects = environment
     fake = FakeTrails()
     lines = [_user('hello', 'u1')]
@@ -661,18 +681,3 @@ class TestForkCuts:
     cuts = _fork_cuts(parent, set(), new_lines)
     assert cuts.verified is False
     assert cuts.pending is False
-
-
-class TestScan:
-  def test_harness_version_and_title_extraction(self):
-    scan = _scan_lines(
-      [
-        _user('hi', 'u1'),
-        json.dumps({'type': 'ai-title', 'aiTitle': 'first'}),
-        json.dumps({'type': 'ai-title', 'aiTitle': 'second'}),
-        'not json',
-      ]
-    )
-    assert scan.harness_version == '2.1.216'
-    assert scan.ai_title == 'second'
-    assert scan.turn_count == 1
