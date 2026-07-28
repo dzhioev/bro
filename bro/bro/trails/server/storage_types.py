@@ -103,20 +103,12 @@ def sha256_hex(payload: bytes) -> str:
   return hashlib.sha256(payload).hexdigest()
 
 
-def legacy_bro_spillover_key(trail_id: str, step_id: str) -> str:
-  return f'trails/{trail_id}/steps/{step_id}.json'
-
-
 def universal_spillover_key(trail_id: str, step_id: int, payload: bytes) -> str:
   return f'trails/steps/{trail_id}/{step_id}-{sha256_hex(payload)}.json'
 
 
 def tool_blob_key(sha256: str) -> str:
   return f'trails/tools/{sha256}.json'
-
-
-def legacy_claude_artifact_key(trail_id: str) -> str:
-  return f'trails/claude/{trail_id}/records.jsonl'
 
 
 def context_key(trail_id: str) -> str:

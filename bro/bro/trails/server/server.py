@@ -22,7 +22,6 @@ __cli_name__ = 'trails-server'
 
 DEFAULT_PORT = 8004
 LOOPBACK_HOSTS = frozenset({'127.0.0.1', 'localhost'})
-VALID_STEP_KINDS = backends.BRO_STEP_KINDS - {'system_prompt', 'end'}
 VALID_END_REASONS = frozenset({'ok', 'raised', 'error'})
 VALID_HOLDS = frozenset({'guided', 'attended', 'detached', 'unattended'})
 SWEEP_INTERVAL_SECONDS = 600.0
@@ -211,36 +210,6 @@ async def _handle_create_trail(request: web.Request) -> web.Response:
   return web.json_response(result, status=201)
 
 
-async def _handle_put_step(request: web.Request) -> web.Response:
-  trail_id = request.match_info['trail_id']
-  payload = await _read_json(request)
-  if not isinstance(payload, dict):
-    return _error('invalid json', 400)
-  kind = payload.get('kind')
-  if not isinstance(kind, str) or kind not in VALID_STEP_KINDS:
-    return _error(f'kind must be one of {sorted(VALID_STEP_KINDS)}', 400)
-  step_id = payload.get('step_id')
-  if step_id is not None and not isinstance(step_id, str):
-    return _error('step_id must be a string', 400)
-  extras = {key: value for key, value in payload.items() if key not in {'kind', 'body', 'step_id'}}
-  store: storage.Storage = request.app['storage']
-  try:
-    await store.put_step(
-      trail_id=trail_id,
-      kind=kind,
-      body=payload.get('body'),
-      extras=extras,
-      step_id=step_id,
-    )
-  except storage.BodyTooLarge as exception:
-    return _error(str(exception), 413)
-  except storage.TrailNotFound:
-    return _error(f'trail not found: {trail_id}', 404)
-  except ValueError as exception:
-    return _error(str(exception), 400)
-  return web.Response(status=204)
-
-
 async def _handle_append_records(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
   payload = await _read_json(request)
@@ -273,30 +242,6 @@ async def _handle_append_records(request: web.Request) -> web.Response:
   except ValueError as exception:
     return _error(str(exception), 400)
   return web.json_response(result)
-
-
-async def _handle_replace_artifact(request: web.Request) -> web.Response:
-  trail_id = request.match_info['trail_id']
-  payload = await _read_json(request)
-  if not isinstance(payload, dict):
-    return _error('invalid json', 400)
-  unknown_fields = set(payload) - {'artifact', 'native'}
-  if len(unknown_fields) > 0:
-    return _error(f'unknown fields: {sorted(unknown_fields)}', 400)
-  artifact = payload.get('artifact')
-  if not isinstance(artifact, str):
-    return _error('artifact must be a string', 400)
-  native = payload.get('native', {})
-  if not isinstance(native, dict):
-    return _error('native must be an object', 400)
-  store: storage.Storage = request.app['storage']
-  try:
-    updates = await store.replace_artifact(trail_id, artifact, native)
-  except storage.TrailNotFound:
-    return _error(f'trail not found: {trail_id}', 404)
-  except ValueError as exception:
-    return _error(str(exception), 400)
-  return web.json_response({'native': updates})
 
 
 async def _handle_update_header(request: web.Request) -> web.Response:
@@ -569,14 +514,12 @@ def create_app(
   app.router.add_get('/v1/steps', _handle_find_steps)
   app.router.add_get('/v1/trails/{trail_id}', _handle_get_trail)
   app.router.add_patch('/v1/trails/{trail_id}', _handle_update_header)
-  app.router.add_post('/v1/trails/{trail_id}/steps', _handle_put_step)
   app.router.add_post('/v1/trails/{trail_id}/records', _handle_append_records)
   app.router.add_get('/v1/trails/{trail_id}/steps', _handle_get_steps)
   app.router.add_get('/v1/trails/{trail_id}/steps/uuids', _handle_get_step_uuids)
   app.router.add_get('/v1/trails/{trail_id}/steps/{step_id}', _handle_get_step)
   app.router.add_get('/v1/trails/{trail_id}/messages', _handle_get_messages)
   app.router.add_get('/v1/trails/{trail_id}/context', _handle_get_context)
-  app.router.add_put('/v1/trails/{trail_id}/artifact', _handle_replace_artifact)
   app.router.add_post('/v1/trails/{trail_id}/end', _handle_end_trail)
   app.router.add_post('/v1/trails/{trail_id}/keepalive', _handle_keepalive)
   app.router.add_post('/v1/admin/trails/check', _handle_check)
@@ -615,7 +558,6 @@ def main(argv: list[str]) -> Optional[int]:
   parser.add_argument('--trails-allow-no-auth', action='store_true')
   parser.add_argument('--trails-table', required=True)
   parser.add_argument('--steps-table', required=True)
-  parser.add_argument('--universal-steps-table', required=True)
   parser.add_argument('--uuid-index', required=True)
   parser.add_argument('--spillover-bucket', required=True)
   parser.add_argument('--aws-region', default=os.environ.get('AWS_REGION', 'eu-central-1'))
@@ -631,7 +573,6 @@ def main(argv: list[str]) -> Optional[int]:
     s3=session.client('s3'),
     trails_table=args['trails_table'],
     steps_table=args['steps_table'],
-    universal_steps_table=args['universal_steps_table'],
     bucket=args['spillover_bucket'],
     uuid_index=args['uuid_index'],
   )

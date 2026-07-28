@@ -22,7 +22,7 @@ def _create_payload(**overrides) -> dict:
     'surface': 'ask',
     'hold': 'unattended',
     'native': {'llm': {'type': 'chat_gpt', 'model': 'gpt-5'}},
-    'body': {'system_prompt': 'hello'},
+    'body': {'records': [{'kind': 'system_prompt', 'body': 'hello'}]},
   }
   payload.update(overrides)
   return payload
@@ -32,7 +32,6 @@ class FakeStorage:
   def __init__(self):
     self.trails: dict[str, dict] = {}
     self.steps: dict[str, list[dict]] = {}
-    self.artifacts: dict[str, str] = {}
     self.contexts: dict[str, object] = {}
     self._counter = 0
     self.raise_body_too_large = False
@@ -71,34 +70,16 @@ class FakeStorage:
     self.steps[trail_id] = []
     if 'launch_context' in payload.get('body', {}):
       self.contexts[trail_id] = payload['body']['launch_context']
-    if payload['harness'] == 'bro':
+    for record in payload['body'].get('records', []):
       self.steps[trail_id].append(
         {
           'trail_id': trail_id,
-          'step_id': self._new_id(),
+          'step_id': len(self.steps[trail_id]),
           'ts': started_at,
-          'kind': 'system_prompt',
-          'body': payload['body']['system_prompt'],
+          **record,
         }
       )
     return {'id': trail_id, 'started_at': started_at}
-
-  async def put_step(self, *, trail_id, kind, body, extras, step_id=None):
-    if self.raise_body_too_large:
-      raise storage.BodyTooLarge('too big')
-    if trail_id not in self.trails:
-      raise storage.TrailNotFound(trail_id)
-    self.steps[trail_id].append(
-      {
-        'trail_id': trail_id,
-        'step_id': step_id if step_id is not None else self._new_id(),
-        'ts': self._now(),
-        'kind': kind,
-        'body': body,
-        **extras,
-      }
-    )
-    return {}
 
   async def append_records(self, trail_id, *, offset, records, tools):
     if trail_id not in self.trails:
@@ -135,20 +116,6 @@ class FakeStorage:
     self.trails[trail_id]['forked_from'] = forked_from
     self.steps[trail_id] = self.steps[trail_id][delete_count:]
     return {'trail_id': trail_id, 'forked_from': forked_from, 'extent': len(self.steps[trail_id])}
-
-  async def replace_artifact(self, trail_id, artifact, metadata):
-    if trail_id not in self.trails:
-      raise storage.TrailNotFound(trail_id)
-    if self.trails[trail_id]['harness'] != 'claude':
-      raise ValueError('artifact replacement is available only for claude trails')
-    self.artifacts[trail_id] = artifact
-    updates = {
-      'line_count': len(artifact.splitlines()),
-      'size_bytes': len(artifact.encode()),
-      **metadata,
-    }
-    self.trails[trail_id]['native'].update(updates)
-    return updates
 
   async def update_header(self, trail_id, changes):
     if trail_id not in self.trails:
@@ -309,25 +276,6 @@ async def test_create_validates_lineage_and_provenance(client):
 
 
 @pytest.mark.asyncio
-async def test_step_append_and_native_read(client, store):
-  cli = await client
-  created = await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
-  trail_id = (await created.json())['id']
-  response = await cli.post(
-    f'/v1/trails/{trail_id}/steps',
-    json={'kind': 'user_input', 'body': 'hello', 'step_id': 'user-1'},
-    headers=_auth(),
-  )
-  assert response.status == 204
-  response = await cli.get(f'/v1/trails/{trail_id}/steps', headers=_auth())
-  assert [item['kind'] for item in (await response.json())['steps']] == [
-    'system_prompt',
-    'user_input',
-  ]
-  assert store.steps[trail_id][-1]['step_id'] == 'user-1'
-
-
-@pytest.mark.asyncio
 async def test_universal_append_and_extent_conflict(client):
   cli = await client
   created = await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
@@ -382,12 +330,16 @@ async def test_messages_support_repeated_type_filter(client):
   cli = await client
   created = await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
   trail_id = (await created.json())['id']
-  for kind in ('user_input', 'reasoning', 'assistant'):
-    await cli.post(
-      f'/v1/trails/{trail_id}/steps',
-      json={'kind': kind, 'body': kind},
-      headers=_auth(),
-    )
+  await cli.post(
+    f'/v1/trails/{trail_id}/records',
+    json={
+      'offset': 1,
+      'records': [
+        {'kind': kind, 'body': kind} for kind in ('user_input', 'reasoning', 'assistant')
+      ],
+    },
+    headers=_auth(),
+  )
   response = await cli.get(
     f'/v1/trails/{trail_id}/messages?type=user_input&type=assistant', headers=_auth()
   )
@@ -434,28 +386,6 @@ async def test_point_step_and_uuid_projection_reads(client, store):
 
 
 @pytest.mark.asyncio
-async def test_claude_artifact_replace(client, store):
-  cli = await client
-  payload = _create_payload(
-    harness='claude',
-    bro=None,
-    surface='cw',
-    native={'segment': 'uuid', 'llm': {}, 'cw_command': 'cw ss', 'harness_version': '2.1.0'},
-    body={'artifact': '', 'launch_context': {'command': 'cw ss'}},
-  )
-  created = await cli.post('/v1/trails', json=payload, headers=_auth())
-  trail_id = (await created.json())['id']
-  response = await cli.put(
-    f'/v1/trails/{trail_id}/artifact',
-    json={'artifact': '{}\n{}\n', 'native': {'harness_version': '2.1.0'}},
-    headers=_auth(),
-  )
-  assert response.status == 200
-  assert store.artifacts[trail_id] == '{}\n{}\n'
-  assert store.trails[trail_id]['native']['line_count'] == 2
-
-
-@pytest.mark.asyncio
 async def test_launch_context_read(client):
   cli = await client
   payload = _create_payload(
@@ -463,7 +393,7 @@ async def test_launch_context_read(client):
     bro=None,
     surface='cw',
     native={'segment': 'uuid', 'llm': {}, 'cw_command': 'cw ss', 'harness_version': '2.1.0'},
-    body={'artifact': '', 'launch_context': [{'title': 'git state'}]},
+    body={'records': [], 'launch_context': [{'title': 'git state'}]},
   )
   created = await cli.post('/v1/trails', json=payload, headers=_auth())
   trail_id = (await created.json())['id']
@@ -531,7 +461,7 @@ async def test_list_filters_by_harness(client):
       bro=None,
       surface='cw',
       native={'segment': 'uuid', 'llm': {}, 'cw_command': 'cw ss', 'harness_version': '2.1.0'},
-      body={'artifact': ''},
+      body={'records': []},
     ),
     headers=_auth(),
   )

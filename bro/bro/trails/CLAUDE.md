@@ -1,6 +1,6 @@
 # trails/CLAUDE.md
 
-Trails is the universal registry and recording pipeline for LLM runs across harnesses. Every run has one header in the `trails-v2` DynamoDB table; migrated bodies use the shared ordinal `trail_steps_v2` table, and the server dual-reads legacy bodies until their retirement stage. The deployed `trails-server` is the only component with DynamoDB/S3 access; clients use the shared bearer-token secret.
+Trails is the universal registry and recording pipeline for LLM runs across harnesses. Every run has one header in the `trails-v2` DynamoDB table and one body in the shared ordinal `trail_steps_v2` table. The deployed `trails-server` is the only component with DynamoDB/S3 access; clients use the shared bearer-token secret.
 
 ## Architecture
 
@@ -20,40 +20,32 @@ bro · claude recorder                       readers
                                       S3 body spill + tool blobs
 ```
 
-- `trails/server/storage.py` owns headers, the extent-conditional append protocol, ordinal storage and spillover, dual reads, UUID projections and point reads, content-addressed tool blobs, list indexes, and unreported-run inference; `folding.py` is the shared aggregate fold.
+- `trails/server/storage.py` owns headers, the extent-conditional append protocol, ordinal storage and spillover, UUID projections and point reads, content-addressed tool blobs, list indexes, and unreported-run inference; `folding.py` is the shared aggregate fold.
 - `trails/server/operations.py` owns recompute, check (including billing and cross-trail UUID audits), and manifested relinking.
 - `trails/server/backends.py` is the harness seam. An adapter supplies exactly `parse`, `classify`, `project`, `open`, and `validate_create`, plus its declared emitted message types; the registry is the complete harness dispatch surface.
 - **Recorder placement:** the shared write spine and every harness recorder live in `trails/record/`; a recorder may import the seam it rides, never the reverse. A third harness adds `record/<harness>.py` over `spine.Recording` beside its server adapter, not recording machinery in `llm/`, `trails/client.py`, or the harness package.
 - Harness adapters mint lineage only when creating a trail. Writers cannot mutate an edge; operators repair a missing edge through manifested `relink`, and audits detect copied records across trails.
-- `trail_steps_v2` uses `(trail_id S, step_id N)` plus a keys-only UUID index for Claude lineage lookup. A migrated header is identified by `body_storage = trail_steps_v2` and carries its current `extent`; append transactions condition on that extent.
+- `trail_steps_v2` uses `(trail_id S, step_id N)` plus a keys-only UUID index for Claude lineage lookup. A header names its body store in `body_storage` and carries its current `extent`; append transactions condition on that extent.
 - Bodies at least 50 KB spill to S3. Bro tool schemas are content-addressed under `trails/tools/{sha256}.json` and referenced by `tools_sha256` on a row; `trails.model.tools_sha256` is the canonical digest helper for clients and migrations.
 - Launch context is a harness-neutral attachment under `trails/{id}/context.json`.
 
-## Transition
+Writer-reported outcomes use `end.reason`; the stale-run sweep instead records `end.inference = unreported`, so absence of a writer verdict is not presented as a failure verdict.
 
-The legacy sources remain readable until the final retirement stage: bro rows in `trail_steps`, and Claude JSONL at `trails/claude/{id}/records.jsonl`. Reads select `trail_steps_v2` only after the header's migrated marker is set, so body migrations can write and verify a complete target before switching one trail.
+## Retirement record
 
-`trails-migrate-claude-rows migrate` moves ended Claude artifacts without a write freeze; live trails remain on the compatibility path. It writes each source manifest before target rows or spill objects, verifies joined-line count/hash and aggregates before switching the header marker last, and retains both legacy artifacts and launch-context objects. `verify` repeats those checks store-wide and writes its report under `trails/migrations/claude-rows/` in the trails bucket.
+A destructive operation over this store manifests what it will do before doing it. `trails-retire-legacy-stores` (`migrations/retirement.py`) is the surviving one: `plan` enumerates every table, object and header field the retirement destroys and runs its preconditions — every trail universal, each authorising report clean, neither legacy table written since the soak window opened — and `apply` manifests that enumeration before deleting, then verifies.
 
-`trails-migrate-bro-rows migrate` moves ended and stale bro streams while dropping response-output decompositions and historical end rows, extracting content-addressed tool schemas, and rewriting lineage/provenance pointers to projected ordinal positions. Per-trail manifests precede target/tool/pointer writes, the source and transformed target carry count/hash checks, and the body marker switches only after rows, blobs, pointers, and aggregates verify; legacy rows and spills remain intact. `verify` rechecks the durable manifests store-wide.
-
-`trails-repair-lineage` snapshots every Claude trail's UUID projection through the service, confirms duplicate candidates through the UUID index, and reports any compatibility bodies still on legacy storage. `migrate` writes the exhaustive audit before calling manifested `relink`; `verify` repeats the clean store-wide audit and index lookup.
-
-`trails-watch-soak` scores the soak that precedes retirement. `open` fixes the legacy baselines, derives the cutover from the last write either legacy store took, and records the surfaces coverage requires; `sample` / `watch` store each reading; `report` scores movement against whether every required surface has recorded universally. All of it lands under `trails/migrations/legacy-retirement-soak/` in the trails bucket.
-
-Writer-reported outcomes use `end.reason`; the stale-run sweep instead records `end.inference = unreported`, so absence of a writer verdict is not presented as a failure verdict. `trails-backfill-unreported` manifests and relabels historical trails from surfaces that never reported outcomes, with the two live legacy migration trails excluded explicitly; its durable manifest and verification reports live under `trails/migrations/lost-verdict-backfill/` in the trails bucket.
-
-The legacy `POST /steps`,  `PUT /artifact`, and client aggregate updates accept only unmigrated trails. They remain as compatibility writers while live clients move to `POST /records`; migrated trails reject them, and universal headers accept no client-written usage or turn totals.
+Its manifest is `trails/retirement/manifest.json` in the trails bucket, deliberately outside the `trails/migrations/` prefix the retirement deletes, and it is the single account of what the retirement removed: the tables and their item counts, every object key, the stripped header fields with their prior values, and the authorising reports it read. Because `plan` reads prefixes the run then deletes, a resumed `apply` works from the stored manifest rather than re-planning.
 
 ## Surfaces
 
-- `trails/model.py` owns the shared trail, step, lineage, and spill-descriptor vocabulary consumed by readers and recorders. Lineage step ids admit legacy strings or universal ordinals, and pointers may carry an event index; `trails/lineage.py` is the cycle-detecting root-first chain walker.
+- `trails/model.py` owns the shared trail, step, lineage, and spill-descriptor vocabulary consumed by readers and recorders. A lineage step id is either a string or an ordinal — the Claude recorder mints the string form — and pointers may carry an event index; `trails/lineage.py` is the cycle-detecting root-first chain walker.
 - `trails/client.py` owns the persistent authenticated HTTPS transport. `TrailsClient` exposes paged headers, native steps, generalized messages, launch context, universal append, and admin operations.
 - `trails/record/spine.py` owns recording creation, ordinal extent validation, batched appends, liveness, and ending; `record/bro.py` adapts `llm.tracker.Tracker`, and `record/claude.py` (`trails.record.claude`) records Claude transcripts.
-- `POST /v1/trails` opens a legacy body for the old `system_prompt` / `artifact` envelopes, or a universal body when `body.records` is present.
+- `POST /v1/trails` opens the body from `body.records`.
 - `POST /v1/trails/{id}/records` sends records beginning at `offset`. A committed retry returns the current extent without folding again; any other extent mismatch is a conflict.
 - `GET /v1/trails/{id}/steps` returns the lossless native stream. `GET /v1/trails/{id}/messages` returns the generalized projection; billing usage is read from the row selected at append time. `GET /v1/steps?uuid=…` returns matching row identities, `/steps/uuids` returns a bounded UUID projection, and `/steps/{step_id}` returns one exact row.
-- Bro projection derives reasoning, assistant text, tool calls, and terminal assistant status from `llm_call.response.output`; decomposed legacy rows do not project separately.
+- Bro projection derives reasoning, assistant text, tool calls, and terminal assistant status from `llm_call.response.output`; rows of those decomposed kinds do not project separately.
 - `POST /v1/admin/trails/{id}/recompute`, `/v1/admin/trails/check`, and `/v1/admin/trails/{id}/relink` are the aggregate repair, non-mutating verification/audit, and manifested lineage-repair surfaces. The store-wide check keeps its long request alive with JSON-whitespace heartbeats and ends with one verdict object.
 - Header responses expose provider-raw usage by model. Provider normalization belongs to the provider-aware usage layer, not the harness adapter.
 - List queries accept exactly one indexed selector: `harness`, `bro`, or `forked_from`, plus the common time range and cursor.
@@ -63,7 +55,7 @@ The legacy `POST /steps`,  `PUT /artifact`, and client aggregate updates accept 
 
 Bearer auth is mandatory outside an explicit loopback-only `TRAILS_ALLOW_NO_AUTH=1` run. The deployed token lives in SSM `/trails/bearer-token`; `trails/bootstrap.sh` writes the client secret.
 
-The ECS service and its retained header, legacy-step, universal-step, and bucket resources are defined in `infra/cdk/trails_stack.py`.
+The ECS service and its retained header, step, and bucket resources are defined in `infra/cdk/trails_stack.py`.
 
 The historical Claude backfill produced 1,119 trails with `version = 'legacy-session-log'`; its manifests remain under `trails/migrations/` in the trails bucket.
 

@@ -49,7 +49,7 @@ class Adapter:
   parse: Callable[[Any], ParsedRecord]
   classify: Callable[[ParsedRecord], Classification]
   project: Callable[[dict], list[dict]]
-  open: Callable[[dict, str], OpenedBody]
+  open: Callable[[dict], OpenedBody]
   validate_create: Callable[[dict], None]
   emitted_message_types: frozenset[str]
 
@@ -127,18 +127,11 @@ def _bro_classify(record: ParsedRecord) -> Classification:
   return Classification(usage_model=str(response.get('model', 'unknown')), usage=usage)
 
 
-def _bro_open(body: dict, started_at: str) -> OpenedBody:
+def _bro_open(body: dict) -> OpenedBody:
   records = body.get('records')
-  if records is not None:
-    if not isinstance(records, list):
-      raise ValueError('bro body.records must be a list')
-    return OpenedBody(records=records)
-  system_prompt = body.get('system_prompt')
-  if not isinstance(system_prompt, str):
-    raise ValueError('bro body.system_prompt must be a string')
-  return OpenedBody(
-    records=[{'kind': 'system_prompt', 'body': system_prompt, 'ts': started_at, 'turn_index': 0}]
-  )
+  if not isinstance(records, list):
+    raise ValueError('bro body.records must be a list')
+  return OpenedBody(records=records)
 
 
 def _validate_server_derived(native: dict) -> None:
@@ -303,17 +296,11 @@ def _claude_classify(record: ParsedRecord) -> Classification:
   )
 
 
-def _claude_open(body: dict, started_at: str) -> OpenedBody:
-  del started_at
+def _claude_open(body: dict) -> OpenedBody:
   records = body.get('records')
-  if records is not None:
-    if not isinstance(records, list) or not all(isinstance(record, str) for record in records):
-      raise ValueError('claude body.records must be a list of strings')
-    return OpenedBody(records=records)
-  artifact = body.get('artifact', '')
-  if not isinstance(artifact, str):
-    raise ValueError('claude body.artifact must be a string')
-  return OpenedBody(records=artifact.splitlines())
+  if not isinstance(records, list) or not all(isinstance(record, str) for record in records):
+    raise ValueError('claude body.records must be a list of strings')
+  return OpenedBody(records=records)
 
 
 def _claude_validate_create(native: dict) -> None:

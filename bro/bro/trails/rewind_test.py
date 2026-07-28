@@ -245,7 +245,11 @@ class TestFormatStepSummary:
     out = _format_step_summary(
       {
         'kind': 'llm_call',
-        'body': {'s3': 'trails/T/steps/S.json', 'url': 'https://example.com/x', 'size': 4096},
+        'body': {
+          's3': 'trails/steps/T/3-abc123.json',
+          'url': 'https://example.com/x',
+          'size': 4096,
+        },
         'ts': '2026-06-07T00:00:00.000000Z',
         'turn_index': 1,
       },
@@ -306,9 +310,9 @@ class TestHeader:
         'native': {
           'llm': {'model': 'claude'},
           'harness_version': '2.1.0',
-          'line_count': 4,
           'segment': 'seg',
         },
+        'extent': 4,
         'started_at': '2026-06-07T22:14:03.000000Z',
         'end': None,
         'interactive': True,

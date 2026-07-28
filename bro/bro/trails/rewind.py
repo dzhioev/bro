@@ -174,7 +174,7 @@ def _claude_native_header_fields(trail: dict) -> list[tuple[str, Any]]:
   fields: list[tuple[str, Any]] = [
     ('llm', native.get('llm', {})),
     ('claude-code', native.get('harness_version', '?')),
-    ('lines', native.get('line_count', '?')),
+    ('lines', trail.get('extent', '?')),
     ('segment', native.get('segment', '?')),
   ]
   cw_command = native.get('cw_command')

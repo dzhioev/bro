@@ -6,7 +6,6 @@ from typing import Any, Optional
 import pytest
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 
-from trails.migrations import bro_rows, claude_rows, lineage, unreported
 from trails.model import MESSAGE_TYPES, UNREPORTED_END_INFERENCE, tools_sha256
 from trails.server import backends, storage, storage_types
 
@@ -66,21 +65,13 @@ class FakeDynamo:
       pass
 
   def __init__(self):
-    self.tables: dict[str, dict[Any, dict]] = {
-      'headers': {},
-      'legacy': {},
-      'universal': {},
-    }
+    self.tables: dict[str, dict[Any, dict]] = {'headers': {}, 'universal': {}}
     self.queries: list[dict] = []
     self.scans: list[dict] = []
 
   @property
   def headers(self) -> dict[str, dict]:
     return self.tables['headers']
-
-  @property
-  def legacy_steps(self) -> dict[tuple[str, str], dict]:
-    return self.tables['legacy']
 
   @property
   def universal_steps(self) -> dict[tuple[str, int], dict]:
@@ -330,15 +321,14 @@ def components():
     dynamo=dynamo,
     s3=s3,
     trails_table='headers',
-    steps_table='legacy',
-    universal_steps_table='universal',
+    steps_table='universal',
     bucket='bucket',
     uuid_index='uuid-index',
   )
   return store, dynamo, s3
 
 
-async def _create_bro(store: storage.Storage, *, universal: bool = True, **overrides) -> str:
+async def _create_bro(store: storage.Storage, **overrides) -> str:
   payload = {
     'harness': 'bro',
     'version': '2',
@@ -347,17 +337,13 @@ async def _create_bro(store: storage.Storage, *, universal: bool = True, **overr
     'surface': 'ask',
     'hold': 'unattended',
     'native': {'llm': {'type': 'chat_gpt', 'model': 'gpt-5'}},
-    'body': (
-      {'records': [{'kind': 'system_prompt', 'body': 'prompt', 'turn_index': 0}]}
-      if universal
-      else {'system_prompt': 'prompt'}
-    ),
+    'body': {'records': [{'kind': 'system_prompt', 'body': 'prompt', 'turn_index': 0}]},
   }
   payload.update(overrides)
   return (await store.create_trail(**payload))['id']
 
 
-async def _create_claude(store: storage.Storage, *, universal: bool = True, **overrides) -> str:
+async def _create_claude(store: storage.Storage, **overrides) -> str:
   payload = {
     'harness': 'claude',
     'version': '2',
@@ -369,7 +355,7 @@ async def _create_claude(store: storage.Storage, *, universal: bool = True, **ov
       'cw_command': 'cw ss',
       'harness_version': 'unknown',
     },
-    'body': {'records': []} if universal else {'artifact': ''},
+    'body': {'records': []},
   }
   payload.update(overrides)
   return (await store.create_trail(**payload))['id']
@@ -643,30 +629,7 @@ async def test_spilled_claude_line_keeps_the_native_raw_view(components):
 
 
 @pytest.mark.asyncio
-async def test_dual_read_keeps_legacy_bro_and_claude_bodies_live(components):
-  store, _, _ = components
-  bro_trail = await _create_bro(store, universal=False)
-  await store.put_step(
-    trail_id=bro_trail,
-    kind='user_input',
-    body='legacy input',
-    extras={},
-    step_id='legacy-user',
-  )
-  bro_steps = await store.query_steps(bro_trail, after=None, limit=10)
-  assert [step['kind'] for step in bro_steps['steps']] == ['system_prompt', 'user_input']
-
-  claude_trail = await _create_claude(store, universal=False)
-  raw = _claude_assistant('legacy-message', 'legacy', uuid='legacy-uuid') + '\n'
-  await store.replace_artifact(claude_trail, raw, {'harness_version': '2.1.0'})
-  claude_steps = await store.query_steps(claude_trail, after=None, limit=10)
-  assert claude_steps['steps'][0]['raw'] == raw.rstrip('\n')
-  messages = await store.query_messages(claude_trail, after=None, limit=10, types=None)
-  assert [message['type'] for message in messages['messages']] == ['llm_call', 'assistant']
-
-
-@pytest.mark.asyncio
-async def test_uuid_projection_and_point_reads_cover_universal_and_legacy_claude(components):
+async def test_uuid_projection_and_point_reads(components):
   store, dynamo, _ = components
   universal = await _create_claude(store)
   first = _claude_assistant('message-1', 'first', uuid='uuid-1')
@@ -680,11 +643,6 @@ async def test_uuid_projection_and_point_reads_cover_universal_and_legacy_claude
   assert dynamo.queries[-1]['ProjectionExpression'] == 'trail_id, step_id, #uuid'
   assert (await store.get_step(universal, '1'))['raw'] == second
   assert await store.query_step_uuids(universal, through='0') == [{'step_id': 0, 'uuid': 'uuid-1'}]
-
-  legacy = await _create_claude(store, universal=False)
-  await store.replace_artifact(legacy, first + '\n' + second + '\n', {})
-  assert (await store.get_step(legacy, '1'))['raw'] == second
-  assert await store.query_step_uuids(legacy, through='0') == [{'step_id': '0', 'uuid': 'uuid-1'}]
 
 
 @pytest.mark.asyncio
@@ -816,565 +774,3 @@ async def test_sweep_marks_stale_trails_as_inferred_unreported(components):
     'inference': UNREPORTED_END_INFERENCE,
   }
   assert dynamo.headers[live]['end'] is None
-
-
-@pytest.mark.asyncio
-async def test_unreported_backfill_manifests_before_relabelling_and_stays_scoped(
-  components, monkeypatch
-):
-  _, dynamo, s3 = components
-  lost = {'at': '2026-06-01T00:00:00.000000Z', 'reason': 'lost'}
-  headers = {
-    'lost-http': {
-      'id': 'lost-http',
-      'harness': 'bro',
-      'surface': 'http',
-      'started_at': '2026-06-01T00:00:00.000000Z',
-      'last_alive_at': '2026-06-01T00:00:01.000000Z',
-      'end': lost,
-    },
-    'aged-call': {
-      'id': 'aged-call',
-      'harness': 'bro',
-      'surface': 'call',
-      'started_at': '2020-01-01T00:00:00.000000Z',
-      'last_alive_at': '2020-01-01T00:00:01.000000Z',
-      'end': None,
-    },
-    'lost-process-inbox': {
-      'id': 'lost-process-inbox',
-      'harness': 'bro',
-      'surface': 'process-inbox',
-      'started_at': '2026-06-01T00:00:00.000000Z',
-      'last_alive_at': '2026-06-01T00:00:01.000000Z',
-      'end': lost,
-    },
-    'lost-ask': {
-      'id': 'lost-ask',
-      'harness': 'bro',
-      'surface': 'ask',
-      'started_at': '2026-06-01T00:00:00.000000Z',
-      'last_alive_at': '2026-06-01T00:00:01.000000Z',
-      'end': lost,
-    },
-    'live-call': {
-      'id': 'live-call',
-      'harness': 'bro',
-      'surface': 'call',
-      'started_at': storage_types.now_iso(),
-      'last_alive_at': storage_types.now_iso(),
-      'end': None,
-    },
-    '01kygtv6g3-atvzpw06-knckz02d': {
-      'id': '01kygtv6g3-atvzpw06-knckz02d',
-      'harness': 'bro',
-      'surface': 'http',
-      'started_at': '2020-01-01T00:00:00.000000Z',
-      'last_alive_at': '2020-01-01T00:00:01.000000Z',
-      'end': lost,
-    },
-    '01kygyx5cf-04x0jpk1-m5kby1bd': {
-      'id': '01kygyx5cf-04x0jpk1-m5kby1bd',
-      'harness': 'bro',
-      'surface': 'call',
-      'started_at': '2020-01-01T00:00:00.000000Z',
-      'last_alive_at': '2020-01-01T00:00:01.000000Z',
-      'end': None,
-    },
-  }
-  dynamo.headers.update(copy.deepcopy(headers))
-  events: list[str] = []
-  original_put_object = s3.put_object
-  original_update_item = dynamo.update_item
-
-  def tracked_put_object(**arguments):
-    events.append(f's3:{arguments["Key"]}')
-    return original_put_object(**arguments)
-
-  def tracked_update_item(**arguments):
-    events.append(f'dynamo:{_deserialize(arguments["Key"])["id"]}')
-    return original_update_item(**arguments)
-
-  monkeypatch.setattr(s3, 'put_object', tracked_put_object)
-  monkeypatch.setattr(dynamo, 'update_item', tracked_update_item)
-  migration = unreported.UnreportedBackfill(
-    dynamo=dynamo,
-    s3=s3,
-    trails_table='headers',
-    steps_table='universal',
-    bucket='bucket',
-  )
-
-  result = await migration.migrate()
-
-  assert result['change_count'] == 3
-  assert events[0] == f's3:{unreported.MANIFEST_KEY}'
-  assert events[1:4] == ['dynamo:aged-call', 'dynamo:lost-http', 'dynamo:lost-process-inbox']
-  manifest = json.loads(s3.objects[unreported.MANIFEST_KEY])
-  assert manifest['status'] == 'applied_verified'
-  assert {(change['trail_id'], change['matching_rule']) for change in manifest['changes']} == {
-    ('aged-call', unreported.AGED_LIVE_RULE),
-    ('lost-http', unreported.SWEPT_LOST_RULE),
-    ('lost-process-inbox', unreported.SWEPT_LOST_RULE),
-  }
-  assert all('old_value' in change and 'new_value' in change for change in manifest['changes'])
-  assert dynamo.headers['aged-call']['end']['inference'] == UNREPORTED_END_INFERENCE
-  assert dynamo.headers['lost-http']['end']['inference'] == UNREPORTED_END_INFERENCE
-  assert dynamo.headers['lost-process-inbox']['end']['inference'] == UNREPORTED_END_INFERENCE
-  for unchanged in (
-    'lost-ask',
-    'live-call',
-    '01kygtv6g3-atvzpw06-knckz02d',
-    '01kygyx5cf-04x0jpk1-m5kby1bd',
-  ):
-    assert dynamo.headers[unchanged]['end'] == headers[unchanged]['end']
-
-  verification = await migration.verify()
-  assert verification['verified_change_count'] == 3
-  assert verification['verification_s3'] in s3.objects
-
-
-def _claude_rows_migration(store, dynamo, s3) -> claude_rows.ClaudeRowsMigration:
-  return claude_rows.ClaudeRowsMigration(
-    store=store,
-    dynamo=dynamo,
-    s3=s3,
-    trails_table='headers',
-    steps_table='universal',
-    bucket='bucket',
-  )
-
-
-@pytest.mark.asyncio
-async def test_claude_row_migration_manifests_before_writes_and_retains_sources(
-  components, monkeypatch
-):
-  store, dynamo, s3 = components
-  trail_id = await _create_claude(store, universal=False)
-  large_raw_line = 'x' * storage.SPILLOVER_THRESHOLD_BYTES
-  artifact = _claude_assistant('message-1', 'answer', uuid='uuid-1') + f'\n{large_raw_line}\n\n'
-  await store.replace_artifact(trail_id, artifact, {'harness_version': '2.1.0'})
-  await store.end_trail(trail_id=trail_id, reason='ok', detail=None)
-  legacy_context_key = f'trails/claude/{trail_id}/launch-context.json'
-  legacy_context = b'{"workspace":"migration-test"}'
-  s3.put_object(Key=legacy_context_key, Body=legacy_context)
-  dynamo.headers[trail_id]['native']['context_s3'] = legacy_context_key
-  artifact_key = storage_types.legacy_claude_artifact_key(trail_id)
-  original_artifact = s3.objects[artifact_key]
-
-  events: list[str] = []
-  original_put_object = s3.put_object
-  original_batch_write = dynamo.batch_write_item
-
-  def tracked_put_object(**kwargs):
-    events.append(f's3:{kwargs["Key"]}')
-    return original_put_object(**kwargs)
-
-  def tracked_batch_write(**kwargs):
-    events.append('dynamo:rows')
-    return original_batch_write(**kwargs)
-
-  monkeypatch.setattr(s3, 'put_object', tracked_put_object)
-  monkeypatch.setattr(dynamo, 'batch_write_item', tracked_batch_write)
-
-  result = await _claude_rows_migration(store, dynamo, s3).migrate(trail_id=trail_id, limit=None)
-
-  manifest_key = claude_rows._manifest_key(trail_id)
-  assert result['migrated'] == [trail_id]
-  target_spill = next(
-    event for event in events if event.startswith(f's3:trails/steps/{trail_id}/1-')
-  )
-  assert (
-    events.index(f's3:{manifest_key}') < events.index(target_spill) < events.index('dynamo:rows')
-  )
-  assert s3.objects[artifact_key] == original_artifact
-  migrated_steps = (await store.query_steps(trail_id, after=None, limit=10))['steps']
-  assert [step['body'] for step in migrated_steps] == [
-    artifact.split('\n')[0],
-    large_raw_line,
-    '',
-  ]
-  header = dynamo.headers[trail_id]
-  assert header['body_storage'] == storage_types.UNIVERSAL_BODY_STORAGE
-  assert header['extent'] == 3
-  assert header['context_s3'] == storage_types.context_key(trail_id)
-  assert 'context_s3' not in header['native']
-  assert s3.objects[storage_types.context_key(trail_id)] == legacy_context
-  manifest = json.loads(s3.objects[manifest_key])
-  assert manifest['status'] == 'migrated_verified'
-  assert manifest['source']['line_count'] == manifest['target']['row_count'] == 3
-  assert manifest['source']['joined_sha256'] == manifest['target']['joined_sha256']
-  assert manifest['verification']['source_retained'] is True
-  assert (await store.check(trail_id))['ok'] is True
-
-
-@pytest.mark.asyncio
-async def test_claude_row_migration_reconciles_manifested_lineage_deletion(components):
-  store, dynamo, s3 = components
-  trail_id = await _create_claude(store, universal=False)
-  artifact = '\n'.join(
-    _claude_assistant(f'message-{index}', f'answer-{index}', uuid=f'uuid-{index}')
-    for index in range(3)
-  )
-  await store.replace_artifact(trail_id, artifact, {'harness_version': '2.1.0'})
-  await store.end_trail(trail_id=trail_id, reason='ok', detail=None)
-  migration = _claude_rows_migration(store, dynamo, s3)
-  await migration.migrate(trail_id=trail_id, limit=None)
-  row_manifest = json.loads(s3.objects[claude_rows._manifest_key(trail_id)])
-  old_extent = int(dynamo.headers[trail_id]['extent'])
-  forked_from = {'trail_id': 'parent', 'step_id': 2}
-
-  relink_result = await store.relink(trail_id, forked_from, delete_count=1)
-  relink_manifest = json.loads(s3.objects[relink_result['manifest_s3']])
-  repair = {
-    'trail_id': trail_id,
-    'forked_from': forked_from,
-    'delete_count': 1,
-    'old_extent': old_extent,
-    'new_extent': old_extent - 1,
-  }
-  s3.put_object(
-    Key=lineage.MANIFEST_KEY,
-    Body=json.dumps(
-      {
-        'operation': lineage.MIGRATION_NAME,
-        'manifest_version': lineage.MANIFEST_VERSION,
-        'status': 'applied_verified',
-        'manifested_at': relink_manifest['at'],
-        'verified_at': storage_types.now_iso(),
-        'repair': repair,
-        'operation_result': {'relink_manifest_s3': relink_result['manifest_s3']},
-      }
-    ),
-  )
-
-  verification = await migration.verify()
-  rerun = await migration.migrate(trail_id=None, limit=None)
-
-  assert verification['verified_trail_count'] == 1
-  assert rerun['verified_existing'] == [trail_id]
-  assert row_manifest['target']['row_count'] == old_extent
-  assert dynamo.headers[trail_id]['extent'] == old_extent - 1
-
-  dynamo.universal_steps[(trail_id, 0)]['body'] = 'corrupted'
-  with pytest.raises(ValueError, match=f'target rows differ for trail {trail_id}'):
-    await migration.verify()
-
-
-@pytest.mark.asyncio
-async def test_claude_row_migration_resumes_after_target_verification(components, monkeypatch):
-  store, dynamo, s3 = components
-  trail_id = await _create_claude(store, universal=False)
-  artifact = _claude_assistant('message-1', 'answer', uuid='uuid-1') + '\n'
-  await store.replace_artifact(trail_id, artifact, {'harness_version': '2.1.0'})
-  await store.end_trail(trail_id=trail_id, reason='ok', detail=None)
-  interrupted = _claude_rows_migration(store, dynamo, s3)
-
-  async def fail_before_switch(*_args, **_kwargs):
-    raise RuntimeError('interrupted before marker')
-
-  monkeypatch.setattr(interrupted, '_switch_header', fail_before_switch)
-  with pytest.raises(RuntimeError, match='interrupted before marker'):
-    await interrupted.migrate(trail_id=trail_id, limit=None)
-
-  assert 'body_storage' not in dynamo.headers[trail_id]
-  assert (trail_id, 0) in dynamo.universal_steps
-  manifest_key = claude_rows._manifest_key(trail_id)
-  assert json.loads(s3.objects[manifest_key])['status'] == 'target_verified'
-
-  resumed = await _claude_rows_migration(store, dynamo, s3).migrate(trail_id=trail_id, limit=None)
-  assert resumed['migrated'] == [trail_id]
-  assert dynamo.headers[trail_id]['body_storage'] == storage_types.UNIVERSAL_BODY_STORAGE
-  assert json.loads(s3.objects[manifest_key])['status'] == 'migrated_verified'
-
-
-@pytest.mark.asyncio
-async def test_claude_row_migration_skips_live_trails(components):
-  store, dynamo, s3 = components
-  trail_id = await _create_claude(store, universal=False)
-
-  result = await _claude_rows_migration(store, dynamo, s3).migrate(trail_id=trail_id, limit=None)
-
-  assert result['skipped_live'] == [trail_id]
-  assert len(dynamo.universal_steps) == 0
-  assert claude_rows._manifest_key(trail_id) not in s3.objects
-
-
-def _bro_rows_migration(store, dynamo, s3) -> bro_rows.BroRowsMigration:
-  return bro_rows.BroRowsMigration(
-    store=store,
-    dynamo=dynamo,
-    s3=s3,
-    trails_table='headers',
-    legacy_steps_table='legacy',
-    steps_table='universal',
-    bucket='bucket',
-  )
-
-
-async def _legacy_bro_migration_fixture(store: storage.Storage, dynamo: FakeDynamo) -> dict:
-  trail_id = await _create_bro(store, universal=False)
-  [system_step_id] = [
-    step_id for row_trail_id, step_id in dynamo.legacy_steps if row_trail_id == trail_id
-  ]
-  step_ids = [storage_types.new_id() for _ in range(7)]
-  user_step_id, call_step_id, reasoning_step_id, tool_step_id = step_ids[:4]
-  tool_result_step_id, assistant_step_id, end_step_id = step_ids[4:]
-  tools = [{'type': 'function', 'name': 'lookup'}]
-  call_body = {
-    'request': {'model': 'gpt-5', 'input': [{'role': 'user', 'content': 'hello'}], 'tools': tools},
-    'response': {
-      'id': 'response-1',
-      'model': 'gpt-5',
-      'usage': {'input_tokens': 10, 'output_tokens': 4},
-      'output': [
-        {'type': 'reasoning', 'summary': [{'type': 'summary_text', 'text': 'think'}]},
-        {'type': 'function_call', 'name': 'lookup', 'call_id': 'call-1', 'arguments': '{}'},
-      ],
-    },
-  }
-  await store.put_step(
-    trail_id=trail_id,
-    kind='user_input',
-    body='hello',
-    extras={'turn_index': 0},
-    step_id=user_step_id,
-  )
-  await store.put_step(
-    trail_id=trail_id,
-    kind='llm_call',
-    body=call_body,
-    extras={'turn_index': 1, 'response_id': 'response-1'},
-    step_id=call_step_id,
-  )
-  await store.put_step(
-    trail_id=trail_id,
-    kind='reasoning',
-    body='think',
-    extras={'turn_index': 1},
-    step_id=reasoning_step_id,
-  )
-  await store.put_step(
-    trail_id=trail_id,
-    kind='tool_call',
-    body=None,
-    extras={'turn_index': 1, 'tool_name': 'lookup', 'call_id': 'call-1', 'arguments': {}},
-    step_id=tool_step_id,
-  )
-  await store.put_step(
-    trail_id=trail_id,
-    kind='tool_result',
-    body='found',
-    extras={'turn_index': 1, 'tool_name': 'lookup', 'call_id': 'call-1', 'is_error': False},
-    step_id=tool_result_step_id,
-  )
-  await store.put_step(
-    trail_id=trail_id,
-    kind='assistant',
-    body='interim',
-    extras={'turn_index': 1, 'terminal': False},
-    step_id=assistant_step_id,
-  )
-  await store.put_step(
-    trail_id=trail_id,
-    kind='end',
-    body={'reason': 'terminal', 'detail': 'completed'},
-    extras={},
-    step_id=end_step_id,
-  )
-  await store.end_trail(trail_id=trail_id, reason='lost', detail=None)
-  summoned_child = await _create_bro(
-    store,
-    universal=False,
-    summoned_by={'trail_id': trail_id, 'step_id': tool_step_id},
-  )
-  forked_child = await _create_bro(
-    store,
-    universal=False,
-    forked_from={'trail_id': trail_id, 'step_id': call_step_id},
-  )
-  return {
-    'trail_id': trail_id,
-    'system_step_id': system_step_id,
-    'call_step_id': call_step_id,
-    'tool_step_id': tool_step_id,
-    'summoned_child': summoned_child,
-    'forked_child': forked_child,
-    'tools': tools,
-  }
-
-
-@pytest.mark.asyncio
-async def test_bro_row_migration_manifests_drops_tools_and_pointers_before_marker(
-  components, monkeypatch
-):
-  store, dynamo, s3 = components
-  fixture = await _legacy_bro_migration_fixture(store, dynamo)
-  trail_id = fixture['trail_id']
-  legacy_rows = copy.deepcopy(
-    {key: row for key, row in dynamo.legacy_steps.items() if key[0] == trail_id}
-  )
-  events: list[str] = []
-  original_put_object = s3.put_object
-  original_batch_write = dynamo.batch_write_item
-
-  def tracked_put_object(**kwargs):
-    events.append(f's3:{kwargs["Key"]}')
-    return original_put_object(**kwargs)
-
-  def tracked_batch_write(**kwargs):
-    events.append('dynamo:rows')
-    return original_batch_write(**kwargs)
-
-  monkeypatch.setattr(s3, 'put_object', tracked_put_object)
-  monkeypatch.setattr(dynamo, 'batch_write_item', tracked_batch_write)
-
-  result = await _bro_rows_migration(store, dynamo, s3).migrate(trail_id=trail_id, limit=None)
-
-  manifest_key = bro_rows._manifest_key(trail_id)
-  tool_sha256 = tools_sha256(fixture['tools'])
-  tool_key = storage_types.tool_blob_key(tool_sha256)
-  assert result['migrated'] == [trail_id]
-  assert events.index(f's3:{manifest_key}') < events.index(f's3:{tool_key}')
-  assert events.index(f's3:{manifest_key}') < events.index('dynamo:rows')
-  assert {key: row for key, row in dynamo.legacy_steps.items() if key[0] == trail_id} == legacy_rows
-
-  header = dynamo.headers[trail_id]
-  assert header['body_storage'] == storage_types.UNIVERSAL_BODY_STORAGE
-  assert header['extent'] == 4
-  assert header['end'] == {
-    'at': header['end']['at'],
-    'reason': 'ok',
-    'detail': 'completed',
-  }
-  rows = [
-    row
-    for (row_trail_id, _), row in sorted(dynamo.universal_steps.items())
-    if row_trail_id == trail_id
-  ]
-  assert [row['kind'] for row in rows] == [
-    'system_prompt',
-    'user_input',
-    'llm_call',
-    'tool_result',
-  ]
-  assert rows[2]['tools_sha256'] == tool_sha256
-  assert 'tools' not in rows[2]['body']['request']
-  assert json.loads(s3.objects[tool_key]) == fixture['tools']
-  assert dynamo.headers[fixture['forked_child']]['forked_from']['step_id'] == 2
-  assert dynamo.headers[fixture['summoned_child']]['summoned_by'] == {
-    'trail_id': trail_id,
-    'step_id': 2,
-    'index': 2,
-  }
-
-  manifest = json.loads(s3.objects[manifest_key])
-  assert manifest['status'] == 'migrated_verified'
-  assert [entry['row']['kind'] for entry in manifest['transformation']['dropped_rows']] == [
-    'reasoning',
-    'tool_call',
-    'assistant',
-    'end',
-  ]
-  assert len(manifest['pointer_rewrites']) == 2
-  assert manifest['verification']['source_retained'] is True
-  assert (await store.check(trail_id))['ok'] is True
-  messages = await store.query_messages(trail_id, after=None, limit=20, types=None)
-  assert [message['type'] for message in messages['messages']] == [
-    'system_prompt',
-    'user_input',
-    'llm_call',
-    'reasoning',
-    'tool_call',
-    'tool_result',
-  ]
-  verification = await _bro_rows_migration(store, dynamo, s3).verify()
-  assert verification['verified_trail_count'] == 1
-  assert verification['legacy_sources_retained'] is True
-
-
-@pytest.mark.asyncio
-async def test_bro_row_migration_resumes_after_target_and_pointer_verification(
-  components, monkeypatch
-):
-  store, dynamo, s3 = components
-  fixture = await _legacy_bro_migration_fixture(store, dynamo)
-  trail_id = fixture['trail_id']
-  interrupted = _bro_rows_migration(store, dynamo, s3)
-
-  async def fail_before_switch(*_args, **_kwargs):
-    raise RuntimeError('interrupted before marker')
-
-  monkeypatch.setattr(interrupted, '_switch_header', fail_before_switch)
-  with pytest.raises(RuntimeError, match='interrupted before marker'):
-    await interrupted.migrate(trail_id=trail_id, limit=None)
-
-  assert 'body_storage' not in dynamo.headers[trail_id]
-  assert (trail_id, 0) in dynamo.universal_steps
-  manifest_key = bro_rows._manifest_key(trail_id)
-  assert json.loads(s3.objects[manifest_key])['status'] == 'target_verified'
-  assert dynamo.headers[fixture['summoned_child']]['summoned_by']['step_id'] == 2
-
-  resumed = await _bro_rows_migration(store, dynamo, s3).migrate(trail_id=trail_id, limit=None)
-  assert resumed['migrated'] == [trail_id]
-  assert dynamo.headers[trail_id]['body_storage'] == storage_types.UNIVERSAL_BODY_STORAGE
-  assert json.loads(s3.objects[manifest_key])['status'] == 'migrated_verified'
-
-
-@pytest.mark.asyncio
-async def test_bro_row_migration_skips_live_trails(components):
-  store, dynamo, s3 = components
-  trail_id = await _create_bro(store, universal=False)
-
-  result = await _bro_rows_migration(store, dynamo, s3).migrate(trail_id=trail_id, limit=None)
-
-  assert result['skipped_live'] == [trail_id]
-  assert len(dynamo.universal_steps) == 0
-  assert bro_rows._manifest_key(trail_id) not in s3.objects
-
-
-@pytest.mark.asyncio
-async def test_bro_row_migration_moves_stale_unended_trails(components):
-  store, dynamo, s3 = components
-  trail_id = await _create_bro(store, universal=False)
-  dynamo.headers[trail_id]['last_alive_at'] = '2020-01-01T00:00:00Z'
-
-  result = await _bro_rows_migration(store, dynamo, s3).migrate(trail_id=trail_id, limit=None)
-
-  assert result['migrated'] == [trail_id]
-  assert dynamo.headers[trail_id]['body_storage'] == storage_types.UNIVERSAL_BODY_STORAGE
-  assert dynamo.headers[trail_id]['end'] is None
-
-
-@pytest.mark.asyncio
-async def test_bro_row_migration_reconciles_manifested_unreported_end(components):
-  store, dynamo, s3 = components
-  trail_id = await _create_bro(store, universal=False, surface='call')
-  dynamo.headers[trail_id]['started_at'] = '2020-01-01T00:00:00Z'
-  dynamo.headers[trail_id]['last_alive_at'] = '2020-01-01T00:00:01Z'
-  migration = _bro_rows_migration(store, dynamo, s3)
-  await migration.migrate(trail_id=trail_id, limit=None)
-  row_manifest = json.loads(s3.objects[bro_rows._manifest_key(trail_id)])
-  assert row_manifest['transformation']['target_end'] is None
-
-  backfill = unreported.UnreportedBackfill(
-    dynamo=dynamo,
-    s3=s3,
-    trails_table='headers',
-    steps_table='universal',
-    bucket='bucket',
-  )
-  await backfill.migrate()
-
-  verification = await migration.verify()
-  rerun = await migration.migrate(trail_id=None, limit=None)
-
-  assert verification['verified_trail_count'] == 1
-  assert rerun['verified_existing'] == [trail_id]
-  assert dynamo.headers[trail_id]['end']['inference'] == UNREPORTED_END_INFERENCE
-
-  dynamo.headers[trail_id]['end']['at'] = '2020-01-02T00:00:00Z'
-  with pytest.raises(
-    ValueError, match=f'unreported backfill does not account for trail {trail_id}'
-  ):
-    await migration.verify()

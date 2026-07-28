@@ -261,7 +261,7 @@ class TestWrites:
   def test_create_trail_posts_the_payload_verbatim(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
     fake.queue((201, b'{"id": "T1", "started_at": "2026-01-01T00:00:00Z"}'))
-    payload = {'harness': 'claude', 'body': {'artifact': ''}}
+    payload = {'harness': 'claude', 'body': {'records': []}}
     result = _client().create_trail(payload)
     assert result['id'] == 'T1'
     method, path, body, headers = fake.requests[0]
@@ -310,16 +310,6 @@ class TestWrites:
       '/v1/admin/trails/check',
       '/v1/admin/trails/T1/relink',
     ]
-
-  def test_replace_artifact_puts_snapshot_and_native(self, monkeypatch):
-    fake = _install_fake_connection(monkeypatch)
-    fake.queue((200, b'{"native": {"line_count": 2}}'))
-    result = _client().replace_artifact('T1', '{}\n{}\n', {'harness_version': '2.1.0'})
-    assert result == {'native': {'line_count': 2}}
-    method, path, body, _ = fake.requests[0]
-    assert (method, path) == ('PUT', '/v1/trails/T1/artifact')
-    assert body is not None
-    assert json.loads(body) == {'artifact': '{}\n{}\n', 'native': {'harness_version': '2.1.0'}}
 
   def test_update_header_patches_changes(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
@@ -524,7 +514,11 @@ class TestFetchRecordedTrail:
     (not the descriptor) — fork replay depends on the complete `response.output`.
     """
     full_body = {'response': {'output': [{'type': 'message', 'content': 'big'}]}}
-    descriptor = {'s3': 'trails/T1/steps/S2.json', 'url': 'https://s3/presigned', 'size': 2_000_000}
+    descriptor = {
+      's3': 'trails/steps/T1/2-abc123.json',
+      'url': 'https://s3/presigned',
+      'size': 2_000_000,
+    }
     with (
       patch.object(TrailsClient, 'get_trail') as get_trail,
       patch.object(TrailsClient, 'get_steps') as get_steps,

@@ -72,7 +72,6 @@ from trails.client import HTTPStatusError, TrailsClient, default_client
 from trails.lineage import walk_header_chain
 from trails.model import UUID_LOOKUP_LIMIT
 from trails.record.spine import Recording
-from trails.server import storage_types
 from trails.server.backends import CLAUDE_ADAPTER
 
 # how many of the parent trail's trailing record uuids may end a verified fork
@@ -533,11 +532,7 @@ class Recorder:
 
   @staticmethod
   def _recorded_line_count(header: dict) -> int:
-    value = (
-      header.get('extent')
-      if header.get('body_storage') == storage_types.UNIVERSAL_BODY_STORAGE
-      else header.get('native', {}).get('line_count')
-    )
+    value = header.get('extent')
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
       raise ValueError(f'trail {header.get("id")!r} has no positive recorded extent')
     return value

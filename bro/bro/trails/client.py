@@ -225,14 +225,6 @@ class TrailsClient:
     """
     return self._send('POST', '/v1/trails', payload, retry_delays=())
 
-  def append_step(self, trail_id: str, payload: dict) -> dict:
-    return self._send(
-      'POST',
-      f'/v1/trails/{trail_id}/steps',
-      payload,
-      retry_delays=RECORD_RETRY_DELAYS_SECONDS,
-    )
-
   def append_records(
     self,
     trail_id: str,
@@ -266,13 +258,6 @@ class TrailsClient:
       'POST',
       f'/v1/admin/trails/{trail_id}/relink',
       {'forked_from': forked_from, 'delete_count': delete_count},
-    )
-
-  def replace_artifact(self, trail_id: str, artifact: str, native: dict) -> dict:
-    """replace the claude trail's artifact with a complete snapshot and advance
-    the mutable native fields; returns the server-derived native updates."""
-    return self._send(
-      'PUT', f'/v1/trails/{trail_id}/artifact', {'artifact': artifact, 'native': native}
     )
 
   def update_header(self, trail_id: str, changes: dict) -> dict:
