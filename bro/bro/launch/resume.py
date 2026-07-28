@@ -17,7 +17,6 @@ from bro.fork import fork, latest_fork_point
 from llm.llm import LLMSpec
 from trails.client import TrailsClient, fetch_recorded_trail
 from trails.lineage import walk_header_chain
-from trails.model import RecordedTrail
 
 # `--resume` without a trail id: continue the bro's newest recorded `call`
 # conversation.
@@ -73,12 +72,12 @@ def conversation_history(client: TrailsClient, trail_id: str) -> list[HistoryMes
 
 
 def _segment_messages(
-  client: TrailsClient, trail_id: str, up_to_step_id: Optional[str | int]
+  client: TrailsClient, trail_id: str, up_to_step_id: Optional[int]
 ) -> list[HistoryMessage]:
   messages: list[HistoryMessage] = []
   for event in client.iter_messages(trail_id, types={'user_input', 'assistant'}):
     source_step_id = event['source']['step_id']
-    if up_to_step_id is not None and _compare_step_ids(source_step_id, up_to_step_id) > 0:
+    if up_to_step_id is not None and source_step_id > up_to_step_id:
       break
     event_type = event.get('type')
     if event_type == 'user_input':
@@ -86,14 +85,6 @@ def _segment_messages(
     elif event_type == 'assistant' and event.get('terminal') is True:
       messages.append(_message(client, event, by_user=False))
   return messages
-
-
-def _compare_step_ids(left: str | int, right: str | int) -> int:
-  if isinstance(left, str) and isinstance(right, str):
-    return (left > right) - (left < right)
-  if isinstance(left, int) and isinstance(right, int):
-    return (left > right) - (left < right)
-  raise ValueError(f'cannot order mixed step ids {left!r} and {right!r}')
 
 
 def _message(client: TrailsClient, event: dict, *, by_user: bool) -> HistoryMessage:
@@ -104,26 +95,13 @@ def _message(client: TrailsClient, event: dict, *, by_user: bool) -> HistoryMess
   )
 
 
-def _fork_step_id(trail: RecordedTrail, at: Optional[str | int]) -> str | int:
-  if at is None:
-    return latest_fork_point(trail)
-  if isinstance(at, int):
-    return at
-  if any(isinstance(step.step_id, int) for step in trail.steps):
-    try:
-      return int(at)
-    except ValueError:
-      return at
-  return at
-
-
 def resume(
   client: TrailsClient,
   bro_name: str,
   trail_ref: str,
   *,
   llm_spec: LLMSpec,
-  at: Optional[str | int] = None,
+  at: Optional[int] = None,
 ) -> ResumedCall:
   """continue a recorded `call` conversation: `trail_ref` is a trail id, or
   `RESUME_LATEST` for the bro's newest one. `at` names an explicit fork step
@@ -144,7 +122,7 @@ def resume(
   if trail.header.bro != bro_name:
     raise ValueError(f'trail {trail_id} belongs to bro {trail.header.bro!r}, not {bro_name!r}')
   history = conversation_history(client, trail_id)
-  fork_step_id = _fork_step_id(trail, at)
+  fork_step_id = at if at is not None else latest_fork_point(trail)
   bro = fork(
     trail,
     fork_step_id,

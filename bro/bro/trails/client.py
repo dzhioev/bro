@@ -137,10 +137,10 @@ class TrailsClient:
     query = [('uuid', uuid) for uuid in sorted(uuids)]
     return self._get_pairs('/v1/steps', query)['steps']
 
-  def get_step(self, trail_id: str, step_id: str | int) -> dict:
+  def get_step(self, trail_id: str, step_id: int) -> dict:
     return self._get(f'/v1/trails/{trail_id}/steps/{step_id}', {})
 
-  def get_step_uuids(self, trail_id: str, *, through: Optional[str | int] = None) -> list[dict]:
+  def get_step_uuids(self, trail_id: str, *, through: Optional[int] = None) -> list[dict]:
     query = {} if through is None else {'through': str(through)}
     return self._get(f'/v1/trails/{trail_id}/steps/uuids', query)['steps']
 
@@ -148,7 +148,7 @@ class TrailsClient:
     self,
     trail_id: str,
     *,
-    after: Optional[str | int] = None,
+    after: Optional[int] = None,
     limit: Optional[int] = None,
   ) -> dict:
     query: dict[str, str] = {}
@@ -162,7 +162,7 @@ class TrailsClient:
     self,
     trail_id: str,
     *,
-    after: Optional[str | int] = None,
+    after: Optional[int] = None,
     page_size: int = DEFAULT_STEPS_PAGE_SIZE,
   ) -> Iterator[dict]:
     """walk steps across cursor pages. `after` starts the walk strictly past
@@ -181,7 +181,7 @@ class TrailsClient:
     trail_id: str,
     *,
     types: Optional[set[str]] = None,
-    after: Optional[str | int] = None,
+    after: Optional[int] = None,
     limit: Optional[int] = None,
   ) -> dict:
     query: list[tuple[str, str]] = []
@@ -198,7 +198,7 @@ class TrailsClient:
     trail_id: str,
     *,
     types: Optional[set[str]] = None,
-    after: Optional[str | int] = None,
+    after: Optional[int] = None,
     page_size: int = DEFAULT_STEPS_PAGE_SIZE,
   ) -> Iterator[dict]:
     while True:

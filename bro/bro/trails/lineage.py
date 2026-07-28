@@ -46,7 +46,7 @@ def walk_header_chain(
     if (
       not isinstance(pointer, dict)
       or not isinstance(pointer.get('trail_id'), str)
-      or not isinstance(step_id, (str, int))
+      or not isinstance(step_id, int)
       or isinstance(step_id, bool)
     ):
       raise ValueError(f'trail {header.get("id")!r} has malformed forked_from')

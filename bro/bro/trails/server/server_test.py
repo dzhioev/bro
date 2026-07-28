@@ -269,6 +269,12 @@ async def test_create_validates_lineage_and_provenance(client):
   assert response.status == 400
   response = await cli.post(
     '/v1/trails',
+    json=_create_payload(forked_from={'trail_id': 'parent', 'step_id': '4'}),
+    headers=_auth(),
+  )
+  assert response.status == 400
+  response = await cli.post(
+    '/v1/trails',
     json=_create_payload(summoned_by={'trail_id': 'parent'}),
     headers=_auth(),
   )

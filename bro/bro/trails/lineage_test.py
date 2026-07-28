@@ -36,8 +36,9 @@ def test_rejects_a_parent_lookup_returning_the_wrong_trail():
     walk_header_chain(child, lambda trail_id: {'id': 'other'})
 
 
-def test_rejects_a_malformed_pointer():
-  header = {'id': 'child', 'forked_from': {'step_id': 1}}
+@pytest.mark.parametrize('pointer', [{'step_id': 1}, {'trail_id': 'parent', 'step_id': '1'}])
+def test_rejects_a_malformed_pointer(pointer):
+  header = {'id': 'child', 'forked_from': pointer}
 
   with pytest.raises(ValueError, match='malformed forked_from'):
     walk_header_chain(header, lambda trail_id: {'id': trail_id})

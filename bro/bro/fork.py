@@ -40,7 +40,7 @@ from trails.model import ForkedFrom, RecordedTrail, Step
 
 def replay_messages(
   trail: RecordedTrail,
-  up_to_step_id: str | int,
+  up_to_step_id: int,
   *,
   fetch_forked_from: Optional[Callable[[str], RecordedTrail]] = None,
 ) -> list[dict]:
@@ -105,7 +105,7 @@ def replay_messages(
   return result
 
 
-def _replay_step_items(trail: RecordedTrail, up_to_step_id: str | int) -> list[dict]:
+def _replay_step_items(trail: RecordedTrail, up_to_step_id: int) -> list[dict]:
   items: list[dict] = []
   for step in trail.steps:
     if step.kind == 'user_input':
@@ -127,7 +127,7 @@ def _replay_step_items(trail: RecordedTrail, up_to_step_id: str | int) -> list[d
   raise ValueError(f'step_id {up_to_step_id!r} not found in trail {trail.header.id!r}')
 
 
-def latest_fork_point(trail: RecordedTrail) -> str | int:
+def latest_fork_point(trail: RecordedTrail) -> int:
   """the step id of the newest legal fork point — where a resume continues from.
 
   walks the steps tracking the turn's unanswered `function_call`s; a step
@@ -141,7 +141,7 @@ def latest_fork_point(trail: RecordedTrail) -> str | int:
   raises `ValueError` when the trail has no step to resume from (a forked_fromless
   trail with no user input recorded).
   """
-  last_good: Optional[str | int] = None
+  last_good: Optional[int] = None
   pending: set[str] = set()
   for step in trail.steps:
     if step.kind == 'system_prompt':
@@ -169,7 +169,7 @@ def latest_fork_point(trail: RecordedTrail) -> str | int:
 
 def fork(
   forked_from_trail: RecordedTrail,
-  up_to_step_id: str | int,
+  up_to_step_id: int,
   *,
   llm_spec: Optional[LLMSpec] = None,
   system_prompt: Optional[str] = None,
@@ -290,7 +290,7 @@ def _server_side_eligible(
   return fork_step.extras.get('response_id') is not None
 
 
-def _find_step(trail: RecordedTrail, step_id: str | int) -> Step:
+def _find_step(trail: RecordedTrail, step_id: int) -> Step:
   for step in trail.steps:
     if step.step_id == step_id:
       return step

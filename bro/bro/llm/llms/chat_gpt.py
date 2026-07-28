@@ -358,7 +358,7 @@ class ChatGPT(llm.llm.LLM):
     response: Response,
     *,
     is_terminal: bool,
-    llm_call_step_id: Optional[str | int],
+    llm_call_step_id: Optional[int],
   ) -> None:
     self._tool_call_sources.clear()
     for index, item in enumerate(response.output, start=1):
@@ -467,7 +467,7 @@ class ChatGPT(llm.llm.LLM):
     *,
     turn_index: int,
     call_index: int,
-  ) -> Optional[str | int]:
+  ) -> Optional[int]:
     body = {'request': request, 'response': response.model_dump(mode='json')}
     return self.tracker.step(
       'llm_call',

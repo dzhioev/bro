@@ -31,15 +31,17 @@ bro · claude recorder                       readers
 
 Writer-reported outcomes use `end.reason`; the stale-run sweep instead records `end.inference = unreported`, so absence of a writer verdict is not presented as a failure verdict.
 
-## Retirement record
+## Manifested operations
 
-A destructive operation over this store manifests what it will do before doing it. `trails-retire-legacy-stores` (`migrations/retirement.py`) is the surviving one: `plan` enumerates every table, object and header field the retirement destroys and runs its preconditions — every trail universal, each authorising report clean, neither legacy table written since the soak window opened — and `apply` manifests that enumeration before deleting, then verifies.
+An operation that drives the store from outside the server manifests what it will do before doing it, and its `plan` produces that enumeration without touching anything. Both live in `migrations/` over the shared direct-AWS I/O in `migrations/direct.py`, and both need AWS credentials the ordinary client tier does not carry.
 
-Its manifest is `trails/retirement/manifest.json` in the trails bucket, deliberately outside the `trails/migrations/` prefix the retirement deletes, and it is the single account of what the retirement removed: the tables and their item counts, every object key, the stripped header fields with their prior values, and the authorising reports it read. Because `plan` reads prefixes the run then deletes, a resumed `apply` works from the stored manifest rather than re-planning.
+`trails-retire-legacy-stores` (`migrations/retirement.py`): `plan` enumerates every table, object and header field the retirement destroys and runs its preconditions — every trail universal, each authorising report clean, neither legacy table written since the soak window opened — and `apply` manifests that enumeration before deleting, then verifies. Its manifest is `trails/retirement/manifest.json` in the trails bucket, deliberately outside the `trails/migrations/` prefix the retirement deletes, and it is the single account of what the retirement removed: the tables and their item counts, every object key, the stripped header fields with their prior values, and the authorising reports it read. Because `plan` reads prefixes the run then deletes, a resumed `apply` works from the stored manifest rather than re-planning.
+
+`trails-normalise-lineage-ordinals` (`migrations/lineage_ordinals.py`): rewrites lineage pointers whose `step_id` is the decimal string of its ordinal. Each `apply` writes the round it is about to perform under `trails/migrations/lineage-ordinals/rounds/`, rewrites conditionally on the string that round recorded, and ends in a `verify` that re-reads every header; the rounds are append-only because nothing here destroys evidence the store cannot show again, so a partial run is finished by planning a fresh round rather than resuming a stored one.
 
 ## Surfaces
 
-- `trails/model.py` owns the shared trail, step, lineage, and spill-descriptor vocabulary consumed by readers and recorders. A lineage step id is either a string or an ordinal — the Claude recorder mints the string form — and pointers may carry an event index; `trails/lineage.py` is the cycle-detecting root-first chain walker.
+- `trails/model.py` owns the shared trail, step, lineage, and spill-descriptor vocabulary consumed by readers and recorders. A step id is an ordinal — position N in the trail's native record stream — in a row and in a `forked_from` / `summoned_by` pointer alike, so pointers order against rows directly; a pointer may also carry an event index. `trails/lineage.py` is the cycle-detecting root-first chain walker.
 - `trails/client.py` owns the persistent authenticated HTTPS transport. `TrailsClient` exposes paged headers, native steps, generalized messages, launch context, universal append, and admin operations.
 - `trails/record/spine.py` owns recording creation, ordinal extent validation, batched appends, liveness, and ending; `record/bro.py` adapts `llm.tracker.Tracker`, and `record/claude.py` (`trails.record.claude`) records Claude transcripts.
 - `POST /v1/trails` opens the body from `body.records`.

@@ -42,10 +42,6 @@ from trails.model import UNREPORTED_END_INFERENCE, spill_descriptor
 __cli_name__ = 'rewind'
 
 _BODY_TRUNCATE_CHARS = 240
-# step ids are truncated for display; trail ids are always rendered in full, so
-# that any id on screen can be pasted into another rewind command — the server
-# does not accept prefixes
-_STEP_ID_DISPLAY_CHARS = 10
 
 
 def _format_timestamp(iso: Optional[str]) -> str:
@@ -314,7 +310,7 @@ def _format_step_summary(step: dict, colors: Colors) -> str:
 
 def _render_native_trail(
   client: TrailsClient, trail: dict, colors: Colors
-) -> tuple[str, Optional[str | int]]:
+) -> tuple[str, Optional[int]]:
   rows = list(client.iter_steps(trail['id']))
   output = [_format_header(trail, colors)]
   output.extend(_format_step_summary(row, colors) for row in rows)
@@ -382,7 +378,7 @@ def _index_tool_results(messages: list[dict]) -> dict[str, str]:
   return results
 
 
-def _source_step_id(message: dict) -> str | int:
+def _source_step_id(message: dict) -> int:
   return message['source']['step_id']
 
 
@@ -509,13 +505,6 @@ class _ConversationTimeline:
     return [heading, *blocks]
 
 
-def _step_is_after(candidate: str | int, bound: str | int) -> bool:
-  try:
-    return int(candidate) > int(bound)
-  except (TypeError, ValueError):
-    return str(candidate) > str(bound)
-
-
 def _segment_messages(client: TrailsClient, trail_id: str, bound: Optional[dict]) -> list[dict]:
   messages: list[dict] = []
   if bound is None:
@@ -526,14 +515,14 @@ def _segment_messages(client: TrailsClient, trail_id: str, bound: Optional[dict]
   for message in client.iter_messages(trail_id):
     source = message['source']
     step_id = source['step_id']
-    if str(step_id) == str(bound_step_id):
+    if step_id == bound_step_id:
       source_index = source.get('index', 0)
       if bound_index is not None and source_index > bound_index:
         return messages
       messages.append(message)
       reached_step = True
       continue
-    if reached_step or _step_is_after(step_id, bound_step_id):
+    if reached_step or step_id > bound_step_id:
       break
     messages.append(message)
   return messages
@@ -567,7 +556,7 @@ def _format_context(records: Any, colors: Colors) -> Optional[str]:
 
 def _render_conversation(
   client: TrailsClient, trail: dict, colors: Colors
-) -> tuple[str, _ConversationTimeline, Optional[str | int]]:
+) -> tuple[str, _ConversationTimeline, Optional[int]]:
   segments = walk_header_chain(trail, client.get_trail)
   message_lists = [_segment_messages(client, header['id'], bound) for header, bound in segments]
   all_messages = [message for messages in message_lists for message in messages]
@@ -596,11 +585,11 @@ def _follow_batches(
   client: TrailsClient,
   trail_id: str,
   *,
-  iterator: Callable[[str, Optional[str | int]], Iterator[dict]],
-  cursor: Callable[[dict], str | int],
+  iterator: Callable[[str, Optional[int]], Iterator[dict]],
+  cursor: Callable[[dict], int],
   terminal: Callable[[dict], bool],
   interval: float,
-  after: Optional[str | int] = None,
+  after: Optional[int] = None,
   sleep: Callable[[float], None] = time.sleep,
 ) -> Iterator[list[dict]]:
   while True:
@@ -631,10 +620,10 @@ def _show_or_follow(
   client: TrailsClient,
   args: dict,
   initial: str,
-  after: Optional[str | int],
+  after: Optional[int],
   *,
-  iterator: Callable[[str, Optional[str | int]], Iterator[dict]],
-  cursor: Callable[[dict], str | int],
+  iterator: Callable[[str, Optional[int]], Iterator[dict]],
+  cursor: Callable[[dict], int],
   terminal: Callable[[dict], bool],
   render_batch: Callable[[list[dict]], str],
 ) -> int:
@@ -808,8 +797,7 @@ def _render_tree(
   forked_from_step = ''
   forked_from = trail.get('forked_from')
   if forked_from is not None:
-    step_id = str(forked_from['step_id'])[:_STEP_ID_DISPLAY_CHARS]
-    forked_from_step = f' {colors.dim}@step {step_id}{colors.reset}'
+    forked_from_step = f' {colors.dim}@step {forked_from["step_id"]}{colors.reset}'
   lines.append(
     f'{prefix}{connector}{colors.yellow}{trail_id}{colors.reset}  '
     f'{colors.cyan}{owner}{colors.reset}/{colors.dim}{model}{colors.reset}'

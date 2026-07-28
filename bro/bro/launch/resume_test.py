@@ -82,7 +82,7 @@ def _header(
   }
 
 
-def _row(trail_id: str, step_id: str, kind: str, body: Any, **extras: Any) -> dict:
+def _row(trail_id: str, step_id: int, kind: str, body: Any, **extras: Any) -> dict:
   return {
     'trail_id': trail_id,
     'step_id': step_id,
@@ -107,11 +107,11 @@ def _output_message(text: str) -> dict:
 
 def _forked_from_steps() -> list[dict]:
   return [
-    _row('trail-1', '000', 'system_prompt', 'prompt'),
-    _row('trail-1', '001', 'user_input', 'hello'),
+    _row('trail-1', 0, 'system_prompt', 'prompt'),
+    _row('trail-1', 1, 'user_input', 'hello'),
     _row(
       'trail-1',
-      '002',
+      2,
       'llm_call',
       _llm_call_body(_output_message('hi back')),
       response_id='r1',
@@ -139,10 +139,10 @@ class TestFindLatestCallTrail:
 class TestConversationHistory:
   def test_collects_user_inputs_and_terminal_replies(self):
     steps = _forked_from_steps() + [
-      _row('trail-1', 'u1', 'user_input', 'and then?'),
+      _row('trail-1', 3, 'user_input', 'and then?'),
       _row(
         'trail-1',
-        'c2',
+        4,
         'llm_call',
         _llm_call_body(
           _output_message('interim'),
@@ -150,10 +150,10 @@ class TestConversationHistory:
         ),
         response_id='r2',
       ),
-      _row('trail-1', 't2', 'tool_result', 'result', call_id='call-1'),
+      _row('trail-1', 5, 'tool_result', 'result', call_id='call-1'),
       _row(
         'trail-1',
-        'c3',
+        6,
         'llm_call',
         _llm_call_body(_output_message('final')),
         response_id='r3',
@@ -178,8 +178,8 @@ class TestConversationHistory:
   def test_resolves_spilled_bodies(self):
     descriptor = {'s3': 'key', 'url': 'https://spill/x', 'size': 12}
     steps = [
-      _row('trail-1', 's0', 'system_prompt', 'prompt'),
-      _row('trail-1', 'u0', 'user_input', descriptor),
+      _row('trail-1', 0, 'system_prompt', 'prompt'),
+      _row('trail-1', 1, 'user_input', descriptor),
     ]
     client = FakeTrailsClient(
       headers=[_header('trail-1')],
@@ -198,35 +198,35 @@ class TestConversationHistory:
   def test_walks_the_fork_chain_and_cuts_ancestors_at_their_fork_point(self):
     # the forked_from continued past the fork point ('diverged') — that content is
     # not part of the resumed conversation; the fork turn's own trailing
-    # terminal reply ('hi back', recorded after the c1 fork step) is.
+    # terminal reply ('hi back', recorded at the fork step itself) is.
     forked_from_steps = _forked_from_steps() + [
-      _row('trail-1', '003', 'user_input', 'diverged'),
+      _row('trail-1', 3, 'user_input', 'diverged'),
       _row(
         'trail-1',
-        '004',
+        4,
         'llm_call',
         _llm_call_body(_output_message('diverged reply')),
         response_id='r2',
       ),
-      _row('trail-1', 'a2', 'assistant', 'diverged reply', terminal=True),
+      _row('trail-1', 5, 'assistant', 'diverged reply', terminal=True),
     ]
     child_steps = [
-      _row('trail-2', 's0', 'system_prompt', 'prompt'),
-      _row('trail-2', 'u0', 'user_input', 'continue'),
+      _row('trail-2', 0, 'system_prompt', 'prompt'),
+      _row('trail-2', 1, 'user_input', 'continue'),
       _row(
         'trail-2',
-        'c1',
+        2,
         'llm_call',
         _llm_call_body(_output_message('continued')),
         response_id='r3',
       ),
-      _row('trail-2', 'a1', 'assistant', 'continued', terminal=True),
+      _row('trail-2', 3, 'assistant', 'continued', terminal=True),
     ]
     client = FakeTrailsClient(
       headers=[
         _header(
           'trail-2',
-          forked_from={'trail_id': 'trail-1', 'step_id': '002'},
+          forked_from={'trail_id': 'trail-1', 'step_id': 2},
         ),
         _header('trail-1'),
       ],
@@ -259,7 +259,7 @@ class TestResume:
     ]
     (trail, step_id), kwargs = fork_stub.call_args
     assert trail.header.id == 'trail-1'
-    assert step_id == '002'
+    assert step_id == 2
     assert kwargs['llm_spec'] is spec
     assert kwargs['surface'] == 'call'
     # the fetch_forked_from seam resolves ancestors through the same client
@@ -269,20 +269,9 @@ class TestResume:
   def test_an_explicit_at_overrides_the_latest_fork_point(self):
     spec = LLMSpec(model='gpt-5', service_tier='priority')
     with patch('bro.launch.resume.fork') as fork_stub:
-      resume(cast(Any, self._client()), 'record', 'trail-1', llm_spec=spec, at='b1')
+      resume(cast(Any, self._client()), 'record', 'trail-1', llm_spec=spec, at=1)
     (_, step_id), _ = fork_stub.call_args
-    assert step_id == 'b1'
-
-  def test_an_explicit_at_uses_an_ordinal_on_a_migrated_trail(self):
-    client = self._client()
-    client._steps['trail-1'] = [
-      {**row, 'step_id': index} for index, row in enumerate(client._steps['trail-1'])
-    ]
-    spec = LLMSpec(model='gpt-5', service_tier='priority')
-    with patch('bro.launch.resume.fork') as fork_stub:
-      resume(cast(Any, client), 'record', 'trail-1', llm_spec=spec, at='2')
-    (_, step_id), _ = fork_stub.call_args
-    assert step_id == 2
+    assert step_id == 1
 
   def test_rejects_a_trail_of_a_different_bro(self):
     client = FakeTrailsClient(

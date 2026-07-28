@@ -18,7 +18,6 @@ class FakeTrails:
     self.created: list[dict] = []
     self.headers: dict[str, dict] = {}
     self.artifacts: dict[str, str] = {}
-    self.legacy_trails: set[str] = set()
     self.appends: list[dict] = []
     self.ends: dict[str, dict] = {}
     self.keepalives: list[str] = []
@@ -66,49 +65,39 @@ class FakeTrails:
     return [
       {'trail_id': trail_id, 'step_id': step_id, 'uuid': record['uuid']}
       for trail_id, artifact in self.artifacts.items()
-      if trail_id not in self.legacy_trails
       for step_id, raw in enumerate(artifact.splitlines())
       if (record := _parse(raw)) is not None and record.get('uuid') in uuids
     ]
 
-  def get_step(self, trail_id: str, step_id: str | int) -> dict:
-    ordinal = int(step_id)
-    self.point_reads.append((trail_id, ordinal))
+  def get_step(self, trail_id: str, step_id: int) -> dict:
+    self.point_reads.append((trail_id, step_id))
     steps = self.get_steps(
       trail_id,
-      after=ordinal - 1 if ordinal > 0 else None,
+      after=step_id - 1 if step_id > 0 else None,
       limit=1,
     )['steps']
     return steps[0] if len(steps) > 0 else {}
 
-  def get_step_uuids(self, trail_id: str, *, through: Optional[str | int] = None) -> list[dict]:
-    limit = int(through) if through is not None else None
-    self.uuid_projections.append((trail_id, limit))
+  def get_step_uuids(self, trail_id: str, *, through: Optional[int] = None) -> list[dict]:
+    self.uuid_projections.append((trail_id, through))
     rows: list[dict] = []
     for step_id, raw in enumerate(self.artifacts[trail_id].splitlines()):
-      if limit is not None and step_id > limit:
+      if through is not None and step_id > through:
         break
       record = _parse(raw)
       uuid = record.get('uuid') if record is not None else None
       if isinstance(uuid, str):
-        rows.append(
-          {
-            'step_id': str(step_id) if trail_id in self.legacy_trails else step_id,
-            'uuid': uuid,
-          }
-        )
+        rows.append({'step_id': step_id, 'uuid': uuid})
     return rows
 
-  def get_steps(
-    self, trail_id: str, *, after: Optional[str | int] = None, limit: int = 100
-  ) -> dict:
+  def get_steps(self, trail_id: str, *, after: Optional[int] = None, limit: int = 100) -> dict:
     lines = self.artifacts[trail_id].splitlines()
-    start = int(after) + 1 if after is not None else 0
+    start = after + 1 if after is not None else 0
     selected = lines[start : start + limit]
     steps = [
       {
         'trail_id': trail_id,
-        'step_id': str(index) if trail_id in self.legacy_trails else index,
+        'step_id': index,
         'raw': raw,
         'record': _parse(raw),
       }
@@ -119,12 +108,7 @@ class FakeTrails:
 
   def get_trail(self, trail_id: str) -> dict:
     header = dict(self.headers[trail_id])
-    line_count = len(self.artifacts[trail_id].splitlines())
-    if trail_id in self.legacy_trails:
-      header.pop('body_storage')
-      header['native'] = {**header['native'], 'line_count': line_count}
-    else:
-      header['extent'] = line_count
+    header['extent'] = len(self.artifacts[trail_id].splitlines())
     return header
 
   def iter_trails(self, *, harness: str, since: Optional[str] = None):
@@ -362,20 +346,7 @@ class TestLifetimeForks:
     second = _recorder(projects, fake)
     assert second.tick() is True
     fork = fake.created[-1]
-    assert fork['forked_from'] == {'trail_id': 'T1', 'step_id': '1'}
-    assert fake.artifacts['T2'] == '\n'.join(appended) + '\n'
-
-  def test_same_segment_resume_reads_a_legacy_parent(self, environment):
-    projects = environment
-    fake = FakeTrails()
-    lines = [_user('hello', 'u1'), _assistant('hi', 'a1')]
-    self._record_first_lifetime(projects, fake, lines)
-    fake.legacy_trails.add('T1')
-    appended = [_user('again', 'u2')]
-    _write_segment(projects, 'seg-1', lines + appended)
-    second = _recorder(projects, fake)
-    assert second.tick() is True
-    assert fake.created[-1]['forked_from'] == {'trail_id': 'T1', 'step_id': '1'}
+    assert fork['forked_from'] == {'trail_id': 'T1', 'step_id': 1}
     assert fake.artifacts['T2'] == '\n'.join(appended) + '\n'
 
   def test_failed_anchors_start_a_fresh_root(self, environment):
@@ -404,7 +375,7 @@ class TestLifetimeForks:
     second = _recorder(projects, fake)
     assert second.tick() is True
     fork = fake.created[-1]
-    assert fork['forked_from'] == {'trail_id': 'T1', 'step_id': '1'}
+    assert fork['forked_from'] == {'trail_id': 'T1', 'step_id': 1}
     assert fork['native']['segment'] == 'seg-2'
     # only the new segment's own contribution: pre-copy ephemera + the tail
     assert fake.artifacts['T2'] == ephemera + '\n' + '\n'.join(tail) + '\n'
@@ -443,7 +414,7 @@ class TestLifetimeForks:
     _write_segment(projects, 'seg-2', [ephemera, *lines, *tail])
     assert second.tick() is True
     fork = fake.created[-1]
-    assert fork['forked_from'] == {'trail_id': 'T1', 'step_id': '1'}
+    assert fork['forked_from'] == {'trail_id': 'T1', 'step_id': 1}
     assert fake.artifacts['T2'] == ephemera + '\n' + '\n'.join(tail) + '\n'
 
   def test_copied_history_verifies_through_the_server_when_the_file_is_gone(self, environment):
@@ -458,7 +429,7 @@ class TestLifetimeForks:
     second = _recorder(projects, fake)
     assert second.tick() is True
     fork = fake.created[-1]
-    assert fork['forked_from'] == {'trail_id': 'T1', 'step_id': '1'}
+    assert fork['forked_from'] == {'trail_id': 'T1', 'step_id': 1}
 
   def test_a_new_segment_without_a_recorded_chain_starts_a_fresh_root(self, environment):
     projects = environment
@@ -486,7 +457,7 @@ class TestLifetimeForks:
     third = _recorder(projects, fake)
     assert third.tick() is True
     fork = fake.created[-1]
-    assert fork['forked_from'] == {'trail_id': 'T2', 'step_id': '0'}
+    assert fork['forked_from'] == {'trail_id': 'T2', 'step_id': 0}
     assert fake.artifacts['T3'] == ephemera + '\n' + '\n'.join(tail) + '\n'
     assert ('T1', 1) in fake.uuid_projections
 
@@ -509,7 +480,7 @@ class TestRecordedChainRecovery:
     _write_segment(projects, 'seg-1', lines + appended)
     second = _recorder(projects, fake)
     assert second.tick() is True
-    assert fake.created[-1]['forked_from'] == {'trail_id': 'T1', 'step_id': '1'}
+    assert fake.created[-1]['forked_from'] == {'trail_id': 'T1', 'step_id': 1}
     assert fake.artifacts['T2'] == '\n'.join(appended) + '\n'
     assert fake.history_scans == 0
     assert len(fake.uuid_lookups) == lookups_before_resume + 1
@@ -525,7 +496,7 @@ class TestRecordedChainRecovery:
     _write_segment(projects, 'seg-2', [*lines, *tail])
     second = _recorder(projects, fake)
     assert second.tick() is True
-    assert fake.created[-1]['forked_from'] == {'trail_id': 'T1', 'step_id': '1'}
+    assert fake.created[-1]['forked_from'] == {'trail_id': 'T1', 'step_id': 1}
     assert fake.artifacts['T2'] == '\n'.join(tail) + '\n'
 
   def test_declared_segment_selects_its_trail_before_inference(self, environment, monkeypatch):
@@ -545,7 +516,7 @@ class TestRecordedChainRecovery:
     _write_segment(projects, 'seg-2', [*lines, *tail])
     second = _recorder(projects, fake)
     assert second.tick() is True
-    assert fake.created[-1]['forked_from'] == {'trail_id': 'T1', 'step_id': '1'}
+    assert fake.created[-1]['forked_from'] == {'trail_id': 'T1', 'step_id': 1}
 
   def test_malformed_uuid_lookup_fails_fast(self, environment):
     projects = environment
@@ -570,7 +541,7 @@ class TestRecordedChainRecovery:
 
     second = _recorder(projects, fake)
     assert second.tick() is True
-    assert fake.created[-1]['forked_from'] == {'trail_id': 'T1', 'step_id': '1'}
+    assert fake.created[-1]['forked_from'] == {'trail_id': 'T1', 'step_id': 1}
 
   def test_state_that_outgrew_the_stored_artifact_recovers_the_real_extent(self, environment):
     projects = environment
@@ -584,7 +555,7 @@ class TestRecordedChainRecovery:
     _write_segment(projects, 'seg-1', lines + appended)
     second = _recorder(projects, fake)
     assert second.tick() is True
-    assert fake.created[-1]['forked_from'] == {'trail_id': 'T1', 'step_id': '0'}
+    assert fake.created[-1]['forked_from'] == {'trail_id': 'T1', 'step_id': 0}
     assert fake.artifacts['T2'] == '\n'.join(appended) + '\n'
 
   def test_state_beyond_the_transcript_length_recovers_the_real_extent(self, environment):
@@ -599,7 +570,7 @@ class TestRecordedChainRecovery:
     _write_segment(projects, 'seg-1', lines + appended)
     second = _recorder(projects, fake)
     assert second.tick() is True
-    assert fake.created[-1]['forked_from'] == {'trail_id': 'T1', 'step_id': '1'}
+    assert fake.created[-1]['forked_from'] == {'trail_id': 'T1', 'step_id': 1}
     assert fake.artifacts['T2'] == '\n'.join(appended) + '\n'
 
 
@@ -619,7 +590,7 @@ class TestTransitions:
     assert recorder.tick() is True
     assert fake.ends['T1'] == {'reason': 'ok', 'detail': None}
     fork = fake.created[-1]
-    assert fork['forked_from'] == {'trail_id': 'T1', 'step_id': '1'}
+    assert fork['forked_from'] == {'trail_id': 'T1', 'step_id': 1}
     assert trail_pointer.read(trail_pointer.path()) == 'T2'
 
   def test_transition_defers_adoption_until_the_copy_lands(self, environment):
@@ -639,7 +610,7 @@ class TestTransitions:
     tail = [_user('resumed', 'u2')]
     _write_segment(projects, 'seg-2', [ephemera, *lines, *tail])
     assert recorder.tick() is True
-    assert fake.created[-1]['forked_from'] == {'trail_id': 'T1', 'step_id': '1'}
+    assert fake.created[-1]['forked_from'] == {'trail_id': 'T1', 'step_id': 1}
     assert fake.artifacts['T2'] == ephemera + '\n' + '\n'.join(tail) + '\n'
 
   def test_transition_holds_while_the_active_segment_grows(self, environment):

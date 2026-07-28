@@ -70,25 +70,25 @@ class FakeClient:
       raise HTTPStatusError(404, f'trail not found: {trail_id}')
     return self.trails[trail_id]
 
-  def iter_steps(self, trail_id: str, *, after: Optional[str | int] = None):
+  def iter_steps(self, trail_id: str, *, after: Optional[int] = None):
     if trail_id in self.steps:
       rows = self.steps[trail_id]
       started = after is None
       for row in rows:
         if started:
           yield row
-        elif str(row['step_id']) == str(after):
+        elif row['step_id'] == after:
           started = True
       return
-    start = int(after) + 1 if after is not None else 0
+    start = after + 1 if after is not None else 0
     for index, raw in enumerate(self.records[trail_id][start:], start=start):
       try:
         record = json.loads(raw)
       except json.JSONDecodeError:
         record = None
-      yield {'step_id': str(index), 'ts': None, 'raw': raw, 'record': record}
+      yield {'step_id': index, 'ts': None, 'raw': raw, 'record': record}
 
-  def iter_messages(self, trail_id: str, *, after: Optional[str | int] = None):
+  def iter_messages(self, trail_id: str, *, after: Optional[int] = None):
     harness = self.trails[trail_id]['harness']
     for row in self.iter_steps(trail_id, after=after):
       yield from BACKENDS[harness].project(row)
@@ -181,7 +181,7 @@ class TestFormatTrailRow:
         'started_at': '2026-06-07T22:14:03.000000Z',
         'end': {'at': '2026-06-07T23:00:00Z', 'reason': 'ok'},
         'subject': 'fix the recorder',
-        'forked_from': {'trail_id': 'T1', 'step_id': '4'},
+        'forked_from': {'trail_id': 'T1', 'step_id': 4},
       },
       NO_COLOR,
     )
@@ -211,7 +211,7 @@ class TestFormatStepSummary:
   def test_inline_body_and_extras(self):
     out = _format_step_summary(
       {
-        'step_id': 'S1',
+        'step_id': 1,
         'kind': 'tool_call',
         'body': None,
         'ts': '2026-06-07T00:00:00.000000Z',
@@ -223,7 +223,7 @@ class TestFormatStepSummary:
       },
       NO_COLOR,
     )
-    assert out.startswith('S1  ')
+    assert out.startswith('1  ')
     assert 'tool_name=add_task' in out
     assert 'args=' in out
     assert 'where' not in out
@@ -231,7 +231,7 @@ class TestFormatStepSummary:
   def test_historical_terminal_end_reason_renders_as_ok(self):
     out = _format_step_summary(
       {
-        'step_id': 'S9',
+        'step_id': 9,
         'kind': 'end',
         'body': {'reason': 'terminal'},
         'ts': '2026-06-07T00:00:00.000000Z',
@@ -287,7 +287,7 @@ class TestHeader:
         'end': {'at': '2026-06-07T22:15:00.000000Z', 'reason': 'ok'},
         'interactive': False,
         'surface': 'ask',
-        'forked_from': {'trail_id': 'T-p', 'step_id': 'S5'},
+        'forked_from': {'trail_id': 'T-p', 'step_id': 5},
         'turn_count': 3,
         'usage': {'gpt-5': {'input': 100, 'cache_write': 0, 'cache_read': 0, 'output': 50}},
         'models': ['gpt-5'],
@@ -295,7 +295,7 @@ class TestHeader:
       NO_COLOR,
     )
     assert 'harness     bro' in out
-    assert 'T-p @ step S5' in out
+    assert 'T-p @ step 5' in out
     assert '"input": 100' in out
     assert '"reasoning": 3' in out
     assert '"end": 0' not in out
@@ -346,7 +346,7 @@ class TestConversationRendering:
     client.add_claude(
       'T2',
       [_user('resumed', 'u3')],
-      forked_from={'trail_id': 'T1', 'step_id': '1'},
+      forked_from={'trail_id': 'T1', 'step_id': 1},
     )
     out, _, _ = _render_conversation(_cast(client), client.get_trail('T2'), NO_COLOR)
     assert 'hello' in out
@@ -391,9 +391,9 @@ class TestShow:
     client.add_bro(
       'T1',
       [
-        {'step_id': 'S1', 'kind': 'user_input', 'body': 'hi', 'ts': '2026-01-01T00:00:00Z'},
+        {'step_id': 0, 'kind': 'user_input', 'body': 'hi', 'ts': '2026-01-01T00:00:00Z'},
         {
-          'step_id': 'S2',
+          'step_id': 1,
           'kind': 'llm_call',
           'ts': '2026-01-01T00:00:01Z',
           'body': {
@@ -431,7 +431,7 @@ class TestSteps:
       'T1',
       [
         {
-          'step_id': 'S1',
+          'step_id': 0,
           'kind': 'llm_call',
           'body': {'response': {'id': 'r1'}},
           'response_id': 'r1',
@@ -442,7 +442,7 @@ class TestSteps:
     args = {'trail_id': 'T1', 'color': 'never', 'no_pager': True}
     assert _command_steps(_cast(client), args, NO_COLOR) == 0
     out = capsys.readouterr().out
-    assert 'S1' in out
+    assert '0  ' in out
     assert 'llm_call' in out
     assert '"response": {"id": "r1"}' in out
     assert 'response_id=r1' in out
@@ -465,7 +465,7 @@ class TestGrep:
     client.add_claude('T-claude', [_user('the needle is here')])
     client.add_bro(
       'T-bro',
-      [{'step_id': 'S1', 'kind': 'user_input', 'body': 'needle too', 'ts': None}],
+      [{'step_id': 0, 'kind': 'user_input', 'body': 'needle too', 'ts': None}],
     )
     assert _command_grep(_cast(client), self._args('needle'), NO_COLOR) == 0
     out = capsys.readouterr().out
@@ -484,7 +484,7 @@ class TestGrep:
     client.add_claude(
       'T2',
       [_user('child')],
-      forked_from={'trail_id': 'T1', 'step_id': '1'},
+      forked_from={'trail_id': 'T1', 'step_id': 1},
     )
     assert _command_grep(_cast(client), self._args('parent needle', trails=['T2']), NO_COLOR) == 0
     assert 'T2:' in capsys.readouterr().out
@@ -508,9 +508,9 @@ class TestFollow:
     client.add_bro(
       'T1',
       [
-        {'step_id': 'S1', 'kind': 'assistant'},
-        {'step_id': 'S2', 'kind': 'end'},
-        {'step_id': 'S3', 'kind': 'assistant'},
+        {'step_id': 0, 'kind': 'assistant'},
+        {'step_id': 1, 'kind': 'end'},
+        {'step_id': 2, 'kind': 'assistant'},
       ],
     )
     batches = list(
@@ -524,7 +524,7 @@ class TestFollow:
         sleep=lambda _: None,
       )
     )
-    assert [row['step_id'] for batch in batches for row in batch] == ['S1', 'S2']
+    assert [row['step_id'] for batch in batches for row in batch] == [0, 1]
 
   def test_header_end_terminates_a_message_stream_without_end_steps(self):
     client = FakeClient()
@@ -547,7 +547,7 @@ class TestRenderTree:
   def test_renders_children_and_highlight(self):
     client = FakeClient()
     client.add_bro('TROOT', [])
-    client.add_claude(LULID, [_user('x')], forked_from={'trail_id': 'TROOT', 'step_id': 'S1'})
+    client.add_claude(LULID, [_user('x')], forked_from={'trail_id': 'TROOT', 'step_id': 0})
     lines: list[str] = []
     _render_tree(
       _cast(client),
@@ -592,7 +592,7 @@ class TestWithDefaultCommand:
 )
 def test_end_reason_mapping_only_touches_terminal(body, expected):
   out = _format_step_summary(
-    {'step_id': 'S', 'kind': 'end', 'body': body, 'ts': None},
+    {'step_id': 0, 'kind': 'end', 'body': body, 'ts': None},
     NO_COLOR,
   )
   assert f'"reason": "{expected}"' in out

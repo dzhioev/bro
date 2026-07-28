@@ -121,7 +121,7 @@ def _payload(
   timeout: Optional[float] = None,
   into: Optional[str] = None,
   hold: Optional[str] = None,
-  step_id: Optional[str | int] = None,
+  step_id: Optional[int] = None,
   index: Optional[int] = None,
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
@@ -253,7 +253,7 @@ def summon_and_wait(
   revoke: Optional[list[str]] = None,
   effort: Optional[str] = None,
   fast: bool = False,
-  step_id: Optional[str | int] = None,
+  step_id: Optional[int] = None,
   index: Optional[int] = None,
   client: Optional['Client'] = None,
 ) -> str:
@@ -294,7 +294,7 @@ def summon_detached(
   revoke: Optional[list[str]] = None,
   effort: Optional[str] = None,
   fast: bool = False,
-  step_id: Optional[str | int] = None,
+  step_id: Optional[int] = None,
   index: Optional[int] = None,
 ) -> str:
   """send one summon and return its request id without waiting — the bro `summon`

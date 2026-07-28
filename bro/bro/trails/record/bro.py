@@ -59,7 +59,7 @@ class Recorder(Tracker):
     self._start_keepalive()
     return recording.trail_id
 
-  def step(self, kind: StepKind, body: Any, **extras: Any) -> Optional[str | int]:
+  def step(self, kind: StepKind, body: Any, **extras: Any) -> Optional[int]:
     record = {'kind': kind, 'body': body, **extras}
     tool_blobs: Optional[dict[str, Any]] = None
     if kind == 'llm_call':

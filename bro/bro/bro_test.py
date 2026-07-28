@@ -225,8 +225,6 @@ class TestBroRun:
     await TraceBro().run('again', tracker=RecordingTracker(), surface='test')
     monkeypatch.setenv('CW_SUMMONER', '{"trail_id":"T-universal","step_id":7,"index":2}')
     await TraceBro().run('universal pointer', tracker=RecordingTracker(), surface='test')
-    monkeypatch.setenv('CW_SUMMONER', '{"trail_id":"T-live-legacy","step_id":"S7"}')
-    await TraceBro().run('legacy pointer', tracker=RecordingTracker(), surface='test')
     monkeypatch.setenv('CW_SUMMONER', '{"target":"pm","trail_id":"T-legacy"}')
     await TraceBro().run('legacy direct', tracker=RecordingTracker(), surface='test')
     monkeypatch.setenv('CW_SUMMONER', '{"session":"c:legacy-root"}')
@@ -235,7 +233,6 @@ class TestBroRun:
       {'trail_id': 'T-parent'},
       None,
       {'trail_id': 'T-universal', 'step_id': 7, 'index': 2},
-      {'trail_id': 'T-live-legacy', 'step_id': 'S7'},
       {'trail_id': 'T-legacy'},
       None,
     ]

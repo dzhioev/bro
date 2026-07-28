@@ -28,7 +28,7 @@ class ForkedFrom:
   """Pointer to a source trail's fork point."""
 
   trail_id: str
-  step_id: str | int
+  step_id: int
   index: Optional[int] = None
 
 
@@ -57,7 +57,7 @@ class Step:
   """One harness-native record in a trail."""
 
   trail_id: str
-  step_id: str | int
+  step_id: int
   ts: Optional[str]
   kind: Optional[str]
   body: Any

@@ -114,17 +114,14 @@ class TestRecorderStartTrail:
   @pytest.mark.parametrize(
     'forked_from, expected',
     [
+      (ForkedFrom(trail_id='source', step_id=4), {'trail_id': 'source', 'step_id': 4}),
       (
-        ForkedFrom(trail_id='legacy', step_id='legacy-step'),
-        {'trail_id': 'legacy', 'step_id': 'legacy-step'},
-      ),
-      (
-        ForkedFrom(trail_id='universal', step_id=4, index=2),
-        {'trail_id': 'universal', 'step_id': 4, 'index': 2},
+        ForkedFrom(trail_id='source', step_id=4, index=2),
+        {'trail_id': 'source', 'step_id': 4, 'index': 2},
       ),
     ],
   )
-  def test_serializes_legacy_and_universal_fork_pointers(self, monkeypatch, forked_from, expected):
+  def test_serializes_fork_pointers(self, monkeypatch, forked_from, expected):
     fake = _install_fake_connection(monkeypatch)
     fake.queue((201, b'{"id": "T1"}'))
     tracker = Recorder('https://trails.example', 'tok')

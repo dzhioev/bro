@@ -191,12 +191,9 @@ def _validate(payload: dict[str, Any]) -> Optional[str]:
     return f"summon 'hold' must be one of {', '.join(HOLDS)}"
   step_id = payload.get('step_id')
   if step_id is not None and (
-    not isinstance(step_id, (str, int))
-    or isinstance(step_id, bool)
-    or (isinstance(step_id, str) and len(step_id) == 0)
-    or (isinstance(step_id, int) and step_id < 0)
+    not isinstance(step_id, int) or isinstance(step_id, bool) or step_id < 0
   ):
-    return "summon 'step_id' must be a non-empty string or non-negative int"
+    return "summon 'step_id' must be a non-negative int"
   index = payload.get('index')
   if index is not None and (
     step_id is None or not isinstance(index, int) or isinstance(index, bool) or index < 0

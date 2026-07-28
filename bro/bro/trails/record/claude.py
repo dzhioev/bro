@@ -544,7 +544,7 @@ class Recorder:
     past the saved extent and forks from the prior trail's final line — when
     the boundary anchors around that extent still hold."""
     if self._anchors_hold(previous, file_lines):
-      forked_from = {'trail_id': previous.trail_id, 'step_id': str(previous.line_count - 1)}
+      forked_from = {'trail_id': previous.trail_id, 'step_id': previous.line_count - 1}
       return _Continuation(forked_from=forked_from, chunks=[[previous.extent, previous.extent]])
     log.warning(
       'segment %s does not match trail %s at the recorded extent',
@@ -587,7 +587,7 @@ class Recorder:
     if not cuts.verified:
       log.info('segment does not carry a verified copy of trail %s', previous.trail_id)
       return None
-    forked_from = {'trail_id': previous.trail_id, 'step_id': str(cuts.anchor_index)}
+    forked_from = {'trail_id': previous.trail_id, 'step_id': cuts.anchor_index}
     chunks: list[list[int]] = []
     if cuts.copy_start_line > 0:
       chunks.append([0, cuts.copy_start_line])
@@ -615,7 +615,7 @@ class Recorder:
       if exception.status == 404:
         return None
       raise
-    return [(int(row['step_id']), row['uuid']) for row in rows]
+    return [(row['step_id'], row['uuid']) for row in rows]
 
   def _ancestor_uuids(self, trail_id: str) -> set[str]:
     """every record uuid carried by the trail's bounded ancestor prefixes."""

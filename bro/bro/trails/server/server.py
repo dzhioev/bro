@@ -106,12 +106,9 @@ def _pointer(payload: dict, field: str, *, step_optional: bool) -> Optional[web.
     return _error(f'{field}.trail_id must be a non-empty string', 400)
   step_id = value.get('step_id')
   if step_id is not None and (
-    not isinstance(step_id, (str, int))
-    or isinstance(step_id, bool)
-    or (isinstance(step_id, str) and len(step_id) == 0)
-    or (isinstance(step_id, int) and step_id < 0)
+    not isinstance(step_id, int) or isinstance(step_id, bool) or step_id < 0
   ):
-    return _error(f'{field}.step_id must be a non-empty string or non-negative int', 400)
+    return _error(f'{field}.step_id must be a non-negative int', 400)
   index = value.get('index')
   if index is not None and (not isinstance(index, int) or isinstance(index, bool) or index < 0):
     return _error(f'{field}.index must be a non-negative int', 400)

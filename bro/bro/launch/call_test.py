@@ -537,14 +537,14 @@ def test_call_forwards_the_at_fork_point_into_container():
     patch('bro.launch.call._tty_supported', return_value=True),
   ):
     env.pop('CW_IN_CONTAINER', None)
-    rc = main(['call', 'ppp-dev', '--resume', 'trail-1', '--at', 'step-7'])
+    rc = main(['call', 'ppp-dev', '--resume', 'trail-1', '--at', '7'])
     assert rc == 0
     command = run.call_args.args[0].command
-    assert command[command.index('--at') + 1] == 'step-7'
+    assert command[command.index('--at') + 1] == '7'
 
 
 def test_call_at_without_resume_is_an_error(capsys):
-  assert main(['call', 'ppp-dev', 'hi', '--at', 'step-7']) == 1
+  assert main(['call', 'ppp-dev', 'hi', '--at', '7']) == 1
   assert 'requires --resume' in capsys.readouterr().err
 
 

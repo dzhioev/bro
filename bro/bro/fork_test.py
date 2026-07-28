@@ -37,7 +37,7 @@ def _step(
   kind: str,
   body: Any,
   *,
-  step_id: str,
+  step_id: int,
   trail_id: str = 'trail-1',
   **extras: Any,
 ) -> Step:
@@ -70,38 +70,38 @@ class TestReplayMessages:
   def test_raises_when_system_prompt_step_missing(self):
     trail = RecordedTrail(
       header=_trail_header(),
-      steps=[_step('user_input', 'hello', step_id='u0', turn_index=0)],
+      steps=[_step('user_input', 'hello', step_id=1, turn_index=0)],
     )
     with pytest.raises(ValueError, match='no system_prompt step'):
-      replay_messages(trail, 'u0')
+      replay_messages(trail, 1)
 
   def test_raises_when_step_id_not_found(self):
     trail = RecordedTrail(
       header=_trail_header(),
       steps=[
-        _step('system_prompt', _SYS_TEXT, step_id='s0', turn_index=0),
-        _step('user_input', 'hello', step_id='u0', turn_index=0),
+        _step('system_prompt', _SYS_TEXT, step_id=0, turn_index=0),
+        _step('user_input', 'hello', step_id=1, turn_index=0),
       ],
     )
     with pytest.raises(ValueError, match='not found'):
-      replay_messages(trail, 'nope')
+      replay_messages(trail, 99)
 
   def test_returns_only_system_and_user_when_forked_at_first_user_input(self):
     trail = RecordedTrail(
       header=_trail_header(),
       steps=[
-        _step('system_prompt', _SYS_TEXT, step_id='s0', turn_index=0),
-        _step('user_input', 'hello', step_id='u0', turn_index=0),
+        _step('system_prompt', _SYS_TEXT, step_id=0, turn_index=0),
+        _step('user_input', 'hello', step_id=1, turn_index=0),
         _step(
           'llm_call',
           _llm_call_body(_output_message('hi back')),
-          step_id='c1',
+          step_id=2,
           turn_index=1,
           response_id='r1',
         ),
       ],
     )
-    assert replay_messages(trail, 'u0') == [
+    assert replay_messages(trail, 1) == [
       {'role': 'system', 'content': _SYS_TEXT},
       {'role': 'user', 'content': 'hello'},
     ]
@@ -111,18 +111,18 @@ class TestReplayMessages:
     trail = RecordedTrail(
       header=_trail_header(),
       steps=[
-        _step('system_prompt', _SYS_TEXT, step_id='s0', turn_index=0),
-        _step('user_input', 'hello', step_id='u0', turn_index=0),
+        _step('system_prompt', _SYS_TEXT, step_id=0, turn_index=0),
+        _step('user_input', 'hello', step_id=1, turn_index=0),
         _step(
           'llm_call',
           _llm_call_body(assistant_msg),
-          step_id='c1',
+          step_id=2,
           turn_index=1,
           response_id='r1',
         ),
       ],
     )
-    assert replay_messages(trail, 'c1') == [
+    assert replay_messages(trail, 2) == [
       {'role': 'system', 'content': _SYS_TEXT},
       {'role': 'user', 'content': 'hello'},
       assistant_msg,
@@ -150,18 +150,18 @@ class TestReplayMessages:
     trail = RecordedTrail(
       header=_trail_header(),
       steps=[
-        _step('system_prompt', _SYS_TEXT, step_id='s0', turn_index=0),
-        _step('user_input', 'hello', step_id='u0', turn_index=0),
+        _step('system_prompt', _SYS_TEXT, step_id=0, turn_index=0),
+        _step('user_input', 'hello', step_id=1, turn_index=0),
         _step(
           'llm_call',
           _llm_call_body(raw_reasoning, raw_message),
-          step_id='c1',
+          step_id=2,
           turn_index=1,
           response_id='r1',
         ),
       ],
     )
-    assert replay_messages(trail, 'c1') == [
+    assert replay_messages(trail, 2) == [
       {'role': 'system', 'content': _SYS_TEXT},
       {'role': 'user', 'content': 'hello'},
       {'type': 'reasoning', 'id': 'rs_1', 'summary': []},
@@ -182,18 +182,18 @@ class TestReplayMessages:
     trail = RecordedTrail(
       header=_trail_header(),
       steps=[
-        _step('system_prompt', _SYS_TEXT, step_id='s0', turn_index=0),
-        _step('user_input', 'hello', step_id='u0', turn_index=0),
+        _step('system_prompt', _SYS_TEXT, step_id=0, turn_index=0),
+        _step('user_input', 'hello', step_id=1, turn_index=0),
         _step(
           'llm_call',
           _llm_call_body(compaction, assistant_msg),
-          step_id='c1',
+          step_id=2,
           turn_index=1,
           response_id='r1',
         ),
       ],
     )
-    assert replay_messages(trail, 'c1') == [
+    assert replay_messages(trail, 2) == [
       {'role': 'system', 'content': _SYS_TEXT},
       {'role': 'user', 'content': 'hello'},
       assistant_msg,
@@ -204,20 +204,20 @@ class TestReplayMessages:
     trail = RecordedTrail(
       header=_trail_header(),
       steps=[
-        _step('system_prompt', _SYS_TEXT, step_id='s0', turn_index=0),
-        _step('user_input', 'add 2+2', step_id='u0', turn_index=0),
+        _step('system_prompt', _SYS_TEXT, step_id=0, turn_index=0),
+        _step('user_input', 'add 2+2', step_id=1, turn_index=0),
         _step(
           'llm_call',
           _llm_call_body(call_item),
-          step_id='cc',
+          step_id=2,
           turn_index=1,
           response_id='r1',
         ),
-        _step('tool_call', None, step_id='tc', turn_index=1, tool_name='add', call_id='c1'),
-        _step('tool_result', '4', step_id='tr', turn_index=1, tool_name='add', call_id='c1'),
+        _step('tool_call', None, step_id=3, turn_index=1, tool_name='add', call_id='c1'),
+        _step('tool_result', '4', step_id=4, turn_index=1, tool_name='add', call_id='c1'),
       ],
     )
-    assert replay_messages(trail, 'tr') == [
+    assert replay_messages(trail, 4) == [
       {'role': 'system', 'content': _SYS_TEXT},
       {'role': 'user', 'content': 'add 2+2'},
       call_item,
@@ -229,21 +229,21 @@ class TestReplayMessages:
     trail = RecordedTrail(
       header=_trail_header(),
       steps=[
-        _step('system_prompt', _SYS_TEXT, step_id='s0', turn_index=0),
-        _step('user_input', 'fetch x', step_id='u0', turn_index=0),
-        _step('llm_call', _llm_call_body(call_item), step_id='cc', turn_index=1, response_id='r'),
-        _step('tool_call', None, step_id='tc', turn_index=1, tool_name='fetch', call_id='c1'),
+        _step('system_prompt', _SYS_TEXT, step_id=0, turn_index=0),
+        _step('user_input', 'fetch x', step_id=1, turn_index=0),
+        _step('llm_call', _llm_call_body(call_item), step_id=2, turn_index=1, response_id='r'),
+        _step('tool_call', None, step_id=3, turn_index=1, tool_name='fetch', call_id='c1'),
         _step(
           'tool_result',
           {'rows': [1, 2]},
-          step_id='tr',
+          step_id=4,
           turn_index=1,
           tool_name='fetch',
           call_id='c1',
         ),
       ],
     )
-    result = replay_messages(trail, 'tr')
+    result = replay_messages(trail, 4)
     fco = result[-1]
     assert fco['output'] == json.dumps({'rows': [1, 2]})
 
@@ -252,15 +252,13 @@ class TestReplayMessages:
     trail = RecordedTrail(
       header=_trail_header(),
       steps=[
-        _step('system_prompt', _SYS_TEXT, step_id='s0', turn_index=0),
-        _step('user_input', 'hello', step_id='u0', turn_index=0),
-        _step(
-          'llm_call', _llm_call_body(first_reply), step_id='c1', turn_index=1, response_id='r1'
-        ),
-        _step('user_input', 'follow up', step_id='u1', turn_index=2),
+        _step('system_prompt', _SYS_TEXT, step_id=0, turn_index=0),
+        _step('user_input', 'hello', step_id=1, turn_index=0),
+        _step('llm_call', _llm_call_body(first_reply), step_id=2, turn_index=1, response_id='r1'),
+        _step('user_input', 'follow up', step_id=3, turn_index=2),
       ],
     )
-    assert replay_messages(trail, 'u1') == [
+    assert replay_messages(trail, 3) == [
       {'role': 'system', 'content': _SYS_TEXT},
       {'role': 'user', 'content': 'hello'},
       first_reply,
@@ -276,17 +274,15 @@ class TestReplayMessages:
     trail = RecordedTrail(
       header=_trail_header(),
       steps=[
-        _step('system_prompt', _SYS_TEXT, step_id='s0', turn_index=0),
-        _step('user_input', 'hi', step_id='u0', turn_index=0),
-        _step(
-          'llm_call', _llm_call_body(assistant_msg), step_id='c1', turn_index=1, response_id='r'
-        ),
-        _step('reasoning', 'thinking', step_id='rs', turn_index=1),
-        _step('assistant', 'reply', step_id='as', turn_index=1, terminal=True),
-        _step('end', {'reason': 'terminal'}, step_id='ed', turn_index=1),
+        _step('system_prompt', _SYS_TEXT, step_id=0, turn_index=0),
+        _step('user_input', 'hi', step_id=1, turn_index=0),
+        _step('llm_call', _llm_call_body(assistant_msg), step_id=2, turn_index=1, response_id='r'),
+        _step('reasoning', 'thinking', step_id=3, turn_index=1),
+        _step('assistant', 'reply', step_id=4, turn_index=1, terminal=True),
+        _step('end', {'reason': 'terminal'}, step_id=5, turn_index=1),
       ],
     )
-    result = replay_messages(trail, 'ed')
+    result = replay_messages(trail, 5)
     # only one assistant payload, taken from llm_call.response.output
     assert result.count(assistant_msg) == 1
     assert all(isinstance(item, dict) for item in result)
@@ -310,16 +306,16 @@ class TestReplayMessagesAcrossForkChain:
         surface='call',
         forked_from=ForkedFrom(
           trail_id='trail-1',
-          step_id='c1',
+          step_id=2,
         ),
       ),
       steps=[
-        _step('system_prompt', _SYS_TEXT, step_id='s0', trail_id='trail-2', turn_index=0),
-        _step('user_input', 'continue', step_id='u0', trail_id='trail-2', turn_index=0),
+        _step('system_prompt', _SYS_TEXT, step_id=0, trail_id='trail-2', turn_index=0),
+        _step('user_input', 'continue', step_id=1, trail_id='trail-2', turn_index=0),
         _step(
           'llm_call',
           _llm_call_body(_output_message('continued')),
-          step_id='c1',
+          step_id=2,
           trail_id='trail-2',
           turn_index=1,
           response_id='r2',
@@ -329,7 +325,7 @@ class TestReplayMessagesAcrossForkChain:
 
   def test_prepends_ancestor_prefix_via_fetch_forked_from(self):
     forked_froms = {'trail-1': self._forked_from()}
-    result = replay_messages(self._child(), 'c1', fetch_forked_from=lambda tid: forked_froms[tid])
+    result = replay_messages(self._child(), 2, fetch_forked_from=lambda tid: forked_froms[tid])
     assert result == [
       {'role': 'system', 'content': _SYS_TEXT},
       {'role': 'user', 'content': 'hello'},
@@ -340,7 +336,7 @@ class TestReplayMessagesAcrossForkChain:
 
   def test_raises_on_fork_trail_without_fetch_forked_from(self):
     with pytest.raises(ValueError, match='fetch_forked_from'):
-      replay_messages(self._child(), 'c1')
+      replay_messages(self._child(), 2)
 
   def test_fork_at_system_prompt_step_replays_only_the_ancestor_prefix(self):
     # an empty continuation (a fork with no exchanges of its own) resumes as
@@ -348,7 +344,7 @@ class TestReplayMessagesAcrossForkChain:
     forked_froms = {'trail-1': self._forked_from()}
     child = self._child()
     empty_child = RecordedTrail(header=child.header, steps=child.steps[:1])
-    result = replay_messages(empty_child, 's0', fetch_forked_from=lambda tid: forked_froms[tid])
+    result = replay_messages(empty_child, 0, fetch_forked_from=lambda tid: forked_froms[tid])
     assert result == [
       {'role': 'system', 'content': _SYS_TEXT},
       {'role': 'user', 'content': 'hello'},
@@ -359,26 +355,26 @@ class TestReplayMessagesAcrossForkChain:
 class TestLatestForkPoint:
   def test_picks_the_terminal_llm_call(self):
     trail = _simple_trail()
-    assert latest_fork_point(trail) == 'c1'
+    assert latest_fork_point(trail) == 2
 
   def test_picks_a_trailing_user_input(self):
     # killed after the user sent a message but before the model replied
     trail = RecordedTrail(
       header=_trail_header(),
       steps=[
-        _step('system_prompt', _SYS_TEXT, step_id='s0', turn_index=0),
-        _step('user_input', 'hello', step_id='u0', turn_index=0),
+        _step('system_prompt', _SYS_TEXT, step_id=0, turn_index=0),
+        _step('user_input', 'hello', step_id=1, turn_index=0),
         _step(
           'llm_call',
           _llm_call_body(_output_message('hi back')),
-          step_id='c1',
+          step_id=2,
           turn_index=1,
           response_id='r1',
         ),
-        _step('user_input', 'follow up', step_id='u1', turn_index=2),
+        _step('user_input', 'follow up', step_id=3, turn_index=2),
       ],
     )
-    assert latest_fork_point(trail) == 'u1'
+    assert latest_fork_point(trail) == 3
 
   def test_skips_an_llm_call_with_unanswered_function_calls(self):
     # killed mid-tool-loop: the last llm_call's function_call has no
@@ -386,46 +382,46 @@ class TestLatestForkPoint:
     trail = RecordedTrail(
       header=_trail_header(),
       steps=[
-        _step('system_prompt', _SYS_TEXT, step_id='s0', turn_index=0),
-        _step('user_input', 'go', step_id='u0', turn_index=0),
+        _step('system_prompt', _SYS_TEXT, step_id=0, turn_index=0),
+        _step('user_input', 'go', step_id=1, turn_index=0),
         _step(
           'llm_call',
           _llm_call_body(_output_function_call('lookup', call_id='call-1')),
-          step_id='c1',
+          step_id=2,
           turn_index=1,
           response_id='r1',
         ),
-        _step('tool_call', None, step_id='tc', turn_index=1, tool_name='lookup', call_id='call-1'),
+        _step('tool_call', None, step_id=3, turn_index=1, tool_name='lookup', call_id='call-1'),
       ],
     )
-    assert latest_fork_point(trail) == 'u0'
+    assert latest_fork_point(trail) == 1
 
   def test_picks_the_tool_result_that_completes_the_turn(self):
     trail = RecordedTrail(
       header=_trail_header(),
       steps=[
-        _step('system_prompt', _SYS_TEXT, step_id='s0', turn_index=0),
-        _step('user_input', 'go', step_id='u0', turn_index=0),
+        _step('system_prompt', _SYS_TEXT, step_id=0, turn_index=0),
+        _step('user_input', 'go', step_id=1, turn_index=0),
         _step(
           'llm_call',
           _llm_call_body(
             _output_function_call('lookup', call_id='call-1'),
             _output_function_call('lookup', call_id='call-2'),
           ),
-          step_id='c1',
+          step_id=2,
           turn_index=1,
           response_id='r1',
         ),
-        _step('tool_result', 'a', step_id='t1', turn_index=1, tool_name='lookup', call_id='call-1'),
-        _step('tool_result', 'b', step_id='t2', turn_index=1, tool_name='lookup', call_id='call-2'),
+        _step('tool_result', 'a', step_id=3, turn_index=1, tool_name='lookup', call_id='call-1'),
+        _step('tool_result', 'b', step_id=4, turn_index=1, tool_name='lookup', call_id='call-2'),
       ],
     )
-    assert latest_fork_point(trail) == 't2'
+    assert latest_fork_point(trail) == 4
 
   def test_raises_on_a_trail_with_nothing_to_resume(self):
     trail = RecordedTrail(
       header=_trail_header(),
-      steps=[_step('system_prompt', _SYS_TEXT, step_id='s0', turn_index=0)],
+      steps=[_step('system_prompt', _SYS_TEXT, step_id=0, turn_index=0)],
     )
     with pytest.raises(ValueError, match='no step to resume from'):
       latest_fork_point(trail)
@@ -435,7 +431,7 @@ class TestLatestForkPoint:
     # forked_from pointer carries
     trail = RecordedTrail(
       header=_trail_header(),
-      steps=[_step('system_prompt', _SYS_TEXT, step_id='s0', turn_index=0)],
+      steps=[_step('system_prompt', _SYS_TEXT, step_id=0, turn_index=0)],
     )
     forked = RecordedTrail(
       header=Trail(
@@ -449,12 +445,12 @@ class TestLatestForkPoint:
         surface='call',
         forked_from=ForkedFrom(
           trail_id='trail-1',
-          step_id='c1',
+          step_id=2,
         ),
       ),
       steps=trail.steps,
     )
-    assert latest_fork_point(forked) == 's0'
+    assert latest_fork_point(forked) == 0
 
 
 class _RecordingTracker(Tracker):
@@ -562,9 +558,9 @@ def _simple_trail(**header_overrides: Any) -> RecordedTrail:
   return RecordedTrail(
     header=_trail_header(**header_overrides),
     steps=[
-      _step('system_prompt', _SYS_TEXT, step_id='s0', turn_index=0),
-      _step('user_input', 'hello', step_id='u0', turn_index=0),
-      _step('llm_call', _llm_call_body(reply), step_id='c1', turn_index=1, response_id='r1'),
+      _step('system_prompt', _SYS_TEXT, step_id=0, turn_index=0),
+      _step('user_input', 'hello', step_id=1, turn_index=0),
+      _step('llm_call', _llm_call_body(reply), step_id=2, turn_index=1, response_id='r1'),
     ],
   )
 
@@ -575,12 +571,12 @@ class TestForkLinkage:
     tracker = _RecordingTracker()
     context, _, _ = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('ok')])])
     with context:
-      fork(forked_from_trail, 'c1', tracker=tracker, surface='test')
+      fork(forked_from_trail, 2, tracker=tracker, surface='test')
     assert len(tracker.headers) == 1
     header = tracker.headers[0]
     assert header['forked_from'] == ForkedFrom(
       trail_id='trail-1',
-      step_id='c1',
+      step_id=2,
     )
     assert header['surface'] == 'test'
     assert header['interactive'] is True
@@ -593,7 +589,7 @@ class TestForkLinkage:
     tracker = _RecordingTracker()
     context, _, _ = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('ok')])])
     with context:
-      bro = fork(forked_from_trail, 'c1', tracker=tracker, surface='call')
+      bro = fork(forked_from_trail, 2, tracker=tracker, surface='call')
     assert tracker.headers[0]['surface'] == 'call'
     assert bro.trail_id == 'forked-trail-id'
 
@@ -602,7 +598,7 @@ class TestForkLinkage:
     tracker = _RecordingTracker()
     context, _, _ = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('ok')])])
     with context:
-      fork(forked_from_trail, 'c1', tracker=tracker, surface='test')
+      fork(forked_from_trail, 2, tracker=tracker, surface='test')
     assert tracker.headers[0]['system_prompt'] == _SYS_TEXT
 
   def test_system_prompt_override_replaces_prefix_and_header(self):
@@ -611,7 +607,7 @@ class TestForkLinkage:
     context, _, created = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('ok')])])
     with context:
       bro = fork(
-        forked_from_trail, 'c1', system_prompt='swapped prompt', tracker=tracker, surface='test'
+        forked_from_trail, 2, system_prompt='swapped prompt', tracker=tracker, surface='test'
       )
     assert tracker.headers[0]['system_prompt'] == 'swapped prompt'
     assert bro.system_prompt == 'swapped prompt'
@@ -626,7 +622,7 @@ class TestForkRecording:
     forked_from_trail = _simple_trail()
     context, _, _ = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('ok')])])
     with context:
-      bro = fork(forked_from_trail, 'c1', record=False, surface='test')
+      bro = fork(forked_from_trail, 2, record=False, surface='test')
     assert isinstance(bro._tracker, NullTracker)
 
   def test_record_true_uses_explicit_tracker(self):
@@ -634,7 +630,7 @@ class TestForkRecording:
     tracker = _RecordingTracker()
     context, _, _ = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('ok')])])
     with context:
-      bro = fork(forked_from_trail, 'c1', tracker=tracker, surface='test')
+      bro = fork(forked_from_trail, 2, tracker=tracker, surface='test')
     assert bro._tracker is tracker
 
 
@@ -644,7 +640,7 @@ class TestForkSpec:
     tracker = _RecordingTracker()
     context, _, created = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('ok')])])
     with context:
-      fork(forked_from_trail, 'c1', tracker=tracker, surface='test')
+      fork(forked_from_trail, 2, tracker=tracker, surface='test')
     assert created[0].model == 'gpt-5'
     assert tracker.headers[0]['llm_spec'] == {
       'type': 'chat_gpt',
@@ -660,7 +656,7 @@ class TestForkSpec:
     override = chat_gpt_module.LLMSpec(model='gpt-5.4-mini', reasoning_effort='medium')
     context, _, created = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('ok')])])
     with context:
-      fork(forked_from_trail, 'c1', llm_spec=override, tracker=tracker, surface='test')
+      fork(forked_from_trail, 2, llm_spec=override, tracker=tracker, surface='test')
     assert created[0].model == 'gpt-5.4-mini'
     assert created[0]._reasoning_effort == 'medium'
     assert tracker.headers[0]['llm_spec']['model'] == 'gpt-5.4-mini'
@@ -680,7 +676,7 @@ class TestForkServerSidePath:
       [_fake_response(output=[_message_item('continuation')])]
     )
     with context:
-      bro = fork(forked_from_trail, 'c1', record=False, surface='test')
+      bro = fork(forked_from_trail, 2, record=False, surface='test')
       result = await bro.send('follow up', surface='test')
     assert result == 'continuation'
     assert len(captured) == 1
@@ -695,7 +691,7 @@ class TestForkServerSidePath:
       [_fake_response(output=[_message_item('continuation')])]
     )
     with context:
-      bro = fork(forked_from_trail, 'c1', tracker=tracker, surface='test')
+      bro = fork(forked_from_trail, 2, tracker=tracker, surface='test')
       await bro.send('follow up', surface='test')
     user_inputs = [s for s in tracker.steps if s[0] == 'user_input']
     # the replayed user input does NOT get re-emitted on the new trail — only
@@ -713,7 +709,7 @@ class TestForkServerSidePath:
       ]
     )
     with context:
-      bro = fork(forked_from_trail, 'c1', record=False, surface='test')
+      bro = fork(forked_from_trail, 2, record=False, surface='test')
       await bro.send('msg one', surface='test')
       await bro.send('msg two', surface='test')
     # first send carries the seeded fork-point response_id; the second chains
@@ -734,17 +730,17 @@ class TestForkClientSideReplay:
 
   @pytest.mark.asyncio
   async def test_fork_at_first_user_input(self):
-    # u0 isn't an `llm_call`; server-side has nothing to anchor on, so the
-    # replay path is the only option.
+    # the fork point isn't an `llm_call`; server-side has nothing to anchor on,
+    # so the replay path is the only option.
     forked_from_trail = _simple_trail()
     context, captured, _ = _patch_chat_gpt_create_llm(
       [_fake_response(output=[_message_item('rerun')])]
     )
     with context:
-      bro = fork(forked_from_trail, 'u0', record=False, surface='test')
+      bro = fork(forked_from_trail, 1, record=False, surface='test')
       assert await bro.send('rerun please', surface='test') == 'rerun'
     api_input = captured[0]['input']
-    # forking right after the first user_input replays system + user_0, then
+    # forking right after the first user_input replays system + that input, then
     # the new user message lands at the end (re-ask path)
     assert api_input == [
       {'role': 'system', 'content': _SYS_TEXT},
@@ -758,16 +754,14 @@ class TestForkClientSideReplay:
     forked_from_trail = RecordedTrail(
       header=_trail_header(),
       steps=[
-        _step('system_prompt', _SYS_TEXT, step_id='s0', turn_index=0),
-        _step('user_input', 'hello', step_id='u0', turn_index=0),
-        _step(
-          'llm_call', _llm_call_body(first_reply), step_id='c1', turn_index=1, response_id='r1'
-        ),
-        _step('user_input', 'follow up', step_id='u1', turn_index=2),
+        _step('system_prompt', _SYS_TEXT, step_id=0, turn_index=0),
+        _step('user_input', 'hello', step_id=1, turn_index=0),
+        _step('llm_call', _llm_call_body(first_reply), step_id=2, turn_index=1, response_id='r1'),
+        _step('user_input', 'follow up', step_id=3, turn_index=2),
         _step(
           'llm_call',
           _llm_call_body(_output_message('second reply')),
-          step_id='c2',
+          step_id=4,
           turn_index=3,
           response_id='r2',
         ),
@@ -777,7 +771,7 @@ class TestForkClientSideReplay:
       [_fake_response(output=[_message_item('forked answer')])]
     )
     with context:
-      bro = fork(forked_from_trail, 'u1', record=False, surface='test')
+      bro = fork(forked_from_trail, 3, record=False, surface='test')
       await bro.send('actually try this', surface='test')
     api_input = captured[0]['input']
     assert api_input == [
@@ -795,14 +789,14 @@ class TestForkClientSideReplay:
     forked_from_trail = RecordedTrail(
       header=_trail_header(),
       steps=[
-        _step('system_prompt', _SYS_TEXT, step_id='s0', turn_index=0),
-        _step('user_input', 'go', step_id='u0', turn_index=0),
-        _step('llm_call', _llm_call_body(call_item), step_id='c1', turn_index=1, response_id='r1'),
-        _step('tool_call', None, step_id='tc', turn_index=1, tool_name='lookup', call_id='c1'),
+        _step('system_prompt', _SYS_TEXT, step_id=0, turn_index=0),
+        _step('user_input', 'go', step_id=1, turn_index=0),
+        _step('llm_call', _llm_call_body(call_item), step_id=2, turn_index=1, response_id='r1'),
+        _step('tool_call', None, step_id=3, turn_index=1, tool_name='lookup', call_id='c1'),
         _step(
           'tool_result',
           'tool answer',
-          step_id='tr',
+          step_id=4,
           turn_index=1,
           tool_name='lookup',
           call_id='c1',
@@ -810,7 +804,7 @@ class TestForkClientSideReplay:
         _step(
           'llm_call',
           _llm_call_body(assistant_reply),
-          step_id='c2',
+          step_id=5,
           turn_index=2,
           response_id='r2',
         ),
@@ -823,7 +817,7 @@ class TestForkClientSideReplay:
       # forcing client-side via a no-op system_prompt override — the path
       # picker treats any override as "client-side only" since the cached
       # server-side prefix can't be restated.
-      bro = fork(forked_from_trail, 'c2', system_prompt=_SYS_TEXT, record=False, surface='test')
+      bro = fork(forked_from_trail, 5, system_prompt=_SYS_TEXT, record=False, surface='test')
       await bro.send('next', surface='test')
     api_input = captured[0]['input']
     # prefix preserves: system, user, function_call, function_call_output (with
@@ -847,7 +841,7 @@ class TestForkClientSideReplay:
       [_fake_response(output=[_message_item('ok')])]
     )
     with context:
-      bro = fork(forked_from_trail, 'c1', llm_spec=override, record=False, surface='test')
+      bro = fork(forked_from_trail, 2, llm_spec=override, record=False, surface='test')
       await bro.send('next', surface='test')
     assert captured[0].get('previous_response_id') is None
     api_input = captured[0]['input']
@@ -864,9 +858,7 @@ class TestForkClientSideReplay:
       [_fake_response(output=[_message_item('ok')])]
     )
     with context:
-      bro = fork(
-        forked_from_trail, 'c1', system_prompt='swapped prompt', record=False, surface='test'
-      )
+      bro = fork(forked_from_trail, 2, system_prompt='swapped prompt', record=False, surface='test')
       await bro.send('next', surface='test')
     assert captured[0].get('previous_response_id') is None
     assert captured[0]['input'][0] == {'role': 'system', 'content': 'swapped prompt'}
@@ -883,7 +875,7 @@ class TestForkClientSideReplay:
       ]
     )
     with context:
-      bro = fork(forked_from_trail, 'c1', system_prompt=_SYS_TEXT, record=False, surface='test')
+      bro = fork(forked_from_trail, 2, system_prompt=_SYS_TEXT, record=False, surface='test')
       await bro.send('msg one', surface='test')
       await bro.send('msg two', surface='test')
     # second call goes through `previous_response_id` and only ships the new

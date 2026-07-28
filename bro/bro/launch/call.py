@@ -175,6 +175,7 @@ def chat_main(
   )
   parser.add_argument(
     '--at',
+    type=int,
     default=None,
     metavar='STEP_ID',
     help='with --resume: fork the conversation at this step of the resumed trail '
@@ -220,7 +221,7 @@ def chat_main(
   if args['resume'] is not None:
     inner_args.extend(['--resume', args['resume']])
   if args['at'] is not None:
-    inner_args.extend(['--at', args['at']])
+    inner_args.extend(['--at', str(args['at'])])
   if fast:
     inner_args.append('--fast')
   if args['effort'] is not None:

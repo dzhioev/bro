@@ -529,7 +529,7 @@ async def test_claude_billing_decision_is_stored_across_batches_and_pages(compon
   assert dynamo.headers[trail_id]['native']['usage']['claude-opus']['input_tokens'] == 7
 
   billed = []
-  after: Optional[str | int] = None
+  after: Optional[int] = None
   while True:
     page = await store.query_messages(trail_id, after=after, limit=1, types=None)
     billed.extend(message for message in page['messages'] if message['type'] == 'llm_call')

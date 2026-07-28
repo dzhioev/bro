@@ -313,7 +313,7 @@ class TestSummonHandler:
     # meaningless — no summoned_by is invented for it
     del tmp_path
     context = FakeContext()
-    control.handle(context, ROOT, _summon_message(step_id='S7'))
+    control.handle(context, ROOT, _summon_message(step_id=7))
     [(launch, _, _)] = context.spawned
     assert launch.summoner is None
 
@@ -354,9 +354,9 @@ class TestSummonHandler:
     # are attributed to it (with the request's step_id when carried)
     control.note_root_trail('RT1')
     context = FakeContext()
-    control.handle(context, ROOT, _summon_message(step_id='S2'))
+    control.handle(context, ROOT, _summon_message(step_id=2))
     [(launch, _, _)] = context.spawned
-    assert launch.summoner == {'trail_id': 'RT1', 'step_id': 'S2'}
+    assert launch.summoner == {'trail_id': 'RT1', 'step_id': 2}
 
   def test_child_summon_outside_its_seeds_is_denied(self, control):
     # devoops seeds no bro, so its child summons nothing — not even a target the
@@ -442,7 +442,7 @@ class TestSummonHandler:
       {'target': 'devoops', 'prompt': 'p', 'into': ''},
       {'target': 'devoops', 'prompt': 'p', 'timout': 60},  # typo'd key must not pass silently
       {'target': 'devoops', 'prompt': 'p', 'hold': 'automatic'},
-      {'target': 'devoops', 'prompt': 'p', 'step_id': ''},
+      {'target': 'devoops', 'prompt': 'p', 'step_id': '7'},
       {'target': 'devoops', 'prompt': 'p', 'step_id': -1},
       {'target': 'devoops', 'prompt': 'p', 'step_id': True},
       {'target': 'devoops', 'prompt': 'p', 'index': 1},

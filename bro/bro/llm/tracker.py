@@ -9,7 +9,7 @@ EndReason = Literal['ok', 'raised', 'error']
 
 
 class ToolStepSource(TypedDict):
-  step_id: str | int
+  step_id: int
   index: int
 
 
@@ -34,7 +34,7 @@ class Tracker(ABC):
     ...
 
   @abstractmethod
-  def step(self, kind: StepKind, body: Any, **extras: Any) -> Optional[str | int]:
+  def step(self, kind: StepKind, body: Any, **extras: Any) -> Optional[int]:
     """Append one event and return its sink-assigned id when available."""
     ...
 
@@ -60,7 +60,7 @@ class NullTracker(Tracker):
   ) -> str:
     return ''
 
-  def step(self, kind: StepKind, body: Any, **extras: Any) -> Optional[str | int]:
+  def step(self, kind: StepKind, body: Any, **extras: Any) -> Optional[int]:
     return None
 
   def end_trail(self, reason: EndReason, detail: Optional[str] = None) -> None:

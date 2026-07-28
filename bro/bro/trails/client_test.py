@@ -125,10 +125,10 @@ class TestGetSteps:
     fake = _install_fake_connection(monkeypatch)
     fake.queue((200, b'{"steps": [], "next": null}'))
     c = _client()
-    c.get_steps('T1', after='s5', limit=20)
+    c.get_steps('T1', after=5, limit=20)
     _, path, _, _ = fake.requests[0]
     assert path.startswith('/v1/trails/T1/steps?')
-    assert 'after=s5' in path
+    assert 'after=5' in path
     assert 'limit=20' in path
 
   def test_returns_steps_and_next(self, monkeypatch):
@@ -137,34 +137,34 @@ class TestGetSteps:
       (
         200,
         json.dumps(
-          {'steps': [{'step_id': 's1', 'kind': 'user_input', 'body': 'hi'}], 'next': 'c1'}
+          {'steps': [{'step_id': 1, 'kind': 'user_input', 'body': 'hi'}], 'next': 2}
         ).encode(),
       )
     )
     c = _client()
     result = c.get_steps('T1')
-    assert result['next'] == 'c1'
+    assert result['next'] == 2
     assert result['steps'][0]['kind'] == 'user_input'
 
 
 class TestIterSteps:
   def test_after_starts_past_the_cursor(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
-    fake.queue((200, json.dumps({'steps': [{'step_id': 's2'}], 'next': None}).encode()))
+    fake.queue((200, json.dumps({'steps': [{'step_id': 2}], 'next': None}).encode()))
     c = _client()
-    steps = list(c.iter_steps('T1', after='s1'))
-    assert [s['step_id'] for s in steps] == ['s2']
-    assert 'after=s1' in fake.requests[0][1]
+    steps = list(c.iter_steps('T1', after=1))
+    assert [s['step_id'] for s in steps] == [2]
+    assert 'after=1' in fake.requests[0][1]
 
   def test_paginates_until_next_is_none(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
-    fake.queue((200, json.dumps({'steps': [{'step_id': 's1'}], 'next': 's1'}).encode()))
-    fake.queue((200, json.dumps({'steps': [{'step_id': 's2'}], 'next': None}).encode()))
+    fake.queue((200, json.dumps({'steps': [{'step_id': 1}], 'next': 1}).encode()))
+    fake.queue((200, json.dumps({'steps': [{'step_id': 2}], 'next': None}).encode()))
     c = _client()
     steps = list(c.iter_steps('T1'))
-    assert [s['step_id'] for s in steps] == ['s1', 's2']
+    assert [s['step_id'] for s in steps] == [1, 2]
     # second request carried the cursor from the first page
-    assert 'after=s1' in fake.requests[1][1]
+    assert 'after=1' in fake.requests[1][1]
 
 
 class TestListTrails:
@@ -349,7 +349,7 @@ class TestMessages:
     fake = _install_fake_connection(monkeypatch)
     fake.queue((200, b'{"messages": [], "next": null}'))
     client = _client()
-    client.get_messages('T1', types={'assistant', 'user_input'}, after='5', limit=20)
+    client.get_messages('T1', types={'assistant', 'user_input'}, after=5, limit=20)
     _, path, _, _ = fake.requests[0]
     assert path.startswith('/v1/trails/T1/messages?')
     assert 'type=assistant' in path
@@ -418,7 +418,7 @@ class TestStepFromRow:
     step = step_from_row(
       {
         'trail_id': 'T1',
-        'step_id': 'S1',
+        'step_id': 1,
         'ts': '2026-06-07T00:00:00.000000Z',
         'kind': 'tool_call',
         'body': None,
@@ -445,7 +445,7 @@ class TestStepFromRow:
     step = step_from_row(
       {
         'trail_id': 'T1',
-        'step_id': 'S1',
+        'step_id': 1,
         'ts': '2026-06-07T00:00:00.000000Z',
         'kind': 'end',
       }
@@ -478,20 +478,20 @@ class TestFetchRecordedTrail:
           'steps': [
             {
               'trail_id': 'T1',
-              'step_id': 'S1',
+              'step_id': 1,
               'ts': '2026-06-07T00:00:00.000000Z',
               'kind': 'system_prompt',
               'body': 'p',
               'turn_index': 0,
             }
           ],
-          'next': 'S1',
+          'next': 1,
         },
         {
           'steps': [
             {
               'trail_id': 'T1',
-              'step_id': 'S2',
+              'step_id': 2,
               'ts': '2026-06-07T00:00:01.000000Z',
               'kind': 'user_input',
               'body': 'hello',
@@ -506,7 +506,7 @@ class TestFetchRecordedTrail:
       assert isinstance(trail, RecordedTrail)
       assert trail.header.id == 'T1'
       assert [s.kind for s in trail.steps] == ['system_prompt', 'user_input']
-      assert [s.step_id for s in trail.steps] == ['S1', 'S2']
+      assert [s.step_id for s in trail.steps] == [1, 2]
 
   def test_follows_spilled_body_descriptor(self):
     """a step whose body is a `{s3,url,size}` spill descriptor is resolved by
@@ -539,14 +539,14 @@ class TestFetchRecordedTrail:
         'steps': [
           {
             'trail_id': 'T1',
-            'step_id': 'S1',
+            'step_id': 1,
             'ts': '2026-06-07T00:00:00.000000Z',
             'kind': 'user_input',
             'body': 'hi',
           },
           {
             'trail_id': 'T1',
-            'step_id': 'S2',
+            'step_id': 2,
             'ts': '2026-06-07T00:00:01.000000Z',
             'kind': 'llm_call',
             'body': descriptor,
@@ -558,8 +558,8 @@ class TestFetchRecordedTrail:
       trail = fetch_recorded_trail(_client(), 'T1')
       fetch_spilled.assert_called_once_with(descriptor['url'])
       bodies = {s.step_id: s.body for s in trail.steps}
-      assert bodies['S1'] == 'hi'
-      assert bodies['S2'] == full_body
+      assert bodies[1] == 'hi'
+      assert bodies[2] == full_body
 
   def test_inline_body_with_s3_key_is_not_followed(self):
     """a genuine body that merely contains an `s3` key (but not the full
@@ -587,7 +587,7 @@ class TestFetchRecordedTrail:
         'steps': [
           {
             'trail_id': 'T1',
-            'step_id': 'S1',
+            'step_id': 1,
             'ts': '2026-06-07T00:00:00.000000Z',
             'kind': 'tool_result',
             'body': lookalike,

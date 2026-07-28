@@ -53,12 +53,7 @@ def _summoned_by_from_env() -> Optional[dict[str, Any]]:
     or len(trail_id) == 0
     or (
       step_id is not None
-      and (
-        not isinstance(step_id, (str, int))
-        or isinstance(step_id, bool)
-        or (isinstance(step_id, str) and len(step_id) == 0)
-        or (isinstance(step_id, int) and step_id < 0)
-      )
+      and (not isinstance(step_id, int) or isinstance(step_id, bool) or step_id < 0)
     )
     or (
       index is not None
