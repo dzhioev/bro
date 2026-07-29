@@ -26,18 +26,10 @@ bro · claude recorder                       readers
 - **Recorder placement:** the shared write spine and every harness recorder live in `trails/record/`; a recorder may import the seam it rides, never the reverse. A third harness adds `record/<harness>.py` over `spine.Recording` beside its server adapter, not recording machinery in `llm/`, `trails/client.py`, or the harness package.
 - Harness adapters mint lineage only when creating a trail. Writers cannot mutate an edge; operators repair a missing edge through manifested `relink`, and audits detect copied records across trails.
 - `trail_steps_v2` uses `(trail_id S, step_id N)` plus a keys-only UUID index for Claude lineage lookup. A header names its body store in `body_storage` and carries its current `extent`; append transactions condition on that extent.
-- Bodies at least 50 KB spill to S3. Bro tool schemas are content-addressed under `trails/tools/{sha256}.json` and referenced by `tools_sha256` on a row; `trails.model.tools_sha256` is the canonical digest helper for clients and migrations.
+- Bodies at least 50 KB spill to S3. Bro tool schemas are content-addressed under `trails/tools/{sha256}.json` and referenced by `tools_sha256` on a row; `trails.model.tools_sha256` is the canonical digest helper for clients.
 - Launch context is a harness-neutral attachment under `trails/{id}/context.json`.
 
 Writer-reported outcomes use `end.reason`; the stale-run sweep instead records `end.inference = unreported`, so absence of a writer verdict is not presented as a failure verdict.
-
-## Manifested operations
-
-An operation that drives the store from outside the server manifests what it will do before doing it, and its `plan` produces that enumeration without touching anything. Both live in `migrations/` over the shared direct-AWS I/O in `migrations/direct.py`, and both need AWS credentials the ordinary client tier does not carry.
-
-`trails-retire-legacy-stores` (`migrations/retirement.py`): `plan` enumerates every table, object and header field the retirement destroys and runs its preconditions — every trail universal, each authorising report clean, neither legacy table written since the soak window opened — and `apply` manifests that enumeration before deleting, then verifies. Its manifest is `trails/retirement/manifest.json` in the trails bucket, deliberately outside the `trails/migrations/` prefix the retirement deletes, and it is the single account of what the retirement removed: the tables and their item counts, every object key, the stripped header fields with their prior values, and the authorising reports it read. Because `plan` reads prefixes the run then deletes, a resumed `apply` works from the stored manifest rather than re-planning.
-
-`trails-normalise-lineage-ordinals` (`migrations/lineage_ordinals.py`): rewrites lineage pointers whose `step_id` is the decimal string of its ordinal. Each `apply` writes the round it is about to perform under `trails/migrations/lineage-ordinals/rounds/`, rewrites conditionally on the string that round recorded, and ends in a `verify` that re-reads every header; the rounds are append-only because nothing here destroys evidence the store cannot show again, so a partial run is finished by planning a fresh round rather than resuming a stored one.
 
 ## Surfaces
 
@@ -59,6 +51,6 @@ Bearer auth is mandatory outside an explicit loopback-only `TRAILS_ALLOW_NO_AUTH
 
 The ECS service and its retained header, step, and bucket resources are defined in `infra/cdk/trails_stack.py`.
 
-The historical Claude backfill produced 1,119 trails with `version = 'legacy-session-log'`; its manifests remain under `trails/migrations/` in the trails bucket.
+The historical Claude backfill produced 1,119 trails with `version = 'legacy-session-log'`.
 
 Server and CDK changes are not live until `trails/server/deploy.sh` builds the image and deploys the trails stacks. The unit suite fakes AWS boundaries, so a storage change requires a post-deploy append/read/check smoke in addition to tests.
