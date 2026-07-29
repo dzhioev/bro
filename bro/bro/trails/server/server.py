@@ -273,7 +273,7 @@ async def _handle_end_trail(request: web.Request) -> web.Response:
   payload = await _read_json(request)
   if not isinstance(payload, dict):
     return _error('invalid json', 400)
-  unknown_fields = set(payload) - {'reason', 'detail', 'step_id'}
+  unknown_fields = set(payload) - {'reason', 'detail'}
   if len(unknown_fields) > 0:
     return _error(f'unknown fields: {sorted(unknown_fields)}', 400)
   reason = payload.get('reason')
@@ -284,12 +284,9 @@ async def _handle_end_trail(request: web.Request) -> web.Response:
     return _error('detail must be a string or null', 400)
   if reason in {'raised', 'error'} and (not isinstance(detail, str) or len(detail) == 0):
     return _error(f'detail is required for {reason}', 400)
-  step_id = payload.get('step_id')
-  if step_id is not None and not isinstance(step_id, str):
-    return _error('step_id must be a string', 400)
   store: storage.Storage = request.app['storage']
   try:
-    await store.end_trail(trail_id=trail_id, reason=reason, detail=detail, step_id=step_id)
+    await store.end_trail(trail_id=trail_id, reason=reason, detail=detail)
   except storage.TrailNotFound:
     return _error(f'trail not found: {trail_id}', 404)
   return web.Response(status=204)
@@ -338,7 +335,7 @@ async def _handle_find_steps(request: web.Request) -> web.Response:
 
 async def _handle_get_step(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
-  step_id = request.match_info['step_id']
+  step_id = _parse_ordinal(request.match_info['step_id'], name='step_id')
   store: storage.Storage = request.app['storage']
   try:
     step = await store.get_step(trail_id, step_id)
@@ -353,9 +350,10 @@ async def _handle_get_step(request: web.Request) -> web.Response:
 
 async def _handle_get_step_uuids(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
+  through = _parse_optional_ordinal(request.query.get('through'), name='through')
   store: storage.Storage = request.app['storage']
   try:
-    steps = await store.query_step_uuids(trail_id, through=request.query.get('through'))
+    steps = await store.query_step_uuids(trail_id, through=through)
   except storage.TrailNotFound:
     return _error(f'trail not found: {trail_id}', 404)
   except ValueError as exception:
@@ -365,7 +363,7 @@ async def _handle_get_step_uuids(request: web.Request) -> web.Response:
 
 async def _handle_get_steps(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
-  after = request.query.get('after')
+  after = _parse_optional_ordinal(request.query.get('after'), name='after')
   limit = _parse_limit(request.query.get('limit'), default=100, ceiling=500)
   store: storage.Storage = request.app['storage']
   try:
@@ -379,7 +377,7 @@ async def _handle_get_steps(request: web.Request) -> web.Response:
 
 async def _handle_get_messages(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
-  after = request.query.get('after')
+  after = _parse_optional_ordinal(request.query.get('after'), name='after')
   limit = _parse_limit(request.query.get('limit'), default=100, ceiling=500)
   requested_types = set(request.query.getall('type', []))
   unknown = requested_types - MESSAGE_TYPES
@@ -469,6 +467,19 @@ async def _handle_list_trails(request: web.Request) -> web.Response:
     limit=_parse_limit(request.query.get('limit'), default=20, ceiling=100),
   )
   return web.json_response(result)
+
+
+def _parse_ordinal(raw: str, *, name: str) -> int:
+  try:
+    return int(raw)
+  except ValueError as exception:
+    raise web.HTTPBadRequest(reason=f'{name} must be an ordinal') from exception
+
+
+def _parse_optional_ordinal(raw: Optional[str], *, name: str) -> Optional[int]:
+  if raw is None:
+    return None
+  return _parse_ordinal(raw, name=name)
 
 
 def _parse_limit(raw: Optional[str], *, default: int, ceiling: int) -> int:

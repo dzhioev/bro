@@ -506,7 +506,7 @@ async def test_bro_projection_derives_output_and_skips_decomposed_rows(component
       _bro_call([{'type': 'message', 'content': [{'type': 'output_text', 'text': 'done'}]}])
     ],
   )
-  messages = (await store.query_messages(trail_id, after='3', limit=10, types=None))['messages']
+  messages = (await store.query_messages(trail_id, after=3, limit=10, types=None))['messages']
   assistant = next(message for message in messages if message['type'] == 'assistant')
   assert assistant['terminal'] is True
 
@@ -641,8 +641,8 @@ async def test_uuid_projection_and_point_reads(components):
   ]
   assert dynamo.queries[-1]['IndexName'] == 'uuid-index'
   assert dynamo.queries[-1]['ProjectionExpression'] == 'trail_id, step_id, #uuid'
-  assert (await store.get_step(universal, '1'))['raw'] == second
-  assert await store.query_step_uuids(universal, through='0') == [{'step_id': 0, 'uuid': 'uuid-1'}]
+  assert (await store.get_step(universal, 1))['raw'] == second
+  assert await store.query_step_uuids(universal, through=0) == [{'step_id': 0, 'uuid': 'uuid-1'}]
 
 
 @pytest.mark.asyncio
@@ -661,7 +661,7 @@ async def test_launch_context_is_harness_neutral_and_end_adds_no_step(components
   assert await store.get_launch_context(trail_id) == {'cwd': '/workspace'}
   assert storage_types.context_key(trail_id) in s3.objects
   before = len(dynamo.universal_steps)
-  await store.end_trail(trail_id=trail_id, reason='ok', detail=None, step_id='ignored')
+  await store.end_trail(trail_id=trail_id, reason='ok', detail=None)
   assert len(dynamo.universal_steps) == before
   assert dynamo.headers[trail_id]['end']['reason'] == 'ok'
 

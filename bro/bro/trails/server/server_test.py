@@ -126,7 +126,7 @@ class FakeStorage:
     self.trails[trail_id]['native'].update(changes.get('native', {}))
     return self.trails[trail_id]
 
-  async def end_trail(self, *, trail_id, reason, detail, step_id=None):
+  async def end_trail(self, *, trail_id, reason, detail):
     if trail_id not in self.trails:
       raise storage.TrailNotFound(trail_id)
     end = {'at': self._now(), 'reason': reason}
@@ -165,18 +165,17 @@ class FakeStorage:
     if trail_id not in self.trails:
       raise storage.TrailNotFound(trail_id)
     return next(
-      (step for step in self.steps[trail_id] if str(step['step_id']) == str(step_id)),
+      (step for step in self.steps[trail_id] if step['step_id'] == step_id),
       None,
     )
 
   async def query_step_uuids(self, trail_id, *, through):
     if trail_id not in self.trails:
       raise storage.TrailNotFound(trail_id)
-    limit = int(through) if through is not None else None
     return [
       {'step_id': step['step_id'], 'uuid': step['uuid']}
       for step in self.steps[trail_id]
-      if 'uuid' in step and (limit is None or int(step['step_id']) <= limit)
+      if 'uuid' in step and (through is None or step['step_id'] <= through)
     ]
 
   async def query_steps(self, trail_id, *, after, limit):
@@ -389,6 +388,22 @@ async def test_point_step_and_uuid_projection_reads(client, store):
   projected = await cli.get('/v1/trails/trail-1/steps/uuids?through=0', headers=_auth())
   assert projected.status == 200
   assert await projected.json() == {'steps': [{'step_id': 0, 'uuid': 'first'}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+  'path',
+  [
+    '/v1/trails/trail-1/steps/two',
+    '/v1/trails/trail-1/steps?after=two',
+    '/v1/trails/trail-1/steps/uuids?through=two',
+    '/v1/trails/trail-1/messages?after=two',
+  ],
+)
+async def test_step_selectors_reject_non_ordinals(client, store, path):
+  store.trails['trail-1'] = {'id': 'trail-1'}
+  store.steps['trail-1'] = []
+  assert (await (await client).get(path, headers=_auth())).status == 400
 
 
 @pytest.mark.asyncio

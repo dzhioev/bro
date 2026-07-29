@@ -271,14 +271,11 @@ class TrailsClient:
     reason: str,
     detail: Optional[str] = None,
     *,
-    step_id: Optional[str] = None,
     retry_delays: tuple[float, ...] = _DEFAULT_RETRY_DELAYS_SECONDS,
   ) -> None:
     payload: dict[str, Any] = {'reason': reason}
     if detail is not None:
       payload['detail'] = detail
-    if step_id is not None:
-      payload['step_id'] = step_id
     self._send('POST', f'/v1/trails/{trail_id}/end', payload, retry_delays=retry_delays)
 
   def keepalive(

@@ -390,9 +390,7 @@ class Storage:
     trail_id: str,
     reason: str,
     detail: Optional[str],
-    step_id: Optional[str] = None,
   ) -> dict:
-    del step_id
     await self._required_header(trail_id)
     timestamp = _now_iso()
     end = {'at': timestamp, 'reason': reason}
@@ -552,16 +550,12 @@ class Storage:
       key=lambda row: (row['trail_id'], row['step_id']),
     )
 
-  async def get_step(self, trail_id: str, step_id: str) -> Optional[dict]:
+  async def get_step(self, trail_id: str, step_id: int) -> Optional[dict]:
     header = await self._required_universal_header(trail_id)
-    try:
-      ordinal = int(step_id)
-    except ValueError as exception:
-      raise ValueError('step_id must be an ordinal') from exception
     response = await asyncio.to_thread(
       self._dynamo.get_item,
       TableName=self._steps_table,
-      Key=_ddb_item({'trail_id': trail_id, 'step_id': ordinal}),
+      Key=_ddb_item({'trail_id': trail_id, 'step_id': step_id}),
       ConsistentRead=True,
     )
     row = _from_ddb_item(response.get('Item'))
@@ -569,20 +563,14 @@ class Storage:
       return None
     return await self._materialize_row(header['harness'], row, resolve_large=True)
 
-  async def query_step_uuids(self, trail_id: str, *, through: Optional[str]) -> list[dict]:
+  async def query_step_uuids(self, trail_id: str, *, through: Optional[int]) -> list[dict]:
     await self._required_universal_header(trail_id)
-    parsed_through: Optional[int] = None
-    if through is not None:
-      try:
-        parsed_through = int(through)
-      except ValueError as exception:
-        raise ValueError('through must be an ordinal') from exception
-      if parsed_through < 0:
-        return []
+    if through is not None and through < 0:
+      return []
     expression_values = {':trail_id': _ddb(trail_id)}
     key_condition = 'trail_id = :trail_id'
-    if parsed_through is not None:
-      expression_values[':through'] = _ddb(parsed_through)
+    if through is not None:
+      expression_values[':through'] = _ddb(through)
       key_condition += ' AND step_id <= :through'
     rows: list[dict] = []
     exclusive_start_key: Optional[dict] = None
@@ -605,11 +593,11 @@ class Storage:
       if exclusive_start_key is None:
         return rows
 
-  async def query_steps(self, trail_id: str, *, after: Optional[str], limit: int) -> dict:
+  async def query_steps(self, trail_id: str, *, after: Optional[int], limit: int) -> dict:
     header = await self._required_universal_header(trail_id)
     return await self._query_universal_rows(
       header,
-      after=_parsed_ordinal(after),
+      after=after,
       limit=limit,
       resolve_large=header['harness'] == 'claude',
     )
@@ -618,15 +606,13 @@ class Storage:
     self,
     trail_id: str,
     *,
-    after: Optional[str],
+    after: Optional[int],
     limit: int,
     types: Optional[set[str]],
   ) -> dict:
     header = await self._required_universal_header(trail_id)
     adapter = self._backend(header['harness'])
-    page = await self._query_universal_rows(
-      header, after=_parsed_ordinal(after), limit=limit, resolve_large=True
-    )
+    page = await self._query_universal_rows(header, after=after, limit=limit, resolve_large=True)
     messages = [message for record in page['steps'] for message in adapter.project(record)]
     undeclared = {message['type'] for message in messages} - adapter.emitted_message_types
     if len(undeclared) > 0:
@@ -761,15 +747,6 @@ class Storage:
     last = response.get('LastEvaluatedKey')
     next_cursor = json.dumps(_from_ddb_item(last)) if last is not None else None
     return {'trails': items, 'next': next_cursor}
-
-
-def _parsed_ordinal(cursor: Optional[str]) -> Optional[int]:
-  if cursor is None:
-    return None
-  try:
-    return int(cursor)
-  except ValueError as exception:
-    raise ValueError('after must be an ordinal') from exception
 
 
 def _format_iso(moment: datetime) -> str:
