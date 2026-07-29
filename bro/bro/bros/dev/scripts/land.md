@@ -1,7 +1,7 @@
 ---
 name: land
 description: This script should be used when the user signals that an open PR should be merged into master — "land it", "land", "merge it", "merge the PR", "merge to master". Runs `land-pr`, which squash-merges the open PR for the current branch in one shot (precondition checks, aggregated token footer injected into the squash body, remote branch cleanup), then records a `merged` comment on the task and closes it to done unless the user explicitly said to keep it open. On APPROVED, `@::run-pr` chains into this script. Direct push to master (no PR) is a one-liner (`git fetch origin && git rebase origin/master && git push origin HEAD:master`) — not this script.
-version: 3.0.0
+version: 3.1.0
 ---
 
 # land
@@ -36,7 +36,7 @@ If `land-pr` exits nonzero, surface its stderr and stop — do not hand-roll the
 
 First decide task closure. Two cases block or defer the close:
 
-- **The change needs a deploy or migration to take effect.** If it touches code or config that runs in a deployed service, or adds a migration/backfill — the repo's own docs say what is deployed — the merge alone doesn't make it live: the task closes only after the deploy succeeds. An explicit instruction in the initial request or task body to close without holding for the deploy (e.g. a staged feature flow that deploys once after integration) overrides this whole case: close as instructed and note the deferred deploy in the report. Otherwise hand the rollout to the operations bro in your summon allow-list: summon it (per `@::ask`) with a terse deploy request — `deploy <service or feature>`, naming the target, not the steps; the ops bro infers the commit, scripts, and sequence itself — and a timeout adequate for the rollout (the 1800s default is sized for a typical deploy; raise it when the target plausibly needs longer). Then:
+- **The change needs a deploy or migration to take effect.** If it touches code or config that runs in a deployed service, or adds a migration/backfill — the repo's own docs say what is deployed — the merge alone doesn't make it live: the task closes only after the deploy succeeds. An explicit instruction in the initial request or task body to close without holding for the deploy (e.g. a staged feature flow that deploys once after integration) overrides this whole case: close as instructed and note the deferred deploy in the report. Otherwise hand the rollout to the operations bro in your summon allow-list: summon it (per `@::ask`) with a terse deploy request — `deploy <service or feature>`, naming the target, not the steps; the ops bro infers the scripts and sequence itself — and a timeout adequate for the rollout (the 1800s default is sized for a typical deploy; raise it when the target plausibly needs longer). Base that child on the merged commit — pass `land-pr`'s `squash_sha` as the summon's base ref (`--into <squash_sha>`), not as a commit named in the prompt; your own HEAD is still the pre-squash branch tip. Then:
   - deploy succeeded → close the task done as usual and include the ops bro's answer in the report;
   - deploy failed (raised / error / timeout) → leave the task open and report the failure and its reason;
   - no summon client in the session (no broker channel), or no operations bro in the allow-list → leave the task open and report the pending deploy, naming the exact summon command (`call <ops-bro> "deploy …"`).

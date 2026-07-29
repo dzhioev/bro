@@ -1,7 +1,7 @@
 ---
 name: ask
 description: This script should be used when the user asks to relay a question or job to another bro — "@:ask librorian to add Dune to the library:@", "ask the pm bro whether the inbox holds anything urgent", "have devoops deploy flow-mcp", "summon ppp-dev". Turns the phrasing into a summon (an isolated one-shot run of the target bro with its own credentials), picks whichever summon client the session has, decides foreground vs background, and relays the answer with the failure modes handled. A summon succeeds only when the target is in the summoner's allow-list — most bros seed none, and a session's own list is fixed at launch — so a denial is a normal outcome the script relays.
-version: 1.3.0
+version: 1.4.0
 ---
 
 # Ask
@@ -15,7 +15,7 @@ From the user's wording extract:
 - **target** — the bro to summon (`devoops`, `pm`, …). The session has a summon allow-list; don't second-guess it, just try — a disallowed target fails immediately with a clear reason.
 - **prompt** — the request, rewritten to be fully self-contained. The target shares no context with this session: no conversation history, no working tree, no environment. Spell out concrete names, refs, and expectations ("list the deploy targets and their kinds", not "list them"). Ask for what the user actually wants back — the reply is the only thing that returns.
 
-Optional knobs, normally only when the user asks for them: a per-call timeout in seconds (default 1800 — sized for a deploy), a base git ref for the child (default: this workspace's current HEAD, so the target builds on the code as committed here — uncommitted changes never transfer; deploys included, so pass a ref explicitly when the child must build something other than what you have checked out), the child's hold — its user-involvement level (default unattended; the child runs isolated with no human channel, so raise it only when the user explicitly wants otherwise) — and the child's reasoning effort and fast mode (default: the target bro's own LLM spec).
+Optional knobs, normally only when the user asks for them: a per-call timeout in seconds (default 1800 — sized for a deploy), a base git ref for the child (default: this workspace's current HEAD, so the target builds on the code as committed here — uncommitted changes never transfer; when the request turns on a specific commit, branch or tag, pass it here rather than naming it in the prompt), the child's hold — its user-involvement level (default unattended; the child runs isolated with no human channel, so raise it only when the user explicitly wants otherwise) — and the child's reasoning effort and fast mode (default: the target bro's own LLM spec).
 
 The child's scope is a knob too: grants and revokes, each value a credential name or `@bro` for a summon target of the target's own. They start from the target's own declarations, not yours — nothing of your scope reaches the child unless you name it, and you can only name what you hold yourself: a credential in your own scope, a bro in your own allow-list. Grant only what the request actually needs and the user asked for: a credential the target's manifest lacks (an e2e run's `gmail_creds`), or a bro the target has to reach onward (`@devoops` so a dev child can hand off a deploy). Both directions are strict, so naming something the target already has (or, for a revoke, lacks) fails the summon rather than passing quietly.
 
