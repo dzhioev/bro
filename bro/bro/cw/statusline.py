@@ -90,3 +90,7 @@ def statusline() -> int:
 def main(argv: list[str]) -> Optional[int]:
   del argv
   return statusline()
+
+
+if __name__ == '__main__':
+  sys.exit(main(sys.argv))

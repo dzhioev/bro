@@ -1,5 +1,6 @@
 import json
-from pathlib import Path
+import shlex
+import sys
 from unittest.mock import patch
 
 import pytest
@@ -9,7 +10,6 @@ from base.project_root import PROJECT_ROOT
 from cw.mcp import MCPEndpoint
 from cw.session_test import _spec
 
-_WORKSPACE = Path('/ws')
 _ENDPOINT = MCPEndpoint(port=1234, token='tok')
 
 
@@ -39,7 +39,7 @@ def _pm_persona_namespaces() -> list[str]:
 def _cw_session_launch(spec, **kwargs) -> cw.claude_argv.ClaudeLaunch:
   kwargs.setdefault('endpoint', _ENDPOINT)
   with patch('cw.claude_argv._session_append_prompt', return_value='append text'):
-    return cw.claude_argv.build_claude_launch(spec, workspace=_WORKSPACE, **kwargs)
+    return cw.claude_argv.build_claude_launch(spec, **kwargs)
 
 
 def _settings(argv: list[str]) -> dict:
@@ -60,6 +60,11 @@ class TestCwSessionLaunch:
   def test_fast_mode_lands_in_settings(self):
     assert _settings(_cw_session_launch(_spec(fast=True), claude_args=[]).argv)['fastMode'] is True
     assert _settings(_cw_session_launch(_spec(), claude_args=[]).argv)['fastMode'] is False
+
+  def test_status_line_lands_in_settings(self):
+    status_line = _settings(_cw_session_launch(_spec(), claude_args=[]).argv)['statusLine']
+    assert status_line['type'] == 'command'
+    assert status_line['command'] == f'{shlex.quote(sys.executable)} -m cw.statusline'
 
   def test_effort_injected(self):
     argv = _cw_session_launch(_spec(effort='xhigh'), claude_args=[]).argv
@@ -103,9 +108,7 @@ class TestCwSessionLaunch:
 class TestRawLaunch:
   def _launch(self, **kwargs) -> cw.claude_argv.ClaudeLaunch:
     spec = _spec(bro='pm', raw=True, **kwargs)
-    return cw.claude_argv.build_claude_launch(
-      spec, workspace=_WORKSPACE, claude_args=[], endpoint=_ENDPOINT
-    )
+    return cw.claude_argv.build_claude_launch(spec, claude_args=[], endpoint=_ENDPOINT)
 
   def test_basic_shape(self):
     argv = self._launch().argv
@@ -153,6 +156,10 @@ class TestRawLaunch:
     assert settings['apiKeyHelper'] == str(PROJECT_ROOT / 'cw' / 'print_anthropic_key.sh')
     assert _settings(self._launch().argv)['fastMode'] is False
 
+  def test_status_line_lands_in_settings(self):
+    status_line = _settings(self._launch().argv)['statusLine']
+    assert status_line['command'] == f'{shlex.quote(sys.executable)} -m cw.statusline'
+
   def test_system_prompt_is_bros_claude_flavor(self):
     from bro.registry import create_bro
 
@@ -178,5 +185,5 @@ class TestRawLaunch:
   def test_unknown_bro_raises(self):
     with pytest.raises(KeyError, match='unknown bro'):
       cw.claude_argv.build_claude_launch(
-        _spec(bro='does-not-exist'), workspace=_WORKSPACE, claude_args=[], endpoint=_ENDPOINT
+        _spec(bro='does-not-exist'), claude_args=[], endpoint=_ENDPOINT
       )

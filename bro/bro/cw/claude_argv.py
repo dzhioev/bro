@@ -4,13 +4,15 @@ The cw-session/raw fork is confined to here: `--raw` selects a `--bare` claude
 with api-key auth and the bro's own system prompt, a cw-session keeps the full
 harness with the cw-injected append prompt. Both mount their bro's session-local
 MCP namespaces. Everything else — model, the merged `--settings` (fastMode +
-apiKeyHelper), `--effort`, the forwarded claude args, and
-prompt seeding is handled once, identically wherever the session runs.
+statusLine, plus the apiKeyHelper under `--raw`), `--effort`, the forwarded
+claude args, and prompt seeding is handled once, identically wherever the
+session runs.
 """
 
 import json
+import shlex
+import sys
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import prompts
@@ -49,11 +51,10 @@ _FIRST_TURN_LAUNCH_NOTE = (
 def build_claude_launch(
   spec: 'SessionSpec',
   *,
-  workspace: Path,
   claude_args: list[str],
   endpoint: MCPEndpoint,
 ) -> ClaudeLaunch:
-  """build the claude argv for a session running in `workspace`.
+  """build the claude argv for a session.
 
   `claude_args` is the forwarded tail (the user's extra args, plus any resolved
   `--resume <id>` — resolution is the caller's, since it differs per launch
@@ -75,7 +76,16 @@ def build_claude_launch(
   """
   from bro.registry import create_bro
 
-  settings: dict = {'fastMode': spec.fast}
+  settings: dict = {
+    'fastMode': spec.fast,
+    'statusLine': {
+      # the runner's own interpreter rather than a PATH lookup for the
+      # registered script — the session's PATH need not carry the workspace's
+      # venv, and the shell claude runs the command through splits on spaces
+      'type': 'command',
+      'command': f'{shlex.quote(sys.executable)} -m cw.statusline',
+    },
+  }
   argv = ['--model', _CW_MODEL]
   bro = create_bro(spec.session_bro)
   servers = bro.claude_bro_mcp_servers() if spec.raw else bro.claude_persona_mcp_servers()

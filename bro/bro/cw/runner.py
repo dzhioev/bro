@@ -143,12 +143,7 @@ def run_in_place(spec: 'SessionSpec') -> int:
       return 1
     teardown.callback(server.stop)
 
-    launch = build_claude_launch(
-      spec,
-      workspace=workspace,
-      claude_args=claude_args,
-      endpoint=server.endpoint,
-    )
+    launch = build_claude_launch(spec, claude_args=claude_args, endpoint=server.endpoint)
     _set_session_context(spec, launch.system_prompt, workspace)
 
     # after the session context: the daemon's spawn snapshots os.environ, and
