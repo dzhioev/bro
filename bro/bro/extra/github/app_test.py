@@ -71,16 +71,16 @@ def test_mints_installation_token_via_signed_app_jwt(monkeypatch):
 
 
 @pytest.fixture
-def ppp_dir(monkeypatch, tmp_path: Path) -> Path:
+def bro_dir(monkeypatch, tmp_path: Path) -> Path:
   """isolated credential search roots (as in base/credentials_test.py)"""
   configs = tmp_path / 'configs'
-  ppp = tmp_path / 'ppp'
+  bro = tmp_path / 'bro'
   configs.mkdir()
-  ppp.mkdir()
+  bro.mkdir()
   monkeypatch.setattr(credentials, 'CONFIGS_DIR', str(configs))
-  monkeypatch.setattr(credentials, 'PPP_DIR', str(ppp))
+  monkeypatch.setattr(credentials, 'BRO_DIR', str(bro))
   monkeypatch.setattr(credentials, '_default_store', None)
-  return ppp
+  return bro
 
 
 class TestSource:
@@ -114,12 +114,12 @@ class TestSource:
     with pytest.raises(ValueError, match="'private_key' must be a string"):
       app.Source('bot.json').mint({'app_id': 1, 'installation_id': 2, 'private_key': 5})
 
-  def test_scoped_store_round_trip(self, ppp_dir: Path, monkeypatch):
+  def test_scoped_store_round_trip(self, bro_dir: Path, monkeypatch):
     # a github_app-backed variant hydrates as its minting config under the kind
     # name, and the scoped entry rehydrates back into this Source in-session
     config = {'app_id': 1, 'installation_id': 2, 'private_key': 'PEM'}
-    (ppp_dir / 'github_app_bot.json').write_text(json.dumps(config))
-    (ppp_dir / credentials.HOST_REGISTRY_FILE).write_text(
+    (bro_dir / 'github_app_bot.json').write_text(json.dumps(config))
+    (bro_dir / credentials.HOST_REGISTRY_FILE).write_text(
       json.dumps(
         {'github+bot': {'sources': [{'type': 'github_app', 'file': 'github_app_bot.json'}]}}
       )

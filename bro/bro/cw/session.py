@@ -230,7 +230,7 @@ def _preflight_cw_session_auth(spec: SessionSpec) -> bool:
   log.error(
     'claude_code secret not resolvable — a cw-session authenticates with the '
     'setup-token; mint one with `claude setup-token` and store it in '
-    '~/.ppp/claude_code_oauth_token'
+    '~/.bro/claude_code_oauth_token'
   )
   return False
 
@@ -430,7 +430,7 @@ def _host_session(spec: SessionSpec, base_ref: Optional[str]) -> int:
   runner_env = venv_env(worktree / '.venv')
   claude_dir = _provision_host_claude_dir(spec.name, worktree, project)
   runner_env['CLAUDE_CONFIG_DIR'] = str(claude_dir)
-  runner_env[credentials.REGISTRY_ENV] = str(materialize_scoped_store(store, claude_dir / '.ppp'))
+  runner_env[credentials.REGISTRY_ENV] = str(materialize_scoped_store(store, claude_dir / '.bro'))
   _apply_claude_auth(runner_env)
   clear_session_end(project, workspace.ref)
   with _held_pidfile(workspace.pidfile):

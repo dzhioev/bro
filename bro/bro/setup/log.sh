@@ -4,7 +4,7 @@
 #   2026-07-17T17:45:10 INFO[scope] message
 #
 # on stderr, with the executed script's file stem as the scope. Messages below
-# the PPP_LOG_LEVEL threshold (base/log.py owns the variable; INFO when unset)
+# the BRO_LOG_LEVEL threshold (base/log.py owns the variable; INFO when unset)
 # are dropped; log_enabled exposes the same gate as a predicate, for quieting a
 # subprocess's own output at higher thresholds.
 
@@ -28,7 +28,7 @@ _log_level_number() {
 
 # resolved once at source time, so an invalid threshold aborts the sourcing
 # script instead of silently dropping every message
-_LOG_THRESHOLD="$(_log_level_number "${PPP_LOG_LEVEL:-INFO}")"
+_LOG_THRESHOLD="$(_log_level_number "${BRO_LOG_LEVEL:-INFO}")"
 
 log_enabled() {
   [ "$(_log_level_number "$1")" -ge "$_LOG_THRESHOLD" ]

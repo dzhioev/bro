@@ -50,7 +50,7 @@ def _initialize_container_submodules(workspace: Path, host_repository: Path) -> 
       str(host_repository),
     ],
     check=True,
-    env={**os.environ, 'PPP_LOG_LEVEL': 'WARNING'},
+    env={**os.environ, 'BRO_LOG_LEVEL': 'WARNING'},
   )
 
 

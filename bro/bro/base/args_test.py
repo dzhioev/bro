@@ -291,7 +291,7 @@ class TestEnvBooleans:
     log.set_level(_logging.INFO)
     parser = Parser()
     parser.parse_args(['--allow-env'])
-    assert _logging.getLogger('ppp').level == log.VERBOSE
+    assert _logging.getLogger('bro').level == log.VERBOSE
     log.set_level(_logging.INFO)
 
   def test_allow_env_itself_not_env_backed(self, monkeypatch):
@@ -720,7 +720,7 @@ class TestLogFlag:
 
     parser = Parser()
     parser.parse_args(['--log', 'warning'])
-    assert _logging.getLogger('ppp').level == _logging.WARNING
+    assert _logging.getLogger('bro').level == _logging.WARNING
     assert os.environ[log.LEVEL_ENV] == 'WARNING'
 
   def test_verbose_is_log_verbose_shorthand(self):
@@ -731,7 +731,7 @@ class TestLogFlag:
 
     parser = Parser()
     parser.parse_args(['--verbose'])
-    assert _logging.getLogger('ppp').level == log.VERBOSE
+    assert _logging.getLogger('bro').level == log.VERBOSE
     assert os.environ[log.LEVEL_ENV] == 'VERBOSE'
 
   def test_unknown_log_level_rejected(self, capsys):
@@ -758,4 +758,4 @@ class TestLogFlag:
     monkeypatch.setenv('VERBOSE', '1')
     parser = Parser()
     parser.parse_args(['--allow-env', '--log', 'info'])
-    assert _logging.getLogger('ppp').level == _logging.INFO
+    assert _logging.getLogger('bro').level == _logging.INFO

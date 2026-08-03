@@ -349,7 +349,7 @@ class TestBroRun:
     from bro import bro as bro_module
 
     monkeypatch.setattr(credentials, 'CONFIGS_DIR', str(tmp_path))
-    monkeypatch.setattr(credentials, 'PPP_DIR', str(tmp_path))
+    monkeypatch.setattr(credentials, 'BRO_DIR', str(tmp_path))
     monkeypatch.setattr(credentials, '_default_store', None)
     monkeypatch.delenv(bro_module._TRAILS_DISABLED_ENV, raising=False)
     with pytest.raises(RuntimeError, match='trails/bootstrap.sh'):

@@ -25,13 +25,13 @@ if [ "$(id -u)" = "0" ] && [ -z "${CW_ENTRYPOINT_REEXEC:-}" ]; then
       groupmod -o -g "$SOCK_GID" docker
     fi
   fi
-  # the scoped credential store is `docker cp`'d into /home/cw/.ppp before start
+  # the scoped credential store is `docker cp`'d into /home/cw/.bro before start
   # (cw/containers.py), landing owned by the uid baked into the tar. re-own it to cw after the
   # remap above so the resolver and install hooks (run as cw) can read the 0600
   # files — on Linux (cw remapped to the host uid) and on Docker for Mac (remap
   # skipped, cw keeps its image uid).
-  if [ -d /home/cw/.ppp ]; then
-    chown -R cw:cw /home/cw/.ppp
+  if [ -d /home/cw/.bro ]; then
+    chown -R cw:cw /home/cw/.bro
   fi
   export CW_ENTRYPOINT_REEXEC=1
   exec gosu cw "$0" "$@"
@@ -143,7 +143,7 @@ if [ "${CW_SKIP_VENV:-}" != "1" ]; then
   source /workspace/.venv/bin/activate
 fi
 
-# secrets resolve from the scoped credential store bind-mounted at ~/.ppp (see
+# secrets resolve from the scoped credential store bind-mounted at ~/.bro (see
 # cw/containers.py). wire each into the tool that consumes it from outside the resolver (git
 # credential helper, the aws CLI's ~/.aws/credentials, ...) via its registry-declared
 # install hook — one generic step, no per-secret logic here. env exports must

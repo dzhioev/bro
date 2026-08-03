@@ -11,7 +11,7 @@ def config_path(monkeypatch, tmp_path):
   from base import credentials
 
   monkeypatch.setattr(credentials, 'CONFIGS_DIR', str(tmp_path))
-  monkeypatch.setattr(credentials, 'PPP_DIR', str(tmp_path))
+  monkeypatch.setattr(credentials, 'BRO_DIR', str(tmp_path))
   monkeypatch.setattr(credentials, '_default_store', None)
   return tmp_path / 'anthropic.json'
 

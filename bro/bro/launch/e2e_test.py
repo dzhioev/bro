@@ -373,9 +373,9 @@ def isolated_env() -> Iterator[IsolatedEnv]:
   # session MCP server builds brog's backend from that secret at assembly, so
   # the health gate needs the stub a real session's scoped store would carry.
   # construction is offline — nothing contacts the url
-  ppp_dir = home / '.ppp'
-  ppp_dir.mkdir()
-  (ppp_dir / 'brog.json').write_text(
+  bro_dir = home / '.bro'
+  bro_dir.mkdir()
+  (bro_dir / 'brog.json').write_text(
     json.dumps(
       {'backend': 'flow', 'transport': 'http', 'url': 'https://brog.e2e.invalid', 'token': 'e2e'}
     )

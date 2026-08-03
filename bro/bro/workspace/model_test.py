@@ -16,23 +16,23 @@ class _FakeProc:
 
 class TestCleanupImage:
   def test_prefers_current_tag_when_present(self, monkeypatch):
-    monkeypatch.setattr(model, 'image_tag', lambda: 'bro/ppp-dev:cur')
+    monkeypatch.setattr(model, 'image_tag', lambda: 'example/session:cur')
     monkeypatch.setattr(model.subprocess, 'run', lambda *a, **k: _FakeProc(returncode=0))
-    assert model._cleanup_image() == 'bro/ppp-dev:cur'
+    assert model._cleanup_image() == 'example/session:cur'
 
-  def test_falls_back_to_any_ppp_cw_image(self, monkeypatch):
-    monkeypatch.setattr(model, 'image_tag', lambda: 'bro/ppp-dev:cur')
+  def test_falls_back_to_an_image_from_the_same_repository(self, monkeypatch):
+    monkeypatch.setattr(model, 'image_tag', lambda: 'example/session:cur')
 
     def fake_run(argv, *a, **k):
       if argv[1] == 'image':  # docker image inspect -> miss
         return _FakeProc(returncode=1)
-      return _FakeProc(returncode=0, stdout='bro/ppp-dev:<none>\nbro/ppp-dev:abc123\n')
+      return _FakeProc(returncode=0, stdout='example/session:<none>\nexample/session:abc123\n')
 
     monkeypatch.setattr(model.subprocess, 'run', fake_run)
-    assert model._cleanup_image() == 'bro/ppp-dev:abc123'
+    assert model._cleanup_image() == 'example/session:abc123'
 
   def test_none_when_no_image(self, monkeypatch):
-    monkeypatch.setattr(model, 'image_tag', lambda: 'bro/ppp-dev:cur')
+    monkeypatch.setattr(model, 'image_tag', lambda: 'example/session:cur')
 
     def fake_run(argv, *a, **k):
       if argv[1] == 'image':
@@ -50,7 +50,7 @@ class TestRemoveContainerDir:
     monkeypatch.setattr(
       model.subprocess, 'run', lambda *a, **k: pytest.fail('docker must not be invoked')
     )
-    model._remove_container_dir(tmp_path / 'ws', image='bro/ppp-dev:x')
+    model._remove_container_dir(tmp_path / 'ws', image='example/session:x')
     assert calls == [tmp_path / 'ws']
 
   def test_missing_dir_is_noop(self, monkeypatch, tmp_path):
@@ -61,7 +61,7 @@ class TestRemoveContainerDir:
     monkeypatch.setattr(
       model.subprocess, 'run', lambda *a, **k: pytest.fail('docker must not be invoked')
     )
-    model._remove_container_dir(tmp_path / 'gone', image='bro/ppp-dev:x')
+    model._remove_container_dir(tmp_path / 'gone', image='example/session:x')
 
   def test_escalates_to_root_container_on_eperm(self, monkeypatch, tmp_path):
     def boom(_):
@@ -76,7 +76,7 @@ class TestRemoveContainerDir:
 
     monkeypatch.setattr(model.subprocess, 'run', fake_run)
     target = tmp_path / 'ws'  # never created -> path.exists() is False afterwards
-    model._remove_container_dir(target, image='bro/ppp-dev:x')
+    model._remove_container_dir(target, image='example/session:x')
     argv = seen['argv']
     assert argv[:5] == ['docker', 'run', '--rm', '-u', '0']
     assert '--entrypoint' in argv and argv[argv.index('--entrypoint') + 1] == 'rm'
@@ -100,7 +100,7 @@ class TestRemoveContainerDir:
       model.subprocess, 'run', lambda *a, **k: _FakeProc(returncode=1, stderr='denied')
     )
     with pytest.raises(RuntimeError, match='docker rm failed: denied'):
-      model._remove_container_dir(tmp_path / 'ws', image='bro/ppp-dev:x')
+      model._remove_container_dir(tmp_path / 'ws', image='example/session:x')
 
   def test_raises_when_dir_survives_docker_rm(self, monkeypatch, tmp_path):
     def boom(_):
@@ -111,13 +111,13 @@ class TestRemoveContainerDir:
     survivor = tmp_path / 'ws'
     survivor.mkdir()  # still present after the mocked docker rm
     with pytest.raises(RuntimeError, match='still present'):
-      model._remove_container_dir(survivor, image='bro/ppp-dev:x')
+      model._remove_container_dir(survivor, image='example/session:x')
 
 
 class TestContainerWorkspaceRemove:
   def test_removes_dir_with_cleanup_image_and_host_log(self, monkeypatch, tmp_path):
     monkeypatch.setattr(model, 'containers_dir', lambda project: tmp_path / 'containers')
-    monkeypatch.setattr(model, '_cleanup_image', lambda: 'bro/ppp-dev:img')
+    monkeypatch.setattr(model, '_cleanup_image', lambda: 'example/session:img')
     removed = {}
     monkeypatch.setattr(
       model,
@@ -130,7 +130,7 @@ class TestContainerWorkspaceRemove:
     host_log.write_text('mid-session line\n')
     model.record_session_end(tmp_path / 'project', workspace.ref, 0)
     workspace.remove()
-    assert removed == {'path': workspace.path, 'image': 'bro/ppp-dev:img'}
+    assert removed == {'path': workspace.path, 'image': 'example/session:img'}
     # the session host log and end record go with the workspace
     assert not host_log.exists()
     assert workspace.is_clean() == (False, ['no recorded session end'])

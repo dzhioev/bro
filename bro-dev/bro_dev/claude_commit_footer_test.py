@@ -74,8 +74,8 @@ class TestEmitDefault:
 
   def test_bro_agent_footer(self, tmp_path):
     s = State(tmp_path / 'state.json')
-    footer = _emit_default(usage.Usage(agent='bro//ppp-dev', per_model={'gpt-5': C(output=42)}), s)
-    assert footer == '> created with bro//ppp-dev | gpt-5: ↑(0 0 0) ↓42'
+    footer = _emit_default(usage.Usage(agent='bro//dev', per_model={'gpt-5': C(output=42)}), s)
+    assert footer == '> created with bro//dev | gpt-5: ↑(0 0 0) ↓42'
 
   def test_second_commit_is_delta(self, tmp_path):
     p = tmp_path / 'state.json'
@@ -136,14 +136,14 @@ class TestEmitSquash:
     s = State(tmp_path / 'state.json')  # land session authored no branch commits
     commits = [
       self._commit('Claude Code 2.1.120', {'Opus 4.8': C(input=100, output=1)}),
-      self._commit('bro//ppp-dev', {'gpt-5': C(cache_read=50)}),
+      self._commit('bro//dev', {'gpt-5': C(cache_read=50)}),
     ]
     land = usage.Usage(agent='Claude Code 2.1.130', per_model={OPUS: C(input=40)})
     footer, _ = _emit_squash(commits, land, s)
     parsed = usage.parse_footer(footer)
     assert parsed is not None
     assert parsed.delta == {'Opus 4.8': C(input=140, output=1), 'gpt-5': C(cache_read=50)}
-    assert parsed.agents == ['Claude Code 2.1.120', 'Claude Code 2.1.130', 'bro//ppp-dev']
+    assert parsed.agents == ['Claude Code 2.1.120', 'Claude Code 2.1.130', 'bro//dev']
 
   def test_historic_compressed_versions_sum(self, tmp_path):
     # commits made before the agent generalization carry the compressed shape;

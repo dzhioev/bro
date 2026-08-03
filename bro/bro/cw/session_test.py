@@ -745,7 +745,7 @@ class TestHostSession:
 
     monkeypatch.setattr(cw.session.subprocess, 'run', fake_run)
     assert cw.session._host_session(_spec(host=True), None) == 0
-    registry = tmp_path / 'claude-config' / '.ppp' / 'credentials.json'
+    registry = tmp_path / 'claude-config' / '.bro' / 'credentials.json'
     assert runs[0][1]['env']['CREDENTIALS_REGISTRY'] == str(registry)
     assert materialized['store'] == {'x.cred': b'v'}
     assert materialized['directory'] == registry.parent

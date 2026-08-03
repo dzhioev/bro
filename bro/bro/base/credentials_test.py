@@ -14,23 +14,23 @@ from base import credentials, template
 
 @pytest.fixture
 def configs_dir(monkeypatch, tmp_path: Path) -> Path:
-  """point the resolver's project search root at a tmp dir, isolate the `~/.ppp`
+  """point the resolver's explicit config root at a tmp dir, isolate the `~/.bro`
   fallback to an empty tmp dir (so the host's real store can't leak in), and reset
   the singleton."""
   configs = tmp_path / 'configs'
-  ppp = tmp_path / 'ppp'
+  bro = tmp_path / 'bro'
   configs.mkdir()
-  ppp.mkdir()
+  bro.mkdir()
   monkeypatch.setattr(credentials, 'CONFIGS_DIR', str(configs))
-  monkeypatch.setattr(credentials, 'PPP_DIR', str(ppp))
+  monkeypatch.setattr(credentials, 'BRO_DIR', str(bro))
   monkeypatch.setattr(credentials, '_default_store', None)
   return configs
 
 
 @pytest.fixture
-def ppp_dir(configs_dir: Path) -> Path:
-  """the `~/.ppp` fallback search root set up alongside `configs_dir`."""
-  return configs_dir.parent / 'ppp'
+def bro_dir(configs_dir: Path) -> Path:
+  """the `~/.bro` fallback search root set up alongside `configs_dir`."""
+  return configs_dir.parent / 'bro'
 
 
 def _write(dir: Path, name: str, payload) -> None:
@@ -115,14 +115,19 @@ class TestLocalSource:
     _write(configs_dir, 'notion.json', {'token': 't'})
     assert credentials.LocalSource('notion.json').fetch() == '{"token": "t"}'
 
-  def test_fetch_falls_back_to_ppp_dir(self, configs_dir: Path, ppp_dir: Path):
-    _write(ppp_dir, 'notion.json', {'token': 'p'})
-    assert credentials.LocalSource('notion.json').fetch() == '{"token": "p"}'
+  def test_fetch_falls_back_to_bro_dir(self, configs_dir: Path, bro_dir: Path):
+    _write(bro_dir, 'notion.json', {'token': 'b'})
+    assert credentials.LocalSource('notion.json').fetch() == '{"token": "b"}'
 
-  def test_configs_dir_wins_over_ppp_dir(self, configs_dir: Path, ppp_dir: Path):
+  def test_configs_dir_wins_over_bro_dir(self, configs_dir: Path, bro_dir: Path):
     _write(configs_dir, 'notion.json', {'token': 'c'})
-    _write(ppp_dir, 'notion.json', {'token': 'p'})
+    _write(bro_dir, 'notion.json', {'token': 'b'})
     assert credentials.LocalSource('notion.json').fetch() == '{"token": "c"}'
+
+  def test_unset_configs_dir_searches_only_bro_dir(self, monkeypatch, bro_dir: Path):
+    monkeypatch.setattr(credentials, 'CONFIGS_DIR', None)
+    _write(bro_dir, 'notion.json', {'token': 'b'})
+    assert credentials.LocalSource('notion.json').fetch() == '{"token": "b"}'
 
   def test_fetch_returns_none_when_absent(self, configs_dir: Path):
     assert credentials.LocalSource('missing.json').fetch() is None
@@ -212,39 +217,39 @@ class TestSSMSource:
 
 
 class TestMintingSource:
-  def _source(self, ppp_dir: Path, config=None, **kwargs) -> _TicketSource:
-    _write(ppp_dir, 'ticket.json', config if config is not None else {'prefix': 'ticket'})
+  def _source(self, bro_dir: Path, config=None, **kwargs) -> _TicketSource:
+    _write(bro_dir, 'ticket.json', config if config is not None else {'prefix': 'ticket'})
     return _TicketSource('ticket.json', **kwargs)
 
-  def test_fetch_mints_from_config(self, ppp_dir: Path):
-    assert self._source(ppp_dir).fetch() == 'ticket_1'
+  def test_fetch_mints_from_config(self, bro_dir: Path):
+    assert self._source(bro_dir).fetch() == 'ticket_1'
 
   def test_fetch_returns_none_when_config_absent(self, configs_dir: Path):
     assert _TicketSource('missing.json').fetch() is None
 
-  def test_fetch_reuses_value_until_near_expiry(self, ppp_dir: Path):
-    source = self._source(ppp_dir)
+  def test_fetch_reuses_value_until_near_expiry(self, bro_dir: Path):
+    source = self._source(bro_dir)
     assert source.fetch() == 'ticket_1'
     assert source.fetch() == 'ticket_1'
     assert source.mints == 1
 
-  def test_fetch_remints_within_expiry_margin(self, ppp_dir: Path):
-    source = self._source(ppp_dir, expires_in=credentials.MintingSource.EXPIRY_MARGIN / 2)
+  def test_fetch_remints_within_expiry_margin(self, bro_dir: Path):
+    source = self._source(bro_dir, expires_in=credentials.MintingSource.EXPIRY_MARGIN / 2)
     assert source.fetch() == 'ticket_1'
     assert source.fetch() == 'ticket_2'
 
-  def test_config_not_an_object_raises(self, ppp_dir: Path):
-    source = self._source(ppp_dir, config=[1, 2])
+  def test_config_not_an_object_raises(self, bro_dir: Path):
+    source = self._source(bro_dir, config=[1, 2])
     with pytest.raises(ValueError, match='not a json object'):
       source.fetch()
 
-  def test_config_not_json_raises(self, ppp_dir: Path):
-    source = self._source(ppp_dir, config='not json')
+  def test_config_not_json_raises(self, bro_dir: Path):
+    source = self._source(bro_dir, config='not json')
     with pytest.raises(ValueError, match='not valid json'):
       source.fetch()
 
-  def test_materialize_scoped_ships_the_config(self, ppp_dir: Path):
-    source = self._source(ppp_dir)
+  def test_materialize_scoped_ships_the_config(self, bro_dir: Path):
+    source = self._source(bro_dir)
     entry, content = source.materialize_scoped('github.cred', 'ticket_1')
     assert entry == {'type': 'ticket', 'file': 'github.cred'}
     assert json.loads(content) == {'prefix': 'ticket'}
@@ -353,8 +358,8 @@ class TestStore:
     store = self._store(credentials.Secret('notion', [credentials.LocalSource('notion.json')]))
     assert store.resolve('notion') == ('{"token": "t"}', True)
 
-  def test_resolve_flags_minted_value_uncacheable(self, ppp_dir: Path):
-    _write(ppp_dir, 'ticket.json', {'prefix': 'ticket'})
+  def test_resolve_flags_minted_value_uncacheable(self, bro_dir: Path):
+    _write(bro_dir, 'ticket.json', {'prefix': 'ticket'})
     store = self._store(credentials.Secret('sekret', [_TicketSource('ticket.json')]))
     assert store.resolve('sekret') == ('ticket_1', False)
 
@@ -725,12 +730,12 @@ class TestNameGrammar:
 
 
 class TestHostRegistry:
-  def test_absent_additions_file_yields_builtin(self, ppp_dir: Path):
+  def test_absent_additions_file_yields_builtin(self, bro_dir: Path):
     assert set(credentials.host_registry()) == set(credentials.default_registry())
 
-  def test_additions_merge_per_name_over_builtin(self, ppp_dir: Path):
+  def test_additions_merge_per_name_over_builtin(self, bro_dir: Path):
     _write(
-      ppp_dir,
+      bro_dir,
       credentials.HOST_REGISTRY_FILE,
       {'github+pavel': {'sources': [{'file': 'github_token_pavel'}]}},
     )
@@ -740,28 +745,28 @@ class TestHostRegistry:
     assert 'github' in registry
     assert 'notion' in registry
 
-  def test_additions_file_follows_the_search_path_priority(self, configs_dir: Path, ppp_dir: Path):
+  def test_additions_file_follows_the_search_path_priority(self, configs_dir: Path, bro_dir: Path):
     # like any secret file: the first search dir that has it wins — the file in
-    # `<project>/.configs` shadows the one in `~/.ppp`, not merged with it
+    # the explicit config dir shadows the one in `~/.bro`, not merged with it
     _write(
       configs_dir,
       credentials.HOST_REGISTRY_FILE,
       {'github+work': {'sources': [{'file': 'a'}]}},
     )
-    _write(ppp_dir, credentials.HOST_REGISTRY_FILE, {'github+home': {'sources': [{'file': 'b'}]}})
+    _write(bro_dir, credentials.HOST_REGISTRY_FILE, {'github+home': {'sources': [{'file': 'b'}]}})
     registry = credentials.host_registry()
     assert 'github+work' in registry
     assert 'github+home' not in registry
 
-  def test_addition_replaces_a_builtin_entry_wholesale(self, ppp_dir: Path):
-    _write(ppp_dir, credentials.HOST_REGISTRY_FILE, {'notion': {'sources': [{'file': 'n2.json'}]}})
+  def test_addition_replaces_a_builtin_entry_wholesale(self, bro_dir: Path):
+    _write(bro_dir, credentials.HOST_REGISTRY_FILE, {'notion': {'sources': [{'file': 'n2.json'}]}})
     source = credentials.host_registry()['notion'].sources[0]
     assert isinstance(source, credentials.LocalSource)
     assert source.file == 'n2.json'
 
-  def test_kind_override_without_install_inherits_the_builtin_hook(self, ppp_dir: Path):
+  def test_kind_override_without_install_inherits_the_builtin_hook(self, bro_dir: Path):
     _write(
-      ppp_dir,
+      bro_dir,
       credentials.HOST_REGISTRY_FILE,
       {'github': {'sources': [{'type': 'github_app', 'file': 'github_app_x.json'}]}},
     )
@@ -771,9 +776,9 @@ class TestHostRegistry:
     assert source.file == 'github_app_x.json'
     assert registry['github'].install == credentials.default_registry()['github'].install
 
-  def test_variant_inherits_the_kind_hook_instantiated_with_its_name(self, ppp_dir: Path):
+  def test_variant_inherits_the_kind_hook_instantiated_with_its_name(self, bro_dir: Path):
     _write(
-      ppp_dir,
+      bro_dir,
       credentials.HOST_REGISTRY_FILE,
       {'github+pavel': {'sources': [{'file': 'github_token_pavel'}]}},
     )
@@ -786,54 +791,54 @@ class TestHostRegistry:
     assert kind is not None
     assert 'credentials get github' in kind
 
-  def test_variant_of_hookless_kind_has_no_hook(self, ppp_dir: Path):
+  def test_variant_of_hookless_kind_has_no_hook(self, bro_dir: Path):
     _write(
-      ppp_dir,
+      bro_dir,
       credentials.HOST_REGISTRY_FILE,
       {'notion+work': {'sources': [{'file': 'notion_work.json'}]}},
     )
     assert credentials.host_registry()['notion+work'].install is None
 
-  def test_variant_declaring_its_own_install_raises(self, ppp_dir: Path):
+  def test_variant_declaring_its_own_install_raises(self, bro_dir: Path):
     _write(
-      ppp_dir,
+      bro_dir,
       credentials.HOST_REGISTRY_FILE,
       {'github+pavel': {'sources': [{'file': 'f'}], 'install': 'export X=1'}},
     )
     with pytest.raises(ValueError, match='the kind entry owns it'):
       credentials.host_registry()
 
-  def test_variant_of_unknown_kind_raises(self, ppp_dir: Path):
-    _write(ppp_dir, credentials.HOST_REGISTRY_FILE, {'nope+x': {'sources': [{'file': 'f'}]}})
+  def test_variant_of_unknown_kind_raises(self, bro_dir: Path):
+    _write(bro_dir, credentials.HOST_REGISTRY_FILE, {'nope+x': {'sources': [{'file': 'f'}]}})
     with pytest.raises(ValueError, match="no kind entry 'nope'"):
       credentials.host_registry()
 
-  def test_malformed_addition_name_raises(self, ppp_dir: Path):
-    _write(ppp_dir, credentials.HOST_REGISTRY_FILE, {'GitHub+pavel': {'sources': [{'file': 'f'}]}})
+  def test_malformed_addition_name_raises(self, bro_dir: Path):
+    _write(bro_dir, credentials.HOST_REGISTRY_FILE, {'GitHub+pavel': {'sources': [{'file': 'f'}]}})
     with pytest.raises(ValueError, match='malformed secret name'):
       credentials.host_registry()
 
-  def test_default_store_resolves_a_host_local_variant(self, configs_dir: Path, ppp_dir: Path):
+  def test_default_store_resolves_a_host_local_variant(self, configs_dir: Path, bro_dir: Path):
     # end-to-end through _load_registry: a host-local variant resolves like any
     # other secret
     _write(
-      ppp_dir,
+      bro_dir,
       credentials.HOST_REGISTRY_FILE,
       {'github+pavel': {'sources': [{'file': 'github_token_pavel'}]}},
     )
-    _write(ppp_dir, 'github_token_pavel', 'ghp_pavel\n')
+    _write(bro_dir, 'github_token_pavel', 'ghp_pavel\n')
     assert credentials.default_store().get('github+pavel') == 'ghp_pavel'
 
-  def test_generated_registry_still_replaces_wholesale(self, configs_dir: Path, ppp_dir: Path):
+  def test_generated_registry_still_replaces_wholesale(self, configs_dir: Path, bro_dir: Path):
     # a generated credentials.json bounds the registry to exactly its own set —
     # host-local additions must not leak through it (the scoped-store bounding
     # invariant)
     _write(
-      ppp_dir,
+      bro_dir,
       credentials.HOST_REGISTRY_FILE,
       {'github+pavel': {'sources': [{'file': 'github_token_pavel'}]}},
     )
-    _write(ppp_dir, credentials.REGISTRY_FILE, {'notion': {'sources': [{'file': 'notion.json'}]}})
+    _write(bro_dir, credentials.REGISTRY_FILE, {'notion': {'sources': [{'file': 'notion.json'}]}})
     assert set(credentials._load_registry()) == {'notion'}
 
 
@@ -861,12 +866,12 @@ class TestDefaultStore:
     )
     assert credentials.default_store().get_json('notion') == {'token': 'x'}
 
-  def test_credentials_json_in_ppp_dir_overrides_builtin(self, configs_dir: Path, ppp_dir: Path):
-    # a scoped credentials.json mounted at the container's ~/.ppp takes effect:
-    # the registry load searches that dir too (no file in <project>/.configs there).
-    _write(ppp_dir, 'custom.json', {'token': 'p'})
+  def test_credentials_json_in_bro_dir_overrides_builtin(self, configs_dir: Path, bro_dir: Path):
+    # a scoped credentials.json mounted at the container's ~/.bro takes effect:
+    # the registry load searches that dir too (no file in the explicit config dir there).
+    _write(bro_dir, 'custom.json', {'token': 'p'})
     _write(
-      ppp_dir,
+      bro_dir,
       credentials.REGISTRY_FILE,
       {'notion': {'sources': [{'type': 'local', 'file': 'custom.json'}]}},
     )
@@ -995,11 +1000,11 @@ class TestBuildScopedStore:
     rebuilt = credentials._registry_from_dict(scoped)
     assert isinstance(rebuilt['remote'].sources[0], credentials.LocalSource)
 
-  def test_minting_secret_ships_the_config(self, ppp_dir: Path, monkeypatch):
+  def test_minting_secret_ships_the_config(self, bro_dir: Path, monkeypatch):
     # the scoped store carries the minting config, not a minted value — the
     # session re-derives on read; the host-side resolve at build time is the
     # launch validation of the config
-    _write(ppp_dir, 'ticket.json', {'prefix': 'ticket'})
+    _write(bro_dir, 'ticket.json', {'prefix': 'ticket'})
     source = _TicketSource('ticket.json')
     registry = {'github+bot': credentials.Secret('github+bot', [source])}
     monkeypatch.setattr(credentials, '_load_registry', lambda: registry)
@@ -1010,21 +1015,21 @@ class TestBuildScopedStore:
     scoped = json.loads(store[credentials.REGISTRY_FILE])
     assert scoped['github']['sources'] == [{'type': 'ticket', 'file': 'github.cred'}]
 
-  def test_minting_failure_fails_the_build(self, ppp_dir: Path, monkeypatch):
+  def test_minting_failure_fails_the_build(self, bro_dir: Path, monkeypatch):
     class _BrokenSource(_TicketSource):
       def mint(self, config: dict) -> credentials.Minted:
         raise ValueError('bad key')
 
-    _write(ppp_dir, 'ticket.json', {'prefix': 'ticket'})
+    _write(bro_dir, 'ticket.json', {'prefix': 'ticket'})
     registry = {'sekret': credentials.Secret('sekret', [_BrokenSource('ticket.json')])}
     monkeypatch.setattr(credentials, '_load_registry', lambda: registry)
     with pytest.raises(ValueError, match='bad key'):
       credentials.build_scoped_store(['sekret'])
 
-  def test_fallback_list_materializes_the_winning_source(self, ppp_dir: Path, monkeypatch):
+  def test_fallback_list_materializes_the_winning_source(self, bro_dir: Path, monkeypatch):
     # an ordered [minting, local] list collapses to whichever source resolves:
     # with the minting config absent, the local fallback wins and ships its value
-    _write(ppp_dir, 'token_file', 'ghp_static')
+    _write(bro_dir, 'token_file', 'ghp_static')
     sources = [_TicketSource('absent.json'), credentials.LocalSource('token_file')]
     registry = {'github': credentials.Secret('github', sources)}
     monkeypatch.setattr(credentials, '_load_registry', lambda: registry)
@@ -1034,12 +1039,12 @@ class TestBuildScopedStore:
     assert scoped['github']['sources'] == [{'file': 'github.cred'}]
 
   def test_uncacheable_expansion_ships_references_intact(
-    self, configs_dir: Path, ppp_dir: Path, monkeypatch
+    self, configs_dir: Path, bro_dir: Path, monkeypatch
   ):
     # a `$cred` chain reaching a minting source must not freeze the minted value
     # into the store: the referrer ships its raw text, references intact, so the
     # session re-expands per read against the scoped registry and mints fresh
-    _write(ppp_dir, 'ticket.json', {'prefix': 'ticket'})
+    _write(bro_dir, 'ticket.json', {'prefix': 'ticket'})
     _write(configs_dir, 'brog.secret', {'backend': 'github', 'token': {'$cred': 'github'}})
     source = _TicketSource('ticket.json')
     registry = {
@@ -1058,12 +1063,12 @@ class TestBuildScopedStore:
     assert scoped['github']['sources'] == [{'type': 'ticket', 'file': 'github.cred'}]
 
   def test_raw_shipped_secret_mints_fresh_in_session(
-    self, configs_dir: Path, ppp_dir: Path, monkeypatch, tmp_path: Path
+    self, configs_dir: Path, bro_dir: Path, monkeypatch, tmp_path: Path
   ):
     # end-to-end: land the scoped store on disk and resolve as the container
     # would — each read re-expands the shipped references and observes a fresh
     # mint from the shipped minting config
-    _write(ppp_dir, 'ticket.json', {'prefix': 'ticket'})
+    _write(bro_dir, 'ticket.json', {'prefix': 'ticket'})
     _write(configs_dir, 'brog.secret', {'backend': 'github', 'token': {'$cred': 'github'}})
     registry = {
       'github': credentials.Secret('github', [_TicketSource('ticket.json')]),
@@ -1077,7 +1082,7 @@ class TestBuildScopedStore:
     for filename, data in files.items():
       (dest / filename).write_bytes(data)
     monkeypatch.setattr(credentials, 'CONFIGS_DIR', str(tmp_path / 'absent'))
-    monkeypatch.setattr(credentials, 'PPP_DIR', str(dest))
+    monkeypatch.setattr(credentials, 'BRO_DIR', str(dest))
     monkeypatch.setattr(credentials, '_default_store', None)
     # back to the real loader: the session resolves via the landed credentials.json
     monkeypatch.setattr(credentials, '_load_registry', original_load_registry)
@@ -1096,13 +1101,13 @@ class TestBuildScopedStore:
     assert session_store.get_json('brog')['token'] == 'ticket_2'
 
   def test_variant_referrer_ships_raw_under_its_kind(
-    self, configs_dir: Path, ppp_dir: Path, monkeypatch
+    self, configs_dir: Path, bro_dir: Path, monkeypatch
   ):
     # the kap topology: the launch selects the `brog+github` variant, whose
     # config references the `github` kind backed by a minting source — the
     # variant's raw text lands under `brog.cred`, references intact
-    _write(ppp_dir, 'ticket.json', {'prefix': 'ticket'})
-    _write(ppp_dir, 'brog_github.json', {'backend': 'github', 'token': {'$cred': 'github'}})
+    _write(bro_dir, 'ticket.json', {'prefix': 'ticket'})
+    _write(bro_dir, 'brog_github.json', {'backend': 'github', 'token': {'$cred': 'github'}})
     registry = {
       'github': credentials.Secret('github', [_TicketSource('ticket.json')]),
       'brog+github': credentials.Secret(
@@ -1116,11 +1121,11 @@ class TestBuildScopedStore:
     assert set(json.loads(store[credentials.REGISTRY_FILE])) == {'brog', 'github'}
 
   def test_shipped_reference_outside_scope_fails(
-    self, configs_dir: Path, ppp_dir: Path, monkeypatch
+    self, configs_dir: Path, bro_dir: Path, monkeypatch
   ):
     # host-side the reference resolves (the host registry has the kind), but the
     # session couldn't re-expand it — the referenced kind must be hydrated too
-    _write(ppp_dir, 'ticket.json', {'prefix': 'ticket'})
+    _write(bro_dir, 'ticket.json', {'prefix': 'ticket'})
     _write(configs_dir, 'brog.secret', {'backend': 'github', 'token': {'$cred': 'github'}})
     registry = {
       'github': credentials.Secret('github', [_TicketSource('ticket.json')]),
@@ -1131,11 +1136,11 @@ class TestBuildScopedStore:
       credentials.build_scoped_store(['brog'])
 
   def test_optional_shipped_reference_outside_scope_fails(
-    self, configs_dir: Path, ppp_dir: Path, monkeypatch
+    self, configs_dir: Path, bro_dir: Path, monkeypatch
   ):
     # the optional tier forgives absence, not misconfiguration: a resolvable
     # optional secret whose shipped references escape the scope fails the build
-    _write(ppp_dir, 'ticket.json', {'prefix': 'ticket'})
+    _write(bro_dir, 'ticket.json', {'prefix': 'ticket'})
     _write(configs_dir, 'brog.secret', {'backend': 'github', 'token': {'$cred': 'github'}})
     registry = {
       'github': credentials.Secret('github', [_TicketSource('ticket.json')]),
@@ -1146,11 +1151,11 @@ class TestBuildScopedStore:
       credentials.build_scoped_store([], optional=['brog'])
 
   def test_shipped_reference_must_be_kind_level(
-    self, configs_dir: Path, ppp_dir: Path, monkeypatch
+    self, configs_dir: Path, bro_dir: Path, monkeypatch
   ):
     # an instance-spelled reference can never resolve in the kinds-only scoped
     # namespace, even when the launch selected exactly that instance
-    _write(ppp_dir, 'ticket.json', {'prefix': 'ticket'})
+    _write(bro_dir, 'ticket.json', {'prefix': 'ticket'})
     _write(configs_dir, 'brog.secret', {'backend': 'github', 'token': {'$cred': 'github+bot'}})
     registry = {
       'github+bot': credentials.Secret('github+bot', [_TicketSource('ticket.json')]),
@@ -1170,7 +1175,7 @@ class TestBuildScopedStore:
   def test_scoped_store_bounds_container_registry(
     self, configs_dir: Path, monkeypatch, tmp_path: Path
   ):
-    # materialising the store as a container's ~/.ppp bounds it to the built
+    # materialising the store as a container's ~/.bro bounds it to the built
     # set: a non-declared secret resolves to a clean SecretNotFound.
     _write(configs_dir, 'notion.json', {'token': 't'})
     _write(configs_dir, 'tmdb.json', {'api_key': 'k'})
@@ -1178,10 +1183,10 @@ class TestBuildScopedStore:
     dest.mkdir()
     for filename, data in credentials.build_scoped_store(['notion']).items():
       (dest / filename).write_bytes(data)
-    # resolve as the container would: scoped dir is its ~/.ppp (and there is no
-    # <project>/.configs). the scoped credentials.json bounds the registry.
+    # resolve as the container would: scoped dir is its ~/.bro and the explicit
+    # config dir is absent. the scoped credentials.json bounds the registry.
     monkeypatch.setattr(credentials, 'CONFIGS_DIR', str(tmp_path / 'absent'))
-    monkeypatch.setattr(credentials, 'PPP_DIR', str(dest))
+    monkeypatch.setattr(credentials, 'BRO_DIR', str(dest))
     monkeypatch.setattr(credentials, '_default_store', None)
     assert credentials.default_store().get_json('notion') == {'token': 't'}
     with pytest.raises(credentials.SecretNotFound):
@@ -1226,15 +1231,15 @@ class TestBuildScopedStore:
     store = credentials.build_scoped_store(['notion'], optional=['notion'])
     assert set(store) == {'notion.cred', credentials.REGISTRY_FILE}
 
-  def test_variant_materializes_under_its_kind_name(self, configs_dir: Path, ppp_dir: Path):
+  def test_variant_materializes_under_its_kind_name(self, configs_dir: Path, bro_dir: Path):
     # the scoped namespace is kinds-only: the registry entry and its cred file
     # are named by the kind, hydrated from the variant's sources
     _write(
-      ppp_dir,
+      bro_dir,
       credentials.HOST_REGISTRY_FILE,
       {'github+pavel': {'sources': [{'file': 'github_token_pavel'}]}},
     )
-    _write(ppp_dir, 'github_token_pavel', 'ghp_pavel\n')
+    _write(bro_dir, 'github_token_pavel', 'ghp_pavel\n')
     store = credentials.build_scoped_store(['github+pavel'])
     assert set(store) == {'github.cred', credentials.REGISTRY_FILE}
     assert store['github.cred'] == b'ghp_pavel'
@@ -1249,38 +1254,38 @@ class TestBuildScopedStore:
     assert rebuilt['github'].install == registry['github']['install']
 
   def test_optional_variant_also_materializes_under_its_kind_name(
-    self, configs_dir: Path, ppp_dir: Path
+    self, configs_dir: Path, bro_dir: Path
   ):
     _write(
-      ppp_dir,
+      bro_dir,
       credentials.HOST_REGISTRY_FILE,
       {'openai+work': {'sources': [{'file': 'openai_work.json'}]}},
     )
-    _write(ppp_dir, 'openai_work.json', '{"api_key": "k"}')
+    _write(bro_dir, 'openai_work.json', '{"api_key": "k"}')
     store = credentials.build_scoped_store([], optional=['openai+work'])
     assert set(store) == {'openai.cred', credentials.REGISTRY_FILE}
     assert set(json.loads(store[credentials.REGISTRY_FILE])) == {'openai'}
 
   def test_variant_of_hookless_kind_materializes_without_hook(
-    self, configs_dir: Path, ppp_dir: Path
+    self, configs_dir: Path, bro_dir: Path
   ):
     _write(
-      ppp_dir,
+      bro_dir,
       credentials.HOST_REGISTRY_FILE,
       {'notion+work': {'sources': [{'file': 'notion_work.json'}]}},
     )
-    _write(ppp_dir, 'notion_work.json', '{"token": "t"}')
+    _write(bro_dir, 'notion_work.json', '{"token": "t"}')
     store = credentials.build_scoped_store(['notion+work'])
     registry = json.loads(store[credentials.REGISTRY_FILE])
     assert registry['notion'] == {'sources': [{'file': 'notion.cred'}]}
 
-  def test_two_instances_of_a_kind_raise(self, configs_dir: Path, ppp_dir: Path):
+  def test_two_instances_of_a_kind_raise(self, configs_dir: Path, bro_dir: Path):
     _write(
-      ppp_dir,
+      bro_dir,
       credentials.HOST_REGISTRY_FILE,
       {'github+pavel': {'sources': [{'file': 'github_token_pavel'}]}},
     )
-    _write(ppp_dir, 'github_token_pavel', 'ghp_pavel')
+    _write(bro_dir, 'github_token_pavel', 'ghp_pavel')
     _write(configs_dir, 'cw_github_token_bro', 'ghp_bro')
     with pytest.raises(ValueError, match='installs at most one'):
       credentials.build_scoped_store(['github', 'github+pavel'])
@@ -1389,8 +1394,8 @@ class TestInstallHooks:
     # no absolute resolver path is interpolated; notion declares no hook
     assert str(configs_dir) not in out
     assert 'notion' not in out
-    # aws materializes to its own dedicated path, never the ~/.ppp resolver source
-    assert '.ppp' not in out
+    # aws materializes to its own dedicated path, never the ~/.bro resolver source
+    assert '.bro' not in out
     assert 'aws_credentials' not in out
 
   def test_install_hooks_emit_for_all_declared_secrets(self, configs_dir: Path):

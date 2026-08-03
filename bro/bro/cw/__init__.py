@@ -27,7 +27,7 @@ keeps the container's git state genuinely isolated. layout:
   - ~/.claude: not seeded from host. cw-sessions/<name>/ is mounted as the
     container's ~/.claude and gets the constructed settings.json; host machine
     state stays on the host.
-  - a per-launch scoped credential store at /home/cw/.ppp: the host resolves only
+  - a per-launch scoped credential store at /home/cw/.bro: the host resolves only
     the secrets the session uses into an in-memory tar and `docker cp`s it into
     the container before it starts (no host-side store, no bind mount), with a
     credentials.json that bounds the container's registry to them. Living in the

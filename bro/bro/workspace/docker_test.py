@@ -203,7 +203,7 @@ class TestPrepareContainer:
       'build_scoped_store',
       lambda secrets, optional=(): events.append(('store', secrets, optional)) or {'x': b'y'},
     )
-    monkeypatch.setattr(workspace.docker, '_ppp_tarball', lambda store: b'TARBALL')
+    monkeypatch.setattr(workspace.docker, '_bro_tarball', lambda store: b'TARBALL')
     monkeypatch.setattr(
       workspace.docker,
       '_docker_create_argv',
@@ -278,9 +278,9 @@ class TestDockerCreateArgv:
     argv = build_argv(extra_env={'CW_BASE_REF': 'deadbeef'})
     assert 'CW_BASE_REF=deadbeef' in argv
 
-  def test_no_ppp_mount(self, build_argv):
+  def test_no_bro_mount(self, build_argv):
     # the scoped store is injected via `docker cp`, never bind-mounted
-    assert not any('/home/cw/.ppp' in a for a in build_argv())
+    assert not any('/home/cw/.bro' in a for a in build_argv())
 
   def test_no_out_of_band_github_token_mount(self, build_argv):
     assert not any('/run/secrets/github_token' in a for a in build_argv())

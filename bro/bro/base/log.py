@@ -9,7 +9,7 @@ logging.addLevelName(VERBOSE, 'VERBOSE')
 # carries the level across process boundaries: set_level exports it, and both
 # this module (at import) and setup/log.sh read it, so child processes inherit
 # the verbosity of the CLI that spawned them
-LEVEL_ENV = 'PPP_LOG_LEVEL'
+LEVEL_ENV = 'BRO_LOG_LEVEL'
 
 # the CLI-facing level vocabulary (`--log` choices)
 LEVEL_NAMES = ('debug', 'verbose', 'info', 'warning', 'error')
@@ -44,7 +44,7 @@ class _DynamicStderrHandler(logging.StreamHandler):
     pass
 
 
-_logger = logging.getLogger('ppp')
+_logger = logging.getLogger('bro')
 _logger.setLevel(_initial_level())
 _handler = _DynamicStderrHandler()
 _handler.setFormatter(

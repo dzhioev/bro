@@ -78,11 +78,11 @@ def materialize_scoped_store(files: dict[str, bytes], directory: Path) -> Path:
   return directory / 'credentials.json'
 
 
-def _ppp_tarball(files: dict[str, bytes]) -> bytes:
+def _bro_tarball(files: dict[str, bytes]) -> bytes:
   """pack a scoped credential store into a tar for `docker cp` into /home/cw.
 
-  entries are prefixed `.ppp/` so extracting at /home/cw lands them at
-  /home/cw/.ppp/<file>. files are 0600, the dir 0700, all owned by the host
+  entries are prefixed `.bro/` so extracting at /home/cw lands them at
+  /home/cw/.bro/<file>. files are 0600, the dir 0700, all owned by the host
   uid/gid (the same uid the entrypoint remaps `cw` to on Linux); the entrypoint
   re-owns the tree to `cw` after its remap so the bytes are readable there and on
   Docker for Mac (where the remap is skipped). mtime defaults to 0 — deterministic,
@@ -91,14 +91,14 @@ def _ppp_tarball(files: dict[str, bytes]) -> bytes:
   uid, gid = os.getuid(), os.getgid()
   buffer = io.BytesIO()
   with tarfile.open(fileobj=buffer, mode='w') as tar:
-    root = tarfile.TarInfo('.ppp')
+    root = tarfile.TarInfo('.bro')
     root.type = tarfile.DIRTYPE
     root.mode = 0o700
     root.uid, root.gid = uid, gid
     tar.addfile(root)
     for filename in sorted(files):
       data = files[filename]
-      info = tarfile.TarInfo(f'.ppp/{filename}')
+      info = tarfile.TarInfo(f'.bro/{filename}')
       info.size = len(data)
       info.mode = 0o600
       info.uid, info.gid = uid, gid

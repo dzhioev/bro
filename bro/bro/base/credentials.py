@@ -7,10 +7,10 @@ on which surface it runs. both are thin aliases over `default_store()`.
 resolution walks an ordered list of `Source`s per secret; the first source that
 has the value wins.
 
-sources are either stored or minting. two stored types: `local` searches
-`<project>/.configs/<file>` then `~/.ppp/<file>` — the deployed services
-synthesize `<project>/.configs` at runtime; on the host secrets live only in
-`~/.ppp`. `ssm` reads an AWS SSM parameter from the region the source names,
+sources are either stored or minting. two stored types: `local` searches the
+explicit `BRO_CONFIGS_DIR` when set, then `~/.bro/<file>`; deployed services set
+the explicit directory when they synthesize configs, while the host uses only
+`~/.bro`. `ssm` reads an AWS SSM parameter from the region the source names,
 for surfaces that resolve secrets from Parameter Store at runtime instead of
 carrying files. a minting type (a `MintingSource` subclass owned by a domain
 package, e.g. `github_app` in `extra/github/app.py`) derives short-lived values
@@ -23,7 +23,7 @@ a value with usable lifetime left. a generated
 (`CREDENTIALS_REGISTRY=<file>` overrides both, process-scoped, and its directory
 joins the local search path first — so a materialized scoped store resolves
 wherever it lands); `build_scoped_store` emits a scoped one (in memory) that
-`cw` `docker cp`s into a container's `~/.ppp` — or materializes into a host
+`cw` `docker cp`s into a container's `~/.bro` — or materializes into a host
 session's state dir — to bound the resolver to a chosen set of secrets.
 
 absent any of those overrides, resolution uses the host registry: the built-in
@@ -76,12 +76,11 @@ from base.condition import StringVariable
 
 __cli_name__ = 'credentials'
 
-# local search roots, highest priority first: the project `.configs` dir (where
-# deployed services synthesize their configs) then the standalone `~/.ppp` host
-# store. module-level so tests can point them at tmp dirs, and read at fetch time
-# so the overrides take effect.
-CONFIGS_DIR = configs.DEFAULT_CONFIGS_DIR
-PPP_DIR = configs.DEFAULT_PPP_DIR
+# local search roots, highest priority first: the explicit service config dir
+# when set, then the standalone `~/.bro` host store. module-level so tests can
+# point them at tmp dirs, and read at fetch time so the overrides take effect.
+CONFIGS_DIR = configs.BRO_CONFIGS_DIR
+BRO_DIR = configs.DEFAULT_BRO_DIR
 
 # a generated registry file (emitted by `build_scoped_store`) overrides the
 # built-in default when present; absent, resolution falls through to the built-in.
@@ -314,12 +313,16 @@ def _search_dirs() -> list[str]:
   # an explicit CREDENTIALS_REGISTRY carries its sibling files: a scoped store is
   # a registry plus the `{name}.cred` files it points at, materialized in one dir
   # (`build_scoped_store`), so that dir must be searched first for the store to
-  # resolve wherever it lands — the container's ~/.ppp needs no override, a host
+  # resolve wherever it lands — the container's ~/.bro needs no override, a host
   # session's store lives outside the standard dirs.
+  directories: list[str] = []
   override = os.environ.get(REGISTRY_ENV)
   if override is not None and override != '':
-    return [str(Path(override).parent), CONFIGS_DIR, PPP_DIR]
-  return [CONFIGS_DIR, PPP_DIR]
+    directories.append(str(Path(override).parent))
+  if CONFIGS_DIR is not None:
+    directories.append(CONFIGS_DIR)
+  directories.append(BRO_DIR)
+  return directories
 
 
 def _find_in_search_dirs(file: str) -> Optional[Path]:
@@ -693,8 +696,8 @@ def _load_registry() -> dict[str, Secret]:
   override = os.environ.get(REGISTRY_ENV)
   if override is not None and override != '':
     return _registry_from_dict(json.loads(Path(override).read_text()))
-  # a generated registry file in either search dir (`<project>/.configs` for the
-  # deployed services, `~/.ppp` for a scoped per-container store) overrides the
+  # a generated registry file in either search dir (`BRO_CONFIGS_DIR` for a
+  # deployed service, `~/.bro` for a scoped per-container store) overrides the
   # host registry wholesale; absent everywhere → the host registry (built-in
   # defaults + host-local additions).
   path = _find_in_search_dirs(REGISTRY_FILE)
@@ -765,7 +768,7 @@ def build_scoped_store(names: Iterable[str], *, optional: Iterable[str] = ()) ->
   secret, its minting config, so the session mints fresh tokens on read), plus a
   generated `credentials.json` registry covering exactly those secrets and
   pointing each at its `{name}.cred`. materialising this map as the container's
-  `~/.ppp` then bounds the container to this set; any other secret resolves to a
+  `~/.bro` then bounds the container to this set; any other secret resolves to a
   clean `SecretNotFound`. The bytes never touch a host file — `cw` packs them
   into a tar and `docker cp`s them straight into the container.
 

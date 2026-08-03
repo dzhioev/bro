@@ -11,7 +11,7 @@ from typing import Optional
 from base import credentials, log
 from workspace.paths import containers_dir, project_root
 from workspace.project import project_config
-from workspace.store import _ppp_tarball
+from workspace.store import _bro_tarball
 
 CONTAINER_DIR = Path(__file__).resolve().parent.parent / 'setup' / 'container'
 BASE_IMAGE_DIR = Path(__file__).resolve().parent.parent / 'setup' / 'base_image'
@@ -39,7 +39,7 @@ _DOCKER_FORWARD_ENV = (
   'GIT_AUTHOR_EMAIL',
   'GIT_COMMITTER_NAME',
   'GIT_COMMITTER_EMAIL',
-  'PPP_LOG_LEVEL',
+  'BRO_LOG_LEVEL',
   'PPP_SHELL_COMMAND',
   # docker defaults containers to TERM=xterm (a low color tier that flattens
   # dim/256-color TUIs); forward the host TERM so in-container colors match.
@@ -253,7 +253,7 @@ def prepare_container(launch: Launch, project: Path) -> str:
     tty=launch.tty,
     extra_mounts=list(launch.extra_mounts),
   )
-  return _create_container(argv, _ppp_tarball(store), launch.name)
+  return _create_container(argv, _bro_tarball(store), launch.name)
 
 
 def _docker_create_argv(

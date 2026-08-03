@@ -136,7 +136,7 @@ class Parser(argparse.ArgumentParser):
       '--log',
       env=False,
       choices=log.LEVEL_NAMES,
-      help='log level threshold (default: info, or the inherited PPP_LOG_LEVEL)',
+      help='log level threshold (default: info, or the inherited BRO_LOG_LEVEL)',
     )
     self._verbose_action = self._add_global_argument(
       '--verbose',
