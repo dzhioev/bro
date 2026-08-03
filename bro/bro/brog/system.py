@@ -1,7 +1,8 @@
+import importlib.metadata
 import os
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 from base import credentials
 from brog.model import Comment, Status, Task
@@ -92,50 +93,54 @@ class System(ABC):
     ...
 
 
+_BACKEND_ENTRY_POINT_GROUP = 'bro.brog.backends'
+BackendFactory = Callable[
+  [Callable[[], dict[str, Any]], dict[str, Any], Optional[str]],
+  System,
+]
+
+
+def _backend_entry_points() -> tuple[importlib.metadata.EntryPoint, ...]:
+  return tuple(importlib.metadata.entry_points(group=_BACKEND_ENTRY_POINT_GROUP))
+
+
+def _backend_factory(name: str) -> BackendFactory:
+  if name == 'github':
+    return _github_system
+  matches = [entry_point for entry_point in _backend_entry_points() if entry_point.name == name]
+  if len(matches) > 1:
+    values = ', '.join(entry_point.value for entry_point in matches)
+    raise ValueError(f'duplicate brog backend {name!r}: {values}')
+  if len(matches) == 0:
+    known = sorted({'github'} | {entry_point.name for entry_point in _backend_entry_points()})
+    raise ValueError(f'unknown brog backend {name!r}; known: {", ".join(known)}')
+  factory = matches[0].load()
+  if not callable(factory):
+    raise TypeError(f'brog backend entry point {name!r} must load a callable')
+  return cast(BackendFactory, factory)
+
+
 def build_system(
   config_provider: Callable[[], dict[str, Any]], *, author: Optional[str] = None
 ) -> System:
-  """construct the backend the provided config selects; author is the persona
-  stamped on comments (ignored by backends that record authorship natively)
+  """construct the backend the provided config selects.
 
-  Backend selection reads the provider once; a backend whose credential may be
-  minted short-lived (the github token) keeps the provider and re-reads it per
-  operation, observing a fresh expansion instead of the one baked at build.
+  Backend selection reads the provider once. A backend whose credential may be
+  minted short-lived can retain the provider and re-read it per operation.
   """
   config = config_provider()
   backend = _required(config, 'backend')
-  if backend == 'flow':
-    return _flow_system(config, author)
-  if backend == 'github':
-    return _github_system(config, config_provider)
-  raise ValueError(f'unknown brog backend {backend!r}; known: flow, github')
+  return _backend_factory(backend)(config_provider, config, author)
 
 
-def _flow_system(config: dict[str, Any], author: Optional[str]) -> System:
-  import brog.flow_proxy
-
-  transport = _required(config, 'transport')
-  if transport == 'http':
-    url = _required(config, 'url')
-    token = _required(config, 'token')
-    return brog.flow_proxy.System(brog.flow_proxy.HTTPTransport(url, token), author=author)
-  if transport == 'local':
-    notion = _required(config, 'notion')
-    if not isinstance(notion, dict):
-      raise ValueError('brog config: "notion" must be an object (the notion.json shape)')
-    from flow.notion.api import NotionAPI
-    from flow.notion.system import System as NotionSystem
-
-    return brog.flow_proxy.System(
-      brog.flow_proxy.LocalTransport(NotionSystem(api=NotionAPI(notion))), author=author
-    )
-  raise ValueError(f'unknown brog flow transport {transport!r}; known: http, local')
-
-
-def _github_system(config: dict[str, Any], config_provider: Callable[[], dict[str, Any]]) -> System:
+def _github_system(
+  config_provider: Callable[[], dict[str, Any]],
+  config: dict[str, Any],
+  author: Optional[str],
+) -> System:
   import brog.github
 
-  _required(config, 'token')  # a config without a token fails at build, not at first use
+  _required(config, 'token')
   repo = config.get('repo')
   if repo is None:
     repo = brog.github.origin_repo()

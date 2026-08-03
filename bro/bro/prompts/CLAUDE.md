@@ -9,9 +9,9 @@ Centralised prompt store. Five loading conventions: auto-inject into every bro +
 
 Prompt content may carry `base.template` directives (`#harness`/`#wire`/`#creds`; grammar and semantics: `reference/template.md`): every rendering surface renders its text once with its own facts via `llm.mcp.render_text` — `BaseBro.__init__` for the two bro flavors, `cw/system_prompt.py:_session_append_prompt` for cw-sessions — so a directive works in `shared/` and bro class prompts alike. `FileSource`-served docs are the exception: one rendering is read by every harness, so their bodies must be surface-neutral — `FileSource.read` supplies no facts and a surface directive raises.
 
-Harness-specific conditioning is expressed with these directives, never as prose that addresses both surfaces and leaves the reader to pick: fork the text with `{{iff #harness = bro}}…{{eliff #harness = claude}}…{{end}}` — the chain raises when no branch matches, so the fork is self-guarding — and each surface reads only its own instruction (see the ppp-dev persona prompt in `bro/bros/ppp_dev/__init__.py` for the pattern).
+Harness-specific conditioning is expressed with these directives, never as prose that addresses both surfaces and leaves the reader to pick: fork the text with `{{iff #harness = bro}}…{{eliff #harness = claude}}…{{end}}` — the chain raises when no branch matches, so the fork is self-guarding — and each surface reads only its own instruction (see the ppp-dev persona prompt in `ppp_bros/ppp_dev/__init__.py` for the pattern).
 
-`__init__.py` is the package loader and single entry point — do not `open()` prompts ad-hoc from elsewhere. Names are contained to `prompts/`: a name that resolves outside it (`..` traversal, absolute path) raises. `get_prompt_path(name)` returns the `Path` if a caller needs to hand the file off to something that wants a path rather than the body (e.g. `bro.datasources.file.FileSource`). `{{include <name>}}` directives resolve through it too — `llm.mcp.render_text` wires `get_prompt` as the template engine's include resolver, so a spliced prompt loads exactly like a directly-requested one.
+`PromptLoader` is the contained directory-backed loader; `__init__.py` binds the framework's module-level `get_prompt` / `get_prompt_path` surface to `prompts/`. Consumer packages bind their own loader (PPP email prompts use `emails/prompts.py`). Do not `open()` prompts ad-hoc from elsewhere. Names are contained to the loader's directory: a name that resolves outside it (`..` traversal, absolute path) raises. `get_prompt_path(name)` returns the `Path` if a caller needs to hand the file off to something that wants a path rather than the body (e.g. `bro.datasources.file.FileSource`). `{{include <name>}}` directives resolve through it too — `llm.mcp.render_text` wires `get_prompt` as the template engine's include resolver, so a spliced prompt loads exactly like a directly-requested one.
 
 ## Auto-injected `shared/` directory
 
@@ -48,7 +48,7 @@ The level files are the single place the levels differ: unattended carries the n
 
 ## Top-level one-shot prompts
 
-`*.prompt` / `*.prompt.template` files at the top level are explicit one-shot prompts loaded by name from their callers (e.g. `email_to_markdown.prompt`).
+`*.prompt` / `*.prompt.template` files at the top level are framework one-shot prompts loaded by name from their callers.
 
 ## Adding a prompt
 

@@ -57,6 +57,7 @@ a malformed node, an absent field, or a reference cycle raises.
 
 from __future__ import annotations
 
+import importlib.metadata
 import json
 import os
 import re
@@ -93,6 +94,22 @@ REGISTRY_ENV = 'CREDENTIALS_REGISTRY'
 # merged per-name over the built-in registry (`host_registry`) — unlike a
 # generated REGISTRY_FILE, which replaces the registry wholesale to bound it.
 HOST_REGISTRY_FILE = 'registry.json'
+
+_CREDENTIAL_SOURCE_GROUP = 'bro.credential_sources'
+_CREDENTIAL_REGISTRY_GROUP = 'bro.credentials'
+
+
+def _entry_points(group: str) -> tuple[importlib.metadata.EntryPoint, ...]:
+  return tuple(importlib.metadata.entry_points(group=group))
+
+
+def _entry_point(group: str, name: str) -> Optional[importlib.metadata.EntryPoint]:
+  matches = [entry_point for entry_point in _entry_points(group) if entry_point.name == name]
+  if len(matches) > 1:
+    values = ', '.join(entry_point.value for entry_point in matches)
+    raise ValueError(f'duplicate {group} entry point {name!r}: {values}')
+  return matches[0] if len(matches) == 1 else None
+
 
 # a secret name: `kind` or `kind+instance`. the charsets keep every name safe
 # to splice into the single-quoted insert slot of an install-hook template, and
@@ -234,7 +251,7 @@ class MintingSource(ABC):
   session re-derives fresh values on read.
 
   a concrete type names its registry `TYPE`, implements `mint` (validating its
-  own config fields), and gets a dispatch branch in `_source_from_dict`."""
+  own config fields), and registers that type in `bro.credential_sources`."""
 
   TYPE: ClassVar[str]
   CACHEABLE: ClassVar[bool] = False
@@ -344,20 +361,25 @@ def _referenced_names(text: str) -> set[str]:
 
 
 def _source_from_dict(data: dict) -> Source:
-  """reconstruct a Source from its `type` discriminator (mirrors LLMSpec.from_dict);
-  `type` defaults to `local` when omitted."""
+  """reconstruct a Source from its `type` discriminator; `type` defaults to local."""
   type_name = data.get('type', LocalSource.TYPE)
   if type_name == LocalSource.TYPE:
     return LocalSource.from_dict(data)
   if type_name == SSMSource.TYPE:
     return SSMSource.from_dict(data)
-  if type_name == 'github_app':
-    # deferred: extra.github.app imports this module (its Source subclasses
-    # MintingSource), so the back reference cannot be module-level
-    import extra.github.app
-
-    return extra.github.app.Source.from_dict(data)
-  raise ValueError(f'unknown credential source type: {type_name!r}')
+  entry_point = _entry_point(_CREDENTIAL_SOURCE_GROUP, type_name)
+  if entry_point is None:
+    known = sorted(
+      {LocalSource.TYPE, SSMSource.TYPE}
+      | {item.name for item in _entry_points(_CREDENTIAL_SOURCE_GROUP)}
+    )
+    raise ValueError(f'unknown credential source type {type_name!r}; known: {known}')
+  source_class = entry_point.load()
+  if not isinstance(source_class, type) or not issubclass(source_class, MintingSource):
+    raise TypeError(
+      f'{_CREDENTIAL_SOURCE_GROUP} entry point {type_name!r} must load a MintingSource class'
+    )
+  return source_class.from_dict(data)
 
 
 class Secret:
@@ -579,17 +601,32 @@ class Store:
 _BUILTIN_REGISTRY_PATH = Path(__file__).with_name('registry.json')
 
 
+def _contributed_registry_data() -> dict[str, dict]:
+  data: dict[str, dict] = {}
+  for entry_point in _entry_points(_CREDENTIAL_REGISTRY_GROUP):
+    if entry_point.name in data:
+      raise ValueError(f'duplicate {_CREDENTIAL_REGISTRY_GROUP} entry point {entry_point.name!r}')
+    entry = entry_point.load()
+    if not isinstance(entry, dict):
+      raise TypeError(
+        f'{_CREDENTIAL_REGISTRY_GROUP} entry point {entry_point.name!r} must load a dict'
+      )
+    data[entry_point.name] = dict(entry)
+  return data
+
+
 def _builtin_registry_data() -> dict:
-  """the built-in registry json with install-hook file references inlined: an
-  `install` of the form `{"file": "<path>"}` loads the hook template from that
-  path relative to the registry, so a multi-line hook stays a real shell file
-  instead of an escaped json string. file references are a built-in-registry
-  affordance — every other registry flavor carries hooks as strings."""
+  """the built-in registry merged with installed credential contributions.
+
+  An `install` of the form `{"file": "<path>"}` loads a built-in hook relative
+  to the registry. Contributed and generated registries carry hooks as strings.
+  """
   data = json.loads(_BUILTIN_REGISTRY_PATH.read_text())
   for entry in data.values():
     install = entry.get('install')
     if isinstance(install, dict):
       entry['install'] = (_BUILTIN_REGISTRY_PATH.parent / install['file']).read_text().rstrip('\n')
+  data.update(_contributed_registry_data())
   return data
 
 
@@ -622,7 +659,7 @@ def _resolve_kinds(data: dict) -> dict:
 
 
 def default_registry() -> dict[str, Secret]:
-  """the built-in registry (every known secret as a single local source)."""
+  """the framework registry merged with installed credential contributions."""
   return _registry_from_dict(_resolve_kinds(_builtin_registry_data()))
 
 

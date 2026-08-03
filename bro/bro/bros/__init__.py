@@ -8,10 +8,5 @@
 # `name` attribute (the registry validates this on load).
 BRO_SPECS: dict[str, str] = {
   'bro': 'bro.bros.bro:Bro',
-  'assistant': 'bro.bros.assistant:Assistant',
-  'pm': 'bro.bros.pm:PM',
-  'librorian': 'bro.bros.librorian:Librorian',
-  'devoops': 'bro.bros.devoops:Devoops',
   'dev': 'bro.bros.dev:Dev',
-  'ppp-dev': 'bro.bros.ppp_dev:PPPDev',
 }

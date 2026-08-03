@@ -1,29 +1,15 @@
 {
-  "notion": {"sources": [{"file": "notion.json"}]},
-  "focus": {"sources": [{"file": "focus.json"}]},
-  "flow_mcp": {"sources": [{"file": "flow_mcp.json"}]},
   "brog": {"sources": [{"file": "brog.json"}]},
-  "infra": {"sources": [{"file": "infra.json"}]},
   "trails": {"sources": [{"file": "trails.json"}]},
-  "process_inbox": {"sources": [{"file": "process_inbox.json"}]},
   "openai": {"sources": [{"file": "openai.json"}]},
   "anthropic": {"sources": [{"file": "anthropic.json"}]},
   "claude_code": {
     "sources": [{"file": "claude_code_oauth_token"}],
     "install": "export CLAUDE_CODE_OAUTH_TOKEN=\"$(credentials get '{{insert #name}}')\""
   },
-  "tmdb": {"sources": [{"file": "tmdb.json"}]},
   "brave": {"sources": [{"file": "brave.json"}]},
-  "google_api": {"sources": [{"file": "google_api.json"}]},
-  "gmail_creds": {"sources": [{"file": "gmail_creds.json"}]},
-  "twitch": {"sources": [{"file": "twitch.json"}]},
-  "twitch_user_token": {"sources": [{"file": "twitch_user_token.json"}]},
   "github": {
     "sources": [],
     "install": {"file": "hooks/github.sh"}
-  },
-  "aws": {
-    "sources": [{"file": "aws_credentials"}],
-    "install": "(umask 077; mkdir -p \"$HOME/.aws\"; credentials get '{{insert #name}}' > \"$HOME/.aws/credentials\")"
   }
 }

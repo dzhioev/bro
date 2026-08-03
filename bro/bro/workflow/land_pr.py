@@ -2,9 +2,8 @@
 """squash-merge the approved PR for the current branch in one shot.
 
 Runs the deterministic tail of a dev session: resolve the PR, enforce the merge
-preconditions, inject the aggregated token footer into the squash body (see
-cw/claude_commit_footer.py for the accounting model), merge, and delete the
-remote feature branch.
+preconditions, append the repo-configured squash footer when present, merge,
+and delete the remote feature branch.
 
 Preconditions (each failure aborts with a message on stderr and exit 1):
 - the PR for the current branch exists and is OPEN
@@ -23,13 +22,13 @@ On success prints a single JSON object to stdout:
 
 import json
 import logging
-import os
 import re
 import subprocess
 from typing import Any, Optional
 
 from base import spawn
 from base.args import Parser
+from workspace.project import project_config
 
 __cli_name__ = 'land-pr'
 
@@ -86,20 +85,16 @@ def _precondition_error(
 
 
 def _squash_footer(base: str) -> str:
-  root = _run(['git', 'rev-parse', '--show-toplevel'], capture=True)
-  # the repo's own copy, or the one vendored via the ppp submodule
-  candidates = [
-    f'{root}/cw/claude_commit_footer.py',
-    f'{root}/ppp/cw/claude_commit_footer.py',
-  ]
-  footer_scripts = [path for path in candidates if os.path.isfile(path)]
-  if len(footer_scripts) == 0:
-    raise LandError(f'claude_commit_footer.py not found at any of: {", ".join(candidates)}')
-  return _run([footer_scripts[0], '--squash', f'origin/{base}..HEAD'], capture=True)
+  command = project_config().footer_command
+  if command is None:
+    return ''
+  return _run([command, '--squash', f'origin/{base}..HEAD'], capture=True)
 
 
 def _body_with_footer(body: str, footer: str) -> str:
   trimmed = body.rstrip()
+  if footer == '':
+    return trimmed
   if trimmed == '':
     return footer
   return f'{trimmed}\n\n{footer}'

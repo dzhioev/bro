@@ -1,3 +1,4 @@
+import importlib.metadata
 from typing import ClassVar
 
 import pytest
@@ -36,6 +37,14 @@ describe(_ping, 'ping the noop server')
 
 def _create_ping_server() -> MCPServer:
   return InProcessMCPServer('ping', [FunctionTool(_ping)])
+
+
+def _ping_toolset() -> MCPServerSpec:
+  return MCPServerSpec(build=_create_ping_server)
+
+
+def _entry_point(name: str, value: str) -> importlib.metadata.EntryPoint:
+  return importlib.metadata.EntryPoint(name, value, mcp_server._TOOLSET_ENTRY_POINT_GROUP)
 
 
 class _ShimBro(BaseBro):
@@ -84,12 +93,38 @@ def _rpc(client: TestClient, path: str, method: str, params=None, headers=None) 
 
 
 class TestResolveServers:
-  def test_static_flow(self):
+  def test_contributed_toolset_is_discovered(self, monkeypatch):
+    monkeypatch.setattr(
+      mcp_server,
+      '_toolset_entry_points',
+      lambda: (_entry_point('ping', 'runtime.mcp_server_test:_ping_toolset'),),
+    )
+    servers = _resolve_servers('ping')
+    assert len(servers) == 1
+    assert servers[0].namespace == 'ping'
+
+  def test_toolset_entry_points_use_the_expected_group(self, monkeypatch):
+    calls = []
+
+    def entry_points(**kwargs):
+      calls.append(kwargs)
+      return ()
+
+    monkeypatch.setattr(importlib.metadata, 'entry_points', entry_points)
+    assert mcp_server._toolset_entry_points() == ()
+    assert calls == [{'group': 'bro.toolsets'}]
+
+  def test_absent_toolset_has_a_clear_error(self, monkeypatch):
+    monkeypatch.setattr(mcp_server, '_toolset_entry_points', lambda: ())
+    with pytest.raises(SystemExit, match="unknown server 'flow'; expected one of"):
+      _resolve_servers('flow')
+
+  def test_contributed_flow(self):
     servers = _resolve_servers('flow')
     assert len(servers) == 1
     assert servers[0].namespace == 'flow'
 
-  def test_static_brog(self, monkeypatch):
+  def test_contributed_brog(self, monkeypatch):
     # brog's state factory reads the self-contained config at build time
     from base import credentials
 
@@ -106,19 +141,9 @@ class TestResolveServers:
     with pytest.raises(SystemExit, match='unknown server'):
       _resolve_servers('does-not-exist')
 
-  def test_bro_spec_includes_service_namespace(self, monkeypatch):
-    from base import credentials
-
-    # pm declares brog.mcp, whose state factory reads the `brog` secret at build
-    monkeypatch.setattr(
-      credentials,
-      'get_json',
-      lambda name: {'backend': 'flow', 'transport': 'http', 'url': 'https://x', 'token': 't'},
-    )
-    namespaces = {s.namespace for s in _resolve_servers('bro:pm')}
+  def test_bro_spec_includes_service_namespace(self):
+    namespaces = {server.namespace for server in _resolve_servers('bro:bro')}
     assert 'bro' in namespaces
-    assert 'flow' in namespaces
-    assert 'brog' in namespaces
 
 
 class TestHTTPBindBeforeResolve:

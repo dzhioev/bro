@@ -5,7 +5,9 @@ guard). sourceable libraries carry no executable bit and stay out of scope."""
 import re
 import subprocess
 
-from base.project_root import PROJECT_ROOT
+from workspace.paths import project_root
+
+PROJECT_ROOT = project_root()
 
 SHEBANG = '#!/usr/bin/env -S bash -e'
 PRELUDE_SOURCE = re.compile(r'^source .*/prelude\.sh"?$', re.MULTILINE)

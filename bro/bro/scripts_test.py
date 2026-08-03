@@ -2,7 +2,7 @@ import json
 import sys
 import types
 from pathlib import Path
-from typing import Optional, get_args
+from typing import ClassVar, Optional, get_args
 
 import pytest
 
@@ -10,10 +10,15 @@ import llm.mcp
 from base.condition import SetVariable
 from bro import bro as bro_module, scripts as script_store
 from bro.bro import BaseBro
-from bro.bros.ppp_dev import PPPDev
+from bro.bros.dev import Dev
 from bro.scripts import DISPATCHER_SECRET, NAMESPACE, SKILL_TOOL_NAME, load_script
 from llm.mcp import InProcessMCPServer, MCPServerSpec, ToolRegistry
 from prompts import get_prompt
+
+
+class _TrackerDev(Dev):
+  name = 'tracker-dev'
+  features: ClassVar = {'brog': ()}
 
 
 def _script(
@@ -144,14 +149,14 @@ class TestScriptStore:
     skill_directories = list((Path(script_store.__file__).parent / 'bros').glob('*/skills'))
     assert skill_directories == []
 
-  def test_ppp_dev_inherits_shared_and_dev_scripts(self):
-    bro = PPPDev()
+  def test_tracker_dev_inherits_shared_and_dev_scripts(self):
+    bro = _TrackerDev()
     assert set(bro.scripts) == {'ask', 'audit', 'fix', 'land', 'reflect', 'run-pr'}
     assert '## Scripts' in bro.system_prompt
     assert '## Available skills' not in bro.system_prompt
 
   def test_fix_declares_optional_task_and_new_arguments_for_bro(self):
-    bro = PPPDev()
+    bro = _TrackerDev()
     script = load_script('fix', bro.scripts['fix'])
     assert [(parameter.name, parameter.required) for parameter in script.parameters] == [
       ('task', False),
@@ -166,7 +171,7 @@ class TestScriptStore:
       assert '/fix' not in body
 
   def test_run_pr_declares_optional_base_and_reentry_arguments(self):
-    bro = PPPDev()
+    bro = _TrackerDev()
     script = load_script('run-pr', bro.scripts['run-pr'])
     assert [(parameter.name, parameter.required) for parameter in script.parameters] == [
       ('base', False),
@@ -183,7 +188,7 @@ class TestScriptStore:
 
   @pytest.mark.asyncio
   async def test_legacy_skill_store_and_service_tool_are_removed(self):
-    bro = PPPDev()
+    bro = _TrackerDev()
     assert not hasattr(bro, 'skills')
     assert not hasattr(bro, 'get_skill_body')
     assert not hasattr(bro, 'skill_descriptions')

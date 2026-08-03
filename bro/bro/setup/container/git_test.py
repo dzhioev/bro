@@ -2,10 +2,9 @@ import os
 import subprocess
 from pathlib import Path
 
-from base.project_root import PROJECT_ROOT
-
-GIT_SCRIPT = PROJECT_ROOT / 'setup' / 'container' / 'git.sh'
-LOG_SCRIPT = PROJECT_ROOT / 'setup' / 'log.sh'
+CONTAINER_DIR = Path(__file__).parent
+GIT_SCRIPT = CONTAINER_DIR / 'git.sh'
+LOG_SCRIPT = CONTAINER_DIR.parent / 'log.sh'
 
 
 def _git(*args: str, cwd: Path, check: bool = True) -> subprocess.CompletedProcess[str]:

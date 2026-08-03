@@ -8,23 +8,15 @@ This document explains the modes, workspace naming, the dispatcher-command seedi
 
 `dive-in` is always in exactly one mode. The mode is selected by which flags are present.
 
-### Bare mode (default — no task flag, no `--focus`)
+### Bare mode (default — no task flag)
 
 `dive-in` with no task-selecting flags falls through to "open a clean session, unattached to any task". The positional `command` (if any) becomes the entire initial prompt; otherwise the session starts with no prompt at all. This is the same as `cw ss <slug>` and is handy when you have a request to make but no task to attach to.
-
-### Focused mode (`--focus`)
-
-`dive-in --focus` (no `-t`, no `--new`) reads the currently focused task from the focus client (`flow/focus/client/client.py`). If nothing is focused, it logs an error and exits 1 — there is no implicit fallback to "any task". The first user message becomes `@:fix <task-id>:@` with the focused task's id — the `fix` script has no focus argument of its own.
-
-Focus is a flow-surface concept (the focus service stores flow task ids), so both `--focus` forms require the flow brog backend; with any other backend the launch fails with a clear error before a session is created.
 
 ### Task mode (`-t / --task <ref>`)
 
 `-t` accepts any task ref the repo's brog backend takes natively (see `brog/CLAUDE.md`): with the flow backend a Notion URL or a dashed UUID, with the GitHub backend an issue number, `#N`, or an issue URL. The ref is resolved host-side through `brog.system.default_system()`, which normalizes it to the backend's canonical id — the value `CW_TASK_ID` carries.
 
 The first user message becomes `@:fix <original-task-ref>:@` — the ref exactly as the user typed it — followed by the pre-fetched task block (see "Initial-prompt composition").
-
-If `--focus` is combined with `-t`, the focus client is also told to focus the resolved task (its canonical id) before the session starts — this is the canonical way to "switch to this task and dive in" in one command. The first message stays `@:fix <original-task-ref>:@`; only the focus state changes.
 
 ### New mode (`--new`)
 
@@ -34,13 +26,13 @@ If `--focus` is combined with `-t`, the focus client is also told to focus the r
 2. Call `brog::create_task` — the task is born open (workable) — and treat the returned id as the target.
 3. Continue the normal flow on that new id.
 
-`-t` and `--new` are mutually exclusive (argparse-enforced), and so are `--new` and `--focus` — the task to focus doesn't exist at launch, and the script has no focus form to delegate the set to; `--focus` combines with `-t` or stands alone.
+`-t` and `--new` are mutually exclusive (argparse-enforced).
 
 ## Workspace naming
 
 Every launch gets a **fresh workspace**: the name is always `base-<8 hex>` — `workspace.paths.fresh_workspace_name` appends a `secrets.token_hex(4)` suffix (e.g. `my-task-a3f9c2b1`), retrying until neither `var/cw/worktrees/<name>` (host) nor `var/cw/containers/<name>` (container) exists. The base is derived from whatever the session is *about*:
 
-- **Task / focused mode** — `_slugify(task_name)`. `_slugify` lowercases, replaces any run of non-alphanumerics with `-`, trims leading/trailing `-`, and truncates to 40 chars (re-trimming a trailing `-` if the truncation produced one). If the slug ends up empty (e.g. all-CJK task name), it falls back to `dive-in`.
+- **Task mode** — `_slugify(task_name)`. `_slugify` lowercases, replaces any run of non-alphanumerics with `-`, trims leading/trailing `-`, and truncates to 40 chars (re-trimming a trailing `-` if the truncation produced one). If the slug ends up empty (e.g. all-CJK task name), it falls back to `dive-in`.
 - **`--new` mode** — `_slugify(command)` if a seed command is present, otherwise `dive-in-new`.
 - **Bare mode** — always `dive-in`.
 
@@ -65,14 +57,12 @@ With `--into` omitted, `dive-in` resolves the base itself: it fetches origin's `
 `dive-in` seeds the first user message as an `@:fix …:@` natural-language script command. The session calls `@::@`, which resolves it to `@::fix` and returns the script instructions with the typed arguments; the script body (`bro/bros/dev/scripts/fix.md`) carries the workflow — resolve → context → plan → log → implement → verify → hand off to `@::run-pr`. Both cw persona and `--raw` sessions mount the `at` server and receive this contract. The mapping from CLI form to message is:
 
 - `dive-in -t <ref>` → `@:fix <ref>:@`
-- `dive-in -t <ref> --focus` → `set_focus(<canonical-id>)` (focus client), then `@:fix <ref>:@`
-- `dive-in --focus` → `@:fix <focused-task-id>:@`
 - `dive-in --new` → `@:fix --new "":@`
 - `dive-in --new <seed>` → `@:fix --new <seed>:@`
 
-The task-scoped forms (all but `--new`) also append a pre-fetched task block to the message — the task metadata, description, and comments, fetched host-side via `brog.system.default_system()` — so the session's first turn reads the task without calling the not-yet-connected brog MCP server.
+Task mode also appends a pre-fetched task block to the message — the task metadata, description, and comments, fetched host-side via `brog.system.default_system()` — so the session's first turn reads the task without calling the not-yet-connected brog MCP server.
 
-If a positional `command` is present alongside a task scope (`-t` or bare `--focus`), it gets appended as `Once you understand the task, <command>`. This lets you say `dive-in -t URL "draft a PR description"` and have it threaded through the task-orientation flow.
+If a positional `command` is present alongside `-t`, it gets appended as `Once you understand the task, <command>`. This lets you say `dive-in -t URL "draft a PR description"` and have it threaded through the task-orientation flow.
 
 For bare mode, the prompt is just the `command` string verbatim — no dispatcher wrapping.
 
@@ -94,7 +84,7 @@ Known gap: `CW_TASK_ID` lives only in the launching `dive-in` process's environm
 
 ## Env-var handoff
 
-- `CW_TASK_ID` — set to the resolved task's canonical brog id in any mode that has one (focused, `-t`, `-t --focus`). Read by the `@::run-pr` script to build the commit footer's `Task: <url>` line (via `brog::get_task(id).url`).
+- `CW_TASK_ID` — set to the resolved task's canonical brog id in task mode (`-t`). Read by the `@::run-pr` script to build the commit footer's `Task: <url>` line (via `brog::get_task(id).url`).
 - `PPP_SHELL_COMMAND` — set (if not already set) to the user-facing reconstruction of the dive-in invocation. The visual `cw banner` shows it as the outer launch command and extracts the user prompt from it; the agent-facing `cw banner --llm` omits it.
 
 The user-facing `dive-in` reconstruction is rebuilt from dive-in's own parser (`Parser.reconstruct` with prog `dive-in`) so the visual banner shows `dive-in`, not the underlying `cw ss`.

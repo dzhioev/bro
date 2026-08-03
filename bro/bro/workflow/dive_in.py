@@ -11,7 +11,6 @@ import brog.system
 import cw
 from base import log
 from base.args import Parser
-from flow.focus.client.client import default_client
 
 __cli_name__ = 'dive-in'
 
@@ -32,12 +31,6 @@ def _shell_quote(s: str) -> str:
 def _fresh_origin_head() -> Optional[str]:
   """origin's default-branch tip, freshly fetched; None when origin is unreachable."""
   return cw.fetch_ref(cw.project_root(), 'HEAD')
-
-
-def _is_flow_backend(system: brog.system.System) -> bool:
-  import brog.flow_proxy
-
-  return isinstance(system, brog.flow_proxy.System)
 
 
 def _prefetch_task(system: brog.system.System, task_ref: str) -> tuple[brog.model.Task, str]:
@@ -78,7 +71,6 @@ def dive_in(
   command: Optional[str] = None,
   task: Optional[str] = None,
   new: bool = False,
-  focus: bool = False,
 ) -> int:
   """launch the session. session shaping — the bro (prompt, scripts, MCP
   namespaces) selected by `--bro` or the project default, or the `--raw`
@@ -91,24 +83,10 @@ def dive_in(
     name = cw.fresh_workspace_name(base)
     log.info('workspace: %s', name)
     prompt = '@:fix --new "":@' if command is None else f'@:fix --new {command}:@'
-  elif task is not None or focus:
+  elif task is not None:
     system = brog.system.default_system()
-    if focus and not _is_flow_backend(system):
-      log.error('--focus requires the flow brog backend (the focus service stores flow task ids)')
-      return 1
-    if task is not None:
-      task_ref = task
-    else:
-      state = default_client().get_focus()
-      if state is None:
-        log.error('no task is currently focused')
-        return 1
-      task_ref = state.task.id
-
+    task_ref = task
     brog_task, task_block = _prefetch_task(system, task_ref)
-    if task is not None and focus:
-      default_client().set_focus(brog_task.id)
-      log.info('focused task: %s', brog_task.id)
     log.info('task: %s', brog_task.name)
     # the ref exactly as given — the prefetch block carries the canonical form
     prompt = f'@:fix {task_ref}:@\n\n{task_block}'
@@ -150,13 +128,6 @@ def main(argv: list[str]) -> Optional[int]:
     action='store_true',
     help='start by creating a new task, then dive into it',
   )
-  parser.add_argument(
-    '--focus',
-    action='store_true',
-    help='dive into the currently focused task; with -t, set focus to that task first (flow backend only)',
-  )
-  # focus cannot attach to a task that does not exist yet at launch
-  parser.add_exclusive_groups(['new'], ['focus'])
   parser.add_argument(
     'command',
     nargs='?',

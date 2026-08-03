@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 import json
 import subprocess
-from typing import Any
+from typing import Any, Optional
 from unittest.mock import patch
 
 import dev.land_pr as land_pr
@@ -47,6 +47,9 @@ class TestBodyWithFooter:
   def test_empty_body_is_footer_alone(self):
     assert land_pr._body_with_footer('  \n', '> footer') == '> footer'
 
+  def test_absent_footer_keeps_the_trimmed_body(self):
+    assert land_pr._body_with_footer('body\n', '') == 'body'
+
 
 def test_merged_minutes():
   assert land_pr._merged_minutes('2026-07-03T10:41:02Z') == '2026-07-03 10:41'
@@ -81,12 +84,14 @@ class TestPreconditionError:
     assert land_pr._precondition_error(pr, False, True) is None
 
 
-_FOOTER_SCRIPT = '/repo/cw/claude_commit_footer.py'
+_FOOTER_COMMAND = 'repo-footer'
 
 
-def _fake_run(
-  merge_calls: list[list[str]], pr: dict[str, Any], footer_script: str = _FOOTER_SCRIPT
-):
+def _project_config(footer_command: Optional[str] = _FOOTER_COMMAND):
+  return type('Config', (), {'footer_command': footer_command})()
+
+
+def _fake_run(merge_calls: list[list[str]], pr: dict[str, Any]):
   def run(command: list[str], *, capture: bool) -> str:
     assert capture == (command[:3] != ['gh', 'pr', 'merge'])
     if command[:3] == ['gh', 'pr', 'view'] and 'mergeCommit' in command[-1]:
@@ -98,9 +103,7 @@ def _fake_run(
       return json.dumps(merged)
     if command[:3] == ['gh', 'pr', 'view']:
       return json.dumps(pr)
-    if command[:3] == ['git', 'rev-parse', '--show-toplevel']:
-      return '/repo'
-    if command[0] == footer_script:
+    if command[0] == _FOOTER_COMMAND:
       assert command[1:] == ['--squash', 'origin/master..HEAD']
       return '> created with Claude Code …'
     if command[:3] == ['gh', 'pr', 'merge']:
@@ -111,15 +114,11 @@ def _fake_run(
   return run
 
 
-def _fake_isfile(*present: str):
-  return patch.object(land_pr.os.path, 'isfile', side_effect=lambda path: path in present)
-
-
 def test_land_happy_path(capsys):
   merge_calls: list[list[str]] = []
   with (
     patch.object(land_pr, '_run', side_effect=_fake_run(merge_calls, _pr())),
-    _fake_isfile(_FOOTER_SCRIPT),
+    patch.object(land_pr, 'project_config', return_value=_project_config()),
     patch.object(land_pr.spawn, 'run', return_value=subprocess.CompletedProcess([], 0)) as push,
   ):
     assert land_pr.land_pr(no_review=False, allow_unchecked=False) is None
@@ -157,33 +156,20 @@ def test_land_failed_branch_delete_degrades(capsys):
   merge_calls: list[list[str]] = []
   with (
     patch.object(land_pr, '_run', side_effect=_fake_run(merge_calls, _pr())),
-    _fake_isfile(_FOOTER_SCRIPT),
+    patch.object(land_pr, 'project_config', return_value=_project_config()),
     patch.object(land_pr.spawn, 'run', return_value=subprocess.CompletedProcess([], 1)),
   ):
     assert land_pr.land_pr(no_review=False, allow_unchecked=False) is None
   assert json.loads(capsys.readouterr().out)['branch_deleted'] is False
 
 
-def test_land_uses_the_vendored_footer_script_when_the_root_copy_is_absent():
-  merge_calls: list[list[str]] = []
-  vendored = '/repo/ppp/cw/claude_commit_footer.py'
-  with (
-    patch.object(
-      land_pr, '_run', side_effect=_fake_run(merge_calls, _pr(), footer_script=vendored)
-    ),
-    _fake_isfile(vendored),
-    patch.object(land_pr.spawn, 'run', return_value=subprocess.CompletedProcess([], 0)),
-  ):
-    assert land_pr.land_pr(no_review=False, allow_unchecked=False) is None
-  assert len(merge_calls) == 1
-
-
-def test_land_fails_without_any_footer_script(capsys):
+def test_land_without_footer_command_keeps_the_pr_body(capsys):
   merge_calls: list[list[str]] = []
   with (
     patch.object(land_pr, '_run', side_effect=_fake_run(merge_calls, _pr())),
-    _fake_isfile(),
+    patch.object(land_pr, 'project_config', return_value=_project_config(None)),
+    patch.object(land_pr.spawn, 'run', return_value=subprocess.CompletedProcess([], 0)),
   ):
-    assert land_pr.land_pr(no_review=False, allow_unchecked=False) == 1
-  assert merge_calls == []
-  assert capsys.readouterr().out == ''
+    assert land_pr.land_pr(no_review=False, allow_unchecked=False) is None
+  merge = merge_calls[0]
+  assert merge[merge.index('--body') + 1] == '## Test plan\n- [x] suite green'

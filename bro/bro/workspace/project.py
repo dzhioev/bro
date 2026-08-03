@@ -15,14 +15,14 @@ def _default_image_repository(default_bro: str) -> str:
 class ProjectConfig:
   """the operated repo's launch defaults: which bro a session runs as when
   `--bro` doesn't name one, the docker repository its session images build
-  under (`bro/<default bro>` unless overridden — the derivation lives in
-  project_config), and the per-kind credential instances its launches
-  substitute where matching kinds occur in a computed scope (`creds`, kind →
-  instance; the launch surfaces' scope computation applies it)."""
+  under (`bro/<default bro>` unless overridden), the per-kind credential
+  instances its launches substitute in computed scopes, and the optional
+  squash-footer command."""
 
   default_bro: str
   image_repository: str
   creds: dict[str, str] = field(default_factory=dict)
+  footer_command: Optional[str] = None
 
 
 def _parse_creds(table: dict, pyproject: Path) -> dict[str, str]:
@@ -50,7 +50,7 @@ def project_config() -> ProjectConfig:
   if not pyproject.is_file():
     raise ValueError(f'missing {pyproject}')
   table = tomllib.loads(pyproject.read_text()).get('tool', {}).get('bro', {})
-  unknown = sorted(set(table) - {'default', 'image-repository', 'creds'})
+  unknown = sorted(set(table) - {'default', 'image-repository', 'creds', 'footer-command'})
   if len(unknown) > 0:
     raise ValueError(f'unknown [tool.bro] key(s) in {pyproject}: {", ".join(unknown)}')
   default_bro = table.get('default')
@@ -59,8 +59,12 @@ def project_config() -> ProjectConfig:
   if not isinstance(default_bro, str):
     raise ValueError(f'[tool.bro] default in {pyproject} must be a string')
   override: Optional[str] = table.get('image-repository')
+  footer_command = table.get('footer-command')
+  if footer_command is not None and (not isinstance(footer_command, str) or footer_command == ''):
+    raise ValueError(f'[tool.bro] footer-command in {pyproject} must be a non-empty string')
   return ProjectConfig(
     default_bro=default_bro,
     image_repository=override if override is not None else _default_image_repository(default_bro),
     creds=_parse_creds(table, pyproject),
+    footer_command=footer_command,
   )

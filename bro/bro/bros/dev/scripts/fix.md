@@ -78,7 +78,7 @@ A full test-suite pass here is optional: the one mandatory pass is `@::run-pr`'s
 
 ## Step 7 — hand off
 
-When the work is ready to land, invoke `@::run-pr` — it owns commit hygiene, the commit-message footer, submodule landing, rebase, PR creation, and the review watcher, and chains into `@::land` on approval.
+When the work is ready to land, invoke `@::run-pr` — it owns commit hygiene, the commit-message footer, rebase, PR creation, and the review watcher, and chains into `@::land` on approval.
 
 For tasks that don't produce code (investigation, confirming existing behavior, external coordination): there is no pr step. Once the goal is confirmed met, close the task with `brog::update_task(<id>, status='done')`.
 

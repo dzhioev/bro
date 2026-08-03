@@ -6,7 +6,6 @@ from unittest.mock import patch
 import pytest
 
 import cw.claude_argv
-from base.project_root import PROJECT_ROOT
 from cw.mcp import MCPEndpoint
 from cw.session_test import _spec
 
@@ -153,7 +152,7 @@ class TestRawLaunch:
     # apiKeyHelper is the ppp checkout the runner's venv installs, hold-neutral
     settings = _settings(self._launch(fast=True).argv)
     assert settings['fastMode'] is True
-    assert settings['apiKeyHelper'] == str(PROJECT_ROOT / 'cw' / 'print_anthropic_key.sh')
+    assert settings['apiKeyHelper'] == str(cw.claude_argv._ANTHROPIC_KEY_HELPER)
     assert _settings(self._launch().argv)['fastMode'] is False
 
   def test_status_line_lands_in_settings(self):

@@ -5,7 +5,7 @@ the instances are stateless, so sharing them across bros is fine.
 """
 
 import prompts
-from base.project_root import PROJECT_ROOT
+import reference
 from bro.datasources.file import FileSource
 
 environment = FileSource(
@@ -24,7 +24,7 @@ template = FileSource(
     'rendering surfaces. Read it when the meaning of a directive matters; '
     'builds on the `conditions` source.'
   ),
-  path=PROJECT_ROOT / 'reference' / 'template.md',
+  path=reference.DIRECTORY / 'template.md',
   # the payload is the directive syntax itself; rendering would execute it
   render=False,
 )
@@ -36,7 +36,7 @@ conditions = FileSource(
     'combinators (`eq` / `contains`), `when` / `select` for declarative '
     'lists, the facts triple.'
   ),
-  path=PROJECT_ROOT / 'reference' / 'conditions.md',
+  path=reference.DIRECTORY / 'conditions.md',
   # carries directive examples; rendering would execute them
   render=False,
 )

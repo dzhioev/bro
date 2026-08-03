@@ -13,7 +13,6 @@ import llm.mcp
 from base import credentials
 from base.condition import ConditionError, when
 from bro.bro import BaseBro, BroRaised, feature, set_default_tracker_factory
-from bro.bros.ppp_dev import PPPDev
 from bro.datasources.searchable import Hit, SearchableDataSource
 from llm.llm import LLM
 from llm.mcp import FunctionTool, InProcessMCPServer, MCPServer, MCPServerSpec, describe
@@ -1236,18 +1235,6 @@ class TestClaudePersonaServers:
       'bro',
       'at',
     ]
-    # ppp-dev pins the feature on, so its surfaces are availability-independent
-    monkeypatch.setattr('base.credentials.available', lambda name: False)
-    assert [s.namespace for s in PPPDev().claude_persona_mcp_servers()] == [
-      'brog',
-      'dev-style-source',
-      'environment-source',
-      'template-source',
-      'conditions-source',
-      'bro',
-      'at',
-    ]
-    assert set(PPPDev().needed_secrets(harness='claude')) == {'github', 'brog'}
 
 
 class _SecretServer(InProcessMCPServer):
@@ -1341,29 +1328,6 @@ class TestMaySummon:
 
     assert Bare().needed_secrets() == ()
 
-  def test_real_bro_manifests(self):
-    from bro.bros.assistant import Assistant
-    from bro.bros.devoops import Devoops
-    from bro.bros.librorian import Librorian
-    from bro.bros.pm import PM
-
-    # component manifest only (no llm key). the full-toolset flow bros hold the
-    # focus tools, so `focus` must be present — exact-set checks (not `<=`) so an
-    # under-declaration like B1 can't slip through.
-    assert set(PPPDev().needed_secrets()) == {'github', 'brog'}
-    assert set(Assistant().needed_secrets()) == {'notion', 'focus'}
-    # PM carries the WebSearch source (brave) for triage lookups; its query-focused
-    # fetch summary makes openai an optional (best-effort) secret, not required.
-    assert set(PM().needed_secrets()) == {'notion', 'focus', 'brave', 'brog'}
-    assert PM().optional_secrets() == ('openai',)
-    # librorian scopes flow to non-focus tools, so it must NOT pull in `focus`.
-    assert 'focus' not in set(Librorian().needed_secrets())
-    assert {'tmdb', 'brave', 'notion'} <= set(Librorian().needed_secrets())
-    assert 'openai' not in PPPDev().needed_secrets()
-    # devoops adds a task-scoped flow server (non-focus tools → `notion`); `focus`
-    # still comes from its infra server.
-    assert set(Devoops().needed_secrets()) == {'aws', 'infra', 'focus', 'notion'}
-
 
 class _OptionalServer(InProcessMCPServer):
   needed_secrets = ('alpha',)
@@ -1443,15 +1407,6 @@ class TestNeedsDocker:
         super().__init__(system_prompt='')
 
     assert Plain().needs_docker is False
-
-  def test_real_bros(self):
-    from bro.bros.devoops import Devoops
-    from bro.bros.librorian import Librorian
-
-    # only the deployer declares it; other bros (incl. ppp-dev) do not
-    assert Devoops().needs_docker is True
-    assert PPPDev().needs_docker is False
-    assert Librorian().needs_docker is False
 
 
 async def _collect_tool_names(servers):
@@ -2030,20 +1985,6 @@ class TestSummonTool:
 
 
 class TestPersona:
-  def test_persona_is_class_prompts_without_shared(self):
-    bro = PPPDev()
-    # a heading names the segment, then the MRO-concatenated class prompts:
-    # Dev's contribution + PPPDev's own
-    assert bro.persona.startswith('# Persona: ppp-dev')
-    assert 'software developer' in bro.persona
-    assert '## PPP project' in bro.persona
-    assert 'dev-style-source::read' in bro.persona
-    # shared prompts and the scripts block are excluded from persona but present
-    # in the full composed system prompt
-    assert 'Interaction policy' not in bro.persona
-    assert '## Scripts' not in bro.persona
-    assert 'Interaction policy' in bro.system_prompt
-
   def test_persona_honors_explicit_override(self):
     assert EchoBro().persona == '# Persona: echo\n\nyou echo'
 

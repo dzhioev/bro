@@ -41,6 +41,7 @@ from typing import Optional
 import llm.usage as usage
 from base.args import Parser
 from llm.usage import Counts
+from workspace.paths import project_root
 
 STATE_FILENAME = '.token_accounting_state.json'
 
@@ -62,7 +63,7 @@ def _effective_baseline(committed: Counts, cum: Counts) -> Counts:
 
 
 def _repo_root() -> Path:
-  return Path(__file__).resolve().parents[1]
+  return project_root()
 
 
 class State:

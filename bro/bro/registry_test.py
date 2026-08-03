@@ -136,12 +136,13 @@ class TestAutoload:
   # the autouse fixture disables autoload; re-enable it here to exercise the
   # real lazy-import path against BRO_SPECS.
   @pytest.fixture(autouse=True)
-  def enable_autoload(self):
+  def enable_autoload(self, monkeypatch):
     bro.registry._autoload = True
+    monkeypatch.setattr(bro.registry, '_entry_points', lambda: ())
 
   def test_get_class_imports_bro_by_name_without_manual_register(self):
-    cls = get_class('pm')
-    assert cls.name == 'pm'
+    cls = get_class('dev')
+    assert cls.name == 'dev'
 
   def test_unknown_name_raises_even_with_autoload(self):
     with pytest.raises(KeyError, match='unknown bro'):
@@ -202,7 +203,7 @@ class TestExternalSpecs:
     monkeypatch.setattr(
       bro.registry,
       '_entry_points',
-      lambda: (_entry_point('pm', 'bro.registry_test:ExternalBro'),),
+      lambda: (_entry_point('dev', 'bro.registry_test:ExternalBro'),),
     )
     with pytest.raises(ValueError, match='shadows a built-in bro'):
       bro.registry.known_names()

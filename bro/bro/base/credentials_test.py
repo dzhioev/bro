@@ -1,3 +1,4 @@
+import importlib.metadata
 import json
 import threading
 import time
@@ -52,6 +53,61 @@ class _TicketSource(credentials.MintingSource):
     return credentials.Minted(
       f'{config["prefix"]}_{self.mints}', datetime.now(UTC) + self.expires_in
     )
+
+
+_REGISTRY_ENTRY = {'sources': [{'file': 'external.json'}]}
+
+
+def _entry_point(name: str, value: str, group: str) -> importlib.metadata.EntryPoint:
+  return importlib.metadata.EntryPoint(name, value, group)
+
+
+class TestExtensionEntryPoints:
+  def test_credential_source_is_discovered_by_type(self, monkeypatch):
+    entry_point = _entry_point(
+      'ticket', 'base.credentials_test:_TicketSource', credentials._CREDENTIAL_SOURCE_GROUP
+    )
+    monkeypatch.setattr(
+      credentials,
+      '_entry_points',
+      lambda group: (entry_point,) if group == credentials._CREDENTIAL_SOURCE_GROUP else (),
+    )
+    source = credentials._source_from_dict({'type': 'ticket', 'file': 'ticket.json'})
+    assert isinstance(source, _TicketSource)
+
+  def test_absent_credential_source_has_a_clear_error(self, monkeypatch):
+    monkeypatch.setattr(credentials, '_entry_points', lambda group: ())
+    with pytest.raises(ValueError, match="unknown credential source type 'ticket'; known"):
+      credentials._source_from_dict({'type': 'ticket', 'file': 'ticket.json'})
+
+  def test_registry_entry_is_discovered(self, monkeypatch):
+    entry_point = _entry_point(
+      'external', 'base.credentials_test:_REGISTRY_ENTRY', credentials._CREDENTIAL_REGISTRY_GROUP
+    )
+    monkeypatch.setattr(
+      credentials,
+      '_entry_points',
+      lambda group: (entry_point,) if group == credentials._CREDENTIAL_REGISTRY_GROUP else (),
+    )
+    registry = credentials.default_registry()
+    source = registry['external'].sources[0]
+    assert isinstance(source, credentials.LocalSource)
+    assert source.file == 'external.json'
+
+  def test_entry_points_use_the_expected_groups(self, monkeypatch):
+    calls = []
+
+    def entry_points(**kwargs):
+      calls.append(kwargs)
+      return ()
+
+    monkeypatch.setattr(importlib.metadata, 'entry_points', entry_points)
+    credentials._entry_points(credentials._CREDENTIAL_SOURCE_GROUP)
+    credentials._entry_points(credentials._CREDENTIAL_REGISTRY_GROUP)
+    assert calls == [
+      {'group': 'bro.credential_sources'},
+      {'group': 'bro.credentials'},
+    ]
 
 
 class TestLocalSource:

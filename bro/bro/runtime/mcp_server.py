@@ -8,11 +8,12 @@
 
 import asyncio
 import contextlib
+import importlib.metadata
 import os
 import secrets
 import socket
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, cast
 
 import base.args
 
@@ -20,7 +21,7 @@ if TYPE_CHECKING:
   from mcp.server.lowlevel import Server
   from starlette.types import ASGIApp, Receive, Scope, Send
 
-  from llm.mcp import MCPServer, Tool
+  from llm.mcp import MCPServer, MCPServerSpec, Tool
 
 __cli_name__ = 'mcp-server'
 
@@ -30,24 +31,30 @@ _BRO_PREFIX = 'bro:'
 _PERSONA_PREFIX = 'persona:'
 
 
-def _flow_server() -> 'MCPServer':
-  import flow.mcp
-
-  return flow.mcp.spec().build()
+_TOOLSET_ENTRY_POINT_GROUP = 'bro.toolsets'
 
 
-def _brog_server() -> 'MCPServer':
-  import brog.mcp
-
-  return brog.mcp.spec().build()
+def _toolset_entry_points() -> tuple[importlib.metadata.EntryPoint, ...]:
+  return tuple(importlib.metadata.entry_points(group=_TOOLSET_ENTRY_POINT_GROUP))
 
 
-# lazy factories: a spec pays its import only when resolved, never at parser
-# construction
-_STATIC_SERVERS: dict[str, Callable[[], 'MCPServer']] = {
-  'flow': _flow_server,
-  'brog': _brog_server,
-}
+def _toolset_server(namespace: str) -> 'MCPServer':
+  matches = [
+    entry_point for entry_point in _toolset_entry_points() if entry_point.name == namespace
+  ]
+  if len(matches) > 1:
+    values = ', '.join(entry_point.value for entry_point in matches)
+    raise SystemExit(f'duplicate toolset {namespace!r}: {values}')
+  if len(matches) == 0:
+    known = sorted(entry_point.name for entry_point in _toolset_entry_points())
+    raise SystemExit(
+      f'unknown server {namespace!r}; expected one of {known}, bro:<name>, or persona:<name>'
+    )
+  factory = matches[0].load()
+  if not callable(factory):
+    raise TypeError(f'toolset entry point {namespace!r} must load a callable')
+  toolset_factory = cast('Callable[[], MCPServerSpec]', factory)
+  return toolset_factory().build()
 
 
 def _resolve_servers(spec: str) -> list['MCPServer']:
@@ -59,13 +66,7 @@ def _resolve_servers(spec: str) -> list['MCPServer']:
     from bro.registry import create_bro
 
     return create_bro(spec[len(_PERSONA_PREFIX) :]).claude_persona_mcp_servers()
-  factory = _STATIC_SERVERS.get(spec)
-  if factory is None:
-    raise SystemExit(
-      f'unknown server {spec!r}; expected one of {sorted(_STATIC_SERVERS)}, '
-      'bro:<name>, or persona:<name>'
-    )
-  return [factory()]
+  return [_toolset_server(spec)]
 
 
 def _lowlevel_server(label: str, entries: list['Tool']) -> 'Server':
@@ -201,7 +202,10 @@ def main(argv: list[str]) -> Optional[int]:
   parser = base.args.Parser(description='generic MCP server: stdio by default, HTTP with --http')
   parser.add_argument(
     'server',
-    help=f'server to serve: {sorted(_STATIC_SERVERS)}, bro:<name>, or persona:<name>',
+    help=(
+      f'server to serve: {sorted(entry_point.name for entry_point in _toolset_entry_points())}, '
+      'bro:<name>, or persona:<name>'
+    ),
   )
   parser.add_argument(
     '--http',

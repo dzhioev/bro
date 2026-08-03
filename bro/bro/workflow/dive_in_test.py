@@ -2,7 +2,6 @@
 import os
 import re
 import shlex
-import types
 from datetime import UTC
 from typing import cast
 
@@ -230,48 +229,9 @@ class TestTaskMode:
       f'@:fix {URL}:@\n\ntask block\n\nOnce you understand the task, run the focused checks'
     )
 
-  def test_focus_with_task_sets_focus_to_the_canonical_id(self, fake_proj, monkeypatch, capsys):
-    focused = {}
-
-    class FakeClient:
-      def set_focus(self, task_id):
-        focused['id'] = task_id
-
-    monkeypatch.setattr(dive_in, '_is_flow_backend', lambda system: True)
-    monkeypatch.setattr(dive_in, '_prefetch_task', lambda system, ref: (_brog_task(), 'task block'))
-    monkeypatch.setattr(dive_in, 'default_client', lambda: FakeClient())
-    rc = dive_in.dive_in(forwarded=[], dry_run=True, task=URL, focus=True)
-    assert rc == 0
-    assert focused['id'] == UUID
-    tokens = shlex.split(capsys.readouterr().out.strip())
-    prompt = tokens[tokens.index('-p') + 1]
-    assert prompt.startswith(f'@:fix {URL}:@')
-
-  def test_bare_focus_seeds_fix_with_the_focused_id(self, fake_proj, monkeypatch, capsys):
-    state = types.SimpleNamespace(task=types.SimpleNamespace(id=UUID))
-
-    class FakeClient:
-      def get_focus(self):
-        return state
-
-    monkeypatch.setattr(dive_in, '_is_flow_backend', lambda system: True)
-    monkeypatch.setattr(dive_in, '_prefetch_task', lambda system, ref: (_brog_task(), 'task block'))
-    monkeypatch.setattr(dive_in, 'default_client', lambda: FakeClient())
-    rc = dive_in.dive_in(forwarded=[], dry_run=True, focus=True)
-    assert rc == 0
-    tokens = shlex.split(capsys.readouterr().out.strip())
-    prompt = tokens[tokens.index('-p') + 1]
-    assert prompt.startswith(f'@:fix {UUID}:@')
-
-  def test_focus_on_a_non_flow_backend_fails_at_launch(self, fake_proj):
-    # the fake backend is a plain object — not the flow proxy — so --focus
-    # must fail before any focus-client call
-    rc = dive_in.dive_in(forwarded=[], dry_run=True, focus=True)
-    assert rc == 1
-
-  def test_new_and_focus_are_mutually_exclusive(self, fake_proj):
+  def test_focus_flag_is_rejected(self):
     with pytest.raises(SystemExit):
-      dive_in.main(['dive-in', '-n', '--new', '--focus'])
+      dive_in.main(['dive-in', '--focus'])
 
   def test_resume_flag_is_rejected(self):
     with pytest.raises(SystemExit):

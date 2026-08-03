@@ -1,6 +1,8 @@
+from pathlib import Path
+
 import pytest
 
-from prompts import get_prompt, get_prompt_path, hold_fragment
+from prompts import PromptLoader, get_prompt, get_prompt_path, hold_fragment
 
 
 class TestContainment:
@@ -23,7 +25,7 @@ class TestContainment:
 
 class TestLoading:
   def test_plain_prompt_reads(self):
-    assert len(get_prompt('email_to_markdown.prompt')) > 0
+    assert len(get_prompt('tool_names.md')) > 0
 
   def test_template_requires_kwargs(self):
     with pytest.raises(ValueError, match='requires format arguments'):
@@ -31,7 +33,14 @@ class TestLoading:
 
   def test_non_template_rejects_kwargs(self):
     with pytest.raises(ValueError, match='not a template'):
-      get_prompt('email_to_markdown.prompt', unexpected='x')
+      get_prompt('tool_names.md', unexpected='x')
+
+  def test_loader_binds_to_another_package_directory(self, tmp_path: Path):
+    (tmp_path / 'one.prompt').write_text('one')
+    loader = PromptLoader(tmp_path)
+    assert loader.get_prompt('one.prompt') == 'one'
+    with pytest.raises(ValueError, match='escapes the prompts directory'):
+      loader.get_prompt('../outside.prompt')
 
 
 class TestHoldFragment:
