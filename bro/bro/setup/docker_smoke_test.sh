@@ -1,19 +1,31 @@
 #!/usr/bin/env -S bash -e
 #
-# Shared docker/podman smoke-test helper for server images.
-# Source this, then call:
+# shared docker/podman smoke-test helper for server images.
+# source this with the OCI command and base-image builder, then call:
 #
+#   source "$(bro-shell-dir)/docker_smoke_test.sh" "$OCI_CMD" ensure_server_base
 #   smoke_build <dockerfile>
 #   smoke_start <internal-port> [-e KEY=VAL ...]
 #   smoke_await <path> [-H <header>]
 #   smoke_curl <curl-args...>          # pre-fills http://localhost:$SMOKE_PORT
 #   smoke_assert_status <path> <expected-status> [-H <header>]
 #
-# Container is cleaned up on EXIT. $SMOKE_PORT holds the mapped host port.
-# Picks docker on the host and podman inside cw containers via $OCI_CMD.
+# container is cleaned up on EXIT. $SMOKE_PORT holds the mapped host port.
 
-_SMOKE_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
-source "$_SMOKE_DIR/../infra/deploy_lib.sh"
+if [ "$#" -ne 2 ]; then
+  echo "usage: source docker_smoke_test.sh <oci-command> <base-image-builder>" >&2
+  return 2
+fi
+_SMOKE_OCI_COMMAND="$1"
+_SMOKE_BASE_IMAGE_BUILDER="$2"
+if ! command -v "$_SMOKE_OCI_COMMAND" >/dev/null; then
+  echo "OCI command not found: $_SMOKE_OCI_COMMAND" >&2
+  return 2
+fi
+if ! command -v "$_SMOKE_BASE_IMAGE_BUILDER" >/dev/null; then
+  echo "base-image builder not found: $_SMOKE_BASE_IMAGE_BUILDER" >&2
+  return 2
+fi
 
 SMOKE_PORT=
 _SMOKE_CID=
@@ -23,9 +35,9 @@ smoke_build() {
   local dockerfile=$1
   _SMOKE_IMAGE="smoke-test-$$"
 
-  ensure_server_base "$dockerfile"
-  echo "=== $OCI_CMD build ==="
-  "$OCI_CMD" build -f "$dockerfile" -t "$_SMOKE_IMAGE" .
+  "$_SMOKE_BASE_IMAGE_BUILDER" "$dockerfile"
+  echo "=== $_SMOKE_OCI_COMMAND build ==="
+  "$_SMOKE_OCI_COMMAND" build -f "$dockerfile" -t "$_SMOKE_IMAGE" .
 }
 
 smoke_start() {
@@ -33,7 +45,7 @@ smoke_start() {
   SMOKE_PORT=$((internal_port + 10000 + RANDOM % 10000))
 
   echo "=== starting container ==="
-  _SMOKE_CID=$("$OCI_CMD" run -d --rm -p "${SMOKE_PORT}:${internal_port}" "$@" "$_SMOKE_IMAGE")
+  _SMOKE_CID=$("$_SMOKE_OCI_COMMAND" run -d --rm -p "${SMOKE_PORT}:${internal_port}" "$@" "$_SMOKE_IMAGE")
   trap '_smoke_cleanup' EXIT
 }
 
@@ -46,7 +58,7 @@ smoke_await() {
     sleep 0.5
   done
   echo "container failed to become ready" >&2
-  "$OCI_CMD" logs "$_SMOKE_CID" >&2
+  "$_SMOKE_OCI_COMMAND" logs "$_SMOKE_CID" >&2
   exit 1
 }
 
@@ -66,5 +78,5 @@ smoke_assert_status() {
 }
 
 _smoke_cleanup() {
-  "$OCI_CMD" stop "$_SMOKE_CID" >/dev/null 2>&1 || true
+  "$_SMOKE_OCI_COMMAND" stop "$_SMOKE_CID" >/dev/null 2>&1 || true
 }
