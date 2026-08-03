@@ -42,11 +42,11 @@ from pathlib import Path
 from typing import Optional
 
 from base.args import Parser
-from workspace.paths import project_root
+from base.source_root import SOURCE_ROOT
 
 __cli_name__ = 'sync-scripts'
 
-ROOT = project_root()
+ROOT = SOURCE_ROOT
 PYPROJECT = ROOT / 'pyproject.toml'
 SKIP_DIRS = {'.venv', 'build', '.claude', 'setup', '__pycache__', 'var'}
 

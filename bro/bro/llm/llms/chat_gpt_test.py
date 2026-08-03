@@ -688,7 +688,7 @@ class TestLLMSpec:
     import subprocess
     import sys
 
-    from workspace.paths import project_root
+    from base.source_root import SOURCE_ROOT
 
     script = (
       'import sys; '
@@ -699,7 +699,7 @@ class TestLLMSpec:
       "assert spec.TYPE == 'chat_gpt'"
     )
     result = subprocess.run(
-      [sys.executable, '-c', script], capture_output=True, text=True, cwd=project_root()
+      [sys.executable, '-c', script], capture_output=True, text=True, cwd=SOURCE_ROOT
     )
     assert result.returncode == 0, f'stderr: {result.stderr}'
 
@@ -722,7 +722,7 @@ class TestLLMSpec:
     import subprocess
     import sys
 
-    from workspace.paths import project_root
+    from base.source_root import SOURCE_ROOT
 
     script = (
       'import sys; '
@@ -731,7 +731,7 @@ class TestLLMSpec:
       "assert 'openai' not in sys.modules"
     )
     result = subprocess.run(
-      [sys.executable, '-c', script], capture_output=True, text=True, cwd=project_root()
+      [sys.executable, '-c', script], capture_output=True, text=True, cwd=SOURCE_ROOT
     )
     assert result.returncode == 0, f'stderr: {result.stderr}'
 

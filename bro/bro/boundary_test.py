@@ -1,7 +1,7 @@
 import ast
 from pathlib import Path
 
-from workspace.paths import project_root
+from base.source_root import SOURCE_ROOT
 
 _FRAMEWORK = 'framework'
 _PPP = 'ppp'
@@ -57,7 +57,6 @@ def _has_prefix(module: str, prefix: str) -> bool:
 
 
 def test_framework_does_not_import_ppp_modules():
-  root = project_root()
   ppp_prefixes = {
     _module_prefix(path)
     for path, side in _PATH_CLASSIFICATION.items()
@@ -68,11 +67,11 @@ def test_framework_does_not_import_ppp_modules():
   for relative_path, side in _PATH_CLASSIFICATION.items():
     if side != _FRAMEWORK:
       continue
-    path = root / relative_path
+    path = SOURCE_ROOT / relative_path
     files = path.rglob('*.py') if path.is_dir() else [path]
     for source_path in files:
       for line, module in _imports(source_path):
         if any(_has_prefix(module, prefix) for prefix in ppp_prefixes):
-          shown = source_path.relative_to(root)
+          shown = source_path.relative_to(SOURCE_ROOT)
           violations.append(f'{shown}:{line}: {module}')
   assert violations == []

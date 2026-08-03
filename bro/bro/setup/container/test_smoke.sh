@@ -5,7 +5,7 @@ source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../prelude.sh"
 # uses CW_SKIP_VENV=1 to skip the slow `uv sync` step.
 
 DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
-PROJECT="$(cd "$DIR" && realpath "$(git rev-parse --git-common-dir)/..")"
+PROJECT="$(realpath "$DIR/../..")"
 
 TAG="bro/ppp-dev:smoke-test"
 echo "building image" >&2
@@ -19,6 +19,13 @@ docker build -t "$TAG" -f "$DIR/Dockerfile" \
 SMOKE_TMP="$(mktemp -d "$PROJECT/.smoke-XXXXXX")"
 trap 'rm -rf "$SMOKE_TMP"' EXIT
 mkdir -p "$SMOKE_TMP/workspace" "$SMOKE_TMP/claude"
+
+# /host-repo has to be a self-contained repo — the entrypoint clones it with
+# --shared, and a linked worktree carries only a pointer to the main checkout's
+# .git. objects hardlink, so the clone costs nothing.
+HOST_REPO="$SMOKE_TMP/host-repo"
+git clone --quiet "$PROJECT" "$HOST_REPO"
+git -C "$HOST_REPO" remote set-url origin "$(git -C "$PROJECT" remote get-url origin)"
 
 cat > "$SMOKE_TMP/gitconfig" << 'GC'
 [user]
@@ -48,7 +55,7 @@ echo "running entrypoint" >&2
 # breaks out of the quote and corrupts the script.
 docker run --rm -i \
   -v "$SMOKE_TMP/workspace:/workspace" \
-  -v "$PROJECT:/host-repo:ro" \
+  -v "$HOST_REPO:/host-repo:ro" \
   -v "$SMOKE_TMP/gitconfig:/host-gitconfig:ro" \
   -v "$SMOKE_TMP/claude:/home/cw/.claude" \
   -v "$SMOKE_TMP/claude/.claude.json:/home/cw/.claude.json" \

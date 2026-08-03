@@ -5,9 +5,7 @@ guard). sourceable libraries carry no executable bit and stay out of scope."""
 import re
 import subprocess
 
-from workspace.paths import project_root
-
-PROJECT_ROOT = project_root()
+from base.source_root import SOURCE_ROOT
 
 SHEBANG = '#!/usr/bin/env -S bash -e'
 PRELUDE_SOURCE = re.compile(r'^source .*/prelude\.sh"?$', re.MULTILINE)
@@ -22,7 +20,7 @@ def executable_scripts() -> list[str]:
     capture_output=True,
     text=True,
     check=True,
-    cwd=PROJECT_ROOT,
+    cwd=SOURCE_ROOT,
   ).stdout
   return [line.split('\t')[1] for line in listing.splitlines() if line.startswith('100755')]
 
@@ -34,7 +32,7 @@ def test_executable_scripts_found():
 def test_shebang_and_prelude():
   problems = []
   for path in executable_scripts():
-    content = (PROJECT_ROOT / path).read_text()
+    content = (SOURCE_ROOT / path).read_text()
     first_line = content.split('\n', 1)[0]
     if first_line != SHEBANG:
       problems.append(f'{path}: shebang is {first_line!r}, expected {SHEBANG!r}')

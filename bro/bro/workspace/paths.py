@@ -13,6 +13,12 @@ def venv_env(venv: Path) -> dict[str, str]:
 
 
 def project_root() -> Path:
+  """the repo whose workspaces, broker and summon state the caller shares.
+
+  resolved through the shared git dir, so every linked worktree of a repo maps to
+  its main checkout — one workspace namespace per repo. callers that mean the tree
+  their own sources sit in want `base.source_root` instead.
+  """
   return Path(git_out('rev-parse', '--git-common-dir')).resolve().parent
 
 
