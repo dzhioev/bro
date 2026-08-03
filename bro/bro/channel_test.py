@@ -4,13 +4,13 @@ from typing import Optional
 import pytest
 
 from bro.bro import BaseBro, BroRaised
+from bro.broker.brotocol import Message
+from bro.broker.client import CHANNEL_ENV, Client
+from bro.broker.transport import ClientTransport
 from bro.channel import BroChannel
-from broker.brotocol import Message
-from broker.client import CHANNEL_ENV, Client
-from broker.transport import ClientTransport
-from llm.llm import LLM
-from llm.observer import NullObserver, Observer
-from llm.tracker import NullTracker
+from bro.llm.llm import LLM
+from bro.llm.observer import NullObserver, Observer
+from bro.llm.tracker import NullTracker
 
 
 class FakeClientTransport(ClientTransport):
@@ -43,9 +43,9 @@ class TestBroChannel:
     # the package cannot be imported — the hook must stay inert, not crash the run
     monkeypatch.setenv(CHANNEL_ENV, 'unix:/run/broker.sock')
     # None-poisoning makes the import machinery raise ImportError; the submodule must be
-    # poisoned too — a cached broker.client would satisfy the from-import on its own
-    monkeypatch.setitem(sys.modules, 'broker', None)
-    monkeypatch.setitem(sys.modules, 'broker.client', None)
+    # poisoned too — a cached bro.broker.client would satisfy the from-import on its own
+    monkeypatch.setitem(sys.modules, 'bro.broker', None)
+    monkeypatch.setitem(sys.modules, 'bro.broker.client', None)
     assert BroChannel.from_env() is None
 
   def test_started_sends_tagged_message(self):

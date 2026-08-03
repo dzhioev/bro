@@ -4,15 +4,15 @@ import asyncio
 import os
 from typing import Literal, Optional
 
-import base.args
+import bro.base.args as base_args
 import bro.launch.bro_run
-from base import log
 from bro import summon as summon_client
+from bro.base import log
 from bro.bro import BroRaised
 from bro.bros.bro import Bro
-from llm.llm import EFFORT_LEVELS, LLMSpec
-from llm.mcp import HOLDS
-from llm.observer import Observer
+from bro.llm.llm import EFFORT_LEVELS, LLMSpec
+from bro.llm.mcp import HOLDS
+from bro.llm.observer import Observer
 
 # shared flag help so all the launcher CLIs describe `--fast` / `--in-place` identically.
 FAST_HELP = (
@@ -112,9 +112,7 @@ def maybe_containerize(
   """re-exec `bro <verb> <bro_name> <inner_args...>` inside a scoped throwaway
   container and return its exit code, or return None so the caller runs in the
   calling process. `cli_name` is the outer spelling the user invoked; it only
-  names the workspace.
-
-  the hop is skipped when `--in-place` was passed or when already inside a container
+  names the bro.workspace.the hop is skipped when `--in-place` was passed or when already inside a container
   (`CW_IN_CONTAINER`, set by the container). Callers reject an implicit in-container
   run before reaching this helper; the hopped command carries `--in-place`, pinning
   the already-scoped inner run in-process. Otherwise the launch is the shared bro-run
@@ -154,9 +152,9 @@ def maybe_containerize(
     preflight_scoped_launch,
     scoped_secrets,
   )
-  from workspace.git import resolve_ref
-  from workspace.paths import fresh_workspace_name, project_root
-  from workspace.project import project_config
+  from bro.workspace.git import resolve_ref
+  from bro.workspace.paths import fresh_workspace_name, project_root
+  from bro.workspace.project import project_config
 
   base_ref: Optional[str] = None
   if into is not None:
@@ -243,7 +241,7 @@ def run_main(
   aliases share this parser and execution path. `force_summon` supplies bare summon's
   implicit mode, and `implied_fast` supplies the ask alias's fast default.
   """
-  parser = base.args.Parser(prog=' '.join(program), description=description)
+  parser = base_args.Parser(prog=' '.join(program), description=description)
   if force_summon:
     parser.add_argument('bro', metavar='target', help='bro to summon')
     parser.add_argument('input', metavar='prompt', help='request the summoned bro answers')
@@ -334,7 +332,7 @@ def run_main(
     return 1
   observer: Optional[Observer] = None
   if args['rich']:
-    from llm.observer import RichConsoleRenderer
+    from bro.llm.observer import RichConsoleRenderer
 
     observer = RichConsoleRenderer(prefix=bro.name)
   hold = args['hold'] if args['hold'] is not None else 'unattended'

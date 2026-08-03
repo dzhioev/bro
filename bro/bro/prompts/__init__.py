@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Optional
 if TYPE_CHECKING:
   from collections.abc import Iterable
 
-  from llm.mcp import Harness, Wire
+  from bro.llm.mcp import Harness, Wire
 
 
 class PromptLoader:
@@ -55,8 +55,9 @@ def hold_fragment(
   which only this call supplies: everything else renders hold-neutrally and a
   stray `#hold` directive there raises.
   """
-  import llm.mcp  # lazy: keeps the loader importable without the llm layer
+  import bro.llm.mcp as llm_mcp  # lazy: keeps the loader importable without the llm layer
+  from bro import llm
 
-  return llm.mcp.render_text(
+  return llm_mcp.render_text(
     get_prompt('hold.md'), hold=hold, harness=harness, wire=wire, creds=creds
   ).strip()

@@ -6,11 +6,11 @@ import re
 import subprocess
 from typing import Optional
 
-import brog.model
-import brog.system
-import cw
-from base import log
-from base.args import Parser
+import bro.brog.model as brog_model
+import bro.brog.system as brog_system
+from bro import cw
+from bro.base import log
+from bro.base.args import Parser
 
 __cli_name__ = 'dive-in'
 
@@ -33,7 +33,7 @@ def _fresh_origin_head() -> Optional[str]:
   return cw.fetch_ref(cw.project_root(), 'HEAD')
 
 
-def _prefetch_task(system: brog.system.System, task_ref: str) -> tuple[brog.model.Task, str]:
+def _prefetch_task(system: brog_system.System, task_ref: str) -> tuple[brog_model.Task, str]:
   """return (task, prompt_block) for a task ref.
 
   Resolves the ref and fetches the task metadata + description + comments here,
@@ -84,7 +84,7 @@ def dive_in(
     log.info('workspace: %s', name)
     prompt = '@:fix --new "":@' if command is None else f'@:fix --new {command}:@'
   elif task is not None:
-    system = brog.system.default_system()
+    system = brog_system.default_system()
     task_ref = task
     brog_task, task_block = _prefetch_task(system, task_ref)
     log.info('task: %s', brog_task.name)

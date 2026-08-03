@@ -3,10 +3,10 @@ from typing import Annotated, Optional
 
 from pydantic import Field
 
-from base.text_window import DEFAULT_LIMIT, MAX_LIMIT, numbered_window
-from brog.model import Comment, Status, Task
-from brog.system import System, default_system
-from llm.mcp import Context, Toolset
+from bro.base.text_window import DEFAULT_LIMIT, MAX_LIMIT, numbered_window
+from bro.brog.model import Comment, Status, Task
+from bro.brog.system import System, default_system
+from bro.llm.mcp import Context, Toolset
 
 
 class _Toolset(Toolset[System]):

@@ -11,13 +11,13 @@ from bro.launch.resume import (
   find_latest_call_trail,
   resume,
 )
-from llm.llms.chat_gpt import LLMSpec
-from trails.model import spill_descriptor
-from trails.server import backends
+from bro.llm.llms.chat_gpt import LLMSpec
+from bro.trails.model import spill_descriptor
+from bro.trails.server import backends
 
 
 class FakeTrailsClient:
-  """dict-backed stand-in for `trails.client.TrailsClient`'s read surface."""
+  """dict-backed stand-in for `bro.trails.client.TrailsClient`'s read surface."""
 
   def __init__(
     self,

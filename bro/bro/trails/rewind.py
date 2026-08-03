@@ -32,12 +32,12 @@ import time
 from collections.abc import Callable, Iterator
 from typing import Any, Optional
 
-import base.args
-from base import log, pager
-from base.ansi import Colors, should_color
-from trails.client import HTTPStatusError, TrailsClient, default_client, is_retryable_status
-from trails.lineage import walk_header_chain
-from trails.model import UNREPORTED_END_INFERENCE, spill_descriptor
+import bro.base.args as base_args
+from bro.base import log, pager
+from bro.base.ansi import Colors, should_color
+from bro.trails.client import HTTPStatusError, TrailsClient, default_client, is_retryable_status
+from bro.trails.lineage import walk_header_chain
+from bro.trails.model import UNREPORTED_END_INFERENCE, spill_descriptor
 
 __cli_name__ = 'rewind'
 
@@ -833,7 +833,7 @@ def _with_default_command(argv: list[str]) -> list[str]:
   return [argv[0], 'show', *remaining]
 
 
-def _add_color_argument(parser: base.args.Parser) -> None:
+def _add_color_argument(parser: base_args.Parser) -> None:
   parser.add_argument(
     '--color',
     default='auto',
@@ -842,7 +842,7 @@ def _add_color_argument(parser: base.args.Parser) -> None:
   )
 
 
-def _add_view_arguments(parser: base.args.Parser) -> None:
+def _add_view_arguments(parser: base_args.Parser) -> None:
   parser.add_argument('trail_id', help='trail id (or a legacy claude session id)')
   parser.add_argument('--no-pager', action='store_true', help='do not pipe output through a pager')
   parser.add_argument(
@@ -859,7 +859,7 @@ def _add_view_arguments(parser: base.args.Parser) -> None:
 
 
 def main(argv: list[str]) -> Optional[int]:
-  parser = base.args.Parser(
+  parser = base_args.Parser(
     description='read recorded runs across harnesses; `rewind <trail-id>` means '
     '`rewind show <trail-id>`'
   )

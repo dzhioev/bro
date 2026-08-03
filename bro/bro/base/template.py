@@ -1,6 +1,6 @@
 """conditional template engine for static agent-facing text (tool descriptions,
 script bodies): when/iff/eliff/else blocks and assert guards in `{{…}}` groups
-terminated by `{{end}}`, their conditions lowered onto `base.condition`
+terminated by `{{end}}`, their conditions lowered onto `bro.base.condition`
 objects — one evaluator and one fail-fast semantics shared with code-built
 conditions, any violation surfacing as `TemplateError` — plus `{{include}}`
 splices loaded through a caller-supplied resolver and rendered recursively
@@ -17,7 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Optional
 
-from base.condition import (
+from bro.base.condition import (
   Condition,
   ConditionError,
   Contains,
@@ -254,7 +254,7 @@ class _Renderer:
       raise TemplateError(f'in {{{{include {name}}}}}: {error}') from error
 
   def _evaluate(self, directive: _Directive) -> bool:
-    """lower the directive's condition text onto the `base.condition` model and
+    """lower the directive's condition text onto the `bro.base.condition` model and
     evaluate it, surfacing any semantic violation as `TemplateError`. inside a
     non-emitted include the condition is only syntax-checked, never evaluated —
     the included file's facts may be foreign to this surface."""

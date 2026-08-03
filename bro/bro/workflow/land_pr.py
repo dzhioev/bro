@@ -21,18 +21,15 @@ On success prints a single JSON object to stdout:
 """
 
 import json
-import logging
 import re
 import subprocess
 from typing import Any, Optional
 
-from base import spawn
-from base.args import Parser
-from workspace.project import project_config
+from bro.base import log, spawn
+from bro.base.args import Parser
+from bro.workspace.project import project_config
 
 __cli_name__ = 'land-pr'
-
-_log = logging.getLogger(__name__)
 
 
 class LandError(Exception):
@@ -110,7 +107,7 @@ def _delete_remote_branch(branch: str) -> bool:
   The merge is already done when this runs, so a failure degrades to a warning."""
   result = spawn.run(['git', 'push', 'origin', '--delete', branch], text=True)
   if result.returncode != 0:
-    _log.warning(f'could not delete remote branch {branch} (exit {result.returncode})')
+    log.warning(f'could not delete remote branch {branch} (exit {result.returncode})')
     return False
   return True
 
@@ -156,7 +153,7 @@ def land_pr(no_review: bool, allow_unchecked: bool) -> Optional[int]:
   try:
     result = _land(no_review, allow_unchecked)
   except LandError as error:
-    _log.error(str(error))
+    log.error(str(error))
     return 1
   print(json.dumps(result))
   return None

@@ -6,10 +6,10 @@ from unittest.mock import patch
 import pytest
 from openai.types.responses import Response
 
-import llm.llms.chat_gpt as chat_gpt_module
+import bro.llm.llms.chat_gpt as chat_gpt_module
 from bro.fork import fork, latest_fork_point, replay_messages
-from llm.tracker import NullTracker, Tracker
-from trails.model import ForkedFrom, RecordedTrail, Step, Trail
+from bro.llm.tracker import NullTracker, Tracker
+from bro.trails.model import ForkedFrom, RecordedTrail, Step, Trail
 
 _SYS_TEXT = 'you are a test bro'
 

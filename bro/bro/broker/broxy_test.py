@@ -10,12 +10,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import broker.broxy
-from broker.brotocol import Message, Tag
-from broker.broxy import Broxy
-from broker.client import CHANNEL_ENV, Client
-from broker.transport import ChannelID
-from broker.transports.unix import UnixClientTransport, UnixServerTransport
+import bro.broker.broxy as broker_broxy
+from bro.broker.brotocol import Message, Tag
+from bro.broker.broxy import Broxy
+from bro.broker.client import CHANNEL_ENV, Client
+from bro.broker.transport import ChannelID
+from bro.broker.transports.unix import UnixClientTransport, UnixServerTransport
 
 TIMEOUT = 5.0
 
@@ -65,7 +65,7 @@ async def running_broxy(**broxy_kwargs):
   socket_path = socket_dir / 'broxy.sock'
   broxy = Broxy('unix:' + str(provisioned.host_endpoint), socket_path, **broxy_kwargs)
   run_task = asyncio.create_task(broxy.run())
-  assert await asyncio.to_thread(broker.broxy._await_ready, str(socket_path), TIMEOUT) == 0
+  assert await asyncio.to_thread(broker_broxy._await_ready, str(socket_path), TIMEOUT) == 0
   try:
     yield Harness(
       transport=transport,
@@ -737,8 +737,8 @@ async def test_upstream_eof_exits_nonzero_and_closes_local_connections():
 def test_launch_starts_serve_and_prints_address_and_pid(tmp_path, monkeypatch, capsys):
   process = MagicMock(pid=123)
   popen = MagicMock(return_value=process)
-  monkeypatch.setattr(broker.broxy.spawn, 'popen', popen)
-  monkeypatch.setattr(broker.broxy, '_await_ready', MagicMock(return_value=0))
+  monkeypatch.setattr(broker_broxy.spawn, 'popen', popen)
+  monkeypatch.setattr(broker_broxy, '_await_ready', MagicMock(return_value=0))
   socket_path = tmp_path / 'broxy.sock'
   log_path = tmp_path / 'broxy.log'
 
@@ -751,7 +751,7 @@ def test_launch_starts_serve_and_prints_address_and_pid(tmp_path, monkeypatch, c
     '--log-file',
     str(log_path),
   ]
-  assert broker.broxy.main(argv) == 0
+  assert broker_broxy.main(argv) == 0
   assert capsys.readouterr().out == f'unix:{socket_path}\t123\n'
   call = popen.call_args
   assert call.args[0] == [
@@ -766,8 +766,8 @@ def test_launch_starts_serve_and_prints_address_and_pid(tmp_path, monkeypatch, c
 
 def test_launch_stops_serve_when_readiness_fails(tmp_path, monkeypatch):
   process = MagicMock(pid=123)
-  monkeypatch.setattr(broker.broxy.spawn, 'popen', MagicMock(return_value=process))
-  monkeypatch.setattr(broker.broxy, '_await_ready', MagicMock(return_value=1))
+  monkeypatch.setattr(broker_broxy.spawn, 'popen', MagicMock(return_value=process))
+  monkeypatch.setattr(broker_broxy, '_await_ready', MagicMock(return_value=1))
 
   argv = [
     'broxy',
@@ -778,19 +778,19 @@ def test_launch_stops_serve_when_readiness_fails(tmp_path, monkeypatch):
     '--log-file',
     str(tmp_path / 'broxy.log'),
   ]
-  assert broker.broxy.main(argv) == 1
+  assert broker_broxy.main(argv) == 1
   process.terminate.assert_called_once_with()
   process.wait.assert_called_once_with(timeout=10)
 
 
 def test_serve_requires_an_upstream(tmp_path, monkeypatch):
   monkeypatch.delenv(CHANNEL_ENV, raising=False)
-  assert broker.broxy.main(['broxy', 'serve', str(tmp_path / 'broxy.sock')]) == 1
+  assert broker_broxy.main(['broxy', 'serve', str(tmp_path / 'broxy.sock')]) == 1
 
 
 def test_serve_rejects_a_non_unix_upstream(tmp_path):
   argv = ['broxy', 'serve', str(tmp_path / 'broxy.sock'), '--upstream', 'ws:x']
-  assert broker.broxy.main(argv) == 1
+  assert broker_broxy.main(argv) == 1
 
 
 def test_await_succeeds_on_a_listening_socket(socket_dir):
@@ -799,11 +799,11 @@ def test_await_succeeds_on_a_listening_socket(socket_dir):
   listener.bind(str(path))
   listener.listen(1)
   try:
-    assert broker.broxy.main(['broxy', 'await', str(path)]) == 0
+    assert broker_broxy.main(['broxy', 'await', str(path)]) == 0
   finally:
     listener.close()
 
 
 def test_await_times_out_on_a_missing_socket(socket_dir):
   argv = ['broxy', 'await', str(socket_dir / 'missing.sock'), '--timeout', '0.3']
-  assert broker.broxy.main(argv) == 1
+  assert broker_broxy.main(argv) == 1

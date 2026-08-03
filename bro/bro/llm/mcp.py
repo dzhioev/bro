@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from types import ModuleType
 from typing import Any, ClassVar, Literal, Optional, get_args, get_origin
 
-from base import condition, credentials, template
-from base.condition import var
+from bro.base import condition, credentials, template
+from bro.base.condition import var
 
 
 def describe[F: Callable[..., Any]](function: F, text: str) -> F:
@@ -31,7 +31,7 @@ _WIRES = frozenset(get_args(Wire))
 
 # the session's hold — its user-involvement level, ordered from no human
 # channel to human-driven. unlike the other facts it is supplied only when
-# rendering the hold text (`prompts.hold_fragment`), so hold-neutral text —
+# rendering the hold text (`bro.prompts.hold_fragment`), so hold-neutral text —
 # scripts, procedure docs — fails fast on a stray `#hold` directive.
 Hold = Literal['unattended', 'detached', 'attended', 'guided']
 HOLDS: tuple[str, ...] = get_args(Hold)
@@ -53,13 +53,13 @@ def render_text(
   hold: Optional[str] = None,
   extra: Optional[condition.Variables] = None,
 ) -> str:
-  """render `base.template` directives in static agent-facing text (system
+  """render `bro.base.template` directives in static agent-facing text (system
   prompts, script bodies, service-tool descriptions) against the surface facts
   the call site knows: `harness` → `#harness`, `wire` → `#wire`, `creds` →
   `#creds` (the closed universe; membership probes `credentials.available`
   lazily, so render in the process that consumes the text, where the store is
   the session's own), `hold` → `#hold` (hold text only — supplied by
-  `prompts.hold_fragment`, no other call site). A fact left None defines no
+  `bro.prompts.hold_fragment`, no other call site). A fact left None defines no
   variable, so a directive referencing it raises. `extra` merges a
   caller-owned domain vocabulary next to the facts (same shape as
   `FunctionTool`'s `variables`); its names shadow same-named facts.
@@ -78,7 +78,7 @@ def render_text(
 
 
 def _load_prompt(name: str) -> str:
-  import prompts  # lazy: keeps this layer import-free of the repo-root prompt store
+  from bro import prompts  # lazy: keeps this layer import-free of the repo-root prompt store
 
   return prompts.get_prompt(name)
 
@@ -91,7 +91,7 @@ def select[T](
   creds: Optional[Iterable[str]] = None,
   extra: Optional[condition.Variables] = None,
 ) -> list[T]:
-  """resolve the `base.condition` wrappers (`when` / `iff`) in a declarative
+  """resolve the `bro.base.condition` wrappers (`when` / `iff`) in a declarative
   list against the same surface facts `render_text` renders with. a fact left
   None defines no variable, so a condition referencing it raises. `extra`
   merges a caller-owned domain vocabulary next to the facts, as in
@@ -245,7 +245,7 @@ class ToolControlSignal(Exception):
 
 
 def render_tool_text(text: str, variables: condition.Variables) -> str:
-  """render `base.template` directives in a tool's static text against the
+  """render `bro.base.template` directives in a tool's static text against the
   owning server's rendering vocabulary (e.g. the `#tools` roster, a data
   source's `#features`). Servers render at build time, so no unprocessed
   directive ever leaves a server — with an empty vocabulary any directive that

@@ -1,7 +1,7 @@
 """the session recorder daemon the in-place runner starts next to claude.
 
 Every session flavor gets continuous transcript recording to trails from one
-mechanism: the runner spawns `trails.record.claude` before launching claude and
+mechanism: the runner spawns `bro.trails.record.claude` before launching claude and
 stops it after claude exits — the stop is the daemon's final append and trail
 end (`trails/record/claude.py` owns the trail model). Deliberately not a Claude
 Code hook: `--raw` sessions run `claude --bare`, which runs no hooks at all.
@@ -18,8 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from base import log, spawn
-from cw.claude_config import _claude_config_dir, _claude_projects_dir
+from bro.base import log, spawn
+from bro.cw.claude_config import _claude_config_dir, _claude_projects_dir
 
 # a stop bounds the final snapshot + end — one transcript upload, seconds even
 # for a large session
@@ -28,7 +28,7 @@ _STOP_TIMEOUT = 60.0
 
 @dataclass
 class _SessionRecorder:
-  """a session-owned `trails.record.claude` daemon."""
+  """a session-owned `bro.trails.record.claude` daemon."""
 
   process: subprocess.Popen
   log_path: Path
@@ -60,7 +60,7 @@ def _start_session_recorder(
   projects_dir = _claude_projects_dir(workspace)
   log_path = _claude_config_dir() / 'session-recorder.log'
   argv = [
-    'trails.record.claude',
+    'bro.trails.record.claude',
     '--workspace',
     name,
     '--projects-dir',

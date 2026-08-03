@@ -7,7 +7,7 @@ yields the true total for a range — and stays correct across squash merges.
 
 The four billed token classes, the footer line shape, and the cumulative-usage
 sources (a bro run's env-pointed usage file, the Claude Code session transcript)
-are owned by the `llm.usage` module; this script owns the per-commit
+are owned by the `bro.llm.usage` module; this script owns the per-commit
 delta/baseline machinery on top of `usage.current_usage()`.
 
 Three modes:
@@ -24,7 +24,7 @@ Three modes:
   the server-side squash commit carries the sum of the children it discards.
 
 State lives in a gitignored `<repo>/.token_accounting_state.json`; git history
-carries only the durable per-class deltas / agents. Runs through base.args, so
+carries only the durable per-class deltas / agents. Runs through bro.base.args, so
 it needs the project venv active (the editable install puts `base` and `usage` on
 the path even when invoked by file path); the post-commit hook surfaces a failure
 rather than swallowing it, so committing without the venv is caught.
@@ -38,10 +38,10 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-import llm.usage as usage
-from base.args import Parser
-from llm.usage import Counts
-from workspace.paths import project_root
+import bro.llm.usage as usage
+from bro.base.args import Parser
+from bro.llm.usage import Counts
+from bro.workspace.paths import project_root
 
 STATE_FILENAME = '.token_accounting_state.json'
 

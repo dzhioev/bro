@@ -1,6 +1,6 @@
 import pytest
 
-from base.name_map import NameMap
+from bro.base.name_map import NameMap
 
 
 class TestResolve:

@@ -1,18 +1,18 @@
-import cw.system_prompt
+import bro.cw.system_prompt as cw_system_prompt
 
 
 class TestSessionAppendPrompt:
   def test_includes_base_prompts(self):
-    out = cw.system_prompt._session_append_prompt('guided', 'bro')
+    out = cw_system_prompt._session_append_prompt('guided', 'bro')
     assert 'Interaction policy' in out
     assert 'full authorization' not in out
 
   def test_non_guided_holds_add_the_authorization_block(self):
     for hold in ('unattended', 'detached', 'attended'):
-      assert 'full authorization' in cw.system_prompt._session_append_prompt(hold, 'bro')
+      assert 'full authorization' in cw_system_prompt._session_append_prompt(hold, 'bro')
 
   def test_guided_fragment(self):
-    out = cw.system_prompt._session_append_prompt('guided', 'bro')
+    out = cw_system_prompt._session_append_prompt('guided', 'bro')
     assert '# Guided session' in out
     assert '# Attended session' not in out
 
@@ -22,21 +22,21 @@ class TestSessionAppendPrompt:
       ('detached', '# Detached session'),
       ('attended', '# Attended session'),
     ):
-      out = cw.system_prompt._session_append_prompt(hold, 'bro')
+      out = cw_system_prompt._session_append_prompt(hold, 'bro')
       assert heading in out
       assert '# Guided session' not in out
 
   def test_persona_prompts_injected(self):
-    out = cw.system_prompt._session_append_prompt('guided', 'ppp-dev')
+    out = cw_system_prompt._session_append_prompt('guided', 'ppp-dev')
     assert '## PPP project' in out
     assert 'dev-style-source::read' in out
 
   def test_other_personas_carry_their_own_prompts_only(self):
-    assert '## PPP project' not in cw.system_prompt._session_append_prompt('guided', 'bro')
+    assert '## PPP project' not in cw_system_prompt._session_append_prompt('guided', 'bro')
 
   def test_persona_scripts_include_dispatcher_contract(self, monkeypatch):
     monkeypatch.setattr('bro.scripts.credentials.available', lambda name: True)
-    out = cw.system_prompt._session_append_prompt('guided', 'ppp-dev')
+    out = cw_system_prompt._session_append_prompt('guided', 'ppp-dev')
     assert '## Scripts' in out
     assert '@:<free text>:@' in out
     assert '`@::@`' in out
@@ -45,13 +45,13 @@ class TestSessionAppendPrompt:
 
 class TestSurfaceRendering:
   def test_tool_names_rendered_for_mcp_wire(self):
-    out = cw.system_prompt._session_append_prompt('guided', 'ppp-dev')
+    out = cw_system_prompt._session_append_prompt('guided', 'ppp-dev')
     assert 'mcp__namespace__tool' in out
     assert 'call that wire name directly' not in out
 
   def test_no_directives_survive_rendering(self):
     # the prose literal `{{…}}` describing the syntax stays; the persona points
     # every surface at the reference tools
-    out = cw.system_prompt._session_append_prompt('guided', 'ppp-dev')
+    out = cw_system_prompt._session_append_prompt('guided', 'ppp-dev')
     assert '{{iff' not in out
     assert 'template-source::read' in out

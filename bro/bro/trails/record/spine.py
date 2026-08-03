@@ -4,7 +4,7 @@ import threading
 import time
 from typing import Any, Optional
 
-from trails.client import RECORD_RETRY_DELAYS_SECONDS, TrailsClient
+from bro.trails.client import RECORD_RETRY_DELAYS_SECONDS, TrailsClient
 
 KEEPALIVE_INTERVAL_SECONDS = 60.0
 WRITE_RETRY_DELAYS_SECONDS = RECORD_RETRY_DELAYS_SECONDS

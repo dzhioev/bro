@@ -1,6 +1,6 @@
 """broker spawner adapters for container and host-process launches.
 
-`DockerSpawner` unwraps a broker-free `workspace.docker.Launch`, adds the
+`DockerSpawner` unwraps a broker-free `bro.workspace.docker.Launch`, adds the
 provisioned channel socket mount and `BROKER_CHANNEL`, and runs the shared
 blocking container prepare off-loop. A TTY launch attaches with inherited stdio
 and host-log redirection; a headless launch captures merged output in a bounded
@@ -24,18 +24,18 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Optional
 
-from base import log
-from broker.spawn import ChildHandle, LaunchSpec, Spawner
-from broker.transport import Provisioned
-from workspace.docker import (
+from bro.base import log
+from bro.broker.spawn import ChildHandle, LaunchSpec, Spawner
+from bro.broker.transport import Provisioned
+from bro.workspace.docker import (
   DETACH_FLAG,
   Launch as DockerLaunch,
   container_running,
   prepare_container,
   suspend_until_continued,
 )
-from workspace.model import ContainerWorkspace, clear_session_end, record_session_end
-from workspace.paths import project_root
+from bro.workspace.model import ContainerWorkspace, clear_session_end, record_session_end
+from bro.workspace.paths import project_root
 
 DEFAULT_RING_BYTES = 1 << 16  # 64 KiB — a full traceback + context, bounded
 

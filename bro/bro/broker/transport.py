@@ -19,7 +19,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Optional, Protocol
 
-from broker.brotocol import Message
+from bro.broker.brotocol import Message
 
 Address = str  # connection URI carried in BROKER_CHANNEL, e.g. 'unix:/run/broker.sock'
 ChannelID = str  # opaque host-side handle for one peer's channel
@@ -100,7 +100,7 @@ def connect(address: Address) -> ClientTransport:
   if separator == '':
     raise ValueError(f'broker address missing scheme: {address!r}')
   if scheme == 'unix':
-    from broker.transports.unix import UnixClientTransport
+    from bro.broker.transports.unix import UnixClientTransport
 
     return UnixClientTransport(rest)
   raise ValueError(f'unsupported broker transport scheme: {scheme!r}')

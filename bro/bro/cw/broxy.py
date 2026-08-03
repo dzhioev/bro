@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from base import log, spawn
+from bro.base import log, spawn
 
 _LAUNCH_TIMEOUT = 10.0
 

@@ -3,9 +3,9 @@
 import asyncio
 from typing import Any
 
-from trails.model import canonical_json_bytes
-from trails.server import backends, storage_types
-from trails.server.folding import AggregateState
+from bro.trails.model import canonical_json_bytes
+from bro.trails.server import backends, storage_types
+from bro.trails.server.folding import AggregateState
 
 
 async def prepare_rows(

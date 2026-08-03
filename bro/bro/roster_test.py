@@ -12,11 +12,11 @@ import re
 
 import pytest
 
-from base.template import _DIRECTIVE_RE
+from bro.base.template import _DIRECTIVE_RE
 from bro.bro import BaseBro
 from bro.bros import BRO_SPECS
+from bro.llm.mcp import MCPServer, Tool
 from bro.registry import create_bro
-from llm.mcp import MCPServer, Tool
 
 # (surface label, server-list builder) — the three consuming harnesses a bro's
 # declared components serve
@@ -31,12 +31,12 @@ _SURFACES = [
 def brog_config(monkeypatch):
   # brog's state factory reads the self-contained `brog` secret at build
   monkeypatch.setattr(
-    'base.credentials.get_json',
+    'bro.base.credentials.get_json',
     lambda name: {'backend': 'flow', 'transport': 'http', 'url': 'https://x', 'token': 't'},
   )
   # every credential resolves, so feature- and credential-gated components all
   # mount and the audit covers the maximal roster deterministically
-  monkeypatch.setattr('base.credentials.available', lambda name: True)
+  monkeypatch.setattr('bro.base.credentials.available', lambda name: True)
 
 
 def _served_texts(tool: Tool) -> list[str]:

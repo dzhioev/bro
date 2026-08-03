@@ -14,9 +14,9 @@ from typing import Optional
 
 from bro.bros.bro import Bro
 from bro.fork import fork, latest_fork_point
-from llm.llm import LLMSpec
-from trails.client import TrailsClient, fetch_recorded_trail
-from trails.lineage import walk_header_chain
+from bro.llm.llm import LLMSpec
+from bro.trails.client import TrailsClient, fetch_recorded_trail
+from bro.trails.lineage import walk_header_chain
 
 # `--resume` without a trail id: continue the bro's newest recorded `call`
 # conversation.
@@ -50,7 +50,7 @@ class ResumedCall:
 
 def find_latest_call_trail(client: TrailsClient, bro_name: str) -> Optional[str]:
   """the bro's newest recorded `call` conversation, or None when none is found
-  among its `_LATEST_SCAN_LIMIT` newest trails."""
+  among its `_LATEST_SCAN_LIMIT` newest bro.trails."""
   for header in client.iter_trails(bro=bro_name, max_items=_LATEST_SCAN_LIMIT):
     if header.get('surface') == _CALL_ENTRY_POINT:
       return header['id']

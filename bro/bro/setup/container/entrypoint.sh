@@ -124,10 +124,6 @@ if [ "${CW_SKIP_VENV:-}" != "1" ] && [ -d /opt/cw-venv ] && [ ! -e /workspace/.v
   log VERBOSE 'reusing the venv baked into the image'
   ln -s /opt/cw-venv /workspace/.venv
   touch /workspace/.venv/.provision-stamp
-  # the baked venv also carries a `_entrypoints.py` bridge generated from the
-  # [project.scripts] of the same manifests the gate above just matched. tell
-  # provision_repo.sh to skip the regen (the only other thing it does is the
-  # console-script bridge + git hooks).
   export CW_VENV_BAKED=1
 fi
 

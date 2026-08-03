@@ -3,9 +3,9 @@ from typing import Any, Optional, cast
 
 import pytest
 
-from base.ansi import Colors
-from trails.client import HTTPStatusError, TrailsClient
-from trails.rewind import (
+from bro.base.ansi import Colors
+from bro.trails.client import HTTPStatusError, TrailsClient
+from bro.trails.rewind import (
   _command_grep,
   _command_show,
   _command_steps,
@@ -18,7 +18,7 @@ from trails.rewind import (
   _truncate_oneline,
   _with_default_command,
 )
-from trails.server.backends import BACKENDS
+from bro.trails.server.backends import BACKENDS
 
 NO_COLOR = Colors(enabled=False)
 LULID = '01kydtgppz-y7fdwep2-apw9ag3b'

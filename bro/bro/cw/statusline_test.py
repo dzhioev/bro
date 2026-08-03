@@ -2,8 +2,8 @@ import io
 import json
 import time
 
-from cw import statusline
-from monitor import health
+from bro.cw import statusline
+from bro.monitor import health
 
 
 def _run(monkeypatch, tmp_path, status=None, summon_status=None) -> str:

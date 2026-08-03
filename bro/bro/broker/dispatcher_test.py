@@ -3,10 +3,10 @@ from typing import Optional
 
 import pytest
 
-from broker.brotocol import Message, Tag
-from broker.dispatcher import DEFAULT_TIMEOUT, Dispatcher, ping_handler, spawn_test_handler
-from broker.runtime import Peer
-from broker.spawn import LaunchSpec
+from bro.broker.brotocol import Message, Tag
+from bro.broker.dispatcher import DEFAULT_TIMEOUT, Dispatcher, ping_handler, spawn_test_handler
+from bro.broker.runtime import Peer
+from bro.broker.spawn import LaunchSpec
 
 _LAUNCH = LaunchSpec()  # opaque marker; the fake Runtime never inspects it
 
@@ -14,7 +14,7 @@ _LAUNCH = LaunchSpec()  # opaque marker; the fake Runtime never inspects it
 class FakeRuntime:
   """records the commands the Dispatcher issues and hands it test-chosen peer ids.
 
-  Structurally a `broker.dispatcher.RuntimeCommands`; the Dispatcher drives it while the
+  Structurally a `bro.broker.dispatcher.RuntimeCommands`; the Dispatcher drives it while the
   test drives the Dispatcher's listener callbacks, so the rules are exercised with no loop,
   socket, or subprocess.
   """

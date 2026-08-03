@@ -1,3 +1,3 @@
-from base import log
+from bro.base import log
 
 log.info('hello from module')

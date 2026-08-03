@@ -13,12 +13,12 @@ import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar, Literal, Optional, Self, cast, get_args
 
-import llm.llm
-import llm.usage as usage
-from base import credentials, log
-from llm.mcp import MCPServer, Tool, ToolControlSignal
-from llm.observer import Observer
-from llm.tracker import ToolStepSource, Tracker
+import bro.llm.llm as llm_llm
+import bro.llm.usage as usage
+from bro.base import credentials, log
+from bro.llm.mcp import MCPServer, Tool, ToolControlSignal
+from bro.llm.observer import Observer
+from bro.llm.tracker import ToolStepSource, Tracker
 
 if TYPE_CHECKING:
   from openai.types.responses import (
@@ -54,7 +54,7 @@ _EFFORT_TO_REASONING_EFFORT: dict[str, ReasoningEffort] = {
 
 
 @dataclass(frozen=True)
-class LLMSpec(llm.llm.LLMSpec):
+class LLMSpec(llm_llm.LLMSpec):
   """spec for the OpenAI Responses API.
 
   service_tier='priority' is the analog of Claude Code's /fast — same model
@@ -115,7 +115,7 @@ class LLMSpec(llm.llm.LLMSpec):
     observer: Optional[Observer] = None,
     tracker: Optional[Tracker] = None,
     agent: Optional[str] = None,
-  ) -> llm.llm.LLM:
+  ) -> llm_llm.LLM:
     return ChatGPT.create(
       model=self.model,
       reasoning_effort=self.reasoning_effort,
@@ -283,7 +283,7 @@ def _cached_tokens(response_usage: Optional[object]) -> int:
   return getattr(input_details, 'cached_tokens', 0) if input_details is not None else 0
 
 
-class ChatGPT(llm.llm.LLM):
+class ChatGPT(llm_llm.LLM):
   @staticmethod
   def create(
     model: str = 'gpt-5',

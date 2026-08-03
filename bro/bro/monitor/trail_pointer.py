@@ -18,7 +18,7 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from monitor import claude_config_dir
+from bro.monitor import claude_config_dir
 
 FILENAME = 'current-trail.json'
 

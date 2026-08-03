@@ -1,4 +1,4 @@
-from base.args import Parser
+from bro.base.args import Parser
 
 DEFAULT_HOLD = 'guided'
 
@@ -16,8 +16,8 @@ def add_forwarded_flags(parser: Parser) -> None:
   )
   # imported here, not at module level: llm pulls asyncio (~150ms) and this
   # module sits on every `import cw`
-  from llm.llm import EFFORT_LEVELS
-  from llm.mcp import HOLDS
+  from bro.llm.llm import EFFORT_LEVELS
+  from bro.llm.mcp import HOLDS
 
   # default None, not DEFAULT_HOLD: each wrapper resolves an omitted flag to
   # its own default, and reconstruction then always carries the resolved value

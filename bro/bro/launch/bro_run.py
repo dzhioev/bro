@@ -13,11 +13,11 @@ import json
 from collections.abc import Sequence
 from typing import Any, Literal, Optional
 
-from base import credentials
+from bro.base import credentials
 from bro.launch.identity import bro_git_identity_env
 from bro.summon import SUMMONER_ENV
-from workspace.docker import Launch
-from workspace.store import ScopedSecrets
+from bro.workspace.docker import Launch
+from bro.workspace.store import ScopedSecrets
 
 
 def describe(

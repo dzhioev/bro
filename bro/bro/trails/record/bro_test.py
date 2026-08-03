@@ -7,11 +7,11 @@ from typing import Any, Optional
 
 import pytest
 
-import trails.record.spine
-from base import configs
-from trails.client import HTTPStatusError
-from trails.model import ForkedFrom, tools_sha256
-from trails.record.bro import Recorder
+import bro.trails.record.spine as trails_record_spine
+from bro.base import configs
+from bro.trails.client import HTTPStatusError
+from bro.trails.model import ForkedFrom, tools_sha256
+from bro.trails.record.bro import Recorder
 
 
 def _request_payload(request: tuple[str, str, Optional[bytes], dict[str, str]]) -> dict:
@@ -62,7 +62,7 @@ def _install_fake_connection(monkeypatch: pytest.MonkeyPatch) -> _FakeConnection
   fake = _FakeConnection()
   monkeypatch.setattr(http.client, 'HTTPSConnection', lambda *args, **kwargs: fake)
   monkeypatch.setattr(time, 'sleep', lambda _: None)
-  monkeypatch.setattr(trails.record.spine, 'KEEPALIVE_INTERVAL_SECONDS', 3600.0)
+  monkeypatch.setattr(trails_record_spine, 'KEEPALIVE_INTERVAL_SECONDS', 3600.0)
   return fake
 
 
@@ -73,18 +73,18 @@ def _append_response(extent: int, *, appended: int = 1) -> tuple[int, bytes]:
 class TestRecorderConstructor:
   def test_rejects_non_https_url(self):
     with pytest.raises(ValueError, match='https'):
-      Recorder('http://trails.example', 'tok')
+      Recorder('http://bro.trails.example', 'tok')
 
   def test_rejects_url_without_scheme(self):
     with pytest.raises(ValueError, match='https'):
-      Recorder('trails.example', 'tok')
+      Recorder('bro.trails.example', 'tok')
 
 
 class TestRecorderStartTrail:
   def test_opens_a_universal_body_and_returns_server_trail_id(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
     fake.queue((201, b'{"id": "T-server"}'))
-    tracker = Recorder('https://trails.example', 'tok')
+    tracker = Recorder('https://bro.trails.example', 'tok')
     trail_id = tracker.start_trail(
       bro='dev',
       llm_spec={'type': 'chat_gpt', 'model': 'gpt-5'},
@@ -124,7 +124,7 @@ class TestRecorderStartTrail:
   def test_serializes_fork_pointers(self, monkeypatch, forked_from, expected):
     fake = _install_fake_connection(monkeypatch)
     fake.queue((201, b'{"id": "T1"}'))
-    tracker = Recorder('https://trails.example', 'tok')
+    tracker = Recorder('https://bro.trails.example', 'tok')
     tracker.start_trail(
       bro='b',
       llm_spec={},
@@ -139,7 +139,7 @@ class TestRecorderStartTrail:
   def test_create_is_not_retried(self, monkeypatch, failure):
     fake = _install_fake_connection(monkeypatch)
     fake.queue(failure)
-    tracker = Recorder('https://trails.example', 'tok')
+    tracker = Recorder('https://bro.trails.example', 'tok')
     with pytest.raises((ConnectionError, HTTPStatusError)):
       tracker.start_trail(
         bro='b',
@@ -156,7 +156,7 @@ class TestRecorderStep:
   def _ready(self, monkeypatch) -> tuple[Recorder, _FakeConnection]:
     fake = _install_fake_connection(monkeypatch)
     fake.queue((201, b'{"id": "T1"}'))
-    tracker = Recorder('https://trails.example', 'tok')
+    tracker = Recorder('https://bro.trails.example', 'tok')
     tracker.start_trail(
       bro='b',
       llm_spec={},
@@ -169,7 +169,7 @@ class TestRecorderStep:
 
   def test_step_before_start_trail_raises(self, monkeypatch):
     _install_fake_connection(monkeypatch)
-    tracker = Recorder('https://trails.example', 'tok')
+    tracker = Recorder('https://bro.trails.example', 'tok')
     with pytest.raises(RuntimeError, match='before start_trail'):
       tracker.step('user_input', 'hello', turn_index=0)
 
@@ -279,7 +279,7 @@ class TestRecorderEndTrail:
   def _ready(self, monkeypatch) -> tuple[Recorder, _FakeConnection]:
     fake = _install_fake_connection(monkeypatch)
     fake.queue((201, b'{"id": "T1"}'))
-    tracker = Recorder('https://trails.example', 'tok')
+    tracker = Recorder('https://bro.trails.example', 'tok')
     tracker.start_trail(
       bro='b', llm_spec={}, system_prompt='p', forked_from=None, interactive=False, surface='x'
     )
@@ -313,9 +313,9 @@ class TestRecorderEndTrail:
 class TestRecorderKeepalive:
   def _start(self, monkeypatch, interval: float) -> tuple[Recorder, _FakeConnection]:
     fake = _install_fake_connection(monkeypatch)
-    monkeypatch.setattr(trails.record.spine, 'KEEPALIVE_INTERVAL_SECONDS', interval)
+    monkeypatch.setattr(trails_record_spine, 'KEEPALIVE_INTERVAL_SECONDS', interval)
     fake.queue((201, b'{"id": "T1"}'))
-    tracker = Recorder('https://trails.example', 'tok')
+    tracker = Recorder('https://bro.trails.example', 'tok')
     tracker.start_trail(
       bro='b', llm_spec={}, system_prompt='', forked_from=None, interactive=False, surface='x'
     )
@@ -373,7 +373,7 @@ class TestRecorderKeepalive:
     with caplog.at_level(logging.WARNING):
       while len(self._keepalive_requests(fake)) < 2 and time.monotonic() < deadline:
         threading.Event().wait(0.01)
-      monkeypatch.setattr(trails.record.spine, 'KEEPALIVE_INTERVAL_SECONDS', 3600.0)
+      monkeypatch.setattr(trails_record_spine, 'KEEPALIVE_INTERVAL_SECONDS', 3600.0)
       threading.Event().wait(0.2)
     assert any('keepalive failed' in record.message for record in caplog.records)
     for item in (_append_response(2), _append_response(2), (204, b'')):

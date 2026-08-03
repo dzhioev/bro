@@ -4,7 +4,7 @@ the Broker supervises.
 
 from abc import ABC, abstractmethod
 
-from broker.transport import Provisioned
+from bro.broker.transport import Provisioned
 
 
 class LaunchSpec:

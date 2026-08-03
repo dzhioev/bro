@@ -33,11 +33,11 @@ from collections.abc import Callable, Generator
 from dataclasses import replace
 from typing import Optional, Protocol
 
-from base import log
-from broker.brotocol import Message, Tag
-from broker.runtime import Peer, Runtime
-from broker.spawn import LaunchSpec, Spawner
-from broker.transport import ServerTransport
+from bro.base import log
+from bro.broker.brotocol import Message, Tag
+from bro.broker.runtime import Peer, Runtime
+from bro.broker.spawn import LaunchSpec, Spawner
+from bro.broker.transport import ServerTransport
 
 # request-lifecycle bound for a spawned child (LLM children run for minutes)
 DEFAULT_TIMEOUT = 600.0

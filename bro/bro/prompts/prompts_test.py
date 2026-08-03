@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from prompts import PromptLoader, get_prompt, get_prompt_path, hold_fragment
+from bro.prompts import PromptLoader, get_prompt, get_prompt_path, hold_fragment
 
 
 class TestContainment:

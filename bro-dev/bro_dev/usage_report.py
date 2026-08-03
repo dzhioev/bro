@@ -23,10 +23,10 @@ from __future__ import annotations
 import subprocess
 from typing import Optional
 
-import llm.usage as usage
-from base import log
-from base.args import Parser
-from llm.usage import Counts
+import bro.llm.usage as usage
+from bro.base import log
+from bro.base.args import Parser
+from bro.llm.usage import Counts
 
 __cli_name__ = 'usage-report'
 

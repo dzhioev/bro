@@ -7,10 +7,10 @@ from dataclasses import dataclass
 import pytest
 
 from bro import summon
-from broker.brotocol import Message
-from broker.client import CHANNEL_ENV
-from broker.transport import ChannelID
-from broker.transports.unix import UnixServerTransport
+from bro.broker.brotocol import Message
+from bro.broker.client import CHANNEL_ENV
+from bro.broker.transport import ChannelID
+from bro.broker.transports.unix import UnixServerTransport
 
 TIMEOUT = 5.0
 

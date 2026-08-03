@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from broker.brotocol import MAX_FRAME_BYTES, PROTOCOL_VERSION, Message, ProtocolError
+from bro.broker.brotocol import MAX_FRAME_BYTES, PROTOCOL_VERSION, Message, ProtocolError
 
 
 def test_round_trip():

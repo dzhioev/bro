@@ -40,14 +40,14 @@ def _session_append_prompt(hold: str, bro_name: str) -> str:
   the session environment's credentials (this composes in the session's own
   process — in-container for container sessions — so the store is the scoped
   one). the hold fragment renders separately through
-  `prompts.hold_fragment` — the `#hold` fact is supplied only there, so the
+  `bro.prompts.hold_fragment` — the `#hold` fact is supplied only there, so the
   base and persona prompts stay hold-neutral.
   """
-  # llm.mcp and bro.registry are imported lazily — the hub aggregates every cw
+  # bro.llm.mcp and bro.registry are imported lazily — the hub aggregates every cw
   # submodule, so a module-level import here would tax every `import cw`.
-  import llm.mcp
-  import prompts
-  from base import credentials
+  import bro.llm.mcp as llm_mcp
+  from bro import prompts
+  from bro.base import credentials
   from bro.registry import create_bro
 
   bro = create_bro(bro_name)
@@ -55,7 +55,7 @@ def _session_append_prompt(hold: str, bro_name: str) -> str:
   script_instructions = bro.script_instructions()
   if len(script_instructions) > 0:
     parts.append(script_instructions)
-  rendered = llm.mcp.render_text(
+  rendered = llm_mcp.render_text(
     '\n\n'.join(parts),
     harness='claude',
     wire='mcp',

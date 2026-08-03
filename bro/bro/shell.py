@@ -1,11 +1,11 @@
 from pathlib import Path
 from typing import Optional
 
-from base.args import Parser
+from bro.base.args import Parser
 
 __cli_name__ = 'bro-shell-dir'
 
-SHELL_DIR = Path(__file__).resolve().parents[1] / 'setup'
+SHELL_DIR = Path(__file__).resolve().parent / 'setup'
 _REQUIRED_FILES = (
   'prelude.sh',
   'log.sh',

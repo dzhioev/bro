@@ -3,19 +3,16 @@
 
 import http.client
 import json
-import logging
 import time
 import urllib.error
 from collections.abc import Callable
 from typing import Any, Optional
 
-from base import credentials
-from base.args import ArgumentTypeError, Parser
-from extra.github import api
+from bro.base import credentials, log
+from bro.base.args import ArgumentTypeError, Parser
+from bro.extra.github import api
 
 __cli_name__ = 'poll-pr'
-
-_log = logging.getLogger(__name__)
 
 
 def _fetch_pr(owner: str, repo: str, pr: int, token: str) -> dict[str, Any]:
@@ -177,7 +174,7 @@ def poll_pr(
 
   startup_token = token()
   repo_owner_login = _owner_login(owner, repo, startup_token)
-  _log.info(f'repo owner: {repo_owner_login}')
+  log.info(f'repo owner: {repo_owner_login}')
 
   for comments in (
     _fetch_issue_comments(owner, repo, pr, startup_token),
@@ -187,7 +184,7 @@ def poll_pr(
       seen_comment_ids.add(c['id'])
   for r in _fetch_reviews(owner, repo, pr, startup_token):
     seen_review_ids.add(r['id'])
-  _log.info(f'existing comments: {len(seen_comment_ids)}, existing reviews: {len(seen_review_ids)}')
+  log.info(f'existing comments: {len(seen_comment_ids)}, existing reviews: {len(seen_review_ids)}')
 
   def is_actionable(login: str) -> bool:
     if self_login is not None and login == self_login:
@@ -197,7 +194,7 @@ def poll_pr(
     return login == repo_owner_login
 
   while True:
-    # `extra.github.api` already retries transient blips per call; this guard is the
+    # `bro.extra.github.api` already retries transient blips per call; this guard is the
     # second layer — if a whole cycle still fails on a transient error (a longer
     # outage), log and poll again next interval instead of exiting, preserving
     # the seen-id baselines. a non-transient error (404 — PR/repo gone) is fatal
@@ -220,7 +217,7 @@ def poll_pr(
       # transient-error tolerance
       if self_login is None:
         self_login = pr_data['user']['login']
-        _log.info(f'self: {self_login} (the PR author)')
+        log.info(f'self: {self_login} (the PR author)')
 
       if conflicts.update(pr_data.get('mergeable')):
         print(json.dumps({'event': 'conflicts', 'pr': pr}), flush=True)
@@ -238,7 +235,7 @@ def poll_pr(
         reason = str(error.reason)
       else:
         reason = f'{type(error).__name__}: {error}'
-      _log.warning(f'{reason} during poll cycle; continuing after {interval}s')
+      log.warning(f'{reason} during poll cycle; continuing after {interval}s')
 
     time.sleep(interval)
 

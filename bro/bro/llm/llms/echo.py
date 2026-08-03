@@ -1,14 +1,14 @@
 from dataclasses import dataclass
 from typing import ClassVar, Optional
 
-import llm.llm
-from llm.mcp import MCPServer
-from llm.observer import Observer
-from llm.tracker import Tracker
+import bro.llm.llm as llm_llm
+from bro.llm.mcp import MCPServer
+from bro.llm.observer import Observer
+from bro.llm.tracker import Tracker
 
 
 @dataclass(frozen=True)
-class LLMSpec(llm.llm.LLMSpec):
+class LLMSpec(llm_llm.LLMSpec):
   """trivial spec for Echo. inherits the raising base `.fast` since echo has
   no fast-mode equivalent."""
 
@@ -22,7 +22,7 @@ class LLMSpec(llm.llm.LLMSpec):
     observer: Optional[Observer] = None,
     tracker: Optional[Tracker] = None,
     agent: Optional[str] = None,
-  ) -> llm.llm.LLM:
+  ) -> llm_llm.LLM:
     return Echo.create(mcp_servers=mcp_servers, observer=observer, tracker=tracker, agent=agent)
 
   def dump(self) -> dict:
@@ -33,7 +33,7 @@ class LLMSpec(llm.llm.LLMSpec):
     return cls(model=data['model'])
 
 
-class Echo(llm.llm.LLM):
+class Echo(llm_llm.LLM):
   @staticmethod
   def create(
     mcp_servers: Optional[list[MCPServer]] = None,

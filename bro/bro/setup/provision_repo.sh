@@ -11,15 +11,15 @@
 #         #!/usr/bin/env -S bash -e
 #         DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 #         git -C "$DIR" submodule update --init ppp
-#         "$DIR/ppp/setup/setup_env.sh"
-#         exec "$DIR/ppp/setup/provision_repo.sh"
+#         "$DIR/ppp/bro/bro/setup/setup_env.sh"
+#         exec "$DIR/ppp/bro/bro/setup/provision_repo.sh"
 # tree creation (clone / worktree / pre-existing) and surface-specific wiring
 # (credentials) stay with the callers; only the steps below are shared.
 
 DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 source "$DIR/prelude.sh"
 
-ppp_root="$(readlink -f "$DIR/..")"
+ppp_root="$(readlink -f "$DIR/../../..")"
 superproject="$(git -C "$ppp_root" rev-parse --show-superproject-working-tree)"
 if [ -n "$superproject" ]; then
   cd "$(readlink -f "$superproject")"
@@ -30,7 +30,7 @@ fi
 unset VIRTUAL_ENV
 
 if ! command -v uv >/dev/null 2>&1; then
-  log ERROR "uv not found; run setup/setup_env.sh first or install manually"
+  log ERROR "uv not found; run bro/bro/setup/setup_env.sh first or install manually"
   exit 1
 fi
 
@@ -52,33 +52,18 @@ if [ ! -f "$stamp" ] || [ uv.lock -nt "$stamp" ] || [ pyproject.toml -nt "$stamp
   touch "$stamp"
 fi
 
-# regenerate the gitignored _entrypoints.py console-script bridge in .venv. the
-# committed [project.scripts] table points at it; it must track the source on
-# every provision. run with the venv's python directly (cwd-independent — the
-# venv's editable install resolves the dev package in either mode — and avoids
-# `uv run` re-syncing the env). see dev/sync_scripts.py.
-# CW_VENV_BAKED: the container entrypoint sets this when it reuses the venv baked
-# into the image, whose bridge was generated from the tag-pinned [project.scripts]
-# and so already matches this clone — skip the regen.
-if [ "${CW_VENV_BAKED:-}" = "1" ]; then
-  log VERBOSE "console-script entrypoints baked into image; skipping regen"
-else
-  log VERBOSE "generating console-script entrypoints"
-  .venv/bin/python -m dev.sync_scripts --entrypoints >&2
-fi
-
 # promote the staged token-accounting baseline after each commit lands. --git-path
 # hooks (not --git-dir/hooks) resolves to the shared common hooks dir from inside a
 # worktree, which is where git actually runs hooks from.
 log VERBOSE "installing git hooks"
 hooks_dir="$(git rev-parse --git-path hooks)"
 mkdir -p "$hooks_dir"
-cp "$DIR/git_hooks/post-commit" "$hooks_dir/post-commit"
+cp "$ppp_root/bro-dev/bro_dev/hooks/post-commit" "$hooks_dir/post-commit"
 chmod +x "$hooks_dir/post-commit"
 
 log VERBOSE "registering local git aliases"
 if [ -n "$superproject" ]; then
-  git config --local alias.golc "!./${ppp_root#"$PWD/"}/dev/git_golc.py"
+  git config --local alias.golc "!./${ppp_root#"$PWD/"}/bro-dev/bro_dev/git_golc.py"
 else
-  git config --local alias.golc '!./dev/git_golc.py'
+  git config --local alias.golc '!./bro-dev/bro_dev/git_golc.py'
 fi

@@ -11,7 +11,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from base.lulid import lulid
+from bro.base.lulid import lulid
 
 PROTOCOL_VERSION = 1
 MAX_FRAME_BYTES = 1 << 20  # 1 MiB; result is model-bounded text, so generous but capped

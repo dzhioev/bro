@@ -4,7 +4,7 @@ import subprocess
 from typing import Any, Optional
 from unittest.mock import patch
 
-import dev.land_pr as land_pr
+import bro.workflow.land_pr as land_pr
 
 
 def _pr(**overrides: Any) -> dict[str, Any]:

@@ -4,10 +4,10 @@ from typing import Optional
 
 import humanize
 
-from cw.claude_config import read_subject
-from workspace.docker import running_mounts
-from workspace.model import ContainerWorkspace, Workspace
-from workspace.paths import project_root
+from bro.cw.claude_config import read_subject
+from bro.workspace.docker import running_mounts
+from bro.workspace.model import ContainerWorkspace, Workspace
+from bro.workspace.paths import project_root
 
 _BADGES = {'L': '[.]', 'C': '[o]', 'X': '[x]'}
 _KIND_ORDER = {'L': 0, 'C': 1, 'X': 2}

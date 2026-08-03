@@ -4,7 +4,7 @@ Owns a session's private claude state dir (`~/.claude/cw-sessions/<name>`) —
 its path derivations, contents (the seeded `.claude.json`, the constructed
 `settings.json`, the plugin seed, the legacy-transcript migration), the
 container mounts that overlay it as `~/.claude`, its readers (the projects dir,
-a session's subject line), and its teardown next to the workspace. A container
+a session's subject line), and its teardown next to the bro.workspace.A container
 reaches the dir through docker mounts, a host session through
 `CLAUDE_CONFIG_DIR`. Why sessions are isolated from the host `~/.claude` — and
 what the dir deliberately excludes — is reference/cw.md, "Host claude-state
@@ -17,9 +17,9 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Optional
 
-from base import log
-from monitor import claude_config_dir, trail_pointer
-from workspace.model import ContainerWorkspace, Workspace
+from bro.base import log
+from bro.monitor import claude_config_dir, trail_pointer
+from bro.workspace.model import ContainerWorkspace, Workspace
 
 
 def _session_claude_dir(name: str) -> Path:

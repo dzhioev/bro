@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from monitor import trail_pointer
+from bro.monitor import trail_pointer
 
 
 class TestPath:

@@ -8,10 +8,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from base import credentials, log
-from workspace.paths import containers_dir, project_root
-from workspace.project import project_config
-from workspace.store import _bro_tarball
+from bro.base import credentials, log
+from bro.workspace.paths import containers_dir, project_root
+from bro.workspace.project import project_config
+from bro.workspace.store import _bro_tarball
 
 CONTAINER_DIR = Path(__file__).resolve().parent.parent / 'setup' / 'container'
 BASE_IMAGE_DIR = Path(__file__).resolve().parent.parent / 'setup' / 'base_image'
@@ -105,7 +105,7 @@ def find_container_id(session: Path) -> Optional[str]:
   """find the running container backing the container workspace mounted at `session`.
 
   filters `docker ps` by the workspace's host mount path, which is unique per
-  workspace. returns the container short id, or None if no running container
+  bro.workspace.returns the container short id, or None if no running container
   is bound to that mount. takes the mount path (not name+project) so this stays a
   dependency-free leaf — the caller resolves the path.
   """
@@ -141,7 +141,7 @@ def image_tag() -> str:
     + [
       project / 'pyproject.toml',
       project / 'uv.lock',
-      project / 'setup' / 'log.sh',
+      CONTAINER_DIR.parent / 'log.sh',
       project / 'ppp' / 'pyproject.toml',
     ]
   )
@@ -187,7 +187,7 @@ def _ensure_image(tag: str) -> None:
   version = (CONTAINER_DIR / 'claude-code-version').read_text().strip()
   log.info('building %s (claude-code %s)', tag, version)
   # the image builds FROM the local-only ppp-base, so refresh that first
-  subprocess.run([str(BASE_IMAGE_DIR / 'build.sh')], check=True)
+  subprocess.run(['bash', str(BASE_IMAGE_DIR / 'build.sh')], check=True)
   subprocess.run(
     [
       'docker',

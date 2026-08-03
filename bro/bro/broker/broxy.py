@@ -87,10 +87,10 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Optional
 
-import base.args
-from base import log, spawn
-from broker.brotocol import MAX_FRAME_BYTES, Message, ProtocolError, Tag
-from broker.client import CHANNEL_ENV
+import bro.base.args as base_args
+from bro.base import log, spawn
+from bro.broker.brotocol import MAX_FRAME_BYTES, Message, ProtocolError, Tag
+from bro.broker.client import CHANNEL_ENV
 
 __cli_name__ = 'broxy'
 
@@ -567,7 +567,7 @@ def _launch(socket_path: str, log_path: str, upstream: Optional[str], timeout: f
 
 
 def main(argv: list[str]) -> Optional[int]:
-  parser = base.args.Parser(
+  parser = base_args.Parser(
     description='peer-side broker proxy: one upstream channel, a local socket for the session swarm'
   )
   subparsers = parser.add_subparsers(dest='command')

@@ -2,11 +2,12 @@ from typing import ClassVar
 
 import pytest
 
-import llm.llms.chat_gpt
+import bro.llm.llms.chat_gpt as llm_llms_chat_gpt
+import bro.llm.llms.echo as llm_llms_echo
 from bro.bro import BaseBro
 from bro.datasources.searchable import Hit, SearchableDataSource
+from bro.llm.mcp import FunctionTool, InProcessMCPServer, MCPServerSpec, describe
 from bro.show import format_card
-from llm.mcp import FunctionTool, InProcessMCPServer, MCPServerSpec, describe
 
 
 def _make_tools(*tool_names: str) -> list[FunctionTool]:
@@ -56,7 +57,7 @@ class _MinimalBro(BaseBro):
 class _FullBro(BaseBro):
   name = 'full'
   description = 'has a data source and two MCP servers'
-  llm_spec = llm.llms.chat_gpt.LLMSpec(reasoning_effort='medium')
+  llm_spec = llm_llms_chat_gpt.LLMSpec(reasoning_effort='medium')
   data_sources: ClassVar = [_StubSource()]
   mcp_servers: ClassVar = [MCPServerSpec.of(ServerAB), MCPServerSpec.of(ServerXZ)]
 
@@ -150,12 +151,12 @@ class TestFormatCard:
       def __init__(self):
         super().__init__(system_prompt='')
 
-    monkeypatch.setattr('base.credentials.available', lambda name: name == 'trackerkey')
+    monkeypatch.setattr('bro.base.credentials.available', lambda name: name == 'trackerkey')
     card = await format_card(_FeatureBro())
     assert '## Features' in card
     assert '- **tracker** — needs `trackerkey`; on in this environment' in card
 
-    monkeypatch.setattr('base.credentials.available', lambda name: False)
+    monkeypatch.setattr('bro.base.credentials.available', lambda name: False)
     card = await format_card(_FeatureBro())
     assert '- **tracker** — needs `trackerkey`; off in this environment' in card
 
@@ -198,12 +199,11 @@ class TestFormatCard:
 
   @pytest.mark.asyncio
   async def test_secrets_section_omitted_when_empty(self):
-    import llm.llms.echo
 
     class _KeylessBro(BaseBro):
       name = 'keyless'
       description = 'no secrets'
-      llm_spec = llm.llms.echo.LLMSpec()
+      llm_spec = llm_llms_echo.LLMSpec()
 
       def __init__(self):
         super().__init__(system_prompt='hi')

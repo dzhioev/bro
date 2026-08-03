@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """argument parsing built on argparse.
 
-base.args must stay importable in a stdlib-only environment (no venv): some
+bro.base.args must stay importable in a stdlib-only environment (no venv): some
 consumers run outside it — e.g. cw/claude_commit_footer.py via the post-commit
 git hook. So it imports no third-party package at module load. icecream is the one
 exception, treated as optional — the --ic debug flag is registered only when it is
@@ -15,26 +15,26 @@ import sys
 from collections.abc import Callable, Generator, Iterable, Sequence
 from typing import TYPE_CHECKING, Optional, TypeVar, overload
 
-from base import log
+from bro.base import log
 
 try:
   from icecream import ic
-except ImportError:  # icecream is a venv dep; base.args must import without it
+except ImportError:  # icecream is a venv dep; bro.base.args must import without it
   ic = None
 
-# re-exported so base.args is the only module in the repo that imports argparse
+# re-exported so bro.base.args is the only module in the repo that imports argparse
 REMAINDER = argparse.REMAINDER
 SUPPRESS = argparse.SUPPRESS
 ArgumentTypeError = argparse.ArgumentTypeError
 
 if TYPE_CHECKING:
-  from base.time_util import Moment
+  from bro.base.time_util import Moment
 
 
 def moment_parser(arg: str) -> 'Moment':
-  # lazy: base.time_util imports base.args for its own CLI, so a top-level import
+  # lazy: bro.base.time_util imports bro.base.args for its own CLI, so a top-level import
   # here would be a cycle.
-  from base.time_util import parse_moment
+  from bro.base.time_util import parse_moment
 
   try:
     return parse_moment(arg)

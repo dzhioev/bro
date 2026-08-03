@@ -53,14 +53,14 @@ from typing import Optional
 import pytest
 
 import bro.launch.spawn
-import workspace.docker
-import workspace.spawn
-from broker.brotocol import Message
-from broker.dispatcher import Broker, Dispatcher, ping_handler, spawn_test_handler
-from broker.runtime import Peer
-from broker.transports.unix import UnixServerTransport
-from workspace.docker import find_container_id
-from workspace.spawn import DockerLaunchSpec, DockerSpawner
+import bro.workspace.docker as workspace_docker
+import bro.workspace.spawn as workspace_spawn
+from bro.broker.brotocol import Message
+from bro.broker.dispatcher import Broker, Dispatcher, ping_handler, spawn_test_handler
+from bro.broker.runtime import Peer
+from bro.broker.transports.unix import UnixServerTransport
+from bro.workspace.docker import find_container_id
+from bro.workspace.spawn import DockerLaunchSpec, DockerSpawner
 
 
 def _docker_available() -> bool:
@@ -115,7 +115,7 @@ while not Path('/workspace/.e2e-continue').exists():
     sys.exit(7)
   time.sleep(0.2)
 
-from broker.client import Client
+from bro.broker.client import Client
 client = Client.from_env()
 assert client is not None
 try:
@@ -137,8 +137,8 @@ from pathlib import Path
 report = {'messages': []}
 
 def main():
-  from broker.brotocol import Message
-  from broker.transport import connect
+  from bro.broker.brotocol import Message
+  from bro.broker.transport import connect
 
   deadline = float(os.environ['CW_E2E_DEADLINE'])
   exit_after = os.environ['CW_E2E_EXIT_AFTER']
@@ -279,14 +279,14 @@ exec "$@"
 _DRIVER = """
 import json, os, sys
 from bro.launch.root import run_in_container
-from workspace.docker import Launch
+from bro.workspace.docker import Launch
 
 launch = Launch(name=os.environ['CW_E2E_NAME'],
                 command=json.loads(os.environ['CW_E2E_COMMAND']), env={},
                 secrets=tuple(json.loads(os.environ.get('CW_E2E_SECRETS', '[]'))),
                 docker_sock=True, tty=True, forward_env=True)
 code = run_in_container(launch)
-loaded = sorted(m for m in sys.modules if m == 'broker' or m.startswith('broker.'))
+loaded = sorted(m for m in sys.modules if m == 'broker' or m.startswith('bro.broker.'))
 print(f'CW_E2E_EXIT:{code}', flush=True)
 print('CW_E2E_BROKER_MODULES:' + json.dumps(loaded), flush=True)
 sys.exit(code)
@@ -377,7 +377,12 @@ def isolated_env() -> Iterator[IsolatedEnv]:
   bro_dir.mkdir()
   (bro_dir / 'brog.json').write_text(
     json.dumps(
-      {'backend': 'flow', 'transport': 'http', 'url': 'https://brog.e2e.invalid', 'token': 'e2e'}
+      {
+        'backend': 'flow',
+        'transport': 'http',
+        'url': 'https://bro.brog.e2e.invalid',
+        'token': 'e2e',
+      }
     )
   )
   (home / '.claude.json').write_text(
@@ -389,8 +394,8 @@ def isolated_env() -> Iterator[IsolatedEnv]:
   # the clone's pyproject/uv.lock are identical to the checkout's, so this resolves to
   # the image real sessions already built; builds only on a host that never launched one
   with pytest.MonkeyPatch.context() as monkeypatch:
-    monkeypatch.setattr(workspace.docker, 'project_root', lambda: project)
-    workspace.docker._ensure_image(workspace.docker.image_tag())
+    monkeypatch.setattr(workspace_docker, 'project_root', lambda: project)
+    workspace_docker._ensure_image(workspace_docker.image_tag())
   env = IsolatedEnv(
     root=root,
     project=project,
@@ -627,7 +632,7 @@ def _run_broker_scenario(
 ) -> BrokerRun:
   name = f'{_NAME_PREFIX}b-{case}-root'
   root = DockerLaunchSpec(
-    workspace.docker.Launch(
+    workspace_docker.Launch(
       name=name,
       command=['python', '-c', _PROBE_B_ROOT],
       env={'CW_E2E_DEADLINE': str(probe_deadline), 'CW_E2E_EXIT_AFTER': exit_after},
@@ -638,7 +643,7 @@ def _run_broker_scenario(
     )
   )
   child = DockerLaunchSpec(
-    workspace.docker.Launch(
+    workspace_docker.Launch(
       name=f'{name}-child',
       command=child_command,
       env={},
@@ -665,8 +670,8 @@ def _run_broker_scenario(
   with pytest.MonkeyPatch.context() as monkeypatch:
     monkeypatch.setenv('HOME', str(env.home))
     monkeypatch.setattr(bro.launch.spawn, 'project_root', lambda: env.project)
-    monkeypatch.setattr(workspace.spawn, 'project_root', lambda: env.project)
-    monkeypatch.setattr(workspace.docker, 'project_root', lambda: env.project)
+    monkeypatch.setattr(workspace_spawn, 'project_root', lambda: env.project)
+    monkeypatch.setattr(workspace_docker, 'project_root', lambda: env.project)
     thread = threading.Thread(target=lambda: result.update(code=facade.run(root)))
     thread.start()
     max_sockets = 0
@@ -855,7 +860,7 @@ def scenario_d(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> Liv
   env = isolated_env
   shadow = env.root / 'shadow'
   shadow.mkdir(exist_ok=True)
-  (shadow / 'broker.py').write_text("raise ImportError('shadowed for the degrade scenario')\n")
+  (shadow / 'bro.broker.py').write_text("raise ImportError('shadowed for the degrade scenario')\n")
   name = f'{_NAME_PREFIX}d-root'
   driver = _Driver(
     env, name, ['python', '-c', _PROBE_NO_CHANNEL], extra_env={'PYTHONPATH': str(shadow)}

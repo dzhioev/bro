@@ -20,8 +20,8 @@ import threading
 import time
 from typing import Optional
 
-from base import spawn
-from base.text_window import apply_limit, format_size, take_head
+from bro.base import spawn
+from bro.base.text_window import apply_limit, format_size, take_head
 
 # seconds a killed job's process group gets to exit on SIGTERM before the
 # escalation to SIGKILL.

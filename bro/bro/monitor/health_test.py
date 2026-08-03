@@ -1,6 +1,6 @@
 import json
 
-from monitor import health
+from bro.monitor import health
 
 
 def _redirect(monkeypatch, tmp_path):

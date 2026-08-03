@@ -28,7 +28,7 @@ async def test_fetch_without_query_returns_raw_content(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_fetch_with_query_summarises_via_mu(monkeypatch):
-  import llm.mu as mu_module
+  import bro.llm.mu as mu_module
 
   captured: list[str] = []
 

@@ -2,17 +2,17 @@
 import sys
 from typing import Optional
 
-from base.args import REMAINDER, SUPPRESS, Parser
-from cw.claude_auth import _load_anthropic_key
-from cw.clean import clean_workspaces
-from cw.flags import DEFAULT_HOLD, add_forwarded_flags
-from cw.listing import list_workspaces
-from cw.runner import run_in_place
-from cw.session import SessionSpec, start_session
-from workspace.banner import banner
-from workspace.containers import exec_in_workspace
-from workspace.model import Workspace
-from workspace.paths import project_root
+from bro.base.args import REMAINDER, SUPPRESS, Parser
+from bro.cw.claude_auth import _load_anthropic_key
+from bro.cw.clean import clean_workspaces
+from bro.cw.flags import DEFAULT_HOLD, add_forwarded_flags
+from bro.cw.listing import list_workspaces
+from bro.cw.runner import run_in_place
+from bro.cw.session import SessionSpec, start_session
+from bro.workspace.banner import banner
+from bro.workspace.containers import exec_in_workspace
+from bro.workspace.model import Workspace
+from bro.workspace.paths import project_root
 
 __cli_name__ = 'cw'
 

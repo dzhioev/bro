@@ -3,9 +3,9 @@ import subprocess
 from dataclasses import dataclass
 from typing import Optional
 
-from monitor import health
-from workspace import paths
-from workspace.model import format_ref
+from bro.monitor import health
+from bro.workspace import paths
+from bro.workspace.model import format_ref
 
 # six-line block-letter "B R O" rendered with box-drawing characters;
 # shown on top of the `cw banner` output when the session carries a bro (CW_BRO).

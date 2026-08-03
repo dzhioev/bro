@@ -8,7 +8,7 @@ from typing import Any, Optional
 
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 
-from base.lulid import lulid
+from bro.base.lulid import lulid
 
 SPILLOVER_THRESHOLD_BYTES = 50 * 1024
 MAX_BODY_BYTES = 10 * 1024 * 1024

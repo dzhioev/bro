@@ -16,14 +16,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import prompts
-from base import credentials
-from cw.constants import _CW_MODEL
-from cw.mcp import MCPEndpoint, _http_mcp_config
-from cw.system_prompt import _session_append_prompt
+from bro import prompts
+from bro.base import credentials
+from bro.cw.constants import _CW_MODEL
+from bro.cw.mcp import MCPEndpoint, _http_mcp_config
+from bro.cw.system_prompt import _session_append_prompt
 
 if TYPE_CHECKING:
-  from cw.session import SessionSpec
+  from bro.cw.session import SessionSpec
 
 
 _ANTHROPIC_KEY_HELPER = Path(__file__).with_name('print_anthropic_key.sh')
@@ -86,7 +86,7 @@ def build_claude_launch(
       # registered script — the session's PATH need not carry the workspace's
       # venv, and the shell claude runs the command through splits on spaces
       'type': 'command',
-      'command': f'{shlex.quote(sys.executable)} -m cw.statusline',
+      'command': f'{shlex.quote(sys.executable)} -m bro.cw.statusline',
     },
   }
   argv = ['--model', _CW_MODEL]

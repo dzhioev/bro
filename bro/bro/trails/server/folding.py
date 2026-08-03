@@ -2,7 +2,7 @@
 
 from typing import Optional
 
-from trails.server import backends
+from bro.trails.server import backends
 
 
 class AggregateState:

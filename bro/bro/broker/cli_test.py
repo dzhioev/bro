@@ -5,11 +5,11 @@ from dataclasses import dataclass
 
 import pytest
 
-import broker.cli
-from broker.brotocol import Message
-from broker.client import CHANNEL_ENV
-from broker.transport import ChannelID
-from broker.transports.unix import UnixServerTransport
+import bro.broker.cli as broker_cli
+from bro.broker.brotocol import Message
+from bro.broker.client import CHANNEL_ENV
+from bro.broker.transport import ChannelID
+from bro.broker.transports.unix import UnixServerTransport
 
 TIMEOUT = 5.0
 
@@ -57,18 +57,18 @@ async def _next(queue: asyncio.Queue):
 
 def test_inert_when_channel_unset(monkeypatch, capsys):
   monkeypatch.delenv(CHANNEL_ENV, raising=False)
-  assert broker.cli.main(['broker', 'send', 'ping']) == 0
-  assert broker.cli.main(['broker', 'request', 'ping']) == 0
-  assert broker.cli.main(['broker', 'receive', '--timeout', '0.2']) == 0
+  assert broker_cli.main(['broker', 'send', 'ping']) == 0
+  assert broker_cli.main(['broker', 'request', 'ping']) == 0
+  assert broker_cli.main(['broker', 'receive', '--timeout', '0.2']) == 0
   assert capsys.readouterr().out == ''  # stdout stays data-only
 
 
 def test_payload_must_be_a_json_object(monkeypatch):
   monkeypatch.delenv(CHANNEL_ENV, raising=False)
   with pytest.raises(SystemExit):
-    broker.cli.main(['broker', 'send', 'ping', 'not-json'])
+    broker_cli.main(['broker', 'send', 'ping', 'not-json'])
   with pytest.raises(SystemExit):
-    broker.cli.main(['broker', 'send', 'ping', '[1, 2]'])
+    broker_cli.main(['broker', 'send', 'ping', '[1, 2]'])
 
 
 @pytest.mark.asyncio
@@ -77,7 +77,7 @@ async def test_send_reaches_the_host(socket_dir, monkeypatch):
     provisioned = await server.transport.provision()
     monkeypatch.setenv(CHANNEL_ENV, 'unix:' + provisioned.host_endpoint)
     argv = ['broker', 'send', 'started', '{"trail_id": "t1"}']
-    assert await asyncio.to_thread(broker.cli.main, argv) == 0
+    assert await asyncio.to_thread(broker_cli.main, argv) == 0
 
     channel, message = await _next(server.sink.messages)
     assert channel == provisioned.channel
@@ -91,7 +91,7 @@ async def test_request_prints_the_correlated_reply(socket_dir, monkeypatch, caps
     provisioned = await server.transport.provision()
     monkeypatch.setenv(CHANNEL_ENV, 'unix:' + provisioned.host_endpoint)
     argv = ['broker', 'request', 'ping', '--timeout', str(TIMEOUT)]
-    main_task = asyncio.create_task(asyncio.to_thread(broker.cli.main, argv))
+    main_task = asyncio.create_task(asyncio.to_thread(broker_cli.main, argv))
 
     channel, request_message = await _next(server.sink.messages)
     await server.transport.send(
@@ -111,7 +111,7 @@ async def test_request_timeout_exits_nonzero(socket_dir, monkeypatch, capsys):
     provisioned = await server.transport.provision()
     monkeypatch.setenv(CHANNEL_ENV, 'unix:' + provisioned.host_endpoint)
     argv = ['broker', 'request', 'ping', '--timeout', '0.2']
-    assert await asyncio.to_thread(broker.cli.main, argv) == 1
+    assert await asyncio.to_thread(broker_cli.main, argv) == 1
     assert capsys.readouterr().out == ''
 
 
@@ -121,7 +121,7 @@ async def test_receive_prints_one_message(socket_dir, monkeypatch, capsys):
     provisioned = await server.transport.provision()
     monkeypatch.setenv(CHANNEL_ENV, 'unix:' + provisioned.host_endpoint)
     argv = ['broker', 'receive', '--timeout', str(TIMEOUT)]
-    main_task = asyncio.create_task(asyncio.to_thread(broker.cli.main, argv))
+    main_task = asyncio.create_task(asyncio.to_thread(broker_cli.main, argv))
 
     await _next(server.sink.connects)  # the CLI's client attached
     await server.transport.send(provisioned.channel, Message(type='status', payload={'n': 7}))
@@ -138,5 +138,5 @@ async def test_receive_nothing_exits_nonzero(socket_dir, monkeypatch, capsys):
     provisioned = await server.transport.provision()
     monkeypatch.setenv(CHANNEL_ENV, 'unix:' + provisioned.host_endpoint)
     argv = ['broker', 'receive', '--timeout', '0.2']
-    assert await asyncio.to_thread(broker.cli.main, argv) == 1
+    assert await asyncio.to_thread(broker_cli.main, argv) == 1
     assert capsys.readouterr().out == ''

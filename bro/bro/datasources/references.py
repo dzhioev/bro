@@ -4,8 +4,7 @@ A bro mounts one by listing it in `data_sources` (`references.environment`);
 the instances are stateless, so sharing them across bros is fine.
 """
 
-import prompts
-import reference
+from bro import prompts, reference
 from bro.datasources.file import FileSource
 
 environment = FileSource(

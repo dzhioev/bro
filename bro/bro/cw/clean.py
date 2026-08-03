@@ -1,10 +1,10 @@
 from typing import Optional
 
-from base import log
-from cw.claude_config import drop_workspace
-from workspace.docker import running_mounts
-from workspace.model import ContainerWorkspace, Workspace
-from workspace.paths import project_root
+from bro.base import log
+from bro.cw.claude_config import drop_workspace
+from bro.workspace.docker import running_mounts
+from bro.workspace.model import ContainerWorkspace, Workspace
+from bro.workspace.paths import project_root
 
 
 def clean_workspaces(

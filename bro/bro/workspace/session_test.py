@@ -3,7 +3,7 @@ import signal
 
 import pytest
 
-import workspace.session
+import bro.workspace.session as workspace_session
 
 
 class TestTerminateSession:
@@ -11,10 +11,10 @@ class TestTerminateSession:
     kills: list[tuple[int, int]] = []
     monkeypatch.setenv('CW_RUNNER_PID', '4242')
     monkeypatch.setattr(os, 'kill', lambda pid, sig: kills.append((pid, sig)))
-    workspace.session.terminate_session()
+    workspace_session.terminate_session()
     assert kills == [(4242, signal.SIGTERM)]
 
   def test_fails_without_a_runner_pid(self, monkeypatch):
     monkeypatch.delenv('CW_RUNNER_PID', raising=False)
     with pytest.raises(KeyError):
-      workspace.session.terminate_session()
+      workspace_session.terminate_session()

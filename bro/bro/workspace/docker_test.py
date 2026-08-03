@@ -2,8 +2,8 @@ import signal
 
 import pytest
 
-import workspace.docker
-import workspace.project
+import bro.workspace.docker as workspace_docker
+import bro.workspace.project as workspace_project
 
 
 class _FakeProc:
@@ -21,7 +21,7 @@ class TestCreateContainer:
       calls.append({'argv': argv, 'input': k.get('input')})
       return results(argv)
 
-    monkeypatch.setattr(workspace.docker.subprocess, 'run', fake_run)
+    monkeypatch.setattr(workspace_docker.subprocess, 'run', fake_run)
     return calls
 
   def test_creates_then_injects_store(self, monkeypatch):
@@ -31,7 +31,7 @@ class TestCreateContainer:
       return _FakeProc(returncode=0)
 
     calls = self._patch_run(monkeypatch, results)
-    container_id = workspace.docker._create_container(
+    container_id = workspace_docker._create_container(
       ['docker', 'create', 'ARGS'], b'TARBALL', 'ws'
     )
     assert container_id == 'cid123'
@@ -42,7 +42,7 @@ class TestCreateContainer:
   def test_create_failure_raises(self, monkeypatch):
     self._patch_run(monkeypatch, lambda argv: _FakeProc(returncode=1, stderr='boom'))
     with pytest.raises(RuntimeError, match='docker create'):
-      workspace.docker._create_container(['docker', 'create'], b'', 'ws')
+      workspace_docker._create_container(['docker', 'create'], b'', 'ws')
 
   def test_cp_failure_removes_container_and_raises(self, monkeypatch):
     def results(argv):
@@ -54,7 +54,7 @@ class TestCreateContainer:
 
     calls = self._patch_run(monkeypatch, results)
     with pytest.raises(RuntimeError, match='docker cp'):
-      workspace.docker._create_container(['docker', 'create'], b'', 'ws')
+      workspace_docker._create_container(['docker', 'create'], b'', 'ws')
     assert calls[-1]['argv'] == ['docker', 'rm', '-f', 'cid123']
 
 
@@ -66,22 +66,22 @@ class TestContainerRunning:
       calls.append(argv)
       return result
 
-    monkeypatch.setattr(workspace.docker.subprocess, 'run', fake_run)
+    monkeypatch.setattr(workspace_docker.subprocess, 'run', fake_run)
     return calls
 
   def test_running(self, monkeypatch):
     calls = self._probe(monkeypatch, _FakeProc(returncode=0, stdout='true\n'))
-    assert workspace.docker.container_running('cid123') is True
+    assert workspace_docker.container_running('cid123') is True
     assert calls == [['docker', 'inspect', '--format', '{{.State.Running}}', 'cid123']]
 
   def test_exited(self, monkeypatch):
     self._probe(monkeypatch, _FakeProc(returncode=0, stdout='false\n'))
-    assert workspace.docker.container_running('cid123') is False
+    assert workspace_docker.container_running('cid123') is False
 
   def test_removed_reads_as_not_running(self, monkeypatch):
     # --rm removes an exited container, so the inspect error is the common exit shape
     self._probe(monkeypatch, _FakeProc(returncode=1, stderr='no such object'))
-    assert workspace.docker.container_running('cid123') is False
+    assert workspace_docker.container_running('cid123') is False
 
 
 class TestSuspendUntilContinued:
@@ -94,15 +94,15 @@ class TestSuspendUntilContinued:
         return pause_result
       return _FakeProc(returncode=0)
 
-    monkeypatch.setattr(workspace.docker.subprocess, 'run', fake_run)
+    monkeypatch.setattr(workspace_docker.subprocess, 'run', fake_run)
     monkeypatch.setattr(
-      workspace.docker.os, 'kill', lambda pid, sig: events.append(('kill', pid, sig))
+      workspace_docker.os, 'kill', lambda pid, sig: events.append(('kill', pid, sig))
     )
     return events
 
   def test_freezes_stops_own_group_then_thaws(self, monkeypatch):
     events = self._dance(monkeypatch)
-    workspace.docker.suspend_until_continued('cid123')
+    workspace_docker.suspend_until_continued('cid123')
     # the stop targets the whole process group (pid 0): the launching shell reports its
     # job stopped only when every process in it stops, dive-in wrappers included
     assert events == [
@@ -113,7 +113,7 @@ class TestSuspendUntilContinued:
 
   def test_freezer_failure_warns_but_still_suspends(self, monkeypatch, caplog):
     events = self._dance(monkeypatch, pause_result=_FakeProc(returncode=1, stderr='not running'))
-    workspace.docker.suspend_until_continued('cid123')
+    workspace_docker.suspend_until_continued('cid123')
     assert ('kill', 0, signal.SIGTSTP) in events
     assert events[-1] == ['docker', 'unpause', 'cid123']
     assert 'docker pause cid123 failed: not running' in caplog.text
@@ -125,13 +125,13 @@ class TestImageTag:
       '[tool.bro]\ndefault = "foo"\nimage-repository = "custom-images"\n'
     )
     (tmp_path / 'uv.lock').write_text('lock')
-    monkeypatch.setattr(workspace.docker, 'project_root', lambda: tmp_path)
-    monkeypatch.setattr(workspace.project, 'project_root', lambda: tmp_path)
-    without_submodule = workspace.docker.image_tag()
+    monkeypatch.setattr(workspace_docker, 'project_root', lambda: tmp_path)
+    monkeypatch.setattr(workspace_project, 'project_root', lambda: tmp_path)
+    without_submodule = workspace_docker.image_tag()
     assert without_submodule.startswith('custom-images:')
     (tmp_path / 'ppp').mkdir()
     (tmp_path / 'ppp' / 'pyproject.toml').write_text('[project.scripts]')
-    with_submodule = workspace.docker.image_tag()
+    with_submodule = workspace_docker.image_tag()
     assert with_submodule.startswith('custom-images:')
     assert with_submodule != without_submodule
 
@@ -148,7 +148,7 @@ class TestPruneSupersededImages:
         return remove_result(argv)
       return _FakeProc(returncode=0)
 
-    monkeypatch.setattr(workspace.docker.subprocess, 'run', fake_run)
+    monkeypatch.setattr(workspace_docker.subprocess, 'run', fake_run)
     return calls
 
   def test_removes_all_but_current_smoke_test_and_untagged(self, monkeypatch):
@@ -157,7 +157,7 @@ class TestPruneSupersededImages:
       stdout='bro/ppp-dev:cur\nbro/ppp-dev:smoke-test\nbro/ppp-dev:<none>\nbro/ppp-dev:old1\nbro/ppp-dev:old2\n',
     )
     calls = self._patch_run(monkeypatch, listing)
-    workspace.docker._prune_superseded_images('bro/ppp-dev:cur')
+    workspace_docker._prune_superseded_images('bro/ppp-dev:cur')
     removals = [argv for argv in calls if argv[:3] == ['docker', 'image', 'rm']]
     assert removals == [
       ['docker', 'image', 'rm', 'bro/ppp-dev:old1'],
@@ -177,7 +177,7 @@ class TestPruneSupersededImages:
       return _FakeProc(returncode=0)
 
     calls = self._patch_run(monkeypatch, listing, remove_result)
-    workspace.docker._prune_superseded_images('bro/ppp-dev:cur')
+    workspace_docker._prune_superseded_images('bro/ppp-dev:cur')
     removals = [argv for argv in calls if argv[:3] == ['docker', 'image', 'rm']]
     assert removals == [
       ['docker', 'image', 'rm', 'bro/ppp-dev:in-use'],
@@ -186,7 +186,7 @@ class TestPruneSupersededImages:
 
   def test_listing_failure_skips_pruning(self, monkeypatch):
     calls = self._patch_run(monkeypatch, _FakeProc(returncode=1, stderr='daemon down'))
-    workspace.docker._prune_superseded_images('bro/ppp-dev:cur')
+    workspace_docker._prune_superseded_images('bro/ppp-dev:cur')
     assert [argv for argv in calls if argv[:3] == ['docker', 'image', 'rm']] == []
 
 
@@ -194,27 +194,27 @@ class TestPrepareContainer:
   def test_runs_the_shared_prepare_sequence_from_the_launch(self, monkeypatch, tmp_path):
     project = tmp_path / 'project'
     events: list = []
-    monkeypatch.setattr(workspace.docker, 'image_tag', lambda: events.append('tag') or 'image')
+    monkeypatch.setattr(workspace_docker, 'image_tag', lambda: events.append('tag') or 'image')
     monkeypatch.setattr(
-      workspace.docker, '_ensure_image', lambda tag: events.append(('ensure', tag))
+      workspace_docker, '_ensure_image', lambda tag: events.append(('ensure', tag))
     )
     monkeypatch.setattr(
-      workspace.docker.credentials,
+      workspace_docker.credentials,
       'build_scoped_store',
       lambda secrets, optional=(): events.append(('store', secrets, optional)) or {'x': b'y'},
     )
-    monkeypatch.setattr(workspace.docker, '_bro_tarball', lambda store: b'TARBALL')
+    monkeypatch.setattr(workspace_docker, '_bro_tarball', lambda store: b'TARBALL')
     monkeypatch.setattr(
-      workspace.docker,
+      workspace_docker,
       '_docker_create_argv',
       lambda *args, **kwargs: events.append(('argv', args, kwargs)) or ['docker', 'create'],
     )
     monkeypatch.setattr(
-      workspace.docker,
+      workspace_docker,
       '_create_container',
       lambda argv, tarball, name: events.append(('create', argv, tarball, name)) or 'cid',
     )
-    launch = workspace.docker.Launch(
+    launch = workspace_docker.Launch(
       name='ws',
       command=['claude'],
       env={'MARKER': 'x'},
@@ -225,7 +225,7 @@ class TestPrepareContainer:
       optional_secrets=('openai',),
       extra_mounts=('/host:/container',),
     )
-    assert workspace.docker.prepare_container(launch, project) == 'cid'
+    assert workspace_docker.prepare_container(launch, project) == 'cid'
     assert (project / 'var' / 'cw' / 'containers' / 'ws').is_dir()
     assert events[0:3] == [
       'tag',
@@ -254,10 +254,10 @@ class TestPrepareContainer:
 class TestDockerCreateArgv:
   @pytest.fixture
   def build_argv(self, monkeypatch, tmp_path):
-    monkeypatch.setattr(workspace.docker.Path, 'home', lambda: tmp_path)
+    monkeypatch.setattr(workspace_docker.Path, 'home', lambda: tmp_path)
 
     def build(**kwargs):
-      return workspace.docker._docker_create_argv(
+      return workspace_docker._docker_create_argv(
         'tag', 'ws', tmp_path / 'proj', tmp_path / 'sess', ['claude'], **kwargs
       )
 
@@ -312,10 +312,10 @@ class TestDockerCreateArgv:
   def test_forward_env_false_switches_the_forward_loop_off(self, build_argv, monkeypatch):
     # a broker-spawned child's environment is its LaunchSpec snapshot (extra_env)
     # only; none of the ambient _DOCKER_FORWARD_ENV vars may reach it
-    for var in workspace.docker._DOCKER_FORWARD_ENV:
+    for var in workspace_docker._DOCKER_FORWARD_ENV:
       monkeypatch.setenv(var, 'ambient')
     argv = build_argv(forward_env=False, extra_env={'MARKER': 'x'})
-    assert not any(var in argv for var in workspace.docker._DOCKER_FORWARD_ENV)
+    assert not any(var in argv for var in workspace_docker._DOCKER_FORWARD_ENV)
     assert 'MARKER=x' in argv
 
   def test_extra_env_injected_as_explicit_key_value(self, build_argv, monkeypatch):

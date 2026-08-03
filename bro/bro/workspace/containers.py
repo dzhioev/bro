@@ -2,21 +2,19 @@ import os
 import subprocess
 import sys
 
-from base import log
-from workspace.docker import (
+from bro.base import log
+from bro.workspace.docker import (
   DETACH_FLAG,
   container_running,
   find_container_id,
   suspend_until_continued,
 )
-from workspace.model import parse_ref
-from workspace.paths import containers_dir, project_root
+from bro.workspace.model import parse_ref
+from bro.workspace.paths import containers_dir, project_root
 
 
 def exec_in_workspace(name: str, command: list[str]) -> int:
-  """exec a command in the running container backing the named workspace.
-
-  with no command, starts an interactive bash. either way, `/workspace/.venv`
+  """exec a command in the running container backing the named bro.workspace.with no command, starts an interactive bash. either way, `/workspace/.venv`
   is sourced first so the workspace's console scripts (created by `uv sync`)
   are on PATH; the prompt's `(.venv)` prefix is dropped after `.bashrc` re-runs,
   but VIRTUAL_ENV and PATH survive.
@@ -61,7 +59,7 @@ def broker_enabled() -> bool:
   if os.environ.get('BROKER_DISABLED') is not None:
     return False
   try:
-    import broker  # noqa: F401
+    import bro.broker  # noqa: F401
   except ImportError:
     log.warning('broker package not importable; launching without a broker channel')
     return False

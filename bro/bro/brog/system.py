@@ -4,8 +4,8 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import Any, Optional, cast
 
-from base import credentials
-from brog.model import Comment, Status, Task
+from bro.base import credentials
+from bro.brog.model import Comment, Status, Task
 
 
 class System(ABC):
@@ -138,17 +138,18 @@ def _github_system(
   config: dict[str, Any],
   author: Optional[str],
 ) -> System:
-  import brog.github
+
+  import bro.brog.github as brog_github
 
   _required(config, 'token')
   repo = config.get('repo')
   if repo is None:
-    repo = brog.github.origin_repo()
+    repo = brog_github.origin_repo()
 
   def token() -> str:
     return _required(config_provider(), 'token')
 
-  return brog.github.System(token=token, repo=repo)
+  return brog_github.System(token=token, repo=repo)
 
 
 def _required(config: dict[str, Any], key: str) -> Any:

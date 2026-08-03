@@ -22,7 +22,7 @@ done
 
 # profile: a checkout vendoring ppp as a submodule needs only the tools cw
 # operates with; ppp development itself needs the full set
-if [ -n "$(git -C "$SCRIPT_DIR/.." rev-parse --show-superproject-working-tree)" ]; then
+if [ -n "$(git -C "$SCRIPT_DIR/../../.." rev-parse --show-superproject-working-tree)" ]; then
   PROFILE=core
 else
   PROFILE=full

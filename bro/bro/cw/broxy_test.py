@@ -12,12 +12,12 @@ from pathlib import Path
 
 import pytest
 
-import cw.broxy
-from broker.brotocol import Message
-from broker.client import Client
-from broker.transport import ChannelID
-from broker.transports.unix import UnixClientTransport, UnixServerTransport
-from cw.broxy import _start_session_broxy
+import bro.cw.broxy as cw_broxy
+from bro.broker.brotocol import Message
+from bro.broker.client import Client
+from bro.broker.transport import ChannelID
+from bro.broker.transports.unix import UnixClientTransport, UnixServerTransport
+from bro.cw.broxy import _start_session_broxy
 
 TIMEOUT = 10.0
 
@@ -92,7 +92,7 @@ async def test_session_broxy_serves_the_rewritten_channel():
 
 
 def test_start_returns_none_when_the_upstream_is_unreachable(tmp_path, monkeypatch):
-  monkeypatch.setattr(cw.broxy, '_LAUNCH_TIMEOUT', 1.0)
+  monkeypatch.setattr(cw_broxy, '_LAUNCH_TIMEOUT', 1.0)
   broxy = _start_session_broxy('unix:' + str(tmp_path / 'missing.sock'), os.environ)
   assert broxy is None
 

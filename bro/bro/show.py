@@ -1,6 +1,6 @@
-from base import credentials
+from bro.base import credentials
 from bro.bro import BaseBro
-from llm.mcp import MCPServerSpec
+from bro.llm.mcp import MCPServerSpec
 
 
 async def format_card(bro: BaseBro, *, include_system_prompt: bool = False) -> str:

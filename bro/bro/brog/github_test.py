@@ -3,10 +3,10 @@ from typing import Any, Optional
 
 import pytest
 
-import brog.github
-import extra.github.api
-from brog.github import System, origin_repo
-from brog.model import Comment
+import bro.brog.github as brog_github
+import bro.extra.github.api
+from bro.brog.github import System, origin_repo
+from bro.brog.model import Comment
 
 _REPO = 'octo/scratch'
 _API = f'https://api.github.com/repos/{_REPO}'
@@ -91,9 +91,9 @@ class _FakeAPI:
 @pytest.fixture
 def api(monkeypatch) -> _FakeAPI:
   fake = _FakeAPI()
-  monkeypatch.setattr(extra.github.api, 'get', fake.get)
-  monkeypatch.setattr(extra.github.api, 'post', fake.post)
-  monkeypatch.setattr(extra.github.api, 'patch', fake.patch)
+  monkeypatch.setattr(bro.extra.github.api, 'get', fake.get)
+  monkeypatch.setattr(bro.extra.github.api, 'post', fake.post)
+  monkeypatch.setattr(bro.extra.github.api, 'patch', fake.patch)
   return fake
 
 
@@ -436,20 +436,20 @@ class TestOriginRepo:
   )
   def test_remote_url_forms(self, monkeypatch, url):
     monkeypatch.setattr(
-      brog.github.subprocess, 'run', lambda *args, **kwargs: _FakeCompletedProcess(0, f'{url}\n')
+      brog_github.subprocess, 'run', lambda *args, **kwargs: _FakeCompletedProcess(0, f'{url}\n')
     )
     assert origin_repo() == 'octo/scratch'
 
   def test_no_origin_remote_errors(self, monkeypatch):
     monkeypatch.setattr(
-      brog.github.subprocess, 'run', lambda *args, **kwargs: _FakeCompletedProcess(2)
+      brog_github.subprocess, 'run', lambda *args, **kwargs: _FakeCompletedProcess(2)
     )
     with pytest.raises(ValueError, match='no origin remote'):
       origin_repo()
 
   def test_non_github_remote_errors(self, monkeypatch):
     monkeypatch.setattr(
-      brog.github.subprocess,
+      brog_github.subprocess,
       'run',
       lambda *args, **kwargs: _FakeCompletedProcess(0, 'https://gitlab.com/octo/scratch.git\n'),
     )

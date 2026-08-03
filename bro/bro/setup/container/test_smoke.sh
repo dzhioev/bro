@@ -5,7 +5,7 @@ source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../prelude.sh"
 # uses CW_SKIP_VENV=1 to skip the slow `uv sync` step.
 
 DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
-PROJECT="$(realpath "$DIR/../..")"
+PROJECT="$(realpath "$DIR/../../../..")"
 
 TAG="bro/ppp-dev:smoke-test"
 echo "building image" >&2
@@ -87,8 +87,10 @@ docker run --rm -i \
     # /workspace so it resolves against a session's clone
     test -x /opt/cw-venv/bin/ask
     grep -q /workspace /opt/cw-venv/lib/python*/site-packages/__editable___ppp*_finder.py
-    # the _entrypoints.py bridge is baked too (so provision can skip the regen)
-    test -f /opt/cw-venv/lib/python*/site-packages/_entrypoints.py
+    # the project ships its argv bridges as ordinary editable modules
+    test -f /workspace/_entrypoints.py
+    test -f /workspace/bro/bro/_entrypoints.py
+    test -f /workspace/bro-dev/bro_dev/_entrypoints.py
     # the manifests the bake ran from are staged for the entrypoint's reuse gate,
     # and match this clone (based on the same tree the image was built from)
     cmp -s /workspace/pyproject.toml /opt/cw-venv-manifest/pyproject.toml

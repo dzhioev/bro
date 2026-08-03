@@ -31,9 +31,9 @@ from bro.launch._reflow import Reflow
 from bro.launch._trace_format import format_tool_call, oneline, truncate
 from bro.launch.call import DATE_FORMAT
 from bro.launch.resume import HistoryMessage
+from bro.llm.mcp import canonical_name
+from bro.llm.observer import Observer
 from bro.show import format_card
-from llm.mcp import canonical_name
-from llm.observer import Observer
 
 _TRACE_VALUE_LIMIT = 200
 
@@ -431,7 +431,7 @@ class ChatApp(App):
     """opening bro bubble: the cw banner (session environment facts), shown
     before the user's first message. display-only — not part of the bro's
     conversation. the visual banner carries ANSI, decoded for Rich here."""
-    from workspace.banner import render_banner
+    from bro.workspace.banner import render_banner
 
     self._maybe_add_date_separator(date.today())
     # pass the bro name so the logo shows on an in-process (--in-place) run, whose

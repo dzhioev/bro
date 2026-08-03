@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from bro.datasources.base import DataSource
-from llm.mcp import FunctionTool, InProcessMCPServer, MCPServer, render_text
+from bro.llm.mcp import FunctionTool, InProcessMCPServer, MCPServer, render_text
 
 
 class FileSource(DataSource):
@@ -15,7 +15,7 @@ class FileSource(DataSource):
   Use for canonical reference docs the agent should consult on demand.
 
   One rendering of the body is read by every harness, so the file must be
-  surface-neutral: `read` renders `base.template` directives with no surface
+  surface-neutral: `read` renders `bro.base.template` directives with no surface
   facts — a `#harness`/`#wire`/`#creds` directive raises at read time instead
   of silently picking a branch. Pass `render=False` to serve the file verbatim
   — for a doc whose payload is the directive syntax itself, where rendering

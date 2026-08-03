@@ -6,9 +6,9 @@ from dataclasses import dataclass
 
 import pytest
 
-from broker.brotocol import MAX_FRAME_BYTES, Message
-from broker.transport import ChannelID, connect
-from broker.transports.unix import UnixClientTransport, UnixServerTransport
+from bro.broker.brotocol import MAX_FRAME_BYTES, Message
+from bro.broker.transport import ChannelID, connect
+from bro.broker.transports.unix import UnixClientTransport, UnixServerTransport
 
 TIMEOUT = 5.0
 

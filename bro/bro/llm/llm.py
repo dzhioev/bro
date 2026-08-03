@@ -5,10 +5,10 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import ClassVar, Optional, Self
 
-import base.args
-from llm.mcp import MCPServer, ToolRegistry
-from llm.observer import NullObserver, Observer
-from llm.tracker import NullTracker, Tracker
+import bro.base.args as base_args
+from bro.llm.mcp import MCPServer, ToolRegistry
+from bro.llm.observer import NullObserver, Observer
+from bro.llm.tracker import NullTracker, Tracker
 
 
 class LLM(ABC):
@@ -33,7 +33,7 @@ class LLM(ABC):
   async def send(self, messages: list[dict], *, request_timeout: Optional[float] = None) -> str: ...
 
   def cumulative_usage(self) -> Optional[dict[str, dict[str, int]]]:
-    """per-model counts in the four billed token classes (`llm.usage.CLASSES`),
+    """per-model counts in the four billed token classes (`bro.llm.usage.CLASSES`),
     summed over this instance's lifetime; None when the provider doesn't
     track usage."""
     return None
@@ -49,7 +49,7 @@ class LLMSpec(ABC):
   """recipe for an LLM: model + provider-specific knobs.
 
   subclasses live alongside their LLM implementation (e.g.
-  `llm.llms.chat_gpt.LLMSpec`) and carry the typed knobs the LLM accepts.
+  `bro.llm.llms.chat_gpt.LLMSpec`) and carry the typed knobs the LLM accepts.
   each subclass validates its own field combinations in `__post_init__`,
   implements `create_llm`, and provides a round-trip `dump` / `from_dict`
   pair keyed by `TYPE` so a stored spec can be reconstructed.
@@ -124,8 +124,8 @@ def _ensure_providers_loaded() -> None:
   # only sees classes Python has already imported. Eagerly import every known
   # provider so deserialisation works even when the caller hasn't pulled the
   # provider module in itself (e.g. a script reading decisions_log records).
-  import llm.llms.chat_gpt  # noqa: F401
-  import llm.llms.echo  # noqa: F401
+  import bro.llm.llms.chat_gpt  # noqa: F401
+  import bro.llm.llms.echo  # noqa: F401
 
 
 def _walk_subclasses(cls: type) -> list[type]:
@@ -146,11 +146,11 @@ def _spec_for_type(type_name: str) -> LLMSpec:
   # tiny stringy bridge for the `llm` CLI's --llm-type choice. each registered
   # LLM type maps to its default spec; advanced knobs go through the Python API.
   if type_name == 'echo':
-    from llm.llms.echo import LLMSpec as EchoSpec
+    from bro.llm.llms.echo import LLMSpec as EchoSpec
 
     return EchoSpec()
   if type_name == 'chat_gpt':
-    from llm.llms.chat_gpt import LLMSpec as ChatGPTSpec
+    from bro.llm.llms.chat_gpt import LLMSpec as ChatGPTSpec
 
     return ChatGPTSpec()
   raise ValueError(f'unknown LLM type: {type_name}')
@@ -172,7 +172,7 @@ async def llm_main(request: str, llm_type: str, attachments: list[str]):
 
 
 def main(argv: list[str]) -> Optional[int]:
-  parser = base.args.Parser(description='chat with LLM')
+  parser = base_args.Parser(description='chat with LLM')
   parser.add_argument('--attach', '-a', dest='attachments', nargs='*', default=[])
   parser.add_argument('--llm-type', '-t', choices=_LLM_TYPES, default='echo')
   parser.add_argument('request')

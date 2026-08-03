@@ -6,8 +6,8 @@ from typing import Any, Optional
 import pytest
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 
-from trails.model import MESSAGE_TYPES, UNREPORTED_END_INFERENCE, tools_sha256
-from trails.server import backends, storage, storage_types
+from bro.trails.model import MESSAGE_TYPES, UNREPORTED_END_INFERENCE, tools_sha256
+from bro.trails.server import backends, storage, storage_types
 
 _serializer = TypeSerializer()
 _deserializer = TypeDeserializer()

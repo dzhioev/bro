@@ -3,13 +3,13 @@ import signal
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import cw.runner
-from base import credentials
-from cw.claude_argv import ClaudeLaunch
-from cw.constants import CW_RESUMED_SESSION_ENV
-from cw.mcp import MCPEndpoint
-from cw.session_test import _spec
-from workspace.project import ProjectConfig
+import bro.cw.runner as cw_runner
+from bro.base import credentials
+from bro.cw.claude_argv import ClaudeLaunch
+from bro.cw.constants import CW_RESUMED_SESSION_ENV
+from bro.cw.mcp import MCPEndpoint
+from bro.cw.session_test import _spec
+from bro.workspace.project import ProjectConfig
 
 
 class _Harness:
@@ -27,26 +27,26 @@ class _Harness:
   def __enter__(self):
     self._patches = [
       patch.dict('os.environ', {}, clear=False),
-      patch('cw.runner._claude_projects_dir', return_value=self.projects_dir),
-      patch('cw.runner._start_session_mcp_server', return_value=self.server),
+      patch('bro.cw.runner._claude_projects_dir', return_value=self.projects_dir),
+      patch('bro.cw.runner._start_session_mcp_server', return_value=self.server),
       patch(
-        'cw.runner.build_claude_launch',
+        'bro.cw.runner.build_claude_launch',
         return_value=ClaudeLaunch(argv=['built'], system_prompt='sp'),
       ),
-      patch('cw.runner._run_claude', return_value=0),
-      patch('cw.runner._start_session_recorder'),
-      patch('cw.runner._apply_claude_auth'),
-      patch('cw.runner._start_session_broxy', return_value=self.broxy),
-      patch('cw.runner.in_container', return_value=False),
-      patch('cw.runner._provision_host_claude_dir', return_value=self.claude_config_dir),
-      patch('cw.runner.project_root', return_value=Path('/main-repo')),
+      patch('bro.cw.runner._run_claude', return_value=0),
+      patch('bro.cw.runner._start_session_recorder'),
+      patch('bro.cw.runner._apply_claude_auth'),
+      patch('bro.cw.runner._start_session_broxy', return_value=self.broxy),
+      patch('bro.cw.runner.in_container', return_value=False),
+      patch('bro.cw.runner._provision_host_claude_dir', return_value=self.claude_config_dir),
+      patch('bro.cw.runner.project_root', return_value=Path('/main-repo')),
       patch(
-        'cw.session.project_config',
+        'bro.cw.session.project_config',
         return_value=ProjectConfig(default_bro='ppp-dev', image_repository='bro/ppp-dev'),
       ),
       # an empty credential store pins the derived git identity to the legacy
       # address regardless of the developer host's real `github` secret
-      patch('base.credentials.default_store', return_value=credentials.Store({})),
+      patch('bro.base.credentials.default_store', return_value=credentials.Store({})),
     ]
     entered = [p.__enter__() for p in self._patches]
     self.env = entered[0]
@@ -76,7 +76,7 @@ class TestRunInPlace:
   def test_resume_without_session_errors(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert cw.runner.run_in_place(_spec(resume=True)) == 1
+      assert cw_runner.run_in_place(_spec(resume=True)) == 1
       assert h.run_claude.call_count == 0
 
   def test_resume_prepends_latest_session_id(self, monkeypatch, tmp_path):
@@ -87,7 +87,7 @@ class TestRunInPlace:
       old.write_text('{}')
       os.utime(old, (1, 1))
       (h.projects_dir / 'newer.jsonl').write_text('{}')
-      assert cw.runner.run_in_place(_spec(resume=True, claude_args=['--foo'])) == 0
+      assert cw_runner.run_in_place(_spec(resume=True, claude_args=['--foo'])) == 0
       assert h.build.call_args.kwargs['claude_args'] == ['--resume', 'newer', '--foo']
       assert h.start_recorder.call_args.args[2][CW_RESUMED_SESSION_ENV] == 'newer'
 
@@ -95,16 +95,16 @@ class TestRunInPlace:
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
       h.env[CW_RESUMED_SESSION_ENV] = 'foreign'
-      assert cw.runner.run_in_place(_spec()) == 0
+      assert cw_runner.run_in_place(_spec()) == 0
       assert CW_RESUMED_SESSION_ENV not in h.start_recorder.call_args.args[2]
 
   def test_recorder_runs_for_the_session_and_stops_after(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert cw.runner.run_in_place(_spec()) == 0
+      assert cw_runner.run_in_place(_spec()) == 0
       assert h.start_recorder.call_args.args[0] == 'w'
       # the launch recipe lands on the trail header as native.llm
-      assert h.start_recorder.call_args.kwargs['llm'] == {'model': cw.runner._CW_MODEL}
+      assert h.start_recorder.call_args.kwargs['llm'] == {'model': cw_runner._CW_MODEL}
       # spawned after the session context is set, so the daemon inherits it
       assert 'CW_SESSION_CONTEXT' in h.start_recorder.call_args.args[2]
       assert h.start_recorder.return_value.stop.call_count == 1
@@ -112,9 +112,9 @@ class TestRunInPlace:
   def test_recorder_carries_the_effort_override(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert cw.runner.run_in_place(_spec(effort='high')) == 0
+      assert cw_runner.run_in_place(_spec(effort='high')) == 0
       assert h.start_recorder.call_args.kwargs['llm'] == {
-        'model': cw.runner._CW_MODEL,
+        'model': cw_runner._CW_MODEL,
         'effort': 'high',
       }
 
@@ -122,13 +122,13 @@ class TestRunInPlace:
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
       h.start_recorder.return_value = None
-      assert cw.runner.run_in_place(_spec()) == 0
+      assert cw_runner.run_in_place(_spec()) == 0
       assert h.run_claude.call_count == 1
 
   def test_raw_session_serves_health_gates_and_syncs(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert cw.runner.run_in_place(_spec(bro='pm', raw=True)) == 0
+      assert cw_runner.run_in_place(_spec(bro='pm', raw=True)) == 0
       assert h.start_server.call_args[0][0] == 'bro:pm'
       assert h.server.wait_healthy.call_count == 1
       assert h.server.stop.call_count == 1
@@ -139,7 +139,7 @@ class TestRunInPlace:
   def test_cw_session_serves_the_persona_and_health_gates(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert cw.runner.run_in_place(_spec(bro='pm')) == 0
+      assert cw_runner.run_in_place(_spec(bro='pm')) == 0
       assert h.start_server.call_args[0][0] == 'persona:pm'
       assert h.server.wait_healthy.call_count == 1
       assert h.server.stop.call_count == 1
@@ -150,7 +150,7 @@ class TestRunInPlace:
   def test_cw_session_uses_the_project_default_bro(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert cw.runner.run_in_place(_spec()) == 0
+      assert cw_runner.run_in_place(_spec()) == 0
       assert h.start_server.call_args[0][0] == 'persona:ppp-dev'
       assert h.env['CW_BRO'] == 'ppp-dev'
 
@@ -158,14 +158,14 @@ class TestRunInPlace:
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
       h.start_server.side_effect = RuntimeError('did not bind')
-      assert cw.runner.run_in_place(_spec()) == 1
+      assert cw_runner.run_in_place(_spec()) == 1
       assert h.run_claude.call_count == 0
 
   def test_health_gate_failure_stops_server_and_returns_1(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
       h.server.wait_healthy.side_effect = RuntimeError('not healthy')
-      assert cw.runner.run_in_place(_spec(bro='pm', raw=True)) == 1
+      assert cw_runner.run_in_place(_spec(bro='pm', raw=True)) == 1
       assert h.run_claude.call_count == 0
       assert h.server.stop.call_count == 1
 
@@ -173,14 +173,14 @@ class TestRunInPlace:
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
       # every session commits as bro, hold-independent
-      assert cw.runner.run_in_place(_spec()) == 0
+      assert cw_runner.run_in_place(_spec()) == 0
       assert h.env['GIT_AUTHOR_NAME'] == 'bro'
       assert h.env['GIT_COMMITTER_EMAIL'] == 'ppp-dev@bro'
 
   def test_exports_the_session_hold(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert cw.runner.run_in_place(_spec(hold='unattended')) == 0
+      assert cw_runner.run_in_place(_spec(hold='unattended')) == 0
       assert h.env['BRO_HOLD'] == 'unattended'
 
   def test_overwrites_the_ambient_hold(self, monkeypatch, tmp_path):
@@ -189,7 +189,7 @@ class TestRunInPlace:
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
       h.env['BRO_HOLD'] = 'unattended'
-      assert cw.runner.run_in_place(_spec()) == 0
+      assert cw_runner.run_in_place(_spec()) == 0
       assert h.env['BRO_HOLD'] == 'guided'
 
   def test_exports_its_own_pid_as_the_raise_kill_target(self, monkeypatch, tmp_path):
@@ -197,25 +197,25 @@ class TestRunInPlace:
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
       h.env['CW_RUNNER_PID'] = '1'
-      assert cw.runner.run_in_place(_spec()) == 0
+      assert cw_runner.run_in_place(_spec()) == 0
       assert h.env['CW_RUNNER_PID'] == str(os.getpid())
 
   def test_session_context_set_next_to_claude(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert cw.runner.run_in_place(_spec()) == 0
+      assert cw_runner.run_in_place(_spec()) == 0
       assert 'CW_SESSION_CONTEXT' in h.env
 
   def test_claude_exit_code_propagates(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
       h.run_claude.return_value = 42
-      assert cw.runner.run_in_place(_spec()) == 42
+      assert cw_runner.run_in_place(_spec()) == 42
 
   def test_cw_session_applies_auth_with_warning(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert cw.runner.run_in_place(_spec()) == 0
+      assert cw_runner.run_in_place(_spec()) == 0
       assert h.apply_auth.call_args.kwargs == {'warn_when_missing': True}
       # the transformed env is the one claude is spawned with
       assert h.apply_auth.call_args.args[0] is h.run_claude.call_args.args[1]
@@ -223,19 +223,19 @@ class TestRunInPlace:
   def test_raw_session_applies_auth_without_warning(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert cw.runner.run_in_place(_spec(bro='pm', raw=True)) == 0
+      assert cw_runner.run_in_place(_spec(bro='pm', raw=True)) == 0
       assert h.apply_auth.call_args.kwargs == {'warn_when_missing': False}
 
   def test_extends_claudes_mcp_tool_call_timeout(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert cw.runner.run_in_place(_spec()) == 0
+      assert cw_runner.run_in_place(_spec()) == 0
       assert h.run_claude.call_args.args[1]['MCP_TOOL_TIMEOUT'] == '600000'
 
   def test_host_session_provisions_and_exports_the_claude_config_dir(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert cw.runner.run_in_place(_spec()) == 0
+      assert cw_runner.run_in_place(_spec()) == 0
       h.provision_claude_dir.assert_called_once_with('w', tmp_path, Path('/main-repo'))
       env = h.run_claude.call_args.args[1]
       assert env['CLAUDE_CONFIG_DIR'] == str(h.claude_config_dir)
@@ -244,7 +244,7 @@ class TestRunInPlace:
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
       h.in_container.return_value = True
-      assert cw.runner.run_in_place(_spec()) == 0
+      assert cw_runner.run_in_place(_spec()) == 0
       h.provision_claude_dir.assert_not_called()
       assert 'CLAUDE_CONFIG_DIR' not in h.run_claude.call_args.args[1]
 
@@ -254,7 +254,7 @@ class TestSessionBroxy:
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
       h.env['BROKER_CHANNEL'] = 'unix:/up.sock'
-      assert cw.runner.run_in_place(_spec()) == 0
+      assert cw_runner.run_in_place(_spec()) == 0
       assert h.start_broxy.call_args.args[0] == 'unix:/up.sock'
       env = h.run_claude.call_args.args[1]
       assert env['BROKER_CHANNEL'] == h.broxy.address
@@ -265,7 +265,7 @@ class TestSessionBroxy:
     with _Harness(tmp_path) as h:
       h.env['BROKER_CHANNEL'] = 'unix:/up.sock'
       h.start_broxy.return_value = None
-      assert cw.runner.run_in_place(_spec()) == 0
+      assert cw_runner.run_in_place(_spec()) == 0
       env = h.run_claude.call_args.args[1]
       assert 'BROKER_CHANNEL' not in env
 
@@ -274,7 +274,7 @@ class TestSessionBroxy:
     with _Harness(tmp_path) as h:
       h.in_container.return_value = True
       h.env['BROKER_CHANNEL'] = 'unix:/tmp/broxy.sock'
-      assert cw.runner.run_in_place(_spec()) == 0
+      assert cw_runner.run_in_place(_spec()) == 0
       h.start_broxy.assert_not_called()
       env = h.run_claude.call_args.args[1]
       assert env['BROKER_CHANNEL'] == 'unix:/tmp/broxy.sock'
@@ -282,7 +282,7 @@ class TestSessionBroxy:
   def test_no_channel_starts_no_broxy(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert cw.runner.run_in_place(_spec()) == 0
+      assert cw_runner.run_in_place(_spec()) == 0
       h.start_broxy.assert_not_called()
 
 
@@ -303,5 +303,5 @@ class TestRunClaude:
     fake.chmod(0o755)
     previous = signal.getsignal(signal.SIGTERM)
     env = {**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}'}
-    assert cw.runner._run_claude([], env) == 7
+    assert cw_runner._run_claude([], env) == 7
     assert signal.getsignal(signal.SIGTERM) == previous

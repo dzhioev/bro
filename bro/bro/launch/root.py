@@ -4,12 +4,17 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Optional
 
-from base import log
-from workspace.containers import attach_interactive, container_broker_enabled
-from workspace.docker import Launch, prepare_container
-from workspace.model import ContainerWorkspace, clear_session_end, format_ref, record_session_end
-from workspace.paths import project_root
-from workspace.store import log_scoped_secrets
+from bro.base import log
+from bro.workspace.containers import attach_interactive, container_broker_enabled
+from bro.workspace.docker import Launch, prepare_container
+from bro.workspace.model import (
+  ContainerWorkspace,
+  clear_session_end,
+  format_ref,
+  record_session_end,
+)
+from bro.workspace.paths import project_root
+from bro.workspace.store import log_scoped_secrets
 
 
 def _run_root_via_broker(
@@ -25,7 +30,7 @@ def _run_root_via_broker(
   # docstring).
   from bro.launch.spawn import run_root_via_broker
   from bro.launch.summon_control import STATUS_ENV, container_status_path
-  from workspace.spawn import DockerLaunchSpec
+  from bro.workspace.spawn import DockerLaunchSpec
 
   session = format_ref(launch.name, True)
   env = dict(launch.env)
@@ -48,9 +53,7 @@ def run_in_container(
   may_summon: Collection[str] = (),
   trail_pointer: Optional[Path] = None,
 ) -> int:
-  """run a prepared launch directly or as the root peer of a broker.
-
-  The launch description is supervision-neutral. The broker path wraps it only
+  """run a prepared launch directly or as the root peer of a bro.broker.The launch description is supervision-neutral. The broker path wraps it only
   after the lazy import gate; the fallback uses the same container prepare and
   attaches with plain `docker start`. `drop` removes the caller-owned workspace
   after a clean exit — a failed run keeps it on disk for inspection and

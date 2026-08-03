@@ -5,8 +5,8 @@ import json
 from collections.abc import Callable
 from typing import Any, Optional
 
-from trails.server import storage_types
-from trails.server.folding import AggregateState
+from bro.trails.server import storage_types
+from bro.trails.server.folding import AggregateState
 
 _ROW_STORAGE_FIELDS = frozenset(
   {

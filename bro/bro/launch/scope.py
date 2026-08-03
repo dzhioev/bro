@@ -8,11 +8,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
-from base import credentials, log
-from workspace.store import ScopedSecrets, finalize_scoped_secrets
+from bro.base import credentials, log
+from bro.workspace.store import ScopedSecrets, finalize_scoped_secrets
 
 if TYPE_CHECKING:
-  import llm.mcp
+  from bro.llm.mcp import Harness
 
 # secrets every claude code session resolves regardless of bro: the session
 # recorder and any in-session bro run both record through trails.
@@ -41,7 +41,7 @@ class _Recipe:
 
   baseline: frozenset[str]
   optional_baseline: frozenset[str]
-  harness: 'llm.mcp.Harness'
+  harness: 'Harness'
   auth_secret: Optional[str]
   llm_key: bool
   docker_sock: Optional[bool]
@@ -119,7 +119,7 @@ def scoped_secrets(
   requests only what it actually uses.
 
   `credential_instances` is the operated repo's kind → instance selection
-  (`workspace.project.ProjectConfig.creds`). mapped kinds are validated against
+  (`bro.workspace.project.ProjectConfig.creds`). mapped kinds are validated against
   the host credential registry, then matching names are substituted over both
   tiers of this persona's scope — so later `--grant`/`--revoke` overrides and
   hydration see the `kind+instance` names, while components keep declaring kinds.

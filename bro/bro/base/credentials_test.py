@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from base import credentials, template
+from bro.base import credentials, template
 
 
 @pytest.fixture
@@ -65,7 +65,7 @@ def _entry_point(name: str, value: str, group: str) -> importlib.metadata.EntryP
 class TestExtensionEntryPoints:
   def test_credential_source_is_discovered_by_type(self, monkeypatch):
     entry_point = _entry_point(
-      'ticket', 'base.credentials_test:_TicketSource', credentials._CREDENTIAL_SOURCE_GROUP
+      'ticket', 'bro.base.credentials_test:_TicketSource', credentials._CREDENTIAL_SOURCE_GROUP
     )
     monkeypatch.setattr(
       credentials,
@@ -82,7 +82,9 @@ class TestExtensionEntryPoints:
 
   def test_registry_entry_is_discovered(self, monkeypatch):
     entry_point = _entry_point(
-      'external', 'base.credentials_test:_REGISTRY_ENTRY', credentials._CREDENTIAL_REGISTRY_GROUP
+      'external',
+      'bro.base.credentials_test:_REGISTRY_ENTRY',
+      credentials._CREDENTIAL_REGISTRY_GROUP,
     )
     monkeypatch.setattr(
       credentials,

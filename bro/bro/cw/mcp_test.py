@@ -5,12 +5,12 @@ from pathlib import Path
 
 import pytest
 
-import cw.mcp
+import bro.cw.mcp as cw_mcp
 
 
 class TestHTTPMCPConfig:
   def test_one_entry_per_namespace(self):
-    config = json.loads(cw.mcp._http_mcp_config(['flow', 'bro'], port=1234, token='tok'))
+    config = json.loads(cw_mcp._http_mcp_config(['flow', 'bro'], port=1234, token='tok'))
     assert list(config['mcpServers']) == ['flow', 'bro']
     for namespace, entry in config['mcpServers'].items():
       assert entry['type'] == 'http'
@@ -68,7 +68,7 @@ class TestStartSessionMCPServer:
       exec sleep 60
       """,
     )
-    server = cw.mcp._start_session_mcp_server('flow', tmp_path, env)
+    server = cw_mcp._start_session_mcp_server('flow', tmp_path, env)
     try:
       assert server.endpoint.port == 45678
       assert len(server.endpoint.token) > 0
@@ -87,7 +87,7 @@ class TestStartSessionMCPServer:
       exec sleep 60
       """,
     )
-    server = cw.mcp._start_session_mcp_server('bro:pm', tmp_path, env)
+    server = cw_mcp._start_session_mcp_server('bro:pm', tmp_path, env)
     server.stop()
     argv = (tmp_path / 'argv').read_text().splitlines()
     assert argv[0] == 'bro:pm'
@@ -98,26 +98,26 @@ class TestStartSessionMCPServer:
   def test_startup_crash_raises(self, tmp_path):
     env = _fake_mcp_server(tmp_path, 'exit 3')
     with pytest.raises(RuntimeError, match='exited with code 3'):
-      cw.mcp._start_session_mcp_server('flow', tmp_path, env)
+      cw_mcp._start_session_mcp_server('flow', tmp_path, env)
 
   def test_bind_timeout_raises_and_kills(self, tmp_path, monkeypatch):
-    monkeypatch.setattr(cw.mcp, '_BIND_TIMEOUT', 0.3)
+    monkeypatch.setattr(cw_mcp, '_BIND_TIMEOUT', 0.3)
     env = _fake_mcp_server(tmp_path, 'exec sleep 60')
     with pytest.raises(RuntimeError, match='did not bind'):
-      cw.mcp._start_session_mcp_server('flow', tmp_path, env)
+      cw_mcp._start_session_mcp_server('flow', tmp_path, env)
 
 
 class TestWaitHealthy:
   def test_returns_once_health_answers(self, tmp_path):
     env = _fake_mcp_server(tmp_path, _HEALTH_SERVER_BODY)
-    server = cw.mcp._start_session_mcp_server('bro:pm', tmp_path, env)
+    server = cw_mcp._start_session_mcp_server('bro:pm', tmp_path, env)
     try:
       server.wait_healthy()
     finally:
       server.stop()
 
   def test_times_out_when_health_never_answers(self, tmp_path, monkeypatch):
-    monkeypatch.setattr(cw.mcp, '_HEALTH_TIMEOUT', 0.3)
+    monkeypatch.setattr(cw_mcp, '_HEALTH_TIMEOUT', 0.3)
     # binds and publishes the port but never serves HTTP, so /health can't answer
     env = _fake_mcp_server(
       tmp_path,
@@ -127,7 +127,7 @@ class TestWaitHealthy:
       exec sleep 60
       """,
     )
-    server = cw.mcp._start_session_mcp_server('bro:pm', tmp_path, env)
+    server = cw_mcp._start_session_mcp_server('bro:pm', tmp_path, env)
     try:
       with pytest.raises(RuntimeError, match='not healthy'):
         server.wait_healthy()
@@ -143,7 +143,7 @@ class TestWaitHealthy:
       sleep 0.1
       """,
     )
-    server = cw.mcp._start_session_mcp_server('bro:pm', tmp_path, env)
+    server = cw_mcp._start_session_mcp_server('bro:pm', tmp_path, env)
     try:
       with pytest.raises(RuntimeError, match='before /health'):
         server.wait_healthy()

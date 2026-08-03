@@ -7,16 +7,9 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Optional
 
-from base import credentials, log
-from bro.launch.root import run_in_container
-from bro.launch.scope import (
-  LaunchScopeError,
-  Surface,
-  preflight_scoped_launch,
-  scoped_secrets,
-)
-from cw.claude_auth import _apply_claude_auth
-from cw.claude_config import (
+from bro.base import credentials, log
+from bro.cw.claude_auth import _apply_claude_auth
+from bro.cw.claude_config import (
   _latest_jsonl,
   _provision_host_claude_dir,
   container_claude_state,
@@ -24,21 +17,28 @@ from cw.claude_config import (
   session_trail_pointer,
   workspace_projects_dir,
 )
-from cw.flags import DEFAULT_HOLD
-from workspace.containers import broker_enabled
-from workspace.docker import Launch, find_container_id
-from workspace.git import resolve_ref
-from workspace.model import (
+from bro.cw.flags import DEFAULT_HOLD
+from bro.launch.root import run_in_container
+from bro.launch.scope import (
+  LaunchScopeError,
+  Surface,
+  preflight_scoped_launch,
+  scoped_secrets,
+)
+from bro.workspace.containers import broker_enabled
+from bro.workspace.docker import Launch, find_container_id
+from bro.workspace.git import resolve_ref
+from bro.workspace.model import (
   ContainerWorkspace,
   HostWorktree,
   Workspace,
   clear_session_end,
   record_session_end,
 )
-from workspace.paths import project_root, venv_env
-from workspace.project import project_config
-from workspace.store import log_scoped_secrets, materialize_scoped_store
-from workspace.worktrees import ensure_host_worktree, provision_host_worktree
+from bro.workspace.paths import project_root, venv_env
+from bro.workspace.project import project_config
+from bro.workspace.store import log_scoped_secrets, materialize_scoped_store
+from bro.workspace.worktrees import ensure_host_worktree, provision_host_worktree
 
 
 @dataclass(frozen=True)
@@ -117,9 +117,7 @@ class SessionSpec:
 
   def to_in_place_argv(self) -> list[str]:
     """this session as the inner `cw ss --in-place` invocation (argv after the
-    program token), for the outer layer to spawn in a prepared workspace.
-
-    a second serialization, distinct from to_command_argv: it carries the prompt
+    program token), for the outer layer to spawn in a prepared bro.workspace.a second serialization, distinct from to_command_argv: it carries the prompt
     and the forwarded claude args (which to_command_argv deliberately omits) and
     drops the flags the outer already consumed (--host --drop --grant --revoke
     --into). the prompt uses the
@@ -321,7 +319,7 @@ def _run_host_root_via_broker(
   # a launch before anything touches the broker package (see its docstring).
   from bro.launch.spawn import run_root_via_broker
   from bro.launch.summon_control import STATUS_ENV, summon_status_file
-  from workspace.spawn import ProcessLaunchSpec
+  from bro.workspace.spawn import ProcessLaunchSpec
 
   # a host session reads the summon-status file the host-side SummonControl
   # writes, straight at its host path; the session key is the bare workspace

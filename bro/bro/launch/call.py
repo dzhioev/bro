@@ -6,8 +6,8 @@ from collections.abc import Callable
 from datetime import date, datetime
 from typing import Any, Optional, TextIO
 
-import base.args
-from base import log
+import bro.base.args as base_args
+from bro.base import log
 from bro.bro import BroRaised
 from bro.bros.bro import Bro
 from bro.launch._cli import (
@@ -25,9 +25,9 @@ from bro.launch._cli import (
 )
 from bro.launch._trace_format import format_tool_call, oneline, truncate
 from bro.launch.resume import RESUME_LATEST, HistoryMessage
-from llm.llm import EFFORT_LEVELS
-from llm.mcp import HOLDS, canonical_name
-from llm.observer import Observer
+from bro.llm.llm import EFFORT_LEVELS
+from bro.llm.mcp import HOLDS, canonical_name
+from bro.llm.observer import Observer
 
 __cli_name__ = 'call'
 
@@ -101,9 +101,8 @@ async def call_text(
   now, and observer are injectable for tests. `history` (a resumed
   conversation's prior exchanges) renders before the banner, with a date line
   wherever the day changes; `initial` may be None on a resume — the REPL then
-  just prompts.
-  """
-  from workspace.banner import render_banner
+  just bro.prompts."""
+  from bro.workspace.banner import render_banner
 
   read = read_line if read_line is not None else (lambda: input('> '))
   effective_observer: Observer = observer if observer is not None else TextRenderer(prefix=bro.name)
@@ -158,7 +157,7 @@ def chat_main(
   implied_fast: bool = False,
   default_hold: str = 'guided',
 ) -> Optional[int]:
-  parser = base.args.Parser(
+  parser = base_args.Parser(
     prog=' '.join(program), description='open an interactive session with a bro'
   )
   parser.add_argument('bro', help='bro name')
@@ -248,7 +247,7 @@ def chat_main(
   if args['resume'] is not None:
     from bro.launch.resume import resume
     from bro.registry import get_class
-    from trails.client import default_client
+    from bro.trails.client import default_client
 
     bro_class = get_class(args['bro'])
     try:

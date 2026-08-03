@@ -5,12 +5,12 @@ import threading
 from dataclasses import asdict
 from typing import Any, Optional
 
-from base import configs
-from llm.tracker import EndReason, StepKind, Tracker
-from trails.client import TrailsClient
-from trails.model import ForkedFrom, tools_sha256
-from trails.record import spine
-from trails.record.spine import Recording
+from bro.base import configs
+from bro.llm.tracker import EndReason, StepKind, Tracker
+from bro.trails.client import TrailsClient
+from bro.trails.model import ForkedFrom, tools_sha256
+from bro.trails.record import spine
+from bro.trails.record.spine import Recording
 
 
 class Recorder(Tracker):

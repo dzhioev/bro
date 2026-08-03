@@ -1,6 +1,4 @@
-"""forking of recorded trails.
-
-a *fork* spins up a fresh `Bro` preseeded with a forked_from trail's prefix and
+"""forking of recorded bro.trails.a *fork* spins up a fresh `Bro` preseeded with a forked_from trail's prefix and
 lets the caller continue with `.send(next_message)`. the new run gets its own
 trail with `forked_from={trail_id, step_id}` so the source → child edge is
 queryable through the fork index.
@@ -29,13 +27,13 @@ import json
 from collections.abc import Callable
 from typing import Any, Optional, cast
 
-import llm.llms.chat_gpt
+import bro.llm.llms.chat_gpt as llm_llms_chat_gpt
 from bro.bros.bro import Bro
+from bro.llm.llm import LLM, LLMSpec
+from bro.llm.tracker import NullTracker, Tracker
 from bro.registry import create_bro
-from llm.llm import LLM, LLMSpec
-from llm.tracker import NullTracker, Tracker
-from trails.lineage import walk_chain
-from trails.model import ForkedFrom, RecordedTrail, Step
+from bro.trails.lineage import walk_chain
+from bro.trails.model import ForkedFrom, RecordedTrail, Step
 
 
 def replay_messages(
@@ -303,7 +301,7 @@ def _seed_response_id(inner_llm: LLM, response_id: str) -> None:
   # entire prefix it had cached for that response. other LLM impls don't
   # support this; raise loudly rather than silently producing a fork that
   # ignores the seed.
-  if not isinstance(inner_llm, llm.llms.chat_gpt.ChatGPT):
+  if not isinstance(inner_llm, llm_llms_chat_gpt.ChatGPT):
     raise NotImplementedError(
       f'server-side fork not implemented for {type(inner_llm).__name__}; '
       'currently supports ChatGPT only'
@@ -353,7 +351,7 @@ def _preseed(inner_llm: LLM, prefix: list[dict]) -> None:
   # other LLM impls (e.g. Echo) don't support replay; their forks would need a
   # provider-specific shim. raise loudly rather than silently producing a fork
   # that ignores the prefix.
-  if not isinstance(inner_llm, llm.llms.chat_gpt.ChatGPT):
+  if not isinstance(inner_llm, llm_llms_chat_gpt.ChatGPT):
     raise NotImplementedError(
       f'client-side fork not implemented for {type(inner_llm).__name__}; '
       'currently supports ChatGPT only'

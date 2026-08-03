@@ -9,15 +9,17 @@ from unittest.mock import MagicMock
 import pytest
 
 import bro.bro
-import llm.mcp
-from base import credentials
-from base.condition import ConditionError, when
+import bro.llm.llms.echo as llm_llms_echo
+import bro.llm.mcp as llm_mcp
+import bro.workspace.banner as workspace_banner
+from bro.base import credentials
+from bro.base.condition import ConditionError, when
 from bro.bro import BaseBro, BroRaised, feature, set_default_tracker_factory
 from bro.datasources.searchable import Hit, SearchableDataSource
-from llm.llm import LLM
-from llm.mcp import FunctionTool, InProcessMCPServer, MCPServer, MCPServerSpec, describe
-from llm.observer import NullObserver, Observer
-from llm.tracker import NullTracker, Tracker
+from bro.llm.llm import LLM
+from bro.llm.mcp import FunctionTool, InProcessMCPServer, MCPServer, MCPServerSpec, describe
+from bro.llm.observer import NullObserver, Observer
+from bro.llm.tracker import NullTracker, Tracker
 
 
 class MockLLM(LLM):
@@ -345,8 +347,8 @@ class TestBroRun:
   def test_default_factory_raises_when_trails_config_missing(self, monkeypatch, tmp_path):
     # `_default_factory` refuses to silently fall back to `NullTracker` —
     # missing config is a setup error that must be surfaced.
-    from base import credentials
     from bro import bro as bro_module
+    from bro.base import credentials
 
     monkeypatch.setattr(credentials, 'CONFIGS_DIR', str(tmp_path))
     monkeypatch.setattr(credentials, 'BRO_DIR', str(tmp_path))
@@ -725,7 +727,6 @@ class TestCredentialGate:
     assert await gated.send('hi', surface='test') == 'ran'
 
   def test_missing_secrets_ignores_the_optional_tier(self, monkeypatch):
-    import llm.llms.echo
 
     monkeypatch.setattr(credentials, 'available', lambda name: False)
 
@@ -743,7 +744,7 @@ class TestCredentialGate:
     class OptionalBro(BaseBro):
       name = 'optional'
       description = 'no required secrets'
-      llm_spec = llm.llms.echo.LLMSpec()
+      llm_spec = llm_llms_echo.LLMSpec()
       data_sources: ClassVar = [OptionalSource()]
 
     optional_bro = OptionalBro()
@@ -837,7 +838,7 @@ class TestBroDataSources:
     assert 'stub-source::' in bro.system_prompt
 
   def test_summary_feature_directive_rendered_present(self, monkeypatch):
-    from base import credentials
+    from bro.base import credentials
 
     monkeypatch.setattr(credentials, 'available', lambda name: True)
 
@@ -855,7 +856,7 @@ class TestBroDataSources:
     assert '{{' not in prompt  # markers fully resolved, never leak raw
 
   def test_summary_feature_directive_rendered_absent(self, monkeypatch):
-    from base import credentials
+    from bro.base import credentials
 
     monkeypatch.setattr(credentials, 'available', lambda name: False)
 
@@ -1002,7 +1003,7 @@ class TestBroMCPServers:
 class TestToolPackEntries:
   @pytest.mark.asyncio
   async def test_bare_toolset_entry_is_the_full_roster(self):
-    toolset = llm.mcp.Toolset('bare-roster')
+    toolset = llm_mcp.Toolset('bare-roster')
 
     @toolset.tool('ping tool')
     def ping() -> str:
@@ -1011,7 +1012,7 @@ class TestToolPackEntries:
     class ToolsetBro(BaseBro):
       name = 'toolset-entry'
       description = 'd'
-      mcp_servers: ClassVar = [when(llm.mcp.harness == 'bro', toolset)]
+      mcp_servers: ClassVar = [when(llm_mcp.harness == 'bro', toolset)]
 
       def __init__(self):
         super().__init__(system_prompt='')
@@ -1023,7 +1024,7 @@ class TestToolPackEntries:
 
   @pytest.mark.asyncio
   async def test_module_entry_resolves_through_its_spec_toolset(self):
-    toolset = llm.mcp.Toolset('fake-pack')
+    toolset = llm_mcp.Toolset('fake-pack')
 
     @toolset.tool('ping tool')
     def ping() -> str:
@@ -1067,7 +1068,7 @@ class TestConditionalComponents:
     class CondBro(BaseBro):
       name = 'cond'
       description = 'd'
-      mcp_servers: ClassVar = [when(llm.mcp.harness == 'claude', MCPServerSpec(build=build))]
+      mcp_servers: ClassVar = [when(llm_mcp.harness == 'claude', MCPServerSpec(build=build))]
 
       def __init__(self):
         super().__init__(system_prompt='')
@@ -1080,7 +1081,7 @@ class TestConditionalComponents:
     class MatchBro(BaseBro):
       name = 'match'
       description = 'd'
-      mcp_servers: ClassVar = [when(llm.mcp.harness == 'bro', _make_spec('a'))]
+      mcp_servers: ClassVar = [when(llm_mcp.harness == 'bro', _make_spec('a'))]
 
       def __init__(self):
         super().__init__(system_prompt='')
@@ -1102,7 +1103,7 @@ class TestConditionalComponents:
     class CondSourceBro(BaseBro):
       name = 'cond-source'
       description = 'd'
-      data_sources: ClassVar = [when(llm.mcp.harness == 'claude', _SecretSource())]
+      data_sources: ClassVar = [when(llm_mcp.harness == 'claude', _SecretSource())]
 
       def __init__(self):
         super().__init__(system_prompt='base')
@@ -1126,13 +1127,13 @@ class TestFeatures:
     return FeatureBro
 
   def test_gated_component_and_text_follow_the_gates(self, monkeypatch):
-    monkeypatch.setattr('base.credentials.available', lambda name: name == 'xkey')
+    monkeypatch.setattr('bro.base.credentials.available', lambda name: name == 'xkey')
     on = self._bro_class()()
     assert len(on._mcp_specs) == 1
     assert 'FEATURE TEXT' in on.system_prompt
     assert set(on.needed_secrets()) == {'alpha', 'beta'}
 
-    monkeypatch.setattr('base.credentials.available', lambda name: False)
+    monkeypatch.setattr('bro.base.credentials.available', lambda name: False)
     off = self._bro_class()()
     assert off._mcp_specs == []
     assert 'FEATURE TEXT' not in off.system_prompt
@@ -1148,13 +1149,13 @@ class TestFeatures:
       def __init__(self):
         super().__init__(system_prompt='')
 
-    monkeypatch.setattr('base.credentials.available', lambda name: name == 'xkey')
+    monkeypatch.setattr('bro.base.credentials.available', lambda name: name == 'xkey')
     assert TwoKeyBro()._mcp_specs == []
-    monkeypatch.setattr('base.credentials.available', lambda name: name in {'xkey', 'ykey'})
+    monkeypatch.setattr('bro.base.credentials.available', lambda name: name in {'xkey', 'ykey'})
     assert len(TwoKeyBro()._mcp_specs) == 1
 
   def test_derived_pins_parent_feature_on(self, monkeypatch):
-    monkeypatch.setattr('base.credentials.available', lambda name: False)
+    monkeypatch.setattr('bro.base.credentials.available', lambda name: False)
 
     class Pinned(self._bro_class()):
       name = 'feature-child'
@@ -1183,10 +1184,10 @@ class TestClaudePersonaServers:
       name = 'persona'
       description = 'd'
       mcp_servers: ClassVar = [
-        when(llm.mcp.harness == 'bro', MCPServerSpec.of(_SecretServer)),
+        when(llm_mcp.harness == 'bro', MCPServerSpec.of(_SecretServer)),
         _make_spec('a'),
       ]
-      data_sources: ClassVar = [when(llm.mcp.harness == 'bro', _SecretSource())]
+      data_sources: ClassVar = [when(llm_mcp.harness == 'bro', _SecretSource())]
 
       def __init__(self):
         super().__init__(system_prompt='')
@@ -1216,11 +1217,11 @@ class TestClaudePersonaServers:
 
     # brog's state factory reads the self-contained `brog` secret at build
     monkeypatch.setattr(
-      'base.credentials.get_json',
+      'bro.base.credentials.get_json',
       lambda name: {'backend': 'flow', 'transport': 'http', 'url': 'https://x', 'token': 't'},
     )
     # dev's brog feature follows the environment: no brog config → no tracker
-    monkeypatch.setattr('base.credentials.available', lambda name: False)
+    monkeypatch.setattr('bro.base.credentials.available', lambda name: False)
     # the dev toolset is bro-harness-only — claude's built-in tools cover it —
     # while the reference FileSources serve every harness
     assert [s.namespace for s in Dev().claude_persona_mcp_servers()] == [
@@ -1228,7 +1229,7 @@ class TestClaudePersonaServers:
       'bro',
       'at',
     ]
-    monkeypatch.setattr('base.credentials.available', lambda name: name == 'brog')
+    monkeypatch.setattr('bro.base.credentials.available', lambda name: name == 'brog')
     assert [s.namespace for s in Dev().claude_persona_mcp_servers()] == [
       'brog',
       'dev-style-source',
@@ -1316,12 +1317,11 @@ class TestMaySummon:
     assert Derived()._may_summon == ('one', 'two')
 
   def test_empty_when_no_components_and_keyless_llm(self):
-    import llm.llms.echo
 
     class Bare(BaseBro):
       name = 'bare'
       description = 'd'
-      llm_spec = llm.llms.echo.LLMSpec()
+      llm_spec = llm_llms_echo.LLMSpec()
 
       def __init__(self):
         super().__init__(system_prompt='')
@@ -1569,7 +1569,6 @@ class TestBannerTool:
 
   @pytest.mark.asyncio
   async def test_renders_the_llm_banner_with_the_bro_name(self, monkeypatch):
-    import workspace.banner
 
     captured: dict = {}
 
@@ -1578,7 +1577,7 @@ class TestBannerTool:
       captured['bro'] = bro
       return 'kind: container'
 
-    monkeypatch.setattr(workspace.banner, 'render_banner', fake_render_banner)
+    monkeypatch.setattr(workspace_banner, 'render_banner', fake_render_banner)
     tool = await _find_tool(EchoBro(), 'banner')
     assert await tool.call({}) == 'kind: container'
     assert captured == {'llm': True, 'bro': 'echo'}
@@ -1994,7 +1993,7 @@ class TestAgentIdentity:
     assert EchoBro().agent == 'bro//echo'
 
   def test_create_llm_threads_the_agent_identity(self):
-    from llm.llms.echo import LLMSpec as EchoSpec
+    from bro.llm.llms.echo import LLMSpec as EchoSpec
 
     class PlainBro(BaseBro):
       name = 'plain'

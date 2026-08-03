@@ -4,7 +4,7 @@ A condition is an immutable predicate tree built at declaration time —
 `var('harness') == 'claude'` for equality, `var('creds').contains('openai')`
 for membership — and evaluated later against a `Variables` mapping, so a
 class-level declaration stays an import-time constant while its truth is
-decided by whatever surface holds the facts. `base.template` directives lower
+decided by whatever surface holds the facts. `bro.base.template` directives lower
 onto the same objects, so text conditions and code-built ones share one
 evaluator and one fail-fast semantics; `when` / `iff` / `select` gate entries
 of declarative lists. The full semantics — variables, fail-fast rules, facts,

@@ -1,12 +1,4 @@
 #!/usr/bin/env -S bash -e
-# promote the staged token-accounting baseline once a commit lands, so the mark
-# only advances after a *successful* commit (cw/claude_commit_footer.py owns the
-# format + state file; the repo carries it at the root or vendored under ppp/).
-# it imports base.args, so it surfaces a failure rather than swallowing it —
-# commit with the project venv active.
-root="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
-for footer in "$root/cw/claude_commit_footer.py" "$root/ppp/cw/claude_commit_footer.py"; do
-  if [ -x "$footer" ]; then
-    exec "$footer" --record
-  fi
-done
+# promote the staged token-accounting baseline once a commit lands. the hook is
+# installed by bro-dev provisioning, and commits run with the project venv active.
+exec bro-dev.claude-commit-footer --record

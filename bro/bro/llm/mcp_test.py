@@ -5,9 +5,9 @@ from typing import Annotated, Optional
 import pytest
 from pydantic import Field, ValidationError
 
-from base.condition import ConditionError, SetVariable, when
-from llm import mcp as mcp_mod
-from llm.mcp import (
+from bro.base.condition import ConditionError, SetVariable, when
+from bro.llm import mcp as mcp_mod
+from bro.llm.mcp import (
   FunctionTool,
   InProcessMCPServer,
   ToolRegistry,
@@ -515,7 +515,7 @@ class TestRenderText:
       render_text('{{iff a = a}}x{{end}}', hold='automatic')
 
   def test_include_resolves_through_prompts_loader(self, monkeypatch):
-    import prompts
+    from bro import prompts
 
     files = {'x.md': 'spliced {{iff #harness = bro}}B{{eliff #harness = claude}}C{{end}}'}
     monkeypatch.setattr(prompts, 'get_prompt', lambda name: files[name])

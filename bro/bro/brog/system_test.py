@@ -3,10 +3,10 @@ from typing import Any, cast
 
 import pytest
 
-import brog.github
-import brog.system
-from base import credentials
-from brog.system import build_system, default_system
+import bro.brog.github as brog_github
+import bro.brog.system as brog_system
+from bro.base import credentials
+from bro.brog.system import build_system, default_system
 
 _GITHUB_CONFIG = {'backend': 'github', 'token': 'gh-secret', 'repo': 'octo/scratch'}
 
@@ -16,13 +16,13 @@ def _external_backend(config_provider, config, author):
 
 
 def _entry_point(name: str, value: str) -> importlib.metadata.EntryPoint:
-  return importlib.metadata.EntryPoint(name, value, brog.system._BACKEND_ENTRY_POINT_GROUP)
+  return importlib.metadata.EntryPoint(name, value, brog_system._BACKEND_ENTRY_POINT_GROUP)
 
 
 class TestBuildSystem:
   def test_github(self):
     system = build_system(lambda: _GITHUB_CONFIG)
-    assert isinstance(system, brog.github.System)
+    assert isinstance(system, brog_github.System)
     assert system._repo == 'octo/scratch'
     assert system._token() == 'gh-secret'
 
@@ -34,13 +34,13 @@ class TestBuildSystem:
       ]
     )
     system = build_system(lambda: next(configs))
-    assert isinstance(system, brog.github.System)
+    assert isinstance(system, brog_github.System)
     assert system._token() == 't2'
 
   def test_github_repo_derived_from_origin_when_omitted(self, monkeypatch):
-    monkeypatch.setattr(brog.github, 'origin_repo', lambda: 'derived/name')
+    monkeypatch.setattr(brog_github, 'origin_repo', lambda: 'derived/name')
     system = build_system(lambda: {'backend': 'github', 'token': 'gh-secret'})
-    assert isinstance(system, brog.github.System)
+    assert isinstance(system, brog_github.System)
     assert system._repo == 'derived/name'
 
   def test_github_missing_token_rejected(self):
@@ -49,9 +49,9 @@ class TestBuildSystem:
 
   def test_contributed_backend_is_discovered(self, monkeypatch):
     monkeypatch.setattr(
-      brog.system,
+      brog_system,
       '_backend_entry_points',
-      lambda: (_entry_point('external', 'brog.system_test:_external_backend'),),
+      lambda: (_entry_point('external', 'bro.brog.system_test:_external_backend'),),
     )
     config = {'backend': 'external', 'token': 't'}
     system = cast(Any, build_system(lambda: config, author='dev'))
@@ -67,20 +67,20 @@ class TestBuildSystem:
       return ()
 
     monkeypatch.setattr(importlib.metadata, 'entry_points', entry_points)
-    assert brog.system._backend_entry_points() == ()
+    assert brog_system._backend_entry_points() == ()
     assert calls == [{'group': 'bro.brog.backends'}]
 
   def test_absent_backend_has_a_clear_error(self, monkeypatch):
-    monkeypatch.setattr(brog.system, '_backend_entry_points', lambda: ())
+    monkeypatch.setattr(brog_system, '_backend_entry_points', lambda: ())
     with pytest.raises(ValueError, match="unknown brog backend 'flow'; known: github"):
       build_system(lambda: {'backend': 'flow'})
 
   def test_duplicate_contributed_backend_rejected(self, monkeypatch):
     monkeypatch.setattr(
-      brog.system,
+      brog_system,
       '_backend_entry_points',
       lambda: (
-        _entry_point('external', 'brog.system_test:_external_backend'),
+        _entry_point('external', 'bro.brog.system_test:_external_backend'),
         _entry_point('external', 'other.module:factory'),
       ),
     )
@@ -103,9 +103,9 @@ class TestDefaultSystem:
 
     monkeypatch.setattr(credentials, 'get_json', fake_get_json)
     monkeypatch.setattr(
-      brog.system,
+      brog_system,
       '_backend_entry_points',
-      lambda: (_entry_point('external', 'brog.system_test:_external_backend'),),
+      lambda: (_entry_point('external', 'bro.brog.system_test:_external_backend'),),
     )
     return requested
 

@@ -18,10 +18,10 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-from base import spawn
-from base.text_window import DEFAULT_LIMIT, apply_limit, numbered_window
+from bro.base import spawn
+from bro.base.text_window import DEFAULT_LIMIT, apply_limit, numbered_window
 from bro.bros.dev import jobs
-from llm.mcp import Context, Toolset
+from bro.llm.mcp import Context, Toolset
 
 # default wall-clock cap for the shell-out tools (bash, grep). On expiry the whole
 # process group is killed and the tool returns a TIMED OUT result; callers can raise

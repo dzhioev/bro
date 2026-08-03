@@ -15,28 +15,28 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-from base import log
+from bro.base import log
+from bro.broker.brotocol import Message, Tag
+from bro.broker.dispatcher import Broker, Dispatcher, ping_handler
+from bro.broker.runtime import Peer
+from bro.broker.spawn import ChildHandle, LaunchSpec, Spawner
+from bro.broker.transport import Provisioned
+from bro.broker.transports.unix import UnixServerTransport
 from bro.launch.bro_run import describe
 from bro.launch.scope import summoned_credential_scope
 from bro.launch.summon_control import SummonControl, summon_status_file
 from bro.summon import SUMMON
-from broker.brotocol import Message, Tag
-from broker.dispatcher import Broker, Dispatcher, ping_handler
-from broker.runtime import Peer
-from broker.spawn import ChildHandle, LaunchSpec, Spawner
-from broker.transport import Provisioned
-from broker.transports.unix import UnixServerTransport
-from workspace.git import resolve_head, resolve_ref
-from workspace.paths import broker_dir, host_log_dir, project_root, summon_dir
-from workspace.project import project_config
-from workspace.spawn import (
+from bro.workspace.git import resolve_head, resolve_ref
+from bro.workspace.paths import broker_dir, host_log_dir, project_root, summon_dir
+from bro.workspace.project import project_config
+from bro.workspace.spawn import (
   CompositeSpawner,
   DockerLaunchSpec,
   DockerSpawner,
   ProcessLaunchSpec,
   ProcessSpawner,
 )
-from workspace.store import log_scoped_secrets
+from bro.workspace.store import log_scoped_secrets
 
 
 @dataclass(frozen=True)
@@ -168,7 +168,7 @@ def run_root_via_broker(
   channel (`broker request ping '{}'`), and logs the root's own run lifecycle
   (`started`/`completed`) as its parent. While an interactive root owns the
   terminal, host output goes to `var/cw/log/<session>.log` instead of the shared
-  TTY (see `workspace.spawn._HostLogRedirect`); headless runs keep it on stderr.
+  TTY (see `bro.workspace.spawn._HostLogRedirect`); headless runs keep it on stderr.
 
   `session` is the session key — the workspace name, mode-prefixed by the launch
   surface (see `bro/launch/summon_control.py`) — the root's identity in the summon audit and the

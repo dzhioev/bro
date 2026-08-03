@@ -3,7 +3,7 @@
 
 The channel comes from `BROKER_CHANNEL` (`Client.from_env`); with it unset every
 subcommand is inert — a stderr note and exit 0 — so scripts embedded in a peer
-work unchanged where there is no broker. Message output on stdout is the wire
+work unchanged where there is no bro.broker.Message output on stdout is the wire
 JSON, one object per line.
 """
 
@@ -11,9 +11,9 @@ import json
 import sys
 from typing import Any, Optional
 
-import base.args
-from base import log
-from broker.client import CHANNEL_ENV, Client
+import bro.base.args as base_args
+from bro.base import log
+from bro.broker.client import CHANNEL_ENV, Client
 
 __cli_name__ = 'broker'
 
@@ -22,9 +22,9 @@ def _payload(arg: str) -> dict[str, Any]:
   try:
     parsed = json.loads(arg)
   except json.JSONDecodeError as e:
-    raise base.args.ArgumentTypeError(f'payload is not valid JSON: {e}')
+    raise base_args.ArgumentTypeError(f'payload is not valid JSON: {e}')
   if not isinstance(parsed, dict):
-    raise base.args.ArgumentTypeError(f'payload must be a JSON object, got {type(parsed).__name__}')
+    raise base_args.ArgumentTypeError(f'payload must be a JSON object, got {type(parsed).__name__}')
   return parsed
 
 
@@ -67,7 +67,7 @@ def _receive(timeout: Optional[float]) -> int:
 
 
 def main(argv: list[str]) -> Optional[int]:
-  parser = base.args.Parser(description='send and receive broker messages from inside a peer')
+  parser = base_args.Parser(description='send and receive broker messages from inside a peer')
   subparsers = parser.add_subparsers(dest='command')
 
   send_parser = subparsers.add_parser('send', help='send a fire-and-forget message')

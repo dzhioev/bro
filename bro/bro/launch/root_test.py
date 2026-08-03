@@ -3,8 +3,8 @@ import sys
 import bro.launch.root
 import bro.launch.spawn
 import bro.launch.summon_control
-import workspace.docker
-import workspace.spawn
+import bro.workspace.docker as workspace_docker
+import bro.workspace.spawn as workspace_spawn
 
 
 class _FakeProc:
@@ -31,7 +31,7 @@ class TestRunInContainerInjection:
       return _FakeProc(returncode=7)
 
     monkeypatch.setattr(bro.launch.root.subprocess, 'run', fake_run)
-    launch = workspace.docker.Launch(
+    launch = workspace_docker.Launch(
       name='ws',
       command=['claude'],
       env={},
@@ -57,7 +57,7 @@ class TestRunInContainerInjection:
       return _FakeProc(returncode=0)
 
     monkeypatch.setattr(bro.launch.root.subprocess, 'run', fake_run)
-    launch = workspace.docker.Launch(
+    launch = workspace_docker.Launch(
       name='ws',
       command=['bro', 'run'],
       env={},
@@ -89,7 +89,7 @@ class TestRunInContainerDrop:
         removed.append(self.name)
 
     monkeypatch.setattr(bro.launch.root, 'ContainerWorkspace', _FakeWorkspace)
-    launch = workspace.docker.Launch(
+    launch = workspace_docker.Launch(
       name='ws',
       command=['bro', 'run'],
       env={},
@@ -121,7 +121,7 @@ class TestRunInContainerBrokerRoute:
       return 5
 
     monkeypatch.setattr(bro.launch.root, '_run_root_via_broker', fake_root)
-    launch = workspace.docker.Launch(
+    launch = workspace_docker.Launch(
       name='ws',
       command=['claude'],
       env={},
@@ -156,7 +156,7 @@ class TestRunRootViaBroker:
       return 3
 
     monkeypatch.setattr(bro.launch.spawn, 'run_root_via_broker', fake_run_root)
-    launch = workspace.docker.Launch(
+    launch = workspace_docker.Launch(
       name='ws',
       command=['claude', '--verbose'],
       env={'CW_BASE_REF': 'deadbeef'},
@@ -175,8 +175,8 @@ class TestRunRootViaBroker:
     # session keeps its own summon state files
     assert captured['session'] == 'c:ws'
     assert captured['may_summon'] == {'devoops'}
-    assert captured['launch'] == workspace.spawn.DockerLaunchSpec(
-      workspace.docker.Launch(
+    assert captured['launch'] == workspace_spawn.DockerLaunchSpec(
+      workspace_docker.Launch(
         name='ws',
         command=['claude', '--verbose'],
         env={

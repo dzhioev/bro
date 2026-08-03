@@ -2,7 +2,7 @@
 
 from typing import Optional
 
-from base import credentials, log
+from bro.base import credentials, log
 
 
 def _load_anthropic_key() -> Optional[str]:

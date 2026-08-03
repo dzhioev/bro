@@ -1,3 +1,3 @@
-from brog.system import System
+from bro.brog.system import System
 
 __all__ = ['System']

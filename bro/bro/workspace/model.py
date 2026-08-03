@@ -5,9 +5,9 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional
 
-from workspace.docker import image_tag
-from workspace.git import git_run
-from workspace.paths import containers_dir, host_log_dir, session_end_dir, worktrees_dir
+from bro.workspace.docker import image_tag
+from bro.workspace.git import git_run
+from bro.workspace.paths import containers_dir, host_log_dir, session_end_dir, worktrees_dir
 
 _CONTAINER_PREFIX = 'c:'
 

@@ -10,6 +10,6 @@ banner. It knows nothing about any harness or agent framework — modules import
 only `base`, `broker` (module-level only in `spawn`, imported past the
 launch-path gates in `containers`), and the stdlib.
 
-Consumers import submodules directly (`from workspace.docker import Launch`);
+Consumers import submodules directly (`from bro.workspace.docker import Launch`);
 intra-package code does the same — there is no re-export hub.
 """

@@ -2,7 +2,7 @@ import os
 import secrets
 from pathlib import Path
 
-from workspace.git import git_out
+from bro.workspace.git import git_out
 
 
 def venv_env(venv: Path) -> dict[str, str]:
@@ -17,7 +17,7 @@ def project_root() -> Path:
 
   resolved through the shared git dir, so every linked worktree of a repo maps to
   its main checkout — one workspace namespace per repo. callers that mean the tree
-  their own sources sit in want `base.source_root` instead.
+  their own sources sit in want `bro.base.source_root` instead.
   """
   return Path(git_out('rev-parse', '--git-common-dir')).resolve().parent
 

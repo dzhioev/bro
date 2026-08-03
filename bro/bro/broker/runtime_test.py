@@ -6,11 +6,11 @@ from dataclasses import dataclass
 
 import pytest
 
-from broker.brotocol import Message
-from broker.runtime import Peer, Runtime
-from broker.spawn import ChildHandle, LaunchSpec, Spawner
-from broker.transport import Provisioned
-from broker.transports.unix import UnixServerTransport
+from bro.broker.brotocol import Message
+from bro.broker.runtime import Peer, Runtime
+from bro.broker.spawn import ChildHandle, LaunchSpec, Spawner
+from bro.broker.transport import Provisioned
+from bro.broker.transports.unix import UnixServerTransport
 
 TIMEOUT = 5.0
 _RING_BYTES = 65536
@@ -145,8 +145,8 @@ def _sock_files(control_dir: str) -> list[str]:
 
 _CHILD_COMPLETE = """
 import os
-from broker.transport import connect
-from broker.brotocol import Message
+from bro.broker.transport import connect
+from bro.broker.brotocol import Message
 client = connect(os.environ['BROKER_CHANNEL'])
 client.send(Message(type='started', payload={'trail_id': 't1'}))
 client.send(Message(type='completed', payload={'result': 'ok', 'end_reason': 'ok'}))
@@ -155,8 +155,8 @@ client.close()
 
 _CHILD_FAIL = """
 import os, sys
-from broker.transport import connect
-from broker.brotocol import Message
+from bro.broker.transport import connect
+from bro.broker.brotocol import Message
 client = connect(os.environ['BROKER_CHANNEL'])
 client.send(Message(type='started', payload={}))
 sys.stderr.write('boom-traceback')
@@ -167,8 +167,8 @@ sys.exit(3)
 
 _CHILD_HANG = """
 import os, time
-from broker.transport import connect
-from broker.brotocol import Message
+from bro.broker.transport import connect
+from bro.broker.brotocol import Message
 client = connect(os.environ['BROKER_CHANNEL'])
 client.send(Message(type='started', payload={}))
 time.sleep(3600)
@@ -176,8 +176,8 @@ time.sleep(3600)
 
 _CHILD_ECHO = """
 import os
-from broker.transport import connect
-from broker.brotocol import Message
+from bro.broker.transport import connect
+from bro.broker.brotocol import Message
 client = connect(os.environ['BROKER_CHANNEL'])
 client.send(Message(type='started', payload={}))
 request = client.receive(5.0)

@@ -3,7 +3,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-from base import log
+from bro.base import log
 
 
 def ensure_host_worktree(worktree: Path, branch: str, base_ref: Optional[str] = None) -> bool:

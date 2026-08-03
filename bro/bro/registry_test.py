@@ -6,9 +6,9 @@ import pytest
 
 import bro.registry
 from bro.bros.bro import Bro
+from bro.llm.llm import LLM, LLMSpec
+from bro.llm.mcp import MCPServer
 from bro.registry import _REGISTRY, create_bro, get_class, list_classes, register
-from llm.llm import LLM, LLMSpec
-from llm.mcp import MCPServer
 
 
 class MockLLM(LLM):

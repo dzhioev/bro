@@ -19,8 +19,8 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
+from bro.monitor import health
 from bro.summon import STATUS_ENV
-from monitor import health
 
 # how long the last terminal outcome stays on the status line; after that the
 # default status bar comes back

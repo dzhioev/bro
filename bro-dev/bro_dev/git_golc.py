@@ -12,7 +12,7 @@ cache-read lives in the full footer, not here). Commits with no parseable footer
 render `—`.
 
 Repo-local — wired by setup/provision_repo.sh via `git config --local alias.golc`.
-The footer format is owned by `llm.usage`; the small parser here is a
+The footer format is owned by `bro.llm.usage`; the small parser here is a
 deliberate dependency-free duplicate so `git golc` works without the project
 venv active.
 """
@@ -26,7 +26,7 @@ import subprocess
 import sys
 from typing import Optional
 
-# footer parser (format owned by llm.usage); the agents part is a
+# footer parser (format owned by bro.llm.usage); the agents part is a
 # surface identity list — 'Claude Code <version>' or a bro name like 'ppp-dev'
 _FOOTER_RE = re.compile(
   r'^>\s*created with\s+(?P<agents>.+?)\s*\|\s*(?P<tokens>.+?)\s*$',

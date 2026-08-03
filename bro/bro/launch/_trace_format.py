@@ -11,7 +11,7 @@ TUI sits inside a narrower bubble column) and so stays on the call site.
 import json
 from typing import Any
 
-from llm.mcp import canonical_name
+from bro.llm.mcp import canonical_name
 
 
 def oneline(text: str) -> str:

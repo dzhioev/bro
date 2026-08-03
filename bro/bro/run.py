@@ -1,7 +1,7 @@
 import asyncio
 from typing import Optional
 
-import base.args
+import bro.base.args as base_args
 
 __cli_name__ = 'bro'
 
@@ -42,7 +42,7 @@ def main(argv: list[str]) -> Optional[int]:
 
     return chat_main(launcher[1], program=['bro', 'chat'])
 
-  parser = base.args.Parser(description='inspect and launch bro agents')
+  parser = base_args.Parser(description='inspect and launch bro agents')
   subparser = parser.add_subparsers(dest='command')
   subparser.add_parser('run', help='run a bro on a single input')
   subparser.add_parser('chat', help='open an interactive session with a bro')

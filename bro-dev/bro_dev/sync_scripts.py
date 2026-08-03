@@ -1,81 +1,106 @@
 #!/usr/bin/env python
-"""regenerate the console-script tables in pyproject.toml and the venv entrypoints bridge.
+"""regenerate the console-script table and committed argv bridges.
 
-scans every .py file for a callable, non-async top-level `main`. each such file
-produces a canonical script entry named after its full module path with the stem
-kebab-cased (e.g. apps/create_report.py -> apps.create-report). a module may
-declare __cli_name__ = 'custom-name' to register an additional alias.
+Scans every Python module in the current three-source layout for a callable,
+non-async top-level `main`. Each such file produces a canonical script name from
+its import path with the stem kebab-cased (for example,
+`bro/bro/cw/cli.py` -> `bro.cw.cli`). A module may declare
+`__cli_name__ = 'custom-name'` to register an additional bare alias.
 
-CLIs expose a pure `def main(argv)` (no sys.argv default). a console script can't
-call that directly -- the generated launcher invokes its entry point with no args
--- so each script's [project.scripts] target points at a generated `_entrypoints`
-shim whose zero-arg functions feed sys.argv to the CLI's main:
-
-    gmail = "_entrypoints:gmail"   ->   def gmail(): return _run('gmail')
-
-`_entrypoints.py` is written into the venv's site-packages (gitignored, since all
-of .venv is) and regenerated on every provision by `setup/provision_repo.sh` -- the
-provisioner behind every repo's root setup.sh, reached on every launch surface
-(host setup, cw's host-mode worktree launch, the container entrypoint). So it is
-NOT committed, unlike the pyproject tables.
-That shim is the single place the process reads the global argv.
-
-modes:
-  --pyproject    rewrite [project.scripts] + py-modules in pyproject.toml (committed)
-  --entrypoints  write _entrypoints.py into the venv site-packages (ephemeral)
-  --check        verify pyproject.toml is up to date; exit 1 if stale (no write)
-  (no flags)     run --pyproject and --entrypoints
-
-the provisioner invokes `python -m dev.sync_scripts --entrypoints` (module path, not the
-`sync-scripts` console script) -- the console script routes through the bridge,
-which doesn't exist yet on a fresh venv. main keeps its own `__main__` guard for
-the same reason.
+Console-script launchers invoke their target with no arguments, while repo CLIs
+expose pure `main(argv)` functions. Each distribution therefore carries a
+committed `_entrypoints.py` bridge whose zero-argument functions pass `sys.argv`
+to the selected module. `sync-scripts` updates those bridges together with the
+root `[project.scripts]` table; `--check` verifies both artifacts.
 """
 
 import ast
 import logging
 import os
 import re
+import subprocess
 import sys
-import sysconfig
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from base.args import Parser
-from base.source_root import SOURCE_ROOT
+from bro.base.args import Parser
 
 __cli_name__ = 'sync-scripts'
 
-ROOT = SOURCE_ROOT
-PYPROJECT = ROOT / 'pyproject.toml'
 SKIP_DIRS = {'.venv', 'build', '.claude', 'setup', '__pycache__', 'var'}
 
 
-def _iter_py_files():
-  # os.walk with in-place pruning: rglob would physically descend into the
-  # skipped trees before any filter could discard them — under the main repo
-  # that means walking every worktree venv in var/ (~10s per --check)
-  collected = []
-  for directory, dir_names, file_names in os.walk(ROOT):
-    dir_names[:] = [d for d in dir_names if d not in SKIP_DIRS and not d.endswith('.egg-info')]
-    rel_dir = Path(directory).relative_to(ROOT)
+@dataclass(frozen=True)
+class Source:
+  directory: Path
+  bridge_module: str
+  bridge_path: Path
+  excluded_directories: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
+class Entry:
+  module: str
+  canonical: str
+  explicit: Optional[str]
+  bridge_module: str
+
+
+def _project_root() -> Path:
+  result = subprocess.run(
+    ['git', 'rev-parse', '--show-toplevel'],
+    capture_output=True,
+    text=True,
+    check=True,
+  )
+  return Path(result.stdout.strip())
+
+
+def _sources(root: Path) -> tuple[Source, ...]:
+  return (
+    Source(
+      root,
+      '_entrypoints',
+      root / '_entrypoints.py',
+      excluded_directories=frozenset({'bro', 'bro-dev'}),
+    ),
+    Source(root / 'bro', 'bro._entrypoints', root / 'bro' / 'bro' / '_entrypoints.py'),
+    Source(
+      root / 'bro-dev',
+      'bro_dev._entrypoints',
+      root / 'bro-dev' / 'bro_dev' / '_entrypoints.py',
+    ),
+  )
+
+
+def _iter_py_files(source: Source):
+  # os.walk with in-place pruning avoids descending into every worktree venv under var/.
+  collected: list[Path] = []
+  for directory, directory_names, file_names in os.walk(source.directory):
+    directory_names[:] = [
+      name
+      for name in directory_names
+      if name not in SKIP_DIRS
+      and name not in source.excluded_directories
+      and not name.endswith('.egg-info')
+    ]
+    relative_directory = Path(directory).relative_to(source.directory)
     for file_name in file_names:
       if not file_name.endswith('.py'):
         continue
-      if file_name == '__init__.py':
+      if file_name == '__init__.py' or file_name == 'test.py' or file_name.endswith('_test.py'):
         continue
-      if file_name == 'test.py' or file_name.endswith('_test.py'):
-        continue
-      collected.append(rel_dir / file_name)
+      collected.append(relative_directory / file_name)
   yield from sorted(collected)
 
 
-def _module_name(rel: Path) -> str:
-  return '.'.join(rel.with_suffix('').parts)
+def _module_name(relative_path: Path) -> str:
+  return '.'.join(relative_path.with_suffix('').parts)
 
 
-def _canonical(rel: Path) -> str:
-  parts = [p.replace('_', '-') for p in rel.with_suffix('').parts]
+def _canonical(relative_path: Path) -> str:
+  parts = [part.replace('_', '-') for part in relative_path.with_suffix('').parts]
   return '.'.join(parts)
 
 
@@ -94,7 +119,7 @@ def _has_sync_main(tree: ast.Module) -> bool:
   return any(isinstance(node, ast.FunctionDef) and node.name == 'main' for node in tree.body)
 
 
-def _cli_name(tree: ast.Module, mod_name: str) -> Optional[str]:
+def _cli_name(tree: ast.Module, module_name: str) -> Optional[str]:
   for node in tree.body:
     if not isinstance(node, ast.Assign):
       continue
@@ -104,74 +129,75 @@ def _cli_name(tree: ast.Module, mod_name: str) -> Optional[str]:
       continue
     if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
       return node.value.value
-    raise ValueError(f'{mod_name}: __cli_name__ must be a string literal')
+    raise ValueError(f'{module_name}: __cli_name__ must be a string literal')
   return None
 
 
-def _discover():
-  entries = []
-  top_level_modules = []
-  for rel in _iter_py_files():
-    mod_name = _module_name(rel)
-    if len(rel.parts) == 1:
-      top_level_modules.append(mod_name)
-    tree = _parse_module(ROOT / rel)
-    if tree is None or not _has_sync_main(tree):
-      continue
-    entries.append(
-      {
-        'module': mod_name,
-        'canonical': _canonical(rel),
-        'explicit': _cli_name(tree, mod_name),
-      }
-    )
+def _discover(root: Path) -> tuple[list[Entry], list[str]]:
+  entries: list[Entry] = []
+  top_level_modules: list[str] = []
+  for source in _sources(root):
+    for relative_path in _iter_py_files(source):
+      module_name = _module_name(relative_path)
+      if source.directory == root and len(relative_path.parts) == 1:
+        top_level_modules.append(module_name)
+      tree = _parse_module(source.directory / relative_path)
+      if tree is None or not _has_sync_main(tree):
+        continue
+      entries.append(
+        Entry(
+          module=module_name,
+          canonical=_canonical(relative_path),
+          explicit=_cli_name(tree, module_name),
+          bridge_module=source.bridge_module,
+        )
+      )
   return entries, top_level_modules
 
 
-def _scripts_and_modules(entries: list[dict]) -> tuple[dict[str, str], dict[str, str]]:
-  """returns (name -> "_entrypoints:attr" target, name -> source module)."""
+def _scripts_and_modules(entries: list[Entry]) -> tuple[dict[str, str], dict[str, str]]:
   scripts: dict[str, str] = {}
-  name_module: dict[str, str] = {}
+  name_modules: dict[str, str] = {}
 
-  def add(name: str, module: str) -> None:
-    target = f'_entrypoints:{_attribute(module)}'
+  def add(name: str, entry: Entry) -> None:
+    target = f'{entry.bridge_module}:{_attribute(entry.module)}'
     previous = scripts.get(name)
     if previous is not None and previous != target:
       raise ValueError(f'script name collision: {name!r} -> {previous} vs {target}')
     scripts[name] = target
-    name_module[name] = module
+    name_modules[name] = entry.module
 
-  for e in entries:
-    add(e['canonical'], e['module'])
-    if e['explicit'] is not None and e['explicit'] != e['canonical']:
-      add(e['explicit'], e['module'])
-  return scripts, name_module
+  for entry in entries:
+    add(entry.canonical, entry)
+    if entry.explicit is not None and entry.explicit != entry.canonical:
+      add(entry.explicit, entry)
+  return scripts, name_modules
 
 
 def _group_entries(
-  scripts: dict[str, str], name_module: dict[str, str]
+  scripts: dict[str, str], name_modules: dict[str, str]
 ) -> list[tuple[str, list[tuple[str, str]]]]:
-  by_target: dict[str, list[str]] = {}
+  targets: dict[str, list[str]] = {}
   for name, target in scripts.items():
-    by_target.setdefault(target, []).append(name)
+    targets.setdefault(target, []).append(name)
   groups: dict[Optional[str], list[tuple[str, str]]] = {}
-  for target, names in by_target.items():
-    module = name_module[names[0]]  # canonical + alias for a target share the module
-    top = module.split('.', 1)[0] if '.' in module else None
-    names.sort(key=lambda n: (len(n.split('.')) == 1, n))
+  for target, names in targets.items():
+    module = name_modules[names[0]]
+    top_level = module.split('.', 1)[0] if '.' in module else None
+    names.sort(key=lambda name: (len(name.split('.')) == 1, name))
     for name in names:
-      groups.setdefault(top, []).append((name, target))
+      groups.setdefault(top_level, []).append((name, target))
   ordered: list[tuple[str, list[tuple[str, str]]]] = []
-  for key in sorted(k for k in groups if k is not None):
+  for key in sorted(key for key in groups if key is not None):
     ordered.append((key, sorted(groups[key])))
   if None in groups:
     ordered.append(('top-level', sorted(groups[None])))
   return ordered
 
 
-def _render_scripts(scripts: dict[str, str], name_module: dict[str, str]) -> str:
+def _render_scripts(scripts: dict[str, str], name_modules: dict[str, str]) -> str:
   lines: list[str] = []
-  for group, pairs in _group_entries(scripts, name_module):
+  for group, pairs in _group_entries(scripts, name_modules):
     lines.append(f'# {group}')
     for name, target in pairs:
       lines.append(f'"{name}" = "{target}"')
@@ -180,59 +206,49 @@ def _render_scripts(scripts: dict[str, str], name_module: dict[str, str]) -> str
 
 def _render_py_modules(modules: list[str]) -> str:
   lines = ['py-modules = [']
-  for m in sorted(modules):
-    lines.append(f'  "{m}",')
+  for module in sorted(modules):
+    lines.append(f'  "{module}",')
   lines.append(']')
   return '\n'.join(lines)
 
 
 def _replace_scripts(text: str, body: str) -> str:
-  pat = re.compile(r'(?ms)^(\[project\.scripts\][ \t]*\n)(.*?)(?=^\[|\Z)')
-  if pat.search(text) is None:
+  pattern = re.compile(r'(?ms)^(\[project\.scripts\][ \t]*\n)(.*?)(?=^\[|\Z)')
+  if pattern.search(text) is None:
     raise ValueError('[project.scripts] not found')
-  return pat.sub(lambda m: m.group(1) + body + '\n\n', text)
+  return pattern.sub(lambda match: match.group(1) + body + '\n\n', text)
 
 
 def _replace_py_modules(text: str, block: str) -> str:
-  pat = re.compile(r'py-modules\s*=\s*\[[^\]]*\]')
-  if pat.search(text) is None:
+  pattern = re.compile(r'py-modules\s*=\s*\[[^\]]*\]')
+  if pattern.search(text) is None:
     raise ValueError('py-modules not found')
-  return pat.sub(block, text)
+  return pattern.sub(block, text)
 
 
-def _render_pyproject(text: str) -> str:
-  entries, top_level = _discover()
-  scripts, name_module = _scripts_and_modules(entries)
-  text = _replace_scripts(text, _render_scripts(scripts, name_module))
-  text = _replace_py_modules(text, _render_py_modules(top_level))
-  return text
+def _render_pyproject(root: Path, text: str, entries: list[Entry], modules: list[str]) -> str:
+  del root
+  scripts, name_modules = _scripts_and_modules(entries)
+  text = _replace_scripts(text, _render_scripts(scripts, name_modules))
+  return _replace_py_modules(text, _render_py_modules(modules))
 
 
-def sync_pyproject() -> None:
-  PYPROJECT.write_text(_render_pyproject(PYPROJECT.read_text()))
-  logging.info('updated %s', PYPROJECT.name)
-
-
-def check_pyproject() -> bool:
-  current = PYPROJECT.read_text()
-  return _render_pyproject(current) == current
-
-
-def _render_entrypoints(entries: list[dict]) -> str:
-  by_attribute: dict[str, str] = {}
-  for e in entries:
-    attribute = _attribute(e['module'])
-    existing = by_attribute.get(attribute)
-    if existing is not None and existing != e['module']:
+def _render_entrypoints(entries: list[Entry], bridge_module: str) -> str:
+  attributes: dict[str, str] = {}
+  for entry in entries:
+    if entry.bridge_module != bridge_module:
+      continue
+    attribute = _attribute(entry.module)
+    existing = attributes.get(attribute)
+    if existing is not None and existing != entry.module:
       raise ValueError(
-        f'entrypoint attr collision: {attribute!r} from {existing} and {e["module"]}'
+        f'entrypoint attribute collision: {attribute!r} from {existing} and {entry.module}'
       )
-    by_attribute[attribute] = e['module']
+    attributes[attribute] = entry.module
   lines = [
-    '# generated by `sync-scripts --entrypoints`; do not edit.',
-    '# lives in the venv site-packages (gitignored), regenerated on every venv build.',
-    '# console scripts import these zero-arg shims, which feed sys.argv to each',
-    "# CLI's main(argv) -- the single place the process reads the global argv.",
+    '# generated by `sync-scripts`; do not edit.',
+    '# console scripts import these zero-argument shims, which feed sys.argv to',
+    "# each CLI's main(argv) -- the single place the process reads the global argv.",
     'import importlib',
     'import sys',
     '',
@@ -240,42 +256,68 @@ def _render_entrypoints(entries: list[dict]) -> str:
     'def _run(module):',
     '  return importlib.import_module(module).main(sys.argv)',
   ]
-  for attribute in sorted(by_attribute):
-    lines += ['', '', f'def {attribute}():', f'  return _run({by_attribute[attribute]!r})']
+  for attribute in sorted(attributes):
+    lines += ['', '', f'def {attribute}():', f'  return _run({attributes[attribute]!r})']
   return '\n'.join(lines) + '\n'
 
 
-def write_entrypoints() -> None:
-  entries, _ = _discover()
-  target = Path(sysconfig.get_paths()['purelib']) / '_entrypoints.py'
-  target.write_text(_render_entrypoints(entries))
-  logging.info('wrote %s (%d entrypoints)', target, len(entries))
+def _rendered_artifacts(root: Path) -> tuple[str, dict[Path, str]]:
+  entries, modules = _discover(root)
+  pyproject = root / 'pyproject.toml'
+  rendered_pyproject = _render_pyproject(root, pyproject.read_text(), entries, modules)
+  bridges = {
+    source.bridge_path: _render_entrypoints(entries, source.bridge_module)
+    for source in _sources(root)
+  }
+  return rendered_pyproject, bridges
+
+
+def sync_pyproject(root: Path) -> None:
+  rendered, _ = _rendered_artifacts(root)
+  path = root / 'pyproject.toml'
+  path.write_text(rendered)
+  logging.info('updated %s', path)
+
+
+def sync_entrypoints(root: Path) -> None:
+  _, bridges = _rendered_artifacts(root)
+  for path, rendered in bridges.items():
+    path.write_text(rendered)
+    logging.info('updated %s', path)
+
+
+def check(root: Path) -> bool:
+  rendered_pyproject, bridges = _rendered_artifacts(root)
+  pyproject_matches = (root / 'pyproject.toml').read_text() == rendered_pyproject
+  bridges_match = all(
+    path.is_file() and path.read_text() == rendered for path, rendered in bridges.items()
+  )
+  return pyproject_matches and bridges_match
 
 
 def main(argv: list[str]) -> Optional[int]:
-  parser = Parser(
-    description='regenerate the console-script tables and/or the venv entrypoints bridge'
+  parser = Parser(description='regenerate console-script metadata and committed argv bridges')
+  parser.add_argument(
+    '--pyproject', action='store_true', help='rewrite [project.scripts] and py-modules'
   )
   parser.add_argument(
-    '--pyproject', action='store_true', help='rewrite [project.scripts] + py-modules'
+    '--entrypoints', action='store_true', help='rewrite the committed _entrypoints.py modules'
   )
   parser.add_argument(
-    '--entrypoints', action='store_true', help='write _entrypoints.py into the venv site-packages'
-  )
-  parser.add_argument(
-    '--check', action='store_true', help='verify pyproject.toml is up to date; exit 1 if stale'
+    '--check', action='store_true', help='verify all generated artifacts are up to date'
   )
   args = parser.parse(argv)
-  if args['check']:
-    if not check_pyproject():
-      print('pyproject.toml is stale; run `sync-scripts --pyproject` and commit', file=sys.stderr)
+  root = _project_root()
+  if args['check'] is True:
+    if not check(root):
+      print('console-script artifacts are stale; run `sync-scripts` and commit', file=sys.stderr)
       return 1
     return 0
   both = not args['pyproject'] and not args['entrypoints']
-  if args['pyproject'] or both:
-    sync_pyproject()
-  if args['entrypoints'] or both:
-    write_entrypoints()
+  if args['pyproject'] is True or both:
+    sync_pyproject(root)
+  if args['entrypoints'] is True or both:
+    sync_entrypoints(root)
   return 0
 
 

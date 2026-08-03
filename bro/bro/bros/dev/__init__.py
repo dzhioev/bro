@@ -1,5 +1,6 @@
-import brog.mcp
-from base.condition import when
+import bro.brog.mcp as brog_mcp
+from bro import brog
+from bro.base.condition import when
 from bro.bro import feature
 
 # a self-reference (resolved through sys.modules mid-initialization) plus the
@@ -9,7 +10,7 @@ from bro.bros import dev
 from bro.bros.bro import Bro
 from bro.bros.dev import mcp
 from bro.datasources import references
-from llm.mcp import harness
+from bro.llm.mcp import harness
 
 SYSTEM_PROMPT = """\
 You are a software developer with tools to read, search, and edit files and run
@@ -41,6 +42,6 @@ class Dev(Bro):
   # still launches a plain developer.
   features = {'brog': ('brog',)}
   # the dev toolset duplicates the claude harness's built-in file/shell tools
-  mcp_servers = [when(harness == 'bro', dev.mcp), when(feature('brog'), brog.mcp)]
+  mcp_servers = [when(harness == 'bro', dev.mcp), when(feature('brog'), brog_mcp)]
   data_sources = [references.dev_style]
   system_prompt = SYSTEM_PROMPT

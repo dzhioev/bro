@@ -7,9 +7,9 @@ from typing import TYPE_CHECKING, Any, Optional, Self
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-import llm.mcp
-from base import credentials
-from base.text_window import window
+import bro.llm.mcp as llm_mcp
+from bro.base import credentials
+from bro.base.text_window import window
 from bro.procedures import collect_markdown, parse_frontmatter
 
 if TYPE_CHECKING:
@@ -147,8 +147,8 @@ def _render_script_call(
   script: Script,
   arguments: dict[str, Any],
   *,
-  harness: llm.mcp.Harness,
-  wire: llm.mcp.Wire,
+  harness: llm_mcp.Harness,
+  wire: llm_mcp.Wire,
   offset: int = 0,
 ) -> str:
   body = bro.get_script_body(script.name, harness=harness, wire=wire)
@@ -198,11 +198,11 @@ def _interpret(
   command: str,
   scripts: list[Script],
   bro: 'BaseBro',
-  harness: llm.mcp.Harness,
-  wire: llm.mcp.Wire,
+  harness: llm_mcp.Harness,
+  wire: llm_mcp.Wire,
 ) -> dict[str, Any] | str:
-  from llm.mu import JSON, mu
-  from prompts import get_prompt
+  from bro.llm.mu import JSON, mu
+  from bro.prompts import get_prompt
 
   request = {'command': command, 'scripts': _dispatcher_roster(scripts)}
   interpretation = mu(
@@ -220,19 +220,19 @@ def _interpret(
   return f'script: {_canonical_name(script)}\n\n{rendered}'
 
 
-class ScriptTool(llm.mcp.Tool):
+class ScriptTool(llm_mcp.Tool):
   def __init__(
     self,
     bro: 'BaseBro',
     script: Script,
     *,
-    harness: llm.mcp.Harness,
-    wire: llm.mcp.Wire,
+    harness: llm_mcp.Harness,
+    wire: llm_mcp.Wire,
   ):
     self._bro = bro
     self._script = script
-    self._harness: llm.mcp.Harness = harness
-    self._wire: llm.mcp.Wire = wire
+    self._harness: llm_mcp.Harness = harness
+    self._wire: llm_mcp.Wire = wire
     properties: dict[str, dict[str, Any]] = {
       parameter.name: {'type': 'string', 'description': parameter.description}
       for parameter in script.parameters
@@ -285,7 +285,7 @@ class ScriptTool(llm.mcp.Tool):
     )
 
 
-class SkillTool(llm.mcp.Tool):
+class SkillTool(llm_mcp.Tool):
   @property
   def name(self) -> str:
     return SKILL_TOOL_NAME
@@ -317,19 +317,19 @@ class SkillTool(llm.mcp.Tool):
     return ''
 
 
-class DispatcherTool(llm.mcp.Tool):
+class DispatcherTool(llm_mcp.Tool):
   def __init__(
     self,
     bro: 'BaseBro',
     scripts: list[Script],
     *,
-    harness: llm.mcp.Harness,
-    wire: llm.mcp.Wire,
+    harness: llm_mcp.Harness,
+    wire: llm_mcp.Wire,
   ):
     self._bro = bro
     self._scripts = scripts
-    self._harness: llm.mcp.Harness = harness
-    self._wire: llm.mcp.Wire = wire
+    self._harness: llm_mcp.Harness = harness
+    self._wire: llm_mcp.Wire = wire
 
   @property
   def name(self) -> str:
@@ -367,16 +367,16 @@ class DispatcherTool(llm.mcp.Tool):
 
 
 def build_server(
-  bro: 'BaseBro', *, harness: llm.mcp.Harness, wire: llm.mcp.Wire
-) -> llm.mcp.MCPServer:
+  bro: 'BaseBro', *, harness: llm_mcp.Harness, wire: llm_mcp.Wire
+) -> llm_mcp.MCPServer:
   scripts = [load_script(name, path) for name, path in bro.scripts.items()]
-  tools: list[llm.mcp.Tool] = [
+  tools: list[llm_mcp.Tool] = [
     ScriptTool(bro, script, harness=harness, wire=wire) for script in scripts
   ]
   if len(scripts) > 0 and dispatcher_available():
     tools.append(DispatcherTool(bro, scripts, harness=harness, wire=wire))
   if harness == 'bro':
     tools.append(SkillTool())
-  server = llm.mcp.InProcessMCPServer(NAMESPACE, tools)
+  server = llm_mcp.InProcessMCPServer(NAMESPACE, tools)
   server.tool_universe = tuple(tool.name for tool in tools)
   return server

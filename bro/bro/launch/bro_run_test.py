@@ -1,6 +1,6 @@
 import bro.launch.bro_run
 from bro.launch.identity import bro_git_identity_env
-from workspace.store import ScopedSecrets
+from bro.workspace.store import ScopedSecrets
 
 _SCOPED = ScopedSecrets(required={'github', 'trails'}, optional={'openai'}, docker_sock=False)
 

@@ -6,14 +6,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import llm.llms.chat_gpt
-import llm.llms.echo
+import bro.llm.llms.chat_gpt as llm_llms_chat_gpt
+import bro.llm.llms.echo as llm_llms_echo
 from bro.bros.bro import Bro
 from bro.launch.call import TextRenderer, call_text, chat_main, main
 from bro.launch.identity import bro_git_identity_env
-from llm.llm import LLM, LLMSpec
-from llm.mcp import MCPServer
-from llm.observer import NullObserver, Observer
+from bro.llm.llm import LLM, LLMSpec
+from bro.llm.mcp import MCPServer
+from bro.llm.observer import NullObserver, Observer
 
 
 @pytest.fixture(autouse=True)
@@ -41,7 +41,7 @@ class RecordBro(Bro):
   description = 'records inputs'
   # no fast mode on the echo spec: call's implied fast falls back to the plain
   # spec, so an in-place run resolves through the patchable create_bro path
-  llm_spec = llm.llms.echo.LLMSpec()
+  llm_spec = llm_llms_echo.LLMSpec()
 
   def __init__(self, response: str = 'reply'):
     super().__init__(system_prompt='record')
@@ -92,7 +92,7 @@ async def test_text_drives_send_until_eof(capsys):
 @pytest.mark.asyncio
 async def test_text_emits_banner_before_first_reply(capsys, monkeypatch):
   monkeypatch.setattr(
-    'workspace.banner.render_banner', lambda llm=False, bro=None: f'BANNER[{bro}]'
+    'bro.workspace.banner.render_banner', lambda llm=False, bro=None: f'BANNER[{bro}]'
   )
   bro = RecordBro(response='reply')
   await call_text(
@@ -203,7 +203,7 @@ class _FastlessSpec(LLMSpec):
 class _ChatBro(Bro):
   name = 'record'
   description = 'records inputs'
-  llm_spec = llm.llms.chat_gpt.LLMSpec(model='gpt-5.4-mini')
+  llm_spec = llm_llms_chat_gpt.LLMSpec(model='gpt-5.4-mini')
 
   def __init__(self):
     super().__init__(system_prompt='record')
@@ -249,11 +249,11 @@ def test_default_invokes_spec_fast(monkeypatch):
   assert rc is None
   assert len(built) == 1
   spec = built[0].llm_spec
-  assert isinstance(spec, llm.llms.chat_gpt.LLMSpec)
+  assert isinstance(spec, llm_llms_chat_gpt.LLMSpec)
   assert spec.service_tier == 'priority'
   # class default untouched — fast() returns a fresh spec
   default = _ChatBro.llm_spec
-  assert isinstance(default, llm.llms.chat_gpt.LLMSpec)
+  assert isinstance(default, llm_llms_chat_gpt.LLMSpec)
   assert default.service_tier is None
 
 
@@ -296,7 +296,7 @@ def test_bro_chat_default_builds_plain_spec(monkeypatch):
   assert rc is None
   assert len(built) == 1
   spec = built[0].llm_spec
-  assert isinstance(spec, llm.llms.chat_gpt.LLMSpec)
+  assert isinstance(spec, llm_llms_chat_gpt.LLMSpec)
   assert spec.service_tier is None
 
 
@@ -315,7 +315,7 @@ def test_bro_chat_fast_flag_invokes_spec_fast(monkeypatch):
   assert rc is None
   assert len(built) == 1
   spec = built[0].llm_spec
-  assert isinstance(spec, llm.llms.chat_gpt.LLMSpec)
+  assert isinstance(spec, llm_llms_chat_gpt.LLMSpec)
   assert spec.service_tier == 'priority'
 
 
@@ -437,7 +437,7 @@ def test_effort_flag_overrides_spec_effort(monkeypatch):
   assert rc is None
   assert len(built) == 1
   spec = built[0].llm_spec
-  assert isinstance(spec, llm.llms.chat_gpt.LLMSpec)
+  assert isinstance(spec, llm_llms_chat_gpt.LLMSpec)
   # max caps at the provider top, on top of the implicit fast()
   assert spec.reasoning_effort == 'xhigh'
   assert spec.service_tier == 'priority'
@@ -597,7 +597,7 @@ def test_call_resume_runs_the_resumed_bro(monkeypatch, capsys):
   monkeypatch.setenv('CW_IN_CONTAINER', '1')
   monkeypatch.setattr('bro.registry.get_class', lambda name: _ChatBro)
   monkeypatch.setattr('bro.launch.resume.resume', fake_resume)
-  monkeypatch.setattr('trails.client.default_client', lambda: MagicMock())
+  monkeypatch.setattr('bro.trails.client.default_client', lambda: MagicMock())
   monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
   monkeypatch.setattr('bro.launch.call._tty_supported', lambda: False)
 
@@ -606,7 +606,7 @@ def test_call_resume_runs_the_resumed_bro(monkeypatch, capsys):
   assert captured['trail_ref'] == 'latest'
   # call implies fast, so the continuation runs the class spec's fast variant
   spec = captured['llm_spec']
-  assert isinstance(spec, llm.llms.chat_gpt.LLMSpec)
+  assert isinstance(spec, llm_llms_chat_gpt.LLMSpec)
   assert spec.service_tier == 'priority'
   assert captured['bro'] is resumed_bro
   assert captured['initial'] is None
@@ -687,7 +687,7 @@ def test_initial_slash_invocation_passes_through_verbatim(monkeypatch):
 
 class _FakeApp:
   """captures `append_thinking` / `append_trace_line` calls; stands in for
-  `ChatApp` in TUIRenderer tests so we don't have to spin up a Textual runtime."""
+  `ChatApp` in TUIRenderer tests so we don't have to spin up a Textual bro.runtime."""
 
   def __init__(self):
     self.posted: list[str] = []
@@ -749,7 +749,7 @@ def test_message_bubble_selection_honors_offsets():
 async def test_tui_drag_inside_markdown_bubble_selects_rendered_text(monkeypatch):
   from bro.launch.call_tui import ChatApp, MessageBubble
 
-  monkeypatch.setattr('workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
   app = ChatApp(RecordBro(), None)
   async with app.run_test(size=(100, 40)) as pilot:
     app._append_bro_message('a **bold** reply')
@@ -786,7 +786,7 @@ async def test_tui_markdown_bubble_copy_reflows_to_logical_lines(monkeypatch):
 
   from bro.launch.call_tui import ChatApp, MessageBubble
 
-  monkeypatch.setattr('workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
   command = (
     'dive-in --auto --grant notion -t "https://example.com/x" '
     '"a long quoted argument that certainly wraps across the bubble width"'
@@ -819,7 +819,7 @@ async def test_tui_survives_markup_like_text(monkeypatch):
 
   from bro.launch.call_tui import ChatApp, MessageBubble, StatsScreen, SystemBubble
 
-  monkeypatch.setattr('workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
   # the shape that crashed the compositor: a bare `[` opens what Textual's
   # content-markup grammar reads as a tag with key=value pairs inside, and
   # rich.markup.escape does not neutralize it
@@ -859,7 +859,7 @@ async def test_tui_turn_error_renders_as_error_bubble(monkeypatch):
   async def fail(*args, **kwargs):
     raise RuntimeError("failed [status='down']")
 
-  monkeypatch.setattr('workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
   bro = RecordBro()
   monkeypatch.setattr(bro, 'send', fail)
   app = ChatApp(bro, None)
@@ -885,7 +885,7 @@ async def test_tui_thinking_renders_as_muted_bubble_above_typing(monkeypatch):
 
   from bro.launch.call_tui import BubbleRow, ChatApp, MessageBubble, TypingIndicator
 
-  monkeypatch.setattr('workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
   app = ChatApp(RecordBro(), None)
   async with app.run_test(size=(80, 40)) as pilot:
     app._show_typing()
@@ -910,7 +910,7 @@ async def test_tui_thinking_renders_as_muted_bubble_above_typing(monkeypatch):
 async def test_tui_timestamp_hugs_the_row_edge_with_seconds(monkeypatch):
   from bro.launch.call_tui import BubbleRow, ChatApp, MessageBubble
 
-  monkeypatch.setattr('workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
   app = ChatApp(RecordBro(), None)
   async with app.run_test(size=(80, 40)) as pilot:
     app._append_user_message('a message from the user', when=datetime(2026, 5, 28, 12, 34, 56))
@@ -940,7 +940,7 @@ async def test_tui_copies_selection_to_clipboard_on_mouse_up(monkeypatch):
 
   from bro.launch.call_tui import ChatApp, MessageBubble
 
-  monkeypatch.setattr('workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
   app = ChatApp(RecordBro(), None)
   async with app.run_test() as pilot:
     # a plain click also posts TextSelected; with nothing selected the
@@ -963,7 +963,7 @@ async def test_tui_shift_enter_breaks_line_and_enter_submits(monkeypatch):
 
   from bro.launch.call_tui import BubbleRow, ChatApp, MessageBubble, MessageInput
 
-  monkeypatch.setattr('workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
   bro = RecordBro()
   app = ChatApp(bro, None)
   async with app.run_test() as pilot:
@@ -986,7 +986,7 @@ async def test_tui_shift_enter_breaks_line_and_enter_submits(monkeypatch):
 async def test_tui_enter_on_blank_input_submits_nothing(monkeypatch):
   from bro.launch.call_tui import ChatApp, MessageInput
 
-  monkeypatch.setattr('workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
   app = ChatApp(RecordBro(), None)
   async with app.run_test() as pilot:
     await pilot.press('enter', 'shift+enter', 'enter')
@@ -1035,7 +1035,7 @@ async def test_tui_typing_indicator_tracks_run_state(monkeypatch):
 
   from bro.launch.call_tui import ChatApp, TypingIndicator
 
-  monkeypatch.setattr('workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
   app = ChatApp(RecordBro(), None)
   async with app.run_test() as pilot:
     app._show_typing()

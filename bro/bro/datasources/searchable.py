@@ -5,9 +5,9 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from base import credentials, template
+from bro.base import credentials, template
 from bro.datasources.base import DataSource
-from llm.mcp import InProcessMCPServer, MCPServer, Tool
+from bro.llm.mcp import InProcessMCPServer, MCPServer, Tool
 
 # every searchable source summarises a fetched record against the caller's query
 # through the one `mu` path, which reads the LLM key. so the query-focused branch
@@ -62,8 +62,8 @@ class SearchableDataSource(DataSource):
       )
     # lazy: keep the openai SDK (via mu) out of every datasource import — only the
     # query path needs it.
-    from llm.mu import Text, mu
-    from prompts import get_prompt
+    from bro.llm.mu import Text, mu
+    from bro.prompts import get_prompt
 
     prompt = get_prompt(
       'source_summary.prompt.template',

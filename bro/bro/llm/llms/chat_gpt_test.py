@@ -6,12 +6,13 @@ from unittest.mock import MagicMock
 import pytest
 from openai.types.responses import Response
 
-import llm.llm
-import llm.usage as usage
-from llm.llms.chat_gpt import ChatGPT, LLMSpec, parse_response
-from llm.mcp import InProcessMCPServer, Tool, ToolControlSignal, ToolRegistry, wire_name
-from llm.observer import Observer
-from llm.tracker import Tracker
+import bro.llm.llm as llm_module
+import bro.llm.llms.chat_gpt as chat_gpt
+import bro.llm.usage as usage
+from bro.llm.llms.chat_gpt import ChatGPT, LLMSpec, parse_response
+from bro.llm.mcp import InProcessMCPServer, Tool, ToolControlSignal, ToolRegistry, wire_name
+from bro.llm.observer import Observer
+from bro.llm.tracker import Tracker
 
 # the registry advertises namespaced wire names, so a tool whose local name is
 # `ping` in this namespace surfaces to the LLM as `svc__ping`. the emit helpers
@@ -669,37 +670,37 @@ class TestLLMSpec:
       service_tier='priority',
       compact_threshold=50_000,
     )
-    restored = llm.llm.LLMSpec.from_dict(spec.dump())
+    restored = llm_module.LLMSpec.from_dict(spec.dump())
     # frozen dataclass auto-generates __eq__ — single assertion covers every field
     assert restored == spec
 
   def test_dump_round_trip_handles_missing_optional_keys(self):
     # legacy / hand-written payloads may omit fields that were absent on write
-    restored = llm.llm.LLMSpec.from_dict({'type': 'chat_gpt', 'model': 'gpt-5'})
+    restored = llm_module.LLMSpec.from_dict({'type': 'chat_gpt', 'model': 'gpt-5'})
     assert isinstance(restored, LLMSpec)
     assert restored == LLMSpec(model='gpt-5')
 
   def test_from_dict_works_without_pre_importing_provider_module(self):
-    # Run in a fresh interpreter so `llm.llms.chat_gpt` is genuinely absent at
+    # Run in a fresh interpreter so `bro.llm.llms.chat_gpt` is genuinely absent at
     # call time — simulates a process (e.g. an ad-hoc decisions_log reader)
-    # that imports only `llm.llm` and expects `from_dict` to still dispatch.
+    # that imports only `bro.llm.llm` and expects `from_dict` to still dispatch.
     # In-process monkeypatching would leave the dataclass class registered on
     # `LLMSpec.__subclasses__` even after sys.modules restoration.
     import subprocess
     import sys
 
-    from base.source_root import SOURCE_ROOT
+    from bro.base.source_root import SOURCE_ROOT
 
     script = (
       'import sys; '
-      "assert 'llm.llms.chat_gpt' not in sys.modules; "
-      'from llm.llm import LLMSpec; '
+      "assert 'bro.llm.llms.chat_gpt' not in sys.modules; "
+      'from bro.llm.llm import LLMSpec; '
       "spec = LLMSpec.from_dict({'type': 'chat_gpt', 'model': 'gpt-5'}); "
       "assert spec.model == 'gpt-5'; "
       "assert spec.TYPE == 'chat_gpt'"
     )
     result = subprocess.run(
-      [sys.executable, '-c', script], capture_output=True, text=True, cwd=SOURCE_ROOT
+      [sys.executable, '-c', script], capture_output=True, text=True, cwd=SOURCE_ROOT.parent
     )
     assert result.returncode == 0, f'stderr: {result.stderr}'
 
@@ -710,10 +711,8 @@ class TestLLMSpec:
 
     import openai.types.shared
 
-    import llm.llms.chat_gpt
-
     openai_values = get_args(get_args(openai.types.shared.ReasoningEffort)[0])
-    assert frozenset(get_args(llm.llms.chat_gpt.ReasoningEffort)) == frozenset(openai_values)
+    assert frozenset(get_args(chat_gpt.ReasoningEffort)) == frozenset(openai_values)
 
   def test_importing_module_does_not_import_openai(self):
     # every bro module constructs an LLMSpec at class-definition time, so the
@@ -722,16 +721,16 @@ class TestLLMSpec:
     import subprocess
     import sys
 
-    from base.source_root import SOURCE_ROOT
+    from bro.base.source_root import SOURCE_ROOT
 
     script = (
       'import sys; '
-      'import llm.llms.chat_gpt; '
-      "llm.llms.chat_gpt.LLMSpec(reasoning_effort='medium'); "
+      'import bro.llm.llms.chat_gpt; '
+      "bro.llm.llms.chat_gpt.LLMSpec(reasoning_effort='medium'); "
       "assert 'openai' not in sys.modules"
     )
     result = subprocess.run(
-      [sys.executable, '-c', script], capture_output=True, text=True, cwd=SOURCE_ROOT
+      [sys.executable, '-c', script], capture_output=True, text=True, cwd=SOURCE_ROOT.parent
     )
     assert result.returncode == 0, f'stderr: {result.stderr}'
 

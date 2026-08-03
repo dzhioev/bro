@@ -1,6 +1,6 @@
 import pytest
 
-from base.template import TemplateError
+from bro.base.template import TemplateError
 from bro.datasources.file import FileSource
 
 

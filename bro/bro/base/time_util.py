@@ -5,8 +5,8 @@ from zoneinfo import ZoneInfo
 
 import dateutil.parser
 
-from base import log
-from base.args import Parser
+from bro.base import log
+from bro.base.args import Parser
 
 UTC = dt.UTC
 timezone = ZoneInfo

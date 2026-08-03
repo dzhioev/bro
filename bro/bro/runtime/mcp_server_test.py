@@ -6,9 +6,9 @@ from starlette.testclient import TestClient
 
 from bro.bro import BaseBro
 from bro.datasources.searchable import Hit, SearchableDataSource
-from llm.mcp import FunctionTool, InProcessMCPServer, MCPServer, MCPServerSpec, describe
-from runtime import mcp_server
-from runtime.mcp_server import _resolve_servers, create_http_app
+from bro.llm.mcp import FunctionTool, InProcessMCPServer, MCPServer, MCPServerSpec, describe
+from bro.runtime import mcp_server
+from bro.runtime.mcp_server import _resolve_servers, create_http_app
 
 TOKEN = 'test-bearer-token'
 _MCP_HEADERS = {
@@ -97,7 +97,7 @@ class TestResolveServers:
     monkeypatch.setattr(
       mcp_server,
       '_toolset_entry_points',
-      lambda: (_entry_point('ping', 'runtime.mcp_server_test:_ping_toolset'),),
+      lambda: (_entry_point('ping', 'bro.runtime.mcp_server_test:_ping_toolset'),),
     )
     servers = _resolve_servers('ping')
     assert len(servers) == 1
@@ -126,7 +126,7 @@ class TestResolveServers:
 
   def test_contributed_brog(self, monkeypatch):
     # brog's state factory reads the self-contained config at build time
-    from base import credentials
+    from bro.base import credentials
 
     monkeypatch.setattr(
       credentials,
@@ -265,7 +265,7 @@ class TestNamespaceEndpoints:
 
 class TestCredsRendering:
   def test_description_renders_against_availability(self, monkeypatch):
-    from base import credentials
+    from bro.base import credentials
 
     monkeypatch.setattr(credentials, 'available', lambda name: False)
     with _client(_ShimBro()._live_mcp_servers()) as client:

@@ -2,14 +2,13 @@
 
 import http.client
 import json
-import logging
 import time
 import urllib.error
 import urllib.request
 from email.utils import parsedate_to_datetime
 from typing import Any, Optional
 
-_log = logging.getLogger(__name__)
+from bro.base import log
 
 # transient HTTP statuses worth retrying: server errors, rate limiting, and
 # 401/403 — GitHub returns these for token-propagation and secondary-rate-limit
@@ -103,7 +102,7 @@ def _request(method: str, url: str, token: str, body: Optional[Any] = None) -> A
         reason = f'{type(error).__name__}: {error}'
       if attempt == _MAX_ATTEMPTS - 1:
         raise
-      _log.warning(
+      log.warning(
         f'{reason} from {url}; retrying in {delay:.1f}s (attempt {attempt + 1}/{_MAX_ATTEMPTS})'
       )
       time.sleep(delay)

@@ -8,9 +8,9 @@ import bro.launch.identity
 import bro.launch.scope
 import bro.launch.spawn
 import bro.launch.summon_control
-import workspace.docker
-import workspace.project
-import workspace.store
+import bro.workspace.docker as workspace_docker
+import bro.workspace.project as workspace_project
+import bro.workspace.store as workspace_store
 
 PARENT_WORKSPACE = Path('/var/cw/worktrees/parent')
 SUMMONER = {'session': 'ws'}
@@ -23,12 +23,12 @@ class TestSummonLowering:
     monkeypatch.setattr(
       bro.launch.spawn,
       'project_config',
-      lambda: workspace.project.ProjectConfig(default_bro='foo', image_repository='bro/foo'),
+      lambda: workspace_project.ProjectConfig(default_bro='foo', image_repository='bro/foo'),
     )
     monkeypatch.setattr(
       bro.launch.scope,
       'scoped_secrets',
-      lambda name, surface, *, credential_instances: workspace.store.ScopedSecrets(
+      lambda name, surface, *, credential_instances: workspace_store.ScopedSecrets(
         required={'aws', 'trails'}, optional={'openai'}, docker_sock=True
       ),
     )
@@ -50,7 +50,7 @@ class TestSummonLowering:
     )
     lowered = bro.launch.spawn._lower_summon(launch, 'broker-CH')
     assert lowered == bro.launch.spawn.DockerLaunchSpec(
-      workspace.docker.Launch(
+      workspace_docker.Launch(
         name='broker-CH',
         command=['bro', 'run', 'devoops', 'deploy the thing', '--in-place'],
         env={
@@ -254,8 +254,8 @@ class TestRunRootViaBroker:
     assert captured['launch'] is launch
 
   def test_root_lifecycle_handlers_log_trail_and_end_reason(self, caplog, tmp_path):
-    from broker.brotocol import Message, Tag
-    from broker.dispatcher import Dispatcher
+    from bro.broker.brotocol import Message, Tag
+    from bro.broker.dispatcher import Dispatcher
 
     dispatcher = Dispatcher()
     control = bro.launch.summon_control.SummonControl(

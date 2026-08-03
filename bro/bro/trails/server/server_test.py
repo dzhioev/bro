@@ -3,8 +3,8 @@ import json
 
 import pytest
 
-from trails.server import storage
-from trails.server.server import create_app, resolve_auth
+from bro.trails.server import storage
+from bro.trails.server.server import create_app, resolve_auth
 
 TOKEN = 'secret-test-token'
 
@@ -319,7 +319,7 @@ async def test_admin_operations_and_indexed_pointer(client):
 
 @pytest.mark.asyncio
 async def test_store_check_streams_heartbeats_then_one_json_verdict(client, store, monkeypatch):
-  monkeypatch.setattr('trails.server.server.CHECK_HEARTBEAT_INTERVAL_SECONDS', 0.001)
+  monkeypatch.setattr('bro.trails.server.server.CHECK_HEARTBEAT_INTERVAL_SECONDS', 0.001)
   store.check_delay_seconds = 0.02
 
   response = await (await client).post('/v1/admin/trails/check', json={}, headers=_auth())

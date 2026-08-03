@@ -5,10 +5,10 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import Any, Optional
 
-from trails.model import UNREPORTED_END_INFERENCE, canonical_json_bytes
-from trails.server import backends, row_storage, storage_types
-from trails.server.folding import AggregateState
-from trails.server.operations import Operations
+from bro.trails.model import UNREPORTED_END_INFERENCE, canonical_json_bytes
+from bro.trails.server import backends, row_storage, storage_types
+from bro.trails.server.folding import AggregateState
+from bro.trails.server.operations import Operations
 
 SPILLOVER_THRESHOLD_BYTES = storage_types.SPILLOVER_THRESHOLD_BYTES
 MAX_BODY_BYTES = storage_types.MAX_BODY_BYTES

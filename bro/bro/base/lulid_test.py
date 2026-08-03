@@ -3,7 +3,7 @@ import time
 
 from ulid import ULID
 
-from base.lulid import _restyle, lulid
+from bro.base.lulid import _restyle, lulid
 
 # Crockford base32 (lowercase) excludes i, l, o, u
 _SHAPE = re.compile(r'[0-9a-hj-km-np-tv-z]{10}-[0-9a-hj-km-np-tv-z]{8}-[0-9a-hj-km-np-tv-z]{8}')

@@ -1,7 +1,8 @@
 #!/usr/bin/env python
-import cw.claude_commit_footer
-import llm.usage as usage
-from cw.claude_commit_footer import (
+import bro.llm.usage as usage
+
+import bro_dev.claude_commit_footer
+from bro_dev.claude_commit_footer import (
   State,
   _effective_baseline,
   _emit_default,
@@ -12,8 +13,8 @@ OPUS = 'claude-opus-4-8'
 
 
 def test_repo_root_uses_the_operated_git_repository(tmp_path, monkeypatch):
-  monkeypatch.setattr(cw.claude_commit_footer, 'project_root', lambda: tmp_path)
-  assert cw.claude_commit_footer._repo_root() == tmp_path
+  monkeypatch.setattr(bro_dev.claude_commit_footer, 'project_root', lambda: tmp_path)
+  assert bro_dev.claude_commit_footer._repo_root() == tmp_path
 
 
 def C(input=0, cache_write=0, cache_read=0, output=0):

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from cw.session_context import build_session_context, encode_session_context
+from bro.cw.session_context import build_session_context, encode_session_context
 
 
 def _proj_with_claude_md(tmp_path: Path, body: str = '# CLAUDE.md\nrules') -> Path:

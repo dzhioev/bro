@@ -2,7 +2,7 @@ import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
-from workspace import git as git_helpers
+from bro.workspace import git as git_helpers
 
 
 def _git(*args: str, cwd: Path) -> None:

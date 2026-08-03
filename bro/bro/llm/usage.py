@@ -61,7 +61,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from base.args import Parser
+from bro.base.args import Parser
 
 __cli_name__ = 'usage'
 

@@ -1,6 +1,6 @@
 import pytest
 
-from trails.lineage import walk_header_chain
+from bro.trails.lineage import walk_header_chain
 
 
 def test_walks_headers_root_first_with_each_child_bound():

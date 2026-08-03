@@ -33,7 +33,7 @@ For each systemic finding, name the one surface whose edit prevents the recurren
 
 - **a script** — a step that misled, is missing, or is mis-ordered in a script that ran, or a workflow that recurs often enough to deserve a script that doesn't exist yet; scripts live in the owning bro package's `scripts/*.md`
 - **the bro's toolset** — a missing, mis-scoped, or misdescribed tool: the `mcp_servers` / `data_sources` declarations on the bro's class, or the tool's description and behavior in the pack that owns it
-- **the bro's system prompt** — the class-level `system_prompt` of the bro or of the ancestor that owns the rule; shared text under `prompts/shared/*.md` only when the lesson genuinely applies to every bro
+- **the bro's system prompt** — the class-level `system_prompt` of the bro or of the ancestor that owns the rule; shared text under `bro/bro/prompts/shared/*.md` only when the lesson genuinely applies to every bro
 - **a doc** — a reference doc or CLAUDE.md the session leaned on that was stale, silent, or misleading
 
 Weigh the lesson's generality honestly — both directions fail: a local lesson hoisted into an ancestor or shared text taxes every session for one workflow's problem, while a general lesson patched into the one script where it happened to surface leaves the recurrence alive everywhere else. Aim for the narrowest surface that still covers everywhere the situation can recur.

@@ -15,7 +15,7 @@ Two layers, both computed per broker root:
   those feed: a host-side log line per event, an append-only JSONL audit file
   (the out-of-band trace a session's own narrative cannot suppress; every entry
   names the actual summoner), and the summon-status file the session's
-  statusLine renders (`cw.statusline` reads it via the
+  statusLine renders (`bro.cw.statusline` reads it via the
   `CW_SUMMON_STATUS` env var each launch surface points at it).
 
 Authorization is per-peer. The root follows the launch-computed effective list
@@ -54,7 +54,7 @@ its summoner's workspace HEAD unless the request's `into` overrides. The HEAD
 read itself is blocking git work and runs off-loop in the spawner
 (`bro/launch/spawn.py:_lower_summon`); the handler only resolves the path.
 
-Both state files live under `var/cw/summon/` (`workspace.paths.summon_dir`), keyed by the
+Both state files live under `var/cw/summon/` (`bro.workspace.paths.summon_dir`), keyed by the
 session key the launch surface passes: the workspace name, mode-prefixed for a
 container session (`c:<name>`, the container-ref convention of `workspace/model.py`)
 and bare on host — a same-name host worktree and container workspace can run
@@ -80,16 +80,16 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Optional
 
-from base import credentials, log
+from bro.base import credentials, log
 from bro.launch.scope import split_scope_overrides
 from bro.summon import DEFAULT_TIMEOUT, STATUS_ENV
-from workspace.model import ContainerWorkspace, HostWorktree, parse_ref
-from workspace.paths import containers_dir, summon_dir
+from bro.workspace.model import ContainerWorkspace, HostWorktree, parse_ref
+from bro.workspace.paths import containers_dir, summon_dir
 
 if TYPE_CHECKING:
-  from broker.brotocol import Message
-  from broker.dispatcher import Dispatcher
-  from broker.runtime import Peer
+  from bro.broker.brotocol import Message
+  from bro.broker.dispatcher import Dispatcher
+  from bro.broker.runtime import Peer
 
 __all__ = [
   'STATUS_ENV',
@@ -170,8 +170,8 @@ def _validate(payload: dict[str, Any]) -> Optional[str]:
   """the request's shape errors, or None when well-formed. Strict: an unknown key
   is rejected rather than ignored — a typo'd `timout` silently falling back to the
   default would hide the caller's bug."""
-  from llm.llm import EFFORT_LEVELS
-  from llm.mcp import HOLDS
+  from bro.llm.llm import EFFORT_LEVELS
+  from bro.llm.mcp import HOLDS
 
   unknown = sorted(set(payload) - _PAYLOAD_KEYS)
   if len(unknown) > 0:
@@ -477,7 +477,7 @@ class SummonControl:
     # early-launch race before transcript adoption, or no recorder at all)
     # degrades to no pointer, never a legacy-shaped one.
     if self._trail_pointer is not None:
-      from monitor.trail_pointer import read
+      from bro.monitor.trail_pointer import read
 
       trail_id = read(self._trail_pointer)
       return {'trail_id': trail_id} if trail_id is not None else None
@@ -512,7 +512,7 @@ class SummonControl:
 
   def observe_delivery(self, source: Optional['Peer'], target: 'Peer', message: 'Message') -> None:
     del source, target  # a summon is identified by its request correlation alone
-    from broker.brotocol import Tag
+    from bro.broker.brotocol import Tag
 
     if message.in_reply_to is None:
       return

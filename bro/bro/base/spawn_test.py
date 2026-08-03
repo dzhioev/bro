@@ -9,7 +9,7 @@ import time
 
 import pytest
 
-from base import spawn
+from bro.base import spawn
 
 
 def _running(pid: int) -> bool:

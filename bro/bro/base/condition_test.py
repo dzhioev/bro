@@ -1,6 +1,6 @@
 import pytest
 
-from base.condition import (
+from bro.base.condition import (
   ConditionError,
   SetVariable,
   StringVariable,

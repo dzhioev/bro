@@ -3,7 +3,7 @@
 `TrailsClient` owns the persistent authenticated HTTPS transport for paged
 headers, steps, messages, launch context, and every recording endpoint.
 
-`fetch_recorded_trail` rehydrates the shared `trails.model` records consumed by
+`fetch_recorded_trail` rehydrates the shared `bro.trails.model` records consumed by
 `bro.fork`. It follows spill descriptors and inlines their full bodies because
 fork replay needs the complete provider response rather than a presigned URL.
 """
@@ -19,8 +19,8 @@ from types import TracebackType
 from typing import Any, Optional
 from urllib.parse import urlencode, urlparse
 
-from base import credentials
-from trails.model import ForkedFrom, RecordedTrail, Step, Trail, spill_descriptor
+from bro.base import credentials
+from bro.trails.model import ForkedFrom, RecordedTrail, Step, Trail, spill_descriptor
 
 DEFAULT_LIST_PAGE_SIZE = 100
 DEFAULT_STEPS_PAGE_SIZE = 200

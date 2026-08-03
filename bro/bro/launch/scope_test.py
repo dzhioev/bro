@@ -4,7 +4,7 @@ import pytest
 
 import bro.launch.scope
 from bro.launch.scope import Surface
-from workspace.store import finalize_scoped_secrets
+from bro.workspace.store import finalize_scoped_secrets
 
 
 class TestScopedSecrets:
@@ -214,7 +214,7 @@ class TestPreflightScopedLaunch:
         self._preflight(bro.launch.scope.ScopedSecrets(set(), set(), True), grant=['@devoop'])
 
   def test_unresolvable_secret_raises_launch_scope_error(self):
-    from base import credentials
+    from bro.base import credentials
 
     with (
       patch('bro.launch.summon_control.summon_allow_list', return_value=set()),

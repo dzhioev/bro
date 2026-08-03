@@ -12,8 +12,8 @@ from openai.types.responses.response_input_content_param import ResponseInputCon
 from openai.types.shared.reasoning_effort import ReasoningEffort
 from pydantic import BaseModel
 
-from llm.llms import ChatGPT
-from llm.llms.chat_gpt import (
+from bro.llm.llms import ChatGPT
+from bro.llm.llms.chat_gpt import (
   image_file_to_content,
   image_to_content,
   pdf_to_content,

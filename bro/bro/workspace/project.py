@@ -3,8 +3,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from base import credentials
-from workspace.paths import project_root
+from bro.base import credentials
+from bro.workspace.paths import project_root
 
 
 def _default_image_repository(default_bro: str) -> str:

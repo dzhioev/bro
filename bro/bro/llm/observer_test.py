@@ -3,7 +3,13 @@ from typing import Any
 
 from rich.console import Console
 
-from llm.observer import BoringRenderer, NullObserver, RichConsoleRenderer, _format_value, _truncate
+from bro.llm.observer import (
+  BoringRenderer,
+  NullObserver,
+  RichConsoleRenderer,
+  _format_value,
+  _truncate,
+)
 
 
 class TestTruncate:

@@ -8,7 +8,7 @@ from typing import Any, Optional
 
 import pytest
 
-from extra.github import poll_pr
+from bro.extra.github import poll_pr
 
 
 def _http_error(code: int) -> urllib.error.HTTPError:
@@ -207,7 +207,7 @@ class TestPollLoopResilience:
     monkeypatch.setattr(poll_pr, '_fetch_reviews', lambda *a: [])
     monkeypatch.setattr(poll_pr.time, 'sleep', lambda _: None)
 
-  def test_transient_cycle_error_is_swallowed(self, monkeypatch):
+  def test_transient_cycle_error_is_swallowed(self, monkeypatch, capsys):
     self._baseline(monkeypatch)
     pr_steps: list[Any] = [_http_error(503), {'merged': True}]
     calls: list[int] = []
@@ -222,6 +222,7 @@ class TestPollLoopResilience:
     monkeypatch.setattr(poll_pr, '_fetch_pr', fake_fetch_pr)
     assert poll_pr.poll_pr('o', 'r', 1, lambda: 't', interval=0, self_login=None) == 0
     assert len(calls) == 2
+    assert 'Logging error' not in capsys.readouterr().err
 
   def test_fatal_cycle_error_propagates(self, monkeypatch):
     self._baseline(monkeypatch)

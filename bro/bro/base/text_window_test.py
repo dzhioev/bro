@@ -1,4 +1,4 @@
-from base.text_window import (
+from bro.base.text_window import (
   DEFAULT_LIMIT,
   MAX_LIMIT,
   _clamp,

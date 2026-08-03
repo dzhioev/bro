@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-from dev.usage_report import _format_table
+from bro_dev.usage_report import _format_table
 
 
 def C(input=0, cache_write=0, cache_read=0, output=0):

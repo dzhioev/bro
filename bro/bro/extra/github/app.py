@@ -14,8 +14,8 @@ from datetime import datetime
 
 import jwt
 
-from base import credentials
-from extra.github import api
+from bro.base import credentials
+from bro.extra.github import api
 
 # JWT claim windows: GitHub caps `exp` at 10 minutes ahead, and recommends
 # backdating `iat` to absorb clock drift between the minting host and GitHub.

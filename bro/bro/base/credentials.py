@@ -31,7 +31,7 @@ defaults merged per-name with a host-local `registry.json` found along the
 same local search path as the secret files — entries that never enter the
 repo, typically `kind+instance` variants of a checked-in kind
 (`github+pavel`). the kind entry (the name up to `+`) owns kind-level
-behavior — notably the install hook, a `base.template` text rendered with
+behavior — notably the install hook, a `bro.base.template` text rendered with
 `#name` bound to each instance's own name — so a variant declares only its
 sources. instance names exist only on the host: `build_scoped_store`
 materializes a variant under its kind name, so a scoped session addresses
@@ -70,9 +70,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, ClassVar, Optional, Protocol
 
-from base import configs, log, template
-from base.args import Parser
-from base.condition import StringVariable
+from bro.base import configs, log, template
+from bro.base.args import Parser
+from bro.base.condition import StringVariable
 
 __cli_name__ = 'credentials'
 
@@ -392,7 +392,7 @@ class Secret:
 
   `install` is an optional shell hook that wires the secret into the tool that
   consumes it from *outside* the resolver (git, the aws CLI, ...). The registry
-  declares it as a `base.template` text over the `#name` variable —
+  declares it as a `bro.base.template` text over the `#name` variable —
   `credentials get '{{insert #name}}'` — so one kind-level hook serves every
   instance of the kind. The raw template is kept (`install_template`) and
   rendered per name by `install_for`, because the name an entry resolves under

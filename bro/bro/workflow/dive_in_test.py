@@ -7,10 +7,10 @@ from typing import cast
 
 import pytest
 
-import brog.system
-import cw
-import dev.dive_in as dive_in
-import workspace.paths
+import bro.brog.system as brog_system
+import bro.workflow.dive_in as dive_in
+import bro.workspace.paths as workspace_paths
+from bro import cw
 
 UUID = '35ad38d8-5a6d-81ea-bce6-e4caf17ece7f'
 HEX = '35ad38d85a6d81eabce6e4caf17ece7f'
@@ -19,7 +19,7 @@ FRESH_SHA = 'a' * 40
 
 
 def _brog_task(name: str = 'my task'):
-  from brog.model import Task
+  from bro.brog.model import Task
 
   return Task(
     id=UUID,
@@ -34,7 +34,7 @@ def _brog_task(name: str = 'my task'):
 
 @pytest.fixture
 def fake_proj(monkeypatch, tmp_path):
-  monkeypatch.setattr(workspace.paths, 'project_root', lambda: tmp_path)
+  monkeypatch.setattr(workspace_paths, 'project_root', lambda: tmp_path)
   monkeypatch.setattr(dive_in, '_fresh_origin_head', lambda: FRESH_SHA)
   worktrees = tmp_path / 'var' / 'cw' / 'worktrees'
   containers = tmp_path / 'var' / 'cw' / 'containers'
@@ -61,7 +61,7 @@ class TestLaunchCommand:
     assert rc == 0
     tokens = shlex.split(capsys.readouterr().out.strip())
     assert tokens[0] == 'cw'
-    # Parser.parse strips argv[0] as the program name, mirroring cw.main(['cw', ...])
+    # Parser.parse strips argv[0] as the program name, mirroring bro.cw.main(['cw', ...])
     args = cw.build_parser().parse(tokens)
     assert args['cmd'] == 'ss'
     assert len(args['name']) > 0
@@ -181,7 +181,7 @@ class TestNewMode:
 class TestTaskMode:
   @pytest.fixture(autouse=True)
   def fake_backend(self, monkeypatch):
-    monkeypatch.setattr('brog.system.default_system', lambda: object())
+    monkeypatch.setattr('bro.brog.system.default_system', lambda: object())
 
   def test_every_launch_picks_a_fresh_workspace_name(self, fake_proj, monkeypatch, capsys):
     monkeypatch.setattr(
@@ -242,7 +242,7 @@ class TestPrefetchTask:
   def test_returns_task_and_embeds_metadata_description_and_comments(self):
     from datetime import datetime
 
-    from brog.model import Comment, Project, Task
+    from bro.brog.model import Comment, Project, Task
 
     task = Task(
       id=UUID,
@@ -274,7 +274,7 @@ class TestPrefetchTask:
           )
         ]
 
-    got, block = dive_in._prefetch_task(cast(brog.system.System, FakeSystem()), URL)
+    got, block = dive_in._prefetch_task(cast(brog_system.System, FakeSystem()), URL)
     assert got is task
     # description embedded verbatim
     assert '## Goal\nDo the thing.' in block

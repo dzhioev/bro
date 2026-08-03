@@ -96,9 +96,7 @@ RUN --mount=type=bind,from=project,source=pyproject.toml,target=/workspace/pypro
       --no-install-package ppp \
  && chmod -R a+rwX /opt/uv-cache /opt/cw-venv
 
-# editable-install the project and bake the `_entrypoints.py` console-script
-# bridge into the venv (the bridge is a pure function of the `[project.scripts]`
-# table, letting the entrypoint skip the ~1s `sync-scripts --entrypoints` regen).
+# editable-install the project, including its committed console-script argv bridges.
 # the sync runs with the project tree at /workspace, so the editable install's
 # module finder records each top-level module under /workspace — the exact path
 # the entrypoint clones into at runtime — and resolves against the live clone.
@@ -114,7 +112,6 @@ RUN --mount=type=bind,from=project,target=/project-src \
       --exclude=./node_modules --exclude=./.configs -cf - . | tar -C /workspace -xf - \
  && cd /workspace \
  && UV_PROJECT_ENVIRONMENT=/opt/cw-venv uv sync --frozen --all-groups \
- && /opt/cw-venv/bin/python -m dev.sync_scripts --entrypoints \
  && find /workspace -mindepth 1 -delete \
  && find /opt/cw-venv /opt/uv-cache \( -type f -o -type d \) ! -perm -o+w \
       -exec chmod a+rwX {} +
@@ -137,12 +134,13 @@ ENV CW_IN_CONTAINER=1
 # the shell-script prelude (logging + fail-fast guards), baked next to the
 # entrypoint: the clone the entrypoint prepares does not exist yet when its
 # early phases run. a project vendoring ppp as a submodule carries the files at
-# ppp/setup/
+# ppp/bro/bro/setup/
 RUN --mount=type=bind,from=project,target=/project-src \
-    src=/project-src/setup \
- && if [ ! -f "$src/prelude.sh" ]; then src=/project-src/ppp/setup; fi \
+    src=/project-src/bro/bro/setup \
+ && if [ ! -f "$src/prelude.sh" ]; then src=/project-src/ppp/bro/bro/setup; fi \
  && mkdir -p /usr/local/lib/ppp-shell \
  && cp "$src/prelude.sh" "$src/log.sh" "$src/strict.sh" /usr/local/lib/ppp-shell/
 COPY git.sh /usr/local/lib/ppp-shell/container-git.sh
 COPY entrypoint.sh /usr/local/bin/cw-entrypoint
+RUN chmod +x /usr/local/bin/cw-entrypoint
 ENTRYPOINT ["/usr/local/bin/cw-entrypoint"]

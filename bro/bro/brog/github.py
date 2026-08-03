@@ -14,9 +14,9 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, Optional
 
-import brog.system
-from brog.model import Comment, Status, Task
-from extra.github import api
+import bro.brog.system as brog_system
+from bro.brog.model import Comment, Status, Task
+from bro.extra.github import api
 
 _PAGE_SIZE = 100
 
@@ -76,7 +76,7 @@ def _to_comment(native: dict[str, Any]) -> Comment:
   )
 
 
-class System(brog.system.System):
+class System(brog_system.System):
   """brog ops over the GitHub Issues REST API of one `owner/name` repo
 
   The token's account is the acting identity: issues and comments are created

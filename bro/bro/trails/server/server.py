@@ -13,10 +13,10 @@ from typing import Any, Optional
 import boto3
 from aiohttp import web
 
-import base.args
-from base import log
-from trails.model import MESSAGE_TYPES, UUID_LOOKUP_LIMIT
-from trails.server import backends, storage
+import bro.base.args as base_args
+from bro.base import log
+from bro.trails.model import MESSAGE_TYPES, UUID_LOOKUP_LIMIT
+from bro.trails.server import backends, storage
 
 __cli_name__ = 'trails-server'
 
@@ -559,7 +559,7 @@ def resolve_auth(bearer_token: Optional[str], allow_no_auth: bool, host: str) ->
 
 
 def main(argv: list[str]) -> Optional[int]:
-  parser = base.args.Parser(description='trails recording server')
+  parser = base_args.Parser(description='trails recording server')
   parser.add_argument('--host', default='0.0.0.0')
   parser.add_argument('--port', type=int, default=DEFAULT_PORT)
   parser.add_argument('--trails-bearer-token', default=None, secret=True)

@@ -1,6 +1,6 @@
 # Declarative conditioning
 
-How PPP gates component declarations and static text on the facts of the surface that consumes them. The model is `base/condition.py`: a condition is an immutable predicate object built at declaration time — constructing one reads no facts — and evaluated later against typed variables, so a class-level declaration stays an import-time constant while its truth is decided by whatever surface holds the facts. The template directive front (`reference/template.md`) lowers text conditions onto the same objects, so both fronts share one evaluator, one fail-fast semantics, and one vocabulary.
+How PPP gates component declarations and static text on the facts of the surface that consumes them. The model is `bro/bro/base/condition.py`: a condition is an immutable predicate object built at declaration time — constructing one reads no facts — and evaluated later against typed variables, so a class-level declaration stays an import-time constant while its truth is decided by whatever surface holds the facts. The template directive front (`bro/bro/reference/template.md`) lowers text conditions onto the same objects, so both fronts share one evaluator, one fail-fast semantics, and one vocabulary.
 
 ## Why
 
@@ -18,7 +18,7 @@ The facts a surface supplies, typed:
 
 ## Conditions
 
-An operand is a variable reference (`var('harness')`, or a ready-made placeholder like `llm.mcp.harness`) or a string literal. Two condition forms, spelled the same as their directive counterparts:
+An operand is a variable reference (`var('harness')`, or a ready-made placeholder like `bro.llm.mcp.harness`) or a string literal. Two condition forms, spelled the same as their directive counterparts:
 
 - `harness == 'bro'` — equality of two strings or two booleans (`#harness = bro` in a directive)
 
@@ -52,35 +52,35 @@ Consumers:
 
 ## Facts
 
-The facts triple a conditioning surface knows, exported by `llm/mcp.py` as ready-made placeholders (`from llm.mcp import creds, harness, wire`):
+The facts triple a conditioning surface knows, exported by `bro/bro/llm/mcp.py` as ready-made placeholders (`from bro.llm.mcp import creds, harness, wire`):
 
 - `harness` — which toolset drives the work: `bro` (bro-native LLM runs and `--raw` claude sessions) or `claude` (Claude Code's own harness with its built-in tools)
 
 - `wire` — how the surface spells canonical `namespace::tool` names: `bare` (`namespace__tool`, the bro-native LLM loop) or `mcp` (`mcp__namespace__tool`, any claude session). Orthogonal to `harness` — a `--raw` session runs the bro harness over mcp wire names
 
-- `creds` — the set of secrets the environment resolves. The supplied universe is closed (the registry's known names) and membership probes `base.credentials.available` lazily
+- `creds` — the set of secrets the environment resolves. The supplied universe is closed (the registry's known names) and membership probes `bro.base.credentials.available` lazily
 
-One more fact sits outside the triple: `hold` — the session's user-involvement level (`unattended | detached | attended | guided`, the domain is `llm.mcp.HOLDS`). It is supplied only when rendering the hold text (`prompts.hold_fragment` → `render_text(hold=…)`), never by the general conditioning surfaces, so hold-neutral text — scripts, procedure docs — fails fast on a stray `#hold` directive. No ready-made placeholder is exported.
+One more fact sits outside the triple: `hold` — the session's user-involvement level (`unattended | detached | attended | guided`, the domain is `bro.llm.mcp.HOLDS`). It is supplied only when rendering the hold text (`bro.prompts.hold_fragment` → `render_text(hold=…)`), never by the general conditioning surfaces, so hold-neutral text — scripts, procedure docs — fails fast on a stray `#hold` directive. No ready-made placeholder is exported.
 
-`llm.mcp.select(entries, harness=…, wire=…, creds=…)` owns the facts-to-variables mapping for declarative lists (`llm.mcp.render_text` is its sibling for text — see `reference/template.md`). Both accept `extra` — a caller-owned vocabulary merged next to the facts (bro features, below). A fact the surface doesn't know defines no variable, so a condition referencing it raises. Select in the process that consumes the result, where the credential store is the session's own.
+`bro.llm.mcp.select(entries, harness=…, wire=…, creds=…)` owns the facts-to-variables mapping for declarative lists (`bro.llm.mcp.render_text` is its sibling for text — see `bro/bro/reference/template.md`). Both accept `extra` — a caller-owned vocabulary merged next to the facts (bro features, below). A fact the surface doesn't know defines no variable, so a condition referencing it raises. Select in the process that consumes the result, where the credential store is the session's own.
 
 ## Bro features
 
 A bro may declare named optional capabilities: `features = {'brog': ('brog',)}` on the class — feature name → the secrets that must all resolve for the feature to be on (`()` pins it on; the map is MRO-merged, derived classes overriding per name). The declaration adds a `#features` variable (`BaseBro.vocabulary()`, passed as the fronts' `extra`) to everything the bro renders or assembles — `mcp_servers` / `data_sources` selection, prompt composition, script bodies, cw's append prompt. Components gate with `when(feature('brog'), …)` (`from bro.bro import feature`) and text with `{{iff #features contains brog}}`, so one declaration switches every consuming site together, and a gated component enters the credential manifest only where its gates resolve.
 
-The universe is the declared feature names — environment-independent, so a typo'd name fails every render. Membership probes `base.credentials.available` per gating secret, deliberately not the `#creds` fact: `#creds`' closed universe is the store's registry, which in a scoped container omits never-hydrated names — a probe there would raise a universe violation instead of reading as feature-off.
+The universe is the declared feature names — environment-independent, so a typo'd name fails every render. Membership probes `bro.base.credentials.available` per gating secret, deliberately not the `#creds` fact: `#creds`' closed universe is the store's registry, which in a scoped container omits never-hydrated names — a probe there would raise a universe violation instead of reading as feature-off.
 
 ## Server-domain vocabularies
 
-The harness facts above condition *session-level* text — prompts, script bodies. An MCP server's own tool text (descriptions, parameter annotations) deliberately does not use them: a server must read the same served standalone, so it renders at build time against its own vocabulary, and no unprocessed directive ever leaves a server (`llm.mcp.FunctionTool`'s `variables`):
+The harness facts above condition *session-level* text — prompts, script bodies. An MCP server's own tool text (descriptions, parameter annotations) deliberately does not use them: a server must read the same served standalone, so it renders at build time against its own vocabulary, and no unprocessed directive ever leaves a server (`bro.llm.mcp.FunctionTool`'s `variables`):
 
 - `tools` — a `Toolset` build's selected roster; universe is the full definition, so a description can test an excluded sibling (`{{when #tools contains read_reference}}…{{end}}`) and a typo'd name fails the build
 - `features` — a data source's capability set (e.g. a searchable source's `summary`, live iff its LLM key resolves); membership probes lazily at render, universe is the source's declared `feature_names`. The source's own name rides along as `source` (for `{{insert #source}}`)
 
-The one exception is the `bro` service-tool build: service tools are harness features, so it injects the system `#wire` fact (`llm.mcp.surface_variables`) next to its `#tools` roster.
+The one exception is the `bro` service-tool build: service tools are harness features, so it injects the system `#wire` fact (`bro.llm.mcp.surface_variables`) next to its `#tools` roster.
 
 ## Code map
 
-- `base/condition.py` — the model: typed variables, `Variable` operators, the evaluator, `when` / `iff` / `select`
-- `llm/mcp.py` — `select` / `render_text` and the fact placeholders: the surface-facts front (`Harness`, `Wire`, credentials)
-- `base/template.py` — the text front, lowering `{{…}}` directives onto this model (`reference/template.md`)
+- `bro/bro/base/condition.py` — the model: typed variables, `Variable` operators, the evaluator, `when` / `iff` / `select`
+- `bro/bro/llm/mcp.py` — `select` / `render_text` and the fact placeholders: the surface-facts front (`Harness`, `Wire`, credentials)
+- `bro/bro/base/template.py` — the text front, lowering `{{…}}` directives onto this model (`bro/bro/reference/template.md`)

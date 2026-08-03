@@ -1,6 +1,4 @@
-"""peer-side handle over one channel back to the host broker.
-
-Synchronous throughout — a peer is its own process with no event loop; only the
+"""peer-side handle over one channel back to the host bro.broker.Synchronous throughout — a peer is its own process with no event loop; only the
 host-side broker is async. `from_env()` resolves the channel from `BROKER_CHANNEL`
 and returns `None` when it is unset, so consumers (the `broker` CLI, the bro hook)
 are inert where there is no channel.
@@ -25,8 +23,8 @@ from collections.abc import Callable
 from types import TracebackType
 from typing import Any, Optional
 
-from broker.brotocol import Message, Tag
-from broker.transport import ClientTransport, connect
+from bro.broker.brotocol import Message, Tag
+from bro.broker.transport import ClientTransport, connect
 
 CHANNEL_ENV = 'BROKER_CHANNEL'
 

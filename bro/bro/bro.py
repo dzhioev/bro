@@ -8,21 +8,21 @@ from pathlib import Path
 from types import ModuleType, TracebackType
 from typing import Any, ClassVar, Optional, Self
 
-import llm.llms.chat_gpt
-import llm.mcp
-from base import credentials, log
-from base.condition import Condition, Entry, SetVariable, Variables, var
+import bro.llm.llms.chat_gpt as llm_llms_chat_gpt
+import bro.llm.mcp as llm_mcp
 from bro import scripts as script_store
+from bro.base import credentials, log
+from bro.base.condition import Condition, Entry, SetVariable, Variables, var
 from bro.channel import BroChannel
 from bro.datasources.base import DataSource
+from bro.llm.llm import EFFORT_LEVELS, LLM, LLMSpec
+from bro.llm.observer import BoringRenderer, NullObserver, Observer
+from bro.llm.tracker import EndReason, NullTracker, ToolStepSource, Tracker
+from bro.prompts import get_prompt, hold_fragment
 from bro.summon import SUMMONER_ENV
-from llm.llm import EFFORT_LEVELS, LLM, LLMSpec
-from llm.observer import BoringRenderer, NullObserver, Observer
-from llm.tracker import EndReason, NullTracker, ToolStepSource, Tracker
-from prompts import get_prompt, hold_fragment
-from trails.record.bro import Recorder
+from bro.trails.record.bro import Recorder
 
-DEFAULT_LLM_SPEC: LLMSpec = llm.llms.chat_gpt.LLMSpec()
+DEFAULT_LLM_SPEC: LLMSpec = llm_llms_chat_gpt.LLMSpec()
 
 
 _TRAILS_DISABLED_ENV = 'TRAILS_DISABLED'
@@ -102,7 +102,7 @@ def set_default_tracker_factory(factory: Callable[[], Tracker]) -> None:
   _default_tracker_factory = factory
 
 
-_SHARED_PROMPTS_DIR = Path(__file__).resolve().parent.parent / 'prompts' / 'shared'
+_SHARED_PROMPTS_DIR = Path(__file__).resolve().parent / 'prompts' / 'shared'
 
 
 def _load_shared_prompts() -> str:
@@ -165,7 +165,7 @@ def _render_scripts(*, include_dispatcher: bool) -> str:
   return '\n'.join(lines)
 
 
-class BroRaised(llm.mcp.ToolControlSignal):
+class BroRaised(llm_mcp.ToolControlSignal):
   """aborts a Bro run: raised by the `raise` service tool, and by the run-start
   credential gate when required secrets don't resolve."""
 
@@ -183,7 +183,7 @@ async def _claude_raise(reason: str) -> str:
   # over the broker channel where one exists, then terminate the session (the
   # workspace layer owns the mechanics). blocking ops, so off-loop; the finally
   # keeps the kill unconditional.
-  from workspace.session import terminate_session
+  from bro.workspace.session import terminate_session
 
   def record_and_kill() -> None:
     log.warning('raise: %s', reason)
@@ -214,9 +214,9 @@ _RAISE_DESCRIPTION = (
 )
 
 
-def _raise_tool(wire: llm.mcp.Wire, variables: Variables) -> llm.mcp.Tool:
+def _raise_tool(wire: llm_mcp.Wire, variables: Variables) -> llm_mcp.Tool:
   target = _raise if wire == 'bare' else _claude_raise
-  return llm.mcp.FunctionTool(
+  return llm_mcp.FunctionTool(
     target, name='raise', description=_RAISE_DESCRIPTION, variables=variables
   )
 
@@ -303,24 +303,24 @@ _BANNER_DESCRIPTION = (
 )
 
 
-def _banner_tool(bro_name: str, variables: Variables) -> llm.mcp.Tool:
+def _banner_tool(bro_name: str, variables: Variables) -> llm_mcp.Tool:
   # the same facts `cw banner --llm` prints, rendered in-process. the bro name is
   # passed explicitly because an in-process run's environment carries the
   # launcher's CW_BRO (or none), not this bro's. the workspace import stays
   # function-local so `import bro` stays cheap.
   def _banner() -> str:
-    from workspace.banner import render_banner
+    from bro.workspace.banner import render_banner
 
     return render_banner(llm=True, bro=bro_name)
 
-  return llm.mcp.FunctionTool(
+  return llm_mcp.FunctionTool(
     _banner, name='banner', description=_BANNER_DESCRIPTION, variables=variables
   )
 
 
 def _summon_tool(
   variables: Variables, current_tool_step_id: Callable[[], Optional[ToolStepSource]]
-) -> llm.mcp.Tool:
+) -> llm_mcp.Tool:
   # a fresh channel client per call, opened on the loop and closed in `finally`
   # so a cancelled tool call (the MCP client timed out or aborted) unblocks the
   # off-loop wait: the broxy sees the waiter go, and the terminal buffers for a
@@ -381,23 +381,23 @@ def _summon_tool(
     finally:
       client.close()
 
-  return llm.mcp.FunctionTool(
+  return llm_mcp.FunctionTool(
     _summon, name='summon', description=_SUMMON_DESCRIPTION, variables=variables
   )
 
 
-def _summon_list_tool(variables: Variables) -> llm.mcp.Tool:
+def _summon_list_tool(variables: Variables) -> llm_mcp.Tool:
   from bro import summon as summon_client
 
   async def _summon_list() -> dict[str, Any]:
     return await asyncio.to_thread(summon_client.list_summons)
 
-  return llm.mcp.FunctionTool(
+  return llm_mcp.FunctionTool(
     _summon_list, name='summon_list', description=_SUMMON_LIST_DESCRIPTION, variables=variables
   )
 
 
-def _summon_check_tool(variables: Variables) -> llm.mcp.Tool:
+def _summon_check_tool(variables: Variables) -> llm_mcp.Tool:
   # the wait path owns its client like _summon_tool, for the same cancellation
   # abort; the plain peek is answered locally and immediately, so it keeps the
   # per-call client inside the worker thread.
@@ -443,7 +443,7 @@ def _summon_check_tool(variables: Variables) -> llm.mcp.Tool:
       completed['seq'] = status.seq
     return completed
 
-  return llm.mcp.FunctionTool(
+  return llm_mcp.FunctionTool(
     _summon_check, name='summon_check', description=_SUMMON_CHECK_DESCRIPTION, variables=variables
   )
 
@@ -454,8 +454,8 @@ _SERVICE_TOOL_NAMES = ('banner', 'raise', 'summon', 'summon_check', 'summon_list
 
 
 def _build_service_server(
-  bro: 'BaseBro', *, include_raise: bool, wire: llm.mcp.Wire
-) -> llm.mcp.MCPServer:
+  bro: 'BaseBro', *, include_raise: bool, wire: llm_mcp.Wire
+) -> llm_mcp.MCPServer:
   # the roster is decided by the caller's surface and local process state:
   # `banner` is unconditional; `raise` only makes sense non-interactively (a
   # caller to abort to — interactive callers pass include_raise=False);
@@ -479,11 +479,11 @@ def _build_service_server(
   if has_summon_list:
     mounted.append('summon_list')
   variables: Variables = {
-    **llm.mcp.surface_variables(wire=wire),
+    **llm_mcp.surface_variables(wire=wire),
     'tools': SetVariable(frozenset(mounted), universe=frozenset(_SERVICE_TOOL_NAMES)),
   }
 
-  tools: list[llm.mcp.Tool] = [_banner_tool(bro.name, variables)]
+  tools: list[llm_mcp.Tool] = [_banner_tool(bro.name, variables)]
   if include_raise:
     tools.append(_raise_tool(wire, variables))
   if has_broker:
@@ -494,7 +494,7 @@ def _build_service_server(
     if has_summon_list:
       tools.append(_summon_list_tool(variables))
   assert [tool.name for tool in tools] == mounted
-  server = llm.mcp.InProcessMCPServer('bro', tools)
+  server = llm_mcp.InProcessMCPServer('bro', tools)
   server.tool_universe = _SERVICE_TOOL_NAMES
   return server
 
@@ -509,7 +509,7 @@ def _unattended_claude_session() -> bool:
 def feature(name: str) -> Condition:
   """membership condition on the bro's `#features` vocabulary — the code
   spelling of the `#features contains <name>` directive, for gating
-  `mcp_servers` / `data_sources` entries: `when(feature('brog'), brog.mcp)`."""
+  `mcp_servers` / `data_sources` entries: `when(feature('brog'), bro.brog.mcp)`."""
   return var('features').contains(name)
 
 
@@ -523,7 +523,7 @@ def _feature_variables(features: dict[str, tuple[str, ...]]) -> Variables:
   return {'features': SetVariable(enabled, universe=frozenset(features))}
 
 
-def _component_needed_secrets(component: llm.mcp.MCPServerSpec | DataSource) -> set[str]:
+def _component_needed_secrets(component: llm_mcp.MCPServerSpec | DataSource) -> set[str]:
   # a component declares its credentials as plain metadata (a spec field, or a
   # DataSource class attribute), so reading the manifest never builds a live
   # server. no real component extends a non-empty base's declaration, so an MRO
@@ -531,7 +531,7 @@ def _component_needed_secrets(component: llm.mcp.MCPServerSpec | DataSource) -> 
   return set(component.needed_secrets)
 
 
-def _component_optional_secrets(component: llm.mcp.MCPServerSpec | DataSource) -> set[str]:
+def _component_optional_secrets(component: llm_mcp.MCPServerSpec | DataSource) -> set[str]:
   # mirror of `_component_needed_secrets` for the best-effort tier (`optional_secrets`).
   return set(component.optional_secrets)
 
@@ -540,15 +540,15 @@ class BaseBro(ABC):
   name: str
   description: str
   llm_spec: LLMSpec = DEFAULT_LLM_SPEC
-  # an entry may be wrapped with `base.condition.when(...)` / grouped with
+  # an entry may be wrapped with `bro.base.condition.when(...)` / grouped with
   # `iff(...)` to gate it on the assembling surface's facts (`#harness`,
   # `#creds`); a wrapped entry whose condition does not hold never mounts and
   # its spec never builds. an `mcp_servers` entry is a tool-pack module
   # (`flow.mcp` — its conventional `spec` Toolset, the full roster), a bare
   # `Toolset`, or an `MCPServerSpec` from a scoping call
-  # (`flow.mcp.spec('add_task')`); see `llm.mcp.as_spec`.
+  # (`flow.mcp.spec('add_task')`); see `bro.llm.mcp.as_spec`.
   data_sources: ClassVar[list[Entry[DataSource]]] = []
-  mcp_servers: ClassVar[list[Entry[llm.mcp.MCPServerSpec | llm.mcp.Toolset[Any] | ModuleType]]] = []
+  mcp_servers: ClassVar[list[Entry[llm_mcp.MCPServerSpec | llm_mcp.Toolset[Any] | ModuleType]]] = []
   # named optional capabilities: feature name → the secrets that must all
   # resolve for the feature to be on (empty tuple = unconditionally on). one
   # declaration switches every consuming site together: components gate via
@@ -591,7 +591,7 @@ class BaseBro(ABC):
   _llm: Optional[LLM] = None
 
   def __init__(self, system_prompt: Optional[str] = None):
-    mcp_entries: list[Entry[llm.mcp.MCPServerSpec | llm.mcp.Toolset[Any] | ModuleType]] = []
+    mcp_entries: list[Entry[llm_mcp.MCPServerSpec | llm_mcp.Toolset[Any] | ModuleType]] = []
     data_source_entries: list[Entry[DataSource]] = []
     prompt_parts: list[str] = []
     extra_secret_names: list[str] = []
@@ -630,22 +630,22 @@ class BaseBro(ABC):
     self._mcp_entries = mcp_entries
     self._data_source_entries = data_source_entries
     surface_creds = credentials.known_names()
-    self._mcp_specs: list[llm.mcp.MCPServerSpec] = [
-      llm.mcp.as_spec(entry)
-      for entry in llm.mcp.select(
+    self._mcp_specs: list[llm_mcp.MCPServerSpec] = [
+      llm_mcp.as_spec(entry)
+      for entry in llm_mcp.select(
         mcp_entries, harness='bro', creds=surface_creds, extra=self._feature_vocabulary
       )
     ]
-    self._data_sources: list[DataSource] = llm.mcp.select(
+    self._data_sources: list[DataSource] = llm_mcp.select(
       data_source_entries, harness='bro', creds=surface_creds, extra=self._feature_vocabulary
     )
     # built lazily by _live_mcp_servers(): metadata surfaces (needed_secrets on
     # hosts, prompt composition) never construct live servers.
-    self._live_mcp: Optional[list[llm.mcp.MCPServer]] = None
+    self._live_mcp: Optional[list[llm_mcp.MCPServer]] = None
     # lazy for the same reason: building service FunctionTools derives their
     # schemas, which imports the mcp/fastmcp stack (~1s) — metadata surfaces
     # never pay it.
-    self._service_server_cache: Optional[llm.mcp.MCPServer] = None
+    self._service_server_cache: Optional[llm_mcp.MCPServer] = None
     self._llm = None
     # default to no-op; BaseBro.run() swaps in a real observer per invocation so the
     # LLM construction path picks it up via self._observer.
@@ -678,7 +678,7 @@ class BaseBro(ABC):
     shared = _load_shared_prompts()
     script_instructions = self.script_instructions()
 
-    def compose(wire: llm.mcp.Wire) -> str:
+    def compose(wire: llm_mcp.Wire) -> str:
       parts = []
       if len(shared) > 0:
         parts.append(shared)
@@ -697,7 +697,7 @@ class BaseBro(ABC):
       # stripped: a fragment whose whole body is a skipped directive block
       # (grounding.md outside the claude-bare surface) collapses to bare join
       # separators at the prompt edge.
-      return llm.mcp.render_text(
+      return llm_mcp.render_text(
         '\n\n'.join(parts),
         harness='bro',
         wire=wire,
@@ -729,13 +729,13 @@ class BaseBro(ABC):
   def scripts(self) -> dict[str, Path]:
     return script_store.collect_scripts(list(reversed(type(self).__mro__)))
 
-  def get_script_body(self, name: str, *, harness: llm.mcp.Harness, wire: llm.mcp.Wire) -> str:
+  def get_script_body(self, name: str, *, harness: llm_mcp.Harness, wire: llm_mcp.Wire) -> str:
     path = self.scripts.get(name)
     if path is None:
       available = ', '.join(sorted(self.scripts)) if len(self.scripts) > 0 else '(none)'
       raise KeyError(f'no script named {name!r}; available: {available}')
     script = script_store.load_script(name, path)
-    return llm.mcp.render_text(
+    return llm_mcp.render_text(
       script.body,
       harness=harness,
       wire=wire,
@@ -755,8 +755,8 @@ class BaseBro(ABC):
     return _render_scripts(include_dispatcher=script_store.dispatcher_available())
 
   def _components_for(
-    self, harness: llm.mcp.Harness
-  ) -> tuple[list[llm.mcp.MCPServerSpec], list[DataSource]]:
+    self, harness: llm_mcp.Harness
+  ) -> tuple[list[llm_mcp.MCPServerSpec], list[DataSource]]:
     # the declared components that hold on `harness`. the bro-harness selection
     # is the one materialized in __init__ (prompt composition and the
     # live-server cache read it); any other harness selects on demand from the
@@ -765,12 +765,12 @@ class BaseBro(ABC):
       return self._mcp_specs, self._data_sources
     surface_creds = credentials.known_names()
     specs = [
-      llm.mcp.as_spec(entry)
-      for entry in llm.mcp.select(
+      llm_mcp.as_spec(entry)
+      for entry in llm_mcp.select(
         self._mcp_entries, harness=harness, creds=surface_creds, extra=self._feature_vocabulary
       )
     ]
-    sources: list[DataSource] = llm.mcp.select(
+    sources: list[DataSource] = llm_mcp.select(
       self._data_source_entries,
       harness=harness,
       creds=surface_creds,
@@ -778,7 +778,7 @@ class BaseBro(ABC):
     )
     return specs, sources
 
-  def needed_secrets(self, harness: llm.mcp.Harness = 'bro') -> tuple[str, ...]:
+  def needed_secrets(self, harness: llm_mcp.Harness = 'bro') -> tuple[str, ...]:
     # the bro's component credential manifest for a consuming harness: the union
     # of each declared MCP server's + data source's `needed_secrets`, over only
     # the components that hold on `harness` — a surface never hydrates a secret
@@ -797,7 +797,7 @@ class BaseBro(ABC):
     names.update(self._extra_secrets)
     return tuple(sorted(names))
 
-  def optional_secrets(self, harness: llm.mcp.Harness = 'bro') -> tuple[str, ...]:
+  def optional_secrets(self, harness: llm_mcp.Harness = 'bro') -> tuple[str, ...]:
     # the bro's best-effort credential tier: the union of each declared MCP
     # server's + data source's `optional_secrets` over the same per-harness
     # component set as `needed_secrets`, plus the dispatcher key when this bro has
@@ -993,11 +993,11 @@ class BaseBro(ABC):
 
   def _servers_with_at_tools(
     self,
-    servers: list[llm.mcp.MCPServer],
+    servers: list[llm_mcp.MCPServer],
     *,
-    harness: llm.mcp.Harness,
-    wire: llm.mcp.Wire,
-  ) -> list[llm.mcp.MCPServer]:
+    harness: llm_mcp.Harness,
+    wire: llm_mcp.Wire,
+  ) -> list[llm_mcp.MCPServer]:
     if any(server.namespace == script_store.NAMESPACE for server in servers):
       raise ValueError(f'namespace {script_store.NAMESPACE!r} is reserved for bro framework tools')
     if harness == 'claude' and len(self.scripts) == 0:
@@ -1005,12 +1005,12 @@ class BaseBro(ABC):
     return [*servers, script_store.build_server(self, harness=harness, wire=wire)]
 
   @property
-  def _service_server(self) -> llm.mcp.MCPServer:
+  def _service_server(self) -> llm_mcp.MCPServer:
     if self._service_server_cache is None:
       self._service_server_cache = _build_service_server(self, include_raise=True, wire='bare')
     return self._service_server_cache
 
-  def _live_mcp_servers(self) -> list[llm.mcp.MCPServer]:
+  def _live_mcp_servers(self) -> list[llm_mcp.MCPServer]:
     # specs materialize here, on first tool use — always in a serving process,
     # post-secrets — and are built once: a live server may hold real resources
     # (flow's shared System), so every run through this bro reuses the same set.
@@ -1019,7 +1019,7 @@ class BaseBro(ABC):
       self._live_mcp.extend(ds.as_mcp_server() for ds in self._data_sources)
     return self._live_mcp
 
-  def _mcp_servers_for(self, *, hold: str) -> list[llm.mcp.MCPServer]:
+  def _mcp_servers_for(self, *, hold: str) -> list[llm_mcp.MCPServer]:
     # the in-process LLM builds (always bare wire): the `raise` service tool
     # mounts only at the unattended hold — with no human channel the agent
     # needs a way to abort; every other level reports blockers in its reply,
@@ -1035,7 +1035,7 @@ class BaseBro(ABC):
       [*self._live_mcp_servers(), service_server], harness='bro', wire='bare'
     )
 
-  def claude_bro_mcp_servers(self) -> list[llm.mcp.MCPServer]:
+  def claude_bro_mcp_servers(self) -> list[llm_mcp.MCPServer]:
     # the MCP servers a `cw ss --raw` Claude Code session mounts (through
     # the generic server's `bro:<name>` surface): declared servers, scripts, and the
     # service tools. procedures serve the bro branch (`--bare` strips claude's
@@ -1051,7 +1051,7 @@ class BaseBro(ABC):
       wire='mcp',
     )
 
-  def claude_persona_mcp_servers(self) -> list[llm.mcp.MCPServer]:
+  def claude_persona_mcp_servers(self) -> list[llm_mcp.MCPServer]:
     # the MCP servers a cw-session themed as this bro mounts — claude's full
     # harness with the bro as its persona, served through the generic server's
     # `persona:<name>` surface: the declared servers and data sources that hold
@@ -1060,7 +1060,7 @@ class BaseBro(ABC):
     # cover it — plus the service server and scripts server (`raise` only for an
     # unattended session). Claude's own skill mechanism remains available.
     specs, sources = self._components_for('claude')
-    servers: list[llm.mcp.MCPServer] = [spec.build() for spec in specs]
+    servers: list[llm_mcp.MCPServer] = [spec.build() for spec in specs]
     servers.extend(ds.as_mcp_server() for ds in sources)
     servers.append(
       _build_service_server(self, include_raise=_unattended_claude_session(), wire='mcp')

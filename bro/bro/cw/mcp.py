@@ -17,8 +17,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from base import log, spawn
-from runtime.mcp_server import BEARER_TOKEN_ENV
+from bro.base import log, spawn
+from bro.runtime.mcp_server import BEARER_TOKEN_ENV
 
 # how long a runner-owned server may take to bind. the bind needs only
 # mcp-server's cheap module imports (the heavy ones are deferred past it), so
@@ -33,7 +33,7 @@ _HEALTH_TIMEOUT = 60.0
 @dataclass(frozen=True)
 class MCPEndpoint:
   """where a session-local MCP server listens; the claude `--mcp-config` (one URL
-  per namespace) is built from it by `cw.claude_argv`."""
+  per namespace) is built from it by `bro.cw.claude_argv`."""
 
   port: int
   token: str

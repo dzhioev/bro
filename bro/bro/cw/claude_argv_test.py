@@ -5,9 +5,9 @@ from unittest.mock import patch
 
 import pytest
 
-import cw.claude_argv
-from cw.mcp import MCPEndpoint
-from cw.session_test import _spec
+import bro.cw.claude_argv as cw_claude_argv
+from bro.cw.mcp import MCPEndpoint
+from bro.cw.session_test import _spec
 
 _ENDPOINT = MCPEndpoint(port=1234, token='tok')
 
@@ -18,7 +18,7 @@ def _brog_config(monkeypatch):
   # namespaces, and brog's state factory reads the self-contained `brog` secret
   # at build; pin a fake so launches build hermetically
   monkeypatch.setattr(
-    'base.credentials.get_json',
+    'bro.base.credentials.get_json',
     lambda name: {'backend': 'flow', 'transport': 'http', 'url': 'https://x', 'token': 't'},
   )
 
@@ -35,10 +35,10 @@ def _pm_persona_namespaces() -> list[str]:
   return list(dict.fromkeys(s.namespace for s in create_bro('pm').claude_persona_mcp_servers()))
 
 
-def _cw_session_launch(spec, **kwargs) -> cw.claude_argv.ClaudeLaunch:
+def _cw_session_launch(spec, **kwargs) -> cw_claude_argv.ClaudeLaunch:
   kwargs.setdefault('endpoint', _ENDPOINT)
-  with patch('cw.claude_argv._session_append_prompt', return_value='append text'):
-    return cw.claude_argv.build_claude_launch(spec, **kwargs)
+  with patch('bro.cw.claude_argv._session_append_prompt', return_value='append text'):
+    return cw_claude_argv.build_claude_launch(spec, **kwargs)
 
 
 def _settings(argv: list[str]) -> dict:
@@ -49,7 +49,7 @@ class TestCwSessionLaunch:
   def test_basic_shape(self):
     launch = _cw_session_launch(_spec(), claude_args=['--foo'])
     argv = launch.argv
-    assert argv[:2] == ['--model', cw.claude_argv._CW_MODEL]
+    assert argv[:2] == ['--model', cw_claude_argv._CW_MODEL]
     assert '--bare' not in argv
     assert argv[argv.index('--disallowed-tools') + 1] == 'mcp__claude_ai_*'
     assert argv[argv.index('--append-system-prompt') + 1] == 'append text'
@@ -63,7 +63,7 @@ class TestCwSessionLaunch:
   def test_status_line_lands_in_settings(self):
     status_line = _settings(_cw_session_launch(_spec(), claude_args=[]).argv)['statusLine']
     assert status_line['type'] == 'command'
-    assert status_line['command'] == f'{shlex.quote(sys.executable)} -m cw.statusline'
+    assert status_line['command'] == f'{shlex.quote(sys.executable)} -m bro.cw.statusline'
 
   def test_effort_injected(self):
     argv = _cw_session_launch(_spec(effort='xhigh'), claude_args=[]).argv
@@ -105,9 +105,9 @@ class TestCwSessionLaunch:
 
 
 class TestRawLaunch:
-  def _launch(self, **kwargs) -> cw.claude_argv.ClaudeLaunch:
+  def _launch(self, **kwargs) -> cw_claude_argv.ClaudeLaunch:
     spec = _spec(bro='pm', raw=True, **kwargs)
-    return cw.claude_argv.build_claude_launch(spec, claude_args=[], endpoint=_ENDPOINT)
+    return cw_claude_argv.build_claude_launch(spec, claude_args=[], endpoint=_ENDPOINT)
 
   def test_basic_shape(self):
     argv = self._launch().argv
@@ -152,12 +152,12 @@ class TestRawLaunch:
     # apiKeyHelper is the ppp checkout the runner's venv installs, hold-neutral
     settings = _settings(self._launch(fast=True).argv)
     assert settings['fastMode'] is True
-    assert settings['apiKeyHelper'] == str(cw.claude_argv._ANTHROPIC_KEY_HELPER)
+    assert settings['apiKeyHelper'] == str(cw_claude_argv._ANTHROPIC_KEY_HELPER)
     assert _settings(self._launch().argv)['fastMode'] is False
 
   def test_status_line_lands_in_settings(self):
     status_line = _settings(self._launch().argv)['statusLine']
-    assert status_line['command'] == f'{shlex.quote(sys.executable)} -m cw.statusline'
+    assert status_line['command'] == f'{shlex.quote(sys.executable)} -m bro.cw.statusline'
 
   def test_system_prompt_is_bros_claude_flavor(self):
     from bro.registry import create_bro
@@ -183,6 +183,6 @@ class TestRawLaunch:
 
   def test_unknown_bro_raises(self):
     with pytest.raises(KeyError, match='unknown bro'):
-      cw.claude_argv.build_claude_launch(
+      cw_claude_argv.build_claude_launch(
         _spec(bro='does-not-exist'), claude_args=[], endpoint=_ENDPOINT
       )

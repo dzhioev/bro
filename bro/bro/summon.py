@@ -49,9 +49,7 @@ the client receives `started`, so the re-armed bound structurally outlives the h
 backstop. The backstop normally delivers a terminal; expiry means it was lost (e.g.
 sent while the broxy was down) or the launch wedged, and the failure message names
 which phase went silent — no `started` points at the session's summon status/audit
-(`var/cw/summon/`), a lost terminal after `started` points at trails.
-
-`summon list` (`list_summons`) reads the session's summon-status file
+(`var/cw/summon/`), a lost terminal after `started` points at bro.trails.`summon list` (`list_summons`) reads the session's summon-status file
 (`CW_SUMMON_STATUS`, written host-side by `bro/launch/summon_control.py`) and reports the active
 summons and the last finished one, each with its request id — the rediscovery
 surface when a request id was lost with a dead client.
@@ -70,18 +68,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
-import base.args
-from base import log
+import bro.base.args as base_args
+from bro.base import log
 
 if TYPE_CHECKING:
-  from broker.brotocol import Message
-  from broker.client import Client
+  from bro.broker.brotocol import Message
+  from bro.broker.client import Client
 
 __cli_name__ = 'summon'
 
 SUMMON = 'summon'  # the request's message-type tag (a consumer tag; not in broker's Tag)
 # points a session at its summon-status file — set by the launch surfaces
-# (bro/launch/summon_control.py owns the writer), read by `cw.statusline`
+# (bro/launch/summon_control.py owns the writer), read by `bro.cw.statusline`
 STATUS_ENV = 'CW_SUMMON_STATUS'
 SUMMONER_ENV = 'CW_SUMMONER'
 # request-lifecycle bound for a summoned child — sized so the flagship deploy
@@ -106,7 +104,7 @@ class SummonError(Exception):
 
 
 def _open_client() -> 'Client':
-  from broker.client import CHANNEL_ENV, Client
+  from bro.broker.client import CHANNEL_ENV, Client
 
   client = Client.from_env()
   if client is None:
@@ -170,7 +168,7 @@ def _trails_hint(trail_id: Optional[str]) -> str:
 def _interpret_terminal(terminal: 'Message', trail_id: Optional[str]) -> str:
   """turn a summon terminal into the answer, or raise `SummonError` with the
   failure reason."""
-  from broker.brotocol import Tag
+  from bro.broker.brotocol import Tag
 
   if terminal.type == Tag.COMPLETED:
     end_reason = terminal.payload.get('end_reason')
@@ -339,7 +337,7 @@ def check_summon(request_id: str, *, last_seen: Optional[int] = None) -> SummonS
   returned `seq` is the new cursor. Raises `SummonError` when the id is unknown,
   the summon failed, `last_seen` is ahead of what was read, or no broxy
   answers."""
-  from broker.brotocol import Tag
+  from bro.broker.brotocol import Tag
 
   payload: dict[str, Any] = {'id': request_id}
   if last_seen is not None:
@@ -399,7 +397,7 @@ def collect_summon(
   With `client` the caller owns the connection's lifecycle (closing it from
   another thread aborts the wait); without, a fresh one is opened and closed per
   call. Raises `SummonError` on any failure."""
-  from broker.brotocol import Tag
+  from bro.broker.brotocol import Tag
 
   with _connection(client) as connection:
     claim = connection.send(Tag.CLAIM, {'id': request_id})
@@ -538,7 +536,7 @@ def _check(request_id: str, wait: bool, timeout: Optional[float], last_seen: Opt
 
 def main(argv: list[str]) -> Optional[int]:
   if len(argv) > 1 and argv[1] == 'list':
-    parser = base.args.Parser(
+    parser = base_args.Parser(
       prog='summon list',
       description="list this session's summons as the host recorded them: the "
       'active ones and the last finished one, each with the request id — the '
@@ -546,7 +544,7 @@ def main(argv: list[str]) -> Optional[int]:
     )
     return _list(**parser.parse(argv[1:]))
   if len(argv) > 1 and argv[1] == 'check':
-    parser = base.args.Parser(
+    parser = base_args.Parser(
       prog='summon check',
       description='check on a detached or interrupted summon by its request id: '
       'print the answer if the result is in, otherwise report `still running` and '

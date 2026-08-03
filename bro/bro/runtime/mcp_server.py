@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 # module import stays cheap by design: every heavy dependency (mcp, starlette,
-# uvicorn, llm.mcp, flow / the bro graph) is imported inside the function that
+# uvicorn, bro.llm.mcp, flow / the bro graph) is imported inside the function that
 # needs it, so the --http path can bind its socket — and publish the port via
 # --port-file — milliseconds after process start, before the import-dominated
 # tool resolution (see main's bind-before-import ordering).
@@ -15,13 +15,13 @@ import socket
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Optional, cast
 
-import base.args
+import bro.base.args as base_args
 
 if TYPE_CHECKING:
   from mcp.server.lowlevel import Server
   from starlette.types import ASGIApp, Receive, Scope, Send
 
-  from llm.mcp import MCPServer, MCPServerSpec, Tool
+  from bro.llm.mcp import MCPServer, MCPServerSpec, Tool
 
 __cli_name__ = 'mcp-server'
 
@@ -71,7 +71,7 @@ def _resolve_servers(spec: str) -> list['MCPServer']:
 
 def _lowlevel_server(label: str, entries: list['Tool']) -> 'Server':
   # tool text (descriptions, parameter annotations) arrives fully rendered —
-  # each server renders its own at build time (llm.mcp `FunctionTool`).
+  # each server renders its own at build time (bro.llm.mcp `FunctionTool`).
   import mcp.types as types
   from mcp.server.lowlevel import Server
 
@@ -199,7 +199,7 @@ def _write_port_file(path: str, port: int) -> None:
 
 
 def main(argv: list[str]) -> Optional[int]:
-  parser = base.args.Parser(description='generic MCP server: stdio by default, HTTP with --http')
+  parser = base_args.Parser(description='generic MCP server: stdio by default, HTTP with --http')
   parser.add_argument(
     'server',
     help=(

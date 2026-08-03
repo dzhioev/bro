@@ -2,8 +2,8 @@ from typing import Optional
 
 import pytest
 
-from base.condition import SetVariable, StringVariable
-from base.template import TemplateError, render
+from bro.base.condition import SetVariable, StringVariable
+from bro.base.template import TemplateError, render
 
 
 def _harness(value: str) -> dict:

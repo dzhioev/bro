@@ -5,8 +5,8 @@ import pytest
 
 import bro.launch.spawn
 import bro.launch.summon_control
-from broker.brotocol import Message
-from broker.dispatcher import Dispatcher
+from bro.broker.brotocol import Message
+from bro.broker.dispatcher import Dispatcher
 
 
 class TestSummonAllowList:

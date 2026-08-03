@@ -4,7 +4,7 @@ import sys
 
 import pytest
 
-from base.args import REMAINDER, ArgumentTypeError, Parser, list_parser, moment_parser
+from bro.base.args import REMAINDER, ArgumentTypeError, Parser, list_parser, moment_parser
 
 
 class TestExclusiveGroups:
@@ -285,7 +285,7 @@ class TestEnvBooleans:
   def test_verbose_env_triggered(self, monkeypatch):
     import logging as _logging
 
-    from base import log
+    from bro.base import log
 
     monkeypatch.setenv('VERBOSE', '1')
     log.set_level(_logging.INFO)
@@ -694,16 +694,16 @@ class TestDispatch:
 
 class TestStdlibOnlyImport:
   def test_imports_and_parses_without_icecream(self):
-    # base.args must import in a stdlib-only environment (no venv); icecream is
+    # bro.base.args must import in a stdlib-only environment (no venv); icecream is
     # optional. simulate its absence in a fresh subprocess. cwd is the repo root
-    # (run_tests invokes pytest there), so `import base.args` resolves.
+    # (run_tests invokes pytest there), so `import bro.base.args` resolves.
     import subprocess
 
     code = (
       "import sys; sys.modules['icecream'] = None; "
-      'import base.args; '
-      "namespace = base.args.Parser().parse(['prog']); "
-      "assert 'ic' not in namespace and '--ic' not in base.args.Parser().format_help(); "
+      'import bro.base.args; '
+      "namespace = bro.base.args.Parser().parse(['prog']); "
+      "assert 'ic' not in namespace and '--ic' not in bro.base.args.Parser().format_help(); "
       "print('ok')"
     )
     result = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True)
@@ -716,7 +716,7 @@ class TestLogFlag:
     import logging as _logging
     import os
 
-    from base import log
+    from bro.base import log
 
     parser = Parser()
     parser.parse_args(['--log', 'warning'])
@@ -727,7 +727,7 @@ class TestLogFlag:
     import logging as _logging
     import os
 
-    from base import log
+    from bro.base import log
 
     parser = Parser()
     parser.parse_args(['--verbose'])

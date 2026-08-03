@@ -4,10 +4,10 @@ from unittest.mock import MagicMock
 import pytest
 from pydantic import ValidationError
 
-from base import credentials
-from base.text_window import DEFAULT_LIMIT, MAX_LIMIT
-from brog.mcp import spec
-from brog.model import Comment, Project, Task
+from bro.base import credentials
+from bro.base.text_window import DEFAULT_LIMIT, MAX_LIMIT
+from bro.brog.mcp import spec
+from bro.brog.model import Comment, Project, Task
 
 # tools are built once against a shared mock System (schema derivation is not
 # free); the autouse fixture resets the mock between tests.

@@ -3,13 +3,13 @@ from unittest.mock import patch
 
 import pytest
 
-import llm.llms.echo
+import bro.llm.llms.echo as llm_llms_echo
 from bro.bro import BaseBro
 from bro.launch.ask import main
 from bro.launch.identity import bro_git_identity_env
-from llm.llm import LLM
-from llm.mcp import MCPServer
-from llm.observer import NullObserver, Observer
+from bro.llm.llm import LLM
+from bro.llm.mcp import MCPServer
+from bro.llm.observer import NullObserver, Observer
 
 
 @pytest.fixture(autouse=True)
@@ -37,7 +37,7 @@ class RecordBro(BaseBro):
   description = 'records inputs'
   # no fast mode on the echo spec: ask's implied fast falls back to the plain
   # spec, so an in-place run resolves through the patchable create_bro path
-  llm_spec = llm.llms.echo.LLMSpec()
+  llm_spec = llm_llms_echo.LLMSpec()
 
   def __init__(self, response: str = 'done'):
     super().__init__(system_prompt='record')

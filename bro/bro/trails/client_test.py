@@ -5,14 +5,14 @@ from unittest.mock import patch
 
 import pytest
 
-from trails.client import (
+from bro.trails.client import (
   HTTPStatusError,
   TrailsClient,
   fetch_recorded_trail,
   step_from_row,
   trail_from_header,
 )
-from trails.model import ForkedFrom, RecordedTrail, Step, Trail
+from bro.trails.model import ForkedFrom, RecordedTrail, Step, Trail
 
 
 class _FakeResponse:
@@ -65,13 +65,13 @@ def _install_fake_connection(monkeypatch) -> _FakeConnection:
 
 
 def _client() -> TrailsClient:
-  return TrailsClient('https://trails.example', 'tok')
+  return TrailsClient('https://bro.trails.example', 'tok')
 
 
 class TestConstructor:
   def test_rejects_non_https(self):
     with pytest.raises(ValueError, match='https'):
-      TrailsClient('http://trails.example', 'tok')
+      TrailsClient('http://bro.trails.example', 'tok')
 
 
 class TestGetTrail:

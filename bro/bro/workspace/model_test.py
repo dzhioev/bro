@@ -3,8 +3,8 @@ import subprocess
 
 import pytest
 
-from workspace import model
-from workspace.model import ContainerWorkspace, HostWorktree, Workspace
+from bro.workspace import model
+from bro.workspace.model import ContainerWorkspace, HostWorktree, Workspace
 
 
 class _FakeProc:

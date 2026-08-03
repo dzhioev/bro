@@ -64,15 +64,15 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any, Optional
 
-from base import configs, credentials, log
-from base.args import Parser
-from cw.constants import CW_RESUMED_SESSION_ENV
-from monitor import claude_config_dir, health, trail_pointer
-from trails.client import HTTPStatusError, TrailsClient, default_client
-from trails.lineage import walk_header_chain
-from trails.model import UUID_LOOKUP_LIMIT
-from trails.record.spine import Recording
-from trails.server.backends import CLAUDE_ADAPTER
+from bro.base import configs, credentials, log
+from bro.base.args import Parser
+from bro.cw.constants import CW_RESUMED_SESSION_ENV
+from bro.monitor import claude_config_dir, health, trail_pointer
+from bro.trails.client import HTTPStatusError, TrailsClient, default_client
+from bro.trails.lineage import walk_header_chain
+from bro.trails.model import UUID_LOOKUP_LIMIT
+from bro.trails.record.spine import Recording
+from bro.trails.server.backends import CLAUDE_ADAPTER
 
 # how many of the parent trail's trailing record uuids may end a verified fork
 # copy: the copy drops ephemeral records, so the very last uuids can be missing
@@ -307,9 +307,7 @@ class _Continuation:
 
 
 class Recorder:
-  """tracks one workspace's active transcript and records it as fork trails.
-
-  `started_after` gates segment adoption to files modified after the session
+  """tracks one workspace's active transcript and records it as fork bro.trails.`started_after` gates segment adoption to files modified after the session
   launched, so a reused workspace's older transcripts are not re-recorded."""
 
   def __init__(

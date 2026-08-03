@@ -2,12 +2,12 @@ from unittest.mock import patch
 
 import pytest
 
-import llm.llms.chat_gpt
-import llm.llms.echo
+import bro.llm.llms.chat_gpt as llm_llms_chat_gpt
+import bro.llm.llms.echo as llm_llms_echo
 from bro.launch._cli import create_bro_for_run, maybe_containerize
 from bro.launch.identity import bro_git_identity_env
-from llm.llm import EFFORT_LEVELS
-from workspace.project import ProjectConfig
+from bro.llm.llm import EFFORT_LEVELS
+from bro.workspace.project import ProjectConfig
 
 # the run bro's own CW_BRO rides in explicitly (never as an ambient forward), so
 # a calling session's theming cannot leak into the container
@@ -20,7 +20,7 @@ def scoped_store_preflight(monkeypatch):
     'bro.launch.scope.credentials.build_scoped_store', lambda names, optional=(): {}
   )
   monkeypatch.setattr(
-    'workspace.project.project_config',
+    'bro.workspace.project.project_config',
     lambda: ProjectConfig(default_bro='foo', image_repository='bro/foo'),
   )
 
@@ -195,7 +195,7 @@ def test_maybe_containerize_unknown_creds_mapping_kind_errors(capsys):
     patch.dict('os.environ', {}, clear=False) as env,
     patch('bro.launch.root.run_in_container') as run,
     patch(
-      'workspace.project.project_config',
+      'bro.workspace.project.project_config',
       return_value=ProjectConfig(
         default_bro='foo', image_repository='bro/foo', creds={'nonesuch': 'x'}
       ),
@@ -366,7 +366,7 @@ def test_maybe_containerize_into_bases_the_clone_on_the_ref():
   with (
     patch.dict('os.environ', {}, clear=False) as env,
     patch('bro.launch.root.run_in_container', return_value=0) as run,
-    patch('workspace.git.resolve_ref', return_value='REF-SHA') as resolve,
+    patch('bro.workspace.git.resolve_ref', return_value='REF-SHA') as resolve,
   ):
     env.pop('CW_IN_CONTAINER', None)
     rc = maybe_containerize(
@@ -386,7 +386,7 @@ def test_maybe_containerize_unresolvable_into_errors(capsys):
   with (
     patch.dict('os.environ', {}, clear=False) as env,
     patch('bro.launch.root.run_in_container') as run,
-    patch('workspace.git.resolve_ref', return_value=None),
+    patch('bro.workspace.git.resolve_ref', return_value=None),
   ):
     env.pop('CW_IN_CONTAINER', None)
     rc = maybe_containerize(
@@ -436,7 +436,7 @@ def test_create_bro_for_run_without_fast_uses_create_bro(monkeypatch):
 
 def test_create_bro_for_run_with_fast_applies_fast_spec(monkeypatch):
   class _Cls:
-    llm_spec = llm.llms.chat_gpt.LLMSpec(model='gpt-5.4-mini')
+    llm_spec = llm_llms_chat_gpt.LLMSpec(model='gpt-5.4-mini')
 
     @classmethod
     def create(cls, spec):
@@ -445,7 +445,7 @@ def test_create_bro_for_run_with_fast_applies_fast_spec(monkeypatch):
 
   monkeypatch.setattr('bro.registry.get_class', lambda name: _Cls)
   spec = create_bro_for_run('x', fast=True)
-  assert isinstance(spec, llm.llms.chat_gpt.LLMSpec)
+  assert isinstance(spec, llm_llms_chat_gpt.LLMSpec)
   assert spec.service_tier == 'priority'
   # class default untouched — fast() returns a fresh spec
   assert _Cls.llm_spec.service_tier is None
@@ -453,7 +453,7 @@ def test_create_bro_for_run_with_fast_applies_fast_spec(monkeypatch):
 
 def test_create_bro_for_run_effort_composes_with_fast(monkeypatch):
   class _Cls:
-    llm_spec = llm.llms.chat_gpt.LLMSpec(model='gpt-5.4-mini')
+    llm_spec = llm_llms_chat_gpt.LLMSpec(model='gpt-5.4-mini')
 
     @classmethod
     def create(cls, spec):
@@ -461,7 +461,7 @@ def test_create_bro_for_run_effort_composes_with_fast(monkeypatch):
 
   monkeypatch.setattr('bro.registry.get_class', lambda name: _Cls)
   spec = create_bro_for_run('x', fast=True, effort='max')
-  assert isinstance(spec, llm.llms.chat_gpt.LLMSpec)
+  assert isinstance(spec, llm_llms_chat_gpt.LLMSpec)
   assert spec.service_tier == 'priority'
   # max caps at the provider top
   assert spec.reasoning_effort == 'xhigh'
@@ -471,7 +471,7 @@ def test_create_bro_for_run_effort_composes_with_fast(monkeypatch):
 
 def test_create_bro_for_run_effort_applies_without_fast(monkeypatch):
   class _Cls:
-    llm_spec = llm.llms.chat_gpt.LLMSpec(model='gpt-5.4-mini')
+    llm_spec = llm_llms_chat_gpt.LLMSpec(model='gpt-5.4-mini')
 
     @classmethod
     def create(cls, spec):
@@ -479,7 +479,7 @@ def test_create_bro_for_run_effort_applies_without_fast(monkeypatch):
 
   monkeypatch.setattr('bro.registry.get_class', lambda name: _Cls)
   spec = create_bro_for_run('x', fast=False, effort='low')
-  assert isinstance(spec, llm.llms.chat_gpt.LLMSpec)
+  assert isinstance(spec, llm_llms_chat_gpt.LLMSpec)
   assert spec.reasoning_effort == 'low'
   assert spec.service_tier is None
 
@@ -488,7 +488,7 @@ def test_create_bro_for_run_effort_unsupported_provider_raises(monkeypatch):
   # --effort is an explicit ask — unlike implicit fast, a provider without the
   # knob must raise, not silently fall back to the plain spec.
   class _Cls:
-    llm_spec = llm.llms.echo.LLMSpec()
+    llm_spec = llm_llms_echo.LLMSpec()
 
     @classmethod
     def create(cls, spec):
@@ -503,7 +503,7 @@ def test_chat_gpt_accepts_every_cli_effort_level():
   # the --effort choices come from llm's EFFORT_LEVELS; the chat_gpt mapping must
   # cover the full vocabulary so no accepted flag value fails at spec build.
   for level in EFFORT_LEVELS:
-    llm.llms.chat_gpt.LLMSpec().with_effort(level)
+    llm_llms_chat_gpt.LLMSpec().with_effort(level)
 
 
 def test_create_bro_for_run_unsupported_fast_falls_back_to_plain(monkeypatch):

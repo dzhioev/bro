@@ -1,4 +1,4 @@
-import workspace.worktrees
+import bro.workspace.worktrees as workspace_worktrees
 
 
 class TestProvisionHostWorktree:
@@ -13,8 +13,8 @@ class TestProvisionHostWorktree:
       captured.update(kwargs)
       return SimpleNamespace(returncode=0)
 
-    monkeypatch.setattr(workspace.worktrees.subprocess, 'run', fake_run)
-    assert workspace.worktrees.provision_host_worktree(tmp_path) is True
+    monkeypatch.setattr(workspace_worktrees.subprocess, 'run', fake_run)
+    assert workspace_worktrees.provision_host_worktree(tmp_path) is True
     assert captured['args'] == [str(tmp_path / 'setup.sh')]
     assert captured['cwd'] == str(tmp_path)
 
@@ -22,8 +22,8 @@ class TestProvisionHostWorktree:
     def fail_run(args, **kwargs):
       raise AssertionError('nothing should run for a script-less worktree')
 
-    monkeypatch.setattr(workspace.worktrees.subprocess, 'run', fail_run)
-    assert workspace.worktrees.provision_host_worktree(tmp_path) is True
+    monkeypatch.setattr(workspace_worktrees.subprocess, 'run', fail_run)
+    assert workspace_worktrees.provision_host_worktree(tmp_path) is True
 
   def test_strips_cw_venv_baked_from_the_provision_env(self, monkeypatch, tmp_path):
     from types import SimpleNamespace
@@ -36,8 +36,8 @@ class TestProvisionHostWorktree:
       captured.update(kwargs)
       return SimpleNamespace(returncode=0)
 
-    monkeypatch.setattr(workspace.worktrees.subprocess, 'run', fake_run)
-    assert workspace.worktrees.provision_host_worktree(tmp_path) is True
+    monkeypatch.setattr(workspace_worktrees.subprocess, 'run', fake_run)
+    assert workspace_worktrees.provision_host_worktree(tmp_path) is True
     assert 'CW_VENV_BAKED' not in captured['env']
 
 
@@ -55,7 +55,7 @@ class TestEnsureHostWorktree:
         return SimpleNamespace(returncode=submodule_returncode, stdout='')
       return SimpleNamespace(returncode=0, stdout='')
 
-    monkeypatch.setattr(workspace.worktrees.subprocess, 'run', fake_run)
+    monkeypatch.setattr(workspace_worktrees.subprocess, 'run', fake_run)
     return calls
 
   def _add_command(self, calls):
@@ -64,7 +64,7 @@ class TestEnsureHostWorktree:
   def test_new_branch_uses_base_ref(self, monkeypatch, tmp_path):
     calls = self._recorder(monkeypatch)
     worktree = tmp_path / 'worktree'
-    assert workspace.worktrees.ensure_host_worktree(worktree, 'worktree-x', 'sha123') is True
+    assert workspace_worktrees.ensure_host_worktree(worktree, 'worktree-x', 'sha123') is True
     assert self._add_command(calls) == [
       'git',
       'worktree',
@@ -80,7 +80,7 @@ class TestEnsureHostWorktree:
     # the launcher's-HEAD rule: a new worktree bases on the checkout as it stands
     calls = self._recorder(monkeypatch)
     worktree = tmp_path / 'worktree'
-    assert workspace.worktrees.ensure_host_worktree(worktree, 'worktree-x') is True
+    assert workspace_worktrees.ensure_host_worktree(worktree, 'worktree-x') is True
     assert self._add_command(calls) == [
       'git',
       'worktree',
@@ -95,7 +95,7 @@ class TestEnsureHostWorktree:
   def test_existing_branch_ignores_base_ref(self, monkeypatch, tmp_path):
     calls = self._recorder(monkeypatch, branch_exists=True)
     worktree = tmp_path / 'worktree'
-    assert workspace.worktrees.ensure_host_worktree(worktree, 'worktree-x', 'sha123') is True
+    assert workspace_worktrees.ensure_host_worktree(worktree, 'worktree-x', 'sha123') is True
     assert self._add_command(calls) == [
       'git',
       'worktree',
@@ -109,7 +109,7 @@ class TestEnsureHostWorktree:
     # a superproject worktree needs its submodules before its setup.sh can run
     calls = self._recorder(monkeypatch)
     worktree = tmp_path / 'worktree'
-    assert workspace.worktrees.ensure_host_worktree(worktree, 'worktree-x') is True
+    assert workspace_worktrees.ensure_host_worktree(worktree, 'worktree-x') is True
     update = next(c for c in calls if 'submodule' in c)
     assert update == ['git', '-C', str(worktree), 'submodule', 'update', '--init', '-q']
     assert calls.index(update) > calls.index(self._add_command(calls))
@@ -117,11 +117,11 @@ class TestEnsureHostWorktree:
   def test_failed_submodule_init_fails(self, monkeypatch, tmp_path):
     self._recorder(monkeypatch, submodule_returncode=1)
     worktree = tmp_path / 'worktree'
-    assert workspace.worktrees.ensure_host_worktree(worktree, 'worktree-x') is False
+    assert workspace_worktrees.ensure_host_worktree(worktree, 'worktree-x') is False
 
   def test_existing_dir_is_noop(self, monkeypatch, tmp_path):
     calls = self._recorder(monkeypatch)
     worktree = tmp_path / 'worktree'
     worktree.mkdir()
-    assert workspace.worktrees.ensure_host_worktree(worktree, 'worktree-x', 'sha123') is True
+    assert workspace_worktrees.ensure_host_worktree(worktree, 'worktree-x', 'sha123') is True
     assert calls == []

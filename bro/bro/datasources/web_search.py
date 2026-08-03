@@ -1,6 +1,6 @@
 from typing import Optional
 
-from base import credentials, log
+from bro.base import credentials, log
 from bro.datasources.http import get_json, get_text
 from bro.datasources.searchable import Hit, SearchableDataSource
 

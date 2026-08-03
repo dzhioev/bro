@@ -5,7 +5,7 @@ from unittest.mock import patch
 import pytest
 import trafilatura
 
-from base import credentials
+from bro.base import credentials
 from bro.datasources import web_search as web_search
 
 

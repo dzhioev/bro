@@ -21,7 +21,7 @@ class PM(Bro):
   name = 'pm'                          # unique, kebab-case
   description = '...'                  # one line, shown in tool listings
   system_prompt = SYSTEM_PROMPT        # class-level; MRO-concatenated base→derived
-  llm_spec = llm.llms.chat_gpt.LLMSpec(model='gpt-5.4-mini', reasoning_effort='medium')
+  llm_spec = bro.llm.llms.chat_gpt.LLMSpec(model='gpt-5.4-mini', reasoning_effort='medium')
   mcp_servers = [flow.mcp.spec()]          # full flow toolset
   # or: flow.mcp.spec('add_task', 'list_tasks')  # subset, validated at declaration
   data_sources = [Wikipedia()]         # read-only connectors
@@ -32,7 +32,7 @@ Everything is a class attribute — there is no custom `__init__`. The LLM recip
 The base class, on instantiation:
 
 - keeps the `mcp_servers` specs as declared; live servers are built once, lazily, when the bro first runs tools
-- auto-prepends every `prompts/shared/*.md` to the system prompt (conventions that must hold across every surface live there)
+- auto-prepends every `bro/bro/prompts/shared/*.md` to the system prompt (conventions that must hold across every surface live there)
 - appends a `## Data sources` block describing each declared `DataSource`
 - on non-interactive runs, exposes a built-in `raise` service tool (see below)
 
@@ -46,7 +46,7 @@ The base class, on instantiation:
 A Bro's behaviour comes from three sources, all declared on the class:
 
 - **`system_prompt`** — the specialisation. Triage policies, output protocol, voice. The single source of truth for what the Bro knows and decides.
-- **`mcp_servers`** — sets of stateful tools. An entry is a tool-pack module (`flow.mcp`, `infra.mcp`, `dev.mcp` — its conventional `spec` Toolset, the full roster) or a scoping call (`flow.mcp.spec(*tool_names)`, a validated subset); both normalize to an `llm.mcp.MCPServerSpec`, the pure-metadata manifest (`needed_secrets` / `optional_secrets` plus a `build()` factory). The declaration/runtime split lets hosts read a bro's credential manifest without constructing live servers — a live server is free to hold real resources (flow's shared `System`) because it only ever exists in a serving process.
+- **`mcp_servers`** — sets of stateful tools. An entry is a tool-pack module (`flow.mcp`, `infra.mcp`, `dev.mcp` — its conventional `spec` Toolset, the full roster) or a scoping call (`flow.mcp.spec(*tool_names)`, a validated subset); both normalize to an `bro.llm.mcp.MCPServerSpec`, the pure-metadata manifest (`needed_secrets` / `optional_secrets` plus a `build()` factory). The declaration/runtime split lets hosts read a bro's credential manifest without constructing live servers — a live server is free to hold real resources (flow's shared `System`) because it only ever exists in a serving process.
 - **`data_sources`** — read-only connectors (Wikipedia, TMDb, Open Library, web search). Each implements `search(query, limit)` and `fetch(id, query=None)`. The base class exposes them as `search` / `fetch` MCP tools inside the source's own `<name>-source` namespace (wire name `<name>-source__search`) and injects each source's `summary` into the system prompt so the LLM knows what is available without enumerating raw tool names.
 
 The split between `mcp_servers` and `data_sources` is a contract: data sources never mutate state, so they are safe to bind to any Bro. MCP servers may mutate state and are chosen per Bro.
@@ -63,10 +63,10 @@ Interactive paths (`Bro.send()`, guided `cw ss --raw` Claude Code sessions) do *
 
 The same Bro runs from many launchers:
 
-- **Console** — `bro run <name> <input>`, `bro list`, `bro show <name>`. Backed by `bro/run.py`.
+- **Console** — `bro run <name> <input>`, `bro list`, `bro show <name>`. Backed by `bro/bro/run.py`.
 - **Claude Code raw** — `cw ss --bro <name> --raw` launches a bare Claude Code session whose system prompt and MCP servers come from the session's Bro. Tools are served by a session-local HTTP MCP server (`mcp-server bro:<name> --http`) exposing the union of the Bro's declared MCP servers, data-source tools, scripts, and the framework `@::skill` loader, one endpoint per namespace. Useful when the user wants a chat UI over the Bro's policy + toolkit.
 - **Claude Code persona** — every cw-session (the default non-`--raw` `cw ss` flavor) runs *as* a Bro too (`--bro <name>`, defaulting to the project default bro): the Bro's persona and Scripts prompts are injected, its scripts mount as canonical `@::` tools, Claude retains its native third-party skill mechanism, and the bro's claude-harness-filtered toolset (`claude_persona_mcp_servers()` via `mcp-server persona:<name> --http`) mounts alongside claude's built-in tools — components gated to the bro harness (the dev toolset) stay out.
-- **`bro run` / `bro chat`** — canonical one-shot and interactive launchers; `ask` and `call` are aliases. See `bro/launch/CLAUDE.md`.
+- **`bro run` / `bro chat`** — canonical one-shot and interactive launchers; `ask` and `call` are aliases. See `bro/bro/launch/CLAUDE.md`.
 
 A given Bro need not support every surface — `pm` is consumed by both `cw ss --bro pm` and the `process-inbox` TUI; `librorian` runs from the console. `assistant` (which declares `mcp_servers=[flow.mcp.spec()]`) remains reachable through `bro run` / `bro show` and `cw ss --bro assistant`.
 

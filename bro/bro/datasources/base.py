@@ -1,8 +1,8 @@
 from abc import ABC, abstractmethod
 
-from base import template
-from base.condition import SetVariable, StringVariable, Variables
-from llm.mcp import MCPServer
+from bro.base import template
+from bro.base.condition import SetVariable, StringVariable, Variables
+from bro.llm.mcp import MCPServer
 
 
 class SourceUnavailable(Exception):

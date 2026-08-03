@@ -4,7 +4,7 @@ import tempfile
 
 import pytest
 
-from base.text_window import DEFAULT_LIMIT
+from bro.base.text_window import DEFAULT_LIMIT
 from bro.bros.dev import jobs
 from bro.bros.dev.mcp import (
   bash,
@@ -19,7 +19,7 @@ from bro.bros.dev.mcp import (
   watch,
   write_file,
 )
-from llm.mcp import Context
+from bro.llm.mcp import Context
 
 
 def test_read_file_returns_numbered_lines():

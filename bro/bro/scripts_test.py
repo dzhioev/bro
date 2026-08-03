@@ -6,14 +6,14 @@ from typing import ClassVar, Optional, get_args
 
 import pytest
 
-import llm.mcp
-from base.condition import SetVariable
+import bro.llm.mcp as llm_mcp
 from bro import bro as bro_module, scripts as script_store
+from bro.base.condition import SetVariable
 from bro.bro import BaseBro
 from bro.bros.dev import Dev
+from bro.llm.mcp import InProcessMCPServer, MCPServerSpec, ToolRegistry
+from bro.prompts import get_prompt
 from bro.scripts import DISPATCHER_SECRET, NAMESPACE, SKILL_TOOL_NAME, load_script
-from llm.mcp import InProcessMCPServer, MCPServerSpec, ToolRegistry
-from prompts import get_prompt
 
 
 class _TrackerDev(Dev):
@@ -72,7 +72,7 @@ def _bro_class(package: str, parent: type[BaseBro] = BaseBro) -> type[BaseBro]:
   )
 
 
-def _script_server(bro: BaseBro, *, wire: llm.mcp.Wire = 'bare') -> llm.mcp.MCPServer:
+def _script_server(bro: BaseBro, *, wire: llm_mcp.Wire = 'bare') -> llm_mcp.MCPServer:
   servers = (
     bro._mcp_servers_for(hold='unattended') if wire == 'bare' else bro.claude_bro_mcp_servers()
   )
@@ -119,10 +119,10 @@ class TestScriptStore:
     feature_names = frozenset({'brog'})
     for path in script_files:
       script = load_script(path.stem, path)
-      for harness in get_args(llm.mcp.Harness):
-        for wire in get_args(llm.mcp.Wire):
+      for harness in get_args(llm_mcp.Harness):
+        for wire in get_args(llm_mcp.Wire):
           for enabled in (True, False):
-            llm.mcp.render_text(
+            llm_mcp.render_text(
               script.body,
               harness=harness,
               wire=wire,
@@ -367,7 +367,7 @@ class TestScriptServer:
 
 class TestDispatcher:
   @staticmethod
-  async def _tool(bro: BaseBro, *, wire: llm.mcp.Wire = 'bare'):
+  async def _tool(bro: BaseBro, *, wire: llm_mcp.Wire = 'bare'):
     tools = await _script_server(bro, wire=wire).list_tools()
     return next(tool for tool in tools if tool.name == NAMESPACE)
 
@@ -394,7 +394,7 @@ class TestDispatcher:
   async def test_success_converts_argument_pairs_and_passes_roster_to_mu(
     self, fake_packages, monkeypatch
   ):
-    import llm.mu as mu_module
+    import bro.llm.mu as mu_module
 
     package = fake_packages(
       '_dispatcher_success',
@@ -450,7 +450,7 @@ class TestDispatcher:
 
   @pytest.mark.asyncio
   async def test_renders_instructions_for_the_serving_surface(self, fake_packages, monkeypatch):
-    import llm.mu as mu_module
+    import bro.llm.mu as mu_module
 
     package = fake_packages(
       '_dispatcher_render',
@@ -471,7 +471,7 @@ class TestDispatcher:
 
   @pytest.mark.asyncio
   async def test_expected_error_passes_through(self, fake_packages, monkeypatch):
-    import llm.mu as mu_module
+    import bro.llm.mu as mu_module
 
     package = fake_packages('_dispatcher_error', {'do-work': _script()})
     monkeypatch.setattr(script_store.credentials, 'available', lambda name: True)
@@ -519,7 +519,7 @@ class TestDispatcher:
   async def test_invalid_model_selection_fails_validation(
     self, fake_packages, monkeypatch, interpretation, match
   ):
-    import llm.mu as mu_module
+    import bro.llm.mu as mu_module
 
     package = fake_packages(
       f'_dispatcher_invalid_{len(sys.modules)}',
@@ -536,7 +536,7 @@ class TestDispatcher:
 
   @pytest.mark.asyncio
   async def test_rejects_empty_expected_error(self, fake_packages, monkeypatch):
-    import llm.mu as mu_module
+    import bro.llm.mu as mu_module
 
     package = fake_packages('_dispatcher_empty_error', {'do-work': _script()})
     monkeypatch.setattr(script_store.credentials, 'available', lambda name: True)
@@ -595,8 +595,8 @@ class TestScriptOptionalSecret:
 class TestScriptToolNames:
   def test_tool_name_prompt_spells_at_for_each_wire(self):
     text = get_prompt('tool_names.md')
-    bare = llm.mcp.render_text(text, wire='bare')
-    mcp = llm.mcp.render_text(text, wire='mcp')
+    bare = llm_mcp.render_text(text, wire='bare')
+    mcp = llm_mcp.render_text(text, wire='mcp')
     assert '`@::send-email` resolves to `at__send-email`' in bare
     assert '`@::send-email` resolves to `mcp__at__send-email`' in mcp
     assert 'No canonical namespace may be named `at`' in bare

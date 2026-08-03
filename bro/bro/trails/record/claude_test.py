@@ -6,9 +6,9 @@ from typing import Any, Optional
 
 import pytest
 
-from cw.constants import CW_RESUMED_SESSION_ENV
-from monitor import trail_pointer
-from trails.record.claude import Recorder, RecorderState, _fork_cuts, _state_path
+from bro.cw.constants import CW_RESUMED_SESSION_ENV
+from bro.monitor import trail_pointer
+from bro.trails.record.claude import Recorder, RecorderState, _fork_cuts, _state_path
 
 
 class FakeTrails:
@@ -200,7 +200,7 @@ def environment(tmp_path: Path, monkeypatch):
   monkeypatch.delenv('CW_HOST', raising=False)
   monkeypatch.delenv('CW_HOST_WORKSPACE', raising=False)
   # the suite itself may run inside a container; pin the probe to host mode
-  monkeypatch.setattr('trails.record.claude._in_container', lambda: False)
+  monkeypatch.setattr('bro.trails.record.claude._in_container', lambda: False)
   return projects
 
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 import datetime as dt
 
-from base.time_util import (
+from bro.base.time_util import (
   FUTURE,
   PAST,
   UTC,

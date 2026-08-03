@@ -3,7 +3,7 @@ import importlib.metadata
 from typing import Optional
 
 from bro.bros.bro import Bro
-from llm.llm import LLMSpec
+from bro.llm.llm import LLMSpec
 
 _REGISTRY: dict[str, type[Bro]] = {}
 # when True (the default), a lookup miss imports the matching bro module from

@@ -1,4 +1,4 @@
-from base import log
+from bro.base import log
 from bro.datasources.http import get_json
 from bro.datasources.searchable import Hit, SearchableDataSource
 
