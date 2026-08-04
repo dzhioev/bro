@@ -67,7 +67,7 @@ from typing import Any, Optional
 from bro.base import configs, credentials, log
 from bro.base.args import Parser
 from bro.cw.constants import CW_RESUMED_SESSION_ENV
-from bro.monitor import claude_config_dir, health, trail_pointer
+from bro.monitor import health, trail_pointer, working_projects_dir
 from bro.trails.client import HTTPStatusError, TrailsClient, default_client
 from bro.trails.lineage import walk_header_chain
 from bro.trails.model import UUID_LOOKUP_LIMIT
@@ -848,20 +848,6 @@ def _watch(recorder: Recorder, interval: int) -> None:
   _attempt(recorder.finalize)
 
 
-def _projects_dir_from_environment() -> Path:
-  """a host cw session points CLAUDE_CONFIG_DIR at its private per-session
-  state dir (reference/cw.md, "Host claude-state isolation"); its transcripts
-  live under that dir's projects/, not the host ~/.claude's."""
-  projects_root = claude_config_dir() / 'projects'
-  pwd = os.environ.get('PWD')
-  cwd = Path(pwd if pwd is not None else os.getcwd()).resolve()
-  for candidate in [cwd, *cwd.parents]:
-    project_dir = projects_root / str(candidate).replace('/', '-').replace('.', '-')
-    if project_dir.is_dir():
-      return project_dir
-  return projects_root / str(cwd).replace('/', '-').replace('.', '-')
-
-
 def record_session(
   interval: int = 3,
   workspace: Optional[str] = None,
@@ -889,7 +875,7 @@ def record_session(
     health.write('error', 'config not found: trails')
     return 1
 
-  src = projects_dir if projects_dir is not None else _projects_dir_from_environment()
+  src = projects_dir if projects_dir is not None else working_projects_dir()
   recorder = Recorder(
     src,
     workspace_name,

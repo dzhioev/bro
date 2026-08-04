@@ -27,7 +27,7 @@ class _Harness:
   def __enter__(self):
     self._patches = [
       patch.dict('os.environ', {}, clear=False),
-      patch('bro.cw.runner._claude_projects_dir', return_value=self.projects_dir),
+      patch('bro.cw.runner.claude_projects_dir', return_value=self.projects_dir),
       patch('bro.cw.runner._start_session_mcp_server', return_value=self.server),
       patch(
         'bro.cw.runner.build_claude_launch',

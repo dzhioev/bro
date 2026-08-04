@@ -124,6 +124,61 @@ class TestTranscriptUsage:
     assert usage.transcript_usage(p) == {}
 
 
+class TestSessionTranscripts:
+  SESSION = '786d6a80-6929-4c9b-aac7-4fdfbe98ec3c'
+
+  def _session(self, tmp_path, monkeypatch, *, subagents=()):
+    monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(tmp_path / 'cw-sessions' / 'w'))
+    projects = tmp_path / 'cw-sessions' / 'w' / 'projects' / '-ws'
+    projects.mkdir(parents=True)
+    segment = projects / f'{self.SESSION}.jsonl'
+    segment.touch()
+    for name in subagents:
+      sidecar = projects / self.SESSION / 'subagents' / f'{name}.jsonl'
+      sidecar.parent.mkdir(parents=True, exist_ok=True)
+      sidecar.touch()
+    return segment
+
+  def test_session_id_resolves_the_segment_under_the_config_root(self, tmp_path, monkeypatch):
+    segment = self._session(tmp_path, monkeypatch)
+    monkeypatch.setenv(usage.SESSION_ID_VARIABLE, self.SESSION)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv('PWD', str(tmp_path))
+    assert usage.session_transcripts() == [segment]
+
+  def test_includes_subagent_sidecars(self, tmp_path, monkeypatch):
+    segment = self._session(tmp_path, monkeypatch, subagents=('agent-a', 'agent-b'))
+    monkeypatch.setenv(usage.SESSION_ID_VARIABLE, self.SESSION)
+    sidecars = segment.parent / self.SESSION / 'subagents'
+    assert usage.session_transcripts() == [
+      segment,
+      sidecars / 'agent-a.jsonl',
+      sidecars / 'agent-b.jsonl',
+    ]
+
+  def test_falls_back_to_the_working_directory_project(self, tmp_path, monkeypatch):
+    monkeypatch.delenv(usage.SESSION_ID_VARIABLE, raising=False)
+    monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(tmp_path / 'config'))
+    workspace = tmp_path / 'ws'
+    workspace.mkdir()
+    projects = tmp_path / 'config' / 'projects' / str(workspace).replace('/', '-')
+    projects.mkdir(parents=True)
+    (projects / 'older.jsonl').touch()
+    newest = projects / 'newest.jsonl'
+    newest.touch()
+    os.utime(projects / 'older.jsonl', (0, 0))
+    monkeypatch.chdir(workspace)
+    monkeypatch.setenv('PWD', str(workspace))
+    assert usage.session_transcripts() == [newest]
+
+  def test_no_transcript_yields_empty(self, tmp_path, monkeypatch):
+    monkeypatch.delenv(usage.SESSION_ID_VARIABLE, raising=False)
+    monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(tmp_path / 'config'))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv('PWD', str(tmp_path))
+    assert usage.session_transcripts() == []
+
+
 class TestCurrentUsage:
   def test_usage_file_pointer_wins(self, tmp_path, monkeypatch):
     pointer = tmp_path / 'usage.json'
@@ -134,7 +189,7 @@ class TestCurrentUsage:
 
   def test_no_pointer_no_transcript_yields_none(self, monkeypatch):
     monkeypatch.delenv(usage.USAGE_FILE_VARIABLE, raising=False)
-    monkeypatch.setattr(usage, 'find_session_jsonl', lambda: None)
+    monkeypatch.setattr(usage, 'session_transcripts', list)
     assert usage.current_usage() is None
 
   def test_transcript_fallback_carries_claude_agent(self, tmp_path, monkeypatch):
@@ -142,9 +197,22 @@ class TestCurrentUsage:
     monkeypatch.setenv('AI_AGENT', 'claude-code_2-1-201_agent')
     jsonl = tmp_path / 't.jsonl'
     jsonl.write_text(json.dumps({'message': {'model': OPUS, 'usage': {'output_tokens': 7}}}) + '\n')
-    monkeypatch.setattr(usage, 'find_session_jsonl', lambda: jsonl)
+    monkeypatch.setattr(usage, 'session_transcripts', lambda: [jsonl])
     current = usage.current_usage()
     assert current == Usage(agent='Claude Code 2.1.201', per_model={OPUS: C(output=7)})
+
+  def test_sums_the_segment_and_its_subagents(self, tmp_path, monkeypatch):
+    monkeypatch.delenv(usage.USAGE_FILE_VARIABLE, raising=False)
+    monkeypatch.setenv('AI_AGENT', 'claude-code_2-1-201_agent')
+    transcripts = []
+    for name, output in (('segment', 7), ('agent-a', 11), ('agent-b', 5)):
+      jsonl = tmp_path / f'{name}.jsonl'
+      row = {'message': {'model': OPUS, 'usage': {'output_tokens': output}}}
+      jsonl.write_text(json.dumps(row) + '\n')
+      transcripts.append(jsonl)
+    monkeypatch.setattr(usage, 'session_transcripts', lambda: transcripts)
+    current = usage.current_usage()
+    assert current == Usage(agent='Claude Code 2.1.201', per_model={OPUS: C(output=23)})
 
 
 class TestToLabels:

@@ -20,7 +20,7 @@ from bro.base import log
 from bro.cw.broxy import _start_session_broxy
 from bro.cw.claude_argv import build_claude_launch
 from bro.cw.claude_auth import _apply_claude_auth
-from bro.cw.claude_config import _claude_projects_dir, _latest_jsonl, _provision_host_claude_dir
+from bro.cw.claude_config import _latest_jsonl, _provision_host_claude_dir
 from bro.cw.constants import _CW_MODEL, CW_RESUMED_SESSION_ENV
 from bro.cw.mcp import _start_session_mcp_server
 from bro.cw.recorder import _start_session_recorder
@@ -30,6 +30,7 @@ from bro.cw.session_context import (
   encode_session_context,
 )
 from bro.launch.identity import bro_git_identity_env
+from bro.monitor import claude_projects_dir
 from bro.workspace.git import git_out
 from bro.workspace.paths import in_container, project_root
 
@@ -93,7 +94,7 @@ def run_in_place(spec: 'SessionSpec') -> int:
   claude_args = list(spec.claude_args)
   os.environ.pop(CW_RESUMED_SESSION_ENV, None)
   if spec.resume:
-    projects_dir = _claude_projects_dir(workspace)
+    projects_dir = claude_projects_dir(workspace)
     latest = _latest_jsonl(projects_dir)
     if latest is None:
       log.error('no claude session found in %s', projects_dir)

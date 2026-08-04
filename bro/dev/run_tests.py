@@ -105,6 +105,7 @@ PYTEST_FILES = [
   'bro/summon_test.py',
   'bro/trails/record/bro_test.py',
   'bro/trails/record/claude_test.py',
+  'bro/monitor/monitor_test.py',
   'bro/monitor/health_test.py',
   'bro/monitor/trail_pointer_test.py',
   'bro/cw/statusline_test.py',

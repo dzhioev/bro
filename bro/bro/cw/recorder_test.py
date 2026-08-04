@@ -9,8 +9,8 @@ class TestStart:
     config_dir = tmp_path / 'config'
     projects_dir = tmp_path / 'config' / 'projects' / '-ws'
     with (
-      patch('bro.cw.recorder._claude_config_dir', return_value=config_dir),
-      patch('bro.cw.recorder._claude_projects_dir', return_value=projects_dir),
+      patch('bro.cw.recorder.claude_config_dir', return_value=config_dir),
+      patch('bro.cw.recorder.claude_projects_dir', return_value=projects_dir),
       patch('bro.cw.recorder.spawn.popen') as popen,
     ):
       recorder = _start_session_recorder(
@@ -32,8 +32,8 @@ class TestStart:
   def test_spawn_failure_returns_none(self, tmp_path):
     config_dir = tmp_path / 'config'
     with (
-      patch('bro.cw.recorder._claude_config_dir', return_value=config_dir),
-      patch('bro.cw.recorder._claude_projects_dir', return_value=tmp_path / 'p'),
+      patch('bro.cw.recorder.claude_config_dir', return_value=config_dir),
+      patch('bro.cw.recorder.claude_projects_dir', return_value=tmp_path / 'p'),
       patch('bro.cw.recorder.spawn.popen', side_effect=OSError('no such command')),
     ):
       assert _start_session_recorder('w', tmp_path / 'ws', {}, llm={}) is None

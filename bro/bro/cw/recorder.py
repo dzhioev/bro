@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Optional
 
 from bro.base import log, spawn
-from bro.cw.claude_config import _claude_config_dir, _claude_projects_dir
+from bro.monitor import claude_config_dir, claude_projects_dir
 
 # a stop bounds the final snapshot + end — one transcript upload, seconds even
 # for a large session
@@ -57,8 +57,8 @@ def _start_session_recorder(
   launch recipe stored as the trail's `native.llm`. returns None — with a
   warning — when the daemon cannot start; the session then stays invisible to
   `rewind` but the launch proceeds."""
-  projects_dir = _claude_projects_dir(workspace)
-  log_path = _claude_config_dir() / 'session-recorder.log'
+  projects_dir = claude_projects_dir(workspace)
+  log_path = claude_config_dir() / 'session-recorder.log'
   argv = [
     'bro.trails.record.claude',
     '--workspace',

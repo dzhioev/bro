@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 
 from bro.base import log
-from bro.monitor import claude_config_dir, trail_pointer
+from bro.monitor import encode_project_path, trail_pointer
 from bro.workspace.model import ContainerWorkspace, Workspace
 
 
@@ -33,24 +33,6 @@ def session_trail_pointer(name: str) -> Path:
   recorder publishes the trail id summon control attributes the session's
   children to (`monitor/trail_pointer.py` owns the file)."""
   return _session_claude_dir(name) / trail_pointer.FILENAME
-
-
-def _encode_claude_path(path: Path) -> str:
-  """claude code's project-dir encoding of an absolute path: '/' and '.'
-  replaced by '-'."""
-  return str(path).replace('/', '-').replace('.', '-')
-
-
-def _claude_config_dir() -> Path:
-  """the Claude config root of the current process's session."""
-  return claude_config_dir()
-
-
-def _claude_projects_dir(workspace: Path) -> Path:
-  """claude code's per-project state dir for a workspace, under the session's
-  config root. one derivation covers both modes — host worktree →
-  `<encoded-worktree-path>`, container clone (`/workspace`) → `-workspace`."""
-  return _claude_config_dir() / 'projects' / _encode_claude_path(workspace)
 
 
 def _latest_jsonl(projects_dir: Path) -> Optional[Path]:
@@ -71,10 +53,10 @@ def workspace_projects_dir(workspace: Workspace) -> Path:
   # sessions were recorded before the dir existed (against the host ~/.claude)
   # is read from the legacy location until a launch migrates it
   # (_migrate_legacy_transcripts)
-  private = session_dir / 'projects' / _encode_claude_path(workspace.path)
+  private = session_dir / 'projects' / encode_project_path(workspace.path)
   if private.is_dir():
     return private
-  legacy = Path.home() / '.claude' / 'projects' / _encode_claude_path(workspace.path)
+  legacy = Path.home() / '.claude' / 'projects' / encode_project_path(workspace.path)
   if legacy.is_dir():
     return legacy
   return private
@@ -230,10 +212,10 @@ def _migrate_legacy_transcripts(claude_dir: Path, worktree: Path) -> None:
   under `~/.claude/projects/<encoded-worktree-path>`. one-shot: once the session
   dir has its own projects entry, the legacy location is never consulted again.
   """
-  destination = claude_dir / 'projects' / _encode_claude_path(worktree)
+  destination = claude_dir / 'projects' / encode_project_path(worktree)
   if destination.is_dir():
     return
-  legacy = Path.home() / '.claude' / 'projects' / _encode_claude_path(worktree)
+  legacy = Path.home() / '.claude' / 'projects' / encode_project_path(worktree)
   if not legacy.is_dir():
     return
   jsonls = [p for p in legacy.iterdir() if p.suffix == '.jsonl']

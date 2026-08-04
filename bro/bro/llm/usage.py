@@ -27,9 +27,9 @@ Two cumulative-usage sources, unified by `current_usage()`:
   inherits the launcher's `CW_BRO`, not its own. The first publish mints the
   path and exports the pointer, so tool subprocesses spawned afterwards inherit
   it.
-- the Claude Code session transcript — discovered under `~/.claude/projects/`
-  from the working directory (`find_session_jsonl`), summed per model across
-  every billed assistant message (`transcript_usage`).
+- the Claude Code session transcript — the session's own segment plus the
+  sidecar transcripts of the subagents it spawned (`session_transcripts`),
+  summed per model across every billed assistant message (`transcript_usage`).
 
 This module also owns the commit-footer line format (one `>`-quoted line; `'`
 thousands separator so it never collides with the `, ` joining model entries):
@@ -62,10 +62,12 @@ from pathlib import Path
 from typing import Optional
 
 from bro.base.args import Parser
+from bro.monitor import claude_config_dir, working_projects_dir
 
 __cli_name__ = 'usage'
 
 USAGE_FILE_VARIABLE = 'PPP_USAGE_FILE'
+SESSION_ID_VARIABLE = 'CLAUDE_CODE_SESSION_ID'
 
 _THOUSANDS = "'"
 _UP = '↑'
@@ -144,22 +146,35 @@ def read_usage_file(path: Path) -> Usage:
 # --- Claude transcript reading ------------------------------------------------
 
 
-def _encode_cwd(cwd: str) -> str:
-  return cwd.replace('/', '-').replace('.', '-')
+def _session_segment() -> Optional[Path]:
+  """the transcript segment of the Claude Code session owning this process.
+
+  Claude names the segment file after the session id it exports, and a subagent
+  inherits its parent's — so the id resolves the session that paid even from a
+  working directory claude keeps no project dir for, such as an agent's own
+  worktree.
+  """
+  session_id = os.environ.get(SESSION_ID_VARIABLE)
+  if session_id is not None:
+    segments = sorted((claude_config_dir() / 'projects').glob(f'*/{session_id}.jsonl'))
+    if len(segments) > 0:
+      return segments[0]
+  jsonls = sorted(working_projects_dir().glob('*.jsonl'), key=lambda p: p.stat().st_mtime)
+  if len(jsonls) == 0:
+    return None
+  return jsonls[-1]
 
 
-def find_session_jsonl() -> Optional[Path]:
-  """the newest transcript of the Claude Code session owning the working directory."""
-  projects_root = Path.home() / '.claude' / 'projects'
-  pwd = os.environ.get('PWD')
-  cwd = Path(pwd if pwd is not None else os.getcwd()).resolve()
-  for candidate in [cwd, *cwd.parents]:
-    project_dir = projects_root / _encode_cwd(str(candidate))
-    if project_dir.is_dir():
-      jsonls = sorted(project_dir.glob('*.jsonl'), key=lambda p: p.stat().st_mtime)
-      if len(jsonls) > 0:
-        return jsonls[-1]
-  return None
+def session_transcripts() -> list[Path]:
+  """every transcript file the current Claude Code session bills through.
+
+  The segment records only the main thread; the turns of each subagent it
+  spawns land in a sidecar transcript under the segment's companion dir.
+  """
+  segment = _session_segment()
+  if segment is None:
+    return []
+  return [segment, *sorted(segment.with_suffix('').rglob('*.jsonl'))]
 
 
 def transcript_usage(path: Path) -> dict[str, Counts]:
@@ -216,14 +231,14 @@ def claude_agent() -> str:
 
 def current_usage() -> Optional[Usage]:
   """the session's cumulative usage: the env-pointed usage file when the pointer
-  is set (bro runs), else the newest Claude transcript, else None."""
+  is set (bro runs), else the Claude session's transcripts, else None."""
   pointer = os.environ.get(USAGE_FILE_VARIABLE)
   if pointer is not None:
     return read_usage_file(Path(pointer))
-  jsonl = find_session_jsonl()
-  if jsonl is None:
-    return None
-  per_model = transcript_usage(jsonl)
+  per_model: dict[str, Counts] = {}
+  for transcript in session_transcripts():
+    for model, counts in transcript_usage(transcript).items():
+      per_model[model] = add(per_model.get(model, zero()), counts)
   if len(per_model) == 0:
     return None
   return Usage(agent=claude_agent(), per_model=per_model)
