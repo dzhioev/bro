@@ -1,58 +1,90 @@
 #!/usr/bin/env -S bash -e
 #
 # shared docker/podman smoke-test helper for server images.
-# source this with the OCI command and base-image builder, then call:
+# source this with the OCI command and a build-preparation function, then call:
 #
-#   source "$(bro-shell-dir)/docker_smoke_test.sh" "$OCI_CMD" ensure_server_base
+#   source "$(bro-shell-dir)/docker_smoke_test.sh" "$OCI_CMD" <build-preparer>
 #   smoke_build <dockerfile>
 #   smoke_start <internal-port> [-e KEY=VAL ...]
 #   smoke_await <path> [-H <header>]
-#   smoke_curl <curl-args...>          # pre-fills http://localhost:$SMOKE_PORT
+#   smoke_curl <path> [-H <header>]
 #   smoke_assert_status <path> <expected-status> [-H <header>]
 #
 # container is cleaned up on EXIT. $SMOKE_PORT holds the mapped host port.
 
 if [ "$#" -ne 2 ]; then
-  echo "usage: source docker_smoke_test.sh <oci-command> <base-image-builder>" >&2
+  echo "usage: source docker_smoke_test.sh <oci-command> <build-preparer>" >&2
   return 2
 fi
 _SMOKE_OCI_COMMAND="$1"
-_SMOKE_BASE_IMAGE_BUILDER="$2"
+_SMOKE_BUILD_PREPARER="$2"
 if ! command -v "$_SMOKE_OCI_COMMAND" >/dev/null; then
   echo "OCI command not found: $_SMOKE_OCI_COMMAND" >&2
   return 2
 fi
-if ! command -v "$_SMOKE_BASE_IMAGE_BUILDER" >/dev/null; then
-  echo "base-image builder not found: $_SMOKE_BASE_IMAGE_BUILDER" >&2
+if ! command -v "$_SMOKE_BUILD_PREPARER" >/dev/null; then
+  echo "build preparer not found: $_SMOKE_BUILD_PREPARER" >&2
   return 2
 fi
 
 SMOKE_PORT=
 _SMOKE_CID=
 _SMOKE_IMAGE=
+_SMOKE_INTERNAL_PORT=
 
 smoke_build() {
   local dockerfile=$1
   _SMOKE_IMAGE="smoke-test-$$"
 
-  "$_SMOKE_BASE_IMAGE_BUILDER" "$dockerfile"
+  "$_SMOKE_BUILD_PREPARER" "$dockerfile"
   echo "=== $_SMOKE_OCI_COMMAND build ==="
   "$_SMOKE_OCI_COMMAND" build -f "$dockerfile" -t "$_SMOKE_IMAGE" .
 }
 
 smoke_start() {
   local internal_port=$1; shift
+  _SMOKE_INTERNAL_PORT=$internal_port
   SMOKE_PORT=$((internal_port + 10000 + RANDOM % 10000))
 
   echo "=== starting container ==="
-  _SMOKE_CID=$("$_SMOKE_OCI_COMMAND" run -d --rm -p "${SMOKE_PORT}:${internal_port}" "$@" "$_SMOKE_IMAGE")
+  _SMOKE_CID=$("$_SMOKE_OCI_COMMAND" run -d -p "${SMOKE_PORT}:${internal_port}" "$@" "$_SMOKE_IMAGE")
   trap '_smoke_cleanup' EXIT
+}
+
+_smoke_request() {
+  local output_mode=$1 path=$2; shift 2
+  "$_SMOKE_OCI_COMMAND" exec "$_SMOKE_CID" python -c '
+import http.client
+import sys
+from contextlib import closing
+
+output_mode, port, path, *arguments = sys.argv[1:]
+headers = {}
+while len(arguments) > 0:
+  if len(arguments) < 2 or arguments[0] != "-H":
+    raise RuntimeError(f"unsupported smoke request arguments: {arguments}")
+  name, value = arguments[1].split(":", 1)
+  headers[name.strip()] = value.strip()
+  arguments = arguments[2:]
+
+with closing(http.client.HTTPConnection("127.0.0.1", int(port), timeout=2)) as connection:
+  connection.request("GET", path, headers=headers)
+  response = connection.getresponse()
+  body = response.read()
+
+if output_mode == "body":
+  sys.stdout.buffer.write(body)
+elif output_mode == "status":
+  print(response.status, end="")
+elif output_mode != "ready":
+  raise RuntimeError(f"unknown output mode: {output_mode}")
+' "$output_mode" "$_SMOKE_INTERNAL_PORT" "$path" "$@"
 }
 
 smoke_await() {
   local path=$1; shift
   for _ in {1..30}; do
-    if curl -s -o /dev/null -w '' "http://localhost:${SMOKE_PORT}${path}" "$@" 2>/dev/null; then
+    if _smoke_request ready "$path" "$@" >/dev/null 2>&1; then
       return 0
     fi
     sleep 0.5
@@ -64,13 +96,13 @@ smoke_await() {
 
 smoke_curl() {
   local path=$1; shift
-  curl -s "http://localhost:${SMOKE_PORT}${path}" "$@"
+  _smoke_request body "$path" "$@"
 }
 
 smoke_assert_status() {
   local path=$1 expected=$2; shift 2
   local actual
-  actual=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${SMOKE_PORT}${path}" "$@")
+  actual=$(_smoke_request status "$path" "$@")
   if [ "$actual" != "$expected" ]; then
     echo "expected $expected on $path, got $actual" >&2
     exit 1
@@ -78,5 +110,5 @@ smoke_assert_status() {
 }
 
 _smoke_cleanup() {
-  "$_SMOKE_OCI_COMMAND" stop "$_SMOKE_CID" >/dev/null 2>&1 || true
+  "$_SMOKE_OCI_COMMAND" rm -f "$_SMOKE_CID" >/dev/null 2>&1 || true
 }

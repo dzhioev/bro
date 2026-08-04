@@ -12,6 +12,8 @@ The base distribution contains `bro.base`, the MCP abstraction, credential handl
 
 - `bro[agent]` — the OpenAI agent loop, data sources, and terminal UIs
 - `bro[cw]` — interactive `cw` and launch UI dependencies
+- `bro[http]` — aiohttp-based clients and services
+- `bro[llm]` — OpenAI LLM access without the agent UI dependencies
 - `bro[runtime]` — HTTP MCP serving through Starlette and uvicorn
 - `bro[trails-server]` — the aiohttp/DynamoDB trails service
 - `bro[github]` — GitHub App authentication
