@@ -22,8 +22,8 @@ Prerequisites are documented in `bro/README.md`. `setup_env.sh` remains an optio
 - `log.sh` — leveled shell logging thresholded by `BRO_LOG_LEVEL`
 - `strict.sh` — fail-fast shell guards, including command-not-found inside test positions
 - `docker_smoke_test.sh` — packaged sourceable helper for service `verify_deps.sh` scripts
-- `base_image/` — Dockerfile and builder for the local general-purpose base image
-- `container/` — the `cw` image, entrypoint, clone helper, and host-only smoke test. The image bakes a workspace venv in two stages: dependency resolution from the root and member manifests, then editable installation from the full project context. On launch the entrypoint reuses it only when its staged dependency manifests match the clone; otherwise the repository's `setup.sh` performs a fresh sync
+- `base_image/` — Dockerfile and builder for `bro-base`, the local-only general-purpose base image
+- `container/` — the `cw` image, entrypoint, clone helper, and host-only smoke test. The build context is assembled by `bro/bro/workspace/build_context.py`, which injects this directory's files and the shell helpers above into the archive. The image bakes a workspace venv in two stages: dependency resolution from the injected manifest set, then editable installation from the full project context. On launch the entrypoint reuses it only when every staged manifest matches the clone's copy; otherwise the repository's `setup.sh` performs a fresh sync
 - `bro-dev/bro_dev/hooks/post-commit` — packaged hook installed by `bro-dev.install`; it advances token-accounting state after each commit
 
 ## Configuration

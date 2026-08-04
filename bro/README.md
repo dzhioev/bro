@@ -42,6 +42,7 @@ default = "dev"
 image-repository = "bro/example"          # optional; defaults to bro/<default>
 creds = { brog = "github" }               # optional kind-to-instance selection
 footer-command = "bro-dev.claude-commit-footer"  # optional squash footer producer
+build-context-command = "git ls-files"    # optional session-image context file list
 ```
 
 `default` is required. Unknown keys and malformed values fail at config load rather than being ignored.

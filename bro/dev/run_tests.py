@@ -84,6 +84,7 @@ PYTEST_FILES = [
   'bro/cw/session_test.py',
   'bro/cw/system_prompt_test.py',
   'bro/workspace/banner_test.py',
+  'bro/workspace/build_context_test.py',
   'bro/workspace/containers_test.py',
   'bro/workspace/docker_test.py',
   'bro/workspace/git_test.py',

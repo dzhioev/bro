@@ -9,12 +9,11 @@ from pathlib import Path
 from typing import Optional
 
 from bro.base import credentials, log
+from bro.workspace import build_context
+from bro.workspace.build_context import BASE_IMAGE_DIR, CONTAINER_DIR
 from bro.workspace.paths import containers_dir, project_root
 from bro.workspace.project import project_config
 from bro.workspace.store import _bro_tarball
-
-CONTAINER_DIR = Path(__file__).resolve().parent.parent / 'setup' / 'container'
-BASE_IMAGE_DIR = Path(__file__).resolve().parent.parent / 'setup' / 'base_image'
 
 
 @dataclass(frozen=True)
@@ -131,23 +130,21 @@ _SMOKE_TEST_TAG = 'bro/ppp-dev:smoke-test'
 
 
 def image_tag() -> str:
+  """content hash of the session image's inputs — the framework's container assets
+  as resolved through the installed package, plus the project's manifest set — as a
+  tag in the project's image repository."""
   h = hashlib.sha256()
   project = project_root()
-  inputs = (
+  framework = (
     sorted(BASE_IMAGE_DIR.iterdir())
     + sorted(CONTAINER_DIR.iterdir())
-    # ppp/pyproject.toml exists when the project vendors ppp as a submodule: the
-    # baked console-script bridge is a function of its [project.scripts] table
-    + [
-      project / 'pyproject.toml',
-      project / 'uv.lock',
-      CONTAINER_DIR.parent / 'log.sh',
-      project / 'ppp' / 'pyproject.toml',
-    ]
+    + [build_context.SETUP_DIR / name for name in build_context.SHELL_HELPERS]
   )
-  for path in inputs:
+  inputs = [(path.name, path) for path in framework]
+  inputs += [(relative, project / relative) for relative in build_context.manifest_paths(project)]
+  for label, path in inputs:
     if path.is_file():
-      h.update(path.name.encode())
+      h.update(label.encode())
       h.update(b'\0')
       h.update(path.read_bytes())
   return f'{project_config().image_repository}:{h.hexdigest()[:12]}'
@@ -179,14 +176,11 @@ def _prune_superseded_images(current: str) -> None:
       log.info('pruned superseded image %s', image)
 
 
-def _ensure_image(tag: str) -> None:
-  inspect = subprocess.run(['docker', 'image', 'inspect', tag], capture_output=True, text=True)
-  if inspect.returncode == 0:
-    log.verbose('image %s ready', tag)
-    return
+def build_image(tag: str, project: Path) -> None:
+  """build the session image under `tag` from `project`'s assembled build context."""
   version = (CONTAINER_DIR / 'claude-code-version').read_text().strip()
   log.info('building %s (claude-code %s)', tag, version)
-  # the image builds FROM the local-only ppp-base, so refresh that first
+  # the image builds FROM the local-only bro-base, so refresh that first
   subprocess.run(['bash', '-e', str(BASE_IMAGE_DIR / 'build.sh')], check=True)
   subprocess.run(
     [
@@ -195,15 +189,22 @@ def _ensure_image(tag: str) -> None:
       '-t',
       tag,
       '-f',
-      str(CONTAINER_DIR / 'Dockerfile'),
+      build_context.DOCKERFILE_PATH,
       '--build-arg',
       f'CLAUDE_CODE_VERSION={version}',
-      '--build-context',
-      f'project={project_root()}',
-      str(CONTAINER_DIR),
+      '-',
     ],
+    input=build_context.assemble(project),
     check=True,
   )
+
+
+def _ensure_image(tag: str) -> None:
+  inspect = subprocess.run(['docker', 'image', 'inspect', tag], capture_output=True, text=True)
+  if inspect.returncode == 0:
+    log.verbose('image %s ready', tag)
+    return
+  build_image(tag, project_root())
   _prune_superseded_images(tag)
 
 

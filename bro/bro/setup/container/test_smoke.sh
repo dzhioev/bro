@@ -9,10 +9,14 @@ PROJECT="$(realpath "$DIR/../../../..")"
 
 TAG="bro/ppp-dev:smoke-test"
 echo "building image" >&2
-"$DIR/../base_image/build.sh" >&2
-docker build -t "$TAG" -f "$DIR/Dockerfile" \
-  --build-arg CLAUDE_CODE_VERSION="$(cat "$DIR/claude-code-version")" \
-  --build-context "project=$PROJECT" "$DIR" >&2
+# through the framework's own builder, so the assembled context this test runs
+# against is the one a session launch builds from. the project is passed
+# explicitly: in a linked worktree project_root() resolves to the main checkout,
+# and this test has to build the tree it ships in
+python -c 'import sys
+from pathlib import Path
+from bro.workspace.docker import build_image
+build_image(sys.argv[1], Path(sys.argv[2]))' "$TAG" "$PROJECT" >&2
 
 # colima only shares /Users; mktemp uses /var/folders which is invisible
 # inside the container. create temp dir under the project tree instead.
@@ -92,10 +96,13 @@ docker run --rm -i \
     test -f /workspace/_entrypoints.py
     test -f /workspace/bro/bro/_entrypoints.py
     test -f /workspace/bro-dev/bro_dev/_entrypoints.py
-    # the manifests the bake ran from are staged for the entrypoint's reuse gate,
-    # and match this clone (based on the same tree the image was built from)
+    # every manifest the bake ran from is staged for the entrypoint's reuse gate at
+    # its project-relative path, and matches this clone (based on the same tree the
+    # image was built from)
     cmp -s /workspace/pyproject.toml /opt/cw-venv-manifest/pyproject.toml
     cmp -s /workspace/uv.lock /opt/cw-venv-manifest/uv.lock
+    cmp -s /workspace/bro/pyproject.toml /opt/cw-venv-manifest/bro/pyproject.toml
+    cmp -s /workspace/bro-dev/pyproject.toml /opt/cw-venv-manifest/bro-dev/pyproject.toml
     # /home/cw/.claude.json reflects the container-private seed and is writable
     grep -q smoke_seed /home/cw/.claude.json
     echo '{"modified_by_container":true}' > /home/cw/.claude.json

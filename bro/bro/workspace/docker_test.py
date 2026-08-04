@@ -120,20 +120,37 @@ class TestSuspendUntilContinued:
 
 
 class TestImageTag:
-  def test_repository_and_submodule_manifest_come_from_the_project(self, monkeypatch, tmp_path):
+  @pytest.fixture
+  def project(self, monkeypatch, tmp_path):
     (tmp_path / 'pyproject.toml').write_text(
-      '[tool.bro]\ndefault = "foo"\nimage-repository = "custom-images"\n'
+      '[tool.bro]\ndefault = "foo"\nimage-repository = "custom-images"\n\n'
+      '[tool.uv.workspace]\nmembers = ["member"]\n'
     )
     (tmp_path / 'uv.lock').write_text('lock')
+    (tmp_path / 'member').mkdir()
+    (tmp_path / 'member' / 'pyproject.toml').write_text('[project]\nname = "member"\n')
     monkeypatch.setattr(workspace_docker, 'project_root', lambda: tmp_path)
     monkeypatch.setattr(workspace_project, 'project_root', lambda: tmp_path)
-    without_submodule = workspace_docker.image_tag()
-    assert without_submodule.startswith('custom-images:')
-    (tmp_path / 'ppp').mkdir()
-    (tmp_path / 'ppp' / 'pyproject.toml').write_text('[project.scripts]')
-    with_submodule = workspace_docker.image_tag()
-    assert with_submodule.startswith('custom-images:')
-    assert with_submodule != without_submodule
+    return tmp_path
+
+  def test_repository_comes_from_the_project(self, project):
+    assert workspace_docker.image_tag().startswith('custom-images:')
+
+  def test_a_member_manifest_edit_changes_the_tag(self, project):
+    before = workspace_docker.image_tag()
+    (project / 'member' / 'pyproject.toml').write_text(
+      '[project]\nname = "member"\nversion = "2"\n'
+    )
+    assert workspace_docker.image_tag() != before
+
+  def test_a_framework_shell_helper_edit_changes_the_tag(self, project, monkeypatch, tmp_path):
+    before = workspace_docker.image_tag()
+    setup = tmp_path / 'framework-setup'
+    setup.mkdir()
+    for name in workspace_docker.build_context.SHELL_HELPERS:
+      (setup / name).write_text(f'# {name} edited\n')
+    monkeypatch.setattr(workspace_docker.build_context, 'SETUP_DIR', setup)
+    assert workspace_docker.image_tag() != before
 
 
 class TestPruneSupersededImages:

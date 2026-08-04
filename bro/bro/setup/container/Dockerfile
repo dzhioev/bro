@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM ppp-base
+FROM bro-base
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
@@ -73,33 +73,32 @@ RUN gosu cw bash -ec '\
 # bake the project venv at /opt/cw-venv at image-build time so per-session
 # containers reuse it instead of running `uv sync` on every launch. the bake is
 # split into two layers so the expensive dependency install survives source
-# churn: this layer mounts every workspace manifest but defers all editable
-# members, which need their source trees; the next layer installs them from the
-# full project context. UV_LINK_MODE=copy because /opt and bind mounts may be on
-# different filesystems.
+# churn: this layer mounts only the manifest set the context stages — every file
+# uv reads to resolve the environment and nothing else, so source edits leave its
+# cache key alone — and defers all editable members, which need their source
+# trees, to the next layer.
+# UV_LINK_MODE=copy because /opt and bind mounts may be on different filesystems.
 ENV UV_CACHE_DIR=/opt/uv-cache
 ENV UV_LINK_MODE=copy
-RUN --mount=type=bind,from=project,source=pyproject.toml,target=/workspace/pyproject.toml \
-    --mount=type=bind,from=project,source=uv.lock,target=/workspace/uv.lock \
-    --mount=type=bind,from=project,source=bro/pyproject.toml,target=/workspace/bro/pyproject.toml \
-    --mount=type=bind,from=project,source=bro-dev/pyproject.toml,target=/workspace/bro-dev/pyproject.toml \
-    cd /workspace \
+RUN --mount=type=bind,source=.bro-container/manifests,target=/manifests \
+    mkdir -p /workspace \
+ && cp -r /manifests/. /workspace/ \
+ && cd /workspace \
  && UV_PROJECT_ENVIRONMENT=/opt/cw-venv uv sync --frozen --all-packages --all-groups --all-extras --no-install-workspace \
+ && find /workspace -mindepth 1 -delete \
  && chmod -R a+rwX /opt/uv-cache /opt/cw-venv
 
 # editable-install the workspace, including its committed console-script bridges.
 # setuptools compat mode records each member's source directory under /workspace,
 # the exact path the entrypoint clones into at runtime.
 # only the venv is kept from the tree: the build-time source is a bind mount
-# removed in the same layer, so nothing is duplicated. the tar excludes are a
-# fallback for builders that don't apply the repo-root .dockerignore to named
-# contexts. the closing find opens up only the files this layer created —
-# everything older is already a+rwX from the layer above, and a blanket chmod -R
-# here would copy the whole venv up into this layer
-RUN --mount=type=bind,from=project,target=/project-src \
+# removed in the same layer, so nothing is duplicated. the closing find opens up
+# only the files this layer created — everything older is already a+rwX from the
+# layer above, and a blanket chmod -R here would copy the whole venv up into this
+# layer
+RUN --mount=type=bind,target=/project-src \
     mkdir -p /workspace \
- && tar -C /project-src --exclude=./.git --exclude=./.venv --exclude=./var \
-      --exclude=./node_modules --exclude=./.configs -cf - . | tar -C /workspace -xf - \
+ && tar -C /project-src --exclude=./.bro-container -cf - . | tar -C /workspace -xf - \
  && cd /workspace \
  && UV_PROJECT_ENVIRONMENT=/opt/cw-venv uv sync --frozen --all-packages --all-groups --all-extras \
  && find /workspace -mindepth 1 -delete \
@@ -107,30 +106,21 @@ RUN --mount=type=bind,from=project,target=/project-src \
       -exec chmod a+rwX {} +
 
 # stage the manifests the venv bake ran from — the entrypoint's reuse gate
-# compares the clone's copies against these. a separate layer so a gate-only
-# change never invalidates the expensive venv layer above. ppp/pyproject.toml
-# exists when the project vendors ppp as a submodule: the baked console-script
-# bridge is a function of its [project.scripts], so a submodule bump that
-# changes it must fail the gate
-RUN --mount=type=bind,from=project,target=/project-src \
+# compares the clone's copies against these, at the same relative paths. a
+# separate layer so a gate-only change never invalidates the expensive venv layer
+# above
+RUN --mount=type=bind,source=.bro-container/manifests,target=/manifests \
     mkdir -p /opt/cw-venv-manifest \
- && cp /project-src/pyproject.toml /project-src/uv.lock /opt/cw-venv-manifest/ \
- && if [ -f /project-src/ppp/pyproject.toml ]; then \
-      cp /project-src/ppp/pyproject.toml /opt/cw-venv-manifest/ppp-pyproject.toml; fi
+ && cp -r /manifests/. /opt/cw-venv-manifest/
 
 WORKDIR /workspace
 ENV CW_IN_CONTAINER=1
 
 # the shell-script prelude (logging + fail-fast guards), baked next to the
-# entrypoint: the clone the entrypoint prepares does not exist yet when its
-# early phases run. a project vendoring ppp as a submodule carries the files at
-# ppp/bro/bro/setup/
-RUN --mount=type=bind,from=project,target=/project-src \
-    src=/project-src/bro/bro/setup \
- && if [ ! -f "$src/prelude.sh" ]; then src=/project-src/ppp/bro/bro/setup; fi \
- && mkdir -p /usr/local/lib/ppp-shell \
- && cp "$src/prelude.sh" "$src/log.sh" "$src/strict.sh" /usr/local/lib/ppp-shell/
-COPY git.sh /usr/local/lib/ppp-shell/container-git.sh
-COPY entrypoint.sh /usr/local/bin/cw-entrypoint
+# entrypoint: the clone the entrypoint prepares does not exist yet when its early
+# phases run
+COPY .bro-container/prelude.sh .bro-container/log.sh .bro-container/strict.sh /usr/local/lib/bro-shell/
+COPY .bro-container/git.sh /usr/local/lib/bro-shell/container-git.sh
+COPY .bro-container/entrypoint.sh /usr/local/bin/cw-entrypoint
 RUN chmod +x /usr/local/bin/cw-entrypoint
 ENTRYPOINT ["/usr/local/bin/cw-entrypoint"]

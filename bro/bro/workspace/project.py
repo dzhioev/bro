@@ -17,12 +17,13 @@ class ProjectConfig:
   `--bro` doesn't name one, the docker repository its session images build
   under (`bro/<default bro>` unless overridden), the per-kind credential
   instances its launches substitute in computed scopes, and the optional
-  squash-footer command."""
+  squash-footer and build-context-file-list commands."""
 
   default_bro: str
   image_repository: str
   creds: dict[str, str] = field(default_factory=dict)
   footer_command: Optional[str] = None
+  build_context_command: Optional[str] = None
 
 
 def _parse_creds(table: dict, pyproject: Path) -> dict[str, str]:
@@ -42,6 +43,13 @@ def _parse_creds(table: dict, pyproject: Path) -> dict[str, str]:
   return creds
 
 
+def _parse_command(table: dict, pyproject: Path, key: str) -> Optional[str]:
+  command = table.get(key)
+  if command is not None and (not isinstance(command, str) or command == ''):
+    raise ValueError(f'[tool.bro] {key} in {pyproject} must be a non-empty string')
+  return command
+
+
 def project_config() -> ProjectConfig:
   """the `[tool.bro]` table of the operated repo's pyproject.toml, read from
   `project_root()` — how a repo declares its session defaults. a missing file,
@@ -50,7 +58,9 @@ def project_config() -> ProjectConfig:
   if not pyproject.is_file():
     raise ValueError(f'missing {pyproject}')
   table = tomllib.loads(pyproject.read_text()).get('tool', {}).get('bro', {})
-  unknown = sorted(set(table) - {'default', 'image-repository', 'creds', 'footer-command'})
+  unknown = sorted(
+    set(table) - {'default', 'image-repository', 'creds', 'footer-command', 'build-context-command'}
+  )
   if len(unknown) > 0:
     raise ValueError(f'unknown [tool.bro] key(s) in {pyproject}: {", ".join(unknown)}')
   default_bro = table.get('default')
@@ -59,12 +69,10 @@ def project_config() -> ProjectConfig:
   if not isinstance(default_bro, str):
     raise ValueError(f'[tool.bro] default in {pyproject} must be a string')
   override: Optional[str] = table.get('image-repository')
-  footer_command = table.get('footer-command')
-  if footer_command is not None and (not isinstance(footer_command, str) or footer_command == ''):
-    raise ValueError(f'[tool.bro] footer-command in {pyproject} must be a non-empty string')
   return ProjectConfig(
     default_bro=default_bro,
     image_repository=override if override is not None else _default_image_repository(default_bro),
     creds=_parse_creds(table, pyproject),
-    footer_command=footer_command,
+    footer_command=_parse_command(table, pyproject, 'footer-command'),
+    build_context_command=_parse_command(table, pyproject, 'build-context-command'),
   )

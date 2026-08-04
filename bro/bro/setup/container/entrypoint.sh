@@ -1,7 +1,7 @@
 #!/usr/bin/env -S bash -e
 
-source /usr/local/lib/ppp-shell/prelude.sh
-source /usr/local/lib/ppp-shell/container-git.sh
+source /usr/local/lib/bro-shell/prelude.sh
+source /usr/local/lib/bro-shell/container-git.sh
 
 # root phase: align container user with host uid/gid, then re-exec as cw
 if [ "$(id -u)" = "0" ] && [ -z "${CW_ENTRYPOINT_REEXEC:-}" ]; then
@@ -102,24 +102,27 @@ if [ -d /opt/claude-plugins-seed ] && [ ! -f "$HOME/.claude/plugins/installed_pl
   cp -r /opt/claude-plugins-seed/. "$HOME/.claude/plugins/"
 fi
 
+# whether every manifest the baked venv was resolved from still matches the
+# clone's copy at the same relative path. the root-manifest probe keeps an empty
+# or absent staging dir from passing the loop vacuously.
+manifests_match() {
+  local staged
+  [ -f /opt/cw-venv-manifest/pyproject.toml ] || return 1
+  while IFS= read -r staged; do
+    cmp -s "$staged" "/workspace/${staged#/opt/cw-venv-manifest/}" || return 1
+  done < <(find /opt/cw-venv-manifest -type f)
+}
+
 # reuse the venv baked into the image (deps + editable workspace already installed,
 # its module finders pointing at /workspace — see the Dockerfile) instead of a fresh
 # `uv sync`. symlink it in and set the setup.sh skip signal. valid only when the
 # clone's dependency manifests equal the ones the image was built from —
 # CW_BASE_REF can base the clone on any ref, so equality is checked against the
-# staged /opt/cw-venv-manifest copies, not assumed. a mismatch (or an older image
-# without the staged manifests, or a pre-existing /workspace/.venv from a reused
-# workspace) falls through to a normal sync from the clone's own manifests.
-# the third cmp covers a project vendoring ppp as a submodule: the baked
-# console-script bridge derives from ppp/pyproject.toml's [project.scripts], so
-# a clone whose submodule manifest diverges from the staged copy must re-sync
-# (both sides absent — the ppp project itself — passes).
+# staged /opt/cw-venv-manifest copies, not assumed. a mismatch (or a pre-existing
+# /workspace/.venv from a reused workspace) falls through to a normal sync from
+# the clone's own manifests.
 if [ "${CW_SKIP_VENV:-}" != "1" ] && [ -d /opt/cw-venv ] && [ ! -e /workspace/.venv ] \
-    && cmp -s /workspace/pyproject.toml /opt/cw-venv-manifest/pyproject.toml \
-    && cmp -s /workspace/uv.lock /opt/cw-venv-manifest/uv.lock \
-    && { { [ ! -f /workspace/ppp/pyproject.toml ] \
-        && [ ! -f /opt/cw-venv-manifest/ppp-pyproject.toml ]; } \
-      || cmp -s /workspace/ppp/pyproject.toml /opt/cw-venv-manifest/ppp-pyproject.toml; }; then
+    && manifests_match; then
   log VERBOSE 'reusing the venv baked into the image'
   ln -s /opt/cw-venv /workspace/.venv
   export CW_VENV_BAKED=1
