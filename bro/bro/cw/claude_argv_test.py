@@ -148,11 +148,12 @@ class TestRawLaunch:
       assert entry['alwaysLoad'] is True
 
   def test_settings_merge_fast_mode_and_api_key_helper(self):
-    # the merged --settings is what lets --fast reach a --raw session; the
-    # apiKeyHelper is the ppp checkout the runner's venv installs, hold-neutral
+    # the merged --settings is what lets --fast reach a --raw session
     settings = _settings(self._launch(fast=True).argv)
     assert settings['fastMode'] is True
-    assert settings['apiKeyHelper'] == str(cw_claude_argv._ANTHROPIC_KEY_HELPER)
+    assert (
+      settings['apiKeyHelper'] == f'{shlex.quote(sys.executable)} -m bro.cw.print_anthropic_key'
+    )
     assert _settings(self._launch().argv)['fastMode'] is False
 
   def test_status_line_lands_in_settings(self):

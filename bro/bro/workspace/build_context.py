@@ -34,9 +34,9 @@ FRAMEWORK_FILES = {
 }
 
 _FIXED_MTIME = 0
-# a wheel does not preserve the executable bit, so the injected assets' own modes
-# would depend on how the framework was installed. nothing in the image execs them
-# in place — they are sourced, read, or chmod'd by the Dockerfile after the COPY.
+# the injected assets carry a fixed mode so the context digest never depends on the
+# modes the framework's own install happened to land. nothing in the image execs
+# them in place — they are sourced, read, or chmod'd by the Dockerfile after the COPY.
 _INJECTED_MODE = 0o644
 
 

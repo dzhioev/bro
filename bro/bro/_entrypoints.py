@@ -29,6 +29,10 @@ def bro_cw_cli():
   return _run('bro.cw.cli')
 
 
+def bro_cw_print_anthropic_key():
+  return _run('bro.cw.print_anthropic_key')
+
+
 def bro_cw_statusline():
   return _run('bro.cw.statusline')
 

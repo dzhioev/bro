@@ -13,7 +13,6 @@ import json
 import shlex
 import sys
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from bro import prompts
@@ -26,7 +25,17 @@ if TYPE_CHECKING:
   from bro.cw.session import SessionSpec
 
 
-_ANTHROPIC_KEY_HELPER = Path(__file__).with_name('print_anthropic_key.sh')
+def _settings_command(module: str) -> str:
+  """a `--settings` command line running `module` under the runner's interpreter.
+
+  claude runs the string through a shell (hence the quoting) whose PATH need not
+  carry the workspace's venv, and the wheel format guarantees no mode for a
+  packaged file outside `.data/scripts` — so a settings command names the
+  interpreter, never a console script or a packaged file's own path. `-m`
+  re-executes `module` as `__main__`, so only a leaf nothing else imports may be
+  named: a second copy breaks every identity check against its symbols.
+  """
+  return shlex.join([sys.executable, '-m', module])
 
 
 @dataclass(frozen=True)
@@ -70,23 +79,19 @@ def build_claude_launch(
   project/user CLAUDE.md, no host MCP servers, no built-in tools, and only the
   bro's MCP namespaces (`mcp__<namespace>__*`); its system prompt is the bro's
   claude_system_prompt (the composition whose tool-name rule matches those
-  mounts). auth comes from the `anthropic` secret via the workspace's own
-  `cw/print_anthropic_key.sh`, wired as apiKeyHelper in the merged
-  `--settings` — reading the key through a helper avoids the "Detected a custom
-  API key" prompt that ANTHROPIC_API_KEY would trigger, and `--settings`
-  (flagSettings, not project/local) means claude executes it without a
-  workspace trust gate.
+  mounts). auth comes from the `anthropic` secret, read through the credentials
+  resolver and wired as apiKeyHelper in the merged `--settings` — reading the key
+  through a helper avoids the "Detected a custom API key" prompt that
+  ANTHROPIC_API_KEY would trigger, and `--settings` (flagSettings, not
+  project/local) means claude executes it without a workspace trust gate.
   """
   from bro.registry import create_bro
 
   settings: dict = {
     'fastMode': spec.fast,
     'statusLine': {
-      # the runner's own interpreter rather than a PATH lookup for the
-      # registered script — the session's PATH need not carry the workspace's
-      # venv, and the shell claude runs the command through splits on spaces
       'type': 'command',
-      'command': f'{shlex.quote(sys.executable)} -m bro.cw.statusline',
+      'command': _settings_command('bro.cw.statusline'),
     },
   }
   argv = ['--model', _CW_MODEL]
@@ -95,7 +100,7 @@ def build_claude_launch(
   namespaces = list(dict.fromkeys(s.namespace for s in servers))
   mcp_config = _http_mcp_config(namespaces, port=endpoint.port, token=endpoint.token)
   if spec.raw:
-    settings['apiKeyHelper'] = str(_ANTHROPIC_KEY_HELPER)
+    settings['apiKeyHelper'] = _settings_command('bro.cw.print_anthropic_key')
     # the hold fragment renders here — appending the unrendered file would leak
     # its directives — with the --raw surface's facts: bro harness over mcp wire
     fragment = prompts.hold_fragment(

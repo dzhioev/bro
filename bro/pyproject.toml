@@ -76,6 +76,7 @@ bro-dev = { workspace = true }
 "bro.broker.broxy" = "bro._entrypoints:bro_broker_broxy"
 "bro.broker.cli" = "bro._entrypoints:bro_broker_cli"
 "bro.cw.cli" = "bro._entrypoints:bro_cw_cli"
+"bro.cw.print-anthropic-key" = "bro._entrypoints:bro_cw_print_anthropic_key"
 "bro.cw.statusline" = "bro._entrypoints:bro_cw_statusline"
 "bro.extra.github.poll-pr" = "bro._entrypoints:bro_extra_github_poll_pr"
 "bro.launch.ask" = "bro._entrypoints:bro_launch_ask"
@@ -131,7 +132,6 @@ exclude = ["*.egg-info"]
 "bro.base" = ["registry.json", "hooks/*.sh"]
 "bro.bros.bro" = ["scripts/*.md"]
 "bro.bros.dev" = ["REFERENCE.md", "scripts/*.md"]
-"bro.cw" = ["print_anthropic_key.sh"]
 "bro.prompts" = [
   "*.md",
   "*.prompt",
