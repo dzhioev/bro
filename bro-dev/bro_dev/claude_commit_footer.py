@@ -41,7 +41,7 @@ from typing import Optional
 import bro.llm.usage as usage
 from bro.base.args import Parser
 from bro.llm.usage import Counts
-from bro.workspace.paths import project_root
+from bro.workspace.git import git_out
 
 STATE_FILENAME = '.token_accounting_state.json'
 
@@ -63,7 +63,7 @@ def _effective_baseline(committed: Counts, cum: Counts) -> Counts:
 
 
 def _repo_root() -> Path:
-  return project_root()
+  return Path(git_out('rev-parse', '--show-toplevel')).resolve()
 
 
 class State:

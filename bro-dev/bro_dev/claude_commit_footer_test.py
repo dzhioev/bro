@@ -1,20 +1,36 @@
 #!/usr/bin/env python
+import subprocess
+
 import bro.llm.usage as usage
 
-import bro_dev.claude_commit_footer
 from bro_dev.claude_commit_footer import (
   State,
   _effective_baseline,
   _emit_default,
   _emit_squash,
+  _repo_root,
 )
 
 OPUS = 'claude-opus-4-8'
 
 
-def test_repo_root_uses_the_operated_git_repository(tmp_path, monkeypatch):
-  monkeypatch.setattr(bro_dev.claude_commit_footer, 'project_root', lambda: tmp_path)
-  assert bro_dev.claude_commit_footer._repo_root() == tmp_path
+def _git(*args: str) -> None:
+  subprocess.run(
+    ['git', '-c', 'user.email=test@example.com', '-c', 'user.name=test', *args], check=True
+  )
+
+
+def test_repo_root_is_the_linked_worktree_not_the_main_checkout(tmp_path, monkeypatch):
+  main = tmp_path / 'main'
+  _git('init', '-q', '-b', 'master', str(main))
+  (main / 'seed.txt').write_text('seed\n')
+  _git('-C', str(main), 'add', 'seed.txt')
+  _git('-C', str(main), 'commit', '-qm', 'seed')
+  linked = tmp_path / 'linked'
+  _git('-C', str(main), 'worktree', 'add', '-q', str(linked))
+
+  monkeypatch.chdir(linked)
+  assert _repo_root() == linked.resolve()
 
 
 def C(input=0, cache_write=0, cache_read=0, output=0):
