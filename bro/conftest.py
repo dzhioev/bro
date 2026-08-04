@@ -1,0 +1,88 @@
+"""project-wide pytest config.
+
+pinned to a no-op `Tracker` so tests never try to ship trail data to a
+configured sink — even on a workstation where the production recorder is the
+default via `set_default_tracker_factory`.
+
+`BROKER_CHANNEL` is dropped for the same reason: every broker-supervised cw
+session (container and host worktree alike) carries the env var, and a bro
+run in a test would otherwise connect to the live session channel and emit
+lifecycle events into it. Unset, `BroChannel.from_env()` returns None and
+the hook is inert.
+
+`BRO_HOLD` and `CW_RUNNER_PID` are dropped for the same hermeticity: together
+they gate the `raise` service tool's claude mounts, and tests would otherwise
+see the launching session's values.
+
+`CREDENTIALS_REGISTRY` is dropped so credential tests are hermetic: a host cw
+session exports it pointing at the session's scoped store, which outranks the
+`BRO_DIR` / `CONFIGS_DIR` module attributes the tests redirect to tmp dirs —
+secrets would resolve against the session's scoped set instead of the test
+fixture. Tests exercising the override set it themselves via monkeypatch.
+
+The run-start credential gate is pinned open for the same hermeticity (the
+autouse fixture below): test bros mostly keep the default chat_gpt spec, whose
+`openai` key would otherwise gate on the host's real store. Gate tests opt out
+with `@pytest.mark.credential_gate` and control `credentials.available`
+themselves.
+
+The usage-file pointer is dropped too: a test suite launched from inside a
+bro run inherits the run's live pointer, and a test reading
+`usage.current_usage()` would otherwise see that session's spend.
+
+The log level is pinned to INFO and `BRO_LOG_LEVEL` dropped — at session start
+against an inherited verbose launch (`run-tests --verbose`), and after every
+test (the autouse fixture below) against a test that parses `--log`/`--verbose`
+through a real CLI: level-sensitive tests — including every subprocess a test
+spawns — must see the default they assert against.
+"""
+
+import logging
+import os
+import shutil
+import tempfile
+from pathlib import Path
+
+import pytest
+
+import bro.llm.usage as usage
+from bro.base import log
+from bro.base.credentials import REGISTRY_ENV
+from bro.bro import set_default_tracker_factory
+from bro.broker.client import CHANNEL_ENV
+from bro.llm.tracker import NullTracker
+
+set_default_tracker_factory(NullTracker)
+os.environ.pop(CHANNEL_ENV, None)
+os.environ.pop('BRO_HOLD', None)
+os.environ.pop('CW_RUNNER_PID', None)
+os.environ.pop(REGISTRY_ENV, None)
+os.environ.pop(usage.USAGE_FILE_VARIABLE, None)
+log.set_level(logging.INFO)
+os.environ.pop(log.LEVEL_ENV, None)
+
+
+@pytest.fixture(autouse=True)
+def _pin_credential_gate_open(request, monkeypatch):
+  if request.node.get_closest_marker('credential_gate') is None:
+    monkeypatch.setattr('bro.bro.BaseBro.missing_secrets', lambda self: ())
+
+
+@pytest.fixture(autouse=True)
+def _reset_log_level():
+  yield
+  log.set_level(logging.INFO)
+  os.environ.pop(log.LEVEL_ENV, None)
+
+
+@pytest.fixture
+def socket_dir():
+  """a short-path tempdir for tests that bind AF_UNIX sockets.
+
+  sun_path caps at ~104 bytes on macOS (108 on Linux), and pytest's tmp_path —
+  the resolved system temp plus per-test naming — exceeds it on macOS before a
+  socket name is even appended. /tmp keeps the whole path well under the cap.
+  """
+  path = Path(tempfile.mkdtemp(prefix='sk-', dir='/tmp'))
+  yield path
+  shutil.rmtree(path, ignore_errors=True)

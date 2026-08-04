@@ -1,0 +1,5 @@
+#!/usr/bin/env -S bash -e
+source "$(bro-shell-dir)/prelude.sh"
+DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+
+exec python "$DIR/dev/run_tests.py" "$@"

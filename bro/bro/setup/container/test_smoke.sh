@@ -82,12 +82,13 @@ docker run --rm -i \
     test -d /opt/uv-cache
     test -n "$(ls -A /opt/uv-cache)"
     test -w /opt/uv-cache
-    # the project venv is baked in (the entrypoint symlinks it to skip uv sync):
-    # console-script launchers present, and the editable finder pointing at
-    # /workspace so it resolves against a session's clone
+    # the workspace venv is baked in: console-script launchers are present, and
+    # setuptools' compat-mode editable paths point every member at the clone
     test -x /opt/cw-venv/bin/ask
-    grep -q /workspace /opt/cw-venv/lib/python*/site-packages/__editable___ppp*_finder.py
-    # the project ships its argv bridges as ordinary editable modules
+    grep -q '^/workspace$' /opt/cw-venv/lib/python*/site-packages/__editable__.ppp-*.pth
+    grep -q '^/workspace/bro$' /opt/cw-venv/lib/python*/site-packages/__editable__.bro-*.pth
+    grep -q '^/workspace/bro-dev$' /opt/cw-venv/lib/python*/site-packages/__editable__.bro_dev-*.pth
+    # the projects ship their argv bridges as ordinary editable modules
     test -f /workspace/_entrypoints.py
     test -f /workspace/bro/bro/_entrypoints.py
     test -f /workspace/bro-dev/bro_dev/_entrypoints.py

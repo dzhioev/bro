@@ -1,0 +1,80 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bro-dev"
+version = "0.1.0"
+description = "development tooling for bro framework repositories"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "bro[agent]",
+]
+
+[dependency-groups]
+dev = [
+  "deptry==0.25.1",
+  "pyright==1.1.411",
+  "pytest==9.1.1",
+  "ruff==0.15.20",
+]
+
+[tool.uv.sources]
+bro = { workspace = true }
+
+[project.scripts]
+# bro_dev
+"bro-dev.claude-commit-footer" = "bro_dev._entrypoints:bro_dev_claude_commit_footer"
+"bro-dev.git-golc" = "bro_dev._entrypoints:bro_dev_git_golc"
+"bro-dev.install" = "bro_dev._entrypoints:bro_dev_install"
+"bro-dev.sync-scripts" = "bro_dev._entrypoints:bro_dev_sync_scripts"
+"bro-dev.usage-report" = "bro_dev._entrypoints:bro_dev_usage_report"
+"sync-scripts" = "bro_dev._entrypoints:bro_dev_sync_scripts"
+"usage-report" = "bro_dev._entrypoints:bro_dev_usage_report"
+
+[project.entry-points.bro]
+bro-dev = "bro_dev.bro:BroDev"
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.packages.find]
+where = ["."]
+namespaces = false
+include = ["bro_dev*"]
+exclude = ["*.egg-info"]
+
+[tool.setuptools.package-data]
+"bro_dev" = ["hooks/post-commit"]
+
+[tool.pytest.ini_options]
+# anchor pytest's rootdir to this workspace member
+pythonpath = ["."]
+max_warnings = "0"
+
+[tool.pyright]
+include = ["bro_dev", "conftest.py", "dev"]
+exclude = [".venv/", ".claude/", "*.egg-info/", "build/"]
+extraPaths = [".", "../bro"]
+venvPath = ".."
+venv = ".venv"
+
+[tool.ruff]
+line-length = 100
+indent-width = 2
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "B", "C4", "UP", "PIE", "RUF012"]
+ignore = ["UP045", "B904"]
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"bro_dev/bro.py" = ["RUF012"]
+
+[tool.ruff.format]
+quote-style = "single"

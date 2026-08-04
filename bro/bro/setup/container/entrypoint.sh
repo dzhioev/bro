@@ -102,11 +102,10 @@ if [ -d /opt/claude-plugins-seed ] && [ ! -f "$HOME/.claude/plugins/installed_pl
   cp -r /opt/claude-plugins-seed/. "$HOME/.claude/plugins/"
 fi
 
-# reuse the venv baked into the image (deps + editable project already installed,
-# its module finder pointing at /workspace — see the Dockerfile) instead of a fresh
-# `uv sync` (~3.4s). symlink it in and stamp provision_repo.sh's skip marker newer
-# than the just-cloned uv.lock/pyproject so the sync is skipped. valid only when
-# the clone's dependency manifests equal the ones the image was built from —
+# reuse the venv baked into the image (deps + editable workspace already installed,
+# its module finders pointing at /workspace — see the Dockerfile) instead of a fresh
+# `uv sync`. symlink it in and set the setup.sh skip signal. valid only when the
+# clone's dependency manifests equal the ones the image was built from —
 # CW_BASE_REF can base the clone on any ref, so equality is checked against the
 # staged /opt/cw-venv-manifest copies, not assumed. a mismatch (or an older image
 # without the staged manifests, or a pre-existing /workspace/.venv from a reused
@@ -123,17 +122,14 @@ if [ "${CW_SKIP_VENV:-}" != "1" ] && [ -d /opt/cw-venv ] && [ ! -e /workspace/.v
       || cmp -s /workspace/ppp/pyproject.toml /opt/cw-venv-manifest/ppp-pyproject.toml; }; then
   log VERBOSE 'reusing the venv baked into the image'
   ln -s /opt/cw-venv /workspace/.venv
-  touch /workspace/.venv/.provision-stamp
   export CW_VENV_BAKED=1
 fi
 
 # provision the cloned repo through its root setup.sh — the uniform provisioning
-# entry point every repo cw operates on carries (venv sync if stale, console-script
-# bridge, post-commit hook, git alias; a superproject setup.sh's own submodule init
-# is a no-op — the clone's submodules were already initialized above from
-# host-local clones). then activate the venv so child processes (hooks, MCP
-# servers, Bash tool) inherit it. CW_SKIP_VENV (smoke test only) skips the whole
-# venv-dependent block.
+# entry point every repo cw operates on carries (uv sync unless CW_VENV_BAKED is
+# set, followed by repository-local development hook installation). then activate
+# the venv so child processes inherit it. CW_SKIP_VENV (smoke test only) skips the
+# whole venv-dependent block.
 if [ "${CW_SKIP_VENV:-}" != "1" ]; then
   /workspace/setup.sh >&2
   source /workspace/.venv/bin/activate

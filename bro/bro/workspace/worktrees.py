@@ -47,12 +47,10 @@ def ensure_host_worktree(worktree: Path, branch: str, base_ref: Optional[str] = 
 
 def provision_host_worktree(worktree: Path) -> bool:
   # run the worktree's own setup.sh — the uniform provisioning entry point every
-  # repo cw operates on carries (idempotent: skips the uv sync when the venv is
-  # current, always refreshes the console-script bridge + git hooks). shared
-  # with the container entrypoint.
+  # repo cw operates on carries (uv sync plus repository hook installation),
+  # shared with the container entrypoint.
   # CW_VENV_BAKED is stripped: the container entrypoint exports it for the baked
-  # /workspace venv, but a worktree venv (the in-container nesting fallback) is
-  # freshly synced and still needs its console-script bridge generated.
+  # /workspace venv, but a host worktree needs its own environment synced.
   script = worktree / 'setup.sh'
   if not script.is_file():
     log.warning('%s not found (worktree on an old base?); skipping provisioning', script)

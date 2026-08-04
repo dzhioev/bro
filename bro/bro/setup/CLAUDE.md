@@ -4,38 +4,27 @@ How to bring up a fresh checkout, plus the credential schemas the project reads 
 
 ## Setup
 
-```bash
-./setup.sh              # system tools, uv sync, git hooks, ~/.bro check
-source .venv/bin/activate
-```
+A repository operated by `cw` provides a root `setup.sh` with one postcondition: `.venv/bin/cw` works when it exits. The script runs `uv sync`, activates that environment long enough to install repository hooks, and skips the sync when the container entrypoint exports `CW_VENV_BAKED=1` for its matching baked environment.
 
-Works on a fresh machine and is idempotent: `setup.sh` chains `setup_env.sh` (system tools, stamped so a no-change rerun is free) before `provision_repo.sh`.
+PPP is a three-member uv workspace: the root `ppp` distribution depends on workspace member `bro` at runtime and on `bro-dev` in its dev group. `uv sync --all-packages --all-groups --all-extras` creates the shared root `.venv`, installs all three members editably, and registers each distribution's committed console-script bridge. Each member owns its own pyproject tool configuration and development gate.
 
-`<repo>/setup.sh` is the uniform provisioning entry point of every repo cw operates on — safe on every launch, postcondition `<repo>/.venv/bin/cw`. ppp's own chains `setup_env.sh` + `provision_repo.sh` plus a non-fatal `~/.bro` presence check; a repo vendoring ppp as a submodule carries only the few-line form that inits the submodule and runs the same two scripts from `ppp/bro/bro/setup/` (template in the `provision_repo.sh` header).
-
-For ppp, `uv sync` creates `.venv`, installs runtime + `dev` + `cdk` dependency groups from `uv.lock`, and editable-installs the project. Lockfile (`uv.lock`) is committed; refresh with `uv lock --upgrade` when bumping deps. Runtime deps live in `pyproject.toml` `[project] dependencies` (exact `==` pins); dev/cdk deps live in `[dependency-groups]`. The editable install registers the CLI console scripts declared in `[project.scripts]` — after activating the venv, every CLI is a bare command on `PATH`. Those launchers import committed `_entrypoints.py` shims from their owning packages; `bro_dev.sync_scripts` regenerates the shims together with the scripts table (see the entry-point convention in the root `CLAUDE.md`).
+Prerequisites are documented in `bro/README.md`. `setup_env.sh` remains an optional macOS/Ubuntu reference installer and is not invoked by repository provisioning.
 
 ### Worktrees
 
-Worktrees get their own `.venv`. `cw` (host mode) creates the worktree and runs its `setup.sh` on every launch; it syncs the venv on the first launch and skips the slow `uv sync` on later ones (re-syncing only when `uv.lock`/`pyproject.toml` changed), while always refreshing the git hooks.
-
-**Never run `uv sync` against the main repo from inside a worktree.** The editable install hardcodes absolute paths and would pin the shared venv to a worktree that may later disappear.
+`cw` creates a fresh `.venv` in each host worktree by running that worktree's `setup.sh`. Container workspaces normally receive the image's matching baked environment and the same setup entry point installs only the repository hooks. Never run `uv sync` against the main checkout from inside another worktree: editable installs record absolute source paths.
 
 ## Files
 
-- `setup_env.sh` — installs system tools (claude-code, docker via colima on macOS, uv, plus stow, tmux, awscli in the full profile — a superproject checkout gets the core set only). macOS and Ubuntu only. Skips containers (the image bakes the environment) and, via a content stamp under `~/.local/state/ppp/`, reruns whose script + pinned versions are unchanged — `--force` re-verifies the installed tools
-- `versions.sh` — single source of truth for the pinned system-tool versions (tmux, stow), sourced by both `setup_env.sh`'s version checks and the `ubuntu/` installers' build targets
-- `provision_repo.sh` — the idempotent "provision a checked-out repo" step behind every repo's root `setup.sh`: `uv sync` (skipped when the venv is already current), installation of the `post-commit` git hook from `bro-dev/bro_dev/hooks/`, and registration of the repo-local `git golc` alias. In superproject mode (this tree vendored as a submodule) it provisions the superproject's root instead: its manifests drive the sync (with the vendored `ppp/pyproject.toml` joining the staleness check), the hook and `git golc` still come from ppp's tree. Reached on every launch surface — host `./setup.sh`, `cw` host mode (host worktrees), and the container entrypoint. Tree creation (clone / worktree) and surface-specific wiring (credentials) stay with the callers
-- `prelude.sh` — the shell-script prelude every executable script sources right after its shebang (the policy in the root `CLAUDE.md` "Shell Scripts"): `log.sh` + `strict.sh`. The framework ships all three as package data and `bro-shell-dir` prints their installed directory for consumer scripts; they are also baked into the container image so the entrypoint can source them before the clone exists (see the container Dockerfile)
-- `log.sh` — sourceable logging for shell scripts: `log <LEVEL> "<message>"` matching `bro/bro/base/log.py`'s line shape, plus the `log_enabled <LEVEL>` predicate, both thresholded on `BRO_LOG_LEVEL` (owned by `bro/bro/base/log.py`)
-- `strict.sh` — sourceable fail-fast guards: asserts errexit is on, aborts the script on command-not-found even in the test positions where `-e` is suppressed
-- `bro-dev/bro_dev/hooks/post-commit` — git hook installed into `.git/hooks` by `provision_repo.sh` (on every surface); invokes the registered `bro-dev.claude-commit-footer --record` command to promote the staged token-accounting baseline after a commit lands. Surfaces failures rather than swallowing them, so commit with the venv active
-- `docker_smoke_test.sh` — packaged sourceable helper for service `verify_deps.sh` scripts (`smoke_build`, `smoke_start`, `smoke_await`, `smoke_curl`, `smoke_assert_status`); its source call takes the OCI command and base-image builder supplied by the consumer
-- `base_image/` — package-shipped Dockerfile + `build.sh` for `ppp-base`, the general-purpose base of the repo's Debian-based container images: python:3.12-slim plus the tooling every container carries (jq, the uv binary). Local-only, never pushed; `build.sh` is the single builder every consumer calls
-- `container/` — Dockerfile + entrypoint for the cw container image (builds `FROM ppp-base`), with sourceable `git.sh` owning container clone/submodule remote setup; `bump-claude-code.sh` rebuilds with the pinned `claude-code-version`. Image bundles the docker CLI; `bro/bro/workspace/docker.py` bind-mounts the host docker socket so deploy scripts inside the container can build + push against the host daemon.
-
-  The Dockerfile bakes the project venv at `/opt/cw-venv` (dependencies + editable project, whose committed entrypoint bridges resolve against `/workspace`) so the entrypoint can symlink it in and skip `uv sync` on every launch. The reuse is gated on the clone's `pyproject.toml` + `uv.lock` — plus the vendored `ppp/pyproject.toml` when the project carries ppp as a submodule (`bro/bro/reference/cw.md`, "Per-project defaults") — matching the copies staged at `/opt/cw-venv-manifest` — a clone can base on any ref via `CW_BASE_REF`, and a diverging manifest falls through to a normal sync from the clone's own files. The entrypoint signals the skip to `provision_repo.sh` via `CW_VENV_BAKED=1`. `test_smoke.sh` validates the image + entrypoint postconditions (run on the host by `dev/run_tests.py`, skipped with `--no-docker` or inside a container)
-- `ubuntu/` — Ubuntu-only install helpers (`install_stow.sh`, `install_tmux.sh` — the latter builds from source into `~/.local` since apt's tmux trails upstream and no maintained PPA carries current builds)
+- `setup_env.sh` — reference host-prerequisite installer for macOS and Ubuntu; invoked by nothing
+- `versions.sh` and `ubuntu/` — pinned host-tool versions and Ubuntu installers used only by `setup_env.sh`
+- `prelude.sh` — shell-script prelude every executable framework script sources; consumers resolve the packaged directory with `bro-shell-dir`
+- `log.sh` — leveled shell logging thresholded by `BRO_LOG_LEVEL`
+- `strict.sh` — fail-fast shell guards, including command-not-found inside test positions
+- `docker_smoke_test.sh` — packaged sourceable helper for service `verify_deps.sh` scripts
+- `base_image/` — Dockerfile and builder for the local general-purpose base image
+- `container/` — the `cw` image, entrypoint, clone helper, and host-only smoke test. The image bakes a workspace venv in two stages: dependency resolution from the root and member manifests, then editable installation from the full project context. On launch the entrypoint reuses it only when its staged dependency manifests match the clone; otherwise the repository's `setup.sh` performs a fresh sync
+- `bro-dev/bro_dev/hooks/post-commit` — packaged hook installed by `bro-dev.install`; it advances token-accounting state after each commit
 
 ## Configuration
 

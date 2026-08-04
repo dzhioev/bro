@@ -71,35 +71,25 @@ RUN gosu cw bash -ec '\
       rm -rf "$CLAUDE_CONFIG_DIR/plugins" "$CLAUDE_CONFIG_DIR/.claude.json" "$CLAUDE_CONFIG_DIR/backups"'
 
 # bake the project venv at /opt/cw-venv at image-build time so per-session
-# containers reuse it instead of running `uv sync` (~3.4s) on every launch (the
-# entrypoint symlinks /workspace/.venv to it and stamps provision_repo.sh's skip
-# marker). the bake is split into two layers so the expensive part survives source
-# churn: the dependency install below mounts only the two manifests, keying its
-# cache on exactly their content, while the project install after it keys on the
-# full `project` context (filtered by the repo-root .dockerignore) and re-runs
-# cheaply on any source change. the baked env matches a clone only when the
-# clone's dependency manifests equal the ones this build ran from — CW_BASE_REF
-# can base the clone on any ref — so the manifests are staged below and the
-# entrypoint compares before reusing; a mismatch falls through to a normal sync
-# from the clone's own manifests. UV_LINK_MODE=copy: /opt is on the image overlay,
-# a different fs from any bind mount, so hardlinks can't be probed.
+# containers reuse it instead of running `uv sync` on every launch. the bake is
+# split into two layers so the expensive dependency install survives source
+# churn: this layer mounts every workspace manifest but defers all editable
+# members, which need their source trees; the next layer installs them from the
+# full project context. UV_LINK_MODE=copy because /opt and bind mounts may be on
+# different filesystems.
 ENV UV_CACHE_DIR=/opt/uv-cache
 ENV UV_LINK_MODE=copy
-# --no-install-package ppp: a project that vendors ppp as a path dependency
-# (a submodule) can't satisfy it here — only the two manifests are mounted — so
-# the editable ppp is deferred to the full-context layer below. for the ppp
-# project itself the flag is a no-op (--no-install-project already excludes it).
 RUN --mount=type=bind,from=project,source=pyproject.toml,target=/workspace/pyproject.toml \
     --mount=type=bind,from=project,source=uv.lock,target=/workspace/uv.lock \
+    --mount=type=bind,from=project,source=bro/pyproject.toml,target=/workspace/bro/pyproject.toml \
+    --mount=type=bind,from=project,source=bro-dev/pyproject.toml,target=/workspace/bro-dev/pyproject.toml \
     cd /workspace \
- && UV_PROJECT_ENVIRONMENT=/opt/cw-venv uv sync --frozen --all-groups --no-install-project \
-      --no-install-package ppp \
+ && UV_PROJECT_ENVIRONMENT=/opt/cw-venv uv sync --frozen --all-packages --all-groups --all-extras --no-install-workspace \
  && chmod -R a+rwX /opt/uv-cache /opt/cw-venv
 
-# editable-install the project, including its committed console-script argv bridges.
-# the sync runs with the project tree at /workspace, so the editable install's
-# module finder records each top-level module under /workspace — the exact path
-# the entrypoint clones into at runtime — and resolves against the live clone.
+# editable-install the workspace, including its committed console-script bridges.
+# setuptools compat mode records each member's source directory under /workspace,
+# the exact path the entrypoint clones into at runtime.
 # only the venv is kept from the tree: the build-time source is a bind mount
 # removed in the same layer, so nothing is duplicated. the tar excludes are a
 # fallback for builders that don't apply the repo-root .dockerignore to named
@@ -111,7 +101,7 @@ RUN --mount=type=bind,from=project,target=/project-src \
  && tar -C /project-src --exclude=./.git --exclude=./.venv --exclude=./var \
       --exclude=./node_modules --exclude=./.configs -cf - . | tar -C /workspace -xf - \
  && cd /workspace \
- && UV_PROJECT_ENVIRONMENT=/opt/cw-venv uv sync --frozen --all-groups \
+ && UV_PROJECT_ENVIRONMENT=/opt/cw-venv uv sync --frozen --all-packages --all-groups --all-extras \
  && find /workspace -mindepth 1 -delete \
  && find /opt/cw-venv /opt/uv-cache \( -type f -o -type d \) ! -perm -o+w \
       -exec chmod a+rwX {} +

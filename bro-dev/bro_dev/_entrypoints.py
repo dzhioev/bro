@@ -17,6 +17,10 @@ def bro_dev_git_golc():
   return _run('bro_dev.git_golc')
 
 
+def bro_dev_install():
+  return _run('bro_dev.install')
+
+
 def bro_dev_sync_scripts():
   return _run('bro_dev.sync_scripts')
 

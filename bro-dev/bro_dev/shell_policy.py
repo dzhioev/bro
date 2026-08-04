@@ -1,4 +1,5 @@
 import re
+import stat
 import subprocess
 from collections.abc import Iterable
 from pathlib import Path
@@ -10,17 +11,34 @@ _DEFAULT_EXEMPTIONS = frozenset({'setup.sh'})
 
 def executable_scripts(repo_root: Path) -> list[str]:
   listing = subprocess.run(
-    ['git', 'ls-files', '-s', '*.sh'],
+    ['git', 'ls-files', '--cached', '--others', '--exclude-standard'],
     capture_output=True,
     text=True,
     check=True,
     cwd=repo_root,
   ).stdout
-  return [line.split('\t')[1] for line in listing.splitlines() if line.startswith('100755')]
+  executable_bits = stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+  scripts = []
+  for relative_path in listing.splitlines():
+    path = repo_root / relative_path
+    if not path.is_file() or path.stat().st_mode & executable_bits == 0:
+      continue
+    first_line = path.read_text().split('\n', 1)[0]
+    if path.suffix == '.sh' or 'bash' in first_line:
+      scripts.append(relative_path)
+  return scripts
 
 
-def assert_shell_policy(repo_root: Path, *, exemptions: Iterable[str] = ()) -> None:
-  scripts = executable_scripts(repo_root)
+def assert_shell_policy(
+  repo_root: Path,
+  *,
+  exemptions: Iterable[str] = (),
+  excluded_directories: Iterable[str] = (),
+) -> None:
+  excluded = frozenset(excluded_directories)
+  scripts = [
+    path for path in executable_scripts(repo_root) if path.split('/', 1)[0] not in excluded
+  ]
   if len(scripts) == 0:
     raise AssertionError(f'no executable shell scripts found under {repo_root}')
 

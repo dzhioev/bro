@@ -1,25 +1,18 @@
 #!/usr/bin/env python
-"""regenerate the console-script table and committed argv bridges.
+"""regenerate one distribution's console-script table and committed argv bridge.
 
-Scans every Python module in the current three-source layout for a callable,
-non-async top-level `main`. Each such file produces a canonical script name from
-its import path with the stem kebab-cased (for example,
-`bro/bro/cw/cli.py` -> `bro.cw.cli`). A module may declare
-`__cli_name__ = 'custom-name'` to register an additional bare alias.
-
-Console-script launchers invoke their target with no arguments, while repo CLIs
-expose pure `main(argv)` functions. Each distribution therefore carries a
-committed `_entrypoints.py` bridge whose zero-argument functions pass `sys.argv`
-to the selected module. `sync-scripts` updates those bridges together with the
-root `[project.scripts]` table; `--check` verifies both artifacts.
+The operated project is selected explicitly (the current directory by default), so
+workspace members own independent artifacts. Python modules with a synchronous
+top-level ``main`` produce a canonical script name from their import path; a literal
+``__cli_name__`` adds a bare alias.
 """
 
 import ast
 import logging
 import os
 import re
-import subprocess
 import sys
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -28,15 +21,16 @@ from bro.base.args import Parser
 
 __cli_name__ = 'sync-scripts'
 
-SKIP_DIRS = {'.venv', 'build', '.claude', 'setup', '__pycache__', 'var'}
+SKIP_DIRECTORIES = {'.venv', 'build', '.claude', 'setup', '__pycache__', 'var'}
 
 
 @dataclass(frozen=True)
-class Source:
+class Project:
   directory: Path
+  pyproject: Path
   bridge_module: str
   bridge_path: Path
-  excluded_directories: frozenset[str] = frozenset()
+  excluded_directories: frozenset[str]
 
 
 @dataclass(frozen=True)
@@ -47,49 +41,71 @@ class Entry:
   bridge_module: str
 
 
-def _project_root() -> Path:
-  result = subprocess.run(
-    ['git', 'rev-parse', '--show-toplevel'],
-    capture_output=True,
-    text=True,
-    check=True,
+def _workspace_directories(directory: Path, data: dict) -> frozenset[str]:
+  patterns = data.get('tool', {}).get('uv', {}).get('workspace', {}).get('members', [])
+  if not isinstance(patterns, list) or not all(isinstance(pattern, str) for pattern in patterns):
+    raise ValueError(
+      f'[tool.uv.workspace] members in {directory / "pyproject.toml"} must be strings'
+    )
+  members: set[str] = set()
+  for pattern in patterns:
+    for member in directory.glob(pattern):
+      if member.is_dir():
+        members.add(member.relative_to(directory).parts[0])
+  return frozenset(members)
+
+
+def _bridge_module(data: dict, pyproject: Path) -> str:
+  scripts = data.get('project', {}).get('scripts')
+  if not isinstance(scripts, dict) or len(scripts) == 0:
+    raise ValueError(f'[project.scripts] in {pyproject} must contain at least one script')
+  targets: list[str] = []
+  for target in scripts.values():
+    if not isinstance(target, str) or ':' not in target:
+      raise ValueError(f'[project.scripts] targets in {pyproject} must be module:attribute strings')
+    targets.append(target)
+  modules = {target.partition(':')[0] for target in targets}
+  if len(modules) != 1:
+    raise ValueError(f'[project.scripts] in {pyproject} must target one bridge module')
+  return next(iter(modules))
+
+
+def _project(path: Path) -> Project:
+  directory = path.resolve()
+  if directory.is_file():
+    if directory.name != 'pyproject.toml':
+      raise ValueError(f'project path must be a directory or pyproject.toml: {directory}')
+    directory = directory.parent
+  pyproject = directory / 'pyproject.toml'
+  if not pyproject.is_file():
+    raise ValueError(f'missing {pyproject}')
+  data = tomllib.loads(pyproject.read_text())
+  bridge_module = _bridge_module(data, pyproject)
+  bridge_path = directory.joinpath(*bridge_module.split('.')).with_suffix('.py')
+  return Project(
+    directory=directory,
+    pyproject=pyproject,
+    bridge_module=bridge_module,
+    bridge_path=bridge_path,
+    excluded_directories=_workspace_directories(directory, data),
   )
-  return Path(result.stdout.strip())
 
 
-def _sources(root: Path) -> tuple[Source, ...]:
-  return (
-    Source(
-      root,
-      '_entrypoints',
-      root / '_entrypoints.py',
-      excluded_directories=frozenset({'bro', 'bro-dev'}),
-    ),
-    Source(root / 'bro', 'bro._entrypoints', root / 'bro' / 'bro' / '_entrypoints.py'),
-    Source(
-      root / 'bro-dev',
-      'bro_dev._entrypoints',
-      root / 'bro-dev' / 'bro_dev' / '_entrypoints.py',
-    ),
-  )
-
-
-def _iter_py_files(source: Source):
-  # os.walk with in-place pruning avoids descending into every worktree venv under var/.
+def _iter_python_files(project: Project):
   collected: list[Path] = []
-  for directory, directory_names, file_names in os.walk(source.directory):
+  for directory, directory_names, file_names in os.walk(project.directory):
     directory_names[:] = [
       name
       for name in directory_names
-      if name not in SKIP_DIRS
-      and name not in source.excluded_directories
+      if name not in SKIP_DIRECTORIES
+      and name not in project.excluded_directories
       and not name.endswith('.egg-info')
     ]
-    relative_directory = Path(directory).relative_to(source.directory)
+    relative_directory = Path(directory).relative_to(project.directory)
     for file_name in file_names:
       if not file_name.endswith('.py'):
         continue
-      if file_name == '__init__.py' or file_name == 'test.py' or file_name.endswith('_test.py'):
+      if file_name in ('__init__.py', 'conftest.py', 'test.py') or file_name.endswith('_test.py'):
         continue
       collected.append(relative_directory / file_name)
   yield from sorted(collected)
@@ -133,25 +149,24 @@ def _cli_name(tree: ast.Module, module_name: str) -> Optional[str]:
   return None
 
 
-def _discover(root: Path) -> tuple[list[Entry], list[str]]:
+def _discover(project: Project) -> tuple[list[Entry], list[str]]:
   entries: list[Entry] = []
   top_level_modules: list[str] = []
-  for source in _sources(root):
-    for relative_path in _iter_py_files(source):
-      module_name = _module_name(relative_path)
-      if source.directory == root and len(relative_path.parts) == 1:
-        top_level_modules.append(module_name)
-      tree = _parse_module(source.directory / relative_path)
-      if tree is None or not _has_sync_main(tree):
-        continue
-      entries.append(
-        Entry(
-          module=module_name,
-          canonical=_canonical(relative_path),
-          explicit=_cli_name(tree, module_name),
-          bridge_module=source.bridge_module,
-        )
+  for relative_path in _iter_python_files(project):
+    module_name = _module_name(relative_path)
+    if len(relative_path.parts) == 1:
+      top_level_modules.append(module_name)
+    tree = _parse_module(project.directory / relative_path)
+    if tree is None or not _has_sync_main(tree):
+      continue
+    entries.append(
+      Entry(
+        module=module_name,
+        canonical=_canonical(relative_path),
+        explicit=_cli_name(tree, module_name),
+        bridge_module=project.bridge_module,
       )
+    )
   return entries, top_level_modules
 
 
@@ -204,7 +219,7 @@ def _render_scripts(scripts: dict[str, str], name_modules: dict[str, str]) -> st
   return '\n'.join(lines)
 
 
-def _render_py_modules(modules: list[str]) -> str:
+def _render_python_modules(modules: list[str]) -> str:
   lines = ['py-modules = [']
   for module in sorted(modules):
     lines.append(f'  "{module}",')
@@ -219,25 +234,22 @@ def _replace_scripts(text: str, body: str) -> str:
   return pattern.sub(lambda match: match.group(1) + body + '\n\n', text)
 
 
-def _replace_py_modules(text: str, block: str) -> str:
+def _replace_python_modules(text: str, block: str) -> str:
   pattern = re.compile(r'py-modules\s*=\s*\[[^\]]*\]')
   if pattern.search(text) is None:
-    raise ValueError('py-modules not found')
+    return text
   return pattern.sub(block, text)
 
 
-def _render_pyproject(root: Path, text: str, entries: list[Entry], modules: list[str]) -> str:
-  del root
+def _render_pyproject(text: str, entries: list[Entry], modules: list[str]) -> str:
   scripts, name_modules = _scripts_and_modules(entries)
   text = _replace_scripts(text, _render_scripts(scripts, name_modules))
-  return _replace_py_modules(text, _render_py_modules(modules))
+  return _replace_python_modules(text, _render_python_modules(modules))
 
 
-def _render_entrypoints(entries: list[Entry], bridge_module: str) -> str:
+def _render_entrypoints(entries: list[Entry]) -> str:
   attributes: dict[str, str] = {}
   for entry in entries:
-    if entry.bridge_module != bridge_module:
-      continue
     attribute = _attribute(entry.module)
     existing = attributes.get(attribute)
     if existing is not None and existing != entry.module:
@@ -261,63 +273,59 @@ def _render_entrypoints(entries: list[Entry], bridge_module: str) -> str:
   return '\n'.join(lines) + '\n'
 
 
-def _rendered_artifacts(root: Path) -> tuple[str, dict[Path, str]]:
-  entries, modules = _discover(root)
-  pyproject = root / 'pyproject.toml'
-  rendered_pyproject = _render_pyproject(root, pyproject.read_text(), entries, modules)
-  bridges = {
-    source.bridge_path: _render_entrypoints(entries, source.bridge_module)
-    for source in _sources(root)
-  }
-  return rendered_pyproject, bridges
-
-
-def sync_pyproject(root: Path) -> None:
-  rendered, _ = _rendered_artifacts(root)
-  path = root / 'pyproject.toml'
-  path.write_text(rendered)
-  logging.info('updated %s', path)
-
-
-def sync_entrypoints(root: Path) -> None:
-  _, bridges = _rendered_artifacts(root)
-  for path, rendered in bridges.items():
-    path.write_text(rendered)
-    logging.info('updated %s', path)
-
-
-def check(root: Path) -> bool:
-  rendered_pyproject, bridges = _rendered_artifacts(root)
-  pyproject_matches = (root / 'pyproject.toml').read_text() == rendered_pyproject
-  bridges_match = all(
-    path.is_file() and path.read_text() == rendered for path, rendered in bridges.items()
+def _rendered_artifacts(project: Project) -> tuple[str, str]:
+  entries, modules = _discover(project)
+  return (
+    _render_pyproject(project.pyproject.read_text(), entries, modules),
+    _render_entrypoints(entries),
   )
-  return pyproject_matches and bridges_match
+
+
+def sync_pyproject(project: Project) -> None:
+  rendered, _ = _rendered_artifacts(project)
+  project.pyproject.write_text(rendered)
+  logging.info('updated %s', project.pyproject)
+
+
+def sync_entrypoints(project: Project) -> None:
+  _, rendered = _rendered_artifacts(project)
+  project.bridge_path.write_text(rendered)
+  logging.info('updated %s', project.bridge_path)
+
+
+def check(project: Project) -> bool:
+  rendered_pyproject, rendered_bridge = _rendered_artifacts(project)
+  return (
+    project.pyproject.read_text() == rendered_pyproject
+    and project.bridge_path.is_file()
+    and project.bridge_path.read_text() == rendered_bridge
+  )
 
 
 def main(argv: list[str]) -> Optional[int]:
-  parser = Parser(description='regenerate console-script metadata and committed argv bridges')
+  parser = Parser(description='regenerate console-script metadata and committed argv bridge')
+  parser.add_argument('--project', default='.', help='project directory or pyproject.toml')
   parser.add_argument(
     '--pyproject', action='store_true', help='rewrite [project.scripts] and py-modules'
   )
   parser.add_argument(
-    '--entrypoints', action='store_true', help='rewrite the committed _entrypoints.py modules'
+    '--entrypoints', action='store_true', help='rewrite the committed _entrypoints.py module'
   )
   parser.add_argument(
-    '--check', action='store_true', help='verify all generated artifacts are up to date'
+    '--check', action='store_true', help='verify the generated artifacts are up to date'
   )
   args = parser.parse(argv)
-  root = _project_root()
+  project = _project(Path(args['project']))
   if args['check'] is True:
-    if not check(root):
+    if not check(project):
       print('console-script artifacts are stale; run `sync-scripts` and commit', file=sys.stderr)
       return 1
     return 0
   both = not args['pyproject'] and not args['entrypoints']
   if args['pyproject'] is True or both:
-    sync_pyproject(root)
+    sync_pyproject(project)
   if args['entrypoints'] is True or both:
-    sync_entrypoints(root)
+    sync_entrypoints(project)
   return 0
 
 
