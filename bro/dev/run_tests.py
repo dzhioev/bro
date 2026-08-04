@@ -120,6 +120,9 @@ PYTEST_FILES = [
   'bro/llm/usage_test.py',
   'shell_policy_test.py',
 ]
+# outside the roster above: it drives the host docker daemon, which the suite's
+# in-container leg has none of
+DOCKER_PYTEST_FILE = 'bro/workspace/launch_smoke_test.py'
 
 
 def run(*args: str, extra_env: Optional[dict[str, str]] = None) -> None:
@@ -133,7 +136,7 @@ def node_env() -> dict[str, str]:
 
 def run_tests(argv: list[str]) -> Optional[int]:
   parser = Parser(description='run bro framework tests')
-  parser.add_argument('--no-docker', action='store_true', help='skip container smoke test')
+  parser.add_argument('--no-docker', action='store_true', help='skip the docker smoke stages')
   args = parser.parse(argv)
 
   print('sync-scripts: verifying console-script metadata', file=sys.stderr)
@@ -153,12 +156,14 @@ def run_tests(argv: list[str]) -> Optional[int]:
   print('pytest: unit suite', file=sys.stderr)
   run(sys.executable, '-m', 'pytest', *PYTEST_FILES)
   if args['no_docker'] is True:
-    print('skipping container smoke test (--no-docker)', file=sys.stderr)
+    print('skipping the docker smoke stages (--no-docker)', file=sys.stderr)
   elif Path('/.dockerenv').is_file():
-    print('skipping container smoke test (inside container; run on host)', file=sys.stderr)
+    print('skipping the docker smoke stages (inside container; run on host)', file=sys.stderr)
   else:
-    print('smoke: container test', file=sys.stderr)
+    print('smoke: container entrypoint', file=sys.stderr)
     run(str(DIR / 'bro' / 'setup' / 'container' / 'test_smoke.sh'))
+    print('smoke: container launch path', file=sys.stderr)
+    run(sys.executable, '-m', 'pytest', DOCKER_PYTEST_FILE)
   return None
 
 

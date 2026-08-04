@@ -7,7 +7,7 @@ Bro is the agent system: independent specialised agents (a "Bro") each run as a 
 `bro` is one member of the repository's uv workspace. From the repository root, `uv sync --all-packages --all-groups --all-extras` installs it with all framework extras and its development tooling. The member owns its formatter, test gate, pytest config, type/dependency policy, and live launch e2e:
 
 - `cd bro && ./format.sh` — format and autofix only framework files
-- `cd bro && ./run-tests` — console-script drift, lint, deptry, pyright, unit tests, and the host-only container smoke test (`--no-docker` skips it)
+- `cd bro && ./run-tests` — console-script drift, lint, deptry, pyright, unit tests, and the two host-only docker smoke stages: the container entrypoint's postconditions and the launch path from a cold image tag (`--no-docker` skips both)
 - `pytest bro/launch/e2e_test.py` from this member — live Docker launch e2e, separate from the default suite
 - `sync-scripts --project bro` — regenerate this distribution's `[project.scripts]` and `bro/_entrypoints.py`
 - `uv build --package bro` from the workspace root — build the framework wheel
