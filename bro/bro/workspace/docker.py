@@ -187,7 +187,7 @@ def _ensure_image(tag: str) -> None:
   version = (CONTAINER_DIR / 'claude-code-version').read_text().strip()
   log.info('building %s (claude-code %s)', tag, version)
   # the image builds FROM the local-only ppp-base, so refresh that first
-  subprocess.run(['bash', str(BASE_IMAGE_DIR / 'build.sh')], check=True)
+  subprocess.run(['bash', '-e', str(BASE_IMAGE_DIR / 'build.sh')], check=True)
   subprocess.run(
     [
       'docker',
