@@ -14,7 +14,7 @@ source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../setup/prelude.sh"
 #   - the `infra` secret resolvable (~/.bro/infra.json)
 #
 # run once after deploying the trails CDK stack:
-#   ./trails/bootstrap.sh
+#   ./bro/bro/trails/bootstrap.sh
 #
 # idempotent: if ~/.bro/trails.json already exists, the script is a no-op.
 

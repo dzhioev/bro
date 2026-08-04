@@ -76,7 +76,7 @@ def _default_factory() -> Tracker:
   if os.environ.get(_TRAILS_DISABLED_ENV) is not None:
     return NullTracker()
   # recording is otherwise mandatory in production: the `trails` secret must
-  # resolve (`trails/bootstrap.sh` writes `~/.bro/trails.json`). a missing
+  # resolve (`bro/bro/trails/bootstrap.sh` writes `~/.bro/trails.json`). a missing
   # secret is a setup error, not a fallback path — `NullTracker` is opt-in:
   # - kill switch: `TRAILS_DISABLED` set in the environment.
   # - tests: `conftest.py`'s `set_default_tracker_factory(NullTracker)`.
@@ -85,7 +85,7 @@ def _default_factory() -> Tracker:
     config = credentials.get_json('trails')
   except credentials.SecretNotFound as e:
     raise RuntimeError(
-      'trails: secret not found; run trails/bootstrap.sh to enable '
+      'trails: secret not found; run bro/bro/trails/bootstrap.sh to enable '
       'recording, or pass tracker=NullTracker() to skip explicitly'
     ) from e
   return Recorder(config['base_url'], config['token'])

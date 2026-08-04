@@ -6,21 +6,12 @@ from pathlib import Path
 from typing import Optional
 
 from bro.base.args import Parser
-
-
-def _git_output(repository: Path, *args: str) -> str:
-  return subprocess.run(
-    ['git', *args],
-    cwd=repository,
-    capture_output=True,
-    text=True,
-    check=True,
-  ).stdout.strip()
+from bro.workspace.git import git_out
 
 
 def install_repository(repository: Path) -> None:
-  root = Path(_git_output(repository, 'rev-parse', '--show-toplevel'))
-  hooks_path = Path(_git_output(root, 'rev-parse', '--git-path', 'hooks'))
+  root = Path(git_out('rev-parse', '--show-toplevel', cwd=str(repository)))
+  hooks_path = Path(git_out('rev-parse', '--git-path', 'hooks', cwd=str(root)))
   if not hooks_path.is_absolute():
     hooks_path = root / hooks_path
   hooks_path.mkdir(parents=True, exist_ok=True)

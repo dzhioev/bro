@@ -2,7 +2,7 @@
 """aggregate LLM token usage across a git commit range.
 
 Walks `git log <range>`, parses the footer emitted by
-`cw/claude_commit_footer.py` (format owned by the `usage` module), and sums
+`bro_dev/claude_commit_footer.py` (format owned by the `usage` module), and sums
 the per-model, per-class *deltas* across every commit in the range — which,
 under the squash-merge workflow, equals the true total spent producing that
 range (each session counted once).

@@ -885,7 +885,7 @@ def record_session(
   try:
     client = default_client()
   except credentials.SecretNotFound:
-    log.error('config not found: trails (run trails/bootstrap.sh)')
+    log.error('config not found: trails (run bro/bro/trails/bootstrap.sh)')
     health.write('error', 'config not found: trails')
     return 1
 

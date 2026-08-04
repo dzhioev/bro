@@ -354,7 +354,7 @@ class TestBroRun:
     monkeypatch.setattr(credentials, 'BRO_DIR', str(tmp_path))
     monkeypatch.setattr(credentials, '_default_store', None)
     monkeypatch.delenv(bro_module._TRAILS_DISABLED_ENV, raising=False)
-    with pytest.raises(RuntimeError, match='trails/bootstrap.sh'):
+    with pytest.raises(RuntimeError, match='bro/bro/trails/bootstrap.sh'):
       bro_module._default_factory()
 
   # presence is what counts (same convention as NO_COLOR / CW_IN_CONTAINER):
