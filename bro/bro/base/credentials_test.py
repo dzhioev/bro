@@ -1417,3 +1417,21 @@ class TestInstallHooks:
     with pytest.raises(SystemExit):
       credentials.main(['credentials', 'get'])
     assert 'required: name' in capsys.readouterr().err
+
+
+class TestWithoutBoto3:
+  def test_imports_and_builds_sources_without_boto3(self):
+    # only SSMSource.fetch may reach for boto3; simulate its absence in a fresh subprocess.
+    import subprocess
+    import sys
+
+    code = (
+      "import sys; sys.modules['boto3'] = None; "
+      'from bro.base import credentials; '
+      "credentials.Secret.from_dict('notion', "
+      "{'sources': [{'type': 'ssm', 'parameter': '/p', 'region': 'eu-central-1'}]}); "
+      "print('ok')"
+    )
+    result = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == 'ok'

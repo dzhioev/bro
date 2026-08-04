@@ -661,3 +661,21 @@ class TestCanonicalName:
 
   def test_unnamespaced_name_passes_through(self):
     assert canonical_name('banner') == 'banner'
+
+
+class TestWithoutMCPPackage:
+  def test_layer_imports_without_the_mcp_package(self):
+    # only FunctionTool may reach for the `mcp` package; simulate its absence in a
+    # fresh subprocess.
+    import subprocess
+    import sys
+
+    code = (
+      "import sys; sys.modules['mcp'] = None; "
+      'import bro.llm.llm, bro.llm.llms.chat_gpt, bro.llm.mcp, bro.prompts; '
+      "bro.llm.mcp.render_text('plain'); "
+      "print('ok')"
+    )
+    result = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == 'ok'

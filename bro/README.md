@@ -8,14 +8,15 @@ Development requires Python 3.12 or newer, Git, and [uv](https://docs.astral.sh/
 
 ## Installation
 
-The base distribution contains `bro.base`, the MCP abstraction, credential handling, workspace primitives, prompts, and the framework console scripts. Optional dependency groups install the heavier surfaces:
+The base distribution contains every module — `bro.base`, the MCP abstraction, credential handling, workspace primitives, prompts, and the framework console scripts — but its required dependencies cover only what `bro.base` imports at module load. Every heavier surface states its own in an extra, so an install pays for the surfaces it selects:
 
-- `bro[agent]` — the OpenAI agent loop, data sources, and terminal UIs
+- `bro[agent]` — the OpenAI agent loop, tool serving, data sources, and terminal UIs
 - `bro[cw]` — interactive `cw` and launch UI dependencies
 - `bro[http]` — aiohttp-based clients and services
 - `bro[llm]` — OpenAI LLM access without the agent UI dependencies
-- `bro[runtime]` — HTTP MCP serving through Starlette and uvicorn
+- `bro[runtime]` — the MCP serving front, over stdio or HTTP
 - `bro[trails-server]` — the aiohttp/DynamoDB trails service
+- `bro[aws]` — the `ssm` credential source
 - `bro[github]` — GitHub App authentication
 
 A repository operated by `cw` provides a root `setup.sh` whose postcondition is an executable `.venv/bin/cw`. When the container entrypoint exports `CW_VENV_BAKED=1`, the script must reuse the baked environment instead of syncing it. A consuming development repository normally installs `bro-dev` in its dev dependency group, syncs the workspace, activates the resulting venv, and calls `bro-dev.install` to install the post-commit hook and `git golc` alias.
