@@ -134,7 +134,7 @@ async def test_call_surfaces_started_and_returns_terminal(socket_dir):
     interims: list[Message] = []
     call_task = asyncio.create_task(
       asyncio.to_thread(
-        client.call, 'summon', {'target': 'devoops'}, TIMEOUT, on_started=interims.append
+        client.call, 'summon', {'target': 'dev'}, TIMEOUT, on_started=interims.append
       )
     )
 
@@ -209,7 +209,7 @@ async def test_send_returns_the_sent_message(socket_dir):
   async with running_server(socket_dir) as server:
     provisioned = await server.transport.provision()
     client = Client(UnixClientTransport(provisioned.host_endpoint))
-    sent = await asyncio.to_thread(client.send, 'summon', {'target': 'devoops'})
+    sent = await asyncio.to_thread(client.send, 'summon', {'target': 'dev'})
 
     _, received = await _next(server.sink.messages)
     # the id is minted client-side, so the caller holds it before any reply exists
@@ -224,7 +224,7 @@ async def test_await_reply_reattaches_to_a_sent_request(socket_dir):
   async with running_server(socket_dir) as server:
     provisioned = await server.transport.provision()
     client = Client(UnixClientTransport(provisioned.host_endpoint))
-    sent = await asyncio.to_thread(client.send, 'summon', {'target': 'devoops'})
+    sent = await asyncio.to_thread(client.send, 'summon', {'target': 'dev'})
     interims: list[Message] = []
     await_task = asyncio.create_task(
       asyncio.to_thread(client.await_reply, sent, TIMEOUT, on_started=interims.append)

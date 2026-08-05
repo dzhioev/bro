@@ -128,23 +128,23 @@ class TestRunInPlace:
   def test_raw_session_serves_health_gates_and_syncs(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert cw_runner.run_in_place(_spec(bro='pm', raw=True)) == 0
-      assert h.start_server.call_args[0][0] == 'bro:pm'
+      assert cw_runner.run_in_place(_spec(bro='dev', raw=True)) == 0
+      assert h.start_server.call_args[0][0] == 'bro:dev'
       assert h.server.wait_healthy.call_count == 1
       assert h.server.stop.call_count == 1
       assert h.start_recorder.call_count == 1
-      assert h.env['CW_BRO'] == 'pm'
+      assert h.env['CW_BRO'] == 'dev'
       assert h.build.call_args.kwargs['endpoint'] == h.server.endpoint
 
   def test_cw_session_serves_the_persona_and_health_gates(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert cw_runner.run_in_place(_spec(bro='pm')) == 0
-      assert h.start_server.call_args[0][0] == 'persona:pm'
+      assert cw_runner.run_in_place(_spec(bro='dev')) == 0
+      assert h.start_server.call_args[0][0] == 'persona:dev'
       assert h.server.wait_healthy.call_count == 1
       assert h.server.stop.call_count == 1
       assert h.start_recorder.call_count == 1
-      assert h.env['CW_BRO'] == 'pm'
+      assert h.env['CW_BRO'] == 'dev'
       assert h.build.call_args.kwargs['endpoint'] == h.server.endpoint
 
   def test_cw_session_uses_the_project_default_bro(self, monkeypatch, tmp_path):
@@ -165,7 +165,7 @@ class TestRunInPlace:
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
       h.server.wait_healthy.side_effect = RuntimeError('not healthy')
-      assert cw_runner.run_in_place(_spec(bro='pm', raw=True)) == 1
+      assert cw_runner.run_in_place(_spec(bro='dev', raw=True)) == 1
       assert h.run_claude.call_count == 0
       assert h.server.stop.call_count == 1
 
@@ -223,7 +223,7 @@ class TestRunInPlace:
   def test_raw_session_applies_auth_without_warning(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert cw_runner.run_in_place(_spec(bro='pm', raw=True)) == 0
+      assert cw_runner.run_in_place(_spec(bro='dev', raw=True)) == 0
       assert h.apply_auth.call_args.kwargs == {'warn_when_missing': False}
 
   def test_extends_claudes_mcp_tool_call_timeout(self, monkeypatch, tmp_path):

@@ -156,7 +156,7 @@ class TestAutoload:
   def test_autoload_off_does_not_import_real_bros(self):
     bro.registry._autoload = False
     with pytest.raises(KeyError, match='unknown bro'):
-      get_class('pm')
+      get_class('dev')
 
 
 def _entry_point(name: str, value: str) -> importlib.metadata.EntryPoint:

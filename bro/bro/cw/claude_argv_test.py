@@ -7,9 +7,14 @@ import pytest
 
 import bro.cw.claude_argv as cw_claude_argv
 from bro.cw.mcp import MCPEndpoint
-from bro.cw.session_test import _spec
+from bro.cw.session_test import _spec as _session_spec
 
 _ENDPOINT = MCPEndpoint(port=1234, token='tok')
+
+
+def _spec(**kwargs):
+  kwargs.setdefault('bro', 'dev')
+  return _session_spec(**kwargs)
 
 
 @pytest.fixture(autouse=True)
@@ -23,16 +28,16 @@ def _brog_config(monkeypatch):
   )
 
 
-def _pm_namespaces() -> list[str]:
+def _dev_namespaces() -> list[str]:
   from bro.registry import create_bro
 
-  return list(dict.fromkeys(s.namespace for s in create_bro('pm').claude_bro_mcp_servers()))
+  return list(dict.fromkeys(s.namespace for s in create_bro('dev').claude_bro_mcp_servers()))
 
 
-def _pm_persona_namespaces() -> list[str]:
+def _dev_persona_namespaces() -> list[str]:
   from bro.registry import create_bro
 
-  return list(dict.fromkeys(s.namespace for s in create_bro('pm').claude_persona_mcp_servers()))
+  return list(dict.fromkeys(s.namespace for s in create_bro('dev').claude_persona_mcp_servers()))
 
 
 def _cw_session_launch(spec, **kwargs) -> cw_claude_argv.ClaudeLaunch:
@@ -79,9 +84,9 @@ class TestCwSessionLaunch:
     assert '--dangerously-skip-permissions' not in argv
 
   def test_mcp_config_covers_the_personas_namespaces(self):
-    argv = _cw_session_launch(_spec(bro='pm'), claude_args=[]).argv
+    argv = _cw_session_launch(_spec(bro='dev'), claude_args=[]).argv
     config = json.loads(argv[argv.index('--mcp-config') + 1])
-    namespaces = _pm_persona_namespaces()
+    namespaces = _dev_persona_namespaces()
     # the service server's `banner` tool rides the `bro` namespace
     assert 'bro' in namespaces
     assert list(config['mcpServers']) == namespaces
@@ -94,7 +99,7 @@ class TestCwSessionLaunch:
   def test_cw_session_keeps_the_full_harness(self):
     # no --strict-mcp-config / --allowed-tools: the persona namespaces mount on
     # top of claude's own tools, not instead of them
-    argv = _cw_session_launch(_spec(bro='pm'), claude_args=[]).argv
+    argv = _cw_session_launch(_spec(bro='dev'), claude_args=[]).argv
     assert '--strict-mcp-config' not in argv
     assert '--allowed-tools' not in argv
 
@@ -106,7 +111,7 @@ class TestCwSessionLaunch:
 
 class TestRawLaunch:
   def _launch(self, **kwargs) -> cw_claude_argv.ClaudeLaunch:
-    spec = _spec(bro='pm', raw=True, **kwargs)
+    spec = _spec(bro='dev', raw=True, **kwargs)
     return cw_claude_argv.build_claude_launch(spec, claude_args=[], endpoint=_ENDPOINT)
 
   def test_basic_shape(self):
@@ -131,13 +136,13 @@ class TestRawLaunch:
   def test_allowed_tools_cover_each_namespace(self):
     argv = self._launch().argv
     assert argv[argv.index('--allowed-tools') + 1] == ','.join(
-      f'mcp__{namespace}__*' for namespace in _pm_namespaces()
+      f'mcp__{namespace}__*' for namespace in _dev_namespaces()
     )
 
   def test_mcp_config_one_http_entry_per_namespace(self):
     argv = self._launch().argv
     config = json.loads(argv[argv.index('--mcp-config') + 1])
-    namespaces = _pm_namespaces()
+    namespaces = _dev_namespaces()
     # the service tools ride the `bro` namespace
     assert 'bro' in namespaces
     assert list(config['mcpServers']) == namespaces
@@ -166,7 +171,7 @@ class TestRawLaunch:
     launch = self._launch()
     argv = launch.argv
     prompt = argv[argv.index('--system-prompt') + 1]
-    assert prompt.startswith(create_bro('pm').claude_system_prompt)
+    assert prompt.startswith(create_bro('dev').claude_system_prompt)
     assert launch.system_prompt == prompt
     # the flavor whose tool-name rule matches the mcp__<namespace>__<tool> mounts
     assert '`mcp__namespace__tool`' in prompt

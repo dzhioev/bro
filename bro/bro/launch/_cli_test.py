@@ -260,10 +260,10 @@ def test_maybe_containerize_bro_grant_extends_the_allow_list():
       bro_name='bro-dev',
       inner_args=['hi'],
       in_place=False,
-      grant=['@pm'],
+      grant=['@bro'],
     )
   assert rc == 0
-  assert run.call_args.kwargs['may_summon'] == {'pm'}
+  assert run.call_args.kwargs['may_summon'] == {'bro'}
 
 
 def test_maybe_containerize_summon_grant_already_allowed_errors(capsys):
@@ -278,7 +278,7 @@ def test_maybe_containerize_summon_grant_already_allowed_errors(capsys):
       bro_name='bro-dev',
       inner_args=['hi'],
       in_place=False,
-      grant=['@devoops', '@devoops'],
+      grant=['@dev', '@dev'],
     )
   assert rc == 1
   assert run.call_count == 0
@@ -316,7 +316,7 @@ def test_maybe_containerize_bro_grant_with_in_place_errors(capsys):
       bro_name='bro-dev',
       inner_args=['hi'],
       in_place=True,
-      grant=['@devoops'],
+      grant=['@dev'],
     )
   assert rc == 1
   assert run.call_count == 0

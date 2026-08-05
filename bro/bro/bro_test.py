@@ -226,7 +226,7 @@ class TestBroRun:
     await TraceBro().run('again', tracker=RecordingTracker(), surface='test')
     monkeypatch.setenv('CW_SUMMONER', '{"trail_id":"T-universal","step_id":7,"index":2}')
     await TraceBro().run('universal pointer', tracker=RecordingTracker(), surface='test')
-    monkeypatch.setenv('CW_SUMMONER', '{"target":"pm","trail_id":"T-legacy"}')
+    monkeypatch.setenv('CW_SUMMONER', '{"target":"bro","trail_id":"T-legacy"}')
     await TraceBro().run('legacy direct', tracker=RecordingTracker(), surface='test')
     monkeypatch.setenv('CW_SUMMONER', '{"session":"c:legacy-root"}')
     await TraceBro().run('legacy session', tracker=RecordingTracker(), surface='test')
@@ -1687,10 +1687,10 @@ class TestSummonTool:
     assert tool is not None
     result = await tool.call(
       {
-        'target': 'devoops',
+        'target': 'dev',
         'prompt': 'deploy',
         'timeout': 60,
-        'grant': ['aws', '@pm'],
+        'grant': ['aws', '@bro'],
         'revoke': ['openai'],
         'effort': 'high',
         'fast': True,
@@ -1700,11 +1700,11 @@ class TestSummonTool:
     # the request carries the summon call's own tool_call step for provenance
     assert calls == [
       {
-        'target': 'devoops',
+        'target': 'dev',
         'prompt': 'deploy',
         'timeout': 60,
         'into': None,
-        'grant': ['aws', '@pm'],
+        'grant': ['aws', '@bro'],
         'revoke': ['openai'],
         'effort': 'high',
         'fast': True,
@@ -1745,9 +1745,9 @@ class TestSummonTool:
     monkeypatch.setattr(summon_module, 'summon_detached', fake_summon_detached)
     monkeypatch.setattr(summon_module, 'summon_and_wait', fail_summon_and_wait)
     tool = await _find_tool(EchoBro(), 'summon')
-    result = await tool.call({'target': 'devoops', 'prompt': 'deploy', 'detach': True})
+    result = await tool.call({'target': 'dev', 'prompt': 'deploy', 'detach': True})
     assert result == 'REQ-ID'
-    assert calls == [{'target': 'devoops', 'prompt': 'deploy', 'timeout': None, 'into': None}]
+    assert calls == [{'target': 'dev', 'prompt': 'deploy', 'timeout': None, 'into': None}]
 
   @pytest.mark.asyncio
   async def test_check_reports_pending_and_completed(self, monkeypatch):
@@ -1845,7 +1845,7 @@ class TestSummonTool:
     monkeypatch.setattr(summon_module, 'open_client', lambda: client)
     monkeypatch.setattr(summon_module, 'summon_and_wait', fake_summon_and_wait)
     tool = await _find_tool(EchoBro(), 'summon')
-    task = asyncio.create_task(tool.call({'target': 'devoops', 'prompt': 'deploy'}))
+    task = asyncio.create_task(tool.call({'target': 'dev', 'prompt': 'deploy'}))
     await asyncio.to_thread(entered.wait, 5)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -1926,7 +1926,7 @@ class TestSummonTool:
     assert tool is not None
     # a generic exception is the agent-loop tool-error contract (vs ToolControlSignal)
     with pytest.raises(summon_module.SummonError, match='summon denied'):
-      await tool.call({'target': 'devoops', 'prompt': 'deploy'})
+      await tool.call({'target': 'dev', 'prompt': 'deploy'})
 
   @pytest.mark.asyncio
   async def test_run_creates_llm_with_the_unattended_hold(self):

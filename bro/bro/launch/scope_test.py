@@ -1,10 +1,31 @@
+from typing import ClassVar
 from unittest.mock import patch
 
 import pytest
 
 import bro.launch.scope
+from bro.bros.bro import Bro
+from bro.datasources.web_search import WebSearch
 from bro.launch.scope import Surface
 from bro.workspace.store import finalize_scoped_secrets
+
+
+class SearchBro(Bro):
+  name = 'scope-search'
+  description = 'searchable bro for launch scope tests'
+  data_sources: ClassVar = [WebSearch()]
+  extra_secrets = ('catalog',)
+
+
+class DockerBro(Bro):
+  name = 'scope-docker'
+  description = 'docker bro for launch scope tests'
+  needs_docker = True
+
+
+@pytest.fixture(autouse=True)
+def registered_scope_bros(register_test_bros):
+  register_test_bros(SearchBro, DockerBro)
 
 
 class TestScopedSecrets:
@@ -18,19 +39,17 @@ class TestScopedSecrets:
     # required (strict), not optional: no .credentials.json fallback in the
     # container, so a missing token must fail loudly on the host
     assert 'claude_code' not in scoped.optional
-    # the persona's own components advertise openai best-effort (searchable-source
-    # query summaries); no session-wide baseline adds anything on top
+    # the scripts dispatcher advertises openai best-effort; no session-wide
+    # baseline adds anything on top
     assert scoped.optional == {'openai'}
     # a normal claude code session keeps the docker socket
     assert scoped.docker_sock is True
 
-  def test_cw_session_set_covers_the_personas_data_sources(self):
-    # librorian's searchable sources mount on the claude harness too, so a
-    # cw-session themed as it hydrates their secrets
+  def test_cw_session_set_covers_the_bros_manifest(self):
     scoped = bro.launch.scope.scoped_secrets(
-      'librorian', Surface.CW_SESSION, credential_instances={}
+      'scope-search', Surface.CW_SESSION, credential_instances={}
     )
-    assert {'tmdb', 'brave', 'notion'} <= scoped.required
+    assert {'catalog', 'brave'} <= scoped.required
 
   def test_raw_session_uses_full_manifest_and_anthropic(self):
     # --raw serves the bro's own MCP servers, so it gets the full manifest (brog)
@@ -46,36 +65,35 @@ class TestScopedSecrets:
     assert 'claude_code' not in scoped.required
 
   def test_raw_session_includes_optional_secrets(self):
-    # a bro with searchable data sources (librorian) advertises openai best-effort
+    # searchable data sources advertise openai best-effort
     # for the query-focused fetch summary; --raw hydrates it as the optional tier.
     scoped = bro.launch.scope.scoped_secrets(
-      'librorian', Surface.RAW_SESSION, credential_instances={}
+      'scope-search', Surface.RAW_SESSION, credential_instances={}
     )
     assert 'openai' in scoped.optional
     assert 'openai' not in scoped.required  # optional, not required
 
-  def test_docker_socket_only_for_deploy_bros(self):
-    # the socket is gated on needs_docker: devoops (deployer) keeps it, librorian doesn't
-    devoops = bro.launch.scope.scoped_secrets(
-      'devoops', Surface.RAW_SESSION, credential_instances={}
+  def test_docker_socket_only_when_declared(self):
+    docker_scope = bro.launch.scope.scoped_secrets(
+      'scope-docker', Surface.RAW_SESSION, credential_instances={}
     )
-    librorian = bro.launch.scope.scoped_secrets(
-      'librorian', Surface.RAW_SESSION, credential_instances={}
+    search_scope = bro.launch.scope.scoped_secrets(
+      'scope-search', Surface.RAW_SESSION, credential_instances={}
     )
-    assert devoops.docker_sock is True
-    assert librorian.docker_sock is False
-    assert {'tmdb', 'brave', 'notion'} <= librorian.required
+    assert docker_scope.docker_sock is True
+    assert search_scope.docker_sock is False
+    assert {'catalog', 'brave'} <= search_scope.required
 
   def test_bro_run_manifest_plus_llm_key_and_trails(self):
-    # devoops runs as an LLM process: its manifest plus its LLM key (chat_gpt →
+    # dev runs as an LLM process: its manifest plus its LLM key (chat_gpt →
     # openai, which needed_secrets() omits) and the mandatory trails sink
-    scoped = bro.launch.scope.scoped_secrets('devoops', Surface.BRO_RUN, credential_instances={})
+    scoped = bro.launch.scope.scoped_secrets('dev', Surface.BRO_RUN, credential_instances={})
     assert {'openai', 'trails'} <= scoped.required
 
   def test_bro_run_docker_socket_gated_on_needs_docker(self):
     assert (
       bro.launch.scope.scoped_secrets(
-        'devoops', Surface.BRO_RUN, credential_instances={}
+        'scope-docker', Surface.BRO_RUN, credential_instances={}
       ).docker_sock
       is True
     )
@@ -87,9 +105,11 @@ class TestScopedSecrets:
     )
 
   def test_bro_run_optional_tier_carries_the_bros_optional_secrets(self):
-    # librorian's data sources advertise openai best-effort for the query-focused
+    # searchable data sources advertise openai best-effort for the query-focused
     # fetch summary
-    scoped = bro.launch.scope.scoped_secrets('librorian', Surface.BRO_RUN, credential_instances={})
+    scoped = bro.launch.scope.scoped_secrets(
+      'scope-search', Surface.BRO_RUN, credential_instances={}
+    )
     assert 'openai' in scoped.optional
 
   def test_unknown_bro_falls_back_to_baseline_on_session_surfaces(self):
@@ -124,7 +144,7 @@ class TestCredentialInstances:
 
   def test_substitutes_a_mapped_kind_in_the_optional_tier(self):
     scoped = bro.launch.scope.scoped_secrets(
-      'librorian', Surface.RAW_SESSION, credential_instances={'openai': 'work'}
+      'scope-search', Surface.RAW_SESSION, credential_instances={'openai': 'work'}
     )
     assert 'openai+work' in scoped.optional
     assert 'openai' not in scoped.optional
@@ -175,20 +195,20 @@ class TestPreflightScopedLaunch:
     # one unified grant list: plain names finalize the credential scope, @names
     # feed the summon allow-list
     with (
-      patch('bro.launch.summon_control.summon_allow_list', return_value={'devoops'}) as allow_list,
+      patch('bro.launch.summon_control.summon_allow_list', return_value={'dev'}) as allow_list,
       patch(
         'bro.launch.scope.credentials.build_scoped_store', return_value={'x.cred': b'v'}
       ) as build,
     ):
       scoped, may_summon, store = self._preflight(
         bro.launch.scope.ScopedSecrets({'github'}, {'openai'}, True),
-        grant=['gmail_creds', '@devoops'],
-        revoke=['@pm'],
+        grant=['gmail_creds', '@dev'],
+        revoke=['@bro'],
       )
     assert scoped == bro.launch.scope.ScopedSecrets({'github', 'gmail_creds'}, {'openai'}, True)
-    assert may_summon == {'devoops'}
+    assert may_summon == {'dev'}
     assert store == {'x.cred': b'v'}
-    assert allow_list.call_args == (('bro-dev',), {'grant': ['devoops'], 'revoke': ['pm']})
+    assert allow_list.call_args == (('bro-dev',), {'grant': ['dev'], 'revoke': ['bro']})
     # the store is hydrated from the finalized tiers, not the incoming ones
     assert build.call_args == (({'github', 'gmail_creds'},), {'optional': {'openai'}})
 

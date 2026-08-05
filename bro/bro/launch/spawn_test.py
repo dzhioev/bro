@@ -43,7 +43,7 @@ class TestSummonLowering:
 
   def test_lowers_to_the_bro_run_docker_launch(self, lowering_harness):
     launch = bro.launch.spawn.SummonLaunchSpec(
-      target='devoops',
+      target='dev',
       prompt='deploy the thing',
       parent_workspace=PARENT_WORKSPACE,
       summoner=SUMMONER,
@@ -52,12 +52,12 @@ class TestSummonLowering:
     assert lowered == bro.launch.spawn.DockerLaunchSpec(
       workspace_docker.Launch(
         name='broker-CH',
-        command=['bro', 'run', 'devoops', 'deploy the thing', '--in-place'],
+        command=['bro', 'run', 'dev', 'deploy the thing', '--in-place'],
         env={
           'CW_BASE_REF': 'PARENT-SHA',
-          'CW_BRO': 'devoops',
+          'CW_BRO': 'dev',
           'CW_SUMMONER': '{"session":"ws"}',
-          **bro.launch.identity.bro_git_identity_env('devoops'),
+          **bro.launch.identity.bro_git_identity_env('dev'),
         },
         secrets={'aws', 'trails'},
         optional_secrets={'openai'},
@@ -70,15 +70,15 @@ class TestSummonLowering:
 
   def test_lowering_logs_the_scope_like_any_container_launch(self, lowering_harness, caplog):
     launch = bro.launch.spawn.SummonLaunchSpec(
-      target='devoops', prompt='p', parent_workspace=PARENT_WORKSPACE, summoner=SUMMONER
+      target='dev', prompt='p', parent_workspace=PARENT_WORKSPACE, summoner=SUMMONER
     )
     with caplog.at_level('INFO'):
       bro.launch.spawn._lower_summon(launch, 'broker-CH')
-    assert 'scoped secrets for summoned devoops: aws, trails' in caplog.text
+    assert 'scoped secrets for summoned dev: aws, trails' in caplog.text
 
   def test_hold_rides_the_childs_inner_argv(self, lowering_harness):
     launch = bro.launch.spawn.SummonLaunchSpec(
-      target='devoops',
+      target='dev',
       prompt='deploy the thing',
       parent_workspace=PARENT_WORKSPACE,
       summoner=SUMMONER,
@@ -86,12 +86,12 @@ class TestSummonLowering:
     )
     lowered = bro.launch.spawn._lower_summon(launch, 'broker-CH')
     assert lowered.launch.command == [
-      'bro', 'run', 'devoops', 'deploy the thing', '--hold', 'attended', '--in-place',
+      'bro', 'run', 'dev', 'deploy the thing', '--hold', 'attended', '--in-place',
     ]  # fmt: skip
 
   def test_spec_flags_ride_the_childs_inner_argv(self, lowering_harness):
     launch = bro.launch.spawn.SummonLaunchSpec(
-      target='devoops',
+      target='dev',
       prompt='deploy the thing',
       parent_workspace=PARENT_WORKSPACE,
       summoner=SUMMONER,
@@ -100,12 +100,12 @@ class TestSummonLowering:
     )
     lowered = bro.launch.spawn._lower_summon(launch, 'broker-CH')
     assert lowered.launch.command == [
-      'bro', 'run', 'devoops', 'deploy the thing', '--fast', '--effort', 'high', '--in-place',
+      'bro', 'run', 'dev', 'deploy the thing', '--fast', '--effort', 'high', '--in-place',
     ]  # fmt: skip
 
   def test_credential_overrides_adjust_the_childs_scope(self, lowering_harness):
     launch = bro.launch.spawn.SummonLaunchSpec(
-      target='devoops',
+      target='dev',
       prompt='p',
       parent_workspace=PARENT_WORKSPACE,
       summoner=SUMMONER,
@@ -118,7 +118,7 @@ class TestSummonLowering:
 
   def test_no_op_credential_override_fails_the_spawn(self, lowering_harness):
     launch = bro.launch.spawn.SummonLaunchSpec(
-      target='devoops',
+      target='dev',
       prompt='p',
       parent_workspace=PARENT_WORKSPACE,
       summoner=SUMMONER,
@@ -129,7 +129,7 @@ class TestSummonLowering:
 
   def test_into_overrides_the_inherited_base_ref(self, lowering_harness):
     launch = bro.launch.spawn.SummonLaunchSpec(
-      target='devoops',
+      target='dev',
       prompt='p',
       parent_workspace=PARENT_WORKSPACE,
       summoner=SUMMONER,
@@ -137,14 +137,14 @@ class TestSummonLowering:
     )
     assert bro.launch.spawn._lower_summon(launch, 'broker-CH').launch.env == {
       'CW_BASE_REF': 'REF-SHA',
-      'CW_BRO': 'devoops',
+      'CW_BRO': 'dev',
       'CW_SUMMONER': '{"session":"ws"}',
-      **bro.launch.identity.bro_git_identity_env('devoops'),
+      **bro.launch.identity.bro_git_identity_env('dev'),
     }
 
   def test_unresolvable_into_fails_the_spawn(self, lowering_harness):
     launch = bro.launch.spawn.SummonLaunchSpec(
-      target='devoops',
+      target='dev',
       prompt='p',
       parent_workspace=PARENT_WORKSPACE,
       summoner=SUMMONER,
@@ -155,7 +155,7 @@ class TestSummonLowering:
 
   def test_unreadable_parent_head_fails_the_spawn(self, lowering_harness):
     launch = bro.launch.spawn.SummonLaunchSpec(
-      target='devoops', prompt='p', parent_workspace=Path('/gone'), summoner=SUMMONER
+      target='dev', prompt='p', parent_workspace=Path('/gone'), summoner=SUMMONER
     )
     with pytest.raises(ValueError, match="summoner's HEAD"):
       bro.launch.spawn._lower_summon(launch, 'broker-CH')
@@ -174,12 +174,12 @@ class TestSummonLowering:
     spawner = bro.launch.spawn.SummonSpawner(docker)
     channel = bro.launch.spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
     launch = bro.launch.spawn.SummonLaunchSpec(
-      target='devoops', prompt='p', parent_workspace=PARENT_WORKSPACE, summoner=SUMMONER
+      target='dev', prompt='p', parent_workspace=PARENT_WORKSPACE, summoner=SUMMONER
     )
     await spawner.spawn(launch, channel)
     [(lowered, lowered_channel)] = docker.spawned
     assert isinstance(lowered, bro.launch.spawn.DockerLaunchSpec)
-    assert lowered.launch.command == ['bro', 'run', 'devoops', 'p', '--in-place']
+    assert lowered.launch.command == ['bro', 'run', 'dev', 'p', '--in-place']
     assert lowered.launch.name == 'broker-CH'
     assert lowered_channel is channel
 
@@ -188,7 +188,7 @@ class TestSummonLowering:
     spawner = bro.launch.spawn.SummonSpawner(bro.launch.spawn.DockerSpawner())
     channel = bro.launch.spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
     launch = bro.launch.spawn.SummonLaunchSpec(
-      target='devoops',
+      target='dev',
       prompt='p',
       parent_workspace=PARENT_WORKSPACE,
       summoner=SUMMONER,

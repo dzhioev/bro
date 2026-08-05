@@ -130,13 +130,13 @@ class TestRunInContainerBrokerRoute:
       tty=True,
       forward_env=True,
     )
-    code = bro.launch.root.run_in_container(launch, may_summon={'devoops'})
+    code = bro.launch.root.run_in_container(launch, may_summon={'dev'})
     assert code == 5
     assert roots == [
       {
         'launch': launch,
         'project': tmp_path / 'project',
-        'may_summon': {'devoops'},
+        'may_summon': {'dev'},
         'trail_pointer': None,
       }
     ]
@@ -167,14 +167,14 @@ class TestRunRootViaBroker:
       forward_env=True,
     )
     code = bro.launch.root._run_root_via_broker(
-      launch, tmp_path / 'project', may_summon={'devoops'}, trail_pointer=None
+      launch, tmp_path / 'project', may_summon={'dev'}, trail_pointer=None
     )
     assert code == 3
     assert captured['project'] == tmp_path / 'project'
     # the session key carries the container-mode prefix, so a same-name host
     # session keeps its own summon state files
     assert captured['session'] == 'c:ws'
-    assert captured['may_summon'] == {'devoops'}
+    assert captured['may_summon'] == {'dev'}
     assert captured['launch'] == workspace_spawn.DockerLaunchSpec(
       workspace_docker.Launch(
         name='ws',

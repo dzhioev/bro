@@ -101,10 +101,10 @@ class TestLaunchCommand:
 
   def test_raw_rides_the_forwarded_flags(self, fake_proj, capsys, monkeypatch):
     monkeypatch.delenv('CW_BRO', raising=False)
-    rc = dive_in.dive_in(forwarded=['--bro', 'pm', '--raw'], dry_run=True)
+    rc = dive_in.dive_in(forwarded=['--bro', 'dev', '--raw'], dry_run=True)
     assert rc == 0
     args = cw.build_parser().parse(shlex.split(capsys.readouterr().out.strip()))
-    assert args['bro'] == 'pm'
+    assert args['bro'] == 'dev'
     assert args['raw']
     assert 'CW_BRO' not in os.environ
 

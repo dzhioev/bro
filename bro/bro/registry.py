@@ -55,7 +55,7 @@ def register(bro_cls: type[Bro]) -> None:
 def _autoload_class(name: str) -> Optional[type[Bro]]:
   # import only the single bro module that declares `name` and register it; None
   # if `name` is not a known bro. importing one bro instead of all of them keeps
-  # `create_bro('pm')` from dragging in every other bro's dependency graph.
+  # `create_bro('dev')` from dragging in every other bro's dependency graph.
   from bro.bros import BRO_SPECS
 
   spec = BRO_SPECS.get(name)

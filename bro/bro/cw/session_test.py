@@ -157,20 +157,20 @@ class TestGrantRevoke:
 class TestSummonAllowList:
   def test_container_session_threads_the_allow_list(self):
     with _ContainerHarness() as h:
-      h.summon_allow_list.return_value = {'devoops'}
-      rc = cw_session.start_session(_spec(drop=True, grant=['@devoops']))
+      h.summon_allow_list.return_value = {'dev'}
+      rc = cw_session.start_session(_spec(drop=True, grant=['@dev']))
     assert rc == 0
     assert h.summon_allow_list.call_args == (
       ('bro-dev',),
-      {'grant': ['devoops'], 'revoke': []},
+      {'grant': ['dev'], 'revoke': []},
     )
-    assert h.run_in_container.call_args.kwargs['may_summon'] == {'devoops'}
+    assert h.run_in_container.call_args.kwargs['may_summon'] == {'dev'}
 
   def test_container_session_keys_identity_on_the_bro(self):
     with _ContainerHarness() as h:
-      rc = cw_session.start_session(_spec(drop=True, bro='pm'))
+      rc = cw_session.start_session(_spec(drop=True, bro='dev'))
     assert rc == 0
-    assert h.summon_allow_list.call_args[0] == ('pm',)
+    assert h.summon_allow_list.call_args[0] == ('dev',)
 
   def test_bad_summon_flag_fails_the_launch(self):
     with _ContainerHarness() as h:
@@ -186,31 +186,31 @@ class TestContainerCommand:
     # argv/MCP/script-delivery work happens inside the container, next to claude
     with _ContainerHarness() as h:
       rc = cw_session.start_session(
-        _spec(drop=True, fast=True, bro='pm', effort='xhigh', prompt='go')
+        _spec(drop=True, fast=True, bro='dev', effort='xhigh', prompt='go')
       )
     assert rc == 0
     command = h.run_in_container.call_args.args[0].command
     assert command == [
-      'cw', 'ss', '--in-place', '--fast', '--effort', 'xhigh', '--bro', 'pm', '--prompt=go', 'w',
+      'cw', 'ss', '--in-place', '--fast', '--effort', 'xhigh', '--bro', 'dev', '--prompt=go', 'w',
     ]  # fmt: skip
 
   def test_bro_carried_in_command_and_stamped_into_the_container_env(self):
     with _ContainerHarness() as h:
-      rc = cw_session.start_session(_spec(drop=True, bro='pm'))
+      rc = cw_session.start_session(_spec(drop=True, bro='dev'))
     assert rc == 0
     command = h.run_in_container.call_args.args[0].command
-    assert command == ['cw', 'ss', '--in-place', '--bro', 'pm', 'w']
+    assert command == ['cw', 'ss', '--in-place', '--bro', 'dev', 'w']
     # CW_BRO themes the whole container (cw exec shells), set explicitly in the
     # container env — never forwarded from the launcher's environment
     launch = h.run_in_container.call_args.args[0]
-    assert launch.env['CW_BRO'] == 'pm'
+    assert launch.env['CW_BRO'] == 'dev'
 
   def test_raw_carried_in_the_container_command(self):
     with _ContainerHarness() as h:
-      rc = cw_session.start_session(_spec(drop=True, bro='pm', raw=True))
+      rc = cw_session.start_session(_spec(drop=True, bro='dev', raw=True))
     assert rc == 0
     command = h.run_in_container.call_args.args[0].command
-    assert command == ['cw', 'ss', '--in-place', '--raw', '--bro', 'pm', 'w']
+    assert command == ['cw', 'ss', '--in-place', '--raw', '--bro', 'dev', 'w']
 
   def test_cw_session_stamps_the_default_bro_as_cw_bro(self):
     with _ContainerHarness() as h:
@@ -285,16 +285,16 @@ class TestResumeCommand:
       fast=True,
       drop=True,
       effort='xhigh',
-      bro='pm',
-      grant=['gmail_creds', '@devoops'],
+      bro='dev',
+      grant=['gmail_creds', '@bro'],
       revoke=['notion'],
       into='feature',
       claude_args=['--foo'],
     ).to_command_argv()
     assert parts == [
       'cw', 'ss', '--fast', '--drop', '--hold', 'attended',
-      '--effort', 'xhigh', '--bro', 'pm', '--grant', 'gmail_creds',
-      '--grant', '@devoops', '--revoke', 'notion', '--into', 'feature', 'w', '--foo',
+      '--effort', 'xhigh', '--bro', 'dev', '--grant', 'gmail_creds',
+      '--grant', '@bro', '--revoke', 'notion', '--into', 'feature', 'w', '--foo',
     ]  # fmt: skip
 
   def test_host_session_carries_the_host_flag(self):
@@ -313,7 +313,7 @@ class TestResumeCommand:
         hold='attended',
         drop=True,
         effort='xhigh',
-        bro='pm',
+        bro='dev',
         grant=['gmail_creds'],
         into='feature',
         prompt='do it',
@@ -324,7 +324,7 @@ class TestResumeCommand:
     )
     assert parts == [
       'cw', 'ss', '--resume', '--hold', 'attended',
-      '--effort', 'xhigh', '--bro', 'pm', '--grant', 'gmail_creds', 'w',
+      '--effort', 'xhigh', '--bro', 'dev', '--grant', 'gmail_creds', 'w',
     ]  # fmt: skip
 
   def test_start_session_records_resume_command(self):
@@ -339,13 +339,13 @@ class TestResumeCommand:
           hold='attended',
           grant=['gmail_creds'],
           effort='xhigh',
-          bro='pm',
+          bro='dev',
         )
       )
       resume_command = env['CW_RESUME_COMMAND']
     assert (
       resume_command
-      == 'cw ss --resume --hold attended --effort xhigh --bro pm --grant gmail_creds w'
+      == 'cw ss --resume --hold attended --effort xhigh --bro dev --grant gmail_creds w'
     )
 
 
@@ -373,7 +373,7 @@ class TestInPlaceArgv:
       fast=True,
       drop=True,
       effort='xhigh',
-      bro='pm',
+      bro='dev',
       grant=['gmail_creds'],
       revoke=['notion'],
       into='feature',
@@ -382,17 +382,17 @@ class TestInPlaceArgv:
     ).to_in_place_argv()
     assert parts == [
       'ss', '--in-place', '--fast', '--hold', 'attended',
-      '--effort', 'xhigh', '--bro', 'pm', '--prompt=do it', 'w', '--foo',
+      '--effort', 'xhigh', '--bro', 'dev', '--prompt=do it', 'w', '--foo',
     ]  # fmt: skip
 
   def test_resume_and_raw_carried(self):
-    parts = _spec(resume=True, bro='pm', raw=True).to_in_place_argv()
-    assert parts == ['ss', '--in-place', '--resume', '--raw', '--bro', 'pm', 'w']
+    parts = _spec(resume=True, bro='dev', raw=True).to_in_place_argv()
+    assert parts == ['ss', '--in-place', '--resume', '--raw', '--bro', 'dev', 'w']
 
 
 class TestSessionBro:
   def test_bro_names_the_identity(self):
-    assert _spec(bro='pm').session_bro == 'pm'
+    assert _spec(bro='dev').session_bro == 'dev'
 
   def test_session_uses_the_project_default(self):
     assert _spec().session_bro == 'bro-dev'
@@ -545,9 +545,7 @@ class TestHostSession:
   def test_broker_supervises_the_worktrees_own_in_place_runner(self, monkeypatch, tmp_path):
     cw_bin, worktree = self._prepare_launch(monkeypatch, tmp_path)
     monkeypatch.setattr(cw_session, 'broker_enabled', lambda: True)
-    monkeypatch.setattr(
-      bro.launch.summon_control, 'summon_allow_list', lambda *_a, **_k: {'devoops'}
-    )
+    monkeypatch.setattr(bro.launch.summon_control, 'summon_allow_list', lambda *_a, **_k: {'dev'})
     roots: list = []
 
     def fake_root(name, command, worktree_arg, project, env, may_summon, credential_scope):
@@ -575,7 +573,7 @@ class TestHostSession:
     assert roots[0]['project'] == tmp_path
     assert roots[0]['env']['VIRTUAL_ENV'] == str(worktree / '.venv')
     # the host root gets the session's summon allow-list like container mode
-    assert roots[0]['may_summon'] == {'devoops'}
+    assert roots[0]['may_summon'] == {'dev'}
 
   def test_bad_summon_flag_fails_before_the_worktree_is_ensured(self, monkeypatch, tmp_path):
     self._prepare_launch(monkeypatch, tmp_path)

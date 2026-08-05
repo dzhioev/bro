@@ -51,9 +51,9 @@ class TestSsValidation:
   def test_ss_bro_with_host_is_accepted(self):
     # --bro only themes the session; host mode fences out --raw, not the bro
     with patch('bro.cw.cli.start_session', return_value=0) as fake_start:
-      rc = cw_cli.main(['cw', 'ss', '--host', '--bro', 'pm', 'w'])
+      rc = cw_cli.main(['cw', 'ss', '--host', '--bro', 'dev', 'w'])
     assert rc == 0
-    assert fake_start.call_args[0][0].bro == 'pm'
+    assert fake_start.call_args[0][0].bro == 'dev'
 
   def test_raw_with_resume_is_accepted(self):
     with (
@@ -76,9 +76,9 @@ class TestSsValidation:
   def test_ss_bro_grant_does_not_require_container(self):
     # a host session has a broker root too, so a summon grant is mode-agnostic
     with patch('bro.cw.cli.start_session', return_value=0) as fake_start:
-      rc = cw_cli.main(['cw', 'ss', '--grant', '@devoops', 'w'])
+      rc = cw_cli.main(['cw', 'ss', '--grant', '@dev', 'w'])
     assert rc == 0
-    assert fake_start.call_args[0][0].grant == ['@devoops']
+    assert fake_start.call_args[0][0].grant == ['@dev']
 
 
 class TestInPlace:
@@ -101,7 +101,7 @@ class TestInPlace:
   def test_rejects_grant_revoke_flags(self, capsys):
     # the outer consumed them; the inner argv never carries them
     with pytest.raises(SystemExit):
-      cw_cli.main(['cw', 'ss', '--in-place', '--grant', '@devoops', 'w'])
+      cw_cli.main(['cw', 'ss', '--in-place', '--grant', '@dev', 'w'])
     assert '--in-place cannot be combined with --grant' in capsys.readouterr().err
 
   def test_hold_carried_in_the_inner_argv(self):
@@ -117,10 +117,10 @@ class TestInPlace:
   def test_skips_the_raw_gates(self):
     # no anthropic-key probe (deliberately unpatched here)
     with patch('bro.cw.cli.run_in_place', return_value=0) as fake_run:
-      rc = cw_cli.main(['cw', 'ss', '--in-place', '--raw', '--bro', 'pm', 'w'])
+      rc = cw_cli.main(['cw', 'ss', '--in-place', '--raw', '--bro', 'dev', 'w'])
     assert rc == 0
     assert fake_run.call_args[0][0].raw
-    assert fake_run.call_args[0][0].bro == 'pm'
+    assert fake_run.call_args[0][0].bro == 'dev'
 
   def test_hidden_from_help(self, capsys):
     with pytest.raises(SystemExit):

@@ -324,7 +324,7 @@ class TestDockerCreateArgv:
     # mis-theme it.
     monkeypatch.setenv('CW_BRO', 'dev')
     assert 'CW_BRO' not in build_argv()
-    assert 'CW_BRO=pm' in build_argv(extra_env={'CW_BRO': 'pm'})
+    assert 'CW_BRO=bro' in build_argv(extra_env={'CW_BRO': 'bro'})
 
   def test_forward_env_false_switches_the_forward_loop_off(self, build_argv, monkeypatch):
     # a broker-spawned child's environment is its LaunchSpec snapshot (extra_env)

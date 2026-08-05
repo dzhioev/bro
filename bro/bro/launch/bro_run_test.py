@@ -39,8 +39,8 @@ def test_describe_base_ref_rides_cw_base_ref():
 
 
 def test_describe_encodes_summoner_as_compact_json():
-  launch = _describe('dev', ['hi'], summoner={'target': 'pm', 'trail_id': 'trail-123'})
-  assert launch.env['CW_SUMMONER'] == '{"target":"pm","trail_id":"trail-123"}'
+  launch = _describe('dev', ['hi'], summoner={'target': 'bro', 'trail_id': 'trail-123'})
+  assert launch.env['CW_SUMMONER'] == '{"target":"bro","trail_id":"trail-123"}'
 
 
 def test_describe_no_trails_drops_secret_and_disables_recording():

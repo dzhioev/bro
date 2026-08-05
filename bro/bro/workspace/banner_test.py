@@ -111,9 +111,9 @@ class TestSessionFacts:
     # the launcher's CW_BRO (or none); the override wins either way
     monkeypatch.delenv('CW_BRO', raising=False)
     assert SessionFacts.collect(bro_override='researcher').bro == 'researcher'
-    monkeypatch.setenv('CW_BRO', 'pm')
+    monkeypatch.setenv('CW_BRO', 'dev')
     assert SessionFacts.collect(bro_override='researcher').bro == 'researcher'
-    assert SessionFacts.collect().bro == 'pm'
+    assert SessionFacts.collect().bro == 'dev'
 
 
 def _facts(**overrides) -> SessionFacts:
@@ -137,7 +137,7 @@ class TestRenderBanner:
   def test_llm_emits_plain_key_value(self):
     out = _facts(
       bro='dev',
-      cw_command='cw ss --bro pm task',
+      cw_command='cw ss --bro bro task',
       shell_command='dive-in -t x',
     ).render_llm()
     assert '\033[' not in out  # no ANSI
@@ -148,7 +148,7 @@ class TestRenderBanner:
     assert 'workspace_host_path: /h/ws' in out
     assert 'workspace_container_path: /workspace' in out
     assert 'docker_shell_command: cw exec task' in out
-    assert 'cw_command: cw ss --bro pm task' in out
+    assert 'cw_command: cw ss --bro bro task' in out
     assert 'launch_command:' not in out
     assert 'dive-in -t x' not in out
 
@@ -174,12 +174,12 @@ class TestRenderBanner:
     assert out == 'kind: host worktree'
 
   def test_visual_shows_logo_with_bro_signature(self):
-    out = _facts(bro='pm').render_visual()
+    out = _facts(bro='dev').render_visual()
     # logo present (top five lines unchanged); bottom line gets a `// <bro>`
     # signature — dim slashes, bright-white-bold bro name
     for line in workspace_banner._BRO_LOGO.split('\n')[:-1]:
       assert line in out
-    assert '\033[2m//\033[0m \033[1;97mpm\033[0m' in out
+    assert '\033[2m//\033[0m \033[1;97mdev\033[0m' in out
     # no parens-form kind on the session line — encoded by the c: prefix instead
     assert '(container)' not in out
     assert '(host worktree)' not in out
@@ -240,9 +240,9 @@ class TestRenderBanner:
     assert '(unknown' in out
 
   def test_visual_shows_cw_command_when_distinct(self):
-    out = _facts(cw_command='cw ss --bro pm task', shell_command='dive-in -t x').render_visual()
+    out = _facts(cw_command='cw ss --bro bro task', shell_command='dive-in -t x').render_visual()
     assert 'cw command:' in out
-    assert 'cw ss --bro pm task' in out
+    assert 'cw ss --bro bro task' in out
 
   def test_visual_suppresses_cw_command_when_equal(self):
     out = _facts(cw_command='cw ss feature', shell_command='cw ss feature').render_visual()
@@ -270,7 +270,7 @@ class TestRenderBanner:
 
   def test_visual_paints_sync_warning_red_above_logo(self):
     out = _facts(
-      bro='pm', sync_warning='session recording FAILING — see session-recorder.log'
+      bro='dev', sync_warning='session recording FAILING — see session-recorder.log'
     ).render_visual()
     first = out.splitlines()[0]
     assert first.startswith('\033[31m\033[1m⚠ ')

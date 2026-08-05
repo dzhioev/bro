@@ -35,7 +35,7 @@ class TestBrokerLaunch:
     launch = workspace_docker.Launch(
       name='broker-X',
       command=['broker', 'recv'],
-      env={'CW_BRO': 'pm'},
+      env={'CW_BRO': 'dev'},
       secrets=(),
       docker_sock=False,
       tty=False,
@@ -44,14 +44,14 @@ class TestBrokerLaunch:
     )
     channel = workspace_spawn.Provisioned(channel='X', host_endpoint='/host/sock.sock')
     adapted = workspace_spawn._broker_launch(launch, channel)
-    assert adapted.env == {'CW_BRO': 'pm', 'BROKER_CHANNEL': 'unix:/run/broker.sock'}
+    assert adapted.env == {'CW_BRO': 'dev', 'BROKER_CHANNEL': 'unix:/run/broker.sock'}
     assert adapted.extra_mounts == (
       '/existing:/mount',
       '/host/sock.sock:/run/broker.sock',
     )
     assert adapted.tty is False
     assert adapted.forward_env is False
-    assert launch.env == {'CW_BRO': 'pm'}
+    assert launch.env == {'CW_BRO': 'dev'}
     assert launch.extra_mounts == ('/existing:/mount',)
 
 

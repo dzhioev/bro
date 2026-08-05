@@ -77,15 +77,15 @@ def test_bare_summon_forwards_with_its_own_shell_command(monkeypatch):
     ),
   )
 
-  assert summon.main(['summon', '--timeout', '60', 'devoops', 'deploy']) == 0
-  assert calls == [('devoops', 'deploy', 60.0, None)]
-  assert os.environ['BRO_SHELL_COMMAND'] == 'summon --timeout 60.0 devoops deploy'
+  assert summon.main(['summon', '--timeout', '60', 'dev', 'deploy']) == 0
+  assert calls == [('dev', 'deploy', 60.0, None)]
+  assert os.environ['BRO_SHELL_COMMAND'] == 'summon --timeout 60.0 dev deploy'
 
 
 def test_errors_without_a_channel(monkeypatch, capsys, caplog):
   # unlike the substrate broker CLI, no channel is a failure, not inert
   monkeypatch.delenv(CHANNEL_ENV, raising=False)
-  assert summon.main(['summon', 'devoops', 'deploy']) == 1
+  assert summon.main(['summon', 'dev', 'deploy']) == 1
   assert summon.main(['summon', 'check', 'SOME-ID']) == 1
   assert capsys.readouterr().out == ''
   assert any(CHANNEL_ENV in record.getMessage() for record in caplog.records)
@@ -94,12 +94,12 @@ def test_errors_without_a_channel(monkeypatch, capsys, caplog):
 @pytest.mark.asyncio
 async def test_blocking_summon_relays_the_answer(socket_dir, monkeypatch, capsys, caplog):
   async with running_server(socket_dir, monkeypatch) as server:
-    argv = ['summon', 'devoops', 'list the deploy targets']
+    argv = ['summon', 'dev', 'list the deploy targets']
     main_task = asyncio.create_task(asyncio.to_thread(summon.main, argv))
 
     channel, request = await _next(server.sink.messages)
     assert request.type == 'summon'
-    assert request.payload == {'target': 'devoops', 'prompt': 'list the deploy targets'}
+    assert request.payload == {'target': 'dev', 'prompt': 'list the deploy targets'}
     await server.transport.send(
       channel, Message(type='started', payload={'trail_id': 'T1'}, in_reply_to=request.id)
     )
@@ -123,12 +123,12 @@ async def test_blocking_summon_relays_the_answer(socket_dir, monkeypatch, capsys
 @pytest.mark.asyncio
 async def test_timeout_and_into_forward_into_the_request(socket_dir, monkeypatch, capsys):
   async with running_server(socket_dir, monkeypatch) as server:
-    argv = ['summon', '--detach', '--timeout', '42', '--into', 'summon', 'devoops', 'p']
+    argv = ['summon', '--detach', '--timeout', '42', '--into', 'summon', 'dev', 'p']
     main_task = asyncio.create_task(asyncio.to_thread(summon.main, argv))
 
     _, request = await _next(server.sink.messages)
     assert request.payload == {
-      'target': 'devoops',
+      'target': 'dev',
       'prompt': 'p',
       'timeout': 42.0,
       'into': 'summon',
@@ -140,12 +140,12 @@ async def test_timeout_and_into_forward_into_the_request(socket_dir, monkeypatch
 @pytest.mark.asyncio
 async def test_hold_forwards_into_the_request(socket_dir, monkeypatch, capsys):
   async with running_server(socket_dir, monkeypatch) as server:
-    argv = ['summon', '--detach', '--hold', 'attended', 'devoops', 'p']
+    argv = ['summon', '--detach', '--hold', 'attended', 'dev', 'p']
     main_task = asyncio.create_task(asyncio.to_thread(summon.main, argv))
 
     _, request = await _next(server.sink.messages)
     assert request.payload == {
-      'target': 'devoops',
+      'target': 'dev',
       'prompt': 'p',
       'hold': 'attended',
     }
@@ -158,16 +158,16 @@ async def test_hold_forwards_into_the_request(socket_dir, monkeypatch, capsys):
 async def test_scope_and_spec_flags_forward_into_the_request(socket_dir, monkeypatch, capsys):
   async with running_server(socket_dir, monkeypatch) as server:
     argv = [
-      'summon', '--detach', '--grant', 'aws', '--grant', '@pm', '--revoke', 'openai',
-      '--effort', 'high', '--fast', 'devoops', 'p',
+      'summon', '--detach', '--grant', 'aws', '--grant', '@bro', '--revoke', 'openai',
+      '--effort', 'high', '--fast', 'dev', 'p',
     ]  # fmt: skip
     main_task = asyncio.create_task(asyncio.to_thread(summon.main, argv))
 
     _, request = await _next(server.sink.messages)
     assert request.payload == {
-      'target': 'devoops',
+      'target': 'dev',
       'prompt': 'p',
-      'grant': ['aws', '@pm'],
+      'grant': ['aws', '@bro'],
       'revoke': ['openai'],
       'effort': 'high',
       'fast': True,
@@ -179,7 +179,7 @@ async def test_scope_and_spec_flags_forward_into_the_request(socket_dir, monkeyp
 @pytest.mark.asyncio
 async def test_raised_completion_is_a_failure(socket_dir, monkeypatch, capsys, caplog):
   async with running_server(socket_dir, monkeypatch) as server:
-    main_task = asyncio.create_task(asyncio.to_thread(summon.main, ['summon', 'devoops', 'p']))
+    main_task = asyncio.create_task(asyncio.to_thread(summon.main, ['summon', 'dev', 'p']))
 
     channel, request = await _next(server.sink.messages)
     await server.transport.send(
@@ -202,7 +202,7 @@ async def test_raised_completion_is_a_failure(socket_dir, monkeypatch, capsys, c
 @pytest.mark.asyncio
 async def test_failed_terminal_carries_a_trails_hint(socket_dir, monkeypatch, capsys, caplog):
   async with running_server(socket_dir, monkeypatch) as server:
-    main_task = asyncio.create_task(asyncio.to_thread(summon.main, ['summon', 'devoops', 'p']))
+    main_task = asyncio.create_task(asyncio.to_thread(summon.main, ['summon', 'dev', 'p']))
 
     channel, request = await _next(server.sink.messages)
     await server.transport.send(
@@ -224,14 +224,14 @@ async def test_failed_terminal_carries_a_trails_hint(socket_dir, monkeypatch, ca
 @pytest.mark.asyncio
 async def test_denial_reply_is_a_failure(socket_dir, monkeypatch, capsys, caplog):
   async with running_server(socket_dir, monkeypatch) as server:
-    main_task = asyncio.create_task(asyncio.to_thread(summon.main, ['summon', 'pm', 'p']))
+    main_task = asyncio.create_task(asyncio.to_thread(summon.main, ['summon', 'bro', 'p']))
 
     channel, request = await _next(server.sink.messages)
     await server.transport.send(
       channel,
       Message(
         type='reply',
-        payload={'error': "summon denied: 'pm' is not in this session's summon allow-list"},
+        payload={'error': "summon denied: 'bro' is not in this session's summon allow-list"},
         in_reply_to=request.id,
       ),
     )
@@ -438,8 +438,8 @@ def test_list_reports_empty_before_any_summon(tmp_path, monkeypatch, capsys):
 
 def test_list_prints_the_recorded_status(tmp_path, monkeypatch, capsys):
   status = {
-    'active': [{'request_id': 'R1', 'target': 'devoops', 'trail_id': 'T1', 'started_at': 1.0}],
-    'last': {'request_id': 'R0', 'target': 'pm', 'outcome': 'ok'},
+    'active': [{'request_id': 'R1', 'target': 'dev', 'trail_id': 'T1', 'started_at': 1.0}],
+    'last': {'request_id': 'R0', 'target': 'bro', 'outcome': 'ok'},
   }
   status_file = tmp_path / 'ws.status.json'
   status_file.write_text(json.dumps(status))
@@ -462,7 +462,7 @@ async def test_wait_after_started_is_bounded_with_a_trails_hint(
   # started re-arms the wait to the effective timeout (down from the launch
   # backstop), so a lost terminal becomes a clean failure with a trails hint
   async with running_server(socket_dir, monkeypatch) as server:
-    argv = ['summon', '--timeout', '0.1', 'devoops', 'p']
+    argv = ['summon', '--timeout', '0.1', 'dev', 'p']
     main_task = asyncio.create_task(asyncio.to_thread(summon.main, argv))
 
     channel, request = await _next(server.sink.messages)
@@ -487,7 +487,7 @@ async def test_prestarted_expiry_points_at_the_summon_status(
   # (no trail exists for a child that never launched)
   async with running_server(socket_dir, monkeypatch):
     monkeypatch.setattr(summon, 'LAUNCH_TIMEOUT', 0.1)
-    argv = ['summon', '--timeout', '0.05', 'devoops', 'p']
+    argv = ['summon', '--timeout', '0.05', 'dev', 'p']
     assert await asyncio.to_thread(summon.main, argv) == 1
     assert capsys.readouterr().out == ''
     messages = [

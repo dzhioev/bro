@@ -76,6 +76,23 @@ def _reset_log_level():
 
 
 @pytest.fixture
+def register_test_bros():
+  import bro.registry
+
+  registered_names: list[str] = []
+
+  def register(*bro_classes):
+    for bro_class in bro_classes:
+      bro.registry.register(bro_class)
+      registered_names.append(bro_class.name)
+
+  yield register
+
+  for name in registered_names:
+    del bro.registry._REGISTRY[name]
+
+
+@pytest.fixture
 def socket_dir():
   """a short-path tempdir for tests that bind AF_UNIX sockets.
 

@@ -13,35 +13,29 @@ from bro.broker.dispatcher import Dispatcher
 def seeded_framework_bro(monkeypatch):
   from bro.registry import get_class
 
-  monkeypatch.setattr(get_class('bro-dev'), 'may_summon', ('devoops',))
+  monkeypatch.setattr(get_class('bro-dev'), 'may_summon', ('dev',))
 
 
 class TestSummonAllowList:
   def test_seeds_from_the_bros_may_summon(self):
-    assert bro.launch.summon_control.summon_allow_list('bro-dev', grant=[], revoke=[]) == {
-      'devoops'
-    }
+    assert bro.launch.summon_control.summon_allow_list('bro-dev', grant=[], revoke=[]) == {'dev'}
 
   def test_defaults_to_empty_for_an_unseeded_bro(self):
     assert bro.launch.summon_control.summon_allow_list('bro', grant=[], revoke=[]) == set()
 
   def test_grant_adds_a_registered_bro(self):
-    assert bro.launch.summon_control.summon_allow_list('bro', grant=['devoops'], revoke=[]) == {
-      'devoops'
-    }
+    assert bro.launch.summon_control.summon_allow_list('bro', grant=['dev'], revoke=[]) == {'dev'}
 
   def test_revoke_removes_a_seed(self):
-    assert (
-      bro.launch.summon_control.summon_allow_list('bro-dev', grant=[], revoke=['devoops']) == set()
-    )
+    assert bro.launch.summon_control.summon_allow_list('bro-dev', grant=[], revoke=['dev']) == set()
 
   def test_grant_already_allowed_raises(self):
     with pytest.raises(ValueError, match='already in the summon allow-list'):
-      bro.launch.summon_control.summon_allow_list('bro-dev', grant=['devoops'], revoke=[])
+      bro.launch.summon_control.summon_allow_list('bro-dev', grant=['dev'], revoke=[])
 
   def test_revoke_absent_raises(self):
     with pytest.raises(ValueError, match='not in the summon allow-list'):
-      bro.launch.summon_control.summon_allow_list('bro', grant=[], revoke=['devoops'])
+      bro.launch.summon_control.summon_allow_list('bro', grant=[], revoke=['dev'])
 
   def test_unregistered_grant_target_raises(self):
     # registry-validated at launch: a typo fails immediately, not as a denied
@@ -56,10 +50,8 @@ class TestSummonAllowList:
   def test_unknown_bro_degrades_to_empty_seeds_with_a_warning(self, caplog):
     # mirrors credential scoping: an ambient CW_BRO this checkout doesn't know
     # must not break the launch; explicit grants still apply on top
-    result = bro.launch.summon_control.summon_allow_list(
-      'no-such-bro', grant=['devoops'], revoke=[]
-    )
-    assert result == {'devoops'}
+    result = bro.launch.summon_control.summon_allow_list('no-such-bro', grant=['dev'], revoke=[])
+    assert result == {'dev'}
     assert any('could not resolve bro' in record.message for record in caplog.records)
 
 
@@ -101,11 +93,11 @@ def _control(
 
 @pytest.fixture
 def control(tmp_path):
-  return _control(tmp_path, {'devoops'})
+  return _control(tmp_path, {'dev'})
 
 
 def _summon_message(**overrides) -> Message:
-  payload = {'target': 'devoops', 'prompt': 'deploy the thing', **overrides}
+  payload = {'target': 'dev', 'prompt': 'deploy the thing', **overrides}
   return Message(type='summon', payload={k: v for k, v in payload.items() if v is not None})
 
 
@@ -136,7 +128,7 @@ class TestSummonHandler:
     assert context.replies == []
     [(launch, peer, timeout)] = context.spawned
     assert launch == bro.launch.spawn.SummonLaunchSpec(
-      target='devoops',
+      target='dev',
       prompt='deploy the thing',
       # the root's base-ref inheritance source: the bare session key names a host
       # worktree
@@ -147,13 +139,13 @@ class TestSummonHandler:
     assert timeout == 1800.0
     status = _status(tmp_path)
     assert [a['request_id'] for a in status['active']] == [message.id]
-    assert status['active'][0]['target'] == 'devoops'
+    assert status['active'][0]['target'] == 'dev'
     assert status['active'][0]['trail_id'] is None
     [spawn_record] = _audit(tmp_path)
     assert spawn_record['event'] == 'spawn'
     assert spawn_record['session'] == 'ws'
     assert spawn_record['summoner'] == {'session': 'ws'}
-    assert spawn_record['target'] == 'devoops'
+    assert spawn_record['target'] == 'dev'
     assert spawn_record['prompt_head'] == 'deploy the thing'
 
   def test_timeout_and_into_forward_into_the_spawn(self, control):
@@ -178,41 +170,41 @@ class TestSummonHandler:
   def test_credential_overrides_ride_the_spawn_and_land_in_the_audit(self, tmp_path):
     # the credential half is applied against the child's own scope in the
     # lowering; only the `@bro` half resolves here
-    control = _control(tmp_path, {'devoops', 'pm'}, credential_scope={'aws'})
+    control = _control(tmp_path, {'dev', 'bro'}, credential_scope={'aws'})
     context = FakeContext()
     # cast: FakeContext stands in for the Dispatcher surface structurally
     control.handle(
-      cast(Dispatcher, context), ROOT, _summon_message(grant=['aws', '@pm'], revoke=['openai'])
+      cast(Dispatcher, context), ROOT, _summon_message(grant=['aws', '@bro'], revoke=['openai'])
     )
     [(launch, _, _)] = context.spawned
     assert launch.grant_credentials == ('aws',)
     assert launch.revoke_credentials == ('openai',)
     [spawn_record] = _audit(tmp_path)
-    assert spawn_record['grant'] == ['aws', '@pm']
+    assert spawn_record['grant'] == ['aws', '@bro']
     assert spawn_record['revoke'] == ['openai']
 
   def test_granted_bro_widens_the_childs_own_allow_list(self, tmp_path):
-    # devoops seeds nothing, so only the grant lets its child summon pm
-    control = _control(tmp_path, {'devoops', 'pm'})
+    # dev seeds nothing, so only the grant lets its child summon bro
+    control = _control(tmp_path, {'dev', 'bro'})
     context = FakeContext()
-    message = _summon_message(target='devoops', grant=['@pm'])
+    message = _summon_message(target='dev', grant=['@bro'])
     # cast: FakeContext stands in for the Dispatcher surface structurally
     control.handle(cast(Dispatcher, context), ROOT, message)
     context.origin[CHILD] = (ROOT, message.id)
-    control.handle(cast(Dispatcher, context), CHILD, _summon_message(target='pm'))
+    control.handle(cast(Dispatcher, context), CHILD, _summon_message(target='bro'))
     assert context.replies == []
-    assert [launch.target for launch, _, _ in context.spawned] == ['devoops', 'pm']
+    assert [launch.target for launch, _, _ in context.spawned] == ['dev', 'bro']
 
   def test_granting_a_bro_the_summoner_may_not_summon_is_denied(self, control):
-    # the fixture session may summon only devoops, so it cannot hand pm down
+    # the fixture session may summon only dev, so it cannot hand bro down
     context = FakeContext()
-    control.handle(context, ROOT, _summon_message(grant=['@pm']))
+    control.handle(context, ROOT, _summon_message(grant=['@bro']))
     assert context.spawned == []
     [(_, payload)] = context.replies
-    assert 'may not summon itself: pm' in payload['error']
+    assert 'may not summon itself: bro' in payload['error']
 
   def test_granting_a_credential_the_summoner_lacks_is_denied(self, tmp_path):
-    control = _control(tmp_path, {'devoops'}, credential_scope={'openai'})
+    control = _control(tmp_path, {'dev'}, credential_scope={'openai'})
     context = FakeContext()
     # cast: FakeContext stands in for the Dispatcher surface structurally
     control.handle(cast(Dispatcher, context), ROOT, _summon_message(grant=['openai', 'aws']))
@@ -229,22 +221,22 @@ class TestSummonHandler:
     control.handle(cast(Dispatcher, context), ROOT, message)
     context.origin[CHILD] = (ROOT, message.id)
     control.handle(
-      cast(Dispatcher, context), CHILD, _summon_message(target='devoops', grant=['github'])
+      cast(Dispatcher, context), CHILD, _summon_message(target='dev', grant=['github'])
     )
-    assert [launch.target for launch, _, _ in context.spawned] == ['bro-dev', 'devoops']
+    assert [launch.target for launch, _, _ in context.spawned] == ['bro-dev', 'dev']
     control.handle(
-      cast(Dispatcher, context), CHILD, _summon_message(target='devoops', grant=['gmail_creds'])
+      cast(Dispatcher, context), CHILD, _summon_message(target='dev', grant=['gmail_creds'])
     )
     [(_, payload)] = context.replies
     assert 'does not hold: gmail_creds' in payload['error']
 
   def test_no_op_bro_override_is_denied(self, tmp_path):
-    # bro-dev already seeds devoops: the strictness of the launcher flags holds
+    # bro-dev already seeds dev: the strictness of the launcher flags holds
     # on the wire too
     control = _control(tmp_path, {'bro-dev'})
     context = FakeContext()
     # cast: FakeContext stands in for the Dispatcher surface structurally
-    control.handle(cast(Dispatcher, context), ROOT, _summon_message(target='bro-dev', grant=['@devoops']))  # fmt: skip
+    control.handle(cast(Dispatcher, context), ROOT, _summon_message(target='bro-dev', grant=['@dev']))  # fmt: skip
     assert context.spawned == []
     [(_, payload)] = context.replies
     assert 'already in the summon allow-list' in payload['error']
@@ -264,7 +256,7 @@ class TestSummonHandler:
     assert 'malformed grant/revoke' in payload['error']
 
   def test_container_session_key_names_the_container_workspace(self, tmp_path):
-    control = _control(tmp_path, {'devoops'}, session='c:ws')
+    control = _control(tmp_path, {'dev'}, session='c:ws')
     context = FakeContext()
     # cast: FakeContext stands in for the Dispatcher surface structurally
     control.handle(cast(Dispatcher, context), ROOT, _summon_message())
@@ -272,7 +264,7 @@ class TestSummonHandler:
     assert launch.parent_workspace == tmp_path / 'var' / 'cw' / 'containers' / 'ws'
 
   def test_child_summon_follows_its_own_seeds(self, tmp_path):
-    # a summoned bro-dev child summons devoops (bro-dev's static seed): spawned
+    # a summoned bro-dev child summons dev (bro-dev's static seed): spawned
     # with the child as the parent, audit + status naming the child as summoner
     control = _control(tmp_path, {'bro-dev'})
     context = FakeContext()
@@ -280,13 +272,13 @@ class TestSummonHandler:
     control.observe_delivery(
       CHILD, ROOT, Message(type='started', payload={'trail_id': 'T1'}, in_reply_to=request.id)
     )
-    child_request = _summon_message(target='devoops')
+    child_request = _summon_message(target='dev')
     # cast: FakeContext stands in for the Dispatcher surface structurally
     control.handle(cast(Dispatcher, context), CHILD, child_request)
     assert context.replies == []
     launch, peer, _ = context.spawned[-1]
     assert launch == bro.launch.spawn.SummonLaunchSpec(
-      target='devoops',
+      target='dev',
       prompt='deploy the thing',
       # a child summoner's base-ref inheritance source: its broker-<channel> clone
       parent_workspace=tmp_path / 'var' / 'cw' / 'containers' / f'broker-{CHILD}',
@@ -309,7 +301,7 @@ class TestSummonHandler:
     control.handle(
       cast(Dispatcher, context),
       CHILD,
-      _summon_message(target='devoops', step_id=7, index=3),
+      _summon_message(target='dev', step_id=7, index=3),
     )
     launch, _, _ = context.spawned[-1]
     assert launch.summoner == {'trail_id': 'T1', 'step_id': 7, 'index': 3}
@@ -327,7 +319,7 @@ class TestSummonHandler:
     pointer = tmp_path / 'current-trail.json'
     pointer.write_text(json.dumps({'trail_id': 'CT9'}))
     control = bro.launch.summon_control.SummonControl(
-      allow_list={'devoops'},
+      allow_list={'dev'},
       session='ws',
       project=tmp_path,
       status_file=tmp_path / 'summon-status.json',
@@ -343,7 +335,7 @@ class TestSummonHandler:
     # the early-launch race: the recorder has not adopted a transcript yet, so
     # the pointer file does not exist — absent provenance, never a legacy shape
     control = bro.launch.summon_control.SummonControl(
-      allow_list={'devoops'},
+      allow_list={'dev'},
       session='ws',
       project=tmp_path,
       status_file=tmp_path / 'summon-status.json',
@@ -365,15 +357,15 @@ class TestSummonHandler:
     assert launch.summoner == {'trail_id': 'RT1', 'step_id': 2}
 
   def test_child_summon_outside_its_seeds_is_denied(self, control):
-    # devoops seeds no bro, so its child summons nothing — not even a target the
+    # dev seeds no bro, so its child summons nothing — not even a target the
     # root session itself is allowed
     context = FakeContext()
-    _summon_child(control, context, CHILD, 'devoops')
-    control.handle(context, CHILD, _summon_message(target='devoops'))
+    _summon_child(control, context, CHILD, 'dev')
+    control.handle(context, CHILD, _summon_message(target='dev'))
     assert len(context.spawned) == 1  # only the root's spawn
     [(peer, payload)] = context.replies
     assert peer == CHILD
-    assert "not in devoops's summon allow-list" in payload['error']
+    assert "not in dev's summon allow-list" in payload['error']
 
   def test_unattributable_peer_is_denied(self, control, tmp_path):
     # a peer with no origin the control can map to a spawned bro has no
@@ -389,14 +381,14 @@ class TestSummonHandler:
     assert deny_record['summoner'] is None
 
   def test_depth_cap_denies_a_grandchilds_summon(self, tmp_path):
-    # root (0) → bro-dev child (1) → devoops grandchild (2): the grandchild's own
+    # root (0) → bro-dev child (1) → dev grandchild (2): the grandchild's own
     # summon would nest to depth 3, over the cap — denied before any list check
     control = _control(tmp_path, {'bro-dev'})
     context = FakeContext()
     _summon_child(control, context, CHILD, 'bro-dev')
-    _summon_child(control, context, GRANDCHILD, 'devoops', parent=CHILD)
+    _summon_child(control, context, GRANDCHILD, 'dev', parent=CHILD)
     assert context.replies == []
-    control.handle(cast(Dispatcher, context), GRANDCHILD, _summon_message(target='devoops'))
+    control.handle(cast(Dispatcher, context), GRANDCHILD, _summon_message(target='dev'))
     assert len(context.spawned) == 2
     [(peer, payload)] = context.replies
     assert peer == GRANDCHILD
@@ -404,7 +396,7 @@ class TestSummonHandler:
 
   def test_target_outside_the_allow_list_is_denied(self, control):
     context = FakeContext()
-    control.handle(context, ROOT, _summon_message(target='pm'))
+    control.handle(context, ROOT, _summon_message(target='bro'))
     assert context.spawned == []
     [(_, payload)] = context.replies
     assert "not in this session's summon allow-list" in payload['error']
@@ -418,7 +410,7 @@ class TestSummonHandler:
 
   def test_denials_land_in_the_audit(self, control, tmp_path):
     context = FakeContext()
-    message = _summon_message(target='pm')
+    message = _summon_message(target='bro')
     control.handle(context, ROOT, message)
     [deny_record] = _audit(tmp_path)
     assert deny_record['event'] == 'deny'
@@ -426,7 +418,7 @@ class TestSummonHandler:
     assert deny_record['request_id'] == message.id
     assert "not in this session's summon allow-list" in deny_record['reason']
     assert deny_record['summoner'] == {'session': 'ws'}
-    assert deny_record['target'] == 'pm'
+    assert deny_record['target'] == 'bro'
     assert deny_record['prompt_head'] == 'deploy the thing'
 
   def test_deny_audit_carries_only_well_typed_payload_fields(self, control, tmp_path):
@@ -441,26 +433,26 @@ class TestSummonHandler:
     'payload',
     [
       {'prompt': 'p'},  # no target
-      {'target': 'devoops'},  # no prompt
+      {'target': 'dev'},  # no prompt
       {'target': '', 'prompt': 'p'},
-      {'target': 'devoops', 'prompt': 'p', 'timeout': -1},
-      {'target': 'devoops', 'prompt': 'p', 'timeout': 'soon'},
-      {'target': 'devoops', 'prompt': 'p', 'into': ''},
-      {'target': 'devoops', 'prompt': 'p', 'timout': 60},  # typo'd key must not pass silently
-      {'target': 'devoops', 'prompt': 'p', 'hold': 'automatic'},
-      {'target': 'devoops', 'prompt': 'p', 'step_id': '7'},
-      {'target': 'devoops', 'prompt': 'p', 'step_id': -1},
-      {'target': 'devoops', 'prompt': 'p', 'step_id': True},
-      {'target': 'devoops', 'prompt': 'p', 'index': 1},
-      {'target': 'devoops', 'prompt': 'p', 'step_id': 7, 'index': -1},
-      {'target': 'devoops', 'prompt': 'p', 'step_id': 7, 'index': True},
-      {'target': 'devoops', 'prompt': 'p', 'grant': 'aws'},
-      {'target': 'devoops', 'prompt': 'p', 'grant': ['']},
-      {'target': 'devoops', 'prompt': 'p', 'grant': None},  # a null cannot default to no override
-      {'target': 'devoops', 'prompt': 'p', 'revoke': [7]},
-      {'target': 'devoops', 'prompt': 'p', 'effort': 'ludicrous'},
-      {'target': 'devoops', 'prompt': 'p', 'fast': 'yes'},
-      {'target': 'devoops', 'prompt': 'p', 'fast': None},
+      {'target': 'dev', 'prompt': 'p', 'timeout': -1},
+      {'target': 'dev', 'prompt': 'p', 'timeout': 'soon'},
+      {'target': 'dev', 'prompt': 'p', 'into': ''},
+      {'target': 'dev', 'prompt': 'p', 'timout': 60},  # typo'd key must not pass silently
+      {'target': 'dev', 'prompt': 'p', 'hold': 'automatic'},
+      {'target': 'dev', 'prompt': 'p', 'step_id': '7'},
+      {'target': 'dev', 'prompt': 'p', 'step_id': -1},
+      {'target': 'dev', 'prompt': 'p', 'step_id': True},
+      {'target': 'dev', 'prompt': 'p', 'index': 1},
+      {'target': 'dev', 'prompt': 'p', 'step_id': 7, 'index': -1},
+      {'target': 'dev', 'prompt': 'p', 'step_id': 7, 'index': True},
+      {'target': 'dev', 'prompt': 'p', 'grant': 'aws'},
+      {'target': 'dev', 'prompt': 'p', 'grant': ['']},
+      {'target': 'dev', 'prompt': 'p', 'grant': None},  # a null cannot default to no override
+      {'target': 'dev', 'prompt': 'p', 'revoke': [7]},
+      {'target': 'dev', 'prompt': 'p', 'effort': 'ludicrous'},
+      {'target': 'dev', 'prompt': 'p', 'fast': 'yes'},
+      {'target': 'dev', 'prompt': 'p', 'fast': None},
     ],
   )
   def test_malformed_payload_is_denied(self, control, payload):
@@ -497,7 +489,7 @@ class TestSummonLedger:
     status = _status(tmp_path)
     assert status['active'] == []
     assert status['last']['request_id'] == request.id
-    assert status['last']['target'] == 'devoops'
+    assert status['last']['target'] == 'dev'
     assert status['last']['trail_id'] == 'T1'
     assert status['last']['summoner'] == {'session': 'ws'}
     assert status['last']['outcome'] == 'ok'
@@ -530,8 +522,7 @@ class TestSummonLedger:
     )
     control.log_killed_in_flight()
     assert any(
-      'root exit killed in-flight child devoops' in record.getMessage()
-      and 'T1' in record.getMessage()
+      'root exit killed in-flight child dev' in record.getMessage() and 'T1' in record.getMessage()
       for record in caplog.records
     )
     assert _status(tmp_path)['active'] == []

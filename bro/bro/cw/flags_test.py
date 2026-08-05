@@ -6,12 +6,12 @@ class TestForwardedFlags:
   def test_extract_forwarded_argv_round_trips_grant_revoke(self):
     parser = Parser(add_help=False)
     cw_flags.add_forwarded_flags(parser)
-    args = vars(parser.parse_args(['--grant', 'a', '--grant', '@devoops', '--revoke', 'c']))
+    args = vars(parser.parse_args(['--grant', 'a', '--grant', '@dev', '--revoke', 'c']))
     assert cw_flags.extract_forwarded_argv(args) == [
       '--grant',
       'a',
       '--grant',
-      '@devoops',
+      '@dev',
       '--revoke',
       'c',
     ]

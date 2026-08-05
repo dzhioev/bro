@@ -680,9 +680,9 @@ def test_initial_slash_invocation_passes_through_verbatim(monkeypatch):
 
   # no client-side expansion: the bro's system prompt describes the /-syntax and
   # the model loads the script body through its `@::` tool.
-  rc = main(['call', 'record', '/ask devoops to ping', '--in-place'])
+  rc = main(['call', 'record', '/ask dev to ping', '--in-place'])
   assert rc is None
-  assert captured == ['/ask devoops to ping']
+  assert captured == ['/ask dev to ping']
 
 
 class _FakeApp:
