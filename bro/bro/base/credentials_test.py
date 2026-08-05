@@ -33,6 +33,23 @@ def bro_dir(configs_dir: Path) -> Path:
   return configs_dir.parent / 'bro'
 
 
+TEST_SECRET = 'test_secret'
+_TEST_SECRET_ENTRY = {
+  'sources': [{'file': 'test_secret.json'}],
+  'install': 'export TEST_SECRET="$(credentials get \'{{insert #name}}\')"',
+}
+
+
+@pytest.fixture(autouse=True)
+def register_test_secret(monkeypatch):
+  contributed_registry_data = credentials._contributed_registry_data
+
+  def with_test_secret() -> dict[str, dict]:
+    return {**contributed_registry_data(), TEST_SECRET: _TEST_SECRET_ENTRY}
+
+  monkeypatch.setattr(credentials, '_contributed_registry_data', with_test_secret)
+
+
 def _write(dir: Path, name: str, payload) -> None:
   (dir / name).write_text(payload if isinstance(payload, str) else json.dumps(payload))
 
@@ -297,9 +314,9 @@ class TestRegistryOverride:
       credentials._load_registry()
 
   def test_empty_override_is_ignored(self, configs_dir: Path, monkeypatch):
-    _write(configs_dir, 'notion.json', {'token': 't'})
+    _write(configs_dir, 'test_secret.json', {'token': 't'})
     monkeypatch.setenv('CREDENTIALS_REGISTRY', '')
-    assert credentials.default_store().get_json('notion') == {'token': 't'}
+    assert credentials.default_store().get_json(TEST_SECRET) == {'token': 't'}
 
 
 class TestStore:
@@ -663,15 +680,14 @@ class TestDefaultRegistry:
   def test_inventory_covers_known_secrets(self):
     registry = credentials.default_registry()
     names = (
-      'notion',
-      'focus',
-      'trails',
-      'openai',
       'anthropic',
-      'claude_code',
-      'tmdb',
       'brave',
+      'brog',
+      'claude_code',
       'github',
+      'openai',
+      TEST_SECRET,
+      'trails',
     )
     for name in names:
       assert name in registry
@@ -745,7 +761,7 @@ class TestHostRegistry:
     assert 'github+pavel' in registry
     # the built-in entries survive the merge untouched
     assert 'github' in registry
-    assert 'notion' in registry
+    assert TEST_SECRET in registry
 
   def test_additions_file_follows_the_search_path_priority(self, configs_dir: Path, bro_dir: Path):
     # like any secret file: the first search dir that has it wins — the file in
@@ -760,11 +776,15 @@ class TestHostRegistry:
     assert 'github+work' in registry
     assert 'github+home' not in registry
 
-  def test_addition_replaces_a_builtin_entry_wholesale(self, bro_dir: Path):
-    _write(bro_dir, credentials.HOST_REGISTRY_FILE, {'notion': {'sources': [{'file': 'n2.json'}]}})
-    source = credentials.host_registry()['notion'].sources[0]
+  def test_addition_replaces_a_registry_entry_wholesale(self, bro_dir: Path):
+    _write(
+      bro_dir,
+      credentials.HOST_REGISTRY_FILE,
+      {TEST_SECRET: {'sources': [{'file': 'replacement.json'}]}},
+    )
+    source = credentials.host_registry()[TEST_SECRET].sources[0]
     assert isinstance(source, credentials.LocalSource)
-    assert source.file == 'n2.json'
+    assert source.file == 'replacement.json'
 
   def test_kind_override_without_install_inherits_the_builtin_hook(self, bro_dir: Path):
     _write(
@@ -797,9 +817,9 @@ class TestHostRegistry:
     _write(
       bro_dir,
       credentials.HOST_REGISTRY_FILE,
-      {'notion+work': {'sources': [{'file': 'notion_work.json'}]}},
+      {'openai+work': {'sources': [{'file': 'openai_work.json'}]}},
     )
-    assert credentials.host_registry()['notion+work'].install is None
+    assert credentials.host_registry()['openai+work'].install is None
 
   def test_variant_declaring_its_own_install_raises(self, bro_dir: Path):
     _write(
@@ -846,8 +866,8 @@ class TestHostRegistry:
 
 class TestDefaultStore:
   def test_falls_back_to_builtin_registry(self, configs_dir: Path):
-    _write(configs_dir, 'notion.json', {'token': 't'})
-    assert credentials.default_store().get_json('notion') == {'token': 't'}
+    _write(configs_dir, 'openai.json', {'token': 't'})
+    assert credentials.default_store().get_json('openai') == {'token': 't'}
 
   def test_credentials_json_overrides_builtin(self, configs_dir: Path):
     _write(configs_dir, 'custom.json', {'token': 'x'})
@@ -884,8 +904,8 @@ class TestDefaultStore:
 
 class TestModuleAliases:
   def test_get_json_aliases_default_store(self, configs_dir: Path):
-    _write(configs_dir, 'notion.json', {'token': 't'})
-    assert credentials.get_json('notion') == {'token': 't'}
+    _write(configs_dir, 'openai.json', {'token': 't'})
+    assert credentials.get_json('openai') == {'token': 't'}
 
   def test_get_aliases_default_store_raw_text(self, configs_dir: Path):
     # `claude_code` maps to a raw-text file; the alias returns it stripped, like the store.
@@ -894,30 +914,30 @@ class TestModuleAliases:
 
   def test_get_raises_secret_not_found(self, configs_dir: Path):
     with pytest.raises(credentials.SecretNotFound):
-      credentials.get('notion')
+      credentials.get('brave')
 
   def test_try_get_aliases_default_store(self, configs_dir: Path):
     _write(configs_dir, 'claude_code_oauth_token', 'tok\n')
     assert credentials.try_get('claude_code') == 'tok'
-    assert credentials.try_get('notion') is None
+    assert credentials.try_get('brave') is None
 
   def test_available_aliases_default_store(self, configs_dir: Path):
-    _write(configs_dir, 'notion.json', {'token': 't'})
-    assert credentials.available('notion') is True
-    assert credentials.available('tmdb') is False
+    _write(configs_dir, 'openai.json', {'token': 't'})
+    assert credentials.available('openai') is True
+    assert credentials.available('brave') is False
 
 
 class TestCLI:
   def test_list_prints_sorted_available_names(self, configs_dir: Path, capsys):
-    _write(configs_dir, 'notion.json', {'token': 't'})
+    _write(configs_dir, 'openai.json', {'token': 't'})
     _write(configs_dir, 'claude_code_oauth_token', 'tok-abc')
 
     assert credentials.main(['credentials', 'list']) is None
-    assert capsys.readouterr().out == 'claude_code\nnotion\n'
+    assert capsys.readouterr().out == 'claude_code\nopenai\n'
 
   def test_get_json_prints_json(self, configs_dir: Path, capsys):
-    _write(configs_dir, 'notion.json', {'token': 't'})
-    assert credentials.main(['credentials', 'get', 'notion']) is None
+    _write(configs_dir, 'openai.json', {'token': 't'})
+    assert credentials.main(['credentials', 'get', 'openai']) is None
     assert json.loads(capsys.readouterr().out) == {'token': 't'}
 
   def test_get_field_prints_value(self, configs_dir: Path, capsys):
@@ -931,7 +951,7 @@ class TestCLI:
     assert capsys.readouterr().out.strip() == 'tok-abc'
 
   def test_missing_secret_exits_nonzero(self, configs_dir: Path, capsys):
-    assert credentials.main(['credentials', 'get', 'notion']) == 1
+    assert credentials.main(['credentials', 'get', 'brave']) == 1
     assert 'not found' in capsys.readouterr().err
 
   def test_field_on_non_json_exits_nonzero(self, configs_dir: Path, capsys):
@@ -945,8 +965,8 @@ class TestCLI:
     assert 'no field' in capsys.readouterr().err
 
   def test_json_flag_pretty_prints(self, configs_dir: Path, capsys):
-    _write(configs_dir, 'notion.json', {'token': 't', 'db': 'd'})
-    assert credentials.main(['credentials', 'get', 'notion', '--json']) is None
+    _write(configs_dir, 'openai.json', {'token': 't', 'db': 'd'})
+    assert credentials.main(['credentials', 'get', 'openai', '--json']) is None
     out = capsys.readouterr().out
     assert json.loads(out) == {'token': 't', 'db': 'd'}
     assert '\n  ' in out  # indent=2
@@ -959,22 +979,22 @@ class TestCLI:
 
 class TestBuildScopedStore:
   def test_builds_files_and_scoped_registry(self, configs_dir: Path):
-    _write(configs_dir, 'notion.json', {'token': 't'})
+    _write(configs_dir, 'openai.json', {'token': 't'})
     _write(configs_dir, 'claude_code_oauth_token', 'tok-abc\n')
-    store = credentials.build_scoped_store(['notion', 'claude_code'])
+    store = credentials.build_scoped_store(['openai', 'claude_code'])
     # one `{name}.cred` entry per secret, plus the scoped registry
-    assert set(store) == {'notion.cred', 'claude_code.cred', credentials.REGISTRY_FILE}
+    assert set(store) == {'openai.cred', 'claude_code.cred', credentials.REGISTRY_FILE}
     # each secret's raw text (stripped) as bytes
-    assert json.loads(store['notion.cred']) == {'token': 't'}
+    assert json.loads(store['openai.cred']) == {'token': 't'}
     assert store['claude_code.cred'] == b'tok-abc'
     registry = json.loads(store[credentials.REGISTRY_FILE])
-    assert set(registry) == {'notion', 'claude_code'}
+    assert set(registry) == {'openai', 'claude_code'}
     # the install hook rides along so the container can apply it generically; the
     # source omits `type` (local is the default) and points at the scoped file
     assert registry['claude_code']['sources'] == [{'file': 'claude_code.cred'}]
     assert 'install' in registry['claude_code']
     # a secret with no install hook carries none
-    assert 'install' not in registry['notion']
+    assert 'install' not in registry['openai']
 
   def test_non_local_source_round_trips_to_scoped_local_file(self, configs_dir: Path, monkeypatch):
     # a pure non-local secret (no LocalSource) hydrates the same as a local one:
@@ -1179,59 +1199,59 @@ class TestBuildScopedStore:
   ):
     # materialising the store as a container's ~/.bro bounds it to the built
     # set: a non-declared secret resolves to a clean SecretNotFound.
-    _write(configs_dir, 'notion.json', {'token': 't'})
-    _write(configs_dir, 'tmdb.json', {'api_key': 'k'})
+    _write(configs_dir, 'test_secret.json', {'token': 't'})
+    _write(configs_dir, 'brave.json', {'api_key': 'k'})
     dest = tmp_path / 'scoped'
     dest.mkdir()
-    for filename, data in credentials.build_scoped_store(['notion']).items():
+    for filename, data in credentials.build_scoped_store([TEST_SECRET]).items():
       (dest / filename).write_bytes(data)
     # resolve as the container would: scoped dir is its ~/.bro and the explicit
     # config dir is absent. the scoped credentials.json bounds the registry.
     monkeypatch.setattr(credentials, 'CONFIGS_DIR', str(tmp_path / 'absent'))
     monkeypatch.setattr(credentials, 'BRO_DIR', str(dest))
     monkeypatch.setattr(credentials, '_default_store', None)
-    assert credentials.default_store().get_json('notion') == {'token': 't'}
+    assert credentials.default_store().get_json(TEST_SECRET) == {'token': 't'}
     with pytest.raises(credentials.SecretNotFound):
-      credentials.default_store().get('tmdb')
+      credentials.default_store().get('brave')
 
   def test_unknown_name_raises(self, configs_dir: Path):
     with pytest.raises(ValueError, match='unknown secret'):
-      credentials.build_scoped_store(['notion', 'nonsense'])
+      credentials.build_scoped_store([TEST_SECRET, 'nonsense'])
 
   def test_absent_value_raises(self, configs_dir: Path):
     # strict: a declared name with no value on the host fails loudly here.
-    _write(configs_dir, 'notion.json', {'token': 't'})
+    _write(configs_dir, 'test_secret.json', {'token': 't'})
     with pytest.raises(credentials.SecretNotFound):
-      credentials.build_scoped_store(['notion', 'tmdb'])
+      credentials.build_scoped_store([TEST_SECRET, 'brave'])
 
   def test_optional_present_is_hydrated(self, configs_dir: Path):
-    _write(configs_dir, 'notion.json', {'token': 't'})
+    _write(configs_dir, 'test_secret.json', {'token': 't'})
     _write(configs_dir, 'openai.json', {'api_key': 'k'})
-    store = credentials.build_scoped_store(['notion'], optional=['openai'])
-    assert set(store) == {'notion.cred', 'openai.cred', credentials.REGISTRY_FILE}
+    store = credentials.build_scoped_store([TEST_SECRET], optional=['openai'])
+    assert set(store) == {'test_secret.cred', 'openai.cred', credentials.REGISTRY_FILE}
     assert json.loads(store['openai.cred']) == {'api_key': 'k'}
-    assert set(json.loads(store[credentials.REGISTRY_FILE])) == {'notion', 'openai'}
+    assert set(json.loads(store[credentials.REGISTRY_FILE])) == {TEST_SECRET, 'openai'}
 
   def test_optional_unresolvable_is_skipped(self, configs_dir: Path):
     # openai is a known registry secret but has no value on the host — best-effort,
     # so it is skipped rather than raising the way a required secret would.
-    _write(configs_dir, 'notion.json', {'token': 't'})
-    store = credentials.build_scoped_store(['notion'], optional=['openai'])
-    assert set(store) == {'notion.cred', credentials.REGISTRY_FILE}
-    assert set(json.loads(store[credentials.REGISTRY_FILE])) == {'notion'}
+    _write(configs_dir, 'test_secret.json', {'token': 't'})
+    store = credentials.build_scoped_store([TEST_SECRET], optional=['openai'])
+    assert set(store) == {'test_secret.cred', credentials.REGISTRY_FILE}
+    assert set(json.loads(store[credentials.REGISTRY_FILE])) == {TEST_SECRET}
 
   def test_optional_unknown_is_skipped(self, configs_dir: Path):
-    _write(configs_dir, 'notion.json', {'token': 't'})
-    store = credentials.build_scoped_store(['notion'], optional=['nonsense'])
-    assert set(store) == {'notion.cred', credentials.REGISTRY_FILE}
+    _write(configs_dir, 'test_secret.json', {'token': 't'})
+    store = credentials.build_scoped_store([TEST_SECRET], optional=['nonsense'])
+    assert set(store) == {'test_secret.cred', credentials.REGISTRY_FILE}
 
   def test_optional_also_required_hydrated_once(self, configs_dir: Path):
     # a name in both tiers resolves once via the strict required pass; the optional
     # pass skips it — required wins, never downgraded to best-effort. same name =
     # same instance, so the per-kind rule is not tripped either.
-    _write(configs_dir, 'notion.json', {'token': 't'})
-    store = credentials.build_scoped_store(['notion'], optional=['notion'])
-    assert set(store) == {'notion.cred', credentials.REGISTRY_FILE}
+    _write(configs_dir, 'test_secret.json', {'token': 't'})
+    store = credentials.build_scoped_store([TEST_SECRET], optional=[TEST_SECRET])
+    assert set(store) == {'test_secret.cred', credentials.REGISTRY_FILE}
 
   def test_variant_materializes_under_its_kind_name(self, configs_dir: Path, bro_dir: Path):
     # the scoped namespace is kinds-only: the registry entry and its cred file
@@ -1274,12 +1294,12 @@ class TestBuildScopedStore:
     _write(
       bro_dir,
       credentials.HOST_REGISTRY_FILE,
-      {'notion+work': {'sources': [{'file': 'notion_work.json'}]}},
+      {'openai+work': {'sources': [{'file': 'openai_work.json'}]}},
     )
-    _write(bro_dir, 'notion_work.json', '{"token": "t"}')
-    store = credentials.build_scoped_store(['notion+work'])
+    _write(bro_dir, 'openai_work.json', '{"api_key": "k"}')
+    store = credentials.build_scoped_store(['openai+work'])
     registry = json.loads(store[credentials.REGISTRY_FILE])
-    assert registry['notion'] == {'sources': [{'file': 'notion.cred'}]}
+    assert registry['openai'] == {'sources': [{'file': 'openai.cred'}]}
 
   def test_two_instances_of_a_kind_raise(self, configs_dir: Path, bro_dir: Path):
     _write(
@@ -1350,11 +1370,11 @@ class TestApplyGrantRevoke:
 
 
 class TestInstallHooks:
-  def test_github_and_aws_have_install_hooks(self):
+  def test_framework_and_test_secrets_have_install_hooks(self):
     registry = credentials.default_registry()
     assert registry['github'].install is not None
-    assert registry['aws'].install is not None
-    assert registry['notion'].install is None
+    assert registry[TEST_SECRET].install is not None
+    assert registry['openai'].install is None
 
   def test_claude_code_maps_to_token_file_with_install_hook(self):
     registry = credentials.default_registry()
@@ -1364,11 +1384,11 @@ class TestInstallHooks:
     # install hook exports the env var claude reads above ~/.claude/.credentials.json
     assert registry['claude_code'].install is not None
 
-  def test_aws_source_file(self):
+  def test_test_secret_source_file(self):
     registry = credentials.default_registry()
-    source = registry['aws'].sources[0]
+    source = registry[TEST_SECRET].sources[0]
     assert isinstance(source, credentials.LocalSource)
-    assert source.file == 'aws_credentials'
+    assert source.file == 'test_secret.json'
 
   def test_install_hooks_are_source_agnostic(self, configs_dir: Path):
     # hooks pull their value via `credentials get` at eval time — no resolved file
@@ -1383,22 +1403,17 @@ class TestInstallHooks:
     assert '.local/bin/gh' in out
     assert 'GH_TOKEN' in out
     assert 'export GH_TOKEN' not in out
-    # aws → materialized to ~/.aws/credentials (the path the CLI reads by default,
-    # so no AWS_SHARED_CREDENTIALS_FILE export needed) via `credentials get`
-    assert "credentials get 'aws'" in out
-    assert '.aws/credentials' in out
-    assert 'AWS_SHARED_CREDENTIALS_FILE' not in out
+    assert 'TEST_SECRET' in out
+    assert "credentials get 'test_secret'" in out
     # claude_code → exports CLAUDE_CODE_OAUTH_TOKEN via `credentials get`
     assert 'CLAUDE_CODE_OAUTH_TOKEN' in out
     assert "credentials get 'claude_code'" in out
     # every template directive is rendered away by emit time
     assert '{{' not in out
-    # no absolute resolver path is interpolated; notion declares no hook
+    # no absolute resolver path or source file is interpolated
     assert str(configs_dir) not in out
-    assert 'notion' not in out
-    # aws materializes to its own dedicated path, never the ~/.bro resolver source
-    assert '.bro' not in out
-    assert 'aws_credentials' not in out
+    assert 'test_secret.json' not in out
+    assert 'openai' not in out
 
   def test_install_hooks_emit_for_all_declared_secrets(self, configs_dir: Path):
     # presence is no longer a path check: every registry secret that declares a
@@ -1406,11 +1421,11 @@ class TestInstallHooks:
     # registry *is* the hydrated (present) set, so this is the right bound.
     out = credentials.install_hooks()
     assert 'credentials get github' in out
-    assert "credentials get 'aws'" in out
+    assert "credentials get 'test_secret'" in out
 
   def test_cli_install_hooks(self, configs_dir: Path, capsys):
     assert credentials.main(['credentials', 'install-hooks']) is None
-    assert "credentials get 'aws'" in capsys.readouterr().out
+    assert "credentials get 'test_secret'" in capsys.readouterr().out
 
   def test_cli_get_without_name_errors(self, configs_dir: Path, capsys):
     # the get subparser makes name a required positional, so argparse enforces it
