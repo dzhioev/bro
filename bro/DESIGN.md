@@ -1,6 +1,6 @@
 # Bro
 
-A **Bro** is a specialised agent: a system prompt, a curated set of tools, and an LLM loop that turns inputs into outputs. Each Bro encapsulates one capability — triaging the Notion inbox, stewarding the media library, answering general questions — and exposes the same uniform interface regardless of where it is invoked from.
+A **Bro** is a specialised agent: a system prompt, a curated set of tools, and an LLM loop that turns inputs into outputs. Each Bro encapsulates one capability — reviewing code, researching a topic, answering general questions — and exposes the same uniform interface regardless of where it is invoked from.
 
 This document is the conceptual model. Operational details (layout, how to add a new Bro, current files) live in `CLAUDE.md`.
 
@@ -17,13 +17,13 @@ This document is the conceptual model. Operational details (layout, how to add a
 A Bro is a subclass of `Bro`:
 
 ```python
-class PM(Bro):
-  name = 'pm'                          # unique, kebab-case
+class Researcher(Bro):
+  name = 'researcher'                   # unique, kebab-case
   description = '...'                  # one line, shown in tool listings
   system_prompt = SYSTEM_PROMPT        # class-level; MRO-concatenated base→derived
   llm_spec = bro.llm.llms.chat_gpt.LLMSpec(model='gpt-5.4-mini', reasoning_effort='medium')
-  mcp_servers = [flow.mcp.spec()]          # full flow toolset
-  # or: flow.mcp.spec('add_task', 'list_tasks')  # subset, validated at declaration
+  mcp_servers = [research.mcp.spec()]  # full toolset
+  # or: research.mcp.spec('search')    # subset, validated at declaration
   data_sources = [Wikipedia()]         # read-only connectors
 ```
 
@@ -46,8 +46,8 @@ The base class, on instantiation:
 A Bro's behaviour comes from three sources, all declared on the class:
 
 - **`system_prompt`** — the specialisation. Triage policies, output protocol, voice. The single source of truth for what the Bro knows and decides.
-- **`mcp_servers`** — sets of stateful tools. An entry is a tool-pack module (`flow.mcp`, `infra.mcp`, `dev.mcp` — its conventional `spec` Toolset, the full roster) or a scoping call (`flow.mcp.spec(*tool_names)`, a validated subset); both normalize to an `bro.llm.mcp.MCPServerSpec`, the pure-metadata manifest (`needed_secrets` / `optional_secrets` plus a `build()` factory). The declaration/runtime split lets hosts read a bro's credential manifest without constructing live servers — a live server is free to hold real resources (flow's shared `System`) because it only ever exists in a serving process.
-- **`data_sources`** — read-only connectors (Wikipedia, TMDb, Open Library, web search). Each implements `search(query, limit)` and `fetch(id, query=None)`. The base class exposes them as `search` / `fetch` MCP tools inside the source's own `<name>-source` namespace (wire name `<name>-source__search`) and injects each source's `summary` into the system prompt so the LLM knows what is available without enumerating raw tool names.
+- **`mcp_servers`** — sets of stateful tools. An entry is a tool-pack module (its conventional `spec` Toolset, the full roster), a bare `Toolset`, or a scoping call such as `research.mcp.spec(*tool_names)` for a validated subset; each normalizes to an `bro.llm.mcp.MCPServerSpec`, the pure-metadata manifest (`needed_secrets` / `optional_secrets` plus a `build()` factory). The declaration/runtime split lets hosts read a bro's credential manifest without constructing live servers, so a live server may hold real resources because it exists only in a serving process.
+- **`data_sources`** — read-only connectors (Wikipedia, web search, and consumer-provided catalogs). Each implements `search(query, limit)` and `fetch(id, query=None)`. The base class exposes them as `search` / `fetch` MCP tools inside the source's own `<name>-source` namespace (wire name `<name>-source__search`) and injects each source's `summary` into the system prompt so the LLM knows what is available without enumerating raw tool names.
 
 The split between `mcp_servers` and `data_sources` is a contract: data sources never mutate state, so they are safe to bind to any Bro. MCP servers may mutate state and are chosen per Bro.
 
@@ -68,21 +68,19 @@ The same Bro runs from many launchers:
 - **Claude Code persona** — every cw-session (the default non-`--raw` `cw ss` flavor) runs *as* a Bro too (`--bro <name>`, defaulting to the project default bro): the Bro's persona and Scripts prompts are injected, its scripts mount as canonical `@::` tools, Claude retains its native third-party skill mechanism, and the bro's claude-harness-filtered toolset (`claude_persona_mcp_servers()` via `mcp-server persona:<name> --http`) mounts alongside claude's built-in tools — components gated to the bro harness (the dev toolset) stay out.
 - **`bro run` / `bro chat`** — canonical one-shot and interactive launchers; `ask` and `call` are aliases. See `bro/bro/launch/CLAUDE.md`.
 
-A given Bro need not support every surface — `pm` is consumed by both `cw ss --bro pm` and the `process-inbox` TUI; `librorian` runs from the console. `assistant` (which declares `mcp_servers=[flow.mcp.spec()]`) remains reachable through `bro run` / `bro show` and `cw ss --bro assistant`.
+A given Bro need not support every surface. A consumer can invoke one from its own application, expose another only through `bro run`, and use a third as a `cw ss` persona without changing the Bro abstraction.
 
 ## Registry
 
-Bros live in a process-wide dict keyed by `name`, holding **classes** (not instances). Lookup is lazy per-name: a miss imports only the one module named for that name in the `BRO_SPECS` map (`name -> "module:ClassName"`) and registers its class, so `create_bro('pm')` never pulls in another bro's dependency graph. There is no `bros.init()` and no auto-discovery; the `BRO_SPECS` entry is the contract (only `list_classes()` / `bro list` imports them all). `create_bro(name, llm_spec=None)` returns a **fresh instance every call** — callers that need the same instance across requests cache the return value themselves.
+Bros live in a process-wide dict keyed by `name`, holding **classes** (not instances). Lookup is lazy per-name: a miss imports only the one module named for that name in the `BRO_SPECS` map (`name -> "module:ClassName"`) and registers its class, so `create_bro('researcher')` never pulls in another bro's dependency graph. There is no `bros.init()` and no auto-discovery; the `BRO_SPECS` entry is the contract (only `list_classes()` / `bro list` imports them all). `create_bro(name, llm_spec=None)` returns a **fresh instance every call** — callers that need the same instance across requests cache the return value themselves.
 
 ## Concrete roster
 
-The current set lives in `bros/`:
+The built-in set lives in `bro/bro/bros/`:
 
-- `assistant` — general-purpose chat with Flow tools
-- `pm` — Flow inbox triage; canonical source of triage policy for both the `process-inbox` TUI and `cw ss --bro pm`
-- `librorian` — steward of the Flow media library (adds, maintains, recommends)
-- `devoops` — autonomous service deploys (the deploy targets are enumerated in `infra/mcp.py`'s `TARGETS` / `list_targets`) with a dry-run-first safety reflex; tools wrap `infra/mcp.py`
-- `dev` — generic software developer with file + shell + search tools; owns the task-driven workflow scripts (`@::fix`, `@::run-pr`, `@::land`), whose task-tracker side rides the `brog` feature — live wherever a brog config resolves
-- `ppp-dev` — full-stack PPP development (inherits `dev` with the `brog` feature pinned on; carries the PPP repo conventions); this repo's default bro
+- `bro` — minimal general-purpose agent and the base for other concrete Bros
+- `dev` — generic software developer with file, shell, and search tools; owns the task-driven workflow scripts (`@::fix`, `@::run-pr`, `@::land`), whose task-tracker side rides the optional `brog` feature
+
+Installed distributions add consumer personas through the `bro` entry-point group.
 
 Adding a new Bro is creating a new subclass and registering it — see `CLAUDE.md` for the operational checklist.

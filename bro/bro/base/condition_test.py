@@ -122,9 +122,9 @@ class TestSelect:
     assert select([when(True, 'a'), when(False, 'b'), 'c'], {}) == ['a', 'c']
 
   def test_when_decides_at_select_time(self):
-    entries = [when(var('harness') == 'bro', 'devtools'), 'flow']
-    assert select(entries, _harness('bro')) == ['devtools', 'flow']
-    assert select(entries, _harness('claude')) == ['flow']
+    entries = [when(var('harness') == 'bro', 'devtools'), 'tools']
+    assert select(entries, _harness('bro')) == ['devtools', 'tools']
+    assert select(entries, _harness('claude')) == ['tools']
 
   def test_condition_error_propagates(self):
     with pytest.raises(ConditionError, match='unknown variable #wire'):

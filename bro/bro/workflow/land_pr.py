@@ -14,10 +14,7 @@ Preconditions (each failure aborts with a message on stderr and exit 1):
 On success prints a single JSON object to stdout:
 
   {"pr": 310, "url": ..., "title": ..., "base": "master", "squash_sha": ...,
-   "merged_at": "2026-07-03T10:41:02Z", "merged_at_minutes": "2026-07-03 10:41",
-   "branch_deleted": true}
-
-`merged_at_minutes` is UTC at minute precision, the format flow @-mentions parse.
+   "merged_at": "2026-07-03T10:41:02Z", "branch_deleted": true}
 """
 
 import json
@@ -97,10 +94,6 @@ def _body_with_footer(body: str, footer: str) -> str:
   return f'{trimmed}\n\n{footer}'
 
 
-def _merged_minutes(merged_at: str) -> str:
-  return merged_at.replace('T', ' ')[:16]
-
-
 def _delete_remote_branch(branch: str) -> bool:
   """delete only the remote ref — the local branch and checkout stay untouched
   (deleting them out from under a live worktree is the session manager's call).
@@ -144,7 +137,6 @@ def _land(no_review: bool, allow_unchecked: bool) -> dict[str, Any]:
     'base': pr['baseRefName'],
     'squash_sha': merged['mergeCommit']['oid'],
     'merged_at': merged['mergedAt'],
-    'merged_at_minutes': _merged_minutes(merged['mergedAt']),
     'branch_deleted': _delete_remote_branch(pr['headRefName']),
   }
 

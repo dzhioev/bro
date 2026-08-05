@@ -56,10 +56,10 @@ def test_main_re_execs_into_container_when_outside():
     patch('bro.launch.root.run_in_container', return_value=0) as run,
   ):
     env.pop('CW_IN_CONTAINER', None)
-    env.pop('PPP_SHELL_COMMAND', None)
+    env.pop('BRO_SHELL_COMMAND', None)
     rc = main(['ask', 'ppp-dev', 'hello world', '--rich'])
     assert rc == 0
-    assert env['PPP_SHELL_COMMAND'] == 'ask --rich ppp-dev hello world'
+    assert env['BRO_SHELL_COMMAND'] == 'ask --rich ppp-dev hello world'
     assert run.call_count == 1
     launch = run.call_args.args[0]
     assert launch.name.startswith('ask-ppp-dev-')

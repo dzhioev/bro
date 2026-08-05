@@ -372,16 +372,15 @@ def isolated_env() -> Iterator[IsolatedEnv]:
   # scenarios that exec the real runner hydrate `brog` (CW_E2E_SECRETS): the
   # session MCP server builds brog's backend from that secret at assembly, so
   # the health gate needs the stub a real session's scoped store would carry.
-  # construction is offline — nothing contacts the url
+  # construction is offline — nothing contacts GitHub
   bro_dir = home / '.bro'
   bro_dir.mkdir()
   (bro_dir / 'brog.json').write_text(
     json.dumps(
       {
-        'backend': 'flow',
-        'transport': 'http',
-        'url': 'https://bro.brog.e2e.invalid',
+        'backend': 'github',
         'token': 'e2e',
+        'repo': 'owner/repository',
       }
     )
   )

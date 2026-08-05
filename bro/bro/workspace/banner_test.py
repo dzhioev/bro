@@ -43,21 +43,21 @@ class TestSessionFacts:
   def isolate_env(self, monkeypatch):
     # session-related env vars are picked up directly — wipe to a known state,
     # and stub the /.dockerenv probe so host runs don't accidentally read True
-    for v in ('CW_NAME', 'CW_BRO', 'CW_COMMAND', 'PPP_SHELL_COMMAND', 'CW_HOST_WORKSPACE'):
+    for v in ('CW_NAME', 'CW_BRO', 'CW_COMMAND', 'BRO_SHELL_COMMAND', 'CW_HOST_WORKSPACE'):
       monkeypatch.delenv(v, raising=False)
     monkeypatch.setattr(workspace_paths, 'in_container', lambda: False)
 
   def test_container_session(self, monkeypatch):
     monkeypatch.setattr(workspace_paths, 'in_container', lambda: True)
     monkeypatch.setenv('CW_NAME', 'my-task')
-    monkeypatch.setenv('CW_BRO', 'ppp-dev')
+    monkeypatch.setenv('CW_BRO', 'dev')
     monkeypatch.setenv('CW_HOST_WORKSPACE', '/host/var/cw/containers/my-task')
-    monkeypatch.setenv('PPP_SHELL_COMMAND', 'dive-in -t abc')
+    monkeypatch.setenv('BRO_SHELL_COMMAND', 'dive-in -t abc')
     monkeypatch.setenv('CW_COMMAND', 'cw ss --hold attended my-task')
     facts = SessionFacts.collect()
     assert facts.in_container is True
     assert facts.name == 'my-task'
-    assert facts.bro == 'ppp-dev'
+    assert facts.bro == 'dev'
     assert facts.host_workspace == '/host/var/cw/containers/my-task'
     assert facts.container_workspace == '/workspace'
     assert facts.exec_command == 'cw exec my-task'
@@ -66,7 +66,7 @@ class TestSessionFacts:
     assert facts.prompt is None
 
   def test_extracts_prompt_from_dive_in_new(self, monkeypatch):
-    monkeypatch.setenv('PPP_SHELL_COMMAND', 'dive-in --hold attended --new I want X')
+    monkeypatch.setenv('BRO_SHELL_COMMAND', 'dive-in --hold attended --new I want X')
     facts = SessionFacts.collect()
     assert facts.shell_command == 'dive-in --hold attended --new '
     assert facts.prompt == 'I want X'
@@ -85,7 +85,7 @@ class TestSessionFacts:
     assert facts.host_workspace == str(worktree)
     assert facts.container_workspace is None
     assert facts.exec_command is None
-    # PPP_SHELL_COMMAND defaults to CW_COMMAND — they're equal in this case
+    # BRO_SHELL_COMMAND defaults to CW_COMMAND — they're equal in this case
     assert facts.shell_command == 'cw ss feature'
     assert facts.cw_command == 'cw ss feature'
 
@@ -110,9 +110,9 @@ class TestSessionFacts:
     # an in-process caller passes its bro explicitly — its environment carries
     # the launcher's CW_BRO (or none); the override wins either way
     monkeypatch.delenv('CW_BRO', raising=False)
-    assert SessionFacts.collect(bro_override='librorian').bro == 'librorian'
+    assert SessionFacts.collect(bro_override='researcher').bro == 'researcher'
     monkeypatch.setenv('CW_BRO', 'pm')
-    assert SessionFacts.collect(bro_override='librorian').bro == 'librorian'
+    assert SessionFacts.collect(bro_override='researcher').bro == 'researcher'
     assert SessionFacts.collect().bro == 'pm'
 
 
@@ -136,7 +136,7 @@ def _facts(**overrides) -> SessionFacts:
 class TestRenderBanner:
   def test_llm_emits_plain_key_value(self):
     out = _facts(
-      bro='ppp-dev',
+      bro='dev',
       cw_command='cw ss --bro pm task',
       shell_command='dive-in -t x',
     ).render_llm()
@@ -144,7 +144,7 @@ class TestRenderBanner:
     assert '██' not in out  # no logo
     assert 'kind: container' in out
     assert 'name: task' in out
-    assert 'bro: ppp-dev' in out
+    assert 'bro: dev' in out
     assert 'workspace_host_path: /h/ws' in out
     assert 'workspace_container_path: /workspace' in out
     assert 'docker_shell_command: cw exec task' in out

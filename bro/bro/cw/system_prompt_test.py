@@ -27,16 +27,18 @@ class TestSessionAppendPrompt:
       assert '# Guided session' not in out
 
   def test_persona_prompts_injected(self):
-    out = cw_system_prompt._session_append_prompt('guided', 'ppp-dev')
-    assert '## PPP project' in out
+    out = cw_system_prompt._session_append_prompt('guided', 'dev')
+    assert 'You are a software developer' in out
     assert 'dev-style-source::read' in out
 
   def test_other_personas_carry_their_own_prompts_only(self):
-    assert '## PPP project' not in cw_system_prompt._session_append_prompt('guided', 'bro')
+    assert 'You are a software developer' not in cw_system_prompt._session_append_prompt(
+      'guided', 'bro'
+    )
 
   def test_persona_scripts_include_dispatcher_contract(self, monkeypatch):
     monkeypatch.setattr('bro.scripts.credentials.available', lambda name: True)
-    out = cw_system_prompt._session_append_prompt('guided', 'ppp-dev')
+    out = cw_system_prompt._session_append_prompt('guided', 'dev')
     assert '## Scripts' in out
     assert '@:<free text>:@' in out
     assert '`@::@`' in out
@@ -45,13 +47,10 @@ class TestSessionAppendPrompt:
 
 class TestSurfaceRendering:
   def test_tool_names_rendered_for_mcp_wire(self):
-    out = cw_system_prompt._session_append_prompt('guided', 'ppp-dev')
+    out = cw_system_prompt._session_append_prompt('guided', 'dev')
     assert 'mcp__namespace__tool' in out
     assert 'call that wire name directly' not in out
 
   def test_no_directives_survive_rendering(self):
-    # the prose literal `{{…}}` describing the syntax stays; the persona points
-    # every surface at the reference tools
-    out = cw_system_prompt._session_append_prompt('guided', 'ppp-dev')
+    out = cw_system_prompt._session_append_prompt('guided', 'dev')
     assert '{{iff' not in out
-    assert 'template-source::read' in out

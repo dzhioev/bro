@@ -15,7 +15,10 @@ class TestClaudeConfigDir:
 
 class TestProjectsDir:
   def test_encodes_slashes_and_dots(self):
-    assert monitor.encode_project_path(Path('/home/u/ppp/.claude/wt')) == '-home-u-ppp--claude-wt'
+    assert (
+      monitor.encode_project_path(Path('/home/u/project/.claude/wt'))
+      == '-home-u-project--claude-wt'
+    )
 
   def test_container_clone_encodes_to_the_mount_point(self):
     assert monitor.encode_project_path(Path('/workspace')) == '-workspace'

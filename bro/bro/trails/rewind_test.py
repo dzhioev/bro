@@ -37,7 +37,7 @@ class FakeClient:
     self.trails[trail_id] = {
       'id': trail_id,
       'harness': 'claude',
-      'bro': 'ppp-dev',
+      'bro': 'dev',
       'started_at': '2026-01-01T00:00:00Z',
       'end': None,
       'turn_count': 0,
@@ -175,7 +175,7 @@ class TestFormatTrailRow:
       {
         'id': 'T2',
         'harness': 'claude',
-        'bro': 'ppp-dev',
+        'bro': 'dev',
         'location': {'workspace': 'my-feature'},
         'native': {'llm': {'model': 'claude'}},
         'started_at': '2026-06-07T22:14:03.000000Z',
@@ -304,7 +304,7 @@ class TestHeader:
     out = _format_header(
       {
         'id': 'T2',
-        'bro': 'ppp-dev',
+        'bro': 'dev',
         'harness': 'claude',
         'version': '1',
         'native': {

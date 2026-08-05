@@ -273,7 +273,7 @@ def run_main(
   if force_summon:
     args.update(summon=True, rich=False, in_place=False, no_trails=False)
   shell_command = parser.reconstruct(args, prog=program)
-  os.environ.setdefault('PPP_SHELL_COMMAND', ' '.join(shell_command))
+  os.environ.setdefault('BRO_SHELL_COMMAND', ' '.join(shell_command))
 
   input_text = args['input']
   fast = args['fast'] or implied_fast

@@ -50,7 +50,7 @@ build-context-command = "git ls-files"    # optional session-image context file 
 
 ## Development
 
-From this workspace's repository root, `uv sync --all-packages --all-groups --all-extras` installs the three editable members. The framework member owns its own gates:
+From the framework repository root, `uv sync --all-packages --all-groups --all-extras` installs the editable workspace members. The framework member owns its own gates:
 
 ```bash
 cd bro

@@ -51,10 +51,6 @@ class TestBodyWithFooter:
     assert land_pr._body_with_footer('body\n', '') == 'body'
 
 
-def test_merged_minutes():
-  assert land_pr._merged_minutes('2026-07-03T10:41:02Z') == '2026-07-03 10:41'
-
-
 class TestPreconditionError:
   def test_open_approved_checked_passes(self):
     assert land_pr._precondition_error(_pr(), False, False) is None
@@ -138,7 +134,6 @@ def test_land_happy_path(capsys):
     'base': 'master',
     'squash_sha': 'abc123',
     'merged_at': '2026-07-03T10:41:02Z',
-    'merged_at_minutes': '2026-07-03 10:41',
     'branch_deleted': True,
   }
 

@@ -20,9 +20,9 @@ def test_run_uses_canonical_container_launch(capsys):
     patch('bro.launch.root.run_in_container', return_value=0) as run,
   ):
     environment.pop('CW_IN_CONTAINER', None)
-    environment.pop('PPP_SHELL_COMMAND', None)
+    environment.pop('BRO_SHELL_COMMAND', None)
     assert main(['bro', 'run', 'dev', 'hello']) == 0
-    shell_command = environment['PPP_SHELL_COMMAND']
+    shell_command = environment['BRO_SHELL_COMMAND']
   launch = run.call_args.args[0]
   assert launch.name.startswith('bro-run-dev-')
   assert launch.command == ['bro', 'run', 'dev', 'hello', '--in-place']
@@ -93,9 +93,9 @@ def test_chat_uses_canonical_container_launch():
     patch('bro.launch.call._tty_supported', return_value=True),
   ):
     environment.pop('CW_IN_CONTAINER', None)
-    environment.pop('PPP_SHELL_COMMAND', None)
+    environment.pop('BRO_SHELL_COMMAND', None)
     assert main(['bro', 'chat', 'dev', 'hello']) == 0
-    shell_command = environment['PPP_SHELL_COMMAND']
+    shell_command = environment['BRO_SHELL_COMMAND']
   launch = run.call_args.args[0]
   assert launch.name.startswith('bro-chat-dev-')
   assert launch.command == ['bro', 'chat', 'dev', 'hello', '--hold', 'guided', '--in-place']

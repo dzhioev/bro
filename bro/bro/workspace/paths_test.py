@@ -12,9 +12,9 @@ def _workspace_dirs(monkeypatch, tmp_path):
 
 def test_fresh_workspace_name_is_unique_per_call(monkeypatch, tmp_path):
   _workspace_dirs(monkeypatch, tmp_path)
-  first = workspace_paths.fresh_workspace_name('ask-ppp-dev')
-  second = workspace_paths.fresh_workspace_name('ask-ppp-dev')
-  assert first.startswith('ask-ppp-dev-')
+  first = workspace_paths.fresh_workspace_name('ask-dev')
+  second = workspace_paths.fresh_workspace_name('ask-dev')
+  assert first.startswith('ask-dev-')
   assert first != second
 
 

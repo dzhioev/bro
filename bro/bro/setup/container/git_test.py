@@ -68,7 +68,7 @@ def test_recursive_fetch_uses_submodule_upstream_and_keeps_host_fallback(tmp_pat
     'add',
     '-q',
     str(submodule_upstream),
-    'ppp',
+    'component',
     cwd=superproject_upstream,
   )
   _git('commit', '-q', '-m', 'base', cwd=superproject_upstream)
@@ -93,18 +93,18 @@ def test_recursive_fetch_uses_submodule_upstream_and_keeps_host_fallback(tmp_pat
 
   _git('checkout', '-q', '-b', 'future', cwd=superproject_upstream)
   future_submodule_commit = _commit(submodule_upstream, 'future')
-  _git('fetch', '-q', 'origin', cwd=superproject_upstream / 'ppp')
-  _git('checkout', '-q', future_submodule_commit, cwd=superproject_upstream / 'ppp')
-  _git('add', 'ppp', cwd=superproject_upstream)
+  _git('fetch', '-q', 'origin', cwd=superproject_upstream / 'component')
+  _git('checkout', '-q', future_submodule_commit, cwd=superproject_upstream / 'component')
+  _git('add', 'component', cwd=superproject_upstream)
   _git('commit', '-q', '-m', 'future', cwd=superproject_upstream)
 
-  container_submodule = workspace / 'ppp'
+  container_submodule = workspace / 'component'
   assert (
     _git(
       'cat-file',
       '-e',
       f'{future_submodule_commit}^{{commit}}',
-      cwd=host_repository / 'ppp',
+      cwd=host_repository / 'component',
       check=False,
     ).returncode
     != 0
@@ -113,7 +113,7 @@ def test_recursive_fetch_uses_submodule_upstream_and_keeps_host_fallback(tmp_pat
     submodule_upstream
   )
   assert _git('remote', 'get-url', 'host', cwd=container_submodule).stdout.strip() == str(
-    host_repository / 'ppp'
+    host_repository / 'component'
   )
 
   _git('config', 'fetch.recurseSubmodules', 'on-demand', cwd=workspace)
@@ -123,8 +123,8 @@ def test_recursive_fetch_uses_submodule_upstream_and_keeps_host_fallback(tmp_pat
     == 'commit'
   )
 
-  _git('checkout', '-q', '-b', 'host-only', cwd=host_repository / 'ppp')
-  host_only_commit = _commit(host_repository / 'ppp', 'host-only')
+  _git('checkout', '-q', '-b', 'host-only', cwd=host_repository / 'component')
+  host_only_commit = _commit(host_repository / 'component', 'host-only')
   _git('fetch', 'host', cwd=container_submodule)
   assert (
     _git('cat-file', '-t', host_only_commit, cwd=container_submodule).stdout.strip() == 'commit'

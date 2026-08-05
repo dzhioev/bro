@@ -45,12 +45,6 @@ Writer-reported outcomes use `end.reason`; the stale-run sweep instead records `
 - List queries accept exactly one indexed selector: `harness`, `bro`, or `forked_from`, plus the common time range and cursor.
 - `bro/bro/trails/rewind.py` (`rewind`) is the reader CLI for every harness: `show` and `grep` render the shared `/messages` conversation across its fork chain; `steps` renders one trail's native `/steps` debugging view; `list` and `tree` navigate headers and lineage.
 
-## Auth and deployment
+## Auth
 
-Bearer auth is mandatory outside an explicit loopback-only `TRAILS_ALLOW_NO_AUTH=1` run. The deployed token lives in SSM `/trails/bearer-token`; `bro/bro/trails/bootstrap.sh` writes the client secret.
-
-The ECS service and its retained header, step, and bucket resources are defined in `infra/cdk/trails_stack.py`.
-
-The historical Claude backfill produced 1,119 trails with `version = 'legacy-session-log'`.
-
-Server and CDK changes are not live until `trails/server/deploy.sh` builds the image and deploys the trails stacks. The unit suite fakes AWS boundaries, so a storage change requires a post-deploy append/read/check smoke in addition to tests.
+Bearer auth is mandatory outside an explicit loopback-only `TRAILS_ALLOW_NO_AUTH=1` run. Clients configure the server URL and bearer token through the `trails` secret documented in `bro/bro/setup/CLAUDE.md`.

@@ -23,7 +23,7 @@ One shot, in order:
 1. Resolves the PR for the current branch and enforces the preconditions — fails with a message and a nonzero exit when the PR is not `OPEN`, not `APPROVED`, or its body has unchecked `- [ ]` test-plan boxes.
 2. Runs the repo's configured footer command over the PR's actual base and appends its stdout to the PR body. A repo without a footer command keeps the body unchanged; command warnings pass through on stderr — relay them to the user.
 3. Squash-merges with the PR's own title and body as the commit subject/body, then deletes the remote feature branch (local branch and worktree stay untouched).
-4. Prints a JSON result: `pr`, `url`, `title`, `base`, `squash_sha`, `merged_at`, `merged_at_minutes`, `branch_deleted`.
+4. Prints a JSON result: `pr`, `url`, `title`, `base`, `squash_sha`, `merged_at`, `branch_deleted`.
 
 Waiver flags map to explicit user statements from this session — never pass them when `@::run-pr`'s APPROVED event chained into this script:
 

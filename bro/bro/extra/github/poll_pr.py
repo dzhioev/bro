@@ -256,7 +256,7 @@ def main(argv: list[str]) -> Optional[int]:
     description='poll a GitHub PR for merge status, merge conflicts, new comments, and new reviews'
   )
   parser.add_argument(
-    'repo', type=_owner_repo, metavar='owner/repo', help='target repo (e.g. dzhioev/ppp)'
+    'repo', type=_owner_repo, metavar='owner/repo', help='target repo (e.g. owner/repository)'
   )
   parser.add_argument('pr', type=int, help='PR number')
   parser.add_argument(

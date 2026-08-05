@@ -39,7 +39,6 @@ PYTEST_FILES = [
   'bro/llm/observer_test.py',
   'bro/llm/tracker_test.py',
   'bro/bro_test.py',
-  'bro/boundary_test.py',
   'bro/channel_test.py',
   'bro/fork_test.py',
   'bro/roster_test.py',

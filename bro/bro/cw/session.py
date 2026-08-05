@@ -190,7 +190,7 @@ def _finish_session(spec: SessionSpec, workspace: Workspace, code: int) -> int:
 def start_session(spec: SessionSpec) -> int:
   os.environ['CW_COMMAND'] = ' '.join(spec.to_command_argv())
   os.environ['CW_NAME'] = spec.name
-  os.environ.setdefault('PPP_SHELL_COMMAND', os.environ['CW_COMMAND'])
+  os.environ.setdefault('BRO_SHELL_COMMAND', os.environ['CW_COMMAND'])
   os.environ['CW_RESUME_COMMAND'] = ' '.join(spec.resume_variant().to_command_argv())
 
   container = not spec.host

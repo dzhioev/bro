@@ -30,7 +30,7 @@ def _task(**overrides) -> Task:
     'id': 'tid',
     'name': 'a task',
     'status': 'open',
-    'url': 'https://www.notion.so/tid',
+    'url': 'https://tracker.example/tasks/tid',
     'tags': ['dev'],
     'project': None,
     'blocked_by': [],
@@ -63,7 +63,7 @@ class TestRoster:
     monkeypatch.setattr(
       credentials,
       'get_json',
-      lambda name: {'backend': 'flow', 'transport': 'http', 'url': 'https://x', 'token': 't'},
+      lambda name: {'backend': 'github', 'token': 't', 'repo': 'owner/repository'},
     )
     server = spec().build()
     assert server.namespace == 'brog'
@@ -75,7 +75,7 @@ class TestCreateTask:
   async def test_returns_id_and_url(self, fake_system):
     fake_system.create_task.return_value = _task()
     result = await tool('create_task').call({'name': 'a task'})
-    assert result == {'id': 'tid', 'url': 'https://www.notion.so/tid'}
+    assert result == {'id': 'tid', 'url': 'https://tracker.example/tasks/tid'}
     fake_system.create_task.assert_called_once_with(name='a task', body=None, tags=None)
 
   @pytest.mark.asyncio
@@ -95,7 +95,7 @@ class TestGetTask:
   @pytest.mark.asyncio
   async def test_returns_task_with_project(self, fake_system):
     fake_system.get_task.return_value = _task(
-      project=Project(id='pid', name='ppp', summary='the pipeline'),
+      project=Project(id='pid', name='example', summary='example project'),
       blocked_by=['u1'],
     )
     result = await tool('get_task').call({'task_id': 'tid'})
@@ -103,9 +103,9 @@ class TestGetTask:
       'id': 'tid',
       'name': 'a task',
       'status': 'open',
-      'url': 'https://www.notion.so/tid',
+      'url': 'https://tracker.example/tasks/tid',
       'tags': ['dev'],
-      'project': {'id': 'pid', 'name': 'ppp', 'summary': 'the pipeline'},
+      'project': {'id': 'pid', 'name': 'example', 'summary': 'example project'},
       'blocked_by': ['u1'],
     }
     fake_system.get_task.assert_called_once_with('tid')
@@ -272,7 +272,7 @@ class TestListTasks:
           'id': 'tid',
           'name': 'a task',
           'status': 'open',
-          'url': 'https://www.notion.so/tid',
+          'url': 'https://tracker.example/tasks/tid',
           'tags': ['dev'],
           'project': None,
           'blocked_by': [],

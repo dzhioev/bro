@@ -53,25 +53,23 @@ class TestUsageFile:
   def test_publish_writes_env_pointed_file(self, tmp_path, monkeypatch):
     pointer = tmp_path / 'usage.json'
     monkeypatch.setenv(usage.USAGE_FILE_VARIABLE, str(pointer))
-    usage.publish('bro//ppp-dev', {'gpt-5': C(input=10, cache_read=4, output=2)})
+    usage.publish('bro//dev', {'gpt-5': C(input=10, cache_read=4, output=2)})
     read = usage.read_usage_file(pointer)
-    assert read == Usage(
-      agent='bro//ppp-dev', per_model={'gpt-5': C(input=10, cache_read=4, output=2)}
-    )
+    assert read == Usage(agent='bro//dev', per_model={'gpt-5': C(input=10, cache_read=4, output=2)})
 
   def test_publish_mints_pointer_when_absent(self, tmp_path, monkeypatch):
     monkeypatch.delenv(usage.USAGE_FILE_VARIABLE, raising=False)
     monkeypatch.setattr('tempfile.gettempdir', lambda: str(tmp_path))
-    usage.publish('bro//ppp-dev', {'gpt-5': C(output=1)})
+    usage.publish('bro//dev', {'gpt-5': C(output=1)})
     minted = os.environ[usage.USAGE_FILE_VARIABLE]
     assert minted.startswith(str(tmp_path))
-    assert usage.read_usage_file(Path(minted)).agent == 'bro//ppp-dev'
+    assert usage.read_usage_file(Path(minted)).agent == 'bro//dev'
 
   def test_publish_replaces_whole_snapshot(self, tmp_path, monkeypatch):
     pointer = tmp_path / 'usage.json'
     monkeypatch.setenv(usage.USAGE_FILE_VARIABLE, str(pointer))
-    usage.publish('bro//ppp-dev', {'gpt-5': C(output=1)})
-    usage.publish('bro//ppp-dev', {'gpt-5': C(output=5)})
+    usage.publish('bro//dev', {'gpt-5': C(output=1)})
+    usage.publish('bro//dev', {'gpt-5': C(output=5)})
     assert usage.read_usage_file(pointer).per_model == {'gpt-5': C(output=5)}
 
 
@@ -183,9 +181,9 @@ class TestCurrentUsage:
   def test_usage_file_pointer_wins(self, tmp_path, monkeypatch):
     pointer = tmp_path / 'usage.json'
     monkeypatch.setenv(usage.USAGE_FILE_VARIABLE, str(pointer))
-    usage.publish('bro//ppp-dev', {'gpt-5': C(output=3)})
+    usage.publish('bro//dev', {'gpt-5': C(output=3)})
     current = usage.current_usage()
-    assert current == Usage(agent='bro//ppp-dev', per_model={'gpt-5': C(output=3)})
+    assert current == Usage(agent='bro//dev', per_model={'gpt-5': C(output=3)})
 
   def test_no_pointer_no_transcript_yields_none(self, monkeypatch):
     monkeypatch.delenv(usage.USAGE_FILE_VARIABLE, raising=False)
@@ -258,18 +256,18 @@ class TestFormatFooter:
 
   def test_multi_agent_multi_model(self):
     out = usage.format_footer(
-      ['Claude Code 2.1.114', 'bro//ppp-dev'],
+      ['Claude Code 2.1.114', 'bro//dev'],
       {'Opus 4.8': C(input=168_892, output=10), 'gpt-5': C(cache_read=5_000)},
     )
     assert out == (
-      '> created with Claude Code 2.1.114, bro//ppp-dev | '
+      '> created with Claude Code 2.1.114, bro//dev | '
       "Opus 4.8: ↑(168'892 0 0) ↓10, gpt-5: ↑(0 0 5'000) ↓0"
     )
 
 
 class TestParseFooter:
   def test_round_trips_format_footer(self):
-    agents = ['Claude Code 2.1.114', 'bro//ppp-dev']
+    agents = ['Claude Code 2.1.114', 'bro//dev']
     tokens = {
       'Opus 4.8': C(input=1, cache_write=2, cache_read=3, output=4),
       'gpt-5': C(output=5_000),
@@ -289,9 +287,9 @@ class TestParseFooter:
     )
 
   def test_bro_agent_footer(self):
-    parsed = usage.parse_footer('> created with bro//ppp-dev | gpt-5: ↑(70 0 30) ↓22')
+    parsed = usage.parse_footer('> created with bro//dev | gpt-5: ↑(70 0 30) ↓22')
     assert parsed == Footer(
-      agents=['bro//ppp-dev'],
+      agents=['bro//dev'],
       delta={'gpt-5': C(input=70, cache_write=0, cache_read=30, output=22)},
     )
 

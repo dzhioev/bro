@@ -68,15 +68,14 @@ def _default_factory() -> Tracker:
   # explicit kill switch wins over everything: define `TRAILS_DISABLED` (to any
   # value, presence is what counts — same convention as `NO_COLOR` /
   # `CW_IN_CONTAINER`) to skip recording for a process — local dev, ad-hoc runs,
-  # or deploying a fix while trails-server itself is down (recording is otherwise
-  # mandatory + crash-on-failure, so a broken server blocks every bro,
-  # including the devoops bro that would fix it). this only governs the default
+  # or repairing trails-server itself (recording is otherwise mandatory and
+  # crash-on-failure, so a broken server blocks every bro). this only governs the default
   # factory: a per-run `tracker=` and a custom `set_default_tracker_factory(...)`
   # still take precedence.
   if os.environ.get(_TRAILS_DISABLED_ENV) is not None:
     return NullTracker()
   # recording is otherwise mandatory in production: the `trails` secret must
-  # resolve (`bro/bro/trails/bootstrap.sh` writes `~/.bro/trails.json`). a missing
+  # resolve from `~/.bro/trails.json`. a missing
   # secret is a setup error, not a fallback path — `NullTracker` is opt-in:
   # - kill switch: `TRAILS_DISABLED` set in the environment.
   # - tests: `conftest.py`'s `set_default_tracker_factory(NullTracker)`.
@@ -85,8 +84,8 @@ def _default_factory() -> Tracker:
     config = credentials.get_json('trails')
   except credentials.SecretNotFound as e:
     raise RuntimeError(
-      'trails: secret not found; run bro/bro/trails/bootstrap.sh to enable '
-      'recording, or pass tracker=NullTracker() to skip explicitly'
+      'trails: secret not found; configure ~/.bro/trails.json to enable recording, '
+      'or pass tracker=NullTracker() to skip explicitly'
     ) from e
   return Recorder(config['base_url'], config['token'])
 
@@ -543,10 +542,9 @@ class BaseBro(ABC):
   # an entry may be wrapped with `bro.base.condition.when(...)` / grouped with
   # `iff(...)` to gate it on the assembling surface's facts (`#harness`,
   # `#creds`); a wrapped entry whose condition does not hold never mounts and
-  # its spec never builds. an `mcp_servers` entry is a tool-pack module
-  # (`flow.mcp` — its conventional `spec` Toolset, the full roster), a bare
-  # `Toolset`, or an `MCPServerSpec` from a scoping call
-  # (`flow.mcp.spec('add_task')`); see `bro.llm.mcp.as_spec`.
+  # its spec never builds. an `mcp_servers` entry is a tool-pack module whose
+  # conventional `spec` Toolset represents the full roster, a bare `Toolset`, or
+  # an `MCPServerSpec` from a scoped Toolset call; see `bro.llm.mcp.as_spec`.
   data_sources: ClassVar[list[Entry[DataSource]]] = []
   mcp_servers: ClassVar[list[Entry[llm_mcp.MCPServerSpec | llm_mcp.Toolset[Any] | ModuleType]]] = []
   # named optional capabilities: feature name → the secrets that must all
@@ -559,16 +557,15 @@ class BaseBro(ABC):
   # inherited feature on, turning its components into hard requirements.
   features: ClassVar[dict[str, tuple[str, ...]]] = {}
   # credentials no component expresses — the escape hatch for a bro's environment
-  # needs (ppp-dev → `github`; devoops → `aws`). MRO-walked and unioned like
-  # `mcp_servers`, so a subclass declares only what it adds. folded into
+  # needs. MRO-walked and unioned like `mcp_servers`, so a subclass declares only
+  # what it adds. folded into
   # `needed_secrets()`.
   extra_secrets: tuple[str, ...] = ()
   # bros this bro may summon — its static outgoing allow-list. root sessions get
   # it adjusted per session by `--grant @bro`/`--revoke @bro`; a summoned child
   # follows the bare seeds, so summons chain transitively through seeded bros
-  # under the host's depth cap (see bro/launch/summon_control.py). MRO-walked and unioned like
-  # `extra_secrets`. ppp-dev seeds `devoops`; everyone else is empty (grows by
-  # precedent).
+  # under the host's depth cap (see bro/launch/summon_control.py). MRO-walked and
+  # unioned like `extra_secrets`.
   may_summon: tuple[str, ...] = ()
   # whether the bro does docker work (building/pushing images for deploys) and so
   # needs the host docker socket. an explicit capability, inherited normally. the
@@ -577,7 +574,7 @@ class BaseBro(ABC):
   needs_docker: bool = False
   # subclasses declare their own `system_prompt = "..."` as a class attribute;
   # `__init__` walks the MRO from base to derived and concatenates each class's
-  # own contribution. so `PPPDev(Dev)` only needs to declare what PPPDev adds —
+  # own contribution. so a `ReviewDev(Dev)` subclass declares only what it adds —
   # Dev's prompt (and Bro's) are picked up automatically. same for
   # `mcp_servers` and `data_sources`. inherit directly from BaseBro to opt out
   # of the concrete `Bro`'s shared defaults.
@@ -970,7 +967,7 @@ class BaseBro(ABC):
         return refusal
       # the tracker is locked in on first send (the LLM is constructed once and
       # records one trail); later calls can't swap it. surface (the trail
-      # header's surface label — `call`, `process-inbox`) and hold are locked
+      # header's surface label) and hold are locked
       # in the same way.
       self._llm, messages, _ = self._start(
         message,
@@ -1013,7 +1010,7 @@ class BaseBro(ABC):
   def _live_mcp_servers(self) -> list[llm_mcp.MCPServer]:
     # specs materialize here, on first tool use — always in a serving process,
     # post-secrets — and are built once: a live server may hold real resources
-    # (flow's shared System), so every run through this bro reuses the same set.
+    # and every run through this bro reuses the same set.
     if self._live_mcp is None:
       self._live_mcp = [spec.build() for spec in self._mcp_specs]
       self._live_mcp.extend(ds.as_mcp_server() for ds in self._data_sources)

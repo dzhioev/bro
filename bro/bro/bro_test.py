@@ -354,7 +354,7 @@ class TestBroRun:
     monkeypatch.setattr(credentials, 'BRO_DIR', str(tmp_path))
     monkeypatch.setattr(credentials, '_default_store', None)
     monkeypatch.delenv(bro_module._TRAILS_DISABLED_ENV, raising=False)
-    with pytest.raises(RuntimeError, match='bro/bro/trails/bootstrap.sh'):
+    with pytest.raises(RuntimeError, match='configure ~/.bro/trails.json'):
       bro_module._default_factory()
 
   # presence is what counts (same convention as NO_COLOR / CW_IN_CONTAINER):
@@ -1218,7 +1218,7 @@ class TestClaudePersonaServers:
     # brog's state factory reads the self-contained `brog` secret at build
     monkeypatch.setattr(
       'bro.base.credentials.get_json',
-      lambda name: {'backend': 'flow', 'transport': 'http', 'url': 'https://x', 'token': 't'},
+      lambda name: {'backend': 'github', 'token': 't', 'repo': 'owner/repository'},
     )
     # dev's brog feature follows the environment: no brog config → no tracker
     monkeypatch.setattr('bro.base.credentials.available', lambda name: False)

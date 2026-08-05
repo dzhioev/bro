@@ -1,6 +1,6 @@
 # Declarative conditioning
 
-How PPP gates component declarations and static text on the facts of the surface that consumes them. The model is `bro/bro/base/condition.py`: a condition is an immutable predicate object built at declaration time — constructing one reads no facts — and evaluated later against typed variables, so a class-level declaration stays an import-time constant while its truth is decided by whatever surface holds the facts. The template directive front (`bro/bro/reference/template.md`) lowers text conditions onto the same objects, so both fronts share one evaluator, one fail-fast semantics, and one vocabulary.
+How the framework gates component declarations and static text on the facts of the surface that consumes them. The model is `bro/bro/base/condition.py`: a condition is an immutable predicate object built at declaration time — constructing one reads no facts — and evaluated later against typed variables, so a class-level declaration stays an import-time constant while its truth is decided by whatever surface holds the facts. The template directive front (`bro/bro/reference/template.md`) lowers text conditions onto the same objects, so both fronts share one evaluator, one fail-fast semantics, and one vocabulary.
 
 ## Why
 

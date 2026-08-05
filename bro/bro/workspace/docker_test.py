@@ -171,39 +171,39 @@ class TestPruneSupersededImages:
   def test_removes_all_but_current_smoke_test_and_untagged(self, monkeypatch):
     listing = _FakeProc(
       returncode=0,
-      stdout='bro/ppp-dev:cur\nbro/ppp-dev:smoke-test\nbro/ppp-dev:<none>\nbro/ppp-dev:old1\nbro/ppp-dev:old2\n',
+      stdout='bro/framework:cur\nbro/framework:smoke-test\nbro/framework:<none>\nbro/framework:old1\nbro/framework:old2\n',
     )
     calls = self._patch_run(monkeypatch, listing)
-    workspace_docker._prune_superseded_images('bro/ppp-dev:cur')
+    workspace_docker._prune_superseded_images('bro/framework:cur')
     removals = [argv for argv in calls if argv[:3] == ['docker', 'image', 'rm']]
     assert removals == [
-      ['docker', 'image', 'rm', 'bro/ppp-dev:old1'],
-      ['docker', 'image', 'rm', 'bro/ppp-dev:old2'],
+      ['docker', 'image', 'rm', 'bro/framework:old1'],
+      ['docker', 'image', 'rm', 'bro/framework:old2'],
     ]
 
   def test_refused_removal_is_tolerated(self, monkeypatch):
     # `docker image rm` without -f refuses images a container still references;
     # that refusal keeps live sessions' images and must not abort the prune
     listing = _FakeProc(
-      returncode=0, stdout='bro/ppp-dev:cur\nbro/ppp-dev:in-use\nbro/ppp-dev:old\n'
+      returncode=0, stdout='bro/framework:cur\nbro/framework:in-use\nbro/framework:old\n'
     )
 
     def remove_result(argv):
-      if argv[-1] == 'bro/ppp-dev:in-use':
+      if argv[-1] == 'bro/framework:in-use':
         return _FakeProc(returncode=1, stderr='image is being used')
       return _FakeProc(returncode=0)
 
     calls = self._patch_run(monkeypatch, listing, remove_result)
-    workspace_docker._prune_superseded_images('bro/ppp-dev:cur')
+    workspace_docker._prune_superseded_images('bro/framework:cur')
     removals = [argv for argv in calls if argv[:3] == ['docker', 'image', 'rm']]
     assert removals == [
-      ['docker', 'image', 'rm', 'bro/ppp-dev:in-use'],
-      ['docker', 'image', 'rm', 'bro/ppp-dev:old'],
+      ['docker', 'image', 'rm', 'bro/framework:in-use'],
+      ['docker', 'image', 'rm', 'bro/framework:old'],
     ]
 
   def test_listing_failure_skips_pruning(self, monkeypatch):
     calls = self._patch_run(monkeypatch, _FakeProc(returncode=1, stderr='daemon down'))
-    workspace_docker._prune_superseded_images('bro/ppp-dev:cur')
+    workspace_docker._prune_superseded_images('bro/framework:cur')
     assert [argv for argv in calls if argv[:3] == ['docker', 'image', 'rm']] == []
 
 

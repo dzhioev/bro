@@ -194,7 +194,7 @@ def chat_main(
   parser.add_argument('--into', metavar='REF', help=INTO_HELP)
   parser.add_argument('--hold', choices=HOLDS, default=None, help=HOLD_HELP.format(default_hold))
   args = parser.parse(argv)
-  os.environ.setdefault('PPP_SHELL_COMMAND', ' '.join(parser.reconstruct(args, prog=program)))
+  os.environ.setdefault('BRO_SHELL_COMMAND', ' '.join(parser.reconstruct(args, prog=program)))
 
   if args['what'] is None and args['resume'] is None:
     log.error('what is required unless --resume is given')

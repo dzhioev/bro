@@ -191,7 +191,7 @@ def environment(tmp_path: Path, monkeypatch):
   projects.mkdir(parents=True)
   monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(config))
   monkeypatch.setenv('CW_COMMAND', 'cw ss ws')
-  monkeypatch.setenv('CW_BRO', 'ppp-dev')
+  monkeypatch.setenv('CW_BRO', 'dev')
   monkeypatch.setenv('BRO_HOLD', 'attended')
   monkeypatch.delenv(CW_RESUMED_SESSION_ENV, raising=False)
   monkeypatch.setenv(
@@ -233,7 +233,7 @@ class TestAdoption:
     assert payload['harness'] == 'claude'
     assert payload['surface'] == 'cw'
     assert payload['interactive'] is True
-    assert payload['bro'] == 'ppp-dev'
+    assert payload['bro'] == 'dev'
     assert payload['hold'] == 'attended'
     assert 'forked_from' not in payload
     assert payload['native']['segment'] == 'seg-1'

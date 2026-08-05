@@ -19,7 +19,7 @@ def _brog_config(monkeypatch):
   # at build; pin a fake so launches build hermetically
   monkeypatch.setattr(
     'bro.base.credentials.get_json',
-    lambda name: {'backend': 'flow', 'transport': 'http', 'url': 'https://x', 'token': 't'},
+    lambda name: {'backend': 'github', 'token': 't', 'repo': 'owner/repository'},
   )
 
 

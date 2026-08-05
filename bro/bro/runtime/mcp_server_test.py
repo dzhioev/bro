@@ -116,13 +116,8 @@ class TestResolveServers:
 
   def test_absent_toolset_has_a_clear_error(self, monkeypatch):
     monkeypatch.setattr(mcp_server, '_toolset_entry_points', lambda: ())
-    with pytest.raises(SystemExit, match="unknown server 'flow'; expected one of"):
-      _resolve_servers('flow')
-
-  def test_contributed_flow(self):
-    servers = _resolve_servers('flow')
-    assert len(servers) == 1
-    assert servers[0].namespace == 'flow'
+    with pytest.raises(SystemExit, match="unknown server 'tasks'; expected one of"):
+      _resolve_servers('tasks')
 
   def test_contributed_brog(self, monkeypatch):
     # brog's state factory reads the self-contained config at build time
@@ -131,7 +126,7 @@ class TestResolveServers:
     monkeypatch.setattr(
       credentials,
       'get_json',
-      lambda name: {'backend': 'flow', 'transport': 'http', 'url': 'https://x', 'token': 't'},
+      lambda name: {'backend': 'github', 'token': 't', 'repo': 'owner/repository'},
     )
     servers = _resolve_servers('brog')
     assert len(servers) == 1
@@ -160,7 +155,7 @@ class TestHTTPBindBeforeResolve:
       mcp_server.main(
         [
           'mcp-server',
-          'flow',
+          'tasks',
           '--http',
           '--port',
           '0',
@@ -184,17 +179,17 @@ class TestHTTPBindBeforeResolve:
 
     monkeypatch.setattr(mcp_server, 'create_http_app', capture_app)
     with pytest.raises(RuntimeError, match='captured token'):
-      mcp_server.main(['mcp-server', 'flow', '--http', '--port', '0'])
+      mcp_server.main(['mcp-server', 'tasks', '--http', '--port', '0'])
     assert captured['token'] == 'env-token'
 
   def test_http_requires_a_bearer_token_source(self, monkeypatch):
     monkeypatch.delenv(mcp_server.BEARER_TOKEN_ENV, raising=False)
     with pytest.raises(SystemExit, match='requires --port and --bearer-token or'):
-      mcp_server.main(['mcp-server', 'flow', '--http', '--port', '0'])
+      mcp_server.main(['mcp-server', 'tasks', '--http', '--port', '0'])
 
   def test_port_file_requires_http(self):
     with pytest.raises(SystemExit, match='only apply with --http'):
-      mcp_server.main(['mcp-server', 'flow', '--port-file', '/tmp/port'])
+      mcp_server.main(['mcp-server', 'tasks', '--port-file', '/tmp/port'])
 
 
 class TestHealth:
@@ -232,7 +227,7 @@ class TestNamespaceEndpoints:
 
   def test_multiple_searchable_sources_do_not_collide(self):
     # two searchable sources both expose bare `search` / `fetch`; each lives on
-    # its own `<name>-source` endpoint (the `cw ss --raw --bro librorian` case).
+    # its own `<name>-source` endpoint in a raw bro session.
     with _client(_TwoSourceBro()._live_mcp_servers()) as client:
       for path in ('/noop-source', '/second-source'):
         body = _rpc(client, path, 'tools/list')

@@ -93,7 +93,7 @@ class TestProvisionHostClaudeDir:
     return home
 
   def _provision(self, home):
-    project = home / 'ppp'
+    project = home / 'project'
     worktree = project / 'var' / 'cw' / 'worktrees' / 'ws'
     return cw_claude_config._provision_host_claude_dir('ws', worktree, project), worktree
 
@@ -105,7 +105,7 @@ class TestProvisionHostClaudeDir:
     # linked worktree's trust against the repository root
     assert data['projects'] == {
       str(worktree): {'hasTrustDialogAccepted': True},
-      str(home / 'ppp'): {'hasTrustDialogAccepted': True},
+      str(home / 'project'): {'hasTrustDialogAccepted': True},
     }
     assert data['installMethod'] == 'native'
 

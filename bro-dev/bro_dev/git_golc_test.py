@@ -12,7 +12,7 @@ FOOTER_MULTI = (
   '> created with Claude Code 2.1.114, 2.1.120 | '
   "Opus 4.8: ↑(0 0 0) ↓1'275'432, Sonnet 4.6: ↑(0 0 0) ↓12'345"
 )
-FOOTER_BRO = '> created with bro//ppp-dev | gpt-5: ↑(70 0 30) ↓22'
+FOOTER_BRO = '> created with bro//dev | gpt-5: ↑(70 0 30) ↓22'
 # an old single-number footer (pre four-class redesign) — must no longer parse
 OLD_SINGLE = "> created with Claude Code 2.1.114 | Opus 4.8: 275'432\n> session(s): abc12345"
 # the previous four-class shape (`↑ a / b (c) ↓ d`) — must no longer parse

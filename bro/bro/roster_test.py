@@ -32,7 +32,7 @@ def brog_config(monkeypatch):
   # brog's state factory reads the self-contained `brog` secret at build
   monkeypatch.setattr(
     'bro.base.credentials.get_json',
-    lambda name: {'backend': 'flow', 'transport': 'http', 'url': 'https://x', 'token': 't'},
+    lambda name: {'backend': 'github', 'token': 't', 'repo': 'owner/repository'},
   )
   # every credential resolves, so feature- and credential-gated components all
   # mount and the audit covers the maximal roster deterministically

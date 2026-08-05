@@ -84,8 +84,8 @@ def _default_now() -> str:
 
 # shared so concurrent renderer calls don't tear each other's panels apart on
 # stderr. lazily built so importing this module stays free of `rich` —
-# required so deployed images (flow-mcp-server, the emails Lambda) that never
-# instantiate a RichConsoleRenderer don't need to ship the `rich` package.
+# required so deployments that never instantiate a RichConsoleRenderer do not
+# need to ship the `rich` package.
 _CONSOLE: Any = None
 
 

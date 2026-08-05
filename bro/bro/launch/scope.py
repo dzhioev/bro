@@ -186,7 +186,7 @@ class LaunchScopeError(Exception):
 
 
 # the unified --grant/--revoke value syntax: a leading `@` marks a bro summon
-# target (`@librorian`), any other value is a credential name.
+# target (`@reviewer`), any other value is a credential name.
 _BRO_MARK = '@'
 
 

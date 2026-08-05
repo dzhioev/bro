@@ -8,7 +8,7 @@ import aiohttp
 # sessions get this tight explicit budget instead
 _TIMEOUT = aiohttp.ClientTimeout(total=30, connect=10)
 
-_USER_AGENT = 'ppp-bro/1.0 (https://github.com/dzhioev/ppp)'
+_USER_AGENT = 'bro/1.0'
 
 
 def _make_session(headers: Optional[dict[str, str]] = None) -> aiohttp.ClientSession:

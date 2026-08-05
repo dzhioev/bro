@@ -7,7 +7,7 @@ source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../prelude.sh"
 DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 PROJECT="$(realpath "$DIR/../../../..")"
 
-TAG="bro/ppp-dev:smoke-test"
+TAG="bro/framework:smoke-test"
 echo "building image" >&2
 # through the framework's own builder, so the assembled context this test runs
 # against is the one a session launch builds from. the project is passed
@@ -87,13 +87,14 @@ docker run --rm -i \
     test -n "$(ls -A /opt/uv-cache)"
     test -w /opt/uv-cache
     # the workspace venv is baked in: console-script launchers are present, and
-    # setuptools' compat-mode editable paths point every member at the clone
+    # setuptools' compat-mode editable paths point at directories in the clone
     test -x /opt/cw-venv/bin/ask
-    grep -q '^/workspace$' /opt/cw-venv/lib/python*/site-packages/__editable__.ppp-*.pth
-    grep -q '^/workspace/bro$' /opt/cw-venv/lib/python*/site-packages/__editable__.bro-*.pth
-    grep -q '^/workspace/bro-dev$' /opt/cw-venv/lib/python*/site-packages/__editable__.bro_dev-*.pth
-    # the projects ship their argv bridges as ordinary editable modules
-    test -f /workspace/_entrypoints.py
+    EDITABLE_PATHS="$(grep -h '^/workspace' /opt/cw-venv/lib/python*/site-packages/__editable__.*.pth)"
+    test -n "$EDITABLE_PATHS"
+    while IFS= read -r EDITABLE_PATH; do
+      test -d "$EDITABLE_PATH"
+    done <<< "$EDITABLE_PATHS"
+    # the framework packages ship their argv bridges as ordinary editable modules
     test -f /workspace/bro/bro/_entrypoints.py
     test -f /workspace/bro-dev/bro_dev/_entrypoints.py
     # every manifest the bake ran from is staged for the entrypoint's reuse gate at

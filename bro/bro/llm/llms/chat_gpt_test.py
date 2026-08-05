@@ -778,7 +778,7 @@ class TestUsageAccounting:
   async def test_agent_publishes_usage_file_after_every_call(self, tmp_path, monkeypatch):
     pointer = tmp_path / 'usage.json'
     monkeypatch.setenv(usage.USAGE_FILE_VARIABLE, str(pointer))
-    gpt, _, captured = _make_chat_gpt_with_tracker([_StaticTool('ping')], agent='bro//ppp-dev')
+    gpt, _, captured = _make_chat_gpt_with_tracker([_StaticTool('ping')], agent='bro//dev')
     first = _fake_response(
       output=[_function_call_item('ping', call_id='c1')],
       usage=_fake_usage(input_tokens=10, output_tokens=5, cached_tokens=0),
@@ -792,7 +792,7 @@ class TestUsageAccounting:
     await gpt.send([{'role': 'user', 'content': 'go'}])
 
     published = usage.read_usage_file(pointer)
-    assert published.agent == 'bro//ppp-dev'
+    assert published.agent == 'bro//dev'
     assert published.per_model == {
       'gpt-5': {'input': 26, 'cache_write': 0, 'cache_read': 4, 'output': 12}
     }

@@ -215,7 +215,7 @@ class Context[T]:
   """per-call context a tool opts into by declaring a `Context`-annotated parameter.
 
   the envelope is built fresh for every call; `state` is the hosting server's
-  long-lived per-server object (flow: its shared `System`), so tools reach
+  long-lived per-server object, so tools reach
   persistent resources without global state. servers without state inject
   `Context[None]`. per-request fields (request id, timing) land here when the
   first consumer does.
@@ -327,16 +327,16 @@ class MCPServer(ABC):
   # credentials this server's tools resolve through the store. unioned across a
   # bro's declared servers (and along each server's own MRO) into
   # `bro.needed_secrets()` so the host can hydrate a scoped credential set per
-  # bro. override with the secret names a subclass actually reads (e.g. flow →
-  # `notion`); the empty default means "no credentials".
+  # bro. override with the secret names a subclass actually reads; the empty
+  # default means "no credentials".
   needed_secrets: tuple[str, ...] = ()
   # credentials this server's tools use *if present* but degrade without (e.g. the
   # LLM key behind a query-focused summary). unioned into `bro.optional_secrets()`,
   # which the host hydrates best-effort (`build_scoped_store(optional=...)`) — an
   # absent one is skipped, not a launch failure. mirrors `needed_secrets`.
   optional_secrets: tuple[str, ...] = ()
-  # the flat namespace this server's tools live in (`flow`, `dev`, `infra`,
-  # `bro`, `<name>-source`). the assembling layer reads it to keep two sources'
+  # the flat namespace this server's tools live in (`tasks`, `dev`, `bro`,
+  # `<name>-source`). the assembling layer reads it to keep two sources'
   # identically-named tools (e.g. `search`) distinct — `ToolRegistry` forms
   # `namespace__tool` wire names; a per-namespace server host mounts it as the
   # endpoint. set by whatever builds the server.
@@ -359,7 +359,7 @@ class MCPServerSpec:
   `needed_secrets` / `optional_secrets` from it before any credential exists
   (a bro's manifest, cw's container scoping) — while `build()` produces the
   live server and runs only in a serving process, so a server's constructor
-  is free to hold real resources (e.g. flow's shared `System`).
+  is free to hold real resources.
   """
 
   build: Callable[[], MCPServer]
@@ -517,8 +517,8 @@ class _NamespacedTool(Tool):
   """wraps a tool to advertise its `namespace__tool` wire name.
 
   the underlying tool keeps its local `name` (the in-namespace identity, and what
-  surfaces that namespace externally — the flow HTTP server, Claude Code's
-  `mcp__flow__` — advertise); the assembling layer wraps it so the bro LLM sees,
+  surfaces that namespace externally — an HTTP MCP server or Claude Code's
+  `mcp__<namespace>__` mount — advertise); the assembling layer wraps it so the bro LLM sees,
   and calls back with, the namespaced wire name.
   """
 
@@ -570,15 +570,14 @@ class Toolset[T]:
 
   one instance per server module, conventionally named `spec` and defined above
   its tools, which register on it with the `@spec.tool('description')`
-  decorator. Call sites read `flow.mcp.spec('add_task')` / `infra.mcp.spec()`: calling
-  the instance validates the tool subset immediately (declaration time) and
+  decorator. Calling the instance with tool names validates the subset immediately
+  at declaration time and
   returns the frozen `MCPServerSpec` manifest; `build()` runs later, in the
   serving process, constructing the per-server state once (`state` factory) and
   injecting it into every selected tool that declares a `Context` parameter.
 
   secrets: the base `get_secrets` returns the static `secrets` class var;
-  subclass and override it when the credential set depends on the selected
-  tools (flow's notion/focus split).
+  subclass and override it when the credential set depends on the selected tools.
   """
 
   # credentials the toolset's tools read through the store when the set is
@@ -666,7 +665,7 @@ class Toolset[T]:
 def as_spec(entry: 'MCPServerSpec | Toolset[Any] | ModuleType') -> MCPServerSpec:
   """a declaration entry normalized to its manifest: a tool-pack module is its
   conventional `spec` Toolset, a bare Toolset is its full roster, a spec passes
-  through. Scoped subsets call the toolset instead (`flow.mcp.spec('add_task')`)."""
+  through. Scoped subsets call the toolset with their selected names."""
   if isinstance(entry, ModuleType):
     toolset = getattr(entry, 'spec', None)
     if not isinstance(toolset, Toolset):

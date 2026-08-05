@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 # module import stays cheap by design: every heavy dependency (mcp, starlette,
-# uvicorn, bro.llm.mcp, flow / the bro graph) is imported inside the function that
+# uvicorn, bro.llm.mcp, and the configured bro graph) is imported inside the function that
 # needs it, so the --http path can bind its socket — and publish the port via
 # --port-file — milliseconds after process start, before the import-dominated
 # tool resolution (see main's bind-before-import ordering).

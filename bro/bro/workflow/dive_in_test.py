@@ -14,7 +14,7 @@ from bro import cw
 
 UUID = '35ad38d8-5a6d-81ea-bce6-e4caf17ece7f'
 HEX = '35ad38d85a6d81eabce6e4caf17ece7f'
-URL = f'https://app.notion.com/p/my-task-{HEX}'
+URL = f'https://tracker.example/tasks/my-task-{HEX}'
 FRESH_SHA = 'a' * 40
 
 
@@ -113,17 +113,17 @@ class TestShellCommandReconstruction:
   """the visual banner receives the wrapper invocation, not the underlying `cw ss`."""
 
   def test_forwarded_flags_appear_in_the_reconstruction(self, fake_proj, monkeypatch):
-    monkeypatch.delenv('PPP_SHELL_COMMAND', raising=False)
+    monkeypatch.delenv('BRO_SHELL_COMMAND', raising=False)
     rc = dive_in.main(['dive-in', '-n', '--hold', 'guided', '--bro', 'ppp-dev'])
     assert rc == 0
-    assert os.environ['PPP_SHELL_COMMAND'] == 'dive-in --hold guided --bro ppp-dev'
+    assert os.environ['BRO_SHELL_COMMAND'] == 'dive-in --hold guided --bro ppp-dev'
 
   def test_new_seed_keeps_the_prompt_marker_tail(self, fake_proj, monkeypatch):
-    monkeypatch.delenv('PPP_SHELL_COMMAND', raising=False)
+    monkeypatch.delenv('BRO_SHELL_COMMAND', raising=False)
     rc = dive_in.main(['dive-in', '-n', '--new', 'do a thing'])
     assert rc == 0
     # `cw banner` splits the user prompt off at the last ` --new ` marker
-    assert os.environ['PPP_SHELL_COMMAND'] == 'dive-in --new do a thing'
+    assert os.environ['BRO_SHELL_COMMAND'] == 'dive-in --new do a thing'
 
 
 class TestBaseRef:
@@ -150,10 +150,10 @@ class TestBaseRef:
     assert args['into'] is None
 
   def test_resolved_sha_stays_out_of_the_shell_command(self, fake_proj, monkeypatch):
-    monkeypatch.delenv('PPP_SHELL_COMMAND', raising=False)
+    monkeypatch.delenv('BRO_SHELL_COMMAND', raising=False)
     rc = dive_in.main(['dive-in', '-n'])
     assert rc == 0
-    assert os.environ['PPP_SHELL_COMMAND'] == 'dive-in'
+    assert os.environ['BRO_SHELL_COMMAND'] == 'dive-in'
 
 
 class TestNewMode:

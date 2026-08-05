@@ -16,7 +16,7 @@ def _auth(token: str = TOKEN) -> dict[str, str]:
 def _create_payload(**overrides) -> dict:
   payload = {
     'harness': 'bro',
-    'bro': 'ppp-dev',
+    'bro': 'dev',
     'version': '2',
     'interactive': False,
     'surface': 'ask',

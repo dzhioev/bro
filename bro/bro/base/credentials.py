@@ -689,8 +689,7 @@ def host_registry() -> dict[str, Secret]:
 def _load_registry() -> dict[str, Secret]:
   # CREDENTIALS_REGISTRY points the process at an explicit registry file, above
   # every other source of one — for a run that must resolve against a specific
-  # registry (e.g. emails/run_e2e_tests.sh pointing the harness at the pipeline's
-  # ssm-backed registry). a bad path raises rather than falling through: an
+  # registry, such as an integration harness using a service-specific registry. a bad path raises rather than falling through: an
   # explicit override that silently degraded to the built-in would resolve
   # against the wrong secret set.
   override = os.environ.get(REGISTRY_ENV)

@@ -20,7 +20,7 @@ inside `output`.
 
 Two cumulative-usage sources, unified by `current_usage()`:
 
-- the usage file — the env-pointed (`PPP_USAGE_FILE`) JSON snapshot a native bro
+- the usage file — the env-pointed (`BRO_USAGE_FILE`) JSON snapshot a native bro
   run's LLM loop publishes after every API call (`publish`). Written atomically
   (temp + rename) and self-describing (`{"agent": ..., "models": {slug: counts}}`):
   the reader cannot trust the environment for the agent — an in-process bro run
@@ -38,7 +38,7 @@ thousands separator so it never collides with the `, ` joining model entries):
 
 `<agents>` is a `, `-joined list of surface identities — `Claude Code <version>`
 for a Claude Code session, the usage file's agent unversioned (a bro run
-publishes `bro//<name>`, e.g. `bro//ppp-dev`); a squash footer unions the
+publishes `bro//<name>`, e.g. `bro//dev`); a squash footer unions the
 agents of the commits it aggregates.
 `↑(…)` groups the upload classes (input, cache_write, cache_read, in that
 order); `↓` marks output. `parse_footer` also accepts the historic shape that
@@ -66,7 +66,7 @@ from bro.monitor import claude_config_dir, working_projects_dir
 
 __cli_name__ = 'usage'
 
-USAGE_FILE_VARIABLE = 'PPP_USAGE_FILE'
+USAGE_FILE_VARIABLE = 'BRO_USAGE_FILE'
 SESSION_ID_VARIABLE = 'CLAUDE_CODE_SESSION_ID'
 
 _THOUSANDS = "'"
@@ -109,7 +109,7 @@ def subtract(a: Counts, b: Counts) -> Counts:
 class Usage:
   """a surface's cumulative spend: who spent it and how much per model."""
 
-  agent: str  # surface identity, e.g. 'Claude Code 2.1.201' or 'ppp-dev'
+  agent: str  # surface identity, e.g. 'Claude Code 2.1.201' or 'bro//dev'
   per_model: dict[str, Counts]  # keyed by model slug
 
 
@@ -126,7 +126,7 @@ def publish(agent: str, per_model: dict[str, Counts]) -> None:
   """
   pointer = os.environ.get(USAGE_FILE_VARIABLE)
   if pointer is None:
-    pointer = str(Path(tempfile.gettempdir()) / f'ppp-usage-{os.getpid()}.json')
+    pointer = str(Path(tempfile.gettempdir()) / f'bro-usage-{os.getpid()}.json')
     os.environ[USAGE_FILE_VARIABLE] = pointer
   path = Path(pointer)
   payload = json.dumps({'agent': agent, 'models': per_model}, indent=2)

@@ -136,7 +136,7 @@ def main(argv: list[str]) -> Optional[int]:
   )
   args = parser.parse(argv)
   os.environ.setdefault(
-    'PPP_SHELL_COMMAND',
+    'BRO_SHELL_COMMAND',
     ' '.join(parser.reconstruct(args, prog=['dive-in'], exclude=('dry_run',))),
   )
   if args['hold'] is None:

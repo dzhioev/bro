@@ -8,6 +8,6 @@ for variable in (
   'BRO_LOG_LEVEL',
   'CREDENTIALS_REGISTRY',
   'CW_RUNNER_PID',
-  'PPP_USAGE_FILE',
+  'BRO_USAGE_FILE',
 ):
   os.environ.pop(variable, None)

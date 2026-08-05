@@ -54,7 +54,7 @@ class SessionFacts:
     - container_workspace — '/workspace' inside a container, else None
     - exec_command — `cw exec <name>` for container sessions
     - cw_command — the canonical `cw ss …` invocation (CW_COMMAND)
-    - shell_command — the outer launch command (PPP_SHELL_COMMAND). For wrappers
+    - shell_command — the outer launch command (BRO_SHELL_COMMAND). For wrappers
       like dive-in this differs from cw_command; for direct `cw ss` use the two
       are equal and the banner suppresses the duplicate
     - prompt — the user-typed prompt extracted from shell_command when a
@@ -88,7 +88,7 @@ class SessionFacts:
     name = os.environ.get('CW_NAME') or None
     bro = bro_override if bro_override is not None else (os.environ.get('CW_BRO') or None)
     cw_command = os.environ.get('CW_COMMAND') or None
-    shell_command = os.environ.get('PPP_SHELL_COMMAND') or cw_command
+    shell_command = os.environ.get('BRO_SHELL_COMMAND') or cw_command
     host_workspace: Optional[str] = os.environ.get('CW_HOST_WORKSPACE') or None
     container_workspace: Optional[str] = '/workspace' if in_container else None
 

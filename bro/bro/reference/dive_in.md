@@ -14,7 +14,7 @@ This document explains the modes, workspace naming, the dispatcher-command seedi
 
 ### Task mode (`-t / --task <ref>`)
 
-`-t` accepts any task ref the repo's brog backend takes natively (see `bro/bro/brog/CLAUDE.md`): with the flow backend a Notion URL or a dashed UUID, with the GitHub backend an issue number, `#N`, or an issue URL. The ref is resolved host-side through `bro.brog.system.default_system()`, which normalizes it to the backend's canonical id — the value `CW_TASK_ID` carries.
+`-t` accepts any task ref the repository's configured brog backend takes natively (see `bro/bro/brog/CLAUDE.md`). The built-in GitHub backend accepts an issue number, `#N`, or an issue URL; contributed backends define their own refs. The ref is resolved host-side through `bro.brog.system.default_system()`, which normalizes it to the backend's canonical id — the value `CW_TASK_ID` carries.
 
 The first user message becomes `@:fix <original-task-ref>:@` — the ref exactly as the user typed it — followed by the pre-fetched task block (see "Initial-prompt composition").
 
@@ -85,6 +85,6 @@ Known gap: `CW_TASK_ID` lives only in the launching `dive-in` process's environm
 ## Env-var handoff
 
 - `CW_TASK_ID` — set to the resolved task's canonical brog id in task mode (`-t`). Read by the `@::run-pr` script to build the commit footer's `Task: <url>` line (via `brog::get_task(id).url`).
-- `PPP_SHELL_COMMAND` — set (if not already set) to the user-facing reconstruction of the dive-in invocation. The visual `cw banner` shows it as the outer launch command and extracts the user prompt from it; the agent-facing `cw banner --llm` omits it.
+- `BRO_SHELL_COMMAND` — set (if not already set) to the user-facing reconstruction of the dive-in invocation. The visual `cw banner` shows it as the outer launch command and extracts the user prompt from it; the agent-facing `cw banner --llm` omits it.
 
 The user-facing `dive-in` reconstruction is rebuilt from dive-in's own parser (`Parser.reconstruct` with prog `dive-in`) so the visual banner shows `dive-in`, not the underlying `cw ss`.

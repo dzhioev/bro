@@ -27,7 +27,7 @@ import sys
 from typing import Optional
 
 # footer parser (format owned by bro.llm.usage); the agents part is a
-# surface identity list — 'Claude Code <version>' or a bro name like 'ppp-dev'
+# surface identity list — 'Claude Code <version>' or a bro identity like 'bro//dev'
 _FOOTER_RE = re.compile(
   r'^>\s*created with\s+(?P<agents>.+?)\s*\|\s*(?P<tokens>.+?)\s*$',
   re.MULTILINE,

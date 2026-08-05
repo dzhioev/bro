@@ -20,8 +20,8 @@ for arg in "$@"; do
   esac
 done
 
-# profile: a checkout vendoring ppp as a submodule needs only the tools cw
-# operates with; ppp development itself needs the full set
+# profile: a checkout vendoring the framework as a submodule needs only the tools cw
+# operates with; framework development itself needs the full set
 if [ -n "$(git -C "$SCRIPT_DIR/../../.." rev-parse --show-superproject-working-tree)" ]; then
   PROFILE=core
 else
@@ -32,7 +32,7 @@ fi
 # successful run on this host: the stamp records a hash of this script and the
 # pinned versions it enforces. system drift behind an unchanged stamp is not
 # re-checked — run with --force to re-verify the installed tools.
-STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/ppp"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/bro"
 STAMP="$STATE_DIR/setup-env-$PROFILE.stamp"
 INPUTS_HASH="$(
   cat "$SCRIPT_DIR/setup_env.sh" "$SCRIPT_DIR/versions.sh" "$SCRIPT_DIR"/ubuntu/*.sh \

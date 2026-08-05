@@ -6,8 +6,8 @@ BRO_CONFIGS_DIR = os.environ.get('BRO_CONFIGS_DIR')
 if BRO_CONFIGS_DIR == '':
   raise ValueError('BRO_CONFIGS_DIR must not be empty')
 
-# the standalone host secret store; host-side writable caches (gmail token,
-# twitch token) write here directly.
+# the standalone host secret store; host-side writable credential caches write
+# here directly.
 DEFAULT_BRO_DIR = os.path.expanduser('~/.bro')
 
 

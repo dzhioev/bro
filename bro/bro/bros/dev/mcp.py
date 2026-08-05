@@ -3,9 +3,8 @@
 Each tool wraps a primitive a Claude Code session would normally reach as a
 built-in (Read / Write / Edit / Bash / Grep / Glob / run_in_background +
 TaskOutput / TaskStop). Exposing them via MCP keeps the Bro abstraction
-declarative — the dev Bro picks the tool set, the LLM (chat_gpt) reaches them
-through the same ToolRegistry that wraps the flow and infra toolsets. Same
-shape as `infra/mcp.py`.
+declarative: the dev Bro picks the toolset and the LLM reaches it through the
+same `ToolRegistry` used by every MCP provider.
 
 Shared behaviour (output `limit`, skipped-content markers, fat-finger clamp,
 the background-job model) lives in sibling `REFERENCE.md` so per-tool

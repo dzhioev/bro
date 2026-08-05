@@ -39,7 +39,7 @@ _DOCKER_FORWARD_ENV = (
   'GIT_COMMITTER_NAME',
   'GIT_COMMITTER_EMAIL',
   'BRO_LOG_LEVEL',
-  'PPP_SHELL_COMMAND',
+  'BRO_SHELL_COMMAND',
   # docker defaults containers to TERM=xterm (a low color tier that flattens
   # dim/256-color TUIs); forward the host TERM so in-container colors match.
   'TERM',
@@ -123,10 +123,8 @@ def find_container_id(session: Path) -> Optional[str]:
   return ids[0]
 
 
-# tagged by setup/container/test_smoke.sh, which owns its lifecycle; the smoke
-# test always builds with the ppp checkout as the project context, so the
-# literal repository is correct regardless of the operated repo's config
-_SMOKE_TEST_TAG = 'bro/ppp-dev:smoke-test'
+# tagged by setup/container/test_smoke.sh, which owns its lifecycle
+_SMOKE_TEST_TAG = 'bro/framework:smoke-test'
 
 
 def image_tag() -> str:

@@ -1,10 +1,8 @@
-# bros are defined here (name -> "module:ClassName") for this repo's bros, or
-# outside of the repo by bro-framework users — through the `bro` entry-point
-# group their own pyproject declares (resolved by bro/registry.py).
-# the registry imports a bro's module lazily, on first lookup by name, so
-# `create_bro('pm')` pulls in only PM's dependency graph — not every other bro's
-# (librorian's trafilatura/dateparser, devoops's boto3, ...). the map carries no
-# imports itself, so reading it is free; the key must equal the class's own
+# built-in bros are defined here as name -> "module:ClassName"; installed
+# distributions contribute others through the `bro` entry-point group. the registry
+# imports a bro's module lazily on first lookup by name, so resolving one bro never
+# imports another's dependency graph. the map carries no imports itself, so reading
+# it is free; the key must equal the class's own
 # `name` attribute (the registry validates this on load).
 BRO_SPECS: dict[str, str] = {
   'bro': 'bro.bros.bro:Bro',

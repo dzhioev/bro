@@ -25,8 +25,8 @@ from bro.runtime.mcp_server import BEARER_TOKEN_ENV
 # this is generous headroom, not expected latency.
 _BIND_TIMEOUT = 30.0
 
-# how long /health may take to answer after the bind: the full tool import
-# (bro graph → flow → notion → boto3) runs behind it, seconds in practice.
+# how long /health may take to answer after the bind: the full configured tool
+# graph imports behind it and can take seconds.
 _HEALTH_TIMEOUT = 60.0
 
 

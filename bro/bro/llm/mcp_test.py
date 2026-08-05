@@ -644,7 +644,7 @@ class TestSelect:
 
 class TestWireName:
   def test_joins_with_double_underscore(self):
-    assert wire_name('flow', 'get_task_info') == 'flow__get_task_info'
+    assert wire_name('tasks', 'get_task_info') == 'tasks__get_task_info'
 
   def test_local_hyphen_and_single_underscore_preserved(self):
     assert wire_name('wikipedia-source', 'get_time') == 'wikipedia-source__get_time'
@@ -656,7 +656,7 @@ class TestWireName:
 
 class TestCanonicalName:
   def test_inverts_wire_name(self):
-    assert canonical_name('flow__get_task_info') == 'flow::get_task_info'
+    assert canonical_name('tasks__get_task_info') == 'tasks::get_task_info'
     assert canonical_name('wikipedia-source__get_time') == 'wikipedia-source::get_time'
 
   def test_unnamespaced_name_passes_through(self):

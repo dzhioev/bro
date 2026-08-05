@@ -68,7 +68,7 @@ def test_bare_summon_help_names_check_and_list(capsys):
 
 def test_bare_summon_forwards_with_its_own_shell_command(monkeypatch):
   calls: list[tuple] = []
-  monkeypatch.delenv('PPP_SHELL_COMMAND', raising=False)
+  monkeypatch.delenv('BRO_SHELL_COMMAND', raising=False)
   monkeypatch.setattr(
     summon,
     'relay_summon',
@@ -79,7 +79,7 @@ def test_bare_summon_forwards_with_its_own_shell_command(monkeypatch):
 
   assert summon.main(['summon', '--timeout', '60', 'devoops', 'deploy']) == 0
   assert calls == [('devoops', 'deploy', 60.0, None)]
-  assert os.environ['PPP_SHELL_COMMAND'] == 'summon --timeout 60.0 devoops deploy'
+  assert os.environ['BRO_SHELL_COMMAND'] == 'summon --timeout 60.0 devoops deploy'
 
 
 def test_errors_without_a_channel(monkeypatch, capsys, caplog):

@@ -24,8 +24,8 @@ class DataSource(ABC):
   summary: str
   # credentials this source resolves through the store. unioned (along the MRO)
   # into `bro.needed_secrets()` so the host can hydrate a scoped credential set
-  # per bro. override with the API key a subclass reads (e.g. TMDb → `tmdb`); the
-  # empty default means "no credentials" (e.g. Wikipedia, OpenLibrary).
+  # per bro. override with the API key a subclass reads; the empty default means
+  # "no credentials" (e.g. Wikipedia).
   needed_secrets: tuple[str, ...] = ()
   # credentials this source uses *if present* but degrades without (e.g. the LLM
   # key behind a query-focused fetch summary). unioned into
