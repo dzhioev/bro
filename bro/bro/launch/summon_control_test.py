@@ -9,10 +9,16 @@ from bro.broker.brotocol import Message
 from bro.broker.dispatcher import Dispatcher
 
 
+@pytest.fixture(autouse=True)
+def seeded_framework_bro(monkeypatch):
+  from bro.registry import get_class
+
+  monkeypatch.setattr(get_class('bro-dev'), 'may_summon', ('devoops',))
+
+
 class TestSummonAllowList:
   def test_seeds_from_the_bros_may_summon(self):
-    # ppp-dev carries the v1 seed; a plain session summons devoops flagless
-    assert bro.launch.summon_control.summon_allow_list('ppp-dev', grant=[], revoke=[]) == {
+    assert bro.launch.summon_control.summon_allow_list('bro-dev', grant=[], revoke=[]) == {
       'devoops'
     }
 
@@ -26,12 +32,12 @@ class TestSummonAllowList:
 
   def test_revoke_removes_a_seed(self):
     assert (
-      bro.launch.summon_control.summon_allow_list('ppp-dev', grant=[], revoke=['devoops']) == set()
+      bro.launch.summon_control.summon_allow_list('bro-dev', grant=[], revoke=['devoops']) == set()
     )
 
   def test_grant_already_allowed_raises(self):
     with pytest.raises(ValueError, match='already in the summon allow-list'):
-      bro.launch.summon_control.summon_allow_list('ppp-dev', grant=['devoops'], revoke=[])
+      bro.launch.summon_control.summon_allow_list('bro-dev', grant=['devoops'], revoke=[])
 
   def test_revoke_absent_raises(self):
     with pytest.raises(ValueError, match='not in the summon allow-list'):
@@ -45,7 +51,7 @@ class TestSummonAllowList:
 
   def test_unregistered_revoke_target_raises(self):
     with pytest.raises(ValueError, match='unknown summon target'):
-      bro.launch.summon_control.summon_allow_list('ppp-dev', grant=[], revoke=['devop'])
+      bro.launch.summon_control.summon_allow_list('bro-dev', grant=[], revoke=['devop'])
 
   def test_unknown_bro_degrades_to_empty_seeds_with_a_warning(self, caplog):
     # mirrors credential scoping: an ambient CW_BRO this checkout doesn't know
@@ -215,17 +221,17 @@ class TestSummonHandler:
     assert 'does not hold: aws' in payload['error']
 
   def test_a_childs_grants_are_bounded_by_its_own_scope(self, tmp_path):
-    # the bound follows the chain: a summoned ppp-dev holds github (its
+    # the bound follows the chain: a summoned bro-dev holds github (its
     # extra_secrets) and can hand that down, but nothing it never held
-    control = _control(tmp_path, {'ppp-dev'})
+    control = _control(tmp_path, {'bro-dev'})
     context = FakeContext()
-    message = _summon_message(target='ppp-dev')
+    message = _summon_message(target='bro-dev')
     control.handle(cast(Dispatcher, context), ROOT, message)
     context.origin[CHILD] = (ROOT, message.id)
     control.handle(
       cast(Dispatcher, context), CHILD, _summon_message(target='devoops', grant=['github'])
     )
-    assert [launch.target for launch, _, _ in context.spawned] == ['ppp-dev', 'devoops']
+    assert [launch.target for launch, _, _ in context.spawned] == ['bro-dev', 'devoops']
     control.handle(
       cast(Dispatcher, context), CHILD, _summon_message(target='devoops', grant=['gmail_creds'])
     )
@@ -233,12 +239,12 @@ class TestSummonHandler:
     assert 'does not hold: gmail_creds' in payload['error']
 
   def test_no_op_bro_override_is_denied(self, tmp_path):
-    # ppp-dev already seeds devoops: the strictness of the launcher flags holds
+    # bro-dev already seeds devoops: the strictness of the launcher flags holds
     # on the wire too
-    control = _control(tmp_path, {'ppp-dev'})
+    control = _control(tmp_path, {'bro-dev'})
     context = FakeContext()
     # cast: FakeContext stands in for the Dispatcher surface structurally
-    control.handle(cast(Dispatcher, context), ROOT, _summon_message(target='ppp-dev', grant=['@devoops']))  # fmt: skip
+    control.handle(cast(Dispatcher, context), ROOT, _summon_message(target='bro-dev', grant=['@devoops']))  # fmt: skip
     assert context.spawned == []
     [(_, payload)] = context.replies
     assert 'already in the summon allow-list' in payload['error']
@@ -266,11 +272,11 @@ class TestSummonHandler:
     assert launch.parent_workspace == tmp_path / 'var' / 'cw' / 'containers' / 'ws'
 
   def test_child_summon_follows_its_own_seeds(self, tmp_path):
-    # a summoned ppp-dev child summons devoops (ppp-dev's static seed): spawned
+    # a summoned bro-dev child summons devoops (bro-dev's static seed): spawned
     # with the child as the parent, audit + status naming the child as summoner
-    control = _control(tmp_path, {'ppp-dev'})
+    control = _control(tmp_path, {'bro-dev'})
     context = FakeContext()
-    request = _summon_child(control, context, CHILD, 'ppp-dev')
+    request = _summon_child(control, context, CHILD, 'bro-dev')
     control.observe_delivery(
       CHILD, ROOT, Message(type='started', payload={'trail_id': 'T1'}, in_reply_to=request.id)
     )
@@ -289,14 +295,14 @@ class TestSummonHandler:
     assert peer == CHILD
     spawn_record = _audit(tmp_path)[-1]
     assert spawn_record['event'] == 'spawn'
-    assert spawn_record['summoner'] == {'target': 'ppp-dev', 'trail_id': 'T1'}
+    assert spawn_record['summoner'] == {'target': 'bro-dev', 'trail_id': 'T1'}
     [child_active] = [a for a in _status(tmp_path)['active'] if a['request_id'] == child_request.id]
-    assert child_active['summoner'] == {'target': 'ppp-dev', 'trail_id': 'T1'}
+    assert child_active['summoner'] == {'target': 'bro-dev', 'trail_id': 'T1'}
 
   def test_child_source_lands_on_the_spawned_summoned_by(self, tmp_path):
-    control = _control(tmp_path, {'ppp-dev'})
+    control = _control(tmp_path, {'bro-dev'})
     context = FakeContext()
-    request = _summon_child(control, context, CHILD, 'ppp-dev')
+    request = _summon_child(control, context, CHILD, 'bro-dev')
     control.observe_delivery(
       CHILD, ROOT, Message(type='started', payload={'trail_id': 'T1'}, in_reply_to=request.id)
     )
@@ -383,11 +389,11 @@ class TestSummonHandler:
     assert deny_record['summoner'] is None
 
   def test_depth_cap_denies_a_grandchilds_summon(self, tmp_path):
-    # root (0) → ppp-dev child (1) → devoops grandchild (2): the grandchild's own
+    # root (0) → bro-dev child (1) → devoops grandchild (2): the grandchild's own
     # summon would nest to depth 3, over the cap — denied before any list check
-    control = _control(tmp_path, {'ppp-dev'})
+    control = _control(tmp_path, {'bro-dev'})
     context = FakeContext()
-    _summon_child(control, context, CHILD, 'ppp-dev')
+    _summon_child(control, context, CHILD, 'bro-dev')
     _summon_child(control, context, GRANDCHILD, 'devoops', parent=CHILD)
     assert context.replies == []
     control.handle(cast(Dispatcher, context), GRANDCHILD, _summon_message(target='devoops'))

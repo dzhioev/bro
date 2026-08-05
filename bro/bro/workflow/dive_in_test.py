@@ -90,10 +90,10 @@ class TestLaunchCommand:
 
   def test_forwarded_flags_ride_verbatim(self, fake_proj, capsys, monkeypatch):
     monkeypatch.delenv('CW_BRO', raising=False)
-    rc = dive_in.dive_in(forwarded=['--bro', 'ppp-dev'], dry_run=True)
+    rc = dive_in.dive_in(forwarded=['--bro', 'bro-dev'], dry_run=True)
     assert rc == 0
     args = cw.build_parser().parse(shlex.split(capsys.readouterr().out.strip()))
-    assert args['bro'] == 'ppp-dev'
+    assert args['bro'] == 'bro-dev'
     assert len(args['claude_args']) == 0
     # cw owns the session theming (persona default, CW_BRO export); dive-in
     # must not preempt it
@@ -114,9 +114,9 @@ class TestShellCommandReconstruction:
 
   def test_forwarded_flags_appear_in_the_reconstruction(self, fake_proj, monkeypatch):
     monkeypatch.delenv('BRO_SHELL_COMMAND', raising=False)
-    rc = dive_in.main(['dive-in', '-n', '--hold', 'guided', '--bro', 'ppp-dev'])
+    rc = dive_in.main(['dive-in', '-n', '--hold', 'guided', '--bro', 'bro-dev'])
     assert rc == 0
-    assert os.environ['BRO_SHELL_COMMAND'] == 'dive-in --hold guided --bro ppp-dev'
+    assert os.environ['BRO_SHELL_COMMAND'] == 'dive-in --hold guided --bro bro-dev'
 
   def test_new_seed_keeps_the_prompt_marker_tail(self, fake_proj, monkeypatch):
     monkeypatch.delenv('BRO_SHELL_COMMAND', raising=False)
@@ -171,7 +171,7 @@ class TestNewMode:
 
   def test_raw_flavor_uses_the_same_dispatcher_command(self, fake_proj, capsys):
     rc = dive_in.dive_in(
-      forwarded=['--raw', '--bro', 'ppp-dev'], dry_run=True, new=True, command='do a thing'
+      forwarded=['--raw', '--bro', 'bro-dev'], dry_run=True, new=True, command='do a thing'
     )
     assert rc == 0
     tokens = shlex.split(capsys.readouterr().out.strip())
@@ -217,7 +217,7 @@ class TestTaskMode:
   ):
     monkeypatch.setattr(dive_in, '_prefetch_task', lambda system, ref: (_brog_task(), 'task block'))
     rc = dive_in.dive_in(
-      forwarded=['--raw', '--bro', 'ppp-dev'],
+      forwarded=['--raw', '--bro', 'bro-dev'],
       dry_run=True,
       task=URL,
       command='run the focused checks',
@@ -268,7 +268,7 @@ class TestPrefetchTask:
         return [
           Comment(
             topic='plan',
-            author='ppp-dev',
+            author='bro-dev',
             timestamp=datetime(2026, 1, 1, 12, 0, tzinfo=UTC),
             body='the plan',
           )

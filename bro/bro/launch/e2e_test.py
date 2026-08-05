@@ -965,7 +965,7 @@ def scenario_f(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> Liv
     env,
     name,
     _inplace_command('cw', 'ss', '--in-place', '--fast', name),
-    extra_env={'CW_BRO': 'ppp-dev', 'CW_E2E_SECRETS': '["brog"]'},
+    extra_env={'CW_BRO': 'bro-dev', 'CW_E2E_SECRETS': '["brog"]'},
   )
   request.addfinalizer(driver.close)
   run = LiveRun(exit_code=driver.wait(300), output=driver.output())

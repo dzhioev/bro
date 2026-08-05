@@ -322,7 +322,7 @@ class TestDockerCreateArgv:
     # every container runs its own bro, set explicitly via extra_env by the
     # launch surface — the caller's ambient CW_BRO must not leak in and
     # mis-theme it.
-    monkeypatch.setenv('CW_BRO', 'ppp-dev')
+    monkeypatch.setenv('CW_BRO', 'dev')
     assert 'CW_BRO' not in build_argv()
     assert 'CW_BRO=pm' in build_argv(extra_env={'CW_BRO': 'pm'})
 

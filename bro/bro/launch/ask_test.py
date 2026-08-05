@@ -57,25 +57,25 @@ def test_main_re_execs_into_container_when_outside():
   ):
     env.pop('CW_IN_CONTAINER', None)
     env.pop('BRO_SHELL_COMMAND', None)
-    rc = main(['ask', 'ppp-dev', 'hello world', '--rich'])
+    rc = main(['ask', 'bro-dev', 'hello world', '--rich'])
     assert rc == 0
-    assert env['BRO_SHELL_COMMAND'] == 'ask --rich ppp-dev hello world'
+    assert env['BRO_SHELL_COMMAND'] == 'ask --rich bro-dev hello world'
     assert run.call_count == 1
     launch = run.call_args.args[0]
-    assert launch.name.startswith('ask-ppp-dev-')
+    assert launch.name.startswith('ask-bro-dev-')
     assert launch.command == [
       'bro',
       'run',
-      'ppp-dev',
+      'bro-dev',
       'hello world',
       '--rich',
       '--fast',
       '--in-place',
     ]
     assert run.call_args.kwargs['drop'] is True
-    # ppp-dev's manifest (github + brog) plus the mandatory trails sink
+    # bro-dev's manifest (github + brog) plus the mandatory trails sink
     assert {'github', 'brog', 'trails'} <= launch.secrets
-    # ppp-dev doesn't deploy → no docker socket
+    # bro-dev doesn't deploy → no docker socket
     assert launch.docker_sock is False
 
 
@@ -85,12 +85,12 @@ def test_main_forwards_implied_fast_into_container():
     patch('bro.launch.root.run_in_container', return_value=0) as run,
   ):
     env.pop('CW_IN_CONTAINER', None)
-    rc = main(['ask', 'ppp-dev', 'hello'])
+    rc = main(['ask', 'bro-dev', 'hello'])
     assert rc == 0
     command = run.call_args.args[0].command
     # ask implies --fast; the inner bro run defaults to the plain spec, so the
     # implied fast must ride the inner argv explicitly
-    assert command == ['bro', 'run', 'ppp-dev', 'hello', '--fast', '--in-place']
+    assert command == ['bro', 'run', 'bro-dev', 'hello', '--fast', '--in-place']
 
 
 def test_main_forwards_effort_into_container():
@@ -99,11 +99,11 @@ def test_main_forwards_effort_into_container():
     patch('bro.launch.root.run_in_container', return_value=0) as run,
   ):
     env.pop('CW_IN_CONTAINER', None)
-    rc = main(['ask', 'ppp-dev', 'hello', '--effort', 'low'])
+    rc = main(['ask', 'bro-dev', 'hello', '--effort', 'low'])
     assert rc == 0
     command = run.call_args.args[0].command
     # --effort is forwarded like the implied --fast; the in-container run applies with_effort
-    assert command == ['bro', 'run', 'ppp-dev', 'hello', '--fast', '--effort', 'low', '--in-place']
+    assert command == ['bro', 'run', 'bro-dev', 'hello', '--fast', '--effort', 'low', '--in-place']
 
 
 def test_main_forwards_hold_into_container():
@@ -112,13 +112,13 @@ def test_main_forwards_hold_into_container():
     patch('bro.launch.root.run_in_container', return_value=0) as run,
   ):
     env.pop('CW_IN_CONTAINER', None)
-    rc = main(['ask', 'ppp-dev', 'hello', '--hold', 'attended'])
+    rc = main(['ask', 'bro-dev', 'hello', '--hold', 'attended'])
     assert rc == 0
     command = run.call_args.args[0].command
     assert command == [
       'bro',
       'run',
-      'ppp-dev',
+      'bro-dev',
       'hello',
       '--fast',
       '--hold',
@@ -132,7 +132,7 @@ def test_main_forwards_hold_into_container():
     patch('bro.launch.root.run_in_container', return_value=0) as run,
   ):
     env.pop('CW_IN_CONTAINER', None)
-    assert main(['ask', 'ppp-dev', 'hello']) == 0
+    assert main(['ask', 'bro-dev', 'hello']) == 0
     assert '--hold' not in run.call_args.args[0].command
 
 
@@ -170,27 +170,27 @@ def test_main_no_trails_disables_recording_in_container():
     patch('bro.launch.root.run_in_container', return_value=0) as run,
   ):
     env.pop('CW_IN_CONTAINER', None)
-    rc = main(['ask', 'ppp-dev', 'hello', '--no-trails'])
+    rc = main(['ask', 'bro-dev', 'hello', '--no-trails'])
     assert rc == 0
     launch = run.call_args.args[0]
     # the env var carries the effect in, so --no-trails isn't forwarded into the inner argv
-    assert launch.command == ['bro', 'run', 'ppp-dev', 'hello', '--fast', '--in-place']
+    assert launch.command == ['bro', 'run', 'bro-dev', 'hello', '--fast', '--in-place']
     assert 'trails' not in launch.secrets
     assert launch.env == {
-      'CW_BRO': 'ppp-dev',
+      'CW_BRO': 'bro-dev',
       'TRAILS_DISABLED': '1',
-      **bro_git_identity_env('ppp-dev'),
+      **bro_git_identity_env('bro-dev'),
     }
 
 
 def test_main_no_trails_with_in_place_is_an_error():
   with pytest.raises(SystemExit):
-    main(['ask', 'ppp-dev', 'hello', '--no-trails', '--in-place'])
+    main(['ask', 'bro-dev', 'hello', '--no-trails', '--in-place'])
 
 
 def test_main_rejects_removed_host_flag():
   with pytest.raises(SystemExit):
-    main(['ask', 'ppp-dev', 'hello', '--host'])
+    main(['ask', 'bro-dev', 'hello', '--host'])
 
 
 def test_main_refuses_implicit_run_inside_container(capsys):
@@ -199,7 +199,7 @@ def test_main_refuses_implicit_run_inside_container(capsys):
     patch('bro.launch.root.run_in_container') as run,
     patch('bro.summon.relay_summon') as relay,
   ):
-    rc = main(['ask', 'ppp-dev', 'hi'])
+    rc = main(['ask', 'bro-dev', 'hi'])
   assert rc == 1
   assert run.call_count == 0
   assert relay.call_count == 0
@@ -210,11 +210,11 @@ def test_main_refuses_implicit_run_inside_container(capsys):
 
 def test_main_summon_forwards_timeout_and_into():
   with patch('bro.summon.relay_summon', return_value=0) as relay:
-    rc = main(['ask', 'ppp-dev', 'hi', '--summon', '--timeout', '7200', '--into', 'feature-branch'])
+    rc = main(['ask', 'bro-dev', 'hi', '--summon', '--timeout', '7200', '--into', 'feature-branch'])
   assert rc == 0
   # the alias's implied --fast shapes the summoned child too: someone waits on the reply
   relay.assert_called_once_with(
-    'ppp-dev',
+    'bro-dev',
     'hi',
     timeout=7200.0,
     into='feature-branch',
@@ -228,10 +228,10 @@ def test_main_summon_forwards_timeout_and_into():
 
 def test_main_summon_detaches(capsys):
   with patch('bro.summon.summon_detached', return_value='REQUEST-ID') as detached:
-    rc = main(['ask', 'ppp-dev', 'hi', '--summon', '--detach'])
+    rc = main(['ask', 'bro-dev', 'hi', '--summon', '--detach'])
   assert rc == 0
   detached.assert_called_once_with(
-    'ppp-dev',
+    'bro-dev',
     'hi',
     timeout=None,
     into=None,
@@ -246,13 +246,13 @@ def test_main_summon_detaches(capsys):
 
 def test_main_summon_statically_rejects_local_flags():
   with pytest.raises(SystemExit):
-    main(['ask', 'ppp-dev', 'hi', '--summon', '--rich'])
+    main(['ask', 'bro-dev', 'hi', '--summon', '--rich'])
 
 
 def test_main_timeout_without_summon_errors(capsys):
   with patch.dict('os.environ', {}, clear=False) as env:
     env.pop('CW_IN_CONTAINER', None)
-    rc = main(['ask', 'ppp-dev', 'hi', '--timeout', '60'])
+    rc = main(['ask', 'bro-dev', 'hi', '--timeout', '60'])
   assert rc == 1
   assert 'require --summon' in capsys.readouterr().err
 

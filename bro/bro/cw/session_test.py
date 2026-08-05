@@ -53,7 +53,7 @@ def configured_project(monkeypatch):
   monkeypatch.setattr(
     cw_session,
     'project_config',
-    lambda: workspace_project.ProjectConfig(default_bro='ppp-dev', image_repository='bro/ppp-dev'),
+    lambda: workspace_project.ProjectConfig(default_bro='bro-dev', image_repository='bro/bro-dev'),
   )
 
 
@@ -161,7 +161,7 @@ class TestSummonAllowList:
       rc = cw_session.start_session(_spec(drop=True, grant=['@devoops']))
     assert rc == 0
     assert h.summon_allow_list.call_args == (
-      ('ppp-dev',),
+      ('bro-dev',),
       {'grant': ['devoops'], 'revoke': []},
     )
     assert h.run_in_container.call_args.kwargs['may_summon'] == {'devoops'}
@@ -217,7 +217,7 @@ class TestContainerCommand:
       rc = cw_session.start_session(_spec(drop=True))
     assert rc == 0
     launch = h.run_in_container.call_args.args[0]
-    assert launch.env['CW_BRO'] == 'ppp-dev'
+    assert launch.env['CW_BRO'] == 'bro-dev'
 
   def test_default_base_is_left_to_the_entrypoint_head_fallback(self):
     # no CW_BASE_REF by default: the clone bases on HEAD — the host checkout as
@@ -395,7 +395,7 @@ class TestSessionBro:
     assert _spec(bro='pm').session_bro == 'pm'
 
   def test_session_uses_the_project_default(self):
-    assert _spec().session_bro == 'ppp-dev'
+    assert _spec().session_bro == 'bro-dev'
 
   def test_raw_selects_the_raw_surface(self):
     assert _spec(raw=True).surface == bro.launch.scope.Surface.RAW_SESSION

@@ -9,11 +9,11 @@ from bro.workspace.store import finalize_scoped_secrets
 
 class TestScopedSecrets:
   def test_cw_session_set(self):
-    # cw-session themed as ppp-dev: baseline + the claude-harness
+    # cw-session themed as bro-dev: baseline + the claude-harness
     # manifest — extra_secrets (github) and the session-local brog server's
     # self-contained backend config — + the claude_code OAuth token (the
     # session's only auth).
-    scoped = bro.launch.scope.scoped_secrets('ppp-dev', Surface.CW_SESSION, credential_instances={})
+    scoped = bro.launch.scope.scoped_secrets('bro-dev', Surface.CW_SESSION, credential_instances={})
     assert {'trails', 'github', 'brog', 'claude_code'} <= scoped.required
     # required (strict), not optional: no .credentials.json fallback in the
     # container, so a missing token must fail loudly on the host
@@ -34,9 +34,9 @@ class TestScopedSecrets:
 
   def test_raw_session_uses_full_manifest_and_anthropic(self):
     # --raw serves the bro's own MCP servers, so it gets the full manifest (brog)
-    # plus anthropic for the apiKeyHelper. ppp-dev doesn't deploy → no docker socket.
+    # plus anthropic for the apiKeyHelper. bro-dev doesn't deploy → no docker socket.
     scoped = bro.launch.scope.scoped_secrets(
-      'ppp-dev', Surface.RAW_SESSION, credential_instances={}
+      'bro-dev', Surface.RAW_SESSION, credential_instances={}
     )
     assert {'brog', 'github', 'anthropic'} <= scoped.required
     assert scoped.docker_sock is False
@@ -81,7 +81,7 @@ class TestScopedSecrets:
     )
     assert (
       bro.launch.scope.scoped_secrets(
-        'ppp-dev', Surface.BRO_RUN, credential_instances={}
+        'bro-dev', Surface.BRO_RUN, credential_instances={}
       ).docker_sock
       is False
     )
@@ -115,7 +115,7 @@ class TestScopedSecrets:
 class TestCredentialInstances:
   def test_substitutes_a_mapped_kind_in_the_required_tier(self):
     scoped = bro.launch.scope.scoped_secrets(
-      'ppp-dev', Surface.CW_SESSION, credential_instances={'brog': 'github'}
+      'bro-dev', Surface.CW_SESSION, credential_instances={'brog': 'github'}
     )
     assert 'brog+github' in scoped.required
     assert 'brog' not in scoped.required
@@ -141,7 +141,7 @@ class TestCredentialInstances:
       bro.launch.scope.LaunchScopeError, match=r"creds maps kind\(s\).*'nonesuch'"
     ):
       bro.launch.scope.scoped_secrets(
-        'ppp-dev', Surface.CW_SESSION, credential_instances={'nonesuch': 'x'}
+        'bro-dev', Surface.CW_SESSION, credential_instances={'nonesuch': 'x'}
       )
 
   def test_substitution_applies_on_the_unknown_bro_fallback_scope(self):
@@ -155,7 +155,7 @@ class TestCredentialInstances:
     # --grant/--revoke run after substitution, so they address kind+instance;
     # the pre-substitution kind name is no longer in the set
     scoped = bro.launch.scope.scoped_secrets(
-      'ppp-dev', Surface.CW_SESSION, credential_instances={'brog': 'github'}
+      'bro-dev', Surface.CW_SESSION, credential_instances={'brog': 'github'}
     )
     finalized = finalize_scoped_secrets(scoped, grant=[], revoke=['brog+github'])
     assert 'brog+github' not in finalized.required
@@ -169,7 +169,7 @@ class TestPreflightScopedLaunch:
   def _preflight(self, scoped, **overrides):
     kwargs = {'grant': [], 'revoke': []}
     kwargs.update(overrides)
-    return bro.launch.scope.preflight_scoped_launch(scoped, 'ppp-dev', **kwargs)
+    return bro.launch.scope.preflight_scoped_launch(scoped, 'bro-dev', **kwargs)
 
   def test_returns_finalized_scope_allow_list_and_store(self):
     # one unified grant list: plain names finalize the credential scope, @names
@@ -188,7 +188,7 @@ class TestPreflightScopedLaunch:
     assert scoped == bro.launch.scope.ScopedSecrets({'github', 'gmail_creds'}, {'openai'}, True)
     assert may_summon == {'devoops'}
     assert store == {'x.cred': b'v'}
-    assert allow_list.call_args == (('ppp-dev',), {'grant': ['devoops'], 'revoke': ['pm']})
+    assert allow_list.call_args == (('bro-dev',), {'grant': ['devoops'], 'revoke': ['pm']})
     # the store is hydrated from the finalized tiers, not the incoming ones
     assert build.call_args == (({'github', 'gmail_creds'},), {'optional': {'openai'}})
 

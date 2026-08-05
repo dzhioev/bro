@@ -25,8 +25,8 @@ class TestForwardedFlags:
   def test_extract_forwarded_argv_round_trips_bro_and_raw(self):
     parser = Parser(add_help=False)
     cw_flags.add_forwarded_flags(parser)
-    args = vars(parser.parse_args(['--bro', 'ppp-dev', '--raw']))
-    assert cw_flags.extract_forwarded_argv(args) == ['--bro', 'ppp-dev', '--raw']
+    args = vars(parser.parse_args(['--bro', 'dev', '--raw']))
+    assert cw_flags.extract_forwarded_argv(args) == ['--bro', 'dev', '--raw']
 
   def test_effort_defaults_to_xhigh(self):
     parser = Parser(add_help=False)

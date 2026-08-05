@@ -42,7 +42,7 @@ class _Harness:
       patch('bro.cw.runner.project_root', return_value=Path('/main-repo')),
       patch(
         'bro.cw.session.project_config',
-        return_value=ProjectConfig(default_bro='ppp-dev', image_repository='bro/ppp-dev'),
+        return_value=ProjectConfig(default_bro='bro-dev', image_repository='bro/bro-dev'),
       ),
       # an empty credential store pins the derived git identity to the legacy
       # address regardless of the developer host's real `github` secret
@@ -151,8 +151,8 @@ class TestRunInPlace:
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
       assert cw_runner.run_in_place(_spec()) == 0
-      assert h.start_server.call_args[0][0] == 'persona:ppp-dev'
-      assert h.env['CW_BRO'] == 'ppp-dev'
+      assert h.start_server.call_args[0][0] == 'persona:bro-dev'
+      assert h.env['CW_BRO'] == 'bro-dev'
 
   def test_server_start_failure_returns_1(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
@@ -175,7 +175,7 @@ class TestRunInPlace:
       # every session commits as bro, hold-independent
       assert cw_runner.run_in_place(_spec()) == 0
       assert h.env['GIT_AUTHOR_NAME'] == 'bro'
-      assert h.env['GIT_COMMITTER_EMAIL'] == 'ppp-dev@bro'
+      assert h.env['GIT_COMMITTER_EMAIL'] == 'bro-dev@bro'
 
   def test_exports_the_session_hold(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)

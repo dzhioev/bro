@@ -11,7 +11,7 @@ from bro.workspace.project import ProjectConfig
 
 # the run bro's own CW_BRO rides in explicitly (never as an ambient forward), so
 # a calling session's theming cannot leak into the container
-_RUN_ENV = {'CW_BRO': 'ppp-dev', **bro_git_identity_env('ppp-dev')}
+_RUN_ENV = {'CW_BRO': 'bro-dev', **bro_git_identity_env('bro-dev')}
 
 
 @pytest.fixture(autouse=True)
@@ -33,7 +33,7 @@ def test_maybe_containerize_skips_when_inside_container():
     rc = maybe_containerize(
       cli_name='call',
       verb='chat',
-      bro_name='ppp-dev',
+      bro_name='bro-dev',
       inner_args=['hi'],
       in_place=False,
       no_trails=False,
@@ -51,7 +51,7 @@ def test_maybe_containerize_skips_with_in_place():
     rc = maybe_containerize(
       cli_name='call',
       verb='chat',
-      bro_name='ppp-dev',
+      bro_name='bro-dev',
       inner_args=['hi'],
       in_place=True,
       no_trails=False,
@@ -69,22 +69,21 @@ def test_maybe_containerize_hops_and_scopes_to_bro():
     rc = maybe_containerize(
       cli_name='call',
       verb='chat',
-      bro_name='ppp-dev',
+      bro_name='bro-dev',
       inner_args=['hi', '--fast'],
       in_place=False,
       no_trails=False,
     )
   assert rc == 7
   launch = run.call_args.args[0]
-  assert launch.name.startswith('call-ppp-dev-')
-  assert launch.command == ['bro', 'chat', 'ppp-dev', 'hi', '--fast', '--in-place']
+  assert launch.name.startswith('call-bro-dev-')
+  assert launch.command == ['bro', 'chat', 'bro-dev', 'hi', '--fast', '--in-place']
   assert run.call_args.kwargs['drop'] is True
-  # ppp-dev's manifest (github + brog) + its llm key + the mandatory trails sink
+  # bro-dev's manifest (github + brog) + its llm key + the mandatory trails sink
   assert {'github', 'brog', 'trails'} <= launch.secrets
-  # ppp-dev doesn't deploy → no docker socket
+  # bro-dev doesn't deploy → no docker socket
   assert launch.docker_sock is False
-  # the bro's may_summon seed reaches the broker root unchanged when no flags adjust it
-  assert run.call_args.kwargs['may_summon'] == {'devoops'}
+  assert run.call_args.kwargs['may_summon'] == set()
   # recording on and no --into: identity + the run bro's CW_BRO is all the env
   # carries — the clone bases on the entrypoint's HEAD fallback
   assert launch.env == _RUN_ENV
@@ -99,14 +98,14 @@ def test_maybe_containerize_no_trails_drops_secret_and_disables_recording():
     maybe_containerize(
       cli_name='call',
       verb='chat',
-      bro_name='ppp-dev',
+      bro_name='bro-dev',
       inner_args=['hi'],
       in_place=False,
       no_trails=True,
     )
   launch = run.call_args.args[0]
   # the env var carries the effect in, so --no-trails isn't forwarded into the inner argv
-  assert launch.command == ['bro', 'chat', 'ppp-dev', 'hi', '--in-place']
+  assert launch.command == ['bro', 'chat', 'bro-dev', 'hi', '--in-place']
   assert 'trails' not in launch.secrets
   assert launch.env == {'TRAILS_DISABLED': '1', **_RUN_ENV}
 
@@ -120,7 +119,7 @@ def test_maybe_containerize_grant_adds_secret():
     rc = maybe_containerize(
       cli_name='call',
       verb='chat',
-      bro_name='ppp-dev',
+      bro_name='bro-dev',
       inner_args=['hi'],
       in_place=False,
       grant=['gmail_creds'],
@@ -138,13 +137,13 @@ def test_maybe_containerize_revoke_removes_secret():
     rc = maybe_containerize(
       cli_name='call',
       verb='chat',
-      bro_name='ppp-dev',
+      bro_name='bro-dev',
       inner_args=['hi'],
       in_place=False,
       revoke=['github'],
     )
   assert rc == 0
-  # github is in ppp-dev's manifest; the revoke drops it from the scoped set
+  # github is in bro-dev's manifest; the revoke drops it from the scoped set
   assert 'github' not in run.call_args.args[0].secrets
 
 
@@ -157,13 +156,13 @@ def test_maybe_containerize_revoke_removes_optional_secret():
     rc = maybe_containerize(
       cli_name='call',
       verb='chat',
-      bro_name='ppp-dev',
+      bro_name='bro-dev',
       inner_args=['hi'],
       in_place=False,
       revoke=['openai'],
     )
   assert rc == 0
-  # openai is in ppp-dev's optional tier, put there by its scripts dispatcher
+  # openai is in bro-dev's optional tier, put there by its scripts dispatcher
   launched = run.call_args.args[0]
   assert 'openai' not in launched.optional_secrets
   assert 'openai' not in launched.secrets
@@ -181,7 +180,7 @@ def test_maybe_containerize_missing_secret_fails_before_launch(monkeypatch, caps
   ):
     env.pop('CW_IN_CONTAINER', None)
     rc = maybe_containerize(
-      cli_name='call', verb='chat', bro_name='ppp-dev', inner_args=['hi'], in_place=False
+      cli_name='call', verb='chat', bro_name='bro-dev', inner_args=['hi'], in_place=False
     )
   assert rc == 1
   assert run.call_count == 0
@@ -203,7 +202,7 @@ def test_maybe_containerize_unknown_creds_mapping_kind_errors(capsys):
   ):
     env.pop('CW_IN_CONTAINER', None)
     rc = maybe_containerize(
-      cli_name='call', verb='chat', bro_name='ppp-dev', inner_args=['hi'], in_place=False
+      cli_name='call', verb='chat', bro_name='bro-dev', inner_args=['hi'], in_place=False
     )
   assert rc == 1
   assert run.call_count == 0
@@ -220,7 +219,7 @@ def test_maybe_containerize_grant_already_present_errors(capsys):
     rc = maybe_containerize(
       cli_name='call',
       verb='chat',
-      bro_name='ppp-dev',
+      bro_name='bro-dev',
       inner_args=['hi'],
       in_place=False,
       grant=['trails'],
@@ -239,7 +238,7 @@ def test_maybe_containerize_revoke_absent_errors(capsys):
     rc = maybe_containerize(
       cli_name='call',
       verb='chat',
-      bro_name='ppp-dev',
+      bro_name='bro-dev',
       inner_args=['hi'],
       in_place=False,
       revoke=['nonexistent'],
@@ -258,11 +257,10 @@ def test_maybe_containerize_bro_grant_extends_the_allow_list():
     rc = maybe_containerize(
       cli_name='call',
       verb='chat',
-      bro_name='ppp-dev',
+      bro_name='bro-dev',
       inner_args=['hi'],
       in_place=False,
       grant=['@pm'],
-      revoke=['@devoops'],
     )
   assert rc == 0
   assert run.call_args.kwargs['may_summon'] == {'pm'}
@@ -277,10 +275,10 @@ def test_maybe_containerize_summon_grant_already_allowed_errors(capsys):
     rc = maybe_containerize(
       cli_name='call',
       verb='chat',
-      bro_name='ppp-dev',
+      bro_name='bro-dev',
       inner_args=['hi'],
       in_place=False,
-      grant=['@devoops'],
+      grant=['@devoops', '@devoops'],
     )
   assert rc == 1
   assert run.call_count == 0
@@ -296,7 +294,7 @@ def test_maybe_containerize_unregistered_summon_target_errors(capsys):
     rc = maybe_containerize(
       cli_name='call',
       verb='chat',
-      bro_name='ppp-dev',
+      bro_name='bro-dev',
       inner_args=['hi'],
       in_place=False,
       grant=['@devoop'],
@@ -315,7 +313,7 @@ def test_maybe_containerize_bro_grant_with_in_place_errors(capsys):
     rc = maybe_containerize(
       cli_name='call',
       verb='chat',
-      bro_name='ppp-dev',
+      bro_name='bro-dev',
       inner_args=['hi'],
       in_place=True,
       grant=['@devoops'],
@@ -334,7 +332,7 @@ def test_maybe_containerize_grant_with_in_place_errors(capsys):
     rc = maybe_containerize(
       cli_name='call',
       verb='chat',
-      bro_name='ppp-dev',
+      bro_name='bro-dev',
       inner_args=['hi'],
       in_place=True,
       grant=['gmail_creds'],
@@ -352,7 +350,7 @@ def test_maybe_containerize_grant_inside_container_errors(capsys):
     rc = maybe_containerize(
       cli_name='call',
       verb='chat',
-      bro_name='ppp-dev',
+      bro_name='bro-dev',
       inner_args=['hi'],
       in_place=False,
       revoke=['github'],
@@ -372,7 +370,7 @@ def test_maybe_containerize_into_bases_the_clone_on_the_ref():
     rc = maybe_containerize(
       cli_name='call',
       verb='chat',
-      bro_name='ppp-dev',
+      bro_name='bro-dev',
       inner_args=['hi'],
       in_place=False,
       into='feature-branch',
@@ -392,7 +390,7 @@ def test_maybe_containerize_unresolvable_into_errors(capsys):
     rc = maybe_containerize(
       cli_name='call',
       verb='chat',
-      bro_name='ppp-dev',
+      bro_name='bro-dev',
       inner_args=['hi'],
       in_place=False,
       into='no-such-ref',
@@ -411,7 +409,7 @@ def test_maybe_containerize_into_with_in_place_errors(capsys):
     rc = maybe_containerize(
       cli_name='call',
       verb='chat',
-      bro_name='ppp-dev',
+      bro_name='bro-dev',
       inner_args=['hi'],
       in_place=True,
       into='feature-branch',

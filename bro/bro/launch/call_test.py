@@ -347,18 +347,18 @@ def test_call_re_execs_into_container_when_outside():
   ):
     env.pop('CW_IN_CONTAINER', None)
     env.pop('BRO_SHELL_COMMAND', None)
-    rc = main(['call', 'ppp-dev', 'hey'])
+    rc = main(['call', 'bro-dev', 'hey'])
     assert rc == 0
-    assert env['BRO_SHELL_COMMAND'] == 'call ppp-dev hey'
+    assert env['BRO_SHELL_COMMAND'] == 'call bro-dev hey'
     assert run.call_count == 1
     launch = run.call_args.args[0]
-    assert launch.name.startswith('call-ppp-dev-')
+    assert launch.name.startswith('call-bro-dev-')
     # host is a tty → the TUI runs in-container, so no --text is forwarded; call
     # implies --fast, which must ride the inner argv (the inner verb defaults plain)
     assert launch.command == [
       'bro',
       'chat',
-      'ppp-dev',
+      'bro-dev',
       'hey',
       '--fast',
       '--hold',
@@ -366,9 +366,9 @@ def test_call_re_execs_into_container_when_outside():
       '--in-place',
     ]
     assert run.call_args.kwargs['drop'] is True
-    # ppp-dev's manifest (github + brog) plus the mandatory trails sink
+    # bro-dev's manifest (github + brog) plus the mandatory trails sink
     assert {'github', 'brog', 'trails'} <= launch.secrets
-    # ppp-dev doesn't deploy → no docker socket
+    # bro-dev doesn't deploy → no docker socket
     assert launch.docker_sock is False
 
 
@@ -379,7 +379,7 @@ def test_call_forwards_text_when_host_not_a_tty():
     patch('bro.launch.call._tty_supported', return_value=False),
   ):
     env.pop('CW_IN_CONTAINER', None)
-    rc = main(['call', 'ppp-dev', 'hey'])
+    rc = main(['call', 'bro-dev', 'hey'])
     assert rc == 0
     command = run.call_args.args[0].command
     # host can't back the TUI → force text mode inside the container (the container's
@@ -387,7 +387,7 @@ def test_call_forwards_text_when_host_not_a_tty():
     assert command == [
       'bro',
       'chat',
-      'ppp-dev',
+      'bro-dev',
       'hey',
       '--text',
       '--fast',
@@ -404,14 +404,14 @@ def test_call_forwards_effort_into_container():
     patch('bro.launch.call._tty_supported', return_value=True),
   ):
     env.pop('CW_IN_CONTAINER', None)
-    rc = main(['call', 'ppp-dev', 'hey', '--effort', 'high'])
+    rc = main(['call', 'bro-dev', 'hey', '--effort', 'high'])
     assert rc == 0
     command = run.call_args.args[0].command
     # --effort is forwarded like the implied --fast; the in-container run applies with_effort
     assert command == [
       'bro',
       'chat',
-      'ppp-dev',
+      'bro-dev',
       'hey',
       '--fast',
       '--effort',
@@ -462,14 +462,14 @@ def test_call_no_trails_disables_recording_in_container():
     patch('bro.launch.call._tty_supported', return_value=True),
   ):
     env.pop('CW_IN_CONTAINER', None)
-    rc = main(['call', 'ppp-dev', 'hey', '--no-trails'])
+    rc = main(['call', 'bro-dev', 'hey', '--no-trails'])
     assert rc == 0
     launch = run.call_args.args[0]
     # the env var carries the effect in, so --no-trails isn't forwarded into the inner argv
     assert launch.command == [
       'bro',
       'chat',
-      'ppp-dev',
+      'bro-dev',
       'hey',
       '--fast',
       '--hold',
@@ -478,31 +478,31 @@ def test_call_no_trails_disables_recording_in_container():
     ]
     assert 'trails' not in launch.secrets
     assert launch.env == {
-      'CW_BRO': 'ppp-dev',
+      'CW_BRO': 'bro-dev',
       'TRAILS_DISABLED': '1',
-      **bro_git_identity_env('ppp-dev'),
+      **bro_git_identity_env('bro-dev'),
     }
 
 
 def test_call_no_trails_with_in_place_is_an_error():
   with pytest.raises(SystemExit):
-    main(['call', 'ppp-dev', 'hey', '--no-trails', '--in-place'])
+    main(['call', 'bro-dev', 'hey', '--no-trails', '--in-place'])
 
 
 def test_call_rejects_removed_host_flag():
   with pytest.raises(SystemExit):
-    main(['call', 'ppp-dev', 'hey', '--host'])
+    main(['call', 'bro-dev', 'hey', '--host'])
 
 
 def test_call_without_message_requires_resume(capsys):
-  rc = main(['call', 'ppp-dev'])
+  rc = main(['call', 'bro-dev'])
   assert rc == 1
   assert 'what is required unless --resume' in capsys.readouterr().err
 
 
 def test_call_resume_with_no_trails_is_an_error():
   with pytest.raises(SystemExit):
-    main(['call', 'ppp-dev', '--resume', '--no-trails'])
+    main(['call', 'bro-dev', '--resume', '--no-trails'])
 
 
 def test_call_forwards_resume_into_container():
@@ -514,13 +514,13 @@ def test_call_forwards_resume_into_container():
     env.pop('CW_IN_CONTAINER', None)
     # the bare flag resolves to the 'latest' sentinel, forwarded explicitly so
     # the in-container run resolves the trail itself
-    rc = main(['call', 'ppp-dev', '--resume'])
+    rc = main(['call', 'bro-dev', '--resume'])
     assert rc == 0
     command = run.call_args.args[0].command
     assert command == [
       'bro',
       'chat',
-      'ppp-dev',
+      'bro-dev',
       '--resume',
       'latest',
       '--fast',
@@ -537,14 +537,14 @@ def test_call_forwards_the_at_fork_point_into_container():
     patch('bro.launch.call._tty_supported', return_value=True),
   ):
     env.pop('CW_IN_CONTAINER', None)
-    rc = main(['call', 'ppp-dev', '--resume', 'trail-1', '--at', '7'])
+    rc = main(['call', 'bro-dev', '--resume', 'trail-1', '--at', '7'])
     assert rc == 0
     command = run.call_args.args[0].command
     assert command[command.index('--at') + 1] == '7'
 
 
 def test_call_at_without_resume_is_an_error(capsys):
-  assert main(['call', 'ppp-dev', 'hi', '--at', '7']) == 1
+  assert main(['call', 'bro-dev', 'hi', '--at', '7']) == 1
   assert 'requires --resume' in capsys.readouterr().err
 
 
@@ -555,13 +555,13 @@ def test_call_forwards_resume_trail_id_with_message():
     patch('bro.launch.call._tty_supported', return_value=True),
   ):
     env.pop('CW_IN_CONTAINER', None)
-    rc = main(['call', 'ppp-dev', 'and then?', '--resume', 'trail-id-1'])
+    rc = main(['call', 'bro-dev', 'and then?', '--resume', 'trail-id-1'])
     assert rc == 0
     command = run.call_args.args[0].command
     assert command == [
       'bro',
       'chat',
-      'ppp-dev',
+      'bro-dev',
       'and then?',
       '--resume',
       'trail-id-1',

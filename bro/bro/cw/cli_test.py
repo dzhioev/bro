@@ -60,7 +60,7 @@ class TestSsValidation:
       patch('bro.cw.cli._load_anthropic_key', return_value={'api_key': 'k'}),
       patch('bro.cw.cli.start_session', return_value=0) as fake_start,
     ):
-      rc = cw_cli.main(['cw', 'ss', '--raw', '--bro', 'ppp-dev', '--resume', 'w'])
+      rc = cw_cli.main(['cw', 'ss', '--raw', '--bro', 'dev', '--resume', 'w'])
     assert rc == 0
     assert fake_start.call_count == 1
 

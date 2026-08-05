@@ -19,7 +19,7 @@ class TestBuildSessionContext:
       branch='worktree-foo',
       base_sha='abc123',
       base_ref=None,
-      bro='ppp-dev',
+      bro='bro-dev',
       raw=False,
       proj_root=_proj_with_claude_md(tmp_path),
     )
@@ -27,7 +27,7 @@ class TestBuildSessionContext:
     assert by['system_prompt']['subtype'] == 'cw_injected'
     assert by['system_prompt']['content'] == 'injected text'
     assert by['git']['fields'] == {'branch': 'worktree-foo', 'base_sha': 'abc123'}
-    assert by['mcp']['fields'] == {'mode': 'persona', 'servers': ['persona:ppp-dev']}
+    assert by['mcp']['fields'] == {'mode': 'persona', 'servers': ['persona:bro-dev']}
     assert by['claude_md']['subtype'] == 'root'
     assert 'rules' in by['claude_md']['content']
 
@@ -37,13 +37,13 @@ class TestBuildSessionContext:
       branch='worktree-foo',
       base_sha=None,
       base_ref=None,
-      bro='ppp-dev',
+      bro='bro-dev',
       raw=True,
       proj_root=_proj_with_claude_md(tmp_path),
     )
     by = _by_kind(records)
     assert by['system_prompt']['subtype'] == 'bro'
-    assert by['mcp']['fields'] == {'mode': 'bro', 'servers': ['bro:ppp-dev']}
+    assert by['mcp']['fields'] == {'mode': 'bro', 'servers': ['bro:bro-dev']}
 
   def test_base_ref_included_when_set(self, tmp_path):
     records = build_session_context(
@@ -51,7 +51,7 @@ class TestBuildSessionContext:
       branch='worktree-foo',
       base_sha='sha',
       base_ref='origin/master',
-      bro='ppp-dev',
+      bro='bro-dev',
       raw=False,
       proj_root=_proj_with_claude_md(tmp_path),
     )
@@ -63,7 +63,7 @@ class TestBuildSessionContext:
       branch='worktree-foo',
       base_sha='sha',
       base_ref=None,
-      bro='ppp-dev',
+      bro='bro-dev',
       raw=False,
       proj_root=tmp_path,
     )
@@ -77,7 +77,7 @@ class TestBuildSessionContext:
       branch='worktree-foo',
       base_sha='sha',
       base_ref=None,
-      bro='ppp-dev',
+      bro='bro-dev',
       raw=False,
       proj_root=_proj_with_claude_md(tmp_path),
     )
