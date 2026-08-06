@@ -49,6 +49,10 @@ class ClaudeLaunch:
   system_prompt: str
 
 
+# claude's statusLine refresh floor; a smaller value is silently dropped, leaving
+# only its event-driven renders
+_STATUSLINE_REFRESH_SECONDS = 1
+
 # prepended to a raw session's argv-seeded first prompt, which fires before
 # claude's async MCP connects complete (cw/mcp.py:_server_entry); rationale for
 # the turn-local delivery: reference/cw.md "Session-local MCP serving".
@@ -92,7 +96,7 @@ def build_claude_launch(
     'statusLine': {
       'type': 'command',
       'command': _settings_command('bro.cw.statusline'),
-      'refreshInterval': 1,
+      'refreshInterval': _STATUSLINE_REFRESH_SECONDS,
     },
   }
   argv = ['--model', _CW_MODEL]
