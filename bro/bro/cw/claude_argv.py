@@ -92,6 +92,7 @@ def build_claude_launch(
     'statusLine': {
       'type': 'command',
       'command': _settings_command('bro.cw.statusline'),
+      'refreshInterval': 1,
     },
   }
   argv = ['--model', _CW_MODEL]
