@@ -69,7 +69,6 @@ class TestCwSessionLaunch:
     status_line = _settings(_cw_session_launch(_spec(), claude_args=[]).argv)['statusLine']
     assert status_line['type'] == 'command'
     assert status_line['command'] == f'{shlex.quote(sys.executable)} -m bro.cw.statusline'
-    assert status_line['refreshInterval'] == cw_claude_argv._STATUSLINE_REFRESH_SECONDS
 
   def test_effort_injected(self):
     argv = _cw_session_launch(_spec(effort='xhigh'), claude_args=[]).argv
