@@ -23,10 +23,6 @@ Each member owns its gates:
 
 `./run-tests` at the root runs both suites; `./format.sh` formats both members. Build wheels from the root with `uv build --package bro` and `uv build --package bro-dev`.
 
-## History
-
-This repository was exported from a private monorepo, carrying the framework's commit history with it. Every commit ends with a `> rewritten from a private repository` disclaimer naming its original; task links are redacted to opaque `N:<id>` markers, and agent identities are collapsed to `bbbbro[bot]`.
-
 ## License
 
 Apache-2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
