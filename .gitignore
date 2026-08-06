@@ -1,0 +1,14 @@
+.DS_Store
+__pycache__/
+build/
+.venv
+*.swp
+var/
+*.egg-info/
+.smoke-*/
+# runtime-synthesized credential dir (deployed services write it; on the host
+# secrets live in ~/.bro). never commit it
+.configs
+# per-session token-accounting scratch state (bro-dev/bro_dev/claude_commit_footer.py);
+# the .tmp sidecar is its atomic-write staging file
+.token_accounting_state.json*

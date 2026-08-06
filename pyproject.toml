@@ -1,0 +1,11 @@
+[tool.uv.workspace]
+members = ["bro", "bro-dev"]
+
+[tool.uv]
+# add each editable member's source directory to sys.path so the root-level
+# bro/ workspace directory cannot shadow the installed bro package as a namespace
+config-settings = { editable_mode = "compat" }
+
+[tool.bro]
+default = "bro-dev"
+footer-command = "bro-dev.claude-commit-footer"
