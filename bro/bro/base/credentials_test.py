@@ -532,11 +532,11 @@ class TestReferences:
     store = self._store(
       configs_dir,
       {
-        'github+pavel': 'ghp_pavel',
-        'brog': {'backend': 'github', 'token': {'$cred': 'github+pavel'}},
+        'github+alice': 'ghp_alice',
+        'brog': {'backend': 'github', 'token': {'$cred': 'github+alice'}},
       },
     )
-    assert store.get_json('brog') == {'backend': 'github', 'token': 'ghp_pavel'}
+    assert store.get_json('brog') == {'backend': 'github', 'token': 'ghp_alice'}
 
   def test_references_nest_in_arrays_and_objects(self, configs_dir: Path):
     store = self._store(
@@ -733,14 +733,14 @@ class TestNameGrammar:
     assert credentials.parse_name('github') == ('github', None)
 
   def test_variant_name_splits_kind_and_instance(self):
-    assert credentials.parse_name('github+pavel') == ('github', 'pavel')
+    assert credentials.parse_name('github+alice') == ('github', 'alice')
 
   def test_instance_allows_dashes(self):
     assert credentials.parse_name('github+read-only') == ('github', 'read-only')
 
   @pytest.mark.parametrize(
     'name',
-    ['github+', '+pavel', 'github+a+b', 'GitHub+a', 'github+Pavel', 'github[pavel]', 'git hub', ''],
+    ['github+', '+alice', 'github+a+b', 'GitHub+a', 'github+Alice', 'github[alice]', 'git hub', ''],
   )
   def test_malformed_name_raises(self, name: str):
     with pytest.raises(ValueError, match='malformed secret name'):
@@ -755,10 +755,10 @@ class TestHostRegistry:
     _write(
       bro_dir,
       credentials.HOST_REGISTRY_FILE,
-      {'github+pavel': {'sources': [{'file': 'github_token_pavel'}]}},
+      {'github+alice': {'sources': [{'file': 'github_token_alice'}]}},
     )
     registry = credentials.host_registry()
-    assert 'github+pavel' in registry
+    assert 'github+alice' in registry
     # the built-in entries survive the merge untouched
     assert 'github' in registry
     assert TEST_SECRET in registry
@@ -802,12 +802,12 @@ class TestHostRegistry:
     _write(
       bro_dir,
       credentials.HOST_REGISTRY_FILE,
-      {'github+pavel': {'sources': [{'file': 'github_token_pavel'}]}},
+      {'github+alice': {'sources': [{'file': 'github_token_alice'}]}},
     )
     registry = credentials.host_registry()
-    variant = registry['github+pavel'].install
+    variant = registry['github+alice'].install
     assert variant is not None
-    assert 'credentials get github+pavel' in variant
+    assert 'credentials get github+alice' in variant
     # the kind's own hook still names the kind
     kind = registry['github'].install
     assert kind is not None
@@ -825,7 +825,7 @@ class TestHostRegistry:
     _write(
       bro_dir,
       credentials.HOST_REGISTRY_FILE,
-      {'github+pavel': {'sources': [{'file': 'f'}], 'install': 'export X=1'}},
+      {'github+alice': {'sources': [{'file': 'f'}], 'install': 'export X=1'}},
     )
     with pytest.raises(ValueError, match='the kind entry owns it'):
       credentials.host_registry()
@@ -836,7 +836,7 @@ class TestHostRegistry:
       credentials.host_registry()
 
   def test_malformed_addition_name_raises(self, bro_dir: Path):
-    _write(bro_dir, credentials.HOST_REGISTRY_FILE, {'GitHub+pavel': {'sources': [{'file': 'f'}]}})
+    _write(bro_dir, credentials.HOST_REGISTRY_FILE, {'GitHub+alice': {'sources': [{'file': 'f'}]}})
     with pytest.raises(ValueError, match='malformed secret name'):
       credentials.host_registry()
 
@@ -846,10 +846,10 @@ class TestHostRegistry:
     _write(
       bro_dir,
       credentials.HOST_REGISTRY_FILE,
-      {'github+pavel': {'sources': [{'file': 'github_token_pavel'}]}},
+      {'github+alice': {'sources': [{'file': 'github_token_alice'}]}},
     )
-    _write(bro_dir, 'github_token_pavel', 'ghp_pavel\n')
-    assert credentials.default_store().get('github+pavel') == 'ghp_pavel'
+    _write(bro_dir, 'github_token_alice', 'ghp_alice\n')
+    assert credentials.default_store().get('github+alice') == 'ghp_alice'
 
   def test_generated_registry_still_replaces_wholesale(self, configs_dir: Path, bro_dir: Path):
     # a generated credentials.json bounds the registry to exactly its own set —
@@ -858,7 +858,7 @@ class TestHostRegistry:
     _write(
       bro_dir,
       credentials.HOST_REGISTRY_FILE,
-      {'github+pavel': {'sources': [{'file': 'github_token_pavel'}]}},
+      {'github+alice': {'sources': [{'file': 'github_token_alice'}]}},
     )
     _write(bro_dir, credentials.REGISTRY_FILE, {'notion': {'sources': [{'file': 'notion.json'}]}})
     assert set(credentials._load_registry()) == {'notion'}
@@ -1259,19 +1259,19 @@ class TestBuildScopedStore:
     _write(
       bro_dir,
       credentials.HOST_REGISTRY_FILE,
-      {'github+pavel': {'sources': [{'file': 'github_token_pavel'}]}},
+      {'github+alice': {'sources': [{'file': 'github_token_alice'}]}},
     )
-    _write(bro_dir, 'github_token_pavel', 'ghp_pavel\n')
-    store = credentials.build_scoped_store(['github+pavel'])
+    _write(bro_dir, 'github_token_alice', 'ghp_alice\n')
+    store = credentials.build_scoped_store(['github+alice'])
     assert set(store) == {'github.cred', credentials.REGISTRY_FILE}
-    assert store['github.cred'] == b'ghp_pavel'
+    assert store['github.cred'] == b'ghp_alice'
     registry = json.loads(store[credentials.REGISTRY_FILE])
     assert set(registry) == {'github'}
     assert registry['github']['sources'] == [{'file': 'github.cred'}]
     # the hook is re-rendered for the kind name — in-session `eval` pulls the
     # value via `credentials get github`, the name the scoped store resolves
     assert 'credentials get github' in registry['github']['install']
-    assert 'github+pavel' not in registry['github']['install']
+    assert 'github+alice' not in registry['github']['install']
     rebuilt = credentials._registry_from_dict(registry)
     assert rebuilt['github'].install == registry['github']['install']
 
@@ -1305,19 +1305,19 @@ class TestBuildScopedStore:
     _write(
       bro_dir,
       credentials.HOST_REGISTRY_FILE,
-      {'github+pavel': {'sources': [{'file': 'github_token_pavel'}]}},
+      {'github+alice': {'sources': [{'file': 'github_token_alice'}]}},
     )
-    _write(bro_dir, 'github_token_pavel', 'ghp_pavel')
+    _write(bro_dir, 'github_token_alice', 'ghp_alice')
     _write(configs_dir, 'cw_github_token_bro', 'ghp_bro')
     with pytest.raises(ValueError, match='installs at most one'):
-      credentials.build_scoped_store(['github', 'github+pavel'])
+      credentials.build_scoped_store(['github', 'github+alice'])
 
   def test_kind_conflict_across_tiers_raises(self, configs_dir: Path):
     # the check runs over the declared union up front — before resolution — so
     # it fires even though the optional variant is unknown and unresolvable
     _write(configs_dir, 'cw_github_token_bro', 'ghp_bro')
     with pytest.raises(ValueError, match='installs at most one'):
-      credentials.build_scoped_store(['github'], optional=['github+pavel'])
+      credentials.build_scoped_store(['github'], optional=['github+alice'])
 
 
 class TestApplyGrantRevoke:

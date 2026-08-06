@@ -13,7 +13,7 @@ import bro.workspace.paths as workspace_paths
 from bro import cw
 
 UUID = '35ad38d8-5a6d-81ea-bce6-e4caf17ece7f'
-HEX = '35ad38d85a6d81eabce6e4caf17ece7f'
+HEX = '0123456789abcdef0123456789abcdef'
 URL = f'https://tracker.example/tasks/my-task-{HEX}'
 FRESH_SHA = 'a' * 40
 

@@ -30,7 +30,7 @@ absent any of those overrides, resolution uses the host registry: the built-in
 defaults merged per-name with a host-local `registry.json` found along the
 same local search path as the secret files — entries that never enter the
 repo, typically `kind+instance` variants of a checked-in kind
-(`github+pavel`). the kind entry (the name up to `+`) owns kind-level
+(`github+alice`). the kind entry (the name up to `+`) owns kind-level
 behavior — notably the install hook, a `bro.base.template` text rendered with
 `#name` bound to each instance's own name — so a variant declares only its
 sources. instance names exist only on the host: `build_scoped_store`
@@ -801,7 +801,7 @@ def build_scoped_store(names: Iterable[str], *, optional: Iterable[str] = ()) ->
   so an absent optional secret degrades the component instead of failing launch.
 
   a session installs at most one instance of each kind: declaring two —
-  `github` and `github+pavel`, in whichever tiers — raises `ValueError`. The
+  `github` and `github+alice`, in whichever tiers — raises `ValueError`. The
   check runs over the declared union up front, so an unresolvable optional name
   cannot flap the outcome.
   """
