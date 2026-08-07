@@ -1142,6 +1142,42 @@ class TestBuildScopedStore:
     assert b'$cred' in store['brog.cred']
     assert set(json.loads(store[credentials.REGISTRY_FILE])) == {'brog', 'github'}
 
+  def test_cacheable_expansion_resolves_through_the_selected_instance(
+    self, configs_dir: Path, bro_dir: Path, monkeypatch
+  ):
+    # a kind-level `$cred` reference in a cacheable chain freezes the instance
+    # the scope selected — the same value the session's own `.cred` for that
+    # kind carries, and the same answer the uncacheable path's in-session
+    # re-expansion would give
+    _write(bro_dir, 'github_token_default', 'ghp_default')
+    _write(bro_dir, 'github_token_bot', 'ghp_bot')
+    _write(bro_dir, 'brog.secret', {'backend': 'github', 'token': {'$cred': 'github'}})
+    registry = {
+      'github': credentials.Secret('github', [credentials.LocalSource('github_token_default')]),
+      'github+bot': credentials.Secret('github+bot', [credentials.LocalSource('github_token_bot')]),
+      'brog': credentials.Secret('brog', [credentials.LocalSource('brog.secret')]),
+    }
+    monkeypatch.setattr(credentials, '_load_registry', lambda: registry)
+    store = credentials.build_scoped_store(['brog', 'github+bot'])
+    assert json.loads(store['brog.cred']) == {'backend': 'github', 'token': 'ghp_bot'}
+    assert store['github.cred'] == b'ghp_bot'
+
+  def test_cacheable_expansion_outside_the_scope_falls_through_to_the_registry(
+    self, configs_dir: Path, bro_dir: Path, monkeypatch
+  ):
+    # only in-scope kinds are rebound; a reference to a kind outside the scope
+    # expands against the registry's own entry and freezes self-contained
+    _write(bro_dir, 'github_token_default', 'ghp_default')
+    _write(bro_dir, 'brog.secret', {'backend': 'github', 'token': {'$cred': 'github'}})
+    registry = {
+      'github': credentials.Secret('github', [credentials.LocalSource('github_token_default')]),
+      'brog': credentials.Secret('brog', [credentials.LocalSource('brog.secret')]),
+    }
+    monkeypatch.setattr(credentials, '_load_registry', lambda: registry)
+    store = credentials.build_scoped_store(['brog'])
+    assert json.loads(store['brog.cred']) == {'backend': 'github', 'token': 'ghp_default'}
+    assert set(store) == {'brog.cred', credentials.REGISTRY_FILE}
+
   def test_shipped_reference_outside_scope_fails(
     self, configs_dir: Path, bro_dir: Path, monkeypatch
   ):

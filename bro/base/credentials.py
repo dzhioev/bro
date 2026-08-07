@@ -773,14 +773,18 @@ def build_scoped_store(names: Iterable[str], *, optional: Iterable[str] = ()) ->
 
   every secret resolves fully on the host first — launch-time validation stays
   strict, and a minting chain mints once here, failing loudly before the session
-  exists. a cacheable resolve embeds the expanded, self-contained value. an
-  un-cacheable one — the winning source, or a `$cred` reference chain, reaching
-  a minting source — must not freeze a short-lived value into the store, so the
-  winning source materializes its raw text with references intact and the
-  session re-expands (and re-mints) per read against the scoped registry. each
-  such reference must be spelled at kind level and land on a kind hydrated into
-  the scoped set (the scoped namespace is kinds-only) — one outside the scope
-  fails the build.
+  exists. resolution — reference expansion included — runs against the registry
+  overlaid with the scope's own kind binding, so a kind-level `$cred` node
+  targeting a kind in scope picks up the launch-selected instance (the value the
+  session's own `.cred` for that kind carries), while one outside the scope
+  falls through to the registry's own entry. a cacheable resolve embeds the
+  expanded, self-contained value. an un-cacheable one — the winning source, or a
+  `$cred` reference chain, reaching a minting source — must not freeze a
+  short-lived value into the store, so the winning source materializes its raw
+  text with references intact and the session re-expands (and re-mints) per read
+  against the scoped registry. each such reference must be spelled at kind level
+  and land on a kind hydrated into the scoped set (the scoped namespace is
+  kinds-only) — one outside the scope fails the build.
 
   a `kind+instance` name materializes under its kind name: the scoped registry
   entry and its `.cred` file are named by the kind, hydrated from the variant's
@@ -806,7 +810,8 @@ def build_scoped_store(names: Iterable[str], *, optional: Iterable[str] = ()) ->
   cannot flap the outcome.
   """
   registry = _load_registry()
-  store = Store(registry)
+  selection = _scoped_selection(set(names), set(optional), registry)
+  store = Store({**registry, **{parse_name(name)[0]: secret for name, secret, _ in selection}})
   files: dict[str, bytes] = {}
   scoped: dict[str, dict] = {}
   shipped_references: dict[str, set[str]] = {}
@@ -835,7 +840,7 @@ def build_scoped_store(names: Iterable[str], *, optional: Iterable[str] = ()) ->
       entry['install'] = install
     scoped[kind] = entry
 
-  for name, secret, required in _scoped_selection(set(names), set(optional), registry):
+  for name, secret, required in selection:
     resolved = store.resolve(name)
     if resolved is None:
       if required:  # strict: a declared name with no value fails the build
