@@ -229,11 +229,37 @@ def preflight_scoped_launch(
   from bro.launch.summon_control import summon_allow_list
 
   try:
-    grant_credentials, grant_bros = split_scope_overrides(grant)
-    revoke_credentials, revoke_bros = split_scope_overrides(revoke)
-    scoped = finalize_scoped_secrets(scoped, grant=grant_credentials, revoke=revoke_credentials)
+    scoped, grant_bros, revoke_bros = _finalize_credential_scope(scoped, grant, revoke)
     may_summon = summon_allow_list(bro_name, grant=grant_bros, revoke=revoke_bros)
     store = credentials.build_scoped_store(scoped.required, optional=scoped.optional)
   except (ValueError, credentials.SecretNotFound) as e:
     raise LaunchScopeError(str(e)) from e
   return scoped, may_summon, store
+
+
+def _finalize_credential_scope(
+  scoped: ScopedSecrets, grant: list[str], revoke: list[str]
+) -> tuple[ScopedSecrets, list[str], list[str]]:
+  """split the unified overrides (`split_scope_overrides`) and finalize the
+  credential tiers; returns the finalized scope plus the `@bro` halves
+  (grant, revoke) for the summon side."""
+  grant_credentials, grant_bros = split_scope_overrides(grant)
+  revoke_credentials, revoke_bros = split_scope_overrides(revoke)
+  finalized = finalize_scoped_secrets(scoped, grant=grant_credentials, revoke=revoke_credentials)
+  return finalized, grant_bros, revoke_bros
+
+
+def launch_view_store(
+  scoped: ScopedSecrets, *, grant: list[str], revoke: list[str]
+) -> credentials.Store:
+  """the lazy counterpart of `preflight_scoped_launch`'s hydrated store: the
+  launch's credential binding as a kinds-only read-through store
+  (`credentials.scoped_view_store`), for host-side code that reads a credential
+  on the session's behalf before the launch exists. `grant`/`revoke` are the
+  unified override values; the `@bro` halves shape only the summon side and are
+  ignored here. raises `LaunchScopeError` like the preflight."""
+  try:
+    finalized, _, _ = _finalize_credential_scope(scoped, grant, revoke)
+    return credentials.scoped_view_store(finalized.required, optional=finalized.optional)
+  except (ValueError, credentials.SecretNotFound) as e:
+    raise LaunchScopeError(str(e)) from e

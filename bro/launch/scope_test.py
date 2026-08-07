@@ -245,3 +245,25 @@ class TestPreflightScopedLaunch:
     ):
       with pytest.raises(bro.launch.scope.LaunchScopeError, match="secret 'github' not found"):
         self._preflight(bro.launch.scope.ScopedSecrets({'github'}, set(), True))
+
+
+class TestLaunchViewStore:
+  def test_finalized_overrides_bind_the_view(self):
+    # the same unified values the preflight takes: plain names finalize the
+    # credential tiers, @names are the summon side and don't reach the view
+    with patch('bro.launch.scope.credentials.scoped_view_store', return_value='the-view') as view:
+      store = bro.launch.scope.launch_view_store(
+        bro.launch.scope.ScopedSecrets({'brog', 'github'}, {'openai'}, True),
+        grant=['brog+github', '@dev'],
+        revoke=['brog'],
+      )
+    assert store == 'the-view'
+    assert view.call_args == (({'brog+github', 'github'},), {'optional': {'openai'}})
+
+  def test_bad_override_raises_launch_scope_error(self):
+    with pytest.raises(
+      bro.launch.scope.LaunchScopeError, match='already in the scoped credential set'
+    ):
+      bro.launch.scope.launch_view_store(
+        bro.launch.scope.ScopedSecrets({'github'}, set(), True), grant=['github'], revoke=[]
+      )
