@@ -9,8 +9,10 @@ from typing import Optional
 import bro.brog.model as brog_model
 import bro.brog.system as brog_system
 from bro import cw
-from bro.base import log
+from bro.base import credentials, log
 from bro.base.args import Parser
+from bro.launch.scope import LaunchScopeError, Surface, launch_view_store, scoped_secrets
+from bro.workspace.project import project_config
 
 __cli_name__ = 'dive-in'
 
@@ -65,16 +67,39 @@ def _prefetch_task(system: brog_system.System, task_ref: str) -> tuple[brog_mode
   return task, block
 
 
+def _task_system(
+  grant: list[str], revoke: list[str], bro: Optional[str], raw: bool
+) -> brog_system.System:
+  """the brog backend for the task prefetch, reading `brog` through the launch's
+  own credential binding (`launch_view_store`) — so the project's instance
+  mapping and `--grant`/`--revoke` select the same brog config the session's
+  store hydrates."""
+  project = project_config()
+  bro_name = bro if bro is not None else project.default_bro
+  surface = Surface.RAW_SESSION if raw else Surface.CW_SESSION
+  store = launch_view_store(
+    scoped_secrets(bro_name, surface, credential_instances=project.creds),
+    grant=grant,
+    revoke=revoke,
+  )
+  return brog_system.build_system(lambda: store.get_json('brog'))
+
+
 def dive_in(
   forwarded: list[str],
   dry_run: bool = False,
   command: Optional[str] = None,
   task: Optional[str] = None,
   new: bool = False,
+  grant: Optional[list[str]] = None,
+  revoke: Optional[list[str]] = None,
+  bro: Optional[str] = None,
+  raw: bool = False,
 ) -> int:
   """launch the session. session shaping — the bro (prompt, scripts, MCP
   namespaces) selected by `--bro` or the project default, or the `--raw`
-  flavor — rides the forwarded flags; dive-in adds nothing of its own."""
+  flavor — rides the forwarded flags; dive-in adds nothing of its own beyond
+  binding the task prefetch to the same scope (`_task_system`)."""
   prompt: Optional[str] = None
   if new:
     base = _slugify(command) if command is not None else ''
@@ -84,7 +109,11 @@ def dive_in(
     log.info('workspace: %s', name)
     prompt = '@:fix --new "":@' if command is None else f'@:fix --new {command}:@'
   elif task is not None:
-    system = brog_system.default_system()
+    try:
+      system = _task_system(grant or [], revoke or [], bro, raw)
+    except (LaunchScopeError, credentials.SecretNotFound, ValueError) as e:
+      log.error('cannot open the task tracker for the prefetch: %s', e)
+      return 1
     task_ref = task
     brog_task, task_block = _prefetch_task(system, task_ref)
     log.info('task: %s', brog_task.name)
@@ -150,5 +179,8 @@ def main(argv: list[str]) -> Optional[int]:
     else:
       log.info('base: origin HEAD %s', base_ref[:12])
       args['into'] = base_ref
+  # the prefetch binds to the same scope the session launches with, so the
+  # scope-shaping flags are read here as well as forwarded
+  scope_args = {key: args[key] for key in ('grant', 'revoke', 'bro', 'raw')}
   forwarded = cw.extract_forwarded_argv(args)
-  return dive_in(forwarded=forwarded, **args)
+  return dive_in(forwarded=forwarded, **scope_args, **args)

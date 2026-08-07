@@ -1142,6 +1142,42 @@ class TestBuildScopedStore:
     assert b'$cred' in store['brog.cred']
     assert set(json.loads(store[credentials.REGISTRY_FILE])) == {'brog', 'github'}
 
+  def test_cacheable_expansion_resolves_through_the_selected_instance(
+    self, configs_dir: Path, bro_dir: Path, monkeypatch
+  ):
+    # a kind-level `$cred` reference in a cacheable chain freezes the instance
+    # the scope selected — the same value the session's own `.cred` for that
+    # kind carries, and the same answer the uncacheable path's in-session
+    # re-expansion would give
+    _write(bro_dir, 'github_token_default', 'ghp_default')
+    _write(bro_dir, 'github_token_bot', 'ghp_bot')
+    _write(bro_dir, 'brog.secret', {'backend': 'github', 'token': {'$cred': 'github'}})
+    registry = {
+      'github': credentials.Secret('github', [credentials.LocalSource('github_token_default')]),
+      'github+bot': credentials.Secret('github+bot', [credentials.LocalSource('github_token_bot')]),
+      'brog': credentials.Secret('brog', [credentials.LocalSource('brog.secret')]),
+    }
+    monkeypatch.setattr(credentials, '_load_registry', lambda: registry)
+    store = credentials.build_scoped_store(['brog', 'github+bot'])
+    assert json.loads(store['brog.cred']) == {'backend': 'github', 'token': 'ghp_bot'}
+    assert store['github.cred'] == b'ghp_bot'
+
+  def test_cacheable_expansion_outside_the_scope_falls_through_to_the_registry(
+    self, configs_dir: Path, bro_dir: Path, monkeypatch
+  ):
+    # only in-scope kinds are rebound; a reference to a kind outside the scope
+    # expands against the registry's own entry and freezes self-contained
+    _write(bro_dir, 'github_token_default', 'ghp_default')
+    _write(bro_dir, 'brog.secret', {'backend': 'github', 'token': {'$cred': 'github'}})
+    registry = {
+      'github': credentials.Secret('github', [credentials.LocalSource('github_token_default')]),
+      'brog': credentials.Secret('brog', [credentials.LocalSource('brog.secret')]),
+    }
+    monkeypatch.setattr(credentials, '_load_registry', lambda: registry)
+    store = credentials.build_scoped_store(['brog'])
+    assert json.loads(store['brog.cred']) == {'backend': 'github', 'token': 'ghp_default'}
+    assert set(store) == {'brog.cred', credentials.REGISTRY_FILE}
+
   def test_shipped_reference_outside_scope_fails(
     self, configs_dir: Path, bro_dir: Path, monkeypatch
   ):
@@ -1318,6 +1354,89 @@ class TestBuildScopedStore:
     _write(configs_dir, 'cw_github_token_bro', 'ghp_bro')
     with pytest.raises(ValueError, match='installs at most one'):
       credentials.build_scoped_store(['github'], optional=['github+alice'])
+
+
+class TestScopedViewStore:
+  def test_variant_reads_under_its_kind_name(self, configs_dir: Path, bro_dir: Path):
+    _write(
+      bro_dir,
+      credentials.HOST_REGISTRY_FILE,
+      {'brog+alt': {'sources': [{'file': 'brog_alt.json'}]}},
+    )
+    _write(bro_dir, 'brog_alt.json', {'backend': 'alt'})
+    _write(bro_dir, 'brog.json', {'backend': 'flow'})
+    store = credentials.scoped_view_store(['brog+alt'])
+    assert store.get_json('brog') == {'backend': 'alt'}
+    assert store.known_names() == frozenset({'brog'})
+
+  def test_bare_kind_reads_its_own_entry(self, configs_dir: Path, bro_dir: Path):
+    _write(bro_dir, 'brog.json', {'backend': 'flow'})
+    store = credentials.scoped_view_store(['brog'])
+    assert store.get_json('brog') == {'backend': 'flow'}
+
+  def test_nothing_is_fetched_at_construction(self, configs_dir: Path, bro_dir: Path, monkeypatch):
+    _write(bro_dir, 'ticket.json', {'prefix': 'ticket'})
+    source = _TicketSource('ticket.json')
+    registry = {'github': credentials.Secret('github', [source])}
+    monkeypatch.setattr(credentials, '_load_registry', lambda: registry)
+    store = credentials.scoped_view_store(['github'])
+    assert source.mints == 0
+    assert store.get('github') == 'ticket_1'
+    assert source.mints == 1
+
+  def test_bounded_to_the_scope(self, configs_dir: Path):
+    _write(configs_dir, 'test_secret.json', {'token': 't'})
+    _write(configs_dir, 'brave.json', {'api_key': 'k'})
+    store = credentials.scoped_view_store([TEST_SECRET])
+    with pytest.raises(credentials.SecretNotFound):
+      store.get('brave')
+
+  def test_unresolvable_name_surfaces_at_read(self, configs_dir: Path):
+    # lazy: the launch-time strictness of hydration is deliberately absent —
+    # a value-less name builds fine and fails only when actually read
+    store = credentials.scoped_view_store([TEST_SECRET])
+    with pytest.raises(credentials.SecretNotFound):
+      store.get(TEST_SECRET)
+
+  def test_unknown_required_name_raises(self, configs_dir: Path):
+    with pytest.raises(ValueError, match='unknown secret'):
+      credentials.scoped_view_store(['nonsense'])
+
+  def test_unknown_optional_name_is_skipped(self, configs_dir: Path):
+    _write(configs_dir, 'test_secret.json', {'token': 't'})
+    store = credentials.scoped_view_store([TEST_SECRET], optional=['nonsense'])
+    assert store.get_json(TEST_SECRET) == {'token': 't'}
+    assert store.try_get('nonsense') is None
+
+  def test_optional_names_join_the_view(self, configs_dir: Path):
+    _write(configs_dir, 'test_secret.json', {'token': 't'})
+    _write(configs_dir, 'openai.json', {'api_key': 'k'})
+    store = credentials.scoped_view_store([TEST_SECRET], optional=['openai'])
+    assert store.get_json('openai') == {'api_key': 'k'}
+
+  def test_two_instances_of_a_kind_raise(self, configs_dir: Path, bro_dir: Path):
+    _write(
+      bro_dir,
+      credentials.HOST_REGISTRY_FILE,
+      {'github+alice': {'sources': [{'file': 'github_token_alice'}]}},
+    )
+    with pytest.raises(ValueError, match='installs at most one'):
+      credentials.scoped_view_store(['github', 'github+alice'])
+
+  def test_kind_reference_expands_through_the_selected_instance(
+    self, configs_dir: Path, bro_dir: Path, monkeypatch
+  ):
+    # a `$cred` reference is spelled at kind level; the view resolves it through
+    # the instance the scope selected, matching the session's own re-expansion
+    _write(bro_dir, 'ticket.json', {'prefix': 'ticket'})
+    _write(bro_dir, 'brog.secret', {'backend': 'github', 'token': {'$cred': 'github'}})
+    registry = {
+      'github+bot': credentials.Secret('github+bot', [_TicketSource('ticket.json')]),
+      'brog': credentials.Secret('brog', [credentials.LocalSource('brog.secret')]),
+    }
+    monkeypatch.setattr(credentials, '_load_registry', lambda: registry)
+    store = credentials.scoped_view_store(['brog', 'github+bot'])
+    assert store.get_json('brog') == {'backend': 'github', 'token': 'ticket_1'}
 
 
 class TestApplyGrantRevoke:

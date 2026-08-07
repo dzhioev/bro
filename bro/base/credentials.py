@@ -773,14 +773,18 @@ def build_scoped_store(names: Iterable[str], *, optional: Iterable[str] = ()) ->
 
   every secret resolves fully on the host first — launch-time validation stays
   strict, and a minting chain mints once here, failing loudly before the session
-  exists. a cacheable resolve embeds the expanded, self-contained value. an
-  un-cacheable one — the winning source, or a `$cred` reference chain, reaching
-  a minting source — must not freeze a short-lived value into the store, so the
-  winning source materializes its raw text with references intact and the
-  session re-expands (and re-mints) per read against the scoped registry. each
-  such reference must be spelled at kind level and land on a kind hydrated into
-  the scoped set (the scoped namespace is kinds-only) — one outside the scope
-  fails the build.
+  exists. resolution — reference expansion included — runs against the registry
+  overlaid with the scope's own kind binding, so a kind-level `$cred` node
+  targeting a kind in scope picks up the launch-selected instance (the value the
+  session's own `.cred` for that kind carries), while one outside the scope
+  falls through to the registry's own entry. a cacheable resolve embeds the
+  expanded, self-contained value. an un-cacheable one — the winning source, or a
+  `$cred` reference chain, reaching a minting source — must not freeze a
+  short-lived value into the store, so the winning source materializes its raw
+  text with references intact and the session re-expands (and re-mints) per read
+  against the scoped registry. each such reference must be spelled at kind level
+  and land on a kind hydrated into the scoped set (the scoped namespace is
+  kinds-only) — one outside the scope fails the build.
 
   a `kind+instance` name materializes under its kind name: the scoped registry
   entry and its `.cred` file are named by the kind, hydrated from the variant's
@@ -805,9 +809,9 @@ def build_scoped_store(names: Iterable[str], *, optional: Iterable[str] = ()) ->
   check runs over the declared union up front, so an unresolvable optional name
   cannot flap the outcome.
   """
-  _require_one_instance_per_kind(set(names) | set(optional))
   registry = _load_registry()
-  store = Store(registry)
+  selection = _scoped_selection(set(names), set(optional), registry)
+  store = Store({**registry, **{parse_name(name)[0]: secret for name, secret, _ in selection}})
   files: dict[str, bytes] = {}
   scoped: dict[str, dict] = {}
   shipped_references: dict[str, set[str]] = {}
@@ -836,22 +840,11 @@ def build_scoped_store(names: Iterable[str], *, optional: Iterable[str] = ()) ->
       entry['install'] = install
     scoped[kind] = entry
 
-  for name in sorted(set(names)):
-    secret = registry.get(name)
-    if secret is None:
-      raise ValueError(f'unknown secret {name!r} declared in manifest; not in the registry')
-    resolved = store.resolve(name)
-    if resolved is None:  # strict: a declared name with no value fails the build
-      raise SecretNotFound(name)
-    value, cacheable = resolved
-    materialize(name, value, cacheable, secret)
-  for name in sorted(set(optional) - set(names)):
-    secret = registry.get(name)
-    if secret is None:
-      log.debug('optional secret %r not in the registry; skipping', name)
-      continue
+  for name, secret, required in selection:
     resolved = store.resolve(name)
     if resolved is None:
+      if required:  # strict: a declared name with no value fails the build
+        raise SecretNotFound(name)
       log.debug('optional secret %r unresolvable; skipping', name)
       continue
     value, cacheable = resolved
@@ -859,6 +852,46 @@ def build_scoped_store(names: Iterable[str], *, optional: Iterable[str] = ()) ->
   _require_references_in_scope(shipped_references, set(scoped))
   files[REGISTRY_FILE] = json.dumps(scoped).encode()
   return files
+
+
+def _scoped_selection(
+  required: set[str], optional: set[str], registry: dict[str, Secret]
+) -> list[tuple[str, Secret, bool]]:
+  """the (name, entry, required) rows a finalized scope selects from a registry,
+  validated for the kinds-only session namespace: at most one instance per kind
+  across both tiers, an unknown required name raises, an unknown optional name
+  is skipped."""
+  _require_one_instance_per_kind(required | optional)
+  selection: list[tuple[str, Secret, bool]] = []
+  for name in sorted(required):
+    secret = registry.get(name)
+    if secret is None:
+      raise ValueError(f'unknown secret {name!r} declared in manifest; not in the registry')
+    selection.append((name, secret, True))
+  for name in sorted(optional - required):
+    secret = registry.get(name)
+    if secret is None:
+      log.debug('optional secret %r not in the registry; skipping', name)
+      continue
+    selection.append((name, secret, False))
+  return selection
+
+
+def scoped_view_store(names: Iterable[str], *, optional: Iterable[str] = ()) -> Store:
+  """a lazy, kinds-only Store over a finalized scope: each selected name's
+  registry entry keyed by its kind, so a `kind+instance` selection reads under
+  the kind name — the namespace a session's materialized store serves — and a
+  read returns the value hydration would materialize from that entry.
+
+  nothing is fetched or minted up front: each read resolves on demand through
+  the entry's own sources, and a name that cannot resolve surfaces as
+  `SecretNotFound` at that read rather than failing a launch. registry-level
+  strictness matches `build_scoped_store` (`_scoped_selection`). for host-side
+  code that reads a credential on a launch's behalf without hydrating the
+  session's store.
+  """
+  selection = _scoped_selection(set(names), set(optional), _load_registry())
+  return Store({parse_name(name)[0]: secret for name, secret, _ in selection})
 
 
 def _require_references_in_scope(shipped: dict[str, set[str]], scoped_kinds: set[str]) -> None:

@@ -181,7 +181,7 @@ class TestNewMode:
 class TestTaskMode:
   @pytest.fixture(autouse=True)
   def fake_backend(self, monkeypatch):
-    monkeypatch.setattr('bro.brog.system.default_system', lambda: object())
+    monkeypatch.setattr(dive_in, '_task_system', lambda grant, revoke, bro, raw: object())
 
   def test_every_launch_picks_a_fresh_workspace_name(self, fake_proj, monkeypatch, capsys):
     monkeypatch.setattr(
@@ -229,6 +229,45 @@ class TestTaskMode:
       f'@:fix {URL}:@\n\ntask block\n\nOnce you understand the task, run the focused checks'
     )
 
+  def test_prefetch_binds_the_launch_scope_flags(self, fake_proj, monkeypatch, capsys):
+    captured = {}
+
+    def fake_task_system(grant, revoke, bro, raw):
+      captured.update(grant=grant, revoke=revoke, bro=bro, raw=raw)
+      return object()
+
+    monkeypatch.setattr(dive_in, '_task_system', fake_task_system)
+    monkeypatch.setattr(dive_in, '_prefetch_task', lambda system, ref: (_brog_task(), 'task block'))
+    argv = ['dive-in', '-n', '-t', UUID, '--grant', 'brog+github', '--revoke', 'brog']
+    rc = dive_in.main([*argv, '--bro', 'dev', '--raw'])
+    assert rc == 0
+    assert captured == {'grant': ['brog+github'], 'revoke': ['brog'], 'bro': 'dev', 'raw': True}
+    # the flags still ride into the forwarded `cw ss` untouched
+    args = cw.build_parser().parse(shlex.split(capsys.readouterr().out.strip()))
+    assert args['grant'] == ['brog+github']
+    assert args['revoke'] == ['brog']
+
+  def test_scope_without_brog_fails_before_any_launch(self, fake_proj, monkeypatch, capsys):
+    from bro.base import credentials
+
+    def no_brog(grant, revoke, bro, raw):
+      raise credentials.SecretNotFound('brog')
+
+    monkeypatch.setattr(dive_in, '_task_system', no_brog)
+    rc = dive_in.dive_in(forwarded=[], dry_run=True, task=UUID, revoke=['brog'])
+    assert rc == 1
+    assert capsys.readouterr().out == ''
+
+  def test_bad_scope_override_fails_before_any_launch(self, fake_proj, monkeypatch):
+    from bro.launch.scope import LaunchScopeError
+
+    def bad_override(grant, revoke, bro, raw):
+      raise LaunchScopeError("cannot grant 'brog': already in the scoped credential set")
+
+    monkeypatch.setattr(dive_in, '_task_system', bad_override)
+    rc = dive_in.dive_in(forwarded=[], dry_run=True, task=UUID, grant=['brog'])
+    assert rc == 1
+
   def test_focus_flag_is_rejected(self):
     with pytest.raises(SystemExit):
       dive_in.main(['dive-in', '--focus'])
@@ -236,6 +275,56 @@ class TestTaskMode:
   def test_resume_flag_is_rejected(self):
     with pytest.raises(SystemExit):
       dive_in.main(['dive-in', '--resume', '-t', UUID])
+
+
+class TestTaskSystem:
+  """the prefetch backend reads `brog` through the launch's own scope binding."""
+
+  def _fake_wiring(self, monkeypatch, calls: dict):
+    from types import SimpleNamespace
+
+    class FakeStore:
+      def get_json(self, name):
+        calls['read'] = name
+        return {'backend': 'github', 'token': 't', 'repo': 'owner/repo'}
+
+    monkeypatch.setattr(
+      dive_in,
+      'project_config',
+      lambda: SimpleNamespace(default_bro='bro-dev', creds={'brog': 'github'}),
+    )
+
+    def fake_scoped_secrets(bro_name, surface, *, credential_instances):
+      calls['scoped'] = (bro_name, surface, credential_instances)
+      return 'base-scope'
+
+    monkeypatch.setattr(dive_in, 'scoped_secrets', fake_scoped_secrets)
+
+    def fake_view(scoped, *, grant, revoke):
+      calls['view'] = (scoped, grant, revoke)
+      return FakeStore()
+
+    monkeypatch.setattr(dive_in, 'launch_view_store', fake_view)
+
+  def test_reads_brog_through_the_launch_view(self, monkeypatch):
+    import bro.brog.github as brog_github
+    from bro.launch.scope import Surface
+
+    calls: dict = {}
+    self._fake_wiring(monkeypatch, calls)
+    system = dive_in._task_system(['brog+github'], ['brog'], None, False)
+    assert calls['scoped'] == ('bro-dev', Surface.CW_SESSION, {'brog': 'github'})
+    assert calls['view'] == ('base-scope', ['brog+github'], ['brog'])
+    assert calls['read'] == 'brog'
+    assert isinstance(system, brog_github.System)
+
+  def test_raw_flavor_scopes_the_raw_surface_and_explicit_bro_wins(self, monkeypatch):
+    from bro.launch.scope import Surface
+
+    calls: dict = {}
+    self._fake_wiring(monkeypatch, calls)
+    dive_in._task_system([], [], 'dev', True)
+    assert calls['scoped'] == ('dev', Surface.RAW_SESSION, {'brog': 'github'})
 
 
 class TestPrefetchTask:

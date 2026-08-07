@@ -14,7 +14,7 @@ This document explains the modes, workspace naming, the dispatcher-command seedi
 
 ### Task mode (`-t / --task <ref>`)
 
-`-t` accepts any task ref the repository's configured brog backend takes natively (see `bro/brog/CLAUDE.md`). The built-in GitHub backend accepts an issue number, `#N`, or an issue URL; contributed backends define their own refs. The ref is resolved host-side through `bro.brog.system.default_system()`, which normalizes it to the backend's canonical id — the value `CW_TASK_ID` carries.
+`-t` accepts any task ref the repository's configured brog backend takes natively (see `bro/brog/CLAUDE.md`). The built-in GitHub backend accepts an issue number, `#N`, or an issue URL; contributed backends define their own refs. The ref is resolved host-side by a brog backend bound to the launch's own credential scope (`_task_system`: the session bro's scope under the launch's `--grant`/`--revoke` and the project's instance mapping, read through `bro.launch.scope.launch_view_store`) — so the prefetch reads the same `brog` config the session's store hydrates. The backend normalizes the ref to its canonical id — the value `CW_TASK_ID` carries. A scope whose `brog` was revoked without a replacement, or a bad override, fails here with a clean error before anything is created.
 
 The first user message becomes `@:fix <original-task-ref>:@` — the ref exactly as the user typed it — followed by the pre-fetched task block (see "Initial-prompt composition").
 
@@ -60,7 +60,7 @@ With `--into` omitted, `dive-in` resolves the base itself: it fetches origin's `
 - `dive-in --new` → `@:fix --new "":@`
 - `dive-in --new <seed>` → `@:fix --new <seed>:@`
 
-Task mode also appends a pre-fetched task block to the message — the task metadata, description, and comments, fetched host-side via `bro.brog.system.default_system()` — so the session's first turn reads the task without calling the not-yet-connected brog MCP server.
+Task mode also appends a pre-fetched task block to the message — the task metadata, description, and comments, fetched host-side by the launch-scoped backend (`_task_system`, see "Task mode") — so the session's first turn reads the task without calling the not-yet-connected brog MCP server.
 
 If a positional `command` is present alongside `-t`, it gets appended as `Once you understand the task, <command>`. This lets you say `dive-in -t URL "draft a PR description"` and have it threaded through the task-orientation flow.
 
