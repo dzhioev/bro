@@ -1,10 +1,10 @@
-# CLAUDE.md
+# bro-dev/CLAUDE.md
 
 Development tooling distributed separately from the bro runtime framework. The package is `bro_dev`; none of it is imported by framework users.
 
 ## Development
 
-This uv workspace member owns `pyproject.toml`, `conftest.py`, `.claude/settings.json`, `format.sh`, and the explicit test roster in `dev/run_tests.py`. Run `(cd bro-dev && ./format.sh)` and `(cd bro-dev && ./run-tests)` from the repository root; build the wheel with `uv build --package bro-dev`.
+This workspace member owns only `pyproject.toml` — its distribution metadata and dependencies. Formatting, linting, typing, and the test roster are the repository root's (`CLAUDE.md`, "Development"), which covers this directory too; build the wheel with `uv build --package bro-dev`.
 
 ## Components
 

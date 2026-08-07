@@ -2,7 +2,6 @@
 import subprocess
 
 import bro.llm.usage as usage
-
 from bro_dev.claude_commit_footer import (
   State,
   _effective_baseline,
