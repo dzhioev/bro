@@ -216,7 +216,7 @@ wheels = [
 [[package]]
 name = "bro"
 version = "0.1.0"
-source = { editable = "bro" }
+source = { editable = "." }
 dependencies = [
     { name = "icecream" },
     { name = "python-dateutil" },
@@ -331,24 +331,8 @@ dependencies = [
     { name = "bro", extra = ["agent"] },
 ]
 
-[package.dev-dependencies]
-dev = [
-    { name = "deptry" },
-    { name = "pyright" },
-    { name = "pytest" },
-    { name = "ruff" },
-]
-
 [package.metadata]
-requires-dist = [{ name = "bro", extras = ["agent"], editable = "bro" }]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "deptry", specifier = "==0.25.1" },
-    { name = "pyright", specifier = "==1.1.411" },
-    { name = "pytest", specifier = "==9.1.1" },
-    { name = "ruff", specifier = "==0.15.20" },
-]
+requires-dist = [{ name = "bro", extras = ["agent"], editable = "." }]
 
 [[package]]
 name = "certifi"

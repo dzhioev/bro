@@ -6,7 +6,7 @@ on:
   pull_request:
 
 jobs:
-  bro:
+  tests:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -15,15 +15,4 @@ jobs:
       - run: uv sync --all-packages --all-groups --all-extras
       - run: |
           source .venv/bin/activate
-          cd bro && ./run-tests
-
-  bro-dev:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - run: uv sync --all-packages --all-groups --all-extras
-      - run: |
-          source .venv/bin/activate
-          cd bro-dev && ./run-tests
+          ./run-tests
