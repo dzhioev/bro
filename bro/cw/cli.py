@@ -3,12 +3,11 @@ import sys
 from typing import Optional
 
 from bro.base.args import REMAINDER, SUPPRESS, Parser
-from bro.cw.claude_auth import _load_anthropic_key
 from bro.cw.clean import clean_workspaces
 from bro.cw.flags import DEFAULT_HOLD, add_forwarded_flags
 from bro.cw.listing import list_workspaces
 from bro.cw.runner import run_in_place
-from bro.cw.session import SessionSpec, start_session
+from bro.cw.session import SessionSpec, resume_session, start_session
 from bro.workspace.banner import banner
 from bro.workspace.containers import exec_in_workspace
 from bro.workspace.model import Workspace
@@ -32,16 +31,22 @@ def build_parser() -> Parser:
   # its cwd — see cw/runner.py
   ss.add_argument('--in-place', action='store_true', env=False, help=SUPPRESS)
   add_forwarded_flags(ss)
-  ss.add_argument(
-    '--resume',
-    action='store_true',
-    help='resume the latest claude session in the named workspace; skips the initial prompt',
-  )
+  # internal seam, not a user surface: `cw resume` builds the resume spec and the
+  # outer serializes it into the inner argv — see cw/session.py
+  ss.add_argument('--resume', action='store_true', env=False, help=SUPPRESS)
   ss.add_argument(
     '-p', '--prompt', default=None, help='initial prompt (prepended with base prompt)'
   )
   ss.add_argument('name', help='worktree name')
   ss.add_argument('claude_args', nargs=REMAINDER, help='args forwarded to claude')
+
+  resume = subparsers.add_parser(
+    'resume', help='resume the last claude session in a workspace, under the flags it ran with'
+  )
+  resume.add_argument(
+    'ref',
+    help='workspace to resume, as `cw list` shows it; use c:<name> for container workspaces',
+  )
 
   subparsers.add_parser('list', help='list workspaces ([.]=local, [o]=container, [x]=abandoned)')
 
@@ -104,6 +109,8 @@ def main(argv: list[str]) -> Optional[int]:
 
   if command == 'list':
     return list_workspaces()
+  if command == 'resume':
+    return resume_session(args['ref'])
   if command == 'clean':
     return clean_workspaces(force=args['force'], dry_run=args['dry_run'], refs=args['refs'])
   if command == 'check-clean':
@@ -135,30 +142,12 @@ def main(argv: list[str]) -> Optional[int]:
     offending = [flag for flag, present in machinery.items() if present]
     if len(offending) > 0:
       parser.error(f'--in-place cannot be combined with {", ".join(offending)}')
-  # the outer-only policy gates (--raw × --host, the anthropic-key probe) are
-  # skipped under --in-place: the outer validated them once, and the inner argv
-  # never carries --host
-  if args['into'] is not None and args['resume']:
-    parser.error(
-      '--into cannot be combined with --resume (it only applies when creating a workspace)'
-    )
-  if args['raw'] and not in_place:
-    if args['host']:
-      parser.error(
-        '--raw cannot be combined with --host (the raw flavor is fenced to the container)'
-      )
-    if _load_anthropic_key() is None:
-      parser.error(
-        '--raw requires the `anthropic` secret to provide an api_key '
-        '({"api_key": "..."}); claude --bare does not use OAuth or keychain'
-      )
-  if args['resume']:
-    if args['drop']:
-      parser.error('--resume cannot be combined with --drop')
-    if args['prompt'] is not None:
-      parser.error(
-        '--resume cannot be combined with -p/--prompt (the initial prompt is ignored on resume)'
-      )
+  if args['resume'] and not in_place:
+    parser.error('resuming is `cw resume <workspace>`; --resume is an inner-argv token')
+  # the outer-only --raw × --host gate is skipped under --in-place: the outer
+  # validated it once, and the inner argv never carries --host
+  if args['raw'] and args['host'] and not in_place:
+    parser.error('--raw cannot be combined with --host (the raw flavor is fenced to the container)')
   if args['hold'] is None:
     args['hold'] = DEFAULT_HOLD
   spec = SessionSpec(**args)
