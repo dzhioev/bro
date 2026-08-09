@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import signal
+import subprocess
 import types
 from typing import ClassVar, Optional
 from unittest.mock import MagicMock
@@ -1120,7 +1121,7 @@ class TestFeatures:
     class FeatureBro(BaseBro):
       name = 'feature-bro'
       description = 'd'
-      features: ClassVar = {'x': ('xkey',)}
+      features: ClassVar = {'x': llm_mcp.creds.contains('xkey')}
       mcp_servers: ClassVar = [when(feature('x'), MCPServerSpec.of(_SecretServer))]
       system_prompt = 'base text{{when #features contains x}} FEATURE TEXT{{end}}'
 
@@ -1139,31 +1140,125 @@ class TestFeatures:
     assert 'FEATURE TEXT' not in off.system_prompt
     assert off.needed_secrets() == ()
 
-  def test_multi_secret_gate_needs_every_secret(self, monkeypatch):
-    class TwoKeyBro(BaseBro):
-      name = 'two-key'
-      description = 'd'
-      features: ClassVar = {'x': ('xkey', 'ykey')}
-      mcp_servers: ClassVar = [when(feature('x'), _make_spec('a'))]
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    monkeypatch.setattr('bro.base.credentials.available', lambda name: name == 'xkey')
-    assert TwoKeyBro()._mcp_specs == []
-    monkeypatch.setattr('bro.base.credentials.available', lambda name: name in {'xkey', 'ykey'})
-    assert len(TwoKeyBro()._mcp_specs) == 1
+  def test_gate_probes_an_unregistered_name_as_off(self, monkeypatch):
+    # the gate vocabulary's creds set has no closed universe: a name the store's
+    # registry doesn't know (e.g. never hydrated into a scoped container) reads
+    # as feature-off instead of raising a universe violation
+    monkeypatch.setattr('bro.base.credentials.available', lambda name: False)
+    bro = self._bro_class()()
+    assert bro._mcp_specs == []
 
   def test_derived_pins_parent_feature_on(self, monkeypatch):
     monkeypatch.setattr('bro.base.credentials.available', lambda name: False)
 
     class Pinned(self._bro_class()):
       name = 'feature-child'
-      features: ClassVar = {'x': ()}
+      features: ClassVar = {'x': True}
 
     child = Pinned()
     assert len(child._mcp_specs) == 1
     assert 'FEATURE TEXT' in child.system_prompt
+
+  def test_derived_disables_parent_feature(self, monkeypatch):
+    monkeypatch.setattr('bro.base.credentials.available', lambda name: name == 'xkey')
+
+    class Disabled(self._bro_class()):
+      name = 'feature-child'
+      features: ClassVar = {'x': False}
+
+    child = Disabled()
+    assert child._mcp_specs == []
+    assert 'FEATURE TEXT' not in child.system_prompt
+
+  def test_reenabling_a_disabled_feature_fails_construction(self):
+    class Disabled(self._bro_class()):
+      name = 'feature-child'
+      features: ClassVar = {'x': False}
+
+    class Reenabled(Disabled):
+      name = 'feature-grandchild'
+      features: ClassVar = {'x': True}
+
+    with pytest.raises(ValueError, match="re-enables feature 'x'"):
+      Reenabled()
+
+  def test_redeclaring_a_disabled_feature_off_is_allowed(self, monkeypatch):
+    monkeypatch.setattr('bro.base.credentials.available', lambda name: False)
+
+    class Disabled(self._bro_class()):
+      name = 'feature-child'
+      features: ClassVar = {'x': False}
+
+    class StillDisabled(Disabled):
+      name = 'feature-grandchild'
+      features: ClassVar = {'x': False}
+
+    assert StillDisabled()._mcp_specs == []
+
+  def test_gate_may_reference_only_the_gate_vocabulary(self):
+    class SurfaceGated(BaseBro):
+      name = 'surface-gated'
+      description = 'd'
+      features: ClassVar = {'x': llm_mcp.harness == 'bro'}
+      mcp_servers: ClassVar = [when(feature('x'), _make_spec('a'))]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    with pytest.raises(ConditionError, match='unknown variable #harness'):
+      SurfaceGated()
+
+  def test_has_feature_probes_live_and_reads_undeclared_as_off(self, monkeypatch):
+    monkeypatch.setattr('bro.base.credentials.available', lambda name: name == 'xkey')
+    bro = self._bro_class()()
+    assert bro.has_feature('x') is True
+    assert bro.has_feature('ghost') is False
+    monkeypatch.setattr('bro.base.credentials.available', lambda name: False)
+    assert bro.has_feature('x') is False
+
+
+class TestWorkspaceProvisioning:
+  def _accounting_bro(self):
+    class AccountingBro(EchoBro):
+      name = 'accounting'
+      features: ClassVar = {'commit-accounting': True}
+
+    return AccountingBro()
+
+  def _repo(self, tmp_path, monkeypatch):
+    subprocess.run(['git', 'init', '-q', str(tmp_path)], check=True)
+    monkeypatch.chdir(tmp_path)
+    return tmp_path / '.git' / 'hooks'
+
+  @pytest.mark.asyncio
+  async def test_run_installs_the_footer_hooks_in_a_managed_workspace(self, tmp_path, monkeypatch):
+    hooks = self._repo(tmp_path, monkeypatch)
+    monkeypatch.setenv('CW_NAME', 'provision-test')
+    await self._accounting_bro().run('hi', surface='test')
+    for hook_name in ('commit-msg', 'post-commit'):
+      assert (hooks / hook_name).exists()
+
+  @pytest.mark.asyncio
+  async def test_no_install_outside_a_managed_workspace(self, tmp_path, monkeypatch):
+    hooks = self._repo(tmp_path, monkeypatch)
+    await self._accounting_bro().run('hi', surface='test')
+    assert not (hooks / 'commit-msg').exists()
+
+  @pytest.mark.asyncio
+  async def test_no_install_without_the_feature(self, tmp_path, monkeypatch):
+    hooks = self._repo(tmp_path, monkeypatch)
+    monkeypatch.setenv('CW_NAME', 'provision-test')
+    await EchoBro().run('hi', surface='test')
+    assert not (hooks / 'commit-msg').exists()
+
+  def test_a_hook_already_present_is_left_alone(self, tmp_path, monkeypatch):
+    hooks = self._repo(tmp_path, monkeypatch)
+    hooks.mkdir(parents=True, exist_ok=True)
+    (hooks / 'commit-msg').write_text('#!/bin/sh\n# the repository installed me\n')
+    monkeypatch.setenv('CW_NAME', 'provision-test')
+    self._accounting_bro()._provision_workspace()
+    assert (hooks / 'commit-msg').read_text() == '#!/bin/sh\n# the repository installed me\n'
+    assert (hooks / 'post-commit').exists()
 
   def test_undeclared_feature_name_raises(self):
     class NoFeature(BaseBro):

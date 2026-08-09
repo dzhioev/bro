@@ -10,7 +10,7 @@ from bro.bros import dev
 from bro.bros.bro import Bro
 from bro.bros.dev import mcp
 from bro.datasources import references
-from bro.llm.mcp import harness
+from bro.llm.mcp import creds, harness
 
 SYSTEM_PROMPT = """\
 You are a software developer with tools to read, search, and edit files and run
@@ -36,11 +36,14 @@ Caution:
 class Dev(Bro):
   name = 'dev'
   description = 'generic software developer with file + shell + search tools'
-  # the task-driven workflow (the fix/run-pr/land scripts and their task
+  # brog: the task-driven workflow (the fix/run-pr/land scripts and their task
   # bookkeeping) needs the brog task tracker; the feature is on wherever a
   # brog config resolves and absent otherwise, so a tracker-less environment
   # still launches a plain developer.
-  features = {'brog': ('brog',)}
+  # commit-accounting: the dev family attributes token spend to its commits —
+  # session-start provisioning installs the footer hooks into the managed
+  # workspace.
+  features = {'brog': creds.contains('brog'), 'commit-accounting': True}
   # the dev toolset duplicates the claude harness's built-in file/shell tools
   mcp_servers = [when(harness == 'bro', dev.mcp), when(feature('brog'), brog_mcp)]
   data_sources = [references.dev_style]

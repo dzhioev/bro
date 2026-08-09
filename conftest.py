@@ -26,15 +26,26 @@ autouse fixture below): test bros mostly keep the default chat_gpt spec, whose
 with `@pytest.mark.credential_gate` and control `credentials.available`
 themselves.
 
-The usage-file pointer is dropped too: a test suite launched from inside a
-bro run inherits the run's live pointer, and a test reading
-`usage.current_usage()` would otherwise see that session's spend.
+The usage-file pointer and the Claude session id are dropped too: a test suite
+launched from inside a bro run or a claude session inherits the live usage
+source, and a test reading `usage.current_usage()` would otherwise see that
+session's spend. `PWD` goes with them — the transcript fallback resolves the
+working directory through it, and `monkeypatch.chdir` never updates it, so a
+chdir'd test would still read the launching session's transcripts. `CW_NAME`
+too — it marks a managed workspace, and a bro run in a test would otherwise
+provision the launching session's workspace
+(`BaseBro._provision_workspace`).
 
 The log level is pinned to INFO and `BRO_LOG_LEVEL` dropped — at session start
 against an inherited verbose launch (`run-tests --verbose`), and after every
 test (the autouse fixture below) against a test that parses `--log`/`--verbose`
 through a real CLI: level-sensitive tests — including every subprocess a test
 spawns — must see the default they assert against.
+
+`*_llm_test.py` files are live-LLM behavior probes: they run a real bro against
+the configured provider and spend real tokens, so they stay outside the default
+roster and `pytest_collection_modifyitems` below skips them unless
+`BRO_LLM_TESTS=1` explicitly opts in.
 """
 
 import logging
@@ -58,8 +69,22 @@ os.environ.pop('BRO_HOLD', None)
 os.environ.pop('CW_RUNNER_PID', None)
 os.environ.pop(REGISTRY_ENV, None)
 os.environ.pop(usage.USAGE_FILE_VARIABLE, None)
+os.environ.pop(usage.SESSION_ID_VARIABLE, None)
+os.environ.pop('PWD', None)
+os.environ.pop('CW_NAME', None)
 log.set_level(logging.INFO)
 os.environ.pop(log.LEVEL_ENV, None)
+
+
+def pytest_collection_modifyitems(items):
+  if os.environ.get('BRO_LLM_TESTS') == '1':
+    return
+  skip = pytest.mark.skip(
+    reason='live-LLM behavior probe; spends real tokens — set BRO_LLM_TESTS=1 to run'
+  )
+  for item in items:
+    if item.path.name.endswith('_llm_test.py'):
+      item.add_marker(skip)
 
 
 @pytest.fixture(autouse=True)

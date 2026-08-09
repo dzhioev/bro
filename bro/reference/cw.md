@@ -37,12 +37,11 @@ default = "foo"                      # the bro a session runs as when --bro does
 image-repository = "custom-images"   # optional: docker repository for the repo's session-container
                                      # images, defaulting to bro/<default> (bro/foo here)
 creds = { brog = "github" }          # optional: per-kind credential instances the repo's launches run on
-footer-command = "repo-footer"        # optional: stdout appended by land-pr to a squash body
 build-context-command = "list-files"  # optional: stdout is the session image's context file list,
                                       # replacing the default `git ls-files`
 ```
 
-`default` is required and names the **project default bro**; `image-repository`, `creds`, `footer-command`, and `build-context-command` are optional. A missing pyproject, table, or default — or an unknown key — fails the launch.
+`default` is required and names the **project default bro**; `image-repository`, `creds`, and `build-context-command` are optional. A missing pyproject, table, or default — or an unknown key — fails the launch.
 
 `creds` selects, per credential kind, the `kind+instance` variant the repo's launches hydrate instead of the kind entry (the `kind+instance` scheme is `bro/setup/CLAUDE.md`'s "Configuration") — e.g. `brog = "github"` puts `brog+github` into every scope that would carry `brog`, backing the repo's `brog::` tools with the GitHub backend while components keep declaring plain kinds. Every launch surface threads the mapping from its `project_config()` into the scope computation — `cw ss` (both flavors), the bro launchers' container hop, and the summon lowering (a child's scope is computed by the supervisor, so it follows the launching repo's config) — where `bro/launch/scope.py:scoped_secrets` substitutes each mapped kind present in the selected persona's tiers before the `--grant`/`--revoke` overrides, so overrides address the substituted names. Mapped kinds absent from that persona's scope are ignored because the mapping is repo-wide; a kind absent from the host credential registry fails the launch as a typo guard. Each entry is also validated against the credential name grammar at config read. In-session code never sees the instance: hydration materializes the variant under its kind name (see "Scoped credential hydration"). This is the launch half of running another project's repo through cw — one whose `setup.sh` leaves `.venv/bin/cw` working. The other half is the persona itself, registered through the `bro` entry-point group (`CLAUDE.md`, "Register the new bro").
 

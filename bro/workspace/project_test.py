@@ -30,22 +30,22 @@ class TestProjectConfig:
     )
     assert project_config() == ProjectConfig(default_bro='foo', image_repository='custom-images')
 
-  def test_footer_command_defaults_to_none(self, project_dir):
+  def test_build_context_command_defaults_to_none(self, project_dir):
     (project_dir / 'pyproject.toml').write_text('[tool.bro]\ndefault = "foo"\n')
-    assert project_config().footer_command is None
+    assert project_config().build_context_command is None
 
-  def test_footer_command_parses(self, project_dir):
+  def test_build_context_command_parses(self, project_dir):
     (project_dir / 'pyproject.toml').write_text(
-      '[tool.bro]\ndefault = "foo"\nfooter-command = "repo-footer"\n'
+      '[tool.bro]\ndefault = "foo"\nbuild-context-command = "list-files"\n'
     )
-    assert project_config().footer_command == 'repo-footer'
+    assert project_config().build_context_command == 'list-files'
 
   @pytest.mark.parametrize('value', ['5', '""'])
-  def test_footer_command_must_be_a_non_empty_string(self, project_dir, value):
+  def test_build_context_command_must_be_a_non_empty_string(self, project_dir, value):
     (project_dir / 'pyproject.toml').write_text(
-      f'[tool.bro]\ndefault = "foo"\nfooter-command = {value}\n'
+      f'[tool.bro]\ndefault = "foo"\nbuild-context-command = {value}\n'
     )
-    with pytest.raises(ValueError, match='footer-command .* non-empty string'):
+    with pytest.raises(ValueError, match='build-context-command .* non-empty string'):
       project_config()
 
   def test_unknown_key_raises(self, project_dir):

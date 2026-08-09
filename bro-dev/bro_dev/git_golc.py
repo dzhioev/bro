@@ -2,7 +2,7 @@
 """show `git gol`-style log with per-commit Claude Code credit usage.
 
 Two passes: pass 1 reads each commit body's footer (the one emitted by
-bro_dev/claude_commit_footer.py) for its per-model output tokens; pass 2 renders
+bro/workflow/commit_footer.py) for its per-model output tokens; pass 2 renders
 `git log --graph --color=always` with a `CREDITS:<full-sha>` sentinel that we
 substitute line-by-line with a fixed-width credits column.
 

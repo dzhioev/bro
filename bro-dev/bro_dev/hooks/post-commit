@@ -1,4 +1,0 @@
-#!/usr/bin/env -S bash -e
-# promote the staged token-accounting baseline once a commit lands. the hook is
-# installed by bro-dev provisioning, and commits run with the project venv active.
-exec bro-dev.claude-commit-footer --record

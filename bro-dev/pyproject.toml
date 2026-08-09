@@ -17,7 +17,6 @@ bro = { workspace = true }
 
 [project.scripts]
 # bro_dev
-"bro-dev.claude-commit-footer" = "bro_dev._entrypoints:bro_dev_claude_commit_footer"
 "bro-dev.git-golc" = "bro_dev._entrypoints:bro_dev_git_golc"
 "bro-dev.install" = "bro_dev._entrypoints:bro_dev_install"
 "bro-dev.sync-scripts" = "bro_dev._entrypoints:bro_dev_sync_scripts"
@@ -36,6 +35,3 @@ where = ["."]
 namespaces = false
 include = ["bro_dev*"]
 exclude = ["*.egg-info"]
-
-[tool.setuptools.package-data]
-"bro_dev" = ["hooks/post-commit"]

@@ -1,6 +1,6 @@
 # bro/base/CLAUDE.md
 
-Low-level shared utilities used across the whole repo. Some modules (`bro.base.args`, `bro.base.log`) happen to import no third-party package at load time, so consumers that run outside the venv (e.g. `bro-dev/bro_dev/claude_commit_footer.py` from the post-commit git hook) can import them. Some modules expose a CLI (`bro.base.credentials`, `bro.base.time-util`); run those with `--help` for flags.
+Low-level shared utilities used across the whole repo. Some modules (`bro.base.args`, `bro.base.log`) happen to import no third-party package at load time, so consumers that run outside the venv (e.g. `bro/workflow/commit_footer.py` from the commit git hooks) can import them. Some modules expose a CLI (`bro.base.credentials`, `bro.base.time-util`); run those with `--help` for flags.
 
 ## Modules
 

@@ -108,11 +108,13 @@ bro-dev = { workspace = true }
 "bro.trails.record.claude" = "bro._entrypoints:bro_trails_record_claude"
 "bro.trails.rewind" = "bro._entrypoints:bro_trails_rewind"
 "bro.trails.server.server" = "bro._entrypoints:bro_trails_server_server"
+"bro.workflow.commit-footer" = "bro._entrypoints:bro_workflow_commit_footer"
 "bro.workflow.dive-in" = "bro._entrypoints:bro_workflow_dive_in"
 "bro.workflow.land-pr" = "bro._entrypoints:bro_workflow_land_pr"
 "broker" = "bro._entrypoints:bro_broker_cli"
 "broxy" = "bro._entrypoints:bro_broker_broxy"
 "call" = "bro._entrypoints:bro_launch_call"
+"commit-footer" = "bro._entrypoints:bro_workflow_commit_footer"
 "credentials" = "bro._entrypoints:bro_base_credentials"
 "cw" = "bro._entrypoints:bro_cw_cli"
 "dive-in" = "bro._entrypoints:bro_workflow_dive_in"
@@ -132,7 +134,6 @@ brog = "bro.brog.mcp:spec"
 
 [tool.bro]
 default = "bro-dev"
-footer-command = "bro-dev.claude-commit-footer"
 
 [tool.deptry.package_module_name_map]
 python_ulid = ["ulid"]
@@ -173,6 +174,7 @@ exclude = ["*.egg-info"]
   "base_image/build.sh",
 ]
 "bro.trails" = ["bootstrap.sh", "server/dynamodb_reserved_words.txt"]
+"bro.workflow" = ["hooks/commit-msg", "hooks/post-commit"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "strict"

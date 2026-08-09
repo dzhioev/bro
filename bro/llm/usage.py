@@ -47,7 +47,7 @@ bare version tokens back to full `Claude Code <version>` agents.
 
 The `usage` CLI prints `current_usage()` — the agent line, then one per-model
 entry per line. The per-commit delta/baseline machinery on top of these
-cumulatives lives in `bro-dev/bro_dev/claude_commit_footer.py`.
+cumulatives lives in `bro/workflow/commit_footer.py`.
 """
 
 from __future__ import annotations

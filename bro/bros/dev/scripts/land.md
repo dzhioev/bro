@@ -1,7 +1,7 @@
 ---
 name: land
-description: This script should be used when the user signals that an open PR should be merged into master — "land it", "land", "merge it", "merge the PR", "merge to master". Runs `land-pr`, which squash-merges the open PR for the current branch in one shot (precondition checks, the repo-configured squash footer when present, remote branch cleanup), then records a `merged` comment on the task and closes it to done unless the user explicitly said to keep it open. On APPROVED, `@::run-pr` chains into this script. Direct push to master (no PR) is a one-liner (`git fetch origin && git rebase origin/master && git push origin HEAD:master`) — not this script.
-version: 3.1.0
+description: This script should be used when the user signals that an open PR should be merged into master — "land it", "land", "merge it", "merge the PR", "merge to master". Runs `land-pr`, which squash-merges the open PR for the current branch in one shot (precondition checks, the branch's aggregated token footer when its commits carry any, remote branch cleanup), then records a `merged` comment on the task and closes it to done unless the user explicitly said to keep it open. On APPROVED, `@::run-pr` chains into this script. Direct push to master (no PR) is a one-liner (`git fetch origin && git rebase origin/master && git push origin HEAD:master`) — not this script.
+version: 3.2.0
 ---
 
 # land
@@ -21,7 +21,7 @@ land-pr
 One shot, in order:
 
 1. Resolves the PR for the current branch and enforces the preconditions — fails with a message and a nonzero exit when the PR is not `OPEN`, not `APPROVED`, or its body has unchecked `- [ ]` test-plan boxes.
-2. Runs the repo's configured footer command over the PR's actual base and appends its stdout to the PR body. A repo without a footer command keeps the body unchanged; command warnings pass through on stderr — relay them to the user.
+2. Aggregates the branch's token-accounting footers over the PR's actual base (`commit-footer --squash`) and appends the result to the PR body. A branch whose commits carry no footers keeps the body unchanged; command warnings pass through on stderr — relay them to the user.
 3. Squash-merges with the PR's own title and body as the commit subject/body, then deletes the remote feature branch (local branch and worktree stay untouched).
 4. Prints a JSON result: `pr`, `url`, `title`, `base`, `squash_sha`, `merged_at`, `branch_deleted`.
 

@@ -512,12 +512,16 @@ def feature(name: str) -> Condition:
   return var('features').contains(name)
 
 
-def _feature_variables(features: dict[str, tuple[str, ...]]) -> Variables:
-  # membership probes the gating secrets with `available`, deliberately not the
-  # `#creds` fact — see `reference/conditions.md` "Bro features" for why a
-  # scoped store breaks the latter
+def _feature_variables(features: dict[str, Condition | bool]) -> Variables:
+  # a Condition gate evaluates against its own vocabulary — `creds` probing
+  # `available` lazily with no closed universe, deliberately not the `#creds`
+  # fact; see `reference/conditions.md` "Bro features" for why a scoped store
+  # breaks the latter. a bool gate is a declaration-time constant, as in `when`.
+  gate_variables: Variables = {'creds': SetVariable(lambda name: credentials.available(name))}
+
   def enabled(name: str) -> bool:
-    return all(credentials.available(secret) for secret in features[name])
+    gate = features[name]
+    return gate if isinstance(gate, bool) else gate.evaluate(gate_variables)
 
   return {'features': SetVariable(enabled, universe=frozenset(features))}
 
@@ -547,15 +551,19 @@ class BaseBro(ABC):
   # an `MCPServerSpec` from a scoped Toolset call; see `bro.llm.mcp.as_spec`.
   data_sources: ClassVar[list[Entry[DataSource]]] = []
   mcp_servers: ClassVar[list[Entry[llm_mcp.MCPServerSpec | llm_mcp.Toolset[Any] | ModuleType]]] = []
-  # named optional capabilities: feature name → the secrets that must all
-  # resolve for the feature to be on (empty tuple = unconditionally on). one
-  # declaration switches every consuming site together: components gate via
-  # `when(feature('<name>'), …)`, static text via `{{iff #features contains
-  # <name>}}` — so a gated component enters the manifest, mounts, and renders
-  # its text only where its gates resolve. MRO-walked like `mcp_servers`, with
-  # derived classes overriding parents per name — `{'<name>': ()}` pins an
-  # inherited feature on, turning its components into hard requirements.
-  features: ClassVar[dict[str, tuple[str, ...]]] = {}
+  # named optional capabilities: feature name → the gate deciding whether the
+  # feature is on — a `Condition` over the environment's resolvable credentials
+  # (`creds.contains('brog')`), or a plain bool constant as in `when` (True
+  # pins the feature on, False disables it). one declaration switches every
+  # consuming site together: components gate via `when(feature('<name>'), …)`,
+  # static text via `{{iff #features contains <name>}}` — so a gated component
+  # enters the manifest, mounts, and renders its text only where its gates
+  # resolve. MRO-walked like `mcp_servers`, with derived classes overriding
+  # parents per name — `{'<name>': True}` pins an inherited feature on, turning
+  # its components into hard requirements. False is terminal: redeclaring a
+  # feature a base class disabled fails construction, so an opt-out binds the
+  # whole sub-hierarchy.
+  features: ClassVar[dict[str, Condition | bool]] = {}
   # credentials no component expresses — the escape hatch for a bro's environment
   # needs. MRO-walked and unioned like `mcp_servers`, so a subclass declares only
   # what it adds. folded into
@@ -593,7 +601,7 @@ class BaseBro(ABC):
     prompt_parts: list[str] = []
     extra_secret_names: list[str] = []
     may_summon_names: list[str] = []
-    feature_gates: dict[str, tuple[str, ...]] = {}
+    feature_gates: dict[str, Condition | bool] = {}
     for cls in reversed(type(self).__mro__):
       raw_mcp = cls.__dict__.get('mcp_servers')
       if raw_mcp is not None:
@@ -612,10 +620,16 @@ class BaseBro(ABC):
         may_summon_names.extend(raw_summon)
       raw_features = cls.__dict__.get('features')
       if raw_features is not None:
-        feature_gates.update(raw_features)
+        for feature_name, gate in raw_features.items():
+          if feature_gates.get(feature_name) is False and gate is not False:
+            raise ValueError(
+              f'{cls.__name__} re-enables feature {feature_name!r} disabled by a base '
+              'class; a False gate is terminal for the sub-hierarchy'
+            )
+          feature_gates[feature_name] = gate
     self._extra_secrets: tuple[str, ...] = tuple(extra_secret_names)
     self._may_summon: tuple[str, ...] = tuple(may_summon_names)
-    self._features: dict[str, tuple[str, ...]] = feature_gates
+    self._features: dict[str, Condition | bool] = feature_gates
     # the membership probe is lazy, so the vocabulary built here stays current
     # with the store — only selection (below) bakes feature truth in.
     self._feature_vocabulary: Variables = _feature_variables(feature_gates)
@@ -721,6 +735,13 @@ class BaseBro(ABC):
     `DataSource.vocabulary`. Any surface that renders the raw `persona` must
     pass it too — the class prompts may carry `#features` directives."""
     return self._feature_vocabulary
+
+  def has_feature(self, name: str) -> bool:
+    """whether the named feature is declared and its gate holds in this
+    environment. an undeclared name reads as off — the probe is for harness
+    code asking an arbitrary persona about a capability, unlike renders, whose
+    closed universe makes an unknown name an error."""
+    return name in self._features and feature(name).evaluate(self._feature_vocabulary)
 
   @property
   def scripts(self) -> dict[str, Path]:
@@ -828,6 +849,19 @@ class BaseBro(ABC):
       return None
     return f'{self.name} cannot start: missing credentials: {", ".join(missing)}'
 
+  def _provision_workspace(self) -> None:
+    # feature-declared workspace provisioning, run at session start (cw's
+    # in-place runner is the claude-harness counterpart): a commit-accounting
+    # persona gets the footer hooks installed into its managed workspace, so
+    # agent commits carry the token footer with no session involvement. scoped
+    # to managed workspaces — an in-place run in an arbitrary repo must not
+    # write into it — and hooks already present are left alone.
+    if not self.has_feature('commit-accounting') or os.environ.get('CW_NAME') is None:
+      return
+    from bro.workflow.commit_footer import install_hooks
+
+    install_hooks(Path.cwd(), overwrite=False)
+
   def _start(
     self,
     input: str,
@@ -844,6 +878,7 @@ class BaseBro(ABC):
     # recording fakes), set on self before _create_llm so the
     # LLM construction path picks them up — then build the LLM, compose the
     # hold prompt, open the trail, and seed the message list.
+    self._provision_workspace()
     self._observer = observer if observer is not None else self._make_observer()
     self._tracker = tracker if tracker is not None else self._make_tracker()
     llm = self._create_llm(hold=hold)

@@ -1,13 +1,17 @@
 #!/usr/bin/env python
+import os
 import subprocess
 
 import bro.llm.usage as usage
-from bro_dev.claude_commit_footer import (
+from bro.workflow.commit_footer import (
   State,
+  _append,
   _effective_baseline,
   _emit_default,
   _emit_squash,
   _repo_root,
+  install_hooks,
+  main,
 )
 
 OPUS = 'claude-opus-4-8'
@@ -30,6 +34,15 @@ def test_repo_root_is_the_linked_worktree_not_the_main_checkout(tmp_path, monkey
 
   monkeypatch.chdir(linked)
   assert _repo_root() == linked.resolve()
+
+
+def test_install_hooks_copies_both_hooks_executable(tmp_path):
+  _git('init', '-q', str(tmp_path))
+  install_hooks(tmp_path)
+  for hook_name in ('commit-msg', 'post-commit'):
+    hook = tmp_path / '.git' / 'hooks' / hook_name
+    assert hook.read_text().startswith('#!/usr/bin/env -S bash -e\n')
+    assert os.access(hook, os.X_OK)
 
 
 def C(input=0, cache_write=0, cache_read=0, output=0):
@@ -68,10 +81,15 @@ class TestState:
     # staged cleared after record
     assert State(p).staged == {}
 
-  def test_record_with_nothing_staged_is_noop(self, tmp_path):
+  def test_record_with_nothing_staged_keeps_the_baseline(self, tmp_path):
+    # a footerless commit (a human's) still fires post-commit; the committed
+    # mark must survive it or the next delta over-credits
     p = tmp_path / 'state.json'
+    s = State(p)
+    s.stage({OPUS: C(output=100)})
+    s.record()
     State(p).record()
-    assert State(p).committed == {}
+    assert State(p).committed == {OPUS: C(output=100)}
 
   def test_corrupt_file_falls_back_to_empty(self, tmp_path):
     p = tmp_path / 'state.json'
@@ -124,6 +142,99 @@ class TestEmitDefault:
       total += parsed.delta['Opus 4.8']['output']
       s.record()
     assert total == 175  # == final cumulative
+
+
+class TestAppend:
+  def _message(self, tmp_path, text):
+    path = tmp_path / 'COMMIT_EDITMSG'
+    path.write_text(text)
+    return path
+
+  def _agent_environment(self, monkeypatch, output=100):
+    monkeypatch.setenv(usage.SESSION_ID_VARIABLE, 'append-test-session')
+    monkeypatch.setattr(
+      usage,
+      'current_usage',
+      lambda: usage.Usage(agent='Claude Code 2.1', per_model={OPUS: C(output=output)}),
+    )
+
+  def test_no_usage_source_leaves_the_message(self, tmp_path, monkeypatch):
+    monkeypatch.setattr(usage, 'current_usage', lambda: None)
+    path = self._message(tmp_path, 'subject\n')
+    state = State(tmp_path / 'state.json')
+    _append(path, state)
+    assert path.read_text() == 'subject\n'
+    assert state.staged == {}
+
+  def test_fallback_resolved_usage_without_env_marker_is_ignored(self, tmp_path, monkeypatch):
+    # a human's shell can resolve usage through the working-directory transcript
+    # fallback; only an env-keyed source marks an agent commit
+    monkeypatch.setattr(
+      usage,
+      'current_usage',
+      lambda: usage.Usage(agent='Claude Code 2.1', per_model={OPUS: C(output=100)}),
+    )
+    path = self._message(tmp_path, 'subject\n')
+    state = State(tmp_path / 'state.json')
+    _append(path, state)
+    assert path.read_text() == 'subject\n'
+    assert state.staged == {}
+
+  def test_appends_footer_and_stages(self, tmp_path, monkeypatch):
+    self._agent_environment(monkeypatch)
+    path = self._message(tmp_path, 'subject\n\nbody\n')
+    state = State(tmp_path / 'state.json')
+    _append(path, state)
+    message = path.read_text()
+    assert message.startswith('subject\n\nbody\n\n> created with Claude Code 2.1 | ')
+    assert message.endswith('↓100\n')
+    assert state.staged[OPUS] == C(output=100)
+
+  def test_footered_message_kept_verbatim(self, tmp_path, monkeypatch):
+    # an amend or rebase reword re-runs the hook; the commit keeps its original
+    # attribution instead of a recomputed (double-counting) delta
+    self._agent_environment(monkeypatch)
+    original = f'subject\n\n{usage.format_footer(["Claude Code 2.1"], {"Opus 4.8": C(output=7)})}\n'
+    path = self._message(tmp_path, original)
+    state = State(tmp_path / 'state.json')
+    _append(path, state)
+    assert path.read_text() == original
+    assert state.staged == {}
+
+  def test_empty_message_left_for_git_to_abort(self, tmp_path, monkeypatch):
+    self._agent_environment(monkeypatch)
+    path = self._message(tmp_path, '\n\n')
+    state = State(tmp_path / 'state.json')
+    _append(path, state)
+    assert path.read_text() == '\n\n'
+    assert state.staged == {}
+
+
+class TestSquashMode:
+  def _repo_with_commits(self, tmp_path, messages):
+    _git('init', '-q', '-b', 'master', str(tmp_path))
+    for index, message in enumerate(messages):
+      (tmp_path / f'f{index}.txt').write_text('x\n')
+      _git('-C', str(tmp_path), 'add', f'f{index}.txt')
+      _git('-C', str(tmp_path), 'commit', '-qm', message)
+
+  def test_unaccounted_range_emits_nothing(self, tmp_path, monkeypatch, capsys):
+    self._repo_with_commits(tmp_path, ['seed', 'one'])
+    monkeypatch.chdir(tmp_path)
+    assert main(['commit-footer', '--squash', 'HEAD~1..HEAD']) == 0
+    captured = capsys.readouterr()
+    assert captured.out == ''
+    assert captured.err == ''
+
+  def test_footered_range_aggregates_and_flags_the_footerless(self, tmp_path, monkeypatch, capsys):
+    footer = usage.format_footer(['Claude Code 2.1'], {'Opus 4.8': C(output=9)})
+    self._repo_with_commits(tmp_path, ['seed', 'one', f'two\n\n{footer}'])
+    monkeypatch.chdir(tmp_path)
+    assert main(['commit-footer', '--squash', 'HEAD~2..HEAD']) == 0
+    captured = capsys.readouterr()
+    assert '↓9' in captured.out
+    assert 'without a parseable footer' in captured.err
+    assert 'no land-session usage' in captured.err
 
 
 class TestEmitSquash:

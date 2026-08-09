@@ -85,6 +85,10 @@ def bro_trails_server_server():
   return _run('bro.trails.server.server')
 
 
+def bro_workflow_commit_footer():
+  return _run('bro.workflow.commit_footer')
+
+
 def bro_workflow_dive_in():
   return _run('bro.workflow.dive_in')
 

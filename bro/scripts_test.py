@@ -11,14 +11,14 @@ from bro import bro as bro_module, scripts as script_store
 from bro.base.condition import SetVariable
 from bro.bro import BaseBro
 from bro.bros.dev import Dev
-from bro.llm.mcp import InProcessMCPServer, MCPServerSpec, ToolRegistry
+from bro.llm.mcp import InProcessMCPServer, MCPServerSpec, ToolRegistry, creds
 from bro.prompts import get_prompt
 from bro.scripts import DISPATCHER_SECRET, NAMESPACE, SKILL_TOOL_NAME, load_script
 
 
 class _TrackerDev(Dev):
   name = 'tracker-dev'
-  features: ClassVar = {'brog': ()}
+  features: ClassVar = {'brog': True}
 
 
 def _script(
@@ -136,7 +136,7 @@ class TestScriptStore:
       {'gated': _script(body='{{iff #features contains x}}on-branch{{else}}off-branch{{end}}')},
     )
     cls = _bro_class(package)
-    cls.features = {'x': ('xkey',)}
+    cls.features = {'x': creds.contains('xkey')}
     bro = cls()
 
     # the probe is live: one instance renders both states as availability moves

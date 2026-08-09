@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 import json
 import subprocess
-from typing import Any, Optional
+from typing import Any
 from unittest.mock import patch
 
 import bro.workflow.land_pr as land_pr
@@ -80,14 +80,11 @@ class TestPreconditionError:
     assert land_pr._precondition_error(pr, False, True) is None
 
 
-_FOOTER_COMMAND = 'repo-footer'
-
-
-def _project_config(footer_command: Optional[str] = _FOOTER_COMMAND):
-  return type('Config', (), {'footer_command': footer_command})()
-
-
-def _fake_run(merge_calls: list[list[str]], pr: dict[str, Any]):
+def _fake_run(
+  merge_calls: list[list[str]],
+  pr: dict[str, Any],
+  footer: str = '> created with Claude Code …',
+):
   def run(command: list[str], *, capture: bool) -> str:
     assert capture == (command[:3] != ['gh', 'pr', 'merge'])
     if command[:3] == ['gh', 'pr', 'view'] and 'mergeCommit' in command[-1]:
@@ -99,9 +96,9 @@ def _fake_run(merge_calls: list[list[str]], pr: dict[str, Any]):
       return json.dumps(merged)
     if command[:3] == ['gh', 'pr', 'view']:
       return json.dumps(pr)
-    if command[0] == _FOOTER_COMMAND:
+    if command[0] == 'commit-footer':
       assert command[1:] == ['--squash', 'origin/master..HEAD']
-      return '> created with Claude Code …'
+      return footer
     if command[:3] == ['gh', 'pr', 'merge']:
       merge_calls.append(command)
       return ''
@@ -114,7 +111,6 @@ def test_land_happy_path(capsys):
   merge_calls: list[list[str]] = []
   with (
     patch.object(land_pr, '_run', side_effect=_fake_run(merge_calls, _pr())),
-    patch.object(land_pr, 'project_config', return_value=_project_config()),
     patch.object(land_pr.spawn, 'run', return_value=subprocess.CompletedProcess([], 0)) as push,
   ):
     assert land_pr.land_pr(no_review=False, allow_unchecked=False) is None
@@ -151,18 +147,17 @@ def test_land_failed_branch_delete_degrades(capsys):
   merge_calls: list[list[str]] = []
   with (
     patch.object(land_pr, '_run', side_effect=_fake_run(merge_calls, _pr())),
-    patch.object(land_pr, 'project_config', return_value=_project_config()),
     patch.object(land_pr.spawn, 'run', return_value=subprocess.CompletedProcess([], 1)),
   ):
     assert land_pr.land_pr(no_review=False, allow_unchecked=False) is None
   assert json.loads(capsys.readouterr().out)['branch_deleted'] is False
 
 
-def test_land_without_footer_command_keeps_the_pr_body(capsys):
+def test_land_with_an_unaccounted_branch_keeps_the_pr_body(capsys):
+  # commit-footer --squash prints nothing for a branch with no footered commits
   merge_calls: list[list[str]] = []
   with (
-    patch.object(land_pr, '_run', side_effect=_fake_run(merge_calls, _pr())),
-    patch.object(land_pr, 'project_config', return_value=_project_config(None)),
+    patch.object(land_pr, '_run', side_effect=_fake_run(merge_calls, _pr(), footer='')),
     patch.object(land_pr.spawn, 'run', return_value=subprocess.CompletedProcess([], 0)),
   ):
     assert land_pr.land_pr(no_review=False, allow_unchecked=False) is None

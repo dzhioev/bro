@@ -9,10 +9,6 @@ def _run(module):
   return importlib.import_module(module).main(sys.argv)
 
 
-def bro_dev_claude_commit_footer():
-  return _run('bro_dev.claude_commit_footer')
-
-
 def bro_dev_git_golc():
   return _run('bro_dev.git_golc')
 
