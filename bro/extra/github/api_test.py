@@ -156,3 +156,24 @@ class TestRetryDelay:
   def test_caps_server_hint_at_max_backoff(self):
     error = _http_error(429, {'Retry-After': '9999'})
     assert api._retry_delay(error, 0) == api._MAX_BACKOFF
+
+
+class TestCheckState:
+  def test_reads_both_api_spellings(self):
+    assert api.check_state('completed', 'success') == 'passed'
+    assert api.check_state('COMPLETED', 'SUCCESS') == 'passed'
+
+  def test_unconcluded_run_is_pending(self):
+    assert api.check_state('in_progress', None) == 'pending'
+    assert api.check_state('QUEUED', None) == 'pending'
+
+  def test_deliberate_non_runs_pass(self):
+    assert api.check_state('completed', 'neutral') == 'passed'
+    assert api.check_state('completed', 'skipped') == 'passed'
+
+  def test_anything_else_concluded_failed(self):
+    for conclusion in ('failure', 'timed_out', 'cancelled', 'action_required', 'stale'):
+      assert api.check_state('completed', conclusion) == 'failed', conclusion
+
+  def test_missing_fields_are_pending(self):
+    assert api.check_state(None, None) == 'pending'

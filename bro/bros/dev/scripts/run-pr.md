@@ -1,8 +1,8 @@
 ---
 name: run-pr
-description: This script should be used when the user signals that the worktree's changes are ready for review and a PR should be opened — "open a PR", "@:run pr:@", "send for review", "PR it", "ship it", "ready for review", "finalize". Covers commit hygiene (docs sync, policy audit, commit splitting), the repo's commit-message conventions, rebases onto the base branch (master by default), opens the PR via `gh pr create`, then launches the `poll-pr` review watcher to handle review comments, merge conflicts, and APPROVED events. On approval, chains into `@::land` for the merge step. Also the re-entry point for a PR that is already open — "resume PR <pr-url-or-number>", "resume the PR", "pick up the review" — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
+description: This script should be used when the user signals that the worktree's changes are ready for review and a PR should be opened — "open a PR", "@:run pr:@", "send for review", "PR it", "ship it", "ready for review", "finalize". Covers commit hygiene (docs sync, policy audit, commit splitting), the repo's commit-message conventions, rebases onto the base branch (master by default), opens the PR via `gh pr create`, then launches the `poll-pr` review watcher to handle review comments, failing CI checks, merge conflicts, and APPROVED events. On approval, chains into `@::land` for the merge step. Also the re-entry point for a PR that is already open — "resume PR <pr-url-or-number>", "resume the PR", "pick up the review" — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
 parameters: {"base?": "base branch for the pull request instead of master", "pr?": "existing pull request URL or number to resume"}
-version: 4.1.0
+version: 4.2.0
 ---
 
 # run-pr
@@ -204,6 +204,7 @@ poll-pr <owner>/<repo> <pr_number>
 - `{"event": "merged", "pr": N}` — PR was merged
 - `{"event": "closed", "pr": N}` — PR was closed without merging
 - `{"event": "conflicts", "pr": N}` — the PR became unmergeable into its base (GitHub's `mergeable` turned false, typically after something landed on the base). Fires once per conflicted episode — it re-arms only after the PR turns mergeable again.
+- `{"event": "checks", "pr": N, "failing": [{"name": "...", "conclusion": "...", "url": "..."}]}` — a status check on the PR's head commit concluded as a failure. Fires once per red episode — it re-arms only after nothing is failing again (a re-run that goes green, or a new push).
 - `{"event": "comment", "id": N, "user": "...", "body": "...", "path": "...", "url": "..."}` — new comment from the repo owner (bot and self filtered out). Standalone inline review comments (replies to existing review threads) fire here; inline comments attached to a fresh review are bundled into the `review` event instead.
 - `{"event": "review", "id": N, "user": "...", "state": "APPROVED|CHANGES_REQUESTED|COMMENTED|DISMISSED", "body": "...", "url": "...", "comments": [{"id": N, "path": "...", "line": N, "body": "...", "url": "..."}]}` — new review. `comments` is the array of inline comments attached to this review at the moment `poll-pr` saw it (typically all of them; rarely empty if the inline-comments endpoint lags the reviews endpoint — late arrivals then fire as standalone `comment` events on a later cycle).
 
@@ -256,6 +257,8 @@ Handle pending feedback as one batch: address every comment that has arrived, th
 Unconditional approval — the PR is ready to merge. Chain into the merge, and batch it: stop the watcher ({{iff #harness = bro}}`dev::kill(job_id)`{{else}}`TaskStop`{{end}}) and call `@::land` **in the same response**, then follow it (its merge step is a single `land-pr` command).
 
 **`review` with `state: "COMMENTED"` or `"DISMISSED"`**: informational; the actionable feedback (if any) is in this event's `comments` array or arrives via accompanying `comment` events.
+
+**`checks` event**: CI went red on what you pushed. Fetch the failing run's log (`gh run view --log-failed <run-id>`, the id is the tail of the event's `url`) and diagnose it as your own breakage — a failure the local gate missed is the interesting kind (environment-dependent, ordering-dependent, or a file you forgot to stage). Fix it exactly like review feedback: gates (step 2), a new commit (steps 5–6), the pre-push gate (step 8), push. Report the failure and your fix to the user; never wait for it to disappear on a re-run you didn't trigger, and never land around it — `land-pr` refuses a failed check anyway.
 
 **`conflicts` event**: rerun step 7 — the rebase, the in-band resolution default, the escalation bar, and the task comment all apply unchanged — then the pre-push gate (step 8), then push the rebased branch: `git push --force-with-lease origin HEAD` — the PR branch, never the base.
 

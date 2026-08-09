@@ -11,6 +11,9 @@ Preconditions (each failure aborts with a message on stderr and exit 1):
 - reviewDecision is APPROVED; `--no-review` waives a *missing* review, but
   CHANGES_REQUESTED is always refused
 - the body has no unchecked `- [ ]` boxes unless `--allow-unchecked`
+- every status check has concluded and passed. Pending checks are waited out
+  (`--wait-checks` seconds) and then waived only by `--no-checks`; a failed
+  check is always refused. A PR with no checks passes.
 
 On success prints a single JSON object to stdout:
 
@@ -21,12 +24,16 @@ On success prints a single JSON object to stdout:
 import json
 import re
 import subprocess
+import time
 from typing import Any, Optional
 
 from bro.base import log, spawn
 from bro.base.args import Parser
+from bro.extra.github import api
 
 __cli_name__ = 'land-pr'
+
+_CHECK_POLL_INTERVAL = 15.0
 
 
 class LandError(Exception):
@@ -78,6 +85,55 @@ def _precondition_error(
   return None
 
 
+def _check_name(entry: dict[str, Any]) -> str:
+  # CheckRun carries `name`, the legacy StatusContext `context`
+  return entry.get('name') or entry.get('context') or '(unnamed check)'
+
+
+def _entry_state(entry: dict[str, Any]) -> str:
+  if entry.get('__typename') == 'StatusContext':
+    state = entry.get('state', '')
+    # a status context has no separate status/conclusion pair: anything but
+    # PENDING is a concluded state whose name doubles as the conclusion
+    return 'pending' if state.lower() == 'pending' else api.check_state('completed', state)
+  return api.check_state(entry.get('status'), entry.get('conclusion'))
+
+
+def _split_checks(entries: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
+  """(pending, failed) check names of a `statusCheckRollup` array."""
+  pending = [_check_name(e) for e in entries if _entry_state(e) == 'pending']
+  failed = [_check_name(e) for e in entries if _entry_state(e) == 'failed']
+  return pending, failed
+
+
+def _await_checks(number: int, entries: list[dict[str, Any]], wait_seconds: int) -> list[dict]:
+  """the rollup once every check concluded, or once the wait budget is spent."""
+  deadline = time.monotonic() + wait_seconds
+  while True:
+    pending, _ = _split_checks(entries)
+    if len(pending) == 0 or time.monotonic() >= deadline:
+      return entries
+    log.info(f'waiting for {len(pending)} pending check(s): {", ".join(pending)}')
+    time.sleep(_CHECK_POLL_INTERVAL)
+    entries = _pr_view(['statusCheckRollup'], number=number).get('statusCheckRollup') or []
+
+
+def _checks_error(number: int, entries: list[dict[str, Any]], no_checks: bool) -> Optional[str]:
+  pending, failed = _split_checks(entries)
+  if len(failed) > 0:
+    return (
+      f'PR #{number} has failing checks: {", ".join(failed)}; '
+      'fix them or re-run them — a failed check is never waived'
+    )
+  if len(pending) > 0 and not no_checks:
+    return (
+      f'PR #{number} still has pending checks: {", ".join(pending)}; '
+      'wait for them (re-run land-pr) or pass --no-checks only when the user '
+      'explicitly said to merge without them'
+    )
+  return None
+
+
 def _squash_footer(base: str) -> str:
   # empty for a branch with no footered commits (commit-footer's own scoping)
   return _run(['commit-footer', '--squash', f'origin/{base}..HEAD'], capture=True)
@@ -103,11 +159,27 @@ def _delete_remote_branch(branch: str) -> bool:
   return True
 
 
-def _land(no_review: bool, allow_unchecked: bool) -> dict[str, Any]:
+def _land(no_review: bool, allow_unchecked: bool, no_checks: bool, wait_checks: int) -> dict:
   pr = _pr_view(
-    ['number', 'title', 'body', 'state', 'reviewDecision', 'baseRefName', 'headRefName', 'url']
+    [
+      'number',
+      'title',
+      'body',
+      'state',
+      'reviewDecision',
+      'baseRefName',
+      'headRefName',
+      'url',
+      'statusCheckRollup',
+    ]
   )
   error = _precondition_error(pr, no_review, allow_unchecked)
+  if error is not None:
+    raise LandError(error)
+  # after the cheap preconditions: a PR that cannot merge anyway must not cost
+  # the check wait
+  rollup = _await_checks(pr['number'], pr.get('statusCheckRollup') or [], wait_checks)
+  error = _checks_error(pr['number'], rollup, no_checks)
   if error is not None:
     raise LandError(error)
   footer = _squash_footer(pr['baseRefName'])
@@ -139,9 +211,11 @@ def _land(no_review: bool, allow_unchecked: bool) -> dict[str, Any]:
   }
 
 
-def land_pr(no_review: bool, allow_unchecked: bool) -> Optional[int]:
+def land_pr(
+  no_review: bool, allow_unchecked: bool, no_checks: bool, wait_checks: int
+) -> Optional[int]:
   try:
-    result = _land(no_review, allow_unchecked)
+    result = _land(no_review, allow_unchecked, no_checks, wait_checks)
   except LandError as error:
     log.error(str(error))
     return 1
@@ -160,5 +234,17 @@ def main(argv: list[str]) -> Optional[int]:
     '--allow-unchecked',
     action='store_true',
     help='merge despite unchecked test-plan boxes (explicit user waiver)',
+  )
+  parser.add_argument(
+    '--no-checks',
+    action='store_true',
+    help='merge with status checks still pending (explicit user waiver; a failed check still refuses)',
+  )
+  parser.add_argument(
+    '--wait-checks',
+    type=int,
+    default=480,
+    metavar='SECONDS',
+    help='how long to wait for pending checks to conclude before refusing (0 to refuse at once)',
   )
   return land_pr(**parser.parse(argv))
