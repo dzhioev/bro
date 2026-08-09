@@ -1,7 +1,7 @@
 ---
 name: land
 description: This script should be used when the user signals that an open PR should be merged into master — "land it", "land", "merge it", "merge the PR", "merge to master". Runs `land-pr`, which squash-merges the open PR for the current branch in one shot (precondition checks including green CI, the branch's aggregated token footer when its commits carry any, remote branch cleanup), then records a `merged` comment on the task and closes it to done unless the user explicitly said to keep it open. On APPROVED, `@::run-pr` chains into this script. Direct push to master (no PR) is a one-liner (`git fetch origin && git rebase origin/master && git push origin HEAD:master`) — not this script.
-version: 3.3.0
+version: 3.4.0
 ---
 
 # land
@@ -21,7 +21,7 @@ land-pr
 One shot, in order:
 
 1. Resolves the PR for the current branch and enforces the preconditions — fails with a message and a nonzero exit when the PR is not `OPEN`, not `APPROVED`, or its body has unchecked `- [ ]` test-plan boxes.
-2. Waits for the PR's status checks to conclude (up to `--wait-checks` seconds, default 480) and refuses to merge while any is pending or failed. A PR with no checks passes straight through. **Give the command room to wait** — run it with a tool timeout above the wait budget, not the default. A timeout expiry is not a verdict: re-run `land-pr` (checks that slow are usually minutes from done), never reach for `--no-checks` to get past it.
+2. Waits for the PR's status checks to conclude (up to `--wait-checks` seconds, default 480) and refuses to merge while any is pending or failed. A PR with no checks passes straight through. **Give the command room to wait** — run it with a tool timeout above the wait budget, not the default. A timeout expiry is not a verdict: re-run `land-pr` (checks that slow are usually minutes from done), never reach for a waiver to get past it.
 3. Aggregates the branch's token-accounting footers over the PR's actual base (`commit-footer --squash`) and appends the result to the PR body. A branch whose commits carry no footers keeps the body unchanged; command warnings pass through on stderr — relay them to the user.
 4. Squash-merges with the PR's own title and body as the commit subject/body, then deletes the remote feature branch (local branch and worktree stay untouched).
 5. Prints a JSON result: `pr`, `url`, `title`, `base`, `squash_sha`, `merged_at`, `branch_deleted`.
@@ -30,7 +30,7 @@ Waiver flags map to explicit user statements from this session — never pass th
 
 - `--no-review` — the user said to merge without waiting for approval. A `CHANGES_REQUESTED` review is refused regardless; that needs the review resolved, not a waiver.
 - `--allow-unchecked` — the user said to land despite unchecked test-plan boxes. Otherwise an unchecked box means nobody verified that item: surface the failure output (it lists the boxes) and wait.
-- `--no-checks` — the user said to merge without waiting for CI. A *failed* check is refused regardless: fix it or re-run it, and report the failing check to the user rather than routing around it.
+- `--ignore-checks` — the user said to merge whatever CI says. It covers both states, pending and failed, and `land-pr` names on stderr every check it merged past — relay that to the user. Reach for it only on the user's explicit say-so about *this* PR's checks; a red check is otherwise something to fix or re-run (`gh run rerun --failed <run-id>`), never something to route around.
 
 A waived review does not imply waived checks: "land it without review" means skip the approval wait, and CI still has to go green.
 
