@@ -1,5 +1,5 @@
 from bro.base.condition import Condition
-from bro.bro import BaseBro, feature
+from bro.bro import BaseBro
 from bro.llm.mcp import MCPServerSpec
 
 
@@ -51,7 +51,7 @@ def _feature_line(bro: BaseBro, name: str, gate: Condition | bool) -> str:
     return f'- **{name}** — always on'
   if gate is False:
     return f'- **{name}** — disabled'
-  state = 'on' if feature(name).evaluate(bro.vocabulary()) else 'off'
+  state = 'on' if bro.has_feature(name) else 'off'
   return f'- **{name}** — gated on `{gate}`; {state} in this environment'
 
 

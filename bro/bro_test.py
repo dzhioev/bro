@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import signal
+import subprocess
 import types
 from typing import ClassVar, Optional
 from unittest.mock import MagicMock
@@ -1206,6 +1207,58 @@ class TestFeatures:
 
     with pytest.raises(ConditionError, match='unknown variable #harness'):
       SurfaceGated()
+
+  def test_has_feature_probes_live_and_reads_undeclared_as_off(self, monkeypatch):
+    monkeypatch.setattr('bro.base.credentials.available', lambda name: name == 'xkey')
+    bro = self._bro_class()()
+    assert bro.has_feature('x') is True
+    assert bro.has_feature('ghost') is False
+    monkeypatch.setattr('bro.base.credentials.available', lambda name: False)
+    assert bro.has_feature('x') is False
+
+
+class TestWorkspaceProvisioning:
+  def _accounting_bro(self):
+    class AccountingBro(EchoBro):
+      name = 'accounting'
+      features: ClassVar = {'commit-accounting': True}
+
+    return AccountingBro()
+
+  def _repo(self, tmp_path, monkeypatch):
+    subprocess.run(['git', 'init', '-q', str(tmp_path)], check=True)
+    monkeypatch.chdir(tmp_path)
+    return tmp_path / '.git' / 'hooks'
+
+  @pytest.mark.asyncio
+  async def test_run_installs_the_footer_hooks_in_a_managed_workspace(self, tmp_path, monkeypatch):
+    hooks = self._repo(tmp_path, monkeypatch)
+    monkeypatch.setenv('CW_NAME', 'provision-test')
+    await self._accounting_bro().run('hi', surface='test')
+    for hook_name in ('commit-msg', 'post-commit'):
+      assert (hooks / hook_name).exists()
+
+  @pytest.mark.asyncio
+  async def test_no_install_outside_a_managed_workspace(self, tmp_path, monkeypatch):
+    hooks = self._repo(tmp_path, monkeypatch)
+    await self._accounting_bro().run('hi', surface='test')
+    assert not (hooks / 'commit-msg').exists()
+
+  @pytest.mark.asyncio
+  async def test_no_install_without_the_feature(self, tmp_path, monkeypatch):
+    hooks = self._repo(tmp_path, monkeypatch)
+    monkeypatch.setenv('CW_NAME', 'provision-test')
+    await EchoBro().run('hi', surface='test')
+    assert not (hooks / 'commit-msg').exists()
+
+  def test_a_hook_already_present_is_left_alone(self, tmp_path, monkeypatch):
+    hooks = self._repo(tmp_path, monkeypatch)
+    hooks.mkdir(parents=True, exist_ok=True)
+    (hooks / 'commit-msg').write_text('#!/bin/sh\n# the repository installed me\n')
+    monkeypatch.setenv('CW_NAME', 'provision-test')
+    self._accounting_bro()._provision_workspace()
+    assert (hooks / 'commit-msg').read_text() == '#!/bin/sh\n# the repository installed me\n'
+    assert (hooks / 'post-commit').exists()
 
   def test_undeclared_feature_name_raises(self):
     class NoFeature(BaseBro):

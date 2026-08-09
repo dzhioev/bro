@@ -108,6 +108,18 @@ def run_in_place(spec: 'SessionSpec') -> int:
   # CW_BRO themes the session (banner, statusLine)
   os.environ['CW_BRO'] = spec.session_bro
 
+  # feature-declared workspace provisioning (bro/bro.py's _provision_workspace
+  # is the bro-harness counterpart): a commit-accounting persona gets the
+  # footer hooks installed into the session workspace, so agent commits carry
+  # the token footer with no session involvement. hooks already present are
+  # left alone.
+  from bro.registry import create_bro
+
+  if create_bro(spec.session_bro).has_feature('commit-accounting'):
+    from bro.workflow.commit_footer import install_hooks
+
+    install_hooks(workspace, overwrite=False)
+
   # hold and kill wiring for the `raise` service tool's mounts (bro/bro.py).
   # both overwrite any ambient value: a session launched from inside another
   # must not inherit its hold or kill target.

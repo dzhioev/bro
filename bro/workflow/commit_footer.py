@@ -16,11 +16,12 @@ usage source in the environment carries the footer with no session involvement.
 A process without a usage source — a human's shell — is a no-op for both hooks.
 
 Four modes:
-- --append <msg-file>: run by the commit-msg git hook. No usage source, an empty
-  message, or a message already carrying a parseable footer (an amend, a reword —
-  the commit keeps its original attribution) leaves the file untouched; otherwise
-  the delta footer is appended and the new cumulative staged. A failure fails the
-  commit, surfacing at the moment of the mistake.
+- --append <msg-file>: run by the commit-msg git hook. No env-keyed usage source
+  (`BRO_USAGE_FILE` / `CLAUDE_CODE_SESSION_ID` — a human's shell carries
+  neither), an empty message, or a message already carrying a parseable footer
+  (an amend, a reword — the commit keeps its original attribution) leaves the
+  file untouched; otherwise the delta footer is appended and the new cumulative
+  staged. A failure fails the commit, surfacing at the moment of the mistake.
 - --record: promote the staged cumulative to the committed baseline. Run by the
   post-commit git hook once a commit actually lands, so the mark only advances
   after a *successful* commit (retries stay correct), and only when something is
@@ -29,6 +30,8 @@ Four modes:
   every branch commit's per-class deltas / the union of agents plus the land
   session's uncommitted remainder. Run by land-pr and injected into the PR body,
   so the server-side squash commit carries the sum of the children it discards.
+  A range with no footered commits emits nothing, so the caller needs no
+  accounting switch of its own.
 - default: print the footer the next commit would carry (also staging its
   cumulative, exactly as --append would).
 
@@ -43,6 +46,7 @@ from __future__ import annotations
 
 import importlib.resources
 import json
+import os
 import shutil
 import stat
 import subprocess
@@ -61,17 +65,24 @@ STATE_FILENAME = '.token_accounting_state.json'
 HOOK_NAMES = ('commit-msg', 'post-commit')
 
 
-def install_hooks(repository: Path) -> None:
-  """copy the packaged footer hooks into `repository`'s git hooks directory."""
+def install_hooks(repository: Path, *, overwrite: bool = True) -> None:
+  """copy the packaged footer hooks into `repository`'s git hooks directory.
+
+  overwrite=False leaves an existing hook file alone — for the session-start
+  provisioning path, which must not clobber hooks a repo installed itself;
+  the explicit installer keeps the refreshing default.
+  """
   root = Path(git_out('rev-parse', '--show-toplevel', cwd=str(repository)))
   hooks_path = Path(git_out('rev-parse', '--git-path', 'hooks', cwd=str(root)))
   if not hooks_path.is_absolute():
     hooks_path = root / hooks_path
   hooks_path.mkdir(parents=True, exist_ok=True)
   for hook_name in HOOK_NAMES:
+    destination = hooks_path / hook_name
+    if not overwrite and destination.exists():
+      continue
     resource = importlib.resources.files('bro.workflow').joinpath(f'hooks/{hook_name}')
     with importlib.resources.as_file(resource) as source:
-      destination = hooks_path / hook_name
       shutil.copyfile(source, destination)
     destination.chmod(destination.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
@@ -158,6 +169,14 @@ def _emit_default(current: usage.Usage, state: State) -> str:
 
 
 def _append(message_path: Path, state: State) -> None:
+  # agenthood is the presence of an env-keyed usage source — deliberately not
+  # current_usage()'s working-directory transcript fallback, which in a human's
+  # shell would resolve a past session's transcript and footer their commit
+  if (
+    os.environ.get(usage.USAGE_FILE_VARIABLE) is None
+    and os.environ.get(usage.SESSION_ID_VARIABLE) is None
+  ):
+    return
   current = usage.current_usage()
   if current is None:
     return
@@ -244,6 +263,11 @@ def main(argv: list[str]) -> Optional[int]:
 
   if args['squash'] is not None:
     commits = _git_log(args['squash'])
+    if all(usage.parse_footer(body) is None for _, body in commits):
+      # a branch carrying no accounting yields no aggregate — and no warnings:
+      # footerless commits are an anomaly only where footers exist at all. this
+      # is what lets land-pr run --squash unconditionally.
+      return 0
     land = usage.current_usage()
     if land is None:
       print(

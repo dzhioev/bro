@@ -736,6 +736,13 @@ class BaseBro(ABC):
     pass it too — the class prompts may carry `#features` directives."""
     return self._feature_vocabulary
 
+  def has_feature(self, name: str) -> bool:
+    """whether the named feature is declared and its gate holds in this
+    environment. an undeclared name reads as off — the probe is for harness
+    code asking an arbitrary persona about a capability, unlike renders, whose
+    closed universe makes an unknown name an error."""
+    return name in self._features and feature(name).evaluate(self._feature_vocabulary)
+
   @property
   def scripts(self) -> dict[str, Path]:
     return script_store.collect_scripts(list(reversed(type(self).__mro__)))
@@ -842,6 +849,19 @@ class BaseBro(ABC):
       return None
     return f'{self.name} cannot start: missing credentials: {", ".join(missing)}'
 
+  def _provision_workspace(self) -> None:
+    # feature-declared workspace provisioning, run at session start (cw's
+    # in-place runner is the claude-harness counterpart): a commit-accounting
+    # persona gets the footer hooks installed into its managed workspace, so
+    # agent commits carry the token footer with no session involvement. scoped
+    # to managed workspaces — an in-place run in an arbitrary repo must not
+    # write into it — and hooks already present are left alone.
+    if not self.has_feature('commit-accounting') or os.environ.get('CW_NAME') is None:
+      return
+    from bro.workflow.commit_footer import install_hooks
+
+    install_hooks(Path.cwd(), overwrite=False)
+
   def _start(
     self,
     input: str,
@@ -858,6 +878,7 @@ class BaseBro(ABC):
     # recording fakes), set on self before _create_llm so the
     # LLM construction path picks them up — then build the LLM, compose the
     # hold prompt, open the trail, and seed the message list.
+    self._provision_workspace()
     self._observer = observer if observer is not None else self._make_observer()
     self._tracker = tracker if tracker is not None else self._make_tracker()
     llm = self._create_llm(hold=hold)

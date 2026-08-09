@@ -17,12 +17,11 @@ class ProjectConfig:
   `--bro` doesn't name one, the docker repository its session images build
   under (`bro/<default bro>` unless overridden), the per-kind credential
   instances its launches substitute in computed scopes, and the optional
-  squash-footer and build-context-file-list commands."""
+  build-context-file-list command."""
 
   default_bro: str
   image_repository: str
   creds: dict[str, str] = field(default_factory=dict)
-  footer_command: Optional[str] = None
   build_context_command: Optional[str] = None
 
 
@@ -58,9 +57,7 @@ def project_config() -> ProjectConfig:
   if not pyproject.is_file():
     raise ValueError(f'missing {pyproject}')
   table = tomllib.loads(pyproject.read_text()).get('tool', {}).get('bro', {})
-  unknown = sorted(
-    set(table) - {'default', 'image-repository', 'creds', 'footer-command', 'build-context-command'}
-  )
+  unknown = sorted(set(table) - {'default', 'image-repository', 'creds', 'build-context-command'})
   if len(unknown) > 0:
     raise ValueError(f'unknown [tool.bro] key(s) in {pyproject}: {", ".join(unknown)}')
   default_bro = table.get('default')
@@ -73,6 +70,5 @@ def project_config() -> ProjectConfig:
     default_bro=default_bro,
     image_repository=override if override is not None else _default_image_repository(default_bro),
     creds=_parse_creds(table, pyproject),
-    footer_command=_parse_command(table, pyproject, 'footer-command'),
     build_context_command=_parse_command(table, pyproject, 'build-context-command'),
   )

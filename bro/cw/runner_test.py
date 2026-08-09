@@ -1,5 +1,6 @@
 import os
 import signal
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -47,6 +48,8 @@ class _Harness:
       # an empty credential store pins the derived git identity to the legacy
       # address regardless of the developer host's real `github` secret
       patch('bro.base.credentials.default_store', return_value=credentials.Store({})),
+      # the workspace-provisioning probe; default: no feature, no hook install
+      patch('bro.registry.create_bro'),
     ]
     entered = [p.__enter__() for p in self._patches]
     self.env = entered[0]
@@ -64,6 +67,8 @@ class _Harness:
     self.start_broxy = entered[7]
     self.in_container = entered[8]
     self.provision_claude_dir = entered[9]
+    self.create_bro = entered[13]
+    self.create_bro.return_value.has_feature.return_value = False
     return self
 
   def __exit__(self, *exception):
@@ -231,6 +236,28 @@ class TestRunInPlace:
     with _Harness(tmp_path) as h:
       assert cw_runner.run_in_place(_spec()) == 0
       assert h.run_claude.call_args.args[1]['MCP_TOOL_TIMEOUT'] == '600000'
+
+  def test_accounting_persona_gets_the_footer_hooks(self, monkeypatch, tmp_path):
+    workspace = tmp_path / 'ws'
+    workspace.mkdir()
+    subprocess.run(['git', 'init', '-q', str(workspace)], check=True)
+    monkeypatch.chdir(workspace)
+    with _Harness(tmp_path) as h:
+      h.create_bro.return_value.has_feature.return_value = True
+      assert cw_runner.run_in_place(_spec()) == 0
+      h.create_bro.assert_called_once_with('bro-dev')
+      h.create_bro.return_value.has_feature.assert_called_once_with('commit-accounting')
+    for hook_name in ('commit-msg', 'post-commit'):
+      assert (workspace / '.git' / 'hooks' / hook_name).exists()
+
+  def test_no_footer_hooks_without_the_feature(self, monkeypatch, tmp_path):
+    workspace = tmp_path / 'ws'
+    workspace.mkdir()
+    subprocess.run(['git', 'init', '-q', str(workspace)], check=True)
+    monkeypatch.chdir(workspace)
+    with _Harness(tmp_path):
+      assert cw_runner.run_in_place(_spec()) == 0
+    assert not (workspace / '.git' / 'hooks' / 'commit-msg').exists()
 
   def test_host_session_provisions_and_exports_the_claude_config_dir(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)

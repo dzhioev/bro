@@ -2,8 +2,9 @@
 """squash-merge the approved PR for the current branch in one shot.
 
 Runs the deterministic tail of a dev session: resolve the PR, enforce the merge
-preconditions, append the repo-configured squash footer when present, merge,
-and delete the remote feature branch.
+preconditions, append the branch's aggregated token footer when its commits
+carry any (`commit-footer --squash`), merge, and delete the remote feature
+branch.
 
 Preconditions (each failure aborts with a message on stderr and exit 1):
 - the PR for the current branch exists and is OPEN
@@ -24,7 +25,6 @@ from typing import Any, Optional
 
 from bro.base import log, spawn
 from bro.base.args import Parser
-from bro.workspace.project import project_config
 
 __cli_name__ = 'land-pr'
 
@@ -79,10 +79,8 @@ def _precondition_error(
 
 
 def _squash_footer(base: str) -> str:
-  command = project_config().footer_command
-  if command is None:
-    return ''
-  return _run([command, '--squash', f'origin/{base}..HEAD'], capture=True)
+  # empty for a branch with no footered commits (commit-footer's own scoping)
+  return _run(['commit-footer', '--squash', f'origin/{base}..HEAD'], capture=True)
 
 
 def _body_with_footer(body: str, footer: str) -> str:

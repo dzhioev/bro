@@ -134,7 +134,6 @@ brog = "bro.brog.mcp:spec"
 
 [tool.bro]
 default = "bro-dev"
-footer-command = "commit-footer"
 
 [tool.deptry.package_module_name_map]
 python_ulid = ["ulid"]

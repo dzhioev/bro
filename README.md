@@ -44,7 +44,6 @@ Every operated repository declares its launch defaults:
 default = "dev"
 image-repository = "bro/example"          # optional; defaults to bro/<default>
 creds = { brog = "github" }               # optional kind-to-instance selection
-footer-command = "commit-footer"          # optional squash footer producer
 build-context-command = "git ls-files"    # optional session-image context file list
 ```
 
