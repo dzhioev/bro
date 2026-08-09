@@ -12,8 +12,9 @@ Preconditions (each failure aborts with a message on stderr and exit 1):
   CHANGES_REQUESTED is always refused
 - the body has no unchecked `- [ ]` boxes unless `--allow-unchecked`
 - every status check has concluded and passed. Pending checks are waited out
-  (`--wait-checks` seconds) and then waived only by `--no-checks`; a failed
-  check is always refused. A PR with no checks passes.
+  (`--wait-checks` seconds) and then refuse the merge, as a failed check does.
+  A PR with no checks passes. `--ignore-checks` drops the gate whole — no
+  wait, no refusal, whatever the checks say.
 
 On success prints a single JSON object to stdout:
 
@@ -118,20 +119,26 @@ def _await_checks(number: int, entries: list[dict[str, Any]], wait_seconds: int)
     entries = _pr_view(['statusCheckRollup'], number=number).get('statusCheckRollup') or []
 
 
-def _checks_error(number: int, entries: list[dict[str, Any]], no_checks: bool) -> Optional[str]:
+def _checks_error(number: int, entries: list[dict[str, Any]]) -> Optional[str]:
   pending, failed = _split_checks(entries)
   if len(failed) > 0:
-    return (
-      f'PR #{number} has failing checks: {", ".join(failed)}; '
-      'fix them or re-run them — a failed check is never waived'
-    )
-  if len(pending) > 0 and not no_checks:
+    return f'PR #{number} has failing checks: {", ".join(failed)}; fix them or re-run them'
+  if len(pending) > 0:
     return (
       f'PR #{number} still has pending checks: {", ".join(pending)}; '
-      'wait for them (re-run land-pr) or pass --no-checks only when the user '
-      'explicitly said to merge without them'
+      're-run land-pr once they conclude'
     )
   return None
+
+
+def _log_ignored_checks(entries: list[dict[str, Any]]) -> None:
+  pending, failed = _split_checks(entries)
+  ignored = [*failed, *pending]
+  if len(ignored) > 0:
+    log.warning(
+      f'--ignore-checks: merging past {len(failed)} failing and {len(pending)} '
+      f'pending check(s): {", ".join(ignored)}'
+    )
 
 
 def _squash_footer(base: str) -> str:
@@ -159,7 +166,7 @@ def _delete_remote_branch(branch: str) -> bool:
   return True
 
 
-def _land(no_review: bool, allow_unchecked: bool, no_checks: bool, wait_checks: int) -> dict:
+def _land(no_review: bool, allow_unchecked: bool, ignore_checks: bool, wait_checks: int) -> dict:
   pr = _pr_view(
     [
       'number',
@@ -176,12 +183,16 @@ def _land(no_review: bool, allow_unchecked: bool, no_checks: bool, wait_checks: 
   error = _precondition_error(pr, no_review, allow_unchecked)
   if error is not None:
     raise LandError(error)
-  # after the cheap preconditions: a PR that cannot merge anyway must not cost
-  # the check wait
-  rollup = _await_checks(pr['number'], pr.get('statusCheckRollup') or [], wait_checks)
-  error = _checks_error(pr['number'], rollup, no_checks)
-  if error is not None:
-    raise LandError(error)
+  rollup = pr.get('statusCheckRollup') or []
+  if ignore_checks:
+    _log_ignored_checks(rollup)
+  else:
+    # after the cheap preconditions: a PR that cannot merge anyway must not
+    # cost the check wait
+    rollup = _await_checks(pr['number'], rollup, wait_checks)
+    error = _checks_error(pr['number'], rollup)
+    if error is not None:
+      raise LandError(error)
   footer = _squash_footer(pr['baseRefName'])
   _run(
     [
@@ -212,10 +223,10 @@ def _land(no_review: bool, allow_unchecked: bool, no_checks: bool, wait_checks: 
 
 
 def land_pr(
-  no_review: bool, allow_unchecked: bool, no_checks: bool, wait_checks: int
+  no_review: bool, allow_unchecked: bool, ignore_checks: bool, wait_checks: int
 ) -> Optional[int]:
   try:
-    result = _land(no_review, allow_unchecked, no_checks, wait_checks)
+    result = _land(no_review, allow_unchecked, ignore_checks, wait_checks)
   except LandError as error:
     log.error(str(error))
     return 1
@@ -236,9 +247,9 @@ def main(argv: list[str]) -> Optional[int]:
     help='merge despite unchecked test-plan boxes (explicit user waiver)',
   )
   parser.add_argument(
-    '--no-checks',
+    '--ignore-checks',
     action='store_true',
-    help='merge with status checks still pending (explicit user waiver; a failed check still refuses)',
+    help='merge whatever the status checks say, pending or failed (explicit user waiver)',
   )
   parser.add_argument(
     '--wait-checks',

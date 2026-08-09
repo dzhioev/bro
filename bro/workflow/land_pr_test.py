@@ -35,7 +35,7 @@ def _land(**overrides: Any) -> Optional[int]:
   arguments: dict[str, Any] = {
     'no_review': False,
     'allow_unchecked': False,
-    'no_checks': False,
+    'ignore_checks': False,
     'wait_checks': 0,
   }
   arguments.update(overrides)
@@ -214,18 +214,15 @@ class TestSplitChecks:
 
 class TestChecksError:
   def test_clean_rollup_passes(self):
-    assert land_pr._checks_error(310, [_check()], False) is None
+    assert land_pr._checks_error(310, [_check()]) is None
 
   def test_pending_refuses_and_names_the_check(self):
-    error = land_pr._checks_error(310, [_check(status='IN_PROGRESS')], False)
-    assert error is not None and 'tests' in error and '--no-checks' in error
+    error = land_pr._checks_error(310, [_check(status='IN_PROGRESS')])
+    assert error is not None and 'tests' in error
 
-  def test_no_checks_waives_pending(self):
-    assert land_pr._checks_error(310, [_check(status='IN_PROGRESS')], True) is None
-
-  def test_failure_refuses_despite_the_waiver(self):
-    error = land_pr._checks_error(310, [_check(conclusion='FAILURE')], True)
-    assert error is not None and 'never waived' in error
+  def test_failure_refuses_and_names_the_check(self):
+    error = land_pr._checks_error(310, [_check(conclusion='FAILURE')])
+    assert error is not None and 'tests' in error
 
 
 class TestAwaitChecks:
@@ -261,12 +258,36 @@ def test_land_refuses_pending_checks_without_merging(capsys):
   assert capsys.readouterr().out == ''
 
 
-def test_land_refuses_a_failed_check_even_when_waived(capsys):
+def test_land_refuses_a_failed_check():
   merge_calls: list[list[str]] = []
   pr = _pr(statusCheckRollup=[_check(conclusion='FAILURE')])
   with patch.object(land_pr, '_run', side_effect=_fake_run(merge_calls, pr)):
-    assert _land(no_checks=True) == 1
+    assert _land() == 1
   assert merge_calls == []
+
+
+def test_ignore_checks_merges_past_a_failure_and_names_it(caplog):
+  merge_calls: list[list[str]] = []
+  pr = _pr(statusCheckRollup=[_check(conclusion='FAILURE'), _check('lint', status='QUEUED')])
+  with (
+    patch.object(land_pr, '_run', side_effect=_fake_run(merge_calls, pr)),
+    patch.object(land_pr.spawn, 'run', return_value=subprocess.CompletedProcess([], 0)),
+  ):
+    assert _land(ignore_checks=True) is None
+  assert len(merge_calls) == 1
+  assert 'tests' in caplog.text and 'lint' in caplog.text
+
+
+def test_ignore_checks_does_not_wait():
+  merge_calls: list[list[str]] = []
+  pr = _pr(statusCheckRollup=[_check(status='IN_PROGRESS', conclusion='')])
+  with (
+    patch.object(land_pr, '_run', side_effect=_fake_run(merge_calls, pr)),
+    patch.object(land_pr.spawn, 'run', return_value=subprocess.CompletedProcess([], 0)),
+    patch.object(land_pr.time, 'sleep') as sleep,
+  ):
+    assert _land(ignore_checks=True, wait_checks=480) is None
+  sleep.assert_not_called()
 
 
 def test_land_merges_with_green_checks(capsys):
