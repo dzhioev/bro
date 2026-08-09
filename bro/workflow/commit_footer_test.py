@@ -1,13 +1,16 @@
 #!/usr/bin/env python
+import os
 import subprocess
 
 import bro.llm.usage as usage
-from bro_dev.claude_commit_footer import (
+from bro.workflow.commit_footer import (
   State,
+  _append,
   _effective_baseline,
   _emit_default,
   _emit_squash,
   _repo_root,
+  install_hooks,
 )
 
 OPUS = 'claude-opus-4-8'
@@ -30,6 +33,15 @@ def test_repo_root_is_the_linked_worktree_not_the_main_checkout(tmp_path, monkey
 
   monkeypatch.chdir(linked)
   assert _repo_root() == linked.resolve()
+
+
+def test_install_hooks_copies_both_hooks_executable(tmp_path):
+  _git('init', '-q', str(tmp_path))
+  install_hooks(tmp_path)
+  for hook_name in ('commit-msg', 'post-commit'):
+    hook = tmp_path / '.git' / 'hooks' / hook_name
+    assert hook.read_text().startswith('#!/usr/bin/env -S bash -e\n')
+    assert os.access(hook, os.X_OK)
 
 
 def C(input=0, cache_write=0, cache_read=0, output=0):
@@ -68,10 +80,15 @@ class TestState:
     # staged cleared after record
     assert State(p).staged == {}
 
-  def test_record_with_nothing_staged_is_noop(self, tmp_path):
+  def test_record_with_nothing_staged_keeps_the_baseline(self, tmp_path):
+    # a footerless commit (a human's) still fires post-commit; the committed
+    # mark must survive it or the next delta over-credits
     p = tmp_path / 'state.json'
+    s = State(p)
+    s.stage({OPUS: C(output=100)})
+    s.record()
     State(p).record()
-    assert State(p).committed == {}
+    assert State(p).committed == {OPUS: C(output=100)}
 
   def test_corrupt_file_falls_back_to_empty(self, tmp_path):
     p = tmp_path / 'state.json'
@@ -124,6 +141,62 @@ class TestEmitDefault:
       total += parsed.delta['Opus 4.8']['output']
       s.record()
     assert total == 175  # == final cumulative
+
+
+class TestAppend:
+  def _message(self, tmp_path, text):
+    path = tmp_path / 'COMMIT_EDITMSG'
+    path.write_text(text)
+    return path
+
+  def test_no_usage_source_leaves_the_message(self, tmp_path, monkeypatch):
+    monkeypatch.setattr(usage, 'current_usage', lambda: None)
+    path = self._message(tmp_path, 'subject\n')
+    state = State(tmp_path / 'state.json')
+    _append(path, state)
+    assert path.read_text() == 'subject\n'
+    assert state.staged == {}
+
+  def test_appends_footer_and_stages(self, tmp_path, monkeypatch):
+    monkeypatch.setattr(
+      usage,
+      'current_usage',
+      lambda: usage.Usage(agent='Claude Code 2.1', per_model={OPUS: C(output=100)}),
+    )
+    path = self._message(tmp_path, 'subject\n\nbody\n')
+    state = State(tmp_path / 'state.json')
+    _append(path, state)
+    message = path.read_text()
+    assert message.startswith('subject\n\nbody\n\n> created with Claude Code 2.1 | ')
+    assert message.endswith('↓100\n')
+    assert state.staged[OPUS] == C(output=100)
+
+  def test_footered_message_kept_verbatim(self, tmp_path, monkeypatch):
+    # an amend or rebase reword re-runs the hook; the commit keeps its original
+    # attribution instead of a recomputed (double-counting) delta
+    monkeypatch.setattr(
+      usage,
+      'current_usage',
+      lambda: usage.Usage(agent='Claude Code 2.1', per_model={OPUS: C(output=100)}),
+    )
+    original = f'subject\n\n{usage.format_footer(["Claude Code 2.1"], {"Opus 4.8": C(output=7)})}\n'
+    path = self._message(tmp_path, original)
+    state = State(tmp_path / 'state.json')
+    _append(path, state)
+    assert path.read_text() == original
+    assert state.staged == {}
+
+  def test_empty_message_left_for_git_to_abort(self, tmp_path, monkeypatch):
+    monkeypatch.setattr(
+      usage,
+      'current_usage',
+      lambda: usage.Usage(agent='Claude Code 2.1', per_model={OPUS: C(output=100)}),
+    )
+    path = self._message(tmp_path, '\n\n')
+    state = State(tmp_path / 'state.json')
+    _append(path, state)
+    assert path.read_text() == '\n\n'
+    assert state.staged == {}
 
 
 class TestEmitSquash:

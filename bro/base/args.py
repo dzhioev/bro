@@ -2,8 +2,8 @@
 """argument parsing built on argparse.
 
 bro.base.args must stay importable in a stdlib-only environment (no venv): some
-consumers run outside it — e.g. bro-dev/bro_dev/claude_commit_footer.py via the post-commit
-git hook. So it imports no third-party package at module load. icecream is the one
+consumers run outside it — e.g. bro/workflow/commit_footer.py via the commit
+git hooks. So it imports no third-party package at module load. icecream is the one
 exception, treated as optional — the --ic debug flag is registered only when it is
 installed.
 """

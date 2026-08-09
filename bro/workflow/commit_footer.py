@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""prints a git commit footer crediting the token spend behind a commit.
+"""maintains the git commit footer crediting the token spend behind a commit.
 
 The footer is the offline-readable cache of a session's token spend, attributed to
 the commits it produced, so that summing a per-commit *delta* across `git log`
@@ -10,29 +10,41 @@ sources (a bro run's env-pointed usage file, the Claude Code session transcript)
 are owned by the `bro.llm.usage` module; this script owns the per-commit
 delta/baseline machinery on top of `usage.current_usage()`.
 
-Three modes:
-- default: emit the footer for the commit about to be made. The per-class delta is
-  this session's cumulative usage now minus the baseline already attributed to its
-  earlier commits (read from the state file). Also stages the new cumulative for
-  the post-commit hook to promote.
+The footer is applied by git, not by the agent: `install_hooks` puts the two
+packaged hooks (`hooks/`) into a repository, and every commit made with an agent
+usage source in the environment carries the footer with no session involvement.
+A process without a usage source — a human's shell — is a no-op for both hooks.
+
+Four modes:
+- --append <msg-file>: run by the commit-msg git hook. No usage source, an empty
+  message, or a message already carrying a parseable footer (an amend, a reword —
+  the commit keeps its original attribution) leaves the file untouched; otherwise
+  the delta footer is appended and the new cumulative staged. A failure fails the
+  commit, surfacing at the moment of the mistake.
 - --record: promote the staged cumulative to the committed baseline. Run by the
   post-commit git hook once a commit actually lands, so the mark only advances
-  after a *successful* commit (retries and footerless commits stay correct).
+  after a *successful* commit (retries stay correct), and only when something is
+  staged (a footerless commit leaves the baseline alone).
 - --squash <range>: emit an aggregated footer for a squash merge — the sum of
   every branch commit's per-class deltas / the union of agents plus the land
-  session's uncommitted remainder. Run by /land and injected into the PR body, so
-  the server-side squash commit carries the sum of the children it discards.
+  session's uncommitted remainder. Run by land-pr and injected into the PR body,
+  so the server-side squash commit carries the sum of the children it discards.
+- default: print the footer the next commit would carry (also staging its
+  cumulative, exactly as --append would).
 
 State lives in a gitignored `<repo>/.token_accounting_state.json`; git history
 carries only the durable per-class deltas / agents. Runs through bro.base.args, so
 it needs the project venv active (the editable install puts `base` and `usage` on
-the path even when invoked by file path); the post-commit hook surfaces a failure
-rather than swallowing it, so committing without the venv is caught.
+the path even when invoked by file path); the hooks surface a failure rather than
+swallowing it, so committing without the venv is caught.
 """
 
 from __future__ import annotations
 
+import importlib.resources
 import json
+import shutil
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -43,7 +55,25 @@ from bro.base.args import Parser
 from bro.llm.usage import Counts
 from bro.workspace.git import git_out
 
+__cli_name__ = 'commit-footer'
+
 STATE_FILENAME = '.token_accounting_state.json'
+HOOK_NAMES = ('commit-msg', 'post-commit')
+
+
+def install_hooks(repository: Path) -> None:
+  """copy the packaged footer hooks into `repository`'s git hooks directory."""
+  root = Path(git_out('rev-parse', '--show-toplevel', cwd=str(repository)))
+  hooks_path = Path(git_out('rev-parse', '--git-path', 'hooks', cwd=str(root)))
+  if not hooks_path.is_absolute():
+    hooks_path = root / hooks_path
+  hooks_path.mkdir(parents=True, exist_ok=True)
+  for hook_name in HOOK_NAMES:
+    resource = importlib.resources.files('bro.workflow').joinpath(f'hooks/{hook_name}')
+    with importlib.resources.as_file(resource) as source:
+      destination = hooks_path / hook_name
+      shutil.copyfile(source, destination)
+    destination.chmod(destination.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
 def _effective_baseline(committed: Counts, cum: Counts) -> Counts:
@@ -97,6 +127,11 @@ class State:
     self._save()
 
   def record(self) -> None:
+    # a commit that generated no footer (a human's, or --append leaving an
+    # already-footered message) stages nothing; promoting would wipe the
+    # baseline and over-credit the next commit.
+    if len(self.staged) == 0:
+      return
     self.committed = self.staged
     self.staged = {}
     self._save()
@@ -120,6 +155,17 @@ def _emit_default(current: usage.Usage, state: State) -> str:
   footer = usage.format_footer([current.agent], usage.to_labels(delta))
   state.stage(current.per_model)
   return footer
+
+
+def _append(message_path: Path, state: State) -> None:
+  current = usage.current_usage()
+  if current is None:
+    return
+  message = message_path.read_text()
+  if len(message.strip()) == 0 or usage.parse_footer(message) is not None:
+    return
+  footer = _emit_default(current, state)
+  message_path.write_text(f'{message.rstrip()}\n\n{footer}\n')
 
 
 def _emit_squash(
@@ -167,8 +213,13 @@ def _git_log(git_range: str) -> list[tuple[str, str]]:
 
 
 def main(argv: list[str]) -> Optional[int]:
-  parser = Parser(description='print/aggregate the token-accounting commit footer')
+  parser = Parser(description='maintain/aggregate the token-accounting commit footer')
   group = parser.add_mutually_exclusive_group()
+  group.add_argument(
+    '--append',
+    metavar='MSG_FILE',
+    help='append the footer to the proposed commit message (commit-msg hook)',
+  )
   group.add_argument(
     '--record',
     action='store_true',
@@ -177,11 +228,15 @@ def main(argv: list[str]) -> Optional[int]:
   group.add_argument(
     '--squash',
     metavar='RANGE',
-    help='emit an aggregated footer over a git range (for /land squash merges)',
+    help='emit an aggregated footer over a git range (for land-pr squash merges)',
   )
   args = parser.parse(argv)
 
   state = State(_repo_root() / STATE_FILENAME)
+
+  if args['append'] is not None:
+    _append(Path(args['append']), state)
+    return 0
 
   if args['record'] is True:
     state.record()

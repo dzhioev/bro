@@ -1,0 +1,4 @@
+#!/usr/bin/env -S bash -e
+# promote the staged token-accounting baseline once a commit lands. the hook is
+# installed by bro provisioning, and commits run with the project venv active.
+exec commit-footer --record
