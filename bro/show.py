@@ -1,5 +1,5 @@
-from bro.base import credentials
-from bro.bro import BaseBro
+from bro.base.condition import Condition
+from bro.bro import BaseBro, feature
 from bro.llm.mcp import MCPServerSpec
 
 
@@ -18,8 +18,8 @@ async def format_card(bro: BaseBro, *, include_system_prompt: bool = False) -> s
 
   if len(bro._features) > 0:
     parts.extend(['', '## Features', ''])
-    for name, gates in bro._features.items():
-      parts.append(_feature_line(name, gates))
+    for name, gate in bro._features.items():
+      parts.append(_feature_line(bro, name, gate))
 
   manifest = bro.needed_secrets()
   optional = bro.optional_secrets()
@@ -46,12 +46,13 @@ async def format_card(bro: BaseBro, *, include_system_prompt: bool = False) -> s
   return '\n'.join(parts) + '\n'
 
 
-def _feature_line(name: str, gates: tuple[str, ...]) -> str:
-  if len(gates) == 0:
+def _feature_line(bro: BaseBro, name: str, gate: Condition | bool) -> str:
+  if gate is True:
     return f'- **{name}** — always on'
-  gate_list = ', '.join(f'`{gate}`' for gate in gates)
-  state = 'on' if all(credentials.available(gate) for gate in gates) else 'off'
-  return f'- **{name}** — needs {gate_list}; {state} in this environment'
+  if gate is False:
+    return f'- **{name}** — disabled'
+  state = 'on' if feature(name).evaluate(bro.vocabulary()) else 'off'
+  return f'- **{name}** — gated on `{gate}`; {state} in this environment'
 
 
 def _identity_lines(bro: BaseBro) -> list[str]:

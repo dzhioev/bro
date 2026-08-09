@@ -10,7 +10,7 @@ from bro.bros import dev
 from bro.bros.bro import Bro
 from bro.bros.dev import mcp
 from bro.datasources import references
-from bro.llm.mcp import harness
+from bro.llm.mcp import creds, harness
 
 SYSTEM_PROMPT = """\
 You are a software developer with tools to read, search, and edit files and run
@@ -40,7 +40,7 @@ class Dev(Bro):
   # bookkeeping) needs the brog task tracker; the feature is on wherever a
   # brog config resolves and absent otherwise, so a tracker-less environment
   # still launches a plain developer.
-  features = {'brog': ('brog',)}
+  features = {'brog': creds.contains('brog')}
   # the dev toolset duplicates the claude harness's built-in file/shell tools
   mcp_servers = [when(harness == 'bro', dev.mcp), when(feature('brog'), brog_mcp)]
   data_sources = [references.dev_style]

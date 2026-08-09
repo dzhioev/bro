@@ -1120,7 +1120,7 @@ class TestFeatures:
     class FeatureBro(BaseBro):
       name = 'feature-bro'
       description = 'd'
-      features: ClassVar = {'x': ('xkey',)}
+      features: ClassVar = {'x': llm_mcp.creds.contains('xkey')}
       mcp_servers: ClassVar = [when(feature('x'), MCPServerSpec.of(_SecretServer))]
       system_prompt = 'base text{{when #features contains x}} FEATURE TEXT{{end}}'
 
@@ -1139,31 +1139,73 @@ class TestFeatures:
     assert 'FEATURE TEXT' not in off.system_prompt
     assert off.needed_secrets() == ()
 
-  def test_multi_secret_gate_needs_every_secret(self, monkeypatch):
-    class TwoKeyBro(BaseBro):
-      name = 'two-key'
-      description = 'd'
-      features: ClassVar = {'x': ('xkey', 'ykey')}
-      mcp_servers: ClassVar = [when(feature('x'), _make_spec('a'))]
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    monkeypatch.setattr('bro.base.credentials.available', lambda name: name == 'xkey')
-    assert TwoKeyBro()._mcp_specs == []
-    monkeypatch.setattr('bro.base.credentials.available', lambda name: name in {'xkey', 'ykey'})
-    assert len(TwoKeyBro()._mcp_specs) == 1
+  def test_gate_probes_an_unregistered_name_as_off(self, monkeypatch):
+    # the gate vocabulary's creds set has no closed universe: a name the store's
+    # registry doesn't know (e.g. never hydrated into a scoped container) reads
+    # as feature-off instead of raising a universe violation
+    monkeypatch.setattr('bro.base.credentials.available', lambda name: False)
+    bro = self._bro_class()()
+    assert bro._mcp_specs == []
 
   def test_derived_pins_parent_feature_on(self, monkeypatch):
     monkeypatch.setattr('bro.base.credentials.available', lambda name: False)
 
     class Pinned(self._bro_class()):
       name = 'feature-child'
-      features: ClassVar = {'x': ()}
+      features: ClassVar = {'x': True}
 
     child = Pinned()
     assert len(child._mcp_specs) == 1
     assert 'FEATURE TEXT' in child.system_prompt
+
+  def test_derived_disables_parent_feature(self, monkeypatch):
+    monkeypatch.setattr('bro.base.credentials.available', lambda name: name == 'xkey')
+
+    class Disabled(self._bro_class()):
+      name = 'feature-child'
+      features: ClassVar = {'x': False}
+
+    child = Disabled()
+    assert child._mcp_specs == []
+    assert 'FEATURE TEXT' not in child.system_prompt
+
+  def test_reenabling_a_disabled_feature_fails_construction(self):
+    class Disabled(self._bro_class()):
+      name = 'feature-child'
+      features: ClassVar = {'x': False}
+
+    class Reenabled(Disabled):
+      name = 'feature-grandchild'
+      features: ClassVar = {'x': True}
+
+    with pytest.raises(ValueError, match="re-enables feature 'x'"):
+      Reenabled()
+
+  def test_redeclaring_a_disabled_feature_off_is_allowed(self, monkeypatch):
+    monkeypatch.setattr('bro.base.credentials.available', lambda name: False)
+
+    class Disabled(self._bro_class()):
+      name = 'feature-child'
+      features: ClassVar = {'x': False}
+
+    class StillDisabled(Disabled):
+      name = 'feature-grandchild'
+      features: ClassVar = {'x': False}
+
+    assert StillDisabled()._mcp_specs == []
+
+  def test_gate_may_reference_only_the_gate_vocabulary(self):
+    class SurfaceGated(BaseBro):
+      name = 'surface-gated'
+      description = 'd'
+      features: ClassVar = {'x': llm_mcp.harness == 'bro'}
+      mcp_servers: ClassVar = [when(feature('x'), _make_spec('a'))]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    with pytest.raises(ConditionError, match='unknown variable #harness'):
+      SurfaceGated()
 
   def test_undeclared_feature_name_raises(self):
     class NoFeature(BaseBro):

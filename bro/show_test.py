@@ -6,7 +6,7 @@ import bro.llm.llms.chat_gpt as llm_llms_chat_gpt
 import bro.llm.llms.echo as llm_llms_echo
 from bro.bro import BaseBro
 from bro.datasources.searchable import Hit, SearchableDataSource
-from bro.llm.mcp import FunctionTool, InProcessMCPServer, MCPServerSpec, describe
+from bro.llm.mcp import FunctionTool, InProcessMCPServer, MCPServerSpec, creds, describe
 from bro.show import format_card
 
 
@@ -146,7 +146,7 @@ class TestFormatCard:
     class _FeatureBro(BaseBro):
       name = 'featured'
       description = 'has a gated feature'
-      features: ClassVar = {'tracker': ('trackerkey',)}
+      features: ClassVar = {'tracker': creds.contains('trackerkey')}
 
       def __init__(self):
         super().__init__(system_prompt='')
@@ -154,24 +154,37 @@ class TestFormatCard:
     monkeypatch.setattr('bro.base.credentials.available', lambda name: name == 'trackerkey')
     card = await format_card(_FeatureBro())
     assert '## Features' in card
-    assert '- **tracker** — needs `trackerkey`; on in this environment' in card
+    assert '- **tracker** — gated on `#creds contains trackerkey`; on in this environment' in card
 
     monkeypatch.setattr('bro.base.credentials.available', lambda name: False)
     card = await format_card(_FeatureBro())
-    assert '- **tracker** — needs `trackerkey`; off in this environment' in card
+    assert '- **tracker** — gated on `#creds contains trackerkey`; off in this environment' in card
 
   @pytest.mark.asyncio
   async def test_pinned_feature_shows_always_on(self):
     class _PinnedBro(BaseBro):
       name = 'pinned'
       description = 'pins its feature'
-      features: ClassVar = {'tracker': ()}
+      features: ClassVar = {'tracker': True}
 
       def __init__(self):
         super().__init__(system_prompt='')
 
     card = await format_card(_PinnedBro())
     assert '- **tracker** — always on' in card
+
+  @pytest.mark.asyncio
+  async def test_disabled_feature_shows_disabled(self):
+    class _DisabledBro(BaseBro):
+      name = 'disabled'
+      description = 'disables its feature'
+      features: ClassVar = {'tracker': False}
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    card = await format_card(_DisabledBro())
+    assert '- **tracker** — disabled' in card
 
   @pytest.mark.asyncio
   async def test_secrets_section_lists_manifest(self):
