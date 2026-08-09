@@ -255,6 +255,82 @@ class TestPollLoopResilience:
     assert len(calls) == 2
 
 
+def _check_run(name: str, status: str, conclusion: Optional[str] = None) -> dict[str, Any]:
+  return {
+    'name': name,
+    'status': status,
+    'conclusion': conclusion,
+    'html_url': f'https://github.com/x/y/runs/{name}',
+  }
+
+
+class TestCheckTracker:
+  def test_fires_once_per_red_episode_and_rearms(self):
+    tracker = poll_pr.CheckTracker()
+    running = [_check_run('tests', 'in_progress')]
+    failed = [_check_run('tests', 'completed', 'failure')]
+    passed = [_check_run('tests', 'completed', 'success')]
+
+    assert tracker.update(running) == []
+    fired = tracker.update(failed)
+    assert [run['name'] for run in fired] == ['tests']
+    assert tracker.update(failed) == []  # still red: no repeat
+    assert tracker.update(passed) == []  # re-run went green: re-arms
+    assert len(tracker.update(failed)) == 1
+
+  def test_neutral_and_skipped_are_not_failures(self):
+    tracker = poll_pr.CheckTracker()
+    runs = [_check_run('a', 'completed', 'neutral'), _check_run('b', 'completed', 'skipped')]
+    assert tracker.update(runs) == []
+
+  def test_no_checks_is_not_a_failure(self):
+    assert poll_pr.CheckTracker().update([]) == []
+
+
+class TestCheckEvents:
+  def _baseline(self, monkeypatch):
+    monkeypatch.setattr(poll_pr, '_owner_login', lambda *a: 'owner')
+    monkeypatch.setattr(poll_pr, '_fetch_issue_comments', lambda *a: [])
+    monkeypatch.setattr(poll_pr, '_fetch_review_comments', lambda *a: [])
+    monkeypatch.setattr(poll_pr, '_fetch_reviews', lambda *a: [])
+    monkeypatch.setattr(poll_pr.time, 'sleep', lambda _: None)
+
+  def test_failing_check_emits_one_event_with_the_run_url(self, monkeypatch, capsys):
+    self._baseline(monkeypatch)
+    head = {'head': {'sha': 'deadbeef'}, 'state': 'open', **_user('alice')}
+    pr_steps: list[dict[str, Any]] = [head, head, {'merged': True}]
+    runs = [
+      [_check_run('tests', 'in_progress')],
+      [_check_run('tests', 'completed', 'failure')],
+      [],
+    ]
+    calls: list[int] = []
+
+    def fake_fetch_pr(*a):
+      step = pr_steps[len(calls)]
+      calls.append(1)
+      return step
+
+    monkeypatch.setattr(poll_pr, '_fetch_pr', fake_fetch_pr)
+    monkeypatch.setattr(poll_pr, '_fetch_check_runs', lambda *a: runs[len(calls) - 1])
+    assert poll_pr.poll_pr('o', 'r', 1, lambda: 't', interval=0, self_login=None) == 0
+
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    checks = [e for e in events if e['event'] == 'checks']
+    assert len(checks) == 1
+    assert checks[0]['failing'] == [
+      {'name': 'tests', 'conclusion': 'failure', 'url': 'https://github.com/x/y/runs/tests'}
+    ]
+
+  def test_a_pr_without_a_head_sha_skips_the_check_fetch(self, monkeypatch):
+    self._baseline(monkeypatch)
+    monkeypatch.setattr(poll_pr, '_fetch_pr', lambda *a: {'merged': True})
+    fetched: list[int] = []
+    monkeypatch.setattr(poll_pr, '_fetch_check_runs', lambda *a: fetched.append(1) or [])
+    assert poll_pr.poll_pr('o', 'r', 1, lambda: 't', interval=0, self_login=None) == 0
+    assert fetched == []
+
+
 class TestConflictDetection:
   def _baseline(self, monkeypatch):
     monkeypatch.setattr(poll_pr, '_owner_login', lambda *a: 'owner')

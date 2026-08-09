@@ -18,6 +18,20 @@ _TRANSIENT_AUTH_STATUSES = frozenset({401, 403})
 _MAX_ATTEMPTS = 5
 _BASE_BACKOFF = 1.0  # seconds; doubled per attempt
 _MAX_BACKOFF = 30.0  # ceiling for both exponential backoff and server-hinted waits
+_PASSING_CONCLUSIONS = frozenset({'success', 'neutral', 'skipped'})
+
+
+def check_state(status: Optional[str], conclusion: Optional[str]) -> str:
+  """one check run as `pending` / `passed` / `failed`.
+
+  Case-insensitive because the two GitHub fronts disagree on spelling: REST
+  returns `completed` / `success`, GraphQL (what `gh --json` serves) `COMPLETED`
+  / `SUCCESS`. A neutral or skipped conclusion counts as passed — those are
+  checks that deliberately did not run.
+  """
+  if (status or '').lower() != 'completed':
+    return 'pending'
+  return 'passed' if (conclusion or '').lower() in _PASSING_CONCLUSIONS else 'failed'
 
 
 def is_transient(error: urllib.error.URLError) -> bool:

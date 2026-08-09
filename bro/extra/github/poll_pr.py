@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""poll a GitHub PR for merge status, merge conflicts, new comments, and new reviews."""
+"""poll a GitHub PR for merge status, merge conflicts, failing checks, new comments, and new reviews."""
 
 import http.client
 import json
@@ -43,6 +43,12 @@ def _fetch_review_inline_comments(
     f'{review_id}/comments?per_page=100'
   )
   return api.get(url, token)
+
+
+def _fetch_check_runs(owner: str, repo: str, sha: str, token: str) -> list[dict[str, Any]]:
+  url = f'https://api.github.com/repos/{owner}/{repo}/commits/{sha}/check-runs?per_page=100'
+  data: dict[str, Any] = api.get(url, token)
+  return data.get('check_runs', [])
 
 
 def _owner_login(owner: str, repo: str, token: str) -> str:
@@ -160,6 +166,45 @@ class ConflictTracker:
     return False
 
 
+class CheckTracker:
+  """edge-triggered failing-check detection: `update` returns the failed runs
+  once when the head commit's checks turn red, stays quiet while they stay red,
+  and re-arms once nothing is failing — a re-run or a new push that goes green.
+  Runs still in progress are no information; only concluded failures fire."""
+
+  def __init__(self):
+    self._failing = False
+
+  def update(self, check_runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    failed = [
+      run
+      for run in check_runs
+      if api.check_state(run.get('status'), run.get('conclusion')) == 'failed'
+    ]
+    if len(failed) == 0:
+      self._failing = False
+      return []
+    if self._failing:
+      return []
+    self._failing = True
+    return failed
+
+
+def _checks_event(pr: int, failed: list[dict[str, Any]]) -> dict[str, Any]:
+  return {
+    'event': 'checks',
+    'pr': pr,
+    'failing': [
+      {
+        'name': run.get('name', ''),
+        'conclusion': run.get('conclusion', ''),
+        'url': run.get('html_url') or run.get('details_url', ''),
+      }
+      for run in failed
+    ],
+  }
+
+
 def poll_pr(
   owner: str,
   repo: str,
@@ -171,6 +216,7 @@ def poll_pr(
   seen_comment_ids: set[int] = set()
   seen_review_ids: set[int] = set()
   conflicts = ConflictTracker()
+  checks = CheckTracker()
 
   startup_token = token()
   repo_owner_login = _owner_login(owner, repo, startup_token)
@@ -222,6 +268,12 @@ def poll_pr(
       if conflicts.update(pr_data.get('mergeable')):
         print(json.dumps({'event': 'conflicts', 'pr': pr}), flush=True)
 
+      head_sha = pr_data.get('head', {}).get('sha')
+      if head_sha is not None:
+        failed = checks.update(_fetch_check_runs(owner, repo, head_sha, cycle_token))
+        if len(failed) > 0:
+          print(json.dumps(_checks_event(pr, failed)), flush=True)
+
       for event in emit_cycle(
         owner, repo, pr, cycle_token, seen_comment_ids, seen_review_ids, is_actionable
       ):
@@ -253,7 +305,8 @@ def _token_provider(credential: str) -> Callable[[], str]:
 
 def main(argv: list[str]) -> Optional[int]:
   parser = Parser(
-    description='poll a GitHub PR for merge status, merge conflicts, new comments, and new reviews'
+    description='poll a GitHub PR for merge status, merge conflicts, failing checks, '
+    'new comments, and new reviews'
   )
   parser.add_argument(
     'repo', type=_owner_repo, metavar='owner/repo', help='target repo (e.g. owner/repository)'

@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 import json
 import subprocess
-from typing import Any
+from typing import Any, Optional
 from unittest.mock import patch
 
 import bro.workflow.land_pr as land_pr
@@ -17,9 +17,29 @@ def _pr(**overrides: Any) -> dict[str, Any]:
     'baseRefName': 'master',
     'headRefName': 'worktree-feature',
     'url': 'https://github.com/o/r/pull/310',
+    'statusCheckRollup': [],
   }
   pr.update(overrides)
   return pr
+
+
+def _check(name: str = 'tests', status: str = 'COMPLETED', conclusion: str = 'SUCCESS') -> dict:
+  return {'__typename': 'CheckRun', 'name': name, 'status': status, 'conclusion': conclusion}
+
+
+def _status_context(context: str = 'ci/legacy', state: str = 'SUCCESS') -> dict[str, Any]:
+  return {'__typename': 'StatusContext', 'context': context, 'state': state}
+
+
+def _land(**overrides: Any) -> Optional[int]:
+  arguments: dict[str, Any] = {
+    'no_review': False,
+    'allow_unchecked': False,
+    'no_checks': False,
+    'wait_checks': 0,
+  }
+  arguments.update(overrides)
+  return land_pr.land_pr(**arguments)
 
 
 class TestUncheckedBoxes:
@@ -113,7 +133,7 @@ def test_land_happy_path(capsys):
     patch.object(land_pr, '_run', side_effect=_fake_run(merge_calls, _pr())),
     patch.object(land_pr.spawn, 'run', return_value=subprocess.CompletedProcess([], 0)) as push,
   ):
-    assert land_pr.land_pr(no_review=False, allow_unchecked=False) is None
+    assert _land() is None
 
   assert len(merge_calls) == 1
   merge = merge_calls[0]
@@ -138,7 +158,7 @@ def test_land_refuses_unapproved_without_merging(capsys):
   merge_calls: list[list[str]] = []
   fake = _fake_run(merge_calls, _pr(reviewDecision='REVIEW_REQUIRED'))
   with patch.object(land_pr, '_run', side_effect=fake):
-    assert land_pr.land_pr(no_review=False, allow_unchecked=False) == 1
+    assert _land() == 1
   assert merge_calls == []
   assert capsys.readouterr().out == ''
 
@@ -149,7 +169,7 @@ def test_land_failed_branch_delete_degrades(capsys):
     patch.object(land_pr, '_run', side_effect=_fake_run(merge_calls, _pr())),
     patch.object(land_pr.spawn, 'run', return_value=subprocess.CompletedProcess([], 1)),
   ):
-    assert land_pr.land_pr(no_review=False, allow_unchecked=False) is None
+    assert _land() is None
   assert json.loads(capsys.readouterr().out)['branch_deleted'] is False
 
 
@@ -160,6 +180,112 @@ def test_land_with_an_unaccounted_branch_keeps_the_pr_body(capsys):
     patch.object(land_pr, '_run', side_effect=_fake_run(merge_calls, _pr(), footer='')),
     patch.object(land_pr.spawn, 'run', return_value=subprocess.CompletedProcess([], 0)),
   ):
-    assert land_pr.land_pr(no_review=False, allow_unchecked=False) is None
+    assert _land() is None
   merge = merge_calls[0]
   assert merge[merge.index('--body') + 1] == '## Test plan\n- [x] suite green'
+
+
+class TestSplitChecks:
+  def test_no_checks_is_clean(self):
+    assert land_pr._split_checks([]) == ([], [])
+
+  def test_running_check_is_pending(self):
+    pending, failed = land_pr._split_checks([_check(status='IN_PROGRESS', conclusion='')])
+    assert (pending, failed) == (['tests'], [])
+
+  def test_queued_check_is_pending(self):
+    pending, _ = land_pr._split_checks([_check(status='QUEUED', conclusion='')])
+    assert pending == ['tests']
+
+  def test_failed_conclusions_are_failures(self):
+    for conclusion in ('FAILURE', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED'):
+      _, failed = land_pr._split_checks([_check(conclusion=conclusion)])
+      assert failed == ['tests'], conclusion
+
+  def test_neutral_and_skipped_pass(self):
+    for conclusion in ('SUCCESS', 'NEUTRAL', 'SKIPPED'):
+      assert land_pr._split_checks([_check(conclusion=conclusion)]) == ([], []), conclusion
+
+  def test_legacy_status_contexts(self):
+    assert land_pr._split_checks([_status_context(state='PENDING')]) == (['ci/legacy'], [])
+    assert land_pr._split_checks([_status_context(state='SUCCESS')]) == ([], [])
+    assert land_pr._split_checks([_status_context(state='ERROR')]) == ([], ['ci/legacy'])
+
+
+class TestChecksError:
+  def test_clean_rollup_passes(self):
+    assert land_pr._checks_error(310, [_check()], False) is None
+
+  def test_pending_refuses_and_names_the_check(self):
+    error = land_pr._checks_error(310, [_check(status='IN_PROGRESS')], False)
+    assert error is not None and 'tests' in error and '--no-checks' in error
+
+  def test_no_checks_waives_pending(self):
+    assert land_pr._checks_error(310, [_check(status='IN_PROGRESS')], True) is None
+
+  def test_failure_refuses_despite_the_waiver(self):
+    error = land_pr._checks_error(310, [_check(conclusion='FAILURE')], True)
+    assert error is not None and 'never waived' in error
+
+
+class TestAwaitChecks:
+  def test_concluded_rollup_returns_at_once(self):
+    with patch.object(land_pr, '_pr_view') as view:
+      assert land_pr._await_checks(310, [_check()], 480) == [_check()]
+    view.assert_not_called()
+
+  def test_polls_until_the_checks_conclude(self):
+    later = {'statusCheckRollup': [_check(status='COMPLETED', conclusion='SUCCESS')]}
+    with (
+      patch.object(land_pr, '_pr_view', return_value=later) as view,
+      patch.object(land_pr.time, 'sleep') as sleep,
+    ):
+      rollup = land_pr._await_checks(310, [_check(status='IN_PROGRESS')], 480)
+    assert land_pr._split_checks(rollup) == ([], [])
+    view.assert_called_once_with(['statusCheckRollup'], number=310)
+    sleep.assert_called_once_with(land_pr._CHECK_POLL_INTERVAL)
+
+  def test_zero_budget_does_not_wait(self):
+    pending = [_check(status='IN_PROGRESS')]
+    with patch.object(land_pr, '_pr_view') as view:
+      assert land_pr._await_checks(310, pending, 0) == pending
+    view.assert_not_called()
+
+
+def test_land_refuses_pending_checks_without_merging(capsys):
+  merge_calls: list[list[str]] = []
+  pr = _pr(statusCheckRollup=[_check(status='IN_PROGRESS', conclusion='')])
+  with patch.object(land_pr, '_run', side_effect=_fake_run(merge_calls, pr)):
+    assert _land() == 1
+  assert merge_calls == []
+  assert capsys.readouterr().out == ''
+
+
+def test_land_refuses_a_failed_check_even_when_waived(capsys):
+  merge_calls: list[list[str]] = []
+  pr = _pr(statusCheckRollup=[_check(conclusion='FAILURE')])
+  with patch.object(land_pr, '_run', side_effect=_fake_run(merge_calls, pr)):
+    assert _land(no_checks=True) == 1
+  assert merge_calls == []
+
+
+def test_land_merges_with_green_checks(capsys):
+  merge_calls: list[list[str]] = []
+  pr = _pr(statusCheckRollup=[_check(), _status_context()])
+  with (
+    patch.object(land_pr, '_run', side_effect=_fake_run(merge_calls, pr)),
+    patch.object(land_pr.spawn, 'run', return_value=subprocess.CompletedProcess([], 0)),
+  ):
+    assert _land() is None
+  assert len(merge_calls) == 1
+
+
+def test_land_does_not_wait_for_checks_on_an_unapproved_pr():
+  merge_calls: list[list[str]] = []
+  pr = _pr(reviewDecision='', statusCheckRollup=[_check(status='IN_PROGRESS', conclusion='')])
+  with (
+    patch.object(land_pr, '_run', side_effect=_fake_run(merge_calls, pr)),
+    patch.object(land_pr.time, 'sleep') as sleep,
+  ):
+    assert _land(wait_checks=480) == 1
+  sleep.assert_not_called()
