@@ -40,7 +40,7 @@ A fresh name means a fresh clone/worktree on the intended base (fresh origin `HE
 
 The suffix also makes each session's `worktree-<slug>` branch **unique by construction**, which is what prevents the remote-branch collision: local cleanup (`cw clean` / `--drop`) deletes only the *local* `worktree-<slug>` branch, so an un-merged session leaves `origin/worktree-<slug>` behind — but the next session picks a different suffix, so it never reuses a slug whose pushed branch still holds unmerged work. Because uniqueness is structural, the remote is never consulted (no `git ls-remote`, no network); the two local `.exists()` checks only guard against the vanishingly rare clash with a live workspace, regenerating the suffix if one hits. `bro/workspace/paths_test.py` covers the collision cases.
 
-`dive-in` logs `workspace: <name>` after picking, so the generated name is visible — you need it to reattach via `cw exec <name>` or to resume via `cw ss --resume <name>` (see "Resuming").
+`dive-in` logs `workspace: <name>` after picking, so the generated name is visible — you need it to reattach via `cw exec <name>` or to resume via `cw resume c:<name>` (see "Resuming").
 
 ## Host vs container
 
@@ -70,9 +70,9 @@ Every cw-session runs as a bro — `--bro`, defaulting to the required project d
 
 ## Resuming
 
-`dive-in` always creates a fresh workspace, so it has no `--resume` of its own. To pick up a finished session, use the hint `cw` prints on session exit — `cw ss --resume <name>` with the session's own flags (see `bro/reference/cw.md`, "`--resume`").
+`dive-in` always creates a fresh workspace, so it has no resume of its own. To pick up a finished session, run `cw resume <ref>` — the workspace as `cw list` shows it (`c:<name>` in the default container mode), relaunched under the session's own flags (see `bro/reference/cw.md`, "Resuming a session").
 
-Known gap: `CW_TASK_ID` lives only in the launching `dive-in` process's environment, so a `cw ss --resume` session doesn't carry it, and commits made there lack the `Task: <url>` footer line. Accepted — resumes are the exception, and the merge usually happens in the original session.
+Known gap: `CW_TASK_ID` lives only in the launching `dive-in` process's environment, so a resumed session doesn't carry it, and commits made there lack the `Task: <url>` footer line. Accepted — resumes are the exception, and the merge usually happens in the original session.
 
 ## Forwarded flags
 

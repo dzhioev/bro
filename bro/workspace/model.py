@@ -1,13 +1,23 @@
+import contextlib
+import fcntl
 import os
 import shutil
 import subprocess
 from abc import ABC, abstractmethod
+from collections.abc import Generator
 from pathlib import Path
 from typing import Optional
 
 from bro.workspace.docker import image_tag
 from bro.workspace.git import git_run
-from bro.workspace.paths import containers_dir, host_log_dir, session_end_dir, worktrees_dir
+from bro.workspace.paths import (
+  containers_dir,
+  host_log_dir,
+  resume_spec_dir,
+  session_end_dir,
+  session_lock_dir,
+  worktrees_dir,
+)
 
 _CONTAINER_PREFIX = 'c:'
 
@@ -22,11 +32,8 @@ def parse_ref(ref: str) -> tuple[str, bool]:
   return ref, False
 
 
-def _host_pidfile(project: Path, name: str) -> Path:
-  # per-worktree git admin dir (outside the working tree, so it never shows up in
-  # `git status` and is cleaned up with the worktree). `cw` writes its own pid here
-  # for the session's duration.
-  return project / '.git' / 'worktrees' / name / 'cw-session.pid'
+class SessionBusy(RuntimeError):
+  """a workspace's session lock is held by a live session."""
 
 
 def _last_active(workspace: Path) -> Optional[float]:
@@ -158,10 +165,50 @@ class Workspace(ABC):
   def ref(self) -> str: ...
 
   @abstractmethod
-  def is_active(self, mounts: set[str]) -> bool: ...
-
-  @abstractmethod
   def remove(self) -> None: ...
+
+  @property
+  def lockfile(self) -> Path:
+    return session_lock_dir(self.project) / self.ref
+
+  @contextlib.contextmanager
+  def hold_session_lock(self) -> Generator[None]:
+    """hold this workspace's session lock for the block, or raise `SessionBusy`.
+
+    One session per workspace: concurrent sessions would mutate the same files
+    and share the workspace's gitignored state. The flock is the lock — the pid
+    written into the file only names the holder in the refusal.
+    """
+    self.lockfile.parent.mkdir(parents=True, exist_ok=True)
+    handle = os.fdopen(os.open(self.lockfile, os.O_RDWR | os.O_CREAT, 0o644), 'r+')
+    with contextlib.closing(handle):
+      try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+      except BlockingIOError as e:
+        raise SessionBusy(
+          f'session already active on workspace {self.ref!r} '
+          f'(pid {handle.read().strip()}); refusing to start a second'
+        ) from e
+      handle.seek(0)
+      handle.truncate()
+      handle.write(str(os.getpid()))
+      handle.flush()
+      yield
+
+  def is_active(self, mounts: set[str]) -> bool:
+    """whether a session currently owns this workspace. `mounts` is the running
+    containers' mount set, which only a container workspace reads."""
+    try:
+      handle = os.fdopen(os.open(self.lockfile, os.O_RDONLY), 'r')
+    except FileNotFoundError:
+      return False
+    with contextlib.closing(handle):
+      try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+      except BlockingIOError:
+        return True
+      fcntl.flock(handle, fcntl.LOCK_UN)
+    return False
 
   def is_clean(self) -> tuple[bool, list[str]]:
     """whether the workspace is safe to remove: its last session finished
@@ -182,9 +229,12 @@ class Workspace(ABC):
   def _remove_session_state(self) -> None:
     # per-session host-side state keyed by `ref` (the mode-prefixed key the launch
     # surfaces pass to the broker root): the session host log
-    # (workspace/spawn.py:_HostLogRedirect) and the session-end record. neither
-    # survives removal — unlike the var/cw/summon/ audit
+    # (workspace/spawn.py:_HostLogRedirect), the session-end record, the resume
+    # spec, and the session lock. none survives removal — unlike the
+    # var/cw/summon/ audit
     (host_log_dir(self.project) / f'{self.ref}.log').unlink(missing_ok=True)
+    (resume_spec_dir(self.project) / f'{self.ref}.json').unlink(missing_ok=True)
+    self.lockfile.unlink(missing_ok=True)
     clear_session_end(self.project, self.ref)
 
   def last_active(self) -> Optional[float]:
@@ -224,29 +274,6 @@ class HostWorktree(Workspace):
   def ref(self) -> str:
     return self.name
 
-  @property
-  def pidfile(self) -> Path:
-    return _host_pidfile(self.project, self.name)
-
-  def is_active(self, mounts: set[str]) -> bool:
-    # host sessions run plain `claude` (no `-w`), so cw is the worktree's owner for
-    # the session; its pid in the lockfile, still alive, means the session is active.
-    # `mounts` (running container mounts) is irrelevant to a host worktree — ignored.
-    pidfile = self.pidfile
-    if not pidfile.is_file():
-      return False
-    try:
-      pid = int(pidfile.read_text().strip())
-    except ValueError:
-      return False
-    try:
-      os.kill(pid, 0)
-    except ProcessLookupError:
-      return False
-    except PermissionError:
-      return True
-    return True
-
   def remove(self) -> None:
     git_run('worktree', 'remove', '--force', str(self.path))
     git_run('branch', '-D', f'worktree-{self.name}')
@@ -263,7 +290,9 @@ class ContainerWorkspace(Workspace):
     return format_ref(self.name, True)
 
   def is_active(self, mounts: set[str]) -> bool:
-    return str(self.path) in mounts
+    # the running container counts on its own: a launcher killed outright releases
+    # the lock while leaving its container bound to the workspace mount.
+    return str(self.path) in mounts or super().is_active(mounts)
 
   def remove(self) -> None:
     # the session state is cleaned in a finally so it never outlives the workspace,

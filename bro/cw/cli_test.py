@@ -42,12 +42,6 @@ class TestSsValidation:
       cw_cli.main(['cw', 'ss', '--host', '--raw', 'w'])
     assert '--raw cannot be combined with --host' in capsys.readouterr().err
 
-  def test_ss_raw_requires_the_anthropic_key(self, capsys):
-    with pytest.raises(SystemExit):
-      with patch('bro.cw.cli._load_anthropic_key', return_value=None):
-        cw_cli.main(['cw', 'ss', '--raw', 'w'])
-    assert '--raw requires the `anthropic` secret' in capsys.readouterr().err
-
   def test_ss_bro_with_host_is_accepted(self):
     # --bro only themes the session; host mode fences out --raw, not the bro
     with patch('bro.cw.cli.start_session', return_value=0) as fake_start:
@@ -55,14 +49,15 @@ class TestSsValidation:
     assert rc == 0
     assert fake_start.call_args[0][0].bro == 'dev'
 
-  def test_raw_with_resume_is_accepted(self):
-    with (
-      patch('bro.cw.cli._load_anthropic_key', return_value={'api_key': 'k'}),
-      patch('bro.cw.cli.start_session', return_value=0) as fake_start,
-    ):
-      rc = cw_cli.main(['cw', 'ss', '--raw', '--bro', 'dev', '--resume', 'w'])
-    assert rc == 0
-    assert fake_start.call_count == 1
+  def test_ss_rejects_resume_and_names_the_verb(self, capsys):
+    with pytest.raises(SystemExit):
+      cw_cli.main(['cw', 'ss', '--resume', 'w'])
+    assert 'resuming is `cw resume <workspace>`' in capsys.readouterr().err
+
+  def test_ss_help_hides_resume(self, capsys):
+    with pytest.raises(SystemExit):
+      cw_cli.main(['cw', 'ss', '--help'])
+    assert '--resume' not in capsys.readouterr().out
 
   def test_ss_builds_spec_with_grant_revoke_normalized_to_lists(self):
     # the grant/revoke parser defaults are None; the SessionSpec the cli
@@ -79,6 +74,20 @@ class TestSsValidation:
       rc = cw_cli.main(['cw', 'ss', '--grant', '@dev', 'w'])
     assert rc == 0
     assert fake_start.call_args[0][0].grant == ['@dev']
+
+
+class TestResume:
+  def test_dispatches_the_workspace_ref(self):
+    with patch('bro.cw.cli.resume_session', return_value=0) as fake_resume:
+      rc = cw_cli.main(['cw', 'resume', 'c:w'])
+    assert rc == 0
+    assert fake_resume.call_args[0] == ('c:w',)
+
+  def test_takes_no_session_flags(self, capsys):
+    # the recorded spec owns them; a flag here would silently not apply
+    with pytest.raises(SystemExit):
+      cw_cli.main(['cw', 'resume', '--bro', 'dev', 'c:w'])
+    assert 'unrecognized arguments' in capsys.readouterr().err
 
 
 class TestInPlace:

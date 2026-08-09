@@ -61,6 +61,20 @@ def session_end_dir(project: Path) -> Path:
   return project / 'var' / 'cw' / 'exit'
 
 
+def session_lock_dir(project: Path) -> Path:
+  # per-workspace session lock (workspace/model.py: Workspace.hold_session_lock).
+  # outside the workspace dirs so the file never lands inside a /workspace mount;
+  # removed with the workspace.
+  return project / 'var' / 'cw' / 'lock'
+
+
+def resume_spec_dir(project: Path) -> Path:
+  # per-workspace record of the session spec a resume relaunches. outside the
+  # workspace dirs so the file never lands inside a /workspace mount; removed
+  # with the workspace.
+  return project / 'var' / 'cw' / 'resume'
+
+
 def host_log_dir(project: Path) -> Path:
   # per-session host logs: where the outer launch process's mid-session output goes
   # while an interactive root owns the terminal (see workspace/spawn.py). outside

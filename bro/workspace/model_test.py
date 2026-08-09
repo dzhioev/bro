@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 
 import pytest
 
@@ -217,40 +218,55 @@ class TestIsClean:
     assert HostWorktree('ws', tmp_path).is_clean()[0] is False
 
 
-class TestIsActive:
-  def _make_workspace(self, tmp_path, name='feat'):
-    return HostWorktree(name, tmp_path)
+class TestSessionLock:
+  def test_idle_workspace_is_inactive(self, tmp_path):
+    assert HostWorktree('feat', tmp_path).is_active(set()) is False
 
-  def _seed(self, workspace):
-    workspace.pidfile.parent.mkdir(parents=True, exist_ok=True)
-    return workspace.pidfile
+  def test_held_lock_reads_as_active(self, tmp_path):
+    workspace = HostWorktree('feat', tmp_path)
+    with workspace.hold_session_lock():
+      assert workspace.is_active(set()) is True
+      assert workspace.lockfile.read_text() == str(os.getpid())
+    assert workspace.is_active(set()) is False
 
-  def test_host_false_when_no_pidfile(self, tmp_path):
-    assert self._make_workspace(tmp_path).is_active(set()) is False
+  def test_a_second_holder_is_refused(self, tmp_path):
+    workspace = HostWorktree('feat', tmp_path)
+    with workspace.hold_session_lock():
+      with pytest.raises(model.SessionBusy, match=f'feat.*pid {os.getpid()}'):
+        with HostWorktree('feat', tmp_path).hold_session_lock():
+          pass
 
-  def test_host_true_for_live_pid(self, tmp_path):
-    workspace = self._make_workspace(tmp_path)
-    self._seed(workspace).write_text(str(os.getpid()))
+  def test_the_lock_dies_with_its_holder(self, tmp_path):
+    # flock releases on process death, so a killed session leaves nothing stale
+    workspace = HostWorktree('feat', tmp_path)
+    workspace.lockfile.parent.mkdir(parents=True, exist_ok=True)
+    holder = subprocess.Popen(
+      [
+        sys.executable,
+        '-c',
+        'import fcntl,sys,time\n'
+        'handle = open(sys.argv[1], "w")\n'
+        'fcntl.flock(handle, fcntl.LOCK_EX)\n'
+        'print("held", flush=True)\n'
+        'time.sleep(60)\n',
+        str(workspace.lockfile),
+      ],
+      stdout=subprocess.PIPE,
+      text=True,
+    )
+    assert holder.stdout is not None and holder.stdout.readline().strip() == 'held'
     assert workspace.is_active(set()) is True
-
-  def test_host_false_for_dead_pid(self, tmp_path):
-    process = subprocess.Popen(['true'])
-    process.wait()
-    workspace = self._make_workspace(tmp_path)
-    self._seed(workspace).write_text(str(process.pid))
+    holder.kill()
+    holder.wait()
     assert workspace.is_active(set()) is False
 
-  def test_host_false_for_garbage(self, tmp_path):
-    workspace = self._make_workspace(tmp_path)
-    self._seed(workspace).write_text('not-a-pid')
-    assert workspace.is_active(set()) is False
-
-  def test_host_ignores_mounts(self, tmp_path):
-    workspace = self._make_workspace(tmp_path)
-    self._seed(workspace).write_text(str(os.getpid()))
-    assert workspace.is_active({str(workspace.path)}) is True  # mounts are irrelevant to a worktree
+  def test_a_host_worktree_and_its_same_name_container_lock_apart(self, tmp_path):
+    with HostWorktree('feat', tmp_path).hold_session_lock():
+      with ContainerWorkspace('feat', tmp_path).hold_session_lock():
+        pass
 
   def test_container_active_when_path_in_mounts(self, tmp_path, monkeypatch):
+    # a running container counts even with no launcher holding the lock
     monkeypatch.setattr(model, 'containers_dir', lambda project: tmp_path)
     workspace = ContainerWorkspace('feat', tmp_path)
     assert workspace.is_active({str(workspace.path)}) is True
