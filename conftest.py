@@ -41,6 +41,11 @@ against an inherited verbose launch (`run-tests --verbose`), and after every
 test (the autouse fixture below) against a test that parses `--log`/`--verbose`
 through a real CLI: level-sensitive tests — including every subprocess a test
 spawns — must see the default they assert against.
+
+`*_llm_test.py` files are live-LLM behavior probes: they run a real bro against
+the configured provider and spend real tokens, so they stay outside the default
+roster and `pytest_collection_modifyitems` below skips them unless
+`BRO_LLM_TESTS=1` explicitly opts in.
 """
 
 import logging
@@ -69,6 +74,17 @@ os.environ.pop('PWD', None)
 os.environ.pop('CW_NAME', None)
 log.set_level(logging.INFO)
 os.environ.pop(log.LEVEL_ENV, None)
+
+
+def pytest_collection_modifyitems(items):
+  if os.environ.get('BRO_LLM_TESTS') == '1':
+    return
+  skip = pytest.mark.skip(
+    reason='live-LLM behavior probe; spends real tokens — set BRO_LLM_TESTS=1 to run'
+  )
+  for item in items:
+    if item.path.name.endswith('_llm_test.py'):
+      item.add_marker(skip)
 
 
 @pytest.fixture(autouse=True)

@@ -9,6 +9,7 @@ The repository is a uv workspace whose root publishes the `bro` distribution fro
 - `./format.sh` — format and autofix the whole repository
 - `./run-tests` — console-script drift, lint, deptry, pyright, unit tests, and the two host-only docker smoke stages: the container entrypoint's postconditions and the launch path from a cold image tag (`--no-docker` skips both). It must pass cleanly before changes are pushed
 - `pytest bro/launch/e2e_test.py` — live Docker launch e2e, separate from the default suite
+- `BRO_LLM_TESTS=1 pytest bro/bros/dev/commit_llm_test.py` — live-LLM behavior probes (`*_llm_test.py`): a real bro against the configured provider, asserting on the artifacts it produces. They spend real tokens, so they stay outside the default roster and are collected-but-skipped without the explicit env var
 - `sync-scripts --project <directory>` — regenerate a distribution's `[project.scripts]` and committed `_entrypoints.py`, then `uv sync --all-packages --all-groups --all-extras`
 - `uv build --package bro` and `uv build --package bro-dev` — build the wheels
 
