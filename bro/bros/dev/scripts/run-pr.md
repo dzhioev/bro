@@ -1,8 +1,8 @@
 ---
 name: run-pr
-description: This script should be used when the user signals that the worktree's changes are ready for review and a PR should be opened — "open a PR", "@:run pr:@", "send for review", "PR it", "ship it", "ready for review", "finalize". Covers commit hygiene (docs sync, policy audit, commit splitting), the repo's commit-message and footer conventions, rebases onto the base branch (master by default), opens the PR via `gh pr create`, then launches the `poll-pr` review watcher to handle review comments, merge conflicts, and APPROVED events. On approval, chains into `@::land` for the merge step. Also the re-entry point for a PR that is already open — "resume PR <pr-url-or-number>", "resume the PR", "pick up the review" — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
+description: This script should be used when the user signals that the worktree's changes are ready for review and a PR should be opened — "open a PR", "@:run pr:@", "send for review", "PR it", "ship it", "ready for review", "finalize". Covers commit hygiene (docs sync, policy audit, commit splitting), the repo's commit-message conventions, rebases onto the base branch (master by default), opens the PR via `gh pr create`, then launches the `poll-pr` review watcher to handle review comments, merge conflicts, and APPROVED events. On approval, chains into `@::land` for the merge step. Also the re-entry point for a PR that is already open — "resume PR <pr-url-or-number>", "resume the PR", "pick up the review" — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
 parameters: {"base?": "base branch for the pull request instead of master", "pr?": "existing pull request URL or number to resume"}
-version: 4.0.0
+version: 4.1.0
 ---
 
 # run-pr
@@ -85,10 +85,8 @@ Don't fragment trivially (every hunk as its own commit) and don't bundle unrelat
 
 Match the repo's conventions — the recent log (step 1) is the reference, and the repo's docs may spell them out. Then:
 
-- **Footer**: follow the repo's own commit-message policy; its docs name the footer command and shape when it has one. Add the task link the repo requires (resolve it via `brog::get_task(task_id).url`; the task id comes from `CW_TASK_ID` or a task created earlier in this session). Omit task metadata when no task id is available.
+- **Task metadata**: add the task link the repo requires (resolve it via `brog::get_task(task_id).url`; the task id comes from `CW_TASK_ID` or a task created earlier in this session). Omit task metadata when no task id is available.
 - **Never** include `Co-Authored-By:` lines or generated-by boilerplate unless the repo's policy explicitly requires them.
-
-Generate any dynamic footer immediately before every commit — and again before every retry — so it reflects the current session state rather than reusing stale output.
 
 ### 6. Commit
 
@@ -101,12 +99,14 @@ git commit -m "$(cat <<'EOF'
 
 <optional terse body>
 
-<task metadata and footer required by the repo's policy>
+<task metadata required by the repo's policy>
 EOF
 )"
 ```
 
 If a pre-commit hook fails: fix the issue, re-stage, and create a **new** commit. Never `--amend` (the original commit didn't happen — amend would modify the previous one and destroy work). Never `--no-verify`.
+
+Repo hooks may append trailers to the committed message (e.g. a token-accounting footer); never hand-write, edit, or strip them.
 
 Repeat steps 5–6 for each logical commit.
 

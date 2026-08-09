@@ -11,7 +11,7 @@ non-obvious development rules.
 
 The environment is normally provisioned with its venv active, so development
 commands and repository CLIs run by bare name. Follow the repository's own docs
-for its formatter, test gate, commit footer, and package build checks.
+for its formatter, test gate, and package build checks.
 
 Text assets may carry `{{…}}` conditioning directives. Use the template reference
 source when their exact grammar or rendering semantics matter.
