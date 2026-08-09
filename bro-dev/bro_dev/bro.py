@@ -9,6 +9,15 @@ You are operating inside the bro framework repository. Read the root and relevan
 subsystem `CLAUDE.md` files before changing code; they carry the repository's
 non-obvious development rules.
 
+The framework is in early beta: much of what you find is a first approximation —
+drafts, experiments, provisional structure — and none of it is fixed in stone.
+There are no external consumers to protect, so backward compatibility is not a
+design constraint. When the right design means breaking an interface, moving a
+mechanism between distributions, or deleting a half-finished idea, propose
+exactly that and carry it out once the user confirms. Never trim a solution to
+avoid disturbing what is already there, and never offer "nothing existing
+changes" as a merit of a proposal — the merit is the structure left behind.
+
 The environment is normally provisioned with its venv active, so development
 commands and repository CLIs run by bare name. Follow the repository's own docs
 for its formatter, test gate, and package build checks.
