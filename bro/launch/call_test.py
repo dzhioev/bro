@@ -1,4 +1,6 @@
+import asyncio
 import io
+import signal
 from dataclasses import dataclass
 from datetime import datetime
 from typing import ClassVar, Optional
@@ -878,7 +880,7 @@ async def test_tui_turn_error_renders_as_error_bubble(monkeypatch):
   monkeypatch.setattr(bro, 'send', fail)
   app = ChatApp(bro, None)
   async with app.run_test(size=(80, 40)) as pilot:
-    app._show_typing()
+    app._begin_turn()
     app._send_to_bro('trigger the failure')
     await app.workers.wait_for_complete()
     await pilot.pause()
@@ -902,7 +904,7 @@ async def test_tui_thinking_renders_as_muted_bubble_above_typing(monkeypatch):
   monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
   app = ChatApp(RecordBro(), None)
   async with app.run_test(size=(80, 40)) as pilot:
-    app._show_typing()
+    app._begin_turn()
     app.append_thinking('**Planning**\n\nweighing the options')
     await pilot.pause()
     row = app.query(BubbleRow).last()
@@ -1052,7 +1054,7 @@ async def test_tui_typing_indicator_tracks_run_state(monkeypatch):
   monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
   app = ChatApp(RecordBro(), None)
   async with app.run_test() as pilot:
-    app._show_typing()
+    app._begin_turn()
     await pilot.pause()
     indicator = app.query_one(TypingIndicator)
     label = indicator.query_one(Static)
@@ -1071,3 +1073,145 @@ async def test_tui_typing_indicator_tracks_run_state(monkeypatch):
     # the batch's results are all in — the next LLM roundtrip starts, so the
     # thinking clock restarts from zero
     assert str(label.content).startswith('Thinking for a moment')
+
+
+class _BlockingBro(RecordBro):
+  """a bro whose turn never finishes on its own — the interruption fixture.
+
+  `started` fires once `send` is running, and `cancelled` records that the
+  cancellation reached the bro rather than only the worker wrapping it."""
+
+  def __init__(self):
+    super().__init__()
+    self.started = asyncio.Event()
+    self.messages: list[str] = []
+    self.cancelled = False
+
+  async def send(self, message, observer=None, tracker=None, request_timeout=None, **kwargs):
+    self.messages.append(message)
+    self.started.set()
+    try:
+      await asyncio.Event().wait()
+    except asyncio.CancelledError:
+      self.cancelled = True
+      raise
+    raise AssertionError('unreachable')
+
+
+async def _start_turn(app, pilot, bro: '_BlockingBro', text: str = 'work on it'):
+  app._submit(text)
+  await asyncio.wait_for(bro.started.wait(), timeout=5)
+  await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_tui_input_is_disabled_while_a_turn_runs(monkeypatch):
+  from bro.launch.call_tui import _BUSY_PLACEHOLDER, _IDLE_PLACEHOLDER, ChatApp, MessageInput
+
+  monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  bro = _BlockingBro()
+  app = ChatApp(bro, None)
+  async with app.run_test(size=(80, 40)) as pilot:
+    field = app.query_one('#input-bar', MessageInput)
+    assert field.disabled is False
+    await _start_turn(app, pilot, bro)
+    assert field.disabled is True
+    assert field.placeholder == _BUSY_PLACEHOLDER
+    # a submit that reaches the app anyway (the field is the only way to raise
+    # one, and it is disabled) never starts a second concurrent conversation
+    await app.on_message_input_submitted(MessageInput.Submitted('second message'))
+    await pilot.pause()
+    assert bro.messages == ['work on it']
+
+    await app.action_interrupt()
+    await pilot.pause()
+    assert field.disabled is False
+    assert field.placeholder == _IDLE_PLACEHOLDER
+    assert field.has_focus
+
+
+@pytest.mark.asyncio
+async def test_tui_escape_interrupts_the_turn(monkeypatch):
+  from bro.launch.call_tui import (
+    INTERRUPTED_NOTICE,
+    ChatApp,
+    MessageInput,
+    SystemBubble,
+    TypingIndicator,
+  )
+
+  monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  bro = _BlockingBro()
+  app = ChatApp(bro, None)
+  async with app.run_test(size=(80, 40)) as pilot:
+    await _start_turn(app, pilot, bro)
+    assert len(app.query(TypingIndicator)) == 1
+
+    await pilot.press('escape')
+    await pilot.pause()
+
+    assert bro.cancelled, 'the cancellation must reach the bro, not just the worker'
+    assert app._turn is None
+    assert len(app.query(TypingIndicator)) == 0
+    assert str(app.query(SystemBubble).last().content) == INTERRUPTED_NOTICE
+    # the conversation continues: the next message is an ordinary turn
+    await app.on_message_input_submitted(MessageInput.Submitted('never mind, do this'))
+    await pilot.pause()
+    assert app._turn is not None
+
+
+@pytest.mark.asyncio
+async def test_tui_quit_takes_the_running_turn_with_it(monkeypatch):
+  from textual.worker import WorkerState
+
+  from bro.launch.call_tui import ChatApp
+
+  monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  bro = _BlockingBro()
+  app = ChatApp(bro, None)
+  async with app.run_test(size=(80, 40)) as pilot:
+    await _start_turn(app, pilot, bro)
+    worker = app._turn
+    assert worker is not None
+
+    await app.action_quit()
+
+    assert worker.state is WorkerState.CANCELLED
+    assert bro.cancelled
+
+
+@pytest.mark.asyncio
+async def test_text_mode_ctrl_c_ends_the_turn_not_the_chat(capsys, monkeypatch):
+  from bro.launch.call import INTERRUPTED_NOTICE
+
+  monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+
+  class _InterruptedBro(RecordBro):
+    def __init__(self):
+      super().__init__()
+      self.cancelled = False
+
+    async def send(self, message, observer=None, tracker=None, request_timeout=None, **kwargs):
+      if message != 'work on it':
+        return 'second reply'
+      # Ctrl+C as the terminal delivers it, while the turn's handler is installed
+      signal.raise_signal(signal.SIGINT)
+      try:
+        await asyncio.Event().wait()
+      except asyncio.CancelledError:
+        self.cancelled = True
+        raise
+      raise AssertionError('unreachable')
+
+  bro = _InterruptedBro()
+  await call_text(
+    bro, 'work on it', read_line=_ScriptedLines(['and now this']), now=_fixed_now, hold='attended'
+  )
+
+  assert bro.cancelled
+  out = capsys.readouterr().out
+  assert INTERRUPTED_NOTICE in out
+  # the REPL kept going: the next message is an ordinary exchange
+  assert 'record: second reply' in out
+  # and SIGINT is back to ending the chat once no turn is running
+  assert signal.getsignal(signal.SIGINT) is signal.default_int_handler

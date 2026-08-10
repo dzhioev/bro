@@ -1,6 +1,7 @@
 """IM-style chat TUI for `call`. Entry point: `ChatApp(bro, initial).run()`."""
 
 import asyncio
+import contextlib
 import time
 from datetime import date, datetime
 from typing import Any, ClassVar, Optional
@@ -25,17 +26,23 @@ from textual.style import Style
 from textual.visual import RenderOptions, RichVisual
 from textual.widget import Widget
 from textual.widgets import Static, TextArea
+from textual.worker import Worker, WorkerCancelled, WorkerFailed
 
 from bro.bros.bro import Bro
 from bro.launch._reflow import Reflow
 from bro.launch._trace_format import format_tool_call, oneline, truncate
-from bro.launch.call import DATE_FORMAT
+from bro.launch.call import DATE_FORMAT, INTERRUPTED_NOTICE
 from bro.launch.resume import HistoryMessage
 from bro.llm.mcp import canonical_name
 from bro.llm.observer import Observer
 from bro.show import format_card
 
 _TRACE_VALUE_LIMIT = 200
+
+# the message field states: it takes text only between turns, so an interrupt is
+# the one way to get the input back while the bro is working.
+_IDLE_PLACEHOLDER = 'message…'
+_BUSY_PLACEHOLDER = 'esc to interrupt…'
 
 
 class UnpaddedCodeBlock(rich.markdown.CodeBlock):
@@ -392,6 +399,8 @@ class ChatApp(App):
   BINDINGS: ClassVar = [
     Binding('ctrl+d', 'quit', show=False, priority=True),
     Binding('grave_accent', 'show_stats', show=False, priority=True),
+    Binding('escape', 'interrupt', show=False, priority=True),
+    Binding('ctrl+c', 'interrupt', show=False, priority=True),
   ]
 
   def __init__(
@@ -408,10 +417,12 @@ class ChatApp(App):
     self._history = history if history is not None else []
     self._last_date: Optional[date] = None
     self._typing: Optional[TypingIndicator] = None
+    # the worker running the current turn; None between turns
+    self._turn: Optional[Worker] = None
 
   def compose(self) -> ComposeResult:
     yield VerticalScroll(id='history')
-    yield MessageInput(placeholder='message…', highlight_cursor_line=False, id='input-bar')
+    yield MessageInput(placeholder=_IDLE_PLACEHOLDER, highlight_cursor_line=False, id='input-bar')
 
   async def on_mount(self) -> None:
     self.query_one('#input-bar', MessageInput).focus()
@@ -425,7 +436,7 @@ class ChatApp(App):
         self._append_bro_message(message.text, when=message.when)
     self._append_banner()
     if self._initial is not None and len(self._initial) > 0:
-      await self._submit(self._initial)
+      self._submit(self._initial)
 
   def _append_banner(self) -> None:
     """opening bro bubble: the cw banner (session environment facts), shown
@@ -442,16 +453,16 @@ class ChatApp(App):
     )
     self._scroll_to_end()
 
-  async def _submit(self, text: str) -> None:
+  def _submit(self, text: str) -> None:
     self._append_user_message(text)
-    self._show_typing()
-    self._send_to_bro(text)
+    self._begin_turn()
+    self._turn = self._send_to_bro(text)
 
   async def on_message_input_submitted(self, event: MessageInput.Submitted) -> None:
-    if len(event.text.strip()) == 0:
+    if len(event.text.strip()) == 0 or self._turn is not None:
       return
     self.query_one('#input-bar', MessageInput).clear()
-    await self._submit(event.text)
+    self._submit(event.text)
 
   def on_text_selected(self) -> None:
     # copy-on-select (OSC 52); posted on every mouse-up, so a plain click
@@ -484,7 +495,7 @@ class ChatApp(App):
     self._scroll_to_end()
 
   def append_thinking(self, text: str) -> None:
-    """mount a thinking bubble; called from `TUIRenderer` via `call_from_thread`."""
+    """mount a thinking bubble; called from `TUIRenderer`."""
     bubble = MessageBubble(ChatMarkdown(text), kind='thinking')
     self.query_one('#history', VerticalScroll).mount(
       BubbleRow(bubble, kind='thinking', when=datetime.now()),
@@ -493,7 +504,7 @@ class ChatApp(App):
     self._scroll_to_end()
 
   def append_trace_line(self, text: str) -> None:
-    """mount a dim system bubble; called from `TUIRenderer` via `call_from_thread`."""
+    """mount a dim system bubble; called from `TUIRenderer`."""
     # the trace lives in the history stream, so the typing indicator (which is
     # also mounted there) needs to slide back to the bottom after each event.
     self.query_one('#history', VerticalScroll).mount(
@@ -511,18 +522,28 @@ class ChatApp(App):
       lambda: self.query_one('#history', VerticalScroll).scroll_end(animate=False)
     )
 
-  def _show_typing(self) -> None:
-    if self._typing is not None:
-      return
-    self._typing = TypingIndicator()
-    self.query_one('#history', VerticalScroll).mount(self._typing)
+  def _begin_turn(self) -> None:
+    # the message field takes no text while the bro works: a second concurrent
+    # send would drive one conversation from two turns, and a queued message
+    # would reach a bro the user has already changed their mind about. the way
+    # back to the field is an interrupt.
+    field = self.query_one('#input-bar', MessageInput)
+    field.placeholder = _BUSY_PLACEHOLDER
+    field.disabled = True
+    if self._typing is None:
+      self._typing = TypingIndicator()
+      self.query_one('#history', VerticalScroll).mount(self._typing)
     self._scroll_to_end()
 
-  def _hide_typing(self) -> None:
-    if self._typing is None:
-      return
-    self._typing.remove()
-    self._typing = None
+  def _end_turn(self) -> None:
+    self._turn = None
+    if self._typing is not None:
+      self._typing.remove()
+      self._typing = None
+    field = self.query_one('#input-bar', MessageInput)
+    field.disabled = False
+    field.placeholder = _IDLE_PLACEHOLDER
+    field.focus()
 
   def _tick_typing(self) -> None:
     if self._typing is None:
@@ -530,35 +551,55 @@ class ChatApp(App):
     self._typing.tick()
 
   def note_tool_call(self, name: str) -> None:
-    """called from `TUIRenderer` via `call_from_thread`."""
+    """called from `TUIRenderer`."""
     if self._typing is not None:
       self._typing.note_tool_call(name)
 
   def note_tool_result(self) -> None:
-    """called from `TUIRenderer` via `call_from_thread`."""
+    """called from `TUIRenderer`."""
     if self._typing is not None:
       self._typing.note_tool_result()
 
-  @work(thread=True, exclusive=True)
-  def _send_to_bro(self, text: str) -> None:
-    # run in a thread so the OpenAI client's blocking `responses.create` call
-    # doesn't freeze the Textual event loop (no user-bubble paint, no typing
-    # animation). bridge UI updates back via call_from_thread.
+  @work(exclusive=True)
+  async def _send_to_bro(self, text: str) -> None:
+    # an async worker on the app's own loop, which is what makes the turn
+    # interruptible: cancelling it unwinds the agent loop (a thread worker keeps
+    # running, cancelled or not). Nothing below it blocks the loop, so the UI
+    # stays live for the whole turn.
     observer = TUIRenderer(self)
     try:
-      reply = asyncio.run(self._bro.send(text, observer=observer, surface='call', hold=self._hold))
+      reply = await self._bro.send(text, observer=observer, surface='call', hold=self._hold)
+    except asyncio.CancelledError:
+      # a cancellation raised by the app's own teardown finds no UI left to update
+      if self.is_running:
+        self._end_turn()
+        self.append_trace_line(INTERRUPTED_NOTICE)
+      raise
     except Exception as error:
-      self.call_from_thread(self._on_error, f'{type(error).__name__}: {error}')
+      self._end_turn()
+      self._append_error_message(f'{type(error).__name__}: {error}')
       return
-    self.call_from_thread(self._on_reply, reply)
-
-  def _on_reply(self, reply: str) -> None:
-    self._hide_typing()
+    self._end_turn()
     self._append_bro_message(reply)
 
-  def _on_error(self, error: str) -> None:
-    self._hide_typing()
-    self._append_error_message(error)
+  async def action_interrupt(self) -> None:
+    await self._interrupt_turn()
+
+  async def action_quit(self) -> None:
+    # the turn goes down with the UI; an abandoned one would keep the process
+    # alive after the terminal is back, which is indistinguishable from a hang.
+    await self._interrupt_turn()
+    await super().action_quit()
+
+  async def _interrupt_turn(self) -> bool:
+    """cancel the running turn and wait for it to unwind; False when idle."""
+    worker = self._turn
+    if worker is None:
+      return False
+    worker.cancel()
+    with contextlib.suppress(WorkerCancelled, WorkerFailed):
+      await worker.wait()
+    return True
 
   async def action_show_stats(self) -> None:
     card = await format_card(self._bro, include_system_prompt=False)
@@ -569,20 +610,20 @@ class TUIRenderer(Observer):
   """post observed events into a `ChatApp` — reasoning as thinking bubbles,
   everything else as dim `SystemBubble` rows.
 
-  the bro runs in a Textual worker thread; each callback hops onto the app
-  thread via `call_from_thread` to mount the bubble safely.
+  the bro runs as an async worker on the app's own loop, so each callback
+  mounts its bubble directly.
   """
 
   def __init__(self, app: 'ChatApp'):
     self._app = app
 
   def _post(self, text: str) -> None:
-    self._app.call_from_thread(self._app.append_trace_line, text)
+    self._app.append_trace_line(text)
 
   def on_reasoning(self, text: str) -> None:
     # each event carries one complete reasoning-summary block, so it renders
     # whole in its own bubble, untruncated
-    self._app.call_from_thread(self._app.append_thinking, text)
+    self._app.append_thinking(text)
 
   def on_assistant_message(self, text: str, terminal: bool) -> None:
     # skip terminal — ChatApp mounts the reply as a bro bubble via _on_reply,
@@ -592,9 +633,9 @@ class TUIRenderer(Observer):
     self._post(f'✎ says: {truncate(oneline(text), _TRACE_VALUE_LIMIT, overflow_marker=False)}')
 
   def on_tool_call(self, name: str, arguments: dict[str, Any]) -> None:
-    self._app.call_from_thread(self._app.note_tool_call, name)
+    self._app.note_tool_call(name)
     self._post(f'→ {format_tool_call(name, arguments)}')
 
   def on_tool_result(self, name: str, result: dict[str, Any] | str) -> None:
-    self._app.call_from_thread(self._app.note_tool_result)
+    self._app.note_tool_result()
     self._post(f'← {canonical_name(name)}')

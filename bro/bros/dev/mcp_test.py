@@ -267,6 +267,60 @@ def test_job_watch_kill_round_trip():
   asyncio.run(round_trip())
 
 
+@pytest.mark.asyncio
+async def test_interrupted_watch_releases_the_job_for_the_next_one():
+  # the watch lock outlives the abandoned thread, so an interrupted watch has to
+  # wake its job — otherwise the job stays unwatchable for the rest of a window
+  # an iterative watcher may have sized in minutes.
+  registry = jobs.Registry()
+  context = Context(state=registry)
+  job(context, 'sleep 30')
+  target = registry.get('job-1')
+  watching = asyncio.create_task(watch(context, 'job-1', wait_seconds=600))
+  await asyncio.sleep(0.1)
+  watching.cancel()
+  with pytest.raises(asyncio.CancelledError):
+    await watching
+
+  # the woken thread drops the lock on its own thread, so the job frees up
+  # promptly rather than by the time cancel() returns
+  for _ in range(50):
+    if not target._watch_lock.locked():
+      break
+    await asyncio.sleep(0.1)
+  assert (await watch(context, 'job-1', wait_seconds=0)).startswith('running')
+  registry.close()
+
+
+@pytest.mark.asyncio
+async def test_interrupted_bash_leaves_no_process_behind(tmp_path):
+  pidfile = tmp_path / 'pid'
+  running = asyncio.create_task(bash(f'echo $$ > {pidfile}; sleep 30', timeout_seconds=60))
+  for _ in range(50):
+    await asyncio.sleep(0.1)
+    if pidfile.exists() and len(pidfile.read_text()) > 0:
+      break
+  pid = int(pidfile.read_text())
+  running.cancel()
+  with pytest.raises(asyncio.CancelledError):
+    await running
+
+  for _ in range(50):
+    if not _process_alive(pid):
+      break
+    await asyncio.sleep(0.1)
+  assert not _process_alive(pid)
+
+
+def _process_alive(pid: int) -> bool:
+  try:
+    os.kill(pid, 0)
+  except ProcessLookupError:
+    return False
+  # a killed child of this process lingers as a zombie until it is reaped
+  return open(f'/proc/{pid}/stat').read().rsplit(')', 1)[1].split()[0] != 'Z'
+
+
 def test_watch_unknown_job_raises():
   context = Context(state=jobs.Registry())
   with pytest.raises(ValueError, match='unknown job id'):

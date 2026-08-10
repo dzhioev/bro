@@ -1,3 +1,5 @@
+import asyncio
+import threading
 from dataclasses import dataclass
 from enum import Enum
 from typing import Annotated, Optional
@@ -679,3 +681,62 @@ class TestWithoutMCPPackage:
     result = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == 'ok'
+
+
+class TestSyncToolExecution:
+  @pytest.mark.asyncio
+  async def test_sync_tool_runs_off_the_loop(self):
+    # the release only ever comes from the event loop, so a tool that ran inline
+    # would deadlock here instead of returning — which is the property under test.
+    release = threading.Event()
+    thread_ids: list[int] = []
+
+    def blocker() -> str:
+      thread_ids.append(threading.get_ident())
+      release.wait(5)
+      return 'done'
+
+    call = asyncio.create_task(FunctionTool(blocker, description='blocks').call({}))
+    await asyncio.sleep(0.05)
+    assert not call.done()
+    release.set()
+
+    assert await asyncio.wait_for(call, timeout=5) == 'done'
+    assert thread_ids != [threading.get_ident()]
+
+  @pytest.mark.asyncio
+  async def test_async_tool_is_awaited_directly(self):
+    async def ping() -> str:
+      return f'{threading.get_ident()}'
+
+    assert await FunctionTool(ping, description='pings').call({}) == str(threading.get_ident())
+
+
+class TestServerTeardown:
+  def test_toolset_close_releases_the_built_state(self):
+    class _State:
+      def __init__(self):
+        self.closed = False
+
+      def close(self) -> None:
+        self.closed = True
+
+    states: list[_State] = []
+
+    def make_state() -> _State:
+      states.append(_State())
+      return states[-1]
+
+    toolset = mcp_mod.Toolset('probe', state=make_state, close=_State.close)
+
+    @toolset.tool('does nothing')
+    def noop() -> str:
+      return 'ok'
+
+    server = toolset.build()
+    assert [state.closed for state in states] == [False]
+    server.close()
+    assert [state.closed for state in states] == [True]
+
+  def test_close_is_a_no_op_without_declared_teardown(self):
+    InProcessMCPServer('probe', []).close()

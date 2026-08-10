@@ -1,8 +1,10 @@
 import asyncio
+import contextlib
 import http.client
 import os
+import signal
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from datetime import date, datetime
 from typing import Any, Optional, TextIO
 
@@ -39,6 +41,9 @@ RESUME_HELP = (
 
 # date-separator format shared with the TUI's DateSeparator
 DATE_FORMAT = '%a, %b %-d, %Y'
+
+# what either mode shows in place of a reply the user interrupted
+INTERRUPTED_NOTICE = '⨯ interrupted'
 
 
 _REASONING_LIMIT = 240
@@ -86,6 +91,32 @@ class TextRenderer(Observer):
     self._emit(f'← {canonical_name(name)}')
 
 
+@contextlib.contextmanager
+def _interruptible(task: asyncio.Task) -> Iterator[None]:
+  """route SIGINT to cancelling `task` for the duration of the block.
+
+  scoped to a running turn rather than installed for the whole REPL: at the
+  prompt there is nothing to interrupt, and Ctrl+C keeps its usual meaning of
+  ending the chat (removing the handler restores the default one)."""
+  loop = asyncio.get_running_loop()
+  loop.add_signal_handler(signal.SIGINT, task.cancel)
+  try:
+    yield
+  finally:
+    loop.remove_signal_handler(signal.SIGINT)
+
+
+async def _turn(bro: Bro, message: str, *, observer: Observer, hold: str) -> Optional[str]:
+  """one exchange, interruptible with Ctrl+C — which ends the turn, not the
+  chat. None when the user interrupted it."""
+  task = asyncio.create_task(bro.send(message, observer=observer, surface='call', hold=hold))
+  with _interruptible(task):
+    try:
+      return await task
+    except asyncio.CancelledError:
+      return None
+
+
 async def call_text(
   bro: Bro,
   initial: Optional[str],
@@ -111,6 +142,13 @@ async def call_text(
     timestamp = now().strftime('%H:%M:%S')
     print(f'[{timestamp}] {bro.name}: {reply}')
 
+  async def exchange(message: str) -> None:
+    reply = await _turn(bro, message, observer=effective_observer, hold=hold)
+    if reply is None:
+      print(f'[{now().strftime("%H:%M:%S")}] {INTERRUPTED_NOTICE}')
+    else:
+      emit(reply)
+
   history_messages = history if history is not None else []
   last_day: Optional[date] = None
   for message in history_messages:
@@ -133,8 +171,7 @@ async def call_text(
   print(render_banner(llm=False, bro=bro.name))
 
   if initial is not None:
-    reply = await bro.send(initial, observer=effective_observer, surface='call', hold=hold)
-    emit(reply)
+    await exchange(initial)
   while True:
     try:
       message = read()
@@ -142,8 +179,7 @@ async def call_text(
       return
     if len(message) == 0:
       continue
-    reply = await bro.send(message, observer=effective_observer, surface='call', hold=hold)
-    emit(reply)
+    await exchange(message)
 
 
 def _tty_supported() -> bool:
