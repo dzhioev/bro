@@ -49,6 +49,17 @@ def _spec(
   )
 
 
+def _resume(
+  name: str = 'w',
+  *,
+  grant: Optional[list[str]] = None,
+  revoke: Optional[list[str]] = None,
+) -> int:
+  return cw_session.resume_session(
+    name, grant=grant if grant is not None else [], revoke=revoke if revoke is not None else []
+  )
+
+
 def _launch_scope(**overrides) -> cw_session._ScopedLaunch:
   base = {
     'scoped': ScopedSecrets({'github'}, set(), True),
@@ -345,6 +356,33 @@ class TestCommandArgv:
     ]
 
 
+class TestScopeOverrides:
+  def test_values_join_the_recorded_lists(self):
+    updated = _spec(grant=['brog+github'], revoke=['openai']).with_scope_overrides(
+      grant=['@bro-dev'], revoke=['brave']
+    )
+    assert updated.grant == ['brog+github', '@bro-dev']
+    assert updated.revoke == ['openai', 'brave']
+
+  def test_an_override_cancels_the_opposite_recorded_one(self):
+    # granting back a revoked credential leaves the computed scope's own selection
+    updated = _spec(grant=['@bro-dev'], revoke=['openai']).with_scope_overrides(
+      grant=['openai'], revoke=['@bro-dev']
+    )
+    assert (updated.grant, updated.revoke) == ([], [])
+
+  def test_restating_a_recorded_override_raises(self):
+    with pytest.raises(ValueError, match='already in the recorded --grant: @bro-dev'):
+      _spec(grant=['@bro-dev']).with_scope_overrides(grant=['@bro-dev'], revoke=[])
+    with pytest.raises(ValueError, match='already in the recorded --revoke: openai'):
+      _spec(revoke=['openai']).with_scope_overrides(grant=[], revoke=['openai'])
+
+  def test_a_contradicting_pair_survives_for_the_scope_layer(self):
+    # nothing recorded to cancel, so both land and the launch preflight rejects them
+    updated = _spec().with_scope_overrides(grant=['openai'], revoke=['openai'])
+    assert (updated.grant, updated.revoke) == (['openai'], ['openai'])
+
+
 class TestResumeSpecRecord:
   def test_recorded_spec_clears_create_only_inputs_and_round_trips(self, tmp_path):
     spec = _spec(
@@ -403,19 +441,32 @@ class TestResumeSession:
   def test_relaunches_the_recorded_spec(self, tmp_path):
     cw_session.record_resume_spec(_workspace(tmp_path), _spec(bro='dev', hold='attended'))
     with patch('bro.cw.session.start_session', return_value=0) as start:
-      assert cw_session.resume_session('w') == 0
+      assert _resume() == 0
     assert start.call_args[0][0] == _spec(bro='dev', hold='attended').resume_variant()
+
+  def test_scope_overrides_reach_the_relaunch(self, tmp_path):
+    cw_session.record_resume_spec(_workspace(tmp_path), _spec(grant=['brog+github']))
+    with patch('bro.cw.session.start_session', return_value=0) as start:
+      assert _resume(grant=['@bro-dev']) == 0
+    assert start.call_args[0][0].grant == ['brog+github', '@bro-dev']
+
+  def test_a_no_op_override_errors(self, tmp_path, caplog):
+    cw_session.record_resume_spec(_workspace(tmp_path), _spec(grant=['@bro-dev']))
+    with patch('bro.cw.session.start_session') as start:
+      assert _resume(grant=['@bro-dev']) == 1
+    assert start.call_count == 0
+    assert 'already in the recorded --grant: @bro-dev' in caplog.text
 
   def test_unknown_workspace_errors(self, caplog):
     with patch('bro.cw.session.start_session') as start:
-      assert cw_session.resume_session('gone') == 1
+      assert _resume('gone') == 1
     assert start.call_count == 0
     assert 'workspace not found: gone' in caplog.text
 
   def test_workspace_without_a_record_errors(self, tmp_path, caplog):
     _workspace(tmp_path)
     with patch('bro.cw.session.start_session') as start:
-      assert cw_session.resume_session('w') == 1
+      assert _resume() == 1
     assert start.call_count == 0
     assert 'no session recorded for w' in caplog.text
 

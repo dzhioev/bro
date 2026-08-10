@@ -4,7 +4,7 @@ from typing import Optional
 
 from bro.base.args import REMAINDER, SUPPRESS, Parser
 from bro.cw.clean import clean_workspaces
-from bro.cw.flags import DEFAULT_HOLD, add_forwarded_flags
+from bro.cw.flags import DEFAULT_HOLD, add_forwarded_flags, add_scope_flags
 from bro.cw.listing import list_workspaces
 from bro.cw.runner import run_in_place
 from bro.cw.session import SessionSpec, resume_session, start_session
@@ -41,8 +41,11 @@ def build_parser() -> Parser:
   ss.add_argument('claude_args', nargs=REMAINDER, help='args forwarded to claude')
 
   resume = subparsers.add_parser(
-    'resume', help='resume the last claude session in a workspace, under the flags it ran with'
+    'resume',
+    help='resume the last claude session in a workspace, under the flags it ran with '
+    '(--grant/--revoke adjust its scope)',
   )
+  add_scope_flags(resume)
   resume.add_argument('name', help='workspace to resume, as `cw list` shows it')
 
   subparsers.add_parser('list', help='list workspaces ([.]=worktree, [o]=container, [x]=abandoned)')
@@ -98,7 +101,7 @@ def main(argv: list[str]) -> Optional[int]:
   if command == 'list':
     return list_workspaces()
   if command == 'resume':
-    return resume_session(args['name'])
+    return resume_session(args['name'], grant=args['grant'] or [], revoke=args['revoke'] or [])
   if command == 'clean':
     return clean_workspaces(force=args['force'], dry_run=args['dry_run'], names=args['names'])
   if command == 'check-clean':

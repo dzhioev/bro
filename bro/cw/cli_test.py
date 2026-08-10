@@ -82,6 +82,13 @@ class TestResume:
       rc = cw_cli.main(['cw', 'resume', 'c:w'])
     assert rc == 0
     assert fake_resume.call_args[0] == ('c:w',)
+    assert fake_resume.call_args[1] == {'grant': [], 'revoke': []}
+
+  def test_dispatches_the_scope_overrides(self):
+    with patch('bro.cw.cli.resume_session', return_value=0) as fake_resume:
+      rc = cw_cli.main(['cw', 'resume', '--grant', '@dev', '--revoke', 'openai', 'w'])
+    assert rc == 0
+    assert fake_resume.call_args[1] == {'grant': ['@dev'], 'revoke': ['openai']}
 
   def test_takes_no_session_flags(self, capsys):
     # the recorded spec owns them; a flag here would silently not apply
