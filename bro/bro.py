@@ -242,10 +242,10 @@ _SUMMON_DESCRIPTION = (
   'by the optional `effort` (reasoning level: '
   f'{", ".join(EFFORT_LEVELS)}) and `fast` (the provider fast knob), and its scope by '
   'the optional `grant` / `revoke` lists — each entry a credential name, or `@bro` '
-  "for a summonable target of the child's own — plus `swap_credentials`, a list of "
-  'same-kind credential replacements. you can only grant or swap to what you hold '
-  'yourself (a credential in your own scope, a bro in your own allow-list), and both '
-  "directions are strict, so naming something the child's scope already has (or, for "
+  "for a summonable target of the child's own. a credential grant replaces the "
+  "child's selected same-kind name. you can only grant what you hold yourself (a "
+  'credential in your own scope, a bro in your own allow-list), and both directions '
+  "are strict, so naming something the child's scope already has (or, for "
   'a revoke, lacks) fails the summon. '
   'fails with the reason when the run raises, errors out, '
   'or dies. `detach: true` returns the request id right after the send instead of '
@@ -340,7 +340,6 @@ def _summon_tool(
     hold: Optional[str] = None,
     grant: Optional[list[str]] = None,
     revoke: Optional[list[str]] = None,
-    swap_credentials: Optional[list[str]] = None,
     effort: Optional[str] = None,
     fast: bool = False,
   ) -> str:
@@ -357,7 +356,6 @@ def _summon_tool(
         hold=hold,
         grant=grant,
         revoke=revoke,
-        swap_credentials=swap_credentials,
         effort=effort,
         fast=fast,
         step_id=step_id,
@@ -374,7 +372,6 @@ def _summon_tool(
         hold=hold,
         grant=grant,
         revoke=revoke,
-        swap_credentials=swap_credentials,
         effort=effort,
         fast=fast,
         step_id=step_id,

@@ -128,25 +128,6 @@ def test_maybe_containerize_grant_adds_secret():
   assert 'gmail_creds' in run.call_args.args[0].secrets
 
 
-def test_maybe_containerize_swap_credentials_replaces_selected_name():
-  with (
-    patch.dict('os.environ', {}, clear=False) as env,
-    patch('bro.launch.root.run_in_container', return_value=0) as run,
-  ):
-    env.pop('CW_IN_CONTAINER', None)
-    rc = maybe_containerize(
-      cli_name='call',
-      verb='chat',
-      bro_name='bro-dev',
-      inner_args=['hi'],
-      in_place=False,
-      swap_credentials=['brog+github'],
-    )
-  assert rc == 0
-  assert 'brog' not in run.call_args.args[0].secrets
-  assert 'brog+github' in run.call_args.args[0].secrets
-
-
 def test_maybe_containerize_revoke_removes_secret():
   with (
     patch.dict('os.environ', {}, clear=False) as env,

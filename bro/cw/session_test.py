@@ -21,7 +21,6 @@ def _spec(
   fast: bool = False,
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
-  swap_credentials: Optional[list[str]] = None,
   effort: Optional[str] = None,
   resume: bool = False,
   into: Optional[str] = None,
@@ -38,7 +37,6 @@ def _spec(
     fast=fast,
     grant=grant if grant is not None else [],
     revoke=revoke if revoke is not None else [],
-    swap_credentials=swap_credentials if swap_credentials is not None else [],
     effort=effort,
     resume=resume,
     into=into,
@@ -119,9 +117,9 @@ class TestGrantRevoke:
     assert 'gmail_creds' in launch.secrets
     assert 'notion' not in launch.secrets
 
-  def test_start_session_swaps_a_credential_instance(self):
+  def test_start_session_grant_replaces_a_credential_instance(self):
     with _ContainerHarness(secrets={'brog', 'github'}) as harness:
-      rc = cw_session.start_session(_spec(drop=True, swap_credentials=['brog+github']))
+      rc = cw_session.start_session(_spec(drop=True, grant=['brog+github']))
     assert rc == 0
     launch = harness.run_in_container.call_args.args[0]
     assert launch.secrets == {'brog+github', 'github'}
@@ -305,15 +303,13 @@ class TestCommandArgv:
       bro='dev',
       grant=['gmail_creds', '@bro'],
       revoke=['notion'],
-      swap_credentials=['brog+github'],
       into='feature',
       claude_args=['--foo'],
     ).to_command_argv()
     assert parts == [
       'cw', 'ss', '--fast', '--drop', '--hold', 'attended',
       '--effort', 'xhigh', '--bro', 'dev', '--grant', 'gmail_creds',
-      '--grant', '@bro', '--revoke', 'notion', '--swap-cred', 'brog+github',
-      '--into', 'feature', 'w', '--foo',
+      '--grant', '@bro', '--revoke', 'notion', '--into', 'feature', 'w', '--foo',
     ]  # fmt: skip
 
   def test_host_session_carries_the_host_flag(self):
@@ -344,7 +340,6 @@ class TestResumeSpecRecord:
       effort='xhigh',
       bro='dev',
       grant=['gmail_creds'],
-      swap_credentials=['brog+github'],
       into='feature',
       prompt='do it',
       claude_args=['--foo'],
@@ -355,12 +350,11 @@ class TestResumeSpecRecord:
     assert loaded is not None and loaded.resume and not loaded.drop
     assert loaded.into is None and loaded.prompt is None and loaded.claude_args == []
     # the forwarded flags survive, so the resumed session runs as it was launched
-    assert (loaded.hold, loaded.effort, loaded.bro, loaded.grant, loaded.swap_credentials) == (
+    assert (loaded.hold, loaded.effort, loaded.bro, loaded.grant) == (
       'attended',
       'xhigh',
       'dev',
       ['gmail_creds'],
-      ['brog+github'],
     )
 
   def test_recording_a_resume_is_a_fixpoint(self, tmp_path):

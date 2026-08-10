@@ -137,7 +137,6 @@ def main(argv: list[str]) -> Optional[int]:
       '--drop': args['drop'],
       '--grant': args['grant'] is not None,
       '--revoke': args['revoke'] is not None,
-      '--swap-cred': args['swap_credentials'] is not None,
       '--into': args['into'] is not None,
     }
     offending = [flag for flag, present in machinery.items() if present]

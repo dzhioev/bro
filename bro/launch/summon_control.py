@@ -43,9 +43,9 @@ summoned child's recomputed from its own spawn record (`_child_credentials`).
 
 The request's `grant`/`revoke` split by kind: `@bro` values resolve here, on the
 loop, so a malformed or no-op override is denied immediately, while the
-credential half and `swap_credentials` ride the spawn and are applied against the child's
-own computed scope in the lowering (`bro/launch/spawn.py`), where a bad override
-fails the launch. `effort`/`fast` are child-facing and ride its `bro run` argv.
+credential half rides the spawn and is applied against the child's own computed
+scope in the lowering (`bro/launch/spawn.py`), where a bad override fails the
+launch. `effort`/`fast` are child-facing and ride its `bro run` argv.
 
 The same per-request attribution also names the requester's workspace (the root's
 from the session key, a child's from its `broker-<channel>` clone), threaded into
@@ -81,7 +81,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Optional
 
 from bro.base import credentials, log
-from bro.launch.scope import credential_swaps_by_kind, split_scope_overrides
+from bro.launch.scope import split_scope_overrides
 from bro.summon import DEFAULT_TIMEOUT, STATUS_ENV
 from bro.workspace.model import ContainerWorkspace, HostWorktree, parse_ref
 from bro.workspace.paths import containers_dir, summon_dir
@@ -111,7 +111,6 @@ _PAYLOAD_KEYS = frozenset(
     'index',
     'grant',
     'revoke',
-    'swap_credentials',
     'effort',
     'fast',
   }
@@ -203,7 +202,7 @@ def _validate(payload: dict[str, Any]) -> Optional[str]:
   # grant/revoke and fast are checked on presence, not on non-None: unlike the
   # optional fields above they feed a non-optional consumer (the override split,
   # the child's argv), so a null must be a shape error rather than a default
-  for key in ('grant', 'revoke', 'swap_credentials'):
+  for key in ('grant', 'revoke'):
     if key in payload and (
       not isinstance(payload[key], list)
       or not all(isinstance(value, str) and len(value) > 0 for value in payload[key])
@@ -228,7 +227,6 @@ class _ActiveSummon:
   allow_list: set[str]  # the spawned child's own effective summon allow-list
   grant: list[str]  # the request's scope overrides, audited as the summoner issued them
   revoke: list[str]
-  swap_credentials: list[str]
   trail_id: Optional[str] = None
 
 
@@ -341,11 +339,9 @@ class SummonControl:
       return
     grant = payload.get('grant', [])
     revoke = payload.get('revoke', [])
-    swap_credentials = payload.get('swap_credentials', [])
     try:
       grant_credentials, grant_bros = split_scope_overrides(grant)
       revoke_credentials, revoke_bros = split_scope_overrides(revoke)
-      credential_swaps_by_kind(swap_credentials)
       child_allow_list = summon_allow_list(target, grant=grant_bros, revoke=revoke_bros)
     except ValueError as e:
       self._deny(context, peer, message, requester.summoner, f'summon denied: {e}')
@@ -364,9 +360,8 @@ class SummonControl:
         f'summon itself: {", ".join(beyond)}',
       )
       return
-    requested_credentials = [*grant_credentials, *swap_credentials]
-    if len(requested_credentials) > 0:
-      beyond = sorted(set(requested_credentials) - requester.credentials())
+    if len(grant_credentials) > 0:
+      beyond = sorted(set(grant_credentials) - requester.credentials())
       if len(beyond) > 0:
         self._deny(
           context,
@@ -395,7 +390,6 @@ class SummonControl:
         hold=payload.get('hold'),
         grant_credentials=tuple(grant_credentials),
         revoke_credentials=tuple(revoke_credentials),
-        swap_credentials=tuple(swap_credentials),
         effort=payload.get('effort'),
         fast=payload.get('fast', False),
       ),
@@ -412,7 +406,6 @@ class SummonControl:
       allow_list=child_allow_list,
       grant=list(grant),
       revoke=list(revoke),
-      swap_credentials=list(swap_credentials),
     )
     self._active[message.id] = record
     log.info(
@@ -475,7 +468,6 @@ class SummonControl:
       credential_instances=self._credential_instances,
       grant=grant,
       revoke=revoke,
-      swap_credentials=record.swap_credentials,
     )
     return scoped.required | scoped.optional
 
@@ -583,8 +575,6 @@ class SummonControl:
       entry['grant'] = record.grant
     if len(record.revoke) > 0:
       entry['revoke'] = record.revoke
-    if len(record.swap_credentials) > 0:
-      entry['swap_credentials'] = record.swap_credentials
     if outcome is not None:
       entry['outcome'] = outcome
     self._append_audit(event, entry)

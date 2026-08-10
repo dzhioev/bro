@@ -79,19 +79,6 @@ def test_main_re_execs_into_container_when_outside():
     assert launch.docker_sock is False
 
 
-def test_main_swaps_a_credential_instance():
-  with (
-    patch.dict('os.environ', {}, clear=False) as env,
-    patch('bro.launch.root.run_in_container', return_value=0) as run,
-  ):
-    env.pop('CW_IN_CONTAINER', None)
-    rc = main(['ask', 'bro-dev', 'hello', '--swap-cred', 'brog+github'])
-  assert rc == 0
-  launch = run.call_args.args[0]
-  assert 'brog' not in launch.secrets
-  assert 'brog+github' in launch.secrets
-
-
 def test_main_forwards_implied_fast_into_container():
   with (
     patch.dict('os.environ', {}, clear=False) as env,
@@ -223,20 +210,7 @@ def test_main_refuses_implicit_run_inside_container(capsys):
 
 def test_main_summon_forwards_timeout_and_into():
   with patch('bro.summon.relay_summon', return_value=0) as relay:
-    rc = main(
-      [
-        'ask',
-        'bro-dev',
-        'hi',
-        '--summon',
-        '--timeout',
-        '7200',
-        '--into',
-        'feature-branch',
-        '--swap-cred',
-        'brog+github',
-      ]
-    )
+    rc = main(['ask', 'bro-dev', 'hi', '--summon', '--timeout', '7200', '--into', 'feature-branch'])
   assert rc == 0
   # the alias's implied --fast shapes the summoned child too: someone waits on the reply
   relay.assert_called_once_with(
@@ -247,7 +221,6 @@ def test_main_summon_forwards_timeout_and_into():
     hold=None,
     grant=None,
     revoke=None,
-    swap_credentials=['brog+github'],
     effort=None,
     fast=True,
   )
@@ -265,7 +238,6 @@ def test_main_summon_detaches(capsys):
     hold=None,
     grant=None,
     revoke=None,
-    swap_credentials=None,
     effort=None,
     fast=True,
   )

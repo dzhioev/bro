@@ -16,12 +16,6 @@ class TestForwardedFlags:
       'c',
     ]
 
-  def test_extract_forwarded_argv_round_trips_swap_credentials(self):
-    parser = Parser(add_help=False)
-    cw_flags.add_forwarded_flags(parser)
-    args = vars(parser.parse_args(['--swap-cred', 'brog+github']))
-    assert cw_flags.extract_forwarded_argv(args) == ['--swap-cred', 'brog+github']
-
   def test_extract_forwarded_argv_round_trips_into(self):
     parser = Parser(add_help=False)
     cw_flags.add_forwarded_flags(parser)

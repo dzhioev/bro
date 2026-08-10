@@ -51,7 +51,6 @@ def test_run_summon_delegates_to_the_summon_library():
     hold=None,
     grant=None,
     revoke=None,
-    swap_credentials=None,
     effort=None,
     fast=False,
   )
@@ -59,10 +58,7 @@ def test_run_summon_delegates_to_the_summon_library():
 
 def test_run_summon_forwards_the_scope_and_spec_flags():
   with patch('bro.summon.relay_summon', return_value=0) as relay:
-    argv = [
-      'bro', 'run', '--summon', '--grant', '@auditor', '--revoke', 'openai',
-      '--swap-cred', 'brog+github',
-    ]  # fmt: skip
+    argv = ['bro', 'run', '--summon', '--grant', '@auditor', '--revoke', 'openai']
     argv += ['--effort', 'high', '--fast', 'reviewer', 'deploy']
     assert main(argv) == 0
   relay.assert_called_once_with(
@@ -73,7 +69,6 @@ def test_run_summon_forwards_the_scope_and_spec_flags():
     hold=None,
     grant=['@auditor'],
     revoke=['openai'],
-    swap_credentials=['brog+github'],
     effort='high',
     fast=True,
   )

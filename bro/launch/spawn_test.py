@@ -116,18 +116,6 @@ class TestSummonLowering:
     assert lowered.launch.secrets == {'aws', 'trails', 'gmail_creds'}
     assert lowered.launch.optional_secrets == set()
 
-  def test_swap_credentials_adjusts_the_childs_scope(self, lowering_harness):
-    launch = bro.launch.spawn.SummonLaunchSpec(
-      target='dev',
-      prompt='p',
-      parent_workspace=PARENT_WORKSPACE,
-      summoner=SUMMONER,
-      swap_credentials=('aws+work',),
-    )
-    lowered = bro.launch.spawn._lower_summon(launch, 'broker-CH')
-    assert lowered.launch.secrets == {'aws+work', 'trails'}
-    assert lowered.launch.optional_secrets == {'openai'}
-
   def test_no_op_credential_override_fails_the_spawn(self, lowering_harness):
     launch = bro.launch.spawn.SummonLaunchSpec(
       target='dev',

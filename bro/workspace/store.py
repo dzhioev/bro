@@ -30,19 +30,42 @@ class ScopedSecrets:
   docker_sock: bool
 
 
+def _replacement_revokes(scoped_names: set[str], grants: list[str]) -> list[str]:
+  selected_by_kind: dict[str, str] = {}
+  for selected in scoped_names:
+    kind, _ = credentials.parse_name(selected)
+    if kind in selected_by_kind:
+      raise ValueError(f'credential kind {kind!r} has multiple selected names')
+    selected_by_kind[kind] = selected
+
+  granted_kinds: set[str] = set()
+  replacements: list[str] = []
+  for grant in grants:
+    kind, _ = credentials.parse_name(grant)
+    if kind in granted_kinds:
+      raise ValueError(f'credential kind {kind!r} is granted more than once')
+    granted_kinds.add(kind)
+    selected = selected_by_kind.get(kind)
+    if selected is not None and selected != grant:
+      replacements.append(selected)
+  return replacements
+
+
 def finalize_scoped_secrets(
   scoped: ScopedSecrets, *, grant: list[str], revoke: list[str]
 ) -> ScopedSecrets:
   """layer strict per-session overrides across both credential tiers.
 
-  grants join the required tier. a revoke removes the name from whichever tier
-  contains it; a name in neither tier remains an error, as do all other no-op
-  overrides enforced by `credentials.apply_grant_revoke`.
+  a grant replaces a selected credential of the same kind, or joins the required
+  tier when that kind is absent. a revoke removes the exact name from whichever
+  tier contains it. all remaining no-op overrides are errors.
   """
+  scoped_names = scoped.required | scoped.optional
+  replacement_revokes = _replacement_revokes(scoped_names, grant)
   final_names = credentials.apply_grant_revoke(
-    scoped.required | scoped.optional,
+    scoped_names,
     grant=grant,
-    revoke=revoke,
+    revoke=[*revoke, *replacement_revokes],
     subject='scoped credential set',
   )
   required = (scoped.required | set(grant)) & final_names

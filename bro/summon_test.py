@@ -72,7 +72,7 @@ def test_bare_summon_forwards_with_its_own_shell_command(monkeypatch):
   monkeypatch.setattr(
     summon,
     'relay_summon',
-    lambda target, prompt, *, timeout, into, hold, grant, revoke, swap_credentials, effort, fast: (
+    lambda target, prompt, *, timeout, into, hold, grant, revoke, effort, fast: (
       calls.append((target, prompt, timeout, into)) or 0
     ),
   )
@@ -159,7 +159,7 @@ async def test_scope_and_spec_flags_forward_into_the_request(socket_dir, monkeyp
   async with running_server(socket_dir, monkeypatch) as server:
     argv = [
       'summon', '--detach', '--grant', 'aws', '--grant', '@bro', '--revoke', 'openai',
-      '--swap-cred', 'brog+github', '--effort', 'high', '--fast', 'dev', 'p',
+      '--effort', 'high', '--fast', 'dev', 'p',
     ]  # fmt: skip
     main_task = asyncio.create_task(asyncio.to_thread(summon.main, argv))
 
@@ -169,7 +169,6 @@ async def test_scope_and_spec_flags_forward_into_the_request(socket_dir, monkeyp
       'prompt': 'p',
       'grant': ['aws', '@bro'],
       'revoke': ['openai'],
-      'swap_credentials': ['brog+github'],
       'effort': 'high',
       'fast': True,
     }

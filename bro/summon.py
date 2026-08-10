@@ -2,7 +2,7 @@
 """summon — request another bro on the session's broker channel and get its answer.
 
 The peer side of the summon mechanism: a `summon{target, prompt, timeout?, into?,
-hold?, grant?, revoke?, swap_credentials?, effort?, fast?}`
+hold?, grant?, revoke?, effort?, fast?}`
 request on the session channel, answered by the host-side handler (`bro/launch/summon_control.py`)
 with `started{trail_id}` and exactly one terminal (`completed` / `failed` /
 `reply{error}`). This module owns the request's wire contract — the type tag, the
@@ -13,9 +13,8 @@ payload keys, the 1800s default timeout — for all its consumers: `bro run
 `relay_summon`.
 
 `grant` / `revoke` are lists of scope overrides for the child, each value a
-credential name or `@bro` for a summon target of its own; `swap_credentials` replaces a
-selected credential with the named same-kind target. The host bounds a grant or
-swap target by the sender's own scope, so a name it does not hold itself comes back denied.
+credential name or `@bro` for a summon target of its own; the host bounds a grant
+by the sender's own scope, so a name it does not hold itself comes back denied.
 `effort` / `fast` shape the child's LLM spec.
 
 Blocking mode sends, prints the request id and the `started` trail id to stderr,
@@ -124,7 +123,6 @@ def _payload(
   index: Optional[int] = None,
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
-  swap_credentials: Optional[list[str]] = None,
   effort: Optional[str] = None,
   fast: bool = False,
 ) -> dict[str, Any]:
@@ -143,8 +141,6 @@ def _payload(
     payload['grant'] = list(grant)
   if revoke is not None:
     payload['revoke'] = list(revoke)
-  if swap_credentials is not None:
-    payload['swap_credentials'] = list(swap_credentials)
   if effort is not None:
     payload['effort'] = effort
   if fast:
@@ -253,7 +249,6 @@ def summon_and_wait(
   hold: Optional[str] = None,
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
-  swap_credentials: Optional[list[str]] = None,
   effort: Optional[str] = None,
   fast: bool = False,
   step_id: Optional[int] = None,
@@ -276,7 +271,6 @@ def summon_and_wait(
     index=index,
     grant=grant,
     revoke=revoke,
-    swap_credentials=swap_credentials,
     effort=effort,
     fast=fast,
   )
@@ -296,7 +290,6 @@ def summon_detached(
   hold: Optional[str] = None,
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
-  swap_credentials: Optional[list[str]] = None,
   effort: Optional[str] = None,
   fast: bool = False,
   step_id: Optional[int] = None,
@@ -314,7 +307,6 @@ def summon_detached(
     index=index,
     grant=grant,
     revoke=revoke,
-    swap_credentials=swap_credentials,
     effort=effort,
     fast=fast,
   )
@@ -445,7 +437,6 @@ def relay_summon(
   hold: Optional[str] = None,
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
-  swap_credentials: Optional[list[str]] = None,
   effort: Optional[str] = None,
   fast: bool = False,
 ) -> int:
@@ -462,7 +453,6 @@ def relay_summon(
     hold=hold,
     grant=grant,
     revoke=revoke,
-    swap_credentials=swap_credentials,
     effort=effort,
     fast=fast,
   )

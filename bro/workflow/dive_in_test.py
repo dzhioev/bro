@@ -181,9 +181,7 @@ class TestNewMode:
 class TestTaskMode:
   @pytest.fixture(autouse=True)
   def fake_backend(self, monkeypatch):
-    monkeypatch.setattr(
-      dive_in, '_task_system', lambda grant, revoke, swap_credentials, bro, raw: object()
-    )
+    monkeypatch.setattr(dive_in, '_task_system', lambda grant, revoke, bro, raw: object())
 
   def test_every_launch_picks_a_fresh_workspace_name(self, fake_proj, monkeypatch, capsys):
     monkeypatch.setattr(
@@ -234,32 +232,25 @@ class TestTaskMode:
   def test_prefetch_binds_the_launch_scope_flags(self, fake_proj, monkeypatch, capsys):
     captured = {}
 
-    def fake_task_system(grant, revoke, swap_credentials, bro, raw):
-      captured.update(
-        grant=grant, revoke=revoke, swap_credentials=swap_credentials, bro=bro, raw=raw
-      )
+    def fake_task_system(grant, revoke, bro, raw):
+      captured.update(grant=grant, revoke=revoke, bro=bro, raw=raw)
       return object()
 
     monkeypatch.setattr(dive_in, '_task_system', fake_task_system)
     monkeypatch.setattr(dive_in, '_prefetch_task', lambda system, ref: (_brog_task(), 'task block'))
-    argv = ['dive-in', '-n', '-t', UUID, '--swap-cred', 'brog+github']
+    argv = ['dive-in', '-n', '-t', UUID, '--grant', 'brog+github']
     rc = dive_in.main([*argv, '--bro', 'dev', '--raw'])
     assert rc == 0
-    assert captured == {
-      'grant': [],
-      'revoke': [],
-      'swap_credentials': ['brog+github'],
-      'bro': 'dev',
-      'raw': True,
-    }
-    # the flag still rides into the forwarded `cw ss` untouched
+    assert captured == {'grant': ['brog+github'], 'revoke': [], 'bro': 'dev', 'raw': True}
+    # the flags still ride into the forwarded `cw ss` untouched
     args = cw.build_parser().parse(shlex.split(capsys.readouterr().out.strip()))
-    assert args['swap_credentials'] == ['brog+github']
+    assert args['grant'] == ['brog+github']
+    assert args['revoke'] is None
 
   def test_scope_without_brog_fails_before_any_launch(self, fake_proj, monkeypatch, capsys):
     from bro.base import credentials
 
-    def no_brog(grant, revoke, swap_credentials, bro, raw):
+    def no_brog(grant, revoke, bro, raw):
       raise credentials.SecretNotFound('brog')
 
     monkeypatch.setattr(dive_in, '_task_system', no_brog)
@@ -270,7 +261,7 @@ class TestTaskMode:
   def test_bad_scope_override_fails_before_any_launch(self, fake_proj, monkeypatch):
     from bro.launch.scope import LaunchScopeError
 
-    def bad_override(grant, revoke, swap_credentials, bro, raw):
+    def bad_override(grant, revoke, bro, raw):
       raise LaunchScopeError("cannot grant 'brog': already in the scoped credential set")
 
     monkeypatch.setattr(dive_in, '_task_system', bad_override)
@@ -309,8 +300,8 @@ class TestTaskSystem:
 
     monkeypatch.setattr(dive_in, 'scoped_secrets', fake_scoped_secrets)
 
-    def fake_view(scoped, *, grant, revoke, swap_credentials):
-      calls['view'] = (scoped, grant, revoke, swap_credentials)
+    def fake_view(scoped, *, grant, revoke):
+      calls['view'] = (scoped, grant, revoke)
       return FakeStore()
 
     monkeypatch.setattr(dive_in, 'launch_view_store', fake_view)
@@ -321,9 +312,9 @@ class TestTaskSystem:
 
     calls: dict = {}
     self._fake_wiring(monkeypatch, calls)
-    system = dive_in._task_system([], [], ['brog+github'], None, False)
+    system = dive_in._task_system(['brog+github'], [], None, False)
     assert calls['scoped'] == ('bro-dev', Surface.CW_SESSION, {'brog': 'github'})
-    assert calls['view'] == ('base-scope', [], [], ['brog+github'])
+    assert calls['view'] == ('base-scope', ['brog+github'], [])
     assert calls['read'] == 'brog'
     assert isinstance(system, brog_github.System)
 
@@ -332,7 +323,7 @@ class TestTaskSystem:
 
     calls: dict = {}
     self._fake_wiring(monkeypatch, calls)
-    dive_in._task_system([], [], [], 'dev', True)
+    dive_in._task_system([], [], 'dev', True)
     assert calls['scoped'] == ('dev', Surface.RAW_SESSION, {'brog': 'github'})
 
 

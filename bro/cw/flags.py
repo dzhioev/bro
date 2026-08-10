@@ -40,7 +40,7 @@ def add_forwarded_flags(parser: Parser) -> None:
     action='append',
     default=None,
     metavar='NAME',
-    help='add a credential (NAME) or a summonable bro (@BRO) to the session scope on top of the computed set (repeatable); errors if already in the scope or unknown',
+    help='add a credential (NAME) or a summonable bro (@BRO) to the session scope; a credential grant replaces the selected same-kind name (repeatable); errors on an exact duplicate or unknown name',
   )
   parser.add_argument(
     '--revoke',
@@ -48,14 +48,6 @@ def add_forwarded_flags(parser: Parser) -> None:
     default=None,
     metavar='NAME',
     help='remove a credential (NAME) or a summonable bro (@BRO) from the session scope (repeatable); errors if not in the scope',
-  )
-  parser.add_argument(
-    '--swap-cred',
-    dest='swap_credentials',
-    action='append',
-    default=None,
-    metavar='NAME',
-    help='replace the selected credential of the same kind with NAME (kind or kind+instance); equivalent to revoking the selected name and granting NAME (repeatable)',
   )
   parser.add_argument(
     '--effort',

@@ -68,15 +68,11 @@ def _prefetch_task(system: brog_system.System, task_ref: str) -> tuple[brog_mode
 
 
 def _task_system(
-  grant: list[str],
-  revoke: list[str],
-  swap_credentials: list[str],
-  bro: Optional[str],
-  raw: bool,
+  grant: list[str], revoke: list[str], bro: Optional[str], raw: bool
 ) -> brog_system.System:
   """the brog backend for the task prefetch, reading `brog` through the launch's
   own credential binding (`launch_view_store`) — so the project's instance
-  mapping and scope overrides select the same brog config the session's
+  mapping and `--grant`/`--revoke` select the same brog config the session's
   store hydrates."""
   project = project_config()
   bro_name = bro if bro is not None else project.default_bro
@@ -85,7 +81,6 @@ def _task_system(
     scoped_secrets(bro_name, surface, credential_instances=project.creds),
     grant=grant,
     revoke=revoke,
-    swap_credentials=swap_credentials,
   )
   return brog_system.build_system(lambda: store.get_json('brog'))
 
@@ -98,7 +93,6 @@ def dive_in(
   new: bool = False,
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
-  swap_credentials: Optional[list[str]] = None,
   bro: Optional[str] = None,
   raw: bool = False,
 ) -> int:
@@ -116,7 +110,7 @@ def dive_in(
     prompt = '@:fix --new "":@' if command is None else f'@:fix --new {command}:@'
   elif task is not None:
     try:
-      system = _task_system(grant or [], revoke or [], swap_credentials or [], bro, raw)
+      system = _task_system(grant or [], revoke or [], bro, raw)
     except (LaunchScopeError, credentials.SecretNotFound, ValueError) as e:
       log.error('cannot open the task tracker for the prefetch: %s', e)
       return 1
@@ -187,6 +181,6 @@ def main(argv: list[str]) -> Optional[int]:
       args['into'] = base_ref
   # the prefetch binds to the same scope the session launches with, so the
   # scope-shaping flags are read here as well as forwarded
-  scope_args = {key: args[key] for key in ('grant', 'revoke', 'swap_credentials', 'bro', 'raw')}
+  scope_args = {key: args[key] for key in ('grant', 'revoke', 'bro', 'raw')}
   forwarded = cw.extract_forwarded_argv(args)
   return dive_in(forwarded=forwarded, **scope_args, **args)
