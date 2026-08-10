@@ -423,7 +423,7 @@ class TestDispatcher:
         }
       )
 
-    monkeypatch.setattr(mu_module, 'mu', fake_mu)
+    monkeypatch.setattr(mu_module, 'mu', types.SimpleNamespace(aio=fake_mu))
     result = await (await self._tool(_bro_class(package)())).call({'command': 'work on T-1'})
 
     assert result == (
@@ -461,7 +461,7 @@ class TestDispatcher:
     async def fake_mu(prompt, result_class, *contents, reasoning_effort=None):
       return result_class.model_validate({'script': '@::do-work', 'arguments': [], 'error': None})
 
-    monkeypatch.setattr(mu_module, 'mu', fake_mu)
+    monkeypatch.setattr(mu_module, 'mu', types.SimpleNamespace(aio=fake_mu))
     bro = _bro_class(package)()
 
     bare_result = await (await self._tool(bro)).call({'command': 'do the work'})
@@ -481,7 +481,7 @@ class TestDispatcher:
         {'script': None, 'arguments': None, 'error': 'the command matches no script'}
       )
 
-    monkeypatch.setattr(mu_module, 'mu', fake_mu)
+    monkeypatch.setattr(mu_module, 'mu', types.SimpleNamespace(aio=fake_mu))
     result = await (await self._tool(_bro_class(package)())).call({'command': 'unknown action'})
     assert result == {'error': 'the command matches no script'}
 
@@ -530,7 +530,7 @@ class TestDispatcher:
     async def fake_mu(prompt, result_class, *contents, reasoning_effort=None):
       return result_class.model_validate({**interpretation, 'error': None})
 
-    monkeypatch.setattr(mu_module, 'mu', fake_mu)
+    monkeypatch.setattr(mu_module, 'mu', types.SimpleNamespace(aio=fake_mu))
     with pytest.raises(ValueError, match=match):
       await (await self._tool(_bro_class(package)())).call({'command': 'do something'})
 
@@ -544,7 +544,7 @@ class TestDispatcher:
     async def fake_mu(prompt, result_class, *contents, reasoning_effort=None):
       return result_class.model_validate({'script': None, 'arguments': None, 'error': '   '})
 
-    monkeypatch.setattr(mu_module, 'mu', fake_mu)
+    monkeypatch.setattr(mu_module, 'mu', types.SimpleNamespace(aio=fake_mu))
     with pytest.raises(ValueError, match='empty error'):
       await (await self._tool(_bro_class(package)())).call({'command': 'do something'})
 

@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import pytest
 
 from bro.datasources import searchable
@@ -37,7 +39,7 @@ async def test_fetch_with_query_summarises_via_mu(monkeypatch):
     return result_cls(summary='focused summary')
 
   monkeypatch.setattr(searchable.credentials, 'available', lambda name: True)
-  monkeypatch.setattr(mu_module, 'mu', fake_mu)
+  monkeypatch.setattr(mu_module, 'mu', SimpleNamespace(aio=fake_mu))
   result = await _FakeSource().fetch('id-7', query='what is it?')
   assert result == 'focused summary'
   # the unified source_summary template carries source name, id, query, content

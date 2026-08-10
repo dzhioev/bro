@@ -57,6 +57,7 @@ PYTEST_FILES = [
   'bro/brog/mcp_test.py',
   'bro/llm/llms/chat_gpt_test.py',
   'bro/llm/mcp_test.py',
+  'bro/llm/mu_test.py',
   'bro/llm/observer_test.py',
   'bro/llm/tracker_test.py',
   'bro/bro_test.py',
