@@ -75,15 +75,15 @@ if [ ! -d /workspace/.git ]; then
   # local copy) so later ancestry/clean checks and rebases compare against the real
   # upstream. ref-only — objects are already shared via alternates, no token needed.
   git fetch "${quiet[@]}" host '+refs/remotes/origin/master:refs/remotes/origin/master' >&2
-  # branch worktree-<CW_NAME> from CW_BASE_REF — a sha the host resolved for an
-  # explicit base (--into <ref>) or a summoned child's inherited summoner HEAD.
-  # the HEAD fallback (the clone's checkout, i.e. the host checkout's current
-  # commit) is the default: a workspace bases on what its launcher has checked
-  # out. -B resets if a stale worktree-<CW_NAME> branch came through with the
-  # clone. either base's objects are shared from /host-repo via the clone's
-  # alternates (the host resolution transfers foreign objects into the host repo
-  # first), so no extra fetch is needed.
-  git checkout "${quiet[@]}" -B "worktree-$CW_NAME" "${CW_BASE_REF:-HEAD}" >&2
+  # branch CW_BRANCH (the workspace's recorded branch) from CW_BASE_REF — a sha
+  # the host resolved for an explicit base (--into <ref>) or a summoned child's
+  # inherited summoner HEAD. the HEAD fallback (the clone's checkout, i.e. the
+  # host checkout's current commit) is the default: a workspace bases on what its
+  # launcher has checked out. -B resets if a stale branch of that name came
+  # through with the clone. either base's objects are shared from /host-repo via
+  # the clone's alternates (the host resolution transfers foreign objects into
+  # the host repo first), so no extra fetch is needed.
+  git checkout "${quiet[@]}" -B "$CW_BRANCH" "${CW_BASE_REF:-HEAD}" >&2
   # initialize from host-local clones because the container has no ssh keys
   initialize_container_submodules /workspace /host-repo
 fi

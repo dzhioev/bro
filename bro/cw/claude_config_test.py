@@ -6,8 +6,8 @@ import pytest
 import bro.cw.claude_config as cw_claude_config
 import bro.workspace.docker as workspace_docker
 import bro.workspace.model as workspace_model
-import bro.workspace.paths as workspace_paths
-from bro.workspace.model import ContainerWorkspace, HostWorktree
+from bro.workspace.metadata import WorkspaceKind
+from bro.workspace.model import Workspace
 
 
 def _host_file(tmp_path, **extra):
@@ -236,11 +236,10 @@ class TestPluginSeedContract:
 class TestWorkspaceProjectsDir:
   def _worktree(self, monkeypatch, tmp_path):
     monkeypatch.setenv('HOME', str(tmp_path / 'home'))
-    monkeypatch.setattr(workspace_paths, 'worktrees_dir', lambda project: tmp_path / 'worktrees')
-    return HostWorktree('ws', tmp_path / 'project')
+    return Workspace.create('ws', tmp_path / 'project', WorkspaceKind.WORKTREE)
 
   def _encoded(self, worktree):
-    return str(worktree.path).replace('/', '-').replace('.', '-')
+    return str(worktree.tree).replace('/', '-').replace('.', '-')
 
   def _private(self, tmp_path, worktree):
     return (
@@ -249,7 +248,7 @@ class TestWorkspaceProjectsDir:
 
   def test_container_workspace_uses_the_fixed_encoding(self, monkeypatch, tmp_path):
     monkeypatch.setenv('HOME', str(tmp_path / 'home'))
-    container = ContainerWorkspace('ws', tmp_path / 'project')
+    container = Workspace.create('ws', tmp_path / 'project', WorkspaceKind.CONTAINER)
     expected = tmp_path / 'home' / '.claude' / 'cw-sessions' / 'ws' / 'projects' / '-workspace'
     assert cw_claude_config.workspace_projects_dir(container) == expected
 
@@ -284,7 +283,8 @@ class TestDropWorkspace:
     monkeypatch.setattr(
       workspace_model.ContainerWorkspace, 'remove', lambda self: removed.append(self.name)
     )
-    cw_claude_config.drop_workspace(ContainerWorkspace('ws', tmp_path / 'project'))
+    workspace = Workspace.create('ws', tmp_path / 'project', WorkspaceKind.CONTAINER)
+    cw_claude_config.drop_workspace(workspace)
     assert removed == ['ws']
     assert not session_dir.exists()
 
@@ -296,6 +296,7 @@ class TestDropWorkspace:
       raise RuntimeError('no image')
 
     monkeypatch.setattr(workspace_model.ContainerWorkspace, 'remove', boom)
+    workspace = Workspace.create('ws', tmp_path / 'project', WorkspaceKind.CONTAINER)
     with pytest.raises(RuntimeError, match='no image'):
-      cw_claude_config.drop_workspace(ContainerWorkspace('ws', tmp_path / 'project'))
+      cw_claude_config.drop_workspace(workspace)
     assert not session_dir.exists()

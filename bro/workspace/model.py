@@ -6,41 +6,35 @@ import subprocess
 from abc import ABC, abstractmethod
 from collections.abc import Generator
 from pathlib import Path
-from typing import Optional
+from typing import ClassVar, Optional
 
+from bro.base import log
 from bro.workspace.docker import image_tag
 from bro.workspace.git import git_run
-from bro.workspace.paths import (
-  containers_dir,
-  host_log_dir,
-  resume_spec_dir,
-  session_end_dir,
-  session_lock_dir,
-  worktrees_dir,
+from bro.workspace.metadata import (
+  WorkspaceKind,
+  WorkspaceMetadata,
+  is_workspace,
+  read_metadata,
+  workspace_branch,
+  write_metadata,
 )
-
-_CONTAINER_PREFIX = 'c:'
-
-
-def format_ref(name: str, is_container: bool) -> str:
-  return f'{_CONTAINER_PREFIX}{name}' if is_container else name
-
-
-def parse_ref(ref: str) -> tuple[str, bool]:
-  if ref.startswith(_CONTAINER_PREFIX):
-    return ref[len(_CONTAINER_PREFIX) :], True
-  return ref, False
+from bro.workspace.paths import workspace_dir, workspace_tree, workspaces_dir
 
 
 class SessionBusy(RuntimeError):
   """a workspace's session lock is held by a live session."""
 
 
-def _last_active(workspace: Path) -> Optional[float]:
-  if not workspace.is_dir():
+class KindMismatch(ValueError):
+  """a launch asked for a kind the named workspace was not created as."""
+
+
+def _last_active(tree: Path) -> Optional[float]:
+  if not tree.is_dir():
     return None
   result = subprocess.run(
-    ['find', str(workspace), '-not', '-path', '*/.git/*', '-type', 'f', '-printf', '%T@\n'],
+    ['find', str(tree), '-not', '-path', '*/.git/*', '-type', 'f', '-printf', '%T@\n'],
     capture_output=True,
     text=True,
   )
@@ -50,27 +44,6 @@ def _last_active(workspace: Path) -> Optional[float]:
 
 
 KILLED = 'killed'
-
-
-def _session_end_file(project: Path, ref: str) -> Path:
-  return session_end_dir(project) / ref
-
-
-def record_session_end(project: Path, ref: str, code: Optional[int]) -> None:
-  """record how the workspace's session ended: the exit code, or None for a
-  killed child (no exit code at the seam). every launch seam writes this after
-  the session ends; a recorded clean exit is what makes the workspace
-  reclaimable (`Workspace.is_clean`)."""
-  file = _session_end_file(project, ref)
-  file.parent.mkdir(parents=True, exist_ok=True)
-  file.write_text(str(code) if code is not None else KILLED)
-
-
-def clear_session_end(project: Path, ref: str) -> None:
-  """drop the workspace's session-end record — every launch seam clears it at
-  session start, so a session that dies without reaching its seam's record
-  (a crashed host, a wedged launch) leaves no record and the workspace is kept."""
-  _session_end_file(project, ref).unlink(missing_ok=True)
 
 
 def _cleanup_image() -> Optional[str]:
@@ -96,7 +69,8 @@ def _cleanup_image() -> Optional[str]:
 
 
 def _remove_container_dir(path: Path, image: Optional[str]) -> None:
-  """remove a container workspace dir, including files the host user can't unlink.
+  """remove a container workspace's directory, including files the host user
+  can't unlink.
 
   container processes can leave files owned by uids that don't match the host
   user (e.g. a pre-fix `cw exec` ran as root, or root-running tooling reached
@@ -143,33 +117,62 @@ def _remove_container_dir(path: Path, image: Optional[str]) -> None:
 
 
 class Workspace(ABC):
-  """a managed workspace backed by either a host worktree or a container clone.
+  """a managed workspace: one directory (`path`) holding an isolated copy of the
+  operated repo (`tree`) plus every record kept about it.
 
-  owns the inspection + teardown surface where the two kinds' duality lives
-  (is_active / is_clean / remove). Launch stays mode-specific (worktrees.py /
+  The subclasses are the kinds, which differ only in how the tree is
+  materialized and released; launch stays with the surfaces (worktrees.py /
   containers.py) and only consumes a Workspace for the post-run finish. Session
   state a launch surface attaches to a workspace is that surface's own — its
   readers and teardown compose around `remove()` there.
   """
 
-  def __init__(self, name: str, project: Path):
+  kind: ClassVar[WorkspaceKind]
+
+  def __init__(self, name: str, project: Path, metadata: WorkspaceMetadata):
     self.name = name
     self.project = project
+    self.metadata = metadata
 
   @property
-  @abstractmethod
-  def path(self) -> Path: ...
+  def path(self) -> Path:
+    return workspace_dir(self.project, self.name)
 
   @property
-  @abstractmethod
-  def ref(self) -> str: ...
-
-  @abstractmethod
-  def remove(self) -> None: ...
+  def tree(self) -> Path:
+    return workspace_tree(self.project, self.name)
 
   @property
   def lockfile(self) -> Path:
-    return session_lock_dir(self.project) / self.ref
+    return self.path / 'lock'
+
+  @property
+  def resume_file(self) -> Path:
+    return self.path / 'resume.json'
+
+  @property
+  def host_log(self) -> Path:
+    """where the launching process's mid-session output goes while an
+    interactive session owns the terminal (workspace/spawn.py)."""
+    return self.path / 'session.log'
+
+  @property
+  def _session_end_file(self) -> Path:
+    return self.path / 'exit'
+
+  @abstractmethod
+  def _release_tree(self) -> None:
+    """release whatever the tree holds outside the workspace directory, before
+    the directory itself goes."""
+
+  @abstractmethod
+  def _remove_dir(self) -> None:
+    """remove the workspace directory."""
+
+  def remove(self) -> None:
+    """remove the workspace: the tree and every record kept about it."""
+    self._release_tree()
+    self._remove_dir()
 
   @contextlib.contextmanager
   def hold_session_lock(self) -> Generator[None]:
@@ -179,14 +182,13 @@ class Workspace(ABC):
     and share the workspace's gitignored state. The flock is the lock — the pid
     written into the file only names the holder in the refusal.
     """
-    self.lockfile.parent.mkdir(parents=True, exist_ok=True)
     handle = os.fdopen(os.open(self.lockfile, os.O_RDWR | os.O_CREAT, 0o644), 'r+')
     with contextlib.closing(handle):
       try:
         fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
       except BlockingIOError as e:
         raise SessionBusy(
-          f'session already active on workspace {self.ref!r} '
+          f'session already active on workspace {self.name!r} '
           f'(pid {handle.read().strip()}); refusing to start a second'
         ) from e
       handle.seek(0)
@@ -210,14 +212,26 @@ class Workspace(ABC):
       fcntl.flock(handle, fcntl.LOCK_UN)
     return False
 
+  def record_session_end(self, code: Optional[int]) -> None:
+    """record how this workspace's session ended: the exit code, or None for a
+    killed child (no exit code at the seam). every launch seam writes this after
+    the session ends; a recorded clean exit is what makes the workspace
+    reclaimable (`is_clean`)."""
+    self._session_end_file.write_text(str(code) if code is not None else KILLED)
+
+  def clear_session_end(self) -> None:
+    """drop the session-end record — every launch seam clears it at session
+    start, so a session that dies without reaching its seam's record (a crashed
+    host, a wedged launch) leaves none and the workspace is kept."""
+    self._session_end_file.unlink(missing_ok=True)
+
   def is_clean(self) -> tuple[bool, list[str]]:
     """whether the workspace is safe to remove: its last session finished
     successfully. the recorded session end is the one deciding factor — anything
     else (a failure, a kill, no record) keeps the workspace for inspection and
     recovery. returns (safe, reasons)."""
-    file = _session_end_file(self.project, self.ref)
     try:
-      end = file.read_text().strip()
+      end = self._session_end_file.read_text().strip()
     except FileNotFoundError:
       return False, ['no recorded session end']
     if end == '0':
@@ -226,78 +240,96 @@ class Workspace(ABC):
       return False, ['last session was killed']
     return False, [f'last session exited with code {end}']
 
-  def _remove_session_state(self) -> None:
-    # per-session host-side state keyed by `ref` (the mode-prefixed key the launch
-    # surfaces pass to the broker root): the session host log
-    # (workspace/spawn.py:_HostLogRedirect), the session-end record, the resume
-    # spec, and the session lock. none survives removal — unlike the
-    # var/cw/summon/ audit
-    (host_log_dir(self.project) / f'{self.ref}.log').unlink(missing_ok=True)
-    (resume_spec_dir(self.project) / f'{self.ref}.json').unlink(missing_ok=True)
-    self.lockfile.unlink(missing_ok=True)
-    clear_session_end(self.project, self.ref)
-
   def last_active(self) -> Optional[float]:
-    return _last_active(self.path)
+    return _last_active(self.tree)
 
   @classmethod
-  def from_ref(cls, ref: str, project: Path) -> 'Workspace':
-    name, is_container = parse_ref(ref)
-    workspace: Workspace = (
-      ContainerWorkspace(name, project) if is_container else HostWorktree(name, project)
-    )
-    if not workspace.path.is_dir():
-      kind = 'container workspace' if is_container else 'workspace'
-      raise ValueError(f'{kind} not found: {ref}')
+  def open(cls, name: str, project: Path) -> 'Workspace':
+    """the workspace `name`, as its recorded metadata describes it. raises
+    `ValueError` when no workspace of that name exists."""
+    metadata = read_metadata(project, name)
+    return _KINDS[metadata.kind](name, project, metadata)
+
+  @classmethod
+  def create(
+    cls, name: str, project: Path, kind: WorkspaceKind, *, throwaway: bool = False
+  ) -> 'Workspace':
+    """record a new workspace of `kind`. the tree is materialized separately, by
+    the launch surface that needs it."""
+    metadata = WorkspaceMetadata(kind=kind, branch=workspace_branch(name), throwaway=throwaway)
+    write_metadata(project, name, metadata)
+    return _KINDS[kind](name, project, metadata)
+
+  @classmethod
+  def ensure(
+    cls, name: str, project: Path, kind: WorkspaceKind, *, throwaway: bool = False
+  ) -> 'Workspace':
+    """the workspace `name`, created as `kind` when it doesn't exist yet.
+
+    an existing workspace keeps the kind it was created as; asking for the other
+    one raises `KindMismatch` rather than running a workspace as something it
+    isn't.
+    """
+    if not is_workspace(project, name):
+      return cls.create(name, project, kind, throwaway=throwaway)
+    workspace = cls.open(name, project)
+    if workspace.kind is not kind:
+      raise KindMismatch(
+        f'workspace {name!r} is a {workspace.kind} workspace, not {kind}; '
+        f'pick another name or remove it with `cw clean --force {name}`'
+      )
     return workspace
 
   @classmethod
   def all(cls, project: Path) -> list['Workspace']:
-    # enumeration only (cheap): the per-workspace I/O (subject/last_active/is_clean)
+    # metadata reads only: the per-workspace I/O (subject/last_active/is_clean)
     # is left to the parallelized loops in listing.py / clean.py.
-    result: list[Workspace] = []
-    worktrees = worktrees_dir(project)
-    if worktrees.is_dir():
-      result.extend(HostWorktree(p.name, project) for p in worktrees.iterdir() if p.is_dir())
-    containers = containers_dir(project)
-    if containers.is_dir():
-      result.extend(ContainerWorkspace(p.name, project) for p in containers.iterdir() if p.is_dir())
-    return result
+    root = workspaces_dir(project)
+    if not root.is_dir():
+      return []
+    return [cls.open(path.name, project) for path in sorted(root.iterdir()) if path.is_dir()]
 
 
-class HostWorktree(Workspace):
-  @property
-  def path(self) -> Path:
-    return worktrees_dir(self.project) / self.name
+class WorktreeWorkspace(Workspace):
+  """a workspace whose tree is a git worktree of the project, run on the host."""
 
-  @property
-  def ref(self) -> str:
-    return self.name
+  kind = WorkspaceKind.WORKTREE
 
-  def remove(self) -> None:
-    git_run('worktree', 'remove', '--force', str(self.path))
-    git_run('branch', '-D', f'worktree-{self.name}')
-    self._remove_session_state()
+  def _release_tree(self) -> None:
+    # a workspace whose tree was never materialized (a launch that failed before
+    # creating it) has no worktree registration to release, and git would refuse
+    # the removal of a path it doesn't know.
+    if self.tree.is_dir():
+      removed = git_run('worktree', 'remove', '--force', str(self.tree))
+      if removed.returncode != 0:
+        raise RuntimeError(f'{self.tree}: git worktree remove failed: {removed.stderr.strip()}')
+    deleted = git_run('branch', '-D', self.metadata.branch)
+    if deleted.returncode != 0:
+      log.warning('could not delete branch %s: %s', self.metadata.branch, deleted.stderr.strip())
+
+  def _remove_dir(self) -> None:
+    shutil.rmtree(self.path)
 
 
 class ContainerWorkspace(Workspace):
-  @property
-  def path(self) -> Path:
-    return containers_dir(self.project) / self.name
+  """a workspace whose tree is a fresh clone, bind-mounted into a container as
+  `/workspace`."""
 
-  @property
-  def ref(self) -> str:
-    return format_ref(self.name, True)
+  kind = WorkspaceKind.CONTAINER
 
   def is_active(self, mounts: set[str]) -> bool:
     # the running container counts on its own: a launcher killed outright releases
     # the lock while leaving its container bound to the workspace mount.
-    return str(self.path) in mounts or super().is_active(mounts)
+    return str(self.tree) in mounts or super().is_active(mounts)
 
-  def remove(self) -> None:
-    # the session state is cleaned in a finally so it never outlives the workspace,
-    # even when the workspace dir removal escalates and then fails.
-    try:
-      _remove_container_dir(self.path, _cleanup_image())
-    finally:
-      self._remove_session_state()
+  def _release_tree(self) -> None:
+    pass
+
+  def _remove_dir(self) -> None:
+    _remove_container_dir(self.path, _cleanup_image())
+
+
+_KINDS: dict[WorkspaceKind, type[Workspace]] = {
+  WorkspaceKind.WORKTREE: WorktreeWorkspace,
+  WorkspaceKind.CONTAINER: ContainerWorkspace,
+}

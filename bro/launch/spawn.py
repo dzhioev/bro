@@ -27,7 +27,9 @@ from bro.launch.scope import summoned_credential_scope
 from bro.launch.summon_control import SummonControl, summon_status_file
 from bro.summon import SUMMON
 from bro.workspace.git import resolve_head, resolve_ref
-from bro.workspace.paths import broker_dir, host_log_dir, project_root, summon_dir
+from bro.workspace.metadata import WorkspaceKind
+from bro.workspace.model import Workspace
+from bro.workspace.paths import broker_dir, project_root, summon_dir
 from bro.workspace.spawn import (
   CompositeSpawner,
   DockerLaunchSpec,
@@ -75,8 +77,9 @@ def _lower_summon(launch: SummonLaunchSpec, workspace_name: str) -> DockerLaunch
   the host repo when they live only in the summoner's own store), unless the
   request's `into` names a ref (resolved with the same fetch-if-unresolvable rule
   as `cw ss --into`, but an unresolvable ref fails the spawn rather than falling
-  back). Raises on any unresolvable input — the spawner surfaces that as the
-  correlated `failed{reason: 'launch'}`."""
+  back). The child's workspace is recorded throwaway, so its supervisor removes
+  it once the child exits cleanly. Raises on any unresolvable input — the spawner
+  surfaces that as the correlated `failed{reason: 'launch'}`."""
   project = project_root()
   if launch.into is not None:
     base_ref = resolve_ref(project, launch.into)
@@ -113,7 +116,8 @@ def _lower_summon(launch: SummonLaunchSpec, workspace_name: str) -> DockerLaunch
     summoner=launch.summoner,
   )
   log_scoped_secrets(f'summoned {launch.target}', run.secrets, run.optional_secrets)
-  return DockerLaunchSpec(run, remove_workspace=True)
+  Workspace.ensure(workspace_name, project, WorkspaceKind.CONTAINER, throwaway=True)
+  return DockerLaunchSpec(run)
 
 
 class SummonSpawner(Spawner):
@@ -151,9 +155,8 @@ def _log_root_completed(context: Dispatcher, peer: Peer, message: Message) -> No
 
 def run_root_via_broker(
   launch: LaunchSpec,
-  project: Path,
   *,
-  session: str,
+  workspace: Workspace,
   may_summon: Collection[str] = (),
   credential_scope: Collection[str] = (),
   trail_pointer: Optional[Path] = None,
@@ -165,12 +168,11 @@ def run_root_via_broker(
   The broker answers the substrate's built-in ping, so a session can verify its
   channel (`broker request ping '{}'`), and logs the root's own run lifecycle
   (`started`/`completed`) as its parent. While an interactive root owns the
-  terminal, host output goes to `var/cw/log/<session>.log` instead of the shared
+  terminal, host output goes to the workspace's host log instead of the shared
   TTY (see `bro.workspace.spawn._HostLogRedirect`); headless runs keep it on stderr.
 
-  `session` is the session key — the workspace name, mode-prefixed by the launch
-  surface (see `bro/launch/summon_control.py`) — the root's identity in the summon audit and the
-  key of its per-session state files. `may_summon` names the bros the root session
+  `workspace` is the workspace the root session runs in — its name is the root's
+  identity in the summon audit. `may_summon` names the bros the root session
   is authorized to summon — its effective outgoing allow-list (`bro/launch/summon_control.py`);
   defaults to deny-all. `credential_scope` names the secrets the root session
   was launched with, the bound on what its summons may grant a child; defaults
@@ -184,7 +186,8 @@ def run_root_via_broker(
   targets = sorted(set(may_summon))
   if len(targets) > 0:
     log.info('session may summon: %s', ', '.join(targets))
-  host_log = host_log_dir(project) / f'{session}.log'
+  project = workspace.project
+  host_log = workspace.host_log
   docker_spawner = DockerSpawner(host_log=host_log)
   spawner = CompositeSpawner(
     {
@@ -196,10 +199,9 @@ def run_root_via_broker(
   control = SummonControl(
     allow_list=may_summon,
     credential_scope=credential_scope,
-    session=session,
-    project=project,
-    status_file=summon_status_file(project, session),
-    audit_file=summon_dir(project) / f'{session}.jsonl',
+    workspace=workspace,
+    status_file=summon_status_file(project, workspace.name),
+    audit_file=summon_dir(project) / f'{workspace.name}.jsonl',
     trail_pointer=trail_pointer,
   )
   facade = Broker(UnixServerTransport(str(broker_dir(project))), spawner)

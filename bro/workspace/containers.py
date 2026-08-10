@@ -9,8 +9,9 @@ from bro.workspace.docker import (
   find_container_id,
   suspend_until_continued,
 )
-from bro.workspace.model import parse_ref
-from bro.workspace.paths import containers_dir, project_root
+from bro.workspace.metadata import WorkspaceKind
+from bro.workspace.model import Workspace
+from bro.workspace.paths import project_root
 
 
 def exec_in_workspace(name: str, command: list[str]) -> int:
@@ -19,9 +20,18 @@ def exec_in_workspace(name: str, command: list[str]) -> int:
   are on PATH; the prompt's `(.venv)` prefix is dropped after `.bashrc` re-runs,
   but VIRTUAL_ENV and PATH survive.
   """
-  name, _ = parse_ref(name)
   project = project_root()
-  container_id = find_container_id(containers_dir(project) / name)
+  try:
+    workspace = Workspace.open(name, project)
+  except ValueError as e:
+    log.error('%s', e)
+    return 1
+  if workspace.kind is not WorkspaceKind.CONTAINER:
+    log.error(
+      'workspace %r is a %s workspace; there is no container to exec into', name, workspace.kind
+    )
+    return 1
+  container_id = find_container_id(workspace.tree)
   if container_id is None:
     log.error('no running container for workspace %r', name)
     return 1

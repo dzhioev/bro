@@ -17,10 +17,10 @@ __cli_name__ = 'cw'
 
 
 def build_parser() -> Parser:
-  parser = Parser(description='launch claude with worktree management')
+  parser = Parser(description='launch claude in a managed workspace')
   subparsers = parser.add_subparsers(dest='cmd', required=True)
 
-  ss = subparsers.add_parser('ss', help='start a claude session in a worktree')
+  ss = subparsers.add_parser('ss', help='start a claude session in a workspace')
   ss.add_argument(
     '--drop',
     action='store_true',
@@ -37,18 +37,15 @@ def build_parser() -> Parser:
   ss.add_argument(
     '-p', '--prompt', default=None, help='initial prompt (prepended with base prompt)'
   )
-  ss.add_argument('name', help='worktree name')
+  ss.add_argument('name', help='workspace name')
   ss.add_argument('claude_args', nargs=REMAINDER, help='args forwarded to claude')
 
   resume = subparsers.add_parser(
     'resume', help='resume the last claude session in a workspace, under the flags it ran with'
   )
-  resume.add_argument(
-    'ref',
-    help='workspace to resume, as `cw list` shows it; use c:<name> for container workspaces',
-  )
+  resume.add_argument('name', help='workspace to resume, as `cw list` shows it')
 
-  subparsers.add_parser('list', help='list workspaces ([.]=local, [o]=container, [x]=abandoned)')
+  subparsers.add_parser('list', help='list workspaces ([.]=worktree, [o]=container, [x]=abandoned)')
 
   clean = subparsers.add_parser(
     'clean', help='remove stale workspaces that have no uncommitted or unpushed changes'
@@ -63,28 +60,19 @@ def build_parser() -> Parser:
     action='store_true',
     help='show what would be removed without actually removing',
   )
-  clean.add_argument(
-    'refs',
-    nargs='*',
-    help='workspaces to clean (default: all); use c:<name> for container workspaces',
-  )
+  clean.add_argument('names', nargs='*', help='workspaces to clean (default: all)')
 
   check_clean = subparsers.add_parser(
     'check-clean',
     help='check if a workspace is safe to remove (exit 0=yes, 1=no); reasons printed to stderr',
   )
-  check_clean.add_argument(
-    'ref',
-    help='workspace to check; use c:<name> for container workspaces',
-  )
+  check_clean.add_argument('name', help='workspace to check')
 
   exec_command = subparsers.add_parser(
     'exec',
     help='exec a command in the running container for a workspace (default: interactive bash with .venv activated)',
   )
-  exec_command.add_argument(
-    'name', help="container workspace name (the 'c:' prefix is accepted but optional)"
-  )
+  exec_command.add_argument('name', help='container workspace name')
   exec_command.add_argument(
     'command', nargs=REMAINDER, help='command + args to exec (default: bash)'
   )
@@ -110,12 +98,12 @@ def main(argv: list[str]) -> Optional[int]:
   if command == 'list':
     return list_workspaces()
   if command == 'resume':
-    return resume_session(args['ref'])
+    return resume_session(args['name'])
   if command == 'clean':
-    return clean_workspaces(force=args['force'], dry_run=args['dry_run'], refs=args['refs'])
+    return clean_workspaces(force=args['force'], dry_run=args['dry_run'], names=args['names'])
   if command == 'check-clean':
     try:
-      workspace = Workspace.from_ref(args['ref'], project_root())
+      workspace = Workspace.open(args['name'], project_root())
     except ValueError as e:
       print(str(e), file=sys.stderr)
       return 1

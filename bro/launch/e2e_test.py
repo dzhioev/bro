@@ -54,6 +54,7 @@ import pytest
 
 import bro.launch.spawn
 import bro.workspace.docker as workspace_docker
+import bro.workspace.paths as workspace_paths
 import bro.workspace.spawn as workspace_spawn
 from bro.broker.brotocol import Message
 from bro.broker.dispatcher import Broker, Dispatcher, ping_handler, spawn_test_handler
@@ -309,8 +310,11 @@ class IsolatedEnv:
     return self.project / 'var' / 'cw' / 'broker'
 
   @property
-  def containers_dir(self) -> Path:
-    return self.project / 'var' / 'cw' / 'containers'
+  def workspaces_dir(self) -> Path:
+    return workspace_paths.workspaces_dir(self.project)
+
+  def tree(self, name: str) -> Path:
+    return workspace_paths.workspace_tree(self.project, name)
 
   @property
   def cw_sessions(self) -> Path:
@@ -322,11 +326,11 @@ class IsolatedEnv:
     return sorted(self.broker_dir.glob('*.sock'))
 
   def live_containers(self) -> list[str]:
-    if not self.containers_dir.is_dir():
+    if not self.workspaces_dir.is_dir():
       return []
     live = []
-    for workspace_dir in sorted(self.containers_dir.iterdir()):
-      if find_container_id(workspace_dir) is not None:
+    for workspace_dir in sorted(self.workspaces_dir.iterdir()):
+      if find_container_id(self.tree(workspace_dir.name)) is not None:
         live.append(workspace_dir.name)
     return live
 
@@ -342,11 +346,11 @@ def _leak_residue(cw_sessions: Path) -> list[str]:
   return sorted(p.name for p in cw_sessions.iterdir() if p.name.startswith(_LEAK_PREFIXES))
 
 
-def _remove_stray_containers(containers_dir: Path) -> None:
-  if not containers_dir.is_dir():
+def _remove_stray_containers(env: 'IsolatedEnv') -> None:
+  if not env.workspaces_dir.is_dir():
     return
-  for workspace_dir in containers_dir.iterdir():
-    container_id = find_container_id(workspace_dir)
+  for workspace_dir in env.workspaces_dir.iterdir():
+    container_id = find_container_id(env.tree(workspace_dir.name))
     if container_id is not None:
       subprocess.run(['docker', 'rm', '-f', container_id], capture_output=True)
 
@@ -403,7 +407,7 @@ def isolated_env() -> Iterator[IsolatedEnv]:
     real_residue_before=residue_before,
   )
   yield env
-  _remove_stray_containers(env.containers_dir)
+  _remove_stray_containers(env)
   shutil.rmtree(root, ignore_errors=True)
 
 
@@ -449,7 +453,7 @@ class _Driver:
     # -P keeps the driver's cwd (the isolated project clone, which carries its own copy
     # of every package) off sys.path: the launcher code under test must resolve from
     # this checkout's editable venv, and scenario D's PYTHONPATH shadow must win the
-    # `import broker` lookup
+    # `import bro.broker` lookup
     self.process = subprocess.Popen(
       [sys.executable, '-P', '-c', _DRIVER],
       stdin=slave,
@@ -540,7 +544,7 @@ def _container_mount_of(container_id: str, source: Path) -> Optional[str]:
 
 
 def _wait_ready(env: IsolatedEnv, name: str, driver: _Driver, timeout: float = 240) -> None:
-  ready = env.containers_dir / name / '.e2e-ready'
+  ready = env.tree(name) / '.e2e-ready'
   _wait_until(
     lambda: ready.exists() or driver.process.poll() is not None,
     timeout,
@@ -552,7 +556,7 @@ def _wait_ready(env: IsolatedEnv, name: str, driver: _Driver, timeout: float = 2
 
 
 def _container_gone(env: IsolatedEnv, name: str, timeout: float) -> bool:
-  return _poll_gone(lambda: find_container_id(env.containers_dir / name) is None, timeout)
+  return _poll_gone(lambda: find_container_id(env.tree(name)) is None, timeout)
 
 
 # --- A: broker-enabled default launch ----------------------------------------
@@ -570,10 +574,10 @@ def scenario_a(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> Liv
   if len(sockets) == 1:
     run.socket_mode = stat.S_IMODE(sockets[0].stat().st_mode)
     run.broker_dir_mode = stat.S_IMODE(env.broker_dir.stat().st_mode)
-    run.container_id = find_container_id(env.containers_dir / name)
+    run.container_id = find_container_id(env.tree(name))
     if run.container_id is not None:
       run.socket_mounted_at = _container_mount_of(run.container_id, sockets[0])
-  (env.containers_dir / name / '.e2e-continue').touch()
+  (env.tree(name) / '.e2e-continue').touch()
   run.exit_code = driver.wait(120)
   run.output = driver.output()
   run.sockets_after = env.sockets()
@@ -650,8 +654,7 @@ def _run_broker_scenario(
       docker_sock=False,
       tty=False,
       forward_env=False,
-    ),
-    remove_workspace=True,
+    )
   )
   facade = Broker(
     UnixServerTransport(str(env.broker_dir)), DockerSpawner(), default_timeout=default_timeout
@@ -681,12 +684,12 @@ def _run_broker_scenario(
       max_live = max(max_live, len(env.live_containers()))
       time.sleep(0.25)
     if thread.is_alive():
-      _remove_stray_containers(env.containers_dir)
+      _remove_stray_containers(env)
       thread.join(30)
     if thread.is_alive():
       pytest.fail(f'broker run for case {case!r} wedged past {budget}s')
 
-  report_path = env.containers_dir / name / '.e2e-report.json'
+  report_path = env.tree(name) / '.e2e-report.json'
   report = json.loads(report_path.read_text()) if report_path.is_file() else {}
   return BrokerRun(
     code=result['code'],
@@ -697,7 +700,7 @@ def _run_broker_scenario(
     max_live=max_live,
     sockets_after=env.sockets(),
     live_after=env.live_containers(),
-    workspace_leaks=env.leaked_dirs(env.containers_dir),
+    workspace_leaks=env.leaked_dirs(env.workspaces_dir),
     session_leaks=env.leaked_dirs(env.cw_sessions),
   )
 
@@ -854,12 +857,32 @@ class TestKillSwitch:
 # --- D: broker unimportable in the launcher -----------------------------------
 
 
+# makes `import bro.broker` fail in the launcher. a module file cannot shadow a
+# submodule of an installed package — the name resolves through the real
+# `bro.__path__` and never consults PYTHONPATH — so the block is a meta-path
+# finder, delivered through the `sitecustomize` that site imports from PYTHONPATH
+# at interpreter start.
+_BROKER_SHADOW = """
+import sys
+
+
+class _Unimportable:
+  def find_spec(self, name, path=None, target=None):
+    if name == 'bro.broker' or name.startswith('bro.broker.'):
+      raise ImportError('shadowed for the degrade scenario')
+    return None
+
+
+sys.meta_path.insert(0, _Unimportable())
+"""
+
+
 @pytest.fixture(scope='module')
 def scenario_d(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> LiveRun:
   env = isolated_env
   shadow = env.root / 'shadow'
   shadow.mkdir(exist_ok=True)
-  (shadow / 'bro.broker.py').write_text("raise ImportError('shadowed for the degrade scenario')\n")
+  (shadow / 'sitecustomize.py').write_text(_BROKER_SHADOW)
   name = f'{_NAME_PREFIX}d-root'
   driver = _Driver(
     env, name, ['python', '-c', _PROBE_NO_CHANNEL], extra_env={'PYTHONPATH': str(shadow)}
@@ -912,7 +935,7 @@ def scenario_e_targeted(isolated_env: IsolatedEnv, request: pytest.FixtureReques
   driver = _Driver(env, name, ['python', '-c', _PROBE_SIGINT], extra_env={})
   request.addfinalizer(driver.close)
   _wait_ready(env, name, driver)
-  container_id = find_container_id(env.containers_dir / name)
+  container_id = find_container_id(env.tree(name))
   os.kill(driver.process.pid, signal.SIGINT)  # targeted at the launcher, not the terminal group
   run = LiveRun(exit_code=driver.wait(60), output=driver.output(), container_id=container_id)
   run.sockets_after = env.sockets()
@@ -950,7 +973,7 @@ def _inplace_command(*inner: str) -> list[str]:
 
 
 def _report(env: IsolatedEnv, name: str) -> dict:
-  path = env.containers_dir / name / '.e2e-report.json'
+  path = env.tree(name) / '.e2e-report.json'
   assert path.is_file(), f'no report from the fake claude at {path}'
   return json.loads(path.read_text())
 
@@ -1010,7 +1033,7 @@ def scenario_g(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> Liv
   )
   request.addfinalizer(driver.close)
   _wait_ready(env, name, driver)
-  container_id = find_container_id(env.containers_dir / name)
+  container_id = find_container_id(env.tree(name))
   assert container_id is not None
   subprocess.run(['docker', 'stop', container_id], capture_output=True, check=True)
   run = LiveRun(exit_code=driver.wait(60), output=driver.output(), container_id=container_id)

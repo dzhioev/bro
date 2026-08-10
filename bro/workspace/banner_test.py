@@ -51,14 +51,14 @@ class TestSessionFacts:
     monkeypatch.setattr(workspace_paths, 'in_container', lambda: True)
     monkeypatch.setenv('CW_NAME', 'my-task')
     monkeypatch.setenv('CW_BRO', 'dev')
-    monkeypatch.setenv('CW_HOST_WORKSPACE', '/host/var/cw/containers/my-task')
+    monkeypatch.setenv('CW_HOST_WORKSPACE', '/host/var/cw/workspaces/my-task/tree')
     monkeypatch.setenv('BRO_SHELL_COMMAND', 'dive-in -t abc')
     monkeypatch.setenv('CW_COMMAND', 'cw ss --hold attended my-task')
     facts = SessionFacts.collect()
     assert facts.in_container is True
     assert facts.name == 'my-task'
     assert facts.bro == 'dev'
-    assert facts.host_workspace == '/host/var/cw/containers/my-task'
+    assert facts.host_workspace == '/host/var/cw/workspaces/my-task/tree'
     assert facts.container_workspace == '/workspace'
     assert facts.exec_command == 'cw exec my-task'
     assert facts.shell_command == 'dive-in -t abc'
@@ -73,7 +73,7 @@ class TestSessionFacts:
 
   def test_host_worktree_with_derived_path(self, monkeypatch, tmp_path):
     project = tmp_path / 'project'
-    worktree = project / 'var' / 'cw' / 'worktrees' / 'feature'
+    worktree = workspace_paths.workspace_tree(project, 'feature')
     worktree.mkdir(parents=True)
     monkeypatch.setattr(workspace_paths, 'project_root', lambda: project)
     monkeypatch.setenv('CW_NAME', 'feature')
@@ -171,7 +171,7 @@ class TestRenderBanner:
       container_workspace=None,
       exec_command=None,
     ).render_llm()
-    assert out == 'kind: host worktree'
+    assert out == 'kind: worktree'
 
   def test_visual_shows_logo_with_bro_signature(self):
     out = _facts(bro='dev').render_visual()
@@ -180,36 +180,32 @@ class TestRenderBanner:
     for line in workspace_banner._BRO_LOGO.split('\n')[:-1]:
       assert line in out
     assert '\033[2m//\033[0m \033[1;97mdev\033[0m' in out
-    # no parens-form kind on the session line — encoded by the c: prefix instead
-    assert '(container)' not in out
-    assert '(host worktree)' not in out
 
-  def test_visual_session_line_uses_c_prefix_for_container(self):
+  def test_visual_session_line_shows_the_workspace_name(self):
     out = _facts(name='task').render_visual()
-    assert 'cw session:   \033[1mc:task\033[0m' in out
+    assert 'cw session:   \033[1mtask\033[0m' in out
 
   def test_visual_container_shows_workspace_and_host_path_on_separate_lines(self):
-    out = _facts(host_workspace='/host/var/cw/containers/task').render_visual()
+    out = _facts(host_workspace='/host/var/cw/workspaces/task/tree').render_visual()
     assert 'workspace:    /workspace' in out
-    assert 'host path:    \033[2m/host/var/cw/containers/task\033[0m' in out
+    assert 'host path:    \033[2m/host/var/cw/workspaces/task/tree\033[0m' in out
 
   def test_visual_uses_docker_shell_label(self):
     out = _facts().render_visual()
     assert 'docker shell:' in out
     assert 'host shell:' not in out
 
-  def test_visual_session_line_omits_prefix_for_worktree(self):
+  def test_visual_session_line_on_a_worktree(self):
     out = _facts(
       in_container=False,
       name='feature',
-      host_workspace='/project/var/cw/worktrees/feature',
+      host_workspace='/project/var/cw/workspaces/feature/tree',
       container_workspace=None,
       exec_command=None,
     ).render_visual()
     # in worktree mode there's no `docker shell:` row, so the widest label is
     # `cw session:` (11 chars) — value follows with one space, no extra padding
     assert 'cw session: \033[1mfeature\033[0m' in out
-    assert 'c:feature' not in out
 
   def test_visual_skips_logo_for_non_bro(self):
     out = _facts().render_visual()
@@ -219,14 +215,14 @@ class TestRenderBanner:
     out = _facts(
       in_container=False,
       name='feature',
-      host_workspace='/project/var/cw/worktrees/feature',
+      host_workspace='/project/var/cw/workspaces/feature/tree',
       container_workspace=None,
       exec_command=None,
     ).render_visual()
-    assert '\033[31m/project/var/cw/worktrees/feature\033[0m' in out
+    assert '\033[31m/project/var/cw/workspaces/feature/tree\033[0m' in out
 
   def test_visual_does_not_paint_container_path_red(self):
-    out = _facts(host_workspace='/host/var/cw/containers/task').render_visual()
+    out = _facts(host_workspace='/host/var/cw/workspaces/task/tree').render_visual()
     assert '\033[31m' not in out
 
   def test_visual_handles_missing_host_path_in_worktree(self):

@@ -10,6 +10,8 @@ import bro.launch.spawn
 import bro.launch.summon_control
 import bro.workspace.docker as workspace_docker
 import bro.workspace.store as workspace_store
+from bro.workspace.metadata import WorkspaceKind
+from bro.workspace.model import Workspace
 
 PARENT_WORKSPACE = Path('/var/cw/worktrees/parent')
 SUMMONER = {'session': 'ws'}
@@ -59,7 +61,6 @@ class TestSummonLowering:
         tty=False,
         forward_env=False,
       ),
-      remove_workspace=True,
     )
 
   def test_lowering_logs_the_scope_like_any_container_launch(self, lowering_harness, caplog):
@@ -217,7 +218,8 @@ class TestRunRootViaBroker:
 
     monkeypatch.setattr(bro.launch.spawn, 'Broker', FakeBroker)
     launch = bro.launch.spawn.ProcessLaunchSpec(command=['x'], cwd='/', env={})
-    assert bro.launch.spawn.run_root_via_broker(launch, tmp_path / 'proj', session='ws') == 3
+    workspace = Workspace.create('ws', tmp_path / 'proj', WorkspaceKind.CONTAINER)
+    assert bro.launch.spawn.run_root_via_broker(launch, workspace=workspace) == 3
     assert captured['transport']._dir == tmp_path / 'proj' / 'var' / 'cw' / 'broker'
     # the composite over both launch modes plus the summon lowering: any root can
     # spawn docker children, summons included
@@ -231,7 +233,7 @@ class TestRunRootViaBroker:
       spawner._spawners[bro.launch.spawn.SummonLaunchSpec], bro.launch.spawn.SummonSpawner
     )
     # both attached-capable spawners point at the same per-session host log
-    host_log = tmp_path / 'proj' / 'var' / 'cw' / 'log' / 'ws.log'
+    host_log = workspace.host_log
     assert docker_spawner._host_log == host_log
     assert process_spawner._host_log == host_log
     assert set(captured['handlers']) == {'ping', 'started', 'completed', 'summon'}
@@ -241,7 +243,7 @@ class TestRunRootViaBroker:
     control = captured['handlers']['summon'].__self__
     assert isinstance(control, bro.launch.summon_control.SummonControl)
     assert [observer.__self__ for observer in captured['observers']] == [control]
-    assert control._session == 'ws'
+    assert control._workspace is workspace
     summon_dir = tmp_path / 'proj' / 'var' / 'cw' / 'summon'
     assert control._status_file == summon_dir / 'ws.status.json'
     assert control._audit_file == summon_dir / 'ws.jsonl'
@@ -254,8 +256,7 @@ class TestRunRootViaBroker:
     dispatcher = Dispatcher()
     control = bro.launch.summon_control.SummonControl(
       allow_list=set(),
-      session='ws',
-      project=tmp_path,
+      workspace=Workspace.create('ws', tmp_path, WorkspaceKind.CONTAINER),
       status_file=tmp_path / 'status.json',
       audit_file=tmp_path / 'audit.jsonl',
     )

@@ -4,7 +4,6 @@ import os
 import subprocess
 import sys
 from dataclasses import dataclass, replace
-from pathlib import Path
 from typing import Optional
 
 from bro.base import credentials, log
@@ -28,18 +27,11 @@ from bro.launch.scope import (
 from bro.workspace.containers import broker_enabled
 from bro.workspace.docker import Launch, find_container_id
 from bro.workspace.git import resolve_ref
-from bro.workspace.model import (
-  ContainerWorkspace,
-  HostWorktree,
-  SessionBusy,
-  Workspace,
-  clear_session_end,
-  format_ref,
-  record_session_end,
-)
-from bro.workspace.paths import project_root, resume_spec_dir, venv_env
+from bro.workspace.metadata import WorkspaceKind
+from bro.workspace.model import KindMismatch, SessionBusy, Workspace
+from bro.workspace.paths import project_root, venv_env
 from bro.workspace.project import project_config
-from bro.workspace.store import log_scoped_secrets, materialize_scoped_store
+from bro.workspace.store import ScopedSecrets, log_scoped_secrets, materialize_scoped_store
 from bro.workspace.worktrees import ensure_host_worktree, provision_host_worktree
 
 
@@ -88,16 +80,16 @@ class SessionSpec:
     return Surface.RAW_SESSION if self.raw else Surface.CW_SESSION
 
   @property
-  def ref(self) -> str:
-    """the workspace ref this session runs in, as `cw list` displays it."""
-    return format_ref(self.name, is_container=not self.host)
+  def kind(self) -> WorkspaceKind:
+    """the workspace kind this session runs in."""
+    return WorkspaceKind.WORKTREE if self.host else WorkspaceKind.CONTAINER
 
   def to_command_argv(self) -> list[str]:
     """reconstruct this session as the `cw` argv tokens that launched it — the
     CW_COMMAND the banner renders."""
     if self.resume:
-      # a resume takes its whole recipe from the record, so the ref is the whole command
-      return ['cw', 'resume', self.ref]
+      # a resume takes its whole recipe from the record, so the name is the whole command
+      return ['cw', 'resume', self.name]
     flags = {
       '--host': self.host,
       '--fast': self.fast,
@@ -157,34 +149,38 @@ class SessionSpec:
     return cls(**data)
 
 
-def _resume_spec_file(project: Path, ref: str) -> Path:
-  return resume_spec_dir(project) / f'{ref}.json'
+@dataclass(frozen=True)
+class _ScopedLaunch:
+  """what the launch preflight resolved for a session: its credential scope, the
+  bros it may summon, and the hydrated store a host session materializes."""
+
+  scoped: ScopedSecrets
+  may_summon: set[str]
+  store: dict[str, bytes]
 
 
-def record_resume_spec(project: Path, spec: SessionSpec) -> None:
-  """persist the spec `cw resume <ref>` relaunches this workspace with.
+def record_resume_spec(workspace: Workspace, spec: SessionSpec) -> None:
+  """persist the spec `cw resume <name>` relaunches this workspace with.
 
   Written at every launch, before the session runs, so a session that dies
   without unwinding stays resumable. What lands is the resume variant — the same
   spec whichever launch wrote it, so repeated resumes are fixpoints.
   """
-  file = _resume_spec_file(project, spec.ref)
-  file.parent.mkdir(parents=True, exist_ok=True)
-  file.write_text(json.dumps(spec.resume_variant().dump(), indent=2))
+  workspace.resume_file.write_text(json.dumps(spec.resume_variant().dump(), indent=2))
 
 
-def load_resume_spec(project: Path, ref: str) -> Optional[SessionSpec]:
+def load_resume_spec(workspace: Workspace) -> Optional[SessionSpec]:
   """the recorded resume spec for a workspace, or None when it has none — a
   workspace whose last session predates the record, or whose record was written
   by an incompatible cw."""
   try:
-    data = json.loads(_resume_spec_file(project, ref).read_text())
+    data = json.loads(workspace.resume_file.read_text())
   except FileNotFoundError:
     return None
   try:
     return SessionSpec.load(data)
   except (TypeError, ValueError) as e:
-    log.warning('ignoring unreadable resume spec for %s: %s', ref, e)
+    log.warning('ignoring unreadable resume spec for %s: %s', workspace.name, e)
     return None
 
 
@@ -210,7 +206,7 @@ def _replace_resume_hint(workspace: Workspace) -> None:
   # \033[J:  clear from cursor to end of screen.
   sys.stdout.write('\033[2A\033[J')
   print('Resume this session with:')
-  print(f'  cw resume {workspace.ref}')
+  print(f'  cw resume {workspace.name}')
 
 
 def _finish_session(spec: SessionSpec, workspace: Workspace, code: int) -> int:
@@ -221,11 +217,11 @@ def _finish_session(spec: SessionSpec, workspace: Workspace, code: int) -> int:
     if code == 0:
       try:
         drop_workspace(workspace)
-        log.info('removed workspace %s', workspace.ref)
-      except RuntimeError as e:
-        log.warning('could not fully remove workspace %s: %s', workspace.ref, e)
+        log.info('removed workspace %s', workspace.name)
+      except (RuntimeError, OSError) as e:
+        log.warning('could not fully remove workspace %s: %s', workspace.name, e)
     else:
-      log.info('session exited with code %d; keeping workspace %s', code, workspace.ref)
+      log.info('session exited with code %d; keeping workspace %s', code, workspace.name)
   elif code == 0:
     _replace_resume_hint(workspace)
   return code
@@ -262,15 +258,34 @@ def start_session(spec: SessionSpec) -> int:
       log.error('cannot resolve --into ref: %s', spec.into)
       return 1
 
-  workspace: Workspace = (
-    ContainerWorkspace(spec.name, project) if container else HostWorktree(spec.name, project)
-  )
+  # every precondition that can reject the launch is checked before the workspace
+  # is recorded, so a refused launch leaves nothing on disk.
+  if not _preflight_session_auth(spec):
+    return 1
+  bro_name = spec.session_bro
+  try:
+    scoped, may_summon, store = preflight_scoped_launch(
+      scoped_secrets(bro_name, spec.surface),
+      bro_name,
+      grant=spec.grant,
+      revoke=spec.revoke,
+    )
+  except LaunchScopeError as e:
+    log.error('%s', e)
+    return 1
+
+  try:
+    workspace = Workspace.ensure(spec.name, project, spec.kind)
+  except KindMismatch as e:
+    log.error('%s', e)
+    return 1
+  launch = _ScopedLaunch(scoped=scoped, may_summon=may_summon, store=store)
   try:
     with workspace.hold_session_lock():
-      record_resume_spec(project, spec)
+      record_resume_spec(workspace, spec)
       if container:
-        return _container_session(spec, workspace, base_ref)
-      return _host_session(spec, workspace, base_ref)
+        return _container_session(spec, workspace, base_ref, launch)
+      return _host_session(spec, workspace, base_ref, launch)
   except SessionBusy as e:
     log.error('%s', e)
     return 1
@@ -296,30 +311,32 @@ def _preflight_session_auth(spec: SessionSpec) -> bool:
   return False
 
 
-def resume_session(ref: str) -> int:
+def resume_session(name: str) -> int:
   """relaunch a workspace's last session under its recorded spec (`cw resume`)."""
   project = project_root()
   try:
-    Workspace.from_ref(ref, project)
+    workspace = Workspace.open(name, project)
   except ValueError as e:
     log.error('%s', e)
     return 1
-  spec = load_resume_spec(project, ref)
+  spec = load_resume_spec(workspace)
   if spec is None:
-    log.error('no session recorded for %s; start one with `cw ss`', ref)
+    log.error('no session recorded for %s; start one with `cw ss`', name)
     return 1
   return start_session(spec)
 
 
-def _container_session(spec: SessionSpec, workspace: Workspace, base_ref: Optional[str]) -> int:
-  """launch the session in a container: only machinery — session guard, scoped
-  secrets, claude-state seeding, broker channel, mounts/env — then the same
-  in-place runner host mode spawns crosses the docker boundary as the container
-  command (`cw ss --in-place …`, resolved from the clone's venv after the
-  entrypoint prepares the tree, so the session runs its workspace's code)."""
+def _container_session(
+  spec: SessionSpec, workspace: Workspace, base_ref: Optional[str], launch_scope: _ScopedLaunch
+) -> int:
+  """launch the session in a container: only machinery — session guard,
+  claude-state seeding, broker channel, mounts/env — then the same in-place
+  runner host mode spawns crosses the docker boundary as the container command
+  (`cw ss --in-place …`, resolved from the clone's venv after the entrypoint
+  prepares the tree, so the session runs its workspace's code)."""
   # a container still bound to this workspace's mount outlived the launcher that
   # held the session lock (a killed `cw`), and its claude is still running.
-  if find_container_id(workspace.path) is not None:
+  if find_container_id(workspace.tree) is not None:
     log.error(
       'session already active in the container for workspace %r; refusing to start a second',
       spec.name,
@@ -335,20 +352,8 @@ def _container_session(spec: SessionSpec, workspace: Workspace, base_ref: Option
       log.error('no claude session found for %s in %s', spec.name, projects_dir)
       return 1
 
-  if not _preflight_session_auth(spec):
-    return 1
-
   bro_name = spec.session_bro
-  try:
-    scoped, may_summon, _ = preflight_scoped_launch(
-      scoped_secrets(bro_name, spec.surface),
-      bro_name,
-      grant=spec.grant,
-      revoke=spec.revoke,
-    )
-  except LaunchScopeError as e:
-    log.error('%s', e)
-    return 1
+  scoped = launch_scope.scoped
 
   # CW_BRO themes the whole container (`cw exec` shells render the bro banner),
   # not just the runner's process tree — the runner re-exports it next to claude.
@@ -372,16 +377,17 @@ def _container_session(spec: SessionSpec, workspace: Workspace, base_ref: Option
     extra_mounts=claude_mounts,
   )
   code = run_in_container(
-    launch, may_summon=may_summon, trail_pointer=session_trail_pointer(spec.name)
+    launch,
+    workspace=workspace,
+    may_summon=launch_scope.may_summon,
+    trail_pointer=session_trail_pointer(spec.name),
   )
   return _finish_session(spec, workspace, code)
 
 
 def _run_host_root_via_broker(
-  name: str,
+  workspace: Workspace,
   command: list[str],
-  worktree: Path,
-  project: Path,
   env: dict[str, str],
   may_summon: set[str],
   credential_scope: set[str],
@@ -396,21 +402,22 @@ def _run_host_root_via_broker(
   from bro.workspace.spawn import ProcessLaunchSpec
 
   # a host session reads the summon-status file the host-side SummonControl
-  # writes, straight at its host path; the session key is the bare workspace
-  # name — container mode prefixes `c:` (see bro/launch/summon_control.py)
-  env[STATUS_ENV] = str(summon_status_file(project, name))
-  launch = ProcessLaunchSpec(command=command, cwd=str(worktree), env=env)
+  # writes, straight at its host path; a container session reads it through
+  # /host-repo (see bro/launch/summon_control.py)
+  env[STATUS_ENV] = str(summon_status_file(workspace.project, workspace.name))
+  launch = ProcessLaunchSpec(command=command, cwd=str(workspace.tree), env=env)
   return run_root_via_broker(
     launch,
-    project,
-    session=name,
+    workspace=workspace,
     may_summon=may_summon,
     credential_scope=credential_scope,
-    trail_pointer=session_trail_pointer(name),
+    trail_pointer=session_trail_pointer(workspace.name),
   )
 
 
-def _host_session(spec: SessionSpec, workspace: Workspace, base_ref: Optional[str]) -> int:
+def _host_session(
+  spec: SessionSpec, workspace: Workspace, base_ref: Optional[str], launch_scope: _ScopedLaunch
+) -> int:
   """launch the session in a host worktree: ensure + provision it, then spawn the
   worktree's own `cw ss --in-place` (the in-place runner) inside it — so a session
   always runs its workspace's code, and everything next to claude (argv, MCP
@@ -420,38 +427,22 @@ def _host_session(spec: SessionSpec, workspace: Workspace, base_ref: Optional[st
   (`BROKER_CHANNEL` in claude's env) exactly like container mode."""
   project = project_root()
   os.chdir(project)
-  worktree = workspace.path
-  branch = f'worktree-{spec.name}'
+  worktree = workspace.tree
+  scoped = launch_scope.scoped
 
   # cheap resume existence guard, before the worktree auto-create below could
-  # manufacture an empty workspace for a mistyped name. the runner resolves the
-  # actual session id from the same dir (derived from its cwd).
+  # materialize a tree for a mistyped name. the runner resolves the actual
+  # session id from the same dir (derived from its cwd).
   if spec.resume and _latest_jsonl(workspace_projects_dir(workspace)) is None:
     log.error('no claude session found for %s in %s', spec.name, workspace_projects_dir(workspace))
     return 1
 
-  if not _preflight_session_auth(spec):
-    return 1
-
-  # the same preflight as container mode, before the worktree exists so a bad
-  # override or missing secret fails without creating anything. the allow-list is
-  # enforced by host mode's broker root like container mode's; the store is a
-  # convenience scope on host, not a boundary (reference/cw.md, "Scoped
-  # credential hydration")
-  bro_name = spec.session_bro
-  try:
-    scoped, may_summon, store = preflight_scoped_launch(
-      scoped_secrets(bro_name, spec.surface),
-      bro_name,
-      grant=spec.grant,
-      revoke=spec.revoke,
-    )
-  except LaunchScopeError as e:
-    log.error('%s', e)
-    return 1
+  # the store is a convenience scope on host, not a boundary (reference/cw.md,
+  # "Scoped credential hydration"); the allow-list is enforced by host mode's
+  # broker root like container mode's
   log_scoped_secrets(spec.name, scoped.required, scoped.optional)
 
-  if not ensure_host_worktree(worktree, branch, base_ref):
+  if not ensure_host_worktree(worktree, workspace.metadata.branch, base_ref):
     return 1
   if not provision_host_worktree(worktree):
     return 1
@@ -477,21 +468,21 @@ def _host_session(spec: SessionSpec, workspace: Workspace, base_ref: Optional[st
   runner_env = venv_env(worktree / '.venv')
   claude_dir = _provision_host_claude_dir(spec.name, worktree, project)
   runner_env['CLAUDE_CONFIG_DIR'] = str(claude_dir)
-  runner_env[credentials.REGISTRY_ENV] = str(materialize_scoped_store(store, claude_dir / '.bro'))
+  runner_env[credentials.REGISTRY_ENV] = str(
+    materialize_scoped_store(launch_scope.store, claude_dir / '.bro')
+  )
   _apply_claude_auth(runner_env)
-  clear_session_end(project, workspace.ref)
+  workspace.clear_session_end()
   if broker_enabled():
     code = _run_host_root_via_broker(
-      spec.name,
+      workspace,
       command,
-      worktree,
-      project,
       runner_env,
-      may_summon,
+      launch_scope.may_summon,
       scoped.required | scoped.optional,
     )
   else:
     code = subprocess.run(command, cwd=str(worktree), env=runner_env).returncode
-  record_session_end(project, workspace.ref, code)
+  workspace.record_session_end(code)
 
   return _finish_session(spec, workspace, code)

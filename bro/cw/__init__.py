@@ -1,7 +1,7 @@
 """launch claude in an isolated docker container, or with --host in a worktree.
 
 host mode (--host): cw owns the worktree lifecycle — it creates the worktree
-(`var/cw/worktrees/<name>`, `worktree-<name>` branch + submodule alternates),
+(the workspace's `tree/`, on its recorded branch + submodule alternates),
 provisions it with the worktree's own setup.sh (same as the container
 entrypoint), then spawns the worktree's own `cw ss --in-place` (the in-place
 session runner, cw/runner.py), which runs plain `claude` from inside it (not
@@ -13,7 +13,7 @@ container mode (default): /workspace is a fresh clone, not a worktree — the
 gitfile-based worktree layout doesn't survive the container boundary, and this
 keeps the container's git state genuinely isolated. layout:
 
-  - var/cw/containers/<name>/ on the host → /workspace rw
+  - the workspace's tree/ on the host → /workspace rw
     (empty on first run; entrypoint clones host repo into it)
   - host project root → /host-repo ro
     (clone --shared reads objects from here via alternates; also the source for

@@ -65,6 +65,7 @@ docker run --rm -i \
   -v "$SMOKE_TMP/claude/.claude.json:/home/cw/.claude.json" \
   -e "HOME=/home/cw" \
   -e "CW_NAME=smoke-test" \
+  -e "CW_BRANCH=worktree-smoke-test" \
   -e "CW_SKIP_VENV=1" \
   "$TAG" bash -s >&2 << 'SMOKE'
     set -e

@@ -19,7 +19,8 @@ from typing import Optional
 
 from bro.base import log
 from bro.monitor import encode_project_path, trail_pointer
-from bro.workspace.model import ContainerWorkspace, Workspace
+from bro.workspace.metadata import WorkspaceKind
+from bro.workspace.model import Workspace
 
 
 def _session_claude_dir(name: str) -> Path:
@@ -47,16 +48,16 @@ def _latest_jsonl(projects_dir: Path) -> Optional[Path]:
 def workspace_projects_dir(workspace: Workspace) -> Path:
   """the host-side claude projects dir of a workspace's sessions."""
   session_dir = _session_claude_dir(workspace.name)
-  if isinstance(workspace, ContainerWorkspace):
+  if workspace.kind is WorkspaceKind.CONTAINER:
     return session_dir / 'projects' / '-workspace'
   # transcripts live in the session's private state dir; a worktree whose
   # sessions were recorded before the dir existed (against the host ~/.claude)
   # is read from the legacy location until a launch migrates it
   # (_migrate_legacy_transcripts)
-  private = session_dir / 'projects' / encode_project_path(workspace.path)
+  private = session_dir / 'projects' / encode_project_path(workspace.tree)
   if private.is_dir():
     return private
-  legacy = Path.home() / '.claude' / 'projects' / encode_project_path(workspace.path)
+  legacy = Path.home() / '.claude' / 'projects' / encode_project_path(workspace.tree)
   if legacy.is_dir():
     return legacy
   return private
