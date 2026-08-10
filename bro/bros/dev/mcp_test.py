@@ -112,21 +112,24 @@ def test_edit_file_not_found_raises():
       edit_file(path, 'zzz', 'X')
 
 
-def test_bash_captures_stdout_and_exit_code():
-  result = bash('echo hello')
+@pytest.mark.asyncio
+async def test_bash_captures_stdout_and_exit_code():
+  result = await bash('echo hello')
   assert 'exit_code: 0' in result
   assert 'hello' in result
   assert 'skipped' not in result
 
 
-def test_bash_captures_stderr():
-  result = bash('echo oops 1>&2 ; false')
+@pytest.mark.asyncio
+async def test_bash_captures_stderr():
+  result = await bash('echo oops 1>&2 ; false')
   assert 'exit_code: 1' in result
   assert 'oops' in result
 
 
-def test_bash_timeout_returns_clearly():
-  result = bash('sleep 5', timeout_seconds=1)
+@pytest.mark.asyncio
+async def test_bash_timeout_returns_clearly():
+  result = await bash('sleep 5', timeout_seconds=1)
   assert 'TIMED OUT' in result
 
 
@@ -143,20 +146,22 @@ def test_file_ops_reject_non_regular_file():
       edit_file(fifo, 'a', 'b')
 
 
-def test_grep_skips_fifo_without_blocking():
+@pytest.mark.asyncio
+async def test_grep_skips_fifo_without_blocking():
   # -D skip means grep never reads a FIFO/device — even one named directly — so it
   # returns immediately instead of blocking on the open. timeout_seconds is a safety
   # net: a regression that drops -D skip fails as TIMED OUT here rather than hanging.
   with tempfile.TemporaryDirectory() as d:
     fifo = os.path.join(d, 'pipe')
     os.mkfifo(fifo)
-    assert grep('anything', path=fifo, timeout_seconds=5) == 'no matches'
+    assert await grep('anything', path=fifo, timeout_seconds=5) == 'no matches'
 
 
-def test_bash_long_output_emits_before_marker_keeps_tail():
+@pytest.mark.asyncio
+async def test_bash_long_output_emits_before_marker_keeps_tail():
   # bash tails are usually most informative — confirm we keep the LAST `limit`
   # lines and report the dropped head via a [...skipped before...] marker.
-  result = bash(f'for i in $(seq 1 {DEFAULT_LIMIT + 30}); do echo "L$i"; done')
+  result = await bash(f'for i in $(seq 1 {DEFAULT_LIMIT + 30}); do echo "L$i"; done')
   assert 'exit_code: 0' in result
   assert 'skipped before:' in result
   assert '30 lines' in result
@@ -166,50 +171,56 @@ def test_bash_long_output_emits_before_marker_keeps_tail():
   assert 'L1\n' not in result
 
 
-def test_grep_finds_match():
+@pytest.mark.asyncio
+async def test_grep_finds_match():
   with tempfile.TemporaryDirectory() as d:
     write_file(os.path.join(d, 'f.txt'), 'hello world\ngoodbye world\n')
-    result = grep('hello', path=d)
+    result = await grep('hello', path=d)
     assert 'hello world' in result
     assert 'skipped' not in result
 
 
-def test_grep_no_match():
+@pytest.mark.asyncio
+async def test_grep_no_match():
   with tempfile.TemporaryDirectory() as d:
     write_file(os.path.join(d, 'f.txt'), 'nothing here\n')
-    assert grep('xyzzy', path=d) == 'no matches'
+    assert await grep('xyzzy', path=d) == 'no matches'
 
 
-def test_grep_case_insensitive():
+@pytest.mark.asyncio
+async def test_grep_case_insensitive():
   with tempfile.TemporaryDirectory() as d:
     write_file(os.path.join(d, 'f.txt'), 'HELLO\n')
-    assert 'HELLO' in grep('hello', path=d, case_insensitive=True)
-    assert grep('hello', path=d) == 'no matches'
+    assert 'HELLO' in await grep('hello', path=d, case_insensitive=True)
+    assert await grep('hello', path=d) == 'no matches'
 
 
-def test_grep_glob_filter():
+@pytest.mark.asyncio
+async def test_grep_glob_filter():
   with tempfile.TemporaryDirectory() as d:
     write_file(os.path.join(d, 'a.py'), 'target\n')
     write_file(os.path.join(d, 'a.txt'), 'target\n')
-    result = grep('target', path=d, glob='*.py')
+    result = await grep('target', path=d, glob='*.py')
     assert 'a.py' in result
     assert 'a.txt' not in result
 
 
-def test_grep_explicit_limit_truncates_and_emits_after_marker():
+@pytest.mark.asyncio
+async def test_grep_explicit_limit_truncates_and_emits_after_marker():
   with tempfile.TemporaryDirectory() as d:
     write_file(os.path.join(d, 'f.txt'), 'x\n' * 10)
-    result = grep('x', path=d, limit=3)
+    result = await grep('x', path=d, limit=3)
     assert result.count('\n') == 3  # 3 kept lines + after marker (no trailing \n)
     assert 'skipped after: 7 lines' in result
 
 
-def test_grep_default_limit_caps_pathological_output():
+@pytest.mark.asyncio
+async def test_grep_default_limit_caps_pathological_output():
   # without an explicit limit the old grep returned everything — a runaway result
   # crashed do.do. now we get DEFAULT_LIMIT lines + a marker reporting the rest.
   with tempfile.TemporaryDirectory() as d:
     write_file(os.path.join(d, 'f.txt'), 'match\n' * (DEFAULT_LIMIT * 3))
-    result = grep('match', path=d)
+    result = await grep('match', path=d)
     assert 'skipped after:' in result
     assert f'{DEFAULT_LIMIT * 2:,} lines' in result
 
@@ -254,6 +265,60 @@ def test_job_watch_kill_round_trip():
     assert (await kill(context, 'job-2')).startswith('job-2 exited')
 
   asyncio.run(round_trip())
+
+
+@pytest.mark.asyncio
+async def test_interrupted_watch_releases_the_job_for_the_next_one():
+  # the watch lock outlives the abandoned thread, so an interrupted watch has to
+  # wake its job — otherwise the job stays unwatchable for the rest of a window
+  # an iterative watcher may have sized in minutes.
+  registry = jobs.Registry()
+  context = Context(state=registry)
+  job(context, 'sleep 30')
+  target = registry.get('job-1')
+  watching = asyncio.create_task(watch(context, 'job-1', wait_seconds=600))
+  await asyncio.sleep(0.1)
+  watching.cancel()
+  with pytest.raises(asyncio.CancelledError):
+    await watching
+
+  # the woken thread drops the lock on its own thread, so the job frees up
+  # promptly rather than by the time cancel() returns
+  for _ in range(50):
+    if not target._watch_lock.locked():
+      break
+    await asyncio.sleep(0.1)
+  assert (await watch(context, 'job-1', wait_seconds=0)).startswith('running')
+  registry.close()
+
+
+@pytest.mark.asyncio
+async def test_interrupted_bash_leaves_no_process_behind(tmp_path):
+  pidfile = tmp_path / 'pid'
+  running = asyncio.create_task(bash(f'echo $$ > {pidfile}; sleep 30', timeout_seconds=60))
+  for _ in range(50):
+    await asyncio.sleep(0.1)
+    if pidfile.exists() and len(pidfile.read_text()) > 0:
+      break
+  pid = int(pidfile.read_text())
+  running.cancel()
+  with pytest.raises(asyncio.CancelledError):
+    await running
+
+  for _ in range(50):
+    if not _process_alive(pid):
+      break
+    await asyncio.sleep(0.1)
+  assert not _process_alive(pid)
+
+
+def _process_alive(pid: int) -> bool:
+  try:
+    os.kill(pid, 0)
+  except ProcessLookupError:
+    return False
+  # a killed child of this process lingers as a zombie until it is reaped
+  return open(f'/proc/{pid}/stat').read().rsplit(')', 1)[1].split()[0] != 'Z'
 
 
 def test_watch_unknown_job_raises():

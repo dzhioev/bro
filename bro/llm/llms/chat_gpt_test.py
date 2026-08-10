@@ -1,3 +1,4 @@
+import asyncio
 import os
 from types import SimpleNamespace
 from typing import Any, Optional, cast
@@ -191,7 +192,7 @@ def _make_chat_gpt_with_tracker(
 def _install_responses(gpt: ChatGPT, sequence: list, captured: list[dict]) -> None:
   iterator = iter(sequence)
 
-  def create(**kwargs):
+  async def create(**kwargs):
     captured.append(kwargs)
     return next(iterator)
 
@@ -807,3 +808,99 @@ class TestUsageAccounting:
 
     # publishing is gated on the agent identity; without it no pointer is minted
     assert usage.USAGE_FILE_VARIABLE not in os.environ
+
+
+class _BlockingTool(Tool):
+  """a tool that never returns on its own — the interruption fixture."""
+
+  def __init__(self, name: str):
+    self._name = name
+    self.started = asyncio.Event()
+
+  @property
+  def name(self) -> str:
+    return self._name
+
+  @property
+  def description(self) -> str:
+    return 'blocks'
+
+  @property
+  def parameters(self) -> dict:
+    return {'type': 'object', 'properties': {}}
+
+  async def call(self, arguments: dict):
+    self.started.set()
+    await asyncio.Event().wait()
+    raise AssertionError('unreachable')
+
+
+def _tool_calls_response(*names: str) -> Response:
+  return _fake_response(
+    response_id='resp_tools',
+    output=[
+      _function_call_item(name, call_id=f'call_{index}')
+      for index, name in enumerate(names, start=1)
+    ],
+  )
+
+
+class TestInterruptedTurn:
+  @pytest.mark.asyncio
+  async def test_pending_tool_calls_are_answered_and_parked(self):
+    blocking = _BlockingTool('slow')
+    gpt, tracker, captured = _make_chat_gpt_with_tracker([blocking, _StaticTool('quick')])
+    _install_responses(
+      gpt,
+      [_tool_calls_response('slow', 'quick'), _fake_response(output=[_message_item('after')])],
+      captured,
+    )
+
+    turn = asyncio.create_task(gpt.send([{'role': 'user', 'content': 'go'}]))
+    await asyncio.wait_for(blocking.started.wait(), timeout=5)
+    turn.cancel()
+    with pytest.raises(asyncio.CancelledError):
+      await turn
+
+    # both the call that was running and the one that never started come back
+    # answered, so the next request is a turn the API accepts
+    parked = [cast(dict, item) for item in gpt._pending_input]
+    assert [item['call_id'] for item in parked] == ['call_1', 'call_2']
+    assert all(item['output'] == chat_gpt.INTERRUPTED_TOOL_OUTPUT for item in parked)
+    # the trail records them too — a replay reconstructs the same turn
+    interrupted = [step for step in tracker.steps if step[1] == chat_gpt.INTERRUPTED_TOOL_OUTPUT]
+    assert [step[0] for step in interrupted] == ['tool_result', 'tool_result']
+    assert all(step[2]['is_error'] is True for step in interrupted)
+
+    reply = await gpt.send([{'role': 'user', 'content': 'never mind, do this'}])
+    assert reply == 'after'
+    # the resumed request chains on the response that made the calls and leads
+    # with their answers, then the new message
+    resumed = captured[-1]
+    assert resumed['previous_response_id'] == 'resp_tools'
+    assert [item.get('call_id') for item in resumed['input'][:2]] == ['call_1', 'call_2']
+    assert resumed['input'][2]['content'] == 'never mind, do this'
+    assert gpt._pending_input == []
+
+  @pytest.mark.asyncio
+  async def test_unanswered_request_is_parked_whole(self):
+    gpt, _tracker, captured = _make_chat_gpt_with_tracker()
+    started = asyncio.Event()
+
+    async def create(**kwargs):
+      captured.append(kwargs)
+      started.set()
+      await asyncio.Event().wait()
+
+    gpt.client = cast(Any, SimpleNamespace(responses=SimpleNamespace(create=create)))
+
+    turn = asyncio.create_task(gpt.send([{'role': 'user', 'content': 'go'}]))
+    await asyncio.wait_for(started.wait(), timeout=5)
+    turn.cancel()
+    with pytest.raises(asyncio.CancelledError):
+      await turn
+
+    # no response came back, so the whole request rides into the next send
+    # rather than vanishing from the conversation
+    assert [item['content'] for item in cast(list, gpt._pending_input)] == ['go']
+    assert gpt._last_response_id is None

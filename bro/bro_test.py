@@ -394,6 +394,37 @@ class TestBroRun:
 
 
 class TestBroLifetime:
+  def test_exit_closes_the_live_servers(self):
+    # what a session holds — the dev toolset's background jobs are the built-in
+    # case — is released when its lifetime ends, not at interpreter exit.
+    closed: list[str] = []
+
+    class _ClosingServer(InProcessMCPServer):
+      def close(self) -> None:
+        closed.append(self.namespace)
+
+    class _Holder(EchoBro):
+      mcp_servers: ClassVar = [MCPServerSpec(build=lambda: _ClosingServer('holder', []))]
+
+    bro = _Holder()
+    with bro:
+      bro._live_mcp_servers()
+      assert closed == []
+    assert closed == ['holder']
+
+  def test_exit_survives_a_failing_server_teardown(self):
+    class _BrokenServer(InProcessMCPServer):
+      def close(self) -> None:
+        raise RuntimeError('teardown exploded')
+
+    class _Holder(EchoBro):
+      mcp_servers: ClassVar = [MCPServerSpec(build=lambda: _BrokenServer('broken', []))]
+
+    bro = _Holder()
+    with bro:
+      bro._live_mcp_servers()
+    assert bro._last_end_reason == 'ok'
+
   def test_exit_without_send_is_safe(self):
     bro = EchoBro()
     with bro:

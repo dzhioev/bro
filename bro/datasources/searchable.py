@@ -72,7 +72,8 @@ class SearchableDataSource(DataSource):
       query=query,
       content=content,
     )
-    return mu(prompt, _Summary, Text(content), reasoning_effort='low').summary
+    summary = await mu(prompt, _Summary, Text(content), reasoning_effort='low')
+    return summary.summary
 
   def as_mcp_server(self) -> MCPServer:
     server = InProcessMCPServer(self.namespace, [_SearchTool(self), _FetchTool(self)])

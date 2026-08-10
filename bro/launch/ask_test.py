@@ -164,6 +164,21 @@ def test_main_in_place_hold_reaches_the_run(monkeypatch):
   assert holds == ['unattended', 'detached']
 
 
+def test_main_interrupted_run_exits_as_an_interrupted_command():
+  # Ctrl+C cancels the run through the loop and asyncio re-raises it here; the
+  # shell asked for that, so it must not read as a crash
+  class InterruptedBro(RecordBro):
+    async def run(self, input, observer=None, tracker=None, request_timeout=None, **kwargs):
+      raise KeyboardInterrupt
+
+  with (
+    patch.dict('os.environ', {'CW_IN_CONTAINER': '1'}),
+    patch('bro.registry.get_class', return_value=InterruptedBro),
+    patch('bro.registry.create_bro', return_value=InterruptedBro()),
+  ):
+    assert main(['ask', 'record', 'hi', '--in-place']) == 130
+
+
 def test_main_no_trails_disables_recording_in_container():
   with (
     patch.dict('os.environ', {}, clear=False) as env,

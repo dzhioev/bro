@@ -2,6 +2,7 @@
 controlling terminal, so an interactive prompt (read of /dev/tty) fails fast instead
 of blocking the agent, and stdin defaults to /dev/null."""
 
+import asyncio
 import errno
 import os
 import subprocess
@@ -113,6 +114,47 @@ def test_terminate_group_signals_the_whole_group(tmp_path) -> None:
   while time.time() < deadline and _running(pid):
     time.sleep(0.05)
   assert not _running(pid), 'grandchild survived terminate_group'
+
+
+@pytest.mark.asyncio
+async def test_run_async_captures_output_and_exit_code() -> None:
+  process = await spawn.run_async(['bash', '-c', 'echo out; echo err 1>&2; exit 3'])
+  assert process.returncode == 3
+  assert process.stdout == 'out\n'
+  assert process.stderr == 'err\n'
+
+
+@pytest.mark.asyncio
+async def test_run_async_timeout_kills_grandchildren(tmp_path) -> None:
+  pidfile = tmp_path / 'pid'
+  command = f'(echo $BASHPID > {pidfile}; sleep 60) | cat'
+  with pytest.raises(subprocess.TimeoutExpired):
+    await spawn.run_async(['bash', '-c', command], timeout=1)
+  pid = int(pidfile.read_text())
+  deadline = time.time() + 5
+  while time.time() < deadline and _running(pid):
+    time.sleep(0.05)
+  assert not _running(pid), 'grandchild survived the timeout'
+
+
+@pytest.mark.asyncio
+async def test_run_async_cancellation_kills_grandchildren(tmp_path) -> None:
+  # the interruption path: a cancelled tool call must not leave the shell it
+  # started (or anything the shell started) running.
+  pidfile = tmp_path / 'pid'
+  command = f'(echo $BASHPID > {pidfile}; sleep 60) | cat'
+  task = asyncio.create_task(spawn.run_async(['bash', '-c', command], timeout=60))
+  deadline = time.time() + 5
+  while time.time() < deadline and (not pidfile.exists() or len(pidfile.read_text()) == 0):
+    await asyncio.sleep(0.05)
+  pid = int(pidfile.read_text())
+  task.cancel()
+  with pytest.raises(asyncio.CancelledError):
+    await task
+  deadline = time.time() + 5
+  while time.time() < deadline and _running(pid):
+    await asyncio.sleep(0.05)
+  assert not _running(pid), 'grandchild survived the cancellation'
 
 
 def test_popen_streams_and_detaches() -> None:

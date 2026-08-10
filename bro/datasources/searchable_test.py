@@ -32,7 +32,7 @@ async def test_fetch_with_query_summarises_via_mu(monkeypatch):
 
   captured: list[str] = []
 
-  def fake_mu(prompt, result_cls, *contents, reasoning_effort=None):
+  async def fake_mu(prompt, result_cls, *contents, reasoning_effort=None):
     captured.append(prompt)
     return result_cls(summary='focused summary')
 

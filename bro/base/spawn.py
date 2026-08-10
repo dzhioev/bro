@@ -4,45 +4,45 @@ Every child runs in a fresh session (`start_new_session=True`), detaching it fro
 any controlling terminal so a `/dev/tty` open fails with ENXIO instead of blocking.
 stdin defaults to /dev/null.
 
-`run` additionally reaps the child's whole process *group* on timeout (or any other
-error mid-run), not just the direct child. `start_new_session=True` makes the child a
-process-group leader, so a SIGKILL to the group also takes out any grandchildren the
-child spawned (shell pipelines, backgrounded helpers). Without this, a timed-out
-`bash -c 'grep -R ... | sed ...'` would kill only the shell and leave a `grep`
-blocked on a FIFO running forever — `subprocess.run`'s own timeout cleanup signals
-only the direct child.
+`run` and `run_async` additionally reap the child's whole process *group* on timeout
+(or any other error mid-run), not just the direct child. `start_new_session=True`
+makes the child a process-group leader, so a SIGKILL to the group also takes out any
+grandchildren the child spawned (shell pipelines, backgrounded helpers). Without this,
+a timed-out `bash -c 'grep -R ... | sed ...'` would kill only the shell and leave a
+`grep` blocked on a FIFO running forever — `subprocess.run`'s own timeout cleanup
+signals only the direct child.
 """
 
+import asyncio
+import contextlib
 import os
 import signal
 import subprocess
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, Callable
 from typing import Optional
 
 
-def _signal_group(
-  process: subprocess.Popen, signal_number: int, fallback: Callable[[], None]
-) -> None:
+def _signal_group(pid: int, signal_number: int, fallback: Callable[[], None]) -> None:
   try:
-    os.killpg(process.pid, signal_number)
+    os.killpg(pid, signal_number)
   except (ProcessLookupError, PermissionError):
     # group already gone, or the leader exited and its pgid was recycled — fall
     # back to signalling just the direct child (a no-op if already reaped).
     fallback()
 
 
-def kill_group(process: subprocess.Popen) -> None:
+def kill_group(process: subprocess.Popen | asyncio.subprocess.Process) -> None:
   """SIGKILL the child's whole process group. The child is a process-group leader
   (`start_new_session=True`), so this also reaps grandchildren. `run` calls it on
   timeout; streaming callers that drive their own read loop (e.g. infra's deploy
   runner with a watchdog timer) call it directly."""
-  _signal_group(process, signal.SIGKILL, process.kill)
+  _signal_group(process.pid, signal.SIGKILL, process.kill)
 
 
-def terminate_group(process: subprocess.Popen) -> None:
+def terminate_group(process: subprocess.Popen | asyncio.subprocess.Process) -> None:
   """SIGTERM the child's whole process group — the graceful sibling of `kill_group`,
   for callers that give the child a chance to clean up and escalate themselves."""
-  _signal_group(process, signal.SIGTERM, process.terminate)
+  _signal_group(process.pid, signal.SIGTERM, process.terminate)
 
 
 def run(
@@ -88,6 +88,45 @@ def run(
   if check and return_code != 0:
     raise subprocess.CalledProcessError(return_code, process.args, output=stdout, stderr=stderr)
   return subprocess.CompletedProcess(process.args, return_code, stdout, stderr)
+
+
+@contextlib.asynccontextmanager
+async def _reaped(process: asyncio.subprocess.Process) -> AsyncGenerator[None]:
+  # whatever ends the wait short of the child's own exit — a timeout, a
+  # cancelled await — takes the whole group with it, so no grandchild outlives
+  # the call that started it. the exit wait is shielded: the cancellation that
+  # brought us here would otherwise abort the reap as well.
+  try:
+    yield
+  except BaseException:
+    if process.returncode is None:
+      kill_group(process)
+      await asyncio.shield(process.wait())
+    raise
+
+
+async def run_async(
+  command, *, timeout: Optional[float] = None
+) -> subprocess.CompletedProcess[str]:
+  """`run`'s awaitable counterpart for the tool path: same detached child and
+  process-group reaping, cancellable. stdout and stderr are always captured as
+  text. Raises `subprocess.TimeoutExpired` on expiry, like `run`."""
+  process = await asyncio.create_subprocess_exec(
+    *command,
+    stdin=subprocess.DEVNULL,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    start_new_session=True,
+  )
+  async with _reaped(process):
+    try:
+      stdout, stderr = await asyncio.wait_for(process.communicate(), timeout)
+    except TimeoutError as error:
+      raise subprocess.TimeoutExpired(command, timeout if timeout is not None else 0) from error
+  assert process.returncode is not None  # communicate returned, so the child has exited
+  return subprocess.CompletedProcess(
+    command, process.returncode, stdout.decode(errors='replace'), stderr.decode(errors='replace')
+  )
 
 
 def popen(command, **kwargs) -> subprocess.Popen:

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import contextlib
 import dataclasses
@@ -23,6 +24,7 @@ from bro.llm.tracker import ToolStepSource, Tracker
 if TYPE_CHECKING:
   from openai.types.responses import (
     Response,
+    ResponseFunctionToolCall,
     ResponseInputItemParam,
     ResponseOutputItem,
     ResponseOutputMessage,
@@ -276,6 +278,14 @@ def convert_message(msg: dict) -> EasyInputMessageParam:
   )
 
 
+# the result a tool call gets when the turn is interrupted before it returned;
+# also what the trail records for it. read by the model on the next turn.
+INTERRUPTED_TOOL_OUTPUT = (
+  'interrupted by the user before this call returned — it may have partly taken '
+  'effect. The user is taking over; do not resume the abandoned work unless they ask.'
+)
+
+
 def _cached_tokens(response_usage: Optional[object]) -> int:
   input_details = (
     getattr(response_usage, 'input_tokens_details', None) if response_usage is not None else None
@@ -320,11 +330,13 @@ class ChatGPT(llm_llm.LLM):
     tracker: Optional[Tracker] = None,
     agent: Optional[str] = None,
   ):
-    from openai import OpenAI
+    from openai import AsyncOpenAI
 
     super().__init__(mcp_servers, observer=observer, tracker=tracker, agent=agent)
     self.model = model
-    self.client = OpenAI(api_key=api_key)
+    # async is what makes a roundtrip interruptible: a cancelled await closes
+    # the request, where the sync client pins the loop until the reply lands.
+    self.client = AsyncOpenAI(api_key=api_key)
     self._openai_tools: Optional[list[ToolParam]] = None
     self._last_response_id: Optional[str] = None
     self._reasoning_effort = reasoning_effort
@@ -345,6 +357,10 @@ class ChatGPT(llm_llm.LLM):
     # incoming messages list is dropped (the prefix already carries the
     # system). cleared after one use so subsequent send()s behave normally.
     self._input_prefix: Optional[list[ResponseInputItemParam]] = None
+    # what an interrupted turn left unacknowledged: the request items no
+    # response came back for, or the tool outputs the loop never got to send.
+    # they lead the next send's input, on the chain `_last_response_id` names.
+    self._pending_input: list[ResponseInputItemParam] = []
 
   async def _resolve_openai_tools(self) -> list[ToolParam]:
     if self._openai_tools is not None:
@@ -394,14 +410,19 @@ class ChatGPT(llm_llm.LLM):
     self, response: Response, *, turn_index: int, call_index: int
   ) -> list[ResponseInputItemParam]:
     results: list[ResponseInputItemParam] = []
-    for item in response.output:
-      if item.type != 'function_call':
-        continue
+    calls = [item for item in response.output if item.type == 'function_call']
+    for position, item in enumerate(calls):
       kwargs = json.loads(item.arguments)
       is_error = False
       try:
         with self._current_tool_step(item.call_id):
           output = await self.tools.call(item.name, kwargs)
+      except asyncio.CancelledError:
+        results.extend(
+          self._interrupted_outputs(calls[position:], turn_index=turn_index, call_index=call_index)
+        )
+        self._pending_input = results
+        raise
       except ToolControlSignal:
         raise
       except Exception as exception:
@@ -425,6 +446,32 @@ class ChatGPT(llm_llm.LLM):
         output = json.dumps(output)
       results.append({'type': 'function_call_output', 'call_id': item.call_id, 'output': output})
     return results
+
+  def _interrupted_outputs(
+    self, calls: list[ResponseFunctionToolCall], *, turn_index: int, call_index: int
+  ) -> list[ResponseInputItemParam]:
+    # every call the interruption left unanswered still needs a result: the API
+    # rejects a turn whose function calls have no output, and the model has to
+    # learn its work was stopped rather than silently lose it.
+    outputs: list[ResponseInputItemParam] = []
+    for item in calls:
+      self.tracker.step(
+        'tool_result',
+        INTERRUPTED_TOOL_OUTPUT,
+        turn_index=turn_index,
+        call_index=call_index,
+        tool_name=item.name,
+        call_id=item.call_id,
+        is_error=True,
+      )
+      outputs.append(
+        {
+          'type': 'function_call_output',
+          'call_id': item.call_id,
+          'output': INTERRUPTED_TOOL_OUTPUT,
+        }
+      )
+    return outputs
 
   def _reasoning_kwargs(self) -> dict:
     if self._reasoning_effort is None:
@@ -522,15 +569,49 @@ class ChatGPT(llm_llm.LLM):
       kwargs['previous_response_id'] = previous_response_id
     return kwargs
 
-  def _create(self, request_kwargs: dict, request_timeout: Optional[float]) -> Response:
+  async def _create(self, request_kwargs: dict, request_timeout: Optional[float]) -> Response:
     # per-request timeout overrides the client default (the OpenAI SDK's 600s)
     # for this call; None leaves that default in place. responses.create is
     # non-streaming — no bytes return until generation finishes — so without a
     # tighter bound a stalled request blocks the full client timeout before the
     # SDK's automatic retry fires.
     if request_timeout is not None:
-      return self.client.responses.create(**request_kwargs, timeout=request_timeout)
-    return self.client.responses.create(**request_kwargs)
+      return await self.client.responses.create(**request_kwargs, timeout=request_timeout)
+    return await self.client.responses.create(**request_kwargs)
+
+  async def _exchange(
+    self,
+    input_items: list[ResponseInputItemParam],
+    openai_tools: list[ToolParam],
+    *,
+    request_timeout: Optional[float],
+  ) -> Response:
+    # one request/response leg of the tool loop, chained onto the last response
+    # actually received — which is also what makes an interruption recoverable:
+    # the chain pointer never names a response whose items we abandoned.
+    request_kwargs = self._build_request_kwargs(
+      input_items, openai_tools, previous_response_id=self._last_response_id
+    )
+    self._call_index += 1
+    try:
+      response = await self._create(request_kwargs, request_timeout)
+    except asyncio.CancelledError:
+      self._pending_input = input_items
+      raise
+    self._last_response_id = response.id
+    llm_call_step_id = self._record_llm_call(
+      request_kwargs,
+      response,
+      turn_index=self._turn_index,
+      call_index=self._call_index,
+    )
+    self._publish_usage(response)
+    self._emit_response_steps(
+      response,
+      is_terminal=not has_tool_calls(response),
+      llm_call_step_id=llm_call_step_id,
+    )
+    return response
 
   async def send(self, messages: list[dict], *, request_timeout: Optional[float] = None) -> str:
     openai_tools = await self._resolve_openai_tools()
@@ -545,6 +626,8 @@ class ChatGPT(llm_llm.LLM):
       api_input.extend(self._input_prefix)
       incoming = [msg for msg in messages if msg.get('role') != 'system']
       self._input_prefix = None
+    api_input.extend(self._pending_input)
+    self._pending_input = []
     api_input.extend(convert_message(msg) for msg in incoming)
 
     user_messages = [message for message in incoming if message.get('role') == 'user']
@@ -554,49 +637,15 @@ class ChatGPT(llm_llm.LLM):
       self.tracker.step('user_input', _extract_text(message), turn_index=self._turn_index)
       self._has_user_input = True
 
-    request_kwargs = self._build_request_kwargs(
-      api_input, openai_tools, previous_response_id=self._last_response_id
-    )
-    self._call_index += 1
-    response = self._create(request_kwargs, request_timeout)
-    llm_call_step_id = self._record_llm_call(
-      request_kwargs,
-      response,
-      turn_index=self._turn_index,
-      call_index=self._call_index,
-    )
-    self._publish_usage(response)
-    self._emit_response_steps(
-      response,
-      is_terminal=not has_tool_calls(response),
-      llm_call_step_id=llm_call_step_id,
-    )
-
+    response = await self._exchange(api_input, openai_tools, request_timeout=request_timeout)
     while has_tool_calls(response):
       tool_results = await self._execute_tool_calls(
         response,
         turn_index=self._turn_index,
         call_index=self._call_index,
       )
-      request_kwargs = self._build_request_kwargs(
-        tool_results, openai_tools, previous_response_id=response.id
-      )
-      self._call_index += 1
-      response = self._create(request_kwargs, request_timeout)
-      llm_call_step_id = self._record_llm_call(
-        request_kwargs,
-        response,
-        turn_index=self._turn_index,
-        call_index=self._call_index,
-      )
-      self._publish_usage(response)
-      self._emit_response_steps(
-        response,
-        is_terminal=not has_tool_calls(response),
-        llm_call_step_id=llm_call_step_id,
-      )
+      response = await self._exchange(tool_results, openai_tools, request_timeout=request_timeout)
 
-    self._last_response_id = response.id
     try:
       return parse_response(response)
     except Exception as error:
