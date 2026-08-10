@@ -9,7 +9,7 @@ This document explains *how it actually works*: the launch stack, where things l
 `cw` is a subcommand dispatcher:
 
 - **`cw ss <name>`** — start a session in the workspace `<name>`. Creates the workspace on the fly if it doesn't exist. This is the workhorse; everything below describes its behaviour.
-- **`cw resume <name>`** — resume the last Claude session in a workspace, under the flags it ran with. See "Resuming a session".
+- **`cw resume [--grant <name>] [--revoke <name>] <name>`** — resume the last Claude session in a workspace, under the flags it ran with, optionally adjusting its launch scope. See "Resuming a session".
 - **`cw list`** — list every workspace under this project. Each entry shows a state badge (`[.]` live worktree session, `[o]` live container session, `[x]` abandoned), the workspace name, an age (last filesystem touch), and the first user prompt of the latest session. Those names are what `cw resume` / `cw clean` / `cw check-clean` take.
 - **`cw clean [--force] [--dry-run] [<name> ...]`** — remove workspaces whose last session finished cleanly (the session-end record below). Without args, scans every workspace; with explicit names, only those. `--force` removes regardless of the record; `--dry-run` only prints. Safety is shared with `check-clean`. Container workspaces may hold files owned by an in-container uid (root, or `cw` ≠ the host user) that a host-side `rmtree` can't unlink; removal first tries `rmtree`, then escalates to deleting from inside a throwaway root container (any local image of the project's session-image repository). A workspace whose removal fails is logged and skipped rather than aborting the sweep; a non-empty failure count makes the command exit non-zero.
 - **`cw check-clean <name>`** — probe a single workspace. Exit 0 if it's safe to remove; exit 1 with reasons on stderr otherwise.
@@ -260,7 +260,7 @@ A bro's scripts (`bro/bros/<bro>/scripts/*.md`, MRO-merged with derived override
 
 ## Flags that shape the session
 
-These flags apply to `cw ss` and (with the exception of `--drop` / `-p`) are also exported via `bro.cw.add_forwarded_flags` so the `dive-in` wrapper can pass them straight through without per-flag plumbing. `cw resume` takes none of them — the resumed session runs under the recipe recorded for it (see "Resuming a session").
+These flags apply to `cw ss` and (with the exception of `--drop` / `-p`) are also exported via `bro.cw.add_forwarded_flags` so the `dive-in` wrapper can pass them straight through without per-flag plumbing. `cw resume` takes only `--grant` / `--revoke`, layered onto the recorded ones; the rest of a resumed session's recipe comes from its record (see "Resuming a session").
 
 - **`--host`** — host mode (see above): a same-machine git worktree instead of the default isolated docker container.
 - **`--drop`** — remove the workspace on exit without prompting. Honored only when the session exits cleanly (exit 0): a failed or killed session keeps its workspace on disk for inspection and recovery — one log line names it; reclaim it with `cw clean --force` once recovered.
@@ -293,9 +293,11 @@ Trailing positional args after `<name>` are forwarded to `claude` verbatim (`arg
 
 ## Resuming a session
 
-`cw resume <name>` picks up the last Claude session in a workspace. The name is the only argument: the session's recipe comes from the record, not from flags typed again.
+`cw resume <name>` picks up the last Claude session in a workspace. The recipe comes from the record, not from flags typed again — `--grant` / `--revoke` are the exception, because the scope is the one part of it a conversation can outgrow.
 
 That record is the workspace's `resume.json`, the launching `SessionSpec` with the create-only inputs cleared (`--drop`, `--into`, the initial prompt, forwarded claude args) and resume set — `SessionSpec.resume_variant()`, so re-recording a resume is a fixpoint. Every launch writes it before the session runs, so a session that dies without unwinding stays resumable, and it is removed with the workspace. A resume therefore reproduces the session's own `--hold`, `--bro`, `--effort`, `--grant` / `--revoke`, `--fast`, `--raw` and execution mode rather than a fixed approximation, and re-runs the same launch preflights (auth, credential scoping, the summon allow-list) against current credential state. A workspace with no record — its last session predates the record — has nothing to resume from and says so; start a fresh session with `cw ss` instead.
+
+`--grant` / `--revoke` layer onto the recorded lists rather than replacing them, so adjusting a session keeps the rest of its scope: `cw resume --grant @bro-dev <name>` lets an ongoing conversation summon a bro its launch never allowed, with everything else it ran with intact. A value the record carries on the *opposite* side cancels it there instead of joining its own — granting back a revoked `openai` restores whatever the computed scope selected rather than pinning that name into the required tier — while restating one the record already carries on the same side is a no-op override and stops the launch, like every other (see `--grant` above). The adjusted spec is the one the launch validates and records, so a rejected override changes nothing while an accepted one holds for the resumes after it, and a bare `cw resume <name>` still reproduces the session.
 
 From there the launch is an ordinary one: the outer fails fast when the workspace has no recorded claude session (see "The outer layer"), and the runner resolves the newest `.jsonl` in its cwd's projects dir to a session id and adds `--resume <id>` to the claude argv. `--resume` survives on `cw ss` only as that inner-argv token — help-suppressed and rejected outside `--in-place`, like `--in-place` itself.
 

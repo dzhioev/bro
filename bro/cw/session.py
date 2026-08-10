@@ -138,6 +138,28 @@ class SessionSpec:
     unchanged."""
     return replace(self, drop=False, resume=True, into=None, prompt=None, claude_args=[])
 
+  def with_scope_overrides(self, *, grant: list[str], revoke: list[str]) -> 'SessionSpec':
+    """this spec with further grant/revoke values layered onto its own — how
+    `cw resume --grant/--revoke` adjusts the recipe it relaunches.
+
+    A value the spec carries on the opposite side cancels it there rather than
+    joining this one, so granting back a revoked credential leaves the computed
+    scope's own selection standing instead of pinning that exact name into the
+    required tier. Restating a value the spec already carries raises, like every
+    other no-op scope override (`credentials.apply_grant_revoke`).
+    """
+    for values, own, flag in ((grant, self.grant, 'grant'), (revoke, self.revoke, 'revoke')):
+      restated = sorted(set(values) & set(own))
+      if len(restated) > 0:
+        raise ValueError(f'already in the recorded --{flag}: {", ".join(restated)}')
+    kept_grant = [name for name in self.grant if name not in revoke]
+    kept_revoke = [name for name in self.revoke if name not in grant]
+    return replace(
+      self,
+      grant=[*kept_grant, *(name for name in grant if name not in self.revoke)],
+      revoke=[*kept_revoke, *(name for name in revoke if name not in self.grant)],
+    )
+
   def dump(self) -> dict:
     return dataclasses.asdict(self)
 
@@ -311,8 +333,9 @@ def _preflight_session_auth(spec: SessionSpec) -> bool:
   return False
 
 
-def resume_session(name: str) -> int:
-  """relaunch a workspace's last session under its recorded spec (`cw resume`)."""
+def resume_session(name: str, *, grant: list[str], revoke: list[str]) -> int:
+  """relaunch a workspace's last session under its recorded spec (`cw resume`),
+  with `grant`/`revoke` layered onto the ones the record carries."""
   project = project_root()
   try:
     workspace = Workspace.open(name, project)
@@ -322,6 +345,11 @@ def resume_session(name: str) -> int:
   spec = load_resume_spec(workspace)
   if spec is None:
     log.error('no session recorded for %s; start one with `cw ss`', name)
+    return 1
+  try:
+    spec = spec.with_scope_overrides(grant=grant, revoke=revoke)
+  except ValueError as e:
+    log.error('%s', e)
     return 1
   return start_session(spec)
 

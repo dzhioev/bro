@@ -3,6 +3,25 @@ from bro.base.args import Parser
 DEFAULT_HOLD = 'guided'
 
 
+def add_scope_flags(parser: Parser) -> None:
+  """register the launch-scope overrides: the credential and summon-target
+  adjustments layered onto a session's computed scope."""
+  parser.add_argument(
+    '--grant',
+    action='append',
+    default=None,
+    metavar='NAME',
+    help='add a credential (NAME) or a summonable bro (@BRO) to the session scope; a credential grant replaces the selected same-kind name (repeatable); errors on an exact duplicate or unknown name',
+  )
+  parser.add_argument(
+    '--revoke',
+    action='append',
+    default=None,
+    metavar='NAME',
+    help='remove a credential (NAME) or a summonable bro (@BRO) from the session scope (repeatable); errors if not in the scope',
+  )
+
+
 def add_forwarded_flags(parser: Parser) -> None:
   """register the flags that the dive-in wrapper forwards to `cw ss`.
 
@@ -35,20 +54,7 @@ def add_forwarded_flags(parser: Parser) -> None:
     action='store_true',
     help='enable fast mode for the session (disabled by default regardless of host settings)',
   )
-  parser.add_argument(
-    '--grant',
-    action='append',
-    default=None,
-    metavar='NAME',
-    help='add a credential (NAME) or a summonable bro (@BRO) to the session scope; a credential grant replaces the selected same-kind name (repeatable); errors on an exact duplicate or unknown name',
-  )
-  parser.add_argument(
-    '--revoke',
-    action='append',
-    default=None,
-    metavar='NAME',
-    help='remove a credential (NAME) or a summonable bro (@BRO) from the session scope (repeatable); errors if not in the scope',
-  )
+  add_scope_flags(parser)
   parser.add_argument(
     '--effort',
     default='xhigh',
