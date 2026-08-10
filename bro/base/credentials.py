@@ -1,11 +1,22 @@
 #!/usr/bin/env python
 """client-side credential resolver.
 
-a reader calls `credentials.get(name)` for a secret's raw text, or
-`get_json(name)` to parse it as a json object — without caring where it lives or
+a reader calls `credentials.get(kind)` for a secret's raw text, or
+`get_json(kind)` to parse it as a json object — without caring where it lives or
 on which surface it runs. both are thin aliases over `default_store()`.
 resolution walks an ordered list of `Source`s per secret; the first source that
 has the value wins.
+
+reads come in two addressing families, differing only in the names they accept —
+both resolve entries of whatever registry is loaded. the get family (`get`,
+`try_get`, `get_json`, `available`) is kind-addressed: it takes a kind and
+rejects a `kind+instance` name, always reading the kind's default-instance
+entry — the portable mode, since a generated scoped registry stores every
+hydrated secret under its kind name and so resolves kind reads by construction.
+the get_instance family (`get_instance`, `try_get_instance`,
+`get_instance_json`) is storage-addressed: it takes any stored entry name,
+plain or `kind+instance`, for readers that mean one specific entry. the CLI's
+`get` and `list` default to kind addressing; `--instance` switches them.
 
 sources are either stored or minting. two stored types: `local` searches the
 explicit `BRO_CONFIGS_DIR` when set, then `~/.bro/<file>`; deployed services set
@@ -33,9 +44,9 @@ repo, typically `kind+instance` variants of a checked-in kind
 (`github+alice`). the kind entry (the name up to `+`) owns kind-level
 behavior — notably the install hook, a `bro.base.template` text rendered with
 `#name` bound to each instance's own name — so a variant declares only its
-sources. instance names exist only on the host: `build_scoped_store`
-materializes a variant under its kind name, so a scoped session addresses
-kinds only.
+sources. instance entries never enter a generated registry: `build_scoped_store`
+materializes a variant under its kind name, so a scoped store carries kind
+entries only.
 
 a json secret may reference other secrets instead of embedding copies: an
 object node `{"$cred": "<name>"}` anywhere in its tree is replaced at
@@ -123,6 +134,18 @@ def parse_name(name: str) -> tuple[str, Optional[str]]:
   if match is None:
     raise ValueError(f'malformed secret name {name!r}; expected kind or kind+instance')
   return match.group(1), match.group(2)
+
+
+def _require_kind(name: str) -> None:
+  """gate of the kind-addressed read family: the name must be a kind alone,
+  with no instance part."""
+  kind, instance = parse_name(name)
+  if instance is not None:
+    raise ValueError(
+      f'secret {name!r} names a storage instance; this read is kind-addressed — '
+      f'read the kind {kind!r}, or address storage via the get_instance family '
+      f'(--instance in the CLI)'
+    )
 
 
 # the reference-node keys of a json secret (module docstring): `$cred` names the
@@ -427,6 +450,16 @@ class Secret:
     return cls(name, [_source_from_dict(s) for s in data['sources']], install=install)
 
 
+def _parse_json_object(name: str, raw: str) -> dict:
+  try:
+    value = json.loads(raw)
+  except json.JSONDecodeError as e:
+    raise ValueError(f'secret {name!r} is not valid json') from e
+  if not isinstance(value, dict):
+    raise ValueError(f'secret {name!r} is not a json object')
+  return value
+
+
 class Store:
   """resolves secrets against a registry, caching resolved values for its
   lifetime — except values a source declares un-cacheable (`Source.CACHEABLE`,
@@ -443,20 +476,30 @@ class Store:
     self._lock = threading.Lock()
 
   def try_get(self, name: str) -> Optional[str]:
-    """resolve a secret to its raw text (stripped), or None when no source yields
-    a value — the non-raising primitive, for callers that treat a missing secret
-    as an expected case. `get` is the strict wrapper that raises on None. a
-    malformed value (a broken reference, a non-UTF-8 file) still raises: absence
-    is expected, corruption is not."""
+    """kind-addressed `try_get_instance`: resolve a kind to its raw text
+    (stripped), or None when no source yields a value — the non-raising
+    primitive, for callers that treat a missing secret as an expected case.
+    `get` is the strict wrapper that raises on None. a malformed value (a broken
+    reference, a non-UTF-8 file) still raises: absence is expected, corruption
+    is not."""
+    _require_kind(name)
+    return self.try_get_instance(name)
+
+  def try_get_instance(self, name: str) -> Optional[str]:
+    """storage-addressed read: resolve the registry entry stored under `name` —
+    plain (the kind's default instance) or `kind+instance` — to its raw text
+    (stripped), or None when no source yields a value. `get_instance` is the
+    raising wrapper."""
+    parse_name(name)
     resolved = self.resolve(name)
     return resolved[0] if resolved is not None else None
 
   def resolve(self, name: str) -> Optional[tuple[str, bool]]:
-    """resolve a secret to (value, cacheable), or None when no source yields a
-    value. cacheable is False when the winning source — or any source behind the
-    expanded references — declares its values un-cacheable, i.e. a later read
-    may observe a different (re-derived) value; `try_get`/`get` are the
-    value-only spellings."""
+    """resolve a secret by its stored registry name to (value, cacheable), or
+    None when no source yields a value. cacheable is False when the winning
+    source — or any source behind the expanded references — declares its values
+    un-cacheable, i.e. a later read may observe a different (re-derived) value;
+    `try_get_instance`/`get_instance` are the value-only spellings."""
     # one lock around the whole resolve: a secret is fetched at most once even
     # under concurrent callers, and the store is read only a handful of times per
     # process (each value cached on first read), so a lock-free fast path buys
@@ -570,16 +613,23 @@ class Store:
     return value
 
   def get(self, name: str) -> str:
-    """resolve a secret to its raw text, raising `SecretNotFound` when no source
-    yields a value."""
-    value = self.try_get(name)
+    """kind-addressed `get_instance`: resolve a kind to its raw text, raising
+    `SecretNotFound` when no source yields a value."""
+    _require_kind(name)
+    return self.get_instance(name)
+
+  def get_instance(self, name: str) -> str:
+    """storage-addressed `try_get_instance` that raises `SecretNotFound` when no
+    source yields a value."""
+    value = self.try_get_instance(name)
     if value is not None:
       return value
     raise SecretNotFound(name)
 
   def available(self, name: str) -> bool:
-    """whether `name` resolves in this store. the predicate behind both the
-    runtime capability gate and the credential template directives (llm/mcp.py)."""
+    """whether the kind `name` resolves in this store. the predicate behind both
+    the runtime capability gate and the credential template directives
+    (llm/mcp.py)."""
     return self.try_get(name) is not None
 
   def known_names(self) -> frozenset[str]:
@@ -587,16 +637,13 @@ class Store:
     return frozenset(self._registry)
 
   def get_json(self, name: str) -> dict:
-    """resolve a secret and parse it as a json object. raises if the text isn't
+    """kind-addressed `get` parsed as a json object. raises if the text isn't
     valid json or isn't an object (e.g. a scalar token)."""
-    raw = self.get(name)
-    try:
-      value = json.loads(raw)
-    except json.JSONDecodeError as e:
-      raise ValueError(f'secret {name!r} is not valid json') from e
-    if not isinstance(value, dict):
-      raise ValueError(f'secret {name!r} is not a json object')
-    return value
+    return _parse_json_object(name, self.get(name))
+
+  def get_instance_json(self, name: str) -> dict:
+    """storage-addressed `get_instance` parsed as a json object."""
+    return _parse_json_object(name, self.get_instance(name))
 
 
 # every secret the project knows about, in the same shape as a generated
@@ -721,23 +768,24 @@ def default_store() -> Store:
 
 
 def get(name: str) -> str:
-  """resolve a secret to its raw text via the process-wide default store."""
+  """resolve a kind to its raw text via the process-wide default store."""
   return default_store().get(name)
 
 
 def try_get(name: str) -> Optional[str]:
-  """resolve a secret to its raw text via the process-wide default store, or None
+  """resolve a kind to its raw text via the process-wide default store, or None
   when no source yields a value — the non-raising sibling of `get`."""
   return default_store().try_get(name)
 
 
 def get_json(name: str) -> dict:
-  """resolve a secret and parse it as a json object via the process-wide default store."""
+  """resolve a kind and parse it as a json object via the process-wide default store."""
   return default_store().get_json(name)
 
 
 def available(name: str) -> bool:
-  """whether `name` resolves in the process-wide default store, without raising."""
+  """whether the kind `name` resolves in the process-wide default store, without
+  raising."""
   return default_store().available(name)
 
 
@@ -966,14 +1014,14 @@ def install_hooks() -> str:
   return '\n'.join(lines)
 
 
-def _get(name: str, field: Optional[str], as_json: bool) -> Optional[int]:
+def _get(name: str, field: Optional[str], as_json: bool, instance: bool) -> Optional[int]:
   store = default_store()
   try:
     # a bare get prints the raw text; --field / --json need the parsed object.
     if field is None and not as_json:
-      print(store.get(name))
+      print(store.get_instance(name) if instance else store.get(name))
       return None
-    data = store.get_json(name)
+    data = store.get_instance_json(name) if instance else store.get_json(name)
   except (SecretNotFound, ValueError) as e:
     print(str(e), file=sys.stderr)
     return 1
@@ -990,10 +1038,13 @@ def _get(name: str, field: Optional[str], as_json: bool) -> Optional[int]:
   return None
 
 
-def _list_available() -> None:
+def _list_available(instance: bool) -> None:
   store = default_store()
   for name in sorted(store.known_names()):
-    if store.available(name):
+    if instance:
+      if store.try_get_instance(name) is not None:
+        print(name)
+    elif parse_name(name)[1] is None and store.available(name):
       print(name)
 
 
@@ -1005,15 +1056,32 @@ def main(argv: list[str]) -> Optional[int]:
   parser = Parser(description='resolve credentials from the default store')
   subparser = parser.add_subparsers(dest='action', required=True)
   get_parser = subparser.add_parser('get', help='resolve a secret and print it')
-  get_parser.add_argument('name', help='secret name (e.g. anthropic, notion)')
+  get_parser.add_argument(
+    'name',
+    help='secret kind (e.g. anthropic, notion); with --instance, a storage name '
+    '(kind or kind+instance)',
+  )
   get_parser.add_argument('--field', help='for a json secret, print only this field')
   get_parser.add_argument(
     '--json', dest='as_json', action='store_true', help='parse as json and pretty-print (indent=2)'
   )
+  get_parser.add_argument(
+    '--instance',
+    '-i',
+    action='store_true',
+    help='address the registry by storage name instead of kind',
+  )
   get_parser.set_handler(_get)
-  subparser.add_parser(
-    'list', help='list credential names that resolve in the default store'
-  ).set_handler(_list_available)
+  list_parser = subparser.add_parser(
+    'list', help='list credential kinds that resolve in the default store'
+  )
+  list_parser.add_argument(
+    '--instance',
+    '-i',
+    action='store_true',
+    help='list resolvable storage names (kind+instance entries included) instead of kinds',
+  )
+  list_parser.set_handler(_list_available)
   subparser.add_parser(
     'install-hooks', help='print shell install hooks for the container entrypoint to eval'
   ).set_handler(_print_hooks)

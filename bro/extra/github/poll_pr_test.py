@@ -443,7 +443,12 @@ class TestMain:
       return 0
 
     monkeypatch.setattr(poll_pr, 'poll_pr', fake_poll)
-    monkeypatch.setattr(poll_pr.credentials, 'get', lambda name: f'resolved:{name}')
+
+    class _Store:
+      def get_instance(self, name: str) -> str:
+        return f'resolved:{name}'
+
+    monkeypatch.setattr(poll_pr.credentials, 'default_store', lambda: _Store())
     return captured
 
   def test_credential_defaults_to_github(self, monkeypatch):
@@ -451,7 +456,7 @@ class TestMain:
     assert poll_pr.main(['poll-pr', 'x/y', '1']) == 0
     assert captured['token']() == 'resolved:github'
 
-  def test_credential_flag_resolves_per_read(self, monkeypatch):
+  def test_credential_flag_accepts_a_storage_name(self, monkeypatch):
     captured = self._capture_poll(monkeypatch)
-    assert poll_pr.main(['poll-pr', 'x/y', '1', '--credential', 'other']) == 0
-    assert captured['token']() == 'resolved:other'
+    assert poll_pr.main(['poll-pr', 'x/y', '1', '--credential', 'github+other']) == 0
+    assert captured['token']() == 'resolved:github+other'

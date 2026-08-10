@@ -300,7 +300,8 @@ def _owner_repo(arg: str) -> tuple[str, str]:
 
 
 def _token_provider(credential: str) -> Callable[[], str]:
-  return lambda: credentials.get(credential)
+  # storage-addressed: the flag may name a kind or a kind+instance variant
+  return lambda: credentials.default_store().get_instance(credential)
 
 
 def main(argv: list[str]) -> Optional[int]:
