@@ -24,7 +24,6 @@ they land, like `tail -f`.
 """
 
 import datetime
-import http.client
 import json
 import re
 import sys
@@ -35,9 +34,9 @@ from typing import Any, Optional
 import bro.base.args as base_args
 from bro.base import log, pager
 from bro.base.ansi import Colors, should_color
-from bro.trails.client import HTTPStatusError, TrailsClient, default_client, is_retryable_status
 from bro.trails.lineage import walk_header_chain
 from bro.trails.model import UNREPORTED_END_INFERENCE, spill_descriptor
+from bro.trails.store import TrailsStore, TransientUnavailable, default_store
 
 __cli_name__ = 'rewind'
 
@@ -128,7 +127,7 @@ def _format_trail_row(trail: dict, colors: Colors) -> str:
   )
 
 
-def _command_list(client: TrailsClient, args: dict, colors: Colors) -> int:
+def _command_list(client: TrailsStore, args: dict, colors: Colors) -> int:
   trails_iter = client.iter_trails(
     harness=args.get('harness'),
     bro=args.get('bro'),
@@ -309,7 +308,7 @@ def _format_step_summary(step: dict, colors: Colors) -> str:
 
 
 def _render_native_trail(
-  client: TrailsClient, trail: dict, colors: Colors
+  client: TrailsStore, trail: dict, colors: Colors
 ) -> tuple[str, Optional[int]]:
   rows = list(client.iter_steps(trail['id']))
   output = [_format_header(trail, colors)]
@@ -505,7 +504,7 @@ class _ConversationTimeline:
     return [heading, *blocks]
 
 
-def _segment_messages(client: TrailsClient, trail_id: str, bound: Optional[dict]) -> list[dict]:
+def _segment_messages(client: TrailsStore, trail_id: str, bound: Optional[dict]) -> list[dict]:
   messages: list[dict] = []
   if bound is None:
     return list(client.iter_messages(trail_id))
@@ -555,7 +554,7 @@ def _format_context(records: Any, colors: Colors) -> Optional[str]:
 
 
 def _render_conversation(
-  client: TrailsClient, trail: dict, colors: Colors
+  client: TrailsStore, trail: dict, colors: Colors
 ) -> tuple[str, _ConversationTimeline, Optional[int]]:
   segments = walk_header_chain(trail, client.get_trail)
   message_lists = [_segment_messages(client, header['id'], bound) for header, bound in segments]
@@ -582,7 +581,7 @@ def _render_conversation(
 
 
 def _follow_batches(
-  client: TrailsClient,
+  client: TrailsStore,
   trail_id: str,
   *,
   iterator: Callable[[str, Optional[int]], Iterator[dict]],
@@ -607,17 +606,13 @@ def _follow_batches(
         if len(drained) > 0:
           yield drained
         return
-    except HTTPStatusError as exception:
-      if not is_retryable_status(exception.status):
-        raise
-      log.warning('transient trails-server error, retrying: %s', exception)
-    except (OSError, http.client.HTTPException) as exception:
-      log.warning('transient trails-server error, retrying: %s', exception)
+    except TransientUnavailable as exception:
+      log.warning('trails store temporarily unavailable, retrying: %s', exception)
     sleep(interval)
 
 
 def _show_or_follow(
-  client: TrailsClient,
+  client: TrailsStore,
   args: dict,
   initial: str,
   after: Optional[int],
@@ -651,7 +646,7 @@ def _show_or_follow(
   return 0
 
 
-def _command_show(client: TrailsClient, args: dict, colors: Colors) -> int:
+def _command_show(client: TrailsStore, args: dict, colors: Colors) -> int:
   trail = client.get_trail(args['trail_id'])
   initial, timeline, after = _render_conversation(client, trail, colors)
 
@@ -671,7 +666,7 @@ def _command_show(client: TrailsClient, args: dict, colors: Colors) -> int:
   )
 
 
-def _command_steps(client: TrailsClient, args: dict, colors: Colors) -> int:
+def _command_steps(client: TrailsStore, args: dict, colors: Colors) -> int:
   trail = client.get_trail(args['trail_id'])
   initial, after = _render_native_trail(client, trail, colors)
   return _show_or_follow(
@@ -726,7 +721,7 @@ def _grep_lines(
   return output
 
 
-def _command_grep(client: TrailsClient, args: dict, colors: Colors) -> int:
+def _command_grep(client: TrailsStore, args: dict, colors: Colors) -> int:
   """Exit 0 when at least one line matched, 1 otherwise — like grep."""
   try:
     regex = re.compile(args['pattern'], re.IGNORECASE if args.get('ignore_case', False) else 0)
@@ -767,7 +762,7 @@ def _command_grep(client: TrailsClient, args: dict, colors: Colors) -> int:
 # --- tree -------------------------------------------------------------------------
 
 
-def _command_tree(client: TrailsClient, args: dict, colors: Colors) -> int:
+def _command_tree(client: TrailsStore, args: dict, colors: Colors) -> int:
   trail_id = args['trail_id']
   start = client.get_trail(trail_id)
 
@@ -780,7 +775,7 @@ def _command_tree(client: TrailsClient, args: dict, colors: Colors) -> int:
 
 
 def _render_tree(
-  client: TrailsClient,
+  client: TrailsStore,
   trail: dict,
   prefix: str,
   *,
@@ -926,7 +921,7 @@ def main(argv: list[str]) -> Optional[int]:
   return parser.dispatch(_with_default_command(argv))
 
 
-def _dispatch(command: Callable[[TrailsClient, dict, Colors], int], args: dict) -> int:
+def _dispatch(command: Callable[[TrailsStore, dict, Colors], int], args: dict) -> int:
   colors = Colors(should_color(args['color']))
-  with default_client() as client:
+  with default_store() as client:
     return command(client, args, colors)

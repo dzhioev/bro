@@ -20,19 +20,8 @@ MAX_TRANSACTION_RECORDS = 50
 UNIVERSAL_BODY_STORAGE = 'trail_steps_v2'
 
 
-class TrailNotFound(Exception):
-  pass
-
-
 class BodyTooLarge(Exception):
   pass
-
-
-class AppendConflict(Exception):
-  def __init__(self, expected: int, actual: int):
-    super().__init__(f'append offset {expected} does not match trail extent {actual}')
-    self.expected = expected
-    self.actual = actual
 
 
 _serializer = TypeSerializer()

@@ -82,6 +82,8 @@ PYTEST_FILES = [
   'bro/run_test.py',
   'bro/packaging_test.py',
   'bro/trails/client_test.py',
+  'bro/trails/store_test.py',
+  'bro/trails/local_test.py',
   'bro/trails/lineage_test.py',
   'bro/trails/rewind_test.py',
   'bro/trails/server/server_test.py',

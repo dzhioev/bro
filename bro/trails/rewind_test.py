@@ -4,7 +4,7 @@ from typing import Any, Optional, cast
 import pytest
 
 from bro.base.ansi import Colors
-from bro.trails.client import HTTPStatusError, TrailsClient
+from bro.trails.backends import BACKENDS
 from bro.trails.rewind import (
   _command_grep,
   _command_show,
@@ -18,14 +18,14 @@ from bro.trails.rewind import (
   _truncate_oneline,
   _with_default_command,
 )
-from bro.trails.server.backends import BACKENDS
+from bro.trails.store import TrailNotFound, TrailsStore
 
 NO_COLOR = Colors(enabled=False)
 LULID = '01kydtgppz-y7fdwep2-apw9ag3b'
 
 
 class FakeClient:
-  """in-memory stand-in for the TrailsClient read surface rewind drives."""
+  """in-memory stand-in for the TrailsStore read surface rewind drives."""
 
   def __init__(self):
     self.trails: dict[str, dict] = {}
@@ -67,7 +67,7 @@ class FakeClient:
 
   def get_trail(self, trail_id: str) -> dict:
     if trail_id not in self.trails:
-      raise HTTPStatusError(404, f'trail not found: {trail_id}')
+      raise TrailNotFound(trail_id)
     return self.trails[trail_id]
 
   def iter_steps(self, trail_id: str, *, after: Optional[int] = None):
@@ -110,9 +110,9 @@ class FakeClient:
     return self.contexts.get(trail_id)
 
 
-def _cast(client: FakeClient) -> 'TrailsClient':
-  # FakeClient stands in for the TrailsClient surface structurally
-  return cast('TrailsClient', client)
+def _cast(client: FakeClient) -> 'TrailsStore':
+  # FakeClient stands in for the TrailsStore surface structurally
+  return cast('TrailsStore', client)
 
 
 def _user(text: str, uuid: str = 'u1') -> str:
@@ -420,7 +420,7 @@ class TestShow:
   def test_unknown_id_propagates_not_found(self):
     client = FakeClient()
     args = {'trail_id': 'b2249daa', 'color': 'never', 'no_pager': True}
-    with pytest.raises(HTTPStatusError, match='trail not found'):
+    with pytest.raises(TrailNotFound, match='trail not found'):
       _command_show(_cast(client), args, NO_COLOR)
 
 
@@ -498,7 +498,7 @@ class TestGrep:
   def test_explicit_unknown_id_propagates_not_found(self):
     client = FakeClient()
     args = self._args('needle', trails=['b2249daa'])
-    with pytest.raises(HTTPStatusError, match='trail not found'):
+    with pytest.raises(TrailNotFound, match='trail not found'):
       _command_grep(_cast(client), args, NO_COLOR)
 
 

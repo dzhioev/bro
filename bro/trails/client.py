@@ -2,10 +2,6 @@
 
 `TrailsClient` owns the persistent authenticated HTTPS transport for paged
 headers, steps, messages, launch context, and every recording endpoint.
-
-`fetch_recorded_trail` rehydrates the shared `bro.trails.model` records consumed by
-`bro.fork`. It follows spill descriptors and inlines their full bodies because
-fork replay needs the complete provider response rather than a presigned URL.
 """
 
 import http.client
@@ -14,19 +10,19 @@ import ssl
 import threading
 import time
 import urllib.request
-from collections.abc import Iterator
-from types import TracebackType
 from typing import Any, Optional
 from urllib.parse import urlencode, urlparse
 
-from bro.base import credentials
-from bro.trails.model import ForkedFrom, RecordedTrail, Step, Trail, spill_descriptor
-
-DEFAULT_LIST_PAGE_SIZE = 100
-DEFAULT_STEPS_PAGE_SIZE = 200
+from bro.trails.model import spill_descriptor
+from bro.trails.store import (
+  RECORD_RETRY_DELAYS_SECONDS,
+  AppendConflict,
+  TrailNotFound,
+  TrailsStore,
+  TransientUnavailable,
+)
 
 _DEFAULT_RETRY_DELAYS_SECONDS = (0.0,)
-RECORD_RETRY_DELAYS_SECONDS = (0.1, 0.5, 2.0)
 
 
 class HTTPStatusError(Exception):
@@ -41,7 +37,7 @@ def is_retryable_status(status: int) -> bool:
   return status >= 500 or status == 429
 
 
-class TrailsClient:
+class TrailsClient(TrailsStore):
   """synchronous HTTPS client for the trails server.
 
   one persistent connection per client; transport blips drop the socket and
@@ -93,41 +89,6 @@ class TrailsClient:
       query['limit'] = str(limit)
     return self._get('/v1/trails', query)
 
-  def iter_trails(
-    self,
-    *,
-    harness: Optional[str] = None,
-    bro: Optional[str] = None,
-    forked_from: Optional[str] = None,
-    since: Optional[str] = None,
-    until: Optional[str] = None,
-    page_size: int = DEFAULT_LIST_PAGE_SIZE,
-    max_items: Optional[int] = None,
-  ) -> Iterator[dict]:
-    """walk every matching trail header across cursor pages. `max_items` caps
-    the total — useful for the CLI's `--limit` flag.
-    """
-    yielded = 0
-    cursor: Optional[str] = None
-    while True:
-      page = self.list_trails(
-        harness=harness,
-        bro=bro,
-        forked_from=forked_from,
-        since=since,
-        until=until,
-        cursor=cursor,
-        limit=page_size,
-      )
-      for trail in page['trails']:
-        yield trail
-        yielded += 1
-        if max_items is not None and yielded >= max_items:
-          return
-      cursor = page.get('next')
-      if cursor is None:
-        return
-
   def get_trail(self, trail_id: str) -> dict:
     return self._get(f'/v1/trails/{trail_id}', {})
 
@@ -158,24 +119,6 @@ class TrailsClient:
       query['limit'] = str(limit)
     return self._get(f'/v1/trails/{trail_id}/steps', query)
 
-  def iter_steps(
-    self,
-    trail_id: str,
-    *,
-    after: Optional[int] = None,
-    page_size: int = DEFAULT_STEPS_PAGE_SIZE,
-  ) -> Iterator[dict]:
-    """walk steps across cursor pages. `after` starts the walk strictly past
-    that step id (the server's exclusive-start cursor), so an incremental
-    caller can resume from the last step it has seen.
-    """
-    while True:
-      page = self.get_steps(trail_id, after=after, limit=page_size)
-      yield from page['steps']
-      after = page.get('next')
-      if after is None:
-        return
-
   def get_messages(
     self,
     trail_id: str,
@@ -193,29 +136,12 @@ class TrailsClient:
       query.append(('limit', str(limit)))
     return self._get_pairs(f'/v1/trails/{trail_id}/messages', query)
 
-  def iter_messages(
-    self,
-    trail_id: str,
-    *,
-    types: Optional[set[str]] = None,
-    after: Optional[int] = None,
-    page_size: int = DEFAULT_STEPS_PAGE_SIZE,
-  ) -> Iterator[dict]:
-    while True:
-      page = self.get_messages(trail_id, types=types, after=after, limit=page_size)
-      yield from page['messages']
-      after = page.get('next')
-      if after is None:
-        return
-
   def get_launch_context(self, trail_id: str) -> Optional[Any]:
     """the trail's stored launch-context document, or None when it has none."""
     try:
       return self._get(f'/v1/trails/{trail_id}/context', {})['launch_context']
-    except HTTPStatusError as exception:
-      if exception.status == 404:
-        return None
-      raise
+    except TrailNotFound:
+      return None
 
   def create_trail(self, payload: dict) -> dict:
     """open a trail (`POST /v1/trails`, harness-native `body` envelope included);
@@ -290,17 +216,6 @@ class TrailsClient:
     with self._lock:
       self._drop_connection()
 
-  def __enter__(self) -> 'TrailsClient':
-    return self
-
-  def __exit__(
-    self,
-    exception_type: Optional[type[BaseException]],
-    exception: Optional[BaseException],
-    traceback: Optional[TracebackType],
-  ) -> None:
-    self.close()
-
   def fetch_spilled_body(self, url: str) -> Any:
     """download a spilled step body from its presigned S3 URL and parse it the
     same way the server resolves an inline body (`storage._resolve_body`): JSON
@@ -368,23 +283,34 @@ class TrailsClient:
           response = connection.getresponse()
           raw = response.read()
           if response.status >= 400:
-            raise HTTPStatusError(
+            exception = HTTPStatusError(
               response.status,
               f'{method} {path} -> HTTP {response.status}: {raw.decode(errors="replace")}',
             )
+            if response.status == 404:
+              raise TrailNotFound(path.split('?', 1)[0]) from exception
+            if response.status == 409:
+              conflict = json.loads(raw)
+              raise AppendConflict(conflict['expected'], conflict['extent']) from exception
+            if is_retryable_status(response.status):
+              raise TransientUnavailable(str(exception)) from exception
+            raise exception
           if response.status == 204 or len(raw) == 0:
             return {}
           return json.loads(raw)
-        except HTTPStatusError as exception:
+        except (TrailNotFound, AppendConflict, HTTPStatusError, ValueError, KeyError, TypeError):
           self._drop_connection()
-          if not is_retryable_status(exception.status):
-            raise
+          raise
+        except TransientUnavailable as exception:
           last_exception = exception
-        except Exception as exception:
+          self._drop_connection()
+        except (OSError, http.client.HTTPException) as exception:
           last_exception = exception
           self._drop_connection()
     assert last_exception is not None
-    raise last_exception
+    if isinstance(last_exception, TransientUnavailable):
+      raise last_exception
+    raise TransientUnavailable(str(last_exception)) from last_exception
 
   def _get_connection(self) -> http.client.HTTPSConnection:
     if self._connection is not None:
@@ -403,72 +329,3 @@ class TrailsClient:
     except Exception:
       pass
     self._connection = None
-
-
-def default_client() -> TrailsClient:
-  """build a `TrailsClient` from the shared `trails` secret."""
-  config = credentials.get_json('trails')
-  return TrailsClient(config['base_url'], config['token'])
-
-
-# fields the server stamps onto every step row alongside the per-kind extras.
-# everything else goes into `Step.extras` so callers can inspect provider- and
-# kind-specific metadata (turn_index, call_index, tool_name, call_id, response_id, ...).
-_STEP_CANONICAL_FIELDS = frozenset(
-  {'trail_id', 'step_id', 'ts', 'kind', 'body', 'usage', 'payload_sha256'}
-)
-
-
-def trail_from_header(data: dict) -> Trail:
-  """rehydrate a server header dict into the typed `Trail` dataclass.
-
-  raises `KeyError` if a required field is missing — the server always emits
-  the full header (nullable fields land as `None`), so a `KeyError` means the
-  payload came from somewhere unexpected.
-  """
-  forked_from_data = data.get('forked_from')
-  forked_from = ForkedFrom(**forked_from_data) if forked_from_data is not None else None
-  return Trail(
-    id=data['id'],
-    harness=data['harness'],
-    bro=data.get('bro'),
-    version=data['version'],
-    native=data['native'],
-    started_at=data['started_at'],
-    interactive=data['interactive'],
-    surface=data['surface'],
-    forked_from=forked_from,
-    summoned_by=data.get('summoned_by'),
-  )
-
-
-def step_from_row(data: dict) -> Step:
-  """rehydrate a server step row into the typed `Step` dataclass.
-
-  splits the canonical step fields off into the dataclass attributes and packs
-  every other key (turn_index, call_index, tool_name, arguments, call_id,
-  response_id, ...) into `extras`.
-  """
-  extras = {k: v for k, v in data.items() if k not in _STEP_CANONICAL_FIELDS}
-  return Step(
-    trail_id=data['trail_id'],
-    step_id=data['step_id'],
-    ts=data['ts'],
-    kind=data['kind'],
-    body=data.get('body'),
-    extras=extras,
-    usage=data.get('usage'),
-  )
-
-
-def fetch_recorded_trail(client: TrailsClient, trail_id: str) -> RecordedTrail:
-  """fetch a trail header and all of its steps and return them as a
-  `RecordedTrail` — the shape `bro.fork.fork()` and `replay_messages` consume.
-  """
-  header = trail_from_header(client.get_trail(trail_id))
-  steps = []
-  for row in client.iter_steps(trail_id):
-    # follow any spill descriptor so the rehydrated step carries the full body;
-    # large `llm_call.response.output`s would otherwise be lost from replay.
-    steps.append(step_from_row({**row, 'body': client.resolve_body(row.get('body'))}))
-  return RecordedTrail(header=header, steps=steps)

@@ -7,17 +7,17 @@ from typing import Any, Optional
 
 from bro.base import configs
 from bro.llm.tracker import EndReason, StepKind, Tracker
-from bro.trails.client import TrailsClient
 from bro.trails.model import ForkedFrom, tools_sha256
 from bro.trails.record import spine
 from bro.trails.record.spine import Recording
+from bro.trails.store import TrailsStore
 
 
 class Recorder(Tracker):
   """adapt bro tracker events into universal ordinal records."""
 
-  def __init__(self, base_url: str, token: str, *, timeout: float = 5.0):
-    self._client = TrailsClient(base_url, token, timeout=timeout)
+  def __init__(self, store: TrailsStore):
+    self._store = store
     self._recording: Optional[Recording] = None
     self._lock = threading.RLock()
     self._keepalive_stop: Optional[threading.Event] = None
@@ -53,7 +53,7 @@ class Recorder(Tracker):
     }
     if summoned_by is not None:
       payload['summoned_by'] = summoned_by
-    recording = Recording.create(self._client, payload)
+    recording = Recording.create(self._store, payload)
     with self._lock:
       self._recording = recording
     self._start_keepalive()
@@ -93,11 +93,11 @@ class Recorder(Tracker):
       logging.warning('trails end_trail failed for trail %s: %s', recording.trail_id, exception)
     with self._lock:
       self._recording = None
-    self._client.close()
+    self._store.close()
 
   def close(self) -> None:
     self._stop_keepalive()
-    self._client.close()
+    self._store.close()
 
   def _start_keepalive(self) -> None:
     stop = threading.Event()

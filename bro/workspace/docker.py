@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 import signal
 import socket
@@ -244,6 +245,14 @@ def prepare_container(launch: Launch, project: Path) -> str:
   _ensure_image(tag)
   log.verbose('hydrating the scoped credential store')
   store = credentials.build_scoped_store(launch.secrets, optional=launch.optional_secrets)
+  extra_env = dict(launch.env)
+  extra_mounts = list(launch.extra_mounts)
+  local_trails_root = _local_trails_root(store)
+  if local_trails_root is not None:
+    container_trails_root = '/home/cw/.bro-trails'
+    local_trails_root.mkdir(parents=True, exist_ok=True)
+    extra_env['BRO_TRAILS_DIR'] = container_trails_root
+    extra_mounts.append(f'{local_trails_root}:{container_trails_root}')
   argv = _docker_create_argv(
     tag,
     launch.name,
@@ -252,12 +261,29 @@ def prepare_container(launch: Launch, project: Path) -> str:
     branch,
     launch.command,
     docker_sock=launch.docker_sock,
-    extra_env=launch.env,
+    extra_env=extra_env,
     forward_env=launch.forward_env,
     tty=launch.tty,
-    extra_mounts=list(launch.extra_mounts),
+    extra_mounts=extra_mounts,
   )
   return _create_container(argv, _bro_tarball(store), launch.name)
+
+
+def _local_trails_root(store: Mapping[str, bytes]) -> Optional[Path]:
+  raw = store.get('trails.cred')
+  if raw is None:
+    return None
+  try:
+    config = json.loads(raw)
+  except (UnicodeDecodeError, json.JSONDecodeError) as exception:
+    raise ValueError('trails credential must be a JSON object') from exception
+  if not isinstance(config, dict):
+    raise ValueError('trails credential must be a JSON object')
+  if config.get('backend', 'service') != 'local':
+    return None
+  from bro.trails.store import local_root
+
+  return local_root().resolve()
 
 
 def _docker_create_argv(

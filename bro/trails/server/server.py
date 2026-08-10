@@ -15,8 +15,9 @@ from aiohttp import web
 
 import bro.base.args as base_args
 from bro.base import log
+from bro.trails import backends
 from bro.trails.model import MESSAGE_TYPES, UUID_LOOKUP_LIMIT
-from bro.trails.server import backends, storage
+from bro.trails.server import storage
 
 __cli_name__ = 'trails-server'
 
