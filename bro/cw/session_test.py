@@ -117,6 +117,13 @@ class TestGrantRevoke:
     assert 'gmail_creds' in launch.secrets
     assert 'notion' not in launch.secrets
 
+  def test_start_session_grant_replaces_a_credential_instance(self):
+    with _ContainerHarness(secrets={'brog', 'github'}) as harness:
+      rc = cw_session.start_session(_spec(drop=True, grant=['brog+github']))
+    assert rc == 0
+    launch = harness.run_in_container.call_args.args[0]
+    assert launch.secrets == {'brog+github', 'github'}
+
   def test_start_session_can_revoke_an_optional_secret(self):
     with _ContainerHarness(optional_secrets={'openai'}) as harness:
       rc = cw_session.start_session(_spec(drop=True, revoke=['openai']))

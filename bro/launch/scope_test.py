@@ -212,6 +212,17 @@ class TestPreflightScopedLaunch:
     # the store is hydrated from the finalized tiers, not the incoming ones
     assert build.call_args == (({'github', 'gmail_creds'},), {'optional': {'openai'}})
 
+  def test_grant_replaces_a_selected_same_kind_credential(self):
+    with (
+      patch('bro.launch.summon_control.summon_allow_list', return_value=set()),
+      patch('bro.launch.scope.credentials.build_scoped_store', return_value={}),
+    ):
+      scoped, _, _ = self._preflight(
+        bro.launch.scope.ScopedSecrets({'brog', 'github'}, set(), True),
+        grant=['brog+github'],
+      )
+    assert scoped.required == {'brog+github', 'github'}
+
   def test_bad_credential_override_raises_launch_scope_error(self):
     with pytest.raises(
       bro.launch.scope.LaunchScopeError, match='already in the scoped credential set'
@@ -255,7 +266,7 @@ class TestLaunchViewStore:
       store = bro.launch.scope.launch_view_store(
         bro.launch.scope.ScopedSecrets({'brog', 'github'}, {'openai'}, True),
         grant=['brog+github', '@dev'],
-        revoke=['brog'],
+        revoke=[],
       )
     assert store == 'the-view'
     assert view.call_args == (({'brog+github', 'github'},), {'optional': {'openai'}})

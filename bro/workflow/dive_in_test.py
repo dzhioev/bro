@@ -238,14 +238,14 @@ class TestTaskMode:
 
     monkeypatch.setattr(dive_in, '_task_system', fake_task_system)
     monkeypatch.setattr(dive_in, '_prefetch_task', lambda system, ref: (_brog_task(), 'task block'))
-    argv = ['dive-in', '-n', '-t', UUID, '--grant', 'brog+github', '--revoke', 'brog']
+    argv = ['dive-in', '-n', '-t', UUID, '--grant', 'brog+github']
     rc = dive_in.main([*argv, '--bro', 'dev', '--raw'])
     assert rc == 0
-    assert captured == {'grant': ['brog+github'], 'revoke': ['brog'], 'bro': 'dev', 'raw': True}
+    assert captured == {'grant': ['brog+github'], 'revoke': [], 'bro': 'dev', 'raw': True}
     # the flags still ride into the forwarded `cw ss` untouched
     args = cw.build_parser().parse(shlex.split(capsys.readouterr().out.strip()))
     assert args['grant'] == ['brog+github']
-    assert args['revoke'] == ['brog']
+    assert args['revoke'] is None
 
   def test_scope_without_brog_fails_before_any_launch(self, fake_proj, monkeypatch, capsys):
     from bro.base import credentials
@@ -312,9 +312,9 @@ class TestTaskSystem:
 
     calls: dict = {}
     self._fake_wiring(monkeypatch, calls)
-    system = dive_in._task_system(['brog+github'], ['brog'], None, False)
+    system = dive_in._task_system(['brog+github'], [], None, False)
     assert calls['scoped'] == ('bro-dev', Surface.CW_SESSION, {'brog': 'github'})
-    assert calls['view'] == ('base-scope', ['brog+github'], ['brog'])
+    assert calls['view'] == ('base-scope', ['brog+github'], [])
     assert calls['read'] == 'brog'
     assert isinstance(system, brog_github.System)
 

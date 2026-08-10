@@ -47,8 +47,8 @@ NO_TRAILS_HELP = (
 )
 GRANT_HELP = (
   "add a credential (NAME) or a summonable bro (@BRO) to the run's scope on top of the "
-  "bro's manifest and may_summon defaults (repeatable); errors if already in the scope "
-  'or unknown'
+  "bro's manifest and may_summon defaults; a credential grant replaces the selected "
+  'same-kind name (repeatable); errors on an exact duplicate or unknown name'
 )
 REVOKE_HELP = (
   "remove a credential (NAME) or a summonable bro (@BRO) from the run's scope "

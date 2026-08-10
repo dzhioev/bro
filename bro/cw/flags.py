@@ -40,7 +40,7 @@ def add_forwarded_flags(parser: Parser) -> None:
     action='append',
     default=None,
     metavar='NAME',
-    help='add a credential (NAME) or a summonable bro (@BRO) to the session scope on top of the computed set (repeatable); errors if already in the scope or unknown',
+    help='add a credential (NAME) or a summonable bro (@BRO) to the session scope; a credential grant replaces the selected same-kind name (repeatable); errors on an exact duplicate or unknown name',
   )
   parser.add_argument(
     '--revoke',
