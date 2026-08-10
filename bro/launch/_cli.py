@@ -341,4 +341,9 @@ def run_main(
   except BroRaised as error:
     log.error('raised: %s', error.reason)
     return 1
+  except KeyboardInterrupt:
+    # Ctrl+C cancels the run through the loop; the shell asked for this, so it
+    # reads as an interrupted command, not a crashed one
+    log.error('interrupted')
+    return 130
   print(result)

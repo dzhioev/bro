@@ -7,6 +7,8 @@ Bros launching and managing layer. It owns the shared launch machinery behind th
 - `ask.py` (`ask`) — the `ask` console script, a thin alias of `bro run`.
 
   Input passes through verbatim, `/<name>` invocations included: the bro's `## Skills` prompt maps that syntax to the framework `@::skill` loader, with the rest treated as arguments to the returned instructions. There is no client-side expansion or validation; an empty body means the requested skill is unavailable.
+
+  Ctrl+C cancels a run through the loop — the tool call in flight takes its process group with it — and `run_main` turns the re-raised `KeyboardInterrupt` into exit 130, so an interrupted run reads as an interrupted command rather than a crash.
 - `call.py` (`call`) — the canonical `bro chat` implementation and its thin `call` alias; drives an interactive `bro.send()` conversation.
 
   The initial message passes through verbatim like every later REPL turn — an `@:ask reviewer …:@` command reaches the dispatcher as-is (see `ask.py`).
