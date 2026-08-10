@@ -1,0 +1,223 @@
+import hashlib
+import json
+import threading
+from datetime import UTC, datetime, timedelta
+
+import pytest
+
+from bro.trails.local import LocalStore
+from bro.trails.model import canonical_json_bytes
+from bro.trails.record.bro import Recorder
+from bro.trails.record.claude import Recorder as ClaudeRecorder
+from bro.trails.store import AppendConflict, TrailNotFound, fetch_recorded_trail
+
+
+def _bro_payload(*, bro: str = 'dev', forked_from: dict | None = None) -> dict:
+  payload = {
+    'harness': 'bro',
+    'bro': bro,
+    'version': 'test',
+    'interactive': False,
+    'surface': 'ask',
+    'native': {'llm': {'type': 'echo', 'model': 'echo'}},
+    'body': {'records': [{'kind': 'system_prompt', 'body': 'prompt'}]},
+  }
+  if forked_from is not None:
+    payload['forked_from'] = forked_from
+  return payload
+
+
+def _claude_payload(raw: str, *, context=None) -> dict:
+  body = {'records': [raw]}
+  if context is not None:
+    body['launch_context'] = context
+  return {
+    'harness': 'claude',
+    'version': 'test',
+    'interactive': True,
+    'surface': 'cw',
+    'native': {
+      'llm': {},
+      'segment': 'segment',
+      'cw_command': 'cw ss',
+      'harness_version': 'test',
+    },
+    'body': body,
+  }
+
+
+def test_records_and_replays_bro_trails(tmp_path):
+  store = LocalStore(tmp_path)
+  recorder = Recorder(store)
+  trail_id = recorder.start_trail(
+    bro='dev',
+    llm_spec={'type': 'echo', 'model': 'echo'},
+    system_prompt='prompt',
+    forked_from=None,
+    interactive=False,
+    surface='ask',
+  )
+  assert recorder.step('user_input', 'hello', turn_index=0) == 1
+  recorder.end_trail('ok')
+
+  trail = fetch_recorded_trail(LocalStore(tmp_path), trail_id)
+  assert [step.kind for step in trail.steps] == ['system_prompt', 'user_input']
+  assert trail.header.bro == 'dev'
+  assert (tmp_path / 'trails' / trail_id / 'header.json').is_file()
+  assert (tmp_path / 'trails' / trail_id / 'steps.jsonl').is_file()
+
+
+def test_claude_recorder_writes_through_local_store(tmp_path):
+  projects = tmp_path / 'projects'
+  projects.mkdir()
+  raw = json.dumps(
+    {
+      'type': 'user',
+      'uuid': 'uuid-recorder',
+      'timestamp': '2026-01-01T00:00:00Z',
+      'message': {'content': 'hello'},
+    }
+  )
+  (projects / 'segment.jsonl').write_text(raw + '\n')
+  store = LocalStore(tmp_path / 'storage')
+  recorder = ClaudeRecorder(
+    projects,
+    'workspace',
+    store,
+    llm={},
+    cw_command='cw ss',
+    started_after=0,
+  )
+
+  assert recorder.tick() is True
+  assert recorder.active is not None
+  trail_id = recorder.active.trail_id
+  assert recorder.finalize() is True
+  assert store.get_step(trail_id, 0)['uuid'] == 'uuid-recorder'
+  assert store.get_trail(trail_id)['end']['reason'] == 'ok'
+
+
+def test_claude_rows_are_reparsed_and_projected(tmp_path):
+  store = LocalStore(tmp_path)
+  raw = json.dumps(
+    {
+      'type': 'user',
+      'uuid': 'uuid-1',
+      'timestamp': '2026-01-01T00:00:00Z',
+      'message': {'content': 'hello'},
+    }
+  )
+  created = store.create_trail(_claude_payload(raw, context={'workspace': 'one'}))
+  trail_id = created['id']
+
+  assert store.get_step(trail_id, 0)['raw'] == raw
+  assert store.find_steps_by_uuid({'uuid-1'}) == [
+    {'trail_id': trail_id, 'step_id': 0, 'uuid': 'uuid-1'}
+  ]
+  assert store.get_step_uuids(trail_id) == [{'step_id': 0, 'uuid': 'uuid-1'}]
+  assert store.get_messages(trail_id)['messages'][0]['type'] == 'user_input'
+  assert store.get_launch_context(trail_id) == {'workspace': 'one'}
+
+
+def test_large_bodies_stay_inline(tmp_path):
+  store = LocalStore(tmp_path)
+  large = 'x' * (60 * 1024)
+  trail_id = store.create_trail(_bro_payload())['id']
+  store.append_records(trail_id, 1, [{'kind': 'user_input', 'body': large}])
+
+  row = store.get_step(trail_id, 1)
+  assert row['body'] == large
+  assert 'body_s3' not in row
+
+
+def test_appends_are_serialized_and_conflicts_are_typed(tmp_path):
+  store = LocalStore(tmp_path)
+  trail_id = store.create_trail(_bro_payload())['id']
+  barrier = threading.Barrier(3)
+  results: list[object] = []
+
+  def append(body: str) -> None:
+    barrier.wait()
+    try:
+      results.append(store.append_records(trail_id, 1, [{'kind': 'user_input', 'body': body}]))
+    except Exception as exception:
+      results.append(exception)
+
+  threads = [threading.Thread(target=append, args=(body,)) for body in ('one', 'two')]
+  for thread in threads:
+    thread.start()
+  barrier.wait()
+  for thread in threads:
+    thread.join()
+
+  assert sum(isinstance(result, AppendConflict) for result in results) == 1
+  assert sum(isinstance(result, dict) for result in results) == 1
+  assert store.get_trail(trail_id)['extent'] == 2
+
+
+def test_committed_append_retry_is_idempotent(tmp_path):
+  store = LocalStore(tmp_path)
+  trail_id = store.create_trail(_bro_payload())['id']
+  records = [{'kind': 'user_input', 'body': 'hello'}]
+  assert store.append_records(trail_id, 1, records)['appended'] == 1
+  assert store.append_records(trail_id, 1, records) == {
+    'extent': 2,
+    'appended': 0,
+    'duplicate': True,
+  }
+
+
+def test_tool_blobs_are_content_addressed(tmp_path):
+  store = LocalStore(tmp_path)
+  trail_id = store.create_trail(_bro_payload())['id']
+  tools = [{'name': 'read'}]
+  digest = hashlib.sha256(canonical_json_bytes(tools)).hexdigest()
+  store.append_records(
+    trail_id,
+    1,
+    [{'kind': 'user_input', 'body': 'hello'}],
+    tools={digest: tools},
+  )
+  assert json.loads((tmp_path / 'trails' / 'tools' / f'{digest}.json').read_text()) == tools
+
+
+def test_listing_preserves_selectors_and_cursor_pagination(tmp_path, monkeypatch):
+  store = LocalStore(tmp_path)
+  ids = iter(('trail-a', 'trail-b', 'trail-c'))
+  monkeypatch.setattr('bro.trails.local.lulid', lambda: next(ids))
+  parent = store.create_trail(_bro_payload(bro='parent'))['id']
+  first = store.create_trail(
+    _bro_payload(bro='dev', forked_from={'trail_id': parent, 'step_id': 0})
+  )['id']
+  second = store.create_trail(_bro_payload(bro='dev'))['id']
+
+  page = store.list_trails(bro='dev', limit=1)
+  assert len(page['trails']) == 1
+  assert page['next'] is not None
+  following = store.list_trails(bro='dev', limit=1, cursor=page['next'])
+  assert {page['trails'][0]['id'], following['trails'][0]['id']} == {first, second}
+  assert [item['id'] for item in store.list_trails(forked_from=parent)['trails']] == [first]
+  with pytest.raises(ValueError, match='only one'):
+    store.list_trails(bro='dev', harness='bro')
+
+
+def test_stale_open_trail_infers_unreported_end_on_read(tmp_path):
+  store = LocalStore(tmp_path)
+  trail_id = store.create_trail(_bro_payload())['id']
+  header_path = tmp_path / 'trails' / trail_id / 'header.json'
+  header = json.loads(header_path.read_text())
+  header['last_alive_at'] = (datetime.now(UTC) - timedelta(hours=2)).strftime(
+    '%Y-%m-%dT%H:%M:%S.%fZ'
+  )
+  header_path.write_text(json.dumps(header))
+
+  assert store.get_trail(trail_id)['end'] == {
+    'at': header['last_alive_at'],
+    'inference': 'unreported',
+  }
+
+
+def test_missing_trails_raise_store_neutral_error(tmp_path):
+  store = LocalStore(tmp_path)
+  with pytest.raises(TrailNotFound):
+    store.get_trail('missing')

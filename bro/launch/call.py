@@ -283,7 +283,7 @@ def chat_main(
   if args['resume'] is not None:
     from bro.launch.resume import resume
     from bro.registry import get_class
-    from bro.trails.client import default_client
+    from bro.trails.store import default_store
 
     bro_class = get_class(args['bro'])
     try:
@@ -293,7 +293,7 @@ def chat_main(
       # error instead of fast mode's silent fallback.
       log.error('%s', e)
       return 1
-    with default_client() as client:
+    with default_store() as client:
       try:
         # the continuation runs the class's current spec (as a fresh call
         # would), not the spec recorded on the trail

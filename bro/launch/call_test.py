@@ -613,7 +613,7 @@ def test_call_resume_runs_the_resumed_bro(monkeypatch, capsys):
   monkeypatch.setenv('CW_IN_CONTAINER', '1')
   monkeypatch.setattr('bro.registry.get_class', lambda name: _ChatBro)
   monkeypatch.setattr('bro.launch.resume.resume', fake_resume)
-  monkeypatch.setattr('bro.trails.client.default_client', lambda: MagicMock())
+  monkeypatch.setattr('bro.trails.store.default_store', lambda: MagicMock())
   monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
   monkeypatch.setattr('bro.launch.call._tty_supported', lambda: False)
 

@@ -4,7 +4,7 @@ import threading
 import time
 from typing import Any, Optional
 
-from bro.trails.client import RECORD_RETRY_DELAYS_SECONDS, TrailsClient
+from bro.trails.store import RECORD_RETRY_DELAYS_SECONDS, TrailsStore
 
 KEEPALIVE_INTERVAL_SECONDS = 60.0
 WRITE_RETRY_DELAYS_SECONDS = RECORD_RETRY_DELAYS_SECONDS
@@ -13,8 +13,8 @@ WRITE_RETRY_DELAYS_SECONDS = RECORD_RETRY_DELAYS_SECONDS
 class Recording:
   """one open trail with ordinal appends, extent validation, and liveness."""
 
-  def __init__(self, client: TrailsClient, trail_id: str, extent: int):
-    self.client = client
+  def __init__(self, store: TrailsStore, trail_id: str, extent: int):
+    self.store = store
     self.trail_id = trail_id
     self._extent = extent
     self._last_write_monotonic = time.monotonic()
@@ -22,12 +22,12 @@ class Recording:
     self._lock = threading.RLock()
 
   @classmethod
-  def create(cls, client: TrailsClient, payload: dict[str, Any]) -> 'Recording':
+  def create(cls, store: TrailsStore, payload: dict[str, Any]) -> 'Recording':
     records = payload.get('body', {}).get('records')
     if not isinstance(records, list):
       raise ValueError('trail body.records must be a list')
-    trail_id: str = client.create_trail(payload)['id']
-    return cls(client, trail_id, len(records))
+    trail_id: str = store.create_trail(payload)['id']
+    return cls(store, trail_id, len(records))
 
   @property
   def extent(self) -> int:
@@ -47,9 +47,9 @@ class Recording:
       offset = self._extent
       expected_extent = offset + len(records)
       if tools is None:
-        response = self.client.append_records(self.trail_id, offset, records)
+        response = self.store.append_records(self.trail_id, offset, records)
       else:
-        response = self.client.append_records(self.trail_id, offset, records, tools=tools)
+        response = self.store.append_records(self.trail_id, offset, records, tools=tools)
       extent = response.get('extent')
       if not isinstance(extent, int) or isinstance(extent, bool) or extent != expected_extent:
         raise RuntimeError(
@@ -71,9 +71,9 @@ class Recording:
       if time.monotonic() - self._last_write_monotonic < KEEPALIVE_INTERVAL_SECONDS:
         return False
       if retry_delays is None:
-        self.client.keepalive(self.trail_id)
+        self.store.keepalive(self.trail_id)
       else:
-        self.client.keepalive(self.trail_id, retry_delays=retry_delays)
+        self.store.keepalive(self.trail_id, retry_delays=retry_delays)
       self._last_write_monotonic = time.monotonic()
       return True
 
@@ -89,7 +89,7 @@ class Recording:
       if self._ended:
         return
       if retry_delays is None:
-        self.client.end_trail(self.trail_id, reason, detail)
+        self.store.end_trail(self.trail_id, reason, detail)
       else:
-        self.client.end_trail(self.trail_id, reason, detail, retry_delays=retry_delays)
+        self.store.end_trail(self.trail_id, reason, detail, retry_delays=retry_delays)
       self._ended = True

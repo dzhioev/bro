@@ -5,18 +5,18 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import Any, Optional
 
+from bro.trails import backends, rows
 from bro.trails.model import UNREPORTED_END_INFERENCE, canonical_json_bytes
-from bro.trails.server import backends, row_storage, storage_types
-from bro.trails.server.folding import AggregateState
+from bro.trails.rows import AggregateState
+from bro.trails.server import row_storage, storage_types
 from bro.trails.server.operations import Operations
+from bro.trails.store import AppendConflict, TrailNotFound
 
 SPILLOVER_THRESHOLD_BYTES = storage_types.SPILLOVER_THRESHOLD_BYTES
 MAX_BODY_BYTES = storage_types.MAX_BODY_BYTES
 INLINE_RESPONSE_THRESHOLD_BYTES = storage_types.INLINE_RESPONSE_THRESHOLD_BYTES
 PRESIGNED_URL_TTL_SECONDS = storage_types.PRESIGNED_URL_TTL_SECONDS
-TrailNotFound = storage_types.TrailNotFound
 BodyTooLarge = storage_types.BodyTooLarge
-AppendConflict = storage_types.AppendConflict
 
 GSI_PK_ATTRIBUTE = 'gsi_pk'
 GSI_PK_VALUE = 'trail'
@@ -613,12 +613,7 @@ class Storage:
     header = await self._required_universal_header(trail_id)
     adapter = self._backend(header['harness'])
     page = await self._query_universal_rows(header, after=after, limit=limit, resolve_large=True)
-    messages = [message for record in page['steps'] for message in adapter.project(record)]
-    undeclared = {message['type'] for message in messages} - adapter.emitted_message_types
-    if len(undeclared) > 0:
-      raise RuntimeError(f'adapter emitted undeclared message types: {sorted(undeclared)}')
-    if types is not None:
-      messages = [message for message in messages if message['type'] in types]
+    messages = rows.project_messages(adapter, page['steps'], types)
     return {'messages': messages, 'next': page['next']}
 
   async def _query_universal_rows(
@@ -655,9 +650,7 @@ class Storage:
     resolved = await self._resolve_body(
       dict(row), resolve_large=resolve_large, parse_json=harness != 'claude'
     )
-    if harness == 'claude':
-      resolved.update(self._backend(harness).parse(resolved).native)
-    return resolved
+    return rows.materialize_row(self._backend(harness), resolved)
 
   async def _resolve_body(
     self, item: dict, *, resolve_large: bool, parse_json: bool = True

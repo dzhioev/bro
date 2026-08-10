@@ -1,8 +1,10 @@
-"""Aggregate folding shared by append, recompute, and verification."""
+"""Shared aggregate folding, row construction, and message projection."""
 
-from typing import Optional
+import hashlib
+from typing import Any, Optional
 
-from bro.trails.server import backends
+from bro.trails import backends
+from bro.trails.model import canonical_json_bytes
 
 
 class AggregateState:
@@ -50,3 +52,52 @@ class AggregateState:
     self.native['usage'] = self.usage
     self.native['step_counts_by_kind'] = self.counts
     return contribution
+
+
+def build_rows(
+  *,
+  trail_id: str,
+  offset: int,
+  payloads: list[Any],
+  adapter: backends.Adapter,
+  default_timestamp: str,
+  state: AggregateState,
+  seen_billing_keys: set[str],
+) -> list[dict]:
+  result: list[dict] = []
+  for step_id, payload in enumerate(payloads, start=offset):
+    parsed = adapter.parse(payload)
+    classification = adapter.classify(parsed)
+    contribution = state.apply(parsed, classification, seen_billing_keys)
+    row: dict[str, Any] = {
+      'trail_id': trail_id,
+      'step_id': step_id,
+      'ts': parsed.timestamp if parsed.timestamp is not None else default_timestamp,
+      'kind': parsed.kind,
+      'payload_sha256': hashlib.sha256(canonical_json_bytes(payload)).hexdigest(),
+      'body': parsed.body,
+      **parsed.attributes,
+    }
+    if contribution is not None:
+      row['usage'] = contribution
+    result.append(row)
+  return result
+
+
+def materialize_row(adapter: backends.Adapter, row: dict) -> dict:
+  result = dict(row)
+  if adapter is backends.CLAUDE_ADAPTER:
+    result.update(adapter.parse(result).native)
+  return result
+
+
+def project_messages(
+  adapter: backends.Adapter, records: list[dict], types: Optional[set[str]] = None
+) -> list[dict]:
+  messages = [message for record in records for message in adapter.project(record)]
+  undeclared = {message['type'] for message in messages} - adapter.emitted_message_types
+  if len(undeclared) > 0:
+    raise RuntimeError(f'adapter emitted undeclared message types: {sorted(undeclared)}')
+  if types is not None:
+    messages = [message for message in messages if message['type'] in types]
+  return messages

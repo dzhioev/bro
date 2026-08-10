@@ -12,7 +12,7 @@ from bro.trails.record.claude import Recorder, RecorderState, _fork_cuts, _state
 
 
 class FakeTrails:
-  """in-memory stand-in for the TrailsClient surface the recorder drives."""
+  """in-memory stand-in for the TrailsStore surface the recorder drives."""
 
   def __init__(self):
     self.created: list[dict] = []
@@ -208,7 +208,7 @@ def _recorder(projects: Path, fake: FakeTrails, *, started_after: float = 0.0) -
   return Recorder(
     projects,
     'ws',
-    fake,  # type: ignore[arg-type] — structural stand-in for TrailsClient
+    fake,  # type: ignore[arg-type] — structural stand-in for TrailsStore
     llm={'model': 'claude-fable-5'},
     cw_command=os.environ['CW_COMMAND'],
     started_after=started_after,

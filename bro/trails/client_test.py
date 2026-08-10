@@ -6,13 +6,17 @@ from unittest.mock import patch
 import pytest
 
 from bro.trails.client import (
-  HTTPStatusError,
   TrailsClient,
+)
+from bro.trails.model import ForkedFrom, RecordedTrail, Step, Trail
+from bro.trails.store import (
+  AppendConflict,
+  TrailNotFound,
+  TransientUnavailable,
   fetch_recorded_trail,
   step_from_row,
   trail_from_header,
 )
-from bro.trails.model import ForkedFrom, RecordedTrail, Step, Trail
 
 
 class _FakeResponse:
@@ -90,9 +94,8 @@ class TestGetTrail:
     fake = _install_fake_connection(monkeypatch)
     fake.queue((404, b'not found'))
     c = _client()
-    with pytest.raises(HTTPStatusError) as exception_info:
+    with pytest.raises(TrailNotFound):
       c.get_trail('missing')
-    assert exception_info.value.status == 404
     assert len(fake.requests) == 1
 
 
@@ -223,7 +226,7 @@ class TestRetryBehavior:
     fake.queue(ConnectionError('blip 1'))
     fake.queue(ConnectionError('blip 2'))
     c = _client()
-    with pytest.raises(ConnectionError):
+    with pytest.raises(TransientUnavailable):
       c.get_trail('T1')
 
   def test_retryable_status_recovered(self, monkeypatch):
@@ -238,9 +241,8 @@ class TestRetryBehavior:
     fake.queue((503, b'unavailable 1'))
     fake.queue((503, b'unavailable 2'))
     c = _client()
-    with pytest.raises(HTTPStatusError) as exception_info:
+    with pytest.raises(TransientUnavailable):
       c.get_trail('T1')
-    assert exception_info.value.status == 503
 
 
 class TestLaunchContext:
@@ -274,9 +276,17 @@ class TestWrites:
     # attempt is the retry
     fake = _install_fake_connection(monkeypatch)
     fake.queue(ConnectionError('blip'))
-    with pytest.raises(ConnectionError):
+    with pytest.raises(TransientUnavailable):
       _client().create_trail({'harness': 'claude'})
     assert len(fake.requests) == 1
+
+  def test_append_conflict_maps_to_store_error(self, monkeypatch):
+    fake = _install_fake_connection(monkeypatch)
+    fake.queue((409, b'{"error":"conflict","expected":2,"extent":3}'))
+    with pytest.raises(AppendConflict) as exception_info:
+      _client().append_records('T1', 2, [{'kind': 'user_input', 'body': 'hello'}])
+    assert exception_info.value.expected == 2
+    assert exception_info.value.actual == 3
 
   def test_append_records_posts_offset_records_and_tool_blobs(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)

@@ -81,13 +81,15 @@ def _default_factory() -> Tracker:
   # - tests: `conftest.py`'s `set_default_tracker_factory(NullTracker)`.
   # - one-shot exploration: `bro.run(..., surface='experiment', tracker=NullTracker())`.
   try:
-    config = credentials.get_json('trails')
+    from bro.trails.store import default_store
+
+    store = default_store()
   except credentials.SecretNotFound as e:
     raise RuntimeError(
       'trails: secret not found; configure ~/.bro/trails.json to enable recording, '
       'or pass tracker=NullTracker() to skip explicitly'
     ) from e
-  return Recorder(config['base_url'], config['token'])
+  return Recorder(store)
 
 
 # default factory for the per-run `Tracker` an unconfigured bro uses. swap with

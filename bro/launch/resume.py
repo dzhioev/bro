@@ -15,8 +15,8 @@ from typing import Optional
 from bro.bros.bro import Bro
 from bro.fork import fork, latest_fork_point
 from bro.llm.llm import LLMSpec
-from bro.trails.client import TrailsClient, fetch_recorded_trail
 from bro.trails.lineage import walk_header_chain
+from bro.trails.store import TrailsStore, fetch_recorded_trail
 
 # `--resume` without a trail id: continue the bro's newest recorded `call`
 # conversation.
@@ -48,7 +48,7 @@ class ResumedCall:
   trail_id: str
 
 
-def find_latest_call_trail(client: TrailsClient, bro_name: str) -> Optional[str]:
+def find_latest_call_trail(client: TrailsStore, bro_name: str) -> Optional[str]:
   """the bro's newest recorded `call` conversation, or None when none is found
   among its `_LATEST_SCAN_LIMIT` newest bro.trails."""
   for header in client.iter_trails(bro=bro_name, max_items=_LATEST_SCAN_LIMIT):
@@ -57,7 +57,7 @@ def find_latest_call_trail(client: TrailsClient, bro_name: str) -> Optional[str]
   return None
 
 
-def conversation_history(client: TrailsClient, trail_id: str) -> list[HistoryMessage]:
+def conversation_history(client: TrailsStore, trail_id: str) -> list[HistoryMessage]:
   """the conversation's projected prior exchanges, oldest first, collected
   across the fork ancestor chain. each ancestor contributes messages through
   its child's fork point.
@@ -72,7 +72,7 @@ def conversation_history(client: TrailsClient, trail_id: str) -> list[HistoryMes
 
 
 def _segment_messages(
-  client: TrailsClient, trail_id: str, up_to_step_id: Optional[int]
+  client: TrailsStore, trail_id: str, up_to_step_id: Optional[int]
 ) -> list[HistoryMessage]:
   messages: list[HistoryMessage] = []
   for event in client.iter_messages(trail_id, types={'user_input', 'assistant'}):
@@ -87,7 +87,7 @@ def _segment_messages(
   return messages
 
 
-def _message(client: TrailsClient, event: dict, *, by_user: bool) -> HistoryMessage:
+def _message(client: TrailsStore, event: dict, *, by_user: bool) -> HistoryMessage:
   return HistoryMessage(
     by_user=by_user,
     text=client.resolve_body(event.get('content')),
@@ -96,7 +96,7 @@ def _message(client: TrailsClient, event: dict, *, by_user: bool) -> HistoryMess
 
 
 def resume(
-  client: TrailsClient,
+  client: TrailsStore,
   bro_name: str,
   trail_ref: str,
   *,
