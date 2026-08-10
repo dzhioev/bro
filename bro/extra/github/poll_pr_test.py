@@ -90,7 +90,8 @@ def _install(monkeypatch, api: _FakeAPI) -> None:
 
 
 def _run(api: _FakeAPI, **kwargs) -> list[dict[str, Any]]:
-  return poll_pr.emit_cycle(
+  events: list[dict[str, Any]] = []
+  poll_pr.emit_cycle(
     owner='x',
     repo='y',
     pr=1,
@@ -98,7 +99,22 @@ def _run(api: _FakeAPI, **kwargs) -> list[dict[str, Any]]:
     seen_comment_ids=kwargs.pop('seen_comment_ids', set()),
     seen_review_ids=kwargs.pop('seen_review_ids', set()),
     is_actionable=kwargs.pop('is_actionable', lambda login: True),
+    emit=events.append,
   )
+  return events
+
+
+def _poll(**overrides) -> int:
+  arguments: dict[str, Any] = {
+    'owner': 'o',
+    'repo': 'r',
+    'pr': 1,
+    'token': lambda: 't',
+    'interval': 0,
+    'self_login': None,
+    'failure_grace': 300,
+  }
+  return poll_pr.poll_pr(**{**arguments, **overrides})
 
 
 class TestEmitCycle:
@@ -185,6 +201,29 @@ class TestEmitCycle:
     assert second[0]['event'] == 'comment'
     assert second[0]['body'] == 'late comment'
 
+  def test_review_whose_inline_fetch_fails_is_emitted_on_the_next_cycle(self, monkeypatch):
+    seen_c: set[int] = set()
+    seen_r: set[int] = set()
+    api = _FakeAPI(
+      reviews=[_review(100, 'alice', 'APPROVED')],
+      review_inline={100: [_inline(200, 100, 'alice', 'nit')]},
+      all_inline=[_inline(200, 100, 'alice', 'nit')],
+    )
+    _install(monkeypatch, api)
+
+    def failing_inline(*a):
+      raise _http_error(403)
+
+    monkeypatch.setattr(poll_pr, '_fetch_review_inline_comments', failing_inline)
+    with pytest.raises(urllib.error.HTTPError):
+      _run(api, seen_comment_ids=seen_c, seen_review_ids=seen_r)
+    assert seen_r == set()
+
+    _install(monkeypatch, api)
+    events = _run(api, seen_comment_ids=seen_c, seen_review_ids=seen_r)
+    assert [e['event'] for e in events] == ['review']
+    assert events[0]['comments'][0]['id'] == 200
+
   def test_non_actionable_review_still_marks_inline_comments_seen(self, monkeypatch):
     # a bot or self-authored review should not emit, but its inline comments
     # must still be marked seen so they don't fire as standalone events.
@@ -199,6 +238,21 @@ class TestEmitCycle:
     assert api.review_inline_calls == [100]
 
 
+class _Stepper:
+  """a fetch fake serving `steps` in order, raising the ones that are exceptions."""
+
+  def __init__(self, steps: list[Any]):
+    self.steps = steps
+    self.calls = 0
+
+  def __call__(self, *args):
+    step = self.steps[self.calls]
+    self.calls += 1
+    if isinstance(step, BaseException):
+      raise step
+    return step
+
+
 class TestPollLoopResilience:
   def _baseline(self, monkeypatch):
     monkeypatch.setattr(poll_pr, '_owner_login', lambda *a: 'owner')
@@ -209,50 +263,116 @@ class TestPollLoopResilience:
 
   def test_transient_cycle_error_is_swallowed(self, monkeypatch, capsys):
     self._baseline(monkeypatch)
-    pr_steps: list[Any] = [_http_error(503), {'merged': True}]
-    calls: list[int] = []
-
-    def fake_fetch_pr(*a):
-      step = pr_steps[len(calls)]
-      calls.append(1)
-      if isinstance(step, BaseException):
-        raise step
-      return step
-
-    monkeypatch.setattr(poll_pr, '_fetch_pr', fake_fetch_pr)
-    assert poll_pr.poll_pr('o', 'r', 1, lambda: 't', interval=0, self_login=None) == 0
-    assert len(calls) == 2
+    fetch = _Stepper([_http_error(503), {'merged': True}])
+    monkeypatch.setattr(poll_pr, '_fetch_pr', fetch)
+    assert _poll() == 0
+    assert fetch.calls == 2
     assert 'Logging error' not in capsys.readouterr().err
-
-  def test_fatal_cycle_error_propagates(self, monkeypatch):
-    self._baseline(monkeypatch)
-
-    def fake_fetch_pr(*a):
-      raise _http_error(404)
-
-    monkeypatch.setattr(poll_pr, '_fetch_pr', fake_fetch_pr)
-    with pytest.raises(urllib.error.HTTPError) as exception:
-      poll_pr.poll_pr('o', 'r', 1, lambda: 't', interval=0, self_login=None)
-    assert exception.value.code == 404
 
   def test_remote_disconnected_cycle_error_is_swallowed(self, monkeypatch):
     self._baseline(monkeypatch)
-    pr_steps: list[Any] = [
-      http.client.RemoteDisconnected('server closed connection'),
-      {'merged': True},
+    fetch = _Stepper([http.client.RemoteDisconnected('server closed connection'), {'merged': True}])
+    monkeypatch.setattr(poll_pr, '_fetch_pr', fetch)
+    assert _poll() == 0
+    assert fetch.calls == 2
+
+
+class TestSourceFailures:
+  def _baseline(self, monkeypatch):
+    monkeypatch.setattr(poll_pr, '_owner_login', lambda *a: 'owner')
+    monkeypatch.setattr(poll_pr, '_fetch_issue_comments', lambda *a: [])
+    monkeypatch.setattr(poll_pr, '_fetch_review_comments', lambda *a: [])
+    monkeypatch.setattr(poll_pr, '_fetch_reviews', lambda *a: [])
+    monkeypatch.setattr(poll_pr, '_fetch_review_inline_comments', lambda *a: [])
+    monkeypatch.setattr(poll_pr.time, 'sleep', lambda _: None)
+
+  def _clock(self, monkeypatch, step: float) -> None:
+    ticks = itertools.count(0, step)
+    monkeypatch.setattr(poll_pr.time, 'monotonic', lambda: next(ticks))
+
+  def test_a_failing_source_does_not_suppress_the_others(self, monkeypatch, capsys):
+    # a token without `checks: read` 403s on check-runs while reviews and
+    # comments stay readable
+    self._baseline(monkeypatch)
+    open_pr = {'head': {'sha': 'deadbeef'}, 'state': 'open', **_user('alice')}
+    monkeypatch.setattr(poll_pr, '_fetch_pr', _Stepper([open_pr, {'merged': True}]))
+    monkeypatch.setattr(poll_pr, '_fetch_check_runs', _Stepper([_http_error(403)]))
+    # empty at the startup baseline scan, so the review counts as new
+    monkeypatch.setattr(
+      poll_pr, '_fetch_reviews', _Stepper([[], [_review(100, 'owner', 'APPROVED')]])
+    )
+    assert _poll(self_login='x') == 0
+    events = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines()]
+    assert [e['event'] for e in events] == ['review', 'merged']
+
+  def test_a_source_failing_past_the_grace_window_ends_the_watch(self, monkeypatch, capsys):
+    self._baseline(monkeypatch)
+    self._clock(monkeypatch, step=10)
+    open_pr = {'head': {'sha': 'deadbeef'}, 'state': 'open', **_user('alice')}
+    monkeypatch.setattr(poll_pr, '_fetch_pr', lambda *a: open_pr)
+
+    def failing_checks(*a):
+      raise _http_error(403)
+
+    monkeypatch.setattr(poll_pr, '_fetch_check_runs', failing_checks)
+    assert _poll(self_login='x', failure_grace=30) == 2
+    events = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines()]
+    assert events == [
+      {
+        'event': 'watch_failed',
+        'pr': 1,
+        'source': 'checks',
+        'reason': 'HTTP 403',
+        'failing_for': 30,
+      }
     ]
-    calls: list[int] = []
 
-    def fake_fetch_pr(*a):
-      step = pr_steps[len(calls)]
-      calls.append(1)
-      if isinstance(step, BaseException):
-        raise step
-      return step
+  def test_a_source_recovering_inside_the_window_rearms_it(self, monkeypatch, capsys):
+    self._baseline(monkeypatch)
+    self._clock(monkeypatch, step=20)
+    open_pr = {'head': {'sha': 'deadbeef'}, 'state': 'open', **_user('alice')}
+    monkeypatch.setattr(
+      poll_pr, '_fetch_pr', _Stepper([open_pr, open_pr, open_pr, open_pr, {'merged': True}])
+    )
+    # each failure is 20s past the previous one — only an unbroken run of them
+    # crosses the 30s window
+    monkeypatch.setattr(
+      poll_pr, '_fetch_check_runs', _Stepper([_http_error(403), [], _http_error(403), []])
+    )
+    assert _poll(self_login='x', failure_grace=30) == 0
+    events = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines()]
+    assert events == [{'event': 'merged', 'pr': 1}]
 
-    monkeypatch.setattr(poll_pr, '_fetch_pr', fake_fetch_pr)
-    assert poll_pr.poll_pr('o', 'r', 1, lambda: 't', interval=0, self_login=None) == 0
-    assert len(calls) == 2
+  def test_a_failed_baseline_ends_the_watch_before_the_first_cycle(self, monkeypatch, capsys):
+    self._baseline(monkeypatch)
+
+    def failing_reviews(*a):
+      raise _http_error(403)
+
+    monkeypatch.setattr(poll_pr, '_fetch_reviews', failing_reviews)
+    monkeypatch.setattr(poll_pr, '_fetch_pr', lambda *a: {'merged': True})
+    assert _poll() == 2
+    events = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines()]
+    assert [(e['event'], e['source']) for e in events] == [('watch_failed', 'baseline')]
+
+  def test_a_non_transient_failure_ends_the_watch_at_once(self, monkeypatch, capsys):
+    self._baseline(monkeypatch)
+
+    def missing_pr(*a):
+      raise _http_error(404)
+
+    monkeypatch.setattr(poll_pr, '_fetch_pr', missing_pr)
+    assert _poll() == 2
+    events = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines()]
+    assert events == [
+      {
+        'event': 'watch_failed',
+        'pr': 1,
+        'source': 'pull-request',
+        'reason': 'HTTP 404',
+        'failing_for': 0,
+      }
+    ]
 
 
 def _check_run(name: str, status: str, conclusion: Optional[str] = None) -> dict[str, Any]:
@@ -313,7 +433,7 @@ class TestCheckEvents:
 
     monkeypatch.setattr(poll_pr, '_fetch_pr', fake_fetch_pr)
     monkeypatch.setattr(poll_pr, '_fetch_check_runs', lambda *a: runs[len(calls) - 1])
-    assert poll_pr.poll_pr('o', 'r', 1, lambda: 't', interval=0, self_login=None) == 0
+    assert _poll() == 0
 
     events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     checks = [e for e in events if e['event'] == 'checks']
@@ -327,7 +447,7 @@ class TestCheckEvents:
     monkeypatch.setattr(poll_pr, '_fetch_pr', lambda *a: {'merged': True})
     fetched: list[int] = []
     monkeypatch.setattr(poll_pr, '_fetch_check_runs', lambda *a: fetched.append(1) or [])
-    assert poll_pr.poll_pr('o', 'r', 1, lambda: 't', interval=0, self_login=None) == 0
+    assert _poll() == 0
     assert fetched == []
 
 
@@ -356,7 +476,7 @@ class TestConflictDetection:
       return pr_steps[len(pr_calls) - 1]
 
     monkeypatch.setattr(poll_pr, '_fetch_pr', fake_fetch_pr)
-    assert poll_pr.poll_pr('o', 'r', 1, lambda: 't', interval=0, self_login='x') == 0
+    assert _poll(self_login='x') == 0
     events = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines()]
     assert events == [
       {'event': 'conflicts', 'pr': 1},
@@ -377,7 +497,7 @@ class TestConflictDetection:
       return pr_steps[len(pr_calls) - 1]
 
     monkeypatch.setattr(poll_pr, '_fetch_pr', fake_fetch_pr)
-    assert poll_pr.poll_pr('o', 'r', 1, lambda: 't', interval=0, self_login='x') == 0
+    assert _poll(self_login='x') == 0
     events = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines()]
     assert events == [{'event': 'merged', 'pr': 1}]
 
@@ -402,7 +522,7 @@ class TestTokenAndSelf:
     monkeypatch.setattr(poll_pr, '_fetch_pr', fake_fetch_pr)
     counter = itertools.count(1)
     provider = lambda: f't{next(counter)}'  # noqa: E731
-    assert poll_pr.poll_pr('o', 'r', 1, provider, interval=0, self_login='x') == 0
+    assert _poll(token=provider, self_login='x') == 0
     # each cycle re-reads the provider: two cycles, two distinct tokens
     assert len(tokens_seen) == 2
     assert len(set(tokens_seen)) == 2
@@ -426,7 +546,7 @@ class TestTokenAndSelf:
       return pr_steps[len(pr_calls) - 1]
 
     monkeypatch.setattr(poll_pr, '_fetch_pr', fake_fetch_pr)
-    assert poll_pr.poll_pr('o', 'r', 1, lambda: 't', interval=0, self_login=None) == 0
+    assert _poll() == 0
     out = capsys.readouterr().out
     # the repo owner authored the PR; with self defaulted to the PR author their
     # own comment is filtered rather than emitted
@@ -438,8 +558,9 @@ class TestMain:
   def _capture_poll(self, monkeypatch) -> dict:
     captured = {}
 
-    def fake_poll(owner, repo, pr, token, interval, self_login):
+    def fake_poll(owner, repo, pr, token, interval, self_login, failure_grace):
       captured['token'] = token
+      captured['failure_grace'] = failure_grace
       return 0
 
     monkeypatch.setattr(poll_pr, 'poll_pr', fake_poll)
@@ -460,3 +581,8 @@ class TestMain:
     captured = self._capture_poll(monkeypatch)
     assert poll_pr.main(['poll-pr', 'x/y', '1', '--credential', 'github+other']) == 0
     assert captured['token']() == 'resolved:github+other'
+
+  def test_failure_grace_flag_reaches_the_watch(self, monkeypatch):
+    captured = self._capture_poll(monkeypatch)
+    assert poll_pr.main(['poll-pr', 'x/y', '1', '--failure-grace', '60']) == 0
+    assert captured['failure_grace'] == 60

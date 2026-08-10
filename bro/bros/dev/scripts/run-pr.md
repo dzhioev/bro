@@ -2,7 +2,7 @@
 name: run-pr
 description: This script should be used when the user signals that the worktree's changes are ready for review and a PR should be opened — "open a PR", "@:run pr:@", "send for review", "PR it", "ship it", "ready for review", "finalize". Covers commit hygiene (docs sync, policy audit, commit splitting), the repo's commit-message conventions, rebases onto the base branch (master by default), opens the PR via `gh pr create`, then launches the `poll-pr` review watcher to handle review comments, failing CI checks, merge conflicts, and APPROVED events. On approval, chains into `@::land` for the merge step. Also the re-entry point for a PR that is already open — "resume PR <pr-url-or-number>", "resume the PR", "pick up the review" — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
 parameters: {"base?": "base branch for the pull request instead of master", "pr?": "existing pull request URL or number to resume"}
-version: 4.2.0
+version: 4.3.0
 ---
 
 # run-pr
@@ -207,6 +207,7 @@ poll-pr <owner>/<repo> <pr_number>
 - `{"event": "checks", "pr": N, "failing": [{"name": "...", "conclusion": "...", "url": "..."}]}` — a status check on the PR's head commit concluded as a failure. Fires once per red episode — it re-arms only after nothing is failing again (a re-run that goes green, or a new push).
 - `{"event": "comment", "id": N, "user": "...", "body": "...", "path": "...", "url": "..."}` — new comment from the repo owner (bot and self filtered out). Standalone inline review comments (replies to existing review threads) fire here; inline comments attached to a fresh review are bundled into the `review` event instead.
 - `{"event": "review", "id": N, "user": "...", "state": "APPROVED|CHANGES_REQUESTED|COMMENTED|DISMISSED", "body": "...", "url": "...", "comments": [{"id": N, "path": "...", "line": N, "body": "...", "url": "..."}]}` — new review. `comments` is the array of inline comments attached to this review at the moment `poll-pr` saw it (typically all of them; rarely empty if the inline-comments endpoint lags the reviews endpoint — late arrivals then fire as standalone `comment` events on a later cycle).
+- `{"event": "watch_failed", "pr": N, "source": "baseline|pull-request|checks|reviews", "reason": "...", "failing_for": N}` — terminal: the named event source kept failing (or failed unrecoverably), so the watch ended rather than going quiet on those events — the process exits nonzero right after. A short blip costs nothing: one source failing is tolerated for `--failure-grace` seconds while the others keep reporting. `baseline` means the watch never started at all.
 
 How to run it:
 
@@ -218,6 +219,7 @@ Run it as a background job and read it iteratively — a plain `dev::bash` call 
    - new output → react to every JSON line per step 14, then watch again;
    - a bare `running` state line (quiet window) → watch again;
    - `exited` right after a `merged`/`closed` event → the PR is terminal; react per step 14, stop looping;
+   - `exited` right after a `watch_failed` event → react per step 14, stop looping;
    - `exited` with no terminal event → the watcher died. Do not just restart it — a fresh `poll-pr` baselines all existing events as seen; reconcile first (re-entry step 4), then start a new `dev::job`.
 3. When chaining into `@::land`, stop the watcher with `dev::kill(job_id)`.
 
@@ -263,6 +265,8 @@ Unconditional approval — the PR is ready to merge. Chain into the merge, and b
 **`conflicts` event**: rerun step 7 — the rebase, the in-band resolution default, the escalation bar, and the task comment all apply unchanged — then the pre-push gate (step 8), then push the rebased branch: `git push --force-with-lease origin HEAD` — the PR branch, never the base.
 
 **`merged` / `closed`**: someone (the user, `@::land`, or external action) terminated the PR. If `merged`, run `@::land`'s post-merge bookkeeping — the `merged` comment and task closure. If `closed` without merge, log it and report to the user.
+
+**`watch_failed` event**: the watch is over and the PR is not — from here on nothing on the PR reaches you. The `reason` is typically a credential the watch cannot use for that source (`HTTP 403` / `HTTP 404` on `checks` means the token lacks `checks: read`) or GitHub being unreachable for minutes. Do not restart the watcher on the same credential and hope: reconcile the review state from `gh` (re-entry step 4) and handle whatever arrived, then report the failing source and reason to the user — stop and ask when questions reach the user; when unattended, `raise` with the source and reason as the reason.
 
 ## Rescue committed work before a raise
 
