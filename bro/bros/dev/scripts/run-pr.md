@@ -20,7 +20,7 @@ Passed values appear in the `# Arguments` section appended by the script tool:
 
 Normal flow only — re-entry has its own entry conditions:
 
-- You are in a worktree (under `var/cw/worktrees/` or otherwise on a non-master branch). Do NOT run this against the main checkout's working copy.
+- You are in a managed workspace (under `var/cw/workspaces/` or otherwise on a non-master branch). Do NOT run this against the main checkout's working copy.
 - The work looks finished. If edits look WIP, a refactor is half-done, or the suite is known-red, confirm with the user before proceeding.
 
 ## Re-entry: PR already open

@@ -5,6 +5,12 @@ import bro.launch.spawn
 import bro.launch.summon_control
 import bro.workspace.docker as workspace_docker
 import bro.workspace.spawn as workspace_spawn
+from bro.workspace.metadata import WorkspaceKind
+from bro.workspace.model import Workspace
+
+
+def _exit_record(tmp_path) -> str:
+  return (tmp_path / 'project' / 'var' / 'cw' / 'workspaces' / 'ws' / 'exit').read_text()
 
 
 class _FakeProc:
@@ -43,8 +49,8 @@ class TestRunInContainerInjection:
     assert bro.launch.root.run_in_container(launch) == 7
     assert prepared == [(launch, tmp_path / 'project')]
     assert calls == [['docker', 'start', '-a', '-i', '--detach-keys=ctrl-z', 'cid123']]
-    # the run's end is recorded under the container-prefixed ref for `cw clean`
-    assert (tmp_path / 'project' / 'var' / 'cw' / 'exit' / 'c:ws').read_text() == '7'
+    # the run's end is recorded on the workspace for `cw clean`
+    assert _exit_record(tmp_path) == '7'
 
   def test_non_tty_launch_attaches_without_detach_keys(self, monkeypatch, tmp_path):
     monkeypatch.setenv('BROKER_DISABLED', '1')
@@ -80,15 +86,7 @@ class TestRunInContainerDrop:
       bro.launch.root.subprocess, 'run', lambda *_a, **_k: _FakeProc(returncode=exit_code)
     )
     removed: list = []
-
-    class _FakeWorkspace:
-      def __init__(self, name, project):
-        self.name = name
-
-      def remove(self):
-        removed.append(self.name)
-
-    monkeypatch.setattr(bro.launch.root, 'ContainerWorkspace', _FakeWorkspace)
+    monkeypatch.setattr(Workspace, 'remove', lambda workspace: removed.append(workspace.name))
     launch = workspace_docker.Launch(
       name='ws',
       command=['bro', 'run'],
@@ -106,7 +104,7 @@ class TestRunInContainerDrop:
 
   def test_drop_keeps_the_workspace_of_a_failed_run(self, monkeypatch, tmp_path):
     assert self._run(monkeypatch, tmp_path, exit_code=7) == []
-    assert (tmp_path / 'project' / 'var' / 'cw' / 'exit' / 'c:ws').read_text() == '7'
+    assert _exit_record(tmp_path) == '7'
 
 
 class TestRunInContainerBrokerRoute:
@@ -116,8 +114,8 @@ class TestRunInContainerBrokerRoute:
     monkeypatch.setattr(bro.launch.root, 'project_root', lambda: tmp_path / 'project')
     roots: list = []
 
-    def fake_root(launch, project, **kwargs):
-      roots.append({'launch': launch, 'project': project, **kwargs})
+    def fake_root(launch, workspace, **kwargs):
+      roots.append({'launch': launch, 'workspace': workspace, **kwargs})
       return 5
 
     monkeypatch.setattr(bro.launch.root, '_run_root_via_broker', fake_root)
@@ -132,24 +130,21 @@ class TestRunInContainerBrokerRoute:
     )
     code = bro.launch.root.run_in_container(launch, may_summon={'dev'})
     assert code == 5
-    assert roots == [
-      {
-        'launch': launch,
-        'project': tmp_path / 'project',
-        'may_summon': {'dev'},
-        'trail_pointer': None,
-      }
-    ]
+    [root] = roots
+    assert root['launch'] is launch
+    assert root['workspace'].name == 'ws'
+    assert root['workspace'].kind is WorkspaceKind.CONTAINER
+    assert root['may_summon'] == {'dev'}
+    assert root['trail_pointer'] is None
 
 
 class TestRunRootViaBroker:
   def test_builds_the_attached_launch_and_delegates(self, monkeypatch, tmp_path):
     captured: dict = {}
 
-    def fake_run_root(launch, project, *, session, may_summon, credential_scope, trail_pointer):
+    def fake_run_root(launch, *, workspace, may_summon, credential_scope, trail_pointer):
       captured['launch'] = launch
-      captured['project'] = project
-      captured['session'] = session
+      captured['workspace'] = workspace
       captured['may_summon'] = may_summon
       captured['credential_scope'] = credential_scope
       captured['trail_pointer'] = trail_pointer
@@ -166,14 +161,12 @@ class TestRunRootViaBroker:
       tty=True,
       forward_env=True,
     )
+    workspace = Workspace.create('ws', tmp_path / 'project', WorkspaceKind.CONTAINER)
     code = bro.launch.root._run_root_via_broker(
-      launch, tmp_path / 'project', may_summon={'dev'}, trail_pointer=None
+      launch, workspace, may_summon={'dev'}, trail_pointer=None
     )
     assert code == 3
-    assert captured['project'] == tmp_path / 'project'
-    # the session key carries the container-mode prefix, so a same-name host
-    # session keeps its own summon state files
-    assert captured['session'] == 'c:ws'
+    assert captured['workspace'] is workspace
     assert captured['may_summon'] == {'dev'}
     assert captured['launch'] == workspace_spawn.DockerLaunchSpec(
       workspace_docker.Launch(
@@ -181,7 +174,7 @@ class TestRunRootViaBroker:
         command=['claude', '--verbose'],
         env={
           'CW_BASE_REF': 'deadbeef',
-          bro.launch.summon_control.STATUS_ENV: '/host-repo/var/cw/summon/c:ws.status.json',
+          bro.launch.summon_control.STATUS_ENV: '/host-repo/var/cw/summon/ws.status.json',
         },
         secrets=('github',),
         optional_secrets=('openai',),

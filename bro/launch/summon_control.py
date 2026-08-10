@@ -48,23 +48,20 @@ scope in the lowering (`bro/launch/spawn.py`), where a bad override fails the
 launch. `effort`/`fast` are child-facing and ride its `bro run` argv.
 
 The same per-request attribution also names the requester's workspace (the root's
-from the session key, a child's from its `broker-<channel>` clone), threaded into
+own, a child's from its `broker-<channel>` clone), threaded into
 the spawn as the child's base-ref inheritance source: a summoned child bases on
 its summoner's workspace HEAD unless the request's `into` overrides. The HEAD
 read itself is blocking git work and runs off-loop in the spawner
 (`bro/launch/spawn.py:_lower_summon`); the handler only resolves the path.
 
 Both state files live under `var/cw/summon/` (`bro.workspace.paths.summon_dir`), keyed by the
-session key the launch surface passes: the workspace name, mode-prefixed for a
-container session (`c:<name>`, the container-ref convention of `workspace/model.py`)
-and bare on host — a same-name host worktree and container workspace can run
-concurrently (the one-session guard is per-mode) and must not interleave one
-audit file or clobber one status file. `<key>.jsonl` (audit) and
-`<key>.status.json` (live status) sit outside the workspace dirs so the audit
-survives a drop, gitignored so neither dirties clean checks. The host process
-writes both; a container session reads the status file through its read-only
-`/host-repo` mount of the project root (`container_status_path`), a host session
-through the host path (`summon_status_file`).
+workspace name: `<name>.jsonl` (audit) and `<name>.status.json` (live status).
+They sit outside the workspace dir so the audit survives a drop — a session can
+have its own workspace removed on a clean exit — and are gitignored so neither
+dirties clean checks. The host process writes both; a container session reads the
+status file through its read-only `/host-repo` mount of the project root
+(`container_status_path`), a host session through the host path
+(`summon_status_file`).
 
 The wire contract (the `summon` tag, payload keys, the 1800s default timeout) is
 owned by the peer-side `bro.summon` module; this module enforces it host-side. Broker
@@ -82,8 +79,8 @@ from typing import TYPE_CHECKING, Any, Optional
 from bro.base import credentials, log
 from bro.launch.scope import split_scope_overrides
 from bro.summon import DEFAULT_TIMEOUT, STATUS_ENV
-from bro.workspace.model import ContainerWorkspace, HostWorktree, parse_ref
-from bro.workspace.paths import containers_dir, summon_dir
+from bro.workspace.model import Workspace
+from bro.workspace.paths import summon_dir, workspace_tree
 
 if TYPE_CHECKING:
   from bro.broker.brotocol import Message
@@ -120,15 +117,15 @@ _PAYLOAD_KEYS = frozenset(
 _MAX_SUMMON_DEPTH = 2
 
 
-def summon_status_file(project: Path, session: str) -> Path:
+def summon_status_file(project: Path, workspace_name: str) -> Path:
   """the session's summon-status file, as the host process writes it."""
-  return summon_dir(project) / f'{session}.status.json'
+  return summon_dir(project) / f'{workspace_name}.status.json'
 
 
-def container_status_path(project: Path, session: str) -> str:
+def container_status_path(project: Path, workspace_name: str) -> str:
   """the same file as `summon_status_file`, seen from inside a container through
   its read-only `/host-repo` mount of the project root."""
-  return f'/host-repo/{summon_status_file(project, session).relative_to(project)}'
+  return f'/host-repo/{summon_status_file(project, workspace_name).relative_to(project)}'
 
 
 def summon_allow_list(bro_name: str, *, grant: list[str], revoke: list[str]) -> set[str]:
@@ -269,8 +266,7 @@ class SummonControl:
     *,
     allow_list: Collection[str],
     credential_scope: Collection[str] = (),
-    session: str,
-    project: Path,
+    workspace: Workspace,
     status_file: Path,
     audit_file: Path,
     trail_pointer: Optional[Path] = None,
@@ -278,8 +274,7 @@ class SummonControl:
     self._allow_list = set(allow_list)
     # the root session's own two scopes bound what its summons may grant a child
     self._credential_scope = set(credential_scope)
-    self._session = session
-    self._project = project
+    self._workspace = workspace
     self._status_file = status_file
     self._audit_file = audit_file
     # the root's trail attribution source: a claude session's recorder publishes
@@ -405,7 +400,7 @@ class SummonControl:
     self._active[message.id] = record
     log.info(
       'summon: %s spawning %s (request %s): %s',
-      self._session,
+      self._workspace.name,
       target,
       message.id,
       record.prompt_head,
@@ -420,18 +415,14 @@ class SummonControl:
     topology and this control's spawn records. None when the peer cannot be
     attributed a bro."""
     if peer == context.root:
-      name, is_container = parse_ref(self._session)
-      root_workspace = (
-        ContainerWorkspace(name, self._project) if is_container else HostWorktree(name, self._project)
-      )  # fmt: skip
       return _Requester(
         allow_list=self._allow_list,
         credentials=lambda: self._credential_scope,
-        summoner={'session': self._session},
+        summoner={'session': self._workspace.name},
         summoned_by=self._root_summoned_by(),
         depth=0,
         list_description="this session's summon allow-list",
-        workspace=root_workspace.path,
+        workspace=self._workspace.tree,
       )
     origin = context.origin.get(peer)
     record = self._active.get(origin[1]) if origin is not None else None
@@ -448,7 +439,7 @@ class SummonControl:
       summoned_by={'trail_id': record.trail_id} if record.trail_id is not None else None,
       depth=record.depth,
       list_description=f"{record.target}'s summon allow-list",
-      workspace=containers_dir(self._project) / _workspace_name(peer),
+      workspace=workspace_tree(self._workspace.project, _workspace_name(peer)),
     )
 
   def _child_credentials(self, record: _ActiveSummon) -> set[str]:
@@ -483,7 +474,7 @@ class SummonControl:
     summoner: Optional[dict[str, Any]],
     error: str,
   ) -> None:
-    log.warning('summon: %s: %s', self._session, error)
+    log.warning('summon: %s: %s', self._workspace.name, error)
     context.reply(peer, {'error': error})
     entry: dict[str, Any] = {
       'request_id': message.id,
@@ -573,7 +564,7 @@ class SummonControl:
     entry = {
       'time': time.strftime('%Y-%m-%dT%H:%M:%S%z'),
       'event': event,
-      'session': self._session,
+      'session': self._workspace.name,
       **entry,
     }
     try:

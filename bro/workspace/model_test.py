@@ -5,7 +5,8 @@ import sys
 import pytest
 
 from bro.workspace import model
-from bro.workspace.model import ContainerWorkspace, HostWorktree, Workspace
+from bro.workspace.metadata import WorkspaceKind
+from bro.workspace.model import ContainerWorkspace, KindMismatch, Workspace, WorktreeWorkspace
 
 
 class _FakeProc:
@@ -13,6 +14,14 @@ class _FakeProc:
     self.returncode = returncode
     self.stdout = stdout
     self.stderr = stderr
+
+
+def _worktree(name: str, project) -> Workspace:
+  return Workspace.create(name, project, WorkspaceKind.WORKTREE)
+
+
+def _container(name: str, project) -> Workspace:
+  return Workspace.create(name, project, WorkspaceKind.CONTAINER)
 
 
 class TestCleanupImage:
@@ -116,8 +125,7 @@ class TestRemoveContainerDir:
 
 
 class TestContainerWorkspaceRemove:
-  def test_removes_dir_with_cleanup_image_and_host_log(self, monkeypatch, tmp_path):
-    monkeypatch.setattr(model, 'containers_dir', lambda project: tmp_path / 'containers')
+  def test_removes_the_whole_workspace_dir_with_the_cleanup_image(self, monkeypatch, tmp_path):
     monkeypatch.setattr(model, '_cleanup_image', lambda: 'example/session:img')
     removed = {}
     monkeypatch.setattr(
@@ -125,36 +133,14 @@ class TestContainerWorkspaceRemove:
       '_remove_container_dir',
       lambda path, image: removed.update(path=path, image=image),
     )
-    workspace = ContainerWorkspace('ws', tmp_path / 'project')
-    host_log = tmp_path / 'project' / 'var' / 'cw' / 'log' / 'c:ws.log'
-    host_log.parent.mkdir(parents=True)
-    host_log.write_text('mid-session line\n')
-    model.record_session_end(tmp_path / 'project', workspace.ref, 0)
+    workspace = _container('ws', tmp_path)
+    workspace.record_session_end(0)
     workspace.remove()
     assert removed == {'path': workspace.path, 'image': 'example/session:img'}
-    # the session host log and end record go with the workspace
-    assert not host_log.exists()
-    assert workspace.is_clean() == (False, ['no recorded session end'])
-
-  def test_host_log_cleaned_even_when_dir_removal_raises(self, monkeypatch, tmp_path):
-    monkeypatch.setattr(model, 'containers_dir', lambda project: tmp_path / 'containers')
-    monkeypatch.setattr(model, '_cleanup_image', lambda: None)
-
-    def boom(path, image):
-      raise RuntimeError('no image')
-
-    monkeypatch.setattr(model, '_remove_container_dir', boom)
-    workspace = ContainerWorkspace('ws', tmp_path / 'project')
-    host_log = tmp_path / 'project' / 'var' / 'cw' / 'log' / 'c:ws.log'
-    host_log.parent.mkdir(parents=True)
-    host_log.write_text('mid-session line\n')
-    with pytest.raises(RuntimeError, match='no image'):
-      workspace.remove()
-    assert not host_log.exists()
 
 
-class TestHostWorktreeRemove:
-  def test_removes_worktree_branch_and_host_log(self, monkeypatch, tmp_path):
+class TestWorktreeWorkspaceRemove:
+  def test_removes_worktree_branch_and_the_workspace_dir(self, monkeypatch, tmp_path):
     calls = []
 
     def fake_git_run(*args, **kwargs):
@@ -162,84 +148,97 @@ class TestHostWorktreeRemove:
       return _FakeProc()
 
     monkeypatch.setattr(model, 'git_run', fake_git_run)
-    workspace = HostWorktree('ws', tmp_path / 'project')
-    host_log = tmp_path / 'project' / 'var' / 'cw' / 'log' / 'ws.log'
-    host_log.parent.mkdir(parents=True)
-    host_log.write_text('mid-session line\n')
-    model.record_session_end(tmp_path / 'project', workspace.ref, 0)
+    workspace = _worktree('ws', tmp_path)
+    workspace.tree.mkdir(parents=True)
+    workspace.record_session_end(0)
+    workspace.host_log.write_text('mid-session line\n')
     workspace.remove()
     assert calls == [
-      ('worktree', 'remove', '--force', str(workspace.path)),
+      ('worktree', 'remove', '--force', str(workspace.tree)),
       ('branch', '-D', 'worktree-ws'),
     ]
-    assert not host_log.exists()
-    assert workspace.is_clean() == (False, ['no recorded session end'])
+    assert not workspace.path.exists()
+
+  def test_a_never_materialized_tree_skips_the_git_removal(self, monkeypatch, tmp_path):
+    calls = []
+
+    def fake_git_run(*args, **kwargs):
+      calls.append(args)
+      return _FakeProc()
+
+    monkeypatch.setattr(model, 'git_run', fake_git_run)
+    workspace = _worktree('ws', tmp_path)
+    workspace.remove()
+    assert calls == [('branch', '-D', 'worktree-ws')]
+    assert not workspace.path.exists()
+
+  def test_a_failed_worktree_removal_raises(self, monkeypatch, tmp_path):
+    monkeypatch.setattr(model, 'git_run', lambda *a, **k: _FakeProc(returncode=1, stderr='busy'))
+    workspace = _worktree('ws', tmp_path)
+    workspace.tree.mkdir(parents=True)
+    with pytest.raises(RuntimeError, match='git worktree remove failed: busy'):
+      workspace.remove()
+    assert workspace.path.exists()
 
 
 class TestSessionEndRecord:
   def test_record_and_clear_round_trip(self, tmp_path):
-    model.record_session_end(tmp_path, 'ws', 0)
-    assert (tmp_path / 'var' / 'cw' / 'exit' / 'ws').read_text() == '0'
-    model.clear_session_end(tmp_path, 'ws')
-    assert not (tmp_path / 'var' / 'cw' / 'exit' / 'ws').exists()
+    workspace = _worktree('ws', tmp_path)
+    workspace.record_session_end(0)
+    assert (workspace.path / 'exit').read_text() == '0'
+    workspace.clear_session_end()
+    assert not (workspace.path / 'exit').exists()
 
   def test_clear_of_an_absent_record_is_a_noop(self, tmp_path):
-    model.clear_session_end(tmp_path, 'ws')
+    _worktree('ws', tmp_path).clear_session_end()
 
   def test_a_kill_is_recorded_without_a_code(self, tmp_path):
-    model.record_session_end(tmp_path, 'ws', None)
-    assert (tmp_path / 'var' / 'cw' / 'exit' / 'ws').read_text() == 'killed'
+    workspace = _worktree('ws', tmp_path)
+    workspace.record_session_end(None)
+    assert (workspace.path / 'exit').read_text() == 'killed'
 
 
 class TestIsClean:
   def test_clean_after_a_recorded_clean_exit(self, tmp_path):
-    model.record_session_end(tmp_path, 'ws', 0)
-    assert HostWorktree('ws', tmp_path).is_clean() == (True, [])
+    workspace = _worktree('ws', tmp_path)
+    workspace.record_session_end(0)
+    assert workspace.is_clean() == (True, [])
 
   def test_not_clean_without_a_record(self, tmp_path):
-    assert HostWorktree('ws', tmp_path).is_clean() == (False, ['no recorded session end'])
+    assert _worktree('ws', tmp_path).is_clean() == (False, ['no recorded session end'])
 
   def test_not_clean_after_a_failed_session(self, tmp_path):
-    model.record_session_end(tmp_path, 'ws', 3)
-    assert HostWorktree('ws', tmp_path).is_clean() == (
-      False,
-      ['last session exited with code 3'],
-    )
+    workspace = _worktree('ws', tmp_path)
+    workspace.record_session_end(3)
+    assert workspace.is_clean() == (False, ['last session exited with code 3'])
 
   def test_not_clean_after_a_killed_session(self, tmp_path):
-    model.record_session_end(tmp_path, 'ws', None)
-    assert HostWorktree('ws', tmp_path).is_clean() == (False, ['last session was killed'])
-
-  def test_container_record_keyed_by_the_prefixed_ref(self, tmp_path):
-    workspace = ContainerWorkspace('ws', tmp_path)
-    model.record_session_end(tmp_path, workspace.ref, 0)
-    assert workspace.is_clean() == (True, [])
-    # the same-name host worktree keeps its own record
-    assert HostWorktree('ws', tmp_path).is_clean()[0] is False
+    workspace = _worktree('ws', tmp_path)
+    workspace.record_session_end(None)
+    assert workspace.is_clean() == (False, ['last session was killed'])
 
 
 class TestSessionLock:
   def test_idle_workspace_is_inactive(self, tmp_path):
-    assert HostWorktree('feat', tmp_path).is_active(set()) is False
+    assert _worktree('feat', tmp_path).is_active(set()) is False
 
   def test_held_lock_reads_as_active(self, tmp_path):
-    workspace = HostWorktree('feat', tmp_path)
+    workspace = _worktree('feat', tmp_path)
     with workspace.hold_session_lock():
       assert workspace.is_active(set()) is True
       assert workspace.lockfile.read_text() == str(os.getpid())
     assert workspace.is_active(set()) is False
 
   def test_a_second_holder_is_refused(self, tmp_path):
-    workspace = HostWorktree('feat', tmp_path)
+    workspace = _worktree('feat', tmp_path)
     with workspace.hold_session_lock():
       with pytest.raises(model.SessionBusy, match=f'feat.*pid {os.getpid()}'):
-        with HostWorktree('feat', tmp_path).hold_session_lock():
+        with Workspace.open('feat', tmp_path).hold_session_lock():
           pass
 
   def test_the_lock_dies_with_its_holder(self, tmp_path):
     # flock releases on process death, so a killed session leaves nothing stale
-    workspace = HostWorktree('feat', tmp_path)
-    workspace.lockfile.parent.mkdir(parents=True, exist_ok=True)
+    workspace = _worktree('feat', tmp_path)
     holder = subprocess.Popen(
       [
         sys.executable,
@@ -260,47 +259,48 @@ class TestSessionLock:
     holder.wait()
     assert workspace.is_active(set()) is False
 
-  def test_a_host_worktree_and_its_same_name_container_lock_apart(self, tmp_path):
-    with HostWorktree('feat', tmp_path).hold_session_lock():
-      with ContainerWorkspace('feat', tmp_path).hold_session_lock():
-        pass
-
-  def test_container_active_when_path_in_mounts(self, tmp_path, monkeypatch):
+  def test_container_active_when_its_tree_is_mounted(self, tmp_path):
     # a running container counts even with no launcher holding the lock
-    monkeypatch.setattr(model, 'containers_dir', lambda project: tmp_path)
-    workspace = ContainerWorkspace('feat', tmp_path)
-    assert workspace.is_active({str(workspace.path)}) is True
+    workspace = _container('feat', tmp_path)
+    assert workspace.is_active({str(workspace.tree)}) is True
     assert workspace.is_active(set()) is False
 
 
-class TestWorkspaceRefsAndEnumeration:
-  def test_from_ref_resolves_host_and_container(self, tmp_path, monkeypatch):
-    worktrees = tmp_path / 'wt'
-    containers = tmp_path / 'ct'
-    (worktrees / 'h').mkdir(parents=True)
-    (containers / 'c').mkdir(parents=True)
-    monkeypatch.setattr(model, 'worktrees_dir', lambda project: worktrees)
-    monkeypatch.setattr(model, 'containers_dir', lambda project: containers)
-    host = Workspace.from_ref('h', tmp_path)
-    container = Workspace.from_ref('c:c', tmp_path)
-    assert isinstance(host, HostWorktree) and host.ref == 'h'
-    assert isinstance(container, ContainerWorkspace) and container.ref == 'c:c'
+class TestKindsAndEnumeration:
+  def test_open_reads_the_recorded_kind(self, tmp_path):
+    _worktree('h', tmp_path)
+    _container('c', tmp_path)
+    assert isinstance(Workspace.open('h', tmp_path), WorktreeWorkspace)
+    assert isinstance(Workspace.open('c', tmp_path), ContainerWorkspace)
 
-  def test_from_ref_raises_with_kind_specific_message(self, tmp_path, monkeypatch):
-    monkeypatch.setattr(model, 'worktrees_dir', lambda project: tmp_path / 'wt')
-    monkeypatch.setattr(model, 'containers_dir', lambda project: tmp_path / 'ct')
+  def test_open_raises_for_an_unknown_name(self, tmp_path):
     with pytest.raises(ValueError, match='^workspace not found: gone$'):
-      Workspace.from_ref('gone', tmp_path)
-    with pytest.raises(ValueError, match='^container workspace not found: c:gone$'):
-      Workspace.from_ref('c:gone', tmp_path)
+      Workspace.open('gone', tmp_path)
 
-  def test_all_enumerates_both_dirs(self, tmp_path, monkeypatch):
-    worktrees = tmp_path / 'wt'
-    containers = tmp_path / 'ct'
-    (worktrees / 'h1').mkdir(parents=True)
-    (worktrees / 'h2').mkdir(parents=True)
-    (containers / 'c1').mkdir(parents=True)
-    monkeypatch.setattr(model, 'worktrees_dir', lambda project: worktrees)
-    monkeypatch.setattr(model, 'containers_dir', lambda project: containers)
-    refs = {workspace.ref for workspace in Workspace.all(tmp_path)}
-    assert refs == {'h1', 'h2', 'c:c1'}
+  def test_create_records_kind_branch_and_throwaway(self, tmp_path):
+    workspace = Workspace.create('ws', tmp_path, WorkspaceKind.CONTAINER, throwaway=True)
+    reopened = Workspace.open('ws', tmp_path)
+    assert reopened.metadata == workspace.metadata
+    assert reopened.metadata.kind is WorkspaceKind.CONTAINER
+    assert reopened.metadata.branch == 'worktree-ws'
+    assert reopened.metadata.throwaway is True
+
+  def test_ensure_returns_the_existing_workspace_of_the_same_kind(self, tmp_path):
+    created = _container('ws', tmp_path)
+    assert Workspace.ensure('ws', tmp_path, WorkspaceKind.CONTAINER).path == created.path
+
+  def test_ensure_refuses_the_other_kind(self, tmp_path):
+    _container('ws', tmp_path)
+    with pytest.raises(KindMismatch, match='is a container workspace, not worktree'):
+      Workspace.ensure('ws', tmp_path, WorkspaceKind.WORKTREE)
+
+  def test_all_enumerates_one_namespace(self, tmp_path):
+    _worktree('h1', tmp_path)
+    _worktree('h2', tmp_path)
+    _container('c1', tmp_path)
+    listed = {workspace.name: workspace.kind for workspace in Workspace.all(tmp_path)}
+    assert listed == {
+      'h1': WorkspaceKind.WORKTREE,
+      'h2': WorkspaceKind.WORKTREE,
+      'c1': WorkspaceKind.CONTAINER,
+    }

@@ -4,8 +4,8 @@
 provisioned channel socket mount and `BROKER_CHANNEL`, and runs the shared
 blocking container prepare off-loop. A TTY launch attaches with inherited stdio
 and host-log redirection; a headless launch captures merged output in a bounded
-ring and can remove its caller-marked throwaway workspace after a clean exit —
-a failed or killed child's workspace stays on disk for inspection. The
+ring and can remove its workspace after a clean exit when the workspace records
+itself throwaway — a failed or killed child's stays on disk for inspection. The
 neutral launch owns the complete docker inputs, including the explicit env
 snapshot and whether ambient forwarding is allowed.
 
@@ -34,7 +34,8 @@ from bro.workspace.docker import (
   prepare_container,
   suspend_until_continued,
 )
-from bro.workspace.model import ContainerWorkspace, clear_session_end, record_session_end
+from bro.workspace.metadata import WorkspaceKind
+from bro.workspace.model import Workspace
 from bro.workspace.paths import project_root
 
 DEFAULT_RING_BYTES = 1 << 16  # 64 KiB — a full traceback + context, bounded
@@ -50,7 +51,6 @@ class DockerLaunchSpec(LaunchSpec):
 
   launch: DockerLaunch
   ring_bytes: int = DEFAULT_RING_BYTES
-  remove_workspace: bool = False
 
 
 @dataclass(frozen=True)
@@ -118,7 +118,7 @@ class _DockerChild(ChildHandle):
     container_id: str,
     process: asyncio.subprocess.Process,
     ring_bytes: int,
-    workspace: Optional[ContainerWorkspace],
+    workspace: Optional[Workspace],
   ):
     self._container_id = container_id
     self._process = process
@@ -134,7 +134,7 @@ class _DockerChild(ChildHandle):
         return
       self._ring.write(chunk)
 
-  def _detach_workspace(self) -> Optional[ContainerWorkspace]:
+  def _detach_workspace(self) -> Optional[Workspace]:
     # wait() and kill() can both get here (the timeout path kills, then the attach
     # exits); the swap runs synchronously on the one loop, so the workspace is
     # settled exactly once — a kill's keep decision holds even when the attach
@@ -142,7 +142,7 @@ class _DockerChild(ChildHandle):
     workspace, self._workspace = self._workspace, None
     return workspace
 
-  async def _remove_workspace(self, workspace: ContainerWorkspace) -> None:
+  async def _remove_workspace(self, workspace: Workspace) -> None:
     # best-effort: a child's dirs must never break lifecycle routing
     try:
       # remove() shells out (image discovery, root-escalated rm); keep it off the loop
@@ -158,7 +158,7 @@ class _DockerChild(ChildHandle):
       if code == 0:
         await self._remove_workspace(workspace)
       else:
-        record_session_end(workspace.project, workspace.ref, code)
+        workspace.record_session_end(code)
         log.info('child exited with code %d; keeping workspace %s', code, workspace.name)
     return code
 
@@ -166,7 +166,7 @@ class _DockerChild(ChildHandle):
     await _force_remove(self._container_id)
     workspace = self._detach_workspace()
     if workspace is not None:
-      record_session_end(workspace.project, workspace.ref, None)
+      workspace.record_session_end(None)
       log.info('child killed; keeping workspace %s', workspace.name)
 
   def output_tail(self) -> str:
@@ -328,14 +328,15 @@ class _AttachedProcess(_AttachedHandle):
 
 def _prepare_docker_spawn(
   launch: DockerLaunchSpec, channel: Provisioned
-) -> tuple[str, Optional[ContainerWorkspace]]:
+) -> tuple[str, Optional[Workspace]]:
   docker_launch = _broker_launch(launch.launch, channel)
   project = project_root()
+  # ensured before the prepare, which reads the record
+  workspace = Workspace.ensure(docker_launch.name, project, WorkspaceKind.CONTAINER)
   container_id = prepare_container(docker_launch, project)
-  if not launch.remove_workspace:
+  if not workspace.metadata.throwaway:
     return container_id, None
-  workspace = ContainerWorkspace(docker_launch.name, project)
-  clear_session_end(project, workspace.ref)
+  workspace.clear_session_end()
   return container_id, workspace
 
 

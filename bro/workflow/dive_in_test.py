@@ -36,11 +36,9 @@ def _brog_task(name: str = 'my task'):
 def fake_proj(monkeypatch, tmp_path):
   monkeypatch.setattr(workspace_paths, 'project_root', lambda: tmp_path)
   monkeypatch.setattr(dive_in, '_fresh_origin_head', lambda: FRESH_SHA)
-  worktrees = tmp_path / 'var' / 'cw' / 'worktrees'
-  containers = tmp_path / 'var' / 'cw' / 'containers'
-  worktrees.mkdir(parents=True)
-  containers.mkdir(parents=True)
-  return worktrees, containers
+  workspaces = workspace_paths.workspaces_dir(tmp_path)
+  workspaces.mkdir(parents=True)
+  return workspaces
 
 
 class TestLaunchCommand:

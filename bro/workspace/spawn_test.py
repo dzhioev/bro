@@ -11,7 +11,16 @@ import pytest
 
 import bro.workspace.docker as workspace_docker
 import bro.workspace.spawn as workspace_spawn
-from bro.workspace.model import ContainerWorkspace
+from bro.workspace.metadata import WorkspaceKind
+from bro.workspace.model import Workspace
+
+
+def _throwaway(name: str, project) -> Workspace:
+  return Workspace.create(name, project, WorkspaceKind.CONTAINER, throwaway=True)
+
+
+def _exit_record(tmp_path) -> str:
+  return (tmp_path / 'proj' / 'var' / 'cw' / 'workspaces' / 'broker-CH' / 'exit').read_text()
 
 
 class TestDockerLaunchSpec:
@@ -27,7 +36,6 @@ class TestDockerLaunchSpec:
     )
     spec = workspace_spawn.DockerLaunchSpec(launch)
     assert spec.ring_bytes == workspace_spawn.DEFAULT_RING_BYTES == 64 * 1024
-    assert spec.remove_workspace is False
 
 
 class TestBrokerLaunch:
@@ -317,8 +325,8 @@ class TestDockerChildCapture:
 
 
 class TestDockerChildWorkspaceCleanup:
-  def _workspace(self, monkeypatch, tmp_path, removed: list) -> ContainerWorkspace:
-    child_workspace = ContainerWorkspace('broker-CH', tmp_path / 'proj')
+  def _workspace(self, monkeypatch, tmp_path, removed: list) -> Workspace:
+    child_workspace = _throwaway('broker-CH', tmp_path / 'proj')
     monkeypatch.setattr(child_workspace, 'remove', lambda: removed.append(child_workspace.name))
     return child_workspace
 
@@ -349,7 +357,7 @@ class TestDockerChildWorkspaceCleanup:
     )
     assert await child.wait() == 3
     assert removed == []
-    assert (tmp_path / 'proj' / 'var' / 'cw' / 'exit' / 'c:broker-CH').read_text() == '3'
+    assert _exit_record(tmp_path) == '3'
 
   @pytest.mark.asyncio
   async def test_kill_keeps_and_records_the_throwaway_workspace(self, monkeypatch, tmp_path):
@@ -361,16 +369,16 @@ class TestDockerChildWorkspaceCleanup:
     child = await self._child(self._workspace(monkeypatch, tmp_path, removed))
     await child.kill()
     assert removed == []
-    assert (tmp_path / 'proj' / 'var' / 'cw' / 'exit' / 'c:broker-CH').read_text() == 'killed'
+    assert _exit_record(tmp_path) == 'killed'
     # the timeout path kills, then the attach exits — here with code 0: the kill's
     # keep decision must hold anyway
     assert await child.wait() == 0
     assert removed == []
-    assert (tmp_path / 'proj' / 'var' / 'cw' / 'exit' / 'c:broker-CH').read_text() == 'killed'
+    assert _exit_record(tmp_path) == 'killed'
 
   @pytest.mark.asyncio
   async def test_removal_failure_warns_instead_of_raising(self, monkeypatch, tmp_path):
-    child_workspace = ContainerWorkspace('broker-CH', tmp_path / 'proj')
+    child_workspace = _throwaway('broker-CH', tmp_path / 'proj')
 
     def boom():
       raise RuntimeError('root-owned files')
@@ -515,23 +523,19 @@ class TestDockerSpawnerModes:
     def fake_prepare(launch, prepared_project):
       prepared.append((launch, prepared_project))
       prepare_threads.append(threading.get_ident())
-      (project / 'var' / 'cw' / 'containers' / launch.name).mkdir(parents=True)
       return 'cid123'
 
     monkeypatch.setattr(workspace_spawn, 'prepare_container', fake_prepare)
+    ensured = Workspace.ensure
 
-    class FakeWorkspace:
-      def __init__(self, name, workspace_project):
-        self.name = name
-        self.project = workspace_project
-        self.ref = f'c:{name}'
-        workspace_threads.append(threading.get_ident())
-        assert workspace_project == project
+    def fake_ensure(name, workspace_project, kind, **kwargs):
+      workspace_threads.append(threading.get_ident())
+      assert workspace_project == project
+      workspace = ensured(name, workspace_project, kind, **kwargs)
+      monkeypatch.setattr(workspace, 'remove', lambda: None)
+      return workspace
 
-      def remove(self):
-        pass
-
-    monkeypatch.setattr(workspace_spawn, 'ContainerWorkspace', FakeWorkspace)
+    monkeypatch.setattr(workspace_spawn.Workspace, 'ensure', fake_ensure)
 
     async def fake_remove(container_id):
       pass
@@ -613,7 +617,7 @@ class TestDockerSpawnerModes:
       tty=False,
       forward_env=False,
     )
-    launch = workspace_spawn.DockerLaunchSpec(docker_launch, remove_workspace=True)
+    launch = workspace_spawn.DockerLaunchSpec(docker_launch)
     provisioned = workspace_spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
     handle = await workspace_spawn.DockerSpawner().spawn(launch, provisioned)
     loop_thread = threading.get_ident()

@@ -4,6 +4,8 @@ import pytest
 
 import bro.workspace.docker as workspace_docker
 import bro.workspace.project as workspace_project
+from bro.workspace.metadata import WorkspaceKind
+from bro.workspace.model import Workspace
 
 
 class _FakeProc:
@@ -210,6 +212,7 @@ class TestPruneSupersededImages:
 class TestPrepareContainer:
   def test_runs_the_shared_prepare_sequence_from_the_launch(self, monkeypatch, tmp_path):
     project = tmp_path / 'project'
+    workspace = Workspace.create('ws', project, WorkspaceKind.CONTAINER)
     events: list = []
     monkeypatch.setattr(workspace_docker, 'image_tag', lambda: events.append('tag') or 'image')
     monkeypatch.setattr(
@@ -243,7 +246,7 @@ class TestPrepareContainer:
       extra_mounts=('/host:/container',),
     )
     assert workspace_docker.prepare_container(launch, project) == 'cid'
-    assert (project / 'var' / 'cw' / 'containers' / 'ws').is_dir()
+    assert workspace.tree.is_dir()
     assert events[0:3] == [
       'tag',
       ('ensure', 'image'),
@@ -251,13 +254,7 @@ class TestPrepareContainer:
     ]
     argv_event = events[3]
     assert argv_event[0] == 'argv'
-    assert argv_event[1] == (
-      'image',
-      'ws',
-      project,
-      project / 'var' / 'cw' / 'containers' / 'ws',
-      ['claude'],
-    )
+    assert argv_event[1] == ('image', 'ws', project, workspace.tree, 'worktree-ws', ['claude'])
     assert argv_event[2] == {
       'docker_sock': False,
       'extra_env': {'MARKER': 'x'},
@@ -275,7 +272,7 @@ class TestDockerCreateArgv:
 
     def build(**kwargs):
       return workspace_docker._docker_create_argv(
-        'tag', 'ws', tmp_path / 'proj', tmp_path / 'sess', ['claude'], **kwargs
+        'tag', 'ws', tmp_path / 'proj', tmp_path / 'tree', 'worktree-ws', ['claude'], **kwargs
       )
 
     return build

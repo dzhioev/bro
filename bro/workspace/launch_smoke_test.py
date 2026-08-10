@@ -26,7 +26,8 @@ import pytest
 import bro.workspace.docker as workspace_docker
 import bro.workspace.project as workspace_project
 from bro.workspace.docker import Launch
-from bro.workspace.paths import containers_dir
+from bro.workspace.metadata import WorkspaceKind
+from bro.workspace.model import Workspace
 
 
 def _docker_available() -> bool:
@@ -200,15 +201,15 @@ def launched(isolated: Isolated) -> Iterator[Launched]:
         tty=False,
         forward_env=False,
       )
+      recorded = Workspace.create(_WORKSPACE_NAME, isolated.project, WorkspaceKind.CONTAINER)
       container_id = workspace_docker.prepare_container(launch, isolated.project)
-      workspace = containers_dir(isolated.project) / _WORKSPACE_NAME
-      running, output = _start_and_observe(container_id, workspace)
+      running, output = _start_and_observe(container_id, recorded.tree)
       yield Launched(
         tag=tag,
         image_before=image_before,
         image_after=_image_present(tag),
         running=running,
-        workspace=workspace,
+        workspace=recorded.tree,
         output=output,
       )
 

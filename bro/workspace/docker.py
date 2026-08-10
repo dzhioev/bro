@@ -11,7 +11,8 @@ from typing import Optional
 from bro.base import credentials, log
 from bro.workspace import build_context
 from bro.workspace.build_context import BASE_IMAGE_DIR, CONTAINER_DIR
-from bro.workspace.paths import containers_dir, project_root
+from bro.workspace.metadata import read_metadata
+from bro.workspace.paths import project_root, workspace_tree
 from bro.workspace.project import project_config
 from bro.workspace.store import _bro_tarball
 
@@ -232,10 +233,13 @@ def _create_container(argv: list[str], store_tarball: bytes, name: str) -> str:
 
 
 def prepare_container(launch: Launch, project: Path) -> str:
-  """create the workspace and unstarted container described by `launch`."""
+  """materialize the workspace's tree directory and create the unstarted
+  container described by `launch`. the workspace itself must already be
+  recorded — the launch surface creates it (`workspace.model.Workspace`)."""
   log.info('creating container workspace %s', launch.name)
-  session = containers_dir(project) / launch.name
-  session.mkdir(parents=True, exist_ok=True)
+  branch = read_metadata(project, launch.name).branch
+  tree = workspace_tree(project, launch.name)
+  tree.mkdir(parents=True, exist_ok=True)
   tag = image_tag()
   _ensure_image(tag)
   log.verbose('hydrating the scoped credential store')
@@ -244,7 +248,8 @@ def prepare_container(launch: Launch, project: Path) -> str:
     tag,
     launch.name,
     project,
-    session,
+    tree,
+    branch,
     launch.command,
     docker_sock=launch.docker_sock,
     extra_env=launch.env,
@@ -259,7 +264,8 @@ def _docker_create_argv(
   tag: str,
   name: str,
   project: Path,
-  session: Path,
+  tree: Path,
+  branch: str,
   command: list[str],
   *,
   docker_sock: bool = True,
@@ -303,7 +309,7 @@ def _docker_create_argv(
     # infra deploys) would leak a zombie grandchild for the container's lifetime.
     '--init',
     '-v',
-    f'{session}:/workspace',
+    f'{tree}:/workspace',
     '-v',
     f'{project}:/host-repo:ro',
     '-v',
@@ -312,10 +318,12 @@ def _docker_create_argv(
     'HOME=/home/cw',
     '-e',
     f'CW_NAME={name}',
+    '-e',
+    f'CW_BRANCH={branch}',
     # surface the host-side workspace path inside the container so `cw banner`
     # can show users where their /workspace mount actually lives on the host
     '-e',
-    f'CW_HOST_WORKSPACE={session}',
+    f'CW_HOST_WORKSPACE={tree}',
     # the host machine's name — a container's own gethostname is the container id
     '-e',
     f'CW_HOST={socket.gethostname()}',

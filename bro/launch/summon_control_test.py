@@ -7,6 +7,9 @@ import bro.launch.spawn
 import bro.launch.summon_control
 from bro.broker.brotocol import Message
 from bro.broker.dispatcher import Dispatcher
+from bro.workspace.metadata import WorkspaceKind
+from bro.workspace.model import Workspace
+from bro.workspace.paths import workspace_tree
 
 
 @pytest.fixture(autouse=True)
@@ -78,14 +81,17 @@ class FakeContext:
     self.spawned.append((launch, peer, timeout))
 
 
+def _workspace(tmp_path, name='ws') -> Workspace:
+  return Workspace.ensure(name, tmp_path, WorkspaceKind.CONTAINER)
+
+
 def _control(
   tmp_path, allow_list, session='ws', credential_scope=()
 ) -> bro.launch.summon_control.SummonControl:
   return bro.launch.summon_control.SummonControl(
     allow_list=allow_list,
     credential_scope=credential_scope,
-    session=session,
-    project=tmp_path,
+    workspace=_workspace(tmp_path, session),
     status_file=tmp_path / 'summon-status.json',
     audit_file=tmp_path / 'audit' / 'ws.jsonl',
   )
@@ -132,7 +138,7 @@ class TestSummonHandler:
       prompt='deploy the thing',
       # the root's base-ref inheritance source: the bare session key names a host
       # worktree
-      parent_workspace=tmp_path / 'var' / 'cw' / 'worktrees' / 'ws',
+      parent_workspace=workspace_tree(tmp_path, 'ws'),
       summoner=None,
     )
     assert peer == ROOT
@@ -255,14 +261,6 @@ class TestSummonHandler:
     [(_, payload)] = context.replies
     assert 'malformed grant/revoke' in payload['error']
 
-  def test_container_session_key_names_the_container_workspace(self, tmp_path):
-    control = _control(tmp_path, {'dev'}, session='c:ws')
-    context = FakeContext()
-    # cast: FakeContext stands in for the Dispatcher surface structurally
-    control.handle(cast(Dispatcher, context), ROOT, _summon_message())
-    [(launch, _, _)] = context.spawned
-    assert launch.parent_workspace == tmp_path / 'var' / 'cw' / 'containers' / 'ws'
-
   def test_child_summon_follows_its_own_seeds(self, tmp_path):
     # a summoned bro-dev child summons dev (bro-dev's static seed): spawned
     # with the child as the parent, audit + status naming the child as summoner
@@ -281,7 +279,7 @@ class TestSummonHandler:
       target='dev',
       prompt='deploy the thing',
       # a child summoner's base-ref inheritance source: its broker-<channel> clone
-      parent_workspace=tmp_path / 'var' / 'cw' / 'containers' / f'broker-{CHILD}',
+      parent_workspace=workspace_tree(tmp_path, f'broker-{CHILD}'),
       summoner={'trail_id': 'T1'},
     )
     assert peer == CHILD
@@ -320,8 +318,7 @@ class TestSummonHandler:
     pointer.write_text(json.dumps({'trail_id': 'CT9'}))
     control = bro.launch.summon_control.SummonControl(
       allow_list={'dev'},
-      session='ws',
-      project=tmp_path,
+      workspace=_workspace(tmp_path),
       status_file=tmp_path / 'summon-status.json',
       audit_file=tmp_path / 'audit' / 'ws.jsonl',
       trail_pointer=pointer,
@@ -336,8 +333,7 @@ class TestSummonHandler:
     # the pointer file does not exist — absent provenance, never a legacy shape
     control = bro.launch.summon_control.SummonControl(
       allow_list={'dev'},
-      session='ws',
-      project=tmp_path,
+      workspace=_workspace(tmp_path),
       status_file=tmp_path / 'summon-status.json',
       audit_file=tmp_path / 'audit' / 'ws.jsonl',
       trail_pointer=tmp_path / 'current-trail.json',

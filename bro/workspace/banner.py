@@ -5,7 +5,6 @@ from typing import Optional
 
 from bro.monitor import health
 from bro.workspace import paths
-from bro.workspace.model import format_ref
 
 # six-line block-letter "B R O" rendered with box-drawing characters;
 # shown on top of the `cw banner` output when the session carries a bro (CW_BRO).
@@ -99,7 +98,7 @@ class SessionFacts:
       except subprocess.CalledProcessError:
         project = None
       if project is not None:
-        candidate = paths.worktrees_dir(project) / name
+        candidate = paths.workspace_tree(project, name)
         if candidate.is_dir():
           host_workspace = str(candidate)
 
@@ -127,10 +126,8 @@ class SessionFacts:
     )
 
   @property
-  def display_ref(self) -> str:
-    """the workspace name with the container `c:` prefix when in a container."""
-    name = self.name if self.name is not None else '(unnamed)'
-    return format_ref(name, self.in_container)
+  def display_name(self) -> str:
+    return self.name if self.name is not None else '(unnamed)'
 
   def render_visual(self) -> str:
     """render the banner with ANSI colour + the Bro logo for bro sessions."""
@@ -157,7 +154,7 @@ class SessionFacts:
     # collect rows as (label, label_style, value) — label_style is applied to
     # the padded label so width math runs on the raw text, not on ANSI bytes
     rows: list[tuple[str, str, str]] = [
-      ('cw session:', '', f'{bold}{self.display_ref}{reset}'),
+      ('cw session:', '', f'{bold}{self.display_name}{reset}'),
     ]
 
     # `cw command` is the canonical `cw ss …` invocation; suppress when it's
@@ -211,7 +208,7 @@ class SessionFacts:
       # first line so it lands in Claude's collapsed tool-output preview without
       # needing expansion; the agent should relay it to the user
       lines.append('session_recording: FAILING — see session-recorder.log')
-    lines.append(f'kind: {"container" if self.in_container else "host worktree"}')
+    lines.append(f'kind: {"container" if self.in_container else "worktree"}')
     pairs: list[tuple[str, str]] = [
       ('name', 'name'),
       ('bro', 'bro'),

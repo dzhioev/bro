@@ -22,22 +22,27 @@ def project_root() -> Path:
   return Path(git_out('rev-parse', '--git-common-dir')).resolve().parent
 
 
-def worktrees_dir(project: Path) -> Path:
-  return project / 'var' / 'cw' / 'worktrees'
+def workspaces_dir(project: Path) -> Path:
+  return project / 'var' / 'cw' / 'workspaces'
 
 
-def containers_dir(project: Path) -> Path:
-  return project / 'var' / 'cw' / 'containers'
+def workspace_dir(project: Path, name: str) -> Path:
+  """a workspace's own directory: its tree plus every record kept about it."""
+  return workspaces_dir(project) / name
+
+
+def workspace_tree(project: Path, name: str) -> Path:
+  # a subdirectory rather than the workspace dir itself: a container binds the
+  # tree as /workspace, and the workspace's records must stay outside that mount.
+  return workspace_dir(project, name) / 'tree'
 
 
 def fresh_workspace_name(base: str) -> str:
-  """mint a workspace name absent from both local workspace namespaces."""
+  """mint a workspace name that no local workspace holds."""
   project = project_root()
-  worktrees = worktrees_dir(project)
-  containers = containers_dir(project)
   while True:
     name = f'{base}-{secrets.token_hex(4)}'
-    if not (worktrees / name).exists() and not (containers / name).exists():
+    if not workspace_dir(project, name).exists():
       return name
 
 
@@ -52,34 +57,6 @@ def summon_dir(project: Path) -> Path:
   # per-session summon audit and live-status files. outside the workspace dirs on
   # purpose: the audit must survive a workspace drop.
   return project / 'var' / 'cw' / 'summon'
-
-
-def session_end_dir(project: Path) -> Path:
-  # per-workspace record of how the last session ended (workspace/model.py:
-  # record_session_end). outside the workspace dirs so the file never lands
-  # inside a /workspace mount; removed with the workspace.
-  return project / 'var' / 'cw' / 'exit'
-
-
-def session_lock_dir(project: Path) -> Path:
-  # per-workspace session lock (workspace/model.py: Workspace.hold_session_lock).
-  # outside the workspace dirs so the file never lands inside a /workspace mount;
-  # removed with the workspace.
-  return project / 'var' / 'cw' / 'lock'
-
-
-def resume_spec_dir(project: Path) -> Path:
-  # per-workspace record of the session spec a resume relaunches. outside the
-  # workspace dirs so the file never lands inside a /workspace mount; removed
-  # with the workspace.
-  return project / 'var' / 'cw' / 'resume'
-
-
-def host_log_dir(project: Path) -> Path:
-  # per-session host logs: where the outer launch process's mid-session output goes
-  # while an interactive root owns the terminal (see workspace/spawn.py). outside
-  # the workspace dirs so the file never lands inside a /workspace mount.
-  return project / 'var' / 'cw' / 'log'
 
 
 def in_container() -> bool:
