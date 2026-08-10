@@ -204,7 +204,7 @@ async def _interpret(
   from bro.prompts import get_prompt
 
   request = {'command': command, 'scripts': _dispatcher_roster(scripts)}
-  interpretation = await mu(
+  interpretation = await mu.aio(
     get_prompt('script_dispatch.prompt'),
     _Interpretation,
     JSON(request),

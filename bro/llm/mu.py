@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+import asyncio
 import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -107,23 +108,28 @@ def create_input(prompt: str, *args: Content) -> ResponseInputParam:
   return result
 
 
-async def mu[T: BaseModel](
-  prompt: str, result: type[T], *args: Content, reasoning_effort: ReasoningEffort = None
-) -> T:
-  # awaited, not blocking: every mu call sits inside a tool call on the agent
-  # loop (the script dispatcher, a data source's query summary), where a
-  # blocking roundtrip would freeze the session for its whole duration and
-  # outlive any interruption.
-  from openai import AsyncOpenAI
+class _Mu:
+  def __call__[T: BaseModel](
+    self, prompt: str, result: type[T], *args: Content, reasoning_effort: ReasoningEffort = None
+  ) -> T:
+    return asyncio.run(self.aio(prompt, result, *args, reasoning_effort=reasoning_effort))
 
-  async with AsyncOpenAI(api_key=credentials.get_json('openai')['api_key']) as client:
-    response = await client.responses.parse(
-      model='gpt-5.1-2025-11-13',
-      input=create_input(prompt, *args),
-      reasoning={'effort': reasoning_effort},
-      text_format=result,
-    )
-  if response.output_parsed is None:
-    response_str = ic.format(response)
-    raise RuntimeError(f'no parsed output in response: {response_str}')
-  return response.output_parsed
+  async def aio[T: BaseModel](
+    self, prompt: str, result: type[T], *args: Content, reasoning_effort: ReasoningEffort = None
+  ) -> T:
+    from openai import AsyncOpenAI
+
+    async with AsyncOpenAI(api_key=credentials.get_json('openai')['api_key']) as client:
+      response = await client.responses.parse(
+        model='gpt-5.1-2025-11-13',
+        input=create_input(prompt, *args),
+        reasoning={'effort': reasoning_effort},
+        text_format=result,
+      )
+    if response.output_parsed is None:
+      response_str = ic.format(response)
+      raise RuntimeError(f'no parsed output in response: {response_str}')
+    return response.output_parsed
+
+
+mu = _Mu()
