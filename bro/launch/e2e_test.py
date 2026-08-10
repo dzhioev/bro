@@ -453,7 +453,7 @@ class _Driver:
     # -P keeps the driver's cwd (the isolated project clone, which carries its own copy
     # of every package) off sys.path: the launcher code under test must resolve from
     # this checkout's editable venv, and scenario D's PYTHONPATH shadow must win the
-    # `import broker` lookup
+    # `import bro.broker` lookup
     self.process = subprocess.Popen(
       [sys.executable, '-P', '-c', _DRIVER],
       stdin=slave,
@@ -857,12 +857,32 @@ class TestKillSwitch:
 # --- D: broker unimportable in the launcher -----------------------------------
 
 
+# makes `import bro.broker` fail in the launcher. a module file cannot shadow a
+# submodule of an installed package — the name resolves through the real
+# `bro.__path__` and never consults PYTHONPATH — so the block is a meta-path
+# finder, delivered through the `sitecustomize` that site imports from PYTHONPATH
+# at interpreter start.
+_BROKER_SHADOW = """
+import sys
+
+
+class _Unimportable:
+  def find_spec(self, name, path=None, target=None):
+    if name == 'bro.broker' or name.startswith('bro.broker.'):
+      raise ImportError('shadowed for the degrade scenario')
+    return None
+
+
+sys.meta_path.insert(0, _Unimportable())
+"""
+
+
 @pytest.fixture(scope='module')
 def scenario_d(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> LiveRun:
   env = isolated_env
   shadow = env.root / 'shadow'
   shadow.mkdir(exist_ok=True)
-  (shadow / 'bro.broker.py').write_text("raise ImportError('shadowed for the degrade scenario')\n")
+  (shadow / 'sitecustomize.py').write_text(_BROKER_SHADOW)
   name = f'{_NAME_PREFIX}d-root'
   driver = _Driver(
     env, name, ['python', '-c', _PROBE_NO_CHANNEL], extra_env={'PYTHONPATH': str(shadow)}
