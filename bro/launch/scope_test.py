@@ -187,7 +187,7 @@ class TestPreflightScopedLaunch:
   # summon_allow_list is patched to keep the bro-registry import out; the
   # override semantics of each step have their own tests
   def _preflight(self, scoped, **overrides):
-    kwargs = {'grant': [], 'revoke': []}
+    kwargs = {'grant': [], 'revoke': [], 'swap_credentials': []}
     kwargs.update(overrides)
     return bro.launch.scope.preflight_scoped_launch(scoped, 'bro-dev', **kwargs)
 
@@ -211,6 +211,60 @@ class TestPreflightScopedLaunch:
     assert allow_list.call_args == (('bro-dev',), {'grant': ['dev'], 'revoke': ['bro']})
     # the store is hydrated from the finalized tiers, not the incoming ones
     assert build.call_args == (({'github', 'gmail_creds'},), {'optional': {'openai'}})
+
+  def test_swap_credentials_replaces_the_selected_same_kind_name(self):
+    with (
+      patch('bro.launch.summon_control.summon_allow_list', return_value=set()),
+      patch('bro.launch.scope.credentials.build_scoped_store', return_value={}),
+    ):
+      scoped, _, _ = self._preflight(
+        bro.launch.scope.ScopedSecrets({'brog', 'github'}, set(), True),
+        swap_credentials=['brog+github'],
+      )
+    assert scoped.required == {'brog+github', 'github'}
+
+  def test_swap_credentials_can_select_the_bare_kind(self):
+    with (
+      patch('bro.launch.summon_control.summon_allow_list', return_value=set()),
+      patch('bro.launch.scope.credentials.build_scoped_store', return_value={}),
+    ):
+      scoped, _, _ = self._preflight(
+        bro.launch.scope.ScopedSecrets({'brog+github'}, set(), True), swap_credentials=['brog']
+      )
+    assert scoped.required == {'brog'}
+
+  def test_swap_credentials_grants_an_optional_replacement_as_required(self):
+    with (
+      patch('bro.launch.summon_control.summon_allow_list', return_value=set()),
+      patch('bro.launch.scope.credentials.build_scoped_store', return_value={}),
+    ):
+      scoped, _, _ = self._preflight(
+        bro.launch.scope.ScopedSecrets(set(), {'openai'}, True),
+        swap_credentials=['openai+work'],
+      )
+    assert scoped.required == {'openai+work'}
+    assert scoped.optional == set()
+
+  @pytest.mark.parametrize(
+    ('scoped', 'targets', 'message'),
+    [
+      (bro.launch.scope.ScopedSecrets({'github'}, set(), True), ['brog+github'], 'not in'),
+      (
+        bro.launch.scope.ScopedSecrets({'brog+github'}, set(), True),
+        ['brog+github'],
+        'already selected',
+      ),
+      (
+        bro.launch.scope.ScopedSecrets({'brog'}, set(), True),
+        ['brog+github', 'brog+linear'],
+        'more than once',
+      ),
+      (bro.launch.scope.ScopedSecrets({'brog'}, set(), True), ['@brog'], 'malformed secret name'),
+    ],
+  )
+  def test_bad_swap_credentials_raises_launch_scope_error(self, scoped, targets, message):
+    with pytest.raises(bro.launch.scope.LaunchScopeError, match=message):
+      self._preflight(scoped, swap_credentials=targets)
 
   def test_bad_credential_override_raises_launch_scope_error(self):
     with pytest.raises(
@@ -256,6 +310,7 @@ class TestLaunchViewStore:
         bro.launch.scope.ScopedSecrets({'brog', 'github'}, {'openai'}, True),
         grant=['brog+github', '@dev'],
         revoke=['brog'],
+        swap_credentials=[],
       )
     assert store == 'the-view'
     assert view.call_args == (({'brog+github', 'github'},), {'optional': {'openai'}})
@@ -265,5 +320,8 @@ class TestLaunchViewStore:
       bro.launch.scope.LaunchScopeError, match='already in the scoped credential set'
     ):
       bro.launch.scope.launch_view_store(
-        bro.launch.scope.ScopedSecrets({'github'}, set(), True), grant=['github'], revoke=[]
+        bro.launch.scope.ScopedSecrets({'github'}, set(), True),
+        grant=['github'],
+        revoke=[],
+        swap_credentials=[],
       )

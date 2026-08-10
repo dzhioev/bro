@@ -49,8 +49,8 @@ class SessionSpec:
 
   one object replaces the positional soup threaded through the launch layers;
   credential scoping, the summon allow-list, and the CW_COMMAND / resume-hint env
-  all read off it. the grant/revoke lists are normalized to [] (the parser leaves
-  them None when unset).
+  all read off it. the grant/revoke/swap lists are normalized to [] (the parser
+  leaves them None when unset).
   """
 
   name: str
@@ -60,6 +60,7 @@ class SessionSpec:
   fast: bool
   grant: list[str]
   revoke: list[str]
+  swap_credentials: list[str]
   effort: Optional[str]
   resume: bool
   into: Optional[str]
@@ -69,7 +70,7 @@ class SessionSpec:
   claude_args: list[str]
 
   def __post_init__(self) -> None:
-    for field in ('grant', 'revoke'):
+    for field in ('grant', 'revoke', 'swap_credentials'):
       if getattr(self, field) is None:
         object.__setattr__(self, field, [])
 
@@ -115,6 +116,8 @@ class SessionSpec:
       parts.extend(['--grant', g])
     for r in self.revoke:
       parts.extend(['--revoke', r])
+    for target in self.swap_credentials:
+      parts.extend(['--swap-cred', target])
     if self.into is not None:
       parts.extend(['--into', self.into])
     parts.extend([self.name, *self.claude_args])
@@ -125,7 +128,7 @@ class SessionSpec:
     program token), for the outer layer to spawn in a prepared bro.workspace.a second serialization, distinct from to_command_argv: it carries the prompt
     and the forwarded claude args (which to_command_argv deliberately omits) and
     drops the flags the outer already consumed (--host --drop --grant --revoke
-    --into). the prompt uses the
+    --swap-cred --into). the prompt uses the
     joined `=` form so a prompt starting with `-` can't be mistaken for a flag."""
     flags = {'--fast': self.fast, '--resume': self.resume, '--raw': self.raw}
     parts = ['ss', '--in-place', *(f for f, v in flags.items() if v)]
@@ -345,6 +348,7 @@ def _container_session(spec: SessionSpec, workspace: Workspace, base_ref: Option
       bro_name,
       grant=spec.grant,
       revoke=spec.revoke,
+      swap_credentials=spec.swap_credentials,
     )
   except LaunchScopeError as e:
     log.error('%s', e)
@@ -445,6 +449,7 @@ def _host_session(spec: SessionSpec, workspace: Workspace, base_ref: Optional[st
       bro_name,
       grant=spec.grant,
       revoke=spec.revoke,
+      swap_credentials=spec.swap_credentials,
     )
   except LaunchScopeError as e:
     log.error('%s', e)

@@ -170,18 +170,22 @@ class TestSummonHandler:
   def test_credential_overrides_ride_the_spawn_and_land_in_the_audit(self, tmp_path):
     # the credential half is applied against the child's own scope in the
     # lowering; only the `@bro` half resolves here
-    control = _control(tmp_path, {'dev', 'bro'}, credential_scope={'aws'})
+    control = _control(tmp_path, {'dev', 'bro'}, credential_scope={'aws', 'brog+github'})
     context = FakeContext()
     # cast: FakeContext stands in for the Dispatcher surface structurally
     control.handle(
-      cast(Dispatcher, context), ROOT, _summon_message(grant=['aws', '@bro'], revoke=['openai'])
+      cast(Dispatcher, context),
+      ROOT,
+      _summon_message(grant=['aws', '@bro'], revoke=['openai'], swap_credentials=['brog+github']),
     )
     [(launch, _, _)] = context.spawned
     assert launch.grant_credentials == ('aws',)
     assert launch.revoke_credentials == ('openai',)
+    assert launch.swap_credentials == ('brog+github',)
     [spawn_record] = _audit(tmp_path)
     assert spawn_record['grant'] == ['aws', '@bro']
     assert spawn_record['revoke'] == ['openai']
+    assert spawn_record['swap_credentials'] == ['brog+github']
 
   def test_granted_bro_widens_the_childs_own_allow_list(self, tmp_path):
     # dev seeds nothing, so only the grant lets its child summon bro
@@ -211,6 +215,18 @@ class TestSummonHandler:
     assert context.spawned == []
     [(_, payload)] = context.replies
     assert 'does not hold: aws' in payload['error']
+
+  def test_swapping_to_a_credential_the_summoner_lacks_is_denied(self, tmp_path):
+    control = _control(tmp_path, {'dev'}, credential_scope={'brog'})
+    context = FakeContext()
+    control.handle(
+      cast(Dispatcher, context),
+      ROOT,
+      _summon_message(swap_credentials=['brog+github']),
+    )
+    assert context.spawned == []
+    [(_, payload)] = context.replies
+    assert 'does not hold: brog+github' in payload['error']
 
   def test_a_childs_grants_are_bounded_by_its_own_scope(self, tmp_path):
     # the bound follows the chain: a summoned bro-dev holds github (its

@@ -372,6 +372,23 @@ def test_call_re_execs_into_container_when_outside():
     assert launch.docker_sock is False
 
 
+def test_call_swaps_a_credential_instance():
+  with (
+    patch.dict('os.environ', {}, clear=False) as env,
+    patch('bro.launch.root.run_in_container', return_value=0) as run,
+    patch('bro.launch.call._tty_supported', return_value=True),
+  ):
+    env.pop('CW_IN_CONTAINER', None)
+    env.pop('BRO_SHELL_COMMAND', None)
+    rc = main(['call', 'bro-dev', 'hey', '--swap-cred', 'brog+github'])
+    shell_command = env['BRO_SHELL_COMMAND']
+  assert rc == 0
+  launch = run.call_args.args[0]
+  assert 'brog' not in launch.secrets
+  assert 'brog+github' in launch.secrets
+  assert shell_command == 'call --swap-cred brog+github bro-dev hey'
+
+
 def test_call_forwards_text_when_host_not_a_tty():
   with (
     patch.dict('os.environ', {}, clear=False) as env,

@@ -48,8 +48,8 @@ class SummonLaunchSpec(LaunchSpec):
   import, scoped-set computation, and base-ref resolution are all blocking work
   the broker loop should not carry.
 
-  The credential halves of the request's grant/revoke are what reaches here; the
-  control resolved the `@bro` halves into the child's allow-list itself."""
+  The credential halves of the request's grant/revoke and its credential swaps
+  reach here; the control resolved the `@bro` halves into the child's allow-list."""
 
   target: str
   prompt: str
@@ -59,6 +59,7 @@ class SummonLaunchSpec(LaunchSpec):
   hold: Optional[str] = None
   grant_credentials: tuple[str, ...] = ()
   revoke_credentials: tuple[str, ...] = ()
+  swap_credentials: tuple[str, ...] = ()
   effort: Optional[str] = None
   fast: bool = False
 
@@ -108,6 +109,7 @@ def _lower_summon(launch: SummonLaunchSpec, workspace_name: str) -> DockerLaunch
       credential_instances=project_config().creds,
       grant=list(launch.grant_credentials),
       revoke=list(launch.revoke_credentials),
+      swap_credentials=list(launch.swap_credentials),
     ),
     base_ref=base_ref,
     tty=False,

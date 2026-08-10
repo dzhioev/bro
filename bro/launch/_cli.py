@@ -54,6 +54,10 @@ REVOKE_HELP = (
   "remove a credential (NAME) or a summonable bro (@BRO) from the run's scope "
   '(repeatable); errors if it is not in the scope'
 )
+SWAP_CREDENTIAL_HELP = (
+  'replace the selected credential of the same kind with NAME (kind or kind+instance); '
+  'equivalent to revoking the selected name and granting NAME (repeatable)'
+)
 INTO_HELP = (
   "base the new workspace clone on this git ref instead of the launcher's current HEAD "
   '(fetched from origin when not local)'
@@ -107,6 +111,7 @@ def maybe_containerize(
   no_trails: bool = False,
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
+  swap_credentials: Optional[list[str]] = None,
   into: Optional[str] = None,
 ) -> Optional[int]:
   """re-exec `bro <verb> <bro_name> <inner_args...>` inside a scoped throwaway
@@ -132,17 +137,21 @@ def maybe_containerize(
   `grant`/`revoke` adjust the run's launch scope — a plain name a credential
   across both tiers of the scoped set, `@bro` the summon allow-list over the
   bro's `may_summon` defaults — both strict, applied by the launch-scope
-  preflight (`bro.launch.scope.preflight_scoped_launch`). those two and `into`
-  are host-side only — not threaded into the inner command — so passing any
+  preflight (`bro.launch.scope.preflight_scoped_launch`); `swap_credentials` replaces
+  the selected credential of the target kind. Those flags and `into` are host-side
+  only — not threaded into the inner command — so passing any
   when the hop is skipped (`--in-place` / already in-container) is a no-op the
   caller didn't get, hence an error: the in-place path creates no credential
   scope or broker root and runs no clone. returns 1 (printing to stderr) on any
   misuse so the caller exits non-zero."""
   grant = grant if grant is not None else []
   revoke = revoke if revoke is not None else []
+  swap_credentials = swap_credentials if swap_credentials is not None else []
   if in_place or os.environ.get('CW_IN_CONTAINER') is not None:
-    if len(grant) > 0 or len(revoke) > 0 or into is not None:
-      log.error('--grant/--revoke/--into require containerization (not valid with --in-place)')
+    if len(grant) > 0 or len(revoke) > 0 or len(swap_credentials) > 0 or into is not None:
+      log.error(
+        '--grant/--revoke/--swap-cred/--into require containerization (not valid with --in-place)'
+      )
       return 1
     return None
   from bro.launch.root import run_in_container
@@ -168,6 +177,7 @@ def maybe_containerize(
       bro_name,
       grant=grant,
       revoke=revoke,
+      swap_credentials=swap_credentials,
     )
   except LaunchScopeError as e:
     log.error('%s', e)
@@ -194,6 +204,7 @@ def _run_summoned(
   hold: Optional[str],
   grant: Optional[list[str]],
   revoke: Optional[list[str]],
+  swap_credentials: Optional[list[str]],
   effort: Optional[str],
   fast: bool,
 ) -> int:
@@ -206,6 +217,7 @@ def _run_summoned(
       hold=hold,
       grant=grant,
       revoke=revoke,
+      swap_credentials=swap_credentials,
       effort=effort,
       fast=fast,
     )
@@ -218,6 +230,7 @@ def _run_summoned(
       hold=hold,
       grant=grant,
       revoke=revoke,
+      swap_credentials=swap_credentials,
       effort=effort,
       fast=fast,
     )
@@ -264,6 +277,14 @@ def run_main(
     parser.add_exclusive_groups(['summon'], ['rich', 'in_place', 'no_trails'])
   parser.add_argument('--grant', action='append', default=None, metavar='NAME', help=GRANT_HELP)
   parser.add_argument('--revoke', action='append', default=None, metavar='NAME', help=REVOKE_HELP)
+  parser.add_argument(
+    '--swap-cred',
+    dest='swap_credentials',
+    action='append',
+    default=None,
+    metavar='NAME',
+    help=SWAP_CREDENTIAL_HELP,
+  )
   parser.add_argument('--into', metavar='REF', help=INTO_HELP)
   parser.add_argument('--hold', choices=HOLDS, default=None, help=HOLD_HELP.format('unattended'))
   parser.add_argument('--timeout', type=float, metavar='SECONDS', help=TIMEOUT_HELP)
@@ -288,6 +309,7 @@ def run_main(
       hold=args['hold'],
       grant=args['grant'],
       revoke=args['revoke'],
+      swap_credentials=args['swap_credentials'],
       effort=args['effort'],
       fast=fast,
     )
@@ -319,6 +341,7 @@ def run_main(
     no_trails=args['no_trails'],
     grant=args['grant'],
     revoke=args['revoke'],
+    swap_credentials=args['swap_credentials'],
     into=args['into'],
   )
   if hopped is not None:

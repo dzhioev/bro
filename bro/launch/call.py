@@ -19,6 +19,7 @@ from bro.launch._cli import (
   INTO_HELP,
   NO_TRAILS_HELP,
   REVOKE_HELP,
+  SWAP_CREDENTIAL_HELP,
   create_bro_for_run,
   maybe_containerize,
   run_llm_spec,
@@ -191,6 +192,14 @@ def chat_main(
   parser.add_exclusive_groups(['resume'], ['no_trails'])
   parser.add_argument('--grant', action='append', default=None, metavar='NAME', help=GRANT_HELP)
   parser.add_argument('--revoke', action='append', default=None, metavar='NAME', help=REVOKE_HELP)
+  parser.add_argument(
+    '--swap-cred',
+    dest='swap_credentials',
+    action='append',
+    default=None,
+    metavar='NAME',
+    help=SWAP_CREDENTIAL_HELP,
+  )
   parser.add_argument('--into', metavar='REF', help=INTO_HELP)
   parser.add_argument('--hold', choices=HOLDS, default=None, help=HOLD_HELP.format(default_hold))
   args = parser.parse(argv)
@@ -238,6 +247,7 @@ def chat_main(
     no_trails=args['no_trails'],
     grant=args['grant'],
     revoke=args['revoke'],
+    swap_credentials=args['swap_credentials'],
     into=args['into'],
   )
   if hopped is not None:

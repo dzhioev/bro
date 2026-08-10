@@ -167,15 +167,15 @@ def summoned_credential_scope(
   credential_instances: Mapping[str, str],
   grant: list[str],
   revoke: list[str],
+  swap_credentials: list[str],
 ) -> ScopedSecrets:
-  """the credential scope a summoned bro runs with: its own `BRO_RUN` scope under
-  the request's overrides. `grant`/`revoke` are the credential halves of the
-  request's unified values (`split_scope_overrides`) — the `@bro` halves shape the
-  summon allow-list instead. Raises `ValueError` on a no-op override."""
+  """the credential scope a summoned bro runs with under its credential overrides."""
+  scoped = scoped_secrets(bro_name, Surface.BRO_RUN, credential_instances=credential_instances)
+  swap_grants, swap_revokes = credential_swap_overrides(scoped, swap_credentials)
   return finalize_scoped_secrets(
-    scoped_secrets(bro_name, Surface.BRO_RUN, credential_instances=credential_instances),
-    grant=grant,
-    revoke=revoke,
+    scoped,
+    grant=[*grant, *swap_grants],
+    revoke=[*revoke, *swap_revokes],
   )
 
 
@@ -205,16 +205,52 @@ def split_scope_overrides(values: list[str]) -> tuple[list[str], list[str]]:
   return credential_names, bro_names
 
 
+def credential_swaps_by_kind(targets: list[str]) -> dict[str, str]:
+  """validate credential swap targets and index them by kind."""
+  swaps: dict[str, str] = {}
+  for target in targets:
+    kind, _ = credentials.parse_name(target)
+    if kind in swaps:
+      raise ValueError(f'credential kind {kind!r} is named by --swap-cred more than once')
+    swaps[kind] = target
+  return swaps
+
+
+def credential_swap_overrides(
+  scoped: ScopedSecrets, targets: list[str]
+) -> tuple[list[str], list[str]]:
+  """lower credential selections to strict same-kind grant/revoke overrides."""
+  selected_by_kind: dict[str, str] = {}
+  for selected in scoped.required | scoped.optional:
+    kind, _ = credentials.parse_name(selected)
+    if kind in selected_by_kind:
+      raise ValueError(f'credential kind {kind!r} has multiple selected names')
+    selected_by_kind[kind] = selected
+
+  grants: list[str] = []
+  revokes: list[str] = []
+  for kind, target in credential_swaps_by_kind(targets).items():
+    selected = selected_by_kind.get(kind)
+    if selected is None:
+      raise ValueError(f'cannot swap credential kind {kind!r}: not in the scoped credential set')
+    if selected == target:
+      raise ValueError(f'cannot swap credential {target!r}: already selected')
+    grants.append(target)
+    revokes.append(selected)
+  return grants, revokes
+
+
 def preflight_scoped_launch(
   scoped: ScopedSecrets,
   bro_name: str,
   *,
   grant: list[str],
   revoke: list[str],
+  swap_credentials: list[str],
 ) -> tuple[ScopedSecrets, set[str], dict[str, bytes]]:
   """the scope preflight every launch surface runs before creating anything
   (worktree, container, workspace dir): split the unified grant/revoke overrides
-  (`split_scope_overrides`), finalize the credential scope
+  (`split_scope_overrides`), lower credential swaps, finalize the credential scope
   (`finalize_scoped_secrets`), compute the summon allow-list of a launch running
   as `bro_name` (`summon_control.summon_allow_list`), and hydrate the scoped store
   (`credentials.build_scoped_store`) — any failure raised as a single
@@ -229,7 +265,9 @@ def preflight_scoped_launch(
   from bro.launch.summon_control import summon_allow_list
 
   try:
-    scoped, grant_bros, revoke_bros = _finalize_credential_scope(scoped, grant, revoke)
+    scoped, grant_bros, revoke_bros = _finalize_credential_scope(
+      scoped, grant, revoke, swap_credentials
+    )
     may_summon = summon_allow_list(bro_name, grant=grant_bros, revoke=revoke_bros)
     store = credentials.build_scoped_store(scoped.required, optional=scoped.optional)
   except (ValueError, credentials.SecretNotFound) as e:
@@ -238,28 +276,32 @@ def preflight_scoped_launch(
 
 
 def _finalize_credential_scope(
-  scoped: ScopedSecrets, grant: list[str], revoke: list[str]
+  scoped: ScopedSecrets, grant: list[str], revoke: list[str], swap_credentials: list[str]
 ) -> tuple[ScopedSecrets, list[str], list[str]]:
-  """split the unified overrides (`split_scope_overrides`) and finalize the
-  credential tiers; returns the finalized scope plus the `@bro` halves
-  (grant, revoke) for the summon side."""
+  """finalize credential and summon-target overrides over a computed scope."""
   grant_credentials, grant_bros = split_scope_overrides(grant)
   revoke_credentials, revoke_bros = split_scope_overrides(revoke)
-  finalized = finalize_scoped_secrets(scoped, grant=grant_credentials, revoke=revoke_credentials)
+  swap_grants, swap_revokes = credential_swap_overrides(scoped, swap_credentials)
+  finalized = finalize_scoped_secrets(
+    scoped,
+    grant=[*grant_credentials, *swap_grants],
+    revoke=[*revoke_credentials, *swap_revokes],
+  )
   return finalized, grant_bros, revoke_bros
 
 
 def launch_view_store(
-  scoped: ScopedSecrets, *, grant: list[str], revoke: list[str]
+  scoped: ScopedSecrets, *, grant: list[str], revoke: list[str], swap_credentials: list[str]
 ) -> credentials.Store:
   """the lazy counterpart of `preflight_scoped_launch`'s hydrated store: the
   launch's credential binding as a kinds-only read-through store
   (`credentials.scoped_view_store`), for host-side code that reads a credential
-  on the session's behalf before the launch exists. `grant`/`revoke` are the
-  unified override values; the `@bro` halves shape only the summon side and are
-  ignored here. raises `LaunchScopeError` like the preflight."""
+  on the session's behalf before the launch exists. `grant`/`revoke` are the unified
+  override values and `swap_credentials` carries same-kind replacements; the `@bro`
+  halves shape only the summon side and are ignored here. raises `LaunchScopeError`
+  like the preflight."""
   try:
-    finalized, _, _ = _finalize_credential_scope(scoped, grant, revoke)
+    finalized, _, _ = _finalize_credential_scope(scoped, grant, revoke, swap_credentials)
     return credentials.scoped_view_store(finalized.required, optional=finalized.optional)
   except (ValueError, credentials.SecretNotFound) as e:
     raise LaunchScopeError(str(e)) from e
