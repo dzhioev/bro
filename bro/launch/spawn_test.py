@@ -9,7 +9,6 @@ import bro.launch.scope
 import bro.launch.spawn
 import bro.launch.summon_control
 import bro.workspace.docker as workspace_docker
-import bro.workspace.project as workspace_project
 import bro.workspace.store as workspace_store
 
 PARENT_WORKSPACE = Path('/var/cw/worktrees/parent')
@@ -21,14 +20,9 @@ class TestSummonLowering:
   def lowering_harness(self, monkeypatch, tmp_path):
     monkeypatch.setattr(bro.launch.spawn, 'project_root', lambda: tmp_path / 'proj')
     monkeypatch.setattr(
-      bro.launch.spawn,
-      'project_config',
-      lambda: workspace_project.ProjectConfig(default_bro='foo', image_repository='bro/foo'),
-    )
-    monkeypatch.setattr(
       bro.launch.scope,
       'scoped_secrets',
-      lambda name, surface, *, credential_instances: workspace_store.ScopedSecrets(
+      lambda name, surface: workspace_store.ScopedSecrets(
         required={'aws', 'trails'}, optional={'openai'}, docker_sock=True
       ),
     )

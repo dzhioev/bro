@@ -435,6 +435,21 @@ class TestStore:
     with pytest.raises(ValueError, match='not a json object'):
       store.get_json('arr')
 
+  def test_get_family_rejects_instance_names(self, configs_dir: Path):
+    _write(configs_dir, 'github_token_alice', 'ghp_alice')
+    store = self._store(
+      credentials.Secret('github+alice', [credentials.LocalSource('github_token_alice')])
+    )
+    for read in (store.get, store.try_get, store.get_json, store.available):
+      with pytest.raises(ValueError, match='kind-addressed'):
+        read('github+alice')
+
+  def test_get_family_rejects_malformed_names(self):
+    store = self._store()
+    for read in (store.get, store.try_get, store.get_json, store.available):
+      with pytest.raises(ValueError, match='malformed secret name'):
+        read('GitHub')
+
   def test_concurrent_get_fetches_once(self):
     # 8 threads resolve the same uncached secret at once. the lock makes
     # resolution single-flight, so the source is fetched exactly once; the
@@ -466,6 +481,48 @@ class TestStore:
 
     assert results == ['v'] * 8
     assert len(calls) == 1
+
+
+class TestGetInstance:
+  def _store(self, *secrets: credentials.Secret) -> credentials.Store:
+    return credentials.Store({s.name: s for s in secrets})
+
+  def test_reads_a_variant_entry(self, configs_dir: Path):
+    _write(configs_dir, 'github_token_alice', 'ghp_alice\n')
+    store = self._store(
+      credentials.Secret('github+alice', [credentials.LocalSource('github_token_alice')])
+    )
+    assert store.get_instance('github+alice') == 'ghp_alice'
+    assert store.try_get_instance('github+alice') == 'ghp_alice'
+
+  def test_reads_a_plain_name_as_the_default_instance(self, configs_dir: Path):
+    # a plain entry is the kind's default instance, so both addressing families
+    # resolve it to the same value
+    _write(configs_dir, 'notion.json', {'token': 't'})
+    store = self._store(credentials.Secret('notion', [credentials.LocalSource('notion.json')]))
+    assert store.get_instance('notion') == store.get('notion')
+
+  def test_get_instance_json_parses_to_dict(self, configs_dir: Path):
+    _write(configs_dir, 'openai_work.json', {'api_key': 'k'})
+    store = self._store(
+      credentials.Secret('openai+work', [credentials.LocalSource('openai_work.json')])
+    )
+    assert store.get_instance_json('openai+work') == {'api_key': 'k'}
+
+  def test_try_get_instance_returns_none_when_unknown(self):
+    assert credentials.Store({}).try_get_instance('github+alice') is None
+
+  def test_unresolvable_name_raises_secret_not_found(self, configs_dir: Path):
+    store = self._store(
+      credentials.Secret('github+alice', [credentials.LocalSource('absent_token')])
+    )
+    with pytest.raises(credentials.SecretNotFound) as exception:
+      store.get_instance('github+alice')
+    assert exception.value.name == 'github+alice'
+
+  def test_malformed_name_raises(self):
+    with pytest.raises(ValueError, match='malformed secret name'):
+      credentials.Store({}).get_instance('GitHub+alice')
 
 
 class TestReferences:
@@ -840,16 +897,84 @@ class TestHostRegistry:
     with pytest.raises(ValueError, match='malformed secret name'):
       credentials.host_registry()
 
+  def test_kind_selects_its_default_instance(self, bro_dir: Path):
+    # `{"instance": ...}` makes the named variant the kind's default: the kind
+    # entry borrows its sources, keeping the kind's own (inherited) install hook
+    _write(
+      bro_dir,
+      credentials.HOST_REGISTRY_FILE,
+      {
+        'github+acme': {'sources': [{'file': 'github_token_acme'}]},
+        'github': {'instance': 'acme'},
+      },
+    )
+    registry = credentials.host_registry()
+    source = registry['github'].sources[0]
+    assert isinstance(source, credentials.LocalSource)
+    assert source.file == 'github_token_acme'
+    install = registry['github'].install
+    assert install is not None
+    assert 'credentials get github' in install
+    assert 'acme' not in install
+
+  def test_selected_instance_resolves_kind_reads_end_to_end(self, configs_dir: Path, bro_dir: Path):
+    _write(
+      bro_dir,
+      credentials.HOST_REGISTRY_FILE,
+      {
+        'openai+work': {'sources': [{'file': 'openai_work.json'}]},
+        'openai': {'instance': 'work'},
+      },
+    )
+    _write(bro_dir, 'openai_work.json', {'api_key': 'k'})
+    assert credentials.default_store().get_json('openai') == {'api_key': 'k'}
+
+  def test_selector_of_absent_variant_raises(self, bro_dir: Path):
+    _write(bro_dir, credentials.HOST_REGISTRY_FILE, {'github': {'instance': 'acme'}})
+    with pytest.raises(ValueError, match="'github\\+acme' is not in the registry"):
+      credentials.host_registry()
+
+  def test_selector_beside_own_sources_raises(self, bro_dir: Path):
+    _write(
+      bro_dir,
+      credentials.HOST_REGISTRY_FILE,
+      {
+        'github+acme': {'sources': [{'file': 'f'}]},
+        'github': {'instance': 'acme', 'sources': [{'file': 'g'}]},
+      },
+    )
+    with pytest.raises(ValueError, match='both an instance selector and its own sources'):
+      credentials.host_registry()
+
+  def test_selector_on_a_variant_raises(self, bro_dir: Path):
+    _write(
+      bro_dir,
+      credentials.HOST_REGISTRY_FILE,
+      {'github+acme': {'sources': [{'file': 'f'}], 'instance': 'other'}},
+    )
+    with pytest.raises(ValueError, match='only a kind entry selects'):
+      credentials.host_registry()
+
+  def test_non_string_selector_raises(self, bro_dir: Path):
+    _write(bro_dir, credentials.HOST_REGISTRY_FILE, {'github': {'instance': 5}})
+    with pytest.raises(ValueError, match='instance selector must be a string'):
+      credentials.host_registry()
+
+  def test_selector_outside_the_name_grammar_raises(self, bro_dir: Path):
+    _write(bro_dir, credentials.HOST_REGISTRY_FILE, {'github': {'instance': 'Acme'}})
+    with pytest.raises(ValueError, match='malformed secret name'):
+      credentials.host_registry()
+
   def test_default_store_resolves_a_host_local_variant(self, configs_dir: Path, bro_dir: Path):
     # end-to-end through _load_registry: a host-local variant resolves like any
-    # other secret
+    # other stored entry — storage-addressed, since it is stored under its full name
     _write(
       bro_dir,
       credentials.HOST_REGISTRY_FILE,
       {'github+alice': {'sources': [{'file': 'github_token_alice'}]}},
     )
     _write(bro_dir, 'github_token_alice', 'ghp_alice\n')
-    assert credentials.default_store().get('github+alice') == 'ghp_alice'
+    assert credentials.default_store().get_instance('github+alice') == 'ghp_alice'
 
   def test_generated_registry_still_replaces_wholesale(self, configs_dir: Path, bro_dir: Path):
     # a generated credentials.json bounds the registry to exactly its own set —
@@ -934,6 +1059,46 @@ class TestCLI:
 
     assert credentials.main(['credentials', 'list']) is None
     assert capsys.readouterr().out == 'claude_code\nopenai\n'
+
+  def _write_variant(self, bro_dir: Path) -> None:
+    """a resolvable host-local `openai+work` variant beside the plain `openai`."""
+    _write(
+      bro_dir,
+      credentials.HOST_REGISTRY_FILE,
+      {'openai+work': {'sources': [{'file': 'openai_work.json'}]}},
+    )
+    _write(bro_dir, 'openai_work.json', {'api_key': 'k'})
+
+  def test_list_addresses_kinds_by_default(self, configs_dir: Path, bro_dir: Path, capsys):
+    self._write_variant(bro_dir)
+    _write(configs_dir, 'openai.json', {'api_key': 'd'})
+    assert credentials.main(['credentials', 'list']) is None
+    assert capsys.readouterr().out == 'openai\n'
+
+  def test_list_instance_flag_lists_storage_names(self, configs_dir: Path, bro_dir: Path, capsys):
+    self._write_variant(bro_dir)
+    _write(configs_dir, 'openai.json', {'api_key': 'd'})
+    assert credentials.main(['credentials', 'list', '--instance']) is None
+    assert capsys.readouterr().out == 'openai\nopenai+work\n'
+
+  def test_get_defaults_to_kind_addressing(self, configs_dir: Path, bro_dir: Path, capsys):
+    # a storage name errors without the flag, pointing at it
+    self._write_variant(bro_dir)
+    assert credentials.main(['credentials', 'get', 'openai+work']) == 1
+    assert '--instance' in capsys.readouterr().err
+
+  def test_get_instance_flag_reads_a_variant(self, configs_dir: Path, bro_dir: Path, capsys):
+    self._write_variant(bro_dir)
+    assert credentials.main(['credentials', 'get', '-i', 'openai+work']) is None
+    assert json.loads(capsys.readouterr().out) == {'api_key': 'k'}
+
+  def test_get_instance_flag_with_field(self, configs_dir: Path, bro_dir: Path, capsys):
+    self._write_variant(bro_dir)
+    assert (
+      credentials.main(['credentials', 'get', '--instance', 'openai+work', '--field', 'api_key'])
+      is None
+    )
+    assert capsys.readouterr().out.strip() == 'k'
 
   def test_get_json_prints_json(self, configs_dir: Path, capsys):
     _write(configs_dir, 'openai.json', {'token': 't'})
@@ -1336,6 +1501,25 @@ class TestBuildScopedStore:
     store = credentials.build_scoped_store(['openai+work'])
     registry = json.loads(store[credentials.REGISTRY_FILE])
     assert registry['openai'] == {'sources': [{'file': 'openai.cred'}]}
+
+  def test_kind_with_selected_instance_hydrates_the_variant_sources(
+    self, configs_dir: Path, bro_dir: Path
+  ):
+    # a scope declaring the plain kind picks up the host registry's selected
+    # default instance — hydration reads the variant's sources under the kind name
+    _write(
+      bro_dir,
+      credentials.HOST_REGISTRY_FILE,
+      {
+        'github+acme': {'sources': [{'file': 'github_token_acme'}]},
+        'github': {'instance': 'acme'},
+      },
+    )
+    _write(bro_dir, 'github_token_acme', 'ghp_acme\n')
+    store = credentials.build_scoped_store(['github'])
+    assert store['github.cred'] == b'ghp_acme'
+    registry = json.loads(store[credentials.REGISTRY_FILE])
+    assert 'credentials get github' in registry['github']['install']
 
   def test_two_instances_of_a_kind_raise(self, configs_dir: Path, bro_dir: Path):
     _write(

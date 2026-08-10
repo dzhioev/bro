@@ -1,9 +1,8 @@
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from bro.base import credentials
 from bro.workspace.paths import project_root
 
 
@@ -15,31 +14,12 @@ def _default_image_repository(default_bro: str) -> str:
 class ProjectConfig:
   """the operated repo's launch defaults: which bro a session runs as when
   `--bro` doesn't name one, the docker repository its session images build
-  under (`bro/<default bro>` unless overridden), the per-kind credential
-  instances its launches substitute in computed scopes, and the optional
+  under (`bro/<default bro>` unless overridden), and the optional
   build-context-file-list command."""
 
   default_bro: str
   image_repository: str
-  creds: dict[str, str] = field(default_factory=dict)
   build_context_command: Optional[str] = None
-
-
-def _parse_creds(table: dict, pyproject: Path) -> dict[str, str]:
-  creds = table.get('creds', {})
-  if not isinstance(creds, dict):
-    raise ValueError(f'[tool.bro] creds in {pyproject} must be a table of kind = "instance"')
-  for kind, instance in creds.items():
-    if not isinstance(instance, str):
-      raise ValueError(
-        f'[tool.bro] creds entry {kind!r} in {pyproject}: instance must be a string, '
-        f'got {instance!r}'
-      )
-    try:
-      credentials.parse_name(f'{kind}+{instance}')
-    except ValueError as e:
-      raise ValueError(f'[tool.bro] creds entry {kind!r} = {instance!r} in {pyproject}: {e}') from e
-  return creds
 
 
 def _parse_command(table: dict, pyproject: Path, key: str) -> Optional[str]:
@@ -57,7 +37,7 @@ def project_config() -> ProjectConfig:
   if not pyproject.is_file():
     raise ValueError(f'missing {pyproject}')
   table = tomllib.loads(pyproject.read_text()).get('tool', {}).get('bro', {})
-  unknown = sorted(set(table) - {'default', 'image-repository', 'creds', 'build-context-command'})
+  unknown = sorted(set(table) - {'default', 'image-repository', 'build-context-command'})
   if len(unknown) > 0:
     raise ValueError(f'unknown [tool.bro] key(s) in {pyproject}: {", ".join(unknown)}')
   default_bro = table.get('default')
@@ -69,6 +49,5 @@ def project_config() -> ProjectConfig:
   return ProjectConfig(
     default_bro=default_bro,
     image_repository=override if override is not None else _default_image_repository(default_bro),
-    creds=_parse_creds(table, pyproject),
     build_context_command=_parse_command(table, pyproject, 'build-context-command'),
   )
