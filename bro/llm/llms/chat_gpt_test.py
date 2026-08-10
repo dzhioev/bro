@@ -191,7 +191,7 @@ def _make_chat_gpt_with_tracker(
 def _install_responses(gpt: ChatGPT, sequence: list, captured: list[dict]) -> None:
   iterator = iter(sequence)
 
-  def create(**kwargs):
+  async def create(**kwargs):
     captured.append(kwargs)
     return next(iterator)
 

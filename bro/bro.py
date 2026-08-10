@@ -1,4 +1,3 @@
-import asyncio
 import json
 import os
 import traceback
@@ -13,6 +12,7 @@ import bro.llm.mcp as llm_mcp
 from bro import scripts as script_store
 from bro.base import credentials, log
 from bro.base.condition import Condition, Entry, SetVariable, Variables, var
+from bro.base.offload import off_loop
 from bro.channel import BroChannel
 from bro.datasources.base import DataSource
 from bro.llm.llm import EFFORT_LEVELS, LLM, LLMSpec
@@ -194,7 +194,7 @@ async def _claude_raise(reason: str) -> str:
     finally:
       terminate_session()
 
-  await asyncio.to_thread(record_and_kill)
+  await off_loop(record_and_kill)
   # unreachable in practice — claude dies awaiting this result
   return 'the abort is recorded and the session is being terminated. Stop working now.'
 
@@ -347,7 +347,7 @@ def _summon_tool(
     step_id = source['step_id'] if source is not None else None
     index = source['index'] if source is not None else None
     if detach:
-      return await asyncio.to_thread(
+      return await off_loop(
         summon_client.summon_detached,
         target,
         prompt,
@@ -363,7 +363,7 @@ def _summon_tool(
       )
     client = summon_client.open_client()
     try:
-      return await asyncio.to_thread(
+      return await off_loop(
         summon_client.summon_and_wait,
         target,
         prompt,
@@ -390,7 +390,7 @@ def _summon_list_tool(variables: Variables) -> llm_mcp.Tool:
   from bro import summon as summon_client
 
   async def _summon_list() -> dict[str, Any]:
-    return await asyncio.to_thread(summon_client.list_summons)
+    return await off_loop(summon_client.list_summons)
 
   return llm_mcp.FunctionTool(
     _summon_list, name='summon_list', description=_SUMMON_LIST_DESCRIPTION, variables=variables
@@ -414,7 +414,7 @@ def _summon_check_tool(variables: Variables) -> llm_mcp.Tool:
         raise ValueError('last_seen is a cursor read; it does not combine with wait')
       client = summon_client.open_client()
       try:
-        answer = await asyncio.to_thread(
+        answer = await off_loop(
           summon_client.collect_summon, request_id, timeout=timeout, client=client
         )
       finally:
@@ -422,7 +422,7 @@ def _summon_check_tool(variables: Variables) -> llm_mcp.Tool:
       return {'state': 'completed', 'answer': answer}
     if timeout is not None:
       raise ValueError('timeout only bounds a wait; a plain check never blocks')
-    status = await asyncio.to_thread(summon_client.check_summon, request_id, last_seen=last_seen)
+    status = await off_loop(summon_client.check_summon, request_id, last_seen=last_seen)
     if status.pending:
       pending: dict[str, Any] = {'state': 'pending'}
       if status.trail_id is not None:
@@ -929,6 +929,7 @@ class BaseBro(ABC):
       detail = str(exception)
       self._record_error_step(exception)
 
+    self._close_live_servers()
     self._lifetime_active = False
     self._last_end_reason = reason
     self._last_end_detail = detail
@@ -1051,6 +1052,19 @@ class BaseBro(ABC):
       self._live_mcp = [spec.build() for spec in self._mcp_specs]
       self._live_mcp.extend(ds.as_mcp_server() for ds in self._data_sources)
     return self._live_mcp
+
+  def _close_live_servers(self) -> None:
+    # a live server may hold real resources — the dev toolset's background jobs
+    # are the built-in case — and the bro's lifetime is the seam that releases
+    # them, so ending a session never leaves a process behind. best-effort: a
+    # failing teardown must not mask the run's own outcome.
+    if self._live_mcp is None:
+      return
+    for server in self._live_mcp:
+      try:
+        server.close()
+      except Exception as error:
+        log.warning('failed to close the %s server: %s', server.namespace, error)
 
   def _mcp_servers_for(self, *, hold: str) -> list[llm_mcp.MCPServer]:
     # the in-process LLM builds (always bare wire): the `raise` service tool

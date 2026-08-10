@@ -112,21 +112,24 @@ def test_edit_file_not_found_raises():
       edit_file(path, 'zzz', 'X')
 
 
-def test_bash_captures_stdout_and_exit_code():
-  result = bash('echo hello')
+@pytest.mark.asyncio
+async def test_bash_captures_stdout_and_exit_code():
+  result = await bash('echo hello')
   assert 'exit_code: 0' in result
   assert 'hello' in result
   assert 'skipped' not in result
 
 
-def test_bash_captures_stderr():
-  result = bash('echo oops 1>&2 ; false')
+@pytest.mark.asyncio
+async def test_bash_captures_stderr():
+  result = await bash('echo oops 1>&2 ; false')
   assert 'exit_code: 1' in result
   assert 'oops' in result
 
 
-def test_bash_timeout_returns_clearly():
-  result = bash('sleep 5', timeout_seconds=1)
+@pytest.mark.asyncio
+async def test_bash_timeout_returns_clearly():
+  result = await bash('sleep 5', timeout_seconds=1)
   assert 'TIMED OUT' in result
 
 
@@ -143,20 +146,22 @@ def test_file_ops_reject_non_regular_file():
       edit_file(fifo, 'a', 'b')
 
 
-def test_grep_skips_fifo_without_blocking():
+@pytest.mark.asyncio
+async def test_grep_skips_fifo_without_blocking():
   # -D skip means grep never reads a FIFO/device — even one named directly — so it
   # returns immediately instead of blocking on the open. timeout_seconds is a safety
   # net: a regression that drops -D skip fails as TIMED OUT here rather than hanging.
   with tempfile.TemporaryDirectory() as d:
     fifo = os.path.join(d, 'pipe')
     os.mkfifo(fifo)
-    assert grep('anything', path=fifo, timeout_seconds=5) == 'no matches'
+    assert await grep('anything', path=fifo, timeout_seconds=5) == 'no matches'
 
 
-def test_bash_long_output_emits_before_marker_keeps_tail():
+@pytest.mark.asyncio
+async def test_bash_long_output_emits_before_marker_keeps_tail():
   # bash tails are usually most informative — confirm we keep the LAST `limit`
   # lines and report the dropped head via a [...skipped before...] marker.
-  result = bash(f'for i in $(seq 1 {DEFAULT_LIMIT + 30}); do echo "L$i"; done')
+  result = await bash(f'for i in $(seq 1 {DEFAULT_LIMIT + 30}); do echo "L$i"; done')
   assert 'exit_code: 0' in result
   assert 'skipped before:' in result
   assert '30 lines' in result
@@ -166,50 +171,56 @@ def test_bash_long_output_emits_before_marker_keeps_tail():
   assert 'L1\n' not in result
 
 
-def test_grep_finds_match():
+@pytest.mark.asyncio
+async def test_grep_finds_match():
   with tempfile.TemporaryDirectory() as d:
     write_file(os.path.join(d, 'f.txt'), 'hello world\ngoodbye world\n')
-    result = grep('hello', path=d)
+    result = await grep('hello', path=d)
     assert 'hello world' in result
     assert 'skipped' not in result
 
 
-def test_grep_no_match():
+@pytest.mark.asyncio
+async def test_grep_no_match():
   with tempfile.TemporaryDirectory() as d:
     write_file(os.path.join(d, 'f.txt'), 'nothing here\n')
-    assert grep('xyzzy', path=d) == 'no matches'
+    assert await grep('xyzzy', path=d) == 'no matches'
 
 
-def test_grep_case_insensitive():
+@pytest.mark.asyncio
+async def test_grep_case_insensitive():
   with tempfile.TemporaryDirectory() as d:
     write_file(os.path.join(d, 'f.txt'), 'HELLO\n')
-    assert 'HELLO' in grep('hello', path=d, case_insensitive=True)
-    assert grep('hello', path=d) == 'no matches'
+    assert 'HELLO' in await grep('hello', path=d, case_insensitive=True)
+    assert await grep('hello', path=d) == 'no matches'
 
 
-def test_grep_glob_filter():
+@pytest.mark.asyncio
+async def test_grep_glob_filter():
   with tempfile.TemporaryDirectory() as d:
     write_file(os.path.join(d, 'a.py'), 'target\n')
     write_file(os.path.join(d, 'a.txt'), 'target\n')
-    result = grep('target', path=d, glob='*.py')
+    result = await grep('target', path=d, glob='*.py')
     assert 'a.py' in result
     assert 'a.txt' not in result
 
 
-def test_grep_explicit_limit_truncates_and_emits_after_marker():
+@pytest.mark.asyncio
+async def test_grep_explicit_limit_truncates_and_emits_after_marker():
   with tempfile.TemporaryDirectory() as d:
     write_file(os.path.join(d, 'f.txt'), 'x\n' * 10)
-    result = grep('x', path=d, limit=3)
+    result = await grep('x', path=d, limit=3)
     assert result.count('\n') == 3  # 3 kept lines + after marker (no trailing \n)
     assert 'skipped after: 7 lines' in result
 
 
-def test_grep_default_limit_caps_pathological_output():
+@pytest.mark.asyncio
+async def test_grep_default_limit_caps_pathological_output():
   # without an explicit limit the old grep returned everything — a runaway result
   # crashed do.do. now we get DEFAULT_LIMIT lines + a marker reporting the rest.
   with tempfile.TemporaryDirectory() as d:
     write_file(os.path.join(d, 'f.txt'), 'match\n' * (DEFAULT_LIMIT * 3))
-    result = grep('match', path=d)
+    result = await grep('match', path=d)
     assert 'skipped after:' in result
     assert f'{DEFAULT_LIMIT * 2:,} lines' in result
 

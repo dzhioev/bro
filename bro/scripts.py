@@ -1,4 +1,3 @@
-import asyncio
 import json
 import re
 from dataclasses import dataclass
@@ -194,7 +193,7 @@ def _validated_call(
   return script, arguments
 
 
-def _interpret(
+async def _interpret(
   command: str,
   scripts: list[Script],
   bro: 'BaseBro',
@@ -205,7 +204,7 @@ def _interpret(
   from bro.prompts import get_prompt
 
   request = {'command': command, 'scripts': _dispatcher_roster(scripts)}
-  interpretation = mu(
+  interpretation = await mu(
     get_prompt('script_dispatch.prompt'),
     _Interpretation,
     JSON(request),
@@ -361,9 +360,7 @@ class DispatcherTool(llm_mcp.Tool):
     command = arguments['command']
     if not isinstance(command, str) or len(command.strip()) == 0:
       raise ValueError('script dispatcher argument "command" must be a non-empty string')
-    return await asyncio.to_thread(
-      _interpret, command, self._scripts, self._bro, self._harness, self._wire
-    )
+    return await _interpret(command, self._scripts, self._bro, self._harness, self._wire)
 
 
 def build_server(

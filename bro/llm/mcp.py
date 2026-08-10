@@ -8,6 +8,7 @@ from typing import Any, ClassVar, Literal, Optional, get_args, get_origin
 
 from bro.base import condition, credentials, template
 from bro.base.condition import var
+from bro.base.offload import off_loop
 
 
 def describe[F: Callable[..., Any]](function: F, text: str) -> F:
@@ -350,6 +351,11 @@ class MCPServer(ABC):
   @abstractmethod
   async def list_tools(self) -> list[Tool]: ...
 
+  def close(self) -> None:  # noqa: B027 — an opt-in hook, not a required override
+    """release what the live server holds — processes it started, connections it
+    opened. Called once when the session that built it ends; the default is a
+    no-op, since most servers hold nothing."""
+
 
 @dataclass(frozen=True)
 class MCPServerSpec:
@@ -451,9 +457,17 @@ class FunctionTool(Tool):
     kwargs = validated.model_dump_one_level()
     if self.context_parameter is not None:
       kwargs[self.context_parameter] = Context(state=self.state)
-    result = self.function(**kwargs)
-    if inspect.isawaitable(result):
-      result = await result
+    if inspect.iscoroutinefunction(self.function):
+      result = await self.function(**kwargs)
+    else:
+      # a blocking tool function would otherwise hold the loop for its whole
+      # runtime, freezing every interactive surface and the interruption path
+      # with it. off-loop it is: a cancelled call abandons the thread, so a tool
+      # that starts a process is responsible for reaping it (see
+      # `bro.base.spawn.run_async`).
+      result = await off_loop(functools.partial(self.function, **kwargs))
+      if inspect.isawaitable(result):
+        result = await result
     return self._coerce_output(result)
 
   def _coerce_output(self, result: Any) -> dict[str, Any] | str:
@@ -554,15 +568,22 @@ async def namespaced_tools(server: MCPServer) -> list[Tool]:
 
 
 class InProcessMCPServer(MCPServer):
-  def __init__(self, namespace: str, tools: Iterable[Tool]):
+  def __init__(
+    self, namespace: str, tools: Iterable[Tool], *, close: Optional[Callable[[], None]] = None
+  ):
     _validate_segment('namespace', namespace)
     self.namespace = namespace
     self._tools = list(tools)
+    self._close = close
     for tool in self._tools:
       _validate_segment('tool name', tool.name)
 
   async def list_tools(self) -> list[Tool]:
     return list(self._tools)
+
+  def close(self) -> None:
+    if self._close is not None:
+      self._close()
 
 
 class Toolset[T]:
@@ -584,10 +605,19 @@ class Toolset[T]:
   # independent of the tool subset; the `get_secrets` default returns it.
   secrets: ClassVar[tuple[str, ...]] = ()
 
-  def __init__(self, namespace: str, *, state: Callable[[], T] = lambda: None):
+  def __init__(
+    self,
+    namespace: str,
+    *,
+    state: Callable[[], T] = lambda: None,
+    close: Optional[Callable[[T], None]] = None,
+  ):
     self.namespace = namespace
     self._by_name: dict[str, Callable[..., Any]] = {}
     self._state_factory = state
+    # how a built server releases its state; `MCPServer.close` calls it once
+    # when the session ends.
+    self._close_state = close
 
   def tool[F: Callable[..., Any]](self, description: str) -> Callable[[F], F]:
     """register the decorated function as a tool and attach its description.
@@ -643,9 +673,11 @@ class Toolset[T]:
     names = self._resolve(tool_names)
     state = self._state_factory()
     variables = self._variables(names)
+    close = None if self._close_state is None else functools.partial(self._close_state, state)
     server = InProcessMCPServer(
       self.namespace,
       [FunctionTool(self._by_name[n], state=state, variables=variables) for n in names],
+      close=close,
     )
     # instance attributes over the writable class-attr defaults: the live
     # server stays self-describing — its scoped credential needs and the

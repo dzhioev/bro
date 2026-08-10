@@ -521,7 +521,7 @@ def _message_item(text: str):
 def _install_responses(gpt: chat_gpt_module.ChatGPT, sequence: list, captured: list[dict]) -> None:
   iterator = iter(sequence)
 
-  def create(**kwargs):
+  async def create(**kwargs):
     captured.append(kwargs)
     return next(iterator)
 

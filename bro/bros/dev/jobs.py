@@ -6,9 +6,8 @@ into an in-memory spool, so the child never blocks on a full pipe, and a second
 thread records the exit code the moment the child dies. `Job.watch` reads the
 spool through a per-job cursor and owns the two read modes (incremental
 pagination and tail). `Registry` tracks jobs for the process lifetime and
-group-kills the still-running ones at interpreter exit — live MCP servers are
-built once with no per-run teardown hook, so process exit is the cleanup seam,
-with container teardown as the backstop.
+group-kills the still-running ones when the hosting server closes, with
+interpreter exit as the backstop.
 """
 
 import atexit
@@ -54,6 +53,7 @@ class Job:
     self._returncode: Optional[int] = None
     self._cursor = 0
     self._watch_lock = threading.Lock()
+    self._woken = False
     self.process = spawn.popen(
       ['bash', '-c', command], stdout=subprocess.PIPE, stderr=subprocess.STDOUT
     )
@@ -106,7 +106,7 @@ class Job:
     """blocking read of the job — call off-loop. Exclusive per job: the watch lock
     is held for the whole call, wait included, and a concurrent same-job watch
     fails immediately rather than racing for stream slices. `kill` takes no lock —
-    the exit it forces wakes a blocked watch."""
+    the exit it forces wakes a blocked watch, as does `wake`."""
     if not self._watch_lock.acquire(blocking=False):
       raise ValueError(
         f'{self.id} is already being watched; watch is exclusive per job — the running '
@@ -115,11 +115,22 @@ class Job:
     try:
       deadline = time.monotonic() + max(wait_seconds, 0.0)
       with self._condition:
+        self._woken = False
         if tail:
           return self._watch_tail(deadline, limit)
         return self._watch_incremental(deadline, limit)
     finally:
       self._watch_lock.release()
+
+  def wake(self) -> None:
+    """end a blocked `watch` now, as if its window had elapsed.
+
+    the watch lock outlives an abandoned call — an interrupted watch would hold
+    the job unwatchable for the rest of its window, which for the large windows
+    an iterative watcher passes is minutes."""
+    with self._condition:
+      self._woken = True
+      self._condition.notify_all()
 
   def _watch_incremental(self, deadline: float, limit: int) -> str:
     # decision order: pending backlog → return it immediately; exited and drained
@@ -132,7 +143,7 @@ class Job:
       if self._finished():
         return self._state_line()
       remaining = deadline - time.monotonic()
-      if remaining <= 0:
+      if remaining <= 0 or self._woken:
         return self._state_line()
       self._condition.wait(remaining)
 
@@ -151,7 +162,7 @@ class Job:
     # on exit the final diagnostics, on timeout a progress glimpse.
     while True:
       remaining = deadline - time.monotonic()
-      if self._finished() or remaining <= 0:
+      if self._finished() or remaining <= 0 or self._woken:
         value = self._spool.getvalue()
         section = value[self._cursor :]
         self._cursor = len(value)
@@ -183,7 +194,7 @@ class Registry:
     self._lock = threading.Lock()
     self._jobs: dict[str, Job] = {}
     self._counter = 0
-    atexit.register(self.kill_running)
+    atexit.register(self.close)
 
   def start(self, command: str) -> Job:
     with self._lock:
@@ -200,7 +211,10 @@ class Registry:
       raise ValueError(f'unknown job id {job_id!r}; known jobs: {known}')
     return job
 
-  def kill_running(self) -> None:
+  def close(self) -> None:
+    """group-kill every still-running job. The hosting server's teardown calls
+    it when the session ends; the atexit registration is the backstop for a
+    process that never gets there."""
     for job in list(self._jobs.values()):
       if job.process.poll() is None:
         spawn.kill_group(job.process)

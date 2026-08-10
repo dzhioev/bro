@@ -12,7 +12,7 @@ from openai.types.responses.response_input_content_param import ResponseInputCon
 from openai.types.shared.reasoning_effort import ReasoningEffort
 from pydantic import BaseModel
 
-from bro.llm.llms import ChatGPT
+from bro.base import credentials
 from bro.llm.llms.chat_gpt import (
   image_file_to_content,
   image_to_content,
@@ -107,16 +107,22 @@ def create_input(prompt: str, *args: Content) -> ResponseInputParam:
   return result
 
 
-def mu[T: BaseModel](
+async def mu[T: BaseModel](
   prompt: str, result: type[T], *args: Content, reasoning_effort: ReasoningEffort = None
 ) -> T:
-  client = ChatGPT.create().client
-  response = client.responses.parse(
-    model='gpt-5.1-2025-11-13',
-    input=create_input(prompt, *args),
-    reasoning={'effort': reasoning_effort},
-    text_format=result,
-  )
+  # awaited, not blocking: every mu call sits inside a tool call on the agent
+  # loop (the script dispatcher, a data source's query summary), where a
+  # blocking roundtrip would freeze the session for its whole duration and
+  # outlive any interruption.
+  from openai import AsyncOpenAI
+
+  async with AsyncOpenAI(api_key=credentials.get_json('openai')['api_key']) as client:
+    response = await client.responses.parse(
+      model='gpt-5.1-2025-11-13',
+      input=create_input(prompt, *args),
+      reasoning={'effort': reasoning_effort},
+      text_format=result,
+    )
   if response.output_parsed is None:
     response_str = ic.format(response)
     raise RuntimeError(f'no parsed output in response: {response_str}')

@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Optional
 
 from bro.base import spawn
+from bro.base.offload import off_loop
 from bro.base.text_window import DEFAULT_LIMIT, apply_limit, numbered_window
 from bro.bros.dev import jobs
 from bro.llm.mcp import Context, Toolset
@@ -38,9 +39,10 @@ _REFERENCE_PATH = Path(__file__).parent / 'REFERENCE.md'
 # bro.bros.dev import mcp`): tools register below via `@spec.tool`;
 # `spec(*tool_names)` is the declarative manifest bros hold (all tools when
 # empty, validated at declaration time); `build()` runs in the serving process,
-# constructing the per-server state — the background-job registry — once.
+# constructing the per-server state — the background-job registry — once, and
+# closing it (killing whatever jobs are still running) when the session ends.
 # no secrets — every tool is local file/shell work.
-spec = Toolset('dev', state=jobs.Registry)
+spec = Toolset('dev', state=jobs.Registry, close=jobs.Registry.close)
 
 
 def _require_regular_file(path: Path) -> None:
@@ -118,16 +120,11 @@ def edit_file(file_path: str, old_string: str, new_string: str, replace_all: boo
   'whole process group is killed and the tool returns TIMED OUT.{{end}} '
   'use for shell work (git, sed, awk, find, …) that has no dedicated tool.'
 )
-def bash(
+async def bash(
   command: str, limit: int = DEFAULT_LIMIT, timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS
 ) -> str:
   try:
-    process = spawn.run(
-      ['bash', '-c', command],
-      capture_output=True,
-      text=True,
-      timeout=timeout_seconds,
-    )
+    process = await spawn.run_async(['bash', '-c', command], timeout=timeout_seconds)
   except subprocess.TimeoutExpired:
     return (
       f'TIMED OUT after {timeout_seconds}s — killed. Re-run with a larger '
@@ -153,7 +150,7 @@ def bash(
   'timeout policies. backed by GNU grep — gitignore is NOT honored; pass a glob or '
   'narrower path to scope.'
 )
-def grep(
+async def grep(
   pattern: str,
   path: str = '.',
   glob: Optional[str] = None,
@@ -170,7 +167,7 @@ def grep(
     command.extend(['--include', glob])
   command.extend(['--', pattern, path])
   try:
-    process = spawn.run(command, capture_output=True, text=True, timeout=timeout_seconds)
+    process = await spawn.run_async(command, timeout=timeout_seconds)
   except subprocess.TimeoutExpired:
     return (
       f'TIMED OUT after {timeout_seconds}s — killed. Re-run with a larger '
@@ -227,8 +224,14 @@ async def watch(
 ) -> str:
   target = context.state.get(job_id)
   # the wait blocks; run it off-loop so concurrent tool calls — other jobs'
-  # watches included — stay serviceable.
-  return await asyncio.to_thread(target.watch, wait_seconds=wait_seconds, limit=limit, tail=tail)
+  # watches included — stay serviceable. an interrupted watch is woken so the
+  # abandoned thread drops the job's watch lock instead of holding it for the
+  # rest of the window.
+  try:
+    return await off_loop(target.watch, wait_seconds=wait_seconds, limit=limit, tail=tail)
+  except asyncio.CancelledError:
+    target.wake()
+    raise
 
 
 @spec.tool(
@@ -238,4 +241,4 @@ async def watch(
 )
 async def kill(context: Context[jobs.Registry], job_id: str) -> str:
   target = context.state.get(job_id)
-  return await asyncio.to_thread(target.kill)
+  return await off_loop(target.kill)

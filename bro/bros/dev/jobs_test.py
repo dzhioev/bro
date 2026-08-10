@@ -184,11 +184,11 @@ def test_kill_escalates_to_sigkill_when_sigterm_is_ignored():
   assert job.kill(grace_seconds=0.3) == 'job-1 exited (code -9)'
 
 
-def test_registry_kill_running_reaps_only_live_jobs():
+def test_registry_close_reaps_only_live_jobs():
   registry = Registry()
   finished = registry.start('true')
   finished.process.wait()
   running = registry.start('sleep 30')
-  registry.kill_running()
+  registry.close()
   assert running.process.wait(timeout=10) == -9
   assert finished.process.returncode == 0
