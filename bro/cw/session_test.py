@@ -475,6 +475,19 @@ class TestConcurrentSessionGuard:
   """the one-session-per-workspace lock, taken by start_session before either mode
   prepares anything."""
 
+  @pytest.fixture(autouse=True)
+  def launch_preflights(self, monkeypatch):
+    # start_session runs the auth and scope preflights ahead of the guards these
+    # tests drive; without stubs they read the machine's own credential store
+    monkeypatch.setattr(cw_session.credentials, 'try_get', lambda name: 'tok')
+    monkeypatch.setattr(
+      cw_session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set(), True)
+    )
+    monkeypatch.setattr(
+      bro.launch.scope.credentials, 'build_scoped_store', lambda names, optional=(): {}
+    )
+    monkeypatch.setattr(bro.launch.summon_control, 'summon_allow_list', lambda *_a, **_k: set())
+
   def test_second_launch_is_refused_while_the_lock_is_held(self, tmp_path, caplog):
     workspace = _workspace(tmp_path)
     with workspace.hold_session_lock():
