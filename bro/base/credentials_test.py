@@ -897,6 +897,74 @@ class TestHostRegistry:
     with pytest.raises(ValueError, match='malformed secret name'):
       credentials.host_registry()
 
+  def test_kind_selects_its_default_instance(self, bro_dir: Path):
+    # `{"instance": ...}` makes the named variant the kind's default: the kind
+    # entry borrows its sources, keeping the kind's own (inherited) install hook
+    _write(
+      bro_dir,
+      credentials.HOST_REGISTRY_FILE,
+      {
+        'github+acme': {'sources': [{'file': 'github_token_acme'}]},
+        'github': {'instance': 'acme'},
+      },
+    )
+    registry = credentials.host_registry()
+    source = registry['github'].sources[0]
+    assert isinstance(source, credentials.LocalSource)
+    assert source.file == 'github_token_acme'
+    install = registry['github'].install
+    assert install is not None
+    assert 'credentials get github' in install
+    assert 'acme' not in install
+
+  def test_selected_instance_resolves_kind_reads_end_to_end(self, configs_dir: Path, bro_dir: Path):
+    _write(
+      bro_dir,
+      credentials.HOST_REGISTRY_FILE,
+      {
+        'openai+work': {'sources': [{'file': 'openai_work.json'}]},
+        'openai': {'instance': 'work'},
+      },
+    )
+    _write(bro_dir, 'openai_work.json', {'api_key': 'k'})
+    assert credentials.default_store().get_json('openai') == {'api_key': 'k'}
+
+  def test_selector_of_absent_variant_raises(self, bro_dir: Path):
+    _write(bro_dir, credentials.HOST_REGISTRY_FILE, {'github': {'instance': 'acme'}})
+    with pytest.raises(ValueError, match="'github\\+acme' is not in the registry"):
+      credentials.host_registry()
+
+  def test_selector_beside_own_sources_raises(self, bro_dir: Path):
+    _write(
+      bro_dir,
+      credentials.HOST_REGISTRY_FILE,
+      {
+        'github+acme': {'sources': [{'file': 'f'}]},
+        'github': {'instance': 'acme', 'sources': [{'file': 'g'}]},
+      },
+    )
+    with pytest.raises(ValueError, match='both an instance selector and its own sources'):
+      credentials.host_registry()
+
+  def test_selector_on_a_variant_raises(self, bro_dir: Path):
+    _write(
+      bro_dir,
+      credentials.HOST_REGISTRY_FILE,
+      {'github+acme': {'sources': [{'file': 'f'}], 'instance': 'other'}},
+    )
+    with pytest.raises(ValueError, match='only a kind entry selects'):
+      credentials.host_registry()
+
+  def test_non_string_selector_raises(self, bro_dir: Path):
+    _write(bro_dir, credentials.HOST_REGISTRY_FILE, {'github': {'instance': 5}})
+    with pytest.raises(ValueError, match='instance selector must be a string'):
+      credentials.host_registry()
+
+  def test_selector_outside_the_name_grammar_raises(self, bro_dir: Path):
+    _write(bro_dir, credentials.HOST_REGISTRY_FILE, {'github': {'instance': 'Acme'}})
+    with pytest.raises(ValueError, match='malformed secret name'):
+      credentials.host_registry()
+
   def test_default_store_resolves_a_host_local_variant(self, configs_dir: Path, bro_dir: Path):
     # end-to-end through _load_registry: a host-local variant resolves like any
     # other stored entry — storage-addressed, since it is stored under its full name
@@ -1433,6 +1501,25 @@ class TestBuildScopedStore:
     store = credentials.build_scoped_store(['openai+work'])
     registry = json.loads(store[credentials.REGISTRY_FILE])
     assert registry['openai'] == {'sources': [{'file': 'openai.cred'}]}
+
+  def test_kind_with_selected_instance_hydrates_the_variant_sources(
+    self, configs_dir: Path, bro_dir: Path
+  ):
+    # a scope declaring the plain kind picks up the host registry's selected
+    # default instance — hydration reads the variant's sources under the kind name
+    _write(
+      bro_dir,
+      credentials.HOST_REGISTRY_FILE,
+      {
+        'github+acme': {'sources': [{'file': 'github_token_acme'}]},
+        'github': {'instance': 'acme'},
+      },
+    )
+    _write(bro_dir, 'github_token_acme', 'ghp_acme\n')
+    store = credentials.build_scoped_store(['github'])
+    assert store['github.cred'] == b'ghp_acme'
+    registry = json.loads(store[credentials.REGISTRY_FILE])
+    assert 'credentials get github' in registry['github']['install']
 
   def test_two_instances_of_a_kind_raise(self, configs_dir: Path, bro_dir: Path):
     _write(

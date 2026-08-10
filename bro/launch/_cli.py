@@ -154,7 +154,6 @@ def maybe_containerize(
   )
   from bro.workspace.git import resolve_ref
   from bro.workspace.paths import fresh_workspace_name, project_root
-  from bro.workspace.project import project_config
 
   base_ref: Optional[str] = None
   if into is not None:
@@ -164,7 +163,7 @@ def maybe_containerize(
       return 1
   try:
     scoped, may_summon, _ = preflight_scoped_launch(
-      scoped_secrets(bro_name, Surface.BRO_RUN, credential_instances=project_config().creds),
+      scoped_secrets(bro_name, Surface.BRO_RUN),
       bro_name,
       grant=grant,
       revoke=revoke,

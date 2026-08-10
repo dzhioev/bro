@@ -44,9 +44,12 @@ repo, typically `kind+instance` variants of a checked-in kind
 (`github+alice`). the kind entry (the name up to `+`) owns kind-level
 behavior — notably the install hook, a `bro.base.template` text rendered with
 `#name` bound to each instance's own name — so a variant declares only its
-sources. instance entries never enter a generated registry: `build_scoped_store`
-materializes a variant under its kind name, so a scoped store carries kind
-entries only.
+sources. a kind entry may select its default instance by name instead of
+declaring sources: `{"instance": "alice"}` borrows `kind+alice`'s sources,
+keeping the kind's own install hook — the durable, host-owned way to decide
+which variant backs a kind (per-launch grant/revoke overrides it). instance
+entries never enter a generated registry: `build_scoped_store` materializes a
+variant under its kind name, so a scoped store carries kind entries only.
 
 a json secret may reference other secrets instead of embedding copies: an
 object node `{"$cred": "<name>"}` anywhere in its tree is replaced at
@@ -685,27 +688,57 @@ def _registry_from_dict(data: dict) -> dict[str, Secret]:
 
 
 def _resolve_kinds(data: dict) -> dict:
-  """validate every name against the grammar and give each `kind+instance`
-  variant its kind entry's install-hook template (instantiated per-entry by
-  `Secret.from_dict`). the kind owns kind-level behavior, so a variant carrying
-  its own `install` — or naming a kind the registry lacks — is an error. only
-  the built-in/host registries pass through here: a generated registry is
-  self-contained, its variant entries already carrying their materialized hooks.
+  """validate every name against the grammar, resolve each kind entry's
+  `instance` selector (`_select_default_instance`), and give each
+  `kind+instance` variant its kind entry's install-hook template (instantiated
+  per-entry by `Secret.from_dict`). the kind owns kind-level behavior, so a
+  variant carrying its own `install` or `instance` — or naming a kind the
+  registry lacks — is an error. only the built-in/host registries pass through
+  here: a generated registry is self-contained, its variant entries already
+  carrying their materialized hooks.
   """
   resolved: dict[str, dict] = {}
   for name, entry in data.items():
     kind, instance = parse_name(name)
     if instance is None:
-      resolved[name] = entry
+      resolved[name] = _select_default_instance(name, entry, data) if 'instance' in entry else entry
       continue
     if 'install' in entry:
       raise ValueError(f'variant {name!r} declares an install hook; the kind entry owns it')
+    if 'instance' in entry:
+      raise ValueError(
+        f'variant {name!r} declares an instance selector; only a kind entry selects '
+        'its default instance'
+      )
     kind_entry = data.get(kind)
     if kind_entry is None:
       raise ValueError(f'variant {name!r} has no kind entry {kind!r} in the registry')
     install = kind_entry.get('install')
     resolved[name] = entry if install is None else {**entry, 'install': install}
   return resolved
+
+
+def _select_default_instance(kind: str, entry: dict, data: dict) -> dict:
+  """resolve a kind entry's `instance` selector: `{"instance": "acme"}` makes
+  `kind+acme` the kind's default instance — the kind entry borrows that
+  variant's sources, keeping its own install hook."""
+  instance = entry['instance']
+  if not isinstance(instance, str):
+    raise ValueError(f'kind {kind!r}: instance selector must be a string, got {instance!r}')
+  if 'sources' in entry:
+    raise ValueError(f'kind {kind!r} declares both an instance selector and its own sources')
+  variant = f'{kind}+{instance}'
+  parse_name(variant)
+  variant_entry = data.get(variant)
+  if variant_entry is None:
+    raise ValueError(
+      f'kind {kind!r} selects instance {instance!r}, but {variant!r} is not in the registry'
+    )
+  selected: dict = {'sources': variant_entry['sources']}
+  install = entry.get('install')
+  if install is not None:
+    selected['install'] = install
+  return selected
 
 
 def default_registry() -> dict[str, Secret]:

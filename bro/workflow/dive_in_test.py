@@ -288,14 +288,10 @@ class TestTaskSystem:
         calls['read'] = name
         return {'backend': 'github', 'token': 't', 'repo': 'owner/repo'}
 
-    monkeypatch.setattr(
-      dive_in,
-      'project_config',
-      lambda: SimpleNamespace(default_bro='bro-dev', creds={'brog': 'github'}),
-    )
+    monkeypatch.setattr(dive_in, 'project_config', lambda: SimpleNamespace(default_bro='bro-dev'))
 
-    def fake_scoped_secrets(bro_name, surface, *, credential_instances):
-      calls['scoped'] = (bro_name, surface, credential_instances)
+    def fake_scoped_secrets(bro_name, surface):
+      calls['scoped'] = (bro_name, surface)
       return 'base-scope'
 
     monkeypatch.setattr(dive_in, 'scoped_secrets', fake_scoped_secrets)
@@ -313,7 +309,7 @@ class TestTaskSystem:
     calls: dict = {}
     self._fake_wiring(monkeypatch, calls)
     system = dive_in._task_system(['brog+github'], [], None, False)
-    assert calls['scoped'] == ('bro-dev', Surface.CW_SESSION, {'brog': 'github'})
+    assert calls['scoped'] == ('bro-dev', Surface.CW_SESSION)
     assert calls['view'] == ('base-scope', ['brog+github'], [])
     assert calls['read'] == 'brog'
     assert isinstance(system, brog_github.System)
@@ -324,7 +320,7 @@ class TestTaskSystem:
     calls: dict = {}
     self._fake_wiring(monkeypatch, calls)
     dive_in._task_system([], [], 'dev', True)
-    assert calls['scoped'] == ('dev', Surface.RAW_SESSION, {'brog': 'github'})
+    assert calls['scoped'] == ('dev', Surface.RAW_SESSION)
 
 
 class TestPrefetchTask:

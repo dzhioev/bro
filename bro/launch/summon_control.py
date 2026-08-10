@@ -74,10 +74,9 @@ imports stay function-local: this module sits on the launch path before the
 
 import json
 import time
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from pathlib import Path
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Optional
 
 from bro.base import credentials, log
@@ -270,7 +269,6 @@ class SummonControl:
     *,
     allow_list: Collection[str],
     credential_scope: Collection[str] = (),
-    credential_instances: Mapping[str, str] = MappingProxyType({}),
     session: str,
     project: Path,
     status_file: Path,
@@ -278,11 +276,8 @@ class SummonControl:
     trail_pointer: Optional[Path] = None,
   ):
     self._allow_list = set(allow_list)
-    # the root session's own two scopes bound what its summons may grant a child;
-    # `credential_instances` is the operated repo's kind → instance selection, the
-    # same input the launch surfaces feed the scope computation
+    # the root session's own two scopes bound what its summons may grant a child
     self._credential_scope = set(credential_scope)
-    self._credential_instances = credential_instances
     self._session = session
     self._project = project
     self._status_file = status_file
@@ -463,12 +458,7 @@ class SummonControl:
 
     grant, _ = split_scope_overrides(record.grant)
     revoke, _ = split_scope_overrides(record.revoke)
-    scoped = summoned_credential_scope(
-      record.target,
-      credential_instances=self._credential_instances,
-      grant=grant,
-      revoke=revoke,
-    )
+    scoped = summoned_credential_scope(record.target, grant=grant, revoke=revoke)
     return scoped.required | scoped.optional
 
   def _root_summoned_by(self) -> Optional[dict[str, Any]]:

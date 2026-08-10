@@ -28,7 +28,6 @@ from bro.launch.summon_control import SummonControl, summon_status_file
 from bro.summon import SUMMON
 from bro.workspace.git import resolve_head, resolve_ref
 from bro.workspace.paths import broker_dir, host_log_dir, project_root, summon_dir
-from bro.workspace.project import project_config
 from bro.workspace.spawn import (
   CompositeSpawner,
   DockerLaunchSpec,
@@ -105,7 +104,6 @@ def _lower_summon(launch: SummonLaunchSpec, workspace_name: str) -> DockerLaunch
     verb='run',
     scoped=summoned_credential_scope(
       launch.target,
-      credential_instances=project_config().creds,
       grant=list(launch.grant_credentials),
       revoke=list(launch.revoke_credentials),
     ),
@@ -198,7 +196,6 @@ def run_root_via_broker(
   control = SummonControl(
     allow_list=may_summon,
     credential_scope=credential_scope,
-    credential_instances=project_config().creds,
     session=session,
     project=project,
     status_file=summon_status_file(project, session),

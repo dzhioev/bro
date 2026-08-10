@@ -71,14 +71,13 @@ def _task_system(
   grant: list[str], revoke: list[str], bro: Optional[str], raw: bool
 ) -> brog_system.System:
   """the brog backend for the task prefetch, reading `brog` through the launch's
-  own credential binding (`launch_view_store`) — so the project's instance
-  mapping and `--grant`/`--revoke` select the same brog config the session's
-  store hydrates."""
+  own credential binding (`launch_view_store`) — so `--grant`/`--revoke` select
+  the same brog config the session's store hydrates."""
   project = project_config()
   bro_name = bro if bro is not None else project.default_bro
   surface = Surface.RAW_SESSION if raw else Surface.CW_SESSION
   store = launch_view_store(
-    scoped_secrets(bro_name, surface, credential_instances=project.creds),
+    scoped_secrets(bro_name, surface),
     grant=grant,
     revoke=revoke,
   )

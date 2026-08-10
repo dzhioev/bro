@@ -341,7 +341,7 @@ def _container_session(spec: SessionSpec, workspace: Workspace, base_ref: Option
   bro_name = spec.session_bro
   try:
     scoped, may_summon, _ = preflight_scoped_launch(
-      scoped_secrets(bro_name, spec.surface, credential_instances=project_config().creds),
+      scoped_secrets(bro_name, spec.surface),
       bro_name,
       grant=spec.grant,
       revoke=spec.revoke,
@@ -441,7 +441,7 @@ def _host_session(spec: SessionSpec, workspace: Workspace, base_ref: Optional[st
   bro_name = spec.session_bro
   try:
     scoped, may_summon, store = preflight_scoped_launch(
-      scoped_secrets(bro_name, spec.surface, credential_instances=project_config().creds),
+      scoped_secrets(bro_name, spec.surface),
       bro_name,
       grant=spec.grant,
       revoke=spec.revoke,
