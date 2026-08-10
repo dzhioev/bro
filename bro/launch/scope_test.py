@@ -1,4 +1,5 @@
 from typing import ClassVar
+from unittest.mock import patch
 
 import pytest
 
