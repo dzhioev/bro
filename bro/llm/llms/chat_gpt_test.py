@@ -867,7 +867,7 @@ class TestInterruptedTurn:
     parked = [cast(dict, item) for item in gpt._pending_input]
     assert [item['call_id'] for item in parked] == ['call_1', 'call_2']
     assert all(item['output'] == chat_gpt.INTERRUPTED_TOOL_OUTPUT for item in parked)
-    # and the trail records them, so a replay of this trail stays consistent
+    # the trail records them too — a replay reconstructs the same turn
     interrupted = [step for step in tracker.steps if step[1] == chat_gpt.INTERRUPTED_TOOL_OUTPUT]
     assert [step[0] for step in interrupted] == ['tool_result', 'tool_result']
     assert all(step[2]['is_error'] is True for step in interrupted)

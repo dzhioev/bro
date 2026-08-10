@@ -461,10 +461,8 @@ class FunctionTool(Tool):
       result = await self.function(**kwargs)
     else:
       # a blocking tool function would otherwise hold the loop for its whole
-      # runtime, freezing every interactive surface and the interruption path
-      # with it. off-loop it is: a cancelled call abandons the thread, so a tool
-      # that starts a process is responsible for reaping it (see
-      # `bro.base.spawn.run_async`).
+      # runtime. a cancelled call abandons the thread, so a tool that starts a
+      # process is responsible for reaping it.
       result = await off_loop(functools.partial(self.function, **kwargs))
       if inspect.isawaitable(result):
         result = await result

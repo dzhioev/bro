@@ -334,9 +334,8 @@ class ChatGPT(llm_llm.LLM):
 
     super().__init__(mcp_servers, observer=observer, tracker=tracker, agent=agent)
     self.model = model
-    # the async client is what makes a roundtrip interruptible: cancelling the
-    # await closes the request instead of leaving the loop pinned inside a
-    # blocking call no signal can reach.
+    # async is what makes a roundtrip interruptible: a cancelled await closes
+    # the request, where the sync client pins the loop until the reply lands.
     self.client = AsyncOpenAI(api_key=api_key)
     self._openai_tools: Optional[list[ToolParam]] = None
     self._last_response_id: Optional[str] = None
@@ -359,10 +358,8 @@ class ChatGPT(llm_llm.LLM):
     # system). cleared after one use so subsequent send()s behave normally.
     self._input_prefix: Optional[list[ResponseInputItemParam]] = None
     # what an interrupted turn left unacknowledged: the request items no
-    # response came back for, or the tool outputs — real ones plus
-    # INTERRUPTED_TOOL_OUTPUT for the calls that never ran — the loop never got
-    # to send. they lead the next send's input, so the model resumes on the
-    # conversation it was actually stopped in rather than an orphaned branch.
+    # response came back for, or the tool outputs the loop never got to send.
+    # they lead the next send's input, on the chain `_last_response_id` names.
     self._pending_input: list[ResponseInputItemParam] = []
 
   async def _resolve_openai_tools(self) -> list[ToolParam]:

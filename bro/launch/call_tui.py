@@ -495,7 +495,6 @@ class ChatApp(App):
     self._scroll_to_end()
 
   def append_thinking(self, text: str) -> None:
-    """mount a thinking bubble; called from `TUIRenderer`."""
     bubble = MessageBubble(ChatMarkdown(text), kind='thinking')
     self.query_one('#history', VerticalScroll).mount(
       BubbleRow(bubble, kind='thinking', when=datetime.now()),
@@ -504,7 +503,6 @@ class ChatApp(App):
     self._scroll_to_end()
 
   def append_trace_line(self, text: str) -> None:
-    """mount a dim system bubble; called from `TUIRenderer`."""
     # the trace lives in the history stream, so the typing indicator (which is
     # also mounted there) needs to slide back to the bottom after each event.
     self.query_one('#history', VerticalScroll).mount(
@@ -523,10 +521,8 @@ class ChatApp(App):
     )
 
   def _begin_turn(self) -> None:
-    # the message field takes no text while the bro works: a second concurrent
-    # send would drive one conversation from two turns, and a queued message
-    # would reach a bro the user has already changed their mind about. the way
-    # back to the field is an interrupt.
+    # the field takes no text while the bro works — one conversation is never
+    # driven by two turns — so an interrupt is the way back to it.
     field = self.query_one('#input-bar', MessageInput)
     field.placeholder = _BUSY_PLACEHOLDER
     field.disabled = True
@@ -551,21 +547,17 @@ class ChatApp(App):
     self._typing.tick()
 
   def note_tool_call(self, name: str) -> None:
-    """called from `TUIRenderer`."""
     if self._typing is not None:
       self._typing.note_tool_call(name)
 
   def note_tool_result(self) -> None:
-    """called from `TUIRenderer`."""
     if self._typing is not None:
       self._typing.note_tool_result()
 
   @work(exclusive=True)
   async def _send_to_bro(self, text: str) -> None:
-    # an async worker on the app's own loop, which is what makes the turn
-    # interruptible: cancelling it unwinds the agent loop (a thread worker keeps
-    # running, cancelled or not). Nothing below it blocks the loop, so the UI
-    # stays live for the whole turn.
+    # async, on the app's own loop: cancelling this worker unwinds the agent
+    # loop, while a thread worker would keep running, cancelled or not.
     observer = TUIRenderer(self)
     try:
       reply = await self._bro.send(text, observer=observer, surface='call', hold=self._hold)
@@ -586,8 +578,8 @@ class ChatApp(App):
     await self._interrupt_turn()
 
   async def action_quit(self) -> None:
-    # the turn goes down with the UI; an abandoned one would keep the process
-    # alive after the terminal is back, which is indistinguishable from a hang.
+    # the turn goes down with the UI: an abandoned one keeps the process alive
+    # after the terminal is back.
     await self._interrupt_turn()
     await super().action_quit()
 

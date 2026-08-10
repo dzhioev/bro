@@ -1054,10 +1054,9 @@ class BaseBro(ABC):
     return self._live_mcp
 
   def _close_live_servers(self) -> None:
-    # a live server may hold real resources — the dev toolset's background jobs
-    # are the built-in case — and the bro's lifetime is the seam that releases
-    # them, so ending a session never leaves a process behind. best-effort: a
-    # failing teardown must not mask the run's own outcome.
+    # a live server may hold real resources, and the lifetime is the seam that
+    # releases them. best-effort: a failing teardown must not mask the run's own
+    # outcome.
     if self._live_mcp is None:
       return
     for server in self._live_mcp:
