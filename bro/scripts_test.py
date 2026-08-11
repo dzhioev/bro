@@ -151,7 +151,7 @@ class TestScriptStore:
 
   def test_tracker_dev_inherits_shared_and_dev_scripts(self):
     bro = _TrackerDev()
-    assert set(bro.scripts) == {'ask', 'audit', 'fix', 'land', 'reflect', 'run-pr'}
+    assert set(bro.scripts) == {'ask', 'audit', 'fix', 'land', 'reflect', 'run-pr', 'wire'}
     assert '## Scripts' in bro.system_prompt
     assert '## Available skills' not in bro.system_prompt
 

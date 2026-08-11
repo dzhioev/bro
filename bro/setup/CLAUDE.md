@@ -40,7 +40,7 @@ A `kind+instance` name declares a variant of the kind named up to the `+` (name 
 
 ### Per-project instances (`~/.bro.json`)
 
-The registry's `instance` selector decides a kind's instance for the whole host, but one host serves several projects and the right `github` identity or task tracker is usually the project's. `~/.bro.json` — config beside the store rather than a secret inside it — records that mapping (`bro/base/host_config.py`):
+The registry's `instance` selector decides a kind's instance for the whole host, but one host serves several projects and the right `github` identity or task tracker is usually the project's. `~/.bro.json` — config beside the store rather than a secret inside it — records that mapping (`bro/base/host_config.py`), and `@::wire` fills it in from inside a repo:
 
 ```json
 {"projects": {"~/projects/api": "brog+github",
