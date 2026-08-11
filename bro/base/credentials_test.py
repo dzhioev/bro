@@ -965,6 +965,70 @@ class TestHostRegistry:
     with pytest.raises(ValueError, match='malformed secret name'):
       credentials.host_registry()
 
+  def test_selected_instances_bind_the_kind_for_this_process(
+    self, configs_dir: Path, bro_dir: Path
+  ):
+    _write(
+      bro_dir,
+      credentials.HOST_REGISTRY_FILE,
+      {'openai+work': {'sources': [{'file': 'openai_work.json'}]}},
+    )
+    _write(bro_dir, 'openai_work.json', {'api_key': 'work'})
+    _write(bro_dir, 'openai.json', {'api_key': 'own'})
+    credentials.select_instances({'openai': 'work'})
+    # kind-addressed reads, the capability probe, and a scoped build alike
+    assert credentials.default_store().get_json('openai') == {'api_key': 'work'}
+    assert credentials.available('openai') is True
+    files = credentials.build_scoped_store({'openai'})
+    assert json.loads(files['openai.cred']) == {'api_key': 'work'}
+
+  def test_selected_instance_of_none_reads_the_kinds_own_entry(
+    self, configs_dir: Path, bro_dir: Path
+  ):
+    _write(
+      bro_dir,
+      credentials.HOST_REGISTRY_FILE,
+      {'openai+work': {'sources': [{'file': 'openai_work.json'}]}},
+    )
+    _write(bro_dir, 'openai_work.json', {'api_key': 'work'})
+    _write(bro_dir, 'openai.json', {'api_key': 'own'})
+    credentials.select_instances({'openai': None})
+    assert credentials.default_store().get_json('openai') == {'api_key': 'own'}
+    credentials.select_instances({'openai': 'work'})
+    assert credentials.default_store().get_json('openai') == {'api_key': 'work'}
+
+  def test_selecting_the_own_entry_of_a_selecting_kind_raises(self, bro_dir: Path):
+    # a kind entry that selects an instance has no sources of its own to read,
+    # so the selection names something that does not exist rather than silently
+    # resolving to the variant it contradicts
+    _write(
+      bro_dir,
+      credentials.HOST_REGISTRY_FILE,
+      {
+        'openai+work': {'sources': [{'file': 'openai_work.json'}]},
+        'openai': {'instance': 'work'},
+      },
+    )
+    credentials.select_instances({'openai': None})
+    with pytest.raises(ValueError, match='no sources of its own'):
+      credentials.host_registry()
+
+  def test_selecting_an_instance_of_an_unregistered_kind_raises(self, bro_dir: Path):
+    credentials.select_instances({'nope': 'acme'})
+    with pytest.raises(ValueError, match="kind 'nope', which the registry does not carry"):
+      credentials.host_registry()
+
+  def test_selection_keyed_by_a_storage_name_raises(self):
+    with pytest.raises(ValueError, match='keyed by kind alone'):
+      credentials.select_instances({'github+acme': 'other'})
+
+  def test_selection_leaves_a_generated_registry_alone(self, configs_dir: Path, bro_dir: Path):
+    # a session's scoped store already carries the instance its launch selected
+    _write(bro_dir, credentials.REGISTRY_FILE, {'openai': {'sources': [{'file': 'openai.json'}]}})
+    _write(bro_dir, 'openai.json', {'api_key': 'scoped'})
+    credentials.select_instances({'openai': 'work'})
+    assert credentials.default_store().get_json('openai') == {'api_key': 'scoped'}
+
   def test_default_store_resolves_a_host_local_variant(self, configs_dir: Path, bro_dir: Path):
     # end-to-end through _load_registry: a host-local variant resolves like any
     # other stored entry — storage-addressed, since it is stored under its full name

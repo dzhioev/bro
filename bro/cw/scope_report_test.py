@@ -1,0 +1,58 @@
+from pathlib import Path
+from unittest.mock import patch
+
+from bro.cw.scope_report import report_scope
+from bro.workspace.project import ProjectConfig
+from bro.workspace.store import ScopedSecrets
+
+
+def _run(capsys, *, selection, scoped, available=lambda name: True, bro=None, raw=False):
+  with (
+    patch('bro.cw.scope_report.project_root', return_value=Path('/repo')),
+    patch(
+      'bro.cw.scope_report.project_config',
+      return_value=ProjectConfig(default_bro='bro-dev', image_repository='bro/bro-dev'),
+    ),
+    patch('bro.cw.scope_report.bind_project_credentials', return_value=selection),
+    patch('bro.cw.scope_report.scoped_secrets', return_value=scoped) as scope,
+    patch('bro.cw.scope_report.credentials.available', available),
+  ):
+    rc = report_scope(bro=bro, raw=raw)
+  return rc, capsys.readouterr().out, scope
+
+
+class TestReportScope:
+  def test_names_the_instance_each_selected_kind_reads(self, capsys):
+    rc, out, _ = _run(
+      capsys,
+      selection={'brog': 'github'},
+      scoped=ScopedSecrets({'brog', 'github'}, {'openai'}, True),
+    )
+    assert rc == 0
+    assert 'project: /repo' in out
+    assert 'bro:     bro-dev (cw-session)' in out
+    assert 'brog+github (project)' in out
+    # a kind the project doesn't select reads whatever the host registry binds
+    assert 'github' in out
+    assert 'optional:' in out and 'openai' in out
+
+  def test_marks_a_selection_that_does_not_resolve(self, capsys):
+    rc, out, _ = _run(
+      capsys,
+      selection={'brog': 'github'},
+      scoped=ScopedSecrets({'brog'}, set(), True),
+      available=lambda name: False,
+    )
+    assert rc == 0
+    assert 'MISSING' in out
+
+  def test_reads_the_kinds_own_entry_selection(self, capsys):
+    _, out, _ = _run(capsys, selection={'brog': None}, scoped=ScopedSecrets({'brog'}, set(), True))
+    assert 'brog (project)' in out
+
+  def test_raw_scopes_the_raw_flavor_and_bro_overrides_the_default(self, capsys):
+    _, out, scope = _run(
+      capsys, selection={}, scoped=ScopedSecrets({'trails'}, set(), True), bro='dev', raw=True
+    )
+    assert 'bro:     dev (raw-session)' in out
+    assert scope.call_args.args[0] == 'dev'

@@ -754,7 +754,8 @@ def host_registry() -> dict[str, Secret]:
   sources-only override keeps the kind's checked-in wiring. the additions file
   follows the local search path, like any secret file. kind resolution runs
   after the merge, so a variant picks up its kind's hook even when an addition
-  overrides the kind."""
+  overrides the kind, and after `select_instances`, whose selections replace the
+  sources of the kinds they name."""
   data = _builtin_registry_data()
   additions_path = _find_in_search_dirs(HOST_REGISTRY_FILE)
   if additions_path is not None:
@@ -763,7 +764,57 @@ def host_registry() -> dict[str, Secret]:
       if builtin is not None and 'install' in builtin and 'install' not in entry:
         entry = {**entry, 'install': builtin['install']}
       data[name] = entry
+  for kind, instance in _selected_instances.items():
+    data[kind] = _selected_entry(kind, instance, data)
   return _registry_from_dict(_resolve_kinds(data))
+
+
+def _selected_entry(kind: str, instance: Optional[str], data: dict) -> dict:
+  """the kind's entry under a `select_instances` binding: an instance replaces
+  the kind's sources with a selector `_select_default_instance` then follows,
+  while None reads the entry's own sources — which a kind entry selecting an
+  instance of its own does not have."""
+  entry = data.get(kind)
+  if entry is None:
+    raise ValueError(f'instance selected for kind {kind!r}, which the registry does not carry')
+  without_selection = {key: value for key, value in entry.items() if key != 'instance'}
+  if instance is None:
+    if 'sources' not in without_selection:
+      raise ValueError(
+        f'kind {kind!r} is selected as its own entry, but the registry gives it no sources '
+        'of its own — name an instance instead'
+      )
+    return without_selection
+  without_selection.pop('sources', None)
+  return {**without_selection, 'instance': instance}
+
+
+# the process-scoped instance selection layered onto the host registry by
+# `select_instances`; empty until a caller binds one.
+_selected_instances: dict[str, Optional[str]] = {}
+
+
+def select_instances(selection: dict[str, Optional[str]]) -> None:
+  """bind this process's resolution to one instance per named kind: `{'brog':
+  'github'}` makes `brog+github` the kind's default here, as a registry
+  kind-entry `instance` selector does durably for the whole host, and a None
+  value names the kind's own entry, which the registry must then give sources of
+  its own.
+
+  the binding replaces any earlier one and drops the cached default store, so
+  every later read — a kind-addressed `get`, a capability probe, a scoped-store
+  build — sees the selected instances. it reaches only the host registry: a
+  generated registry (a session's scoped store) is self-contained and already
+  carries the instance its launch selected."""
+  global _selected_instances, _default_store
+  for kind, instance in selection.items():
+    if parse_name(kind)[1] is not None:
+      raise ValueError(f'instance selection is keyed by kind alone, got {kind!r}')
+    if instance is not None:
+      parse_name(f'{kind}+{instance}')
+  with _default_store_lock:
+    _selected_instances = dict(selection)
+    _default_store = None
 
 
 def _load_registry() -> dict[str, Secret]:
