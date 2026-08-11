@@ -43,11 +43,19 @@ A `kind+instance` name declares a variant of the kind named up to the `+` (name 
 The registry's `instance` selector decides a kind's instance for the whole host, but one host serves several projects and the right `github` identity or task tracker is usually the project's. `~/.bro.json` — config beside the store rather than a secret inside it — records that mapping (`bro/base/host_config.py`), and `@::wire` fills it in from inside a repo:
 
 ```json
-{"projects": {"~/projects/api": "brog+github",
-              "~/projects/site": ["github+acme", "brog+"]}}
+{
+  "projects": {
+    "/home/foo/projects/api": {
+      "instances": ["brog+github", "github+acme"]
+    },
+    "/home/foo/projects/site": {
+      "instances": ["brog+"]
+    }
+  }
+}
 ```
 
-A key is the operated repo's root (`~` and symlinks resolved before matching — every linked worktree maps to its main checkout, so one entry covers a checkout's sessions and worktrees alike); its value is one `kind+instance` selection or a list of them. The `+` is always written: `kind+` states that the project reads the kind's own registry entry, and fails where that entry declares no sources of its own — a kind entry that selects an instance has none, so two real alternatives need two names.
+A key is the operated repo's root (`~` and symlinks resolved before matching — every linked worktree maps to its main checkout, so one entry covers a checkout's sessions and worktrees alike). Its value is that project's policy object, carrying `instances`: the list of `kind+instance` names it reads, each naming a kind at most once. The `+` is always written: `kind+` states that the project reads the kind's own registry entry, and fails where that entry declares no sources of its own — a kind entry that selects an instance has none, so two real alternatives need two names.
 
 A launch binds the operated project's selection at the resolver before it computes anything (`bro.launch.scope.bind_project_credentials` over `credentials.select_instances`), so the scope it hydrates, the bro's feature gates, and any host-side read on the session's behalf agree on which instance a kind means; `cw scope` prints the result. The binding reaches the host registry only — a session's generated registry already carries the instance its launch selected — and a `--grant kind+instance` still overrides it for one launch. Precedence, most specific first: the launch flag, the project's entry here, the registry's own kind-level selector.
 

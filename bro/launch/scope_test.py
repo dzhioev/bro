@@ -93,7 +93,7 @@ class TestScopedSecrets:
   def test_computing_a_scope_binds_the_projects_instances(self, tmp_path, monkeypatch):
     # the scope keeps naming kinds; the instance each reads is bound at the resolver
     config = tmp_path / 'bro.json'
-    config.write_text(json.dumps({'projects': {str(tmp_path): ['brog+github']}}))
+    config.write_text(json.dumps({'projects': {str(tmp_path): {'instances': ['brog+github']}}}))
     monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
     monkeypatch.setattr('bro.launch.scope.project_root', lambda: tmp_path)
     bound = {}

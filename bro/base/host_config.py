@@ -1,19 +1,10 @@
 """the host's per-project launch policy (`~/.bro.json`).
 
 one host serves several projects, and a credential kind may have more than one
-instance stored for it (`bro/setup/CLAUDE.md`, "Configuration"). this file
-records which instance each project reads:
-
-    {"projects": {"~/projects/api": "brog+github",
-                  "~/projects/site": ["github+acme", "brog+"]}}
-
-a project key is the filesystem path of the operated repo's root (`~` and
-symlinks resolved before matching); its value is one selection or a list of
-them, each naming a kind and the instance backing it there. the `+` is written
-even when no instance follows it: `brog+` states that the project reads the
-kind's own registry entry, and fails where the registry gives the kind none of
-its own. the file is optional — a host holding one instance per kind needs none,
-and a project without an entry reads each kind's own default.
+instance stored for it; this file records which instance each project reads.
+the schema is `bro/setup/CLAUDE.md`, "Per-project instances". the file is
+optional — a host holding one instance per kind needs none, and a project
+without an entry reads each kind's own default.
 
 reading is project-agnostic: the caller names the project.
 """
@@ -29,6 +20,7 @@ from bro.base import configs, credentials
 HOST_CONFIG_FILE = configs.DEFAULT_HOST_CONFIG
 
 _PROJECTS_KEY = 'projects'
+_INSTANCES_KEY = 'instances'
 
 
 def project_instances(project: Path) -> dict[str, Optional[str]]:
@@ -61,9 +53,14 @@ def _resolve_path(path: str) -> Path:
 
 
 def _project_selection(path: Path, project: str, value: object) -> dict[str, Optional[str]]:
-  entries = [value] if isinstance(value, str) else value
+  if not isinstance(value, dict):
+    raise ValueError(f'{path}: project {project!r} must hold a json object')
+  unknown = sorted(set(value) - {_INSTANCES_KEY})
+  if len(unknown) > 0:
+    raise ValueError(f'{path}: project {project!r} has unknown field(s): {", ".join(unknown)}')
+  entries = value.get(_INSTANCES_KEY, [])
   if not isinstance(entries, list):
-    raise ValueError(f'{path}: project {project!r} must hold a selection or a list of them')
+    raise ValueError(f'{path}: project {project!r}: {_INSTANCES_KEY} must be a list')
   selection: dict[str, Optional[str]] = {}
   for entry in entries:
     kind, instance = _parse_selection(path, project, entry)

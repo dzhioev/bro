@@ -28,16 +28,9 @@ Resolve the project root (`git rev-parse --git-common-dir`, then its parent — 
 
 ## 4. Record the decision
 
-Merge only this project's entry into `~/.bro.json`, leaving every other project's untouched, and show the user the change before writing it:
+Merge only this project's entry into `~/.bro.json`, leaving every other project's untouched, and show the user the change before writing it. The file's schema — and what `kind+` with no instance after it means — is `bro/setup/CLAUDE.md`, "Per-project instances"; read it before writing.
 
-```json
-{"projects": {"~/projects/api": "brog+github",
-              "~/projects/site": ["github+acme", "brog+"]}}
-```
-
-A value is one selection or a list of them, each written as `kind+instance`. The `+` is always written: `brog+` states that the project reads the kind's own registry entry, worth recording where a reader would otherwise wonder which instance a project with several got. Kinds the project has no opinion about stay out of the entry.
-
-A kind whose registry entry selects an instance of its own has no sources under its plain name, so `kind+` fails there — the alternatives both need names (`brog+flow` beside `brog+github`) before a project can choose between them.
+Kinds the project has no opinion about stay out of the entry.
 
 ## 5. Verify
 
