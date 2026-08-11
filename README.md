@@ -1,5 +1,12 @@
 # bro
 
+> [!WARNING]
+> **Early development — not recommended for production use.**
+>
+> The framework is at an early stage: much of it is work in progress, more is still to be designed, and `master` regularly carries breaking changes that require migrations. Interfaces move without deprecation cycles or compatibility shims.
+>
+> It is provided as-is, without warranty or support of any kind, and no responsibility is taken for any outcome of running it. Use it at your own risk.
+
 Harness your bros: `bro` is a meta-harness for declarative agent personas. A persona — system prompt, tools, data sources, credentials, scripts — is declared once and runs unchanged on every supported harness: a Claude Code session, or the framework's own native agent loop. Around that core: MCP tool serving, credential scoping, recorded runs, task-driven development workflows, and `cw` — isolated host or container workspaces. Consumer projects install the distribution, register their extensions through entry points, and choose their defaults in `[tool.bro]`. [`DESIGN.md`](DESIGN.md) covers the conceptual model.
 
 The repository is a [uv](https://docs.astral.sh/uv/) workspace: this root publishes `bro`, and [`bro-dev/`](bro-dev/README.md) publishes development tooling for repositories built on the framework — console-script metadata generation, token-usage reports, shell-policy checks, repository hook installation, and the `bro-dev` persona.
