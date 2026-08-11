@@ -10,6 +10,10 @@ if BRO_CONFIGS_DIR == '':
 # here directly.
 DEFAULT_BRO_DIR = os.path.expanduser('~/.bro')
 
+# the host's own launch policy, beside the store rather than inside it: config,
+# not secrets.
+DEFAULT_HOST_CONFIG = os.path.expanduser('~/.bro.json')
+
 
 @cache
 def _distribution_version() -> str:

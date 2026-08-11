@@ -1,13 +1,15 @@
 """per-surface launch scoping of a bro run: which credentials each launch
 surface hydrates and which bros the session may summon, computed from the bro's
-own declarations (manifest, optional tier, `may_summon`, `needs_docker`).
+own declarations (manifest, optional tier, `may_summon`, `needs_docker`) against
+the operated project's instance selection.
 """
 
 import enum
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
-from bro.base import credentials, log
+from bro.base import credentials, host_config, log
+from bro.workspace.paths import project_root
 from bro.workspace.store import ScopedSecrets, finalize_scoped_secrets
 
 if TYPE_CHECKING:
@@ -80,14 +82,31 @@ _RECIPES: dict[Surface, _Recipe] = {
 }
 
 
+def bind_project_credentials() -> dict[str, Optional[str]]:
+  """bind this process's credential resolution to the operated project's
+  instance selection (`bro.base.host_config`) and return it. every host-side
+  read on a launch's behalf goes through the binding — the scope it hydrates,
+  the bro's feature gates, a prefetch made for the session — so none of them
+  resolves a kind to a different instance than the launch does.
+  """
+  selection = host_config.project_instances(project_root())
+  credentials.select_instances(selection)
+  return selection
+
+
 def scoped_secrets(bro_name: str, surface: Surface) -> ScopedSecrets:
   """the credential scope of a launch running as `bro_name` on `surface` — one
   computation for every launch surface, so they cannot drift. the per-surface
   recipe is the `_RECIPES` row; required hydration is strict, so each surface
   requests only what it actually uses.
+
+  computing a scope also binds this process to the operated project's instance
+  selection (`bind_project_credentials`) — the scope names kinds, and the launch
+  hydrates whichever instance the project reads.
   """
   from bro.registry import create_bro
 
+  bind_project_credentials()
   recipe = _RECIPES[surface]
   required = set(recipe.baseline)
   optional = set(recipe.optional_baseline)

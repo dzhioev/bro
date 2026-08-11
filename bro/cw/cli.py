@@ -80,6 +80,17 @@ def build_parser() -> Parser:
     'command', nargs=REMAINDER, help='command + args to exec (default: bash)'
   )
 
+  scope = subparsers.add_parser(
+    'scope',
+    help="print the credential scope a session launched from this project would hydrate, with the instance each kind reads (~/.bro.json's project selection)",
+  )
+  scope.add_argument(
+    '--bro', default=None, help='the bro to scope for (default: the project default bro)'
+  )
+  scope.add_argument(
+    '--raw', action='store_true', help='scope the --raw session flavor instead of a cw-session'
+  )
+
   banner_parser = subparsers.add_parser(
     'banner',
     help='print the banner; auto-run by the container .bashrc on `cw exec` shells',
@@ -116,6 +127,12 @@ def main(argv: list[str]) -> Optional[int]:
     return 0 if clean_ else 1
   if command == 'exec':
     return exec_in_workspace(name=args['name'], command=args['command'])
+  if command == 'scope':
+    # imported here, not at module level: the launch-scope stack pulls the bro
+    # registry, and every other subcommand runs without it
+    from bro.cw.scope_report import report_scope
+
+    return report_scope(bro=args['bro'], raw=args['raw'])
   if command == 'banner':
     return banner(llm=args['llm'])
   assert command == 'ss'

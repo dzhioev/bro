@@ -1,3 +1,4 @@
+import json
 from typing import ClassVar
 from unittest.mock import patch
 
@@ -88,6 +89,19 @@ class TestScopedSecrets:
     # fetch summary
     scoped = bro.launch.scope.scoped_secrets('scope-search', Surface.BRO_RUN)
     assert 'openai' in scoped.optional
+
+  def test_computing_a_scope_binds_the_projects_instances(self, tmp_path, monkeypatch):
+    # the scope keeps naming kinds; the instance each reads is bound at the resolver
+    config = tmp_path / 'bro.json'
+    config.write_text(json.dumps({'projects': {str(tmp_path): ['brog+github']}}))
+    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
+    monkeypatch.setattr('bro.launch.scope.project_root', lambda: tmp_path)
+    bound = {}
+    monkeypatch.setattr('bro.launch.scope.credentials.select_instances', bound.update)
+    scoped = bro.launch.scope.scoped_secrets('bro-dev', Surface.CW_SESSION)
+    assert bound == {'brog': 'github'}
+    assert 'brog' in scoped.required
+    assert 'brog+github' not in scoped.required
 
   def test_unknown_bro_falls_back_to_baseline_on_session_surfaces(self):
     scoped = bro.launch.scope.scoped_secrets('nonexistent-bro', Surface.CW_SESSION)

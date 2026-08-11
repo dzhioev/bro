@@ -26,6 +26,11 @@ autouse fixture below): test bros mostly keep the default chat_gpt spec, whose
 with `@pytest.mark.credential_gate` and control `credentials.available`
 themselves.
 
+`~/.bro.json` is pointed at an absent path (the autouse fixture below): it maps
+the developer's own checkouts to credential instances, and a launch-scoping test
+runs from inside one of them, so the real file would bind the resolver to
+whatever that checkout reads.
+
 The usage-file pointer and the Claude session id are dropped too: a test suite
 launched from inside a bro run or a claude session inherits the live usage
 source, and a test reading `usage.current_usage()` would otherwise see that
@@ -91,6 +96,12 @@ def pytest_collection_modifyitems(items):
 def _pin_credential_gate_open(request, monkeypatch):
   if request.node.get_closest_marker('credential_gate') is None:
     monkeypatch.setattr('bro.bro.BaseBro.missing_secrets', lambda self: ())
+
+
+@pytest.fixture(autouse=True)
+def _isolate_host_config(monkeypatch, tmp_path):
+  monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(tmp_path / 'absent.json'))
+  monkeypatch.setattr('bro.base.credentials._selected_instances', {})
 
 
 @pytest.fixture(autouse=True)

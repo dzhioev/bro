@@ -38,6 +38,19 @@ A host-local `registry.json` — searched along the same path as the secret file
 
 A `kind+instance` name declares a variant of the kind named up to the `+` (name grammar owned by `bro/base/credentials.py`). The kind entry owns kind-level behavior — notably the install hook, a template (`bro/reference/template.md`) rendered with `#name` bound to each instance's own name — so a variant declares only its `sources`, and one that carries its own `install` or names a kind the registry lacks fails the load. Instance entries never enter a generated scoped registry: a scoped store materializes a variant under its kind name (entry, cred file, and install hook all speak the kind), so readers of a scoped store address kinds only. A session installs at most one instance of each kind: hydrating two (e.g. `github` and `github+alice`) fails the launch, so grant the desired selection (`--grant github+alice` replaces the selected `github` credential). A kind entry may instead select its default instance durably — `{"github": {"instance": "alice"}}` borrows `github+alice`'s sources while keeping the kind's install hook, so every scope that hydrates `github` reads that variant with no launch flags. Generated registries (a scoped store's `credentials.json`, `CREDENTIALS_REGISTRY`) replace the registry wholesale, so a scoped session stays bounded to exactly its hydrated set and never sees host-local additions it wasn't granted.
 
+### Per-project instances (`~/.bro.json`)
+
+The registry's `instance` selector decides a kind's instance for the whole host, but one host serves several projects and the right `github` identity or task tracker is usually the project's. `~/.bro.json` — config beside the store rather than a secret inside it — records that mapping (`bro/base/host_config.py`):
+
+```json
+{"projects": {"~/projects/api": "brog+github",
+              "~/projects/site": ["github+acme", "brog+"]}}
+```
+
+A key is the operated repo's root (`~` and symlinks resolved before matching — every linked worktree maps to its main checkout, so one entry covers a checkout's sessions and worktrees alike); its value is one `kind+instance` selection or a list of them. The `+` is always written: `kind+` states that the project reads the kind's own registry entry, and fails where that entry declares no sources of its own — a kind entry that selects an instance has none, so two real alternatives need two names.
+
+A launch binds the operated project's selection at the resolver before it computes anything (`bro.launch.scope.bind_project_credentials` over `credentials.select_instances`), so the scope it hydrates, the bro's feature gates, and any host-side read on the session's behalf agree on which instance a kind means; `cw scope` prints the result. The binding reaches the host registry only — a session's generated registry already carries the instance its launch selected — and a `--grant kind+instance` still overrides it for one launch. Precedence, most specific first: the launch flag, the project's entry here, the registry's own kind-level selector.
+
 A json secret may reference other secrets instead of embedding copies: `{"$cred": "<name>"}` anywhere in its tree resolves to the referenced secret's value, `{"$cred": "<name>", "field": "<key>"}` to one top-level field (exact semantics in `bro/base/credentials.py`). The resolver expands references before any consumer sees the value, so a scoped store hydrates a granted secret with its references already expanded — self-contained in the container, no grant of the referenced secrets needed.
 
 - `brog.json` — the brog task-tracker backend selection. The built-in GitHub backend accepts `{ "backend": "github", "token": ..., "repo": "owner/name"? }`; `repo` omitted derives owner/name from the workspace's `origin` remote at server start. Backends contributed through `bro.brog.backends` own and validate their additional fields.
