@@ -7,4 +7,5 @@
 BRO_SPECS: dict[str, str] = {
   'bro': 'bro.bros.bro:Bro',
   'dev': 'bro.bros.dev:Dev',
+  'lead': 'bro.bros.lead:Lead',
 }
