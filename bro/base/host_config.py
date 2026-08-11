@@ -1,10 +1,26 @@
 """the host's per-project launch policy (`~/.bro.json`).
 
 one host serves several projects, and a credential kind may have more than one
-instance stored for it; this file records which instance each project reads.
-the schema is `bro/setup/CLAUDE.md`, "Per-project instances". the file is
-optional — a host holding one instance per kind needs none, and a project
-without an entry reads each kind's own default.
+instance stored for it; this file records which instance each project reads:
+
+    {
+      "projects": {
+        "/home/foo/projects/api": {
+          "instances": ["brog+github", "github+acme"]
+        },
+        "/home/foo/projects/site": {
+          "instances": ["brog+"]
+        }
+      }
+    }
+
+a project key is the filesystem path of the operated repo's root (`~` and
+symlinks resolved before matching). its value is that project's policy object,
+carrying `instances`: the `kind+instance` names the project reads, naming each
+kind at most once. the `+` is always written — `kind+` states that the project
+reads the kind's own registry entry, which the registry must then give sources
+of its own. the file is optional: a host holding one instance per kind needs
+none, and a project without an entry reads each kind's own default.
 
 reading is project-agnostic: the caller names the project.
 """

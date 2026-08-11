@@ -28,7 +28,7 @@ Resolve the project root (`git rev-parse --git-common-dir`, then its parent — 
 
 ## 4. Record the decision
 
-Merge only this project's entry into `~/.bro.json`, leaving every other project's untouched, and show the user the change before writing it. The file's schema — and what `kind+` with no instance after it means — is `bro/setup/CLAUDE.md`, "Per-project instances"; read it before writing.
+Merge only this project's entry into `~/.bro.json`, leaving every other project's untouched, and show the user the change before writing it. The file's schema — and what `kind+` with no instance after it means — is the module docstring of `bro/base/host_config.py` in the framework's own sources; read it before writing.
 
 Kinds the project has no opinion about stay out of the entry.
 
