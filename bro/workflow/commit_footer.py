@@ -15,7 +15,7 @@ packaged hooks (`hooks/`) into a repository, and every commit made with an agent
 usage source in the environment carries the footer with no session involvement.
 A process without a usage source — a human's shell — is a no-op for both hooks.
 
-Four CLI modes:
+Three CLI modes:
 - --append <msg-file>: run by the commit-msg git hook. No env-keyed usage source
   (`BRO_USAGE_FILE` / `CLAUDE_CODE_SESSION_ID` — a human's shell carries
   neither), an empty message, or a message already carrying a parseable footer
@@ -26,10 +26,6 @@ Four CLI modes:
   post-commit git hook once a commit actually lands, so the mark only advances
   after a *successful* commit (retries stay correct), and only when something is
   staged (a footerless commit leaves the baseline alone).
-- --squash <range>: emit the aggregated footer for the range's commits — what a
-  squash merge's single commit carries, the sum of the children it discards. A
-  range with no footered commits emits nothing, so the caller needs no
-  accounting switch of its own.
 - default: print the footer the next commit would carry (also staging its
   cumulative, exactly as --append would).
 
@@ -241,10 +237,6 @@ def _commit_messages(shas: Sequence[str]) -> list[tuple[str, str]]:
   return commits
 
 
-def _range_commits(git_range: str) -> list[str]:
-  return subprocess.check_output(['git', 'rev-list', git_range], text=True).split()
-
-
 def group_footers(groups: Sequence[Sequence[str]]) -> list[str]:
   """the footer for each group of commits folded into one, in group order.
 
@@ -306,11 +298,6 @@ def main(argv: list[str]) -> Optional[int]:
     action='store_true',
     help='promote the staged cumulative to the committed baseline (post-commit hook)',
   )
-  group.add_argument(
-    '--squash',
-    metavar='RANGE',
-    help='emit the aggregated footer over a git range (for a squash merge)',
-  )
   args = parser.parse(argv)
 
   state = State(_repo_root() / STATE_FILENAME)
@@ -321,12 +308,6 @@ def main(argv: list[str]) -> Optional[int]:
 
   if args['record'] is True:
     state.record()
-    return 0
-
-  if args['squash'] is not None:
-    footer = group_footers([_range_commits(args['squash'])])[0]
-    if footer != '':
-      print(footer)
     return 0
 
   current = usage.current_usage()
