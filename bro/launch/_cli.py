@@ -23,9 +23,9 @@ FAST_HELP = (
 )
 EFFORT_HELP = (
   "override the reasoning-effort knob of the bro's LLM spec with this neutral level, "
-  "mapped onto the provider's own scale (for ChatGPT, xhigh maps through and max caps "
-  "at xhigh); without the flag the bro's own spec stands. errors when the provider "
-  'has no effort knob'
+  "mapped onto the provider's own scale (for ChatGPT every level maps through); "
+  "without the flag the bro's own spec stands. errors when the provider has no "
+  'effort knob'
 )
 IN_PLACE_HELP = 'run the bro in the calling process instead of creating an isolated container'
 HOLD_HELP = (

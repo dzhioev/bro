@@ -41,17 +41,16 @@ _VALID_SERVICE_TIERS: frozenset[str] = frozenset(get_args(ServiceTier))
 # local mirror of the Literal inside openai's `ReasoningEffort` (which the SDK
 # wraps in Optional); spelled out so spec validation needs no openai import. a
 # sync test asserts the values against the SDK's type.
-ReasoningEffort = Literal['none', 'minimal', 'low', 'medium', 'high', 'xhigh']
+ReasoningEffort = Literal['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 _VALID_REASONING_EFFORTS: frozenset[str] = frozenset(get_args(ReasoningEffort))
 
 # neutral effort level (`LLMSpec.with_effort`) → Responses API reasoning_effort.
-# the shared levels map through; max (above the API's scale) caps at its top.
 _EFFORT_TO_REASONING_EFFORT: dict[str, ReasoningEffort] = {
   'low': 'low',
   'medium': 'medium',
   'high': 'high',
   'xhigh': 'xhigh',
-  'max': 'xhigh',
+  'max': 'max',
 }
 
 

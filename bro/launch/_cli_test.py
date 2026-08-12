@@ -439,8 +439,7 @@ def test_create_bro_for_run_effort_composes_with_fast(monkeypatch):
   spec = create_bro_for_run('x', fast=True, effort='max')
   assert isinstance(spec, llm_llms_chat_gpt.LLMSpec)
   assert spec.service_tier == 'priority'
-  # max caps at the provider top
-  assert spec.reasoning_effort == 'xhigh'
+  assert spec.reasoning_effort == 'max'
   # class default untouched
   assert _Cls.llm_spec.reasoning_effort is None
 

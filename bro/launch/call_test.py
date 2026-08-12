@@ -454,8 +454,8 @@ def test_effort_flag_overrides_spec_effort(monkeypatch):
   assert len(built) == 1
   spec = built[0].llm_spec
   assert isinstance(spec, llm_llms_chat_gpt.LLMSpec)
-  # max caps at the provider top, on top of the implicit fast()
-  assert spec.reasoning_effort == 'xhigh'
+  # the effort override lands on top of the implicit fast()
+  assert spec.reasoning_effort == 'max'
   assert spec.service_tier == 'priority'
 
 
