@@ -3,7 +3,6 @@ import inspect
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
-from types import ModuleType
 from typing import Any, ClassVar, Literal, Optional, get_args, get_origin
 
 from bro.base import condition, credentials, template
@@ -386,6 +385,39 @@ class MCPServerSpec:
     )
 
 
+@dataclass(frozen=True)
+class ToolLayer:
+  """one composable layer of server mounts and harness-native tool blocks."""
+
+  server_specs: tuple[MCPServerSpec, ...] = ()
+  blocked_native_tool_names: tuple[str, ...] = ()
+
+  def __post_init__(self) -> None:
+    if not isinstance(self.server_specs, tuple) or any(
+      not isinstance(spec, MCPServerSpec) for spec in self.server_specs
+    ):
+      raise TypeError('server_specs must be a tuple of MCPServerSpec values')
+    names = self.blocked_native_tool_names
+    if not isinstance(names, tuple) or any(
+      not isinstance(name, str) or len(name) == 0 for name in names
+    ):
+      raise TypeError('blocked_native_tool_names must be a tuple of non-empty strings')
+    if len(set(names)) != len(names):
+      raise ValueError(f'a tool layer blocks duplicate names: {names!r}')
+    if len(self.server_specs) == 0 and len(names) == 0:
+      raise ValueError('a tool layer must mount a server or block a native tool')
+
+
+def mount(toolset: 'Toolset[Any]', *tool_names: str) -> ToolLayer:
+  if not isinstance(toolset, Toolset):
+    raise TypeError('mount requires a Toolset')
+  return ToolLayer(server_specs=(toolset._manifest(*tool_names),))
+
+
+def block(*tool_names: str) -> ToolLayer:
+  return ToolLayer(blocked_native_tool_names=tool_names)
+
+
 class FunctionTool(Tool):
   def __init__(
     self,
@@ -587,13 +619,12 @@ class InProcessMCPServer(MCPServer):
 class Toolset[T]:
   """declarative definition of a roster-based in-process tool server.
 
-  one instance per server module, conventionally named `spec` and defined above
-  its tools, which register on it with the `@spec.tool('description')`
-  decorator. Calling the instance with tool names validates the subset immediately
-  at declaration time and
-  returns the frozen `MCPServerSpec` manifest; `build()` runs later, in the
-  serving process, constructing the per-server state once (`state` factory) and
-  injecting it into every selected tool that declares a `Context` parameter.
+  one instance per server module, conventionally named `toolset` and defined
+  above its tools, which register on it with the `@toolset.tool('description')`
+  decorator. `mount(toolset, *tool_names)` validates the subset immediately and
+  returns a frozen `ToolLayer`; `build()` runs later, in the serving process,
+  constructing the per-server state once (`state` factory) and injecting it
+  into every selected tool that declares a `Context` parameter.
 
   secrets: the base `get_secrets` returns the static `secrets` class var;
   subclass and override it when the credential set depends on the selected tools.
@@ -684,26 +715,12 @@ class Toolset[T]:
     server.tool_universe = tuple(self._by_name)
     return server
 
-  def __call__(self, *tool_names: str) -> MCPServerSpec:
+  def _manifest(self, *tool_names: str) -> MCPServerSpec:
     names = self._resolve(tool_names)
     return MCPServerSpec(
       build=lambda: self.build(*names),
       needed_secrets=self.get_secrets(names),
     )
-
-
-def as_spec(entry: 'MCPServerSpec | Toolset[Any] | ModuleType') -> MCPServerSpec:
-  """a declaration entry normalized to its manifest: a tool-pack module is its
-  conventional `spec` Toolset, a bare Toolset is its full roster, a spec passes
-  through. Scoped subsets call the toolset with their selected names."""
-  if isinstance(entry, ModuleType):
-    toolset = getattr(entry, 'spec', None)
-    if not isinstance(toolset, Toolset):
-      raise TypeError(f'module {entry.__name__!r} declares no Toolset named spec')
-    return toolset()
-  if isinstance(entry, Toolset):
-    return entry()
-  return entry
 
 
 class UnknownToolError(Exception):

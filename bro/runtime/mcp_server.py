@@ -12,8 +12,7 @@ import importlib.metadata
 import os
 import secrets
 import socket
-from collections.abc import Callable
-from typing import TYPE_CHECKING, Optional, cast
+from typing import TYPE_CHECKING, Optional
 
 import bro.base.args as base_args
 
@@ -21,7 +20,7 @@ if TYPE_CHECKING:
   from mcp.server.lowlevel import Server
   from starlette.types import ASGIApp, Receive, Scope, Send
 
-  from bro.llm.mcp import MCPServer, MCPServerSpec, Tool
+  from bro.llm.mcp import MCPServer, Tool
 
 __cli_name__ = 'mcp-server'
 
@@ -50,11 +49,12 @@ def _toolset_server(namespace: str) -> 'MCPServer':
     raise SystemExit(
       f'unknown server {namespace!r}; expected one of {known}, bro:<name>, or persona:<name>'
     )
-  factory = matches[0].load()
-  if not callable(factory):
-    raise TypeError(f'toolset entry point {namespace!r} must load a callable')
-  toolset_factory = cast('Callable[[], MCPServerSpec]', factory)
-  return toolset_factory().build()
+  from bro.llm.mcp import Toolset
+
+  toolset = matches[0].load()
+  if not isinstance(toolset, Toolset):
+    raise TypeError(f'toolset entry point {namespace!r} must load a Toolset')
+  return toolset.build()
 
 
 def _resolve_servers(spec: str) -> list['MCPServer']:

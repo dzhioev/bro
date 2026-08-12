@@ -15,7 +15,7 @@ class _Toolset(Toolset[System]):
   secrets = ('brog',)
 
 
-spec = _Toolset('brog', state=default_system)
+toolset = _Toolset('brog', state=default_system)
 
 _TASK_ID_FIELD = Field(
   description=(
@@ -31,7 +31,7 @@ class CreatedTask:
   url: str
 
 
-@spec.tool(
+@toolset.tool(
   "create a task; tasks are born open (workable). Returns the created task's canonical id and url"
 )
 def create_task(
@@ -55,7 +55,7 @@ def create_task(
   return CreatedTask(id=task.id, url=task.url)
 
 
-@spec.tool(
+@toolset.tool(
   'return task metadata: status (open = workable, done, dropped), url, tags, the '
   'owning project (with its summary) when there is one, and blocked_by — ids of '
   'still-open tasks blocking this one (empty = workable). No document content; use '
@@ -68,7 +68,7 @@ def get_task(
   return context.state.get_task(task_id)
 
 
-@spec.tool(
+@toolset.tool(
   'read a window of the task description rendered as markdown, each line prefixed '
   'with its 1-based line number (cat -n style). Content outside the window is '
   'announced with [...skipped before/after: N lines...] markers. Line numbers are '
@@ -95,7 +95,7 @@ def read_task(
   return numbered_window(context.state.get_task_description(task_id), offset, limit)
 
 
-@spec.tool(
+@toolset.tool(
   "return the task's comment stream, oldest first: entries with topic, author, UTC "
   'timestamp, and markdown body — the durable record of development events. topic '
   'and author are null when the backend recorded none (e.g. a comment written '
@@ -108,7 +108,7 @@ def read_comments(
   return context.state.get_task_comments(task_id)
 
 
-@spec.tool(
+@toolset.tool(
   'update task name, status, and/or tags; an omitted (or null) property is left '
   'untouched ([] clears tags). Returns "ok".'
 )
@@ -137,7 +137,7 @@ def update_task(
   return 'ok'
 
 
-@spec.tool(
+@toolset.tool(
   'append a comment entry to the task — the durable record of a development event '
   '(a plan, a design change, a blocker, a merge). The author and timestamp are the '
   'backend\'s own record of the write, never parameters. Returns "ok".'
@@ -158,7 +158,7 @@ def add_comment(
   return 'ok'
 
 
-@spec.tool(
+@toolset.tool(
   'append markdown to the task description — document sections like `## Design` or '
   '`## Verification` land here. The comment stream stays below it; use add_comment '
   'for events. Returns "ok".'
@@ -172,7 +172,7 @@ def append_description(
   return 'ok'
 
 
-@spec.tool(
+@toolset.tool(
   'replace old_string with new_string in the task description — for in-place section '
   'updates. old_string is matched against the description markdown read_task returns '
   '(minus the line-number prefixes) and must occur exactly once — errors when absent, '
@@ -206,7 +206,7 @@ def edit_description(
   return f'replaced {count} occurrence(s)'
 
 
-@spec.tool('query tasks — sibling context for the one being worked; omitted filters match any')
+@toolset.tool('query tasks — sibling context for the one being worked; omitted filters match any')
 def list_tasks(
   context: Context[System],
   status: Annotated[

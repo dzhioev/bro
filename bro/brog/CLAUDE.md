@@ -21,7 +21,7 @@ The GitHub backend uses `bro/extra/github/api.py`: one issue per task, labels as
 - `model.py` — `Task` / `Project` / `Comment` / `Status`
 - `system.py` — the `System` ABC, config parsing and validation, backend discovery, and `build_system` / `default_system`; author is the session persona from `CW_BRO`
 - `github.py` — built-in GitHub Issues backend
-- `mcp.py` — the brog `Toolset` and its `spec` factory
+- `mcp.py` — the brog `Toolset`, exported as `toolset` for persona mounts and the standalone entry point
 
 ## Testing
 

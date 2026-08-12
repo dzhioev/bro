@@ -1,6 +1,7 @@
 import json
 import shlex
 import sys
+from typing import ClassVar
 from unittest.mock import patch
 
 import pytest
@@ -60,6 +61,23 @@ class TestCwSessionLaunch:
     assert argv[argv.index('--append-system-prompt') + 1] == 'append text'
     assert launch.system_prompt == 'append text'
     assert '--foo' in argv
+
+  def test_selected_tool_blocks_reach_disallowed_tools(self, monkeypatch):
+    from bro.base.condition import when
+    from bro.bro import BaseBro
+    from bro.llm.mcp import block, harness
+
+    class BlockingBro(BaseBro):
+      name = 'blocking'
+      description = 'd'
+      tools: ClassVar = [when(harness == 'claude', block('Read', 'Write', 'Bash'))]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    monkeypatch.setattr('bro.registry.create_bro', lambda name: BlockingBro())
+    argv = _cw_session_launch(_spec(bro='blocking'), claude_args=[]).argv
+    assert argv[argv.index('--disallowed-tools') + 1] == 'mcp__claude_ai_*,Read,Write,Bash'
 
   def test_fast_mode_lands_in_settings(self):
     assert _settings(_cw_session_launch(_spec(fast=True), claude_args=[]).argv)['fastMode'] is True

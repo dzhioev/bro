@@ -15,11 +15,11 @@ from bro.bros.dev.mcp import (
   kill,
   read_file,
   read_reference,
-  spec,
+  toolset,
   watch,
   write_file,
 )
-from bro.llm.mcp import Context
+from bro.llm.mcp import Context, mount
 
 
 def test_read_file_returns_numbered_lines():
@@ -327,8 +327,8 @@ def test_watch_unknown_job_raises():
     asyncio.run(watch(context, 'job-1'))
 
 
-def test_spec_no_args_lists_all_tools():
-  server = spec().build()
+def test_toolset_build_lists_all_tools():
+  server = toolset.build()
   tools = asyncio.run(server.list_tools())
   names = {t.name for t in tools}
   assert names == {
@@ -356,13 +356,13 @@ def test_read_reference_returns_file_contents():
   assert 'Background jobs (`job`, `watch`, `kill`)' in ref
 
 
-def test_spec_subset_filters_tools():
-  server = spec('read_file', 'bash').build()
+def test_toolset_subset_filters_tools():
+  server = toolset.build('read_file', 'bash')
   tools = asyncio.run(server.list_tools())
   names = {t.name for t in tools}
   assert names == {'read_file', 'bash'}
 
 
-def test_spec_unknown_tool_raises():
+def test_mount_unknown_tool_raises():
   with pytest.raises(ValueError, match='unknown dev tools'):
-    spec('nope')
+    mount(toolset, 'nope')

@@ -6,7 +6,15 @@ from starlette.testclient import TestClient
 
 from bro.bro import BaseBro
 from bro.datasources.searchable import Hit, SearchableDataSource
-from bro.llm.mcp import FunctionTool, InProcessMCPServer, MCPServer, MCPServerSpec, describe
+from bro.llm.mcp import (
+  FunctionTool,
+  InProcessMCPServer,
+  MCPServer,
+  MCPServerSpec,
+  ToolLayer,
+  Toolset,
+  describe,
+)
 from bro.runtime import mcp_server
 from bro.runtime.mcp_server import _resolve_servers, create_http_app
 
@@ -39,8 +47,8 @@ def _create_ping_server() -> MCPServer:
   return InProcessMCPServer('ping', [FunctionTool(_ping)])
 
 
-def _ping_toolset() -> MCPServerSpec:
-  return MCPServerSpec(build=_create_ping_server)
+_ping_toolset = Toolset('ping')
+_ping_toolset.tool('ping the noop server')(_ping)
 
 
 def _entry_point(name: str, value: str) -> importlib.metadata.EntryPoint:
@@ -51,7 +59,7 @@ class _ShimBro(BaseBro):
   name = 'shim-test'
   description = 'composes a ping server and a data source'
   data_sources: ClassVar = [_NoopSource()]
-  mcp_servers: ClassVar = [MCPServerSpec(build=_create_ping_server)]
+  tools: ClassVar = [ToolLayer(server_specs=(MCPServerSpec(build=_create_ping_server),))]
 
   def __init__(self):
     super().__init__(system_prompt='test')

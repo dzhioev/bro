@@ -38,7 +38,7 @@ Installed distributions contribute framework extensions through standard Python 
 - `bro.credential_sources` — credential minting source classes, keyed by source type
 - `bro.credentials` — credential registry fragments
 - `bro.brog.backends` — task-tracker backends, keyed by backend name
-- `bro.toolsets` — standalone MCP toolsets, keyed by namespace
+- `bro.toolsets` — standalone MCP `Toolset` objects, keyed by namespace
 
 Entry-point metadata is written when a distribution is installed, so adding or removing a declaration requires another `uv sync`; editing an already-declared target does not. Name-keyed groups load only the selected entry. Credential registry assembly loads every `bro.credentials` contributor, so those target modules must remain cheap to import.
 
