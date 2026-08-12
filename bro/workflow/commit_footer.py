@@ -15,7 +15,7 @@ packaged hooks (`hooks/`) into a repository, and every commit made with an agent
 usage source in the environment carries the footer with no session involvement.
 A process without a usage source — a human's shell — is a no-op for both hooks.
 
-Four modes:
+Four CLI modes:
 - --append <msg-file>: run by the commit-msg git hook. No env-keyed usage source
   (`BRO_USAGE_FILE` / `CLAUDE_CODE_SESSION_ID` — a human's shell carries
   neither), an empty message, or a message already carrying a parseable footer
@@ -26,14 +26,21 @@ Four modes:
   post-commit git hook once a commit actually lands, so the mark only advances
   after a *successful* commit (retries stay correct), and only when something is
   staged (a footerless commit leaves the baseline alone).
-- --squash <range>: emit an aggregated footer for a squash merge — the sum of
-  every branch commit's per-class deltas / the union of agents plus the land
-  session's uncommitted remainder. Run by land-pr and injected into the PR body,
-  so the server-side squash commit carries the sum of the children it discards.
-  A range with no footered commits emits nothing, so the caller needs no
+- --squash <range>: emit the aggregated footer for the range's commits — what a
+  squash merge's single commit carries, the sum of the children it discards. A
+  range with no footered commits emits nothing, so the caller needs no
   accounting switch of its own.
 - default: print the footer the next commit would carry (also staging its
   cumulative, exactly as --append would).
+
+and the fold aggregation, `group_footers(groups)`: the footer each commit of a
+rewritten history carries — the sum of the per-class deltas / the union of
+agents of the commits folded into it, plus the current session's uncommitted
+remainder on the last group that carries accounting, so a fold conserves the
+spend its commits accounted for however they are grouped. A set of commits with
+no footers between them aggregates to nothing, so the caller needs no accounting
+switch of its own. `record_session_spend()` promotes that remainder to the
+baseline once the footers are published, so it is credited exactly once.
 
 State lives in a gitignored `<repo>/.token_accounting_state.json`; git history
 carries only the durable per-class deltas / agents. Runs through bro.base.args, so
@@ -51,10 +58,12 @@ import shutil
 import stat
 import subprocess
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Optional
 
 import bro.llm.usage as usage
+from bro.base import log
 from bro.base.args import Parser
 from bro.llm.usage import Counts
 from bro.workspace.git import git_out
@@ -187,39 +196,40 @@ def _append(message_path: Path, state: State) -> None:
   message_path.write_text(f'{message.rstrip()}\n\n{footer}\n')
 
 
-def _emit_squash(
+def _aggregate(
   commits: list[tuple[str, str]],
-  land: Optional[usage.Usage],
+  session: Optional[usage.Usage],
   state: State,
-) -> tuple[str, list[str]]:
-  """returns (footer, footerless_shas). delta accumulates per-class, label-keyed."""
+) -> str:
+  """the footer summing the commits' own deltas per class, label-keyed, plus the
+  session's uncommitted remainder when one is given."""
   delta: dict[str, Counts] = {}
   agents: set[str] = set()
-  footerless: list[str] = []
-  for sha, body in commits:
-    f = usage.parse_footer(body)
-    if f is None:
-      footerless.append(sha)
+  for _, body in commits:
+    parsed = usage.parse_footer(body)
+    if parsed is None:
       continue
-    for label, c in f.delta.items():
+    for label, c in parsed.delta.items():
       delta[label] = usage.add(delta.get(label, usage.zero()), c)
-    agents.update(f.agents)
-  if land is not None:
+    agents.update(parsed.agents)
+  if session is not None:
     remainder: dict[str, Counts] = {}
-    for slug, cum in land.per_model.items():
+    for slug, cum in session.per_model.items():
       remainder[slug] = usage.subtract(
         cum, _effective_baseline(state.committed.get(slug, usage.zero()), cum)
       )
     for label, c in usage.to_labels(remainder).items():
       delta[label] = usage.add(delta.get(label, usage.zero()), c)
-    agents.add(land.agent)
-  return usage.format_footer(sorted(agents), delta), footerless
+    agents.add(session.agent)
+  return usage.format_footer(sorted(agents), delta)
 
 
-def _git_log(git_range: str) -> list[tuple[str, str]]:
-  """returns [(commit_sha, commit_message)] for commits in range."""
+def _commit_messages(shas: Sequence[str]) -> list[tuple[str, str]]:
+  """returns [(commit_sha, commit_message)] for the named commits, in the order given."""
+  if len(shas) == 0:
+    return []
   out = subprocess.check_output(
-    ['git', 'log', '--pretty=format:%H%x1f%B%x1e', git_range], text=True
+    ['git', 'log', '--no-walk=unsorted', '--pretty=format:%H%x1f%B%x1e', *shas], text=True
   )
   commits: list[tuple[str, str]] = []
   for record in out.split('\x1e'):
@@ -229,6 +239,58 @@ def _git_log(git_range: str) -> list[tuple[str, str]]:
     sha, _, body = record.partition('\x1f')
     commits.append((sha, body))
   return commits
+
+
+def _range_commits(git_range: str) -> list[str]:
+  return subprocess.check_output(['git', 'rev-list', git_range], text=True).split()
+
+
+def group_footers(groups: Sequence[Sequence[str]]) -> list[str]:
+  """the footer for each group of commits folded into one, in group order.
+
+  The current session's own remainder rides the last group with accounting to
+  carry it, so it is credited once however the commits are grouped. Groups whose
+  commits carry no footer aggregate to an empty string — as do all of them when
+  the whole set is unaccounted, since footerless commits are an anomaly only
+  where footers exist at all.
+  """
+  folded = [_commit_messages(group) for group in groups]
+  accounted = {
+    index
+    for index, commits in enumerate(folded)
+    if any(usage.parse_footer(body) is not None for _, body in commits)
+  }
+  if len(accounted) == 0:
+    return ['' for _ in groups]
+  footerless = [
+    sha for commits in folded for sha, body in commits if usage.parse_footer(body) is None
+  ]
+  if len(footerless) > 0:
+    shas = ', '.join(sha[:9] for sha in footerless)
+    log.warning(f'{len(footerless)} commit(s) without a parseable footer counted 0: {shas}')
+  session = usage.current_usage()
+  if session is None:
+    log.warning('no session usage found; aggregating the folded footers only')
+  state = State(_repo_root() / STATE_FILENAME)
+  last_accounted = max(accounted)
+  return [
+    _aggregate(commits, session if index == last_accounted else None, state)
+    if index in accounted
+    else ''
+    for index, commits in enumerate(folded)
+  ]
+
+
+def record_session_spend() -> None:
+  """promote the session's cumulative to the committed baseline, once a footer
+  carrying its remainder has been published — a later commit or land in the same
+  session is credited only what it spends after this point."""
+  session = usage.current_usage()
+  if session is None:
+    return
+  state = State(_repo_root() / STATE_FILENAME)
+  state.stage(session.per_model)
+  state.record()
 
 
 def main(argv: list[str]) -> Optional[int]:
@@ -247,7 +309,7 @@ def main(argv: list[str]) -> Optional[int]:
   group.add_argument(
     '--squash',
     metavar='RANGE',
-    help='emit an aggregated footer over a git range (for land-pr squash merges)',
+    help='emit the aggregated footer over a git range (for a squash merge)',
   )
   args = parser.parse(argv)
 
@@ -262,26 +324,9 @@ def main(argv: list[str]) -> Optional[int]:
     return 0
 
   if args['squash'] is not None:
-    commits = _git_log(args['squash'])
-    if all(usage.parse_footer(body) is None for _, body in commits):
-      # a branch carrying no accounting yields no aggregate — and no warnings:
-      # footerless commits are an anomaly only where footers exist at all. this
-      # is what lets land-pr run --squash unconditionally.
-      return 0
-    land = usage.current_usage()
-    if land is None:
-      print(
-        'warning: no land-session usage found; aggregating branch footers only',
-        file=sys.stderr,
-      )
-    footer, footerless = _emit_squash(commits, land, state)
-    if len(footerless) > 0:
-      shas = ', '.join(s[:9] for s in footerless)
-      print(
-        f'warning: {len(footerless)} commit(s) without a parseable footer counted 0: {shas}',
-        file=sys.stderr,
-      )
-    print(footer)
+    footer = group_footers([_range_commits(args['squash'])])[0]
+    if footer != '':
+      print(footer)
     return 0
 
   current = usage.current_usage()
