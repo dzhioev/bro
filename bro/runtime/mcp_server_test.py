@@ -51,7 +51,7 @@ class _ShimBro(BaseBro):
   name = 'shim-test'
   description = 'composes a ping server and a data source'
   data_sources: ClassVar = [_NoopSource()]
-  mcp_servers: ClassVar = [MCPServerSpec(build=_create_ping_server)]
+  tools: ClassVar = [MCPServerSpec(build=_create_ping_server)]
 
   def __init__(self):
     super().__init__(system_prompt='test')

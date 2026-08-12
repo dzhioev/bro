@@ -2,11 +2,6 @@ import bro.brog.mcp as brog_mcp
 from bro import brog
 from bro.base.condition import when
 from bro.bro import feature
-
-# a self-reference (resolved through sys.modules mid-initialization) plus the
-# submodule import that binds `mcp` on the package — so the declaration below
-# spells its entry by qualified pack path, readable without this header
-from bro.bros import dev
 from bro.bros.bro import Bro
 from bro.bros.dev import mcp
 from bro.datasources import references
@@ -45,6 +40,6 @@ class Dev(Bro):
   # workspace.
   features = {'brog': creds.contains('brog'), 'commit-accounting': True}
   # the dev toolset duplicates the claude harness's built-in file/shell tools
-  mcp_servers = [when(harness == 'bro', dev.mcp), when(feature('brog'), brog_mcp)]
+  tools = [when(harness == 'bro', mcp.spec()), when(feature('brog'), brog_mcp.spec())]
   data_sources = [references.dev_style]
   system_prompt = SYSTEM_PROMPT

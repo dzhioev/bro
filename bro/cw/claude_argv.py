@@ -102,6 +102,7 @@ def build_claude_launch(
   argv = ['--model', _CW_MODEL]
   bro = create_bro(spec.session_bro)
   servers = bro.claude_bro_mcp_servers() if spec.raw else bro.claude_persona_mcp_servers()
+  withheld_tool_names = () if spec.raw else bro.withheld_tool_names('claude')
   namespaces = list(dict.fromkeys(s.namespace for s in servers))
   mcp_config = _http_mcp_config(namespaces, port=endpoint.port, token=endpoint.token)
   if spec.raw:
@@ -130,7 +131,7 @@ def build_claude_launch(
     system_prompt = _session_append_prompt(spec.hold, spec.session_bro)
     argv += [
       '--disallowed-tools',
-      'mcp__claude_ai_*',
+      ','.join(('mcp__claude_ai_*', *withheld_tool_names)),
       '--settings',
       json.dumps(settings, separators=(',', ':')),
       '--mcp-config',

@@ -3,7 +3,6 @@ import inspect
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
-from types import ModuleType
 from typing import Any, ClassVar, Literal, Optional, get_args, get_origin
 
 from bro.base import condition, credentials, template
@@ -386,6 +385,30 @@ class MCPServerSpec:
     )
 
 
+@dataclass(frozen=True)
+class ToolWithdrawal:
+  """harness-native tool names to remove from an assembled surface."""
+
+  tool_names: tuple[str, ...]
+
+  def __post_init__(self) -> None:
+    if not isinstance(self.tool_names, tuple):
+      raise TypeError('tool_names must be a tuple')
+    if len(self.tool_names) == 0:
+      raise ValueError('a tool withdrawal must name at least one tool')
+    if any(not isinstance(name, str) or len(name) == 0 for name in self.tool_names):
+      raise ValueError('withdrawn tool names must be non-empty strings')
+    if len(set(self.tool_names)) != len(self.tool_names):
+      raise ValueError(f'a tool withdrawal contains duplicate names: {self.tool_names!r}')
+
+
+type ToolSpec = MCPServerSpec | ToolWithdrawal
+
+
+def withhold(*tool_names: str) -> ToolWithdrawal:
+  return ToolWithdrawal(tool_names)
+
+
 class FunctionTool(Tool):
   def __init__(
     self,
@@ -690,20 +713,6 @@ class Toolset[T]:
       build=lambda: self.build(*names),
       needed_secrets=self.get_secrets(names),
     )
-
-
-def as_spec(entry: 'MCPServerSpec | Toolset[Any] | ModuleType') -> MCPServerSpec:
-  """a declaration entry normalized to its manifest: a tool-pack module is its
-  conventional `spec` Toolset, a bare Toolset is its full roster, a spec passes
-  through. Scoped subsets call the toolset with their selected names."""
-  if isinstance(entry, ModuleType):
-    toolset = getattr(entry, 'spec', None)
-    if not isinstance(toolset, Toolset):
-      raise TypeError(f'module {entry.__name__!r} declares no Toolset named spec')
-    return toolset()
-  if isinstance(entry, Toolset):
-    return entry()
-  return entry
 
 
 class UnknownToolError(Exception):

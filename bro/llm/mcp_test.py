@@ -583,6 +583,20 @@ class TestToolVariables:
       FunctionTool(helper)
 
 
+class TestToolWithdrawal:
+  @pytest.mark.parametrize(
+    ('tool_names', 'message'),
+    [
+      ((), 'at least one tool'),
+      (('',), 'non-empty strings'),
+      (('Read', 'Read'), 'duplicate names'),
+    ],
+  )
+  def test_rejects_invalid_declarations(self, tool_names, message):
+    with pytest.raises(ValueError, match=message):
+      mcp_mod.withhold(*tool_names)
+
+
 class TestToolsetRendering:
   def _toolset(self) -> mcp_mod.Toolset:
     spec = mcp_mod.Toolset('pack')
