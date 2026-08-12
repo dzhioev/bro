@@ -3,7 +3,6 @@ import json
 import os
 import signal
 import subprocess
-import types
 from typing import ClassVar, Optional
 from unittest.mock import MagicMock
 
@@ -404,7 +403,7 @@ class TestBroLifetime:
         closed.append(self.namespace)
 
     class _Holder(EchoBro):
-      mcp_servers: ClassVar = [MCPServerSpec(build=lambda: _ClosingServer('holder', []))]
+      tools: ClassVar = [MCPServerSpec(build=lambda: _ClosingServer('holder', []))]
 
     bro = _Holder()
     with bro:
@@ -418,7 +417,7 @@ class TestBroLifetime:
         raise RuntimeError('teardown exploded')
 
     class _Holder(EchoBro):
-      mcp_servers: ClassVar = [MCPServerSpec(build=lambda: _BrokenServer('broken', []))]
+      tools: ClassVar = [MCPServerSpec(build=lambda: _BrokenServer('broken', []))]
 
     bro = _Holder()
     with bro:
@@ -910,7 +909,7 @@ class TestToolNamesBlock:
     class ToolBro(BaseBro):
       name = 'tooled'
       description = 'd'
-      mcp_servers: ClassVar = [_make_spec('a')]
+      tools: ClassVar = [_make_spec('a')]
 
       def __init__(self):
         super().__init__(system_prompt='base')
@@ -942,7 +941,7 @@ class TestToolNamesBlock:
     class ToolBro(BaseBro):
       name = 'tooled'
       description = 'd'
-      mcp_servers: ClassVar = [_make_spec('a')]
+      tools: ClassVar = [_make_spec('a')]
 
       def __init__(self):
         super().__init__(system_prompt='base')
@@ -997,7 +996,7 @@ class TestBroMCPServers:
     class SpecBro(BaseBro):
       name = 'spec'
       description = 'd'
-      mcp_servers: ClassVar = [_make_spec('a', 'b', 'c')]
+      tools: ClassVar = [_make_spec('a', 'b', 'c')]
 
       def __init__(self):
         super().__init__(system_prompt='')
@@ -1017,7 +1016,7 @@ class TestBroMCPServers:
     class CountBro(BaseBro):
       name = 'count'
       description = 'd'
-      mcp_servers: ClassVar = [MCPServerSpec(build=build)]
+      tools: ClassVar = [MCPServerSpec(build=build)]
 
       def __init__(self):
         super().__init__(system_prompt='')
@@ -1034,7 +1033,7 @@ class TestBroMCPServers:
 
 class TestToolPackEntries:
   @pytest.mark.asyncio
-  async def test_bare_toolset_entry_is_the_full_roster(self):
+  async def test_explicit_toolset_call_is_the_full_roster(self):
     toolset = llm_mcp.Toolset('bare-roster')
 
     @toolset.tool('ping tool')
@@ -1044,7 +1043,7 @@ class TestToolPackEntries:
     class ToolsetBro(BaseBro):
       name = 'toolset-entry'
       description = 'd'
-      mcp_servers: ClassVar = [when(llm_mcp.harness == 'bro', toolset)]
+      tools: ClassVar = [when(llm_mcp.harness == 'bro', toolset())]
 
       def __init__(self):
         super().__init__(system_prompt='')
@@ -1053,41 +1052,6 @@ class TestToolPackEntries:
     assert len(bro._mcp_specs) == 1
     tools = await bro._live_mcp_servers()[0].list_tools()
     assert {t.name for t in tools} == {'ping'}
-
-  @pytest.mark.asyncio
-  async def test_module_entry_resolves_through_its_spec_toolset(self):
-    toolset = llm_mcp.Toolset('fake-pack')
-
-    @toolset.tool('ping tool')
-    def ping() -> str:
-      return 'pong'
-
-    pack = types.ModuleType('_fake_pack')
-    vars(pack)['spec'] = toolset
-
-    class ModuleBro(BaseBro):
-      name = 'module-entry'
-      description = 'd'
-      mcp_servers: ClassVar = [pack]
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    bro = ModuleBro()
-    tools = await bro._live_mcp_servers()[0].list_tools()
-    assert {t.name for t in tools} == {'ping'}
-
-  def test_module_without_spec_toolset_raises(self):
-    class BadPackBro(BaseBro):
-      name = 'bad-pack'
-      description = 'd'
-      mcp_servers: ClassVar = [types.ModuleType('_spec_less')]
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    with pytest.raises(TypeError, match='no Toolset named spec'):
-      BadPackBro()
 
 
 class TestConditionalComponents:
@@ -1100,7 +1064,7 @@ class TestConditionalComponents:
     class CondBro(BaseBro):
       name = 'cond'
       description = 'd'
-      mcp_servers: ClassVar = [when(llm_mcp.harness == 'claude', MCPServerSpec(build=build))]
+      tools: ClassVar = [when(llm_mcp.harness == 'claude', MCPServerSpec(build=build))]
 
       def __init__(self):
         super().__init__(system_prompt='')
@@ -1113,7 +1077,7 @@ class TestConditionalComponents:
     class MatchBro(BaseBro):
       name = 'match'
       description = 'd'
-      mcp_servers: ClassVar = [when(llm_mcp.harness == 'bro', _make_spec('a'))]
+      tools: ClassVar = [when(llm_mcp.harness == 'bro', _make_spec('a'))]
 
       def __init__(self):
         super().__init__(system_prompt='')
@@ -1124,7 +1088,7 @@ class TestConditionalComponents:
     class BoolBro(BaseBro):
       name = 'bool'
       description = 'd'
-      mcp_servers: ClassVar = [when(False, _make_spec('a')), _make_spec('b')]
+      tools: ClassVar = [when(False, _make_spec('a')), _make_spec('b')]
 
       def __init__(self):
         super().__init__(system_prompt='')
@@ -1153,7 +1117,7 @@ class TestFeatures:
       name = 'feature-bro'
       description = 'd'
       features: ClassVar = {'x': llm_mcp.creds.contains('xkey')}
-      mcp_servers: ClassVar = [when(feature('x'), MCPServerSpec.of(_SecretServer))]
+      tools: ClassVar = [when(feature('x'), MCPServerSpec.of(_SecretServer))]
       system_prompt = 'base text{{when #features contains x}} FEATURE TEXT{{end}}'
 
     return FeatureBro
@@ -1231,7 +1195,7 @@ class TestFeatures:
       name = 'surface-gated'
       description = 'd'
       features: ClassVar = {'x': llm_mcp.harness == 'bro'}
-      mcp_servers: ClassVar = [when(feature('x'), _make_spec('a'))]
+      tools: ClassVar = [when(feature('x'), _make_spec('a'))]
 
       def __init__(self):
         super().__init__(system_prompt='')
@@ -1295,7 +1259,7 @@ class TestWorkspaceProvisioning:
     class NoFeature(BaseBro):
       name = 'no-feature'
       description = 'd'
-      mcp_servers: ClassVar = [when(feature('ghost'), _make_spec('a'))]
+      tools: ClassVar = [when(feature('ghost'), _make_spec('a'))]
 
       def __init__(self):
         super().__init__(system_prompt='')
@@ -1309,7 +1273,7 @@ class TestClaudePersonaServers:
     class PersonaBro(BaseBro):
       name = 'persona'
       description = 'd'
-      mcp_servers: ClassVar = [
+      tools: ClassVar = [
         when(llm_mcp.harness == 'bro', MCPServerSpec.of(_SecretServer)),
         _make_spec('a'),
       ]
@@ -1388,7 +1352,7 @@ class TestNeededSecrets:
     class ManifestBro(BaseBro):
       name = 'manifest'
       description = 'd'
-      mcp_servers: ClassVar = [MCPServerSpec.of(_SecretServer)]
+      tools: ClassVar = [MCPServerSpec.of(_SecretServer)]
       data_sources: ClassVar = [_SecretSource()]
       extra_secrets = ('delta',)
 
@@ -1443,7 +1407,7 @@ class TestMaySummon:
     assert Derived()._may_summon == ('one', 'two')
 
 
-class TestDeniedCapabilities:
+class TestToolWithdrawals:
   def test_defaults_to_empty(self):
     class Plain(BaseBro):
       name = 'plain'
@@ -1452,34 +1416,34 @@ class TestDeniedCapabilities:
       def __init__(self):
         super().__init__(system_prompt='')
 
-    assert Plain()._denied_capabilities == ()
+    assert Plain().withheld_tools('claude') == ()
 
-  def test_mro_unioned_without_repeats(self):
+  def test_conditioned_entries_concatenate_along_mro_without_repeats(self):
     class Base(BaseBro):
       name = 'base'
       description = 'd'
-      denied_capabilities = ('shell',)
+      tools: ClassVar = [when(llm_mcp.harness == 'claude', llm_mcp.withhold('Bash'))]
 
       def __init__(self):
         super().__init__(system_prompt='')
 
     class Derived(Base):
       name = 'derived'
-      denied_capabilities = ('file', 'shell')
+      tools: ClassVar = [when(llm_mcp.harness == 'claude', llm_mcp.withhold('Read', 'Bash'))]
 
-    assert Derived()._denied_capabilities == ('shell', 'file')
+    assert Derived().withheld_tools('claude') == ('Bash', 'Read')
 
-  def test_unknown_capability_fails_construction(self):
-    class Bogus(BaseBro):
-      name = 'bogus'
+  def test_withdrawal_selected_for_bro_harness_fails_construction(self):
+    class Invalid(BaseBro):
+      name = 'invalid'
       description = 'd'
-      denied_capabilities = ('network',)
+      tools: ClassVar = [llm_mcp.withhold('Bash')]
 
       def __init__(self):
         super().__init__(system_prompt='')
 
-    with pytest.raises(ValueError, match="unknown capability 'network'"):
-      Bogus()
+    with pytest.raises(ValueError, match='bro harness, which has no native tools'):
+      Invalid()
 
   def test_empty_when_no_components_and_keyless_llm(self):
 
@@ -1519,7 +1483,7 @@ class TestOptionalSecrets:
     class OptBro(BaseBro):
       name = 'opt'
       description = 'd'
-      mcp_servers: ClassVar = [MCPServerSpec.of(_OptionalServer)]
+      tools: ClassVar = [MCPServerSpec.of(_OptionalServer)]
       data_sources: ClassVar = [_OptionalSource()]
 
       def __init__(self):
@@ -1551,7 +1515,7 @@ class TestOptionalSecrets:
     class BothBro(BaseBro):
       name = 'both'
       description = 'd'
-      mcp_servers: ClassVar = [MCPServerSpec.of(_BothServer)]
+      tools: ClassVar = [MCPServerSpec.of(_BothServer)]
       data_sources: ClassVar = [_OptShared()]
 
       def __init__(self):

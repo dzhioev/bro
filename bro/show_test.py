@@ -59,7 +59,7 @@ class _FullBro(BaseBro):
   description = 'has a data source and two MCP servers'
   llm_spec = llm_llms_chat_gpt.LLMSpec(reasoning_effort='medium')
   data_sources: ClassVar = [_StubSource()]
-  mcp_servers: ClassVar = [MCPServerSpec.of(ServerAB), MCPServerSpec.of(ServerXZ)]
+  tools: ClassVar = [MCPServerSpec.of(ServerAB), MCPServerSpec.of(ServerXZ)]
 
   def __init__(self):
     super().__init__(system_prompt='YOU ARE FULL')
@@ -127,7 +127,7 @@ class TestFormatCard:
     class _SharedBro(BaseBro):
       name = 'shared'
       description = 'two servers in one namespace'
-      mcp_servers: ClassVar = [MCPServerSpec.of(ServerAB), MCPServerSpec.of(ServerAB2)]
+      tools: ClassVar = [MCPServerSpec.of(ServerAB), MCPServerSpec.of(ServerAB2)]
 
       def __init__(self):
         super().__init__(system_prompt='')
@@ -294,7 +294,7 @@ class TestFormatCard:
     class _LongBro(BaseBro):
       name = 'long'
       description = 'd'
-      mcp_servers: ClassVar = [MCPServerSpec.of(LongServer)]
+      tools: ClassVar = [MCPServerSpec.of(LongServer)]
 
       def __init__(self):
         super().__init__(system_prompt='')

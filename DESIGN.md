@@ -7,7 +7,7 @@ This document is the conceptual model. Operational details (layout, how to add a
 ## Principles
 
 - **One capability per Bro.** A Bro is named, described, and prompted for exactly one job. Composition happens externally — an orchestrator Bro delegates to specialists via the same abstractions used everywhere else.
-- **Declarative tool composition.** A Bro lists its tool sources on the class (`data_sources`, `mcp_servers`); the base class mounts them, materialising live servers lazily on first tool use. No per-Bro wiring code.
+- **Declarative tool composition.** A Bro lists its tool sources on the class (`data_sources`, `tools`); the base class mounts them, materialising live servers lazily on first tool use. No per-Bro wiring code.
 - **Stateless by default.** `run()` is a fresh agent loop per call — no history carried over, no hidden state. `send()` opts into multi-turn continuity when the surface needs it.
 - **Delivery-agnostic.** The same Bro instance is invoked from a CLI, an HTTP server, a Claude Code session, or a scheduled job. The launcher picks the entry point; the Bro does not care.
 - **Policy lives in the system prompt.** What the Bro decides is in `system_prompt`; how it acts is in its tools. There is no third place. Consumers of the policy (other surfaces, documentation) reference the Bro, they do not restate it.
@@ -22,7 +22,7 @@ class Researcher(Bro):
   description = '...'                  # one line, shown in tool listings
   system_prompt = SYSTEM_PROMPT        # class-level; MRO-concatenated base→derived
   llm_spec = bro.llm.llms.chat_gpt.LLMSpec(model='gpt-5.4-mini', reasoning_effort='medium')
-  mcp_servers = [research.mcp.spec()]  # full toolset
+  tools = [research.mcp.spec()]  # full toolset
   # or: research.mcp.spec('search')    # subset, validated at declaration
   data_sources = [Wikipedia()]         # read-only connectors
 ```
@@ -31,7 +31,7 @@ Everything is a class attribute — there is no custom `__init__`. The LLM recip
 
 The base class, on instantiation:
 
-- keeps the `mcp_servers` specs as declared; live servers are built once, lazily, when the bro first runs tools
+- keeps the `tools` specs as declared; live servers are built once, lazily, when the bro first runs tools
 - auto-prepends every `bro/prompts/shared/*.md` to the system prompt (conventions that must hold across every surface live there)
 - appends a `## Data sources` block describing each declared `DataSource`
 - on non-interactive runs, exposes a built-in `raise` service tool (see below)
@@ -46,10 +46,10 @@ The base class, on instantiation:
 A Bro's behaviour comes from three sources, all declared on the class:
 
 - **`system_prompt`** — the specialisation. Triage policies, output protocol, voice. The single source of truth for what the Bro knows and decides.
-- **`mcp_servers`** — sets of stateful tools. An entry is a tool-pack module (its conventional `spec` Toolset, the full roster), a bare `Toolset`, or a scoping call such as `research.mcp.spec(*tool_names)` for a validated subset; each normalizes to an `bro.llm.mcp.MCPServerSpec`, the pure-metadata manifest (`needed_secrets` / `optional_secrets` plus a `build()` factory). The declaration/runtime split lets hosts read a bro's credential manifest without constructing live servers, so a live server may hold real resources because it exists only in a serving process.
+- **`tools`** — the conditioned tool declaration list. Every entry has the closed `ToolSpec` type: an `MCPServerSpec` addition from an explicit toolset call such as `research.mcp.spec(*tool_names)`, or a frozen `WithheldTools` entry from `withhold(*names)` that removes harness-native tools. The declaration/runtime split lets hosts read an added server's credential manifest without constructing it, while withdrawals travel through the same MRO collection and `when` / `iff` selection. A withdrawal selected for the bro harness is invalid because that harness provides no native tools.
 - **`data_sources`** — read-only connectors (Wikipedia, web search, and consumer-provided catalogs). Each implements `search(query, limit)` and `fetch(id, query=None)`. The base class exposes them as `search` / `fetch` MCP tools inside the source's own `<name>-source` namespace (wire name `<name>-source__search`) and injects each source's `summary` into the system prompt so the LLM knows what is available without enumerating raw tool names.
 
-The split between `mcp_servers` and `data_sources` is a contract: data sources never mutate state, so they are safe to bind to any Bro. MCP servers may mutate state and are chosen per Bro.
+The split between `tools` and `data_sources` is a contract: data sources never mutate state, so they are safe to bind to any Bro. MCP servers may mutate state and are chosen per Bro.
 
 A Bro can additionally declare **scripts** — named procedures backed by markdown files under `<bro_pkg>/scripts/*.md` with flat frontmatter. Scripts compose along the MRO (derived overrides parent) and mount as one tool each in the reserved `@` canonical namespace (`at` on the wire) for bro-native execution and both Claude session flavors. When OpenAI is available, `@::@` interprets free-form commands against that roster and returns the resolved script's instructions with the interpreted arguments, or an expected error; direct tools remain available without it. The composed Scripts prompt carries the direct and natural-language invocation contracts, while `bro show` exposes the roster and OpenAI is a best-effort secret for any bro with scripts. Native bro and `cw ss --raw` also mount reserved framework tool `@::skill(name)` as the bridge for third-party skills their harness cannot load; an empty body represents an unavailable skill. Ordinary Claude persona sessions use Claude's native skill mechanism and do not adapt bro scripts into skills.
 

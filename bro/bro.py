@@ -4,7 +4,7 @@ import traceback
 from abc import ABC
 from collections.abc import Callable
 from pathlib import Path
-from types import ModuleType, TracebackType
+from types import TracebackType
 from typing import Any, ClassVar, Optional, Self
 
 import bro.llm.llms.chat_gpt as llm_llms_chat_gpt
@@ -23,14 +23,6 @@ from bro.summon import SUMMONER_ENV
 from bro.trails.record.bro import Recorder
 
 DEFAULT_LLM_SPEC: LLMSpec = llm_llms_chat_gpt.LLMSpec()
-
-# the capabilities a bro can forgo through `denied_capabilities`, named for what
-# they do rather than for any harness's tools: `file` reads and edits the
-# workspace, `shell` runs commands in it. each harness adapter maps them onto its
-# own built-ins (`bro/cw/claude_argv.py`); a harness whose tool surface is exactly
-# what the bro declares has nothing to withhold.
-HARNESS_CAPABILITIES = ('file', 'shell')
-
 
 _TRAILS_DISABLED_ENV = 'TRAILS_DISABLED'
 
@@ -516,7 +508,7 @@ def _unattended_claude_session() -> bool:
 def feature(name: str) -> Condition:
   """membership condition on the bro's `#features` vocabulary — the code
   spelling of the `#features contains <name>` directive, for gating
-  `mcp_servers` / `data_sources` entries: `when(feature('brog'), bro.brog.mcp)`."""
+  `tools` / `data_sources` entries: `when(feature('brog'), bro.brog.mcp.spec())`."""
   return var('features').contains(name)
 
 
@@ -554,11 +546,11 @@ class BaseBro(ABC):
   # an entry may be wrapped with `bro.base.condition.when(...)` / grouped with
   # `iff(...)` to gate it on the assembling surface's facts (`#harness`,
   # `#creds`); a wrapped entry whose condition does not hold never mounts and
-  # its spec never builds. an `mcp_servers` entry is a tool-pack module whose
-  # conventional `spec` Toolset represents the full roster, a bare `Toolset`, or
-  # an `MCPServerSpec` from a scoped Toolset call; see `bro.llm.mcp.as_spec`.
+  # its server never builds. `tools` is the checked declaration surface for both
+  # server additions (`MCPServerSpec`) and harness-native withdrawals
+  # (`WithheldTools`). A tool-pack module contributes its explicit `spec()`.
   data_sources: ClassVar[list[Entry[DataSource]]] = []
-  mcp_servers: ClassVar[list[Entry[llm_mcp.MCPServerSpec | llm_mcp.Toolset[Any] | ModuleType]]] = []
+  tools: ClassVar[list[Entry[llm_mcp.ToolSpec]]] = []
   # named optional capabilities: feature name → the gate deciding whether the
   # feature is on — a `Condition` over the environment's resolvable credentials
   # (`creds.contains('brog')`), or a plain bool constant as in `when` (True
@@ -566,14 +558,14 @@ class BaseBro(ABC):
   # consuming site together: components gate via `when(feature('<name>'), …)`,
   # static text via `{{iff #features contains <name>}}` — so a gated component
   # enters the manifest, mounts, and renders its text only where its gates
-  # resolve. MRO-walked like `mcp_servers`, with derived classes overriding
+  # resolve. MRO-walked like `tools`, with derived classes overriding
   # parents per name — `{'<name>': True}` pins an inherited feature on, turning
   # its components into hard requirements. False is terminal: redeclaring a
   # feature a base class disabled fails construction, so an opt-out binds the
   # whole sub-hierarchy.
   features: ClassVar[dict[str, Condition | bool]] = {}
   # credentials no component expresses — the escape hatch for a bro's environment
-  # needs. MRO-walked and unioned like `mcp_servers`, so a subclass declares only
+  # needs. MRO-walked and unioned like `tools`, so a subclass declares only
   # what it adds. folded into
   # `needed_secrets()`.
   extra_secrets: tuple[str, ...] = ()
@@ -588,17 +580,11 @@ class BaseBro(ABC):
   # host grants `/var/run/docker.sock` to a `--raw`/bro-run container only when this
   # is set (claude code sessions get it unconditionally); see bro/launch/scope.py.
   needs_docker: bool = False
-  # capabilities the bro forgoes, from `HARNESS_CAPABILITIES`. a harness that
-  # carries built-in tools of its own is told to withhold the matching ones, so a
-  # persona whose discipline is that it never touches the workspace has that
-  # enforced by its tool surface instead of by its prompt. MRO-walked and unioned
-  # like `extra_secrets`; a bro that declares none keeps the harness's full set.
-  denied_capabilities: tuple[str, ...] = ()
   # subclasses declare their own `system_prompt = "..."` as a class attribute;
   # `__init__` walks the MRO from base to derived and concatenates each class's
   # own contribution. so a `ReviewDev(Dev)` subclass declares only what it adds —
   # Dev's prompt (and Bro's) are picked up automatically. same for
-  # `mcp_servers` and `data_sources`. inherit directly from BaseBro to opt out
+  # `tools` and `data_sources`. inherit directly from BaseBro to opt out
   # of the concrete `Bro`'s shared defaults.
   system_prompt: str = ''
   # the bro's own class prompts (MRO-concatenated); set in __init__
@@ -610,17 +596,16 @@ class BaseBro(ABC):
   _llm: Optional[LLM] = None
 
   def __init__(self, system_prompt: Optional[str] = None):
-    mcp_entries: list[Entry[llm_mcp.MCPServerSpec | llm_mcp.Toolset[Any] | ModuleType]] = []
+    tool_entries: list[Entry[llm_mcp.ToolSpec]] = []
     data_source_entries: list[Entry[DataSource]] = []
     prompt_parts: list[str] = []
     extra_secret_names: list[str] = []
     may_summon_names: list[str] = []
-    denied_capability_names: list[str] = []
     feature_gates: dict[str, Condition | bool] = {}
     for cls in reversed(type(self).__mro__):
-      raw_mcp = cls.__dict__.get('mcp_servers')
-      if raw_mcp is not None:
-        mcp_entries.extend(raw_mcp)
+      raw_tools = cls.__dict__.get('tools')
+      if raw_tools is not None:
+        tool_entries.extend(raw_tools)
       raw_sources = cls.__dict__.get('data_sources')
       if raw_sources is not None:
         data_source_entries.extend(raw_sources)
@@ -633,15 +618,6 @@ class BaseBro(ABC):
       raw_summon = cls.__dict__.get('may_summon')
       if raw_summon is not None:
         may_summon_names.extend(raw_summon)
-      raw_denied = cls.__dict__.get('denied_capabilities')
-      if raw_denied is not None:
-        for capability in raw_denied:
-          if capability not in HARNESS_CAPABILITIES:
-            raise ValueError(
-              f'{cls.__name__} denies unknown capability {capability!r}; '
-              f'known: {", ".join(HARNESS_CAPABILITIES)}'
-            )
-          denied_capability_names.append(capability)
       raw_features = cls.__dict__.get('features')
       if raw_features is not None:
         for feature_name, gate in raw_features.items():
@@ -653,7 +629,6 @@ class BaseBro(ABC):
           feature_gates[feature_name] = gate
     self._extra_secrets: tuple[str, ...] = tuple(extra_secret_names)
     self._may_summon: tuple[str, ...] = tuple(may_summon_names)
-    self._denied_capabilities: tuple[str, ...] = tuple(dict.fromkeys(denied_capability_names))
     self._features: dict[str, Condition | bool] = feature_gates
     # the membership probe is lazy, so the vocabulary built here stays current
     # with the store — only selection (below) bakes feature truth in.
@@ -663,15 +638,10 @@ class BaseBro(ABC):
     # the prompt compositions below and the live-server cache read it. wire is
     # not a fact — component inclusion is wire-independent (the wire only
     # spells tool names).
-    self._mcp_entries = mcp_entries
+    self._tool_entries = tool_entries
     self._data_source_entries = data_source_entries
     surface_creds = credentials.known_names()
-    self._mcp_specs: list[llm_mcp.MCPServerSpec] = [
-      llm_mcp.as_spec(entry)
-      for entry in llm_mcp.select(
-        mcp_entries, harness='bro', creds=surface_creds, extra=self._feature_vocabulary
-      )
-    ]
+    self._mcp_specs, _ = self._select_tools('bro')
     self._data_sources: list[DataSource] = llm_mcp.select(
       data_source_entries, harness='bro', creds=surface_creds, extra=self._feature_vocabulary
     )
@@ -797,6 +767,40 @@ class BaseBro(ABC):
       return ''
     return _render_scripts(include_dispatcher=script_store.dispatcher_available())
 
+  def _select_tools(
+    self, harness: llm_mcp.Harness
+  ) -> tuple[list[llm_mcp.MCPServerSpec], tuple[str, ...]]:
+    selected = llm_mcp.select(
+      self._tool_entries,
+      harness=harness,
+      creds=credentials.known_names(),
+      extra=self._feature_vocabulary,
+    )
+    server_specs: list[llm_mcp.MCPServerSpec] = []
+    withheld_names: list[str] = []
+    for spec in selected:
+      if isinstance(spec, llm_mcp.MCPServerSpec):
+        server_specs.append(spec)
+      elif isinstance(spec, llm_mcp.WithheldTools):
+        if harness == 'bro':
+          raise ValueError(
+            f'{type(self).__name__} withdraws tools from the bro harness, which has no native '
+            'tools; condition the withdrawal on a harness that supplies them'
+          )
+        withheld_names.extend(spec.names)
+      else:
+        raise TypeError(
+          f'{type(self).__name__}.tools contains {type(spec).__name__}; additions must be '
+          "MCPServerSpec values (call a tool-pack module's spec) and withdrawals must be "
+          'WithheldTools values'
+        )
+    return server_specs, tuple(dict.fromkeys(withheld_names))
+
+  def withheld_tools(self, harness: llm_mcp.Harness) -> tuple[str, ...]:
+    """the harness-native tool names selected for withdrawal on `harness`."""
+    _, names = self._select_tools(harness)
+    return names
+
   def _components_for(
     self, harness: llm_mcp.Harness
   ) -> tuple[list[llm_mcp.MCPServerSpec], list[DataSource]]:
@@ -806,17 +810,11 @@ class BaseBro(ABC):
     # raw entries.
     if harness == 'bro':
       return self._mcp_specs, self._data_sources
-    surface_creds = credentials.known_names()
-    specs = [
-      llm_mcp.as_spec(entry)
-      for entry in llm_mcp.select(
-        self._mcp_entries, harness=harness, creds=surface_creds, extra=self._feature_vocabulary
-      )
-    ]
+    specs, _ = self._select_tools(harness)
     sources: list[DataSource] = llm_mcp.select(
       self._data_source_entries,
       harness=harness,
-      creds=surface_creds,
+      creds=credentials.known_names(),
       extra=self._feature_vocabulary,
     )
     return specs, sources

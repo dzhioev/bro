@@ -32,7 +32,7 @@ Then filter: separate one-off slips from systemic friction. An edit is warranted
 For each systemic finding, name the one surface whose edit prevents the recurrence:
 
 - **a script** — a step that misled, is missing, or is mis-ordered in a script that ran, or a workflow that recurs often enough to deserve a script that doesn't exist yet; scripts live in the owning bro package's `scripts/*.md`
-- **the bro's toolset** — a missing, mis-scoped, or misdescribed tool: the `mcp_servers` / `data_sources` declarations on the bro's class, or the tool's description and behavior in the pack that owns it
+- **the bro's toolset** — a missing, mis-scoped, or misdescribed tool: the `tools` / `data_sources` declarations on the bro's class, or the tool's description and behavior in the pack that owns it
 - **the bro's system prompt** — the class-level `system_prompt` of the bro or of the ancestor that owns the rule; shared text under `bro/prompts/shared/*.md` only when the lesson genuinely applies to every bro
 - **a doc** — a reference doc or CLAUDE.md the session leaned on that was stale, silent, or misleading
 

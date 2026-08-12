@@ -4,7 +4,7 @@ How the framework gates component declarations and static text on the facts of t
 
 ## Why
 
-Component declarations (a bro's `mcp_servers` / `data_sources`) and static text (system prompts, script bodies, tool descriptions) are written once but consumed by different surfaces — the bro-native LLM loop, `--raw` claude sessions, cw-sessions — with different toolsets, wire-name spellings, and credentials. Conditioning derives each surface's variant from one declaration, and fails fast on a typo instead of silently deciding one way forever.
+Component declarations (a bro's `tools` / `data_sources`) and static text (system prompts, script bodies, tool descriptions) are written once but consumed by different surfaces — the bro-native LLM loop, `--raw` claude sessions, cw-sessions — with different toolsets, wire-name spellings, and credentials. Conditioning derives each surface's variant from one declaration, and fails fast on a typo instead of silently deciding one way forever.
 
 ## Variables
 
@@ -48,7 +48,7 @@ Three declaration-time guards close off the Python operators that cannot build d
 
 Consumers:
 
-- a bro's `mcp_servers` / `data_sources` entries may be `when`-wrapped or `iff`-grouped; `BaseBro.__init__` selects at harness `bro`, so an unmatched entry never mounts and its spec never builds. E.g. the dev toolset mounts only on the bro harness (claude has built-in file/shell tools): `mcp_servers = [when(harness == 'bro', dev.mcp)]`
+- a bro's `tools` / `data_sources` entries may be `when`-wrapped or `iff`-grouped; `BaseBro.__init__` selects at harness `bro`, so an unmatched entry never takes effect and its server never builds. E.g. `tools = [when(harness == 'bro', dev.mcp.spec()), when(harness == 'claude', withhold('Read'))]` adds the dev server only to the bro harness and removes a built-in only from Claude. A withdrawal selected for the bro harness raises because that surface has no native roster.
 
 ## Facts
 
@@ -66,7 +66,7 @@ One more fact sits outside the triple: `hold` — the session's user-involvement
 
 ## Bro features
 
-A bro may declare named optional capabilities: `features = {'brog': creds.contains('brog')}` on the class — feature name → the gate deciding whether the feature is on: a `Condition`, or a plain bool constant as in `when` (`True` pins it on, `False` disables it). The map is MRO-merged with derived classes overriding per name, and `False` is terminal: redeclaring a feature a base class disabled as anything but `False` fails construction, so an opt-out binds the whole sub-hierarchy. The declaration adds a `#features` variable (`BaseBro.vocabulary()`, passed as the fronts' `extra`) to everything the bro renders or assembles — `mcp_servers` / `data_sources` selection, prompt composition, script bodies, cw's append prompt. Components gate with `when(feature('brog'), …)` (`from bro.bro import feature`) and text with `{{iff #features contains brog}}`, so one declaration switches every consuming site together, and a gated component enters the credential manifest only where its gates resolve.
+A bro may declare named optional capabilities: `features = {'brog': creds.contains('brog')}` on the class — feature name → the gate deciding whether the feature is on: a `Condition`, or a plain bool constant as in `when` (`True` pins it on, `False` disables it). The map is MRO-merged with derived classes overriding per name, and `False` is terminal: redeclaring a feature a base class disabled as anything but `False` fails construction, so an opt-out binds the whole sub-hierarchy. The declaration adds a `#features` variable (`BaseBro.vocabulary()`, passed as the fronts' `extra`) to everything the bro renders or assembles — `tools` / `data_sources` selection, prompt composition, script bodies, cw's append prompt. Components gate with `when(feature('brog'), …)` (`from bro.bro import feature`) and text with `{{iff #features contains brog}}`, so one declaration switches every consuming site together, and a gated component enters the credential manifest only where its gates resolve.
 
 The `#features` universe is the declared feature names — environment-independent, so a typo'd name fails every render. A gate condition evaluates against its own single-variable vocabulary — `creds`, probing `bro.base.credentials.available` lazily with no closed universe — deliberately not the surface's `#creds` fact: that fact's closed universe is the store's registry, which in a scoped container omits never-hydrated names, so a probe there would raise a universe violation, while the gate vocabulary's open universe makes the same probe read as feature-off. Any other variable reference in a gate raises. The condition model has no conjunction, so a feature needing several secrets has no gate spelling until an `and` combinator exists.
 

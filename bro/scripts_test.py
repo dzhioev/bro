@@ -257,7 +257,7 @@ class TestScriptServer:
         '__module__': package,
         'name': 'reserved',
         'description': 'test bro',
-        'mcp_servers': [server_spec],
+        'tools': [server_spec],
       },
     )
     with pytest.raises(ValueError, match='reserved for bro framework tools'):

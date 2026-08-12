@@ -61,7 +61,7 @@ class TestCwSessionLaunch:
     assert launch.system_prompt == 'append text'
     assert '--foo' in argv
 
-  def test_denied_capabilities_reach_disallowed_tools(self):
+  def test_selected_tool_withdrawals_reach_disallowed_tools(self):
     argv = _cw_session_launch(_spec(bro='lead'), claude_args=[]).argv
     denied = argv[argv.index('--disallowed-tools') + 1].split(',')
     assert denied[0] == 'mcp__claude_ai_*'

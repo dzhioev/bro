@@ -3,7 +3,6 @@ import inspect
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
-from types import ModuleType
 from typing import Any, ClassVar, Literal, Optional, get_args, get_origin
 
 from bro.base import condition, credentials, template
@@ -386,6 +385,31 @@ class MCPServerSpec:
     )
 
 
+@dataclass(frozen=True)
+class WithheldTools:
+  """harness-native tool names to remove from a conditioned tool declaration."""
+
+  names: tuple[str, ...]
+
+  def __post_init__(self) -> None:
+    if len(self.names) == 0:
+      raise ValueError('a tool withdrawal must name at least one tool')
+    invalid = [name for name in self.names if not isinstance(name, str) or len(name) == 0]
+    if len(invalid) > 0:
+      raise ValueError(f'tool withdrawal names must be non-empty strings: {invalid!r}')
+    duplicates = [name for index, name in enumerate(self.names) if name in self.names[:index]]
+    if len(duplicates) > 0:
+      raise ValueError(f'duplicate tool withdrawal names: {duplicates!r}')
+
+
+type ToolSpec = MCPServerSpec | WithheldTools
+
+
+def withhold(*names: str) -> WithheldTools:
+  """one declaration that withholds the named tools from a harness's native roster."""
+  return WithheldTools(names)
+
+
 class FunctionTool(Tool):
   def __init__(
     self,
@@ -590,8 +614,7 @@ class Toolset[T]:
   one instance per server module, conventionally named `spec` and defined above
   its tools, which register on it with the `@spec.tool('description')`
   decorator. Calling the instance with tool names validates the subset immediately
-  at declaration time and
-  returns the frozen `MCPServerSpec` manifest; `build()` runs later, in the
+  at declaration time and returns the frozen `MCPServerSpec` manifest; `build()` runs later, in the
   serving process, constructing the per-server state once (`state` factory) and
   injecting it into every selected tool that declares a `Context` parameter.
 
@@ -690,20 +713,6 @@ class Toolset[T]:
       build=lambda: self.build(*names),
       needed_secrets=self.get_secrets(names),
     )
-
-
-def as_spec(entry: 'MCPServerSpec | Toolset[Any] | ModuleType') -> MCPServerSpec:
-  """a declaration entry normalized to its manifest: a tool-pack module is its
-  conventional `spec` Toolset, a bare Toolset is its full roster, a spec passes
-  through. Scoped subsets call the toolset with their selected names."""
-  if isinstance(entry, ModuleType):
-    toolset = getattr(entry, 'spec', None)
-    if not isinstance(toolset, Toolset):
-      raise TypeError(f'module {entry.__name__!r} declares no Toolset named spec')
-    return toolset()
-  if isinstance(entry, Toolset):
-    return entry()
-  return entry
 
 
 class UnknownToolError(Exception):

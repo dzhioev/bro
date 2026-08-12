@@ -1,5 +1,7 @@
 import bro.brog.mcp as brog_mcp
+from bro.base.condition import when
 from bro.bros.bro import Bro
+from bro.llm.mcp import harness, withhold
 
 SYSTEM_PROMPT = """\
 You are the lead — the coordinator of work too large for a single session. You own
@@ -23,10 +25,14 @@ class Lead(Bro):
   description = 'coordinator that drives multi-stage work by summoning worker bros'
   # a coordinator keeps no state of its own, so without a task page there is
   # nowhere to put the work: the tracker is not optional here.
-  mcp_servers = [brog_mcp]
+  tools = [
+    brog_mcp.spec(),
+    when(
+      harness == 'claude',
+      withhold(
+        'Read', 'Write', 'Edit', 'NotebookEdit', 'Glob', 'Grep', 'Bash', 'BashOutput', 'KillShell'
+      ),
+    ),
+  ]
   may_summon = ('dev',)
-  # the coordinator delegates the work instead of doing it, and a harness that
-  # hands it file and shell tools anyway leaves that discipline resting on the
-  # prompt alone.
-  denied_capabilities = ('file', 'shell')
   system_prompt = SYSTEM_PROMPT

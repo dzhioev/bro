@@ -45,6 +45,6 @@ class Dev(Bro):
   # workspace.
   features = {'brog': creds.contains('brog'), 'commit-accounting': True}
   # the dev toolset duplicates the claude harness's built-in file/shell tools
-  mcp_servers = [when(harness == 'bro', dev.mcp), when(feature('brog'), brog_mcp)]
+  tools = [when(harness == 'bro', dev.mcp.spec()), when(feature('brog'), brog_mcp.spec())]
   data_sources = [references.dev_style]
   system_prompt = SYSTEM_PROMPT

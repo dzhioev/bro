@@ -622,6 +622,20 @@ class TestToolsetRendering:
       spec.build()
 
 
+class TestWithheldTools:
+  def test_one_entry_carries_several_names(self):
+    assert mcp_mod.withhold('Read', 'Bash').names == ('Read', 'Bash')
+
+  def test_requires_at_least_one_name(self):
+    with pytest.raises(ValueError, match='at least one tool'):
+      mcp_mod.withhold()
+
+  @pytest.mark.parametrize('names', [('',), ('Read', 'Read')])
+  def test_rejects_invalid_names(self, names):
+    with pytest.raises(ValueError):
+      mcp_mod.withhold(*names)
+
+
 class TestSelect:
   def test_harness_condition_filters_entries(self):
     entries = ['plain', when(mcp_mod.harness == 'bro', 'devtools')]

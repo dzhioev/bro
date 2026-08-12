@@ -22,7 +22,6 @@ from bro.cw.mcp import MCPEndpoint, _http_mcp_config
 from bro.cw.system_prompt import _session_append_prompt
 
 if TYPE_CHECKING:
-  from bro.bro import BaseBro
   from bro.cw.session import SessionSpec
 
 
@@ -63,22 +62,6 @@ _FIRST_TURN_LAUNCH_NOTE = (
   'loaded yet and end the turn — the tools arrive within seconds; never write a '
   'tool call or its result as text.]'
 )
-
-
-# claude's own tools per capability a bro can forgo (`bro.bro.HARNESS_CAPABILITIES`).
-# a cw-session hands them to `--disallowed-tools`; the raw flavor withholds every
-# built-in already. names track claude's tool roster, so a tool added to a
-# capability there belongs in the matching entry here.
-_CAPABILITY_BUILTINS = {
-  'file': ('Read', 'Write', 'Edit', 'NotebookEdit', 'Glob', 'Grep'),
-  'shell': ('Bash', 'BashOutput', 'KillShell'),
-}
-
-
-def _denied_builtins(bro: 'BaseBro') -> tuple[str, ...]:
-  return tuple(
-    name for capability in bro._denied_capabilities for name in _CAPABILITY_BUILTINS[capability]
-  )
 
 
 def build_claude_launch(
@@ -147,7 +130,7 @@ def build_claude_launch(
     system_prompt = _session_append_prompt(spec.hold, spec.session_bro)
     argv += [
       '--disallowed-tools',
-      ','.join(('mcp__claude_ai_*', *_denied_builtins(bro))),
+      ','.join(('mcp__claude_ai_*', *bro.withheld_tools('claude'))),
       '--settings',
       json.dumps(settings, separators=(',', ':')),
       '--mcp-config',
