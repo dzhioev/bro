@@ -5,7 +5,7 @@ from bro.bro import feature
 from bro.bros.bro import Bro
 from bro.bros.dev import mcp
 from bro.datasources import references
-from bro.llm.mcp import creds, harness
+from bro.llm.mcp import creds, harness, mount
 
 SYSTEM_PROMPT = """\
 You are a software developer with tools to read, search, and edit files and run
@@ -40,6 +40,9 @@ class Dev(Bro):
   # workspace.
   features = {'brog': creds.contains('brog'), 'commit-accounting': True}
   # the dev toolset duplicates the claude harness's built-in file/shell tools
-  tools = [when(harness == 'bro', mcp.spec()), when(feature('brog'), brog_mcp.spec())]
+  tools = [
+    when(harness == 'bro', mount(mcp.toolset)),
+    when(feature('brog'), mount(brog_mcp.toolset)),
+  ]
   data_sources = [references.dev_style]
   system_prompt = SYSTEM_PROMPT

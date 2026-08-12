@@ -7,7 +7,7 @@ This document is the conceptual model. Operational details (layout, how to add a
 ## Principles
 
 - **One capability per Bro.** A Bro is named, described, and prompted for exactly one job. Composition happens externally — an orchestrator Bro delegates to specialists via the same abstractions used everywhere else.
-- **Declarative tool composition.** A Bro lists its tool policy on the class (`tools`, `data_sources`); the base class selects additions and harness-native withdrawals for each surface, materialising live servers lazily on first tool use. No per-Bro wiring code.
+- **Declarative tool composition.** A Bro lists its tool policy on the class (`tools`, `data_sources`); the base class selects server mounts and harness-native blocks for each surface, materialising live servers lazily on first tool use. No per-Bro wiring code.
 - **Stateless by default.** `run()` is a fresh agent loop per call — no history carried over, no hidden state. `send()` opts into multi-turn continuity when the surface needs it.
 - **Delivery-agnostic.** The same Bro instance is invoked from a CLI, an HTTP server, a Claude Code session, or a scheduled job. The launcher picks the entry point; the Bro does not care.
 - **Policy lives in the system prompt.** What the Bro decides is in `system_prompt`; how it acts is in its tools. There is no third place. Consumers of the policy (other surfaces, documentation) reference the Bro, they do not restate it.
@@ -22,8 +22,8 @@ class Researcher(Bro):
   description = '...'                  # one line, shown in tool listings
   system_prompt = SYSTEM_PROMPT        # class-level; MRO-concatenated base→derived
   llm_spec = bro.llm.llms.chat_gpt.LLMSpec(model='gpt-5.4-mini', reasoning_effort='medium')
-  tools = [research.mcp.spec()]        # full toolset
-  # or: research.mcp.spec('search')    # subset, validated at declaration
+  tools = [mount(research.mcp.toolset)]
+  # or: mount(research.mcp.toolset, 'search')  # validated subset
   data_sources = [Wikipedia()]         # read-only connectors
 ```
 
@@ -46,7 +46,7 @@ The base class, on instantiation:
 A Bro's behaviour comes from three sources, all declared on the class:
 
 - **`system_prompt`** — the specialisation. Triage policies, output protocol, voice. The single source of truth for what the Bro knows and decides.
-- **`tools`** — additions and withdrawals under one checkable `ToolSpec` type. An `MCPServerSpec` from an explicit toolset call such as `research.mcp.spec(*tool_names)` adds a validated roster; the pure-metadata manifest (`needed_secrets` / `optional_secrets` plus a `build()` factory) lets hosts inspect credentials without constructing live servers. A `ToolWithdrawal` from `withhold(*tool_names)` removes native tools from a harness that supplies its own, and is conditioned through the same `when` / `iff` surface as additions. A withdrawal selected for a harness with no native tools is a declaration error.
+- **`tools`** — one checkable `ToolLayer` type for every entry. `mount(research.mcp.toolset, *tool_names)` contributes a full or validated subset and carries its pure-metadata server manifest (`needed_secrets` / `optional_secrets` plus a `build()` factory); `block(*tool_names)` restricts native tools on a harness that supplies its own. Both produce layers and use the same `when` / `iff` conditioning. A block selected for a harness with no native tools is a declaration error.
 - **`data_sources`** — read-only connectors (Wikipedia, web search, and consumer-provided catalogs). Each implements `search(query, limit)` and `fetch(id, query=None)`. The base class exposes them as `search` / `fetch` MCP tools inside the source's own `<name>-source` namespace (wire name `<name>-source__search`) and injects each source's `summary` into the system prompt so the LLM knows what is available without enumerating raw tool names.
 
 The split between `tools` and `data_sources` is a contract: data sources never mutate state, so they are safe to bind to any Bro. Tool servers may mutate state and are chosen per Bro.
@@ -65,7 +65,7 @@ The same Bro runs from many launchers:
 
 - **Console** — `bro run <name> <input>`, `bro list`, `bro show <name>`. Backed by `bro/run.py`.
 - **Claude Code raw** — `cw ss --bro <name> --raw` launches a bare Claude Code session whose system prompt and MCP servers come from the session's Bro. Tools are served by a session-local HTTP MCP server (`mcp-server bro:<name> --http`) exposing the union of the Bro's declared MCP servers, data-source tools, scripts, and the framework `@::skill` loader, one endpoint per namespace. Useful when the user wants a chat UI over the Bro's policy + toolkit.
-- **Claude Code persona** — every cw-session (the default non-`--raw` `cw ss` flavor) runs *as* a Bro too (`--bro <name>`, defaulting to the project default bro): the Bro's persona and Scripts prompts are injected, its scripts mount as canonical `@::` tools, Claude retains its native third-party skill mechanism, and the bro's claude-harness-filtered toolset (`claude_persona_mcp_servers()` via `mcp-server persona:<name> --http`) mounts alongside Claude's remaining built-in tools — components gated to the bro harness (the dev toolset) stay out, and selected withdrawals feed Claude's `--disallowed-tools`.
+- **Claude Code persona** — every cw-session (the default non-`--raw` `cw ss` flavor) runs *as* a Bro too (`--bro <name>`, defaulting to the project default bro): the Bro's persona and Scripts prompts are injected, its scripts mount as canonical `@::` tools, Claude retains its native third-party skill mechanism, and the bro's claude-harness-filtered toolset (`claude_persona_mcp_servers()` via `mcp-server persona:<name> --http`) mounts alongside Claude's remaining built-in tools — components gated to the bro harness (the dev toolset) stay out, and selected blocks feed Claude's `--disallowed-tools`.
 - **`bro run` / `bro chat`** — canonical one-shot and interactive launchers; `ask` and `call` are aliases. See `bro/launch/CLAUDE.md`.
 
 A given Bro need not support every surface. A consumer can invoke one from its own application, expose another only through `bro run`, and use a third as a `cw ss` persona without changing the Bro abstraction.

@@ -583,33 +583,48 @@ class TestToolVariables:
       FunctionTool(helper)
 
 
-class TestToolWithdrawal:
+class TestToolLayer:
   @pytest.mark.parametrize(
-    ('tool_names', 'message'),
+    ('tool_names', 'error_type', 'message'),
     [
-      ((), 'at least one tool'),
-      (('',), 'non-empty strings'),
-      (('Read', 'Read'), 'duplicate names'),
+      ((), ValueError, 'must mount a server or block'),
+      (('',), TypeError, 'non-empty strings'),
+      (('Read', 'Read'), ValueError, 'duplicate names'),
     ],
   )
-  def test_rejects_invalid_declarations(self, tool_names, message):
-    with pytest.raises(ValueError, match=message):
-      mcp_mod.withhold(*tool_names)
+  def test_block_rejects_invalid_declarations(self, tool_names, error_type, message):
+    with pytest.raises(error_type, match=message):
+      mcp_mod.block(*tool_names)
+
+  def test_mount_selects_from_one_toolset_type(self):
+    toolset = mcp_mod.Toolset('layer')
+
+    @toolset.tool('read')
+    def read() -> str:
+      return 'read'
+
+    full = mcp_mod.mount(toolset)
+    selected = mcp_mod.mount(toolset, 'read')
+
+    assert isinstance(full, mcp_mod.ToolLayer)
+    assert isinstance(selected, mcp_mod.ToolLayer)
+    assert len(full.server_specs) == 1
+    assert len(selected.server_specs) == 1
 
 
 class TestToolsetRendering:
   def _toolset(self) -> mcp_mod.Toolset:
-    spec = mcp_mod.Toolset('pack')
+    toolset = mcp_mod.Toolset('pack')
 
-    @spec.tool('read stuff{{when #tools contains manual}}; rules in manual{{end}}')
+    @toolset.tool('read stuff{{when #tools contains manual}}; rules in manual{{end}}')
     def read(x: str) -> str:
       return x
 
-    @spec.tool('the shared rules')
+    @toolset.tool('the shared rules')
     def manual() -> str:
       return 'rules'
 
-    return spec
+    return toolset
 
   @pytest.mark.asyncio
   async def test_full_build_keeps_the_cross_reference(self):
@@ -626,14 +641,14 @@ class TestToolsetRendering:
     assert server.tool_universe == ('read', 'manual')
 
   def test_reference_outside_the_roster_raises_at_build(self):
-    spec = mcp_mod.Toolset('pack')
+    toolset = mcp_mod.Toolset('pack')
 
-    @spec.tool('read stuff{{when #tools contains manaul}}; typo{{end}}')
+    @toolset.tool('read stuff{{when #tools contains manaul}}; typo{{end}}')
     def read(x: str) -> str:
       return x
 
     with pytest.raises(ValueError, match='outside the set universe'):
-      spec.build()
+      toolset.build()
 
 
 class TestSelect:

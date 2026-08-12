@@ -5,7 +5,7 @@ from abc import ABC
 from collections.abc import Callable
 from pathlib import Path
 from types import TracebackType
-from typing import Any, ClassVar, Optional, Self, assert_never
+from typing import Any, ClassVar, Optional, Self
 
 import bro.llm.llms.chat_gpt as llm_llms_chat_gpt
 import bro.llm.mcp as llm_mcp
@@ -509,7 +509,7 @@ def _unattended_claude_session() -> bool:
 def feature(name: str) -> Condition:
   """membership condition on the bro's `#features` vocabulary — the code
   spelling of the `#features contains <name>` directive, for gating
-  `tools` / `data_sources` entries: `when(feature('brog'), brog_mcp.spec())`."""
+  `tools` / `data_sources` entries: `when(feature('brog'), mount(brog_mcp.toolset))`."""
   return var('features').contains(name)
 
 
@@ -540,25 +540,20 @@ def _component_optional_secrets(component: llm_mcp.MCPServerSpec | DataSource) -
   return set(component.optional_secrets)
 
 
-def _partition_tools(
-  declarations: list[llm_mcp.ToolSpec], harness: llm_mcp.Harness
+def _fold_tool_layers(
+  layers: list[llm_mcp.ToolLayer], harness: llm_mcp.Harness
 ) -> tuple[list[llm_mcp.MCPServerSpec], tuple[str, ...]]:
   server_specs: list[llm_mcp.MCPServerSpec] = []
-  withheld_names: list[str] = []
-  for declaration in declarations:
-    match declaration:
-      case llm_mcp.MCPServerSpec():
-        server_specs.append(declaration)
-      case llm_mcp.ToolWithdrawal(tool_names=tool_names):
-        if harness != 'claude':
-          raise ValueError(
-            f'cannot withhold native tools {tool_names!r} from the {harness!r} harness; '
-            'it serves only the tools the bro declares'
-          )
-        withheld_names.extend(tool_names)
-      case _ as unreachable:
-        assert_never(unreachable)
-  return server_specs, tuple(dict.fromkeys(withheld_names))
+  blocked_names: list[str] = []
+  for layer in layers:
+    server_specs.extend(layer.server_specs)
+    if len(layer.blocked_native_tool_names) > 0 and harness != 'claude':
+      raise ValueError(
+        f'cannot block native tools {layer.blocked_native_tool_names!r} on the {harness!r} '
+        'harness; it serves only the tools the bro declares'
+      )
+    blocked_names.extend(layer.blocked_native_tool_names)
+  return server_specs, tuple(dict.fromkeys(blocked_names))
 
 
 class BaseBro(ABC):
@@ -568,10 +563,11 @@ class BaseBro(ABC):
   # entries may be wrapped with `bro.base.condition.when(...)` / grouped with
   # `iff(...)` to gate them on the assembling surface's facts (`#harness`,
   # `#creds`); a wrapped entry whose condition does not hold is omitted before
-  # the declaration is applied. `tools` adds MCP server specs or withdraws
-  # harness-native tools; data sources remain a separate read-only contract.
+  # the declaration is applied. each `tools` layer mounts server specs, blocks
+  # harness-native tools, or does both; data sources remain a separate read-only
+  # contract.
   data_sources: ClassVar[list[Entry[DataSource]]] = []
-  tools: ClassVar[list[Entry[llm_mcp.ToolSpec]]] = []
+  tools: ClassVar[list[Entry[llm_mcp.ToolLayer]]] = []
   # named optional capabilities: feature name → the gate deciding whether the
   # feature is on — a `Condition` over the environment's resolvable credentials
   # (`creds.contains('brog')`), or a plain bool constant as in `when` (True
@@ -617,7 +613,7 @@ class BaseBro(ABC):
   _llm: Optional[LLM] = None
 
   def __init__(self, system_prompt: Optional[str] = None):
-    tool_entries: list[Entry[llm_mcp.ToolSpec]] = []
+    tool_entries: list[Entry[llm_mcp.ToolLayer]] = []
     data_source_entries: list[Entry[DataSource]] = []
     prompt_parts: list[str] = []
     extra_secret_names: list[str] = []
@@ -665,7 +661,7 @@ class BaseBro(ABC):
     selected_tools = llm_mcp.select(
       tool_entries, harness='bro', creds=surface_creds, extra=self._feature_vocabulary
     )
-    self._mcp_specs, _ = _partition_tools(selected_tools, 'bro')
+    self._mcp_specs, _ = _fold_tool_layers(selected_tools, 'bro')
     self._data_sources: list[DataSource] = llm_mcp.select(
       data_source_entries, harness='bro', creds=surface_creds, extra=self._feature_vocabulary
     )
@@ -794,18 +790,18 @@ class BaseBro(ABC):
   def _selected_tools_for(
     self, harness: llm_mcp.Harness
   ) -> tuple[list[llm_mcp.MCPServerSpec], tuple[str, ...]]:
-    selected: list[llm_mcp.ToolSpec] = llm_mcp.select(
+    selected: list[llm_mcp.ToolLayer] = llm_mcp.select(
       self._tool_entries,
       harness=harness,
       creds=credentials.known_names(),
       extra=self._feature_vocabulary,
     )
-    return _partition_tools(selected, harness)
+    return _fold_tool_layers(selected, harness)
 
-  def withheld_tool_names(self, harness: llm_mcp.Harness) -> tuple[str, ...]:
-    """harness-native tool names removed by this bro's selected declarations."""
-    _, withheld_names = self._selected_tools_for(harness)
-    return withheld_names
+  def blocked_tool_names(self, harness: llm_mcp.Harness) -> tuple[str, ...]:
+    """harness-native tool names blocked by this bro's selected layers."""
+    _, blocked_names = self._selected_tools_for(harness)
+    return blocked_names
 
   def _components_for(
     self, harness: llm_mcp.Harness

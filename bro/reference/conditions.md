@@ -48,7 +48,7 @@ Three declaration-time guards close off the Python operators that cannot build d
 
 Consumers:
 
-- a bro's `tools` / `data_sources` entries may be `when`-wrapped or `iff`-grouped; `BaseBro.__init__` selects at harness `bro`, so an unmatched declaration is never applied. E.g. the dev toolset mounts only on the bro harness (claude has built-in file/shell tools): `tools = [when(harness == 'bro', dev_mcp.spec())]`. The same wrapper gates withdrawals: `tools = [when(harness == 'claude', withhold('Read', 'Write'))]`; selecting a withdrawal for the bro harness raises because it has no native tools to remove.
+- a bro's `tools` / `data_sources` entries may be `when`-wrapped or `iff`-grouped; `BaseBro.__init__` selects at harness `bro`, so an unmatched declaration is never applied. E.g. the dev toolset mounts only on the bro harness (claude has built-in file/shell tools): `tools = [when(harness == 'bro', mount(dev_mcp.toolset))]`. The same wrapper gates native blocks: `tools = [when(harness == 'claude', block('Read', 'Write'))]`; selecting a block for the bro harness raises because it has no native tools to remove.
 
 ## Facts
 

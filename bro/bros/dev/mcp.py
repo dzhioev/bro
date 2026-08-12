@@ -35,14 +35,7 @@ DEFAULT_WAIT_SECONDS = 10
 
 _REFERENCE_PATH = Path(__file__).parent / 'REFERENCE.md'
 
-# the dev server definition, conventionally reached as `mcp.spec` (`from
-# bro.bros.dev import mcp`): tools register below via `@spec.tool`;
-# `spec(*tool_names)` is the declarative manifest bros hold (all tools when
-# empty, validated at declaration time); `build()` runs in the serving process,
-# constructing the per-server state — the background-job registry — once, and
-# closing it (killing whatever jobs are still running) when the session ends.
-# no secrets — every tool is local file/shell work.
-spec = Toolset('dev', state=jobs.Registry, close=jobs.Registry.close)
+toolset = Toolset('dev', state=jobs.Registry, close=jobs.Registry.close)
 
 
 def _require_regular_file(path: Path) -> None:
@@ -57,7 +50,7 @@ def _require_regular_file(path: Path) -> None:
     )
 
 
-@spec.tool(
+@toolset.tool(
   'return the dev tools reference: shared rules for the output `limit`, the '
   'skipped-content markers, the fat-finger clamp, and any other shared '
   'behaviour. call once at the start of a session before relying on the '
@@ -67,7 +60,7 @@ def read_reference() -> str:
   return _REFERENCE_PATH.read_text()
 
 
-@spec.tool(
+@toolset.tool(
   'read a file and return its contents prefixed with 1-based line numbers '
   '(cat -n style). offset is the 0-based line index to start from. '
   'limit: see read_reference for the shared output cap policy.'
@@ -78,7 +71,7 @@ def read_file(file_path: str, offset: int = 0, limit: int = DEFAULT_LIMIT) -> st
   return numbered_window(path.read_text(), offset, limit)
 
 
-@spec.tool(
+@toolset.tool(
   'overwrite the file at file_path with content. parent directories are created if '
   'missing. use for new files or full rewrites; use edit_file for incremental changes.'
 )
@@ -90,7 +83,7 @@ def write_file(file_path: str, content: str) -> str:
   return f'wrote {len(content)} chars to {file_path}'
 
 
-@spec.tool(
+@toolset.tool(
   'replace old_string with new_string in the file. by default requires old_string '
   'to be unique (errors otherwise). with replace_all=True, replaces every occurrence. '
   'errors if old_string is not found.'
@@ -111,7 +104,7 @@ def edit_file(file_path: str, old_string: str, new_string: str, replace_all: boo
   return f'replaced {count} occurrence(s) of old_string in {file_path}'
 
 
-@spec.tool(
+@toolset.tool(
   'run a bash command, capture stdout and stderr, and return exit code + combined '
   'output. bash keeps the tail (shell diagnostics live at the end). '
   '{{iff #tools contains read_reference}}limit and timeout_seconds: see read_reference '
@@ -143,7 +136,7 @@ async def bash(
   )
 
 
-@spec.tool(
+@toolset.tool(
   'recursively search for pattern (extended regex) in files under path. glob filters '
   'which files to match (e.g. "*.py"). case_insensitive lowers the comparison. '
   'limit and timeout_seconds: see read_reference for the shared output cap and '
@@ -180,7 +173,7 @@ async def grep(
   return apply_limit(process.stdout, limit, keep='head')
 
 
-@spec.tool(
+@toolset.tool(
   'list files matching the glob pattern (e.g. "**/*.py", "src/*.ts"). path defaults '
   'to cwd. results sorted by mtime, newest first. limit: see read_reference for the '
   'shared output cap policy.'
@@ -195,7 +188,7 @@ def glob(pattern: str, path: Optional[str] = None, limit: int = DEFAULT_LIMIT) -
   return apply_limit('\n'.join(str(p) for p in matches), limit, keep='head')
 
 
-@spec.tool(
+@toolset.tool(
   'start command as a background job (bash -c, stdout+stderr merged into one '
   'chronological stream, spooled continuously so the process never blocks on unread '
   'output) and return its job id immediately. No timeout — the job runs until it '
@@ -207,7 +200,7 @@ def job(context: Context[jobs.Registry], command: str) -> str:
   return f'started {started.id} (pid {started.process.pid})'
 
 
-@spec.tool(
+@toolset.tool(
   'read new output from a background job, oldest-first from the per-job cursor; '
   'every return opens with a state line (running / exited (code N)). Blocks up to '
   'wait_seconds when nothing is pending (0 = non-blocking poll); tail=true waits '
@@ -234,7 +227,7 @@ async def watch(
     raise
 
 
-@spec.tool(
+@toolset.tool(
   'terminate a background job: SIGTERM its whole process group, escalating to '
   'SIGKILL after a short grace. The record and spooled output stay readable via '
   'watch for a final collect. Reports when the job had already exited.'

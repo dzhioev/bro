@@ -62,21 +62,21 @@ class TestCwSessionLaunch:
     assert launch.system_prompt == 'append text'
     assert '--foo' in argv
 
-  def test_selected_tool_withdrawals_reach_disallowed_tools(self, monkeypatch):
+  def test_selected_tool_blocks_reach_disallowed_tools(self, monkeypatch):
     from bro.base.condition import when
     from bro.bro import BaseBro
-    from bro.llm.mcp import harness, withhold
+    from bro.llm.mcp import block, harness
 
-    class WithholdingBro(BaseBro):
-      name = 'withholding'
+    class BlockingBro(BaseBro):
+      name = 'blocking'
       description = 'd'
-      tools: ClassVar = [when(harness == 'claude', withhold('Read', 'Write', 'Bash'))]
+      tools: ClassVar = [when(harness == 'claude', block('Read', 'Write', 'Bash'))]
 
       def __init__(self):
         super().__init__(system_prompt='')
 
-    monkeypatch.setattr('bro.registry.create_bro', lambda name: WithholdingBro())
-    argv = _cw_session_launch(_spec(bro='withholding'), claude_args=[]).argv
+    monkeypatch.setattr('bro.registry.create_bro', lambda name: BlockingBro())
+    argv = _cw_session_launch(_spec(bro='blocking'), claude_args=[]).argv
     assert argv[argv.index('--disallowed-tools') + 1] == 'mcp__claude_ai_*,Read,Write,Bash'
 
   def test_fast_mode_lands_in_settings(self):

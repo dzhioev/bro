@@ -6,13 +6,14 @@ from pydantic import ValidationError
 
 from bro.base import credentials
 from bro.base.text_window import DEFAULT_LIMIT, MAX_LIMIT
-from bro.brog.mcp import spec
+from bro.brog.mcp import toolset
 from bro.brog.model import Comment, Project, Task
+from bro.llm.mcp import mount
 
 # tools are built once against a shared mock System (schema derivation is not
 # free); the autouse fixture resets the mock between tests.
 _SYSTEM = MagicMock()
-_TOOLS = {t.name: t for t in spec.tools(_SYSTEM)}
+_TOOLS = {t.name: t for t in toolset.tools(_SYSTEM)}
 
 
 @pytest.fixture(autouse=True)
@@ -41,7 +42,7 @@ def _task(**overrides) -> Task:
 
 class TestRoster:
   def test_tool_names(self):
-    assert set(spec.tool_names) == {
+    assert set(toolset.tool_names) == {
       'create_task',
       'get_task',
       'read_task',
@@ -54,10 +55,10 @@ class TestRoster:
     }
 
   def test_static_secrets(self):
-    assert spec().needed_secrets == ('brog',)
+    assert mount(toolset).server_specs[0].needed_secrets == ('brog',)
 
   def test_scoped_subset_keeps_the_static_secrets(self):
-    assert spec('get_task', 'read_task').needed_secrets == ('brog',)
+    assert mount(toolset, 'get_task', 'read_task').server_specs[0].needed_secrets == ('brog',)
 
   def test_build(self, monkeypatch):
     monkeypatch.setattr(
@@ -65,7 +66,7 @@ class TestRoster:
       'get_json',
       lambda name: {'backend': 'github', 'token': 't', 'repo': 'owner/repository'},
     )
-    server = spec().build()
+    server = toolset.build()
     assert server.namespace == 'brog'
     assert server.needed_secrets == ('brog',)
 
