@@ -34,7 +34,7 @@ task backends, and toolsets through the documented entry-point groups.
 class BroDev(Dev):
   name = 'bro-dev'
   description = 'bro framework development: task → implement → verify → land'
-  llm_spec = llm_llms_chat_gpt.LLMSpec(model='gpt-5.6', reasoning_effort='high')
+  llm_spec = llm_llms_chat_gpt.LLMSpec(model='gpt-5.6-sol', reasoning_effort='high')
   features = {'brog': True}
   extra_secrets = ('github',)
   data_sources = [references.environment, references.template, references.conditions]

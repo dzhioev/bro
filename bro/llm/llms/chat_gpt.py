@@ -41,17 +41,18 @@ _VALID_SERVICE_TIERS: frozenset[str] = frozenset(get_args(ServiceTier))
 # local mirror of the Literal inside openai's `ReasoningEffort` (which the SDK
 # wraps in Optional); spelled out so spec validation needs no openai import. a
 # sync test asserts the values against the SDK's type.
-ReasoningEffort = Literal['none', 'minimal', 'low', 'medium', 'high', 'xhigh']
+ReasoningEffort = Literal['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 _VALID_REASONING_EFFORTS: frozenset[str] = frozenset(get_args(ReasoningEffort))
 
+DEFAULT_MODEL = 'gpt-5.6-terra'
+
 # neutral effort level (`LLMSpec.with_effort`) → Responses API reasoning_effort.
-# the shared levels map through; max (above the API's scale) caps at its top.
 _EFFORT_TO_REASONING_EFFORT: dict[str, ReasoningEffort] = {
   'low': 'low',
   'medium': 'medium',
   'high': 'high',
   'xhigh': 'xhigh',
-  'max': 'xhigh',
+  'max': 'max',
 }
 
 
@@ -76,7 +77,7 @@ class LLMSpec(llm_llm.LLMSpec):
 
   TYPE: ClassVar[str] = 'chat_gpt'
 
-  model: str = 'gpt-5'
+  model: str = DEFAULT_MODEL
   reasoning_effort: Optional[ReasoningEffort] = None
   service_tier: Optional[ServiceTier] = None
   compact_threshold: Optional[int] = None
@@ -296,7 +297,7 @@ def _cached_tokens(response_usage: Optional[object]) -> int:
 class ChatGPT(llm_llm.LLM):
   @staticmethod
   def create(
-    model: str = 'gpt-5',
+    model: str = DEFAULT_MODEL,
     mcp_servers: Optional[list[MCPServer]] = None,
     reasoning_effort: Optional[ReasoningEffort] = None,
     service_tier: Optional[str] = None,
@@ -321,7 +322,7 @@ class ChatGPT(llm_llm.LLM):
   def __init__(
     self,
     api_key: str,
-    model: str = 'gpt-5',
+    model: str = DEFAULT_MODEL,
     mcp_servers: Optional[list[MCPServer]] = None,
     reasoning_effort: Optional[ReasoningEffort] = None,
     service_tier: Optional[str] = None,

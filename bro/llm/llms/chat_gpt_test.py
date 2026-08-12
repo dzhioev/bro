@@ -352,7 +352,7 @@ class TestSendTrackerEmission:
     assert len(llm_calls) == 1
     _, body, extras = llm_calls[0]
     assert body['response'] == {'id': 'resp_xyz', 'output': ['…']}
-    assert body['request']['model'] == 'gpt-5'
+    assert body['request']['model'] == gpt.model
     # request kwargs round-tripped, including the input list passed to the API.
     assert body['request']['input'] == captured[0]['input']
     assert extras == {'turn_index': 0, 'call_index': 1, 'response_id': 'resp_xyz'}
@@ -604,7 +604,7 @@ class TestContextManagementKwargs:
 class TestLLMSpec:
   def test_default_spec_has_no_optional_knobs(self):
     spec = LLMSpec()
-    assert spec.model == 'gpt-5'
+    assert spec.model == 'gpt-5.6-terra'
     assert spec.reasoning_effort is None
     assert spec.service_tier is None
     assert spec.compact_threshold is None
@@ -634,12 +634,9 @@ class TestLLMSpec:
     assert fast.reasoning_effort == 'medium'
     assert fast.compact_threshold == 50_000
 
-  @pytest.mark.parametrize('level', ['low', 'medium', 'high', 'xhigh'])
+  @pytest.mark.parametrize('level', ['low', 'medium', 'high', 'xhigh', 'max'])
   def test_with_effort_maps_shared_levels_through(self, level: str):
     assert LLMSpec().with_effort(level).reasoning_effort == level
-
-  def test_with_effort_caps_max_at_the_provider_top(self):
-    assert LLMSpec().with_effort('max').reasoning_effort == 'xhigh'
 
   def test_with_effort_rejects_a_level_outside_the_neutral_vocabulary(self):
     # 'minimal' is a valid reasoning_effort but not a neutral level — with_effort

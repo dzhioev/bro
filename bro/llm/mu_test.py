@@ -45,6 +45,24 @@ def test_call_returns_parsed_result_without_a_caller_loop(monkeypatch):
   assert calls[0]['text_format'] is _Answer
 
 
+def test_call_defaults_to_the_shared_model(monkeypatch):
+  calls = _install_fake_client(monkeypatch, _Answer(answer='42'))
+
+  mu('what is it?', _Answer)
+
+  assert calls[0]['model'] == mu_module.DEFAULT_MODEL
+
+
+@pytest.mark.asyncio
+async def test_explicit_model_overrides_the_default(monkeypatch):
+  calls = _install_fake_client(monkeypatch, _Answer(answer='42'))
+
+  await mu.aio('what is it?', _Answer, model='gpt-5.6-luna', reasoning_effort='low')
+
+  assert calls[0]['model'] == 'gpt-5.6-luna'
+  assert calls[0]['reasoning'] == {'effort': 'low'}
+
+
 @pytest.mark.asyncio
 async def test_aio_returns_parsed_result(monkeypatch):
   _install_fake_client(monkeypatch, _Answer(answer='42'))

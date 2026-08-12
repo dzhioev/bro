@@ -408,9 +408,10 @@ class TestDispatcher:
     monkeypatch.setattr(script_store.credentials, 'available', lambda name: True)
     captured = {}
 
-    async def fake_mu(prompt, result_class, *contents, reasoning_effort=None):
+    async def fake_mu(prompt, result_class, *contents, model=None, reasoning_effort=None):
       captured['prompt'] = prompt
       captured['request'] = contents[0].json
+      captured['model'] = model
       captured['reasoning_effort'] = reasoning_effort
       return result_class.model_validate(
         {
@@ -430,6 +431,7 @@ class TestDispatcher:
       'script: @::do-work\n\nprocedure body\n\n# Arguments\n\ntask: T-1\nnotes: keep the merge'
     )
     assert 'unambiguously applies' in captured['prompt']
+    assert captured['model'] == 'gpt-5.6-luna'
     assert captured['reasoning_effort'] == 'low'
     assert captured['request']['command'] == 'work on T-1'
     assert captured['request']['scripts'] == [
@@ -458,7 +460,7 @@ class TestDispatcher:
     )
     monkeypatch.setattr(script_store.credentials, 'available', lambda name: True)
 
-    async def fake_mu(prompt, result_class, *contents, reasoning_effort=None):
+    async def fake_mu(prompt, result_class, *contents, model=None, reasoning_effort=None):
       return result_class.model_validate({'script': '@::do-work', 'arguments': [], 'error': None})
 
     monkeypatch.setattr(mu_module, 'mu', types.SimpleNamespace(aio=fake_mu))
@@ -476,7 +478,7 @@ class TestDispatcher:
     package = fake_packages('_dispatcher_error', {'do-work': _script()})
     monkeypatch.setattr(script_store.credentials, 'available', lambda name: True)
 
-    async def fake_mu(prompt, result_class, *contents, reasoning_effort=None):
+    async def fake_mu(prompt, result_class, *contents, model=None, reasoning_effort=None):
       return result_class.model_validate(
         {'script': None, 'arguments': None, 'error': 'the command matches no script'}
       )
@@ -527,7 +529,7 @@ class TestDispatcher:
     )
     monkeypatch.setattr(script_store.credentials, 'available', lambda name: True)
 
-    async def fake_mu(prompt, result_class, *contents, reasoning_effort=None):
+    async def fake_mu(prompt, result_class, *contents, model=None, reasoning_effort=None):
       return result_class.model_validate({**interpretation, 'error': None})
 
     monkeypatch.setattr(mu_module, 'mu', types.SimpleNamespace(aio=fake_mu))
@@ -541,7 +543,7 @@ class TestDispatcher:
     package = fake_packages('_dispatcher_empty_error', {'do-work': _script()})
     monkeypatch.setattr(script_store.credentials, 'available', lambda name: True)
 
-    async def fake_mu(prompt, result_class, *contents, reasoning_effort=None):
+    async def fake_mu(prompt, result_class, *contents, model=None, reasoning_effort=None):
       return result_class.model_validate({'script': None, 'arguments': None, 'error': '   '})
 
     monkeypatch.setattr(mu_module, 'mu', types.SimpleNamespace(aio=fake_mu))
