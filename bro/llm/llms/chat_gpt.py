@@ -44,6 +44,8 @@ _VALID_SERVICE_TIERS: frozenset[str] = frozenset(get_args(ServiceTier))
 ReasoningEffort = Literal['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 _VALID_REASONING_EFFORTS: frozenset[str] = frozenset(get_args(ReasoningEffort))
 
+DEFAULT_MODEL = 'gpt-5.6-terra'
+
 # neutral effort level (`LLMSpec.with_effort`) → Responses API reasoning_effort.
 _EFFORT_TO_REASONING_EFFORT: dict[str, ReasoningEffort] = {
   'low': 'low',
@@ -75,7 +77,7 @@ class LLMSpec(llm_llm.LLMSpec):
 
   TYPE: ClassVar[str] = 'chat_gpt'
 
-  model: str = 'gpt-5.6-terra'
+  model: str = DEFAULT_MODEL
   reasoning_effort: Optional[ReasoningEffort] = None
   service_tier: Optional[ServiceTier] = None
   compact_threshold: Optional[int] = None
@@ -295,7 +297,7 @@ def _cached_tokens(response_usage: Optional[object]) -> int:
 class ChatGPT(llm_llm.LLM):
   @staticmethod
   def create(
-    model: str = 'gpt-5.6-terra',
+    model: str = DEFAULT_MODEL,
     mcp_servers: Optional[list[MCPServer]] = None,
     reasoning_effort: Optional[ReasoningEffort] = None,
     service_tier: Optional[str] = None,
@@ -320,7 +322,7 @@ class ChatGPT(llm_llm.LLM):
   def __init__(
     self,
     api_key: str,
-    model: str = 'gpt-5.6-terra',
+    model: str = DEFAULT_MODEL,
     mcp_servers: Optional[list[MCPServer]] = None,
     reasoning_effort: Optional[ReasoningEffort] = None,
     service_tier: Optional[str] = None,
