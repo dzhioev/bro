@@ -337,6 +337,11 @@ def parse_footer(commit_msg: str) -> Optional[Footer]:
   return Footer(agents=agents, delta=delta)
 
 
+def strip_footer(commit_msg: str) -> str:
+  """the message without its footer line."""
+  return _FOOTER_RE.sub('', commit_msg).rstrip()
+
+
 # --- CLI -----------------------------------------------------------------------
 
 

@@ -2,7 +2,7 @@
 name: run-pr
 description: This script should be used when the user signals that the worktree's changes are ready for review and a PR should be opened — "open a PR", "@:run pr:@", "send for review", "PR it", "ship it", "ready for review", "finalize". Covers commit hygiene (docs sync, policy audit, commit splitting), the repo's commit-message conventions, rebases onto the base branch (master by default), opens the PR via `gh pr create`, then launches the `poll-pr` review watcher to handle review comments, failing CI checks, merge conflicts, and APPROVED events. On approval, chains into `@::land` for the merge step. Also the re-entry point for a PR that is already open — "resume PR <pr-url-or-number>", "resume the PR", "pick up the review" — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
 parameters: {"base?": "base branch for the pull request instead of master", "pr?": "existing pull request URL or number to resume"}
-version: 4.3.0
+version: 4.3.1
 ---
 
 # run-pr
@@ -256,7 +256,7 @@ Handle pending feedback as one batch: address every comment that has arrived, th
 
 **`review` with `state: "APPROVED"` and empty `comments`**:
 
-Unconditional approval — the PR is ready to merge. Chain into the merge, and batch it: stop the watcher ({{iff #harness = bro}}`dev::kill(job_id)`{{else}}`TaskStop`{{end}}) and call `@::land` **in the same response**, then follow it (its merge step is a single `land-pr` command).
+Unconditional approval — the PR is ready to merge. Chain into the merge, and batch it: stop the watcher ({{iff #harness = bro}}`dev::kill(job_id)`{{else}}`TaskStop`{{end}}) and call `@::land` **in the same response**, then follow it (it reads the branch to decide what master should carry, then merges with a single `land-pr` command).
 
 **`review` with `state: "COMMENTED"` or `"DISMISSED"`**: informational; the actionable feedback (if any) is in this event's `comments` array or arrives via accompanying `comment` events.
 

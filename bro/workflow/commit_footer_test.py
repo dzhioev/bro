@@ -12,7 +12,6 @@ from bro.workflow.commit_footer import (
   _repo_root,
   group_footers,
   install_hooks,
-  main,
   record_session_spend,
 )
 
@@ -218,51 +217,32 @@ class TestAppend:
     assert state.staged == {}
 
 
-def _repo_with_commits(tmp_path, messages) -> list[str]:
-  _git('init', '-q', '-b', 'master', str(tmp_path))
-  shas = []
-  for index, message in enumerate(messages):
-    (tmp_path / f'f{index}.txt').write_text('x\n')
-    _git('-C', str(tmp_path), 'add', f'f{index}.txt')
-    _git('-C', str(tmp_path), 'commit', '-qm', message)
-    shas.append(
-      subprocess.check_output(['git', '-C', str(tmp_path), 'rev-parse', 'HEAD'], text=True).strip()
-    )
-  return shas
-
-
-class TestSquashMode:
-  def test_unaccounted_range_emits_nothing(self, tmp_path, monkeypatch, capsys, caplog):
-    _repo_with_commits(tmp_path, ['seed', 'one'])
-    monkeypatch.chdir(tmp_path)
-    assert main(['commit-footer', '--squash', 'HEAD~1..HEAD']) == 0
-    assert capsys.readouterr().out == ''
-    assert caplog.text == ''
-
-  def test_footered_range_aggregates_and_flags_the_footerless(
-    self, tmp_path, monkeypatch, capsys, caplog
-  ):
-    footer = usage.format_footer(['Claude Code 2.1'], {'Opus 4.8': C(output=9)})
-    _repo_with_commits(tmp_path, ['seed', 'one', f'two\n\n{footer}'])
-    monkeypatch.chdir(tmp_path)
-    assert main(['commit-footer', '--squash', 'HEAD~2..HEAD']) == 0
-    assert '↓9' in capsys.readouterr().out
-    assert 'without a parseable footer' in caplog.text
-    assert 'no session usage' in caplog.text
-
-
 class TestGroupFooters:
+  def _repo_with_commits(self, tmp_path, messages) -> list[str]:
+    _git('init', '-q', '-b', 'master', str(tmp_path))
+    shas = []
+    for index, message in enumerate(messages):
+      (tmp_path / f'f{index}.txt').write_text('x\n')
+      _git('-C', str(tmp_path), 'add', f'f{index}.txt')
+      _git('-C', str(tmp_path), 'commit', '-qm', message)
+      shas.append(
+        subprocess.check_output(
+          ['git', '-C', str(tmp_path), 'rev-parse', 'HEAD'], text=True
+        ).strip()
+      )
+    return shas
+
   def _footer(self, output):
     return usage.format_footer(['Claude Code 2.1'], {'Opus 4.8': C(output=output)})
 
   def test_unaccounted_commits_aggregate_to_nothing(self, tmp_path, monkeypatch, caplog):
-    shas = _repo_with_commits(tmp_path, ['seed', 'one', 'two'])
+    shas = self._repo_with_commits(tmp_path, ['seed', 'one', 'two'])
     monkeypatch.chdir(tmp_path)
     assert group_footers([shas[1:2], shas[2:3]]) == ['', '']
     assert caplog.text == ''
 
   def test_aggregates_per_group_and_flags_the_footerless(self, tmp_path, monkeypatch, caplog):
-    shas = _repo_with_commits(
+    shas = self._repo_with_commits(
       tmp_path, ['seed', f'one\n\n{self._footer(9)}', 'two', f'three\n\n{self._footer(4)}']
     )
     monkeypatch.chdir(tmp_path)
@@ -273,14 +253,14 @@ class TestGroupFooters:
     assert 'no session usage' in caplog.text
 
   def test_a_group_without_accounting_carries_no_footer(self, tmp_path, monkeypatch):
-    shas = _repo_with_commits(tmp_path, ['seed', f'one\n\n{self._footer(9)}', 'two'])
+    shas = self._repo_with_commits(tmp_path, ['seed', f'one\n\n{self._footer(9)}', 'two'])
     monkeypatch.chdir(tmp_path)
     assert group_footers([[shas[1]], [shas[2]]])[1] == ''
 
   def test_grouping_preserves_the_total(self, tmp_path, monkeypatch):
     # the accounting contract: however the branch is grouped, the landed footers
     # sum to what the single squash would have carried
-    shas = _repo_with_commits(
+    shas = self._repo_with_commits(
       tmp_path,
       [
         'seed',
@@ -302,7 +282,7 @@ class TestGroupFooters:
     assert _parsed(split[0]).agents == ['Claude Code 2.1']
 
   def test_the_remainder_rides_the_last_accounted_group(self, tmp_path, monkeypatch):
-    shas = _repo_with_commits(tmp_path, ['seed', f'one\n\n{self._footer(9)}', 'two'])
+    shas = self._repo_with_commits(tmp_path, ['seed', f'one\n\n{self._footer(9)}', 'two'])
     monkeypatch.chdir(tmp_path)
     session = usage.Usage(agent='bro//dev', per_model={OPUS: C(output=20)})
     monkeypatch.setattr(usage, 'current_usage', lambda: session)
@@ -312,7 +292,7 @@ class TestGroupFooters:
 
   def test_recording_the_session_spend_zeroes_the_next_remainder(self, tmp_path, monkeypatch):
     # a re-run must not credit the landing session's spend to a second commit
-    shas = _repo_with_commits(tmp_path, ['seed', f'one\n\n{self._footer(9)}'])
+    shas = self._repo_with_commits(tmp_path, ['seed', f'one\n\n{self._footer(9)}'])
     monkeypatch.chdir(tmp_path)
     session = usage.Usage(agent='bro//dev', per_model={OPUS: C(output=20)})
     monkeypatch.setattr(usage, 'current_usage', lambda: session)
