@@ -169,11 +169,10 @@ def test_text_renderer_renders_tool_result_as_bare_canonical_name():
   assert out.getvalue() == '[12:34:56] bro ← flow::list_tasks\n'
 
 
-def test_text_renderer_truncates_long_interim_message():
+def test_text_renderer_renders_interim_message_as_a_reply_line():
   renderer, out = _make_text_renderer()
-  renderer.on_assistant_message('x' * 500, terminal=False)
-  # body capped at _MESSAGE_LIMIT (240); the line ends with the overflow marker
-  assert '<260 more chars>' in out.getvalue()
+  renderer.on_assistant_message(f'on it — {"x" * 500}', terminal=False)
+  assert out.getvalue() == f'[12:34:56] bro: on it — {"x" * 500}\n'
 
 
 def test_text_renderer_skips_terminal_message():
@@ -702,16 +701,20 @@ def test_initial_slash_invocation_passes_through_verbatim(monkeypatch):
 
 
 class _FakeApp:
-  """captures `append_thinking` / `append_trace_line` calls; stands in for
-  `ChatApp` in TUIRenderer tests so we don't have to spin up a Textual bro.runtime."""
+  """captures the `append_*` calls; stands in for `ChatApp` in TUIRenderer
+  tests so we don't have to spin up a Textual bro.runtime."""
 
   def __init__(self):
     self.posted: list[str] = []
     self.thinking: list[str] = []
+    self.messages: list[str] = []
     self.tool_events: list[str] = []
 
   def call_from_thread(self, function, *args, **kwargs):
     function(*args, **kwargs)
+
+  def append_bro_message(self, text: str) -> None:
+    self.messages.append(text)
 
   def append_thinking(self, text: str) -> None:
     self.thinking.append(text)
@@ -768,7 +771,7 @@ async def test_tui_drag_inside_markdown_bubble_selects_rendered_text(monkeypatch
   monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
   app = ChatApp(RecordBro(), None)
   async with app.run_test(size=(100, 40)) as pilot:
-    app._append_bro_message('a **bold** reply')
+    app.append_bro_message('a **bold** reply')
     await pilot.pause()
     bubble = app.query(MessageBubble).last()
     region = bubble.content_region
@@ -811,7 +814,7 @@ async def test_tui_markdown_bubble_copy_reflows_to_logical_lines(monkeypatch):
   reply = f'{paragraph}\n\n```\n{command}\n```\n\n```python\ndef f():\n    return 1\n```'
   app = ChatApp(RecordBro(), None)
   async with app.run_test(size=(80, 40)) as pilot:
-    app._append_bro_message(reply)
+    app.append_bro_message(reply)
     await pilot.pause()
     bubble = app.query(MessageBubble).last()
     app.screen.selections = {bubble: SELECT_ALL}
@@ -923,6 +926,31 @@ async def test_tui_thinking_renders_as_muted_bubble_above_typing(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_tui_mid_turn_message_renders_as_bro_bubble_above_typing(monkeypatch):
+  from textual.selection import SELECT_ALL
+
+  from bro.launch.call_tui import BubbleRow, ChatApp, MessageBubble, TUIRenderer, TypingIndicator
+
+  monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  app = ChatApp(RecordBro(), None)
+  async with app.run_test(size=(80, 40)) as pilot:
+    app._begin_turn()
+    TUIRenderer(app).on_assistant_message('on it — **rewriting** the tests', terminal=False)
+    await pilot.pause()
+    row = app.query(BubbleRow).last()
+    assert row.has_class('bro')
+    bubble = row.query_one(MessageBubble)
+    app.screen.selections = {bubble: SELECT_ALL}
+    assert app.screen.get_selected_text() == 'on it — rewriting the tests'
+    # the same theme a reply bubble gets, not the thinking one
+    banner = app.query(MessageBubble).first()
+    assert bubble.styles.border_left[1] == banner.styles.border_left[1]
+    # the turn goes on below it: mounted above the typing indicator
+    children = list(app.query_one('#history').children)
+    assert children.index(row) < children.index(app.query_one(TypingIndicator))
+
+
+@pytest.mark.asyncio
 async def test_tui_timestamp_hugs_the_row_edge_with_seconds(monkeypatch):
   from bro.launch.call_tui import BubbleRow, ChatApp, MessageBubble
 
@@ -930,7 +958,7 @@ async def test_tui_timestamp_hugs_the_row_edge_with_seconds(monkeypatch):
   app = ChatApp(RecordBro(), None)
   async with app.run_test(size=(80, 40)) as pilot:
     app._append_user_message('a message from the user', when=datetime(2026, 5, 28, 12, 34, 56))
-    app._append_bro_message('a reply', when=datetime(2026, 5, 28, 12, 35, 7))
+    app.append_bro_message('a reply', when=datetime(2026, 5, 28, 12, 35, 7))
     await pilot.pause()
     user_row = app.query_one('BubbleRow.user', BubbleRow)
     user_stamp = user_row.query_one('.timestamp')
@@ -1012,7 +1040,7 @@ async def test_tui_enter_on_blank_input_submits_nothing(monkeypatch):
     assert app.query_one('#input-bar', MessageInput).text == '\n'
 
 
-def test_tui_renderer_posts_one_line_per_event():
+def test_tui_renderer_posts_one_line_per_tool_event():
   from bro.launch.call_tui import TUIRenderer
 
   app = _FakeApp()
@@ -1020,17 +1048,14 @@ def test_tui_renderer_posts_one_line_per_event():
   renderer.on_reasoning('user wants\na movie rec')
   renderer.on_tool_call('web_search', {'query': 'sci-fi'})
   renderer.on_tool_result('web_search', '[\n  "Arrival"\n]')
-  renderer.on_assistant_message('thinking out loud', terminal=False)
+  renderer.on_assistant_message('checking the\nlistings first', terminal=False)
   renderer.on_assistant_message('the final answer', terminal=True)
 
   # reasoning becomes a thinking bubble carrying the summary block verbatim
   assert app.thinking == ['user wants\na movie rec']
-  assert app.posted == [
-    '→ web_search(query=sci-fi)',
-    '← web_search',
-    '✎ says: thinking out loud',
-    # terminal message is skipped — ChatApp renders the reply itself
-  ]
+  # the terminal message is skipped — ChatApp renders the reply itself
+  assert app.messages == ['checking the\nlistings first']
+  assert app.posted == ['→ web_search(query=sci-fi)', '← web_search']
   assert app.tool_events == ['call web_search', 'result']
 
 

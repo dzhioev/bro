@@ -30,14 +30,12 @@ from textual.worker import Worker, WorkerCancelled, WorkerFailed
 
 from bro.bros.bro import Bro
 from bro.launch._reflow import Reflow
-from bro.launch._trace_format import format_tool_call, oneline, truncate
+from bro.launch._trace_format import format_tool_call
 from bro.launch.call import DATE_FORMAT, INTERRUPTED_NOTICE
 from bro.launch.resume import HistoryMessage
 from bro.llm.mcp import canonical_name
 from bro.llm.observer import Observer
 from bro.show import format_card
-
-_TRACE_VALUE_LIMIT = 200
 
 # the message field states: it takes text only between turns, so an interrupt is
 # the one way to get the input back while the bro is working.
@@ -433,7 +431,7 @@ class ChatApp(App):
       if message.by_user:
         self._append_user_message(message.text, when=message.when)
       else:
-        self._append_bro_message(message.text, when=message.when)
+        self.append_bro_message(message.text, when=message.when)
     self._append_banner()
     if self._initial is not None and len(self._initial) > 0:
       self._submit(self._initial)
@@ -448,10 +446,7 @@ class ChatApp(App):
     # pass the bro name so the logo shows on an in-process (--in-place) run, whose
     # environment doesn't carry this bro's CW_BRO.
     bubble = MessageBubble(Text.from_ansi(render_banner(llm=False, bro=self._bro.name)), kind='bro')
-    self.query_one('#history', VerticalScroll).mount(
-      BubbleRow(bubble, kind='bro', when=datetime.now())
-    )
-    self._scroll_to_end()
+    self._mount_in_history(BubbleRow(bubble, kind='bro', when=datetime.now()))
 
   def _submit(self, text: str) -> None:
     self._append_user_message(text)
@@ -475,45 +470,41 @@ class ChatApp(App):
     when = when if when is not None else datetime.now()
     self._maybe_add_date_separator(when.date())
     bubble = MessageBubble(text, kind='user')
-    self.query_one('#history', VerticalScroll).mount(BubbleRow(bubble, kind='user', when=when))
-    self._scroll_to_end()
+    self._mount_in_history(BubbleRow(bubble, kind='user', when=when))
 
-  def _append_bro_message(self, text: str, when: Optional[datetime] = None) -> None:
+  def append_bro_message(self, text: str, when: Optional[datetime] = None) -> None:
     when = when if when is not None else datetime.now()
     self._maybe_add_date_separator(when.date())
-    # replies are markdown-authored — render them (bold, lists, fenced code,
-    # hyperlinks) instead of showing the raw syntax.
+    # bro messages are markdown-authored — render them (bold, lists, fenced
+    # code, hyperlinks) instead of showing the raw syntax.
     bubble = MessageBubble(ChatMarkdown(text), kind='bro')
-    self.query_one('#history', VerticalScroll).mount(BubbleRow(bubble, kind='bro', when=when))
-    self._scroll_to_end()
+    self._mount_in_history(BubbleRow(bubble, kind='bro', when=when))
 
   def _append_error_message(self, text: str, when: Optional[datetime] = None) -> None:
     when = when if when is not None else datetime.now()
     self._maybe_add_date_separator(when.date())
     bubble = MessageBubble(text, kind='error')
-    self.query_one('#history', VerticalScroll).mount(BubbleRow(bubble, kind='error', when=when))
-    self._scroll_to_end()
+    self._mount_in_history(BubbleRow(bubble, kind='error', when=when))
 
   def append_thinking(self, text: str) -> None:
     bubble = MessageBubble(ChatMarkdown(text), kind='thinking')
-    self.query_one('#history', VerticalScroll).mount(
-      BubbleRow(bubble, kind='thinking', when=datetime.now()),
-      before=self._typing if self._typing is not None else None,
-    )
-    self._scroll_to_end()
+    self._mount_in_history(BubbleRow(bubble, kind='thinking', when=datetime.now()))
 
   def append_trace_line(self, text: str) -> None:
-    # the trace lives in the history stream, so the typing indicator (which is
-    # also mounted there) needs to slide back to the bottom after each event.
-    self.query_one('#history', VerticalScroll).mount(
-      SystemBubble(text), before=self._typing if self._typing is not None else None
-    )
-    self._scroll_to_end()
+    self._mount_in_history(SystemBubble(text))
 
   def _maybe_add_date_separator(self, day: date) -> None:
     if self._last_date != day:
-      self.query_one('#history', VerticalScroll).mount(DateSeparator(day))
+      self._mount_in_history(DateSeparator(day))
       self._last_date = day
+
+  def _mount_in_history(self, widget: Widget) -> None:
+    # everything mid-turn joins the history stream, where the typing indicator
+    # sits too — mount above it so it keeps its place at the bottom.
+    self.query_one('#history', VerticalScroll).mount(
+      widget, before=self._typing if self._typing is not None else None
+    )
+    self._scroll_to_end()
 
   def _scroll_to_end(self) -> None:
     self.call_after_refresh(
@@ -572,7 +563,7 @@ class ChatApp(App):
       self._append_error_message(f'{type(error).__name__}: {error}')
       return
     self._end_turn()
-    self._append_bro_message(reply)
+    self.append_bro_message(reply)
 
   async def action_interrupt(self) -> None:
     await self._interrupt_turn()
@@ -599,8 +590,8 @@ class ChatApp(App):
 
 
 class TUIRenderer(Observer):
-  """post observed events into a `ChatApp` — reasoning as thinking bubbles,
-  everything else as dim `SystemBubble` rows.
+  """post observed events into a `ChatApp` — assistant text as bro bubbles,
+  reasoning as thinking bubbles, the tool trace as dim `SystemBubble` rows.
 
   the bro runs as an async worker on the app's own loop, so each callback
   mounts its bubble directly.
@@ -618,11 +609,11 @@ class TUIRenderer(Observer):
     self._app.append_thinking(text)
 
   def on_assistant_message(self, text: str, terminal: bool) -> None:
-    # skip terminal — ChatApp mounts the reply as a bro bubble via _on_reply,
-    # so emitting here would double-render.
+    # skip terminal — ChatApp mounts the reply as a bro bubble when the turn
+    # ends, so emitting here would double-render.
     if terminal:
       return
-    self._post(f'✎ says: {truncate(oneline(text), _TRACE_VALUE_LIMIT, overflow_marker=False)}')
+    self._app.append_bro_message(text)
 
   def on_tool_call(self, name: str, arguments: dict[str, Any]) -> None:
     self._app.note_tool_call(name)
