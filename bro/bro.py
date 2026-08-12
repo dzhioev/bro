@@ -24,6 +24,13 @@ from bro.trails.record.bro import Recorder
 
 DEFAULT_LLM_SPEC: LLMSpec = llm_llms_chat_gpt.LLMSpec()
 
+# the capabilities a bro can forgo through `denied_capabilities`, named for what
+# they do rather than for any harness's tools: `file` reads and edits the
+# workspace, `shell` runs commands in it. each harness adapter maps them onto its
+# own built-ins (`bro/cw/claude_argv.py`); a harness whose tool surface is exactly
+# what the bro declares has nothing to withhold.
+HARNESS_CAPABILITIES = ('file', 'shell')
+
 
 _TRAILS_DISABLED_ENV = 'TRAILS_DISABLED'
 
@@ -581,6 +588,12 @@ class BaseBro(ABC):
   # host grants `/var/run/docker.sock` to a `--raw`/bro-run container only when this
   # is set (claude code sessions get it unconditionally); see bro/launch/scope.py.
   needs_docker: bool = False
+  # capabilities the bro forgoes, from `HARNESS_CAPABILITIES`. a harness that
+  # carries built-in tools of its own is told to withhold the matching ones, so a
+  # persona whose discipline is that it never touches the workspace has that
+  # enforced by its tool surface instead of by its prompt. MRO-walked and unioned
+  # like `extra_secrets`; a bro that declares none keeps the harness's full set.
+  denied_capabilities: tuple[str, ...] = ()
   # subclasses declare their own `system_prompt = "..."` as a class attribute;
   # `__init__` walks the MRO from base to derived and concatenates each class's
   # own contribution. so a `ReviewDev(Dev)` subclass declares only what it adds —
@@ -602,6 +615,7 @@ class BaseBro(ABC):
     prompt_parts: list[str] = []
     extra_secret_names: list[str] = []
     may_summon_names: list[str] = []
+    denied_capability_names: list[str] = []
     feature_gates: dict[str, Condition | bool] = {}
     for cls in reversed(type(self).__mro__):
       raw_mcp = cls.__dict__.get('mcp_servers')
@@ -619,6 +633,15 @@ class BaseBro(ABC):
       raw_summon = cls.__dict__.get('may_summon')
       if raw_summon is not None:
         may_summon_names.extend(raw_summon)
+      raw_denied = cls.__dict__.get('denied_capabilities')
+      if raw_denied is not None:
+        for capability in raw_denied:
+          if capability not in HARNESS_CAPABILITIES:
+            raise ValueError(
+              f'{cls.__name__} denies unknown capability {capability!r}; '
+              f'known: {", ".join(HARNESS_CAPABILITIES)}'
+            )
+          denied_capability_names.append(capability)
       raw_features = cls.__dict__.get('features')
       if raw_features is not None:
         for feature_name, gate in raw_features.items():
@@ -630,6 +653,7 @@ class BaseBro(ABC):
           feature_gates[feature_name] = gate
     self._extra_secrets: tuple[str, ...] = tuple(extra_secret_names)
     self._may_summon: tuple[str, ...] = tuple(may_summon_names)
+    self._denied_capabilities: tuple[str, ...] = tuple(dict.fromkeys(denied_capability_names))
     self._features: dict[str, Condition | bool] = feature_gates
     # the membership probe is lazy, so the vocabulary built here stays current
     # with the store — only selection (below) bakes feature truth in.

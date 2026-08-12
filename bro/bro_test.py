@@ -1442,6 +1442,45 @@ class TestMaySummon:
 
     assert Derived()._may_summon == ('one', 'two')
 
+
+class TestDeniedCapabilities:
+  def test_defaults_to_empty(self):
+    class Plain(BaseBro):
+      name = 'plain'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    assert Plain()._denied_capabilities == ()
+
+  def test_mro_unioned_without_repeats(self):
+    class Base(BaseBro):
+      name = 'base'
+      description = 'd'
+      denied_capabilities = ('shell',)
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    class Derived(Base):
+      name = 'derived'
+      denied_capabilities = ('file', 'shell')
+
+    assert Derived()._denied_capabilities == ('shell', 'file')
+
+  def test_unknown_capability_fails_construction(self):
+    class Bogus(BaseBro):
+      name = 'bogus'
+      description = 'd'
+      denied_capabilities = ('network',)
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    with pytest.raises(ValueError, match="unknown capability 'network'"):
+      Bogus()
+
   def test_empty_when_no_components_and_keyless_llm(self):
 
     class Bare(BaseBro):

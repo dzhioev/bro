@@ -61,6 +61,12 @@ class TestCwSessionLaunch:
     assert launch.system_prompt == 'append text'
     assert '--foo' in argv
 
+  def test_denied_capabilities_reach_disallowed_tools(self):
+    argv = _cw_session_launch(_spec(bro='lead'), claude_args=[]).argv
+    denied = argv[argv.index('--disallowed-tools') + 1].split(',')
+    assert denied[0] == 'mcp__claude_ai_*'
+    assert {'Read', 'Edit', 'Write', 'Bash'} <= set(denied)
+
   def test_fast_mode_lands_in_settings(self):
     assert _settings(_cw_session_launch(_spec(fast=True), claude_args=[]).argv)['fastMode'] is True
     assert _settings(_cw_session_launch(_spec(), claude_args=[]).argv)['fastMode'] is False

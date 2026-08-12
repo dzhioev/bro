@@ -25,4 +25,8 @@ class Lead(Bro):
   # nowhere to put the work: the tracker is not optional here.
   mcp_servers = [brog_mcp]
   may_summon = ('dev',)
+  # the coordinator delegates the work instead of doing it, and a harness that
+  # hands it file and shell tools anyway leaves that discipline resting on the
+  # prompt alone.
+  denied_capabilities = ('file', 'shell')
   system_prompt = SYSTEM_PROMPT
