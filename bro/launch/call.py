@@ -47,17 +47,21 @@ INTERRUPTED_NOTICE = '⨯ interrupted'
 
 
 _REASONING_LIMIT = 240
-_MESSAGE_LIMIT = 240
 
 
 def _now_hms() -> str:
   return datetime.now().strftime('%H:%M:%S')
 
 
+def _message_line(timestamp: str, speaker: str, text: str) -> str:
+  """text mode's shape for one conversation message."""
+  return f'[{timestamp}] {speaker}: {text}'
+
+
 class TextRenderer(Observer):
-  """render observed events as one-liners that share the `[HH:MM:SS] bro …` shape
-  with text-mode reply emission. background activity and final replies read as
-  one stream — no multi-line panels, no extra blank lines.
+  """render observed events in the `[HH:MM:SS] bro …` shape text-mode emission
+  shares: background activity as one-liners, a message the bro sends mid-turn as
+  the conversation line a reply gets. no multi-line panels, no extra blank lines.
   """
 
   def __init__(
@@ -82,7 +86,8 @@ class TextRenderer(Observer):
     # so emitting here would double-render.
     if terminal:
       return
-    self._emit(f'· says: {truncate(oneline(text), _MESSAGE_LIMIT)}')
+    print(_message_line(self._now(), self._prefix, text), file=self._file)
+    self._file.flush()
 
   def on_tool_call(self, name: str, arguments: dict[str, Any]) -> None:
     self._emit(f'→ {format_tool_call(name, arguments)}')
@@ -139,8 +144,7 @@ async def call_text(
   effective_observer: Observer = observer if observer is not None else TextRenderer(prefix=bro.name)
 
   def emit(reply: str) -> None:
-    timestamp = now().strftime('%H:%M:%S')
-    print(f'[{timestamp}] {bro.name}: {reply}')
+    print(_message_line(now().strftime('%H:%M:%S'), bro.name, reply))
 
   async def exchange(message: str) -> None:
     reply = await _turn(bro, message, observer=effective_observer, hold=hold)
@@ -157,7 +161,7 @@ async def call_text(
       print(f'--- {day.strftime(DATE_FORMAT)} ---')
       last_day = day
     speaker = 'you' if message.by_user else bro.name
-    print(f'[{message.when.strftime("%H:%M:%S")}] {speaker}: {message.text}')
+    print(_message_line(message.when.strftime('%H:%M:%S'), speaker, message.text))
   if len(history_messages) > 0:
     # close the history block with today's date line, so the live exchanges
     # below read against the right day

@@ -2,10 +2,9 @@
 
 both `TextRenderer` (in `call.py`) and `TUIRenderer` (in `call_tui.py`) render
 the same trace events. tool calls go through `format_tool_call` — one canonical
-`namespace::tool(arg=value, …)` line, identical in both surfaces. reasoning and
-interim assistant text are collapsed onto a single line and capped with
-`truncate`, whose limit is per-caller (text mode runs alongside reply lines, the
-TUI sits inside a narrower bubble column) and so stays on the call site.
+`namespace::tool(arg=value, …)` line, identical in both surfaces. text mode
+additionally collapses a reasoning summary onto a single line and caps it with
+`truncate`, whose limit stays on the call site.
 """
 
 import json
@@ -39,16 +38,13 @@ def compact_value(value: dict[str, Any] | str) -> str:
   return oneline(text)
 
 
-def truncate(text: str, limit: int, overflow_marker: bool = True) -> str:
-  """cap `text` to `limit` chars; when `overflow_marker` is set, append
-  `… <N more chars>` so the reader can tell how much was dropped. set it
-  False for the TUI variant where the bubble is already narrow."""
+def truncate(text: str, limit: int) -> str:
+  """cap `text` to `limit` chars, appending `… <N more chars>` so the reader
+  can tell how much was dropped."""
   if len(text) <= limit:
     return text
-  if overflow_marker:
-    overflow = len(text) - limit
-    return f'{text[:limit]}… <{overflow} more chars>'
-  return f'{text[:limit]}…'
+  overflow = len(text) - limit
+  return f'{text[:limit]}… <{overflow} more chars>'
 
 
 # an argument value is shown inline only when its compact form is short; a longer
