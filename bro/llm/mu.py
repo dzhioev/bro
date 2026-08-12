@@ -22,6 +22,8 @@ from bro.llm.llms.chat_gpt import (
   text_to_content,
 )
 
+DEFAULT_MODEL = 'gpt-5.6-terra'
+
 
 class Markdown(BaseModel):
   markdown: str
@@ -110,18 +112,30 @@ def create_input(prompt: str, *args: Content) -> ResponseInputParam:
 
 class _Mu:
   def __call__[T: BaseModel](
-    self, prompt: str, result: type[T], *args: Content, reasoning_effort: ReasoningEffort = None
+    self,
+    prompt: str,
+    result: type[T],
+    *args: Content,
+    model: str = DEFAULT_MODEL,
+    reasoning_effort: ReasoningEffort = None,
   ) -> T:
-    return asyncio.run(self.aio(prompt, result, *args, reasoning_effort=reasoning_effort))
+    return asyncio.run(
+      self.aio(prompt, result, *args, model=model, reasoning_effort=reasoning_effort)
+    )
 
   async def aio[T: BaseModel](
-    self, prompt: str, result: type[T], *args: Content, reasoning_effort: ReasoningEffort = None
+    self,
+    prompt: str,
+    result: type[T],
+    *args: Content,
+    model: str = DEFAULT_MODEL,
+    reasoning_effort: ReasoningEffort = None,
   ) -> T:
     from openai import AsyncOpenAI
 
     async with AsyncOpenAI(api_key=credentials.get_json('openai')['api_key']) as client:
       response = await client.responses.parse(
-        model='gpt-5.1-2025-11-13',
+        model=model,
         input=create_input(prompt, *args),
         reasoning={'effort': reasoning_effort},
         text_format=result,

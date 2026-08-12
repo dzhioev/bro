@@ -352,7 +352,7 @@ class TestSendTrackerEmission:
     assert len(llm_calls) == 1
     _, body, extras = llm_calls[0]
     assert body['response'] == {'id': 'resp_xyz', 'output': ['…']}
-    assert body['request']['model'] == 'gpt-5'
+    assert body['request']['model'] == gpt.model
     # request kwargs round-tripped, including the input list passed to the API.
     assert body['request']['input'] == captured[0]['input']
     assert extras == {'turn_index': 0, 'call_index': 1, 'response_id': 'resp_xyz'}
@@ -604,7 +604,7 @@ class TestContextManagementKwargs:
 class TestLLMSpec:
   def test_default_spec_has_no_optional_knobs(self):
     spec = LLMSpec()
-    assert spec.model == 'gpt-5'
+    assert spec.model == 'gpt-5.6-terra'
     assert spec.reasoning_effort is None
     assert spec.service_tier is None
     assert spec.compact_threshold is None

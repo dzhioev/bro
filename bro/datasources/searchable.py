@@ -72,7 +72,9 @@ class SearchableDataSource(DataSource):
       query=query,
       content=content,
     )
-    summary = await mu.aio(prompt, _Summary, Text(content), reasoning_effort='low')
+    summary = await mu.aio(
+      prompt, _Summary, Text(content), model='gpt-5.6-luna', reasoning_effort='low'
+    )
     return summary.summary
 
   def as_mcp_server(self) -> MCPServer:

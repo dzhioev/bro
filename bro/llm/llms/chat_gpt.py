@@ -75,7 +75,7 @@ class LLMSpec(llm_llm.LLMSpec):
 
   TYPE: ClassVar[str] = 'chat_gpt'
 
-  model: str = 'gpt-5'
+  model: str = 'gpt-5.6-terra'
   reasoning_effort: Optional[ReasoningEffort] = None
   service_tier: Optional[ServiceTier] = None
   compact_threshold: Optional[int] = None
@@ -295,7 +295,7 @@ def _cached_tokens(response_usage: Optional[object]) -> int:
 class ChatGPT(llm_llm.LLM):
   @staticmethod
   def create(
-    model: str = 'gpt-5',
+    model: str = 'gpt-5.6-terra',
     mcp_servers: Optional[list[MCPServer]] = None,
     reasoning_effort: Optional[ReasoningEffort] = None,
     service_tier: Optional[str] = None,
@@ -320,7 +320,7 @@ class ChatGPT(llm_llm.LLM):
   def __init__(
     self,
     api_key: str,
-    model: str = 'gpt-5',
+    model: str = 'gpt-5.6-terra',
     mcp_servers: Optional[list[MCPServer]] = None,
     reasoning_effort: Optional[ReasoningEffort] = None,
     service_tier: Optional[str] = None,

@@ -208,6 +208,7 @@ async def _interpret(
     get_prompt('script_dispatch.prompt'),
     _Interpretation,
     JSON(request),
+    model='gpt-5.6-luna',
     reasoning_effort='low',
   )
   if interpretation.error is not None:
