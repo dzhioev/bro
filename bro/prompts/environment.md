@@ -14,6 +14,6 @@ Call the `bro::banner` tool once. It returns the structured session facts as `ke
 
 3. `may_summon` lists the bros this session may summon — plan delegation from it instead of probing: `may_summon: none` means this session delegates to nobody, and the line's absence means the launcher published no list (an unmanaged environment). A listed target can still be denied for another reason, but an unlisted one always is. The list is fixed at launch and nothing in-session widens it; widening means relaunching with `--grant @<bro>`, which is the user's call.
 
-4. `trail_id` is the trail this session is recorded into (`rewind show <trail-id>`). Never cache it — a resume or a `/clear` rolls the session onto a new trail — so read it off the banner at the moment you need it. `none (not published)` means recording is off or has not started yet.
+4. `trail_id` is the trail this session is recorded into. It can roll mid-session — never cache it, read it off the banner when you need it.
 
 5. If a `session_recording: FAILING` line appears (always first in the output), session recording is broken — the transcript isn't reaching trails and this session could be lost on `--drop`. Don't swallow it: tell the user up front and point at `<claude config dir>/session-recorder.log` for the cause. A red statusLine warning also stays pinned for the user, but surface it in your first reply too.
