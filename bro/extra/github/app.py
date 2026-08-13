@@ -12,8 +12,6 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 
-import jwt
-
 from bro.base import credentials
 from bro.extra.github import api
 
@@ -34,6 +32,10 @@ def mint_installation_token(
 ) -> InstallationToken:
   """mint an installation access token for one installation of the app;
   `private_key` is the app's PEM-encoded RSA key."""
+  # pyjwt ships with the `github` extra, while this module loads for any
+  # credential registry that names the `github_app` source type
+  import jwt
+
   now = int(time.time())
   claims = {'iat': now - _JWT_BACKDATE_SECONDS, 'exp': now + _JWT_LIFETIME_SECONDS, 'iss': app_id}
   app_jwt = jwt.encode(claims, private_key, algorithm='RS256')

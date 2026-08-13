@@ -219,6 +219,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "icecream" },
+    { name = "pydantic" },
     { name = "python-dateutil" },
     { name = "python-ulid" },
 ]
@@ -229,7 +230,6 @@ agent = [
     { name = "humanize" },
     { name = "mcp" },
     { name = "openai" },
-    { name = "pydantic" },
     { name = "rich" },
     { name = "textual" },
     { name = "trafilatura" },
@@ -240,7 +240,6 @@ aws = [
 cw = [
     { name = "humanize" },
     { name = "mcp" },
-    { name = "pydantic" },
     { name = "rich" },
     { name = "textual" },
 ]
@@ -252,11 +251,9 @@ http = [
 ]
 llm = [
     { name = "openai" },
-    { name = "pydantic" },
 ]
 runtime = [
     { name = "mcp" },
-    { name = "pydantic" },
     { name = "starlette" },
     { name = "uvicorn" },
 ]
@@ -293,10 +290,7 @@ requires-dist = [
     { name = "mcp", marker = "extra == 'runtime'", specifier = "==1.28.1" },
     { name = "openai", marker = "extra == 'agent'", specifier = "==3.0.0" },
     { name = "openai", marker = "extra == 'llm'", specifier = "==3.0.0" },
-    { name = "pydantic", marker = "extra == 'agent'", specifier = "==2.13.4" },
-    { name = "pydantic", marker = "extra == 'cw'", specifier = "==2.13.4" },
-    { name = "pydantic", marker = "extra == 'llm'", specifier = "==2.13.4" },
-    { name = "pydantic", marker = "extra == 'runtime'", specifier = "==2.13.4" },
+    { name = "pydantic", specifier = "==2.13.4" },
     { name = "pyjwt", extras = ["crypto"], marker = "extra == 'github'", specifier = "==2.12.1" },
     { name = "python-dateutil", specifier = "==2.9.0.post0" },
     { name = "python-ulid", specifier = "==3.1.0" },
