@@ -1,7 +1,7 @@
 import bro.brog.mcp as brog_mcp
-from bro.base.condition import when
 from bro.bros.bro import Bro
-from bro.llm.mcp import block, harness, mount
+from bro.harness import claude
+from bro.llm.mcp import mount
 
 SYSTEM_PROMPT = """\
 You are the lead — the coordinator of work too large for a single session. You own
@@ -24,16 +24,11 @@ class Lead(Bro):
   name = 'lead'
   description = 'coordinator that drives multi-stage work by summoning worker bros'
   # neither entry is incidental: without a task page a coordinator has nowhere to
-  # keep the work, and without the block the claude harness hands it the file and
-  # shell tools its whole discipline says it must not use.
+  # keep the work, and without the block a harness hands it the very tools for
+  # doing the work itself that its whole discipline says it must not use.
   tools = [
     mount(brog_mcp.toolset),
-    when(
-      harness == 'claude',
-      block(
-        'Read', 'Write', 'Edit', 'NotebookEdit', 'Glob', 'Grep', 'Bash', 'BashOutput', 'KillShell'
-      ),
-    ),
+    claude.block(*claude.FILES, *claude.SHELL, *claude.DELEGATION),
   ]
   may_summon = ('dev',)
   system_prompt = SYSTEM_PROMPT
