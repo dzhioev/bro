@@ -28,6 +28,7 @@ DISTRIBUTIONS = [
       'bro/base/log_test_helper\\.py$',
       'bro/setup/',
       'bro-dev/',
+      'dev/',
       '.venv/',
       '.claude/',
     ),
@@ -37,6 +38,11 @@ DISTRIBUTIONS = [
     directory='bro-dev',
     deptry_exclude=('.*_test\\.py$',),
     deptry_known_first_party=('bro', 'bro_dev'),
+  ),
+  Distribution(
+    directory='dev',
+    deptry_exclude=(),
+    deptry_known_first_party=('bro',),
   ),
 ]
 
@@ -165,7 +171,7 @@ def node_env() -> dict[str, str]:
   return {'NODE_OPTIONS': '--max-old-space-size=4096'}
 
 
-def run_tests(argv: list[str]) -> Optional[int]:
+def main(argv: list[str]) -> Optional[int]:
   parser = Parser(description='run the repository test gate')
   parser.add_argument('--no-docker', action='store_true', help='skip the docker smoke stages')
   args = parser.parse(argv)
@@ -200,4 +206,4 @@ def run_tests(argv: list[str]) -> Optional[int]:
 
 
 if __name__ == '__main__':
-  sys.exit(run_tests(sys.argv))
+  sys.exit(main(sys.argv))

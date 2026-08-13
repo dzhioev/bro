@@ -87,9 +87,11 @@ docker run --rm -i \
     test -d /opt/uv-cache
     test -n "$(ls -A /opt/uv-cache)"
     test -w /opt/uv-cache
-    # the workspace venv is baked in: console-script launchers are present, and
-    # setuptools' compat-mode editable paths point at directories in the clone
+    # the workspace venv is baked in: console-script launchers are present, from
+    # the published members and the repository-local one alike, and setuptools'
+    # compat-mode editable paths point at directories in the clone
     test -x /opt/cw-venv/bin/ask
+    test -x /opt/cw-venv/bin/run-tests
     EDITABLE_PATHS="$(grep -h '^/workspace' /opt/cw-venv/lib/python*/site-packages/__editable__.*.pth)"
     test -n "$EDITABLE_PATHS"
     while IFS= read -r EDITABLE_PATH; do
@@ -104,6 +106,7 @@ docker run --rm -i \
     cmp -s /workspace/pyproject.toml /opt/cw-venv-manifest/pyproject.toml
     cmp -s /workspace/uv.lock /opt/cw-venv-manifest/uv.lock
     cmp -s /workspace/bro-dev/pyproject.toml /opt/cw-venv-manifest/bro-dev/pyproject.toml
+    cmp -s /workspace/dev/pyproject.toml /opt/cw-venv-manifest/dev/pyproject.toml
     # /home/cw/.claude.json reflects the container-private seed and is writable
     grep -q smoke_seed /home/cw/.claude.json
     echo '{"modified_by_container":true}' > /home/cw/.claude.json

@@ -12,6 +12,7 @@ resolution-markers = [
 members = [
     "bro",
     "bro-dev",
+    "bro-repo",
 ]
 
 [[package]]
@@ -268,6 +269,7 @@ trails-server = [
 [package.dev-dependencies]
 dev = [
     { name = "bro-dev" },
+    { name = "bro-repo" },
     { name = "deptry" },
     { name = "httpx2" },
     { name = "pyright" },
@@ -313,6 +315,7 @@ provides-extras = ["agent", "aws", "cw", "http", "llm", "runtime", "trails-serve
 [package.metadata.requires-dev]
 dev = [
     { name = "bro-dev", editable = "bro-dev" },
+    { name = "bro-repo", editable = "dev" },
     { name = "deptry", specifier = "==0.25.1" },
     { name = "httpx2", specifier = "==2.10.0" },
     { name = "pyright", specifier = "==1.1.411" },
@@ -333,6 +336,17 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "bro", extras = ["agent"], editable = "." }]
+
+[[package]]
+name = "bro-repo"
+version = "0.1.0"
+source = { editable = "dev" }
+dependencies = [
+    { name = "bro" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "bro", editable = "." }]
 
 [[package]]
 name = "certifi"

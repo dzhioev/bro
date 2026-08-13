@@ -6,7 +6,7 @@ How to bring up a fresh checkout, plus the credential schemas the framework read
 
 A repository operated by `cw` provides a root `setup.sh` with one postcondition: `.venv/bin/cw` works when it exits. The script runs `uv sync`, activates that environment long enough to install repository hooks, and skips the sync when the container entrypoint exports `CW_VENV_BAKED=1` for its matching baked environment.
 
-The framework repository is a uv workspace whose root publishes the `bro` distribution and whose one member, `bro-dev/`, publishes the development tooling. `uv sync --all-packages --all-groups --all-extras` creates the root `.venv`, installs both editably, and registers each distribution's committed console-script bridge. The root owns the tool configuration and the development gate for both.
+The framework repository is a uv workspace whose root publishes the `bro` distribution, whose `bro-dev/` member publishes the development tooling, and whose `dev/` member (`bro-repo`) carries this checkout's own scripts. `uv sync --all-packages --all-groups --all-extras` creates the root `.venv`, installs all three editably, and registers each distribution's committed console-script bridge. The root owns the tool configuration and the development gate for every member.
 
 Prerequisites are documented in `README.md`. `setup_env.sh` remains an optional macOS/Ubuntu reference installer and is not invoked by repository provisioning.
 
