@@ -581,7 +581,8 @@ class TestSpellsPrompt:
     assert 'canonical `spell::` tools' in spells_section
     assert '`/<name>`' not in spells_section
     assert '`bro::cast`' not in spells_section
-    assert '[[…]]' not in bro.system_prompt
+    assert '[[…]]' in spells_section
+    assert "call the named spell's own tool" in spells_section
     assert description not in bro.system_prompt
 
   def test_dispatch_contract_is_present_when_secret_resolves(self, fake_packages, monkeypatch):

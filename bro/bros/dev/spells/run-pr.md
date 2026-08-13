@@ -1,13 +1,13 @@
 ---
 name: run-pr
-description: This spell should be used when the user signals that the worktree's changes are ready for review and a PR should be opened — "open a PR", "[[run pr]]", "send for review", "PR it", "ship it", "ready for review", "finalize". Covers commit hygiene (docs sync, policy audit, commit splitting), the repo's commit-message conventions, rebases onto the base branch (master by default), opens the PR via `gh pr create`, then launches the `poll-pr` review watcher to handle review comments, failing CI checks, merge conflicts, and APPROVED events. On approval, chains into `spell::land` for the merge step. Also the re-entry point for a PR that is already open — "resume PR <pr-url-or-number>", "resume the PR", "pick up the review" — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
+description: This spell should be used when the user signals that the worktree's changes are ready for review and a PR should be opened — "open a PR", "[[run pr]]", "send for review", "PR it", "ship it", "ready for review", "finalize". Covers commit hygiene (docs sync, policy audit, commit splitting), the repo's commit-message conventions, rebases onto the base branch (master by default), opens the PR via `gh pr create`, then launches the `poll-pr` review watcher to handle review comments, failing CI checks, merge conflicts, and APPROVED events. On approval, chains into [[land]] for the merge step. Also the re-entry point for a PR that is already open — "resume PR <pr-url-or-number>", "resume the PR", "pick up the review" — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
 parameters: {"base?": "base branch for the pull request instead of master", "pr?": "existing pull request URL or number to resume"}
-version: 4.4.0
+version: 4.4.1
 ---
 
 # run-pr
 
-Take worktree changes from "work is finished" to "PR open and through review". Stops at APPROVED — `spell::land` does the merge.
+Take worktree changes from "work is finished" to "PR open and through review". Stops at APPROVED — [[land]] does the merge.
 
 ## Arguments
 
@@ -32,15 +32,15 @@ The `pr` argument carries the existing PR URL or number — e.g. `bro run <bro> 
    ```bash
    gh pr view <number> --json number,url,state,baseRefName,title,body
    ```
-   - The task link is the `Task:` line in the PR body — use it for the task-logging steps (13, and `spell::land`'s bookkeeping). No `Task:` line → proceed without task logging.
+   - The task link is the `Task:` line in the PR body — use it for the task-logging steps (13, and [[land]]'s bookkeeping). No `Task:` line → proceed without task logging.
    - `<base>` is `baseRefName`.
-3. **Handle a terminal PR**: `state: MERGED` → run `spell::land`'s post-merge bookkeeping (`merged` comment, task closure) and stop; `state: CLOSED` → report it and stop.
+3. **Handle a terminal PR**: `state: MERGED` → run [[land]]'s post-merge bookkeeping (`merged` comment, task closure) and stop; `state: CLOSED` → report it and stop.
 4. **Reconcile unaddressed feedback from `gh` state — never trust a lost watcher.** The dead session may have died before, during, or after handling any event, and a restarted `poll-pr` baselines all existing events as already seen — feedback left unhandled now would be silently skipped forever. Pull the full review state:
    ```bash
    gh pr view <number> --json reviews,comments
    gh api repos/<owner>/<repo>/pulls/<number>/comments   # inline review comments
    ```
-   Treat as actionable any repo-owner feedback per step 14's rules that has no later reply from the PR author and no later commit addressing it; handle each per step 14. If the latest owner review is APPROVED and nothing actionable is pending, chain straight into `spell::land` — no watcher needed.
+   Treat as actionable any repo-owner feedback per step 14's rules that has no later reply from the PR author and no later commit addressing it; handle each per step 14. If the latest owner review is APPROVED and nothing actionable is pending, chain straight into [[land]] — no watcher needed.
 5. **Resume watching**: continue at step 13.
 
 ## Workflow
@@ -71,7 +71,7 @@ If the repo documents itself (`CLAUDE.md` files or an equivalent) and the change
 
 ### 4. Decide commit splits
 
-If `spell::fix` already checkpointed completed units as it implemented, those commits are your splits — review them with `git log origin/<base>..HEAD`, commit any remaining uncommitted work the same way, and don't reorganize what's already on the branch. Otherwise, split the uncommitted work:
+If [[fix]] already checkpointed completed units as it implemented, those commits are your splits — review them with `git log origin/<base>..HEAD`, commit any remaining uncommitted work the same way, and don't reorganize what's already on the branch. Otherwise, split the uncommitted work:
 
 Split commits logically by feature/concern. Group by concern, not by file:
 - Two unrelated fixes → two commits.
@@ -157,7 +157,7 @@ Use `gh` for everything GitHub-related — it's pre-authenticated, auto-detects 
 
 Build the PR title and body:
 - **Title**: if single commit, use its title. If multiple commits, a brief summary in the same style.
-- **Body**: `Task:` line linking the task URL (if a task id is known), then `## Summary` bullets describing the changes, then a `## Test plan` checklist of what you verified, each box ticked. Don't list a step this session cannot run — the repo's own CI gate runs on the PR, and an unticked box blocks `spell::land` later with nobody able to clear it.
+- **Body**: `Task:` line linking the task URL (if a task id is known), then `## Summary` bullets describing the changes, then a `## Test plan` checklist of what you verified, each box ticked. Don't list a step this session cannot run — the repo's own CI gate runs on the PR, and an unticked box blocks [[land]] later with nobody able to clear it.
 
 ```bash
 gh pr create --base <base> --title "<title>" --body "$(cat <<'EOF'
@@ -221,13 +221,13 @@ Run it as a background job and read it iteratively — a plain `dev::bash` call 
    - `exited` right after a `merged`/`closed` event → the PR is terminal; react per step 14, stop looping;
    - `exited` right after a `watch_failed` event → react per step 14, stop looping;
    - `exited` with no terminal event → the watcher died. Do not just restart it — a fresh `poll-pr` baselines all existing events as seen; reconcile first (re-entry step 4), then start a new `dev::job`.
-3. When chaining into `spell::land`, stop the watcher with `dev::kill(job_id)`.
+3. When chaining into [[land]], stop the watcher with `dev::kill(job_id)`.
 
 The large `wait_seconds` keeps the run idling inside the tool call between events; don't shorten it to poll — every quiet return costs a full model round trip.
 
-**The watch loop is the rest of the run.** Your terminal answer comes only after the PR reaches a terminal state — merged (typically via the `spell::land` chain on APPROVED) or closed. Until then, keep calling `dev::watch` iteration after iteration, however quiet the PR stays; that idling is the run working as designed, not a stall to wrap up. Do not kill the job and end the run with a "waiting for review" report — an ended run watches nothing, and every later review event goes unhandled.
+**The watch loop is the rest of the run.** Your terminal answer comes only after the PR reaches a terminal state — merged (typically via the [[land]] chain on APPROVED) or closed. Until then, keep calling `dev::watch` iteration after iteration, however quiet the PR stays; that idling is the run working as designed, not a stall to wrap up. Do not kill the job and end the run with a "waiting for review" report — an ended run watches nothing, and every later review event goes unhandled.
 {{eliff #harness = claude}}
-**MUST launch via the `Monitor` tool with `persistent: true`. Do NOT use Bash `run_in_background`** — that only notifies on process exit, so review/comment events sit silently in the output file and approvals never trigger the auto-chain. The harness wakes you on each output event; react per step 14. Stop the watcher with `TaskStop` when chaining into `spell::land`.
+**MUST launch via the `Monitor` tool with `persistent: true`. Do NOT use Bash `run_in_background`** — that only notifies on process exit, so review/comment events sit silently in the output file and approvals never trigger the auto-chain. The harness wakes you on each output event; react per step 14. Stop the watcher with `TaskStop` when chaining into [[land]].
 
 If the `Monitor` schema needs a `ToolSearch` fetch, load `TaskStop` in the same query (`select:Monitor,TaskStop`) — the APPROVED handler needs it and shouldn't spend a round trip on it later.
 {{end}}
@@ -256,7 +256,7 @@ Handle pending feedback as one batch: address every comment that has arrived, th
 
 **`review` with `state: "APPROVED"` and empty `comments`**:
 
-Unconditional approval — the PR is ready to merge. Chain into the merge, and batch it: stop the watcher ({{iff #harness = bro}}`dev::kill(job_id)`{{else}}`TaskStop`{{end}}) and call `spell::land` **in the same response**, then follow it (it reads the branch to decide what master should carry, then merges with a single `land-pr` command).
+Unconditional approval — the PR is ready to merge. Chain into the merge, and batch it: stop the watcher ({{iff #harness = bro}}`dev::kill(job_id)`{{else}}`TaskStop`{{end}}) and [[land]] **in the same response**, then follow it (it reads the branch to decide what master should carry, then merges with a single `land-pr` command).
 
 **`review` with `state: "COMMENTED"` or `"DISMISSED"`**: informational; the actionable feedback (if any) is in this event's `comments` array or arrives via accompanying `comment` events.
 
@@ -264,7 +264,7 @@ Unconditional approval — the PR is ready to merge. Chain into the merge, and b
 
 **`conflicts` event**: rerun step 7 — the rebase, the in-band resolution default, the escalation bar, and the task comment all apply unchanged — then the pre-push gate (step 8), then push the rebased branch: `git push --force-with-lease origin HEAD` — the PR branch, never the base.
 
-**`merged` / `closed`**: someone (the user, `spell::land`, or external action) terminated the PR. If `merged`, run `spell::land`'s post-merge bookkeeping — the `merged` comment and task closure. If `closed` without merge, log it and report to the user.
+**`merged` / `closed`**: someone (the user, a [[land]] run, or external action) terminated the PR. If `merged`, run [[land]]'s post-merge bookkeeping — the `merged` comment and task closure. If `closed` without merge, log it and report to the user.
 
 **`watch_failed` event**: the watch is over and the PR is not — from here on nothing on the PR reaches you. The `reason` is typically a credential the watch cannot use for that source (`HTTP 403` / `HTTP 404` on `checks` means the token lacks `checks: read`) or GitHub being unreachable for minutes. Do not restart the watcher on the same credential and hope: reconcile the review state from `gh` (re-entry step 4) and handle whatever arrived, then report the failing source and reason to the user — stop and ask when questions reach the user; when unattended, `raise` with the source and reason as the reason.
 

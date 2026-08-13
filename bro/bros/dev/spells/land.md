@@ -1,7 +1,7 @@
 ---
 name: land
-description: This spell should be used when the user signals that an open PR should be merged into master — "land it", "land", "merge it", "merge the PR", "merge to master". Decides the shape the branch lands in — one squashed commit by default, or one commit per logical change when the branch carries more than one — and runs `land-pr`, which merges the open PR for the current branch in one shot (precondition checks including green CI, per-landed-commit token-footer aggregation, remote branch cleanup), then records a `merged` comment on the task and closes it to done unless the user explicitly said to keep it open. On APPROVED, `spell::run-pr` chains into this spell. Direct push to master (no PR) is a one-liner (`git fetch origin && git rebase origin/master && git push origin HEAD:master`) — not this spell.
-version: 3.5.1
+description: This spell should be used when the user signals that an open PR should be merged into master — "land it", "land", "merge it", "merge the PR", "merge to master". Decides the shape the branch lands in — one squashed commit by default, or one commit per logical change when the branch carries more than one — and runs `land-pr`, which merges the open PR for the current branch in one shot (precondition checks including green CI, per-landed-commit token-footer aggregation, remote branch cleanup), then records a `merged` comment on the task and closes it to done unless the user explicitly said to keep it open. On APPROVED, [[run pr]] chains into this spell. Direct push to master (no PR) is a one-liner (`git fetch origin && git rebase origin/master && git push origin HEAD:master`) — not this spell.
+version: 3.5.2
 ---
 
 # land
@@ -14,7 +14,7 @@ No suite run before the merge: the branch was verified at its last push, nothing
 
 ## Step 1 — decide the landing shape
 
-Master carries one commit per logical change, and the branch is rarely shaped that way already: `spell::fix`'s checkpoints and the review round-trips are commits about *making* the change, not changes of their own. Read what the branch became and decide what it should land as:
+Master carries one commit per logical change, and the branch is rarely shaped that way already: [[fix]]'s checkpoints and the review round-trips are commits about *making* the change, not changes of their own. Read what the branch became and decide what it should land as:
 
 ```bash
 git log origin/<base>..HEAD --oneline    # <base> is the PR's base branch, master unless it says otherwise
@@ -59,7 +59,7 @@ Two things only the `--plan` path can hit:
 
 Conflicts are the fold's own failure mode — grouping reorders the branch, and hoisting one fold above another can collide. `land-pr` aborts the rebase, leaves the branch untouched, and names what collided; regroup so the colliding commits keep their relative order, or land it squashed.
 
-Waiver flags map to explicit user statements from this session — never pass them when `spell::run-pr`'s APPROVED event chained into this spell:
+Waiver flags map to explicit user statements from this session — never pass them when [[run pr]]'s APPROVED event chained into this spell:
 
 - `--no-review` — the user said to merge without waiting for approval. A `CHANGES_REQUESTED` review is refused regardless; that needs the review resolved, not a waiver.
 - `--allow-unchecked` — the user said to land despite unchecked test-plan boxes. Otherwise an unchecked box means nobody verified that item: surface the failure output (it lists the boxes) and wait.
@@ -67,13 +67,13 @@ Waiver flags map to explicit user statements from this session — never pass th
 
 A waived review does not imply waived checks: "land it without review" means skip the approval wait, and CI still has to go green.
 
-If `land-pr` exits nonzero, surface its stderr and stop — do not hand-roll the merge with raw `gh` commands, do not invent state. If the PR description has materially drifted from what shipped (the user pushed content between `spell::run-pr` and `spell::land`), surface it *before* running — with no plan, the PR body is what becomes the commit body.
+If `land-pr` exits nonzero, surface its stderr and stop — do not hand-roll the merge with raw `gh` commands, do not invent state. If the PR description has materially drifted from what shipped (the user pushed content between [[run pr]] and [[land]]), surface it *before* running — with no plan, the PR body is what becomes the commit body.
 
 ## Step 3 — task bookkeeping + report: one response
 
 First decide task closure. Two cases block or defer the close:
 
-- **The change needs a deploy or migration to take effect.** If it touches code or config that runs in a deployed service, or adds a migration/backfill — the repo's own docs say what is deployed — the merge alone doesn't make it live: the task closes only after the deploy succeeds. An explicit instruction in the initial request or task body to close without holding for the deploy (e.g. a staged feature flow that deploys once after integration) overrides this whole case: close as instructed and note the deferred deploy in the report. Otherwise hand the rollout to the operations bro in your summon allow-list: summon it (per `spell::ask`) with a terse deploy request — `deploy <service or feature>`, naming the target, not the steps; the ops bro infers the spells and sequence itself — and a timeout adequate for the rollout (the 1800s default is sized for a typical deploy; raise it when the target plausibly needs longer). Base that child on the merged commit — pass `land-pr`'s `merged_sha` as the summon's base ref (`--into <merged_sha>`), not as a commit named in the prompt; your own HEAD is not what master now points at. Then:
+- **The change needs a deploy or migration to take effect.** If it touches code or config that runs in a deployed service, or adds a migration/backfill — the repo's own docs say what is deployed — the merge alone doesn't make it live: the task closes only after the deploy succeeds. An explicit instruction in the initial request or task body to close without holding for the deploy (e.g. a staged feature flow that deploys once after integration) overrides this whole case: close as instructed and note the deferred deploy in the report. Otherwise hand the rollout to the operations bro in your summon allow-list: summon it (per [[ask]]) with a terse deploy request — `deploy <service or feature>`, naming the target, not the steps; the ops bro infers the spells and sequence itself — and a timeout adequate for the rollout (the 1800s default is sized for a typical deploy; raise it when the target plausibly needs longer). Base that child on the merged commit — pass `land-pr`'s `merged_sha` as the summon's base ref (`--into <merged_sha>`), not as a commit named in the prompt; your own HEAD is not what master now points at. Then:
   - deploy succeeded → close the task done as usual and include the ops bro's answer in the report;
   - deploy failed (raised / error / timeout) → leave the task open and report the failure and its reason;
   - no summon client in the session (no broker channel), or no operations bro in the allow-list → leave the task open and report the pending deploy, naming the exact summon command (`call <ops-bro> "deploy …"`).

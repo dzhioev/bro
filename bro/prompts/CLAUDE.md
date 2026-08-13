@@ -28,7 +28,7 @@ Current reference docs:
 
 - `environment.md` — session-banner playbook: every surface calls the `bro::banner` service tool and reads this doc through the `environment` `FileSource` (`cw banner --llm` stays as the human CLI). Tool-served only — not injected
 
-- `dev/style.md` — the development style policy, tool-served through the `dev-style` `FileSource` mounted on the Dev bro (the persona directs a read at session start and re-reads on demand — e.g. the `spell::run-pr` policy audit before each commit's verdict). Not injected
+- `dev/style.md` — the development style policy, tool-served through the `dev-style` `FileSource` mounted on the Dev bro (the persona directs a read at session start and re-reads on demand — e.g. [[run pr]]'s policy audit before each commit's verdict). Not injected
 - `tool_names.md` — the tool-name resolution rule, templated on the `#wire` scheme; one file serves every surface. Claude sessions get the `mcp` rendering (`ns::tool` → `mcp__ns__tool`): injected here for non-raw sessions, composed into `BaseBro.claude_system_prompt` for `cw ss --raw` ones. Bro-native LLM runs compose the `bare` rendering (`ns::tool` → `ns__tool`) into `BaseBro.system_prompt`. Deliberately no `FileSource`
 
 ## Hold text
