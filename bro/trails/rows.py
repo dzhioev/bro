@@ -84,13 +84,6 @@ def build_rows(
   return result
 
 
-def materialize_row(adapter: backends.Adapter, row: dict) -> dict:
-  result = dict(row)
-  if adapter is backends.CLAUDE_ADAPTER:
-    result.update(adapter.parse(result).native)
-  return result
-
-
 def project_messages(
   adapter: backends.Adapter, records: list[dict], types: Optional[set[str]] = None
 ) -> list[dict]:

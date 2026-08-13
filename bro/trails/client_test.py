@@ -114,10 +114,10 @@ class TestLineageLookups:
 
   def test_reads_one_step_and_bounded_uuid_projection(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
-    fake.queue((200, b'{"step_id": 4, "raw": "line"}'))
+    fake.queue((200, b'{"step_id": 4, "body": "line"}'))
     fake.queue((200, b'{"steps": [{"step_id": 4, "uuid": "u4"}]}'))
     client = _client()
-    assert client.get_step('T1', 4)['raw'] == 'line'
+    assert client.get_step('T1', 4)['body'] == 'line'
     assert client.get_step_uuids('T1', through=4) == [{'step_id': 4, 'uuid': 'u4'}]
     assert fake.requests[0][1] == '/v1/trails/T1/steps/4'
     assert fake.requests[1][1] == '/v1/trails/T1/steps/uuids?through=4'

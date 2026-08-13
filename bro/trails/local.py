@@ -113,10 +113,10 @@ class LocalStore(TrailsStore):
     if step_id < 0:
       raise TrailNotFound(f'{trail_id}/{step_id}')
     with self._locked(trail_id, shared=True):
-      adapter = self._adapter(self._read_header(trail_id)['harness'])
+      self._read_header(trail_id)
       for row in self._read_rows(trail_id):
         if row['step_id'] == step_id:
-          return rows.materialize_row(adapter, row)
+          return row
     raise TrailNotFound(f'{trail_id}/{step_id}')
 
   def get_step_uuids(self, trail_id: str, *, through: Optional[int] = None) -> list[dict]:
@@ -133,14 +133,13 @@ class LocalStore(TrailsStore):
     if page_size < 1 or page_size > 500:
       raise ValueError('limit must be between 1 and 500')
     with self._locked(trail_id, shared=True):
-      adapter = self._adapter(self._read_header(trail_id)['harness'])
+      self._read_header(trail_id)
       selected = [
         row for row in self._read_rows(trail_id) if after is None or row['step_id'] > after
       ]
       page = selected[:page_size]
-      materialized = [rows.materialize_row(adapter, row) for row in page]
     next_cursor = page[-1]['step_id'] if len(selected) > page_size else None
-    return {'steps': materialized, 'next': next_cursor}
+    return {'steps': page, 'next': next_cursor}
 
   def get_messages(
     self,

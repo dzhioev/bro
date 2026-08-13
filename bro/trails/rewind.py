@@ -270,7 +270,7 @@ def _format_step_summary(step: dict, colors: Colors) -> str:
     f'{colors.dim}{timestamp}{colors.reset}  {colors.yellow}{turn_text}{kind:<14}{colors.reset}'
   )
 
-  body = step.get('raw') if 'raw' in step else step.get('body')
+  body = step.get('body')
   if kind == 'end' and isinstance(body, dict) and body.get('reason') == 'terminal':
     body = {**body, 'reason': 'ok'}
   spilled = spill_descriptor(body)
@@ -288,8 +288,6 @@ def _format_step_summary(step: dict, colors: Colors) -> str:
     'ts',
     'turn_index',
     'body',
-    'raw',
-    'record',
     'where',
   }
   extra_parts = []

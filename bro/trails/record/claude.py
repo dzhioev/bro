@@ -561,9 +561,9 @@ class Recorder:
     return first == file_lines[previous.chunks[0][0]] and last == file_lines[previous.extent - 1]
 
   def _fetch_step_raw(self, trail_id: str, step_id: int) -> Optional[str]:
-    """one native record's raw line, or None when the trail or step is absent."""
+    """one native record's line, or None when the trail or step is absent."""
     try:
-      return self.client.get_step(trail_id, step_id).get('raw')
+      return self.client.get_step(trail_id, step_id).get('body')
     except TrailNotFound:
       return None
 

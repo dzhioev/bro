@@ -55,7 +55,7 @@ class Storage:
       bucket=bucket,
       backend=self._backend,
       required_header=self._required_header,
-      materialize_row=self._materialize_row,
+      resolve_row_body=self._resolve_row_body,
     )
 
   def _backend(self, harness: str) -> backends.Adapter:
@@ -561,7 +561,7 @@ class Storage:
     row = _from_ddb_item(response.get('Item'))
     if row is None:
       return None
-    return await self._materialize_row(header['harness'], row, resolve_large=True)
+    return await self._resolve_row_body(header['harness'], row, resolve_large=True)
 
   async def query_step_uuids(self, trail_id: str, *, through: Optional[int]) -> list[dict]:
     await self._required_universal_header(trail_id)
@@ -638,7 +638,7 @@ class Storage:
     ]
     rows = await asyncio.gather(
       *(
-        self._materialize_row(header['harness'], row, resolve_large=resolve_large)
+        self._resolve_row_body(header['harness'], row, resolve_large=resolve_large)
         for row in raw_rows
       )
     )
@@ -646,11 +646,10 @@ class Storage:
     next_cursor = _from_ddb(last['step_id']) if last is not None else None
     return {'steps': rows, 'next': next_cursor}
 
-  async def _materialize_row(self, harness: str, row: dict, *, resolve_large: bool) -> dict:
-    resolved = await self._resolve_body(
+  async def _resolve_row_body(self, harness: str, row: dict, *, resolve_large: bool) -> dict:
+    return await self._resolve_body(
       dict(row), resolve_large=resolve_large, parse_json=harness != 'claude'
     )
-    return rows.materialize_row(self._backend(harness), resolved)
 
   async def _resolve_body(
     self, item: dict, *, resolve_large: bool, parse_json: bool = True

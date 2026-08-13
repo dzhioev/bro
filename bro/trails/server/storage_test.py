@@ -617,7 +617,7 @@ async def test_spill_and_content_addressed_tools(components):
 
 
 @pytest.mark.asyncio
-async def test_spilled_claude_line_keeps_the_native_raw_view(components):
+async def test_spilled_claude_line_is_served_as_the_stored_body(components):
   store, _, _ = components
   trail_id = await _create_claude(store)
   raw = json.dumps(
@@ -625,8 +625,9 @@ async def test_spilled_claude_line_keeps_the_native_raw_view(components):
   )
   await store.append_records(trail_id, offset=0, records=[raw])
   [step] = (await store.query_steps(trail_id, after=None, limit=10))['steps']
-  assert step['raw'] == raw
-  assert step['record']['type'] == 'system'
+  assert step['body'] == raw
+  assert 'raw' not in step
+  assert 'record' not in step
 
 
 @pytest.mark.asyncio
@@ -642,7 +643,7 @@ async def test_uuid_projection_and_point_reads(components):
   ]
   assert dynamo.queries[-1]['IndexName'] == 'uuid-index'
   assert dynamo.queries[-1]['ProjectionExpression'] == 'trail_id, step_id, #uuid'
-  assert (await store.get_step(universal, 1))['raw'] == second
+  assert (await store.get_step(universal, 1))['body'] == second
   assert await store.query_step_uuids(universal, through=0) == [{'step_id': 0, 'uuid': 'uuid-1'}]
 
 

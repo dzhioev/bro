@@ -98,10 +98,9 @@ class FakeTrails:
       {
         'trail_id': trail_id,
         'step_id': index,
-        'raw': raw,
-        'record': _parse(raw),
+        'body': body,
       }
-      for index, raw in enumerate(selected, start=start)
+      for index, body in enumerate(selected, start=start)
     ]
     next_cursor = start + len(selected) - 1 if start + len(selected) < len(lines) else None
     return {'steps': steps, 'next': next_cursor}

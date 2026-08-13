@@ -81,12 +81,8 @@ class FakeClient:
           started = True
       return
     start = after + 1 if after is not None else 0
-    for index, raw in enumerate(self.records[trail_id][start:], start=start):
-      try:
-        record = json.loads(raw)
-      except json.JSONDecodeError:
-        record = None
-      yield {'step_id': index, 'ts': None, 'raw': raw, 'record': record}
+    for index, body in enumerate(self.records[trail_id][start:], start=start):
+      yield {'step_id': index, 'ts': None, 'body': body}
 
   def iter_messages(self, trail_id: str, *, after: Optional[int] = None):
     harness = self.trails[trail_id]['harness']

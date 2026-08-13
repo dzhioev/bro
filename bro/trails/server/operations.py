@@ -37,7 +37,7 @@ class Operations:
     bucket: str,
     backend: Callable[[str], Any],
     required_header: Callable[[str], Any],
-    materialize_row: Callable[..., Any],
+    resolve_row_body: Callable[..., Any],
   ):
     self._dynamo = dynamo
     self._s3 = s3
@@ -46,7 +46,7 @@ class Operations:
     self._bucket = bucket
     self._backend = backend
     self._required_header = required_header
-    self._materialize_row = materialize_row
+    self._resolve_row_body = resolve_row_body
 
   async def recompute(self, trail_id: str) -> dict:
     header = await self._required_migrated_header(trail_id)
@@ -133,8 +133,8 @@ class Operations:
             'expected': expected_step_id,
           }
         )
-      materialized = await self._materialize_row(header['harness'], row, resolve_large=True)
-      parsed = adapter.parse(materialized)
+      resolved = await self._resolve_row_body(header['harness'], row, resolve_large=True)
+      parsed = adapter.parse(resolved)
       classification = adapter.classify(parsed)
       contribution = state.apply(parsed, classification, seen_billing_keys)
       expected_rows.append(
@@ -235,7 +235,7 @@ class Operations:
     timestamp = storage_types.now_iso()
     manifest_key = storage_types.relink_manifest_key(trail_id, timestamp)
     deleted = [
-      await self._materialize_row(header['harness'], row, resolve_large=True)
+      await self._resolve_row_body(header['harness'], row, resolve_large=True)
       for row in rows[:delete_count]
     ]
     manifest = {

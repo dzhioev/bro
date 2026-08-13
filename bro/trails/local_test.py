@@ -97,7 +97,7 @@ def test_claude_recorder_writes_through_local_store(tmp_path):
   assert store.get_trail(trail_id)['end']['reason'] == 'ok'
 
 
-def test_claude_rows_are_reparsed_and_projected(tmp_path):
+def test_claude_rows_store_body_and_project_messages(tmp_path):
   store = LocalStore(tmp_path)
   raw = json.dumps(
     {
@@ -110,7 +110,7 @@ def test_claude_rows_are_reparsed_and_projected(tmp_path):
   created = store.create_trail(_claude_payload(raw, context={'workspace': 'one'}))
   trail_id = created['id']
 
-  assert store.get_step(trail_id, 0)['raw'] == raw
+  assert store.get_step(trail_id, 0)['body'] == raw
   assert store.find_steps_by_uuid({'uuid-1'}) == [
     {'trail_id': trail_id, 'step_id': 0, 'uuid': 'uuid-1'}
   ]
