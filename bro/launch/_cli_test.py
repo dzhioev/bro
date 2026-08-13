@@ -162,7 +162,7 @@ def test_maybe_containerize_revoke_removes_optional_secret():
       revoke=['openai'],
     )
   assert rc == 0
-  # openai is in bro-dev's optional tier, put there by its scripts dispatcher
+  # openai is in bro-dev's optional tier, put there by spell casting
   launched = run.call_args.args[0]
   assert 'openai' not in launched.optional_secrets
   assert 'openai' not in launched.secrets

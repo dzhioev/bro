@@ -1,13 +1,13 @@
 ---
 name: reflect
-description: This script should be used when the user asks to step back and turn lessons from experience into durable improvements — "@:reflect:@", "reflect on this session", "post-mortem this incident", "what should we learn from this", "how could this have gone better". Analyzes the current session history (or a given situation/incident), separates one-off slips from systemic friction, traces each systemic finding to the durable surface that owns it — a script, the bro's toolset, the bro's system prompt or shared prompt text, a doc — and drafts concrete edit proposals. After presenting the findings it suggests a delivery per proposal: file it as a task that lands through its own session, or fix it in place when the change is small.
+description: This spell should be used when the user asks to step back and turn lessons from experience into durable improvements — "[[reflect]]", "reflect on this session", "post-mortem this incident", "what should we learn from this", "how could this have gone better". Analyzes the current session history (or a given situation/incident), separates one-off slips from systemic friction, traces each systemic finding to the durable surface that owns it — a spell, the bro's toolset, the bro's system prompt or shared prompt text, a doc — and drafts concrete edit proposals. After presenting the findings it suggests a delivery per proposal: file it as a task that lands through its own session, or fix it in place when the change is small.
 parameters: {"incident?": "the situation or incident to reflect on instead of the whole current session"}
-version: 1.0.1
+version: 1.0.2
 ---
 
 # Reflect
 
-Turn friction into durable improvements. Reflection mines what happened for lessons, traces each lesson to the surface that owns it — a script, the bro's toolset, its system prompt, a doc — and drafts the edits as proposals. Each accepted proposal is either filed as a task — landing through that task's own session — or, when the change is small, fixed in place.
+Turn friction into durable improvements. Reflection mines what happened for lessons, traces each lesson to the surface that owns it — a spell, the bro's toolset, its system prompt, a doc — and drafts the edits as proposals. Each accepted proposal is either filed as a task — landing through that task's own session — or, when the change is small, fixed in place.
 
 ## Scope the material
 
@@ -19,9 +19,9 @@ Walk the material and collect the moments where things went worse than they shou
 
 - corrections: the user restated a request, interrupted, rejected a tool call, or reversed something already done
 - wrong turns: a misread request, a wrong tool or target picked, retries on the same step, work redone or thrown away
-- gaps: information or a tool the session needed but didn't have — including every question that reached the user only because no prompt, script, or doc answered it
-- policy misses: a rule a prompt or script states but the session ignored, or followed to a bad result because the rule is ambiguous or wrong
-- drag: avoidable round trips, noisy output, steps a script should have ordered better
+- gaps: information or a tool the session needed but didn't have — including every question that reached the user only because no prompt, spell, or doc answered it
+- policy misses: a rule a prompt or spell states but the session ignored, or followed to a bad result because the rule is ambiguous or wrong
+- drag: avoidable round trips, noisy output, steps a spell should have ordered better
 
 Include your own mistakes plainly — the material is evidence, not a verdict on anyone.
 
@@ -31,12 +31,12 @@ Then filter: separate one-off slips from systemic friction. An edit is warranted
 
 For each systemic finding, name the one surface whose edit prevents the recurrence:
 
-- **a script** — a step that misled, is missing, or is mis-ordered in a script that ran, or a workflow that recurs often enough to deserve a script that doesn't exist yet; scripts live in the owning bro package's `scripts/*.md`
+- **a spell** — a step that misled, is missing, or is mis-ordered in a spell that ran, or a workflow that recurs often enough to deserve a spell that doesn't exist yet; spells live in the owning bro package's `spells/*.md`
 - **the bro's toolset** — a missing, mis-scoped, or misdescribed tool: the `tools` / `data_sources` declarations on the bro's class, or the tool's description and behavior in the pack that owns it
 - **the bro's system prompt** — the class-level `system_prompt` of the bro or of the ancestor that owns the rule; shared text under `bro/prompts/shared/*.md` only when the lesson genuinely applies to every bro
 - **a doc** — a reference doc or CLAUDE.md the session leaned on that was stale, silent, or misleading
 
-Weigh the lesson's generality honestly — both directions fail: a local lesson hoisted into an ancestor or shared text taxes every session for one workflow's problem, while a general lesson patched into the one script where it happened to surface leaves the recurrence alive everywhere else. Aim for the narrowest surface that still covers everywhere the situation can recur.
+Weigh the lesson's generality honestly — both directions fail: a local lesson hoisted into an ancestor or shared text taxes every session for one workflow's problem, while a general lesson patched into the one spell where it happened to surface leaves the recurrence alive everywhere else. Aim for the narrowest surface that still covers everywhere the situation can recur.
 
 ## Draft the edits
 

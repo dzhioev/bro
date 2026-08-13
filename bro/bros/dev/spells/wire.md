@@ -1,12 +1,12 @@
 ---
 name: wire
-description: Use this script to wire the host's credentials for the repository you are working in — deciding which stored instance of each credential kind this project's sessions read, and recording it in the host's `~/.bro.json`. Trigger on "@:wire credentials:@", "configure credentials for this repo", "which github token does this project use", "my sessions pick the wrong task tracker", or a launch that failed on a missing or wrong credential. It runs on the host (a container session cannot reach `~/.bro.json`), changes no repository file, and never invents a secret — a kind with nothing behind it is reported for the user to provide.
-version: 1.0.0
+description: Use this spell to wire the host's credentials for the repository you are working in — deciding which stored instance of each credential kind this project's sessions read, and recording it in the host's `~/.bro.json`. Trigger on "[[wire credentials]]", "configure credentials for this repo", "which github token does this project use", "my sessions pick the wrong task tracker", or a launch that failed on a missing or wrong credential. It runs on the host (a container session cannot reach `~/.bro.json`), changes no repository file, and never invents a secret — a kind with nothing behind it is reported for the user to provide.
+version: 1.0.1
 ---
 
 # Wire this project's credentials
 
-A host serves several projects, and its store may hold several instances of one credential kind — two GitHub identities, a task tracker per backend. Which instance a project's sessions read is recorded per project in `~/.bro.json`; this script decides that mapping with the user and writes it.
+A host serves several projects, and its store may hold several instances of one credential kind — two GitHub identities, a task tracker per backend. Which instance a project's sessions read is recorded per project in `~/.bro.json`; this spell decides that mapping with the user and writes it.
 
 ## 1. Check you can reach the host config
 

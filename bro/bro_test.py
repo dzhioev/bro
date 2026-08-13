@@ -1373,14 +1373,14 @@ class TestClaudePersonaServers:
     assert [s.namespace for s in Dev().claude_persona_mcp_servers()] == [
       'dev-style-source',
       'bro',
-      'at',
+      'spell',
     ]
     monkeypatch.setattr('bro.base.credentials.available', lambda name: name == 'brog')
     assert [s.namespace for s in Dev().claude_persona_mcp_servers()] == [
       'brog',
       'dev-style-source',
       'bro',
-      'at',
+      'spell',
     ]
 
 
@@ -1627,7 +1627,7 @@ class TestClaudeRaise:
       assert 'raise' not in names
 
   async def _mcp_raise_tool(self):
-    server = bro.bro._build_service_server(EchoBro(), include_raise=True, wire='mcp')
+    server = bro.bro._build_service_server(EchoBro(), include_raise=True, harness='bro', wire='mcp')
     for tool in await server.list_tools():
       if tool.name == 'raise':
         return tool
@@ -2004,8 +2004,12 @@ class TestSummonTool:
     # call budget; their summon descriptions carry the timeout caution
     monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
     bro_instance = EchoBro()
-    mcp_build = bro.bro._build_service_server(bro_instance, include_raise=False, wire='mcp')
-    bare_build = bro.bro._build_service_server(bro_instance, include_raise=False, wire='bare')
+    mcp_build = bro.bro._build_service_server(
+      bro_instance, include_raise=False, harness='bro', wire='mcp'
+    )
+    bare_build = bro.bro._build_service_server(
+      bro_instance, include_raise=False, harness='bro', wire='bare'
+    )
     mcp_tools = {t.name: t for t in await mcp_build.list_tools()}
     bare_tools = {t.name: t for t in await bare_build.list_tools()}
     for name in ('summon', 'summon_check'):

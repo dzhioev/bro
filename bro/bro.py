@@ -9,7 +9,7 @@ from typing import Any, ClassVar, Optional, Self
 
 import bro.llm.llms.chat_gpt as llm_llms_chat_gpt
 import bro.llm.mcp as llm_mcp
-from bro import scripts as script_store
+from bro import spells as spell_store
 from bro.base import credentials, log
 from bro.base.condition import Condition, Entry, SetVariable, Variables, var
 from bro.base.offload import off_loop
@@ -138,27 +138,27 @@ def _render_skill_loader() -> str:
     [
       '## Skills',
       '',
-      'Third-party skills load through `@::skill`. A user message starting with `/<name>` '
-      'requests that skill: call `@::skill` with its name, then execute the returned '
+      'Third-party skills load through `bro::skill`. A user message starting with `/<name>` '
+      'requests that skill: call `bro::skill` with its name, then execute the returned '
       'instructions with the rest of the message as arguments. An empty body means the skill '
       'is unavailable.',
     ]
   )
 
 
-def _render_scripts(*, include_dispatcher: bool) -> str:
+def _render_spells(*, include_cast: bool) -> str:
   lines = [
-    '## Scripts',
+    '## Spells',
     '',
-    'Scripts are named procedures exposed as canonical `@::` tools. To run one, call its '
+    'Spells are named procedures exposed as canonical `spell::` tools. To run one, call its '
     'tool and execute the returned instructions.',
   ]
-  if include_dispatcher:
+  if include_cast:
     lines.extend(
       [
         '',
-        'Text enclosed as `@:<free text>:@` is a natural-language script command. Call '
-        '`@::@` with `<free text>` and execute the returned script instructions.',
+        'Text enclosed as `[[…]]` is a spell command — call `bro::cast` with it and follow '
+        'the returned instructions.',
       ]
     )
   return '\n'.join(lines)
@@ -450,20 +450,30 @@ def _summon_check_tool(variables: Variables) -> llm_mcp.Tool:
 
 # the service roster's tool names — the closed `#tools` universe the service
 # descriptions render against
-_SERVICE_TOOL_NAMES = ('banner', 'raise', 'summon', 'summon_check', 'summon_list')
+_SERVICE_TOOL_NAMES = (
+  'banner',
+  'cast',
+  'skill',
+  'raise',
+  'summon',
+  'summon_check',
+  'summon_list',
+)
 
 
 def _build_service_server(
-  bro: 'BaseBro', *, include_raise: bool, wire: llm_mcp.Wire
+  bro: 'BaseBro', *, include_raise: bool, harness: llm_mcp.Harness, wire: llm_mcp.Wire
 ) -> llm_mcp.MCPServer:
   # the roster is decided by the caller's surface and local process state:
-  # `banner` is unconditional; `raise` only makes sense non-interactively (a
-  # caller to abort to — interactive callers pass include_raise=False);
-  # `summon`/`summon_check` need a broker channel and `summon_list` the session's
-  # summon-status file on top. the decided roster then feeds the tools'
-  # rendering vocabulary: service tools are harness features, the one tool
-  # surface that conditions on system facts, so `#wire` is injected next to the
-  # `#tools` roster.
+  # `banner` is unconditional; `cast` needs spells and its optional secret;
+  # `skill` bridges only harnesses without a native loader; `raise` only makes
+  # sense non-interactively (a caller to abort to — interactive callers pass
+  # include_raise=False); `summon`/`summon_check` need a broker channel and
+  # `summon_list` the session's summon-status file on top. the decided roster
+  # then feeds the tools' rendering vocabulary: service tools are harness
+  # features, the one tool surface that conditions on system facts, so `#wire`
+  # is injected next to the `#tools` roster.
+  has_cast = len(bro.spells) > 0 and spell_store.cast_available()
   has_broker = os.environ.get('BROKER_CHANNEL') is not None
   has_summon_list = False
   if has_broker:
@@ -472,6 +482,10 @@ def _build_service_server(
     has_summon_list = os.environ.get(summon_module.STATUS_ENV) is not None
 
   mounted = ['banner']
+  if has_cast:
+    mounted.append('cast')
+  if harness == 'bro':
+    mounted.append('skill')
   if include_raise:
     mounted.append('raise')
   if has_broker:
@@ -484,6 +498,10 @@ def _build_service_server(
   }
 
   tools: list[llm_mcp.Tool] = [_banner_tool(bro.name, variables)]
+  if has_cast:
+    tools.append(spell_store.build_cast_tool(bro, harness=harness, wire=wire))
+  if harness == 'bro':
+    tools.append(spell_store.build_skill_tool())
   if include_raise:
     tools.append(_raise_tool(wire, variables))
   if has_broker:
@@ -695,14 +713,14 @@ class BaseBro(ABC):
     # the bro's own persona: MRO-concatenated class system_prompt(s) under a
     # `# Persona: <name>` heading — the segment lands inside larger composed
     # prompts (below, and cw's append prompt), where headingless identity text
-    # reads as a stray fragment. no shared / data-source / scripts blocks here;
+    # reads as a stray fragment. no shared / data-source / spells blocks here;
     # injected into dive-in Claude Code sessions (cw/system_prompt.py) so they
     # carry the bro's policies outside --raw mode.
     self.persona = (
       '\n\n'.join([f'# Persona: {self.name}', *prompt_parts]) if len(prompt_parts) > 0 else ''
     )
     shared = _load_shared_prompts()
-    script_instructions = self.script_instructions()
+    spell_instructions = self.spell_instructions()
 
     def compose(wire: llm_mcp.Wire) -> str:
       parts = []
@@ -713,8 +731,8 @@ class BaseBro(ABC):
       parts.append(get_prompt('tool_names.md').strip())
       if len(self._data_sources) > 0:
         parts.append(_render_data_sources(self._data_sources))
-      if len(script_instructions) > 0:
-        parts.append(script_instructions)
+      if len(spell_instructions) > 0:
+        parts.append(spell_instructions)
       parts.append(_render_skill_loader())
       # last, so it sits at the end of the prompt where instruction recency is
       # strongest; the file's directives scope it to the claude-bare surface.
@@ -759,33 +777,32 @@ class BaseBro(ABC):
     return name in self._features and feature(name).evaluate(self._feature_vocabulary)
 
   @property
-  def scripts(self) -> dict[str, Path]:
-    return script_store.collect_scripts(list(reversed(type(self).__mro__)))
+  def spells(self) -> dict[str, Path]:
+    return spell_store.collect_spells(list(reversed(type(self).__mro__)))
 
-  def get_script_body(self, name: str, *, harness: llm_mcp.Harness, wire: llm_mcp.Wire) -> str:
-    path = self.scripts.get(name)
+  def get_spell_body(self, name: str, *, harness: llm_mcp.Harness, wire: llm_mcp.Wire) -> str:
+    path = self.spells.get(name)
     if path is None:
-      available = ', '.join(sorted(self.scripts)) if len(self.scripts) > 0 else '(none)'
-      raise KeyError(f'no script named {name!r}; available: {available}')
-    script = script_store.load_script(name, path)
+      available = ', '.join(sorted(self.spells)) if len(self.spells) > 0 else '(none)'
+      raise KeyError(f'no spell named {name!r}; available: {available}')
+    spell = spell_store.load_spell(name, path)
     return llm_mcp.render_text(
-      script.body,
+      spell.body,
       harness=harness,
       wire=wire,
       creds=credentials.known_names(),
       extra=self._feature_vocabulary,
     ).strip()
 
-  def script_descriptions(self) -> list[tuple[str, str]]:
+  def spell_descriptions(self) -> list[tuple[str, str]]:
     return [
-      (name, script_store.load_script(name, path).description)
-      for name, path in self.scripts.items()
+      (name, spell_store.load_spell(name, path).description) for name, path in self.spells.items()
     ]
 
-  def script_instructions(self) -> str:
-    if len(self.script_descriptions()) == 0:
+  def spell_instructions(self) -> str:
+    if len(self.spell_descriptions()) == 0:
       return ''
-    return _render_scripts(include_dispatcher=script_store.dispatcher_available())
+    return _render_spells(include_cast=spell_store.cast_available())
 
   def _selected_tools_for(
     self, harness: llm_mcp.Harness
@@ -843,8 +860,8 @@ class BaseBro(ABC):
   def optional_secrets(self, harness: llm_mcp.Harness = 'bro') -> tuple[str, ...]:
     # the bro's best-effort credential tier: the union of each declared MCP
     # server's + data source's `optional_secrets` over the same per-harness
-    # component set as `needed_secrets`, plus the dispatcher key when this bro has
-    # scripts. minus anything already required — a hard requirement is never
+    # component set as `needed_secrets`, plus the cast key when this bro has
+    # spells. minus anything already required — a hard requirement is never
     # downgraded. absent optional secrets degrade the capability instead of
     # failing the launch.
     specs, sources = self._components_for(harness)
@@ -853,8 +870,8 @@ class BaseBro(ABC):
       names.update(_component_optional_secrets(spec))
     for ds in sources:
       names.update(_component_optional_secrets(ds))
-    if len(self.scripts) > 0:
-      names.add(script_store.DISPATCHER_SECRET)
+    if len(self.spells) > 0:
+      names.add(spell_store.CAST_SECRET)
     return tuple(sorted(names - set(self.needed_secrets(harness))))
 
   def missing_secrets(self) -> tuple[str, ...]:
@@ -1049,23 +1066,25 @@ class BaseBro(ABC):
       messages = [{'role': 'user', 'content': message}]
     return await self._llm.send(messages, request_timeout=request_timeout)
 
-  def _servers_with_at_tools(
+  def _servers_with_spell_tools(
     self,
     servers: list[llm_mcp.MCPServer],
     *,
     harness: llm_mcp.Harness,
     wire: llm_mcp.Wire,
   ) -> list[llm_mcp.MCPServer]:
-    if any(server.namespace == script_store.NAMESPACE for server in servers):
-      raise ValueError(f'namespace {script_store.NAMESPACE!r} is reserved for bro framework tools')
-    if harness == 'claude' and len(self.scripts) == 0:
+    if any(server.namespace == spell_store.NAMESPACE for server in servers):
+      raise ValueError(f'namespace {spell_store.NAMESPACE!r} is reserved for bro framework tools')
+    if len(self.spells) == 0:
       return servers
-    return [*servers, script_store.build_server(self, harness=harness, wire=wire)]
+    return [*servers, spell_store.build_spell_server(self, harness=harness, wire=wire)]
 
   @property
   def _service_server(self) -> llm_mcp.MCPServer:
     if self._service_server_cache is None:
-      self._service_server_cache = _build_service_server(self, include_raise=True, wire='bare')
+      self._service_server_cache = _build_service_server(
+        self, include_raise=True, harness='bro', wire='bare'
+      )
     return self._service_server_cache
 
   def _live_mcp_servers(self) -> list[llm_mcp.MCPServer]:
@@ -1099,23 +1118,25 @@ class BaseBro(ABC):
     service_server = (
       self._service_server
       if hold == 'unattended'
-      else _build_service_server(self, include_raise=False, wire='bare')
+      else _build_service_server(self, include_raise=False, harness='bro', wire='bare')
     )
-    return self._servers_with_at_tools(
+    return self._servers_with_spell_tools(
       [*self._live_mcp_servers(), service_server], harness='bro', wire='bare'
     )
 
   def claude_bro_mcp_servers(self) -> list[llm_mcp.MCPServer]:
     # the MCP servers a `cw ss --raw` Claude Code session mounts (through
-    # the generic server's `bro:<name>` surface): declared servers, scripts, and the
+    # the generic server's `bro:<name>` surface): declared servers, spells, and the
     # service tools. procedures serve the bro branch (`--bare` strips claude's
     # built-ins, so the session drives work through the bro toolset, not
     # Monitor/Bash) over mcp wire names. `raise` mounts only for an unattended
     # session.
-    return self._servers_with_at_tools(
+    return self._servers_with_spell_tools(
       [
         *self._live_mcp_servers(),
-        _build_service_server(self, include_raise=_unattended_claude_session(), wire='mcp'),
+        _build_service_server(
+          self, include_raise=_unattended_claude_session(), harness='bro', wire='mcp'
+        ),
       ],
       harness='bro',
       wire='mcp',
@@ -1127,15 +1148,17 @@ class BaseBro(ABC):
     # `persona:<name>` surface: the declared servers and data sources that hold
     # on the claude harness — an entry gated to the bro harness (the dev
     # toolset, the reference FileSources) never mounts, claude's built-in tools
-    # cover it — plus the service server and scripts server (`raise` only for an
+    # cover it — plus the service server and spells server (`raise` only for an
     # unattended session). Claude's own skill mechanism remains available.
     specs, sources = self._components_for('claude')
     servers: list[llm_mcp.MCPServer] = [spec.build() for spec in specs]
     servers.extend(ds.as_mcp_server() for ds in sources)
     servers.append(
-      _build_service_server(self, include_raise=_unattended_claude_session(), wire='mcp')
+      _build_service_server(
+        self, include_raise=_unattended_claude_session(), harness='claude', wire='mcp'
+      )
     )
-    return self._servers_with_at_tools(servers, harness='claude', wire='mcp')
+    return self._servers_with_spell_tools(servers, harness='claude', wire='mcp')
 
   def _system_prompt_for(self, *, hold: str) -> str:
     # the hold is pinned at run start, so the matching hold fragment is

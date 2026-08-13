@@ -40,7 +40,7 @@ A `kind+instance` name declares a variant of the kind named up to the `+` (name 
 
 ### Per-project instances (`~/.bro.json`)
 
-The registry's `instance` selector decides a kind's instance for the whole host, but one host serves several projects and the right `github` identity or task tracker is usually the project's. `~/.bro.json` — config beside the store rather than a secret inside it — records that mapping, and `@::wire` fills it in from inside a repo.
+The registry's `instance` selector decides a kind's instance for the whole host, but one host serves several projects and the right `github` identity or task tracker is usually the project's. `~/.bro.json` — config beside the store rather than a secret inside it — records that mapping, and `spell::wire` fills it in from inside a repo.
 
 The file's schema is `bro/base/host_config.py`'s module docstring, which the parser there validates against. A project keys on its repo root, so every linked worktree maps to its main checkout and one entry covers a checkout's sessions and worktrees alike. A selection of `kind+` — the kind's own registry entry — needs that entry to declare sources of its own, which a kind entry selecting an instance does not have: two real alternatives need two names.
 
@@ -50,7 +50,7 @@ A json secret may reference other secrets instead of embedding copies: `{"$cred"
 
 - `brog.json` — the brog task-tracker backend selection. The built-in GitHub backend accepts `{ "backend": "github", "token": ..., "repo": "owner/name"? }`; `repo` omitted derives owner/name from the workspace's `origin` remote at server start. Backends contributed through `bro.brog.backends` own and validate their additional fields.
 - `trails.json` — `{ "base_url": "https://trails.example", "token": "<bearer>" }` for the trails server. Required for production bro runs — `BaseBro`'s default tracker factory raises when the file is missing rather than silently falling back — and for the claude session recorder, whose persistent failures surface via the health file `session-recorder-health.json` it writes into the session's claude config dir (read by the cw statusLine and `cw banner`; the daemon's stderr goes to `session-recorder.log` next to it).
-- `openai.json` — `{ "api_key": "sk-..." }` for OpenAI-backed LLM runs, optional data-source summaries, and script interpretation
+- `openai.json` — `{ "api_key": "sk-..." }` for OpenAI-backed LLM runs, optional data-source summaries, and spell interpretation
 - `anthropic.json` — `{ "api_key": "sk-ant-..." }` for Anthropic API use
 - `claude_code_oauth_token` — the long-lived OAuth token from `claude setup-token` (scalar, not json), minted once on the host. Registered as the `claude_code` secret; exported as `CLAUDE_CODE_OAUTH_TOKEN` for every interactive Claude Code session (host: subprocess env; container: registry install hook), so each session presents the same stable subscription bearer instead of the rotating `~/.claude/.credentials.json` OAuth token. `claude --bare` (the bro LLM hop) ignores the variable and authenticates with the `anthropic` key.
 

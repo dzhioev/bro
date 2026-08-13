@@ -223,7 +223,7 @@ class TestSummonAllowList:
 class TestContainerCommand:
   def test_command_is_the_in_place_invocation(self):
     # the docker command is the same in-place runner host mode spawns; the
-    # argv/MCP/script-delivery work happens inside the container, next to claude
+    # argv/MCP/spell-delivery work happens inside the container, next to claude
     with _ContainerHarness() as h:
       rc = cw_session.start_session(
         _spec(drop=True, fast=True, bro='dev', effort='xhigh', prompt='go')

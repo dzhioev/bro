@@ -155,25 +155,25 @@ class TestBaseRef:
 
 
 class TestNewMode:
-  def test_without_seed_uses_dispatcher_command(self, fake_proj, capsys):
+  def test_without_seed_uses_spell_command(self, fake_proj, capsys):
     rc = dive_in.dive_in(forwarded=[], dry_run=True, new=True)
     assert rc == 0
     tokens = shlex.split(capsys.readouterr().out.strip())
-    assert tokens[tokens.index('-p') + 1] == '@:fix --new "":@'
+    assert tokens[tokens.index('-p') + 1] == '[[fix --new ""]]'
 
-  def test_seed_stays_inside_dispatcher_command(self, fake_proj, capsys):
+  def test_seed_stays_inside_spell_command(self, fake_proj, capsys):
     rc = dive_in.dive_in(forwarded=[], dry_run=True, new=True, command='do a thing')
     assert rc == 0
     tokens = shlex.split(capsys.readouterr().out.strip())
-    assert tokens[tokens.index('-p') + 1] == '@:fix --new do a thing:@'
+    assert tokens[tokens.index('-p') + 1] == '[[fix --new do a thing]]'
 
-  def test_raw_flavor_uses_the_same_dispatcher_command(self, fake_proj, capsys):
+  def test_raw_flavor_uses_the_same_spell_command(self, fake_proj, capsys):
     rc = dive_in.dive_in(
       forwarded=['--raw', '--bro', 'bro-dev'], dry_run=True, new=True, command='do a thing'
     )
     assert rc == 0
     tokens = shlex.split(capsys.readouterr().out.strip())
-    assert tokens[tokens.index('-p') + 1] == '@:fix --new do a thing:@'
+    assert tokens[tokens.index('-p') + 1] == '[[fix --new do a thing]]'
 
 
 class TestTaskMode:
@@ -207,10 +207,10 @@ class TestTaskMode:
     assert rc == 0
     tokens = shlex.split(capsys.readouterr().out.strip())
     prompt = tokens[tokens.index('-p') + 1]
-    assert prompt.startswith(f'@:fix {URL}:@\n\ntask block')
+    assert prompt.startswith(f'[[fix {URL}]]\n\ntask block')
     assert os.environ['CW_TASK_ID'] == UUID
 
-  def test_raw_flavor_keeps_prefetch_and_appended_command_outside_dispatcher_command(
+  def test_raw_flavor_keeps_prefetch_and_appended_command_outside_spell_command(
     self, fake_proj, monkeypatch, capsys
   ):
     monkeypatch.setattr(dive_in, '_prefetch_task', lambda system, ref: (_brog_task(), 'task block'))
@@ -224,7 +224,7 @@ class TestTaskMode:
     tokens = shlex.split(capsys.readouterr().out.strip())
     prompt = tokens[tokens.index('-p') + 1]
     assert prompt == (
-      f'@:fix {URL}:@\n\ntask block\n\nOnce you understand the task, run the focused checks'
+      f'[[fix {URL}]]\n\ntask block\n\nOnce you understand the task, run the focused checks'
     )
 
   def test_prefetch_binds_the_launch_scope_flags(self, fake_proj, monkeypatch, capsys):

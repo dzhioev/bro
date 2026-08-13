@@ -983,7 +983,7 @@ def scenario_f(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> Liv
   env = isolated_env
   name = f'{_NAME_PREFIX}f-root'
   # CW_BRO is set explicitly in the container env, as every launch surface does
-  # for a persona-themed cw-session; the runner adapts that bro's scripts
+  # for a persona-themed cw-session; the runner adapts that bro's spells
   driver = _Driver(
     env,
     name,

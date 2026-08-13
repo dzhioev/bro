@@ -34,11 +34,11 @@ async def format_card(bro: BaseBro, *, include_system_prompt: bool = False) -> s
       parts.append(f'- `{name}` — LLM key')
     parts.append('- _session baselines (`trails`; `anthropic` for `--raw`) added per-surface_')
 
-  scripts = bro.script_descriptions()
-  if len(scripts) > 0:
-    parts.extend(['', '## Scripts', ''])
-    for name, description in scripts:
-      parts.append(f'- **@::{name}** — {_one_line(description)}')
+  spells = bro.spell_descriptions()
+  if len(spells) > 0:
+    parts.extend(['', '## Spells', ''])
+    for name, description in spells:
+      parts.append(f'- **spell::{name}** — {_one_line(description)}')
 
   if include_system_prompt:
     parts.extend(['', '## System prompt', '', '```', bro.system_prompt, '```'])

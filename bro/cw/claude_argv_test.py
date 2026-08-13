@@ -137,7 +137,7 @@ class TestRawLaunch:
     assert '--bare' in argv
     assert '--strict-mcp-config' in argv
     # --bare skips project/user skill discovery; framework tools provide the
-    # script and skill surfaces while built-in slash commands stay enabled
+    # spell and skill surfaces while built-in slash commands stay enabled
     assert '--disable-slash-commands' not in argv
     # tools disabled (empty string follows --tools)
     assert argv[argv.index('--tools') + 1] == ''
