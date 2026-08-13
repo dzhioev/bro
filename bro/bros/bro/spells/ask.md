@@ -1,7 +1,7 @@
 ---
 name: ask
 description: This spell should be used when the user asks to relay a question or job to another bro — "[[ask researcher to compare the storage options]]", "ask the reviewer whether the change is safe", "have deployer roll out the API", "summon developer". Turns the phrasing into a summon (an isolated one-shot run of the target bro with its own credentials), picks whichever summon client the session has, decides foreground vs background, and relays the answer with the failure modes handled. A summon succeeds only when the target is in the summoner's allow-list — most bros seed none, and a session's own list is fixed at launch — so a denial is a normal outcome the spell relays.
-version: 1.5.1
+version: 1.6.0
 ---
 
 # Ask
@@ -23,7 +23,7 @@ Exception — set the timeout unprompted when the child's run is open-ended: a f
 
 ## Pick the client
 
-Use whichever the session has — they speak the same mechanism:
+Prefer Bash where the session has it: its background run ends in a harness completion notification that wakes you, while a detached tool summon has no wake-up at all and leaves the session dark until someone prompts it. The mechanism is the same either way:
 
 - **Bash available** (a cw-session): `bro run --summon <target> '<prompt>'` (`--timeout <s>`, `--into <ref>`, `--hold <level>`, `--grant <name>`, `--revoke <name>`, `--effort <level>`, `--fast`); bare `summon <target> '<prompt>'` is the thin alias. It prints the request id and the started trail id to stderr, then blocks until the answer lands on stdout; non-zero exit + stderr on failure.
 - **No Bash, the `summon` tools present** (`bro::summon` / `bro::summon_check` — the `--raw` claude session case): call `summon` with `target` and `prompt` (optional `timeout`, `into`, `hold`, `grant`, `revoke`, `effort`, `fast`). It blocks and returns the answer; failures come back as the tool error with the reason. `detach: true` returns the request id right away instead; `summon_check(request_id)` peeks non-blockingly (`{state: pending|completed, …}`) and `summon_check(request_id, wait: true)` blocks and collects.
@@ -53,3 +53,7 @@ The stdout / tool result is the target's terminal reply. Relay it to the user, a
 ## Do not exit with a summon in flight
 
 When the session's root process exits, in-flight summoned children are killed. Before ending the session (or letting it end), wait for pending summons or collect them with `summon check --wait`; if a result was lost this way it is still recoverable from the child's trail.
+
+## Stopping one deliberately
+
+The protocol has no cancel: stopping a summon means stopping the child's container. A child that ran for a while has usually left state outside itself — a pushed branch, an open PR, a review watcher now dead, task comments. Reconcile that state *after* the stop, not before: a PR can appear in the seconds before the container dies. Record on the task what was left unattended.
