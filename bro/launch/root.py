@@ -26,10 +26,12 @@ def _run_root_via_broker(
   # docstring).
   from bro.launch.spawn import run_root_via_broker
   from bro.launch.summon_control import STATUS_ENV, container_status_path
+  from bro.summon import MAY_SUMMON_ENV, encode_may_summon
   from bro.workspace.spawn import DockerLaunchSpec
 
   env = dict(launch.env)
   env[STATUS_ENV] = container_status_path(workspace.project, workspace.name)
+  env[MAY_SUMMON_ENV] = encode_may_summon(may_summon)
   broker_launch = DockerLaunchSpec(replace(launch, env=env))
   return run_root_via_broker(
     broker_launch,

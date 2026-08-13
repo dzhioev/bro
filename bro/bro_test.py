@@ -1714,19 +1714,25 @@ class TestBannerTool:
     assert 'banner' in interactive
 
   @pytest.mark.asyncio
-  async def test_renders_the_llm_banner_with_the_bro_name(self, monkeypatch):
+  async def test_renders_the_llm_banner_with_the_bro_name_and_live_trail(self, monkeypatch):
 
     captured: dict = {}
 
-    def fake_render_banner(llm=False, bro=None):
+    def fake_render_banner(llm=False, bro=None, trail_id=None):
       captured['llm'] = llm
       captured['bro'] = bro
+      captured['trail_id'] = trail_id
       return 'kind: container'
 
     monkeypatch.setattr(workspace_banner, 'render_banner', fake_render_banner)
-    tool = await _find_tool(EchoBro(), 'banner')
+    bro = EchoBro()
+    tool = await _find_tool(bro, 'banner')
     assert await tool.call({}) == 'kind: container'
-    assert captured == {'llm': True, 'bro': 'echo'}
+    assert captured == {'llm': True, 'bro': 'echo', 'trail_id': None}
+    # the run's trail opens after the tool is built, so it is read per call
+    bro.trail_id = '01trail'
+    await tool.call({})
+    assert captured['trail_id'] == '01trail'
 
 
 class _FakeSummonClient:

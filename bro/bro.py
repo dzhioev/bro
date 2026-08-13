@@ -302,20 +302,22 @@ _SUMMON_LIST_DESCRIPTION = (
 _BANNER_DESCRIPTION = (
   "return this session's environment facts as `key: value` lines: `kind` "
   '(docker container vs host worktree), workspace name and paths, the bro '
-  'persona, and the launch command. call it once at session start to detect '
-  'your environment.'
+  'persona, the launch command, the bros it may delegate to (`may_summon`), and '
+  'the trail it is recorded into (`trail_id`). call it once at session start to '
+  'detect your environment.'
 )
 
 
-def _banner_tool(bro_name: str, variables: Variables) -> llm_mcp.Tool:
+def _banner_tool(bro: 'BaseBro', variables: Variables) -> llm_mcp.Tool:
   # the same facts `cw banner --llm` prints, rendered in-process. the bro name is
   # passed explicitly because an in-process run's environment carries the
-  # launcher's CW_BRO (or none), not this bro's. the workspace import stays
-  # function-local so `import bro` stays cheap.
+  # launcher's CW_BRO (or none), not this bro's; the trail id is read at call
+  # time because the run's trail opens after this server is built. the workspace
+  # import stays function-local so `import bro` stays cheap.
   def _banner() -> str:
     from bro.workspace.banner import render_banner
 
-    return render_banner(llm=True, bro=bro_name)
+    return render_banner(llm=True, bro=bro.name, trail_id=bro.trail_id)
 
   return llm_mcp.FunctionTool(
     _banner, name='banner', description=_BANNER_DESCRIPTION, variables=variables
@@ -501,7 +503,7 @@ def _build_service_server(
     'tools': SetVariable(frozenset(mounted), universe=frozenset(_SERVICE_TOOL_NAMES)),
   }
 
-  tools: list[llm_mcp.Tool] = [_banner_tool(bro.name, variables)]
+  tools: list[llm_mcp.Tool] = [_banner_tool(bro, variables)]
   if has_cast:
     tools.append(spell_store.build_cast_tool(bro, harness=harness, wire=wire))
   if harness == 'bro':

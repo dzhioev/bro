@@ -2,7 +2,7 @@
 name: run-feature
 description: This spell should be used when the user wants a large piece of work driven end to end from a coordinator session — "start a feature", "kick off the <X> feature", "let's design and build <big thing>", "run the feature workflow", "orchestrate this", "resume the feature at <url>". This session becomes the coordinator: it opens a feature task as the single source of truth, then walks the work through design, review and planning, per-stage implementation, integration, and verification, running every phase as a summoned worker in its own isolated container and recording each outcome on the feature page before starting the next. It never designs or implements itself. For work that fits one session this is overkill — summon a single worker on the task ([[ask]]) and let it run [[fix]] itself.
 parameters: {"feature?": "ref of an existing feature task to resume", "new?": "seed text for a new feature"}
-version: 1.0.2
+version: 1.1.0
 ---
 
 # run-feature
@@ -31,7 +31,7 @@ Read the appended `# Arguments` section:
 ## Step 0 — open the feature task
 
 1. Discuss scope with the user only far enough to pin down a name and tags — you are framing the feature, not designing it. Names start with a lowercase letter (except proper nouns).
-2. Settle the **worker bro** for the feature and its phases. Your summon allow-list is fixed at launch and you cannot introspect it, so ask the user which bro should do the work rather than discovering it by denial; `dev` is the default where nothing else is named. If a phase needs a different target than the rest (an operations bro for the rollout), settle that now too.
+2. Settle the **worker bro** for the feature and its phases. Read your allow-list off the banner (`bro::banner`, `may_summon`): where it names one plausible worker, take it; where several could take a phase, ask the user which. If a phase needs a different target than the rest (an operations bro for the rollout), settle that now too — and say so up front when the list holds nobody who could run it, since the list is fixed at launch and only a relaunch widens it.
 3. `brog::create_task` with the name, tags, and a `## Goal` body stating in a few lines what the feature must achieve. The task is born open. Its returned url is the feature URL every phase prompt carries.
 4. Record the kickoff comment, naming the worker bro so a resumed session recovers it, then summon the design phase.
 

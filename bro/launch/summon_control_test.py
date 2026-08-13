@@ -140,6 +140,8 @@ class TestSummonHandler:
       # worktree
       parent_workspace=workspace_tree(tmp_path, 'ws'),
       summoner=None,
+      # dev seeds no summon targets of its own — the child is told exactly that
+      may_summon=(),
     )
     assert peer == ROOT
     assert timeout == 1800.0
@@ -200,6 +202,9 @@ class TestSummonHandler:
     control.handle(cast(Dispatcher, context), CHILD, _summon_message(target='bro'))
     assert context.replies == []
     assert [launch.target for launch, _, _ in context.spawned] == ['dev', 'bro']
+    # the child is handed the list it is authorized against — its own, not the
+    # session's, which also holds dev
+    assert context.spawned[0][0].may_summon == ('bro',)
 
   def test_granting_a_bro_the_summoner_may_not_summon_is_denied(self, control):
     # the fixture session may summon only dev, so it cannot hand bro down
@@ -281,6 +286,7 @@ class TestSummonHandler:
       # a child summoner's base-ref inheritance source: its broker-<channel> clone
       parent_workspace=workspace_tree(tmp_path, f'broker-{CHILD}'),
       summoner={'trail_id': 'T1'},
+      may_summon=(),
     )
     assert peer == CHILD
     spawn_record = _audit(tmp_path)[-1]

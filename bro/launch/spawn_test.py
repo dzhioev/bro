@@ -43,6 +43,7 @@ class TestSummonLowering:
       prompt='deploy the thing',
       parent_workspace=PARENT_WORKSPACE,
       summoner=SUMMONER,
+      may_summon=(),
     )
     lowered = bro.launch.spawn._lower_summon(launch, 'broker-CH')
     assert lowered == bro.launch.spawn.DockerLaunchSpec(
@@ -52,6 +53,7 @@ class TestSummonLowering:
         env={
           'CW_BASE_REF': 'PARENT-SHA',
           'CW_BRO': 'dev',
+          'CW_MAY_SUMMON': '',
           'CW_SUMMONER': '{"session":"ws"}',
           **bro.launch.identity.bro_git_identity_env('dev'),
         },
@@ -65,7 +67,7 @@ class TestSummonLowering:
 
   def test_lowering_logs_the_scope_like_any_container_launch(self, lowering_harness, caplog):
     launch = bro.launch.spawn.SummonLaunchSpec(
-      target='dev', prompt='p', parent_workspace=PARENT_WORKSPACE, summoner=SUMMONER
+      target='dev', prompt='p', parent_workspace=PARENT_WORKSPACE, summoner=SUMMONER, may_summon=()
     )
     with caplog.at_level('INFO'):
       bro.launch.spawn._lower_summon(launch, 'broker-CH')
@@ -77,6 +79,7 @@ class TestSummonLowering:
       prompt='deploy the thing',
       parent_workspace=PARENT_WORKSPACE,
       summoner=SUMMONER,
+      may_summon=(),
       hold='attended',
     )
     lowered = bro.launch.spawn._lower_summon(launch, 'broker-CH')
@@ -90,6 +93,7 @@ class TestSummonLowering:
       prompt='deploy the thing',
       parent_workspace=PARENT_WORKSPACE,
       summoner=SUMMONER,
+      may_summon=(),
       effort='high',
       fast=True,
     )
@@ -104,6 +108,7 @@ class TestSummonLowering:
       prompt='p',
       parent_workspace=PARENT_WORKSPACE,
       summoner=SUMMONER,
+      may_summon=(),
       grant_credentials=('gmail_creds',),
       revoke_credentials=('openai',),
     )
@@ -117,10 +122,22 @@ class TestSummonLowering:
       prompt='p',
       parent_workspace=PARENT_WORKSPACE,
       summoner=SUMMONER,
+      may_summon=(),
       grant_credentials=('aws',),
     )
     with pytest.raises(ValueError, match='already in the scoped credential set'):
       bro.launch.spawn._lower_summon(launch, 'broker-CH')
+
+  def test_the_childs_own_allow_list_rides_its_environment(self, lowering_harness):
+    launch = bro.launch.spawn.SummonLaunchSpec(
+      target='dev',
+      prompt='p',
+      parent_workspace=PARENT_WORKSPACE,
+      summoner=SUMMONER,
+      may_summon=('bro', 'reviewer'),
+    )
+    lowered = bro.launch.spawn._lower_summon(launch, 'broker-CH')
+    assert lowered.launch.env['CW_MAY_SUMMON'] == 'bro,reviewer'
 
   def test_into_overrides_the_inherited_base_ref(self, lowering_harness):
     launch = bro.launch.spawn.SummonLaunchSpec(
@@ -128,11 +145,13 @@ class TestSummonLowering:
       prompt='p',
       parent_workspace=PARENT_WORKSPACE,
       summoner=SUMMONER,
+      may_summon=(),
       into='summon',
     )
     assert bro.launch.spawn._lower_summon(launch, 'broker-CH').launch.env == {
       'CW_BASE_REF': 'REF-SHA',
       'CW_BRO': 'dev',
+      'CW_MAY_SUMMON': '',
       'CW_SUMMONER': '{"session":"ws"}',
       **bro.launch.identity.bro_git_identity_env('dev'),
     }
@@ -143,6 +162,7 @@ class TestSummonLowering:
       prompt='p',
       parent_workspace=PARENT_WORKSPACE,
       summoner=SUMMONER,
+      may_summon=(),
       into='nope',
     )
     with pytest.raises(ValueError, match='nope'):
@@ -150,7 +170,7 @@ class TestSummonLowering:
 
   def test_unreadable_parent_head_fails_the_spawn(self, lowering_harness):
     launch = bro.launch.spawn.SummonLaunchSpec(
-      target='dev', prompt='p', parent_workspace=Path('/gone'), summoner=SUMMONER
+      target='dev', prompt='p', parent_workspace=Path('/gone'), summoner=SUMMONER, may_summon=()
     )
     with pytest.raises(ValueError, match="summoner's HEAD"):
       bro.launch.spawn._lower_summon(launch, 'broker-CH')
@@ -169,7 +189,7 @@ class TestSummonLowering:
     spawner = bro.launch.spawn.SummonSpawner(docker)
     channel = bro.launch.spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
     launch = bro.launch.spawn.SummonLaunchSpec(
-      target='dev', prompt='p', parent_workspace=PARENT_WORKSPACE, summoner=SUMMONER
+      target='dev', prompt='p', parent_workspace=PARENT_WORKSPACE, summoner=SUMMONER, may_summon=()
     )
     await spawner.spawn(launch, channel)
     [(lowered, lowered_channel)] = docker.spawned
@@ -187,6 +207,7 @@ class TestSummonLowering:
       prompt='p',
       parent_workspace=PARENT_WORKSPACE,
       summoner=SUMMONER,
+      may_summon=(),
       into='nope',
     )
     # the raise crosses to_thread back onto the loop: Dispatcher.spawn turns it
