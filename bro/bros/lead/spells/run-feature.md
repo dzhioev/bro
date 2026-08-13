@@ -1,20 +1,20 @@
 ---
 name: run-feature
-description: This spell should be used when the user wants a large piece of work driven end to end from a coordinator session — "start a feature", "kick off the <X> feature", "let's design and build <big thing>", "run the feature workflow", "orchestrate this", "resume the feature at <url>". This session becomes the coordinator: it opens a feature task as the single source of truth, then walks the work through design, review and planning, per-stage implementation, integration, and verification, running each phase in a session of its own — the design and planning phases as interactive sessions it hands to the user to launch, the rest as summoned workers in isolated containers — and recording each outcome on the feature page before starting the next. It never designs or implements itself. For work that fits one session this is overkill — summon a single worker on the task ([[ask]]) and let it run [[fix]] itself.
+description: This spell should be used when the user wants a large piece of work driven end to end from a coordinator session — "start a feature", "kick off the <X> feature", "let's design and build <big thing>", "run the feature workflow", "orchestrate this", "resume the feature at <url>". This session becomes the coordinator: it opens a feature task as the single source of truth, then walks the work through design, review and planning, per-stage implementation, integration, and verification, running each phase in a session of its own — the design and planning phases as interactive sessions it hands to the user to launch, the rest as summoned bros in isolated containers — and recording each outcome on the feature page before starting the next. It never designs or implements itself. For work that fits one session this is overkill — summon a single bro on the task ([[ask]]) and let it run [[fix]] itself.
 parameters: {"feature?": "ref of an existing feature task to resume", "new?": "seed text for a new feature"}
 version: 1.2.0
 ---
 
 # run-feature
 
-Coordinate a feature across many short-lived worker sessions. You are the root: you never design, plan, or write code. You own the feature task page, and each phase is a session of its own that does the work, writes its artifact to the page, and ends.
+Coordinate a feature across many short-lived sessions. You are the root: you never design, plan, or write code. You own the feature task page, and each phase is a session of its own that does the work, writes its artifact to the page, and ends.
 
 ## Operating principle — the root does no hard work
 
 - **Keep context sparse.** Do not read the codebase, draft designs, or implement. Every unit of real work happens in a phase session.
 - **The feature page is the single source of truth.** Each turn, read it and the statuses of the stage tasks it links to recover where the feature stands, then act.
 - **One phase at a time.** Launch a phase, wait for it to finish, record the outcome, review the artifact, then launch the next. Everything durable must land on the page: a summoned phase answers you as well, a handed-off one returns nothing at all.
-- **You are the human's interface.** A summoned worker runs isolated with no human channel: one that cannot proceed raises with a reason instead of asking. Questions, corrections, and go/no-go between phases are yours to handle.
+- **You are the human's interface.** A summoned bro runs isolated with no human channel: one that cannot proceed raises with a reason instead of asking. Questions, corrections, and go/no-go between phases are yours to handle.
 
 ## Invocation forms
 
@@ -31,13 +31,13 @@ Read the appended `# Arguments` section:
 ## Step 0 — open the feature task
 
 1. Discuss scope with the user only far enough to pin down a name and tags — you are framing the feature, not designing it. Names start with a lowercase letter (except proper nouns).
-2. Settle the **worker bro** for the feature and its phases. Read your allow-list off the banner (`bro::banner`, `may_summon`): where it names one plausible worker, take it; where several could take a phase, ask the user which. If a phase needs a different target than the rest (an operations bro for the rollout), settle that now too — and say so up front when the list holds nobody who could run it, since the list is fixed at launch and only a relaunch widens it. The list bounds the summoned phases alone; a handed-off phase names its bro on the command the user runs.
+2. Settle the **bro** for the feature and its phases. Read your allow-list off the banner (`bro::banner`, `may_summon`): where it names one plausible candidate, take it; where several could take a phase, ask the user which. If a phase needs a different target than the rest (an operations bro for the rollout), settle that now too — and say so up front when the list holds nobody who could run it, since the list is fixed at launch and only a relaunch widens it. The list bounds the summoned phases alone; a handed-off phase names its bro on the command the user runs.
 3. `brog::create_task` with the name, tags, and a `## Goal` body stating in a few lines what the feature must achieve. The task is born open. Its returned url is the feature URL every phase prompt carries.
-4. Record the kickoff comment, naming the worker bro so a resumed session recovers it, then start the design phase.
+4. Record the kickoff comment, naming the bro so a resumed session recovers it, then start the design phase.
 
 ## The feature page
 
-Sections accumulate on the description; workers write them with `brog::append_description` / `brog::edit_description`. Your own running record lives in the comment stream, not in a section.
+Sections accumulate on the description; the phases write them with `brog::append_description` / `brog::edit_description`. Your own running record lives in the comment stream, not in a section.
 
 - `## Goal` — written at creation.
 - `## Design` — written by the design phase, finalized by the review-and-plan phase.
@@ -56,19 +56,19 @@ Every phase below opens with its **launch line** — the knobs that phase needs;
 The summon mechanics — client pick, relaying, and every failure mode — are [[ask]]'s; this spell only says how a phase differs from a one-shot ask.
 
 - **Never wait inline.** No phase is short enough for a blocking wait: send every one detached and poll for its result.
-- **Hold and effort.** Leave both at the summon defaults. A worker with no human channel either delivers or raises with a reason you relay, and these phases execute a settled plan rather than working one out — the thinking was bought in the phases before them.
-- **Scope.** A worker starts from its own credentials, not yours. Grant only what a phase needs beyond them and only what you hold yourself: a credential the phase must reach, or `@<bro>` when the phase has to hand work onward.
-- **Self-contained prompts.** A worker shares no context with you: spell out the feature URL, what to produce, where to put it, and what not to touch. Ask for the open questions and unmet prerequisites in its *answer* rather than on the page — they are yours to act on, not the page's to carry.
+- **Hold and effort.** Leave both at the summon defaults. A bro with no human channel either delivers or raises with a reason you relay, and these phases execute a settled plan rather than working one out — the thinking was bought in the phases before them.
+- **Scope.** A bro starts from its own credentials, not yours. Grant only what a phase needs beyond them and only what you hold yourself: a credential the phase must reach, or `@<bro>` when the phase has to hand work onward.
+- **Self-contained prompts.** A bro shares no context with you: spell out the feature URL, what to produce, where to put it, and what not to touch. Ask for the open questions and unmet prerequisites in its *answer* rather than on the page — they are yours to act on, not the page's to carry.
 
 Do not let this session end with a phase in flight; [[ask]] covers reclaiming a summon whose wait was lost.
 
 ### Handed-off phases
 
-These want an interactive session rather than a one-shot summon, and no session can launch one for itself. Give the user both commands and let them pick the surface — a Claude Code session, or a chat with the worker bro itself:
+These want an interactive session rather than a one-shot summon, and no session can launch one for itself. Give the user both commands and let them pick the surface — a Claude Code session, or a chat with the bro itself:
 
 ```
-dive-in <launch line> --bro <worker-bro> '<phase prompt>'
-call <worker-bro> '<phase prompt>' <launch line>
+dive-in <launch line> --bro <bro> '<phase prompt>'
+call <bro> '<phase prompt>' <launch line>
 ```
 
 - The launch line is the same on both: `--hold` and `--effort` carry the same meaning on either launcher.
@@ -107,11 +107,11 @@ Outcome: a finalized `## Design`, stage tasks created and linked under `## Imple
 
 The long timeout covers the PR review a phase ends on: it idles on human latency, and the summon default kills it mid-watch.
 
-Run them **in order, one at a time**: each stage builds on the branch state the previous one left. For each, summon a worker on the stage task:
+Run them **in order, one at a time**: each stage builds on the branch state the previous one left. For each, summon the bro on the stage task:
 
 > Work the task at `<stage-url>` through [[fix]]. Its body carries the feature context and how to land it.
 
-The worker implements, opens its PR into the feature branch, carries it through review, lands it there, and closes its stage task. Record the outcome and move to the next stage.
+The bro implements, opens its PR into the feature branch, carries it through review, lands it there, and closes its stage task. Record the outcome and move to the next stage.
 
 If a stage reports a blocker or a design change, decide with the user whether the plan needs adjusting — a repointed stage, an added one — before continuing. A stage that raises leaves its work recoverable on a pushed ref named in the reason; the retry is a fresh summon on the same stage task.
 
@@ -123,7 +123,7 @@ Once every stage task is done:
 
 > Integration phase of a multi-phase feature coordinated by another session. This workspace is on the feature branch `<feature-branch>`. Sync it against origin, rebase it onto `origin/master` (force-push the FEATURE branch with `--force-with-lease` if the rebase rewrote it — never force-push master), then open ONE pull request for the whole feature with [[run pr]] based on master and land it with [[land]]. Skip the review round: every stage PR was reviewed already, so treat this as an explicit waiver of the approval precondition rather than waiting on a second review of the same code. Keep the task at `<feature-url>` open whatever happens — the coordinating session closes it after verification. If the merged feature needs a rollout to take effect, hand it off per [[land]]'s own rules and report what came back. Answer with the merged PR, the squash commit, and the rollout outcome if there was one.
 
-Outcome: the feature on master as a single squash, rolled out if it needed one. When the worker reports a rollout it could not hand off — no operations bro in its allow-list — relay the exact command to the user and confirm it ran before verifying.
+Outcome: the feature on master as a single squash, rolled out if it needed one. When the phase reports a rollout it could not hand off — no operations bro in its allow-list — relay the exact command to the user and confirm it ran before verifying.
 
 ### 5 — verify
 

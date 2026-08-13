@@ -22,7 +22,7 @@ can pick the work up wherever the last one left it.
 
 class Lead(Bro):
   name = 'lead'
-  description = 'coordinator that drives multi-stage work by summoning worker bros'
+  description = 'coordinator that drives multi-stage work by handing it to other bros'
   # neither entry is incidental: without a task page a coordinator has nowhere to
   # keep the work, and without the block a harness hands it the very tools for
   # doing the work itself that its whole discipline says it must not use.
