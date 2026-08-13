@@ -421,6 +421,22 @@ async def test_check_that_nothing_answers_fails_with_a_hint(
     assert any('broxy' in record.getMessage() for record in caplog.records)
 
 
+def test_may_summon_round_trips_the_launch_published_list(monkeypatch):
+  monkeypatch.setenv(summon.MAY_SUMMON_ENV, summon.encode_may_summon({'reviewer', 'dev'}))
+  assert summon.may_summon() == ('dev', 'reviewer')
+
+
+def test_may_summon_reads_an_empty_list_as_deny_all(monkeypatch):
+  # distinct from an unpublished list: this run may summon nobody
+  monkeypatch.setenv(summon.MAY_SUMMON_ENV, summon.encode_may_summon(()))
+  assert summon.may_summon() == ()
+
+
+def test_may_summon_is_none_without_a_publishing_launch(monkeypatch):
+  monkeypatch.delenv(summon.MAY_SUMMON_ENV, raising=False)
+  assert summon.may_summon() is None
+
+
 def test_list_errors_without_a_status_file_env(monkeypatch, capsys, caplog):
   monkeypatch.delenv(summon.STATUS_ENV, raising=False)
   assert summon.main(['summon', 'list']) == 1

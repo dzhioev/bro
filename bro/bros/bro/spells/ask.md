@@ -1,7 +1,7 @@
 ---
 name: ask
-description: This spell should be used when the user asks to relay a question or job to another bro — "[[ask researcher to compare the storage options]]", "ask the reviewer whether the change is safe", "have deployer roll out the API", "summon developer". Turns the phrasing into a summon (an isolated one-shot run of the target bro with its own credentials), picks whichever summon client the session has, decides foreground vs background, and relays the answer with the failure modes handled. A summon succeeds only when the target is in the summoner's allow-list — most bros seed none, and a session's own list is fixed at launch — so a denial is a normal outcome the spell relays.
-version: 1.6.1
+description: This spell should be used when the user asks to relay a question or job to another bro — "[[ask researcher to compare the storage options]]", "ask the reviewer whether the change is safe", "have deployer roll out the API", "summon developer". Turns the phrasing into a summon (an isolated one-shot run of the target bro with its own credentials), picks whichever summon client the session has, decides foreground vs background, and relays the answer with the failure modes handled. A summon succeeds only when the target is in the summoner's allow-list — the session reads its own off the banner, fixed at launch — so a denial stays a normal outcome the spell relays.
+version: 1.7.0
 ---
 
 # Ask
@@ -12,7 +12,7 @@ Relay a request to another bro via **summon**: the target runs your prompt as a 
 
 From the user's wording extract:
 
-- **target** — the bro to summon (`reviewer`, `deployer`, …). The session has a summon allow-list; don't second-guess it, just try — a disallowed target fails immediately with a clear reason.
+- **target** — the bro to summon (`reviewer`, `deployer`, …). The session's allow-list is on its banner as `may_summon` (`bro::banner`) — read it rather than probing: a target it does not name is denied, and `none` means this session cannot summon at all. Being listed is not a promise the run succeeds; the failure modes below still apply.
 - **prompt** — the request, rewritten to be fully self-contained. The target shares no context with this session: no conversation history, no working tree, no environment. Spell out concrete names, refs, and expectations ("list the deploy targets and their kinds", not "list them"). Ask for what the user actually wants back — the reply is the only thing that returns.
 
 Optional knobs, normally only when the user asks for them: a per-call timeout in seconds (default 1800 — sized for a deploy), a base git ref for the child (default: this workspace's current HEAD, so the target builds on the code as committed here — uncommitted changes never transfer; when the request turns on a specific commit, branch or tag, pass it here rather than naming it in the prompt), the child's hold — its user-involvement level (default unattended; the child runs isolated with no human channel, so raise it only when the user explicitly wants otherwise) — and the child's reasoning effort and fast mode (default: the target bro's own LLM spec).

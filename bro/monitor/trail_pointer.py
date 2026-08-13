@@ -1,14 +1,14 @@
 """the session's current-trail pointer.
 
-The recorder daemon publishes the trail id it is currently recording so summon
-control can stamp the session's summoned children with `summoned_by.trail_id`.
-The file lives under the session's claude config dir — host-readable in both
-session modes (a container session's dir is the mounted
-`~/.claude/cw-sessions/<name>`), the same placement as the recording-health file.
-`cw` derives the host-side path and threads it to the broker root
-(`bro/launch/summon_control.py` reads it per summon request); before the
-recorder adopts a transcript the file is absent and a summon degrades to no
-provenance pointer.
+The recorder daemon publishes the trail id it is currently recording, so the
+trail a live session lands in is readable without a query to the trails service.
+The file lives under the session's claude config dir — readable from inside the
+session and, in both session modes, from the host (a container session's dir is
+the mounted `~/.claude/cw-sessions/<name>`), the same placement as the
+recording-health file; `cw` derives that host-side path and threads it to the
+broker root. The pointer is absent until the recorder adopts a transcript, and
+stays absent for a session nothing records: no trail published is an answer
+readers carry, not a state they wait out.
 
 Stdlib-only on purpose: the host-side reader must not pull in service
 dependencies.

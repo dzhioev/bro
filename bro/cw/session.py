@@ -427,12 +427,14 @@ def _run_host_root_via_broker(
   # a launch before anything touches the broker package (see its docstring).
   from bro.launch.spawn import run_root_via_broker
   from bro.launch.summon_control import STATUS_ENV, summon_status_file
+  from bro.summon import MAY_SUMMON_ENV, encode_may_summon
   from bro.workspace.spawn import ProcessLaunchSpec
 
   # a host session reads the summon-status file the host-side SummonControl
   # writes, straight at its host path; a container session reads it through
   # /host-repo (see bro/launch/summon_control.py)
   env[STATUS_ENV] = str(summon_status_file(workspace.project, workspace.name))
+  env[MAY_SUMMON_ENV] = encode_may_summon(may_summon)
   launch = ProcessLaunchSpec(command=command, cwd=str(workspace.tree), env=env)
   return run_root_via_broker(
     launch,

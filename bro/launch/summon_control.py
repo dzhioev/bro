@@ -376,6 +376,7 @@ class SummonControl:
         prompt=prompt,
         parent_workspace=requester.workspace,
         summoner=summoned_by,
+        may_summon=tuple(sorted(child_allow_list)),
         into=payload.get('into'),
         hold=payload.get('hold'),
         grant_credentials=tuple(grant_credentials),

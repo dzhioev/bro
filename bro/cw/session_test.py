@@ -6,7 +6,9 @@ import pytest
 
 import bro.cw.session as cw_session
 import bro.launch.scope
+import bro.launch.spawn
 import bro.launch.summon_control
+import bro.summon
 import bro.workspace.project as workspace_project
 from bro.cw.flags import DEFAULT_HOLD
 from bro.launch.scope import ScopedSecrets
@@ -641,6 +643,19 @@ class TestHostSession:
     assert roots[0]['env']['VIRTUAL_ENV'] == str(worktree / '.venv')
     # the host root gets the session's summon allow-list like container mode
     assert roots[0]['may_summon'] == {'dev'}
+
+  def test_host_runner_env_carries_the_summon_facts(self, monkeypatch, tmp_path):
+    workspace, _, _ = self._prepare_launch(monkeypatch, tmp_path)
+    captured: dict = {}
+
+    def fake_run_root(launch, **_kwargs):
+      captured['env'] = launch.env
+      return 0
+
+    monkeypatch.setattr(bro.launch.spawn, 'run_root_via_broker', fake_run_root)
+    assert cw_session._run_host_root_via_broker(workspace, ['cw'], {}, {'dev', 'bro'}, set()) == 0
+    assert captured['env'][bro.summon.MAY_SUMMON_ENV] == 'bro,dev'
+    assert captured['env'][bro.launch.summon_control.STATUS_ENV].endswith('w.status.json')
 
   def test_bad_summon_flag_fails_before_the_workspace_is_recorded(self, monkeypatch, tmp_path):
     self._prepare_launch(monkeypatch, tmp_path)

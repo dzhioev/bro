@@ -3,7 +3,8 @@ import subprocess
 from dataclasses import dataclass
 from typing import Optional
 
-from bro.monitor import health
+from bro import summon
+from bro.monitor import health, trail_pointer
 from bro.workspace import paths
 
 # six-line block-letter "B R O" rendered with box-drawing characters;
@@ -61,6 +62,11 @@ class SessionFacts:
       the prompt portion replaced by a placeholder in this case
     - sync_warning — set when the session-recorder health file reports a failure,
       so the banner can warn that the transcript is not being recorded
+    - may_summon — the bros the session may summon, as its launch fixed them;
+      empty when it may summon none, None when it was launched by a surface that
+      publishes no list
+    - trail_id — the trail the session is being recorded into; None when nothing
+      publishes one (recording off, or not started yet)
   """
 
   in_container: bool
@@ -73,15 +79,20 @@ class SessionFacts:
   shell_command: Optional[str]
   prompt: Optional[str]
   sync_warning: Optional[str]
+  may_summon: Optional[tuple[str, ...]]
+  trail_id: Optional[str]
 
   @classmethod
-  def collect(cls, bro_override: Optional[str] = None) -> 'SessionFacts':
-    """collect session facts from env + /.dockerenv for `cw banner`.
+  def collect(
+    cls, bro_override: Optional[str] = None, trail_id_override: Optional[str] = None
+  ) -> 'SessionFacts':
+    """collect session facts from env + session-local state for `cw banner`.
 
     read-only; never raises. bro_override forces the `bro` fact regardless of
     `CW_BRO` — for in-process callers that know the bro they run: an in-process
     run (e.g. `bro run <bro> --in-place`) reads the launching environment, whose
-    `CW_BRO` is the launcher's own persona or absent.
+    `CW_BRO` is the launcher's own persona or absent. trail_id_override likewise
+    carries an in-process run's own trail, which no session recorder publishes.
     """
     in_container = paths.in_container()
     name = os.environ.get('CW_NAME') or None
@@ -112,6 +123,10 @@ class SessionFacts:
     if health.is_failing():
       sync_warning = 'session recording FAILING — see session-recorder.log'
 
+    trail_id = trail_id_override
+    if trail_id is None:
+      trail_id = trail_pointer.read(trail_pointer.path())
+
     return cls(
       in_container=in_container,
       name=name,
@@ -123,6 +138,8 @@ class SessionFacts:
       shell_command=shell_command,
       prompt=prompt,
       sync_warning=sync_warning,
+      may_summon=summon.may_summon(),
+      trail_id=trail_id,
     )
 
   @property
@@ -183,6 +200,13 @@ class SessionFacts:
       # container — the label tracks the destination, not the host that launches it
       rows.append(('docker shell:', '', f'{dim}{self.exec_command}{reset}'))
 
+    if self.may_summon is not None:
+      targets = ', '.join(self.may_summon) if len(self.may_summon) > 0 else '(none)'
+      rows.append(('may summon:', '', f'{dim}{targets}{reset}'))
+
+    if self.trail_id is not None:
+      rows.append(('trail:', '', f'{dim}{self.trail_id}{reset}'))
+
     if self.shell_command is not None:
       launched = f'{dim}{self.shell_command}{reset}'
       if self.prompt is not None:
@@ -222,17 +246,27 @@ class SessionFacts:
       value = getattr(self, attribute)
       if value is not None:
         lines.append(f'{label}: {value}')
+    if self.may_summon is not None:
+      # spelled out when empty: "this session delegates to nobody" is a different
+      # answer from a launch surface that publishes no list at all
+      targets = ', '.join(self.may_summon) if len(self.may_summon) > 0 else 'none'
+      lines.append(f'may_summon: {targets}')
+    trail = self.trail_id if self.trail_id is not None else 'none (not published)'
+    lines.append(f'trail_id: {trail}')
     return '\n'.join(lines)
 
 
-def render_banner(llm: bool = False, bro: Optional[str] = None) -> str:
+def render_banner(
+  llm: bool = False, bro: Optional[str] = None, trail_id: Optional[str] = None
+) -> str:
   """render the banner string for the current session. visual (ANSI + logo) by
   default; --llm for plain key:value text. exposed so in-process callers (e.g.
   `call`'s opening bro message, the `bro::banner` service tool) can render
   without a shell-out. bro overrides the `bro` fact — an in-process run's
   environment carries the launcher's `CW_BRO` (or none), not the running
-  bro's; None falls back to the env."""
-  facts = SessionFacts.collect(bro_override=bro)
+  bro's; None falls back to the env. trail_id overrides the recorded-trail fact
+  the same way, for a run recording a trail of its own."""
+  facts = SessionFacts.collect(bro_override=bro, trail_id_override=trail_id)
   return facts.render_llm() if llm else facts.render_visual()
 
 

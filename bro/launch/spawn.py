@@ -11,7 +11,7 @@ broker, then supervises the root until exit.
 
 import asyncio
 from collections.abc import Collection
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Optional
 
@@ -25,7 +25,7 @@ from bro.broker.transports.unix import UnixServerTransport
 from bro.launch.bro_run import describe
 from bro.launch.scope import summoned_credential_scope
 from bro.launch.summon_control import SummonControl, summon_status_file
-from bro.summon import SUMMON
+from bro.summon import MAY_SUMMON_ENV, SUMMON, encode_may_summon
 from bro.workspace.git import resolve_head, resolve_ref
 from bro.workspace.metadata import WorkspaceKind
 from bro.workspace.model import Workspace
@@ -50,12 +50,14 @@ class SummonLaunchSpec(LaunchSpec):
   the broker loop should not carry.
 
   The credential halves of the request's grant/revoke are what reaches here; the
-  control resolved the `@bro` halves into the child's allow-list itself."""
+  control resolved the `@bro` halves into `may_summon`, the child's own effective
+  allow-list — never the summoner's, which the child is not authorized against."""
 
   target: str
   prompt: str
   parent_workspace: Path
   summoner: Optional[dict[str, Any]]
+  may_summon: tuple[str, ...]
   into: Optional[str] = None
   hold: Optional[str] = None
   grant_credentials: tuple[str, ...] = ()
@@ -117,7 +119,8 @@ def _lower_summon(launch: SummonLaunchSpec, workspace_name: str) -> DockerLaunch
   )
   log_scoped_secrets(f'summoned {launch.target}', run.secrets, run.optional_secrets)
   Workspace.ensure(workspace_name, project, WorkspaceKind.CONTAINER, throwaway=True)
-  return DockerLaunchSpec(run)
+  env = {**run.env, MAY_SUMMON_ENV: encode_may_summon(launch.may_summon)}
+  return DockerLaunchSpec(replace(run, env=env))
 
 
 class SummonSpawner(Spawner):

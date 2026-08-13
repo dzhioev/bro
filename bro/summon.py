@@ -52,7 +52,11 @@ which phase went silent — no `started` points at the session's summon status/a
 (`var/cw/summon/`), a lost terminal after `started` points at bro.trails.`summon list` (`list_summons`) reads the session's summon-status file
 (`CW_SUMMON_STATUS`, written host-side by `bro/launch/summon_control.py`) and reports the active
 summons and the last finished one, each with its request id — the rediscovery
-surface when a request id was lost with a dead client.
+surface when a request id was lost with a dead client. A run's own effective
+allow-list travels the same way, in `CW_MAY_SUMMON`: the surface that launches a
+run writes the list the host will authorize its summons against, and
+`may_summon` reads it back, so a target's standing is readable instead of
+discoverable by denial.
 
 Unlike the substrate `broker` CLI, an unset `BROKER_CHANNEL` is an error, not
 inert — a summon that silently does nothing is a failure. Broker imports are
@@ -63,7 +67,7 @@ on the pre-gate launch path) never pull the broker package in.
 import contextlib
 import json
 import os
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Collection, Generator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
@@ -82,6 +86,9 @@ SUMMON = 'summon'  # the request's message-type tag (a consumer tag; not in brok
 # (bro/launch/summon_control.py owns the writer), read by `bro.cw.statusline`
 STATUS_ENV = 'CW_SUMMON_STATUS'
 SUMMONER_ENV = 'CW_SUMMONER'
+# carries a run's own effective summon allow-list into it, written by the surface
+# that launches the run: a session root's at launch, a summoned child's at its spawn
+MAY_SUMMON_ENV = 'CW_MAY_SUMMON'
 # request-lifecycle bound for a summoned child — sized so the flagship deploy
 # workload survives the default; the substrate's generic 600s default is untouched
 DEFAULT_TIMEOUT = 1800.0
@@ -96,6 +103,23 @@ CHECK_TIMEOUT = 10.0
 # `summon check` exit code while the result is not in yet (0 = answer relayed,
 # 1 = failure, 2 = argparse usage error)
 PENDING_EXIT_CODE = 3
+
+
+def encode_may_summon(targets: Collection[str]) -> str:
+  """an effective summon allow-list as the `MAY_SUMMON_ENV` value: the names
+  sorted and comma-joined, empty for a run that may summon nothing."""
+  return ','.join(sorted(set(targets)))
+
+
+def may_summon() -> Optional[tuple[str, ...]]:
+  """the bros this run may summon, as its launch fixed them — the empty tuple
+  when it may summon none, and None when it was launched by a surface that
+  publishes no list. Read-only: the host authorizes against its own copy, so
+  nothing here can widen it."""
+  raw = os.environ.get(MAY_SUMMON_ENV)
+  if raw is None:
+    return None
+  return tuple(name for name in raw.split(',') if len(name) > 0)
 
 
 class SummonError(Exception):

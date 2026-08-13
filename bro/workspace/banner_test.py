@@ -2,6 +2,8 @@ import pytest
 
 import bro.workspace.banner as workspace_banner
 import bro.workspace.paths as workspace_paths
+from bro import summon
+from bro.monitor import trail_pointer
 from bro.workspace.banner import SessionFacts
 
 
@@ -40,11 +42,21 @@ class TestSplitLaunchPrompt:
 
 class TestSessionFacts:
   @pytest.fixture(autouse=True)
-  def isolate_env(self, monkeypatch):
+  def isolate_env(self, monkeypatch, tmp_path):
     # session-related env vars are picked up directly — wipe to a known state,
-    # and stub the /.dockerenv probe so host runs don't accidentally read True
-    for v in ('CW_NAME', 'CW_BRO', 'CW_COMMAND', 'BRO_SHELL_COMMAND', 'CW_HOST_WORKSPACE'):
+    # stub the /.dockerenv probe so host runs don't accidentally read True, and
+    # point the claude config dir at an empty one so the session-local reads
+    # (trail pointer, recording health) see a session that publishes nothing
+    for v in (
+      'CW_NAME',
+      'CW_BRO',
+      'CW_COMMAND',
+      'BRO_SHELL_COMMAND',
+      'CW_HOST_WORKSPACE',
+      summon.MAY_SUMMON_ENV,
+    ):
       monkeypatch.delenv(v, raising=False)
+    monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(tmp_path / 'claude'))
     monkeypatch.setattr(workspace_paths, 'in_container', lambda: False)
 
   def test_container_session(self, monkeypatch):
@@ -105,6 +117,26 @@ class TestSessionFacts:
     assert facts.shell_command is None
     assert facts.cw_command is None
     assert facts.prompt is None
+    assert facts.may_summon is None
+    assert facts.trail_id is None
+
+  def test_may_summon_reads_the_launch_published_list(self, monkeypatch):
+    monkeypatch.setenv(summon.MAY_SUMMON_ENV, 'dev,reviewer')
+    assert SessionFacts.collect().may_summon == ('dev', 'reviewer')
+
+  def test_may_summon_distinguishes_an_empty_list_from_an_unset_one(self, monkeypatch):
+    monkeypatch.setenv(summon.MAY_SUMMON_ENV, '')
+    assert SessionFacts.collect().may_summon == ()
+
+  def test_trail_id_reads_the_session_pointer(self):
+    trail_pointer.publish('01trail')
+    assert SessionFacts.collect().trail_id == '01trail'
+
+  def test_trail_id_override_wins_over_the_pointer(self):
+    # an in-process run records its own trail; the pointer names the claude
+    # session it was started from
+    trail_pointer.publish('01session')
+    assert SessionFacts.collect(trail_id_override='01run').trail_id == '01run'
 
   def test_bro_override_takes_precedence_over_env(self, monkeypatch):
     # an in-process caller passes its bro explicitly — its environment carries
@@ -128,6 +160,8 @@ def _facts(**overrides) -> SessionFacts:
     'shell_command': None,
     'prompt': None,
     'sync_warning': None,
+    'may_summon': None,
+    'trail_id': None,
   }
   base.update(overrides)
   return SessionFacts(**base)
@@ -171,7 +205,33 @@ class TestRenderBanner:
       container_workspace=None,
       exec_command=None,
     ).render_llm()
-    assert out == 'kind: worktree'
+    assert out == 'kind: worktree\ntrail_id: none (not published)'
+
+  def test_llm_lists_the_summon_targets(self):
+    assert 'may_summon: dev, reviewer' in _facts(may_summon=('dev', 'reviewer')).render_llm()
+
+  def test_llm_spells_out_an_empty_allow_list(self):
+    # distinguishable from the omitted line of a launch that published no list
+    assert 'may_summon: none' in _facts(may_summon=()).render_llm()
+
+  def test_llm_omits_may_summon_when_no_list_was_published(self):
+    assert 'may_summon' not in _facts(may_summon=None).render_llm()
+
+  def test_llm_emits_the_trail_id(self):
+    assert 'trail_id: 01trail' in _facts(trail_id='01trail').render_llm()
+
+  def test_visual_shows_the_summon_targets_and_trail(self):
+    out = _facts(may_summon=('dev',), trail_id='01trail').render_visual()
+    assert 'may summon:   \033[2mdev\033[0m' in out
+    assert 'trail:        \033[2m01trail\033[0m' in out
+
+  def test_visual_shows_an_empty_allow_list(self):
+    assert '(none)' in _facts(may_summon=()).render_visual()
+
+  def test_visual_omits_the_unpublished_facts(self):
+    out = _facts().render_visual()
+    assert 'may summon:' not in out
+    assert 'trail:' not in out
 
   def test_visual_shows_logo_with_bro_signature(self):
     out = _facts(bro='dev').render_visual()

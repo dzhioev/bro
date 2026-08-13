@@ -3,6 +3,7 @@ import sys
 import bro.launch.root
 import bro.launch.spawn
 import bro.launch.summon_control
+import bro.summon
 import bro.workspace.docker as workspace_docker
 import bro.workspace.spawn as workspace_spawn
 from bro.workspace.metadata import WorkspaceKind
@@ -175,6 +176,7 @@ class TestRunRootViaBroker:
         env={
           'CW_BASE_REF': 'deadbeef',
           bro.launch.summon_control.STATUS_ENV: '/host-repo/var/cw/summon/ws.status.json',
+          bro.summon.MAY_SUMMON_ENV: 'dev',
         },
         secrets=('github',),
         optional_secrets=('openai',),
