@@ -151,6 +151,7 @@ PYTEST_FILES = [
   'bro/setup/container/git_test.py',
   'bro/llm/usage_test.py',
   'shell_policy_test.py',
+  'setup_test.py',
   'bro-dev/bro_dev/sync_scripts_test.py',
   'bro-dev/bro_dev/bro_test.py',
   'bro-dev/bro_dev/git_golc_test.py',

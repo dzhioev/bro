@@ -49,13 +49,13 @@ def provision_host_worktree(worktree: Path) -> bool:
   # run the worktree's own setup.sh — the uniform provisioning entry point every
   # repo cw operates on carries (uv sync plus repository hook installation),
   # shared with the container entrypoint.
-  # CW_VENV_BAKED is stripped: the container entrypoint exports it for the baked
-  # /workspace venv, but a host worktree needs its own environment synced.
+  # CW_VENV_MANIFEST is stripped: the container entrypoint exports it for the
+  # baked /workspace venv, but a host worktree needs its own environment synced.
   script = worktree / 'setup.sh'
   if not script.is_file():
     log.warning('%s not found (worktree on an old base?); skipping provisioning', script)
     return True
-  env = {k: v for k, v in os.environ.items() if k != 'CW_VENV_BAKED'}
+  env = {k: v for k, v in os.environ.items() if k != 'CW_VENV_MANIFEST'}
   if subprocess.run([str(script)], cwd=str(worktree), env=env).returncode != 0:
     log.error('failed to provision worktree %s', worktree)
     return False
