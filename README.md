@@ -24,7 +24,7 @@ The base distribution contains every module — `bro.base`, the MCP abstraction,
 - `bro[http]` — aiohttp-based clients and services
 - `bro[llm]` — OpenAI LLM access without the agent UI dependencies
 - `bro[runtime]` — the MCP serving front, over stdio or HTTP
-- `bro[trails-server]` — the optional aiohttp/DynamoDB trails service backend
+- `bro[trails-server]` — the aiohttp trails proxy and optional DynamoDB/S3 backend
 - `bro[aws]` — the `ssm` credential source
 - `bro[github]` — GitHub App authentication
 
@@ -63,7 +63,7 @@ Recording remains mandatory and every launch requires `~/.bro/trails.json`. Loca
 {"backend": "local"}
 ```
 
-It writes to `$BRO_TRAILS_DIR/trails` when set, otherwise `$XDG_DATA_HOME/bro/trails` (normally `~/.local/share/bro/trails`). Container launches bind-mount that host root automatically. The hosted service uses `{"backend": "service", "base_url": "https://trails.example", "token": "<bearer>"}`; an existing config with `base_url` and `token` but no `backend` continues to select the service.
+It writes to `$BRO_TRAILS_DIR/trails` when set, otherwise `$XDG_DATA_HOME/bro/trails` (normally `~/.local/share/bro/trails`). Container launch composers bind-mount that host root automatically. The hosted service uses `{"backend": "service", "base_url": "https://trails.example", "token": "<bearer>"}`; an existing config with `base_url` and `token` but no `backend` continues to select the service. `trails-server` resolves its hosted store from the same credential vocabulary, selecting either local storage or the DynamoDB/S3 shape documented in [`bro/setup/CLAUDE.md`](bro/setup/CLAUDE.md); only its bearer-auth settings remain command-line/environment flags.
 
 ## Development
 

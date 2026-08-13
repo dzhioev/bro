@@ -81,7 +81,8 @@ PYTEST_FILES = [
   'bro/registry_test.py',
   'bro/run_test.py',
   'bro/packaging_test.py',
-  'bro/trails/network_test.py'
+  'bro/trails/network_test.py',
+  'bro/trails/contract_test.py',
   'bro/trails/model_test.py',
   'bro/trails/store_test.py',
   'bro/trails/local_test.py',

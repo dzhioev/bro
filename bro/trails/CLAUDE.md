@@ -1,6 +1,6 @@
 # bro/trails/CLAUDE.md
 
-Trails is the universal registry and recording pipeline for LLM runs across harnesses. Readers and recorders use the `TrailsStore` facade; the `trails` credential selects either local filesystem storage or the deployed HTTPS service.
+Trails is the universal registry and recording pipeline for LLM runs across harnesses. Recorders and readers use the synchronous `TrailsStore` contract; the `trails` credential selects its concrete backend.
 
 ## Architecture
 
@@ -11,39 +11,48 @@ bro · claude recorders                     readers
                          │
               ┌──────────┴──────────┐
               ▼                     ▼
-        LocalStore             TrailsClient
-              │                     │ HTTPS
+         LocalStore             NetworkStore
+              │                     │ HTTP(S)
               ▼                     ▼
       local JSON/JSONL         trails-server
-                                    │
-                         DynamoDB + S3 storage
+                                    │ off-loop dispatch
+                                    ▼
+                               TrailsStore
+                              ┌─────┴──────┐
+                              ▼            ▼
+                         LocalStore   DynamoStore
+                                      │
+                                 DynamoDB + S3
 ```
 
-- `store.py` owns the client facade, store-neutral errors (`TrailNotFound`, `AppendConflict`, `TransientUnavailable`), common pagination helpers, recorded-trail rehydration, and `default_store()` dispatch. A `trails` config with no `backend` selects `service`; local storage is opt-in with `{"backend": "local"}`.
-- `client.py` is the HTTPS service implementation. It maps not-found, append-conflict, and transient HTTP/transport failures onto the facade errors. Its recompute, check, and relink methods are service-only.
-- `local.py` stores each trail under `<root>/trails/<id>/` as `header.json`, `steps.jsonl`, and optional `context.json`, with tool blobs under `<root>/trails/tools/<sha256>.json`. Appends are ordinal and `flock`-serialized, headers are atomically replaced, bodies remain inline, and listing scans trail directories while preserving the selector/cursor contract. A stale open header gets `end.inference = unreported` when read.
-- The local root is `BRO_TRAILS_DIR` when set, otherwise `$XDG_DATA_HOME/bro` (default `~/.local/share/bro`). Container launch preparation bind-mounts that host root and sets `BRO_TRAILS_DIR` in the container whenever its hydrated `trails` credential selects local storage.
+- `store.py` owns `TrailsStore`, store-neutral errors (`TrailNotFound`, `AppendConflict`, `TransientUnavailable`), pagination helpers, recorded-trail rehydration, and credential dispatch. A config without `backend` selects `service`; `local` and `dynamo` are explicit. The `dynamo` branch lazy-imports the server package.
+- `network.py` owns `NetworkStore`, the authenticated wire proxy. HTTPS is required except for HTTP loopback hosts. It maps not-found, append-conflict, and transient transport failures onto the store errors and owns operation-specific retry schedules. Its concrete `recompute`, `check`, and `relink` methods forward the Dynamo administration endpoints; they are not part of `TrailsStore`.
+- `local.py` stores each trail under `<root>/trails/<id>/` as `header.json`, `steps.jsonl`, and optional `context.json`, with tool blobs under `<root>/trails/tools/<sha256>.json`. Appends are ordinal and `flock`-serialized, headers are atomically replaced, bodies remain inline, and listing preserves the selector/cursor contract. A stale open header gets `end.inference = unreported` when read.
+- The local root is `BRO_TRAILS_DIR` when set, otherwise `$XDG_DATA_HOME/bro` (default `~/.local/share/bro`). `bro.launch.trails` contributes its mount and in-container env to the `Launch` composed by the cw-session and bro-run launch surfaces.
+- `server/server.py` is an aiohttp proxy over any configured `TrailsStore`; every synchronous store call runs through `asyncio.to_thread`. The process resolves its hosted store with `default_store()`. It mounts `/v1/admin/*` and starts the unreported-trail sweep only when its hosted store is a `DynamoStore`.
+- `server/dynamo.py` owns `DynamoStore(TrailsStore)`: conditional append transactions, indexes, S3 body spill/resolution, UUID reads, and its store-owned thread pool for UUID-query and spilled-row fan-outs. `server/dynamo_types.py` owns Dynamo conversion and row constants. `server/operations.py` remains the recompute/check/relink engine.
+- Stored rows are served rows. Claude message projection reparses the row's `body`; reads do not add `raw` or `record`. Dynamo's `body_s3` fields are resolved back to inline `body` values before a row leaves the store.
 - `backends.py` is the harness seam. An adapter supplies `parse`, `classify`, `project`, `open`, and `validate_create`, plus its declared emitted message types; the registry is the complete harness dispatch surface.
-- `rows.py` owns the shared aggregate fold, row construction, Claude row re-parsing, and message projection. Client-side stores and recorders do not import `bro.trails.server`.
-- `server/storage.py` owns the DynamoDB/S3 implementation: conditional append transactions, indexes, S3 body spill, and UUID reads. `server/operations.py` owns recompute, check, and manifested relinking. These modules stay behind `TrailsClient`.
-- **Recorder placement:** the shared write spine and every harness recorder live in `record/`; a recorder may import the facade and harness seam, never the reverse. A third harness adds `record/<harness>.py` over `spine.Recording` beside its adapter.
-- Harness adapters mint lineage only when creating a trail. Writers cannot mutate an edge; the service operator can repair one through manifested `relink`, and service audits detect copied records across trails.
+- `rows.py` owns aggregate folding, row construction, and message projection. Client-side stores and recorders do not import `bro.trails.server`.
+- **Recorder placement:** the shared write spine and every harness recorder live in `record/`; a recorder may import the store contract and harness seam, never the reverse. Both harness-specific classes deliberately remain named `Recorder`.
+- Harness adapters mint lineage only when blazing a trail. Writers cannot mutate an edge; the Dynamo operator can repair one through manifested `relink`, and audits detect copied records across trails.
 - Bro tool schemas are content-addressed and referenced by `tools_sha256` on a row; `model.tools_sha256` is the canonical digest helper.
 
 Writer-reported outcomes use `end.reason`. Absence of a writer verdict is represented as `end.inference = unreported`, not as a failure verdict.
 
 ## Surfaces
 
-- `model.py` owns the shared trail, step, lineage, and spill-descriptor vocabulary consumed by readers and recorders. A step id is an ordinal — position N in the trail's native record stream — in rows and `forked_from` / `summoned_by` pointers alike. `lineage.py` is the cycle-detecting root-first chain walker.
-- `record/spine.py` owns recording creation, ordinal extent validation, batched appends, liveness, and ending; `record/bro.py` adapts `bro.llm.tracker.Tracker`, and `record/claude.py` records Claude transcripts.
-- `POST /v1/trails` opens a service trail from `body.records`; `POST /v1/trails/{id}/records` appends records at `offset`. A committed retry returns the current extent without folding again; any other extent mismatch is a conflict.
-- Service `/steps` returns the lossless native stream and `/messages` the generalized projection. UUID lookup, bounded UUID projection, and exact-row reads support Claude lineage recovery.
+- `model.py` owns `BlazeRequest`, shared validation constants, trail/step/lineage records, and body helpers. `BlazeRequest.from_wire()` / `to_wire()` is the one blaze-envelope validator; harness-native validation and body opening remain in each store. A step id is an ordinal in rows and lineage pointers.
+- `record/spine.py` owns blaze, ordinal extent validation, batched appends, liveness, and ending; `record/bro.py` adapts `bro.llm.tracker.Tracker`, and `record/claude.py` records Claude transcripts.
+- `POST /v1/trails` blazes from `body.records`; `POST /v1/trails/{id}/records` appends at `offset`. A committed retry returns the current extent without folding again; any other extent mismatch is a conflict.
+- `/steps` returns the native stream and `/messages` its generalized projection. UUID lookup, bounded UUID projection, and exact-row reads support Claude lineage recovery. Large bodies remain inline over the wire.
+- `GET /v1/trails/{id}/context` returns `{"launch_context": null}` for an existing trail without context and 404 only when the trail is missing.
 - Bro projection derives reasoning, assistant text, tool calls, and terminal assistant status from `llm_call.response.output`; rows of those decomposed kinds do not project separately.
-- Service admin endpoints for recompute, check, and relink are aggregate repair, verification/audit, and lineage repair. The local backend intentionally exposes none of them.
 - Header responses expose provider-raw usage by model. Provider normalization belongs to the provider-aware usage layer, not the harness adapter.
 - List queries accept exactly one selector — `harness`, `bro`, or `forked_from` — plus the common time range and opaque cursor.
-- `rewind.py` (`rewind`) works through `TrailsStore` for either backend: `show` and `grep` render projected messages across a fork chain, `steps` renders one native stream, and `list` / `tree` navigate headers and lineage.
+- `rewind.py` (`rewind`) works through `TrailsStore`: `show` and `grep` render projected messages across a fork chain, `steps` renders one native stream, and `list` / `tree` navigate headers and lineage.
+- `contract_test.py` runs the same contract suite against `LocalStore` and `NetworkStore` over a real loopback aiohttp server backed by `LocalStore`. `network_test.py` owns transport/retry/error mapping; `server/dynamo_test.py` owns fake-backed Dynamo mechanics.
 
 ## Service auth
 
-Bearer auth is mandatory outside an explicit loopback-only `TRAILS_ALLOW_NO_AUTH=1` service run. The `trails` credential schemas are documented in `bro/setup/CLAUDE.md`.
+Bearer auth is mandatory outside an explicit loopback-only `TRAILS_ALLOW_NO_AUTH=1` server run. The hosted backend comes from `trails.json`; auth remains in `--trails-bearer-token` / `TRAILS_BEARER_TOKEN` and `--trails-allow-no-auth` / `TRAILS_ALLOW_NO_AUTH`. Credential schemas are documented in `bro/setup/CLAUDE.md`.

@@ -210,7 +210,7 @@ class RecordedTrail:
 
 
 class SpillDescriptor(TypedDict):
-  """A body stored outside its trail row and exposed through a presigned URL."""
+  """An external body reference accepted by store body resolution."""
 
   s3: str
   url: str
