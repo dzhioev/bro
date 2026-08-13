@@ -17,7 +17,7 @@ Development requires Python 3.12 or newer, Git, and [uv](https://docs.astral.sh/
 
 ## Installation
 
-The base distribution contains every module — `bro.base`, the MCP abstraction, credential handling, workspace primitives, prompts, and the framework console scripts — but its required dependencies cover only what `bro.base` imports at module load. Every heavier surface states its own in an extra, so an install pays for the surfaces it selects:
+The base distribution contains every module — `bro.base`, the MCP abstraction, credential handling, workspace primitives, prompts, and the framework console scripts — and its required dependencies cover declaring and inspecting a persona: `bro list`, `bro show`, `credentials`, and `bro-shell-dir` run on a bare install. Every surface that *runs* a persona states its dependencies in an extra, so an install pays for the surfaces it selects:
 
 - `bro[agent]` — the OpenAI agent loop, tool serving, data sources, and terminal UIs
 - `bro[cw]` — interactive `cw` and launch UI dependencies

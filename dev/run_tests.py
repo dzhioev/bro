@@ -74,6 +74,7 @@ PYTEST_FILES = [
   'bro/datasources/wikipedia_test.py',
   'bro/registry_test.py',
   'bro/run_test.py',
+  'bro/packaging_test.py',
   'bro/trails/client_test.py',
   'bro/trails/lineage_test.py',
   'bro/trails/rewind_test.py',

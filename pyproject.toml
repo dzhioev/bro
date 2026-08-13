@@ -8,10 +8,11 @@ version = "0.1.0"
 description = "agent framework and isolated development workspaces"
 readme = "README.md"
 requires-python = ">=3.12"
-# only what bro.base imports at module load — every heavier surface is pinned by the
-# extra that owns it, including the ones bro imports lazily (mcp, boto3)
+# what declaring and inspecting a persona costs — every surface that *runs* one is
+# pinned by the extra that owns it, including the ones bro imports lazily (mcp, boto3)
 dependencies = [
   "icecream==2.2.0",
+  "pydantic==2.13.4",
   "python-dateutil==2.9.0.post0",
   "python-ulid==3.1.0",
 ]
@@ -22,7 +23,6 @@ agent = [
   "humanize==4.16.0",
   "mcp==1.28.1",
   "openai==3.0.0",
-  "pydantic==2.13.4",
   "rich==15.0.0",
   "textual==8.2.8",
   "trafilatura==2.1.0",
@@ -33,7 +33,6 @@ aws = [
 cw = [
   "humanize==4.16.0",
   "mcp==1.28.1",
-  "pydantic==2.13.4",
   "rich==15.0.0",
   "textual==8.2.8",
 ]
@@ -42,11 +41,9 @@ http = [
 ]
 llm = [
   "openai==3.0.0",
-  "pydantic==2.13.4",
 ]
 runtime = [
   "mcp==1.28.1",
-  "pydantic==2.13.4",
   "starlette==1.3.1",
   "uvicorn==0.49.0",
 ]
@@ -149,9 +146,9 @@ exclude = ["*.egg-info"]
 
 [tool.setuptools.package-data]
 "bro.base" = ["registry.json", "hooks/*.sh"]
-"bro.bros.bro" = ["scripts/*.md"]
-"bro.bros.dev" = ["REFERENCE.md", "scripts/*.md"]
-"bro.bros.lead" = ["scripts/*.md"]
+"bro.bros.bro" = ["spells/*.md"]
+"bro.bros.dev" = ["REFERENCE.md", "spells/*.md"]
+"bro.bros.lead" = ["spells/*.md"]
 "bro.prompts" = [
   "*.md",
   "*.prompt",
@@ -174,7 +171,7 @@ exclude = ["*.egg-info"]
   "base_image/Dockerfile",
   "base_image/build.sh",
 ]
-"bro.trails" = ["bootstrap.sh", "server/dynamodb_reserved_words.txt"]
+"bro.trails" = ["server/dynamodb_reserved_words.txt"]
 "bro.workflow" = ["hooks/commit-msg", "hooks/post-commit"]
 
 [tool.pytest.ini_options]
