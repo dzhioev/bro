@@ -15,7 +15,7 @@ jobs:
       # branches only — a pull_request checkout is a detached HEAD with none, leaving
       # the clone without the origin/master its entrypoint fetches. push runs already
       # have master checked out, and git refuses a fetch into the current branch.
-      - name: fetch master for the container smoke test
+      - name: fetch master
         if: github.event_name == 'pull_request'
         run: git fetch --no-tags origin +refs/heads/master:refs/heads/master
       - uses: astral-sh/setup-uv@v5
