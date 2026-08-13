@@ -61,10 +61,10 @@ build-context-command = "git ls-files"    # optional session-image context file 
 ./setup.sh
 source .venv/bin/activate
 ./format.sh
-./run-tests
+run-tests
 ```
 
-`./setup.sh` syncs the editable workspace and installs the repository hooks; the formatter and the test gate cover both distributions. Build the wheels with `uv build --package bro` and `uv build --package bro-dev`.
+`./setup.sh` syncs the editable workspace and installs the repository hooks; the formatter and the test gate cover every workspace member. Build the wheels with `uv build --package bro` and `uv build --package bro-dev`.
 
 ## License
 

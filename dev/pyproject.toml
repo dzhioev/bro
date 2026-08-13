@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bro-repo"
+version = "0.1.0"
+description = "scripts local to the bro framework checkout"
+requires-python = ">=3.12"
+dependencies = [
+  "bro",
+]
+
+[tool.uv.sources]
+bro = { workspace = true }
+
+[project.scripts]
+# top-level
+"run-tests" = "_entrypoints:run_tests"
+
+[tool.setuptools]
+include-package-data = false
+py-modules = [
+  "_entrypoints",
+  "run_tests",
+]

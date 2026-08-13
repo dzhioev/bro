@@ -58,6 +58,8 @@ github = [
 [dependency-groups]
 dev = [
   "bro-dev",
+  # dev/'s member; must stay a group entry — a [project] dependency would ship it
+  "bro-repo",
   "deptry==0.25.1",
   # starlette.testclient's preferred HTTP client (using httpx 0.x there is deprecated)
   "httpx2==2.10.0",
@@ -70,7 +72,7 @@ dev = [
 ]
 
 [tool.uv.workspace]
-members = ["bro-dev"]
+members = ["bro-dev", "dev"]
 
 [tool.uv]
 # each member's source directory reaches sys.path as a plain path entry; the
@@ -80,6 +82,7 @@ config-settings = { editable_mode = "compat" }
 
 [tool.uv.sources]
 bro-dev = { workspace = true }
+bro-repo = { workspace = true }
 
 [project.scripts]
 # bro

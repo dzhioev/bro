@@ -21,4 +21,4 @@ jobs:
       - run: uv sync --all-packages --all-groups --all-extras
       - run: |
           source .venv/bin/activate
-          ./run-tests
+          run-tests
