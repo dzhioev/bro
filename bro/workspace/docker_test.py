@@ -264,50 +264,6 @@ class TestPrepareContainer:
     }
     assert events[4] == ('create', ['docker', 'create'], b'TARBALL', 'ws')
 
-  def test_local_trails_root_is_mounted_into_the_container(self, monkeypatch, tmp_path):
-    project = tmp_path / 'project'
-    Workspace.create('ws', project, WorkspaceKind.CONTAINER)
-    trails_root = tmp_path / 'trail-data'
-    captured: dict = {}
-    monkeypatch.setenv('BRO_TRAILS_DIR', str(trails_root))
-    monkeypatch.setattr(workspace_docker, 'image_tag', lambda: 'image')
-    monkeypatch.setattr(workspace_docker, '_ensure_image', lambda tag: None)
-    monkeypatch.setattr(
-      workspace_docker.credentials,
-      'build_scoped_store',
-      lambda secrets, optional=(): {'trails.cred': b'{"backend":"local"}'},
-    )
-    monkeypatch.setattr(workspace_docker, '_bro_tarball', lambda store: b'TARBALL')
-    monkeypatch.setattr(
-      workspace_docker,
-      '_docker_create_argv',
-      lambda *args, **kwargs: captured.update(kwargs) or ['docker', 'create'],
-    )
-    monkeypatch.setattr(workspace_docker, '_create_container', lambda *args: 'cid')
-    launch = workspace_docker.Launch(
-      name='ws',
-      command=['bro', 'run'],
-      env={},
-      secrets=('trails',),
-      docker_sock=False,
-      tty=False,
-      forward_env=False,
-    )
-
-    assert workspace_docker.prepare_container(launch, project) == 'cid'
-    assert captured['extra_env']['BRO_TRAILS_DIR'] == '/home/cw/.bro-trails'
-    assert captured['extra_mounts'] == [f'{trails_root.resolve()}:/home/cw/.bro-trails']
-    assert trails_root.is_dir()
-
-  def test_service_trails_credential_adds_no_storage_mount(self, tmp_path, monkeypatch):
-    monkeypatch.setenv('BRO_TRAILS_DIR', str(tmp_path))
-    assert (
-      workspace_docker._local_trails_root(
-        {'trails.cred': b'{"base_url":"https://trails.example","token":"token"}'}
-      )
-      is None
-    )
-
 
 class TestDockerCreateArgv:
   @pytest.fixture

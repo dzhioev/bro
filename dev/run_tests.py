@@ -96,6 +96,7 @@ PYTEST_FILES = [
   'bro/launch/identity_test.py',
   'bro/launch/root_test.py',
   'bro/launch/scope_test.py',
+  'bro/launch/trails_test.py',
   'bro/launch/spawn_test.py',
   'bro/launch/summon_control_test.py',
   'bro/launch/_reflow_test.py',
