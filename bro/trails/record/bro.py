@@ -87,7 +87,7 @@ class Recorder(Tracker):
       return
     self._stop_keepalive()
     try:
-      recording.end(reason, detail, retry_delays=spine.WRITE_RETRY_DELAYS_SECONDS)
+      recording.end(reason, detail)
     except Exception as exception:
       logging.warning('trails end_trail failed for trail %s: %s', recording.trail_id, exception)
     with self._lock:
@@ -121,6 +121,6 @@ class Recorder(Tracker):
       if recording is None:
         return
       try:
-        recording.keepalive_if_idle(retry_delays=(0.5,))
+        recording.keepalive_if_idle()
       except Exception as exception:
         logging.warning('trails keepalive failed for trail %s: %s', recording.trail_id, exception)

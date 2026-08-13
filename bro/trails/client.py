@@ -15,7 +15,6 @@ from urllib.parse import urlencode, urlparse
 
 from bro.trails.model import BlazeRequest, spill_descriptor
 from bro.trails.store import (
-  RECORD_RETRY_DELAYS_SECONDS,
   AppendConflict,
   TrailNotFound,
   TrailsStore,
@@ -23,6 +22,8 @@ from bro.trails.store import (
 )
 
 _DEFAULT_RETRY_DELAYS_SECONDS = (0.0,)
+_HARD_RETRY_DELAYS_SECONDS = (0.1, 0.5, 2.0)
+_KEEPALIVE_RETRY_DELAYS_SECONDS = (0.5,)
 
 
 class HTTPStatusError(Exception):
@@ -166,7 +167,7 @@ class TrailsClient(TrailsStore):
       'POST',
       f'/v1/trails/{trail_id}/records',
       payload,
-      retry_delays=RECORD_RETRY_DELAYS_SECONDS,
+      retry_delays=_HARD_RETRY_DELAYS_SECONDS,
     )
 
   def recompute(self, trail_id: str) -> dict:
@@ -196,21 +197,24 @@ class TrailsClient(TrailsStore):
     trail_id: str,
     reason: str,
     detail: Optional[str] = None,
-    *,
-    retry_delays: tuple[float, ...] = _DEFAULT_RETRY_DELAYS_SECONDS,
   ) -> None:
     payload: dict[str, Any] = {'reason': reason}
     if detail is not None:
       payload['detail'] = detail
-    self._send('POST', f'/v1/trails/{trail_id}/end', payload, retry_delays=retry_delays)
+    self._send(
+      'POST',
+      f'/v1/trails/{trail_id}/end',
+      payload,
+      retry_delays=_HARD_RETRY_DELAYS_SECONDS,
+    )
 
-  def keepalive(
-    self,
-    trail_id: str,
-    *,
-    retry_delays: tuple[float, ...] = _DEFAULT_RETRY_DELAYS_SECONDS,
-  ) -> None:
-    self._send('POST', f'/v1/trails/{trail_id}/keepalive', {}, retry_delays=retry_delays)
+  def keepalive(self, trail_id: str) -> None:
+    self._send(
+      'POST',
+      f'/v1/trails/{trail_id}/keepalive',
+      {},
+      retry_delays=_KEEPALIVE_RETRY_DELAYS_SECONDS,
+    )
 
   def close(self) -> None:
     with self._lock:

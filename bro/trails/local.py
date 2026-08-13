@@ -257,10 +257,7 @@ class LocalStore(TrailsStore):
     trail_id: str,
     reason: str,
     detail: Optional[str] = None,
-    *,
-    retry_delays: tuple[float, ...] = (0.0,),
   ) -> None:
-    del retry_delays
     validate_end(reason, detail)
     with self._locked(trail_id, shared=False):
       header = self._read_header(trail_id)
@@ -272,8 +269,7 @@ class LocalStore(TrailsStore):
       header['last_alive_at'] = timestamp
       _atomic_json(self._trail_directory(trail_id) / 'header.json', header)
 
-  def keepalive(self, trail_id: str, *, retry_delays: tuple[float, ...] = (0.0,)) -> None:
-    del retry_delays
+  def keepalive(self, trail_id: str) -> None:
     with self._locked(trail_id, shared=False):
       header = self._read_header(trail_id)
       header['last_alive_at'] = _now_iso()

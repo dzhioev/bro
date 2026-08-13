@@ -5,10 +5,9 @@ import time
 from typing import Any, Optional
 
 from bro.trails.model import BlazeRequest
-from bro.trails.store import RECORD_RETRY_DELAYS_SECONDS, TrailsStore
+from bro.trails.store import TrailsStore
 
 KEEPALIVE_INTERVAL_SECONDS = 60.0
-WRITE_RETRY_DELAYS_SECONDS = RECORD_RETRY_DELAYS_SECONDS
 
 
 class Recording:
@@ -60,21 +59,14 @@ class Recording:
       self._last_write_monotonic = time.monotonic()
       return offset
 
-  def keepalive_if_idle(
-    self,
-    *,
-    retry_delays: Optional[tuple[float, ...]] = None,
-  ) -> bool:
+  def keepalive_if_idle(self) -> bool:
     """send a keepalive after one shared idle interval; return whether one sent."""
     with self._lock:
       if self._ended:
         return False
       if time.monotonic() - self._last_write_monotonic < KEEPALIVE_INTERVAL_SECONDS:
         return False
-      if retry_delays is None:
-        self.store.keepalive(self.trail_id)
-      else:
-        self.store.keepalive(self.trail_id, retry_delays=retry_delays)
+      self.store.keepalive(self.trail_id)
       self._last_write_monotonic = time.monotonic()
       return True
 
@@ -82,15 +74,10 @@ class Recording:
     self,
     reason: str,
     detail: Optional[str] = None,
-    *,
-    retry_delays: Optional[tuple[float, ...]] = None,
   ) -> None:
     """end this trail once."""
     with self._lock:
       if self._ended:
         return
-      if retry_delays is None:
-        self.store.end_trail(self.trail_id, reason, detail)
-      else:
-        self.store.end_trail(self.trail_id, reason, detail, retry_delays=retry_delays)
+      self.store.end_trail(self.trail_id, reason, detail)
       self._ended = True

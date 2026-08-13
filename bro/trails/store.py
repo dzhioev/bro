@@ -12,7 +12,6 @@ from bro.trails.model import BlazeRequest, ForkedFrom, RecordedTrail, Step, Trai
 
 DEFAULT_LIST_PAGE_SIZE = 100
 DEFAULT_STEPS_PAGE_SIZE = 200
-RECORD_RETRY_DELAYS_SECONDS = (0.1, 0.5, 2.0)
 
 
 class TrailNotFound(Exception):
@@ -159,12 +158,10 @@ class TrailsStore(ABC):
     trail_id: str,
     reason: str,
     detail: Optional[str] = None,
-    *,
-    retry_delays: tuple[float, ...] = (0.0,),
   ) -> None: ...
 
   @abstractmethod
-  def keepalive(self, trail_id: str, *, retry_delays: tuple[float, ...] = (0.0,)) -> None: ...
+  def keepalive(self, trail_id: str) -> None: ...
 
   def resolve_body(self, body: Any) -> Any:
     return body
