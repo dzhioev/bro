@@ -520,4 +520,5 @@ def test_resolve_auth_requires_explicit_loopback_override():
     resolve_auth(None, False, '127.0.0.1')
   with pytest.raises(RuntimeError, match='HOST'):
     resolve_auth(None, True, '0.0.0.0')
-  assert resolve_auth(None, True, '127.0.0.1') is None
+  for host in ('127.0.0.1', 'localhost', '::1'):
+    assert resolve_auth(None, True, host) is None

@@ -7,6 +7,7 @@ from typing import Any, Optional, TypedDict, cast
 
 UUID_LOOKUP_LIMIT = 100
 UNREPORTED_END_INFERENCE = 'unreported'
+LOOPBACK_HOSTS = frozenset({'127.0.0.1', 'localhost', '::1'})
 VALID_END_REASONS = frozenset({'ok', 'raised', 'error'})
 VALID_HOLDS = frozenset({'guided', 'attended', 'detached', 'unattended'})
 

@@ -1,8 +1,4 @@
-"""Synchronous read and write client for the trails service.
-
-`TrailsClient` owns the persistent authenticated HTTPS transport for paged
-headers, steps, messages, launch context, and every recording endpoint.
-"""
+"""Synchronous network proxy for a trails server."""
 
 import http.client
 import json
@@ -13,7 +9,7 @@ import urllib.request
 from typing import Any, Optional
 from urllib.parse import urlencode, urlparse
 
-from bro.trails.model import BlazeRequest, spill_descriptor
+from bro.trails.model import LOOPBACK_HOSTS, BlazeRequest, spill_descriptor
 from bro.trails.store import (
   AppendConflict,
   TrailNotFound,
@@ -38,10 +34,10 @@ def is_retryable_status(status: int) -> bool:
   return status >= 500 or status == 429
 
 
-class TrailsClient(TrailsStore):
-  """synchronous HTTPS client for the trails server.
+class NetworkStore(TrailsStore):
+  """synchronous transport proxy for a trails server.
 
-  one persistent connection per client; transport blips drop the socket and
+  one persistent connection per store; transport blips drop the socket and
   reopen on the next attempt. the transport lock also lets a recording adapter
   share the connection safely with its keepalive thread.
   """
@@ -51,12 +47,15 @@ class TrailsClient(TrailsStore):
     self._token = token
     self._timeout = timeout
     parsed = urlparse(self._base_url)
-    if parsed.scheme != 'https':
-      raise ValueError(f'TrailsClient requires an https URL, got {base_url!r}')
     hostname = parsed.hostname
-    self._host: str = hostname if hostname is not None else 'localhost'
+    secure = parsed.scheme == 'https'
+    loopback_http = parsed.scheme == 'http' and hostname in LOOPBACK_HOSTS
+    if hostname is None or not (secure or loopback_http):
+      raise ValueError(f'NetworkStore requires https or loopback http, got {base_url!r}')
+    self._scheme = parsed.scheme
+    self._host = hostname
     self._port = parsed.port
-    self._connection: Optional[http.client.HTTPSConnection] = None
+    self._connection: Optional[http.client.HTTPConnection] = None
     self._lock = threading.RLock()
 
   def list_trails(
@@ -316,13 +315,16 @@ class TrailsClient(TrailsStore):
       raise last_exception
     raise TransientUnavailable(str(last_exception)) from last_exception
 
-  def _get_connection(self) -> http.client.HTTPSConnection:
+  def _get_connection(self) -> http.client.HTTPConnection:
     if self._connection is not None:
       return self._connection
-    context = ssl.create_default_context()
-    self._connection = http.client.HTTPSConnection(
-      self._host, self._port, timeout=self._timeout, context=context
-    )
+    if self._scheme == 'http':
+      self._connection = http.client.HTTPConnection(self._host, self._port, timeout=self._timeout)
+    else:
+      context = ssl.create_default_context()
+      self._connection = http.client.HTTPSConnection(
+        self._host, self._port, timeout=self._timeout, context=context
+      )
     return self._connection
 
   def _drop_connection(self) -> None:

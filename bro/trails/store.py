@@ -195,7 +195,7 @@ def local_root() -> Path:
 def build_store(config: dict[str, Any]) -> TrailsStore:
   backend = config.get('backend', 'service')
   if backend == 'service':
-    from bro.trails.client import TrailsClient
+    from bro.trails.network import NetworkStore
 
     try:
       base_url = config['base_url']
@@ -204,7 +204,7 @@ def build_store(config: dict[str, Any]) -> TrailsStore:
       raise ValueError(f'trails service config is missing {exception.args[0]!r}') from exception
     if not isinstance(base_url, str) or not isinstance(token, str):
       raise ValueError('trails service base_url and token must be strings')
-    return TrailsClient(base_url, token)
+    return NetworkStore(base_url, token)
   if backend == 'local':
     from bro.trails.local import LocalStore
 

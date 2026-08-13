@@ -15,13 +15,18 @@ from aiohttp import web
 
 import bro.base.args as base_args
 from bro.base import log
-from bro.trails.model import MESSAGE_TYPES, UUID_LOOKUP_LIMIT, BlazeRequest, validate_end
+from bro.trails.model import (
+  LOOPBACK_HOSTS,
+  MESSAGE_TYPES,
+  UUID_LOOKUP_LIMIT,
+  BlazeRequest,
+  validate_end,
+)
 from bro.trails.server import storage
 
 __cli_name__ = 'trails-server'
 
 DEFAULT_PORT = 8004
-LOOPBACK_HOSTS = frozenset({'127.0.0.1', 'localhost'})
 SWEEP_INTERVAL_SECONDS = 600.0
 CHECK_HEARTBEAT_INTERVAL_SECONDS = 5.0
 

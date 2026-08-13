@@ -5,10 +5,10 @@ from unittest.mock import patch
 
 import pytest
 
-from bro.trails.client import (
-  TrailsClient,
-)
 from bro.trails.model import BlazeRequest, ForkedFrom, RecordedTrail, Step, Trail
+from bro.trails.network import (
+  NetworkStore,
+)
 from bro.trails.store import (
   AppendConflict,
   TrailNotFound,
@@ -68,14 +68,29 @@ def _install_fake_connection(monkeypatch) -> _FakeConnection:
   return fake
 
 
-def _client() -> TrailsClient:
-  return TrailsClient('https://bro.trails.example', 'tok')
+def _client() -> NetworkStore:
+  return NetworkStore('https://bro.trails.example', 'tok')
 
 
 class TestConstructor:
-  def test_rejects_non_https(self):
-    with pytest.raises(ValueError, match='https'):
-      TrailsClient('http://bro.trails.example', 'tok')
+  @pytest.mark.parametrize(
+    'base_url',
+    ['http://127.0.0.1:8004', 'http://localhost:8004', 'http://[::1]:8004'],
+  )
+  def test_accepts_loopback_http(self, base_url):
+    NetworkStore(base_url, 'tok')
+
+  def test_rejects_non_loopback_http(self):
+    with pytest.raises(ValueError, match='https or loopback http'):
+      NetworkStore('http://bro.trails.example', 'tok')
+
+  def test_uses_plain_http_connection_for_loopback(self, monkeypatch):
+    fake = _FakeConnection()
+    monkeypatch.setattr(http.client, 'HTTPConnection', lambda *args, **kwargs: fake)
+    fake.queue((200, b'{"id": "T1"}'))
+
+    store = NetworkStore('http://127.0.0.1:8004', 'tok')
+    assert store.get_trail('T1') == {'id': 'T1'}
 
 
 class TestGetTrail:
@@ -482,8 +497,8 @@ class TestFetchRecordedTrail:
     cursor pages until exhausted, then returns a `RecordedTrail`.
     """
     with (
-      patch.object(TrailsClient, 'get_trail') as get_trail,
-      patch.object(TrailsClient, 'get_steps') as get_steps,
+      patch.object(NetworkStore, 'get_trail') as get_trail,
+      patch.object(NetworkStore, 'get_steps') as get_steps,
     ):
       get_trail.return_value = {
         'id': 'T1',
@@ -543,9 +558,9 @@ class TestFetchRecordedTrail:
       'size': 2_000_000,
     }
     with (
-      patch.object(TrailsClient, 'get_trail') as get_trail,
-      patch.object(TrailsClient, 'get_steps') as get_steps,
-      patch.object(TrailsClient, 'fetch_spilled_body') as fetch_spilled,
+      patch.object(NetworkStore, 'get_trail') as get_trail,
+      patch.object(NetworkStore, 'get_steps') as get_steps,
+      patch.object(NetworkStore, 'fetch_spilled_body') as fetch_spilled,
     ):
       get_trail.return_value = {
         'id': 'T1',
@@ -590,9 +605,9 @@ class TestFetchRecordedTrail:
     a spill descriptor.
     """
     with (
-      patch.object(TrailsClient, 'get_trail') as get_trail,
-      patch.object(TrailsClient, 'get_steps') as get_steps,
-      patch.object(TrailsClient, 'fetch_spilled_body') as fetch_spilled,
+      patch.object(NetworkStore, 'get_trail') as get_trail,
+      patch.object(NetworkStore, 'get_steps') as get_steps,
+      patch.object(NetworkStore, 'fetch_spilled_body') as fetch_spilled,
     ):
       get_trail.return_value = {
         'id': 'T1',

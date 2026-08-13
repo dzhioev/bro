@@ -9,8 +9,8 @@ import pytest
 
 import bro.trails.record.spine as trails_record_spine
 from bro.base import configs
-from bro.trails.client import HTTPStatusError, TrailsClient
 from bro.trails.model import ForkedFrom, tools_sha256
+from bro.trails.network import HTTPStatusError, NetworkStore
 from bro.trails.record.bro import Recorder
 from bro.trails.store import TransientUnavailable
 
@@ -72,20 +72,20 @@ def _append_response(extent: int, *, appended: int = 1) -> tuple[int, bytes]:
 
 
 class TestRecorderConstructor:
-  def test_rejects_non_https_url(self):
+  def test_rejects_non_loopback_http_url(self):
     with pytest.raises(ValueError, match='https'):
-      TrailsClient('http://bro.trails.example', 'tok')
+      NetworkStore('http://bro.trails.example', 'tok')
 
   def test_rejects_url_without_scheme(self):
     with pytest.raises(ValueError, match='https'):
-      TrailsClient('bro.trails.example', 'tok')
+      NetworkStore('bro.trails.example', 'tok')
 
 
 class TestRecorderStartTrail:
   def test_opens_a_universal_body_and_returns_server_trail_id(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
     fake.queue((201, b'{"id": "T-server"}'))
-    tracker = Recorder(TrailsClient('https://bro.trails.example', 'tok'))
+    tracker = Recorder(NetworkStore('https://bro.trails.example', 'tok'))
     trail_id = tracker.start_trail(
       bro='dev',
       llm_spec={'type': 'chat_gpt', 'model': 'gpt-5'},
@@ -125,7 +125,7 @@ class TestRecorderStartTrail:
   def test_serializes_fork_pointers(self, monkeypatch, forked_from, expected):
     fake = _install_fake_connection(monkeypatch)
     fake.queue((201, b'{"id": "T1"}'))
-    tracker = Recorder(TrailsClient('https://bro.trails.example', 'tok'))
+    tracker = Recorder(NetworkStore('https://bro.trails.example', 'tok'))
     tracker.start_trail(
       bro='b',
       llm_spec={},
@@ -140,7 +140,7 @@ class TestRecorderStartTrail:
   def test_blaze_is_not_retried(self, monkeypatch, failure):
     fake = _install_fake_connection(monkeypatch)
     fake.queue(failure)
-    tracker = Recorder(TrailsClient('https://bro.trails.example', 'tok'))
+    tracker = Recorder(NetworkStore('https://bro.trails.example', 'tok'))
     with pytest.raises(TransientUnavailable):
       tracker.start_trail(
         bro='b',
@@ -157,7 +157,7 @@ class TestRecorderStep:
   def _ready(self, monkeypatch) -> tuple[Recorder, _FakeConnection]:
     fake = _install_fake_connection(monkeypatch)
     fake.queue((201, b'{"id": "T1"}'))
-    tracker = Recorder(TrailsClient('https://bro.trails.example', 'tok'))
+    tracker = Recorder(NetworkStore('https://bro.trails.example', 'tok'))
     tracker.start_trail(
       bro='b',
       llm_spec={},
@@ -170,7 +170,7 @@ class TestRecorderStep:
 
   def test_step_before_start_trail_raises(self, monkeypatch):
     _install_fake_connection(monkeypatch)
-    tracker = Recorder(TrailsClient('https://bro.trails.example', 'tok'))
+    tracker = Recorder(NetworkStore('https://bro.trails.example', 'tok'))
     with pytest.raises(RuntimeError, match='before start_trail'):
       tracker.step('user_input', 'hello', turn_index=0)
 
@@ -280,7 +280,7 @@ class TestRecorderEndTrail:
   def _ready(self, monkeypatch) -> tuple[Recorder, _FakeConnection]:
     fake = _install_fake_connection(monkeypatch)
     fake.queue((201, b'{"id": "T1"}'))
-    tracker = Recorder(TrailsClient('https://bro.trails.example', 'tok'))
+    tracker = Recorder(NetworkStore('https://bro.trails.example', 'tok'))
     tracker.start_trail(
       bro='b', llm_spec={}, system_prompt='p', forked_from=None, interactive=False, surface='x'
     )
@@ -316,7 +316,7 @@ class TestRecorderKeepalive:
     fake = _install_fake_connection(monkeypatch)
     monkeypatch.setattr(trails_record_spine, 'KEEPALIVE_INTERVAL_SECONDS', interval)
     fake.queue((201, b'{"id": "T1"}'))
-    tracker = Recorder(TrailsClient('https://bro.trails.example', 'tok'))
+    tracker = Recorder(NetworkStore('https://bro.trails.example', 'tok'))
     tracker.start_trail(
       bro='b', llm_spec={}, system_prompt='', forked_from=None, interactive=False, surface='x'
     )

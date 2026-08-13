@@ -3,14 +3,14 @@ from unittest.mock import patch
 
 import pytest
 
-from bro.trails.client import TrailsClient
 from bro.trails.local import LocalStore
+from bro.trails.network import NetworkStore
 from bro.trails.store import build_store, local_root
 
 
 def test_missing_backend_keeps_selecting_service():
   store = build_store({'base_url': 'https://trails.example', 'token': 'secret'})
-  assert isinstance(store, TrailsClient)
+  assert isinstance(store, NetworkStore)
 
 
 def test_explicit_local_backend_uses_environment_root(tmp_path, monkeypatch):
