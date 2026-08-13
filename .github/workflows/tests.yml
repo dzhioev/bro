@@ -15,10 +15,13 @@ jobs:
       # branches only — a pull_request checkout is a detached HEAD with none, leaving
       # the clone without the origin/master its entrypoint fetches. push runs already
       # have master checked out, and git refuses a fetch into the current branch.
-      - if: github.event_name == 'pull_request'
+      - name: fetch master
+        if: github.event_name == 'pull_request'
         run: git fetch --no-tags origin +refs/heads/master:refs/heads/master
       - uses: astral-sh/setup-uv@v5
-      - run: uv sync --all-packages --all-groups --all-extras
-      - run: |
+      - name: sync the workspace
+        run: uv sync --all-packages --all-groups --all-extras
+      - name: run-tests
+        run: |
           source .venv/bin/activate
           run-tests
