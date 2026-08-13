@@ -151,6 +151,7 @@ exclude = ["*.egg-info"]
 "bro.base" = ["registry.json", "hooks/*.sh"]
 "bro.bros.bro" = ["scripts/*.md"]
 "bro.bros.dev" = ["REFERENCE.md", "scripts/*.md"]
+"bro.bros.lead" = ["scripts/*.md"]
 "bro.prompts" = [
   "*.md",
   "*.prompt",
