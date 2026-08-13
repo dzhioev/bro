@@ -1,8 +1,8 @@
 ---
 name: run-feature
-description: This spell should be used when the user wants a large piece of work driven end to end from a coordinator session — "start a feature", "kick off the <X> feature", "let's design and build <big thing>", "run the feature workflow", "orchestrate this", "resume the feature at <url>". This session becomes the coordinator: it opens a feature task as the single source of truth, then walks the work through design, review and planning, per-stage implementation, integration, and verification, running every phase as a summoned worker in its own isolated container and recording each outcome on the feature page before starting the next. It never designs or implements itself. For work that fits one session this is overkill — summon a single worker on the task (`spell::ask`) and let it run `spell::fix` itself.
+description: This spell should be used when the user wants a large piece of work driven end to end from a coordinator session — "start a feature", "kick off the <X> feature", "let's design and build <big thing>", "run the feature workflow", "orchestrate this", "resume the feature at <url>". This session becomes the coordinator: it opens a feature task as the single source of truth, then walks the work through design, review and planning, per-stage implementation, integration, and verification, running every phase as a summoned worker in its own isolated container and recording each outcome on the feature page before starting the next. It never designs or implements itself. For work that fits one session this is overkill — summon a single worker on the task ([[ask]]) and let it run [[fix]] itself.
 parameters: {"feature?": "ref of an existing feature task to resume", "new?": "seed text for a new feature"}
-version: 1.0.1
+version: 1.0.2
 ---
 
 # run-feature
@@ -49,16 +49,16 @@ Record orchestration events as comments (`brog::add_comment(id, topic, body)`): 
 
 ## Summoning a phase
 
-The summon mechanics — client pick, relaying, and every failure mode — are `spell::ask`'s; this spell only says how a phase differs from a one-shot ask.
+The summon mechanics — client pick, relaying, and every failure mode — are [[ask]]'s; this spell only says how a phase differs from a one-shot ask.
 
 - **Always detached.** No phase is short enough for a blocking wait: send every one detached and poll for its result.
-- **Size the timeout to the phase.** Stages and integration end in a PR review and idle on human latency, so `spell::ask`'s open-ended-run exception applies to them — at the default they are killed mid-watch. The other phases finish on their own and take it.
+- **Size the timeout to the phase.** Stages and integration end in a PR review and idle on human latency, so [[ask]]'s open-ended-run exception applies to them — at the default they are killed mid-watch. The other phases finish on their own and take it.
 - **Base ref (`into`).** Design and review-and-plan inherit your workspace HEAD — pass nothing. Stages and integration pass the feature branch. Verification passes `master`, since the feature is on it by then.
 - **Hold.** Leave the default. A worker with no human channel either delivers or raises with a reason you relay.
 - **Scope.** A worker starts from its own credentials, not yours. Grant only what a phase needs beyond them and only what you hold yourself: a credential the phase must reach, or `@<bro>` when the phase has to hand work onward — the integration phase needs the operations bro granted when the feature requires a rollout to go live.
 - **Self-contained prompts.** A worker shares no context with you: spell out the feature URL, what to produce, where to put it, and what not to touch. Ask for the open questions and unmet prerequisites in its *answer* rather than on the page — they are yours to act on, not the page's to carry.
 
-Do not let this session end with a phase in flight; `spell::ask` covers reclaiming a summon whose wait was lost.
+Do not let this session end with a phase in flight; [[ask]] covers reclaiming a summon whose wait was lost.
 
 ## Phases
 
@@ -74,7 +74,7 @@ Outcome: `## Design` on the page.
 
 Summon a **fresh** worker — the value here is eyes that did not write the design — and raise its reasoning effort to the maximum the summon accepts. Reviewing and planning are one phase: the reviewer ends up holding the deepest understanding of the design, which is what splitting it into stages needs.
 
-> Design-review and planning phase of a multi-phase feature coordinated by another session. Read the whole task at `<feature-url>`, then its `## Design` with fresh eyes: find the problems and the improvements, and verify the design's assumptions wherever you can reach them — introspect the real schemas, APIs, and call sites instead of leaving them as open questions. Finalize the design in place (`brog::edit_description` on the `## Design` section, leaving the other sections intact). Then plan the implementation of the design you just finalized and split it into stages — one stage if the work is small. For EACH stage call `brog::create_task` to open a stage task whose body carries: the stage's goal and details; "part of feature [`<feature-name>`](`<feature-url>`) — read its `## Design` and `## Design changelog` before starting"; "land via `spell::run-pr` with its base argument set to `<feature-branch>`, so this PRs into the feature branch rather than master"; "when the PR merges, mark this task done — do not hold it for a rollout, the feature rolls out once after integration"; and "if you change a design decision mid-build, append it to the feature page's `## Design changelog` for the history and the later stages". Then establish the feature integration branch: `git fetch origin master && git reset --hard origin/master && git push -u origin $(git branch --show-current)`. Finally write `## Implementation plan` on the feature task (`brog::append_description`): the feature branch name and the ordered stages, each linking its stage task. Do NOT implement code or open a PR, and do not change any task's status. Answer with what you changed in the design and why, the stage list, the feature branch name, and any prerequisite implementation will still need.
+> Design-review and planning phase of a multi-phase feature coordinated by another session. Read the whole task at `<feature-url>`, then its `## Design` with fresh eyes: find the problems and the improvements, and verify the design's assumptions wherever you can reach them — introspect the real schemas, APIs, and call sites instead of leaving them as open questions. Finalize the design in place (`brog::edit_description` on the `## Design` section, leaving the other sections intact). Then plan the implementation of the design you just finalized and split it into stages — one stage if the work is small. For EACH stage call `brog::create_task` to open a stage task whose body carries: the stage's goal and details; "part of feature [`<feature-name>`](`<feature-url>`) — read its `## Design` and `## Design changelog` before starting"; "land via [[run pr]] with its base argument set to `<feature-branch>`, so this PRs into the feature branch rather than master"; "when the PR merges, mark this task done — do not hold it for a rollout, the feature rolls out once after integration"; and "if you change a design decision mid-build, append it to the feature page's `## Design changelog` for the history and the later stages". Then establish the feature integration branch: `git fetch origin master && git reset --hard origin/master && git push -u origin $(git branch --show-current)`. Finally write `## Implementation plan` on the feature task (`brog::append_description`): the feature branch name and the ordered stages, each linking its stage task. Do NOT implement code or open a PR, and do not change any task's status. Answer with what you changed in the design and why, the stage list, the feature branch name, and any prerequisite implementation will still need.
 
 Outcome: a finalized `## Design`, stage tasks created and linked under `## Implementation plan`, and the feature branch pushed. Take material objections and open questions to the user before starting stage 1.
 
@@ -82,7 +82,7 @@ Outcome: a finalized `## Design`, stage tasks created and linked under `## Imple
 
 Run them **in order, one at a time**: each stage builds on the branch state the previous one left. For each, summon a worker on the stage task with the feature branch as its base ref and a review-sized timeout:
 
-> Work the task at `<stage-url>` through `spell::fix`. Its body carries the feature context and how to land it.
+> Work the task at `<stage-url>` through [[fix]]. Its body carries the feature context and how to land it.
 
 The worker implements, opens its PR into the feature branch, carries it through review, lands it there, and closes its stage task. Record the outcome and move to the next stage.
 
@@ -92,7 +92,7 @@ If a stage reports a blocker or a design change, decide with the user whether th
 
 Once every stage task is done:
 
-> Integration phase of a multi-phase feature coordinated by another session. This workspace is on the feature branch `<feature-branch>`. Sync it against origin, rebase it onto `origin/master` (force-push the FEATURE branch with `--force-with-lease` if the rebase rewrote it — never force-push master), then open ONE pull request for the whole feature with `spell::run-pr` based on master and land it with `spell::land`. Skip the review round: every stage PR was reviewed already, so treat this as an explicit waiver of the approval precondition rather than waiting on a second review of the same code. Keep the task at `<feature-url>` open whatever happens — the coordinating session closes it after verification. If the merged feature needs a rollout to take effect, hand it off per `spell::land`'s own rules and report what came back. Answer with the merged PR, the squash commit, and the rollout outcome if there was one.
+> Integration phase of a multi-phase feature coordinated by another session. This workspace is on the feature branch `<feature-branch>`. Sync it against origin, rebase it onto `origin/master` (force-push the FEATURE branch with `--force-with-lease` if the rebase rewrote it — never force-push master), then open ONE pull request for the whole feature with [[run pr]] based on master and land it with [[land]]. Skip the review round: every stage PR was reviewed already, so treat this as an explicit waiver of the approval precondition rather than waiting on a second review of the same code. Keep the task at `<feature-url>` open whatever happens — the coordinating session closes it after verification. If the merged feature needs a rollout to take effect, hand it off per [[land]]'s own rules and report what came back. Answer with the merged PR, the squash commit, and the rollout outcome if there was one.
 
 Outcome: the feature on master as a single squash, rolled out if it needed one. When the worker reports a rollout it could not hand off — no operations bro in its allow-list — relay the exact command to the user and confirm it ran before verifying.
 

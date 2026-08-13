@@ -147,21 +147,25 @@ def _render_skill_loader() -> str:
 
 
 def _render_spells(*, include_cast: bool) -> str:
-  lines = [
-    '## Spells',
-    '',
-    'Spells are named procedures exposed as canonical `spell::` tools. To run one, call its '
-    'tool and execute the returned instructions.',
-  ]
-  if include_cast:
-    lines.extend(
-      [
-        '',
-        'Text enclosed as `[[…]]` is a spell command — call `bro::cast` with it and follow '
-        'the returned instructions.',
-      ]
-    )
-  return '\n'.join(lines)
+  run_instruction = (
+    'call `bro::cast` with the enclosed text and follow the returned instructions'
+    if include_cast
+    else "call the named spell's own tool"
+  )
+  return '\n'.join(
+    [
+      '## Spells',
+      '',
+      'Spells are named procedures exposed as canonical `spell::` tools. To run one, call its '
+      'tool and execute the returned instructions.',
+      '',
+      '`[[…]]` marks a spell — in a user message, a spell body, a doc — with the enclosed text '
+      'phrased to fit its sentence rather than spelled as the canonical name: `please [[land '
+      'the pr]]`, `did you [[land]]?` and `I [[landed PR:54]]` all name the `land` spell. Run '
+      f'the marked spell only where the sentence asks you to: {run_instruction}. Anywhere else '
+      'the marker only names it.',
+    ]
+  )
 
 
 class BroRaised(llm_mcp.ToolControlSignal):

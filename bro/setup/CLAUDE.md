@@ -40,7 +40,7 @@ A `kind+instance` name declares a variant of the kind named up to the `+` (name 
 
 ### Per-project instances (`~/.bro.json`)
 
-The registry's `instance` selector decides a kind's instance for the whole host, but one host serves several projects and the right `github` identity or task tracker is usually the project's. `~/.bro.json` — config beside the store rather than a secret inside it — records that mapping, and `spell::wire` fills it in from inside a repo.
+The registry's `instance` selector decides a kind's instance for the whole host, but one host serves several projects and the right `github` identity or task tracker is usually the project's. `~/.bro.json` — config beside the store rather than a secret inside it — records that mapping, and [[wire]] fills it in from inside a repo.
 
 The file's schema is `bro/base/host_config.py`'s module docstring, which the parser there validates against. A project keys on its repo root, so every linked worktree maps to its main checkout and one entry covers a checkout's sessions and worktrees alike. A selection of `kind+` — the kind's own registry entry — needs that entry to declare sources of its own, which a kind entry selecting an instance does not have: two real alternatives need two names.
 
