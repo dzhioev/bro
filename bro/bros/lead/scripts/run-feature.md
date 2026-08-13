@@ -1,6 +1,6 @@
 ---
 name: run-feature
-description: This script should be used when the user wants a large piece of work driven end to end from a coordinator session — "start a feature", "kick off the <X> feature", "let's design and build <big thing>", "run the feature workflow", "orchestrate this", "resume the feature at <url>". This session becomes the coordinator: it opens a feature task as the single source of truth, then walks the work through design, design review, planning, per-stage implementation, integration, and verification, running every phase as a summoned worker in its own isolated container and recording each outcome on the feature page before starting the next. It never designs or implements itself. For work that fits one session this is overkill — summon a single worker on the task (`@::ask`) and let it run `@::fix` itself.
+description: This script should be used when the user wants a large piece of work driven end to end from a coordinator session — "start a feature", "kick off the <X> feature", "let's design and build <big thing>", "run the feature workflow", "orchestrate this", "resume the feature at <url>". This session becomes the coordinator: it opens a feature task as the single source of truth, then walks the work through design, review and planning, per-stage implementation, integration, and verification, running every phase as a summoned worker in its own isolated container and recording each outcome on the feature page before starting the next. It never designs or implements itself. For work that fits one session this is overkill — summon a single worker on the task (`@::ask`) and let it run `@::fix` itself.
 parameters: {"feature?": "ref of an existing feature task to resume", "new?": "seed text for a new feature"}
 version: 1.0.0
 ---
@@ -40,8 +40,8 @@ Read the appended `# Arguments` section:
 Sections accumulate on the description; workers write them with `brog::append_description` / `brog::edit_description`. Your own running record lives in the comment stream, not in a section.
 
 - `## Goal` — written at creation.
-- `## Design` — written by the design phase, finalized by the design review.
-- `## Implementation plan` — written by the planning phase: the feature integration branch name plus the ordered stages, each linking its stage task.
+- `## Design` — written by the design phase, finalized by the review-and-plan phase.
+- `## Implementation plan` — written by the review-and-plan phase: the feature integration branch name plus the ordered stages, each linking its stage task.
 - `## Design changelog` — appended by a stage when a design decision changes mid-build, so later stages and the history see it.
 - `## Verification` — appended by the verification phase: what it exercised against the shipped result, and the outcome.
 
@@ -53,7 +53,7 @@ The summon mechanics — client pick, relaying, and every failure mode — are `
 
 - **Always detached.** No phase is short enough for a blocking wait: send every one detached and poll for its result.
 - **Size the timeout to the phase.** Stages and integration end in a PR review and idle on human latency, so `@::ask`'s open-ended-run exception applies to them — at the default they are killed mid-watch. The other phases finish on their own and take it.
-- **Base ref (`into`).** Design, review, and planning inherit your workspace HEAD — pass nothing. Stages and integration pass the feature branch. Verification passes `master`, since the feature is on it by then.
+- **Base ref (`into`).** Design and review-and-plan inherit your workspace HEAD — pass nothing. Stages and integration pass the feature branch. Verification passes `master`, since the feature is on it by then.
 - **Hold.** Leave the default. A worker with no human channel either delivers or raises with a reason you relay.
 - **Scope.** A worker starts from its own credentials, not yours. Grant only what a phase needs beyond them and only what you hold yourself: a credential the phase must reach, or `@<bro>` when the phase has to hand work onward — the integration phase needs the operations bro granted when the feature requires a rollout to go live.
 - **Self-contained prompts.** A worker shares no context with you: spell out the feature URL, what to produce, where to put it, and what not to touch. Ask for the open questions and unmet prerequisites in its *answer* rather than on the page — they are yours to act on, not the page's to carry.
@@ -70,21 +70,15 @@ Between phases, review the artifact the worker produced before summoning the nex
 
 Outcome: `## Design` on the page.
 
-### 2 — design review
+### 2 — review and plan
 
-Summon a **fresh** worker — the value here is eyes that did not write the design — and raise its reasoning effort to the maximum the summon accepts.
+Summon a **fresh** worker — the value here is eyes that did not write the design — and raise its reasoning effort to the maximum the summon accepts. Reviewing and planning are one phase: the reviewer ends up holding the deepest understanding of the design, which is what splitting it into stages needs.
 
-> Design-review phase of a multi-phase feature coordinated by another session. Read the whole task at `<feature-url>`, then its `## Design` with fresh eyes: find the problems and the improvements, and verify the design's assumptions wherever you can reach them — introspect the real schemas, APIs, and call sites instead of leaving them as open questions. Then finalize the design in place (`brog::edit_description` on the `## Design` section, leaving the other sections intact). Do NOT implement, open a PR, or change the task status. Answer with what you changed and why, anything you would change but did not, and any prerequisite implementation will still need.
+> Design-review and planning phase of a multi-phase feature coordinated by another session. Read the whole task at `<feature-url>`, then its `## Design` with fresh eyes: find the problems and the improvements, and verify the design's assumptions wherever you can reach them — introspect the real schemas, APIs, and call sites instead of leaving them as open questions. Finalize the design in place (`brog::edit_description` on the `## Design` section, leaving the other sections intact). Then plan the implementation of the design you just finalized and split it into stages — one stage if the work is small. For EACH stage call `brog::create_task` to open a stage task whose body carries: the stage's goal and details; "part of feature [`<feature-name>`](`<feature-url>`) — read its `## Design` and `## Design changelog` before starting"; "land via `@::run-pr` with its base argument set to `<feature-branch>`, so this PRs into the feature branch rather than master"; "when the PR merges, mark this task done — do not hold it for a rollout, the feature rolls out once after integration"; and "if you change a design decision mid-build, append it to the feature page's `## Design changelog` for the history and the later stages". Then establish the feature integration branch: `git fetch origin master && git reset --hard origin/master && git push -u origin $(git branch --show-current)`. Finally write `## Implementation plan` on the feature task (`brog::append_description`): the feature branch name and the ordered stages, each linking its stage task. Do NOT implement code or open a PR, and do not change any task's status. Answer with what you changed in the design and why, the stage list, the feature branch name, and any prerequisite implementation will still need.
 
-Outcome: a finalized `## Design`. Take material objections to the user before moving on.
+Outcome: a finalized `## Design`, stage tasks created and linked under `## Implementation plan`, and the feature branch pushed. Take material objections and open questions to the user before starting stage 1.
 
-### 3 — plan
-
-> Planning phase of a multi-phase feature coordinated by another session. From the finalized `## Design` on the task at `<feature-url>`, produce an implementation plan and split it into stages — one stage if the work is small. For EACH stage call `brog::create_task` to open a stage task whose body carries: the stage's goal and details; "part of feature [`<feature-name>`](`<feature-url>`) — read its `## Design` and `## Design changelog` before starting"; "land via `@::run-pr` with its base argument set to `<feature-branch>`, so this PRs into the feature branch rather than master"; "when the PR merges, mark this task done — do not hold it for a rollout, the feature rolls out once after integration"; and "if you change a design decision mid-build, append it to the feature page's `## Design changelog` for the history and the later stages". Then establish the feature integration branch: `git fetch origin master && git reset --hard origin/master && git push -u origin $(git branch --show-current)`. Finally write `## Implementation plan` on the feature task (`brog::append_description`): the feature branch name and the ordered stages, each linking its stage task. Do NOT implement. Answer with the stage list, the feature branch name, and any open question about the breakdown.
-
-Outcome: stage tasks created and linked, the feature branch pushed. Settle the worker's open questions with the user before starting stage 1.
-
-### 4 — stages
+### 3 — stages
 
 Run them **in order, one at a time**: each stage builds on the branch state the previous one left. For each, summon a worker on the stage task with the feature branch as its base ref and a review-sized timeout:
 
@@ -94,7 +88,7 @@ The worker implements, opens its PR into the feature branch, carries it through 
 
 If a stage reports a blocker or a design change, decide with the user whether the plan needs adjusting — a repointed stage, an added one — before continuing. A stage that raises leaves its work recoverable on a pushed ref named in the reason; the retry is a fresh summon on the same stage task.
 
-### 5 — integrate
+### 4 — integrate
 
 Once every stage task is done:
 
@@ -102,7 +96,7 @@ Once every stage task is done:
 
 Outcome: the feature on master as a single squash, rolled out if it needed one. When the worker reports a rollout it could not hand off — no operations bro in its allow-list — relay the exact command to the user and confirm it ran before verifying.
 
-### 6 — verify
+### 5 — verify
 
 Once the feature is live — merged, and rolled out if it needed a rollout:
 
@@ -110,7 +104,7 @@ Once the feature is live — merged, and rolled out if it needed a rollout:
 
 Grant this phase the credentials the feature's live surface needs. A failed verification is not a close: surface it, and plan a fix stage with the user.
 
-### 7 — close
+### 6 — close
 
 **Closing the feature task is yours alone** — no phase does it for you. Once the goal is met, any rollout is confirmed, and verification passed, add a final comment summarizing what shipped and close the task (`brog::update_task(<feature-id>, status='done')`). Don't leave a finished feature open.
 
