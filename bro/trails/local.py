@@ -15,29 +15,16 @@ from typing import Any, Optional
 
 from bro.base.lulid import lulid
 from bro.trails import backends, rows
-from bro.trails.model import UNREPORTED_END_INFERENCE, canonical_json_bytes
+from bro.trails.model import (
+  UNREPORTED_END_INFERENCE,
+  BlazeRequest,
+  canonical_json_bytes,
+  validate_end,
+)
 from bro.trails.store import AppendConflict, TrailNotFound, TrailsStore
 
 _DEFAULT_PAGE_SIZE = 100
 _UNREPORTED_AFTER = timedelta(hours=1)
-_VALID_END_REASONS = frozenset({'ok', 'raised', 'error'})
-_VALID_HOLDS = frozenset({'guided', 'attended', 'detached', 'unattended'})
-_CREATE_FIELDS = frozenset(
-  {
-    'harness',
-    'version',
-    'interactive',
-    'surface',
-    'body',
-    'bro',
-    'hold',
-    'forked_from',
-    'summoned_by',
-    'subject',
-    'location',
-    'native',
-  }
-)
 
 
 class LocalStore(TrailsStore):
@@ -162,23 +149,27 @@ class LocalStore(TrailsStore):
         return None
       return json.loads(path.read_text())
 
-  def create_trail(self, payload: dict) -> dict:
-    adapter, records = self._validate_create(payload)
+  def blaze(self, request: BlazeRequest) -> dict:
+    adapter = self._adapter(request.harness)
+    adapter.validate_create(request.native)
+    if request.harness == 'bro' and request.bro is None:
+      raise ValueError('bro is required for the bro harness')
+    records = adapter.open(request.body).records
     trail_id = lulid()
     started_at = _now_iso()
     directory = self._trail_directory(trail_id)
     with _creating_directory(directory):
       header: dict[str, Any] = {
         'id': trail_id,
-        'harness': payload['harness'],
-        'version': payload['version'],
+        'harness': request.harness,
+        'version': request.version,
         'started_at': started_at,
         'end': None,
         'last_alive_at': started_at,
-        'interactive': payload['interactive'],
-        'surface': payload['surface'],
+        'interactive': request.interactive,
+        'surface': request.surface,
         'turn_count': 0,
-        'native': dict(payload['native']),
+        'native': dict(request.native),
         'body_storage': 'local-jsonl',
         'extent': 0,
       }
@@ -190,8 +181,9 @@ class LocalStore(TrailsStore):
         'subject',
         'location',
       ):
-        if payload.get(field) is not None:
-          header[field] = payload[field]
+        value = getattr(request, field)
+        if value is not None:
+          header[field] = value
       state = rows.AggregateState(header)
       prepared = rows.build_rows(
         trail_id=trail_id,
@@ -204,7 +196,7 @@ class LocalStore(TrailsStore):
       )
       header.update(_state_fields(state, len(prepared)))
       self._write_rows(trail_id, prepared, append=False)
-      launch_context = payload['body'].get('launch_context')
+      launch_context = request.body.get('launch_context')
       if launch_context is not None:
         _atomic_json(directory / 'context.json', launch_context)
       _atomic_json(directory / 'header.json', header)
@@ -269,10 +261,7 @@ class LocalStore(TrailsStore):
     retry_delays: tuple[float, ...] = (0.0,),
   ) -> None:
     del retry_delays
-    if reason not in _VALID_END_REASONS:
-      raise ValueError(f'reason must be one of {sorted(_VALID_END_REASONS)}')
-    if reason in {'raised', 'error'} and (detail is None or len(detail) == 0):
-      raise ValueError(f'detail is required for {reason}')
+    validate_end(reason, detail)
     with self._locked(trail_id, shared=False):
       header = self._read_header(trail_id)
       timestamp = _now_iso()
@@ -292,43 +281,6 @@ class LocalStore(TrailsStore):
 
   def close(self) -> None:
     pass
-
-  def _validate_create(self, payload: dict) -> tuple[backends.Adapter, list[Any]]:
-    unknown = set(payload) - _CREATE_FIELDS
-    if len(unknown) > 0:
-      raise ValueError(f'unknown fields: {sorted(unknown)}')
-    required = {'harness', 'version', 'interactive', 'surface', 'body', 'native'}
-    missing = required - set(payload)
-    if len(missing) > 0:
-      raise ValueError(f'missing fields: {sorted(missing)}')
-    for field in ('harness', 'version', 'surface'):
-      if not isinstance(payload[field], str) or len(payload[field]) == 0:
-        raise ValueError(f'{field} must be a non-empty string')
-    if not isinstance(payload['interactive'], bool):
-      raise ValueError('interactive must be a bool')
-    for field in ('bro', 'subject'):
-      value = payload.get(field)
-      if value is not None and (not isinstance(value, str) or len(value) == 0):
-        raise ValueError(f'{field} must be a non-empty string')
-    hold = payload.get('hold')
-    if hold is not None and hold not in _VALID_HOLDS:
-      raise ValueError(f'hold must be one of {sorted(_VALID_HOLDS)}')
-    _validate_pointer(payload.get('forked_from'), 'forked_from', step_optional=False)
-    _validate_pointer(payload.get('summoned_by'), 'summoned_by', step_optional=True)
-    _validate_location(payload.get('location'))
-
-    harness = payload['harness']
-    adapter = self._adapter(harness)
-    native = payload['native']
-    if not isinstance(native, dict):
-      raise ValueError('native must be an object')
-    adapter.validate_create(native)
-    if harness == 'bro' and not isinstance(payload.get('bro'), str):
-      raise ValueError('bro is required for the bro harness')
-    body = payload['body']
-    if not isinstance(body, dict):
-      raise ValueError('body must be an object')
-    return adapter, adapter.open(body).records
 
   @staticmethod
   def _adapter(harness: str) -> backends.Adapter:
@@ -424,37 +376,6 @@ def _creating_directory(directory: Path) -> Iterator[None]:
   except BaseException:
     shutil.rmtree(directory)
     raise
-
-
-def _validate_pointer(value: Any, field: str, *, step_optional: bool) -> None:
-  if value is None:
-    return
-  allowed = {'trail_id', 'step_id', 'index'}
-  required = {'trail_id'} if step_optional else {'trail_id', 'step_id'}
-  if (
-    not isinstance(value, dict) or not required.issubset(value) or not set(value).issubset(allowed)
-  ):
-    raise ValueError(f'{field} has an invalid pointer shape')
-  if not isinstance(value['trail_id'], str) or len(value['trail_id']) == 0:
-    raise ValueError(f'{field}.trail_id must be a non-empty string')
-  for ordinal in ('step_id', 'index'):
-    item = value.get(ordinal)
-    if item is not None and (not isinstance(item, int) or isinstance(item, bool) or item < 0):
-      raise ValueError(f'{field}.{ordinal} must be a non-negative int')
-
-
-def _validate_location(value: Any) -> None:
-  if value is None:
-    return
-  if not isinstance(value, dict) or not set(value).issubset(
-    {'host', 'workspace', 'dir', 'is_container'}
-  ):
-    raise ValueError('location has unknown fields')
-  for field in ('host', 'workspace', 'dir'):
-    if value.get(field) is not None and not isinstance(value[field], str):
-      raise ValueError(f'location.{field} must be a string')
-  if value.get('is_container') is not None and not isinstance(value['is_container'], bool):
-    raise ValueError('location.is_container must be a bool')
 
 
 def _state_fields(state: rows.AggregateState, extent: int) -> dict:

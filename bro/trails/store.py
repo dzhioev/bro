@@ -8,7 +8,7 @@ from types import TracebackType
 from typing import Any, Optional
 
 from bro.base import credentials
-from bro.trails.model import ForkedFrom, RecordedTrail, Step, Trail
+from bro.trails.model import BlazeRequest, ForkedFrom, RecordedTrail, Step, Trail
 
 DEFAULT_LIST_PAGE_SIZE = 100
 DEFAULT_STEPS_PAGE_SIZE = 200
@@ -138,7 +138,7 @@ class TrailsStore(ABC):
   def get_launch_context(self, trail_id: str) -> Optional[Any]: ...
 
   @abstractmethod
-  def create_trail(self, payload: dict) -> dict: ...
+  def blaze(self, request: BlazeRequest) -> dict: ...
 
   @abstractmethod
   def append_records(

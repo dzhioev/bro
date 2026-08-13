@@ -70,7 +70,7 @@ from bro.cw.constants import CW_RESUMED_SESSION_ENV
 from bro.monitor import health, trail_pointer, working_projects_dir
 from bro.trails.backends import CLAUDE_ADAPTER
 from bro.trails.lineage import walk_header_chain
-from bro.trails.model import UUID_LOOKUP_LIMIT
+from bro.trails.model import UUID_LOOKUP_LIMIT, BlazeRequest
 from bro.trails.record.spine import Recording
 from bro.trails.store import TrailNotFound, TrailsStore, default_store
 
@@ -410,7 +410,7 @@ class Recorder:
       return False
     forked_from = continuation.forked_from if continuation is not None else None
     chunks = continuation.chunks if continuation is not None else [[0, 0]]
-    self._create_trail(path.stem, forked_from, chunks)
+    self._blaze(path.stem, forked_from, chunks)
     self._append_if_changed()
     return True
 
@@ -633,35 +633,29 @@ class Recorder:
 
   # --- trail lifecycle ------------------------------------------------------------
 
-  def _create_trail(
-    self, segment: str, forked_from: Optional[dict], chunks: list[list[int]]
-  ) -> None:
-    payload: dict[str, Any] = {
-      'harness': 'claude',
-      'version': configs.VERSION,
-      'interactive': True,
-      'surface': 'cw',
-      'native': {
+  def _blaze(self, segment: str, forked_from: Optional[dict], chunks: list[list[int]]) -> None:
+    body: dict[str, Any] = {'records': []}
+    context = _launch_context()
+    if context is not None:
+      body['launch_context'] = context
+    request = BlazeRequest(
+      harness='claude',
+      version=configs.VERSION,
+      interactive=True,
+      surface='cw',
+      native={
         'llm': self.llm,
         'segment': segment,
         'cw_command': self.cw_command,
         'harness_version': 'unknown',
       },
-      'location': _location(self.workspace),
-      'body': {'records': []},
-    }
-    bro = os.environ.get('CW_BRO')
-    if bro is not None:
-      payload['bro'] = bro
-    hold = os.environ.get('BRO_HOLD')
-    if hold is not None:
-      payload['hold'] = hold
-    if forked_from is not None:
-      payload['forked_from'] = forked_from
-    context = _launch_context()
-    if context is not None:
-      payload['body']['launch_context'] = context
-    recording = Recording.create(self.client, payload)
+      location=_location(self.workspace),
+      body=body,
+      bro=os.environ.get('CW_BRO'),
+      hold=os.environ.get('BRO_HOLD'),
+      forked_from=forked_from,
+    )
+    recording = Recording.create(self.client, request)
     trail_id = recording.trail_id
     self.active = RecorderState(trail_id=trail_id, segment=segment, chunks=chunks)
     self._recording = recording

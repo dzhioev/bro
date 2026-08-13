@@ -7,7 +7,7 @@ from typing import Any, Optional
 
 from bro.base import configs
 from bro.llm.tracker import EndReason, StepKind, Tracker
-from bro.trails.model import ForkedFrom, tools_sha256
+from bro.trails.model import BlazeRequest, ForkedFrom, tools_sha256
 from bro.trails.record import spine
 from bro.trails.record.spine import Recording
 from bro.trails.store import TrailsStore
@@ -36,24 +36,23 @@ class Recorder(Tracker):
   ) -> str:
     if forked_from is not None and not isinstance(forked_from, ForkedFrom):
       raise TypeError('forked_from must be a ForkedFrom')
-    payload = {
-      'harness': 'bro',
-      'bro': bro,
-      'version': configs.VERSION,
-      'native': {'llm': llm_spec},
-      'body': {'records': [{'kind': 'system_prompt', 'body': system_prompt, 'turn_index': 0}]},
-      'forked_from': (
+    request = BlazeRequest(
+      harness='bro',
+      bro=bro,
+      version=configs.VERSION,
+      native={'llm': llm_spec},
+      body={'records': [{'kind': 'system_prompt', 'body': system_prompt, 'turn_index': 0}]},
+      forked_from=(
         {key: value for key, value in asdict(forked_from).items() if value is not None}
         if forked_from is not None
         else None
       ),
-      'interactive': interactive,
-      'surface': surface,
-      'hold': hold,
-    }
-    if summoned_by is not None:
-      payload['summoned_by'] = summoned_by
-    recording = Recording.create(self._store, payload)
+      interactive=interactive,
+      surface=surface,
+      hold=hold,
+      summoned_by=summoned_by,
+    )
+    recording = Recording.create(self._store, request)
     with self._lock:
       self._recording = recording
     self._start_keepalive()

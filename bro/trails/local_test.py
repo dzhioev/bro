@@ -6,44 +6,42 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from bro.trails.local import LocalStore
-from bro.trails.model import canonical_json_bytes
+from bro.trails.model import BlazeRequest, canonical_json_bytes
 from bro.trails.record.bro import Recorder
 from bro.trails.record.claude import Recorder as ClaudeRecorder
 from bro.trails.store import AppendConflict, TrailNotFound, fetch_recorded_trail
 
 
-def _bro_payload(*, bro: str = 'dev', forked_from: dict | None = None) -> dict:
-  payload = {
-    'harness': 'bro',
-    'bro': bro,
-    'version': 'test',
-    'interactive': False,
-    'surface': 'ask',
-    'native': {'llm': {'type': 'echo', 'model': 'echo'}},
-    'body': {'records': [{'kind': 'system_prompt', 'body': 'prompt'}]},
-  }
-  if forked_from is not None:
-    payload['forked_from'] = forked_from
-  return payload
+def _bro_request(*, bro: str = 'dev', forked_from: dict | None = None) -> BlazeRequest:
+  return BlazeRequest(
+    harness='bro',
+    bro=bro,
+    version='test',
+    interactive=False,
+    surface='ask',
+    native={'llm': {'type': 'echo', 'model': 'echo'}},
+    body={'records': [{'kind': 'system_prompt', 'body': 'prompt'}]},
+    forked_from=forked_from,
+  )
 
 
-def _claude_payload(raw: str, *, context=None) -> dict:
+def _claude_request(raw: str, *, context=None) -> BlazeRequest:
   body = {'records': [raw]}
   if context is not None:
     body['launch_context'] = context
-  return {
-    'harness': 'claude',
-    'version': 'test',
-    'interactive': True,
-    'surface': 'cw',
-    'native': {
+  return BlazeRequest(
+    harness='claude',
+    version='test',
+    interactive=True,
+    surface='cw',
+    native={
       'llm': {},
       'segment': 'segment',
       'cw_command': 'cw ss',
       'harness_version': 'test',
     },
-    'body': body,
-  }
+    body=body,
+  )
 
 
 def test_records_and_replays_bro_trails(tmp_path):
@@ -107,7 +105,7 @@ def test_claude_rows_store_body_and_project_messages(tmp_path):
       'message': {'content': 'hello'},
     }
   )
-  created = store.create_trail(_claude_payload(raw, context={'workspace': 'one'}))
+  created = store.blaze(_claude_request(raw, context={'workspace': 'one'}))
   trail_id = created['id']
 
   assert store.get_step(trail_id, 0)['body'] == raw
@@ -122,7 +120,7 @@ def test_claude_rows_store_body_and_project_messages(tmp_path):
 def test_large_bodies_stay_inline(tmp_path):
   store = LocalStore(tmp_path)
   large = 'x' * (60 * 1024)
-  trail_id = store.create_trail(_bro_payload())['id']
+  trail_id = store.blaze(_bro_request())['id']
   store.append_records(trail_id, 1, [{'kind': 'user_input', 'body': large}])
 
   row = store.get_step(trail_id, 1)
@@ -132,7 +130,7 @@ def test_large_bodies_stay_inline(tmp_path):
 
 def test_appends_are_serialized_and_conflicts_are_typed(tmp_path):
   store = LocalStore(tmp_path)
-  trail_id = store.create_trail(_bro_payload())['id']
+  trail_id = store.blaze(_bro_request())['id']
   barrier = threading.Barrier(3)
   results: list[object] = []
 
@@ -157,7 +155,7 @@ def test_appends_are_serialized_and_conflicts_are_typed(tmp_path):
 
 def test_committed_append_retry_is_idempotent(tmp_path):
   store = LocalStore(tmp_path)
-  trail_id = store.create_trail(_bro_payload())['id']
+  trail_id = store.blaze(_bro_request())['id']
   records = [{'kind': 'user_input', 'body': 'hello'}]
   assert store.append_records(trail_id, 1, records)['appended'] == 1
   assert store.append_records(trail_id, 1, records) == {
@@ -169,7 +167,7 @@ def test_committed_append_retry_is_idempotent(tmp_path):
 
 def test_tool_blobs_are_content_addressed(tmp_path):
   store = LocalStore(tmp_path)
-  trail_id = store.create_trail(_bro_payload())['id']
+  trail_id = store.blaze(_bro_request())['id']
   tools = [{'name': 'read'}]
   digest = hashlib.sha256(canonical_json_bytes(tools)).hexdigest()
   store.append_records(
@@ -185,11 +183,9 @@ def test_listing_preserves_selectors_and_cursor_pagination(tmp_path, monkeypatch
   store = LocalStore(tmp_path)
   ids = iter(('trail-a', 'trail-b', 'trail-c'))
   monkeypatch.setattr('bro.trails.local.lulid', lambda: next(ids))
-  parent = store.create_trail(_bro_payload(bro='parent'))['id']
-  first = store.create_trail(
-    _bro_payload(bro='dev', forked_from={'trail_id': parent, 'step_id': 0})
-  )['id']
-  second = store.create_trail(_bro_payload(bro='dev'))['id']
+  parent = store.blaze(_bro_request(bro='parent'))['id']
+  first = store.blaze(_bro_request(bro='dev', forked_from={'trail_id': parent, 'step_id': 0}))['id']
+  second = store.blaze(_bro_request(bro='dev'))['id']
 
   page = store.list_trails(bro='dev', limit=1)
   assert len(page['trails']) == 1
@@ -203,7 +199,7 @@ def test_listing_preserves_selectors_and_cursor_pagination(tmp_path, monkeypatch
 
 def test_stale_open_trail_infers_unreported_end_on_read(tmp_path):
   store = LocalStore(tmp_path)
-  trail_id = store.create_trail(_bro_payload())['id']
+  trail_id = store.blaze(_bro_request())['id']
   header_path = tmp_path / 'trails' / trail_id / 'header.json'
   header = json.loads(header_path.read_text())
   header['last_alive_at'] = (datetime.now(UTC) - timedelta(hours=2)).strftime(

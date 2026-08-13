@@ -15,16 +15,13 @@ from aiohttp import web
 
 import bro.base.args as base_args
 from bro.base import log
-from bro.trails import backends
-from bro.trails.model import MESSAGE_TYPES, UUID_LOOKUP_LIMIT
+from bro.trails.model import MESSAGE_TYPES, UUID_LOOKUP_LIMIT, BlazeRequest, validate_end
 from bro.trails.server import storage
 
 __cli_name__ = 'trails-server'
 
 DEFAULT_PORT = 8004
 LOOPBACK_HOSTS = frozenset({'127.0.0.1', 'localhost'})
-VALID_END_REASONS = frozenset({'ok', 'raised', 'error'})
-VALID_HOLDS = frozenset({'guided', 'attended', 'detached', 'unattended'})
 SWEEP_INTERVAL_SECONDS = 600.0
 CHECK_HEARTBEAT_INTERVAL_SECONDS = 5.0
 
@@ -75,22 +72,6 @@ async def _stream_json_with_heartbeats(
   return response
 
 
-def _required(payload: dict, fields: tuple[str, ...]) -> Optional[web.Response]:
-  for field in fields:
-    if field not in payload:
-      return _error(f'missing field: {field}', 400)
-  return None
-
-
-def _string(payload: dict, field: str, *, optional: bool = False) -> Optional[web.Response]:
-  value = payload.get(field)
-  if optional and value is None:
-    return None
-  if not isinstance(value, str) or len(value) == 0:
-    return _error(f'{field} must be a non-empty string', 400)
-  return None
-
-
 def _pointer(payload: dict, field: str, *, step_optional: bool) -> Optional[web.Response]:
   value = payload.get(field)
   if value is None:
@@ -120,89 +101,17 @@ async def _handle_health(_: web.Request) -> web.Response:
   return web.json_response({'status': 'ok'})
 
 
-async def _handle_create_trail(request: web.Request) -> web.Response:
+async def _handle_blaze(request: web.Request) -> web.Response:
   payload = await _read_json(request)
   if not isinstance(payload, dict):
     return _error('invalid json', 400)
-  missing = _required(payload, ('harness', 'version', 'interactive', 'surface', 'body'))
-  if missing is not None:
-    return missing
-  allowed_fields = {
-    'harness',
-    'version',
-    'interactive',
-    'surface',
-    'body',
-    'bro',
-    'hold',
-    'forked_from',
-    'summoned_by',
-    'subject',
-    'location',
-    'native',
-  }
-  unknown_fields = set(payload) - allowed_fields
-  if len(unknown_fields) > 0:
-    return _error(f'unknown fields: {sorted(unknown_fields)}', 400)
-  for field in ('harness', 'version', 'surface'):
-    invalid = _string(payload, field)
-    if invalid is not None:
-      return invalid
-  if not isinstance(payload['interactive'], bool):
-    return _error('interactive must be a bool', 400)
-  if not isinstance(payload['body'], dict):
-    return _error('body must be an object', 400)
-  for field in ('bro', 'subject'):
-    invalid = _string(payload, field, optional=True)
-    if invalid is not None:
-      return invalid
-  if payload.get('hold') is not None and payload['hold'] not in VALID_HOLDS:
-    return _error(f'hold must be one of {sorted(VALID_HOLDS)}', 400)
-  for field, step_optional in (('forked_from', False), ('summoned_by', True)):
-    invalid = _pointer(payload, field, step_optional=step_optional)
-    if invalid is not None:
-      return invalid
-  native = payload.get('native')
-  if not isinstance(native, dict):
-    return _error('native must be an object', 400)
   try:
-    adapter = backends.BACKENDS[payload['harness']]
-  except KeyError:
-    return _error(f'unsupported harness: {payload["harness"]}', 400)
-  try:
-    adapter.validate_create(native)
+    blaze_request = BlazeRequest.from_wire(payload)
   except ValueError as exception:
     return _error(str(exception), 400)
-  if payload['harness'] == 'bro' and not isinstance(payload.get('bro'), str):
-    return _error('bro is required for the bro harness', 400)
-  location = payload.get('location')
-  if location is not None:
-    if not isinstance(location, dict) or not set(location).issubset(
-      {'host', 'workspace', 'dir', 'is_container'}
-    ):
-      return _error('location has unknown fields', 400)
-    for field in ('host', 'workspace', 'dir'):
-      if location.get(field) is not None and not isinstance(location[field], str):
-        return _error(f'location.{field} must be a string', 400)
-    if location.get('is_container') is not None and not isinstance(location['is_container'], bool):
-      return _error('location.is_container must be a bool', 400)
-
   store: storage.Storage = request.app['storage']
   try:
-    result = await store.create_trail(
-      harness=payload['harness'],
-      version=payload['version'],
-      interactive=payload['interactive'],
-      surface=payload['surface'],
-      body=payload['body'],
-      bro=payload.get('bro'),
-      hold=payload.get('hold'),
-      forked_from=payload.get('forked_from'),
-      summoned_by=payload.get('summoned_by'),
-      subject=payload.get('subject'),
-      location=payload.get('location'),
-      native=payload.get('native'),
-    )
+    result = await store.blaze(blaze_request)
   except ValueError as exception:
     return _error(str(exception), 400)
   return web.json_response(result, status=201)
@@ -277,19 +186,14 @@ async def _handle_end_trail(request: web.Request) -> web.Response:
   unknown_fields = set(payload) - {'reason', 'detail'}
   if len(unknown_fields) > 0:
     return _error(f'unknown fields: {sorted(unknown_fields)}', 400)
-  reason = payload.get('reason')
-  if reason not in VALID_END_REASONS:
-    return _error(f'reason must be one of {sorted(VALID_END_REASONS)}', 400)
-  detail = payload.get('detail')
-  if detail is not None and not isinstance(detail, str):
-    return _error('detail must be a string or null', 400)
-  if reason in {'raised', 'error'} and (not isinstance(detail, str) or len(detail) == 0):
-    return _error(f'detail is required for {reason}', 400)
   store: storage.Storage = request.app['storage']
   try:
+    reason, detail = validate_end(payload.get('reason'), payload.get('detail'))
     await store.end_trail(trail_id=trail_id, reason=reason, detail=detail)
   except storage.TrailNotFound:
     return _error(f'trail not found: {trail_id}', 404)
+  except ValueError as exception:
+    return _error(str(exception), 400)
   return web.Response(status=204)
 
 
@@ -518,7 +422,7 @@ def create_app(
   app['storage'] = store
   app['bearer_token'] = bearer_token
   app.router.add_get('/health', _handle_health)
-  app.router.add_post('/v1/trails', _handle_create_trail)
+  app.router.add_post('/v1/trails', _handle_blaze)
   app.router.add_get('/v1/trails', _handle_list_trails)
   app.router.add_get('/v1/steps', _handle_find_steps)
   app.router.add_get('/v1/trails/{trail_id}', _handle_get_trail)

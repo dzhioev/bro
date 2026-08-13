@@ -13,7 +13,7 @@ import urllib.request
 from typing import Any, Optional
 from urllib.parse import urlencode, urlparse
 
-from bro.trails.model import spill_descriptor
+from bro.trails.model import BlazeRequest, spill_descriptor
 from bro.trails.store import (
   RECORD_RETRY_DELAYS_SECONDS,
   AppendConflict,
@@ -143,13 +143,13 @@ class TrailsClient(TrailsStore):
     except TrailNotFound:
       return None
 
-  def create_trail(self, payload: dict) -> dict:
+  def blaze(self, request: BlazeRequest) -> dict:
     """open a trail (`POST /v1/trails`, harness-native `body` envelope included);
     returns `{id, started_at}`. deliberately not retried: creation is the one
     non-idempotent write, and a duplicate from a lost response would strand an
     orphan trail — the caller's own next attempt is the retry.
     """
-    return self._send('POST', '/v1/trails', payload, retry_delays=())
+    return self._send('POST', '/v1/trails', request.to_wire(), retry_delays=())
 
   def append_records(
     self,

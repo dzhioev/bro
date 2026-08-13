@@ -8,7 +8,7 @@ import pytest
 from bro.trails.client import (
   TrailsClient,
 )
-from bro.trails.model import ForkedFrom, RecordedTrail, Step, Trail
+from bro.trails.model import BlazeRequest, ForkedFrom, RecordedTrail, Step, Trail
 from bro.trails.store import (
   AppendConflict,
   TrailNotFound,
@@ -260,24 +260,37 @@ class TestLaunchContext:
 
 
 class TestWrites:
-  def test_create_trail_posts_the_payload_verbatim(self, monkeypatch):
+  def test_blaze_posts_the_payload_verbatim(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
     fake.queue((201, b'{"id": "T1", "started_at": "2026-01-01T00:00:00Z"}'))
-    payload = {'harness': 'claude', 'body': {'records': []}}
-    result = _client().create_trail(payload)
+    request = BlazeRequest(
+      harness='claude',
+      version='test',
+      interactive=True,
+      surface='cw',
+      body={'records': []},
+      native={},
+    )
+    result = _client().blaze(request)
     assert result['id'] == 'T1'
     method, path, body, headers = fake.requests[0]
     assert (method, path) == ('POST', '/v1/trails')
     assert headers['Content-Type'] == 'application/json'
-    assert body is not None and json.loads(body) == payload
+    assert body is not None and json.loads(body) == request.to_wire()
 
-  def test_create_trail_is_not_retried(self, monkeypatch):
-    # a lost create response must not double-create; the caller's own next
-    # attempt is the retry
+  def test_blaze_is_not_retried(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
     fake.queue(ConnectionError('blip'))
+    request = BlazeRequest(
+      harness='claude',
+      version='test',
+      interactive=True,
+      surface='cw',
+      body={'records': []},
+      native={},
+    )
     with pytest.raises(TransientUnavailable):
-      _client().create_trail({'harness': 'claude'})
+      _client().blaze(request)
     assert len(fake.requests) == 1
 
   def test_append_conflict_maps_to_store_error(self, monkeypatch):

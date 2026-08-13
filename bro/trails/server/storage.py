@@ -6,7 +6,12 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Optional
 
 from bro.trails import backends, rows
-from bro.trails.model import UNREPORTED_END_INFERENCE, canonical_json_bytes
+from bro.trails.model import (
+  UNREPORTED_END_INFERENCE,
+  BlazeRequest,
+  canonical_json_bytes,
+  validate_end,
+)
 from bro.trails.rows import AggregateState
 from bro.trails.server import row_storage, storage_types
 from bro.trails.server.operations import Operations
@@ -64,37 +69,15 @@ class Storage:
     except KeyError as exception:
       raise ValueError(f'unsupported harness: {harness}') from exception
 
-  def validate_create(self, harness: str, native: dict) -> None:
-    if not isinstance(native, dict):
-      raise ValueError('native must be an object')
-    self._backend(harness).validate_create(native)
-
-  async def create_trail(
-    self,
-    *,
-    harness: str,
-    version: str,
-    interactive: bool,
-    surface: str,
-    body: dict,
-    bro: Optional[str] = None,
-    hold: Optional[str] = None,
-    forked_from: Optional[dict] = None,
-    summoned_by: Optional[dict] = None,
-    subject: Optional[str] = None,
-    location: Optional[dict] = None,
-    native: Optional[dict] = None,
-    trail_id: Optional[str] = None,
-  ) -> dict:
-    native = native if native is not None else {}
-    self.validate_create(harness, native)
-    if harness == 'bro' and bro is None:
+  async def blaze(self, request: BlazeRequest) -> dict:
+    adapter = self._backend(request.harness)
+    adapter.validate_create(request.native)
+    if request.harness == 'bro' and request.bro is None:
       raise ValueError('bro is required for the bro harness')
-    trail_id = trail_id if trail_id is not None else storage_types.new_id()
+    trail_id = storage_types.new_id()
     started_at = _now_iso()
-    adapter = self._backend(harness)
-    launch_context = body.get('launch_context')
-    opened = adapter.open(body)
+    launch_context = request.body.get('launch_context')
+    opened = adapter.open(request.body)
     if len(opened.records) > storage_types.MAX_TRANSACTION_RECORDS:
       raise ValueError(
         f'a trail may open with at most {storage_types.MAX_TRANSACTION_RECORDS} records'
@@ -104,29 +87,29 @@ class Storage:
 
     item: dict[str, Any] = {
       'id': trail_id,
-      'harness': harness,
-      'version': version,
+      'harness': request.harness,
+      'version': request.version,
       'started_at': started_at,
       'end': None,
       'last_alive_at': started_at,
-      'interactive': interactive,
-      'surface': surface,
+      'interactive': request.interactive,
+      'surface': request.surface,
       'turn_count': 0,
-      'native': dict(native),
+      'native': dict(request.native),
       GSI_PK_ATTRIBUTE: GSI_PK_VALUE,
     }
     optional = {
-      'bro': bro,
-      'hold': hold,
-      'forked_from': forked_from,
-      'summoned_by': summoned_by,
-      'subject': subject,
-      'location': location,
+      'bro': request.bro,
+      'hold': request.hold,
+      'forked_from': request.forked_from,
+      'summoned_by': request.summoned_by,
+      'subject': request.subject,
+      'location': request.location,
       'context_s3': storage_types.context_key(trail_id) if launch_context is not None else None,
     }
     item.update({key: value for key, value in optional.items() if value is not None})
-    if forked_from is not None:
-      item['forked_from_id'] = forked_from['trail_id']
+    if request.forked_from is not None:
+      item['forked_from_id'] = request.forked_from['trail_id']
 
     item['body_storage'] = storage_types.UNIVERSAL_BODY_STORAGE
     item['extent'] = 0
@@ -391,6 +374,7 @@ class Storage:
     reason: str,
     detail: Optional[str],
   ) -> dict:
+    validate_end(reason, detail)
     await self._required_header(trail_id)
     timestamp = _now_iso()
     end = {'at': timestamp, 'reason': reason}

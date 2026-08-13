@@ -7,7 +7,7 @@ import pytest
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 
 from bro.trails import backends
-from bro.trails.model import MESSAGE_TYPES, UNREPORTED_END_INFERENCE, tools_sha256
+from bro.trails.model import MESSAGE_TYPES, UNREPORTED_END_INFERENCE, BlazeRequest, tools_sha256
 from bro.trails.server import storage, storage_types
 
 _serializer = TypeSerializer()
@@ -329,7 +329,7 @@ def components():
   return store, dynamo, s3
 
 
-async def _create_bro(store: storage.Storage, **overrides) -> str:
+async def _blaze_bro(store: storage.Storage, **overrides) -> str:
   payload = {
     'harness': 'bro',
     'version': '2',
@@ -341,10 +341,10 @@ async def _create_bro(store: storage.Storage, **overrides) -> str:
     'body': {'records': [{'kind': 'system_prompt', 'body': 'prompt', 'turn_index': 0}]},
   }
   payload.update(overrides)
-  return (await store.create_trail(**payload))['id']
+  return (await store.blaze(BlazeRequest.from_wire(payload)))['id']
 
 
-async def _create_claude(store: storage.Storage, **overrides) -> str:
+async def _blaze_claude(store: storage.Storage, **overrides) -> str:
   payload = {
     'harness': 'claude',
     'version': '2',
@@ -359,7 +359,7 @@ async def _create_claude(store: storage.Storage, **overrides) -> str:
     'body': {'records': []},
   }
   payload.update(overrides)
-  return (await store.create_trail(**payload))['id']
+  return (await store.blaze(BlazeRequest.from_wire(payload)))['id']
 
 
 def _bro_call(output: list[dict], *, model: str = 'gpt-5', input_tokens: int = 10) -> dict:
@@ -409,7 +409,7 @@ async def test_five_function_registry_and_declared_projection_contract():
 @pytest.mark.asyncio
 async def test_universal_append_uses_ordinals_folds_raw_usage_and_is_idempotent(components):
   store, dynamo, _ = components
-  trail_id = await _create_bro(store)
+  trail_id = await _blaze_bro(store)
   result = await store.append_records(
     trail_id,
     offset=1,
@@ -460,7 +460,7 @@ async def test_universal_append_uses_ordinals_folds_raw_usage_and_is_idempotent(
 @pytest.mark.asyncio
 async def test_append_chunks_without_interleaving(components):
   store, dynamo, _ = components
-  trail_id = await _create_bro(store)
+  trail_id = await _blaze_bro(store)
   records = [{'kind': 'error', 'body': str(index)} for index in range(51)]
   assert await store.append_records(trail_id, offset=1, records=records) == {
     'extent': 52,
@@ -472,7 +472,7 @@ async def test_append_chunks_without_interleaving(components):
 @pytest.mark.asyncio
 async def test_bro_projection_derives_output_and_skips_decomposed_rows(components):
   store, _, _ = components
-  trail_id = await _create_bro(store)
+  trail_id = await _blaze_bro(store)
   await store.append_records(
     trail_id,
     offset=1,
@@ -515,7 +515,7 @@ async def test_bro_projection_derives_output_and_skips_decomposed_rows(component
 @pytest.mark.asyncio
 async def test_claude_billing_decision_is_stored_across_batches_and_pages(components):
   store, dynamo, _ = components
-  trail_id = await _create_claude(store)
+  trail_id = await _blaze_claude(store)
   first = _claude_assistant('message-1', 'first', uuid='uuid-1')
   second = _claude_assistant('message-1', 'second', uuid='uuid-2')
   third = _claude_assistant('message-1', 'third', uuid='uuid-3')
@@ -544,7 +544,7 @@ async def test_claude_billing_decision_is_stored_across_batches_and_pages(compon
 @pytest.mark.asyncio
 async def test_check_detects_non_adjacent_message_billing(components):
   store, _, _ = components
-  trail_id = await _create_claude(store)
+  trail_id = await _blaze_claude(store)
   await store.append_records(
     trail_id,
     offset=0,
@@ -572,7 +572,7 @@ async def test_check_detects_non_adjacent_message_billing(components):
 @pytest.mark.asyncio
 async def test_claude_classifier_owns_version_title_and_turns(components):
   store, dynamo, _ = components
-  trail_id = await _create_claude(store)
+  trail_id = await _blaze_claude(store)
   records = [
     json.dumps({'type': 'system', 'version': '2.1.0'}),
     json.dumps({'type': 'ai-title', 'aiTitle': 'A useful title'}),
@@ -596,7 +596,7 @@ async def test_claude_classifier_owns_version_title_and_turns(components):
 @pytest.mark.asyncio
 async def test_spill_and_content_addressed_tools(components):
   store, _, s3 = components
-  trail_id = await _create_bro(store)
+  trail_id = await _blaze_bro(store)
   tool_body = [{'type': 'function', 'name': 'read'}]
   sha256 = tools_sha256(tool_body)
   large = 'x' * (storage.SPILLOVER_THRESHOLD_BYTES + 1)
@@ -619,7 +619,7 @@ async def test_spill_and_content_addressed_tools(components):
 @pytest.mark.asyncio
 async def test_spilled_claude_line_is_served_as_the_stored_body(components):
   store, _, _ = components
-  trail_id = await _create_claude(store)
+  trail_id = await _blaze_claude(store)
   raw = json.dumps(
     {'type': 'system', 'content': 'x' * (storage.INLINE_RESPONSE_THRESHOLD_BYTES + 1)}
   )
@@ -633,7 +633,7 @@ async def test_spilled_claude_line_is_served_as_the_stored_body(components):
 @pytest.mark.asyncio
 async def test_uuid_projection_and_point_reads(components):
   store, dynamo, _ = components
-  universal = await _create_claude(store)
+  universal = await _blaze_claude(store)
   first = _claude_assistant('message-1', 'first', uuid='uuid-1')
   second = _claude_assistant('message-2', 'second', uuid='uuid-2')
   await store.append_records(universal, offset=0, records=[first, second])
@@ -650,7 +650,7 @@ async def test_uuid_projection_and_point_reads(components):
 @pytest.mark.asyncio
 async def test_launch_context_is_harness_neutral_and_end_adds_no_step(components):
   store, dynamo, s3 = components
-  trail_id = await _create_bro(
+  trail_id = await _blaze_bro(
     store,
     body={
       'records': [{'kind': 'system_prompt', 'body': 'prompt'}],
@@ -671,7 +671,7 @@ async def test_launch_context_is_harness_neutral_and_end_adds_no_step(components
 @pytest.mark.asyncio
 async def test_check_detects_corruption_and_recompute_repairs_rows_and_header(components):
   store, dynamo, _ = components
-  trail_id = await _create_claude(store)
+  trail_id = await _blaze_claude(store)
   await store.append_records(
     trail_id,
     offset=0,
@@ -694,8 +694,8 @@ async def test_check_detects_corruption_and_recompute_repairs_rows_and_header(co
 @pytest.mark.asyncio
 async def test_store_check_finds_cross_trail_duplicate_uuids(components):
   store, _, _ = components
-  first = await _create_claude(store)
-  second = await _create_claude(store)
+  first = await _blaze_claude(store)
+  second = await _blaze_claude(store)
   await store.append_records(
     first,
     offset=0,
@@ -716,7 +716,7 @@ async def test_store_check_finds_cross_trail_duplicate_uuids(components):
 @pytest.mark.asyncio
 async def test_relink_manifests_before_trimming_and_recomputes(components):
   store, dynamo, s3 = components
-  trail_id = await _create_claude(store)
+  trail_id = await _blaze_claude(store)
   records = [
     json.dumps({'type': 'system', 'uuid': 'copied'}),
     json.dumps(
@@ -746,8 +746,8 @@ async def test_relink_manifests_before_trimming_and_recomputes(components):
 @pytest.mark.asyncio
 async def test_list_and_pointer_index_stay_available(components):
   store, _, _ = components
-  root = await _create_bro(store)
-  child = await _create_bro(
+  root = await _blaze_bro(store)
+  child = await _blaze_bro(
     store,
     forked_from={'trail_id': root, 'step_id': 0, 'index': 2},
   )
@@ -766,8 +766,8 @@ async def test_list_and_pointer_index_stay_available(components):
 @pytest.mark.asyncio
 async def test_sweep_marks_stale_trails_as_inferred_unreported(components):
   store, dynamo, _ = components
-  stale = await _create_bro(store)
-  live = await _create_bro(store)
+  stale = await _blaze_bro(store)
+  live = await _blaze_bro(store)
   dynamo.headers[stale]['last_alive_at'] = '2020-01-01T00:00:00.000000Z'
 
   assert await store.sweep_unreported() == [stale]

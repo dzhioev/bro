@@ -7,6 +7,8 @@ from typing import Any, Optional, TypedDict, cast
 
 UUID_LOOKUP_LIMIT = 100
 UNREPORTED_END_INFERENCE = 'unreported'
+VALID_END_REASONS = frozenset({'ok', 'raised', 'error'})
+VALID_HOLDS = frozenset({'guided', 'attended', 'detached', 'unattended'})
 
 MESSAGE_TYPES = frozenset(
   {
@@ -21,6 +23,139 @@ MESSAGE_TYPES = frozenset(
     'harness_event',
   }
 )
+
+
+@dataclass(frozen=True)
+class BlazeRequest:
+  harness: str
+  version: str
+  interactive: bool
+  surface: str
+  body: dict[str, Any]
+  native: dict[str, Any]
+  bro: Optional[str] = None
+  hold: Optional[str] = None
+  forked_from: Optional[dict[str, Any]] = None
+  summoned_by: Optional[dict[str, Any]] = None
+  subject: Optional[str] = None
+  location: Optional[dict[str, Any]] = None
+
+  def __post_init__(self) -> None:
+    for field in ('harness', 'version', 'surface'):
+      value = getattr(self, field)
+      if not isinstance(value, str) or len(value) == 0:
+        raise ValueError(f'{field} must be a non-empty string')
+    if not isinstance(self.interactive, bool):
+      raise ValueError('interactive must be a bool')
+    if not isinstance(self.body, dict):
+      raise ValueError('body must be an object')
+    if not isinstance(self.native, dict):
+      raise ValueError('native must be an object')
+    for field in ('bro', 'subject'):
+      value = getattr(self, field)
+      if value is not None and (not isinstance(value, str) or len(value) == 0):
+        raise ValueError(f'{field} must be a non-empty string')
+    if self.hold is not None and self.hold not in VALID_HOLDS:
+      raise ValueError(f'hold must be one of {sorted(VALID_HOLDS)}')
+    _validate_pointer(self.forked_from, 'forked_from', step_optional=False)
+    _validate_pointer(self.summoned_by, 'summoned_by', step_optional=True)
+    _validate_location(self.location)
+
+  @classmethod
+  def from_wire(cls, data: dict[str, Any]) -> 'BlazeRequest':
+    if not isinstance(data, dict):
+      raise ValueError('blaze request must be an object')
+    fields = {
+      'harness',
+      'version',
+      'interactive',
+      'surface',
+      'body',
+      'native',
+      'bro',
+      'hold',
+      'forked_from',
+      'summoned_by',
+      'subject',
+      'location',
+    }
+    unknown = set(data) - fields
+    if len(unknown) > 0:
+      raise ValueError(f'unknown fields: {sorted(unknown)}')
+    required = {'harness', 'version', 'interactive', 'surface', 'body', 'native'}
+    missing = required - set(data)
+    if len(missing) > 0:
+      raise ValueError(f'missing fields: {sorted(missing)}')
+    return cls(
+      harness=data['harness'],
+      version=data['version'],
+      interactive=data['interactive'],
+      surface=data['surface'],
+      body=data['body'],
+      native=data['native'],
+      bro=data.get('bro'),
+      hold=data.get('hold'),
+      forked_from=data.get('forked_from'),
+      summoned_by=data.get('summoned_by'),
+      subject=data.get('subject'),
+      location=data.get('location'),
+    )
+
+  def to_wire(self) -> dict[str, Any]:
+    data: dict[str, Any] = {
+      'harness': self.harness,
+      'version': self.version,
+      'interactive': self.interactive,
+      'surface': self.surface,
+      'body': self.body,
+      'native': self.native,
+    }
+    for field in ('bro', 'hold', 'forked_from', 'summoned_by', 'subject', 'location'):
+      value = getattr(self, field)
+      if value is not None:
+        data[field] = value
+    return data
+
+
+def validate_end(reason: Any, detail: Any) -> tuple[str, Optional[str]]:
+  if not isinstance(reason, str) or reason not in VALID_END_REASONS:
+    raise ValueError(f'reason must be one of {sorted(VALID_END_REASONS)}')
+  if detail is not None and not isinstance(detail, str):
+    raise ValueError('detail must be a string or null')
+  if reason in {'raised', 'error'} and (detail is None or len(detail) == 0):
+    raise ValueError(f'detail is required for {reason}')
+  return reason, detail
+
+
+def _validate_pointer(value: Any, field: str, *, step_optional: bool) -> None:
+  if value is None:
+    return
+  allowed = {'trail_id', 'step_id', 'index'}
+  required = {'trail_id'} if step_optional else {'trail_id', 'step_id'}
+  if (
+    not isinstance(value, dict) or not required.issubset(value) or not set(value).issubset(allowed)
+  ):
+    raise ValueError(f'{field} has an invalid pointer shape')
+  if not isinstance(value['trail_id'], str) or len(value['trail_id']) == 0:
+    raise ValueError(f'{field}.trail_id must be a non-empty string')
+  for ordinal in ('step_id', 'index'):
+    item = value.get(ordinal)
+    if item is not None and (not isinstance(item, int) or isinstance(item, bool) or item < 0):
+      raise ValueError(f'{field}.{ordinal} must be a non-negative int')
+
+
+def _validate_location(value: Any) -> None:
+  if value is None:
+    return
+  if not isinstance(value, dict) or not set(value).issubset(
+    {'host', 'workspace', 'dir', 'is_container'}
+  ):
+    raise ValueError('location has unknown fields')
+  for field in ('host', 'workspace', 'dir'):
+    if value.get(field) is not None and not isinstance(value[field], str):
+      raise ValueError(f'location.{field} must be a string')
+  if value.get('is_container') is not None and not isinstance(value['is_container'], bool):
+    raise ValueError('location.is_container must be a bool')
 
 
 @dataclass(frozen=True)

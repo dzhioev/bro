@@ -8,6 +8,7 @@ import pytest
 
 from bro.cw.constants import CW_RESUMED_SESSION_ENV
 from bro.monitor import trail_pointer
+from bro.trails.model import BlazeRequest
 from bro.trails.record.claude import Recorder, RecorderState, _fork_cuts, _state_path
 
 
@@ -27,7 +28,8 @@ class FakeTrails:
     self.history_scans = 0
     self._counter = 0
 
-  def create_trail(self, payload: dict) -> dict:
+  def blaze(self, request: BlazeRequest) -> dict:
+    payload = request.to_wire()
     self._counter += 1
     trail_id = f'T{self._counter}'
     self.created.append(payload)
@@ -507,7 +509,7 @@ class TestRecordedChainRecovery:
     _write_segment(projects, 'other-segment', lines)
     other_payload = dict(fake.created[0])
     other_payload['native'] = {**other_payload['native'], 'segment': 'other-segment'}
-    other_id = fake.create_trail(other_payload)['id']
+    other_id = fake.blaze(BlazeRequest.from_wire(other_payload))['id']
     fake.append_records(other_id, 0, lines)
 
     monkeypatch.setenv(CW_RESUMED_SESSION_ENV, 'seg-1')

@@ -3,6 +3,8 @@ import json
 
 import pytest
 
+from bro.trails import backends
+from bro.trails.model import BlazeRequest, validate_end
 from bro.trails.server import storage
 from bro.trails.server.server import create_app, resolve_auth
 
@@ -13,7 +15,7 @@ def _auth(token: str = TOKEN) -> dict[str, str]:
   return {'Authorization': f'Bearer {token}'}
 
 
-def _create_payload(**overrides) -> dict:
+def _blaze_payload(**overrides) -> dict:
   payload = {
     'harness': 'bro',
     'bro': 'dev',
@@ -45,10 +47,15 @@ class FakeStorage:
   def _now(self) -> str:
     return f'2026-06-07T00:00:{self._counter:02d}.000000Z'
 
-  async def create_trail(self, **payload):
-    trail_id = payload.get('trail_id') or self._new_id()
+  async def blaze(self, request: BlazeRequest):
+    adapter = backends.BACKENDS[request.harness]
+    adapter.validate_create(request.native)
+    if request.harness == 'bro' and request.bro is None:
+      raise ValueError('bro is required for the bro harness')
+    payload = request.to_wire()
+    trail_id = self._new_id()
     started_at = self._now()
-    native = payload.get('native') or {}
+    native = request.native
     header = {
       'id': trail_id,
       'harness': payload['harness'],
@@ -127,6 +134,7 @@ class FakeStorage:
     return self.trails[trail_id]
 
   async def end_trail(self, *, trail_id, reason, detail):
+    validate_end(reason, detail)
     if trail_id not in self.trails:
       raise storage.TrailNotFound(trail_id)
     end = {'at': self._now(), 'reason': reason}
@@ -234,13 +242,13 @@ async def test_health_needs_no_auth(client):
 
 @pytest.mark.asyncio
 async def test_auth_is_required(client):
-  response = await (await client).post('/v1/trails', json=_create_payload())
+  response = await (await client).post('/v1/trails', json=_blaze_payload())
   assert response.status == 401
 
 
 @pytest.mark.asyncio
-async def test_create_bro_trail(client, store):
-  response = await (await client).post('/v1/trails', json=_create_payload(), headers=_auth())
+async def test_blaze_bro_trail(client, store):
+  response = await (await client).post('/v1/trails', json=_blaze_payload(), headers=_auth())
   assert response.status == 201
   trail_id = (await response.json())['id']
   assert store.trails[trail_id]['harness'] == 'bro'
@@ -249,32 +257,34 @@ async def test_create_bro_trail(client, store):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('field', ['harness', 'version', 'interactive', 'surface', 'body'])
-async def test_create_requires_universal_fields(client, field):
-  payload = _create_payload()
+@pytest.mark.parametrize(
+  'field', ['harness', 'version', 'interactive', 'surface', 'body', 'native']
+)
+async def test_blaze_requires_universal_fields(client, field):
+  payload = _blaze_payload()
   del payload[field]
   response = await (await client).post('/v1/trails', json=payload, headers=_auth())
   assert response.status == 400
 
 
 @pytest.mark.asyncio
-async def test_create_validates_lineage_and_provenance(client):
+async def test_blaze_validates_lineage_and_provenance(client):
   cli = await client
   response = await cli.post(
     '/v1/trails',
-    json=_create_payload(forked_from={'trail_id': 'parent'}),
+    json=_blaze_payload(forked_from={'trail_id': 'parent'}),
     headers=_auth(),
   )
   assert response.status == 400
   response = await cli.post(
     '/v1/trails',
-    json=_create_payload(forked_from={'trail_id': 'parent', 'step_id': '4'}),
+    json=_blaze_payload(forked_from={'trail_id': 'parent', 'step_id': '4'}),
     headers=_auth(),
   )
   assert response.status == 400
   response = await cli.post(
     '/v1/trails',
-    json=_create_payload(summoned_by={'trail_id': 'parent'}),
+    json=_blaze_payload(summoned_by={'trail_id': 'parent'}),
     headers=_auth(),
   )
   assert response.status == 201
@@ -283,7 +293,7 @@ async def test_create_validates_lineage_and_provenance(client):
 @pytest.mark.asyncio
 async def test_universal_append_and_extent_conflict(client):
   cli = await client
-  created = await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
+  created = await cli.post('/v1/trails', json=_blaze_payload(), headers=_auth())
   trail_id = (await created.json())['id']
   response = await cli.post(
     f'/v1/trails/{trail_id}/records',
@@ -306,7 +316,7 @@ async def test_admin_operations_and_indexed_pointer(client):
   cli = await client
   created = await cli.post(
     '/v1/trails',
-    json=_create_payload(forked_from={'trail_id': 'parent', 'step_id': 4, 'index': 2}),
+    json=_blaze_payload(forked_from={'trail_id': 'parent', 'step_id': 4, 'index': 2}),
     headers=_auth(),
   )
   assert created.status == 201
@@ -333,7 +343,7 @@ async def test_store_check_streams_heartbeats_then_one_json_verdict(client, stor
 @pytest.mark.asyncio
 async def test_messages_support_repeated_type_filter(client):
   cli = await client
-  created = await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
+  created = await cli.post('/v1/trails', json=_blaze_payload(), headers=_auth())
   trail_id = (await created.json())['id']
   await cli.post(
     f'/v1/trails/{trail_id}/records',
@@ -409,7 +419,7 @@ async def test_step_selectors_reject_non_ordinals(client, store, path):
 @pytest.mark.asyncio
 async def test_launch_context_read(client):
   cli = await client
-  payload = _create_payload(
+  payload = _blaze_payload(
     harness='claude',
     bro=None,
     surface='cw',
@@ -426,7 +436,7 @@ async def test_launch_context_read(client):
 @pytest.mark.asyncio
 async def test_launch_context_absent_is_404(client):
   cli = await client
-  created = await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
+  created = await cli.post('/v1/trails', json=_blaze_payload(), headers=_auth())
   trail_id = (await created.json())['id']
   response = await cli.get(f'/v1/trails/{trail_id}/context', headers=_auth())
   assert response.status == 404
@@ -437,7 +447,7 @@ async def test_launch_context_absent_is_404(client):
 @pytest.mark.asyncio
 async def test_constrained_header_upsert(client, store):
   cli = await client
-  created = await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
+  created = await cli.post('/v1/trails', json=_blaze_payload(), headers=_auth())
   trail_id = (await created.json())['id']
   response = await cli.patch(f'/v1/trails/{trail_id}', json={'subject': 'renamed'}, headers=_auth())
   assert response.status == 200
@@ -449,7 +459,7 @@ async def test_constrained_header_upsert(client, store):
 @pytest.mark.asyncio
 async def test_end_records_map_and_detail(client, store):
   cli = await client
-  created = await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
+  created = await cli.post('/v1/trails', json=_blaze_payload(), headers=_auth())
   trail_id = (await created.json())['id']
   response = await cli.post(
     f'/v1/trails/{trail_id}/end',
@@ -465,7 +475,7 @@ async def test_end_records_map_and_detail(client, store):
 @pytest.mark.parametrize('reason', ['terminal', 'lost', 'whatever'])
 async def test_end_rejects_non_writer_reasons(client, reason):
   cli = await client
-  created = await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
+  created = await cli.post('/v1/trails', json=_blaze_payload(), headers=_auth())
   trail_id = (await created.json())['id']
   response = await cli.post(f'/v1/trails/{trail_id}/end', json={'reason': reason}, headers=_auth())
   assert response.status == 400
@@ -474,10 +484,10 @@ async def test_end_rejects_non_writer_reasons(client, reason):
 @pytest.mark.asyncio
 async def test_list_filters_by_harness(client):
   cli = await client
-  await cli.post('/v1/trails', json=_create_payload(), headers=_auth())
+  await cli.post('/v1/trails', json=_blaze_payload(), headers=_auth())
   await cli.post(
     '/v1/trails',
-    json=_create_payload(
+    json=_blaze_payload(
       harness='claude',
       bro=None,
       surface='cw',

@@ -137,7 +137,7 @@ class TestRecorderStartTrail:
     assert _request_payload(fake.requests[0])['forked_from'] == expected
 
   @pytest.mark.parametrize('failure', [ConnectionError('boom'), (500, b'oops')])
-  def test_create_is_not_retried(self, monkeypatch, failure):
+  def test_blaze_is_not_retried(self, monkeypatch, failure):
     fake = _install_fake_connection(monkeypatch)
     fake.queue(failure)
     tracker = Recorder(TrailsClient('https://bro.trails.example', 'tok'))

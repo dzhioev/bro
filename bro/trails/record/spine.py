@@ -4,6 +4,7 @@ import threading
 import time
 from typing import Any, Optional
 
+from bro.trails.model import BlazeRequest
 from bro.trails.store import RECORD_RETRY_DELAYS_SECONDS, TrailsStore
 
 KEEPALIVE_INTERVAL_SECONDS = 60.0
@@ -22,11 +23,11 @@ class Recording:
     self._lock = threading.RLock()
 
   @classmethod
-  def create(cls, store: TrailsStore, payload: dict[str, Any]) -> 'Recording':
-    records = payload.get('body', {}).get('records')
+  def create(cls, store: TrailsStore, request: BlazeRequest) -> 'Recording':
+    records = request.body.get('records')
     if not isinstance(records, list):
       raise ValueError('trail body.records must be a list')
-    trail_id: str = store.create_trail(payload)['id']
+    trail_id: str = store.blaze(request)['id']
     return cls(store, trail_id, len(records))
 
   @property
