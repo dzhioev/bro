@@ -8,7 +8,8 @@ from json import JSONEncoder
 from typing import Any, Optional
 
 from icecream import ic
-from openai.types.responses import ResponseInputParam
+from openai import pydantic_function_tool
+from openai.types.responses import Response, ResponseInputParam, ResponseTextConfigParam
 from openai.types.responses.response_input_content_param import ResponseInputContentParam
 from openai.types.shared.reasoning_effort import ReasoningEffort
 from pydantic import BaseModel
@@ -23,6 +24,14 @@ from bro.llm.llms.chat_gpt import (
 )
 
 DEFAULT_MODEL = 'gpt-5.6-terra'
+
+
+class IncompleteResponse(Exception):
+  """The model stopped before it finished the reply."""
+
+
+class TruncatedResponse(IncompleteResponse):
+  """The model ran out of output tokens before it finished the reply."""
 
 
 class Markdown(BaseModel):
@@ -110,6 +119,37 @@ def create_input(prompt: str, *args: Content) -> ResponseInputParam:
   return result
 
 
+def _text_format(result: type[BaseModel]) -> ResponseTextConfigParam:
+  # the SDK derives an OpenAI strict schema only inside its function-tool helper; the
+  # Responses text format needs that same schema under its own keys
+  function = pydantic_function_tool(result)['function']
+  schema = function.get('parameters')
+  assert schema is not None
+  return {
+    'format': {'type': 'json_schema', 'name': function['name'], 'schema': schema, 'strict': True}
+  }
+
+
+def _completed_text(response: Response) -> str:
+  """The response's output text, rejecting a reply the model never finished."""
+  if response.status == 'incomplete':
+    details = response.incomplete_details
+    reason = details.reason if details is not None else None
+    usage = response.usage
+    tokens = (
+      f'{usage.input_tokens} input / {usage.output_tokens} output tokens'
+      if usage is not None
+      else 'usage not reported'
+    )
+    if reason == 'max_output_tokens':
+      raise TruncatedResponse(f'response truncated at the output-token limit ({tokens})')
+    raise IncompleteResponse(f'response incomplete, reason {reason} ({tokens})')
+  if len(response.output_text) == 0:
+    response_str = ic.format(response)
+    raise RuntimeError(f'no output text in response: {response_str}')
+  return response.output_text
+
+
 class _Mu:
   def __call__[T: BaseModel](
     self,
@@ -133,17 +173,16 @@ class _Mu:
   ) -> T:
     from openai import AsyncOpenAI
 
+    # responses.parse would validate the partial text of a truncated reply and surface the
+    # cut-off as a schema error, so the completion check has to run on an unparsed response
     async with AsyncOpenAI(api_key=credentials.get_json('openai')['api_key']) as client:
-      response = await client.responses.parse(
+      response = await client.responses.create(
         model=model,
         input=create_input(prompt, *args),
         reasoning={'effort': reasoning_effort},
-        text_format=result,
+        text=_text_format(result),
       )
-    if response.output_parsed is None:
-      response_str = ic.format(response)
-      raise RuntimeError(f'no parsed output in response: {response_str}')
-    return response.output_parsed
+    return result.model_validate_json(_completed_text(response))
 
 
 mu = _Mu()
