@@ -680,9 +680,8 @@ class TestWireName:
   def test_local_hyphen_and_single_underscore_preserved(self):
     assert wire_name('wikipedia-source', 'get_time') == 'wikipedia-source__get_time'
 
-  def test_at_segment_uses_provider_safe_spelling(self):
-    assert wire_name('@', 'send-email') == 'at__send-email'
-    assert wire_name('@', '@') == 'at__at'
+  def test_spell_namespace_uses_the_ordinary_spelling(self):
+    assert wire_name('spell', 'send-email') == 'spell__send-email'
 
 
 class TestCanonicalName:

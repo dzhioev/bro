@@ -28,7 +28,7 @@ Current reference docs:
 
 - `environment.md` — session-banner playbook: every surface calls the `bro::banner` service tool and reads this doc through the `environment` `FileSource` (`cw banner --llm` stays as the human CLI). Tool-served only — not injected
 
-- `dev/style.md` — the development style policy, tool-served through the `dev-style` `FileSource` mounted on the Dev bro (the persona directs a read at session start and re-reads on demand — e.g. the `@::run-pr` policy audit before each commit's verdict). Not injected
+- `dev/style.md` — the development style policy, tool-served through the `dev-style` `FileSource` mounted on the Dev bro (the persona directs a read at session start and re-reads on demand — e.g. the `spell::run-pr` policy audit before each commit's verdict). Not injected
 - `tool_names.md` — the tool-name resolution rule, templated on the `#wire` scheme; one file serves every surface. Claude sessions get the `mcp` rendering (`ns::tool` → `mcp__ns__tool`): injected here for non-raw sessions, composed into `BaseBro.claude_system_prompt` for `cw ss --raw` ones. Bro-native LLM runs compose the `bare` rendering (`ns::tool` → `ns__tool`) into `BaseBro.system_prompt`. Deliberately no `FileSource`
 
 ## Hold text
@@ -38,7 +38,7 @@ A session's hold — its user-involvement level — is one of `unattended | deta
 - `cw ss` picks by its `--hold` flag for both claude flavors — the cw-session append prompt and the `--raw` `--system-prompt` (flag semantics: `bro/reference/cw.md`)
 - the bro-native launch surfaces pick it through `bro/bro.py:_system_prompt_for` — `run()` defaults unattended, `send()` guided, with every launcher's `--hold` overriding (per-surface defaults: `bro/launch/CLAUDE.md`, "Launch holds")
 
-`hold.md` (top level, not in `_BASE_PROMPT_FILES`) selects the per-level file in `holds/` via an exhaustive `{{iff #hold = …}}` chain and `{{include}}`s it; the three non-guided level files share `holds/authorization.md`, the full-authorization block. `bro.prompts.hold_fragment(hold, …facts)` is the one rendering path — every injection site uses it (`bro/cw/system_prompt.py:_session_append_prompt`, `bro/cw/claude_argv.py` for `--raw`, `bro/bro.py:_system_prompt_for`), and it is the only call that supplies the `#hold` fact, so all other text stays hold-neutral mechanically: a stray `#hold` directive in a script or procedure doc raises.
+`hold.md` (top level, not in `_BASE_PROMPT_FILES`) selects the per-level file in `holds/` via an exhaustive `{{iff #hold = …}}` chain and `{{include}}`s it; the three non-guided level files share `holds/authorization.md`, the full-authorization block. `bro.prompts.hold_fragment(hold, …facts)` is the one rendering path — every injection site uses it (`bro/cw/system_prompt.py:_session_append_prompt`, `bro/cw/claude_argv.py` for `--raw`, `bro/bro.py:_system_prompt_for`), and it is the only call that supplies the `#hold` fact, so all other text stays hold-neutral mechanically: a stray `#hold` directive in a spell or procedure doc raises.
 
 The level files are the single place the levels differ: unattended carries the never-ask + `raise` convention, detached the carry-questions-into-the-report convention, attended the end-the-turn-at-pivotal-points convention, guided the confirm-each-significant-step convention.
 

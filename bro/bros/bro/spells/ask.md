@@ -1,7 +1,7 @@
 ---
 name: ask
-description: This script should be used when the user asks to relay a question or job to another bro — "@:ask researcher to compare the storage options:@", "ask the reviewer whether the change is safe", "have deployer roll out the API", "summon developer". Turns the phrasing into a summon (an isolated one-shot run of the target bro with its own credentials), picks whichever summon client the session has, decides foreground vs background, and relays the answer with the failure modes handled. A summon succeeds only when the target is in the summoner's allow-list — most bros seed none, and a session's own list is fixed at launch — so a denial is a normal outcome the script relays.
-version: 1.5.0
+description: This spell should be used when the user asks to relay a question or job to another bro — "[[ask researcher to compare the storage options]]", "ask the reviewer whether the change is safe", "have deployer roll out the API", "summon developer". Turns the phrasing into a summon (an isolated one-shot run of the target bro with its own credentials), picks whichever summon client the session has, decides foreground vs background, and relays the answer with the failure modes handled. A summon succeeds only when the target is in the summoner's allow-list — most bros seed none, and a session's own list is fixed at launch — so a denial is a normal outcome the spell relays.
+version: 1.5.1
 ---
 
 # Ask
@@ -19,7 +19,7 @@ Optional knobs, normally only when the user asks for them: a per-call timeout in
 
 The child's scope is a knob too: grants and revokes, each value a credential name or `@bro` for a summon target of the target's own. They start from the target's own declarations, not yours — nothing of your scope reaches the child unless you name it, and you can only name what you hold yourself: a credential in your own scope, a bro in your own allow-list. Grant only what the request actually needs and the user asked for: a credential the target's manifest lacks (`staging_api` for an integration run), a different instance of a selected credential kind, or a bro the target has to reach onward (`@reviewer` so a developer child can hand off a review). A credential grant replaces the target's selected same-kind name. Both directions are strict, so naming the exact credential or bro the target already has (or, for a revoke, lacks) fails the summon rather than passing quietly.
 
-Exception — set the timeout unprompted when the child's run is open-ended: a full-cycle dev child (an `@::fix` run through `@::run-pr` and the review watch, or an `@::run-pr` re-entry) idles for human review latency, so the default kills it mid-watch. Size the timeout in hours (e.g. 28800), not minutes.
+Exception — set the timeout unprompted when the child's run is open-ended: a full-cycle dev child (an `spell::fix` run through `spell::run-pr` and the review watch, or an `spell::run-pr` re-entry) idles for human review latency, so the default kills it mid-watch. Size the timeout in hours (e.g. 28800), not minutes.
 
 ## Pick the client
 

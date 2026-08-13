@@ -247,37 +247,37 @@ class TestFormatCard:
     assert card.endswith('\n')
 
   @pytest.mark.asyncio
-  async def test_scripts_section_renders_canonical_roster_and_optional_secret(self, tmp_path):
-    script_path = tmp_path / 'do-work.md'
-    script_path.write_text('---\ndescription: develop the named task\n---\n\nbody')
+  async def test_spells_section_renders_canonical_roster_and_optional_secret(self, tmp_path):
+    spell_path = tmp_path / 'do-work.md'
+    spell_path.write_text('---\ndescription: develop the named task\n---\n\nbody')
 
-    class _ScriptedBro(_MinimalBro):
+    class _SpelledBro(_MinimalBro):
       @property
-      def scripts(self):
-        return {'do-work': script_path}
+      def spells(self):
+        return {'do-work': spell_path}
 
-    card = await format_card(_ScriptedBro())
-    assert '## Scripts' in card
-    assert '- **@::do-work** — develop the named task' in card
+    card = await format_card(_SpelledBro())
+    assert '## Spells' in card
+    assert '- **spell::do-work** — develop the named task' in card
     assert '- `openai` — optional (used if present)' in card
 
   @pytest.mark.asyncio
-  async def test_scripts_section_omitted_when_empty(self):
+  async def test_spells_section_omitted_when_empty(self):
     card = await format_card(_MinimalBro())
-    assert '## Scripts' not in card
+    assert '## Spells' not in card
 
   @pytest.mark.asyncio
-  async def test_scripts_long_description_truncated(self, tmp_path):
+  async def test_spells_long_description_truncated(self, tmp_path):
     long_description = 'x' * 300
-    script_path = tmp_path / 'foo.md'
-    script_path.write_text(f'---\ndescription: {long_description}\n---\n\nbody')
+    spell_path = tmp_path / 'foo.md'
+    spell_path.write_text(f'---\ndescription: {long_description}\n---\n\nbody')
 
-    class _LongScriptBro(_MinimalBro):
+    class _LongSpellBro(_MinimalBro):
       @property
-      def scripts(self):
-        return {'foo': script_path}
+      def spells(self):
+        return {'foo': spell_path}
 
-    card = await format_card(_LongScriptBro())
+    card = await format_card(_LongSpellBro())
     assert '…' in card
     assert long_description not in card
 

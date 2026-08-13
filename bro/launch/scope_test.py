@@ -39,7 +39,7 @@ class TestScopedSecrets:
     # required (strict), not optional: no .credentials.json fallback in the
     # container, so a missing token must fail loudly on the host
     assert 'claude_code' not in scoped.optional
-    # the scripts dispatcher advertises openai best-effort; no session-wide
+    # spell casting advertises openai best-effort; no session-wide
     # baseline adds anything on top
     assert scoped.optional == {'openai'}
     # a normal claude code session keeps the docker socket

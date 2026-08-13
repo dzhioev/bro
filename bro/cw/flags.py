@@ -73,7 +73,7 @@ def add_forwarded_flags(parser: Parser) -> None:
   parser.add_argument(
     '--bro',
     default=None,
-    help='the bro the session runs as — persona and script prompt injection, canonical script tools, and the session-local MCP namespaces (default: the project default bro)',
+    help='the bro the session runs as — persona and spell prompt injection, canonical spell tools, and the session-local MCP namespaces (default: the project default bro)',
   )
   parser.add_argument(
     '--raw',

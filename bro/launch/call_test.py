@@ -693,7 +693,7 @@ def test_initial_slash_invocation_passes_through_verbatim(monkeypatch):
   monkeypatch.setattr('bro.launch.call._tty_supported', lambda: False)
 
   # no client-side expansion: the bro's system prompt describes the /-syntax and
-  # the model loads the script body through its `@::` tool.
+  # the model loads the spell body through its `spell::` tool.
   rc = main(['call', 'record', '/ask dev to ping', '--in-place'])
   assert rc is None
   assert captured == ['/ask dev to ping']

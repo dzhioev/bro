@@ -6,12 +6,12 @@ Bros launching and managing layer. It owns the shared launch machinery behind th
 
 - `ask.py` (`ask`) — the `ask` console script, a thin alias of `bro run`.
 
-  Input passes through verbatim, `/<name>` invocations included: the bro's `## Skills` prompt maps that syntax to the framework `@::skill` loader, with the rest treated as arguments to the returned instructions. There is no client-side expansion or validation; an empty body means the requested skill is unavailable.
+  Input passes through verbatim, `/<name>` invocations included: the bro's `## Skills` prompt maps that syntax to the framework `bro::skill` loader, with the rest treated as arguments to the returned instructions. There is no client-side expansion or validation; an empty body means the requested skill is unavailable.
 
   Ctrl+C cancels a run through the loop — the tool call in flight takes its process group with it — and `run_main` turns the re-raised `KeyboardInterrupt` into exit 130, so an interrupted run reads as an interrupted command rather than a crash.
 - `call.py` (`call`) — the canonical `bro chat` implementation and its thin `call` alias; drives an interactive `bro.send()` conversation.
 
-  The initial message passes through verbatim like every later REPL turn — an `@:ask reviewer …:@` command reaches the dispatcher as-is (see `ask.py`).
+  The initial message passes through verbatim like every later REPL turn — a `[[ask reviewer …]]` command reaches the spell interpreter as-is (see `ask.py`).
 
   By default opens the Textual chat UI in `call_tui.py` (IM-style: scrollable history, left/right bubbles, error-colored bubbles for failed turns, timestamp + date separators, an animated status bubble — "Thinking for \<elapsed\>…" during an LLM roundtrip, "Calling \<tool\>…" / "Calling N tools…" while tool results are pending — mouse selection copies straight to the system clipboard, Shift+Enter breaks the line in the message field, Ctrl+D to quit, backtick (`) opens a stats modal). Falls back to text mode (`[HH:MM:SS] bro: <reply>` lines + `> ` prompt) when stdin/stdout isn't a TTY; `--text` forces it.
 

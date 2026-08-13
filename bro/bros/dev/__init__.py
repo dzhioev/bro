@@ -31,7 +31,7 @@ Caution:
 class Dev(Bro):
   name = 'dev'
   description = 'generic software developer with file + shell + search tools'
-  # brog: the task-driven workflow (the fix/run-pr/land scripts and their task
+  # brog: the task-driven workflow (the fix/run-pr/land spells and their task
   # bookkeeping) needs the brog task tracker; the feature is on wherever a
   # brog config resolves and absent otherwise, so a tracker-less environment
   # still launches a plain developer.

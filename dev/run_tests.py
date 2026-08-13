@@ -66,7 +66,7 @@ PYTEST_FILES = [
   'bro/channel_test.py',
   'bro/fork_test.py',
   'bro/roster_test.py',
-  'bro/scripts_test.py',
+  'bro/spells_test.py',
   'bro/datasources/current_time_test.py',
   'bro/datasources/file_test.py',
   'bro/datasources/searchable_test.py',

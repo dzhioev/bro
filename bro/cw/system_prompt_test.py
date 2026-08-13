@@ -36,12 +36,12 @@ class TestSessionAppendPrompt:
       'guided', 'bro'
     )
 
-  def test_persona_scripts_include_dispatcher_contract(self, monkeypatch):
-    monkeypatch.setattr('bro.scripts.credentials.available', lambda name: True)
+  def test_persona_spells_include_cast_contract(self, monkeypatch):
+    monkeypatch.setattr('bro.spells.credentials.available', lambda name: True)
     out = cw_system_prompt._session_append_prompt('guided', 'dev')
-    assert '## Scripts' in out
-    assert '@:<free text>:@' in out
-    assert '`@::@`' in out
+    assert '## Spells' in out
+    assert '[[…]]' in out
+    assert '`bro::cast`' in out
     assert '`/<name>`' not in out
 
 
