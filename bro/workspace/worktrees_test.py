@@ -25,11 +25,11 @@ class TestProvisionHostWorktree:
     monkeypatch.setattr(workspace_worktrees.subprocess, 'run', fail_run)
     assert workspace_worktrees.provision_host_worktree(tmp_path) is True
 
-  def test_strips_cw_venv_baked_from_the_provision_env(self, monkeypatch, tmp_path):
+  def test_strips_cw_venv_manifest_from_the_provision_env(self, monkeypatch, tmp_path):
     from types import SimpleNamespace
 
     (tmp_path / 'setup.sh').write_text('#!/bin/sh\n')
-    monkeypatch.setenv('CW_VENV_BAKED', '1')
+    monkeypatch.setenv('CW_VENV_MANIFEST', '/opt/cw-venv-manifest')
     captured: dict = {}
 
     def fake_run(args, **kwargs):
@@ -38,7 +38,7 @@ class TestProvisionHostWorktree:
 
     monkeypatch.setattr(workspace_worktrees.subprocess, 'run', fake_run)
     assert workspace_worktrees.provision_host_worktree(tmp_path) is True
-    assert 'CW_VENV_BAKED' not in captured['env']
+    assert 'CW_VENV_MANIFEST' not in captured['env']
 
 
 class TestEnsureHostWorktree:

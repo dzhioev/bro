@@ -100,8 +100,8 @@ docker run --rm -i \
     # the framework packages ship their argv bridges as ordinary editable modules
     test -f /workspace/bro/_entrypoints.py
     test -f /workspace/bro-dev/bro_dev/_entrypoints.py
-    # every manifest the bake ran from is staged for the entrypoint's reuse gate at
-    # its project-relative path, and matches this clone (based on the same tree the
+    # every manifest the bake ran from is staged for setup.sh's reuse gate at its
+    # project-relative path, and matches this clone (based on the same tree the
     # image was built from)
     cmp -s /workspace/pyproject.toml /opt/cw-venv-manifest/pyproject.toml
     cmp -s /workspace/uv.lock /opt/cw-venv-manifest/uv.lock

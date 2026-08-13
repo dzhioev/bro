@@ -102,37 +102,23 @@ if [ -d /opt/claude-plugins-seed ] && [ ! -f "$HOME/.claude/plugins/installed_pl
   cp -r /opt/claude-plugins-seed/. "$HOME/.claude/plugins/"
 fi
 
-# whether every manifest the baked venv was resolved from still matches the
-# clone's copy at the same relative path. the root-manifest probe keeps an empty
-# or absent staging dir from passing the loop vacuously.
-manifests_match() {
-  local staged
-  [ -f /opt/cw-venv-manifest/pyproject.toml ] || return 1
-  while IFS= read -r staged; do
-    cmp -s "$staged" "/workspace/${staged#/opt/cw-venv-manifest/}" || return 1
-  done < <(find /opt/cw-venv-manifest -type f)
-}
-
-# reuse the venv baked into the image (deps + editable workspace already installed,
-# its module finders pointing at /workspace — see the Dockerfile) instead of a fresh
-# `uv sync`. symlink it in and set the setup.sh skip signal. valid only when the
-# clone's dependency manifests equal the ones the image was built from —
-# CW_BASE_REF can base the clone on any ref, so equality is checked against the
-# staged /opt/cw-venv-manifest copies, not assumed. a mismatch (or a pre-existing
-# /workspace/.venv from a reused workspace) falls through to a normal sync from
-# the clone's own manifests.
-if [ "${CW_SKIP_VENV:-}" != "1" ] && [ -d /opt/cw-venv ] && [ ! -e /workspace/.venv ] \
-    && manifests_match; then
-  log VERBOSE 'reusing the venv baked into the image'
+# link in the venv baked into the image (deps + editable workspace already
+# installed, its module finders pointing at /workspace — see the Dockerfile) and
+# name the manifest set it was resolved from, staged at the clone's own relative
+# paths. whether that venv still describes the clone — CW_BASE_REF can base it on
+# any ref — is setup.sh's call below, so a diverged clone syncs the bake into
+# shape instead of building an environment from scratch. a pre-existing
+# /workspace/.venv (a reused workspace) keeps its own environment.
+if [ "${CW_SKIP_VENV:-}" != "1" ] && [ -d /opt/cw-venv ] && [ ! -e /workspace/.venv ]; then
+  log VERBOSE 'linking the venv baked into the image'
   ln -s /opt/cw-venv /workspace/.venv
-  export CW_VENV_BAKED=1
+  export CW_VENV_MANIFEST=/opt/cw-venv-manifest
 fi
 
 # provision the cloned repo through its root setup.sh — the uniform provisioning
-# entry point every repo cw operates on carries (uv sync unless CW_VENV_BAKED is
-# set, followed by repository-local development hook installation). then activate
-# the venv so child processes inherit it. CW_SKIP_VENV (smoke test only) skips the
-# whole venv-dependent block.
+# entry point every repo cw operates on carries (uv sync plus repository-local
+# development hook installation). then activate the venv so child processes
+# inherit it. CW_SKIP_VENV (smoke test only) skips the whole venv-dependent block.
 if [ "${CW_SKIP_VENV:-}" != "1" ]; then
   /workspace/setup.sh >&2
   source /workspace/.venv/bin/activate

@@ -28,7 +28,7 @@ The base distribution contains every module — `bro.base`, the MCP abstraction,
 - `bro[aws]` — the `ssm` credential source
 - `bro[github]` — GitHub App authentication
 
-A repository operated by `cw` provides a root `setup.sh` whose postcondition is an executable `.venv/bin/cw`. When the container entrypoint exports `CW_VENV_BAKED=1`, the script must reuse the baked environment instead of syncing it. A consuming development repository normally installs `bro-dev` in its dev dependency group, syncs the workspace, activates the resulting venv, and calls `bro-dev.install` to install the commit-footer hooks and `git golc` alias.
+A repository operated by `cw` provides a root `setup.sh` whose postcondition is an executable `.venv/bin/cw`. When the container entrypoint links a pre-built environment into the tree it exports `CW_VENV_MANIFEST`, a directory holding the dependency manifests that environment was resolved from at their repository-relative paths; the script must reuse the environment while the tree's own copies still match them and sync when they diverge. A consuming development repository normally installs `bro-dev` in its dev dependency group, syncs the workspace, activates the resulting venv, and calls `bro-dev.install` to install the commit-footer hooks and `git golc` alias.
 
 ## Extension entry points
 
