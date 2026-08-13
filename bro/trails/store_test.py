@@ -20,6 +20,21 @@ def test_explicit_local_backend_uses_environment_root(tmp_path, monkeypatch):
   assert store.root == tmp_path.resolve()
 
 
+def test_dynamo_backend_dispatches_through_the_server_package(monkeypatch):
+  sentinel = object()
+  config = {
+    'backend': 'dynamo',
+    'trails_table': 'headers',
+    'steps_table': 'steps',
+    'uuid_index': 'uuid-index',
+    'bucket': 'spill',
+    'region': 'eu-test-1',
+  }
+  monkeypatch.setattr('bro.trails.server.dynamo.build_dynamo_store', lambda value: sentinel)
+
+  assert build_store(config) is sentinel
+
+
 def test_unknown_backend_fails():
   with pytest.raises(ValueError, match='unknown trails backend'):
     build_store({'backend': 'other'})

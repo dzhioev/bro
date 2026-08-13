@@ -1,12 +1,14 @@
 import asyncio
 import json
+import threading
+import time
 
 import pytest
 
 from bro.trails import backends
 from bro.trails.model import BlazeRequest, validate_end
-from bro.trails.server import storage
-from bro.trails.server.server import create_app, resolve_auth
+from bro.trails.server.server import create_app, main, resolve_auth
+from bro.trails.store import AppendConflict, TrailNotFound
 
 TOKEN = 'secret-test-token'
 
@@ -39,6 +41,7 @@ class FakeStorage:
     self.raise_body_too_large = False
     self.check_delay_seconds = 0.0
     self.sweep_calls = 0
+    self.operation_threads: list[int] = []
 
   def _new_id(self) -> str:
     self._counter += 1
@@ -47,7 +50,8 @@ class FakeStorage:
   def _now(self) -> str:
     return f'2026-06-07T00:00:{self._counter:02d}.000000Z'
 
-  async def blaze(self, request: BlazeRequest):
+  def blaze(self, request: BlazeRequest):
+    self.operation_threads.append(threading.get_ident())
     adapter = backends.BACKENDS[request.harness]
     adapter.validate_create(request.native)
     if request.harness == 'bro' and request.bro is None:
@@ -88,14 +92,14 @@ class FakeStorage:
       )
     return {'id': trail_id, 'started_at': started_at}
 
-  async def append_records(self, trail_id, *, offset, records, tools):
+  def append_records(self, trail_id, offset, records, *, tools=None):
     if trail_id not in self.trails:
-      raise storage.TrailNotFound(trail_id)
+      raise TrailNotFound(trail_id)
     extent = len(self.steps[trail_id])
     if extent != offset:
       if extent == offset + len(records):
         return {'extent': extent, 'appended': 0, 'duplicate': True}
-      raise storage.AppendConflict(offset, extent)
+      raise AppendConflict(offset, extent)
     for record in records:
       self.steps[trail_id].append(
         {
@@ -108,60 +112,63 @@ class FakeStorage:
     self.trails[trail_id]['extent'] = len(self.steps[trail_id])
     return {'extent': len(self.steps[trail_id]), 'appended': len(records)}
 
-  async def recompute(self, trail_id):
+  def recompute(self, trail_id):
     if trail_id not in self.trails:
-      raise storage.TrailNotFound(trail_id)
+      raise TrailNotFound(trail_id)
     return {'trail_id': trail_id, 'extent': len(self.steps[trail_id])}
 
-  async def check(self, trail_id=None):
-    await asyncio.sleep(self.check_delay_seconds)
+  def check(self, trail_id=None):
+    time.sleep(self.check_delay_seconds)
     return {'ok': True, 'trails': [] if trail_id is None else [{'trail_id': trail_id, 'ok': True}]}
 
-  async def relink(self, trail_id, forked_from, delete_count):
+  def relink(self, trail_id, forked_from, delete_count):
     if trail_id not in self.trails:
-      raise storage.TrailNotFound(trail_id)
+      raise TrailNotFound(trail_id)
     self.trails[trail_id]['forked_from'] = forked_from
     self.steps[trail_id] = self.steps[trail_id][delete_count:]
     return {'trail_id': trail_id, 'forked_from': forked_from, 'extent': len(self.steps[trail_id])}
 
-  async def update_header(self, trail_id, changes):
+  def update_header(self, trail_id, changes):
     if trail_id not in self.trails:
-      raise storage.TrailNotFound(trail_id)
+      raise TrailNotFound(trail_id)
     if set(changes) - {'subject', 'last_alive_at', 'turn_count', 'native'}:
       raise ValueError('immutable or unknown header fields')
     self.trails[trail_id].update({key: value for key, value in changes.items() if key != 'native'})
     self.trails[trail_id]['native'].update(changes.get('native', {}))
     return self.trails[trail_id]
 
-  async def end_trail(self, *, trail_id, reason, detail):
+  def end_trail(self, trail_id, reason, detail=None):
     validate_end(reason, detail)
     if trail_id not in self.trails:
-      raise storage.TrailNotFound(trail_id)
+      raise TrailNotFound(trail_id)
     end = {'at': self._now(), 'reason': reason}
     if detail is not None:
       end['detail'] = detail
     self.trails[trail_id]['end'] = end
     return {}
 
-  async def keepalive(self, trail_id):
+  def keepalive(self, trail_id):
     if trail_id not in self.trails:
-      raise storage.TrailNotFound(trail_id)
+      raise TrailNotFound(trail_id)
     self.trails[trail_id]['last_alive_at'] = self._now()
     return {}
 
-  async def get_launch_context(self, trail_id):
+  def get_launch_context(self, trail_id):
     if trail_id not in self.trails:
-      raise storage.TrailNotFound(trail_id)
+      raise TrailNotFound(trail_id)
     return self.contexts.get(trail_id)
 
-  async def sweep_unreported(self):
+  def sweep_unreported(self):
     self.sweep_calls += 1
     return []
 
-  async def get_trail(self, trail_id):
-    return self.trails.get(trail_id)
+  def get_trail(self, trail_id):
+    try:
+      return self.trails[trail_id]
+    except KeyError as exception:
+      raise TrailNotFound(trail_id) from exception
 
-  async def find_steps_by_uuid(self, uuids):
+  def find_steps_by_uuid(self, uuids):
     return [
       {'trail_id': trail_id, 'step_id': step['step_id'], 'uuid': step['uuid']}
       for trail_id, steps in self.steps.items()
@@ -169,26 +176,26 @@ class FakeStorage:
       if step.get('uuid') in uuids
     ]
 
-  async def get_step(self, trail_id, step_id):
+  def get_step(self, trail_id, step_id):
     if trail_id not in self.trails:
-      raise storage.TrailNotFound(trail_id)
-    return next(
-      (step for step in self.steps[trail_id] if step['step_id'] == step_id),
-      None,
-    )
+      raise TrailNotFound(trail_id)
+    try:
+      return next(step for step in self.steps[trail_id] if step['step_id'] == step_id)
+    except StopIteration as exception:
+      raise TrailNotFound(f'{trail_id}/{step_id}') from exception
 
-  async def query_step_uuids(self, trail_id, *, through):
+  def get_step_uuids(self, trail_id, *, through):
     if trail_id not in self.trails:
-      raise storage.TrailNotFound(trail_id)
+      raise TrailNotFound(trail_id)
     return [
       {'step_id': step['step_id'], 'uuid': step['uuid']}
       for step in self.steps[trail_id]
       if 'uuid' in step and (through is None or step['step_id'] <= through)
     ]
 
-  async def query_steps(self, trail_id, *, after, limit):
+  def get_steps(self, trail_id, *, after, limit):
     if trail_id not in self.trails:
-      raise storage.TrailNotFound(trail_id)
+      raise TrailNotFound(trail_id)
     items = self.steps[trail_id]
     start = 0
     if after is not None:
@@ -197,8 +204,8 @@ class FakeStorage:
     next_cursor = page[-1]['step_id'] if start + limit < len(items) else None
     return {'steps': page, 'next': next_cursor}
 
-  async def query_messages(self, trail_id, *, after, limit, types):
-    page = await self.query_steps(trail_id, after=after, limit=limit)
+  def get_messages(self, trail_id, *, after, limit, types):
+    page = self.get_steps(trail_id, after=after, limit=limit)
     messages = [
       {
         'type': item['kind'],
@@ -212,7 +219,7 @@ class FakeStorage:
       messages = [message for message in messages if message['type'] in types]
     return {'messages': messages, 'next': page['next']}
 
-  async def list_trails(self, *, harness, bro, forked_from, since, until, cursor, limit):
+  def list_trails(self, *, harness, bro, forked_from, since, until, cursor, limit):
     items = list(self.trails.values())
     if harness is not None:
       items = [item for item in items if item['harness'] == harness]
@@ -223,6 +230,9 @@ class FakeStorage:
     items.sort(key=lambda item: item['started_at'], reverse=True)
     return {'trails': items[:limit], 'next': None}
 
+  def close(self):
+    pass
+
 
 @pytest.fixture
 def store():
@@ -231,7 +241,7 @@ def store():
 
 @pytest.fixture
 def client(aiohttp_client, store):
-  return aiohttp_client(create_app(store, TOKEN))
+  return aiohttp_client(create_app(store, TOKEN, admin=store))
 
 
 @pytest.mark.asyncio
@@ -247,9 +257,12 @@ async def test_auth_is_required(client):
 
 
 @pytest.mark.asyncio
-async def test_blaze_bro_trail(client, store):
+async def test_blaze_bro_trail_dispatches_off_loop(client, store):
+  event_loop_thread = threading.get_ident()
   response = await (await client).post('/v1/trails', json=_blaze_payload(), headers=_auth())
   assert response.status == 201
+  assert len(store.operation_threads) == 1
+  assert store.operation_threads[0] != event_loop_thread
   trail_id = (await response.json())['id']
   assert store.trails[trail_id]['harness'] == 'bro'
   assert store.trails[trail_id]['surface'] == 'ask'
@@ -309,6 +322,15 @@ async def test_universal_append_and_extent_conflict(client):
   )
   assert response.status == 409
   assert (await response.json())['extent'] == 2
+
+
+@pytest.mark.asyncio
+async def test_admin_routes_are_not_mounted_without_a_dynamo_surface(aiohttp_client, store):
+  client = await aiohttp_client(create_app(store, TOKEN))
+
+  response = await client.post('/v1/admin/trails/check', json={}, headers=_auth())
+
+  assert response.status == 404
 
 
 @pytest.mark.asyncio
@@ -434,12 +456,13 @@ async def test_launch_context_read(client):
 
 
 @pytest.mark.asyncio
-async def test_launch_context_absent_is_404(client):
+async def test_launch_context_distinguishes_absent_context_from_missing_trail(client):
   cli = await client
   created = await cli.post('/v1/trails', json=_blaze_payload(), headers=_auth())
   trail_id = (await created.json())['id']
   response = await cli.get(f'/v1/trails/{trail_id}/context', headers=_auth())
-  assert response.status == 404
+  assert response.status == 200
+  assert await response.json() == {'launch_context': None}
   response = await cli.get('/v1/trails/nope/context', headers=_auth())
   assert response.status == 404
 
@@ -508,7 +531,7 @@ async def test_malformed_limit_is_rejected(client):
 
 @pytest.mark.asyncio
 async def test_sweep_loop_runs(aiohttp_client, store):
-  await aiohttp_client(create_app(store, TOKEN, sweep_interval_seconds=0.01))
+  await aiohttp_client(create_app(store, TOKEN, admin=store, sweep_interval_seconds=0.01))
   deadline = asyncio.get_running_loop().time() + 1
   while store.sweep_calls == 0 and asyncio.get_running_loop().time() < deadline:
     await asyncio.sleep(0.01)
@@ -522,3 +545,18 @@ def test_resolve_auth_requires_explicit_loopback_override():
     resolve_auth(None, True, '0.0.0.0')
   for host in ('127.0.0.1', 'localhost', '::1'):
     assert resolve_auth(None, True, host) is None
+
+
+def test_main_resolves_the_hosted_store_from_credentials(monkeypatch, store):
+  launched = {}
+  monkeypatch.setattr('bro.trails.server.server.default_store', lambda: store)
+  monkeypatch.setattr(
+    'bro.trails.server.server.web.run_app',
+    lambda app, *, host, port: launched.update(app=app, host=host, port=port),
+  )
+
+  main(['trails-server', '--host', '127.0.0.1', '--port', '9000', '--trails-bearer-token', TOKEN])
+
+  assert launched['host'] == '127.0.0.1'
+  assert launched['port'] == 9000
+  assert launched['app']['store'] is store

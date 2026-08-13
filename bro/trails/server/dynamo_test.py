@@ -1,6 +1,7 @@
 import copy
 import io
 import json
+import threading
 from typing import Any, Optional
 
 import pytest
@@ -8,7 +9,8 @@ from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 
 from bro.trails import backends
 from bro.trails.model import MESSAGE_TYPES, UNREPORTED_END_INFERENCE, BlazeRequest, tools_sha256
-from bro.trails.server import storage, storage_types
+from bro.trails.server import dynamo as dynamo_store, dynamo_types
+from bro.trails.store import AppendConflict
 
 _serializer = TypeSerializer()
 _deserializer = TypeDeserializer()
@@ -35,6 +37,7 @@ class FakeS3:
   def __init__(self):
     self.objects: dict[str, bytes] = {}
     self.put_counts: dict[str, int] = {}
+    self.get_threads: list[int] = []
 
   def put_object(self, *, Key, Body, IfNoneMatch=None, **_):
     if IfNoneMatch == '*' and Key in self.objects:
@@ -46,15 +49,10 @@ class FakeS3:
     self.put_counts[Key] = self.put_counts.get(Key, 0) + 1
 
   def get_object(self, *, Key, **_):
+    self.get_threads.append(threading.get_ident())
     if Key not in self.objects:
       raise FakeClientError({'Error': {'Code': 'NoSuchKey', 'Message': 'missing'}}, 'GetObject')
     return {'Body': io.BytesIO(self.objects[Key])}
-
-  def head_object(self, *, Key, **_):
-    return {'ContentLength': len(self.objects[Key])}
-
-  def generate_presigned_url(self, **_):
-    return 'https://example.test/spill'
 
 
 class FakeDynamo:
@@ -68,6 +66,7 @@ class FakeDynamo:
   def __init__(self):
     self.tables: dict[str, dict[Any, dict]] = {'headers': {}, 'universal': {}}
     self.queries: list[dict] = []
+    self.query_threads: list[int] = []
     self.scans: list[dict] = []
 
   @property
@@ -257,6 +256,7 @@ class FakeDynamo:
 
   def query(self, **kwargs):
     self.queries.append(kwargs)
+    self.query_threads.append(threading.get_ident())
     table = kwargs['TableName']
     values = self._values(kwargs)
     if 'IndexName' in kwargs:
@@ -316,20 +316,21 @@ class FakeDynamo:
 
 @pytest.fixture
 def components():
-  dynamo = FakeDynamo()
+  dynamo_client = FakeDynamo()
   s3 = FakeS3()
-  store = storage.Storage(
-    dynamo=dynamo,
+  store = dynamo_store.DynamoStore(
+    dynamo=dynamo_client,
     s3=s3,
     trails_table='headers',
     steps_table='universal',
     bucket='bucket',
     uuid_index='uuid-index',
   )
-  return store, dynamo, s3
+  with store:
+    yield store, dynamo_client, s3
 
 
-async def _blaze_bro(store: storage.Storage, **overrides) -> str:
+def _blaze_bro(store: dynamo_store.DynamoStore, **overrides) -> str:
   payload = {
     'harness': 'bro',
     'version': '2',
@@ -341,10 +342,10 @@ async def _blaze_bro(store: storage.Storage, **overrides) -> str:
     'body': {'records': [{'kind': 'system_prompt', 'body': 'prompt', 'turn_index': 0}]},
   }
   payload.update(overrides)
-  return (await store.blaze(BlazeRequest.from_wire(payload)))['id']
+  return (store.blaze(BlazeRequest.from_wire(payload)))['id']
 
 
-async def _blaze_claude(store: storage.Storage, **overrides) -> str:
+def _blaze_claude(store: dynamo_store.DynamoStore, **overrides) -> str:
   payload = {
     'harness': 'claude',
     'version': '2',
@@ -359,7 +360,39 @@ async def _blaze_claude(store: storage.Storage, **overrides) -> str:
     'body': {'records': []},
   }
   payload.update(overrides)
-  return (await store.blaze(BlazeRequest.from_wire(payload)))['id']
+  return (store.blaze(BlazeRequest.from_wire(payload)))['id']
+
+
+def test_build_dynamo_store_uses_the_shared_credential_shape(monkeypatch):
+  clients = {'dynamodb': FakeDynamo(), 's3': FakeS3()}
+  regions = []
+
+  class FakeSession:
+    def __init__(self, *, region_name):
+      regions.append(region_name)
+
+    def client(self, name):
+      return clients[name]
+
+  monkeypatch.setattr(dynamo_store.boto3, 'Session', FakeSession)
+  config = {
+    'backend': 'dynamo',
+    'trails_table': 'headers',
+    'steps_table': 'steps',
+    'uuid_index': 'uuid-index',
+    'bucket': 'spill',
+    'region': 'eu-test-1',
+  }
+  with dynamo_store.build_dynamo_store(config) as store:
+    assert isinstance(store, dynamo_store.DynamoStore)
+    assert store._dynamo is clients['dynamodb']
+    assert store._s3 is clients['s3']
+  assert regions == ['eu-test-1']
+
+
+def test_build_dynamo_store_requires_every_backend_field():
+  with pytest.raises(ValueError, match='missing fields'):
+    dynamo_store.build_dynamo_store({'backend': 'dynamo'})
 
 
 def _bro_call(output: list[dict], *, model: str = 'gpt-5', input_tokens: int = 10) -> dict:
@@ -393,8 +426,7 @@ def _claude_assistant(message_id: str, text: str, *, uuid: str) -> str:
   )
 
 
-@pytest.mark.asyncio
-async def test_five_function_registry_and_declared_projection_contract():
+def test_five_function_registry_and_declared_projection_contract():
   assert 'end' not in MESSAGE_TYPES
   assert set(backends.BACKENDS) == {'bro', 'claude'}
   for adapter in backends.BACKENDS.values():
@@ -406,11 +438,10 @@ async def test_five_function_registry_and_declared_projection_contract():
     assert adapter.emitted_message_types <= MESSAGE_TYPES
 
 
-@pytest.mark.asyncio
-async def test_universal_append_uses_ordinals_folds_raw_usage_and_is_idempotent(components):
+def test_universal_append_uses_ordinals_folds_raw_usage_and_is_idempotent(components):
   store, dynamo, _ = components
-  trail_id = await _blaze_bro(store)
-  result = await store.append_records(
+  trail_id = _blaze_bro(store)
+  result = store.append_records(
     trail_id,
     offset=1,
     records=[
@@ -430,10 +461,10 @@ async def test_universal_append_uses_ordinals_folds_raw_usage_and_is_idempotent(
   assert header['extent'] == 3
   assert header['turn_count'] == 1
   assert header['native']['usage'] == {'gpt-5': {'input_tokens': 10, 'output_tokens': 3}}
-  assert (await store.get_trail(trail_id))['usage'] == header['native']['usage']
-  assert (await store.check(trail_id))['ok'] is True
+  assert (store.get_trail(trail_id))['usage'] == header['native']['usage']
+  assert (store.check(trail_id))['ok'] is True
 
-  duplicate = await store.append_records(
+  duplicate = store.append_records(
     trail_id,
     offset=1,
     records=[
@@ -443,8 +474,8 @@ async def test_universal_append_uses_ordinals_folds_raw_usage_and_is_idempotent(
   )
   assert duplicate == {'extent': 3, 'appended': 0, 'duplicate': True}
   assert dynamo.headers[trail_id]['turn_count'] == 1
-  with pytest.raises(storage.AppendConflict):
-    await store.append_records(
+  with pytest.raises(AppendConflict):
+    store.append_records(
       trail_id,
       offset=1,
       records=[
@@ -452,28 +483,26 @@ async def test_universal_append_uses_ordinals_folds_raw_usage_and_is_idempotent(
         {'kind': 'error', 'body': 'competing writer'},
       ],
     )
-  with pytest.raises(storage.AppendConflict) as caught:
-    await store.append_records(trail_id, offset=0, records=[{'kind': 'error', 'body': 'x'}])
+  with pytest.raises(AppendConflict) as caught:
+    store.append_records(trail_id, offset=0, records=[{'kind': 'error', 'body': 'x'}])
   assert caught.value.actual == 3
 
 
-@pytest.mark.asyncio
-async def test_append_chunks_without_interleaving(components):
+def test_append_chunks_without_interleaving(components):
   store, dynamo, _ = components
-  trail_id = await _blaze_bro(store)
+  trail_id = _blaze_bro(store)
   records = [{'kind': 'error', 'body': str(index)} for index in range(51)]
-  assert await store.append_records(trail_id, offset=1, records=records) == {
+  assert store.append_records(trail_id, offset=1, records=records) == {
     'extent': 52,
     'appended': 51,
   }
   assert dynamo.headers[trail_id]['extent'] == 52
 
 
-@pytest.mark.asyncio
-async def test_bro_projection_derives_output_and_skips_decomposed_rows(components):
+def test_bro_projection_derives_output_and_skips_decomposed_rows(components):
   store, _, _ = components
-  trail_id = await _blaze_bro(store)
-  await store.append_records(
+  trail_id = _blaze_bro(store)
+  store.append_records(
     trail_id,
     offset=1,
     records=[
@@ -490,7 +519,7 @@ async def test_bro_projection_derives_output_and_skips_decomposed_rows(component
       {'kind': 'tool_call', 'body': None, 'call_id': 'call-1'},
     ],
   )
-  page = await store.query_messages(trail_id, after=None, limit=20, types=None)
+  page = store.get_messages(trail_id, after=None, limit=20, types=None)
   assert [message['type'] for message in page['messages']] == [
     'system_prompt',
     'llm_call',
@@ -500,27 +529,26 @@ async def test_bro_projection_derives_output_and_skips_decomposed_rows(component
   assert page['messages'][2]['source'] == {'step_id': 1, 'index': 1}
   assert page['messages'][3]['source'] == {'step_id': 1, 'index': 2}
 
-  await store.append_records(
+  store.append_records(
     trail_id,
     offset=4,
     records=[
       _bro_call([{'type': 'message', 'content': [{'type': 'output_text', 'text': 'done'}]}])
     ],
   )
-  messages = (await store.query_messages(trail_id, after=3, limit=10, types=None))['messages']
+  messages = (store.get_messages(trail_id, after=3, limit=10, types=None))['messages']
   assistant = next(message for message in messages if message['type'] == 'assistant')
   assert assistant['terminal'] is True
 
 
-@pytest.mark.asyncio
-async def test_claude_billing_decision_is_stored_across_batches_and_pages(components):
+def test_claude_billing_decision_is_stored_across_batches_and_pages(components):
   store, dynamo, _ = components
-  trail_id = await _blaze_claude(store)
+  trail_id = _blaze_claude(store)
   first = _claude_assistant('message-1', 'first', uuid='uuid-1')
   second = _claude_assistant('message-1', 'second', uuid='uuid-2')
   third = _claude_assistant('message-1', 'third', uuid='uuid-3')
-  await store.append_records(trail_id, offset=0, records=[first, second])
-  await store.append_records(trail_id, offset=2, records=[third])
+  store.append_records(trail_id, offset=0, records=[first, second])
+  store.append_records(trail_id, offset=2, records=[third])
   assert dynamo.universal_steps[(trail_id, 0)]['usage'] == {
     'input_tokens': 7,
     'output_tokens': 2,
@@ -532,35 +560,34 @@ async def test_claude_billing_decision_is_stored_across_batches_and_pages(compon
   billed = []
   after: Optional[int] = None
   while True:
-    page = await store.query_messages(trail_id, after=after, limit=1, types=None)
+    page = store.get_messages(trail_id, after=after, limit=1, types=None)
     billed.extend(message for message in page['messages'] if message['type'] == 'llm_call')
     after = page['next']
     if after is None:
       break
   assert len(billed) == 1
-  assert (await store.check(trail_id))['ok'] is True
+  assert (store.check(trail_id))['ok'] is True
 
 
-@pytest.mark.asyncio
-async def test_check_detects_non_adjacent_message_billing(components):
+def test_check_detects_non_adjacent_message_billing(components):
   store, _, _ = components
-  trail_id = await _blaze_claude(store)
-  await store.append_records(
+  trail_id = _blaze_claude(store)
+  store.append_records(
     trail_id,
     offset=0,
     records=[_claude_assistant('message-a', 'first', uuid='uuid-1')],
   )
-  await store.append_records(
+  store.append_records(
     trail_id,
     offset=1,
     records=[_claude_assistant('message-b', 'middle', uuid='uuid-2')],
   )
-  await store.append_records(
+  store.append_records(
     trail_id,
     offset=2,
     records=[_claude_assistant('message-a', 'last', uuid='uuid-3')],
   )
-  checked = await store.check(trail_id)
+  checked = store.check(trail_id)
   differences = checked['trails'][0]['differences']
   assert checked['ok'] is False
   assert any(
@@ -569,10 +596,9 @@ async def test_check_detects_non_adjacent_message_billing(components):
   )
 
 
-@pytest.mark.asyncio
-async def test_claude_classifier_owns_version_title_and_turns(components):
+def test_claude_classifier_owns_version_title_and_turns(components):
   store, dynamo, _ = components
-  trail_id = await _blaze_claude(store)
+  trail_id = _blaze_claude(store)
   records = [
     json.dumps({'type': 'system', 'version': '2.1.0'}),
     json.dumps({'type': 'ai-title', 'aiTitle': 'A useful title'}),
@@ -586,71 +612,78 @@ async def test_claude_classifier_owns_version_title_and_turns(components):
       }
     ),
   ]
-  await store.append_records(trail_id, offset=0, records=records)
+  store.append_records(trail_id, offset=0, records=records)
   header = dynamo.headers[trail_id]
   assert header['native']['harness_version'] == '2.1.0'
   assert header['subject'] == 'A useful title'
   assert header['turn_count'] == 1
 
 
-@pytest.mark.asyncio
-async def test_spill_and_content_addressed_tools(components):
+def test_spill_and_content_addressed_tools(components):
   store, _, s3 = components
-  trail_id = await _blaze_bro(store)
+  trail_id = _blaze_bro(store)
   tool_body = [{'type': 'function', 'name': 'read'}]
   sha256 = tools_sha256(tool_body)
-  large = 'x' * (storage.SPILLOVER_THRESHOLD_BYTES + 1)
-  await store.append_records(
+  large = 'x' * (dynamo_store.SPILLOVER_THRESHOLD_BYTES + 1)
+  store.append_records(
     trail_id,
     offset=1,
     records=[{'kind': 'tool_result', 'body': large, 'tools_sha256': sha256}],
     tools={sha256: tool_body},
   )
-  await store.append_records(trail_id, offset=2, records=[], tools={sha256: tool_body})
-  tool_key = storage_types.tool_blob_key(sha256)
+  store.append_records(trail_id, offset=2, records=[], tools={sha256: tool_body})
+  tool_key = dynamo_types.tool_blob_key(sha256)
   assert s3.put_counts[tool_key] == 1
   row = next(row for row in s3.objects if row.startswith(f'trails/steps/{trail_id}/1-'))
   assert row in s3.objects
-  assert (await store.query_steps(trail_id, after=None, limit=10))['steps'][1]['body'] == large
+  assert (store.get_steps(trail_id, after=None, limit=10))['steps'][1]['body'] == large
   with pytest.raises(ValueError, match='hash mismatch'):
-    await store.append_records(trail_id, offset=2, records=[], tools={'0' * 64: tool_body})
+    store.append_records(trail_id, offset=2, records=[], tools={'0' * 64: tool_body})
 
 
-@pytest.mark.asyncio
-async def test_spilled_claude_line_is_served_as_the_stored_body(components):
-  store, _, _ = components
-  trail_id = await _blaze_claude(store)
-  raw = json.dumps(
-    {'type': 'system', 'content': 'x' * (storage.INLINE_RESPONSE_THRESHOLD_BYTES + 1)}
-  )
-  await store.append_records(trail_id, offset=0, records=[raw])
-  [step] = (await store.query_steps(trail_id, after=None, limit=10))['steps']
-  assert step['body'] == raw
-  assert 'raw' not in step
-  assert 'record' not in step
+def test_spilled_claude_lines_resolve_in_the_store_thread_pool(components):
+  store, _, s3 = components
+  trail_id = _blaze_claude(store)
+  raw_lines = [
+    json.dumps(
+      {
+        'type': 'system',
+        'content': character * (dynamo_store.SPILLOVER_THRESHOLD_BYTES + 1),
+      }
+    )
+    for character in ('x', 'y')
+  ]
+  store.append_records(trail_id, offset=0, records=raw_lines)
+  caller_thread = threading.get_ident()
+  steps = store.get_steps(trail_id, after=None, limit=10)['steps']
+
+  assert [step['body'] for step in steps] == raw_lines
+  assert all(thread != caller_thread for thread in s3.get_threads)
+  assert all('raw' not in step and 'record' not in step for step in steps)
 
 
-@pytest.mark.asyncio
-async def test_uuid_projection_and_point_reads(components):
+def test_uuid_projection_and_point_reads(components):
   store, dynamo, _ = components
-  universal = await _blaze_claude(store)
+  universal = _blaze_claude(store)
   first = _claude_assistant('message-1', 'first', uuid='uuid-1')
   second = _claude_assistant('message-2', 'second', uuid='uuid-2')
-  await store.append_records(universal, offset=0, records=[first, second])
+  store.append_records(universal, offset=0, records=[first, second])
 
-  assert await store.find_steps_by_uuid({'uuid-2', 'missing'}) == [
+  query_count = len(dynamo.query_threads)
+  caller_thread = threading.get_ident()
+  assert store.find_steps_by_uuid({'uuid-2', 'missing'}) == [
     {'trail_id': universal, 'step_id': 1, 'uuid': 'uuid-2'}
   ]
+  assert all(thread != caller_thread for thread in dynamo.query_threads[query_count:])
   assert dynamo.queries[-1]['IndexName'] == 'uuid-index'
   assert dynamo.queries[-1]['ProjectionExpression'] == 'trail_id, step_id, #uuid'
-  assert (await store.get_step(universal, 1))['body'] == second
-  assert await store.query_step_uuids(universal, through=0) == [{'step_id': 0, 'uuid': 'uuid-1'}]
+  assert (store.get_step(universal, 1))['body'] == second
+  assert store.get_step_uuids(universal, through=0) == [{'step_id': 0, 'uuid': 'uuid-1'}]
 
 
-@pytest.mark.asyncio
-async def test_launch_context_is_harness_neutral_and_end_adds_no_step(components):
+def test_launch_context_is_harness_neutral_and_end_adds_no_step(components):
   store, dynamo, s3 = components
-  trail_id = await _blaze_bro(
+  trail_id = _blaze_bro(
     store,
     body={
       'records': [{'kind': 'system_prompt', 'body': 'prompt'}],
@@ -658,21 +691,20 @@ async def test_launch_context_is_harness_neutral_and_end_adds_no_step(components
     },
   )
   header = dynamo.headers[trail_id]
-  assert header['context_s3'] == storage_types.context_key(trail_id)
+  assert header['context_s3'] == dynamo_types.context_key(trail_id)
   assert 'context_s3' not in header['native']
-  assert await store.get_launch_context(trail_id) == {'cwd': '/workspace'}
-  assert storage_types.context_key(trail_id) in s3.objects
+  assert store.get_launch_context(trail_id) == {'cwd': '/workspace'}
+  assert dynamo_types.context_key(trail_id) in s3.objects
   before = len(dynamo.universal_steps)
-  await store.end_trail(trail_id=trail_id, reason='ok', detail=None)
+  store.end_trail(trail_id=trail_id, reason='ok', detail=None)
   assert len(dynamo.universal_steps) == before
   assert dynamo.headers[trail_id]['end']['reason'] == 'ok'
 
 
-@pytest.mark.asyncio
-async def test_check_detects_corruption_and_recompute_repairs_rows_and_header(components):
+def test_check_detects_corruption_and_recompute_repairs_rows_and_header(components):
   store, dynamo, _ = components
-  trail_id = await _blaze_claude(store)
-  await store.append_records(
+  trail_id = _blaze_claude(store)
+  store.append_records(
     trail_id,
     offset=0,
     records=[_claude_assistant('message-1', 'first', uuid='uuid-1')],
@@ -681,42 +713,40 @@ async def test_check_detects_corruption_and_recompute_repairs_rows_and_header(co
   dynamo.headers[trail_id]['native']['usage'] = {}
   dynamo.universal_steps[(trail_id, 0)]['uuid'] = 'wrong'
   dynamo.universal_steps[(trail_id, 0)].pop('usage')
-  checked = await store.check(trail_id)
+  checked = store.check(trail_id)
   assert checked['ok'] is False
   fields = {difference['field'] for difference in checked['trails'][0]['differences']}
   assert {'turn_count', 'native.usage', 'uuid', 'usage', 'billing_contributions'} <= fields
 
-  await store.recompute(trail_id)
-  assert (await store.check(trail_id))['ok'] is True
+  store.recompute(trail_id)
+  assert (store.check(trail_id))['ok'] is True
   assert dynamo.universal_steps[(trail_id, 0)]['uuid'] == 'uuid-1'
 
 
-@pytest.mark.asyncio
-async def test_store_check_finds_cross_trail_duplicate_uuids(components):
+def test_store_check_finds_cross_trail_duplicate_uuids(components):
   store, _, _ = components
-  first = await _blaze_claude(store)
-  second = await _blaze_claude(store)
-  await store.append_records(
+  first = _blaze_claude(store)
+  second = _blaze_claude(store)
+  store.append_records(
     first,
     offset=0,
     records=[_claude_assistant('message-1', 'first', uuid='duplicate')],
   )
-  await store.append_records(
+  store.append_records(
     second,
     offset=0,
     records=[_claude_assistant('message-2', 'second', uuid='duplicate')],
   )
-  checked = await store.check()
+  checked = store.check()
   assert checked['ok'] is False
   assert checked['cross_trail_duplicate_uuids'] == [
     {'uuid': 'duplicate', 'trail_ids': sorted([first, second])}
   ]
 
 
-@pytest.mark.asyncio
-async def test_relink_manifests_before_trimming_and_recomputes(components):
+def test_relink_manifests_before_trimming_and_recomputes(components):
   store, dynamo, s3 = components
-  trail_id = await _blaze_claude(store)
+  trail_id = _blaze_claude(store)
   records = [
     json.dumps({'type': 'system', 'uuid': 'copied'}),
     json.dumps(
@@ -727,8 +757,8 @@ async def test_relink_manifests_before_trimming_and_recomputes(components):
       }
     ),
   ]
-  await store.append_records(trail_id, offset=0, records=records)
-  result = await store.relink(
+  store.append_records(trail_id, offset=0, records=records)
+  result = store.relink(
     trail_id,
     {'trail_id': 'parent', 'step_id': 7, 'index': 2},
     1,
@@ -743,15 +773,14 @@ async def test_relink_manifests_before_trimming_and_recomputes(components):
   assert (trail_id, 1) not in dynamo.universal_steps
 
 
-@pytest.mark.asyncio
-async def test_list_and_pointer_index_stay_available(components):
+def test_list_and_pointer_index_stay_available(components):
   store, _, _ = components
-  root = await _blaze_bro(store)
-  child = await _blaze_bro(
+  root = _blaze_bro(store)
+  child = _blaze_bro(
     store,
     forked_from={'trail_id': root, 'step_id': 0, 'index': 2},
   )
-  page = await store.list_trails(
+  page = store.list_trails(
     harness=None,
     bro=None,
     forked_from=root,
@@ -763,14 +792,13 @@ async def test_list_and_pointer_index_stay_available(components):
   assert [trail['id'] for trail in page['trails']] == [child]
 
 
-@pytest.mark.asyncio
-async def test_sweep_marks_stale_trails_as_inferred_unreported(components):
+def test_sweep_marks_stale_trails_as_inferred_unreported(components):
   store, dynamo, _ = components
-  stale = await _blaze_bro(store)
-  live = await _blaze_bro(store)
+  stale = _blaze_bro(store)
+  live = _blaze_bro(store)
   dynamo.headers[stale]['last_alive_at'] = '2020-01-01T00:00:00.000000Z'
 
-  assert await store.sweep_unreported() == [stale]
+  assert store.sweep_unreported() == [stale]
   assert dynamo.headers[stale]['end'] == {
     'at': '2020-01-01T00:00:00.000000Z',
     'inference': UNREPORTED_END_INFERENCE,

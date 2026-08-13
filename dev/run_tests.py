@@ -88,7 +88,7 @@ PYTEST_FILES = [
   'bro/trails/lineage_test.py',
   'bro/trails/rewind_test.py',
   'bro/trails/server/server_test.py',
-  'bro/trails/server/storage_test.py',
+  'bro/trails/server/dynamo_test.py',
   'bro/show_test.py',
   'bro/shell_test.py',
   'bro/launch/_cli_test.py',

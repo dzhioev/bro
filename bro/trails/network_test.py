@@ -270,8 +270,14 @@ class TestLaunchContext:
 
   def test_absent_context_is_none(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
-    fake.queue((404, b'no launch context'))
+    fake.queue((200, b'{"launch_context": null}'))
     assert _client().get_launch_context('T1') is None
+
+  def test_missing_trail_is_not_found(self, monkeypatch):
+    fake = _install_fake_connection(monkeypatch)
+    fake.queue((404, b'trail not found'))
+    with pytest.raises(TrailNotFound):
+      _client().get_launch_context('missing')
 
 
 class TestWrites:

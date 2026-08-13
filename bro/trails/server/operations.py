@@ -1,12 +1,11 @@
 """Aggregate repair, verification, audits, and manifested relinking."""
 
-import asyncio
 import json
 from collections.abc import Callable
 from typing import Any, Optional
 
 from bro.trails.rows import AggregateState
-from bro.trails.server import storage_types
+from bro.trails.server import dynamo_types
 
 _ROW_STORAGE_FIELDS = frozenset(
   {
@@ -21,9 +20,9 @@ _ROW_STORAGE_FIELDS = frozenset(
     'payload_sha256',
   }
 )
-_ddb = storage_types.ddb
-_ddb_item = storage_types.ddb_item
-_from_ddb_item = storage_types.from_ddb_item
+_ddb = dynamo_types.ddb
+_ddb_item = dynamo_types.ddb_item
+_from_ddb_item = dynamo_types.from_ddb_item
 
 
 class Operations:
@@ -48,10 +47,10 @@ class Operations:
     self._required_header = required_header
     self._resolve_row_body = resolve_row_body
 
-  async def recompute(self, trail_id: str) -> dict:
-    header = await self._required_migrated_header(trail_id)
-    rows = await self._all_universal_rows(trail_id)
-    computed = await self._compute(header, rows)
+  def recompute(self, trail_id: str) -> dict:
+    header = self._required_migrated_header(trail_id)
+    rows = self._all_universal_rows(trail_id)
+    computed = self._compute(header, rows)
     for row, expected in zip(rows, computed['rows'], strict=True):
       updated = {key: value for key, value in row.items() if key in _ROW_STORAGE_FIELDS}
       updated.pop('usage', None)
@@ -59,12 +58,11 @@ class Operations:
       updated.update(expected['attributes'])
       if expected['usage'] is not None:
         updated['usage'] = expected['usage']
-      await asyncio.to_thread(
-        self._dynamo.put_item,
+      self._dynamo.put_item(
         TableName=self._steps_table,
         Item=_ddb_item(updated),
       )
-    await self._write_recomputed_header(header, computed)
+    self._write_recomputed_header(header, computed)
     return {
       'trail_id': trail_id,
       'extent': computed['extent'],
@@ -72,28 +70,28 @@ class Operations:
       'usage': computed['native']['usage'],
     }
 
-  async def check(self, trail_id: Optional[str] = None) -> dict:
+  def check(self, trail_id: Optional[str] = None) -> dict:
     if trail_id is not None:
-      result = await self._check_trail(trail_id)
+      result = self._check_trail(trail_id)
       return {'ok': result['ok'], 'trails': [result], 'cross_trail_duplicate_uuids': []}
-    headers = await self._scan_items(self._trails_table)
+    headers = self._scan_items(self._trails_table)
     migrated = [
       header
       for header in headers
-      if header.get('body_storage') == storage_types.UNIVERSAL_BODY_STORAGE
+      if header.get('body_storage') == dynamo_types.UNIVERSAL_BODY_STORAGE
     ]
-    results = [await self._check_trail(header['id']) for header in migrated]
-    duplicates = await self._cross_trail_duplicate_uuids()
+    results = [self._check_trail(header['id']) for header in migrated]
+    duplicates = self._cross_trail_duplicate_uuids()
     return {
       'ok': all(result['ok'] for result in results) and len(duplicates) == 0,
       'trails': results,
       'cross_trail_duplicate_uuids': duplicates,
     }
 
-  async def _check_trail(self, trail_id: str) -> dict:
-    header = await self._required_migrated_header(trail_id)
-    rows = await self._all_universal_rows(trail_id)
-    computed = await self._compute(header, rows)
+  def _check_trail(self, trail_id: str) -> dict:
+    header = self._required_migrated_header(trail_id)
+    rows = self._all_universal_rows(trail_id)
+    computed = self._compute(header, rows)
     differences: list[dict] = []
     for field in ('extent', 'turn_count', 'last_billed_message_id'):
       stored = header.get(field)
@@ -112,7 +110,7 @@ class Operations:
     differences.extend(computed['billing_differences'])
     return {'trail_id': trail_id, 'ok': len(differences) == 0, 'differences': differences}
 
-  async def _compute(self, header: dict, rows: list[dict]) -> dict:
+  def _compute(self, header: dict, rows: list[dict]) -> dict:
     native = {
       key: value
       for key, value in header.get('native', {}).items()
@@ -133,7 +131,7 @@ class Operations:
             'expected': expected_step_id,
           }
         )
-      resolved = await self._resolve_row_body(header['harness'], row, resolve_large=True)
+      resolved = self._resolve_row_body(header['harness'], row)
       parsed = adapter.parse(resolved)
       classification = adapter.classify(parsed)
       contribution = state.apply(parsed, classification, seen_billing_keys)
@@ -188,7 +186,7 @@ class Operations:
       'billing_differences': billing_differences,
     }
 
-  async def _write_recomputed_header(self, header: dict, computed: dict) -> None:
+  def _write_recomputed_header(self, header: dict, computed: dict) -> None:
     names = {
       '#body_storage': 'body_storage',
       '#extent': 'extent',
@@ -197,7 +195,7 @@ class Operations:
       '#last_billed': 'last_billed_message_id',
     }
     values = {
-      ':storage': _ddb(storage_types.UNIVERSAL_BODY_STORAGE),
+      ':storage': _ddb(dynamo_types.UNIVERSAL_BODY_STORAGE),
       ':extent': _ddb(computed['extent']),
       ':turn_count': _ddb(computed['turn_count']),
       ':native': _ddb(computed['native']),
@@ -213,8 +211,7 @@ class Operations:
       names['#subject'] = 'subject'
       values[':subject'] = _ddb(computed['subject'])
       assignments.append('#subject = if_not_exists(#subject, :subject)')
-    await asyncio.to_thread(
-      self._dynamo.update_item,
+    self._dynamo.update_item(
       TableName=self._trails_table,
       Key=_ddb_item({'id': header['id']}),
       ConditionExpression='#body_storage = :storage',
@@ -223,21 +220,18 @@ class Operations:
       ExpressionAttributeValues=values,
     )
 
-  async def relink(self, trail_id: str, forked_from: dict, delete_count: int) -> dict:
+  def relink(self, trail_id: str, forked_from: dict, delete_count: int) -> dict:
     if delete_count < 0:
       raise ValueError('delete_count must be non-negative')
-    header = await self._required_migrated_header(trail_id)
+    header = self._required_migrated_header(trail_id)
     if header.get('forked_from') is not None:
       raise ValueError('trail already has forked_from')
-    rows = await self._all_universal_rows(trail_id)
+    rows = self._all_universal_rows(trail_id)
     if delete_count > len(rows):
       raise ValueError('delete_count exceeds the trail extent')
-    timestamp = storage_types.now_iso()
-    manifest_key = storage_types.relink_manifest_key(trail_id, timestamp)
-    deleted = [
-      await self._resolve_row_body(header['harness'], row, resolve_large=True)
-      for row in rows[:delete_count]
-    ]
+    timestamp = dynamo_types.now_iso()
+    manifest_key = dynamo_types.relink_manifest_key(trail_id, timestamp)
+    deleted = [self._resolve_row_body(header['harness'], row) for row in rows[:delete_count]]
     manifest = {
       'operation': 'relink',
       'at': timestamp,
@@ -248,8 +242,7 @@ class Operations:
       'new_extent': len(rows) - delete_count,
       'deleted_rows': deleted,
     }
-    await asyncio.to_thread(
-      self._s3.put_object,
+    self._s3.put_object(
       Bucket=self._bucket,
       Key=manifest_key,
       Body=json.dumps(manifest, ensure_ascii=False).encode('utf-8'),
@@ -259,21 +252,18 @@ class Operations:
     remaining = rows[delete_count:]
     for step_id, row in enumerate(remaining):
       rewritten = {**row, 'step_id': step_id}
-      await asyncio.to_thread(
-        self._dynamo.put_item,
+      self._dynamo.put_item(
         TableName=self._steps_table,
         Item=_ddb_item(rewritten),
       )
     for step_id in range(len(remaining), len(rows)):
-      await asyncio.to_thread(
-        self._dynamo.delete_item,
+      self._dynamo.delete_item(
         TableName=self._steps_table,
         Key=_ddb_item({'trail_id': trail_id, 'step_id': step_id}),
       )
-    await self.recompute(trail_id)
+    self.recompute(trail_id)
     try:
-      await asyncio.to_thread(
-        self._dynamo.update_item,
+      self._dynamo.update_item(
         TableName=self._trails_table,
         Key=_ddb_item({'id': trail_id}),
         ConditionExpression='attribute_not_exists(#forked_from)',
@@ -296,13 +286,13 @@ class Operations:
       'manifest_s3': manifest_key,
     }
 
-  async def _required_migrated_header(self, trail_id: str) -> dict:
-    header = await self._required_header(trail_id)
-    if header.get('body_storage') != storage_types.UNIVERSAL_BODY_STORAGE:
+  def _required_migrated_header(self, trail_id: str) -> dict:
+    header = self._required_header(trail_id)
+    if header.get('body_storage') != dynamo_types.UNIVERSAL_BODY_STORAGE:
       raise ValueError('operation requires a migrated trail body')
     return header
 
-  async def _all_universal_rows(self, trail_id: str) -> list[dict]:
+  def _all_universal_rows(self, trail_id: str) -> list[dict]:
     rows: list[dict] = []
     exclusive_start_key: Optional[dict] = None
     while True:
@@ -313,7 +303,7 @@ class Operations:
       }
       if exclusive_start_key is not None:
         kwargs['ExclusiveStartKey'] = exclusive_start_key
-      response = await asyncio.to_thread(self._dynamo.query, **kwargs)
+      response = self._dynamo.query(**kwargs)
       rows.extend(
         row for item in response.get('Items', []) if (row := _from_ddb_item(item)) is not None
       )
@@ -321,14 +311,14 @@ class Operations:
       if exclusive_start_key is None:
         return rows
 
-  async def _scan_items(self, table: str) -> list[dict]:
+  def _scan_items(self, table: str) -> list[dict]:
     items: list[dict] = []
     exclusive_start_key: Optional[dict] = None
     while True:
       kwargs: dict[str, Any] = {'TableName': table}
       if exclusive_start_key is not None:
         kwargs['ExclusiveStartKey'] = exclusive_start_key
-      response = await asyncio.to_thread(self._dynamo.scan, **kwargs)
+      response = self._dynamo.scan(**kwargs)
       items.extend(
         item for raw in response.get('Items', []) if (item := _from_ddb_item(raw)) is not None
       )
@@ -336,7 +326,7 @@ class Operations:
       if exclusive_start_key is None:
         return items
 
-  async def _cross_trail_duplicate_uuids(self) -> list[dict]:
+  def _cross_trail_duplicate_uuids(self) -> list[dict]:
     trails_by_uuid: dict[str, set[str]] = {}
     exclusive_start_key: Optional[dict] = None
     while True:
@@ -347,7 +337,7 @@ class Operations:
       }
       if exclusive_start_key is not None:
         kwargs['ExclusiveStartKey'] = exclusive_start_key
-      response = await asyncio.to_thread(self._dynamo.scan, **kwargs)
+      response = self._dynamo.scan(**kwargs)
       for raw in response.get('Items', []):
         row = _from_ddb_item(raw)
         if row is None:

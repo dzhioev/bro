@@ -209,7 +209,11 @@ def build_store(config: dict[str, Any]) -> TrailsStore:
     from bro.trails.local import LocalStore
 
     return LocalStore(local_root())
-  raise ValueError(f'unknown trails backend {backend!r}; known: local, service')
+  if backend == 'dynamo':
+    from bro.trails.server.dynamo import build_dynamo_store
+
+    return build_dynamo_store(config)
+  raise ValueError(f'unknown trails backend {backend!r}; known: dynamo, local, service')
 
 
 def default_store() -> TrailsStore:

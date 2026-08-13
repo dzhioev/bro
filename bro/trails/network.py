@@ -138,10 +138,7 @@ class NetworkStore(TrailsStore):
 
   def get_launch_context(self, trail_id: str) -> Optional[Any]:
     """the trail's stored launch-context document, or None when it has none."""
-    try:
-      return self._get(f'/v1/trails/{trail_id}/context', {})['launch_context']
-    except TrailNotFound:
-      return None
+    return self._get(f'/v1/trails/{trail_id}/context', {})['launch_context']
 
   def blaze(self, request: BlazeRequest) -> dict:
     """open a trail (`POST /v1/trails`, harness-native `body` envelope included);
@@ -221,7 +218,7 @@ class NetworkStore(TrailsStore):
 
   def fetch_spilled_body(self, url: str) -> Any:
     """download a spilled step body from its presigned S3 URL and parse it the
-    same way the server resolves an inline body (`storage._resolve_body`): JSON
+    same way the server resolves an inline body (`DynamoStore._resolve_body`): JSON
     when it decodes, raw text otherwise. the URL is self-authenticating, so this
     bypasses the bearer-token connection and hits S3 directly.
     """

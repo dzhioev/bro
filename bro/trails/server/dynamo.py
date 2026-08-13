@@ -1,9 +1,11 @@
-"""Universal trail headers, append storage, and reads."""
+"""DynamoDB/S3 trails store and maintenance surface."""
 
-import asyncio
 import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from typing import Any, Optional
+
+import boto3
 
 from bro.trails import backends, rows
 from bro.trails.model import (
@@ -13,27 +15,25 @@ from bro.trails.model import (
   validate_end,
 )
 from bro.trails.rows import AggregateState
-from bro.trails.server import row_storage, storage_types
+from bro.trails.server import dynamo_types
 from bro.trails.server.operations import Operations
-from bro.trails.store import AppendConflict, TrailNotFound
+from bro.trails.store import AppendConflict, TrailNotFound, TrailsStore
 
-SPILLOVER_THRESHOLD_BYTES = storage_types.SPILLOVER_THRESHOLD_BYTES
-MAX_BODY_BYTES = storage_types.MAX_BODY_BYTES
-INLINE_RESPONSE_THRESHOLD_BYTES = storage_types.INLINE_RESPONSE_THRESHOLD_BYTES
-PRESIGNED_URL_TTL_SECONDS = storage_types.PRESIGNED_URL_TTL_SECONDS
-BodyTooLarge = storage_types.BodyTooLarge
+SPILLOVER_THRESHOLD_BYTES = dynamo_types.SPILLOVER_THRESHOLD_BYTES
+MAX_BODY_BYTES = dynamo_types.MAX_BODY_BYTES
+BodyTooLarge = dynamo_types.BodyTooLarge
 
 GSI_PK_ATTRIBUTE = 'gsi_pk'
 GSI_PK_VALUE = 'trail'
 UNREPORTED_AFTER_SECONDS = 3600
 SWEEP_WINDOW_DAYS = 30
-_ddb = storage_types.ddb
-_ddb_item = storage_types.ddb_item
-_from_ddb = storage_types.from_ddb
-_from_ddb_item = storage_types.from_ddb_item
+_ddb = dynamo_types.ddb
+_ddb_item = dynamo_types.ddb_item
+_from_ddb = dynamo_types.from_ddb
+_from_ddb_item = dynamo_types.from_ddb_item
 
 
-class Storage:
+class DynamoStore(TrailsStore):
   def __init__(
     self,
     *,
@@ -52,6 +52,7 @@ class Storage:
     self._uuid_index = uuid_index
     self._backends = dict(backends.BACKENDS)
     self._stored_tool_hashes: set[str] = set()
+    self._executor = ThreadPoolExecutor(thread_name_prefix='trails-dynamo')
     self._operations = Operations(
       dynamo=dynamo,
       s3=s3,
@@ -69,21 +70,60 @@ class Storage:
     except KeyError as exception:
       raise ValueError(f'unsupported harness: {harness}') from exception
 
-  async def blaze(self, request: BlazeRequest) -> dict:
+  def _prepare_rows(
+    self,
+    *,
+    trail_id: str,
+    offset: int,
+    payloads: list[Any],
+    adapter: backends.Adapter,
+    default_timestamp: str,
+    state: rows.AggregateState,
+    seen_billing_keys: set[str],
+  ) -> list[dict]:
+    prepared = rows.build_rows(
+      trail_id=trail_id,
+      offset=offset,
+      payloads=payloads,
+      adapter=adapter,
+      default_timestamp=default_timestamp,
+      state=state,
+      seen_billing_keys=seen_billing_keys,
+    )
+    for row in prepared:
+      body = row.pop('body')
+      body_payload = dynamo_types.body_bytes(body)
+      if len(body_payload) > dynamo_types.MAX_BODY_BYTES:
+        raise BodyTooLarge(f'body size {len(body_payload)} exceeds {dynamo_types.MAX_BODY_BYTES}')
+      if len(body_payload) < dynamo_types.SPILLOVER_THRESHOLD_BYTES:
+        row['body'] = body
+        continue
+      key = dynamo_types.universal_spillover_key(trail_id, row['step_id'], body_payload)
+      self._s3.put_object(
+        Bucket=self._bucket,
+        Key=key,
+        Body=body_payload,
+        ContentType='application/json',
+      )
+      row['body_s3'] = key
+      row['body_encoding'] = 'text' if isinstance(body, str) else 'json'
+    return prepared
+
+  def blaze(self, request: BlazeRequest) -> dict:
     adapter = self._backend(request.harness)
     adapter.validate_create(request.native)
     if request.harness == 'bro' and request.bro is None:
       raise ValueError('bro is required for the bro harness')
-    trail_id = storage_types.new_id()
+    trail_id = dynamo_types.new_id()
     started_at = _now_iso()
     launch_context = request.body.get('launch_context')
     opened = adapter.open(request.body)
-    if len(opened.records) > storage_types.MAX_TRANSACTION_RECORDS:
+    if len(opened.records) > dynamo_types.MAX_TRANSACTION_RECORDS:
       raise ValueError(
-        f'a trail may open with at most {storage_types.MAX_TRANSACTION_RECORDS} records'
+        f'a trail may open with at most {dynamo_types.MAX_TRANSACTION_RECORDS} records'
       )
     if launch_context is not None:
-      await self._store_context(trail_id, launch_context)
+      self._store_context(trail_id, launch_context)
 
     item: dict[str, Any] = {
       'id': trail_id,
@@ -105,19 +145,17 @@ class Storage:
       'summoned_by': request.summoned_by,
       'subject': request.subject,
       'location': request.location,
-      'context_s3': storage_types.context_key(trail_id) if launch_context is not None else None,
+      'context_s3': dynamo_types.context_key(trail_id) if launch_context is not None else None,
     }
     item.update({key: value for key, value in optional.items() if value is not None})
     if request.forked_from is not None:
       item['forked_from_id'] = request.forked_from['trail_id']
 
-    item['body_storage'] = storage_types.UNIVERSAL_BODY_STORAGE
+    item['body_storage'] = dynamo_types.UNIVERSAL_BODY_STORAGE
     item['extent'] = 0
     state = AggregateState(item)
     seen_billing_keys: set[str] = set()
-    rows = await row_storage.prepare_rows(
-      s3=self._s3,
-      bucket=self._bucket,
+    rows = self._prepare_rows(
       trail_id=trail_id,
       offset=0,
       payloads=opened.records,
@@ -127,8 +165,7 @@ class Storage:
       seen_billing_keys=seen_billing_keys,
     )
     item.update(self._state_fields(state, len(rows)))
-    await asyncio.to_thread(
-      self._dynamo.transact_write_items,
+    self._dynamo.transact_write_items(
       TransactItems=[
         {
           'Put': {
@@ -151,33 +188,32 @@ class Storage:
     )
     return {'id': trail_id, 'started_at': started_at}
 
-  async def _store_context(self, trail_id: str, context: Any) -> None:
-    await asyncio.to_thread(
-      self._s3.put_object,
+  def _store_context(self, trail_id: str, context: Any) -> None:
+    self._s3.put_object(
       Bucket=self._bucket,
-      Key=storage_types.context_key(trail_id),
+      Key=dynamo_types.context_key(trail_id),
       Body=json.dumps(context, ensure_ascii=False).encode('utf-8'),
       ContentType='application/json',
     )
 
-  async def append_records(
+  def append_records(
     self,
     trail_id: str,
-    *,
     offset: int,
     records: list[Any],
+    *,
     tools: Optional[dict[str, Any]] = None,
   ) -> dict:
     if offset < 0:
       raise ValueError('offset must be non-negative')
-    header = await self._required_universal_header(trail_id)
+    header = self._required_universal_header(trail_id)
     actual = self._header_extent(header)
     expected_end = offset + len(records)
     if actual != offset:
-      if actual == expected_end and await self._batch_matches(trail_id, offset, records):
+      if actual == expected_end and self._batch_matches(trail_id, offset, records):
         return {'extent': actual, 'appended': 0, 'duplicate': True}
       raise AppendConflict(offset, actual)
-    await self._store_tools(tools if tools is not None else {})
+    self._store_tools(tools if tools is not None else {})
     if len(records) == 0:
       return {'extent': actual, 'appended': 0}
 
@@ -186,11 +222,9 @@ class Storage:
     seen_billing_keys: set[str] = set()
     committed = 0
     while committed < len(records):
-      chunk = records[committed : committed + storage_types.MAX_TRANSACTION_RECORDS]
+      chunk = records[committed : committed + dynamo_types.MAX_TRANSACTION_RECORDS]
       chunk_offset = offset + committed
-      rows = await row_storage.prepare_rows(
-        s3=self._s3,
-        bucket=self._bucket,
+      rows = self._prepare_rows(
         trail_id=trail_id,
         offset=chunk_offset,
         payloads=chunk,
@@ -218,17 +252,16 @@ class Storage:
       ]
       transaction_items.append({'Update': update})
       try:
-        await asyncio.to_thread(
-          self._dynamo.transact_write_items,
+        self._dynamo.transact_write_items(
           TransactItems=transaction_items,
         )
       except self._dynamo.exceptions.TransactionCanceledException as exception:
-        refreshed = await self._required_header(trail_id)
+        refreshed = self._required_header(trail_id)
         refreshed_extent = self._header_extent(refreshed)
         if (
           committed == 0
           and refreshed_extent == expected_end
-          and await self._batch_matches(trail_id, offset, records)
+          and self._batch_matches(trail_id, offset, records)
         ):
           return {'extent': refreshed_extent, 'appended': 0, 'duplicate': True}
         if refreshed_extent != chunk_offset:
@@ -239,9 +272,8 @@ class Storage:
       committed += len(rows)
     return {'extent': offset + committed, 'appended': committed}
 
-  async def _batch_matches(self, trail_id: str, offset: int, records: list[Any]) -> bool:
-    response = await asyncio.to_thread(
-      self._dynamo.query,
+  def _batch_matches(self, trail_id: str, offset: int, records: list[Any]) -> bool:
+    response = self._dynamo.query(
       TableName=self._steps_table,
       KeyConditionExpression='trail_id = :trail_id AND step_id BETWEEN :start AND :end',
       ExpressionAttributeValues={
@@ -252,26 +284,25 @@ class Storage:
       ConsistentRead=True,
     )
     rows = [row for item in response.get('Items', []) if (row := _from_ddb_item(item)) is not None]
-    expected = [storage_types.sha256_hex(canonical_json_bytes(record)) for record in records]
+    expected = [dynamo_types.sha256_hex(canonical_json_bytes(record)) for record in records]
     return len(rows) == len(records) and all(
       row.get('payload_sha256') == sha256 for row, sha256 in zip(rows, expected, strict=True)
     )
 
-  async def _store_tools(self, tools: dict[str, Any]) -> None:
+  def _store_tools(self, tools: dict[str, Any]) -> None:
     if not isinstance(tools, dict):
       raise ValueError('tools must be an object keyed by sha256')
     for sha256, body in tools.items():
       if not isinstance(sha256, str) or len(sha256) != 64:
         raise ValueError('tool blob keys must be sha256 hex strings')
       payload = canonical_json_bytes(body)
-      if storage_types.sha256_hex(payload) != sha256:
+      if dynamo_types.sha256_hex(payload) != sha256:
         raise ValueError(f'tool blob hash mismatch: {sha256}')
       if sha256 in self._stored_tool_hashes:
         continue
-      await asyncio.to_thread(
-        self._s3.put_object,
+      self._s3.put_object(
         Bucket=self._bucket,
-        Key=storage_types.tool_blob_key(sha256),
+        Key=dynamo_types.tool_blob_key(sha256),
         Body=payload,
         ContentType='application/json',
       )
@@ -307,7 +338,7 @@ class Storage:
       '#last_billed': 'last_billed_message_id',
     }
     values = {
-      ':storage': _ddb(storage_types.UNIVERSAL_BODY_STORAGE),
+      ':storage': _ddb(dynamo_types.UNIVERSAL_BODY_STORAGE),
       ':expected_extent': _ddb(expected_extent),
       ':extent': _ddb(new_extent),
       ':alive': _ddb(_now_iso()),
@@ -342,8 +373,8 @@ class Storage:
       raise ValueError('migrated trail header has an invalid extent')
     return extent
 
-  async def update_header(self, trail_id: str, changes: dict) -> dict:
-    header = await self._required_universal_header(trail_id)
+  def update_header(self, trail_id: str, changes: dict) -> dict:
+    header = self._required_universal_header(trail_id)
     unknown = set(changes) - {'subject', 'last_alive_at'}
     if len(unknown) > 0:
       raise ValueError(f'immutable or unknown header fields: {sorted(unknown)}')
@@ -356,8 +387,7 @@ class Storage:
       assignments.append(f'#field{index} = :value{index}')
     if len(assignments) == 0:
       return self._project_header(header)
-    await asyncio.to_thread(
-      self._dynamo.update_item,
+    self._dynamo.update_item(
       TableName=self._trails_table,
       Key=_ddb_item({'id': trail_id}),
       ConditionExpression='attribute_exists(id)',
@@ -365,23 +395,21 @@ class Storage:
       ExpressionAttributeNames=names,
       ExpressionAttributeValues=values,
     )
-    return self._project_header(await self._required_header(trail_id))
+    return self._project_header(self._required_header(trail_id))
 
-  async def end_trail(
+  def end_trail(
     self,
-    *,
     trail_id: str,
     reason: str,
-    detail: Optional[str],
-  ) -> dict:
+    detail: Optional[str] = None,
+  ) -> None:
     validate_end(reason, detail)
-    await self._required_header(trail_id)
+    self._required_header(trail_id)
     timestamp = _now_iso()
     end = {'at': timestamp, 'reason': reason}
     if detail is not None:
       end['detail'] = detail
-    await asyncio.to_thread(
-      self._dynamo.update_item,
+    self._dynamo.update_item(
       TableName=self._trails_table,
       Key=_ddb_item({'id': trail_id}),
       ConditionExpression='attribute_exists(id)',
@@ -389,13 +417,11 @@ class Storage:
       ExpressionAttributeNames={'#end': 'end'},
       ExpressionAttributeValues={':end': _ddb(end), ':timestamp': _ddb(timestamp)},
     )
-    return {'ended_at': timestamp}
 
-  async def keepalive(self, trail_id: str) -> dict:
+  def keepalive(self, trail_id: str) -> None:
     timestamp = _now_iso()
     try:
-      await asyncio.to_thread(
-        self._dynamo.update_item,
+      self._dynamo.update_item(
         TableName=self._trails_table,
         Key=_ddb_item({'id': trail_id}),
         ConditionExpression='attribute_exists(id)',
@@ -404,16 +430,15 @@ class Storage:
       )
     except self._dynamo.exceptions.ConditionalCheckFailedException as exception:
       raise TrailNotFound(trail_id) from exception
-    return {'last_alive_at': timestamp}
 
-  async def sweep_unreported(self) -> list[str]:
+  def sweep_unreported(self) -> list[str]:
     now = datetime.now(UTC)
     cutoff = _format_iso(now - timedelta(seconds=UNREPORTED_AFTER_SECONDS))
     since = _format_iso(now - timedelta(days=SWEEP_WINDOW_DAYS))
     swept: list[str] = []
     cursor: Optional[str] = None
     while True:
-      page = await self.list_trails(
+      page = self._list_trails(
         harness=None,
         bro=None,
         forked_from=None,
@@ -426,16 +451,15 @@ class Storage:
       for item in page['trails']:
         if item.get('end') is not None or item['last_alive_at'] >= cutoff:
           continue
-        if await self._stamp_unreported(item['id'], item['last_alive_at']):
+        if self._stamp_unreported(item['id'], item['last_alive_at']):
           swept.append(item['id'])
       cursor = page['next']
       if cursor is None:
         return swept
 
-  async def _stamp_unreported(self, trail_id: str, ended_at: str) -> bool:
+  def _stamp_unreported(self, trail_id: str, ended_at: str) -> bool:
     try:
-      await asyncio.to_thread(
-        self._dynamo.update_item,
+      self._dynamo.update_item(
         TableName=self._trails_table,
         Key=_ddb_item({'id': trail_id}),
         ConditionExpression='attribute_type(#end, :null_type)',
@@ -450,18 +474,11 @@ class Storage:
       return False
     return True
 
-  async def get_trail(self, trail_id: str) -> Optional[dict]:
-    response = await asyncio.to_thread(
-      self._dynamo.get_item,
-      TableName=self._trails_table,
-      Key=_ddb_item({'id': trail_id}),
-    )
-    item = _from_ddb_item(response.get('Item'))
-    return self._project_header(item) if item is not None else None
+  def get_trail(self, trail_id: str) -> dict:
+    return self._project_header(self._required_header(trail_id))
 
-  async def _required_header(self, trail_id: str) -> dict:
-    response = await asyncio.to_thread(
-      self._dynamo.get_item,
+  def _required_header(self, trail_id: str) -> dict:
+    response = self._dynamo.get_item(
       TableName=self._trails_table,
       Key=_ddb_item({'id': trail_id}),
       ConsistentRead=True,
@@ -471,10 +488,10 @@ class Storage:
       raise TrailNotFound(trail_id)
     return item
 
-  async def _required_universal_header(self, trail_id: str) -> dict:
-    header = await self._required_header(trail_id)
-    if header.get('body_storage') != storage_types.UNIVERSAL_BODY_STORAGE:
-      raise ValueError(f'trail {trail_id} has no body in {storage_types.UNIVERSAL_BODY_STORAGE}')
+  def _required_universal_header(self, trail_id: str) -> dict:
+    header = self._required_header(trail_id)
+    if header.get('body_storage') != dynamo_types.UNIVERSAL_BODY_STORAGE:
+      raise ValueError(f'trail {trail_id} has no body in {dynamo_types.UNIVERSAL_BODY_STORAGE}')
     return header
 
   def _project_header(self, item: dict) -> dict:
@@ -483,22 +500,24 @@ class Storage:
       raise ValueError('native.usage must be an object')
     return {**item, 'usage': raw_usage, 'models': sorted(raw_usage)}
 
-  async def get_launch_context(self, trail_id: str) -> Optional[Any]:
-    header = await self._required_header(trail_id)
+  def get_launch_context(self, trail_id: str) -> Optional[Any]:
+    header = self._required_header(trail_id)
     key = header.get('context_s3')
     if key is None:
       key = header.get('native', {}).get('context_s3')
     if key is None:
       return None
-    response = await asyncio.to_thread(self._s3.get_object, Bucket=self._bucket, Key=key)
+    response = self._s3.get_object(Bucket=self._bucket, Key=key)
     return json.loads(response['Body'].read().decode('utf-8'))
 
-  async def find_steps_by_uuid(self, uuids: set[str]) -> list[dict]:
+  def find_steps_by_uuid(self, uuids: set[str]) -> list[dict]:
     """Return universal row identities carrying any requested UUID."""
+    if len(uuids) == 0:
+      return []
     if self._uuid_index is None:
       raise RuntimeError('UUID lookup requires a configured index')
 
-    async def find(uuid: str) -> list[dict]:
+    def find(uuid: str) -> list[dict]:
       matches: list[dict] = []
       exclusive_start_key: Optional[dict] = None
       while True:
@@ -512,7 +531,7 @@ class Storage:
         }
         if exclusive_start_key is not None:
           kwargs['ExclusiveStartKey'] = exclusive_start_key
-        response = await asyncio.to_thread(self._dynamo.query, **kwargs)
+        response = self._dynamo.query(**kwargs)
         for raw in response.get('Items', []):
           row = _from_ddb_item(raw)
           if (
@@ -528,27 +547,28 @@ class Storage:
         if exclusive_start_key is None:
           return matches
 
-    pages = await asyncio.gather(*(find(uuid) for uuid in sorted(uuids)))
+    pages = self._executor.map(find, sorted(uuids))
     return sorted(
       (match for page in pages for match in page),
       key=lambda row: (row['trail_id'], row['step_id']),
     )
 
-  async def get_step(self, trail_id: str, step_id: int) -> Optional[dict]:
-    header = await self._required_universal_header(trail_id)
-    response = await asyncio.to_thread(
-      self._dynamo.get_item,
+  def get_step(self, trail_id: str, step_id: int) -> dict:
+    header = self._required_universal_header(trail_id)
+    if step_id < 0:
+      raise TrailNotFound(f'{trail_id}/{step_id}')
+    response = self._dynamo.get_item(
       TableName=self._steps_table,
       Key=_ddb_item({'trail_id': trail_id, 'step_id': step_id}),
       ConsistentRead=True,
     )
     row = _from_ddb_item(response.get('Item'))
     if row is None:
-      return None
-    return await self._resolve_row_body(header['harness'], row, resolve_large=True)
+      raise TrailNotFound(f'{trail_id}/{step_id}')
+    return self._resolve_row_body(header['harness'], row)
 
-  async def query_step_uuids(self, trail_id: str, *, through: Optional[int]) -> list[dict]:
-    await self._required_universal_header(trail_id)
+  def get_step_uuids(self, trail_id: str, *, through: Optional[int] = None) -> list[dict]:
+    self._required_universal_header(trail_id)
     if through is not None and through < 0:
       return []
     expression_values = {':trail_id': _ddb(trail_id)}
@@ -568,7 +588,7 @@ class Storage:
       }
       if exclusive_start_key is not None:
         kwargs['ExclusiveStartKey'] = exclusive_start_key
-      response = await asyncio.to_thread(self._dynamo.query, **kwargs)
+      response = self._dynamo.query(**kwargs)
       for raw in response.get('Items', []):
         row = _from_ddb_item(raw)
         if row is not None and isinstance(row.get('uuid'), str):
@@ -577,36 +597,42 @@ class Storage:
       if exclusive_start_key is None:
         return rows
 
-  async def query_steps(self, trail_id: str, *, after: Optional[int], limit: int) -> dict:
-    header = await self._required_universal_header(trail_id)
-    return await self._query_universal_rows(
-      header,
-      after=after,
-      limit=limit,
-      resolve_large=header['harness'] == 'claude',
-    )
-
-  async def query_messages(
+  def get_steps(
     self,
     trail_id: str,
     *,
-    after: Optional[int],
-    limit: int,
-    types: Optional[set[str]],
+    after: Optional[int] = None,
+    limit: Optional[int] = None,
   ) -> dict:
-    header = await self._required_universal_header(trail_id)
+    page_size = 100 if limit is None else limit
+    if page_size < 1 or page_size > 500:
+      raise ValueError('limit must be between 1 and 500')
+    header = self._required_universal_header(trail_id)
+    return self._query_universal_rows(header, after=after, limit=page_size)
+
+  def get_messages(
+    self,
+    trail_id: str,
+    *,
+    types: Optional[set[str]] = None,
+    after: Optional[int] = None,
+    limit: Optional[int] = None,
+  ) -> dict:
+    page_size = 100 if limit is None else limit
+    if page_size < 1 or page_size > 500:
+      raise ValueError('limit must be between 1 and 500')
+    header = self._required_universal_header(trail_id)
     adapter = self._backend(header['harness'])
-    page = await self._query_universal_rows(header, after=after, limit=limit, resolve_large=True)
+    page = self._query_universal_rows(header, after=after, limit=page_size)
     messages = rows.project_messages(adapter, page['steps'], types)
     return {'messages': messages, 'next': page['next']}
 
-  async def _query_universal_rows(
+  def _query_universal_rows(
     self,
     header: dict,
     *,
     after: Optional[int],
     limit: int,
-    resolve_large: bool,
   ) -> dict:
     kwargs: dict[str, Any] = {
       'TableName': self._steps_table,
@@ -616,68 +642,79 @@ class Storage:
     }
     if after is not None:
       kwargs['ExclusiveStartKey'] = _ddb_item({'trail_id': header['id'], 'step_id': after})
-    response = await asyncio.to_thread(self._dynamo.query, **kwargs)
+    response = self._dynamo.query(**kwargs)
     raw_rows = [
       row for item in response.get('Items', []) if (row := _from_ddb_item(item)) is not None
     ]
-    rows = await asyncio.gather(
-      *(
-        self._resolve_row_body(header['harness'], row, resolve_large=resolve_large)
-        for row in raw_rows
-      )
+    rows = self._executor.map(
+      lambda row: self._resolve_row_body(header['harness'], row),
+      raw_rows,
     )
     last = response.get('LastEvaluatedKey')
     next_cursor = _from_ddb(last['step_id']) if last is not None else None
-    return {'steps': rows, 'next': next_cursor}
+    return {'steps': list(rows), 'next': next_cursor}
 
-  async def _resolve_row_body(self, harness: str, row: dict, *, resolve_large: bool) -> dict:
-    return await self._resolve_body(
-      dict(row), resolve_large=resolve_large, parse_json=harness != 'claude'
-    )
+  def _resolve_row_body(self, harness: str, row: dict) -> dict:
+    return self._resolve_body(dict(row), parse_json=harness != 'claude')
 
-  async def _resolve_body(
-    self, item: dict, *, resolve_large: bool, parse_json: bool = True
-  ) -> dict:
+  def _resolve_body(self, item: dict, *, parse_json: bool = True) -> dict:
     key = item.pop('body_s3', None)
     encoding = item.pop('body_encoding', None)
     if key is None:
       return item
-    head = await asyncio.to_thread(self._s3.head_object, Bucket=self._bucket, Key=key)
-    size = int(head.get('ContentLength', 0))
-    if resolve_large or size <= storage_types.INLINE_RESPONSE_THRESHOLD_BYTES:
-      stored = await asyncio.to_thread(self._s3.get_object, Bucket=self._bucket, Key=key)
-      raw = stored['Body'].read()
-      if encoding == 'text' or (encoding is None and not parse_json):
-        item['body'] = raw.decode('utf-8')
-      elif encoding == 'json':
+    stored = self._s3.get_object(Bucket=self._bucket, Key=key)
+    raw = stored['Body'].read()
+    if encoding == 'text' or (encoding is None and not parse_json):
+      item['body'] = raw.decode('utf-8')
+    elif encoding == 'json':
+      item['body'] = json.loads(raw)
+    elif encoding is None:
+      try:
         item['body'] = json.loads(raw)
-      elif encoding is None:
-        try:
-          item['body'] = json.loads(raw)
-        except json.JSONDecodeError:
-          item['body'] = raw.decode('utf-8')
-      else:
-        raise ValueError(f'unsupported body encoding: {encoding}')
+      except json.JSONDecodeError:
+        item['body'] = raw.decode('utf-8')
     else:
-      url = await asyncio.to_thread(
-        self._s3.generate_presigned_url,
-        ClientMethod='get_object',
-        Params={'Bucket': self._bucket, 'Key': key},
-        ExpiresIn=storage_types.PRESIGNED_URL_TTL_SECONDS,
-      )
-      item['body'] = {'s3': key, 'url': url, 'size': size}
+      raise ValueError(f'unsupported body encoding: {encoding}')
     return item
 
-  async def recompute(self, trail_id: str) -> dict:
-    return await self._operations.recompute(trail_id)
+  def recompute(self, trail_id: str) -> dict:
+    return self._operations.recompute(trail_id)
 
-  async def check(self, trail_id: Optional[str] = None) -> dict:
-    return await self._operations.check(trail_id)
+  def check(self, trail_id: Optional[str] = None) -> dict:
+    return self._operations.check(trail_id)
 
-  async def relink(self, trail_id: str, forked_from: dict, delete_count: int) -> dict:
-    return await self._operations.relink(trail_id, forked_from, delete_count)
+  def relink(self, trail_id: str, forked_from: dict, delete_count: int) -> dict:
+    return self._operations.relink(trail_id, forked_from, delete_count)
 
-  async def list_trails(
+  def close(self) -> None:
+    self._executor.shutdown()
+
+  def list_trails(
+    self,
+    *,
+    harness: Optional[str] = None,
+    bro: Optional[str] = None,
+    forked_from: Optional[str] = None,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    cursor: Optional[str] = None,
+    limit: Optional[int] = None,
+  ) -> dict:
+    page_size = 100 if limit is None else limit
+    if page_size < 1 or page_size > 100:
+      raise ValueError('limit must be between 1 and 100')
+    return self._list_trails(
+      harness=harness,
+      bro=bro,
+      forked_from=forked_from,
+      since=since,
+      until=until,
+      cursor=cursor,
+      limit=page_size,
+      project=True,
+    )
+
+  def _list_trails(
     self,
     *,
     harness: Optional[str],
@@ -687,7 +724,7 @@ class Storage:
     until: Optional[str],
     cursor: Optional[str],
     limit: int,
-    project: bool = True,
+    project: bool,
   ) -> dict:
     selected = [value is not None for value in (harness, bro, forked_from)]
     if sum(selected) > 1:
@@ -704,8 +741,7 @@ class Storage:
       )
     else:
       index, partition_name, partition_value = 'all-index', GSI_PK_ATTRIBUTE, GSI_PK_VALUE
-    response = await asyncio.to_thread(
-      self._dynamo.query,
+    response = self._dynamo.query(
       **_range_query(
         table=self._trails_table,
         index=index,
@@ -725,12 +761,36 @@ class Storage:
     return {'trails': items, 'next': next_cursor}
 
 
+def build_dynamo_store(config: dict[str, Any]) -> DynamoStore:
+  fields = {'backend', 'trails_table', 'steps_table', 'uuid_index', 'bucket', 'region'}
+  unknown = set(config) - fields
+  if len(unknown) > 0:
+    raise ValueError(f'unknown dynamo trails fields: {sorted(unknown)}')
+  required = fields - {'backend'}
+  missing = required - set(config)
+  if len(missing) > 0:
+    raise ValueError(f'dynamo trails config is missing fields: {sorted(missing)}')
+  for field in sorted(required):
+    value = config[field]
+    if not isinstance(value, str) or len(value) == 0:
+      raise ValueError(f'dynamo trails {field} must be a non-empty string')
+  session = boto3.Session(region_name=config['region'])
+  return DynamoStore(
+    dynamo=session.client('dynamodb'),
+    s3=session.client('s3'),
+    trails_table=config['trails_table'],
+    steps_table=config['steps_table'],
+    uuid_index=config['uuid_index'],
+    bucket=config['bucket'],
+  )
+
+
 def _format_iso(moment: datetime) -> str:
   return moment.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
 
 
 def _now_iso() -> str:
-  return storage_types.now_iso()
+  return dynamo_types.now_iso()
 
 
 def _range_query(
