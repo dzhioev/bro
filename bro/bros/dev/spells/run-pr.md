@@ -2,7 +2,7 @@
 name: run-pr
 description: This spell should be used when the user signals that the worktree's changes are ready for review and a PR should be opened — "open a PR", "[[run pr]]", "send for review", "PR it", "ship it", "ready for review", "finalize". Covers commit hygiene (docs sync, policy audit, commit splitting), the repo's commit-message conventions, rebases onto the base branch (master by default), opens the PR via `gh pr create`, then launches the `poll-pr` review watcher to handle review comments, failing CI checks, merge conflicts, and APPROVED events. On approval, chains into `spell::land` for the merge step. Also the re-entry point for a PR that is already open — "resume PR <pr-url-or-number>", "resume the PR", "pick up the review" — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
 parameters: {"base?": "base branch for the pull request instead of master", "pr?": "existing pull request URL or number to resume"}
-version: 4.3.2
+version: 4.4.0
 ---
 
 # run-pr
@@ -157,7 +157,7 @@ Use `gh` for everything GitHub-related — it's pre-authenticated, auto-detects 
 
 Build the PR title and body:
 - **Title**: if single commit, use its title. If multiple commits, a brief summary in the same style.
-- **Body**: `Task:` line linking the task URL (if a task id is known), then `## Summary` bullets describing the changes, then a `## Test plan` checklist.
+- **Body**: `Task:` line linking the task URL (if a task id is known), then `## Summary` bullets describing the changes, then a `## Test plan` checklist of what you verified, each box ticked. Don't list a step this session cannot run — the repo's own CI gate runs on the PR, and an unticked box blocks `spell::land` later with nobody able to clear it.
 
 ```bash
 gh pr create --base <base> --title "<title>" --body "$(cat <<'EOF'
