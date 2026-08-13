@@ -12,6 +12,7 @@ def _stub_scoped_store(monkeypatch):
   monkeypatch.setattr(
     'bro.launch.scope.credentials.build_scoped_store', lambda names, optional=(): {}
   )
+  monkeypatch.setattr('bro.launch.bro_run.local_trails_launch_data', lambda scoped: ({}, ()))
 
 
 def test_run_uses_canonical_container_launch(capsys):
