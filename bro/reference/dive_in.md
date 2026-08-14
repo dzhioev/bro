@@ -54,7 +54,7 @@ With `--into` omitted, `dive-in` resolves the base itself: it fetches origin's `
 
 ## Initial-prompt composition
 
-`dive-in` seeds the first user message as a `[[fix …]]` natural-language spell command. The session calls `bro::cast`, which resolves it to `spell::fix` and returns the spell instructions with the typed arguments; the spell body (`bro/bros/dev/spells/fix.md`) carries the workflow — resolve → context → plan → log → implement → verify → hand off to [[run pr]]. Both cw persona and `--raw` sessions mount the `spell` server and receive this contract. The mapping from CLI form to message is:
+`dive-in` seeds the first user message as a `[[fix …]]` natural-language spell command. The session calls `bro::cast`, which resolves it to `spell::fix` and returns the spell instructions with the typed arguments; the spell body (`bros/dev/spells/fix.md`) carries the workflow — resolve → context → plan → log → implement → verify → hand off to [[run pr]]. Both cw persona and `--raw` sessions mount the `spell` server and receive this contract. The mapping from CLI form to message is:
 
 - `dive-in -t <ref>` → `[[fix <ref>]]`
 - `dive-in --new` → `[[fix --new ""]]`
@@ -66,7 +66,7 @@ If a positional `command` is present alongside `-t`, it gets appended as `Once y
 
 For bare mode, the prompt is just the `command` string verbatim — no cast service wrapping.
 
-Every cw-session runs as a bro — `--bro`, defaulting to the required project default. Its session-local server mounts the bro's MRO-collected spells; a persona derived from `Dev` inherits `spell::fix`, `spell::run-pr`, `spell::land`, `spell::audit` (`bro/bros/dev/spells/`) and `spell::ask` (summon). `_session_append_prompt` injects the canonical Spells contract next to the persona prompt. Bro spells have no generated slash-command copies; Claude's own third-party skill mechanism remains independent. The bro's other claude-harness-filtered MCP namespaces ride the same session-local server (see `bro/reference/cw.md`, "Session-local MCP serving"). To run the raw flavor outright, forward `--raw` (see "Forwarded flags").
+Every cw-session runs as a bro — `--bro`, defaulting to the required project default. Its session-local server mounts the bro's MRO-collected spells; a persona derived from `Dev` inherits `spell::fix`, `spell::run-pr`, `spell::land`, `spell::audit` (`bros/dev/spells/`) and `spell::ask` (summon). `_session_append_prompt` injects the canonical Spells contract next to the persona prompt. Bro spells have no generated slash-command copies; Claude's own third-party skill mechanism remains independent. The bro's other claude-harness-filtered MCP namespaces ride the same session-local server (see `bro/reference/cw.md`, "Session-local MCP serving"). To run the raw flavor outright, forward `--raw` (see "Forwarded flags").
 
 ## Resuming
 

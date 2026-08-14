@@ -14,9 +14,9 @@ import pytest
 
 from bro.base.template import _DIRECTIVE_RE
 from bro.bro import BaseBro
-from bro.bros import BRO_SPECS
 from bro.llm.mcp import MCPServer, Tool
 from bro.registry import create_bro
+from bros import BRO_SPECS
 
 # (surface label, server-list builder) — the three consuming harnesses a bro's
 # declared components serve

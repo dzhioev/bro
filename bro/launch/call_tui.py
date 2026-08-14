@@ -28,7 +28,6 @@ from textual.widget import Widget
 from textual.widgets import Static, TextArea
 from textual.worker import Worker, WorkerCancelled, WorkerFailed
 
-from bro.bros.bro import Bro
 from bro.launch._reflow import Reflow
 from bro.launch._trace_format import format_tool_call
 from bro.launch.call import DATE_FORMAT, INTERRUPTED_NOTICE
@@ -36,6 +35,7 @@ from bro.launch.resume import HistoryMessage
 from bro.llm.mcp import canonical_name
 from bro.llm.observer import Observer
 from bro.show import format_card
+from bros.bro import Bro
 
 # the message field states: it takes text only between turns, so an interrupt is
 # the one way to get the input back while the bro is working.

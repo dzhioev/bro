@@ -11,7 +11,6 @@ from typing import Any, Optional, TextIO
 import bro.base.args as base_args
 from bro.base import log
 from bro.bro import BroRaised
-from bro.bros.bro import Bro
 from bro.launch._cli import (
   EFFORT_HELP,
   FAST_HELP,
@@ -30,6 +29,7 @@ from bro.launch.resume import RESUME_LATEST, HistoryMessage
 from bro.llm.llm import EFFORT_LEVELS
 from bro.llm.mcp import HOLDS, canonical_name
 from bro.llm.observer import Observer
+from bros.bro import Bro
 
 __cli_name__ = 'call'
 

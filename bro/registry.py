@@ -2,8 +2,8 @@ import importlib
 import importlib.metadata
 from typing import Optional
 
-from bro.bros.bro import Bro
 from bro.llm.llm import LLMSpec
+from bros.bro import Bro
 
 _REGISTRY: dict[str, type[Bro]] = {}
 # when True (the default), a lookup miss imports the matching bro module from
@@ -26,7 +26,7 @@ def _external_specs() -> dict[str, str]:
   """name -> "module:ClassName" declared by installed distributions' entry
   points — the out-of-tree counterpart of BRO_SPECS. reading the metadata never
   imports a bro module; collisions (with a built-in or between externals) raise."""
-  from bro.bros import BRO_SPECS
+  from bros import BRO_SPECS
 
   specs: dict[str, str] = {}
   for entry_point in _entry_points():
@@ -56,7 +56,7 @@ def _autoload_class(name: str) -> Optional[type[Bro]]:
   # import only the single bro module that declares `name` and register it; None
   # if `name` is not a known bro. importing one bro instead of all of them keeps
   # `create_bro('dev')` from dragging in every other bro's dependency graph.
-  from bro.bros import BRO_SPECS
+  from bros import BRO_SPECS
 
   spec = BRO_SPECS.get(name)
   if spec is None:
@@ -100,7 +100,7 @@ def known_names() -> set[str]:
   and the entry-point externals."""
   names = set(_REGISTRY)
   if _autoload:
-    from bro.bros import BRO_SPECS
+    from bros import BRO_SPECS
 
     names |= set(BRO_SPECS) | set(_external_specs())
   return names
@@ -108,7 +108,7 @@ def known_names() -> set[str]:
 
 def list_classes() -> list[type[Bro]]:
   if _autoload:
-    from bro.bros import BRO_SPECS
+    from bros import BRO_SPECS
 
     for name in BRO_SPECS:
       _autoload_class(name)

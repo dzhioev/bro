@@ -28,12 +28,12 @@ from collections.abc import Callable
 from typing import Any, Optional, cast
 
 import bro.llm.llms.chat_gpt as llm_llms_chat_gpt
-from bro.bros.bro import Bro
 from bro.llm.llm import LLM, LLMSpec
 from bro.llm.tracker import NullTracker, Tracker
 from bro.registry import create_bro
 from bro.trails.lineage import walk_chain
 from bro.trails.model import ForkedFrom, RecordedTrail, Step
+from bros.bro import Bro
 
 
 def replay_messages(

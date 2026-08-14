@@ -1359,7 +1359,7 @@ class TestClaudePersonaServers:
     assert bro.needed_secrets(harness='claude') == ()
 
   def test_real_bro_persona_surfaces(self, monkeypatch):
-    from bro.bros.dev import Dev
+    from bros.dev import Dev
 
     # brog's state factory reads the self-contained `brog` secret at build
     monkeypatch.setattr(

@@ -10,12 +10,12 @@ import pytest
 
 import bro.llm.llms.chat_gpt as llm_llms_chat_gpt
 import bro.llm.llms.echo as llm_llms_echo
-from bro.bros.bro import Bro
 from bro.launch.call import TextRenderer, call_text, chat_main, main
 from bro.launch.identity import bro_git_identity_env
 from bro.llm.llm import LLM, LLMSpec
 from bro.llm.mcp import MCPServer
 from bro.llm.observer import NullObserver, Observer
+from bros.bro import Bro
 
 
 @pytest.fixture(autouse=True)

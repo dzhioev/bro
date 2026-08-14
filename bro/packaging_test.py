@@ -18,13 +18,13 @@ from pathlib import Path
 
 import pytest
 
-from bro.bros import BRO_SPECS
+from bros import BRO_SPECS
 
 _ROOT = Path(__file__).resolve().parents[1]
 _ALLOWED_ENV = 'BASE_INSTALL_MODULES'
 # `bro list` imports every registered persona, and the workspace's development
 # distribution registers one through the `bro` entry point
-_WORKSPACE_MODULES = {'bro', 'bro_dev'}
+_WORKSPACE_MODULES = {'bro', 'bro_dev', 'bros'}
 
 # (console script, entry-point shim, arguments) — the environment scripts that
 # belong to no extra
@@ -170,7 +170,7 @@ def _shipped() -> dict[tuple[str, str], set[str]]:
 def _data_files() -> set[str]:
   """the package's non-source files — every candidate for shipping."""
   tracked = subprocess.run(
-    ['git', 'ls-files', 'bro'], capture_output=True, text=True, cwd=_ROOT, check=True
+    ['git', 'ls-files', 'bro', 'bros'], capture_output=True, text=True, cwd=_ROOT, check=True
   ).stdout.split()
   return {path for path in tracked if not path.endswith('.py')}
 
