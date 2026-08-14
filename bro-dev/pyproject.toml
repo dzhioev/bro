@@ -27,6 +27,9 @@ bro = { workspace = true }
 [project.entry-points.bro]
 bro-dev = "bro_dev.bro:BroDev"
 
+[tool.deptry.package_module_name_map]
+bro = ["bro", "bros"]
+
 [tool.setuptools]
 include-package-data = false
 

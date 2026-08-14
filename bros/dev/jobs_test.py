@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-from bro.bros.dev.jobs import Job, Registry
+from bros.dev.jobs import Job, Registry
 
 
 def _wait_finished(job: Job, timeout: float = 10.0) -> None:

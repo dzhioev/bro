@@ -76,7 +76,7 @@ Bros live in a process-wide dict keyed by `name`, holding **classes** (not insta
 
 ## Concrete roster
 
-The built-in set lives in `bro/bros/`:
+The built-in set lives in `bros/`:
 
 - `bro` — minimal general-purpose agent and the base for other concrete Bros
 - `dev` — generic software developer with file, shell, and search tools; owns the task-driven workflow spells (`spell::fix`, `spell::run-pr`, `spell::land`), whose task-tracker side rides the optional `brog` feature

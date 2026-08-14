@@ -9,10 +9,10 @@ import bro.launch.bro_run
 from bro import summon as summon_client
 from bro.base import log
 from bro.bro import BroRaised
-from bro.bros.bro import Bro
 from bro.llm.llm import EFFORT_LEVELS, LLMSpec
 from bro.llm.mcp import HOLDS
 from bro.llm.observer import Observer
+from bros.bro import Bro
 
 # shared flag help so all the launcher CLIs describe `--fast` / `--in-place` identically.
 FAST_HELP = (

@@ -2,10 +2,10 @@ import bro.brog.mcp as brog_mcp
 from bro import brog
 from bro.base.condition import when
 from bro.bro import feature
-from bro.bros.bro import Bro
-from bro.bros.dev import mcp
 from bro.datasources import references
 from bro.llm.mcp import creds, harness, mount
+from bros.bro import Bro
+from bros.dev import mcp
 
 SYSTEM_PROMPT = """\
 You are a software developer with tools to read, search, and edit files and run

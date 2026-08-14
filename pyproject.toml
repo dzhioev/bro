@@ -144,14 +144,14 @@ include-package-data = false
 [tool.setuptools.packages.find]
 where = ["."]
 namespaces = false
-include = ["bro*"]
+include = ["bro", "bro.*", "bros", "bros.*"]
 exclude = ["*.egg-info"]
 
 [tool.setuptools.package-data]
 "bro.base" = ["registry.json", "hooks/*.sh"]
-"bro.bros.bro" = ["spells/*.md"]
-"bro.bros.dev" = ["REFERENCE.md", "spells/*.md"]
-"bro.bros.lead" = ["spells/*.md"]
+"bros.bro" = ["spells/*.md"]
+"bros.dev" = ["REFERENCE.md", "spells/*.md"]
+"bros.lead" = ["spells/*.md"]
 "bro.prompts" = [
   "*.md",
   "*.prompt",
@@ -187,7 +187,7 @@ markers = [
 ]
 
 [tool.pyright]
-include = ["bro", "bro-dev/bro_dev", "conftest.py", "dev", "shell_policy_test.py"]
+include = ["bro", "bros", "bro-dev/bro_dev", "conftest.py", "dev", "shell_policy_test.py"]
 exclude = ["bro/setup/", ".venv/", ".claude/", "*.egg-info/", "build/"]
 extraPaths = [".", "bro-dev"]
 venvPath = "."
@@ -208,7 +208,7 @@ combine-as-imports = true
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
-"bro/bros/*/__init__.py" = ["RUF012"]
+"bros/*/__init__.py" = ["RUF012"]
 "bro-dev/bro_dev/bro.py" = ["RUF012"]
 
 [tool.ruff.format]

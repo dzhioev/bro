@@ -10,10 +10,10 @@ import bro.llm.mcp as llm_mcp
 from bro import bro as bro_module, spells as spell_store
 from bro.base.condition import SetVariable
 from bro.bro import BaseBro
-from bro.bros.dev import Dev
 from bro.llm.mcp import InProcessMCPServer, MCPServerSpec, ToolRegistry, creds
 from bro.prompts import get_prompt
 from bro.spells import CAST_SECRET, NAMESPACE, load_spell
+from bros.dev import Dev
 
 
 class _TrackerDev(Dev):
@@ -117,7 +117,7 @@ class TestSpellStore:
       _bro_class(package)().get_spell_body('missing', harness='bro', wire='bare')
 
   def test_checked_in_spells_render_for_every_surface(self):
-    spell_files = sorted((Path(spell_store.__file__).parent / 'bros').glob('*/spells/*.md'))
+    spell_files = sorted((Path(spell_store.__file__).parent.parent / 'bros').glob('*/spells/*.md'))
     assert len(spell_files) > 0
     # the closed universe of feature names checked-in spells may condition on;
     # grow it when a bro declares a new feature
@@ -151,7 +151,7 @@ class TestSpellStore:
     assert bro.get_spell_body('gated', harness='bro', wire='bare') == 'off-branch'
 
   def test_checked_in_store_has_no_legacy_skill_directories(self):
-    skill_directories = list((Path(spell_store.__file__).parent / 'bros').glob('*/skills'))
+    skill_directories = list((Path(spell_store.__file__).parent.parent / 'bros').glob('*/skills'))
     assert skill_directories == []
 
   def test_tracker_dev_inherits_shared_and_dev_spells(self):

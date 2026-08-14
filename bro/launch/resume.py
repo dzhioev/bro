@@ -12,11 +12,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
-from bro.bros.bro import Bro
 from bro.fork import fork, latest_fork_point
 from bro.llm.llm import LLMSpec
 from bro.trails.client import TrailsClient, fetch_recorded_trail
 from bro.trails.lineage import walk_header_chain
+from bros.bro import Bro
 
 # `--resume` without a trail id: continue the bro's newest recorded `call`
 # conversation.

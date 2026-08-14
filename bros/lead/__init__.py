@@ -1,7 +1,7 @@
 import bro.brog.mcp as brog_mcp
-from bro.bros.bro import Bro
 from bro.harness import claude
 from bro.llm.mcp import mount
+from bros.bro import Bro
 
 SYSTEM_PROMPT = """\
 You are the lead — the coordinator of work too large for a single session. You own

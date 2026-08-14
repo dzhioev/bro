@@ -5,9 +5,9 @@ from unittest.mock import patch
 import pytest
 
 import bro.launch.scope
-from bro.bros.bro import Bro
 from bro.datasources.web_search import WebSearch
 from bro.launch.scope import Surface
+from bros.bro import Bro
 
 
 class SearchBro(Bro):

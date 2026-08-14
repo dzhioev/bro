@@ -5,10 +5,10 @@ from typing import ClassVar, Optional
 import pytest
 
 import bro.registry
-from bro.bros.bro import Bro
 from bro.llm.llm import LLM, LLMSpec
 from bro.llm.mcp import MCPServer
 from bro.registry import _REGISTRY, create_bro, get_class, list_classes, register
+from bros.bro import Bro
 
 
 class MockLLM(LLM):
@@ -149,7 +149,7 @@ class TestAutoload:
       get_class('nonexistent')
 
   def test_list_classes_autoloads_every_bro_spec(self):
-    from bro.bros import BRO_SPECS
+    from bros import BRO_SPECS
 
     assert {cls.name for cls in list_classes()} == set(BRO_SPECS)
 
@@ -221,7 +221,7 @@ class TestExternalSpecs:
       bro.registry.known_names()
 
   def test_known_names_unions_builtins_and_externals(self, monkeypatch):
-    from bro.bros import BRO_SPECS
+    from bros import BRO_SPECS
 
     monkeypatch.setattr(
       bro.registry,
@@ -240,7 +240,7 @@ class TestExternalSpecs:
     assert bro.registry.known_names() == {'alpha'}
 
   def test_list_classes_includes_externals(self, monkeypatch):
-    from bro.bros import BRO_SPECS
+    from bros import BRO_SPECS
 
     monkeypatch.setattr(
       bro.registry,

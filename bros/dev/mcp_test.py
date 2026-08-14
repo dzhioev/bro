@@ -5,8 +5,9 @@ import tempfile
 import pytest
 
 from bro.base.text_window import DEFAULT_LIMIT
-from bro.bros.dev import jobs
-from bro.bros.dev.mcp import (
+from bro.llm.mcp import Context, mount
+from bros.dev import jobs
+from bros.dev.mcp import (
   bash,
   edit_file,
   glob,
@@ -19,7 +20,6 @@ from bro.bros.dev.mcp import (
   watch,
   write_file,
 )
-from bro.llm.mcp import Context, mount
 
 
 def test_read_file_returns_numbered_lines():
