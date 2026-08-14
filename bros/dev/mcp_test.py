@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import os
 import tempfile
+import threading
 
 import pytest
 
@@ -23,6 +24,8 @@ from bros.dev.mcp import (
   watch,
   write_file,
 )
+
+_WAKE_TIMEOUT = 10.0
 
 
 def test_read_file_returns_numbered_lines():
@@ -270,29 +273,36 @@ def test_job_watch_kill_round_trip():
   asyncio.run(round_trip())
 
 
+class _BlockedJob:
+  """stands in for a job whose watch is in flight: `watch` blocks until `wake`."""
+
+  def __init__(self) -> None:
+    self.watching = threading.Event()
+    self.woken = threading.Event()
+
+  def watch(self, *, wait_seconds: float, limit: int, tail: bool) -> str:
+    self.watching.set()
+    self.woken.wait(_WAKE_TIMEOUT)
+    return 'running'
+
+  def wake(self) -> None:
+    self.woken.set()
+
+
 @pytest.mark.asyncio
-async def test_interrupted_watch_releases_the_job_for_the_next_one():
-  # the watch lock outlives the abandoned thread, so an interrupted watch has to
-  # wake its job — otherwise the job stays unwatchable for the rest of a window
-  # an iterative watcher may have sized in minutes.
+async def test_interrupted_watch_wakes_the_job_it_abandoned(monkeypatch):
+  # the claim outlives the abandoned thread, so an interrupted watch has to wake
+  # its job — otherwise the job stays unwatchable for the rest of a window an
+  # iterative watcher may have sized in minutes.
+  target = _BlockedJob()
   registry = jobs.Registry()
-  context = Context(state=registry)
-  job(context, 'sleep 30')
-  target = registry.get('job-1')
-  watching = asyncio.create_task(watch(context, 'job-1', wait_seconds=600))
-  await asyncio.sleep(0.1)
+  monkeypatch.setattr(registry, 'get', lambda job_id: target)
+  watching = asyncio.create_task(watch(Context(state=registry), 'job-1', wait_seconds=600))
+  assert await off_loop(target.watching.wait, _WAKE_TIMEOUT), 'the watch never reached the job'
   watching.cancel()
   with pytest.raises(asyncio.CancelledError):
     await watching
-
-  # the woken thread drops the lock on its own thread, so the job frees up
-  # promptly rather than by the time cancel() returns
-  for _ in range(50):
-    if not target._watch_lock.locked():
-      break
-    await asyncio.sleep(0.1)
-  assert (await watch(context, 'job-1', wait_seconds=0)).startswith('running')
-  registry.close()
+  assert await off_loop(target.woken.wait, _WAKE_TIMEOUT), 'the abandoned watch was not woken'
 
 
 @pytest.mark.asyncio

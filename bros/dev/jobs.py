@@ -12,11 +12,13 @@ interpreter exit as the backstop.
 
 import atexit
 import codecs
+import contextlib
 import io
 import os
 import subprocess
 import threading
 import time
+from collections.abc import Generator
 from typing import Optional
 
 from bro.base import spawn
@@ -52,7 +54,7 @@ class Job:
     self._drained = False
     self._returncode: Optional[int] = None
     self._cursor = 0
-    self._watch_lock = threading.Lock()
+    self._watching = False
     self._woken = False
     self.process = spawn.popen(
       ['bash', '-c', command], stdout=subprocess.PIPE, stderr=subprocess.STDOUT
@@ -102,32 +104,43 @@ class Job:
     # (the reader may be one os.read behind), so a final collect waits for both.
     return self._returncode is not None and self._drained
 
-  def watch(self, *, wait_seconds: float, limit: int, tail: bool) -> str:
-    """blocking read of the job — call off-loop. Exclusive per job: the watch lock
-    is held for the whole call, wait included, and a concurrent same-job watch
-    fails immediately rather than racing for stream slices. `kill` takes no lock —
-    the exit it forces wakes a blocked watch, as does `wake`."""
-    if not self._watch_lock.acquire(blocking=False):
-      raise ValueError(
-        f'{self.id} is already being watched; watch is exclusive per job — the running '
-        'call holds the watch lock for its whole wait, retry after it returns'
-      )
+  @contextlib.contextmanager
+  def _claimed(self) -> Generator[None]:
+    # the claim is condition-guarded state like the spool and the exit record, so
+    # both edges notify and a caller can wait for the job to be taken or freed.
+    with self._condition:
+      if self._watching:
+        raise ValueError(
+          f'{self.id} is already being watched; watch is exclusive per job — the running '
+          'call holds the job for its whole wait, retry after it returns'
+        )
+      self._watching = True
+      self._condition.notify_all()
     try:
-      deadline = time.monotonic() + max(wait_seconds, 0.0)
-      with self._condition:
-        self._woken = False
-        if tail:
-          return self._watch_tail(deadline, limit)
-        return self._watch_incremental(deadline, limit)
+      yield
     finally:
-      self._watch_lock.release()
+      with self._condition:
+        self._watching = False
+        self._condition.notify_all()
+
+  def watch(self, *, wait_seconds: float, limit: int, tail: bool) -> str:
+    """blocking read of the job — call off-loop. Exclusive per job: the claim is
+    held for the whole call, wait included, and a concurrent same-job watch fails
+    immediately rather than racing for stream slices. `kill` claims nothing — the
+    exit it forces wakes a blocked watch, as does `wake`."""
+    deadline = time.monotonic() + max(wait_seconds, 0.0)
+    with self._claimed(), self._condition:
+      self._woken = False
+      if tail:
+        return self._watch_tail(deadline, limit)
+      return self._watch_incremental(deadline, limit)
 
   def wake(self) -> None:
     """end a blocked `watch` now, as if its window had elapsed.
 
-    the watch lock outlives an abandoned call — an interrupted watch would hold
-    the job unwatchable for the rest of its window, which for the large windows
-    an iterative watcher passes is minutes."""
+    the claim outlives an abandoned call — an interrupted watch would hold the job
+    unwatchable for the rest of its window, which for the large windows an
+    iterative watcher passes is minutes."""
     with self._condition:
       self._woken = True
       self._condition.notify_all()
