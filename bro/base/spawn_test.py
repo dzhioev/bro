@@ -5,75 +5,25 @@ of blocking the agent, and stdin defaults to /dev/null."""
 import asyncio
 import contextlib
 import errno
-import os
-import select
 import subprocess
 from collections.abc import Iterator
-from pathlib import Path
-from typing import Optional
 
 import pytest
 
 from bro.base import spawn
+from bro.base.liveness_test_helper import Liveness
 from bro.base.offload import off_loop
-
-_UP_MARKER = 'up'
-_HANG_TIMEOUT = 10.0
-
-
-class _Grandchild:
-  """the left side of a shell pipeline, holding a FIFO open for as long as it lives.
-
-  Liveness is read off that FIFO: the read end reaches EOF exactly when the last
-  holder of a write end is gone — an identity a recycled pid cannot wear. This side
-  holds a writer of its own until it asks, so a FIFO the grandchild has not opened
-  yet never reads as one whose writer has died."""
-
-  def __init__(self, fifo: Path) -> None:
-    os.mkfifo(fifo)
-    self._fifo = fifo
-    self._read_fd = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)  # its writers open later
-    self._write_fd: Optional[int] = os.open(fifo, os.O_WRONLY)
-    self._started = False
-
-  @property
-  def command(self) -> str:
-    """a shell pipeline whose left side takes the FIFO with it and then blocks."""
-    return f'(exec 3>{self._fifo}; printf {_UP_MARKER} >&3; sleep 60) | cat'
-
-  def wait_started(self) -> None:
-    if self._started:
-      return
-    assert self._readable(), 'the grandchild never opened the FIFO'
-    assert os.read(self._read_fd, len(_UP_MARKER)) == _UP_MARKER.encode()
-    self._started = True
-
-  def assert_reaped(self) -> None:
-    self.wait_started()
-    self._drop_writer()
-    assert self._readable() and not os.read(self._read_fd, 1), 'the grandchild survived'
-
-  def close(self) -> None:
-    self._drop_writer()
-    os.close(self._read_fd)
-
-  def _drop_writer(self) -> None:
-    if self._write_fd is not None:
-      os.close(self._write_fd)
-      self._write_fd = None
-
-  def _readable(self) -> bool:
-    # the timeout bounds a hang rather than a race: each wait ends on the event itself
-    # — the grandchild's write, or the last write end closing — so a run that passes
-    # spends none of it.
-    ready, _, _ = select.select([self._read_fd], [], [], _HANG_TIMEOUT)
-    return bool(ready)
 
 
 @pytest.fixture
-def grandchild(tmp_path) -> Iterator[_Grandchild]:
-  with contextlib.closing(_Grandchild(tmp_path / 'liveness')) as handle:
+def grandchild(tmp_path) -> Iterator[Liveness]:
+  with contextlib.closing(Liveness(tmp_path / 'liveness')) as handle:
     yield handle
+
+
+def _pipeline(grandchild: Liveness) -> str:
+  """a shell pipeline whose left side takes the liveness handle with it, then blocks."""
+  return f'({grandchild.holding("sleep 60")}) | cat'
 
 
 def test_child_is_detached_into_own_session() -> None:
@@ -127,7 +77,7 @@ def test_run_timeout_kills_grandchildren(grandchild) -> None:
   # process group with it. If only the shell were killed, the blocked left side of
   # the pipe would survive as an orphan.
   with pytest.raises(subprocess.TimeoutExpired):
-    spawn.run(['bash', '-c', grandchild.command], timeout=1, capture_output=True, text=True)
+    spawn.run(['bash', '-c', _pipeline(grandchild)], timeout=1, capture_output=True, text=True)
   grandchild.assert_reaped()
 
 
@@ -139,7 +89,7 @@ def test_run_check_raises_on_nonzero() -> None:
 def test_terminate_group_signals_the_whole_group(grandchild) -> None:
   # same shape as the timeout test: the pipeline's left side must receive the
   # SIGTERM too, not just the direct bash child.
-  process = spawn.popen(['bash', '-c', grandchild.command])
+  process = spawn.popen(['bash', '-c', _pipeline(grandchild)])
   grandchild.wait_started()
   spawn.terminate_group(process)
   assert process.wait(timeout=10) == -15
@@ -157,7 +107,7 @@ async def test_run_async_captures_output_and_exit_code() -> None:
 @pytest.mark.asyncio
 async def test_run_async_timeout_kills_grandchildren(grandchild) -> None:
   with pytest.raises(subprocess.TimeoutExpired):
-    await spawn.run_async(['bash', '-c', grandchild.command], timeout=1)
+    await spawn.run_async(['bash', '-c', _pipeline(grandchild)], timeout=1)
   grandchild.assert_reaped()
 
 
@@ -165,7 +115,7 @@ async def test_run_async_timeout_kills_grandchildren(grandchild) -> None:
 async def test_run_async_cancellation_kills_grandchildren(grandchild) -> None:
   # the interruption path: a cancelled tool call must not leave the shell it
   # started (or anything the shell started) running.
-  task = asyncio.create_task(spawn.run_async(['bash', '-c', grandchild.command], timeout=60))
+  task = asyncio.create_task(spawn.run_async(['bash', '-c', _pipeline(grandchild)], timeout=60))
   await off_loop(grandchild.wait_started)
   task.cancel()
   with pytest.raises(asyncio.CancelledError):

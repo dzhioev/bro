@@ -1,9 +1,12 @@
 import asyncio
+import contextlib
 import os
 import tempfile
 
 import pytest
 
+from bro.base.liveness_test_helper import Liveness
+from bro.base.offload import off_loop
 from bro.base.text_window import DEFAULT_LIMIT
 from bro.llm.mcp import Context, mount
 from bros.dev import jobs
@@ -294,31 +297,13 @@ async def test_interrupted_watch_releases_the_job_for_the_next_one():
 
 @pytest.mark.asyncio
 async def test_interrupted_bash_leaves_no_process_behind(tmp_path):
-  pidfile = tmp_path / 'pid'
-  running = asyncio.create_task(bash(f'echo $$ > {pidfile}; sleep 30', timeout_seconds=60))
-  for _ in range(50):
-    await asyncio.sleep(0.1)
-    if pidfile.exists() and len(pidfile.read_text()) > 0:
-      break
-  pid = int(pidfile.read_text())
-  running.cancel()
-  with pytest.raises(asyncio.CancelledError):
-    await running
-
-  for _ in range(50):
-    if not _process_alive(pid):
-      break
-    await asyncio.sleep(0.1)
-  assert not _process_alive(pid)
-
-
-def _process_alive(pid: int) -> bool:
-  try:
-    os.kill(pid, 0)
-  except ProcessLookupError:
-    return False
-  # a killed child of this process lingers as a zombie until it is reaped
-  return open(f'/proc/{pid}/stat').read().rsplit(')', 1)[1].split()[0] != 'Z'
+  with contextlib.closing(Liveness(tmp_path / 'liveness')) as shell:
+    running = asyncio.create_task(bash(shell.holding('sleep 30'), timeout_seconds=60))
+    await off_loop(shell.wait_started)
+    running.cancel()
+    with pytest.raises(asyncio.CancelledError):
+      await running
+    shell.assert_reaped()
 
 
 def test_watch_unknown_job_raises():
