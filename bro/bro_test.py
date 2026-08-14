@@ -994,6 +994,42 @@ def _make_layer(*tool_names: str) -> llm_mcp.ToolLayer:
   return _server_layer(MCPServerSpec(build=lambda: _make_server(*tool_names)))
 
 
+class TestComponentDeclarations:
+  def test_retired_tool_attribute_names_its_replacement(self):
+    with pytest.raises(
+      TypeError,
+      match=r"RetiredBro\.mcp_servers.*move them to 'tools'.*'mcp_servers' was renamed to 'tools'",
+    ):
+
+      class RetiredBro(BaseBro):
+        mcp_servers: ClassVar = [_make_layer('a')]
+
+  def test_tool_layer_under_typo_raises_at_class_definition(self):
+    with pytest.raises(TypeError, match=r"TypoBro\.toolss.*move them to 'tools'"):
+
+      class TypoBro(BaseBro):
+        toolss = when(False, _make_layer('a'))
+
+  def test_iff_tool_entry_under_unknown_attribute_raises(self):
+    with pytest.raises(TypeError, match=r"ConditionalTypoBro\.tool.*move them to 'tools'"):
+
+      class ConditionalTypoBro(BaseBro):
+        tool = iff(False, _make_layer('a'), _make_layer('b'))
+
+  def test_data_source_under_typo_raises_at_class_definition(self):
+    with pytest.raises(TypeError, match=r"SourceTypoBro\.datasources.*move them to 'data_sources'"):
+
+      class SourceTypoBro(BaseBro):
+        datasources: ClassVar = [when(False, _StubSource())]
+
+  def test_unrelated_helper_attributes_remain_valid(self):
+    class HelperBro(BaseBro):
+      labels: ClassVar = ['first', 'second']
+      lookup: ClassVar = {'first': 1}
+
+    assert HelperBro.labels == ['first', 'second']
+
+
 class TestBroMCPServers:
   @pytest.mark.asyncio
   async def test_spec_entry_exposes_its_tools(self):

@@ -11,7 +11,7 @@ import bro.llm.llms.chat_gpt as llm_llms_chat_gpt
 import bro.llm.mcp as llm_mcp
 from bro import spells as spell_store
 from bro.base import credentials, log
-from bro.base.condition import Condition, Entry, SetVariable, Variables, var
+from bro.base.condition import Condition, Entry, Iff, SetVariable, Variables, When, var
 from bro.base.offload import off_loop
 from bro.channel import BroChannel
 from bro.datasources.base import DataSource
@@ -580,6 +580,33 @@ def _fold_tool_layers(
   return server_specs, tuple(dict.fromkeys(blocked_names))
 
 
+_COMPONENT_DECLARATION_ATTRIBUTES = frozenset({'data_sources', 'tools'})
+_RETIRED_COMPONENT_DECLARATION_ATTRIBUTES = {'mcp_servers': 'tools'}
+
+
+def _component_declaration_attributes(value: object, seen: set[int]) -> set[str]:
+  if isinstance(value, llm_mcp.ToolLayer):
+    return {'tools'}
+  if isinstance(value, DataSource):
+    return {'data_sources'}
+  if not isinstance(value, (When, Iff, list, tuple, set, frozenset)):
+    return set()
+  if id(value) in seen:
+    return set()
+  seen.add(id(value))
+  if isinstance(value, When):
+    values = (value.item,)
+  elif isinstance(value, Iff):
+    values = tuple(item for _, item in value.branches)
+    if value.otherwise is not None:
+      values += value.otherwise
+  else:
+    values = value
+  return {
+    attribute for item in values for attribute in _component_declaration_attributes(item, seen)
+  }
+
+
 class BaseBro(ABC):
   name: str
   description: str
@@ -635,6 +662,24 @@ class BaseBro(ABC):
   claude_system_prompt: str
 
   _llm: Optional[LLM] = None
+
+  def __init_subclass__(cls, **kwargs: Any) -> None:
+    super().__init_subclass__(**kwargs)
+    for attribute_name, value in vars(cls).items():
+      if attribute_name in _COMPONENT_DECLARATION_ATTRIBUTES:
+        continue
+      declaration_attributes = _component_declaration_attributes(value, set())
+      if len(declaration_attributes) == 0:
+        continue
+      destinations = ' or '.join(repr(name) for name in sorted(declaration_attributes))
+      message = (
+        f'{cls.__name__}.{attribute_name} contains component declarations under an attribute '
+        f'BaseBro does not read; move them to {destinations}'
+      )
+      retired_destination = _RETIRED_COMPONENT_DECLARATION_ATTRIBUTES.get(attribute_name)
+      if retired_destination in declaration_attributes:
+        message += f'; {attribute_name!r} was renamed to {retired_destination!r}'
+      raise TypeError(message)
 
   def __init__(self, system_prompt: Optional[str] = None):
     tool_entries: list[Entry[llm_mcp.ToolLayer]] = []
