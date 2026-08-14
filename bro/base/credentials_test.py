@@ -1447,6 +1447,35 @@ class TestBuildScopedStore:
     scoped = json.loads(store[credentials.REGISTRY_FILE])
     assert scoped['github']['install'] == 'hook for github'
 
+  def test_pulled_kind_follows_the_selected_instance(
+    self, configs_dir: Path, bro_dir: Path, monkeypatch
+  ):
+    # nothing declares the referenced kind, so it hydrates from the entry that
+    # kind resolves to for this launch — here the registry's selected instance
+    entry_point = _entry_point(
+      'ticket', 'bro.base.credentials_test:_TicketSource', credentials._CREDENTIAL_SOURCE_GROUP
+    )
+    monkeypatch.setattr(
+      credentials,
+      '_entry_points',
+      lambda group: (entry_point,) if group == credentials._CREDENTIAL_SOURCE_GROUP else (),
+    )
+    _write(
+      bro_dir,
+      credentials.HOST_REGISTRY_FILE,
+      {
+        'github+acme': {'sources': [{'type': 'ticket', 'file': 'ticket_acme.json'}]},
+        'github': {'instance': 'acme'},
+      },
+    )
+    _write(bro_dir, 'ticket_acme.json', {'prefix': 'acme'})
+    _write(bro_dir, 'brog.json', {'backend': 'github', 'token': {'$cred': 'github'}})
+    store = credentials.build_scoped_store(['brog'])
+    assert json.loads(store['github.cred']) == {'prefix': 'acme'}
+    registry = json.loads(store[credentials.REGISTRY_FILE])
+    assert registry['github']['sources'] == [{'type': 'ticket', 'file': 'github.cred'}]
+    assert 'install' not in registry['github']
+
   def test_shipped_references_are_followed_transitively(
     self, configs_dir: Path, bro_dir: Path, monkeypatch
   ):

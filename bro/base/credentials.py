@@ -917,7 +917,8 @@ def build_scoped_store(names: Iterable[str], *, optional: Iterable[str] = ()) ->
   text with references intact and the session re-expands (and re-mints) per read
   against the scoped registry. each such reference must be spelled at kind level
   (the scoped namespace is kinds-only), and the kinds it names join the scope —
-  transitively, and hydrated for the resolver alone: a kind pulled in this way
+  transitively, hydrated from the entry the expansion above read, so the session
+  resolves the instance the host validated. a kind pulled in this way
   carries no install hook, so a shipped reference never wires a session's tools
   to a credential the scope did not ask for.
 
