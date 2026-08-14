@@ -171,19 +171,39 @@ def test_concurrent_watch_fails_immediately_and_kill_wakes_the_blocked_watch():
 
 def test_wake_frees_the_job_for_the_next_watch():
   job = Job('job-1', 'sleep 30')
+  woken = threading.Event()
   woken_result: list[str] = []
 
   def blocked_watch():
-    woken_result.append(job.watch(wait_seconds=600, limit=100, tail=False))
+    woken_result.append(job.watch(wait_seconds=600, limit=100, tail=False, woken=woken))
 
   watcher = threading.Thread(target=blocked_watch)
   watcher.start()
   _await_watching(job)
-  job.wake()
+  job.wake(woken)
   watcher.join(timeout=10)
   assert not watcher.is_alive()
   assert woken_result == ['running']
   assert job.watch(wait_seconds=0, limit=100, tail=False) == 'running'
+  assert job.kill(grace_seconds=5) == 'job-1 exited (code -15)'
+
+
+def test_wake_that_lands_before_the_watch_starts_still_ends_it():
+  # the window outlasts the join below, so a wake this call fails to see shows up as
+  # a thread still running rather than as a slow pass.
+  job = Job('job-1', 'sleep 30')
+  woken = threading.Event()
+  job.wake(woken)
+  early_result: list[str] = []
+
+  def late_watch():
+    early_result.append(job.watch(wait_seconds=600, limit=100, tail=False, woken=woken))
+
+  watcher = threading.Thread(target=late_watch)
+  watcher.start()
+  watcher.join(timeout=10)
+  assert not watcher.is_alive(), 'the pre-woken watch blocked for its whole window'
+  assert early_result == ['running']
   assert job.kill(grace_seconds=5) == 'job-1 exited (code -15)'
 
 

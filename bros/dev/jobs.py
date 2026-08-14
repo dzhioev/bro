@@ -55,7 +55,6 @@ class Job:
     self._returncode: Optional[int] = None
     self._cursor = 0
     self._watching = False
-    self._woken = False
     self.process = spawn.popen(
       ['bash', '-c', command], stdout=subprocess.PIPE, stderr=subprocess.STDOUT
     )
@@ -123,29 +122,37 @@ class Job:
         self._watching = False
         self._condition.notify_all()
 
-  def watch(self, *, wait_seconds: float, limit: int, tail: bool) -> str:
+  def watch(
+    self,
+    *,
+    wait_seconds: float,
+    limit: int,
+    tail: bool,
+    woken: Optional[threading.Event] = None,
+  ) -> str:
     """blocking read of the job — call off-loop. Exclusive per job: the claim is
     held for the whole call, wait included, and a concurrent same-job watch fails
     immediately rather than racing for stream slices. `kill` claims nothing — the
-    exit it forces wakes a blocked watch, as does `wake`."""
+    exit it forces ends a blocked watch, as does `wake` on the `woken` event a
+    caller passes here to keep a handle on the call it is about to start."""
+    if woken is None:
+      woken = threading.Event()
     deadline = time.monotonic() + max(wait_seconds, 0.0)
     with self._claimed(), self._condition:
-      self._woken = False
       if tail:
-        return self._watch_tail(deadline, limit)
-      return self._watch_incremental(deadline, limit)
+        return self._watch_tail(deadline, limit, woken)
+      return self._watch_incremental(deadline, limit, woken)
 
-  def wake(self) -> None:
-    """end a blocked `watch` now, as if its window had elapsed.
-
-    the claim outlives an abandoned call — an interrupted watch would hold the job
-    unwatchable for the rest of its window, which for the large windows an
-    iterative watcher passes is minutes."""
+  def wake(self, woken: threading.Event) -> None:
+    """end the watch handed `woken` now, as if its window had elapsed. The event is
+    that one call's, so a wake landing before the call starts still ends it: the
+    claim must not outlive its caller's interest, which for the large windows an
+    iterative watcher passes would leave the job unwatchable for minutes."""
+    woken.set()
     with self._condition:
-      self._woken = True
       self._condition.notify_all()
 
-  def _watch_incremental(self, deadline: float, limit: int) -> str:
+  def _watch_incremental(self, deadline: float, limit: int, woken: threading.Event) -> str:
     # decision order: pending backlog → return it immediately; exited and drained
     # → immediate bare state line; otherwise block for output or exit, a quiet
     # window ending in a bare state-line heartbeat.
@@ -156,7 +163,7 @@ class Job:
       if self._finished():
         return self._state_line()
       remaining = deadline - time.monotonic()
-      if remaining <= 0 or self._woken:
+      if remaining <= 0 or woken.is_set():
         return self._state_line()
       self._condition.wait(remaining)
 
@@ -169,13 +176,13 @@ class Job:
       pieces.append(marker)
     return '\n'.join(pieces)
 
-  def _watch_tail(self, deadline: float, limit: int) -> str:
+  def _watch_tail(self, deadline: float, limit: int, woken: threading.Event) -> str:
     # only exit (fully drained) or the window's end wakes this mode; every return
     # jumps the cursor to the spool end and keeps the tail of what was jumped —
     # on exit the final diagnostics, on timeout a progress glimpse.
     while True:
       remaining = deadline - time.monotonic()
-      if self._finished() or remaining <= 0 or self._woken:
+      if self._finished() or remaining <= 0 or woken.is_set():
         value = self._spool.getvalue()
         section = value[self._cursor :]
         self._cursor = len(value)

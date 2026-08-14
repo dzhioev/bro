@@ -274,19 +274,21 @@ def test_job_watch_kill_round_trip():
 
 
 class _BlockedJob:
-  """stands in for a job whose watch is in flight: `watch` blocks until `wake`."""
+  """stands in for a job whose watch is in flight: `watch` blocks until `wake`, and
+  ends only when woken through the very event it was handed."""
 
   def __init__(self) -> None:
     self.watching = threading.Event()
-    self.woken = threading.Event()
+    self.ended = threading.Event()
 
-  def watch(self, *, wait_seconds: float, limit: int, tail: bool) -> str:
+  def watch(self, *, wait_seconds: float, limit: int, tail: bool, woken: threading.Event) -> str:
     self.watching.set()
-    self.woken.wait(_WAKE_TIMEOUT)
+    if woken.wait(_WAKE_TIMEOUT):
+      self.ended.set()
     return 'running'
 
-  def wake(self) -> None:
-    self.woken.set()
+  def wake(self, woken: threading.Event) -> None:
+    woken.set()
 
 
 @pytest.mark.asyncio
@@ -302,7 +304,7 @@ async def test_interrupted_watch_wakes_the_job_it_abandoned(monkeypatch):
   watching.cancel()
   with pytest.raises(asyncio.CancelledError):
     await watching
-  assert await off_loop(target.woken.wait, _WAKE_TIMEOUT), 'the abandoned watch was not woken'
+  assert await off_loop(target.ended.wait, _WAKE_TIMEOUT), 'the abandoned watch was not woken'
 
 
 @pytest.mark.asyncio
