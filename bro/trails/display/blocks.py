@@ -10,8 +10,11 @@ from bro.trails.display.config import DisplayConfig, Layout, OutputRoute
 class BlockKind(StrEnum):
   MESSAGE = 'message'
   TOOL = 'tool'
+  TOOL_RESULT = 'tool-result'
   EVENT = 'event'
   METADATA = 'metadata'
+  CONTEXT = 'context'
+  SEGMENT = 'segment'
   NATIVE_STEP = 'native-step'
   TRAIL_ROW = 'trail-row'
   LINEAGE_NODE = 'lineage-node'
@@ -40,6 +43,7 @@ class BlockItem:
   label: str | None = None
   omitted_characters: int = 0
   markdown: bool = False
+  timestamp: str | None = None
 
   def __post_init__(self) -> None:
     if self.omitted_characters < 0:
@@ -58,13 +62,17 @@ class PresentationBlock:
   label: str
   timestamp: str | None
   items: tuple[BlockItem, ...]
+  ordinal: int | None = None
   depth: int = 0
   tree_last: bool = False
+  tree_ancestor_last: tuple[bool, ...] = ()
   pending: bool = False
 
   def __post_init__(self) -> None:
     if len(self.id) == 0 or len(self.label) == 0:
       raise ValueError('block id and label must not be empty')
+    if self.ordinal is not None and self.ordinal <= 0:
+      raise ValueError('block ordinal must be positive when present')
     if self.depth < 0:
       raise ValueError('block depth must be non-negative')
 

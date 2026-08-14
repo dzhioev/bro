@@ -176,7 +176,8 @@ class TestCorrelation:
     update = renderer.operations[1]
     assert isinstance(update, Update)
     assert not update.block.pending
-    assert [item.label for item in update.block.items] == ['arguments']
+    assert [item.label for item in update.block.items] == ['arguments', 'result']
+    assert update.block.items[-1].text == ''
 
   def test_hidden_call_with_visible_result_produces_a_standalone_result(self):
     configuration = DisplayConfig(

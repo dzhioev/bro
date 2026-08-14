@@ -37,6 +37,12 @@ class ColorMode(StrEnum):
   NEVER = 'never'
 
 
+class Appearance(StrEnum):
+  PLAIN_LOG = 'plain-log'
+  CHAT = 'chat'
+  REWIND = 'rewind'
+
+
 class TimestampPolicy(StrEnum):
   HIDDEN = 'hidden'
   WHEN_KNOWN = 'when-known'
@@ -112,14 +118,21 @@ class ContentLimits:
   normal: int | None = 2000
   full: int | None = None
   debug: int | None = None
+  kind_overrides: tuple[tuple[RecordKind, int | None], ...] = ()
 
   def __post_init__(self) -> None:
-    for name in ('compact', 'normal', 'full', 'debug'):
-      value = getattr(self, name)
-      if value is not None and value <= 0:
-        raise ValueError(f'{name} content limit must be positive or None')
+    values = [getattr(self, name) for name in ('compact', 'normal', 'full', 'debug')]
+    values.extend(limit for _, limit in self.kind_overrides)
+    if any(value is not None and value <= 0 for value in values):
+      raise ValueError('content limits must be positive or None')
+    kinds = [kind for kind, _ in self.kind_overrides]
+    if len(kinds) != len(set(kinds)):
+      raise ValueError('content limit overrides contain duplicate record kinds')
 
-  def for_verbosity(self, verbosity: Verbosity) -> int | None:
+  def for_record(self, kind: RecordKind, verbosity: Verbosity) -> int | None:
+    for candidate, limit in self.kind_overrides:
+      if candidate is kind:
+        return limit
     return getattr(self, verbosity.value)
 
 
@@ -139,7 +152,7 @@ _DEFAULT_LABEL_PAIRS = (
   (RecordKind.INTERIM_ASSISTANT, 'assistant'),
   (RecordKind.ASSISTANT, 'reply'),
   (RecordKind.LLM_CALL, 'llm call'),
-  (RecordKind.TOOL_CALL, 'tool'),
+  (RecordKind.TOOL_CALL, 'tool call'),
   (RecordKind.TOOL_RESULT, 'tool result'),
   (RecordKind.ERROR, 'error'),
   (RecordKind.HARNESS_EVENT, 'harness event'),
@@ -167,12 +180,21 @@ class Labels:
       raise ValueError(f'display labels are missing {sorted(missing)}')
     if any(len(label) == 0 for _, label in self.values):
       raise ValueError('display labels must not be empty')
+    if any(
+      any(ord(character) < 32 or ord(character) == 127 for character in label)
+      for _, label in self.values
+    ):
+      raise ValueError('display labels cannot contain control characters')
 
   def for_kind(self, kind: RecordKind) -> str:
     for candidate, label in self.values:
       if candidate is kind:
         return label
     raise AssertionError(f'label validation missed {kind}')
+
+  def override(self, *values: tuple[RecordKind, str]) -> 'Labels':
+    replacements = dict(values)
+    return Labels(tuple((kind, replacements.get(kind, label)) for kind, label in self.values))
 
 
 @dataclass(frozen=True)
@@ -181,17 +203,29 @@ class DisplayConfig:
   verbosity: Verbosity = Verbosity.NORMAL
   detail_overrides: tuple[tuple[RecordKind, Verbosity], ...] = ()
   layout: Layout = Layout.EVENT_LOG
+  appearance: Appearance = Appearance.PLAIN_LOG
   color: ColorMode = ColorMode.AUTO
   content_limits: ContentLimits = ContentLimits()
+  hidden_content_kinds: frozenset[RecordKind] = frozenset()
   timestamps: TimestampPolicy = TimestampPolicy.WHEN_KNOWN
   routes: OutputRoutes = OutputRoutes()
   labels: Labels = Labels()
+  context_label: str = ''
   paging: bool = False
 
   def __post_init__(self) -> None:
     kinds = [kind for kind, _ in self.detail_overrides]
     if len(kinds) != len(set(kinds)):
       raise ValueError('detail overrides contain duplicate record kinds')
+    if any(ord(character) < 32 or ord(character) == 127 for character in self.context_label):
+      raise ValueError('display context label cannot contain control characters')
+    if self.appearance is Appearance.CHAT and self.layout is not Layout.CONVERSATION:
+      raise ValueError('chat appearance requires conversation layout')
+    if self.appearance is Appearance.REWIND and self.layout in {
+      Layout.EVENT_LOG,
+      Layout.PANELS,
+    }:
+      raise ValueError('rewind appearance requires a rewind layout')
     if self.layout is Layout.NATIVE_STEPS and self.record_filter.included_kinds is not None:
       if RecordKind.NATIVE_STEP not in self.record_filter.included_kinds:
         raise ValueError('native-steps layout must allow native step records')
@@ -240,14 +274,41 @@ def _build_presets() -> Mapping[PresetName, DisplayConfig]:
     metadata=OutputRoute.TRACE,
     status=OutputRoute.TRACE,
   )
+  chat_labels = Labels().override(
+    (RecordKind.USER_INPUT, 'you'),
+    (RecordKind.REASONING, 'thinking'),
+  )
+  rewind_labels = Labels().override(
+    (RecordKind.USER_INPUT, 'USER'),
+    (RecordKind.REASONING, 'thinking'),
+    (RecordKind.INTERIM_ASSISTANT, 'ASSISTANT'),
+    (RecordKind.ASSISTANT, 'ASSISTANT'),
+    (RecordKind.TOOL_CALL, 'ASSISTANT'),
+    (RecordKind.TOOL_RESULT, 'ASSISTANT'),
+    (RecordKind.ERROR, 'ERROR'),
+    (RecordKind.LAUNCH_CONTEXT, 'SESSION CONTEXT'),
+  )
+  log_limits = ContentLimits(
+    normal=4000,
+    kind_overrides=(
+      (RecordKind.TOOL_CALL, 1500),
+      (RecordKind.TOOL_RESULT, 1500),
+    ),
+  )
   observer = DisplayConfig(
     record_filter=_filter_for(activity_kinds),
     layout=Layout.EVENT_LOG,
+    appearance=Appearance.PLAIN_LOG,
+    color=ColorMode.NEVER,
+    content_limits=log_limits,
     routes=all_trace,
   )
   ask = DisplayConfig(
     record_filter=_filter_for(activity_kinds, RecordKind.USER_INPUT),
     layout=Layout.EVENT_LOG,
+    appearance=Appearance.PLAIN_LOG,
+    color=ColorMode.NEVER,
+    content_limits=log_limits,
     routes=OutputRoutes(
       conversation=OutputRoute.TRACE,
       reply=OutputRoute.REPLY,
@@ -261,14 +322,26 @@ def _build_presets() -> Mapping[PresetName, DisplayConfig]:
       activity_kinds,
       RecordKind.SYSTEM_PROMPT,
       RecordKind.LLM_CALL,
-      RecordKind.TOOL_RESULT,
       RecordKind.HARNESS_EVENT,
     ),
     verbosity=Verbosity.COMPACT,
+    detail_overrides=(
+      (RecordKind.USER_INPUT, Verbosity.FULL),
+      (RecordKind.INTERIM_ASSISTANT, Verbosity.FULL),
+      (RecordKind.ASSISTANT, Verbosity.FULL),
+    ),
     layout=Layout.CONVERSATION,
+    appearance=Appearance.CHAT,
+    color=ColorMode.NEVER,
+    hidden_content_kinds=frozenset({RecordKind.TOOL_RESULT}),
     timestamps=TimestampPolicy.WHEN_KNOWN,
+    labels=chat_labels,
   )
-  rewind_show_kinds = CONVERSATION_RECORD_KINDS | {
+  rewind_show_kinds = CONVERSATION_RECORD_KINDS - {
+    RecordKind.SYSTEM_PROMPT,
+    RecordKind.LLM_CALL,
+    RecordKind.HARNESS_EVENT,
+  } | {
     RecordKind.TRAIL_METADATA,
     RecordKind.LAUNCH_CONTEXT,
     RecordKind.SEGMENT_BOUNDARY,
@@ -277,6 +350,9 @@ def _build_presets() -> Mapping[PresetName, DisplayConfig]:
     record_filter=_filter_for(rewind_show_kinds),
     verbosity=Verbosity.FULL,
     layout=Layout.CONVERSATION,
+    appearance=Appearance.REWIND,
+    timestamps=TimestampPolicy.PLACEHOLDER,
+    labels=rewind_labels,
     paging=True,
   )
   return MappingProxyType(
@@ -290,19 +366,23 @@ def _build_presets() -> Mapping[PresetName, DisplayConfig]:
         record_filter=_filter_for(frozenset({RecordKind.TRAIL_METADATA, RecordKind.NATIVE_STEP})),
         verbosity=Verbosity.FULL,
         layout=Layout.NATIVE_STEPS,
+        appearance=Appearance.REWIND,
+        timestamps=TimestampPolicy.PLACEHOLDER,
         paging=True,
       ),
       PresetName.REWIND_LIST: DisplayConfig(
         record_filter=_filter_for(frozenset({RecordKind.TRAIL_LIST_ROW})),
         verbosity=Verbosity.COMPACT,
         layout=Layout.TRAIL_LIST,
-        timestamps=TimestampPolicy.HIDDEN,
+        appearance=Appearance.REWIND,
+        timestamps=TimestampPolicy.PLACEHOLDER,
         paging=True,
       ),
       PresetName.REWIND_TREE: DisplayConfig(
         record_filter=_filter_for(frozenset({RecordKind.LINEAGE_NODE})),
         verbosity=Verbosity.COMPACT,
         layout=Layout.LINEAGE_TREE,
+        appearance=Appearance.REWIND,
         timestamps=TimestampPolicy.HIDDEN,
       ),
       PresetName.REWIND_GREP: rewind_show.override(

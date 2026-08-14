@@ -14,6 +14,7 @@ from bro.trails.display.blocks import (
 )
 from bro.trails.display.config import (
   PRESETS,
+  Appearance,
   AttributePredicate,
   ColorMode,
   ContentLimits,

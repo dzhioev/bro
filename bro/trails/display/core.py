@@ -18,6 +18,7 @@ from bro.trails.display.blocks import (
   Update,
 )
 from bro.trails.display.config import (
+  Appearance,
   DisplayConfig,
   Layout,
   OutputRoute,
@@ -112,6 +113,8 @@ class DisplaySession:
     self._seen_calls: set[tuple[Origin, str, str]] = set()
     self._seen_results: set[tuple[Origin, str, str]] = set()
     self._active_transients: dict[str, str] = {}
+    self._turn_numbers: dict[tuple[str, int], int] = {}
+    self._next_turn = 1
     self._group: _GroupState | None = None
 
   def __enter__(self) -> 'DisplaySession':
@@ -290,7 +293,13 @@ class DisplaySession:
     if state.result is not None and state.result_visible:
       result_style = StyleRole.ERROR if state.result.is_error else StyleRole.SUCCESS
       items.append(
-        self._item(state.result.result, state.result.kind, label='result', style=result_style)
+        self._item(
+          state.result.result,
+          state.result.kind,
+          label='result',
+          style=result_style,
+          timestamp=self._timestamp(state.result),
+        )
       )
       style = result_style if state.result.is_error else style
     elif missing_result:
@@ -304,6 +313,7 @@ class DisplaySession:
       label=sanitize_text(canonical_name(call.tool_name)),
       timestamp=self._timestamp(call),
       items=tuple(items),
+      ordinal=self._ordinal_for(call),
       pending=pending,
     )
 
@@ -313,13 +323,21 @@ class DisplaySession:
     style = StyleRole.ERROR if record.is_error else StyleRole.SUCCESS
     return PresentationBlock(
       id=block_id,
-      kind=BlockKind.TOOL,
+      kind=BlockKind.TOOL_RESULT,
       layout=self.configuration.layout,
       route=self.configuration.routes.trace,
       style=style,
       label=f'{self.configuration.labels.for_kind(record.kind)} · {name}',
       timestamp=self._timestamp(record),
-      items=(self._item(record.result, record.kind, style=style),),
+      items=(
+        self._item(
+          record.result,
+          record.kind,
+          style=style,
+          timestamp=self._timestamp(record),
+        ),
+      ),
+      ordinal=self._ordinal_for(record),
     )
 
   def _block_for(self, record: DisplayRecord, *, block_id: str | None = None) -> PresentationBlock:
@@ -335,8 +353,10 @@ class DisplaySession:
       label=sanitize_text(self._label_for(record)),
       timestamp=self._timestamp(record),
       items=items,
+      ordinal=self._ordinal_for(record),
       depth=record.depth if isinstance(record, LineageNode) else 0,
       tree_last=record.is_last if isinstance(record, LineageNode) else False,
+      tree_ancestor_last=record.ancestor_last if isinstance(record, LineageNode) else (),
     )
 
   def _items_for(self, record: DisplayRecord, style: StyleRole) -> tuple[BlockItem, ...]:
@@ -379,36 +399,56 @@ class DisplaySession:
       return tuple(segment_items)
     if isinstance(record, NativeStep):
       if isinstance(record.body, InlineStepBody):
-        body = self._item(record.body.value, record.kind, label=record.step_kind, style=style)
+        body = self._item(
+          record.body.value,
+          record.kind,
+          label=record.step_kind,
+          style=style,
+          limit=240,
+        )
       elif isinstance(record.body, SpilledStepBody):
         body = BlockItem(
-          f'{record.body.size} bytes spilled · {record.body.url}',
+          f'<{record.body.size} bytes spilled> {record.body.url}',
           style=StyleRole.MUTED,
           label=record.step_kind,
         )
       else:
         raise AssertionError(f'unhandled native step body: {record.body!r}')
       attributes = tuple(
-        self._item(value, record.kind, label=label, style=StyleRole.MUTED)
+        self._item(value, record.kind, label=label, style=StyleRole.MUTED, limit=80)
         for label, value in record.attributes
       )
       return (body, *attributes)
     if isinstance(record, TrailListRow):
-      trail_values: list[tuple[str, Any]] = [
-        ('harness', record.harness),
-        ('owner', record.owner),
-        ('model', record.model),
-        ('status', record.status),
+      trail_items = [
+        BlockItem(record.harness, style=StyleRole.REASONING, label='harness'),
+        BlockItem(record.owner or '?', style=StyleRole.TOOL, label='owner'),
+        BlockItem(record.model or '?', style=StyleRole.MUTED, label='model'),
+        BlockItem(
+          record.status,
+          style=(
+            StyleRole.ERROR
+            if record.status == 'lost'
+            else StyleRole.SUCCESS
+            if record.status.startswith('done:')
+            else StyleRole.NOTICE
+          ),
+          label='status',
+        ),
       ]
       if record.forked_from is not None:
-        trail_values.append(('fork of', record.forked_from))
+        trail_items.append(BlockItem(record.forked_from, style=StyleRole.MUTED, label='fork of'))
       if record.subject is not None:
-        trail_values.append(('subject', record.subject))
-      return tuple(
-        self._item(value, record.kind, label=label, style=style)
-        for label, value in trail_values
-        if value is not None
-      )
+        trail_items.append(
+          self._item(
+            record.subject,
+            record.kind,
+            label='subject',
+            style=StyleRole.MUTED,
+            limit=60,
+          )
+        )
+      return tuple(trail_items)
     if isinstance(record, LineageNode):
       lineage_items: list[BlockItem] = []
       if record.owner is not None:
@@ -436,32 +476,94 @@ class DisplaySession:
     label: str | None = None,
     style: StyleRole = StyleRole.NORMAL,
     markdown: bool = False,
+    timestamp: str | None = None,
+    limit: int | None = None,
   ) -> BlockItem:
-    text = self._render_value(value)
-    limit = self.configuration.content_limits.for_verbosity(self.configuration.detail_for(kind))
+    hidden = kind in self.configuration.hidden_content_kinds
+    text = '' if hidden else self._render_value(value, kind)
+    content_limit = (
+      limit
+      if limit is not None
+      else self.configuration.content_limits.for_record(kind, self.configuration.detail_for(kind))
+    )
     omitted = 0
-    if limit is not None and len(text) > limit:
-      omitted = len(text) - limit
-      text = text[:limit]
+    if not hidden and content_limit is not None and len(text) > content_limit:
+      omitted = len(text) - content_limit
+      text = text[:content_limit]
     return BlockItem(
       text=text,
       style=style,
       label=sanitize_text(label) if label is not None else None,
       omitted_characters=omitted,
       markdown=markdown,
+      timestamp=timestamp,
     )
 
-  @staticmethod
-  def _render_value(value: Any) -> str:
+  def _render_value(self, value: Any, kind: RecordKind) -> str:
     if value is None:
       return ''
+    if self.configuration.appearance is Appearance.CHAT:
+      if kind is RecordKind.TOOL_CALL:
+        return self._chat_arguments(value)
+      if kind is RecordKind.REASONING and isinstance(value, str):
+        return sanitize_text(' '.join(value.split()))
     if isinstance(value, str):
-      return sanitize_text(value)
+      if self.configuration.appearance is Appearance.PLAIN_LOG and kind in {
+        RecordKind.TOOL_CALL,
+        RecordKind.TOOL_RESULT,
+      }:
+        stripped = value.strip()
+        if len(stripped) > 0 and stripped[0] in '[{':
+          try:
+            value = json.loads(stripped)
+          except json.JSONDecodeError:
+            return sanitize_text(value)
+        else:
+          return sanitize_text(value)
+      else:
+        return sanitize_text(value)
+    indent = None if self.configuration.appearance is Appearance.REWIND else 2
     try:
-      rendered = json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False)
+      rendered = json.dumps(value, ensure_ascii=False, indent=indent, allow_nan=False)
     except (TypeError, ValueError) as exception:
       raise DisplayDataError(f'display value is not JSON-serializable: {value!r}') from exception
     return sanitize_text(rendered)
+
+  @staticmethod
+  def _chat_arguments(value: Any) -> str:
+    if not isinstance(value, dict):
+      raise DisplayDataError('chat tool arguments must be an object')
+    arguments = []
+    for name, argument in value.items():
+      if isinstance(argument, str):
+        compact = ' '.join(argument.split())
+      else:
+        try:
+          compact = json.dumps(argument, ensure_ascii=False, separators=(',', ':'))
+        except (TypeError, ValueError) as exception:
+          raise DisplayDataError(
+            f'display value is not JSON-serializable: {argument!r}'
+          ) from exception
+      rendered = compact if len(compact) <= 10 else '...'
+      arguments.append(f'{sanitize_text(str(name))}={sanitize_text(rendered)}')
+    return ', '.join(arguments)
+
+  def _ordinal_for(self, record: DisplayRecord) -> int | None:
+    if self.configuration.appearance is not Appearance.REWIND or not isinstance(
+      record,
+      (UserInput, Reasoning, InterimAssistantText, AssistantText, ToolCall, ToolResult, Error),
+    ):
+      return None
+    source = record.source
+    if not isinstance(source, RecordedSource):
+      return None
+    source_group = (source.trail_id, source.step_id)
+    ordinal = self._turn_numbers.get(source_group)
+    if ordinal is None:
+      ordinal = self._next_turn
+      self._next_turn += 1
+      self._turn_numbers[source_group] = ordinal
+    return ordinal
 
   def _label_for(self, record: DisplayRecord) -> str:
     label = self.configuration.labels.for_kind(record.kind)
@@ -473,6 +575,8 @@ class DisplaySession:
         markers.append('[meta]')
       if len(markers) > 0:
         label = f'{" ".join(markers)} {label}'
+    if isinstance(record, LaunchContextEntry):
+      return record.title
     if isinstance(record, TrailListRow):
       return record.trail_id
     if isinstance(record, LineageNode):
@@ -487,7 +591,12 @@ class DisplaySession:
     if self.configuration.timestamps is TimestampPolicy.HIDDEN:
       return None
     if record.timestamp is not None:
-      return sanitize_text(record.timestamp)
+      timestamp = sanitize_text(record.timestamp)
+      if self.configuration.appearance is Appearance.REWIND:
+        return timestamp.replace('T', ' ')[:19]
+      if 'T' in timestamp and len(timestamp) >= 19:
+        return timestamp[11:19]
+      return timestamp
     if self.configuration.timestamps is TimestampPolicy.PLACEHOLDER:
       return '-'
     return None
@@ -512,10 +621,14 @@ class DisplaySession:
       record, (SystemPrompt, UserInput, Reasoning, InterimAssistantText, AssistantText, Error)
     ):
       return BlockKind.MESSAGE
-    if isinstance(record, (LLMCall, HarnessEvent, SegmentBoundary)):
+    if isinstance(record, (LLMCall, HarnessEvent)):
       return BlockKind.EVENT
-    if isinstance(record, (TrailMetadata, LaunchContextEntry)):
+    if isinstance(record, TrailMetadata):
       return BlockKind.METADATA
+    if isinstance(record, LaunchContextEntry):
+      return BlockKind.CONTEXT
+    if isinstance(record, SegmentBoundary):
+      return BlockKind.SEGMENT
     if isinstance(record, NativeStep):
       return BlockKind.NATIVE_STEP
     if isinstance(record, TrailListRow):

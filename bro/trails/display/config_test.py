@@ -6,6 +6,7 @@ from bro.trails.display import (
   ALL_RECORD_KINDS,
   CONVERSATION_RECORD_KINDS,
   PRESETS,
+  Appearance,
   AssistantText,
   ColorMode,
   ContentLimits,
@@ -91,6 +92,12 @@ class TestConfiguration:
     with pytest.raises(ValueError, match='positive'):
       ContentLimits(normal=0)
 
+  def test_appearance_rejects_an_incompatible_layout(self):
+    with pytest.raises(ValueError, match='chat appearance'):
+      DisplayConfig(appearance=Appearance.CHAT, layout=Layout.EVENT_LOG)
+    with pytest.raises(ValueError, match='rewind appearance'):
+      DisplayConfig(appearance=Appearance.REWIND, layout=Layout.PANELS)
+
   def test_layout_rejects_a_filter_that_cannot_supply_its_records(self):
     with pytest.raises(ValueError, match='native step'):
       DisplayConfig(
@@ -132,7 +139,6 @@ class TestPresets:
         - {
           RecordKind.SYSTEM_PROMPT,
           RecordKind.LLM_CALL,
-          RecordKind.TOOL_RESULT,
           RecordKind.HARNESS_EVENT,
         },
       ),
@@ -144,7 +150,6 @@ class TestPresets:
         - {
           RecordKind.SYSTEM_PROMPT,
           RecordKind.LLM_CALL,
-          RecordKind.TOOL_RESULT,
           RecordKind.HARNESS_EVENT,
         },
       ),
@@ -152,7 +157,10 @@ class TestPresets:
         PresetName.REWIND_SHOW,
         Layout.CONVERSATION,
         Verbosity.FULL,
-        CONVERSATION_RECORD_KINDS
+        (
+          CONVERSATION_RECORD_KINDS
+          - {RecordKind.SYSTEM_PROMPT, RecordKind.LLM_CALL, RecordKind.HARNESS_EVENT}
+        )
         | {
           RecordKind.TRAIL_METADATA,
           RecordKind.LAUNCH_CONTEXT,
@@ -181,7 +189,10 @@ class TestPresets:
         PresetName.REWIND_GREP,
         Layout.CONVERSATION,
         Verbosity.FULL,
-        CONVERSATION_RECORD_KINDS
+        (
+          CONVERSATION_RECORD_KINDS
+          - {RecordKind.SYSTEM_PROMPT, RecordKind.LLM_CALL, RecordKind.HARNESS_EVENT}
+        )
         | {
           RecordKind.TRAIL_METADATA,
           RecordKind.LAUNCH_CONTEXT,
@@ -202,6 +213,22 @@ class TestPresets:
     assert configuration.verbosity is verbosity
     assert configuration.record_filter.included_kinds == frozenset(visible_kinds)
 
+  def test_presets_assign_each_terminal_appearance(self):
+    assert preset('observer').appearance is Appearance.PLAIN_LOG
+    assert preset('ask').appearance is Appearance.PLAIN_LOG
+    assert preset('call').appearance is Appearance.CHAT
+    assert preset('chat').appearance is Appearance.CHAT
+    assert all(
+      preset(name).appearance is Appearance.REWIND
+      for name in (
+        'rewind-show',
+        'rewind-steps',
+        'rewind-list',
+        'rewind-tree',
+        'rewind-grep',
+      )
+    )
+
   def test_ask_routes_exactly_the_terminal_reply_to_reply(self):
     ask = preset('ask')
     assert ask.routes.reply is OutputRoute.REPLY
@@ -216,8 +243,10 @@ class TestPresets:
       call_id='call',
       result='secret',
     )
-    assert not preset('call').record_filter.includes(result)
-    assert not preset('chat').record_filter.includes(result)
+    assert preset('call').record_filter.includes(result)
+    assert preset('chat').record_filter.includes(result)
+    assert RecordKind.TOOL_RESULT in preset('call').hidden_content_kinds
+    assert RecordKind.TOOL_RESULT in preset('chat').hidden_content_kinds
     assert PresetName.CALL is not PresetName.CHAT
 
   def test_rewind_grep_is_plain_unpaged_show(self):

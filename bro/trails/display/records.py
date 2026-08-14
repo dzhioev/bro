@@ -241,6 +241,7 @@ class LineageNode(Record):
   trail_id: str
   depth: int
   is_last: bool
+  ancestor_last: tuple[bool, ...] = ()
   highlighted: bool = False
   model: str | None = None
   owner: str | None = None
@@ -250,6 +251,8 @@ class LineageNode(Record):
     super().__post_init__()
     if self.depth < 0:
       raise ValueError('lineage depth must be non-negative')
+    if len(self.ancestor_last) not in {0, self.depth}:
+      raise ValueError('lineage ancestor state must be empty or match its depth')
 
 
 @dataclass(frozen=True, kw_only=True)
