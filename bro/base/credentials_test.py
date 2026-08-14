@@ -1407,26 +1407,98 @@ class TestBuildScopedStore:
     assert json.loads(store['brog.cred']) == {'backend': 'github', 'token': 'ghp_default'}
     assert set(store) == {'brog.cred', credentials.REGISTRY_FILE}
 
-  def test_shipped_reference_outside_scope_fails(
+  def test_shipped_reference_hydrates_the_referenced_kind(
     self, configs_dir: Path, bro_dir: Path, monkeypatch
   ):
-    # host-side the reference resolves (the host registry has the kind), but the
-    # session couldn't re-expand it — the referenced kind must be hydrated too
+    # the session re-expands the shipped reference against its own registry, so
+    # the referenced kind joins the scope even though nothing declared it — but
+    # only for the resolver: the kind's install hook is not wired in
     _write(bro_dir, 'ticket.json', {'prefix': 'ticket'})
     _write(configs_dir, 'brog.secret', {'backend': 'github', 'token': {'$cred': 'github'}})
     registry = {
-      'github': credentials.Secret('github', [_TicketSource('ticket.json')]),
+      'github': credentials.Secret(
+        'github', [_TicketSource('ticket.json')], install='hook for {{insert #name}}'
+      ),
       'brog': credentials.Secret('brog', [credentials.LocalSource('brog.secret')]),
     }
     monkeypatch.setattr(credentials, '_load_registry', lambda: registry)
-    with pytest.raises(ValueError, match="'github' is not in the scoped set"):
-      credentials.build_scoped_store(['brog'])
+    store = credentials.build_scoped_store(['brog'])
+    assert set(store) == {'brog.cred', 'github.cred', credentials.REGISTRY_FILE}
+    assert json.loads(store['github.cred']) == {'prefix': 'ticket'}
+    scoped = json.loads(store[credentials.REGISTRY_FILE])
+    assert scoped['github']['sources'] == [{'type': 'ticket', 'file': 'github.cred'}]
+    assert 'install' not in scoped['github']
 
-  def test_optional_shipped_reference_outside_scope_fails(
+  def test_declared_referenced_kind_keeps_its_install_hook(
     self, configs_dir: Path, bro_dir: Path, monkeypatch
   ):
-    # the optional tier forgives absence, not misconfiguration: a resolvable
-    # optional secret whose shipped references escape the scope fails the build
+    # the reference pulls in only what the scope lacks: a kind the scope declares
+    # itself is hydrated as declared, install hook included
+    _write(bro_dir, 'ticket.json', {'prefix': 'ticket'})
+    _write(configs_dir, 'brog.secret', {'backend': 'github', 'token': {'$cred': 'github'}})
+    registry = {
+      'github': credentials.Secret(
+        'github', [_TicketSource('ticket.json')], install='hook for {{insert #name}}'
+      ),
+      'brog': credentials.Secret('brog', [credentials.LocalSource('brog.secret')]),
+    }
+    monkeypatch.setattr(credentials, '_load_registry', lambda: registry)
+    store = credentials.build_scoped_store(['brog', 'github'])
+    scoped = json.loads(store[credentials.REGISTRY_FILE])
+    assert scoped['github']['install'] == 'hook for github'
+
+  def test_pulled_kind_follows_the_selected_instance(
+    self, configs_dir: Path, bro_dir: Path, monkeypatch
+  ):
+    # nothing declares the referenced kind, so it hydrates from the entry that
+    # kind resolves to for this launch — here the registry's selected instance
+    entry_point = _entry_point(
+      'ticket', 'bro.base.credentials_test:_TicketSource', credentials._CREDENTIAL_SOURCE_GROUP
+    )
+    monkeypatch.setattr(
+      credentials,
+      '_entry_points',
+      lambda group: (entry_point,) if group == credentials._CREDENTIAL_SOURCE_GROUP else (),
+    )
+    _write(
+      bro_dir,
+      credentials.HOST_REGISTRY_FILE,
+      {
+        'github+acme': {'sources': [{'type': 'ticket', 'file': 'ticket_acme.json'}]},
+        'github': {'instance': 'acme'},
+      },
+    )
+    _write(bro_dir, 'ticket_acme.json', {'prefix': 'acme'})
+    _write(bro_dir, 'brog.json', {'backend': 'github', 'token': {'$cred': 'github'}})
+    store = credentials.build_scoped_store(['brog'])
+    assert json.loads(store['github.cred']) == {'prefix': 'acme'}
+    registry = json.loads(store[credentials.REGISTRY_FILE])
+    assert registry['github']['sources'] == [{'type': 'ticket', 'file': 'github.cred'}]
+    assert 'install' not in registry['github']
+
+  def test_shipped_references_are_followed_transitively(
+    self, configs_dir: Path, bro_dir: Path, monkeypatch
+  ):
+    # a pulled kind ships references of its own: the closure runs to fixpoint, or
+    # the session's re-expansion would stop one link short
+    _write(bro_dir, 'ticket.json', {'prefix': 'ticket'})
+    _write(bro_dir, 'middle.secret', {'token': {'$cred': 'github'}})
+    _write(configs_dir, 'brog.secret', {'backend': 'github', 'auth': {'$cred': 'middle'}})
+    registry = {
+      'github': credentials.Secret('github', [_TicketSource('ticket.json')]),
+      'middle': credentials.Secret('middle', [credentials.LocalSource('middle.secret')]),
+      'brog': credentials.Secret('brog', [credentials.LocalSource('brog.secret')]),
+    }
+    monkeypatch.setattr(credentials, '_load_registry', lambda: registry)
+    store = credentials.build_scoped_store(['brog'])
+    assert set(store) == {'brog.cred', 'middle.cred', 'github.cred', credentials.REGISTRY_FILE}
+    assert json.loads(store['middle.cred']) == {'token': {'$cred': 'github'}}
+
+  def test_optional_shipped_reference_hydrates_the_referenced_kind(
+    self, configs_dir: Path, bro_dir: Path, monkeypatch
+  ):
+    # an optional secret that did resolve carries the same requirement as a
+    # required one: what it references must resolve in-session too
     _write(bro_dir, 'ticket.json', {'prefix': 'ticket'})
     _write(configs_dir, 'brog.secret', {'backend': 'github', 'token': {'$cred': 'github'}})
     registry = {
@@ -1434,8 +1506,8 @@ class TestBuildScopedStore:
       'brog': credentials.Secret('brog', [credentials.LocalSource('brog.secret')]),
     }
     monkeypatch.setattr(credentials, '_load_registry', lambda: registry)
-    with pytest.raises(ValueError, match="'github' is not in the scoped set"):
-      credentials.build_scoped_store([], optional=['brog'])
+    store = credentials.build_scoped_store([], optional=['brog'])
+    assert set(store) == {'brog.cred', 'github.cred', credentials.REGISTRY_FILE}
 
   def test_shipped_reference_must_be_kind_level(
     self, configs_dir: Path, bro_dir: Path, monkeypatch

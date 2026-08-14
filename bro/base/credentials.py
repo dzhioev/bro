@@ -64,8 +64,9 @@ declared secrets with no knowledge of the references. an expansion whose
 reference chain reaches a minting source is the exception: freezing it would
 strand the session on an expired value, so the scoped store ships the winning
 source's raw reference-preserving text instead and the session re-expands —
-and re-mints — per read; every referenced name must then be a kind hydrated
-into the scoped set (`build_scoped_store`). a reference that does not resolve,
+and re-mints — per read; the kinds such text names are hydrated into the scope
+alongside it, so the session's own registry resolves them
+(`build_scoped_store`). a reference that does not resolve,
 a malformed node, an absent field, or a reference cycle raises.
 """
 
@@ -915,8 +916,11 @@ def build_scoped_store(names: Iterable[str], *, optional: Iterable[str] = ()) ->
   short-lived value into the store, so the winning source materializes its raw
   text with references intact and the session re-expands (and re-mints) per read
   against the scoped registry. each such reference must be spelled at kind level
-  and land on a kind hydrated into the scoped set (the scoped namespace is
-  kinds-only) — one outside the scope fails the build.
+  (the scoped namespace is kinds-only), and the kinds it names join the scope —
+  transitively, hydrated from the entry the expansion above read, so the session
+  resolves the instance the host validated. a kind pulled in this way
+  carries no install hook, so a shipped reference never wires a session's tools
+  to a credential the scope did not ask for.
 
   a `kind+instance` name materializes under its kind name: the scoped registry
   entry and its `.cred` file are named by the kind, hydrated from the variant's
@@ -946,9 +950,9 @@ def build_scoped_store(names: Iterable[str], *, optional: Iterable[str] = ()) ->
   store = Store({**registry, **{parse_name(name)[0]: secret for name, secret, _ in selection}})
   files: dict[str, bytes] = {}
   scoped: dict[str, dict] = {}
-  shipped_references: dict[str, set[str]] = {}
+  pending_references: list[tuple[str, str]] = []
 
-  def materialize(name: str, value: str, cacheable: bool, secret: Secret) -> None:
+  def materialize(name: str, value: str, cacheable: bool, install: Optional[str]) -> None:
     # resolve generically on the host (doubling as launch-time validation), then
     # let the winning source pick its scoped representation under a uniform
     # `{kind}.cred` — Source.materialize_scoped owns the per-source semantics
@@ -958,16 +962,17 @@ def build_scoped_store(names: Iterable[str], *, optional: Iterable[str] = ()) ->
     if not cacheable:
       # an expansion that reached a minting source: materialize the winning
       # source's raw text, references intact, so the session re-expands — and
-      # re-mints — per read; _require_references_in_scope covers the references
+      # re-mints — per read; the targets are queued into the scope below
       raw = source.fetch()
       if raw is None:
         raise ValueError(f'secret {name!r} disappeared during hydration')
       value = raw.strip()
-      shipped_references[name] = _referenced_names(value)
+      for reference in sorted(_referenced_names(value)):
+        _require_kind_level(name, reference)
+        pending_references.append((name, reference))
     entry_source, content = source.materialize_scoped(file, value)
     files[file] = content
     entry: dict = {'sources': [entry_source]}
-    install = secret.install_for(kind)
     if install is not None:
       entry['install'] = install
     scoped[kind] = entry
@@ -980,8 +985,19 @@ def build_scoped_store(names: Iterable[str], *, optional: Iterable[str] = ()) ->
       log.debug('optional secret %r unresolvable; skipping', name)
       continue
     value, cacheable = resolved
-    materialize(name, value, cacheable, secret)
-  _require_references_in_scope(shipped_references, set(scoped))
+    materialize(name, value, cacheable, secret.install_for(parse_name(name)[0]))
+  # the whole selection is materialized before the first pull, so a referenced
+  # kind the scope declares itself keeps its declared hydration
+  while len(pending_references) > 0:
+    referrer, reference = pending_references.pop(0)
+    if reference in scoped:
+      continue
+    resolved = store.resolve(reference)
+    if resolved is None:  # the referrer's own resolve expanded it, so it has a value
+      raise SecretNotFound(reference)
+    log.info('hydrating %r into the scope: referenced by %r', reference, referrer)
+    value, cacheable = resolved
+    materialize(reference, value, cacheable, install=None)
   files[REGISTRY_FILE] = json.dumps(scoped).encode()
   return files
 
@@ -1026,23 +1042,16 @@ def scoped_view_store(names: Iterable[str], *, optional: Iterable[str] = ()) -> 
   return Store({parse_name(name)[0]: secret for name, secret, _ in selection})
 
 
-def _require_references_in_scope(shipped: dict[str, set[str]], scoped_kinds: set[str]) -> None:
+def _require_kind_level(name: str, reference: str) -> None:
   """reject a reference-preserving materialization whose in-session expansion
-  could not resolve: every `$cred` target of a raw-shipped secret must name a
-  kind hydrated into the scoped set (the scoped namespace is kinds-only)."""
-  for name in sorted(shipped):
-    for reference in sorted(shipped[name]):
-      kind, instance = parse_name(reference)
-      if instance is not None:
-        raise ValueError(
-          f'secret {name!r} ships reference-preserving text; reference {reference!r} '
-          f'must be spelled at kind level ({kind!r}) — the scoped namespace is kinds-only'
-        )
-      if kind not in scoped_kinds:
-        raise ValueError(
-          f'secret {name!r} ships reference-preserving text; referenced kind '
-          f'{reference!r} is not in the scoped set'
-        )
+  could not resolve: a raw-shipped secret's `$cred` targets are hydrated under
+  their kind names, so an instance-spelled one names nothing the session has."""
+  kind, instance = parse_name(reference)
+  if instance is not None:
+    raise ValueError(
+      f'secret {name!r} ships reference-preserving text; reference {reference!r} '
+      f'must be spelled at kind level ({kind!r}) — the scoped namespace is kinds-only'
+    )
 
 
 def apply_grant_revoke(
