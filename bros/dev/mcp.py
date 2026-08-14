@@ -14,6 +14,7 @@ learn the rules. Add new shared concepts there, not in each tool's description.
 
 import asyncio
 import subprocess
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -220,10 +221,13 @@ async def watch(
   # watches included — stay serviceable. an interrupted watch is woken so the
   # abandoned thread drops its claim on the job instead of holding it for the
   # rest of the window.
+  woken = threading.Event()
   try:
-    return await off_loop(target.watch, wait_seconds=wait_seconds, limit=limit, tail=tail)
+    return await off_loop(
+      target.watch, wait_seconds=wait_seconds, limit=limit, tail=tail, woken=woken
+    )
   except asyncio.CancelledError:
-    target.wake()
+    target.wake(woken)
     raise
 
 
