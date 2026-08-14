@@ -218,7 +218,7 @@ async def watch(
   target = context.state.get(job_id)
   # the wait blocks; run it off-loop so concurrent tool calls — other jobs'
   # watches included — stay serviceable. an interrupted watch is woken so the
-  # abandoned thread drops the job's watch lock instead of holding it for the
+  # abandoned thread drops its claim on the job instead of holding it for the
   # rest of the window.
   try:
     return await off_loop(target.watch, wait_seconds=wait_seconds, limit=limit, tail=tail)

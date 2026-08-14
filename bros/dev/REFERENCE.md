@@ -69,6 +69,6 @@ For long processes that outlive a `bash` call's timeout — test suites, PR watc
 
 `wait_seconds` defaults to 10; `0` is a non-blocking poll. There is no upper bound — an iterative watcher (e.g. a PR watch loop) passes a large window explicitly and handles each return as one iteration.
 
-`watch` is exclusive per job: the call holds the job's watch lock for its whole wait, and a second concurrent `watch` on the same job fails immediately with the reason. Watches on different jobs run concurrently.
+`watch` is exclusive per job: the call holds the job for its whole wait, and a second concurrent `watch` on the same job fails immediately with the reason. Watches on different jobs run concurrently.
 
-`kill(job_id)` terminates the job's whole process group — SIGTERM, escalating to SIGKILL after a 5s grace. It takes no lock: the exit it forces wakes a blocked `watch`. The record and spool stay readable afterwards for a final collect. Any jobs still running when the server process exits are group-killed.
+`kill(job_id)` terminates the job's whole process group — SIGTERM, escalating to SIGKILL after a 5s grace. It claims nothing: the exit it forces wakes a blocked `watch`. The record and spool stay readable afterwards for a final collect. Any jobs still running when the server process exits are group-killed.
