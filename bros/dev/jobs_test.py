@@ -18,6 +18,16 @@ def _wait_finished(job: Job, timeout: float = 10.0) -> None:
       job._condition.wait(remaining)
 
 
+def _await_watching(job: Job, timeout: float = 10.0) -> None:
+  """block until a watch has claimed the job."""
+  deadline = time.monotonic() + timeout
+  with job._condition:
+    while not job._watching:
+      remaining = deadline - time.monotonic()
+      assert remaining > 0, 'no watch claimed the job in time'
+      job._condition.wait(remaining)
+
+
 def _await_spool(job: Job, expected: str, timeout: float = 10.0) -> None:
   deadline = time.monotonic() + timeout
   with job._condition:
@@ -150,16 +160,31 @@ def test_concurrent_watch_fails_immediately_and_kill_wakes_the_blocked_watch():
 
   watcher = threading.Thread(target=blocked_watch)
   watcher.start()
-  deadline = time.monotonic() + 5
-  while not job._watch_lock.locked():
-    assert time.monotonic() < deadline
-    time.sleep(0.01)
+  _await_watching(job)
   with pytest.raises(ValueError, match='job-1 is already being watched'):
     job.watch(wait_seconds=0, limit=100, tail=False)
   assert job.kill(grace_seconds=5) == 'job-1 exited (code -15)'
   watcher.join(timeout=10)
   assert not watcher.is_alive()
   assert blocked_result == ['exited (code -15)']
+
+
+def test_wake_frees_the_job_for_the_next_watch():
+  job = Job('job-1', 'sleep 30')
+  woken_result: list[str] = []
+
+  def blocked_watch():
+    woken_result.append(job.watch(wait_seconds=600, limit=100, tail=False))
+
+  watcher = threading.Thread(target=blocked_watch)
+  watcher.start()
+  _await_watching(job)
+  job.wake()
+  watcher.join(timeout=10)
+  assert not watcher.is_alive()
+  assert woken_result == ['running']
+  assert job.watch(wait_seconds=0, limit=100, tail=False) == 'running'
+  assert job.kill(grace_seconds=5) == 'job-1 exited (code -15)'
 
 
 def test_kill_terminates_and_record_stays_readable():
