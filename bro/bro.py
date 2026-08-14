@@ -584,27 +584,22 @@ _COMPONENT_DECLARATION_ATTRIBUTES = frozenset({'data_sources', 'tools'})
 _RETIRED_COMPONENT_DECLARATION_ATTRIBUTES = {'mcp_servers': 'tools'}
 
 
-def _component_declaration_attributes(value: object, seen: set[int]) -> set[str]:
-  if isinstance(value, llm_mcp.ToolLayer):
-    return {'tools'}
-  if isinstance(value, DataSource):
-    return {'data_sources'}
-  if not isinstance(value, (When, Iff, list, tuple, set, frozenset)):
-    return set()
-  if id(value) in seen:
-    return set()
-  seen.add(id(value))
-  if isinstance(value, When):
-    values = (value.item,)
-  elif isinstance(value, Iff):
-    values = tuple(item for _, item in value.branches)
-    if value.otherwise is not None:
-      values += value.otherwise
-  else:
-    values = value
-  return {
-    attribute for item in values for attribute in _component_declaration_attributes(item, seen)
-  }
+def _component_destinations(value: object) -> set[str]:
+  destinations: set[str] = set()
+  entries = value if isinstance(value, list) else (value,)
+  for entry in entries:
+    if isinstance(entry, When):
+      components = (entry.item,)
+    elif isinstance(entry, Iff):
+      components = tuple(item for _, item in entry.branches) + (entry.otherwise or ())
+    else:
+      components = (entry,)
+    for component in components:
+      if isinstance(component, llm_mcp.ToolLayer):
+        destinations.add('tools')
+      elif isinstance(component, DataSource):
+        destinations.add('data_sources')
+  return destinations
 
 
 class BaseBro(ABC):
@@ -668,16 +663,16 @@ class BaseBro(ABC):
     for attribute_name, value in vars(cls).items():
       if attribute_name in _COMPONENT_DECLARATION_ATTRIBUTES:
         continue
-      declaration_attributes = _component_declaration_attributes(value, set())
-      if len(declaration_attributes) == 0:
+      component_destinations = _component_destinations(value)
+      if len(component_destinations) == 0:
         continue
-      destinations = ' or '.join(repr(name) for name in sorted(declaration_attributes))
+      destination_text = ' or '.join(repr(name) for name in sorted(component_destinations))
       message = (
         f'{cls.__name__}.{attribute_name} contains component declarations under an attribute '
-        f'BaseBro does not read; move them to {destinations}'
+        f'BaseBro does not read; move them to {destination_text}'
       )
       retired_destination = _RETIRED_COMPONENT_DECLARATION_ATTRIBUTES.get(attribute_name)
-      if retired_destination in declaration_attributes:
+      if retired_destination in component_destinations:
         message += f'; {attribute_name!r} was renamed to {retired_destination!r}'
       raise TypeError(message)
 
