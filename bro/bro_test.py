@@ -18,7 +18,15 @@ from bro.bro import BaseBro, BroRaised, feature, set_default_tracker_factory
 from bro.datasources.searchable import Hit, SearchableDataSource
 from bro.llm.llm import LLM
 from bro.llm.mcp import FunctionTool, InProcessMCPServer, MCPServer, MCPServerSpec, describe
-from bro.llm.observer import NullObserver, Observer
+from bro.llm.observer import (
+  NullObserver,
+  ObservedEvent,
+  Observer,
+  TurnCompletedEvent,
+  TurnFailedEvent,
+  TurnRefusedEvent,
+  TurnStartedEvent,
+)
 from bro.llm.tracker import NullTracker, Tracker
 
 
@@ -31,6 +39,14 @@ class MockLLM(LLM):
   async def send(self, messages: list[dict], *, request_timeout: Optional[float] = None) -> str:
     self.send_calls.append(messages)
     return self.response
+
+
+class CapturingObserver(Observer):
+  def __init__(self):
+    self.events: list[ObservedEvent] = []
+
+  def on_event(self, event: ObservedEvent) -> None:
+    self.events.append(event)
 
 
 class EchoBro(BaseBro):
@@ -54,6 +70,50 @@ class TestBroRun:
     bro = EchoBro(response='hello back')
     result = await bro.run('hello', surface='test')
     assert result == 'hello back'
+
+  @pytest.mark.asyncio
+  async def test_run_emits_turn_boundaries_with_the_exact_return_value(self):
+    observer = CapturingObserver()
+
+    result = await EchoBro(response='exact reply').run('hello', observer=observer, surface='test')
+
+    assert result == 'exact reply'
+    assert observer.events == [TurnStartedEvent('hello'), TurnCompletedEvent('exact reply')]
+
+  @pytest.mark.asyncio
+  async def test_run_owns_a_context_managed_observer(self):
+    class ContextObserver(CapturingObserver):
+      def __init__(self):
+        super().__init__()
+        self.entered = False
+        self.exited = False
+
+      def __enter__(self):
+        self.entered = True
+        return self
+
+      def __exit__(self, exception_type, exception, traceback):
+        self.exited = True
+
+    observer = ContextObserver()
+    await EchoBro().run('hello', observer=observer, surface='test')
+    assert observer.entered is True
+    assert observer.exited is True
+
+  @pytest.mark.asyncio
+  async def test_run_emits_failure_before_propagating_it(self):
+    class FailingLLM(MockLLM):
+      async def send(self, messages, *, request_timeout=None):
+        raise RuntimeError('provider failed')
+
+    class FailingBro(EchoBro):
+      def _create_llm(self, *, hold: str) -> LLM:
+        return FailingLLM()
+
+    observer = CapturingObserver()
+    with pytest.raises(RuntimeError, match='provider failed'):
+      await FailingBro().run('hello', observer=observer, surface='test')
+    assert observer.events == [TurnStartedEvent('hello'), TurnFailedEvent('provider failed')]
 
   @pytest.mark.asyncio
   async def test_run_wires_observer_through_to_llm(self):
@@ -735,8 +795,13 @@ class TestCredentialGate:
   async def test_run_refuses_listing_every_missing_name(self, monkeypatch):
     monkeypatch.setattr(credentials, 'available', lambda name: False)
     gated = GatedBro()
+    observer = CapturingObserver()
     with pytest.raises(BroRaised, match='missing credentials: alpha, beta, openai'):
-      await gated.run('hi', surface='test')
+      await gated.run('hi', observer=observer, surface='test')
+    assert observer.events == [
+      TurnStartedEvent('hi'),
+      TurnFailedEvent('gated cannot start: missing credentials: alpha, beta, openai'),
+    ]
     assert len(gated.mock_llm.send_calls) == 0
 
   @pytest.mark.asyncio
@@ -750,8 +815,13 @@ class TestCredentialGate:
     available = {'beta', 'openai'}
     monkeypatch.setattr(credentials, 'available', lambda name: name in available)
     gated = GatedBro()
-    reply = await gated.send('hi', surface='test')
+    observer = CapturingObserver()
+    reply = await gated.send('hi', observer=observer, surface='test')
     assert reply == 'gated cannot start: missing credentials: alpha'
+    assert observer.events == [
+      TurnStartedEvent('hi'),
+      TurnRefusedEvent('gated cannot start: missing credentials: alpha'),
+    ]
     assert len(gated.mock_llm.send_calls) == 0
     # the LLM stays unbuilt, so a later send re-checks the store
     available.add('alpha')

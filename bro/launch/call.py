@@ -6,7 +6,7 @@ import signal
 import sys
 from collections.abc import Callable, Iterator
 from datetime import date, datetime
-from typing import Any, Optional, TextIO
+from typing import Optional, TextIO, assert_never
 
 import bro.base.args as base_args
 from bro.base import log
@@ -28,7 +28,18 @@ from bro.launch._trace_format import format_tool_call, oneline, truncate
 from bro.launch.resume import RESUME_LATEST, HistoryMessage
 from bro.llm.llm import EFFORT_LEVELS
 from bro.llm.mcp import HOLDS, canonical_name
-from bro.llm.observer import Observer
+from bro.llm.observer import (
+  InterimAssistantTextEvent,
+  ObservedEvent,
+  Observer,
+  ReasoningEvent,
+  ToolCallEvent,
+  ToolResultEvent,
+  TurnCompletedEvent,
+  TurnFailedEvent,
+  TurnRefusedEvent,
+  TurnStartedEvent,
+)
 from bros.bro import Bro
 
 __cli_name__ = 'call'
@@ -78,22 +89,22 @@ class TextRenderer(Observer):
     print(f'[{self._now()}] {self._prefix} {body}', file=self._file)
     self._file.flush()
 
-  def on_reasoning(self, text: str) -> None:
-    self._emit(f'· thinking: {truncate(oneline(text), _REASONING_LIMIT)}')
-
-  def on_assistant_message(self, text: str, terminal: bool) -> None:
-    # skip terminal — call_text prints the reply itself as `[timestamp] bro: <reply>`,
-    # so emitting here would double-render.
-    if terminal:
+  def on_event(self, event: ObservedEvent) -> None:
+    if isinstance(event, ReasoningEvent):
+      self._emit(f'· thinking: {truncate(oneline(event.content), _REASONING_LIMIT)}')
+    elif isinstance(event, InterimAssistantTextEvent):
+      print(_message_line(self._now(), self._prefix, event.content), file=self._file)
+      self._file.flush()
+    elif isinstance(event, ToolCallEvent):
+      self._emit(f'→ {format_tool_call(event.tool_name, event.arguments)}')
+    elif isinstance(event, ToolResultEvent):
+      self._emit(f'← {canonical_name(event.tool_name)}')
+    elif isinstance(
+      event, (TurnStartedEvent, TurnCompletedEvent, TurnRefusedEvent, TurnFailedEvent)
+    ):
       return
-    print(_message_line(self._now(), self._prefix, text), file=self._file)
-    self._file.flush()
-
-  def on_tool_call(self, name: str, arguments: dict[str, Any]) -> None:
-    self._emit(f'→ {format_tool_call(name, arguments)}')
-
-  def on_tool_result(self, name: str, result: dict[str, Any] | str) -> None:
-    self._emit(f'← {canonical_name(name)}')
+    else:
+      assert_never(event)
 
 
 @contextlib.contextmanager
