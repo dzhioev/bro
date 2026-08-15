@@ -26,4 +26,4 @@ if ! manifests_match; then
 fi
 
 source "$DIR/.venv/bin/activate"
-bro-dev.install
+bro.dev.install

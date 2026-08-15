@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-from bro_dev.git_golc import (
+from bro.dev.git_golc import (
   _SENTINEL_RE,
   _format_credits,
   _model_initial,

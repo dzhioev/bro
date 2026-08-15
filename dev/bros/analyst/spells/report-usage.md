@@ -13,7 +13,7 @@ A standing report on what the recorded runs actually cost. It is committed into 
 
 The generator is `bros/analyst/scripts/trails_usage.py`, and it ships with the analyst — it is there in any install, not just this checkout.
 
-Where its reports go is the operated repository's decision, declared as `[tool.bro] reports` in that repo's pyproject. The generator resolves it and stops when the repo declares none, because a framework installed into site-packages has no directory of its own to commit into. On that failure: ask the user where this repo should keep its analyses and offer to add the setting, when the session can ask; raise with what is missing, when it cannot. Reports are one `<YYYY-MM-DD>–<slug>.md` per report there — the date it was generated, then what it is about.
+Where its reports go is the operated repository's decision, declared as `[tool.bro.analyst] reports` in that repo's pyproject. The generator resolves it and stops when the repo declares none, because a framework installed into site-packages has no directory of its own to commit into. On that failure: ask the user where this repo should keep its analyses and offer to add the setting, when the session can ask; raise with what is missing, when it cannot. Reports are one `<YYYY-MM-DD>–<slug>.md` per report there — the date it was generated, then what it is about.
 
 Name it so a reader scanning the directory knows which report answers their question without opening any of them: `--slug` takes the window and the angle, as in `--slug "june-2026 cache balance"` → `2026-08-15–june-2026-cache-balance.md`. The date is when the figures were pulled, not the window they cover, so a backfill says so in its slug and a regenerated report sorts after the one it supersedes.
 

@@ -58,8 +58,8 @@ github = [
 [dependency-groups]
 dev = [
   "bro-dev",
-  # dev/'s member; must stay a group entry — a [project] dependency would ship it
-  "bro-repo",
+  # local/'s member; must stay a group entry — a [project] dependency would ship it
+  "bro-local",
   "deptry==0.25.1",
   # starlette.testclient's preferred HTTP client (using httpx 0.x there is deprecated)
   "httpx2==2.10.0",
@@ -72,7 +72,7 @@ dev = [
 ]
 
 [tool.uv.workspace]
-members = ["bro-dev", "dev"]
+members = ["dev", "local"]
 
 [tool.uv]
 # each member's source directory reaches sys.path as a plain path entry; the
@@ -82,7 +82,7 @@ config-settings = { editable_mode = "compat" }
 
 [tool.uv.sources]
 bro-dev = { workspace = true }
-bro-repo = { workspace = true }
+bro-local = { workspace = true }
 
 [project.scripts]
 # bro
@@ -125,8 +125,11 @@ bro-repo = { workspace = true }
 "summon" = "bro._entrypoints:bro_summon"
 "trails-server" = "bro._entrypoints:bro_trails_server_server"
 "usage" = "bro._entrypoints:bro_llm_usage"
-# bros
-"bros.analyst.scripts.trails-usage" = "bro._entrypoints:bros_analyst_scripts_trails_usage"
+
+[project.entry-points.bro]
+bro = "bros.bro:Bro"
+dev = "bros.dev:Dev"
+lead = "bros.lead:Lead"
 
 [project.entry-points."bro.credential_sources"]
 github_app = "bro.extra.github.app:Source"
@@ -136,7 +139,9 @@ brog = "bro.brog.mcp:toolset"
 
 [tool.bro]
 default = "bro-dev"
-reports = "bros/analyst/reports"
+
+[tool.bro.analyst]
+reports = "dev/bros/analyst/reports"
 
 [tool.deptry.package_module_name_map]
 python_ulid = ["ulid"]
@@ -146,13 +151,23 @@ include-package-data = false
 
 [tool.setuptools.packages.find]
 where = ["."]
-namespaces = false
+# `bros` is a namespace package: a distribution outside this one contributes a
+# persona into it, and an editable checkout only merges the two portions when no
+# portion carries an __init__.py. The excludes keep that from promoting the
+# data-only directories to packages of their own, which would strip their files
+# from the package-data globs that ship them under the owning package.
+namespaces = true
 include = ["bro", "bro.*", "bros", "bros.*"]
-exclude = ["*.egg-info"]
+exclude = [
+  "*.egg-info",
+  "*.spells",
+  "bro.base.hooks",
+  "bro.prompts.*",
+  "bro.setup.*",
+]
 
 [tool.setuptools.package-data]
 "bro.base" = ["registry.json", "hooks/*.sh"]
-"bros.analyst" = ["spells/*.md"]
 "bros.bro" = ["spells/*.md"]
 "bros.dev" = ["REFERENCE.md", "spells/*.md"]
 "bros.lead" = ["spells/*.md"]
@@ -182,18 +197,22 @@ exclude = ["*.egg-info"]
 "bro.workflow" = ["hooks/commit-msg", "hooks/post-commit"]
 
 [tool.pytest.ini_options]
+# `bros` is a namespace package spanning two distributions; without this pytest
+# names a test module from the first ancestor lacking an __init__.py and lands on
+# the wrong dotted path
+consider_namespace_packages = true
 asyncio_mode = "strict"
 asyncio_default_fixture_loop_scope = "function"
-pythonpath = [".", "bro-dev"]
+pythonpath = [".", "dev", "local"]
 max_warnings = "0"
 markers = [
   "credential_gate: run with the real run-start credential gate (opts out of the conftest autouse fixture that pins it open)",
 ]
 
 [tool.pyright]
-include = ["bro", "bros", "bro-dev/bro_dev", "conftest.py", "dev", "shell_policy_test.py"]
+include = ["bro", "bros", "dev", "local", "conftest.py", "shell_policy_test.py"]
 exclude = ["bro/setup/", ".venv/", ".claude/", "*.egg-info/", "build/"]
-extraPaths = [".", "bro-dev"]
+extraPaths = [".", "dev", "local"]
 venvPath = "."
 venv = ".venv"
 
@@ -201,7 +220,7 @@ venv = ".venv"
 line-length = 100
 indent-width = 2
 target-version = "py312"
-src = [".", "bro-dev"]
+src = [".", "dev", "local"]
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "I", "B", "C4", "UP", "PIE", "RUF012"]
@@ -212,8 +231,9 @@ combine-as-imports = true
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
-"bros/*/__init__.py" = ["RUF012"]
-"bro-dev/bro_dev/bro.py" = ["RUF012"]
+# a persona declares its components as plain class-level lists and maps,
+# wherever the distribution that ships it keeps them
+"**/bros/*/__init__.py" = ["RUF012"]
 
 [tool.ruff.format]
 quote-style = "single"

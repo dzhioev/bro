@@ -3,24 +3,45 @@ requires = ["setuptools>=61", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "bro-repo"
+name = "bro-dev"
 version = "0.1.0"
-description = "scripts local to the bro framework checkout"
+description = "development tooling for repositories built on the bro framework"
+readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
   "bro",
 ]
 
+[project.scripts]
+# bro
+"bro.dev.git-golc" = "bro.dev._entrypoints:bro_dev_git_golc"
+"bro.dev.install" = "bro.dev._entrypoints:bro_dev_install"
+"bro.dev.sync-scripts" = "bro.dev._entrypoints:bro_dev_sync_scripts"
+"bro.dev.usage-report" = "bro.dev._entrypoints:bro_dev_usage_report"
+"sync-scripts" = "bro.dev._entrypoints:bro_dev_sync_scripts"
+"usage-report" = "bro.dev._entrypoints:bro_dev_usage_report"
+# bros
+"bros.analyst.scripts.trails-usage" = "bro.dev._entrypoints:bros_analyst_scripts_trails_usage"
+
+[project.entry-points.bro]
+analyst = "bros.analyst:Analyst"
+
 [tool.uv.sources]
 bro = { workspace = true }
 
-[project.scripts]
-# top-level
-"run-tests" = "_entrypoints:run_tests"
+[tool.deptry.package_module_name_map]
+bro = ["bro", "bros"]
 
 [tool.setuptools]
 include-package-data = false
-py-modules = [
-  "_entrypoints",
-  "run_tests",
-]
+
+[tool.setuptools.package-data]
+"bros.analyst" = ["spells/*.md"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+# `bro` is the framework's namespace package; this portion carries no
+# __init__.py of its own so the two merge.
+namespaces = true
+include = ["bro.dev", "bros.analyst", "bros.analyst.scripts"]
+exclude = ["*.egg-info"]

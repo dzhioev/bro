@@ -287,6 +287,9 @@ def report_name(slug: str, generated: datetime) -> str:
   return f'{generated.date()}–{cleaned}.md'
 
 
+SECTION = 'analyst'
+
+
 def reports_directory() -> Path:
   """the operated repo's declared reports directory.
 
@@ -294,10 +297,10 @@ def reports_directory() -> Path:
   is site-packages and no place to commit anything. Absent, the run stops here
   rather than guessing at a location the repo would have to live with.
   """
-  configured = project_config().reports
-  if configured is None:
+  configured = project_config().sections.get(SECTION, {}).get('reports')
+  if not isinstance(configured, str) or configured == '':
     raise ValueError(
-      f'{project_root() / "pyproject.toml"} declares no [tool.bro] reports directory; '
+      f'{project_root() / "pyproject.toml"} declares no [tool.bro.{SECTION}] reports directory; '
       'add one naming where this repo keeps its analyses'
     )
   return project_root() / configured

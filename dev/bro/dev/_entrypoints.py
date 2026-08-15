@@ -10,16 +10,20 @@ def _run(module):
 
 
 def bro_dev_git_golc():
-  return _run('bro_dev.git_golc')
+  return _run('bro.dev.git_golc')
 
 
 def bro_dev_install():
-  return _run('bro_dev.install')
+  return _run('bro.dev.install')
 
 
 def bro_dev_sync_scripts():
-  return _run('bro_dev.sync_scripts')
+  return _run('bro.dev.sync_scripts')
 
 
 def bro_dev_usage_report():
-  return _run('bro_dev.usage_report')
+  return _run('bro.dev.usage_report')
+
+
+def bros_analyst_scripts_trails_usage():
+  return _run('bros.analyst.scripts.trails_usage')

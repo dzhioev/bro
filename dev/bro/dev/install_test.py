@@ -1,7 +1,7 @@
 import os
 import subprocess
 
-from bro_dev.install import install_repository
+from bro.dev.install import install_repository
 
 
 def test_installs_hooks_and_git_alias(tmp_path):
@@ -19,4 +19,4 @@ def test_installs_hooks_and_git_alias(tmp_path):
     text=True,
     check=True,
   ).stdout.strip()
-  assert alias == '!bro-dev.git-golc'
+  assert alias == '!bro.dev.git-golc'

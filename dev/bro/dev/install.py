@@ -11,7 +11,7 @@ def install_repository(repository: Path) -> None:
   root = Path(git_out('rev-parse', '--show-toplevel', cwd=str(repository)))
   install_hooks(root)
   subprocess.run(
-    ['git', 'config', '--local', 'alias.golc', '!bro-dev.git-golc'],
+    ['git', 'config', '--local', 'alias.golc', '!bro.dev.git-golc'],
     cwd=root,
     check=True,
   )
