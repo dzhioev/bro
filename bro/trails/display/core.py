@@ -4,6 +4,7 @@ import json
 import threading
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
+from datetime import datetime
 from typing import Any
 
 from bro.llm.mcp import canonical_name
@@ -316,6 +317,7 @@ class DisplaySession:
       style=style,
       label=sanitize_text(canonical_name(call.tool_name)),
       timestamp=self._timestamp(call),
+      calendar_date=self._calendar_date(call),
       items=tuple(items),
       ordinal=self._ordinal_for(call),
       pending=pending,
@@ -333,6 +335,7 @@ class DisplaySession:
       style=style,
       label=f'{self.configuration.labels.for_kind(record.kind)} · {name}',
       timestamp=self._timestamp(record),
+      calendar_date=self._calendar_date(record),
       items=(
         self._item(
           record.result,
@@ -356,6 +359,7 @@ class DisplaySession:
       style=style,
       label=sanitize_text(self._label_for(record)),
       timestamp=self._timestamp(record),
+      calendar_date=self._calendar_date(record),
       items=items,
       ordinal=self._ordinal_for(record),
       depth=record.depth if isinstance(record, LineageNode) else 0,
@@ -465,7 +469,14 @@ class DisplaySession:
         lineage_items.append(BlockItem('here', style=StyleRole.HEADING))
       return tuple(lineage_items)
     if isinstance(record, Notice):
-      return (self._item(record.content, record.kind, style=style),)
+      return (
+        self._item(
+          record.content,
+          record.kind,
+          style=style,
+          trusted_visual=record.trusted_visual,
+        ),
+      )
     if isinstance(record, TransientActivity):
       return (self._item(record.content, record.kind, style=style),)
     if isinstance(record, (ToolCall, ToolResult)):
@@ -480,16 +491,22 @@ class DisplaySession:
     label: str | None = None,
     style: StyleRole = StyleRole.NORMAL,
     markdown: bool = False,
+    trusted_visual: bool = False,
     timestamp: str | None = None,
     limit: int | None = None,
   ) -> BlockItem:
     hidden = kind in self.configuration.hidden_content_kinds
-    text = '' if hidden else self._render_value(value, kind)
-    content_limit = (
-      limit
-      if limit is not None
-      else self.configuration.content_limits.for_record(kind, self.configuration.detail_for(kind))
-    )
+    if trusted_visual and not isinstance(value, str):
+      raise DisplayDataError('trusted visual display content must be a string')
+    text = '' if hidden else value if trusted_visual else self._render_value(value, kind)
+    if trusted_visual:
+      content_limit = None
+    elif limit is not None:
+      content_limit = limit
+    else:
+      content_limit = self.configuration.content_limits.for_record(
+        kind, self.configuration.detail_for(kind)
+      )
     omitted = 0
     if not hidden and content_limit is not None and len(text) > content_limit:
       omitted = len(text) - content_limit
@@ -500,6 +517,7 @@ class DisplaySession:
       label=sanitize_text(label) if label is not None else None,
       omitted_characters=omitted,
       markdown=markdown,
+      trusted_visual=trusted_visual,
       timestamp=timestamp,
     )
 
@@ -509,8 +527,6 @@ class DisplaySession:
     if self.configuration.appearance is Appearance.CHAT:
       if kind is RecordKind.TOOL_CALL:
         return self._chat_arguments(value)
-      if kind is RecordKind.REASONING and isinstance(value, str):
-        return sanitize_text(' '.join(value.split()))
     if isinstance(value, str):
       if self.configuration.appearance is Appearance.PLAIN_LOG and kind in {
         RecordKind.TOOL_CALL,
@@ -592,18 +608,31 @@ class DisplaySession:
     return label
 
   def _timestamp(self, record: DisplayRecord) -> str | None:
+    timestamp, _calendar_date = self._time_parts(record)
+    return timestamp
+
+  def _calendar_date(self, record: DisplayRecord) -> str | None:
+    _timestamp, calendar_date = self._time_parts(record)
+    return calendar_date
+
+  def _time_parts(self, record: DisplayRecord) -> tuple[str | None, str | None]:
     if self.configuration.timestamps is TimestampPolicy.HIDDEN:
-      return None
+      return None, None
     if record.timestamp is not None:
       timestamp = sanitize_text(record.timestamp)
       if self.configuration.appearance is Appearance.REWIND:
-        return timestamp.replace('T', ' ')[:19]
-      if 'T' in timestamp and len(timestamp) >= 19:
-        return timestamp[11:19]
-      return timestamp
+        return timestamp.replace('T', ' ')[:19], None
+      if 'T' in timestamp:
+        try:
+          moment = datetime.fromisoformat(timestamp.replace('Z', '+00:00')).astimezone()
+        except ValueError:
+          pass
+        else:
+          return moment.strftime('%H:%M:%S'), moment.date().isoformat()
+      return timestamp, None
     if self.configuration.timestamps is TimestampPolicy.PLACEHOLDER:
-      return '-'
-    return None
+      return '-', None
+    return None, None
 
   def _route_for(self, record: DisplayRecord) -> OutputRoute:
     routes = self.configuration.routes

@@ -2,7 +2,7 @@
 
 from typing import Optional
 
-from bro.launch._reflow import LineSpan, Reflow
+from bro.trails.display._reflow import LineSpan, Reflow
 
 
 def select_all(y: int) -> Optional[tuple[int, int]]:

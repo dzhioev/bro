@@ -14,6 +14,7 @@ from bro.trails.display import (
   DisplaySession,
   Layout,
   LiveSource,
+  Notice,
   Origin,
   OutputRoute,
   PresentationBlock,
@@ -178,11 +179,36 @@ def test_chat_preset_uses_timestamped_conversation_lines():
       ]
     )
   assert stream.getvalue() == (
+    '--- Thu, Jan 1, 2026 ---\n'
     '[12:34:56] dev · thinking: one two\n'
     '[12:34:57] dev → repo::search(query=x, sentence=...)\n'
     '[12:34:58] dev ← repo::search\n'
     '[12:34:59] dev: done\n'
   )
+
+
+def test_chat_preserves_only_explicitly_trusted_visual_ansi():
+  stream = io.StringIO()
+  renderer = StreamRenderer(stream)
+  with DisplaySession(preset('call', context_label='dev'), renderer) as session:
+    session.consume(
+      [
+        Notice(
+          key='trusted',
+          origin=Origin.SURFACE,
+          content=f'\x1b[32m{"x" * 300}\x1b[0m',
+          trusted_visual=True,
+        ),
+        Notice(
+          key='plain',
+          origin=Origin.SURFACE,
+          content='\x1b[31mplain\x1b[0m',
+        ),
+      ]
+    )
+  assert f'\x1b[32m{"x" * 300}\x1b[0m' in stream.getvalue()
+  assert '\x1b[31mplain\x1b[0m' not in stream.getvalue()
+  assert '�[31mplain�[0m' in stream.getvalue()
 
 
 def test_rewind_preset_uses_numbered_conversation_turns():

@@ -22,6 +22,7 @@ from bro.trails.display.records import (
   Reasoning,
   ToolCall,
   ToolResult,
+  TransientActivity,
   UserInput,
 )
 
@@ -84,6 +85,34 @@ def test_live_adapter_maps_all_events_with_arrival_provenance():
   assert result.call_id == 'call-1'
   assert result.tool_name == 'service__tool'
   assert result.is_error is True
+
+
+def test_live_adapter_emits_keyed_conversation_activity():
+  session = _CapturingSession()
+  observer = LiveDisplayObserver(
+    cast(DisplaySession, session),
+    run_id='run-1',
+    activity_id='turn',
+  )
+
+  observer.on_event(TurnStartedEvent('input'))
+  observer.on_event(ToolCallEvent('call-1', 'service__first', {}))
+  observer.on_event(ToolCallEvent('call-2', 'service__second', {}))
+  observer.on_event(ToolResultEvent('call-1', 'service__first', 'one'))
+  observer.on_event(ToolResultEvent('call-2', 'service__second', 'two'))
+  observer.on_event(TurnCompletedEvent('done'))
+
+  activities = [record for record in session.records if isinstance(record, TransientActivity)]
+  assert [(record.content, record.active) for record in activities] == [
+    ('thinking', True),
+    ('calling service::first', True),
+    ('calling 2 tools', True),
+    ('calling service::second', True),
+    ('thinking', True),
+    ('', False),
+  ]
+  assert {record.activity_id for record in activities} == {'turn'}
+  assert observer.turn_finished
 
 
 def test_live_adapter_owns_the_display_session_context():

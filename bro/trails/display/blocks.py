@@ -43,6 +43,7 @@ class BlockItem:
   label: str | None = None
   omitted_characters: int = 0
   markdown: bool = False
+  trusted_visual: bool = False
   timestamp: str | None = None
 
   def __post_init__(self) -> None:
@@ -62,6 +63,7 @@ class PresentationBlock:
   label: str
   timestamp: str | None
   items: tuple[BlockItem, ...]
+  calendar_date: str | None = None
   ordinal: int | None = None
   depth: int = 0
   tree_last: bool = False
