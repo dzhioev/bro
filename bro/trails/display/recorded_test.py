@@ -334,6 +334,21 @@ class TestStructures:
     assert [node.trail_id for node in lineage] == ['root', 'child']
     assert lineage[1].highlighted
 
+  def test_structural_adapters_reject_invalid_segment_and_end_status(self):
+    fake = FakeClient()
+    fake.headers['parent'] = _header('parent')
+    fake.headers['child'] = _header(
+      'child',
+      native={'llm': {'model': 'gpt-5'}, 'segment': 3},
+      forked_from={'trail_id': 'parent', 'step_id': 0},
+    )
+    adapter = RecordedAdapter(_client(fake))
+
+    with pytest.raises(ValueError, match='segment id'):
+      adapter.conversation_records(fake.headers['child'])
+    with pytest.raises(ValueError, match='trail end reason'):
+      adapter.trail_list_row(_header('ended', end={'at': '2026-08-15T01:03:00Z'}))
+
   def test_native_step_never_fetches_a_spilled_body(self):
     fake = FakeClient()
     adapter = RecordedAdapter(_client(fake))

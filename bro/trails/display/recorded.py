@@ -187,6 +187,8 @@ class RecordedAdapter:
       if segment_index > 0:
         native = segment_header.get('native')
         segment = native.get('segment') if isinstance(native, dict) else None
+        if segment is not None:
+          segment = _require_string(segment, 'segment id', nonempty=True)
         records.append(
           SegmentBoundary(
             key=f'recorded:{segment_id}:segment-boundary',
@@ -197,7 +199,7 @@ class RecordedAdapter:
               else None
             ),
             trail_id=segment_id,
-            segment=str(segment) if segment is not None else None,
+            segment=segment,
           )
         )
       messages = list(self._bounded_messages(segment_id, bound))
@@ -344,7 +346,7 @@ class RecordedAdapter:
     elif end.get('reason') == 'lost':
       status = 'lost'
     else:
-      status = f'done:{end.get("reason")}'
+      status = f'done:{_require_string(end.get("reason"), "trail end reason", nonempty=True)}'
     forked_from = header.get('forked_from')
     forked_from_id = None
     if forked_from is not None:
