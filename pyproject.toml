@@ -125,6 +125,8 @@ bro-repo = { workspace = true }
 "summon" = "bro._entrypoints:bro_summon"
 "trails-server" = "bro._entrypoints:bro_trails_server_server"
 "usage" = "bro._entrypoints:bro_llm_usage"
+# bros
+"bros.analyst.scripts.trails-usage" = "bro._entrypoints:bros_analyst_scripts_trails_usage"
 
 [project.entry-points."bro.credential_sources"]
 github_app = "bro.extra.github.app:Source"
@@ -134,6 +136,7 @@ brog = "bro.brog.mcp:toolset"
 
 [tool.bro]
 default = "bro-dev"
+reports = "bros/analyst/reports"
 
 [tool.deptry.package_module_name_map]
 python_ulid = ["ulid"]
@@ -149,6 +152,7 @@ exclude = ["*.egg-info"]
 
 [tool.setuptools.package-data]
 "bro.base" = ["registry.json", "hooks/*.sh"]
+"bros.analyst" = ["spells/*.md"]
 "bros.bro" = ["spells/*.md"]
 "bros.dev" = ["REFERENCE.md", "spells/*.md"]
 "bros.lead" = ["spells/*.md"]

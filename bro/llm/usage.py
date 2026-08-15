@@ -105,6 +105,28 @@ def subtract(a: Counts, b: Counts) -> Counts:
   return {c: a.get(c, 0) - b.get(c, 0) for c in CLASSES}
 
 
+def from_provider_counts(raw: dict) -> Counts:
+  """normalize one provider-raw usage record into the four billed classes.
+
+  Anthropic reports the four as disjoint fields. OpenAI reports a single
+  `input_tokens` covering the whole prompt and breaks its cached and
+  cache-written parts out under `input_tokens_details`, so both come off that
+  total to leave the uncached remainder — the discriminator between the two
+  shapes is that detail block, which Anthropic never sends.
+  """
+  details = raw.get('input_tokens_details')
+  if details is None:
+    return {c: int(raw.get(_FIELD_OF[c], 0)) for c in CLASSES}
+  cache_read = int(details.get('cached_tokens', 0))
+  cache_write = int(details.get('cache_write_tokens', 0))
+  return {
+    'input': int(raw['input_tokens']) - cache_read - cache_write,
+    'cache_write': cache_write,
+    'cache_read': cache_read,
+    'output': int(raw.get('output_tokens', 0)),
+  }
+
+
 @dataclass
 class Usage:
   """a surface's cumulative spend: who spent it and how much per model."""
@@ -200,8 +222,7 @@ def transcript_usage(path: Path) -> dict[str, Counts]:
         model = 'unknown'
       if model == _SYNTHETIC_MODEL:
         continue
-      counts = {c: int(v) for c in CLASSES if (v := u.get(_FIELD_OF[c])) is not None}
-      totals[model] = add(totals.get(model, zero()), counts)
+      totals[model] = add(totals.get(model, zero()), from_provider_counts(u))
   return totals
 
 

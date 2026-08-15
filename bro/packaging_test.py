@@ -37,6 +37,7 @@ _SCRIPTS = [
 # the host-provisioning scripts `setup_env.sh` drives from a checkout
 _NOT_SHIPPED = [
   '*/CLAUDE.md',
+  'bros/analyst/reports/*',
   'bro/setup/setup_env.sh',
   'bro/setup/versions.sh',
   'bro/setup/ubuntu/*',

@@ -95,3 +95,7 @@ def bro_workflow_dive_in():
 
 def bro_workflow_land_pr():
   return _run('bro.workflow.land_pr')
+
+
+def bros_analyst_scripts_trails_usage():
+  return _run('bros.analyst.scripts.trails_usage')

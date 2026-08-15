@@ -3,6 +3,8 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+
 import bro.llm.usage as usage
 from bro.llm.usage import Footer, Usage
 
@@ -19,6 +21,48 @@ PREVIOUS_FOOTER = (
 
 def C(input=0, cache_write=0, cache_read=0, output=0):
   return {'input': input, 'cache_write': cache_write, 'cache_read': cache_read, 'output': output}
+
+
+class TestFromProviderCounts:
+  def test_anthropic_fields_are_already_disjoint(self):
+    raw = {
+      'input_tokens': 2,
+      'cache_creation_input_tokens': 300,
+      'cache_read_input_tokens': 5_000,
+      'output_tokens': 80,
+    }
+    assert usage.from_provider_counts(raw) == C(
+      input=2, cache_write=300, cache_read=5_000, output=80
+    )
+
+  def test_absent_anthropic_fields_read_as_zero(self):
+    assert usage.from_provider_counts({'input_tokens': 11, 'output_tokens': 7}) == C(
+      input=11, output=7
+    )
+
+  def test_openai_details_come_out_of_the_input_total(self):
+    raw = {
+      'input_tokens': 1_000,
+      'input_tokens_details': {'cached_tokens': 600, 'cache_write_tokens': 100},
+      'output_tokens': 40,
+      'total_tokens': 1_040,
+    }
+    assert usage.from_provider_counts(raw) == C(
+      input=300, cache_write=100, cache_read=600, output=40
+    )
+
+  def test_openai_classes_stay_disjoint(self):
+    raw = {
+      'input_tokens': 8_687,
+      'input_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': 8_684},
+      'output_tokens': 190,
+    }
+    counts = usage.from_provider_counts(raw)
+    assert counts['input'] + counts['cache_write'] + counts['cache_read'] == 8_687
+
+  def test_openai_shape_without_input_tokens_raises(self):
+    with pytest.raises(KeyError):
+      usage.from_provider_counts({'input_tokens_details': {'cached_tokens': 1}})
 
 
 class TestFormatInt:

@@ -66,9 +66,11 @@ image-repository = "custom-images"   # optional: docker repository for the repo'
                                      # images, defaulting to bro/<default> (bro/foo here)
 build-context-command = "list-files"  # optional: stdout is the session image's context file list,
                                       # replacing the default `git ls-files`
+reports = "docs/analyses"            # optional: repo-relative directory a session commits its
+                                     # analyses into; absent, an analysis has nowhere to land
 ```
 
-`default` is required and names the **project default bro**; `image-repository` and `build-context-command` are optional. A missing pyproject, table, or default — or an unknown key — fails the launch. Which credential instance backs a kind stays out of the repo: the host records it per project in `~/.bro.json` (`bro/setup/CLAUDE.md`, "Per-project instances"), and `--grant`/`--revoke` overrides it per launch. The `[tool.bro]` table is the launch half of running another project's repo through cw — one whose `setup.sh` leaves `.venv/bin/cw` working. The other half is the persona itself, registered through the `bro` entry-point group (`CLAUDE.md`, "Register the new bro").
+`default` is required and names the **project default bro**; `image-repository`, `build-context-command`, and `reports` are optional. `reports` is what an analyst session resolves its output directory from — every repo names its own, because an installed framework's package directory is site-packages and no place to commit anything; a session with no declared directory asks for one where it can and stops where it cannot. A missing pyproject, table, or default — or an unknown key — fails the launch. Which credential instance backs a kind stays out of the repo: the host records it per project in `~/.bro.json` (`bro/setup/CLAUDE.md`, "Per-project instances"), and `--grant`/`--revoke` overrides it per launch. The `[tool.bro]` table is the launch half of running another project's repo through cw — one whose `setup.sh` leaves `.venv/bin/cw` working. The other half is the persona itself, registered through the `bro` entry-point group (`CLAUDE.md`, "Register the new bro").
 
 ## The outer layer
 
