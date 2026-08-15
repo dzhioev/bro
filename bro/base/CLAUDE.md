@@ -23,4 +23,4 @@ Low-level shared utilities used across the whole repo. Some modules (`bro.base.a
 
 ## CLI relationship
 
-Every CLI in the repo is a bare `def main(argv)` whose body builds a `bro.base.args.Parser` and ends in `return fn(**parser.parse(argv))` or `return parser.dispatch(argv)`. The global-argv read happens once, in the owning package's committed `_entrypoints.py` shim, not in `main` — see the root `CLAUDE.md` "Commands" section and `bro-dev/bro_dev/template.py`.
+Every CLI in the repo is a bare `def main(argv)` whose body builds a `bro.base.args.Parser` and ends in `return fn(**parser.parse(argv))` or `return parser.dispatch(argv)`. The global-argv read happens once, in the owning package's committed `_entrypoints.py` shim, not in `main` — see the root `CLAUDE.md` "Commands" section and the committed `_entrypoints.py` of any distribution.

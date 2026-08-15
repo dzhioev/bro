@@ -25,4 +25,4 @@ The GitHub backend uses `bro/extra/github/api.py`: one issue per task, labels as
 
 ## Testing
 
-`system_test.py` covers config validation and backend discovery, `github_test.py` covers the GitHub backend over a fake API, and `mcp_test.py` covers tool round-trips against a fake `System`. All are in `dev/run_tests.py`'s explicit `PYTEST_FILES` roster.
+`system_test.py` covers config validation and backend discovery, `github_test.py` covers the GitHub backend over a fake API, and `mcp_test.py` covers tool round-trips against a fake `System`. All are in `bro/local/run_tests.py`'s explicit `PYTEST_FILES` roster.

@@ -72,7 +72,7 @@ A given Bro need not support every surface. A consumer can invoke one from its o
 
 ## Registry
 
-Bros live in a process-wide dict keyed by `name`, holding **classes** (not instances). Lookup is lazy per-name: a miss imports only the one module named for that name in the `BRO_SPECS` map (`name -> "module:ClassName"`) and registers its class, so `create_bro('researcher')` never pulls in another bro's dependency graph. There is no `bros.init()` and no auto-discovery; the `BRO_SPECS` entry is the contract (only `list_classes()` / `bro list` imports them all). `create_bro(name, llm_spec=None)` returns a **fresh instance every call** — callers that need the same instance across requests cache the return value themselves.
+Bros live in a process-wide dict keyed by `name`, holding **classes** (not instances). Lookup is lazy per-name: a miss reads the `name -> "module:ClassName"` declarations from installed distribution metadata, imports only the one module named for that name, and registers its class, so `create_bro('researcher')` never pulls in another bro's dependency graph. There is no `bros.init()` and no auto-discovery; the entry-point declaration is the contract (only `list_classes()` / `bro list` imports them all). `create_bro(name, llm_spec=None)` returns a **fresh instance every call** — callers that need the same instance across requests cache the return value themselves.
 
 ## Concrete roster
 

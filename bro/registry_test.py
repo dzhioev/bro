@@ -72,7 +72,7 @@ class ExternalBro(Bro):
 @pytest.fixture(autouse=True)
 def clean_registry():
   # isolate to hand-registered bros: disable autoload so the real bros from
-  # BRO_SPECS never bleed into get_class / list_classes during the test.
+  # the real bros never bleed into get_class / list_classes during the test.
   saved = dict(_REGISTRY)
   saved_autoload = bro.registry._autoload
   _REGISTRY.clear()
@@ -134,11 +134,10 @@ class TestListClasses:
 
 class TestAutoload:
   # the autouse fixture disables autoload; re-enable it here to exercise the
-  # real lazy-import path against BRO_SPECS.
+  # real lazy-import path against the installed declarations.
   @pytest.fixture(autouse=True)
-  def enable_autoload(self, monkeypatch):
+  def enable_autoload(self):
     bro.registry._autoload = True
-    monkeypatch.setattr(bro.registry, '_entry_points', lambda: ())
 
   def test_get_class_imports_bro_by_name_without_manual_register(self):
     cls = get_class('dev')
@@ -148,10 +147,10 @@ class TestAutoload:
     with pytest.raises(KeyError, match='unknown bro'):
       get_class('nonexistent')
 
-  def test_list_classes_autoloads_every_bro_spec(self):
-    from bros import BRO_SPECS
-
-    assert {cls.name for cls in list_classes()} == set(BRO_SPECS)
+  def test_list_classes_autoloads_every_declared_bro(self):
+    names = {cls.name for cls in list_classes()}
+    assert names == set(bro.registry.declared_specs())
+    assert {'bro', 'dev', 'lead', 'analyst'} <= names
 
   def test_autoload_off_does_not_import_real_bros(self):
     bro.registry._autoload = False
@@ -163,9 +162,9 @@ def _entry_point(name: str, value: str) -> importlib.metadata.EntryPoint:
   return importlib.metadata.EntryPoint(name, value, bro.registry._ENTRY_POINT_GROUP)
 
 
-class TestExternalSpecs:
-  # the autouse fixture disables autoload; the external entry-point path only
-  # exists under autoload, so re-enable it and fake the installed entry points.
+class TestDeclaredSpecs:
+  # the autouse fixture disables autoload; declarations are only consulted under
+  # autoload, so re-enable it and fake the installed entry points.
   @pytest.fixture(autouse=True)
   def enable_autoload(self):
     bro.registry._autoload = True
@@ -181,7 +180,7 @@ class TestExternalSpecs:
     assert bro.registry._entry_points() == ()
     assert calls == [{'group': 'bro'}]
 
-  def test_get_class_resolves_an_external_entry_point(self, monkeypatch):
+  def test_get_class_resolves_a_declared_entry_point(self, monkeypatch):
     monkeypatch.setattr(
       bro.registry,
       '_entry_points',
@@ -190,7 +189,7 @@ class TestExternalSpecs:
     assert get_class('external') is ExternalBro
     assert create_bro('external').name == 'external'
 
-  def test_external_name_mismatch_raises(self, monkeypatch):
+  def test_declared_name_mismatch_raises(self, monkeypatch):
     monkeypatch.setattr(
       bro.registry,
       '_entry_points',
@@ -199,16 +198,7 @@ class TestExternalSpecs:
     with pytest.raises(ValueError, match="declares name 'external'"):
       get_class('mismatched')
 
-  def test_external_shadowing_a_builtin_raises(self, monkeypatch):
-    monkeypatch.setattr(
-      bro.registry,
-      '_entry_points',
-      lambda: (_entry_point('dev', 'bro.registry_test:ExternalBro'),),
-    )
-    with pytest.raises(ValueError, match='shadows a built-in bro'):
-      bro.registry.known_names()
-
-  def test_duplicate_externals_raise(self, monkeypatch):
+  def test_duplicate_names_raise(self, monkeypatch):
     monkeypatch.setattr(
       bro.registry,
       '_entry_points',
@@ -217,18 +207,16 @@ class TestExternalSpecs:
         _entry_point('external', 'other.module:Other'),
       ),
     )
-    with pytest.raises(ValueError, match='duplicate external bro'):
+    with pytest.raises(ValueError, match='duplicate bro'):
       bro.registry.known_names()
 
-  def test_known_names_unions_builtins_and_externals(self, monkeypatch):
-    from bros import BRO_SPECS
-
+  def test_known_names_are_the_declared_names(self, monkeypatch):
     monkeypatch.setattr(
       bro.registry,
       '_entry_points',
       lambda: (_entry_point('external', 'bro.registry_test:ExternalBro'),),
     )
-    assert bro.registry.known_names() == set(BRO_SPECS) | {'external'}
+    assert bro.registry.known_names() == {'external'}
 
   def test_known_names_with_autoload_off_sees_only_hand_registered(self, monkeypatch):
     def unexpected_read():
@@ -239,12 +227,10 @@ class TestExternalSpecs:
     register(AlphaBro)
     assert bro.registry.known_names() == {'alpha'}
 
-  def test_list_classes_includes_externals(self, monkeypatch):
-    from bros import BRO_SPECS
-
+  def test_list_classes_includes_every_declared_bro(self, monkeypatch):
     monkeypatch.setattr(
       bro.registry,
       '_entry_points',
       lambda: (_entry_point('external', 'bro.registry_test:ExternalBro'),),
     )
-    assert {cls.name for cls in list_classes()} == set(BRO_SPECS) | {'external'}
+    assert {cls.name for cls in list_classes()} == {'external'}

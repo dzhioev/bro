@@ -15,8 +15,7 @@ import pytest
 from bro.base.template import _DIRECTIVE_RE
 from bro.bro import BaseBro
 from bro.llm.mcp import MCPServer, Tool
-from bro.registry import create_bro
-from bros import BRO_SPECS
+from bro.registry import create_bro, declared_specs
 
 # (surface label, server-list builder) — the three consuming harnesses a bro's
 # declared components serve
@@ -75,7 +74,7 @@ async def _audit_server(label: str, server: MCPServer) -> list[str]:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('name', sorted(BRO_SPECS))
+@pytest.mark.parametrize('name', sorted(declared_specs()))
 async def test_served_tool_text_stays_inside_the_roster(name):
   problems: list[str] = []
   for label, servers_for in _SURFACES:
@@ -87,7 +86,7 @@ async def test_served_tool_text_stays_inside_the_roster(name):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('name', sorted(BRO_SPECS))
+@pytest.mark.parametrize('name', sorted(declared_specs()))
 async def test_composed_prompts_leak_no_directives(name):
   bro = create_bro(name)
   for prompt in (bro.system_prompt, bro.claude_system_prompt):

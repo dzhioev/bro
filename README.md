@@ -9,7 +9,7 @@
 
 Harness your bros: `bro` is a meta-harness for declarative agent personas. A persona — system prompt, tools, data sources, credentials, scripts — is declared once and runs unchanged on every supported harness: a Claude Code session, or the framework's own native agent loop. Around that core: MCP tool serving, credential scoping, recorded runs, task-driven development workflows, and `cw` — isolated host or container workspaces. Consumer projects install the distribution, register their extensions through entry points, and choose their defaults in `[tool.bro]`. [`DESIGN.md`](DESIGN.md) covers the conceptual model.
 
-The repository is a [uv](https://docs.astral.sh/uv/) workspace: this root publishes `bro`, and [`bro-dev/`](bro-dev/README.md) publishes development tooling for repositories built on the framework — console-script metadata generation, token-usage reports, shell-policy checks, repository hook installation, and the `bro-dev` persona.
+The repository is a [uv](https://docs.astral.sh/uv/) workspace: this root publishes `bro`, and [`dev/`](dev/README.md) publishes development tooling for repositories built on the framework — console-script metadata generation, token-usage reports, shell-policy checks, and repository hook installation.
 
 ## Prerequisites
 
@@ -28,7 +28,7 @@ The base distribution contains every module — `bro.base`, the MCP abstraction,
 - `bro[aws]` — the `ssm` credential source
 - `bro[github]` — GitHub App authentication
 
-A repository operated by `cw` provides a root `setup.sh` whose postcondition is an executable `.venv/bin/cw`. When the container entrypoint links a pre-built environment into the tree it exports `CW_VENV_MANIFEST`, a directory holding the dependency manifests that environment was resolved from at their repository-relative paths; the script must reuse the environment while the tree's own copies still match them and sync when they diverge. A consuming development repository normally installs `bro-dev` in its dev dependency group, syncs the workspace, activates the resulting venv, and calls `bro-dev.install` to install the commit-footer hooks and `git golc` alias.
+A repository operated by `cw` provides a root `setup.sh` whose postcondition is an executable `.venv/bin/cw`. When the container entrypoint links a pre-built environment into the tree it exports `CW_VENV_MANIFEST`, a directory holding the dependency manifests that environment was resolved from at their repository-relative paths; the script must reuse the environment while the tree's own copies still match them and sync when they diverge. A consuming development repository normally installs `bro-dev` in its dev dependency group, syncs the workspace, activates the resulting venv, and calls `bro.dev.install` to install the commit-footer hooks and `git golc` alias.
 
 ## Extension entry points
 

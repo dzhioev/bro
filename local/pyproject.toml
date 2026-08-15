@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bro-local"
+version = "0.1.0"
+description = "the bro framework checkout's own persona and scripts"
+requires-python = ">=3.12"
+dependencies = [
+  "bro",
+]
+
+[project.scripts]
+# bro
+"bro.local.run-tests" = "bro.local._entrypoints:bro_local_run_tests"
+"run-tests" = "bro.local._entrypoints:bro_local_run_tests"
+
+[tool.uv.sources]
+bro = { workspace = true }
+
+[project.entry-points.bro]
+bro-dev = "bros.bro_dev:BroDev"
+
+[tool.deptry.package_module_name_map]
+bro = ["bro", "bros"]
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.packages.find]
+where = ["."]
+# both are namespace packages the framework distribution also ships into; these
+# portions carry no __init__.py of their own so they merge.
+namespaces = true
+include = ["bro.local", "bros.bro_dev"]
+exclude = ["*.egg-info"]

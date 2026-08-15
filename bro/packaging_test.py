@@ -18,13 +18,11 @@ from pathlib import Path
 
 import pytest
 
-from bros import BRO_SPECS
-
 _ROOT = Path(__file__).resolve().parents[1]
 _ALLOWED_ENV = 'BASE_INSTALL_MODULES'
-# `bro list` imports every registered persona, and the workspace's development
-# distribution registers one through the `bro` entry point
-_WORKSPACE_MODULES = {'bro', 'bro_dev', 'bros'}
+# `bro list` imports every persona any installed distribution declares, and every
+# one of them lives under `bros`
+_WORKSPACE_MODULES = {'bro', 'bros'}
 
 # (console script, entry-point shim, arguments) — the environment scripts that
 # belong to no extra
@@ -37,7 +35,6 @@ _SCRIPTS = [
 # the host-provisioning scripts `setup_env.sh` drives from a checkout
 _NOT_SHIPPED = [
   '*/CLAUDE.md',
-  'bros/analyst/reports/*',
   'bro/setup/setup_env.sh',
   'bro/setup/versions.sh',
   'bro/setup/ubuntu/*',
@@ -75,6 +72,11 @@ sys.meta_path.insert(0, _BaseInstall())
 
 def _metadata() -> dict:
   return tomllib.loads((_ROOT / 'pyproject.toml').read_text())
+
+
+def _own_bros() -> list[str]:
+  """the personas this distribution declares — the only ones a base install has."""
+  return sorted(_metadata()['project']['entry-points']['bro'])
 
 
 def _requirement_name(requirement: str) -> str:
@@ -146,10 +148,10 @@ def test_script_runs_on_base_install(script, entry_point, arguments, tmp_path):
 
 def test_list_runs_on_base_install(tmp_path):
   output = _run('bro', 'bro_run', ['list'], tmp_path)
-  assert set(BRO_SPECS) <= {line.partition(':')[0] for line in output.splitlines()}
+  assert set(_own_bros()) <= {line.partition(':')[0] for line in output.splitlines()}
 
 
-@pytest.mark.parametrize('name', sorted(BRO_SPECS))
+@pytest.mark.parametrize('name', _own_bros())
 def test_show_runs_on_base_install(name, tmp_path):
   assert name in _run('bro', 'bro_run', ['show', name], tmp_path)
 

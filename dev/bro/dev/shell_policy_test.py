@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from bro_dev.shell_policy import assert_shell_policy
+from bro.dev.shell_policy import assert_shell_policy
 
 
 def _write_executable(path: Path, content: str) -> None:

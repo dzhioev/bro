@@ -15,18 +15,15 @@ DEFAULT_BRO_DIR = os.path.expanduser('~/.bro')
 DEFAULT_HOST_CONFIG = os.path.expanduser('~/.bro.json')
 
 
+# the framework's own distribution. `bro` is a namespace package several
+# distributions ship portions of, so the one whose version is the framework
+# revision has to be named rather than inferred from package ownership.
+DISTRIBUTION = 'bro'
+
+
 @cache
 def _distribution_version() -> str:
-  package_name = __name__.partition('.')[0]
-  distribution_names = sorted(
-    set(importlib.metadata.packages_distributions().get(package_name, []))
-  )
-  if len(distribution_names) != 1:
-    raise RuntimeError(
-      f'package {package_name!r} must belong to exactly one distribution, found '
-      f'{distribution_names}'
-    )
-  return importlib.metadata.version(distribution_names[0])
+  return importlib.metadata.version(DISTRIBUTION)
 
 
 VERSION: str

@@ -12,7 +12,7 @@ resolution-markers = [
 members = [
     "bro",
     "bro-dev",
-    "bro-repo",
+    "bro-local",
 ]
 
 [[package]]
@@ -266,7 +266,7 @@ trails-server = [
 [package.dev-dependencies]
 dev = [
     { name = "bro-dev" },
-    { name = "bro-repo" },
+    { name = "bro-local" },
     { name = "deptry" },
     { name = "httpx2" },
     { name = "pyright" },
@@ -308,8 +308,8 @@ provides-extras = ["agent", "aws", "cw", "http", "llm", "runtime", "trails-serve
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "bro-dev", editable = "bro-dev" },
-    { name = "bro-repo", editable = "dev" },
+    { name = "bro-dev", editable = "dev" },
+    { name = "bro-local", editable = "local" },
     { name = "deptry", specifier = "==0.25.1" },
     { name = "httpx2", specifier = "==2.10.0" },
     { name = "pyright", specifier = "==1.1.411" },
@@ -323,18 +323,18 @@ dev = [
 [[package]]
 name = "bro-dev"
 version = "0.1.0"
-source = { editable = "bro-dev" }
+source = { editable = "dev" }
 dependencies = [
-    { name = "bro", extra = ["agent"] },
+    { name = "bro" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "bro", extras = ["agent"], editable = "." }]
+requires-dist = [{ name = "bro", editable = "." }]
 
 [[package]]
-name = "bro-repo"
+name = "bro-local"
 version = "0.1.0"
-source = { editable = "dev" }
+source = { editable = "local" }
 dependencies = [
     { name = "bro" },
 ]

@@ -99,14 +99,17 @@ docker run --rm -i \
     done <<< "$EDITABLE_PATHS"
     # the framework packages ship their argv bridges as ordinary editable modules
     test -f /workspace/bro/_entrypoints.py
-    test -f /workspace/bro-dev/bro_dev/_entrypoints.py
+    test -f /workspace/dev/bro/dev/_entrypoints.py
+    test -f /workspace/local/bro/local/_entrypoints.py
     # every manifest the bake ran from is staged for setup.sh's reuse gate at its
     # project-relative path, and matches this clone (based on the same tree the
-    # image was built from)
-    cmp -s /workspace/pyproject.toml /opt/cw-venv-manifest/pyproject.toml
-    cmp -s /workspace/uv.lock /opt/cw-venv-manifest/uv.lock
-    cmp -s /workspace/bro-dev/pyproject.toml /opt/cw-venv-manifest/bro-dev/pyproject.toml
-    cmp -s /workspace/dev/pyproject.toml /opt/cw-venv-manifest/dev/pyproject.toml
+    # image was built from). the staged set is walked rather than listed, so the
+    # check covers whatever members the workspace declares
+    STAGED_MANIFESTS="$(cd /opt/cw-venv-manifest && find . -type f)"
+    test -n "$STAGED_MANIFESTS"
+    while IFS= read -r MANIFEST; do
+      cmp -s "/opt/cw-venv-manifest/$MANIFEST" "/workspace/$MANIFEST"
+    done <<< "$STAGED_MANIFESTS"
     # /home/cw/.claude.json reflects the container-private seed and is writable
     grep -q smoke_seed /home/cw/.claude.json
     echo '{"modified_by_container":true}' > /home/cw/.claude.json

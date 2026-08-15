@@ -2,12 +2,12 @@ import subprocess
 import sys
 import tomllib
 
-from bro_dev import sync_scripts
+from bro.dev import sync_scripts
 
 
 def test_imports_without_git_metadata(tmp_path):
   result = subprocess.run(
-    [sys.executable, '-c', 'import bro_dev.sync_scripts'],
+    [sys.executable, '-c', 'import bro.dev.sync_scripts'],
     capture_output=True,
     text=True,
     cwd=tmp_path,

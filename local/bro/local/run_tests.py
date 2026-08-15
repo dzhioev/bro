@@ -8,7 +8,9 @@ from typing import Optional
 
 from bro.base.args import Parser
 
-DIR = Path(__file__).resolve().parents[1]
+__cli_name__ = 'run-tests'
+
+DIR = Path(__file__).resolve().parents[3]
 
 
 @dataclass(frozen=True)
@@ -27,22 +29,24 @@ DISTRIBUTIONS = [
       'bro/base/yesno\\.py$',
       'bro/base/log_test_helper\\.py$',
       'bro/setup/',
-      'bro-dev/',
-      'dev/',
+      '^dev/',
+      '^local/',
       '.venv/',
       '.claude/',
     ),
-    deptry_known_first_party=('bro',),
-  ),
-  Distribution(
-    directory='bro-dev',
-    deptry_exclude=('.*_test\\.py$',),
-    deptry_known_first_party=('bro', 'bro_dev'),
+    # the root ships both packages; `bros` is a namespace another member also
+    # contributes to, so nothing infers it from the directory alone
+    deptry_known_first_party=('bro', 'bros'),
   ),
   Distribution(
     directory='dev',
-    deptry_exclude=(),
+    deptry_exclude=('.*_test\\.py$',),
     deptry_known_first_party=('bro',),
+  ),
+  Distribution(
+    directory='local',
+    deptry_exclude=('.*_test\\.py$',),
+    deptry_known_first_party=('bro', 'bros'),
   ),
 ]
 
@@ -101,7 +105,7 @@ PYTEST_FILES = [
   'bro/launch/ask_test.py',
   'bros/dev/mcp_test.py',
   'bros/dev/jobs_test.py',
-  'bros/analyst/scripts/trails_usage_test.py',
+  'dev/bros/analyst/scripts/trails_usage_test.py',
   'bro/cw/broxy_test.py',
   'bro/cw/claude_argv_test.py',
   'bro/cw/claude_config_test.py',
@@ -153,12 +157,12 @@ PYTEST_FILES = [
   'bro/llm/usage_test.py',
   'shell_policy_test.py',
   'setup_test.py',
-  'bro-dev/bro_dev/sync_scripts_test.py',
-  'bro-dev/bro_dev/bro_test.py',
-  'bro-dev/bro_dev/git_golc_test.py',
-  'bro-dev/bro_dev/usage_report_test.py',
-  'bro-dev/bro_dev/install_test.py',
-  'bro-dev/bro_dev/shell_policy_test.py',
+  'dev/bro/dev/sync_scripts_test.py',
+  'local/bros/bro_dev/bro_dev_test.py',
+  'dev/bro/dev/git_golc_test.py',
+  'dev/bro/dev/usage_report_test.py',
+  'dev/bro/dev/install_test.py',
+  'dev/bro/dev/shell_policy_test.py',
 ]
 # outside the roster above: it drives the host docker daemon, which the suite's
 # in-container leg has none of
@@ -182,7 +186,7 @@ def main(argv: list[str]) -> Optional[int]:
   for distribution in DISTRIBUTIONS:
     directory = DIR / distribution.directory
     print(f'sync-scripts: verifying {directory} console-script metadata', file=sys.stderr)
-    run(sys.executable, '-m', 'bro_dev.sync_scripts', '--check', '--project', str(directory))
+    run(sys.executable, '-m', 'bro.dev.sync_scripts', '--check', '--project', str(directory))
     deptry_args = [sys.executable, '-m', 'deptry', '.']
     for pattern in distribution.deptry_exclude:
       deptry_args += ['-ee', pattern]

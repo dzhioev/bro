@@ -1,9 +1,11 @@
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from bro.workspace.paths import project_root
+
+_LAUNCH_KEYS = frozenset({'default', 'image-repository', 'build-context-command'})
 
 
 def _default_image_repository(default_bro: str) -> str:
@@ -14,14 +16,17 @@ def _default_image_repository(default_bro: str) -> str:
 class ProjectConfig:
   """the operated repo's launch defaults: which bro a session runs as when
   `--bro` doesn't name one, the docker repository its session images build
-  under (`bro/<default bro>` unless overridden), the optional
-  build-context-file-list command, and the optional directory a session commits
-  its analyses into."""
+  under (`bro/<default bro>` unless overridden), and the optional
+  build-context-file-list command.
+
+  `sections` carries the `[tool.bro.<name>]` sub-tables verbatim. Their keys
+  belong to whoever declares them, so they are read but never interpreted here.
+  """
 
   default_bro: str
   image_repository: str
   build_context_command: Optional[str] = None
-  reports: Optional[str] = None
+  sections: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 def _optional_string(table: dict, pyproject: Path, key: str) -> Optional[str]:
@@ -39,7 +44,8 @@ def project_config() -> ProjectConfig:
   if not pyproject.is_file():
     raise ValueError(f'missing {pyproject}')
   table = tomllib.loads(pyproject.read_text()).get('tool', {}).get('bro', {})
-  unknown = sorted(set(table) - {'default', 'image-repository', 'build-context-command', 'reports'})
+  sections = {key: value for key, value in table.items() if isinstance(value, dict)}
+  unknown = sorted(set(table) - _LAUNCH_KEYS - set(sections))
   if len(unknown) > 0:
     raise ValueError(f'unknown [tool.bro] key(s) in {pyproject}: {", ".join(unknown)}')
   default_bro = table.get('default')
@@ -52,5 +58,5 @@ def project_config() -> ProjectConfig:
     default_bro=default_bro,
     image_repository=override if override is not None else _default_image_repository(default_bro),
     build_context_command=_optional_string(table, pyproject, 'build-context-command'),
-    reports=_optional_string(table, pyproject, 'reports'),
+    sections=sections,
   )
