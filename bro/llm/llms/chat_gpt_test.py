@@ -107,12 +107,16 @@ class _RecordingTracker(Tracker):
     self.ended.append(reason)
 
 
-def _fake_usage(*, input_tokens=10, output_tokens=20, reasoning_tokens=5, cached_tokens=0):
+def _fake_usage(
+  *, input_tokens=10, output_tokens=20, reasoning_tokens=5, cached_tokens=0, cache_write_tokens=0
+):
   return SimpleNamespace(
     input_tokens=input_tokens,
     output_tokens=output_tokens,
     output_tokens_details=SimpleNamespace(reasoning_tokens=reasoning_tokens),
-    input_tokens_details=SimpleNamespace(cached_tokens=cached_tokens),
+    input_tokens_details=SimpleNamespace(
+      cached_tokens=cached_tokens, cache_write_tokens=cache_write_tokens
+    ),
   )
 
 
@@ -736,8 +740,7 @@ class TestLLMSpec:
 class TestUsageAccounting:
   @pytest.mark.asyncio
   async def test_cumulative_usage_maps_openai_classes(self):
-    # cached input lands in cache_read, the uncached remainder in input,
-    # cache_write stays 0, output keeps reasoning inside.
+    # reasoning tokens sit inside output_tokens, not beside it.
     gpt, _, captured = _make_chat_gpt_with_tracker()
     response = _fake_response(
       output=[_message_item('ok')],
@@ -749,6 +752,23 @@ class TestUsageAccounting:
 
     assert gpt.cumulative_usage() == {
       'gpt-5': {'input': 70, 'cache_write': 0, 'cache_read': 30, 'output': 22}
+    }
+
+  @pytest.mark.asyncio
+  async def test_cumulative_usage_credits_cache_writes(self):
+    gpt, _, captured = _make_chat_gpt_with_tracker()
+    response = _fake_response(
+      output=[_message_item('ok')],
+      usage=_fake_usage(
+        input_tokens=8_687, output_tokens=190, cached_tokens=0, cache_write_tokens=8_684
+      ),
+    )
+    _install_responses(gpt, [response], captured)
+
+    await gpt.send([{'role': 'user', 'content': 'hi'}])
+
+    assert gpt.cumulative_usage() == {
+      'gpt-5': {'input': 3, 'cache_write': 8_684, 'cache_read': 0, 'output': 190}
     }
 
   @pytest.mark.asyncio

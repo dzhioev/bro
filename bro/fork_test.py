@@ -496,6 +496,7 @@ def _fake_usage(*, input_tokens=10, output_tokens=20, reasoning_tokens=0):
     input_tokens=input_tokens,
     output_tokens=output_tokens,
     output_tokens_details=SimpleNamespace(reasoning_tokens=reasoning_tokens),
+    input_tokens_details=SimpleNamespace(cached_tokens=0, cache_write_tokens=0),
   )
 
 
