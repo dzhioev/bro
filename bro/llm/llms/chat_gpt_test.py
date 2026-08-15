@@ -2,7 +2,7 @@ import asyncio
 import os
 from types import SimpleNamespace
 from typing import Any, Optional, cast
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 import pytest
 from openai.types.responses import Response
@@ -12,7 +12,13 @@ import bro.llm.llms.chat_gpt as chat_gpt
 import bro.llm.usage as usage
 from bro.llm.llms.chat_gpt import ChatGPT, LLMSpec, parse_response
 from bro.llm.mcp import InProcessMCPServer, Tool, ToolControlSignal, ToolRegistry, wire_name
-from bro.llm.observer import Observer
+from bro.llm.observer import (
+  InterimAssistantTextEvent,
+  Observer,
+  ReasoningEvent,
+  ToolCallEvent,
+  ToolResultEvent,
+)
 from bro.llm.tracker import Tracker
 
 # the registry advertises namespaced wire names, so a tool whose local name is
@@ -405,13 +411,12 @@ class TestSendTrackerEmission:
 
     await gpt.send([{'role': 'user', 'content': 'go'}])
 
-    observer.on_reasoning.assert_called_once_with('thinking')
-    assert observer.on_assistant_message.call_args_list == [
-      (('interim',), {'terminal': False}),
-      (('final',), {'terminal': True}),
+    assert observer.on_event.call_args_list == [
+      call(ReasoningEvent('thinking')),
+      call(InterimAssistantTextEvent('interim')),
+      call(ToolCallEvent('c1', 'svc__ping', {'x': 1})),
+      call(ToolResultEvent('c1', 'svc__ping', 'ok')),
     ]
-    observer.on_tool_call.assert_called_once_with('svc__ping', {'x': 1})
-    observer.on_tool_result.assert_called_once_with('svc__ping', 'ok')
 
   @pytest.mark.asyncio
   async def test_executing_tool_exposes_its_llm_call_source(self):

@@ -15,7 +15,15 @@ from bro.launch.call import TextRenderer, call_text, chat_main, main
 from bro.launch.identity import bro_git_identity_env
 from bro.llm.llm import LLM, LLMSpec
 from bro.llm.mcp import MCPServer
-from bro.llm.observer import NullObserver, Observer
+from bro.llm.observer import (
+  InterimAssistantTextEvent,
+  NullObserver,
+  Observer,
+  ReasoningEvent,
+  ToolCallEvent,
+  ToolResultEvent,
+  TurnCompletedEvent,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -142,7 +150,7 @@ def _make_text_renderer() -> tuple[TextRenderer, io.StringIO]:
 
 def test_text_renderer_renders_reasoning_one_liner():
   renderer, out = _make_text_renderer()
-  renderer.on_reasoning('user wants a movie rec\nwithout horror, please')
+  renderer.on_event(ReasoningEvent('user wants a movie rec\nwithout horror, please'))
   assert (
     out.getvalue() == '[12:34:56] bro · thinking: user wants a movie rec without horror, please\n'
   )
@@ -150,34 +158,38 @@ def test_text_renderer_renders_reasoning_one_liner():
 
 def test_text_renderer_canonicalizes_name_and_elides_long_values():
   renderer, out = _make_text_renderer()
-  renderer.on_tool_call('dev__read_file', {'file_path': '/workspace/bro/launch/call.py'})
+  renderer.on_event(
+    ToolCallEvent('call-1', 'dev__read_file', {'file_path': '/workspace/bro/launch/call.py'})
+  )
   # wire name shown canonical, the argument named, and its long value elided
   assert out.getvalue() == '[12:34:56] bro → dev::read_file(file_path=...)\n'
 
 
 def test_text_renderer_shows_short_argument_values_inline():
   renderer, out = _make_text_renderer()
-  renderer.on_tool_call('web_search', {'query': 'sci-fi'})
+  renderer.on_event(ToolCallEvent('call-1', 'web_search', {'query': 'sci-fi'}))
   # a value within the limit stays inline; an unnamespaced name passes through
   assert out.getvalue() == '[12:34:56] bro → web_search(query=sci-fi)\n'
 
 
 def test_text_renderer_renders_tool_result_as_bare_canonical_name():
   renderer, out = _make_text_renderer()
-  renderer.on_tool_result('flow__list_tasks', '[\n  "Arrival",\n  "Annihilation"\n]')
+  renderer.on_event(
+    ToolResultEvent('call-1', 'flow__list_tasks', '[\n  "Arrival",\n  "Annihilation"\n]')
+  )
   # the result payload is dropped — the bare canonical name marks the return
   assert out.getvalue() == '[12:34:56] bro ← flow::list_tasks\n'
 
 
 def test_text_renderer_renders_interim_message_as_a_reply_line():
   renderer, out = _make_text_renderer()
-  renderer.on_assistant_message(f'on it — {"x" * 500}', terminal=False)
+  renderer.on_event(InterimAssistantTextEvent(f'on it — {"x" * 500}'))
   assert out.getvalue() == f'[12:34:56] bro: on it — {"x" * 500}\n'
 
 
 def test_text_renderer_skips_terminal_message():
   renderer, out = _make_text_renderer()
-  renderer.on_assistant_message('here is the answer', terminal=True)
+  renderer.on_event(TurnCompletedEvent('here is the answer'))
   # call_text renders the reply itself; the renderer must not double-emit
   assert out.getvalue() == ''
 
@@ -934,7 +946,7 @@ async def test_tui_mid_turn_message_renders_as_bro_bubble_above_typing(monkeypat
   app = ChatApp(RecordBro(), None)
   async with app.run_test(size=(80, 40)) as pilot:
     app._begin_turn()
-    TUIRenderer(app).on_assistant_message('on it — **rewriting** the tests', terminal=False)
+    TUIRenderer(app).on_event(InterimAssistantTextEvent('on it — **rewriting** the tests'))
     await pilot.pause()
     row = app.query(BubbleRow).last()
     assert row.has_class('bro')
@@ -1044,11 +1056,11 @@ def test_tui_renderer_posts_one_line_per_tool_event():
 
   app = _FakeApp()
   renderer = TUIRenderer(app)  # type: ignore[arg-type]
-  renderer.on_reasoning('user wants\na movie rec')
-  renderer.on_tool_call('web_search', {'query': 'sci-fi'})
-  renderer.on_tool_result('web_search', '[\n  "Arrival"\n]')
-  renderer.on_assistant_message('checking the\nlistings first', terminal=False)
-  renderer.on_assistant_message('the final answer', terminal=True)
+  renderer.on_event(ReasoningEvent('user wants\na movie rec'))
+  renderer.on_event(ToolCallEvent('call-1', 'web_search', {'query': 'sci-fi'}))
+  renderer.on_event(ToolResultEvent('call-1', 'web_search', '[\n  "Arrival"\n]'))
+  renderer.on_event(InterimAssistantTextEvent('checking the\nlistings first'))
+  renderer.on_event(TurnCompletedEvent('the final answer'))
 
   # reasoning becomes a thinking bubble carrying the summary block verbatim
   assert app.thinking == ['user wants\na movie rec']

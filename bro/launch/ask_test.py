@@ -4,12 +4,12 @@ from unittest.mock import patch
 import pytest
 
 import bro.llm.llms.echo as llm_llms_echo
-from bro.bro import BaseBro
+from bro.bro import BaseBro, BroRaised
 from bro.launch.ask import main
 from bro.launch.identity import bro_git_identity_env
 from bro.llm.llm import LLM
 from bro.llm.mcp import MCPServer
-from bro.llm.observer import NullObserver, Observer
+from bro.llm.observer import NullObserver, Observer, ReasoningEvent
 
 
 @pytest.fixture(autouse=True)
@@ -295,6 +295,67 @@ def test_main_skips_container_with_in_place_flag():
     rc = main(['ask', 'record', 'hi', '--in-place'])
     assert rc is None
     assert run.call_count == 0
+
+
+@pytest.mark.parametrize('rich_arguments', [[], ['--rich']])
+def test_main_emits_one_undecorated_terminal_reply(rich_arguments, capsys):
+  with (
+    patch.dict('os.environ', {'CW_IN_CONTAINER': '1'}),
+    patch('bro.registry.get_class', return_value=RecordBro),
+    patch('bro.registry.create_bro', return_value=RecordBro(response='exact reply')),
+  ):
+    assert main(['ask', 'record', 'hi', *rich_arguments, '--in-place']) is None
+
+  captured = capsys.readouterr()
+  assert captured.out == 'exact reply\n'
+  assert 'exact reply' not in captured.err
+
+
+@pytest.mark.parametrize('rich_arguments', [[], ['--rich']])
+def test_main_routes_activity_to_stderr(rich_arguments, capsys):
+  class ActivityLLM(MockLLM):
+    async def send(self, messages, *, request_timeout=None):
+      self.observer.on_event(ReasoningEvent('thinking'))
+      return self.response
+
+  class ActivityBro(RecordBro):
+    def _create_llm(self, *, hold: str) -> LLM:
+      llm = ActivityLLM(response='reply')
+      llm.observer = self._observer
+      return llm
+
+  with (
+    patch.dict('os.environ', {'CW_IN_CONTAINER': '1'}),
+    patch('bro.registry.get_class', return_value=ActivityBro),
+    patch('bro.registry.create_bro', return_value=ActivityBro()),
+  ):
+    assert main(['ask', 'record', 'hi', *rich_arguments, '--in-place']) is None
+
+  captured = capsys.readouterr()
+  assert captured.out == 'reply\n'
+  assert 'thinking' in captured.err
+  assert 'reply' not in captured.err
+
+
+def test_main_renders_a_raised_failure_once_and_returns_error(capsys):
+  class RaisingLLM(MockLLM):
+    async def send(self, messages, *, request_timeout=None):
+      raise BroRaised('cannot continue')
+
+  class RaisingBro(RecordBro):
+    def _create_llm(self, *, hold: str) -> LLM:
+      return RaisingLLM()
+
+  with (
+    patch.dict('os.environ', {'CW_IN_CONTAINER': '1'}),
+    patch('bro.registry.get_class', return_value=RaisingBro),
+    patch('bro.registry.create_bro', return_value=RaisingBro()),
+  ):
+    assert main(['ask', 'record', 'hi', '--in-place']) == 1
+
+  captured = capsys.readouterr()
+  assert captured.out == ''
+  assert captured.err.count('cannot continue') == 1
 
 
 def test_main_sends_unknown_slash_input_to_the_bro(capsys):

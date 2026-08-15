@@ -1,8 +1,10 @@
 import json
 import os
+import sys
 import traceback
 from abc import ABC
 from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
 from types import TracebackType
 from typing import Any, ClassVar, Optional, Self
@@ -16,16 +18,33 @@ from bro.base.offload import off_loop
 from bro.channel import BroChannel
 from bro.datasources.base import DataSource
 from bro.llm.llm import EFFORT_LEVELS, LLM, LLMSpec
-from bro.llm.observer import BoringRenderer, NullObserver, Observer
+from bro.llm.observer import (
+  NullObserver,
+  Observer,
+  TurnCompletedEvent,
+  TurnFailedEvent,
+  TurnRefusedEvent,
+  TurnStartedEvent,
+)
 from bro.llm.tracker import EndReason, NullTracker, ToolStepSource, Tracker
 from bro.prompts import get_prompt, hold_fragment
 from bro.summon import SUMMONER_ENV
+from bro.trails.display.config import PresetName, preset
+from bro.trails.display.core import DisplaySession
+from bro.trails.display.live import LiveDisplayObserver
+from bro.trails.display.terminal import StreamRenderer
 from bro.trails.record.bro import Recorder
 
 DEFAULT_LLM_SPEC: LLMSpec = llm_llms_chat_gpt.LLMSpec()
 
 
 _TRAILS_DISABLED_ENV = 'TRAILS_DISABLED'
+
+
+def _observer_scope(observer: Observer) -> AbstractContextManager[Observer]:
+  if isinstance(observer, AbstractContextManager):
+    return observer
+  return nullcontext(observer)
 
 
 def _summoned_by_from_env() -> Optional[dict[str, Any]]:
@@ -1005,34 +1024,47 @@ class BaseBro(ABC):
     surface: str,
     hold: str = 'unattended',
   ) -> str:
-    refusal = self._start_refusal()
-    if refusal is not None:
-      raise BroRaised(refusal)
-    llm, messages, trail_id = self._start(
-      input,
-      interactive=False,
-      hold=hold,
-      observer=observer,
-      tracker=tracker,
-      surface=surface,
-      summoned_by=_summoned_by_from_env(),
-    )
-    log.info('run started%s', f' (trail {trail_id})' if len(trail_id) > 0 else '')
-    channel = self._make_channel()
-    if channel is not None:
-      channel.started(trail_id)
-    result: Optional[str] = None
-    try:
-      with self:
-        result = await llm.send(messages, request_timeout=request_timeout)
-        return result
-    finally:
+    effective_observer = observer if observer is not None else self._make_observer()
+    with _observer_scope(effective_observer):
+      effective_observer.on_event(TurnStartedEvent(input))
+      refusal = self._start_refusal()
+      if refusal is not None:
+        effective_observer.on_event(TurnFailedEvent(refusal))
+        raise BroRaised(refusal)
+      try:
+        llm, messages, trail_id = self._start(
+          input,
+          interactive=False,
+          hold=hold,
+          observer=effective_observer,
+          tracker=tracker,
+          surface=surface,
+          summoned_by=_summoned_by_from_env(),
+        )
+      except Exception as error:
+        effective_observer.on_event(TurnFailedEvent(str(error)))
+        raise
+      log.info('run started%s', f' (trail {trail_id})' if len(trail_id) > 0 else '')
+      channel = self._make_channel()
       if channel is not None:
-        if self._last_end_reason is None:
-          raise RuntimeError('run lifetime ended without an outcome')
-        channel_result = result if self._last_end_reason == 'ok' else self._last_end_detail
-        channel.completed(channel_result, self._last_end_reason)
-        channel.close()
+        channel.started(trail_id)
+      result: Optional[str] = None
+      try:
+        with self:
+          try:
+            result = await llm.send(messages, request_timeout=request_timeout)
+          except Exception as error:
+            effective_observer.on_event(TurnFailedEvent(str(error)))
+            raise
+          effective_observer.on_event(TurnCompletedEvent(result))
+          return result
+      finally:
+        if channel is not None:
+          if self._last_end_reason is None:
+            raise RuntimeError('run lifetime ended without an outcome')
+          channel_result = result if self._last_end_reason == 'ok' else self._last_end_detail
+          channel.completed(channel_result, self._last_end_reason)
+          channel.close()
 
   async def send(
     self,
@@ -1045,23 +1077,29 @@ class BaseBro(ABC):
     hold: str = 'guided',
   ) -> str:
     if self._llm is None:
+      effective_observer = observer if observer is not None else self._make_observer()
+      effective_observer.on_event(TurnStartedEvent(message))
       refusal = self._start_refusal()
       if refusal is not None:
         # in-reply report; the LLM stays unbuilt, so a later send re-checks
+        effective_observer.on_event(TurnRefusedEvent(refusal))
         return refusal
       # the tracker is locked in on first send (the LLM is constructed once and
       # records one trail); later calls can't swap it. surface (the trail
-      # header's surface label) and hold are locked
-      # in the same way.
-      self._llm, messages, _ = self._start(
-        message,
-        interactive=True,
-        hold=hold,
-        observer=observer,
-        tracker=tracker,
-        surface=surface,
-        summoned_by=None,
-      )
+      # header's surface label) and hold are locked in the same way.
+      try:
+        self._llm, messages, _ = self._start(
+          message,
+          interactive=True,
+          hold=hold,
+          observer=effective_observer,
+          tracker=tracker,
+          surface=surface,
+          summoned_by=None,
+        )
+      except Exception as error:
+        effective_observer.on_event(TurnFailedEvent(str(error)))
+        raise
     else:
       if observer is not None:
         # unlike the tracker, the observer is rebindable mid-conversation: a
@@ -1069,8 +1107,16 @@ class BaseBro(ABC):
         # existed, so the surface attaches its renderer on its first send.
         self._observer = observer
         self._llm.observer = observer
+      effective_observer = self._observer
+      effective_observer.on_event(TurnStartedEvent(message))
       messages = [{'role': 'user', 'content': message}]
-    return await self._llm.send(messages, request_timeout=request_timeout)
+    try:
+      result = await self._llm.send(messages, request_timeout=request_timeout)
+    except Exception as error:
+      effective_observer.on_event(TurnFailedEvent(str(error)))
+      raise
+    effective_observer.on_event(TurnCompletedEvent(result))
+    return result
 
   def _servers_with_spell_tools(
     self,
@@ -1190,7 +1236,8 @@ class BaseBro(ABC):
       log.warning('failed to record the error step: %s', step_error)
 
   def _make_observer(self) -> Observer:
-    return BoringRenderer(prefix=self.name)
+    configuration = preset(PresetName.OBSERVER, context_label=self.name)
+    return LiveDisplayObserver(DisplaySession(configuration, StreamRenderer(sys.stderr)))
 
   def _make_tracker(self) -> Tracker:
     return _default_tracker_factory()

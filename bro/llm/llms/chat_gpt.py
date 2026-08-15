@@ -18,7 +18,13 @@ import bro.llm.llm as llm_llm
 import bro.llm.usage as usage
 from bro.base import credentials, log
 from bro.llm.mcp import MCPServer, Tool, ToolControlSignal
-from bro.llm.observer import Observer
+from bro.llm.observer import (
+  InterimAssistantTextEvent,
+  Observer,
+  ReasoningEvent,
+  ToolCallEvent,
+  ToolResultEvent,
+)
 from bro.llm.tracker import ToolStepSource, Tracker
 
 if TYPE_CHECKING:
@@ -374,25 +380,25 @@ class ChatGPT(llm_llm.LLM):
     self,
     response: Response,
     *,
-    is_terminal: bool,
     llm_call_step_id: Optional[int],
   ) -> None:
     self._tool_call_sources.clear()
+    continues = has_tool_calls(response)
     for index, item in enumerate(response.output, start=1):
       if item.type == 'reasoning':
         for part in item.summary:
           if part.type == 'summary_text' and len(part.text) > 0:
-            self.observer.on_reasoning(part.text)
-      elif item.type == 'message':
+            self.observer.on_event(ReasoningEvent(part.text))
+      elif item.type == 'message' and continues:
         text = ''.join(content.text for content in item.content if content.type == 'output_text')
         if len(text) > 0:
-          self.observer.on_assistant_message(text, terminal=is_terminal)
+          self.observer.on_event(InterimAssistantTextEvent(text))
       elif item.type == 'function_call':
         try:
           arguments = json.loads(item.arguments)
         except json.JSONDecodeError:
           arguments = {'_raw_arguments': item.arguments}
-        self.observer.on_tool_call(item.name, arguments)
+        self.observer.on_event(ToolCallEvent(item.call_id, item.name, arguments))
         if llm_call_step_id is not None:
           self._tool_call_sources[item.call_id] = {
             'step_id': llm_call_step_id,
@@ -431,7 +437,7 @@ class ChatGPT(llm_llm.LLM):
         # can react (retry, switch source, raise) instead of crashing the loop.
         output = f'tool {item.name!r} failed: {type(exception).__name__}: {exception}'
         is_error = True
-      self.observer.on_tool_result(item.name, output)
+      self.observer.on_event(ToolResultEvent(item.call_id, item.name, output, is_error=is_error))
       # tracker body keeps the raw tool output (dict or str) — the JSON encoding
       # we do below for the API is a wire-format concern only.
       self.tracker.step(
@@ -456,6 +462,9 @@ class ChatGPT(llm_llm.LLM):
     # learn its work was stopped rather than silently lose it.
     outputs: list[ResponseInputItemParam] = []
     for item in calls:
+      self.observer.on_event(
+        ToolResultEvent(item.call_id, item.name, INTERRUPTED_TOOL_OUTPUT, is_error=True)
+      )
       self.tracker.step(
         'tool_result',
         INTERRUPTED_TOOL_OUTPUT,
@@ -607,11 +616,7 @@ class ChatGPT(llm_llm.LLM):
       call_index=self._call_index,
     )
     self._publish_usage(response)
-    self._emit_response_steps(
-      response,
-      is_terminal=not has_tool_calls(response),
-      llm_call_step_id=llm_call_step_id,
-    )
+    self._emit_response_steps(response, llm_call_step_id=llm_call_step_id)
     return response
 
   async def send(self, messages: list[dict], *, request_timeout: Optional[float] = None) -> str:

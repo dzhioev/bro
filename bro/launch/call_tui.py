@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import time
 from datetime import date, datetime
-from typing import Any, ClassVar, Optional
+from typing import ClassVar, Optional, assert_never
 
 import humanize
 import rich.markdown
@@ -34,7 +34,18 @@ from bro.launch._trace_format import format_tool_call
 from bro.launch.call import DATE_FORMAT, INTERRUPTED_NOTICE
 from bro.launch.resume import HistoryMessage
 from bro.llm.mcp import canonical_name
-from bro.llm.observer import Observer
+from bro.llm.observer import (
+  InterimAssistantTextEvent,
+  ObservedEvent,
+  Observer,
+  ReasoningEvent,
+  ToolCallEvent,
+  ToolResultEvent,
+  TurnCompletedEvent,
+  TurnFailedEvent,
+  TurnRefusedEvent,
+  TurnStartedEvent,
+)
 from bro.show import format_card
 
 # the message field states: it takes text only between turns, so an interrupt is
@@ -603,22 +614,22 @@ class TUIRenderer(Observer):
   def _post(self, text: str) -> None:
     self._app.append_trace_line(text)
 
-  def on_reasoning(self, text: str) -> None:
-    # each event carries one complete reasoning-summary block, so it renders
-    # whole in its own bubble, untruncated
-    self._app.append_thinking(text)
-
-  def on_assistant_message(self, text: str, terminal: bool) -> None:
-    # skip terminal — ChatApp mounts the reply as a bro bubble when the turn
-    # ends, so emitting here would double-render.
-    if terminal:
+  def on_event(self, event: ObservedEvent) -> None:
+    if isinstance(event, ReasoningEvent):
+      # each event carries one complete reasoning-summary block, so it renders
+      # whole in its own bubble, untruncated
+      self._app.append_thinking(event.content)
+    elif isinstance(event, InterimAssistantTextEvent):
+      self._app.append_bro_message(event.content)
+    elif isinstance(event, ToolCallEvent):
+      self._app.note_tool_call(event.tool_name)
+      self._post(f'→ {format_tool_call(event.tool_name, event.arguments)}')
+    elif isinstance(event, ToolResultEvent):
+      self._app.note_tool_result()
+      self._post(f'← {canonical_name(event.tool_name)}')
+    elif isinstance(
+      event, (TurnStartedEvent, TurnCompletedEvent, TurnRefusedEvent, TurnFailedEvent)
+    ):
       return
-    self._app.append_bro_message(text)
-
-  def on_tool_call(self, name: str, arguments: dict[str, Any]) -> None:
-    self._app.note_tool_call(name)
-    self._post(f'→ {format_tool_call(name, arguments)}')
-
-  def on_tool_result(self, name: str, result: dict[str, Any] | str) -> None:
-    self._app.note_tool_result()
-    self._post(f'← {canonical_name(name)}')
+    else:
+      assert_never(event)
