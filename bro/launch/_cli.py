@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import sys
 from typing import Literal, Optional
 
 import bro.base.args as base_args
@@ -12,7 +13,11 @@ from bro.bro import BroRaised
 from bro.bros.bro import Bro
 from bro.llm.llm import EFFORT_LEVELS, LLMSpec
 from bro.llm.mcp import HOLDS
-from bro.llm.observer import Observer
+from bro.trails.display.config import Layout, OutputRoute, PresetName, preset
+from bro.trails.display.core import DisplaySession
+from bro.trails.display.live import LiveDisplayObserver
+from bro.trails.display.panel import RichPanelRenderer
+from bro.trails.display.terminal import StreamRenderer
 
 # shared flag help so all the launcher CLIs describe `--fast` / `--in-place` identically.
 FAST_HELP = (
@@ -227,6 +232,18 @@ def _run_summoned(
   return 0
 
 
+def _ask_observer(bro_name: str, *, rich: bool) -> LiveDisplayObserver:
+  configuration = preset(
+    PresetName.ASK,
+    context_label=bro_name,
+    **({'layout': Layout.PANELS} if rich else {}),
+  )
+  destinations = dict.fromkeys(OutputRoute, sys.stderr)
+  destinations[OutputRoute.REPLY] = sys.stdout
+  renderer = RichPanelRenderer(destinations) if rich else StreamRenderer(destinations)
+  return LiveDisplayObserver(DisplaySession(configuration, renderer))
+
+
 def run_main(
   argv: list[str],
   *,
@@ -329,20 +346,14 @@ def run_main(
   except NotImplementedError as error:
     log.error('%s', error)
     return 1
-  observer: Optional[Observer] = None
-  if args['rich']:
-    from bro.llm.observer import RichConsoleRenderer
-
-    observer = RichConsoleRenderer(prefix=bro.name)
+  observer = _ask_observer(bro.name, rich=args['rich'])
   hold = args['hold'] if args['hold'] is not None else 'unattended'
   try:
-    result = asyncio.run(bro.run(input_text, observer=observer, surface='ask', hold=hold))
-  except BroRaised as error:
-    log.error('raised: %s', error.reason)
+    asyncio.run(bro.run(input_text, observer=observer, surface='ask', hold=hold))
+  except BroRaised:
     return 1
   except KeyboardInterrupt:
     # Ctrl+C cancels the run through the loop; the shell asked for this, so it
     # reads as an interrupted command, not a crashed one
     log.error('interrupted')
     return 130
-  print(result)
