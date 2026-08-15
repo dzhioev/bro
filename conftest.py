@@ -31,15 +31,16 @@ the developer's own checkouts to credential instances, and a launch-scoping test
 runs from inside one of them, so the real file would bind the resolver to
 whatever that checkout reads.
 
-The usage-file pointer and the Claude session id are dropped too: a test suite
-launched from inside a bro run or a claude session inherits the live usage
-source, and a test reading `usage.current_usage()` would otherwise see that
-session's spend. `PWD` goes with them — the transcript fallback resolves the
-working directory through it, and `monkeypatch.chdir` never updates it, so a
-chdir'd test would still read the launching session's transcripts. `CW_NAME`
-too — it marks a managed workspace, and a bro run in a test would otherwise
-provision the launching session's workspace
-(`BaseBro._provision_workspace`).
+The usage-file pointer and the Claude session id are dropped before every test
+(the autouse fixture below): a test suite launched from inside a bro run or a
+claude session inherits the live usage source, and `usage.publish` exports a
+minted pointer into `os.environ` mid-run, so a test reading a usage source
+would otherwise see the launching session's spend or an earlier test's file. `PWD` is dropped at import — the
+transcript fallback resolves the working directory through it, and
+`monkeypatch.chdir` never updates it, so a chdir'd test would still read the
+launching session's transcripts. `CW_NAME` too — it marks a managed workspace,
+and a bro run in a test would otherwise provision the launching session's
+workspace (`BaseBro._provision_workspace`).
 
 The log level is pinned to INFO and `BRO_LOG_LEVEL` dropped — at session start
 against an inherited verbose launch (`run-tests --verbose`), and after every
@@ -73,8 +74,6 @@ os.environ.pop(CHANNEL_ENV, None)
 os.environ.pop('BRO_HOLD', None)
 os.environ.pop('CW_RUNNER_PID', None)
 os.environ.pop(REGISTRY_ENV, None)
-os.environ.pop(usage.USAGE_FILE_VARIABLE, None)
-os.environ.pop(usage.SESSION_ID_VARIABLE, None)
 os.environ.pop('PWD', None)
 os.environ.pop('CW_NAME', None)
 log.set_level(logging.INFO)
@@ -102,6 +101,12 @@ def _pin_credential_gate_open(request, monkeypatch):
 def _isolate_host_config(monkeypatch, tmp_path):
   monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(tmp_path / 'absent.json'))
   monkeypatch.setattr('bro.base.credentials._selected_instances', {})
+
+
+@pytest.fixture(autouse=True)
+def _drop_usage_source():
+  os.environ.pop(usage.USAGE_FILE_VARIABLE, None)
+  os.environ.pop(usage.SESSION_ID_VARIABLE, None)
 
 
 @pytest.fixture(autouse=True)
