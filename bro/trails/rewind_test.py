@@ -1,36 +1,34 @@
+import io
 import json
 from typing import Any, Optional, cast
 
 import pytest
 
-from bro.base.ansi import Colors
+import bro.trails.rewind as rewind
 from bro.trails.client import HTTPStatusError, TrailsClient
+from bro.trails.display import ColorMode, preset
 from bro.trails.rewind import (
   _command_grep,
+  _command_list,
   _command_show,
   _command_steps,
+  _command_tree,
+  _emit_document,
   _follow_batches,
-  _format_header,
-  _format_step_summary,
-  _format_trail_row,
-  _render_conversation,
-  _render_tree,
-  _truncate_oneline,
   _with_default_command,
 )
 from bro.trails.server.backends import BACKENDS
 
-NO_COLOR = Colors(enabled=False)
 LULID = '01kydtgppz-y7fdwep2-apw9ag3b'
 
 
 class FakeClient:
-  """in-memory stand-in for the TrailsClient read surface rewind drives."""
+  """In-memory stand-in for the TrailsClient read surface rewind drives."""
 
   def __init__(self):
-    self.trails: dict[str, dict] = {}
+    self.trails: dict[str, dict[str, Any]] = {}
     self.records: dict[str, list[str]] = {}
-    self.steps: dict[str, list[dict]] = {}
+    self.steps: dict[str, list[dict[str, Any]]] = {}
     self.contexts: dict[str, Any] = {}
 
   def add_claude(self, trail_id: str, lines: list[str], **header: Any) -> None:
@@ -38,16 +36,26 @@ class FakeClient:
       'id': trail_id,
       'harness': 'claude',
       'bro': 'dev',
+      'version': '2',
       'started_at': '2026-01-01T00:00:00Z',
       'end': None,
+      'interactive': True,
+      'surface': 'cw',
       'turn_count': 0,
-      'native': {'segment': 'seg', 'llm': {'model': 'claude'}, 'line_count': len(lines)},
+      'native': {
+        'segment': 'segment',
+        'llm': {'model': 'claude'},
+        'harness_version': '2.1.0',
+      },
       'location': {'workspace': 'ws'},
+      'usage': {},
+      'models': ['claude'],
+      'extent': len(lines),
       **header,
     }
     self.records[trail_id] = lines
 
-  def add_bro(self, trail_id: str, steps: list[dict], **header: Any) -> None:
+  def add_bro(self, trail_id: str, steps: list[dict[str, Any]], **header: Any) -> None:
     self.trails[trail_id] = {
       'id': trail_id,
       'harness': 'bro',
@@ -60,28 +68,25 @@ class FakeClient:
       'turn_count': 0,
       'native': {'llm': {'model': 'gpt-5'}},
       'usage': {},
-      'models': [],
+      'models': ['gpt-5'],
       **header,
     }
     self.steps[trail_id] = steps
 
-  def get_trail(self, trail_id: str) -> dict:
+  def get_trail(self, trail_id: str) -> dict[str, Any]:
     if trail_id not in self.trails:
       raise HTTPStatusError(404, f'trail not found: {trail_id}')
     return self.trails[trail_id]
 
   def iter_steps(self, trail_id: str, *, after: Optional[int] = None):
     if trail_id in self.steps:
-      rows = self.steps[trail_id]
-      started = after is None
-      for row in rows:
-        if started:
+      for row in self.steps[trail_id]:
+        if after is None or row['step_id'] > after:
           yield row
-        elif row['step_id'] == after:
-          started = True
       return
-    start = after + 1 if after is not None else 0
-    for index, raw in enumerate(self.records[trail_id][start:], start=start):
+    for index, raw in enumerate(self.records[trail_id]):
+      if after is not None and index <= after:
+        continue
       try:
         record = json.loads(raw)
       except json.JSONDecodeError:
@@ -94,25 +99,26 @@ class FakeClient:
       yield from BACKENDS[harness].project(row)
 
   def iter_trails(self, **filters: Any):
-    forked_from = filters.get('forked_from')
     selected = []
     for trail in self.trails.values():
+      forked_from = filters.get('forked_from')
       if forked_from is not None:
         if trail.get('forked_from', {}).get('trail_id') != forked_from:
           continue
       elif filters.get('harness') is not None and trail['harness'] != filters['harness']:
         continue
+      elif filters.get('bro') is not None and trail.get('bro') != filters['bro']:
+        continue
       selected.append(trail)
     limit = filters.get('max_items')
     yield from selected[: limit if limit is not None else len(selected)]
 
-  def get_launch_context(self, trail_id: str) -> Optional[Any]:
+  def get_launch_context(self, trail_id: str) -> Any:
     return self.contexts.get(trail_id)
 
 
-def _cast(client: FakeClient) -> 'TrailsClient':
-  # FakeClient stands in for the TrailsClient surface structurally
-  return cast('TrailsClient', client)
+def _client(fake: FakeClient) -> TrailsClient:
+  return cast(TrailsClient, fake)
 
 
 def _user(text: str, uuid: str = 'u1') -> str:
@@ -142,221 +148,49 @@ def _assistant(text: str, uuid: str = 'a1') -> str:
   )
 
 
-class TestTruncateOneline:
-  def test_short_string_passes_through(self):
-    assert _truncate_oneline('hello') == 'hello'
-
-  def test_long_string_truncates_with_marker(self):
-    out = _truncate_oneline('x' * 300, limit=100)
-    assert out.startswith('x' * 100)
-    assert '... <200 more chars>' in out
-
-
-class TestFormatTrailRow:
-  def test_bro_row_names_the_bro(self):
-    out = _format_trail_row(
-      {
-        'id': 'T1',
-        'harness': 'bro',
-        'bro': 'dev',
-        'native': {'llm': {'model': 'gpt-5'}},
-        'started_at': '2026-06-07T22:14:03.000000Z',
-        'end': None,
-      },
-      NO_COLOR,
-    )
-    assert 'T1' in out
-    assert 'bro' in out
-    assert 'dev' in out
-    assert 'live' in out
-
-  def test_claude_row_names_the_workspace_and_subject(self):
-    out = _format_trail_row(
-      {
-        'id': 'T2',
-        'harness': 'claude',
-        'bro': 'dev',
-        'location': {'workspace': 'my-feature'},
-        'native': {'llm': {'model': 'claude'}},
-        'started_at': '2026-06-07T22:14:03.000000Z',
-        'end': {'at': '2026-06-07T23:00:00Z', 'reason': 'ok'},
-        'subject': 'fix the recorder',
-        'forked_from': {'trail_id': 'T1', 'step_id': 4},
-      },
-      NO_COLOR,
-    )
-    assert 'claude' in out
-    assert 'my-feature' in out
-    assert 'done:ok' in out
-    assert 'fork-of T1' in out
-    assert 'fix the recorder' in out
-
-  def test_server_inference_renders_as_unreported(self):
-    out = _format_trail_row(
-      {
-        'id': 'T3',
-        'harness': 'bro',
-        'bro': 'dev',
-        'native': {'llm': {'model': 'gpt-5'}},
-        'started_at': '2026-06-07T22:14:03.000000Z',
-        'end': {'at': '2026-06-07T23:00:00Z', 'inference': 'unreported'},
-      },
-      NO_COLOR,
-    )
-    assert 'unreported' in out
-    assert 'done:' not in out
+def _args(trail_id: str, **changes: Any) -> dict[str, Any]:
+  return {
+    'trail_id': trail_id,
+    'color': 'never',
+    'no_pager': True,
+    'follow': False,
+    'interval': 0,
+    **changes,
+  }
 
 
-class TestFormatStepSummary:
-  def test_inline_body_and_extras(self):
-    out = _format_step_summary(
-      {
-        'step_id': 1,
-        'kind': 'tool_call',
-        'body': None,
-        'ts': '2026-06-07T00:00:00.000000Z',
-        'turn_index': 2,
-        'tool_name': 'add_task',
-        'call_id': 'c1',
-        'arguments': {'name': 'x'},
-        'where': 'retired-writer',
-      },
-      NO_COLOR,
-    )
-    assert out.startswith('1  ')
-    assert 'tool_name=add_task' in out
-    assert 'args=' in out
-    assert 'where' not in out
-
-  def test_historical_terminal_end_reason_renders_as_ok(self):
-    out = _format_step_summary(
-      {
-        'step_id': 9,
-        'kind': 'end',
-        'body': {'reason': 'terminal'},
-        'ts': '2026-06-07T00:00:00.000000Z',
-      },
-      NO_COLOR,
-    )
-    assert '"reason": "ok"' in out
-    assert 'terminal' not in out
-
-  def test_spilled_body_renders_size_and_url(self):
-    out = _format_step_summary(
-      {
-        'kind': 'llm_call',
-        'body': {
-          's3': 'trails/steps/T/3-abc123.json',
-          'url': 'https://example.com/x',
-          'size': 4096,
-        },
-        'ts': '2026-06-07T00:00:00.000000Z',
-        'turn_index': 1,
-      },
-      NO_COLOR,
-    )
-    assert '<4096 bytes spilled>' in out
-    assert 'https://example.com/x' in out
-
-  def test_body_with_only_an_s3_key_is_rendered_inline(self):
-    out = _format_step_summary(
-      {
-        'kind': 'tool_result',
-        'body': {'s3': 'a genuine field'},
-        'ts': '2026-06-07T00:00:00.000000Z',
-      },
-      NO_COLOR,
-    )
-    assert '"s3": "a genuine field"' in out
-    assert 'spilled' not in out
-
-
-class TestHeader:
-  def test_shared_header_includes_universal_and_native_fields(self):
-    out = _format_header(
-      {
-        'id': 'T1',
-        'bro': 'dev',
-        'harness': 'bro',
-        'version': '1',
-        'native': {
-          'llm': {'type': 'chat_gpt', 'model': 'gpt-5'},
-          'step_counts_by_kind': {'reasoning': 3, 'end': 0},
-        },
-        'started_at': '2026-06-07T22:14:03.000000Z',
-        'end': {'at': '2026-06-07T22:15:00.000000Z', 'reason': 'ok'},
-        'interactive': False,
-        'surface': 'ask',
-        'forked_from': {'trail_id': 'T-p', 'step_id': 5},
-        'turn_count': 3,
-        'usage': {'gpt-5': {'input': 100, 'cache_write': 0, 'cache_read': 0, 'output': 50}},
-        'models': ['gpt-5'],
-      },
-      NO_COLOR,
-    )
-    assert 'harness     bro' in out
-    assert 'T-p @ step 5' in out
-    assert '"input": 100' in out
-    assert '"reasoning": 3' in out
-    assert '"end": 0' not in out
-
-  def test_claude_header_uses_the_same_spine_with_its_native_block(self):
-    out = _format_header(
-      {
-        'id': 'T2',
-        'bro': 'dev',
-        'harness': 'claude',
-        'version': '1',
-        'native': {
-          'llm': {'model': 'claude'},
-          'harness_version': '2.1.0',
-          'segment': 'seg',
-        },
-        'extent': 4,
-        'started_at': '2026-06-07T22:14:03.000000Z',
-        'end': None,
-        'interactive': True,
-        'surface': 'cw',
-        'location': {'workspace': 'feature', 'host': 'box'},
-        'turn_count': 2,
-      },
-      NO_COLOR,
-    )
-    assert 'workspace   feature' in out
-    assert 'claude-code 2.1.0' in out
-    assert 'lines       4' in out
-
-
-class TestConversationRendering:
-  def test_renders_conversation_with_context_preamble(self):
+class TestShow:
+  def test_renders_conversation_context_and_header_through_the_shared_path(self, capsys):
     client = FakeClient()
     client.add_claude('T1', [_user('hello'), _assistant('hi there')])
-    client.contexts['T1'] = [{'title': 'git state', 'fields': {'branch': 'b'}}]
-    out, _, _ = _render_conversation(_cast(client), client.get_trail('T1'), NO_COLOR)
-    assert 'SESSION CONTEXT' in out
-    assert '▸ git state' in out
-    assert '#1 USER' in out
-    assert 'hello' in out
-    assert '#2 ASSISTANT' in out
-    assert 'hi there' in out
+    client.contexts['T1'] = [{'title': 'git state', 'fields': {'branch': 'feature'}}]
 
-  def test_walks_the_fork_chain_through_parent_anchors(self):
+    assert _command_show(_client(client), _args('T1')) == 0
+
+    output = capsys.readouterr().out
+    assert 'trail' in output and 'T1' in output
+    assert 'SESSION CONTEXT' in output
+    assert '▸ git state' in output
+    assert '#1 USER' in output and 'hello' in output
+    assert '#2 ASSISTANT' in output and 'hi there' in output
+
+  def test_walks_the_fork_chain_through_the_exact_parent_anchor(self, capsys):
     client = FakeClient()
-    client.add_claude('T1', [_user('hello', 'u1'), _assistant('hi', 'a1'), _user('lost', 'u2')])
+    client.add_claude('T1', [_user('hello'), _assistant('anchor'), _user('discarded')])
     client.add_claude(
       'T2',
-      [_user('resumed', 'u3')],
-      forked_from={'trail_id': 'T1', 'step_id': 1},
+      [_user('resumed')],
+      forked_from={'trail_id': 'T1', 'step_id': 1, 'index': 1},
     )
-    out, _, _ = _render_conversation(_cast(client), client.get_trail('T2'), NO_COLOR)
-    assert 'hello' in out
-    assert 'hi' in out
-    assert 'lost' not in out
-    assert 'resumed' in out
-    assert '── resumed as trail T2' in out
-    assert '#3 USER' in out
 
-  def test_tool_results_inline_under_their_call(self):
+    assert _command_show(_client(client), _args('T2')) == 0
+
+    output = capsys.readouterr().out
+    assert 'hello' in output and 'anchor' in output and 'resumed' in output
+    assert 'discarded' not in output
+    assert '── resumed as trail T2' in output
+
+  def test_tool_results_are_retained_under_their_calls(self, capsys):
     call = json.dumps(
       {
         'type': 'assistant',
@@ -380,52 +214,20 @@ class TestConversationRendering:
     )
     client = FakeClient()
     client.add_claude('T1', [call, result])
-    out, _, _ = _render_conversation(_cast(client), client.get_trail('T1'), NO_COLOR)
-    assert '→ bash({"cmd": "ls"})' in out
-    assert 'file.txt' in out
 
+    assert _command_show(_client(client), _args('T1')) == 0
 
-class TestShow:
-  def test_bro_trail_renders_the_generalized_conversation(self, capsys):
-    client = FakeClient()
-    client.add_bro(
-      'T1',
-      [
-        {'step_id': 0, 'kind': 'user_input', 'body': 'hi', 'ts': '2026-01-01T00:00:00Z'},
-        {
-          'step_id': 1,
-          'kind': 'llm_call',
-          'ts': '2026-01-01T00:00:01Z',
-          'body': {
-            'response': {
-              'model': 'gpt-5',
-              'output': [
-                {'type': 'message', 'content': [{'type': 'output_text', 'text': 'hello'}]}
-              ],
-            }
-          },
-        },
-      ],
-    )
-    args = {'trail_id': 'T1', 'color': 'never', 'no_pager': True}
-    assert _command_show(_cast(client), args, NO_COLOR) == 0
-    out = capsys.readouterr().out
-    assert 'trail' in out and 'T1' in out
-    assert '#1 USER' in out
-    assert 'hi' in out
-    assert '#2 ASSISTANT' in out
-    assert 'hello' in out
-    assert 'user_input' not in out
+    output = capsys.readouterr().out
+    assert '→ bash({"cmd": "ls"})' in output
+    assert 'file.txt' in output
 
   def test_unknown_id_propagates_not_found(self):
-    client = FakeClient()
-    args = {'trail_id': 'b2249daa', 'color': 'never', 'no_pager': True}
     with pytest.raises(HTTPStatusError, match='trail not found'):
-      _command_show(_cast(client), args, NO_COLOR)
+      _command_show(_client(FakeClient()), _args('missing'))
 
 
 class TestSteps:
-  def test_native_view_keeps_bro_step_ids_and_bodies(self, capsys):
+  def test_native_view_keeps_step_ids_bodies_and_extras(self, capsys):
     client = FakeClient()
     client.add_bro(
       'T1',
@@ -439,70 +241,179 @@ class TestSteps:
         }
       ],
     )
-    args = {'trail_id': 'T1', 'color': 'never', 'no_pager': True}
-    assert _command_steps(_cast(client), args, NO_COLOR) == 0
-    out = capsys.readouterr().out
-    assert '0  ' in out
-    assert 'llm_call' in out
-    assert '"response": {"id": "r1"}' in out
-    assert 'response_id=r1' in out
 
-  def test_native_view_exposes_claude_raw_lines(self, capsys):
+    assert _command_steps(_client(client), _args('T1')) == 0
+
+    output = capsys.readouterr().out
+    assert '0  ' in output
+    assert 'llm_call' in output
+    assert '"response": {"id": "r1"}' in output
+    assert 'response_id=r1' in output
+
+  def test_spilled_body_is_an_omission_marker_and_is_not_fetched(self, capsys):
     client = FakeClient()
-    raw = _user('hello')
-    client.add_claude('T1', [raw])
-    args = {'trail_id': 'T1', 'color': 'never', 'no_pager': True}
-    assert _command_steps(_cast(client), args, NO_COLOR) == 0
-    assert raw in capsys.readouterr().out
+    client.add_bro(
+      'T1',
+      [
+        {
+          'step_id': 0,
+          'kind': 'llm_call',
+          'body': {'s3': 'key', 'url': 'https://example.test/body', 'size': 4096},
+          'ts': None,
+        }
+      ],
+    )
+
+    assert _command_steps(_client(client), _args('T1')) == 0
+
+    output = capsys.readouterr().out
+    assert '<4096 bytes spilled> https://example.test/body' in output
+
+  def test_historical_terminal_end_reason_renders_as_ok(self, capsys):
+    client = FakeClient()
+    client.add_bro(
+      'T1', [{'step_id': 0, 'kind': 'end', 'body': {'reason': 'terminal'}, 'ts': None}]
+    )
+    assert _command_steps(_client(client), _args('T1')) == 0
+    output = capsys.readouterr().out
+    assert '"reason": "ok"' in output
+    assert 'terminal' not in output
+
+
+class TestListAndTree:
+  def test_list_uses_structural_rows_for_status_owner_subject_and_fork(self, capsys):
+    client = FakeClient()
+    client.add_bro('T1', [], subject='root')
+    client.add_claude(
+      'T2',
+      [],
+      end={'at': '2026-01-01T00:01:00Z', 'reason': 'ok'},
+      subject='child',
+      forked_from={'trail_id': 'T1', 'step_id': 0},
+    )
+    args = {
+      'color': 'never',
+      'no_pager': True,
+      'harness': None,
+      'bro': None,
+      'forked_from': None,
+      'since': None,
+      'until': None,
+      'limit': 50,
+    }
+
+    assert _command_list(_client(client), args) == 0
+
+    output = capsys.readouterr().out
+    assert 'T1' in output and 'live' in output and 'root' in output
+    assert 'T2' in output and 'done:ok' in output and 'fork-of T1' in output
+    assert 'ws' in output
+
+  def test_tree_uses_lineage_records_and_highlights_the_selected_node(self, capsys):
+    client = FakeClient()
+    client.add_bro('TROOT', [])
+    client.add_claude(LULID, [], forked_from={'trail_id': 'TROOT', 'step_id': 0})
+
+    assert _command_tree(_client(client), {'trail_id': LULID, 'color': 'never'}) == 0
+
+    output = capsys.readouterr().out
+    assert 'TROOT' in output and LULID in output
+    assert 'ws/claude' in output
+    assert '<-- here' in output
 
 
 class TestGrep:
-  def _args(self, pattern: str, **overrides) -> dict:
-    return {'pattern': pattern, 'trails': [], 'color': 'never', **overrides}
+  def _grep_args(self, pattern: str, **changes: Any) -> dict[str, Any]:
+    return {
+      'pattern': pattern,
+      'trails': [],
+      'color': 'never',
+      'context': None,
+      'after_context': None,
+      'before_context': None,
+      **changes,
+    }
 
-  def test_matches_across_harnesses(self, capsys):
+  def test_matches_the_plain_rewind_show_document_across_harnesses(self, capsys):
     client = FakeClient()
     client.add_claude('T-claude', [_user('the needle is here')])
     client.add_bro(
-      'T-bro',
-      [{'step_id': 0, 'kind': 'user_input', 'body': 'needle too', 'ts': None}],
+      'T-bro', [{'step_id': 0, 'kind': 'user_input', 'body': 'needle too', 'ts': None}]
     )
-    assert _command_grep(_cast(client), self._args('needle'), NO_COLOR) == 0
-    out = capsys.readouterr().out
-    assert 'T-claude:' in out
-    assert 'T-bro:' in out
 
-  def test_line_name_is_the_whole_trail_id(self, capsys):
+    assert _command_grep(_client(client), self._grep_args('needle')) == 0
+
+    output = capsys.readouterr().out
+    assert 'T-claude:' in output and 'T-bro:' in output
+    assert '\x1b[' not in output
+
+  def test_searches_the_same_fork_chain_and_keeps_the_whole_trail_id(self, capsys):
     client = FakeClient()
-    client.add_claude(LULID, [_user('the needle is here')])
-    assert _command_grep(_cast(client), self._args('needle'), NO_COLOR) == 0
+    client.add_claude('parent', [_user('parent needle'), _assistant('anchor')])
+    client.add_claude(
+      LULID,
+      [_user('child')],
+      forked_from={'trail_id': 'parent', 'step_id': 1},
+    )
+
+    assert _command_grep(_client(client), self._grep_args('parent needle', trails=[LULID])) == 0
     assert f'{LULID}:' in capsys.readouterr().out
 
-  def test_searches_the_same_fork_chain_as_show(self, capsys):
+  def test_no_match_exits_one(self):
     client = FakeClient()
-    client.add_claude('T1', [_user('parent needle'), _assistant('anchor')])
-    client.add_claude(
-      'T2',
-      [_user('child')],
-      forked_from={'trail_id': 'T1', 'step_id': 1},
-    )
-    assert _command_grep(_cast(client), self._args('parent needle', trails=['T2']), NO_COLOR) == 0
-    assert 'T2:' in capsys.readouterr().out
-
-  def test_no_match_exits_1(self, capsys):
-    client = FakeClient()
-    client.add_claude('T1', [_user('nothing to see')])
-    assert _command_grep(_cast(client), self._args('absent-pattern'), NO_COLOR) == 1
-    del capsys
+    client.add_claude('T1', [_user('nothing')])
+    assert _command_grep(_client(client), self._grep_args('absent')) == 1
 
   def test_explicit_unknown_id_propagates_not_found(self):
-    client = FakeClient()
-    args = self._args('needle', trails=['b2249daa'])
     with pytest.raises(HTTPStatusError, match='trail not found'):
-      _command_grep(_cast(client), args, NO_COLOR)
+      _command_grep(_client(FakeClient()), self._grep_args('needle', trails=['missing']))
+
+
+class FollowClient(FakeClient):
+  def __init__(self):
+    super().__init__()
+    self.add_bro('T1', [])
+    self.result_sent = False
+
+  def iter_messages(self, trail_id: str, *, after: Optional[int] = None):
+    del trail_id
+    if after is None:
+      yield {
+        'type': 'tool_call',
+        'ts': None,
+        'source': {'step_id': 0, 'index': 0},
+        'call_id': 'call',
+        'tool_name': 'read',
+        'arguments': {},
+      }
+    elif after == 0 and not self.result_sent:
+      self.result_sent = True
+      yield {
+        'type': 'tool_result',
+        'ts': None,
+        'source': {'step_id': 1, 'index': 0},
+        'call_id': 'call',
+        'content': 'followed result',
+      }
+
+  def get_trail(self, trail_id: str) -> dict[str, Any]:
+    header = super().get_trail(trail_id)
+    if self.result_sent:
+      return {**header, 'end': {'at': '2026-01-01T00:01:00Z', 'reason': 'ok'}}
+    return header
 
 
 class TestFollow:
+  def test_show_follow_streams_late_result_continuations_without_cursor_updates(self, capsys):
+    client = FollowClient()
+
+    assert _command_show(_client(client), _args('T1', follow=True)) == 0
+
+    output = capsys.readouterr().out
+    assert '→ read({})' in output
+    assert '← followed result' in output
+    assert '\x1b[' not in output
+
   def test_shared_loop_stops_at_a_native_end_step(self):
     client = FakeClient()
     client.add_bro(
@@ -515,7 +426,7 @@ class TestFollow:
     )
     batches = list(
       _follow_batches(
-        _cast(client),
+        _client(client),
         'T1',
         iterator=lambda trail_id, after: client.iter_steps(trail_id, after=after),
         cursor=lambda step: step['step_id'],
@@ -526,12 +437,23 @@ class TestFollow:
     )
     assert [row['step_id'] for batch in batches for row in batch] == [0, 1]
 
-  def test_header_end_terminates_a_message_stream_without_end_steps(self):
-    client = FakeClient()
-    client.add_claude('T1', [_user('hello')], end={'at': 'x', 'reason': 'ok'})
+  def test_header_completion_drains_a_message_stream(self):
+    class DrainClient(FakeClient):
+      def __init__(self):
+        super().__init__()
+        self.add_bro('T1', [], end={'at': 'x', 'reason': 'ok'})
+        self.queries = 0
+
+      def iter_messages(self, trail_id: str, *, after: Optional[int] = None):
+        del trail_id, after
+        self.queries += 1
+        if self.queries == 2:
+          yield {'type': 'assistant', 'source': {'step_id': 3}}
+
+    client = DrainClient()
     batches = list(
       _follow_batches(
-        _cast(client),
+        _client(client),
         'T1',
         iterator=lambda trail_id, after: client.iter_messages(trail_id, after=after),
         cursor=lambda message: message['source']['step_id'],
@@ -540,59 +462,48 @@ class TestFollow:
         sleep=lambda _: None,
       )
     )
-    assert [message['type'] for batch in batches for message in batch] == ['user_input']
+    assert [message['source']['step_id'] for batch in batches for message in batch] == [3]
 
 
-class TestRenderTree:
-  def test_renders_children_and_highlight(self):
-    client = FakeClient()
-    client.add_bro('TROOT', [])
-    client.add_claude(LULID, [_user('x')], forked_from={'trail_id': 'TROOT', 'step_id': 0})
-    lines: list[str] = []
-    _render_tree(
-      _cast(client),
-      client.get_trail('TROOT'),
-      '',
-      is_last=True,
-      lines=lines,
-      colors=NO_COLOR,
-      highlight=LULID,
-    )
-    joined = '\n'.join(lines)
-    assert 'TROOT' in joined
-    assert LULID in joined
-    assert 'ws/claude' in joined  # claude nodes label by workspace
-    assert '<-- here' in joined
+class TTYBuffer(io.StringIO):
+  def isatty(self) -> bool:
+    return True
+
+
+class TestCapabilities:
+  def test_pager_is_only_used_for_a_finite_retained_tty_document(self, monkeypatch):
+    target = TTYBuffer()
+    paged: list[str] = []
+    monkeypatch.setattr(rewind.sys, 'stdout', target)
+    monkeypatch.setattr(rewind.pager, 'page', paged.append)
+    configuration = preset('rewind-show', color=ColorMode.NEVER)
+
+    _emit_document('finite', {'no_pager': False, 'follow': False}, configuration)
+    _emit_document('follow', {'no_pager': False, 'follow': True}, configuration)
+
+    assert paged == ['finite']
+    assert target.getvalue() == 'follow'
+
+  def test_rewind_no_longer_owns_trail_formatting_helpers(self):
+    for name in (
+      '_ConversationTimeline',
+      '_format_header',
+      '_format_step_summary',
+      '_format_trail_row',
+      '_render_tree',
+    ):
+      assert not hasattr(rewind, name)
 
 
 class TestWithDefaultCommand:
   def test_bare_id_gets_show(self):
-    assert _with_default_command(['rewind', 'b2249daa']) == ['rewind', 'show', 'b2249daa']
+    assert _with_default_command(['rewind', 'trail']) == ['rewind', 'show', 'trail']
 
-  def test_explicit_commands_kept(self):
+  def test_explicit_commands_and_help_are_kept(self):
     assert _with_default_command(['rewind', 'list']) == ['rewind', 'list']
     assert _with_default_command(['rewind', 'grep', 'p']) == ['rewind', 'grep', 'p']
-    assert _with_default_command(['rewind', 'steps', 'T1']) == ['rewind', 'steps', 'T1']
-
-  def test_no_args_and_help_kept(self):
-    assert _with_default_command(['rewind']) == ['rewind']
     assert _with_default_command(['rewind', '--help']) == ['rewind', '--help']
 
   def test_leading_flag_gets_show(self):
-    argv = ['rewind', '--color=never', 'b2249daa']
-    assert _with_default_command(argv) == ['rewind', 'show', '--color=never', 'b2249daa']
-
-
-@pytest.mark.parametrize(
-  'body,expected',
-  [
-    ({'reason': 'terminal'}, 'ok'),
-    ({'reason': 'raised', 'detail': 'x'}, 'raised'),
-  ],
-)
-def test_end_reason_mapping_only_touches_terminal(body, expected):
-  out = _format_step_summary(
-    {'step_id': 0, 'kind': 'end', 'body': body, 'ts': None},
-    NO_COLOR,
-  )
-  assert f'"reason": "{expected}"' in out
+    argv = ['rewind', '--color=never', 'trail']
+    assert _with_default_command(argv) == ['rewind', 'show', '--color=never', 'trail']

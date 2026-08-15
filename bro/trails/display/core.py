@@ -56,7 +56,11 @@ from bro.trails.display.records import (
 
 
 class DisplayDataError(ValueError):
-  """Malformed or inconsistent semantic display input."""
+  """Malformed or inconsistent semantic display input, with known provenance."""
+
+  def __init__(self, message: str, *, source: RecordedSource | LiveSource | None = None):
+    super().__init__(message)
+    self.source = source
 
 
 @dataclass
