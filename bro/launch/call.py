@@ -1,12 +1,13 @@
 import asyncio
 import contextlib
 import http.client
+import importlib.util
 import os
 import signal
 import sys
 from collections.abc import Callable, Iterator
-from datetime import date, datetime
-from typing import Any, Optional, TextIO
+from datetime import datetime
+from typing import Optional, TextIO
 
 import bro.base.args as base_args
 from bro.base import log
@@ -24,11 +25,20 @@ from bro.launch._cli import (
   maybe_containerize,
   run_llm_spec,
 )
-from bro.launch._trace_format import format_tool_call, oneline, truncate
-from bro.launch.resume import RESUME_LATEST, HistoryMessage
+from bro.launch.resume import RESUME_LATEST
 from bro.llm.llm import EFFORT_LEVELS
-from bro.llm.mcp import HOLDS, canonical_name
+from bro.llm.mcp import HOLDS
 from bro.llm.observer import Observer
+from bro.trails.display import (
+  DisplayRecord,
+  DisplaySession,
+  LiveDisplayObserver,
+  Notice,
+  Origin,
+  PresetName,
+  StreamRenderer,
+  preset,
+)
 from bros.bro import Bro
 
 __cli_name__ = 'call'
@@ -39,81 +49,20 @@ RESUME_HELP = (
   'prior exchanges are rendered as history and the continuation is recorded as a new trail'
 )
 
-# date-separator format shared with the TUI's DateSeparator
-DATE_FORMAT = '%a, %b %-d, %Y'
-
-# what either mode shows in place of a reply the user interrupted
 INTERRUPTED_NOTICE = '⨯ interrupted'
-
-
-_REASONING_LIMIT = 240
-
-
-def _now_hms() -> str:
-  return datetime.now().strftime('%H:%M:%S')
-
-
-def _message_line(timestamp: str, speaker: str, text: str) -> str:
-  """text mode's shape for one conversation message."""
-  return f'[{timestamp}] {speaker}: {text}'
-
-
-class TextRenderer(Observer):
-  """render observed events in the `[HH:MM:SS] bro …` shape text-mode emission
-  shares: background activity as one-liners, a message the bro sends mid-turn as
-  the conversation line a reply gets. no multi-line panels, no extra blank lines.
-  """
-
-  def __init__(
-    self,
-    prefix: str,
-    file: Optional[TextIO] = None,
-    now: Callable[[], str] = _now_hms,
-  ):
-    self._prefix = prefix
-    self._file = file if file is not None else sys.stdout
-    self._now = now
-
-  def _emit(self, body: str) -> None:
-    print(f'[{self._now()}] {self._prefix} {body}', file=self._file)
-    self._file.flush()
-
-  def on_reasoning(self, text: str) -> None:
-    self._emit(f'· thinking: {truncate(oneline(text), _REASONING_LIMIT)}')
-
-  def on_assistant_message(self, text: str, terminal: bool) -> None:
-    # skip terminal — call_text prints the reply itself as `[timestamp] bro: <reply>`,
-    # so emitting here would double-render.
-    if terminal:
-      return
-    print(_message_line(self._now(), self._prefix, text), file=self._file)
-    self._file.flush()
-
-  def on_tool_call(self, name: str, arguments: dict[str, Any]) -> None:
-    self._emit(f'→ {format_tool_call(name, arguments)}')
-
-  def on_tool_result(self, name: str, result: dict[str, Any] | str) -> None:
-    self._emit(f'← {canonical_name(name)}')
 
 
 @contextlib.contextmanager
 def _interruptible(task: asyncio.Task) -> Iterator[None]:
-  """route SIGINT to cancelling `task` for the duration of the block.
-
-  scoped to a running turn rather than installed for the whole REPL: at the
-  prompt there is nothing to interrupt, and Ctrl+C keeps its usual meaning of
-  ending the chat (removing the handler restores the default one)."""
+  """Route SIGINT to cancellation for the duration of one running turn."""
   loop = asyncio.get_running_loop()
   loop.add_signal_handler(signal.SIGINT, task.cancel)
-  try:
+  with contextlib.ExitStack() as stack:
+    stack.callback(loop.remove_signal_handler, signal.SIGINT)
     yield
-  finally:
-    loop.remove_signal_handler(signal.SIGINT)
 
 
 async def _turn(bro: Bro, message: str, *, observer: Observer, hold: str) -> Optional[str]:
-  """one exchange, interruptible with Ctrl+C — which ends the turn, not the
-  chat. None when the user interrupted it."""
   task = asyncio.create_task(bro.send(message, observer=observer, surface='call', hold=hold))
   with _interruptible(task):
     try:
@@ -122,72 +71,92 @@ async def _turn(bro: Bro, message: str, *, observer: Observer, hold: str) -> Opt
       return None
 
 
+def _surface_notice(
+  key: str,
+  content: str,
+  when: datetime,
+  *,
+  level: str = 'info',
+  trusted_visual: bool = False,
+) -> Notice:
+  return Notice(
+    key=key,
+    origin=Origin.SURFACE,
+    timestamp=when.astimezone().isoformat(),
+    content=content,
+    level=level,
+    trusted_visual=trusted_visual,
+  )
+
+
 async def call_text(
   bro: Bro,
   initial: Optional[str],
-  observer: Optional[Observer] = None,
   read_line: Optional[Callable[[], str]] = None,
   now: Callable[[], datetime] = datetime.now,
-  history: Optional[list[HistoryMessage]] = None,
+  history: Optional[list[DisplayRecord]] = None,
   hold: str = 'guided',
+  preset_name: PresetName = PresetName.CALL,
+  output: Optional[TextIO] = None,
 ) -> None:
-  """text-mode REPL: `[HH:MM:SS] bro: <reply>` lines, plain `> ` prompt.
-
-  used when stdin/stdout isn't a TTY or when `--text` is forced. read_line,
-  now, and observer are injectable for tests. `history` (a resumed
-  conversation's prior exchanges) renders before the banner, with a date line
-  wherever the day changes; `initial` may be None on a resume — the REPL then
-  just bro.prompts."""
+  """Run the conversation REPL through the stream trails frontend."""
   from bro.workspace.banner import render_banner
 
   read = read_line if read_line is not None else (lambda: input('> '))
-  effective_observer: Observer = observer if observer is not None else TextRenderer(prefix=bro.name)
+  destination = output if output is not None else sys.stdout
+  renderer = StreamRenderer(destination)
+  configuration = preset(preset_name, context_label=bro.name)
+  interruption_number = 0
 
-  def emit(reply: str) -> None:
-    print(_message_line(now().strftime('%H:%M:%S'), bro.name, reply))
+  with DisplaySession(configuration, renderer) as session:
+    if history is not None:
+      session.consume(history)
+    session.consume(
+      _surface_notice(
+        'surface:banner',
+        render_banner(llm=False, bro=bro.name),
+        now(),
+        trusted_visual=True,
+      )
+    )
+    observer = LiveDisplayObserver(session, now=lambda: now().astimezone())
 
-  async def exchange(message: str) -> None:
-    reply = await _turn(bro, message, observer=effective_observer, hold=hold)
-    if reply is None:
-      print(f'[{now().strftime("%H:%M:%S")}] {INTERRUPTED_NOTICE}')
-    else:
-      emit(reply)
+    async def exchange(message: str) -> None:
+      nonlocal interruption_number
+      reply = await _turn(bro, message, observer=observer, hold=hold)
+      if reply is None:
+        session.consume(
+          _surface_notice(
+            f'surface:interruption:{interruption_number}',
+            INTERRUPTED_NOTICE,
+            now(),
+            level='interruption',
+          )
+        )
+        interruption_number += 1
 
-  history_messages = history if history is not None else []
-  last_day: Optional[date] = None
-  for message in history_messages:
-    day = message.when.date()
-    if day != last_day:
-      print(f'--- {day.strftime(DATE_FORMAT)} ---')
-      last_day = day
-    speaker = 'you' if message.by_user else bro.name
-    print(_message_line(message.when.strftime('%H:%M:%S'), speaker, message.text))
-  if len(history_messages) > 0:
-    # close the history block with today's date line, so the live exchanges
-    # below read against the right day
-    print(f'--- {now().date().strftime(DATE_FORMAT)} ---')
-
-  # opening bro message: the cw banner (session environment facts), before the
-  # first user message is sent. visual form — its ANSI renders in the terminal.
-  # pass the bro name so the logo shows on an in-process (--in-place) run, whose
-  # environment doesn't carry this bro's CW_BRO.
-  print(f'[{now().strftime("%H:%M:%S")}] {bro.name}:')
-  print(render_banner(llm=False, bro=bro.name))
-
-  if initial is not None:
-    await exchange(initial)
-  while True:
-    try:
-      message = read()
-    except EOFError:
-      return
-    if len(message) == 0:
-      continue
-    await exchange(message)
+    if initial is not None:
+      await exchange(initial)
+    while True:
+      try:
+        message = read()
+      except EOFError:
+        return
+      if len(message) == 0:
+        continue
+      await exchange(message)
 
 
 def _tty_supported() -> bool:
   return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _tui_supported() -> bool:
+  return (
+    _tty_supported()
+    and importlib.util.find_spec('rich') is not None
+    and importlib.util.find_spec('textual') is not None
+  )
 
 
 def chat_main(
@@ -249,10 +218,9 @@ def chat_main(
     return 1
 
   # decide TUI-vs-text on the host, before the hop: `run_in_container` always
-  # allocates a `-it` PTY, so an in-container `_tty_supported()` check would pick the
-  # TUI even for a piped/redirected host invocation. force text mode into the
-  # container whenever the host can't back the TUI (or the user asked for it).
-  force_text = args['text'] or not _tty_supported()
+  # allocates a `-it` PTY, so capability selection runs before the hop and the
+  # selected stream fallback is forwarded into the container.
+  force_text = args['text'] or not _tui_supported()
   fast = args['fast'] or implied_fast
   inner_args = [args['what']] if args['what'] is not None else []
   if force_text:
@@ -283,7 +251,7 @@ def chat_main(
   if hopped is not None:
     return hopped
 
-  history: Optional[list[HistoryMessage]] = None
+  history: Optional[list[DisplayRecord]] = None
   if args['resume'] is not None:
     from bro.launch.resume import resume
     from bro.registry import get_class
@@ -313,7 +281,7 @@ def chat_main(
         return 1
     bro = resumed.bro
     history = resumed.history
-    log.info('resumed trail %s (%d prior messages)', resumed.trail_id, len(history))
+    log.info('resumed trail %s (%d prior display records)', resumed.trail_id, len(history))
   else:
     log.verbose('creating bro %s', args['bro'])
     try:
@@ -324,16 +292,31 @@ def chat_main(
       log.error('%s', e)
       return 1
   initial: Optional[str] = args['what']
-  use_tui = not args['text'] and _tty_supported()
+  use_tui = not args['text'] and _tui_supported()
+  preset_name = PresetName.CHAT if program == ['bro', 'chat'] else PresetName.CALL
 
   try:
     with bro:
       if use_tui:
         from bro.launch.call_tui import ChatApp
 
-        ChatApp(bro, initial, history=history, hold=hold).run()
+        ChatApp(
+          bro,
+          initial,
+          history=history,
+          hold=hold,
+          preset_name=preset_name,
+        ).run()
       else:
-        asyncio.run(call_text(bro, initial, history=history, hold=hold))
+        asyncio.run(
+          call_text(
+            bro,
+            initial,
+            history=history,
+            hold=hold,
+            preset_name=preset_name,
+          )
+        )
   except BroRaised as error:
     log.error('raised: %s', error.reason)
     return 1

@@ -35,6 +35,7 @@ Writer-reported outcomes use `end.reason`; the stale-run sweep instead records `
 
 - `bro/trails/model.py` owns the shared trail, step, lineage, and spill-descriptor vocabulary consumed by readers and recorders. A step id is an ordinal — position N in the trail's native record stream — in a row and in a `forked_from` / `summoned_by` pointer alike, so pointers order against rows directly; a pointer may also carry an event index. `bro/trails/lineage.py` is the cycle-detecting root-first chain walker.
 - `bro/trails/client.py` owns the persistent authenticated HTTPS transport. `TrailsClient` exposes paged headers, native steps, generalized messages, launch context, universal append, and admin operations.
+- `bro/trails/display/` owns the typed process-local display records, immutable scenario presets, stateful presentation core, renderer-neutral block operations, the live and recorded adapters, plain stream/retained and lazy Rich-panel terminal renderers, and the lazy embedded Textual trail view. The Textual renderer owns selectable message/reasoning/tool/status widgets and logical-line copy reflow; chat launch code supplies only the app shell and lifecycle. The recorded adapter validates `/messages`, adapts headers/context/native steps/navigation rows, and collects exact fork-bounded segments. It is a view layer only; none of its records enter trail storage or server contracts.
 - `bro/trails/record/spine.py` owns recording creation, ordinal extent validation, batched appends, liveness, and ending; `record/bro.py` adapts `bro.llm.tracker.Tracker`, and `record/claude.py` (`bro.trails.record.claude`) records Claude transcripts.
 - `POST /v1/trails` opens the body from `body.records`.
 - `POST /v1/trails/{id}/records` sends records beginning at `offset`. A committed retry returns the current extent without folding again; any other extent mismatch is a conflict.
@@ -43,7 +44,7 @@ Writer-reported outcomes use `end.reason`; the stale-run sweep instead records `
 - `POST /v1/admin/trails/{id}/recompute`, `/v1/admin/trails/check`, and `/v1/admin/trails/{id}/relink` are the aggregate repair, non-mutating verification/audit, and manifested lineage-repair surfaces. The store-wide check keeps its long request alive with JSON-whitespace heartbeats and ends with one verdict object.
 - Header responses expose provider-raw usage by model. Provider normalization belongs to the provider-aware usage layer, not the harness adapter.
 - List queries accept exactly one indexed selector: `harness`, `bro`, or `forked_from`, plus the common time range and cursor.
-- `bro/trails/rewind.py` (`rewind`) is the reader CLI for every harness: `show` and `grep` render the shared `/messages` conversation across its fork chain; `steps` renders one trail's native `/steps` debugging view; `list` and `tree` navigate headers and lineage.
+- `bro/trails/rewind.py` (`rewind`) is the reader CLI for every harness: it owns argument parsing, queries, follow polling, regex matching, and grep context while every `show`, `steps`, `list`, `tree`, and `grep` record renders through the matching display preset.
 
 ## Auth
 
