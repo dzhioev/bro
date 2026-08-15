@@ -1,5 +1,4 @@
 import asyncio
-import io
 import signal
 from dataclasses import dataclass
 from datetime import datetime
@@ -10,7 +9,8 @@ import pytest
 
 import bro.llm.llms.chat_gpt as llm_llms_chat_gpt
 import bro.llm.llms.echo as llm_llms_echo
-from bro.launch.call import TextRenderer, call_text, chat_main, main
+from bros.bro import Bro
+from bro.launch.call import call_text, chat_main, main
 from bro.launch.identity import bro_git_identity_env
 from bro.llm.llm import LLM, LLMSpec
 from bro.llm.mcp import MCPServer
@@ -18,12 +18,28 @@ from bro.llm.observer import (
   InterimAssistantTextEvent,
   NullObserver,
   Observer,
-  ReasoningEvent,
   ToolCallEvent,
   ToolResultEvent,
   TurnCompletedEvent,
+  TurnStartedEvent,
 )
-from bros.bro import Bro
+from bro.trails.display import (
+  AssistantText,
+  DisplayRecord,
+  Notice,
+  Origin,
+  PresetName,
+  Reasoning,
+  UserInput,
+)
+from bro.trails.display.textual import (
+  BubbleRow,
+  ChatMarkdown,
+  MessageBubble,
+  SystemBubble,
+  TypingIndicator,
+  _typing_status,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -80,13 +96,17 @@ def _fixed_now() -> datetime:
   return datetime(2026, 5, 28, 12, 34, 56)
 
 
+def _consume_display(app, record) -> None:
+  assert app._display_session is not None
+  app._display_session.consume(record)
+
+
 @pytest.mark.asyncio
 async def test_text_drives_send_until_eof(capsys):
   bro = RecordBro(response='reply')
   await call_text(
     bro,
     'first',
-    observer=NullObserver(),
     read_line=_ScriptedLines(['second', 'third']),
     now=_fixed_now,
   )
@@ -105,9 +125,7 @@ async def test_text_emits_banner_before_first_reply(capsys, monkeypatch):
     'bro.workspace.banner.render_banner', lambda llm=False, bro=None: f'BANNER[{bro}]'
   )
   bro = RecordBro(response='reply')
-  await call_text(
-    bro, 'first', observer=NullObserver(), read_line=_ScriptedLines([]), now=_fixed_now
-  )
+  await call_text(bro, 'first', read_line=_ScriptedLines([]), now=_fixed_now)
   out = capsys.readouterr().out
   # banner is the opening bro message, before the first reply line; the bro name
   # is passed through so the logo renders on an in-process run, whose
@@ -122,7 +140,6 @@ async def test_text_skips_empty_input(capsys):
   await call_text(
     bro,
     'first',
-    observer=NullObserver(),
     read_line=_ScriptedLines(['', '   ', 'real']),
     now=_fixed_now,
   )
@@ -135,63 +152,9 @@ async def test_text_skips_empty_input(capsys):
 @pytest.mark.asyncio
 async def test_text_returns_on_immediate_eof(capsys):
   bro = RecordBro(response='reply')
-  await call_text(
-    bro, 'only', observer=NullObserver(), read_line=_ScriptedLines([]), now=_fixed_now
-  )
+  await call_text(bro, 'only', read_line=_ScriptedLines([]), now=_fixed_now)
   assert len(bro.mock_llm.send_calls) == 1
   assert bro.mock_llm.send_calls[0][-1] == {'role': 'user', 'content': 'only'}
-
-
-def _make_text_renderer() -> tuple[TextRenderer, io.StringIO]:
-  out = io.StringIO()
-  renderer = TextRenderer(prefix='bro', file=out, now=lambda: '12:34:56')
-  return renderer, out
-
-
-def test_text_renderer_renders_reasoning_one_liner():
-  renderer, out = _make_text_renderer()
-  renderer.on_event(ReasoningEvent('user wants a movie rec\nwithout horror, please'))
-  assert (
-    out.getvalue() == '[12:34:56] bro · thinking: user wants a movie rec without horror, please\n'
-  )
-
-
-def test_text_renderer_canonicalizes_name_and_elides_long_values():
-  renderer, out = _make_text_renderer()
-  renderer.on_event(
-    ToolCallEvent('call-1', 'dev__read_file', {'file_path': '/workspace/bro/launch/call.py'})
-  )
-  # wire name shown canonical, the argument named, and its long value elided
-  assert out.getvalue() == '[12:34:56] bro → dev::read_file(file_path=...)\n'
-
-
-def test_text_renderer_shows_short_argument_values_inline():
-  renderer, out = _make_text_renderer()
-  renderer.on_event(ToolCallEvent('call-1', 'web_search', {'query': 'sci-fi'}))
-  # a value within the limit stays inline; an unnamespaced name passes through
-  assert out.getvalue() == '[12:34:56] bro → web_search(query=sci-fi)\n'
-
-
-def test_text_renderer_renders_tool_result_as_bare_canonical_name():
-  renderer, out = _make_text_renderer()
-  renderer.on_event(
-    ToolResultEvent('call-1', 'flow__list_tasks', '[\n  "Arrival",\n  "Annihilation"\n]')
-  )
-  # the result payload is dropped — the bare canonical name marks the return
-  assert out.getvalue() == '[12:34:56] bro ← flow::list_tasks\n'
-
-
-def test_text_renderer_renders_interim_message_as_a_reply_line():
-  renderer, out = _make_text_renderer()
-  renderer.on_event(InterimAssistantTextEvent(f'on it — {"x" * 500}'))
-  assert out.getvalue() == f'[12:34:56] bro: on it — {"x" * 500}\n'
-
-
-def test_text_renderer_skips_terminal_message():
-  renderer, out = _make_text_renderer()
-  renderer.on_event(TurnCompletedEvent('here is the answer'))
-  # call_text renders the reply itself; the renderer must not double-emit
-  assert out.getvalue() == ''
 
 
 @dataclass(frozen=True)
@@ -248,7 +211,7 @@ class _FastlessBro(Bro):
 def test_default_invokes_spec_fast(monkeypatch):
   built: list[Bro] = []
 
-  async def fake_call_text(bro, initial, history=None, hold='guided'):
+  async def fake_call_text(bro, initial, history=None, hold='guided', preset_name=None):
     built.append(bro)
 
   # exercise the in-process path: outside a container, main() would re-exec into one.
@@ -273,7 +236,7 @@ def test_default_invokes_spec_fast(monkeypatch):
 def test_in_place_hold_defaults_diverge_per_alias(monkeypatch):
   holds: list[str] = []
 
-  async def fake_call_text(bro, initial, history=None, hold='guided'):
+  async def fake_call_text(bro, initial, history=None, hold='guided', preset_name=None):
     holds.append(hold)
 
   monkeypatch.setenv('CW_IN_CONTAINER', '1')
@@ -293,10 +256,27 @@ def test_in_place_hold_defaults_diverge_per_alias(monkeypatch):
   assert holds == ['attended', 'guided', 'unattended']
 
 
+def test_aliases_name_their_own_display_presets(monkeypatch):
+  selected: list[PresetName] = []
+
+  async def fake_call_text(bro, initial, history=None, hold='guided', preset_name=PresetName.CALL):
+    selected.append(preset_name)
+
+  monkeypatch.setenv('CW_IN_CONTAINER', '1')
+  monkeypatch.setattr('bro.registry.get_class', lambda name: _ChatBro)
+  monkeypatch.setattr('bro.registry.create_bro', lambda name: _ChatBro())
+  monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
+  monkeypatch.setattr('bro.launch.call._tui_supported', lambda: False)
+
+  assert main(['call', 'record', 'hi', '--in-place']) is None
+  assert chat_main(['bro', 'record', 'hi', '--in-place'], program=['bro', 'chat']) is None
+  assert selected == [PresetName.CALL, PresetName.CHAT]
+
+
 def test_bro_chat_default_builds_plain_spec(monkeypatch):
   built: list[Bro] = []
 
-  async def fake_call_text(bro, initial, history=None, hold='guided'):
+  async def fake_call_text(bro, initial, history=None, hold='guided', preset_name=None):
     built.append(bro)
 
   monkeypatch.setenv('CW_IN_CONTAINER', '1')
@@ -316,7 +296,7 @@ def test_bro_chat_default_builds_plain_spec(monkeypatch):
 def test_bro_chat_fast_flag_invokes_spec_fast(monkeypatch):
   built: list[Bro] = []
 
-  async def fake_call_text(bro, initial, history=None, hold='guided'):
+  async def fake_call_text(bro, initial, history=None, hold='guided', preset_name=None):
     built.append(bro)
 
   monkeypatch.setenv('CW_IN_CONTAINER', '1')
@@ -335,7 +315,7 @@ def test_bro_chat_fast_flag_invokes_spec_fast(monkeypatch):
 def test_default_falls_back_to_plain_when_no_fast_mode(monkeypatch):
   built: list[Bro] = []
 
-  async def fake_call_text(bro, initial, history=None, hold='guided'):
+  async def fake_call_text(bro, initial, history=None, hold='guided', preset_name=None):
     built.append(bro)
 
   monkeypatch.setenv('CW_IN_CONTAINER', '1')
@@ -424,6 +404,21 @@ def test_call_forwards_text_when_host_not_a_tty():
     ]
 
 
+def test_call_forwards_text_when_the_ui_dependency_is_missing():
+  with (
+    patch.dict('os.environ', {}, clear=False) as environment,
+    patch('bro.launch.root.run_in_container', return_value=0) as run,
+    patch('bro.launch.call._tty_supported', return_value=True),
+    patch(
+      'bro.launch.call.importlib.util.find_spec',
+      side_effect=lambda name: object() if name == 'rich' else None,
+    ),
+  ):
+    environment.pop('CW_IN_CONTAINER', None)
+    assert main(['call', 'bro-dev', 'hey']) == 0
+  assert '--text' in run.call_args.args[0].command
+
+
 def test_call_forwards_effort_into_container():
   with (
     patch.dict('os.environ', {}, clear=False) as env,
@@ -452,7 +447,7 @@ def test_call_forwards_effort_into_container():
 def test_effort_flag_overrides_spec_effort(monkeypatch):
   built: list[Bro] = []
 
-  async def fake_call_text(bro, initial, history=None, hold='guided'):
+  async def fake_call_text(bro, initial, history=None, hold='guided', preset_name=None):
     built.append(bro)
 
   monkeypatch.setenv('CW_IN_CONTAINER', '1')
@@ -599,20 +594,27 @@ def test_call_forwards_resume_trail_id_with_message():
 
 
 def test_call_resume_runs_the_resumed_bro(monkeypatch, capsys):
-  from datetime import datetime
-
-  from bro.launch.resume import HistoryMessage, ResumedCall
+  from bro.launch.resume import ResumedCall
+  from bro.trails.display import RecordedSource
 
   captured: dict = {}
 
-  async def fake_call_text(bro, initial, history=None, hold='guided'):
+  async def fake_call_text(bro, initial, history=None, hold='guided', preset_name=None):
     captured['bro'] = bro
     captured['initial'] = initial
     captured['history'] = history
 
   resumed_bro = RecordBro()
   resumed_bro.trail_id = 'new-trail'
-  history = [HistoryMessage(by_user=True, text='hello', when=datetime(2026, 5, 27, 9, 0, 0))]
+  history: list[DisplayRecord] = [
+    UserInput(
+      key='recorded:old-trail:message:1:0:0',
+      origin=Origin.RECORDED,
+      source=RecordedSource('old-trail', 1),
+      timestamp='2026-05-27T09:00:00Z',
+      content='hello',
+    )
+  ]
 
   def fake_resume(client, bro_name, trail_ref, *, llm_spec, at=None):
     captured['trail_ref'] = trail_ref
@@ -643,7 +645,7 @@ def test_call_resume_runs_the_resumed_bro(monkeypatch, capsys):
 
 
 def test_call_prints_resume_hint_when_a_trail_was_recorded(monkeypatch, capsys):
-  async def fake_call_text(bro, initial, history=None, hold='guided'):
+  async def fake_call_text(bro, initial, history=None, hold='guided', preset_name=None):
     bro.trail_id = 'trail-xyz'
 
   monkeypatch.setenv('CW_IN_CONTAINER', '1')
@@ -660,7 +662,7 @@ def test_call_prints_resume_hint_when_a_trail_was_recorded(monkeypatch, capsys):
 
 
 def test_call_skips_resume_hint_without_a_trail(monkeypatch, capsys):
-  async def fake_call_text(bro, initial, history=None, hold='guided'):
+  async def fake_call_text(bro, initial, history=None, hold='guided', preset_name=None):
     pass
 
   monkeypatch.setenv('CW_IN_CONTAINER', '1')
@@ -677,7 +679,7 @@ def test_call_skips_resume_hint_without_a_trail(monkeypatch, capsys):
 def test_call_skips_container_with_in_place_flag(monkeypatch):
   built: list[Bro] = []
 
-  async def fake_call_text(bro, initial, history=None, hold='guided'):
+  async def fake_call_text(bro, initial, history=None, hold='guided', preset_name=None):
     built.append(bro)
 
   monkeypatch.delenv('CW_IN_CONTAINER', raising=False)
@@ -695,7 +697,7 @@ def test_call_skips_container_with_in_place_flag(monkeypatch):
 def test_initial_slash_invocation_passes_through_verbatim(monkeypatch):
   captured: list[str] = []
 
-  async def fake_call_text(bro, initial, history=None, hold='guided'):
+  async def fake_call_text(bro, initial, history=None, hold='guided', preset_name=None):
     captured.append(initial)
 
   monkeypatch.setenv('CW_IN_CONTAINER', '1')
@@ -711,39 +713,8 @@ def test_initial_slash_invocation_passes_through_verbatim(monkeypatch):
   assert captured == ['/ask dev to ping']
 
 
-class _FakeApp:
-  """captures the `append_*` calls; stands in for `ChatApp` in TUIRenderer
-  tests so we don't have to spin up a Textual bro.runtime."""
-
-  def __init__(self):
-    self.posted: list[str] = []
-    self.thinking: list[str] = []
-    self.messages: list[str] = []
-    self.tool_events: list[str] = []
-
-  def call_from_thread(self, function, *args, **kwargs):
-    function(*args, **kwargs)
-
-  def append_bro_message(self, text: str) -> None:
-    self.messages.append(text)
-
-  def append_thinking(self, text: str) -> None:
-    self.thinking.append(text)
-
-  def append_trace_line(self, text: str) -> None:
-    self.posted.append(text)
-
-  def note_tool_call(self, name: str) -> None:
-    self.tool_events.append(f'call {name}')
-
-  def note_tool_result(self) -> None:
-    self.tool_events.append('result')
-
-
 def test_chat_markdown_carries_bold_and_link_styles():
   from rich.console import Console
-
-  from bro.launch.call_tui import ChatMarkdown
 
   console = Console(width=80)
   segments = console.render(ChatMarkdown('**bold** and [docs](https://example.com/x)'))
@@ -756,8 +727,6 @@ def test_chat_markdown_measurement_hugs_short_text():
   from rich.console import Console
   from rich.measure import Measurement
 
-  from bro.launch.call_tui import ChatMarkdown
-
   console = Console(width=80)
   measurement = Measurement.get(console, console.options, ChatMarkdown('ok'))
   assert measurement.maximum == 2
@@ -767,8 +736,6 @@ def test_message_bubble_selection_honors_offsets():
   from textual.geometry import Offset
   from textual.selection import Selection
 
-  from bro.launch.call_tui import MessageBubble
-
   bubble = MessageBubble('first\nsecond', kind='user')
   extraction = bubble.get_selection(Selection(Offset(0, 1), None))
   assert extraction is not None
@@ -777,12 +744,20 @@ def test_message_bubble_selection_honors_offsets():
 
 @pytest.mark.asyncio
 async def test_tui_drag_inside_markdown_bubble_selects_rendered_text(monkeypatch):
-  from bro.launch.call_tui import ChatApp, MessageBubble
+  from bro.launch.call_tui import ChatApp
 
   monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
   app = ChatApp(RecordBro(), None)
   async with app.run_test(size=(100, 40)) as pilot:
-    app.append_bro_message('a **bold** reply')
+    _consume_display(
+      app,
+      AssistantText(
+        key='reply',
+        origin=Origin.SURFACE,
+        timestamp='2026-05-28T12:34:56',
+        content='a **bold** reply',
+      ),
+    )
     await pilot.pause()
     bubble = app.query(MessageBubble).last()
     region = bubble.content_region
@@ -814,7 +789,7 @@ async def test_tui_drag_inside_markdown_bubble_selects_rendered_text(monkeypatch
 async def test_tui_markdown_bubble_copy_reflows_to_logical_lines(monkeypatch):
   from textual.selection import SELECT_ALL
 
-  from bro.launch.call_tui import ChatApp, MessageBubble
+  from bro.launch.call_tui import ChatApp
 
   monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
   command = (
@@ -825,7 +800,15 @@ async def test_tui_markdown_bubble_copy_reflows_to_logical_lines(monkeypatch):
   reply = f'{paragraph}\n\n```\n{command}\n```\n\n```python\ndef f():\n    return 1\n```'
   app = ChatApp(RecordBro(), None)
   async with app.run_test(size=(80, 40)) as pilot:
-    app.append_bro_message(reply)
+    _consume_display(
+      app,
+      AssistantText(
+        key='reply',
+        origin=Origin.SURFACE,
+        timestamp='2026-05-28T12:34:56',
+        content=reply,
+      ),
+    )
     await pilot.pause()
     bubble = app.query(MessageBubble).last()
     app.screen.selections = {bubble: SELECT_ALL}
@@ -847,7 +830,7 @@ async def test_tui_markdown_bubble_copy_reflows_to_logical_lines(monkeypatch):
 async def test_tui_survives_markup_like_text(monkeypatch):
   from textual.selection import SELECT_ALL
 
-  from bro.launch.call_tui import ChatApp, MessageBubble, StatsScreen, SystemBubble
+  from bro.launch.call_tui import ChatApp, StatsScreen
 
   monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
   # the shape that crashed the compositor: a bare `[` opens what Textual's
@@ -857,8 +840,25 @@ async def test_tui_survives_markup_like_text(monkeypatch):
   message = "please retry [a=b, statuses=['done', 'dropped']]"
   app = ChatApp(RecordBro(), None)
   async with app.run_test(size=(120, 40)) as pilot:
-    app.append_trace_line(trace)
-    app._append_user_message(message, when=datetime(2026, 5, 28, 12, 34, 56))
+    _consume_display(
+      app,
+      Notice(
+        key='trace',
+        origin=Origin.SURFACE,
+        timestamp='2026-05-28T12:34:55',
+        content=trace,
+        level='interruption',
+      ),
+    )
+    _consume_display(
+      app,
+      UserInput(
+        key='user',
+        origin=Origin.SURFACE,
+        timestamp='2026-05-28T12:34:56',
+        content=message,
+      ),
+    )
     # reflow renders every bubble — where the MarkupError used to raise
     await pilot.pause()
     system = app.query(SystemBubble).last()
@@ -884,7 +884,7 @@ async def test_tui_survives_markup_like_text(monkeypatch):
 async def test_tui_turn_error_renders_as_error_bubble(monkeypatch):
   from textual.selection import SELECT_ALL
 
-  from bro.launch.call_tui import BubbleRow, ChatApp, MessageBubble, TypingIndicator
+  from bro.launch.call_tui import ChatApp
 
   async def fail(*args, **kwargs):
     raise RuntimeError("failed [status='down']")
@@ -913,20 +913,30 @@ async def test_tui_turn_error_renders_as_error_bubble(monkeypatch):
 async def test_tui_thinking_renders_as_muted_bubble_above_typing(monkeypatch):
   from textual.selection import SELECT_ALL
 
-  from bro.launch.call_tui import BubbleRow, ChatApp, MessageBubble, TypingIndicator
+  from bro.launch.call_tui import ChatApp
 
   monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
   app = ChatApp(RecordBro(), None)
   async with app.run_test(size=(80, 40)) as pilot:
     app._begin_turn()
-    app.append_thinking('**Planning**\n\nweighing the options')
+    assert app._observer is not None
+    app._observer.on_event(TurnStartedEvent('work'))
+    _consume_display(
+      app,
+      Reasoning(
+        key='reasoning',
+        origin=Origin.SURFACE,
+        timestamp='2026-05-28T12:34:56',
+        content='**Planning**\n\nweighing the options',
+      ),
+    )
     await pilot.pause()
     row = app.query(BubbleRow).last()
     assert row.has_class('thinking')
     bubble = row.query_one(MessageBubble)
-    # the full summary block is in the bubble, markdown-rendered
+    # reasoning is plain authored text; Markdown parsing is reserved for assistant records
     app.screen.selections = {bubble: SELECT_ALL}
-    assert app.screen.get_selected_text() == 'Planning\n\nweighing the options'
+    assert app.screen.get_selected_text() == '**Planning**\n\nweighing the options'
     # lighter theme than a bro bubble: faded bar, muted text
     banner = app.query(MessageBubble).first()
     assert bubble.styles.border_left[1].a < banner.styles.border_left[1].a
@@ -940,13 +950,15 @@ async def test_tui_thinking_renders_as_muted_bubble_above_typing(monkeypatch):
 async def test_tui_mid_turn_message_renders_as_bro_bubble_above_typing(monkeypatch):
   from textual.selection import SELECT_ALL
 
-  from bro.launch.call_tui import BubbleRow, ChatApp, MessageBubble, TUIRenderer, TypingIndicator
+  from bro.launch.call_tui import ChatApp
 
   monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
   app = ChatApp(RecordBro(), None)
   async with app.run_test(size=(80, 40)) as pilot:
     app._begin_turn()
-    TUIRenderer(app).on_event(InterimAssistantTextEvent('on it — **rewriting** the tests'))
+    assert app._observer is not None
+    app._observer.on_event(TurnStartedEvent('work'))
+    app._observer.on_event(InterimAssistantTextEvent('on it — **rewriting** the tests'))
     await pilot.pause()
     row = app.query(BubbleRow).last()
     assert row.has_class('bro')
@@ -963,13 +975,29 @@ async def test_tui_mid_turn_message_renders_as_bro_bubble_above_typing(monkeypat
 
 @pytest.mark.asyncio
 async def test_tui_timestamp_hugs_the_row_edge_with_seconds(monkeypatch):
-  from bro.launch.call_tui import BubbleRow, ChatApp, MessageBubble
+  from bro.launch.call_tui import ChatApp
 
   monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
   app = ChatApp(RecordBro(), None)
   async with app.run_test(size=(80, 40)) as pilot:
-    app._append_user_message('a message from the user', when=datetime(2026, 5, 28, 12, 34, 56))
-    app.append_bro_message('a reply', when=datetime(2026, 5, 28, 12, 35, 7))
+    _consume_display(
+      app,
+      UserInput(
+        key='user',
+        origin=Origin.SURFACE,
+        timestamp='2026-05-28T12:34:56',
+        content='a message from the user',
+      ),
+    )
+    _consume_display(
+      app,
+      AssistantText(
+        key='reply',
+        origin=Origin.SURFACE,
+        timestamp='2026-05-28T12:35:07',
+        content='a reply',
+      ),
+    )
     await pilot.pause()
     user_row = app.query_one('BubbleRow.user', BubbleRow)
     user_stamp = user_row.query_one('.timestamp')
@@ -993,7 +1021,7 @@ async def test_tui_copies_selection_to_clipboard_on_mouse_up(monkeypatch):
   from textual.events import TextSelected
   from textual.selection import SELECT_ALL
 
-  from bro.launch.call_tui import ChatApp, MessageBubble
+  from bro.launch.call_tui import ChatApp
 
   monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
   app = ChatApp(RecordBro(), None)
@@ -1016,7 +1044,7 @@ async def test_tui_copies_selection_to_clipboard_on_mouse_up(monkeypatch):
 async def test_tui_shift_enter_breaks_line_and_enter_submits(monkeypatch):
   from textual.selection import SELECT_ALL
 
-  from bro.launch.call_tui import BubbleRow, ChatApp, MessageBubble, MessageInput
+  from bro.launch.call_tui import ChatApp, MessageInput
 
   monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
   bro = RecordBro()
@@ -1051,61 +1079,43 @@ async def test_tui_enter_on_blank_input_submits_nothing(monkeypatch):
     assert app.query_one('#input-bar', MessageInput).text == '\n'
 
 
-def test_tui_renderer_posts_one_line_per_tool_event():
-  from bro.launch.call_tui import TUIRenderer
-
-  app = _FakeApp()
-  renderer = TUIRenderer(app)  # type: ignore[arg-type]
-  renderer.on_event(ReasoningEvent('user wants\na movie rec'))
-  renderer.on_event(ToolCallEvent('call-1', 'web_search', {'query': 'sci-fi'}))
-  renderer.on_event(ToolResultEvent('call-1', 'web_search', '[\n  "Arrival"\n]'))
-  renderer.on_event(InterimAssistantTextEvent('checking the\nlistings first'))
-  renderer.on_event(TurnCompletedEvent('the final answer'))
-
-  # reasoning becomes a thinking bubble carrying the summary block verbatim
-  assert app.thinking == ['user wants\na movie rec']
-  # the terminal message is skipped — ChatApp renders the reply itself
-  assert app.messages == ['checking the\nlistings first']
-  assert app.posted == ['→ web_search(query=sci-fi)', '← web_search']
-  assert app.tool_events == ['call web_search', 'result']
-
-
 def test_typing_status_text():
-  from bro.launch.call_tui import _typing_status
 
-  assert _typing_status([], 5) == 'Thinking for 5 seconds'
-  assert _typing_status([], 61) == 'Thinking for a minute'
-  assert _typing_status(['brog__create_task'], 0.5) == 'Calling brog::create_task()'
-  assert _typing_status(['brog__create_task'], 5) == 'Calling brog::create_task for 5 seconds'
-  assert _typing_status(['banner'], 0.5) == 'Calling banner()'
-  assert _typing_status(['a', 'b', 'c'], 5) == 'Calling 3 tools'
+  assert _typing_status('thinking', 5) == 'Thinking for 5 seconds'
+  assert _typing_status('thinking', 61) == 'Thinking for a minute'
+  assert _typing_status('calling brog::create_task', 0.5) == 'Calling brog::create_task()'
+  assert _typing_status('calling brog::create_task', 5) == 'Calling brog::create_task for 5 seconds'
+  assert _typing_status('calling banner', 0.5) == 'Calling banner()'
+  assert _typing_status('calling 3 tools', 5) == 'Calling 3 tools'
 
 
 @pytest.mark.asyncio
 async def test_tui_typing_indicator_tracks_run_state(monkeypatch):
   from textual.widgets import Static
 
-  from bro.launch.call_tui import ChatApp, TypingIndicator
+  from bro.launch.call_tui import ChatApp
 
   monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
   app = ChatApp(RecordBro(), None)
   async with app.run_test() as pilot:
     app._begin_turn()
+    assert app._observer is not None
+    app._observer.on_event(TurnStartedEvent('work'))
     await pilot.pause()
     indicator = app.query_one(TypingIndicator)
     label = indicator.query_one(Static)
     assert str(label.content).startswith('Thinking for')
-    app.note_tool_call('web_search')
+    app._observer.on_event(ToolCallEvent('call-1', 'web_search', {}))
     assert str(label.content).startswith('Calling web_search()')
     # a call running longer than a second gains its elapsed time
     indicator._phase_since -= 5
     indicator.tick()
     assert str(label.content).startswith('Calling web_search for 5 seconds')
-    app.note_tool_call('flow__list_tasks')
+    app._observer.on_event(ToolCallEvent('call-2', 'flow__list_tasks', {}))
     assert str(label.content).startswith('Calling 2 tools')
-    app.note_tool_result()
+    app._observer.on_event(ToolResultEvent('call-1', 'web_search', 'done'))
     assert str(label.content).startswith('Calling flow::list_tasks()')
-    app.note_tool_result()
+    app._observer.on_event(ToolResultEvent('call-2', 'flow__list_tasks', 'done'))
     # the batch's results are all in — the next LLM roundtrip starts, so the
     # thinking clock restarts from zero
     assert str(label.content).startswith('Thinking for a moment')
@@ -1125,6 +1135,8 @@ class _BlockingBro(RecordBro):
 
   async def send(self, message, observer=None, tracker=None, request_timeout=None, **kwargs):
     self.messages.append(message)
+    assert observer is not None
+    observer.on_event(TurnStartedEvent(message))
     self.started.set()
     try:
       await asyncio.Event().wait()
@@ -1172,8 +1184,6 @@ async def test_tui_escape_interrupts_the_turn(monkeypatch):
     INTERRUPTED_NOTICE,
     ChatApp,
     MessageInput,
-    SystemBubble,
-    TypingIndicator,
   )
 
   monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
@@ -1228,7 +1238,10 @@ async def test_text_mode_ctrl_c_ends_the_turn_not_the_chat(capsys, monkeypatch):
       self.cancelled = False
 
     async def send(self, message, observer=None, tracker=None, request_timeout=None, **kwargs):
+      assert observer is not None
+      observer.on_event(TurnStartedEvent(message))
       if message != 'work on it':
+        observer.on_event(TurnCompletedEvent('second reply'))
         return 'second reply'
       # Ctrl+C as the terminal delivers it, while the turn's handler is installed
       signal.raise_signal(signal.SIGINT)

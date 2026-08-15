@@ -28,6 +28,7 @@ from bro.trails.display.records import (
   Reasoning,
   ToolCall,
   ToolResult,
+  TransientActivity,
   UserInput,
 )
 
@@ -45,6 +46,7 @@ class LiveDisplayObserver(Observer):
     *,
     run_id: str | None = None,
     now: Callable[[], datetime] = _arrival_time,
+    activity_id: str | None = None,
   ):
     self.session = session
     self.run_id = run_id if run_id is not None else str(uuid4())
@@ -52,6 +54,10 @@ class LiveDisplayObserver(Observer):
       raise ValueError('live display run_id must not be empty')
     self._now = now
     self._sequence = 0
+    self._activity_id = activity_id
+    self._activity_sequence = 0
+    self._pending_tools: dict[str, str] = {}
+    self.turn_finished = False
 
   def __enter__(self) -> Self:
     self.session.__enter__()
@@ -104,3 +110,56 @@ class LiveDisplayObserver(Observer):
     else:
       assert_never(event)
     self.session.consume(record)
+    if isinstance(event, TurnStartedEvent):
+      self.turn_finished = False
+    elif isinstance(event, (TurnCompletedEvent, TurnRefusedEvent, TurnFailedEvent)):
+      self.turn_finished = True
+    if self._activity_id is not None:
+      self._update_activity(event)
+
+  def close_activity(self) -> None:
+    if self._activity_id is None:
+      return
+    self._pending_tools.clear()
+    self._consume_activity('', active=False)
+
+  def _update_activity(self, event: ObservedEvent) -> None:
+    if isinstance(event, TurnStartedEvent):
+      if len(self._pending_tools) > 0:
+        raise RuntimeError('a new turn started while tool activity was still pending')
+      self._consume_activity('thinking')
+    elif isinstance(event, ToolCallEvent):
+      self._pending_tools[event.call_id] = event.tool_name
+      self._consume_activity(self._activity_content())
+    elif isinstance(event, ToolResultEvent):
+      self._pending_tools.pop(event.call_id, None)
+      self._consume_activity(self._activity_content())
+    elif isinstance(event, (TurnCompletedEvent, TurnRefusedEvent, TurnFailedEvent)):
+      self.close_activity()
+    elif isinstance(event, (ReasoningEvent, InterimAssistantTextEvent)):
+      return
+    else:
+      assert_never(event)
+
+  def _activity_content(self) -> str:
+    if len(self._pending_tools) == 0:
+      return 'thinking'
+    if len(self._pending_tools) == 1:
+      from bro.llm.mcp import canonical_name
+
+      return f'calling {canonical_name(next(iter(self._pending_tools.values())))}'
+    return f'calling {len(self._pending_tools)} tools'
+
+  def _consume_activity(self, content: str, *, active: bool = True) -> None:
+    assert self._activity_id is not None
+    sequence = self._activity_sequence
+    self._activity_sequence += 1
+    self.session.consume(
+      TransientActivity(
+        key=f'surface:{self.run_id}:activity:{sequence}',
+        origin=Origin.SURFACE,
+        activity_id=self._activity_id,
+        content=content,
+        active=active,
+      )
+    )

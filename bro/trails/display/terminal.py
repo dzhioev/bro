@@ -3,6 +3,7 @@
 import os
 from collections.abc import Mapping
 from dataclasses import replace
+from datetime import date
 from typing import TextIO
 
 from bro.trails.display.blocks import (
@@ -50,12 +51,13 @@ class _TerminalFormatter:
     self._color = color
     self._rewind_turns: set[int] = set()
     self._context_open = False
+    self._chat_date: str | None = None
 
   def block(self, block: PresentationBlock) -> str:
     if self._configuration.appearance is Appearance.PLAIN_LOG:
       return self._plain_log(block)
     if self._configuration.appearance is Appearance.CHAT:
-      return self._chat(block)
+      return self._chat_date_separator(block) + self._chat(block)
     return self._rewind(block)
 
   def continuation(self, previous: PresentationBlock, current: PresentationBlock) -> str:
@@ -160,6 +162,13 @@ class _TerminalFormatter:
       return ''
     return f'\n... <{item.omitted_characters} more chars>'
 
+  def _chat_date_separator(self, block: PresentationBlock) -> str:
+    if block.calendar_date is None or block.calendar_date == self._chat_date:
+      return ''
+    self._chat_date = block.calendar_date
+    rendered_date = date.fromisoformat(block.calendar_date).strftime('%a, %b %-d, %Y')
+    return f'--- {rendered_date} ---\n'
+
   def _chat(self, block: PresentationBlock) -> str:
     if block.kind is BlockKind.TOOL_RESULT:
       name = block.label.partition(' · ')[2] or block.label
@@ -188,7 +197,8 @@ class _TerminalFormatter:
     speaker = self._configuration.context_label or block.label
     omission = self._chat_omission(item)
     if block.style is StyleRole.REASONING:
-      return f'{timestamp}{speaker} · {block.label}: {item.text}{omission}\n'
+      one_line_text = ' '.join(item.text.split())
+      return f'{timestamp}{speaker} · {block.label}: {one_line_text}{omission}\n'
     return f'{timestamp}{speaker}: {item.text}{omission}\n'
 
   def _chat_tool_call(self, block: PresentationBlock) -> str:

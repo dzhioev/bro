@@ -4,14 +4,9 @@ from unittest.mock import patch
 
 import pytest
 
-from bro.launch.resume import (
-  RESUME_LATEST,
-  HistoryMessage,
-  conversation_history,
-  find_latest_call_trail,
-  resume,
-)
+from bro.launch.resume import RESUME_LATEST, conversation_history, find_latest_call_trail, resume
 from bro.llm.llms.chat_gpt import LLMSpec
+from bro.trails.display import AssistantText, InterimAssistantText, ToolCall, UserInput
 from bro.trails.model import spill_descriptor
 from bro.trails.server import backends
 
@@ -49,11 +44,17 @@ class FakeTrailsClient:
   def iter_steps(self, trail_id: str):
     yield from self._steps[trail_id]
 
-  def iter_messages(self, trail_id: str, *, types: set[str]):
+  def iter_messages(self, trail_id: str, *, types: Optional[set[str]] = None):
     for row in self._steps[trail_id]:
       for event in backends.BRO_ADAPTER.project(row):
-        if event['type'] in types:
-          yield event
+        if types is None or event['type'] in types:
+          resolved = dict(event)
+          if 'content' in resolved:
+            resolved['content'] = self.resolve_body(resolved['content'])
+          yield resolved
+
+  def get_launch_context(self, trail_id: str):
+    return None
 
   def resolve_body(self, body: Any) -> Any:
     descriptor = spill_descriptor(body)
@@ -103,6 +104,14 @@ def _output_message(text: str) -> dict:
     'role': 'assistant',
     'content': [{'type': 'output_text', 'text': text}],
   }
+
+
+def _conversation_text(records: list) -> list[tuple[type, str]]:
+  return [
+    (type(record), record.content)
+    for record in records
+    if isinstance(record, (UserInput, InterimAssistantText, AssistantText))
+  ]
 
 
 def _forked_from_steps() -> list[dict]:
@@ -161,19 +170,23 @@ class TestConversationHistory:
     ]
     client = FakeTrailsClient(headers=[_header('trail-1')], steps={'trail-1': steps})
     history = conversation_history(cast(Any, client), 'trail-1')
-    assert [(m.by_user, m.text) for m in history] == [
-      (True, 'hello'),
-      (False, 'hi back'),
-      (True, 'and then?'),
-      (False, 'final'),
+    assert _conversation_text(history) == [
+      (UserInput, 'hello'),
+      (AssistantText, 'hi back'),
+      (UserInput, 'and then?'),
+      (InterimAssistantText, 'interim'),
+      (AssistantText, 'final'),
     ]
+    assert any(isinstance(record, ToolCall) for record in history)
 
   def test_timestamps_are_timezone_aware_local_time(self):
     client = FakeTrailsClient(headers=[_header('trail-1')], steps={'trail-1': _forked_from_steps()})
     history = conversation_history(cast(Any, client), 'trail-1')
-    expected = datetime(2026, 6, 7, 10, 0, 0, tzinfo=UTC).astimezone()
-    assert history[0].when == expected
-    assert history[0].when.tzinfo is not None
+    user = next(record for record in history if isinstance(record, UserInput))
+    assert (
+      datetime.fromisoformat(user.timestamp or '').astimezone()
+      == datetime(2026, 6, 7, 10, 0, 0, tzinfo=UTC).astimezone()
+    )
 
   def test_resolves_spilled_bodies(self):
     descriptor = {'s3': 'key', 'url': 'https://spill/x', 'size': 12}
@@ -187,13 +200,45 @@ class TestConversationHistory:
       spilled={'https://spill/x': 'a very long message'},
     )
     history = conversation_history(cast(Any, client), 'trail-1')
-    assert history == [
-      HistoryMessage(
-        by_user=True,
-        text='a very long message',
-        when=datetime.fromisoformat('2026-06-07T10:00:00.000000Z').astimezone(),
-      )
+    user = next(record for record in history if isinstance(record, UserInput))
+    assert user.content == 'a very long message'
+
+  def test_honors_the_exact_fork_event_index(self):
+    parent_steps = [
+      _row('trail-1', 0, 'system_prompt', 'prompt'),
+      _row('trail-1', 1, 'user_input', 'hello'),
+      _row(
+        'trail-1',
+        2,
+        'llm_call',
+        _llm_call_body(
+          _output_message('interim'),
+          {'type': 'function_call', 'name': 'lookup', 'call_id': 'call-1', 'arguments': '{}'},
+        ),
+        response_id='r1',
+      ),
     ]
+    client = FakeTrailsClient(
+      headers=[
+        _header(
+          'trail-2',
+          forked_from={'trail_id': 'trail-1', 'step_id': 2, 'index': 1},
+        ),
+        _header('trail-1'),
+      ],
+      steps={
+        'trail-1': parent_steps,
+        'trail-2': [_row('trail-2', 0, 'system_prompt', 'prompt')],
+      },
+    )
+
+    history = conversation_history(cast(Any, client), 'trail-2')
+
+    assert _conversation_text(history) == [
+      (UserInput, 'hello'),
+      (InterimAssistantText, 'interim'),
+    ]
+    assert not any(isinstance(record, ToolCall) for record in history)
 
   def test_walks_the_fork_chain_and_cuts_ancestors_at_their_fork_point(self):
     # the forked_from continued past the fork point ('diverged') — that content is
@@ -233,11 +278,11 @@ class TestConversationHistory:
       steps={'trail-1': forked_from_steps, 'trail-2': child_steps},
     )
     history = conversation_history(cast(Any, client), 'trail-2')
-    assert [(m.by_user, m.text) for m in history] == [
-      (True, 'hello'),
-      (False, 'hi back'),
-      (True, 'continue'),
-      (False, 'continued'),
+    assert _conversation_text(history) == [
+      (UserInput, 'hello'),
+      (AssistantText, 'hi back'),
+      (UserInput, 'continue'),
+      (AssistantText, 'continued'),
     ]
 
 
@@ -253,9 +298,9 @@ class TestResume:
     with patch('bro.launch.resume.fork') as fork_stub:
       resumed = resume(cast(Any, self._client()), 'record', RESUME_LATEST, llm_spec=spec)
     assert resumed.trail_id == 'trail-1'
-    assert [(m.by_user, m.text) for m in resumed.history] == [
-      (True, 'hello'),
-      (False, 'hi back'),
+    assert _conversation_text(resumed.history) == [
+      (UserInput, 'hello'),
+      (AssistantText, 'hi back'),
     ]
     (trail, step_id), kwargs = fork_stub.call_args
     assert trail.header.id == 'trail-1'
