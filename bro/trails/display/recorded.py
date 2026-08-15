@@ -2,7 +2,7 @@
 
 from collections.abc import Iterable
 from datetime import datetime
-from typing import Any, cast
+from typing import Any
 
 from bro.trails.client import TrailsClient
 from bro.trails.display.core import DisplayDataError
@@ -174,13 +174,12 @@ class RecordedAdapter:
       records.append(self._message_record(trail_id, message))
     return records
 
-  def conversation_records(self, header: dict[str, Any]) -> tuple[list[DisplayRecord], int | None]:
+  def conversation_records(self, header: dict[str, Any]) -> list[DisplayRecord]:
     target_id = _require_string(header.get('id'), 'trail id', nonempty=True)
     records: list[DisplayRecord] = [self.trail_metadata(header)]
     records.extend(
       self.launch_context_records(target_id, self.client.get_launch_context(target_id))
     )
-    target_after: int | None = None
     segments = walk_header_chain(header, self.client.get_trail)
     for segment_index, (segment_header, bound) in enumerate(segments):
       segment_id = _require_string(segment_header.get('id'), 'segment trail id', nonempty=True)
@@ -204,9 +203,7 @@ class RecordedAdapter:
         )
       messages = list(self._bounded_messages(segment_id, bound))
       records.extend(self.message_records(segment_id, messages))
-      if segment_id == target_id and len(messages) > 0:
-        target_after = cast(dict[str, Any], messages[-1]['source'])['step_id']
-    return records, target_after
+    return records
 
   def native_step_records(self, trail_id: str, steps: Iterable[dict[str, Any]]) -> list[NativeStep]:
     return [self.native_step(trail_id, step) for step in steps]

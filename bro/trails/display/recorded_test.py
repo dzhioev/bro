@@ -262,7 +262,7 @@ class TestCollection:
     ]
     fake.messages['child'] = [_message('user_input', 0, content='child')]
 
-    records, after = RecordedAdapter(_client(fake)).conversation_records(fake.headers['child'])
+    records = RecordedAdapter(_client(fake)).conversation_records(fake.headers['child'])
 
     message_content = [
       record.content
@@ -271,7 +271,6 @@ class TestCollection:
     ]
     assert message_content == ['kept zero', 'kept one', 'kept two', 'child']
     assert any(isinstance(record, SegmentBoundary) for record in records)
-    assert after == 0
 
   def test_tool_call_ids_are_scoped_across_collected_segments(self):
     fake = FakeClient()
@@ -286,7 +285,7 @@ class TestCollection:
       _message('tool_result', 1, call_id='same', content='child result'),
     ]
     adapter = RecordedAdapter(_client(fake))
-    records, _ = adapter.conversation_records(fake.headers['child'])
+    records = adapter.conversation_records(fake.headers['child'])
     renderer = RetainedRenderer()
     with DisplaySession(preset('rewind-show'), renderer) as session:
       session.consume(records)

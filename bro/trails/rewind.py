@@ -19,6 +19,7 @@ from bro.trails.display import (
   DisplaySession,
   PresetName,
   RecordedAdapter,
+  RecordedSource,
   RetainedRenderer,
   StreamRenderer,
   preset,
@@ -141,11 +142,23 @@ def _stream_follow(
   return 0
 
 
+def _last_target_step_id(records: Iterable[DisplayRecord], trail_id: str) -> int | None:
+  return max(
+    (
+      record.source.step_id
+      for record in records
+      if isinstance(record.source, RecordedSource) and record.source.trail_id == trail_id
+    ),
+    default=None,
+  )
+
+
 def _command_show(client: TrailsClient, args: dict[str, Any]) -> int:
   adapter = RecordedAdapter(client)
   trail_id = args['trail_id']
   header = client.get_trail(trail_id)
-  records, after = adapter.conversation_records(header)
+  records = adapter.conversation_records(header)
+  after = _last_target_step_id(records, trail_id)
   configuration = _configuration(args, PresetName.REWIND_SHOW)
   if bool(args.get('follow', False)):
     return _stream_follow(
@@ -259,7 +272,7 @@ def _command_grep(client: TrailsClient, args: dict[str, Any]) -> int:
   configuration = _configuration(args, PresetName.REWIND_GREP)
   for header in headers:
     adapter = RecordedAdapter(client)
-    records, _ = adapter.conversation_records(header)
+    records = adapter.conversation_records(header)
     rendered = _retained_document(records, configuration)
     matches = _grep_lines(header['id'], rendered, regex, colors, before=before, after=after)
     if len(matches) > 0:
