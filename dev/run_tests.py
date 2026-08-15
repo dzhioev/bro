@@ -101,6 +101,7 @@ PYTEST_FILES = [
   'bro/launch/ask_test.py',
   'bros/dev/mcp_test.py',
   'bros/dev/jobs_test.py',
+  'bros/analyst/scripts/trails_usage_test.py',
   'bro/cw/broxy_test.py',
   'bro/cw/claude_argv_test.py',
   'bro/cw/claude_config_test.py',

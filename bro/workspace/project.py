@@ -14,19 +14,21 @@ def _default_image_repository(default_bro: str) -> str:
 class ProjectConfig:
   """the operated repo's launch defaults: which bro a session runs as when
   `--bro` doesn't name one, the docker repository its session images build
-  under (`bro/<default bro>` unless overridden), and the optional
-  build-context-file-list command."""
+  under (`bro/<default bro>` unless overridden), the optional
+  build-context-file-list command, and the optional directory a session commits
+  its analyses into."""
 
   default_bro: str
   image_repository: str
   build_context_command: Optional[str] = None
+  reports: Optional[str] = None
 
 
-def _parse_command(table: dict, pyproject: Path, key: str) -> Optional[str]:
-  command = table.get(key)
-  if command is not None and (not isinstance(command, str) or command == ''):
+def _optional_string(table: dict, pyproject: Path, key: str) -> Optional[str]:
+  value = table.get(key)
+  if value is not None and (not isinstance(value, str) or value == ''):
     raise ValueError(f'[tool.bro] {key} in {pyproject} must be a non-empty string')
-  return command
+  return value
 
 
 def project_config() -> ProjectConfig:
@@ -37,7 +39,7 @@ def project_config() -> ProjectConfig:
   if not pyproject.is_file():
     raise ValueError(f'missing {pyproject}')
   table = tomllib.loads(pyproject.read_text()).get('tool', {}).get('bro', {})
-  unknown = sorted(set(table) - {'default', 'image-repository', 'build-context-command'})
+  unknown = sorted(set(table) - {'default', 'image-repository', 'build-context-command', 'reports'})
   if len(unknown) > 0:
     raise ValueError(f'unknown [tool.bro] key(s) in {pyproject}: {", ".join(unknown)}')
   default_bro = table.get('default')
@@ -49,5 +51,6 @@ def project_config() -> ProjectConfig:
   return ProjectConfig(
     default_bro=default_bro,
     image_repository=override if override is not None else _default_image_repository(default_bro),
-    build_context_command=_parse_command(table, pyproject, 'build-context-command'),
+    build_context_command=_optional_string(table, pyproject, 'build-context-command'),
+    reports=_optional_string(table, pyproject, 'reports'),
   )

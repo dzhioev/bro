@@ -30,6 +30,22 @@ class TestProjectConfig:
     )
     assert project_config() == ProjectConfig(default_bro='foo', image_repository='custom-images')
 
+  def test_reports_defaults_to_none(self, project_dir):
+    (project_dir / 'pyproject.toml').write_text('[tool.bro]\ndefault = "foo"\n')
+    assert project_config().reports is None
+
+  def test_reports_parses(self, project_dir):
+    (project_dir / 'pyproject.toml').write_text(
+      '[tool.bro]\ndefault = "foo"\nreports = "docs/analyses"\n'
+    )
+    assert project_config().reports == 'docs/analyses'
+
+  @pytest.mark.parametrize('value', ['5', '""'])
+  def test_reports_must_be_a_non_empty_string(self, project_dir, value):
+    (project_dir / 'pyproject.toml').write_text(f'[tool.bro]\ndefault = "foo"\nreports = {value}\n')
+    with pytest.raises(ValueError, match='reports .* non-empty string'):
+      project_config()
+
   def test_build_context_command_defaults_to_none(self, project_dir):
     (project_dir / 'pyproject.toml').write_text('[tool.bro]\ndefault = "foo"\n')
     assert project_config().build_context_command is None
