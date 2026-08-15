@@ -3,11 +3,11 @@
 from dataclasses import dataclass
 from typing import Optional
 
-from bros.bro import Bro
 from bro.fork import fork, latest_fork_point
 from bro.llm.llm import LLMSpec
 from bro.trails.client import TrailsClient, fetch_recorded_trail
 from bro.trails.display import DisplayRecord, RecordedAdapter
+from bros.bro import Bro
 
 RESUME_LATEST = 'latest'
 _LATEST_SCAN_LIMIT = 200

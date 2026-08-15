@@ -9,7 +9,6 @@ import pytest
 
 import bro.llm.llms.chat_gpt as llm_llms_chat_gpt
 import bro.llm.llms.echo as llm_llms_echo
-from bros.bro import Bro
 from bro.launch.call import call_text, chat_main, main
 from bro.launch.identity import bro_git_identity_env
 from bro.llm.llm import LLM, LLMSpec
@@ -40,6 +39,7 @@ from bro.trails.display.textual import (
   TypingIndicator,
   _typing_status,
 )
+from bros.bro import Bro
 
 
 @pytest.fixture(autouse=True)

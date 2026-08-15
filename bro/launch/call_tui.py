@@ -15,7 +15,6 @@ from textual.screen import ModalScreen
 from textual.widgets import Static, TextArea
 from textual.worker import Worker, WorkerCancelled, WorkerFailed
 
-from bros.bro import Bro
 from bro.launch.call import INTERRUPTED_NOTICE
 from bro.show import format_card
 from bro.trails.display import (
@@ -29,6 +28,7 @@ from bro.trails.display import (
   preset,
 )
 from bro.trails.display.textual import TextualRenderer, TrailView
+from bros.bro import Bro
 
 _IDLE_PLACEHOLDER = 'message…'
 _BUSY_PLACEHOLDER = 'esc to interrupt…'
