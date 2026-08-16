@@ -20,7 +20,7 @@ from typing import Optional, Protocol
 import bro.llm.usage as usage
 from bro.base import credentials
 from bro.base.args import Parser
-from bro.trails.client import TrailsClient
+from bro.trails.network import NetworkStore
 from bro.workspace.paths import project_root
 from bro.workspace.project import project_config
 
@@ -313,9 +313,9 @@ def resolve_destination(
   return destination
 
 
-def make_client() -> TrailsClient:
+def make_client() -> NetworkStore:
   config = credentials.get_json('trails')
-  return TrailsClient(config['base_url'], config['token'], timeout=CLIENT_TIMEOUT_SECONDS)
+  return NetworkStore(config['base_url'], config['token'], timeout=CLIENT_TIMEOUT_SECONDS)
 
 
 def main(argv: list[str]) -> Optional[int]:

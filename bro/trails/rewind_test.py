@@ -5,7 +5,7 @@ from typing import Any, Optional, cast
 import pytest
 
 import bro.trails.rewind as rewind
-from bro.trails.client import HTTPStatusError, TrailsClient
+from bro.trails.backends import BACKENDS
 from bro.trails.display import ColorMode, preset
 from bro.trails.rewind import (
   _command_grep,
@@ -17,13 +17,13 @@ from bro.trails.rewind import (
   _follow_batches,
   _with_default_command,
 )
-from bro.trails.server.backends import BACKENDS
+from bro.trails.store import TrailNotFound, TrailsStore
 
 LULID = '01kydtgppz-y7fdwep2-apw9ag3b'
 
 
 class FakeClient:
-  """In-memory stand-in for the TrailsClient read surface rewind drives."""
+  """In-memory stand-in for the TrailsStore read surface rewind drives."""
 
   def __init__(self):
     self.trails: dict[str, dict[str, Any]] = {}
@@ -75,7 +75,7 @@ class FakeClient:
 
   def get_trail(self, trail_id: str) -> dict[str, Any]:
     if trail_id not in self.trails:
-      raise HTTPStatusError(404, f'trail not found: {trail_id}')
+      raise TrailNotFound(trail_id)
     return self.trails[trail_id]
 
   def iter_steps(self, trail_id: str, *, after: Optional[int] = None):
@@ -87,11 +87,7 @@ class FakeClient:
     for index, raw in enumerate(self.records[trail_id]):
       if after is not None and index <= after:
         continue
-      try:
-        record = json.loads(raw)
-      except json.JSONDecodeError:
-        record = None
-      yield {'step_id': index, 'ts': None, 'raw': raw, 'record': record}
+      yield {'step_id': index, 'ts': None, 'body': raw}
 
   def iter_messages(self, trail_id: str, *, after: Optional[int] = None):
     harness = self.trails[trail_id]['harness']
@@ -117,8 +113,8 @@ class FakeClient:
     return self.contexts.get(trail_id)
 
 
-def _client(fake: FakeClient) -> TrailsClient:
-  return cast(TrailsClient, fake)
+def _client(fake: FakeClient) -> TrailsStore:
+  return cast(TrailsStore, fake)
 
 
 def _user(text: str, uuid: str = 'u1') -> str:
@@ -222,7 +218,7 @@ class TestShow:
     assert 'file.txt' in output
 
   def test_unknown_id_propagates_not_found(self):
-    with pytest.raises(HTTPStatusError, match='trail not found'):
+    with pytest.raises(TrailNotFound, match='trail not found'):
       _command_show(_client(FakeClient()), _args('missing'))
 
 
@@ -365,7 +361,7 @@ class TestGrep:
     assert _command_grep(_client(client), self._grep_args('absent')) == 1
 
   def test_explicit_unknown_id_propagates_not_found(self):
-    with pytest.raises(HTTPStatusError, match='trail not found'):
+    with pytest.raises(TrailNotFound, match='trail not found'):
       _command_grep(_client(FakeClient()), self._grep_args('needle', trails=['missing']))
 
 

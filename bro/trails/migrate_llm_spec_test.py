@@ -1,7 +1,7 @@
 import pytest
+from bro.trails.client import HTTPStatusError
 
 from bro.trails import migrate_llm_spec as migrate
-from bro.trails.client import HTTPStatusError
 
 _OLD_BRO = {'type': 'chat_gpt', 'model': 'gpt-5.6-sol', 'reasoning_effort': 'high'}
 _OLD_CLAUDE = {'model': 'claude-opus-5', 'effort': 'xhigh'}

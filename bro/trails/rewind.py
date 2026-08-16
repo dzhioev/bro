@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 """`rewind` — the single reader over recorded runs, every harness."""
 
-import http.client
 import re
 import sys
 import time
@@ -11,7 +10,6 @@ from typing import Any, Optional
 import bro.base.args as base_args
 from bro.base import log, pager
 from bro.base.ansi import Colors, should_color
-from bro.trails.client import HTTPStatusError, TrailsClient, default_client, is_retryable_status
 from bro.trails.display import (
   ColorMode,
   DisplayConfig,
@@ -24,6 +22,7 @@ from bro.trails.display import (
   StreamRenderer,
   preset,
 )
+from bro.trails.store import TrailsStore, TransientUnavailable, default_store
 
 __cli_name__ = 'rewind'
 
@@ -51,7 +50,7 @@ def _emit_document(text: str, args: dict[str, Any], configuration: DisplayConfig
     sys.stdout.write(text)
 
 
-def _command_list(client: TrailsClient, args: dict[str, Any]) -> int:
+def _command_list(client: TrailsStore, args: dict[str, Any]) -> int:
   adapter = RecordedAdapter(client)
   records = [
     adapter.trail_list_row(header)
@@ -73,7 +72,7 @@ def _command_list(client: TrailsClient, args: dict[str, Any]) -> int:
 
 
 def _follow_batches(
-  client: TrailsClient,
+  client: TrailsStore,
   trail_id: str,
   *,
   iterator: Callable[[str, Optional[int]], Iterator[dict]],
@@ -98,17 +97,13 @@ def _follow_batches(
         if len(drained) > 0:
           yield drained
         return
-    except HTTPStatusError as exception:
-      if not is_retryable_status(exception.status):
-        raise
-      log.warning('transient trails-server error, retrying: %s', exception)
-    except (OSError, http.client.HTTPException) as exception:
-      log.warning('transient trails-server error, retrying: %s', exception)
+    except TransientUnavailable as exception:
+      log.warning('trails store temporarily unavailable, retrying: %s', exception)
     sleep(interval)
 
 
 def _stream_follow(
-  client: TrailsClient,
+  client: TrailsStore,
   args: dict[str, Any],
   configuration: DisplayConfig,
   initial_records: Iterable[DisplayRecord],
@@ -153,7 +148,7 @@ def _last_target_step_id(records: Iterable[DisplayRecord], trail_id: str) -> int
   )
 
 
-def _command_show(client: TrailsClient, args: dict[str, Any]) -> int:
+def _command_show(client: TrailsStore, args: dict[str, Any]) -> int:
   adapter = RecordedAdapter(client)
   trail_id = args['trail_id']
   header = client.get_trail(trail_id)
@@ -176,7 +171,7 @@ def _command_show(client: TrailsClient, args: dict[str, Any]) -> int:
   return 0
 
 
-def _command_steps(client: TrailsClient, args: dict[str, Any]) -> int:
+def _command_steps(client: TrailsStore, args: dict[str, Any]) -> int:
   adapter = RecordedAdapter(client)
   trail_id = args['trail_id']
   header = client.get_trail(trail_id)
@@ -243,7 +238,7 @@ def _grep_lines(
   return output
 
 
-def _command_grep(client: TrailsClient, args: dict[str, Any]) -> int:
+def _command_grep(client: TrailsStore, args: dict[str, Any]) -> int:
   """Exit 0 when at least one line matched, 1 otherwise — like grep."""
   try:
     regex = re.compile(args['pattern'], re.IGNORECASE if args.get('ignore_case', False) else 0)
@@ -284,7 +279,7 @@ def _command_grep(client: TrailsClient, args: dict[str, Any]) -> int:
   return 0 if found else 1
 
 
-def _command_tree(client: TrailsClient, args: dict[str, Any]) -> int:
+def _command_tree(client: TrailsStore, args: dict[str, Any]) -> int:
   adapter = RecordedAdapter(client)
   records = adapter.lineage_records(args['trail_id'])
   configuration = _configuration(args, PresetName.REWIND_TREE)
@@ -396,6 +391,6 @@ def main(argv: list[str]) -> Optional[int]:
   return parser.dispatch(_with_default_command(argv))
 
 
-def _dispatch(command: Callable[[TrailsClient, dict[str, Any]], int], args: dict[str, Any]) -> int:
-  with default_client() as client:
+def _dispatch(command: Callable[[TrailsStore, dict[str, Any]], int], args: dict[str, Any]) -> int:
+  with default_store() as client:
     return command(client, args)

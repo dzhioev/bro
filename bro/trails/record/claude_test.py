@@ -8,11 +8,12 @@ import pytest
 
 from bro.cw.constants import CW_RESUMED_SESSION_ENV
 from bro.monitor import trail_pointer
+from bro.trails.model import BlazeRequest
 from bro.trails.record.claude import Recorder, RecorderState, _fork_cuts, _state_path
 
 
 class FakeTrails:
-  """in-memory stand-in for the TrailsClient surface the recorder drives."""
+  """in-memory stand-in for the TrailsStore surface the recorder drives."""
 
   def __init__(self):
     self.created: list[dict] = []
@@ -27,7 +28,8 @@ class FakeTrails:
     self.history_scans = 0
     self._counter = 0
 
-  def create_trail(self, payload: dict) -> dict:
+  def blaze(self, request: BlazeRequest) -> dict:
+    payload = request.to_wire()
     self._counter += 1
     trail_id = f'T{self._counter}'
     self.created.append(payload)
@@ -98,10 +100,9 @@ class FakeTrails:
       {
         'trail_id': trail_id,
         'step_id': index,
-        'raw': raw,
-        'record': _parse(raw),
+        'body': body,
       }
-      for index, raw in enumerate(selected, start=start)
+      for index, body in enumerate(selected, start=start)
     ]
     next_cursor = start + len(selected) - 1 if start + len(selected) < len(lines) else None
     return {'steps': steps, 'next': next_cursor}
@@ -208,7 +209,7 @@ def _recorder(projects: Path, fake: FakeTrails, *, started_after: float = 0.0) -
   return Recorder(
     projects,
     'ws',
-    fake,  # type: ignore[arg-type] — structural stand-in for TrailsClient
+    fake,  # type: ignore[arg-type] — structural stand-in for TrailsStore
     llm={'model': 'claude-fable-5'},
     cw_command=os.environ['CW_COMMAND'],
     started_after=started_after,
@@ -508,7 +509,7 @@ class TestRecordedChainRecovery:
     _write_segment(projects, 'other-segment', lines)
     other_payload = dict(fake.created[0])
     other_payload['native'] = {**other_payload['native'], 'segment': 'other-segment'}
-    other_id = fake.create_trail(other_payload)['id']
+    other_id = fake.blaze(BlazeRequest.from_wire(other_payload))['id']
     fake.append_records(other_id, 0, lines)
 
     monkeypatch.setenv(CW_RESUMED_SESSION_ENV, 'seg-1')

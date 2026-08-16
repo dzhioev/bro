@@ -20,6 +20,7 @@ def scoped_store_preflight(monkeypatch):
   monkeypatch.setattr(
     'bro.launch.scope.credentials.build_scoped_store', lambda names, optional=(): {}
   )
+  monkeypatch.setattr('bro.launch.bro_run.local_trails_launch_data', lambda scoped: ({}, ()))
   monkeypatch.setattr(
     'bro.workspace.project.project_config',
     lambda: ProjectConfig(default_bro='foo', image_repository='bro/foo'),

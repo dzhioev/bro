@@ -6,13 +6,13 @@ import pytest
 
 from bro.launch.resume import RESUME_LATEST, conversation_history, find_latest_call_trail, resume
 from bro.llm.llms.openai import LLMSpec
+from bro.trails import backends
 from bro.trails.display import AssistantText, InterimAssistantText, ToolCall, UserInput
 from bro.trails.model import spill_descriptor
-from bro.trails.server import backends
 
 
-class FakeTrailsClient:
-  """dict-backed stand-in for `bro.trails.client.TrailsClient`'s read surface."""
+class FakeTrailsStore:
+  """dict-backed stand-in for `bro.trails.store.TrailsStore`'s read surface."""
 
   def __init__(
     self,
@@ -130,7 +130,7 @@ def _forked_from_steps() -> list[dict]:
 
 class TestFindLatestCallTrail:
   def test_picks_the_newest_call_trail_skipping_other_surfaces(self):
-    client = FakeTrailsClient(
+    client = FakeTrailsStore(
       headers=[
         _header('trail-3', surface='fork'),
         _header('trail-2'),
@@ -141,7 +141,7 @@ class TestFindLatestCallTrail:
     assert find_latest_call_trail(cast(Any, client), 'record') == 'trail-2'
 
   def test_returns_none_when_the_bro_has_no_call_trails(self):
-    client = FakeTrailsClient(headers=[_header('trail-1', surface='fork')], steps={})
+    client = FakeTrailsStore(headers=[_header('trail-1', surface='fork')], steps={})
     assert find_latest_call_trail(cast(Any, client), 'record') is None
 
 
@@ -168,7 +168,7 @@ class TestConversationHistory:
         response_id='r3',
       ),
     ]
-    client = FakeTrailsClient(headers=[_header('trail-1')], steps={'trail-1': steps})
+    client = FakeTrailsStore(headers=[_header('trail-1')], steps={'trail-1': steps})
     history = conversation_history(cast(Any, client), 'trail-1')
     assert _conversation_text(history) == [
       (UserInput, 'hello'),
@@ -180,7 +180,7 @@ class TestConversationHistory:
     assert any(isinstance(record, ToolCall) for record in history)
 
   def test_timestamps_are_timezone_aware_local_time(self):
-    client = FakeTrailsClient(headers=[_header('trail-1')], steps={'trail-1': _forked_from_steps()})
+    client = FakeTrailsStore(headers=[_header('trail-1')], steps={'trail-1': _forked_from_steps()})
     history = conversation_history(cast(Any, client), 'trail-1')
     user = next(record for record in history if isinstance(record, UserInput))
     assert (
@@ -194,7 +194,7 @@ class TestConversationHistory:
       _row('trail-1', 0, 'system_prompt', 'prompt'),
       _row('trail-1', 1, 'user_input', descriptor),
     ]
-    client = FakeTrailsClient(
+    client = FakeTrailsStore(
       headers=[_header('trail-1')],
       steps={'trail-1': steps},
       spilled={'https://spill/x': 'a very long message'},
@@ -218,7 +218,7 @@ class TestConversationHistory:
         response_id='r1',
       ),
     ]
-    client = FakeTrailsClient(
+    client = FakeTrailsStore(
       headers=[
         _header(
           'trail-2',
@@ -267,7 +267,7 @@ class TestConversationHistory:
       ),
       _row('trail-2', 3, 'assistant', 'continued', terminal=True),
     ]
-    client = FakeTrailsClient(
+    client = FakeTrailsStore(
       headers=[
         _header(
           'trail-2',
@@ -287,8 +287,8 @@ class TestConversationHistory:
 
 
 class TestResume:
-  def _client(self) -> FakeTrailsClient:
-    return FakeTrailsClient(
+  def _client(self) -> FakeTrailsStore:
+    return FakeTrailsStore(
       headers=[_header('trail-1')],
       steps={'trail-1': _forked_from_steps()},
     )
@@ -319,7 +319,7 @@ class TestResume:
     assert step_id == 1
 
   def test_rejects_a_trail_of_a_different_bro(self):
-    client = FakeTrailsClient(
+    client = FakeTrailsStore(
       headers=[_header('trail-1', bro='other')],
       steps={'trail-1': _forked_from_steps()},
     )
@@ -327,6 +327,6 @@ class TestResume:
       resume(cast(Any, client), 'record', 'trail-1', llm_spec=LLMSpec(model='gpt-5'))
 
   def test_raises_when_the_bro_has_nothing_to_resume(self):
-    client = FakeTrailsClient(headers=[], steps={})
+    client = FakeTrailsStore(headers=[], steps={})
     with pytest.raises(ValueError, match='no call conversation found'):
       resume(cast(Any, client), 'record', RESUME_LATEST, llm_spec=LLMSpec(model='gpt-5'))

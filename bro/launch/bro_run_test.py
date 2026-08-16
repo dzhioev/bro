@@ -1,8 +1,19 @@
+from unittest.mock import Mock
+
+import pytest
+
 import bro.launch.bro_run
 from bro.launch.identity import bro_git_identity_env
 from bro.workspace.store import ScopedSecrets
 
 _SCOPED = ScopedSecrets(required={'github', 'trails'}, optional={'openai'}, docker_sock=False)
+
+
+@pytest.fixture(autouse=True)
+def trails_launch_data(monkeypatch):
+  helper = Mock(return_value=({}, ()))
+  monkeypatch.setattr(bro.launch.bro_run, 'local_trails_launch_data', helper)
+  return helper
 
 
 def _describe(*args, **kwargs):
@@ -26,6 +37,19 @@ def test_describe_env_carries_identity_and_bro():
   assert launch.env == {'CW_BRO': 'dev', **bro_git_identity_env('dev')}
 
 
+def test_describe_carries_local_trails_data_in_the_launch(trails_launch_data):
+  trails_launch_data.return_value = (
+    {'BRO_TRAILS_DIR': '/home/cw/.bro-trails'},
+    ('/host/trails:/home/cw/.bro-trails',),
+  )
+
+  launch = _describe('dev', ['hi'])
+
+  trails_launch_data.assert_called_once_with(_SCOPED)
+  assert launch.env['BRO_TRAILS_DIR'] == '/home/cw/.bro-trails'
+  assert launch.extra_mounts == ('/host/trails:/home/cw/.bro-trails',)
+
+
 def test_describe_carries_the_given_scope():
   launch = _describe('dev', ['hi'])
   assert launch.secrets == {'github', 'trails'}
@@ -43,10 +67,13 @@ def test_describe_encodes_summoner_as_compact_json():
   assert launch.env['CW_SUMMONER'] == '{"target":"bro","trail_id":"trail-123"}'
 
 
-def test_describe_no_trails_drops_secret_and_disables_recording():
+def test_describe_no_trails_drops_secret_and_disables_recording(trails_launch_data):
   launch = _describe('dev', ['hi'], trails=False)
   assert 'trails' not in launch.secrets
   assert launch.env['TRAILS_DISABLED'] == '1'
+  trails_launch_data.assert_called_once_with(
+    ScopedSecrets(required={'github'}, optional={'openai'}, docker_sock=False)
+  )
 
 
 def test_describe_no_trails_drops_a_mapped_trails_instance():

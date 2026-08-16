@@ -5,27 +5,34 @@ import asyncio
 import contextlib
 import hmac
 import json
-import os
 import sys
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from typing import Any, Optional
 
-import boto3
 from aiohttp import web
 
 import bro.base.args as base_args
 from bro.base import log
-from bro.trails.model import MESSAGE_TYPES, UUID_LOOKUP_LIMIT
-from bro.trails.server import backends, storage
+from bro.trails.model import (
+  LOOPBACK_HOSTS,
+  MESSAGE_TYPES,
+  UUID_LOOKUP_LIMIT,
+  BlazeRequest,
+  validate_end,
+)
+from bro.trails.server.dynamo import BodyTooLarge, DynamoStore
+from bro.trails.store import AppendConflict, TrailNotFound, TrailsStore, default_store
 
 __cli_name__ = 'trails-server'
 
 DEFAULT_PORT = 8004
-LOOPBACK_HOSTS = frozenset({'127.0.0.1', 'localhost'})
-VALID_END_REASONS = frozenset({'ok', 'raised', 'error'})
-VALID_HOLDS = frozenset({'guided', 'attended', 'detached', 'unattended'})
 SWEEP_INTERVAL_SECONDS = 600.0
 CHECK_HEARTBEAT_INTERVAL_SECONDS = 5.0
+MAX_REQUEST_BYTES = 64 * 1024 * 1024
+
+
+async def _dispatch[Result](operation: Callable[..., Result], *args: Any, **kwargs: Any) -> Result:
+  return await asyncio.to_thread(operation, *args, **kwargs)
 
 
 @web.middleware
@@ -74,22 +81,6 @@ async def _stream_json_with_heartbeats(
   return response
 
 
-def _required(payload: dict, fields: tuple[str, ...]) -> Optional[web.Response]:
-  for field in fields:
-    if field not in payload:
-      return _error(f'missing field: {field}', 400)
-  return None
-
-
-def _string(payload: dict, field: str, *, optional: bool = False) -> Optional[web.Response]:
-  value = payload.get(field)
-  if optional and value is None:
-    return None
-  if not isinstance(value, str) or len(value) == 0:
-    return _error(f'{field} must be a non-empty string', 400)
-  return None
-
-
 def _pointer(payload: dict, field: str, *, step_optional: bool) -> Optional[web.Response]:
   value = payload.get(field)
   if value is None:
@@ -119,89 +110,17 @@ async def _handle_health(_: web.Request) -> web.Response:
   return web.json_response({'status': 'ok'})
 
 
-async def _handle_create_trail(request: web.Request) -> web.Response:
+async def _handle_blaze(request: web.Request) -> web.Response:
   payload = await _read_json(request)
   if not isinstance(payload, dict):
     return _error('invalid json', 400)
-  missing = _required(payload, ('harness', 'version', 'interactive', 'surface', 'body'))
-  if missing is not None:
-    return missing
-  allowed_fields = {
-    'harness',
-    'version',
-    'interactive',
-    'surface',
-    'body',
-    'bro',
-    'hold',
-    'forked_from',
-    'summoned_by',
-    'subject',
-    'location',
-    'native',
-  }
-  unknown_fields = set(payload) - allowed_fields
-  if len(unknown_fields) > 0:
-    return _error(f'unknown fields: {sorted(unknown_fields)}', 400)
-  for field in ('harness', 'version', 'surface'):
-    invalid = _string(payload, field)
-    if invalid is not None:
-      return invalid
-  if not isinstance(payload['interactive'], bool):
-    return _error('interactive must be a bool', 400)
-  if not isinstance(payload['body'], dict):
-    return _error('body must be an object', 400)
-  for field in ('bro', 'subject'):
-    invalid = _string(payload, field, optional=True)
-    if invalid is not None:
-      return invalid
-  if payload.get('hold') is not None and payload['hold'] not in VALID_HOLDS:
-    return _error(f'hold must be one of {sorted(VALID_HOLDS)}', 400)
-  for field, step_optional in (('forked_from', False), ('summoned_by', True)):
-    invalid = _pointer(payload, field, step_optional=step_optional)
-    if invalid is not None:
-      return invalid
-  native = payload.get('native')
-  if not isinstance(native, dict):
-    return _error('native must be an object', 400)
   try:
-    adapter = backends.BACKENDS[payload['harness']]
-  except KeyError:
-    return _error(f'unsupported harness: {payload["harness"]}', 400)
-  try:
-    adapter.validate_create(native)
+    blaze_request = BlazeRequest.from_wire(payload)
   except ValueError as exception:
     return _error(str(exception), 400)
-  if payload['harness'] == 'bro' and not isinstance(payload.get('bro'), str):
-    return _error('bro is required for the bro harness', 400)
-  location = payload.get('location')
-  if location is not None:
-    if not isinstance(location, dict) or not set(location).issubset(
-      {'host', 'workspace', 'dir', 'is_container'}
-    ):
-      return _error('location has unknown fields', 400)
-    for field in ('host', 'workspace', 'dir'):
-      if location.get(field) is not None and not isinstance(location[field], str):
-        return _error(f'location.{field} must be a string', 400)
-    if location.get('is_container') is not None and not isinstance(location['is_container'], bool):
-      return _error('location.is_container must be a bool', 400)
-
-  store: storage.Storage = request.app['storage']
+  store: TrailsStore = request.app['store']
   try:
-    result = await store.create_trail(
-      harness=payload['harness'],
-      version=payload['version'],
-      interactive=payload['interactive'],
-      surface=payload['surface'],
-      body=payload['body'],
-      bro=payload.get('bro'),
-      hold=payload.get('hold'),
-      forked_from=payload.get('forked_from'),
-      summoned_by=payload.get('summoned_by'),
-      subject=payload.get('subject'),
-      location=payload.get('location'),
-      native=payload.get('native'),
-    )
+    result = await _dispatch(store.blaze, blaze_request)
   except ValueError as exception:
     return _error(str(exception), 400)
   return web.json_response(result, status=201)
@@ -224,14 +143,14 @@ async def _handle_append_records(request: web.Request) -> web.Response:
   tools = payload.get('tools', {})
   if not isinstance(tools, dict):
     return _error('tools must be an object', 400)
-  store: storage.Storage = request.app['storage']
+  store: TrailsStore = request.app['store']
   try:
-    result = await store.append_records(trail_id, offset=offset, records=records, tools=tools)
-  except storage.BodyTooLarge as exception:
+    result = await _dispatch(store.append_records, trail_id, offset, records, tools=tools)
+  except BodyTooLarge as exception:
     return _error(str(exception), 413)
-  except storage.TrailNotFound:
+  except TrailNotFound:
     return _error(f'trail not found: {trail_id}', 404)
-  except storage.AppendConflict as exception:
+  except AppendConflict as exception:
     return web.json_response(
       {'error': str(exception), 'expected': exception.expected, 'extent': exception.actual},
       status=409,
@@ -258,10 +177,10 @@ async def _handle_update_header(request: web.Request) -> web.Response:
     return _error('turn_count must be a non-negative int', 400)
   if 'native' in payload and not isinstance(payload['native'], dict):
     return _error('native must be an object', 400)
-  store: storage.Storage = request.app['storage']
+  store: TrailsStore = request.app['store']
   try:
-    updated = await store.update_header(trail_id, payload)
-  except storage.TrailNotFound:
+    updated = await _dispatch(store.update_header, trail_id, payload)
+  except TrailNotFound:
     return _error(f'trail not found: {trail_id}', 404)
   except ValueError as exception:
     return _error(str(exception), 400)
@@ -276,50 +195,44 @@ async def _handle_end_trail(request: web.Request) -> web.Response:
   unknown_fields = set(payload) - {'reason', 'detail'}
   if len(unknown_fields) > 0:
     return _error(f'unknown fields: {sorted(unknown_fields)}', 400)
-  reason = payload.get('reason')
-  if reason not in VALID_END_REASONS:
-    return _error(f'reason must be one of {sorted(VALID_END_REASONS)}', 400)
-  detail = payload.get('detail')
-  if detail is not None and not isinstance(detail, str):
-    return _error('detail must be a string or null', 400)
-  if reason in {'raised', 'error'} and (not isinstance(detail, str) or len(detail) == 0):
-    return _error(f'detail is required for {reason}', 400)
-  store: storage.Storage = request.app['storage']
+  store: TrailsStore = request.app['store']
   try:
-    await store.end_trail(trail_id=trail_id, reason=reason, detail=detail)
-  except storage.TrailNotFound:
+    reason, detail = validate_end(payload.get('reason'), payload.get('detail'))
+    await _dispatch(store.end_trail, trail_id, reason, detail)
+  except TrailNotFound:
     return _error(f'trail not found: {trail_id}', 404)
+  except ValueError as exception:
+    return _error(str(exception), 400)
   return web.Response(status=204)
 
 
 async def _handle_keepalive(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
-  store: storage.Storage = request.app['storage']
+  store: TrailsStore = request.app['store']
   try:
-    await store.keepalive(trail_id)
-  except storage.TrailNotFound:
+    await _dispatch(store.keepalive, trail_id)
+  except TrailNotFound:
     return _error(f'trail not found: {trail_id}', 404)
   return web.Response(status=204)
 
 
 async def _handle_get_trail(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
-  store: storage.Storage = request.app['storage']
-  trail = await store.get_trail(trail_id)
-  if trail is None:
+  store: TrailsStore = request.app['store']
+  try:
+    trail = await _dispatch(store.get_trail, trail_id)
+  except TrailNotFound:
     return _error(f'trail not found: {trail_id}', 404)
   return web.json_response(trail)
 
 
 async def _handle_get_context(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
-  store: storage.Storage = request.app['storage']
+  store: TrailsStore = request.app['store']
   try:
-    context = await store.get_launch_context(trail_id)
-  except storage.TrailNotFound:
+    context = await _dispatch(store.get_launch_context, trail_id)
+  except TrailNotFound:
     return _error(f'trail not found: {trail_id}', 404)
-  if context is None:
-    return _error(f'no launch context for trail: {trail_id}', 404)
   return web.json_response({'launch_context': context})
 
 
@@ -329,32 +242,31 @@ async def _handle_find_steps(request: web.Request) -> web.Response:
     return _error(f'uuid must be supplied between 1 and {UUID_LOOKUP_LIMIT} times', 400)
   if any(len(uuid) == 0 for uuid in requested):
     return _error('uuid must be non-empty', 400)
-  store: storage.Storage = request.app['storage']
-  return web.json_response({'steps': await store.find_steps_by_uuid(set(requested))})
+  store: TrailsStore = request.app['store']
+  steps = await _dispatch(store.find_steps_by_uuid, set(requested))
+  return web.json_response({'steps': steps})
 
 
 async def _handle_get_step(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
   step_id = _parse_ordinal(request.match_info['step_id'], name='step_id')
-  store: storage.Storage = request.app['storage']
+  store: TrailsStore = request.app['store']
   try:
-    step = await store.get_step(trail_id, step_id)
-  except storage.TrailNotFound:
+    step = await _dispatch(store.get_step, trail_id, step_id)
+  except TrailNotFound:
     return _error(f'trail not found: {trail_id}', 404)
   except ValueError as exception:
     return _error(str(exception), 400)
-  if step is None:
-    return _error(f'step not found: {trail_id}/{step_id}', 404)
   return web.json_response(step)
 
 
 async def _handle_get_step_uuids(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
   through = _parse_optional_ordinal(request.query.get('through'), name='through')
-  store: storage.Storage = request.app['storage']
+  store: TrailsStore = request.app['store']
   try:
-    steps = await store.query_step_uuids(trail_id, through=through)
-  except storage.TrailNotFound:
+    steps = await _dispatch(store.get_step_uuids, trail_id, through=through)
+  except TrailNotFound:
     return _error(f'trail not found: {trail_id}', 404)
   except ValueError as exception:
     return _error(str(exception), 400)
@@ -365,10 +277,10 @@ async def _handle_get_steps(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
   after = _parse_optional_ordinal(request.query.get('after'), name='after')
   limit = _parse_limit(request.query.get('limit'), default=100, ceiling=500)
-  store: storage.Storage = request.app['storage']
+  store: TrailsStore = request.app['store']
   try:
-    result = await store.query_steps(trail_id, after=after, limit=limit)
-  except storage.TrailNotFound:
+    result = await _dispatch(store.get_steps, trail_id, after=after, limit=limit)
+  except TrailNotFound:
     return _error(f'trail not found: {trail_id}', 404)
   except ValueError as exception:
     return _error(str(exception), 400)
@@ -383,15 +295,16 @@ async def _handle_get_messages(request: web.Request) -> web.Response:
   unknown = requested_types - MESSAGE_TYPES
   if len(unknown) > 0:
     return _error(f'unknown message types: {sorted(unknown)}', 400)
-  store: storage.Storage = request.app['storage']
+  store: TrailsStore = request.app['store']
   try:
-    result = await store.query_messages(
+    result = await _dispatch(
+      store.get_messages,
       trail_id,
       after=after,
       limit=limit,
       types=requested_types if len(requested_types) > 0 else None,
     )
-  except storage.TrailNotFound:
+  except TrailNotFound:
     return _error(f'trail not found: {trail_id}', 404)
   except ValueError as exception:
     return _error(str(exception), 400)
@@ -400,10 +313,10 @@ async def _handle_get_messages(request: web.Request) -> web.Response:
 
 async def _handle_recompute(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
-  store: storage.Storage = request.app['storage']
+  admin: DynamoStore = request.app['admin']
   try:
-    return web.json_response(await store.recompute(trail_id))
-  except storage.TrailNotFound:
+    return web.json_response(await _dispatch(admin.recompute, trail_id))
+  except TrailNotFound:
     return _error(f'trail not found: {trail_id}', 404)
   except ValueError as exception:
     return _error(str(exception), 400)
@@ -418,12 +331,12 @@ async def _handle_check(request: web.Request) -> web.StreamResponse:
   trail_id = payload.get('trail_id')
   if trail_id is not None and (not isinstance(trail_id, str) or len(trail_id) == 0):
     return _error('trail_id must be a non-empty string', 400)
-  store: storage.Storage = request.app['storage']
+  admin: DynamoStore = request.app['admin']
   try:
     if trail_id is None:
-      return await _stream_json_with_heartbeats(request, store.check())
-    return web.json_response(await store.check(trail_id))
-  except storage.TrailNotFound:
+      return await _stream_json_with_heartbeats(request, _dispatch(admin.check))
+    return web.json_response(await _dispatch(admin.check, trail_id))
+  except TrailNotFound:
     return _error(f'trail not found: {trail_id}', 404)
   except ValueError as exception:
     return _error(str(exception), 400)
@@ -441,10 +354,11 @@ async def _handle_relink(request: web.Request) -> web.Response:
   delete_count = payload['delete_count']
   if not isinstance(delete_count, int) or isinstance(delete_count, bool) or delete_count < 0:
     return _error('delete_count must be a non-negative int', 400)
-  store: storage.Storage = request.app['storage']
+  admin: DynamoStore = request.app['admin']
   try:
-    return web.json_response(await store.relink(trail_id, payload['forked_from'], delete_count))
-  except storage.TrailNotFound:
+    result = await _dispatch(admin.relink, trail_id, payload['forked_from'], delete_count)
+    return web.json_response(result)
+  except TrailNotFound:
     return _error(f'trail not found: {trail_id}', 404)
   except ValueError as exception:
     return _error(str(exception), 400)
@@ -458,12 +372,12 @@ async def _handle_repair_llm_spec(request: web.Request) -> web.Response:
   replacement = payload['replacement']
   if not isinstance(replacement, dict):
     return _error('replacement must be an object', 400)
-  store: storage.Storage = request.app['storage']
+  admin: DynamoStore = request.app['admin']
   try:
     return web.json_response(
-      await store.repair_llm_spec(trail_id, payload['expected'], replacement)
+      await _dispatch(admin.repair_llm_spec, trail_id, payload['expected'], replacement)
     )
-  except storage.TrailNotFound:
+  except TrailNotFound:
     return _error(f'trail not found: {trail_id}', 404)
   except ValueError as exception:
     return _error(str(exception), 409)
@@ -475,8 +389,9 @@ async def _handle_list_trails(request: web.Request) -> web.Response:
   forked_from = request.query.get('forked_from')
   if sum(value is not None for value in (harness, bro, forked_from)) > 1:
     return _error('only one of harness/bro/forked_from may be set', 400)
-  store: storage.Storage = request.app['storage']
-  result = await store.list_trails(
+  store: TrailsStore = request.app['store']
+  result = await _dispatch(
+    store.list_trails,
     harness=harness,
     bro=bro,
     forked_from=forked_from,
@@ -513,11 +428,11 @@ def _parse_limit(raw: Optional[str], *, default: int, ceiling: int) -> int:
   return value
 
 
-async def _sweep_loop(store: storage.Storage, interval_seconds: float) -> None:
+async def _sweep_loop(admin: DynamoStore, interval_seconds: float) -> None:
   while True:
     await asyncio.sleep(interval_seconds)
     try:
-      swept = await store.sweep_unreported()
+      swept = await _dispatch(admin.sweep_unreported)
       if len(swept) > 0:
         log.info('sweep inferred %d trails as unreported: %s', len(swept), ', '.join(swept))
     except Exception as exception:
@@ -525,23 +440,25 @@ async def _sweep_loop(store: storage.Storage, interval_seconds: float) -> None:
 
 
 def create_app(
-  store: storage.Storage,
+  store: TrailsStore,
   bearer_token: Optional[str],
   *,
+  admin: Optional[DynamoStore] = None,
   sweep_interval_seconds: Optional[float] = None,
 ) -> web.Application:
-  app = web.Application(
-    middlewares=[_auth_middleware], client_max_size=storage.MAX_BODY_BYTES + 64 * 1024
-  )
-  app['storage'] = store
+  if admin is not None and admin is not store:
+    raise ValueError('the trails admin surface must be the hosted store')
+  if sweep_interval_seconds is not None and admin is None:
+    raise ValueError('a trails sweep requires a DynamoStore admin surface')
+  app = web.Application(middlewares=[_auth_middleware], client_max_size=MAX_REQUEST_BYTES)
+  app['store'] = store
   app['bearer_token'] = bearer_token
   app.router.add_get('/health', _handle_health)
-  app.router.add_post('/v1/trails', _handle_create_trail)
+  app.router.add_post('/v1/trails', _handle_blaze)
   app.router.add_get('/v1/trails', _handle_list_trails)
   app.router.add_get('/v1/steps', _handle_find_steps)
   app.router.add_get('/v1/trails/{trail_id}', _handle_get_trail)
   app.router.add_patch('/v1/trails/{trail_id}', _handle_update_header)
-  app.router.add_post('/v1/admin/trails/{trail_id}/repair-llm-spec', _handle_repair_llm_spec)
   app.router.add_post('/v1/trails/{trail_id}/records', _handle_append_records)
   app.router.add_get('/v1/trails/{trail_id}/steps', _handle_get_steps)
   app.router.add_get('/v1/trails/{trail_id}/steps/uuids', _handle_get_step_uuids)
@@ -550,19 +467,28 @@ def create_app(
   app.router.add_get('/v1/trails/{trail_id}/context', _handle_get_context)
   app.router.add_post('/v1/trails/{trail_id}/end', _handle_end_trail)
   app.router.add_post('/v1/trails/{trail_id}/keepalive', _handle_keepalive)
-  app.router.add_post('/v1/admin/trails/check', _handle_check)
-  app.router.add_post('/v1/admin/trails/{trail_id}/recompute', _handle_recompute)
-  app.router.add_post('/v1/admin/trails/{trail_id}/relink', _handle_relink)
+  if admin is not None:
+    app['admin'] = admin
+    app.router.add_post('/v1/admin/trails/check', _handle_check)
+    app.router.add_post('/v1/admin/trails/{trail_id}/recompute', _handle_recompute)
+    app.router.add_post('/v1/admin/trails/{trail_id}/relink', _handle_relink)
+    app.router.add_post('/v1/admin/trails/{trail_id}/repair-llm-spec', _handle_repair_llm_spec)
   if sweep_interval_seconds is not None:
+    assert admin is not None
 
-    async def _sweep_context(app: web.Application):
-      task = asyncio.create_task(_sweep_loop(app['storage'], sweep_interval_seconds))
+    async def _sweep_context(_: web.Application):
+      task = asyncio.create_task(_sweep_loop(admin, sweep_interval_seconds))
       yield
       task.cancel()
       with contextlib.suppress(asyncio.CancelledError):
         await task
 
     app.cleanup_ctx.append(_sweep_context)
+
+  async def _close_store(_: web.Application) -> None:
+    await _dispatch(store.close)
+
+  app.on_cleanup.append(_close_store)
   return app
 
 
@@ -584,30 +510,29 @@ def main(argv: list[str]) -> Optional[int]:
   parser.add_argument('--port', type=int, default=DEFAULT_PORT)
   parser.add_argument('--trails-bearer-token', default=None, secret=True)
   parser.add_argument('--trails-allow-no-auth', action='store_true')
-  parser.add_argument('--trails-table', required=True)
-  parser.add_argument('--steps-table', required=True)
-  parser.add_argument('--uuid-index', required=True)
-  parser.add_argument('--spillover-bucket', required=True)
-  parser.add_argument('--aws-region', default=os.environ.get('AWS_REGION', 'eu-central-1'))
   args = parser.parse(argv)
   bearer_token = resolve_auth(
     bearer_token=args['trails_bearer_token'],
     allow_no_auth=args['trails_allow_no_auth'],
     host=args['host'],
   )
-  session = boto3.Session(region_name=args['aws_region'])
-  store = storage.Storage(
-    dynamo=session.client('dynamodb'),
-    s3=session.client('s3'),
-    trails_table=args['trails_table'],
-    steps_table=args['steps_table'],
-    bucket=args['spillover_bucket'],
-    uuid_index=args['uuid_index'],
-  )
+  store = default_store()
+  admin = store if isinstance(store, DynamoStore) else None
   auth_description = 'bearer auth' if bearer_token is not None else 'NO AUTH'
-  log.info(f'starting trails server on {args["host"]}:{args["port"]} ({auth_description})')
+  log.info(
+    'starting trails server on %s:%s with %s (%s)',
+    args['host'],
+    args['port'],
+    type(store).__name__,
+    auth_description,
+  )
   web.run_app(
-    create_app(store, bearer_token, sweep_interval_seconds=SWEEP_INTERVAL_SECONDS),
+    create_app(
+      store,
+      bearer_token,
+      admin=admin,
+      sweep_interval_seconds=SWEEP_INTERVAL_SECONDS if admin is not None else None,
+    ),
     host=args['host'],
     port=args['port'],
   )

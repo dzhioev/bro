@@ -1,4 +1,4 @@
-"""Shared storage constants, DynamoDB conversion, and storage exceptions."""
+"""DynamoDB row constants, conversion, and errors."""
 
 import decimal
 import hashlib
@@ -12,27 +12,14 @@ from bro.base.lulid import lulid
 
 SPILLOVER_THRESHOLD_BYTES = 50 * 1024
 MAX_BODY_BYTES = 10 * 1024 * 1024
-INLINE_RESPONSE_THRESHOLD_BYTES = 1 * 1024 * 1024
-PRESIGNED_URL_TTL_SECONDS = 3600
 # keeps both DynamoDB transaction limits: 51 operations and under 4 MB when every inline body
 # is just below the spill threshold.
 MAX_TRANSACTION_RECORDS = 50
 UNIVERSAL_BODY_STORAGE = 'trail_steps_v2'
 
 
-class TrailNotFound(Exception):
-  pass
-
-
 class BodyTooLarge(Exception):
   pass
-
-
-class AppendConflict(Exception):
-  def __init__(self, expected: int, actual: int):
-    super().__init__(f'append offset {expected} does not match trail extent {actual}')
-    self.expected = expected
-    self.actual = actual
 
 
 _serializer = TypeSerializer()
@@ -93,12 +80,6 @@ def body_bytes(body: Any) -> bytes:
   return json.dumps(body, ensure_ascii=False).encode('utf-8')
 
 
-def body_size_bytes(body: Any) -> int:
-  if body is None:
-    return 0
-  return len(body_bytes(body))
-
-
 def sha256_hex(payload: bytes) -> str:
   return hashlib.sha256(payload).hexdigest()
 
@@ -123,8 +104,3 @@ def relink_manifest_key(trail_id: str, timestamp: str) -> str:
 def llm_spec_manifest_key(trail_id: str, timestamp: str) -> str:
   compact = timestamp.replace(':', '').replace('.', '')
   return f'trails/migrations/llm-spec/{trail_id}-{compact}.json'
-
-
-def cancellation_codes(exception) -> list[str]:
-  reasons = getattr(exception, 'response', {}).get('CancellationReasons', [])
-  return [reason.get('Code', 'None') for reason in reasons]

@@ -68,11 +68,11 @@ from bro.base import configs, credentials, log
 from bro.base.args import Parser
 from bro.cw.constants import CW_RESUMED_SESSION_ENV
 from bro.monitor import health, trail_pointer, working_projects_dir
-from bro.trails.client import HTTPStatusError, TrailsClient, default_client
+from bro.trails.backends import CLAUDE_ADAPTER
 from bro.trails.lineage import walk_header_chain
-from bro.trails.model import UUID_LOOKUP_LIMIT
+from bro.trails.model import UUID_LOOKUP_LIMIT, BlazeRequest
 from bro.trails.record.spine import Recording
-from bro.trails.server.backends import CLAUDE_ADAPTER
+from bro.trails.store import TrailNotFound, TrailsStore, default_store
 
 # how many of the parent trail's trailing record uuids may end a verified fork
 # copy: the copy drops ephemeral records, so the very last uuids can be missing
@@ -314,7 +314,7 @@ class Recorder:
     self,
     projects_dir: Path,
     workspace: str,
-    client: TrailsClient,
+    client: TrailsStore,
     *,
     llm: dict,
     cw_command: str,
@@ -410,7 +410,7 @@ class Recorder:
       return False
     forked_from = continuation.forked_from if continuation is not None else None
     chunks = continuation.chunks if continuation is not None else [[0, 0]]
-    self._create_trail(path.stem, forked_from, chunks)
+    self._blaze(path.stem, forked_from, chunks)
     self._append_if_changed()
     return True
 
@@ -561,13 +561,11 @@ class Recorder:
     return first == file_lines[previous.chunks[0][0]] and last == file_lines[previous.extent - 1]
 
   def _fetch_step_raw(self, trail_id: str, step_id: int) -> Optional[str]:
-    """one native record's raw line, or None when the trail or step is absent."""
+    """one native record's line, or None when the trail or step is absent."""
     try:
-      return self.client.get_step(trail_id, step_id).get('raw')
-    except HTTPStatusError as exception:
-      if exception.status == 404:
-        return None
-      raise
+      return self.client.get_step(trail_id, step_id).get('body')
+    except TrailNotFound:
+      return None
 
   def _copied_history_continuation(
     self, previous: RecorderState, file_lines: list[str]
@@ -609,10 +607,8 @@ class Recorder:
         return _uuid_lines(_compose(file_lines, previous.chunks))
     try:
       rows = self.client.get_step_uuids(previous.trail_id)
-    except HTTPStatusError as exception:
-      if exception.status == 404:
-        return None
-      raise
+    except TrailNotFound:
+      return None
     return [(row['step_id'], row['uuid']) for row in rows]
 
   def _ancestor_uuids(self, trail_id: str) -> set[str]:
@@ -632,42 +628,34 @@ class Recorder:
     """the trail's header, or None when the server does not know it."""
     try:
       return self.client.get_trail(trail_id)
-    except HTTPStatusError as exception:
-      if exception.status == 404:
-        return None
-      raise
+    except TrailNotFound:
+      return None
 
   # --- trail lifecycle ------------------------------------------------------------
 
-  def _create_trail(
-    self, segment: str, forked_from: Optional[dict], chunks: list[list[int]]
-  ) -> None:
-    payload: dict[str, Any] = {
-      'harness': 'claude',
-      'version': configs.VERSION,
-      'interactive': True,
-      'surface': 'cw',
-      'native': {
+  def _blaze(self, segment: str, forked_from: Optional[dict], chunks: list[list[int]]) -> None:
+    body: dict[str, Any] = {'records': []}
+    context = _launch_context()
+    if context is not None:
+      body['launch_context'] = context
+    request = BlazeRequest(
+      harness='claude',
+      version=configs.VERSION,
+      interactive=True,
+      surface='cw',
+      native={
         'llm': self.llm,
         'segment': segment,
         'cw_command': self.cw_command,
         'harness_version': 'unknown',
       },
-      'location': _location(self.workspace),
-      'body': {'records': []},
-    }
-    bro = os.environ.get('CW_BRO')
-    if bro is not None:
-      payload['bro'] = bro
-    hold = os.environ.get('BRO_HOLD')
-    if hold is not None:
-      payload['hold'] = hold
-    if forked_from is not None:
-      payload['forked_from'] = forked_from
-    context = _launch_context()
-    if context is not None:
-      payload['body']['launch_context'] = context
-    recording = Recording.create(self.client, payload)
+      location=_location(self.workspace),
+      body=body,
+      bro=os.environ.get('CW_BRO'),
+      hold=os.environ.get('BRO_HOLD'),
+      forked_from=forked_from,
+    )
+    recording = Recording.create(self.client, request)
     trail_id = recording.trail_id
     self.active = RecorderState(trail_id=trail_id, segment=segment, chunks=chunks)
     self._recording = recording
@@ -869,7 +857,7 @@ def record_session(
     return 1
 
   try:
-    client = default_client()
+    client = default_store()
   except credentials.SecretNotFound:
     log.error('config not found: trails (configure ~/.bro/trails.json)')
     health.write('error', 'config not found: trails')
