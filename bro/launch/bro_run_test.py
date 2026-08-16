@@ -6,13 +6,13 @@ import bro.launch.bro_run
 from bro.launch.identity import bro_git_identity_env
 from bro.workspace.store import ScopedSecrets
 
-_SCOPED = ScopedSecrets(required={'github', 'trails'}, optional={'openai'}, docker_sock=False)
+_SCOPED = ScopedSecrets(required={'github'}, optional={'openai', 'trails'}, docker_sock=False)
 
 
 @pytest.fixture(autouse=True)
-def trails_launch_data(monkeypatch):
-  helper = Mock(return_value=({}, ()))
-  monkeypatch.setattr(bro.launch.bro_run, 'local_trails_launch_data', helper)
+def trails_mounts(monkeypatch):
+  helper = Mock(return_value=())
+  monkeypatch.setattr(bro.launch.bro_run, 'local_trails_mounts', helper)
   return helper
 
 
@@ -37,19 +37,19 @@ def test_describe_env_carries_identity_and_bro():
   assert launch.env == {'CW_BRO': 'dev', **bro_git_identity_env('dev')}
 
 
-def test_describe_carries_local_trails_data_in_the_launch(trails_launch_data):
-  trails_launch_data.return_value = ({}, ('/host/trails:/workspace/var/cw/trails',))
+def test_describe_carries_the_local_trails_mount_in_the_launch(trails_mounts):
+  trails_mounts.return_value = ('/host/trails:/workspace/var/cw/trails',)
 
   launch = _describe('dev', ['hi'])
 
-  trails_launch_data.assert_called_once_with(_SCOPED)
+  trails_mounts.assert_called_once_with(_SCOPED)
   assert launch.extra_mounts == ('/host/trails:/workspace/var/cw/trails',)
 
 
 def test_describe_carries_the_given_scope():
   launch = _describe('dev', ['hi'])
-  assert launch.secrets == {'github', 'trails'}
-  assert launch.optional_secrets == {'openai'}
+  assert launch.secrets == {'github'}
+  assert launch.optional_secrets == {'openai', 'trails'}
   assert launch.docker_sock is False
 
 
@@ -63,13 +63,13 @@ def test_describe_encodes_summoner_as_compact_json():
   assert launch.env['CW_SUMMONER'] == '{"target":"bro","trail_id":"trail-123"}'
 
 
-def test_describe_no_trails_drops_secret_and_disables_recording(trails_launch_data):
+def test_describe_no_trails_drops_secret_and_disables_recording(trails_mounts):
   launch = _describe('dev', ['hi'], trails=False)
-  assert 'trails' not in launch.secrets
+  assert launch.optional_secrets == {'openai'}
   assert launch.env['TRAILS_DISABLED'] == '1'
-  trails_launch_data.assert_called_once_with(
-    ScopedSecrets(required={'github'}, optional={'openai'}, docker_sock=False)
-  )
+  # a run that records nothing binds no trails root
+  trails_mounts.assert_not_called()
+  assert launch.extra_mounts == ()
 
 
 def test_describe_no_trails_drops_a_mapped_trails_instance():

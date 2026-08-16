@@ -28,11 +28,7 @@ class TestSummonLowering:
         required={'aws', 'trails'}, optional={'openai'}, docker_sock=True
       ),
     )
-    monkeypatch.setattr(
-      bro.launch.bro_run,
-      'local_trails_launch_data',
-      lambda scoped: ({}, ()),
-    )
+    monkeypatch.setattr(bro.launch.bro_run, 'local_trails_mounts', lambda scoped: ())
     monkeypatch.setattr(
       bro.launch.spawn,
       'resolve_head',

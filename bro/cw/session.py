@@ -24,7 +24,7 @@ from bro.launch.scope import (
   preflight_scoped_launch,
   scoped_secrets,
 )
-from bro.launch.trails import local_trails_launch_data
+from bro.launch.trails import local_trails_mounts
 from bro.workspace.containers import broker_enabled
 from bro.workspace.docker import Launch, find_container_id
 from bro.workspace.git import resolve_ref
@@ -405,8 +405,7 @@ def _container_session(
     env['CW_BASE_REF'] = base_ref
   claude_mounts, claude_env = container_claude_state(spec.name)
   env.update(claude_env)
-  trails_env, trails_mounts = local_trails_launch_data(scoped)
-  env.update(trails_env)
+  trails_mounts = local_trails_mounts(scoped)
   launch = Launch(
     name=spec.name,
     command=['cw', *spec.to_in_place_argv()],

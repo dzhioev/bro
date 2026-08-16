@@ -16,9 +16,10 @@ if TYPE_CHECKING:
   from bro.llm.llm import LLMSpec
   from bro.llm.mcp import Harness
 
-# secrets every claude code session resolves regardless of bro: the session
-# recorder and any in-session bro run both record through trails.
-_SESSION_BASELINE = frozenset({'trails'})
+# the recording credential every surface hydrates best-effort, regardless of bro:
+# it selects a backend (`bro.trails.store.resolve_config`) rather than enabling
+# recording, so a launch that cannot resolve it still records.
+_TRAILS_BASELINE = frozenset({'trails'})
 
 
 class Surface(enum.Enum):
@@ -33,7 +34,7 @@ class Surface(enum.Enum):
 class _Recipe:
   """a surface's row in the per-surface scope table (`_RECIPES`).
 
-  `baseline`/`optional_baseline` are the bro-independent tiers; `harness` selects
+  `optional_baseline` is the bro-independent best-effort tier; `harness` selects
   the component set the bro's manifest counts; `auth_secret` is the surface's
   fixed session-auth secret; `llm_key` adds the bro's own LLM-provider key
   (`llm_spec.needed_secrets()`, which the manifest omits); `docker_sock` pins the
@@ -41,7 +42,6 @@ class _Recipe:
   degrades an unknown bro to the baseline scope with a warning instead of raising.
   """
 
-  baseline: frozenset[str]
   optional_baseline: frozenset[str]
   harness: 'Harness'
   auth_secret: Optional[str]
@@ -54,8 +54,7 @@ class _Recipe:
 # per-surface sets) documents each set's rationale, bullet-per-row.
 _RECIPES: dict[Surface, _Recipe] = {
   Surface.CW_SESSION: _Recipe(
-    baseline=_SESSION_BASELINE,
-    optional_baseline=frozenset(),
+    optional_baseline=_TRAILS_BASELINE,
     harness='claude',
     auth_secret='claude_code',
     llm_key=False,
@@ -63,8 +62,7 @@ _RECIPES: dict[Surface, _Recipe] = {
     unknown_bro_fallback=True,
   ),
   Surface.RAW_SESSION: _Recipe(
-    baseline=_SESSION_BASELINE,
-    optional_baseline=frozenset(),
+    optional_baseline=_TRAILS_BASELINE,
     harness='bro',
     auth_secret='anthropic',
     llm_key=False,
@@ -72,8 +70,7 @@ _RECIPES: dict[Surface, _Recipe] = {
     unknown_bro_fallback=True,
   ),
   Surface.BRO_RUN: _Recipe(
-    baseline=frozenset({'trails'}),
-    optional_baseline=frozenset(),
+    optional_baseline=_TRAILS_BASELINE,
     harness='bro',
     auth_secret=None,
     llm_key=True,
@@ -115,7 +112,7 @@ def scoped_secrets(
 
   bind_project_credentials()
   recipe = _RECIPES[surface]
-  required = set(recipe.baseline)
+  required: set[str] = set()
   optional = set(recipe.optional_baseline)
   try:
     bro = create_bro(bro_name)

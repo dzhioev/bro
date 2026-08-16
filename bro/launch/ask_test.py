@@ -19,7 +19,7 @@ def _stub_scoped_store(monkeypatch):
   monkeypatch.setattr(
     'bro.launch.scope.credentials.build_scoped_store', lambda names, optional=(): {}
   )
-  monkeypatch.setattr('bro.launch.bro_run.local_trails_launch_data', lambda scoped: ({}, ()))
+  monkeypatch.setattr('bro.launch.bro_run.local_trails_mounts', lambda scoped: ())
 
 
 class MockLLM(LLM):
@@ -75,8 +75,9 @@ def test_main_re_execs_into_container_when_outside():
       '--in-place',
     ]
     assert run.call_args.kwargs['drop'] is True
-    # bro-dev's manifest (github + brog) plus the mandatory trails sink
-    assert {'github', 'brog', 'trails'} <= launch.secrets
+    # bro-dev's manifest (github + brog), with recording hydrated best-effort
+    assert {'github', 'brog'} <= launch.secrets
+    assert 'trails' in launch.optional_secrets
     # bro-dev doesn't deploy → no docker socket
     assert launch.docker_sock is False
 
@@ -193,7 +194,7 @@ def test_main_no_trails_disables_recording_in_container():
     launch = run.call_args.args[0]
     # the env var carries the effect in, so --no-trails isn't forwarded into the inner argv
     assert launch.command == ['bro', 'run', 'bro-dev', 'hello', '--llm', '+fast', '--in-place']
-    assert 'trails' not in launch.secrets
+    assert 'trails' not in launch.secrets | launch.optional_secrets
     assert launch.env == {
       'CW_BRO': 'bro-dev',
       'TRAILS_DISABLED': '1',
