@@ -51,5 +51,4 @@ class Lead(Bro):
     ),
     sh('rewind tree', 'trail_id', 'output_offset', 'output_limit'),
   ]
-  extra_secrets = ('trails',)
   system_prompt = SYSTEM_PROMPT

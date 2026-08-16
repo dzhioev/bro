@@ -93,22 +93,13 @@ def _default_factory() -> Tracker:
   # still take precedence.
   if os.environ.get(_TRAILS_DISABLED_ENV) is not None:
     return NullTracker()
-  # recording is otherwise mandatory in production: the `trails` secret must
-  # resolve from `~/.bro/trails.json`. a missing
-  # secret is a setup error, not a fallback path — `NullTracker` is opt-in:
+  # recording is otherwise on, and `NullTracker` opt-in:
   # - kill switch: `TRAILS_DISABLED` set in the environment.
   # - tests: `conftest.py`'s `set_default_tracker_factory(NullTracker)`.
   # - one-shot exploration: `bro.run(..., surface='experiment', tracker=NullTracker())`.
-  try:
-    from bro.trails.store import default_store
+  from bro.trails.store import default_store
 
-    store = default_store()
-  except credentials.SecretNotFound as e:
-    raise RuntimeError(
-      'trails: secret not found; configure ~/.bro/trails.json to enable recording, '
-      'or pass tracker=NullTracker() to skip explicitly'
-    ) from e
-  return Recorder(store)
+  return Recorder(default_store())
 
 
 # default factory for the per-run `Tracker` an unconfigured bro uses. swap with

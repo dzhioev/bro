@@ -184,9 +184,33 @@ def local_root() -> Path:
   return paths.trails_dir(paths.project_root())
 
 
+_TRAILS_SECRET = 'trails'
+_LOCAL_BACKEND = 'local'
+_SERVICE_BACKEND = 'service'
+
+
+def _backend(config: dict[str, Any]) -> str:
+  return config.get('backend', _SERVICE_BACKEND)
+
+
+def resolve_config(store: credentials.Store) -> dict[str, Any]:
+  """the trails configuration a process resolves through `store`: its `trails`
+  credential, or local storage where that credential does not resolve —
+  configuring the credential is what opts a deployment into the service or dynamo
+  backends."""
+  if not store.available(_TRAILS_SECRET):
+    return {'backend': _LOCAL_BACKEND}
+  return store.get_json(_TRAILS_SECRET)
+
+
+def selects_local_storage(store: credentials.Store) -> bool:
+  """whether `resolve_config(store)` records to the local filesystem."""
+  return _backend(resolve_config(store)) == _LOCAL_BACKEND
+
+
 def build_store(config: dict[str, Any]) -> TrailsStore:
-  backend = config.get('backend', 'service')
-  if backend == 'service':
+  backend = _backend(config)
+  if backend == _SERVICE_BACKEND:
     from bro.trails.network import NetworkStore
 
     try:
@@ -197,7 +221,7 @@ def build_store(config: dict[str, Any]) -> TrailsStore:
     if not isinstance(base_url, str) or not isinstance(token, str):
       raise ValueError('trails service base_url and token must be strings')
     return NetworkStore(base_url, token)
-  if backend == 'local':
+  if backend == _LOCAL_BACKEND:
     from bro.trails.local import LocalStore
 
     return LocalStore(local_root())
@@ -209,7 +233,7 @@ def build_store(config: dict[str, Any]) -> TrailsStore:
 
 
 def default_store() -> TrailsStore:
-  return build_store(credentials.get_json('trails'))
+  return build_store(resolve_config(credentials.default_store()))
 
 
 _STEP_CANONICAL_FIELDS = frozenset(

@@ -93,7 +93,6 @@ async def test_lead_exposes_the_rewind_read_surface_as_generated_commands():
     if server.namespace == 'sh':
       tools.update({tool.name: tool for tool in await server.list_tools()})
 
-  assert {'trails'} <= set(lead.needed_secrets())
   assert {
     'rewind_list',
     'rewind_show',

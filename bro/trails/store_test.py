@@ -1,10 +1,18 @@
+from typing import Optional, cast
 from unittest.mock import patch
 
 import pytest
 
+from bro.base import credentials
 from bro.trails.local import LocalStore
 from bro.trails.network import NetworkStore
-from bro.trails.store import build_store, local_root
+from bro.trails.store import (
+  build_store,
+  default_store,
+  local_root,
+  resolve_config,
+  selects_local_storage,
+)
 
 
 def test_missing_backend_keeps_selecting_service():
@@ -44,9 +52,38 @@ def test_the_local_root_sits_beside_the_projects_other_state(tmp_path, monkeypat
   assert local_root() == tmp_path / 'var' / 'cw' / 'trails'
 
 
-def test_default_store_still_requires_the_trails_credential():
-  from bro.trails.store import default_store
+def _credential_store(config: Optional[dict]) -> credentials.Store:
+  class _Store:
+    def available(self, name: str) -> bool:
+      assert name == 'trails'
+      return config is not None
 
-  with patch('bro.trails.store.credentials.get_json', side_effect=RuntimeError('missing')):
-    with pytest.raises(RuntimeError, match='missing'):
-      default_store()
+    def get_json(self, name: str) -> dict:
+      assert name == 'trails'
+      assert config is not None
+      return config
+
+  return cast(credentials.Store, _Store())
+
+
+def test_an_absent_credential_resolves_to_local_storage():
+  store = _credential_store(None)
+
+  assert resolve_config(store) == {'backend': 'local'}
+  assert selects_local_storage(store)
+
+
+def test_a_configured_credential_resolves_to_its_own_backend():
+  store = _credential_store({'base_url': 'https://trails.example', 'token': 'secret'})
+
+  assert resolve_config(store) == {'base_url': 'https://trails.example', 'token': 'secret'}
+  assert not selects_local_storage(store)
+
+
+def test_default_store_records_locally_without_the_trails_credential(tmp_path, monkeypatch):
+  monkeypatch.setattr('bro.trails.store.paths.project_root', lambda: tmp_path)
+  with patch('bro.trails.store.credentials.default_store', return_value=_credential_store(None)):
+    store = default_store()
+
+  assert isinstance(store, LocalStore)
+  assert store.root == (tmp_path / 'var' / 'cw' / 'trails').resolve()

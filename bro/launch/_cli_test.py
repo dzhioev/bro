@@ -20,7 +20,7 @@ def scoped_store_preflight(monkeypatch):
   monkeypatch.setattr(
     'bro.launch.scope.credentials.build_scoped_store', lambda names, optional=(): {}
   )
-  monkeypatch.setattr('bro.launch.bro_run.local_trails_launch_data', lambda scoped: ({}, ()))
+  monkeypatch.setattr('bro.launch.bro_run.local_trails_mounts', lambda scoped: ())
   monkeypatch.setattr(
     'bro.workspace.project.project_config',
     lambda: ProjectConfig(default_bro='foo', image_repository='bro/foo'),
@@ -81,8 +81,9 @@ def test_maybe_containerize_hops_and_scopes_to_bro():
   assert launch.name.startswith('call-bro-dev-')
   assert launch.command == ['bro', 'chat', 'bro-dev', 'hi', '--fast', '--in-place']
   assert run.call_args.kwargs['drop'] is True
-  # bro-dev's manifest (github + brog) + its llm key + the mandatory trails sink
-  assert {'github', 'brog', 'trails'} <= launch.secrets
+  # bro-dev's manifest (github + brog) + its llm key; recording is best-effort
+  assert {'github', 'brog', 'openai'} <= launch.secrets
+  assert 'trails' in launch.optional_secrets
   # bro-dev doesn't deploy → no docker socket
   assert launch.docker_sock is False
   assert run.call_args.kwargs['may_summon'] == set()

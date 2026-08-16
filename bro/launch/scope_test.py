@@ -30,18 +30,17 @@ def registered_scope_bros(register_test_bros):
 
 class TestScopedSecrets:
   def test_cw_session_set(self):
-    # cw-session themed as bro-dev: baseline + the claude-harness
-    # manifest — extra_secrets (github) and the session-local brog server's
-    # self-contained backend config — + the claude_code OAuth token (the
-    # session's only auth).
+    # cw-session themed as bro-dev: the claude-harness manifest — extra_secrets
+    # (github) and the session-local brog server's self-contained backend config
+    # — + the claude_code OAuth token (the session's only auth).
     scoped = bro.launch.scope.scoped_secrets('bro-dev', Surface.CW_SESSION)
-    assert {'trails', 'github', 'brog', 'claude_code'} <= scoped.required
+    assert {'github', 'brog', 'claude_code'} <= scoped.required
     # required (strict), not optional: no .credentials.json fallback in the
     # container, so a missing token must fail loudly on the host
     assert 'claude_code' not in scoped.optional
-    # spell casting advertises openai best-effort; no session-wide
-    # baseline adds anything on top
-    assert scoped.optional == {'openai'}
+    # spell casting advertises openai best-effort, and the session-wide baseline
+    # adds the recording credential in the same tier
+    assert scoped.optional == {'openai', 'trails'}
     # a normal claude code session keeps the docker socket
     assert scoped.docker_sock is True
 
@@ -74,11 +73,11 @@ class TestScopedSecrets:
     assert search_scope.docker_sock is False
     assert {'catalog', 'brave'} <= search_scope.required
 
-  def test_bro_run_manifest_plus_llm_key_and_trails(self):
+  def test_bro_run_manifest_plus_llm_key(self):
     # dev runs as an LLM process: its manifest plus its LLM key (openai →
-    # openai, which needed_secrets() omits) and the mandatory trails sink
+    # openai, which needed_secrets() omits)
     scoped = bro.launch.scope.scoped_secrets('dev', Surface.BRO_RUN)
-    assert {'openai', 'trails'} <= scoped.required
+    assert 'openai' in scoped.required
 
   def test_bro_run_docker_socket_gated_on_needs_docker(self):
     assert bro.launch.scope.scoped_secrets('scope-docker', Surface.BRO_RUN).docker_sock is True
@@ -105,8 +104,8 @@ class TestScopedSecrets:
 
   def test_unknown_bro_falls_back_to_baseline_on_session_surfaces(self):
     scoped = bro.launch.scope.scoped_secrets('nonexistent-bro', Surface.CW_SESSION)
-    assert scoped.required == set(bro.launch.scope._SESSION_BASELINE)
-    assert scoped.optional == set()
+    assert scoped.required == set()
+    assert scoped.optional == set(bro.launch.scope._TRAILS_BASELINE)
     assert scoped.docker_sock is True
     # a --raw fallback drops the socket: no bro to consult for needs_docker
     assert (

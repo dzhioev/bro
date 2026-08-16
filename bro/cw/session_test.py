@@ -116,7 +116,7 @@ class _ContainerHarness:
       # keep the bro-registry import out; threading is asserted per-test
       patch('bro.launch.summon_control.summon_allow_list', return_value=set()),
       patch('bro.cw.session._load_anthropic_key', return_value={'api_key': 'k'}),
-      patch('bro.cw.session.local_trails_launch_data', return_value=({}, ())),
+      patch('bro.cw.session.local_trails_mounts', return_value=()),
     ]
     entered = [p.__enter__() for p in self._patches]
     self.env = entered[0]
@@ -128,7 +128,7 @@ class _ContainerHarness:
     self.container_claude_state = entered[6]
     self.drop_workspace = entered[7]
     self.summon_allow_list = entered[9]
-    self.local_trails_launch_data = entered[11]
+    self.local_trails_mounts = entered[11]
     return self
 
   def __exit__(self, *exception):
@@ -251,14 +251,11 @@ class TestContainerCommand:
         ['/host/claude:/home/cw/.claude'],
         {'CLAUDE_CONFIG_DIR': '/home/cw/.claude'},
       )
-      harness.local_trails_launch_data.return_value = (
-        {},
-        ('/host/trails:/workspace/var/cw/trails',),
-      )
+      harness.local_trails_mounts.return_value = ('/host/trails:/workspace/var/cw/trails',)
       result = cw_session.start_session(_spec(drop=True))
 
     assert result == 0
-    harness.local_trails_launch_data.assert_called_once_with(
+    harness.local_trails_mounts.assert_called_once_with(
       ScopedSecrets({'github', 'trails'}, set(), True)
     )
     launch = harness.run_in_container.call_args.args[0]
