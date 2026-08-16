@@ -27,12 +27,12 @@ _SURFACES = [
 
 
 @pytest.fixture(autouse=True)
-def brog_config(monkeypatch):
-  # brog's state factory reads the self-contained `brog` secret at build
-  monkeypatch.setattr(
-    'bro.base.credentials.get_json',
-    lambda name: {'backend': 'github', 'token': 't', 'repo': 'owner/repository'},
-  )
+def toolset_configs(monkeypatch):
+  configs = {
+    'brog': {'backend': 'github', 'token': 't', 'repo': 'owner/repository'},
+    'trails': {'base_url': 'https://trails.example', 'token': 't'},
+  }
+  monkeypatch.setattr('bro.base.credentials.get_json', configs.__getitem__)
   # every credential resolves, so feature- and credential-gated components all
   # mount and the audit covers the maximal roster deterministically
   monkeypatch.setattr('bro.base.credentials.available', lambda name: True)
