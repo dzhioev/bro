@@ -34,6 +34,9 @@ that will not run.
 
 ## Scoring Terminal-Bench 2.1
 
+Harbor drives every task container through the `docker compose` CLI plugin, which nothing else in
+this repository needs — install it before the first run.
+
 Build the bundle once, then start the job:
 
 ```
@@ -41,9 +44,11 @@ uv run --project benchmark benchmark-bundle
 uv run --project benchmark harbor job start -c benchmark/bro/benchmark/terminal_bench_2_1.yaml
 ```
 
-`-i/--include-task-name <glob>` narrows a run to one task; `-k/--n-attempts` repeats each trial.
 The job config is the whole reproducibility contract — dataset revision, the bros under test, the
 model, concurrency, and the retry policy — so a run is described by that file plus the bundle.
+`-k/--n-attempts` repeats each trial. To narrow a run to a subset of tasks, add a `task_names` list
+of globs under the dataset: harbor's `--include-task-name` applies only to a dataset the command
+line itself names, which would mean restating the pinned revision there.
 
 The score lands in `<jobs_dir>/<job-name>/result.json` (`jobs/` unless `-o` says otherwise), under
 `stats.evals`, one entry per agent and dataset: `pass_at_k`, `reward_stats`, `exception_stats`,

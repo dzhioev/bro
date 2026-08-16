@@ -22,6 +22,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from harbor.cli.config_sources import load_config_source
 
 from bro.base import credentials
 from bro.benchmark.bundle import build, default_root, workspace_root
@@ -29,7 +30,7 @@ from bro.benchmark.harbor_agent import DEFAULT_LLM_CREDENTIAL
 
 # the smallest image in the set, and one carrying neither python3 nor a CA
 # store — so a single trial exercises the bundle and SSL_CERT_FILE for real
-TASK = 'adaptive-rejection-sampler'
+TASK = 'terminal-bench/adaptive-rejection-sampler'
 JOB_CONFIG = Path(__file__).with_name('terminal_bench_2_1.yaml')
 HARBOR = Path(sys.executable).with_name('harbor')
 
@@ -49,6 +50,16 @@ pytestmark = [
 ]
 
 
+def _one_task_config(directory: Path) -> Path:
+  """the pinned config narrowed to the one task, so the pins stay in one file."""
+  config = load_config_source(JOB_CONFIG)
+  for dataset in config['datasets']:
+    dataset['task_names'] = [TASK]
+  narrowed = directory / 'one-task.json'
+  narrowed.write_text(json.dumps(config))
+  return narrowed
+
+
 def test_a_real_task_is_driven_and_graded(tmp_path):
   workspace = workspace_root()
   build(workspace, default_root(workspace))
@@ -60,9 +71,7 @@ def test_a_real_task_is_driven_and_graded(tmp_path):
       'job',
       'start',
       '--config',
-      str(JOB_CONFIG),
-      '--include-task-name',
-      TASK,
+      str(_one_task_config(tmp_path)),
       '--jobs-dir',
       str(jobs),
       '--yes',
