@@ -53,6 +53,12 @@ def broker_dir(project: Path) -> Path:
   return project / 'var' / 'cw' / 'broker'
 
 
+def trails_dir(project: Path) -> Path:
+  # recorded trails for a local backend: one root per repo, beside the rest of
+  # its per-project state.
+  return project / 'var' / 'cw' / 'trails'
+
+
 def summon_dir(project: Path) -> Path:
   # per-session summon audit and live-status files. outside the workspace dirs on
   # purpose: the audit must survive a workspace drop.
