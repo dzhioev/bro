@@ -4,7 +4,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-SETUP_SCRIPT = Path(__file__).resolve().parent / 'setup.sh'
+SETUP_SCRIPT = Path(__file__).resolve().parents[3] / 'setup.sh'
 MANIFESTS = ('pyproject.toml', 'uv.lock', 'dev/pyproject.toml', 'local/pyproject.toml')
 
 

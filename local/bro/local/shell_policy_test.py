@@ -8,4 +8,4 @@ _PACKAGED_HOOKS = ('bro/workflow/hooks/commit-msg', 'bro/workflow/hooks/post-com
 
 
 def test_repository_shell_policy():
-  assert_shell_policy(Path(__file__).resolve().parent, exemptions=_PACKAGED_HOOKS)
+  assert_shell_policy(Path(__file__).resolve().parents[3], exemptions=_PACKAGED_HOOKS)
