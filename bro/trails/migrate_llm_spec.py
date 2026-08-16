@@ -22,7 +22,7 @@ import json
 import sys
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Optional, Protocol
+from typing import Optional, Protocol, runtime_checkable
 
 import bro.base.args as base_args
 from bro.base import log
@@ -54,8 +54,10 @@ def replacement_for(harness: str, recipe: object) -> Optional[dict]:
   return None if current is None else {**recipe, 'type': current}
 
 
+@runtime_checkable
 class Store(Protocol):
-  """the two trails-client calls a pass makes."""
+  """the two store calls a pass makes. The repair is an administration
+  surface, which only a backend that hosts one offers."""
 
   def iter_trails(self) -> Iterator[dict]: ...
 
@@ -139,6 +141,9 @@ def main(argv: list[str]) -> Optional[int]:
   )
   args = parser.parse(argv)
   with default_store() as client:
+    if not isinstance(client, Store):
+      log.error('the configured trails backend has no administration surface')
+      return 1
     tally = migrate(client, apply=args['apply'], limit=args['limit'])
   print(tally.report())
   if not args['apply']:
