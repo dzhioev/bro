@@ -31,4 +31,10 @@ module-name = ["bro.local", "bros.bro_dev"]
 # both are namespace packages the framework distribution also ships into; these
 # portions carry no __init__.py of their own so they merge
 namespace = true
-wheel-exclude = ["**/*_test.py", "**/*_test_helper.py", "**/conftest.py", "**/CLAUDE.md"]
+wheel-exclude = [
+  "**/*_test.py",
+  "**/*_test_helper.py",
+  "**/conftest.py",
+  "**/CLAUDE.md",
+  "**/*.egg-info",
+]

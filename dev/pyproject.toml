@@ -43,5 +43,6 @@ wheel-exclude = [
   "**/*_test_helper.py",
   "**/conftest.py",
   "**/CLAUDE.md",
+  "**/*.egg-info",
   "bros/analyst/reports",
 ]
