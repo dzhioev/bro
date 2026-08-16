@@ -10,6 +10,7 @@ from typing import Any, Optional
 import bro.base.args as base_args
 from bro.base import log, pager
 from bro.base.ansi import Colors, should_color
+from bro.base.text_window import DEFAULT_LIMIT, window
 from bro.trails.display import (
   ColorMode,
   DisplayConfig,
@@ -38,7 +39,18 @@ def _retained_document(records: Iterable[DisplayRecord], configuration: DisplayC
   return renderer.document()
 
 
+def _window_output(text: str, args: dict[str, Any]) -> str:
+  offset = args.get('output_offset')
+  limit = args.get('output_limit')
+  if offset is None and limit is None:
+    return text
+  if offset is not None and offset < 0:
+    raise SystemExit('output offset must be non-negative')
+  return window(text, offset or 0, DEFAULT_LIMIT if limit is None else limit)
+
+
 def _emit_document(text: str, args: dict[str, Any], configuration: DisplayConfig) -> None:
+  text = _window_output(text, args)
   if (
     configuration.paging
     and sys.stdout.isatty()
@@ -262,21 +274,22 @@ def _command_grep(client: TrailsStore, args: dict[str, Any]) -> int:
     headers = list(client.iter_trails(harness=args.get('harness'), max_items=args.get('limit')))
 
   log.info('searching %d trails', len(headers))
-  found = False
   colors = Colors(should_color(args['color']))
   configuration = _configuration(args, PresetName.REWIND_GREP)
+  groups: list[str] = []
   for header in headers:
     adapter = RecordedAdapter(client)
     records = adapter.conversation_records(header)
     rendered = _retained_document(records, configuration)
     matches = _grep_lines(header['id'], rendered, regex, colors, before=before, after=after)
     if len(matches) > 0:
-      if found and has_context:
-        sys.stdout.write(f'{colors.cyan}--{colors.reset}\n')
-      found = True
-      sys.stdout.write('\n'.join(matches) + '\n')
-      sys.stdout.flush()
-  return 0 if found else 1
+      groups.append('\n'.join(matches))
+  if len(groups) == 0:
+    return 1
+  separator = f'\n{colors.cyan}--{colors.reset}\n' if has_context else '\n'
+  sys.stdout.write(_window_output(separator.join(groups) + '\n', args))
+  sys.stdout.flush()
+  return 0
 
 
 def _command_tree(client: TrailsStore, args: dict[str, Any]) -> int:
@@ -307,6 +320,19 @@ def _add_color_argument(parser: base_args.Parser) -> None:
   )
 
 
+def _add_output_window_arguments(parser: base_args.Parser) -> None:
+  parser.add_argument(
+    '--output-offset',
+    type=int,
+    help='skip this many rendered output lines before printing',
+  )
+  parser.add_argument(
+    '--output-limit',
+    type=int,
+    help=f'max rendered output lines (default with an offset: {DEFAULT_LIMIT})',
+  )
+
+
 def _add_view_arguments(parser: base_args.Parser) -> None:
   parser.add_argument('trail_id', help='trail id (or a legacy claude session id)')
   parser.add_argument('--no-pager', action='store_true', help='do not pipe output through a pager')
@@ -320,6 +346,7 @@ def _add_view_arguments(parser: base_args.Parser) -> None:
   parser.add_argument(
     '--interval', type=float, default=2.0, help='seconds between polls with --follow'
   )
+  _add_output_window_arguments(parser)
   _add_color_argument(parser)
 
 
@@ -378,6 +405,7 @@ def main(argv: list[str]) -> Optional[int]:
   grep_parser.add_argument(
     '--limit', type=int, default=None, help='max trails to search (default: all)'
   )
+  _add_output_window_arguments(grep_parser)
   _add_color_argument(grep_parser)
   grep_parser.set_handler(lambda **args: _dispatch(_command_grep, args))
 
@@ -385,6 +413,7 @@ def main(argv: list[str]) -> Optional[int]:
     'tree', help='render the forked_from/fork hierarchy reachable from a trail'
   )
   tree_parser.add_argument('trail_id')
+  _add_output_window_arguments(tree_parser)
   _add_color_argument(tree_parser)
   tree_parser.set_handler(lambda **args: _dispatch(_command_tree, args))
 

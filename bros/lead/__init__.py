@@ -28,13 +28,28 @@ can pick the work up wherever the last one left it.
 class Lead(Bro):
   name = 'lead'
   description = 'coordinator that drives multi-stage work by handing it to other bros'
-  # neither entry is incidental: without a task page a coordinator has nowhere to
-  # keep the work, and without the block a harness hands it the very tools for
-  # doing the work itself that its whole discipline says it must not use.
   tools = [
     mount(brog_mcp.toolset),
     claude.block(*claude.FILES, *claude.SHELL, *claude.DELEGATION),
     sh('bro list'),
     sh('bro show', 'name'),
+    sh('rewind list', 'harness', 'bro', 'since', 'until', 'forked_from', 'limit'),
+    sh('rewind show', 'trail_id', 'output_offset', 'output_limit'),
+    sh('rewind steps', 'trail_id', 'output_offset', 'output_limit'),
+    sh(
+      'rewind grep',
+      'pattern',
+      'trails',
+      'harness',
+      'ignore_case',
+      'after_context',
+      'before_context',
+      'context',
+      'limit',
+      'output_offset',
+      'output_limit',
+    ),
+    sh('rewind tree', 'trail_id', 'output_offset', 'output_limit'),
   ]
+  extra_secrets = ('trails',)
   system_prompt = SYSTEM_PROMPT
