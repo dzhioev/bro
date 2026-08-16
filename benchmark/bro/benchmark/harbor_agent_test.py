@@ -1,6 +1,7 @@
 import asyncio
 import json
 import shlex
+import subprocess
 from pathlib import Path
 from typing import Any, Optional, cast
 
@@ -29,6 +30,20 @@ from bro.benchmark.harbor_agent import (
 CREDENTIAL = 'openai'
 INSTANCE = 'openai+benchmark'
 KEY = '{"api_key": "sk-test"}'
+
+
+@pytest.fixture(autouse=True)
+def _compose(monkeypatch):
+  """answer the host probe every construction runs, without a subprocess and
+  without carrying one test's answer into the next."""
+  monkeypatch.setattr(subprocess, 'run', lambda command, **kwargs: _completed(command, 0))
+  harbor_agent.docker_compose_missing.cache_clear()
+  yield
+  harbor_agent.docker_compose_missing.cache_clear()
+
+
+def _completed(command, returncode: int) -> subprocess.CompletedProcess:
+  return subprocess.CompletedProcess(command, returncode)
 
 
 @pytest.fixture
@@ -161,6 +176,22 @@ def test_a_ceiling_that_is_no_duration_is_refused(value):
 
 def test_a_ceiling_survives_the_string_a_command_line_kwarg_carries():
   assert run_timeout('900') == 900
+
+
+@pytest.mark.parametrize(('returncode', 'missing'), [(0, False), (1, True)])
+def test_the_compose_plugin_is_probed_through_the_docker_cli(monkeypatch, returncode, missing):
+  monkeypatch.setattr(subprocess, 'run', lambda command, **kwargs: _completed(command, returncode))
+
+  assert harbor_agent.docker_compose_missing() is missing
+
+
+def test_a_host_without_docker_at_all_reads_as_missing(monkeypatch):
+  def absent(*args, **kwargs):
+    raise FileNotFoundError('docker')
+
+  monkeypatch.setattr(subprocess, 'run', absent)
+
+  assert harbor_agent.docker_compose_missing() is True
 
 
 def test_the_kill_reaps_the_group_and_reports_success():

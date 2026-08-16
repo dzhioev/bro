@@ -13,7 +13,7 @@ The repository is a [uv](https://docs.astral.sh/uv/) workspace: this root publis
 
 ## Prerequisites
 
-Development requires Python 3.12 or newer, Git, and [uv](https://docs.astral.sh/uv/). `cw` sessions also require Claude Code; container workspaces require Docker, and GitHub workflows require `gh`. `bro/setup/setup_env.sh` is an opinionated macOS/Ubuntu reference installer for these host tools, not part of repository provisioning.
+Development requires Python 3.12 or newer, Git, and [uv](https://docs.astral.sh/uv/). `cw` sessions also require Claude Code; container workspaces require Docker, GitHub workflows require `gh`, and benchmark runs additionally require Docker's `compose` CLI plugin, which installs separately from the engine. `bro/setup/setup_env.sh` is an opinionated macOS/Ubuntu reference installer for these host tools, not part of repository provisioning.
 
 ## Installation
 

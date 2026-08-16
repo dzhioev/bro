@@ -18,8 +18,10 @@ itself to check.
 import asyncio
 import contextlib
 import shlex
+import subprocess
 import tempfile
 from collections.abc import Generator
+from functools import cache
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar, Optional, override
 
@@ -61,6 +63,8 @@ USAGE_FILE = AGENT_DIR / 'usage.json'
 DEFAULT_LLM_CREDENTIAL = 'openai'
 MODEL_PROVIDER = 'openai'
 
+COMPOSE_PROBE = ('docker', 'compose', 'version')
+
 # seconds between the TERM and the KILL when a cancelled phase reaps the bro,
 # and the same grace for the optional in-container `timeout` wrapper
 TERM_GRACE_SEC = 5
@@ -69,6 +73,22 @@ TERM_GRACE_SEC = 5
 # the error classifier and the recorded failure detail, bounded because the log
 # holds the bro's whole trajectory
 FAILURE_LOG_TAIL_BYTES = 64 * 1024
+
+
+@cache
+def docker_compose_missing() -> bool:
+  """whether this host lacks the `docker compose` CLI plugin, which installs
+  separately from the engine.
+
+  Only harbor's docker environment reaches containers through it, and which
+  environment a job runs is harbor's choice rather than this agent's — so an
+  absent plugin is reported, never refused. Probed once per process: a job
+  constructs one agent per trial.
+  """
+  try:
+    return subprocess.run(COMPOSE_PROBE, capture_output=True).returncode != 0
+  except FileNotFoundError:
+    return True
 
 
 def bare_model(model_name: Optional[str]) -> Optional[str]:
@@ -208,6 +228,11 @@ class BroAgent(BaseInstalledAgent):
     self._llm_credential = llm_credential
     self._run_timeout_sec = run_timeout(run_timeout_sec)
     self._model = bare_model(self.model_name)
+    if docker_compose_missing():
+      self.logger.warning(
+        'no docker compose plugin on this host: a job on the docker environment cannot '
+        'start a task container without it'
+      )
 
   @staticmethod
   @override
