@@ -5,6 +5,7 @@
 #
 #   source "$(bro-shell-dir)/docker_smoke_test.sh" "$OCI_CMD" <build-preparer>
 #   smoke_build <dockerfile>
+#   smoke_copy <source> <container-path>
 #   smoke_start <internal-port> [-e KEY=VAL ...]
 #   smoke_await <path> [-H <header>]
 #   smoke_curl <path> [-H <header>]
@@ -31,6 +32,7 @@ SMOKE_PORT=
 _SMOKE_CID=
 _SMOKE_IMAGE=
 _SMOKE_INTERNAL_PORT=
+_SMOKE_COPIES=()
 
 smoke_build() {
   local dockerfile=$1
@@ -41,14 +43,34 @@ smoke_build() {
   "$_SMOKE_OCI_COMMAND" build -f "$dockerfile" -t "$_SMOKE_IMAGE" .
 }
 
+# stage a file or directory for the next smoke_start to place in the container.
+# the copy streams from this client, while a `-v` source is resolved by the
+# daemon against its own filesystem: a caller running with the host docker
+# socket bind-mounted can name no path the daemon shares, and docker answers an
+# unresolvable mount source by creating an empty directory there.
+smoke_copy() {
+  local source=$1 container_path=$2
+  if [ ! -e "$source" ]; then
+    echo "copy source does not exist: $source" >&2
+    exit 1
+  fi
+  _SMOKE_COPIES+=("$source" "$container_path")
+}
+
 smoke_start() {
   local internal_port=$1; shift
   _SMOKE_INTERNAL_PORT=$internal_port
   SMOKE_PORT=$((internal_port + 10000 + RANDOM % 10000))
 
   echo "=== starting container ==="
-  _SMOKE_CID=$("$_SMOKE_OCI_COMMAND" run -d -p "${SMOKE_PORT}:${internal_port}" "$@" "$_SMOKE_IMAGE")
+  _SMOKE_CID=$("$_SMOKE_OCI_COMMAND" create -p "${SMOKE_PORT}:${internal_port}" "$@" "$_SMOKE_IMAGE")
+  # armed before the copies, which can fail with the container already created
   trap '_smoke_cleanup' EXIT
+  local index
+  for ((index = 0; index < ${#_SMOKE_COPIES[@]}; index += 2)); do
+    "$_SMOKE_OCI_COMMAND" cp "${_SMOKE_COPIES[index]}" "$_SMOKE_CID:${_SMOKE_COPIES[index + 1]}"
+  done
+  "$_SMOKE_OCI_COMMAND" start "$_SMOKE_CID" >/dev/null
 }
 
 _smoke_request() {
