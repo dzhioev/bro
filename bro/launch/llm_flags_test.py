@@ -63,8 +63,8 @@ class TestPresets:
   def _stores(self, monkeypatch, tmp_path):
     monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', tmp_path / 'bro.json')
     monkeypatch.setattr(
-      'bro.workspace.project.project_config',
-      lambda: _FakeProjectConfig({'sharp': 'openai:sol:max', 'cheap': ':terra'}),
+      'bro.workspace.project.project_sections',
+      lambda: {'llm': {'sharp': 'openai:sol:max', 'cheap': ':terra'}},
     )
     self.host_file = tmp_path / 'bro.json'
 
@@ -82,23 +82,24 @@ class TestPresets:
   def test_a_name_no_table_carries_is_read_as_a_recipe(self):
     assert llm_flags.selection_from_args(_args(['--llm', ':terra'])) == LLMSelection(model='terra')
 
-  def test_a_recipe_is_read_without_a_project_around_it(self, monkeypatch):
-    def no_project():
-      raise FileNotFoundError('git')
+  def test_a_recipe_is_read_without_reaching_for_a_table(self, monkeypatch):
+    def unreachable():
+      raise AssertionError('a recipe must resolve on its own')
 
-    monkeypatch.setattr('bro.workspace.project.project_config', no_project)
+    monkeypatch.setattr('bro.workspace.project.project_sections', unreachable)
 
     assert llm_flags.selection_from_args(_args(['--llm', ':terra'])) == LLMSelection(model='terra')
+
+  def test_the_host_names_stay_in_scope_outside_a_project(self, monkeypatch):
+    monkeypatch.setattr('bro.workspace.project.project_sections', dict)
+    self.host_file.write_text(json.dumps({'llm': {'sharp': ':fable5'}}))
+
+    assert llm_flags.selection_from_args(_args(['--llm', 'sharp'])) == LLMSelection(model='fable5')
 
   def test_a_malformed_preset_names_itself_in_the_error(self):
     self.host_file.write_text(json.dumps({'llm': {'broken': '::ludicrous'}}))
     with pytest.raises(LLMSelectionError, match="preset 'broken'"):
       llm_flags.selection_from_args(_args(['--llm', 'broken']))
-
-
-class _FakeProjectConfig:
-  def __init__(self, presets: dict):
-    self.sections = {'llm': presets}
 
 
 class TestSurfaceGuards:

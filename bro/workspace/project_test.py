@@ -1,13 +1,19 @@
 import pytest
 
 import bro.workspace.project as workspace_project
-from bro.workspace.project import ProjectConfig, project_config
+from bro.workspace.project import ProjectConfig, project_config, project_sections
 
 
 @pytest.fixture
 def project_dir(tmp_path, monkeypatch):
   monkeypatch.setattr(workspace_project, 'project_root', lambda: tmp_path)
+  monkeypatch.setattr(workspace_project, 'find_project_root', lambda: tmp_path)
   return tmp_path
+
+
+@pytest.fixture
+def no_project(monkeypatch):
+  monkeypatch.setattr(workspace_project, 'find_project_root', lambda: None)
 
 
 class TestProjectConfig:
@@ -78,3 +84,24 @@ class TestProjectConfig:
     (project_dir / 'pyproject.toml').write_text('[tool.bro]\ndefault = 5\n')
     with pytest.raises(ValueError, match=r'\[tool.bro\] default .* must be a string'):
       project_config()
+
+
+class TestProjectSections:
+  def test_a_sub_table_is_carried_verbatim(self, project_dir):
+    (project_dir / 'pyproject.toml').write_text(
+      '[tool.bro]\ndefault = "foo"\n\n[tool.bro.llm]\nsharp = "openai:sol:max"\n'
+    )
+    assert project_sections() == {'llm': {'sharp': 'openai:sol:max'}}
+
+  def test_no_project_carries_no_sections(self, no_project):
+    assert project_sections() == {}
+
+  def test_a_project_without_the_launch_keys_still_carries_its_sections(self, project_dir):
+    (project_dir / 'pyproject.toml').write_text('[tool.bro.llm]\nsharp = "openai:sol:max"\n')
+
+    assert project_sections() == {'llm': {'sharp': 'openai:sol:max'}}
+    with pytest.raises(ValueError, match=r'missing \[tool.bro\] default'):
+      project_config()
+
+  def test_a_project_with_no_pyproject_carries_no_sections(self, project_dir):
+    assert project_sections() == {}

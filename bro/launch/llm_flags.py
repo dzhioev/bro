@@ -55,10 +55,11 @@ def add_llm_flags(parser: Parser, *, effort_help: str, fast_help: str) -> None:
 
 def presets() -> dict[str, str]:
   """the `--llm` preset names in scope: the operated project's `[tool.bro.llm]`
-  table, with the host's own `llm` table overriding it per name."""
-  from bro.workspace.project import project_config
+  table, with the host's own `llm` table overriding it per name. Outside any
+  project only the host's names are in scope."""
+  from bro.workspace.project import project_sections
 
-  merged = dict(project_config().sections.get('llm', {}))
+  merged = dict(project_sections().get('llm', {}))
   for name, value in merged.items():
     if not isinstance(value, str) or value == '':
       raise ValueError(f'[tool.bro.llm] preset {name!r} must be a non-empty string')
