@@ -64,7 +64,7 @@ source .venv/bin/activate
 run-tests
 ```
 
-`./setup.sh` syncs the editable workspace and installs the repository hooks; the formatter and the test gate cover every workspace member. Build the wheels with `uv build --package bro` and `uv build --package bro-dev`.
+`./setup.sh` syncs the editable workspace and installs the repository hooks; the formatter and the test gate cover every workspace member, plus [`benchmark/`](benchmark/README.md), which ships from this repository beside the workspace rather than inside it and carries an environment of its own. Build the wheels with `uv build --package bro` and `uv build --package bro-dev`.
 
 ## License
 
