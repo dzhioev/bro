@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 SETUP_SCRIPT = Path(__file__).resolve().parent / 'setup.sh'
-MANIFESTS = ('pyproject.toml', 'uv.lock', 'bro-dev/pyproject.toml')
+MANIFESTS = ('pyproject.toml', 'uv.lock', 'dev/pyproject.toml', 'local/pyproject.toml')
 
 
 def _stub_command(path: Path, body: str) -> None:
@@ -66,7 +66,7 @@ def test_reuses_the_linked_venv_while_the_manifests_match(tmp_path):
 def test_syncs_when_a_manifest_moved_away_from_the_linked_venv(tmp_path):
   tree = _stub_tree(tmp_path)
   staged = _staged_manifests(tmp_path, tree)
-  (tree / 'bro-dev' / 'pyproject.toml').write_text('a dependency bump\n')
+  (tree / 'dev' / 'pyproject.toml').write_text('a dependency bump\n')
   completed = _provision(tree, staged)
   assert [call.split()[0] for call in _sync_calls(tree)] == ['sync']
   assert 'syncing' in completed.stderr
