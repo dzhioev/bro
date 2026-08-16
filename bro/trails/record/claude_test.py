@@ -6,9 +6,9 @@ from typing import Any, Optional
 
 import pytest
 
-from bro.monitor import trail_pointer
+from bro.monitor import health, trail_pointer
 from bro.trails.local import LocalStore
-from bro.trails.record.claude import Recorder
+from bro.trails.record.claude import Recorder, _attempt
 
 
 class _Store(LocalStore):
@@ -442,3 +442,41 @@ class TestClose:
 
     assert recorder.finalize() is False
     assert _trails(store) == []
+
+
+def _fail() -> bool:
+  raise RuntimeError('store is down')
+
+
+@pytest.fixture
+def health_file(environment) -> Path:
+  """the beat file, under the config dir the environment fixture points at."""
+  del environment
+  return health.health_path()
+
+
+class TestHealthBeat:
+  def test_a_quiet_attempt_beats_ok(self, environment, store, health_file):
+    # an empty projects dir: the tick adopts nothing and advances no trail
+    _attempt(_recorder(environment, store, started_after=time.time()).tick, interval=3)
+
+    assert json.loads(health_file.read_text())['status'] == 'ok'
+    assert health.problem() is None
+
+  def test_a_raising_attempt_beats_the_error(self, health_file):
+    _attempt(_fail, interval=3)
+
+    assert json.loads(health_file.read_text())['error'].endswith('store is down')
+    assert health.problem() == health._FAILING
+
+  def test_a_quiet_attempt_clears_an_earlier_error(self, environment, store, health_file):
+    _attempt(_fail, interval=3)
+    _attempt(_recorder(environment, store, started_after=time.time()).tick, interval=3)
+
+    assert json.loads(health_file.read_text())['status'] == 'ok'
+    assert health.problem() is None
+
+  def test_the_shutdown_attempt_promises_no_further_beat(self, environment, store, health_file):
+    _attempt(_recorder(environment, store, started_after=time.time()).finalize, interval=None)
+
+    assert json.loads(health_file.read_text())['stale_after'] is None

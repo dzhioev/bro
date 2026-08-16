@@ -3,8 +3,9 @@
 Prints nothing when there is nothing to say, so Claude keeps its default status
 bar. Two sections, joined into the one line Claude renders:
 
-- a red `⚠ session recording FAILING` warning when the health file reports an
-  error — the one coloured channel that survives Claude's alternate-screen buffer;
+- a red `⚠ session recording …` warning when the health file reports a failing or
+  a stopped recorder — the one coloured channel that survives Claude's
+  alternate-screen buffer;
 - the session's summons, read from the status file `CW_SUMMON_STATUS` points at
   (written host-side by `bro/launch/summon_control.py`): each active summon as target, trail id,
   and age, plus the last terminal outcome for a while after it lands. External
@@ -79,8 +80,9 @@ def statusline() -> int:
   except OSError:
     pass
   parts = []
-  if health.is_failing():
-    parts.append(f'{_RED}⚠ session recording FAILING — see session-recorder.log{_RESET}')
+  problem = health.problem()
+  if problem is not None:
+    parts.append(f'{_RED}⚠ session recording {problem}{_RESET}')
   parts.extend(_summon_parts(time.time()))
   if len(parts) > 0:
     print(' · '.join(parts))

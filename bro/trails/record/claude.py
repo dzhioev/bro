@@ -501,15 +501,16 @@ def _exception_summary(exception: BaseException) -> str:
   return f'{type(exception).__name__}: {exception}'
 
 
-def _attempt(step: Callable[[], bool]) -> None:
+def _attempt(step: Callable[[], bool], *, interval: Optional[int]) -> None:
+  """run one recorder pass and beat the health file with its outcome, quiet
+  passes included — a beat that stops arriving is how a killed daemon is seen."""
   try:
-    advanced = step()
+    step()
   except Exception as e:
     log.exception('recording failed')
-    health.write('error', _exception_summary(e))
+    health.write('error', _exception_summary(e), interval=interval)
     return
-  if advanced:
-    health.write('ok')
+  health.write('ok', interval=interval)
 
 
 def _watch(recorder: Recorder, interval: int) -> None:
@@ -527,10 +528,10 @@ def _watch(recorder: Recorder, interval: int) -> None:
     if os.getppid() != parent_pid:
       log.info('parent process exited, shutting down')
       break
-    _attempt(recorder.tick)
+    _attempt(recorder.tick, interval=interval)
     stop.wait(interval)
 
-  _attempt(recorder.finalize)
+  _attempt(recorder.finalize, interval=None)
 
 
 def record_session(
@@ -557,7 +558,7 @@ def record_session(
     client = default_store()
   except credentials.SecretNotFound:
     log.error('config not found: trails (configure ~/.bro/trails.json)')
-    health.write('error', 'config not found: trails')
+    health.write('error', 'config not found: trails', interval=None)
     return 1
 
   src = projects_dir if projects_dir is not None else working_projects_dir()

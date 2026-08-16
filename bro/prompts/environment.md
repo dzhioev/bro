@@ -16,4 +16,4 @@ Call the `bro::banner` tool once. It returns the structured session facts as `ke
 
 4. `trail_id` is the trail this session is recorded into. It can roll mid-session — never cache it, read it off the banner when you need it.
 
-5. If a `session_recording: FAILING` line appears (always first in the output), session recording is broken — the transcript isn't reaching trails and this session could be lost on `--drop`. Don't swallow it: tell the user up front and point at `<claude config dir>/session-recorder.log` for the cause. A red statusLine warning also stays pinned for the user, but surface it in your first reply too.
+5. If a `session_recording:` line appears (always first in the output), session recording is broken — the transcript isn't reaching trails and this session could be lost on `--drop`. `FAILING` is a recorder that is erroring; `STOPPED` is one that is no longer running at all, so nothing will resume on its own. Don't swallow either: tell the user up front and point at `<claude config dir>/session-recorder.log` for the cause. A red statusLine warning also stays pinned for the user, but surface it in your first reply too.

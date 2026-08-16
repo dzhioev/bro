@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Optional
 
 from bro.base import log, spawn
-from bro.monitor import claude_config_dir, claude_projects_dir
+from bro.monitor import claude_config_dir, claude_projects_dir, health
 
 # a stop bounds the final snapshot + end — one transcript upload, seconds even
 # for a large session
@@ -74,6 +74,7 @@ def _start_session_recorder(
       process = spawn.popen(argv, env=dict(env), stdout=log_file, stderr=subprocess.STDOUT)
   except OSError as e:
     log.warning('cannot start the session recorder (%s); the session is not recorded', e)
+    health.write('error', f'the session recorder could not start: {e}', interval=None)
     return None
   log.verbose('session recorder started (log: %s)', log_path)
   return _SessionRecorder(process, log_path)

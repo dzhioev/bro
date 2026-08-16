@@ -60,8 +60,9 @@ class SessionFacts:
     - prompt — the user-typed prompt extracted from shell_command when a
       `--new`/`-p`/`--prompt`/`--` marker is found; shell_command is shown with
       the prompt portion replaced by a placeholder in this case
-    - sync_warning — set when the session-recorder health file reports a failure,
-      so the banner can warn that the transcript is not being recorded
+    - recording_problem — set when the session-recorder health file reports a
+      failing or a stopped recorder, so the banner can warn that the transcript
+      is not being recorded
     - may_summon — the bros the session may summon, as its launch fixed them;
       empty when it may summon none, None when it was launched by a surface that
       publishes no list
@@ -78,7 +79,7 @@ class SessionFacts:
   cw_command: Optional[str]
   shell_command: Optional[str]
   prompt: Optional[str]
-  sync_warning: Optional[str]
+  recording_problem: Optional[str]
   may_summon: Optional[tuple[str, ...]]
   trail_id: Optional[str]
 
@@ -119,10 +120,6 @@ class SessionFacts:
     if shell_command is not None:
       shell_command, prompt = _split_launch_prompt(shell_command)
 
-    sync_warning: Optional[str] = None
-    if health.is_failing():
-      sync_warning = 'session recording FAILING — see session-recorder.log'
-
     trail_id = trail_id_override
     if trail_id is None:
       trail_id = trail_pointer.read(trail_pointer.path())
@@ -137,7 +134,7 @@ class SessionFacts:
       cw_command=cw_command,
       shell_command=shell_command,
       prompt=prompt,
-      sync_warning=sync_warning,
+      recording_problem=health.problem(),
       may_summon=summon.may_summon(),
       trail_id=trail_id,
     )
@@ -155,10 +152,10 @@ class SessionFacts:
     reset = '\033[0m'
 
     lines: list[str] = []
-    if self.sync_warning is not None:
-      # most prominent slot — above the logo, red+bold so a broken sync is the
-      # first thing the eye lands on in a `cw exec` shell
-      lines.append(f'{red}{bold}⚠ {self.sync_warning}{reset}')
+    if self.recording_problem is not None:
+      # most prominent slot — above the logo, red+bold so broken recording is
+      # the first thing the eye lands on in a `cw exec` shell
+      lines.append(f'{red}{bold}⚠ session recording {self.recording_problem}{reset}')
       lines.append('')
     if self.bro is not None:
       # annotate the bottom line of the logo with a `// <bro>` signature — dim
@@ -228,10 +225,10 @@ class SessionFacts:
   def render_llm(self) -> str:
     """render the agent-facing session facts as plain key:value lines."""
     lines: list[str] = []
-    if self.sync_warning is not None:
+    if self.recording_problem is not None:
       # first line so it lands in Claude's collapsed tool-output preview without
       # needing expansion; the agent should relay it to the user
-      lines.append('session_recording: FAILING — see session-recorder.log')
+      lines.append(f'session_recording: {self.recording_problem}')
     lines.append(f'kind: {"container" if self.in_container else "worktree"}')
     pairs: list[tuple[str, str]] = [
       ('name', 'name'),
