@@ -1,4 +1,5 @@
 import importlib.metadata
+import importlib.util
 import os
 import subprocess
 import sys
@@ -10,11 +11,10 @@ def test_version_matches_the_frameworks_own_distribution():
   assert configs.VERSION == importlib.metadata.version(configs.DISTRIBUTION)
 
 
-def test_version_survives_several_distributions_owning_the_package():
-  package_name = configs.__name__.partition('.')[0]
-  owners = importlib.metadata.packages_distributions()[package_name]
-  assert configs.DISTRIBUTION in owners
-  assert configs.VERSION == importlib.metadata.version(configs.DISTRIBUTION)
+def test_the_package_carrying_the_version_is_owned_by_no_one_distribution():
+  package = configs.__name__.partition('.')[0]
+  spec = importlib.util.find_spec(package)
+  assert spec is not None and spec.origin is None, f'{package} is a regular package now'
 
 
 def test_bro_configs_dir_reads_the_environment(tmp_path):

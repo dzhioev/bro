@@ -88,11 +88,11 @@ docker run --rm -i \
     test -n "$(ls -A /opt/uv-cache)"
     test -w /opt/uv-cache
     # the workspace venv is baked in: console-script launchers are present, from
-    # the published members and the repository-local one alike, and setuptools'
-    # compat-mode editable paths point at directories in the clone
+    # the published members and the repository-local one alike, and every editable
+    # path entry points at a directory in the clone
     test -x /opt/cw-venv/bin/ask
     test -x /opt/cw-venv/bin/run-tests
-    EDITABLE_PATHS="$(grep -h '^/workspace' /opt/cw-venv/lib/python*/site-packages/__editable__.*.pth)"
+    EDITABLE_PATHS="$(grep -h '^/workspace' /opt/cw-venv/lib/python*/site-packages/*.pth)"
     test -n "$EDITABLE_PATHS"
     while IFS= read -r EDITABLE_PATH; do
       test -d "$EDITABLE_PATH"

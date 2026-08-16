@@ -1,12 +1,13 @@
 [build-system]
-requires = ["setuptools>=61", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"
 
 [project]
 name = "bro"
 version = "0.1.0"
 description = "agent framework and isolated development workspaces"
 readme = "README.md"
+license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.12"
 # what declaring and inspecting a persona costs — every surface that *runs* one is
 # pinned by the extra that owns it, including the ones bro imports lazily (mcp, boto3)
@@ -74,12 +75,6 @@ dev = [
 [tool.uv.workspace]
 members = ["dev", "local"]
 
-[tool.uv]
-# each member's source directory reaches sys.path as a plain path entry; the
-# container's baked venv is asserted against that shape
-# (bro/setup/container/test_smoke.sh)
-config-settings = { editable_mode = "compat" }
-
 [tool.uv.sources]
 bro-dev = { workspace = true }
 bro-local = { workspace = true }
@@ -146,55 +141,22 @@ reports = "dev/bros/analyst/reports"
 [tool.deptry.package_module_name_map]
 python_ulid = ["ulid"]
 
-[tool.setuptools]
-include-package-data = false
-
-[tool.setuptools.packages.find]
-where = ["."]
-# `bros` is a namespace package: a distribution outside this one contributes a
-# persona into it, and an editable checkout only merges the two portions when no
-# portion carries an __init__.py. The excludes keep that from promoting the
-# data-only directories to packages of their own, which would strip their files
-# from the package-data globs that ship them under the owning package.
-namespaces = true
-include = ["bro", "bro.*", "bros", "bros.*"]
-exclude = [
-  "*.egg-info",
-  "*.spells",
-  "bro.base.hooks",
-  "bro.prompts.*",
-  "bro.setup.*",
+[tool.uv.build-backend]
+module-root = ""
+module-name = ["bro", "bros"]
+# both are PEP 420 namespace packages another distribution contributes into
+namespace = true
+wheel-exclude = [
+  "**/*_test.py",
+  "**/*_test_helper.py",
+  "**/conftest.py",
+  "**/CLAUDE.md",
+  "bro/setup/setup_env.sh",
+  "bro/setup/versions.sh",
+  "bro/setup/ubuntu",
+  "bro/setup/container/bump-claude-code.sh",
+  "bro/setup/container/test_smoke.sh",
 ]
-
-[tool.setuptools.package-data]
-"bro.base" = ["registry.json", "hooks/*.sh"]
-"bros.bro" = ["spells/*.md"]
-"bros.dev" = ["REFERENCE.md", "spells/*.md"]
-"bros.lead" = ["spells/*.md"]
-"bro.prompts" = [
-  "*.md",
-  "*.prompt",
-  "*.prompt.template",
-  "dev/*.md",
-  "fragments/*.md",
-  "holds/*.md",
-  "shared/*.md",
-]
-"bro.reference" = ["*.md"]
-"bro.setup" = [
-  "prelude.sh",
-  "log.sh",
-  "strict.sh",
-  "docker_smoke_test.sh",
-  "container/Dockerfile",
-  "container/entrypoint.sh",
-  "container/git.sh",
-  "container/claude-code-version",
-  "base_image/Dockerfile",
-  "base_image/build.sh",
-]
-"bro.trails" = ["server/dynamodb_reserved_words.txt"]
-"bro.workflow" = ["hooks/commit-msg", "hooks/post-commit"]
 
 [tool.pytest.ini_options]
 # `bros` is a namespace package spanning two distributions; without this pytest
@@ -210,7 +172,15 @@ markers = [
 ]
 
 [tool.pyright]
-include = ["bro", "bros", "dev", "local", "conftest.py", "shell_policy_test.py"]
+include = [
+  "bro",
+  "bros",
+  "dev",
+  "local",
+  "conftest.py",
+  "packaging_policy_test.py",
+  "shell_policy_test.py",
+]
 exclude = ["bro/setup/", ".venv/", ".claude/", "*.egg-info/", "build/"]
 extraPaths = [".", "dev", "local"]
 venvPath = "."

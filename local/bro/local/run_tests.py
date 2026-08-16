@@ -165,6 +165,8 @@ PYTEST_FILES = [
   'bro/llm/usage_test.py',
   'shell_policy_test.py',
   'setup_test.py',
+  'packaging_policy_test.py',
+  'dev/bro/dev/packaging_policy_test.py',
   'dev/bro/dev/sync_scripts_test.py',
   'local/bros/bro_dev/bro_dev_test.py',
   'dev/bro/dev/git_golc_test.py',
