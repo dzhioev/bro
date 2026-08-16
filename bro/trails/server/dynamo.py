@@ -368,27 +368,14 @@ class DynamoStore(TrailsStore):
       raise ValueError('migrated trail header has an invalid extent')
     return extent
 
-  def update_header(self, trail_id: str, changes: dict) -> dict:
-    header = self._required_universal_header(trail_id)
-    unknown = set(changes) - {'subject', 'last_alive_at'}
-    if len(unknown) > 0:
-      raise ValueError(f'immutable or unknown header fields: {sorted(unknown)}')
-    names: dict[str, str] = {}
-    values: dict[str, dict] = {}
-    assignments: list[str] = []
-    for index, (key, value) in enumerate(changes.items()):
-      names[f'#field{index}'] = key
-      values[f':value{index}'] = _ddb(value)
-      assignments.append(f'#field{index} = :value{index}')
-    if len(assignments) == 0:
-      return self._project_header(header)
+  def set_subject(self, trail_id: str, subject: Optional[str]) -> dict:
+    self._required_header(trail_id)
     self._dynamo.update_item(
       TableName=self._trails_table,
       Key=_ddb_item({'id': trail_id}),
       ConditionExpression='attribute_exists(id)',
-      UpdateExpression='SET ' + ', '.join(assignments),
-      ExpressionAttributeNames=names,
-      ExpressionAttributeValues=values,
+      UpdateExpression='SET subject = :subject',
+      ExpressionAttributeValues={':subject': _ddb(subject)},
     )
     return self._project_header(self._required_header(trail_id))
 

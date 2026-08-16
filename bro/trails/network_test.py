@@ -339,10 +339,10 @@ class TestWrites:
       '/v1/admin/trails/T1/relink',
     ]
 
-  def test_update_header_patches_changes(self, monkeypatch):
+  def test_set_subject_patches_the_header(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
     fake.queue((200, b'{"id": "T1", "subject": "s"}'))
-    result = _client().update_header('T1', {'subject': 's'})
+    result = _client().set_subject('T1', 's')
     assert result['subject'] == 's'
     method, path, body, _ = fake.requests[0]
     assert (method, path) == ('PATCH', '/v1/trails/T1')
