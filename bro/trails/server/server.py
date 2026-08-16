@@ -351,6 +351,7 @@ async def _handle_relink(request: web.Request) -> web.Response:
     return _error(str(exception), 400)
 
 
+@_administered
 async def _handle_repair_llm_spec(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
   payload = await _read_json(request)
