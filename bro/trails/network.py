@@ -197,10 +197,9 @@ class NetworkStore(TrailsStore):
       {'expected': expected, 'replacement': replacement},
     )
 
-  def update_header(self, trail_id: str, changes: dict) -> dict:
-    """apply a constrained mutable-field upsert (`PATCH /v1/trails/{id}`);
-    returns the updated header."""
-    return self._send('PATCH', f'/v1/trails/{trail_id}', changes)
+  def set_subject(self, trail_id: str, subject: Optional[str]) -> dict:
+    """name the trail (`PATCH /v1/trails/{id}`); returns the updated header."""
+    return self._send('PATCH', f'/v1/trails/{trail_id}', {'subject': subject})
 
   def end_trail(
     self,

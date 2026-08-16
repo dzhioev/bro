@@ -149,7 +149,7 @@ class TestTrailsStoreContract:
     ]
 
     trails_store.keepalive(trail_id)
-    assert trails_store.update_header(trail_id, {'subject': 'updated'})['subject'] == 'updated'
+    assert trails_store.set_subject(trail_id, 'updated')['subject'] == 'updated'
     trails_store.end_trail(trail_id, 'raised', 'blocked')
     assert trails_store.get_trail(trail_id)['end']['detail'] == 'blocked'
 

@@ -160,26 +160,20 @@ async def _handle_append_records(request: web.Request) -> web.Response:
   return web.json_response(result)
 
 
-async def _handle_update_header(request: web.Request) -> web.Response:
+async def _handle_set_subject(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
   payload = await _read_json(request)
   if not isinstance(payload, dict):
     return _error('invalid json', 400)
+  unknown = set(payload) - {'subject'}
+  if len(unknown) > 0:
+    return _error(f'immutable or unknown header fields: {sorted(unknown)}', 400)
   subject = payload.get('subject')
-  if 'subject' in payload and subject is not None and not isinstance(subject, str):
+  if subject is not None and not isinstance(subject, str):
     return _error('subject must be a string or null', 400)
-  if 'last_alive_at' in payload and not isinstance(payload['last_alive_at'], str):
-    return _error('last_alive_at must be a string', 400)
-  turn_count = payload.get('turn_count')
-  if 'turn_count' in payload and (
-    not isinstance(turn_count, int) or isinstance(turn_count, bool) or turn_count < 0
-  ):
-    return _error('turn_count must be a non-negative int', 400)
-  if 'native' in payload and not isinstance(payload['native'], dict):
-    return _error('native must be an object', 400)
   store: TrailsStore = request.app['store']
   try:
-    updated = await _dispatch(store.update_header, trail_id, payload)
+    updated = await _dispatch(store.set_subject, trail_id, subject)
   except TrailNotFound:
     return _error(f'trail not found: {trail_id}', 404)
   except ValueError as exception:
@@ -433,7 +427,7 @@ def create_app(
   app.router.add_post('/v1/trails', _handle_blaze)
   app.router.add_get('/v1/trails', _handle_list_trails)
   app.router.add_get('/v1/trails/{trail_id}', _handle_get_trail)
-  app.router.add_patch('/v1/trails/{trail_id}', _handle_update_header)
+  app.router.add_patch('/v1/trails/{trail_id}', _handle_set_subject)
   app.router.add_post('/v1/trails/{trail_id}/records', _handle_append_records)
   app.router.add_get('/v1/trails/{trail_id}/steps', _handle_get_steps)
   app.router.add_get('/v1/trails/{trail_id}/steps/{step_id}', _handle_get_step)

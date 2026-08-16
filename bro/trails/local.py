@@ -271,13 +271,10 @@ class LocalStore(TrailsStore):
       _atomic_json(self._trail_directory(trail_id) / 'header.json', header)
       return {'extent': expected_end, 'appended': len(prepared)}
 
-  def update_header(self, trail_id: str, changes: dict) -> dict:
-    unknown = set(changes) - {'subject', 'last_alive_at'}
-    if len(unknown) > 0:
-      raise ValueError(f'immutable or unknown header fields: {sorted(unknown)}')
+  def set_subject(self, trail_id: str, subject: Optional[str]) -> dict:
     with self._locked(trail_id, shared=False):
       header = self._read_header(trail_id)
-      header.update(changes)
+      header['subject'] = subject
       _atomic_json(self._trail_directory(trail_id) / 'header.json', header)
     return self._project_header(header)
 
