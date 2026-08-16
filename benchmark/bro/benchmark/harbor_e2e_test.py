@@ -10,10 +10,6 @@ It builds a real bundle, drives the host docker daemon and spends real tokens,
 so it stays out of the gate's roster:
 
   uv run --directory benchmark pytest bro/benchmark/harbor_e2e_test.py
-
-The job's trial directories are bind-mounted into the task containers by the
-docker daemon, so `--basetemp` has to name a directory that daemon can reach
-when pytest and the daemon do not share a filesystem.
 """
 
 import json
@@ -93,5 +89,5 @@ def test_a_real_task_is_driven_and_graded(tmp_path):
     assert evaluated['reward_stats'] != {}, f'{name} produced no reward'
   # what the reward alone cannot tell: a bro that died on startup is graded zero
   # like one that worked the task and failed. Tokens mean the loop actually ran,
-  # and that the usage file made it back through the mounted trial directory
+  # and that the usage file made it back out of the container
   assert stats['n_output_tokens'] > 0

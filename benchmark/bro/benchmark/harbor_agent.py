@@ -54,8 +54,8 @@ BUNDLE = Bundle(Path(INSTALL_DIR / 'bro'))
 STORE_DIR = INSTALL_DIR / 'credentials'
 PGID_FILE = INSTALL_DIR / 'bro.pgid'
 
-# harbor mounts the trial's own directory here, so what a run writes under it
-# reaches the host
+# harbor collects this directory into the job's results, so what a run writes
+# under it is the record it leaves behind
 AGENT_DIR = EnvironmentPaths.agent_dir
 ACTIVITY_LOG = AGENT_DIR / 'bro.log'
 USAGE_FILE = AGENT_DIR / 'usage.json'
