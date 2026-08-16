@@ -13,6 +13,7 @@ from bro.trails.store import (
   AppendConflict,
   TrailNotFound,
   TransientUnavailable,
+  UnsupportedOperation,
   fetch_recorded_trail,
   step_from_row,
   trail_from_header,
@@ -104,6 +105,13 @@ class TestGetTrail:
     assert (method, path) == ('GET', '/v1/trails/T1')
     assert headers['Authorization'] == 'Bearer tok'
     assert body is None
+
+  def test_unsupported_operation_is_not_a_missing_trail(self, monkeypatch):
+    fake = _install_fake_connection(monkeypatch)
+    fake.queue((501, b'{"error": "this trails backend has no administration surface"}'))
+    with pytest.raises(UnsupportedOperation):
+      _client().recompute('T1')
+    assert len(fake.requests) == 1
 
   def test_deterministic_http_error_propagates_without_retry(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)

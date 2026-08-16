@@ -15,6 +15,7 @@ from bro.trails.store import (
   TrailNotFound,
   TrailsStore,
   TransientUnavailable,
+  UnsupportedOperation,
 )
 
 _DEFAULT_RETRY_DELAYS_SECONDS = (0.0,)
@@ -305,13 +306,23 @@ class NetworkStore(TrailsStore):
             extents = _append_conflict_extents(raw)
             if response.status == 409 and extents is not None:
               raise AppendConflict(*extents) from exception
+            if response.status == 501:
+              raise UnsupportedOperation(str(exception)) from exception
             if is_retryable_status(response.status):
               raise TransientUnavailable(str(exception)) from exception
             raise exception
           if response.status == 204 or len(raw) == 0:
             return {}
           return json.loads(raw)
-        except (TrailNotFound, AppendConflict, HTTPStatusError, ValueError, KeyError, TypeError):
+        except (
+          TrailNotFound,
+          AppendConflict,
+          UnsupportedOperation,
+          HTTPStatusError,
+          ValueError,
+          KeyError,
+          TypeError,
+        ):
           self._drop_connection()
           raise
         except TransientUnavailable as exception:

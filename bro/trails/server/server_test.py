@@ -233,12 +233,13 @@ async def test_missing_resources_are_404(client):
 
 
 @pytest.mark.asyncio
-async def test_admin_routes_are_not_mounted_for_local_store(client):
+async def test_admin_routes_report_an_unsupported_backend(client):
   response = await (await client).post('/v1/admin/trails/check', json={}, headers=_auth())
-  assert response.status == 404
+  assert response.status == 501
+  assert 'administration surface' in (await response.json())['error']
 
 
-def test_admin_routes_are_mounted_for_dynamo_store():
+def test_admin_routes_serve_a_dynamo_backed_store():
   store = DynamoStore(
     dynamo=object(),
     s3=object(),
@@ -255,6 +256,7 @@ def test_admin_routes_are_mounted_for_dynamo_store():
       if (resource := route.resource) is not None
     }
 
+  assert app['admin'] is store
   assert '/v1/admin/trails/check' in paths
   assert '/v1/admin/trails/{trail_id}/recompute' in paths
   assert '/v1/admin/trails/{trail_id}/relink' in paths
