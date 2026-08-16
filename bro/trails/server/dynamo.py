@@ -692,9 +692,6 @@ class DynamoStore(TrailsStore):
   def relink(self, trail_id: str, forked_from: dict, delete_count: int) -> dict:
     return self._operations.relink(trail_id, forked_from, delete_count)
 
-  def repair_llm_spec(self, trail_id: str, expected: Any, replacement: dict) -> dict:
-    return self._operations.repair_llm_spec(trail_id, expected, replacement)
-
   def close(self) -> None:
     self._executor.shutdown()
 

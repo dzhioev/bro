@@ -356,26 +356,6 @@ async def _handle_relink(request: web.Request) -> web.Response:
     return _error(str(exception), 400)
 
 
-@_administered
-async def _handle_repair_llm_spec(request: web.Request) -> web.Response:
-  trail_id = request.match_info['trail_id']
-  payload = await _read_json(request)
-  if not isinstance(payload, dict) or set(payload) != {'expected', 'replacement'}:
-    return _error('body must contain expected and replacement', 400)
-  replacement = payload['replacement']
-  if not isinstance(replacement, dict):
-    return _error('replacement must be an object', 400)
-  admin: DynamoStore = request.app['admin']
-  try:
-    return web.json_response(
-      await _dispatch(admin.repair_llm_spec, trail_id, payload['expected'], replacement)
-    )
-  except TrailNotFound:
-    return _trail_not_found(trail_id)
-  except ValueError as exception:
-    return _error(str(exception), 409)
-
-
 async def _handle_list_trails(request: web.Request) -> web.Response:
   harness = request.query.get('harness')
   bro = request.query.get('bro')
@@ -462,7 +442,6 @@ def create_app(
   app.router.add_post('/v1/admin/trails/check', _handle_check)
   app.router.add_post('/v1/admin/trails/{trail_id}/recompute', _handle_recompute)
   app.router.add_post('/v1/admin/trails/{trail_id}/relink', _handle_relink)
-  app.router.add_post('/v1/admin/trails/{trail_id}/repair-llm-spec', _handle_repair_llm_spec)
   if sweep_interval_seconds is not None:
     assert admin is not None
 
