@@ -15,7 +15,7 @@ Harness-specific conditioning is expressed with these directives, never as prose
 
 ## Auto-injected `shared/` directory
 
-`bro/prompts/shared/*.md` is appended to the system prompt of every Bro (see `bro/bro.py:_load_shared_prompts`) AND injected into every `cw ss` Claude Code session via `bro/cw/system_prompt.py:_load_base_prompts`. Conventions that must hold across both surfaces (e.g. interaction policy) belong here. Files are sorted alphabetically at load time, so prefix with `00-`, `10-`, etc. if order matters.
+`bro/prompts/shared/*.md` is appended to the system prompt of every Bro (see `bro/bro.py:_load_shared_prompts`) AND injected into every `cw ss` Claude Code session via `bro/cw/system_prompt.py:_load_base_prompts`. Conventions that must hold across both surfaces and at every hold (e.g. word choices) belong here. Files are sorted alphabetically at load time, so prefix with `00-`, `10-`, etc. if order matters.
 
 ## `*.md` reference docs
 
@@ -38,7 +38,7 @@ A session's hold — its user-involvement level — is one of `unattended | deta
 - `cw ss` picks by its `--hold` flag for both claude flavors — the cw-session append prompt and the `--raw` `--system-prompt` (flag semantics: `bro/reference/cw.md`)
 - the bro-native launch surfaces pick it through `bro/bro.py:_system_prompt_for` — `run()` defaults unattended, `send()` guided, with every launcher's `--hold` overriding (per-surface defaults: `bro/launch/CLAUDE.md`, "Launch holds")
 
-`hold.md` (top level, not in `_BASE_PROMPT_FILES`) selects the per-level file in `holds/` via an exhaustive `{{iff #hold = …}}` chain and `{{include}}`s it; the three non-guided level files share `holds/authorization.md`, the full-authorization block. `bro.prompts.hold_fragment(hold, …facts)` is the one rendering path — every injection site uses it (`bro/cw/system_prompt.py:_session_append_prompt`, `bro/cw/claude_argv.py` for `--raw`, `bro/bro.py:_system_prompt_for`), and it is the only call that supplies the `#hold` fact, so all other text stays hold-neutral mechanically: a stray `#hold` directive in a spell or procedure doc raises.
+`hold.md` (top level, not in `_BASE_PROMPT_FILES`) selects the per-level file in `holds/` via an exhaustive `{{iff #hold = …}}` chain and `{{include}}`s it; the three non-guided level files share `holds/authorization.md`, the full-authorization block, and the three with a human channel — detached, attended, guided — share `fragments/interaction.md`, the interaction policy. `bro.prompts.hold_fragment(hold, …facts)` is the one rendering path — every injection site uses it (`bro/cw/system_prompt.py:_session_append_prompt`, `bro/cw/claude_argv.py` for `--raw`, `bro/bro.py:_system_prompt_for`), and it is the only call that supplies the `#hold` fact, so all other text stays hold-neutral mechanically: a stray `#hold` directive in a spell or procedure doc raises.
 
 The level files are the single place the levels differ: unattended carries the never-ask + `raise` convention, detached the carry-questions-into-the-report convention, attended the end-the-turn-at-pivotal-points convention, guided the confirm-each-significant-step convention.
 
@@ -53,6 +53,6 @@ The level files are the single place the levels differ: unattended carries the n
 ## Adding a prompt
 
 - **One-shot**: drop `<name>.prompt` (or `<name>.prompt.template` for `str.format` slots) at the top level. Load with `get_prompt('<name>.prompt'[, **kwargs])`
-- **Auto-injected into bros and `cw ss` sessions**: drop a `*.md` in `shared/`. Conventions that must hold for both surfaces (interaction policy, tone) belong here
-- **Include fragment**: drop a `*.md` in `fragments/` and splice it with `{{include fragments/<name>.md}}` from each opting-in text. For a convention that applies only where a capability exists — e.g. `task_tracker.md`, included by every persona that mounts task-tracker tools rather than injected everywhere
+- **Auto-injected into bros and `cw ss` sessions**: drop a `*.md` in `shared/`. Conventions that must hold for both surfaces at every hold (word choices, tone) belong here
+- **Include fragment**: drop a `*.md` in `fragments/` and splice it with `{{include fragments/<name>.md}}` from each opting-in text. For a convention that applies only where a capability exists — e.g. `task_tracker.md`, included by every persona that mounts task-tracker tools rather than injected everywhere — or only at some holds, e.g. `interaction.md`, included by the level files with a human channel
 - **Reference doc**: drop a `*.md` at top level or in a subdirectory (e.g. `dev/style.md`), then either add its filename to `bro/cw/system_prompt.py:_BASE_PROMPT_FILES` (injected into every `cw ss` session) or declare a `FileSource` for it in `bro/datasources/references.py` and mount it on a bro (tool-served on demand, every harness — e.g. `environment.md`)
