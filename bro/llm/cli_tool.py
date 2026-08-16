@@ -23,8 +23,6 @@ NAMESPACE = 'sh'
 # rather than exposed, so a generated tool's parameters stay the command's own.
 TIMEOUT_SECONDS = 45
 
-_JSON_TYPE = {'string': 'string', 'integer': 'integer', 'number': 'number'}
-
 
 def _description(signature: CommandSignature, arguments: tuple[Argument, ...]) -> str:
   spelled = ' '.join(signature.command)
@@ -41,7 +39,7 @@ def _description(signature: CommandSignature, arguments: tuple[Argument, ...]) -
 def _parameter_schema(argument: Argument) -> dict[str, Any]:
   if argument.kind == 'flag':
     return {'type': 'boolean', 'description': argument.help}
-  value: dict[str, Any] = {'type': _JSON_TYPE[argument.value_type]}
+  value: dict[str, Any] = {'type': argument.value_type}
   if len(argument.choices) > 0:
     value['enum'] = list(argument.choices)
   if argument.kind == 'list':
@@ -101,10 +99,9 @@ class _CommandTool(Tool):
           assert argument.option is not None  # a positional cannot be flag-shaped
           options.append(argument.option)
         continue
-      items = value if isinstance(value, list) else [value]
-      if argument.kind == 'value' and isinstance(value, list):
+      if isinstance(value, list) and argument.kind != 'list':
         raise ValueError(f'{argument.name!r} takes one value, got a list')
-      for item in items:
+      for item in value if isinstance(value, list) else [value]:
         text = str(item)
         if len(argument.choices) > 0 and text not in argument.choices:
           raise ValueError(
@@ -146,7 +143,10 @@ def _exposed(signature: CommandSignature, names: tuple[str, ...]) -> tuple[Argum
   if len(withheld) > 0:
     spelled = ' '.join(signature.command)
     raise ValueError(f'{spelled!r} requires {", ".join(withheld)}; the exposure cannot omit them')
-  return tuple(declared[name] for name in names)
+  # declaration order, not the order the names were listed in: positionals reach
+  # the command in the order it declares them.
+  exposed = set(names)
+  return tuple(argument for argument in signature.arguments if argument.name in exposed)
 
 
 def build_server(

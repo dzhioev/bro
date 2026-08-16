@@ -497,9 +497,9 @@ def _parse_intercepted() -> Generator[None]:
 def _cli_module(program: str) -> str:
   """the module whose `main` the installed console script `program` runs.
 
-  Every CLI is published under two script names — its import path with the
-  underscores dashed, and the bare `__cli_name__` alias — both pointing at a
-  bridge attribute that is the import path with the dots underscored. The
+  `sync-scripts` publishes every CLI under two script names — its import path
+  with the underscores dashed, and the bare `__cli_name__` alias — both pointing
+  at a bridge attribute that is the import path with the dots underscored. The
   attribute therefore picks the path-shaped name out of the pair, and that name
   spells the module.
   """

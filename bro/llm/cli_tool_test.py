@@ -81,6 +81,17 @@ class TestGeneratedSurface:
   def test_exposure_narrows_to_the_named_arguments(self):
     assert set(_tool('bro show', 'name').parameters['properties']) == {'name'}
 
+  def test_exposure_keeps_the_commands_own_argument_order(self):
+    tool = _tool('rewind grep', 'trails', 'color', 'pattern')
+    assert tool._argv({'pattern': 'p', 'trails': ['a'], 'color': 'never'}) == [
+      'rewind',
+      'grep',
+      '--color=never',
+      '--',
+      'p',
+      'a',
+    ]
+
   def test_exposure_cannot_omit_a_required_argument(self):
     with pytest.raises(ValueError, match='requires name'):
       _tool('bro show', 'system_prompt')
