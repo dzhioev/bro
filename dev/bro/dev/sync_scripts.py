@@ -149,13 +149,10 @@ def _cli_name(tree: ast.Module, module_name: str) -> Optional[str]:
   return None
 
 
-def _discover(project: Project) -> tuple[list[Entry], list[str]]:
+def _discover(project: Project) -> list[Entry]:
   entries: list[Entry] = []
-  top_level_modules: list[str] = []
   for relative_path in _iter_python_files(project):
     module_name = _module_name(relative_path)
-    if len(relative_path.parts) == 1:
-      top_level_modules.append(module_name)
     tree = _parse_module(project.directory / relative_path)
     if tree is None or not _has_sync_main(tree):
       continue
@@ -167,7 +164,7 @@ def _discover(project: Project) -> tuple[list[Entry], list[str]]:
         bridge_module=project.bridge_module,
       )
     )
-  return entries, top_level_modules
+  return entries
 
 
 def _scripts_and_modules(entries: list[Entry]) -> tuple[dict[str, str], dict[str, str]]:
@@ -219,14 +216,6 @@ def _render_scripts(scripts: dict[str, str], name_modules: dict[str, str]) -> st
   return '\n'.join(lines)
 
 
-def _render_python_modules(modules: list[str]) -> str:
-  lines = ['py-modules = [']
-  for module in sorted(modules):
-    lines.append(f'  "{module}",')
-  lines.append(']')
-  return '\n'.join(lines)
-
-
 def _replace_scripts(text: str, body: str) -> str:
   pattern = re.compile(r'(?ms)^(\[project\.scripts\][ \t]*\n)(.*?)(?=^\[|\Z)')
   if pattern.search(text) is None:
@@ -234,17 +223,9 @@ def _replace_scripts(text: str, body: str) -> str:
   return pattern.sub(lambda match: match.group(1) + body + '\n\n', text)
 
 
-def _replace_python_modules(text: str, block: str) -> str:
-  pattern = re.compile(r'py-modules\s*=\s*\[[^\]]*\]')
-  if pattern.search(text) is None:
-    return text
-  return pattern.sub(block, text)
-
-
-def _render_pyproject(text: str, entries: list[Entry], modules: list[str]) -> str:
+def _render_pyproject(text: str, entries: list[Entry]) -> str:
   scripts, name_modules = _scripts_and_modules(entries)
-  text = _replace_scripts(text, _render_scripts(scripts, name_modules))
-  return _replace_python_modules(text, _render_python_modules(modules))
+  return _replace_scripts(text, _render_scripts(scripts, name_modules))
 
 
 def _render_entrypoints(entries: list[Entry]) -> str:
@@ -274,9 +255,9 @@ def _render_entrypoints(entries: list[Entry]) -> str:
 
 
 def _rendered_artifacts(project: Project) -> tuple[str, str]:
-  entries, modules = _discover(project)
+  entries = _discover(project)
   return (
-    _render_pyproject(project.pyproject.read_text(), entries, modules),
+    _render_pyproject(project.pyproject.read_text(), entries),
     _render_entrypoints(entries),
   )
 
@@ -305,9 +286,7 @@ def check(project: Project) -> bool:
 def main(argv: list[str]) -> Optional[int]:
   parser = Parser(description='regenerate console-script metadata and committed argv bridge')
   parser.add_argument('--project', default='.', help='project directory or pyproject.toml')
-  parser.add_argument(
-    '--pyproject', action='store_true', help='rewrite [project.scripts] and py-modules'
-  )
+  parser.add_argument('--pyproject', action='store_true', help='rewrite [project.scripts]')
   parser.add_argument(
     '--entrypoints', action='store_true', help='rewrite the committed _entrypoints.py module'
   )
