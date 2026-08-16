@@ -215,10 +215,12 @@ class UnixClientTransport(ClientTransport):
           return None
       try:
         readable, _, _ = select.select([self._sock, self._abort_receive], [], [], remaining)
-      except OSError:
+      except (OSError, ValueError):
         # the socket died under us — a concurrent close() aborting this wait
         # (see ClientTransport.close), or the peer tearing the channel down
-        # mid-read; either way the channel is gone, which is EOF to the caller
+        # mid-read; either way the channel is gone, which is EOF to the caller.
+        # A close() that completed before this thread parked leaves closed socket
+        # objects (fileno() == -1), which select rejects with ValueError, not OSError
         return None
       if self._abort_receive in readable:  # close() aborted this wait
         return None
