@@ -51,8 +51,7 @@ def test_run_summon_delegates_to_the_summon_library():
     hold=None,
     grant=None,
     revoke=None,
-    effort=None,
-    fast=False,
+    llm=None,
   )
 
 
@@ -69,8 +68,7 @@ def test_run_summon_forwards_the_scope_and_spec_flags():
     hold=None,
     grant=['@auditor'],
     revoke=['openai'],
-    effort='high',
-    fast=True,
+    llm='::high+fast',
   )
 
 

@@ -2,8 +2,8 @@ from typing import ClassVar
 
 import pytest
 
-import bro.llm.llms.chat_gpt as llm_llms_chat_gpt
 import bro.llm.llms.echo as llm_llms_echo
+import bro.llm.llms.openai as llm_llms_openai
 from bro.bro import BaseBro
 from bro.datasources.searchable import Hit, SearchableDataSource
 from bro.llm.mcp import FunctionTool, InProcessMCPServer, MCPServerSpec, ToolLayer, creds, describe
@@ -61,7 +61,7 @@ class _MinimalBro(BaseBro):
 class _FullBro(BaseBro):
   name = 'full'
   description = 'has a data source and two MCP servers'
-  llm_spec = llm_llms_chat_gpt.LLMSpec(reasoning_effort='medium')
+  llm_spec = llm_llms_openai.LLMSpec(reasoning_effort='medium')
   data_sources: ClassVar = [_StubSource()]
   tools: ClassVar = [_layer(ServerAB), _layer(ServerXZ)]
 
@@ -205,7 +205,7 @@ class TestFormatCard:
 
   @pytest.mark.asyncio
   async def test_secrets_section_lists_llm_key(self):
-    # the LLM key (chat_gpt → openai) surfaces on its own line beyond the manifest
+    # the LLM key (openai → openai) surfaces on its own line beyond the manifest
     card = await format_card(_FullBro())
     assert '- `openai` — LLM key' in card
 

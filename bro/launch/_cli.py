@@ -1,17 +1,20 @@
 """shared bro launcher plumbing: container hops, one-shot runs, and bro construction."""
 
 import asyncio
+import dataclasses
 import os
 import sys
-from typing import Literal, Optional
+from typing import TYPE_CHECKING, Literal, Optional
 
 import bro.base.args as base_args
 import bro.launch.bro_run
 from bro import summon as summon_client
 from bro.base import log
 from bro.bro import BroRaised
-from bro.llm.llm import EFFORT_LEVELS, LLMSpec
+from bro.launch.llm_flags import add_llm_flags, canonicalize, resolve_native, selection_from_args
+from bro.llm.llm import NativeLLMSpec
 from bro.llm.mcp import HOLDS
+from bro.llm.providers import LLMSelectionError
 from bro.trails.display.config import Layout, OutputRoute, PresetName, preset
 from bro.trails.display.core import DisplaySession
 from bro.trails.display.live import LiveDisplayObserver
@@ -19,16 +22,19 @@ from bro.trails.display.panel import RichPanelRenderer
 from bro.trails.display.terminal import StreamRenderer
 from bros.bro import Bro
 
+if TYPE_CHECKING:
+  from bro.llm.providers import LLMSelection
+
 # shared flag help so all the launcher CLIs describe `--fast` / `--in-place` identically.
 FAST_HELP = (
-  "run with the bro's fast-mode LLM knob (provider-specific; for ChatGPT fast mode is "
-  "OpenAI's 'priority' service tier — same model and quality, faster and more consistent "
+  "run with the fast-mode knob of the run's LLM recipe (provider-specific; for OpenAI it is "
+  "the 'priority' service tier — same model and quality, faster and more consistent "
   'generation at a higher per-token price); implied by the ask and call aliases; a provider '
-  'with no fast mode falls back to the plain spec'
+  'with no fast mode falls back to the plain recipe'
 )
 EFFORT_HELP = (
-  "override the reasoning-effort knob of the bro's LLM spec with this neutral level, "
-  "mapped onto the provider's own scale (for ChatGPT every level maps through); "
+  "override the reasoning-effort knob of the run's LLM recipe with this neutral level, "
+  "mapped onto the provider's own scale (for OpenAI every level maps through); "
   "without the flag the bro's own spec stands. errors when the provider has no "
   'effort knob'
 )
@@ -65,41 +71,27 @@ INTO_HELP = (
 )
 
 
-def run_llm_spec(
-  bro_class: type[Bro], *, fast: bool, effort: Optional[str] = None
-) -> Optional[LLMSpec]:
+def run_llm_spec(bro_name: str, selection: 'LLMSelection') -> Optional[NativeLLMSpec]:
   """the per-run LLM spec these CLIs run the bro with, or None when the class
-  default stands. fast (`--fast`, implied by the `ask` / `call` aliases) applies
-  the provider's fast knob; a provider with no fast mode (e.g. echo) falls back
-  to the normal spec rather than raising — the aliases imply fast without the
-  user asking for it. effort (`--effort`) overrides the spec's reasoning-effort
-  knob via `LLMSpec.with_effort`; being an explicit ask, a provider without the
-  knob raises NotImplementedError instead of falling back."""
-  if not fast and effort is None:
+  default stands — `selection` (the launch's LLM flags) resolved over the bro's
+  own recipe. An empty selection resolves nothing, so a plain run never has to
+  reach the registry."""
+  if selection.is_empty():
     return None
-  spec = bro_class.llm_spec
-  if fast:
-    try:
-      spec = spec.fast()
-    except NotImplementedError:
-      log.verbose('%s has no fast mode; running with the normal spec', bro_class.__name__)
-  if effort is not None:
-    spec = spec.with_effort(effort)
-  return None if spec is bro_class.llm_spec else spec
+  from bro.registry import get_class
+
+  bro_class = get_class(bro_name)
+  spec = resolve_native(bro_class.llm_spec, selection)
+  return None if spec == bro_class.llm_spec else spec
 
 
-def create_bro_for_run(bro_name: str, *, fast: bool, effort: Optional[str] = None) -> Bro:
+def create_bro_for_run(bro_name: str, selection: 'LLMSelection') -> Bro:
   """instantiate the bro for an in-process run, with the `run_llm_spec`
   override applied when one is needed."""
   from bro.registry import create_bro, get_class
 
-  if not fast and effort is None:
-    return create_bro(bro_name)
-  bro_class = get_class(bro_name)
-  spec = run_llm_spec(bro_class, fast=fast, effort=effort)
-  if spec is None:
-    return create_bro(bro_name)
-  return bro_class.create(spec)
+  spec = run_llm_spec(bro_name, selection)
+  return create_bro(bro_name) if spec is None else get_class(bro_name).create(spec)
 
 
 def maybe_containerize(
@@ -113,6 +105,7 @@ def maybe_containerize(
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
   into: Optional[str] = None,
+  llm_spec: Optional[NativeLLMSpec] = None,
 ) -> Optional[int]:
   """re-exec `bro <verb> <bro_name> <inner_args...>` inside a scoped throwaway
   container and return its exit code, or return None so the caller runs in the
@@ -133,6 +126,10 @@ def maybe_containerize(
 
   `no_trails` drops `trails` from the scoped set and sets `TRAILS_DISABLED` in the
   container (the in-container tracker factory then returns `NullTracker`).
+
+  `llm_spec` is the recipe the run settled on, so the hydrated scope carries the
+  key of the provider that will actually answer rather than the bro's declared
+  one; None leaves the bro's own.
 
   `grant`/`revoke` adjust the run's launch scope — a plain name a credential
   across both tiers of the scoped set, `@bro` the summon allow-list over the
@@ -168,7 +165,7 @@ def maybe_containerize(
       return 1
   try:
     scoped, may_summon, _ = preflight_scoped_launch(
-      scoped_secrets(bro_name, Surface.BRO_RUN),
+      scoped_secrets(bro_name, Surface.BRO_RUN, llm_spec=llm_spec),
       bro_name,
       grant=grant,
       revoke=revoke,
@@ -198,8 +195,7 @@ def _run_summoned(
   hold: Optional[str],
   grant: Optional[list[str]],
   revoke: Optional[list[str]],
-  effort: Optional[str],
-  fast: bool,
+  llm: Optional[str],
 ) -> int:
   if not detach:
     return summon_client.relay_summon(
@@ -210,8 +206,7 @@ def _run_summoned(
       hold=hold,
       grant=grant,
       revoke=revoke,
-      effort=effort,
-      fast=fast,
+      llm=llm,
     )
   try:
     request_id = summon_client.summon_detached(
@@ -222,8 +217,7 @@ def _run_summoned(
       hold=hold,
       grant=grant,
       revoke=revoke,
-      effort=effort,
-      fast=fast,
+      llm=llm,
     )
   except summon_client.SummonError as error:
     log.error('%s', error)
@@ -270,8 +264,7 @@ def run_main(
       action='store_true',
       help='render the trace as colored rich panels instead of plain log lines',
     )
-  parser.add_argument('--fast', action='store_true', help=FAST_HELP)
-  parser.add_argument('--effort', choices=EFFORT_LEVELS, default=None, help=EFFORT_HELP)
+  add_llm_flags(parser, effort_help=EFFORT_HELP, fast_help=FAST_HELP)
   if not force_summon:
     parser.add_argument('--summon', action='store_true', help=SUMMON_HELP)
     parser.add_argument('--in-place', action='store_true', help=IN_PLACE_HELP)
@@ -288,11 +281,18 @@ def run_main(
   args = parser.parse(argv)
   if force_summon:
     args.update(summon=True, rich=False, in_place=False, no_trails=False)
+  try:
+    selection = selection_from_args(args)
+  except LLMSelectionError as error:
+    log.error('%s', error)
+    return 1
+  if implied_fast:
+    selection = dataclasses.replace(selection, fast=True)
+  canonicalize(args, selection)
   shell_command = parser.reconstruct(args, prog=program)
   os.environ.setdefault('BRO_SHELL_COMMAND', ' '.join(shell_command))
 
   input_text = args['input']
-  fast = args['fast'] or implied_fast
 
   if args['summon']:
     return _run_summoned(
@@ -304,8 +304,7 @@ def run_main(
       hold=args['hold'],
       grant=args['grant'],
       revoke=args['revoke'],
-      effort=args['effort'],
-      fast=fast,
+      llm=args['llm'],
     )
   if args['timeout'] is not None or args['detach']:
     log.error('--timeout/--detach require --summon')
@@ -317,13 +316,17 @@ def run_main(
     )
     return 1
 
+  try:
+    run_spec = run_llm_spec(args['bro'], selection)
+  except (NotImplementedError, LLMSelectionError) as error:
+    log.error('%s', error)
+    return 1
+
   inner_args = [input_text]
   if args['rich']:
     inner_args.append('--rich')
-  if fast:
-    inner_args.append('--fast')
-  if args['effort'] is not None:
-    inner_args.extend(['--effort', args['effort']])
+  if args['llm'] is not None:
+    inner_args.extend(['--llm', args['llm']])
   if args['hold'] is not None:
     inner_args.extend(['--hold', args['hold']])
   hopped = maybe_containerize(
@@ -336,16 +339,13 @@ def run_main(
     grant=args['grant'],
     revoke=args['revoke'],
     into=args['into'],
+    llm_spec=run_spec,
   )
   if hopped is not None:
     return hopped
 
   log.verbose('creating bro %s', args['bro'])
-  try:
-    bro = create_bro_for_run(args['bro'], fast=fast, effort=args['effort'])
-  except NotImplementedError as error:
-    log.error('%s', error)
-    return 1
+  bro = create_bro_for_run(args['bro'], selection)
   observer = _ask_observer(bro.name, rich=args['rich'])
   hold = args['hold'] if args['hold'] is not None else 'unattended'
   try:

@@ -27,8 +27,8 @@ import json
 from collections.abc import Callable
 from typing import Any, Optional, cast
 
-import bro.llm.llms.chat_gpt as llm_llms_chat_gpt
-from bro.llm.llm import LLM, LLMSpec
+import bro.llm.llms.openai as llm_llms_openai
+from bro.llm.llm import LLM, LLMSpec, NativeLLMSpec
 from bro.llm.tracker import NullTracker, Tracker
 from bro.registry import create_bro
 from bro.trails.lineage import walk_chain
@@ -61,7 +61,7 @@ def replay_messages(
     history subsumes what they summarize.
   - `{'type': 'function_call_output', 'call_id': ..., 'output': ...}` for each
     `tool_result`. dict outputs are JSON-encoded to match the wire format
-    `ChatGPT._execute_tool_calls` uses.
+    `OpenAI._execute_tool_calls` uses.
 
   legal fork points (the caller is responsible for picking one — or asking
   `latest_fork_point` for the trail's newest one): right after the first
@@ -169,7 +169,7 @@ def fork(
   forked_from_trail: RecordedTrail,
   up_to_step_id: int,
   *,
-  llm_spec: Optional[LLMSpec] = None,
+  llm_spec: Optional[NativeLLMSpec] = None,
   system_prompt: Optional[str] = None,
   record: bool = True,
   tracker: Optional[Tracker] = None,
@@ -203,6 +203,11 @@ def fork(
     raise ValueError(f'trail {forked_from_trail.header.id!r} has no bro persona')
   bro = create_bro(bro_name)
   spec = llm_spec if llm_spec is not None else LLMSpec.from_dict(forked_from_trail.header.llm_spec)
+  if not isinstance(spec, NativeLLMSpec):
+    raise ValueError(
+      f'trail {forked_from_trail.header.id!r} was recorded under {spec.TYPE!r}, whose harness '
+      'runs its own loop; there is no bro-native conversation to continue'
+    )
   bro.llm_spec = spec
 
   fork_step = _find_step(forked_from_trail, up_to_step_id)
@@ -296,15 +301,15 @@ def _find_step(trail: RecordedTrail, step_id: int) -> Step:
 
 
 def _seed_response_id(inner_llm: LLM, response_id: str) -> None:
-  # server-side replay seam: ChatGPT.send sends `previous_response_id=...` on
+  # server-side replay seam: OpenAI.send sends `previous_response_id=...` on
   # its first call when `_last_response_id` is set, and OpenAI carries the
   # entire prefix it had cached for that response. other LLM impls don't
   # support this; raise loudly rather than silently producing a fork that
   # ignores the seed.
-  if not isinstance(inner_llm, llm_llms_chat_gpt.ChatGPT):
+  if not isinstance(inner_llm, llm_llms_openai.OpenAI):
     raise NotImplementedError(
       f'server-side fork not implemented for {type(inner_llm).__name__}; '
-      'currently supports ChatGPT only'
+      'currently supports OpenAI only'
     )
   inner_llm._last_response_id = response_id
 
@@ -339,7 +344,7 @@ def _response_output_items(llm_call_body: Any) -> list[dict]:
 
 
 def _encode_tool_output(output: Any) -> str:
-  # mirrors `ChatGPT._execute_tool_calls`: dicts go on the wire as JSON; other
+  # mirrors `OpenAI._execute_tool_calls`: dicts go on the wire as JSON; other
   # tool outputs (str, already-stringified) pass through.
   if isinstance(output, dict):
     return json.dumps(output)
@@ -347,14 +352,14 @@ def _encode_tool_output(output: Any) -> str:
 
 
 def _preseed(inner_llm: LLM, prefix: list[dict]) -> None:
-  # client-side replay seam: ChatGPT consumes _input_prefix on its first send().
+  # client-side replay seam: OpenAI consumes _input_prefix on its first send().
   # other LLM impls (e.g. Echo) don't support replay; their forks would need a
   # provider-specific shim. raise loudly rather than silently producing a fork
   # that ignores the prefix.
-  if not isinstance(inner_llm, llm_llms_chat_gpt.ChatGPT):
+  if not isinstance(inner_llm, llm_llms_openai.OpenAI):
     raise NotImplementedError(
       f'client-side fork not implemented for {type(inner_llm).__name__}; '
-      'currently supports ChatGPT only'
+      'currently supports OpenAI only'
     )
   # the prefix mixes role-keyed message dicts with raw OpenAI output items —
   # all valid `ResponseInputItemParam` shapes — but list invariance prevents a

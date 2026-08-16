@@ -336,7 +336,7 @@ async def _create_bro(store: storage.Storage, **overrides) -> str:
     'interactive': False,
     'surface': 'ask',
     'hold': 'unattended',
-    'native': {'llm': {'type': 'chat_gpt', 'model': 'gpt-5'}},
+    'native': {'llm': {'type': 'openai', 'model': 'gpt-5'}},
     'body': {'records': [{'kind': 'system_prompt', 'body': 'prompt', 'turn_index': 0}]},
   }
   payload.update(overrides)

@@ -2,11 +2,12 @@ from unittest.mock import patch
 
 import pytest
 
-import bro.llm.llms.chat_gpt as llm_llms_chat_gpt
 import bro.llm.llms.echo as llm_llms_echo
+import bro.llm.llms.openai as llm_llms_openai
 from bro.launch._cli import create_bro_for_run, maybe_containerize
 from bro.launch.identity import bro_git_identity_env
 from bro.llm.llm import EFFORT_LEVELS
+from bro.llm.providers import LLMSelection
 from bro.workspace.project import ProjectConfig
 
 # the run bro's own CW_BRO rides in explicitly (never as an ambient forward), so
@@ -405,14 +406,14 @@ def test_create_bro_for_run_without_fast_uses_create_bro(monkeypatch):
     return 'plain-bro'
 
   monkeypatch.setattr('bro.registry.create_bro', fake_create_bro)
-  result = create_bro_for_run('mybro', fast=False)
+  result = create_bro_for_run('mybro', LLMSelection())
   assert result == 'plain-bro'
   assert captured == ['mybro']
 
 
 def test_create_bro_for_run_with_fast_applies_fast_spec(monkeypatch):
   class _Cls:
-    llm_spec = llm_llms_chat_gpt.LLMSpec(model='gpt-5.4-mini')
+    llm_spec = llm_llms_openai.LLMSpec(model='gpt-5.4-mini')
 
     @classmethod
     def create(cls, spec):
@@ -420,8 +421,8 @@ def test_create_bro_for_run_with_fast_applies_fast_spec(monkeypatch):
       return spec
 
   monkeypatch.setattr('bro.registry.get_class', lambda name: _Cls)
-  spec = create_bro_for_run('x', fast=True)
-  assert isinstance(spec, llm_llms_chat_gpt.LLMSpec)
+  spec = create_bro_for_run('x', LLMSelection(fast=True))
+  assert isinstance(spec, llm_llms_openai.LLMSpec)
   assert spec.service_tier == 'priority'
   # class default untouched — fast() returns a fresh spec
   assert _Cls.llm_spec.service_tier is None
@@ -429,15 +430,15 @@ def test_create_bro_for_run_with_fast_applies_fast_spec(monkeypatch):
 
 def test_create_bro_for_run_effort_composes_with_fast(monkeypatch):
   class _Cls:
-    llm_spec = llm_llms_chat_gpt.LLMSpec(model='gpt-5.4-mini')
+    llm_spec = llm_llms_openai.LLMSpec(model='gpt-5.4-mini')
 
     @classmethod
     def create(cls, spec):
       return spec
 
   monkeypatch.setattr('bro.registry.get_class', lambda name: _Cls)
-  spec = create_bro_for_run('x', fast=True, effort='max')
-  assert isinstance(spec, llm_llms_chat_gpt.LLMSpec)
+  spec = create_bro_for_run('x', LLMSelection(fast=True, effort='max'))
+  assert isinstance(spec, llm_llms_openai.LLMSpec)
   assert spec.service_tier == 'priority'
   assert spec.reasoning_effort == 'max'
   # class default untouched
@@ -446,15 +447,15 @@ def test_create_bro_for_run_effort_composes_with_fast(monkeypatch):
 
 def test_create_bro_for_run_effort_applies_without_fast(monkeypatch):
   class _Cls:
-    llm_spec = llm_llms_chat_gpt.LLMSpec(model='gpt-5.4-mini')
+    llm_spec = llm_llms_openai.LLMSpec(model='gpt-5.4-mini')
 
     @classmethod
     def create(cls, spec):
       return spec
 
   monkeypatch.setattr('bro.registry.get_class', lambda name: _Cls)
-  spec = create_bro_for_run('x', fast=False, effort='low')
-  assert isinstance(spec, llm_llms_chat_gpt.LLMSpec)
+  spec = create_bro_for_run('x', LLMSelection(effort='low'))
+  assert isinstance(spec, llm_llms_openai.LLMSpec)
   assert spec.reasoning_effort == 'low'
   assert spec.service_tier is None
 
@@ -471,25 +472,21 @@ def test_create_bro_for_run_effort_unsupported_provider_raises(monkeypatch):
 
   monkeypatch.setattr('bro.registry.get_class', lambda name: _Cls)
   with pytest.raises(NotImplementedError, match='does not support an effort override'):
-    create_bro_for_run('x', fast=True, effort='high')
+    create_bro_for_run('x', LLMSelection(fast=True, effort='high'))
 
 
-def test_chat_gpt_accepts_every_cli_effort_level():
-  # the --effort choices come from llm's EFFORT_LEVELS; the chat_gpt mapping must
+def test_openai_accepts_every_cli_effort_level():
+  # the --effort choices come from llm's EFFORT_LEVELS; the openai mapping must
   # cover the full vocabulary so no accepted flag value fails at spec build.
   for level in EFFORT_LEVELS:
-    llm_llms_chat_gpt.LLMSpec().with_effort(level)
+    llm_llms_openai.LLMSpec().with_effort(level)
 
 
 def test_create_bro_for_run_unsupported_fast_falls_back_to_plain(monkeypatch):
   # fast is the implicit default for these CLIs, so a provider with no fast mode
   # must degrade to the plain spec rather than raise — the user never asked for fast.
-  class _NoFastSpec:
-    def fast(self):
-      raise NotImplementedError('_NoFastSpec does not support fast mode')
-
   class _Cls:
-    llm_spec = _NoFastSpec()
+    llm_spec = llm_llms_echo.LLMSpec()
 
     @classmethod
     def create(cls, spec):
@@ -497,4 +494,4 @@ def test_create_bro_for_run_unsupported_fast_falls_back_to_plain(monkeypatch):
 
   monkeypatch.setattr('bro.registry.get_class', lambda name: _Cls)
   monkeypatch.setattr('bro.registry.create_bro', lambda name: f'plain-{name}')
-  assert create_bro_for_run('x', fast=True) == 'plain-x'
+  assert create_bro_for_run('x', LLMSelection(fast=True)) == 'plain-x'

@@ -13,7 +13,7 @@ from typing import ClassVar
 
 import pytest
 
-import bro.llm.llms.chat_gpt as llm_llms_chat_gpt
+import bro.llm.llms.openai as llm_llms_openai
 import bro.llm.usage as usage
 from bro.base import credentials
 from bros.dev import Dev
@@ -54,7 +54,7 @@ def staged_repo(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_dev_commit_carries_the_footer(staged_repo):
-  bro = _ProbeDev.create(llm_llms_chat_gpt.LLMSpec(reasoning_effort='low'))
+  bro = _ProbeDev.create(llm_llms_openai.LLMSpec(reasoning_effort='low'))
   await bro.run(
     'Commit the staged change in this repository with an appropriate message '
     'following the repository conventions. Do not push.',

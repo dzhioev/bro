@@ -1,7 +1,8 @@
-"""the host's per-project launch policy (`~/.bro.json`).
+"""the host's launch policy (`~/.bro.json`).
 
 one host serves several projects, and a credential kind may have more than one
-instance stored for it; this file records which instance each project reads:
+instance stored for it; this file records which instance each project reads,
+beside the host's own `--llm` preset names:
 
     {
       "projects": {
@@ -11,7 +12,8 @@ instance stored for it; this file records which instance each project reads:
         "/home/foo/projects/site": {
           "instances": ["brog+"]
         }
-      }
+      },
+      "llm": {"sharp": "openai:sol:max"}
     }
 
 a project key is the filesystem path of the operated repo's root (`~` and
@@ -21,6 +23,10 @@ kind at most once. the `+` is always written — `kind+` states that the project
 reads the kind's own registry entry, which the registry must then give sources
 of its own. the file is optional: a host holding one instance per kind needs
 none, and a project without an entry reads each kind's own default.
+
+`llm` maps a preset name to the `--llm` value it stands for, host-wide rather
+than per project — it is the operator's own shorthand, which every project they
+launch from answers to.
 
 reading is project-agnostic: the caller names the project.
 """
@@ -37,24 +43,43 @@ HOST_CONFIG_FILE = configs.DEFAULT_HOST_CONFIG
 
 _PROJECTS_KEY = 'projects'
 _INSTANCES_KEY = 'instances'
+_LLM_KEY = 'llm'
+
+
+def _read() -> tuple[Path, dict]:
+  """the host config's contents, validated whole on every read so a typo in a
+  section the caller isn't asking about still surfaces at the next launch.
+  Empty when the file does not exist."""
+  path = Path(HOST_CONFIG_FILE)
+  if not path.is_file():
+    return path, {}
+  data = json.loads(path.read_text())
+  if not isinstance(data, dict):
+    raise ValueError(f'{path} must hold a json object')
+  unknown = sorted(set(data) - {_PROJECTS_KEY, _LLM_KEY})
+  if len(unknown) > 0:
+    raise ValueError(f'unknown key(s) in {path}: {", ".join(unknown)}')
+  return path, data
+
+
+def llm_presets() -> dict[str, str]:
+  """the host's `--llm` preset names, each mapped to the value it stands for.
+  empty when the file declares none (or does not exist)."""
+  path, data = _read()
+  presets = data.get(_LLM_KEY, {})
+  if not isinstance(presets, dict):
+    raise ValueError(f'{path}: {_LLM_KEY} must be a json object')
+  for name, value in presets.items():
+    if not isinstance(value, str) or value == '':
+      raise ValueError(f'{path}: {_LLM_KEY} preset {name!r} must be a non-empty string')
+  return presets
 
 
 def project_instances(project: Path) -> dict[str, Optional[str]]:
   """the instance selection `project` reads on this host: kind → the instance
   backing it, or None where the selection names the kind's own entry. empty when
-  the file has no entry for the project (or does not exist).
-
-  the whole file is validated on every read, so a typo in another project's
-  entry surfaces at the next launch rather than lying in wait."""
-  path = Path(HOST_CONFIG_FILE)
-  if not path.is_file():
-    return {}
-  data = json.loads(path.read_text())
-  if not isinstance(data, dict):
-    raise ValueError(f'{path} must hold a json object')
-  unknown = sorted(set(data) - {_PROJECTS_KEY})
-  if len(unknown) > 0:
-    raise ValueError(f'unknown key(s) in {path}: {", ".join(unknown)}')
+  the file has no entry for the project (or does not exist)."""
+  path, data = _read()
   projects = data.get(_PROJECTS_KEY, {})
   if not isinstance(projects, dict):
     raise ValueError(f'{path}: {_PROJECTS_KEY} must be a json object')

@@ -9,7 +9,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any, ClassVar, Optional, Self
 
-import bro.llm.llms.chat_gpt as llm_llms_chat_gpt
+import bro.llm.llms.openai as llm_llms_openai
 import bro.llm.mcp as llm_mcp
 from bro import spells as spell_store
 from bro.base import credentials, log
@@ -17,7 +17,7 @@ from bro.base.condition import Condition, Entry, Iff, SetVariable, Variables, Wh
 from bro.base.offload import off_loop
 from bro.channel import BroChannel
 from bro.datasources.base import DataSource
-from bro.llm.llm import EFFORT_LEVELS, LLM, LLMSpec
+from bro.llm.llm import EFFORT_LEVELS, LLM, NativeLLMSpec
 from bro.llm.observer import (
   NullObserver,
   Observer,
@@ -35,7 +35,7 @@ from bro.trails.display.live import LiveDisplayObserver
 from bro.trails.display.terminal import StreamRenderer
 from bro.trails.record.bro import Recorder
 
-DEFAULT_LLM_SPEC: LLMSpec = llm_llms_chat_gpt.LLMSpec()
+DEFAULT_LLM_SPEC: NativeLLMSpec = llm_llms_openai.LLMSpec()
 
 
 _TRAILS_DISABLED_ENV = 'TRAILS_DISABLED'
@@ -262,8 +262,10 @@ _SUMMON_DESCRIPTION = (
   "`into` bases the child on a git ref instead of your workspace's "
   'current HEAD (uncommitted changes never transfer); optional `hold` sets the '
   "child's user-involvement level (default unattended). the child's run is shaped "
-  'by the optional `effort` (reasoning level: '
-  f'{", ".join(EFFORT_LEVELS)}) and `fast` (the provider fast knob), and its scope by '
+  'by the optional `llm` — the LLM recipe it runs, written `provider:model:effort` '
+  'with an optional `+fast` suffix and any field left empty '
+  f"(effort is one of {', '.join(EFFORT_LEVELS)}; `::high` keeps the target's own "
+  'provider and model, `:opus5` names a model) — and its scope by '
   'the optional `grant` / `revoke` lists — each entry a credential name, or `@bro` '
   "for a summonable target of the child's own. a credential grant replaces the "
   "child's selected same-kind name. you can only grant what you hold yourself (a "
@@ -365,8 +367,7 @@ def _summon_tool(
     hold: Optional[str] = None,
     grant: Optional[list[str]] = None,
     revoke: Optional[list[str]] = None,
-    effort: Optional[str] = None,
-    fast: bool = False,
+    llm: Optional[str] = None,
   ) -> str:
     source = current_tool_step_id()
     step_id = source['step_id'] if source is not None else None
@@ -381,8 +382,7 @@ def _summon_tool(
         hold=hold,
         grant=grant,
         revoke=revoke,
-        effort=effort,
-        fast=fast,
+        llm=llm,
         step_id=step_id,
         index=index,
       )
@@ -397,8 +397,7 @@ def _summon_tool(
         hold=hold,
         grant=grant,
         revoke=revoke,
-        effort=effort,
-        fast=fast,
+        llm=llm,
         step_id=step_id,
         index=index,
         client=client,
@@ -624,7 +623,7 @@ def _component_destinations(value: object) -> set[str]:
 class BaseBro(ABC):
   name: str
   description: str
-  llm_spec: LLMSpec = DEFAULT_LLM_SPEC
+  llm_spec: NativeLLMSpec = DEFAULT_LLM_SPEC
   # entries may be wrapped with `bro.base.condition.when(...)` / grouped with
   # `iff(...)` to gate them on the assembling surface's facts (`#harness`,
   # `#creds`); a wrapped entry whose condition does not hold is omitted before
@@ -1044,7 +1043,7 @@ class BaseBro(ABC):
     return False
 
   @classmethod
-  def create(cls, llm_spec: LLMSpec) -> Self:
+  def create(cls, llm_spec: NativeLLMSpec) -> Self:
     # factory for a construction-time LLMSpec override — applied after the bro's
     # own __init__, so subclass constructors never need to know about it. the
     # spec replaces the class default in full; build a new spec (or call

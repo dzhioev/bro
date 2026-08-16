@@ -62,8 +62,7 @@ class SummonLaunchSpec(LaunchSpec):
   hold: Optional[str] = None
   grant_credentials: tuple[str, ...] = ()
   revoke_credentials: tuple[str, ...] = ()
-  effort: Optional[str] = None
-  fast: bool = False
+  llm: Optional[str] = None
 
 
 def _workspace_name(channel: str) -> str:
@@ -91,15 +90,13 @@ def _lower_summon(launch: SummonLaunchSpec, workspace_name: str) -> DockerLaunch
     base_ref = resolve_head(project, launch.parent_workspace)
     if base_ref is None:
       raise ValueError(f"cannot read the summoner's HEAD at {launch.parent_workspace}")
-  # hold, effort and fast are the request's child-facing fields, so they ride the
+  # hold and llm are the request's child-facing fields, so they ride the
   # child's own `bro run` argv; the rest is consumed host-side (into → the base
   # ref above, timeout → the spawner's wait timer, the credential overrides → the
   # scope below)
   inner_args = [launch.prompt]
-  if launch.fast:
-    inner_args.append('--fast')
-  if launch.effort is not None:
-    inner_args.extend(['--effort', launch.effort])
+  if launch.llm is not None:
+    inner_args.extend(['--llm', launch.llm])
   if launch.hold is not None:
     inner_args.extend(['--hold', launch.hold])
   run = describe(

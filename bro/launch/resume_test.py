@@ -5,7 +5,7 @@ from unittest.mock import patch
 import pytest
 
 from bro.launch.resume import RESUME_LATEST, conversation_history, find_latest_call_trail, resume
-from bro.llm.llms.chat_gpt import LLMSpec
+from bro.llm.llms.openai import LLMSpec
 from bro.trails.display import AssistantText, InterimAssistantText, ToolCall, UserInput
 from bro.trails.model import spill_descriptor
 from bro.trails.server import backends
@@ -75,7 +75,7 @@ def _header(
     'harness': 'bro',
     'bro': bro,
     'version': '1',
-    'native': {'llm': {'type': 'chat_gpt', 'model': 'gpt-5'}},
+    'native': {'llm': {'type': 'openai', 'model': 'gpt-5'}},
     'started_at': '2026-06-07T00:00:00.000000Z',
     'interactive': True,
     'surface': surface,

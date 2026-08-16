@@ -15,7 +15,7 @@ from openai.types.shared.reasoning_effort import ReasoningEffort
 from pydantic import BaseModel
 
 from bro.base import credentials
-from bro.llm.llms.chat_gpt import (
+from bro.llm.llms.openai import (
   image_file_to_content,
   image_to_content,
   pdf_to_content,

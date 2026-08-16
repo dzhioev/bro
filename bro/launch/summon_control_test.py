@@ -169,11 +169,11 @@ class TestSummonHandler:
     [(launch, _, _)] = context.spawned
     assert launch.hold == 'attended'
 
-  def test_spec_flags_forward_into_the_spawn(self, control):
+  def test_the_llm_recipe_forwards_into_the_spawn(self, control):
     context = FakeContext()
-    control.handle(context, ROOT, _summon_message(effort='high', fast=True))
+    control.handle(context, ROOT, _summon_message(llm='openai:sol:high+fast'))
     [(launch, _, _)] = context.spawned
-    assert (launch.effort, launch.fast) == ('high', True)
+    assert launch.llm == 'openai:sol:high+fast'
 
   def test_credential_overrides_ride_the_spawn_and_land_in_the_audit(self, tmp_path):
     # the credential half is applied against the child's own scope in the
@@ -452,9 +452,9 @@ class TestSummonHandler:
       {'target': 'dev', 'prompt': 'p', 'grant': ['']},
       {'target': 'dev', 'prompt': 'p', 'grant': None},  # a null cannot default to no override
       {'target': 'dev', 'prompt': 'p', 'revoke': [7]},
-      {'target': 'dev', 'prompt': 'p', 'effort': 'ludicrous'},
-      {'target': 'dev', 'prompt': 'p', 'fast': 'yes'},
-      {'target': 'dev', 'prompt': 'p', 'fast': None},
+      {'target': 'dev', 'prompt': 'p', 'llm': '::ludicrous'},
+      {'target': 'dev', 'prompt': 'p', 'llm': 'nosuchprovider'},
+      {'target': 'dev', 'prompt': 'p', 'llm': 7},
     ],
   )
   def test_malformed_payload_is_denied(self, control, payload):

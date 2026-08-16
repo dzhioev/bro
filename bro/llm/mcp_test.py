@@ -702,7 +702,7 @@ class TestWithoutMCPPackage:
 
     code = (
       "import sys; sys.modules['mcp'] = None; "
-      'import bro.llm.llm, bro.llm.llms.chat_gpt, bro.llm.mcp, bro.prompts; '
+      'import bro.llm.llm, bro.llm.llms.openai, bro.llm.mcp, bro.prompts; '
       "bro.llm.mcp.render_text('plain'); "
       "print('ok')"
     )

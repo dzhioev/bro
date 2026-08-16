@@ -35,7 +35,7 @@ def add_forwarded_flags(parser: Parser) -> None:
   )
   # imported here, not at module level: llm pulls asyncio (~150ms) and this
   # module sits on every `import cw`
-  from bro.llm.llm import EFFORT_LEVELS
+  from bro.launch.llm_flags import add_llm_flags
   from bro.llm.mcp import HOLDS
 
   # default None, not DEFAULT_HOLD: each wrapper resolves an omitted flag to
@@ -49,18 +49,12 @@ def add_forwarded_flags(parser: Parser) -> None:
     'every level but guided skips permission prompts (unsandboxed when combined with --host). '
     'default: guided for cw ss; attended for dive-in, guided for dive-in --host',
   )
-  parser.add_argument(
-    '--fast',
-    action='store_true',
-    help='enable fast mode for the session (disabled by default regardless of host settings)',
+  add_llm_flags(
+    parser,
+    effort_help='thinking effort level (forwarded to claude --effort)',
+    fast_help='enable fast mode for the session (disabled by default regardless of host settings)',
   )
   add_scope_flags(parser)
-  parser.add_argument(
-    '--effort',
-    default='xhigh',
-    choices=EFFORT_LEVELS,
-    help='thinking effort level (forwarded to claude --effort); defaults to xhigh',
-  )
   parser.add_argument(
     '--into',
     default=None,

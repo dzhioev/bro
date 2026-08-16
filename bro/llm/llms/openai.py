@@ -52,6 +52,12 @@ _VALID_REASONING_EFFORTS: frozenset[str] = frozenset(get_args(ReasoningEffort))
 
 DEFAULT_MODEL = 'gpt-5.6-terra'
 
+# `--model` short names for this provider's models.
+MODELS: dict[str, str] = {
+  'terra': 'gpt-5.6-terra',
+  'sol': 'gpt-5.6-sol',
+}
+
 # neutral effort level (`LLMSpec.with_effort`) → Responses API reasoning_effort.
 _EFFORT_TO_REASONING_EFFORT: dict[str, ReasoningEffort] = {
   'low': 'low',
@@ -63,7 +69,7 @@ _EFFORT_TO_REASONING_EFFORT: dict[str, ReasoningEffort] = {
 
 
 @dataclass(frozen=True)
-class LLMSpec(llm_llm.LLMSpec):
+class LLMSpec(llm_llm.NativeLLMSpec):
   """spec for the OpenAI Responses API.
 
   service_tier='priority' is the analog of Claude Code's /fast — same model
@@ -72,7 +78,7 @@ class LLMSpec(llm_llm.LLMSpec):
 
   compact_threshold (opt-in) bounds context growth in long runs: when the
   chained conversation crosses it, the server compacts the context in-band
-  (see `ChatGPT._context_management_kwargs`). None (the default) leaves growth
+  (see `OpenAI._context_management_kwargs`). None (the default) leaves growth
   unbounded. GPT-5-family models take at most 272k input tokens (400k window
   minus the 128k output reservation), so a value like 200_000 leaves tool-loop
   turns room to grow between the threshold crossing and the compaction pass.
@@ -81,7 +87,7 @@ class LLMSpec(llm_llm.LLMSpec):
   live: 10 passes per call, ~5x billed input, minutes of latency).
   """
 
-  TYPE: ClassVar[str] = 'chat_gpt'
+  TYPE: ClassVar[str] = 'openai'
 
   model: str = DEFAULT_MODEL
   reasoning_effort: Optional[ReasoningEffort] = None
@@ -125,7 +131,7 @@ class LLMSpec(llm_llm.LLMSpec):
     tracker: Optional[Tracker] = None,
     agent: Optional[str] = None,
   ) -> llm_llm.LLM:
-    return ChatGPT.create(
+    return OpenAI.create(
       model=self.model,
       reasoning_effort=self.reasoning_effort,
       service_tier=self.service_tier,
@@ -293,7 +299,7 @@ INTERRUPTED_TOOL_OUTPUT = (
 )
 
 
-class ChatGPT(llm_llm.LLM):
+class OpenAI(llm_llm.LLM):
   @staticmethod
   def create(
     model: str = DEFAULT_MODEL,
@@ -306,7 +312,7 @@ class ChatGPT(llm_llm.LLM):
     agent: Optional[str] = None,
   ):
     config = credentials.get_json('openai')
-    return ChatGPT(
+    return OpenAI(
       api_key=config['api_key'],
       model=model,
       mcp_servers=mcp_servers,

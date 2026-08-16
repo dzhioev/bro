@@ -9,6 +9,7 @@ import pytest
 import bro.cw.claude_argv as cw_claude_argv
 from bro.cw.mcp import MCPEndpoint
 from bro.cw.session_test import _spec as _session_spec
+from bro.llm.llms import claude_code
 
 _ENDPOINT = MCPEndpoint(port=1234, token='tok')
 
@@ -55,7 +56,7 @@ class TestCwSessionLaunch:
   def test_basic_shape(self):
     launch = _cw_session_launch(_spec(), claude_args=['--foo'])
     argv = launch.argv
-    assert argv[:2] == ['--model', cw_claude_argv._CW_MODEL]
+    assert argv[:2] == ['--model', claude_code.DEFAULT_MODEL]
     assert '--bare' not in argv
     assert argv[argv.index('--disallowed-tools') + 1] == 'mcp__claude_ai_*'
     assert argv[argv.index('--append-system-prompt') + 1] == 'append text'
@@ -80,7 +81,9 @@ class TestCwSessionLaunch:
     assert argv[argv.index('--disallowed-tools') + 1] == 'mcp__claude_ai_*,Read,Write,Bash'
 
   def test_fast_mode_lands_in_settings(self):
-    assert _settings(_cw_session_launch(_spec(fast=True), claude_args=[]).argv)['fastMode'] is True
+    assert (
+      _settings(_cw_session_launch(_spec(llm='+fast'), claude_args=[]).argv)['fastMode'] is True
+    )
     assert _settings(_cw_session_launch(_spec(), claude_args=[]).argv)['fastMode'] is False
 
   def test_status_line_lands_in_settings(self):
@@ -89,7 +92,7 @@ class TestCwSessionLaunch:
     assert status_line['command'] == f'{shlex.quote(sys.executable)} -m bro.cw.statusline'
 
   def test_effort_injected(self):
-    argv = _cw_session_launch(_spec(effort='xhigh'), claude_args=[]).argv
+    argv = _cw_session_launch(_spec(llm='::xhigh'), claude_args=[]).argv
     assert argv[argv.index('--effort') + 1] == 'xhigh'
 
   @pytest.mark.parametrize('hold', ['unattended', 'detached', 'attended'])
@@ -172,7 +175,7 @@ class TestRawLaunch:
 
   def test_settings_merge_fast_mode_and_api_key_helper(self):
     # the merged --settings is what lets --fast reach a --raw session
-    settings = _settings(self._launch(fast=True).argv)
+    settings = _settings(self._launch(llm='+fast').argv)
     assert settings['fastMode'] is True
     assert (
       settings['apiKeyHelper'] == f'{shlex.quote(sys.executable)} -m bro.cw.print_anthropic_key'

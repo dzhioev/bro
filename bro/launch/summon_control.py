@@ -45,7 +45,7 @@ The request's `grant`/`revoke` split by kind: `@bro` values resolve here, on the
 loop, so a malformed or no-op override is denied immediately, while the
 credential half rides the spawn and is applied against the child's own computed
 scope in the lowering (`bro/launch/spawn.py`), where a bad override fails the
-launch. `effort`/`fast` are child-facing and ride its `bro run` argv.
+launch. `llm` is child-facing and rides its `bro run` argv.
 
 The same per-request attribution also names the requester's workspace (the root's
 own, a child's from its `broker-<channel>` clone), threaded into
@@ -107,8 +107,7 @@ _PAYLOAD_KEYS = frozenset(
     'index',
     'grant',
     'revoke',
-    'effort',
-    'fast',
+    'llm',
   }
 )
 # the deepest peer a summon may spawn: the root sits at depth 0, its children at
@@ -166,8 +165,8 @@ def _validate(payload: dict[str, Any]) -> Optional[str]:
   """the request's shape errors, or None when well-formed. Strict: an unknown key
   is rejected rather than ignored — a typo'd `timout` silently falling back to the
   default would hide the caller's bug."""
-  from bro.llm.llm import EFFORT_LEVELS
   from bro.llm.mcp import HOLDS
+  from bro.llm.providers import LLMSelectionError, parse as parse_llm
 
   unknown = sorted(set(payload) - _PAYLOAD_KEYS)
   if len(unknown) > 0:
@@ -195,20 +194,23 @@ def _validate(payload: dict[str, Any]) -> Optional[str]:
     step_id is None or not isinstance(index, int) or isinstance(index, bool) or index < 0
   ):
     return "summon 'index' requires step_id and must be a non-negative int"
-  # grant/revoke and fast are checked on presence, not on non-None: unlike the
-  # optional fields above they feed a non-optional consumer (the override split,
-  # the child's argv), so a null must be a shape error rather than a default
+  # grant/revoke are checked on presence, not on non-None: unlike the optional
+  # fields above they feed a non-optional consumer (the override split), so a
+  # null must be a shape error rather than a default
   for key in ('grant', 'revoke'):
     if key in payload and (
       not isinstance(payload[key], list)
       or not all(isinstance(value, str) and len(value) > 0 for value in payload[key])
     ):
       return f'summon {key!r} must be a list of non-empty names'
-  effort = payload.get('effort')
-  if effort is not None and effort not in EFFORT_LEVELS:
-    return f"summon 'effort' must be one of {', '.join(EFFORT_LEVELS)}"
-  if 'fast' in payload and not isinstance(payload['fast'], bool):
-    return "summon 'fast' must be a boolean"
+  llm = payload.get('llm')
+  if llm is not None:
+    if not isinstance(llm, str):
+      return "summon 'llm' must be a string"
+    try:
+      parse_llm(llm)
+    except LLMSelectionError as error:
+      return f"summon 'llm': {error}"
   return None
 
 
@@ -381,8 +383,7 @@ class SummonControl:
         hold=payload.get('hold'),
         grant_credentials=tuple(grant_credentials),
         revoke_credentials=tuple(revoke_credentials),
-        effort=payload.get('effort'),
-        fast=payload.get('fast', False),
+        llm=payload.get('llm'),
       ),
       peer,
       timeout=float(timeout) if timeout is not None else DEFAULT_TIMEOUT,

@@ -72,7 +72,7 @@ def test_bare_summon_forwards_with_its_own_shell_command(monkeypatch):
   monkeypatch.setattr(
     summon,
     'relay_summon',
-    lambda target, prompt, *, timeout, into, hold, grant, revoke, effort, fast: (
+    lambda target, prompt, *, timeout, into, hold, grant, revoke, llm: (
       calls.append((target, prompt, timeout, into)) or 0
     ),
   )
@@ -169,8 +169,7 @@ async def test_scope_and_spec_flags_forward_into_the_request(socket_dir, monkeyp
       'prompt': 'p',
       'grant': ['aws', '@bro'],
       'revoke': ['openai'],
-      'effort': 'high',
-      'fast': True,
+      'llm': '::high+fast',
     }
     assert await asyncio.wait_for(main_task, TIMEOUT) == 0
     capsys.readouterr()
