@@ -494,9 +494,9 @@ def _build_service_server(
   has_broker = os.environ.get('BROKER_CHANNEL') is not None
   has_summon_list = False
   if has_broker:
-    from bro import summon as summon_module
+    from bro import summon_status
 
-    has_summon_list = os.environ.get(summon_module.STATUS_ENV) is not None
+    has_summon_list = summon_status.status_path() is not None
 
   mounted = ['banner']
   if has_cast:

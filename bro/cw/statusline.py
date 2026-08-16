@@ -11,17 +11,17 @@ bar. Two sections, joined into the one line Claude renders:
   and age, plus the last terminal outcome for a while after it lands. External
   stderr is invisible under the fullscreen TUI, so this is the session's one live
   view of an in-flight summon.
+
+Claude re-runs this in a fresh interpreter on every render, so its whole import
+closure is a standing cost and must stay small.
 """
 
-import json
-import os
 import sys
 import time
-from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
+from bro import summon_status
 from bro.monitor import health
-from bro.summon import STATUS_ENV
 
 # how long the last terminal outcome stays on the status line; after that the
 # default status bar comes back
@@ -49,28 +49,22 @@ def _trail(trail_id: Optional[str]) -> str:
 
 
 def _summon_parts(now: float) -> list[str]:
-  status_path = os.environ.get(STATUS_ENV)
-  if status_path is None:
-    return []
-  path = Path(status_path)
-  if not path.is_file():
+  path = summon_status.status_path()
+  if path is None:
     return []
   try:
-    status: Any = json.loads(path.read_text())
-  except (OSError, json.JSONDecodeError):
+    status = summon_status.read(path)
+  except (OSError, ValueError):
     return [f'{_RED}⚠ summon status unreadable{_RESET}']
   parts = []
-  for active in status.get('active', []):
-    age = _age(now - active.get('started_at', now))
-    parts.append(
-      f'{_YELLOW}⚡ summoning {active.get("target")} {age} ({_trail(active.get("trail_id"))}){_RESET}'
-    )
-  last = status.get('last')
-  if last is not None and now - last.get('ended_at', 0) < _LAST_OUTCOME_TTL:
-    outcome = last.get('outcome')
-    color = _GREEN if outcome == 'ok' else _RED
-    mark = '✓' if outcome == 'ok' else '✗'
-    parts.append(f'{color}{mark} summon {last.get("target")}: {outcome}{_RESET}')
+  for active in status.active:
+    age = _age(now - active.started_at)
+    parts.append(f'{_YELLOW}⚡ summoning {active.target} {age} ({_trail(active.trail_id)}){_RESET}')
+  last = status.last
+  if last is not None and now - last.ended_at < _LAST_OUTCOME_TTL:
+    color = _GREEN if last.outcome == 'ok' else _RED
+    mark = '✓' if last.outcome == 'ok' else '✗'
+    parts.append(f'{color}{mark} summon {last.target}: {last.outcome}{_RESET}')
   return parts
 
 

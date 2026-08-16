@@ -15,8 +15,8 @@ Two layers, both computed per broker root:
   those feed: a host-side log line per event, an append-only JSONL audit file
   (the out-of-band trace a session's own narrative cannot suppress; every entry
   names the actual summoner), and the summon-status file the session's
-  statusLine renders (`bro.cw.statusline` reads it via the
-  `CW_SUMMON_STATUS` env var each launch surface points at it).
+  statusLine renders (records and atomic write in `bro.summon_status`; each
+  launch surface points its session at one through `CW_SUMMON_STATUS`).
 
 Authorization is per-peer. The root follows the launch-computed effective list
 above; a summoned child follows the list its own summon request resolved — its
@@ -76,9 +76,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
+from bro import summon_status
 from bro.base import credentials, log
 from bro.launch.scope import split_scope_overrides
-from bro.summon import DEFAULT_TIMEOUT, STATUS_ENV
+from bro.summon import DEFAULT_TIMEOUT
+from bro.summon_status import STATUS_ENV
 from bro.workspace.model import Workspace
 from bro.workspace.paths import summon_dir, workspace_tree
 
@@ -286,7 +288,7 @@ class SummonControl:
     self._trail_pointer = trail_pointer
     self._root_trail_id: Optional[str] = None
     self._active: dict[str, _ActiveSummon] = {}  # request id -> in-flight child
-    self._last: Optional[dict[str, Any]] = None  # the most recent terminal outcome
+    self._last: Optional[summon_status.FinishedSummon] = None
 
   def note_root_trail(self, trail_id: Optional[str]) -> None:
     """record the root peer's own trail id (from its `started` lifecycle event)
@@ -516,14 +518,14 @@ class SummonControl:
 
   def _finish(self, record: _ActiveSummon, outcome: str) -> None:
     del self._active[record.request_id]
-    self._last = {
-      'request_id': record.request_id,  # the reattach handle (`summon check` / `summon list`)
-      'target': record.target,
-      'trail_id': record.trail_id,
-      'summoner': record.summoner,
-      'outcome': outcome,
-      'ended_at': time.time(),
-    }
+    self._last = summon_status.FinishedSummon(
+      request_id=record.request_id,
+      target=record.target,
+      trail_id=record.trail_id,
+      summoner=record.summoner,
+      outcome=outcome,
+      ended_at=time.time(),
+    )
     log.info('summon: %s ended: %s (trail %s)', record.target, outcome, record.trail_id)
     self._audit('end', record, outcome=outcome)
     self._write_status()
@@ -577,23 +579,20 @@ class SummonControl:
       log.warning('could not append summon audit record to %s: %s', self._audit_file, e)
 
   def _write_status(self) -> None:
-    status = {
-      'active': [
-        {
-          'request_id': record.request_id,
-          'target': record.target,
-          'trail_id': record.trail_id,
-          'summoner': record.summoner,
-          'started_at': record.started_at,
-        }
+    status = summon_status.SummonStatus(
+      active=tuple(
+        summon_status.ActiveSummon(
+          request_id=record.request_id,
+          target=record.target,
+          trail_id=record.trail_id,
+          summoner=record.summoner,
+          started_at=record.started_at,
+        )
         for record in self._active.values()
-      ],
-      'last': self._last,
-    }
+      ),
+      last=self._last,
+    )
     try:
-      self._status_file.parent.mkdir(parents=True, exist_ok=True)
-      scratch = self._status_file.with_suffix('.tmp')
-      scratch.write_text(json.dumps(status, ensure_ascii=False))
-      scratch.replace(self._status_file)  # atomic: the statusLine never sees a partial write
+      summon_status.write(self._status_file, status)
     except OSError as e:
       log.warning('could not write summon status file %s: %s', self._status_file, e)

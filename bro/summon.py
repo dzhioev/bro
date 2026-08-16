@@ -68,11 +68,11 @@ import contextlib
 import json
 import os
 from collections.abc import Callable, Collection, Generator
-from dataclasses import dataclass
-from pathlib import Path
+from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any, Optional
 
 import bro.base.args as base_args
+from bro import summon_status
 from bro.base import log
 
 if TYPE_CHECKING:
@@ -82,9 +82,6 @@ if TYPE_CHECKING:
 __cli_name__ = 'summon'
 
 SUMMON = 'summon'  # the request's message-type tag (a consumer tag; not in broker's Tag)
-# points a session at its summon-status file — set by the launch surfaces
-# (bro/launch/summon_control.py owns the writer), read by `bro.cw.statusline`
-STATUS_ENV = 'CW_SUMMON_STATUS'
 SUMMONER_ENV = 'CW_SUMMONER'
 # carries a run's own effective summon allow-list into it, written by the surface
 # that launches the run: a session root's at launch, a summoned child's at its spawn
@@ -433,16 +430,13 @@ def list_summons() -> dict[str, Any]:
   host writes the file with the session's first summon; before that the state is
   empty. Raises `SummonError` when the environment carries no status file (only
   cw-launched sessions track summon status)."""
-  status_path = os.environ.get(STATUS_ENV)
-  if status_path is None:
+  path = summon_status.status_path()
+  if path is None:
     raise SummonError(
-      f'no summon status file ({STATUS_ENV} unset); only cw-launched sessions track summon status'
+      f'no summon status file ({summon_status.STATUS_ENV} unset); '
+      'only cw-launched sessions track summon status'
     )
-  try:
-    raw = Path(status_path).read_text()
-  except FileNotFoundError:
-    return {'active': [], 'last': None}  # no summon ever ran in this session
-  return json.loads(raw)
+  return asdict(summon_status.read(path))
 
 
 def relay_summon(
