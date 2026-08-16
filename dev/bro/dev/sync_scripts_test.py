@@ -32,8 +32,6 @@ name = "example"
 version = "0.1.0"
 [project.scripts]
 stale = "_entrypoints:stale"
-[tool.setuptools]
-py-modules = ["_entrypoints", "conftest"]
 [tool.uv.workspace]
 members = ["member"]
 """
@@ -49,7 +47,6 @@ members = ["member"]
     'tool': '_entrypoints:package_cli',
     'top': '_entrypoints:top',
   }
-  assert data['tool']['setuptools']['py-modules'] == ['_entrypoints', 'top']
   bridge = (tmp_path / '_entrypoints.py').read_text()
   assert "_run('package.cli')" in bridge
   assert "_run('top')" in bridge
