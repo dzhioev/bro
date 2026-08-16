@@ -159,7 +159,7 @@ def _facts(**overrides) -> SessionFacts:
     'cw_command': None,
     'shell_command': None,
     'prompt': None,
-    'sync_warning': None,
+    'recording_problem': None,
     'may_summon': None,
     'trail_id': None,
   }
@@ -314,22 +314,20 @@ class TestRenderBanner:
     assert 'I want a banner' in out
     assert out.count('I want a banner') == 1
 
-  def test_llm_emits_sync_warning_as_first_line(self):
-    out = _facts(sync_warning='session recording FAILING — see session-recorder.log').render_llm()
+  def test_llm_emits_the_recording_problem_as_first_line(self):
+    out = _facts(recording_problem='FAILING — see session-recorder.log').render_llm()
     # first line so it survives Claude's collapsed tool-output preview
     assert out.splitlines()[0] == 'session_recording: FAILING — see session-recorder.log'
     assert 'kind: container' in out
 
-  def test_llm_omits_sync_warning_when_healthy(self):
+  def test_llm_omits_the_recording_problem_when_healthy(self):
     out = _facts().render_llm()
     assert 'session_recording' not in out
 
-  def test_visual_paints_sync_warning_red_above_logo(self):
-    out = _facts(
-      bro='dev', sync_warning='session recording FAILING — see session-recorder.log'
-    ).render_visual()
+  def test_visual_paints_the_recording_problem_red_above_logo(self):
+    out = _facts(bro='dev', recording_problem='STOPPED — the recorder is gone').render_visual()
     first = out.splitlines()[0]
     assert first.startswith('\033[31m\033[1m⚠ ')
-    assert 'session recording FAILING' in first
+    assert 'session recording STOPPED — the recorder is gone' in first
     # warning sits above the bro logo
     assert out.index('⚠') < out.index('██')

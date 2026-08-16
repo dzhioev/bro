@@ -9,7 +9,7 @@ from bro.monitor import health
 def _run(monkeypatch, tmp_path, status=None, summon_status=None) -> str:
   monkeypatch.setattr(health, 'health_path', lambda: tmp_path / 'health.json')
   if status is not None:
-    health.write(status)
+    health.write(status, interval=3)
   monkeypatch.delenv(statusline.STATUS_ENV, raising=False)
   if summon_status is not None:
     summon_file = tmp_path / 'summon-status.json'
