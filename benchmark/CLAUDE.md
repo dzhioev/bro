@@ -35,18 +35,13 @@ uv run --directory benchmark pytest bro/benchmark/harbor_e2e_test.py
   lock with the framework entering as a built wheel so `bros/*` ships with it, and a shim setting
   `PYTHONPATH` over the two. `Bundle` is the layout a consumer addresses — shim, interpreter,
   site-packages, and the CA store to point `SSL_CERT_FILE` at; `built(root)` reports an absent or
-  incomplete bundle rather than building one behind the caller's back. The console scripts inside
-  `site-packages/bin` carry the build machine's absolute shebang and dangle once the bundle moves,
-  so every consumer reaches the framework through the shim
+  incomplete bundle rather than building one behind the caller's back
 - `bro/benchmark/harbor_agent.py` — `BroAgent`, the `BaseInstalledAgent` harbor imports.
   `install()` uploads the bundle and a scoped store holding only the LLM key, then runs
   `bro show <bro>` through the uploaded bundle — the one validation the host cannot make, and a
   smoke test of the bundle in the task's own image. `run()` is a single
   `bro run <bro> <instruction> --in-place` under `setsid`, reaped through a fresh root exec when
-  harbor cancels the phase, because cancelling the coroutine only kills the local exec client and
-  would leave the bro writing to the filesystem the verifier is about to grade. Harbor's
-  `-m openai/<model>` maps onto `--llm :<model>`, whose empty provider slot replaces the model
-  alone and keeps the persona's other knobs. `ERROR_PATTERNS` replaces the inherited list, which
-  matches prose the bro's own output reproduces from the task
+  harbor cancels the phase. Harbor's `-m openai/<model>` maps onto `--llm :<model>`, the spelling
+  that keeps the persona's own recipe
 - `bro/benchmark/terminal_bench_2_1.yaml` — the pinned harbor job config, and with the bundle the
   whole of what a score depends on
