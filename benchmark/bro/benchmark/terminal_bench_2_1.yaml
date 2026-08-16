@@ -27,6 +27,11 @@ agents:
       bro: terminal
       llm_credential: openai+benchmark
 
+# a trial's files are copied out of its container, so a score is the same
+# wherever the run is driven from
+environment:
+  import_path: bro.benchmark.harbor_environment:UnmountedDockerEnvironment
+
 n_attempts: 1
 n_concurrent_trials: 8
 

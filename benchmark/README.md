@@ -55,6 +55,11 @@ The score lands in `<jobs_dir>/<job-name>/result.json` (`jobs/` unless `-o` says
 `n_trials`, `n_errors`. Each trial keeps its own directory beside it, with the bro's activity log
 (`agent/bro.log`) and per-model token counts (`agent/usage.json`) as the run's record.
 
+Both are copied out of the container once the trial ends, so a job runs wherever the docker daemon
+is reachable — from a container with the socket mounted as readily as from the host itself — and
+leaves nothing of a trial on the docker host. Following a run as it happens means reading the log
+where it is being written: `docker exec <task-container> tail -f /logs/agent/bro.log`.
+
 The container gets exactly one credential, the LLM key named by the `llm_credential` kwarg — use a
 dedicated, budget-capped instance. It sits in a container where an LLM has unrestricted shell and
 internet, and the task instruction is third-party text the bro treats as its request.

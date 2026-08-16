@@ -43,5 +43,9 @@ uv run --directory benchmark pytest bro/benchmark/harbor_e2e_test.py
   `bro run <bro> <instruction> --in-place` under `setsid`, reaped through a fresh root exec when
   harbor cancels the phase. Harbor's `-m openai/<model>` maps onto `--llm :<model>`, the spelling
   that keeps the persona's own recipe
+- `bro/benchmark/harbor_environment.py` — `UnmountedDockerEnvironment`, the environment the job
+  config names: it keeps a trial's logs, artifacts and reward inside the task container for harbor
+  to copy out, so a job runs wherever the docker daemon is reachable and leaves nothing on the
+  docker host
 - `bro/benchmark/terminal_bench_2_1.yaml` — the pinned harbor job config, and with the bundle the
   whole of what a score depends on
