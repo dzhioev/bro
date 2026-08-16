@@ -12,7 +12,7 @@ from typing import Optional, TextIO
 
 import bro.base.args as base_args
 from bro.base import log
-from bro.bro import BroRaised
+from bro.bro import BaseBro, BroRaised
 from bro.launch._cli import (
   EFFORT_HELP,
   FAST_HELP,
@@ -41,7 +41,6 @@ from bro.trails.display import (
   StreamRenderer,
   preset,
 )
-from bros.bro import Bro
 
 __cli_name__ = 'call'
 
@@ -64,7 +63,7 @@ def _interruptible(task: asyncio.Task) -> Iterator[None]:
     yield
 
 
-async def _turn(bro: Bro, message: str, *, observer: Observer, hold: str) -> Optional[str]:
+async def _turn(bro: BaseBro, message: str, *, observer: Observer, hold: str) -> Optional[str]:
   task = asyncio.create_task(bro.send(message, observer=observer, surface='call', hold=hold))
   with _interruptible(task):
     try:
@@ -92,7 +91,7 @@ def _surface_notice(
 
 
 async def call_text(
-  bro: Bro,
+  bro: BaseBro,
   initial: Optional[str],
   read_line: Optional[Callable[[], str]] = None,
   now: Callable[[], datetime] = datetime.now,

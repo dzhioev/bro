@@ -51,7 +51,7 @@ class SessionFacts:
     - name — workspace name (CW_NAME)
     - bro — the bro the session runs as (CW_BRO)
     - host_workspace — host-side path to the workspace dir
-    - container_workspace — '/workspace' inside a container, else None
+    - container_workspace — '/workspace' in a managed container session, else None
     - exec_command — `cw exec <name>` for container sessions
     - cw_command — the canonical `cw ss …` invocation (CW_COMMAND)
     - shell_command — the outer launch command (BRO_SHELL_COMMAND). For wrappers
@@ -100,7 +100,7 @@ class SessionFacts:
     cw_command = os.environ.get('CW_COMMAND') or None
     shell_command = os.environ.get('BRO_SHELL_COMMAND') or cw_command
     host_workspace: Optional[str] = os.environ.get('CW_HOST_WORKSPACE') or None
-    container_workspace: Optional[str] = '/workspace' if in_container else None
+    container_workspace: Optional[str] = '/workspace' if in_container and name is not None else None
 
     if not in_container and host_workspace is None and name is not None:
       # host worktree case — derive path from the project root + worktree name
@@ -183,7 +183,10 @@ class SessionFacts:
     if self.in_container:
       # /workspace inside, host bind-mount path below — both are useful and
       # packing them onto one line crowded the eye
-      rows.append(('workspace:', '', str(self.container_workspace)))
+      if self.container_workspace is not None:
+        rows.append(('workspace:', '', self.container_workspace))
+      else:
+        rows.append(('workspace:', '', f'{dim}(unmanaged container){reset}'))
       if self.host_workspace is not None:
         rows.append(('host path:', '', f'{dim}{self.host_workspace}{reset}'))
     elif self.host_workspace is not None:

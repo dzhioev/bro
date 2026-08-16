@@ -125,6 +125,7 @@ bro-local = { workspace = true }
 bro = "bros.bro:Bro"
 dev = "bros.dev:Dev"
 lead = "bros.lead:Lead"
+terminal = "bros.terminal:Terminal"
 
 [project.entry-points."bro.credential_sources"]
 github_app = "bro.extra.github.app:Source"

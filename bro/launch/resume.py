@@ -3,11 +3,11 @@
 from dataclasses import dataclass
 from typing import Optional
 
+from bro.bro import BaseBro
 from bro.fork import fork, latest_fork_point
 from bro.llm.llm import NativeLLMSpec
 from bro.trails.client import TrailsClient, fetch_recorded_trail
 from bro.trails.display import DisplayRecord, RecordedAdapter
-from bros.bro import Bro
 
 RESUME_LATEST = 'latest'
 _LATEST_SCAN_LIMIT = 200
@@ -16,7 +16,7 @@ _CALL_ENTRY_POINT = 'call'
 
 @dataclass(frozen=True)
 class ResumedCall:
-  bro: Bro
+  bro: BaseBro
   history: list[DisplayRecord]
   trail_id: str
 
