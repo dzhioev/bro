@@ -223,7 +223,7 @@ class LocalStore(TrailsStore):
         state=state,
         seen_billing_keys=set(),
       )
-      header.update(_state_fields(state, len(prepared)))
+      header.update(rows.state_fields(state, len(prepared)))
       self._write_rows(trail_id, prepared, append=False)
       launch_context = request.body.get('launch_context')
       if launch_context is not None:
@@ -266,7 +266,7 @@ class LocalStore(TrailsStore):
         seen_billing_keys=set(),
       )
       self._write_rows(trail_id, prepared, append=True)
-      header.update(_state_fields(state, expected_end))
+      header.update(rows.state_fields(state, expected_end))
       header['last_alive_at'] = _now_iso()
       _atomic_json(self._trail_directory(trail_id) / 'header.json', header)
       return {'extent': expected_end, 'appended': len(prepared)}
@@ -412,19 +412,6 @@ def _creating_directory(directory: Path) -> Iterator[None]:
   except BaseException:
     shutil.rmtree(directory)
     raise
-
-
-def _state_fields(state: rows.AggregateState, extent: int) -> dict:
-  fields: dict[str, Any] = {
-    'extent': extent,
-    'turn_count': state.turn_count,
-    'native': state.native,
-  }
-  if state.last_billed_message_id is not None:
-    fields['last_billed_message_id'] = state.last_billed_message_id
-  if state.subject is not None:
-    fields['subject'] = state.subject
-  return fields
 
 
 def _extent(header: dict) -> int:
