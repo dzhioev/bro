@@ -8,7 +8,7 @@ from bro.prompts import PromptLoader, get_prompt, get_prompt_path, hold_fragment
 class TestContainment:
   def test_traversal_raises(self):
     with pytest.raises(ValueError, match='escapes the prompts directory'):
-      get_prompt('../CLAUDE.md')
+      get_prompt('../AGENTS.md')
 
   def test_absolute_path_raises(self):
     with pytest.raises(ValueError, match='escapes the prompts directory'):
@@ -16,7 +16,7 @@ class TestContainment:
 
   def test_path_lookup_is_guarded_too(self):
     with pytest.raises(ValueError, match='escapes the prompts directory'):
-      get_prompt_path('../CLAUDE.md')
+      get_prompt_path('../AGENTS.md')
 
   def test_contained_dotdot_is_allowed(self):
     # containment is the invariant, not name syntax: a `..` that stays inside resolves

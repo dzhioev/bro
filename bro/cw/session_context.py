@@ -41,7 +41,7 @@ def build_session_context(
   `bro` names the session's bro; `raw` selects the system-prompt record's
   shape: a raw session passes the whole prompt via --system-prompt (replaces
   the base), a cw-session passes only its --append-system-prompt addition on
-  top of claude's base + CLAUDE.md.
+  top of claude's base + AGENTS.md.
   """
   records: list[dict] = []
 
@@ -64,14 +64,14 @@ def build_session_context(
 
   records.append(_mcp_record(bro, raw))
 
-  claude_md = proj_root / 'CLAUDE.md'
-  if claude_md.is_file():
+  agents_md = proj_root / 'AGENTS.md'
+  if agents_md.is_file():
     records.append(
       {
-        'kind': 'claude_md',
+        'kind': 'agents_md',
         'subtype': 'root',
-        'title': 'CLAUDE.md (root)',
-        'content': claude_md.read_text().strip(),
+        'title': 'AGENTS.md (root)',
+        'content': agents_md.read_text().strip(),
       }
     )
 

@@ -80,7 +80,7 @@ def build_claude_launch(
   cw-session.
 
   the raw flavor (`--bare --strict-mcp-config --tools ''`) runs claude with no
-  project/user CLAUDE.md, no host MCP servers, no built-in tools, and only the
+  project/user AGENTS.md, no host MCP servers, no built-in tools, and only the
   bro's MCP namespaces (`mcp__<namespace>__*`); its system prompt is the bro's
   claude_system_prompt (the composition whose tool-name rule matches those
   mounts). auth comes from the `anthropic` secret, read through the credentials

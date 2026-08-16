@@ -1,4 +1,4 @@
-# bro/prompts/CLAUDE.md
+# bro/prompts/AGENTS.md
 
 Centralised prompt store. Five loading conventions: auto-inject into every bro + `cw ss` session (`shared/`); serve as a reference doc — injected into `cw ss` sessions or mounted as a `FileSource` tool (`*.md`, top level or a subdirectory like `dev/`); inject the hold fragment at launch (`hold.md` composing `holds/`); splice into an opting-in text via `{{include}}` (`fragments/`); load explicitly by name (top-level `*.prompt` / `*.prompt.template`).
 
@@ -36,7 +36,7 @@ Current reference docs:
 A session's hold — its user-involvement level — is one of `unattended | detached | attended | guided`, ordered from no human channel to human-driven. Every session gets exactly one level's text, picked by the launching surface at session start — a session is told its hold, never left to detect it at runtime:
 
 - `cw ss` picks by its `--hold` flag for both claude flavors — the cw-session append prompt and the `--raw` `--system-prompt` (flag semantics: `bro/reference/cw.md`)
-- the bro-native launch surfaces pick it through `bro/bro.py:_system_prompt_for` — `run()` defaults unattended, `send()` guided, with every launcher's `--hold` overriding (per-surface defaults: `bro/launch/CLAUDE.md`, "Launch holds")
+- the bro-native launch surfaces pick it through `bro/bro.py:_system_prompt_for` — `run()` defaults unattended, `send()` guided, with every launcher's `--hold` overriding (per-surface defaults: `bro/launch/AGENTS.md`, "Launch holds")
 
 `hold.md` (top level, not in `_BASE_PROMPT_FILES`) selects the per-level file in `holds/` via an exhaustive `{{iff #hold = …}}` chain and `{{include}}`s it; the three non-guided level files share `holds/authorization.md`, the full-authorization block, and the three interactive levels — detached, attended, guided — share `fragments/interaction.md`, the interaction policy. `bro.prompts.hold_fragment(hold, …facts)` is the one rendering path — every injection site uses it (`bro/cw/system_prompt.py:_session_append_prompt`, `bro/cw/claude_argv.py` for `--raw`, `bro/bro.py:_system_prompt_for`), and it is the only call that supplies the `#hold` fact, so all other text stays hold-neutral mechanically: a stray `#hold` directive in a spell or procedure doc raises.
 

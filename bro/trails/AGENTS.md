@@ -1,4 +1,4 @@
-# bro/trails/CLAUDE.md
+# bro/trails/AGENTS.md
 
 Trails is the universal registry and recording pipeline for LLM runs across harnesses. Every run has one header in the `trails-v2` DynamoDB table and one body in the shared ordinal `trail_steps_v2` table. The deployed `trails-server` is the only component with DynamoDB/S3 access; clients use the shared bearer-token secret.
 
@@ -48,4 +48,4 @@ Writer-reported outcomes use `end.reason`; the stale-run sweep instead records `
 
 ## Auth
 
-Bearer auth is mandatory outside an explicit loopback-only `TRAILS_ALLOW_NO_AUTH=1` run. Clients configure the server URL and bearer token through the `trails` secret documented in `bro/setup/CLAUDE.md`.
+Bearer auth is mandatory outside an explicit loopback-only `TRAILS_ALLOW_NO_AUTH=1` run. Clients configure the server URL and bearer token through the `trails` secret documented in `bro/setup/AGENTS.md`.

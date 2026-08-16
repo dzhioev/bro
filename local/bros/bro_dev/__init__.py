@@ -6,7 +6,7 @@ SYSTEM_PROMPT = """\
 ## Bro framework project
 
 You are operating inside the bro framework repository. Read the root and relevant
-subsystem `CLAUDE.md` files before changing code; they carry the repository's
+subsystem `AGENTS.md` files before changing code; they carry the repository's
 non-obvious development rules.
 
 The framework is in early beta: much of what you find is a first approximation —

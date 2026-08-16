@@ -66,7 +66,7 @@ status file through its read-only `/host-repo` mount of the project root
 The wire contract (the `summon` tag, payload keys, the 1800s default timeout) is
 owned by the peer-side `bro.summon` module; this module enforces it host-side. Broker
 imports stay function-local: this module sits on the launch path before the
-`_broker_enabled` gate (see cw/CLAUDE.md, "Lazy broker import").
+`_broker_enabled` gate (see cw/AGENTS.md, "Lazy broker import").
 """
 
 import json
@@ -430,7 +430,7 @@ class SummonControl:
     if record is None:
       return None
     # function-local like SummonLaunchSpec above: bro.launch.spawn imports broker at
-    # module level (cw/CLAUDE.md, "Lazy broker import")
+    # module level (cw/AGENTS.md, "Lazy broker import")
     from bro.launch.spawn import _workspace_name
 
     return _Requester(

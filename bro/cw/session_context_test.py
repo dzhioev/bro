@@ -3,8 +3,8 @@ from pathlib import Path
 from bro.cw.session_context import build_session_context, encode_session_context
 
 
-def _proj_with_claude_md(tmp_path: Path, body: str = '# CLAUDE.md\nrules') -> Path:
-  (tmp_path / 'CLAUDE.md').write_text(body)
+def _proj_with_agents_md(tmp_path: Path, body: str = '# AGENTS.md\nrules') -> Path:
+  (tmp_path / 'AGENTS.md').write_text(body)
   return tmp_path
 
 
@@ -21,15 +21,15 @@ class TestBuildSessionContext:
       base_ref=None,
       bro='bro-dev',
       raw=False,
-      proj_root=_proj_with_claude_md(tmp_path),
+      proj_root=_proj_with_agents_md(tmp_path),
     )
     by = _by_kind(records)
     assert by['system_prompt']['subtype'] == 'cw_injected'
     assert by['system_prompt']['content'] == 'injected text'
     assert by['git']['fields'] == {'branch': 'worktree-foo', 'base_sha': 'abc123'}
     assert by['mcp']['fields'] == {'mode': 'persona', 'servers': ['persona:bro-dev']}
-    assert by['claude_md']['subtype'] == 'root'
-    assert 'rules' in by['claude_md']['content']
+    assert by['agents_md']['subtype'] == 'root'
+    assert 'rules' in by['agents_md']['content']
 
   def test_raw_session_system_prompt_subtype(self, tmp_path):
     records = build_session_context(
@@ -39,7 +39,7 @@ class TestBuildSessionContext:
       base_ref=None,
       bro='bro-dev',
       raw=True,
-      proj_root=_proj_with_claude_md(tmp_path),
+      proj_root=_proj_with_agents_md(tmp_path),
     )
     by = _by_kind(records)
     assert by['system_prompt']['subtype'] == 'bro'
@@ -53,11 +53,11 @@ class TestBuildSessionContext:
       base_ref='origin/master',
       bro='bro-dev',
       raw=False,
-      proj_root=_proj_with_claude_md(tmp_path),
+      proj_root=_proj_with_agents_md(tmp_path),
     )
     assert _by_kind(records)['git']['fields']['base_ref'] == 'origin/master'
 
-  def test_claude_md_omitted_when_absent(self, tmp_path):
+  def test_agents_md_omitted_when_absent(self, tmp_path):
     records = build_session_context(
       system_prompt='x',
       branch='worktree-foo',
@@ -67,7 +67,7 @@ class TestBuildSessionContext:
       raw=False,
       proj_root=tmp_path,
     )
-    assert 'claude_md' not in _by_kind(records)
+    assert 'agents_md' not in _by_kind(records)
 
   def test_encode_roundtrips(self, tmp_path):
     import json
@@ -79,6 +79,6 @@ class TestBuildSessionContext:
       base_ref=None,
       bro='bro-dev',
       raw=False,
-      proj_root=_proj_with_claude_md(tmp_path),
+      proj_root=_proj_with_agents_md(tmp_path),
     )
     assert json.loads(encode_session_context(records)) == records

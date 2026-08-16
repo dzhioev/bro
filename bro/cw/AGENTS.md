@@ -1,6 +1,6 @@
-# bro/cw/CLAUDE.md
+# bro/cw/AGENTS.md
 
-`cw` launches claude in a managed workspace — either a host **worktree** or an isolated docker **container** clone. The package is the claude-harness launch surface over two lower layers: the `bro/workspace/` package (containerization/workspace mechanics — `bro/workspace/CLAUDE.md`) and `bro/launch/` (the bro-aware host machinery: per-surface credential scopes, summon enforcement, the broker-root composition — `bro/launch/CLAUDE.md`). For *how it actually works* (subcommands, host vs container modes, credential seeding, env vars, resuming, `--raw`/`--hold`), read `bro/reference/cw.md` — that document owns the behavior, this one owns the code layout.
+`cw` launches claude in a managed workspace — either a host **worktree** or an isolated docker **container** clone. The package is the claude-harness launch surface over two lower layers: the `bro/workspace/` package (containerization/workspace mechanics — `bro/workspace/AGENTS.md`) and `bro/launch/` (the bro-aware host machinery: per-surface credential scopes, summon enforcement, the broker-root composition — `bro/launch/AGENTS.md`). For *how it actually works* (subcommands, host vs container modes, credential seeding, env vars, resuming, `--raw`/`--hold`), read `bro/reference/cw.md` — that document owns the behavior, this one owns the code layout.
 
 ## Module map
 
@@ -13,7 +13,7 @@ Leaf utilities (no intra-package deps, or only on each other):
 - `system_prompt.py` — `_load_base_prompts` / `_session_append_prompt` (the `--append-system-prompt` text: base prompts plus the persona and its canonical spell instructions)
 - `mcp.py` — session-local HTTP MCP serving through `bro/runtime/mcp_server.py`: `MCPEndpoint` carries the port and token, `_http_mcp_config` builds Claude's namespace map, and `_start_session_mcp_server` / `_SessionMCPServer` own the `mcp-server <spec> --http --port 0` lifecycle (OS-assigned port file, `/health` gate, and termination on session exit)
 - `broxy.py` — host-mode session wrapper around `broxy launch`: `_start_session_broxy` chooses a session-tempdir socket + log and `_SessionBroxy` retains the returned address + pid for stop-on-session-exit; returns `None` with a warning when the broxy cannot run, after which the runner unsets `BROKER_CHANNEL`. No broker import, so the module stays importable where broker is not
-- `session_context.py` — `build_session_context` / `encode_session_context`: the typed launch-context records (system prompt, git state, MCP servers, root CLAUDE.md) the in-place session runner captures into `CW_SESSION_CONTEXT` for the session recorder → `rewind`
+- `session_context.py` — `build_session_context` / `encode_session_context`: the typed launch-context records (system prompt, git state, MCP servers, root AGENTS.md) the in-place session runner captures into `CW_SESSION_CONTEXT` for the session recorder → `rewind`
 - `recorder.py` — `_start_session_recorder` / `_SessionRecorder`: the runner-owned `bro.trails.record.claude` daemon lifecycle — continuous transcript recording to trails next to claude for every session flavor, stderr to `<claude config dir>/session-recorder.log`, terminate-on-session-exit as the final append + trail end (`bro/reference/cw.md` "Session recording" owns the behavior)
 
 Supporting tools:

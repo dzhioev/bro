@@ -2,7 +2,7 @@
 
 A **Bro** is a specialised agent: a system prompt, a curated set of tools, and an LLM loop that turns inputs into outputs. Each Bro encapsulates one capability — reviewing code, researching a topic, answering general questions — and exposes the same uniform interface regardless of where it is invoked from.
 
-This document is the conceptual model. Operational details (layout, how to add a new Bro, current files) live in `CLAUDE.md`.
+This document is the conceptual model. Operational details (layout, how to add a new Bro, current files) live in `AGENTS.md`.
 
 ## Principles
 
@@ -66,7 +66,7 @@ The same Bro runs from many launchers:
 - **Console** — `bro run <name> <input>`, `bro list`, `bro show <name>`. Backed by `bro/run.py`.
 - **Claude Code raw** — `cw ss --bro <name> --raw` launches a bare Claude Code session whose system prompt and MCP servers come from the session's Bro. Tools are served by a session-local HTTP MCP server (`mcp-server bro:<name> --http`) exposing the union of the Bro's declared MCP servers, data-source tools, spells, and the framework `bro::skill` loader, one endpoint per namespace. Useful when the user wants a chat UI over the Bro's policy + toolkit.
 - **Claude Code persona** — every cw-session (the default non-`--raw` `cw ss` flavor) runs *as* a Bro too (`--bro <name>`, defaulting to the project default bro): the Bro's persona and Spells prompts are injected, its spells mount as canonical `spell::` tools, Claude retains its native third-party skill mechanism, and the bro's claude-harness-filtered toolset (`claude_persona_mcp_servers()` via `mcp-server persona:<name> --http`) mounts alongside Claude's remaining built-in tools — components gated to the bro harness (the dev toolset) stay out, and selected blocks feed Claude's `--disallowed-tools`.
-- **`bro run` / `bro chat`** — canonical one-shot and interactive launchers; `ask` and `call` are aliases. See `bro/launch/CLAUDE.md`.
+- **`bro run` / `bro chat`** — canonical one-shot and interactive launchers; `ask` and `call` are aliases. See `bro/launch/AGENTS.md`.
 
 A given Bro need not support every surface. A consumer can invoke one from its own application, expose another only through `bro run`, and use a third as a `cw ss` persona without changing the Bro abstraction.
 
@@ -83,4 +83,4 @@ The built-in set lives in `bros/`:
 
 Installed distributions add consumer personas through the `bro` entry-point group.
 
-Adding a new Bro is creating a new subclass and registering it — see `CLAUDE.md` for the operational checklist.
+Adding a new Bro is creating a new subclass and registering it — see `AGENTS.md` for the operational checklist.

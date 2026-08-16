@@ -117,7 +117,7 @@ class TestProvisionHostClaudeDir:
     settings = json.loads((claude_dir / 'settings.json').read_text())
     assert settings == cw_claude_config._SESSION_SETTINGS_JSON
     assert not (claude_dir / '.credentials.json').exists()
-    assert not (claude_dir / 'CLAUDE.md').exists()
+    assert not (claude_dir / 'AGENTS.md').exists()
 
   def test_settings_do_not_preaccept_the_bypass_permissions_dialog(self, home):
     # only container sessions pre-accept it; on a host worktree

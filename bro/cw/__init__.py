@@ -46,7 +46,7 @@ network is not restricted by design.
 This package re-exports below exactly the cross-package surface that
 `bro/workflow/dive_in.py` consumes through `from bro import cw`. Intra-package
 code imports submodule → submodule (never through this hub — partial-init hazard); see
-cw/CLAUDE.md.
+cw/AGENTS.md.
 """
 
 from bro.cw.cli import build_parser

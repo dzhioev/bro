@@ -526,7 +526,7 @@ class TestRenderText:
 
   def test_include_escaping_the_prompts_directory_raises(self):
     with pytest.raises(ValueError, match='escapes the prompts directory'):
-      render_text('{{include ../CLAUDE.md}}', harness='bro')
+      render_text('{{include ../AGENTS.md}}', harness='bro')
 
   @pytest.mark.asyncio
   async def test_namespaced_tool_passes_rendered_description_through(self):
