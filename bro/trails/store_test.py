@@ -8,6 +8,7 @@ from bro.trails.local import LocalStore
 from bro.trails.network import NetworkStore
 from bro.trails.store import (
   build_store,
+  configured_store,
   default_store,
   local_root,
   resolve_config,
@@ -87,3 +88,18 @@ def test_default_store_records_locally_without_the_trails_credential(tmp_path, m
 
   assert isinstance(store, LocalStore)
   assert store.root == (tmp_path / 'var' / 'cw' / 'trails').resolve()
+
+
+def test_configured_store_builds_the_named_backend():
+  with patch('bro.trails.store.credentials.get_json', return_value={'backend': 'dynamo'}) as read:
+    with patch('bro.trails.server.dynamo.build_dynamo_store', lambda config: 'DYNAMO'):
+      assert configured_store() == 'DYNAMO'
+  read.assert_called_once_with('trails')
+
+
+def test_configured_store_requires_the_trails_credential():
+  with patch(
+    'bro.trails.store.credentials.get_json', side_effect=credentials.SecretNotFound('trails')
+  ):
+    with pytest.raises(credentials.SecretNotFound):
+      configured_store()

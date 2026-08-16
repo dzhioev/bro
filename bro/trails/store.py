@@ -236,6 +236,12 @@ def default_store() -> TrailsStore:
   return build_store(resolve_config(credentials.default_store()))
 
 
+def configured_store() -> TrailsStore:
+  """the store the `trails` credential names, required: unlike `default_store`,
+  an unresolvable credential raises instead of selecting local storage."""
+  return build_store(credentials.get_json(_TRAILS_SECRET))
+
+
 _STEP_CANONICAL_FIELDS = frozenset(
   {'trail_id', 'step_id', 'ts', 'kind', 'body', 'usage', 'payload_sha256'}
 )

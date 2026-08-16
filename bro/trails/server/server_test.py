@@ -292,7 +292,7 @@ def test_resolve_auth_requires_explicit_loopback_override():
 
 def test_main_resolves_the_hosted_store_from_credentials(monkeypatch, store):
   launched = {}
-  monkeypatch.setattr('bro.trails.server.server.default_store', lambda: store)
+  monkeypatch.setattr('bro.trails.server.server.configured_store', lambda: store)
   monkeypatch.setattr(
     'bro.trails.server.server.web.run_app',
     lambda app, *, host, port: launched.update(app=app, host=host, port=port),

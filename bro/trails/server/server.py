@@ -22,7 +22,7 @@ from bro.trails.model import (
   validate_end,
 )
 from bro.trails.server.dynamo import BodyTooLarge, DynamoStore
-from bro.trails.store import AppendConflict, TrailNotFound, TrailsStore, default_store
+from bro.trails.store import AppendConflict, TrailNotFound, TrailsStore, configured_store
 
 __cli_name__ = 'trails-server'
 
@@ -485,7 +485,7 @@ def main(argv: list[str]) -> Optional[int]:
     allow_no_auth=args['trails_allow_no_auth'],
     host=args['host'],
   )
-  store = default_store()
+  store = configured_store()
   admin = store if isinstance(store, DynamoStore) else None
   auth_description = 'bearer auth' if bearer_token is not None else 'NO AUTH'
   log.info(
