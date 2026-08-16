@@ -4,6 +4,7 @@ import threading
 import pytest
 
 from bro.trails.local import LocalStore
+from bro.trails.model import reported_missing_trail
 from bro.trails.server.dynamo import DynamoStore
 from bro.trails.server.server import create_app, main, resolve_auth
 
@@ -225,11 +226,24 @@ async def test_header_and_end_handlers_preserve_store_validation(client, store):
 
 
 @pytest.mark.asyncio
-async def test_missing_resources_are_404(client):
+async def test_missing_resources_are_404_reporting_the_trail(client):
   client = await client
-  assert (await client.get('/v1/trails/missing', headers=_auth())).status == 404
-  assert (await client.get('/v1/trails/missing/steps', headers=_auth())).status == 404
-  assert (await client.get('/v1/trails/missing/steps/0', headers=_auth())).status == 404
+  for path in (
+    '/v1/trails/missing',
+    '/v1/trails/missing/steps',
+    '/v1/trails/missing/steps/0',
+    '/v1/trails/missing/context',
+  ):
+    response = await client.get(path, headers=_auth())
+    assert response.status == 404
+    assert reported_missing_trail(await response.read()) == 'missing'
+
+
+@pytest.mark.asyncio
+async def test_an_unrouted_path_is_not_a_missing_trail(client):
+  response = await (await client).get('/v1/trails/T1/nowhere', headers=_auth())
+  assert response.status == 404
+  assert reported_missing_trail(await response.read()) is None
 
 
 @pytest.mark.asyncio

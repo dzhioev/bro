@@ -135,6 +135,29 @@ def validate_end(reason: Any, detail: Any) -> tuple[str, Optional[str]]:
   return reason, detail
 
 
+_MISSING_TRAIL_FIELD = 'missing_trail'
+
+
+def trail_not_found_body(trail_id: str) -> dict[str, Any]:
+  """the body a trails server answers a request for a missing trail with. the
+  `missing_trail` field is what separates it from every other 404 a client can
+  receive — an unrouted path, or one from an intermediary."""
+  return {'error': f'trail not found: {trail_id}', _MISSING_TRAIL_FIELD: trail_id}
+
+
+def reported_missing_trail(raw: bytes) -> Optional[str]:
+  """the trail id a 404 response body reports missing, or None when the body
+  reports anything else."""
+  try:
+    body = json.loads(raw)
+  except (json.JSONDecodeError, UnicodeDecodeError):
+    return None
+  if not isinstance(body, dict):
+    return None
+  trail_id = body.get(_MISSING_TRAIL_FIELD)
+  return trail_id if isinstance(trail_id, str) else None
+
+
 def _validate_pointer(value: Any, field: str, *, step_optional: bool) -> None:
   if value is None:
     return

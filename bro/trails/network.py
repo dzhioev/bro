@@ -9,7 +9,12 @@ import urllib.request
 from typing import Any, Optional
 from urllib.parse import urlencode, urlparse
 
-from bro.trails.model import LOOPBACK_HOSTS, BlazeRequest, spill_descriptor
+from bro.trails.model import (
+  LOOPBACK_HOSTS,
+  BlazeRequest,
+  reported_missing_trail,
+  spill_descriptor,
+)
 from bro.trails.store import (
   AppendConflict,
   TrailNotFound,
@@ -302,7 +307,9 @@ class NetworkStore(TrailsStore):
               f'{method} {path} -> HTTP {response.status}: {raw.decode(errors="replace")}',
             )
             if response.status == 404:
-              raise TrailNotFound(path.split('?', 1)[0]) from exception
+              missing_trail = reported_missing_trail(raw)
+              if missing_trail is not None:
+                raise TrailNotFound(missing_trail) from exception
             extents = _append_conflict_extents(raw)
             if response.status == 409 and extents is not None:
               raise AppendConflict(*extents) from exception
