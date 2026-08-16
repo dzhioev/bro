@@ -152,6 +152,9 @@ wheel-exclude = [
   "**/*_test_helper.py",
   "**/conftest.py",
   "**/CLAUDE.md",
+  # the backend reads no ignore file, so a build artifact left in a working tree
+  # ships unless it is named here
+  "**/*.egg-info",
   "bro/setup/setup_env.sh",
   "bro/setup/versions.sh",
   "bro/setup/ubuntu",
