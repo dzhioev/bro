@@ -82,6 +82,14 @@ class TestPresets:
   def test_a_name_no_table_carries_is_read_as_a_recipe(self):
     assert llm_flags.selection_from_args(_args(['--llm', ':terra'])) == LLMSelection(model='terra')
 
+  def test_a_recipe_is_read_without_a_project_around_it(self, monkeypatch):
+    def no_project():
+      raise FileNotFoundError('git')
+
+    monkeypatch.setattr('bro.workspace.project.project_config', no_project)
+
+    assert llm_flags.selection_from_args(_args(['--llm', ':terra'])) == LLMSelection(model='terra')
+
   def test_a_malformed_preset_names_itself_in_the_error(self):
     self.host_file.write_text(json.dumps({'llm': {'broken': '::ludicrous'}}))
     with pytest.raises(LLMSelectionError, match="preset 'broken'"):

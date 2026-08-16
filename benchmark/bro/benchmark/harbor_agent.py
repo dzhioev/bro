@@ -60,7 +60,6 @@ AGENT_DIR = EnvironmentPaths.agent_dir
 # `populate_context_post_run` reads back
 ACTIVITY_LOG = AGENT_DIR / 'bro.log'
 USAGE_FILE = AGENT_DIR / 'usage.json'
-USAGE_FILE_NAME = USAGE_FILE.name
 
 # the credential kind the bro reads its LLM key as; an instance of it
 # (`openai+benchmark`) materializes under that same kind name
@@ -304,7 +303,7 @@ class BroAgent(BaseInstalledAgent):
     takes the whole prompt. Cost stays unset — the framework's usage accounting
     carries counts, not prices.
     """
-    usage_file = self.logs_dir / USAGE_FILE_NAME
+    usage_file = self.logs_dir / USAGE_FILE.name
     if not usage_file.is_file():
       self.logger.debug('no usage file at %s; the run published none', usage_file)
       return

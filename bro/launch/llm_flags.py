@@ -67,7 +67,14 @@ def presets() -> dict[str, str]:
 
 
 def selection_from_args(args: dict) -> 'LLMSelection':
-  """the LLM selection `args` spells, with a preset name expanded to its value."""
+  """the LLM selection `args` spells, with a preset name expanded to its value.
+
+  A value that already spells a recipe is read as one and the preset table is
+  never consulted — half of that table lives in the operated project, so a run
+  handed the canonical value (`canonicalize`) resolves it with no repository
+  around it. The names that lose to the grammar are exactly the provider names,
+  the only bare words it accepts.
+  """
   from bro.llm.providers import LLMSelection, LLMSelectionError, parse
 
   value = args.get('llm')
@@ -78,9 +85,12 @@ def selection_from_args(args: dict) -> 'LLMSelection':
       effort=args.get('effort'),
       fast=args.get('fast', False),
     )
-  expanded = presets().get(value)
-  if expanded is None:
+  try:
     return parse(value)
+  except LLMSelectionError:
+    expanded = presets().get(value)
+    if expanded is None:
+      raise
   try:
     return parse(expanded)
   except LLMSelectionError as error:

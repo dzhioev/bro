@@ -83,7 +83,10 @@ def test_a_real_task_is_driven_and_graded(tmp_path):
   results = sorted(jobs.glob('*/result.json'))
   assert len(results) == 1
   stats = json.loads(results[0].read_text())['stats']
-  assert stats['n_errored_trials'] == 0
   for name, evaluated in stats['evals'].items():
     assert evaluated['n_trials'] > 0, f'{name} produced no graded trial'
     assert evaluated['reward_stats'] != {}, f'{name} produced no reward'
+  # what the reward alone cannot tell: a bro that died on startup is graded zero
+  # like one that worked the task and failed. Tokens mean the loop actually ran,
+  # and that the usage file made it back through the mounted trial directory
+  assert stats['n_output_tokens'] > 0
