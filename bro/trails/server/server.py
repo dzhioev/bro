@@ -450,6 +450,25 @@ async def _handle_relink(request: web.Request) -> web.Response:
     return _error(str(exception), 400)
 
 
+async def _handle_repair_llm_spec(request: web.Request) -> web.Response:
+  trail_id = request.match_info['trail_id']
+  payload = await _read_json(request)
+  if not isinstance(payload, dict) or set(payload) != {'expected', 'replacement'}:
+    return _error('body must contain expected and replacement', 400)
+  replacement = payload['replacement']
+  if not isinstance(replacement, dict):
+    return _error('replacement must be an object', 400)
+  store: storage.Storage = request.app['storage']
+  try:
+    return web.json_response(
+      await store.repair_llm_spec(trail_id, payload['expected'], replacement)
+    )
+  except storage.TrailNotFound:
+    return _error(f'trail not found: {trail_id}', 404)
+  except ValueError as exception:
+    return _error(str(exception), 409)
+
+
 async def _handle_list_trails(request: web.Request) -> web.Response:
   harness = request.query.get('harness')
   bro = request.query.get('bro')
@@ -522,6 +541,7 @@ def create_app(
   app.router.add_get('/v1/steps', _handle_find_steps)
   app.router.add_get('/v1/trails/{trail_id}', _handle_get_trail)
   app.router.add_patch('/v1/trails/{trail_id}', _handle_update_header)
+  app.router.add_post('/v1/admin/trails/{trail_id}/repair-llm-spec', _handle_repair_llm_spec)
   app.router.add_post('/v1/trails/{trail_id}/records', _handle_append_records)
   app.router.add_get('/v1/trails/{trail_id}/steps', _handle_get_steps)
   app.router.add_get('/v1/trails/{trail_id}/steps/uuids', _handle_get_step_uuids)

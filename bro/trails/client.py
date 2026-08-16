@@ -260,6 +260,17 @@ class TrailsClient:
       {'forked_from': forked_from, 'delete_count': delete_count},
     )
 
+  def repair_llm_spec(self, trail_id: str, expected, replacement: dict) -> dict:
+    """replace a header's recorded `native.llm`, conditional on it still being
+    `expected` (`POST /v1/admin/trails/{id}/repair-llm-spec`). Raises
+    `HTTPStatusError` with status 409 when it is not, so a repeated run is
+    a reported no-op rather than a clobber."""
+    return self._send(
+      'POST',
+      f'/v1/admin/trails/{trail_id}/repair-llm-spec',
+      {'expected': expected, 'replacement': replacement},
+    )
+
   def update_header(self, trail_id: str, changes: dict) -> dict:
     """apply a constrained mutable-field upsert (`PATCH /v1/trails/{id}`);
     returns the updated header."""

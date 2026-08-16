@@ -701,6 +701,9 @@ class Storage:
   async def relink(self, trail_id: str, forked_from: dict, delete_count: int) -> dict:
     return await self._operations.relink(trail_id, forked_from, delete_count)
 
+  async def repair_llm_spec(self, trail_id: str, expected, replacement: dict) -> dict:
+    return await self._operations.repair_llm_spec(trail_id, expected, replacement)
+
   async def list_trails(
     self,
     *,

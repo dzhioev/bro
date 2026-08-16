@@ -73,6 +73,10 @@ def bro_summon():
   return _run('bro.summon')
 
 
+def bro_trails_migrate_llm_spec():
+  return _run('bro.trails.migrate_llm_spec')
+
+
 def bro_trails_record_claude():
   return _run('bro.trails.record.claude')
 

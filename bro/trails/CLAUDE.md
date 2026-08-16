@@ -21,7 +21,7 @@ bro · claude recorder                       readers
 ```
 
 - `bro/trails/server/storage.py` owns headers, the extent-conditional append protocol, ordinal storage and spillover, UUID projections and point reads, content-addressed tool blobs, list indexes, and unreported-run inference; `folding.py` is the shared aggregate fold.
-- `bro/trails/server/operations.py` owns recompute, check (including billing and cross-trail UUID audits), and manifested relinking.
+- `bro/trails/server/operations.py` owns recompute, check (including billing and cross-trail UUID audits), and the manifested repairs — relinking, and `repair_llm_spec` for a launch recipe recorded under a vocabulary the current code no longer reads.
 - `bro/trails/server/backends.py` is the harness seam. An adapter supplies exactly `parse`, `classify`, `project`, `open`, and `validate_create`, plus its declared emitted message types; the registry is the complete harness dispatch surface.
 - **Recorder placement:** the shared write spine and every harness recorder live in `bro/trails/record/`; a recorder may import the seam it rides, never the reverse. A third harness adds `record/<harness>.py` over `spine.Recording` beside its server adapter, not recording machinery in `bro/llm/`, `bro/trails/client.py`, or the harness package.
 - Harness adapters mint lineage only when creating a trail. Writers cannot mutate an edge; operators repair a missing edge through manifested `relink`, and audits detect copied records across trails.
@@ -41,9 +41,10 @@ Writer-reported outcomes use `end.reason`; the stale-run sweep instead records `
 - `POST /v1/trails/{id}/records` sends records beginning at `offset`. A committed retry returns the current extent without folding again; any other extent mismatch is a conflict.
 - `GET /v1/trails/{id}/steps` returns the lossless native stream. `GET /v1/trails/{id}/messages` returns the generalized projection; billing usage is read from the row selected at append time. `GET /v1/steps?uuid=…` returns matching row identities, `/steps/uuids` returns a bounded UUID projection, and `/steps/{step_id}` returns one exact row.
 - Bro projection derives reasoning, assistant text, tool calls, and terminal assistant status from `llm_call.response.output`; rows of those decomposed kinds do not project separately.
-- `POST /v1/admin/trails/{id}/recompute`, `/v1/admin/trails/check`, and `/v1/admin/trails/{id}/relink` are the aggregate repair, non-mutating verification/audit, and manifested lineage-repair surfaces. The store-wide check keeps its long request alive with JSON-whitespace heartbeats and ends with one verdict object.
+- `POST /v1/admin/trails/{id}/recompute`, `/v1/admin/trails/check`, `/v1/admin/trails/{id}/relink`, and `/v1/admin/trails/{id}/repair-llm-spec` are the aggregate repair, non-mutating verification/audit, manifested lineage-repair, and manifested recipe-repair surfaces. The recipe repair carries the value the operator expects to find and applies its replacement under a condition on that value, so it can neither double-apply nor overwrite a writer that moved underneath it — `native.usage` beside it is untouched. The store-wide check keeps its long request alive with JSON-whitespace heartbeats and ends with one verdict object.
 - Header responses expose provider-raw usage by model. Provider normalization belongs to the provider-aware usage layer, not the harness adapter.
 - List queries accept exactly one indexed selector: `harness`, `bro`, or `forked_from`, plus the common time range and cursor.
+- `bro/trails/migrate_llm_spec.py` (`migrate-trail-llm-spec`) drives that repair across the store: it holds the policy (which recorded shapes map to which replacement) while the server holds the primitive, reports by default and rewrites under `--apply`. A recipe with no model is left alone — there is nothing to migrate it to.
 - `bro/trails/rewind.py` (`rewind`) is the reader CLI for every harness: it owns argument parsing, queries, follow polling, regex matching, and grep context while every `show`, `steps`, `list`, `tree`, and `grep` record renders through the matching display preset.
 
 ## Auth
