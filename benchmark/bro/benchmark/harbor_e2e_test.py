@@ -35,15 +35,20 @@ JOB_CONFIG = Path(__file__).with_name('terminal_bench_2_1.yaml')
 HARBOR = Path(sys.executable).with_name('harbor')
 
 
-def _docker_available() -> bool:
+def _available(*command: str) -> bool:
   try:
-    return subprocess.run(['docker', 'info'], capture_output=True).returncode == 0
+    return subprocess.run(command, capture_output=True).returncode == 0
   except FileNotFoundError:
     return False
 
 
 pytestmark = [
-  pytest.mark.skipif(not _docker_available(), reason='no reachable docker daemon'),
+  pytest.mark.skipif(not _available('docker', 'info'), reason='no reachable docker daemon'),
+  # harbor drives every container through the compose CLI plugin, which is
+  # installed separately from the engine
+  pytest.mark.skipif(
+    not _available('docker', 'compose', 'version'), reason='no docker compose plugin'
+  ),
   pytest.mark.skipif(
     not credentials.available(DEFAULT_LLM_CREDENTIAL), reason='no LLM key resolves'
   ),
