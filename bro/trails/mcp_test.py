@@ -131,6 +131,7 @@ class TestList:
 
     result = await tool('list').call({})
 
+    assert isinstance(result, dict)
     subject = result['result'][0]['subject']
     assert subject == ('x' * 60) + '... <940 more chars>'
 
