@@ -8,19 +8,37 @@ import pytest
 
 from bro.monitor import health, trail_pointer
 from bro.trails.local import LocalStore
-from bro.trails.record.claude import Recorder, _attempt
+from bro.trails.model import BlazeRequest
+from bro.trails.record.claude import (
+  Recorder,
+  _attempt,
+  _compose,
+  _Position,
+  _Progress,
+  _read_lines_after,
+  _SegmentRecorder,
+  _signature,
+)
 
 
 class _Store(LocalStore):
-  """a real local store that also records the keepalives it was sent."""
+  """a real local store that also records the keepalives it was sent, and fails
+  the number of appends `refusals` is set to."""
 
   def __init__(self, root: Path):
     super().__init__(root)
     self.keepalives: list[str] = []
+    self.refusals = 0
 
   def keepalive(self, trail_id: str) -> None:
     self.keepalives.append(trail_id)
     super().keepalive(trail_id)
+
+  def append_records(self, trail_id: str, offset: int, records: list[Any], **kwargs: Any) -> dict:
+    if self.refusals > 0:
+      self.refusals -= 1
+      raise RuntimeError('store is down')
+    return super().append_records(trail_id, offset, records, **kwargs)
 
 
 def _record(**fields: Any) -> str:
@@ -99,6 +117,28 @@ def _write_segment(projects: Path, stem: str, lines: list[str]) -> Path:
   path = projects / f'{stem}.jsonl'
   path.write_text('\n'.join(lines) + '\n')
   return path
+
+
+def _worker(store: LocalStore, path: Path) -> _SegmentRecorder:
+  """a recorder over the whole of `path`, on a trail blazed as its own root."""
+  request = BlazeRequest(
+    harness='claude',
+    version='test',
+    interactive=True,
+    surface='cw',
+    native={'llm': {}, 'segment': path.stem, 'cw_command': 'cw ss', 'harness_version': 'test'},
+    body={'records': []},
+  )
+  lines, byte_extent = _read_lines_after(path, 0)
+  signature = _signature(path)
+  assert signature is not None
+  return _SegmentRecorder(
+    store,
+    path,
+    store.blaze(request)['id'],
+    pending=_compose(lines, [[0, len(lines)]]),
+    position=_Position(signature, byte_extent),
+  )
 
 
 def _trails(store: LocalStore) -> list[dict]:
@@ -181,47 +221,73 @@ class TestAdoption:
 
 
 class TestAppends:
+  """the segment recorder alone: one file, one trail, no segment selection."""
+
+  def test_the_first_tick_records_what_the_verdict_awarded(self, environment, store):
+    lines = [_user('hello', 'u1'), _assistant('hi', 'a1')]
+    worker = _worker(store, _write_segment(environment, 'seg-1', lines))
+
+    assert worker.tick() is _Progress.ADVANCED
+    assert worker.tick() is _Progress.QUIET
+
+    assert _rows(store, worker.trail_id) == lines
+
   def test_growth_appends_only_new_lines(self, environment, store):
     lines = [_user('hello', 'u1')]
     path = _write_segment(environment, 'seg-1', lines)
-    recorder = _recorder(environment, store)
-    recorder.tick()
+    worker = _worker(store, path)
+    worker.tick()
     lines.append(_assistant('hi', 'a1'))
     path.write_text('\n'.join(lines) + '\n')
 
-    assert recorder.tick() is True
+    assert worker.tick() is _Progress.ADVANCED
 
-    [header] = _trails(store)
-    assert _rows(store, header['id']) == lines
+    assert _rows(store, worker.trail_id) == lines
 
   def test_incomplete_line_waits_for_its_newline(self, environment, store):
     first = _user('hello', 'u1')
     path = _write_segment(environment, 'seg-1', [first])
-    recorder = _recorder(environment, store)
-    recorder.tick()
+    worker = _worker(store, path)
+    worker.tick()
     second = _assistant('hi', 'a1')
     path.write_text(first + '\n' + second)
 
-    assert recorder.tick() is False
-    [header] = _trails(store)
-    assert _rows(store, header['id']) == [first]
+    assert worker.tick() is _Progress.QUIET
+    assert _rows(store, worker.trail_id) == [first]
 
     path.write_text(first + '\n' + second + '\n')
-    assert recorder.tick() is True
-    assert _rows(store, header['id']) == [first, second]
+    assert worker.tick() is _Progress.ADVANCED
+    assert _rows(store, worker.trail_id) == [first, second]
+
+  def test_a_refused_append_is_retried_whole(self, environment, store):
+    lines = [_user('hello', 'u1'), _assistant('hi', 'a1')]
+    worker = _worker(store, _write_segment(environment, 'seg-1', lines))
+    store.refusals = 1
+
+    with pytest.raises(RuntimeError):
+      worker.tick()
+
+    assert worker.tick() is _Progress.ADVANCED
+    assert _rows(store, worker.trail_id) == lines
+
+  def test_a_segment_shrinking_below_the_trail_rewinds(self, environment, store):
+    path = _write_segment(environment, 'seg-1', [_user('hello', 'u1'), _assistant('hi', 'a1')])
+    worker = _worker(store, path)
+    worker.tick()
+    _write_segment(environment, 'seg-1', [_user('different', 'x1')])
+
+    assert worker.tick() is _Progress.REWOUND
 
   def test_quiet_tick_keepalives_after_the_idle_interval(self, environment, store):
-    _write_segment(environment, 'seg-1', [_user('hello', 'u1')])
-    recorder = _recorder(environment, store)
-    recorder.tick()
+    worker = _worker(store, _write_segment(environment, 'seg-1', [_user('hello', 'u1')]))
+    worker.tick()
 
-    assert recorder.tick() is False
+    assert worker.tick() is _Progress.QUIET
     assert store.keepalives == []  # inside the idle window: no traffic
 
-    assert recorder._recording is not None
-    recorder._recording._last_write_monotonic = time.monotonic() - 120.0
-    assert recorder.tick() is False
-    assert store.keepalives == [_trails(store)[0]['id']]
+    worker._recording._last_write_monotonic = time.monotonic() - 120.0
+    assert worker.tick() is _Progress.QUIET
+    assert store.keepalives == [worker.trail_id]
 
 
 class TestLifetimeForks:
@@ -380,6 +446,22 @@ class TestTransitions:
     assert fork['forked_from'] == {'trail_id': first_id, 'step_id': 1}
     assert _rows(store, fork['id']) == [_EPHEMERA, *tail]
 
+  def test_a_rewritten_segment_closes_its_trail_for_good(self, environment, store):
+    lines = [_user('hello', 'u1'), _assistant('hi', 'a1')]
+    _write_segment(environment, 'seg-1', lines)
+    recorder = _recorder(environment, store)
+    recorder.tick()
+    first_id = _trails(store)[0]['id']
+    _write_segment(environment, 'seg-1', [_user('different', 'x1')])
+
+    assert recorder.tick() is True
+    assert store.get_trail(first_id)['end']['reason'] == 'ok'
+    assert _rows(store, first_id) == lines
+
+    # the rewritten file is consumed: no second trail records it
+    assert recorder.tick() is False
+    assert len(_trails(store)) == 1
+
   def test_transition_holds_while_the_active_segment_grows(self, environment, store):
     lines = [_user('hello', 'u1')]
     path = _write_segment(environment, 'seg-1', lines)
@@ -417,25 +499,36 @@ class TestClose:
     assert trail_pointer.read(trail_pointer.path()) is None
 
   def test_terminal_raise_ends_the_trail_raised(self, environment, store):
-    _write_segment(environment, 'seg-1', [_user('go', 'u1'), _raise_call('no api key')])
-    recorder = _recorder(environment, store)
-    recorder.tick()
-    recorder.finalize()
+    path = _write_segment(environment, 'seg-1', [_user('go', 'u1'), _raise_call('no api key')])
+    worker = _worker(store, path)
 
-    end = store.get_trail(_trails(store)[0]['id'])['end']
+    worker.close()
+
+    end = store.get_trail(worker.trail_id)['end']
     assert (end['reason'], end['detail']) == ('raised', 'no api key')
 
   def test_a_later_real_user_message_clears_the_raise(self, environment, store):
-    _write_segment(
+    path = _write_segment(
       environment,
       'seg-1',
       [_user('go', 'u1'), _raise_call('stuck'), _user('resumed', 'u2')],
     )
-    recorder = _recorder(environment, store)
-    recorder.tick()
-    recorder.finalize()
+    worker = _worker(store, path)
 
-    assert store.get_trail(_trails(store)[0]['id'])['end']['reason'] == 'ok'
+    worker.close()
+
+    assert store.get_trail(worker.trail_id)['end']['reason'] == 'ok'
+
+  def test_closing_a_rewound_segment_ends_the_trail_without_appending(self, environment, store):
+    lines = [_user('hello', 'u1'), _assistant('hi', 'a1')]
+    worker = _worker(store, _write_segment(environment, 'seg-1', lines))
+    worker.tick()
+    _write_segment(environment, 'seg-1', [_user('different', 'x1')])
+
+    worker.close()
+
+    assert store.get_trail(worker.trail_id)['end']['reason'] == 'ok'
+    assert _rows(store, worker.trail_id) == lines
 
   def test_finalize_without_an_adopted_segment_is_a_noop(self, environment, store):
     recorder = _recorder(environment, store, started_after=time.time())

@@ -25,7 +25,7 @@ then `end` with `ok`, or `raised` plus the reason when the transcript's
 terminal record stream carries a bro `raise` service-tool call.
 """
 
-import dataclasses
+import enum
 import json
 import os
 import signal
@@ -34,7 +34,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, NamedTuple, Optional
 
 from bro.base import configs, credentials, log
 from bro.base.args import Parser
@@ -51,8 +51,30 @@ _RAISE_TOOL = 'mcp__bro__raise'
 # digest the stored row would hold
 _EvidenceLine = list[Optional[str]]
 
-# a segment file's identity for one tick: name, modification time, size
-_Signature = tuple[str, int, int]
+
+class _Signature(NamedTuple):
+  """a segment file's identity for one tick; an unchanged one means nothing was
+  written to the file since it was taken."""
+
+  segment: str
+  modified_ns: int
+  size: int
+
+
+class _Position(NamedTuple):
+  """how far a segment file has been consumed, and the identity it carried at
+  that read — the pair is what makes `byte_extent` trustworthy."""
+
+  signature: _Signature
+  byte_extent: int
+
+
+class _Progress(enum.Enum):
+  """what one pass over the recorded segment found."""
+
+  QUIET = enum.auto()
+  ADVANCED = enum.auto()
+  REWOUND = enum.auto()
 
 
 def _user_content_has_text(content: Any) -> bool:
@@ -109,23 +131,12 @@ def _evidence_lines(file_lines: list[str]) -> list[_EvidenceLine]:
   return [[_record_uuid(line), payload_sha256(line)] for line in file_lines]
 
 
-@dataclasses.dataclass
-class _Stream:
-  """the segment line ranges the active trail holds — at most a pre-copy head
-  plus the tail, each `[start, end)`. The final range's end is the consumed line
-  extent as uploaded; `line_count` is how many rows the server holds."""
-
-  trail_id: str
-  segment: str
-  chunks: list[list[int]]
-
-  @property
-  def extent(self) -> int:
-    return self.chunks[-1][1]
-
-  @property
-  def line_count(self) -> int:
-    return sum(end - start for start, end in self.chunks)
+def _signature(path: Path) -> Optional[_Signature]:
+  try:
+    stat = path.stat()
+  except FileNotFoundError:
+    return None
+  return _Signature(path.stem, stat.st_mtime_ns, stat.st_size)
 
 
 def _modified_at(path: Path) -> float:
@@ -193,10 +204,86 @@ def _verdict_chunks(result: dict) -> list[list[int]]:
   return [list(chunk) for chunk in chunks]
 
 
+class _SegmentRecorder:
+  """records one segment file into one trail: the lines the blaze verdict
+  awarded the trail, then every line the file grows by."""
+
+  def __init__(
+    self,
+    store: TrailsStore,
+    path: Path,
+    trail_id: str,
+    *,
+    pending: list[str],
+    position: _Position,
+  ) -> None:
+    """`pending` are the awarded lines and `position` the read they came from;
+    the trail owns everything the file carries past it."""
+    self.path = path
+    self.trail_id = trail_id
+    self._store = store
+    self._recording = Recording(store, trail_id, 0)
+    self._pending = pending
+    self._position = position
+
+  @property
+  def segment(self) -> str:
+    return self.path.stem
+
+  def tick(self) -> _Progress:
+    """record what the trail is owed — the awarded lines, then whatever the
+    segment has grown by."""
+    signature = _signature(self.path)
+    if signature is None:
+      self._recording.keepalive_if_idle()
+      return _Progress.QUIET
+    if signature.size < self._position.byte_extent:
+      return _Progress.REWOUND
+    records, byte_extent = self._pending, self._position.byte_extent
+    if signature != self._position.signature:
+      grown, byte_extent = _read_lines_after(self.path, byte_extent)
+      records = [*records, *grown]
+    if len(records) == 0:
+      self._position = _Position(signature, byte_extent)
+      self._recording.keepalive_if_idle()
+      return _Progress.QUIET
+    self._recording.append(records)
+    self._pending = []
+    self._position = _Position(signature, byte_extent)
+    log.info(
+      'recorded trail %s (%d lines, segment %s)',
+      self.trail_id,
+      self._recording.extent,
+      self.segment[:12],
+    )
+    return _Progress.ADVANCED
+
+  def is_quiet(self) -> bool:
+    """True when the segment has not been written since the last read."""
+    signature = _signature(self.path)
+    return signature is None or signature == self._position.signature
+
+  def close(self) -> None:
+    """final append, then end the trail — `ok`, or `raised` with the reason
+    when the recorded stream's terminal state is a raise call."""
+    self.tick()
+    raised = _terminal_raise_reason(
+      self._store.iter_messages(self.trail_id, types={'tool_call', 'user_input'})
+    )
+    if raised is not None:
+      detail = raised if len(raised) > 0 else 'raise reason unavailable'
+      self._recording.end('raised', detail=detail)
+    else:
+      self._recording.end('ok')
+    log.info('trail %s ended (%s)', self.trail_id, 'raised' if raised is not None else 'ok')
+
+
 class Recorder:
-  """tracks one workspace's active transcript and records it. `started_after`
-  gates segment adoption to files modified after the session launched, so a
-  reused workspace's older transcripts are not re-recorded."""
+  """supervises one workspace's transcripts: which segment file is the session's
+  transcript right now, what lineage evidence its trail is blazed from, and when
+  the segment it handed to a `_SegmentRecorder` is over. `started_after` gates
+  segment adoption to files modified after the session launched, so a reused
+  workspace's older transcripts are not re-recorded."""
 
   def __init__(
     self,
@@ -214,13 +301,9 @@ class Recorder:
     self.llm = llm
     self.cw_command = cw_command
     self.started_after = started_after
-    self.active: Optional[_Stream] = None
-    self._recording: Optional[Recording] = None
+    self._active: Optional[_SegmentRecorder] = None
     self._consumed: set[str] = set()
-    self._recorded_signature: Optional[_Signature] = None
-    self._active_signature: Optional[_Signature] = None
     self._declined_signature: Optional[_Signature] = None
-    self._active_byte_extent = 0
     # a stale pointer from a previous lifetime must not attribute this
     # session's summons to an ended trail
     trail_pointer.clear()
@@ -229,20 +312,29 @@ class Recorder:
 
   def tick(self) -> bool:
     """one pass; True when a server write advanced the trail."""
-    if self.active is None:
+    active = self._active
+    if active is None:
       return self._maybe_adopt()
     candidate = self._pick_segment()
-    if candidate is not None and candidate.stem != self.active.segment:
-      return self._maybe_transition(candidate)
-    return self._append_if_changed()
+    if candidate is not None and candidate.stem != active.segment:
+      return self._maybe_transition(active, candidate)
+    return self._advance(active)
 
   def finalize(self) -> bool:
     """the daemon's shutdown pass: one last append, then end the trail."""
-    if self.active is None:
+    if self._active is None:
       self._maybe_adopt()
-    if self.active is None:
+    if self._active is None:
       return False
-    self._close_active()
+    self._close(self._active)
+    return True
+
+  def _advance(self, active: _SegmentRecorder) -> bool:
+    progress = active.tick()
+    if progress is not _Progress.REWOUND:
+      return progress is _Progress.ADVANCED
+    log.warning('segment %s shrank below trail %s; closing', active.segment[:12], active.trail_id)
+    self._close(active)
     return True
 
   # --- segment selection ----------------------------------------------------------
@@ -250,7 +342,7 @@ class Recorder:
   def _pick_segment(self) -> Optional[Path]:
     if not self.projects_dir.is_dir():
       return None
-    active = self.active.segment if self.active is not None else None
+    active = self._active.segment if self._active is not None else None
     best: Optional[Path] = None
     best_mtime = 0.0
     for path in self.projects_dir.iterdir():
@@ -267,26 +359,18 @@ class Recorder:
         best_mtime = mtime
     return best
 
-  @staticmethod
-  def _signature(path: Path) -> Optional[_Signature]:
-    try:
-      stat = path.stat()
-    except FileNotFoundError:
-      return None
-    return (path.stem, stat.st_mtime_ns, stat.st_size)
-
   # --- adoption -------------------------------------------------------------------
 
   def _maybe_adopt(self) -> bool:
     path = self._pick_segment()
     if path is None:
       return False
-    signature = self._signature(path)
+    signature = _signature(path)
     if signature is None or signature == self._declined_signature:
       # unchanged since the resolver declined it; ask again when it grows
       return False
     try:
-      file_lines = _read_lines(path)
+      file_lines, byte_extent = _read_lines_after(path, 0)
     except OSError:
       return False
     lines = _evidence_lines(file_lines)
@@ -299,10 +383,22 @@ class Recorder:
       'lines': lines,
       'related_segments': self._related_segments(path, lines),
     }
-    if not self._blaze(path.stem, lineage):
+    verdict = self._blaze(path.stem, lineage)
+    if verdict is None:
       self._declined_signature = signature
       return False
-    self._append_if_changed()
+    chunks = _verdict_chunks(verdict)
+    awarded = _compose(file_lines, [*chunks[:-1], [chunks[-1][0], len(file_lines)]])
+    active = _SegmentRecorder(
+      self.client,
+      path,
+      verdict['id'],
+      pending=awarded,
+      position=_Position(signature, byte_extent),
+    )
+    self._active = active
+    trail_pointer.publish(active.trail_id)
+    active.tick()
     return True
 
   def _related_segments(self, path: Path, lines: list[_EvidenceLine]) -> list[str]:
@@ -326,9 +422,9 @@ class Recorder:
 
   # --- trail lifecycle ------------------------------------------------------------
 
-  def _blaze(self, segment: str, lineage: dict) -> bool:
-    """open the trail this transcript continues; False when the resolver
-    declines to adopt the segment yet."""
+  def _blaze(self, segment: str, lineage: dict) -> Optional[dict]:
+    """open the trail this transcript continues and return the verdict; None
+    when the resolver declines to adopt the segment yet."""
     body: dict[str, Any] = {'records': []}
     context = _launch_context()
     if context is not None:
@@ -353,14 +449,9 @@ class Recorder:
     result = self.client.blaze(request)
     if result.get('adopted') is False:
       log.info('segment %s not adopted yet (%s)', segment[:12], result.get('reason'))
-      return False
+      return None
     trail_id = result['id']
     forked_from = result.get('forked_from')
-    self.active = _Stream(trail_id=trail_id, segment=segment, chunks=_verdict_chunks(result))
-    self._recording = Recording(self.client, trail_id, 0)
-    self._recorded_signature = None
-    self._active_byte_extent = 0
-    trail_pointer.publish(trail_id)
     if forked_from is None:
       log.info(
         'trail %s opens at segment %s (root: %s)', trail_id, segment[:12], result.get('reason')
@@ -373,79 +464,10 @@ class Recorder:
         forked_from['trail_id'],
         forked_from['step_id'],
       )
-    return True
+    return result
 
-  def _active_path(self) -> Path:
-    assert self.active is not None
-    return self.projects_dir / (self.active.segment + '.jsonl')
-
-  def _append_if_changed(self) -> bool:
-    active = self.active
-    assert active is not None
-    path = self._active_path()
-    signature = self._signature(path)
-    if signature is None:
-      self._keepalive_if_idle()
-      return False
-    self._active_signature = signature
-    if signature == self._recorded_signature:
-      self._keepalive_if_idle()
-      return False
-
-    if self._recorded_signature is None:
-      file_lines, byte_extent = _read_lines_after(path, 0)
-      if len(file_lines) < active.chunks[-1][0]:
-        log.warning(
-          'segment %s shrank below trail %s; closing', active.segment[:12], active.trail_id
-        )
-        self._close_active(append=False)
-        return True
-      chunks = [list(chunk) for chunk in active.chunks]
-      chunks[-1][1] = len(file_lines)
-      records = _compose(file_lines, chunks)
-      offset = 0
-    else:
-      if signature[2] < self._active_byte_extent:
-        log.warning(
-          'segment %s shrank below trail %s; closing', active.segment[:12], active.trail_id
-        )
-        self._close_active(append=False)
-        return True
-      records, byte_extent = _read_lines_after(path, self._active_byte_extent)
-      offset = active.line_count
-      chunks = [list(chunk) for chunk in active.chunks]
-      chunks[-1][1] += len(records)
-
-    if len(records) == 0:
-      self._recorded_signature = signature
-      self._keepalive_if_idle()
-      return False
-    recording = self._recording
-    assert recording is not None
-    if recording.extent != offset:
-      raise RuntimeError(
-        f'local extent for trail {active.trail_id} is {recording.extent}, expected {offset}'
-      )
-    recording.append(records)
-    active.chunks = chunks
-    self._active_byte_extent = byte_extent
-    self._recorded_signature = signature
-    log.info(
-      'recorded trail %s (%d lines, segment %s)',
-      active.trail_id,
-      active.line_count,
-      active.segment[:12],
-    )
-    return True
-
-  def _keepalive_if_idle(self) -> None:
-    if self._recording is not None:
-      self._recording.keepalive_if_idle()
-
-  def _maybe_transition(self, new_path: Path) -> bool:
-    active = self.active
-    assert active is not None
-    if not self._active_is_quiet():
+  def _maybe_transition(self, active: _SegmentRecorder, new_path: Path) -> bool:
+    if not self._active_is_quiet(active):
       # a live active segment plus an unrelated newer jsonl: hold rather than
       # flip recording back and forth between two growing files
       log.warning(
@@ -453,47 +475,20 @@ class Recorder:
         new_path.stem[:12],
         active.segment[:12],
       )
-      return self._append_if_changed()
-    self._close_active()
+      return self._advance(active)
+    self._close(active)
     self._maybe_adopt()
     return True
 
-  def _active_is_quiet(self) -> bool:
-    signature = self._signature(self._active_path())
-    if signature is None:
-      return True
-    try:
-      if self._active_path().stat().st_mtime < self.started_after:
-        return True
-    except FileNotFoundError:
-      return True
-    return signature == self._active_signature
+  def _active_is_quiet(self, active: _SegmentRecorder) -> bool:
+    return _modified_at(active.path) < self.started_after or active.is_quiet()
 
-  def _close_active(self, *, append: bool = True) -> None:
-    """final append, then end the trail — `ok`, or `raised` with the reason
-    when the recorded stream's terminal state is a raise call."""
-    if append:
-      self._append_if_changed()
-      if self.active is None:
-        return
-    active = self.active
-    recording = self._recording
-    assert active is not None and recording is not None
-    raised = _terminal_raise_reason(
-      self.client.iter_messages(active.trail_id, types={'tool_call', 'user_input'})
-    )
-    if raised is not None:
-      detail = raised if len(raised) > 0 else 'raise reason unavailable'
-      recording.end('raised', detail=detail)
-    else:
-      recording.end('ok')
-    log.info('trail %s ended (%s)', active.trail_id, 'raised' if raised is not None else 'ok')
+  def _close(self, active: _SegmentRecorder) -> None:
+    """end the segment's trail and retire it: nothing adopts it again."""
+    active.close()
     self._consumed.add(active.segment)
-    self.active = None
-    self._recording = None
-    self._recorded_signature = None
+    self._active = None
     self._declined_signature = None
-    self._active_byte_extent = 0
     trail_pointer.clear()
 
 

@@ -88,8 +88,8 @@ def test_claude_recorder_writes_through_local_store(tmp_path):
   )
 
   assert recorder.tick() is True
-  assert recorder.active is not None
-  trail_id = recorder.active.trail_id
+  [header] = store.iter_trails(harness='claude')
+  trail_id = header['id']
   assert recorder.finalize() is True
   assert store.get_step(trail_id, 0)['uuid'] == 'uuid-recorder'
   assert store.get_trail(trail_id)['end']['reason'] == 'ok'
