@@ -1,4 +1,5 @@
 import bro.brog.mcp as brog_mcp
+from bro.datasources.current_time import CurrentTime
 from bro.harness import claude
 from bro.llm.mcp import mount
 from bros.bro import Bro
@@ -34,4 +35,5 @@ class Lead(Bro):
     mount(brog_mcp.toolset),
     claude.block(*claude.FILES, *claude.SHELL, *claude.DELEGATION),
   ]
+  data_sources = [CurrentTime()]
   system_prompt = SYSTEM_PROMPT
