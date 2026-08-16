@@ -8,10 +8,12 @@ from typing import Optional
 
 import bro.brog.model as brog_model
 import bro.brog.system as brog_system
-from bro import cw
 from bro.base import credentials, log
 from bro.base.args import Parser
+from bro.cw.flags import add_forwarded_flags, extract_forwarded_argv
 from bro.launch.scope import LaunchScopeError, Surface, launch_view_store, scoped_secrets
+from bro.workspace.git import fetch_ref
+from bro.workspace.paths import fresh_workspace_name, project_root
 from bro.workspace.project import project_config
 
 __cli_name__ = 'dive-in'
@@ -32,7 +34,7 @@ def _shell_quote(s: str) -> str:
 
 def _fresh_origin_head() -> Optional[str]:
   """origin's default-branch tip, freshly fetched; None when origin is unreachable."""
-  return cw.fetch_ref(cw.project_root(), 'HEAD')
+  return fetch_ref(project_root(), 'HEAD')
 
 
 def _prefetch_task(system: brog_system.System, task_ref: str) -> tuple[brog_model.Task, str]:
@@ -104,7 +106,7 @@ def dive_in(
     base = _slugify(command) if command is not None else ''
     if len(base) == 0:
       base = 'dive-in-new'
-    name = cw.fresh_workspace_name(base)
+    name = fresh_workspace_name(base)
     log.info('workspace: %s', name)
     prompt = '[[fix --new ""]]' if command is None else f'[[fix --new {command}]]'
   elif task is not None:
@@ -124,13 +126,13 @@ def dive_in(
     base = _slugify(brog_task.name)
     if len(base) == 0:
       base = 'dive-in'
-    name = cw.fresh_workspace_name(base)
+    name = fresh_workspace_name(base)
     log.info('workspace: %s', name)
 
     os.environ['CW_TASK_ID'] = brog_task.id
   else:
     prompt = command
-    name = cw.fresh_workspace_name('dive-in')
+    name = fresh_workspace_name('dive-in')
     log.info('workspace: %s', name)
 
   cw_command = ['cw', 'ss', *forwarded]
@@ -148,7 +150,7 @@ def main(argv: list[str]) -> Optional[int]:
   parser.add_argument(
     '-n', '--dry-run', action='store_true', help='print the command without running it'
   )
-  cw.add_forwarded_flags(parser)
+  add_forwarded_flags(parser)
   group = parser.add_mutually_exclusive_group()
   group.add_argument('-t', '--task', default=None, help='task id, URL, or issue ref to dive into')
   group.add_argument(
@@ -181,5 +183,5 @@ def main(argv: list[str]) -> Optional[int]:
   # the prefetch binds to the same scope the session launches with, so the
   # scope-shaping flags are read here as well as forwarded
   scope_args = {key: args[key] for key in ('grant', 'revoke', 'bro', 'raw')}
-  forwarded = cw.extract_forwarded_argv(args)
+  forwarded = extract_forwarded_argv(args)
   return dive_in(forwarded=forwarded, **scope_args, **args)

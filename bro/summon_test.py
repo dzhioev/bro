@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from bro import summon
+from bro import summon, summon_status
 from bro.broker.brotocol import Message
 from bro.broker.client import CHANNEL_ENV
 from bro.broker.transport import ChannelID
@@ -437,28 +437,43 @@ def test_may_summon_is_none_without_a_publishing_launch(monkeypatch):
 
 
 def test_list_errors_without_a_status_file_env(monkeypatch, capsys, caplog):
-  monkeypatch.delenv(summon.STATUS_ENV, raising=False)
+  monkeypatch.delenv(summon_status.STATUS_ENV, raising=False)
   assert summon.main(['summon', 'list']) == 1
   assert capsys.readouterr().out == ''
-  assert any(summon.STATUS_ENV in record.getMessage() for record in caplog.records)
+  assert any(summon_status.STATUS_ENV in record.getMessage() for record in caplog.records)
 
 
 def test_list_reports_empty_before_any_summon(tmp_path, monkeypatch, capsys):
   # the host writes the status file with the session's first summon; before that
   # the pointed-at path does not exist and the state is simply empty
-  monkeypatch.setenv(summon.STATUS_ENV, str(tmp_path / 'ws.status.json'))
+  monkeypatch.setenv(summon_status.STATUS_ENV, str(tmp_path / 'ws.status.json'))
   assert summon.main(['summon', 'list']) == 0
   assert json.loads(capsys.readouterr().out) == {'active': [], 'last': None}
 
 
 def test_list_prints_the_recorded_status(tmp_path, monkeypatch, capsys):
   status = {
-    'active': [{'request_id': 'R1', 'target': 'dev', 'trail_id': 'T1', 'started_at': 1.0}],
-    'last': {'request_id': 'R0', 'target': 'bro', 'outcome': 'ok'},
+    'active': [
+      {
+        'request_id': 'R1',
+        'target': 'dev',
+        'trail_id': 'T1',
+        'summoner': {'kind': 'root'},
+        'started_at': 1.0,
+      }
+    ],
+    'last': {
+      'request_id': 'R0',
+      'target': 'bro',
+      'trail_id': 'T0',
+      'summoner': {'kind': 'root'},
+      'outcome': 'ok',
+      'ended_at': 0.5,
+    },
   }
   status_file = tmp_path / 'ws.status.json'
   status_file.write_text(json.dumps(status))
-  monkeypatch.setenv(summon.STATUS_ENV, str(status_file))
+  monkeypatch.setenv(summon_status.STATUS_ENV, str(status_file))
   assert summon.main(['summon', 'list']) == 0
   assert json.loads(capsys.readouterr().out) == status
 

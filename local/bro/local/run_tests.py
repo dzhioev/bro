@@ -169,6 +169,7 @@ PYTEST_FILES = [
   'bro/broker/broxy_test.py',
   'bro/broker/transports/unix_test.py',
   'bro/summon_test.py',
+  'bro/summon_status_test.py',
   'bro/trails/record/bro_test.py',
   'bro/trails/record/claude_test.py',
   'bro/monitor/monitor_test.py',

@@ -1878,22 +1878,22 @@ class TestSummonTool:
 
   @pytest.mark.asyncio
   async def test_summon_list_needs_the_status_file_env(self, monkeypatch):
-    from bro import summon as summon_module
+    from bro import summon_status
 
     monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
-    monkeypatch.delenv(summon_module.STATUS_ENV, raising=False)
+    monkeypatch.delenv(summon_status.STATUS_ENV, raising=False)
     names = await _collect_tool_names(EchoBro()._mcp_servers_for(hold='unattended'))
     assert 'summon_list' not in names
-    monkeypatch.setenv(summon_module.STATUS_ENV, '/anywhere/ws.status.json')
+    monkeypatch.setenv(summon_status.STATUS_ENV, '/anywhere/ws.status.json')
     names = await _collect_tool_names(EchoBro()._mcp_servers_for(hold='unattended'))
     assert 'summon_list' in names
 
   @pytest.mark.asyncio
   async def test_summon_list_returns_the_recorded_status(self, monkeypatch):
-    from bro import summon as summon_module
+    from bro import summon as summon_module, summon_status
 
     monkeypatch.setenv('BROKER_CHANNEL', 'unix:/run/broker.sock')
-    monkeypatch.setenv(summon_module.STATUS_ENV, '/anywhere/ws.status.json')
+    monkeypatch.setenv(summon_status.STATUS_ENV, '/anywhere/ws.status.json')
     status = {'active': [], 'last': {'request_id': 'R1', 'outcome': 'ok'}}
     monkeypatch.setattr(summon_module, 'list_summons', lambda: status)
     tool = await _find_tool(EchoBro(), 'summon_list')

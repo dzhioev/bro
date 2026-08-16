@@ -700,18 +700,33 @@ class TestDispatch:
 
 
 class TestStdlibOnlyImport:
+  # cwd is the repo root (run_tests invokes pytest there), so `import
+  # bro.base.args` resolves in these subprocesses.
   def test_imports_and_parses_without_icecream(self):
-    # bro.base.args must import in a stdlib-only environment (no venv); icecream is
-    # optional. simulate its absence in a fresh subprocess. cwd is the repo root
-    # (run_tests invokes pytest there), so `import bro.base.args` resolves.
+    # bro.base.args must import and parse in a stdlib-only environment (no venv);
+    # simulate icecream's absence in a fresh subprocess.
     import subprocess
 
     code = (
       "import sys; sys.modules['icecream'] = None; "
       'import bro.base.args; '
       "namespace = bro.base.args.Parser().parse(['prog']); "
-      "assert 'ic' not in namespace and '--ic' not in bro.base.args.Parser().format_help(); "
+      "assert 'ic' not in namespace; "
       "print('ok')"
+    )
+    result = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == 'ok'
+
+  def test_parsing_does_not_import_icecream(self):
+    # every CLI in the repository builds a parser, and icecream costs more to
+    # import than the whole of argparse — only --ic may pay for it
+    import subprocess
+
+    code = (
+      'import sys, bro.base.args; '
+      "bro.base.args.Parser().parse(['prog']); "
+      "assert 'icecream' not in sys.modules; print('ok')"
     )
     result = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
