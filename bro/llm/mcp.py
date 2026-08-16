@@ -426,8 +426,7 @@ def sh(command: str, *argument_names: str) -> ToolLayer:
   `command` is a program name and any subcommands (`'bro list'`); the tool's
   signature is derived from the command's own argument declarations when the
   server is built, and `argument_names` narrows the exposure to the named
-  arguments (all of them by default), which is how a declaration hands out a
-  command's roster without its every flag. Nothing is imported or run here — a
+  arguments, defaulting to all of them. Nothing is imported or run here — a
   command that cannot be read, or a required argument withheld from the
   exposure, fails at build.
 

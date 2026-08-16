@@ -19,8 +19,6 @@ from bro.llm.mcp import InProcessMCPServer, Tool
 
 NAMESPACE = 'sh'
 
-# wall-clock cap on a command; on expiry the whole process group is killed. Fixed
-# rather than exposed, so a generated tool's parameters stay the command's own.
 TIMEOUT_SECONDS = 45
 
 
@@ -63,8 +61,8 @@ class _CommandTool(Tool):
     self._description = _description(signature, arguments)
     self._parameters = {
       'type': 'object',
-      'properties': {a.name: _parameter_schema(a) for a in arguments},
-      'required': [a.name for a in arguments if a.required],
+      'properties': {argument.name: _parameter_schema(argument) for argument in arguments},
+      'required': [argument.name for argument in arguments if argument.required],
     }
 
   @property

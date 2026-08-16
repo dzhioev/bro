@@ -597,7 +597,7 @@ def _argument(action: argparse.Action) -> Argument:
     required=bool(action.required),
     kind=kind,
     option=option,
-    choices=() if action.choices is None else tuple(str(c) for c in action.choices),
+    choices=() if action.choices is None else tuple(str(choice) for choice in action.choices),
     value_type=value_type,
   )
 

@@ -50,7 +50,6 @@ class TestDeclaration:
       sh('   ')
 
   def test_declaration_neither_reads_nor_runs_the_command(self):
-    # only build() introspects, so a declaration of an absent command is inert
     sh('definitely-not-installed subcommand')
 
 
