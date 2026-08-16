@@ -13,6 +13,11 @@ __cli_name__ = 'run-tests'
 DIR = Path(__file__).resolve().parents[3]
 
 
+# this checkout's one project outside the workspace, which the root metadata
+# names nowhere, so every tool that walks the members is told about it here
+BENCHMARK = 'benchmark'
+
+
 @dataclass(frozen=True)
 class Distribution:
   directory: str
@@ -47,6 +52,11 @@ DISTRIBUTIONS = [
     directory='local',
     deptry_exclude=('.*_test\\.py$',),
     deptry_known_first_party=('bro', 'bros'),
+  ),
+  Distribution(
+    directory=BENCHMARK,
+    deptry_exclude=('.*_test\\.py$', '.venv/'),
+    deptry_known_first_party=('bro',),
   ),
 ]
 
@@ -189,6 +199,9 @@ PYTEST_FILES = [
 # outside the roster above: it drives the host docker daemon, which the suite's
 # in-container leg has none of
 DOCKER_PYTEST_FILE = 'bro/workspace/launch_smoke_test.py'
+# run from the benchmark project's own environment, the only one that can import
+# it. `bundle_e2e_test.py` stays out: it builds a real bundle and drives docker
+BENCHMARK_PYTEST_FILES = ['bro/benchmark/bundle_test.py']
 
 
 def run(*args: str, extra_env: Optional[dict[str, str]] = None, cwd: Optional[Path] = None) -> None:
@@ -200,9 +213,27 @@ def node_env() -> dict[str, str]:
   return {'NODE_OPTIONS': '--max-old-space-size=4096'}
 
 
+def benchmark_stage() -> None:
+  directory = DIR / BENCHMARK
+  environment = directory / '.venv'
+  # naming the environment uv is about to sync keeps it from reporting the
+  # workspace venv this gate runs from as one it is ignoring
+  in_environment = {'VIRTUAL_ENV': str(environment)}
+  print(f'benchmark: syncing {environment}', file=sys.stderr)
+  run('uv', 'sync', '--all-groups', cwd=directory, extra_env=in_environment)
+  python = str(environment / 'bin' / 'python')
+  print('benchmark: type check', file=sys.stderr)
+  run(python, '-m', 'pyright', cwd=directory, extra_env={**in_environment, **node_env()})
+  print('benchmark: unit suite', file=sys.stderr)
+  run(python, '-m', 'pytest', *BENCHMARK_PYTEST_FILES, cwd=directory, extra_env=in_environment)
+
+
 def main(argv: list[str]) -> Optional[int]:
   parser = Parser(description='run the repository test gate')
   parser.add_argument('--no-docker', action='store_true', help='skip the docker smoke stages')
+  parser.add_argument(
+    '--no-benchmark', action='store_true', help='skip the benchmark project stage'
+  )
   args = parser.parse(argv)
 
   for distribution in DISTRIBUTIONS:
@@ -222,6 +253,10 @@ def main(argv: list[str]) -> Optional[int]:
   run(sys.executable, '-m', 'pyright', extra_env=node_env())
   print('pytest: unit suite', file=sys.stderr)
   run(sys.executable, '-m', 'pytest', *PYTEST_FILES)
+  if args['no_benchmark'] is True:
+    print('skipping the benchmark stage (--no-benchmark)', file=sys.stderr)
+  else:
+    benchmark_stage()
   if args['no_docker'] is True:
     print('skipping the docker smoke stages (--no-docker)', file=sys.stderr)
   elif Path('/.dockerenv').is_file():
