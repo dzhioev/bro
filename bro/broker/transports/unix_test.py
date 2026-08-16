@@ -1,8 +1,11 @@
 import asyncio
 import contextlib
 import os
+import select
 import stat
+import threading
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 import pytest
 
@@ -167,6 +170,35 @@ async def test_peer_disconnect_notifies_sink(socket_dir):
     await _next(server.sink.messages)
     client.close()
     assert await _next(server.sink.disconnects) == provisioned.channel
+
+
+@pytest.mark.asyncio
+async def test_close_completing_before_the_reader_parks_reads_as_eof(socket_dir, monkeypatch):
+  # the losing ordering of the cross-thread abort (ClientTransport.close): close()
+  # finishes before the reading thread reaches select, so the wake-up byte arrives
+  # on an already-closed pipe and the reader meets closed sockets instead
+  async with running_server(socket_dir) as server:
+    provisioned = await server.transport.provision()
+    client = UnixClientTransport(provisioned.host_endpoint)
+    reader_reached_select = threading.Event()
+    close_returned = threading.Event()
+    real_select = select.select
+
+    def select_once_close_has_run(*args):
+      if not reader_reached_select.is_set():
+        reader_reached_select.set()
+        close_returned.wait(TIMEOUT)
+      return real_select(*args)
+
+    monkeypatch.setattr(
+      'bro.broker.transports.unix.select', SimpleNamespace(select=select_once_close_has_run)
+    )
+    receive_task = asyncio.create_task(asyncio.to_thread(client.receive, TIMEOUT))
+    await asyncio.to_thread(reader_reached_select.wait, TIMEOUT)
+    await asyncio.to_thread(client.close)
+    close_returned.set()
+
+    assert await asyncio.wait_for(receive_task, TIMEOUT) is None
 
 
 @pytest.mark.asyncio
