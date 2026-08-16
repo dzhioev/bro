@@ -86,6 +86,29 @@ async def test_served_tool_text_stays_inside_the_roster(name):
 
 
 @pytest.mark.asyncio
+async def test_lead_exposes_the_rewind_read_surface_as_generated_commands():
+  lead = create_bro('lead')
+  tools = {}
+  for server in lead._mcp_servers_for(hold='unattended'):
+    if server.namespace == 'sh':
+      tools.update({tool.name: tool for tool in await server.list_tools()})
+
+  assert {'trails'} <= set(lead.needed_secrets())
+  assert {
+    'rewind_list',
+    'rewind_show',
+    'rewind_steps',
+    'rewind_grep',
+    'rewind_tree',
+  } <= set(tools)
+  assert set(tools['rewind_show'].parameters['properties']) == {
+    'trail_id',
+    'output_offset',
+    'output_limit',
+  }
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('name', sorted(declared_specs()))
 async def test_composed_prompts_leak_no_directives(name):
   bro = create_bro(name)

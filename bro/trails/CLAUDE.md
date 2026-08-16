@@ -53,7 +53,7 @@ Writer-reported outcomes use `end.reason`. Absence of a writer verdict is repres
 - Header responses expose provider-raw usage by model. Provider normalization belongs to the provider-aware usage layer, not the harness adapter.
 - List queries accept exactly one selector — `harness`, `bro`, or `forked_from` — plus the common time range and opaque cursor.
 - `migrate_llm_spec.py` (`migrate-trail-llm-spec`) drives the recipe repair across the store: it holds the policy (which recorded shapes map to which replacement) while the server holds the primitive, reports by default and rewrites under `--apply`. A recipe with no model is left alone — there is nothing to migrate it to.
-- `rewind.py` (`rewind`) is the reader CLI for every harness, working through `TrailsStore`: it owns argument parsing, queries, follow polling, regex matching, and grep context, while every `show`, `steps`, `list`, `tree`, and `grep` record renders through the matching display preset.
+- `rewind.py` (`rewind`) is the reader CLI for every harness, working through `TrailsStore`: it owns argument parsing, queries, follow polling, regex matching, and grep context, while every `show`, `steps`, `list`, `tree`, and `grep` record renders through the matching display preset. The text views accept `--output-offset` / `--output-limit` for bounded windows.
 - `contract_test.py` runs the same contract suite against `LocalStore` and `NetworkStore` over a real loopback aiohttp server backed by `LocalStore`; `claude_lineage_test.py` drives the resolver over a real store, and `record/claude_test.py` drives the recorder over one. `network_test.py` owns transport/retry/error mapping; `server/dynamo_test.py` owns fake-backed Dynamo mechanics.
 
 ## Service auth
