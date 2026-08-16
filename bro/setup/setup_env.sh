@@ -198,19 +198,31 @@ install_claude_code() {
   npx @anthropic-ai/claude-code install
 }
 
+# the compose plugin ships separately from the engine, and benchmark jobs drive
+# every task container through it
+check_docker_compose() {
+  if docker compose version &> /dev/null; then
+    echo "docker compose: $(docker compose version --short)"
+    return
+  fi
+  echo "docker compose plugin missing; benchmark runs need it (Ubuntu: docker-compose-plugin)"
+}
+
 install_docker() {
   if [ "$PLATFORM" != "macOS" ]; then
+    check_docker_compose
     return
   fi
 
   if command -v docker &> /dev/null && docker info &> /dev/null; then
     echo "Docker is already installed and running"
+    check_docker_compose
     return
   fi
 
   check_brew
   echo "Installing Docker (via Colima)..."
-  brew install colima docker docker-buildx
+  brew install colima docker docker-buildx docker-compose
   brew services start colima 2>/dev/null || colima start
 
   # Configure Docker to find Homebrew plugins
@@ -228,6 +240,8 @@ with open('$HOME/.docker/config.json', 'w') as f:
     json.dump(config, f, indent=2)
 "
   fi
+
+  check_docker_compose
 }
 
 install_tkinter() {

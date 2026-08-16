@@ -1,4 +1,4 @@
-"""forking of recorded bro.trails.a *fork* spins up a fresh `Bro` preseeded with a forked_from trail's prefix and
+"""forking of recorded bro.trails.a *fork* spins up a fresh bro preseeded with a forked_from trail's prefix and
 lets the caller continue with `.send(next_message)`. the new run gets its own
 trail with `forked_from={trail_id, step_id}` so the source → child edge is
 queryable through the fork index.
@@ -28,12 +28,12 @@ from collections.abc import Callable
 from typing import Any, Optional, cast
 
 import bro.llm.llms.openai as llm_llms_openai
+from bro.bro import BaseBro
 from bro.llm.llm import LLM, LLMSpec, NativeLLMSpec
 from bro.llm.tracker import NullTracker, Tracker
 from bro.registry import create_bro
 from bro.trails.lineage import walk_chain
 from bro.trails.model import ForkedFrom, RecordedTrail, Step
-from bros.bro import Bro
 
 # the harness whose records this module replays; `bro/trails/record/bro.py`
 # stamps it on every trail it opens
@@ -179,8 +179,8 @@ def fork(
   tracker: Optional[Tracker] = None,
   surface: str,
   fetch_forked_from: Optional[Callable[[str], RecordedTrail]] = None,
-) -> Bro:
-  """spin up a fresh `Bro` preseeded with the forked_from trail's prefix up to
+) -> BaseBro:
+  """spin up a fresh bro preseeded with the forked_from trail's prefix up to
   `up_to_step_id`. call `.send(next_message)` on the returned bro to continue
   the conversation.
 

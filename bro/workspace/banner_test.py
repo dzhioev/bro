@@ -77,6 +77,16 @@ class TestSessionFacts:
     assert facts.cw_command == 'cw ss --hold attended my-task'
     assert facts.prompt is None
 
+  def test_unmanaged_container_has_no_workspace(self, monkeypatch):
+    monkeypatch.setattr(workspace_paths, 'in_container', lambda: True)
+    facts = SessionFacts.collect()
+    assert facts.in_container is True
+    assert facts.name is None
+    assert facts.container_workspace is None
+    assert facts.exec_command is None
+    assert 'workspace_container_path' not in facts.render_llm()
+    assert '(unmanaged container)' in facts.render_visual()
+
   def test_extracts_prompt_from_dive_in_new(self, monkeypatch):
     monkeypatch.setenv('BRO_SHELL_COMMAND', 'dive-in --hold attended --new I want X')
     facts = SessionFacts.collect()

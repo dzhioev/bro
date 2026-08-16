@@ -15,7 +15,7 @@ def test_imports_without_git_metadata(tmp_path):
   assert result.returncode == 0, f'stderr: {result.stderr}'
 
 
-def test_syncs_one_workspace_member_without_scanning_its_siblings(tmp_path):
+def test_syncs_one_project_without_scanning_the_ones_nested_in_it(tmp_path):
   (tmp_path / 'package').mkdir()
   (tmp_path / 'package' / '__init__.py').write_text('')
   (tmp_path / 'package' / 'cli.py').write_text(
@@ -26,6 +26,10 @@ def test_syncs_one_workspace_member_without_scanning_its_siblings(tmp_path):
   (tmp_path / '_entrypoints.py').write_text('stale\n')
   (tmp_path / 'member').mkdir()
   (tmp_path / 'member' / 'foreign.py').write_text('def main(argv):\n  return argv\n')
+  (tmp_path / 'member' / 'pyproject.toml').write_text('[project]\nname = "member"\n')
+  (tmp_path / 'beside').mkdir()
+  (tmp_path / 'beside' / 'unrelated.py').write_text('def main(argv):\n  return argv\n')
+  (tmp_path / 'beside' / 'pyproject.toml').write_text('[project]\nname = "beside"\n')
   (tmp_path / 'pyproject.toml').write_text(
     """[project]
 name = "example"
@@ -51,4 +55,5 @@ members = ["member"]
   assert "_run('package.cli')" in bridge
   assert "_run('top')" in bridge
   assert 'foreign' not in bridge
+  assert 'unrelated' not in bridge
   assert sync_scripts.check(project) is True

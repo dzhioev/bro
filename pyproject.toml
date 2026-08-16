@@ -125,6 +125,7 @@ bro-local = { workspace = true }
 bro = "bros.bro:Bro"
 dev = "bros.dev:Dev"
 lead = "bros.lead:Lead"
+terminal = "bros.terminal:Terminal"
 
 [project.entry-points."bro.credential_sources"]
 github_app = "bro.extra.github.app:Source"
@@ -182,7 +183,7 @@ venv = ".venv"
 line-length = 100
 indent-width = 2
 target-version = "py312"
-src = [".", "dev", "local"]
+src = [".", "dev", "local", "benchmark"]
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "I", "B", "C4", "UP", "PIE", "RUF012"]

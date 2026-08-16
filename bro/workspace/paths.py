@@ -1,8 +1,9 @@
 import os
 import secrets
 from pathlib import Path
+from typing import Optional
 
-from bro.workspace.git import git_out
+from bro.workspace.git import git_run
 
 
 def venv_env(venv: Path) -> dict[str, str]:
@@ -12,14 +13,30 @@ def venv_env(venv: Path) -> dict[str, str]:
   return env
 
 
-def project_root() -> Path:
-  """the repo whose workspaces, broker and summon state the caller shares.
+def find_project_root() -> Optional[Path]:
+  """the repo whose workspaces, broker and summon state the caller shares, or
+  None where nothing names one — no git on PATH, or no repository around the
+  working directory. `project_root` is the form for callers that require one.
 
   resolved through the shared git dir, so every linked worktree of a repo maps to
   its main checkout — one workspace namespace per repo. callers that mean the tree
   their own sources sit in want `bro.base.source_root` instead.
   """
-  return Path(git_out('rev-parse', '--git-common-dir')).resolve().parent
+  try:
+    result = git_run('rev-parse', '--git-common-dir')
+  except FileNotFoundError:
+    return None
+  if result.returncode != 0:
+    return None
+  return Path(result.stdout.strip()).resolve().parent
+
+
+def project_root() -> Path:
+  """`find_project_root` for the callers a project is a precondition of."""
+  root = find_project_root()
+  if root is None:
+    raise ValueError(f'{Path.cwd()} is in no git repository, so it names no project')
+  return root
 
 
 def workspaces_dir(project: Path) -> Path:

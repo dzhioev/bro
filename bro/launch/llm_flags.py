@@ -55,10 +55,11 @@ def add_llm_flags(parser: Parser, *, effort_help: str, fast_help: str) -> None:
 
 def presets() -> dict[str, str]:
   """the `--llm` preset names in scope: the operated project's `[tool.bro.llm]`
-  table, with the host's own `llm` table overriding it per name."""
-  from bro.workspace.project import project_config
+  table, with the host's own `llm` table overriding it per name. Outside any
+  project only the host's names are in scope."""
+  from bro.workspace.project import project_sections
 
-  merged = dict(project_config().sections.get('llm', {}))
+  merged = dict(project_sections().get('llm', {}))
   for name, value in merged.items():
     if not isinstance(value, str) or value == '':
       raise ValueError(f'[tool.bro.llm] preset {name!r} must be a non-empty string')
@@ -67,7 +68,14 @@ def presets() -> dict[str, str]:
 
 
 def selection_from_args(args: dict) -> 'LLMSelection':
-  """the LLM selection `args` spells, with a preset name expanded to its value."""
+  """the LLM selection `args` spells, with a preset name expanded to its value.
+
+  A value that already spells a recipe is read as one and the preset table is
+  never consulted — half of that table lives in the operated project, so a run
+  handed the canonical value (`canonicalize`) resolves it with no repository
+  around it. The names that lose to the grammar are exactly the provider names,
+  the only bare words it accepts.
+  """
   from bro.llm.providers import LLMSelection, LLMSelectionError, parse
 
   value = args.get('llm')
@@ -78,9 +86,12 @@ def selection_from_args(args: dict) -> 'LLMSelection':
       effort=args.get('effort'),
       fast=args.get('fast', False),
     )
-  expanded = presets().get(value)
-  if expanded is None:
+  try:
     return parse(value)
+  except LLMSelectionError:
+    expanded = presets().get(value)
+    if expanded is None:
+      raise
   try:
     return parse(expanded)
   except LLMSelectionError as error:
