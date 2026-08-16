@@ -10,7 +10,7 @@ by reading the recorded evidence and folding it into figures, never by
 estimating from what you remember of it.
 
 Your source is the trail store: every LLM run across every harness is recorded
-there. `rewind` browses it from the shell; `bro.trails.client` is the Python
+there. `rewind` browses it from the shell; `bro.trails.store` is the Python
 surface for anything that needs an aggregate rather than a read. Prefer the
 aggregate a trail header already carries over one you recompute from its steps.
 

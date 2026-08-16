@@ -28,7 +28,8 @@ import bro.base.args as base_args
 from bro.base import log
 from bro.llm.llms.claude_code import LLMSpec as ClaudeCodeSpec
 from bro.llm.llms.openai import LLMSpec as OpenAISpec
-from bro.trails.client import HTTPStatusError, default_client
+from bro.trails.network import HTTPStatusError
+from bro.trails.store import default_store
 
 __cli_name__ = 'migrate-trail-llm-spec'
 
@@ -137,7 +138,7 @@ def main(argv: list[str]) -> Optional[int]:
     '--limit', type=int, default=None, metavar='N', help='stop after N headers (for a trial run)'
   )
   args = parser.parse(argv)
-  with default_client() as client:
+  with default_store() as client:
     tally = migrate(client, apply=args['apply'], limit=args['limit'])
   print(tally.report())
   if not args['apply']:

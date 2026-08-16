@@ -116,6 +116,7 @@ class _ContainerHarness:
       # keep the bro-registry import out; threading is asserted per-test
       patch('bro.launch.summon_control.summon_allow_list', return_value=set()),
       patch('bro.cw.session._load_anthropic_key', return_value={'api_key': 'k'}),
+      patch('bro.cw.session.local_trails_launch_data', return_value=({}, ())),
     ]
     entered = [p.__enter__() for p in self._patches]
     self.env = entered[0]
@@ -127,6 +128,7 @@ class _ContainerHarness:
     self.container_claude_state = entered[6]
     self.drop_workspace = entered[7]
     self.summon_allow_list = entered[9]
+    self.local_trails_launch_data = entered[11]
     return self
 
   def __exit__(self, *exception):
@@ -242,6 +244,29 @@ class TestContainerCommand:
     # container env — never forwarded from the launcher's environment
     launch = h.run_in_container.call_args.args[0]
     assert launch.env['CW_BRO'] == 'dev'
+
+  def test_local_trails_data_is_combined_with_claude_launch_data(self):
+    with _ContainerHarness(secrets={'github', 'trails'}) as harness:
+      harness.container_claude_state.return_value = (
+        ['/host/claude:/home/cw/.claude'],
+        {'CLAUDE_CONFIG_DIR': '/home/cw/.claude'},
+      )
+      harness.local_trails_launch_data.return_value = (
+        {'BRO_TRAILS_DIR': '/home/cw/.bro-trails'},
+        ('/host/trails:/home/cw/.bro-trails',),
+      )
+      result = cw_session.start_session(_spec(drop=True))
+
+    assert result == 0
+    harness.local_trails_launch_data.assert_called_once_with(
+      ScopedSecrets({'github', 'trails'}, set(), True)
+    )
+    launch = harness.run_in_container.call_args.args[0]
+    assert launch.env['BRO_TRAILS_DIR'] == '/home/cw/.bro-trails'
+    assert launch.extra_mounts == (
+      '/host/claude:/home/cw/.claude',
+      '/host/trails:/home/cw/.bro-trails',
+    )
 
   def test_raw_carried_in_the_container_command(self):
     with _ContainerHarness() as h:

@@ -380,12 +380,9 @@ def _claude_user_messages(record: dict, native: dict, message: dict) -> list[dic
 
 
 def _claude_project(record: dict) -> list[dict]:
-  native = record.get('record')
+  native = _claude_parse(record).native['record']
   if not isinstance(native, dict):
-    parsed = _claude_parse(record)
-    native = parsed.native['record']
-  if not isinstance(native, dict):
-    return [_event(record, 'harness_event', raw=record.get('raw', record.get('body')))]
+    return [_event(record, 'harness_event', raw=record.get('body'))]
   message = native.get('message')
   if native.get('type') == 'assistant' and isinstance(message, dict):
     return _claude_assistant_messages(record, native, message)

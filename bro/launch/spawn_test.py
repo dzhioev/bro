@@ -29,6 +29,11 @@ class TestSummonLowering:
       ),
     )
     monkeypatch.setattr(
+      bro.launch.bro_run,
+      'local_trails_launch_data',
+      lambda scoped: ({}, ()),
+    )
+    monkeypatch.setattr(
       bro.launch.spawn,
       'resolve_head',
       lambda root, repository: 'PARENT-SHA' if repository == PARENT_WORKSPACE else None,

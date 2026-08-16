@@ -244,6 +244,8 @@ def prepare_container(launch: Launch, project: Path) -> str:
   _ensure_image(tag)
   log.verbose('hydrating the scoped credential store')
   store = credentials.build_scoped_store(launch.secrets, optional=launch.optional_secrets)
+  extra_env = dict(launch.env)
+  extra_mounts = list(launch.extra_mounts)
   argv = _docker_create_argv(
     tag,
     launch.name,
@@ -252,10 +254,10 @@ def prepare_container(launch: Launch, project: Path) -> str:
     branch,
     launch.command,
     docker_sock=launch.docker_sock,
-    extra_env=launch.env,
+    extra_env=extra_env,
     forward_env=launch.forward_env,
     tty=launch.tty,
-    extra_mounts=list(launch.extra_mounts),
+    extra_mounts=extra_mounts,
   )
   return _create_container(argv, _bro_tarball(store), launch.name)
 

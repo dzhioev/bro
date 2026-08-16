@@ -15,6 +15,7 @@ from typing import Any, Literal, Optional
 
 from bro.base import credentials
 from bro.launch.identity import bro_git_identity_env
+from bro.launch.trails import local_trails_launch_data
 from bro.summon import SUMMONER_ENV
 from bro.workspace.docker import Launch
 from bro.workspace.store import ScopedSecrets
@@ -53,6 +54,9 @@ def describe(
     env['TRAILS_DISABLED'] = '1'
   if summoner is not None:
     env[SUMMONER_ENV] = json.dumps(summoner, ensure_ascii=False, separators=(',', ':'))
+  launch_scope = ScopedSecrets(required, set(scoped.optional), scoped.docker_sock)
+  trails_env, trails_mounts = local_trails_launch_data(launch_scope)
+  env.update(trails_env)
   return Launch(
     name=workspace_name,
     command=['bro', verb, bro_name, *inner_args, '--in-place'],
@@ -62,4 +66,5 @@ def describe(
     docker_sock=scoped.docker_sock,
     tty=tty,
     forward_env=forward_env,
+    extra_mounts=trails_mounts,
   )

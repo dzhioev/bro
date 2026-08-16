@@ -5,8 +5,8 @@ from typing import Optional
 
 from bro.fork import fork, latest_fork_point
 from bro.llm.llm import NativeLLMSpec
-from bro.trails.client import TrailsClient, fetch_recorded_trail
 from bro.trails.display import DisplayRecord, RecordedAdapter
+from bro.trails.store import TrailsStore, fetch_recorded_trail
 from bros.bro import Bro
 
 RESUME_LATEST = 'latest'
@@ -21,7 +21,7 @@ class ResumedCall:
   trail_id: str
 
 
-def find_latest_call_trail(client: TrailsClient, bro_name: str) -> Optional[str]:
+def find_latest_call_trail(client: TrailsStore, bro_name: str) -> Optional[str]:
   """Return the bro's newest recorded call conversation, when one exists."""
   for header in client.iter_trails(bro=bro_name, max_items=_LATEST_SCAN_LIMIT):
     if header.get('surface') == _CALL_ENTRY_POINT:
@@ -29,14 +29,14 @@ def find_latest_call_trail(client: TrailsClient, bro_name: str) -> Optional[str]
   return None
 
 
-def conversation_history(client: TrailsClient, trail_id: str) -> list[DisplayRecord]:
+def conversation_history(client: TrailsStore, trail_id: str) -> list[DisplayRecord]:
   """Normalize the recorded conversation and its exact fork-bounded ancestors."""
   target = client.get_trail(trail_id)
   return RecordedAdapter(client).conversation_records(target)
 
 
 def resume(
-  client: TrailsClient,
+  client: TrailsStore,
   bro_name: str,
   trail_ref: str,
   *,

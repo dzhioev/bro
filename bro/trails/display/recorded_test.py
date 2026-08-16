@@ -12,7 +12,6 @@ from bro.llm.observer import (
   TurnCompletedEvent,
   TurnStartedEvent,
 )
-from bro.trails.client import TrailsClient
 from bro.trails.display import (
   AssistantText,
   DisplayDataError,
@@ -36,6 +35,7 @@ from bro.trails.display import (
   UserInput,
   preset,
 )
+from bro.trails.store import TrailsStore
 
 
 class FakeClient:
@@ -71,8 +71,8 @@ class FakeClient:
     yield from self.children.get(parent_id, [])
 
 
-def _client(fake: FakeClient) -> TrailsClient:
-  return cast(TrailsClient, fake)
+def _client(fake: FakeClient) -> TrailsStore:
+  return cast(TrailsStore, fake)
 
 
 def _header(trail_id: str, **changes: Any) -> dict[str, Any]:

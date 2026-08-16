@@ -4,7 +4,6 @@ from collections.abc import Iterable
 from datetime import datetime
 from typing import Any
 
-from bro.trails.client import TrailsClient
 from bro.trails.display.core import DisplayDataError
 from bro.trails.display.records import (
   AssistantText,
@@ -31,6 +30,7 @@ from bro.trails.display.records import (
 )
 from bro.trails.lineage import walk_header_chain
 from bro.trails.model import MESSAGE_TYPES, UNREPORTED_END_INFERENCE, spill_descriptor
+from bro.trails.store import TrailsStore
 
 
 def _require_string(value: Any, name: str, *, nonempty: bool = False) -> str:
@@ -162,7 +162,7 @@ def _native_header_fields(header: dict[str, Any]) -> list[tuple[str, Any]]:
 class RecordedAdapter:
   """Stateful converter for one recorded display session."""
 
-  def __init__(self, client: TrailsClient):
+  def __init__(self, client: TrailsStore):
     self.client = client
     self._source_occurrences: dict[tuple[str, int, int], int] = {}
 
@@ -287,7 +287,7 @@ class RecordedAdapter:
       kind = step.get('kind')
       if kind is not None:
         kind = _require_string(kind, 'step kind', nonempty=True)
-      body_value = step.get('raw') if 'raw' in step else step.get('body')
+      body_value = step.get('body')
       if kind == 'end' and isinstance(body_value, dict) and body_value.get('reason') == 'terminal':
         body_value = {**body_value, 'reason': 'ok'}
       descriptor = spill_descriptor(body_value)
@@ -307,8 +307,6 @@ class RecordedAdapter:
         'ts',
         'turn_index',
         'body',
-        'raw',
-        'record',
         'where',
       }
       attributes = []

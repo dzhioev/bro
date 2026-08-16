@@ -49,6 +49,7 @@ def _stub_scoped_store(monkeypatch):
   monkeypatch.setattr(
     'bro.launch.scope.credentials.build_scoped_store', lambda names, optional=(): {}
   )
+  monkeypatch.setattr('bro.launch.bro_run.local_trails_launch_data', lambda scoped: ({}, ()))
 
 
 class MockLLM(LLM):
@@ -629,7 +630,7 @@ def test_call_resume_runs_the_resumed_bro(monkeypatch, capsys):
   monkeypatch.setenv('CW_IN_CONTAINER', '1')
   monkeypatch.setattr('bro.registry.get_class', lambda name: _ChatBro)
   monkeypatch.setattr('bro.launch.resume.resume', fake_resume)
-  monkeypatch.setattr('bro.trails.client.default_client', lambda: MagicMock())
+  monkeypatch.setattr('bro.trails.store.default_store', lambda: MagicMock())
   monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
   monkeypatch.setattr('bro.launch.call._tty_supported', lambda: False)
 

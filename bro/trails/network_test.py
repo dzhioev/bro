@@ -5,14 +5,18 @@ from unittest.mock import patch
 
 import pytest
 
-from bro.trails.client import (
-  HTTPStatusError,
-  TrailsClient,
+from bro.trails.model import BlazeRequest, ForkedFrom, RecordedTrail, Step, Trail
+from bro.trails.network import (
+  NetworkStore,
+)
+from bro.trails.store import (
+  AppendConflict,
+  TrailNotFound,
+  TransientUnavailable,
   fetch_recorded_trail,
   step_from_row,
   trail_from_header,
 )
-from bro.trails.model import ForkedFrom, RecordedTrail, Step, Trail
 
 
 class _FakeResponse:
@@ -64,14 +68,29 @@ def _install_fake_connection(monkeypatch) -> _FakeConnection:
   return fake
 
 
-def _client() -> TrailsClient:
-  return TrailsClient('https://bro.trails.example', 'tok')
+def _client() -> NetworkStore:
+  return NetworkStore('https://bro.trails.example', 'tok')
 
 
 class TestConstructor:
-  def test_rejects_non_https(self):
-    with pytest.raises(ValueError, match='https'):
-      TrailsClient('http://bro.trails.example', 'tok')
+  @pytest.mark.parametrize(
+    'base_url',
+    ['http://127.0.0.1:8004', 'http://localhost:8004', 'http://[::1]:8004'],
+  )
+  def test_accepts_loopback_http(self, base_url):
+    NetworkStore(base_url, 'tok')
+
+  def test_rejects_non_loopback_http(self):
+    with pytest.raises(ValueError, match='https or loopback http'):
+      NetworkStore('http://bro.trails.example', 'tok')
+
+  def test_uses_plain_http_connection_for_loopback(self, monkeypatch):
+    fake = _FakeConnection()
+    monkeypatch.setattr(http.client, 'HTTPConnection', lambda *args, **kwargs: fake)
+    fake.queue((200, b'{"id": "T1"}'))
+
+    store = NetworkStore('http://127.0.0.1:8004', 'tok')
+    assert store.get_trail('T1') == {'id': 'T1'}
 
 
 class TestGetTrail:
@@ -90,9 +109,8 @@ class TestGetTrail:
     fake = _install_fake_connection(monkeypatch)
     fake.queue((404, b'not found'))
     c = _client()
-    with pytest.raises(HTTPStatusError) as exception_info:
+    with pytest.raises(TrailNotFound):
       c.get_trail('missing')
-    assert exception_info.value.status == 404
     assert len(fake.requests) == 1
 
 
@@ -111,10 +129,10 @@ class TestLineageLookups:
 
   def test_reads_one_step_and_bounded_uuid_projection(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
-    fake.queue((200, b'{"step_id": 4, "raw": "line"}'))
+    fake.queue((200, b'{"step_id": 4, "body": "line"}'))
     fake.queue((200, b'{"steps": [{"step_id": 4, "uuid": "u4"}]}'))
     client = _client()
-    assert client.get_step('T1', 4)['raw'] == 'line'
+    assert client.get_step('T1', 4)['body'] == 'line'
     assert client.get_step_uuids('T1', through=4) == [{'step_id': 4, 'uuid': 'u4'}]
     assert fake.requests[0][1] == '/v1/trails/T1/steps/4'
     assert fake.requests[1][1] == '/v1/trails/T1/steps/uuids?through=4'
@@ -223,7 +241,7 @@ class TestRetryBehavior:
     fake.queue(ConnectionError('blip 1'))
     fake.queue(ConnectionError('blip 2'))
     c = _client()
-    with pytest.raises(ConnectionError):
+    with pytest.raises(TransientUnavailable):
       c.get_trail('T1')
 
   def test_retryable_status_recovered(self, monkeypatch):
@@ -238,9 +256,8 @@ class TestRetryBehavior:
     fake.queue((503, b'unavailable 1'))
     fake.queue((503, b'unavailable 2'))
     c = _client()
-    with pytest.raises(HTTPStatusError) as exception_info:
+    with pytest.raises(TransientUnavailable):
       c.get_trail('T1')
-    assert exception_info.value.status == 503
 
 
 class TestLaunchContext:
@@ -253,30 +270,57 @@ class TestLaunchContext:
 
   def test_absent_context_is_none(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
-    fake.queue((404, b'no launch context'))
+    fake.queue((200, b'{"launch_context": null}'))
     assert _client().get_launch_context('T1') is None
+
+  def test_missing_trail_is_not_found(self, monkeypatch):
+    fake = _install_fake_connection(monkeypatch)
+    fake.queue((404, b'trail not found'))
+    with pytest.raises(TrailNotFound):
+      _client().get_launch_context('missing')
 
 
 class TestWrites:
-  def test_create_trail_posts_the_payload_verbatim(self, monkeypatch):
+  def test_blaze_posts_the_payload_verbatim(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
     fake.queue((201, b'{"id": "T1", "started_at": "2026-01-01T00:00:00Z"}'))
-    payload = {'harness': 'claude', 'body': {'records': []}}
-    result = _client().create_trail(payload)
+    request = BlazeRequest(
+      harness='claude',
+      version='test',
+      interactive=True,
+      surface='cw',
+      body={'records': []},
+      native={},
+    )
+    result = _client().blaze(request)
     assert result['id'] == 'T1'
     method, path, body, headers = fake.requests[0]
     assert (method, path) == ('POST', '/v1/trails')
     assert headers['Content-Type'] == 'application/json'
-    assert body is not None and json.loads(body) == payload
+    assert body is not None and json.loads(body) == request.to_wire()
 
-  def test_create_trail_is_not_retried(self, monkeypatch):
-    # a lost create response must not double-create; the caller's own next
-    # attempt is the retry
+  def test_blaze_is_not_retried(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
     fake.queue(ConnectionError('blip'))
-    with pytest.raises(ConnectionError):
-      _client().create_trail({'harness': 'claude'})
+    request = BlazeRequest(
+      harness='claude',
+      version='test',
+      interactive=True,
+      surface='cw',
+      body={'records': []},
+      native={},
+    )
+    with pytest.raises(TransientUnavailable):
+      _client().blaze(request)
     assert len(fake.requests) == 1
+
+  def test_append_conflict_maps_to_store_error(self, monkeypatch):
+    fake = _install_fake_connection(monkeypatch)
+    fake.queue((409, b'{"error":"conflict","expected":2,"extent":3}'))
+    with pytest.raises(AppendConflict) as exception_info:
+      _client().append_records('T1', 2, [{'kind': 'user_input', 'body': 'hello'}])
+    assert exception_info.value.expected == 2
+    assert exception_info.value.actual == 3
 
   def test_append_records_posts_offset_records_and_tool_blobs(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
@@ -459,8 +503,8 @@ class TestFetchRecordedTrail:
     cursor pages until exhausted, then returns a `RecordedTrail`.
     """
     with (
-      patch.object(TrailsClient, 'get_trail') as get_trail,
-      patch.object(TrailsClient, 'get_steps') as get_steps,
+      patch.object(NetworkStore, 'get_trail') as get_trail,
+      patch.object(NetworkStore, 'get_steps') as get_steps,
     ):
       get_trail.return_value = {
         'id': 'T1',
@@ -520,9 +564,9 @@ class TestFetchRecordedTrail:
       'size': 2_000_000,
     }
     with (
-      patch.object(TrailsClient, 'get_trail') as get_trail,
-      patch.object(TrailsClient, 'get_steps') as get_steps,
-      patch.object(TrailsClient, 'fetch_spilled_body') as fetch_spilled,
+      patch.object(NetworkStore, 'get_trail') as get_trail,
+      patch.object(NetworkStore, 'get_steps') as get_steps,
+      patch.object(NetworkStore, 'fetch_spilled_body') as fetch_spilled,
     ):
       get_trail.return_value = {
         'id': 'T1',
@@ -567,9 +611,9 @@ class TestFetchRecordedTrail:
     a spill descriptor.
     """
     with (
-      patch.object(TrailsClient, 'get_trail') as get_trail,
-      patch.object(TrailsClient, 'get_steps') as get_steps,
-      patch.object(TrailsClient, 'fetch_spilled_body') as fetch_spilled,
+      patch.object(NetworkStore, 'get_trail') as get_trail,
+      patch.object(NetworkStore, 'get_steps') as get_steps,
+      patch.object(NetworkStore, 'fetch_spilled_body') as fetch_spilled,
     ):
       get_trail.return_value = {
         'id': 'T1',

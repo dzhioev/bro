@@ -7,17 +7,17 @@ from typing import Any, Optional
 
 from bro.base import configs
 from bro.llm.tracker import EndReason, StepKind, Tracker
-from bro.trails.client import TrailsClient
-from bro.trails.model import ForkedFrom, tools_sha256
+from bro.trails.model import BlazeRequest, ForkedFrom, tools_sha256
 from bro.trails.record import spine
 from bro.trails.record.spine import Recording
+from bro.trails.store import TrailsStore
 
 
 class Recorder(Tracker):
   """adapt bro tracker events into universal ordinal records."""
 
-  def __init__(self, base_url: str, token: str, *, timeout: float = 5.0):
-    self._client = TrailsClient(base_url, token, timeout=timeout)
+  def __init__(self, store: TrailsStore):
+    self._store = store
     self._recording: Optional[Recording] = None
     self._lock = threading.RLock()
     self._keepalive_stop: Optional[threading.Event] = None
@@ -36,24 +36,23 @@ class Recorder(Tracker):
   ) -> str:
     if forked_from is not None and not isinstance(forked_from, ForkedFrom):
       raise TypeError('forked_from must be a ForkedFrom')
-    payload = {
-      'harness': 'bro',
-      'bro': bro,
-      'version': configs.VERSION,
-      'native': {'llm': llm_spec},
-      'body': {'records': [{'kind': 'system_prompt', 'body': system_prompt, 'turn_index': 0}]},
-      'forked_from': (
+    request = BlazeRequest(
+      harness='bro',
+      bro=bro,
+      version=configs.VERSION,
+      native={'llm': llm_spec},
+      body={'records': [{'kind': 'system_prompt', 'body': system_prompt, 'turn_index': 0}]},
+      forked_from=(
         {key: value for key, value in asdict(forked_from).items() if value is not None}
         if forked_from is not None
         else None
       ),
-      'interactive': interactive,
-      'surface': surface,
-      'hold': hold,
-    }
-    if summoned_by is not None:
-      payload['summoned_by'] = summoned_by
-    recording = Recording.create(self._client, payload)
+      interactive=interactive,
+      surface=surface,
+      hold=hold,
+      summoned_by=summoned_by,
+    )
+    recording = Recording.create(self._store, request)
     with self._lock:
       self._recording = recording
     self._start_keepalive()
@@ -88,16 +87,16 @@ class Recorder(Tracker):
       return
     self._stop_keepalive()
     try:
-      recording.end(reason, detail, retry_delays=spine.WRITE_RETRY_DELAYS_SECONDS)
+      recording.end(reason, detail)
     except Exception as exception:
       logging.warning('trails end_trail failed for trail %s: %s', recording.trail_id, exception)
     with self._lock:
       self._recording = None
-    self._client.close()
+    self._store.close()
 
   def close(self) -> None:
     self._stop_keepalive()
-    self._client.close()
+    self._store.close()
 
   def _start_keepalive(self) -> None:
     stop = threading.Event()
@@ -122,6 +121,6 @@ class Recorder(Tracker):
       if recording is None:
         return
       try:
-        recording.keepalive_if_idle(retry_delays=(0.5,))
+        recording.keepalive_if_idle()
       except Exception as exception:
         logging.warning('trails keepalive failed for trail %s: %s', recording.trail_id, exception)
