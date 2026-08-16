@@ -35,6 +35,10 @@ from bro.trails.lineage import walk_chain
 from bro.trails.model import ForkedFrom, RecordedTrail, Step
 from bros.bro import Bro
 
+# the harness whose records this module replays; `bro/trails/record/bro.py`
+# stamps it on every trail it opens
+_BRO_HARNESS = 'bro'
+
 
 def replay_messages(
   trail: RecordedTrail,
@@ -198,6 +202,12 @@ def fork(
   `surface` labels the driving program on the new trail; every caller supplies
   it explicitly.
   """
+  if forked_from_trail.header.harness != _BRO_HARNESS:
+    raise ValueError(
+      f'trail {forked_from_trail.header.id!r} was recorded by the '
+      f'{forked_from_trail.header.harness!r} harness, which drives its own loop; there is no '
+      'bro-native conversation to continue'
+    )
   bro_name = forked_from_trail.header.bro
   if bro_name is None:
     raise ValueError(f'trail {forked_from_trail.header.id!r} has no bro persona')

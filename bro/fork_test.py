@@ -1,3 +1,4 @@
+import dataclasses
 import json
 from types import SimpleNamespace
 from typing import Any, Optional, cast
@@ -19,10 +20,11 @@ def _trail_header(
   trail_id: str = 'trail-1',
   bro: str = 'bro',
   llm_spec: Optional[dict] = None,
+  harness: str = 'bro',
 ) -> Trail:
   return Trail(
     id=trail_id,
-    harness='bro',
+    harness=harness,
     bro=bro,
     version='1',
     native={'llm': llm_spec if llm_spec is not None else {'type': 'openai', 'model': 'gpt-5'}},
@@ -564,6 +566,25 @@ def _simple_trail(**header_overrides: Any) -> RecordedTrail:
       _step('llm_call', _llm_call_body(reply), step_id=2, turn_index=1, response_id='r1'),
     ],
   )
+
+
+class TestForkHarnessGuard:
+  def test_a_foreign_harness_trail_is_refused(self):
+    # a claude session records a `bro` too, so `call --resume <claude-trail>`
+    # reaches fork; its records are not the llm_call stream replay reads
+    trail = _simple_trail(harness='claude')
+    with pytest.raises(ValueError, match='no bro-native conversation to continue'):
+      fork(trail, 2, surface='test')
+
+  def test_the_refusal_precedes_reading_the_recipe(self):
+    # 112 recorded claude headers carry no `native.llm` at all, so a guard that
+    # ran later would surface a KeyError instead of the reason
+    recorded = _simple_trail(harness='claude')
+    trail = RecordedTrail(
+      header=dataclasses.replace(recorded.header, native={}), steps=recorded.steps
+    )
+    with pytest.raises(ValueError, match='no bro-native conversation to continue'):
+      fork(trail, 2, surface='test')
 
 
 class TestForkLinkage:
