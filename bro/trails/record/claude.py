@@ -1,46 +1,18 @@
 """record a Claude Code session's transcript to the trails service.
 
 Claude Code writes one jsonl *segment* per session id under the project's
-transcripts dir. An interactive leave→resume forks a fresh segment: a new
-session id whose file re-serializes the conversation history — record `uuid`s
-and `timestamp`s preserved, `sessionId` rewritten, ephemeral records dropped —
-before the new turns. A headless resume appends to the existing segment.
+transcripts dir. One *trail* is the suffix recorded during one recorder
+lifetime within one segment: the daemon adopts a transcript, appends each newly
+completed line, and ends the trail on segment transition or shutdown. Every
+process resume therefore opens a new trail, and a verified continuation is
+recorded as a fork.
 
-One *trail* is the suffix recorded during one recorder lifetime within one
-segment: the daemon creates a claude-harness trail when it adopts a transcript,
-appends each newly completed line, and ends the trail on segment transition or
-shutdown. Every process resume therefore opens a new trail; a verified
-continuation is a fork:
-
-- a same-segment resume starts after the previously recorded line extent and
-  forks from the prior trail's final line, verified by boundary anchors — the
-  stored stream's first and last lines must match the segment file at the
-  saved extent;
-- a new-segment resume forks from the matching uuid line in the parent and
-  stores only the new segment's own contribution (pre-copy ephemera plus the
-  post-copy tail): the parent's first record uuid and one of its recent record
-  uuids must both appear in the copy — recent-tail rather than full-prefix
-  equality because claude's history copy is lossy. The copy is a
-  re-serialization of the whole conversation, so its start is the earliest line
-  the chain already holds, ancestors of the parent included;
-- `/clear` or failed anchors starts a fresh root (no `forked_from`) rather than
-  inventing lineage.
-
-Claude writes a forked segment in stages — the head ephemera, then the
-re-serialized history, then the new turns — and a copy read mid-write verifies
-as no copy at all. The lineage decision is made once, on the tick that opens the
-trail, so a segment is not adopted until it holds a record of its own: one whose
-uuid the recorded chain does not already store.
-
-The durable local state (`<config root>/recorder/<projects dir name>.json`)
-maps the active segment to the trail id and the stored line ranges in the
-segment file, saved after every successful append so the recorded extent
-always matches the server's stream — that equality is what the next
-lifetime's fork verification anchors on. It is a fast path, not the only
-source: cw declares the segment selected by `--resume` as a hint, and UUID
-projection lookups recover candidate trail ids when state is missing or stale.
-The candidate's first and last rows must still match the local file; a failed
-declaration falls through to inference, and failed anchors open a fresh root.
+The daemon does not decide those forks. It reports what it can see — the segment
+name, its lines' record uuids and digests, and the sibling segment files sharing
+those records — and blazes with that evidence; the store's harness resolver
+answers with the fork point and the line ranges the new trail owns, or declines
+a transcript claude has not finished writing (`bro/trails/claude_lineage.py`).
+The daemon then uploads those ranges and keeps appending to the last one.
 
 The append endpoint classifies records and folds usage, turns, harness version,
 and claude's generated title into the header. Quiet ticks keep the trail alive
@@ -66,21 +38,21 @@ from typing import Any, Optional
 
 from bro.base import configs, credentials, log
 from bro.base.args import Parser
-from bro.cw.constants import CW_RESUMED_SESSION_ENV
 from bro.monitor import health, trail_pointer, working_projects_dir
 from bro.trails.backends import CLAUDE_ADAPTER
-from bro.trails.lineage import walk_header_chain
-from bro.trails.model import UUID_LOOKUP_LIMIT, BlazeRequest
+from bro.trails.model import BlazeRequest, payload_sha256
 from bro.trails.record.spine import Recording
-from bro.trails.store import TrailNotFound, TrailsStore, default_store
-
-# how many of the parent trail's trailing record uuids may end a verified fork
-# copy: the copy drops ephemeral records, so the very last uuids can be missing
-# even when the history copy is intact
-_VERIFY_TAIL_UUIDS = 20
+from bro.trails.store import TrailsStore, default_store
 
 # the bro service `raise` tool's wire name in a claude session's transcript
 _RAISE_TOOL = 'mcp__bro__raise'
+
+# one line of lineage evidence: the record's uuid when it carries one, and the
+# digest the stored row would hold
+_EvidenceLine = list[Optional[str]]
+
+# a segment file's identity for one tick: name, modification time, size
+_Signature = tuple[str, int, int]
 
 
 def _user_content_has_text(content: Any) -> bool:
@@ -127,19 +99,21 @@ def _read_lines_after(path: Path, byte_offset: int) -> tuple[list[str], int]:
   return lines, byte_offset + complete_size
 
 
-def _state_path(projects_dir: Path) -> Path:
-  """the recorder state file for a claude projects dir, under the config root
-  (`<config>/recorder/`) so it survives resume relaunches in both session
-  modes."""
-  return projects_dir.parent.parent / 'recorder' / (projects_dir.name + '.json')
+def _record_uuid(raw: str) -> Optional[str]:
+  entry = CLAUDE_ADAPTER.parse(raw).native['record']
+  uuid = entry.get('uuid') if isinstance(entry, dict) else None
+  return uuid if isinstance(uuid, str) else None
+
+
+def _evidence_lines(file_lines: list[str]) -> list[_EvidenceLine]:
+  return [[_record_uuid(line), payload_sha256(line)] for line in file_lines]
 
 
 @dataclasses.dataclass
-class RecorderState:
-  """the durable per-projects-dir state: which segment the last trail recorded,
-  which of the segment file's line ranges form its stream (`chunks`, each
-  `[start, end)` — at most a pre-copy head plus the tail), and the trail id.
-  The final chunk's end is the consumed line extent as uploaded."""
+class _Stream:
+  """the segment line ranges the active trail holds — at most a pre-copy head
+  plus the tail, each `[start, end)`. The final range's end is the consumed line
+  extent as uploaded; `line_count` is how many rows the server holds."""
 
   trail_id: str
   segment: str
@@ -152,97 +126,6 @@ class RecorderState:
   @property
   def line_count(self) -> int:
     return sum(end - start for start, end in self.chunks)
-
-  @classmethod
-  def load(cls, path: Path) -> Optional['RecorderState']:
-    try:
-      data = json.loads(path.read_text())
-    except FileNotFoundError:
-      return None
-    except (OSError, json.JSONDecodeError) as e:
-      log.warning('unreadable recorder state %s (%s); starting a fresh root', path, e)
-      return None
-    try:
-      chunks = [[int(start), int(end)] for start, end in data['chunks']]
-      return cls(trail_id=data['trail_id'], segment=data['segment'], chunks=chunks)
-    except (KeyError, TypeError, ValueError) as e:
-      log.warning('malformed recorder state %s (%s); starting a fresh root', path, e)
-      return None
-
-  def save(self, path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {'trail_id': self.trail_id, 'segment': self.segment, 'chunks': self.chunks}
-    tmp = path.with_name(path.name + '.tmp')
-    tmp.write_text(json.dumps(payload))
-    tmp.replace(path)
-
-
-def _uuid_lines(lines: list[str]) -> list[tuple[int, str]]:
-  """(line index, uuid) for every record carrying a uuid, in order."""
-  out: list[tuple[int, str]] = []
-  for index, raw in enumerate(lines):
-    entry = CLAUDE_ADAPTER.parse(raw).native['record']
-    if entry is None:
-      continue
-    uuid = entry.get('uuid')
-    if isinstance(uuid, str):
-      out.append((index, uuid))
-  return out
-
-
-@dataclasses.dataclass(frozen=True)
-class _ForkCuts:
-  """where the parent trail's history copy sits in a forked segment's file:
-  the copy spans [copy_start_line, resume_start_line); the new segment's own
-  contribution is everything outside it. `anchor_index` is the parent-artifact
-  step index the fork points at — the last copied record found. `pending` marks
-  a file whose newest record the chain already stores, so nothing of the
-  segment's own is in it yet."""
-
-  verified: bool
-  pending: bool = False
-  copy_start_line: int = 0
-  resume_start_line: int = 0
-  anchor_index: int = 0
-
-
-def _fork_cuts(
-  parent_uuid_lines: list[tuple[int, str]], ancestor_uuids: set[str], new_lines: list[str]
-) -> _ForkCuts:
-  """locate the recorded chain's history copy in a forked segment and verify it
-  is intact: the parent's first uuid and one of its recent uuids must both
-  appear in the new file. `parent_uuid_lines` are the parent artifact's
-  (step index, uuid) pairs in step order; `ancestor_uuids` are the records the
-  parent's own ancestors store — the copy re-serializes the whole conversation,
-  so the copy starts at the earliest line either of them already holds."""
-  if len(parent_uuid_lines) == 0:
-    return _ForkCuts(verified=False)
-  new_uuid_lines = _uuid_lines(new_lines)
-  line_by_uuid: dict[str, int] = {}
-  for index, uuid in new_uuid_lines:
-    if uuid not in line_by_uuid:
-      line_by_uuid[uuid] = index
-  chain = ancestor_uuids | {uuid for _, uuid in parent_uuid_lines}
-  pending = len(new_uuid_lines) == 0 or new_uuid_lines[-1][1] in chain
-  parent_start = line_by_uuid.get(parent_uuid_lines[0][1])
-  if parent_start is None:
-    return _ForkCuts(verified=False, pending=pending)
-  ancestor_lines = [line for uuid, line in line_by_uuid.items() if uuid in ancestor_uuids]
-  copy_start = min([parent_start, *ancestor_lines])
-  recent = {uuid for _, uuid in parent_uuid_lines[-_VERIFY_TAIL_UUIDS:]}
-  for step_index, uuid in reversed(parent_uuid_lines):
-    line = line_by_uuid.get(uuid)
-    if line is not None:
-      if uuid not in recent:
-        return _ForkCuts(verified=False, pending=pending)
-      return _ForkCuts(
-        verified=True,
-        pending=pending,
-        copy_start_line=copy_start,
-        resume_start_line=line + 1,
-        anchor_index=step_index,
-      )
-  return _ForkCuts(verified=False, pending=pending)
 
 
 def _modified_at(path: Path) -> float:
@@ -294,21 +177,26 @@ def _workspace_name() -> Optional[str]:
   return os.environ.get('CW_NAME')
 
 
-@dataclasses.dataclass(frozen=True)
-class _Continuation:
-  """how an adopted transcript joins the recorded chain: the new trail's
-  `forked_from` plus the segment line ranges it stores. `pending` instead marks
-  a segment whose head claude has not finished writing, whose lineage is
-  therefore not decidable yet."""
-
-  forked_from: Optional[dict] = None
-  chunks: list[list[int]] = dataclasses.field(default_factory=list)
-  pending: bool = False
+def _verdict_chunks(result: dict) -> list[list[int]]:
+  chunks = result.get('chunks')
+  if (
+    not isinstance(chunks, list)
+    or len(chunks) == 0
+    or not all(
+      isinstance(chunk, list)
+      and len(chunk) == 2
+      and all(isinstance(bound, int) and not isinstance(bound, bool) for bound in chunk)
+      for chunk in chunks
+    )
+  ):
+    raise ValueError(f'lineage verdict carries malformed chunks: {chunks!r}')
+  return [list(chunk) for chunk in chunks]
 
 
 class Recorder:
-  """tracks one workspace's active transcript and records it as fork bro.trails.`started_after` gates segment adoption to files modified after the session
-  launched, so a reused workspace's older transcripts are not re-recorded."""
+  """tracks one workspace's active transcript and records it. `started_after`
+  gates segment adoption to files modified after the session launched, so a
+  reused workspace's older transcripts are not re-recorded."""
 
   def __init__(
     self,
@@ -326,13 +214,12 @@ class Recorder:
     self.llm = llm
     self.cw_command = cw_command
     self.started_after = started_after
-    self.state_path = _state_path(projects_dir)
-    self.previous: Optional[RecorderState] = RecorderState.load(self.state_path)
-    self.active: Optional[RecorderState] = None
+    self.active: Optional[_Stream] = None
     self._recording: Optional[Recording] = None
     self._consumed: set[str] = set()
-    self._recorded_signature: Optional[tuple[str, int, int]] = None
-    self._active_signature: Optional[tuple[str, int, int]] = None
+    self._recorded_signature: Optional[_Signature] = None
+    self._active_signature: Optional[_Signature] = None
+    self._declined_signature: Optional[_Signature] = None
     self._active_byte_extent = 0
     # a stale pointer from a previous lifetime must not attribute this
     # session's summons to an ended trail
@@ -380,260 +267,68 @@ class Recorder:
         best_mtime = mtime
     return best
 
+  @staticmethod
+  def _signature(path: Path) -> Optional[_Signature]:
+    try:
+      stat = path.stat()
+    except FileNotFoundError:
+      return None
+    return (path.stem, stat.st_mtime_ns, stat.st_size)
+
   # --- adoption -------------------------------------------------------------------
 
   def _maybe_adopt(self) -> bool:
     path = self._pick_segment()
     if path is None:
       return False
+    signature = self._signature(path)
+    if signature is None or signature == self._declined_signature:
+      # unchanged since the resolver declined it; ask again when it grows
+      return False
     try:
       file_lines = _read_lines(path)
     except OSError:
       return False
-    if len(_uuid_lines(file_lines)) == 0:
+    lines = _evidence_lines(file_lines)
+    if not any(uuid is not None for uuid, _ in lines):
       # nothing but head ephemera: a history copy may still land, and the
       # segment's lineage is settled by the tick that adopts it
       return False
-    continuation: Optional[_Continuation] = None
-    for previous in self._parent_candidates(path.stem, file_lines):
-      if previous.segment == path.stem:
-        if len(file_lines) == previous.extent:
-          return False  # no new content yet; claude's choice is not visible
-        # only equality is quiet: a shorter file is a mismatch for the anchor
-        # check below to reject
-        continuation = self._same_segment_continuation(previous, file_lines)
-      else:
-        continuation = self._copied_history_continuation(previous, file_lines)
-      if continuation is not None:
-        break
-    if continuation is not None and continuation.pending:
+    lineage = {
+      'segment': path.stem,
+      'lines': lines,
+      'related_segments': self._related_segments(path, lines),
+    }
+    if not self._blaze(path.stem, lineage):
+      self._declined_signature = signature
       return False
-    forked_from = continuation.forked_from if continuation is not None else None
-    chunks = continuation.chunks if continuation is not None else [[0, 0]]
-    self._blaze(path.stem, forked_from, chunks)
     self._append_if_changed()
     return True
 
-  def _parent_candidates(self, segment: str, file_lines: list[str]) -> Iterator[RecorderState]:
-    """the lifetimes this transcript may continue, best first: durable state,
-    the launcher's resumed-segment hint, then inferred local segments."""
-    seen: set[tuple[str, tuple[tuple[int, int], ...]]] = set()
-
-    def state_key(state: RecorderState) -> tuple[str, tuple[tuple[int, int], ...]]:
-      return state.trail_id, tuple((chunk[0], chunk[1]) for chunk in state.chunks)
-
-    if self.previous is not None:
-      seen.add(state_key(self.previous))
-      yield self.previous
-
-    declared_segment = os.environ.get(CW_RESUMED_SESSION_ENV)
-    if declared_segment is not None:
-      if declared_segment == segment:
-        declared_lines = file_lines
-      else:
-        try:
-          declared_lines = _read_lines(self.projects_dir / f'{declared_segment}.jsonl')
-        except OSError:
-          declared_lines = None
-      if declared_lines is not None:
-        declared = self._recorded_state(declared_segment, declared_lines)
-        if declared is not None and state_key(declared) not in seen:
-          seen.add(state_key(declared))
-          yield declared
-
-    for candidate_segment, candidate_lines in self._recorded_segments(segment, file_lines):
-      recorded = self._recorded_state(candidate_segment, candidate_lines)
-      if recorded is not None and state_key(recorded) not in seen:
-        seen.add(state_key(recorded))
-        yield recorded
-
-  def _recorded_segments(
-    self, segment: str, file_lines: list[str]
-  ) -> Iterator[tuple[str, list[str]]]:
-    """the segments whose recorded trail could parent this transcript: the
-    adopted segment itself, then the segment holding the first record of the
-    history copy it opens with — claude rewrites `sessionId` in a copy, so a
-    record uuid is the only link back to where the conversation was."""
-    yield segment, file_lines
-    uuids = _uuid_lines(file_lines)
-    if len(uuids) == 0:
-      return
-    first_uuid = uuids[0][1]
-    for path in sorted(self.projects_dir.glob('*.jsonl'), key=_modified_at, reverse=True):
-      if path.stem == segment:
+  def _related_segments(self, path: Path, lines: list[_EvidenceLine]) -> list[str]:
+    """the segments whose files carry this transcript's first record: claude
+    rewrites `sessionId` in a history copy, so a record uuid is the only link
+    back to where the conversation was, and each copy in the chain carries it."""
+    first = next((uuid for uuid, _ in lines if uuid is not None), None)
+    if first is None:
+      return []
+    related: list[str] = []
+    for other in sorted(self.projects_dir.glob('*.jsonl'), key=_modified_at, reverse=True):
+      if other.stem == path.stem:
         continue
       try:
-        lines = _read_lines(path)
+        other_lines = _read_lines(other)
       except OSError:
         continue
-      if any(uuid == first_uuid for _, uuid in _uuid_lines(lines)):
-        yield path.stem, lines
-        return
-
-  def _recorded_state(self, segment: str, file_lines: list[str]) -> Optional[RecorderState]:
-    """the newest verified trail recording a contiguous slice of `file_lines`."""
-    uuid_lines = _uuid_lines(file_lines)
-    rejected: set[str] = set()
-    for end in range(len(uuid_lines), 0, -UUID_LOOKUP_LIMIT):
-      batch = uuid_lines[max(0, end - UUID_LOOKUP_LIMIT) : end]
-      line_by_uuid = {uuid: line for line, uuid in batch}
-      matches = self.client.find_steps_by_uuid(set(line_by_uuid))
-      candidates: list[tuple[str, int, int, dict]] = []
-      for match in matches:
-        trail_id = match.get('trail_id')
-        uuid = match.get('uuid')
-        step_id = match.get('step_id')
-        if (
-          not isinstance(trail_id, str)
-          or not isinstance(uuid, str)
-          or not isinstance(step_id, int)
-          or isinstance(step_id, bool)
-          or uuid not in line_by_uuid
-        ):
-          raise ValueError(f'malformed UUID lookup result: {match!r}')
-        if trail_id in rejected:
-          continue
-        header = self._header(trail_id)
-        if header is None:
-          raise ValueError(f'UUID lookup returned missing trail {trail_id!r}')
-        if header.get('native', {}).get('segment') != segment:
-          rejected.add(trail_id)
-          continue
-        started_at = header.get('started_at')
-        if not isinstance(started_at, str):
-          raise ValueError(f'trail {trail_id!r} has no started_at')
-        candidates.append((started_at, line_by_uuid[uuid], step_id, header))
-      for _, local_line, step_index, header in sorted(
-        candidates, reverse=True, key=lambda item: item[0]
-      ):
-        trail_id = header['id']
-        if trail_id in rejected:
-          continue
-        rejected.add(trail_id)
-        line_count = self._recorded_line_count(header)
-        start = local_line - step_index
-        if start < 0 or start + line_count > len(file_lines):
-          continue
-        state = RecorderState(
-          trail_id=trail_id,
-          segment=segment,
-          chunks=[[start, start + line_count]],
-        )
-        if self._anchors_hold(state, file_lines):
-          return state
-        log.warning(
-          'trail %s records segment %s but its boundary anchors do not hold',
-          trail_id,
-          segment[:12],
-        )
-    return None
-
-  @staticmethod
-  def _recorded_line_count(header: dict) -> int:
-    value = header.get('extent')
-    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
-      raise ValueError(f'trail {header.get("id")!r} has no positive recorded extent')
-    return value
-
-  def _same_segment_continuation(
-    self, previous: RecorderState, file_lines: list[str]
-  ) -> Optional[_Continuation]:
-    """claude appended to the recorded segment: the new trail records the lines
-    past the saved extent and forks from the prior trail's final line — when
-    the boundary anchors around that extent still hold."""
-    if self._anchors_hold(previous, file_lines):
-      forked_from = {'trail_id': previous.trail_id, 'step_id': previous.line_count - 1}
-      return _Continuation(forked_from=forked_from, chunks=[[previous.extent, previous.extent]])
-    log.warning(
-      'segment %s does not match trail %s at the recorded extent',
-      previous.segment[:12],
-      previous.trail_id,
-    )
-    return None
-
-  def _anchors_hold(self, previous: RecorderState, file_lines: list[str]) -> bool:
-    if previous.line_count == 0 or len(file_lines) < previous.extent:
-      return False
-    first = self._fetch_step_raw(previous.trail_id, 0)
-    last = self._fetch_step_raw(previous.trail_id, previous.line_count - 1)
-    if first is None or last is None:
-      return False
-    return first == file_lines[previous.chunks[0][0]] and last == file_lines[previous.extent - 1]
-
-  def _fetch_step_raw(self, trail_id: str, step_id: int) -> Optional[str]:
-    """one native record's line, or None when the trail or step is absent."""
-    try:
-      return self.client.get_step(trail_id, step_id).get('body')
-    except TrailNotFound:
-      return None
-
-  def _copied_history_continuation(
-    self, previous: RecorderState, file_lines: list[str]
-  ) -> Optional[_Continuation]:
-    """claude forked a new segment re-serializing the history: verify the copy
-    against the parent trail's uuids and store only the new segment's own
-    contribution — the recorded chain is authoritative for the copied part."""
-    parent_uuid_lines = self._parent_uuid_lines(previous)
-    if parent_uuid_lines is None:
-      return None
-    cuts = _fork_cuts(parent_uuid_lines, self._ancestor_uuids(previous.trail_id), file_lines)
-    if cuts.pending:
-      log.info('segment holds no record past the copy of trail %s yet', previous.trail_id)
-      return _Continuation(pending=True)
-    if not cuts.verified:
-      log.info('segment does not carry a verified copy of trail %s', previous.trail_id)
-      return None
-    forked_from = {'trail_id': previous.trail_id, 'step_id': cuts.anchor_index}
-    chunks: list[list[int]] = []
-    if cuts.copy_start_line > 0:
-      chunks.append([0, cuts.copy_start_line])
-    chunks.append([cuts.resume_start_line, cuts.resume_start_line])
-    return _Continuation(forked_from=forked_from, chunks=chunks)
-
-  def _parent_uuid_lines(self, previous: RecorderState) -> Optional[list[tuple[int, str]]]:
-    """the parent trail's (step index, uuid) pairs in step order — from its
-    local segment file when that composition is still the artifact the server
-    holds (the fast path), else from the server's step stream; None when the
-    trail is definitively absent."""
-    header = self._header(previous.trail_id)
-    if header is None:
-      return None
-    if previous.line_count == self._recorded_line_count(header):
-      try:
-        file_lines = _read_lines(self.projects_dir / (previous.segment + '.jsonl'))
-      except OSError:
-        file_lines = None
-      if file_lines is not None and len(file_lines) >= previous.extent:
-        return _uuid_lines(_compose(file_lines, previous.chunks))
-    try:
-      rows = self.client.get_step_uuids(previous.trail_id)
-    except TrailNotFound:
-      return None
-    return [(row['step_id'], row['uuid']) for row in rows]
-
-  def _ancestor_uuids(self, trail_id: str) -> set[str]:
-    """every record uuid carried by the trail's bounded ancestor prefixes."""
-    header = self._header(trail_id)
-    if header is None:
-      raise ValueError(f'trail {trail_id!r} is absent from its own fork chain')
-    chain = walk_header_chain(header, self.client.get_trail)
-    uuids: set[str] = set()
-    for ancestor, bound in chain[:-1]:
-      assert bound is not None
-      rows = self.client.get_step_uuids(ancestor['id'], through=bound['step_id'])
-      uuids.update(row['uuid'] for row in rows)
-    return uuids
-
-  def _header(self, trail_id: str) -> Optional[dict]:
-    """the trail's header, or None when the server does not know it."""
-    try:
-      return self.client.get_trail(trail_id)
-    except TrailNotFound:
-      return None
+      if any(_record_uuid(line) == first for line in other_lines):
+        related.append(other.stem)
+    return related
 
   # --- trail lifecycle ------------------------------------------------------------
 
-  def _blaze(self, segment: str, forked_from: Optional[dict], chunks: list[list[int]]) -> None:
+  def _blaze(self, segment: str, lineage: dict) -> bool:
+    """open the trail this transcript continues; False when the resolver
+    declines to adopt the segment yet."""
     body: dict[str, Any] = {'records': []}
     context = _launch_context()
     if context is not None:
@@ -653,18 +348,23 @@ class Recorder:
       body=body,
       bro=os.environ.get('CW_BRO'),
       hold=os.environ.get('BRO_HOLD'),
-      forked_from=forked_from,
+      lineage=lineage,
     )
-    recording = Recording.create(self.client, request)
-    trail_id = recording.trail_id
-    self.active = RecorderState(trail_id=trail_id, segment=segment, chunks=chunks)
-    self._recording = recording
+    result = self.client.blaze(request)
+    if result.get('adopted') is False:
+      log.info('segment %s not adopted yet (%s)', segment[:12], result.get('reason'))
+      return False
+    trail_id = result['id']
+    forked_from = result.get('forked_from')
+    self.active = _Stream(trail_id=trail_id, segment=segment, chunks=_verdict_chunks(result))
+    self._recording = Recording(self.client, trail_id, 0)
     self._recorded_signature = None
     self._active_byte_extent = 0
-    self.active.save(self.state_path)
     trail_pointer.publish(trail_id)
     if forked_from is None:
-      log.info('trail %s opens at segment %s (root)', trail_id, segment[:12])
+      log.info(
+        'trail %s opens at segment %s (root: %s)', trail_id, segment[:12], result.get('reason')
+      )
     else:
       log.info(
         'trail %s opens at segment %s (forked from %s @ %s)',
@@ -673,6 +373,7 @@ class Recorder:
         forked_from['trail_id'],
         forked_from['step_id'],
       )
+    return True
 
   def _active_path(self) -> Path:
     assert self.active is not None
@@ -682,12 +383,10 @@ class Recorder:
     active = self.active
     assert active is not None
     path = self._active_path()
-    try:
-      stat = path.stat()
-    except FileNotFoundError:
+    signature = self._signature(path)
+    if signature is None:
       self._keepalive_if_idle()
       return False
-    signature = (active.segment, stat.st_mtime_ns, stat.st_size)
     self._active_signature = signature
     if signature == self._recorded_signature:
       self._keepalive_if_idle()
@@ -706,7 +405,7 @@ class Recorder:
       records = _compose(file_lines, chunks)
       offset = 0
     else:
-      if stat.st_size < self._active_byte_extent:
+      if signature[2] < self._active_byte_extent:
         log.warning(
           'segment %s shrank below trail %s; closing', active.segment[:12], active.trail_id
         )
@@ -731,7 +430,6 @@ class Recorder:
     active.chunks = chunks
     self._active_byte_extent = byte_extent
     self._recorded_signature = signature
-    active.save(self.state_path)
     log.info(
       'recorded trail %s (%d lines, segment %s)',
       active.trail_id,
@@ -761,20 +459,19 @@ class Recorder:
     return True
 
   def _active_is_quiet(self) -> bool:
+    signature = self._signature(self._active_path())
+    if signature is None:
+      return True
     try:
-      stat = self._active_path().stat()
+      if self._active_path().stat().st_mtime < self.started_after:
+        return True
     except FileNotFoundError:
       return True
-    if stat.st_mtime < self.started_after:
-      return True
-    assert self.active is not None
-    signature = (self.active.segment, stat.st_mtime_ns, stat.st_size)
     return signature == self._active_signature
 
   def _close_active(self, *, append: bool = True) -> None:
     """final append, then end the trail — `ok`, or `raised` with the reason
-    when the recorded stream's terminal state is a raise call. the closed state
-    stays on disk as the parent for the next lifetime's fork verification."""
+    when the recorded stream's terminal state is a raise call."""
     if append:
       self._append_if_changed()
       if self.active is None:
@@ -792,10 +489,10 @@ class Recorder:
       recording.end('ok')
     log.info('trail %s ended (%s)', active.trail_id, 'raised' if raised is not None else 'ok')
     self._consumed.add(active.segment)
-    self.previous = active
     self.active = None
     self._recording = None
     self._recorded_signature = None
+    self._declined_signature = None
     self._active_byte_extent = 0
     trail_pointer.clear()
 

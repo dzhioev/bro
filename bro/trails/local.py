@@ -19,6 +19,7 @@ from bro.trails.model import (
   UNREPORTED_END_INFERENCE,
   BlazeRequest,
   canonical_json_bytes,
+  payload_sha256,
   validate_end,
 )
 from bro.trails.store import AppendConflict, TrailNotFound, TrailsStore
@@ -83,17 +84,30 @@ class LocalStore(TrailsStore):
       header = self._read_header(trail_id)
     return self._project_header(header)
 
-  def find_steps_by_uuid(self, uuids: set[str]) -> list[dict]:
-    if len(uuids) == 0:
+  def find_segment_steps(self, segments: set[str], uuids: set[str]) -> list[dict]:
+    """Row identities carrying any of `uuids`, in the trails recording one of
+    `segments` — the segment filter is what bounds the scan to a handful of
+    trails."""
+    if len(uuids) == 0 or len(segments) == 0:
       return []
     matches = []
     for directory in self.trails_directory.iterdir():
       if not directory.is_dir() or not (directory / 'header.json').is_file():
         continue
-      for row in self.iter_steps(directory.name):
+      header = self.get_trail(directory.name)
+      if header.get('native', {}).get('segment') not in segments:
+        continue
+      for row in self._read_rows(directory.name):
         uuid = row.get('uuid')
         if uuid in uuids:
-          matches.append({'trail_id': directory.name, 'step_id': row['step_id'], 'uuid': uuid})
+          matches.append(
+            {
+              'trail_id': directory.name,
+              'step_id': row['step_id'],
+              'uuid': uuid,
+              'header': header,
+            }
+          )
     return sorted(matches, key=lambda row: (row['trail_id'], row['step_id']))
 
   def get_step(self, trail_id: str, step_id: int) -> dict:
@@ -101,17 +115,31 @@ class LocalStore(TrailsStore):
       raise TrailNotFound(f'{trail_id}/{step_id}')
     with self._locked(trail_id, shared=True):
       self._read_header(trail_id)
-      for row in self._read_rows(trail_id):
-        if row['step_id'] == step_id:
-          return row
-    raise TrailNotFound(f'{trail_id}/{step_id}')
+      rows = self._read_rows(trail_id, step_id, step_id + 1)
+    if len(rows) == 0:
+      raise TrailNotFound(f'{trail_id}/{step_id}')
+    return rows[0]
 
   def get_step_uuids(self, trail_id: str, *, through: Optional[int] = None) -> list[dict]:
+    with self._locked(trail_id, shared=True):
+      self._read_header(trail_id)
+      rows = self._read_rows(trail_id, 0, None if through is None else through + 1)
     return [
       {'step_id': row['step_id'], 'uuid': row['uuid']}
-      for row in self.iter_steps(trail_id)
-      if isinstance(row.get('uuid'), str) and (through is None or row['step_id'] <= through)
+      for row in rows
+      if isinstance(row.get('uuid'), str)
     ]
+
+  def step_payload_hashes(self, trail_id: str, step_ids: list[int]) -> dict[int, str]:
+    wanted = set(step_ids)
+    with self._locked(trail_id, shared=True):
+      self._read_header(trail_id)
+      lines = self._read_row_lines(trail_id)
+    return {
+      step_id: _parse_rows(trail_id, lines[step_id : step_id + 1], step_id)[0]['payload_sha256']
+      for step_id in sorted(wanted)
+      if 0 <= step_id < len(lines)
+    }
 
   def get_steps(
     self, trail_id: str, *, after: Optional[int] = None, limit: Optional[int] = None
@@ -121,11 +149,10 @@ class LocalStore(TrailsStore):
       raise ValueError('limit must be between 1 and 500')
     with self._locked(trail_id, shared=True):
       self._read_header(trail_id)
-      selected = [
-        row for row in self._read_rows(trail_id) if after is None or row['step_id'] > after
-      ]
-      page = selected[:page_size]
-    next_cursor = page[-1]['step_id'] if len(selected) > page_size else None
+      lines = self._read_row_lines(trail_id)
+    start = 0 if after is None else max(0, after + 1)
+    page = _parse_rows(trail_id, lines[start : start + page_size], start)
+    next_cursor = page[-1]['step_id'] if len(lines) > start + page_size else None
     return {'steps': page, 'next': next_cursor}
 
   def get_messages(
@@ -154,6 +181,13 @@ class LocalStore(TrailsStore):
     adapter.validate_create(request.native)
     if request.harness == 'bro' and request.bro is None:
       raise ValueError('bro is required for the bro harness')
+    decision = None
+    forked_from = request.forked_from
+    if request.lineage is not None:
+      decision = backends.resolve_lineage(adapter, request, self)
+      if not decision.adopt:
+        return {'adopted': False, 'reason': decision.reason}
+      forked_from = decision.forked_from
     records = adapter.open(request.body).records
     trail_id = lulid()
     started_at = _now_iso()
@@ -173,14 +207,9 @@ class LocalStore(TrailsStore):
         'body_storage': 'local-jsonl',
         'extent': 0,
       }
-      for field in (
-        'bro',
-        'hold',
-        'forked_from',
-        'summoned_by',
-        'subject',
-        'location',
-      ):
+      if forked_from is not None:
+        header['forked_from'] = forked_from
+      for field in ('bro', 'hold', 'summoned_by', 'subject', 'location'):
         value = getattr(request, field)
         if value is not None:
           header[field] = value
@@ -201,7 +230,7 @@ class LocalStore(TrailsStore):
         _atomic_json(directory / 'context.json', launch_context)
       _atomic_json(directory / 'header.json', header)
       (directory / '.lock').touch()
-    return {'id': trail_id, 'started_at': started_at}
+    return backends.blaze_result(trail_id, started_at, decision)
 
   def append_records(
     self,
@@ -218,8 +247,8 @@ class LocalStore(TrailsStore):
       actual = _extent(header)
       expected_end = offset + len(records)
       if actual != offset:
-        existing = self._read_rows(trail_id)[offset:expected_end]
-        hashes = [_payload_hash(record) for record in records]
+        existing = self._read_rows(trail_id, offset, expected_end)
+        hashes = [payload_sha256(record) for record in records]
         if actual == expected_end and [row.get('payload_sha256') for row in existing] == hashes:
           return {'extent': actual, 'appended': 0, 'duplicate': True}
         raise AppendConflict(offset, actual)
@@ -309,16 +338,16 @@ class LocalStore(TrailsStore):
       raise ValueError(f'trail {trail_id} header must be an object')
     return value
 
-  def _read_rows(self, trail_id: str) -> list[dict]:
+  def _read_row_lines(self, trail_id: str) -> list[str]:
     path = self._trail_directory(trail_id) / 'steps.jsonl'
     try:
-      lines = path.read_text().splitlines()
+      return path.read_text().splitlines()
     except FileNotFoundError as exception:
       raise TrailNotFound(trail_id) from exception
-    result = [json.loads(line) for line in lines]
-    if not all(isinstance(row, dict) for row in result):
-      raise ValueError(f'trail {trail_id} steps must be objects')
-    return result
+
+  def _read_rows(self, trail_id: str, start: int = 0, end: Optional[int] = None) -> list[dict]:
+    lines = self._read_row_lines(trail_id)
+    return _parse_rows(trail_id, lines[start:end], start)
 
   def _write_rows(self, trail_id: str, prepared: list[dict], *, append: bool) -> None:
     path = self._trail_directory(trail_id) / 'steps.jsonl'
@@ -362,6 +391,17 @@ class LocalStore(TrailsStore):
     projected['usage'] = raw_usage
     projected['models'] = sorted(raw_usage)
     return projected
+
+
+def _parse_rows(trail_id: str, lines: list[str], start: int) -> list[dict]:
+  """Rows for `lines`, the slice of the trail's stream starting at step `start` —
+  a step id is its row's line ordinal in `steps.jsonl`."""
+  rows = [json.loads(line) for line in lines]
+  if not all(isinstance(row, dict) for row in rows):
+    raise ValueError(f'trail {trail_id} steps must be objects')
+  if len(rows) > 0 and rows[0]['step_id'] != start:
+    raise ValueError(f'trail {trail_id} carries step {rows[0]["step_id"]} at line {start}')
+  return rows
 
 
 @contextlib.contextmanager
@@ -414,10 +454,6 @@ def _atomic_bytes(path: Path, value: bytes) -> None:
   except BaseException:
     temporary.unlink(missing_ok=True)
     raise
-
-
-def _payload_hash(payload: Any) -> str:
-  return _sha256(canonical_json_bytes(payload))
 
 
 def _sha256(payload: bytes) -> str:

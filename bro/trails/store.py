@@ -81,13 +81,7 @@ class TrailsStore(ABC):
   def get_trail(self, trail_id: str) -> dict: ...
 
   @abstractmethod
-  def find_steps_by_uuid(self, uuids: set[str]) -> list[dict]: ...
-
-  @abstractmethod
   def get_step(self, trail_id: str, step_id: int) -> dict: ...
-
-  @abstractmethod
-  def get_step_uuids(self, trail_id: str, *, through: Optional[int] = None) -> list[dict]: ...
 
   @abstractmethod
   def get_steps(

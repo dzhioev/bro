@@ -1,10 +1,9 @@
 """Shared aggregate folding, row construction, and message projection."""
 
-import hashlib
 from typing import Any, Optional
 
 from bro.trails import backends
-from bro.trails.model import canonical_json_bytes
+from bro.trails.model import payload_sha256
 
 
 class AggregateState:
@@ -74,7 +73,7 @@ def build_rows(
       'step_id': step_id,
       'ts': parsed.timestamp if parsed.timestamp is not None else default_timestamp,
       'kind': parsed.kind,
-      'payload_sha256': hashlib.sha256(canonical_json_bytes(payload)).hexdigest(),
+      'payload_sha256': payload_sha256(payload),
       'body': parsed.body,
       **parsed.attributes,
     }

@@ -114,28 +114,12 @@ class TestGetTrail:
     assert len(fake.requests) == 1
 
 
-class TestLineageLookups:
-  def test_finds_step_identities_by_repeated_uuid_query(self, monkeypatch):
-    fake = _install_fake_connection(monkeypatch)
-    fake.queue((200, b'{"steps": [{"trail_id": "T1", "step_id": 2, "uuid": "u2"}]}'))
-    result = _client().find_steps_by_uuid({'u2', 'u1'})
-    assert result == [{'trail_id': 'T1', 'step_id': 2, 'uuid': 'u2'}]
-    assert fake.requests[0][1] == '/v1/steps?uuid=u1&uuid=u2'
-
-  def test_empty_uuid_lookup_needs_no_request(self, monkeypatch):
-    fake = _install_fake_connection(monkeypatch)
-    assert _client().find_steps_by_uuid(set()) == []
-    assert fake.requests == []
-
-  def test_reads_one_step_and_bounded_uuid_projection(self, monkeypatch):
+class TestStepReads:
+  def test_reads_one_step(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
     fake.queue((200, b'{"step_id": 4, "body": "line"}'))
-    fake.queue((200, b'{"steps": [{"step_id": 4, "uuid": "u4"}]}'))
-    client = _client()
-    assert client.get_step('T1', 4)['body'] == 'line'
-    assert client.get_step_uuids('T1', through=4) == [{'step_id': 4, 'uuid': 'u4'}]
+    assert _client().get_step('T1', 4)['body'] == 'line'
     assert fake.requests[0][1] == '/v1/trails/T1/steps/4'
-    assert fake.requests[1][1] == '/v1/trails/T1/steps/uuids?through=4'
 
 
 class TestGetSteps:
