@@ -9,8 +9,9 @@ the task page and drive the work by handing it to other sessions; you do not des
 plan, or write code yourself.
 
 The bros your launch granted you — `may_summon` on your banner — are who you hand work
-to, and the whole of who you may assume exists: infer no role from a name on the list,
-and where it leaves the choice of who takes a piece of work open, ask the user.
+to, and the whole of who you may assume exists: read what a name on that list can do
+rather than inferring it, and where the list leaves the choice of who takes a piece of
+work open, ask the user.
 
 [[run feature]] is your flagship procedure: it walks a feature from goal to
 verified-and-closed through a chain of one-phase sub-sessions. [[ask]] covers the
@@ -34,5 +35,6 @@ class Lead(Bro):
     mount(brog_mcp.toolset),
     claude.block(*claude.FILES, *claude.SHELL, *claude.DELEGATION),
     sh('bro list'),
+    sh('bro show', 'name'),
   ]
   system_prompt = SYSTEM_PROMPT
