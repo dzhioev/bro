@@ -15,7 +15,7 @@ from bro.trails.model import (
   payload_sha256,
   validate_end,
 )
-from bro.trails.rows import AggregateState
+from bro.trails.rows import AggregateState, state_fields
 from bro.trails.server import dynamo_types
 from bro.trails.server.operations import Operations
 from bro.trails.store import AppendConflict, TrailNotFound, TrailsStore
@@ -172,7 +172,7 @@ class DynamoStore(TrailsStore):
       state=state,
       seen_billing_keys=seen_billing_keys,
     )
-    item.update(self._state_fields(state, len(rows)))
+    item.update(state_fields(state, len(rows)))
     self._dynamo.transact_write_items(
       TransactItems=[
         {
@@ -315,19 +315,6 @@ class DynamoStore(TrailsStore):
         ContentType='application/json',
       )
       self._stored_tool_hashes.add(sha256)
-
-  @staticmethod
-  def _state_fields(state: AggregateState, extent: int) -> dict:
-    fields: dict[str, Any] = {
-      'extent': extent,
-      'turn_count': state.turn_count,
-      'native': state.native,
-    }
-    if state.last_billed_message_id is not None:
-      fields['last_billed_message_id'] = state.last_billed_message_id
-    if state.subject is not None:
-      fields['subject'] = state.subject
-    return fields
 
   def _append_header_update(
     self,

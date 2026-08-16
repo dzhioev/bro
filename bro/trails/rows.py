@@ -53,6 +53,20 @@ class AggregateState:
     return contribution
 
 
+def state_fields(state: AggregateState, extent: int) -> dict:
+  """The header fields a folded aggregate contributes."""
+  fields: dict[str, Any] = {
+    'extent': extent,
+    'turn_count': state.turn_count,
+    'native': state.native,
+  }
+  if state.last_billed_message_id is not None:
+    fields['last_billed_message_id'] = state.last_billed_message_id
+  if state.subject is not None:
+    fields['subject'] = state.subject
+  return fields
+
+
 def build_rows(
   *,
   trail_id: str,
