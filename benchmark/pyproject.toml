@@ -17,6 +17,7 @@ dependencies = [
 dev = [
   "pyright==1.1.411",
   "pytest==9.1.1",
+  "pytest-asyncio==1.4.0",
 ]
 
 [project.scripts]
@@ -33,11 +34,6 @@ bro = ["bro", "bros"]
 # read the module name off
 harbor = ["harbor"]
 
-[tool.deptry.per_rule_ignores]
-# harbor is declared for the resolution it forces — it is what holds this project
-# outside the workspace, and what its lock pins — ahead of a module importing it
-DEP002 = ["harbor"]
-
 [tool.uv.build-backend]
 module-root = ""
 module-name = ["bro.benchmark"]
@@ -50,6 +46,7 @@ wheel-exclude = ["**/*_test.py", "**/*_test_helper.py", "**/conftest.py", "**/CL
 # the repository root's is what formats and lints the directory
 [tool.pytest.ini_options]
 max_warnings = "0"
+asyncio_mode = "auto"
 
 [tool.pyright]
 include = ["bro"]

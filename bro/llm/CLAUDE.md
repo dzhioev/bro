@@ -2,6 +2,10 @@
 
 Provider-agnostic LLM abstraction and MCP tooling for the `bro` agent system and installed tool providers. `LLM` is the chat interface; an `MCPServer` supplies callable `Tool`s; an `Observer` receives typed live events while a `Tracker` records durably. Run the `llm` CLI (`bro.llm.py`) with `--help` to chat against a provider from the shell.
 
+## Design
+
+- **Empty package hub.** `__init__.py` re-exports nothing, and consumers import submodules directly (`from bro.llm.llm import LLM`). `usage.py` reaches no further than `bro.base` and `bro.monitor`, which is what lets an environment without the agent extra read a usage record; a hub re-export would put the provider stack — and the `mcp` dependency behind it — on every import of this package.
+
 ## Modules
 
 - `bro.llm.py` — the `LLM` ABC (`send(messages)`, holding a `ToolRegistry` + `Observer` + `Tracker` plus an optional `agent` identity) and the `LLMSpec` ABC: a frozen recipe (model + provider knobs) with `needed_secrets`, an optional `.fast()` / `.with_effort(level)` (a level from `EFFORT_LEVELS`, the neutral low/medium/high/xhigh/max effort vocabulary, mapped per provider), and a `dump` / `from_dict` round-trip keyed by a `TYPE` discriminator so a stored spec rehydrates. `NativeLLMSpec` refines it with `create_llm` — the recipes the bro-native loop can run, and so the type a bro's `llm_spec` takes; a provider whose harness drives its own loop (`claude_code`) is a bare `LLMSpec` and cannot be declared as one. `cumulative_usage()` reports the instance's lifetime per-model counts in the four billed token classes (None for providers that don't track). Also the `llm` chat CLI.

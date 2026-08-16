@@ -64,7 +64,12 @@ class Bundle:
 
   @property
   def command(self) -> Path:
-    """the framework's own `bro` console script, which the shim runs."""
+    """the framework's own `bro` console script, which the shim runs.
+
+    Reachable only that way: the installer wrote the build machine's interpreter
+    path into its shebang, which dangles the moment the bundle is copied
+    anywhere.
+    """
     return self.site_packages / 'bin' / 'bro'
 
   @property

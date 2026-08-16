@@ -36,6 +36,7 @@ DISTRIBUTIONS = [
       'bro/setup/',
       '^dev/',
       '^local/',
+      f'^{BENCHMARK}/',
       '.venv/',
       '.claude/',
     ),
@@ -200,8 +201,9 @@ PYTEST_FILES = [
 # in-container leg has none of
 DOCKER_PYTEST_FILE = 'bro/workspace/launch_smoke_test.py'
 # run from the benchmark project's own environment, the only one that can import
-# it. `bundle_e2e_test.py` stays out: it builds a real bundle and drives docker
-BENCHMARK_PYTEST_FILES = ['bro/benchmark/bundle_test.py']
+# it. The `*_e2e_test.py` modules stay out: they build a real bundle and drive
+# docker, and the harbor one spends real tokens
+BENCHMARK_PYTEST_FILES = ['bro/benchmark/bundle_test.py', 'bro/benchmark/harbor_agent_test.py']
 
 
 def run(*args: str, extra_env: Optional[dict[str, str]] = None, cwd: Optional[Path] = None) -> None:
