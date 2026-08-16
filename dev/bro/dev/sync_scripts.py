@@ -1,10 +1,11 @@
 #!/usr/bin/env python
 """regenerate one distribution's console-script table and committed argv bridge.
 
-The operated project is selected explicitly (the current directory by default), so
-workspace members own independent artifacts. Python modules with a synchronous
-top-level ``main`` produce a canonical script name from their import path; a literal
-``__cli_name__`` adds a bare alias.
+The operated project is selected explicitly (the current directory by default), and
+a nested project is left to its own invocation, so every project in a repository
+owns independent artifacts. Python modules with a synchronous top-level ``main``
+produce a canonical script name from their import path; a literal ``__cli_name__``
+adds a bare alias.
 """
 
 import ast
@@ -30,7 +31,6 @@ class Project:
   pyproject: Path
   bridge_module: str
   bridge_path: Path
-  excluded_directories: frozenset[str]
 
 
 @dataclass(frozen=True)
@@ -39,20 +39,6 @@ class Entry:
   canonical: str
   explicit: Optional[str]
   bridge_module: str
-
-
-def _workspace_directories(directory: Path, data: dict) -> frozenset[str]:
-  patterns = data.get('tool', {}).get('uv', {}).get('workspace', {}).get('members', [])
-  if not isinstance(patterns, list) or not all(isinstance(pattern, str) for pattern in patterns):
-    raise ValueError(
-      f'[tool.uv.workspace] members in {directory / "pyproject.toml"} must be strings'
-    )
-  members: set[str] = set()
-  for pattern in patterns:
-    for member in directory.glob(pattern):
-      if member.is_dir():
-        members.add(member.relative_to(directory).parts[0])
-  return frozenset(members)
 
 
 def _bridge_module(data: dict, pyproject: Path) -> str:
@@ -87,7 +73,6 @@ def _project(path: Path) -> Project:
     pyproject=pyproject,
     bridge_module=bridge_module,
     bridge_path=bridge_path,
-    excluded_directories=_workspace_directories(directory, data),
   )
 
 
@@ -98,8 +83,8 @@ def _iter_python_files(project: Project):
       name
       for name in directory_names
       if name not in SKIP_DIRECTORIES
-      and name not in project.excluded_directories
       and not name.endswith('.egg-info')
+      and not (Path(directory) / name / 'pyproject.toml').is_file()
     ]
     relative_directory = Path(directory).relative_to(project.directory)
     for file_name in file_names:
