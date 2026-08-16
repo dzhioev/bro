@@ -8,9 +8,9 @@ from typing import cast
 import pytest
 
 import bro.brog.system as brog_system
+import bro.cw.cli as cw_cli
 import bro.workflow.dive_in as dive_in
 import bro.workspace.paths as workspace_paths
-from bro import cw
 
 UUID = '35ad38d8-5a6d-81ea-bce6-e4caf17ece7f'
 HEX = '0123456789abcdef0123456789abcdef'
@@ -60,7 +60,7 @@ class TestLaunchCommand:
     tokens = shlex.split(capsys.readouterr().out.strip())
     assert tokens[0] == 'cw'
     # Parser.parse strips argv[0] as the program name, mirroring bro.cw.main(['cw', ...])
-    args = cw.build_parser().parse(tokens)
+    args = cw_cli.build_parser().parse(tokens)
     assert args['cmd'] == 'ss'
     assert len(args['name']) > 0
     assert len(args['claude_args']) == 0  # nothing leaked into the forwarded REMAINDER
@@ -69,28 +69,28 @@ class TestLaunchCommand:
     rc = dive_in.main(['dive-in', '-n'])
     assert rc == 0
     tokens = shlex.split(capsys.readouterr().out.strip())
-    args = cw.build_parser().parse(tokens)
+    args = cw_cli.build_parser().parse(tokens)
     assert args['hold'] == 'attended'
 
   def test_host_defaults_to_guided(self, fake_proj, capsys):
     rc = dive_in.main(['dive-in', '-n', '--host'])
     assert rc == 0
     tokens = shlex.split(capsys.readouterr().out.strip())
-    args = cw.build_parser().parse(tokens)
+    args = cw_cli.build_parser().parse(tokens)
     assert args['hold'] == 'guided'
 
   def test_explicit_hold_wins_over_the_host_default(self, fake_proj, capsys):
     rc = dive_in.main(['dive-in', '-n', '--host', '--hold', 'attended'])
     assert rc == 0
     tokens = shlex.split(capsys.readouterr().out.strip())
-    args = cw.build_parser().parse(tokens)
+    args = cw_cli.build_parser().parse(tokens)
     assert args['hold'] == 'attended'
 
   def test_forwarded_flags_ride_verbatim(self, fake_proj, capsys, monkeypatch):
     monkeypatch.delenv('CW_BRO', raising=False)
     rc = dive_in.dive_in(forwarded=['--bro', 'bro-dev'], dry_run=True)
     assert rc == 0
-    args = cw.build_parser().parse(shlex.split(capsys.readouterr().out.strip()))
+    args = cw_cli.build_parser().parse(shlex.split(capsys.readouterr().out.strip()))
     assert args['bro'] == 'bro-dev'
     assert len(args['claude_args']) == 0
     # cw owns the session theming (persona default, CW_BRO export); dive-in
@@ -101,7 +101,7 @@ class TestLaunchCommand:
     monkeypatch.delenv('CW_BRO', raising=False)
     rc = dive_in.dive_in(forwarded=['--bro', 'dev', '--raw'], dry_run=True)
     assert rc == 0
-    args = cw.build_parser().parse(shlex.split(capsys.readouterr().out.strip()))
+    args = cw_cli.build_parser().parse(shlex.split(capsys.readouterr().out.strip()))
     assert args['bro'] == 'dev'
     assert args['raw']
     assert 'CW_BRO' not in os.environ
@@ -130,21 +130,21 @@ class TestBaseRef:
   def test_omitted_into_forwards_the_fetched_sha(self, fake_proj, capsys):
     rc = dive_in.main(['dive-in', '-n'])
     assert rc == 0
-    args = cw.build_parser().parse(shlex.split(capsys.readouterr().out.strip()))
+    args = cw_cli.build_parser().parse(shlex.split(capsys.readouterr().out.strip()))
     assert args['into'] == FRESH_SHA
 
   def test_explicit_into_skips_the_fetch(self, fake_proj, capsys, monkeypatch):
     monkeypatch.setattr(dive_in, '_fresh_origin_head', lambda: pytest.fail('must not fetch'))
     rc = dive_in.main(['dive-in', '-n', '--into', 'feature'])
     assert rc == 0
-    args = cw.build_parser().parse(shlex.split(capsys.readouterr().out.strip()))
+    args = cw_cli.build_parser().parse(shlex.split(capsys.readouterr().out.strip()))
     assert args['into'] == 'feature'
 
   def test_unreachable_origin_falls_back_to_the_host_head(self, fake_proj, capsys, monkeypatch):
     monkeypatch.setattr(dive_in, '_fresh_origin_head', lambda: None)
     rc = dive_in.main(['dive-in', '-n'])
     assert rc == 0
-    args = cw.build_parser().parse(shlex.split(capsys.readouterr().out.strip()))
+    args = cw_cli.build_parser().parse(shlex.split(capsys.readouterr().out.strip()))
     assert args['into'] is None
 
   def test_resolved_sha_stays_out_of_the_shell_command(self, fake_proj, monkeypatch):
@@ -241,7 +241,7 @@ class TestTaskMode:
     assert rc == 0
     assert captured == {'grant': ['brog+github'], 'revoke': [], 'bro': 'dev', 'raw': True}
     # the flags still ride into the forwarded `cw ss` untouched
-    args = cw.build_parser().parse(shlex.split(capsys.readouterr().out.strip()))
+    args = cw_cli.build_parser().parse(shlex.split(capsys.readouterr().out.strip()))
     assert args['grant'] == ['brog+github']
     assert args['revoke'] is None
 

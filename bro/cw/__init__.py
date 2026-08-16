@@ -43,13 +43,7 @@ keeps the container's git state genuinely isolated. layout:
 
 network is not restricted by design.
 
-This package re-exports below exactly the cross-package surface that
-`bro/workflow/dive_in.py` consumes through `from bro import cw`. Intra-package
-code imports submodule → submodule (never through this hub — partial-init hazard); see
-cw/CLAUDE.md.
+This hub imports nothing, so every consumer — inside the package and out —
+imports the submodule it needs. `python -m bro.cw.statusline` runs this file
+first, and that leaf's docstring says what its import closure costs.
 """
-
-from bro.cw.cli import build_parser
-from bro.cw.flags import add_forwarded_flags, extract_forwarded_argv
-from bro.workspace.git import fetch_ref
-from bro.workspace.paths import fresh_workspace_name, project_root

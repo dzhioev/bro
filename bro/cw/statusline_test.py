@@ -1,5 +1,7 @@
 import io
 import json
+import subprocess
+import sys
 import time
 
 from bro import summon_status
@@ -145,3 +147,20 @@ class TestSummonSection:
     assert '⚡ summoning reviewer' in out
     assert ' · ' in out
 
+
+class TestImportCost:
+  # claude re-runs the statusline in a fresh interpreter every second of every
+  # session, so its import closure is a standing CPU cost on the host machine.
+  # Each of these costs more to import than the whole render is worth.
+  _FORBIDDEN = ('bro.cw.cli', 'bro.summon', 'icecream', 'asyncio')
+
+  def test_import_reaches_no_further_than_it_must(self):
+    # cwd is the repo root (run_tests invokes pytest there), so the import resolves
+    code = (
+      'import sys, bro.cw.statusline; '
+      f'loaded = [name for name in {self._FORBIDDEN} if name in sys.modules]; '
+      "assert len(loaded) == 0, loaded; print('ok')"
+    )
+    result = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == 'ok'
