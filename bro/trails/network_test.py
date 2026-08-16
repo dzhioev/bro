@@ -5,8 +5,16 @@ from unittest.mock import patch
 
 import pytest
 
-from bro.trails.model import BlazeRequest, ForkedFrom, RecordedTrail, Step, Trail
+from bro.trails.model import (
+  BlazeRequest,
+  ForkedFrom,
+  RecordedTrail,
+  Step,
+  Trail,
+  trail_not_found_body,
+)
 from bro.trails.network import (
+  HTTPStatusError,
   NetworkStore,
 )
 from bro.trails.store import (
@@ -113,12 +121,21 @@ class TestGetTrail:
       _client().recompute('T1')
     assert len(fake.requests) == 1
 
-  def test_deterministic_http_error_propagates_without_retry(self, monkeypatch):
+  def test_reported_missing_trail_maps_to_store_error(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
-    fake.queue((404, b'not found'))
-    c = _client()
-    with pytest.raises(TrailNotFound):
-      c.get_trail('missing')
+    fake.queue((404, json.dumps(trail_not_found_body('missing')).encode()))
+    with pytest.raises(TrailNotFound) as exception_info:
+      _client().get_trail('missing')
+    assert exception_info.value.trail_id == 'missing'
+    assert len(fake.requests) == 1
+
+  def test_other_404s_keep_what_the_response_said(self, monkeypatch):
+    fake = _install_fake_connection(monkeypatch)
+    fake.queue((404, b'<html>404 Not Found</html>'))
+    with pytest.raises(HTTPStatusError) as exception_info:
+      _client().get_trail('T1')
+    assert exception_info.value.status == 404
+    assert '404 Not Found' in str(exception_info.value)
     assert len(fake.requests) == 1
 
 
@@ -267,7 +284,7 @@ class TestLaunchContext:
 
   def test_missing_trail_is_not_found(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
-    fake.queue((404, b'trail not found'))
+    fake.queue((404, json.dumps(trail_not_found_body('missing')).encode()))
     with pytest.raises(TrailNotFound):
       _client().get_launch_context('missing')
 

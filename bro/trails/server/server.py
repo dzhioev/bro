@@ -18,6 +18,7 @@ from bro.trails.model import (
   LOOPBACK_HOSTS,
   MESSAGE_TYPES,
   BlazeRequest,
+  trail_not_found_body,
   validate_end,
 )
 from bro.trails.server.dynamo import BodyTooLarge, DynamoStore
@@ -57,6 +58,10 @@ async def _read_json(request: web.Request) -> Any:
 
 def _error(message: str, status: int) -> web.Response:
   return web.json_response({'error': message}, status=status)
+
+
+def _trail_not_found(trail_id: str) -> web.Response:
+  return web.json_response(trail_not_found_body(trail_id), status=404)
 
 
 async def _stream_json_with_heartbeats(
@@ -150,7 +155,7 @@ async def _handle_append_records(request: web.Request) -> web.Response:
   except BodyTooLarge as exception:
     return _error(str(exception), 413)
   except TrailNotFound:
-    return _error(f'trail not found: {trail_id}', 404)
+    return _trail_not_found(trail_id)
   except AppendConflict as exception:
     return web.json_response(
       {'error': str(exception), 'expected': exception.expected, 'extent': exception.actual},
@@ -176,7 +181,7 @@ async def _handle_set_subject(request: web.Request) -> web.Response:
   try:
     updated = await _dispatch(store.set_subject, trail_id, subject)
   except TrailNotFound:
-    return _error(f'trail not found: {trail_id}', 404)
+    return _trail_not_found(trail_id)
   except ValueError as exception:
     return _error(str(exception), 400)
   return web.json_response(updated)
@@ -195,7 +200,7 @@ async def _handle_end_trail(request: web.Request) -> web.Response:
     reason, detail = validate_end(payload.get('reason'), payload.get('detail'))
     await _dispatch(store.end_trail, trail_id, reason, detail)
   except TrailNotFound:
-    return _error(f'trail not found: {trail_id}', 404)
+    return _trail_not_found(trail_id)
   except ValueError as exception:
     return _error(str(exception), 400)
   return web.Response(status=204)
@@ -207,7 +212,7 @@ async def _handle_keepalive(request: web.Request) -> web.Response:
   try:
     await _dispatch(store.keepalive, trail_id)
   except TrailNotFound:
-    return _error(f'trail not found: {trail_id}', 404)
+    return _trail_not_found(trail_id)
   return web.Response(status=204)
 
 
@@ -217,7 +222,7 @@ async def _handle_get_trail(request: web.Request) -> web.Response:
   try:
     trail = await _dispatch(store.get_trail, trail_id)
   except TrailNotFound:
-    return _error(f'trail not found: {trail_id}', 404)
+    return _trail_not_found(trail_id)
   return web.json_response(trail)
 
 
@@ -227,7 +232,7 @@ async def _handle_get_context(request: web.Request) -> web.Response:
   try:
     context = await _dispatch(store.get_launch_context, trail_id)
   except TrailNotFound:
-    return _error(f'trail not found: {trail_id}', 404)
+    return _trail_not_found(trail_id)
   return web.json_response({'launch_context': context})
 
 
@@ -238,7 +243,7 @@ async def _handle_get_step(request: web.Request) -> web.Response:
   try:
     step = await _dispatch(store.get_step, trail_id, step_id)
   except TrailNotFound:
-    return _error(f'trail not found: {trail_id}', 404)
+    return _trail_not_found(trail_id)
   except ValueError as exception:
     return _error(str(exception), 400)
   return web.json_response(step)
@@ -252,7 +257,7 @@ async def _handle_get_steps(request: web.Request) -> web.Response:
   try:
     result = await _dispatch(store.get_steps, trail_id, after=after, limit=limit)
   except TrailNotFound:
-    return _error(f'trail not found: {trail_id}', 404)
+    return _trail_not_found(trail_id)
   except ValueError as exception:
     return _error(str(exception), 400)
   return web.json_response(result)
@@ -276,7 +281,7 @@ async def _handle_get_messages(request: web.Request) -> web.Response:
       types=requested_types if len(requested_types) > 0 else None,
     )
   except TrailNotFound:
-    return _error(f'trail not found: {trail_id}', 404)
+    return _trail_not_found(trail_id)
   except ValueError as exception:
     return _error(str(exception), 400)
   return web.json_response(result)
@@ -284,7 +289,7 @@ async def _handle_get_messages(request: web.Request) -> web.Response:
 
 def _administered(handler):
   """Answer 501 rather than routing to an administration surface the hosted
-  store does not have — a 404 would read as a missing trail at the client."""
+  store does not have."""
 
   @functools.wraps(handler)
   async def guarded(request: web.Request) -> web.StreamResponse:
@@ -302,7 +307,7 @@ async def _handle_recompute(request: web.Request) -> web.Response:
   try:
     return web.json_response(await _dispatch(admin.recompute, trail_id))
   except TrailNotFound:
-    return _error(f'trail not found: {trail_id}', 404)
+    return _trail_not_found(trail_id)
   except ValueError as exception:
     return _error(str(exception), 400)
 
@@ -318,12 +323,12 @@ async def _handle_check(request: web.Request) -> web.StreamResponse:
   if trail_id is not None and (not isinstance(trail_id, str) or len(trail_id) == 0):
     return _error('trail_id must be a non-empty string', 400)
   admin: DynamoStore = request.app['admin']
+  if trail_id is None:
+    return await _stream_json_with_heartbeats(request, _dispatch(admin.check))
   try:
-    if trail_id is None:
-      return await _stream_json_with_heartbeats(request, _dispatch(admin.check))
     return web.json_response(await _dispatch(admin.check, trail_id))
   except TrailNotFound:
-    return _error(f'trail not found: {trail_id}', 404)
+    return _trail_not_found(trail_id)
   except ValueError as exception:
     return _error(str(exception), 400)
 
@@ -346,7 +351,7 @@ async def _handle_relink(request: web.Request) -> web.Response:
     result = await _dispatch(admin.relink, trail_id, payload['forked_from'], delete_count)
     return web.json_response(result)
   except TrailNotFound:
-    return _error(f'trail not found: {trail_id}', 404)
+    return _trail_not_found(trail_id)
   except ValueError as exception:
     return _error(str(exception), 400)
 
@@ -366,7 +371,7 @@ async def _handle_repair_llm_spec(request: web.Request) -> web.Response:
       await _dispatch(admin.repair_llm_spec, trail_id, payload['expected'], replacement)
     )
   except TrailNotFound:
-    return _error(f'trail not found: {trail_id}', 404)
+    return _trail_not_found(trail_id)
   except ValueError as exception:
     return _error(str(exception), 409)
 
