@@ -10,7 +10,7 @@ import bro.base.args as base_args
 import bro.launch.bro_run
 from bro import summon as summon_client
 from bro.base import log
-from bro.bro import BroRaised
+from bro.bro import BaseBro, BroRaised
 from bro.launch.llm_flags import add_llm_flags, canonicalize, resolve_native, selection_from_args
 from bro.llm.llm import NativeLLMSpec
 from bro.llm.mcp import HOLDS
@@ -20,7 +20,6 @@ from bro.trails.display.core import DisplaySession
 from bro.trails.display.live import LiveDisplayObserver
 from bro.trails.display.panel import RichPanelRenderer
 from bro.trails.display.terminal import StreamRenderer
-from bros.bro import Bro
 
 if TYPE_CHECKING:
   from bro.llm.providers import LLMSelection
@@ -85,7 +84,7 @@ def run_llm_spec(bro_name: str, selection: 'LLMSelection') -> Optional[NativeLLM
   return None if spec == bro_class.llm_spec else spec
 
 
-def create_bro_for_run(bro_name: str, selection: 'LLMSelection') -> Bro:
+def create_bro_for_run(bro_name: str, selection: 'LLMSelection') -> BaseBro:
   """instantiate the bro for an in-process run, with the `run_llm_spec`
   override applied when one is needed."""
   from bro.registry import create_bro, get_class
