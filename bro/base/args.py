@@ -3,9 +3,9 @@
 
 bro.base.args must stay importable in a stdlib-only environment (no venv): some
 consumers run outside it — e.g. bro/workflow/commit_footer.py via the commit
-git hooks. So it imports no third-party package at module load. icecream is the one
-exception, treated as optional — the --ic debug flag is registered only when it is
-installed.
+git hooks. So it imports no third-party package, at module load or otherwise,
+until a flag asks for one: icecream costs more to import than the whole of
+argparse, and every CLI in the repository builds a parser.
 """
 
 import argparse
@@ -17,11 +17,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Optional, TypeVar, overload
 
 from bro.base import log
-
-try:
-  from icecream import ic
-except ImportError:  # icecream is a venv dep; bro.base.args must import without it
-  ic = None
 
 # re-exported so bro.base.args is the only module in the repo that imports argparse
 REMAINDER = argparse.REMAINDER
@@ -61,8 +56,18 @@ def trigger(function: Callable) -> type[argparse.Action]:
 
 
 def enable_ic() -> None:
-  if ic is not None:
-    ic.enable()
+  from icecream import ic
+
+  ic.enable()
+
+
+def _disable_ic() -> None:
+  """silence ic output, the default the --ic flag lifts. Only where something
+  already imported icecream — nothing can have called `ic()` otherwise, and
+  importing it here would charge every CLI start for a debug aid nobody used."""
+  icecream = sys.modules.get('icecream')
+  if icecream is not None:
+    icecream.ic.disable()
 
 
 _N = TypeVar('_N')
@@ -146,8 +151,7 @@ class Parser(argparse.ArgumentParser):
       dest='log',
       help='shorthand for --log verbose',
     )
-    if ic is not None:
-      self._add_global_argument('--ic', action=trigger(enable_ic), help='enable ic output')
+    self._add_global_argument('--ic', action=trigger(enable_ic), help='enable ic output')
 
   def _move_to_global(self, action: argparse.Action) -> None:
     for group in self._action_groups:
@@ -342,8 +346,7 @@ class Parser(argparse.ArgumentParser):
   def parse_args(  # type: ignore[override]
     self, args: Iterable[str], namespace: Optional[_N] = None
   ) -> _N | argparse.Namespace:
-    if ic is not None:
-      ic.disable()
+    _disable_ic()
     argv_list = list(args)
     self._last_argv = argv_list
     # sharing the `log` dest keeps --verbose a pure alias, but it also means
@@ -364,8 +367,7 @@ class Parser(argparse.ArgumentParser):
       self._print_env_table(parsed, argv_list)
       sys.exit(0)
     self._check_exclusive_groups(parsed)
-    if ic is not None:
-      delattr(parsed, 'ic')
+    delattr(parsed, 'ic')
     delattr(parsed, 'log')
     delattr(parsed, 'print_env')
     delattr(parsed, 'allow_env')
