@@ -3,6 +3,7 @@
 
 import asyncio
 import contextlib
+import functools
 import hmac
 import json
 import sys
@@ -281,6 +282,20 @@ async def _handle_get_messages(request: web.Request) -> web.Response:
   return web.json_response(result)
 
 
+def _administered(handler):
+  """Answer 501 rather than routing to an administration surface the hosted
+  store does not have — a 404 would read as a missing trail at the client."""
+
+  @functools.wraps(handler)
+  async def guarded(request: web.Request) -> web.StreamResponse:
+    if request.app['admin'] is None:
+      return _error('this trails backend has no administration surface', 501)
+    return await handler(request)
+
+  return guarded
+
+
+@_administered
 async def _handle_recompute(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
   admin: DynamoStore = request.app['admin']
@@ -292,6 +307,7 @@ async def _handle_recompute(request: web.Request) -> web.Response:
     return _error(str(exception), 400)
 
 
+@_administered
 async def _handle_check(request: web.Request) -> web.StreamResponse:
   payload = await _read_json(request)
   if payload is None:
@@ -312,6 +328,7 @@ async def _handle_check(request: web.Request) -> web.StreamResponse:
     return _error(str(exception), 400)
 
 
+@_administered
 async def _handle_relink(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
   payload = await _read_json(request)
@@ -435,12 +452,11 @@ def create_app(
   app.router.add_get('/v1/trails/{trail_id}/context', _handle_get_context)
   app.router.add_post('/v1/trails/{trail_id}/end', _handle_end_trail)
   app.router.add_post('/v1/trails/{trail_id}/keepalive', _handle_keepalive)
-  if admin is not None:
-    app['admin'] = admin
-    app.router.add_post('/v1/admin/trails/check', _handle_check)
-    app.router.add_post('/v1/admin/trails/{trail_id}/recompute', _handle_recompute)
-    app.router.add_post('/v1/admin/trails/{trail_id}/relink', _handle_relink)
-    app.router.add_post('/v1/admin/trails/{trail_id}/repair-llm-spec', _handle_repair_llm_spec)
+  app['admin'] = admin
+  app.router.add_post('/v1/admin/trails/check', _handle_check)
+  app.router.add_post('/v1/admin/trails/{trail_id}/recompute', _handle_recompute)
+  app.router.add_post('/v1/admin/trails/{trail_id}/relink', _handle_relink)
+  app.router.add_post('/v1/admin/trails/{trail_id}/repair-llm-spec', _handle_repair_llm_spec)
   if sweep_interval_seconds is not None:
     assert admin is not None
 

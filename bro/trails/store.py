@@ -31,6 +31,10 @@ class TransientUnavailable(Exception):
   pass
 
 
+class UnsupportedOperation(Exception):
+  """The hosted backend does not serve this operation."""
+
+
 class TrailsStore(ABC):
   @abstractmethod
   def list_trails(
