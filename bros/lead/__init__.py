@@ -1,6 +1,6 @@
 import bro.brog.mcp as brog_mcp
 from bro.harness import claude
-from bro.llm.mcp import mount
+from bro.llm.mcp import mount, sh
 from bros.bro import Bro
 
 SYSTEM_PROMPT = """\
@@ -33,5 +33,6 @@ class Lead(Bro):
   tools = [
     mount(brog_mcp.toolset),
     claude.block(*claude.FILES, *claude.SHELL, *claude.DELEGATION),
+    sh('bro list'),
   ]
   system_prompt = SYSTEM_PROMPT

@@ -4,7 +4,14 @@ import sys
 
 import pytest
 
-from bro.base.args import REMAINDER, ArgumentTypeError, Parser, list_parser, moment_parser
+from bro.base.args import (
+  REMAINDER,
+  ArgumentTypeError,
+  Parser,
+  command_signature,
+  list_parser,
+  moment_parser,
+)
 
 
 class TestExclusiveGroups:
@@ -759,3 +766,53 @@ class TestLogFlag:
     parser = Parser()
     parser.parse_args(['--allow-env', '--log', 'info'])
     assert _logging.getLogger('bro').level == _logging.INFO
+
+
+class TestCommandSignature:
+  def test_repo_globals_are_not_the_commands_arguments(self):
+    signature = command_signature(('bro', 'list'))
+    assert signature.arguments == ()
+    assert signature.description == 'list registered bros'
+
+  def test_positional_and_flag_are_described(self):
+    arguments = {a.name: a for a in command_signature(('bro', 'show')).arguments}
+    assert arguments['name'].required is True
+    assert arguments['name'].kind == 'value'
+    assert arguments['name'].option is None
+    assert arguments['system_prompt'].kind == 'flag'
+    assert arguments['system_prompt'].option == '--system-prompt'
+    assert arguments['system_prompt'].required is False
+
+  def test_choices_types_and_variadic_positionals_carry(self):
+    arguments = {a.name: a for a in command_signature(('rewind', 'grep')).arguments}
+    assert arguments['color'].choices == ('auto', 'always', 'never')
+    assert arguments['after_context'].value_type == 'integer'
+    assert arguments['after_context'].option == '--after-context'  # the long form, not -A
+    assert arguments['trails'].kind == 'list'
+    assert arguments['trails'].required is False
+
+  def test_a_dispatching_command_names_its_subcommands(self):
+    with pytest.raises(ValueError, match='dispatches subcommands'):
+      command_signature(('rewind',))
+
+  def test_a_subcommand_without_a_handler_is_refused(self):
+    # `bro run` is routed by main before the parser sees it, so its real
+    # arguments are declared in the launcher, not here
+    with pytest.raises(ValueError, match='registers no handler'):
+      command_signature(('bro', 'run'))
+
+  def test_unknown_subcommand_lists_the_available_ones(self):
+    with pytest.raises(ValueError, match='available: run, chat, list, show'):
+      command_signature(('bro', 'nope'))
+
+  def test_a_command_taking_no_subcommand_says_so(self):
+    with pytest.raises(ValueError, match='takes no subcommand'):
+      command_signature(('bro', 'list', 'extra'))
+
+  def test_uninstalled_program_raises(self):
+    with pytest.raises(ValueError, match='no installed command'):
+      command_signature(('definitely-not-installed',))
+
+  def test_capture_leaves_the_parser_untouched(self):
+    command_signature(('bro', 'list'))
+    assert Parser(description='d').parse(['prog']) == {}

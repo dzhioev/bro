@@ -66,6 +66,7 @@ PYTEST_FILES = [
   'bro/brog/system_test.py',
   'bro/brog/github_test.py',
   'bro/brog/mcp_test.py',
+  'bro/llm/cli_tool_test.py',
   'bro/llm/llms/chat_gpt_test.py',
   'bro/llm/mcp_test.py',
   'bro/llm/mu_test.py',

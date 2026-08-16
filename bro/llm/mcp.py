@@ -1,5 +1,6 @@
 import functools
 import inspect
+import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
@@ -414,6 +415,44 @@ def mount(toolset: 'Toolset[Any]', *tool_names: str) -> ToolLayer:
 
 def block(*tool_names: str) -> ToolLayer:
   return ToolLayer(blocked_native_tool_names=tool_names)
+
+
+_COMMAND_WORD = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]*')
+
+
+def sh(command: str, *argument_names: str) -> ToolLayer:
+  """serve one installed CLI command as a generated tool.
+
+  `command` is a program name and any subcommands (`'bro list'`); the tool's
+  signature is derived from the command's own argument declarations when the
+  server is built, and `argument_names` narrows the exposure to the named
+  arguments (all of them by default), which is how a declaration hands out a
+  command's roster without its every flag. Nothing is imported or run here — a
+  command that cannot be read, or a required argument withheld from the
+  exposure, fails at build.
+
+  The command runs as a fixed argv with no shell between, so a bro reaches
+  exactly what it declares. Credentials the command reads are the declaring
+  bro's `extra_secrets`: this layer needs none of its own.
+  """
+  words = tuple(command.split())
+  if len(words) == 0:
+    raise ValueError('sh needs a command')
+  for word in words:
+    if _COMMAND_WORD.fullmatch(word) is None:
+      raise ValueError(
+        f'{word!r} is not a command word; a declaration names a program and its '
+        'subcommands, and nothing a shell would interpret'
+      )
+  name = '_'.join(words).replace('.', '_')
+  _validate_segment('tool name', name)
+
+  def build() -> MCPServer:
+    from bro.llm import cli_tool  # deferred: cli_tool builds on this module
+
+    return cli_tool.build_server(words, argument_names, name)
+
+  return ToolLayer(server_specs=(MCPServerSpec(build=build),))
 
 
 class FunctionTool(Tool):

@@ -124,17 +124,7 @@ async def bash(
       f'TIMED OUT after {timeout_seconds}s — killed. Re-run with a larger '
       'timeout_seconds if the command needs more time.'
     )
-  combined = process.stdout
-  if len(process.stderr) > 0:
-    combined = (
-      f'{combined}\n--- stderr ---\n{process.stderr}' if len(combined) > 0 else process.stderr
-    )
-  capped = apply_limit(combined, limit, keep='tail')
-  return (
-    f'exit_code: {process.returncode}\n{capped}'
-    if len(capped) > 0
-    else f'exit_code: {process.returncode}'
-  )
+  return spawn.format_result(process, limit=limit, keep='tail')
 
 
 @toolset.tool(
