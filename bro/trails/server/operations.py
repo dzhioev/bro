@@ -296,6 +296,62 @@ class Operations:
       'manifest_s3': manifest_key,
     }
 
+  async def repair_llm_spec(self, trail_id: str, expected: Any, replacement: dict) -> dict:
+    """replace a header's `native.llm` with `replacement`, but only while it still
+    equals `expected` — the manifested repair for a launch recipe recorded under a
+    vocabulary the current code no longer reads.
+
+    `native` is otherwise immutable: what a writer recorded is what the trail says
+    it ran. So this states the before-value it is replacing, writes it to S3 as a
+    manifest, and applies the change under a condition on that same value — a
+    second run, or a racing writer, leaves the header alone and says so.
+    """
+    header = await self._required_header(trail_id)
+    native = header.get('native')
+    if not isinstance(native, dict):
+      raise ValueError('trail header has no native record')
+    current = native.get('llm')
+    if current != expected:
+      raise ValueError(f'native.llm is not the expected value; found {json.dumps(current)}')
+    timestamp = storage_types.now_iso()
+    manifest_key = storage_types.llm_spec_manifest_key(trail_id, timestamp)
+    manifest = {
+      'operation': 'repair_llm_spec',
+      'at': timestamp,
+      'trail_id': trail_id,
+      'harness': header.get('harness'),
+      'previous': current,
+      'replacement': replacement,
+    }
+    await asyncio.to_thread(
+      self._s3.put_object,
+      Bucket=self._bucket,
+      Key=manifest_key,
+      Body=json.dumps(manifest, ensure_ascii=False).encode('utf-8'),
+      ContentType='application/json',
+    )
+    try:
+      await asyncio.to_thread(
+        self._dynamo.update_item,
+        TableName=self._trails_table,
+        Key=_ddb_item({'id': trail_id}),
+        ConditionExpression='#native.#llm = :expected',
+        UpdateExpression='SET #native.#llm = :replacement',
+        ExpressionAttributeNames={'#native': 'native', '#llm': 'llm'},
+        ExpressionAttributeValues={
+          ':expected': _ddb(expected),
+          ':replacement': _ddb(replacement),
+        },
+      )
+    except self._dynamo.exceptions.ConditionalCheckFailedException as exception:
+      raise ValueError('native.llm changed before the repair applied') from exception
+    return {
+      'trail_id': trail_id,
+      'previous': current,
+      'llm': replacement,
+      'manifest_s3': manifest_key,
+    }
+
   async def _required_migrated_header(self, trail_id: str) -> dict:
     header = await self._required_header(trail_id)
     if header.get('body_storage') != storage_types.UNIVERSAL_BODY_STORAGE:

@@ -117,6 +117,9 @@ class FakeDynamo:
       return item is not None and item.get(self._field('#end', operation)) is None
     if expression == '#end = :old':
       return item is not None and item.get(self._field('#end', operation)) == values[':old']
+    if expression == '#native.#llm = :expected':
+      native = item.get(self._field('#native', operation)) if item is not None else None
+      return isinstance(native, dict) and native.get('llm') == values[':expected']
     if expression == '#native = :old_native':
       return (
         item is not None and item.get(self._field('#native', operation)) == values[':old_native']
@@ -184,8 +187,8 @@ class FakeDynamo:
     expression = operation['UpdateExpression'].removeprefix('SET ')
     for assignment in self._split_assignments(expression):
       target, source = (part.strip() for part in assignment.split('=', 1))
-      target_parts = target.split('.')
-      field = names.get(target_parts[-1], target_parts[-1])
+      target_parts = [names.get(part, part) for part in target.split('.')]
+      field = target_parts[-1]
       if source.startswith('if_not_exists('):
         if field in item:
           continue
@@ -739,6 +742,43 @@ async def test_relink_manifests_before_trimming_and_recomputes(components):
   assert dynamo.headers[trail_id]['turn_count'] == 1
   assert dynamo.universal_steps[(trail_id, 0)]['uuid'] == 'own'
   assert (trail_id, 1) not in dynamo.universal_steps
+
+
+@pytest.mark.asyncio
+async def test_repair_llm_spec_manifests_the_value_it_replaces(components):
+  store, dynamo, s3 = components
+  trail_id = await _create_bro(store)
+  recorded = dynamo.headers[trail_id]['native']['llm']
+
+  result = await store.repair_llm_spec(trail_id, recorded, {**recorded, 'type': 'openai'})
+
+  assert dynamo.headers[trail_id]['native']['llm']['type'] == 'openai'
+  assert json.loads(s3.objects[result['manifest_s3']])['previous'] == recorded
+
+
+@pytest.mark.asyncio
+async def test_repair_llm_spec_refuses_a_value_it_did_not_read(components):
+  store, dynamo, _ = components
+  trail_id = await _create_bro(store)
+  recorded = dynamo.headers[trail_id]['native']['llm']
+
+  with pytest.raises(ValueError, match='not the expected value'):
+    await store.repair_llm_spec(trail_id, {'type': 'stale'}, {'type': 'openai'})
+  assert dynamo.headers[trail_id]['native']['llm'] == recorded
+
+
+@pytest.mark.asyncio
+async def test_repair_llm_spec_leaves_the_rest_of_native_alone(components):
+  # `native` also carries the usage an append folds in, so the repair must
+  # replace the recipe rather than the record around it
+  store, dynamo, _ = components
+  trail_id = await _create_bro(store)
+  recorded = dynamo.headers[trail_id]['native']['llm']
+  dynamo.headers[trail_id]['native']['usage'] = {'gpt-5': {'input_tokens': 7}}
+
+  await store.repair_llm_spec(trail_id, recorded, {**recorded, 'type': 'openai'})
+
+  assert dynamo.headers[trail_id]['native']['usage'] == {'gpt-5': {'input_tokens': 7}}
 
 
 @pytest.mark.asyncio
