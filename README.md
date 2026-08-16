@@ -63,7 +63,7 @@ Recording remains mandatory and every launch requires `~/.bro/trails.json`. Loca
 {"backend": "local"}
 ```
 
-It writes to `$BRO_TRAILS_DIR/trails` when set, otherwise `$XDG_DATA_HOME/bro/trails` (normally `~/.local/share/bro/trails`). Container launch composers bind-mount that host root automatically. The hosted service uses `{"backend": "service", "base_url": "https://trails.example", "token": "<bearer>"}`; an existing config with `base_url` and `token` but no `backend` continues to select the service. `trails-server` resolves its hosted store from the same credential vocabulary, selecting either local storage or the DynamoDB/S3 shape documented in [`bro/setup/CLAUDE.md`](bro/setup/CLAUDE.md); only its bearer-auth settings remain command-line/environment flags.
+It writes to `var/cw/trails` in the repository it runs against, beside the rest of that project's local state. Container launch composers bind-mount that host root at the same path inside the container automatically. The hosted service uses `{"backend": "service", "base_url": "https://trails.example", "token": "<bearer>"}`; an existing config with `base_url` and `token` but no `backend` continues to select the service. `trails-server` resolves its hosted store from the same credential vocabulary, selecting either local storage or the DynamoDB/S3 shape documented in [`bro/setup/CLAUDE.md`](bro/setup/CLAUDE.md); only its bearer-auth settings remain command-line/environment flags.
 
 ## Development
 

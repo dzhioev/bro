@@ -1,4 +1,3 @@
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -13,11 +12,11 @@ def test_missing_backend_keeps_selecting_service():
   assert isinstance(store, NetworkStore)
 
 
-def test_explicit_local_backend_uses_environment_root(tmp_path, monkeypatch):
-  monkeypatch.setenv('BRO_TRAILS_DIR', str(tmp_path))
+def test_explicit_local_backend_uses_the_project_root(tmp_path, monkeypatch):
+  monkeypatch.setattr('bro.trails.store.paths.project_root', lambda: tmp_path)
   store = build_store({'backend': 'local'})
   assert isinstance(store, LocalStore)
-  assert store.root == tmp_path.resolve()
+  assert store.root == (tmp_path / 'var' / 'cw' / 'trails').resolve()
 
 
 def test_dynamo_backend_dispatches_through_the_server_package(monkeypatch):
@@ -40,10 +39,9 @@ def test_unknown_backend_fails():
     build_store({'backend': 'other'})
 
 
-def test_default_local_root_uses_xdg_data_home(tmp_path, monkeypatch):
-  monkeypatch.delenv('BRO_TRAILS_DIR', raising=False)
-  monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path))
-  assert local_root() == Path(tmp_path) / 'bro'
+def test_the_local_root_sits_beside_the_projects_other_state(tmp_path, monkeypatch):
+  monkeypatch.setattr('bro.trails.store.paths.project_root', lambda: tmp_path)
+  assert local_root() == tmp_path / 'var' / 'cw' / 'trails'
 
 
 def test_default_store_still_requires_the_trails_credential():

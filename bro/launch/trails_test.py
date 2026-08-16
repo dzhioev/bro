@@ -49,6 +49,6 @@ def test_local_credential_maps_the_host_root_for_a_selected_instance(monkeypatch
   environment, mounts = launch_trails.local_trails_launch_data(_scope({'github', 'trails+eu'}))
 
   assert selected == [({'github', 'trails+eu'}, {'openai'})]
-  assert environment == {'BRO_TRAILS_DIR': '/home/cw/.bro-trails'}
-  assert mounts == (f'{root.resolve()}:/home/cw/.bro-trails',)
+  assert environment == {}
+  assert mounts == (f'{root.resolve()}:/workspace/var/cw/trails',)
   assert root.is_dir()

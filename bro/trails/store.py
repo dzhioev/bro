@@ -1,6 +1,5 @@
 """Store-neutral trails facade and credential-level backend selection."""
 
-import os
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from pathlib import Path
@@ -9,6 +8,7 @@ from typing import Any, Optional
 
 from bro.base import credentials
 from bro.trails.model import BlazeRequest, ForkedFrom, RecordedTrail, Step, Trail
+from bro.workspace import paths
 
 DEFAULT_LIST_PAGE_SIZE = 100
 DEFAULT_STEPS_PAGE_SIZE = 200
@@ -180,14 +180,8 @@ class TrailsStore(ABC):
 
 
 def local_root() -> Path:
-  configured = os.environ.get('BRO_TRAILS_DIR')
-  if configured is not None:
-    if len(configured) == 0:
-      raise ValueError('BRO_TRAILS_DIR must not be empty')
-    return Path(configured).expanduser()
-  data_home = os.environ.get('XDG_DATA_HOME')
-  base = Path(data_home).expanduser() if data_home is not None else Path.home() / '.local' / 'share'
-  return base / 'bro'
+  """the local backend's root for the repository the process runs against."""
+  return paths.trails_dir(paths.project_root())
 
 
 def build_store(config: dict[str, Any]) -> TrailsStore:

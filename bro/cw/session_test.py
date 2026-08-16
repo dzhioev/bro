@@ -252,8 +252,8 @@ class TestContainerCommand:
         {'CLAUDE_CONFIG_DIR': '/home/cw/.claude'},
       )
       harness.local_trails_launch_data.return_value = (
-        {'BRO_TRAILS_DIR': '/home/cw/.bro-trails'},
-        ('/host/trails:/home/cw/.bro-trails',),
+        {},
+        ('/host/trails:/workspace/var/cw/trails',),
       )
       result = cw_session.start_session(_spec(drop=True))
 
@@ -262,10 +262,9 @@ class TestContainerCommand:
       ScopedSecrets({'github', 'trails'}, set(), True)
     )
     launch = harness.run_in_container.call_args.args[0]
-    assert launch.env['BRO_TRAILS_DIR'] == '/home/cw/.bro-trails'
     assert launch.extra_mounts == (
       '/host/claude:/home/cw/.claude',
-      '/host/trails:/home/cw/.bro-trails',
+      '/host/trails:/workspace/var/cw/trails',
     )
 
   def test_raw_carried_in_the_container_command(self):

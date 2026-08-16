@@ -38,16 +38,12 @@ def test_describe_env_carries_identity_and_bro():
 
 
 def test_describe_carries_local_trails_data_in_the_launch(trails_launch_data):
-  trails_launch_data.return_value = (
-    {'BRO_TRAILS_DIR': '/home/cw/.bro-trails'},
-    ('/host/trails:/home/cw/.bro-trails',),
-  )
+  trails_launch_data.return_value = ({}, ('/host/trails:/workspace/var/cw/trails',))
 
   launch = _describe('dev', ['hi'])
 
   trails_launch_data.assert_called_once_with(_SCOPED)
-  assert launch.env['BRO_TRAILS_DIR'] == '/home/cw/.bro-trails'
-  assert launch.extra_mounts == ('/host/trails:/home/cw/.bro-trails',)
+  assert launch.extra_mounts == ('/host/trails:/workspace/var/cw/trails',)
 
 
 def test_describe_carries_the_given_scope():

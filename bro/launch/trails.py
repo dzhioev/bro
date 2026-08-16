@@ -4,12 +4,12 @@ from bro.base import credentials
 from bro.trails.store import local_root
 from bro.workspace.store import ScopedSecrets
 
-_CONTAINER_TRAILS_ROOT = '/home/cw/.bro-trails'
+# the container's project root is its /workspace clone, so the host root binds
+# where an in-container `local_root()` already looks
+_CONTAINER_TRAILS_ROOT = '/workspace/var/cw/trails'
 
 
-def local_trails_launch_data(
-  scoped: ScopedSecrets,
-) -> tuple[dict[str, str], tuple[str, ...]]:
+def local_trails_launch_data(scoped: ScopedSecrets) -> tuple[dict[str, str], tuple[str, ...]]:
   trails_names = {name for name in scoped.required if credentials.parse_name(name)[0] == 'trails'}
   if len(trails_names) == 0:
     return {}, ()
@@ -20,7 +20,4 @@ def local_trails_launch_data(
     return {}, ()
   host_root = local_root().resolve()
   host_root.mkdir(parents=True, exist_ok=True)
-  return (
-    {'BRO_TRAILS_DIR': _CONTAINER_TRAILS_ROOT},
-    (f'{host_root}:{_CONTAINER_TRAILS_ROOT}',),
-  )
+  return {}, (f'{host_root}:{_CONTAINER_TRAILS_ROOT}',)
