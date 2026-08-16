@@ -64,6 +64,15 @@ class TestHoldFragment:
     fragment = hold_fragment('guided', harness='claude', wire='mcp')
     assert 'full authorization' not in fragment
 
+  def test_interactive_levels_share_the_interaction_policy(self):
+    for hold in ('detached', 'attended', 'guided'):
+      fragment = hold_fragment(hold, harness='claude', wire='mcp')
+      assert '# Interaction policy' in fragment
+
+  def test_unattended_carries_no_interaction_policy(self):
+    fragment = hold_fragment('unattended', harness='claude', wire='mcp')
+    assert '# Interaction policy' not in fragment
+
   def test_unknown_hold_raises(self):
     with pytest.raises(ValueError, match='unknown hold'):
       hold_fragment('automatic', harness='claude', wire='mcp')
