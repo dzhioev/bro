@@ -67,4 +67,5 @@ from bro.trails.display.records import (
   TransientActivity,
   UserInput,
 )
+from bro.trails.display.render import retained_document
 from bro.trails.display.terminal import RetainedRenderer, StreamRenderer, color_enabled

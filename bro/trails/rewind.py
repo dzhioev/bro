@@ -20,23 +20,17 @@ from bro.trails.display import (
   PresetName,
   RecordedAdapter,
   RecordedSource,
-  RetainedRenderer,
   StreamRenderer,
   preset,
+  retained_document,
 )
+from bro.trails.search import grep_lines
 
 __cli_name__ = 'rewind'
 
 
 def _configuration(args: dict[str, Any], name: PresetName) -> DisplayConfig:
   return preset(name, color=ColorMode(args.get('color', ColorMode.AUTO)))
-
-
-def _retained_document(records: Iterable[DisplayRecord], configuration: DisplayConfig) -> str:
-  renderer = RetainedRenderer(target=sys.stdout)
-  with DisplaySession(configuration, renderer) as session:
-    session.consume(records)
-  return renderer.document()
 
 
 def _emit_document(text: str, args: dict[str, Any], configuration: DisplayConfig) -> None:
@@ -68,7 +62,7 @@ def _command_list(client: TrailsClient, args: dict[str, Any]) -> int:
     print('(no trails)', file=sys.stderr)
     return 0
   configuration = _configuration(args, PresetName.REWIND_LIST)
-  _emit_document(_retained_document(records, configuration), args, configuration)
+  _emit_document(retained_document(records, configuration, target=sys.stdout), args, configuration)
   return 0
 
 
@@ -172,7 +166,7 @@ def _command_show(client: TrailsClient, args: dict[str, Any]) -> int:
       terminal=lambda message: False,
       adapt_batch=lambda messages: adapter.message_records(trail_id, messages),
     )
-  _emit_document(_retained_document(records, configuration), args, configuration)
+  _emit_document(retained_document(records, configuration, target=sys.stdout), args, configuration)
   return 0
 
 
@@ -199,48 +193,8 @@ def _command_steps(client: TrailsClient, args: dict[str, Any]) -> int:
       terminal=lambda step: step.get('kind') == 'end',
       adapt_batch=lambda batch: adapter.native_step_records(trail_id, batch),
     )
-  _emit_document(_retained_document(records, configuration), args, configuration)
+  _emit_document(retained_document(records, configuration, target=sys.stdout), args, configuration)
   return 0
-
-
-def _grep_lines(
-  name: str,
-  text: str,
-  regex: re.Pattern[str],
-  colors: Colors,
-  before: int = 0,
-  after: int = 0,
-) -> list[str]:
-  """Return grep-style matching lines and optional context."""
-
-  def highlight(match: re.Match[str]) -> str:
-    return f'{colors.bold}{colors.red}{match.group(0)}{colors.reset}'
-
-  lines = text.splitlines()
-  match_indexes = {index for index, line in enumerate(lines) if regex.search(line) is not None}
-  shown: set[int] = set()
-  for index in match_indexes:
-    shown.update(range(max(index - before, 0), min(index + after + 1, len(lines))))
-
-  has_context = before > 0 or after > 0
-  output: list[str] = []
-  previous: Optional[int] = None
-  for index in sorted(shown):
-    if has_context and previous is not None and index > previous + 1:
-      output.append(f'{colors.cyan}--{colors.reset}')
-    previous = index
-    line = lines[index]
-    if index in match_indexes:
-      separator = f'{colors.cyan}:{colors.reset}'
-      if colors.enabled:
-        line = regex.sub(highlight, line)
-    else:
-      separator = f'{colors.cyan}-{colors.reset}'
-    output.append(
-      f'{colors.magenta}{name}{colors.reset}{separator}'
-      f'{colors.green}{index + 1}{colors.reset}{separator}{line}'
-    )
-  return output
 
 
 def _command_grep(client: TrailsClient, args: dict[str, Any]) -> int:
@@ -273,8 +227,8 @@ def _command_grep(client: TrailsClient, args: dict[str, Any]) -> int:
   for header in headers:
     adapter = RecordedAdapter(client)
     records = adapter.conversation_records(header)
-    rendered = _retained_document(records, configuration)
-    matches = _grep_lines(header['id'], rendered, regex, colors, before=before, after=after)
+    rendered = retained_document(records, configuration, target=sys.stdout)
+    matches = grep_lines(header['id'], rendered, regex, colors, before=before, after=after)
     if len(matches) > 0:
       if found and has_context:
         sys.stdout.write(f'{colors.cyan}--{colors.reset}\n')
@@ -288,7 +242,7 @@ def _command_tree(client: TrailsClient, args: dict[str, Any]) -> int:
   adapter = RecordedAdapter(client)
   records = adapter.lineage_records(args['trail_id'])
   configuration = _configuration(args, PresetName.REWIND_TREE)
-  _emit_document(_retained_document(records, configuration), args, configuration)
+  _emit_document(retained_document(records, configuration, target=sys.stdout), args, configuration)
   return 0
 
 

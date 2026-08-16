@@ -45,7 +45,8 @@ Writer-reported outcomes use `end.reason`; the stale-run sweep instead records `
 - Header responses expose provider-raw usage by model. Provider normalization belongs to the provider-aware usage layer, not the harness adapter.
 - List queries accept exactly one indexed selector: `harness`, `bro`, or `forked_from`, plus the common time range and cursor.
 - `bro/trails/migrate_llm_spec.py` (`migrate-trail-llm-spec`) drives that repair across the store: it holds the policy (which recorded shapes map to which replacement) while the server holds the primitive, reports by default and rewrites under `--apply`. A recipe with no model is left alone — there is nothing to migrate it to.
-- `bro/trails/rewind.py` (`rewind`) is the reader CLI for every harness: it owns argument parsing, queries, follow polling, regex matching, and grep context while every `show`, `steps`, `list`, `tree`, and `grep` record renders through the matching display preset.
+- `bro/trails/rewind.py` (`rewind`) is the reader CLI for every harness: it owns argument parsing, queries, follow polling, and grep context while every `show`, `steps`, `list`, `tree`, and `grep` record renders through the matching display preset.
+- `bro/trails/mcp.py` is the read-only `trails` toolset: structured bounded `list` summaries plus line/byte-windowed `show`, `steps`, `grep`, and `tree` documents rendered through the same recorded adapter and presets as rewind.
 
 ## Auth
 

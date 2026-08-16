@@ -133,6 +133,7 @@ github_app = "bro.extra.github.app:Source"
 
 [project.entry-points."bro.toolsets"]
 brog = "bro.brog.mcp:toolset"
+trails = "bro.trails.mcp:toolset"
 
 [tool.bro]
 default = "bro-dev"
