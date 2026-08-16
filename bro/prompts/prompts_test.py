@@ -64,7 +64,7 @@ class TestHoldFragment:
     fragment = hold_fragment('guided', harness='claude', wire='mcp')
     assert 'full authorization' not in fragment
 
-  def test_levels_with_a_human_channel_share_the_interaction_policy(self):
+  def test_interactive_levels_share_the_interaction_policy(self):
     for hold in ('detached', 'attended', 'guided'):
       fragment = hold_fragment(hold, harness='claude', wire='mcp')
       assert '# Interaction policy' in fragment
