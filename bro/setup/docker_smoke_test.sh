@@ -11,7 +11,8 @@
 #   smoke_curl <path> [-H <header>]
 #   smoke_assert_status <path> <expected-status> [-H <header>]
 #
-# container is cleaned up on EXIT. $SMOKE_PORT holds the mapped host port.
+# container and image are cleaned up on EXIT. $SMOKE_PORT holds the mapped host
+# port.
 
 if [ "$#" -ne 2 ]; then
   echo "usage: source docker_smoke_test.sh <oci-command> <build-preparer>" >&2
@@ -37,6 +38,9 @@ _SMOKE_COPIES=()
 smoke_build() {
   local dockerfile=$1
   _SMOKE_IMAGE="smoke-test-$$"
+  # the build tags the image, so the cleanup has to cover every step from here
+  # on, not just the ones holding a container
+  trap '_smoke_cleanup' EXIT
 
   "$_SMOKE_BUILD_PREPARER" "$dockerfile"
   echo "=== $_SMOKE_OCI_COMMAND build ==="
@@ -64,8 +68,6 @@ smoke_start() {
 
   echo "=== starting container ==="
   _SMOKE_CID=$("$_SMOKE_OCI_COMMAND" create -p "${SMOKE_PORT}:${internal_port}" "$@" "$_SMOKE_IMAGE")
-  # armed before the copies, which can fail with the container already created
-  trap '_smoke_cleanup' EXIT
   local index
   for ((index = 0; index < ${#_SMOKE_COPIES[@]}; index += 2)); do
     "$_SMOKE_OCI_COMMAND" cp "${_SMOKE_COPIES[index]}" "$_SMOKE_CID:${_SMOKE_COPIES[index + 1]}"
@@ -132,5 +134,10 @@ smoke_assert_status() {
 }
 
 _smoke_cleanup() {
-  "$_SMOKE_OCI_COMMAND" rm -f "$_SMOKE_CID" >/dev/null 2>&1 || true
+  if [ -n "$_SMOKE_CID" ]; then
+    "$_SMOKE_OCI_COMMAND" rm -f "$_SMOKE_CID" >/dev/null 2>&1 || true
+  fi
+  if [ -n "$_SMOKE_IMAGE" ]; then
+    "$_SMOKE_OCI_COMMAND" rmi -f "$_SMOKE_IMAGE" >/dev/null 2>&1 || true
+  fi
 }
