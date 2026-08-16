@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from bro.trails.local import LocalStore
-from bro.trails.model import BlazeRequest, canonical_json_bytes
+from bro.trails.model import BlazeRequest, canonical_json_bytes, payload_sha256
 from bro.trails.record.bro import Recorder
 from bro.trails.record.claude import Recorder as ClaudeRecorder
 from bro.trails.store import AppendConflict, TrailNotFound, fetch_recorded_trail
@@ -109,12 +109,23 @@ def test_claude_rows_store_body_and_project_messages(tmp_path):
   trail_id = created['id']
 
   assert store.get_step(trail_id, 0)['body'] == raw
-  assert store.find_steps_by_uuid({'uuid-1'}) == [
-    {'trail_id': trail_id, 'step_id': 0, 'uuid': 'uuid-1'}
-  ]
-  assert store.get_step_uuids(trail_id) == [{'step_id': 0, 'uuid': 'uuid-1'}]
   assert store.get_messages(trail_id)['messages'][0]['type'] == 'user_input'
   assert store.get_launch_context(trail_id) == {'workspace': 'one'}
+
+
+def test_lineage_index_reads_only_the_named_segments(tmp_path):
+  store = LocalStore(tmp_path)
+  raw = json.dumps({'type': 'user', 'uuid': 'uuid-1', 'message': {'content': 'hello'}})
+  trail_id = store.blaze(_claude_request(raw))['id']
+
+  [match] = store.find_segment_steps({'segment'}, {'uuid-1'})
+  assert (match['trail_id'], match['step_id'], match['uuid']) == (trail_id, 0, 'uuid-1')
+  assert match['header']['id'] == trail_id
+  assert store.find_segment_steps({'elsewhere'}, {'uuid-1'}) == []
+  assert store.find_segment_steps({'segment'}, set()) == []
+  assert store.get_step_uuids(trail_id) == [{'step_id': 0, 'uuid': 'uuid-1'}]
+  assert store.get_step_uuids(trail_id, through=-1) == []
+  assert store.step_payload_hashes(trail_id, [0, 7]) == {0: payload_sha256(raw)}
 
 
 def test_large_bodies_stay_inline(tmp_path):

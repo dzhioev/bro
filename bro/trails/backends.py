@@ -5,6 +5,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from bro.trails import claude_lineage
+from bro.trails.lineage import LineageDecision
+from bro.trails.model import BlazeRequest
+
 BRO_STEP_KINDS = frozenset(
   {
     'system_prompt',
@@ -52,6 +56,31 @@ class Adapter:
   open: Callable[[dict], OpenedBody]
   validate_create: Callable[[dict], None]
   emitted_message_types: frozenset[str]
+  # evidence, plus whatever row reads the store offers a resolver, to a verdict
+  resolve_lineage: Optional[Callable[[dict, Any], LineageDecision]] = None
+
+
+def resolve_lineage(adapter: Adapter, request: BlazeRequest, index: Any) -> LineageDecision:
+  """The harness verdict for a blaze carrying lineage evidence."""
+  assert request.lineage is not None
+  if adapter.resolve_lineage is None:
+    raise ValueError(f'the {request.harness} harness does not resolve lineage')
+  return adapter.resolve_lineage(request.lineage, index)
+
+
+def blaze_result(
+  trail_id: str, started_at: str, decision: Optional[LineageDecision]
+) -> dict[str, Any]:
+  """The create response: the new trail's identity, plus the resolver's verdict
+  when the request carried lineage evidence."""
+  result: dict[str, Any] = {'id': trail_id, 'started_at': started_at}
+  if decision is not None:
+    result['adopted'] = True
+    result['forked_from'] = decision.forked_from
+    result['chunks'] = decision.chunks
+    if decision.reason is not None:
+      result['reason'] = decision.reason
+  return result
 
 
 def add_numeric_maps(left: dict, right: dict) -> dict:
@@ -418,6 +447,7 @@ CLAUDE_ADAPTER = Adapter(
   project=_claude_project,
   open=_claude_open,
   validate_create=_claude_validate_create,
+  resolve_lineage=claude_lineage.resolve,
   emitted_message_types=frozenset(
     {
       'user_input',

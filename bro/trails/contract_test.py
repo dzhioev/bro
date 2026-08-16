@@ -10,7 +10,7 @@ import pytest
 from aiohttp import web
 
 from bro.trails.local import LocalStore
-from bro.trails.model import BlazeRequest
+from bro.trails.model import BlazeRequest, payload_sha256
 from bro.trails.network import NetworkStore
 from bro.trails.server.server import create_app
 from bro.trails.store import AppendConflict, TrailNotFound, TrailsStore
@@ -33,7 +33,14 @@ def _bro_request(*, bro='dev', body=None, forked_from=None, subject=None):
   )
 
 
-def _claude_request(*records, context=None):
+def _lineage(*records, segment='segment'):
+  return {
+    'segment': segment,
+    'lines': [[json.loads(record)['uuid'], payload_sha256(record)] for record in records],
+  }
+
+
+def _claude_request(*records, context=None, lineage=None):
   body = {'records': list(records)}
   if context is not None:
     body['launch_context'] = context
@@ -49,6 +56,7 @@ def _claude_request(*records, context=None):
       'cw_command': 'cw ss',
       'harness_version': 'test',
     },
+    lineage=lineage,
   )
 
 
@@ -164,24 +172,31 @@ class TestTrailsStoreContract:
       sibling,
     }
 
-  def test_uuid_reads_and_launch_context(self, trails_store):
+  def test_launch_context(self, trails_store):
     first = json.dumps({'type': 'system', 'uuid': 'uuid-1'})
-    second = json.dumps({'type': 'user', 'uuid': 'uuid-2', 'message': {'content': 'hello'}})
-    trail_id = trails_store.blaze(_claude_request(first, second, context={'cwd': '/workspace'}))[
-      'id'
-    ]
+    trail_id = trails_store.blaze(_claude_request(first, context={'cwd': '/workspace'}))['id']
 
-    assert trails_store.find_steps_by_uuid({'uuid-2', 'missing'}) == [
-      {'trail_id': trail_id, 'step_id': 1, 'uuid': 'uuid-2'}
-    ]
-    assert trails_store.find_steps_by_uuid(set()) == []
-    assert trails_store.get_step_uuids(trail_id, through=0) == [{'step_id': 0, 'uuid': 'uuid-1'}]
     assert trails_store.get_launch_context(trail_id) == {'cwd': '/workspace'}
 
     no_context = trails_store.blaze(_bro_request())['id']
     assert trails_store.get_launch_context(no_context) is None
     with pytest.raises(TrailNotFound):
       trails_store.get_launch_context('missing')
+
+  def test_blaze_resolves_harness_lineage(self, trails_store):
+    first = json.dumps({'type': 'system', 'uuid': 'uuid-1'})
+    second = json.dumps({'type': 'user', 'uuid': 'uuid-2', 'message': {'content': 'hello'}})
+    trail_id = trails_store.blaze(_claude_request(first, second))['id']
+    third = json.dumps({'type': 'user', 'uuid': 'uuid-3', 'message': {'content': 'again'}})
+
+    declined = trails_store.blaze(_claude_request(lineage=_lineage(first, second)))
+    verdict = trails_store.blaze(_claude_request(lineage=_lineage(first, second, third)))
+
+    assert declined == {'adopted': False, 'reason': 'no line past the recorded extent yet'}
+    assert verdict['adopted'] is True
+    assert verdict['forked_from'] == {'trail_id': trail_id, 'step_id': 1}
+    assert verdict['chunks'] == [[2, 2]]
+    assert trails_store.get_trail(verdict['id'])['forked_from'] == verdict['forked_from']
 
   def test_large_bodies_are_inline(self, trails_store):
     trail_id = trails_store.blaze(_bro_request())['id']

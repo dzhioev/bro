@@ -12,6 +12,7 @@ from bro.trails.model import (
   UNREPORTED_END_INFERENCE,
   BlazeRequest,
   canonical_json_bytes,
+  payload_sha256,
   validate_end,
 )
 from bro.trails.rows import AggregateState
@@ -114,6 +115,13 @@ class DynamoStore(TrailsStore):
     adapter.validate_create(request.native)
     if request.harness == 'bro' and request.bro is None:
       raise ValueError('bro is required for the bro harness')
+    decision = None
+    forked_from = request.forked_from
+    if request.lineage is not None:
+      decision = backends.resolve_lineage(adapter, request, self)
+      if not decision.adopt:
+        return {'adopted': False, 'reason': decision.reason}
+      forked_from = decision.forked_from
     trail_id = dynamo_types.new_id()
     started_at = _now_iso()
     launch_context = request.body.get('launch_context')
@@ -141,15 +149,15 @@ class DynamoStore(TrailsStore):
     optional = {
       'bro': request.bro,
       'hold': request.hold,
-      'forked_from': request.forked_from,
+      'forked_from': forked_from,
       'summoned_by': request.summoned_by,
       'subject': request.subject,
       'location': request.location,
       'context_s3': dynamo_types.context_key(trail_id) if launch_context is not None else None,
     }
     item.update({key: value for key, value in optional.items() if value is not None})
-    if request.forked_from is not None:
-      item['forked_from_id'] = request.forked_from['trail_id']
+    if forked_from is not None:
+      item['forked_from_id'] = forked_from['trail_id']
 
     item['body_storage'] = dynamo_types.UNIVERSAL_BODY_STORAGE
     item['extent'] = 0
@@ -186,7 +194,7 @@ class DynamoStore(TrailsStore):
         ],
       ],
     )
-    return {'id': trail_id, 'started_at': started_at}
+    return backends.blaze_result(trail_id, started_at, decision)
 
   def _store_context(self, trail_id: str, context: Any) -> None:
     self._s3.put_object(
@@ -284,7 +292,7 @@ class DynamoStore(TrailsStore):
       ConsistentRead=True,
     )
     rows = [row for item in response.get('Items', []) if (row := _from_ddb_item(item)) is not None]
-    expected = [dynamo_types.sha256_hex(canonical_json_bytes(record)) for record in records]
+    expected = [payload_sha256(record) for record in records]
     return len(rows) == len(records) and all(
       row.get('payload_sha256') == sha256 for row, sha256 in zip(rows, expected, strict=True)
     )
@@ -510,9 +518,10 @@ class DynamoStore(TrailsStore):
     response = self._s3.get_object(Bucket=self._bucket, Key=key)
     return json.loads(response['Body'].read().decode('utf-8'))
 
-  def find_steps_by_uuid(self, uuids: set[str]) -> list[dict]:
-    """Return universal row identities carrying any requested UUID."""
-    if len(uuids) == 0:
+  def find_segment_steps(self, segments: set[str], uuids: set[str]) -> list[dict]:
+    """Return row identities carrying any requested UUID, restricted to the
+    trails recording one of `segments`."""
+    if len(uuids) == 0 or len(segments) == 0:
       return []
     if self._uuid_index is None:
       raise RuntimeError('UUID lookup requires a configured index')
@@ -548,10 +557,17 @@ class DynamoStore(TrailsStore):
           return matches
 
     pages = self._executor.map(find, sorted(uuids))
-    return sorted(
-      (match for page in pages for match in page),
-      key=lambda row: (row['trail_id'], row['step_id']),
-    )
+    matches = [match for page in pages for match in page]
+    headers: dict[str, dict] = {}
+    kept: list[dict] = []
+    for match in matches:
+      trail_id = match['trail_id']
+      if trail_id not in headers:
+        headers[trail_id] = self.get_trail(trail_id)
+      header = headers[trail_id]
+      if header.get('native', {}).get('segment') in segments:
+        kept.append({**match, 'header': header})
+    return sorted(kept, key=lambda row: (row['trail_id'], row['step_id']))
 
   def get_step(self, trail_id: str, step_id: int) -> dict:
     header = self._required_universal_header(trail_id)
@@ -566,6 +582,22 @@ class DynamoStore(TrailsStore):
     if row is None:
       raise TrailNotFound(f'{trail_id}/{step_id}')
     return self._resolve_row_body(header['harness'], row)
+
+  def step_payload_hashes(self, trail_id: str, step_ids: list[int]) -> dict[int, str]:
+    self._required_universal_header(trail_id)
+    hashes: dict[int, str] = {}
+    for step_id in sorted({step_id for step_id in step_ids if step_id >= 0}):
+      response = self._dynamo.get_item(
+        TableName=self._steps_table,
+        Key=_ddb_item({'trail_id': trail_id, 'step_id': step_id}),
+        ProjectionExpression='payload_sha256',
+        ConsistentRead=True,
+      )
+      row = _from_ddb_item(response.get('Item'))
+      digest = row.get('payload_sha256') if row is not None else None
+      if isinstance(digest, str):
+        hashes[step_id] = digest
+    return hashes
 
   def get_step_uuids(self, trail_id: str, *, through: Optional[int] = None) -> list[dict]:
     self._required_universal_header(trail_id)

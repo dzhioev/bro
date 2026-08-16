@@ -7,7 +7,6 @@ from unittest.mock import MagicMock, patch
 import bro.cw.runner as cw_runner
 from bro.base import credentials
 from bro.cw.claude_argv import ClaudeLaunch
-from bro.cw.constants import CW_RESUMED_SESSION_ENV
 from bro.cw.mcp import MCPEndpoint
 from bro.cw.session_test import _spec
 from bro.llm.llms import claude_code
@@ -59,7 +58,6 @@ class _Harness:
     self.env.pop('CW_RUNNER_PID', None)
     self.env.pop('BROKER_CHANNEL', None)
     self.env.pop('CLAUDE_CONFIG_DIR', None)
-    self.env.pop(CW_RESUMED_SESSION_ENV, None)
     self.start_server = entered[2]
     self.build = entered[3]
     self.run_claude = entered[4]
@@ -95,14 +93,6 @@ class TestRunInPlace:
       (h.projects_dir / 'newer.jsonl').write_text('{}')
       assert cw_runner.run_in_place(_spec(resume=True, claude_args=['--foo'])) == 0
       assert h.build.call_args.kwargs['claude_args'] == ['--resume', 'newer', '--foo']
-      assert h.start_recorder.call_args.args[2][CW_RESUMED_SESSION_ENV] == 'newer'
-
-  def test_non_resume_clears_an_ambient_resumed_session(self, monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
-    with _Harness(tmp_path) as h:
-      h.env[CW_RESUMED_SESSION_ENV] = 'foreign'
-      assert cw_runner.run_in_place(_spec()) == 0
-      assert CW_RESUMED_SESSION_ENV not in h.start_recorder.call_args.args[2]
 
   def test_recorder_runs_for_the_session_and_stops_after(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)

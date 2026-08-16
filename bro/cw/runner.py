@@ -21,7 +21,6 @@ from bro.cw.broxy import _start_session_broxy
 from bro.cw.claude_argv import build_claude_launch
 from bro.cw.claude_auth import _apply_claude_auth
 from bro.cw.claude_config import _latest_jsonl, _provision_host_claude_dir
-from bro.cw.constants import CW_RESUMED_SESSION_ENV
 from bro.cw.mcp import _start_session_mcp_server
 from bro.cw.recorder import _start_session_recorder
 from bro.cw.session_context import (
@@ -92,7 +91,6 @@ def run_in_place(spec: 'SessionSpec') -> int:
     os.environ['CLAUDE_CONFIG_DIR'] = str(claude_dir)
 
   claude_args = list(spec.claude_args)
-  os.environ.pop(CW_RESUMED_SESSION_ENV, None)
   if spec.resume:
     projects_dir = claude_projects_dir(workspace)
     latest = _latest_jsonl(projects_dir)
@@ -101,7 +99,6 @@ def run_in_place(spec: 'SessionSpec') -> int:
       return 1
     log.info('resuming session %s', latest.stem)
     claude_args = ['--resume', latest.stem, *claude_args]
-    os.environ[CW_RESUMED_SESSION_ENV] = latest.stem
 
   os.environ.update(bro_git_identity_env(spec.session_bro))
 

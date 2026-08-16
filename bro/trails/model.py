@@ -5,7 +5,6 @@ import json
 from dataclasses import dataclass
 from typing import Any, Optional, TypedDict, cast
 
-UUID_LOOKUP_LIMIT = 100
 UNREPORTED_END_INFERENCE = 'unreported'
 LOOPBACK_HOSTS = frozenset({'127.0.0.1', 'localhost', '::1'})
 VALID_END_REASONS = frozenset({'ok', 'raised', 'error'})
@@ -40,6 +39,9 @@ class BlazeRequest:
   summoned_by: Optional[dict[str, Any]] = None
   subject: Optional[str] = None
   location: Optional[dict[str, Any]] = None
+  lineage: Optional[dict[str, Any]] = None
+  """harness-specific evidence for the trail's lineage, interpreted by the
+  harness adapter's resolver."""
 
   def __post_init__(self) -> None:
     for field in ('harness', 'version', 'surface'):
@@ -52,6 +54,9 @@ class BlazeRequest:
       raise ValueError('body must be an object')
     if not isinstance(self.native, dict):
       raise ValueError('native must be an object')
+    _validate_lineage(self.lineage)
+    if self.lineage is not None and self.forked_from is not None:
+      raise ValueError('lineage evidence and forked_from are mutually exclusive')
     for field in ('bro', 'subject'):
       value = getattr(self, field)
       if value is not None and (not isinstance(value, str) or len(value) == 0):
@@ -79,6 +84,7 @@ class BlazeRequest:
       'summoned_by',
       'subject',
       'location',
+      'lineage',
     }
     unknown = set(data) - fields
     if len(unknown) > 0:
@@ -100,6 +106,7 @@ class BlazeRequest:
       summoned_by=data.get('summoned_by'),
       subject=data.get('subject'),
       location=data.get('location'),
+      lineage=data.get('lineage'),
     )
 
   def to_wire(self) -> dict[str, Any]:
@@ -111,7 +118,7 @@ class BlazeRequest:
       'body': self.body,
       'native': self.native,
     }
-    for field in ('bro', 'hold', 'forked_from', 'summoned_by', 'subject', 'location'):
+    for field in ('bro', 'hold', 'forked_from', 'summoned_by', 'subject', 'location', 'lineage'):
       value = getattr(self, field)
       if value is not None:
         data[field] = value
@@ -143,6 +150,11 @@ def _validate_pointer(value: Any, field: str, *, step_optional: bool) -> None:
     item = value.get(ordinal)
     if item is not None and (not isinstance(item, int) or isinstance(item, bool) or item < 0):
       raise ValueError(f'{field}.{ordinal} must be a non-negative int')
+
+
+def _validate_lineage(value: Any) -> None:
+  if value is not None and not isinstance(value, dict):
+    raise ValueError('lineage must be an object')
 
 
 def _validate_location(value: Any) -> None:
@@ -228,6 +240,11 @@ def canonical_json_bytes(value: Any) -> bytes:
 
 def tools_sha256(tools: Any) -> str:
   return hashlib.sha256(canonical_json_bytes(tools)).hexdigest()
+
+
+def payload_sha256(payload: Any) -> str:
+  """the digest a stored row carries as `payload_sha256`."""
+  return hashlib.sha256(canonical_json_bytes(payload)).hexdigest()
 
 
 def spill_descriptor(value: Any) -> Optional[SpillDescriptor]:

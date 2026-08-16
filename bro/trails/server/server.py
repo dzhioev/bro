@@ -16,7 +16,6 @@ from bro.base import log
 from bro.trails.model import (
   LOOPBACK_HOSTS,
   MESSAGE_TYPES,
-  UUID_LOOKUP_LIMIT,
   BlazeRequest,
   validate_end,
 )
@@ -123,7 +122,8 @@ async def _handle_blaze(request: web.Request) -> web.Response:
     result = await _dispatch(store.blaze, blaze_request)
   except ValueError as exception:
     return _error(str(exception), 400)
-  return web.json_response(result, status=201)
+  # a resolver that declines to adopt creates nothing, so the response is not 201
+  return web.json_response(result, status=200 if result.get('adopted') is False else 201)
 
 
 async def _handle_append_records(request: web.Request) -> web.Response:
@@ -236,17 +236,6 @@ async def _handle_get_context(request: web.Request) -> web.Response:
   return web.json_response({'launch_context': context})
 
 
-async def _handle_find_steps(request: web.Request) -> web.Response:
-  requested = request.query.getall('uuid', [])
-  if len(requested) == 0 or len(requested) > UUID_LOOKUP_LIMIT:
-    return _error(f'uuid must be supplied between 1 and {UUID_LOOKUP_LIMIT} times', 400)
-  if any(len(uuid) == 0 for uuid in requested):
-    return _error('uuid must be non-empty', 400)
-  store: TrailsStore = request.app['store']
-  steps = await _dispatch(store.find_steps_by_uuid, set(requested))
-  return web.json_response({'steps': steps})
-
-
 async def _handle_get_step(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
   step_id = _parse_ordinal(request.match_info['step_id'], name='step_id')
@@ -258,19 +247,6 @@ async def _handle_get_step(request: web.Request) -> web.Response:
   except ValueError as exception:
     return _error(str(exception), 400)
   return web.json_response(step)
-
-
-async def _handle_get_step_uuids(request: web.Request) -> web.Response:
-  trail_id = request.match_info['trail_id']
-  through = _parse_optional_ordinal(request.query.get('through'), name='through')
-  store: TrailsStore = request.app['store']
-  try:
-    steps = await _dispatch(store.get_step_uuids, trail_id, through=through)
-  except TrailNotFound:
-    return _error(f'trail not found: {trail_id}', 404)
-  except ValueError as exception:
-    return _error(str(exception), 400)
-  return web.json_response({'steps': steps})
 
 
 async def _handle_get_steps(request: web.Request) -> web.Response:
@@ -456,12 +432,10 @@ def create_app(
   app.router.add_get('/health', _handle_health)
   app.router.add_post('/v1/trails', _handle_blaze)
   app.router.add_get('/v1/trails', _handle_list_trails)
-  app.router.add_get('/v1/steps', _handle_find_steps)
   app.router.add_get('/v1/trails/{trail_id}', _handle_get_trail)
   app.router.add_patch('/v1/trails/{trail_id}', _handle_update_header)
   app.router.add_post('/v1/trails/{trail_id}/records', _handle_append_records)
   app.router.add_get('/v1/trails/{trail_id}/steps', _handle_get_steps)
-  app.router.add_get('/v1/trails/{trail_id}/steps/uuids', _handle_get_step_uuids)
   app.router.add_get('/v1/trails/{trail_id}/steps/{step_id}', _handle_get_step)
   app.router.add_get('/v1/trails/{trail_id}/messages', _handle_get_messages)
   app.router.add_get('/v1/trails/{trail_id}/context', _handle_get_context)

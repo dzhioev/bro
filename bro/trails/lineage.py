@@ -1,7 +1,22 @@
-"""Shared fork-lineage traversal."""
+"""Shared fork-lineage traversal and the harness resolution verdict."""
 
+import dataclasses
 from collections.abc import Callable
-from typing import Optional
+from typing import Any, Optional
+
+
+@dataclasses.dataclass(frozen=True)
+class LineageDecision:
+  """A harness resolver's verdict for a trail about to be blazed: where it forks
+  from, and which ranges of the harness artifact the trail will hold. Each chunk
+  is a half-open ``[start, end)`` range; the last one grows as the artifact does.
+  ``adopt`` is False when the artifact is not yet in a state worth recording, and
+  nothing is created."""
+
+  adopt: bool = True
+  forked_from: Optional[dict[str, Any]] = None
+  chunks: list[list[int]] = dataclasses.field(default_factory=lambda: [[0, 0]])
+  reason: Optional[str] = None
 
 
 def walk_chain[TrailValue, BoundValue](

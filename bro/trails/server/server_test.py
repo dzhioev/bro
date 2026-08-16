@@ -148,14 +148,10 @@ async def test_read_handlers_dispatch_local_store_semantics(client):
   trail_id = (await created.json())['id']
 
   point = await client.get(f'/v1/trails/{trail_id}/steps/1', headers=_auth())
-  uuids = await client.get(f'/v1/trails/{trail_id}/steps/uuids?through=0', headers=_auth())
-  found = await client.get('/v1/steps?uuid=second', headers=_auth())
   messages = await client.get(f'/v1/trails/{trail_id}/messages?type=user_input', headers=_auth())
   context = await client.get(f'/v1/trails/{trail_id}/context', headers=_auth())
 
   assert (await point.json())['uuid'] == 'second'
-  assert await uuids.json() == {'steps': [{'step_id': 0, 'uuid': 'first'}]}
-  assert await found.json() == {'steps': [{'trail_id': trail_id, 'step_id': 1, 'uuid': 'second'}]}
   assert [message['type'] for message in (await messages.json())['messages']] == ['user_input']
   assert await context.json() == {'launch_context': {'cwd': '/workspace'}}
 
@@ -179,13 +175,11 @@ async def test_list_filters_and_rejects_invalid_queries(client):
   filtered = await client.get('/v1/trails?harness=claude', headers=_auth())
   conflicting = await client.get('/v1/trails?harness=claude&bro=dev', headers=_auth())
   malformed_limit = await client.get('/v1/trails?limit=lots', headers=_auth())
-  missing_uuid = await client.get('/v1/steps', headers=_auth())
   malformed_step = await client.get('/v1/trails/missing/steps/two', headers=_auth())
 
   assert [trail['harness'] for trail in (await filtered.json())['trails']] == ['claude']
   assert conflicting.status == 400
   assert malformed_limit.status == 400
-  assert missing_uuid.status == 400
   assert malformed_step.status == 400
 
 
