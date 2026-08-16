@@ -4,7 +4,7 @@ import os
 import subprocess
 import sys
 from dataclasses import dataclass, replace
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from bro.base import credentials, log
 from bro.cw.claude_auth import _apply_claude_auth, _load_anthropic_key
@@ -34,6 +34,9 @@ from bro.workspace.project import project_config
 from bro.workspace.store import ScopedSecrets, log_scoped_secrets, materialize_scoped_store
 from bro.workspace.worktrees import ensure_host_worktree, provision_host_worktree
 
+if TYPE_CHECKING:
+  from bro.llm.llms.claude_code import LLMSpec as ClaudeCodeSpec
+
 
 @dataclass(frozen=True)
 class SessionSpec:
@@ -49,10 +52,9 @@ class SessionSpec:
   host: bool
   drop: bool
   hold: str
-  fast: bool
   grant: list[str]
   revoke: list[str]
-  effort: Optional[str]
+  llm: Optional[str]
   resume: bool
   into: Optional[str]
   bro: Optional[str]
@@ -80,6 +82,16 @@ class SessionSpec:
     return Surface.RAW_SESSION if self.raw else Surface.CW_SESSION
 
   @property
+  def llm_spec(self) -> 'ClaudeCodeSpec':
+    """the recipe this session's claude runs under: `--llm` over Claude Code's
+    own default. Raises `LLMSelectionError` when the value names another
+    provider."""
+    from bro.launch.llm_flags import resolve_claude
+    from bro.llm.providers import LLMSelection, parse
+
+    return resolve_claude(LLMSelection() if self.llm is None else parse(self.llm))
+
+  @property
   def kind(self) -> WorkspaceKind:
     """the workspace kind this session runs in."""
     return WorkspaceKind.WORKTREE if self.host else WorkspaceKind.CONTAINER
@@ -92,15 +104,14 @@ class SessionSpec:
       return ['cw', 'resume', self.name]
     flags = {
       '--host': self.host,
-      '--fast': self.fast,
       '--drop': self.drop,
       '--raw': self.raw,
     }
     parts = ['cw', 'ss', *(f for f, v in flags.items() if v)]
     if self.hold != DEFAULT_HOLD:
       parts.extend(['--hold', self.hold])
-    if self.effort is not None:
-      parts.extend(['--effort', self.effort])
+    if self.llm is not None:
+      parts.extend(['--llm', self.llm])
     if self.bro is not None:
       parts.extend(['--bro', self.bro])
     for g in self.grant:
@@ -119,12 +130,12 @@ class SessionSpec:
     drops the flags the outer already consumed (--host --drop --grant --revoke
     --into). the prompt uses the
     joined `=` form so a prompt starting with `-` can't be mistaken for a flag."""
-    flags = {'--fast': self.fast, '--resume': self.resume, '--raw': self.raw}
+    flags = {'--resume': self.resume, '--raw': self.raw}
     parts = ['ss', '--in-place', *(f for f, v in flags.items() if v)]
     if self.hold != DEFAULT_HOLD:
       parts.extend(['--hold', self.hold])
-    if self.effort is not None:
-      parts.extend(['--effort', self.effort])
+    if self.llm is not None:
+      parts.extend(['--llm', self.llm])
     if self.bro is not None:
       parts.extend(['--bro', self.bro])
     if self.prompt is not None:

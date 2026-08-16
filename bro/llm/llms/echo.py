@@ -6,15 +6,20 @@ from bro.llm.mcp import MCPServer
 from bro.llm.observer import Observer
 from bro.llm.tracker import Tracker
 
+DEFAULT_MODEL = 'echo'
+
+# Echo answers whatever it is asked with, so it has no model roster to name.
+MODELS: dict[str, str] = {}
+
 
 @dataclass(frozen=True)
-class LLMSpec(llm_llm.LLMSpec):
+class LLMSpec(llm_llm.NativeLLMSpec):
   """trivial spec for Echo. inherits the raising base `.fast` since echo has
   no fast-mode equivalent."""
 
   TYPE: ClassVar[str] = 'echo'
 
-  model: str = 'echo'
+  model: str = DEFAULT_MODEL
 
   def create_llm(
     self,

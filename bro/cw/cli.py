@@ -158,7 +158,20 @@ def main(argv: list[str]) -> Optional[int]:
     parser.error('--raw cannot be combined with --host (the raw flavor is fenced to the container)')
   if args['hold'] is None:
     args['hold'] = DEFAULT_HOLD
-  spec = SessionSpec(**args)
+  # imported here, not at module level: the flag layer pulls the llm package,
+  # and every other subcommand runs without it
+  from bro.launch.llm_flags import canonicalize, drop_piece_flags, selection_from_args
+  from bro.llm.providers import LLMSelectionError
+
+  try:
+    canonicalize(args, selection_from_args(args))
+    drop_piece_flags(args)
+    spec = SessionSpec(**args)
+    # settle the recipe here rather than deep in the argv builder, so a bad
+    # --llm fails as the usage error it is
+    _ = spec.llm_spec
+  except LLMSelectionError as e:
+    parser.error(str(e))
   if in_place:
     return run_in_place(spec)
   return start_session(spec)

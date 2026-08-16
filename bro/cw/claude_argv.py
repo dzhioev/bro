@@ -6,7 +6,8 @@ harness with the cw-injected append prompt. Both mount their bro's session-local
 MCP namespaces. Everything else — model, the merged `--settings` (fastMode +
 statusLine, plus the apiKeyHelper under `--raw`), `--effort`, the forwarded
 claude args, and prompt seeding is handled once, identically wherever the
-session runs.
+session runs. Model, effort and fast mode come off the session's claude-code
+`LLMSpec` (`SessionSpec.llm_spec`).
 """
 
 import json
@@ -17,7 +18,6 @@ from typing import TYPE_CHECKING
 
 from bro import prompts
 from bro.base import credentials
-from bro.cw.constants import _CW_MODEL
 from bro.cw.mcp import MCPEndpoint, _http_mcp_config
 from bro.cw.system_prompt import _session_append_prompt
 
@@ -91,15 +91,16 @@ def build_claude_launch(
   """
   from bro.registry import create_bro
 
+  llm = spec.llm_spec
   settings: dict = {
-    'fastMode': spec.fast,
+    'fastMode': llm.fast_mode,
     'statusLine': {
       'type': 'command',
       'command': _settings_command('bro.cw.statusline'),
       'refreshInterval': _STATUSLINE_REFRESH_SECONDS,
     },
   }
-  argv = ['--model', _CW_MODEL]
+  argv = ['--model', llm.model]
   bro = create_bro(spec.session_bro)
   servers = bro.claude_bro_mcp_servers() if spec.raw else bro.claude_persona_mcp_servers()
   blocked_tool_names = () if spec.raw else bro.blocked_tool_names('claude')
@@ -141,8 +142,8 @@ def build_claude_launch(
     ]
   if spec.hold != 'guided':
     argv.append('--dangerously-skip-permissions')
-  if spec.effort is not None:
-    argv += ['--effort', spec.effort]
+  if llm.effort is not None:
+    argv += ['--effort', llm.effort]
   argv += claude_args
   if spec.prompt is not None:
     prompt = spec.prompt

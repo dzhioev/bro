@@ -7,11 +7,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import bro.llm.llms.chat_gpt as llm_llms_chat_gpt
 import bro.llm.llms.echo as llm_llms_echo
+import bro.llm.llms.openai as llm_llms_openai
 from bro.launch.call import call_text, chat_main, main
 from bro.launch.identity import bro_git_identity_env
-from bro.llm.llm import LLM, LLMSpec
+from bro.llm.llm import LLM, NativeLLMSpec
 from bro.llm.mcp import MCPServer
 from bro.llm.observer import (
   InterimAssistantTextEvent,
@@ -158,7 +158,7 @@ async def test_text_returns_on_immediate_eof(capsys):
 
 
 @dataclass(frozen=True)
-class _FastlessSpec(LLMSpec):
+class _FastlessSpec(NativeLLMSpec):
   """test spec that intentionally has no fast-mode equivalent."""
 
   TYPE: ClassVar[str] = 'fastless'
@@ -172,14 +172,14 @@ class _FastlessSpec(LLMSpec):
     return {'type': self.TYPE, 'model': self.model}
 
   @classmethod
-  def _from_dict_impl(cls, data: dict) -> 'LLMSpec':
+  def _from_dict_impl(cls, data: dict) -> 'NativeLLMSpec':
     return cls(model=data['model'])
 
 
 class _ChatBro(Bro):
   name = 'record'
   description = 'records inputs'
-  llm_spec = llm_llms_chat_gpt.LLMSpec(model='gpt-5.4-mini')
+  llm_spec = llm_llms_openai.LLMSpec(model='gpt-5.4-mini')
 
   def __init__(self):
     super().__init__(system_prompt='record')
@@ -225,11 +225,11 @@ def test_default_invokes_spec_fast(monkeypatch):
   assert rc is None
   assert len(built) == 1
   spec = built[0].llm_spec
-  assert isinstance(spec, llm_llms_chat_gpt.LLMSpec)
+  assert isinstance(spec, llm_llms_openai.LLMSpec)
   assert spec.service_tier == 'priority'
   # class default untouched — fast() returns a fresh spec
   default = _ChatBro.llm_spec
-  assert isinstance(default, llm_llms_chat_gpt.LLMSpec)
+  assert isinstance(default, llm_llms_openai.LLMSpec)
   assert default.service_tier is None
 
 
@@ -289,7 +289,7 @@ def test_bro_chat_default_builds_plain_spec(monkeypatch):
   assert rc is None
   assert len(built) == 1
   spec = built[0].llm_spec
-  assert isinstance(spec, llm_llms_chat_gpt.LLMSpec)
+  assert isinstance(spec, llm_llms_openai.LLMSpec)
   assert spec.service_tier is None
 
 
@@ -308,7 +308,7 @@ def test_bro_chat_fast_flag_invokes_spec_fast(monkeypatch):
   assert rc is None
   assert len(built) == 1
   spec = built[0].llm_spec
-  assert isinstance(spec, llm_llms_chat_gpt.LLMSpec)
+  assert isinstance(spec, llm_llms_openai.LLMSpec)
   assert spec.service_tier == 'priority'
 
 
@@ -342,7 +342,7 @@ def test_call_re_execs_into_container_when_outside():
     env.pop('BRO_SHELL_COMMAND', None)
     rc = main(['call', 'bro-dev', 'hey'])
     assert rc == 0
-    assert env['BRO_SHELL_COMMAND'] == 'call bro-dev hey'
+    assert env['BRO_SHELL_COMMAND'] == 'call --llm +fast bro-dev hey'
     assert run.call_count == 1
     launch = run.call_args.args[0]
     assert launch.name.startswith('call-bro-dev-')
@@ -353,7 +353,8 @@ def test_call_re_execs_into_container_when_outside():
       'chat',
       'bro-dev',
       'hey',
-      '--fast',
+      '--llm',
+      '+fast',
       '--hold',
       'attended',
       '--in-place',
@@ -397,7 +398,8 @@ def test_call_forwards_text_when_host_not_a_tty():
       'bro-dev',
       'hey',
       '--text',
-      '--fast',
+      '--llm',
+      '+fast',
       '--hold',
       'attended',
       '--in-place',
@@ -435,9 +437,8 @@ def test_call_forwards_effort_into_container():
       'chat',
       'bro-dev',
       'hey',
-      '--fast',
-      '--effort',
-      'high',
+      '--llm',
+      '::high+fast',
       '--hold',
       'attended',
       '--in-place',
@@ -459,7 +460,7 @@ def test_effort_flag_overrides_spec_effort(monkeypatch):
   assert rc is None
   assert len(built) == 1
   spec = built[0].llm_spec
-  assert isinstance(spec, llm_llms_chat_gpt.LLMSpec)
+  assert isinstance(spec, llm_llms_openai.LLMSpec)
   assert spec.reasoning_effort == 'max'
   assert spec.service_tier == 'priority'
 
@@ -492,7 +493,8 @@ def test_call_no_trails_disables_recording_in_container():
       'chat',
       'bro-dev',
       'hey',
-      '--fast',
+      '--llm',
+      '+fast',
       '--hold',
       'attended',
       '--in-place',
@@ -544,7 +546,8 @@ def test_call_forwards_resume_into_container():
       'bro-dev',
       '--resume',
       'latest',
-      '--fast',
+      '--llm',
+      '+fast',
       '--hold',
       'attended',
       '--in-place',
@@ -586,7 +589,8 @@ def test_call_forwards_resume_trail_id_with_message():
       'and then?',
       '--resume',
       'trail-id-1',
-      '--fast',
+      '--llm',
+      '+fast',
       '--hold',
       'attended',
       '--in-place',
@@ -634,7 +638,7 @@ def test_call_resume_runs_the_resumed_bro(monkeypatch, capsys):
   assert captured['trail_ref'] == 'latest'
   # call implies fast, so the continuation runs the class spec's fast variant
   spec = captured['llm_spec']
-  assert isinstance(spec, llm_llms_chat_gpt.LLMSpec)
+  assert isinstance(spec, llm_llms_openai.LLMSpec)
   assert spec.service_tier == 'priority'
   assert captured['bro'] is resumed_bro
   assert captured['initial'] is None

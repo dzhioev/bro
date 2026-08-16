@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import dataclasses
 import http.client
 import importlib.util
 import os
@@ -25,10 +26,11 @@ from bro.launch._cli import (
   maybe_containerize,
   run_llm_spec,
 )
+from bro.launch.llm_flags import add_llm_flags, canonicalize, selection_from_args
 from bro.launch.resume import RESUME_LATEST
-from bro.llm.llm import EFFORT_LEVELS
 from bro.llm.mcp import HOLDS
 from bro.llm.observer import Observer
+from bro.llm.providers import LLMSelectionError
 from bro.trails.display import (
   DisplayRecord,
   DisplaySession,
@@ -189,8 +191,7 @@ def chat_main(
     help='with --resume: fork the conversation at this step of the resumed trail '
     'instead of its latest consistent point',
   )
-  parser.add_argument('--fast', action='store_true', help=FAST_HELP)
-  parser.add_argument('--effort', choices=EFFORT_LEVELS, default=None, help=EFFORT_HELP)
+  add_llm_flags(parser, effort_help=EFFORT_HELP, fast_help=FAST_HELP)
   parser.add_argument('--in-place', action='store_true', help=IN_PLACE_HELP)
   parser.add_argument('--no-trails', dest='no_trails', action='store_true', help=NO_TRAILS_HELP)
   # --no-trails acts only on the container hop; --in-place has no hop to act on.
@@ -203,6 +204,14 @@ def chat_main(
   parser.add_argument('--into', metavar='REF', help=INTO_HELP)
   parser.add_argument('--hold', choices=HOLDS, default=None, help=HOLD_HELP.format(default_hold))
   args = parser.parse(argv)
+  try:
+    selection = selection_from_args(args)
+  except LLMSelectionError as error:
+    log.error('%s', error)
+    return 1
+  if implied_fast:
+    selection = dataclasses.replace(selection, fast=True)
+  canonicalize(args, selection)
   os.environ.setdefault('BRO_SHELL_COMMAND', ' '.join(parser.reconstruct(args, prog=program)))
 
   if args['what'] is None and args['resume'] is None:
@@ -221,7 +230,13 @@ def chat_main(
   # allocates a `-it` PTY, so capability selection runs before the hop and the
   # selected stream fallback is forwarded into the container.
   force_text = args['text'] or not _tui_supported()
-  fast = args['fast'] or implied_fast
+  try:
+    run_spec = run_llm_spec(args['bro'], selection)
+  except (NotImplementedError, LLMSelectionError) as e:
+    # an explicit knob a provider does not have — a clean error rather than fast
+    # mode's silent fallback
+    log.error('%s', e)
+    return 1
   inner_args = [args['what']] if args['what'] is not None else []
   if force_text:
     inner_args.append('--text')
@@ -229,10 +244,8 @@ def chat_main(
     inner_args.extend(['--resume', args['resume']])
   if args['at'] is not None:
     inner_args.extend(['--at', str(args['at'])])
-  if fast:
-    inner_args.append('--fast')
-  if args['effort'] is not None:
-    inner_args.extend(['--effort', args['effort']])
+  if args['llm'] is not None:
+    inner_args.extend(['--llm', args['llm']])
   # always explicit: the alias defaults diverge (call attends, bro chat guides),
   # so the inner `bro chat` must not fall back to its own default
   hold = args['hold'] if args['hold'] is not None else default_hold
@@ -247,6 +260,7 @@ def chat_main(
     grant=args['grant'],
     revoke=args['revoke'],
     into=args['into'],
+    llm_spec=run_spec,
   )
   if hopped is not None:
     return hopped
@@ -257,14 +271,6 @@ def chat_main(
     from bro.registry import get_class
     from bro.trails.client import default_client
 
-    bro_class = get_class(args['bro'])
-    try:
-      spec = run_llm_spec(bro_class, fast=fast, effort=args['effort'])
-    except NotImplementedError as e:
-      # --effort on a provider without the knob — an explicit ask, so a clean
-      # error instead of fast mode's silent fallback.
-      log.error('%s', e)
-      return 1
     with default_client() as client:
       try:
         # the continuation runs the class's current spec (as a fresh call
@@ -273,7 +279,7 @@ def chat_main(
           client,
           args['bro'],
           args['resume'],
-          llm_spec=spec if spec is not None else bro_class.llm_spec,
+          llm_spec=run_spec if run_spec is not None else get_class(args['bro']).llm_spec,
           at=args['at'],
         )
       except (ValueError, http.client.HTTPException) as e:
@@ -284,13 +290,7 @@ def chat_main(
     log.info('resumed trail %s (%d prior display records)', resumed.trail_id, len(history))
   else:
     log.verbose('creating bro %s', args['bro'])
-    try:
-      bro = create_bro_for_run(args['bro'], fast=fast, effort=args['effort'])
-    except NotImplementedError as e:
-      # --effort on a provider without the knob — an explicit ask, so a clean
-      # error instead of fast mode's silent fallback.
-      log.error('%s', e)
-      return 1
+    bro = create_bro_for_run(args['bro'], selection)
   initial: Optional[str] = args['what']
   use_tui = not args['text'] and _tui_supported()
   preset_name = PresetName.CHAT if program == ['bro', 'chat'] else PresetName.CALL

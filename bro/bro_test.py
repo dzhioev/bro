@@ -772,7 +772,7 @@ class TestBroSend:
 class GatedBro(BaseBro):
   name = 'gated'
   description = 'declares secrets for credential-gate tests'
-  # two manifest names on top of the default chat_gpt spec's `openai`
+  # two manifest names on top of the default openai spec's `openai`
   extra_secrets = ('alpha', 'beta')
 
   def __init__(self):
@@ -1524,7 +1524,7 @@ class TestNeededSecrets:
     bro = ManifestBro()
     # the llm key is NOT in needed_secrets() — surfaces that run the bro add it
     assert bro.needed_secrets() == ('alpha', 'beta', 'delta', 'gamma')
-    assert bro.llm_spec.needed_secrets() == ('openai',)  # default chat_gpt
+    assert bro.llm_spec.needed_secrets() == ('openai',)  # default openai
 
   def test_extra_secrets_mro_unioned(self):
     class Base(BaseBro):
@@ -1911,8 +1911,7 @@ class TestSummonTool:
       hold=None,
       grant=None,
       revoke=None,
-      effort=None,
-      fast=False,
+      llm=None,
       step_id=None,
       index=None,
       client=None,
@@ -1925,8 +1924,7 @@ class TestSummonTool:
           'into': into,
           'grant': grant,
           'revoke': revoke,
-          'effort': effort,
-          'fast': fast,
+          'llm': llm,
           'step_id': step_id,
           'index': index,
           'client': client,
@@ -1950,8 +1948,7 @@ class TestSummonTool:
         'timeout': 60,
         'grant': ['aws', '@bro'],
         'revoke': ['openai'],
-        'effort': 'high',
-        'fast': True,
+        'llm': 'openai:sol:high+fast',
       }
     )
     assert result == 'the answer'
@@ -1964,8 +1961,7 @@ class TestSummonTool:
         'into': None,
         'grant': ['aws', '@bro'],
         'revoke': ['openai'],
-        'effort': 'high',
-        'fast': True,
+        'llm': 'openai:sol:high+fast',
         'step_id': 42,
         'index': 3,
         'client': client,
@@ -1989,8 +1985,7 @@ class TestSummonTool:
       hold=None,
       grant=None,
       revoke=None,
-      effort=None,
-      fast=False,
+      llm=None,
       step_id=None,
       index=None,
     ):
@@ -2084,8 +2079,7 @@ class TestSummonTool:
       hold=None,
       grant=None,
       revoke=None,
-      effort=None,
-      fast=False,
+      llm=None,
       step_id=None,
       index=None,
       client=None,
@@ -2170,8 +2164,7 @@ class TestSummonTool:
       hold=None,
       grant=None,
       revoke=None,
-      effort=None,
-      fast=False,
+      llm=None,
       step_id=None,
       index=None,
       client=None,

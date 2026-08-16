@@ -21,7 +21,7 @@ def _create_payload(**overrides) -> dict:
     'interactive': False,
     'surface': 'ask',
     'hold': 'unattended',
-    'native': {'llm': {'type': 'chat_gpt', 'model': 'gpt-5'}},
+    'native': {'llm': {'type': 'openai', 'model': 'gpt-5'}},
     'body': {'records': [{'kind': 'system_prompt', 'body': 'hello'}]},
   }
   payload.update(overrides)

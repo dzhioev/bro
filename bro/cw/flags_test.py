@@ -28,10 +28,17 @@ class TestForwardedFlags:
     args = vars(parser.parse_args(['--bro', 'dev', '--raw']))
     assert cw_flags.extract_forwarded_argv(args) == ['--bro', 'dev', '--raw']
 
-  def test_effort_defaults_to_xhigh(self):
+  def test_llm_flags_default_to_none_for_the_claude_code_spec_to_supply(self):
     parser = Parser(add_help=False)
     cw_flags.add_forwarded_flags(parser)
-    assert parser.parse_args([]).effort == 'xhigh'
+    args = parser.parse_args([])
+    assert (args.llm, args.provider, args.model, args.effort, args.fast) == (
+      None,
+      None,
+      None,
+      None,
+      False,
+    )
 
   def test_hold_defaults_to_none_for_the_wrapper_to_resolve(self):
     parser = Parser(add_help=False)

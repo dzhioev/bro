@@ -22,10 +22,9 @@ def _spec(
   host: bool = False,
   drop: bool = False,
   hold: str = DEFAULT_HOLD,
-  fast: bool = False,
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
-  effort: Optional[str] = None,
+  llm: Optional[str] = None,
   resume: bool = False,
   into: Optional[str] = None,
   bro: Optional[str] = None,
@@ -38,10 +37,9 @@ def _spec(
     host=host,
     drop=drop,
     hold=hold,
-    fast=fast,
     grant=grant if grant is not None else [],
     revoke=revoke if revoke is not None else [],
-    effort=effort,
+    llm=llm,
     resume=resume,
     into=into,
     bro=bro,
@@ -188,12 +186,12 @@ class TestGrantRevoke:
     assert rc == 1
     assert h.run_in_container.call_count == 0
 
-  def test_start_session_injects_effort_into_the_container_command(self):
+  def test_start_session_injects_the_llm_recipe_into_the_container_command(self):
     with _ContainerHarness() as h:
-      rc = cw_session.start_session(_spec(drop=True, effort='xhigh'))
+      rc = cw_session.start_session(_spec(drop=True, llm='::xhigh'))
     assert rc == 0
     command = h.run_in_container.call_args.args[0].command
-    assert command[command.index('--effort') + 1] == 'xhigh'
+    assert command[command.index('--llm') + 1] == '::xhigh'
 
 
 class TestSummonAllowList:
@@ -227,13 +225,11 @@ class TestContainerCommand:
     # the docker command is the same in-place runner host mode spawns; the
     # argv/MCP/spell-delivery work happens inside the container, next to claude
     with _ContainerHarness() as h:
-      rc = cw_session.start_session(
-        _spec(drop=True, fast=True, bro='dev', effort='xhigh', prompt='go')
-      )
+      rc = cw_session.start_session(_spec(drop=True, bro='dev', llm='::xhigh+fast', prompt='go'))
     assert rc == 0
     command = h.run_in_container.call_args.args[0].command
     assert command == [
-      'cw', 'ss', '--in-place', '--fast', '--effort', 'xhigh', '--bro', 'dev', '--prompt=go', 'w',
+      'cw', 'ss', '--in-place', '--llm', '::xhigh+fast', '--bro', 'dev', '--prompt=go', 'w',
     ]  # fmt: skip
 
   def test_bro_carried_in_command_and_stamped_into_the_container_env(self):
@@ -326,9 +322,8 @@ class TestCommandArgv:
   def test_create_command_includes_drop_into_and_claude_args(self):
     parts = _spec(
       hold='attended',
-      fast=True,
       drop=True,
-      effort='xhigh',
+      llm='::xhigh+fast',
       bro='dev',
       grant=['gmail_creds', '@bro'],
       revoke=['notion'],
@@ -336,8 +331,8 @@ class TestCommandArgv:
       claude_args=['--foo'],
     ).to_command_argv()
     assert parts == [
-      'cw', 'ss', '--fast', '--drop', '--hold', 'attended',
-      '--effort', 'xhigh', '--bro', 'dev', '--grant', 'gmail_creds',
+      'cw', 'ss', '--drop', '--hold', 'attended',
+      '--llm', '::xhigh+fast', '--bro', 'dev', '--grant', 'gmail_creds',
       '--grant', '@bro', '--revoke', 'notion', '--into', 'feature', 'w', '--foo',
     ]  # fmt: skip
 
@@ -390,7 +385,7 @@ class TestResumeSpecRecord:
     spec = _spec(
       hold='attended',
       drop=True,
-      effort='xhigh',
+      llm='::xhigh',
       bro='dev',
       grant=['gmail_creds'],
       into='feature',
@@ -404,9 +399,9 @@ class TestResumeSpecRecord:
     assert loaded is not None and loaded.resume and not loaded.drop
     assert loaded.into is None and loaded.prompt is None and loaded.claude_args == []
     # the forwarded flags survive, so the resumed session runs as it was launched
-    assert (loaded.hold, loaded.effort, loaded.bro, loaded.grant) == (
+    assert (loaded.hold, loaded.llm, loaded.bro, loaded.grant) == (
       'attended',
-      'xhigh',
+      '::xhigh',
       'dev',
       ['gmail_creds'],
     )
@@ -492,9 +487,8 @@ class TestInPlaceArgv:
     parts = _spec(
       host=True,
       hold='attended',
-      fast=True,
       drop=True,
-      effort='xhigh',
+      llm='::xhigh+fast',
       bro='dev',
       grant=['gmail_creds'],
       revoke=['notion'],
@@ -503,8 +497,8 @@ class TestInPlaceArgv:
       claude_args=['--foo'],
     ).to_in_place_argv()
     assert parts == [
-      'ss', '--in-place', '--fast', '--hold', 'attended',
-      '--effort', 'xhigh', '--bro', 'dev', '--prompt=do it', 'w', '--foo',
+      'ss', '--in-place', '--hold', 'attended',
+      '--llm', '::xhigh+fast', '--bro', 'dev', '--prompt=do it', 'w', '--foo',
     ]  # fmt: skip
 
   def test_resume_and_raw_carried(self):
@@ -633,12 +627,12 @@ class TestHostSession:
       return 5
 
     monkeypatch.setattr(cw_session, '_run_host_root_via_broker', fake_root)
-    spec = _spec(host=True, hold='attended', effort='xhigh', prompt='go', claude_args=['--foo'])
+    spec = _spec(host=True, hold='attended', llm='::xhigh', prompt='go', claude_args=['--foo'])
     scope = _launch_scope(may_summon={'dev'})
     assert cw_session._host_session(spec, workspace, None, scope) == 5
     assert roots[0]['workspace'] is workspace
     assert roots[0]['command'] == [
-      str(cw_bin), 'ss', '--in-place', '--hold', 'attended', '--effort', 'xhigh', '--prompt=go', 'w', '--foo',
+      str(cw_bin), 'ss', '--in-place', '--hold', 'attended', '--llm', '::xhigh', '--prompt=go', 'w', '--foo',
     ]  # fmt: skip
     assert roots[0]['env']['VIRTUAL_ENV'] == str(worktree / '.venv')
     # the host root gets the session's summon allow-list like container mode
@@ -684,11 +678,11 @@ class TestHostSession:
       return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(cw_session.subprocess, 'run', fake_run)
-    spec = _spec(host=True, hold='attended', effort='xhigh', prompt='go', claude_args=['--foo'])
+    spec = _spec(host=True, hold='attended', llm='::xhigh', prompt='go', claude_args=['--foo'])
     assert cw_session._host_session(spec, workspace, None, _launch_scope()) == 0
     argv, kwargs = runs[0]
     assert argv == [
-      str(cw_bin), 'ss', '--in-place', '--hold', 'attended', '--effort', 'xhigh', '--prompt=go', 'w', '--foo',
+      str(cw_bin), 'ss', '--in-place', '--hold', 'attended', '--llm', '::xhigh', '--prompt=go', 'w', '--foo',
     ]  # fmt: skip
     assert kwargs['cwd'] == str(worktree)
     assert kwargs['env']['VIRTUAL_ENV'] == str(worktree / '.venv')

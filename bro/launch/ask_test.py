@@ -59,7 +59,7 @@ def test_main_re_execs_into_container_when_outside():
     env.pop('BRO_SHELL_COMMAND', None)
     rc = main(['ask', 'bro-dev', 'hello world', '--rich'])
     assert rc == 0
-    assert env['BRO_SHELL_COMMAND'] == 'ask --rich bro-dev hello world'
+    assert env['BRO_SHELL_COMMAND'] == 'ask --rich --llm +fast bro-dev hello world'
     assert run.call_count == 1
     launch = run.call_args.args[0]
     assert launch.name.startswith('ask-bro-dev-')
@@ -69,7 +69,8 @@ def test_main_re_execs_into_container_when_outside():
       'bro-dev',
       'hello world',
       '--rich',
-      '--fast',
+      '--llm',
+      '+fast',
       '--in-place',
     ]
     assert run.call_args.kwargs['drop'] is True
@@ -90,7 +91,7 @@ def test_main_forwards_implied_fast_into_container():
     command = run.call_args.args[0].command
     # ask implies --fast; the inner bro run defaults to the plain spec, so the
     # implied fast must ride the inner argv explicitly
-    assert command == ['bro', 'run', 'bro-dev', 'hello', '--fast', '--in-place']
+    assert command == ['bro', 'run', 'bro-dev', 'hello', '--llm', '+fast', '--in-place']
 
 
 def test_main_forwards_effort_into_container():
@@ -103,7 +104,7 @@ def test_main_forwards_effort_into_container():
     assert rc == 0
     command = run.call_args.args[0].command
     # --effort is forwarded like the implied --fast; the in-container run applies with_effort
-    assert command == ['bro', 'run', 'bro-dev', 'hello', '--fast', '--effort', 'low', '--in-place']
+    assert command == ['bro', 'run', 'bro-dev', 'hello', '--llm', '::low+fast', '--in-place']
 
 
 def test_main_forwards_hold_into_container():
@@ -120,7 +121,8 @@ def test_main_forwards_hold_into_container():
       'run',
       'bro-dev',
       'hello',
-      '--fast',
+      '--llm',
+      '+fast',
       '--hold',
       'attended',
       '--in-place',
@@ -189,7 +191,7 @@ def test_main_no_trails_disables_recording_in_container():
     assert rc == 0
     launch = run.call_args.args[0]
     # the env var carries the effect in, so --no-trails isn't forwarded into the inner argv
-    assert launch.command == ['bro', 'run', 'bro-dev', 'hello', '--fast', '--in-place']
+    assert launch.command == ['bro', 'run', 'bro-dev', 'hello', '--llm', '+fast', '--in-place']
     assert 'trails' not in launch.secrets
     assert launch.env == {
       'CW_BRO': 'bro-dev',
@@ -236,8 +238,7 @@ def test_main_summon_forwards_timeout_and_into():
     hold=None,
     grant=None,
     revoke=None,
-    effort=None,
-    fast=True,
+    llm='+fast',
   )
 
 
@@ -253,8 +254,7 @@ def test_main_summon_detaches(capsys):
     hold=None,
     grant=None,
     revoke=None,
-    effort=None,
-    fast=True,
+    llm='+fast',
   )
   assert capsys.readouterr().out == 'REQUEST-ID\n'
 

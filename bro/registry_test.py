@@ -5,7 +5,7 @@ from typing import ClassVar, Optional
 import pytest
 
 import bro.registry
-from bro.llm.llm import LLM, LLMSpec
+from bro.llm.llm import LLM, NativeLLMSpec
 from bro.llm.mcp import MCPServer
 from bro.registry import _REGISTRY, create_bro, get_class, list_classes, register
 from bros.bro import Bro
@@ -20,7 +20,7 @@ class MockLLM(LLM):
 
 
 @dataclass(frozen=True)
-class _EchoOnlySpec(LLMSpec):
+class _EchoOnlySpec(NativeLLMSpec):
   TYPE: ClassVar[str] = 'mock'
 
   model: str = 'mock'
@@ -32,7 +32,7 @@ class _EchoOnlySpec(LLMSpec):
     return {'type': self.TYPE, 'model': self.model}
 
   @classmethod
-  def _from_dict_impl(cls, data: dict) -> 'LLMSpec':
+  def _from_dict_impl(cls, data: dict) -> 'NativeLLMSpec':
     return cls(model=data['model'])
 
 

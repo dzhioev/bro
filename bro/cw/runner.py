@@ -21,7 +21,7 @@ from bro.cw.broxy import _start_session_broxy
 from bro.cw.claude_argv import build_claude_launch
 from bro.cw.claude_auth import _apply_claude_auth
 from bro.cw.claude_config import _latest_jsonl, _provision_host_claude_dir
-from bro.cw.constants import _CW_MODEL, CW_RESUMED_SESSION_ENV
+from bro.cw.constants import CW_RESUMED_SESSION_ENV
 from bro.cw.mcp import _start_session_mcp_server
 from bro.cw.recorder import _start_session_recorder
 from bro.cw.session_context import (
@@ -161,10 +161,7 @@ def run_in_place(spec: 'SessionSpec') -> int:
 
     # after the session context: the daemon's spawn snapshots os.environ, and
     # CW_SESSION_CONTEXT becomes the trail's launch-context attachment
-    llm_recipe: dict = {'model': _CW_MODEL}
-    if spec.effort is not None:
-      llm_recipe['effort'] = spec.effort
-    recorder = _start_session_recorder(spec.name, workspace, os.environ, llm=llm_recipe)
+    recorder = _start_session_recorder(spec.name, workspace, os.environ, llm=spec.llm_spec.dump())
     if recorder is not None:
       teardown.callback(recorder.stop)
 

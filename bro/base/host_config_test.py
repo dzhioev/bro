@@ -94,3 +94,22 @@ class TestProjectInstances:
     monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', str(path))
     with pytest.raises(ValueError, match='must hold a json object'):
       host_config.project_instances(Path(tmp_path))
+
+
+class TestLLMPresets:
+  def test_absent_file_declares_none(self, tmp_path, monkeypatch):
+    monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', str(tmp_path / 'nope.json'))
+    assert host_config.llm_presets() == {}
+
+  def test_presets_read_as_name_to_recipe(self, config_file):
+    config_file({'llm': {'sharp': 'openai:sol:max', 'cheap': ':terra'}})
+    assert host_config.llm_presets() == {'sharp': 'openai:sol:max', 'cheap': ':terra'}
+
+  def test_a_non_string_recipe_is_rejected(self, config_file):
+    config_file({'llm': {'sharp': 7}})
+    with pytest.raises(ValueError, match="preset 'sharp'"):
+      host_config.llm_presets()
+
+  def test_a_projects_only_file_declares_none(self, config_file, tmp_path):
+    config_file({'projects': {str(tmp_path): {'instances': ['brog+']}}})
+    assert host_config.llm_presets() == {}

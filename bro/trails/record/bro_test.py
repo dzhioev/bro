@@ -87,7 +87,7 @@ class TestRecorderStartTrail:
     tracker = Recorder('https://bro.trails.example', 'tok')
     trail_id = tracker.start_trail(
       bro='dev',
-      llm_spec={'type': 'chat_gpt', 'model': 'gpt-5'},
+      llm_spec={'type': 'openai', 'model': 'gpt-5'},
       system_prompt='do the thing',
       forked_from=None,
       interactive=False,
@@ -105,7 +105,7 @@ class TestRecorderStartTrail:
     payload = _request_payload(fake.requests[0])
     assert payload['bro'] == 'dev'
     assert payload['version'] == configs.VERSION
-    assert payload['native']['llm'] == {'type': 'chat_gpt', 'model': 'gpt-5'}
+    assert payload['native']['llm'] == {'type': 'openai', 'model': 'gpt-5'}
     assert payload['body'] == {
       'records': [{'kind': 'system_prompt', 'body': 'do the thing', 'turn_index': 0}]
     }

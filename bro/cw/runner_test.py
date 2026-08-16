@@ -10,6 +10,7 @@ from bro.cw.claude_argv import ClaudeLaunch
 from bro.cw.constants import CW_RESUMED_SESSION_ENV
 from bro.cw.mcp import MCPEndpoint
 from bro.cw.session_test import _spec
+from bro.llm.llms import claude_code
 from bro.workspace.project import ProjectConfig
 
 
@@ -109,18 +110,20 @@ class TestRunInPlace:
       assert cw_runner.run_in_place(_spec()) == 0
       assert h.start_recorder.call_args.args[0] == 'w'
       # the launch recipe lands on the trail header as native.llm
-      assert h.start_recorder.call_args.kwargs['llm'] == {'model': cw_runner._CW_MODEL}
+      assert h.start_recorder.call_args.kwargs['llm'] == claude_code.LLMSpec().dump()
       # spawned after the session context is set, so the daemon inherits it
       assert 'CW_SESSION_CONTEXT' in h.start_recorder.call_args.args[2]
       assert h.start_recorder.return_value.stop.call_count == 1
 
-  def test_recorder_carries_the_effort_override(self, monkeypatch, tmp_path):
+  def test_recorder_carries_the_launch_recipe(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert cw_runner.run_in_place(_spec(effort='high')) == 0
+      assert cw_runner.run_in_place(_spec(llm=':fable5:high')) == 0
       assert h.start_recorder.call_args.kwargs['llm'] == {
-        'model': cw_runner._CW_MODEL,
+        'type': 'claude-code',
+        'model': 'claude-fable-5',
         'effort': 'high',
+        'fast_mode': False,
       }
 
   def test_recorder_start_failure_does_not_block_the_launch(self, monkeypatch, tmp_path):

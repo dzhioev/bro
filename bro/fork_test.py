@@ -6,7 +6,7 @@ from unittest.mock import patch
 import pytest
 from openai.types.responses import Response
 
-import bro.llm.llms.chat_gpt as chat_gpt_module
+import bro.llm.llms.openai as openai_module
 from bro.fork import fork, latest_fork_point, replay_messages
 from bro.llm.tracker import NullTracker, Tracker
 from bro.trails.model import ForkedFrom, RecordedTrail, Step, Trail
@@ -25,7 +25,7 @@ def _trail_header(
     harness='bro',
     bro=bro,
     version='1',
-    native={'llm': llm_spec if llm_spec is not None else {'type': 'chat_gpt', 'model': 'gpt-5'}},
+    native={'llm': llm_spec if llm_spec is not None else {'type': 'openai', 'model': 'gpt-5'}},
     started_at='2026-06-07T00:00:00.000000Z',
     interactive=False,
     surface='ask',
@@ -266,7 +266,7 @@ class TestReplayMessages:
     ]
 
   def test_skips_kinds_not_carried_in_input(self):
-    # reasoning / assistant / tool_call / end are produced by ChatGPT as
+    # reasoning / assistant / tool_call / end are produced by OpenAI as
     # side-channel steps; the canonical input shapes (assistant message,
     # function_call) live on the llm_call's response.output items. ensure
     # replay does not double-emit them.
@@ -300,7 +300,7 @@ class TestReplayMessagesAcrossForkChain:
         harness='bro',
         bro='bro',
         version='1',
-        native={'llm': {'type': 'chat_gpt', 'model': 'gpt-5'}},
+        native={'llm': {'type': 'openai', 'model': 'gpt-5'}},
         started_at='2026-06-08T00:00:00.000000Z',
         interactive=True,
         surface='call',
@@ -439,7 +439,7 @@ class TestLatestForkPoint:
         harness='bro',
         bro='bro',
         version='1',
-        native={'llm': {'type': 'chat_gpt', 'model': 'gpt-5'}},
+        native={'llm': {'type': 'openai', 'model': 'gpt-5'}},
         started_at='2026-06-08T00:00:00.000000Z',
         interactive=True,
         surface='call',
@@ -519,7 +519,7 @@ def _message_item(text: str):
   )
 
 
-def _install_responses(gpt: chat_gpt_module.ChatGPT, sequence: list, captured: list[dict]) -> None:
+def _install_responses(gpt: openai_module.OpenAI, sequence: list, captured: list[dict]) -> None:
   iterator = iter(sequence)
 
   async def create(**kwargs):
@@ -529,15 +529,15 @@ def _install_responses(gpt: chat_gpt_module.ChatGPT, sequence: list, captured: l
   gpt.client = cast(Any, SimpleNamespace(responses=SimpleNamespace(create=create)))
 
 
-def _patch_chat_gpt_create_llm(stub_responses):
-  """patch chat_gpt.LLMSpec.create_llm so fork() builds a controllable ChatGPT
+def _patch_openai_create_llm(stub_responses):
+  """patch openai.LLMSpec.create_llm so fork() builds a controllable OpenAI
   with a stub responses.create. returns (patcher_context, captured_kwargs, created_gpts).
   """
   captured_kwargs: list[dict] = []
-  created: list[chat_gpt_module.ChatGPT] = []
+  created: list[openai_module.OpenAI] = []
 
   def _create(self, mcp_servers=None, observer=None, tracker=None, agent=None):
-    gpt = chat_gpt_module.ChatGPT(
+    gpt = openai_module.OpenAI(
       api_key='dummy',
       model=self.model,
       reasoning_effort=self.reasoning_effort,
@@ -550,7 +550,7 @@ def _patch_chat_gpt_create_llm(stub_responses):
     created.append(gpt)
     return gpt
 
-  context = patch.object(chat_gpt_module.LLMSpec, 'create_llm', _create)
+  context = patch.object(openai_module.LLMSpec, 'create_llm', _create)
   return context, captured_kwargs, created
 
 
@@ -570,7 +570,7 @@ class TestForkLinkage:
   def test_start_trail_records_forked_from_pointer(self):
     forked_from_trail = _simple_trail()
     tracker = _RecordingTracker()
-    context, _, _ = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('ok')])])
+    context, _, _ = _patch_openai_create_llm([_fake_response(output=[_message_item('ok')])])
     with context:
       fork(forked_from_trail, 2, tracker=tracker, surface='test')
     assert len(tracker.headers) == 1
@@ -588,7 +588,7 @@ class TestForkLinkage:
     # picked up by the next resume-latest lookup
     forked_from_trail = _simple_trail()
     tracker = _RecordingTracker()
-    context, _, _ = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('ok')])])
+    context, _, _ = _patch_openai_create_llm([_fake_response(output=[_message_item('ok')])])
     with context:
       bro = fork(forked_from_trail, 2, tracker=tracker, surface='call')
     assert tracker.headers[0]['surface'] == 'call'
@@ -597,7 +597,7 @@ class TestForkLinkage:
   def test_records_resolved_system_prompt(self):
     forked_from_trail = _simple_trail()
     tracker = _RecordingTracker()
-    context, _, _ = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('ok')])])
+    context, _, _ = _patch_openai_create_llm([_fake_response(output=[_message_item('ok')])])
     with context:
       fork(forked_from_trail, 2, tracker=tracker, surface='test')
     assert tracker.headers[0]['system_prompt'] == _SYS_TEXT
@@ -605,14 +605,14 @@ class TestForkLinkage:
   def test_system_prompt_override_replaces_prefix_and_header(self):
     forked_from_trail = _simple_trail()
     tracker = _RecordingTracker()
-    context, _, created = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('ok')])])
+    context, _, created = _patch_openai_create_llm([_fake_response(output=[_message_item('ok')])])
     with context:
       bro = fork(
         forked_from_trail, 2, system_prompt='swapped prompt', tracker=tracker, surface='test'
       )
     assert tracker.headers[0]['system_prompt'] == 'swapped prompt'
     assert bro.system_prompt == 'swapped prompt'
-    # prefix on the new ChatGPT's seam carries the override at index 0
+    # prefix on the new OpenAI's seam carries the override at index 0
     seeded = created[0]._input_prefix
     assert seeded is not None
     assert seeded[0] == {'role': 'system', 'content': 'swapped prompt'}
@@ -621,7 +621,7 @@ class TestForkLinkage:
 class TestForkRecording:
   def test_record_false_uses_null_tracker(self):
     forked_from_trail = _simple_trail()
-    context, _, _ = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('ok')])])
+    context, _, _ = _patch_openai_create_llm([_fake_response(output=[_message_item('ok')])])
     with context:
       bro = fork(forked_from_trail, 2, record=False, surface='test')
     assert isinstance(bro._tracker, NullTracker)
@@ -629,7 +629,7 @@ class TestForkRecording:
   def test_record_true_uses_explicit_tracker(self):
     forked_from_trail = _simple_trail()
     tracker = _RecordingTracker()
-    context, _, _ = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('ok')])])
+    context, _, _ = _patch_openai_create_llm([_fake_response(output=[_message_item('ok')])])
     with context:
       bro = fork(forked_from_trail, 2, tracker=tracker, surface='test')
     assert bro._tracker is tracker
@@ -639,12 +639,12 @@ class TestForkSpec:
   def test_defaults_to_forked_from_spec(self):
     forked_from_trail = _simple_trail()
     tracker = _RecordingTracker()
-    context, _, created = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('ok')])])
+    context, _, created = _patch_openai_create_llm([_fake_response(output=[_message_item('ok')])])
     with context:
       fork(forked_from_trail, 2, tracker=tracker, surface='test')
     assert created[0].model == 'gpt-5'
     assert tracker.headers[0]['llm_spec'] == {
-      'type': 'chat_gpt',
+      'type': 'openai',
       'model': 'gpt-5',
       'reasoning_effort': None,
       'service_tier': None,
@@ -654,8 +654,8 @@ class TestForkSpec:
   def test_cross_model_spec_override(self):
     forked_from_trail = _simple_trail()
     tracker = _RecordingTracker()
-    override = chat_gpt_module.LLMSpec(model='gpt-5.4-mini', reasoning_effort='medium')
-    context, _, created = _patch_chat_gpt_create_llm([_fake_response(output=[_message_item('ok')])])
+    override = openai_module.LLMSpec(model='gpt-5.4-mini', reasoning_effort='medium')
+    context, _, created = _patch_openai_create_llm([_fake_response(output=[_message_item('ok')])])
     with context:
       fork(forked_from_trail, 2, llm_spec=override, tracker=tracker, surface='test')
     assert created[0].model == 'gpt-5.4-mini'
@@ -673,7 +673,7 @@ class TestForkServerSidePath:
   @pytest.mark.asyncio
   async def test_send_seeds_previous_response_id_and_omits_prefix(self):
     forked_from_trail = _simple_trail()
-    context, captured, _ = _patch_chat_gpt_create_llm(
+    context, captured, _ = _patch_openai_create_llm(
       [_fake_response(output=[_message_item('continuation')])]
     )
     with context:
@@ -688,7 +688,7 @@ class TestForkServerSidePath:
   async def test_user_input_step_recorded_only_for_new_message(self):
     forked_from_trail = _simple_trail()
     tracker = _RecordingTracker()
-    context, _, _ = _patch_chat_gpt_create_llm(
+    context, _, _ = _patch_openai_create_llm(
       [_fake_response(output=[_message_item('continuation')])]
     )
     with context:
@@ -703,7 +703,7 @@ class TestForkServerSidePath:
   @pytest.mark.asyncio
   async def test_multi_send_chains_response_ids(self):
     forked_from_trail = _simple_trail()
-    context, captured, _ = _patch_chat_gpt_create_llm(
+    context, captured, _ = _patch_openai_create_llm(
       [
         _fake_response(output=[_message_item('first')], response_id='r2'),
         _fake_response(output=[_message_item('second')], response_id='r3'),
@@ -734,7 +734,7 @@ class TestForkClientSideReplay:
     # the fork point isn't an `llm_call`; server-side has nothing to anchor on,
     # so the replay path is the only option.
     forked_from_trail = _simple_trail()
-    context, captured, _ = _patch_chat_gpt_create_llm(
+    context, captured, _ = _patch_openai_create_llm(
       [_fake_response(output=[_message_item('rerun')])]
     )
     with context:
@@ -768,7 +768,7 @@ class TestForkClientSideReplay:
         ),
       ],
     )
-    context, captured, _ = _patch_chat_gpt_create_llm(
+    context, captured, _ = _patch_openai_create_llm(
       [_fake_response(output=[_message_item('forked answer')])]
     )
     with context:
@@ -811,7 +811,7 @@ class TestForkClientSideReplay:
         ),
       ],
     )
-    context, captured, _ = _patch_chat_gpt_create_llm(
+    context, captured, _ = _patch_openai_create_llm(
       [_fake_response(output=[_message_item('continued')])]
     )
     with context:
@@ -837,10 +837,8 @@ class TestForkClientSideReplay:
     # different model on the new spec disqualifies server-side (a
     # response_id is pinned to the originating model on OpenAI's side).
     forked_from_trail = _simple_trail()
-    override = chat_gpt_module.LLMSpec(model='gpt-5.4-mini')
-    context, captured, _ = _patch_chat_gpt_create_llm(
-      [_fake_response(output=[_message_item('ok')])]
-    )
+    override = openai_module.LLMSpec(model='gpt-5.4-mini')
+    context, captured, _ = _patch_openai_create_llm([_fake_response(output=[_message_item('ok')])])
     with context:
       bro = fork(forked_from_trail, 2, llm_spec=override, record=False, surface='test')
       await bro.send('next', surface='test')
@@ -855,9 +853,7 @@ class TestForkClientSideReplay:
     # restate it through `previous_response_id`, so any override forces a
     # full replay so the swapped prompt actually takes effect.
     forked_from_trail = _simple_trail()
-    context, captured, _ = _patch_chat_gpt_create_llm(
-      [_fake_response(output=[_message_item('ok')])]
-    )
+    context, captured, _ = _patch_openai_create_llm([_fake_response(output=[_message_item('ok')])])
     with context:
       bro = fork(forked_from_trail, 2, system_prompt='swapped prompt', record=False, surface='test')
       await bro.send('next', surface='test')
@@ -869,7 +865,7 @@ class TestForkClientSideReplay:
     # `_input_prefix` is consumed exactly once on first send. forced
     # client-side here via prompt override so the prefix path actually fires.
     forked_from_trail = _simple_trail()
-    context, captured, _ = _patch_chat_gpt_create_llm(
+    context, captured, _ = _patch_openai_create_llm(
       [
         _fake_response(output=[_message_item('first')], response_id='resp_a'),
         _fake_response(output=[_message_item('second')], response_id='resp_b'),

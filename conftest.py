@@ -21,7 +21,7 @@ secrets would resolve against the session's scoped set instead of the test
 fixture. Tests exercising the override set it themselves via monkeypatch.
 
 The run-start credential gate is pinned open for the same hermeticity (the
-autouse fixture below): test bros mostly keep the default chat_gpt spec, whose
+autouse fixture below): test bros mostly keep the default openai spec, whose
 `openai` key would otherwise gate on the host's real store. Gate tests opt out
 with `@pytest.mark.credential_gate` and control `credentials.available`
 themselves.

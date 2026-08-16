@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import asyncio
+import dataclasses
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import ClassVar, Optional, Self
@@ -48,11 +49,15 @@ EFFORT_LEVELS = ('low', 'medium', 'high', 'xhigh', 'max')
 class LLMSpec(ABC):
   """recipe for an LLM: model + provider-specific knobs.
 
-  subclasses live alongside their LLM implementation (e.g.
-  `bro.llm.llms.chat_gpt.LLMSpec`) and carry the typed knobs the LLM accepts.
-  each subclass validates its own field combinations in `__post_init__`,
-  implements `create_llm`, and provides a round-trip `dump` / `from_dict`
+  subclasses live alongside their provider (e.g. `bro.llm.llms.openai.LLMSpec`)
+  and carry the typed knobs it accepts. each subclass validates its own field
+  combinations in `__post_init__` and provides a round-trip `dump` / `from_dict`
   pair keyed by `TYPE` so a stored spec can be reconstructed.
+
+  A recipe is not by itself something the framework can run: a provider whose
+  harness drives its own loop (`bro.llm.llms.claude_code`) is a recipe and
+  nothing more, while one the bro-native loop drives subclasses `NativeLLMSpec`
+  and builds the client.
 
   Frozen so a class-level `llm_spec = SomeSpec(...)` default can be shared
   across instances safely — `.fast()` and friends return a new spec via
@@ -70,7 +75,7 @@ class LLMSpec(ABC):
     raises NotImplementedError when the provider has no fast-mode equivalent —
     callers should treat that as 'this LLM type does not support fast mode'.
     """
-    raise NotImplementedError(f'{type(self).__name__} does not support fast mode')
+    raise NotImplementedError(f'{self.TYPE} does not support fast mode')
 
   def with_effort(self, effort: str) -> Self:
     """return a copy of self with the provider's reasoning-effort knob set to the
@@ -80,22 +85,13 @@ class LLMSpec(ABC):
     raises NotImplementedError when the provider has no effort equivalent, and
     ValueError on a level outside the neutral vocabulary.
     """
-    raise NotImplementedError(f'{type(self).__name__} does not support an effort override')
+    raise NotImplementedError(f'{self.TYPE} does not support an effort override')
 
   def needed_secrets(self) -> tuple[str, ...]:
-    """credentials this spec's provider resolves through the store (e.g. chat_gpt
+    """credentials this spec's provider resolves through the store (e.g. openai
     → `openai`). folded into a bro's hydration set on surfaces that run the bro as
     an LLM process (`bro run` / `bro chat`). default empty for providers with no key."""
     return ()
-
-  @abstractmethod
-  def create_llm(
-    self,
-    mcp_servers: Optional[list[MCPServer]] = None,
-    observer: Optional[Observer] = None,
-    tracker: Optional[Tracker] = None,
-    agent: Optional[str] = None,
-  ) -> LLM: ...
 
   @abstractmethod
   def dump(self) -> dict:
@@ -119,13 +115,28 @@ class LLMSpec(ABC):
     ...
 
 
+@dataclass(frozen=True)
+class NativeLLMSpec(LLMSpec, ABC):
+  """an `LLMSpec` the bro-native loop can run: `create_llm` builds the in-process
+  client a turn is sent through."""
+
+  @abstractmethod
+  def create_llm(
+    self,
+    mcp_servers: Optional[list[MCPServer]] = None,
+    observer: Optional[Observer] = None,
+    tracker: Optional[Tracker] = None,
+    agent: Optional[str] = None,
+  ) -> LLM: ...
+
+
 def _ensure_providers_loaded() -> None:
-  # `LLMSpec.from_dict` dispatches across `LLMSpec.__subclasses__()`, which
-  # only sees classes Python has already imported. Eagerly import every known
-  # provider so deserialisation works even when the caller hasn't pulled the
-  # provider module in itself (e.g. a script reading decisions_log records).
-  import bro.llm.llms.chat_gpt  # noqa: F401
-  import bro.llm.llms.echo  # noqa: F401
+  # `LLMSpec.from_dict` dispatches across `LLMSpec.__subclasses__()`, which only
+  # sees classes Python has already imported, so deserialisation has to pull
+  # every provider in itself.
+  from bro.llm import providers
+
+  providers.load_all()
 
 
 def _walk_subclasses(cls: type) -> list[type]:
@@ -142,25 +153,15 @@ def _walk_subclasses(cls: type) -> list[type]:
   return result
 
 
-def _spec_for_type(type_name: str) -> LLMSpec:
-  # tiny stringy bridge for the `llm` CLI's --llm-type choice. each registered
-  # LLM type maps to its default spec; advanced knobs go through the Python API.
-  if type_name == 'echo':
-    from bro.llm.llms.echo import LLMSpec as EchoSpec
+async def llm_main(request: str, provider: str, model: Optional[str], attachments: list[str]):
+  from bro.llm import providers as llm_providers
 
-    return EchoSpec()
-  if type_name == 'chat_gpt':
-    from bro.llm.llms.chat_gpt import LLMSpec as ChatGPTSpec
-
-    return ChatGPTSpec()
-  raise ValueError(f'unknown LLM type: {type_name}')
-
-
-_LLM_TYPES = ('echo', 'chat_gpt')
-
-
-async def llm_main(request: str, llm_type: str, attachments: list[str]):
-  instance = _spec_for_type(llm_type).create_llm()
+  spec = llm_providers.default_spec(provider)
+  if not isinstance(spec, NativeLLMSpec):
+    raise ValueError(f'provider {provider!r} builds no in-process client')
+  if model is not None:
+    spec = dataclasses.replace(spec, model=llm_providers.resolve_model(provider, model))
+  instance = spec.create_llm()
   content: list[dict] = [{'type': 'text', 'text': request}]
   for path in attachments:
     content.append({'type': 'image_url', 'image_url': {'url': path}})
@@ -172,8 +173,15 @@ async def llm_main(request: str, llm_type: str, attachments: list[str]):
 
 
 def main(argv: list[str]) -> Optional[int]:
+  from bro.llm import providers as llm_providers
+
   parser = base_args.Parser(description='chat with LLM')
   parser.add_argument('--attach', '-a', dest='attachments', nargs='*', default=[])
-  parser.add_argument('--llm-type', '-t', choices=_LLM_TYPES, default='echo')
+  parser.add_argument(
+    '--provider', '-p', choices=llm_providers.known_names(), default='echo', help='LLM provider'
+  )
+  parser.add_argument(
+    '--model', '-m', default=None, help='model short name or id within --provider'
+  )
   parser.add_argument('request')
   return asyncio.run(llm_main(**parser.parse(argv)))

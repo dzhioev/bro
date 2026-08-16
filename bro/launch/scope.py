@@ -13,6 +13,7 @@ from bro.workspace.paths import project_root
 from bro.workspace.store import ScopedSecrets, finalize_scoped_secrets
 
 if TYPE_CHECKING:
+  from bro.llm.llm import LLMSpec
   from bro.llm.mcp import Harness
 
 # secrets every claude code session resolves regardless of bro: the session
@@ -94,11 +95,17 @@ def bind_project_credentials() -> dict[str, Optional[str]]:
   return selection
 
 
-def scoped_secrets(bro_name: str, surface: Surface) -> ScopedSecrets:
+def scoped_secrets(
+  bro_name: str, surface: Surface, *, llm_spec: Optional['LLMSpec'] = None
+) -> ScopedSecrets:
   """the credential scope of a launch running as `bro_name` on `surface` — one
   computation for every launch surface, so they cannot drift. the per-surface
   recipe is the `_RECIPES` row; required hydration is strict, so each surface
   requests only what it actually uses.
+
+  `llm_spec` is the recipe the launch settled on (`--provider` / `--model` /
+  `--llm`), whose key the scope hydrates in place of the bro's own — a run
+  against another provider needs that provider's key, not the declared one.
 
   computing a scope also binds this process to the operated project's instance
   selection (`bind_project_credentials`) — the scope names kinds, and the launch
@@ -126,7 +133,7 @@ def scoped_secrets(bro_name: str, surface: Surface) -> ScopedSecrets:
   if recipe.auth_secret is not None:
     required.add(recipe.auth_secret)
   if recipe.llm_key:
-    required.update(bro.llm_spec.needed_secrets())
+    required.update((llm_spec if llm_spec is not None else bro.llm_spec).needed_secrets())
   optional.update(bro.optional_secrets(harness=recipe.harness))
   if recipe.docker_sock is not None:
     docker_sock = recipe.docker_sock
@@ -140,13 +147,14 @@ def summoned_credential_scope(
   *,
   grant: list[str],
   revoke: list[str],
+  llm_spec: Optional['LLMSpec'] = None,
 ) -> ScopedSecrets:
   """the credential scope a summoned bro runs with: its own `BRO_RUN` scope under
   the request's overrides. `grant`/`revoke` are the credential halves of the
   request's unified values (`split_scope_overrides`) — the `@bro` halves shape the
   summon allow-list instead. Raises `ValueError` on a no-op override."""
   return finalize_scoped_secrets(
-    scoped_secrets(bro_name, Surface.BRO_RUN),
+    scoped_secrets(bro_name, Surface.BRO_RUN, llm_spec=llm_spec),
     grant=grant,
     revoke=revoke,
   )

@@ -2,7 +2,7 @@
 """summon — request another bro on the session's broker channel and get its answer.
 
 The peer side of the summon mechanism: a `summon{target, prompt, timeout?, into?,
-hold?, grant?, revoke?, effort?, fast?}`
+hold?, grant?, revoke?, llm?}`
 request on the session channel, answered by the host-side handler (`bro/launch/summon_control.py`)
 with `started{trail_id}` and exactly one terminal (`completed` / `failed` /
 `reply{error}`). This module owns the request's wire contract — the type tag, the
@@ -15,7 +15,7 @@ payload keys, the 1800s default timeout — for all its consumers: `bro run
 `grant` / `revoke` are lists of scope overrides for the child, each value a
 credential name or `@bro` for a summon target of its own; the host bounds a grant
 by the sender's own scope, so a name it does not hold itself comes back denied.
-`effort` / `fast` shape the child's LLM spec.
+`llm` is the canonical `provider:model:effort+fast` recipe the child runs (`bro.llm.providers`).
 
 Blocking mode sends, prints the request id and the `started` trail id to stderr,
 and relays the terminal: the answer on stdout (exit 0), everything else as a
@@ -147,8 +147,7 @@ def _payload(
   index: Optional[int] = None,
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
-  effort: Optional[str] = None,
-  fast: bool = False,
+  llm: Optional[str] = None,
 ) -> dict[str, Any]:
   payload: dict[str, Any] = {'target': target, 'prompt': prompt}
   if timeout is not None:
@@ -165,10 +164,8 @@ def _payload(
     payload['grant'] = list(grant)
   if revoke is not None:
     payload['revoke'] = list(revoke)
-  if effort is not None:
-    payload['effort'] = effort
-  if fast:
-    payload['fast'] = True
+  if llm is not None:
+    payload['llm'] = llm
   return payload
 
 
@@ -273,8 +270,7 @@ def summon_and_wait(
   hold: Optional[str] = None,
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
-  effort: Optional[str] = None,
-  fast: bool = False,
+  llm: Optional[str] = None,
   step_id: Optional[int] = None,
   index: Optional[int] = None,
   client: Optional['Client'] = None,
@@ -295,8 +291,7 @@ def summon_and_wait(
     index=index,
     grant=grant,
     revoke=revoke,
-    effort=effort,
-    fast=fast,
+    llm=llm,
   )
   with _connection(client) as connection:
     request = connection.send(SUMMON, payload)
@@ -314,8 +309,7 @@ def summon_detached(
   hold: Optional[str] = None,
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
-  effort: Optional[str] = None,
-  fast: bool = False,
+  llm: Optional[str] = None,
   step_id: Optional[int] = None,
   index: Optional[int] = None,
 ) -> str:
@@ -331,8 +325,7 @@ def summon_detached(
     index=index,
     grant=grant,
     revoke=revoke,
-    effort=effort,
-    fast=fast,
+    llm=llm,
   )
   with _open_client() as client:
     return client.send(SUMMON, payload).id
@@ -461,8 +454,7 @@ def relay_summon(
   hold: Optional[str] = None,
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
-  effort: Optional[str] = None,
-  fast: bool = False,
+  llm: Optional[str] = None,
 ) -> int:
   """send one summon and relay its outcome as a CLI would: the request id and
   the started trail id to stderr, the answer to stdout, any failure as an error
@@ -477,8 +469,7 @@ def relay_summon(
     hold=hold,
     grant=grant,
     revoke=revoke,
-    effort=effort,
-    fast=fast,
+    llm=llm,
   )
   try:
     client = _open_client()

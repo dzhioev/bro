@@ -24,7 +24,7 @@ class TestSummonLowering:
     monkeypatch.setattr(
       bro.launch.scope,
       'scoped_secrets',
-      lambda name, surface: workspace_store.ScopedSecrets(
+      lambda name, surface, llm_spec=None: workspace_store.ScopedSecrets(
         required={'aws', 'trails'}, optional={'openai'}, docker_sock=True
       ),
     )
@@ -87,19 +87,18 @@ class TestSummonLowering:
       'bro', 'run', 'dev', 'deploy the thing', '--hold', 'attended', '--in-place',
     ]  # fmt: skip
 
-  def test_spec_flags_ride_the_childs_inner_argv(self, lowering_harness):
+  def test_the_llm_recipe_rides_the_childs_inner_argv(self, lowering_harness):
     launch = bro.launch.spawn.SummonLaunchSpec(
       target='dev',
       prompt='deploy the thing',
       parent_workspace=PARENT_WORKSPACE,
       summoner=SUMMONER,
       may_summon=(),
-      effort='high',
-      fast=True,
+      llm='openai:sol:high+fast',
     )
     lowered = bro.launch.spawn._lower_summon(launch, 'broker-CH')
     assert lowered.launch.command == [
-      'bro', 'run', 'dev', 'deploy the thing', '--fast', '--effort', 'high', '--in-place',
+      'bro', 'run', 'dev', 'deploy the thing', '--llm', 'openai:sol:high+fast', '--in-place',
     ]  # fmt: skip
 
   def test_credential_overrides_adjust_the_childs_scope(self, lowering_harness):

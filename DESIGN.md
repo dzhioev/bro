@@ -21,7 +21,7 @@ class Researcher(Bro):
   name = 'researcher'                   # unique, kebab-case
   description = '...'                  # one line, shown in tool listings
   system_prompt = SYSTEM_PROMPT        # class-level; MRO-concatenated base→derived
-  llm_spec = bro.llm.llms.chat_gpt.LLMSpec(model='gpt-5.4-mini', reasoning_effort='medium')
+  llm_spec = bro.llm.llms.openai.LLMSpec(model='gpt-5.6-sol', reasoning_effort='medium')
   tools = [mount(research.mcp.toolset)]
   # or: mount(research.mcp.toolset, 'search')  # validated subset
   data_sources = [Wikipedia()]         # read-only connectors

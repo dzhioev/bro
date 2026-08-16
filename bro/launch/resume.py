@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from bro.fork import fork, latest_fork_point
-from bro.llm.llm import LLMSpec
+from bro.llm.llm import NativeLLMSpec
 from bro.trails.client import TrailsClient, fetch_recorded_trail
 from bro.trails.display import DisplayRecord, RecordedAdapter
 from bros.bro import Bro
@@ -40,7 +40,7 @@ def resume(
   bro_name: str,
   trail_ref: str,
   *,
-  llm_spec: LLMSpec,
+  llm_spec: NativeLLMSpec,
   at: Optional[int] = None,
 ) -> ResumedCall:
   """Continue a recorded call at an explicit or latest consistent fork point."""

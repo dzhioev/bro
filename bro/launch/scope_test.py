@@ -75,7 +75,7 @@ class TestScopedSecrets:
     assert {'catalog', 'brave'} <= search_scope.required
 
   def test_bro_run_manifest_plus_llm_key_and_trails(self):
-    # dev runs as an LLM process: its manifest plus its LLM key (chat_gpt →
+    # dev runs as an LLM process: its manifest plus its LLM key (openai →
     # openai, which needed_secrets() omits) and the mandatory trails sink
     scoped = bro.launch.scope.scoped_secrets('dev', Surface.BRO_RUN)
     assert {'openai', 'trails'} <= scoped.required

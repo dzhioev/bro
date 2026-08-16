@@ -377,7 +377,7 @@ class TestTrailFromHeader:
         'harness': 'bro',
         'bro': 'dev',
         'version': str(7),
-        'native': {'llm': {'type': 'chat_gpt', 'model': 'gpt-5'}},
+        'native': {'llm': {'type': 'openai', 'model': 'gpt-5'}},
         'started_at': '2026-06-07T00:00:00.000000Z',
         'interactive': False,
         'surface': 'ask',
