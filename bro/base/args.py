@@ -13,7 +13,8 @@ import contextlib
 import os
 import sys
 from collections.abc import Callable, Generator, Iterable, Sequence
-from typing import TYPE_CHECKING, Optional, TypeVar, overload
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal, Optional, TypeVar, overload
 
 from bro.base import log
 
@@ -438,3 +439,208 @@ class Parser(argparse.ArgumentParser):
 
   def parse(self, argv: list[str]) -> dict:
     return vars(self.parse_args(argv[1:]))
+
+
+@dataclass(frozen=True)
+class Argument:
+  """one argument an installed command declares, described without argparse.
+
+  `name` is the keyword the command's handler receives it under, `option` the
+  option string to spell it with on a command line (None for a positional).
+  `kind` is `flag` (present or absent, no value), `value` (one value), or `list`
+  (any number of values).
+  """
+
+  name: str
+  help: str
+  required: bool
+  kind: Literal['flag', 'value', 'list']
+  option: Optional[str]
+  choices: tuple[str, ...]
+  value_type: Literal['string', 'integer', 'number']
+
+
+@dataclass(frozen=True)
+class CommandSignature:
+  command: tuple[str, ...]
+  description: str
+  arguments: tuple[Argument, ...]
+
+
+class _ParserBuilt(BaseException):
+  """unwinds a `main` at the moment its parser is complete.
+
+  BaseException so a `main` that guards its own body against Exception cannot
+  swallow the capture and leave the introspection silently empty-handed.
+  """
+
+  def __init__(self, parser: Parser):
+    super().__init__('parser captured')
+    self.parser = parser
+
+
+@contextlib.contextmanager
+def _parse_intercepted() -> Generator[None]:
+  original = Parser.parse
+
+  def intercept(self: Parser, argv: list[str]) -> dict:
+    del argv
+    raise _ParserBuilt(self)
+
+  Parser.parse = intercept  # type: ignore[method-assign]
+  try:
+    yield
+  finally:
+    Parser.parse = original  # type: ignore[method-assign]
+
+
+def _cli_module(program: str) -> str:
+  """the module whose `main` the installed console script `program` runs.
+
+  `sync-scripts` publishes every CLI under two script names — its import path
+  with the underscores dashed, and the bare `__cli_name__` alias — both pointing
+  at a bridge attribute that is the import path with the dots underscored. The
+  attribute therefore picks the path-shaped name out of the pair, and that name
+  spells the module.
+  """
+  import importlib.metadata
+
+  entry_points = list(importlib.metadata.entry_points(group='console_scripts'))
+  targets = {entry_point.value for entry_point in entry_points if entry_point.name == program}
+  if len(targets) == 0:
+    raise ValueError(f'no installed command named {program!r}')
+  if len(targets) > 1:
+    raise ValueError(
+      f'command {program!r} is installed by several distributions: {sorted(targets)}'
+    )
+  target = next(iter(targets))
+  attribute = target.partition(':')[2]
+  paths = [
+    entry_point.name
+    for entry_point in entry_points
+    if entry_point.value == target
+    and entry_point.name.replace('-', '_').replace('.', '_') == attribute
+  ]
+  if len(paths) != 1:
+    raise ValueError(f'command {program!r} ({target}) is not published as an import path')
+  return paths[0].replace('-', '_')
+
+
+def _built_parser(program: str) -> Parser:
+  import importlib
+
+  module_name = _cli_module(program)
+  module = importlib.import_module(module_name)
+  main = getattr(module, 'main', None)
+  if main is None:
+    raise ValueError(f'{module_name} has no main to read {program!r} from')
+  with _parse_intercepted():
+    try:
+      main([program])
+    except _ParserBuilt as built:
+      return built.parser
+  raise ValueError(f'{module_name}.main returned without building a parser')
+
+
+def _subcommands(parser: Parser) -> Optional[argparse._SubParsersAction]:
+  return next((a for a in parser._actions if isinstance(a, argparse._SubParsersAction)), None)
+
+
+def _descend(parser: Parser, command: Sequence[str]) -> tuple[Parser, str]:
+  """the parser the command's last word selects, plus the summary its parent
+  lists it under."""
+  summary = ''
+  for index, word in enumerate(command[1:], start=1):
+    selected = ' '.join(command[:index])
+    action = _subcommands(parser)
+    if action is None:
+      raise ValueError(f'{selected!r} takes no subcommand, so {word!r} names nothing')
+    if word not in action.choices:
+      raise ValueError(
+        f'{selected!r} has no subcommand {word!r}; available: {", ".join(action.choices)}'
+      )
+    summary = next(
+      (choice.help or '' for choice in action._choices_actions if choice.dest == word), ''
+    )
+    parser = action.choices[word]
+    if not isinstance(parser, Parser):
+      raise ValueError(f'subcommand {word!r} of {selected!r} is not built on this parser')
+  return parser, summary
+
+
+def _argument(action: argparse.Action) -> Argument:
+  if isinstance(action, (argparse._AppendAction, argparse._CountAction)):
+    raise ValueError(f'argument {action.dest!r} accumulates across repetitions')
+  if action.nargs == 0:
+    kind: Literal['flag', 'value', 'list'] = 'flag'
+  elif isinstance(action.nargs, int):
+    raise ValueError(f'argument {action.dest!r} takes exactly {action.nargs} values')
+  elif action.nargs in ('*', '+'):
+    kind = 'list'
+  elif action.nargs in (None, '?'):
+    kind = 'value'
+  else:
+    raise ValueError(f'argument {action.dest!r} takes {action.nargs!r} values')
+  long_options = [option for option in action.option_strings if option.startswith('--')]
+  option = None
+  if len(action.option_strings) > 0:
+    option = long_options[0] if len(long_options) > 0 else action.option_strings[0]
+  if action.type is int:
+    value_type: Literal['string', 'integer', 'number'] = 'integer'
+  elif action.type is float:
+    value_type = 'number'
+  else:
+    value_type = 'string'
+  # a positional's own `required` is not a stable reading of it: for `nargs='*'`
+  # argparse has spelled it both ways across CPython patch releases, keying it on
+  # whether a default was passed. `nargs` says what the command actually demands.
+  required = (
+    bool(action.required) if len(action.option_strings) > 0 else action.nargs not in ('?', '*')
+  )
+  return Argument(
+    name=action.dest,
+    help=action.help if action.help is not None else '',
+    required=required,
+    kind=kind,
+    option=option,
+    choices=() if action.choices is None else tuple(str(choice) for choice in action.choices),
+    value_type=value_type,
+  )
+
+
+def command_signature(command: Sequence[str]) -> CommandSignature:
+  """the signature of an installed command — its summary and the arguments it
+  declares — read from the parser its `main` builds rather than from its help text.
+
+  `command` is the console-script name followed by any subcommands (`('bro',
+  'list')`). Only the command's own arguments are described: the repo-wide global
+  flags and anything hidden with a SUPPRESS help are left out. Raises when the
+  command is not an installed CLI built on this module, when it dispatches
+  subcommands of its own rather than doing the work, or when it declares an
+  argument shape that cannot be described.
+  """
+  words = tuple(command)
+  if len(words) == 0:
+    raise ValueError('a command needs at least a program name')
+  parser, summary = _descend(_built_parser(words[0]), words)
+  spelled = ' '.join(words)
+  action = _subcommands(parser)
+  if action is not None:
+    raise ValueError(
+      f'{spelled!r} dispatches subcommands ({", ".join(action.choices)}); name one of them'
+    )
+  if len(words) > 1 and _HANDLER_DEST not in parser._defaults:
+    # a subcommand that registers no handler is a placeholder its main routes
+    # elsewhere before parsing, so the arguments it really takes are declared
+    # nowhere this walk can reach.
+    raise ValueError(f'{spelled!r} registers no handler; its arguments are declared elsewhere')
+  description = parser.description if parser.description is not None else summary
+  if len(description) == 0:
+    raise ValueError(f'{spelled!r} describes itself nowhere; give it a description or a help line')
+  global_actions = {id(a) for a in parser._global_group._group_actions}
+  arguments = tuple(
+    _argument(action)
+    for action in parser._actions
+    if id(action) not in global_actions and action.help is not SUPPRESS
+  )
+  return CommandSignature(command=words, description=description, arguments=arguments)

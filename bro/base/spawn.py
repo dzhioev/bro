@@ -11,6 +11,8 @@ grandchildren the child spawned (shell pipelines, backgrounded helpers). Without
 a timed-out `bash -c 'grep -R ... | sed ...'` would kill only the shell and leave a
 `grep` blocked on a FIFO running forever — `subprocess.run`'s own timeout cleanup
 signals only the direct child.
+
+`format_result` is the shared shape a finished child takes as agent-tool output.
 """
 
 import asyncio
@@ -19,7 +21,9 @@ import os
 import signal
 import subprocess
 from collections.abc import AsyncGenerator, Callable
-from typing import Optional
+from typing import Literal, Optional
+
+from bro.base.text_window import apply_limit
 
 
 def _signal_group(pid: int, signal_number: int, fallback: Callable[[], None]) -> None:
@@ -127,6 +131,25 @@ async def run_async(
   return subprocess.CompletedProcess(
     command, process.returncode, stdout.decode(errors='replace'), stderr.decode(errors='replace')
   )
+
+
+def format_result(
+  process: subprocess.CompletedProcess[str],
+  *,
+  limit: int,
+  keep: Literal['head', 'tail'] = 'head',
+) -> str:
+  """a finished child's result as agent-tool output: the exit code, then the
+  captured output with stderr under a divider, capped to `limit` lines."""
+  combined = process.stdout
+  if len(process.stderr) > 0:
+    combined = (
+      f'{combined}\n--- stderr ---\n{process.stderr}' if len(combined) > 0 else process.stderr
+    )
+  capped = apply_limit(combined, limit, keep=keep)
+  if len(capped) == 0:
+    return f'exit_code: {process.returncode}'
+  return f'exit_code: {process.returncode}\n{capped}'
 
 
 def popen(command, **kwargs) -> subprocess.Popen:
