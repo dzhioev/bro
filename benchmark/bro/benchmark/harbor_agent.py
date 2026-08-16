@@ -46,26 +46,19 @@ from bro.workspace.store import materialize_scoped_store
 
 AGENT_NAME = 'bro'
 
-# harbor's own `setup()` creates the install directory and then calls `install()`
+# the directory harbor's own `setup()` creates before it calls `install()`
 INSTALL_DIR = PurePosixPath('/installed-agent')
-# the uploaded bundle, addressed through the layout its builder publishes
 BUNDLE = Bundle(Path(INSTALL_DIR / 'bro'))
 STORE_DIR = INSTALL_DIR / 'credentials'
-# where the bro records its own process group for the cancellation path
 PGID_FILE = INSTALL_DIR / 'bro.pgid'
 
+# harbor mounts the trial's own directory here, so what a run writes under it
+# reaches the host
 AGENT_DIR = EnvironmentPaths.agent_dir
-# the trial directory is mounted here, so both files reach the host as the run's
-# record: the trajectory a leaderboard submission publishes, and the token counts
-# `populate_context_post_run` reads back
 ACTIVITY_LOG = AGENT_DIR / 'bro.log'
 USAGE_FILE = AGENT_DIR / 'usage.json'
 
-# the credential kind the bro reads its LLM key as; an instance of it
-# (`openai+benchmark`) materializes under that same kind name
 DEFAULT_LLM_CREDENTIAL = 'openai'
-
-# the provider prefix harbor's `-m <provider>/<model>` must name
 MODEL_PROVIDER = 'openai'
 
 # seconds between the TERM and the KILL when a cancelled phase reaps the bro,
@@ -261,8 +254,8 @@ class BroAgent(BaseInstalledAgent):
       # task images ship no CA store unless their own layers add one, and the
       # bundle carries certifi's
       'SSL_CERT_FILE': str(BUNDLE.ca_bundle),
-      # the in-place switch for run recording, which the container has no
-      # trails service to reach
+      # `bro run` refuses `--no-trails` beside `--in-place`, so the env var is
+      # the switch an in-place run has
       'TRAILS_DISABLED': '1',
     }
 

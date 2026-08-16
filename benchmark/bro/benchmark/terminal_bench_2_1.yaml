@@ -7,8 +7,7 @@
 # command builds; `benchmark/README.md` says where the score lands.
 
 datasets:
-  # harbor reads a bare integer ref as a dataset revision; 6 is what `latest`
-  # resolved to when this file was written
+  # harbor reads a bare integer ref as a dataset revision
   - name: terminal-bench/terminal-bench-2-1
     ref: "6"
 
