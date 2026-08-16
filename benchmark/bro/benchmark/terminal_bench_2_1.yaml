@@ -1,0 +1,41 @@
+# Terminal-Bench 2.1, scored with a bro as the agent under test.
+#
+#   uv run --project benchmark benchmark-bundle
+#   uv run --project benchmark harbor job start -c benchmark/bro/benchmark/terminal_bench_2_1.yaml
+#
+# Every input a score depends on is pinned here or in the bundle the first
+# command builds; `benchmark/README.md` says where the score lands.
+
+datasets:
+  # harbor reads a bare integer ref as a dataset revision; 6 is what `latest`
+  # resolved to when this file was written
+  - name: terminal-bench/terminal-bench-2-1
+    ref: "6"
+
+# two entries over one dataset, so the difference between the developer bro as
+# it ships and the purpose-built one is a measured number in a single job
+agents:
+  - import_path: bro.benchmark.harbor_agent:BroAgent
+    model_name: openai/gpt-5.6-terra
+    kwargs:
+      bro: dev
+      # a dedicated, budget-capped key: the agent phase hands it to an LLM with
+      # unrestricted shell and internet, driven by third-party task text
+      llm_credential: openai+benchmark
+  - import_path: bro.benchmark.harbor_agent:BroAgent
+    model_name: openai/gpt-5.6-terra
+    kwargs:
+      bro: terminal
+      llm_credential: openai+benchmark
+
+n_attempts: 1
+n_concurrent_trials: 8
+
+# only the provider failures BroAgent classifies from the framework's own error
+# output; anything unclassified is a task result, not a flake
+retry:
+  max_retries: 2
+  include_exceptions:
+    - ApiRateLimitError
+    - ApiInternalServerError
+    - NetworkConnectionError

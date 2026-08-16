@@ -1,0 +1,80 @@
+"""live check of one real Terminal-Bench task driven through harbor end to end.
+
+Passing the task is not the point and is not expected — what this asserts is
+that every seam holds: the bundle installs into a foreign image, the credential
+store resolves there, the bro drives the LLM loop against the task filesystem,
+and the verifier grades what it left behind. It runs the documented commands
+rather than the library, so what is checked is the path an operator uses.
+
+It builds a real bundle, drives the host docker daemon and spends real tokens,
+so it stays out of the gate's roster:
+
+  uv run --directory benchmark pytest bro/benchmark/harbor_e2e_test.py
+
+The job's trial directories are bind-mounted into the task containers by the
+docker daemon, so `--basetemp` has to name a directory that daemon can reach
+when pytest and the daemon do not share a filesystem.
+"""
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+from bro.base import credentials
+from bro.benchmark.bundle import build, default_root, workspace_root
+from bro.benchmark.harbor_agent import DEFAULT_LLM_CREDENTIAL
+
+# the smallest image in the set, and one carrying neither python3 nor a CA
+# store — so a single trial exercises the bundle and SSL_CERT_FILE for real
+TASK = 'adaptive-rejection-sampler'
+JOB_CONFIG = Path(__file__).with_name('terminal_bench_2_1.yaml')
+HARBOR = Path(sys.executable).with_name('harbor')
+
+
+def _docker_available() -> bool:
+  try:
+    return subprocess.run(['docker', 'info'], capture_output=True).returncode == 0
+  except FileNotFoundError:
+    return False
+
+
+pytestmark = [
+  pytest.mark.skipif(not _docker_available(), reason='no reachable docker daemon'),
+  pytest.mark.skipif(
+    not credentials.available(DEFAULT_LLM_CREDENTIAL), reason='no LLM key resolves'
+  ),
+]
+
+
+def test_a_real_task_is_driven_and_graded(tmp_path):
+  workspace = workspace_root()
+  build(workspace, default_root(workspace))
+  jobs = tmp_path / 'jobs'
+
+  subprocess.run(
+    [
+      str(HARBOR),
+      'job',
+      'start',
+      '--config',
+      str(JOB_CONFIG),
+      '--include-task-name',
+      TASK,
+      '--jobs-dir',
+      str(jobs),
+      '--yes',
+      '--quiet',
+    ],
+    check=True,
+  )
+
+  results = sorted(jobs.glob('*/result.json'))
+  assert len(results) == 1
+  stats = json.loads(results[0].read_text())['stats']
+  assert stats['n_errored_trials'] == 0
+  for name, evaluated in stats['evals'].items():
+    assert evaluated['n_trials'] > 0, f'{name} produced no graded trial'
+    assert evaluated['reward_stats'] != {}, f'{name} produced no reward'
