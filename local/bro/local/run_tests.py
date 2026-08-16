@@ -103,7 +103,6 @@ PYTEST_FILES = [
   'bro/trails/display/textual_test.py',
   'bro/trails/display/_reflow_test.py',
   'bro/trails/lineage_test.py',
-  'bro/trails/migrate_llm_spec_test.py',
   'bro/trails/claude_lineage_test.py',
   'bro/trails/rewind_test.py',
   'bro/trails/server/server_test.py',

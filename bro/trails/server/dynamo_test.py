@@ -777,40 +777,6 @@ def test_relink_manifests_before_trimming_and_recomputes(components):
   assert (trail_id, 1) not in dynamo.universal_steps
 
 
-def test_repair_llm_spec_manifests_the_value_it_replaces(components):
-  store, dynamo, s3 = components
-  trail_id = _blaze_bro(store)
-  recorded = dynamo.headers[trail_id]['native']['llm']
-
-  result = store.repair_llm_spec(trail_id, recorded, {**recorded, 'type': 'anthropic'})
-
-  assert dynamo.headers[trail_id]['native']['llm']['type'] == 'anthropic'
-  assert json.loads(s3.objects[result['manifest_s3']])['previous'] == recorded
-
-
-def test_repair_llm_spec_refuses_a_value_it_did_not_read(components):
-  store, dynamo, _ = components
-  trail_id = _blaze_bro(store)
-  recorded = dynamo.headers[trail_id]['native']['llm']
-
-  with pytest.raises(ValueError, match='not the expected value'):
-    store.repair_llm_spec(trail_id, {'type': 'stale'}, {'type': 'anthropic'})
-  assert dynamo.headers[trail_id]['native']['llm'] == recorded
-
-
-def test_repair_llm_spec_leaves_the_rest_of_native_alone(components):
-  # `native` also carries the usage an append folds in, so the repair must
-  # replace the recipe rather than the record around it
-  store, dynamo, _ = components
-  trail_id = _blaze_bro(store)
-  recorded = dynamo.headers[trail_id]['native']['llm']
-  dynamo.headers[trail_id]['native']['usage'] = {'gpt-5': {'input_tokens': 7}}
-
-  store.repair_llm_spec(trail_id, recorded, {**recorded, 'type': 'anthropic'})
-
-  assert dynamo.headers[trail_id]['native']['usage'] == {'gpt-5': {'input_tokens': 7}}
-
-
 def test_list_and_pointer_index_stay_available(components):
   store, _, _ = components
   root = _blaze_bro(store)

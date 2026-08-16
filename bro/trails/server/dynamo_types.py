@@ -99,8 +99,3 @@ def context_key(trail_id: str) -> str:
 def relink_manifest_key(trail_id: str, timestamp: str) -> str:
   compact = timestamp.replace(':', '').replace('.', '')
   return f'trails/migrations/relink/{trail_id}-{compact}.json'
-
-
-def llm_spec_manifest_key(trail_id: str, timestamp: str) -> str:
-  compact = timestamp.replace(':', '').replace('.', '')
-  return f'trails/migrations/llm-spec/{trail_id}-{compact}.json'
