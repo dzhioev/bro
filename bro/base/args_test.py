@@ -789,6 +789,7 @@ class TestCommandSignature:
     assert arguments['after_context'].value_type == 'integer'
     assert arguments['after_context'].option == '--after-context'  # the long form, not -A
     assert arguments['trails'].kind == 'list'
+    # `nargs='*'`, whose argparse `required` flag reads differently per CPython patch release
     assert arguments['trails'].required is False
 
   def test_a_dispatching_command_names_its_subcommands(self):

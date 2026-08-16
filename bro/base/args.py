@@ -591,10 +591,16 @@ def _argument(action: argparse.Action) -> Argument:
     value_type = 'number'
   else:
     value_type = 'string'
+  # a positional's own `required` is not a stable reading of it: for `nargs='*'`
+  # argparse has spelled it both ways across CPython patch releases, keying it on
+  # whether a default was passed. `nargs` says what the command actually demands.
+  required = (
+    bool(action.required) if len(action.option_strings) > 0 else action.nargs not in ('?', '*')
+  )
   return Argument(
     name=action.dest,
     help=action.help if action.help is not None else '',
-    required=bool(action.required),
+    required=required,
     kind=kind,
     option=option,
     choices=() if action.choices is None else tuple(str(choice) for choice in action.choices),
