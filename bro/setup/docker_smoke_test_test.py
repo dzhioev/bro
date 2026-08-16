@@ -46,6 +46,12 @@ def _oci_calls(tmp_path: Path) -> list[str]:
   return log.read_text().splitlines() if log.exists() else []
 
 
+def _built_image(build_call: str) -> str:
+  built = re.fullmatch(r'build -f Dockerfile -t (smoke-test-\d+) \.', build_call)
+  assert built is not None
+  return built.group(1)
+
+
 def test_copies_land_between_container_create_and_start(tmp_path):
   (tmp_path / 'Dockerfile').write_text('FROM scratch\n')
   (tmp_path / 'config.json').write_text('{}\n')
@@ -62,13 +68,14 @@ def test_copies_land_between_container_create_and_start(tmp_path):
   )
 
   build, create, *rest = _oci_calls(tmp_path)
-  assert re.fullmatch(r'build -f Dockerfile -t smoke-test-\d+ \.', build)
-  assert re.fullmatch(r'create -p \d+:8080 -e KEY=VAL smoke-test-\d+', create)
+  image = _built_image(build)
+  assert re.fullmatch(rf'create -p \d+:8080 -e KEY=VAL {image}', create)
   assert rest == [
     'cp config.json smoke-cid:/etc/app/config.json',
     'cp seed.sql smoke-cid:/var/seed.sql',
     'start smoke-cid',
     'rm -f smoke-cid',
+    f'rmi -f {image}',
   ]
 
 
@@ -78,3 +85,21 @@ def test_absent_copy_source_fails_before_the_container_exists(tmp_path):
   assert result.returncode != 0
   assert 'missing.json' in result.stderr
   assert _oci_calls(tmp_path) == []
+
+
+def test_image_is_removed_when_the_run_fails_before_the_container(tmp_path):
+  (tmp_path / 'Dockerfile').write_text('FROM scratch\n')
+
+  result = _run_smoke(
+    """
+    smoke_build Dockerfile
+    smoke_copy missing.json /etc/app/config.json
+    smoke_start 8080
+    """,
+    tmp_path,
+    check=False,
+  )
+
+  assert result.returncode != 0
+  build, *rest = _oci_calls(tmp_path)
+  assert rest == [f'rmi -f {_built_image(build)}']
