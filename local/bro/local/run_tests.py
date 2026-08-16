@@ -173,6 +173,7 @@ PYTEST_FILES = [
   'bro/runtime/mcp_server_test.py',
   'bro/prompts/prompts_test.py',
   'bro/setup/container/git_test.py',
+  'bro/setup/docker_smoke_test_test.py',
   'bro/llm/usage_test.py',
   'local/bro/local/shell_policy_test.py',
   'local/bro/local/setup_test.py',
