@@ -123,6 +123,7 @@ PYTEST_FILES = [
   'bro/launch/ask_test.py',
   'bros/dev/mcp_test.py',
   'bros/dev/jobs_test.py',
+  'bros/terminal/terminal_test.py',
   'dev/bros/analyst/scripts/trails_usage_test.py',
   'bro/cw/broxy_test.py',
   'bro/cw/claude_argv_test.py',

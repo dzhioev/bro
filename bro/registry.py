@@ -2,10 +2,10 @@ import importlib
 import importlib.metadata
 from typing import Optional
 
+from bro.bro import BaseBro
 from bro.llm.llm import NativeLLMSpec
-from bros.bro import Bro
 
-_REGISTRY: dict[str, type[Bro]] = {}
+_REGISTRY: dict[str, type[BaseBro]] = {}
 # when True (the default), a lookup miss imports the matching bro module on
 # demand. tests flip it off to isolate the registry to whatever they register by
 # hand, so the real bros never bleed into list_classes().
@@ -39,7 +39,7 @@ def declared_specs() -> dict[str, str]:
   return specs
 
 
-def register(bro_cls: type[Bro]) -> None:
+def register(bro_cls: type[BaseBro]) -> None:
   name = getattr(bro_cls, 'name', None)
   if not isinstance(name, str):
     raise ValueError(f'{bro_cls.__name__} must declare a `name` class attribute')
@@ -48,7 +48,7 @@ def register(bro_cls: type[Bro]) -> None:
   _REGISTRY[name] = bro_cls
 
 
-def _autoload_class(name: str) -> Optional[type[Bro]]:
+def _autoload_class(name: str) -> Optional[type[BaseBro]]:
   # import only the single bro module that declares `name` and register it; None
   # if `name` is not a known bro. importing one bro instead of all of them keeps
   # `create_bro('dev')` from dragging in every other bro's dependency graph.
@@ -64,7 +64,7 @@ def _autoload_class(name: str) -> Optional[type[Bro]]:
   return _REGISTRY[name]
 
 
-def get_class(name: str) -> type[Bro]:
+def get_class(name: str) -> type[BaseBro]:
   cls = _REGISTRY.get(name)
   if cls is not None:
     return cls
@@ -75,7 +75,7 @@ def get_class(name: str) -> type[Bro]:
   raise KeyError(f'unknown bro: {name!r}')
 
 
-def create_bro(name: str, llm_spec: Optional[NativeLLMSpec] = None) -> Bro:
+def create_bro(name: str, llm_spec: Optional[NativeLLMSpec] = None) -> BaseBro:
   """instantiate the registered bro by name. returns a fresh instance every
   call — construction walks the MRO, materialises MCP servers, and renders the
   system prompt, so callers that need the same instance across requests should
@@ -96,7 +96,7 @@ def known_names() -> set[str]:
   return names
 
 
-def list_classes() -> list[type[Bro]]:
+def list_classes() -> list[type[BaseBro]]:
   if _autoload:
     for name in declared_specs():
       _autoload_class(name)
