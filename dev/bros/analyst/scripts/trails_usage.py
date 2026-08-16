@@ -37,18 +37,6 @@ DEFAULT_VERIFY = 10
 # short timeout a header listing needs
 CLIENT_TIMEOUT_SECONDS = 120.0
 
-_PROVIDER_PATTERNS = (
-  (re.compile(r'^claude-'), 'anthropic'),
-  (re.compile(r'^(gpt|o\d)'), 'openai'),
-)
-
-
-def provider_of(model: str) -> str:
-  for pattern, provider in _PROVIDER_PATTERNS:
-    if pattern.match(model) is not None:
-      return provider
-  raise ValueError(f'no provider known for model {model!r}')
-
 
 @dataclass
 class Window:
@@ -69,7 +57,7 @@ class Fold:
 
   trails: int = 0
   live: int = 0
-  by_provider: dict[str, usage.Counts] = field(default_factory=dict)
+  by_vendor: dict[str, usage.Counts] = field(default_factory=dict)
   by_model: dict[str, usage.Counts] = field(default_factory=dict)
   by_bro: dict[str, usage.Counts] = field(default_factory=dict)
   by_harness: dict[str, usage.Counts] = field(default_factory=dict)
@@ -77,7 +65,7 @@ class Fold:
 
   def total(self) -> usage.Counts:
     totals = usage.zero()
-    for counts in self.by_provider.values():
+    for counts in self.by_vendor.values():
       totals = usage.add(totals, counts)
     return totals
 
@@ -95,9 +83,9 @@ def fold_headers(headers: list[dict]) -> Fold:
     bro = header.get('bro') or '(none)'
     fold.sessions_by_bro[bro] += 1
     for model, raw in (header.get('usage') or {}).items():
-      counts = usage.from_provider_counts(raw)
-      _accumulate(fold.by_provider, provider_of(model), counts)
-      _accumulate(fold.by_model, model, counts)
+      counts = usage.from_vendor_counts(raw)
+      _accumulate(fold.by_vendor, usage.vendor_of(model), counts)
+      _accumulate(fold.by_model, usage.model_family(model), counts)
       _accumulate(fold.by_bro, bro, counts)
       _accumulate(fold.by_harness, header['harness'], counts)
   return fold
@@ -106,7 +94,7 @@ def fold_headers(headers: list[dict]) -> Fold:
 def header_total(header: dict) -> usage.Counts:
   totals = usage.zero()
   for raw in (header.get('usage') or {}).values():
-    totals = usage.add(totals, usage.from_provider_counts(raw))
+    totals = usage.add(totals, usage.from_vendor_counts(raw))
   return totals
 
 
@@ -116,7 +104,7 @@ def call_total(client: MessageReader, trail_id: str) -> usage.Counts:
   for message in client.iter_messages(trail_id, types={'llm_call'}):
     call_usage = message.get('usage')
     if call_usage is not None:
-      totals = usage.add(totals, usage.from_provider_counts(call_usage))
+      totals = usage.add(totals, usage.from_vendor_counts(call_usage))
   return totals
 
 
@@ -206,9 +194,9 @@ def render(
     '',
     *_table({'all': totals}, 'scope'),
     '',
-    '## By provider',
+    '## By vendor',
     '',
-    *_table(fold.by_provider, 'provider'),
+    *_table(fold.by_vendor, 'vendor'),
     '',
     '## By model',
     '',
@@ -230,7 +218,7 @@ def render(
     '',
     *_balance_table({'all': totals}, 'scope'),
     '',
-    *_balance_table(fold.by_provider, 'provider'),
+    *_balance_table(fold.by_vendor, 'vendor'),
     '',
     *_balance_table(fold.by_bro, 'bro'),
     '',

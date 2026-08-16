@@ -31,12 +31,10 @@ class TestFromProviderCounts:
       'cache_read_input_tokens': 5_000,
       'output_tokens': 80,
     }
-    assert usage.from_provider_counts(raw) == C(
-      input=2, cache_write=300, cache_read=5_000, output=80
-    )
+    assert usage.from_vendor_counts(raw) == C(input=2, cache_write=300, cache_read=5_000, output=80)
 
   def test_absent_anthropic_fields_read_as_zero(self):
-    assert usage.from_provider_counts({'input_tokens': 11, 'output_tokens': 7}) == C(
+    assert usage.from_vendor_counts({'input_tokens': 11, 'output_tokens': 7}) == C(
       input=11, output=7
     )
 
@@ -47,9 +45,7 @@ class TestFromProviderCounts:
       'output_tokens': 40,
       'total_tokens': 1_040,
     }
-    assert usage.from_provider_counts(raw) == C(
-      input=300, cache_write=100, cache_read=600, output=40
-    )
+    assert usage.from_vendor_counts(raw) == C(input=300, cache_write=100, cache_read=600, output=40)
 
   def test_openai_classes_stay_disjoint(self):
     raw = {
@@ -57,12 +53,12 @@ class TestFromProviderCounts:
       'input_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': 8_684},
       'output_tokens': 190,
     }
-    counts = usage.from_provider_counts(raw)
+    counts = usage.from_vendor_counts(raw)
     assert counts['input'] + counts['cache_write'] + counts['cache_read'] == 8_687
 
   def test_openai_shape_without_input_tokens_raises(self):
     with pytest.raises(KeyError):
-      usage.from_provider_counts({'input_tokens_details': {'cached_tokens': 1}})
+      usage.from_vendor_counts({'input_tokens_details': {'cached_tokens': 1}})
 
 
 class TestFormatInt:
@@ -74,23 +70,58 @@ class TestFormatInt:
     assert usage.format_int(1_275_432) == "1'275'432"
 
 
-class TestModelLabel:
+class TestVendorOf:
+  @pytest.mark.parametrize(
+    ('slug', 'vendor'),
+    [
+      ('claude-opus-5', 'anthropic'),
+      ('claude-fable-5', 'anthropic'),
+      ('claude-haiku-4-5-20251001', 'anthropic'),
+      ('gpt-5.6-sol', 'openai'),
+      ('gpt-5-2025-08-07', 'openai'),
+      ('o3-mini', 'openai'),
+    ],
+  )
+  def test_known_vendors(self, slug, vendor):
+    assert usage.vendor_of(slug) == vendor
+
+  def test_a_claude_slug_bills_anthropic_whichever_surface_ran_it(self):
+    # the launch roster calls this same string `claude-code`; who bills it is a
+    # separate question with a separate answer
+    assert usage.vendor_of('claude-opus-5') == 'anthropic'
+
+  def test_an_unclaimed_slug_raises(self):
+    with pytest.raises(ValueError, match='no vendor known'):
+      usage.vendor_of('llama-4')
+
+
+class TestModelFamily:
   def test_known_families(self):
-    assert usage.model_label(OPUS) == 'Opus 4.8'
-    assert usage.model_label(HAIKU) == 'Haiku 4.5'
-    assert usage.model_label('claude-sonnet-4-6') == 'Sonnet 4.6'
+    assert usage.model_family(OPUS) == 'Opus 4.8'
+    assert usage.model_family(HAIKU) == 'Haiku 4.5'
+    assert usage.model_family('claude-sonnet-4-6') == 'Sonnet 4.6'
 
   def test_single_number_families(self):
-    assert usage.model_label('claude-fable-5') == 'Fable 5'
-    assert usage.model_label('claude-mythos-5') == 'Mythos 5'
+    assert usage.model_family('claude-fable-5') == 'Fable 5'
+    assert usage.model_family('claude-mythos-5') == 'Mythos 5'
 
   def test_openai_snapshot_collapses_to_family(self):
-    assert usage.model_label('gpt-5-2025-08-07') == 'gpt-5'
-    assert usage.model_label('gpt-5') == 'gpt-5'
+    assert usage.model_family('gpt-5-2025-08-07') == 'gpt-5'
+    assert usage.model_family('gpt-5') == 'gpt-5'
 
   def test_unknown_slug_passes_through(self):
-    assert usage.model_label('<synthetic>') == '<synthetic>'
-    assert usage.model_label('claude-experimental-99-12') == 'claude-experimental-99-12'
+    assert usage.model_family('<synthetic>') == '<synthetic>'
+    assert usage.model_family('claude-experimental-99-12') == 'claude-experimental-99-12'
+
+  def test_two_snapshots_of_one_model_share_a_family(self):
+    assert usage.model_family('gpt-5-2025-08-07') == usage.model_family('gpt-5-2026-01-15')
+    assert usage.model_family('claude-haiku-4-5-20251001') == usage.model_family(
+      'claude-haiku-4-5-20260514'
+    )
+
+  def test_two_versions_of_one_model_do_not(self):
+    # Opus 4.8 and Opus 5 are different models, not snapshots of one
+    assert usage.model_family('claude-opus-4-8') != usage.model_family('claude-opus-5')
 
 
 class TestUsageFile:

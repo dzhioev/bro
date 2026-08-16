@@ -105,8 +105,8 @@ def subtract(a: Counts, b: Counts) -> Counts:
   return {c: a.get(c, 0) - b.get(c, 0) for c in CLASSES}
 
 
-def from_provider_counts(raw: dict) -> Counts:
-  """normalize one provider-raw usage record into the four billed classes.
+def from_vendor_counts(raw: dict) -> Counts:
+  """normalize one vendor-raw usage record into the four billed classes.
 
   Anthropic reports the four as disjoint fields. OpenAI reports a single
   `input_tokens` covering the whole prompt and breaks its cached and
@@ -222,7 +222,7 @@ def transcript_usage(path: Path) -> dict[str, Counts]:
         model = 'unknown'
       if model == _SYNTHETIC_MODEL:
         continue
-      totals[model] = add(totals.get(model, zero()), from_provider_counts(u))
+      totals[model] = add(totals.get(model, zero()), from_vendor_counts(u))
   return totals
 
 
@@ -272,7 +272,36 @@ def format_int(n: int) -> str:
   return f'{n:,}'.replace(',', _THOUSANDS)
 
 
-def model_label(slug: str) -> str:
+# the vendor a resolved model slug bills, by the shape of the slug. Distinct
+# from the launch-time provider of `bro.llm.providers`, which answers which
+# surface serves a model *name*: a claude slug bills `anthropic` whether a Claude
+# Code session or the Anthropic API served it, where the launch roster would call
+# the same string `claude-code`.
+_VENDOR_PATTERNS = (
+  (re.compile(r'^claude-'), 'anthropic'),
+  (re.compile(r'^(gpt|o\d)'), 'openai'),
+)
+
+
+def vendor_of(slug: str) -> str:
+  """the vendor that billed `slug`. Raises for a slug no known vendor claims,
+  rather than folding unattributed spend into a bucket."""
+  for pattern, vendor in _VENDOR_PATTERNS:
+    if pattern.match(slug) is not None:
+      return vendor
+  raise ValueError(f'no vendor known for model {slug!r}')
+
+
+def model_family(slug: str) -> str:
+  """the model a resolved slug belongs to, with whatever pins one version of it
+  stripped — the key that matches two snapshots of one model to each other.
+
+  A vendor pins a version in its own way: OpenAI resolves a request to a dated
+  snapshot (`gpt-5` → `gpt-5-2025-08-07`), Anthropic carries the date in the id
+  (`claude-haiku-4-5-20251001`). Either way the version *of the model itself*
+  survives, because Opus 4.8 and Opus 5 are different models, not two snapshots
+  of one. A slug no scheme matches is its own family.
+  """
   # minor version is optional: single-number families (claude-fable-5) label as
   # just the major ("Fable 5")
   m = re.match(r'^claude-(opus|sonnet|haiku|fable|mythos)-(\d+)(?:-(\d+))?', slug)
@@ -286,10 +315,10 @@ def model_label(slug: str) -> str:
 
 
 def to_labels(slug_counts: dict[str, Counts]) -> dict[str, Counts]:
-  """collapse model-slug-keyed counts to the human labels the footer carries."""
+  """collapse model-slug-keyed counts to the families the footer labels."""
   labels: dict[str, Counts] = {}
   for slug, c in slug_counts.items():
-    label = model_label(slug)
+    label = model_family(slug)
     labels[label] = add(labels.get(label, zero()), c)
   return labels
 

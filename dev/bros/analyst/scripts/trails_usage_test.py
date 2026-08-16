@@ -28,24 +28,6 @@ def _header(trail_id, harness, bro, usage_by_model, ended=True):
   }
 
 
-class TestProviderOf:
-  @pytest.mark.parametrize(
-    ('model', 'provider'),
-    [
-      ('claude-opus-5', 'anthropic'),
-      ('claude-fable-5', 'anthropic'),
-      ('gpt-5.6-sol', 'openai'),
-      ('o3-mini', 'openai'),
-    ],
-  )
-  def test_known_families(self, model, provider):
-    assert generate.provider_of(model) == provider
-
-  def test_unknown_family_raises(self):
-    with pytest.raises(ValueError, match='no provider known'):
-      generate.provider_of('llama-4')
-
-
 class TestFoldHeaders:
   def test_cuts_the_same_spend_every_way(self):
     fold = generate.fold_headers(
@@ -55,13 +37,13 @@ class TestFoldHeaders:
       ]
     )
     assert fold.trails == 2
-    assert fold.by_provider['anthropic'] == {
+    assert fold.by_vendor['anthropic'] == {
       'input': 2,
       'cache_write': 300,
       'cache_read': 5000,
       'output': 80,
     }
-    assert fold.by_provider['openai'] == {
+    assert fold.by_vendor['openai'] == {
       'input': 300,
       'cache_write': 100,
       'cache_read': 600,
@@ -69,6 +51,17 @@ class TestFoldHeaders:
     }
     assert fold.by_harness['claude'] == fold.by_bro['bro-dev']
     assert fold.total()['output'] == 120
+
+  def test_snapshots_of_one_model_fold_into_one_row(self):
+    # a window spanning a snapshot rotation reports the model once, not twice
+    fold = generate.fold_headers(
+      [
+        _header('a', 'bro', 'bro-dev', {'gpt-5-2025-08-07': _OPENAI}),
+        _header('b', 'bro', 'bro-dev', {'gpt-5-2026-01-15': _OPENAI}),
+      ]
+    )
+    assert list(fold.by_model) == ['gpt-5']
+    assert fold.by_model['gpt-5']['output'] == 80
 
   def test_counts_live_trails_and_nameless_bros(self):
     fold = generate.fold_headers(

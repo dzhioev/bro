@@ -1,8 +1,8 @@
 ---
 name: report-usage
-description: This spell should be used when the user asks for a usage report over recorded runs — "[[report usage]]", "write the usage report", "how much did we spend last month", "where did the tokens go", "usage report for the last two weeks", "usage for yesterday 12-14, focus on cache balance". Folds every trail in a window into per-class token totals broken down by provider, model, bro, and harness, optionally emphasising an angle the caller names, reconciles the fold against the trail headers' own aggregates, and commits the report into the directory the operated repository declares for its analyses, together with any change to the generator that produced it, in one commit, leaving the push to whoever owns the branch.
+description: This spell should be used when the user asks for a usage report over recorded runs — "[[report usage]]", "write the usage report", "how much did we spend last month", "where did the tokens go", "usage report for the last two weeks", "usage for yesterday 12-14, focus on cache balance". Folds every trail in a window into per-class token totals broken down by vendor, model, bro, and harness, optionally emphasising an angle the caller names, reconciles the fold against the trail headers' own aggregates, and commits the report into the directory the operated repository declares for its analyses, together with any change to the generator that produced it, in one commit, leaving the push to whoever owns the branch.
 parameters: {"window?": "period to report on, in whatever form the caller states it — \"last week\", \"this June\", \"a week till now\", \"yesterday 12-14\", \"since 2026-07-01\"; defaults to the last 30 days", "focus?": "an angle to emphasise beyond the standing aggregates, e.g. \"cache write/read balance\", \"where the reasoning tokens go\", \"which bros grew\""}
-version: 3.0.0
+version: 3.1.0
 ---
 
 # Usage report
@@ -57,7 +57,7 @@ Exact agreement is the expected result, because both sides count the same record
 
 The generator produces the figures; this step writes the reading of them into the file it just produced. The document carries both, and keeps them distinguishable — a table is evidence, a sentence about what it means is an interpretation.
 
-Cover the window's totals per token class, the split by provider and model, and the split by bro and by harness. Read this window on its own terms — what is large, what is disproportionate to the sessions behind it, what does not look like what it should. Reports are not differences of each other, and two of them over overlapping windows subtract to nothing meaningful.
+Cover the window's totals per token class, the split by vendor and model, and the split by bro and by harness. Read this window on its own terms — what is large, what is disproportionate to the sessions behind it, what does not look like what it should. Reports are not differences of each other, and two of them over overlapping windows subtract to nothing meaningful.
 
 Where a focus was named, give it its own section of the reading, after the standing one and titled for the question it answers. It is where the report says something rather than shows something, so it carries the load: what the figures mean, which of them are noise at this volume, and what would have to change before the answer changes.
 

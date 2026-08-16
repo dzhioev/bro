@@ -541,7 +541,7 @@ class OpenAI(llm_llm.LLM):
     if response_usage is None:
       return
     details = response_usage.input_tokens_details
-    counts = usage.from_provider_counts(
+    counts = usage.from_vendor_counts(
       {
         'input_tokens': response_usage.input_tokens,
         'input_tokens_details': {

@@ -40,7 +40,7 @@ _PART_RE = re.compile(
 
 
 def _parse_footer(commit_msg: str) -> Optional[dict[str, int]]:
-  """returns {model_label: output_tokens} for the credits column, or None."""
+  """returns {model family: output tokens} for the credits column, or None."""
   m = _FOOTER_RE.search(commit_msg)
   if m is None:
     return None
