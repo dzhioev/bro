@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools>=61", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"
 
 [project]
 name = "bro-dev"
@@ -32,16 +32,16 @@ bro = { workspace = true }
 [tool.deptry.package_module_name_map]
 bro = ["bro", "bros"]
 
-[tool.setuptools]
-include-package-data = false
-
-[tool.setuptools.package-data]
-"bros.analyst" = ["spells/*.md"]
-
-[tool.setuptools.packages.find]
-where = ["."]
-# `bro` is the framework's namespace package; this portion carries no
-# __init__.py of its own so the two merge.
-namespaces = true
-include = ["bro.dev", "bros.analyst", "bros.analyst.scripts"]
-exclude = ["*.egg-info"]
+[tool.uv.build-backend]
+module-root = ""
+module-name = ["bro.dev", "bros.analyst"]
+# `bro` and `bros` are the framework's namespace packages; these portions carry
+# no __init__.py of their own so the distributions merge
+namespace = true
+wheel-exclude = [
+  "**/*_test.py",
+  "**/*_test_helper.py",
+  "**/conftest.py",
+  "**/CLAUDE.md",
+  "bros/analyst/reports",
+]

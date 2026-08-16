@@ -4,8 +4,8 @@ The test gate syncs every extra from the source tree, so neither an extra-only
 import on a base-install surface nor a data file missing from the built
 distribution shows up in-tree. The base-install cases re-run each console script
 in a subprocess whose import system serves only the standard library and the
-transitive closure of the base `dependencies` table; the package-data cases hold
-the shipped-file globs against the tree.
+transitive closure of the base `dependencies` table; the data-file cases hold a
+freshly built wheel against the tracked tree.
 """
 
 import fnmatch
@@ -14,9 +14,12 @@ import os
 import subprocess
 import sys
 import tomllib
+import zipfile
 from pathlib import Path
 
 import pytest
+
+from bro.base import configs
 
 _ROOT = Path(__file__).resolve().parents[1]
 _ALLOWED_ENV = 'BASE_INSTALL_MODULES'
@@ -156,20 +159,6 @@ def test_show_runs_on_base_install(name, tmp_path):
   assert name in _run('bro', 'bro_run', ['show', name], tmp_path)
 
 
-def _shipped() -> dict[tuple[str, str], set[str]]:
-  """(package, glob) -> the tree files that glob ships."""
-  package_data = _metadata()['tool']['setuptools']['package-data']
-  return {
-    (package, pattern): {
-      str(path.relative_to(_ROOT))
-      for path in (_ROOT / package.replace('.', '/')).glob(pattern)
-      if path.is_file()
-    }
-    for package, patterns in package_data.items()
-    for pattern in patterns
-  }
-
-
 def _data_files() -> set[str]:
   """the package's non-source files — every candidate for shipping."""
   tracked = subprocess.run(
@@ -178,18 +167,45 @@ def _data_files() -> set[str]:
   return {path for path in tracked if not path.endswith('.py')}
 
 
-def test_every_data_file_ships():
-  shipped = set().union(*_shipped().values())
-  missing = sorted(
+def _expected_data_files() -> set[str]:
+  return {
     path
-    for path in _data_files() - shipped
+    for path in _data_files()
     if not any(fnmatch.fnmatch(path, pattern) for pattern in _NOT_SHIPPED)
-  )
-  assert missing == [], f'no [tool.setuptools.package-data] glob ships {missing}'
+  }
 
 
-def test_every_package_data_glob_matches():
-  empty = sorted(
-    f'{package}: {pattern}' for (package, pattern), paths in _shipped().items() if len(paths) == 0
+@pytest.fixture(scope='module')
+def shipped_files(tmp_path_factory) -> set[str]:
+  """everything a freshly built wheel carries."""
+  directory = tmp_path_factory.mktemp('wheel')
+  subprocess.run(
+    ['uv', 'build', '--wheel', str(_ROOT), '--out-dir', str(directory)],
+    capture_output=True,
+    cwd=_ROOT,
+    check=True,
   )
-  assert empty == [], f'[tool.setuptools.package-data] globs matching nothing: {empty}'
+  with zipfile.ZipFile(next(directory.glob('*.whl'))) as archive:
+    return {name for name in archive.namelist() if not name.endswith('/')}
+
+
+@pytest.fixture(scope='module')
+def shipped_data_files(shipped_files) -> set[str]:
+  return {name for name in shipped_files if not name.endswith('.py') and '.dist-info/' not in name}
+
+
+def test_every_data_file_ships(shipped_data_files):
+  missing = sorted(_expected_data_files() - shipped_data_files)
+  assert missing == [], f'the wheel does not carry {missing}'
+
+
+def test_the_wheel_carries_nothing_else(shipped_data_files):
+  unexpected = sorted(shipped_data_files - _expected_data_files())
+  assert unexpected == [], f'the wheel carries {unexpected}'
+
+
+def test_the_wheel_is_the_distribution_the_framework_names(shipped_files):
+  """the version `bro.base.configs` reads comes from the distribution built here."""
+  built = {name.partition('.dist-info/')[0] for name in shipped_files if '.dist-info/' in name}
+  assert built == {f'{configs.DISTRIBUTION}-{configs.VERSION}'}
+  assert configs.__name__.replace('.', '/') + '.py' in shipped_files
