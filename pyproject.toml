@@ -68,7 +68,10 @@ dev = [
   "pytest==9.1.1",
   "pytest-aiohttp==1.1.1",
   "pytest-asyncio==1.4.0",
+  # an independent parser for the YAML display rendering to be held against
+  "pyyaml==6.0.3",
   "ruff==0.15.20",
+  "types-pyyaml==6.0.12.20260815",
   "types-python-dateutil==2.9.0.20260518",
 ]
 
