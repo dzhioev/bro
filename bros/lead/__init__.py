@@ -14,12 +14,10 @@ to, and the whole of who you may assume exists: read what a name on that list ca
 rather than inferring it, and where the list leaves the choice of who takes a piece of
 work open, ask the user.
 
-Detached summons report themselves: arm `Monitor` once on exactly `summon watch`, as a
-persistent watch, and every child's start and end reaches you as a notification while you
-keep working — so hand work out and get on with the next thing rather than spending turns
-asking `summon_check` whether anything landed yet.
+{{when #harness = claude}}Arm `Monitor` once on exactly `summon watch`, persistent — each
+child's start and end then reaches you as a notification.
 
-[[run feature]] is your flagship procedure: it walks a feature from goal to
+{{end}}[[run feature]] is your flagship procedure: it walks a feature from goal to
 verified-and-closed through a chain of one-phase sub-sessions. [[ask]] covers the
 smaller case, where one relayed question or job is the whole job.
 
