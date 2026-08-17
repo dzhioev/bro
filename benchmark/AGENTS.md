@@ -1,4 +1,4 @@
-# benchmark/CLAUDE.md
+# benchmark/AGENTS.md
 
 Driving a bro as an agent under Harbor, the harness Terminal-Bench runs on. The distribution is
 `bro-benchmark` and its package is `bro.benchmark`, a portion of the framework's `bro` namespace;

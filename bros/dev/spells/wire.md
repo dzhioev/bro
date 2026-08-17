@@ -20,7 +20,7 @@ Resolve the project root (`git rev-parse --git-common-dir`, then its parent — 
 
 ## 3. See what the host holds
 
-`credentials list --instance` prints the entries that resolve, variants included; the registry is `~/.bro/registry.json` plus the framework's built-ins (`bro/setup/CLAUDE.md`, "Configuration"). For each kind the project needs, sort the host into one of three cases:
+`credentials list --instance` prints the entries that resolve, variants included; the registry is `~/.bro/registry.json` plus the framework's built-ins (`bro/setup/AGENTS.md`, "Configuration"). For each kind the project needs, sort the host into one of three cases:
 
 - **one instance, resolving** — nothing to decide; leave it alone.
 - **several instances** — the project has a real choice. Show the user the candidates with whatever distinguishes them (a config's `backend`, an account or repo field — never the secret material itself) and ask which this project should read.

@@ -17,6 +17,11 @@ from typing import Optional
 
 CW_SESSION_CONTEXT_ENV = 'CW_SESSION_CONTEXT'
 
+# the two names a repository's agent instructions go by, most canonical first —
+# `AGENTS.md` is the cross-agent convention, `CLAUDE.md` the one Claude Code
+# loads on its own
+_INSTRUCTIONS_NAMES = ('AGENTS.md', 'CLAUDE.md')
+
 
 def _mcp_record(bro: str, raw: bool) -> dict:
   if raw:
@@ -41,7 +46,7 @@ def build_session_context(
   `bro` names the session's bro; `raw` selects the system-prompt record's
   shape: a raw session passes the whole prompt via --system-prompt (replaces
   the base), a cw-session passes only its --append-system-prompt addition on
-  top of claude's base + CLAUDE.md.
+  top of claude's base plus whatever instructions it loads itself.
   """
   records: list[dict] = []
 
@@ -64,16 +69,18 @@ def build_session_context(
 
   records.append(_mcp_record(bro, raw))
 
-  claude_md = proj_root / 'CLAUDE.md'
-  if claude_md.is_file():
-    records.append(
-      {
-        'kind': 'claude_md',
-        'subtype': 'root',
-        'title': 'CLAUDE.md (root)',
-        'content': claude_md.read_text().strip(),
-      }
-    )
+  for name in _INSTRUCTIONS_NAMES:
+    instructions = proj_root / name
+    if instructions.is_file():
+      records.append(
+        {
+          'kind': 'instructions',
+          'subtype': 'root',
+          'title': f'{name} (root)',
+          'content': instructions.read_text().strip(),
+        }
+      )
+      break
 
   return records
 

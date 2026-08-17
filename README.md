@@ -59,7 +59,7 @@ build-context-command = "git ls-files"    # optional session-image context file 
 
 Recording is mandatory, and storage is local unless configured otherwise: with no `~/.bro/trails.json`, a run writes to `var/cw/trails` in the repository it runs against, beside the rest of that project's local state. Container launch composers bind-mount that host root at the same path inside the container automatically.
 
-The hosted service is the opt-in, `{"backend": "service", "base_url": "https://trails.example", "token": "<bearer>"}`; an existing config with `base_url` and `token` but no `backend` continues to select the service, and `{"backend": "local"}` states the default explicitly. `trails-server` resolves its hosted store from the same credential vocabulary, selecting either local storage or the DynamoDB/S3 shape documented in [`bro/setup/CLAUDE.md`](bro/setup/CLAUDE.md) — but it requires the credential rather than defaulting, since a server states the backend it serves; only its bearer-auth settings remain command-line/environment flags.
+The hosted service is the opt-in, `{"backend": "service", "base_url": "https://trails.example", "token": "<bearer>"}`; an existing config with `base_url` and `token` but no `backend` continues to select the service, and `{"backend": "local"}` states the default explicitly. `trails-server` resolves its hosted store from the same credential vocabulary, selecting either local storage or the DynamoDB/S3 shape documented in [`bro/setup/AGENTS.md`](bro/setup/AGENTS.md) — but it requires the credential rather than defaulting, since a server states the backend it serves; only its bearer-auth settings remain command-line/environment flags.
 
 ## Development
 

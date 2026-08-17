@@ -1,4 +1,4 @@
-# bro/trails/CLAUDE.md
+# bro/trails/AGENTS.md
 
 Trails is the universal registry and recording pipeline for LLM runs across harnesses. Recorders and readers use the synchronous `TrailsStore` contract; the `trails` credential selects its concrete backend, and a process without that credential records locally.
 
@@ -58,4 +58,4 @@ Writer-reported outcomes use `end.reason`. Absence of a writer verdict is repres
 
 ## Service auth
 
-Bearer auth is mandatory outside an explicit loopback-only `TRAILS_ALLOW_NO_AUTH=1` server run. The hosted backend comes from `trails.json`; auth remains in `--trails-bearer-token` / `TRAILS_BEARER_TOKEN` and `--trails-allow-no-auth` / `TRAILS_ALLOW_NO_AUTH`. Credential schemas are documented in `bro/setup/CLAUDE.md`.
+Bearer auth is mandatory outside an explicit loopback-only `TRAILS_ALLOW_NO_AUTH=1` server run. The hosted backend comes from `trails.json`; auth remains in `--trails-bearer-token` / `TRAILS_BEARER_TOKEN` and `--trails-allow-no-auth` / `TRAILS_ALLOW_NO_AUTH`. Credential schemas are documented in `bro/setup/AGENTS.md`.

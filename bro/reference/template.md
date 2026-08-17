@@ -54,4 +54,4 @@ file      := prompt file name           file: [A-Za-z0-9._/-]+
 - credential install hooks — `bro.base.credentials.Secret.from_dict` renders each registry secret's `install` text with `#name` bound to the secret's own name, its own single-variable vocabulary like the server-domain ones
 - `FileSource.read` — no facts: one rendering is read by every harness, so a served doc must be surface-neutral and a `#harness`/`#wire`/`#creds` directive raises; `render=False` opts a source out entirely, for a doc whose payload is the directive syntax itself (this reference and `bro/reference/conditions.md`)
 
-Authoring rule for prompt files — fork with directives rather than writing dual-surface prose — lives in `bro/prompts/CLAUDE.md`.
+Authoring rule for prompt files — fork with directives rather than writing dual-surface prose — lives in `bro/prompts/AGENTS.md`.
