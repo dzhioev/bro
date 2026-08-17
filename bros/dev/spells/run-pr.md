@@ -67,7 +67,7 @@ Treat it as a precondition of the `git commit`, run at the moment of committing 
 
 ### 3. Sync the repo docs
 
-If the repo documents itself (`CLAUDE.md` files or an equivalent) and the change affects architecture, modules, commands, spells, code style, or any documented section, update the docs. Bundle the update into the relevant commit, or make it its own commit if the docs change stands alone.
+If the repo documents itself (`AGENTS.md` files or an equivalent) and the change affects architecture, modules, commands, spells, code style, or any documented section, update the docs. Bundle the update into the relevant commit, or make it its own commit if the docs change stands alone.
 
 ### 4. Decide commit splits
 

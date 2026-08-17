@@ -1,4 +1,4 @@
-# bro/launch/CLAUDE.md
+# bro/launch/AGENTS.md
 
 Bros launching and managing layer. It owns the shared launch machinery behind the canonical `bro run` / `bro chat` verbs and their compatibility aliases, plus the bro-aware host machinery every launch surface (these CLIs and `cw ss` alike) runs a session through: per-surface credential scoping, summon enforcement, and the broker-root composition over the `bro/workspace/` layer's spawners.
 
@@ -15,7 +15,7 @@ Bros launching and managing layer. It owns the shared launch machinery behind th
 
   Auto mode embeds the Textual trail view in `call_tui.py` when both stdin and the conversation output are TTYs and the UI dependencies are installed. It falls back to the conversation stream frontend when either stream is redirected or the dependency is absent; `--text` forces that frontend. The Textual shell keeps the message field, clipboard-on-selection, Shift+Enter line breaks, Ctrl+D quit, backtick stats modal, and turn cancellation, while the embedded view owns the scrollable history, message/reasoning/tool widgets, dates, and animated transient status.
 
-  **Interrupting a turn.** Either mode can stop the bro mid-thought, mid-tool-call, or mid-wait and take a new message — Esc or Ctrl+C in the TUI, Ctrl+C in the text REPL — and both render the stopped turn as `⨯ interrupted` (`call.INTERRUPTED_NOTICE`). What that costs the conversation is the provider's business (`bro/llm/CLAUDE.md`, `openai.py`): the model resumes knowing its calls were abandoned. The TUI disables the message field for the length of a turn, so a second concurrent `send` on one conversation is impossible and no message queues up for a bro the user has already changed their mind about — the interrupt is the way back to the field. In text mode the SIGINT handler is installed only around a running turn, so Ctrl+C at the `> ` prompt still ends the chat.
+  **Interrupting a turn.** Either mode can stop the bro mid-thought, mid-tool-call, or mid-wait and take a new message — Esc or Ctrl+C in the TUI, Ctrl+C in the text REPL — and both render the stopped turn as `⨯ interrupted` (`call.INTERRUPTED_NOTICE`). What that costs the conversation is the provider's business (`bro/llm/AGENTS.md`, `openai.py`): the model resumes knowing its calls were abandoned. The TUI disables the message field for the length of a turn, so a second concurrent `send` on one conversation is impossible and no message queues up for a bro the user has already changed their mind about — the interrupt is the way back to the field. In text mode the SIGINT handler is installed only around a running turn, so Ctrl+C at the `> ` prompt still ends the chat.
 
   The Bro's interactive machinery picks up automatically in both modes: the surface's hold fragment injected into the system prompt (guided for `bro chat`, attended for `call` — see "Launch holds"), with no `raise` tool at either.
 
@@ -41,7 +41,7 @@ A surface then resolves the value over its own standing recipe. `resolve_native`
 
 ## Launch holds
 
-Every launcher forwards `--hold` — the run's user-involvement level, whose fragment `BaseBro` injects into the system prompt and which gates the `raise` service tool (unattended only; semantics in `CLAUDE.md`, "Interactive vs non-interactive paths"). An omitted flag resolves to the surface's own default:
+Every launcher forwards `--hold` — the run's user-involvement level, whose fragment `BaseBro` injects into the system prompt and which gates the `raise` service tool (unattended only; semantics in `AGENTS.md`, "Interactive vs non-interactive paths"). An omitted flag resolves to the surface's own default:
 
 - `bro run`, `ask`, and the summon path (`bro run --summon` / bare `summon` / the `bro::summon` service tool) — `unattended`; a summon carries the flag in its request payload only when explicitly set, so the child's own default applies otherwise
 
@@ -84,4 +84,4 @@ In summon mode the same two flags shape the *child's* scope, resolved host-side 
 
 Widening there is per request and bounded by the summoner: nothing of a summoner's scope is inherited unless its `grant` names it, and it can only name what it holds itself — a bro outside its own allow-list, or a credential outside its own scoped set, is denied. So authority only ever narrows down a summon chain, and the launch flags remain the one place it widens.
 
-`--no-trails` turns recording off for either canonical host-side container hop: `maybe_containerize` has `bro_run.describe` set `TRAILS_DISABLED` in the launch env (the in-container tracker factory then returns `NullTracker`), drop `trails` from both tiers of the scoped set, and bind no local trails root. It acts only on the container hop, so it's mutually exclusive with `--in-place`; and unlike `--llm` / `--text` it isn't forwarded into the inner argv — the env var carries the effect in. The recovery use case (deploying `trails-server` through a bro) and the `--in-place` alternative (`TRAILS_DISABLED=1` in the shell) are in `bro/trails/CLAUDE.md`.
+`--no-trails` turns recording off for either canonical host-side container hop: `maybe_containerize` has `bro_run.describe` set `TRAILS_DISABLED` in the launch env (the in-container tracker factory then returns `NullTracker`), drop `trails` from both tiers of the scoped set, and bind no local trails root. It acts only on the container hop, so it's mutually exclusive with `--in-place`; and unlike `--llm` / `--text` it isn't forwarded into the inner argv — the env var carries the effect in. The recovery use case (deploying `trails-server` through a bro) and the `--in-place` alternative (`TRAILS_DISABLED=1` in the shell) are in `bro/trails/AGENTS.md`.

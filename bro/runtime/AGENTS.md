@@ -1,4 +1,4 @@
-# bro/runtime/CLAUDE.md
+# bro/runtime/AGENTS.md
 
 Serving-process fronts that compose lower-level packages into runnable services.
 

@@ -1,4 +1,4 @@
-# bro/setup/CLAUDE.md
+# bro/setup/AGENTS.md
 
 How to bring up a fresh checkout, plus the credential schemas the framework reads (secrets live in `~/.bro`). Run any script with `--help` for flags.
 

@@ -1,11 +1,11 @@
-# bro/brog/CLAUDE.md
+# bro/brog/AGENTS.md
 
 brog ("bro backlog") is a minimal, development-shaped task-tracker facade exposed as the `brog` MCP namespace: create, read, close, and comment operations with the concrete tracker selected by config. Switching a repository's tracker is a config change only.
 
 ## Design
 
 - The tool surface deliberately covers only the task operations the development workflow needs; tracker-specific capabilities stay behind the backend boundary.
-- The backend is selected by the `brog` secret (`~/.bro/brog.json`, schemas in `bro/setup/CLAUDE.md`). The config is self-contained: every credential the active backend needs is embedded — literally or as `$cred` reference nodes the resolver expands before brog reads the config — so the toolset's manifest is a static `('brog',)` and brog makes no assumption about other secrets granted to the session. The `backend` field resolves through the built-in GitHub backend or the matching `bro.brog.backends` entry point; an unknown backend fails at build.
+- The backend is selected by the `brog` secret (`~/.bro/brog.json`, schemas in `bro/setup/AGENTS.md`). The config is self-contained: every credential the active backend needs is embedded — literally or as `$cred` reference nodes the resolver expands before brog reads the config — so the toolset's manifest is a static `('brog',)` and brog makes no assumption about other secrets granted to the session. The `backend` field resolves through the built-in GitHub backend or the matching `bro.brog.backends` entry point; an unknown backend fails at build.
 - Task statuses collapse to three: `open` (workable), `done`, and `dropped` (won't happen). Tasks are born open.
 - Conceptually a task is a description plus an append-only comment stream. `read_task` returns the description; `read_comments` returns structured `bro.brog.model.Comment` entries with topic, author, UTC timestamp, and body. Metadata comes from the backend, never the caller; topic and author are `None` when the backend recorded neither. `add_comment` appends an entry from topic and body, while `append_description` and `edit_description` operate only on the description. Storage is a backend detail.
 - Ids are opaque strings in the backend's native canonical form; each backend accepts its natural refs and returns the canonical form.

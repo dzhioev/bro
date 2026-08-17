@@ -40,7 +40,7 @@ module-name = ["bro.benchmark"]
 # `bro` is the framework's namespace package; this portion carries no
 # __init__.py of its own so the distributions merge
 namespace = true
-wheel-exclude = ["**/*_test.py", "**/*_test_helper.py", "**/conftest.py", "**/CLAUDE.md"]
+wheel-exclude = ["**/*_test.py", "**/*_test_helper.py", "**/conftest.py", "**/AGENTS.md"]
 
 # no [tool.ruff] table: it would make this project a config root of its own, and
 # the repository root's is what formats and lints the directory

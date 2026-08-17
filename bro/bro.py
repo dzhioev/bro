@@ -1270,7 +1270,7 @@ class BaseBro(ABC):
     # the hold is pinned at run start, so the matching hold fragment is
     # injected rather than detected by the agent — run() defaults unattended,
     # send() guided, with the launch surfaces overriding per their --hold flag
-    # (the level files are documented in prompts/CLAUDE.md).
+    # (the level files are documented in prompts/AGENTS.md).
     fragment = hold_fragment(
       hold,
       harness='bro',
