@@ -131,7 +131,7 @@ class ClaudeHarness:
 
   def inner_command(self, spec: 'SessionSpec') -> list[str]:
     claude = options(spec)
-    flags = {'--resume': spec.resume, '--raw': claude.raw}
+    flags = {'--solo': spec.solo, '--resume': spec.resume, '--raw': claude.raw}
     parts = ['cw', 'ss', '--in-place', *(flag for flag, enabled in flags.items() if enabled)]
     if spec.hold != 'guided':
       parts.extend(['--hold', spec.hold])

@@ -64,7 +64,7 @@ def _container_session(
     env=env,
     secrets=scoped.required,
     docker_sock=scoped.docker_sock,
-    tty=True,
+    tty=not spec.solo,
     forward_env=True,
     optional_secrets=scoped.optional,
     extra_mounts=(*claude_mounts, *trails_mounts),
@@ -83,6 +83,8 @@ def _run_host_root_via_broker(
   env: dict[str, str],
   may_summon: set[str],
   credential_scope: set[str],
+  *,
+  interactive: bool,
 ) -> int:
   from bro.launch.spawn import run_root_via_broker
   from bro.launch.summon_control import STATUS_ENV, summon_status_file
@@ -91,7 +93,9 @@ def _run_host_root_via_broker(
 
   env[STATUS_ENV] = str(summon_status_file(workspace.project, workspace.name))
   env[MAY_SUMMON_ENV] = encode_may_summon(may_summon)
-  launch = ProcessLaunchSpec(command=command, cwd=str(workspace.tree), env=env)
+  launch = ProcessLaunchSpec(
+    command=command, cwd=str(workspace.tree), env=env, interactive=interactive
+  )
   return run_root_via_broker(
     launch,
     workspace=workspace,
@@ -144,6 +148,7 @@ def _host_session(
       runner_env,
       launch_scope.may_summon,
       scoped.required | scoped.optional,
+      interactive=not spec.solo,
     )
   else:
     code = subprocess.run(command, cwd=str(worktree), env=runner_env).returncode

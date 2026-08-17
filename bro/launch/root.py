@@ -32,7 +32,7 @@ def _run_root_via_broker(
   env = dict(launch.env)
   env[STATUS_ENV] = container_status_path(workspace.project, workspace.name)
   env[MAY_SUMMON_ENV] = encode_may_summon(may_summon)
-  broker_launch = DockerLaunchSpec(replace(launch, env=env))
+  broker_launch = DockerLaunchSpec(replace(launch, env=env), capture_output=False)
   return run_root_via_broker(
     broker_launch,
     workspace=workspace,

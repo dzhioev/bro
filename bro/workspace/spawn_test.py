@@ -462,6 +462,16 @@ class TestProcessSpawner:
     assert await handle.wait() == 7
     assert (tmp_path / 'here').is_file()
 
+  @pytest.mark.asyncio
+  async def test_headless_process_inherits_streams_without_interactive_handling(self, tmp_path):
+    launch = workspace_spawn.ProcessLaunchSpec(
+      command=[sys.executable, '-c', 'pass'], cwd=str(tmp_path), env={}, interactive=False
+    )
+    provisioned = workspace_spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
+    handle = await workspace_spawn.ProcessSpawner().spawn(launch, provisioned)
+    assert isinstance(handle, workspace_spawn._HeadlessProcess)
+    assert await handle.wait() == 0
+
 
 class TestCompositeSpawner:
   class _Recording(workspace_spawn.Spawner):
@@ -543,16 +553,19 @@ class TestDockerSpawnerModes:
     monkeypatch.setattr(workspace_spawn, '_force_remove', fake_remove)
     monkeypatch.setattr(workspace_spawn, 'container_running', lambda container_id: False)
     starts: list = []
+    start_kwargs: list[dict] = []
     real_exec = asyncio.create_subprocess_exec
 
     def fake_exec(*argv, **kwargs):
       starts.append(list(argv))
+      start_kwargs.append(kwargs)
       return real_exec(sys.executable, '-c', 'pass', **kwargs)
 
     monkeypatch.setattr(asyncio, 'create_subprocess_exec', fake_exec)
     return {
       'prepared': prepared,
       'starts': starts,
+      'start_kwargs': start_kwargs,
       'project': project,
       'project_threads': project_threads,
       'prepare_threads': prepare_threads,
@@ -586,6 +599,25 @@ class TestDockerSpawnerModes:
       ]
     finally:
       await handle.wait()
+
+  @pytest.mark.asyncio
+  async def test_headless_root_inherits_separate_streams(self, spawn_harness):
+    docker_launch = workspace_docker.Launch(
+      name='ws',
+      command=['claude', '-p', 'answer'],
+      env={},
+      secrets=(),
+      docker_sock=False,
+      tty=False,
+      forward_env=True,
+    )
+    launch = workspace_spawn.DockerLaunchSpec(docker_launch, capture_output=False)
+    provisioned = workspace_spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
+    handle = await workspace_spawn.DockerSpawner().spawn(launch, provisioned)
+    assert isinstance(handle, workspace_spawn._HeadlessRoot)
+    assert spawn_harness['starts'] == [['docker', 'start', '-a', 'cid123']]
+    assert spawn_harness['start_kwargs'] == [{}]
+    assert await handle.wait() == 0
 
   @pytest.mark.asyncio
   async def test_child_mode_uses_the_described_workspace(self, spawn_harness):

@@ -30,6 +30,7 @@ def _spec(
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
   llm: Optional[str] = None,
+  solo: bool = False,
   resume: bool = False,
   into: Optional[str] = None,
   bro: Optional[str] = None,
@@ -51,6 +52,7 @@ def _spec(
     grant=grant if grant is not None else [],
     revoke=revoke if revoke is not None else [],
     llm=llm,
+    solo=solo,
     resume=resume,
     into=into,
     bro=resolved_bro,
@@ -305,6 +307,27 @@ class TestContainerCommand:
     command = h.run_in_container.call_args.args[0].command
     assert command == ['cw', 'ss', '--in-place', '--raw', '--bro', 'dev', 'w']
 
+  def test_solo_launch_has_no_container_tty(self):
+    spec = replace(
+      _spec(solo=True, hold='unattended', prompt='go'),
+      interface='ride',
+      workspace_pinned=False,
+    )
+    with _ContainerHarness() as harness:
+      assert cw_session.start_session(spec) == 0
+    launch = harness.run_in_container.call_args.args[0]
+    assert not launch.tty
+    assert launch.command == [
+      'cw',
+      'ss',
+      '--in-place',
+      '--solo',
+      '--hold',
+      'unattended',
+      '--prompt=go',
+      'w',
+    ]
+
   def test_cw_session_stamps_the_default_bro_as_cw_bro(self):
     with _ContainerHarness() as h:
       rc = cw_session.start_session(_spec(drop=True))
@@ -399,6 +422,30 @@ class TestCommandArgv:
     # the parser's default hold stays implicit in the reconstructed command
     assert _spec().to_command_argv() == ['cw', 'ss', 'w']
 
+  def test_solo_command_uses_keep_only_for_a_retained_automatic_workspace(self):
+    automatic = replace(
+      _spec(solo=True, drop=True, hold='unattended', prompt='go'),
+      interface='ride',
+      workspace_pinned=False,
+    )
+    assert automatic.to_command_argv() == [
+      'ride',
+      'solo',
+      '--harness',
+      'claude',
+      'bro-dev',
+      'go',
+    ]
+    assert replace(automatic, drop=False).to_command_argv() == [
+      'ride',
+      'solo',
+      '--keep',
+      '--harness',
+      'claude',
+      'bro-dev',
+      'go',
+    ]
+
   def test_a_resume_is_its_own_command(self):
     # the recorded spec carries the flags, so the name is the whole command
     assert _spec(hold='attended', bro='dev').resume_variant().to_command_argv() == [
@@ -464,6 +511,20 @@ class TestResumeSpecRecord:
       'dev',
       ['gmail_creds'],
     )
+
+  def test_solo_resume_becomes_an_along_session_with_its_default_hold(self, tmp_path):
+    solo = replace(
+      _spec(solo=True, hold='unattended', prompt='go'),
+      interface='ride',
+      workspace_pinned=False,
+    )
+    workspace = _workspace(tmp_path)
+    cw_session.record_resume_spec(workspace, solo)
+    loaded = cw_session.load_resume_spec(workspace)
+    assert loaded is not None
+    assert not loaded.solo
+    assert loaded.hold == 'attended'
+    assert loaded.to_command_argv() == ['ride', 'resume', 'w']
 
   def test_recording_a_resume_is_a_fixpoint(self, tmp_path):
     workspace = _workspace(tmp_path)
@@ -676,7 +737,7 @@ class TestHostSession:
     monkeypatch.setattr(bro.launch.summon_control, 'summon_allow_list', lambda *_a, **_k: {'dev'})
     roots: list = []
 
-    def fake_root(root_workspace, command, env, may_summon, credential_scope):
+    def fake_root(root_workspace, command, env, may_summon, credential_scope, *, interactive):
       roots.append(
         {
           'workspace': root_workspace,
@@ -684,6 +745,7 @@ class TestHostSession:
           'env': env,
           'may_summon': may_summon,
           'credential_scope': credential_scope,
+          'interactive': interactive,
         }
       )
       return 5
@@ -699,21 +761,27 @@ class TestHostSession:
     assert roots[0]['env']['VIRTUAL_ENV'] == str(worktree / '.venv')
     # the host root gets the session's summon allow-list like container mode
     assert roots[0]['may_summon'] == {'dev'}
+    assert roots[0]['interactive']
 
   def test_host_runner_env_carries_the_summon_facts(self, monkeypatch, tmp_path):
     workspace, _, _ = self._prepare_launch(monkeypatch, tmp_path)
     captured: dict = {}
 
     def fake_run_root(launch, **_kwargs):
+      captured['launch'] = launch
       captured['env'] = launch.env
       return 0
 
     monkeypatch.setattr(bro.launch.spawn, 'run_root_via_broker', fake_run_root)
     assert (
-      claude_session._run_host_root_via_broker(workspace, ['cw'], {}, {'dev', 'bro'}, set()) == 0
+      claude_session._run_host_root_via_broker(
+        workspace, ['cw'], {}, {'dev', 'bro'}, set(), interactive=False
+      )
+      == 0
     )
     assert captured['env'][bro.summon.MAY_SUMMON_ENV] == 'bro,dev'
     assert captured['env'][bro.launch.summon_control.STATUS_ENV].endswith('w.status.json')
+    assert not captured['launch'].interactive
 
   def test_bad_summon_flag_fails_before_the_workspace_is_recorded(self, monkeypatch, tmp_path):
     self._prepare_launch(monkeypatch, tmp_path)

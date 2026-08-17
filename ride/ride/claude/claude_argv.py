@@ -145,6 +145,8 @@ def build_claude_launch(
     argv.append('--dangerously-skip-permissions')
   if llm.effort is not None:
     argv += ['--effort', llm.effort]
+  if spec.solo:
+    argv.append('-p')
   argv += claude_args
   if spec.prompt is not None:
     prompt = spec.prompt
