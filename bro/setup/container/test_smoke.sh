@@ -30,6 +30,8 @@ mkdir -p "$SMOKE_TMP/workspace" "$SMOKE_TMP/claude"
 HOST_REPO="$SMOKE_TMP/host-repo"
 git clone --quiet "$PROJECT" "$HOST_REPO"
 git -C "$HOST_REPO" remote set-url origin "$(git -C "$PROJECT" remote get-url origin)"
+# a clone mirrors the source's local branches only, so seed the ref the entrypoint refreshes
+git -C "$HOST_REPO" update-ref refs/remotes/origin/master HEAD
 
 cat > "$SMOKE_TMP/gitconfig" << 'GC'
 [user]
