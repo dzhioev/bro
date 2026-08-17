@@ -59,6 +59,6 @@ class Lead(Bro):
   data_sources = [
     man('environment'),
     man('dive-in'),
-    man('cw'),
+    man('ride'),
   ]
   system_prompt = SYSTEM_PROMPT
