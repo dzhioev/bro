@@ -2,7 +2,7 @@
 name: run-pr
 description: This spell should be used when the user signals that the worktree's changes are ready for review and a PR should be opened — "open a PR", "[[run pr]]", "send for review", "PR it", "ship it", "ready for review", "finalize". Covers commit hygiene (docs sync, policy audit, commit splitting), the repo's commit-message conventions, rebases onto the base branch (master by default), opens the PR via `gh pr create`, then launches the `poll-pr` review watcher to handle review comments, failing CI checks, merge conflicts, and APPROVED events. On approval, chains into [[land]] for the merge step. Also the re-entry point for a PR that is already open — "resume PR <pr-url-or-number>", "resume the PR", "pick up the review" — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
 parameters: {"base?": "base branch for the pull request instead of master", "pr?": "existing pull request URL or number to resume"}
-version: 4.4.1
+version: 4.5.0
 ---
 
 # run-pr
@@ -59,7 +59,7 @@ If `git status` is clean and there are no untracked files to add, stop — nothi
 Run before committing:
 - The repo's formatter (its own docs name the command). Stage any formatter-induced changes alongside your own.
 
-No full-suite run here: the suite is the pre-push gate (step 8), run once on the final rebased tree — a pass before the rebase is evidence the rebase discards.
+No full-suite run here: the suite is the mandatory gate (step 8), run once on the final rebased tree — a pass before the rebase is evidence the rebase discards.
 
 **Policy audit**: before each commit, call `dev-style-source::read` and audit that commit's `git diff` against the returned policy text. The tool read is part of the gate — it puts the policy fresh in context instead of relying on recall of a read far behind. The policies carry their own specifics, so this gate just re-applies all of them.
 
@@ -118,17 +118,19 @@ To verify a new test catches a bug (revert-and-rerun), use `git stash push <path
 git fetch origin <base> && git rebase origin/<base>
 ```
 
-Conflicts → resolve them yourself, in-band: merge each conflict, `git add` the resolved paths, `git rebase --continue`. Then record the resolution on the task (same conditions as step 12): `brog::add_comment(task_id, topic='rebase conflicts', body=...)` naming the conflicted files and the resolution each one took — the pre-push gate (step 8) verifies the resolved result next.
+Conflicts → resolve them yourself, in-band: merge each conflict, `git add` the resolved paths, `git rebase --continue`. Then record the resolution on the task (same conditions as step 12): `brog::add_comment(task_id, topic='rebase conflicts', body=...)` naming the conflicted files and the resolution each one took — the gate (step 8) verifies the resolved result next.
 
 Escalate only when a resolution is not obvious — the two sides carry contradicting logic or intent that no merged version can honor both of: stop and ask when questions reach the user; raise with the contradiction spelled out when unattended. Never `--abort` or `--skip` silently.
 
 In an **unattended** session there is no user to stop for: when a conflict clears that escalation bar, rescue your commits per _Rescue committed work before a raise_ below (abort the rebase to restore them, push the branch, name the ref), then `raise` with the contradiction as the reason — the parked commits stay recoverable.
 
-### 8. Pre-push gate: the full test suite
+### 8. The mandatory gate: the full test suite
 
-The flow's one mandatory suite pass — on the final rebased tree, immediately before anything is published. Run the repo's full verification gate (its own docs name the command and any environment-specific flags).{{when #harness = bro}} Run it with an explicit large `timeout_seconds` (600 fits) — `dev::bash`'s default kills a full suite mid-run; same for any other long command.{{end}}
+The flow's one mandatory suite pass — on the final rebased tree, before the change reaches a reviewer. Run the repo's full verification gate (its own docs name the command and any environment-specific flags).{{when #harness = bro}} Run it with an explicit large `timeout_seconds` (600 fits) — `dev::bash`'s default kills a full suite mid-run; same for any other long command.{{end}}
 
-A red suite blocks the push. Do not interpret or triage failures — fix with new commits, or propose fixing pre-existing failures in this session or a separate one; do not push through failures.
+Locally is the default. Where the repo's CI runs that same gate against a branch of its own — a manual dispatch, a branch trigger — pushing the branch (step 10) and waiting on that run counts as the pass, and is the better route when CI is faster or covers stages the workspace cannot run at all. What waits for green is the PR, not the push: a pushed branch has offered nothing to anyone.
+
+A red gate blocks the PR. Do not interpret or triage failures — fix with new commits, or propose fixing pre-existing failures in this session or a separate one; do not open a PR over failures.
 
 Earlier full passes (per checkpoint, pre-rebase) are optional and usually redundant — this gate re-verifies the exact tree that ships.
 
@@ -150,6 +152,8 @@ Do not silently open a PR whose scope is wider than its title says.
 ```bash
 git push -u origin HEAD
 ```
+
+A gate that ran on CI (step 8) already pushed this branch, so the command is a no-op there.
 
 ### 11. Open the PR
 
@@ -244,7 +248,7 @@ Handle pending feedback as one batch: address every comment that has arrived, th
 2. Make the requested code changes locally.
 3. Re-run the pre-commit gates (step 2).
 4. Commit (a **new** commit, not `--amend`) with the same conventions as step 5–6.
-5. Run the pre-push gate (step 8).
+5. Run the mandatory gate (step 8).
 6. Push: `git push origin HEAD`.
 7. Reply on the PR confirming the fix (reference the commit SHA):
    - **Top-level PR comment**: `gh pr comment <n> --body "..."`
@@ -260,9 +264,9 @@ Unconditional approval — the PR is ready to merge. Chain into the merge, and b
 
 **`review` with `state: "COMMENTED"` or `"DISMISSED"`**: informational; the actionable feedback (if any) is in this event's `comments` array or arrives via accompanying `comment` events.
 
-**`checks` event**: CI went red on what you pushed. Fetch the failing run's log (`gh run view --log-failed <run-id>`, the id is the tail of the event's `url`) and diagnose it as your own breakage — a failure the local gate missed is the interesting kind (environment-dependent, ordering-dependent, or a file you forgot to stage). Fix it exactly like review feedback: gates (step 2), a new commit (steps 5–6), the pre-push gate (step 8), push. Report the failure and your fix to the user; never wait for it to disappear on a re-run you didn't trigger, and never land around it — `land-pr` refuses a failed check anyway.
+**`checks` event**: CI went red on what you pushed. Fetch the failing run's log (`gh run view --log-failed <run-id>`, the id is the tail of the event's `url`) and diagnose it as your own breakage — a failure the local gate missed is the interesting kind (environment-dependent, ordering-dependent, or a file you forgot to stage). Fix it exactly like review feedback: gates (step 2), a new commit (steps 5–6), the gate (step 8), push. Report the failure and your fix to the user; never wait for it to disappear on a re-run you didn't trigger, and never land around it — `land-pr` refuses a failed check anyway.
 
-**`conflicts` event**: rerun step 7 — the rebase, the in-band resolution default, the escalation bar, and the task comment all apply unchanged — then the pre-push gate (step 8), then push the rebased branch: `git push --force-with-lease origin HEAD` — the PR branch, never the base.
+**`conflicts` event**: rerun step 7 — the rebase, the in-band resolution default, the escalation bar, and the task comment all apply unchanged — then the gate (step 8), then push the rebased branch: `git push --force-with-lease origin HEAD` — the PR branch, never the base.
 
 **`merged` / `closed`**: someone (the user, a [[land]] run, or external action) terminated the PR. If `merged`, run [[land]]'s post-merge bookkeeping — the `merged` comment and task closure. If `closed` without merge, log it and report to the user.
 
