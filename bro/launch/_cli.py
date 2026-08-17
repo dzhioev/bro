@@ -148,8 +148,8 @@ def maybe_containerize(
     return None
   from bro.launch.root import run_in_container
   from bro.launch.scope import (
+    BRO_RUN_RECIPE,
     LaunchScopeError,
-    Surface,
     preflight_scoped_launch,
     scoped_secrets,
   )
@@ -164,7 +164,7 @@ def maybe_containerize(
       return 1
   try:
     scoped, may_summon, _ = preflight_scoped_launch(
-      scoped_secrets(bro_name, Surface.BRO_RUN, llm_spec=llm_spec),
+      scoped_secrets(bro_name, BRO_RUN_RECIPE, llm_spec=llm_spec),
       bro_name,
       grant=grant,
       revoke=revoke,

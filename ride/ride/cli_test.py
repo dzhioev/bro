@@ -1,0 +1,97 @@
+from types import SimpleNamespace
+from unittest.mock import patch
+
+import pytest
+
+import ride.cli as ride_cli
+from ride.claude.harness import options
+
+
+@pytest.fixture(autouse=True)
+def project(monkeypatch):
+  monkeypatch.setattr(
+    ride_cli,
+    'project_config',
+    lambda: SimpleNamespace(default_bro='bro-dev', harness='claude'),
+  )
+  monkeypatch.setattr(ride_cli, 'fresh_workspace_name', lambda base: f'{base}-12345678')
+
+
+class TestAlong:
+  def test_builds_an_attended_claude_session(self):
+    with patch('ride.cli.start_session', return_value=0) as start:
+      assert ride_cli.main(['ride', 'along', 'dev', 'do it']) == 0
+    spec = start.call_args.args[0]
+    assert spec.interface == 'ride'
+    assert spec.harness == 'claude'
+    assert spec.name == 'ride-dev-12345678'
+    assert spec.bro == 'dev'
+    assert spec.prompt == 'do it'
+    assert spec.hold == 'attended'
+    assert not spec.drop
+    assert not spec.workspace_pinned
+    assert spec.inner_command()[:5] == ['cw', 'ss', '--in-place', '--hold', 'attended']
+
+  def test_host_defaults_to_guided(self):
+    with patch('ride.cli.start_session', return_value=0) as start:
+      ride_cli.main(['ride', 'along', '--host', 'dev'])
+    assert start.call_args.args[0].hold == 'guided'
+
+  def test_workspace_pins_an_existing_name(self):
+    with patch('ride.cli.start_session', return_value=0) as start:
+      ride_cli.main(['ride', 'along', '--workspace', 'shared', 'dev'])
+    spec = start.call_args.args[0]
+    assert spec.name == 'shared'
+    assert spec.workspace_pinned
+
+  def test_pinned_workspace_rejects_drop(self, capsys):
+    with pytest.raises(SystemExit):
+      ride_cli.main(['ride', 'along', '--workspace', 'shared', '--drop', 'dev'])
+    assert 'pinned workspaces are always kept' in capsys.readouterr().err
+
+  def test_forwards_claude_arguments_only_after_the_separator(self):
+    with patch('ride.cli.start_session', return_value=0) as start:
+      ride_cli.main(['ride', 'along', 'dev', 'hello', '--', '--debug', 'mcp'])
+    assert options(start.call_args.args[0]).arguments == ['--debug', 'mcp']
+
+  def test_raw_host_combination_errors(self, capsys):
+    with pytest.raises(SystemExit):
+      ride_cli.main(['ride', 'along', '--host', '--raw', 'dev'])
+    assert '--raw cannot be combined with --host' in capsys.readouterr().err
+
+  def test_incompatible_provider_names_the_harness_remedy(self, capsys):
+    with pytest.raises(SystemExit):
+      ride_cli.main(['ride', 'along', '--provider', 'openai', 'dev'])
+    assert '--harness bro' in capsys.readouterr().err
+
+  def test_bro_harness_reports_the_staged_gap(self, capsys):
+    with pytest.raises(SystemExit):
+      ride_cli.main(['ride', 'along', '--harness', 'bro', 'dev'])
+    assert 'bro harness is not implemented yet' in capsys.readouterr().err
+
+  def test_project_harness_default_is_used(self, monkeypatch, capsys):
+    monkeypatch.setattr(
+      ride_cli,
+      'project_config',
+      lambda: SimpleNamespace(default_bro='bro-dev', harness='bro'),
+    )
+    with pytest.raises(SystemExit):
+      ride_cli.main(['ride', 'along', 'dev'])
+    assert 'bro harness is not implemented yet' in capsys.readouterr().err
+
+
+class TestLifecycle:
+  def test_resume_dispatches_scope_overrides(self):
+    with patch('ride.cli.resume_session', return_value=0) as resume:
+      assert ride_cli.main(['ride', 'resume', '--grant', '@dev', 'workspace']) == 0
+    assert resume.call_args.args == ('workspace',)
+    assert resume.call_args.kwargs == {
+      'interface': 'ride',
+      'grant': ['@dev'],
+      'revoke': [],
+    }
+
+  def test_scope_dispatches_harness(self):
+    with patch('ride.scope_report.report_scope', return_value=0) as report:
+      assert ride_cli.main(['ride', 'scope', '--harness', 'claude', '--raw']) == 0
+    assert report.call_args.kwargs == {'bro': None, 'harness': 'claude', 'raw': True}

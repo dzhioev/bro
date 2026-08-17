@@ -1,0 +1,42 @@
+[build-system]
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"
+
+[project]
+name = "bro-ride"
+version = "0.1.0"
+description = "managed-workspace runtime for bro harnesses"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "bro[cw]",
+  "humanize==4.16.0",
+]
+
+[project.scripts]
+# ride
+"cw" = "ride._entrypoints:ride_cw"
+"dive-in" = "ride._entrypoints:ride_dive_in"
+"ride" = "ride._entrypoints:ride_cli"
+"ride.claude.print-anthropic-key" = "ride._entrypoints:ride_claude_print_anthropic_key"
+"ride.claude.statusline" = "ride._entrypoints:ride_claude_statusline"
+"ride.cli" = "ride._entrypoints:ride_cli"
+"ride.cw" = "ride._entrypoints:ride_cw"
+"ride.dive-in" = "ride._entrypoints:ride_dive_in"
+
+[tool.uv.sources]
+bro = { workspace = true }
+
+[tool.deptry.package_module_name_map]
+bro = ["bro", "bros"]
+
+[tool.uv.build-backend]
+module-root = ""
+module-name = ["ride"]
+wheel-exclude = [
+  "**/*_test.py",
+  "**/*_test_helper.py",
+  "**/conftest.py",
+  "**/CLAUDE.md",
+  "**/*.egg-info",
+]
