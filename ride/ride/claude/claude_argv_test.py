@@ -52,7 +52,7 @@ def _settings(argv: list[str]) -> dict:
   return json.loads(argv[argv.index('--settings') + 1])
 
 
-class TestCwSessionLaunch:
+class TestRideSessionLaunch:
   def test_basic_shape(self):
     launch = _ride_session_launch(_spec(), claude_args=['--foo'])
     argv = launch.argv
@@ -97,7 +97,7 @@ class TestCwSessionLaunch:
         super().__init__(system_prompt='')
 
     monkeypatch.setattr('bro.registry.create_bro', lambda name: WatchingBro())
-    argv = _cw_session_launch(_spec(bro='watching'), claude_args=[]).argv
+    argv = _ride_session_launch(_spec(bro='watching'), claude_args=[]).argv
     assert argv[argv.index('--disallowed-tools') + 1] == 'mcp__claude_ai_*,Bash'
     (entry,) = _settings(argv)['hooks']['PreToolUse']
     assert entry['matcher'] == 'Monitor'
@@ -106,13 +106,13 @@ class TestCwSessionLaunch:
     assert shlex.split(hook['command']) == [
       sys.executable,
       '-m',
-      'bro.cw.watch_guard',
+      'ride.claude.watch_guard',
       'Monitor',
       'summon watch',
     ]
 
   def test_no_narrowing_declares_no_hooks(self):
-    assert 'hooks' not in _settings(_cw_session_launch(_spec(), claude_args=[]).argv)
+    assert 'hooks' not in _settings(_ride_session_launch(_spec(), claude_args=[]).argv)
 
   def test_fast_mode_lands_in_settings(self):
     assert (

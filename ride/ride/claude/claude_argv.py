@@ -39,7 +39,6 @@ def _settings_command(module: str, *args: str) -> str:
   return shlex.join([sys.executable, '-m', module, *args])
 
 
-
 def _tool_gate_hooks(narrowed: dict[str, tuple[str, ...]]) -> dict:
   """the `hooks` settings block gating each narrowed native tool to its commands."""
   return {

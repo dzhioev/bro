@@ -12,7 +12,7 @@
 - `ride/bro.py`, `ride/bro_session.py` — native harness implementation: typed options, native recipe resolution, shared bro-run container composition, provisioned host-worktree launch, workspace trail pointer, and exact-recipe continuation.
 - `ride/flags.py` — common session, scope, and LLM flag registration.
 - `ride/listing.py`, `ride/clean.py`, `ride/scope_report.py` — lifecycle implementations.
-- `ride/claude/` — the Claude Code harness implementation; see `ride/claude/CLAUDE.md`.
+- `ride/claude/` — the Claude Code harness implementation; see `ride/claude/AGENTS.md`.
 
 ## Invariants
 
