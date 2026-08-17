@@ -17,6 +17,7 @@ from bro.base.condition import Condition, Entry, Iff, SetVariable, Variables, Wh
 from bro.base.offload import off_loop
 from bro.channel import BroChannel
 from bro.datasources.base import DataSource
+from bro.datasources.man import ManPage, manual
 from bro.llm.llm import EFFORT_LEVELS, LLM, NativeLLMSpec
 from bro.llm.observer import (
   NullObserver,
@@ -591,6 +592,22 @@ def _fold_tool_layers(
   return server_specs, tuple(dict.fromkeys(blocked_names))
 
 
+def _fold_man_pages(entries: list[DataSource | ManPage]) -> list[DataSource]:
+  # the declared pages amount to one manual, mounted where the first of them was
+  # declared — a namespace is one server, so a hierarchy contributing pages from
+  # several classes still serves a single `read` tool over all of them.
+  pages = [entry for entry in entries if isinstance(entry, ManPage)]
+  sources: list[DataSource] = []
+  folded = False
+  for entry in entries:
+    if not isinstance(entry, ManPage):
+      sources.append(entry)
+    elif not folded:
+      sources.append(manual(pages))
+      folded = True
+  return sources
+
+
 _COMPONENT_DECLARATION_ATTRIBUTES = frozenset({'data_sources', 'tools'})
 _RETIRED_COMPONENT_DECLARATION_ATTRIBUTES = {'mcp_servers': 'tools'}
 
@@ -608,7 +625,7 @@ def _component_destinations(value: object) -> set[str]:
     for component in components:
       if isinstance(component, llm_mcp.ToolLayer):
         destinations.add('tools')
-      elif isinstance(component, DataSource):
+      elif isinstance(component, DataSource | ManPage):
         destinations.add('data_sources')
   return destinations
 
@@ -622,8 +639,9 @@ class BaseBro(ABC):
   # `#creds`); a wrapped entry whose condition does not hold is omitted before
   # the declaration is applied. each `tools` layer mounts server specs, blocks
   # harness-native tools, or does both; data sources remain a separate read-only
-  # contract.
-  data_sources: ClassVar[list[Entry[DataSource]]] = []
+  # contract, one entry per source — or per reference page (`man('<topic>')`),
+  # which fold into a single manual.
+  data_sources: ClassVar[list[Entry[DataSource | ManPage]]] = []
   tools: ClassVar[list[Entry[llm_mcp.ToolLayer]]] = []
   # named optional capabilities: feature name → the gate deciding whether the
   # feature is on — a `Condition` over the environment's resolvable credentials
@@ -689,7 +707,7 @@ class BaseBro(ABC):
 
   def __init__(self, system_prompt: Optional[str] = None):
     tool_entries: list[Entry[llm_mcp.ToolLayer]] = []
-    data_source_entries: list[Entry[DataSource]] = []
+    data_source_entries: list[Entry[DataSource | ManPage]] = []
     prompt_parts: list[str] = []
     extra_secret_names: list[str] = []
     may_summon_names: list[str] = []
@@ -737,8 +755,10 @@ class BaseBro(ABC):
       tool_entries, harness='bro', creds=surface_creds, extra=self._feature_vocabulary
     )
     self._mcp_specs, _ = _fold_tool_layers(selected_tools, 'bro')
-    self._data_sources: list[DataSource] = llm_mcp.select(
-      data_source_entries, harness='bro', creds=surface_creds, extra=self._feature_vocabulary
+    self._data_sources: list[DataSource] = _fold_man_pages(
+      llm_mcp.select(
+        data_source_entries, harness='bro', creds=surface_creds, extra=self._feature_vocabulary
+      )
     )
     # built lazily by _live_mcp_servers(): metadata surfaces (needed_secrets on
     # hosts, prompt composition) never construct live servers.
@@ -887,11 +907,13 @@ class BaseBro(ABC):
     if harness == 'bro':
       return self._mcp_specs, self._data_sources
     specs, _ = self._selected_tools_for(harness)
-    sources: list[DataSource] = llm_mcp.select(
-      self._data_source_entries,
-      harness=harness,
-      creds=credentials.known_names(),
-      extra=self._feature_vocabulary,
+    sources = _fold_man_pages(
+      llm_mcp.select(
+        self._data_source_entries,
+        harness=harness,
+        creds=credentials.known_names(),
+        extra=self._feature_vocabulary,
+      )
     )
     return specs, sources
 

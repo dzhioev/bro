@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from bro.base.name_map import NameMap
@@ -10,6 +11,16 @@ from bro.llm.mcp import InProcessMCPServer, MCPServer, Tool
 # sized so an ordinary page arrives whole and only a long reference is walked
 # across calls
 PAGE_LIMIT = 200
+
+MANUAL_NAME = 'man'
+MANUAL_SUMMARY = 'the reference pages this session carries, read on demand by topic'
+
+
+@dataclass(frozen=True)
+class ManPage:
+  """one page declared into the manual of whatever declares it."""
+
+  page: FileSource
 
 
 class ManSource(DataSource):
@@ -50,6 +61,14 @@ class ManSource(DataSource):
 
   def as_mcp_server(self) -> MCPServer:
     return InProcessMCPServer(self.namespace, [_ReadTool(self)])
+
+
+def manual(entries: Sequence[ManPage]) -> ManSource:
+  """the manual those declared pages amount to. Repeats collapse — a page
+  declared more than once is one topic, in first-declared order."""
+  return ManSource(
+    MANUAL_NAME, MANUAL_SUMMARY, list(dict.fromkeys(entry.page for entry in entries))
+  )
 
 
 class _ReadTool(Tool):

@@ -2,8 +2,9 @@ import re
 
 import pytest
 
+from bro.datasources import references
 from bro.datasources.file import FileSource
-from bro.datasources.man import PAGE_LIMIT, ManSource
+from bro.datasources.man import PAGE_LIMIT, ManPage, ManSource, manual
 
 
 @pytest.fixture
@@ -88,10 +89,19 @@ async def test_read_tool_rejects_a_non_integer_offset(source):
     await tool.call({'topic': 'first', 'offset': '2'})
 
 
-def test_reference_man_pages_resolve_and_read():
-  # every topic of the shipped roster must point at a live repo file; a moved
-  # or renamed doc would otherwise surface only at tool-call time
-  from bro.datasources import references
+def test_manual_collapses_repeats_in_first_declared_order(tmp_path):
+  first = FileSource('first', summary='x', path=tmp_path / 'first.md')
+  second = FileSource('second', summary='x', path=tmp_path / 'second.md')
+  folded = manual([ManPage(first), ManPage(second), ManPage(first)])
+  assert [page.name for page in folded.pages] == ['first', 'second']
 
-  for page in references.man.pages:
-    assert len(references.man.read(page.name)) > 0
+
+def test_man_declares_a_page_of_the_repo_roster():
+  entry = references.man('dive-in')
+  assert entry.page.name == 'dive-in'
+  assert len(entry.page.read()) > 0
+
+
+def test_man_names_the_topics_on_an_unknown_one():
+  with pytest.raises(LookupError, match='dive-in'):
+    references.man('no-such-topic')
