@@ -13,6 +13,7 @@ members = [
     "bro",
     "bro-dev",
     "bro-local",
+    "bro-ride",
 ]
 
 [[package]]
@@ -345,6 +346,21 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "bro", editable = "." }]
+
+[[package]]
+name = "bro-ride"
+version = "0.1.0"
+source = { editable = "ride" }
+dependencies = [
+    { name = "bro", extra = ["cw"] },
+    { name = "humanize" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "bro", extras = ["cw"], editable = "." },
+    { name = "humanize", specifier = "==4.16.0" },
+]
 
 [[package]]
 name = "certifi"

@@ -8,7 +8,7 @@ with `canonicalize`, and resolves that over its own standing recipe
 (`bro.llm.providers.resolve`).
 
 Kept apart from the launcher modules so a surface that only registers the flags
-(`bro.cw.flags`) can do it without pulling the launcher stack; the provider
+(the managed-workspace flag layer) can do it without pulling the launcher stack; the provider
 roster is likewise imported at call time, not at load.
 """
 

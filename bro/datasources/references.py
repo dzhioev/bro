@@ -54,6 +54,15 @@ dev_style = FileSource(
   path=prompts.get_prompt_path('dev/style.md'),
 )
 
+ride = FileSource(
+  'ride',
+  summary=(
+    'the managed-workspace runtime: harness selection and seam, interactive along mode, '
+    'lifecycle verbs, workspace policy, and compatibility behavior.'
+  ),
+  path=reference.DIRECTORY / 'ride.md',
+)
+
 cw = FileSource(
   'cw',
   summary=(
@@ -74,7 +83,7 @@ dive_in = FileSource(
 )
 
 _PAGES = NameMap(
-  {page.name: page for page in (environment, dev_style, template, conditions, cw, dive_in)}
+  {page.name: page for page in (environment, dev_style, template, conditions, ride, cw, dive_in)}
 )
 
 

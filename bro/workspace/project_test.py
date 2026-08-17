@@ -52,6 +52,20 @@ class TestProjectConfig:
     )
     assert project_config().sections['whoever'] == {'anything': 5}
 
+  def test_harness_defaults_to_claude(self, project_dir):
+    (project_dir / 'pyproject.toml').write_text('[tool.bro]\ndefault = "foo"\n')
+    assert project_config().harness == 'claude'
+
+  def test_harness_parses(self, project_dir):
+    (project_dir / 'pyproject.toml').write_text('[tool.bro]\ndefault = "foo"\nharness = "bro"\n')
+    assert project_config().harness == 'bro'
+
+  @pytest.mark.parametrize('value', ['"other"', '5', '""'])
+  def test_harness_must_be_supported(self, project_dir, value):
+    (project_dir / 'pyproject.toml').write_text(f'[tool.bro]\ndefault = "foo"\nharness = {value}\n')
+    with pytest.raises(ValueError, match=r'\[tool.bro\] harness'):
+      project_config()
+
   def test_build_context_command_defaults_to_none(self, project_dir):
     (project_dir / 'pyproject.toml').write_text('[tool.bro]\ndefault = "foo"\n')
     assert project_config().build_context_command is None
