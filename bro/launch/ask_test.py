@@ -9,7 +9,7 @@ from bro.launch.ask import main
 from bro.launch.identity import bro_git_identity_env
 from bro.llm.llm import LLM
 from bro.llm.mcp import MCPServer
-from bro.llm.observer import NullObserver, Observer, ReasoningEvent
+from bro.llm.observer import ReasoningEvent
 
 
 @pytest.fixture(autouse=True)
@@ -43,9 +43,6 @@ class RecordBro(BaseBro):
   def __init__(self, response: str = 'done'):
     super().__init__(system_prompt='record')
     self.mock_llm = MockLLM(response=response)
-
-  def _make_observer(self) -> Observer:
-    return NullObserver()
 
   def _create_llm(self, *, hold: str) -> LLM:
     return self.mock_llm
