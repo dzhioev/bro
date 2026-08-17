@@ -19,7 +19,7 @@ class Harness(Protocol):
 
   def scope_recipe(self, spec: 'SessionSpec') -> ScopeRecipe: ...
 
-  def resolve_llm(self, value: str | None) -> LLMSpec: ...
+  def resolve_llm(self, value: str | None, bro_name: str) -> LLMSpec: ...
 
   def preflight_auth(self, spec: 'SessionSpec') -> bool: ...
 
@@ -56,5 +56,7 @@ def get_harness(name: str) -> Harness:
 
     return CLAUDE
   if name == 'bro':
-    raise ValueError('the bro harness is not implemented yet; use --harness claude')
+    from ride.bro import BRO
+
+    return BRO
   raise ValueError(f'unknown harness: {name}')

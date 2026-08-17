@@ -3,7 +3,12 @@
 from typing import Optional
 
 from bro.base import credentials
-from bro.launch.scope import LaunchScopeError, bind_project_credentials, scoped_secrets
+from bro.launch.scope import (
+  BRO_RUN_RECIPE,
+  LaunchScopeError,
+  bind_project_credentials,
+  scoped_secrets,
+)
 from bro.workspace.paths import project_root
 from bro.workspace.project import project_config
 from ride.claude.harness import scope_recipe as claude_scope_recipe
@@ -22,9 +27,12 @@ def report_scope(
   harness_name = harness or config.harness
   try:
     get_harness(harness_name)
-    if harness_name != 'claude':
-      raise ValueError(f'the {harness_name} harness is not implemented yet')
-    recipe = claude_scope_recipe(raw)
+    if harness_name == 'claude':
+      recipe = claude_scope_recipe(raw)
+    else:
+      if raw:
+        raise ValueError('--raw requires the claude harness')
+      recipe = BRO_RUN_RECIPE
     selection = bind_project_credentials()
     scoped = scoped_secrets(bro_name, recipe)
   except (LaunchScopeError, ValueError) as error:

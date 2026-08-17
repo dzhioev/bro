@@ -8,7 +8,7 @@ The runtime is published by the `bro-ride` distribution and depends on the `bro`
 
 ### `ride solo <bro> <prompt>`
 
-Runs one prompt without a TTY and writes Claude's reply to stdout. The default harness is Claude Code and the default hold is `unattended`. Claude runs in print mode with the same prompt, MCP, recording, model, and permission composition as an interactive session; the recorded Claude session remains available to `ride resume`.
+Runs one prompt without a TTY and writes the harness reply to stdout. The default harness is Claude Code and the default hold is `unattended`. Claude runs in print mode; the bro harness runs `bro run` with the ask display preset. Both retain the session record needed by `ride resume` when the workspace is kept.
 
 A launch without `-w / --workspace` receives a fresh name and removes that workspace after a clean exit. `--keep` retains it, and a failed run always keeps it for inspection. `-w NAME` creates or reuses that exact workspace after checking its kind and always retains it.
 
@@ -41,7 +41,7 @@ Shared launch flags are `--host`, `--hold`, `--grant`, `--revoke`, `--into`, and
 
 ## Harness selection
 
-`--harness {claude,bro}` selects the driving loop. When omitted, `ride` reads `[tool.bro] harness`; a project that omits the key gets `claude`. The bro harness value is reserved in this stage and fails before workspace creation until its implementation lands.
+`--harness {claude,bro}` selects the driving loop. When omitted, `ride` reads `[tool.bro] harness`; a project that omits the key gets `claude`.
 
 LLM flags resolve within the selected harness. They never switch the harness implicitly. A recipe whose provider the harness cannot run errors with `--harness` as the remedy.
 
@@ -62,6 +62,16 @@ The generic scope computation and the bro-run recipe stay in `bro.launch.scope`,
 Claude full mode retains Claude Code's built-ins, skills, and base prompt while adding the selected bro's persona, spells, filtered MCP namespaces, and blocked-tool declarations. `--raw` runs `claude --bare` under the bro's own composed prompt and MCP surface. Raw remains container-only and requires the `anthropic` secret; full mode requires the `claude_code` setup token.
 
 The in-place command deliberately remains `cw ss --in-place` during the compatibility period. This lets a checkout on the feature branch drive a workspace based on the older branch, and the older launcher drive a workspace based on the feature branch.
+
+## Bro harness
+
+The bro harness drives the selected bro's native LLM loop. Container sessions compose the same `bro run|chat … --in-place` launch description used by summoned children; host sessions provision the workspace worktree and run its own `.venv/bin/bro` under the same broker-root supervision and scoped credential store.
+
+Harness-owned flags are `--rich` for `solo`, `--text` for `along`, and `--no-trails` for either mode. Claude rejects those flags; the bro harness rejects Claude's `--raw` and forwarded arguments after `--`.
+
+The broker publishes a native root's `started` trail id beside the workspace's `resume.json`. `ride resume` continues that exact trail at its latest consistent point under the recorded native recipe, producing a new trail with `forked_from`; it does not use the globally newest call or the bro class's current recipe. A session without a broker-published pointer — including a broker-disabled launch or `--no-trails` — cannot be resumed and fails with that reason.
+
+The compatibility-period `bro run`, `bro chat`, `ask`, `call`, and `summon` surfaces are unchanged. In particular, public `bro chat --resume` remains the history-fork operation with its current semantics until the retirement stage.
 
 ## In-container launches
 

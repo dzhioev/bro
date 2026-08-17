@@ -3,7 +3,7 @@ import subprocess
 from typing import Optional
 
 from bro.base import credentials, log
-from bro.launch.root import run_in_container
+from bro.launch.root import run_host_process_via_broker, run_in_container
 from bro.launch.trails import local_trails_mounts
 from bro.workspace.containers import broker_enabled
 from bro.workspace.docker import Launch, find_container_id
@@ -77,34 +77,6 @@ def _container_session(
   )
 
 
-def _run_host_root_via_broker(
-  workspace: Workspace,
-  command: list[str],
-  env: dict[str, str],
-  may_summon: set[str],
-  credential_scope: set[str],
-  *,
-  interactive: bool,
-) -> int:
-  from bro.launch.spawn import run_root_via_broker
-  from bro.launch.summon_control import STATUS_ENV, summon_status_file
-  from bro.summon import MAY_SUMMON_ENV, encode_may_summon
-  from bro.workspace.spawn import ProcessLaunchSpec
-
-  env[STATUS_ENV] = str(summon_status_file(workspace.project, workspace.name))
-  env[MAY_SUMMON_ENV] = encode_may_summon(may_summon)
-  launch = ProcessLaunchSpec(
-    command=command, cwd=str(workspace.tree), env=env, interactive=interactive
-  )
-  return run_root_via_broker(
-    launch,
-    workspace=workspace,
-    may_summon=may_summon,
-    credential_scope=credential_scope,
-    trail_pointer=session_trail_pointer(workspace.name),
-  )
-
-
 def _host_session(
   spec: SessionSpec, workspace: Workspace, base_ref: Optional[str], launch_scope: ScopedLaunch
 ) -> int:
@@ -142,13 +114,14 @@ def _host_session(
   _apply_claude_auth(runner_env)
   workspace.clear_session_end()
   if broker_enabled():
-    code = _run_host_root_via_broker(
+    code = run_host_process_via_broker(
       workspace,
       command,
       runner_env,
       launch_scope.may_summon,
       scoped.required | scoped.optional,
       interactive=not spec.solo,
+      trail_pointer=session_trail_pointer(workspace.name),
     )
   else:
     code = subprocess.run(command, cwd=str(worktree), env=runner_env).returncode

@@ -6,7 +6,9 @@ from bro.workspace.store import ScopedSecrets
 from ride.scope_report import report_scope
 
 
-def _run(capsys, *, selection, scoped, available=lambda name: True, bro=None, raw=False):
+def _run(
+  capsys, *, selection, scoped, available=lambda name: True, bro=None, raw=False, harness=None
+):
   with (
     patch('ride.scope_report.project_root', return_value=Path('/repo')),
     patch(
@@ -17,7 +19,7 @@ def _run(capsys, *, selection, scoped, available=lambda name: True, bro=None, ra
     patch('ride.scope_report.scoped_secrets', return_value=scoped) as scope,
     patch('ride.scope_report.credentials.available', available),
   ):
-    rc = report_scope(bro=bro, raw=raw)
+    rc = report_scope(bro=bro, raw=raw, harness=harness)
   return rc, capsys.readouterr().out, scope
 
 
@@ -56,3 +58,13 @@ class TestReportScope:
     )
     assert 'bro:     dev (claude-raw)' in out
     assert scope.call_args.args[0] == 'dev'
+
+  def test_bro_harness_uses_the_native_scope_recipe(self, capsys):
+    _, out, scope = _run(
+      capsys,
+      selection={},
+      scoped=ScopedSecrets({'openai'}, {'trails'}, False),
+      harness='bro',
+    )
+    assert 'bro:     bro-dev (bro-run)' in out
+    assert scope.call_args.args[1].name == 'bro-run'

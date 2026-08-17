@@ -144,6 +144,7 @@ PYTEST_FILES = [
   'bros/terminal/terminal_test.py',
   'dev/bros/analyst/scripts/trails_usage_test.py',
   'bro/launch/broxy_test.py',
+  'ride/ride/bro_test.py',
   'ride/ride/claude/claude_argv_test.py',
   'ride/ride/claude/claude_config_test.py',
   'ride/ride/cw_test.py',

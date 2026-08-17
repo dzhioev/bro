@@ -52,6 +52,7 @@ def _spec(
     grant=grant if grant is not None else [],
     revoke=revoke if revoke is not None else [],
     llm=llm,
+    resolved_llm=claude_harness.CLAUDE.resolve_llm(llm, resolved_bro).dump(),
     solo=solo,
     resume=resume,
     into=into,
@@ -737,7 +738,16 @@ class TestHostSession:
     monkeypatch.setattr(bro.launch.summon_control, 'summon_allow_list', lambda *_a, **_k: {'dev'})
     roots: list = []
 
-    def fake_root(root_workspace, command, env, may_summon, credential_scope, *, interactive):
+    def fake_root(
+      root_workspace,
+      command,
+      env,
+      may_summon,
+      credential_scope,
+      *,
+      interactive,
+      trail_pointer,
+    ):
       roots.append(
         {
           'workspace': root_workspace,
@@ -750,7 +760,7 @@ class TestHostSession:
       )
       return 5
 
-    monkeypatch.setattr(claude_session, '_run_host_root_via_broker', fake_root)
+    monkeypatch.setattr(claude_session, 'run_host_process_via_broker', fake_root)
     spec = _spec(host=True, hold='attended', llm='::xhigh', prompt='go', claude_args=['--foo'])
     scope = _launch_scope(may_summon={'dev'})
     assert claude_session._host_session(spec, workspace, None, scope) == 5
@@ -774,7 +784,7 @@ class TestHostSession:
 
     monkeypatch.setattr(bro.launch.spawn, 'run_root_via_broker', fake_run_root)
     assert (
-      claude_session._run_host_root_via_broker(
+      claude_session.run_host_process_via_broker(
         workspace, ['cw'], {}, {'dev', 'bro'}, set(), interactive=False
       )
       == 0

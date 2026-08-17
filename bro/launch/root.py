@@ -42,6 +42,40 @@ def _run_root_via_broker(
   )
 
 
+def run_host_process_via_broker(
+  workspace: Workspace,
+  command: list[str],
+  env: dict[str, str],
+  may_summon: Collection[str],
+  credential_scope: Collection[str],
+  *,
+  interactive: bool,
+  trail_pointer: Optional[Path] = None,
+) -> int:
+  """run a host-worktree process as the broker's supervised session root."""
+  from bro.launch.spawn import run_root_via_broker
+  from bro.launch.summon_control import STATUS_ENV, summon_status_file
+  from bro.summon import MAY_SUMMON_ENV, encode_may_summon
+  from bro.workspace.spawn import ProcessLaunchSpec
+
+  launch_env = dict(env)
+  launch_env[STATUS_ENV] = str(summon_status_file(workspace.project, workspace.name))
+  launch_env[MAY_SUMMON_ENV] = encode_may_summon(may_summon)
+  launch = ProcessLaunchSpec(
+    command=command,
+    cwd=str(workspace.tree),
+    env=launch_env,
+    interactive=interactive,
+  )
+  return run_root_via_broker(
+    launch,
+    workspace=workspace,
+    may_summon=may_summon,
+    credential_scope=credential_scope,
+    trail_pointer=trail_pointer,
+  )
+
+
 def run_in_container(
   launch: Launch,
   *,

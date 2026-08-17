@@ -42,6 +42,7 @@ def resume(
   *,
   llm_spec: NativeLLMSpec,
   at: Optional[int] = None,
+  hold: Optional[str] = None,
 ) -> ResumedCall:
   """Continue a recorded call at an explicit or latest consistent fork point."""
   if trail_ref == RESUME_LATEST:
@@ -63,6 +64,7 @@ def resume(
     fork_step_id,
     llm_spec=llm_spec,
     surface=_CALL_ENTRY_POINT,
+    hold=hold,
     fetch_forked_from=lambda forked_from_id: fetch_recorded_trail(client, forked_from_id),
   )
   return ResumedCall(bro=bro, history=history, trail_id=trail_id)

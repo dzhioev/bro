@@ -1,4 +1,5 @@
 import asyncio
+import json
 import signal
 from dataclasses import dataclass
 from datetime import datetime
@@ -1259,3 +1260,47 @@ async def test_text_mode_ctrl_c_ends_the_turn_not_the_chat(capsys, monkeypatch):
   assert 'record: second reply' in out
   # and SIGINT is back to ending the chat once no turn is running
   assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
+
+
+def test_managed_continuation_uses_the_recorded_recipe_and_hold(monkeypatch):
+  from bro.launch.resume import ResumedCall
+
+  captured: dict = {}
+  resumed_bro = RecordBro()
+  recorded_spec = llm_llms_openai.LLMSpec(model='gpt-5', reasoning_effort='low')
+
+  def fake_resume(client, bro_name, trail_ref, *, llm_spec, at=None, hold='guided'):
+    captured.update(trail_ref=trail_ref, llm_spec=llm_spec, at=at, hold=hold)
+    return ResumedCall(bro=resumed_bro, history=[], trail_id=trail_ref)
+
+  async def fake_call_text(bro, initial, history=None, hold='guided', preset_name=None):
+    captured.update(bro=bro, initial=initial, history=history, chat_hold=hold)
+
+  monkeypatch.setenv('CW_IN_CONTAINER', '1')
+  monkeypatch.setattr('bro.launch.resume.resume', fake_resume)
+  monkeypatch.setattr('bro.trails.store.default_store', lambda: MagicMock())
+  monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
+  monkeypatch.setattr('bro.launch.call._tty_supported', lambda: False)
+
+  code = chat_main(
+    [
+      'bro',
+      'record',
+      '--continue-trail',
+      'workspace-trail',
+      '--continue-llm',
+      json.dumps(recorded_spec.dump()),
+      '--hold',
+      'attended',
+      '--in-place',
+    ],
+    program=['bro', 'chat'],
+  )
+  assert code is None
+  assert captured['trail_ref'] == 'workspace-trail'
+  assert captured['llm_spec'] == recorded_spec
+  assert captured['hold'] == 'attended'
+  assert captured['bro'] is resumed_bro
+  assert captured['initial'] is None
+  assert captured['history'] == []
+  assert captured['chat_hold'] == 'attended'

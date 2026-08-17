@@ -6,11 +6,12 @@ start without a channel. The caller owns the fail-open policy and unsets
 `BROKER_CHANNEL` when launch fails.
 """
 
+import contextlib
 import os
 import signal
 import subprocess
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Generator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -18,6 +19,7 @@ from typing import Optional
 from bro.base import log, spawn
 
 _LAUNCH_TIMEOUT = 10.0
+START_SESSION_BROXY_ENV = 'BRO_START_SESSION_BROXY'
 
 
 @dataclass
@@ -80,3 +82,25 @@ def _start_session_broxy(upstream: str, env: Mapping[str, str]) -> Optional[_Ses
     return None
   log.verbose('session broxy at %s (pid %d)', address, pid)
   return _SessionBroxy(pid, address, log_path)
+
+
+@contextlib.contextmanager
+def session_broxy() -> Generator[None]:
+  """give a broker-root host runner its session-local proxy channel."""
+  requested = os.environ.pop(START_SESSION_BROXY_ENV, None)
+  upstream = os.environ.get('BROKER_CHANNEL')
+  if requested is None or upstream is None:
+    yield
+    return
+
+  broxy = _start_session_broxy(upstream, os.environ)
+  if broxy is None:
+    os.environ.pop('BROKER_CHANNEL', None)
+  else:
+    os.environ['BROKER_CHANNEL'] = broxy.address
+  try:
+    yield
+  finally:
+    if broxy is not None:
+      broxy.stop()
+    os.environ['BROKER_CHANNEL'] = upstream

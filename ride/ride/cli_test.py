@@ -63,6 +63,26 @@ class TestSolo:
       ride_cli.main(['ride', 'solo', 'dev', 'hello', '--', '--debug', 'mcp'])
     assert options(start.call_args.args[0]).arguments == ['--debug', 'mcp']
 
+  def test_bro_solo_owns_rich_and_no_trails(self):
+    from ride.bro import options as bro_options
+
+    with patch('ride.cli.start_session', return_value=0) as start:
+      assert (
+        ride_cli.main(['ride', 'solo', '--harness', 'bro', '--rich', '--no-trails', 'dev', 'hello'])
+        == 0
+      )
+    spec = start.call_args.args[0]
+    assert bro_options(spec).rich
+    assert bro_options(spec).no_trails
+    assert spec.inner_command() == [
+      'bro', 'run', 'dev', 'hello', '--rich', '--hold', 'unattended', '--in-place'
+    ]  # fmt: skip
+
+  def test_claude_rejects_bro_harness_flags(self, capsys):
+    with pytest.raises(SystemExit):
+      ride_cli.main(['ride', 'solo', '--no-trails', 'dev', 'hello'])
+    assert '--no-trails require --harness bro' in capsys.readouterr().err
+
 
 class TestAlong:
   def test_builds_an_attended_claude_session(self):
@@ -111,20 +131,24 @@ class TestAlong:
       ride_cli.main(['ride', 'along', '--provider', 'openai', 'dev'])
     assert '--harness bro' in capsys.readouterr().err
 
-  def test_bro_harness_reports_the_staged_gap(self, capsys):
-    with pytest.raises(SystemExit):
-      ride_cli.main(['ride', 'along', '--harness', 'bro', 'dev'])
-    assert 'bro harness is not implemented yet' in capsys.readouterr().err
+  def test_bro_harness_builds_a_native_chat(self):
+    with patch('ride.cli.start_session', return_value=0) as start:
+      assert ride_cli.main(['ride', 'along', '--harness', 'bro', '--text', 'dev']) == 0
+    spec = start.call_args.args[0]
+    assert spec.harness == 'bro'
+    assert spec.inner_command() == [
+      'bro', 'chat', 'dev', '--text', '--hold', 'attended', '--in-place'
+    ]  # fmt: skip
 
-  def test_project_harness_default_is_used(self, monkeypatch, capsys):
+  def test_project_harness_default_is_used(self, monkeypatch):
     monkeypatch.setattr(
       ride_cli,
       'project_config',
       lambda: SimpleNamespace(default_bro='bro-dev', harness='bro'),
     )
-    with pytest.raises(SystemExit):
-      ride_cli.main(['ride', 'along', 'dev'])
-    assert 'bro harness is not implemented yet' in capsys.readouterr().err
+    with patch('ride.cli.start_session', return_value=0) as start:
+      assert ride_cli.main(['ride', 'along', 'dev']) == 0
+    assert start.call_args.args[0].harness == 'bro'
 
 
 class TestLifecycle:
