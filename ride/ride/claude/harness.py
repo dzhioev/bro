@@ -125,24 +125,29 @@ class ClaudeHarness:
     )
     return False
 
-  def host_fallback_error(self, spec: 'SessionSpec') -> Optional[str]:
-    if options(spec).raw:
-      return '--raw sessions cannot nest inside a container'
-    return None
-
   def inner_command(self, spec: 'SessionSpec') -> list[str]:
     claude = options(spec)
-    flags = {'--solo': spec.solo, '--resume': spec.resume, '--raw': claude.raw}
-    parts = ['cw', 'ss', '--in-place', *(flag for flag, enabled in flags.items() if enabled)]
-    if spec.hold != 'guided':
+    verb = 'solo' if spec.solo else 'along'
+    flags = {'--resume': spec.resume, '--raw': claude.raw}
+    parts = [
+      'ride',
+      verb,
+      '--in-place',
+      '--workspace',
+      spec.name,
+      '--harness',
+      'claude',
+      *(flag for flag, enabled in flags.items() if enabled),
+    ]
+    if spec.hold != ('unattended' if spec.solo else 'guided'):
       parts.extend(['--hold', spec.hold])
     if spec.llm is not None:
       parts.extend(['--llm', spec.llm])
-    if spec.bro_argument is not None:
-      parts.extend(['--bro', spec.bro_argument])
+    parts.append(spec.bro)
     if spec.prompt is not None:
-      parts.append(f'--prompt={spec.prompt}')
-    parts.extend([spec.name, *claude.arguments])
+      parts.append(spec.prompt)
+    if len(claude.arguments) > 0:
+      parts.extend(['--', *claude.arguments])
     return parts
 
   def command_options(self, spec: 'SessionSpec') -> tuple[list[str], list[str]]:

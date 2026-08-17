@@ -244,7 +244,7 @@ sys.exit(5)
 # scenarios F/G: a wrapper the entrypoint execs in place of the session command.
 # it drops a fake `claude` onto PATH — the in-place runner resolves it instead of
 # the image's real one — then execs the runner itself ("$@", the same
-# `cw ss --in-place …` invocation `_container_session` sends). the fake records
+# `ride solo|along --in-place …` invocation `_container_session` sends). the fake records
 # its argv/env to the report file, proving the argv was built in-container by the
 # workspace's own code; under CW_E2E_LINGER it traps SIGTERM (exit 7) so the
 # harness can assert `docker stop` reaches claude through tini → runner.
@@ -276,7 +276,7 @@ exec "$@"
 """
 
 # the launcher driver: one subprocess per live-path scenario, running the exact
-# `cw ss` seam (`run_in_container`) under the isolated HOME/project root
+# `ride solo|along` seam (`run_in_container`) under the isolated HOME/project root
 _DRIVER = """
 import json, os, sys
 from bro.launch.root import run_in_container

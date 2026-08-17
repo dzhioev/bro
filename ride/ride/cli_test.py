@@ -22,7 +22,6 @@ class TestSolo:
     with patch('ride.cli.start_session', return_value=0) as start:
       assert ride_cli.main(['ride', 'solo', 'dev', 'do it']) == 0
     spec = start.call_args.args[0]
-    assert spec.interface == 'ride'
     assert spec.harness == 'claude'
     assert spec.name == 'ride-dev-12345678'
     assert spec.bro == 'dev'
@@ -31,13 +30,14 @@ class TestSolo:
     assert spec.solo
     assert spec.drop
     assert not spec.workspace_pinned
-    assert spec.inner_command()[:6] == [
-      'cw',
-      'ss',
+    assert spec.inner_command()[:7] == [
+      'ride',
+      'solo',
       '--in-place',
-      '--solo',
-      '--hold',
-      'unattended',
+      '--workspace',
+      'ride-dev-12345678',
+      '--harness',
+      'claude',
     ]
 
   def test_host_keeps_the_unattended_default(self):
@@ -89,7 +89,6 @@ class TestAlong:
     with patch('ride.cli.start_session', return_value=0) as start:
       assert ride_cli.main(['ride', 'along', 'dev', 'do it']) == 0
     spec = start.call_args.args[0]
-    assert spec.interface == 'ride'
     assert spec.harness == 'claude'
     assert spec.name == 'ride-dev-12345678'
     assert spec.bro == 'dev'
@@ -97,7 +96,15 @@ class TestAlong:
     assert spec.hold == 'attended'
     assert not spec.drop
     assert not spec.workspace_pinned
-    assert spec.inner_command()[:5] == ['cw', 'ss', '--in-place', '--hold', 'attended']
+    assert spec.inner_command()[:7] == [
+      'ride',
+      'along',
+      '--in-place',
+      '--workspace',
+      'ride-dev-12345678',
+      '--harness',
+      'claude',
+    ]
 
   def test_host_defaults_to_guided(self):
     with patch('ride.cli.start_session', return_value=0) as start:
@@ -156,11 +163,7 @@ class TestLifecycle:
     with patch('ride.cli.resume_session', return_value=0) as resume:
       assert ride_cli.main(['ride', 'resume', '--grant', '@dev', 'workspace']) == 0
     assert resume.call_args.args == ('workspace',)
-    assert resume.call_args.kwargs == {
-      'interface': 'ride',
-      'grant': ['@dev'],
-      'revoke': [],
-    }
+    assert resume.call_args.kwargs == {'grant': ['@dev'], 'revoke': []}
 
   def test_scope_dispatches_harness(self):
     with patch('ride.scope_report.report_scope', return_value=0) as report:

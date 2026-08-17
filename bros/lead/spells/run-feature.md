@@ -2,7 +2,7 @@
 name: run-feature
 description: This spell should be used when the user wants a large piece of work driven end to end from a coordinator session — "start a feature", "kick off the <X> feature", "let's design and build <big thing>", "run the feature workflow", "orchestrate this", "resume the feature at <url>". This session becomes the coordinator: it opens a feature task as the single source of truth, then walks the work through design, review and planning, per-stage implementation, integration, and verification, running each phase in a session of its own — the design and planning phases as interactive sessions it hands to the user to launch, the rest as summoned bros in isolated containers — and recording each outcome on the feature page before starting the next. It never designs or implements itself. For work that fits one session this is overkill — summon a single bro on the task ([[ask]]) and let it run [[fix]] itself.
 parameters: {"feature?": "ref of an existing feature task to resume", "new?": "seed text for a new feature"}
-version: 1.3.0
+version: 1.4.0
 ---
 
 # run-feature
@@ -64,14 +64,13 @@ Do not let this session end with a phase in flight; [[ask]] covers reclaiming a 
 
 ### Handed-off phases
 
-These want an interactive session rather than a one-shot summon, and no session can launch one for itself. Give the user both commands and let them pick the surface — a Claude Code session, or a chat with the bro itself:
+These want an interactive session rather than a one-shot summon, and no session can launch one for itself. Give the user one command; `--harness` selects Claude Code or the bro's native chat loop:
 
 ```
-dive-in <launch line> --bro <bro> '<phase prompt>'
-call <bro> '<phase prompt>' <launch line>
+ride along <bro> '<phase prompt>' <launch line> --harness <claude|bro>
 ```
 
-- The launch line is the same on both: `--hold` and `--effort` carry the same meaning on either launcher.
+- The launch line's `--hold` and `--effort` carry the same meaning under either harness.
 - The phase prompt goes in verbatim as the positional argument, so the session starts on it directly instead of through [[fix]]. It is as self-contained as a summon's — the session shares no context with you either. Quote it so its own apostrophes and backticks survive the shell.
 - No base ref: neither phase needs one — design only reads the codebase, and review-and-plan resets the feature branch to `origin/master` itself.
 - **Nothing returns to you.** There is no answer channel, so whatever the phase has to report goes on the feature page — its prompt closes by recording a comment rather than answering.

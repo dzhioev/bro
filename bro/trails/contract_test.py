@@ -53,7 +53,7 @@ def _claude_request(*records, context=None, lineage=None):
     native={
       'llm': {'type': 'claude'},
       'segment': 'segment',
-      'cw_command': 'cw ss',
+      'cw_command': 'ride along',
       'harness_version': 'test',
     },
     lineage=lineage,

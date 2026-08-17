@@ -3,7 +3,7 @@ import json
 import os
 import sys
 from dataclasses import dataclass, replace
-from typing import Literal, Optional
+from typing import Optional
 
 from bro.base import log
 from bro.launch.scope import LaunchScopeError, preflight_scoped_launch, scoped_secrets
@@ -21,7 +21,6 @@ class SessionSpec:
   """the harness-neutral recipe recorded for one managed session."""
 
   name: str
-  interface: Literal['cw', 'ride']
   harness: str
   workspace_pinned: bool
   host: bool
@@ -35,7 +34,6 @@ class SessionSpec:
   resume: bool
   into: Optional[str]
   bro: str
-  bro_argument: Optional[str]
   prompt: Optional[str]
   harness_options: dict
 
@@ -45,8 +43,6 @@ class SessionSpec:
 
   @property
   def along_default_hold(self) -> str:
-    if self.interface == 'cw':
-      return 'guided'
     return 'guided' if self.host else 'attended'
 
   @property
@@ -65,24 +61,21 @@ class SessionSpec:
 
   def to_command_argv(self) -> list[str]:
     if self.resume:
-      return [self.interface, 'resume', self.name]
+      return ['ride', 'resume', self.name]
     flags = {'--host': self.host}
-    if self.interface == 'cw' or not self.solo:
+    if not self.solo:
       flags['--drop'] = self.drop
     elif not self.workspace_pinned:
       flags['--keep'] = not self.drop
-    verb = 'ss' if self.interface == 'cw' else 'solo' if self.solo else 'along'
-    parts = [self.interface, verb, *(flag for flag, enabled in flags.items() if enabled)]
+    verb = 'solo' if self.solo else 'along'
+    parts = ['ride', verb, *(flag for flag, enabled in flags.items() if enabled)]
     if self.hold != self.default_hold:
       parts.extend(['--hold', self.hold])
     if self.llm is not None:
       parts.extend(['--llm', self.llm])
-    if self.interface == 'ride':
-      parts.extend(['--harness', self.harness])
-      if self.workspace_pinned:
-        parts.extend(['--workspace', self.name])
-    elif self.bro_argument is not None:
-      parts.extend(['--bro', self.bro_argument])
+    parts.extend(['--harness', self.harness])
+    if self.workspace_pinned:
+      parts.extend(['--workspace', self.name])
     for value in self.grant:
       parts.extend(['--grant', value])
     for value in self.revoke:
@@ -91,14 +84,11 @@ class SessionSpec:
       parts.extend(['--into', self.into])
     harness_flags, forwarded = get_harness(self.harness).command_options(self)
     parts.extend(harness_flags)
-    if self.interface == 'cw':
-      parts.extend([self.name, *forwarded])
-    else:
-      parts.append(self.bro)
-      if self.prompt is not None:
-        parts.append(self.prompt)
-      if len(forwarded) > 0:
-        parts.extend(['--', *forwarded])
+    parts.append(self.bro)
+    if self.prompt is not None:
+      parts.append(self.prompt)
+    if len(forwarded) > 0:
+      parts.extend(['--', *forwarded])
     return parts
 
   def inner_command(self) -> list[str]:
@@ -188,7 +178,7 @@ def _replace_resume_hint(spec: SessionSpec, workspace: Workspace) -> None:
     return
   sys.stdout.write('\033[2A\033[J')
   print('Resume this session with:')
-  print(f'  {spec.interface} resume {workspace.name}')
+  print(f'  ride resume {workspace.name}')
 
 
 def _finish_session(spec: SessionSpec, workspace: Workspace, code: int) -> int:
@@ -209,21 +199,12 @@ def _finish_session(spec: SessionSpec, workspace: Workspace, code: int) -> int:
 def start_session(spec: SessionSpec) -> int:
   harness = get_harness(spec.harness)
   container = not spec.host
-  if os.environ.get('CW_IN_CONTAINER') is not None and spec.interface == 'ride':
+  if os.environ.get('CW_IN_CONTAINER') is not None:
     log.error(
       'ride cannot start inside a managed container yet; use `summon` for an isolated sibling '
-      'or `bro run|chat --in-place` for this container and credential scope'
+      'or `bro run|chat` for this container and credential scope'
     )
     return 1
-  if container and os.environ.get('CW_IN_CONTAINER') is not None:
-    fallback_error = harness.host_fallback_error(spec)
-    if fallback_error is not None:
-      log.error('%s', fallback_error)
-      return 1
-    log.info('already inside a container; falling back to host mode')
-    container = False
-    spec = replace(spec, host=True)
-
   os.environ['CW_COMMAND'] = ' '.join(spec.to_command_argv())
   os.environ['CW_NAME'] = spec.name
   os.environ.setdefault('BRO_SHELL_COMMAND', os.environ['CW_COMMAND'])
@@ -265,13 +246,7 @@ def start_session(spec: SessionSpec) -> int:
     return 1
 
 
-def resume_session(
-  name: str,
-  *,
-  interface: Literal['cw', 'ride'],
-  grant: list[str],
-  revoke: list[str],
-) -> int:
+def resume_session(name: str, *, grant: list[str], revoke: list[str]) -> int:
   project = project_root()
   try:
     workspace = Workspace.open(name, project)
@@ -282,7 +257,6 @@ def resume_session(
   if spec is None:
     log.error('no session recorded for %s; start a new one instead', name)
     return 1
-  spec = replace(spec, interface=interface)
   try:
     spec = spec.with_scope_overrides(grant=grant, revoke=revoke)
   except ValueError as error:

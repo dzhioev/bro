@@ -7,7 +7,7 @@ container mounts that overlay it as `~/.claude`, its readers (the projects dir,
 a session's subject line), and its teardown next to the bro.workspace.A container
 reaches the dir through docker mounts, a host session through
 `CLAUDE_CONFIG_DIR`. Why sessions are isolated from the host `~/.claude` — and
-what the dir deliberately excludes — is reference/cw.md, "Host claude-state
+what the dir deliberately excludes — is reference/ride.md, "Host claude-state
 isolation".
 """
 

@@ -33,14 +33,14 @@ RUN useradd -m -u 1000 -s /bin/bash cw \
  && chown cw:cw /home/cw/.claude
 
 # print the session-info banner once per interactive shell — surfaces workspace
-# paths, the `cw exec` command, and (for bro sessions) the ASCII Bro logo when
-# users shell in via `cw exec <name>`. guarded so it runs only when `cw` is on
+# paths, the `ride exec` command, and (for bro sessions) the ASCII Bro logo when
+# users shell in via `ride exec <name>`. guarded so it runs only when `ride` is on
 # PATH (i.e. after venv activation) and only once per shell process.
 RUN cat >> /home/cw/.bashrc <<'EOF'
 
-if [ -z "${CW_BANNER_SHOWN:-}" ] && command -v cw >/dev/null 2>&1; then
+if [ -z "${CW_BANNER_SHOWN:-}" ] && command -v ride >/dev/null 2>&1; then
   export CW_BANNER_SHOWN=1
-  cw banner || true
+  ride banner || true
 fi
 EOF
 

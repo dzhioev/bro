@@ -95,16 +95,16 @@ def _host_session(
   if not provision_host_worktree(worktree):
     return 1
 
-  cw_bin = worktree / '.venv' / 'bin' / 'cw'
-  if not cw_bin.is_file():
+  ride_binary = worktree / '.venv' / 'bin' / 'ride'
+  if not ride_binary.is_file():
     log.error(
-      'no cw in %s — the worktree base predates `cw ss --in-place`; '
+      'no ride in %s — the worktree base predates `ride along --in-place`; '
       'rebase it onto origin/master or recreate it',
-      cw_bin,
+      ride_binary,
     )
     return 1
 
-  command = [str(cw_bin), *spec.inner_command()[1:]]
+  command = [str(ride_binary), *spec.inner_command()[1:]]
   runner_env = venv_env(worktree / '.venv')
   claude_dir = _provision_host_claude_dir(spec.name, worktree, project)
   runner_env['CLAUDE_CONFIG_DIR'] = str(claude_dir)

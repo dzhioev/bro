@@ -1,4 +1,4 @@
-"""launch-context records for a `cw ss` session.
+"""launch-context records for a `ride solo|along` session.
 
 The model's system prompt and the repo policy it ran under are assembled inside
 the claude process and never written to the JSONL transcript. cw knows the

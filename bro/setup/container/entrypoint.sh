@@ -161,7 +161,7 @@ if [ -n "${BROKER_CHANNEL:-}" ]; then
   fi
 fi
 
-# the tree is prepared; the command (for a `cw ss` session: the same
-# `cw ss --in-place` runner host mode spawns, resolved from the venv activated
+# the tree is prepared; the command (for a Claude ride: the same
+# `ride solo|along --in-place` runner host mode spawns, resolved from the venv activated
 # above) owns everything else — MCP servers, skills, claude itself.
 exec "$@"
