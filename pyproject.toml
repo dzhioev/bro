@@ -31,7 +31,7 @@ agent = [
 aws = [
   "boto3==1.43.40",
 ]
-cw = [
+ride = [
   "humanize==4.16.0",
   "mcp==1.28.1",
   "rich==15.0.0",
@@ -68,15 +68,12 @@ dev = [
   "pytest==9.1.1",
   "pytest-aiohttp==1.1.1",
   "pytest-asyncio==1.4.0",
-  # an independent parser for the YAML display rendering to be held against
-  "pyyaml==6.0.3",
   "ruff==0.15.20",
-  "types-pyyaml==6.0.12.20260815",
   "types-python-dateutil==2.9.0.20260518",
 ]
 
 [tool.uv.workspace]
-members = ["dev", "local"]
+members = ["dev", "local", "ride"]
 
 [tool.uv.sources]
 bro-dev = { workspace = true }
@@ -84,20 +81,13 @@ bro-local = { workspace = true }
 
 [project.scripts]
 # bro
-"ask" = "bro._entrypoints:bro_launch_ask"
 "bro" = "bro._entrypoints:bro_run"
 "bro-shell-dir" = "bro._entrypoints:bro_shell"
 "bro.base.credentials" = "bro._entrypoints:bro_base_credentials"
 "bro.base.time-util" = "bro._entrypoints:bro_base_time_util"
 "bro.broker.broxy" = "bro._entrypoints:bro_broker_broxy"
 "bro.broker.cli" = "bro._entrypoints:bro_broker_cli"
-"bro.cw.cli" = "bro._entrypoints:bro_cw_cli"
-"bro.cw.print-anthropic-key" = "bro._entrypoints:bro_cw_print_anthropic_key"
-"bro.cw.statusline" = "bro._entrypoints:bro_cw_statusline"
-"bro.cw.watch-guard" = "bro._entrypoints:bro_cw_watch_guard"
 "bro.extra.github.poll-pr" = "bro._entrypoints:bro_extra_github_poll_pr"
-"bro.launch.ask" = "bro._entrypoints:bro_launch_ask"
-"bro.launch.call" = "bro._entrypoints:bro_launch_call"
 "bro.llm.llm" = "bro._entrypoints:bro_llm_llm"
 "bro.llm.usage" = "bro._entrypoints:bro_llm_usage"
 "bro.run" = "bro._entrypoints:bro_run"
@@ -108,15 +98,11 @@ bro-local = { workspace = true }
 "bro.trails.rewind" = "bro._entrypoints:bro_trails_rewind"
 "bro.trails.server.server" = "bro._entrypoints:bro_trails_server_server"
 "bro.workflow.commit-footer" = "bro._entrypoints:bro_workflow_commit_footer"
-"bro.workflow.dive-in" = "bro._entrypoints:bro_workflow_dive_in"
 "bro.workflow.land-pr" = "bro._entrypoints:bro_workflow_land_pr"
 "broker" = "bro._entrypoints:bro_broker_cli"
 "broxy" = "bro._entrypoints:bro_broker_broxy"
-"call" = "bro._entrypoints:bro_launch_call"
 "commit-footer" = "bro._entrypoints:bro_workflow_commit_footer"
 "credentials" = "bro._entrypoints:bro_base_credentials"
-"cw" = "bro._entrypoints:bro_cw_cli"
-"dive-in" = "bro._entrypoints:bro_workflow_dive_in"
 "land-pr" = "bro._entrypoints:bro_workflow_land_pr"
 "mcp-server" = "bro._entrypoints:bro_runtime_mcp_server"
 "poll-pr" = "bro._entrypoints:bro_extra_github_poll_pr"
@@ -173,16 +159,16 @@ wheel-exclude = [
 consider_namespace_packages = true
 asyncio_mode = "strict"
 asyncio_default_fixture_loop_scope = "function"
-pythonpath = [".", "dev", "local"]
+pythonpath = [".", "dev", "local", "ride"]
 max_warnings = "0"
 markers = [
   "credential_gate: run with the real run-start credential gate (opts out of the conftest autouse fixture that pins it open)",
 ]
 
 [tool.pyright]
-include = ["bro", "bros", "dev", "local", "conftest.py"]
+include = ["bro", "bros", "dev", "local", "ride", "conftest.py"]
 exclude = ["bro/setup/", ".venv/", ".claude/", "*.egg-info/", "build/"]
-extraPaths = [".", "dev", "local"]
+extraPaths = [".", "dev", "local", "ride"]
 venvPath = "."
 venv = ".venv"
 
@@ -190,7 +176,7 @@ venv = ".venv"
 line-length = 100
 indent-width = 2
 target-version = "py312"
-src = [".", "dev", "local", "benchmark"]
+src = [".", "dev", "local", "ride", "benchmark"]
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "I", "B", "C4", "UP", "PIE", "RUF012"]

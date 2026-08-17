@@ -1,14 +1,10 @@
-"""the session's current-trail pointer.
+"""a managed session's current-trail pointer.
 
-The recorder daemon publishes the trail id it is currently recording, so the
-trail a live session lands in is readable without a query to the trails service.
-The file lives under the session's claude config dir — readable from inside the
-session and, in both session modes, from the host (a container session's dir is
-the mounted `~/.claude/cw-sessions/<name>`), the same placement as the
-recording-health file; `cw` derives that host-side path and threads it to the
-broker root. The pointer is absent until the recorder adopts a transcript, and
-stays absent for a session nothing records: no trail published is an answer
-readers carry, not a state they wait out.
+A Claude recorder writes the pointer in its session config directory. A native
+bro root is published by the supervising broker into the workspace record
+directory. Both placements are host-readable and let resume and summon
+provenance identify the session trail without querying the trails service. An
+absent pointer means the session published no trail.
 
 Stdlib-only on purpose: the host-side reader must not pull in service
 dependencies.
@@ -27,11 +23,9 @@ def path() -> Path:
   return claude_config_dir() / FILENAME
 
 
-def publish(trail_id: str) -> None:
-  """atomically point the file at `trail_id`. never raises — publishing must
-  not be able to break the recording it points at."""
+def write(target: Path, trail_id: str) -> None:
+  """atomically point `target` at `trail_id` without breaking its publisher."""
   try:
-    target = path()
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(target.name + '.tmp')
     tmp.write_text(json.dumps({'trail_id': trail_id}))
@@ -40,10 +34,15 @@ def publish(trail_id: str) -> None:
     pass
 
 
-def clear() -> None:
-  """drop the pointer — no trail is being recorded. never raises."""
+def publish(trail_id: str) -> None:
+  """publish the current recorder trail at the process-default pointer."""
+  write(path(), trail_id)
+
+
+def clear(target: Optional[Path] = None) -> None:
+  """drop a pointer — no trail is being recorded. never raises."""
   try:
-    path().unlink(missing_ok=True)
+    (path() if target is None else target).unlink(missing_ok=True)
   except OSError:
     pass
 

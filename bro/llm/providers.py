@@ -185,9 +185,9 @@ def resolve(base: LLMSpec, selection: LLMSelection) -> LLMSpec:
   belongs to `base`'s own provider. `effort` and `fast` then apply on top, so
   they adjust whichever recipe the first two settled on.
 
-  The two knobs differ on a provider that lacks them: fast mode falls back to the
-  plain recipe, since the `ask` / `call` aliases imply it without the user asking,
-  while an effort override raises as the explicit ask it is.
+  The two knobs differ on a provider that lacks them: fast is a portable best-effort
+  service-tier preference and falls back to the plain recipe, while an effort override
+  requests an exact reasoning control and raises when the provider has none.
   """
   spec = base
   if selection.provider is not None:

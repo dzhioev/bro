@@ -13,6 +13,7 @@ import bro.workspace.docker as workspace_docker
 import bro.workspace.spawn as workspace_spawn
 from bro.workspace.metadata import WorkspaceKind
 from bro.workspace.model import Workspace
+from bro.workspace.paths import workspace_dir
 
 
 def _throwaway(name: str, project) -> Workspace:
@@ -20,7 +21,7 @@ def _throwaway(name: str, project) -> Workspace:
 
 
 def _exit_record(tmp_path) -> str:
-  return (tmp_path / 'proj' / 'var' / 'cw' / 'workspaces' / 'broker-CH' / 'exit').read_text()
+  return (workspace_dir(tmp_path / 'proj', 'broker-CH') / 'exit').read_text()
 
 
 class TestDockerLaunchSpec:
@@ -43,7 +44,7 @@ class TestBrokerLaunch:
     launch = workspace_docker.Launch(
       name='broker-X',
       command=['broker', 'recv'],
-      env={'CW_BRO': 'dev'},
+      env={'RIDE_BRO': 'dev'},
       secrets=(),
       docker_sock=False,
       tty=False,
@@ -52,14 +53,14 @@ class TestBrokerLaunch:
     )
     channel = workspace_spawn.Provisioned(channel='X', host_endpoint='/host/sock.sock')
     adapted = workspace_spawn._broker_launch(launch, channel)
-    assert adapted.env == {'CW_BRO': 'dev', 'BROKER_CHANNEL': 'unix:/run/broker.sock'}
+    assert adapted.env == {'RIDE_BRO': 'dev', 'BROKER_CHANNEL': 'unix:/run/broker.sock'}
     assert adapted.extra_mounts == (
       '/existing:/mount',
       '/host/sock.sock:/run/broker.sock',
     )
     assert adapted.tty is False
     assert adapted.forward_env is False
-    assert launch.env == {'CW_BRO': 'dev'}
+    assert launch.env == {'RIDE_BRO': 'dev'}
     assert launch.extra_mounts == ('/existing:/mount',)
 
 
@@ -442,7 +443,7 @@ class TestProcessSpawner:
 
   @pytest.mark.asyncio
   async def test_env_is_the_spec_snapshot_plus_broker_channel(self, monkeypatch, tmp_path):
-    monkeypatch.setenv('CW_AMBIENT_CANARY', 'leak')
+    monkeypatch.setenv('RIDE_AMBIENT_CANARY', 'leak')
     out = tmp_path / 'env.json'
     code = 'import json, os, sys; json.dump(dict(os.environ), open(sys.argv[1], "w"))'
     handle = await self._spawn(
@@ -453,7 +454,7 @@ class TestProcessSpawner:
     assert env['MARKER'] == 'x'
     assert env['BROKER_CHANNEL'] == 'unix:/host/CH.sock'
     # a spawn is a pure function of its LaunchSpec: nothing ambient leaks in
-    assert 'CW_AMBIENT_CANARY' not in env
+    assert 'RIDE_AMBIENT_CANARY' not in env
 
   @pytest.mark.asyncio
   async def test_runs_in_cwd_and_propagates_exit_code(self, tmp_path):
@@ -461,6 +462,16 @@ class TestProcessSpawner:
     handle = await self._spawn([sys.executable, '-c', code], str(tmp_path), {})
     assert await handle.wait() == 7
     assert (tmp_path / 'here').is_file()
+
+  @pytest.mark.asyncio
+  async def test_headless_process_inherits_streams_without_interactive_handling(self, tmp_path):
+    launch = workspace_spawn.ProcessLaunchSpec(
+      command=[sys.executable, '-c', 'pass'], cwd=str(tmp_path), env={}, interactive=False
+    )
+    provisioned = workspace_spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
+    handle = await workspace_spawn.ProcessSpawner().spawn(launch, provisioned)
+    assert isinstance(handle, workspace_spawn._HeadlessProcess)
+    assert await handle.wait() == 0
 
 
 class TestCompositeSpawner:
@@ -543,16 +554,19 @@ class TestDockerSpawnerModes:
     monkeypatch.setattr(workspace_spawn, '_force_remove', fake_remove)
     monkeypatch.setattr(workspace_spawn, 'container_running', lambda container_id: False)
     starts: list = []
+    start_kwargs: list[dict] = []
     real_exec = asyncio.create_subprocess_exec
 
     def fake_exec(*argv, **kwargs):
       starts.append(list(argv))
+      start_kwargs.append(kwargs)
       return real_exec(sys.executable, '-c', 'pass', **kwargs)
 
     monkeypatch.setattr(asyncio, 'create_subprocess_exec', fake_exec)
     return {
       'prepared': prepared,
       'starts': starts,
+      'start_kwargs': start_kwargs,
       'project': project,
       'project_threads': project_threads,
       'prepare_threads': prepare_threads,
@@ -586,6 +600,25 @@ class TestDockerSpawnerModes:
       ]
     finally:
       await handle.wait()
+
+  @pytest.mark.asyncio
+  async def test_headless_root_inherits_separate_streams(self, spawn_harness):
+    docker_launch = workspace_docker.Launch(
+      name='ws',
+      command=['claude', '-p', 'answer'],
+      env={},
+      secrets=(),
+      docker_sock=False,
+      tty=False,
+      forward_env=True,
+    )
+    launch = workspace_spawn.DockerLaunchSpec(docker_launch, capture_output=False)
+    provisioned = workspace_spawn.Provisioned(channel='CH', host_endpoint='/host/CH.sock')
+    handle = await workspace_spawn.DockerSpawner().spawn(launch, provisioned)
+    assert isinstance(handle, workspace_spawn._HeadlessRoot)
+    assert spawn_harness['starts'] == [['docker', 'start', '-a', 'cid123']]
+    assert spawn_harness['start_kwargs'] == [{}]
+    assert await handle.wait() == 0
 
   @pytest.mark.asyncio
   async def test_child_mode_uses_the_described_workspace(self, spawn_harness):

@@ -1,8 +1,8 @@
 #!/usr/bin/env -S bash -e
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../prelude.sh"
 # smoke-test the container entrypoint: builds the image, runs the entrypoint
-# with the same mount layout as a cw container session, and verifies key postconditions.
-# uses CW_SKIP_VENV=1 to skip the slow `uv sync` step.
+# with the same mount layout as a ride container session, and verifies key postconditions.
+# uses RIDE_SKIP_VENV=1 to skip the slow `uv sync` step.
 
 DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 PROJECT="$(realpath "$DIR/../../..")"
@@ -43,11 +43,11 @@ GC
 
 # credential wiring (git helper, AWS, ...) is applied by `eval "$(credentials
 # install-hooks)"` after venv activation, which this smoke test skips
-# (CW_SKIP_VENV=1) — so that path is covered by base/credentials_test.py, not here.
+# (RIDE_SKIP_VENV=1) — so that path is covered by base/credentials_test.py, not here.
 
-# pre-seed the container-private .claude.json (cw/containers.py does this on first run).
+# pre-seed the container-private .claude.json (bro/workspace/docker.py does this on first run).
 # also drop a "host" .claude.json next to it as a tripwire: it must not exist
-# on any container mount, so any write the container makes to /home/cw/.claude.json
+# on any container mount, so any write the container makes to /home/ride/.claude.json
 # must land in claude/.claude.json and leave host_claude.json untouched.
 echo '{"projects":{"/workspace":{"smoke_seed":true}}}' > "$SMOKE_TMP/claude/.claude.json"
 echo '{"host_marker":"untouched"}' > "$SMOKE_TMP/host_claude.json"
@@ -63,12 +63,12 @@ docker run --rm -i \
   -v "$SMOKE_TMP/workspace:/workspace" \
   -v "$HOST_REPO:/host-repo:ro" \
   -v "$SMOKE_TMP/gitconfig:/host-gitconfig:ro" \
-  -v "$SMOKE_TMP/claude:/home/cw/.claude" \
-  -v "$SMOKE_TMP/claude/.claude.json:/home/cw/.claude.json" \
-  -e "HOME=/home/cw" \
-  -e "CW_NAME=smoke-test" \
-  -e "CW_BRANCH=worktree-smoke-test" \
-  -e "CW_SKIP_VENV=1" \
+  -v "$SMOKE_TMP/claude:/home/ride/.claude" \
+  -v "$SMOKE_TMP/claude/.claude.json:/home/ride/.claude.json" \
+  -e "HOME=/home/ride" \
+  -e "RIDE_WORKSPACE=smoke-test" \
+  -e "RIDE_BRANCH=worktree-smoke-test" \
+  -e "RIDE_SKIP_VENV=1" \
   "$TAG" bash -s >&2 << 'SMOKE'
     set -e
     # gitconfig should be writable (the bug this test guards against)
@@ -85,16 +85,16 @@ docker run --rm -i \
     aws --version
     # docker CLI should be installed for deploys via host socket
     docker --version
-    # uv cache should be pre-warmed and writable by cw
+    # uv cache should be pre-warmed and writable by ride
     test -d /opt/uv-cache
     test -n "$(ls -A /opt/uv-cache)"
     test -w /opt/uv-cache
     # the workspace venv is baked in: console-script launchers are present, from
     # the published members and the repository-local one alike, and every editable
     # path entry points at a directory in the clone
-    test -x /opt/cw-venv/bin/ask
-    test -x /opt/cw-venv/bin/run-tests
-    EDITABLE_PATHS="$(grep -h '^/workspace' /opt/cw-venv/lib/python*/site-packages/*.pth)"
+    test -x /opt/ride-venv/bin/ask
+    test -x /opt/ride-venv/bin/run-tests
+    EDITABLE_PATHS="$(grep -h '^/workspace' /opt/ride-venv/lib/python*/site-packages/*.pth)"
     test -n "$EDITABLE_PATHS"
     while IFS= read -r EDITABLE_PATH; do
       test -d "$EDITABLE_PATH"
@@ -107,14 +107,14 @@ docker run --rm -i \
     # project-relative path, and matches this clone (based on the same tree the
     # image was built from). the staged set is walked rather than listed, so the
     # check covers whatever members the workspace declares
-    STAGED_MANIFESTS="$(cd /opt/cw-venv-manifest && find . -type f)"
+    STAGED_MANIFESTS="$(cd /opt/ride-venv-manifest && find . -type f)"
     test -n "$STAGED_MANIFESTS"
     while IFS= read -r MANIFEST; do
-      cmp -s "/opt/cw-venv-manifest/$MANIFEST" "/workspace/$MANIFEST"
+      cmp -s "/opt/ride-venv-manifest/$MANIFEST" "/workspace/$MANIFEST"
     done <<< "$STAGED_MANIFESTS"
-    # /home/cw/.claude.json reflects the container-private seed and is writable
-    grep -q smoke_seed /home/cw/.claude.json
-    echo '{"modified_by_container":true}' > /home/cw/.claude.json
+    # /home/ride/.claude.json reflects the container-private seed and is writable
+    grep -q smoke_seed /home/ride/.claude.json
+    echo '{"modified_by_container":true}' > /home/ride/.claude.json
 SMOKE
 
 # container-private .claude.json reflects the in-container write

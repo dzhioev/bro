@@ -8,10 +8,11 @@ import bro.workspace.docker as workspace_docker
 import bro.workspace.spawn as workspace_spawn
 from bro.workspace.metadata import WorkspaceKind
 from bro.workspace.model import Workspace
+from bro.workspace.paths import CONTAINER_SUMMON_ROOT, summon_dir, workspace_dir
 
 
 def _exit_record(tmp_path) -> str:
-  return (tmp_path / 'project' / 'var' / 'cw' / 'workspaces' / 'ws' / 'exit').read_text()
+  return (workspace_dir(tmp_path / 'project', 'ws') / 'exit').read_text()
 
 
 class _FakeProc:
@@ -50,7 +51,7 @@ class TestRunInContainerInjection:
     assert bro.launch.root.run_in_container(launch) == 7
     assert prepared == [(launch, tmp_path / 'project')]
     assert calls == [['docker', 'start', '-a', '-i', '--detach-keys=ctrl-z', 'cid123']]
-    # the run's end is recorded on the workspace for `cw clean`
+    # the run's end is recorded on the workspace for `ride clean`
     assert _exit_record(tmp_path) == '7'
 
   def test_non_tty_launch_attaches_without_detach_keys(self, monkeypatch, tmp_path):
@@ -155,7 +156,7 @@ class TestRunRootViaBroker:
     launch = workspace_docker.Launch(
       name='ws',
       command=['claude', '--verbose'],
-      env={'CW_BASE_REF': 'deadbeef'},
+      env={'RIDE_BASE_REF': 'deadbeef'},
       secrets=('github',),
       optional_secrets=('openai',),
       docker_sock=True,
@@ -174,8 +175,8 @@ class TestRunRootViaBroker:
         name='ws',
         command=['claude', '--verbose'],
         env={
-          'CW_BASE_REF': 'deadbeef',
-          bro.launch.summon_control.STATUS_ENV: '/host-repo/var/cw/summon/ws.status.json',
+          'RIDE_BASE_REF': 'deadbeef',
+          bro.launch.summon_control.STATUS_ENV: str(CONTAINER_SUMMON_ROOT / 'ws.status.json'),
           bro.summon.MAY_SUMMON_ENV: 'dev',
         },
         secrets=('github',),
@@ -183,5 +184,7 @@ class TestRunRootViaBroker:
         docker_sock=True,
         tty=True,
         forward_env=True,
-      )
+        extra_mounts=(f'{summon_dir(tmp_path / "project")}:{CONTAINER_SUMMON_ROOT}:ro',),
+      ),
+      capture_output=False,
     )

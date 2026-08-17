@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -12,8 +13,9 @@ import bro.workspace.docker as workspace_docker
 import bro.workspace.store as workspace_store
 from bro.workspace.metadata import WorkspaceKind
 from bro.workspace.model import Workspace
+from bro.workspace.paths import broker_dir, summon_dir
 
-PARENT_WORKSPACE = Path('/var/cw/worktrees/parent')
+PARENT_WORKSPACE = Path('/var/ride/0123456789abcdef/workspaces/parent/tree')
 SUMMONER = {'session': 'ws'}
 
 
@@ -52,10 +54,10 @@ class TestSummonLowering:
         name='broker-CH',
         command=['bro', 'run', 'dev', 'deploy the thing', '--in-place'],
         env={
-          'CW_BASE_REF': 'PARENT-SHA',
-          'CW_BRO': 'dev',
-          'CW_MAY_SUMMON': '',
-          'CW_SUMMONER': '{"session":"ws"}',
+          'RIDE_BASE_REF': 'PARENT-SHA',
+          'RIDE_BRO': 'dev',
+          'RIDE_MAY_SUMMON': '',
+          'RIDE_SUMMONER': '{"session":"ws"}',
           **bro.launch.identity.bro_git_identity_env('dev'),
         },
         secrets={'aws', 'trails'},
@@ -137,7 +139,7 @@ class TestSummonLowering:
       may_summon=('bro', 'reviewer'),
     )
     lowered = bro.launch.spawn._lower_summon(launch, 'broker-CH')
-    assert lowered.launch.env['CW_MAY_SUMMON'] == 'bro,reviewer'
+    assert lowered.launch.env['RIDE_MAY_SUMMON'] == 'bro,reviewer'
 
   def test_into_overrides_the_inherited_base_ref(self, lowering_harness):
     launch = bro.launch.spawn.SummonLaunchSpec(
@@ -149,10 +151,10 @@ class TestSummonLowering:
       into='summon',
     )
     assert bro.launch.spawn._lower_summon(launch, 'broker-CH').launch.env == {
-      'CW_BASE_REF': 'REF-SHA',
-      'CW_BRO': 'dev',
-      'CW_MAY_SUMMON': '',
-      'CW_SUMMONER': '{"session":"ws"}',
+      'RIDE_BASE_REF': 'REF-SHA',
+      'RIDE_BRO': 'dev',
+      'RIDE_MAY_SUMMON': '',
+      'RIDE_SUMMONER': '{"session":"ws"}',
       **bro.launch.identity.bro_git_identity_env('dev'),
     }
 
@@ -241,7 +243,7 @@ class TestRunRootViaBroker:
     launch = bro.launch.spawn.ProcessLaunchSpec(command=['x'], cwd='/', env={})
     workspace = Workspace.create('ws', tmp_path / 'proj', WorkspaceKind.CONTAINER)
     assert bro.launch.spawn.run_root_via_broker(launch, workspace=workspace) == 3
-    assert captured['transport']._dir == tmp_path / 'proj' / 'var' / 'cw' / 'broker'
+    assert captured['transport']._dir == broker_dir(tmp_path / 'proj')
     # the composite over both launch modes plus the summon lowering: any root can
     # spawn docker children, summons included
     spawner = captured['spawner']
@@ -265,9 +267,9 @@ class TestRunRootViaBroker:
     assert isinstance(control, bro.launch.summon_control.SummonControl)
     assert [observer.__self__ for observer in captured['observers']] == [control]
     assert control._workspace is workspace
-    summon_dir = tmp_path / 'proj' / 'var' / 'cw' / 'summon'
-    assert control._status_file == summon_dir / 'ws.status.json'
-    assert control._audit_file == summon_dir / 'ws.jsonl'
+    state_directory = summon_dir(tmp_path / 'proj')
+    assert control._status_file == state_directory / 'ws.status.json'
+    assert control._audit_file == state_directory / 'ws.jsonl'
     assert captured['launch'] is launch
 
   def test_root_lifecycle_handlers_log_trail_and_end_reason(self, caplog, tmp_path):
@@ -281,11 +283,13 @@ class TestRunRootViaBroker:
       status_file=tmp_path / 'status.json',
       audit_file=tmp_path / 'audit.jsonl',
     )
-    bro.launch.spawn._note_root_started(control)(
+    pointer = tmp_path / 'current-trail.json'
+    bro.launch.spawn._note_root_started(control, pointer)(
       dispatcher, 'root', Message(type=Tag.STARTED, payload={'trail_id': 't-1'})
     )
     # the started handler doubles as the bro-run root's provenance source
     assert control._root_trail_id == 't-1'
+    assert json.loads(pointer.read_text()) == {'trail_id': 't-1'}
     bro.launch.spawn._log_root_completed(
       dispatcher,
       'root',

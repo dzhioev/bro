@@ -40,7 +40,7 @@ class FakeClient:
       'started_at': '2026-01-01T00:00:00Z',
       'end': None,
       'interactive': True,
-      'surface': 'cw',
+      'surface': 'ride',
       'turn_count': 0,
       'native': {
         'segment': 'segment',

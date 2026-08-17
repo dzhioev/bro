@@ -1,16 +1,16 @@
 import asyncio
+import json
 import signal
 from dataclasses import dataclass
 from datetime import datetime
 from typing import ClassVar, Optional
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 import bro.llm.llms.echo as llm_llms_echo
 import bro.llm.llms.openai as llm_llms_openai
-from bro.launch.call import call_text, chat_main, main
-from bro.launch.identity import bro_git_identity_env
+from bro.launch.call import call_text, chat_main
 from bro.llm.llm import LLM, NativeLLMSpec
 from bro.llm.mcp import MCPServer
 from bro.llm.observer import (
@@ -125,7 +125,7 @@ async def test_text_emits_banner_before_first_reply(capsys, monkeypatch):
   out = capsys.readouterr().out
   # banner is the opening bro message, before the first reply line; the bro name
   # is passed through so the logo renders on an in-process run, whose
-  # environment doesn't carry this bro's CW_BRO
+  # environment doesn't carry this bro's RIDE_BRO
   assert out.index('BANNER[record]') < out.index('[12:34:56] record: reply')
   assert '[12:34:56] record:\nBANNER[record]' in out
 
@@ -198,69 +198,8 @@ class _FastlessBro(Bro):
     return self.mock_llm
 
 
-def test_default_invokes_spec_fast(monkeypatch):
-  built: list[Bro] = []
-
-  async def fake_call_text(bro, initial, history=None, hold='guided', preset_name=None):
-    built.append(bro)
-
-  # exercise the in-process path: outside a container, main() would re-exec into one.
-  monkeypatch.setenv('CW_IN_CONTAINER', '1')
-  monkeypatch.setattr('bro.registry.get_class', lambda name: _ChatBro)
-  monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
-  monkeypatch.setattr('bro.launch.call._tty_supported', lambda: False)
-
-  # no flag — the call alias implies fast
-  rc = main(['call', 'record', 'hi', '--in-place'])
-  assert rc is None
-  assert len(built) == 1
-  spec = built[0].llm_spec
-  assert isinstance(spec, llm_llms_openai.LLMSpec)
-  assert spec.service_tier == 'priority'
-  # class default untouched — fast() returns a fresh spec
-  default = _ChatBro.llm_spec
-  assert isinstance(default, llm_llms_openai.LLMSpec)
-  assert default.service_tier is None
-
-
-def test_in_place_hold_defaults_diverge_per_alias(monkeypatch):
-  holds: list[str] = []
-
-  async def fake_call_text(bro, initial, history=None, hold='guided', preset_name=None):
-    holds.append(hold)
-
-  monkeypatch.setenv('CW_IN_CONTAINER', '1')
-  monkeypatch.setattr('bro.registry.get_class', lambda name: _ChatBro)
-  monkeypatch.setattr('bro.registry.create_bro', lambda name: _ChatBro())
-  monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
-  monkeypatch.setattr('bro.launch.call._tty_supported', lambda: False)
-
-  assert main(['call', 'record', 'hi', '--in-place']) is None
-  assert chat_main(['bro', 'record', 'hi', '--in-place'], program=['bro', 'chat']) is None
-  assert (
-    chat_main(
-      ['bro', 'record', 'hi', '--hold', 'unattended', '--in-place'], program=['bro', 'chat']
-    )
-    is None
-  )
-  assert holds == ['attended', 'guided', 'unattended']
-
-
-def test_aliases_name_their_own_display_presets(monkeypatch):
-  selected: list[PresetName] = []
-
-  async def fake_call_text(bro, initial, history=None, hold='guided', preset_name=PresetName.CALL):
-    selected.append(preset_name)
-
-  monkeypatch.setenv('CW_IN_CONTAINER', '1')
-  monkeypatch.setattr('bro.registry.get_class', lambda name: _ChatBro)
-  monkeypatch.setattr('bro.registry.create_bro', lambda name: _ChatBro())
-  monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
-  monkeypatch.setattr('bro.launch.call._tui_supported', lambda: False)
-
-  assert main(['call', 'record', 'hi', '--in-place']) is None
-  assert chat_main(['bro', 'record', 'hi', '--in-place'], program=['bro', 'chat']) is None
-  assert selected == [PresetName.CALL, PresetName.CHAT]
+def _chat(argv: list[str]):
+  return chat_main(argv, program=['bro', 'chat'])
 
 
 def test_bro_chat_default_builds_plain_spec(monkeypatch):
@@ -269,326 +208,81 @@ def test_bro_chat_default_builds_plain_spec(monkeypatch):
   async def fake_call_text(bro, initial, history=None, hold='guided', preset_name=None):
     built.append(bro)
 
-  monkeypatch.setenv('CW_IN_CONTAINER', '1')
   monkeypatch.setattr('bro.registry.create_bro', lambda name: _ChatBro())
   monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
-  monkeypatch.setattr('bro.launch.call._tty_supported', lambda: False)
+  monkeypatch.setattr('bro.launch.call._tui_supported', lambda: False)
 
-  # the canonical verb defaults to the plain class spec; fast is opt-in
-  rc = chat_main(['bro', 'record', 'hi', '--in-place'], program=['bro', 'chat'])
-  assert rc is None
-  assert len(built) == 1
+  assert _chat(['bro', 'record', 'hi']) is None
   spec = built[0].llm_spec
   assert isinstance(spec, llm_llms_openai.LLMSpec)
   assert spec.service_tier is None
 
 
-def test_bro_chat_fast_flag_invokes_spec_fast(monkeypatch):
+def test_bro_chat_fast_flag_is_explicit(monkeypatch):
   built: list[Bro] = []
 
   async def fake_call_text(bro, initial, history=None, hold='guided', preset_name=None):
     built.append(bro)
 
-  monkeypatch.setenv('CW_IN_CONTAINER', '1')
   monkeypatch.setattr('bro.registry.get_class', lambda name: _ChatBro)
   monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
-  monkeypatch.setattr('bro.launch.call._tty_supported', lambda: False)
+  monkeypatch.setattr('bro.launch.call._tui_supported', lambda: False)
 
-  rc = chat_main(['bro', 'record', 'hi', '--fast', '--in-place'], program=['bro', 'chat'])
-  assert rc is None
-  assert len(built) == 1
+  assert _chat(['bro', 'record', 'hi', '--fast']) is None
   spec = built[0].llm_spec
   assert isinstance(spec, llm_llms_openai.LLMSpec)
   assert spec.service_tier == 'priority'
 
 
-def test_default_falls_back_to_plain_when_no_fast_mode(monkeypatch):
-  built: list[Bro] = []
+def test_chat_starts_an_empty_repl_and_defaults_to_guided(monkeypatch):
+  captured: list[tuple[Optional[str], str, PresetName]] = []
+
+  async def fake_call_text(
+    bro,
+    initial: Optional[str],
+    history=None,
+    hold: str = 'guided',
+    preset_name: PresetName = PresetName.CHAT,
+  ):
+    captured.append((initial, hold, preset_name))
+
+  monkeypatch.setattr('bro.registry.create_bro', lambda name: _ChatBro())
+  monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
+  monkeypatch.setattr('bro.launch.call._tui_supported', lambda: False)
+
+  assert _chat(['bro', 'record']) is None
+  assert captured == [(None, 'guided', PresetName.CHAT)]
+
+
+def test_in_place_is_a_suppressed_no_op(monkeypatch):
+  called: list[str] = []
 
   async def fake_call_text(bro, initial, history=None, hold='guided', preset_name=None):
-    built.append(bro)
+    called.append(initial)
 
-  monkeypatch.setenv('CW_IN_CONTAINER', '1')
-  monkeypatch.setattr('bro.registry.get_class', lambda name: _FastlessBro)
-  monkeypatch.setattr('bro.registry.create_bro', lambda name: _FastlessBro())
+  monkeypatch.setattr('bro.registry.create_bro', lambda name: RecordBro())
   monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
-  monkeypatch.setattr('bro.launch.call._tty_supported', lambda: False)
+  monkeypatch.setattr('bro.launch.call._tui_supported', lambda: False)
 
-  # fast is implicit, so a provider with no fast mode degrades to the plain spec
-  # instead of erroring out.
-  rc = main(['call', 'fastless', 'hi', '--in-place'])
-  assert rc is None
-  assert len(built) == 1
-  assert isinstance(built[0], _FastlessBro)
+  assert _chat(['bro', 'record', 'hi', '--in-place']) is None
+  assert called == ['hi']
 
 
-def test_call_re_execs_into_container_when_outside():
-  with (
-    patch.dict('os.environ', {}, clear=False) as env,
-    patch('bro.launch.root.run_in_container', return_value=0) as run,
-    patch('bro.launch.call._tty_supported', return_value=True),
-  ):
-    env.pop('CW_IN_CONTAINER', None)
-    env.pop('BRO_SHELL_COMMAND', None)
-    rc = main(['call', 'bro-dev', 'hey'])
-    assert rc == 0
-    assert env['BRO_SHELL_COMMAND'] == 'call --llm +fast bro-dev hey'
-    assert run.call_count == 1
-    launch = run.call_args.args[0]
-    assert launch.name.startswith('call-bro-dev-')
-    # host is a tty → the TUI runs in-container, so no --text is forwarded; call
-    # implies --fast, which must ride the inner argv (the inner verb defaults plain)
-    assert launch.command == [
-      'bro',
-      'chat',
-      'bro-dev',
-      'hey',
-      '--llm',
-      '+fast',
-      '--hold',
-      'attended',
-      '--in-place',
-    ]
-    assert run.call_args.kwargs['drop'] is True
-    # bro-dev's manifest (github + brog), with recording hydrated best-effort
-    assert {'github', 'brog'} <= launch.secrets
-    assert 'trails' in launch.optional_secrets
-    # bro-dev doesn't deploy → no docker socket
-    assert launch.docker_sock is False
-
-
-def test_call_grant_replaces_a_credential_instance():
-  with (
-    patch.dict('os.environ', {}, clear=False) as environment,
-    patch('bro.launch.root.run_in_container', return_value=0) as run,
-    patch('bro.launch.call._tty_supported', return_value=True),
-  ):
-    environment.pop('CW_IN_CONTAINER', None)
-    rc = main(['call', 'bro-dev', 'hey', '--grant', 'brog+github'])
-  assert rc == 0
-  launch = run.call_args.args[0]
-  assert 'brog' not in launch.secrets
-  assert 'brog+github' in launch.secrets
-
-
-def test_call_forwards_text_when_host_not_a_tty():
-  with (
-    patch.dict('os.environ', {}, clear=False) as env,
-    patch('bro.launch.root.run_in_container', return_value=0) as run,
-    patch('bro.launch.call._tty_supported', return_value=False),
-  ):
-    env.pop('CW_IN_CONTAINER', None)
-    rc = main(['call', 'bro-dev', 'hey'])
-    assert rc == 0
-    command = run.call_args.args[0].command
-    # host can't back the TUI → force text mode inside the container (the container's
-    # PTY always reports a TTY, so the decision has to be made here on the host)
-    assert command == [
-      'bro',
-      'chat',
-      'bro-dev',
-      'hey',
-      '--text',
-      '--llm',
-      '+fast',
-      '--hold',
-      'attended',
-      '--in-place',
-    ]
-
-
-def test_call_forwards_text_when_the_ui_dependency_is_missing():
-  with (
-    patch.dict('os.environ', {}, clear=False) as environment,
-    patch('bro.launch.root.run_in_container', return_value=0) as run,
-    patch('bro.launch.call._tty_supported', return_value=True),
-    patch(
-      'bro.launch.call.importlib.util.find_spec',
-      side_effect=lambda name: object() if name == 'rich' else None,
-    ),
-  ):
-    environment.pop('CW_IN_CONTAINER', None)
-    assert main(['call', 'bro-dev', 'hey']) == 0
-  assert '--text' in run.call_args.args[0].command
-
-
-def test_call_forwards_effort_into_container():
-  with (
-    patch.dict('os.environ', {}, clear=False) as env,
-    patch('bro.launch.root.run_in_container', return_value=0) as run,
-    patch('bro.launch.call._tty_supported', return_value=True),
-  ):
-    env.pop('CW_IN_CONTAINER', None)
-    rc = main(['call', 'bro-dev', 'hey', '--effort', 'high'])
-    assert rc == 0
-    command = run.call_args.args[0].command
-    # --effort is forwarded like the implied --fast; the in-container run applies with_effort
-    assert command == [
-      'bro',
-      'chat',
-      'bro-dev',
-      'hey',
-      '--llm',
-      '::high+fast',
-      '--hold',
-      'attended',
-      '--in-place',
-    ]
-
-
-def test_effort_flag_overrides_spec_effort(monkeypatch):
-  built: list[Bro] = []
-
-  async def fake_call_text(bro, initial, history=None, hold='guided', preset_name=None):
-    built.append(bro)
-
-  monkeypatch.setenv('CW_IN_CONTAINER', '1')
-  monkeypatch.setattr('bro.registry.get_class', lambda name: _ChatBro)
-  monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
-  monkeypatch.setattr('bro.launch.call._tty_supported', lambda: False)
-
-  rc = main(['call', 'record', 'hi', '--effort', 'max', '--in-place'])
-  assert rc is None
-  assert len(built) == 1
-  spec = built[0].llm_spec
-  assert isinstance(spec, llm_llms_openai.LLMSpec)
-  assert spec.reasoning_effort == 'max'
-  assert spec.service_tier == 'priority'
-
-
-def test_effort_flag_on_effortless_provider_exits_1(monkeypatch, capsys):
-  monkeypatch.setenv('CW_IN_CONTAINER', '1')
-  monkeypatch.setattr('bro.registry.get_class', lambda name: _FastlessBro)
-  monkeypatch.setattr('bro.launch.call._tty_supported', lambda: False)
-
-  # --effort is an explicit ask — a provider without the knob errors instead of
-  # falling back the way implicit fast does.
-  rc = main(['call', 'fastless', 'hi', '--effort', 'high', '--in-place'])
-  assert rc == 1
-  assert 'does not support an effort override' in capsys.readouterr().err
-
-
-def test_call_no_trails_disables_recording_in_container():
-  with (
-    patch.dict('os.environ', {}, clear=False) as env,
-    patch('bro.launch.root.run_in_container', return_value=0) as run,
-    patch('bro.launch.call._tty_supported', return_value=True),
-  ):
-    env.pop('CW_IN_CONTAINER', None)
-    rc = main(['call', 'bro-dev', 'hey', '--no-trails'])
-    assert rc == 0
-    launch = run.call_args.args[0]
-    # the env var carries the effect in, so --no-trails isn't forwarded into the inner argv
-    assert launch.command == [
-      'bro',
-      'chat',
-      'bro-dev',
-      'hey',
-      '--llm',
-      '+fast',
-      '--hold',
-      'attended',
-      '--in-place',
-    ]
-    assert 'trails' not in launch.secrets | launch.optional_secrets
-    assert launch.env == {
-      'CW_BRO': 'bro-dev',
-      'TRAILS_DISABLED': '1',
-      **bro_git_identity_env('bro-dev'),
-    }
-
-
-def test_call_no_trails_with_in_place_is_an_error():
+@pytest.mark.parametrize(
+  'flag',
+  ['--summon', '--grant', '--revoke', '--into', '--no-trails', '--host'],
+)
+def test_runtime_flags_are_not_accepted(flag):
   with pytest.raises(SystemExit):
-    main(['call', 'bro-dev', 'hey', '--no-trails', '--in-place'])
+    _chat(['bro', 'record', 'hi', flag])
 
 
-def test_call_rejects_removed_host_flag():
-  with pytest.raises(SystemExit):
-    main(['call', 'bro-dev', 'hey', '--host'])
+def test_at_requires_fork(capsys):
+  assert _chat(['bro', 'record', 'hi', '--at', '7']) == 1
+  assert 'requires --fork' in capsys.readouterr().err
 
 
-def test_call_without_message_requires_resume(capsys):
-  rc = main(['call', 'bro-dev'])
-  assert rc == 1
-  assert 'what is required unless --resume' in capsys.readouterr().err
-
-
-def test_call_resume_with_no_trails_is_an_error():
-  with pytest.raises(SystemExit):
-    main(['call', 'bro-dev', '--resume', '--no-trails'])
-
-
-def test_call_forwards_resume_into_container():
-  with (
-    patch.dict('os.environ', {}, clear=False) as env,
-    patch('bro.launch.root.run_in_container', return_value=0) as run,
-    patch('bro.launch.call._tty_supported', return_value=True),
-  ):
-    env.pop('CW_IN_CONTAINER', None)
-    # the bare flag resolves to the 'latest' sentinel, forwarded explicitly so
-    # the in-container run resolves the trail itself
-    rc = main(['call', 'bro-dev', '--resume'])
-    assert rc == 0
-    command = run.call_args.args[0].command
-    assert command == [
-      'bro',
-      'chat',
-      'bro-dev',
-      '--resume',
-      'latest',
-      '--llm',
-      '+fast',
-      '--hold',
-      'attended',
-      '--in-place',
-    ]
-
-
-def test_call_forwards_the_at_fork_point_into_container():
-  with (
-    patch.dict('os.environ', {}, clear=False) as env,
-    patch('bro.launch.root.run_in_container', return_value=0) as run,
-    patch('bro.launch.call._tty_supported', return_value=True),
-  ):
-    env.pop('CW_IN_CONTAINER', None)
-    rc = main(['call', 'bro-dev', '--resume', 'trail-1', '--at', '7'])
-    assert rc == 0
-    command = run.call_args.args[0].command
-    assert command[command.index('--at') + 1] == '7'
-
-
-def test_call_at_without_resume_is_an_error(capsys):
-  assert main(['call', 'bro-dev', 'hi', '--at', '7']) == 1
-  assert 'requires --resume' in capsys.readouterr().err
-
-
-def test_call_forwards_resume_trail_id_with_message():
-  with (
-    patch.dict('os.environ', {}, clear=False) as env,
-    patch('bro.launch.root.run_in_container', return_value=0) as run,
-    patch('bro.launch.call._tty_supported', return_value=True),
-  ):
-    env.pop('CW_IN_CONTAINER', None)
-    rc = main(['call', 'bro-dev', 'and then?', '--resume', 'trail-id-1'])
-    assert rc == 0
-    command = run.call_args.args[0].command
-    assert command == [
-      'bro',
-      'chat',
-      'bro-dev',
-      'and then?',
-      '--resume',
-      'trail-id-1',
-      '--llm',
-      '+fast',
-      '--hold',
-      'attended',
-      '--in-place',
-    ]
-
-
-def test_call_resume_runs_the_resumed_bro(monkeypatch, capsys):
+def test_fork_runs_the_recorded_history_under_the_current_spec(monkeypatch, capsys):
   from bro.launch.resume import ResumedCall
   from bro.trails.display import RecordedSource
 
@@ -599,8 +293,8 @@ def test_call_resume_runs_the_resumed_bro(monkeypatch, capsys):
     captured['initial'] = initial
     captured['history'] = history
 
-  resumed_bro = RecordBro()
-  resumed_bro.trail_id = 'new-trail'
+  forked_bro = RecordBro()
+  forked_bro.trail_id = 'new-trail'
   history: list[DisplayRecord] = [
     UserInput(
       key='recorded:old-trail:message:1:0:0',
@@ -615,78 +309,56 @@ def test_call_resume_runs_the_resumed_bro(monkeypatch, capsys):
     captured['trail_ref'] = trail_ref
     captured['llm_spec'] = llm_spec
     captured['at'] = at
-    return ResumedCall(bro=resumed_bro, history=history, trail_id='old-trail')
+    return ResumedCall(bro=forked_bro, history=history, trail_id='old-trail')
 
-  monkeypatch.setenv('CW_IN_CONTAINER', '1')
   monkeypatch.setattr('bro.registry.get_class', lambda name: _ChatBro)
   monkeypatch.setattr('bro.launch.resume.resume', fake_resume)
   monkeypatch.setattr('bro.trails.store.default_store', lambda: MagicMock())
   monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
-  monkeypatch.setattr('bro.launch.call._tty_supported', lambda: False)
+  monkeypatch.setattr('bro.launch.call._tui_supported', lambda: False)
 
-  rc = main(['call', 'record', '--resume', '--in-place'])
-  assert rc is None
-  assert captured['trail_ref'] == 'latest'
-  # call implies fast, so the continuation runs the class spec's fast variant
-  spec = captured['llm_spec']
-  assert isinstance(spec, llm_llms_openai.LLMSpec)
-  assert spec.service_tier == 'priority'
-  assert captured['bro'] is resumed_bro
+  assert _chat(['bro', 'record', '--fork', 'trail-1', '--at', '7']) is None
+  assert captured['trail_ref'] == 'trail-1'
+  assert captured['at'] == 7
+  assert captured['llm_spec'] == _ChatBro.llm_spec
+  assert captured['bro'] is forked_bro
   assert captured['initial'] is None
   assert captured['history'] is history
-  # the exit hint points at the continuation's own trail
-  err = capsys.readouterr().err
-  assert 'call record --resume new-trail' in err
+  assert 'bro chat record --fork new-trail' in capsys.readouterr().err
 
 
-def test_call_prints_resume_hint_when_a_trail_was_recorded(monkeypatch, capsys):
-  async def fake_call_text(bro, initial, history=None, hold='guided', preset_name=None):
-    bro.trail_id = 'trail-xyz'
+def test_bare_fork_selects_the_newest_call(monkeypatch):
+  from bro.launch.resume import ResumedCall
 
-  monkeypatch.setenv('CW_IN_CONTAINER', '1')
-  monkeypatch.setattr('bro.registry.get_class', lambda name: RecordBro)
-  monkeypatch.setattr('bro.registry.create_bro', lambda name: RecordBro())
-  monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
-  monkeypatch.setattr('bro.launch.call._tty_supported', lambda: False)
+  captured: dict = {}
 
-  rc = main(['call', 'record', 'hi', '--in-place'])
-  assert rc is None
-  err = capsys.readouterr().err
-  assert 'conversation recorded as trail trail-xyz' in err
-  assert 'call record --resume trail-xyz' in err
+  def fake_resume(client, bro_name, trail_ref, *, llm_spec, at=None):
+    captured['trail_ref'] = trail_ref
+    return ResumedCall(bro=RecordBro(), history=[], trail_id='old-trail')
 
-
-def test_call_skips_resume_hint_without_a_trail(monkeypatch, capsys):
   async def fake_call_text(bro, initial, history=None, hold='guided', preset_name=None):
     pass
 
-  monkeypatch.setenv('CW_IN_CONTAINER', '1')
   monkeypatch.setattr('bro.registry.get_class', lambda name: RecordBro)
-  monkeypatch.setattr('bro.registry.create_bro', lambda name: RecordBro())
+  monkeypatch.setattr('bro.launch.resume.resume', fake_resume)
+  monkeypatch.setattr('bro.trails.store.default_store', lambda: MagicMock())
   monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
-  monkeypatch.setattr('bro.launch.call._tty_supported', lambda: False)
+  monkeypatch.setattr('bro.launch.call._tui_supported', lambda: False)
 
-  rc = main(['call', 'record', 'hi', '--in-place'])
-  assert rc is None
-  assert 'conversation recorded' not in capsys.readouterr().err
+  assert _chat(['bro', 'record', '--fork']) is None
+  assert captured['trail_ref'] == 'latest'
 
 
-def test_call_skips_container_with_in_place_flag(monkeypatch):
-  built: list[Bro] = []
-
+def test_prints_fork_hint_when_a_trail_was_recorded(monkeypatch, capsys):
   async def fake_call_text(bro, initial, history=None, hold='guided', preset_name=None):
-    built.append(bro)
+    bro.trail_id = 'trail-xyz'
 
-  monkeypatch.delenv('CW_IN_CONTAINER', raising=False)
-  monkeypatch.setattr('bro.registry.get_class', lambda name: RecordBro)
   monkeypatch.setattr('bro.registry.create_bro', lambda name: RecordBro())
   monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
-  monkeypatch.setattr('bro.launch.call._tty_supported', lambda: False)
-  with patch('bro.launch.root.run_in_container') as run:
-    rc = main(['call', 'record', 'hi', '--in-place'])
-  assert rc is None
-  assert run.call_count == 0
-  assert len(built) == 1
+  monkeypatch.setattr('bro.launch.call._tui_supported', lambda: False)
+
+  assert _chat(['bro', 'record', 'hi']) is None
+  assert 'bro chat record --fork trail-xyz' in capsys.readouterr().err
 
 
 def test_initial_slash_invocation_passes_through_verbatim(monkeypatch):
@@ -695,16 +367,11 @@ def test_initial_slash_invocation_passes_through_verbatim(monkeypatch):
   async def fake_call_text(bro, initial, history=None, hold='guided', preset_name=None):
     captured.append(initial)
 
-  monkeypatch.setenv('CW_IN_CONTAINER', '1')
-  monkeypatch.setattr('bro.registry.get_class', lambda name: RecordBro)
   monkeypatch.setattr('bro.registry.create_bro', lambda name: RecordBro())
   monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
-  monkeypatch.setattr('bro.launch.call._tty_supported', lambda: False)
+  monkeypatch.setattr('bro.launch.call._tui_supported', lambda: False)
 
-  # no client-side expansion: the bro's system prompt describes the /-syntax and
-  # the model loads the spell body through its `spell::` tool.
-  rc = main(['call', 'record', '/ask dev to ping', '--in-place'])
-  assert rc is None
+  assert _chat(['bro', 'record', '/ask dev to ping']) is None
   assert captured == ['/ask dev to ping']
 
 
@@ -1259,3 +926,47 @@ async def test_text_mode_ctrl_c_ends_the_turn_not_the_chat(capsys, monkeypatch):
   assert 'record: second reply' in out
   # and SIGINT is back to ending the chat once no turn is running
   assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
+
+
+def test_managed_continuation_uses_the_recorded_recipe_and_hold(monkeypatch):
+  from bro.launch.resume import ResumedCall
+
+  captured: dict = {}
+  resumed_bro = RecordBro()
+  recorded_spec = llm_llms_openai.LLMSpec(model='gpt-5', reasoning_effort='low')
+
+  def fake_resume(client, bro_name, trail_ref, *, llm_spec, at=None, hold='guided'):
+    captured.update(trail_ref=trail_ref, llm_spec=llm_spec, at=at, hold=hold)
+    return ResumedCall(bro=resumed_bro, history=[], trail_id=trail_ref)
+
+  async def fake_call_text(bro, initial, history=None, hold='guided', preset_name=None):
+    captured.update(bro=bro, initial=initial, history=history, chat_hold=hold)
+
+  monkeypatch.setenv('RIDE_IN_CONTAINER', '1')
+  monkeypatch.setattr('bro.launch.resume.resume', fake_resume)
+  monkeypatch.setattr('bro.trails.store.default_store', lambda: MagicMock())
+  monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
+  monkeypatch.setattr('bro.launch.call._tty_supported', lambda: False)
+
+  code = chat_main(
+    [
+      'bro',
+      'record',
+      '--continue-trail',
+      'workspace-trail',
+      '--continue-llm',
+      json.dumps(recorded_spec.dump()),
+      '--hold',
+      'attended',
+      '--in-place',
+    ],
+    program=['bro', 'chat'],
+  )
+  assert code is None
+  assert captured['trail_ref'] == 'workspace-trail'
+  assert captured['llm_spec'] == recorded_spec
+  assert captured['hold'] == 'attended'
+  assert captured['bro'] is resumed_bro
+  assert captured['initial'] is None
+  assert captured['history'] == []
+  assert captured['chat_hold'] == 'attended'

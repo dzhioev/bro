@@ -1,6 +1,6 @@
 """managed workspaces: the containerization/workspace layer under the launch surfaces.
 
-A *workspace* is `var/cw/workspaces/<name>/`: an isolated per-task copy of the
+A *workspace* is `/var/ride/<project-key>/workspaces/<name>/`: an isolated per-task copy of the
 operated repo in `tree/`, plus the records kept about it. `meta.json` says which
 kind it is — a same-machine git worktree or a docker container clone. This
 package owns the mechanics every launch surface shares: workspace creation and

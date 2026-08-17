@@ -6,8 +6,7 @@ hold?, grant?, revoke?, llm?}`
 request on the session channel, answered by the host-side handler (`bro/launch/summon_control.py`)
 with `started{trail_id}` and exactly one terminal (`completed` / `failed` /
 `reply{error}`). This module owns the request's wire contract — the type tag, the
-payload keys, the 1800s default timeout — for all its consumers: `bro run
---summon` and its bare `summon` alias, the bro service tools (`summon` /
+payload keys, the 1800s default timeout — for all its consumers: the self-contained `summon` CLI, the bro service tools (`summon` /
 `summon_check`, over the library functions `summon_and_wait`, `summon_detached`,
 `check_summon`, `collect_summon`), and the blocking CLI relay helper
 `relay_summon`.
@@ -48,15 +47,16 @@ timer, so only the backstop bounds it, and a claim that never sees a `started`
 the client receives `started`, so the re-armed bound structurally outlives the host
 backstop. The backstop normally delivers a terminal; expiry means it was lost (e.g.
 sent while the broxy was down) or the launch wedged, and the failure message names
-which phase went silent — no `started` points at the session's summon status/audit
-(`var/cw/summon/`), a lost terminal after `started` points at bro.trails.`summon list` (`list_summons`) reads the session's summon-status file
-(`CW_SUMMON_STATUS`, written host-side by `bro/launch/summon_control.py`) and reports the active
+which phase went silent — no `started` points at the session's checkout-keyed
+summon status/audit, while a lost terminal after `started` points at bro.trails.
+`summon list` (`list_summons`) reads the session's summon-status file
+(`RIDE_SUMMON_STATUS`, written host-side by `bro/launch/summon_control.py`) and reports the active
 summons and the last finished one, each with its request id — the rediscovery
 surface when a request id was lost with a dead client. `summon watch`
 (`watch_summons`) follows the same file instead of sampling it, printing a line
 as each child starts and ends: the shape a session's event-stream tool consumes,
 so a summoner learns a child landed without spending a turn to ask. A run's own effective
-allow-list travels the same way, in `CW_MAY_SUMMON`: the surface that launches a
+allow-list travels the same way, in `RIDE_MAY_SUMMON`: the surface that launches a
 run writes the list the host will authorize its summons against, and
 `may_summon` reads it back, so a target's standing is readable instead of
 discoverable by denial.
@@ -78,6 +78,15 @@ from typing import TYPE_CHECKING, Any, Optional
 import bro.base.args as base_args
 from bro import summon_status
 from bro.base import log
+from bro.launch.llm_flags import (
+  EFFORT_HELP,
+  FAST_HELP,
+  add_llm_flags,
+  canonicalize,
+  selection_from_args,
+)
+from bro.llm.mcp import HOLDS
+from bro.llm.providers import LLMSelectionError
 
 if TYPE_CHECKING:
   from bro.broker.brotocol import Message
@@ -86,10 +95,10 @@ if TYPE_CHECKING:
 __cli_name__ = 'summon'
 
 SUMMON = 'summon'  # the request's message-type tag (a consumer tag; not in broker's Tag)
-SUMMONER_ENV = 'CW_SUMMONER'
+SUMMONER_ENV = 'RIDE_SUMMONER'
 # carries a run's own effective summon allow-list into it, written by the surface
 # that launches the run: a session root's at launch, a summoned child's at its spawn
-MAY_SUMMON_ENV = 'CW_MAY_SUMMON'
+MAY_SUMMON_ENV = 'RIDE_MAY_SUMMON'
 # request-lifecycle bound for a summoned child — sized so the flagship deploy
 # workload survives the default; the substrate's generic 600s default is untouched
 DEFAULT_TIMEOUT = 1800.0
@@ -104,6 +113,13 @@ CHECK_TIMEOUT = 10.0
 # `summon check` exit code while the result is not in yet (0 = answer relayed,
 # 1 = failure, 2 = argparse usage error)
 PENDING_EXIT_CODE = 3
+HOLD_HELP = "the child's user-involvement level; omitted lets the child use its unattended default"
+GRANT_HELP = "add a credential (NAME) or summonable bro (@BRO) to the child's scope (repeatable)"
+REVOKE_HELP = (
+  "remove a credential (NAME) or summonable bro (@BRO) from the child's scope (repeatable)"
+)
+INTO_HELP = "base the child's workspace on this git ref instead of the summoner's workspace HEAD"
+DETACH_HELP = 'print the request id and exit after sending; collect it with summon check'
 
 
 def encode_may_summon(targets: Collection[str]) -> str:
@@ -245,7 +261,7 @@ def _await_answer(
       ) from None
     raise SummonError(
       f'no started and no terminal within {launch_bound:.0f}s — the child likely '
-      f'never launched; check the session summon status and audit (var/cw/summon/)'
+      'never launched; check the session summon status and checkout-keyed runtime audit'
     ) from None
   except ConnectionError as e:
     raise SummonError(f'broker channel closed awaiting the summon result: {e}') from None
@@ -429,16 +445,16 @@ def collect_summon(
 
 def list_summons() -> dict[str, Any]:
   """the session's summons as the host recorded them: `{'active': [...], 'last': …}`
-  from the status file `CW_SUMMON_STATUS` points at, each entry carrying its
+  from the status file `RIDE_SUMMON_STATUS` points at, each entry carrying its
   `request_id` — the reattach handle for `check_summon` / `collect_summon`. The
   host writes the file with the session's first summon; before that the state is
   empty. Raises `SummonError` when the environment carries no status file (only
-  cw-launched sessions track summon status)."""
+  ride-launched sessions track summon status)."""
   path = summon_status.status_path()
   if path is None:
     raise SummonError(
       f'no summon status file ({summon_status.STATUS_ENV} unset); '
-      'only cw-launched sessions track summon status'
+      'only managed ride sessions track summon status'
     )
   return asdict(summon_status.read(path))
 
@@ -453,13 +469,13 @@ def watch_summons(poll_seconds: float = _WATCH_POLL_SECONDS) -> Generator[str]:
   Reports each child starting (with the trail id to read it by) and each one
   ending. What is already in flight when the call is made is the baseline rather
   than an event, so a watch reports from where it was armed. Same status file as
-  `list_summons`, and the same requirement of a cw-launched session.
+  `list_summons`, and the same requirement of a ride-launched session.
   """
   path = summon_status.status_path()
   if path is None:
     raise SummonError(
       f'no summon status file ({summon_status.STATUS_ENV} unset); '
-      'only cw-launched sessions track summon status'
+      'only ride-launched sessions track summon status'
     )
   watched = {entry.request_id: entry for entry in summon_status.read(path).active}
   while True:
@@ -496,8 +512,7 @@ def relay_summon(
   """send one summon and relay its outcome as a CLI would: the request id and
   the started trail id to stderr, the answer to stdout, any failure as an error
   log line. Returns the exit code — the blocking `summon` CLI mode, exposed for
-  surfaces that relay a whole run through the host (`bro run --summon` and its
-  aliases)."""
+  the self-contained blocking `summon` CLI."""
   payload = _payload(
     target,
     prompt,
@@ -643,12 +658,56 @@ def main(argv: list[str]) -> Optional[int]:
       'read by a dead wait; not combinable with --wait',
     )
     return _check(**parser.parse(argv[1:]))
-  from bro.launch._cli import run_main
-
-  return run_main(
-    argv,
-    program=['summon'],
+  parser = base_args.Parser(
+    prog='summon',
     description='summon a bro over the session channel; use `summon check` to reattach '
     'to a request and `summon list` to rediscover request ids',
-    force_summon=True,
+  )
+  parser.add_argument('target', help='bro to summon')
+  parser.add_argument('prompt', help='request the summoned bro answers')
+  add_llm_flags(parser, effort_help=EFFORT_HELP, fast_help=FAST_HELP)
+  parser.add_argument('--grant', action='append', default=None, metavar='NAME', help=GRANT_HELP)
+  parser.add_argument('--revoke', action='append', default=None, metavar='NAME', help=REVOKE_HELP)
+  parser.add_argument('--into', metavar='REF', help=INTO_HELP)
+  parser.add_argument('--hold', choices=HOLDS, default=None, help=HOLD_HELP)
+  parser.add_argument(
+    '--timeout',
+    type=float,
+    metavar='SECONDS',
+    help=f'seconds before the host kills the child (default: {DEFAULT_TIMEOUT:.0f})',
+  )
+  parser.add_argument('--detach', action='store_true', help=DETACH_HELP)
+  args = parser.parse(argv)
+  try:
+    canonicalize(args, selection_from_args(args))
+  except LLMSelectionError as error:
+    log.error('%s', error)
+    return 1
+  os.environ.setdefault('BRO_SHELL_COMMAND', ' '.join(parser.reconstruct(args, prog=['summon'])))
+  if args['detach']:
+    try:
+      request_id = summon_detached(
+        args['target'],
+        args['prompt'],
+        timeout=args['timeout'],
+        into=args['into'],
+        hold=args['hold'],
+        grant=args['grant'],
+        revoke=args['revoke'],
+        llm=args['llm'],
+      )
+    except SummonError as error:
+      log.error('%s', error)
+      return 1
+    print(request_id)
+    return 0
+  return relay_summon(
+    args['target'],
+    args['prompt'],
+    timeout=args['timeout'],
+    into=args['into'],
+    hold=args['hold'],
+    grant=args['grant'],
+    revoke=args['revoke'],
+    llm=args['llm'],
   )

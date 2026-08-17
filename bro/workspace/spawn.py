@@ -2,15 +2,17 @@
 
 `DockerSpawner` unwraps a broker-free `bro.workspace.docker.Launch`, adds the
 provisioned channel socket mount and `BROKER_CHANNEL`, and runs the shared
-blocking container prepare off-loop. A TTY launch attaches with inherited stdio
-and host-log redirection; a headless launch captures merged output in a bounded
-ring and can remove its workspace after a clean exit when the workspace records
-itself throwaway — a failed or killed child's stays on disk for inspection. The
-neutral launch owns the complete docker inputs, including the explicit env
-snapshot and whether ambient forwarding is allowed.
+blocking container prepare off-loop. A TTY root attaches with inherited stdio
+and host-log redirection; a headless root inherits separate stdout and stderr;
+a headless child captures merged output in a bounded ring and can remove its
+workspace after a clean exit when the workspace records itself throwaway — a
+failed or killed child's stays on disk for inspection. The neutral launch owns
+the complete docker inputs, including the explicit env snapshot and whether
+ambient forwarding is allowed.
 
-`ProcessSpawner` runs the host-session root with inherited stdio and adds the
-provisioned host socket directly to its explicit environment.
+`ProcessSpawner` runs a host-session root with inherited stdio, adds the
+provisioned host socket directly to its explicit environment, and applies the
+interactive signal and host-log handling only to interactive launches.
 
 `CompositeSpawner` dispatches on the concrete `LaunchSpec` type, so a broker
 root of either mode can spawn children of any registered kind.
@@ -50,13 +52,14 @@ class DockerLaunchSpec(LaunchSpec):
   """broker adapter around a supervision-neutral container launch."""
 
   launch: DockerLaunch
+  capture_output: bool = True
   ring_bytes: int = DEFAULT_RING_BYTES
 
 
 @dataclass(frozen=True)
 class ProcessLaunchSpec(LaunchSpec):
-  """the concrete launch description `ProcessSpawner` reads: an interactive host
-  subprocess run in `cwd` with inherited stdio (the launcher's TTY).
+  """the concrete launch description `ProcessSpawner` reads: a host subprocess
+  run in `cwd` with inherited stdio.
 
   `env` is the child's full environment — an explicit snapshot, never a live
   `os.environ` read (the same purity rule as `DockerLaunchSpec.env`); the spawner
@@ -66,6 +69,7 @@ class ProcessLaunchSpec(LaunchSpec):
   command: list[str]
   cwd: str
   env: dict[str, str]
+  interactive: bool = True
 
 
 class _RingBuffer:
@@ -326,6 +330,43 @@ class _AttachedProcess(_AttachedHandle):
       await self._process.wait()
 
 
+class _HeadlessProcess(ChildHandle):
+  """handle for a non-interactive host root with inherited, separate streams."""
+
+  def __init__(self, process: asyncio.subprocess.Process):
+    self._process = process
+
+  async def wait(self) -> int:
+    return await self._process.wait()
+
+  async def kill(self) -> None:
+    if self._process.returncode is None:
+      self._process.kill()
+      await self._process.wait()
+
+  def output_tail(self) -> str:
+    return ''
+
+
+class _HeadlessRoot(ChildHandle):
+  """handle for a non-TTY container root with inherited, separate streams."""
+
+  def __init__(self, container_id: str, process: asyncio.subprocess.Process):
+    self._container_id = container_id
+    self._process = process
+
+  async def wait(self) -> int:
+    code = await self._process.wait()
+    await _force_remove(self._container_id)
+    return code
+
+  async def kill(self) -> None:
+    await _force_remove(self._container_id)
+
+  def output_tail(self) -> str:
+    return ''
+
+
 def _prepare_docker_spawn(
   launch: DockerLaunchSpec, channel: Provisioned
 ) -> tuple[str, Optional[Workspace]]:
@@ -352,6 +393,9 @@ class DockerSpawner(Spawner):
         'docker', 'start', '-a', '-i', DETACH_FLAG, container_id
       )
       return _AttachedRoot(container_id, process, host_log=self._host_log)
+    if not launch.capture_output:
+      process = await asyncio.create_subprocess_exec('docker', 'start', '-a', container_id)
+      return _HeadlessRoot(container_id, process)
     process = await asyncio.create_subprocess_exec(
       'docker',
       'start',
@@ -372,7 +416,9 @@ class ProcessSpawner(Spawner):
     env = dict(launch.env)
     env['BROKER_CHANNEL'] = f'unix:{channel.host_endpoint}'
     process = await asyncio.create_subprocess_exec(*launch.command, cwd=launch.cwd, env=env)
-    return _AttachedProcess(process, self._host_log)
+    if launch.interactive:
+      return _AttachedProcess(process, self._host_log)
+    return _HeadlessProcess(process)
 
 
 class CompositeSpawner(Spawner):

@@ -8,7 +8,7 @@ from bro.monitor import health, trail_pointer
 from bro.workspace import paths
 
 # six-line block-letter "B R O" rendered with box-drawing characters;
-# shown on top of the `cw banner` output when the session carries a bro (CW_BRO).
+# shown on top of the `ride banner` output when the session carries a bro (RIDE_BRO).
 _BRO_LOGO = """\
 ██████╗   ██████╗    ██████╗
 ██╔══██╗  ██╔══██╗  ██╔═══██╗
@@ -19,9 +19,9 @@ _BRO_LOGO = """\
 """
 
 # tokens after which the rest of an unquoted launch command is the user-typed
-# prompt — `dive-in --new <seed>`, `cw ss -p <prompt>`, `cw ss ... -- <prompt>`.
+# prompt — `dive-in --new <seed>` or a mode command whose prompt follows `--`.
 # rfind so the *last* marker wins if more than one is present.
-_PROMPT_MARKERS = (' --new ', ' --prompt ', ' -p ', ' -- ')
+_PROMPT_MARKERS = (' --new ',)
 
 
 def _split_launch_prompt(command: str) -> tuple[str, Optional[str]]:
@@ -44,21 +44,21 @@ def _split_launch_prompt(command: str) -> tuple[str, Optional[str]]:
 
 @dataclass(frozen=True)
 class SessionFacts:
-  """the session facts `cw banner` renders, collected from env + /.dockerenv.
+  """the session facts `ride banner` renders, collected from env + /.dockerenv.
 
   The fields are the documentation — what each renderer may show:
     - in_container — /.dockerenv presence
-    - name — workspace name (CW_NAME)
-    - bro — the bro the session runs as (CW_BRO)
+    - name — workspace name (RIDE_WORKSPACE)
+    - bro — the bro the session runs as (RIDE_BRO)
     - host_workspace — host-side path to the workspace dir
     - container_workspace — '/workspace' in a managed container session, else None
-    - exec_command — `cw exec <name>` for container sessions
-    - cw_command — the canonical `cw ss …` invocation (CW_COMMAND)
+    - exec_command — `ride exec <name>` for container sessions
+    - ride_command — the canonical `ride solo|along …` invocation (RIDE_COMMAND)
     - shell_command — the outer launch command (BRO_SHELL_COMMAND). For wrappers
-      like dive-in this differs from cw_command; for direct `cw ss` use the two
+      like dive-in this differs from ride_command; for direct `ride` use the two
       are equal and the banner suppresses the duplicate
-    - prompt — the user-typed prompt extracted from shell_command when a
-      `--new`/`-p`/`--prompt`/`--` marker is found; shell_command is shown with
+    - prompt — the user-typed prompt extracted from shell_command when the
+      dive-in `--new` marker is found; shell_command is shown with
       the prompt portion replaced by a placeholder in this case
     - recording_problem — set when the session-recorder health file reports a
       failing or a stopped recorder, so the banner can warn that the transcript
@@ -76,7 +76,7 @@ class SessionFacts:
   host_workspace: Optional[str]
   container_workspace: Optional[str]
   exec_command: Optional[str]
-  cw_command: Optional[str]
+  ride_command: Optional[str]
   shell_command: Optional[str]
   prompt: Optional[str]
   recording_problem: Optional[str]
@@ -87,20 +87,20 @@ class SessionFacts:
   def collect(
     cls, bro_override: Optional[str] = None, trail_id_override: Optional[str] = None
   ) -> 'SessionFacts':
-    """collect session facts from env + session-local state for `cw banner`.
+    """collect session facts from env + session-local state for `ride banner`.
 
     read-only; never raises. bro_override forces the `bro` fact regardless of
-    `CW_BRO` — for in-process callers that know the bro they run: an in-process
+    `RIDE_BRO` — for in-process callers that know the bro they run: an in-process
     run (e.g. `bro run <bro> --in-place`) reads the launching environment, whose
-    `CW_BRO` is the launcher's own persona or absent. trail_id_override likewise
+    `RIDE_BRO` is the launcher's own persona or absent. trail_id_override likewise
     carries an in-process run's own trail, which no session recorder publishes.
     """
     in_container = paths.in_container()
-    name = os.environ.get('CW_NAME') or None
-    bro = bro_override if bro_override is not None else (os.environ.get('CW_BRO') or None)
-    cw_command = os.environ.get('CW_COMMAND') or None
-    shell_command = os.environ.get('BRO_SHELL_COMMAND') or cw_command
-    host_workspace: Optional[str] = os.environ.get('CW_HOST_WORKSPACE') or None
+    name = os.environ.get('RIDE_WORKSPACE') or None
+    bro = bro_override if bro_override is not None else (os.environ.get('RIDE_BRO') or None)
+    ride_command = os.environ.get('RIDE_COMMAND') or None
+    shell_command = os.environ.get('BRO_SHELL_COMMAND') or ride_command
+    host_workspace: Optional[str] = os.environ.get('RIDE_HOST_WORKSPACE') or None
     container_workspace: Optional[str] = '/workspace' if in_container and name is not None else None
 
     if not in_container and host_workspace is None and name is not None:
@@ -114,7 +114,7 @@ class SessionFacts:
         if candidate.is_dir():
           host_workspace = str(candidate)
 
-    exec_command = f'cw exec {name}' if in_container and name is not None else None
+    exec_command = f'ride exec {name}' if in_container and name is not None else None
 
     prompt: Optional[str] = None
     if shell_command is not None:
@@ -131,7 +131,7 @@ class SessionFacts:
       host_workspace=host_workspace,
       container_workspace=container_workspace,
       exec_command=exec_command,
-      cw_command=cw_command,
+      ride_command=ride_command,
       shell_command=shell_command,
       prompt=prompt,
       recording_problem=health.problem(),
@@ -154,7 +154,7 @@ class SessionFacts:
     lines: list[str] = []
     if self.recording_problem is not None:
       # most prominent slot — above the logo, red+bold so broken recording is
-      # the first thing the eye lands on in a `cw exec` shell
+      # the first thing the eye lands on in a `ride exec` shell
       lines.append(f'{red}{bold}⚠ session recording {self.recording_problem}{reset}')
       lines.append('')
     if self.bro is not None:
@@ -168,14 +168,14 @@ class SessionFacts:
     # collect rows as (label, label_style, value) — label_style is applied to
     # the padded label so width math runs on the raw text, not on ANSI bytes
     rows: list[tuple[str, str, str]] = [
-      ('cw session:', '', f'{bold}{self.display_name}{reset}'),
+      ('ride session:', '', f'{bold}{self.display_name}{reset}'),
     ]
 
-    # `cw command` is the canonical `cw ss …` invocation; suppress when it's
-    # the same string as `launched` (direct `cw ss` use) so we don't show the
+    # `ride command` is the canonical `ride solo|along …` invocation; suppress when it's
+    # the same string as `launched` (direct `ride` use) so we don't show the
     # same text twice
-    if self.cw_command is not None and self.cw_command != self.shell_command:
-      rows.append(('cw command:', '', f'{dim}{self.cw_command}{reset}'))
+    if self.ride_command is not None and self.ride_command != self.shell_command:
+      rows.append(('ride command:', '', f'{dim}{self.ride_command}{reset}'))
 
     if self.in_container:
       # /workspace inside, host bind-mount path below — both are useful and
@@ -192,7 +192,7 @@ class SessionFacts:
       rows.append(('workspace:', '', f'{red}{self.host_workspace}{reset}'))
     else:
       rows.append(
-        ('workspace:', '', f'{dim}(unknown — no CW_NAME / not a registered worktree){reset}')
+        ('workspace:', '', f'{dim}(unknown — no RIDE_WORKSPACE / not a registered worktree){reset}')
       )
 
     if self.exec_command is not None:
@@ -240,8 +240,8 @@ class SessionFacts:
       ('container_workspace', 'workspace_container_path'),
       ('exec_command', 'docker_shell_command'),
     ]
-    if self.cw_command is not None:
-      pairs.append(('cw_command', 'cw_command'))
+    if self.ride_command is not None:
+      pairs.append(('ride_command', 'ride_command'))
     for attribute, label in pairs:
       value = getattr(self, attribute)
       if value is not None:
@@ -263,7 +263,7 @@ def render_banner(
   default; --llm for plain key:value text. exposed so in-process callers (e.g.
   `call`'s opening bro message, the `bro::banner` service tool) can render
   without a shell-out. bro overrides the `bro` fact — an in-process run's
-  environment carries the launcher's `CW_BRO` (or none), not the running
+  environment carries the launcher's `RIDE_BRO` (or none), not the running
   bro's; None falls back to the env. trail_id overrides the recorded-trail fact
   the same way, for a run recording a trail of its own."""
   facts = SessionFacts.collect(bro_override=bro, trail_id_override=trail_id)

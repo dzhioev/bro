@@ -41,7 +41,7 @@ class BroDev(Dev):
     man('environment'),
     man('template'),
     man('conditions'),
-    man('cw'),
+    man('ride'),
     man('dive-in'),
   ]
   system_prompt = SYSTEM_PROMPT

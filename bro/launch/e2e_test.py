@@ -6,7 +6,7 @@ daemon; skipped inside a container, and on macOS, where container sessions are
 pinned to the broker-less path — see `_container_broker_enabled`) and, like
 every live integration test, run separately from the default suite:
 
-  pytest cw/e2e_test.py [-k <scenario>]
+  pytest ride/e2e_test.py [-k <scenario>]
 
 The matrix: A — broker-enabled default launch (socket provisioning, the
 entrypoint-owned broxy on the channel, ping round-trip through it); B — child
@@ -15,11 +15,11 @@ routing, early exit, timeout, teardown, channel-pinned identity); C — the
 `BROKER_DISABLED` kill-switch; D — degrade when broker is unimportable in the
 launcher; E — SIGINT handling through the attached root; F — the in-place
 session runner as the container command (exit-code propagation, in-container
-argv build: merged --settings, MCP namespaces, CW_SESSION_CONTEXT);
+argv build: merged --settings, MCP namespaces, RIDE_SESSION_CONTEXT);
 G — SIGTERM forwarding, so `docker stop` lands in claude.
 
 Isolation: every launch runs under a throwaway HOME and project root, so no
-scenario touches the real `~/.claude/cw-sessions` or the repo's `var/cw`. The
+scenario touches the real `~/.claude/ride-sessions` or `/var/ride` runtime root. The
 project root is a local git clone of this checkout — its `pyproject.toml` /
 `uv.lock` are byte-identical, so `_image_tag()` resolves to the already-built
 image, and the container's baked venv serves this branch's committed
@@ -87,7 +87,7 @@ pytestmark = [
 
 # names of everything this harness creates, so the final real-HOME assertion can
 # discriminate its own residue from concurrent real sessions on the same host
-_NAME_PREFIX = 'cw-e2e-'
+_NAME_PREFIX = 'ride-e2e-'
 _LEAK_PREFIXES = ('broker-', _NAME_PREFIX)
 
 
@@ -122,11 +122,11 @@ assert client is not None
 try:
   reply = client.request('ping', {'n': 1}, timeout=15)
 except TimeoutError:
-  print('CW_E2E_PING_TIMEOUT', flush=True)
+  print('RIDE_E2E_PING_TIMEOUT', flush=True)
   sys.exit(8)
 assert reply.type == 'reply', reply.type
 assert reply.payload == {'pong': {'n': 1}}, reply.payload
-print('CW_E2E_PING_OK', flush=True)
+print('RIDE_E2E_PING_OK', flush=True)
 """
 
 # scenario B root: ping (with a forged identity claim in the payload), then spawn a
@@ -141,8 +141,8 @@ def main():
   from bro.broker.brotocol import Message
   from bro.broker.transport import connect
 
-  deadline = float(os.environ['CW_E2E_DEADLINE'])
-  exit_after = os.environ['CW_E2E_EXIT_AFTER']
+  deadline = float(os.environ['RIDE_E2E_DEADLINE'])
+  exit_after = os.environ['RIDE_E2E_EXIT_AFTER']
   transport = connect(os.environ['BROKER_CHANNEL'])
   ping = Message(type='ping', payload={'n': 1, 'from': 'forged-peer-identity'})
   transport.send(ping)
@@ -223,7 +223,7 @@ assert BroChannel.from_env() is None
 inert = subprocess.run(['broker', 'send', 'ping', '{}'], capture_output=True, text=True)
 assert inert.returncode == 0, (inert.returncode, inert.stderr)
 assert 'message not sent' in inert.stderr, inert.stderr
-print('CW_E2E_NO_CHANNEL_OK', flush=True)
+print('RIDE_E2E_NO_CHANNEL_OK', flush=True)
 """
 
 # scenario E root: catch SIGINT (delivered only via the container tty), else linger
@@ -232,7 +232,7 @@ import signal, sys, time
 from pathlib import Path
 
 def _handle(signum, frame):
-  print('CW_E2E_SIGINT_CAUGHT', flush=True)
+  print('RIDE_E2E_SIGINT_CAUGHT', flush=True)
   sys.exit(0)
 
 signal.signal(signal.SIGINT, _handle)
@@ -244,9 +244,9 @@ sys.exit(5)
 # scenarios F/G: a wrapper the entrypoint execs in place of the session command.
 # it drops a fake `claude` onto PATH — the in-place runner resolves it instead of
 # the image's real one — then execs the runner itself ("$@", the same
-# `cw ss --in-place …` invocation `_container_session` sends). the fake records
+# `ride solo|along --in-place …` invocation `_container_session` sends). the fake records
 # its argv/env to the report file, proving the argv was built in-container by the
-# workspace's own code; under CW_E2E_LINGER it traps SIGTERM (exit 7) so the
+# workspace's own code; under RIDE_E2E_LINGER it traps SIGTERM (exit 7) so the
 # harness can assert `docker stop` reaches claude through tini → runner.
 _INPLACE_WRAPPER = """
 mkdir -p /tmp/e2e-bin
@@ -257,13 +257,13 @@ from pathlib import Path
 
 report = {
   'argv': sys.argv[1:],
-  'session_context_set': os.environ.get('CW_SESSION_CONTEXT') is not None,
+  'session_context_set': os.environ.get('RIDE_SESSION_CONTEXT') is not None,
 }
 argv = sys.argv[1:]
 if '--settings' in argv:
   report['settings'] = json.loads(argv[argv.index('--settings') + 1])
 Path('/workspace/.e2e-report.json').write_text(json.dumps(report))
-if os.environ.get('CW_E2E_LINGER') == '1':
+if os.environ.get('RIDE_E2E_LINGER') == '1':
   signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(7))
   Path('/workspace/.e2e-ready').touch()
   time.sleep(90)
@@ -276,20 +276,24 @@ exec "$@"
 """
 
 # the launcher driver: one subprocess per live-path scenario, running the exact
-# `cw ss` seam (`run_in_container`) under the isolated HOME/project root
+# `ride solo|along` seam (`run_in_container`) under the isolated HOME/project root
 _DRIVER = """
 import json, os, sys
+from pathlib import Path
+import bro.workspace.paths as workspace_paths
+
+workspace_paths.RUNTIME_BASE = Path(os.environ['RIDE_E2E_RUNTIME_BASE'])
 from bro.launch.root import run_in_container
 from bro.workspace.docker import Launch
 
-launch = Launch(name=os.environ['CW_E2E_NAME'],
-                command=json.loads(os.environ['CW_E2E_COMMAND']), env={},
-                secrets=tuple(json.loads(os.environ.get('CW_E2E_SECRETS', '[]'))),
+launch = Launch(name=os.environ['RIDE_E2E_NAME'],
+                command=json.loads(os.environ['RIDE_E2E_COMMAND']), env={},
+                secrets=tuple(json.loads(os.environ.get('RIDE_E2E_SECRETS', '[]'))),
                 docker_sock=True, tty=True, forward_env=True)
 code = run_in_container(launch)
 loaded = sorted(m for m in sys.modules if m == 'broker' or m.startswith('bro.broker.'))
-print(f'CW_E2E_EXIT:{code}', flush=True)
-print('CW_E2E_BROKER_MODULES:' + json.dumps(loaded), flush=True)
+print(f'RIDE_E2E_EXIT:{code}', flush=True)
+print('RIDE_E2E_BROKER_MODULES:' + json.dumps(loaded), flush=True)
 sys.exit(code)
 """
 
@@ -302,23 +306,24 @@ class IsolatedEnv:
   root: Path
   project: Path
   home: Path
-  real_cw_sessions: Path
+  runtime_root: Path
+  real_ride_sessions: Path
   real_residue_before: list[str]
 
   @property
   def broker_dir(self) -> Path:
-    return self.project / 'var' / 'cw' / 'broker'
+    return self.runtime_root / 'broker'
 
   @property
   def workspaces_dir(self) -> Path:
-    return workspace_paths.workspaces_dir(self.project)
+    return self.runtime_root / 'workspaces'
 
   def tree(self, name: str) -> Path:
-    return workspace_paths.workspace_tree(self.project, name)
+    return self.workspaces_dir / name / 'tree'
 
   @property
-  def cw_sessions(self) -> Path:
-    return self.home / '.claude' / 'cw-sessions'
+  def ride_sessions(self) -> Path:
+    return self.home / '.claude' / 'ride-sessions'
 
   def sockets(self) -> list[Path]:
     if not self.broker_dir.is_dir():
@@ -340,10 +345,10 @@ class IsolatedEnv:
     return sorted(p.name for p in parent.iterdir() if p.name.startswith('broker-'))
 
 
-def _leak_residue(cw_sessions: Path) -> list[str]:
-  if not cw_sessions.is_dir():
+def _leak_residue(ride_sessions: Path) -> list[str]:
+  if not ride_sessions.is_dir():
     return []
-  return sorted(p.name for p in cw_sessions.iterdir() if p.name.startswith(_LEAK_PREFIXES))
+  return sorted(p.name for p in ride_sessions.iterdir() if p.name.startswith(_LEAK_PREFIXES))
 
 
 def _remove_stray_containers(env: 'IsolatedEnv') -> None:
@@ -357,8 +362,8 @@ def _remove_stray_containers(env: 'IsolatedEnv') -> None:
 
 @pytest.fixture(scope='module')
 def isolated_env() -> Iterator[IsolatedEnv]:
-  real_cw_sessions = Path(os.environ['HOME']) / '.claude' / 'cw-sessions'
-  residue_before = _leak_residue(real_cw_sessions)
+  real_ride_sessions = Path(os.environ['HOME']) / '.claude' / 'ride-sessions'
+  residue_before = _leak_residue(real_ride_sessions)
   # short prefix directly under the system temp dir: the socket path must fit sun_path
   root = Path(tempfile.mkdtemp(prefix=_NAME_PREFIX))
   checkout = Path(
@@ -371,9 +376,12 @@ def isolated_env() -> Iterator[IsolatedEnv]:
   )
   project = root / 'project'
   subprocess.run(['git', 'clone', '--quiet', str(checkout), str(project)], check=True)
+  runtime_base = root / 'state'
+  runtime_root = runtime_base / workspace_paths.project_key(project)
+  runtime_root.mkdir(parents=True)
   home = root / 'home'
   home.mkdir()
-  # scenarios that exec the real runner hydrate `brog` (CW_E2E_SECRETS): the
+  # scenarios that exec the real runner hydrate `brog` (RIDE_E2E_SECRETS): the
   # session MCP server builds brog's backend from that secret at assembly, so
   # the health gate needs the stub a real session's scoped store would carry.
   # construction is offline — nothing contacts GitHub
@@ -389,10 +397,10 @@ def isolated_env() -> Iterator[IsolatedEnv]:
     )
   )
   (home / '.claude.json').write_text(
-    json.dumps({'oauthAccount': {'emailAddress': 'e2e@invalid'}, 'userID': 'cw-e2e'})
+    json.dumps({'oauthAccount': {'emailAddress': 'e2e@invalid'}, 'userID': 'ride-e2e'})
   )
   (home / '.gitconfig').write_text(
-    '[user]\n\tname = cw e2e\n\temail = e2e@invalid\n[init]\n\tdefaultBranch = master\n'
+    '[user]\n\tname = ride e2e\n\temail = e2e@invalid\n[init]\n\tdefaultBranch = master\n'
   )
   # the clone's pyproject/uv.lock are identical to the checkout's, so this resolves to
   # the image real sessions already built; builds only on a host that never launched one
@@ -403,7 +411,8 @@ def isolated_env() -> Iterator[IsolatedEnv]:
     root=root,
     project=project,
     home=home,
-    real_cw_sessions=real_cw_sessions,
+    runtime_root=runtime_root,
+    real_ride_sessions=real_ride_sessions,
     real_residue_before=residue_before,
   )
   yield env
@@ -443,10 +452,11 @@ class _Driver:
   """the launcher subprocess under a pty (an attached session owns the terminal)."""
 
   def __init__(self, env: IsolatedEnv, name: str, command: list[str], extra_env: dict[str, str]):
-    driver_env = {k: v for k, v in os.environ.items() if not k.startswith(('CW_', 'BROKER_'))}
+    driver_env = {k: v for k, v in os.environ.items() if not k.startswith(('RIDE_', 'BROKER_'))}
     driver_env['HOME'] = str(env.home)
-    driver_env['CW_E2E_NAME'] = name
-    driver_env['CW_E2E_COMMAND'] = json.dumps(command)
+    driver_env['RIDE_E2E_NAME'] = name
+    driver_env['RIDE_E2E_COMMAND'] = json.dumps(command)
+    driver_env['RIDE_E2E_RUNTIME_BASE'] = str(env.runtime_root.parent)
     driver_env.update(extra_env)
     master, slave = pty.openpty()
     self._master = master
@@ -518,11 +528,11 @@ class LiveRun:
 
   @property
   def reported_exit(self) -> Optional[str]:
-    return _marker(self.output, 'CW_E2E_EXIT')
+    return _marker(self.output, 'RIDE_E2E_EXIT')
 
   @property
   def broker_modules(self) -> Optional[list[str]]:
-    raw = _marker(self.output, 'CW_E2E_BROKER_MODULES')
+    raw = _marker(self.output, 'RIDE_E2E_BROKER_MODULES')
     if raw is None:
       return None
     return json.loads(raw)
@@ -598,7 +608,7 @@ class TestBrokerEnabledLaunch:
     assert scenario_a.container_gone_after, 'session container survived the root exit'
 
   def test_ping_round_trip_over_live_channel(self, scenario_a: LiveRun) -> None:
-    assert 'CW_E2E_PING_OK' in scenario_a.output and scenario_a.exit_code == 0, (
+    assert 'RIDE_E2E_PING_OK' in scenario_a.output and scenario_a.exit_code == 0, (
       f'a ping over the live launch path got no correlated reply — the launch-path broker '
       f'refuses typed requests (driver exit {scenario_a.exit_code})\n{scenario_a.output}'
     )
@@ -638,7 +648,7 @@ def _run_broker_scenario(
     workspace_docker.Launch(
       name=name,
       command=['python', '-c', _PROBE_B_ROOT],
-      env={'CW_E2E_DEADLINE': str(probe_deadline), 'CW_E2E_EXIT_AFTER': exit_after},
+      env={'RIDE_E2E_DEADLINE': str(probe_deadline), 'RIDE_E2E_EXIT_AFTER': exit_after},
       secrets=(),
       docker_sock=False,
       tty=False,
@@ -701,7 +711,7 @@ def _run_broker_scenario(
     sockets_after=env.sockets(),
     live_after=env.live_containers(),
     workspace_leaks=env.leaked_dirs(env.workspaces_dir),
-    session_leaks=env.leaked_dirs(env.cw_sessions),
+    session_leaks=env.leaked_dirs(env.ride_sessions),
   )
 
 
@@ -780,8 +790,8 @@ class TestChildLifecycle:
   def test_no_workspace_dirs_leaked_after_parent_exit(self, b_clean: BrokerRun) -> None:
     assert b_clean.workspace_leaks == [] and b_clean.session_leaks == [], (
       f'spawned child left workspace state behind after the parent exited: '
-      f'var/cw/containers {b_clean.workspace_leaks}, '
-      f'~/.claude/cw-sessions {b_clean.session_leaks}'
+      f'/var/ride workspaces {b_clean.workspace_leaks}, '
+      f'~/.claude/ride-sessions {b_clean.session_leaks}'
     )
 
   def test_early_exit_child_synthesizes_failed(self, b_early_exit: BrokerRun) -> None:
@@ -844,7 +854,7 @@ def scenario_c(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> Liv
 class TestKillSwitch:
   def test_session_launches_cleanly_without_broker(self, scenario_c: LiveRun) -> None:
     assert scenario_c.exit_code == 0, scenario_c.output
-    assert 'CW_E2E_NO_CHANNEL_OK' in scenario_c.output
+    assert 'RIDE_E2E_NO_CHANNEL_OK' in scenario_c.output
 
   def test_short_circuits_before_any_broker_import(self, scenario_c: LiveRun) -> None:
     assert scenario_c.broker_modules == []
@@ -903,7 +913,7 @@ class TestBrokerUnimportable:
   def test_degrades_to_direct_launch_with_warning(self, scenario_d: LiveRun) -> None:
     assert scenario_d.exit_code == 0, scenario_d.output
     assert 'broker package not importable' in scenario_d.output
-    assert 'CW_E2E_NO_CHANNEL_OK' in scenario_d.output
+    assert 'RIDE_E2E_NO_CHANNEL_OK' in scenario_d.output
     assert scenario_d.broker_modules == []
 
   def test_no_socket_provisioned(self, scenario_d: LiveRun) -> None:
@@ -947,7 +957,7 @@ def scenario_e_targeted(isolated_env: IsolatedEnv, request: pytest.FixtureReques
 
 class TestSigintHandling:
   def test_terminal_ctrl_c_clean_teardown(self, scenario_e_ctrl_c: LiveRun) -> None:
-    assert 'CW_E2E_SIGINT_CAUGHT' in scenario_e_ctrl_c.output
+    assert 'RIDE_E2E_SIGINT_CAUGHT' in scenario_e_ctrl_c.output
     assert scenario_e_ctrl_c.exit_code == 0, scenario_e_ctrl_c.output
     assert 'Traceback' not in scenario_e_ctrl_c.output
     assert scenario_e_ctrl_c.sockets_after == []
@@ -969,7 +979,7 @@ class TestSigintHandling:
 
 
 def _inplace_command(*inner: str) -> list[str]:
-  return ['bash', '-ec', _INPLACE_WRAPPER, 'cw-e2e-wrapper', *inner]
+  return ['bash', '-ec', _INPLACE_WRAPPER, 'ride-e2e-wrapper', *inner]
 
 
 def _report(env: IsolatedEnv, name: str) -> dict:
@@ -982,13 +992,13 @@ def _report(env: IsolatedEnv, name: str) -> dict:
 def scenario_f(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> LiveRun:
   env = isolated_env
   name = f'{_NAME_PREFIX}f-root'
-  # CW_BRO is set explicitly in the container env, as every launch surface does
-  # for a persona-themed cw-session; the runner adapts that bro's spells
+  # RIDE_BRO is set explicitly in the container env, as every launch surface does
+  # for a persona-themed ride-session; the runner adapts that bro's spells
   driver = _Driver(
     env,
     name,
-    _inplace_command('cw', 'ss', '--in-place', '--fast', name),
-    extra_env={'CW_BRO': 'bro-dev', 'CW_E2E_SECRETS': '["brog"]'},
+    _inplace_command('ride', 'ss', '--in-place', '--fast', name),
+    extra_env={'RIDE_BRO': 'bro-dev', 'RIDE_E2E_SECRETS': '["brog"]'},
   )
   request.addfinalizer(driver.close)
   run = LiveRun(exit_code=driver.wait(300), output=driver.output())
@@ -1028,8 +1038,8 @@ def scenario_g(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> Liv
   driver = _Driver(
     env,
     name,
-    _inplace_command('env', 'CW_E2E_LINGER=1', 'cw', 'ss', '--in-place', name),
-    extra_env={'CW_E2E_SECRETS': '["brog"]'},
+    _inplace_command('env', 'RIDE_E2E_LINGER=1', 'ride', 'ss', '--in-place', name),
+    extra_env={'RIDE_E2E_SECRETS': '["brog"]'},
   )
   request.addfinalizer(driver.close)
   _wait_ready(env, name, driver)
@@ -1056,5 +1066,5 @@ class TestDockerStopReachesClaude:
 # --- the harness itself must not touch the real HOME --------------------------
 
 
-def test_real_home_cw_sessions_untouched(isolated_env: IsolatedEnv) -> None:
-  assert _leak_residue(isolated_env.real_cw_sessions) == isolated_env.real_residue_before
+def test_real_home_ride_sessions_untouched(isolated_env: IsolatedEnv) -> None:
+  assert _leak_residue(isolated_env.real_ride_sessions) == isolated_env.real_residue_before

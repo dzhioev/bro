@@ -1,7 +1,7 @@
 ---
 name: ask
 description: This spell should be used when the user asks to relay a question or job to another bro — "[[ask researcher to compare the storage options]]", "ask the reviewer whether the change is safe", "have deployer roll out the API", "summon developer". Turns the phrasing into a summon (an isolated one-shot run of the target bro with its own credentials), picks whichever summon client the session has, decides foreground vs background, and relays the answer with the failure modes handled. A summon succeeds only when the target is in the summoner's allow-list — the session reads its own off the banner, fixed at launch — so a denial stays a normal outcome the spell relays.
-version: 1.8.0
+version: 1.9.0
 ---
 
 # Ask
@@ -25,7 +25,7 @@ Exception — set the timeout unprompted when the child's run is open-ended: a f
 
 Prefer Bash where the session has it: its background run ends in a harness completion notification that wakes you, while a detached tool summon has no wake-up at all and leaves the session dark until someone prompts it. The mechanism is the same either way:
 
-- **Bash available** (a cw-session): `bro run --summon <target> '<prompt>'` (`--timeout <s>`, `--into <ref>`, `--hold <level>`, `--grant <name>`, `--revoke <name>`, `--llm <recipe>`); bare `summon <target> '<prompt>'` is the thin alias. It prints the request id and the started trail id to stderr, then blocks until the answer lands on stdout; non-zero exit + stderr on failure.
+- **Bash available** (a managed Claude session): `summon <target> '<prompt>'` (`--timeout <s>`, `--into <ref>`, `--hold <level>`, `--grant <name>`, `--revoke <name>`, `--llm <recipe>`). It prints the request id and the started trail id to stderr, then blocks until the answer lands on stdout; non-zero exit + stderr on failure.
 - **No Bash, the `summon` tools present** (`bro::summon` / `bro::summon_check` — the `--raw` claude session case): call `summon` with `target` and `prompt` (optional `timeout`, `into`, `hold`, `grant`, `revoke`, `llm`). It blocks and returns the answer; failures come back as the tool error with the reason. `detach: true` returns the request id right away instead; `summon_check(request_id)` peeks non-blockingly (`{state: pending|completed, …}`) and `summon_check(request_id, wait: true)` blocks and collects.
 - **Neither** — this session can't summon; say so instead of improvising.
 
@@ -45,7 +45,7 @@ The stdout / tool result is the target's terminal reply. Relay it to the user, a
 
 ## Failure modes
 
-- **Denied** — the target isn't in the summoner's allow-list, a scope override was malformed, a no-op, or beyond what the summoner holds, or the summon would nest past the depth cap. Immediate, no child spawned; the error names the reason. For the session itself the list is fixed at launch: the fix is relaunching with `--grant @<target>` (on `cw ss` / `dive-in` / `bro run` / `bro chat` or their aliases) — tell the user that; nothing in-session can widen it. A summoned bro starts from its own static `may_summon` seeds, so its onward denials are fixed at the summon that spawned it (grant `@<name>` there) or by seeding the bro in code.
+- **Denied** — the target isn't in the summoner's allow-list, a scope override was malformed, a no-op, or beyond what the summoner holds, or the summon would nest past the depth cap. Immediate, no child spawned; the error names the reason. For the session itself the list is fixed at launch: the fix is relaunching `ride solo|along` (or `ask` / `call` / `dive-in`) with `--grant @<target>` — tell the user that; nothing in-session can widen it. A summoned bro starts from its own static `may_summon` seeds, so its onward denials are fixed at the summon that spawned it (grant `@<name>` there) or by seeding the bro in code.
 - **Raised / error** — the target ran but couldn't fulfill the request; the reason is the failure text. Relay it — rephrasing the prompt or picking another target is a user decision.
 - **Failed (launch / exit / timeout)** — the child never started, died, or was killed at the timeout. The message carries the reason and a trails hint; `rewind show <trail-id>` has the full trace.
 - **Wait expired with no terminal** — the result was lost or the child is still running; the error says which trail to inspect. A killed or detached wait is recoverable: `summon check <request-id>` polls, `summon check --wait <request-id>` collects the buffered result (the `summon_check` tool does the same for tool-only sessions).

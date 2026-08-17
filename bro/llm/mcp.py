@@ -361,7 +361,7 @@ class MCPServerSpec:
 
   the declaration/runtime split: a spec is pure metadata — hosts read
   `needed_secrets` / `optional_secrets` from it before any credential exists
-  (a bro's manifest, cw's container scoping) — while `build()` produces the
+  (a bro's manifest, ride's container scoping) — while `build()` produces the
   live server and runs only in a serving process, so a server's constructor
   is free to hold real resources.
   """

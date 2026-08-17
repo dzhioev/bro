@@ -1,9 +1,15 @@
+import hashlib
 import os
 import secrets
 from pathlib import Path
 from typing import Optional
 
 from bro.workspace.git import git_run
+
+RUNTIME_BASE = Path('/var/ride')
+CONTAINER_TRAILS_ROOT = Path('/var/ride/trails')
+CONTAINER_SUMMON_ROOT = Path('/var/ride/summon')
+_PROJECT_KEY_BYTES = 8
 
 
 def venv_env(venv: Path) -> dict[str, str]:
@@ -13,34 +19,65 @@ def venv_env(venv: Path) -> dict[str, str]:
   return env
 
 
-def find_project_root() -> Optional[Path]:
-  """the repo whose workspaces, broker and summon state the caller shares, or
-  None where nothing names one — no git on PATH, or no repository around the
-  working directory. `project_root` is the form for callers that require one.
+def find_project_root(directory: Optional[Path] = None) -> Optional[Path]:
+  """the repo whose runtime state `directory` shares, or None where nothing names
+  one — no git on PATH, or no repository around it. The working directory is the
+  default.
 
   resolved through the shared git dir, so every linked worktree of a repo maps to
-  its main checkout — one workspace namespace per repo. callers that mean the tree
-  their own sources sit in want `bro.base.source_root` instead.
+  its main checkout. Separate checkouts retain separate roots.
   """
   try:
-    result = git_run('rev-parse', '--git-common-dir')
+    if directory is None:
+      result = git_run('rev-parse', '--git-common-dir')
+    else:
+      result = git_run('rev-parse', '--git-common-dir', cwd=directory)
   except FileNotFoundError:
     return None
   if result.returncode != 0:
     return None
-  return Path(result.stdout.strip()).resolve().parent
+  common_directory = Path(result.stdout.strip())
+  if not common_directory.is_absolute():
+    common_directory = (Path.cwd() if directory is None else directory) / common_directory
+  return common_directory.resolve().parent
 
 
-def project_root() -> Path:
+def project_root(directory: Optional[Path] = None) -> Path:
   """`find_project_root` for the callers a project is a precondition of."""
-  root = find_project_root()
+  root = find_project_root(directory)
   if root is None:
-    raise ValueError(f'{Path.cwd()} is in no git repository, so it names no project')
+    subject = Path.cwd() if directory is None else directory
+    raise ValueError(f'{subject} is in no git repository, so it names no project')
+  return root
+
+
+def project_key(project: Path) -> str:
+  """the stable, path-derived key separating one checkout's runtime state."""
+  canonical = str(project.resolve()).encode()
+  return hashlib.blake2b(canonical, digest_size=_PROJECT_KEY_BYTES).hexdigest()
+
+
+def runtime_root(project: Path) -> Path:
+  return RUNTIME_BASE / project_key(project)
+
+
+def require_runtime_root(project: Path) -> Path:
+  """the setup-provisioned runtime root, or a launch-ready error."""
+  root = runtime_root(project)
+  if not root.is_dir():
+    raise RuntimeError(
+      f'runtime state root {root} is absent; run {project / "setup.sh"} on the host to create it'
+    )
+  if root.stat().st_uid != os.getuid() or not os.access(root, os.R_OK | os.W_OK | os.X_OK):
+    raise RuntimeError(
+      f'runtime state root {root} is not owned and writable by this user; '
+      f'rerun {project / "setup.sh"} on the host'
+    )
   return root
 
 
 def workspaces_dir(project: Path) -> Path:
-  return project / 'var' / 'cw' / 'workspaces'
+  return runtime_root(project) / 'workspaces'
 
 
 def workspace_dir(project: Path, name: str) -> Path:
@@ -64,22 +101,21 @@ def fresh_workspace_name(base: str) -> str:
 
 
 def broker_dir(project: Path) -> Path:
-  # the broker's control dir (one socket file per peer). deliberately shallow: the
-  # host bind path must fit sun_path (~108 bytes), and a workspace-relative path
-  # would land inside every container's /workspace mount.
-  return project / 'var' / 'cw' / 'broker'
+  # One socket file lives here per peer. Keeping the root shallow leaves ample
+  # room under the unix sun_path limit for the channel id.
+  return runtime_root(project) / 'broker'
 
 
 def trails_dir(project: Path) -> Path:
-  # recorded trails for a local backend: one root per repo, beside the rest of
-  # its per-project state.
-  return project / 'var' / 'cw' / 'trails'
+  if os.environ.get('RIDE_IN_CONTAINER') is not None:
+    return CONTAINER_TRAILS_ROOT
+  return runtime_root(project) / 'trails'
 
 
 def summon_dir(project: Path) -> Path:
   # per-session summon audit and live-status files. outside the workspace dirs on
   # purpose: the audit must survive a workspace drop.
-  return project / 'var' / 'cw' / 'summon'
+  return runtime_root(project) / 'summon'
 
 
 def in_container() -> bool:

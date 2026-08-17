@@ -329,9 +329,9 @@ class TestStore:
     assert store.get('notion') == '{"token": "t", "tasks_db_id": "d"}'
 
   def test_get_strips_trailing_whitespace(self, configs_dir: Path):
-    _write(configs_dir, 'cw_github_token_bro', 'ghp_abc\n')
+    _write(configs_dir, 'ride_github_token_bro', 'ghp_abc\n')
     store = self._store(
-      credentials.Secret('github', [credentials.LocalSource('cw_github_token_bro')])
+      credentials.Secret('github', [credentials.LocalSource('ride_github_token_bro')])
     )
     assert store.get('github') == 'ghp_abc'
 
@@ -422,9 +422,9 @@ class TestStore:
     assert store.get_json('notion') == {'token': 't'}
 
   def test_get_json_rejects_non_json(self, configs_dir: Path):
-    _write(configs_dir, 'cw_github_token_bro', 'ghp_abc')
+    _write(configs_dir, 'ride_github_token_bro', 'ghp_abc')
     store = self._store(
-      credentials.Secret('github', [credentials.LocalSource('cw_github_token_bro')])
+      credentials.Secret('github', [credentials.LocalSource('ride_github_token_bro')])
     )
     with pytest.raises(ValueError, match='not valid json'):
       store.get_json('github')
@@ -1525,7 +1525,7 @@ class TestBuildScopedStore:
       credentials.build_scoped_store(['brog', 'github+bot'])
 
   def test_empty_names_yields_only_registry(self, configs_dir: Path):
-    # cw always cps a store in (even a zero-secret session), so the registry
+    # ride always cps a store in (even a zero-secret session), so the registry
     # file is always present — an empty bounding registry.
     store = credentials.build_scoped_store([])
     assert set(store) == {credentials.REGISTRY_FILE}
@@ -1664,14 +1664,14 @@ class TestBuildScopedStore:
       {'github+alice': {'sources': [{'file': 'github_token_alice'}]}},
     )
     _write(bro_dir, 'github_token_alice', 'ghp_alice')
-    _write(configs_dir, 'cw_github_token_bro', 'ghp_bro')
+    _write(configs_dir, 'ride_github_token_bro', 'ghp_bro')
     with pytest.raises(ValueError, match='installs at most one'):
       credentials.build_scoped_store(['github', 'github+alice'])
 
   def test_kind_conflict_across_tiers_raises(self, configs_dir: Path):
     # the check runs over the declared union up front — before resolution — so
     # it fires even though the optional variant is unknown and unresolvable
-    _write(configs_dir, 'cw_github_token_bro', 'ghp_bro')
+    _write(configs_dir, 'ride_github_token_bro', 'ghp_bro')
     with pytest.raises(ValueError, match='installs at most one'):
       credentials.build_scoped_store(['github'], optional=['github+alice'])
 

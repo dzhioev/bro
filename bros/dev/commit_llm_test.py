@@ -48,7 +48,7 @@ def staged_repo(tmp_path, monkeypatch):
   (tmp_path / 'notes.txt').write_text('a staged change for the probe\n')
   _git(tmp_path, 'add', 'notes.txt')
   monkeypatch.chdir(tmp_path)
-  monkeypatch.setenv('CW_NAME', 'llm-probe')
+  monkeypatch.setenv('RIDE_WORKSPACE', 'llm-probe')
   return tmp_path
 
 

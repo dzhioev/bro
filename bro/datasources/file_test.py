@@ -66,7 +66,7 @@ async def test_read_tool_returns_file_body(env_file):
 @pytest.mark.asyncio
 async def test_read_tool_description_carries_name_and_summary(env_file):
   # the summary must reach surfaces that see only the tool listing (a
-  # cw-session has no `## Data sources` block)
+  # ride-session has no `## Data sources` block)
   server = FileSource('environment', summary='session playbook', path=env_file).as_mcp_server()
   tool = (await server.list_tools())[0]
   assert 'environment' in tool.description

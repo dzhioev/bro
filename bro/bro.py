@@ -83,7 +83,7 @@ def _summoned_by_from_env() -> Optional[dict[str, Any]]:
 def _default_factory() -> Tracker:
   # explicit kill switch wins over everything: define `TRAILS_DISABLED` (to any
   # value, presence is what counts — same convention as `NO_COLOR` /
-  # `CW_IN_CONTAINER`) to skip recording for a process — local dev, ad-hoc runs,
+  # `RIDE_IN_CONTAINER`) to skip recording for a process — local dev, ad-hoc runs,
   # or repairing trails-server itself (recording is otherwise mandatory and
   # crash-on-failure, so a broken server blocks every bro). this only governs the default
   # factory: a per-run `tracker=` and a custom `set_default_tracker_factory(...)`
@@ -320,9 +320,9 @@ _BANNER_DESCRIPTION = (
 
 
 def _banner_tool(bro: 'BaseBro', variables: Variables) -> llm_mcp.Tool:
-  # the same facts `cw banner --llm` prints, rendered in-process. the bro name is
+  # the same facts `ride banner --llm` prints, rendered in-process. the bro name is
   # passed explicitly because an in-process run's environment carries the
-  # launcher's CW_BRO (or none), not this bro's; the trail id is read at call
+  # launcher's RIDE_BRO (or none), not this bro's; the trail id is read at call
   # time because the run's trail opens after this server is built. the workspace
   # import stays function-local so `import bro` stays cheap.
   def _banner() -> str:
@@ -532,10 +532,12 @@ def _build_service_server(
 
 
 def _unattended_claude_session() -> bool:
-  # BRO_HOLD carries the session's user-involvement level, CW_RUNNER_PID makes
-  # it terminatable (both exported by cw's in-place runner); `raise` needs an
+  # BRO_HOLD carries the session's user-involvement level, RIDE_RUNNER_PID makes
+  # it terminatable (both exported by ride's in-place runner); `raise` needs an
   # unattended session and a runner to signal.
-  return os.environ.get('BRO_HOLD') == 'unattended' and os.environ.get('CW_RUNNER_PID') is not None
+  return (
+    os.environ.get('BRO_HOLD') == 'unattended' and os.environ.get('RIDE_RUNNER_PID') is not None
+  )
 
 
 def feature(name: str) -> Condition:
@@ -705,7 +707,7 @@ class BaseBro(ABC):
   # the bro's own class prompts (MRO-concatenated); set in __init__
   persona: str
   # `system_prompt` with the Claude-Code tool-name rule in place of the
-  # bro-native one; set in __init__, consumed by `cw ss --raw`
+  # bro-native one; set in __init__, consumed by `ride solo|along --raw`
   claude_system_prompt: str
 
   _llm: Optional[LLM] = None
@@ -813,9 +815,9 @@ class BaseBro(ABC):
       prompt_parts = [system_prompt] if len(system_prompt) > 0 else []
     # the bro's own persona: MRO-concatenated class system_prompt(s) under a
     # `# Persona: <name>` heading — the segment lands inside larger composed
-    # prompts (below, and cw's append prompt), where headingless identity text
+    # prompts (below, and ride's append prompt), where headingless identity text
     # reads as a stray fragment. no shared / data-source / spells blocks here;
-    # injected into dive-in Claude Code sessions (cw/system_prompt.py) so they
+    # injected into dive-in Claude Code sessions (ride/ride/claude/system_prompt.py) so they
     # carry the bro's policies outside --raw mode.
     self.persona = (
       '\n\n'.join([f'# Persona: {self.name}', *prompt_parts]) if len(prompt_parts) > 0 else ''
@@ -851,8 +853,8 @@ class BaseBro(ABC):
       ).strip()
 
     self.system_prompt = compose('bare')
-    # the same prompt over mcp wire names — what a `cw ss --raw` session passes
-    # as --system-prompt (cw/claude_argv.py).
+    # the same prompt over mcp wire names — what a `ride solo|along --raw` session passes
+    # as --system-prompt (ride/ride/claude/claude_argv.py).
     self.claude_system_prompt = compose('mcp')
 
   @property
@@ -997,13 +999,13 @@ class BaseBro(ABC):
     return f'{self.name} cannot start: missing credentials: {", ".join(missing)}'
 
   def _provision_workspace(self) -> None:
-    # feature-declared workspace provisioning, run at session start (cw's
+    # feature-declared workspace provisioning, run at session start (ride's
     # in-place runner is the claude-harness counterpart): a commit-accounting
     # persona gets the footer hooks installed into its managed workspace, so
     # agent commits carry the token footer with no session involvement. scoped
     # to managed workspaces — an in-place run in an arbitrary repo must not
     # write into it — and hooks already present are left alone.
-    if not self.has_feature('commit-accounting') or os.environ.get('CW_NAME') is None:
+    if not self.has_feature('commit-accounting') or os.environ.get('RIDE_WORKSPACE') is None:
       return
     from bro.workflow.commit_footer import install_hooks
 
@@ -1257,7 +1259,7 @@ class BaseBro(ABC):
     )
 
   def claude_bro_mcp_servers(self) -> list[llm_mcp.MCPServer]:
-    # the MCP servers a `cw ss --raw` Claude Code session mounts (through
+    # the MCP servers a `ride solo|along --raw` Claude Code session mounts (through
     # the generic server's `bro:<name>` surface): declared servers, spells, and the
     # service tools. procedures serve the bro branch (`--bare` strips claude's
     # built-ins, so the session drives work through the bro toolset, not
@@ -1275,7 +1277,7 @@ class BaseBro(ABC):
     )
 
   def claude_persona_mcp_servers(self) -> list[llm_mcp.MCPServer]:
-    # the MCP servers a cw-session themed as this bro mounts — claude's full
+    # the MCP servers a ride-session themed as this bro mounts — claude's full
     # harness with the bro as its persona, served through the generic server's
     # `persona:<name>` surface: the declared servers and data sources that hold
     # on the claude harness — an entry gated to the bro harness (the dev
@@ -1328,7 +1330,7 @@ class BaseBro(ABC):
       observer=self._observer,
       tracker=self._tracker,
       # the LLM publishes cumulative usage under the bro's surface identity (the
-      # usage file must be self-describing — an in-process run's CW_BRO is the
+      # usage file must be self-describing — an in-process run's RIDE_BRO is the
       # launcher's, not this bro's).
       agent=self.agent,
     )

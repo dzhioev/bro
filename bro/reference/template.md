@@ -46,9 +46,9 @@ file      := prompt file name           file: [A-Za-z0-9._/-]+
 `bro.llm.mcp.render_text(text, harness=…, wire=…, creds=…, hold=…, extra=…)` renders directives against the facts the call site knows (the facts, `#hold`'s single-purpose supply rule included, are documented in `bro/reference/conditions.md`; `extra` merges a caller-owned vocabulary next to them — the bro surfaces pass the owning bro's `#features`) and resolves `{{include}}` targets through the `prompts` loader. Each surface renders its copy once, with its own facts:
 
 - `BaseBro.__init__` — the two bro prompt flavors (harness `bro`; wire `bare` / `mcp`)
-- `bro/cw/system_prompt.py` — a cw-session's append prompt, the injected persona included (harness `claude`, wire `mcp`)
+- `ride/ride/claude/system_prompt.py` — a managed Claude session's append prompt, the injected persona included (harness `claude`, wire `mcp`)
 - `bro.prompts.hold_fragment` — the hold text (`bro/prompts/hold.md` selecting over `bro/prompts/holds/`), the only surface that supplies `#hold`
-- spell bodies — each `spell::` tool renders for its serving harness; bro-native and `--raw` use the bro branch, while a cw persona session uses the Claude branch
+- spell bodies — each `spell::` tool renders for its serving harness; bro-native and `--raw` use the bro branch, while a ride persona session uses the Claude branch
 - tool descriptions and parameter annotations — rendered by the owning server at build time against its own vocabulary, not the harness facts (`#tools` for a `Toolset`'s roster, a data source's `#features` + `#source`; the bro service-tool build additionally injects `#wire`), so no unprocessed directive leaves a server and a standalone server serves final text — see `bro/reference/conditions.md` "Server-domain vocabularies"
 - data-source summaries — `DataSource.rendered_summary()`, the source's vocabulary again, rendered where the prompt composes
 - credential install hooks — `bro.base.credentials.Secret.from_dict` renders each registry secret's `install` text with `#name` bound to the secret's own name, its own single-variable vocabulary like the server-domain ones

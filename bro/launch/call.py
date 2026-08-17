@@ -1,8 +1,8 @@
 import asyncio
 import contextlib
-import dataclasses
 import http.client
 import importlib.util
+import json
 import os
 import signal
 import sys
@@ -13,21 +13,15 @@ from typing import Optional, TextIO
 import bro.base.args as base_args
 from bro.base import log
 from bro.bro import BaseBro, BroRaised
-from bro.launch._cli import (
+from bro.launch.llm_flags import (
   EFFORT_HELP,
   FAST_HELP,
-  GRANT_HELP,
-  HOLD_HELP,
-  IN_PLACE_HELP,
-  INTO_HELP,
-  NO_TRAILS_HELP,
-  REVOKE_HELP,
-  create_bro_for_run,
-  maybe_containerize,
-  run_llm_spec,
+  add_llm_flags,
+  canonicalize,
+  selection_from_args,
 )
-from bro.launch.llm_flags import add_llm_flags, canonicalize, selection_from_args
 from bro.launch.resume import RESUME_LATEST
+from bro.launch.run import HOLD_HELP, create_bro_for_run, run_llm_spec
 from bro.llm.mcp import HOLDS
 from bro.llm.observer import Observer
 from bro.llm.providers import LLMSelectionError
@@ -42,12 +36,10 @@ from bro.trails.display import (
   preset,
 )
 
-__cli_name__ = 'call'
-
-RESUME_HELP = (
-  'continue a recorded call conversation instead of starting a fresh one: pass the trail id '
-  "printed when that call ended, or omit the value to continue the bro's newest recorded call. "
-  'prior exchanges are rendered as history and the continuation is recorded as a new trail'
+FORK_HELP = (
+  'fork a recorded conversation into a new trail: pass any trail id, or omit the value to fork '
+  "the bro's newest recorded call. prior exchanges are rendered as history and the fork uses "
+  "the bro class's current LLM recipe"
 )
 
 INTERRUPTED_NOTICE = '⨯ interrupted'
@@ -160,178 +152,136 @@ def _tui_supported() -> bool:
   )
 
 
-def chat_main(
-  argv: list[str],
-  *,
-  program: list[str],
-  implied_fast: bool = False,
-  default_hold: str = 'guided',
-) -> Optional[int]:
+def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
   parser = base_args.Parser(
     prog=' '.join(program), description='open an interactive session with a bro'
   )
   parser.add_argument('bro', help='bro name')
-  parser.add_argument(
-    'what', nargs='?', help='first message to send to the bro (optional with --resume)'
-  )
+  parser.add_argument('what', nargs='?', help='first message to send to the bro')
   parser.add_argument(
     '--text',
     action='store_true',
     help='force text mode (timestamped lines) instead of the Textual chat UI',
   )
   parser.add_argument(
-    '--resume', nargs='?', const=RESUME_LATEST, default=None, metavar='TRAIL_ID', help=RESUME_HELP
+    '--fork', nargs='?', const=RESUME_LATEST, default=None, metavar='TRAIL_ID', help=FORK_HELP
   )
+  parser.add_argument('--continue-trail', default=None, help=base_args.SUPPRESS)
+  parser.add_argument('--continue-llm', default=None, help=base_args.SUPPRESS)
   parser.add_argument(
     '--at',
     type=int,
     default=None,
     metavar='STEP_ID',
-    help='with --resume: fork the conversation at this step of the resumed trail '
-    'instead of its latest consistent point',
+    help='with --fork: fork the conversation at this step instead of the latest consistent point',
   )
   add_llm_flags(parser, effort_help=EFFORT_HELP, fast_help=FAST_HELP)
-  parser.add_argument('--in-place', action='store_true', help=IN_PLACE_HELP)
-  parser.add_argument('--no-trails', dest='no_trails', action='store_true', help=NO_TRAILS_HELP)
-  # --no-trails acts only on the container hop; --in-place has no hop to act on.
-  parser.add_exclusive_groups(['in_place'], ['no_trails'])
-  # a resume reads the recorded trail and records the continuation — both need
-  # the trails sink --no-trails turns off.
-  parser.add_exclusive_groups(['resume'], ['no_trails'])
-  parser.add_argument('--grant', action='append', default=None, metavar='NAME', help=GRANT_HELP)
-  parser.add_argument('--revoke', action='append', default=None, metavar='NAME', help=REVOKE_HELP)
-  parser.add_argument('--into', metavar='REF', help=INTO_HELP)
-  parser.add_argument('--hold', choices=HOLDS, default=None, help=HOLD_HELP.format(default_hold))
+  parser.add_argument('--in-place', action='store_true', help=base_args.SUPPRESS)
+  parser.add_argument('--hold', choices=HOLDS, default=None, help=HOLD_HELP.format('guided'))
   args = parser.parse(argv)
   try:
     selection = selection_from_args(args)
+    canonicalize(args, selection)
   except LLMSelectionError as error:
     log.error('%s', error)
     return 1
-  if implied_fast:
-    selection = dataclasses.replace(selection, fast=True)
-  canonicalize(args, selection)
   os.environ.setdefault('BRO_SHELL_COMMAND', ' '.join(parser.reconstruct(args, prog=program)))
 
-  if args['what'] is None and args['resume'] is None:
-    log.error('what is required unless --resume is given')
+  continuing = args['continue_trail'] is not None or args['continue_llm'] is not None
+  if (args['continue_trail'] is None) != (args['continue_llm'] is None):
+    log.error('--continue-trail and --continue-llm must be passed together')
     return 1
-  if args['at'] is not None and args['resume'] is None:
-    log.error('--at names a fork point of a resumed trail; it requires --resume')
+  if continuing and (args['fork'] is not None or args['what'] is not None):
+    log.error('--continue-trail cannot be combined with --fork or an initial message')
     return 1
-  if os.environ.get('CW_IN_CONTAINER') is not None and not args['in_place']:
-    log.error(
-      "bro chat refuses an implicit in-container run; pass --in-place to use this container's scope"
-    )
+  if args['at'] is not None and args['fork'] is None:
+    log.error('--at names a fork point; it requires --fork')
     return 1
-
-  # decide TUI-vs-text on the host, before the hop: `run_in_container` always
-  # allocates a `-it` PTY, so capability selection runs before the hop and the
-  # selected stream fallback is forwarded into the container.
-  force_text = args['text'] or not _tui_supported()
-  try:
-    run_spec = run_llm_spec(args['bro'], selection)
-  except (NotImplementedError, LLMSelectionError) as e:
-    # an explicit knob a provider does not have — a clean error rather than fast
-    # mode's silent fallback
-    log.error('%s', e)
-    return 1
-  inner_args = [args['what']] if args['what'] is not None else []
-  if force_text:
-    inner_args.append('--text')
-  if args['resume'] is not None:
-    inner_args.extend(['--resume', args['resume']])
-  if args['at'] is not None:
-    inner_args.extend(['--at', str(args['at'])])
-  if args['llm'] is not None:
-    inner_args.extend(['--llm', args['llm']])
-  # always explicit: the alias defaults diverge (call attends, bro chat guides),
-  # so the inner `bro chat` must not fall back to its own default
-  hold = args['hold'] if args['hold'] is not None else default_hold
-  inner_args.extend(['--hold', hold])
-  hopped = maybe_containerize(
-    cli_name='bro-chat' if program == ['bro', 'chat'] else program[0],
-    verb='chat',
-    bro_name=args['bro'],
-    inner_args=inner_args,
-    in_place=args['in_place'],
-    no_trails=args['no_trails'],
-    grant=args['grant'],
-    revoke=args['revoke'],
-    into=args['into'],
-    llm_spec=run_spec,
-  )
-  if hopped is not None:
-    return hopped
-
-  history: Optional[list[DisplayRecord]] = None
-  if args['resume'] is not None:
-    from bro.launch.resume import resume
-    from bro.registry import get_class
-    from bro.trails.store import default_store
-
-    with default_store() as client:
-      try:
-        # the continuation runs the class's current spec (as a fresh call
-        # would), not the spec recorded on the trail
-        resumed = resume(
-          client,
-          args['bro'],
-          args['resume'],
-          llm_spec=run_spec if run_spec is not None else get_class(args['bro']).llm_spec,
-          at=args['at'],
-        )
-      except (ValueError, http.client.HTTPException) as e:
-        log.error('%s', e)
-        return 1
-    bro = resumed.bro
-    history = resumed.history
-    log.info('resumed trail %s (%d prior display records)', resumed.trail_id, len(history))
-  else:
-    log.verbose('creating bro %s', args['bro'])
-    bro = create_bro_for_run(args['bro'], selection)
-  initial: Optional[str] = args['what']
-  use_tui = not args['text'] and _tui_supported()
-  preset_name = PresetName.CHAT if program == ['bro', 'chat'] else PresetName.CALL
 
   try:
-    with bro:
-      if use_tui:
-        from bro.launch.call_tui import ChatApp
+    run_spec = None if continuing else run_llm_spec(args['bro'], selection)
+  except (KeyError, NotImplementedError, LLMSelectionError) as error:
+    log.error('%s', error)
+    return 1
+  hold = args['hold'] if args['hold'] is not None else 'guided'
 
-        ChatApp(
-          bro,
-          initial,
-          history=history,
-          hold=hold,
-          preset_name=preset_name,
-        ).run()
+  from bro.launch.broxy import session_broxy
+
+  with session_broxy():
+    history: Optional[list[DisplayRecord]] = None
+    if args['fork'] is not None or continuing:
+      from bro.launch.resume import resume
+      from bro.llm.llm import LLMSpec, NativeLLMSpec
+      from bro.registry import get_class
+      from bro.trails.store import default_store
+
+      trail_ref = args['continue_trail'] if continuing else args['fork']
+      assert trail_ref is not None
+      if continuing:
+        continued_llm = args['continue_llm']
+        assert isinstance(continued_llm, str)
+        try:
+          continued_spec = LLMSpec.from_dict(json.loads(continued_llm))
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+          log.error('invalid recorded LLM recipe: %s', error)
+          return 1
+        if not isinstance(continued_spec, NativeLLMSpec):
+          log.error('recorded recipe %s is not runnable by the bro harness', continued_spec.TYPE)
+          return 1
+        fork_spec = continued_spec
       else:
-        asyncio.run(
-          call_text(
+        fork_spec = run_spec if run_spec is not None else get_class(args['bro']).llm_spec
+      with default_store() as client:
+        try:
+          fork_arguments = {'llm_spec': fork_spec, 'at': args['at']}
+          if continuing:
+            fork_arguments['hold'] = hold
+          forked = resume(client, args['bro'], trail_ref, **fork_arguments)
+        except (ValueError, http.client.HTTPException) as error:
+          log.error('%s', error)
+          return 1
+      bro = forked.bro
+      history = forked.history
+      log.info('forked trail %s (%d prior display records)', forked.trail_id, len(history))
+    else:
+      log.verbose('creating bro %s', args['bro'])
+      bro = create_bro_for_run(args['bro'], selection)
+    initial: Optional[str] = args['what']
+    use_tui = not args['text'] and _tui_supported()
+
+    try:
+      with bro:
+        if use_tui:
+          from bro.launch.call_tui import ChatApp
+
+          ChatApp(
             bro,
             initial,
             history=history,
             hold=hold,
-            preset_name=preset_name,
+            preset_name=PresetName.CHAT,
+          ).run()
+        else:
+          asyncio.run(
+            call_text(
+              bro,
+              initial,
+              history=history,
+              hold=hold,
+              preset_name=PresetName.CHAT,
+            )
           )
+    except BroRaised as error:
+      log.error('raised: %s', error.reason)
+      return 1
+    except KeyboardInterrupt:
+      return 130
+    finally:
+      if bro.trail_id is not None:
+        log.info(
+          'conversation recorded as trail %s; fork it with: %s %s --fork %s',
+          bro.trail_id,
+          ' '.join(program),
+          args['bro'],
+          bro.trail_id,
         )
-  except BroRaised as error:
-    log.error('raised: %s', error.reason)
-    return 1
-  except KeyboardInterrupt:
-    return 130
-  finally:
-    # the conversation survives as its trail — point the user at the pickup
-    if bro.trail_id is not None:
-      log.info(
-        'conversation recorded as trail %s; continue it with: %s %s --resume %s',
-        bro.trail_id,
-        ' '.join(program),
-        args['bro'],
-        bro.trail_id,
-      )
-
-
-def main(argv: list[str]) -> Optional[int]:
-  return chat_main(argv, program=['call'], implied_fast=True, default_hold='attended')

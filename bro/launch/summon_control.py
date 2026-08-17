@@ -3,7 +3,7 @@
 Two layers, both computed per broker root:
 
 - `summon_allow_list` — which bros a session may summon. Every surface that starts
-  a broker root (`cw ss` in both modes, the do-CLI container hop) computes the
+  a broker root (`ride solo|along` in both modes, the do-CLI container hop) computes the
   session's effective outgoing allow-list here at launch and threads it to
   `run_root_via_broker`.
 - `SummonControl` — the root's summon state, wired up by `run_root_via_broker`:
@@ -16,7 +16,7 @@ Two layers, both computed per broker root:
   (the out-of-band trace a session's own narrative cannot suppress; every entry
   names the actual summoner), and the summon-status file the session's
   statusLine renders (records and atomic write in `bro.summon_status`; each
-  launch surface points its session at one through `CW_SUMMON_STATUS`).
+  launch surface points its session at one through `RIDE_SUMMON_STATUS`).
 
 Authorization is per-peer. The root follows the launch-computed effective list
 above; a summoned child follows the list its own summon request resolved — its
@@ -54,19 +54,17 @@ its summoner's workspace HEAD unless the request's `into` overrides. The HEAD
 read itself is blocking git work and runs off-loop in the spawner
 (`bro/launch/spawn.py:_lower_summon`); the handler only resolves the path.
 
-Both state files live under `var/cw/summon/` (`bro.workspace.paths.summon_dir`), keyed by the
-workspace name: `<name>.jsonl` (audit) and `<name>.status.json` (live status).
-They sit outside the workspace dir so the audit survives a drop — a session can
-have its own workspace removed on a clean exit — and are gitignored so neither
-dirties clean checks. The host process writes both; a container session reads the
-status file through its read-only `/host-repo` mount of the project root
-(`container_status_path`), a host session through the host path
-(`summon_status_file`).
+Both state files live under `/var/ride/<project-key>/summon/`
+(`bro.workspace.paths.summon_dir`), keyed by the workspace name: `<name>.jsonl`
+(audit) and `<name>.status.json` (live status). They sit outside the workspace dir
+so the audit survives a drop. The host process writes both; a container session
+reads the status through the dedicated read-only `/var/ride/summon` bind, while a
+host session reads the host path.
 
 The wire contract (the `summon` tag, payload keys, the 1800s default timeout) is
 owned by the peer-side `bro.summon` module; this module enforces it host-side. Broker
 imports stay function-local: this module sits on the launch path before the
-`_broker_enabled` gate (see cw/AGENTS.md, "Lazy broker import").
+`_broker_enabled` gate (see ride/AGENTS.md, "Lazy broker import").
 """
 
 import json
@@ -82,7 +80,7 @@ from bro.launch.scope import split_scope_overrides
 from bro.summon import DEFAULT_TIMEOUT
 from bro.summon_status import STATUS_ENV
 from bro.workspace.model import Workspace
-from bro.workspace.paths import summon_dir, workspace_tree
+from bro.workspace.paths import CONTAINER_SUMMON_ROOT, summon_dir, workspace_tree
 
 if TYPE_CHECKING:
   from bro.broker.brotocol import Message
@@ -123,10 +121,9 @@ def summon_status_file(project: Path, workspace_name: str) -> Path:
   return summon_dir(project) / f'{workspace_name}.status.json'
 
 
-def container_status_path(project: Path, workspace_name: str) -> str:
-  """the same file as `summon_status_file`, seen from inside a container through
-  its read-only `/host-repo` mount of the project root."""
-  return f'/host-repo/{summon_status_file(project, workspace_name).relative_to(project)}'
+def container_status_path(workspace_name: str) -> str:
+  """the session's status file at its dedicated in-container mount."""
+  return str(CONTAINER_SUMMON_ROOT / f'{workspace_name}.status.json')
 
 
 def summon_allow_list(bro_name: str, *, grant: list[str], revoke: list[str]) -> set[str]:
@@ -140,7 +137,7 @@ def summon_allow_list(bro_name: str, *, grant: list[str], revoke: list[str]) -> 
   without importing any target module, so a typo fails the launch immediately
   rather than minutes later as a denied summon. an unknown `bro_name` degrades to
   empty seeds with a warning, mirroring credential scoping (`scoped_secrets`):
-  an ambient CW_BRO this checkout doesn't know must not break the launch."""
+  an ambient RIDE_BRO this checkout doesn't know must not break the launch."""
   # imported here, not at module level: the registry import pulls the bro class
   # graph, which the pre-gate launch path must not pay for up front
   from bro.registry import create_bro, known_names
@@ -433,7 +430,7 @@ class SummonControl:
     if record is None:
       return None
     # function-local like SummonLaunchSpec above: bro.launch.spawn imports broker at
-    # module level (cw/AGENTS.md, "Lazy broker import")
+    # module level (ride/AGENTS.md, "Lazy broker import")
     from bro.launch.spawn import _workspace_name
 
     return _Requester(

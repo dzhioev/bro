@@ -44,9 +44,9 @@ def _provision(tree: Path, staged: Optional[Path]) -> subprocess.CompletedProces
     **os.environ,
     'PATH': f'{tree / "bin"}{os.pathsep}{os.environ["PATH"]}',
   }
-  environment.pop('CW_VENV_MANIFEST', None)
+  environment.pop('RIDE_VENV_MANIFEST', None)
   if staged is not None:
-    environment['CW_VENV_MANIFEST'] = str(staged)
+    environment['RIDE_VENV_MANIFEST'] = str(staged)
   return subprocess.run(
     [str(tree / 'setup.sh')], capture_output=True, text=True, check=True, env=environment
   )

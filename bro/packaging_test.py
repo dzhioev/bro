@@ -164,7 +164,7 @@ def _data_files() -> set[str]:
   tracked = subprocess.run(
     ['git', 'ls-files', 'bro', 'bros'], capture_output=True, text=True, cwd=_ROOT, check=True
   ).stdout.split()
-  return {path for path in tracked if not path.endswith('.py')}
+  return {path for path in tracked if not path.endswith('.py') and (_ROOT / path).is_file()}
 
 
 def _expected_data_files() -> set[str]:

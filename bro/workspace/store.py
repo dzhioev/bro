@@ -102,10 +102,10 @@ def materialize_scoped_store(files: dict[str, bytes], directory: Path) -> Path:
 
 
 def _bro_tarball(files: dict[str, bytes]) -> bytes:
-  """pack a scoped credential store into a tar for `docker cp` into /home/bro.cw.entries are prefixed `.bro/` so extracting at /home/cw lands them at
-  /home/cw/.bro/<file>. files are 0600, the dir 0700, all owned by the host
-  uid/gid (the same uid the entrypoint remaps `cw` to on Linux); the entrypoint
-  re-owns the tree to `cw` after its remap so the bytes are readable there and on
+  """pack a scoped credential store into a tar for `docker cp` into /home/bro.ride.entries are prefixed `.bro/` so extracting at /home/ride lands them at
+  /home/ride/.bro/<file>. files are 0600, the dir 0700, all owned by the host
+  uid/gid (the same uid the entrypoint remaps `ride` to on Linux); the entrypoint
+  re-owns the tree to `ride` after its remap so the bytes are readable there and on
   Docker for Mac (where the remap is skipped). mtime defaults to 0 — deterministic,
   no clock needed.
   """

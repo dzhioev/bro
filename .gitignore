@@ -4,7 +4,6 @@ build/
 dist/
 .venv
 *.swp
-var/
 *.egg-info/
 .smoke-*/
 # runtime-synthesized credential dir (deployed services write it; on the host

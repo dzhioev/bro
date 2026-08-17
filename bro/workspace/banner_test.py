@@ -13,21 +13,6 @@ class TestSplitLaunchPrompt:
     assert head == 'dive-in --hold attended --new '
     assert prompt == 'I want X'
 
-  def test_dashdash_marker(self):
-    head, prompt = workspace_banner._split_launch_prompt('cw ss name -- run the thing')
-    assert head == 'cw ss name -- '
-    assert prompt == 'run the thing'
-
-  def test_p_marker(self):
-    head, prompt = workspace_banner._split_launch_prompt('cw ss -p hello world')
-    assert head == 'cw ss -p '
-    assert prompt == 'hello world'
-
-  def test_long_prompt_marker(self):
-    head, prompt = workspace_banner._split_launch_prompt('cw ss --prompt do the thing')
-    assert head == 'cw ss --prompt '
-    assert prompt == 'do the thing'
-
   def test_no_marker_returns_command_unchanged(self):
     head, prompt = workspace_banner._split_launch_prompt('dive-in -t abc123')
     assert head == 'dive-in -t abc123'
@@ -48,11 +33,11 @@ class TestSessionFacts:
     # point the claude config dir at an empty one so the session-local reads
     # (trail pointer, recording health) see a session that publishes nothing
     for v in (
-      'CW_NAME',
-      'CW_BRO',
-      'CW_COMMAND',
+      'RIDE_WORKSPACE',
+      'RIDE_BRO',
+      'RIDE_COMMAND',
       'BRO_SHELL_COMMAND',
-      'CW_HOST_WORKSPACE',
+      'RIDE_HOST_WORKSPACE',
       summon.MAY_SUMMON_ENV,
     ):
       monkeypatch.delenv(v, raising=False)
@@ -61,20 +46,20 @@ class TestSessionFacts:
 
   def test_container_session(self, monkeypatch):
     monkeypatch.setattr(workspace_paths, 'in_container', lambda: True)
-    monkeypatch.setenv('CW_NAME', 'my-task')
-    monkeypatch.setenv('CW_BRO', 'dev')
-    monkeypatch.setenv('CW_HOST_WORKSPACE', '/host/var/cw/workspaces/my-task/tree')
+    monkeypatch.setenv('RIDE_WORKSPACE', 'my-task')
+    monkeypatch.setenv('RIDE_BRO', 'dev')
+    monkeypatch.setenv('RIDE_HOST_WORKSPACE', '/var/ride/0123456789abcdef/workspaces/my-task/tree')
     monkeypatch.setenv('BRO_SHELL_COMMAND', 'dive-in -t abc')
-    monkeypatch.setenv('CW_COMMAND', 'cw ss --hold attended my-task')
+    monkeypatch.setenv('RIDE_COMMAND', 'ride along --hold attended my-task')
     facts = SessionFacts.collect()
     assert facts.in_container is True
     assert facts.name == 'my-task'
     assert facts.bro == 'dev'
-    assert facts.host_workspace == '/host/var/cw/workspaces/my-task/tree'
+    assert facts.host_workspace == '/var/ride/0123456789abcdef/workspaces/my-task/tree'
     assert facts.container_workspace == '/workspace'
-    assert facts.exec_command == 'cw exec my-task'
+    assert facts.exec_command == 'ride exec my-task'
     assert facts.shell_command == 'dive-in -t abc'
-    assert facts.cw_command == 'cw ss --hold attended my-task'
+    assert facts.ride_command == 'ride along --hold attended my-task'
     assert facts.prompt is None
 
   def test_unmanaged_container_has_no_workspace(self, monkeypatch):
@@ -98,8 +83,8 @@ class TestSessionFacts:
     worktree = workspace_paths.workspace_tree(project, 'feature')
     worktree.mkdir(parents=True)
     monkeypatch.setattr(workspace_paths, 'project_root', lambda: project)
-    monkeypatch.setenv('CW_NAME', 'feature')
-    monkeypatch.setenv('CW_COMMAND', 'cw ss feature')
+    monkeypatch.setenv('RIDE_WORKSPACE', 'feature')
+    monkeypatch.setenv('RIDE_COMMAND', 'ride along feature')
     facts = SessionFacts.collect()
     assert facts.in_container is False
     assert facts.name == 'feature'
@@ -107,15 +92,15 @@ class TestSessionFacts:
     assert facts.host_workspace == str(worktree)
     assert facts.container_workspace is None
     assert facts.exec_command is None
-    # BRO_SHELL_COMMAND defaults to CW_COMMAND — they're equal in this case
-    assert facts.shell_command == 'cw ss feature'
-    assert facts.cw_command == 'cw ss feature'
+    # BRO_SHELL_COMMAND defaults to RIDE_COMMAND — they're equal in this case
+    assert facts.shell_command == 'ride along feature'
+    assert facts.ride_command == 'ride along feature'
 
-  def test_shell_command_falls_back_to_cw_command(self, monkeypatch):
-    monkeypatch.setenv('CW_COMMAND', 'cw ss x')
+  def test_shell_command_falls_back_to_ride_command(self, monkeypatch):
+    monkeypatch.setenv('RIDE_COMMAND', 'ride along x')
     facts = SessionFacts.collect()
-    assert facts.shell_command == 'cw ss x'
-    assert facts.cw_command == 'cw ss x'
+    assert facts.shell_command == 'ride along x'
+    assert facts.ride_command == 'ride along x'
 
   def test_no_session_context(self):
     facts = SessionFacts.collect()
@@ -125,7 +110,7 @@ class TestSessionFacts:
     assert facts.host_workspace is None
     assert facts.exec_command is None
     assert facts.shell_command is None
-    assert facts.cw_command is None
+    assert facts.ride_command is None
     assert facts.prompt is None
     assert facts.may_summon is None
     assert facts.trail_id is None
@@ -150,10 +135,10 @@ class TestSessionFacts:
 
   def test_bro_override_takes_precedence_over_env(self, monkeypatch):
     # an in-process caller passes its bro explicitly — its environment carries
-    # the launcher's CW_BRO (or none); the override wins either way
-    monkeypatch.delenv('CW_BRO', raising=False)
+    # the launcher's RIDE_BRO (or none); the override wins either way
+    monkeypatch.delenv('RIDE_BRO', raising=False)
     assert SessionFacts.collect(bro_override='researcher').bro == 'researcher'
-    monkeypatch.setenv('CW_BRO', 'dev')
+    monkeypatch.setenv('RIDE_BRO', 'dev')
     assert SessionFacts.collect(bro_override='researcher').bro == 'researcher'
     assert SessionFacts.collect().bro == 'dev'
 
@@ -165,8 +150,8 @@ def _facts(**overrides) -> SessionFacts:
     'bro': None,
     'host_workspace': '/h/ws',
     'container_workspace': '/workspace',
-    'exec_command': 'cw exec task',
-    'cw_command': None,
+    'exec_command': 'ride exec task',
+    'ride_command': None,
     'shell_command': None,
     'prompt': None,
     'recording_problem': None,
@@ -181,7 +166,7 @@ class TestRenderBanner:
   def test_llm_emits_plain_key_value(self):
     out = _facts(
       bro='dev',
-      cw_command='cw ss --bro bro task',
+      ride_command='ride along --bro bro task',
       shell_command='dive-in -t x',
     ).render_llm()
     assert '\033[' not in out  # no ANSI
@@ -191,8 +176,8 @@ class TestRenderBanner:
     assert 'bro: dev' in out
     assert 'workspace_host_path: /h/ws' in out
     assert 'workspace_container_path: /workspace' in out
-    assert 'docker_shell_command: cw exec task' in out
-    assert 'cw_command: cw ss --bro bro task' in out
+    assert 'docker_shell_command: ride exec task' in out
+    assert 'ride_command: ride along --bro bro task' in out
     assert 'launch_command:' not in out
     assert 'dive-in -t x' not in out
 
@@ -202,9 +187,9 @@ class TestRenderBanner:
     assert 'prompt:' not in out
     assert 'launch_command:' not in out
 
-  def test_llm_emits_cw_command_for_direct_session(self):
-    out = _facts(cw_command='cw ss feature', shell_command='cw ss feature').render_llm()
-    assert 'cw_command: cw ss feature' in out
+  def test_llm_emits_ride_command_for_direct_session(self):
+    out = _facts(ride_command='ride along feature', shell_command='ride along feature').render_llm()
+    assert 'ride_command: ride along feature' in out
     assert 'launch_command:' not in out
 
   def test_llm_omits_none_fields(self):
@@ -253,12 +238,12 @@ class TestRenderBanner:
 
   def test_visual_session_line_shows_the_workspace_name(self):
     out = _facts(name='task').render_visual()
-    assert 'cw session:   \033[1mtask\033[0m' in out
+    assert 'ride session: \033[1mtask\033[0m' in out
 
   def test_visual_container_shows_workspace_and_host_path_on_separate_lines(self):
-    out = _facts(host_workspace='/host/var/cw/workspaces/task/tree').render_visual()
+    out = _facts(host_workspace='/var/ride/0123456789abcdef/workspaces/task/tree').render_visual()
     assert 'workspace:    /workspace' in out
-    assert 'host path:    \033[2m/host/var/cw/workspaces/task/tree\033[0m' in out
+    assert 'host path:    \033[2m/var/ride/0123456789abcdef/workspaces/task/tree\033[0m' in out
 
   def test_visual_uses_docker_shell_label(self):
     out = _facts().render_visual()
@@ -269,13 +254,13 @@ class TestRenderBanner:
     out = _facts(
       in_container=False,
       name='feature',
-      host_workspace='/project/var/cw/workspaces/feature/tree',
+      host_workspace='/var/ride/fedcba9876543210/workspaces/feature/tree',
       container_workspace=None,
       exec_command=None,
     ).render_visual()
     # in worktree mode there's no `docker shell:` row, so the widest label is
-    # `cw session:` (11 chars) — value follows with one space, no extra padding
-    assert 'cw session: \033[1mfeature\033[0m' in out
+    # `ride session:` (11 chars) — value follows with one space, no extra padding
+    assert 'ride session: \033[1mfeature\033[0m' in out
 
   def test_visual_skips_logo_for_non_bro(self):
     out = _facts().render_visual()
@@ -285,14 +270,14 @@ class TestRenderBanner:
     out = _facts(
       in_container=False,
       name='feature',
-      host_workspace='/project/var/cw/workspaces/feature/tree',
+      host_workspace='/var/ride/fedcba9876543210/workspaces/feature/tree',
       container_workspace=None,
       exec_command=None,
     ).render_visual()
-    assert '\033[31m/project/var/cw/workspaces/feature/tree\033[0m' in out
+    assert '\033[31m/var/ride/fedcba9876543210/workspaces/feature/tree\033[0m' in out
 
   def test_visual_does_not_paint_container_path_red(self):
-    out = _facts(host_workspace='/host/var/cw/workspaces/task/tree').render_visual()
+    out = _facts(host_workspace='/var/ride/0123456789abcdef/workspaces/task/tree').render_visual()
     assert '\033[31m' not in out
 
   def test_visual_handles_missing_host_path_in_worktree(self):
@@ -305,14 +290,18 @@ class TestRenderBanner:
     ).render_visual()
     assert '(unknown' in out
 
-  def test_visual_shows_cw_command_when_distinct(self):
-    out = _facts(cw_command='cw ss --bro bro task', shell_command='dive-in -t x').render_visual()
-    assert 'cw command:' in out
-    assert 'cw ss --bro bro task' in out
+  def test_visual_shows_ride_command_when_distinct(self):
+    out = _facts(
+      ride_command='ride along --bro bro task', shell_command='dive-in -t x'
+    ).render_visual()
+    assert 'ride command:' in out
+    assert 'ride along --bro bro task' in out
 
-  def test_visual_suppresses_cw_command_when_equal(self):
-    out = _facts(cw_command='cw ss feature', shell_command='cw ss feature').render_visual()
-    assert 'cw command:' not in out
+  def test_visual_suppresses_ride_command_when_equal(self):
+    out = _facts(
+      ride_command='ride along feature', shell_command='ride along feature'
+    ).render_visual()
+    assert 'ride command:' not in out
 
   def test_visual_replaces_prompt_with_placeholder_and_separate_line(self):
     out = _facts(shell_command='dive-in --new ', prompt='I want a banner').render_visual()

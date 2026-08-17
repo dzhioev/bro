@@ -26,7 +26,7 @@ def test_blaze_request_round_trips_wire_data_and_is_frozen():
   assert request.to_wire() == _wire_request()
   mutable_request: Any = request
   with pytest.raises(FrozenInstanceError):
-    mutable_request.surface = 'cw'
+    mutable_request.surface = 'ride'
 
 
 @pytest.mark.parametrize(

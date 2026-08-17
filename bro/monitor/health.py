@@ -1,14 +1,14 @@
 """durable health state for session recording.
 
-The Claude recorder beats this file on every attempt; `bro.cw.statusline` and
-`cw banner` read it without a network call to warn when recording is failing or
+The Claude recorder beats this file on every attempt; `ride.claude.statusline` and
+`ride banner` read it without a network call to warn when recording is failing or
 has stopped. Without it a broken recorder is silent — the daemon's stderr goes
 to a per-session log file (`<claude config dir>/session-recorder.log`) nobody
 watches live, and a daemon killed by a signal writes nothing at all, so a
 missed beat is the only trace it leaves.
 
 The file lives under the session's claude config dir (`CLAUDE_CONFIG_DIR` when
-set — every cw session points it at private per-session state), so concurrent
+set — every ride session points it at private per-session state), so concurrent
 sessions don't clobber each other's signal.
 
 Stdlib-only on purpose: the statusline imports this on every render, so it must

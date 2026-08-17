@@ -14,7 +14,7 @@ import bro.workflow.land_pr as land_pr
 def _pr(**overrides: Any) -> dict[str, Any]:
   pr: dict[str, Any] = {
     'number': 310,
-    'title': 'cw: land in one shot',
+    'title': 'ride: land in one shot',
     'body': '## Test plan\n- [x] suite green',
     'state': 'OPEN',
     'reviewDecision': 'APPROVED',
@@ -147,7 +147,7 @@ def test_land_happy_path(capsys):
   assert len(merge_calls) == 1
   merge = merge_calls[0]
   assert merge[:5] == ['gh', 'pr', 'merge', '310', '--squash']
-  assert merge[merge.index('--subject') + 1] == 'cw: land in one shot'
+  assert merge[merge.index('--subject') + 1] == 'ride: land in one shot'
   expected_body = '## Test plan\n- [x] suite green\n\n> created with Claude Code …'
   assert merge[merge.index('--body') + 1] == expected_body
   spawned.assert_called_once_with(
@@ -158,7 +158,7 @@ def test_land_happy_path(capsys):
   assert json.loads(capsys.readouterr().out) == {
     'pr': 310,
     'url': 'https://github.com/o/r/pull/310',
-    'title': 'cw: land in one shot',
+    'title': 'ride: land in one shot',
     'base': 'master',
     'merged_sha': 'abc123',
     'merged_at': '2026-07-03T10:41:02Z',

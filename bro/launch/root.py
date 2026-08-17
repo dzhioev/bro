@@ -25,19 +25,60 @@ def _run_root_via_broker(
   # short-circuit a launch before anything touches the broker package (see its
   # docstring).
   from bro.launch.spawn import run_root_via_broker
-  from bro.launch.summon_control import STATUS_ENV, container_status_path
+  from bro.launch.summon_control import STATUS_ENV, container_status_path, summon_status_file
   from bro.summon import MAY_SUMMON_ENV, encode_may_summon
+  from bro.workspace.paths import CONTAINER_SUMMON_ROOT
   from bro.workspace.spawn import DockerLaunchSpec
 
+  status_file = summon_status_file(workspace.project, workspace.name)
+  status_file.parent.mkdir(parents=True, exist_ok=True)
   env = dict(launch.env)
-  env[STATUS_ENV] = container_status_path(workspace.project, workspace.name)
+  env[STATUS_ENV] = container_status_path(workspace.name)
   env[MAY_SUMMON_ENV] = encode_may_summon(may_summon)
-  broker_launch = DockerLaunchSpec(replace(launch, env=env))
+  status_mount = f'{status_file.parent}:{CONTAINER_SUMMON_ROOT}:ro'
+  broker_launch = DockerLaunchSpec(
+    replace(launch, env=env, extra_mounts=(*launch.extra_mounts, status_mount)),
+    capture_output=False,
+  )
   return run_root_via_broker(
     broker_launch,
     workspace=workspace,
     may_summon=may_summon,
     credential_scope=set(launch.secrets) | set(launch.optional_secrets),
+    trail_pointer=trail_pointer,
+  )
+
+
+def run_host_process_via_broker(
+  workspace: Workspace,
+  command: list[str],
+  env: dict[str, str],
+  may_summon: Collection[str],
+  credential_scope: Collection[str],
+  *,
+  interactive: bool,
+  trail_pointer: Optional[Path] = None,
+) -> int:
+  """run a host-worktree process as the broker's supervised session root."""
+  from bro.launch.spawn import run_root_via_broker
+  from bro.launch.summon_control import STATUS_ENV, summon_status_file
+  from bro.summon import MAY_SUMMON_ENV, encode_may_summon
+  from bro.workspace.spawn import ProcessLaunchSpec
+
+  launch_env = dict(env)
+  launch_env[STATUS_ENV] = str(summon_status_file(workspace.project, workspace.name))
+  launch_env[MAY_SUMMON_ENV] = encode_may_summon(may_summon)
+  launch = ProcessLaunchSpec(
+    command=command,
+    cwd=str(workspace.tree),
+    env=launch_env,
+    interactive=interactive,
+  )
+  return run_root_via_broker(
+    launch,
+    workspace=workspace,
+    may_summon=may_summon,
+    credential_scope=credential_scope,
     trail_pointer=trail_pointer,
   )
 

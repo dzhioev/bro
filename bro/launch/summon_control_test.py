@@ -51,7 +51,7 @@ class TestSummonAllowList:
       bro.launch.summon_control.summon_allow_list('bro-dev', grant=[], revoke=['devop'])
 
   def test_unknown_bro_degrades_to_empty_seeds_with_a_warning(self, caplog):
-    # mirrors credential scoping: an ambient CW_BRO this checkout doesn't know
+    # mirrors credential scoping: an ambient RIDE_BRO this checkout doesn't know
     # must not break the launch; explicit grants still apply on top
     result = bro.launch.summon_control.summon_allow_list('no-such-bro', grant=['dev'], revoke=[])
     assert result == {'dev'}

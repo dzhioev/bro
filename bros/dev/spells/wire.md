@@ -16,7 +16,7 @@ A host serves several projects, and its store may hold several instances of one 
 
 Resolve the project root (`git rev-parse --git-common-dir`, then its parent — every linked worktree maps to its main checkout, which is what the mapping keys on) and read the repo's `[tool.bro] default` bro from its `pyproject.toml`. That bro is what sessions launched here run as.
 
-`bro show <bro>` lists the credential kinds it needs, its best-effort tier, and its features. `cw scope` states the same thing as a launch sees it: every kind a session from this project would hydrate, the instance each reads today, and whether it resolves.
+`bro show <bro>` lists the credential kinds it needs, its best-effort tier, and its features. `ride scope` states the same thing as a launch sees it: every kind a session from this project would hydrate, the instance each reads today, and whether it resolves.
 
 ## 3. See what the host holds
 
@@ -34,6 +34,6 @@ Kinds the project has no opinion about stay out of the entry.
 
 ## 5. Verify
 
-Re-run `cw scope`: each kind the project selects should now name that instance and read `ok`. A kind reported `MISSING` is a selection pointing at an entry the store cannot resolve — fix it before finishing rather than leaving the user to meet it at their next launch.
+Re-run `ride scope`: each kind the project selects should now name that instance and read `ok`. A kind reported `MISSING` is a selection pointing at an entry the store cannot resolve — fix it before finishing rather than leaving the user to meet it at their next launch.
 
 Close by telling the user what changed and what a session from this project now reads. A launch can still override any of it for one session with `--grant <kind>+<instance>`.

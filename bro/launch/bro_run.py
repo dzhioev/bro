@@ -1,6 +1,6 @@
 """a bro run as a container launch, described once.
 
-A bro run is the bro's LLM process in its own throwaway cw-style container:
+A bro run is the bro's LLM process in its own throwaway ride-style container:
 `bro <verb> <bro> … --in-place` executing against a caller-resolved credential
 scope, committing as the bro git identity, based on a caller-resolved git ref.
 This module owns that description — inner command, container environment,
@@ -43,16 +43,16 @@ def describe(
 
   `scoped` is the run's credential scope, applied as given — the caller resolves
   it, overrides included. `base_ref` is a caller-resolved commit sha the
-  container's workspace clone bases on (`CW_BASE_REF`); None leaves the
+  container's workspace clone bases on (`RIDE_BASE_REF`); None leaves the
   entrypoint's HEAD fallback — the host checkout's current commit.
   `trails=False` disables run recording: the trails secret leaves the scope,
   `TRAILS_DISABLED` rides in the env, and no local trails root is bound.
   """
   required, optional = set(scoped.required), set(scoped.optional)
   env = dict(bro_git_identity_env(bro_name))
-  env['CW_BRO'] = bro_name
+  env['RIDE_BRO'] = bro_name
   if base_ref is not None:
-    env['CW_BASE_REF'] = base_ref
+    env['RIDE_BASE_REF'] = base_ref
   if not trails:
     required, optional = _without_trails(required), _without_trails(optional)
     env['TRAILS_DISABLED'] = '1'

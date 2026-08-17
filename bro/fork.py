@@ -178,6 +178,7 @@ def fork(
   record: bool = True,
   tracker: Optional[Tracker] = None,
   surface: str,
+  hold: Optional[str] = None,
   fetch_forked_from: Optional[Callable[[str], RecordedTrail]] = None,
 ) -> BaseBro:
   """spin up a fresh bro preseeded with the forked_from trail's prefix up to
@@ -194,6 +195,9 @@ def fork(
   `previous_response_id`. otherwise → client-side message replay, which needs
   `fetch_forked_from` when the forked_from trail is itself a fork (see
   `replay_messages`).
+
+  `hold` replaces the recorded hold fragment when provided; that prompt change
+  selects client-side replay. Omit it to preserve the recorded prompt.
 
   `record=False` pins the new bro to a `NullTracker` — handy for one-shot
   exploration where the fork's trail is not worth keeping. `record=True` (the
@@ -221,27 +225,34 @@ def fork(
   bro.llm_spec = spec
 
   fork_step = _find_step(forked_from_trail, up_to_step_id)
-  use_server_side = _server_side_eligible(
-    forked_from_spec=forked_from_trail.header.llm_spec,
-    new_spec=spec,
-    fork_step=fork_step,
-    system_prompt_override=system_prompt,
-  )
   forked_from_system_prompt = _extract_system_prompt(forked_from_trail)
   effective_system_prompt = (
     system_prompt if system_prompt is not None else forked_from_system_prompt
   )
-  # `bro.system_prompt` is the raw prompt without the hold fragment;
-  # forks reuse the forked_from's exact text and skip BaseBro's fragment-appending
-  # path (the forked_from's prompt — recorded in the trail — already has the
-  # fragment baked in from its original run).
+  prompt_changed = system_prompt is not None
+  if system_prompt is None and hold is not None and hold != forked_from_trail.header.hold:
+    effective_system_prompt = _replace_hold_fragment(
+      forked_from_system_prompt,
+      recorded_hold=forked_from_trail.header.hold,
+      resumed_hold=hold,
+    )
+    prompt_changed = True
+  use_server_side = _server_side_eligible(
+    forked_from_spec=forked_from_trail.header.llm_spec,
+    new_spec=spec,
+    fork_step=fork_step,
+    system_prompt_override=effective_system_prompt if prompt_changed else None,
+  )
+  # This value is the complete recorded prompt, including its hold fragment;
+  # pre-assigning it bypasses BaseBro's fresh-run fragment append.
   bro.system_prompt = effective_system_prompt
+  effective_hold = hold if hold is not None else 'guided'
 
   bro._tracker = (
     NullTracker() if not record else (tracker if tracker is not None else bro._make_tracker())
   )
   inner_llm = spec.create_llm(
-    mcp_servers=bro._mcp_servers_for(hold='guided'),
+    mcp_servers=bro._mcp_servers_for(hold=effective_hold),
     observer=bro._observer,
     tracker=bro._tracker,
     agent=bro.agent,
@@ -250,8 +261,8 @@ def fork(
     _seed_response_id(inner_llm, fork_step.extras['response_id'])
   else:
     prefix = replay_messages(forked_from_trail, up_to_step_id, fetch_forked_from=fetch_forked_from)
-    if system_prompt is not None:
-      prefix[0] = {'role': 'system', 'content': system_prompt}
+    if prompt_changed:
+      prefix[0] = {'role': 'system', 'content': effective_system_prompt}
     _preseed(inner_llm, prefix)
   # pre-assigning _llm makes BaseBro.send take the subsequent-call branch on
   # the first .send(next_message) — it ships `[{'role': 'user', 'content': ...}]`
@@ -270,10 +281,34 @@ def fork(
     forked_from=forked_from,
     interactive=True,
     surface=surface,
-    hold='guided',
+    hold=effective_hold,
   )
   bro.trail_id = trail_id if len(trail_id) > 0 else None
   return bro
+
+
+def _replace_hold_fragment(
+  system_prompt: str,
+  *,
+  recorded_hold: Optional[str],
+  resumed_hold: str,
+) -> str:
+  if recorded_hold is None:
+    raise ValueError('cannot change the hold of a trail that recorded no hold')
+  from bro.base import credentials
+  from bro.prompts import hold_fragment
+
+  known_credentials = credentials.known_names()
+  recorded_fragment = hold_fragment(
+    recorded_hold, harness='bro', wire='bare', creds=known_credentials
+  )
+  suffix = f'\n\n{recorded_fragment}'
+  if not system_prompt.endswith(suffix):
+    raise ValueError('recorded system prompt does not end with its hold fragment')
+  resumed_fragment = hold_fragment(
+    resumed_hold, harness='bro', wire='bare', creds=known_credentials
+  )
+  return f'{system_prompt.removesuffix(suffix)}\n\n{resumed_fragment}'
 
 
 def _server_side_eligible(

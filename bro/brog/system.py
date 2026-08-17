@@ -164,10 +164,10 @@ def default_system() -> System:
 
   The config is self-contained — every credential the active backend needs is embedded,
   literally or via `$cred` references the resolver expands — so brog needs no secret
-  granted beyond `brog`. The comment author is the session persona (`CW_BRO`); with no
+  granted beyond `brog`. The comment author is the session persona (`RIDE_BRO`); with no
   persona, comments carry no author segment.
   """
-  author = os.environ.get('CW_BRO')
+  author = os.environ.get('RIDE_BRO')
   if author == '':
     author = None
   return build_system(lambda: credentials.get_json('brog'), author=author)
