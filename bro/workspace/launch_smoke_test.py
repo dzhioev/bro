@@ -168,6 +168,10 @@ def isolated() -> Iterator[Isolated]:
   subprocess.run(
     ['git', '-C', str(project), 'remote', 'set-url', 'origin', origin.stdout.strip()], check=True
   )
+  # a clone mirrors the source's local branches only, so seed the ref the entrypoint refreshes
+  subprocess.run(
+    ['git', '-C', str(project), 'update-ref', 'refs/remotes/origin/master', 'HEAD'], check=True
+  )
   home = root / 'home'
   home.mkdir()
   (home / '.gitconfig').write_text(
