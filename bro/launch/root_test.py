@@ -183,5 +183,6 @@ class TestRunRootViaBroker:
         docker_sock=True,
         tty=True,
         forward_env=True,
-      )
+      ),
+      capture_output=False,
     )

@@ -17,6 +17,53 @@ def project(monkeypatch):
   monkeypatch.setattr(ride_cli, 'fresh_workspace_name', lambda base: f'{base}-12345678')
 
 
+class TestSolo:
+  def test_builds_an_unattended_claude_session(self):
+    with patch('ride.cli.start_session', return_value=0) as start:
+      assert ride_cli.main(['ride', 'solo', 'dev', 'do it']) == 0
+    spec = start.call_args.args[0]
+    assert spec.interface == 'ride'
+    assert spec.harness == 'claude'
+    assert spec.name == 'ride-dev-12345678'
+    assert spec.bro == 'dev'
+    assert spec.prompt == 'do it'
+    assert spec.hold == 'unattended'
+    assert spec.solo
+    assert spec.drop
+    assert not spec.workspace_pinned
+    assert spec.inner_command()[:6] == [
+      'cw',
+      'ss',
+      '--in-place',
+      '--solo',
+      '--hold',
+      'unattended',
+    ]
+
+  def test_host_keeps_the_unattended_default(self):
+    with patch('ride.cli.start_session', return_value=0) as start:
+      ride_cli.main(['ride', 'solo', '--host', 'dev', 'do it'])
+    assert start.call_args.args[0].hold == 'unattended'
+
+  def test_keep_retains_an_automatic_workspace(self):
+    with patch('ride.cli.start_session', return_value=0) as start:
+      ride_cli.main(['ride', 'solo', '--keep', 'dev', 'do it'])
+    assert not start.call_args.args[0].drop
+
+  def test_pinned_workspace_is_retained(self):
+    with patch('ride.cli.start_session', return_value=0) as start:
+      ride_cli.main(['ride', 'solo', '--workspace', 'shared', 'dev', 'do it'])
+    spec = start.call_args.args[0]
+    assert spec.name == 'shared'
+    assert spec.workspace_pinned
+    assert not spec.drop
+
+  def test_forwards_claude_arguments_only_after_the_separator(self):
+    with patch('ride.cli.start_session', return_value=0) as start:
+      ride_cli.main(['ride', 'solo', 'dev', 'hello', '--', '--debug', 'mcp'])
+    assert options(start.call_args.args[0]).arguments == ['--debug', 'mcp']
+
+
 class TestAlong:
   def test_builds_an_attended_claude_session(self):
     with patch('ride.cli.start_session', return_value=0) as start:

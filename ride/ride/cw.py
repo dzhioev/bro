@@ -32,8 +32,9 @@ def build_parser() -> Parser:
   # its cwd — see ride/claude/runner.py
   ss.add_argument('--in-place', action='store_true', env=False, help=SUPPRESS)
   add_forwarded_flags(ss)
-  # internal seam, not a user surface: `cw resume` builds the resume spec and the
-  # outer serializes it into the inner argv — see ride/session.py
+  # internal seams, not user surfaces: the ride outer serializes its mode into
+  # the workspace checkout's compatibility runner — see ride/session.py
+  ss.add_argument('--solo', action='store_true', env=False, help=SUPPRESS)
   ss.add_argument('--resume', action='store_true', env=False, help=SUPPRESS)
   ss.add_argument(
     '-p', '--prompt', default=None, help='initial prompt (prepended with base prompt)'
@@ -158,6 +159,8 @@ def main(argv: list[str]) -> Optional[int]:
     offending = [flag for flag, present in machinery.items() if present]
     if len(offending) > 0:
       parser.error(f'--in-place cannot be combined with {", ".join(offending)}')
+  if args['solo'] and not in_place:
+    parser.error('--solo is an inner-argv token')
   if args['resume'] and not in_place:
     parser.error('resuming is `cw resume <workspace>`; --resume is an inner-argv token')
   # the outer-only --raw × --host gate is skipped under --in-place: the outer

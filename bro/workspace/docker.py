@@ -283,9 +283,9 @@ def _docker_create_argv(
   gives `prepare_container` a window to `docker cp` the scoped credential store into
   the pre-start container's writable layer — no host-side store, no bind mount.
 
-  `tty=False` is the non-TTY variant the broker's supervised children launch with: a
-  headless child gets no pty — its output is captured host-side into a ring buffer, not
-  rendered to a terminal. `extra_mounts` adds explicit `-v SRC:DST` bind mounts — the
+  `tty=False` is the non-TTY variant used by one-shot roots and supervised children.
+  The broker adapter decides whether its streams are inherited separately by a root or
+  captured together for a child. `extra_mounts` adds explicit `-v SRC:DST` bind mounts — the
   broker child mounts its provisioned host socket → the in-container `/run/broker.sock`.
 
   `extra_env` adds explicit `-e KEY=VALUE` entries (value set here) — distinct from the

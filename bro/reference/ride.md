@@ -6,6 +6,12 @@ The runtime is published by the `bro-ride` distribution and depends on the `bro`
 
 ## Commands
 
+### `ride solo <bro> <prompt>`
+
+Runs one prompt without a TTY and writes Claude's reply to stdout. The default harness is Claude Code and the default hold is `unattended`. Claude runs in print mode with the same prompt, MCP, recording, model, and permission composition as an interactive session; the recorded Claude session remains available to `ride resume`.
+
+A launch without `-w / --workspace` receives a fresh name and removes that workspace after a clean exit. `--keep` retains it, and a failed run always keeps it for inspection. `-w NAME` creates or reuses that exact workspace after checking its kind and always retains it.
+
 ### `ride along <bro> [prompt]`
 
 Starts an interactive session. The default harness is Claude Code, the default hold is `attended`, and the workspace is kept after exit. `--host` switches to a same-machine worktree and changes the omitted hold to `guided`, because a non-guided host session skips permission prompts without the container boundary.
@@ -14,17 +20,18 @@ A launch without `-w / --workspace` receives a fresh name. `-w NAME` creates or 
 
 The workspace base defaults to the checkout's current `HEAD`. `--into REF` resolves a branch, tag, or commit, fetching an origin-only ref when needed, and affects only workspace creation. Uncommitted host changes never transfer.
 
-The prompt occupies the optional positional slot. Harness-native arguments therefore follow an explicit separator:
+The prompt occupies a positional slot on both mode verbs. Harness-native arguments therefore follow an explicit separator:
 
 ```console
-ride along dev 'inspect the launch path' -- --debug mcp
+ride solo dev 'inspect the launch path' -- --debug mcp
+ride along dev 'continue the inspection' -- --debug mcp
 ```
 
 Shared launch flags are `--host`, `--hold`, `--grant`, `--revoke`, `--into`, and the LLM selection set (`--provider`, `--model`, `--effort`, `--fast`, `--llm`). `--grant` and `--revoke` use the framework's unified grammar: credential names shape the scoped store and `@bro` names shape the summon allow-list.
 
 ### Lifecycle verbs
 
-- `ride resume <workspace>` relaunches the recorded session recipe, with optional `--grant` / `--revoke` adjustments.
+- `ride resume <workspace>` relaunches the recorded session recipe, with optional `--grant` / `--revoke` adjustments. Resuming a solo run opens an interactive conversation in the same workspace and re-resolves the hold to `along`'s default (`attended`, or `guided` with `--host`).
 - `ride list` lists project workspaces and their activity state.
 - `ride clean` removes inactive clean workspaces; `--force` permits dirty ones and `--dry-run` reports only.
 - `ride exec <workspace> [command ...]` enters a running container workspace.

@@ -20,31 +20,45 @@ from ride.session import SessionSpec, resume_session, start_session
 __cli_name__ = 'ride'
 
 
-def build_parser() -> Parser:
-  parser = Parser(description='run a harness infused with a bro in a managed workspace')
-  subparsers = parser.add_subparsers(dest='cmd', required=True)
-
-  along = subparsers.add_parser('along', help='start an interactive session')
-  along.add_argument(
+def _add_mode_flags(parser: Parser) -> None:
+  parser.add_argument(
     '-w',
     '--workspace',
     default=None,
     metavar='NAME',
     help='pin or reuse NAME (pinned workspaces are always kept)',
   )
-  along.add_argument(
-    '--drop',
-    action='store_true',
-    help='remove an automatically named workspace after a clean exit',
-  )
-  along.add_argument(
+  parser.add_argument(
     '--harness',
     choices=('claude', 'bro'),
     default=None,
     help='driving harness (default: project [tool.bro] harness, then claude; bro is reserved)',
   )
-  add_session_flags(along, include_bro=False)
-  add_claude_flags(along)
+  add_session_flags(parser, include_bro=False)
+  add_claude_flags(parser)
+
+
+def build_parser() -> Parser:
+  parser = Parser(description='run a harness infused with a bro in a managed workspace')
+  subparsers = parser.add_subparsers(dest='cmd', required=True)
+
+  solo = subparsers.add_parser('solo', help='run a one-shot prompt and print the reply')
+  _add_mode_flags(solo)
+  solo.add_argument(
+    '--keep',
+    action='store_true',
+    help='keep an automatically named workspace after a clean exit',
+  )
+  solo.add_argument('bro', help='bro personality to run the harness as')
+  solo.add_argument('prompt', help='prompt to answer')
+
+  along = subparsers.add_parser('along', help='start an interactive session')
+  _add_mode_flags(along)
+  along.add_argument(
+    '--drop',
+    action='store_true',
+    help='remove an automatically named workspace after a clean exit',
+  )
   along.add_argument('bro', help='bro personality to run the harness as')
   along.add_argument('prompt', nargs='?', default=None, help='initial prompt')
 
@@ -85,7 +99,7 @@ def build_parser() -> Parser:
 
 
 def _parse(parser: Parser, argv: list[str]) -> tuple[dict, list[str]]:
-  if len(argv) < 2 or argv[1] != 'along':
+  if len(argv) < 2 or argv[1] not in ('solo', 'along'):
     return parser.parse(argv), []
   try:
     separator = argv.index('--')
@@ -94,11 +108,16 @@ def _parse(parser: Parser, argv: list[str]) -> tuple[dict, list[str]]:
   return parser.parse(argv[:separator]), argv[separator + 1 :]
 
 
-def _along(parser: Parser, args: dict, harness_arguments: list[str]) -> int:
-  if args['workspace'] is not None and args['drop']:
-    parser.error('--drop cannot be combined with --workspace; pinned workspaces are always kept')
+def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, solo: bool) -> int:
+  workspace = args.pop('workspace')
+  if solo:
+    drop = not args.pop('keep') and workspace is None
+  else:
+    drop = args.pop('drop')
+    if workspace is not None and drop:
+      parser.error('--drop cannot be combined with --workspace; pinned workspaces are always kept')
   if args['hold'] is None:
-    args['hold'] = 'guided' if args['host'] else 'attended'
+    args['hold'] = 'unattended' if solo else 'guided' if args['host'] else 'attended'
   harness_name = args.pop('harness') or project_config().harness
   if harness_name == 'bro':
     parser.error('the bro harness is not implemented yet; use --harness claude')
@@ -113,7 +132,6 @@ def _along(parser: Parser, args: dict, harness_arguments: list[str]) -> int:
   args['revoke'] = args['revoke'] or []
   if raw and args['host']:
     parser.error('--raw cannot be combined with --host')
-  workspace = args.pop('workspace')
   bro = args.pop('bro')
   prompt = args.pop('prompt')
   name = workspace if workspace is not None else fresh_workspace_name(f'ride-{bro}')
@@ -122,9 +140,11 @@ def _along(parser: Parser, args: dict, harness_arguments: list[str]) -> int:
     interface='ride',
     harness=harness_name,
     workspace_pinned=workspace is not None,
+    drop=drop,
     bro=bro,
     bro_argument=bro,
     prompt=prompt,
+    solo=solo,
     resume=False,
     harness_options=ClaudeOptions(raw=raw, arguments=harness_arguments).dump(),
     **args,
@@ -140,10 +160,10 @@ def main(argv: list[str]) -> Optional[int]:
   parser = build_parser()
   args, harness_arguments = _parse(parser, argv)
   command = args.pop('cmd')
-  if command != 'along' and len(harness_arguments) > 0:
-    parser.error('`--` harness arguments are accepted only by `ride along`')
-  if command == 'along':
-    return _along(parser, args, harness_arguments)
+  if command not in ('solo', 'along') and len(harness_arguments) > 0:
+    parser.error('`--` harness arguments are accepted only by `ride solo` and `ride along`')
+  if command in ('solo', 'along'):
+    return _start_mode(parser, args, harness_arguments, solo=command == 'solo')
   if command == 'list':
     return list_workspaces()
   if command == 'resume':

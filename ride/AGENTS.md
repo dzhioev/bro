@@ -4,7 +4,7 @@
 
 ## Runtime map
 
-- `ride/cli.py` — the `ride` dispatcher. `along` is the interactive mode verb; `resume`, `list`, `clean`, `exec`, `check-clean`, `scope`, and `banner` are the lifecycle verbs.
+- `ride/cli.py` — the `ride` dispatcher. `solo` is the one-shot mode verb, `along` is the interactive mode verb; `resume`, `list`, `clean`, `exec`, `check-clean`, `scope`, and `banner` are the lifecycle verbs.
 - `ride/cw.py` — the compatibility `cw` parser and dispatcher. It preserves the existing command line, nested-container fallback, and `cw ss --in-place` inner contract while delegating to the moved runtime.
 - `ride/dive_in.py` — the task utility wrapper. It retains task prefetch, task-derived workspace naming, `CW_TASK_ID`, fresh-origin base selection, and hold defaults, then invokes `ride along` with the resolved project-default bro.
 - `ride/session.py` — harness-neutral outer lifecycle: recorded `SessionSpec`, base resolution, auth/scope preflight, workspace kind and lock, resume records, launch dispatch, and keep/drop finish behavior.
@@ -18,5 +18,6 @@
 - The runtime layer names no Claude detail in its serialized harness options. `SessionSpec.harness_options` belongs to the selected implementation and is validated there.
 - The harness seam owns scope recipes, auth, LLM resolution, inner command, workspace state operations, host/container launch, and the in-place runner. Generic credential computation remains in `bro.launch.scope` for native launch and summon reuse.
 - The compatibility inner command remains `cw ss --in-place` until the retirement stage. Do not switch it to `ride` early: host and workspace checkouts may be on opposite sides of this feature branch.
-- A pinned `ride along -w NAME` workspace is never auto-dropped. An unpinned interactive workspace is kept unless `--drop` is explicit.
+- A pinned mode-verb workspace is never auto-dropped. An unpinned `along` workspace is kept unless `--drop` is explicit; an unpinned `solo` workspace is dropped after a clean exit unless `--keep` is explicit.
+- A solo resume becomes an along session and takes along's host-sensitive default hold; the unattended solo hold describes a run with no human channel.
 - `ride` refuses nested launches while process-host mode is unavailable. `cw` alone retains the previous host-worktree fallback.
