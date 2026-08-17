@@ -30,6 +30,7 @@ class SessionSpec:
   grant: list[str]
   revoke: list[str]
   llm: Optional[str]
+  solo: bool
   resume: bool
   into: Optional[str]
   bro: str
@@ -42,10 +43,16 @@ class SessionSpec:
     return self.bro
 
   @property
-  def default_hold(self) -> str:
+  def along_default_hold(self) -> str:
     if self.interface == 'cw':
       return 'guided'
     return 'guided' if self.host else 'attended'
+
+  @property
+  def default_hold(self) -> str:
+    if self.solo:
+      return 'unattended'
+    return self.along_default_hold
 
   @property
   def llm_spec(self) -> LLMSpec:
@@ -58,8 +65,12 @@ class SessionSpec:
   def to_command_argv(self) -> list[str]:
     if self.resume:
       return [self.interface, 'resume', self.name]
-    flags = {'--host': self.host, '--drop': self.drop}
-    verb = 'ss' if self.interface == 'cw' else 'along'
+    flags = {'--host': self.host}
+    if self.interface == 'cw' or not self.solo:
+      flags['--drop'] = self.drop
+    elif not self.workspace_pinned:
+      flags['--keep'] = not self.drop
+    verb = 'ss' if self.interface == 'cw' else 'solo' if self.solo else 'along'
     parts = [self.interface, verb, *(flag for flag, enabled in flags.items() if enabled)]
     if self.hold != self.default_hold:
       parts.extend(['--hold', self.hold])
@@ -96,6 +107,8 @@ class SessionSpec:
     return replace(
       self,
       drop=False,
+      hold=self.along_default_hold if self.solo else self.hold,
+      solo=False,
       resume=True,
       into=None,
       prompt=None,

@@ -129,6 +129,17 @@ class TestCwSessionLaunch:
     assert argv[-2:] == ['--', 'go']
     assert argv.index('--mcp-config') < argv.index('--x')
 
+  def test_solo_adds_print_mode_to_the_full_session_composition(self):
+    argv = _cw_session_launch(
+      _spec(solo=True, hold='unattended', prompt='answer'), claude_args=[]
+    ).argv
+    assert '-p' in argv
+    assert '--dangerously-skip-permissions' in argv
+    assert '--mcp-config' in argv
+    assert '--append-system-prompt' in argv
+    assert '--no-session-persistence' not in argv
+    assert argv[-2:] == ['--', 'answer']
+
 
 class TestRawLaunch:
   def _launch(self, **kwargs) -> cw_claude_argv.ClaudeLaunch:
@@ -208,6 +219,16 @@ class TestRawLaunch:
     assert 'full authorization' not in guided
     # the fragment renders at build — no directive may leak into the prompt
     assert '{{' not in guided
+
+  def test_solo_combines_bare_and_print_modes(self):
+    argv = self._launch(solo=True, hold='unattended', prompt='answer').argv
+    assert '--bare' in argv
+    assert '-p' in argv
+    assert '--dangerously-skip-permissions' in argv
+    assert '--mcp-config' in argv
+    assert '--system-prompt' in argv
+    assert '--no-session-persistence' not in argv
+    assert argv[-1].endswith('answer')
 
   def test_unknown_bro_raises(self):
     with pytest.raises(KeyError, match='unknown bro'):
