@@ -1,6 +1,6 @@
-# bro/runtime/AGENTS.md
+# Serving processes
 
-Serving-process fronts that compose lower-level packages into runnable services.
+Fronts that compose lower-level packages into runnable services.
 
 ## Components
 

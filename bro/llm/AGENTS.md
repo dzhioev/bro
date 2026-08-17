@@ -1,6 +1,6 @@
-# bro/llm/AGENTS.md
+# LLM abstraction and MCP tooling
 
-Provider-agnostic LLM abstraction and MCP tooling for the `bro` agent system and installed tool providers. `LLM` is the chat interface; an `MCPServer` supplies callable `Tool`s; an `Observer` receives typed live events while a `Tracker` records durably. Run the `llm` CLI (`bro.llm.py`) with `--help` to chat against a provider from the shell.
+Provider-agnostic, serving the `bro` agent system and installed tool providers. `LLM` is the chat interface; an `MCPServer` supplies callable `Tool`s; an `Observer` receives typed live events while a `Tracker` records durably. Run the `llm` CLI (`bro.llm.py`) with `--help` to chat against a provider from the shell.
 
 ## Design
 

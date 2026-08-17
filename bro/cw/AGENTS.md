@@ -1,4 +1,4 @@
-# bro/cw/AGENTS.md
+# cw workspace launcher
 
 `cw` launches claude in a managed workspace — either a host **worktree** or an isolated docker **container** clone. The package is the claude-harness launch surface over two lower layers: the `bro/workspace/` package (containerization/workspace mechanics — `bro/workspace/AGENTS.md`) and `bro/launch/` (the bro-aware host machinery: per-surface credential scopes, summon enforcement, the broker-root composition — `bro/launch/AGENTS.md`). For *how it actually works* (subcommands, host vs container modes, credential seeding, env vars, resuming, `--raw`/`--hold`), read `bro/reference/cw.md` — that document owns the behavior, this one owns the code layout.
 

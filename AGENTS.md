@@ -1,6 +1,6 @@
-# AGENTS.md
+# Bro framework
 
-Bro is the agent system: independent specialised agents (a "Bro") each run as a stateless LLM loop with their own system prompt and MCP-tool access. Conceptual model and rationale: `DESIGN.md`. This file maps the framework; `dev/AGENTS.md` maps the development tooling that ships beside it. Run any script with `--help` for flags.
+Bro is the agent system: independent specialised agents (a "Bro") each run as a stateless LLM loop with their own system prompt and MCP-tool access. Conceptual model and rationale: `DESIGN.md`. This file maps the framework; `dev/AGENTS.md` maps the development tooling that ships beside it. Every subsystem carries its own `AGENTS.md`, titled after what the subsystem is rather than the path it sits at. Run any script with `--help` for flags.
 
 ## Development
 

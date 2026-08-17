@@ -1,6 +1,6 @@
-# bro/trails/AGENTS.md
+# Trails recording pipeline
 
-Trails is the universal registry and recording pipeline for LLM runs across harnesses. Recorders and readers use the synchronous `TrailsStore` contract; the `trails` credential selects its concrete backend, and a process without that credential records locally.
+Trails is the universal registry for LLM runs across harnesses. Recorders and readers use the synchronous `TrailsStore` contract; the `trails` credential selects its concrete backend, and a process without that credential records locally.
 
 ## Architecture
 

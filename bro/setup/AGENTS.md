@@ -1,6 +1,6 @@
-# bro/setup/AGENTS.md
+# Setup and credential schemas
 
-How to bring up a fresh checkout, plus the credential schemas the framework reads (secrets live in `~/.bro`). Run any script with `--help` for flags.
+How to bring up a fresh checkout, plus what the framework reads out of `~/.bro`. Run any script with `--help` for flags.
 
 ## Setup
 

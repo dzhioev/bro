@@ -1,6 +1,6 @@
-# bro/workspace/AGENTS.md
+# Managed workspaces
 
-Managed workspaces: the containerization/workspace layer every launch surface builds on. A *workspace* is `var/cw/workspaces/<name>/` — an isolated per-task copy of the operated repo in `tree/` plus the records kept about it (`meta.json`, `lock`, `exit`, `resume.json`, `session.log`), with `meta.json` naming its kind: a same-machine git worktree or a docker container clone. This package owns the workspace's mechanics: creation and provisioning, the session image, container create/attach/suspend, inspection and teardown, scoped credential-store hydration, the broker spawner adapters, and the session banner. The behavior of the launch stack built on top is `bro/reference/cw.md`; this file owns the code layout.
+The containerization/workspace layer every launch surface builds on. A *workspace* is `var/cw/workspaces/<name>/` — an isolated per-task copy of the operated repo in `tree/` plus the records kept about it (`meta.json`, `lock`, `exit`, `resume.json`, `session.log`), with `meta.json` naming its kind: a same-machine git worktree or a docker container clone. This package owns the workspace's mechanics: creation and provisioning, the session image, container create/attach/suspend, inspection and teardown, scoped credential-store hydration, the broker spawner adapters, and the session banner. The behavior of the launch stack built on top is `bro/reference/cw.md`; this file owns the code layout.
 
 ## Design
 

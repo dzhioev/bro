@@ -1,6 +1,6 @@
-# dev/AGENTS.md
+# Development tooling
 
-Development tooling for repositories built on the bro framework, distributed separately from the runtime. The distribution is `bro-dev` and its package is `bro.dev`, a portion of the framework's `bro` namespace; none of it is imported by framework users, and none of it is specific to this checkout — what only means something here lives in the `bro-local` member (`local/`).
+For repositories built on the bro framework, distributed separately from the runtime. The distribution is `bro-dev` and its package is `bro.dev`, a portion of the framework's `bro` namespace; none of it is imported by framework users, and none of it is specific to this checkout — what only means something here lives in the `bro-local` member (`local/`).
 
 ## Development
 

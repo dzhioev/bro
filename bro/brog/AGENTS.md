@@ -1,6 +1,6 @@
-# bro/brog/AGENTS.md
+# brog task tracker facade
 
-brog ("bro backlog") is a minimal, development-shaped task-tracker facade exposed as the `brog` MCP namespace: create, read, close, and comment operations with the concrete tracker selected by config. Switching a repository's tracker is a config change only.
+brog ("bro backlog") is minimal and development-shaped, exposed as the `brog` MCP namespace: create, read, close, and comment operations with the concrete tracker selected by config. Switching a repository's tracker is a config change only.
 
 ## Design
 

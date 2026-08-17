@@ -1,6 +1,6 @@
-# bro/launch/AGENTS.md
+# Launch machinery
 
-Bros launching and managing layer. It owns the shared launch machinery behind the canonical `bro run` / `bro chat` verbs and their compatibility aliases, plus the bro-aware host machinery every launch surface (these CLIs and `cw ss` alike) runs a session through: per-surface credential scoping, summon enforcement, and the broker-root composition over the `bro/workspace/` layer's spawners.
+The shared machinery behind the canonical `bro run` / `bro chat` verbs and their compatibility aliases, plus the bro-aware host machinery every launch surface (these CLIs and `cw ss` alike) runs a session through: per-surface credential scoping, summon enforcement, and the broker-root composition over the `bro/workspace/` layer's spawners.
 
 ## Files
 

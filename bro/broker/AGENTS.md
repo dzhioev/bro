@@ -1,6 +1,6 @@
-# bro/broker/AGENTS.md
+# broker messaging substrate
 
-`broker` is the host↔peer messaging substrate for the `cw`/`bro` world — the wire format plus the transport that carries it. **Pure substrate: it imports neither `cw` nor `bro`.** Consumers (`cw` and `bro.summon`) depend on broker through its ports; broker depends on nothing of theirs. This file maps what exists in the tree.
+Host↔peer messaging for the `cw`/`bro` world — the wire format plus the transport that carries it. **Pure substrate: it imports neither `cw` nor `bro`.** Consumers (`cw` and `bro.summon`) depend on broker through its ports; broker depends on nothing of theirs. This file maps what exists in the tree.
 
 ## The encoding / framing seam
 
