@@ -214,7 +214,7 @@ class TestShow:
     assert _command_show(_client(client), _args('T1')) == 0
 
     output = capsys.readouterr().out
-    assert '→ bash({"cmd": "ls"})' in output
+    assert '→ bash {cmd: ls}' in output
     assert 'file.txt' in output
 
   def test_unknown_id_propagates_not_found(self):
@@ -243,7 +243,7 @@ class TestSteps:
     output = capsys.readouterr().out
     assert '0  ' in output
     assert 'llm_call' in output
-    assert '"response": {"id": "r1"}' in output
+    assert '{response: {id: r1}}' in output
     assert 'response_id=r1' in output
 
   def test_spilled_body_is_an_omission_marker_and_is_not_fetched(self, capsys):
@@ -272,7 +272,7 @@ class TestSteps:
     )
     assert _command_steps(_client(client), _args('T1')) == 0
     output = capsys.readouterr().out
-    assert '"reason": "ok"' in output
+    assert '{reason: ok}' in output
     assert 'terminal' not in output
 
 
@@ -406,7 +406,7 @@ class TestFollow:
     assert _command_show(_client(client), _args('T1', follow=True)) == 0
 
     output = capsys.readouterr().out
-    assert '→ read({})' in output
+    assert '→ read\n' in output
     assert '← followed result' in output
     assert '\x1b[' not in output
 

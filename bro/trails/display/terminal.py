@@ -281,13 +281,13 @@ class _TerminalFormatter:
   def _rewind_conversation(self, block: PresentationBlock) -> str:
     output = self._rewind_turn_heading(block)
     if block.kind is BlockKind.TOOL:
-      arguments = block.items[0].text
-      output += f'  {self._styled(f"→ {block.label}({arguments})", StyleRole.TOOL)}\n'
+      output += self._rewind_tool_call(block.label, block.items[0])
       for item in block.items[1:]:
         rendered = item.text if len(item.text) > 0 else '(empty)'
         output += ''.join(
           self._styled(f'    {line}', StyleRole.MUTED) + '\n' for line in rendered.splitlines()
         )
+        output += self._rewind_omitted_line(item)
       return output
     for item in block.items:
       if block.style is StyleRole.REASONING:
@@ -298,9 +298,24 @@ class _TerminalFormatter:
       else:
         rendered = item.text if len(item.text) > 0 else '(no detail)'
         output += ''.join(f'  {line}\n' for line in rendered.splitlines())
-      if item.omitted_characters > 0:
-        output += self._styled(f'  ... <{item.omitted_characters} more chars>\n', StyleRole.MUTED)
+      output += self._rewind_omitted_line(item)
     return output
+
+  def _rewind_tool_call(self, label: str, item: BlockItem) -> str:
+    if '\n' in item.text:
+      output = f'  {self._styled(f"→ {label}", StyleRole.TOOL)}\n'
+      output += ''.join(
+        (self._styled(f'      {line}', StyleRole.TOOL) if len(line) > 0 else '') + '\n'
+        for line in item.text.rstrip('\n').split('\n')
+      )
+    else:
+      arguments = f' {item.text}' if len(item.text) > 0 else ''
+      output = f'  {self._styled(f"→ {label}{arguments}", StyleRole.TOOL)}\n'
+    return output + self._rewind_omitted_line(item)
+
+  def _rewind_omitted_line(self, item: BlockItem) -> str:
+    suffix = self._rewind_omission(item)
+    return '' if len(suffix) == 0 else self._styled(f'  {suffix}\n', StyleRole.MUTED)
 
   def _rewind_turn_heading(self, block: PresentationBlock) -> str:
     if block.ordinal is None or block.ordinal in self._rewind_turns:

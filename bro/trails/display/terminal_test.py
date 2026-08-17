@@ -105,9 +105,7 @@ def test_observer_preset_uses_the_plain_log_shape():
     '  thinking\n'
     '\n'
     '[12:34:57] test-bro tool call: repo::search\n'
-    '  {\n'
-    '    "query": "x"\n'
-    '  }\n'
+    '  {query: x}\n'
     '\n'
     '[12:34:58] test-bro tool result: repo::search\n'
     '  ok\n'
@@ -272,8 +270,74 @@ def test_rewind_preset_uses_numbered_conversation_turns():
     '  [thinking]\n'
     '    think\n'
     '  working\n'
-    '  → search({"query": "x"})\n'
+    '  → search {query: x}\n'
     '    found\n'
+  )
+
+
+def test_rewind_lays_a_wide_tool_call_out_under_its_name():
+  renderer = RetainedRenderer()
+  configuration = preset('rewind-show', color=ColorMode.NEVER)
+  with DisplaySession(configuration, renderer) as session:
+    session.consume(
+      [
+        ToolCall(
+          key='call',
+          origin=Origin.RECORDED,
+          source=RecordedSource('T1', 1),
+          timestamp='2026-01-01T00:00:01Z',
+          call_id='call',
+          tool_name='edit_file',
+          arguments={'path': '/workspace/bro.py', 'text': 'def main():\n  return 1\n'},
+        ),
+        ToolResult(
+          key='result',
+          origin=Origin.RECORDED,
+          source=RecordedSource('T1', 2),
+          timestamp='2026-01-01T00:00:02Z',
+          call_id='call',
+          result='written',
+        ),
+      ]
+    )
+  assert renderer.document() == (
+    '\n#1 ASSISTANT 2026-01-01 00:00:01\n'
+    '  → edit_file\n'
+    '      path: /workspace/bro.py\n'
+    '      text: |\n'
+    '        def main():\n'
+    '          return 1\n'
+    '    written\n'
+  )
+
+
+def test_rewind_shows_a_call_without_arguments_as_its_name_alone():
+  renderer = RetainedRenderer()
+  configuration = preset('rewind-show', color=ColorMode.NEVER)
+  with DisplaySession(configuration, renderer) as session:
+    session.consume(
+      [
+        ToolCall(
+          key='call',
+          origin=Origin.RECORDED,
+          source=RecordedSource('T1', 1),
+          timestamp='2026-01-01T00:00:01Z',
+          call_id='call',
+          tool_name='dev__read_reference',
+          arguments={},
+        ),
+        ToolResult(
+          key='result',
+          origin=Origin.RECORDED,
+          source=RecordedSource('T1', 2),
+          timestamp='2026-01-01T00:00:02Z',
+          call_id='call',
+          result='reference',
+        ),
+      ]
+    )
+  assert renderer.document() == (
+    '\n#1 ASSISTANT 2026-01-01 00:00:01\n  → dev::read_reference\n    reference\n'
   )
 
 

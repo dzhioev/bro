@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any
 
 from bro.llm.mcp import canonical_name
+from bro.trails.display import _yaml
 from bro.trails.display.blocks import (
   Append,
   BlockItem,
@@ -80,6 +81,21 @@ class _GroupState:
   route: OutputRoute
   block: PresentationBlock
 
+
+# the widest one-line rendering a structured value keeps before it expands to a block
+_INLINE_VALUE_WIDTH = 88
+
+# kinds the rewind layouts print as one row, whatever a value's structure
+_ROW_RECORD_KINDS = frozenset(
+  {
+    RecordKind.TRAIL_METADATA,
+    RecordKind.LAUNCH_CONTEXT,
+    RecordKind.SEGMENT_BOUNDARY,
+    RecordKind.NATIVE_STEP,
+    RecordKind.TRAIL_LIST_ROW,
+    RecordKind.LINEAGE_NODE,
+  }
+)
 
 _STYLE_BY_KIND = {
   RecordKind.SYSTEM_PROMPT: StyleRole.MUTED,
@@ -293,7 +309,8 @@ class DisplaySession:
   ) -> PresentationBlock:
     assert state.call is not None and state.block_id is not None
     call = state.call
-    items = [self._item(call.arguments, call.kind, label='arguments')]
+    arguments = None if call.arguments == {} else call.arguments
+    items = [self._item(arguments, call.kind, label='arguments')]
     style = StyleRole.TOOL
     if state.result is not None and state.result_visible:
       result_style = StyleRole.ERROR if state.result.is_error else StyleRole.SUCCESS
@@ -528,26 +545,37 @@ class DisplaySession:
       if kind is RecordKind.TOOL_CALL:
         return self._chat_arguments(value)
     if isinstance(value, str):
-      if self.configuration.appearance is Appearance.PLAIN_LOG and kind in {
-        RecordKind.TOOL_CALL,
-        RecordKind.TOOL_RESULT,
-      }:
-        stripped = value.strip()
-        if len(stripped) > 0 and stripped[0] in '[{':
-          try:
-            value = json.loads(stripped)
-          except json.JSONDecodeError:
-            return sanitize_text(value)
-        else:
-          return sanitize_text(value)
-      else:
+      structured = self._structured_tool_text(value, kind)
+      if structured is None:
         return sanitize_text(value)
-    indent = None if self.configuration.appearance is Appearance.REWIND else 2
+      value = structured
     try:
-      rendered = json.dumps(value, ensure_ascii=False, indent=indent, allow_nan=False)
+      if self._single_line(kind):
+        rendered = _yaml.flow(value)
+      else:
+        rendered = _yaml.render(value, width=_INLINE_VALUE_WIDTH)
     except (TypeError, ValueError) as exception:
-      raise DisplayDataError(f'display value is not JSON-serializable: {value!r}') from exception
+      raise DisplayDataError(f'display value has no rendering: {value!r}') from exception
     return sanitize_text(rendered)
+
+  def _structured_tool_text(self, value: str, kind: RecordKind) -> Any:
+    """The value a tool call or result carries as JSON text, or None for prose."""
+    if self.configuration.appearance is Appearance.CHAT:
+      return None
+    if kind not in {RecordKind.TOOL_CALL, RecordKind.TOOL_RESULT}:
+      return None
+    stripped = value.strip()
+    if len(stripped) == 0 or stripped[0] not in '[{':
+      return None
+    try:
+      return json.loads(stripped)
+    except json.JSONDecodeError:
+      return None
+
+  def _single_line(self, kind: RecordKind) -> bool:
+    if self.configuration.appearance is Appearance.CHAT:
+      return True
+    return self.configuration.appearance is Appearance.REWIND and kind in _ROW_RECORD_KINDS
 
   @staticmethod
   def _chat_arguments(value: Any) -> str:
