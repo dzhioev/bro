@@ -343,16 +343,19 @@ def run_main(
   if hopped is not None:
     return hopped
 
-  log.verbose('creating bro %s', args['bro'])
-  bro = create_bro_for_run(args['bro'], selection)
-  observer = _ask_observer(bro.name, rich=args['rich'])
-  hold = args['hold'] if args['hold'] is not None else 'unattended'
-  try:
-    asyncio.run(bro.run(input_text, observer=observer, surface='ask', hold=hold))
-  except BroRaised:
-    return 1
-  except KeyboardInterrupt:
-    # Ctrl+C cancels the run through the loop; the shell asked for this, so it
-    # reads as an interrupted command, not a crashed one
-    log.error('interrupted')
-    return 130
+  from bro.launch.broxy import session_broxy
+
+  with session_broxy():
+    log.verbose('creating bro %s', args['bro'])
+    bro = create_bro_for_run(args['bro'], selection)
+    observer = _ask_observer(bro.name, rich=args['rich'])
+    hold = args['hold'] if args['hold'] is not None else 'unattended'
+    try:
+      asyncio.run(bro.run(input_text, observer=observer, surface='ask', hold=hold))
+    except BroRaised:
+      return 1
+    except KeyboardInterrupt:
+      # Ctrl+C cancels the run through the loop; the shell asked for this, so it
+      # reads as an interrupted command, not a crashed one
+      log.error('interrupted')
+      return 130

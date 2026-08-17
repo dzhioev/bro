@@ -21,6 +21,7 @@ def _trail_header(
   bro: str = 'bro',
   llm_spec: Optional[dict] = None,
   harness: str = 'bro',
+  hold: Optional[str] = None,
 ) -> Trail:
   return Trail(
     id=trail_id,
@@ -32,6 +33,7 @@ def _trail_header(
     interactive=False,
     surface='ask',
     forked_from=None,
+    hold=hold,
   )
 
 
@@ -482,6 +484,7 @@ class _RecordingTracker(Tracker):
         'forked_from': forked_from,
         'interactive': interactive,
         'surface': surface,
+        'hold': hold,
       }
     )
     return 'forked-trail-id'
@@ -637,6 +640,32 @@ class TestForkLinkage:
     seeded = created[0]._input_prefix
     assert seeded is not None
     assert seeded[0] == {'role': 'system', 'content': 'swapped prompt'}
+
+  def test_explicit_hold_replaces_the_recorded_hold_fragment(self):
+    from bro.base import credentials
+    from bro.prompts import hold_fragment
+
+    known_credentials = credentials.known_names()
+    unattended = hold_fragment('unattended', harness='bro', wire='bare', creds=known_credentials)
+    attended = hold_fragment('attended', harness='bro', wire='bare', creds=known_credentials)
+    recorded = _simple_trail(hold='unattended')
+    trail = RecordedTrail(
+      header=recorded.header,
+      steps=[
+        dataclasses.replace(recorded.steps[0], body=f'{_SYS_TEXT}\n\n{unattended}'),
+        *recorded.steps[1:],
+      ],
+    )
+    tracker = _RecordingTracker()
+    context, _, created = _patch_openai_create_llm([_fake_response(output=[_message_item('ok')])])
+    with context:
+      fork(trail, 2, hold='attended', tracker=tracker, surface='call')
+    expected_prompt = f'{_SYS_TEXT}\n\n{attended}'
+    assert tracker.headers[0]['system_prompt'] == expected_prompt
+    assert tracker.headers[0]['hold'] == 'attended'
+    prefix = created[0]._input_prefix
+    assert prefix is not None
+    assert prefix[0] == {'role': 'system', 'content': expected_prompt}
 
 
 class TestForkRecording:

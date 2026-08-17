@@ -217,6 +217,7 @@ class Trail:
   surface: str
   forked_from: Optional[ForkedFrom]
   summoned_by: Optional[dict[str, Any]] = None
+  hold: Optional[str] = None
 
   @property
   def llm_spec(self) -> dict:

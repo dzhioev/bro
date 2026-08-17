@@ -94,7 +94,8 @@ class ClaudeHarness:
   def scope_recipe(self, spec: 'SessionSpec') -> ScopeRecipe:
     return scope_recipe(options(spec).raw)
 
-  def resolve_llm(self, value: str | None) -> LLMSpec:
+  def resolve_llm(self, value: str | None, bro_name: str) -> LLMSpec:
+    del bro_name
     from bro.llm.providers import LLMSelectionError, resolve
 
     selection = LLMSelection() if value is None else parse(value)

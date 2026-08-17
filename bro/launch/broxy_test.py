@@ -9,6 +9,7 @@ import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -102,3 +103,31 @@ def test_start_returns_none_without_the_console_script(tmp_path):
   # spawn itself fails, and the caller is left to unset BROKER_CHANNEL
   broxy = _start_session_broxy('unix:' + str(tmp_path / 'upstream.sock'), {'PATH': str(tmp_path)})
   assert broxy is None
+
+
+def test_session_broxy_rewrites_only_a_marked_host_root(monkeypatch):
+  daemon = MagicMock(address='unix:/tmp/session-broxy.sock')
+  start = MagicMock(return_value=daemon)
+  monkeypatch.setattr(cw_broxy, '_start_session_broxy', start)
+  monkeypatch.setenv(cw_broxy.START_SESSION_BROXY_ENV, '1')
+  monkeypatch.setenv('BROKER_CHANNEL', 'unix:/tmp/root.sock')
+
+  with cw_broxy.session_broxy():
+    assert os.environ['BROKER_CHANNEL'] == daemon.address
+    assert cw_broxy.START_SESSION_BROXY_ENV not in os.environ
+
+  start.assert_called_once()
+  daemon.stop.assert_called_once()
+  assert os.environ['BROKER_CHANNEL'] == 'unix:/tmp/root.sock'
+
+
+def test_session_broxy_leaves_an_existing_session_channel_alone(monkeypatch):
+  start = MagicMock()
+  monkeypatch.setattr(cw_broxy, '_start_session_broxy', start)
+  monkeypatch.delenv(cw_broxy.START_SESSION_BROXY_ENV, raising=False)
+  monkeypatch.setenv('BROKER_CHANNEL', 'unix:/tmp/existing-broxy.sock')
+
+  with cw_broxy.session_broxy():
+    assert os.environ['BROKER_CHANNEL'] == 'unix:/tmp/existing-broxy.sock'
+
+  start.assert_not_called()

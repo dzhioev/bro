@@ -10,6 +10,7 @@ from bro.workspace.containers import exec_in_workspace
 from bro.workspace.model import Workspace
 from bro.workspace.paths import fresh_workspace_name, project_root
 from bro.workspace.project import project_config
+from ride.bro import BroOptions, add_flags as add_bro_flags
 from ride.claude.harness import ClaudeOptions, add_flags as add_claude_flags
 from ride.clean import clean_workspaces
 from ride.flags import add_scope_flags, add_session_flags
@@ -32,10 +33,11 @@ def _add_mode_flags(parser: Parser) -> None:
     '--harness',
     choices=('claude', 'bro'),
     default=None,
-    help='driving harness (default: project [tool.bro] harness, then claude; bro is reserved)',
+    help='driving harness (default: project [tool.bro] harness, then claude)',
   )
   add_session_flags(parser, include_bro=False)
   add_claude_flags(parser)
+  add_bro_flags(parser)
 
 
 def build_parser() -> Parser:
@@ -119,21 +121,40 @@ def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, sol
   if args['hold'] is None:
     args['hold'] = 'unattended' if solo else 'guided' if args['host'] else 'attended'
   harness_name = args.pop('harness') or project_config().harness
-  if harness_name == 'bro':
-    parser.error('the bro harness is not implemented yet; use --harness claude')
   try:
-    get_harness(harness_name)
+    harness = get_harness(harness_name)
     canonicalize(args, selection_from_args(args))
     drop_piece_flags(args)
   except (LLMSelectionError, ValueError) as error:
     parser.error(str(error))
   raw = args.pop('raw')
+  rich = args.pop('rich')
+  text = args.pop('text')
+  no_trails = args.pop('no_trails')
   args['grant'] = args['grant'] or []
   args['revoke'] = args['revoke'] or []
-  if raw and args['host']:
-    parser.error('--raw cannot be combined with --host')
   bro = args.pop('bro')
   prompt = args.pop('prompt')
+  if harness_name == 'claude':
+    if rich or text or no_trails:
+      parser.error('--rich/--text/--no-trails require --harness bro')
+    if raw and args['host']:
+      parser.error('--raw cannot be combined with --host')
+    harness_options = ClaudeOptions(raw=raw, arguments=harness_arguments).dump()
+  else:
+    if raw:
+      parser.error('--raw requires --harness claude')
+    if len(harness_arguments) > 0:
+      parser.error('arguments after `--` require --harness claude')
+    if rich and not solo:
+      parser.error('--rich is accepted only by ride solo')
+    if text and solo:
+      parser.error('--text is accepted only by ride along')
+    harness_options = BroOptions(rich=rich, text=text, no_trails=no_trails, subject=prompt).dump()
+  try:
+    resolved_llm = harness.resolve_llm(args['llm'], bro)
+  except (KeyError, LLMSelectionError, ValueError) as error:
+    parser.error(str(error))
   name = workspace if workspace is not None else fresh_workspace_name(f'ride-{bro}')
   spec = SessionSpec(
     name=name,
@@ -144,15 +165,12 @@ def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, sol
     bro=bro,
     bro_argument=bro,
     prompt=prompt,
+    resolved_llm=resolved_llm.dump(),
     solo=solo,
     resume=False,
-    harness_options=ClaudeOptions(raw=raw, arguments=harness_arguments).dump(),
+    harness_options=harness_options,
     **args,
   )
-  try:
-    _ = spec.llm_spec
-  except LLMSelectionError as error:
-    parser.error(str(error))
   return start_session(spec)
 
 

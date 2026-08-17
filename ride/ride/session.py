@@ -30,6 +30,7 @@ class SessionSpec:
   grant: list[str]
   revoke: list[str]
   llm: Optional[str]
+  resolved_llm: dict
   solo: bool
   resume: bool
   into: Optional[str]
@@ -56,7 +57,7 @@ class SessionSpec:
 
   @property
   def llm_spec(self) -> LLMSpec:
-    return get_harness(self.harness).resolve_llm(self.llm)
+    return LLMSpec.from_dict(self.resolved_llm)
 
   @property
   def kind(self) -> WorkspaceKind:
@@ -145,6 +146,10 @@ def _without_create_options(harness: str, values: dict) -> dict:
 
     options = ClaudeOptions.load(values)
     return ClaudeOptions(raw=options.raw, arguments=[]).dump()
+  if harness == 'bro':
+    from ride.bro import BroOptions
+
+    return BroOptions.load(values).dump()
   raise ValueError(f'unknown harness: {harness}')
 
 

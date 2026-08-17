@@ -133,13 +133,17 @@ class SummonSpawner(Spawner):
     return await self._docker.spawn(lowered, channel)
 
 
-def _note_root_started(control: SummonControl):
+def _note_root_started(control: SummonControl, trail_pointer_path: Optional[Path] = None):
   def _handle(context: Dispatcher, peer: Peer, message: Message) -> None:
     del context, peer
     trail_id = message.payload.get('trail_id')
     log.info('root run started (trail %s)', trail_id)
     # a bro-run root's own trail is what its summon children are attributed to
     control.note_root_trail(trail_id)
+    if trail_pointer_path is not None and isinstance(trail_id, str) and len(trail_id) > 0:
+      from bro.monitor.trail_pointer import write
+
+      write(trail_pointer_path, trail_id)
 
   return _handle
 
@@ -208,7 +212,7 @@ def run_root_via_broker(
   facade.on(Tag.PING, ping_handler)
   # the root's own lifecycle (a bro run at the session root) has no parent peer to
   # route to; this host process is its parent, so it lands in the host log
-  facade.on(Tag.STARTED, _note_root_started(control))
+  facade.on(Tag.STARTED, _note_root_started(control, trail_pointer))
   facade.on(Tag.COMPLETED, _log_root_completed)
   facade.on(SUMMON, control.handle)
   facade.add_delivery_observer(control.observe_delivery)
