@@ -37,6 +37,10 @@ def bro_cw_statusline():
   return _run('bro.cw.statusline')
 
 
+def bro_cw_watch_guard():
+  return _run('bro.cw.watch_guard')
+
+
 def bro_extra_github_poll_pr():
   return _run('bro.extra.github.poll_pr')
 

@@ -526,3 +526,88 @@ async def test_prestarted_expiry_points_at_the_summon_status(
     assert len(messages) == 1
     assert 'var/cw/summon' in messages[0]
     assert 'trails' not in messages[0]
+
+
+class _StopWatching(Exception):
+  pass
+
+
+def _active(request_id: str, trail_id: str | None) -> dict:
+  return {
+    'request_id': request_id,
+    'target': 'dev',
+    'trail_id': trail_id,
+    'summoner': {'kind': 'root'},
+    'started_at': 1.0,
+  }
+
+
+def _finished(request_id: str, outcome: str) -> dict:
+  return {
+    'request_id': request_id,
+    'target': 'dev',
+    'trail_id': 'T1',
+    'summoner': {'kind': 'root'},
+    'outcome': outcome,
+    'ended_at': 2.0,
+  }
+
+
+def _watched(tmp_path, monkeypatch, first: dict, rest: list[dict]) -> list[str]:
+  """the events `watch_summons` reports as the status file walks `first` -> `rest`."""
+  status_file = tmp_path / 'ws.status.json'
+  status_file.write_text(json.dumps(first))
+  monkeypatch.setenv(summon_status.STATUS_ENV, str(status_file))
+  pending = list(rest)
+
+  def _advance(seconds):
+    del seconds
+    if len(pending) == 0:
+      raise _StopWatching
+    status_file.write_text(json.dumps(pending.pop(0)))
+
+  monkeypatch.setattr('bro.summon.time.sleep', _advance)
+  events = []
+  with contextlib.suppress(_StopWatching):
+    events.extend(summon.watch_summons())
+  return events
+
+
+def test_watch_errors_without_a_status_file_env(monkeypatch, capsys, caplog):
+  monkeypatch.delenv(summon_status.STATUS_ENV, raising=False)
+  assert summon.main(['summon', 'watch']) == 1
+  assert capsys.readouterr().out == ''
+  assert any(summon_status.STATUS_ENV in record.getMessage() for record in caplog.records)
+
+
+def test_watch_reports_a_child_starting_and_ending(tmp_path, monkeypatch):
+  assert _watched(
+    tmp_path,
+    monkeypatch,
+    {'active': [], 'last': None},
+    [
+      {'active': [_active('R1', None)], 'last': None},
+      {'active': [_active('R1', 'T1')], 'last': None},
+      {'active': [], 'last': _finished('R1', 'completed')},
+    ],
+  ) == ['dev started — trail T1 (request R1)', 'dev completed (request R1)']
+
+
+def test_watch_treats_what_is_already_in_flight_as_the_baseline(tmp_path, monkeypatch):
+  assert _watched(
+    tmp_path,
+    monkeypatch,
+    {'active': [_active('R1', 'T1')], 'last': None},
+    [{'active': [], 'last': _finished('R1', 'raised')}],
+  ) == ['dev raised (request R1)']
+
+
+def test_watch_reports_an_end_whose_outcome_the_status_file_no_longer_holds(tmp_path, monkeypatch):
+  # the file retains one finished summon, so the older of two ends in the same
+  # poll is reported without its outcome rather than dropped
+  assert _watched(
+    tmp_path,
+    monkeypatch,
+    {'active': [_active('R1', 'T1'), _active('R2', 'T2')], 'last': None},
+    [{'active': [], 'last': _finished('R2', 'completed')}],
+  ) == ['dev ended (request R1)', 'dev completed (request R2)']

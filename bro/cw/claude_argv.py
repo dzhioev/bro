@@ -25,7 +25,7 @@ if TYPE_CHECKING:
   from bro.cw.session import SessionSpec
 
 
-def _settings_command(module: str) -> str:
+def _settings_command(module: str, *args: str) -> str:
   """a `--settings` command line running `module` under the runner's interpreter.
 
   claude runs the string through a shell (hence the quoting) whose PATH need not
@@ -35,7 +35,27 @@ def _settings_command(module: str) -> str:
   re-executes `module` as `__main__`, so only a leaf nothing else imports may be
   named: a second copy breaks every identity check against its symbols.
   """
-  return shlex.join([sys.executable, '-m', module])
+  return shlex.join([sys.executable, '-m', module, *args])
+
+
+def _tool_gate_hooks(narrowed: dict[str, tuple[str, ...]]) -> dict:
+  """the `hooks` settings block gating each narrowed native tool to its commands.
+
+  claude matches a `PreToolUse` entry by tool name and runs its hook before the
+  call, so one entry per tool carries that tool's allowed commands as the gate's
+  own argv (`bro/cw/watch_guard.py`).
+  """
+  return {
+    'PreToolUse': [
+      {
+        'matcher': tool,
+        'hooks': [
+          {'type': 'command', 'command': _settings_command('bro.cw.watch_guard', tool, *commands)}
+        ],
+      }
+      for tool, commands in narrowed.items()
+    ]
+  }
 
 
 @dataclass(frozen=True)
@@ -104,6 +124,9 @@ def build_claude_launch(
   bro = create_bro(spec.session_bro)
   servers = bro.claude_bro_mcp_servers() if spec.raw else bro.claude_persona_mcp_servers()
   blocked_tool_names = () if spec.raw else bro.blocked_tool_names('claude')
+  narrowed_tool_commands = {} if spec.raw else bro.narrowed_tool_commands('claude')
+  if len(narrowed_tool_commands) > 0:
+    settings['hooks'] = _tool_gate_hooks(narrowed_tool_commands)
   namespaces = list(dict.fromkeys(s.namespace for s in servers))
   mcp_config = _http_mcp_config(namespaces, port=endpoint.port, token=endpoint.token)
   if spec.raw:

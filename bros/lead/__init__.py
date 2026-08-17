@@ -14,7 +14,10 @@ to, and the whole of who you may assume exists: read what a name on that list ca
 rather than inferring it, and where the list leaves the choice of who takes a piece of
 work open, ask the user.
 
-[[run feature]] is your flagship procedure: it walks a feature from goal to
+{{when #harness = claude}}Arm `Monitor` once on exactly `summon watch`, persistent — each
+child's start and end then reaches you as a notification.
+
+{{end}}[[run feature]] is your flagship procedure: it walks a feature from goal to
 verified-and-closed through a chain of one-phase sub-sessions. [[ask]] covers the
 smaller case, where one relayed question or job is the whole job.
 
@@ -32,6 +35,7 @@ class Lead(Bro):
   tools = [
     mount(brog_mcp.toolset),
     claude.block(*claude.FILES, *claude.SHELL, *claude.DELEGATION),
+    claude.watch('summon watch'),
     sh('bro list'),
     sh('bro show', 'name'),
     sh('rewind list', 'harness', 'bro', 'since', 'until', 'forked_from', 'limit'),

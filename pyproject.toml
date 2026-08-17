@@ -94,6 +94,7 @@ bro-local = { workspace = true }
 "bro.cw.cli" = "bro._entrypoints:bro_cw_cli"
 "bro.cw.print-anthropic-key" = "bro._entrypoints:bro_cw_print_anthropic_key"
 "bro.cw.statusline" = "bro._entrypoints:bro_cw_statusline"
+"bro.cw.watch-guard" = "bro._entrypoints:bro_cw_watch_guard"
 "bro.extra.github.poll-pr" = "bro._entrypoints:bro_extra_github_poll_pr"
 "bro.launch.ask" = "bro._entrypoints:bro_launch_ask"
 "bro.launch.call" = "bro._entrypoints:bro_launch_call"

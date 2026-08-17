@@ -587,7 +587,7 @@ class TestToolLayer:
   @pytest.mark.parametrize(
     ('tool_names', 'error_type', 'message'),
     [
-      ((), ValueError, 'must mount a server or block'),
+      ((), ValueError, 'must mount a server, block a native tool, or narrow one'),
       (('',), TypeError, 'non-empty strings'),
       (('Read', 'Read'), ValueError, 'duplicate names'),
     ],
@@ -595,6 +595,22 @@ class TestToolLayer:
   def test_block_rejects_invalid_declarations(self, tool_names, error_type, message):
     with pytest.raises(error_type, match=message):
       mcp_mod.block(*tool_names)
+
+  def test_allow_commands_pairs_each_command_with_its_tool(self):
+    layer = mcp_mod.allow_commands('Monitor', 'watch one', 'watch two')
+    assert layer.native_tool_commands == (('Monitor', 'watch one'), ('Monitor', 'watch two'))
+    assert layer.blocked_native_tool_names == ()
+
+  @pytest.mark.parametrize(
+    ('commands', 'error_type', 'message'),
+    [
+      ((), ValueError, 'needs at least one command'),
+      (('',), TypeError, 'non-empty \\(name, command\\) pairs'),
+    ],
+  )
+  def test_allow_commands_rejects_invalid_declarations(self, commands, error_type, message):
+    with pytest.raises(error_type, match=message):
+      mcp_mod.allow_commands('Monitor', *commands)
 
   def test_mount_selects_from_one_toolset_type(self):
     toolset = mcp_mod.Toolset('layer')

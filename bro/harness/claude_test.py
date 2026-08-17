@@ -32,3 +32,15 @@ class TestBlock:
   def test_rejects_a_duplicate_name(self):
     with pytest.raises(ValueError, match='duplicate'):
       claude.block('Read', 'Read')
+
+
+class TestWatch:
+  def test_selected_on_claude_only(self):
+    entry = claude.watch('summon watch')
+    assert select([entry], harness='claude') == [
+      ToolLayer(native_tool_commands=(('Monitor', 'summon watch'),))
+    ]
+    assert select([entry], harness='bro') == []
+
+  def test_narrows_a_tool_the_shell_group_withholds(self):
+    assert 'Monitor' in claude.SHELL
