@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -281,11 +282,13 @@ class TestRunRootViaBroker:
       status_file=tmp_path / 'status.json',
       audit_file=tmp_path / 'audit.jsonl',
     )
-    bro.launch.spawn._note_root_started(control)(
+    pointer = tmp_path / 'current-trail.json'
+    bro.launch.spawn._note_root_started(control, pointer)(
       dispatcher, 'root', Message(type=Tag.STARTED, payload={'trail_id': 't-1'})
     )
     # the started handler doubles as the bro-run root's provenance source
     assert control._root_trail_id == 't-1'
+    assert json.loads(pointer.read_text()) == {'trail_id': 't-1'}
     bro.launch.spawn._log_root_completed(
       dispatcher,
       'root',

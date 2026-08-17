@@ -7,7 +7,7 @@ from bro.workspace.banner import banner
 from bro.workspace.containers import exec_in_workspace
 from bro.workspace.model import Workspace
 from bro.workspace.paths import project_root
-from ride.claude.harness import ClaudeOptions
+from ride.claude.harness import CLAUDE, ClaudeOptions
 from ride.claude.runner import run_in_place
 from ride.clean import clean_workspaces
 from ride.flags import DEFAULT_HOLD, add_forwarded_flags, add_scope_flags
@@ -184,16 +184,18 @@ def main(argv: list[str]) -> Optional[int]:
     args['revoke'] = args['revoke'] or []
     from bro.workspace.project import project_config
 
+    bro_name = bro_argument if bro_argument is not None else project_config().default_bro
+    resolved_llm = CLAUDE.resolve_llm(args['llm'], bro_name)
     spec = SessionSpec(
       interface='cw',
       harness='claude',
       workspace_pinned=True,
-      bro=bro_argument if bro_argument is not None else project_config().default_bro,
+      bro=bro_name,
       bro_argument=bro_argument,
+      resolved_llm=resolved_llm.dump(),
       harness_options=ClaudeOptions(raw=raw, arguments=claude_arguments).dump(),
       **args,
     )
-    _ = spec.llm_spec
   except LLMSelectionError as error:
     parser.error(str(error))
   if in_place:

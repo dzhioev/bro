@@ -261,6 +261,7 @@ def trail_from_header(data: dict) -> Trail:
     surface=data['surface'],
     forked_from=forked_from,
     summoned_by=data.get('summoned_by'),
+    hold=data.get('hold'),
   )
 
 

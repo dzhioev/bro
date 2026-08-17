@@ -3,6 +3,7 @@ import contextlib
 import dataclasses
 import http.client
 import importlib.util
+import json
 import os
 import signal
 import sys
@@ -182,6 +183,8 @@ def chat_main(
   parser.add_argument(
     '--resume', nargs='?', const=RESUME_LATEST, default=None, metavar='TRAIL_ID', help=RESUME_HELP
   )
+  parser.add_argument('--continue-trail', default=None, help=base_args.SUPPRESS)
+  parser.add_argument('--continue-llm', default=None, help=base_args.SUPPRESS)
   parser.add_argument(
     '--at',
     type=int,
@@ -213,7 +216,17 @@ def chat_main(
   canonicalize(args, selection)
   os.environ.setdefault('BRO_SHELL_COMMAND', ' '.join(parser.reconstruct(args, prog=program)))
 
-  if args['what'] is None and args['resume'] is None:
+  continuing = args['continue_trail'] is not None or args['continue_llm'] is not None
+  if (args['continue_trail'] is None) != (args['continue_llm'] is None):
+    log.error('--continue-trail and --continue-llm must be passed together')
+    return 1
+  if continuing and (args['resume'] is not None or args['what'] is not None):
+    log.error('--continue-trail cannot be combined with --resume or an initial message')
+    return 1
+  if continuing and not args['in_place']:
+    log.error('--continue-trail is an in-place runner contract')
+    return 1
+  if args['what'] is None and args['resume'] is None and not continuing:
     log.error('what is required unless --resume is given')
     return 1
   if args['at'] is not None and args['resume'] is None:
@@ -230,7 +243,7 @@ def chat_main(
   # selected stream fallback is forwarded into the container.
   force_text = args['text'] or not _tui_supported()
   try:
-    run_spec = run_llm_spec(args['bro'], selection)
+    run_spec = None if continuing else run_llm_spec(args['bro'], selection)
   except (NotImplementedError, LLMSelectionError) as e:
     # an explicit knob a provider does not have — a clean error rather than fast
     # mode's silent fallback
@@ -264,73 +277,89 @@ def chat_main(
   if hopped is not None:
     return hopped
 
-  history: Optional[list[DisplayRecord]] = None
-  if args['resume'] is not None:
-    from bro.launch.resume import resume
-    from bro.registry import get_class
-    from bro.trails.store import default_store
+  from bro.launch.broxy import session_broxy
 
-    with default_store() as client:
-      try:
-        # the continuation runs the class's current spec (as a fresh call
-        # would), not the spec recorded on the trail
-        resumed = resume(
-          client,
-          args['bro'],
-          args['resume'],
-          llm_spec=run_spec if run_spec is not None else get_class(args['bro']).llm_spec,
-          at=args['at'],
-        )
-      except (ValueError, http.client.HTTPException) as e:
-        log.error('%s', e)
-        return 1
-    bro = resumed.bro
-    history = resumed.history
-    log.info('resumed trail %s (%d prior display records)', resumed.trail_id, len(history))
-  else:
-    log.verbose('creating bro %s', args['bro'])
-    bro = create_bro_for_run(args['bro'], selection)
-  initial: Optional[str] = args['what']
-  use_tui = not args['text'] and _tui_supported()
-  preset_name = PresetName.CHAT if program == ['bro', 'chat'] else PresetName.CALL
+  with session_broxy():
+    history: Optional[list[DisplayRecord]] = None
+    if args['resume'] is not None or continuing:
+      from bro.launch.resume import resume
+      from bro.llm.llm import LLMSpec, NativeLLMSpec
+      from bro.registry import get_class
+      from bro.trails.store import default_store
 
-  try:
-    with bro:
-      if use_tui:
-        from bro.launch.call_tui import ChatApp
-
-        ChatApp(
-          bro,
-          initial,
-          history=history,
-          hold=hold,
-          preset_name=preset_name,
-        ).run()
+      trail_ref = args['continue_trail'] if continuing else args['resume']
+      assert trail_ref is not None
+      if continuing:
+        continued_llm = args['continue_llm']
+        assert isinstance(continued_llm, str)
+        try:
+          continued_spec = LLMSpec.from_dict(json.loads(continued_llm))
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+          log.error('invalid recorded LLM recipe: %s', error)
+          return 1
+        if not isinstance(continued_spec, NativeLLMSpec):
+          log.error('recorded recipe %s is not runnable by the bro harness', continued_spec.TYPE)
+          return 1
+        resume_spec = continued_spec
       else:
-        asyncio.run(
-          call_text(
+        # the public history-fork surface keeps using the class's current recipe.
+        resume_spec = run_spec if run_spec is not None else get_class(args['bro']).llm_spec
+      with default_store() as client:
+        try:
+          resume_kwargs = {'llm_spec': resume_spec, 'at': args['at']}
+          if continuing:
+            resume_kwargs['hold'] = hold
+          resumed = resume(client, args['bro'], trail_ref, **resume_kwargs)
+        except (ValueError, http.client.HTTPException) as error:
+          log.error('%s', error)
+          return 1
+      bro = resumed.bro
+      history = resumed.history
+      log.info('resumed trail %s (%d prior display records)', resumed.trail_id, len(history))
+    else:
+      log.verbose('creating bro %s', args['bro'])
+      bro = create_bro_for_run(args['bro'], selection)
+    initial: Optional[str] = args['what']
+    use_tui = not args['text'] and _tui_supported()
+    preset_name = PresetName.CHAT if program == ['bro', 'chat'] else PresetName.CALL
+
+    try:
+      with bro:
+        if use_tui:
+          from bro.launch.call_tui import ChatApp
+
+          ChatApp(
             bro,
             initial,
             history=history,
             hold=hold,
             preset_name=preset_name,
+          ).run()
+        else:
+          asyncio.run(
+            call_text(
+              bro,
+              initial,
+              history=history,
+              hold=hold,
+              preset_name=preset_name,
+            )
           )
+    except BroRaised as error:
+      log.error('raised: %s', error.reason)
+      return 1
+    except KeyboardInterrupt:
+      return 130
+    finally:
+      # the conversation survives as its trail — point the user at the pickup
+      if bro.trail_id is not None:
+        log.info(
+          'conversation recorded as trail %s; continue it with: %s %s --resume %s',
+          bro.trail_id,
+          ' '.join(program),
+          args['bro'],
+          bro.trail_id,
         )
-  except BroRaised as error:
-    log.error('raised: %s', error.reason)
-    return 1
-  except KeyboardInterrupt:
-    return 130
-  finally:
-    # the conversation survives as its trail — point the user at the pickup
-    if bro.trail_id is not None:
-      log.info(
-        'conversation recorded as trail %s; continue it with: %s %s --resume %s',
-        bro.trail_id,
-        ' '.join(program),
-        args['bro'],
-        bro.trail_id,
-      )
 
 
 def main(argv: list[str]) -> Optional[int]:

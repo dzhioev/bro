@@ -457,6 +457,7 @@ class TestTrailFromHeader:
         'surface': 'fork',
         'forked_from': {'trail_id': 'T1', 'step_id': 5, 'index': 2},
         'summoned_by': {'trail_id': 'T-root'},
+        'hold': 'attended',
       }
     )
     assert isinstance(trail.forked_from, ForkedFrom)
@@ -464,6 +465,7 @@ class TestTrailFromHeader:
     assert trail.forked_from.step_id == 5
     assert trail.forked_from.index == 2
     assert trail.summoned_by == {'trail_id': 'T-root'}
+    assert trail.hold == 'attended'
 
 
 class TestStepFromRow:
