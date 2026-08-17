@@ -5,7 +5,7 @@ from typing import Any, Optional
 
 from bro.workspace.paths import find_project_root, project_root
 
-_LAUNCH_KEYS = frozenset({'default', 'image-repository', 'build-context-command'})
+_LAUNCH_KEYS = frozenset({'default', 'harness', 'image-repository', 'build-context-command'})
 
 
 def _default_image_repository(default_bro: str) -> str:
@@ -25,6 +25,7 @@ class ProjectConfig:
 
   default_bro: str
   image_repository: str
+  harness: str = 'claude'
   build_context_command: Optional[str] = None
   sections: dict[str, dict[str, Any]] = field(default_factory=dict)
 
@@ -78,9 +79,13 @@ def project_config() -> ProjectConfig:
   if not isinstance(default_bro, str):
     raise ValueError(f'[tool.bro] default in {pyproject} must be a string')
   override: Optional[str] = table.get('image-repository')
+  harness = _optional_string(table, pyproject, 'harness') or 'claude'
+  if harness not in ('claude', 'bro'):
+    raise ValueError(f'[tool.bro] harness in {pyproject} must be `claude` or `bro`')
   return ProjectConfig(
     default_bro=default_bro,
     image_repository=override if override is not None else _default_image_repository(default_bro),
+    harness=harness,
     build_context_command=_optional_string(table, pyproject, 'build-context-command'),
     sections=sections,
   )

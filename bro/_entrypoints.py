@@ -25,18 +25,6 @@ def bro_broker_cli():
   return _run('bro.broker.cli')
 
 
-def bro_cw_cli():
-  return _run('bro.cw.cli')
-
-
-def bro_cw_print_anthropic_key():
-  return _run('bro.cw.print_anthropic_key')
-
-
-def bro_cw_statusline():
-  return _run('bro.cw.statusline')
-
-
 def bro_extra_github_poll_pr():
   return _run('bro.extra.github.poll_pr')
 
@@ -87,10 +75,6 @@ def bro_trails_server_server():
 
 def bro_workflow_commit_footer():
   return _run('bro.workflow.commit_footer')
-
-
-def bro_workflow_dive_in():
-  return _run('bro.workflow.dive_in')
 
 
 def bro_workflow_land_pr():

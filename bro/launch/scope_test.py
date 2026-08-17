@@ -6,8 +6,25 @@ import pytest
 
 import bro.launch.scope
 from bro.datasources.web_search import WebSearch
-from bro.launch.scope import Surface
+from bro.launch.scope import BRO_RUN_RECIPE, ScopeRecipe
 from bros.bro import Bro
+
+CLAUDE_RECIPE = ScopeRecipe(
+  name='test-claude',
+  harness='claude',
+  auth_secret='claude_code',
+  llm_key=False,
+  docker_sock=True,
+  unknown_bro_fallback=True,
+)
+RAW_RECIPE = ScopeRecipe(
+  name='test-raw',
+  harness='bro',
+  auth_secret='anthropic',
+  llm_key=False,
+  docker_sock=None,
+  unknown_bro_fallback=True,
+)
 
 
 class SearchBro(Bro):
@@ -33,7 +50,7 @@ class TestScopedSecrets:
     # cw-session themed as bro-dev: the claude-harness manifest — extra_secrets
     # (github) and the session-local brog server's self-contained backend config
     # — + the claude_code OAuth token (the session's only auth).
-    scoped = bro.launch.scope.scoped_secrets('bro-dev', Surface.CW_SESSION)
+    scoped = bro.launch.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE)
     assert {'github', 'brog', 'claude_code'} <= scoped.required
     # required (strict), not optional: no .credentials.json fallback in the
     # container, so a missing token must fail loudly on the host
@@ -45,13 +62,13 @@ class TestScopedSecrets:
     assert scoped.docker_sock is True
 
   def test_cw_session_set_covers_the_bros_manifest(self):
-    scoped = bro.launch.scope.scoped_secrets('scope-search', Surface.CW_SESSION)
+    scoped = bro.launch.scope.scoped_secrets('scope-search', CLAUDE_RECIPE)
     assert {'catalog', 'brave'} <= scoped.required
 
   def test_raw_session_uses_full_manifest_and_anthropic(self):
     # --raw serves the bro's own MCP servers, so it gets the full manifest (brog)
     # plus anthropic for the apiKeyHelper. bro-dev doesn't deploy → no docker socket.
-    scoped = bro.launch.scope.scoped_secrets('bro-dev', Surface.RAW_SESSION)
+    scoped = bro.launch.scope.scoped_secrets('bro-dev', RAW_RECIPE)
     assert {'brog', 'github', 'anthropic'} <= scoped.required
     assert scoped.docker_sock is False
     # --raw runs claude --bare, which ignores CLAUDE_CODE_OAUTH_TOKEN, so the token
@@ -62,13 +79,13 @@ class TestScopedSecrets:
   def test_raw_session_includes_optional_secrets(self):
     # searchable data sources advertise openai best-effort
     # for the query-focused fetch summary; --raw hydrates it as the optional tier.
-    scoped = bro.launch.scope.scoped_secrets('scope-search', Surface.RAW_SESSION)
+    scoped = bro.launch.scope.scoped_secrets('scope-search', RAW_RECIPE)
     assert 'openai' in scoped.optional
     assert 'openai' not in scoped.required  # optional, not required
 
   def test_docker_socket_only_when_declared(self):
-    docker_scope = bro.launch.scope.scoped_secrets('scope-docker', Surface.RAW_SESSION)
-    search_scope = bro.launch.scope.scoped_secrets('scope-search', Surface.RAW_SESSION)
+    docker_scope = bro.launch.scope.scoped_secrets('scope-docker', RAW_RECIPE)
+    search_scope = bro.launch.scope.scoped_secrets('scope-search', RAW_RECIPE)
     assert docker_scope.docker_sock is True
     assert search_scope.docker_sock is False
     assert {'catalog', 'brave'} <= search_scope.required
@@ -76,17 +93,17 @@ class TestScopedSecrets:
   def test_bro_run_manifest_plus_llm_key(self):
     # dev runs as an LLM process: its manifest plus its LLM key (openai →
     # openai, which needed_secrets() omits)
-    scoped = bro.launch.scope.scoped_secrets('dev', Surface.BRO_RUN)
+    scoped = bro.launch.scope.scoped_secrets('dev', BRO_RUN_RECIPE)
     assert 'openai' in scoped.required
 
   def test_bro_run_docker_socket_gated_on_needs_docker(self):
-    assert bro.launch.scope.scoped_secrets('scope-docker', Surface.BRO_RUN).docker_sock is True
-    assert bro.launch.scope.scoped_secrets('bro-dev', Surface.BRO_RUN).docker_sock is False
+    assert bro.launch.scope.scoped_secrets('scope-docker', BRO_RUN_RECIPE).docker_sock is True
+    assert bro.launch.scope.scoped_secrets('bro-dev', BRO_RUN_RECIPE).docker_sock is False
 
   def test_bro_run_optional_tier_carries_the_bros_optional_secrets(self):
     # searchable data sources advertise openai best-effort for the query-focused
     # fetch summary
-    scoped = bro.launch.scope.scoped_secrets('scope-search', Surface.BRO_RUN)
+    scoped = bro.launch.scope.scoped_secrets('scope-search', BRO_RUN_RECIPE)
     assert 'openai' in scoped.optional
 
   def test_computing_a_scope_binds_the_projects_instances(self, tmp_path, monkeypatch):
@@ -97,24 +114,22 @@ class TestScopedSecrets:
     monkeypatch.setattr('bro.launch.scope.project_root', lambda: tmp_path)
     bound = {}
     monkeypatch.setattr('bro.launch.scope.credentials.select_instances', bound.update)
-    scoped = bro.launch.scope.scoped_secrets('bro-dev', Surface.CW_SESSION)
+    scoped = bro.launch.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE)
     assert bound == {'brog': 'github'}
     assert 'brog' in scoped.required
     assert 'brog+github' not in scoped.required
 
   def test_unknown_bro_falls_back_to_baseline_on_session_surfaces(self):
-    scoped = bro.launch.scope.scoped_secrets('nonexistent-bro', Surface.CW_SESSION)
+    scoped = bro.launch.scope.scoped_secrets('nonexistent-bro', CLAUDE_RECIPE)
     assert scoped.required == set()
     assert scoped.optional == set(bro.launch.scope._TRAILS_BASELINE)
     assert scoped.docker_sock is True
     # a --raw fallback drops the socket: no bro to consult for needs_docker
-    assert (
-      bro.launch.scope.scoped_secrets('nonexistent-bro', Surface.RAW_SESSION).docker_sock is False
-    )
+    assert bro.launch.scope.scoped_secrets('nonexistent-bro', RAW_RECIPE).docker_sock is False
 
   def test_unknown_bro_raises_for_bro_run(self):
     with pytest.raises(KeyError):
-      bro.launch.scope.scoped_secrets('nonexistent-bro', Surface.BRO_RUN)
+      bro.launch.scope.scoped_secrets('nonexistent-bro', BRO_RUN_RECIPE)
 
 
 class TestPreflightScopedLaunch:

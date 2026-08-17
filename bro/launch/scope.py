@@ -4,7 +4,6 @@ own declarations (manifest, optional tier, `may_summon`, `needs_docker`) against
 the operated project's instance selection.
 """
 
-import enum
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
@@ -22,62 +21,27 @@ if TYPE_CHECKING:
 _TRAILS_BASELINE = frozenset({'trails'})
 
 
-class Surface(enum.Enum):
-  """the launch surface a credential scope is computed for."""
-
-  CW_SESSION = 'cw-session'  # dive-in / plain `cw ss`, themed as its session bro
-  RAW_SESSION = 'raw-session'  # `cw ss --raw`: claude --bare serving the bro's own MCP servers
-  BRO_RUN = 'bro-run'  # the bro as an LLM process: the `bro run` / `bro chat` hop, summon children
-
-
 @dataclass(frozen=True)
-class _Recipe:
-  """a surface's row in the per-surface scope table (`_RECIPES`).
+class ScopeRecipe:
+  """the component and credential policy a harness mode scopes a bro through."""
 
-  `optional_baseline` is the bro-independent best-effort tier; `harness` selects
-  the component set the bro's manifest counts; `auth_secret` is the surface's
-  fixed session-auth secret; `llm_key` adds the bro's own LLM-provider key
-  (`llm_spec.needed_secrets()`, which the manifest omits); `docker_sock` pins the
-  socket decision (None → the bro's `needs_docker`); `unknown_bro_fallback`
-  degrades an unknown bro to the baseline scope with a warning instead of raising.
-  """
-
-  optional_baseline: frozenset[str]
+  name: str
   harness: 'Harness'
   auth_secret: Optional[str]
   llm_key: bool
   docker_sock: Optional[bool]
   unknown_bro_fallback: bool
+  optional_baseline: frozenset[str] = _TRAILS_BASELINE
 
 
-# the per-surface recipes; reference/cw.md ("Scoped credential hydration" →
-# per-surface sets) documents each set's rationale, bullet-per-row.
-_RECIPES: dict[Surface, _Recipe] = {
-  Surface.CW_SESSION: _Recipe(
-    optional_baseline=_TRAILS_BASELINE,
-    harness='claude',
-    auth_secret='claude_code',
-    llm_key=False,
-    docker_sock=True,
-    unknown_bro_fallback=True,
-  ),
-  Surface.RAW_SESSION: _Recipe(
-    optional_baseline=_TRAILS_BASELINE,
-    harness='bro',
-    auth_secret='anthropic',
-    llm_key=False,
-    docker_sock=None,
-    unknown_bro_fallback=True,
-  ),
-  Surface.BRO_RUN: _Recipe(
-    optional_baseline=_TRAILS_BASELINE,
-    harness='bro',
-    auth_secret=None,
-    llm_key=True,
-    docker_sock=None,
-    unknown_bro_fallback=False,
-  ),
-}
+BRO_RUN_RECIPE = ScopeRecipe(
+  name='bro-run',
+  harness='bro',
+  auth_secret=None,
+  llm_key=True,
+  docker_sock=None,
+  unknown_bro_fallback=False,
+)
 
 
 def bind_project_credentials() -> dict[str, Optional[str]]:
@@ -93,12 +57,13 @@ def bind_project_credentials() -> dict[str, Optional[str]]:
 
 
 def scoped_secrets(
-  bro_name: str, surface: Surface, *, llm_spec: Optional['LLMSpec'] = None
+  bro_name: str, recipe: ScopeRecipe, *, llm_spec: Optional['LLMSpec'] = None
 ) -> ScopedSecrets:
-  """the credential scope of a launch running as `bro_name` on `surface` — one
-  computation for every launch surface, so they cannot drift. the per-surface
-  recipe is the `_RECIPES` row; required hydration is strict, so each surface
-  requests only what it actually uses.
+  """the credential scope of a launch running as `bro_name` under `recipe`.
+
+  Harness implementations own their recipes while this generic computation stays
+  in the framework for launch surfaces and summon lowering. Required hydration is
+  strict, so each recipe requests only what it actually uses.
 
   `llm_spec` is the recipe the launch settled on (`--provider` / `--model` /
   `--llm`), whose key the scope hydrates in place of the bro's own — a run
@@ -111,7 +76,6 @@ def scoped_secrets(
   from bro.registry import create_bro
 
   bind_project_credentials()
-  recipe = _RECIPES[surface]
   required: set[str] = set()
   optional = set(recipe.optional_baseline)
   try:
@@ -151,7 +115,7 @@ def summoned_credential_scope(
   request's unified values (`split_scope_overrides`) — the `@bro` halves shape the
   summon allow-list instead. Raises `ValueError` on a no-op override."""
   return finalize_scoped_secrets(
-    scoped_secrets(bro_name, Surface.BRO_RUN, llm_spec=llm_spec),
+    scoped_secrets(bro_name, BRO_RUN_RECIPE, llm_spec=llm_spec),
     grant=grant,
     revoke=revoke,
   )

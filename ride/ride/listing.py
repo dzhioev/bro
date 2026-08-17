@@ -1,0 +1,65 @@
+import concurrent.futures
+import datetime
+from typing import Optional
+
+import humanize
+
+from bro.workspace.docker import running_mounts
+from bro.workspace.metadata import WorkspaceKind
+from bro.workspace.model import Workspace
+from bro.workspace.paths import project_root
+from ride.session import harness_for_workspace
+
+_ABANDONED = 'abandoned'
+_BADGES = {WorkspaceKind.WORKTREE: '[.]', WorkspaceKind.CONTAINER: '[o]', _ABANDONED: '[x]'}
+_STATE_ORDER = {WorkspaceKind.WORKTREE: 0, WorkspaceKind.CONTAINER: 1, _ABANDONED: 2}
+
+
+def _format_age(mtime: float) -> str:
+  delta = datetime.timedelta(seconds=int(datetime.datetime.now().timestamp() - mtime))
+  return humanize.naturaltime(delta)
+
+
+def _truncate(s: str, n: int) -> str:
+  return s if len(s) <= n else s[: n - 1] + '…'
+
+
+def list_workspaces() -> int:
+  project = project_root()
+  workspaces = Workspace.all(project)
+  containers = [workspace for workspace in workspaces if workspace.kind is WorkspaceKind.CONTAINER]
+
+  def _read(workspace: Workspace) -> tuple[Workspace, Optional[str], Optional[float]]:
+    return (
+      workspace,
+      harness_for_workspace(workspace).read_subject(workspace),
+      workspace.last_active(),
+    )
+
+  with concurrent.futures.ThreadPoolExecutor() as pool:
+    mounts_future = pool.submit(running_mounts) if len(containers) > 0 else None
+    read_futures = [pool.submit(_read, workspace) for workspace in workspaces]
+    mounts = mounts_future.result() if mounts_future is not None else set()
+    reads = [future.result() for future in read_futures]
+
+  if len(reads) == 0:
+    return 0
+
+  entries: list[tuple[str, Workspace, Optional[str], Optional[float]]] = []
+  for workspace, subject, last in reads:
+    state = workspace.kind if workspace.is_active(mounts) else _ABANDONED
+    entries.append((state, workspace, subject, last))
+
+  entries.sort(key=lambda e: (_STATE_ORDER[e[0]], e[1].kind, e[1].name))
+  displays = [workspace.name for _, workspace, _, _ in entries]
+  name_width = max(len(display) for display in displays)
+  ages = [_format_age(mtime) if mtime is not None else '' for _, _, _, mtime in entries]
+  age_width = max(len(age) for age in ages) if len(ages) > 0 else 0
+  for (state, workspace, subject, _), age in zip(entries, ages, strict=True):
+    badge = _BADGES[state]
+    age_column = f'  {age:<{age_width}}' if len(age) > 0 else ' ' * (age_width + 2)
+    if subject is None:
+      print(f'{badge} {workspace.name:<{name_width}}{age_column}')
+    else:
+      print(f'{badge} {workspace.name:<{name_width}}{age_column}  {_truncate(subject, 80)}')
+  return 0
