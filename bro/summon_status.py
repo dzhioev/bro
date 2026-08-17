@@ -2,7 +2,7 @@
 the last one ended.
 
 The host rewrites the whole file on every summon lifecycle event; the session
-reads it back through the path `CW_SUMMON_STATUS` names. Every entry carries the
+reads it back through the path `RIDE_SUMMON_STATUS` names. Every entry carries the
 `request_id` a lost client reattaches with.
 
 Stdlib-only on purpose: the statusline reads this file on every render, so it
@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 # points a session at its status file — set by the launch surfaces
-STATUS_ENV = 'CW_SUMMON_STATUS'
+STATUS_ENV = 'RIDE_SUMMON_STATUS'
 
 
 @dataclass(frozen=True)

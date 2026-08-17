@@ -9,10 +9,11 @@ import bro.launch.scope
 import bro.launch.spawn
 import bro.launch.summon_control
 import bro.summon
+import bro.workspace.paths as workspace_paths
 import bro.workspace.project as workspace_project
 import ride.claude.harness as claude_harness
 import ride.claude.session as claude_session
-import ride.session as cw_session
+import ride.session as ride_session
 from bro.base import credentials
 from bro.launch.scope import ScopedSecrets
 from bro.workspace.metadata import WorkspaceKind
@@ -37,11 +38,11 @@ def _spec(
   raw: bool = False,
   prompt: Optional[str] = None,
   claude_args: Optional[list[str]] = None,
-) -> cw_session.SessionSpec:
+) -> ride_session.SessionSpec:
   from ride.claude.harness import ClaudeOptions
 
   resolved_bro = bro if bro is not None else 'bro-dev'
-  return cw_session.SessionSpec(
+  return ride_session.SessionSpec(
     name=name,
     harness='claude',
     workspace_pinned=True,
@@ -69,21 +70,21 @@ def _resume(
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
 ) -> int:
-  return cw_session.resume_session(
+  return ride_session.resume_session(
     name,
     grant=grant if grant is not None else [],
     revoke=revoke if revoke is not None else [],
   )
 
 
-def _launch_scope(**overrides) -> cw_session.ScopedLaunch:
+def _launch_scope(**overrides) -> ride_session.ScopedLaunch:
   base = {
     'scoped': ScopedSecrets({'github'}, set(), True),
     'may_summon': set(),
     'store': {},
   }
   base.update(overrides)
-  return cw_session.ScopedLaunch(**base)
+  return ride_session.ScopedLaunch(**base)
 
 
 def _workspace(tmp_path, kind: WorkspaceKind = WorkspaceKind.CONTAINER) -> Workspace:
@@ -94,10 +95,10 @@ def _workspace(tmp_path, kind: WorkspaceKind = WorkspaceKind.CONTAINER) -> Works
 def configured_project(monkeypatch, tmp_path):
   # every launch path takes the workspace session lock and records a resume spec
   # under the project root; keep both off the real repo
-  monkeypatch.setattr(cw_session, 'project_root', lambda: tmp_path)
+  monkeypatch.setattr(ride_session, 'project_root', lambda: tmp_path)
   # the suite itself runs inside a container; without this every container launch
   # would degrade to host mode
-  monkeypatch.delenv('CW_IN_CONTAINER', raising=False)
+  monkeypatch.delenv('RIDE_IN_CONTAINER', raising=False)
 
 
 class _ContainerHarness:
@@ -131,8 +132,8 @@ class _ContainerHarness:
     ]
     entered = [p.__enter__() for p in self._patches]
     self.env = entered[0]
-    self.env.pop('CW_BRO', None)
-    self.env.pop('CW_IN_CONTAINER', None)
+    self.env.pop('RIDE_BRO', None)
+    self.env.pop('RIDE_IN_CONTAINER', None)
     self.run_in_container = entered[2]
     self.try_get = entered[4]
     self.build_scoped_store = entered[5]
@@ -148,11 +149,27 @@ class _ContainerHarness:
     return False
 
 
+class TestRuntimeRoot:
+  def test_missing_root_refuses_with_setup_remedy(self, monkeypatch, tmp_path, caplog):
+    monkeypatch.setattr(workspace_paths, 'RUNTIME_BASE', tmp_path / 'absent')
+
+    assert ride_session.start_session(_spec()) == 1
+    assert 'setup.sh' in caplog.text
+    assert 'runtime state root' in caplog.text
+
+  def test_missing_root_refuses_resume_with_setup_remedy(self, monkeypatch, tmp_path, caplog):
+    monkeypatch.setattr(workspace_paths, 'RUNTIME_BASE', tmp_path / 'absent')
+
+    assert ride_session.resume_session('w', grant=[], revoke=[]) == 1
+    assert 'setup.sh' in caplog.text
+    assert 'runtime state root' in caplog.text
+
+
 class TestNestedLaunch:
   def test_ride_refuses_with_process_and_summon_remedies(self, monkeypatch, caplog):
-    monkeypatch.setenv('CW_IN_CONTAINER', '1')
+    monkeypatch.setenv('RIDE_IN_CONTAINER', '1')
     spec = replace(_spec(), workspace_pinned=False)
-    assert cw_session.start_session(spec) == 1
+    assert ride_session.start_session(spec) == 1
     assert '`summon`' in caplog.text
     assert '`bro run|chat`' in caplog.text
 
@@ -160,7 +177,7 @@ class TestNestedLaunch:
 class TestGrantRevoke:
   def test_start_session_applies_grant_and_revoke(self):
     with _ContainerHarness(secrets={'notion', 'trails', 'github'}) as h:
-      rc = cw_session.start_session(_spec(drop=True, grant=['gmail_creds'], revoke=['notion']))
+      rc = ride_session.start_session(_spec(drop=True, grant=['gmail_creds'], revoke=['notion']))
     assert rc == 0
     launch = h.run_in_container.call_args.args[0]
     assert 'gmail_creds' in launch.secrets
@@ -168,14 +185,14 @@ class TestGrantRevoke:
 
   def test_start_session_grant_replaces_a_credential_instance(self):
     with _ContainerHarness(secrets={'brog', 'github'}) as harness:
-      rc = cw_session.start_session(_spec(drop=True, grant=['brog+github']))
+      rc = ride_session.start_session(_spec(drop=True, grant=['brog+github']))
     assert rc == 0
     launch = harness.run_in_container.call_args.args[0]
     assert launch.secrets == {'brog+github', 'github'}
 
   def test_start_session_can_revoke_an_optional_secret(self):
     with _ContainerHarness(optional_secrets={'openai'}) as harness:
-      rc = cw_session.start_session(_spec(drop=True, revoke=['openai']))
+      rc = ride_session.start_session(_spec(drop=True, revoke=['openai']))
     assert rc == 0
     launch = harness.run_in_container.call_args.args[0]
     assert launch.optional_secrets == set()
@@ -183,7 +200,7 @@ class TestGrantRevoke:
   def test_missing_secret_fails_cleanly_before_container_launch(self, caplog):
     with _ContainerHarness() as harness:
       harness.build_scoped_store.side_effect = credentials.SecretNotFound('github')
-      rc = cw_session.start_session(_spec(drop=True))
+      rc = ride_session.start_session(_spec(drop=True))
     assert rc == 1
     assert harness.run_in_container.call_count == 0
     assert 'github' in caplog.text
@@ -191,7 +208,7 @@ class TestGrantRevoke:
   def test_missing_setup_token_has_actionable_container_error(self, caplog):
     with _ContainerHarness() as harness:
       harness.try_get.return_value = None
-      rc = cw_session.start_session(_spec(drop=True))
+      rc = ride_session.start_session(_spec(drop=True))
     assert rc == 1
     assert harness.run_in_container.call_count == 0
     assert 'mint one with `claude setup-token`' in caplog.text
@@ -199,18 +216,18 @@ class TestGrantRevoke:
   def test_missing_setup_token_does_not_gate_a_raw_launch(self):
     with _ContainerHarness() as harness:
       harness.try_get.return_value = None
-      rc = cw_session.start_session(_spec(drop=True, raw=True))
+      rc = ride_session.start_session(_spec(drop=True, raw=True))
     assert rc == 0
 
   def test_start_session_grant_already_present_returns_1(self):
     with _ContainerHarness() as h:
-      rc = cw_session.start_session(_spec(drop=True, grant=['github']))
+      rc = ride_session.start_session(_spec(drop=True, grant=['github']))
     assert rc == 1
     assert h.run_in_container.call_count == 0
 
   def test_start_session_injects_the_llm_recipe_into_the_container_command(self):
     with _ContainerHarness() as h:
-      rc = cw_session.start_session(_spec(drop=True, llm='::xhigh'))
+      rc = ride_session.start_session(_spec(drop=True, llm='::xhigh'))
     assert rc == 0
     command = h.run_in_container.call_args.args[0].command
     assert command[command.index('--llm') + 1] == '::xhigh'
@@ -220,7 +237,7 @@ class TestSummonAllowList:
   def test_container_session_threads_the_allow_list(self):
     with _ContainerHarness() as h:
       h.summon_allow_list.return_value = {'dev'}
-      rc = cw_session.start_session(_spec(drop=True, grant=['@dev']))
+      rc = ride_session.start_session(_spec(drop=True, grant=['@dev']))
     assert rc == 0
     assert h.summon_allow_list.call_args == (
       ('bro-dev',),
@@ -230,14 +247,14 @@ class TestSummonAllowList:
 
   def test_container_session_keys_identity_on_the_bro(self):
     with _ContainerHarness() as h:
-      rc = cw_session.start_session(_spec(drop=True, bro='dev'))
+      rc = ride_session.start_session(_spec(drop=True, bro='dev'))
     assert rc == 0
     assert h.summon_allow_list.call_args[0] == ('dev',)
 
   def test_bad_summon_flag_fails_the_launch(self):
     with _ContainerHarness() as h:
       h.summon_allow_list.side_effect = ValueError('unknown summon target(s): devoop')
-      rc = cw_session.start_session(_spec(drop=True, grant=['@devoop']))
+      rc = ride_session.start_session(_spec(drop=True, grant=['@devoop']))
     assert rc == 1
     assert h.run_in_container.call_count == 0
 
@@ -247,7 +264,7 @@ class TestContainerCommand:
     # the docker command is the same in-place runner host mode spawns; the
     # argv/MCP/spell-delivery work happens inside the container, next to claude
     with _ContainerHarness() as h:
-      rc = cw_session.start_session(_spec(drop=True, bro='dev', llm='::xhigh+fast', prompt='go'))
+      rc = ride_session.start_session(_spec(drop=True, bro='dev', llm='::xhigh+fast', prompt='go'))
     assert rc == 0
     command = h.run_in_container.call_args.args[0].command
     assert command == [
@@ -257,7 +274,7 @@ class TestContainerCommand:
 
   def test_bro_carried_in_command_and_stamped_into_the_container_env(self):
     with _ContainerHarness() as h:
-      rc = cw_session.start_session(_spec(drop=True, bro='dev'))
+      rc = ride_session.start_session(_spec(drop=True, bro='dev'))
     assert rc == 0
     command = h.run_in_container.call_args.args[0].command
     assert command == [
@@ -270,19 +287,19 @@ class TestContainerCommand:
       'claude',
       'dev',
     ]
-    # CW_BRO themes the whole container (ride exec shells), set explicitly in the
+    # RIDE_BRO themes the whole container (ride exec shells), set explicitly in the
     # container env — never forwarded from the launcher's environment
     launch = h.run_in_container.call_args.args[0]
-    assert launch.env['CW_BRO'] == 'dev'
+    assert launch.env['RIDE_BRO'] == 'dev'
 
   def test_local_trails_data_is_combined_with_claude_launch_data(self):
     with _ContainerHarness(secrets={'github', 'trails'}) as harness:
       harness.container_claude_state.return_value = (
-        ['/host/claude:/home/cw/.claude'],
-        {'CLAUDE_CONFIG_DIR': '/home/cw/.claude'},
+        ['/host/claude:/home/ride/.claude'],
+        {'CLAUDE_CONFIG_DIR': '/home/ride/.claude'},
       )
-      harness.local_trails_mounts.return_value = ('/host/trails:/workspace/var/cw/trails',)
-      result = cw_session.start_session(_spec(drop=True))
+      harness.local_trails_mounts.return_value = ('/host/trails:/var/ride/trails',)
+      result = ride_session.start_session(_spec(drop=True))
 
     assert result == 0
     harness.local_trails_mounts.assert_called_once_with(
@@ -290,13 +307,13 @@ class TestContainerCommand:
     )
     launch = harness.run_in_container.call_args.args[0]
     assert launch.extra_mounts == (
-      '/host/claude:/home/cw/.claude',
-      '/host/trails:/workspace/var/cw/trails',
+      '/host/claude:/home/ride/.claude',
+      '/host/trails:/var/ride/trails',
     )
 
   def test_raw_carried_in_the_container_command(self):
     with _ContainerHarness() as h:
-      rc = cw_session.start_session(_spec(drop=True, bro='dev', raw=True))
+      rc = ride_session.start_session(_spec(drop=True, bro='dev', raw=True))
     assert rc == 0
     command = h.run_in_container.call_args.args[0].command
     assert command == [
@@ -317,7 +334,7 @@ class TestContainerCommand:
       workspace_pinned=False,
     )
     with _ContainerHarness() as harness:
-      assert cw_session.start_session(spec) == 0
+      assert ride_session.start_session(spec) == 0
     launch = harness.run_in_container.call_args.args[0]
     assert not launch.tty
     assert launch.command == [
@@ -325,35 +342,35 @@ class TestContainerCommand:
       'bro-dev', 'go',
     ]  # fmt: skip
 
-  def test_cw_session_stamps_the_default_bro_as_cw_bro(self):
+  def test_ride_session_stamps_the_default_bro_as_ride_bro(self):
     with _ContainerHarness() as h:
-      rc = cw_session.start_session(_spec(drop=True))
+      rc = ride_session.start_session(_spec(drop=True))
     assert rc == 0
     launch = h.run_in_container.call_args.args[0]
-    assert launch.env['CW_BRO'] == 'bro-dev'
+    assert launch.env['RIDE_BRO'] == 'bro-dev'
 
   def test_default_base_is_left_to_the_entrypoint_head_fallback(self):
-    # no CW_BASE_REF by default: the clone bases on HEAD — the host checkout as
+    # no RIDE_BASE_REF by default: the clone bases on HEAD — the host checkout as
     # cloned — with no network touched on the way
     with _ContainerHarness() as h:
-      rc = cw_session.start_session(_spec(drop=True))
+      rc = ride_session.start_session(_spec(drop=True))
     assert rc == 0
     launch = h.run_in_container.call_args.args[0]
-    assert 'CW_BASE_REF' not in launch.env
+    assert 'RIDE_BASE_REF' not in launch.env
 
   def test_into_threads_the_resolved_base_into_the_container_env(self):
     with _ContainerHarness() as h:
       with patch('ride.session.resolve_ref', return_value='intosha') as resolve:
-        rc = cw_session.start_session(_spec(drop=True, into='feature'))
+        rc = ride_session.start_session(_spec(drop=True, into='feature'))
     assert rc == 0
     assert resolve.call_args[0][1] == 'feature'
     launch = h.run_in_container.call_args.args[0]
-    assert launch.env['CW_BASE_REF'] == 'intosha'
+    assert launch.env['RIDE_BASE_REF'] == 'intosha'
 
   def test_unresolvable_into_fails_launch(self):
     with _ContainerHarness() as h:
       with patch('ride.session.resolve_ref', return_value=None):
-        rc = cw_session.start_session(_spec(drop=True, into='nope'))
+        rc = ride_session.start_session(_spec(drop=True, into='nope'))
     assert rc == 1
     assert h.run_in_container.call_count == 0
 
@@ -361,7 +378,7 @@ class TestContainerCommand:
     with _ContainerHarness() as h:
       with patch('ride.claude.session.workspace_projects_dir') as projects:
         projects.return_value = tmp_path / 'projects'
-        rc = cw_session.start_session(_spec(resume=True))
+        rc = ride_session.start_session(_spec(resume=True))
     assert rc == 1
     assert h.run_in_container.call_count == 0
 
@@ -372,7 +389,7 @@ class TestContainerCommand:
     with _ContainerHarness() as h:
       with patch('ride.claude.session.workspace_projects_dir') as projects:
         projects.return_value = projects_dir
-        rc = cw_session.start_session(_spec(resume=True))
+        rc = ride_session.start_session(_spec(resume=True))
     assert rc == 0
     command = h.run_in_container.call_args.args[0].command
     assert command == [
@@ -391,14 +408,14 @@ class TestContainerCommand:
 class TestContainerDrop:
   def test_drop_removes_the_workspace_on_clean_exit(self):
     with _ContainerHarness() as h:
-      rc = cw_session.start_session(_spec(drop=True))
+      rc = ride_session.start_session(_spec(drop=True))
     assert rc == 0
     assert h.drop_workspace.call_count == 1
 
   def test_drop_keeps_the_workspace_when_the_session_failed(self):
     with _ContainerHarness() as h:
       h.run_in_container.return_value = 3
-      rc = cw_session.start_session(_spec(drop=True))
+      rc = ride_session.start_session(_spec(drop=True))
     assert rc == 3
     assert h.drop_workspace.call_count == 0
 
@@ -522,8 +539,8 @@ class TestResumeSpecRecord:
       claude_args=['--foo'],
     )
     workspace = _workspace(tmp_path)
-    cw_session.record_resume_spec(workspace, spec)
-    loaded = cw_session.load_resume_spec(workspace)
+    ride_session.record_resume_spec(workspace, spec)
+    loaded = ride_session.load_resume_spec(workspace)
     assert loaded == spec.resume_variant()
     assert loaded is not None and loaded.resume and not loaded.drop
     assert (
@@ -545,8 +562,8 @@ class TestResumeSpecRecord:
       workspace_pinned=False,
     )
     workspace = _workspace(tmp_path)
-    cw_session.record_resume_spec(workspace, solo)
-    loaded = cw_session.load_resume_spec(workspace)
+    ride_session.record_resume_spec(workspace, solo)
+    loaded = ride_session.load_resume_spec(workspace)
     assert loaded is not None
     assert not loaded.solo
     assert loaded.hold == 'attended'
@@ -554,19 +571,19 @@ class TestResumeSpecRecord:
 
   def test_recording_a_resume_is_a_fixpoint(self, tmp_path):
     workspace = _workspace(tmp_path)
-    cw_session.record_resume_spec(workspace, _spec(bro='dev'))
-    first = cw_session.load_resume_spec(workspace)
+    ride_session.record_resume_spec(workspace, _spec(bro='dev'))
+    first = ride_session.load_resume_spec(workspace)
     assert first is not None
-    cw_session.record_resume_spec(workspace, first)
-    assert cw_session.load_resume_spec(workspace) == first
+    ride_session.record_resume_spec(workspace, first)
+    assert ride_session.load_resume_spec(workspace) == first
 
   def test_missing_record_reads_as_none(self, tmp_path):
-    assert cw_session.load_resume_spec(_workspace(tmp_path)) is None
+    assert ride_session.load_resume_spec(_workspace(tmp_path)) is None
 
-  def test_record_from_an_incompatible_cw_reads_as_none(self, tmp_path, caplog):
+  def test_record_from_an_incompatible_ride_reads_as_none(self, tmp_path, caplog):
     workspace = _workspace(tmp_path)
     workspace.resume_file.write_text(json.dumps({'name': 'w', 'gone': True}))
-    assert cw_session.load_resume_spec(workspace) is None
+    assert ride_session.load_resume_spec(workspace) is None
     assert 'unreadable resume spec' in caplog.text
 
   def test_start_session_records_before_launching(self, tmp_path):
@@ -574,27 +591,27 @@ class TestResumeSpecRecord:
       recorded: list = []
       with patch(
         'ride.claude.session._container_session',
-        side_effect=lambda *args: recorded.append(cw_session.load_resume_spec(args[1])) or 0,
+        side_effect=lambda *args: recorded.append(ride_session.load_resume_spec(args[1])) or 0,
       ):
-        assert cw_session.start_session(_spec(drop=True, bro='dev')) == 0
+        assert ride_session.start_session(_spec(drop=True, bro='dev')) == 0
     assert recorded[0] == _spec(drop=True, bro='dev').resume_variant()
 
 
 class TestResumeSession:
   def test_relaunches_the_recorded_spec(self, tmp_path):
-    cw_session.record_resume_spec(_workspace(tmp_path), _spec(bro='dev', hold='attended'))
+    ride_session.record_resume_spec(_workspace(tmp_path), _spec(bro='dev', hold='attended'))
     with patch('ride.session.start_session', return_value=0) as start:
       assert _resume() == 0
     assert start.call_args[0][0] == _spec(bro='dev', hold='attended').resume_variant()
 
   def test_scope_overrides_reach_the_relaunch(self, tmp_path):
-    cw_session.record_resume_spec(_workspace(tmp_path), _spec(grant=['brog+github']))
+    ride_session.record_resume_spec(_workspace(tmp_path), _spec(grant=['brog+github']))
     with patch('ride.session.start_session', return_value=0) as start:
       assert _resume(grant=['@bro-dev']) == 0
     assert start.call_args[0][0].grant == ['brog+github', '@bro-dev']
 
   def test_a_no_op_override_errors(self, tmp_path, caplog):
-    cw_session.record_resume_spec(_workspace(tmp_path), _spec(grant=['@bro-dev']))
+    ride_session.record_resume_spec(_workspace(tmp_path), _spec(grant=['@bro-dev']))
     with patch('ride.session.start_session') as start:
       assert _resume(grant=['@bro-dev']) == 1
     assert start.call_count == 0
@@ -618,13 +635,15 @@ class TestReplaceResumeHint:
   def test_prints_the_resume_command_over_claudes_hint(self, monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(claude_harness.CLAUDE, 'session_exists', lambda workspace: True)
     monkeypatch.setattr('sys.stdout.isatty', lambda: True)
-    cw_session._replace_resume_hint(_spec(), _workspace(tmp_path))
+    ride_session._replace_resume_hint(_spec(), _workspace(tmp_path))
     assert 'ride resume w' in capsys.readouterr().out
 
   def test_silent_without_a_session_jsonl(self, monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(claude_harness.CLAUDE, 'session_exists', lambda workspace: False)
     monkeypatch.setattr('sys.stdout.isatty', lambda: True)
-    cw_session._replace_resume_hint(_spec(host=True), _workspace(tmp_path, WorkspaceKind.WORKTREE))
+    ride_session._replace_resume_hint(
+      _spec(host=True), _workspace(tmp_path, WorkspaceKind.WORKTREE)
+    )
     assert capsys.readouterr().out == ''
 
 
@@ -685,7 +704,7 @@ class TestConcurrentSessionGuard:
     # tests drive; without stubs they read the machine's own credential store
     monkeypatch.setattr(credentials, 'try_get', lambda name: 'tok')
     monkeypatch.setattr(
-      cw_session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set(), True)
+      ride_session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set(), True)
     )
     monkeypatch.setattr(
       bro.launch.scope.credentials, 'build_scoped_store', lambda names, optional=(): {}
@@ -696,19 +715,19 @@ class TestConcurrentSessionGuard:
     workspace = _workspace(tmp_path)
     with workspace.hold_session_lock():
       with patch('ride.claude.session._container_session') as launch:
-        assert cw_session.start_session(_spec()) == 1
+        assert ride_session.start_session(_spec()) == 1
     assert launch.call_count == 0
     assert 'session already active on workspace' in caplog.text
 
   def test_the_lock_releases_with_the_session(self, tmp_path):
     with patch('ride.claude.session._container_session', return_value=0):
-      assert cw_session.start_session(_spec()) == 0
+      assert ride_session.start_session(_spec()) == 0
     assert not _workspace(tmp_path).is_active(set())
 
   def test_a_launch_naming_a_workspace_of_the_other_kind_is_refused(self, tmp_path, caplog):
     _workspace(tmp_path, WorkspaceKind.WORKTREE)
     with patch('ride.claude.session._container_session') as launch:
-      assert cw_session.start_session(_spec()) == 1
+      assert ride_session.start_session(_spec()) == 1
     assert launch.call_count == 0
     assert 'is a worktree workspace, not container' in caplog.text
 
@@ -720,7 +739,7 @@ class TestConcurrentSessionGuard:
       raise AssertionError('must not launch a second container session')
 
     monkeypatch.setattr(claude_session, 'run_in_container', boom)
-    assert cw_session.start_session(_spec()) == 1
+    assert ride_session.start_session(_spec()) == 1
     assert 'session already active in the container' in caplog.text
 
 
@@ -755,7 +774,7 @@ class TestHostSession:
       lambda name, wt, project: tmp_path / 'claude-config',
     )
     monkeypatch.setattr(
-      cw_session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets({'github'}, set(), True)
+      ride_session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets({'github'}, set(), True)
     )
     monkeypatch.setattr(
       bro.launch.scope.credentials, 'build_scoped_store', lambda names, optional=(): {}
@@ -822,7 +841,7 @@ class TestHostSession:
     monkeypatch.setattr(bro.launch.spawn, 'run_root_via_broker', fake_run_root)
     assert (
       claude_session.run_host_process_via_broker(
-        workspace, ['cw'], {}, {'dev', 'bro'}, set(), interactive=False
+        workspace, ['ride'], {}, {'dev', 'bro'}, set(), interactive=False
       )
       == 0
     )
@@ -842,8 +861,8 @@ class TestHostSession:
       raise AssertionError('must not launch when the summon grant is bad')
 
     monkeypatch.setattr(claude_session, '_host_session', boom)
-    assert cw_session.start_session(_spec(name='fresh', host=True, grant=['@devoop'])) == 1
-    assert not (tmp_path / 'var' / 'cw' / 'workspaces' / 'fresh').exists()
+    assert ride_session.start_session(_spec(name='fresh', host=True, grant=['@devoop'])) == 1
+    assert not (tmp_path / 'var' / 'ride' / 'workspaces' / 'fresh').exists()
 
   def test_direct_spawn_when_broker_disabled(self, monkeypatch, tmp_path):
     workspace, ride_binary, worktree = self._prepare_launch(monkeypatch, tmp_path)
@@ -906,7 +925,7 @@ class TestHostSession:
     assert claude_session._host_session(_spec(host=True), workspace, None, _launch_scope()) == 0
     assert runs[0][1]['env']['CLAUDE_CONFIG_DIR'] == str(tmp_path / 'claude-config')
 
-  def test_missing_claude_code_fails_a_cw_session_launch_before_the_workspace(
+  def test_missing_claude_code_fails_a_ride_session_launch_before_the_workspace(
     self, monkeypatch, tmp_path
   ):
     self._prepare_launch(monkeypatch, tmp_path)
@@ -916,8 +935,8 @@ class TestHostSession:
       raise AssertionError('must not launch without the setup-token')
 
     monkeypatch.setattr(claude_session, '_host_session', boom)
-    assert cw_session.start_session(_spec(name='fresh', host=True)) == 1
-    assert not (tmp_path / 'var' / 'cw' / 'workspaces' / 'fresh').exists()
+    assert ride_session.start_session(_spec(name='fresh', host=True)) == 1
+    assert not (tmp_path / 'var' / 'ride' / 'workspaces' / 'fresh').exists()
 
   def test_runner_env_points_at_the_scoped_store_registry(self, monkeypatch, tmp_path):
     from types import SimpleNamespace
@@ -951,7 +970,7 @@ class TestHostSession:
     self._prepare_launch(monkeypatch, tmp_path)
     monkeypatch.setattr(claude_session, 'broker_enabled', lambda: False)
     monkeypatch.setattr(
-      cw_session,
+      ride_session,
       'scoped_secrets',
       lambda *_a, **_k: ScopedSecrets({'github', 'notion'}, {'openai'}, True),
     )
@@ -967,7 +986,7 @@ class TestHostSession:
     )
     spec = _spec(host=True, grant=['gmail_creds'], revoke=['notion'])
     with caplog.at_level('INFO'):
-      assert cw_session.start_session(spec) == 0
+      assert ride_session.start_session(spec) == 0
     assert hydrated == {
       'names': {'github', 'gmail_creds'},
       'optional': {'openai'},
@@ -987,10 +1006,10 @@ class TestHostSession:
       raise AssertionError('must not launch when hydration fails')
 
     monkeypatch.setattr(claude_session, '_host_session', boom)
-    assert cw_session.start_session(_spec(name='fresh', host=True)) == 1
-    assert not (tmp_path / 'var' / 'cw' / 'workspaces' / 'fresh').exists()
+    assert ride_session.start_session(_spec(name='fresh', host=True)) == 1
+    assert not (tmp_path / 'var' / 'ride' / 'workspaces' / 'fresh').exists()
 
-  def test_missing_inner_cw_fails_before_spawn(self, monkeypatch, tmp_path):
+  def test_missing_inner_ride_fails_before_spawn(self, monkeypatch, tmp_path):
     workspace, worktree = self._fake_workspace(monkeypatch, tmp_path, has_session=False)
     monkeypatch.setattr(workspace_project, 'project_root', lambda: tmp_path)
     monkeypatch.setattr(claude_session, 'project_root', lambda: tmp_path)
@@ -1004,7 +1023,7 @@ class TestHostSession:
       lambda name, wt, project: tmp_path / 'claude-config',
     )
     monkeypatch.setattr(
-      cw_session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set(), True)
+      ride_session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set(), True)
     )
     monkeypatch.setattr(
       bro.launch.scope.credentials, 'build_scoped_store', lambda names, optional=(): {}
@@ -1012,7 +1031,7 @@ class TestHostSession:
     monkeypatch.setattr(bro.launch.summon_control, 'summon_allow_list', lambda *_a, **_k: set())
 
     def boom(*_a, **_k):
-      raise AssertionError('must not spawn without the inner cw')
+      raise AssertionError('must not spawn without the inner ride')
 
     monkeypatch.setattr(claude_session.subprocess, 'run', boom)
     assert claude_session._host_session(_spec(host=True), workspace, None, _launch_scope()) == 1
@@ -1043,8 +1062,9 @@ class TestHostBrokerPingRoundTrip:
 
   def test_broker_request_ping_from_a_host_session(self, monkeypatch, capfd, socket_dir):
     # socket_dir doubles as the project root: the channel socket lands at
-    # <project>/var/cw/broker/<channel>.sock
+    # /var/ride/<project-key>/broker/<channel>.sock
     root = socket_dir
+    monkeypatch.setattr(workspace_paths, 'RUNTIME_BASE', root / 'state')
     home = root / 'home'
     home.mkdir()
     # the identity fields _seed_claude_json requires from the host ~/.claude.json
@@ -1059,14 +1079,14 @@ class TestHostBrokerPingRoundTrip:
     ride_binary.write_text('#!/bin/sh\nexec broker request ping "{}" --timeout 30\n')
     ride_binary.chmod(0o755)
 
-    monkeypatch.setattr(cw_session, 'project_root', lambda: root)
+    monkeypatch.setattr(ride_session, 'project_root', lambda: root)
     monkeypatch.setattr(claude_session.os, 'chdir', lambda p: None)
     monkeypatch.setattr(claude_session, 'ensure_host_worktree', lambda *_a: True)
     monkeypatch.setattr(claude_session, 'provision_host_worktree', lambda *_a: True)
     monkeypatch.setattr(bro.launch.summon_control, 'summon_allow_list', lambda *_a, **_k: set())
     monkeypatch.setattr(credentials, 'try_get', lambda name: 'tok')
     monkeypatch.setattr(
-      cw_session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set(), True)
+      ride_session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set(), True)
     )
     monkeypatch.setattr(
       bro.launch.scope.credentials, 'build_scoped_store', lambda names, optional=(): {}
@@ -1076,7 +1096,7 @@ class TestHostBrokerPingRoundTrip:
     # the CLI printed the correlated reply's wire JSON
     assert '"pong"' in capfd.readouterr().out
     # the channel socket is unlinked once the root exits
-    assert list((root / 'var' / 'cw' / 'broker').glob('*.sock')) == []
+    assert list((root / 'var' / 'ride' / 'broker').glob('*.sock')) == []
     # the session claude state landed under the fake HOME, seeded from its identity
-    seeded = home / '.claude' / 'cw-sessions' / 'w' / '.claude.json'
+    seeded = home / '.claude' / 'ride-sessions' / 'w' / '.claude.json'
     assert json.loads(seeded.read_text())['userID'] == 'u'

@@ -34,7 +34,7 @@ a value with usable lifetime left. a generated
 (`CREDENTIALS_REGISTRY=<file>` overrides both, process-scoped, and its directory
 joins the local search path first — so a materialized scoped store resolves
 wherever it lands); `build_scoped_store` emits a scoped one (in memory) that
-`cw` `docker cp`s into a container's `~/.bro` — or materializes into a host
+`ride` `docker cp`s into a container's `~/.bro` — or materializes into a host
 session's state dir — to bound the resolver to a chosen set of secrets.
 
 absent any of those overrides, resolution uses the host registry: the built-in
@@ -227,7 +227,7 @@ class LocalSource:
 class SSMSource:
   """reads an AWS SSM parameter (decrypted) from the region the source names.
   the region is required: SSM is a regional service, and a non-AWS surface (e.g.
-  a cw container holding only static credentials) has no ambient region to
+  a ride container holding only static credentials) has no ambient region to
   discover, so the registry states it. credentials come from the ambient AWS
   configuration. a missing parameter falls through to the next source; credential
   or permission errors propagate — a surface that is supposed to reach SSM but
@@ -901,7 +901,7 @@ def build_scoped_store(names: Iterable[str], *, optional: Iterable[str] = ()) ->
   generated `credentials.json` registry covering exactly those secrets and
   pointing each at its `{name}.cred`. materialising this map as the container's
   `~/.bro` then bounds the container to this set; any other secret resolves to a
-  clean `SecretNotFound`. The bytes never touch a host file — `cw` packs them
+  clean `SecretNotFound`. The bytes never touch a host file — `ride` packs them
   into a tar and `docker cp`s them straight into the container.
 
   every secret resolves fully on the host first — launch-time validation stays

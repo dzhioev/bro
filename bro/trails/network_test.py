@@ -297,7 +297,7 @@ class TestWrites:
       harness='claude',
       version='test',
       interactive=True,
-      surface='cw',
+      surface='ride',
       body={'records': []},
       native={},
     )
@@ -315,7 +315,7 @@ class TestWrites:
       harness='claude',
       version='test',
       interactive=True,
-      surface='cw',
+      surface='ride',
       body={'records': []},
       native={},
     )

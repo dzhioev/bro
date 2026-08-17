@@ -33,11 +33,11 @@ def _claude_request(raw: str, *, context=None) -> BlazeRequest:
     harness='claude',
     version='test',
     interactive=True,
-    surface='cw',
+    surface='ride',
     native={
       'llm': {},
       'segment': 'segment',
-      'cw_command': 'ride along',
+      'ride_command': 'ride along',
       'harness_version': 'test',
     },
     body=body,
@@ -83,7 +83,7 @@ def test_claude_recorder_writes_through_local_store(tmp_path):
     'workspace',
     store,
     llm={},
-    cw_command='ride along',
+    ride_command='ride along',
     started_after=0,
   )
 

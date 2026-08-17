@@ -29,11 +29,10 @@ def _apply_claude_auth(env: dict[str, str], *, warn_when_missing: bool = False) 
 
   scrubs the inherited vars that outrank the session's designated auth, then
   overlays the long-lived `claude setup-token` credential (`claude_code`). the
-  session's private claude state (cw/claude_config.py) carries no OAuth
-  credentials file, so the token is a cw-session's whole auth — both
-  launch surfaces gate on it before anything is created, and `warn_when_missing`
-  surfaces the remaining unauthenticated path (a runner spawned by an outer cw
-  that predates the gate). a `--raw` session authenticates via apiKeyHelper and
+  session's private claude state (`ride/ride/claude/claude_config.py`) carries no OAuth
+  credentials file, so the token is a managed session's whole auth — both launch
+  surfaces gate on it before anything is created, and `warn_when_missing` diagnoses
+  a runner that reaches this layer without the preflight contract. a `--raw` session authenticates via apiKeyHelper and
   resolves no token by design. containers get the same var from the secret's
   registry install hook as well; re-applying it here is idempotent.
   """

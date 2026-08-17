@@ -126,12 +126,12 @@ class TestSummonRecoveryFork:
 
   def test_recovery_names_summon_list_only_when_mounted(self, monkeypatch):
     monkeypatch.setenv('BROKER_CHANNEL', '/tmp/test-broker.sock')
-    monkeypatch.delenv('CW_SUMMON_STATUS', raising=False)
+    monkeypatch.delenv('RIDE_SUMMON_STATUS', raising=False)
     description, mounted = self._summon_description(create_bro('bro'))
     assert not mounted
     assert 'summon_list' not in description
 
-    monkeypatch.setenv('CW_SUMMON_STATUS', '/tmp/test-summon-status.json')
+    monkeypatch.setenv('RIDE_SUMMON_STATUS', '/tmp/test-summon-status.json')
     description, mounted = self._summon_description(create_bro('bro'))
     assert mounted
     assert 'recover the request id with summon_list' in description

@@ -13,6 +13,7 @@ import bro.workspace.docker as workspace_docker
 import bro.workspace.spawn as workspace_spawn
 from bro.workspace.metadata import WorkspaceKind
 from bro.workspace.model import Workspace
+from bro.workspace.paths import workspace_dir
 
 
 def _throwaway(name: str, project) -> Workspace:
@@ -20,7 +21,7 @@ def _throwaway(name: str, project) -> Workspace:
 
 
 def _exit_record(tmp_path) -> str:
-  return (tmp_path / 'proj' / 'var' / 'cw' / 'workspaces' / 'broker-CH' / 'exit').read_text()
+  return (workspace_dir(tmp_path / 'proj', 'broker-CH') / 'exit').read_text()
 
 
 class TestDockerLaunchSpec:
@@ -43,7 +44,7 @@ class TestBrokerLaunch:
     launch = workspace_docker.Launch(
       name='broker-X',
       command=['broker', 'recv'],
-      env={'CW_BRO': 'dev'},
+      env={'RIDE_BRO': 'dev'},
       secrets=(),
       docker_sock=False,
       tty=False,
@@ -52,14 +53,14 @@ class TestBrokerLaunch:
     )
     channel = workspace_spawn.Provisioned(channel='X', host_endpoint='/host/sock.sock')
     adapted = workspace_spawn._broker_launch(launch, channel)
-    assert adapted.env == {'CW_BRO': 'dev', 'BROKER_CHANNEL': 'unix:/run/broker.sock'}
+    assert adapted.env == {'RIDE_BRO': 'dev', 'BROKER_CHANNEL': 'unix:/run/broker.sock'}
     assert adapted.extra_mounts == (
       '/existing:/mount',
       '/host/sock.sock:/run/broker.sock',
     )
     assert adapted.tty is False
     assert adapted.forward_env is False
-    assert launch.env == {'CW_BRO': 'dev'}
+    assert launch.env == {'RIDE_BRO': 'dev'}
     assert launch.extra_mounts == ('/existing:/mount',)
 
 
@@ -442,7 +443,7 @@ class TestProcessSpawner:
 
   @pytest.mark.asyncio
   async def test_env_is_the_spec_snapshot_plus_broker_channel(self, monkeypatch, tmp_path):
-    monkeypatch.setenv('CW_AMBIENT_CANARY', 'leak')
+    monkeypatch.setenv('RIDE_AMBIENT_CANARY', 'leak')
     out = tmp_path / 'env.json'
     code = 'import json, os, sys; json.dump(dict(os.environ), open(sys.argv[1], "w"))'
     handle = await self._spawn(
@@ -453,7 +454,7 @@ class TestProcessSpawner:
     assert env['MARKER'] == 'x'
     assert env['BROKER_CHANNEL'] == 'unix:/host/CH.sock'
     # a spawn is a pure function of its LaunchSpec: nothing ambient leaks in
-    assert 'CW_AMBIENT_CANARY' not in env
+    assert 'RIDE_AMBIENT_CANARY' not in env
 
   @pytest.mark.asyncio
   async def test_runs_in_cwd_and_propagates_exit_code(self, tmp_path):

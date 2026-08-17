@@ -524,5 +524,5 @@ async def test_prestarted_expiry_points_at_the_summon_status(
       record.getMessage() for record in caplog.records if 'never launched' in record.getMessage()
     ]
     assert len(messages) == 1
-    assert 'var/cw/summon' in messages[0]
+    assert 'runtime audit' in messages[0]
     assert 'trails' not in messages[0]

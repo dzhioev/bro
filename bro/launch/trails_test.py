@@ -39,7 +39,7 @@ def test_a_scope_without_a_trails_credential_maps_the_host_root(monkeypatch, tmp
 
   mounts = launch_trails.local_trails_mounts(_scope({'github'}))
 
-  assert mounts == (f'{root.resolve()}:/workspace/var/cw/trails',)
+  assert mounts == (f'{root.resolve()}:/var/ride/trails',)
   assert root.is_dir()
 
 
@@ -57,5 +57,5 @@ def test_a_local_credential_maps_the_host_root_for_a_selected_instance(monkeypat
   mounts = launch_trails.local_trails_mounts(_scope({'github'}, optional={'trails+eu'}))
 
   assert reads == [({'github'}, {'trails+eu'})]
-  assert mounts == (f'{root.resolve()}:/workspace/var/cw/trails',)
+  assert mounts == (f'{root.resolve()}:/var/ride/trails',)
   assert root.is_dir()

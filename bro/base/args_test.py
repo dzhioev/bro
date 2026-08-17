@@ -592,7 +592,7 @@ class TestReconstruct:
     parser = Parser()
     parser.add_argument('--flag', action='store_true')
     args = parser.parse(['cmd', '--flag'])
-    assert parser.reconstruct(args, prog=['cw', 'ss']) == ['cw', 'ss', '--flag']
+    assert parser.reconstruct(args, prog=['ride', 'ss']) == ['ride', 'ss', '--flag']
 
   def test_exclude(self):
     parser = Parser()
@@ -649,8 +649,8 @@ class TestReconstruct:
     subparser.add_argument('name')
     subparser.add_argument('extra', nargs=REMAINDER)
     args = parser.parse(['cmd', 'ss', '-c', '--mcp', 'myname', '--foo'])
-    result = subparser.reconstruct(args, prog=['cw', 'ss'])
-    assert result == ['cw', 'ss', '-c', '--mcp', 'myname', '--foo']
+    result = subparser.reconstruct(args, prog=['ride', 'ss'])
+    assert result == ['ride', 'ss', '-c', '--mcp', 'myname', '--foo']
 
 
 class TestParseArgvBoundary:

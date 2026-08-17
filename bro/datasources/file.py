@@ -11,7 +11,7 @@ class FileSource(DataSource):
   (using `summary`), and `as_mcp_server()` mounts a `read` tool (wire name
   `<name>-source__read`) that returns the file body; the tool description
   carries `summary` too, so a surface without the data-sources block (a
-  cw-session's tool listing) still sees what the doc is and when to read it.
+  ride-session's tool listing) still sees what the doc is and when to read it.
   Use for canonical reference docs the agent should consult on demand.
 
   One rendering of the body is read by every harness, so the file must be

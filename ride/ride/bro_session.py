@@ -155,7 +155,7 @@ def _host_session(
   ]
   runner_env = venv_env(worktree / '.venv')
   runner_env.update(bro_git_identity_env(spec.bro))
-  runner_env['CW_BRO'] = spec.bro
+  runner_env['RIDE_BRO'] = spec.bro
   runner_env[START_SESSION_BROXY_ENV] = '1'
   runner_env[credentials.REGISTRY_ENV] = str(
     materialize_scoped_store(launch_scope.store, workspace.path / '.bro')

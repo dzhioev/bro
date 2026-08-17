@@ -42,16 +42,16 @@ def exec_in_workspace(name: str, command: list[str]) -> int:
       'bash',
       '-c',
       'source /workspace/.venv/bin/activate 2>/dev/null; exec "$@"',
-      'cw-exec',
+      'ride-exec',
       *command,
     ]
-  # run as cw, not the image's default root: docker exec ignores the entrypoint's
+  # run as ride, not the image's default root: docker exec ignores the entrypoint's
   # gosu drop, so without -u every exec'd command runs as root and writes
   # root-owned files into the bind-mounted /workspace that the host user can't
-  # later remove. the entrypoint remaps cw to the host uid, so -u cw matches the
+  # later remove. the entrypoint remaps ride to the host uid, so -u ride matches the
   # session user and keeps workspace files host-owned.
   return subprocess.run(
-    ['docker', 'exec', '-it', '-u', 'cw', container_id, *docker_command]
+    ['docker', 'exec', '-it', '-u', 'ride', container_id, *docker_command]
   ).returncode
 
 

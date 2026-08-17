@@ -25,14 +25,21 @@ def _run_root_via_broker(
   # short-circuit a launch before anything touches the broker package (see its
   # docstring).
   from bro.launch.spawn import run_root_via_broker
-  from bro.launch.summon_control import STATUS_ENV, container_status_path
+  from bro.launch.summon_control import STATUS_ENV, container_status_path, summon_status_file
   from bro.summon import MAY_SUMMON_ENV, encode_may_summon
+  from bro.workspace.paths import CONTAINER_SUMMON_ROOT
   from bro.workspace.spawn import DockerLaunchSpec
 
+  status_file = summon_status_file(workspace.project, workspace.name)
+  status_file.parent.mkdir(parents=True, exist_ok=True)
   env = dict(launch.env)
-  env[STATUS_ENV] = container_status_path(workspace.project, workspace.name)
+  env[STATUS_ENV] = container_status_path(workspace.name)
   env[MAY_SUMMON_ENV] = encode_may_summon(may_summon)
-  broker_launch = DockerLaunchSpec(replace(launch, env=env), capture_output=False)
+  status_mount = f'{status_file.parent}:{CONTAINER_SUMMON_ROOT}:ro'
+  broker_launch = DockerLaunchSpec(
+    replace(launch, env=env, extra_mounts=(*launch.extra_mounts, status_mount)),
+    capture_output=False,
+  )
   return run_root_via_broker(
     broker_launch,
     workspace=workspace,

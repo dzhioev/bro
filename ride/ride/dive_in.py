@@ -129,7 +129,7 @@ def dive_in(
     name = fresh_workspace_name(base)
     log.info('workspace: %s', name)
 
-    os.environ['CW_TASK_ID'] = brog_task.id
+    os.environ['RIDE_TASK_ID'] = brog_task.id
   else:
     prompt = command
     name = fresh_workspace_name('dive-in')
@@ -146,7 +146,7 @@ def dive_in(
 
 
 def main(argv: list[str]) -> Optional[int]:
-  parser = Parser(description='start a cw session focused on a task')
+  parser = Parser(description='start a ride session focused on a task')
   parser.add_argument(
     '-n', '--dry-run', action='store_true', help='print the command without running it'
   )

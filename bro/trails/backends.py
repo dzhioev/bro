@@ -337,7 +337,7 @@ def _claude_validate_create(native: dict) -> None:
   for field, expected_type in (
     ('llm', dict),
     ('segment', str),
-    ('cw_command', str),
+    ('ride_command', str),
     ('harness_version', str),
   ):
     if not isinstance(native.get(field), expected_type):

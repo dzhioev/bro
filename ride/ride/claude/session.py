@@ -52,9 +52,9 @@ def _container_session(
       return 1
 
   scoped = launch_scope.scoped
-  env: dict[str, str] = {'CW_BRO': spec.session_bro}
+  env: dict[str, str] = {'RIDE_BRO': spec.session_bro}
   if base_ref is not None:
-    env['CW_BASE_REF'] = base_ref
+    env['RIDE_BASE_REF'] = base_ref
   claude_mounts, claude_env = container_claude_state(spec.name)
   env.update(claude_env)
   trails_mounts = local_trails_mounts(scoped)

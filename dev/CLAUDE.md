@@ -10,7 +10,7 @@ This workspace member owns only `pyproject.toml` — its distribution metadata, 
 
 - `bro/dev/sync_scripts.py` — discovers CLIs and regenerates the project scripts table plus each distribution's committed `_entrypoints.py` bridge
 - `bro/dev/usage_report.py` — aggregates token-accounting footers over a git range
-- `bro/dev/install.py` — installs the framework's commit-footer hooks (`bro/workflow/commit_footer.py`) and the repo-local `git golc` alias into the current repository
+- `bro/dev/install.py` — provisions the checkout-keyed `/var/ride` runtime root on the host, then installs the framework's commit-footer hooks (`bro/workflow/commit_footer.py`) and the repo-local `git golc` alias into the current repository
 - `bro/dev/git_golc.py` — backs the repo-local `git golc` view with per-commit output-token credits
 - `bro/dev/shell_policy.py` — reusable shell-policy assertion over an explicit repository root
 - `bro/dev/packaging_policy.py` — reusable packaging-policy assertion over an explicit repository root: builds every distribution the workspace declares, plus any project the caller names beside it, and fails on a test module inside a wheel

@@ -47,12 +47,13 @@ timer, so only the backstop bounds it, and a claim that never sees a `started`
 the client receives `started`, so the re-armed bound structurally outlives the host
 backstop. The backstop normally delivers a terminal; expiry means it was lost (e.g.
 sent while the broxy was down) or the launch wedged, and the failure message names
-which phase went silent — no `started` points at the session's summon status/audit
-(`var/cw/summon/`), a lost terminal after `started` points at bro.trails.`summon list` (`list_summons`) reads the session's summon-status file
-(`CW_SUMMON_STATUS`, written host-side by `bro/launch/summon_control.py`) and reports the active
+which phase went silent — no `started` points at the session's checkout-keyed
+summon status/audit, while a lost terminal after `started` points at bro.trails.
+`summon list` (`list_summons`) reads the session's summon-status file
+(`RIDE_SUMMON_STATUS`, written host-side by `bro/launch/summon_control.py`) and reports the active
 summons and the last finished one, each with its request id — the rediscovery
 surface when a request id was lost with a dead client. A run's own effective
-allow-list travels the same way, in `CW_MAY_SUMMON`: the surface that launches a
+allow-list travels the same way, in `RIDE_MAY_SUMMON`: the surface that launches a
 run writes the list the host will authorize its summons against, and
 `may_summon` reads it back, so a target's standing is readable instead of
 discoverable by denial.
@@ -90,10 +91,10 @@ if TYPE_CHECKING:
 __cli_name__ = 'summon'
 
 SUMMON = 'summon'  # the request's message-type tag (a consumer tag; not in broker's Tag)
-SUMMONER_ENV = 'CW_SUMMONER'
+SUMMONER_ENV = 'RIDE_SUMMONER'
 # carries a run's own effective summon allow-list into it, written by the surface
 # that launches the run: a session root's at launch, a summoned child's at its spawn
-MAY_SUMMON_ENV = 'CW_MAY_SUMMON'
+MAY_SUMMON_ENV = 'RIDE_MAY_SUMMON'
 # request-lifecycle bound for a summoned child — sized so the flagship deploy
 # workload survives the default; the substrate's generic 600s default is untouched
 DEFAULT_TIMEOUT = 1800.0
@@ -256,7 +257,7 @@ def _await_answer(
       ) from None
     raise SummonError(
       f'no started and no terminal within {launch_bound:.0f}s — the child likely '
-      f'never launched; check the session summon status and audit (var/cw/summon/)'
+      'never launched; check the session summon status and checkout-keyed runtime audit'
     ) from None
   except ConnectionError as e:
     raise SummonError(f'broker channel closed awaiting the summon result: {e}') from None
@@ -440,11 +441,11 @@ def collect_summon(
 
 def list_summons() -> dict[str, Any]:
   """the session's summons as the host recorded them: `{'active': [...], 'last': …}`
-  from the status file `CW_SUMMON_STATUS` points at, each entry carrying its
+  from the status file `RIDE_SUMMON_STATUS` points at, each entry carrying its
   `request_id` — the reattach handle for `check_summon` / `collect_summon`. The
   host writes the file with the session's first summon; before that the state is
   empty. Raises `SummonError` when the environment carries no status file (only
-  cw-launched sessions track summon status)."""
+  ride-launched sessions track summon status)."""
   path = summon_status.status_path()
   if path is None:
     raise SummonError(

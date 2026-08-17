@@ -276,7 +276,7 @@ class Workspace(ABC):
     if workspace.kind is not kind:
       raise KindMismatch(
         f'workspace {name!r} is a {workspace.kind} workspace, not {kind}; '
-        f'pick another name or remove it with `cw clean --force {name}`'
+        f'pick another name or remove it with `ride clean --force {name}`'
       )
     return workspace
 

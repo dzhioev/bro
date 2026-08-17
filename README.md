@@ -30,7 +30,7 @@ The base distribution contains every module — `bro.base`, the MCP abstraction,
 - `bro[aws]` — the `ssm` credential source
 - `bro[github]` — GitHub App authentication
 
-A repository operated by `ride` provides a root `setup.sh` whose postcondition is executable `.venv/bin/ride`. When the container entrypoint links a pre-built environment into the tree it exports `CW_VENV_MANIFEST`, a directory holding the dependency manifests that environment was resolved from at their repository-relative paths; the script must reuse the environment while the tree's own copies still match them and sync when they diverge. A consuming development repository normally installs `bro-dev` in its dev dependency group, syncs the workspace, activates the resulting venv, and calls `bro.dev.install` to install the commit-footer hooks and `git golc` alias.
+A repository operated by `ride` provides a root `setup.sh` whose postcondition is executable `.venv/bin/ride` and a user-owned `/var/ride/<project-key>` runtime root. A consuming development repository normally installs `bro-dev` in its dev dependency group, syncs the workspace, activates the resulting venv, and calls `bro.dev.install`; on the host, that installer uses `sudo` once to create the checkout-keyed runtime root, then installs the commit-footer hooks and `git golc` alias. When the container entrypoint links a pre-built environment into the tree it exports `RIDE_VENV_MANIFEST`, a directory holding the dependency manifests that environment was resolved from at their repository-relative paths; the script must reuse the environment while the tree's own copies still match them and sync when they diverge.
 
 ## Extension entry points
 
@@ -60,7 +60,7 @@ build-context-command = "git ls-files"    # optional session-image context file 
 
 ## Trails storage
 
-Recording is mandatory, and storage is local unless configured otherwise: with no `~/.bro/trails.json`, a run writes to `var/cw/trails` in the repository it runs against, beside the rest of that project's local state. Container launch composers bind-mount that host root at the same path inside the container automatically.
+Recording is mandatory, and storage is local unless configured otherwise: with no `~/.bro/trails.json`, a run writes to `/var/ride/<project-key>/trails`, beside the checkout's other runtime state. Container launch composers bind-mount that host root at the fixed absolute `/var/ride/trails` path inside the container automatically.
 
 The hosted service is the opt-in, `{"backend": "service", "base_url": "https://trails.example", "token": "<bearer>"}`; an existing config with `base_url` and `token` but no `backend` continues to select the service, and `{"backend": "local"}` states the default explicitly. `trails-server` resolves its hosted store from the same credential vocabulary, selecting either local storage or the DynamoDB/S3 shape documented in [`bro/setup/CLAUDE.md`](bro/setup/CLAUDE.md) — but it requires the credential rather than defaulting, since a server states the backend it serves; only its bearer-auth settings remain command-line/environment flags.
 

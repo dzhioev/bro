@@ -282,7 +282,7 @@ class Dispatcher:
 
 
 class Broker:
-  """the thin facade cw constructs: injects the two ports, exposes `on` / `run` / `stop`."""
+  """the thin facade ride constructs: injects the two ports, exposes `on` / `run` / `stop`."""
 
   def __init__(
     self, transport: ServerTransport, spawner: Spawner, *, default_timeout: float = DEFAULT_TIMEOUT

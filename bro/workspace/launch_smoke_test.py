@@ -195,7 +195,7 @@ def launched(isolated: Isolated) -> Iterator[Launched]:
         # skips the entrypoint's venv-dependent half, which costs a full `uv sync`
         # whenever the clone's committed manifests differ from the ones the image
         # baked — an uncommitted manifest edit would otherwise stall the gate
-        env={'CW_SKIP_VENV': '1'},
+        env={'RIDE_SKIP_VENV': '1'},
         secrets=(),
         docker_sock=False,
         tty=False,

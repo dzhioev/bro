@@ -14,7 +14,7 @@ class TestStart:
       patch('ride.claude.recorder.spawn.popen') as popen,
     ):
       recorder = _start_session_recorder(
-        'w', tmp_path / 'ws', {'CW_NAME': 'w'}, llm=kwargs.pop('llm', {'model': 'm'})
+        'w', tmp_path / 'ws', {'RIDE_WORKSPACE': 'w'}, llm=kwargs.pop('llm', {'model': 'm'})
       )
     return recorder, popen, config_dir, projects_dir
 
@@ -26,7 +26,7 @@ class TestStart:
     assert argv[argv.index('--workspace') + 1] == 'w'
     assert argv[argv.index('--projects-dir') + 1] == str(projects_dir)
     assert argv[argv.index('--llm') + 1] == '{"model": "m"}'
-    assert popen.call_args.kwargs['env'] == {'CW_NAME': 'w'}
+    assert popen.call_args.kwargs['env'] == {'RIDE_WORKSPACE': 'w'}
     assert recorder.log_path == config_dir / 'session-recorder.log'
 
   def test_spawn_failure_returns_none(self, tmp_path):

@@ -277,18 +277,18 @@ class TestBroRun:
       def _create_llm(self, *, hold: str):
         return MockLLM(response='ok')
 
-    monkeypatch.setenv('CW_SUMMONER', '{"trail_id":"T-parent"}')
+    monkeypatch.setenv('RIDE_SUMMONER', '{"trail_id":"T-parent"}')
     await TraceBro().run('hello', tracker=RecordingTracker(), surface='test')
     assert captured == [{'trail_id': 'T-parent'}]
     # consumed on read: a nested in-place run spawned by this process's tools
     # must not inherit the marker and re-stamp the parent's summoned_by
-    assert 'CW_SUMMONER' not in os.environ
+    assert 'RIDE_SUMMONER' not in os.environ
     await TraceBro().run('again', tracker=RecordingTracker(), surface='test')
-    monkeypatch.setenv('CW_SUMMONER', '{"trail_id":"T-universal","step_id":7,"index":2}')
+    monkeypatch.setenv('RIDE_SUMMONER', '{"trail_id":"T-universal","step_id":7,"index":2}')
     await TraceBro().run('universal pointer', tracker=RecordingTracker(), surface='test')
-    monkeypatch.setenv('CW_SUMMONER', '{"target":"bro","trail_id":"T-legacy"}')
+    monkeypatch.setenv('RIDE_SUMMONER', '{"target":"bro","trail_id":"T-legacy"}')
     await TraceBro().run('legacy direct', tracker=RecordingTracker(), surface='test')
-    monkeypatch.setenv('CW_SUMMONER', '{"session":"c:legacy-root"}')
+    monkeypatch.setenv('RIDE_SUMMONER', '{"session":"c:legacy-root"}')
     await TraceBro().run('legacy session', tracker=RecordingTracker(), surface='test')
     assert captured == [
       {'trail_id': 'T-parent'},
@@ -423,7 +423,7 @@ class TestBroRun:
     assert isinstance(tracker, Recorder)
     assert isinstance(tracker._store, LocalStore)
 
-  # presence is what counts (same convention as NO_COLOR / CW_IN_CONTAINER):
+  # presence is what counts (same convention as NO_COLOR / RIDE_IN_CONTAINER):
   # any value, including '' and '0', enables the switch. unset it to record.
   @pytest.mark.parametrize('value', ['1', '', '0', 'whatever'])
   def test_default_factory_disabled_by_env_var(self, monkeypatch, value):
@@ -1395,7 +1395,7 @@ class TestWorkspaceProvisioning:
   @pytest.mark.asyncio
   async def test_run_installs_the_footer_hooks_in_a_managed_workspace(self, tmp_path, monkeypatch):
     hooks = self._repo(tmp_path, monkeypatch)
-    monkeypatch.setenv('CW_NAME', 'provision-test')
+    monkeypatch.setenv('RIDE_WORKSPACE', 'provision-test')
     await self._accounting_bro().run('hi', surface='test')
     for hook_name in ('commit-msg', 'post-commit'):
       assert (hooks / hook_name).exists()
@@ -1409,7 +1409,7 @@ class TestWorkspaceProvisioning:
   @pytest.mark.asyncio
   async def test_no_install_without_the_feature(self, tmp_path, monkeypatch):
     hooks = self._repo(tmp_path, monkeypatch)
-    monkeypatch.setenv('CW_NAME', 'provision-test')
+    monkeypatch.setenv('RIDE_WORKSPACE', 'provision-test')
     await EchoBro().run('hi', surface='test')
     assert not (hooks / 'commit-msg').exists()
 
@@ -1417,7 +1417,7 @@ class TestWorkspaceProvisioning:
     hooks = self._repo(tmp_path, monkeypatch)
     hooks.mkdir(parents=True, exist_ok=True)
     (hooks / 'commit-msg').write_text('#!/bin/sh\n# the repository installed me\n')
-    monkeypatch.setenv('CW_NAME', 'provision-test')
+    monkeypatch.setenv('RIDE_WORKSPACE', 'provision-test')
     self._accounting_bro()._provision_workspace()
     assert (hooks / 'commit-msg').read_text() == '#!/bin/sh\n# the repository installed me\n'
     assert (hooks / 'post-commit').exists()
@@ -1718,7 +1718,7 @@ class TestClaudeRaise:
 
   def test_unattended_claude_builds_mount_raise(self, monkeypatch):
     monkeypatch.setenv('BRO_HOLD', 'unattended')
-    monkeypatch.setenv('CW_RUNNER_PID', '4242')
+    monkeypatch.setenv('RIDE_RUNNER_PID', '4242')
     bro = EchoBro()
     assert 'raise' in asyncio.run(_collect_tool_names(bro.claude_persona_mcp_servers()))
     assert 'raise' in asyncio.run(_collect_tool_names(bro.claude_bro_mcp_servers()))
@@ -1731,7 +1731,7 @@ class TestClaudeRaise:
 
   def test_other_skip_permission_holds_do_not_mount_raise(self, monkeypatch):
     # detached and attended sessions have a human to report to — no abort tool
-    monkeypatch.setenv('CW_RUNNER_PID', '4242')
+    monkeypatch.setenv('RIDE_RUNNER_PID', '4242')
     for hold in ('detached', 'attended', 'guided'):
       monkeypatch.setenv('BRO_HOLD', hold)
       names = asyncio.run(_collect_tool_names(EchoBro().claude_persona_mcp_servers()))
@@ -1746,7 +1746,7 @@ class TestClaudeRaise:
 
   @pytest.mark.asyncio
   async def test_mcp_raise_records_channel_and_kills_the_runner(self, monkeypatch):
-    monkeypatch.setenv('CW_RUNNER_PID', '4242')
+    monkeypatch.setenv('RIDE_RUNNER_PID', '4242')
     channel = MagicMock()
     monkeypatch.setattr('bro.bro.BroChannel.from_env', lambda: channel)
     kills: list[tuple[int, int]] = []
@@ -1759,7 +1759,7 @@ class TestClaudeRaise:
 
   @pytest.mark.asyncio
   async def test_mcp_raise_kills_without_a_channel(self, monkeypatch):
-    monkeypatch.setenv('CW_RUNNER_PID', '4242')
+    monkeypatch.setenv('RIDE_RUNNER_PID', '4242')
     monkeypatch.setattr('bro.bro.BroChannel.from_env', lambda: None)
     kills: list[tuple[int, int]] = []
     monkeypatch.setattr(os, 'kill', lambda pid, sig: kills.append((pid, sig)))
@@ -1769,7 +1769,7 @@ class TestClaudeRaise:
 
   @pytest.mark.asyncio
   async def test_mcp_raise_kills_even_when_the_channel_emission_fails(self, monkeypatch):
-    monkeypatch.setenv('CW_RUNNER_PID', '4242')
+    monkeypatch.setenv('RIDE_RUNNER_PID', '4242')
     channel = MagicMock()
     channel.completed.side_effect = ConnectionError('channel closed')
     monkeypatch.setattr('bro.bro.BroChannel.from_env', lambda: channel)

@@ -20,7 +20,7 @@ Passed values appear in the `# Arguments` section appended by the spell tool:
 
 Normal flow only — re-entry has its own entry conditions:
 
-- You are in a managed workspace (under `var/cw/workspaces/` or otherwise on a non-master branch). Do NOT run this against the main checkout's working copy.
+- You are in a managed workspace (under `/var/ride/<project-key>/workspaces/` or otherwise on a non-master branch). Do NOT run this against the main checkout's working copy.
 - The work looks finished. If edits look WIP, a refactor is half-done, or the suite is known-red, confirm with the user before proceeding.
 
 ## Re-entry: PR already open
@@ -28,7 +28,7 @@ Normal flow only — re-entry has its own entry conditions:
 The `pr` argument carries the existing PR URL or number — e.g. `bro run <bro> '[[resume PR <pr-url>]]'` after the session that opened it died. Restore the state that session had, reconcile what happened while nobody watched, then rejoin the normal flow at the watcher (step 13).
 
 1. **Check out the PR's head branch first**: `gh pr checkout <number-or-url>`. A fresh clone sits on a `worktree-<name>` branch at the base ref — the PR's head branch is not checked out locally; `gh pr checkout` fetches it and sets up tracking so later pushes go to the right branch.
-2. **Recover the context** the environment no longer carries (`CW_TASK_ID` is unset here):
+2. **Recover the context** the environment no longer carries (`RIDE_TASK_ID` is unset here):
    ```bash
    gh pr view <number> --json number,url,state,baseRefName,title,body
    ```
@@ -85,7 +85,7 @@ Don't fragment trivially (every hunk as its own commit) and don't bundle unrelat
 
 Match the repo's conventions — the recent log (step 1) is the reference, and the repo's docs may spell them out. Then:
 
-- **Task metadata**: add the task link the repo requires (resolve it via `brog::get_task(task_id).url`; the task id comes from `CW_TASK_ID` or a task created earlier in this session). Omit task metadata when no task id is available.
+- **Task metadata**: add the task link the repo requires (resolve it via `brog::get_task(task_id).url`; the task id comes from `RIDE_TASK_ID` or a task created earlier in this session). Omit task metadata when no task id is available.
 - **Never** include `Co-Authored-By:` lines or generated-by boilerplate unless the repo's policy explicitly requires them.
 
 ### 6. Commit
@@ -182,7 +182,7 @@ Surface this link every time the PR enters review-pending: here at creation, and
 
 ### 12. Log "PR opened" to the task (sessions with a task)
 
-If the session has a task (`CW_TASK_ID` — `dive-in` sets it — or a task resolved earlier in this session) and the brog tools are available, record the event with `brog::add_comment(task_id, topic='PR opened', body=...)`:
+If the session has a task (`RIDE_TASK_ID` — `dive-in` sets it — or a task resolved earlier in this session) and the brog tools are available, record the event with `brog::add_comment(task_id, topic='PR opened', body=...)`:
 
 ```
 [PR:<n>](<pr-url>)

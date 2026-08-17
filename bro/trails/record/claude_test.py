@@ -84,14 +84,14 @@ def environment(tmp_path: Path, monkeypatch):
   projects = config / 'projects' / '-workspace'
   projects.mkdir(parents=True)
   monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(config))
-  monkeypatch.setenv('CW_COMMAND', 'ride along ws')
-  monkeypatch.setenv('CW_BRO', 'dev')
+  monkeypatch.setenv('RIDE_COMMAND', 'ride along ws')
+  monkeypatch.setenv('RIDE_BRO', 'dev')
   monkeypatch.setenv('BRO_HOLD', 'attended')
   monkeypatch.setenv(
-    'CW_SESSION_CONTEXT', json.dumps([{'title': 'git state', 'fields': {'branch': 'b'}}])
+    'RIDE_SESSION_CONTEXT', json.dumps([{'title': 'git state', 'fields': {'branch': 'b'}}])
   )
-  monkeypatch.delenv('CW_HOST', raising=False)
-  monkeypatch.delenv('CW_HOST_WORKSPACE', raising=False)
+  monkeypatch.delenv('RIDE_HOST', raising=False)
+  monkeypatch.delenv('RIDE_HOST_WORKSPACE', raising=False)
   # the suite itself may run inside a container; pin the probe to host mode
   monkeypatch.setattr('bro.trails.record.claude._in_container', lambda: False)
   return projects
@@ -108,7 +108,7 @@ def _recorder(projects: Path, store: LocalStore, *, started_after: float = 0.0) 
     'ws',
     store,
     llm={'model': 'claude-fable-5'},
-    cw_command=os.environ['CW_COMMAND'],
+    ride_command=os.environ['RIDE_COMMAND'],
     started_after=started_after,
   )
 
@@ -125,8 +125,13 @@ def _worker(store: LocalStore, path: Path) -> _SegmentRecorder:
     harness='claude',
     version='test',
     interactive=True,
-    surface='cw',
-    native={'llm': {}, 'segment': path.stem, 'cw_command': 'ride along', 'harness_version': 'test'},
+    surface='ride',
+    native={
+      'llm': {},
+      'segment': path.stem,
+      'ride_command': 'ride along',
+      'harness_version': 'test',
+    },
     body={'records': []},
   )
   lines, byte_extent = _read_lines_after(path, 0)
@@ -161,13 +166,13 @@ class TestAdoption:
 
     [header] = _trails(store)
     assert header['harness'] == 'claude'
-    assert header['surface'] == 'cw'
+    assert header['surface'] == 'ride'
     assert header['interactive'] is True
     assert header['bro'] == 'dev'
     assert header['hold'] == 'attended'
     assert 'forked_from' not in header
     assert header['native']['segment'] == 'seg-1'
-    assert header['native']['cw_command'] == 'ride along ws'
+    assert header['native']['ride_command'] == 'ride along ws'
     assert header['native']['llm'] == {'model': 'claude-fable-5'}
     assert header['location']['workspace'] == 'ws'
     assert header['location']['is_container'] is False

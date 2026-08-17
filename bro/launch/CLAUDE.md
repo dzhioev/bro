@@ -30,7 +30,7 @@ Every native run and every managed mode registers one flag set from `llm_flags.p
 ## Shared host machinery
 
 - `scope.py` — `ScopeRecipe`, `BRO_RUN_RECIPE`, project-bound credential selection, `scoped_secrets`, strict launch preflight, scope override splitting, and summoned-child scope computation. Managed launches and summon lowering use this layer; in-process `bro run` / `bro chat` do not create a scope.
-- `bro_run.py` — the broker-free `Launch` description for a managed or summoned native run: `bro run|chat … --in-place`, bro git identity, `CW_BRO`, stdio policy, and optional local-trails data.
+- `bro_run.py` — the broker-free `Launch` description for a managed or summoned native run: `bro run|chat … --in-place`, bro git identity, `RIDE_BRO`, stdio policy, and optional local-trails data.
 - `trails.py` — local-trails mounts for launch descriptions whose computed scope records locally.
 - `root.py` — neutral container and host-process root supervision behind the broker availability gate.
 - `spawn.py` — broker-root composition, root lifecycle handlers, native workspace trail-pointer publication, summon lowering, and per-root `SummonControl` wiring.

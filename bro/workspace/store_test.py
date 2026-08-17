@@ -115,6 +115,6 @@ class TestBroTarball:
     assert members['.bro'].isdir()
     assert members['.bro'].mode == 0o700
     assert members['.bro/notion.json'].mode == 0o600
-    # owned by the host uid/gid — the same uid the entrypoint remaps cw to on Linux
+    # owned by the host uid/gid — the same uid the entrypoint remaps ride to on Linux
     assert members['.bro/notion.json'].uid == workspace_store.os.getuid()
     assert members['.bro/notion.json'].gid == workspace_store.os.getgid()

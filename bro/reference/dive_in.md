@@ -40,7 +40,7 @@ Task prefetch reads brog through the same prospective Claude scope and the same 
 
 ## Environment
 
-- `CW_TASK_ID` is set to the canonical task id after a task is resolved. The PR workflow reads it when recording task attribution.
+- `RIDE_TASK_ID` is set to the canonical task id after a task is resolved. The PR workflow reads it when recording task attribution.
 - `BRO_SHELL_COMMAND` preserves the user-facing `dive-in` invocation for the visual banner rather than exposing the generated `ride along` command.
 
-The `CW_*` names remain intentionally unchanged until the dedicated runtime-state naming stage.
+The `RIDE_*` names remain intentionally unchanged until the dedicated runtime-state naming stage.
