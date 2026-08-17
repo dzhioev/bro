@@ -70,7 +70,7 @@ docker run --rm -i \
   -e "RIDE_BRANCH=worktree-smoke-test" \
   -e "RIDE_SKIP_VENV=1" \
   "$TAG" bash -s >&2 << 'SMOKE'
-    set -e
+    set -ex
     # gitconfig should be writable (the bug this test guards against)
     git config --global --list > /dev/null
     # workspace should have a cloned repo
