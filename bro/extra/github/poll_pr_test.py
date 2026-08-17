@@ -355,14 +355,15 @@ class TestSourceFailures:
     events = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines()]
     assert [(e['event'], e['source']) for e in events] == [('watch_failed', 'baseline')]
 
-  def test_a_non_transient_failure_ends_the_watch_at_once(self, monkeypatch, capsys):
+  def test_a_not_found_ends_the_watch_once_the_window_closes(self, monkeypatch, capsys):
     self._baseline(monkeypatch)
+    self._clock(monkeypatch, step=10)
 
     def missing_pr(*a):
       raise _http_error(404)
 
     monkeypatch.setattr(poll_pr, '_fetch_pr', missing_pr)
-    assert _poll() == 2
+    assert _poll(failure_grace=30) == 2
     events = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines()]
     assert events == [
       {
@@ -370,9 +371,20 @@ class TestSourceFailures:
         'pr': 1,
         'source': 'pull-request',
         'reason': 'HTTP 404',
-        'failing_for': 0,
+        'failing_for': 30,
       }
     ]
+
+  def test_a_not_found_blip_clears_on_the_next_cycle(self, monkeypatch, capsys):
+    self._baseline(monkeypatch)
+    open_pr = {'head': {'sha': 'deadbeef'}, 'state': 'open', **_user('alice')}
+    monkeypatch.setattr(
+      poll_pr, '_fetch_pr', _Stepper([open_pr, _http_error(404), {'merged': True}])
+    )
+    monkeypatch.setattr(poll_pr, '_fetch_check_runs', lambda *a: [])
+    assert _poll(self_login='x', failure_grace=30) == 0
+    events = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines()]
+    assert events == [{'event': 'merged', 'pr': 1}]
 
 
 def _check_run(name: str, status: str, conclusion: Optional[str] = None) -> dict[str, Any]:

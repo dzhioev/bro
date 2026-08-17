@@ -239,10 +239,15 @@ class FailureTracker:
 
   `probe` runs one event source's fetch: on success it returns the result and
   clears that source's clock, on failure it returns None so the rest of the
-  cycle still serves the other sources. A source that fails with an error no
-  retry can clear, or keeps failing for longer than `grace` seconds, raises
-  `WatchFailed` — a source that cannot be served ends the watch rather than
-  leaving its events indistinguishable from a quiet PR.
+  cycle still serves the other sources. A source that keeps failing for longer
+  than `grace` seconds raises `WatchFailed` — a source that cannot be served
+  ends the watch rather than leaving its events indistinguishable from a quiet
+  PR.
+
+  The clock covers every failure, 404 included: GitHub returns one for minutes
+  at a time on an endpoint that answered seconds earlier (observed on
+  `pulls/{n}/reviews`), and a resource that is genuinely gone keeps failing
+  until the window ends the watch anyway.
   """
 
   def __init__(self, grace: float):
@@ -260,8 +265,6 @@ class FailureTracker:
 
   def _record(self, source: str, error: Exception) -> None:
     reason = _failure_reason(error)
-    if isinstance(error, urllib.error.URLError) and not api.is_transient(error):
-      raise WatchFailed(source, reason, 0.0)
     now = time.monotonic()
     failing_for = now - self._failing_since.setdefault(source, now)
     if failing_for >= self._grace:
