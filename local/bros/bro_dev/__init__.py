@@ -22,8 +22,8 @@ The environment is normally provisioned with its venv active, so development
 commands and repository CLIs run by bare name. Follow the repository's own docs
 for its formatter, test gate, and package build checks.
 
-Text assets may carry `{{…}}` conditioning directives. Use the template reference
-source when their exact grammar or rendering semantics matter.
+Text assets may carry `{{…}}` conditioning directives. Read the `template` man
+page when their exact grammar or rendering semantics matter.
 
 Never stage credential stores or synthesized secret directories. Framework code
 must stay consumer-neutral: extension packages contribute personas, credentials,
@@ -37,5 +37,5 @@ class BroDev(Dev):
   llm_spec = llm_llms_openai.LLMSpec(model='gpt-5.6-sol', reasoning_effort='high')
   features = {'brog': True}
   extra_secrets = ('github',)
-  data_sources = [references.environment, references.template, references.conditions]
+  data_sources = [references.man]
   system_prompt = SYSTEM_PROMPT

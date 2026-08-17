@@ -1,4 +1,5 @@
 import bro.brog.mcp as brog_mcp
+from bro.datasources import references
 from bro.harness import claude
 from bro.llm.mcp import mount, sh
 from bros.bro import Bro
@@ -51,4 +52,5 @@ class Lead(Bro):
     ),
     sh('rewind tree', 'trail_id', 'output_offset', 'output_limit'),
   ]
+  data_sources = [references.man]
   system_prompt = SYSTEM_PROMPT
