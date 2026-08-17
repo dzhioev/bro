@@ -390,6 +390,10 @@ class ToolLayer:
 
   server_specs: tuple[MCPServerSpec, ...] = ()
   blocked_native_tool_names: tuple[str, ...] = ()
+  # `(tool name, command)` pairs narrowing a harness-native tool that takes a
+  # command to run: the tool is served, and the harness rejects every call whose
+  # command is not one of these
+  native_tool_commands: tuple[tuple[str, str], ...] = ()
 
   def __post_init__(self) -> None:
     if not isinstance(self.server_specs, tuple) or any(
@@ -403,8 +407,13 @@ class ToolLayer:
       raise TypeError('blocked_native_tool_names must be a tuple of non-empty strings')
     if len(set(names)) != len(names):
       raise ValueError(f'a tool layer blocks duplicate names: {names!r}')
-    if len(self.server_specs) == 0 and len(names) == 0:
-      raise ValueError('a tool layer must mount a server or block a native tool')
+    pairs = self.native_tool_commands
+    if not isinstance(pairs, tuple) or any(
+      not isinstance(value, str) or len(value) == 0 for pair in pairs for value in pair
+    ):
+      raise TypeError('native_tool_commands must be a tuple of non-empty (name, command) pairs')
+    if len(self.server_specs) == 0 and len(names) == 0 and len(pairs) == 0:
+      raise ValueError('a tool layer must mount a server, block a native tool, or narrow one')
 
 
 def mount(toolset: 'Toolset[Any]', *tool_names: str) -> ToolLayer:
@@ -415,6 +424,19 @@ def mount(toolset: 'Toolset[Any]', *tool_names: str) -> ToolLayer:
 
 def block(*tool_names: str) -> ToolLayer:
   return ToolLayer(blocked_native_tool_names=tool_names)
+
+
+def allow_commands(tool_name: str, *commands: str) -> ToolLayer:
+  """serve the harness-native `tool_name`, reaching only `commands`.
+
+  For a native tool whose argument is a command line to run: the harness admits
+  a call whose command is exactly one of `commands` and rejects the rest, so a
+  persona reaches what it declares and no more — `sh`'s bargain, for a tool the
+  harness serves rather than this layer.
+  """
+  if len(commands) == 0:
+    raise ValueError(f'narrowing {tool_name} needs at least one command')
+  return ToolLayer(native_tool_commands=tuple((tool_name, command) for command in commands))
 
 
 _COMMAND_WORD = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]*')

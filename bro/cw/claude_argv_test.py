@@ -80,6 +80,40 @@ class TestCwSessionLaunch:
     argv = _cw_session_launch(_spec(bro='blocking'), claude_args=[]).argv
     assert argv[argv.index('--disallowed-tools') + 1] == 'mcp__claude_ai_*,Read,Write,Bash'
 
+  def test_narrowed_tool_is_served_and_gated_by_a_hook(self, monkeypatch):
+    from bro.base.condition import when
+    from bro.bro import BaseBro
+    from bro.llm.mcp import allow_commands, block, harness
+
+    class WatchingBro(BaseBro):
+      name = 'watching'
+      description = 'd'
+      tools: ClassVar = [
+        when(harness == 'claude', block('Bash', 'Monitor')),
+        when(harness == 'claude', allow_commands('Monitor', 'summon watch')),
+      ]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    monkeypatch.setattr('bro.registry.create_bro', lambda name: WatchingBro())
+    argv = _cw_session_launch(_spec(bro='watching'), claude_args=[]).argv
+    assert argv[argv.index('--disallowed-tools') + 1] == 'mcp__claude_ai_*,Bash'
+    (entry,) = _settings(argv)['hooks']['PreToolUse']
+    assert entry['matcher'] == 'Monitor'
+    (hook,) = entry['hooks']
+    assert hook['type'] == 'command'
+    assert shlex.split(hook['command']) == [
+      sys.executable,
+      '-m',
+      'bro.cw.watch_guard',
+      'Monitor',
+      'summon watch',
+    ]
+
+  def test_no_narrowing_declares_no_hooks(self):
+    assert 'hooks' not in _settings(_cw_session_launch(_spec(), claude_args=[]).argv)
+
   def test_fast_mode_lands_in_settings(self):
     assert (
       _settings(_cw_session_launch(_spec(llm='+fast'), claude_args=[]).argv)['fastMode'] is True

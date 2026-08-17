@@ -1257,8 +1257,52 @@ class TestToolLayers:
       def __init__(self):
         super().__init__(system_prompt='')
 
-    with pytest.raises(ValueError, match="cannot block native tools.*'bro' harness"):
+    with pytest.raises(ValueError, match="cannot declare native tools.*'bro' harness"):
       InvalidBro()
+
+  def test_narrowing_serves_the_tool_it_takes_out_of_the_block(self):
+    class WatchingBro(BaseBro):
+      name = 'watching'
+      description = 'd'
+      tools: ClassVar = [
+        when(llm_mcp.harness == 'claude', llm_mcp.block('Bash', 'Monitor')),
+        when(llm_mcp.harness == 'claude', llm_mcp.allow_commands('Monitor', 'watch it')),
+      ]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    bro = WatchingBro()
+    assert bro.blocked_tool_names('claude') == ('Bash',)
+    assert bro.narrowed_tool_commands('claude') == {'Monitor': ('watch it',)}
+    assert bro.narrowed_tool_commands('bro') == {}
+
+  def test_narrowing_layers_accumulate_their_commands(self):
+    class WatchingBro(BaseBro):
+      name = 'watching-twice'
+      description = 'd'
+      tools: ClassVar = [
+        when(llm_mcp.harness == 'claude', llm_mcp.block('Monitor')),
+        when(llm_mcp.harness == 'claude', llm_mcp.allow_commands('Monitor', 'watch one')),
+        when(llm_mcp.harness == 'claude', llm_mcp.allow_commands('Monitor', 'watch two')),
+      ]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    assert WatchingBro().narrowed_tool_commands('claude') == {'Monitor': ('watch one', 'watch two')}
+
+  def test_narrowing_a_tool_the_bro_never_blocked_raises(self):
+    class InvalidBro(BaseBro):
+      name = 'invalid-narrowing'
+      description = 'd'
+      tools: ClassVar = [when(llm_mcp.harness == 'claude', llm_mcp.allow_commands('Monitor', 'go'))]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    with pytest.raises(ValueError, match='Monitor is narrowed.*never blocked'):
+      InvalidBro().blocked_tool_names('claude')
 
 
 class TestConditionalComponents:

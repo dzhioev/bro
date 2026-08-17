@@ -11,7 +11,7 @@ persona forgoes: `FILES` reaches the workspace, `SHELL` runs commands in it, and
 """
 
 from bro.base.condition import When, when
-from bro.llm.mcp import ToolLayer, block as _block, harness
+from bro.llm.mcp import ToolLayer, allow_commands as _allow_commands, block as _block, harness
 
 HARNESS = 'claude'
 
@@ -34,3 +34,15 @@ def block(*tool_names: str) -> When[ToolLayer]:
   a choice a caller makes.
   """
   return when(harness == HARNESS, _block(*tool_names))
+
+
+def watch(*commands: str) -> When[ToolLayer]:
+  """serve `Monitor`, reaching only `commands`.
+
+  `Monitor` streams a command's output back as notifications, which is the
+  harness's one push channel — and its command is a free-form script, so
+  serving it plainly is serving a shell. A persona that declares the commands
+  it may watch gets the channel and nothing else; the withheld `SHELL` group it
+  must also declare is what makes that narrowing worth anything.
+  """
+  return when(harness == HARNESS, _allow_commands('Monitor', *commands))

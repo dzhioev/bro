@@ -52,7 +52,10 @@ which phase went silent — no `started` points at the session's summon status/a
 (`var/cw/summon/`), a lost terminal after `started` points at bro.trails.`summon list` (`list_summons`) reads the session's summon-status file
 (`CW_SUMMON_STATUS`, written host-side by `bro/launch/summon_control.py`) and reports the active
 summons and the last finished one, each with its request id — the rediscovery
-surface when a request id was lost with a dead client. A run's own effective
+surface when a request id was lost with a dead client. `summon watch`
+(`watch_summons`) follows the same file instead of sampling it, printing a line
+as each child starts and ends: the shape a session's event-stream tool consumes,
+so a summoner learns a child landed without spending a turn to ask. A run's own effective
 allow-list travels the same way, in `CW_MAY_SUMMON`: the surface that launches a
 run writes the list the host will authorize its summons against, and
 `may_summon` reads it back, so a target's standing is readable instead of
@@ -67,6 +70,7 @@ on the pre-gate launch path) never pull the broker package in.
 import contextlib
 import json
 import os
+import time
 from collections.abc import Callable, Collection, Generator
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any, Optional
@@ -439,6 +443,45 @@ def list_summons() -> dict[str, Any]:
   return asdict(summon_status.read(path))
 
 
+_WATCH_POLL_SECONDS = 1.0
+
+
+def watch_summons(poll_seconds: float = _WATCH_POLL_SECONDS) -> Generator[str]:
+  """the session's summon lifecycle, a line per event, until the caller stops
+  reading.
+
+  Reports each child starting (with the trail id to read it by) and each one
+  ending. What is already in flight when the call is made is the baseline rather
+  than an event, so a watch reports from where it was armed. Same status file as
+  `list_summons`, and the same requirement of a cw-launched session.
+  """
+  path = summon_status.status_path()
+  if path is None:
+    raise SummonError(
+      f'no summon status file ({summon_status.STATUS_ENV} unset); '
+      'only cw-launched sessions track summon status'
+    )
+  watched = {entry.request_id: entry for entry in summon_status.read(path).active}
+  while True:
+    time.sleep(poll_seconds)
+    status = summon_status.read(path)
+    active = {entry.request_id: entry for entry in status.active}
+    for request_id, entry in active.items():
+      previous = watched.get(request_id)
+      if entry.trail_id is not None and (previous is None or previous.trail_id is None):
+        yield f'{entry.target} started — trail {entry.trail_id} (request {request_id})'
+    for request_id, entry in watched.items():
+      if request_id in active:
+        continue
+      # the status file retains one finished summon, so a second one ending
+      # within the same poll leaves the earlier outcome unreadable — its end is
+      # still reported, unnamed, and `summon check` has the answer either way
+      last = status.last
+      outcome = last.outcome if last is not None and last.request_id == request_id else 'ended'
+      yield f'{entry.target} {outcome} (request {request_id})'
+    watched = active
+
+
 def relay_summon(
   target: str,
   prompt: str,
@@ -507,6 +550,16 @@ def _list() -> int:
   return 0
 
 
+def _watch() -> int:
+  try:
+    for event in watch_summons():
+      print(event, flush=True)
+  except SummonError as e:
+    log.error('%s', e)
+    return 1
+  return 0
+
+
 def _check(request_id: str, wait: bool, timeout: Optional[float], last_seen: Optional[int]) -> int:
   if wait and last_seen is not None:
     log.error('--last-seen is a cursor read; it does not combine with --wait')
@@ -552,6 +605,15 @@ def main(argv: list[str]) -> Optional[int]:
       'reattach handle for `summon check`',
     )
     return _list(**parser.parse(argv[1:]))
+  if len(argv) > 1 and argv[1] == 'watch':
+    parser = base_args.Parser(
+      prog='summon watch',
+      description="stream this session's summon lifecycle: a line when a child "
+      'starts, naming its trail, and a line when one ends, naming its outcome. '
+      'Runs until killed; what is already in flight when it starts is the '
+      'baseline rather than an event',
+    )
+    return _watch(**parser.parse(argv[1:]))
   if len(argv) > 1 and argv[1] == 'check':
     parser = base_args.Parser(
       prog='summon check',

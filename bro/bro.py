@@ -5,6 +5,7 @@ import traceback
 from abc import ABC
 from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
+from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
 from typing import Any, ClassVar, Optional, Self
@@ -576,20 +577,47 @@ def _component_optional_secrets(component: llm_mcp.MCPServerSpec | DataSource) -
   return set(component.optional_secrets)
 
 
-def _fold_tool_layers(
-  layers: list[llm_mcp.ToolLayer], harness: llm_mcp.Harness
-) -> tuple[list[llm_mcp.MCPServerSpec], tuple[str, ...]]:
+@dataclass(frozen=True)
+class _ToolSelection:
+  """what a bro's tool layers amount to on one harness."""
+
+  server_specs: list[llm_mcp.MCPServerSpec]
+  blocked_tool_names: tuple[str, ...]
+  # native tool name -> the commands it may reach, for the harness to enforce
+  narrowed_tool_commands: dict[str, tuple[str, ...]]
+
+
+def _fold_tool_layers(layers: list[llm_mcp.ToolLayer], harness: llm_mcp.Harness) -> _ToolSelection:
   server_specs: list[llm_mcp.MCPServerSpec] = []
   blocked_names: list[str] = []
+  narrowed: dict[str, list[str]] = {}
   for layer in layers:
     server_specs.extend(layer.server_specs)
-    if len(layer.blocked_native_tool_names) > 0 and harness != 'claude':
+    native = layer.blocked_native_tool_names + tuple(name for name, _ in layer.native_tool_commands)
+    if len(native) > 0 and harness != 'claude':
       raise ValueError(
-        f'cannot block native tools {layer.blocked_native_tool_names!r} on the {harness!r} '
-        'harness; it serves only the tools the bro declares'
+        f'cannot declare native tools {native!r} on the {harness!r} harness; '
+        'it serves only the tools the bro declares'
       )
     blocked_names.extend(layer.blocked_native_tool_names)
-  return server_specs, tuple(dict.fromkeys(blocked_names))
+    for name, command in layer.native_tool_commands:
+      narrowed.setdefault(name, []).append(command)
+  blocked = dict.fromkeys(blocked_names)
+  for name in narrowed:
+    # a narrowed tool is served, so it leaves the block set the harness withholds
+    if name not in blocked:
+      raise ValueError(
+        f'{name} is narrowed to specific commands but never blocked; narrowing '
+        'only bounds a tool the bro otherwise withholds'
+      )
+    del blocked[name]
+  return _ToolSelection(
+    server_specs=server_specs,
+    blocked_tool_names=tuple(blocked),
+    narrowed_tool_commands={
+      name: tuple(dict.fromkeys(commands)) for name, commands in narrowed.items()
+    },
+  )
 
 
 def _fold_man_pages(entries: list[DataSource | ManPage]) -> list[DataSource]:
@@ -754,7 +782,7 @@ class BaseBro(ABC):
     selected_tools = llm_mcp.select(
       tool_entries, harness='bro', creds=surface_creds, extra=self._feature_vocabulary
     )
-    self._mcp_specs, _ = _fold_tool_layers(selected_tools, 'bro')
+    self._mcp_specs = _fold_tool_layers(selected_tools, 'bro').server_specs
     self._data_sources: list[DataSource] = _fold_man_pages(
       llm_mcp.select(
         data_source_entries, harness='bro', creds=surface_creds, extra=self._feature_vocabulary
@@ -881,9 +909,7 @@ class BaseBro(ABC):
       return ''
     return _render_spells(include_cast=spell_store.cast_available())
 
-  def _selected_tools_for(
-    self, harness: llm_mcp.Harness
-  ) -> tuple[list[llm_mcp.MCPServerSpec], tuple[str, ...]]:
+  def _selected_tools_for(self, harness: llm_mcp.Harness) -> '_ToolSelection':
     selected: list[llm_mcp.ToolLayer] = llm_mcp.select(
       self._tool_entries,
       harness=harness,
@@ -894,8 +920,12 @@ class BaseBro(ABC):
 
   def blocked_tool_names(self, harness: llm_mcp.Harness) -> tuple[str, ...]:
     """harness-native tool names blocked by this bro's selected layers."""
-    _, blocked_names = self._selected_tools_for(harness)
-    return blocked_names
+    return self._selected_tools_for(harness).blocked_tool_names
+
+  def narrowed_tool_commands(self, harness: llm_mcp.Harness) -> dict[str, tuple[str, ...]]:
+    """harness-native tool name -> the commands this bro's selected layers narrow
+    it to; the harness rejects every other command the tool is called with."""
+    return self._selected_tools_for(harness).narrowed_tool_commands
 
   def _components_for(
     self, harness: llm_mcp.Harness
@@ -906,7 +936,7 @@ class BaseBro(ABC):
     # raw entries.
     if harness == 'bro':
       return self._mcp_specs, self._data_sources
-    specs, _ = self._selected_tools_for(harness)
+    specs = self._selected_tools_for(harness).server_specs
     sources = _fold_man_pages(
       llm_mcp.select(
         self._data_source_entries,
