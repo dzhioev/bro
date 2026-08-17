@@ -1,8 +1,9 @@
 import io
 import json
 
-import ride.claude.watch_guard as watch_guard
 import pytest
+
+import ride.claude.watch_guard as watch_guard
 
 _ARGV = ['watch_guard', 'Monitor', 'summon watch', 'tail the log']
 
