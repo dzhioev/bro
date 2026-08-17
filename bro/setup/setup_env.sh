@@ -208,24 +208,56 @@ check_docker_compose() {
   echo "docker compose plugin missing; benchmark runs need it (Ubuntu: docker-compose-plugin)"
 }
 
-install_docker() {
-  if [ "$PLATFORM" != "macOS" ]; then
-    check_docker_compose
-    return
+check_docker_cli() {
+  if ! command -v docker &> /dev/null; then
+    return 1
   fi
+  echo "docker CLI: $(docker --version) ($(command -v docker))"
+  return 0
+}
 
-  if command -v docker &> /dev/null && docker info &> /dev/null; then
-    echo "Docker is already installed and running"
-    check_docker_compose
+install_docker_cli() {
+  if check_docker_cli; then
     return
   fi
 
   check_brew
-  echo "Installing Docker (via Colima)..."
+  echo "Installing the docker CLI..."
   brew install colima docker docker-buildx docker-compose
-  brew services start colima 2>/dev/null || colima start
+  # `brew install` is a no-op on a formula that is installed but unlinked, so a
+  # docker sitting unlinked in the Cellar survives it and stays off PATH
+  if ! command -v docker &> /dev/null; then
+    echo "docker is installed but not linked; linking it"
+    if ! brew link docker; then
+      echo "cannot link docker; resolve the conflict brew reports above" >&2
+      exit 1
+    fi
+  fi
+  if ! check_docker_cli; then
+    echo "docker is still not on PATH; check that $(brew --prefix)/bin is on it" >&2
+    exit 1
+  fi
+}
 
-  # Configure Docker to find Homebrew plugins
+start_docker_daemon() {
+  if docker info &> /dev/null; then
+    echo "docker daemon: answering"
+    return
+  fi
+  if ! command -v colima &> /dev/null; then
+    echo "no docker daemon answers and colima is not installed" >&2
+    exit 1
+  fi
+  echo "Starting the docker daemon (via Colima)..."
+  brew services start colima 2> /dev/null || colima start
+}
+
+# the brew-installed buildx and compose plugins live outside the directories the
+# CLI searches by default
+configure_docker_plugins() {
+  if ! command -v brew &> /dev/null; then
+    return
+  fi
   mkdir -p ~/.docker
   if [ ! -f ~/.docker/config.json ]; then
     echo '{}' > ~/.docker/config.json
@@ -235,12 +267,25 @@ install_docker() {
 import json
 with open('$HOME/.docker/config.json', 'r') as f:
     config = json.load(f)
-config['cliPluginsExtraDirs'] = ['/opt/homebrew/lib/docker/cli-plugins']
+config['cliPluginsExtraDirs'] = ['$(brew --prefix)/lib/docker/cli-plugins']
 with open('$HOME/.docker/config.json', 'w') as f:
     json.dump(config, f, indent=2)
 "
   fi
+}
 
+# macOS ships no docker of its own: Homebrew provides the CLI and colima the VM
+# running the daemon it talks to. The two go missing independently, so each is
+# checked and installed on its own.
+install_docker() {
+  if [ "$PLATFORM" != "macOS" ]; then
+    check_docker_compose
+    return
+  fi
+
+  install_docker_cli
+  start_docker_daemon
+  configure_docker_plugins
   check_docker_compose
 }
 
