@@ -104,7 +104,7 @@ class TestPresets:
 
 class TestSurfaceGuards:
   def test_a_native_launcher_refuses_a_self_driving_harness(self):
-    with pytest.raises(LLMSelectionError, match='cw ss --raw'):
+    with pytest.raises(LLMSelectionError, match='ride solo\\|along --harness claude --raw'):
       llm_flags.resolve_native(openai_llm.LLMSpec(), LLMSelection(model='fable5'))
 
   def test_a_claude_session_refuses_an_api_provider(self):

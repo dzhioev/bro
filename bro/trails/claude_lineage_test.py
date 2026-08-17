@@ -53,7 +53,7 @@ def _blaze(
       native={
         'llm': {'type': 'claude'},
         'segment': segment,
-        'cw_command': 'cw ss ws',
+        'cw_command': 'ride along ws',
         'harness_version': 'test',
       },
       forked_from=forked_from,

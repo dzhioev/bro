@@ -81,7 +81,6 @@ bro-local = { workspace = true }
 
 [project.scripts]
 # bro
-"ask" = "bro._entrypoints:bro_launch_ask"
 "bro" = "bro._entrypoints:bro_run"
 "bro-shell-dir" = "bro._entrypoints:bro_shell"
 "bro.base.credentials" = "bro._entrypoints:bro_base_credentials"
@@ -89,8 +88,6 @@ bro-local = { workspace = true }
 "bro.broker.broxy" = "bro._entrypoints:bro_broker_broxy"
 "bro.broker.cli" = "bro._entrypoints:bro_broker_cli"
 "bro.extra.github.poll-pr" = "bro._entrypoints:bro_extra_github_poll_pr"
-"bro.launch.ask" = "bro._entrypoints:bro_launch_ask"
-"bro.launch.call" = "bro._entrypoints:bro_launch_call"
 "bro.llm.llm" = "bro._entrypoints:bro_llm_llm"
 "bro.llm.usage" = "bro._entrypoints:bro_llm_usage"
 "bro.run" = "bro._entrypoints:bro_run"
@@ -104,7 +101,6 @@ bro-local = { workspace = true }
 "bro.workflow.land-pr" = "bro._entrypoints:bro_workflow_land_pr"
 "broker" = "bro._entrypoints:bro_broker_cli"
 "broxy" = "bro._entrypoints:bro_broker_broxy"
-"call" = "bro._entrypoints:bro_launch_call"
 "commit-footer" = "bro._entrypoints:bro_workflow_commit_footer"
 "credentials" = "bro._entrypoints:bro_base_credentials"
 "land-pr" = "bro._entrypoints:bro_workflow_land_pr"

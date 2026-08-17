@@ -23,14 +23,14 @@ def add_scope_flags(parser: Parser) -> None:
 
 
 def add_session_flags(parser: Parser, *, include_bro: bool = True) -> None:
-  """register the session flags shared by `ride along` and compatibility wrappers."""
+  """register the session flags shared by `ride along` and the mode aliases and dive-in."""
   parser.add_argument(
     '--host',
     action='store_true',
     help='run on the host in a same-machine git worktree instead of the default isolated docker container',
   )
   # imported here, not at module level: llm pulls asyncio (~150ms) and this
-  # module sits on every `import cw`
+  # module sits on every runtime CLI import
   from bro.launch.llm_flags import add_llm_flags
   from bro.llm.mcp import HOLDS
 
@@ -43,7 +43,7 @@ def add_session_flags(parser: Parser, *, include_bro: bool = True) -> None:
     help='how firmly the human holds the session: unattended = no human channel, detached = launched and left, '
     'attended = human watching while the work runs autonomously, guided = human drives each step. '
     'every level but guided skips permission prompts (unsandboxed when combined with --host). '
-    'defaults: unattended for ride solo; attended for ride along and dive-in, guided with --host; guided for cw ss',
+    'defaults: unattended for ride solo; attended for ride along and dive-in, guided with --host',
   )
   add_llm_flags(
     parser,
@@ -57,7 +57,7 @@ def add_session_flags(parser: Parser, *, include_bro: bool = True) -> None:
     metavar='REF',
     help='base a new session on git REF (branch/tag/sha). a REF that only exists on origin is '
     'fetched automatically; ignored once the workspace exists. '
-    "default: the host checkout's current HEAD for ride along and cw ss; origin's freshly "
+    "default: the host checkout's current HEAD for ride along; origin's freshly "
     'fetched HEAD for dive-in, with the host HEAD as the unreachable-origin fallback',
   )
   if include_bro:
@@ -79,7 +79,7 @@ def extract_forwarded_argv(args: dict) -> list[str]:
   """pop forwarded-flag values from `args` and return them as canonical argv tokens.
 
   mutates `args`: removes every key registered by `add_forwarded_flags`. The returned
-  list is suitable to splice directly into a `cw ss` invocation.
+  list is suitable to splice directly into a `ride solo|along` invocation.
   """
   parser = Parser(add_help=False)
   add_forwarded_flags(parser)

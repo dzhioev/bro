@@ -3,7 +3,7 @@ from pathlib import Path
 import bro.prompts as prompts
 
 _PROMPTS_DIR = Path(prompts.__file__).parent
-# auto-injected into every `cw ss` session via --append-system-prompt. Files in
+# auto-injected into every `ride solo|along` session via --append-system-prompt. Files in
 # `shared/` also flow into every bro (via bro/bro.py:_load_shared_prompts), so
 # put cross-surface conventions there. Prompt files may carry template
 # directives (`#harness`/`#wire`/`#creds`, plus the bro's own `#features`) —

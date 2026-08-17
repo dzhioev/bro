@@ -9,6 +9,14 @@ def _run(module):
   return importlib.import_module(module).main(sys.argv)
 
 
+def ride_ask():
+  return _run('ride.ask')
+
+
+def ride_call():
+  return _run('ride.call')
+
+
 def ride_claude_print_anthropic_key():
   return _run('ride.claude.print_anthropic_key')
 
@@ -19,10 +27,6 @@ def ride_claude_statusline():
 
 def ride_cli():
   return _run('ride.cli')
-
-
-def ride_cw():
-  return _run('ride.cw')
 
 
 def ride_dive_in():

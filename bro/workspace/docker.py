@@ -322,7 +322,7 @@ def _docker_create_argv(
     f'CW_NAME={name}',
     '-e',
     f'CW_BRANCH={branch}',
-    # surface the host-side workspace path inside the container so `cw banner`
+    # surface the host-side workspace path inside the container so `ride banner`
     # can show users where their /workspace mount actually lives on the host
     '-e',
     f'CW_HOST_WORKSPACE={tree}',

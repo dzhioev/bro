@@ -1,6 +1,6 @@
 """session-local HTTP MCP serving.
 
-Every `cw ss` session gets its MCP tools from an `mcp-server <spec> --http`
+Every `ride solo|along` session gets its MCP tools from an `mcp-server <spec> --http`
 instance the in-place session runner owns — OS-assigned port published via a
 port file, per-session bearer token — with claude pointed at it via a generated
 `--mcp-config`.

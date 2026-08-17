@@ -77,7 +77,7 @@ def _lower_summon(launch: SummonLaunchSpec, workspace_name: str) -> DockerLaunch
   read live here (`resolve_head` — which also transfers the commit's objects into
   the host repo when they live only in the summoner's own store), unless the
   request's `into` names a ref (resolved with the same fetch-if-unresolvable rule
-  as `cw ss --into`, but an unresolvable ref fails the spawn rather than falling
+  as `ride --into`, but an unresolvable ref fails the spawn rather than falling
   back). The child's workspace is recorded throwaway, so its supervisor removes
   it once the child exits cleanly. Raises on any unresolvable input — the spawner
   surfaces that as the correlated `failed{reason: 'launch'}`."""

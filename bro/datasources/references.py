@@ -57,20 +57,10 @@ dev_style = FileSource(
 ride = FileSource(
   'ride',
   summary=(
-    'the managed-workspace runtime: harness selection and seam, interactive along mode, '
-    'lifecycle verbs, workspace policy, and compatibility behavior.'
+    'the managed-workspace runtime: harness selection and seam, solo/along modes, lifecycle '
+    'verbs, workspace policy, credential scoping, container/host launch, and session state.'
   ),
   path=reference.DIRECTORY / 'ride.md',
-)
-
-cw = FileSource(
-  'cw',
-  summary=(
-    'the session launcher: workspaces, host vs container mode, scoped '
-    'credentials, the flags that shape a `cw ss` session, and the env vars '
-    'it forwards.'
-  ),
-  path=reference.DIRECTORY / 'cw.md',
 )
 
 dive_in = FileSource(
@@ -83,7 +73,7 @@ dive_in = FileSource(
 )
 
 _PAGES = NameMap(
-  {page.name: page for page in (environment, dev_style, template, conditions, ride, cw, dive_in)}
+  {page.name: page for page in (environment, dev_style, template, conditions, ride, dive_in)}
 )
 
 

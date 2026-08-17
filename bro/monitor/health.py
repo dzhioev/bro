@@ -1,7 +1,7 @@
 """durable health state for session recording.
 
 The Claude recorder beats this file on every attempt; `ride.claude.statusline` and
-`cw banner` read it without a network call to warn when recording is failing or
+`ride banner` read it without a network call to warn when recording is failing or
 has stopped. Without it a broken recorder is silent — the daemon's stderr goes
 to a per-session log file (`<claude config dir>/session-recorder.log`) nobody
 watches live, and a daemon killed by a signal writes nothing at all, so a

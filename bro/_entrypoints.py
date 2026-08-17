@@ -29,14 +29,6 @@ def bro_extra_github_poll_pr():
   return _run('bro.extra.github.poll_pr')
 
 
-def bro_launch_ask():
-  return _run('bro.launch.ask')
-
-
-def bro_launch_call():
-  return _run('bro.launch.call')
-
-
 def bro_llm_llm():
   return _run('bro.llm.llm')
 

@@ -22,7 +22,7 @@ Every invocation creates a fresh pinned workspace and passes it as `ride along -
 
 Slugification lowercases, replaces non-alphanumeric runs with `-`, trims separators, and truncates to 40 characters. An empty task slug falls back to `dive-in`. A random suffix makes every name distinct.
 
-The generated name is logged before launch. Use it with `ride exec`, `ride resume`, or the compatibility `cw` lifecycle verbs.
+The generated name is logged before launch. Use it with `ride exec` or `ride resume`.
 
 ## Base and hold defaults
 

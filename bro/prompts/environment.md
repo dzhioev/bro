@@ -8,7 +8,7 @@ Call the `bro::banner` tool once. It returns the structured session facts as `ke
    - No direct filesystem access to the host
    - git (push over HTTPS) and the `gh` CLI are pre-authenticated in managed sessions
    - Push your changes in a managed session; the host cannot see uncommitted work
-   - `docker_shell_command` (`cw exec <name>`) is what the user runs from their host shell to drop into a managed container
+   - `docker_shell_command` (`ride exec <name>`) is what the user runs from their host shell to drop into a managed container
 
 2. Use the session `name` as a hint about the work scope
 
