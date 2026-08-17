@@ -323,7 +323,7 @@ _BANNER_DESCRIPTION = (
 
 
 def _banner_tool(bro: 'BaseBro', variables: Variables) -> llm_mcp.Tool:
-  # the same facts `cw banner --llm` prints, rendered in-process. the bro name is
+  # the same facts `ride banner --llm` prints, rendered in-process. the bro name is
   # passed explicitly because an in-process run's environment carries the
   # launcher's CW_BRO (or none), not this bro's; the trail id is read at call
   # time because the run's trail opens after this server is built. the workspace
@@ -664,7 +664,7 @@ class BaseBro(ABC):
   # the bro's own class prompts (MRO-concatenated); set in __init__
   persona: str
   # `system_prompt` with the Claude-Code tool-name rule in place of the
-  # bro-native one; set in __init__, consumed by `cw ss --raw`
+  # bro-native one; set in __init__, consumed by `ride solo|along --raw`
   claude_system_prompt: str
 
   _llm: Optional[LLM] = None
@@ -807,7 +807,7 @@ class BaseBro(ABC):
       ).strip()
 
     self.system_prompt = compose('bare')
-    # the same prompt over mcp wire names — what a `cw ss --raw` session passes
+    # the same prompt over mcp wire names — what a `ride solo|along --raw` session passes
     # as --system-prompt (cw/claude_argv.py).
     self.claude_system_prompt = compose('mcp')
 
@@ -1209,7 +1209,7 @@ class BaseBro(ABC):
     )
 
   def claude_bro_mcp_servers(self) -> list[llm_mcp.MCPServer]:
-    # the MCP servers a `cw ss --raw` Claude Code session mounts (through
+    # the MCP servers a `ride solo|along --raw` Claude Code session mounts (through
     # the generic server's `bro:<name>` surface): declared servers, spells, and the
     # service tools. procedures serve the bro branch (`--bare` strips claude's
     # built-ins, so the session drives work through the bro toolset, not

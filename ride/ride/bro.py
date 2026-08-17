@@ -93,10 +93,6 @@ class BroHarness:
     del spec
     return True
 
-  def host_fallback_error(self, spec: 'SessionSpec') -> Optional[str]:
-    del spec
-    return None
-
   def inner_command(self, spec: 'SessionSpec') -> list[str]:
     from ride.bro_session import inner_command
 
@@ -140,7 +136,8 @@ class BroHarness:
     return launch_session(spec, workspace, base_ref, launch_scope, container=container)
 
   def run_in_place(self, spec: 'SessionSpec') -> int:
-    raise ValueError(f'{spec.interface} has no bro-harness in-place runner')
+    del spec
+    raise ValueError('ride has no bro-harness in-place runner')
 
 
 BRO = BroHarness()

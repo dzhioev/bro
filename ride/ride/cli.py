@@ -1,8 +1,9 @@
 #!/usr/bin/env python
 import sys
+from pathlib import Path
 from typing import Optional
 
-from bro.base.args import REMAINDER, Parser
+from bro.base.args import REMAINDER, SUPPRESS, Parser
 from bro.launch.llm_flags import canonicalize, drop_piece_flags, selection_from_args
 from bro.llm.providers import LLMSelectionError
 from bro.workspace.banner import banner
@@ -38,6 +39,29 @@ def _add_mode_flags(parser: Parser) -> None:
   add_session_flags(parser, include_bro=False)
   add_claude_flags(parser)
   add_bro_flags(parser)
+  parser.add_argument('--in-place', action='store_true', env=False, help=SUPPRESS)
+  parser.add_argument('--resume', action='store_true', env=False, help=SUPPRESS)
+
+
+def _configure_mode_parser(parser: Parser, *, solo: bool) -> None:
+  _add_mode_flags(parser)
+  if solo:
+    parser.add_argument(
+      '--keep',
+      action='store_true',
+      help='keep an automatically named workspace after a clean exit',
+    )
+  else:
+    parser.add_argument(
+      '--drop',
+      action='store_true',
+      help='remove an automatically named workspace after a clean exit',
+    )
+  parser.add_argument('bro', help='bro personality to run the harness as')
+  if solo:
+    parser.add_argument('prompt', help='prompt to answer')
+  else:
+    parser.add_argument('prompt', nargs='?', default=None, help='initial prompt')
 
 
 def build_parser() -> Parser:
@@ -45,24 +69,10 @@ def build_parser() -> Parser:
   subparsers = parser.add_subparsers(dest='cmd', required=True)
 
   solo = subparsers.add_parser('solo', help='run a one-shot prompt and print the reply')
-  _add_mode_flags(solo)
-  solo.add_argument(
-    '--keep',
-    action='store_true',
-    help='keep an automatically named workspace after a clean exit',
-  )
-  solo.add_argument('bro', help='bro personality to run the harness as')
-  solo.add_argument('prompt', help='prompt to answer')
+  _configure_mode_parser(solo, solo=True)
 
   along = subparsers.add_parser('along', help='start an interactive session')
-  _add_mode_flags(along)
-  along.add_argument(
-    '--drop',
-    action='store_true',
-    help='remove an automatically named workspace after a clean exit',
-  )
-  along.add_argument('bro', help='bro personality to run the harness as')
-  along.add_argument('prompt', nargs='?', default=None, help='initial prompt')
+  _configure_mode_parser(along, solo=False)
 
   resume = subparsers.add_parser(
     'resume', help='resume the last harness session in a workspace under its recorded recipe'
@@ -100,9 +110,7 @@ def build_parser() -> Parser:
   return parser
 
 
-def _parse(parser: Parser, argv: list[str]) -> tuple[dict, list[str]]:
-  if len(argv) < 2 or argv[1] not in ('solo', 'along'):
-    return parser.parse(argv), []
+def _parse_mode(parser: Parser, argv: list[str]) -> tuple[dict, list[str]]:
   try:
     separator = argv.index('--')
   except ValueError:
@@ -110,14 +118,40 @@ def _parse(parser: Parser, argv: list[str]) -> tuple[dict, list[str]]:
   return parser.parse(argv[:separator]), argv[separator + 1 :]
 
 
+def _parse(parser: Parser, argv: list[str]) -> tuple[dict, list[str]]:
+  if len(argv) < 2 or argv[1] not in ('solo', 'along'):
+    return parser.parse(argv), []
+  return _parse_mode(parser, argv)
+
+
 def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, solo: bool) -> int:
   workspace = args.pop('workspace')
+  in_place = args.pop('in_place')
+  resume = args.pop('resume')
   if solo:
-    drop = not args.pop('keep') and workspace is None
+    keep = args.pop('keep')
+    drop = not keep and workspace is None
   else:
     drop = args.pop('drop')
+    keep = False
     if workspace is not None and drop:
       parser.error('--drop cannot be combined with --workspace; pinned workspaces are always kept')
+  if resume and not in_place:
+    parser.error('resuming is `ride resume <workspace>`; --resume is an inner-argv token')
+  if in_place:
+    machinery = {
+      '--host': args['host'],
+      '--drop': drop,
+      '--keep': keep,
+      '--grant': args['grant'] is not None,
+      '--revoke': args['revoke'] is not None,
+      '--into': args['into'] is not None,
+    }
+    offending = [flag for flag, present in machinery.items() if present]
+    if len(offending) > 0:
+      parser.error(f'--in-place cannot be combined with {", ".join(offending)}')
+    if workspace is None:
+      parser.error('--in-place requires --workspace')
   if args['hold'] is None:
     args['hold'] = 'unattended' if solo else 'guided' if args['host'] else 'attended'
   harness_name = args.pop('harness') or project_config().harness
@@ -158,20 +192,32 @@ def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, sol
   name = workspace if workspace is not None else fresh_workspace_name(f'ride-{bro}')
   spec = SessionSpec(
     name=name,
-    interface='ride',
     harness=harness_name,
     workspace_pinned=workspace is not None,
     drop=drop,
     bro=bro,
-    bro_argument=bro,
     prompt=prompt,
     resolved_llm=resolved_llm.dump(),
     solo=solo,
-    resume=False,
+    resume=resume,
     harness_options=harness_options,
     **args,
   )
+  if in_place:
+    return harness.run_in_place(spec)
   return start_session(spec)
+
+
+def alias_main(argv: list[str], *, solo: bool) -> int:
+  parser = Parser(
+    prog=Path(argv[0]).name,
+    description='run a one-shot prompt and print the reply'
+    if solo
+    else 'start an interactive session',
+  )
+  _configure_mode_parser(parser, solo=solo)
+  args, harness_arguments = _parse_mode(parser, argv)
+  return _start_mode(parser, args, harness_arguments, solo=solo)
 
 
 def main(argv: list[str]) -> Optional[int]:
@@ -185,9 +231,7 @@ def main(argv: list[str]) -> Optional[int]:
   if command == 'list':
     return list_workspaces()
   if command == 'resume':
-    return resume_session(
-      args['name'], interface='ride', grant=args['grant'] or [], revoke=args['revoke'] or []
-    )
+    return resume_session(args['name'], grant=args['grant'] or [], revoke=args['revoke'] or [])
   if command == 'clean':
     return clean_workspaces(force=args['force'], dry_run=args['dry_run'], names=args['names'])
   if command == 'check-clean':

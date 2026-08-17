@@ -17,7 +17,6 @@ from ride.session import ScopedLaunch, SessionSpec
 def _spec(**overrides) -> SessionSpec:
   values = {
     'name': 'w',
-    'interface': 'ride',
     'harness': 'bro',
     'workspace_pinned': True,
     'host': False,
@@ -31,7 +30,6 @@ def _spec(**overrides) -> SessionSpec:
     'resume': False,
     'into': None,
     'bro': 'dev',
-    'bro_argument': 'dev',
     'prompt': 'start here',
     'harness_options': bro_harness.BroOptions(
       rich=False, text=False, no_trails=False, subject='start here'

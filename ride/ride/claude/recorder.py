@@ -8,7 +8,7 @@ Code hook: `--raw` sessions run `claude --bare`, which runs no hooks at all.
 
 The daemon's stderr goes to `<claude config dir>/session-recorder.log`; its
 durable failure signal is the health file (`monitor/health.py`) surfaced by
-the statusLine and `cw banner`.
+the status line and `ride banner`.
 """
 
 import json

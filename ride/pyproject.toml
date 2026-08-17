@@ -15,13 +15,15 @@ dependencies = [
 
 [project.scripts]
 # ride
-"cw" = "ride._entrypoints:ride_cw"
+"ask" = "ride._entrypoints:ride_ask"
+"call" = "ride._entrypoints:ride_call"
 "dive-in" = "ride._entrypoints:ride_dive_in"
 "ride" = "ride._entrypoints:ride_cli"
+"ride.ask" = "ride._entrypoints:ride_ask"
+"ride.call" = "ride._entrypoints:ride_call"
 "ride.claude.print-anthropic-key" = "ride._entrypoints:ride_claude_print_anthropic_key"
 "ride.claude.statusline" = "ride._entrypoints:ride_claude_statusline"
 "ride.cli" = "ride._entrypoints:ride_cli"
-"ride.cw" = "ride._entrypoints:ride_cw"
 "ride.dive-in" = "ride._entrypoints:ride_dive_in"
 
 [tool.uv.sources]

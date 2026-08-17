@@ -43,7 +43,6 @@ def _spec(
   resolved_bro = bro if bro is not None else 'bro-dev'
   return cw_session.SessionSpec(
     name=name,
-    interface='cw',
     harness='claude',
     workspace_pinned=True,
     host=host,
@@ -57,7 +56,6 @@ def _spec(
     resume=resume,
     into=into,
     bro=resolved_bro,
-    bro_argument=bro,
     prompt=prompt,
     harness_options=ClaudeOptions(
       raw=raw, arguments=claude_args if claude_args is not None else []
@@ -73,7 +71,6 @@ def _resume(
 ) -> int:
   return cw_session.resume_session(
     name,
-    interface='cw',
     grant=grant if grant is not None else [],
     revoke=revoke if revoke is not None else [],
   )
@@ -154,24 +151,10 @@ class _ContainerHarness:
 class TestNestedLaunch:
   def test_ride_refuses_with_process_and_summon_remedies(self, monkeypatch, caplog):
     monkeypatch.setenv('CW_IN_CONTAINER', '1')
-    spec = replace(_spec(), interface='ride', workspace_pinned=False, bro_argument='bro-dev')
+    spec = replace(_spec(), workspace_pinned=False)
     assert cw_session.start_session(spec) == 1
     assert '`summon`' in caplog.text
-    assert '`bro run|chat --in-place`' in caplog.text
-
-  def test_cw_retains_the_host_fallback(self, monkeypatch):
-    monkeypatch.setenv('CW_IN_CONTAINER', '1')
-    with (
-      patch.object(claude_harness.CLAUDE, 'preflight_auth', return_value=True),
-      patch.object(claude_harness.CLAUDE, 'launch', return_value=0) as launch,
-      patch('ride.session.scoped_secrets', return_value=ScopedSecrets(set(), set(), False)),
-      patch('bro.launch.scope.credentials.build_scoped_store', return_value={}),
-      patch('bro.launch.summon_control.summon_allow_list', return_value=set()),
-      patch('ride.session._replace_resume_hint'),
-    ):
-      assert cw_session.start_session(_spec()) == 0
-    assert launch.call_args.kwargs['container'] is False
-    assert launch.call_args.args[0].host
+    assert '`bro run|chat`' in caplog.text
 
 
 class TestGrantRevoke:
@@ -268,7 +251,8 @@ class TestContainerCommand:
     assert rc == 0
     command = h.run_in_container.call_args.args[0].command
     assert command == [
-      'cw', 'ss', '--in-place', '--llm', '::xhigh+fast', '--bro', 'dev', '--prompt=go', 'w',
+      'ride', 'along', '--in-place', '--workspace', 'w', '--harness', 'claude',
+      '--llm', '::xhigh+fast', 'dev', 'go',
     ]  # fmt: skip
 
   def test_bro_carried_in_command_and_stamped_into_the_container_env(self):
@@ -276,8 +260,17 @@ class TestContainerCommand:
       rc = cw_session.start_session(_spec(drop=True, bro='dev'))
     assert rc == 0
     command = h.run_in_container.call_args.args[0].command
-    assert command == ['cw', 'ss', '--in-place', '--bro', 'dev', 'w']
-    # CW_BRO themes the whole container (cw exec shells), set explicitly in the
+    assert command == [
+      'ride',
+      'along',
+      '--in-place',
+      '--workspace',
+      'w',
+      '--harness',
+      'claude',
+      'dev',
+    ]
+    # CW_BRO themes the whole container (ride exec shells), set explicitly in the
     # container env — never forwarded from the launcher's environment
     launch = h.run_in_container.call_args.args[0]
     assert launch.env['CW_BRO'] == 'dev'
@@ -306,12 +299,21 @@ class TestContainerCommand:
       rc = cw_session.start_session(_spec(drop=True, bro='dev', raw=True))
     assert rc == 0
     command = h.run_in_container.call_args.args[0].command
-    assert command == ['cw', 'ss', '--in-place', '--raw', '--bro', 'dev', 'w']
+    assert command == [
+      'ride',
+      'along',
+      '--in-place',
+      '--workspace',
+      'w',
+      '--harness',
+      'claude',
+      '--raw',
+      'dev',
+    ]
 
   def test_solo_launch_has_no_container_tty(self):
     spec = replace(
       _spec(solo=True, hold='unattended', prompt='go'),
-      interface='ride',
       workspace_pinned=False,
     )
     with _ContainerHarness() as harness:
@@ -319,15 +321,9 @@ class TestContainerCommand:
     launch = harness.run_in_container.call_args.args[0]
     assert not launch.tty
     assert launch.command == [
-      'cw',
-      'ss',
-      '--in-place',
-      '--solo',
-      '--hold',
-      'unattended',
-      '--prompt=go',
-      'w',
-    ]
+      'ride', 'solo', '--in-place', '--workspace', 'w', '--harness', 'claude',
+      'bro-dev', 'go',
+    ]  # fmt: skip
 
   def test_cw_session_stamps_the_default_bro_as_cw_bro(self):
     with _ContainerHarness() as h:
@@ -379,7 +375,17 @@ class TestContainerCommand:
         rc = cw_session.start_session(_spec(resume=True))
     assert rc == 0
     command = h.run_in_container.call_args.args[0].command
-    assert command == ['cw', 'ss', '--in-place', '--resume', 'w']
+    assert command == [
+      'ride',
+      'along',
+      '--in-place',
+      '--workspace',
+      'w',
+      '--harness',
+      'claude',
+      '--resume',
+      'bro-dev',
+    ]
 
 
 class TestContainerDrop:
@@ -410,23 +416,43 @@ class TestCommandArgv:
       claude_args=['--foo'],
     ).to_command_argv()
     assert parts == [
-      'cw', 'ss', '--drop', '--hold', 'attended',
-      '--llm', '::xhigh+fast', '--bro', 'dev', '--grant', 'gmail_creds',
-      '--grant', '@bro', '--revoke', 'notion', '--into', 'feature', 'w', '--foo',
+      'ride', 'along', '--drop', '--llm', '::xhigh+fast', '--harness', 'claude',
+      '--workspace', 'w', '--grant', 'gmail_creds', '--grant', '@bro',
+      '--revoke', 'notion', '--into', 'feature', 'dev', '--', '--foo',
     ]  # fmt: skip
 
   def test_host_session_carries_the_host_flag(self):
     parts = _spec(host=True, hold='detached').to_command_argv()
-    assert parts == ['cw', 'ss', '--host', '--hold', 'detached', 'w']
+    assert parts == [
+      'ride',
+      'along',
+      '--host',
+      '--hold',
+      'detached',
+      '--harness',
+      'claude',
+      '--workspace',
+      'w',
+      'bro-dev',
+    ]
 
   def test_default_hold_is_elided(self):
     # the parser's default hold stays implicit in the reconstructed command
-    assert _spec().to_command_argv() == ['cw', 'ss', 'w']
+    assert _spec().to_command_argv() == [
+      'ride',
+      'along',
+      '--hold',
+      'guided',
+      '--harness',
+      'claude',
+      '--workspace',
+      'w',
+      'bro-dev',
+    ]
 
   def test_solo_command_uses_keep_only_for_a_retained_automatic_workspace(self):
     automatic = replace(
       _spec(solo=True, drop=True, hold='unattended', prompt='go'),
-      interface='ride',
       workspace_pinned=False,
     )
     assert automatic.to_command_argv() == [
@@ -450,7 +476,7 @@ class TestCommandArgv:
   def test_a_resume_is_its_own_command(self):
     # the recorded spec carries the flags, so the name is the whole command
     assert _spec(hold='attended', bro='dev').resume_variant().to_command_argv() == [
-      'cw',
+      'ride',
       'resume',
       'w',
     ]
@@ -516,7 +542,6 @@ class TestResumeSpecRecord:
   def test_solo_resume_becomes_an_along_session_with_its_default_hold(self, tmp_path):
     solo = replace(
       _spec(solo=True, hold='unattended', prompt='go'),
-      interface='ride',
       workspace_pinned=False,
     )
     workspace = _workspace(tmp_path)
@@ -594,7 +619,7 @@ class TestReplaceResumeHint:
     monkeypatch.setattr(claude_harness.CLAUDE, 'session_exists', lambda workspace: True)
     monkeypatch.setattr('sys.stdout.isatty', lambda: True)
     cw_session._replace_resume_hint(_spec(), _workspace(tmp_path))
-    assert 'cw resume w' in capsys.readouterr().out
+    assert 'ride resume w' in capsys.readouterr().out
 
   def test_silent_without_a_session_jsonl(self, monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(claude_harness.CLAUDE, 'session_exists', lambda workspace: False)
@@ -618,13 +643,24 @@ class TestInPlaceArgv:
       claude_args=['--foo'],
     ).inner_command()
     assert parts == [
-      'cw', 'ss', '--in-place', '--hold', 'attended',
-      '--llm', '::xhigh+fast', '--bro', 'dev', '--prompt=do it', 'w', '--foo',
+      'ride', 'along', '--in-place', '--workspace', 'w', '--harness', 'claude',
+      '--hold', 'attended', '--llm', '::xhigh+fast', 'dev', 'do it', '--', '--foo',
     ]  # fmt: skip
 
   def test_resume_and_raw_carried(self):
     parts = _spec(resume=True, bro='dev', raw=True).inner_command()
-    assert parts == ['cw', 'ss', '--in-place', '--resume', '--raw', '--bro', 'dev', 'w']
+    assert parts == [
+      'ride',
+      'along',
+      '--in-place',
+      '--workspace',
+      'w',
+      '--harness',
+      'claude',
+      '--resume',
+      '--raw',
+      'dev',
+    ]
 
 
 class TestSessionBro:
@@ -701,9 +737,9 @@ class TestHostSession:
 
   def _prepare_launch(self, monkeypatch, tmp_path):
     workspace, worktree = self._fake_workspace(monkeypatch, tmp_path, has_session=False)
-    cw_bin = worktree / '.venv' / 'bin' / 'cw'
-    cw_bin.parent.mkdir(parents=True)
-    cw_bin.write_text('')
+    ride_binary = worktree / '.venv' / 'bin' / 'ride'
+    ride_binary.parent.mkdir(parents=True)
+    ride_binary.write_text('')
     monkeypatch.setattr(workspace_project, 'project_root', lambda: tmp_path)
     monkeypatch.setattr(claude_session, 'project_root', lambda: tmp_path)
     monkeypatch.setattr(claude_session.os, 'chdir', lambda p: None)
@@ -730,10 +766,10 @@ class TestHostSession:
       lambda store, directory: directory / 'credentials.json',
     )
     monkeypatch.setattr(bro.launch.summon_control, 'summon_allow_list', lambda *_a, **_k: set())
-    return workspace, cw_bin, worktree
+    return workspace, ride_binary, worktree
 
   def test_broker_supervises_the_worktrees_own_in_place_runner(self, monkeypatch, tmp_path):
-    workspace, cw_bin, worktree = self._prepare_launch(monkeypatch, tmp_path)
+    workspace, ride_binary, worktree = self._prepare_launch(monkeypatch, tmp_path)
     monkeypatch.setattr(claude_session, 'broker_enabled', lambda: True)
     monkeypatch.setattr(bro.launch.summon_control, 'summon_allow_list', lambda *_a, **_k: {'dev'})
     roots: list = []
@@ -766,7 +802,8 @@ class TestHostSession:
     assert claude_session._host_session(spec, workspace, None, scope) == 5
     assert roots[0]['workspace'] is workspace
     assert roots[0]['command'] == [
-      str(cw_bin), 'ss', '--in-place', '--hold', 'attended', '--llm', '::xhigh', '--prompt=go', 'w', '--foo',
+      str(ride_binary), 'along', '--in-place', '--workspace', 'w', '--harness', 'claude',
+      '--hold', 'attended', '--llm', '::xhigh', 'bro-dev', 'go', '--', '--foo',
     ]  # fmt: skip
     assert roots[0]['env']['VIRTUAL_ENV'] == str(worktree / '.venv')
     # the host root gets the session's summon allow-list like container mode
@@ -809,7 +846,7 @@ class TestHostSession:
     assert not (tmp_path / 'var' / 'cw' / 'workspaces' / 'fresh').exists()
 
   def test_direct_spawn_when_broker_disabled(self, monkeypatch, tmp_path):
-    workspace, cw_bin, worktree = self._prepare_launch(monkeypatch, tmp_path)
+    workspace, ride_binary, worktree = self._prepare_launch(monkeypatch, tmp_path)
     monkeypatch.setattr(claude_session, 'broker_enabled', lambda: False)
     runs: list = []
 
@@ -824,7 +861,8 @@ class TestHostSession:
     assert claude_session._host_session(spec, workspace, None, _launch_scope()) == 0
     argv, kwargs = runs[0]
     assert argv == [
-      str(cw_bin), 'ss', '--in-place', '--hold', 'attended', '--llm', '::xhigh', '--prompt=go', 'w', '--foo',
+      str(ride_binary), 'along', '--in-place', '--workspace', 'w', '--harness', 'claude',
+      '--hold', 'attended', '--llm', '::xhigh', 'bro-dev', 'go', '--', '--foo',
     ]  # fmt: skip
     assert kwargs['cwd'] == str(worktree)
     assert kwargs['env']['VIRTUAL_ENV'] == str(worktree / '.venv')
@@ -832,7 +870,7 @@ class TestHostSession:
   def test_runner_env_gets_the_claude_auth_transform(self, monkeypatch, tmp_path):
     # the outer applies _apply_claude_auth to the runner env it spawns, so a
     # worktree whose own runner predates the transform still inherits the token
-    workspace, cw_bin, worktree = self._prepare_launch(monkeypatch, tmp_path)
+    workspace, ride_binary, worktree = self._prepare_launch(monkeypatch, tmp_path)
     monkeypatch.setattr(claude_session, 'broker_enabled', lambda: False)
 
     def fake_apply(env, **_kwargs):
@@ -1014,12 +1052,12 @@ class TestHostBrokerPingRoundTrip:
     monkeypatch.setenv('HOME', str(home))
     workspace = Workspace.create('w', root, WorkspaceKind.WORKTREE)
     worktree = workspace.tree
-    cw_bin = worktree / '.venv' / 'bin' / 'cw'
-    cw_bin.parent.mkdir(parents=True)
+    ride_binary = worktree / '.venv' / 'bin' / 'ride'
+    ride_binary.parent.mkdir(parents=True)
     # stands in for the in-place runner: the real `broker` CLI resolves from the
     # ambient venv PATH (retained through _venv_env) and rides BROKER_CHANNEL
-    cw_bin.write_text('#!/bin/sh\nexec broker request ping "{}" --timeout 30\n')
-    cw_bin.chmod(0o755)
+    ride_binary.write_text('#!/bin/sh\nexec broker request ping "{}" --timeout 30\n')
+    ride_binary.chmod(0o755)
 
     monkeypatch.setattr(cw_session, 'project_root', lambda: root)
     monkeypatch.setattr(claude_session.os, 'chdir', lambda p: None)

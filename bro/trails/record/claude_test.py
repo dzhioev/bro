@@ -84,7 +84,7 @@ def environment(tmp_path: Path, monkeypatch):
   projects = config / 'projects' / '-workspace'
   projects.mkdir(parents=True)
   monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(config))
-  monkeypatch.setenv('CW_COMMAND', 'cw ss ws')
+  monkeypatch.setenv('CW_COMMAND', 'ride along ws')
   monkeypatch.setenv('CW_BRO', 'dev')
   monkeypatch.setenv('BRO_HOLD', 'attended')
   monkeypatch.setenv(
@@ -126,7 +126,7 @@ def _worker(store: LocalStore, path: Path) -> _SegmentRecorder:
     version='test',
     interactive=True,
     surface='cw',
-    native={'llm': {}, 'segment': path.stem, 'cw_command': 'cw ss', 'harness_version': 'test'},
+    native={'llm': {}, 'segment': path.stem, 'cw_command': 'ride along', 'harness_version': 'test'},
     body={'records': []},
   )
   lines, byte_extent = _read_lines_after(path, 0)
@@ -167,7 +167,7 @@ class TestAdoption:
     assert header['hold'] == 'attended'
     assert 'forked_from' not in header
     assert header['native']['segment'] == 'seg-1'
-    assert header['native']['cw_command'] == 'cw ss ws'
+    assert header['native']['cw_command'] == 'ride along ws'
     assert header['native']['llm'] == {'model': 'claude-fable-5'}
     assert header['location']['workspace'] == 'ws'
     assert header['location']['is_container'] is False

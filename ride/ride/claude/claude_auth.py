@@ -25,7 +25,7 @@ _OUTRANKING_AUTH_VARS = ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN')
 
 
 def _apply_claude_auth(env: dict[str, str], *, warn_when_missing: bool = False) -> None:
-  """align a claude session env with the session auth model (reference/cw.md).
+  """align a claude session env with the session auth model (reference/ride.md).
 
   scrubs the inherited vars that outrank the session's designated auth, then
   overlays the long-lived `claude setup-token` credential (`claude_code`). the

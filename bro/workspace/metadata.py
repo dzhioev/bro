@@ -31,7 +31,7 @@ def workspace_branch(name: str) -> str:
 @dataclass(frozen=True)
 class WorkspaceMetadata:
   """what a workspace is: its backing, the branch its tree is checked out on,
-  and whether a clean exit disposes of it. `bro/reference/cw.md` ("Workspaces")
+  and whether a clean exit disposes of it. `bro/reference/ride.md` ("Workspaces")
   owns what each means for a launch."""
 
   kind: WorkspaceKind

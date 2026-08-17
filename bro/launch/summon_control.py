@@ -3,7 +3,7 @@
 Two layers, both computed per broker root:
 
 - `summon_allow_list` — which bros a session may summon. Every surface that starts
-  a broker root (`cw ss` in both modes, the do-CLI container hop) computes the
+  a broker root (`ride solo|along` in both modes, the do-CLI container hop) computes the
   session's effective outgoing allow-list here at launch and threads it to
   `run_root_via_broker`.
 - `SummonControl` — the root's summon state, wired up by `run_root_via_broker`:

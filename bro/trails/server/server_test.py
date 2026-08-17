@@ -136,7 +136,7 @@ async def test_read_handlers_dispatch_local_store_semantics(client):
     harness='claude',
     bro=None,
     surface='cw',
-    native={'segment': 'segment', 'llm': {}, 'cw_command': 'cw ss', 'harness_version': '2'},
+    native={'segment': 'segment', 'llm': {}, 'cw_command': 'ride along', 'harness_version': '2'},
     body={
       'records': [
         json.dumps({'type': 'system', 'uuid': 'first'}),
@@ -167,7 +167,7 @@ async def test_list_filters_and_rejects_invalid_queries(client):
       harness='claude',
       bro=None,
       surface='cw',
-      native={'segment': 'segment', 'llm': {}, 'cw_command': 'cw ss', 'harness_version': '2'},
+      native={'segment': 'segment', 'llm': {}, 'cw_command': 'ride along', 'harness_version': '2'},
       body={'records': []},
     ),
     headers=_auth(),

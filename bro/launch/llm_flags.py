@@ -35,6 +35,17 @@ LLM_HELP = (
   'any field left empty (`:fable5`, `::high`, `openai:sol:max+fast`), or a preset name from the '
   "project's [tool.bro.llm] table or the host's ~/.bro.json. excludes the four flags above"
 )
+FAST_HELP = (
+  "run with the fast-mode knob of the run's LLM recipe (provider-specific; for OpenAI it is "
+  "the 'priority' service tier — same model and quality, faster and more consistent "
+  'generation at a higher per-token price); a provider with no fast mode falls back to the '
+  'plain recipe'
+)
+EFFORT_HELP = (
+  "override the reasoning-effort knob of the run's LLM recipe with this neutral level, "
+  "mapped onto the provider's own scale (for OpenAI every level maps through); "
+  'without the flag the standing spec remains. errors when the provider has no effort knob'
+)
 
 
 def add_llm_flags(parser: Parser, *, effort_help: str, fast_help: str) -> None:
@@ -111,7 +122,7 @@ def resolve_native(base: 'NativeLLMSpec', selection: 'LLMSelection') -> 'NativeL
   if not isinstance(spec, NativeLLMSpec):
     raise LLMSelectionError(
       f'{spec.TYPE} runs its own agent loop, so a bro cannot be launched against it here; '
-      f'run the bro under that harness with `cw ss --raw --llm {selection.format()}`'
+      f'run the bro under that harness with `ride solo|along --harness claude --raw --llm {selection.format()}`'
     )
   return spec
 

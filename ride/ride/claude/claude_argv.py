@@ -1,4 +1,4 @@
-"""the claude argv for a `cw ss` session — one builder for both flavors.
+"""the claude argv for a `ride solo|along` session — one builder for both flavors.
 
 The cw-session/raw fork is confined to here: `--raw` selects a `--bare` claude
 with api-key auth and the bro's own system prompt, a cw-session keeps the full
@@ -56,7 +56,7 @@ _STATUSLINE_REFRESH_SECONDS = 1
 
 # prepended to a raw session's argv-seeded first prompt, which fires before
 # claude's async MCP connects complete (cw/mcp.py:_server_entry); rationale for
-# the turn-local delivery: reference/cw.md "Session-local MCP serving".
+# the turn-local delivery: reference/ride.md "Session-local MCP serving".
 _FIRST_TURN_LAUNCH_NOTE = (
   '[launch note: MCP tools connect asynchronously and may be missing from your '
   'tool list on this first turn. If a needed tool is absent, say it has not '

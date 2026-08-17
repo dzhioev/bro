@@ -116,7 +116,7 @@ class TestLaunchCommand:
 
 
 class TestShellCommandReconstruction:
-  """the visual banner receives the wrapper invocation, not the underlying `cw ss`."""
+  """the visual banner receives the wrapper invocation, not the underlying `ride solo|along`."""
 
   def test_forwarded_flags_appear_in_the_reconstruction(self, fake_proj, monkeypatch):
     monkeypatch.delenv('BRO_SHELL_COMMAND', raising=False)
@@ -128,7 +128,7 @@ class TestShellCommandReconstruction:
     monkeypatch.delenv('BRO_SHELL_COMMAND', raising=False)
     rc = dive_in.main(['dive-in', '-n', '--new', 'do a thing'])
     assert rc == 0
-    # `cw banner` splits the user prompt off at the last ` --new ` marker
+    # `ride banner` splits the user prompt off at the last ` --new ` marker
     assert os.environ['BRO_SHELL_COMMAND'] == 'dive-in --new do a thing'
 
 

@@ -1,9 +1,9 @@
-"""the in-place session runner (`cw ss --in-place`).
+"""the in-place Claude session runner (`ride solo|along --in-place`).
 
 The inner layer of the launch stack: it assumes its cwd is a prepared workspace
 (host worktree or container clone) with the workspace venv active, and owns
 everything that runs next to claude — resume resolution, the claude argv, the
-session-local MCP server, launch declarations, and the session recorder daemon. The outer `cw ss` (mode-specific by nature: worktree
+session-local MCP server, launch declarations, and the session recorder daemon. The outer `ride solo|along` (mode-specific by nature: worktree
 ensure / container machinery) validates policy once and spawns this runner in
 the workspace, so it re-runs no policy gates.
 """
@@ -83,7 +83,7 @@ def run_in_place(spec: 'SessionSpec') -> int:
 
   if not in_container():
     # a host session's claude state lives in the private per-session config dir
-    # (the container-equivalent isolation — reference/cw.md, "Host claude-state
+    # (the container-equivalent isolation — reference/ride.md, "Host claude-state
     # isolation"). provisioning is idempotent and the outer launch also applies
     # it, so a runner spawned by an outer cw that predates the config dir still
     # provisions its own. set before anything derives paths or spawns children:
