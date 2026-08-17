@@ -93,6 +93,7 @@ PYTEST_FILES = [
   'bro/spells_test.py',
   'bro/datasources/current_time_test.py',
   'bro/datasources/file_test.py',
+  'bro/datasources/man_test.py',
   'bro/datasources/searchable_test.py',
   'bro/datasources/web_search_test.py',
   'bro/datasources/wikipedia_test.py',

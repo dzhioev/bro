@@ -1,11 +1,14 @@
-"""ready-made `FileSource` instances over the repo's canonical reference docs.
+"""ready-made sources over the repo's canonical reference docs.
 
-A bro mounts one by listing it in `data_sources` (`references.environment`);
-the instances are stateless, so sharing them across bros is fine.
+Each doc is declared once as a `FileSource`. A bro mounts one directly in
+`data_sources` for a dedicated `read` tool (`references.dev_style`), or mounts
+`references.man` for the whole corpus behind one topic-keyed tool. The
+instances are stateless, so sharing them across bros is fine.
 """
 
 from bro import prompts, reference
 from bro.datasources.file import FileSource
+from bro.datasources.man import ManSource
 
 environment = FileSource(
   'environment',
@@ -21,7 +24,7 @@ template = FileSource(
   summary=(
     'the `{{…}}` template-directive reference: grammar, directive semantics, '
     'rendering surfaces. Read it when the meaning of a directive matters; '
-    'builds on the `conditions` source.'
+    'builds on the `conditions` reference.'
   ),
   path=reference.DIRECTORY / 'template.md',
   # the payload is the directive syntax itself; rendering would execute it
@@ -48,4 +51,29 @@ dev_style = FileSource(
     'when auditing a diff against policy.'
   ),
   path=prompts.get_prompt_path('dev/style.md'),
+)
+
+cw = FileSource(
+  'cw',
+  summary=(
+    'the session launcher: workspaces, host vs container mode, scoped '
+    'credentials, the flags that shape a `cw ss` session, and the env vars '
+    'it forwards.'
+  ),
+  path=reference.DIRECTORY / 'cw.md',
+)
+
+dive_in = FileSource(
+  'dive-in',
+  summary=(
+    'the task → ready-to-go session wrapper: its modes, workspace naming, the '
+    'spell command it seeds as the first message, and `--host`.'
+  ),
+  path=reference.DIRECTORY / 'dive_in.md',
+)
+
+man = ManSource(
+  'man',
+  summary='the framework reference pages, read on demand by topic',
+  pages=[environment, dev_style, template, conditions, cw, dive_in],
 )
