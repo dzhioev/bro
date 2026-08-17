@@ -152,8 +152,8 @@ def _native_header_fields(header: dict[str, Any]) -> list[tuple[str, Any]]:
         ('segment', native.get('segment', '?')),
       ]
     )
-    if native.get('cw_command') is not None:
-      fields.append(('cw', native['cw_command']))
+    if native.get('ride_command') is not None:
+      fields.append(('ride', native['ride_command']))
   else:
     fields.append(('native', native))
   return fields

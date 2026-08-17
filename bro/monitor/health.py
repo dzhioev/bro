@@ -8,7 +8,7 @@ watches live, and a daemon killed by a signal writes nothing at all, so a
 missed beat is the only trace it leaves.
 
 The file lives under the session's claude config dir (`CLAUDE_CONFIG_DIR` when
-set — every cw session points it at private per-session state), so concurrent
+set — every ride session points it at private per-session state), so concurrent
 sessions don't clobber each other's signal.
 
 Stdlib-only on purpose: the statusline imports this on every render, so it must

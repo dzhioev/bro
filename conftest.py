@@ -4,17 +4,17 @@ pinned to a no-op `Tracker` so tests never try to ship trail data to a
 configured sink — even on a workstation where the production recorder is the
 default via `set_default_tracker_factory`.
 
-`BROKER_CHANNEL` is dropped for the same reason: every broker-supervised cw
+`BROKER_CHANNEL` is dropped for the same reason: every broker-supervised ride
 session (container and host worktree alike) carries the env var, and a bro
 run in a test would otherwise connect to the live session channel and emit
 lifecycle events into it. Unset, `BroChannel.from_env()` returns None and
 the hook is inert.
 
-`BRO_HOLD` and `CW_RUNNER_PID` are dropped for the same hermeticity: together
+`BRO_HOLD` and `RIDE_RUNNER_PID` are dropped for the same hermeticity: together
 they gate the `raise` service tool's claude mounts, and tests would otherwise
 see the launching session's values.
 
-`CREDENTIALS_REGISTRY` is dropped so credential tests are hermetic: a host cw
+`CREDENTIALS_REGISTRY` is dropped so credential tests are hermetic: a host ride
 session exports it pointing at the session's scoped store, which outranks the
 `BRO_DIR` / `CONFIGS_DIR` module attributes the tests redirect to tmp dirs —
 secrets would resolve against the session's scoped set instead of the test
@@ -38,9 +38,11 @@ minted pointer into `os.environ` mid-run, so a test reading a usage source
 would otherwise see the launching session's spend or an earlier test's file. `PWD` is dropped at import — the
 transcript fallback resolves the working directory through it, and
 `monkeypatch.chdir` never updates it, so a chdir'd test would still read the
-launching session's transcripts. `CW_NAME` too — it marks a managed workspace,
+launching session's transcripts. `RIDE_WORKSPACE` too — it marks a managed workspace,
 and a bro run in a test would otherwise provision the launching session's
-workspace (`BaseBro._provision_workspace`).
+workspace (`BaseBro._provision_workspace`). `RIDE_IN_CONTAINER` is dropped so
+path tests resolve host runtime roots unless they explicitly exercise the fixed
+container mounts.
 
 The log level is pinned to INFO and `BRO_LOG_LEVEL` dropped — at session start
 against an inherited verbose launch (`run-tests --verbose`), and after every
@@ -72,10 +74,11 @@ from bro.llm.tracker import NullTracker
 set_default_tracker_factory(NullTracker)
 os.environ.pop(CHANNEL_ENV, None)
 os.environ.pop('BRO_HOLD', None)
-os.environ.pop('CW_RUNNER_PID', None)
+os.environ.pop('RIDE_RUNNER_PID', None)
 os.environ.pop(REGISTRY_ENV, None)
 os.environ.pop('PWD', None)
-os.environ.pop('CW_NAME', None)
+os.environ.pop('RIDE_WORKSPACE', None)
+os.environ.pop('RIDE_IN_CONTAINER', None)
 log.set_level(logging.INFO)
 os.environ.pop(log.LEVEL_ENV, None)
 
@@ -101,6 +104,15 @@ def _pin_credential_gate_open(request, monkeypatch):
 def _isolate_host_config(monkeypatch, tmp_path):
   monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(tmp_path / 'absent.json'))
   monkeypatch.setattr('bro.base.credentials._selected_instances', {})
+
+
+@pytest.fixture(autouse=True)
+def _isolate_runtime_state(monkeypatch, tmp_path):
+  from bro.workspace.paths import project_key
+
+  runtime_base = tmp_path.parent / f'{tmp_path.name}-ride-state'
+  (runtime_base / project_key(tmp_path)).mkdir(parents=True)
+  monkeypatch.setattr('bro.workspace.paths.RUNTIME_BASE', runtime_base)
 
 
 @pytest.fixture(autouse=True)

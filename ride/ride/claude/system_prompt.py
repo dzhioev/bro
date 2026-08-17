@@ -33,10 +33,10 @@ def _load_base_prompts() -> str:
 
 
 def _session_append_prompt(hold: str, bro_name: str) -> str:
-  """--append-system-prompt text for a cw-session (the non --raw flavor).
+  """--append-system-prompt text for a ride-session (the non --raw flavor).
 
   base prompts plus the session bro's own persona prompts and spell
-  instructions (`bro_name`, the `--bro` bro) — so a cw-session carries the
+  instructions (`bro_name`, the `--bro` bro) — so a ride-session carries the
   bro's policies even though it runs the Claude Code harness. the assembled text renders
   once with this surface's facts: the claude harness over mcp wire names, with
   the session environment's credentials (this composes in the session's own
@@ -45,8 +45,7 @@ def _session_append_prompt(hold: str, bro_name: str) -> str:
   `bro.prompts.hold_fragment` — the `#hold` fact is supplied only there, so the
   base and persona prompts stay hold-neutral.
   """
-  # bro.llm.mcp and bro.registry are imported lazily — the hub aggregates every cw
-  # submodule, so a module-level import here would tax every `import cw`.
+  # Keep the bro class graph out of this leaf module's import closure.
   import bro.llm.mcp as llm_mcp
   from bro import prompts
   from bro.base import credentials

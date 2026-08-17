@@ -22,7 +22,7 @@ def _commit(path: Path, name: str) -> str:
 
 
 def _private_refs(path: Path) -> str:
-  return git_helpers.git_out('for-each-ref', 'refs/cw', cwd=str(path))
+  return git_helpers.git_out('for-each-ref', 'refs/ride', cwd=str(path))
 
 
 def _forbid_transfer(monkeypatch):
@@ -135,7 +135,7 @@ class TestResolveRef:
     for fetch in fetches:
       assert fetch['args'][1] == 'origin'
       refspec = fetch['args'][2]
-      assert refspec.startswith('+nope:refs/cw/resolve-')
+      assert refspec.startswith('+nope:refs/ride/resolve-')
       refspecs.append(refspec)
       # no-prompt overlay: an unreachable remote fails fast instead of prompting
       assert fetch['env']['GIT_TERMINAL_PROMPT'] == '0'

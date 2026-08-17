@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import bro.launch.broxy as cw_broxy
+import bro.launch.broxy as ride_broxy
 from bro.broker.brotocol import Message
 from bro.broker.client import Client
 from bro.broker.transport import ChannelID
@@ -93,7 +93,7 @@ async def test_session_broxy_serves_the_rewritten_channel():
 
 
 def test_start_returns_none_when_the_upstream_is_unreachable(tmp_path, monkeypatch):
-  monkeypatch.setattr(cw_broxy, '_LAUNCH_TIMEOUT', 1.0)
+  monkeypatch.setattr(ride_broxy, '_LAUNCH_TIMEOUT', 1.0)
   broxy = _start_session_broxy('unix:' + str(tmp_path / 'missing.sock'), os.environ)
   assert broxy is None
 
@@ -108,13 +108,13 @@ def test_start_returns_none_without_the_console_script(tmp_path):
 def test_session_broxy_rewrites_only_a_marked_host_root(monkeypatch):
   daemon = MagicMock(address='unix:/tmp/session-broxy.sock')
   start = MagicMock(return_value=daemon)
-  monkeypatch.setattr(cw_broxy, '_start_session_broxy', start)
-  monkeypatch.setenv(cw_broxy.START_SESSION_BROXY_ENV, '1')
+  monkeypatch.setattr(ride_broxy, '_start_session_broxy', start)
+  monkeypatch.setenv(ride_broxy.START_SESSION_BROXY_ENV, '1')
   monkeypatch.setenv('BROKER_CHANNEL', 'unix:/tmp/root.sock')
 
-  with cw_broxy.session_broxy():
+  with ride_broxy.session_broxy():
     assert os.environ['BROKER_CHANNEL'] == daemon.address
-    assert cw_broxy.START_SESSION_BROXY_ENV not in os.environ
+    assert ride_broxy.START_SESSION_BROXY_ENV not in os.environ
 
   start.assert_called_once()
   daemon.stop.assert_called_once()
@@ -123,11 +123,11 @@ def test_session_broxy_rewrites_only_a_marked_host_root(monkeypatch):
 
 def test_session_broxy_leaves_an_existing_session_channel_alone(monkeypatch):
   start = MagicMock()
-  monkeypatch.setattr(cw_broxy, '_start_session_broxy', start)
-  monkeypatch.delenv(cw_broxy.START_SESSION_BROXY_ENV, raising=False)
+  monkeypatch.setattr(ride_broxy, '_start_session_broxy', start)
+  monkeypatch.delenv(ride_broxy.START_SESSION_BROXY_ENV, raising=False)
   monkeypatch.setenv('BROKER_CHANNEL', 'unix:/tmp/existing-broxy.sock')
 
-  with cw_broxy.session_broxy():
+  with ride_broxy.session_broxy():
     assert os.environ['BROKER_CHANNEL'] == 'unix:/tmp/existing-broxy.sock'
 
   start.assert_not_called()

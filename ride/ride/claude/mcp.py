@@ -44,7 +44,7 @@ def _server_entry(url: str, token: str) -> dict:
   (`-p`) run's first request until the server is connected; an interactive
   session's argv-seeded first prompt does not wait on it — MCP connects stay
   async, so that first turn can reach the model with no tools attached (the bare
-  flavor's first-turn launch note in `cw/claude_argv.py` covers that window)."""
+  flavor's first-turn launch note in `ride/ride/claude/claude_argv.py` covers that window)."""
   return {
     'type': 'http',
     'url': url,
@@ -129,7 +129,7 @@ def _start_session_mcp_server(spec: str, cwd: Path, env: Mapping[str, str]) -> _
   raises RuntimeError when the server dies or fails to bind in time.
   """
   token = secrets.token_urlsafe(32)
-  state = Path(tempfile.mkdtemp(prefix='cw-mcp-'))
+  state = Path(tempfile.mkdtemp(prefix='ride-mcp-'))
   port_file = state / 'port'
   log_path = state / 'server.log'
   server_env = dict(env)

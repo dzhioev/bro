@@ -110,15 +110,15 @@ class TestDefaultSystem:
     return requested
 
   def test_reads_the_brog_secret(self, backend, monkeypatch):
-    monkeypatch.delenv('CW_BRO', raising=False)
+    monkeypatch.delenv('RIDE_BRO', raising=False)
     system = cast(Any, default_system())
     assert backend == ['brog']
     assert system['author'] is None
 
-  def test_author_from_cw_bro(self, backend, monkeypatch):
-    monkeypatch.setenv('CW_BRO', 'dev')
+  def test_author_from_ride_bro(self, backend, monkeypatch):
+    monkeypatch.setenv('RIDE_BRO', 'dev')
     assert cast(Any, default_system())['author'] == 'dev'
 
-  def test_empty_cw_bro_means_no_author(self, backend, monkeypatch):
-    monkeypatch.setenv('CW_BRO', '')
+  def test_empty_ride_bro_means_no_author(self, backend, monkeypatch):
+    monkeypatch.setenv('RIDE_BRO', '')
     assert cast(Any, default_system())['author'] is None

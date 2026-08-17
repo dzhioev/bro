@@ -31,7 +31,7 @@ agent = [
 aws = [
   "boto3==1.43.40",
 ]
-cw = [
+ride = [
   "humanize==4.16.0",
   "mcp==1.28.1",
   "rich==15.0.0",

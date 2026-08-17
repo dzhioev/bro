@@ -20,7 +20,7 @@ for arg in "$@"; do
   esac
 done
 
-# profile: a checkout vendoring the framework as a submodule needs only the tools cw
+# profile: a checkout vendoring the framework as a submodule needs only the tools ride
 # operates with; framework development itself needs the full set
 if [ -n "$(git -C "$SCRIPT_DIR/../.." rev-parse --show-superproject-working-tree)" ]; then
   PROFILE=core

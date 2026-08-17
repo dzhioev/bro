@@ -37,7 +37,7 @@ def rev_parse_commit(root: Path, ref: str) -> Optional[str]:
 def _private_ref() -> str:
   """a uniquely named transfer ref: the nonce keeps concurrent resolutions in the
   same repo from reading each other's result."""
-  return f'refs/cw/resolve-{secrets.token_hex(8)}'
+  return f'refs/ride/resolve-{secrets.token_hex(8)}'
 
 
 def _claim_private_ref(root: Path, private: str) -> Optional[str]:

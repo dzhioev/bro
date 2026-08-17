@@ -1,9 +1,9 @@
 """launch-context records for a `ride solo|along` session.
 
 The model's system prompt and the repo policy it ran under are assembled inside
-the claude process and never written to the JSONL transcript. cw knows the
+the claude process and never written to the JSONL transcript. ride knows the
 session-shaping pieces at launch, so it captures them here as a list of typed
-records, hands them to the session via the CW_SESSION_CONTEXT env var, and
+records, hands them to the session via the RIDE_SESSION_CONTEXT env var, and
 the session recorder uploads them as the trail's launch-context attachment for `rewind` to render.
 
 A record is `{kind, subtype, title}` plus either `content` (a text block) or
@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 from typing import Optional
 
-CW_SESSION_CONTEXT_ENV = 'CW_SESSION_CONTEXT'
+RIDE_SESSION_CONTEXT_ENV = 'RIDE_SESSION_CONTEXT'
 
 # the two names a repository's agent instructions go by, most canonical first —
 # `AGENTS.md` is the cross-agent convention, `CLAUDE.md` the one Claude Code
@@ -45,7 +45,7 @@ def build_session_context(
 
   `bro` names the session's bro; `raw` selects the system-prompt record's
   shape: a raw session passes the whole prompt via --system-prompt (replaces
-  the base), a cw-session passes only its --append-system-prompt addition on
+  the base), a ride-session passes only its --append-system-prompt addition on
   top of claude's base plus whatever instructions it loads itself.
   """
   records: list[dict] = []
@@ -53,7 +53,7 @@ def build_session_context(
   if raw:
     sp_subtype, sp_title = 'bro', 'bro system prompt (--system-prompt, replaces base)'
   else:
-    sp_subtype, sp_title = 'cw_injected', 'cw-injected system prompt (--append-system-prompt)'
+    sp_subtype, sp_title = 'ride_injected', 'ride-injected system prompt (--append-system-prompt)'
   records.append(
     {'kind': 'system_prompt', 'subtype': sp_subtype, 'title': sp_title, 'content': system_prompt}
   )

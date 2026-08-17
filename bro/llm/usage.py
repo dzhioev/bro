@@ -24,7 +24,7 @@ Two cumulative-usage sources, unified by `current_usage()`:
   run's LLM loop publishes after every API call (`publish`). Written atomically
   (temp + rename) and self-describing (`{"agent": ..., "models": {slug: counts}}`):
   the reader cannot trust the environment for the agent — an in-process bro run
-  inherits the launcher's `CW_BRO`, not its own. The first publish mints the
+  inherits the launcher's `RIDE_BRO`, not its own. The first publish mints the
   path and exports the pointer, so tool subprocesses spawned afterwards inherit
   it.
 - the Claude Code session transcript — the session's own segment plus the

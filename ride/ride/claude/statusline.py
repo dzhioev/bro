@@ -6,7 +6,7 @@ bar. Two sections, joined into the one line Claude renders:
 - a red `⚠ session recording …` warning when the health file reports a failing or
   a stopped recorder — the one coloured channel that survives Claude's
   alternate-screen buffer;
-- the session's summons, read from the status file `CW_SUMMON_STATUS` points at
+- the session's summons, read from the status file `RIDE_SUMMON_STATUS` points at
   (written host-side by `bro/launch/summon_control.py`): each active summon as target, trail id,
   and age, plus the last terminal outcome for a while after it lands. External
   stderr is invisible under the fullscreen TUI, so this is the session's one live

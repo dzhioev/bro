@@ -29,7 +29,7 @@ from ride.claude.harness import options
 from ride.claude.mcp import _start_session_mcp_server
 from ride.claude.recorder import _start_session_recorder
 from ride.claude.session_context import (
-  CW_SESSION_CONTEXT_ENV,
+  RIDE_SESSION_CONTEXT_ENV,
   build_session_context,
   encode_session_context,
 )
@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 
 
 def _set_session_context(spec: 'SessionSpec', system_prompt: str, workspace: Path) -> None:
-  """capture the session's launch context into CW_SESSION_CONTEXT for the
+  """capture the session's launch context into RIDE_SESSION_CONTEXT for the
   session recorder daemon (set in os.environ, which the daemon's spawn
   snapshots). the git base is the workspace's HEAD — for a fresh workspace the
   ref the outer based it on, for a resume the branch tip."""
@@ -56,7 +56,7 @@ def _set_session_context(spec: 'SessionSpec', system_prompt: str, workspace: Pat
     raw=options(spec).raw,
     proj_root=workspace,
   )
-  os.environ[CW_SESSION_CONTEXT_ENV] = encode_session_context(records)
+  os.environ[RIDE_SESSION_CONTEXT_ENV] = encode_session_context(records)
 
 
 @contextlib.contextmanager
@@ -84,9 +84,8 @@ def run_in_place(spec: 'SessionSpec') -> int:
   if not in_container():
     # a host session's claude state lives in the private per-session config dir
     # (the container-equivalent isolation — reference/ride.md, "Host claude-state
-    # isolation"). provisioning is idempotent and the outer launch also applies
-    # it, so a runner spawned by an outer cw that predates the config dir still
-    # provisions its own. set before anything derives paths or spawns children:
+    # isolation"). provisioning is idempotent because both launch layers apply it.
+    # Set before anything derives paths or spawns children:
     # the resume resolution below, the hooks, and claude itself all read it.
     claude_dir = _provision_host_claude_dir(spec.name, workspace, project_root())
     os.environ['CLAUDE_CONFIG_DIR'] = str(claude_dir)
@@ -103,8 +102,8 @@ def run_in_place(spec: 'SessionSpec') -> int:
 
   os.environ.update(bro_git_identity_env(spec.session_bro))
 
-  # CW_BRO themes the session (banner, statusLine)
-  os.environ['CW_BRO'] = spec.session_bro
+  # RIDE_BRO themes the session (banner, statusLine)
+  os.environ['RIDE_BRO'] = spec.session_bro
 
   # feature-declared workspace provisioning (bro/bro.py's _provision_workspace
   # is the bro-harness counterpart): a commit-accounting persona gets the
@@ -122,7 +121,7 @@ def run_in_place(spec: 'SessionSpec') -> int:
   # both overwrite any ambient value: a session launched from inside another
   # must not inherit its hold or kill target.
   os.environ['BRO_HOLD'] = spec.hold
-  os.environ['CW_RUNNER_PID'] = str(os.getpid())
+  os.environ['RIDE_RUNNER_PID'] = str(os.getpid())
 
   with contextlib.ExitStack() as teardown:
     # host mode launches the session broxy (in a container the entrypoint started
@@ -142,7 +141,7 @@ def run_in_place(spec: 'SessionSpec') -> int:
     # session-local MCP serving, one mechanism for both flavors: OS-assigned port
     # published via a port file, per-session bearer token. the tools serve this
     # workspace's code (the runner's cwd and venv) — the bro's own toolset under
-    # --raw, the persona's claude-harness namespaces for a cw-session.
+    # --raw, the persona's claude-harness namespaces for a ride-session.
     if options(spec).raw:
       mcp_spec = f'bro:{spec.session_bro}'
     else:
@@ -158,7 +157,7 @@ def run_in_place(spec: 'SessionSpec') -> int:
     _set_session_context(spec, launch.system_prompt, workspace)
 
     # after the session context: the daemon's spawn snapshots os.environ, and
-    # CW_SESSION_CONTEXT becomes the trail's launch-context attachment
+    # RIDE_SESSION_CONTEXT becomes the trail's launch-context attachment
     recorder = _start_session_recorder(spec.name, workspace, os.environ, llm=spec.llm_spec.dump())
     if recorder is not None:
       teardown.callback(recorder.stop)

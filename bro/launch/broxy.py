@@ -39,7 +39,7 @@ class _SessionBroxy:
 
 def _start_session_broxy(upstream: str, env: Mapping[str, str]) -> Optional[_SessionBroxy]:
   """launch a broxy on a session-tempdir socket, returning None on failure."""
-  state = Path(tempfile.mkdtemp(prefix='cw-broxy-'))
+  state = Path(tempfile.mkdtemp(prefix='ride-broxy-'))
   socket_path = state / 'broxy.sock'
   log_path = state / 'broxy.log'
   command = [

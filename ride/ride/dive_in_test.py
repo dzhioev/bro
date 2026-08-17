@@ -95,24 +95,24 @@ class TestLaunchCommand:
     assert args['hold'] == 'attended'
 
   def test_forwarded_flags_ride_verbatim(self, fake_proj, capsys, monkeypatch):
-    monkeypatch.delenv('CW_BRO', raising=False)
+    monkeypatch.delenv('RIDE_BRO', raising=False)
     rc = dive_in.dive_in(forwarded=[], dry_run=True, bro='bro-dev')
     assert rc == 0
     args, harness_arguments = _parse_emitted(shlex.split(capsys.readouterr().out.strip()))
     assert args['bro'] == 'bro-dev'
     assert harness_arguments == []
-    # cw owns the session theming (persona default, CW_BRO export); dive-in
+    # ride owns the session theming (persona default, RIDE_BRO export); dive-in
     # must not preempt it
-    assert 'CW_BRO' not in os.environ
+    assert 'RIDE_BRO' not in os.environ
 
   def test_raw_rides_the_forwarded_flags(self, fake_proj, capsys, monkeypatch):
-    monkeypatch.delenv('CW_BRO', raising=False)
+    monkeypatch.delenv('RIDE_BRO', raising=False)
     rc = dive_in.dive_in(forwarded=['--raw'], dry_run=True, bro='dev', raw=True)
     assert rc == 0
     args, harness_arguments = _parse_emitted(shlex.split(capsys.readouterr().out.strip()))
     assert args['bro'] == 'dev'
     assert args['raw']
-    assert 'CW_BRO' not in os.environ
+    assert 'RIDE_BRO' not in os.environ
 
 
 class TestShellCommandReconstruction:
@@ -216,7 +216,7 @@ class TestTaskMode:
     tokens = shlex.split(capsys.readouterr().out.strip())
     prompt = tokens[-1]
     assert prompt.startswith(f'[[fix {URL}]]\n\ntask block')
-    assert os.environ['CW_TASK_ID'] == UUID
+    assert os.environ['RIDE_TASK_ID'] == UUID
 
   def test_raw_flavor_keeps_prefetch_and_appended_command_outside_spell_command(
     self, fake_proj, monkeypatch, capsys

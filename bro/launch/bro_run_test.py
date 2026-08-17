@@ -34,16 +34,16 @@ def test_describe_pins_the_chat_verb():
 
 def test_describe_env_carries_identity_and_bro():
   launch = _describe('dev', ['hi'])
-  assert launch.env == {'CW_BRO': 'dev', **bro_git_identity_env('dev')}
+  assert launch.env == {'RIDE_BRO': 'dev', **bro_git_identity_env('dev')}
 
 
 def test_describe_carries_the_local_trails_mount_in_the_launch(trails_mounts):
-  trails_mounts.return_value = ('/host/trails:/workspace/var/cw/trails',)
+  trails_mounts.return_value = ('/host/trails:/var/ride/trails',)
 
   launch = _describe('dev', ['hi'])
 
   trails_mounts.assert_called_once_with(_SCOPED)
-  assert launch.extra_mounts == ('/host/trails:/workspace/var/cw/trails',)
+  assert launch.extra_mounts == ('/host/trails:/var/ride/trails',)
 
 
 def test_describe_carries_the_given_scope():
@@ -53,14 +53,14 @@ def test_describe_carries_the_given_scope():
   assert launch.docker_sock is False
 
 
-def test_describe_base_ref_rides_cw_base_ref():
+def test_describe_base_ref_rides_ride_base_ref():
   launch = _describe('dev', ['hi'], base_ref='REF-SHA')
-  assert launch.env['CW_BASE_REF'] == 'REF-SHA'
+  assert launch.env['RIDE_BASE_REF'] == 'REF-SHA'
 
 
 def test_describe_encodes_summoner_as_compact_json():
   launch = _describe('dev', ['hi'], summoner={'target': 'bro', 'trail_id': 'trail-123'})
-  assert launch.env['CW_SUMMONER'] == '{"target":"bro","trail_id":"trail-123"}'
+  assert launch.env['RIDE_SUMMONER'] == '{"target":"bro","trail_id":"trail-123"}'
 
 
 def test_describe_no_trails_drops_secret_and_disables_recording(trails_mounts):

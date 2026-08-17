@@ -13,7 +13,7 @@ def _by_kind(records: list[dict]) -> dict:
 
 
 class TestBuildSessionContext:
-  def test_cw_session_records(self, tmp_path):
+  def test_ride_session_records(self, tmp_path):
     records = build_session_context(
       system_prompt='injected text',
       branch='worktree-foo',
@@ -24,7 +24,7 @@ class TestBuildSessionContext:
       proj_root=_proj_with_instructions(tmp_path),
     )
     by = _by_kind(records)
-    assert by['system_prompt']['subtype'] == 'cw_injected'
+    assert by['system_prompt']['subtype'] == 'ride_injected'
     assert by['system_prompt']['content'] == 'injected text'
     assert by['git']['fields'] == {'branch': 'worktree-foo', 'base_sha': 'abc123'}
     assert by['mcp']['fields'] == {'mode': 'persona', 'servers': ['persona:bro-dev']}

@@ -12,7 +12,7 @@ The Claude harness supplies `ride`'s first harness implementation. Its two inter
 - `claude_config.py` — per-workspace Claude state, settings, transcript paths, subject reads, trail pointer, host provisioning, container mounts, and teardown.
 - `mcp.py` — session-local HTTP MCP server lifetime and Claude MCP config.
 - `recorder.py` — Claude transcript recorder daemon lifetime.
-- `session_context.py` — typed launch-context records exported through `CW_SESSION_CONTEXT`.
+- `session_context.py` — typed launch-context records exported through `RIDE_SESSION_CONTEXT`.
 - `system_prompt.py` — shared prompt and persona assembly. Prompt assets are loaded from the `bro` distribution, not relative to this package.
 - `statusline.py` and `print_anthropic_key.py` — leaf modules invoked by Claude settings through the runner interpreter (`python -m ride.claude.<module>`).
 

@@ -121,7 +121,11 @@ class TestContainerSession:
     assert launch.command == [
       'bro', 'run', 'dev', 'start here', '--rich', '--hold', 'unattended', '--in-place'
     ]  # fmt: skip
-    assert launch.env == {'CW_BRO': 'dev', 'CW_BASE_REF': 'abc123', **bro_git_identity_env('dev')}
+    assert launch.env == {
+      'RIDE_BRO': 'dev',
+      'RIDE_BASE_REF': 'abc123',
+      **bro_git_identity_env('dev'),
+    }
     assert not launch.tty
     assert captured['workspace'] is workspace
     assert captured['may_summon'] == {'reviewer'}
@@ -175,7 +179,7 @@ class TestHostSession:
     assert command == [
       str(bro_binary), 'chat', 'dev', 'start here', '--hold', 'attended', '--in-place'
     ]  # fmt: skip
-    assert env['CW_BRO'] == 'dev'
+    assert env['RIDE_BRO'] == 'dev'
     assert env[bro_session.START_SESSION_BROXY_ENV] == '1'
     assert env['GIT_AUTHOR_NAME'] == 'bro'
     assert env['GIT_AUTHOR_EMAIL'] == 'dev@bro'

@@ -28,49 +28,49 @@ RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -
 ARG CLAUDE_CODE_VERSION
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 
-RUN useradd -m -u 1000 -s /bin/bash cw \
- && mkdir -p /home/cw/.claude \
- && chown cw:cw /home/cw/.claude
+RUN useradd -m -u 1000 -s /bin/bash ride \
+ && mkdir -p /home/ride/.claude \
+ && chown ride:ride /home/ride/.claude
 
 # print the session-info banner once per interactive shell — surfaces workspace
 # paths, the `ride exec` command, and (for bro sessions) the ASCII Bro logo when
 # users shell in via `ride exec <name>`. guarded so it runs only when `ride` is on
 # PATH (i.e. after venv activation) and only once per shell process.
-RUN cat >> /home/cw/.bashrc <<'EOF'
+RUN cat >> /home/ride/.bashrc <<'EOF'
 
-if [ -z "${CW_BANNER_SHOWN:-}" ] && command -v ride >/dev/null 2>&1; then
-  export CW_BANNER_SHOWN=1
+if [ -z "${RIDE_BANNER_SHOWN:-}" ] && command -v ride >/dev/null 2>&1; then
+  export RIDE_BANNER_SHOWN=1
   ride banner || true
 fi
 EOF
 
-# cw needs to talk to the host docker socket (bind-mounted at runtime) so
+# ride needs to talk to the host docker socket (bind-mounted at runtime) so
 # deploy scripts can build + push without a nested runtime. group `docker`
-# inside the container owns /var/run/docker.sock; cw is added so it can
+# inside the container owns /var/run/docker.sock; ride is added so it can
 # access without sudo. socket gid is reconciled with the host's at runtime
 # by the entrypoint.
 RUN groupadd -g 999 docker \
- && usermod -aG docker cw
+ && usermod -aG docker ride
 
 # pre-install the pyright-lsp Claude Code plugin at build time. settings.json
-# only *enables* the plugin (cw/docker.py); without a matching *install* record Claude
+# only *enables* the plugin (ride/ride/claude/claude_config.py); without a matching *install* record Claude
 # prompts the "LSP Plugin Recommendation" on .py files. CLAUDE_CONFIG_DIR is the
 # runtime ~/.claude path so the absolute paths baked into installed_plugins.json
 # / known_marketplaces.json match where the entrypoint copies the seed. That dir
 # is bind-mounted from a fresh per-session dir at runtime, so the built plugin
-# tree is staged at /opt and copied in on first run. Done as cw (file ownership)
+# tree is staged at /opt and copied in on first run. Done as ride (file ownership)
 # and offline-after-build (no per-session network race). swift-lsp is left out —
 # no Swift toolchain in this image.
-RUN mkdir -p /opt/claude-plugins-seed && chown cw:cw /opt/claude-plugins-seed
-RUN gosu cw bash -ec '\
-      export CLAUDE_CONFIG_DIR=/home/cw/.claude; \
+RUN mkdir -p /opt/claude-plugins-seed && chown ride:ride /opt/claude-plugins-seed
+RUN gosu ride bash -ec '\
+      export CLAUDE_CONFIG_DIR=/home/ride/.claude; \
       printf "%s" "{\"hasCompletedOnboarding\":true,\"installMethod\":\"global\"}" > "$CLAUDE_CONFIG_DIR/.claude.json"; \
       claude plugin marketplace add anthropics/claude-plugins-official; \
       claude plugin install pyright-lsp@claude-plugins-official; \
       cp -r "$CLAUDE_CONFIG_DIR/plugins/." /opt/claude-plugins-seed/; \
       rm -rf "$CLAUDE_CONFIG_DIR/plugins" "$CLAUDE_CONFIG_DIR/.claude.json" "$CLAUDE_CONFIG_DIR/backups"'
 
-# bake the project venv at /opt/cw-venv at image-build time so per-session
+# bake the project venv at /opt/ride-venv at image-build time so per-session
 # containers reuse it instead of running `uv sync` on every launch. the bake is
 # split into two layers so the expensive dependency install survives source
 # churn: this layer mounts only the manifest set the context stages — every file
@@ -84,9 +84,9 @@ RUN --mount=type=bind,source=.bro-container/manifests,target=/manifests \
     mkdir -p /workspace \
  && cp -r /manifests/. /workspace/ \
  && cd /workspace \
- && UV_PROJECT_ENVIRONMENT=/opt/cw-venv uv sync --frozen --all-packages --all-groups --all-extras --no-install-workspace \
+ && UV_PROJECT_ENVIRONMENT=/opt/ride-venv uv sync --frozen --all-packages --all-groups --all-extras --no-install-workspace \
  && find /workspace -mindepth 1 -delete \
- && chmod -R a+rwX /opt/uv-cache /opt/cw-venv
+ && chmod -R a+rwX /opt/uv-cache /opt/ride-venv
 
 # editable-install the workspace, including its committed console-script bridges.
 # setuptools compat mode records each member's source directory under /workspace,
@@ -100,9 +100,9 @@ RUN --mount=type=bind,target=/project-src \
     mkdir -p /workspace \
  && tar -C /project-src --exclude=./.bro-container -cf - . | tar -C /workspace -xf - \
  && cd /workspace \
- && UV_PROJECT_ENVIRONMENT=/opt/cw-venv uv sync --frozen --all-packages --all-groups --all-extras \
+ && UV_PROJECT_ENVIRONMENT=/opt/ride-venv uv sync --frozen --all-packages --all-groups --all-extras \
  && find /workspace -mindepth 1 -delete \
- && find /opt/cw-venv /opt/uv-cache \( -type f -o -type d \) ! -perm -o+w \
+ && find /opt/ride-venv /opt/uv-cache \( -type f -o -type d \) ! -perm -o+w \
       -exec chmod a+rwX {} +
 
 # stage the manifests the venv bake ran from — the entrypoint's reuse gate
@@ -110,17 +110,17 @@ RUN --mount=type=bind,target=/project-src \
 # separate layer so a gate-only change never invalidates the expensive venv layer
 # above
 RUN --mount=type=bind,source=.bro-container/manifests,target=/manifests \
-    mkdir -p /opt/cw-venv-manifest \
- && cp -r /manifests/. /opt/cw-venv-manifest/
+    mkdir -p /opt/ride-venv-manifest \
+ && cp -r /manifests/. /opt/ride-venv-manifest/
 
 WORKDIR /workspace
-ENV CW_IN_CONTAINER=1
+ENV RIDE_IN_CONTAINER=1
 
 # the shell-script prelude (logging + fail-fast guards), baked next to the
 # entrypoint: the clone the entrypoint prepares does not exist yet when its early
 # phases run
 COPY .bro-container/prelude.sh .bro-container/log.sh .bro-container/strict.sh /usr/local/lib/bro-shell/
 COPY .bro-container/git.sh /usr/local/lib/bro-shell/container-git.sh
-COPY .bro-container/entrypoint.sh /usr/local/bin/cw-entrypoint
-RUN chmod +x /usr/local/bin/cw-entrypoint
-ENTRYPOINT ["/usr/local/bin/cw-entrypoint"]
+COPY .bro-container/entrypoint.sh /usr/local/bin/ride-entrypoint
+RUN chmod +x /usr/local/bin/ride-entrypoint
+ENTRYPOINT ["/usr/local/bin/ride-entrypoint"]

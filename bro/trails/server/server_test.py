@@ -135,8 +135,8 @@ async def test_read_handlers_dispatch_local_store_semantics(client):
   claude = _blaze_payload(
     harness='claude',
     bro=None,
-    surface='cw',
-    native={'segment': 'segment', 'llm': {}, 'cw_command': 'ride along', 'harness_version': '2'},
+    surface='ride',
+    native={'segment': 'segment', 'llm': {}, 'ride_command': 'ride along', 'harness_version': '2'},
     body={
       'records': [
         json.dumps({'type': 'system', 'uuid': 'first'}),
@@ -166,8 +166,13 @@ async def test_list_filters_and_rejects_invalid_queries(client):
     json=_blaze_payload(
       harness='claude',
       bro=None,
-      surface='cw',
-      native={'segment': 'segment', 'llm': {}, 'cw_command': 'ride along', 'harness_version': '2'},
+      surface='ride',
+      native={
+        'segment': 'segment',
+        'llm': {},
+        'ride_command': 'ride along',
+        'harness_version': '2',
+      },
       body={'records': []},
     ),
     headers=_auth(),

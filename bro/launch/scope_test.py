@@ -46,8 +46,8 @@ def registered_scope_bros(register_test_bros):
 
 
 class TestScopedSecrets:
-  def test_cw_session_set(self):
-    # cw-session themed as bro-dev: the claude-harness manifest — extra_secrets
+  def test_ride_session_set(self):
+    # ride-session themed as bro-dev: the claude-harness manifest — extra_secrets
     # (github) and the session-local brog server's self-contained backend config
     # — + the claude_code OAuth token (the session's only auth).
     scoped = bro.launch.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE)
@@ -61,7 +61,7 @@ class TestScopedSecrets:
     # a normal claude code session keeps the docker socket
     assert scoped.docker_sock is True
 
-  def test_cw_session_set_covers_the_bros_manifest(self):
+  def test_ride_session_set_covers_the_bros_manifest(self):
     scoped = bro.launch.scope.scoped_secrets('scope-search', CLAUDE_RECIPE)
     assert {'catalog', 'brave'} <= scoped.required
 

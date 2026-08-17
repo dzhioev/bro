@@ -1,8 +1,8 @@
 """the claude argv for a `ride solo|along` session — one builder for both flavors.
 
-The cw-session/raw fork is confined to here: `--raw` selects a `--bare` claude
-with api-key auth and the bro's own system prompt, a cw-session keeps the full
-harness with the cw-injected append prompt. Both mount their bro's session-local
+The ride-session/raw fork is confined to here: `--raw` selects a `--bare` claude
+with api-key auth and the bro's own system prompt, a ride-session keeps the full
+harness with the ride-injected append prompt. Both mount their bro's session-local
 MCP namespaces. Everything else — model, the merged `--settings` (fastMode +
 statusLine, plus the apiKeyHelper under `--raw`), `--effort`, the forwarded
 claude args, and prompt seeding is handled once, identically wherever the
@@ -62,7 +62,7 @@ def _tool_gate_hooks(narrowed: dict[str, tuple[str, ...]]) -> dict:
 class ClaudeLaunch:
   """a built claude invocation: the argv (everything after the `claude` program
   token) plus the session-shaping prompt text (`--system-prompt` for a raw
-  session, `--append-system-prompt` for a cw-session) that CW_SESSION_CONTEXT
+  session, `--append-system-prompt` for a ride-session) that RIDE_SESSION_CONTEXT
   captures."""
 
   argv: list[str]
@@ -74,7 +74,7 @@ class ClaudeLaunch:
 _STATUSLINE_REFRESH_SECONDS = 1
 
 # prepended to a raw session's argv-seeded first prompt, which fires before
-# claude's async MCP connects complete (cw/mcp.py:_server_entry); rationale for
+# claude's async MCP connects complete (ride/ride/claude/mcp.py:_server_entry); rationale for
 # the turn-local delivery: reference/ride.md "Session-local MCP serving".
 _FIRST_TURN_LAUNCH_NOTE = (
   '[launch note: MCP tools connect asynchronously and may be missing from your '
@@ -97,7 +97,7 @@ def build_claude_launch(
   layer). `endpoint` is the session-local MCP server's (the caller owns the
   server lifecycle); every session mounts its bro's namespaces from it — the
   bro's own toolset under `--raw`, the persona's claude-harness set in a
-  cw-session.
+  ride-session.
 
   the raw flavor (`--bare --strict-mcp-config --tools ''`) runs claude with no
   project/user CLAUDE.md, no host MCP servers, no built-in tools, and only the

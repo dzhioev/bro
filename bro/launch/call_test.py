@@ -125,7 +125,7 @@ async def test_text_emits_banner_before_first_reply(capsys, monkeypatch):
   out = capsys.readouterr().out
   # banner is the opening bro message, before the first reply line; the bro name
   # is passed through so the logo renders on an in-process run, whose
-  # environment doesn't carry this bro's CW_BRO
+  # environment doesn't carry this bro's RIDE_BRO
   assert out.index('BANNER[record]') < out.index('[12:34:56] record: reply')
   assert '[12:34:56] record:\nBANNER[record]' in out
 
@@ -942,7 +942,7 @@ def test_managed_continuation_uses_the_recorded_recipe_and_hold(monkeypatch):
   async def fake_call_text(bro, initial, history=None, hold='guided', preset_name=None):
     captured.update(bro=bro, initial=initial, history=history, chat_hold=hold)
 
-  monkeypatch.setenv('CW_IN_CONTAINER', '1')
+  monkeypatch.setenv('RIDE_IN_CONTAINER', '1')
   monkeypatch.setattr('bro.launch.resume.resume', fake_resume)
   monkeypatch.setattr('bro.trails.store.default_store', lambda: MagicMock())
   monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)

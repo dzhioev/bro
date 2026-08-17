@@ -38,7 +38,7 @@ class TestCreateContainer:
     )
     assert container_id == 'cid123'
     cp = next(c for c in calls if c['argv'][:3] == ['docker', 'cp', '-'])
-    assert cp['argv'][3] == 'cid123:/home/cw'
+    assert cp['argv'][3] == 'cid123:/home/ride'
     assert cp['input'] == b'TARBALL'
 
   def test_create_failure_raises(self, monkeypatch):
@@ -289,12 +289,12 @@ class TestDockerCreateArgv:
     assert '/var/run/docker.sock:/var/run/docker.sock' not in build_argv(docker_sock=False)
 
   def test_base_ref_passed_as_env(self, build_argv):
-    argv = build_argv(extra_env={'CW_BASE_REF': 'deadbeef'})
-    assert 'CW_BASE_REF=deadbeef' in argv
+    argv = build_argv(extra_env={'RIDE_BASE_REF': 'deadbeef'})
+    assert 'RIDE_BASE_REF=deadbeef' in argv
 
   def test_no_bro_mount(self, build_argv):
     # the scoped store is injected via `docker cp`, never bind-mounted
-    assert not any('/home/cw/.bro' in a for a in build_argv())
+    assert not any('/home/ride/.bro' in a for a in build_argv())
 
   def test_no_out_of_band_github_token_mount(self, build_argv):
     assert not any('/run/secrets/github_token' in a for a in build_argv())
@@ -315,13 +315,13 @@ class TestDockerCreateArgv:
     assert 'TERM' in argv
     assert argv[argv.index('TERM') - 1] == '-e'
 
-  def test_ambient_cw_bro_never_forwarded(self, build_argv, monkeypatch):
+  def test_ambient_ride_bro_never_forwarded(self, build_argv, monkeypatch):
     # every container runs its own bro, set explicitly via extra_env by the
-    # launch surface — the caller's ambient CW_BRO must not leak in and
+    # launch surface — the caller's ambient RIDE_BRO must not leak in and
     # mis-theme it.
-    monkeypatch.setenv('CW_BRO', 'dev')
-    assert 'CW_BRO' not in build_argv()
-    assert 'CW_BRO=bro' in build_argv(extra_env={'CW_BRO': 'bro'})
+    monkeypatch.setenv('RIDE_BRO', 'dev')
+    assert 'RIDE_BRO' not in build_argv()
+    assert 'RIDE_BRO=bro' in build_argv(extra_env={'RIDE_BRO': 'bro'})
 
   def test_forward_env_false_switches_the_forward_loop_off(self, build_argv, monkeypatch):
     # a broker-spawned child's environment is its LaunchSpec snapshot (extra_env)

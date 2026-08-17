@@ -33,8 +33,8 @@ class Launch:
 
 
 _DOCKER_FORWARD_ENV = (
-  'CW_COMMAND',
-  'CW_TASK_ID',
+  'RIDE_COMMAND',
+  'RIDE_TASK_ID',
   'GIT_AUTHOR_NAME',
   'GIT_AUTHOR_EMAIL',
   'GIT_COMMITTER_NAME',
@@ -219,7 +219,7 @@ def _create_container(argv: list[str], store_tarball: bytes, name: str) -> str:
     raise RuntimeError(f'docker create for {name} failed: {created.stderr.strip()}')
   container_id = created.stdout.strip()
   cp = subprocess.run(
-    ['docker', 'cp', '-', f'{container_id}:/home/cw'],
+    ['docker', 'cp', '-', f'{container_id}:/home/ride'],
     input=store_tarball,
     capture_output=True,
   )
@@ -295,7 +295,7 @@ def _docker_create_argv(
   child's environment is the explicit snapshot its launcher assembled (`extra_env`)
   — forwarding the launching process's task/session identity, git author identity,
   and terminal facts would bake the launcher's values into the child
-  (mis-attributed commits, wrong banner facts). `CW_BRO` is deliberately not in
+  (mis-attributed commits, wrong banner facts). `RIDE_BRO` is deliberately not in
   the forward set: every launch surface sets the container's bro in `extra_env`,
   so an ambient value — the calling session's own theming — never leaks in.
   """
@@ -317,18 +317,18 @@ def _docker_create_argv(
     '-v',
     f'{home}/.gitconfig:/host-gitconfig:ro',
     '-e',
-    'HOME=/home/cw',
+    'HOME=/home/ride',
     '-e',
-    f'CW_NAME={name}',
+    f'RIDE_WORKSPACE={name}',
     '-e',
-    f'CW_BRANCH={branch}',
+    f'RIDE_BRANCH={branch}',
     # surface the host-side workspace path inside the container so `ride banner`
     # can show users where their /workspace mount actually lives on the host
     '-e',
-    f'CW_HOST_WORKSPACE={tree}',
+    f'RIDE_HOST_WORKSPACE={tree}',
     # the host machine's name — a container's own gethostname is the container id
     '-e',
-    f'CW_HOST={socket.gethostname()}',
+    f'RIDE_HOST={socket.gethostname()}',
     '-w',
     '/workspace',
     '--memory=8g',
@@ -336,7 +336,7 @@ def _docker_create_argv(
   # bind-mount the host docker socket so deploy scripts inside the container can
   # `docker build` / `docker push` against the host daemon (no nested runtime).
   # gives an in-container process API-level control over host docker, a real but
-  # bounded escalation vector (cw is single-user dev; the rootless-podman
+  # bounded escalation vector (ride is single-user dev; the rootless-podman
   # alternative has the same blast radius across more surfaces). gated by
   # `docker_sock` so a session that does no docker work is denied it, keeping the
   # scoped boundary intact against prompt-injection exfiltration.

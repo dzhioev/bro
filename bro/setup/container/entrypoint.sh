@@ -3,43 +3,43 @@
 source /usr/local/lib/bro-shell/prelude.sh
 source /usr/local/lib/bro-shell/container-git.sh
 
-# root phase: align container user with host uid/gid, then re-exec as cw
-if [ "$(id -u)" = "0" ] && [ -z "${CW_ENTRYPOINT_REEXEC:-}" ]; then
+# root phase: align container user with host uid/gid, then re-exec as ride
+if [ "$(id -u)" = "0" ] && [ -z "${RIDE_ENTRYPOINT_REEXEC:-}" ]; then
   TARGET_UID="$(stat -c '%u' /workspace)"
   TARGET_GID="$(stat -c '%g' /workspace)"
   # skip remapping when detected uid is 0 — on Docker for Mac, virtiofs reports
   # bind mounts as root-owned but handles permissions transparently; remapping to
   # uid 0 would make claude refuse --dangerously-skip-permissions
   if [ "$TARGET_UID" != "0" ]; then
-    if [ "$(id -u cw)" != "$TARGET_UID" ] || [ "$(id -g cw)" != "$TARGET_GID" ]; then
-      groupmod -o -g "$TARGET_GID" cw
-      usermod -o -u "$TARGET_UID" -g "$TARGET_GID" cw
-      chown cw:cw /home/cw /home/cw/.claude
+    if [ "$(id -u ride)" != "$TARGET_UID" ] || [ "$(id -g ride)" != "$TARGET_GID" ]; then
+      groupmod -o -g "$TARGET_GID" ride
+      usermod -o -u "$TARGET_UID" -g "$TARGET_GID" ride
+      chown ride:ride /home/ride /home/ride/.claude
     fi
   fi
   # align the in-container `docker` group's gid with the bind-mounted host
-  # socket's gid so cw can talk to the host daemon without sudo
+  # socket's gid so ride can talk to the host daemon without sudo
   if [ -S /var/run/docker.sock ]; then
     SOCK_GID="$(stat -c '%g' /var/run/docker.sock)"
     if [ "$(getent group docker | cut -d: -f3)" != "$SOCK_GID" ]; then
       groupmod -o -g "$SOCK_GID" docker
     fi
   fi
-  # the scoped credential store is `docker cp`'d into /home/cw/.bro before start
-  # (cw/containers.py), landing owned by the uid baked into the tar. re-own it to cw after the
-  # remap above so the resolver and install hooks (run as cw) can read the 0600
-  # files — on Linux (cw remapped to the host uid) and on Docker for Mac (remap
-  # skipped, cw keeps its image uid).
-  if [ -d /home/cw/.bro ]; then
-    chown -R cw:cw /home/cw/.bro
+  # the scoped credential store is `docker cp`'d into /home/ride/.bro before start
+  # (bro/workspace/docker.py), landing owned by the uid baked into the tar. re-own it to ride after the
+  # remap above so the resolver and install hooks (run as ride) can read the 0600
+  # files — on Linux (ride remapped to the host uid) and on Docker for Mac (remap
+  # skipped, ride keeps its image uid).
+  if [ -d /home/ride/.bro ]; then
+    chown -R ride:ride /home/ride/.bro
   fi
-  export CW_ENTRYPOINT_REEXEC=1
-  exec gosu cw "$0" "$@"
+  export RIDE_ENTRYPOINT_REEXEC=1
+  exec gosu ride "$0" "$@"
 fi
 
-# --- running as cw from here ---
+# --- running as ride from here ---
 
-# ~/.claude is not seeded from the host: cw constructs ~/.claude.json and
+# ~/.claude is not seeded from the host: ride constructs ~/.claude.json and
 # settings.json and syncs credentials; host machine state stays on the host.
 
 # seed host git config into a writable copy (the host file is bind-mounted
@@ -50,7 +50,7 @@ if [ -f /host-gitconfig ] && [ ! -f "$HOME/.gitconfig" ]; then
 fi
 
 # mark /workspace safe for git. on Docker for Mac, virtiofs reports the bind
-# mount as root-owned even though cw can read/write it (see uid-remap skip in
+# mount as root-owned even though ride can read/write it (see uid-remap skip in
 # the root phase); without this, git refuses with "dubious ownership"
 git config --global --add safe.directory /workspace
 
@@ -75,7 +75,7 @@ if [ ! -d /workspace/.git ]; then
   # local copy) so later ancestry/clean checks and rebases compare against the real
   # upstream. ref-only — objects are already shared via alternates, no token needed.
   git fetch "${quiet[@]}" host '+refs/remotes/origin/master:refs/remotes/origin/master' >&2
-  # branch CW_BRANCH (the workspace's recorded branch) from CW_BASE_REF — a sha
+  # branch RIDE_BRANCH (the workspace's recorded branch) from RIDE_BASE_REF — a sha
   # the host resolved for an explicit base (--into <ref>) or a summoned child's
   # inherited summoner HEAD. the HEAD fallback (the clone's checkout, i.e. the
   # host checkout's current commit) is the default: a workspace bases on what its
@@ -83,7 +83,7 @@ if [ ! -d /workspace/.git ]; then
   # through with the clone. either base's objects are shared from /host-repo via
   # the clone's alternates (the host resolution transfers foreign objects into
   # the host repo first), so no extra fetch is needed.
-  git checkout "${quiet[@]}" -B "$CW_BRANCH" "${CW_BASE_REF:-HEAD}" >&2
+  git checkout "${quiet[@]}" -B "$RIDE_BRANCH" "${RIDE_BASE_REF:-HEAD}" >&2
   # initialize from host-local clones because the container has no ssh keys
   initialize_container_submodules /workspace /host-repo
 fi
@@ -94,7 +94,7 @@ mkdir -p "$HOME/.claude/projects/-workspace"
 
 # seed the pre-installed plugins baked into the image (pyright-lsp). ~/.claude is
 # bind-mounted from a fresh per-session dir, so the build-time install staged at
-# /opt is copied in on first run. settings.json enables the plugin (cw/docker.py); this
+# /opt is copied in on first run. settings.json enables the plugin (ride/ride/claude/claude_config.py); this
 # provides the matching install records so claude doesn't prompt to install it on
 # .py files.
 if [ -d /opt/claude-plugins-seed ] && [ ! -f "$HOME/.claude/plugins/installed_plugins.json" ]; then
@@ -105,27 +105,27 @@ fi
 # link in the venv baked into the image (deps + editable workspace already
 # installed, its module finders pointing at /workspace — see the Dockerfile) and
 # name the manifest set it was resolved from, staged at the clone's own relative
-# paths. whether that venv still describes the clone — CW_BASE_REF can base it on
+# paths. whether that venv still describes the clone — RIDE_BASE_REF can base it on
 # any ref — is setup.sh's call below, so a diverged clone syncs the bake into
 # shape instead of building an environment from scratch. a pre-existing
 # /workspace/.venv (a reused workspace) keeps its own environment.
-if [ "${CW_SKIP_VENV:-}" != "1" ] && [ -d /opt/cw-venv ] && [ ! -e /workspace/.venv ]; then
+if [ "${RIDE_SKIP_VENV:-}" != "1" ] && [ -d /opt/ride-venv ] && [ ! -e /workspace/.venv ]; then
   log VERBOSE 'linking the venv baked into the image'
-  ln -s /opt/cw-venv /workspace/.venv
-  export CW_VENV_MANIFEST=/opt/cw-venv-manifest
+  ln -s /opt/ride-venv /workspace/.venv
+  export RIDE_VENV_MANIFEST=/opt/ride-venv-manifest
 fi
 
 # provision the cloned repo through its root setup.sh — the uniform provisioning
-# entry point every repo cw operates on carries (uv sync plus repository-local
+# entry point every repo ride operates on carries (uv sync plus repository-local
 # development hook installation). then activate the venv so child processes
-# inherit it. CW_SKIP_VENV (smoke test only) skips the whole venv-dependent block.
-if [ "${CW_SKIP_VENV:-}" != "1" ]; then
+# inherit it. RIDE_SKIP_VENV (smoke test only) skips the whole venv-dependent block.
+if [ "${RIDE_SKIP_VENV:-}" != "1" ]; then
   /workspace/setup.sh >&2
   source /workspace/.venv/bin/activate
 fi
 
 # secrets resolve from the scoped credential store bind-mounted at ~/.bro (see
-# cw/containers.py). wire each into the tool that consumes it from outside the resolver (git
+# bro/workspace/docker.py). wire each into the tool that consumes it from outside the resolver (git
 # credential helper, the aws CLI's ~/.aws/credentials, ...) via its registry-declared
 # install hook — one generic step, no per-secret logic here. env exports must
 # persist into `exec`, so this is eval'd in the entrypoint shell.
@@ -134,7 +134,7 @@ fi
 # crash — the failed command substitution yields empty stdout, `eval ""` exits 0, and
 # set -e never fires, so claude would launch with credentials unwired. a plain
 # assignment propagates the substitution's exit status to set -e, aborting the launch.
-if [ "${CW_SKIP_VENV:-}" != "1" ]; then
+if [ "${RIDE_SKIP_VENV:-}" != "1" ]; then
   log VERBOSE 'installing credential hooks'
   install_hooks="$(credentials install-hooks)"
   eval "$install_hooks"
@@ -144,7 +144,7 @@ fi
 # in-container client swarm. `broxy launch` owns spawn, readiness, and failure
 # cleanup; this entrypoint owns the fail-open launch policy.
 if [ -n "${BROKER_CHANNEL:-}" ]; then
-  if [ "${CW_SKIP_VENV:-}" != "1" ] && command -v broxy > /dev/null; then
+  if [ "${RIDE_SKIP_VENV:-}" != "1" ] && command -v broxy > /dev/null; then
     if broxy_launch="$(
       broxy launch /tmp/broxy.sock --upstream "$BROKER_CHANNEL" --log-file /tmp/broxy.log
     )"; then

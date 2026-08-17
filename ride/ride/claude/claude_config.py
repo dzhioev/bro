@@ -1,6 +1,6 @@
 """per-session claude state, shared by both session modes.
 
-Owns a session's private claude state dir (`~/.claude/cw-sessions/<name>`) —
+Owns a session's private claude state dir (`~/.claude/ride-sessions/<name>`) —
 its path derivations, contents (the seeded `.claude.json`, the constructed
 `settings.json`, the plugin seed, the legacy-transcript migration), the
 container mounts that overlay it as `~/.claude`, its readers (the projects dir,
@@ -26,7 +26,7 @@ from bro.workspace.model import Workspace
 def _session_claude_dir(name: str) -> Path:
   """the per-session claude state dir on the host — mounted as a container
   session's ~/.claude overlay."""
-  return Path.home() / '.claude' / 'cw-sessions' / name
+  return Path.home() / '.claude' / 'ride-sessions' / name
 
 
 def session_trail_pointer(name: str) -> Path:
@@ -245,8 +245,8 @@ def container_claude_state(name: str) -> tuple[list[str], dict[str, str]]:
   )
   _write_session_settings(claude_dir, container=True)
   mounts = [
-    f'{claude_json}:/home/cw/.claude.json',
-    f'{claude_dir}:/home/cw/.claude',
+    f'{claude_json}:/home/ride/.claude.json',
+    f'{claude_dir}:/home/ride/.claude',
   ]
   env = {'DISABLE_AUTOUPDATER': '1', 'DISABLE_INSTALLATION_CHECKS': '1'}
   return mounts, env
@@ -255,9 +255,8 @@ def container_claude_state(name: str) -> tuple[list[str], dict[str, str]]:
 def _provision_host_claude_dir(name: str, worktree: Path, project: Path) -> Path:
   """provision a host session's private claude state dir and return it — the
   value the launch points CLAUDE_CONFIG_DIR at. `project` is the main repo root
-  the worktree links to. idempotent: the outer launch and the in-place runner
-  both call it, so a runner spawned by an outer cw that predates the config dir
-  still provisions its own."""
+  the worktree links to. idempotent because the outer launch and the in-place
+  runner both call it."""
   claude_dir = _session_claude_dir(name)
   log.verbose('provisioning the session claude state dir at %s', claude_dir)
   claude_dir.mkdir(parents=True, exist_ok=True)

@@ -2,7 +2,7 @@
 
 At session start, detect your environment. Do not produce any visible output — silently incorporate this context into your planning.
 
-Call the `bro::banner` tool once. It returns the structured session facts as `key: value` lines (`kind`, `name`, `bro`, `workspace_host_path`, `workspace_container_path`, `docker_shell_command`, `cw_command`, `may_summon`, `trail_id`). Interpret them as follows:
+Call the `bro::banner` tool once. It returns the structured session facts as `key: value` lines (`kind`, `name`, `bro`, `workspace_host_path`, `workspace_container_path`, `docker_shell_command`, `ride_command`, `may_summon`, `trail_id`). Interpret them as follows:
 
 1. `kind: container` means you are inside a docker container. Managed session containers also report `name`, `workspace_container_path`, and `docker_shell_command`; an unmanaged container omits them rather than claiming `/workspace` belongs to the session:
    - No direct filesystem access to the host

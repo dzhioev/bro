@@ -30,6 +30,63 @@ def test_a_repository_names_its_own_root(monkeypatch, tmp_path):
   assert workspace_paths.find_project_root() == tmp_path.resolve()
 
 
+def test_linked_worktree_names_the_main_checkout(monkeypatch, tmp_path):
+  repository = tmp_path / 'repository'
+  worktree = tmp_path / 'worktree'
+  subprocess.run(['git', 'init', '--quiet', str(repository)], check=True)
+  subprocess.run(
+    [
+      'git',
+      '-C',
+      str(repository),
+      '-c',
+      'user.name=test',
+      '-c',
+      'user.email=test@example.invalid',
+      'commit',
+      '--allow-empty',
+      '-m',
+      'root',
+    ],
+    capture_output=True,
+    check=True,
+  )
+  subprocess.run(
+    ['git', '-C', str(repository), 'worktree', 'add', '-q', '-b', 'worktree-test', str(worktree)],
+    check=True,
+  )
+
+  assert workspace_paths.find_project_root(worktree) == repository.resolve()
+
+
+def test_project_keys_are_stable_and_separate_checkouts(tmp_path):
+  first = tmp_path / 'first'
+  second = tmp_path / 'second'
+  first.mkdir()
+  second.mkdir()
+
+  assert workspace_paths.project_key(first) == workspace_paths.project_key(first)
+  assert workspace_paths.project_key(first) != workspace_paths.project_key(second)
+
+
+def test_runtime_paths_share_the_checkout_keyed_root(tmp_path):
+  root = workspace_paths.runtime_root(tmp_path)
+  assert workspace_paths.workspaces_dir(tmp_path) == root / 'workspaces'
+  assert workspace_paths.broker_dir(tmp_path) == root / 'broker'
+  assert workspace_paths.summon_dir(tmp_path) == root / 'summon'
+  assert workspace_paths.trails_dir(tmp_path) == root / 'trails'
+
+
+def test_container_trails_use_the_absolute_mount(monkeypatch, tmp_path):
+  monkeypatch.setenv('RIDE_IN_CONTAINER', '1')
+  assert workspace_paths.trails_dir(tmp_path) == workspace_paths.CONTAINER_TRAILS_ROOT
+
+
+def test_missing_runtime_root_names_setup_remedy(tmp_path):
+  with pytest.raises(RuntimeError, match=r'setup\.sh'):
+    workspace_paths.require_runtime_root(tmp_path / 'unprovisioned')
+
+
 def _workspaces_dir(monkeypatch, tmp_path):
   monkeypatch.setattr(workspace_paths, 'project_root', lambda: tmp_path)
   workspaces = workspace_paths.workspaces_dir(tmp_path)

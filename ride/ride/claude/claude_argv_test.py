@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-import ride.claude.claude_argv as cw_claude_argv
+import ride.claude.claude_argv as ride_claude_argv
 from bro.llm.llms import claude_code
 from ride.claude.mcp import MCPEndpoint
 from ride.session_test import _spec as _session_spec
@@ -42,10 +42,10 @@ def _dev_persona_namespaces() -> list[str]:
   return list(dict.fromkeys(s.namespace for s in create_bro('dev').claude_persona_mcp_servers()))
 
 
-def _cw_session_launch(spec, **kwargs) -> cw_claude_argv.ClaudeLaunch:
+def _ride_session_launch(spec, **kwargs) -> ride_claude_argv.ClaudeLaunch:
   kwargs.setdefault('endpoint', _ENDPOINT)
   with patch('ride.claude.claude_argv._session_append_prompt', return_value='append text'):
-    return cw_claude_argv.build_claude_launch(spec, **kwargs)
+    return ride_claude_argv.build_claude_launch(spec, **kwargs)
 
 
 def _settings(argv: list[str]) -> dict:
@@ -54,7 +54,7 @@ def _settings(argv: list[str]) -> dict:
 
 class TestCwSessionLaunch:
   def test_basic_shape(self):
-    launch = _cw_session_launch(_spec(), claude_args=['--foo'])
+    launch = _ride_session_launch(_spec(), claude_args=['--foo'])
     argv = launch.argv
     assert argv[:2] == ['--model', claude_code.DEFAULT_MODEL]
     assert '--bare' not in argv
@@ -77,7 +77,7 @@ class TestCwSessionLaunch:
         super().__init__(system_prompt='')
 
     monkeypatch.setattr('bro.registry.create_bro', lambda name: BlockingBro())
-    argv = _cw_session_launch(_spec(bro='blocking'), claude_args=[]).argv
+    argv = _ride_session_launch(_spec(bro='blocking'), claude_args=[]).argv
     assert argv[argv.index('--disallowed-tools') + 1] == 'mcp__claude_ai_*,Read,Write,Bash'
 
   def test_narrowed_tool_is_served_and_gated_by_a_hook(self, monkeypatch):
@@ -116,30 +116,30 @@ class TestCwSessionLaunch:
 
   def test_fast_mode_lands_in_settings(self):
     assert (
-      _settings(_cw_session_launch(_spec(llm='+fast'), claude_args=[]).argv)['fastMode'] is True
+      _settings(_ride_session_launch(_spec(llm='+fast'), claude_args=[]).argv)['fastMode'] is True
     )
-    assert _settings(_cw_session_launch(_spec(), claude_args=[]).argv)['fastMode'] is False
+    assert _settings(_ride_session_launch(_spec(), claude_args=[]).argv)['fastMode'] is False
 
   def test_status_line_lands_in_settings(self):
-    status_line = _settings(_cw_session_launch(_spec(), claude_args=[]).argv)['statusLine']
+    status_line = _settings(_ride_session_launch(_spec(), claude_args=[]).argv)['statusLine']
     assert status_line['type'] == 'command'
     assert status_line['command'] == f'{shlex.quote(sys.executable)} -m ride.claude.statusline'
 
   def test_effort_injected(self):
-    argv = _cw_session_launch(_spec(llm='::xhigh'), claude_args=[]).argv
+    argv = _ride_session_launch(_spec(llm='::xhigh'), claude_args=[]).argv
     assert argv[argv.index('--effort') + 1] == 'xhigh'
 
   @pytest.mark.parametrize('hold', ['unattended', 'detached', 'attended'])
   def test_non_guided_holds_skip_permissions(self, hold):
-    argv = _cw_session_launch(_spec(hold=hold), claude_args=[]).argv
+    argv = _ride_session_launch(_spec(hold=hold), claude_args=[]).argv
     assert '--dangerously-skip-permissions' in argv
 
   def test_guided_hold_keeps_permission_prompts(self):
-    argv = _cw_session_launch(_spec(hold='guided'), claude_args=[]).argv
+    argv = _ride_session_launch(_spec(hold='guided'), claude_args=[]).argv
     assert '--dangerously-skip-permissions' not in argv
 
   def test_mcp_config_covers_the_personas_namespaces(self):
-    argv = _cw_session_launch(_spec(bro='dev'), claude_args=[]).argv
+    argv = _ride_session_launch(_spec(bro='dev'), claude_args=[]).argv
     config = json.loads(argv[argv.index('--mcp-config') + 1])
     namespaces = _dev_persona_namespaces()
     # the service server's `banner` tool rides the `bro` namespace
@@ -151,20 +151,20 @@ class TestCwSessionLaunch:
       assert entry['headers'] == {'Authorization': 'Bearer tok'}
       assert entry['alwaysLoad'] is True
 
-  def test_cw_session_keeps_the_full_harness(self):
+  def test_ride_session_keeps_the_full_harness(self):
     # no --strict-mcp-config / --allowed-tools: the persona namespaces mount on
     # top of claude's own tools, not instead of them
-    argv = _cw_session_launch(_spec(bro='dev'), claude_args=[]).argv
+    argv = _ride_session_launch(_spec(bro='dev'), claude_args=[]).argv
     assert '--strict-mcp-config' not in argv
     assert '--allowed-tools' not in argv
 
   def test_claude_args_precede_prompt_tail(self):
-    argv = _cw_session_launch(_spec(prompt='go'), claude_args=['--x']).argv
+    argv = _ride_session_launch(_spec(prompt='go'), claude_args=['--x']).argv
     assert argv[-2:] == ['--', 'go']
     assert argv.index('--mcp-config') < argv.index('--x')
 
   def test_solo_adds_print_mode_to_the_full_session_composition(self):
-    argv = _cw_session_launch(
+    argv = _ride_session_launch(
       _spec(solo=True, hold='unattended', prompt='answer'), claude_args=[]
     ).argv
     assert '-p' in argv
@@ -176,9 +176,9 @@ class TestCwSessionLaunch:
 
 
 class TestRawLaunch:
-  def _launch(self, **kwargs) -> cw_claude_argv.ClaudeLaunch:
+  def _launch(self, **kwargs) -> ride_claude_argv.ClaudeLaunch:
     spec = _spec(bro='dev', raw=True, **kwargs)
-    return cw_claude_argv.build_claude_launch(spec, claude_args=[], endpoint=_ENDPOINT)
+    return ride_claude_argv.build_claude_launch(spec, claude_args=[], endpoint=_ENDPOINT)
 
   def test_basic_shape(self):
     argv = self._launch().argv
@@ -195,8 +195,8 @@ class TestRawLaunch:
     seeded = argv[argv.index('--') + 1]
     assert seeded.startswith('[launch note:')
     assert seeded.endswith('do it')
-    # cw-sessions keep the seed verbatim (harness reminders cover them)
-    native = _cw_session_launch(_spec(prompt='do it'), claude_args=[]).argv
+    # ride-sessions keep the seed verbatim (harness reminders cover them)
+    native = _ride_session_launch(_spec(prompt='do it'), claude_args=[]).argv
     assert native[native.index('--') + 1] == 'do it'
 
   def test_allowed_tools_cover_each_namespace(self):
@@ -266,6 +266,6 @@ class TestRawLaunch:
 
   def test_unknown_bro_raises(self):
     with pytest.raises(KeyError, match='unknown bro'):
-      cw_claude_argv.build_claude_launch(
+      ride_claude_argv.build_claude_launch(
         _spec(bro='does-not-exist'), claude_args=[], endpoint=_ENDPOINT
       )

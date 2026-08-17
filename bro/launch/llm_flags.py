@@ -52,7 +52,7 @@ def add_llm_flags(parser: Parser, *, effort_help: str, fast_help: str) -> None:
   """register the LLM-selection flag set — `--provider`, `--model`, `--effort`,
   `--fast`, and the `--llm` that excludes all four."""
   # imported here, not at module level: the provider roster pulls the llm
-  # package, and this module sits on the cw flag path
+  # package, and this module sits on the ride flag path
   from bro.llm.llm import EFFORT_LEVELS
   from bro.llm.providers import known_names
 

@@ -353,11 +353,11 @@ def _blaze_claude(store: dynamo_store.DynamoStore, **overrides) -> str:
     'harness': 'claude',
     'version': '2',
     'interactive': True,
-    'surface': 'cw',
+    'surface': 'ride',
     'native': {
       'llm': {'type': 'claude'},
       'segment': 'segment',
-      'cw_command': 'ride along',
+      'ride_command': 'ride along',
       'harness_version': 'unknown',
     },
     'body': {'records': []},

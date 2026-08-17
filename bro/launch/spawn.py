@@ -166,8 +166,8 @@ def run_root_via_broker(
   trail_pointer: Optional[Path] = None,
 ) -> int:
   """run `launch` as the root peer of a broker over the host control dir
-  (`var/cw/broker`), supervise it on the broker loop until it exits, and return its
-  exit code. The spawner is the composite over both cw launch modes plus the summon
+  (`/var/ride/<project-key>/broker`), supervise it on the broker loop until it exits,
+  and return its exit code. The spawner is the composite over both ride launch modes plus the summon
   lowering, so any root — host process or container — can spawn docker children.
   The broker answers the substrate's built-in ping, so a session can verify its
   channel (`broker request ping '{}'`), and logs the root's own run lifecycle
@@ -181,7 +181,7 @@ def run_root_via_broker(
   defaults to deny-all. `credential_scope` names the secrets the root session
   was launched with, the bound on what its summons may grant a child; defaults
   to grant-nothing. `trail_pointer` is a claude session's current-trail
-  pointer file (host-side path; `cw` passes it), the control's provenance source
+  pointer file (host-side path; `ride` passes it), the control's provenance source
   for the root's summon children. A summoned child follows its own bro's static seeds
   instead, resolved per request by the control. The summon handler is registered
   either way, so a denied summoner always gets a clean correlated error instead of

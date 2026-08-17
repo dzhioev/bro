@@ -24,6 +24,7 @@ from pathlib import Path
 import pytest
 
 import bro.workspace.docker as workspace_docker
+import bro.workspace.paths as workspace_paths
 import bro.workspace.project as workspace_project
 from bro.workspace.docker import Launch
 from bro.workspace.metadata import WorkspaceKind
@@ -184,7 +185,10 @@ def isolated() -> Iterator[Isolated]:
 @pytest.fixture(scope='module')
 def launched(isolated: Isolated) -> Iterator[Launched]:
   checkout = _checkout()
+  runtime_base = isolated.project.parent / 'state'
+  (runtime_base / workspace_paths.project_key(isolated.project)).mkdir(parents=True)
   with pytest.MonkeyPatch.context() as monkeypatch:
+    monkeypatch.setattr(workspace_paths, 'RUNTIME_BASE', runtime_base)
     monkeypatch.setattr(workspace_docker, 'project_root', lambda: checkout)
     monkeypatch.setattr(workspace_project, 'project_root', lambda: checkout)
     monkeypatch.setattr(workspace_docker.Path, 'home', lambda: isolated.home)
@@ -199,7 +203,7 @@ def launched(isolated: Isolated) -> Iterator[Launched]:
         # skips the entrypoint's venv-dependent half, which costs a full `uv sync`
         # whenever the clone's committed manifests differ from the ones the image
         # baked — an uncommitted manifest edit would otherwise stall the gate
-        env={'CW_SKIP_VENV': '1'},
+        env={'RIDE_SKIP_VENV': '1'},
         secrets=(),
         docker_sock=False,
         tty=False,

@@ -19,7 +19,7 @@ and claude's generated title into the header. Quiet ticks keep the trail alive
 for the server's lost-sweep. The current trail id is published to the session's
 trail pointer (`monitor/trail_pointer.py`) for summon provenance.
 
-The daemon is started by the in-place session runner (`cw/recorder.py`) next to
+The daemon is started by the in-place session runner (`ride/ride/claude/recorder.py`) next to
 claude for every session flavor and finalizes on SIGTERM — one last append,
 then `end` with `ok`, or `raised` plus the reason when the transcript's
 terminal record stream carries a bro `raise` service-tool call.
@@ -154,13 +154,13 @@ def _compose(file_lines: list[str], chunks: list[list[int]]) -> list[str]:
 
 
 def _launch_context() -> Optional[Any]:
-  raw = os.environ.get('CW_SESSION_CONTEXT')
+  raw = os.environ.get('RIDE_SESSION_CONTEXT')
   if raw is None:
     return None
   try:
     return json.loads(raw)
   except json.JSONDecodeError as e:
-    log.warning('unparsable CW_SESSION_CONTEXT (%s); omitting the launch context', e)
+    log.warning('unparsable RIDE_SESSION_CONTEXT (%s); omitting the launch context', e)
     return None
 
 
@@ -172,20 +172,20 @@ def _location(workspace: str) -> dict:
   in_container = _in_container()
   location: dict[str, Any] = {'workspace': workspace, 'is_container': in_container}
   # `host` is the host machine, never a container hostname: the launcher stamps
-  # CW_HOST into the container env (workspace/docker.py); on host we are it
-  host = os.environ.get('CW_HOST')
+  # RIDE_HOST into the container env (workspace/docker.py); on host we are it
+  host = os.environ.get('RIDE_HOST')
   if host is None and not in_container:
     host = socket.gethostname()
   if host is not None:
     location['host'] = host
-  directory = os.environ.get('CW_HOST_WORKSPACE') if in_container else str(Path.cwd())
+  directory = os.environ.get('RIDE_HOST_WORKSPACE') if in_container else str(Path.cwd())
   if directory is not None:
     location['dir'] = directory
   return location
 
 
 def _workspace_name() -> Optional[str]:
-  return os.environ.get('CW_NAME')
+  return os.environ.get('RIDE_WORKSPACE')
 
 
 def _verdict_chunks(result: dict) -> list[list[int]]:
@@ -292,14 +292,14 @@ class Recorder:
     client: TrailsStore,
     *,
     llm: dict,
-    cw_command: str,
+    ride_command: str,
     started_after: float,
   ) -> None:
     self.projects_dir = projects_dir
     self.workspace = workspace
     self.client = client
     self.llm = llm
-    self.cw_command = cw_command
+    self.ride_command = ride_command
     self.started_after = started_after
     self._active: Optional[_SegmentRecorder] = None
     self._consumed: set[str] = set()
@@ -433,16 +433,16 @@ class Recorder:
       harness='claude',
       version=configs.VERSION,
       interactive=True,
-      surface='cw',
+      surface='ride',
       native={
         'llm': self.llm,
         'segment': segment,
-        'cw_command': self.cw_command,
+        'ride_command': self.ride_command,
         'harness_version': 'unknown',
       },
       location=_location(self.workspace),
       body=body,
-      bro=os.environ.get('CW_BRO'),
+      bro=os.environ.get('RIDE_BRO'),
       hold=os.environ.get('BRO_HOLD'),
       lineage=lineage,
     )
@@ -537,11 +537,11 @@ def record_session(
 ) -> int:
   workspace_name = workspace if workspace is not None else _workspace_name()
   if workspace_name is None:
-    log.error('cannot determine workspace name; pass --workspace or set CW_NAME')
+    log.error('cannot determine workspace name; pass --workspace or set RIDE_WORKSPACE')
     return 1
-  cw_command = os.environ.get('CW_COMMAND')
-  if cw_command is None:
-    log.error('CW_COMMAND is not set; the trail header requires the launch command')
+  ride_command = os.environ.get('RIDE_COMMAND')
+  if ride_command is None:
+    log.error('RIDE_COMMAND is not set; the trail header requires the launch command')
     return 1
   try:
     llm_recipe = json.loads(llm) if llm is not None else {}
@@ -562,7 +562,7 @@ def record_session(
     workspace_name,
     client,
     llm=llm_recipe,
-    cw_command=cw_command,
+    ride_command=ride_command,
     started_after=time.time(),
   )
   log.info('recording %s (interval=%ds, workspace=%s)', src, interval, workspace_name)
@@ -575,7 +575,9 @@ def main(argv: list[str]) -> Optional[int]:
   parser.add_argument(
     '--interval', type=int, default=3, help='poll interval in seconds (default: 3)'
   )
-  parser.add_argument('--workspace', default=None, help='workspace name (default: from CW_NAME)')
+  parser.add_argument(
+    '--workspace', default=None, help='workspace name (default: from RIDE_WORKSPACE)'
+  )
   parser.add_argument(
     '--projects-dir',
     type=Path,
