@@ -3,6 +3,7 @@ import json
 import os
 import signal
 import subprocess
+from pathlib import Path
 from typing import ClassVar, Optional
 from unittest.mock import MagicMock
 
@@ -15,6 +16,8 @@ import bro.workspace.banner as workspace_banner
 from bro.base import credentials
 from bro.base.condition import ConditionError, iff, when
 from bro.bro import BaseBro, BroRaised, feature, set_default_tracker_factory
+from bro.datasources.file import FileSource
+from bro.datasources.man import ManPage, ManSource
 from bro.datasources.searchable import Hit, SearchableDataSource
 from bro.llm.llm import LLM
 from bro.llm.mcp import FunctionTool, InProcessMCPServer, MCPServer, MCPServerSpec, describe
@@ -925,6 +928,45 @@ class TestBroDataSources:
 
     bro = ChildSourceBro()
     assert [ds.name for ds in bro._data_sources] == ['stub', 'marker']
+
+  def test_man_pages_fold_into_one_manual_along_the_mro(self):
+    page = FileSource('alpha', summary='the alpha page', path=Path(__file__))
+    other = FileSource('beta', summary='the beta page', path=Path(__file__))
+
+    class ParentManBro(BaseBro):
+      name = 'parent-man'
+      description = 'd'
+      data_sources: ClassVar = [ManPage(page), _StubSource()]
+
+      def __init__(self):
+        super().__init__(system_prompt='base')
+
+    class ChildManBro(ParentManBro):
+      name = 'child-man'
+      # the repeat collapses; a namespace is one server either way
+      data_sources: ClassVar = [ManPage(other), ManPage(page)]
+
+    bro = ChildManBro()
+    # the manual sits where the first page was declared, ahead of the stub
+    assert [ds.name for ds in bro._data_sources] == ['man', 'stub']
+    folded = bro._data_sources[0]
+    assert isinstance(folded, ManSource)
+    assert [p.name for p in folded.pages] == ['alpha', 'beta']
+
+  def test_man_pages_gate_on_conditions_like_any_source(self):
+    page = FileSource('alpha', summary='the alpha page', path=Path(__file__))
+
+    class GatedManBro(BaseBro):
+      name = 'gated-man'
+      description = 'd'
+      data_sources: ClassVar = [when(llm_mcp.harness == 'claude', ManPage(page))]
+
+      def __init__(self):
+        super().__init__(system_prompt='base')
+
+    bro = GatedManBro()
+    assert bro._data_sources == []
+    assert [ds.name for ds in bro._components_for('claude')[1]] == ['man']
 
   def test_data_source_summary_in_system_prompt(self):
     class SourceBro(BaseBro):
