@@ -9,7 +9,6 @@ from bro.broker.client import CHANNEL_ENV, Client
 from bro.broker.transport import ClientTransport
 from bro.channel import BroChannel
 from bro.llm.llm import LLM
-from bro.llm.observer import NullObserver, Observer
 from bro.llm.tracker import NullTracker
 
 
@@ -91,9 +90,6 @@ class _ChannelBro(BaseBro):
     super().__init__(system_prompt='')
     self._channel = channel
     self._llm_stub = llm
-
-  def _make_observer(self) -> Observer:
-    return NullObserver()
 
   def _make_channel(self) -> Optional[BroChannel]:
     return self._channel
@@ -191,9 +187,6 @@ class TestRunLifecycle:
 
       def __init__(self):
         super().__init__(system_prompt='')
-
-      def _make_observer(self) -> Observer:
-        return NullObserver()
 
       def _create_llm(self, *, hold: str) -> LLM:
         return _StubLLM(response='fine')

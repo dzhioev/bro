@@ -15,8 +15,6 @@ from bro.llm.llm import LLM, NativeLLMSpec
 from bro.llm.mcp import MCPServer
 from bro.llm.observer import (
   InterimAssistantTextEvent,
-  NullObserver,
-  Observer,
   ToolCallEvent,
   ToolResultEvent,
   TurnCompletedEvent,
@@ -73,9 +71,6 @@ class RecordBro(Bro):
   def __init__(self, response: str = 'reply'):
     super().__init__(system_prompt='record')
     self.mock_llm = MockLLM(response=response)
-
-  def _make_observer(self) -> Observer:
-    return NullObserver()
 
   def _create_llm(self, *, hold: str) -> LLM:
     return self.mock_llm
@@ -186,9 +181,6 @@ class _ChatBro(Bro):
     super().__init__(system_prompt='record')
     self.mock_llm = MockLLM(response='reply')
 
-  def _make_observer(self) -> Observer:
-    return NullObserver()
-
   def _create_llm(self, *, hold: str) -> LLM:
     return self.mock_llm
 
@@ -201,9 +193,6 @@ class _FastlessBro(Bro):
   def __init__(self):
     super().__init__(system_prompt='fastless')
     self.mock_llm = MockLLM(response='reply')
-
-  def _make_observer(self) -> Observer:
-    return NullObserver()
 
   def _create_llm(self, *, hold: str) -> LLM:
     return self.mock_llm

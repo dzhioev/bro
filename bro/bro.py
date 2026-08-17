@@ -1,6 +1,5 @@
 import json
 import os
-import sys
 import traceback
 from abc import ABC
 from collections.abc import Callable
@@ -30,10 +29,6 @@ from bro.llm.observer import (
 from bro.llm.tracker import EndReason, NullTracker, ToolStepSource, Tracker
 from bro.prompts import get_prompt, hold_fragment
 from bro.summon import SUMMONER_ENV
-from bro.trails.display.config import PresetName, preset
-from bro.trails.display.core import DisplaySession
-from bro.trails.display.live import LiveDisplayObserver
-from bro.trails.display.terminal import StreamRenderer
 from bro.trails.record.bro import Recorder
 
 DEFAULT_LLM_SPEC: NativeLLMSpec = llm_llms_openai.LLMSpec()
@@ -768,8 +763,9 @@ class BaseBro(ABC):
     # never pay it.
     self._service_server_cache: Optional[llm_mcp.MCPServer] = None
     self._llm = None
-    # default to no-op; BaseBro.run() swaps in a real observer per invocation so the
-    # LLM construction path picks it up via self._observer.
+    # a bro renders only through an observer its caller passes: an embedding
+    # application must not get terminal output, or a display session, it never
+    # asked for.
     self._observer: Observer = NullObserver()
     # sibling of _observer — the tracker records the run for offline analysis
     # rather than rendering it to stderr. swapped in BaseBro.run() / .send() the
@@ -989,18 +985,18 @@ class BaseBro(ABC):
     *,
     interactive: bool,
     hold: str,
-    observer: Optional[Observer],
+    observer: Observer,
     tracker: Optional[Tracker],
     surface: str,
     summoned_by: Optional[dict[str, Any]],
   ) -> tuple[LLM, list[dict], str]:
-    # the shared start sequence of run() and send(): lock in observer/tracker —
-    # caller-supplied ones win (CLIs use this to force --boring and tests inject
-    # recording fakes), set on self before _create_llm so the
-    # LLM construction path picks them up — then build the LLM, compose the
-    # hold prompt, open the trail, and seed the message list.
+    # the shared start sequence of run() and send(): pin the resolved observer
+    # and the tracker — a caller-supplied one wins (tests inject recording
+    # fakes) — on self before _create_llm, so the LLM construction path picks
+    # them up, then build the LLM, compose the hold prompt, open the trail, and
+    # seed the message list.
     self._provision_workspace()
-    self._observer = observer if observer is not None else self._make_observer()
+    self._observer = observer
     self._tracker = tracker if tracker is not None else self._make_tracker()
     llm = self._create_llm(hold=hold)
     system_prompt = self._system_prompt_for(hold=hold)
@@ -1078,7 +1074,7 @@ class BaseBro(ABC):
     surface: str,
     hold: str = 'unattended',
   ) -> str:
-    effective_observer = observer if observer is not None else self._make_observer()
+    effective_observer = observer if observer is not None else NullObserver()
     with _observer_scope(effective_observer):
       effective_observer.on_event(TurnStartedEvent(input))
       refusal = self._start_refusal()
@@ -1131,7 +1127,7 @@ class BaseBro(ABC):
     hold: str = 'guided',
   ) -> str:
     if self._llm is None:
-      effective_observer = observer if observer is not None else self._make_observer()
+      effective_observer = observer if observer is not None else NullObserver()
       effective_observer.on_event(TurnStartedEvent(message))
       refusal = self._start_refusal()
       if refusal is not None:
@@ -1288,10 +1284,6 @@ class BaseBro(ABC):
       )
     except Exception as step_error:
       log.warning('failed to record the error step: %s', step_error)
-
-  def _make_observer(self) -> Observer:
-    configuration = preset(PresetName.OBSERVER, context_label=self.name)
-    return LiveDisplayObserver(DisplaySession(configuration, StreamRenderer(sys.stderr)))
 
   def _make_tracker(self) -> Tracker:
     return _default_tracker_factory()

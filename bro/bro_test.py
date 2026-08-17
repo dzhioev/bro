@@ -60,9 +60,6 @@ class EchoBro(BaseBro):
     super().__init__(system_prompt='you echo')
     self._response = response
 
-  def _make_observer(self) -> Observer:
-    return NullObserver()
-
   def _create_llm(self, *, hold: str) -> LLM:
     return MockLLM(response=self._response)
 
@@ -122,7 +119,7 @@ class TestBroRun:
   async def test_run_wires_observer_through_to_llm(self):
     captured: list[Observer] = []
 
-    class CapturingObserver(NullObserver):
+    class ExplicitObserver(NullObserver):
       pass
 
     class WireBro(BaseBro):
@@ -132,45 +129,20 @@ class TestBroRun:
       def __init__(self):
         super().__init__(system_prompt='')
 
-      def _make_observer(self) -> Observer:
-        return CapturingObserver()
-
-      def _create_llm(self, *, hold: str):
-        captured.append(self._observer)
-        return MockLLM()
-
-    await WireBro().run('hi', surface='test')
-    assert len(captured) == 1
-    assert isinstance(captured[0], CapturingObserver)
-
-  @pytest.mark.asyncio
-  async def test_run_explicit_observer_overrides_make_observer(self):
-    captured: list[Observer] = []
-
-    class MadeObserver(NullObserver):
-      pass
-
-    class ExplicitObserver(NullObserver):
-      pass
-
-    class OverrideBro(BaseBro):
-      name = 'override'
-      description = 'd'
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-      def _make_observer(self) -> Observer:
-        return MadeObserver()
-
       def _create_llm(self, *, hold: str):
         captured.append(self._observer)
         return MockLLM()
 
     explicit = ExplicitObserver()
-    await OverrideBro().run('hi', observer=explicit, surface='test')
+    await WireBro().run('hi', observer=explicit, surface='test')
     assert len(captured) == 1
     assert captured[0] is explicit
+
+  @pytest.mark.asyncio
+  async def test_run_without_an_observer_renders_nothing(self):
+    bro = EchoBro()
+    await bro.run('hi', surface='test')
+    assert isinstance(bro._observer, NullObserver)
 
   @pytest.mark.asyncio
   async def test_run_explicit_tracker_overrides_default(self):
@@ -629,6 +601,12 @@ class TestBroSend:
     assert captured[0] is explicit
 
   @pytest.mark.asyncio
+  async def test_send_without_an_observer_renders_nothing(self):
+    bro = EchoBro()
+    await bro.send('hi', surface='test')
+    assert isinstance(bro._observer, NullObserver)
+
+  @pytest.mark.asyncio
   async def test_send_first_call_starts_interactive_trail(self):
     calls: list[tuple[str, dict]] = []
 
@@ -786,9 +764,6 @@ class GatedBro(BaseBro):
   def __init__(self):
     super().__init__(system_prompt='gated')
     self.mock_llm = MockLLM(response='ran')
-
-  def _make_observer(self) -> Observer:
-    return NullObserver()
 
   def _create_llm(self, *, hold: str) -> LLM:
     return self.mock_llm

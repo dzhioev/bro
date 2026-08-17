@@ -240,7 +240,6 @@ def fork(
   bro._tracker = (
     NullTracker() if not record else (tracker if tracker is not None else bro._make_tracker())
   )
-  bro._observer = bro._make_observer()
   inner_llm = spec.create_llm(
     mcp_servers=bro._mcp_servers_for(hold='guided'),
     observer=bro._observer,
