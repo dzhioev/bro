@@ -4,10 +4,13 @@ import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 import ride.claude.runner as ride_runner
 from bro.base import credentials
 from bro.launch.broxy import START_SESSION_BROXY_ENV
 from bro.llm.llms import claude_code
+from bro.monitor import trail_pointer
 from bro.workspace.paths import workspace_dir
 from ride.claude.claude_argv import ClaudeLaunch
 from ride.claude.mcp import MCPEndpoint
@@ -338,3 +341,131 @@ class TestRunClaude:
     env = {**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}'}
     assert ride_runner._run_claude([], env) == 7
     assert signal.getsignal(signal.SIGTERM) == previous
+
+
+def _fake_claude(tmp_path: Path, script: str) -> dict[str, str]:
+  bin_dir = tmp_path / 'bin'
+  bin_dir.mkdir(exist_ok=True)
+  fake = bin_dir / 'claude'
+  fake.write_text(f'#!/usr/bin/env bash\n{script}')
+  fake.chmod(0o755)
+  return {**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}'}
+
+
+class _RecordingChannel:
+  def __init__(self, events: list):
+    self._events = events
+
+  def started(self, trail_id: str) -> None:
+    self._events.append(('started', trail_id))
+
+  def completed(self, result, end_reason) -> None:
+    self._events.append(('completed', result, end_reason))
+
+  def close(self) -> None:
+    self._events.append(('close',))
+
+
+class TestRunClaudeSummoned:
+  @pytest.fixture
+  def channel_events(self, monkeypatch) -> list:
+    events: list = []
+
+    class FakeChannel:
+      @classmethod
+      def from_env(cls):
+        return _RecordingChannel(events)
+
+    monkeypatch.setattr(ride_runner, 'BroChannel', FakeChannel)
+    return events
+
+  @pytest.fixture
+  def claude_config(self, monkeypatch, tmp_path) -> Path:
+    config = tmp_path / 'claude-config'
+    monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(config))
+    return config
+
+  def test_clean_exit_relays_the_reply_and_lifecycle(
+    self, tmp_path, claude_config, channel_events, capfd
+  ):
+    trail_pointer.write(trail_pointer.path(), 't-child')
+    env = _fake_claude(tmp_path, 'echo "THE REPLY"\n')
+    assert ride_runner._run_claude_summoned([], env) == 0
+    assert channel_events == [
+      ('started', 't-child'),
+      ('close',),
+      ('completed', 'THE REPLY', 'ok'),
+      ('close',),
+    ]
+    # the reply is echoed so the child's captured output tail carries it too
+    assert capfd.readouterr().out == 'THE REPLY\n'
+
+  def test_started_lands_while_claude_still_runs(
+    self, tmp_path, claude_config, channel_events, monkeypatch
+  ):
+    monkeypatch.setattr(ride_runner, '_TRAIL_POLL_SECONDS', 0.05)
+    trail_pointer.write(trail_pointer.path(), 't-child')
+    env = _fake_claude(tmp_path, 'sleep 0.4\necho LATE\n')
+    assert ride_runner._run_claude_summoned([], env) == 0
+    assert channel_events == [
+      ('started', 't-child'),
+      ('close',),
+      ('completed', 'LATE', 'ok'),
+      ('close',),
+    ]
+
+  def test_an_unpublished_trail_still_delivers_the_terminal(
+    self, tmp_path, claude_config, channel_events
+  ):
+    env = _fake_claude(tmp_path, 'echo DONE\n')
+    assert ride_runner._run_claude_summoned([], env) == 0
+    assert channel_events == [('completed', 'DONE', 'ok'), ('close',)]
+
+  def test_failed_exit_emits_no_terminal_but_echoes(
+    self, tmp_path, claude_config, channel_events, capfd
+  ):
+    env = _fake_claude(tmp_path, 'echo PARTIAL\nexit 3\n')
+    assert ride_runner._run_claude_summoned([], env) == 3
+    assert channel_events == []
+    assert capfd.readouterr().out == 'PARTIAL\n'
+
+  def test_a_forwarded_sigterm_suppresses_the_terminal(
+    self, tmp_path, claude_config, channel_events
+  ):
+    trail_pointer.write(trail_pointer.path(), 't-child')
+    env = _fake_claude(
+      tmp_path,
+      'trap "exit 0" TERM\nsleep 0.2\nkill -TERM $PPID\nwhile true; do sleep 0.05; done\n',
+    )
+    assert ride_runner._run_claude_summoned([], env) == 0
+    assert not [event for event in channel_events if event[0] == 'completed']
+
+  def test_without_a_channel_the_run_still_completes(
+    self, tmp_path, claude_config, monkeypatch, capfd
+  ):
+    monkeypatch.delenv('BROKER_CHANNEL', raising=False)
+    trail_pointer.write(trail_pointer.path(), 't-child')
+    env = _fake_claude(tmp_path, 'echo OK\n')
+    assert ride_runner._run_claude_summoned([], env) == 0
+    assert capfd.readouterr().out == 'OK\n'
+
+
+class TestSummonedSession:
+  def test_a_summoned_child_routes_to_the_lifecycle_runner(self, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    with _Harness(tmp_path) as h:
+      h.env['RIDE_SUMMONED'] = '1'
+      with patch('ride.claude.runner._run_claude_summoned', return_value=5) as summoned:
+        assert ride_runner.run_in_place(_spec(solo=True)) == 5
+      summoned.assert_called_once()
+      h.run_claude.assert_not_called()
+
+  def test_summoner_attribution_is_dropped_from_claudes_env(self, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    with _Harness(tmp_path) as h:
+      h.env['RIDE_SUMMONER'] = '{"trail_id":"t-parent"}'
+      assert ride_runner.run_in_place(_spec()) == 0
+      # the recorder daemon starts before the drop, so its snapshot carries it
+      assert h.start_recorder.called
+      assert 'RIDE_SUMMONER' not in os.environ
+      assert 'RIDE_SUMMONER' not in h.run_claude.call_args.args[1]

@@ -92,6 +92,7 @@ def environment(tmp_path: Path, monkeypatch):
   )
   monkeypatch.delenv('RIDE_HOST', raising=False)
   monkeypatch.delenv('RIDE_HOST_WORKSPACE', raising=False)
+  monkeypatch.delenv('RIDE_SUMMONER', raising=False)
   # the suite itself may run inside a container; pin the probe to host mode
   monkeypatch.setattr('bro.trails.record.claude._in_container', lambda: False)
   return projects
@@ -203,6 +204,27 @@ class TestAdoption:
 
     [header] = _trails(store)
     assert trail_pointer.read(trail_pointer.path()) == header['id']
+
+  def test_summoner_attribution_stamps_the_blazed_trail(self, environment, store, monkeypatch):
+    monkeypatch.setenv('RIDE_SUMMONER', '{"trail_id": "t-parent", "step_id": 3}')
+    _write_segment(environment, 'seg-1', [_user('hello', 'u1'), _assistant('hi', 'a1')])
+
+    recorder = _recorder(environment, store)
+    # consumed on read: claude's own subprocesses must not inherit it
+    assert os.environ.get('RIDE_SUMMONER') is None
+    recorder.tick()
+
+    [header] = _trails(store)
+    assert header['summoned_by'] == {'trail_id': 't-parent', 'step_id': 3}
+
+  def test_a_root_session_attribution_stamps_nothing(self, environment, store, monkeypatch):
+    monkeypatch.setenv('RIDE_SUMMONER', '{"session": "parent-ws"}')
+    _write_segment(environment, 'seg-1', [_user('hello', 'u1'), _assistant('hi', 'a1')])
+
+    _recorder(environment, store).tick()
+
+    [header] = _trails(store)
+    assert header.get('summoned_by') is None
 
   def test_a_stale_pointer_is_cleared_at_start(self, environment, store):
     trail_pointer.publish('STALE')

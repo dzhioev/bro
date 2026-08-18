@@ -12,14 +12,17 @@ import contextlib
 import os
 import signal
 import subprocess
+import threading
 from collections.abc import Generator
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from bro.base import log
+from bro.channel import BroChannel
 from bro.launch.broxy import session_broxy
 from bro.launch.hold import HOLD_VARIABLE
-from bro.monitor import claude_projects_dir
+from bro.monitor import claude_projects_dir, trail_pointer
+from bro.summon import SUMMONED_ENV, SUMMONER_ENV
 from bro.workspace.git import git_out
 from bro.workspace.paths import in_container, project_root, workspace_dir
 from ride.claude.claude_argv import build_claude_launch
@@ -61,10 +64,19 @@ def _set_session_context(spec: 'SessionSpec', system_prompt: str, tree: Path) ->
 
 
 @contextlib.contextmanager
-def _sigterm_forwarded_to(process: subprocess.Popen) -> Generator[None]:
-  previous = signal.signal(signal.SIGTERM, lambda signum, frame: process.terminate())
+def _sigterm_forwarded_to(process: subprocess.Popen) -> Generator[threading.Event]:
+  """forward SIGTERM to `process` for the block's duration, yielding the event
+  that records a forward happened."""
+  forwarded = threading.Event()
+
+  def _forward(signum, frame):
+    del signum, frame
+    forwarded.set()
+    process.terminate()
+
+  previous = signal.signal(signal.SIGTERM, _forward)
   try:
-    yield
+    yield forwarded
   finally:
     signal.signal(signal.SIGTERM, previous)
 
@@ -77,6 +89,72 @@ def _run_claude(argv: list[str], env: dict[str, str]) -> int:
   process = subprocess.Popen(['claude', *argv], env=env)
   with _sigterm_forwarded_to(process):
     return process.wait()
+
+
+# the recorder adopts the transcript and publishes the pointer within its own
+# polling cadence, so a tighter poll here would only spin
+_TRAIL_POLL_SECONDS = 1.0
+
+
+def _announce_started(announced: threading.Event) -> None:
+  """emit `started{trail_id}` once, with the trail id the session recorder
+  published; no-op when it is not published yet or the session has no channel."""
+  trail_id = trail_pointer.read(trail_pointer.path())
+  if trail_id is None or announced.is_set():
+    return
+  channel = BroChannel.from_env()
+  if channel is not None:
+    channel.started(trail_id)
+    channel.close()
+  announced.set()
+
+
+@contextlib.contextmanager
+def _started_watch() -> Generator[threading.Event]:
+  """watch for the session recorder's current-trail pointer for the block's
+  duration and announce `started` when it lands, yielding the announced event."""
+  announced = threading.Event()
+  stop = threading.Event()
+
+  def _watch() -> None:
+    while not stop.wait(_TRAIL_POLL_SECONDS):
+      _announce_started(announced)
+      if announced.is_set():
+        return
+
+  thread = threading.Thread(target=_watch, daemon=True)
+  thread.start()
+  try:
+    yield announced
+  finally:
+    stop.set()
+    thread.join()
+
+
+def _run_claude_summoned(argv: list[str], env: dict[str, str]) -> int:
+  """the `_run_claude` of a summoned child: claude runs in print mode with its
+  stdout captured, and the runner emits the run lifecycle a bro-run child gets
+  from `BaseBro.run` — `started{trail_id}` once the session recorder publishes
+  the current-trail pointer, and `completed{result, end_reason: ok}` carrying
+  the printed reply after a clean exit. A non-zero or SIGTERMed exit emits no
+  terminal: the broker synthesizes `failed{exit, output_tail}` for the former,
+  and a `raise`-terminated session already sent its own `completed`. The
+  captured reply is echoed to stdout either way, so the child's output tail
+  still carries it."""
+  process = subprocess.Popen(['claude', *argv], env=env, stdout=subprocess.PIPE, text=True)
+  with _sigterm_forwarded_to(process) as terminated, _started_watch() as announced:
+    output, _ = process.communicate()
+  print(output, end='', flush=True)
+  if process.returncode != 0 or terminated.is_set():
+    return process.returncode
+  # a run short enough to end inside the recorder's adoption cadence announces
+  # here or not at all; the terminal must not wait on recording
+  _announce_started(announced)
+  channel = BroChannel.from_env()
+  if channel is not None:
+    channel.completed(output.rstrip('\n'), 'ok')
+    channel.close()
+  return process.returncode
 
 
 def run_in_place(spec: 'SessionSpec') -> int:
@@ -156,6 +234,10 @@ def run_in_place(spec: 'SessionSpec') -> int:
       recorder = _start_session_recorder(spec.name, tree, os.environ, llm=spec.llm_spec.dump())
       if recorder is not None:
         teardown.callback(recorder.stop)
+    # the recorder above got its copy; claude's subprocesses must not see the
+    # summoner attribution, or a nested in-place run would stamp it on its own
+    # trail (bro.summon.summoned_by_from_env owns the semantics)
+    os.environ.pop(SUMMONER_ENV, None)
 
     # gate the launch on full tool readiness: the argv build above overlapped
     # the server's own bro import, so much of the wait is already paid
@@ -172,6 +254,9 @@ def run_in_place(spec: 'SessionSpec') -> int:
     env['MCP_TOOL_TIMEOUT'] = str(10 * 60 * 1000)
     _apply_claude_auth(env, warn_when_missing=not options(spec).raw)
     log.info('launching claude')
-    code = _run_claude(launch.argv, env)
+    if os.environ.get(SUMMONED_ENV) is not None:
+      code = _run_claude_summoned(launch.argv, env)
+    else:
+      code = _run_claude(launch.argv, env)
 
   return code
