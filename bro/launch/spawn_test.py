@@ -11,6 +11,7 @@ import bro.launch.spawn
 import bro.launch.summon_control
 import bro.workspace.docker as workspace_docker
 import bro.workspace.store as workspace_store
+from bro.monitor import trail_pointer
 from bro.workspace.metadata import WorkspaceKind
 from bro.workspace.model import Workspace
 from bro.workspace.paths import broker_dir, summon_dir
@@ -277,18 +278,19 @@ class TestRunRootViaBroker:
     from bro.broker.dispatcher import Dispatcher
 
     dispatcher = Dispatcher()
+    workspace = Workspace.create('ws', tmp_path, WorkspaceKind.CONTAINER)
     control = bro.launch.summon_control.SummonControl(
       allow_list=set(),
-      workspace=Workspace.create('ws', tmp_path, WorkspaceKind.CONTAINER),
+      workspace=workspace,
       status_file=tmp_path / 'status.json',
       audit_file=tmp_path / 'audit.jsonl',
     )
-    pointer = tmp_path / 'current-trail.json'
-    bro.launch.spawn._note_root_started(control, pointer)(
+    bro.launch.spawn._note_root_started(control, workspace)(
       dispatcher, 'root', Message(type=Tag.STARTED, payload={'trail_id': 't-1'})
     )
     # the started handler doubles as the bro-run root's provenance source
     assert control._root_trail_id == 't-1'
+    pointer = trail_pointer.broker_pointer(workspace.path)
     assert json.loads(pointer.read_text()) == {'trail_id': 't-1'}
     bro.launch.spawn._log_root_completed(
       dispatcher,

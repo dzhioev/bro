@@ -17,26 +17,9 @@ from pathlib import Path
 from typing import Optional
 
 from bro.base import log
-from bro.monitor import encode_project_path, trail_pointer
+from bro.monitor import encode_project_path, workspace_claude_dir
 from bro.workspace.metadata import WorkspaceKind
 from bro.workspace.model import Workspace
-
-
-def workspace_claude_dir(workspace: Path) -> Path:
-  """the claude state under a workspace's own directory — a record of the
-  workspace like every other, which removing the workspace takes with it.
-
-  host-side in both modes: a container mounts it, and the container does not
-  outlive the state (reference/ride.md, "Container mode").
-  """
-  return workspace / 'claude'
-
-
-def session_trail_pointer(workspace: Path) -> Path:
-  """the host-side path of the session's current-trail pointer — where the
-  recorder publishes the trail id summon control attributes the session's
-  children to (`monitor/trail_pointer.py` owns the file)."""
-  return workspace_claude_dir(workspace) / trail_pointer.FILENAME
 
 
 def _latest_jsonl(projects_dir: Path) -> Optional[Path]:

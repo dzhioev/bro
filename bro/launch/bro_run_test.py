@@ -61,19 +61,3 @@ def test_describe_base_ref_rides_ride_base_ref():
 def test_describe_encodes_summoner_as_compact_json():
   launch = _describe('dev', ['hi'], summoner={'target': 'bro', 'trail_id': 'trail-123'})
   assert launch.env['RIDE_SUMMONER'] == '{"target":"bro","trail_id":"trail-123"}'
-
-
-def test_describe_no_trails_drops_secret_and_disables_recording(trails_mounts):
-  launch = _describe('dev', ['hi'], trails=False)
-  assert launch.optional_secrets == {'openai'}
-  assert launch.env['TRAILS_DISABLED'] == '1'
-  # a run that records nothing binds no trails root
-  trails_mounts.assert_not_called()
-  assert launch.extra_mounts == ()
-
-
-def test_describe_no_trails_drops_a_mapped_trails_instance():
-  scoped = ScopedSecrets(required={'github', 'trails+eu'}, optional=set(), docker_sock=False)
-  launch = _describe('dev', ['hi'], trails=False, scoped=scoped)
-  assert 'trails+eu' not in launch.secrets
-  assert launch.env['TRAILS_DISABLED'] == '1'

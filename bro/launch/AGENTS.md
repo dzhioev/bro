@@ -30,7 +30,7 @@ Every native run and every managed mode registers one flag set from `llm_flags.p
 ## Shared host machinery
 
 - `scope.py` — `ScopeRecipe`, `BRO_RUN_RECIPE`, project-bound credential selection, `scoped_secrets`, strict launch preflight, scope override splitting, and summoned-child scope computation. Managed launches and summon lowering use this layer; in-process `bro run` / `bro chat` do not create a scope.
-- `bro_run.py` — the broker-free `Launch` description for a managed or summoned native run: `bro run|chat … --in-place`, bro git identity, `RIDE_BRO`, stdio policy, and optional local-trails data.
+- `bro_run.py` — the broker-free `Launch` description for a summoned native run: `bro run|chat … --in-place`, bro git identity, `RIDE_BRO`, stdio policy, and local-trails data where the scope records locally.
 - `trails.py` — local-trails mounts for launch descriptions whose computed scope records locally.
 - `root.py` — neutral container and host-process root supervision behind the broker availability gate.
 - `spawn.py` — broker-root composition, root lifecycle handlers, native workspace trail-pointer publication, summon lowering, and per-root `SummonControl` wiring.
@@ -40,4 +40,4 @@ Every native run and every managed mode registers one flag set from `llm_flags.p
 - `broxy.py` — host-session wrapper around `broxy launch`, giving an in-place runner a session-local channel proxy with context-managed teardown.
 - `e2e_test.py` — live Docker launch coverage, outside the default test roster.
 
-A managed native container or host worktree is always launched by `ride`; a summon child is always launched by `summon`. `bro_run.describe` is shared description machinery, not a public container hop for `bro run`.
+A managed native container or host worktree is always launched by `ride`; a summon child is always launched by `summon`. `bro_run.describe` is summon description machinery, not a public container hop for `bro run`.

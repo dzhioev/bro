@@ -278,12 +278,16 @@ _DRIVER = """
 import json, os, sys
 from bro.launch.root import run_in_container
 from bro.workspace.docker import Launch
+from bro.workspace.metadata import WorkspaceKind
+from bro.workspace.model import Workspace
+from bro.workspace.paths import project_root
 
 launch = Launch(name=os.environ['RIDE_E2E_NAME'],
                 command=json.loads(os.environ['RIDE_E2E_COMMAND']), env={},
                 secrets=tuple(json.loads(os.environ.get('RIDE_E2E_SECRETS', '[]'))),
                 docker_sock=True, tty=True, forward_env=True)
-code = run_in_container(launch)
+workspace = Workspace.ensure(launch.name, project_root(), WorkspaceKind.CONTAINER)
+code = run_in_container(launch, workspace)
 loaded = sorted(m for m in sys.modules if m == 'broker' or m.startswith('bro.broker.'))
 print(f'RIDE_E2E_EXIT:{code}', flush=True)
 print('RIDE_E2E_BROKER_MODULES:' + json.dumps(loaded), flush=True)

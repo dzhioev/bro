@@ -7,9 +7,9 @@
 - `ride/cli.py` — the `ride` dispatcher. `solo` is the one-shot mode verb, `along` the interactive mode verb; `resume`, `list`, `clean`, `exec`, `check-clean`, `scope`, and `banner` are lifecycle verbs. It also owns the suppressed mode-verb inner-runner tokens.
 - `ride/ask.py`, `ride/call.py` — pure option-preserving aliases of `ride solo` and `ride along`. Their scripts live in this distribution and add no implied fast mode or other flags.
 - `ride/dive_in.py` — task utility wrapper: prefetch, task-derived workspace naming, `RIDE_TASK_ID`, fresh-origin base selection, hold defaults, and forwarding to `ride along` with the project-default bro.
-- `ride/session.py` — harness-neutral outer lifecycle: recorded `SessionSpec`, base resolution, auth/scope preflight, workspace kind and lock, resume records, launch dispatch, and keep/drop finish behavior.
-- `ride/harness.py` — the `Harness` protocol and lazy harness resolver.
-- `ride/bro.py`, `ride/bro_session.py` — native harness implementation: typed options, native recipe resolution, shared bro-run container composition, provisioned host-worktree launch, workspace trail pointer, and exact-recipe continuation.
+- `ride/session.py` — harness-neutral session lifecycle: recorded `SessionSpec`, base resolution, auth/scope preflight, workspace kind and lock, resume records, keep/drop finish behavior, and the shared launch skeleton for both modes — active-container refusal, stale-pointer clear, resume gate, the container `Launch` composition, and the provisioned host-worktree body.
+- `ride/harness.py` — the `Harness` protocol (per-harness flags, scope, auth, session reads, and the launch hooks: trail-pointer path, inner command, container extras, host runner env) and the lazy harness resolver.
+- `ride/bro.py` — native harness implementation: typed options, native recipe resolution, the `bro run|chat … --in-place` inner command with exact-recipe continuation, and the launch hooks.
 - `ride/flags.py` — common session, scope, and LLM flag registration, and the default an omitted `--hold` resolves to.
 - `ride/listing.py`, `ride/clean.py`, `ride/scope_report.py` — lifecycle implementations.
 - `ride/claude/` — the Claude Code harness implementation; see `ride/claude/AGENTS.md`.
@@ -17,7 +17,7 @@
 ## Invariants
 
 - The runtime layer names no Claude detail in its serialized harness options. `SessionSpec.harness_options` belongs to the selected implementation and is validated there.
-- The harness seam owns scope recipes, auth, LLM resolution, inner command, session-state reads, host/container launch, and the in-place runner. Generic credential computation and broker-root process supervision remain in `bro.launch` for native launch and summon reuse.
+- The neutral layer owns both launch bodies; the harness seam supplies scope recipes, auth, LLM resolution, the inner command, session-state reads, and the per-harness launch extras. The in-place runner is the Claude harness's alone — bro workspaces run `bro run|chat --in-place`. Generic credential computation and broker-root process supervision remain in `bro.launch` for native launch and summon reuse.
 - Every harness keeps its session state among the workspace's own records, so reclaiming a workspace is `Workspace.remove()` for all of them and no harness supplies a teardown of its own.
 - Claude workspaces run their checkout's `ride solo|along --in-place`; native workspaces run `bro run|chat … --in-place`. These hidden inner contracts fail loudly when a workspace tree predates them.
 - A bro resume reads the broker-published pointer beside the workspace's `resume.json` and continues that trail under the recipe recorded in the session spec. No pointer is synthesized when the broker or native trail recording is disabled.

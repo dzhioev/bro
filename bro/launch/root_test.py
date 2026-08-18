@@ -15,6 +15,10 @@ def _exit_record(tmp_path) -> str:
   return (workspace_dir(tmp_path / 'project', 'ws') / 'exit').read_text()
 
 
+def _workspace(tmp_path) -> Workspace:
+  return Workspace.ensure('ws', tmp_path / 'project', WorkspaceKind.CONTAINER)
+
+
 class _FakeProc:
   def __init__(self, returncode=0, stdout='', stderr: str | bytes = ''):
     self.returncode = returncode
@@ -25,7 +29,6 @@ class _FakeProc:
 class TestRunInContainerInjection:
   def test_prepare_then_start_sequence(self, monkeypatch, tmp_path):
     monkeypatch.setenv('BROKER_DISABLED', '1')
-    monkeypatch.setattr(bro.launch.root, 'project_root', lambda: tmp_path / 'project')
     prepared: list = []
     monkeypatch.setattr(
       bro.launch.root,
@@ -48,7 +51,7 @@ class TestRunInContainerInjection:
       tty=True,
       forward_env=True,
     )
-    assert bro.launch.root.run_in_container(launch) == 7
+    assert bro.launch.root.run_in_container(launch, _workspace(tmp_path)) == 7
     assert prepared == [(launch, tmp_path / 'project')]
     assert calls == [['docker', 'start', '-a', '-i', '--detach-keys=ctrl-z', 'cid123']]
     # the run's end is recorded on the workspace for `ride clean`
@@ -56,7 +59,6 @@ class TestRunInContainerInjection:
 
   def test_non_tty_launch_attaches_without_detach_keys(self, monkeypatch, tmp_path):
     monkeypatch.setenv('BROKER_DISABLED', '1')
-    monkeypatch.setattr(bro.launch.root, 'project_root', lambda: tmp_path / 'project')
     monkeypatch.setattr(bro.launch.root, 'prepare_container', lambda launch, project: 'cid123')
     calls: list[list[str]] = []
 
@@ -74,46 +76,15 @@ class TestRunInContainerInjection:
       tty=False,
       forward_env=False,
     )
-    assert bro.launch.root.run_in_container(launch) == 0
+    assert bro.launch.root.run_in_container(launch, _workspace(tmp_path)) == 0
     # no pty, so no Ctrl+Z to intercept — and a zero exit must not probe the container
     assert calls == [['docker', 'start', '-a', 'cid123']]
-
-
-class TestRunInContainerDrop:
-  def _run(self, monkeypatch, tmp_path, *, exit_code: int) -> list:
-    monkeypatch.setenv('BROKER_DISABLED', '1')
-    monkeypatch.setattr(bro.launch.root, 'project_root', lambda: tmp_path / 'project')
-    monkeypatch.setattr(bro.launch.root, 'prepare_container', lambda launch, project: 'cid123')
-    monkeypatch.setattr(
-      bro.launch.root.subprocess, 'run', lambda *_a, **_k: _FakeProc(returncode=exit_code)
-    )
-    removed: list = []
-    monkeypatch.setattr(Workspace, 'remove', lambda workspace: removed.append(workspace.name))
-    launch = workspace_docker.Launch(
-      name='ws',
-      command=['bro', 'run'],
-      env={},
-      secrets=(),
-      docker_sock=False,
-      tty=False,
-      forward_env=False,
-    )
-    assert bro.launch.root.run_in_container(launch, drop=True) == exit_code
-    return removed
-
-  def test_drop_removes_the_workspace_after_a_clean_exit(self, monkeypatch, tmp_path):
-    assert self._run(monkeypatch, tmp_path, exit_code=0) == ['ws']
-
-  def test_drop_keeps_the_workspace_of_a_failed_run(self, monkeypatch, tmp_path):
-    assert self._run(monkeypatch, tmp_path, exit_code=7) == []
-    assert _exit_record(tmp_path) == '7'
 
 
 class TestRunInContainerBrokerRoute:
   def test_run_in_container_routes_through_broker(self, monkeypatch, tmp_path):
     monkeypatch.delenv('BROKER_DISABLED', raising=False)
     monkeypatch.setattr(sys, 'platform', 'linux')
-    monkeypatch.setattr(bro.launch.root, 'project_root', lambda: tmp_path / 'project')
     roots: list = []
 
     def fake_root(launch, workspace, **kwargs):
@@ -130,26 +101,24 @@ class TestRunInContainerBrokerRoute:
       tty=True,
       forward_env=True,
     )
-    code = bro.launch.root.run_in_container(launch, may_summon={'dev'})
+    code = bro.launch.root.run_in_container(launch, _workspace(tmp_path), may_summon={'dev'})
     assert code == 5
     [root] = roots
     assert root['launch'] is launch
     assert root['workspace'].name == 'ws'
     assert root['workspace'].kind is WorkspaceKind.CONTAINER
     assert root['may_summon'] == {'dev'}
-    assert root['trail_pointer'] is None
 
 
 class TestRunRootViaBroker:
   def test_builds_the_attached_launch_and_delegates(self, monkeypatch, tmp_path):
     captured: dict = {}
 
-    def fake_run_root(launch, *, workspace, may_summon, credential_scope, trail_pointer):
+    def fake_run_root(launch, *, workspace, may_summon, credential_scope):
       captured['launch'] = launch
       captured['workspace'] = workspace
       captured['may_summon'] = may_summon
       captured['credential_scope'] = credential_scope
-      captured['trail_pointer'] = trail_pointer
       return 3
 
     monkeypatch.setattr(bro.launch.spawn, 'run_root_via_broker', fake_run_root)
@@ -164,9 +133,7 @@ class TestRunRootViaBroker:
       forward_env=True,
     )
     workspace = Workspace.create('ws', tmp_path / 'project', WorkspaceKind.CONTAINER)
-    code = bro.launch.root._run_root_via_broker(
-      launch, workspace, may_summon={'dev'}, trail_pointer=None
-    )
+    code = bro.launch.root._run_root_via_broker(launch, workspace, may_summon={'dev'})
     assert code == 3
     assert captured['workspace'] is workspace
     assert captured['may_summon'] == {'dev'}

@@ -2,7 +2,7 @@
 
 The broker package stays a lazy dependency: this module invokes the console script
 instead of importing broker, so a workspace based on a pre-broxy ref can still
-start without a channel. The caller owns the fail-open policy and unsets
+start without a channel. `session_broxy` owns the fail-open policy and unsets
 `BROKER_CHANNEL` when launch fails.
 """
 

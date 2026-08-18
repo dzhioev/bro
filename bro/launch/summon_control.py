@@ -269,7 +269,6 @@ class SummonControl:
     workspace: Workspace,
     status_file: Path,
     audit_file: Path,
-    trail_pointer: Optional[Path] = None,
   ):
     self._allow_list = set(allow_list)
     # the root session's own two scopes bound what its summons may grant a child
@@ -277,11 +276,6 @@ class SummonControl:
     self._workspace = workspace
     self._status_file = status_file
     self._audit_file = audit_file
-    # the root's trail attribution source: a claude session's recorder publishes
-    # its current trail id at `trail_pointer` (monitor/trail_pointer.py);
-    # a bro-run root announces its trail in the `started` lifecycle event,
-    # noted via note_root_trail
-    self._trail_pointer = trail_pointer
     self._root_trail_id: Optional[str] = None
     self._active: dict[str, _ActiveSummon] = {}  # request id -> in-flight child
     self._last: Optional[summon_status.FinishedSummon] = None
@@ -453,18 +447,20 @@ class SummonControl:
     return scoped.required | scoped.optional
 
   def _root_summoned_by(self) -> Optional[dict[str, Any]]:
-    # read per request — a claude session's recorder opens a new trail per
-    # recorder lifetime, so the pointer moves. an absent or empty pointer (the
-    # early-launch race before transcript adoption, or no recorder at all)
+    # the root's trail attribution source, per publication channel
+    # (monitor/trail_pointer.py): a claude session's recorder publishes its
+    # current trail at the workspace's claude placement — read per request,
+    # since the recorder opens a new trail per recorder lifetime and the
+    # pointer moves — while a bro-run root announces its trail in the `started`
+    # lifecycle event, noted via note_root_trail. absent both (the early-launch
+    # race before transcript adoption, or no recorder at all), provenance
     # degrades to no pointer, never a legacy-shaped one.
-    if self._trail_pointer is not None:
-      from bro.monitor.trail_pointer import read
+    from bro.monitor.trail_pointer import claude_pointer, read
 
-      trail_id = read(self._trail_pointer)
-      return {'trail_id': trail_id} if trail_id is not None else None
-    if self._root_trail_id is not None:
-      return {'trail_id': self._root_trail_id}
-    return None
+    trail_id = read(claude_pointer(self._workspace.path))
+    if trail_id is None:
+      trail_id = self._root_trail_id
+    return {'trail_id': trail_id} if trail_id is not None else None
 
   def _deny(
     self,
