@@ -25,7 +25,14 @@ from bro.broker.spawn import ChildHandle, LaunchSpec, Spawner
 from bro.broker.transport import Provisioned
 from bro.broker.transports.unix import UnixServerTransport
 from bro.monitor import trail_pointer
-from bro.summon import MAY_SUMMON_ENV, SUMMON, SUMMONED_ENV, SUMMONER_ENV, encode_may_summon
+from bro.summon import (
+  DEFAULT_HARNESS,
+  MAY_SUMMON_ENV,
+  SUMMON,
+  SUMMONED_ENV,
+  SUMMONER_ENV,
+  encode_may_summon,
+)
 from bro.workspace.docker import Launch
 from bro.workspace.git import resolve_head, resolve_ref
 from bro.workspace.metadata import WorkspaceKind
@@ -72,6 +79,7 @@ class SummonLaunchSpec(LaunchSpec):
   grant: tuple[str, ...] = ()
   revoke: tuple[str, ...] = ()
   llm: Optional[str] = None
+  harness: Optional[str] = None
 
 
 def _workspace_name(channel: str) -> str:
@@ -84,7 +92,7 @@ def _child_session_spec(launch: SummonLaunchSpec, workspace_name: str) -> Sessio
   `timeout` maps to no spec field (it is the spawner's wait timer, not part of
   the run). Recorded as the workspace's resume record and the source of the
   child's inner argv, so what `ride resume` relaunches is what ran."""
-  harness = get_harness('bro')
+  harness = get_harness(launch.harness if launch.harness is not None else DEFAULT_HARNESS)
   return SessionSpec(
     name=workspace_name,
     harness=harness.name,

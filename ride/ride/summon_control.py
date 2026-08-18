@@ -45,9 +45,9 @@ The request's `grant`/`revoke` split by kind: `@bro` values resolve here, on the
 loop, so a malformed or no-op override is denied immediately, while the unified
 values ride the spawn, where the lowering (`ride/ride/spawn.py`) applies the
 credential half against the child's own computed scope — a bad override fails
-the launch — and records the whole lists in the child's session spec. `llm` is
-child-facing: it rides the child's `bro run` argv and, through the recipe it
-resolves to, the child's computed scope.
+the launch — and records the whole lists in the child's session spec. `harness`
+and `llm` are child-facing: they select the child's driving loop and recipe,
+ride its recorded session spec and inner argv, and shape its computed scope.
 
 The same per-request attribution also names the requester's workspace (the root's
 own, a child's from its `broker-<channel>` clone), threaded into
@@ -77,10 +77,11 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from bro import summon_status
 from bro.base import credentials, log
-from bro.summon import DEFAULT_TIMEOUT
+from bro.summon import DEFAULT_HARNESS, DEFAULT_TIMEOUT
 from bro.summon_status import STATUS_ENV
 from bro.workspace.model import Workspace
 from bro.workspace.paths import CONTAINER_SUMMON_ROOT, summon_dir, workspace_tree
+from ride.harness import HARNESS_NAMES
 from ride.scope import split_scope_overrides
 
 if TYPE_CHECKING:
@@ -109,6 +110,7 @@ _PAYLOAD_KEYS = frozenset(
     'grant',
     'revoke',
     'llm',
+    'harness',
   }
 )
 # the deepest peer a summon may spawn: the root sits at depth 0, its children at
@@ -211,6 +213,9 @@ def _validate(payload: dict[str, Any]) -> Optional[str]:
       parse_llm(llm)
     except LLMSelectionError as error:
       return f"summon 'llm': {error}"
+  harness = payload.get('harness')
+  if harness is not None and harness not in HARNESS_NAMES:
+    return f"summon 'harness' must be one of {', '.join(HARNESS_NAMES)}"
   return None
 
 
@@ -226,6 +231,7 @@ class _ActiveSummon:
   grant: list[str]  # the request's scope overrides, audited as the summoner issued them
   revoke: list[str]
   llm: Optional[str]
+  harness: Optional[str]
   trail_id: Optional[str] = None
 
 
@@ -379,6 +385,7 @@ class SummonControl:
         grant=tuple(grant),
         revoke=tuple(revoke),
         llm=payload.get('llm'),
+        harness=payload.get('harness'),
       ),
       peer,
       timeout=float(timeout) if timeout is not None else DEFAULT_TIMEOUT,
@@ -394,6 +401,7 @@ class SummonControl:
       grant=list(grant),
       revoke=list(revoke),
       llm=payload.get('llm'),
+      harness=payload.get('harness'),
     )
     self._active[message.id] = record
     log.info(
@@ -446,7 +454,7 @@ class SummonControl:
     from ride.harness import get_harness
     from ride.scope import summoned_credential_scope
 
-    harness = get_harness('bro')
+    harness = get_harness(record.harness if record.harness is not None else DEFAULT_HARNESS)
     grant, _ = split_scope_overrides(record.grant)
     revoke, _ = split_scope_overrides(record.revoke)
     scoped = summoned_credential_scope(
@@ -564,6 +572,8 @@ class SummonControl:
       entry['grant'] = record.grant
     if len(record.revoke) > 0:
       entry['revoke'] = record.revoke
+    if record.harness is not None:
+      entry['harness'] = record.harness
     if outcome is not None:
       entry['outcome'] = outcome
     self._append_audit(event, entry)
