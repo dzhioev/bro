@@ -88,7 +88,7 @@ Create `bros/<name>/__init__.py` with `from bros.bro import Bro` and a `class Yo
 
 - `system_prompt = "..."` — class-level. When you `class B(A)` and both declare `system_prompt`, `__init__` concatenates A's then B's (MRO base-to-derived) so subclasses only declare their *additions*.
 - `data_sources = [YourSource()]` for read-only data connectors
-- `data_sources = [man('conditions'), man('cw')]` (`from bro.datasources.references import man`) declares reference pages one topic at a time; every page the class hierarchy declares folds into the bro's single `man` source
+- `data_sources = [man('conditions'), man('ride')]` (`from bro.datasources.references import man`) declares reference pages one topic at a time; every page the class hierarchy declares folds into the bro's single `man` source
 - `tools = [mount(project_tools.mcp.toolset)]` adds a contributing package's full toolset
 - `tools = [mount(project_tools.mcp.toolset, 'search', 'update')]` scopes the mount to specific tools (validated at declaration)
 - `tools = [when(harness == 'bro', mount(dev_mcp.toolset))]` (`from bros.dev import mcp as dev_mcp`) mounts the developer toolset (file/shell/search tools; roster in `bros/dev/mcp.py`) only on the bro harness

@@ -173,7 +173,7 @@ A second concurrent claude on one workspace would mutate the same files and shar
 
 1. creates the worktree if new — on the workspace's recorded branch (based on `--into <ref>` when given, else on the host checkout's current `HEAD` — see the shared launch flags under "Commands") plus `submodule.alternateLocation=superproject` so submodule updates reuse the superproject's modules, then initializes submodules;
 2. runs the worktree's own `setup.sh` (the uniform provisioning entry point, same as the container entrypoint — `uv sync`, then the repository hook and `git golc` installation);
-3. provisions the session's private claude state dir (`ride/ride/claude/claude_config.py` — see "Host claude-state isolation" below), materializes the scoped store into its `.bro/`, and points `CLAUDE_CONFIG_DIR` + `CREDENTIALS_REGISTRY` at them in the runner env;
+3. provisions the session's private claude state dir (`ride/ride/claude/claude_config.py` — see "Host claude-state isolation" below) and materializes the scoped store into the workspace's `credentials/` (see "Workspaces"), pointing `CLAUDE_CONFIG_DIR` + `CREDENTIALS_REGISTRY` at them in the runner env;
 4. spawns `<worktree>/.venv/bin/ride along --in-place …` with the env extended to activate the worktree's `.venv`.
 
 The flavor's auth precondition and the scoped-credential hydration run earlier, in the outer layer, so neither the workspace nor the worktree exists when they fail.
@@ -195,7 +195,6 @@ The dir is provisioned with exactly the container's session state — nothing el
 - `.claude.json` — seeded once from the same explicit config as the container's (onboarding done, marketplace auto-install marked done, auto-updates off, host account identity), with trust entries for the worktree path *and* the main repo root — claude resolves a linked worktree's trust against the repository root, so the worktree entry alone still prompts — and `installMethod` carried from the host's own config (the session runs the host claude, not the image's npm install).
 - `settings.json` — the same constructed UX-prefs config container mode writes (one `_write_session_settings`, rewritten each launch), minus the container-only bypass-permissions pre-accept — on a host worktree the `--dangerously-skip-permissions` acceptance dialog stays interactive; the repo's `.claude/settings.json` still layers on top, as in containers.
 - `plugins/` — first-run copy of the host claude install's plugins dir, the host twin of the entrypoint's `/opt/claude-plugins-seed` copy (same guard file), so the settings' pyright-lsp enable has its matching install records.
-- `.bro/` — the session's materialized scoped credential store, pointed at by `CREDENTIALS_REGISTRY` and rewritten each launch (see "Scoped credential hydration").
 - unlike container mode there is no OAuth file at all to fall back on, which is why a missing `claude_code` secret fails the full mode launch up front instead of degrading to the host's rotating credentials.
 
 ### Container mode (`ride along -w <name> <bro>` — the default)
