@@ -283,12 +283,15 @@ Handle pending feedback as one batch: address every comment that has arrived, th
 5. Run the mandatory gate (step 9).
 6. Re-fold (step 8): the branch has to be back in landing shape before it is pushed, or the approval that follows would cover commits that are not the ones landing. Write the plan over the branch as it stands now — the last fold rewrote the shas — and let a `fold` line naming no commits absorb what this round added, or name the round's commit in the fold whose unit it serves. The re-approval this costs is the point: the commits genuinely changed.
 7. Push: `git push --force-with-lease origin HEAD` — the fold rewrote the branch.
-8. Reply on the PR confirming the fix (reference the commit SHA):
-   - **Top-level PR comment**: `gh pr comment <n> --body "..."`
-   - **Reply to a specific review comment** (endpoint includes the PR number `<n>`):
-     ```bash
-     gh api -X POST repos/<owner>/<repo>/pulls/<n>/comments/<comment_id>/replies -f body="..."
-     ```
+8. Reply on the PR confirming the fix (reference the commit SHA). Never place Markdown containing backticks or `$()` directly inside a double-quoted shell argument.
+   ```bash
+   read -r -d '' body <<'EOF' || true
+   <markdown reply>
+   EOF
+   gh pr comment <n> --body "$body"
+   # or:
+   gh api -X POST repos/<owner>/<repo>/pulls/<n>/comments/<comment_id>/replies -f body="$body"
+   ```
 9. Surface the review link again (step 12's `[#<n>](<pr-url>/files)` format) — the pushed commits put the PR back into review-pending.
 
 **`review` with `state: "APPROVED"` and empty `comments`**:
