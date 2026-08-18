@@ -3,7 +3,7 @@
 
 The peer side of the summon mechanism: a `summon{target, prompt, timeout?, into?,
 hold?, grant?, revoke?, llm?}`
-request on the session channel, answered by the host-side handler (`bro/launch/summon_control.py`)
+request on the session channel, answered by the host-side handler (`ride/ride/summon_control.py`)
 with `started{trail_id}` and exactly one terminal (`completed` / `failed` /
 `reply{error}`). This module owns the request's wire contract — the type tag, the
 payload keys, the 1800s default timeout — for all its consumers: the self-contained `summon` CLI, the bro service tools (`summon` /
@@ -50,7 +50,7 @@ sent while the broxy was down) or the launch wedged, and the failure message nam
 which phase went silent — no `started` points at the session's checkout-keyed
 summon status/audit, while a lost terminal after `started` points at bro.trails.
 `summon list` (`list_summons`) reads the session's summon-status file
-(`RIDE_SUMMON_STATUS`, written host-side by `bro/launch/summon_control.py`) and reports the active
+(`RIDE_SUMMON_STATUS`, written host-side by `ride/ride/summon_control.py`) and reports the active
 summons and the last finished one, each with its request id — the rediscovery
 surface when a request id was lost with a dead client. `summon watch`
 (`watch_summons`) follows the same file instead of sampling it, printing a line
@@ -63,7 +63,7 @@ discoverable by denial.
 
 Unlike the substrate `broker` CLI, an unset `BROKER_CHANNEL` is an error, not
 inert — a summon that silently does nothing is a failure. Broker imports are
-deferred to call time so importers of the module-level constants (`bro/launch/summon_control.py`,
+deferred to call time so importers of the module-level constants (`ride/ride/summon_control.py`,
 on the pre-gate launch path) never pull the broker package in.
 """
 

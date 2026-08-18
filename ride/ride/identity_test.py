@@ -1,4 +1,4 @@
-from bro.launch.identity import bro_git_identity_env
+from ride.identity import bro_git_identity_env
 
 
 def test_identity_derives_from_the_bro_name():

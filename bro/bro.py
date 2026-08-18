@@ -688,13 +688,13 @@ class BaseBro(ABC):
   # bros this bro may summon — its static outgoing allow-list. root sessions get
   # it adjusted per session by `--grant @bro`/`--revoke @bro`; a summoned child
   # follows the bare seeds, so summons chain transitively through seeded bros
-  # under the host's depth cap (see bro/launch/summon_control.py). MRO-walked and
+  # under the host's depth cap (see ride/ride/summon_control.py). MRO-walked and
   # unioned like `extra_secrets`.
   may_summon: tuple[str, ...] = ()
   # whether the bro does docker work (building/pushing images for deploys) and so
   # needs the host docker socket. an explicit capability, inherited normally. the
   # host grants `/var/run/docker.sock` to a `--raw`/bro-run container only when this
-  # is set (claude code sessions get it unconditionally); see bro/launch/scope.py.
+  # is set (claude code sessions get it unconditionally); see ride/ride/scope.py.
   needs_docker: bool = False
   # subclasses declare their own `system_prompt = "..."` as a class attribute;
   # `__init__` walks the MRO from base to derived and concatenates each class's

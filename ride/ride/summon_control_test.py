@@ -3,8 +3,8 @@ from typing import cast
 
 import pytest
 
-import bro.launch.spawn
-import bro.launch.summon_control
+import ride.spawn
+import ride.summon_control
 from bro.broker.brotocol import Message
 from bro.broker.dispatcher import Dispatcher
 from bro.monitor import trail_pointer
@@ -22,39 +22,39 @@ def seeded_framework_bro(monkeypatch):
 
 class TestSummonAllowList:
   def test_seeds_from_the_bros_may_summon(self):
-    assert bro.launch.summon_control.summon_allow_list('bro-dev', grant=[], revoke=[]) == {'dev'}
+    assert ride.summon_control.summon_allow_list('bro-dev', grant=[], revoke=[]) == {'dev'}
 
   def test_defaults_to_empty_for_an_unseeded_bro(self):
-    assert bro.launch.summon_control.summon_allow_list('bro', grant=[], revoke=[]) == set()
+    assert ride.summon_control.summon_allow_list('bro', grant=[], revoke=[]) == set()
 
   def test_grant_adds_a_registered_bro(self):
-    assert bro.launch.summon_control.summon_allow_list('bro', grant=['dev'], revoke=[]) == {'dev'}
+    assert ride.summon_control.summon_allow_list('bro', grant=['dev'], revoke=[]) == {'dev'}
 
   def test_revoke_removes_a_seed(self):
-    assert bro.launch.summon_control.summon_allow_list('bro-dev', grant=[], revoke=['dev']) == set()
+    assert ride.summon_control.summon_allow_list('bro-dev', grant=[], revoke=['dev']) == set()
 
   def test_grant_already_allowed_raises(self):
     with pytest.raises(ValueError, match='already in the summon allow-list'):
-      bro.launch.summon_control.summon_allow_list('bro-dev', grant=['dev'], revoke=[])
+      ride.summon_control.summon_allow_list('bro-dev', grant=['dev'], revoke=[])
 
   def test_revoke_absent_raises(self):
     with pytest.raises(ValueError, match='not in the summon allow-list'):
-      bro.launch.summon_control.summon_allow_list('bro', grant=[], revoke=['dev'])
+      ride.summon_control.summon_allow_list('bro', grant=[], revoke=['dev'])
 
   def test_unregistered_grant_target_raises(self):
     # registry-validated at launch: a typo fails immediately, not as a denied
     # summon minutes later
     with pytest.raises(ValueError, match='unknown summon target'):
-      bro.launch.summon_control.summon_allow_list('bro', grant=['devoop'], revoke=[])
+      ride.summon_control.summon_allow_list('bro', grant=['devoop'], revoke=[])
 
   def test_unregistered_revoke_target_raises(self):
     with pytest.raises(ValueError, match='unknown summon target'):
-      bro.launch.summon_control.summon_allow_list('bro-dev', grant=[], revoke=['devop'])
+      ride.summon_control.summon_allow_list('bro-dev', grant=[], revoke=['devop'])
 
   def test_unknown_bro_degrades_to_empty_seeds_with_a_warning(self, caplog):
     # mirrors credential scoping: an ambient RIDE_BRO this checkout doesn't know
     # must not break the launch; explicit grants still apply on top
-    result = bro.launch.summon_control.summon_allow_list('no-such-bro', grant=['dev'], revoke=[])
+    result = ride.summon_control.summon_allow_list('no-such-bro', grant=['dev'], revoke=[])
     assert result == {'dev'}
     assert any('could not resolve bro' in record.message for record in caplog.records)
 
@@ -88,8 +88,8 @@ def _workspace(tmp_path, name='ws') -> Workspace:
 
 def _control(
   tmp_path, allow_list, session='ws', credential_scope=()
-) -> bro.launch.summon_control.SummonControl:
-  return bro.launch.summon_control.SummonControl(
+) -> ride.summon_control.SummonControl:
+  return ride.summon_control.SummonControl(
     allow_list=allow_list,
     credential_scope=credential_scope,
     workspace=_workspace(tmp_path, session),
@@ -134,7 +134,7 @@ class TestSummonHandler:
     control.handle(context, ROOT, message)
     assert context.replies == []
     [(launch, peer, timeout)] = context.spawned
-    assert launch == bro.launch.spawn.SummonLaunchSpec(
+    assert launch == ride.spawn.SummonLaunchSpec(
       target='dev',
       prompt='deploy the thing',
       # the root's base-ref inheritance source: the bare session key names a host
@@ -281,7 +281,7 @@ class TestSummonHandler:
     control.handle(cast(Dispatcher, context), CHILD, child_request)
     assert context.replies == []
     launch, peer, _ = context.spawned[-1]
-    assert launch == bro.launch.spawn.SummonLaunchSpec(
+    assert launch == ride.spawn.SummonLaunchSpec(
       target='dev',
       prompt='deploy the thing',
       # a child summoner's base-ref inheritance source: its broker-<channel> clone

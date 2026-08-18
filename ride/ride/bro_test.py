@@ -5,12 +5,12 @@ import pytest
 
 import ride.bro as bro_harness
 import ride.session as ride_session
-from bro.launch.identity import bro_git_identity_env
 from bro.llm.llms.openai import LLMSpec
 from bro.monitor import trail_pointer
 from bro.workspace.metadata import WorkspaceKind
 from bro.workspace.model import Workspace
 from bro.workspace.store import ScopedSecrets
+from ride.identity import bro_git_identity_env
 from ride.session import ScopedLaunch, SessionSpec
 
 

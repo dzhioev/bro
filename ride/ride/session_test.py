@@ -5,17 +5,17 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import bro.launch.scope
-import bro.launch.spawn
-import bro.launch.summon_control
 import bro.summon
 import bro.workspace.project as workspace_project
 import ride.claude.harness as claude_harness
+import ride.scope
 import ride.session as ride_session
+import ride.spawn
+import ride.summon_control
 from bro.base import credentials
-from bro.launch.scope import ScopedSecrets
 from bro.workspace.metadata import WorkspaceKind
 from bro.workspace.model import Workspace
+from ride.scope import ScopedSecrets
 
 
 def _spec(
@@ -119,12 +119,12 @@ class _ContainerHarness:
         return_value=ScopedSecrets(set(self.secrets), set(self.optional_secrets), True),
       ),
       patch('ride.claude.harness.credentials.try_get', return_value='tok'),
-      patch('bro.launch.scope.credentials.build_scoped_store', return_value={}),
+      patch('ride.scope.credentials.build_scoped_store', return_value={}),
       patch('ride.claude.harness.container_claude_state', return_value=([], {})),
       patch('bro.workspace.model.ContainerWorkspace.remove'),
       patch('ride.session._print_resume_hint'),
       # keep the bro-registry import out; threading is asserted per-test
-      patch('bro.launch.summon_control.summon_allow_list', return_value=set()),
+      patch('ride.summon_control.summon_allow_list', return_value=set()),
       patch('ride.claude.harness._load_anthropic_key', return_value={'api_key': 'k'}),
       patch('ride.session.local_trails_mounts', return_value=()),
     ]
@@ -736,10 +736,8 @@ class TestConcurrentSessionGuard:
     monkeypatch.setattr(
       ride_session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set(), True)
     )
-    monkeypatch.setattr(
-      bro.launch.scope.credentials, 'build_scoped_store', lambda names, optional=(): {}
-    )
-    monkeypatch.setattr(bro.launch.summon_control, 'summon_allow_list', lambda *_a, **_k: set())
+    monkeypatch.setattr(ride.scope.credentials, 'build_scoped_store', lambda names, optional=(): {})
+    monkeypatch.setattr(ride.summon_control, 'summon_allow_list', lambda *_a, **_k: set())
     # the shared active-container refusal probes docker ahead of the launch body
     monkeypatch.setattr(ride_session, 'find_container_id', lambda tree: None)
 
@@ -811,21 +809,19 @@ class TestHostSession:
     monkeypatch.setattr(
       ride_session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets({'github'}, set(), True)
     )
-    monkeypatch.setattr(
-      bro.launch.scope.credentials, 'build_scoped_store', lambda names, optional=(): {}
-    )
+    monkeypatch.setattr(ride.scope.credentials, 'build_scoped_store', lambda names, optional=(): {})
     monkeypatch.setattr(
       ride_session,
       'materialize_scoped_store',
       lambda store, directory: directory / 'credentials.json',
     )
-    monkeypatch.setattr(bro.launch.summon_control, 'summon_allow_list', lambda *_a, **_k: set())
+    monkeypatch.setattr(ride.summon_control, 'summon_allow_list', lambda *_a, **_k: set())
     return workspace, ride_binary, worktree
 
   def test_broker_supervises_the_worktrees_own_in_place_runner(self, monkeypatch, tmp_path):
     workspace, ride_binary, worktree = self._prepare_launch(monkeypatch, tmp_path)
     monkeypatch.setattr(ride_session, 'broker_enabled', lambda: True)
-    monkeypatch.setattr(bro.launch.summon_control, 'summon_allow_list', lambda *_a, **_k: {'dev'})
+    monkeypatch.setattr(ride.summon_control, 'summon_allow_list', lambda *_a, **_k: {'dev'})
     roots: list = []
 
     def fake_root(
@@ -872,7 +868,7 @@ class TestHostSession:
       captured['env'] = launch.env
       return 0
 
-    monkeypatch.setattr(bro.launch.spawn, 'run_root_via_broker', fake_run_root)
+    monkeypatch.setattr(ride.spawn, 'run_root_via_broker', fake_run_root)
     assert (
       ride_session.run_host_process_via_broker(
         workspace, ['ride'], {}, {'dev', 'bro'}, set(), interactive=False
@@ -880,7 +876,7 @@ class TestHostSession:
       == 0
     )
     assert captured['env'][bro.summon.MAY_SUMMON_ENV] == 'bro,dev'
-    assert captured['env'][bro.launch.summon_control.STATUS_ENV].endswith('w.status.json')
+    assert captured['env'][ride.summon_control.STATUS_ENV].endswith('w.status.json')
     assert not captured['launch'].interactive
 
   def test_bad_summon_flag_fails_before_the_workspace_is_recorded(self, monkeypatch, tmp_path):
@@ -889,7 +885,7 @@ class TestHostSession:
     def bad_allow_list(*_a, **_k):
       raise ValueError('unknown summon target(s): devoop')
 
-    monkeypatch.setattr(bro.launch.summon_control, 'summon_allow_list', bad_allow_list)
+    monkeypatch.setattr(ride.summon_control, 'summon_allow_list', bad_allow_list)
 
     def boom(*_a, **_k):
       raise AssertionError('must not launch when the summon grant is bad')
@@ -1039,7 +1035,7 @@ class TestHostSession:
       hydrated.update(names=set(names), optional=set(optional))
       return {}
 
-    monkeypatch.setattr(bro.launch.scope.credentials, 'build_scoped_store', fake_build)
+    monkeypatch.setattr(ride.scope.credentials, 'build_scoped_store', fake_build)
     monkeypatch.setattr(
       ride_session.subprocess, 'run', lambda *_a, **_k: SimpleNamespace(returncode=0)
     )
@@ -1059,7 +1055,7 @@ class TestHostSession:
     def missing(names, optional=()):
       raise credentials.SecretNotFound('github')
 
-    monkeypatch.setattr(bro.launch.scope.credentials, 'build_scoped_store', missing)
+    monkeypatch.setattr(ride.scope.credentials, 'build_scoped_store', missing)
 
     def boom(*_a, **_k):
       raise AssertionError('must not launch when hydration fails')
@@ -1084,10 +1080,8 @@ class TestHostSession:
     monkeypatch.setattr(
       ride_session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set(), True)
     )
-    monkeypatch.setattr(
-      bro.launch.scope.credentials, 'build_scoped_store', lambda names, optional=(): {}
-    )
-    monkeypatch.setattr(bro.launch.summon_control, 'summon_allow_list', lambda *_a, **_k: set())
+    monkeypatch.setattr(ride.scope.credentials, 'build_scoped_store', lambda names, optional=(): {})
+    monkeypatch.setattr(ride.summon_control, 'summon_allow_list', lambda *_a, **_k: set())
 
     def boom(*_a, **_k):
       raise AssertionError('must not spawn without the inner ride')
@@ -1139,14 +1133,12 @@ class TestHostBrokerPingRoundTrip:
     monkeypatch.setattr(ride_session.os, 'chdir', lambda p: None)
     monkeypatch.setattr(ride_session, 'ensure_host_worktree', lambda *_a: True)
     monkeypatch.setattr(ride_session, 'provision_host_worktree', lambda *_a: True)
-    monkeypatch.setattr(bro.launch.summon_control, 'summon_allow_list', lambda *_a, **_k: set())
+    monkeypatch.setattr(ride.summon_control, 'summon_allow_list', lambda *_a, **_k: set())
     monkeypatch.setattr(credentials, 'try_get', lambda name: 'tok')
     monkeypatch.setattr(
       ride_session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set(), True)
     )
-    monkeypatch.setattr(
-      bro.launch.scope.credentials, 'build_scoped_store', lambda names, optional=(): {}
-    )
+    monkeypatch.setattr(ride.scope.credentials, 'build_scoped_store', lambda names, optional=(): {})
     monkeypatch.delenv('BROKER_DISABLED', raising=False)
     assert (
       ride_session._launch_session(

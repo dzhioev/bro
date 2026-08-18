@@ -20,7 +20,7 @@ drives both, and `--no-benchmark` skips that whole stage. Build the wheel with `
 directory rather than `uv build --package`.
 
 The `*_e2e_test.py` modules stay out of the gate's roster: they build a bundle and drive the host
-docker daemon, the way `bro/launch/e2e_test.py` does, and the harbor one spends real tokens. Run
+docker daemon, the way `ride/ride/e2e_test.py` does, and the harbor one spends real tokens. Run
 them explicitly, from `.venv`:
 
 ```

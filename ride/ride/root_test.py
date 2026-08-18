@@ -1,11 +1,11 @@
 import sys
 
-import bro.launch.root
-import bro.launch.spawn
-import bro.launch.summon_control
 import bro.summon
 import bro.workspace.docker as workspace_docker
 import bro.workspace.spawn as workspace_spawn
+import ride.root
+import ride.spawn
+import ride.summon_control
 from bro.workspace.metadata import WorkspaceKind
 from bro.workspace.model import Workspace
 from bro.workspace.paths import CONTAINER_SUMMON_ROOT, summon_dir, workspace_dir
@@ -31,7 +31,7 @@ class TestRunInContainerInjection:
     monkeypatch.setenv('BROKER_DISABLED', '1')
     prepared: list = []
     monkeypatch.setattr(
-      bro.launch.root,
+      ride.root,
       'prepare_container',
       lambda launch, project: prepared.append((launch, project)) or 'cid123',
     )
@@ -41,7 +41,7 @@ class TestRunInContainerInjection:
       calls.append(argv)
       return _FakeProc(returncode=7)
 
-    monkeypatch.setattr(bro.launch.root.subprocess, 'run', fake_run)
+    monkeypatch.setattr(ride.root.subprocess, 'run', fake_run)
     launch = workspace_docker.Launch(
       name='ws',
       command=['claude'],
@@ -51,7 +51,7 @@ class TestRunInContainerInjection:
       tty=True,
       forward_env=True,
     )
-    assert bro.launch.root.run_in_container(launch, _workspace(tmp_path)) == 7
+    assert ride.root.run_in_container(launch, _workspace(tmp_path)) == 7
     assert prepared == [(launch, tmp_path / 'project')]
     assert calls == [['docker', 'start', '-a', '-i', '--detach-keys=ctrl-z', 'cid123']]
     # the run's end is recorded on the workspace for `ride clean`
@@ -59,14 +59,14 @@ class TestRunInContainerInjection:
 
   def test_non_tty_launch_attaches_without_detach_keys(self, monkeypatch, tmp_path):
     monkeypatch.setenv('BROKER_DISABLED', '1')
-    monkeypatch.setattr(bro.launch.root, 'prepare_container', lambda launch, project: 'cid123')
+    monkeypatch.setattr(ride.root, 'prepare_container', lambda launch, project: 'cid123')
     calls: list[list[str]] = []
 
     def fake_run(argv, *args, **kwargs):
       calls.append(argv)
       return _FakeProc(returncode=0)
 
-    monkeypatch.setattr(bro.launch.root.subprocess, 'run', fake_run)
+    monkeypatch.setattr(ride.root.subprocess, 'run', fake_run)
     launch = workspace_docker.Launch(
       name='ws',
       command=['bro', 'run'],
@@ -76,7 +76,7 @@ class TestRunInContainerInjection:
       tty=False,
       forward_env=False,
     )
-    assert bro.launch.root.run_in_container(launch, _workspace(tmp_path)) == 0
+    assert ride.root.run_in_container(launch, _workspace(tmp_path)) == 0
     # no pty, so no Ctrl+Z to intercept — and a zero exit must not probe the container
     assert calls == [['docker', 'start', '-a', 'cid123']]
 
@@ -91,7 +91,7 @@ class TestRunInContainerBrokerRoute:
       roots.append({'launch': launch, 'workspace': workspace, **kwargs})
       return 5
 
-    monkeypatch.setattr(bro.launch.root, '_run_root_via_broker', fake_root)
+    monkeypatch.setattr(ride.root, '_run_root_via_broker', fake_root)
     launch = workspace_docker.Launch(
       name='ws',
       command=['claude'],
@@ -101,7 +101,7 @@ class TestRunInContainerBrokerRoute:
       tty=True,
       forward_env=True,
     )
-    code = bro.launch.root.run_in_container(launch, _workspace(tmp_path), may_summon={'dev'})
+    code = ride.root.run_in_container(launch, _workspace(tmp_path), may_summon={'dev'})
     assert code == 5
     [root] = roots
     assert root['launch'] is launch
@@ -121,7 +121,7 @@ class TestRunRootViaBroker:
       captured['credential_scope'] = credential_scope
       return 3
 
-    monkeypatch.setattr(bro.launch.spawn, 'run_root_via_broker', fake_run_root)
+    monkeypatch.setattr(ride.spawn, 'run_root_via_broker', fake_run_root)
     launch = workspace_docker.Launch(
       name='ws',
       command=['claude', '--verbose'],
@@ -133,7 +133,7 @@ class TestRunRootViaBroker:
       forward_env=True,
     )
     workspace = Workspace.create('ws', tmp_path / 'project', WorkspaceKind.CONTAINER)
-    code = bro.launch.root._run_root_via_broker(launch, workspace, may_summon={'dev'})
+    code = ride.root._run_root_via_broker(launch, workspace, may_summon={'dev'})
     assert code == 3
     assert captured['workspace'] is workspace
     assert captured['may_summon'] == {'dev'}
@@ -143,7 +143,7 @@ class TestRunRootViaBroker:
         command=['claude', '--verbose'],
         env={
           'RIDE_BASE_REF': 'deadbeef',
-          bro.launch.summon_control.STATUS_ENV: str(CONTAINER_SUMMON_ROOT / 'ws.status.json'),
+          ride.summon_control.STATUS_ENV: str(CONTAINER_SUMMON_ROOT / 'ws.status.json'),
           bro.summon.MAY_SUMMON_ENV: 'dev',
         },
         secrets=('github',),

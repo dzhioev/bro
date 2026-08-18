@@ -19,7 +19,6 @@ from typing import TYPE_CHECKING
 from bro.base import log
 from bro.launch.broxy import session_broxy
 from bro.launch.hold import HOLD_VARIABLE
-from bro.launch.identity import bro_git_identity_env
 from bro.monitor import claude_projects_dir
 from bro.workspace.git import git_out
 from bro.workspace.paths import in_container, project_root, workspace_dir
@@ -34,6 +33,7 @@ from ride.claude.session_context import (
   build_session_context,
   encode_session_context,
 )
+from ride.identity import bro_git_identity_env
 
 if TYPE_CHECKING:
   from ride.session import SessionSpec

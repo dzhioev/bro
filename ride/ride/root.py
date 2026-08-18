@@ -18,11 +18,11 @@ def _run_root_via_broker(
   # imported here, not at module level: container_broker_enabled() must be able to
   # short-circuit a launch before anything touches the broker package (see its
   # docstring).
-  from bro.launch.spawn import run_root_via_broker
-  from bro.launch.summon_control import STATUS_ENV, container_status_path, summon_status_file
   from bro.summon import MAY_SUMMON_ENV, encode_may_summon
   from bro.workspace.paths import CONTAINER_SUMMON_ROOT
   from bro.workspace.spawn import DockerLaunchSpec
+  from ride.spawn import run_root_via_broker
+  from ride.summon_control import STATUS_ENV, container_status_path, summon_status_file
 
   status_file = summon_status_file(workspace.project, workspace.name)
   status_file.parent.mkdir(parents=True, exist_ok=True)
@@ -52,10 +52,10 @@ def run_host_process_via_broker(
   interactive: bool,
 ) -> int:
   """run a host-worktree process as the broker's supervised session root."""
-  from bro.launch.spawn import run_root_via_broker
-  from bro.launch.summon_control import STATUS_ENV, summon_status_file
   from bro.summon import MAY_SUMMON_ENV, encode_may_summon
   from bro.workspace.spawn import ProcessLaunchSpec
+  from ride.spawn import run_root_via_broker
+  from ride.summon_control import STATUS_ENV, summon_status_file
 
   launch_env = dict(env)
   launch_env[STATUS_ENV] = str(summon_status_file(workspace.project, workspace.name))

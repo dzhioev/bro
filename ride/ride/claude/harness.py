@@ -3,7 +3,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from bro.base import credentials, log
-from bro.launch.scope import ScopeRecipe
 from bro.llm.llms.claude_code import LLMSpec
 from bro.llm.providers import LLMSelection, parse
 from bro.monitor import trail_pointer
@@ -18,6 +17,7 @@ from ride.claude.claude_config import (
   workspace_projects_dir,
 )
 from ride.harness import ContainerExtras
+from ride.scope import ScopeRecipe
 
 if TYPE_CHECKING:
   from bro.base.args import Parser

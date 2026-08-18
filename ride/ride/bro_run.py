@@ -13,11 +13,11 @@ import json
 from collections.abc import Sequence
 from typing import Any, Literal, Optional
 
-from bro.launch.identity import bro_git_identity_env
-from bro.launch.trails import local_trails_mounts
 from bro.summon import SUMMONER_ENV
 from bro.workspace.docker import Launch
 from bro.workspace.store import ScopedSecrets
+from ride.identity import bro_git_identity_env
+from ride.trails import local_trails_mounts
 
 
 def describe(

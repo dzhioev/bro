@@ -8,9 +8,6 @@ from typing import Optional
 
 from bro.base import credentials, log
 from bro.launch.broxy import START_SESSION_BROXY_ENV
-from bro.launch.root import run_host_process_via_broker, run_in_container
-from bro.launch.scope import LaunchScopeError, preflight_scoped_launch, scoped_secrets
-from bro.launch.trails import local_trails_mounts
 from bro.llm.llm import LLMSpec
 from bro.monitor import trail_pointer
 from bro.workspace.containers import broker_enabled
@@ -23,6 +20,9 @@ from bro.workspace.store import ScopedSecrets, log_scoped_secrets, materialize_s
 from bro.workspace.worktrees import ensure_host_worktree, provision_host_worktree
 from ride.flags import default_hold
 from ride.harness import Harness, get_harness
+from ride.root import run_host_process_via_broker, run_in_container
+from ride.scope import LaunchScopeError, preflight_scoped_launch, scoped_secrets
+from ride.trails import local_trails_mounts
 
 
 @dataclass(frozen=True)
