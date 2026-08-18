@@ -179,6 +179,15 @@ class TestSummonHandler:
     [(launch, _, _)] = context.spawned
     assert launch.llm == 'openai:sol:high+fast'
 
+  def test_the_harness_forwards_into_the_spawn_and_the_audit(self, tmp_path):
+    control = _control(tmp_path, {'dev'})
+    context = FakeContext()
+    control.handle(cast(Dispatcher, context), ROOT, _summon_message(harness='claude'))
+    [(launch, _, _)] = context.spawned
+    assert launch.harness == 'claude'
+    [spawn_record] = _audit(tmp_path)
+    assert spawn_record['harness'] == 'claude'
+
   def test_credential_overrides_ride_the_spawn_and_land_in_the_audit(self, tmp_path):
     # the unified values ride the spawn (the lowering splits them); only the
     # `@bro` half resolves here
@@ -263,6 +272,25 @@ class TestSummonHandler:
     )
     assert [launch.target for launch, _, _ in context.spawned] == ['bro-dev', 'dev']
     assert calls == [('bro-dev', ride.bro.BRO.resolve_llm('echo', 'bro-dev'))]
+
+  def test_a_claude_childs_grant_bound_follows_its_harness(self, tmp_path, monkeypatch):
+    calls: list = []
+
+    def capture_scope(target, recipe, *, grant, revoke, llm_spec=None):
+      calls.append((target, recipe.name, llm_spec.TYPE if llm_spec is not None else None))
+      return ScopedSecrets(required={'github'}, optional=set(), docker_sock=False)
+
+    monkeypatch.setattr(ride.scope, 'summoned_credential_scope', capture_scope)
+    control = _control(tmp_path, {'bro-dev'})
+    context = FakeContext()
+    message = _summon_message(target='bro-dev', harness='claude')
+    control.handle(cast(Dispatcher, context), ROOT, message)
+    context.origin[CHILD] = (ROOT, message.id)
+    control.handle(
+      cast(Dispatcher, context), CHILD, _summon_message(target='dev', grant=['github'])
+    )
+    assert [launch.target for launch, _, _ in context.spawned] == ['bro-dev', 'dev']
+    assert calls == [('bro-dev', 'claude-full', 'claude-code')]
 
   def test_no_op_bro_override_is_denied(self, tmp_path):
     # bro-dev already seeds dev: the strictness of the launcher flags holds
@@ -468,6 +496,8 @@ class TestSummonHandler:
       {'target': 'dev', 'prompt': 'p', 'llm': '::ludicrous'},
       {'target': 'dev', 'prompt': 'p', 'llm': 'nosuchprovider'},
       {'target': 'dev', 'prompt': 'p', 'llm': 7},
+      {'target': 'dev', 'prompt': 'p', 'harness': 'zsh'},
+      {'target': 'dev', 'prompt': 'p', 'harness': 7},
     ],
   )
   def test_malformed_payload_is_denied(self, control, payload):

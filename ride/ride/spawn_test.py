@@ -21,27 +21,28 @@ PARENT_WORKSPACE = Path('/var/ride/0123456789abcdef/workspaces/parent/tree')
 SUMMONER = {'session': 'ws'}
 
 
-class TestSummonLowering:
-  @pytest.fixture
-  def lowering_harness(self, monkeypatch, tmp_path):
-    monkeypatch.setattr(ride.spawn, 'project_root', lambda: tmp_path / 'proj')
-    monkeypatch.setattr(
-      ride.scope,
-      'scoped_secrets',
-      lambda name, surface, llm_spec=None: workspace_store.ScopedSecrets(
-        required={'aws', 'trails'}, optional={'openai'}, docker_sock=True
-      ),
-    )
-    monkeypatch.setattr(ride.spawn, 'local_trails_mounts', lambda scoped: ())
-    monkeypatch.setattr(
-      ride.spawn,
-      'resolve_head',
-      lambda root, repository: 'PARENT-SHA' if repository == PARENT_WORKSPACE else None,
-    )
-    monkeypatch.setattr(
-      ride.spawn, 'resolve_ref', lambda root, ref: 'REF-SHA' if ref == 'summon' else None
-    )
+@pytest.fixture
+def lowering_harness(monkeypatch, tmp_path):
+  monkeypatch.setattr(ride.spawn, 'project_root', lambda: tmp_path / 'proj')
+  monkeypatch.setattr(
+    ride.scope,
+    'scoped_secrets',
+    lambda name, surface, llm_spec=None: workspace_store.ScopedSecrets(
+      required={'aws', 'trails'}, optional={'openai'}, docker_sock=True
+    ),
+  )
+  monkeypatch.setattr(ride.spawn, 'local_trails_mounts', lambda scoped: ())
+  monkeypatch.setattr(
+    ride.spawn,
+    'resolve_head',
+    lambda root, repository: 'PARENT-SHA' if repository == PARENT_WORKSPACE else None,
+  )
+  monkeypatch.setattr(
+    ride.spawn, 'resolve_ref', lambda root, ref: 'REF-SHA' if ref == 'summon' else None
+  )
 
+
+class TestSummonLowering:
   def test_lowers_to_the_bro_run_docker_launch(self, lowering_harness):
     launch = ride.spawn.SummonLaunchSpec(
       target='dev',
@@ -313,6 +314,103 @@ class TestSummonLowering:
     # into the correlated failed{reason: 'launch'}
     with pytest.raises(ValueError, match='nope'):
       await spawner.spawn(launch, channel)
+
+
+class TestClaudeSummonLowering:
+  @pytest.fixture
+  def claude_harness(self, lowering_harness, monkeypatch):
+    from ride.claude.harness import CLAUDE
+
+    monkeypatch.setattr(CLAUDE, 'preflight_auth', lambda spec: None)
+    monkeypatch.setattr(
+      CLAUDE,
+      'container_extras',
+      lambda spec, workspace, scoped: ride.spawn.ContainerExtras(
+        env={'CLAUDE_CONFIG_DIR': '/home/ride/.claude'},
+        mounts=('/host/claude:/home/ride/.claude',),
+      ),
+    )
+
+  def _launch(self, **overrides) -> ride.spawn.SummonLaunchSpec:
+    fields: dict = {
+      'target': 'dev',
+      'prompt': 'deploy the thing',
+      'parent_workspace': PARENT_WORKSPACE,
+      'summoner': SUMMONER,
+      'may_summon': (),
+      'harness': 'claude',
+      **overrides,
+    }
+    return ride.spawn.SummonLaunchSpec(**fields)
+
+  def test_lowers_to_a_ride_solo_claude_launch(self, claude_harness):
+    lowered = ride.spawn._lower_summon(self._launch(), 'broker-CH')
+    assert lowered.launch.command == [
+      'ride', 'solo', '--in-place', '--workspace', 'broker-CH', '--harness', 'claude',
+      '--hold', 'unattended', 'dev', 'deploy the thing',
+    ]  # fmt: skip
+    assert lowered.launch.env == {
+      'CLAUDE_CONFIG_DIR': '/home/ride/.claude',
+      'RIDE_BASE_REF': 'PARENT-SHA',
+      'RIDE_BRO': 'dev',
+      'RIDE_COMMAND': 'ride solo --hold unattended --harness claude dev deploy the thing',
+      'RIDE_MAY_SUMMON': '',
+      'RIDE_SUMMONED': '1',
+      'RIDE_SUMMONER': '{"session":"ws"}',
+    }
+    assert lowered.launch.extra_mounts == ('/host/claude:/home/ride/.claude',)
+    assert lowered.launch.tty is False
+    assert lowered.launch.forward_env is False
+
+  def test_records_the_claude_resume_spec(self, claude_harness, tmp_path):
+    from bro.llm.llms.claude_code import LLMSpec as ClaudeCodeSpec
+
+    ride.spawn._lower_summon(self._launch(llm=':fable5'), 'broker-CH')
+    workspace = Workspace.open('broker-CH', tmp_path / 'proj')
+    spec = ride.session.load_resume_spec(workspace)
+    assert spec is not None
+    assert spec.harness == 'claude'
+    assert spec.harness_options == {'raw': False}
+    assert spec.resolved_llm == ClaudeCodeSpec(model='claude-fable-5').dump()
+
+  def test_scope_follows_the_claude_recipe(self, claude_harness, monkeypatch):
+    captured: list = []
+
+    def capture_scope(name, recipe, llm_spec=None):
+      captured.append(recipe.name)
+      return workspace_store.ScopedSecrets(required=set(), optional=set(), docker_sock=True)
+
+    monkeypatch.setattr(ride.scope, 'scoped_secrets', capture_scope)
+    ride.spawn._lower_summon(self._launch(), 'broker-CH')
+    assert captured == ['claude-full']
+
+  def test_auth_preflight_failure_fails_the_spawn_before_the_workspace(
+    self, lowering_harness, monkeypatch, tmp_path
+  ):
+    from ride.claude.harness import CLAUDE
+
+    monkeypatch.setattr(CLAUDE, 'preflight_auth', lambda spec: 'claude_code secret not resolvable')
+    with pytest.raises(ValueError, match='claude_code secret not resolvable'):
+      ride.spawn._lower_summon(self._launch(), 'broker-CH')
+    with pytest.raises(ValueError, match='broker-CH'):
+      Workspace.open('broker-CH', tmp_path / 'proj')
+
+  def test_a_native_recipe_fails_the_claude_spawn(self, claude_harness, tmp_path):
+    from bro.llm.providers import LLMSelectionError
+
+    with pytest.raises(LLMSelectionError, match='runs Claude Code, not openai'):
+      ride.spawn._lower_summon(self._launch(llm='openai:sol'), 'broker-CH')
+    with pytest.raises(ValueError, match='broker-CH'):
+      Workspace.open('broker-CH', tmp_path / 'proj')
+
+  def test_a_claude_recipe_rides_the_inner_argv(self, claude_harness):
+    lowered = ride.spawn._lower_summon(self._launch(llm=':fable5:high'), 'broker-CH')
+    command = lowered.launch.command
+    assert command[command.index('--llm') + 1] == ':fable5:high'
+
+  def test_an_explicit_bro_harness_matches_the_default_lowering(self, lowering_harness):
+    explicit = ride.spawn._lower_summon(self._launch(harness='bro'), 'broker-CH')
+    assert explicit.launch.command[:2] == ['bro', 'run']
 
 
 class TestChildTrailPublication:

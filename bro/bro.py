@@ -216,10 +216,13 @@ _SUMMON_DESCRIPTION = (
   "`into` bases the child on a git ref instead of your workspace's "
   'current HEAD (uncommitted changes never transfer); optional `hold` sets the '
   "child's user-involvement level (default unattended). the child's run is shaped "
-  'by the optional `llm` — the LLM recipe it runs, written `provider:model:effort` '
+  "by the optional `harness` — the driving loop it runs under: `bro` (default — the target's "
+  'own LLM process) or `claude` (a one-shot managed Claude Code session) — and the optional '
+  '`llm` — the LLM recipe it runs within that harness, written `provider:model:effort` '
   'with an optional `+fast` suffix and any field left empty '
   f"(effort is one of {', '.join(EFFORT_LEVELS)}; `::high` keeps the target's own "
-  'provider and model, `:opus5` names a model) — and its scope by '
+  'provider and model, `:opus5` names a model; a recipe the harness cannot run fails the '
+  'spawn rather than switching the harness). its scope is shaped by '
   'the optional `grant` / `revoke` lists — each entry a credential name, or `@bro` '
   "for a summonable target of the child's own. a credential grant replaces the "
   "child's selected same-kind name. you can only grant what you hold yourself (a "
@@ -322,6 +325,7 @@ def _summon_tool(
     grant: Optional[list[str]] = None,
     revoke: Optional[list[str]] = None,
     llm: Optional[str] = None,
+    harness: Optional[str] = None,
   ) -> str:
     source = current_tool_step_id()
     step_id = source['step_id'] if source is not None else None
@@ -337,6 +341,7 @@ def _summon_tool(
         grant=grant,
         revoke=revoke,
         llm=llm,
+        harness=harness,
         step_id=step_id,
         index=index,
       )
@@ -352,6 +357,7 @@ def _summon_tool(
         grant=grant,
         revoke=revoke,
         llm=llm,
+        harness=harness,
         step_id=step_id,
         index=index,
         client=client,

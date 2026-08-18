@@ -2,7 +2,7 @@
 """summon — request another bro on the session's broker channel and get its answer.
 
 The peer side of the summon mechanism: a `summon{target, prompt, timeout?, into?,
-hold?, grant?, revoke?, llm?}`
+hold?, grant?, revoke?, llm?, harness?}`
 request on the session channel, answered by the host-side handler (`ride/ride/summon_control.py`)
 with `started{trail_id}` and exactly one terminal (`completed` / `failed` /
 `reply{error}`). This module owns the request's wire contract — the type tag, the
@@ -14,7 +14,11 @@ payload keys, the 1800s default timeout — for all its consumers: the self-cont
 `grant` / `revoke` are lists of scope overrides for the child, each value a
 credential name or `@bro` for a summon target of its own; the host bounds a grant
 by the sender's own scope, so a name it does not hold itself comes back denied.
-`llm` is the canonical `provider:model:effort+fast` recipe the child runs (`bro.llm.providers`).
+`harness` names the driving loop the child runs under — `bro` (the default: the
+target's own LLM process) or `claude` (a one-shot managed Claude Code session) —
+and `llm` is the canonical `provider:model:effort+fast` recipe the child runs
+within it (`bro.llm.providers`); a recipe the named harness cannot run fails the
+spawn rather than switching the harness.
 
 Blocking mode sends, prints the request id and the `started` trail id to stderr,
 and relays the terminal: the answer on stdout (exit 0), everything else as a
@@ -102,6 +106,8 @@ SUMMONED_ENV = 'RIDE_SUMMONED'
 # carries a run's own effective summon allow-list into it, written by the surface
 # that launches the run: a session root's at launch, a summoned child's at its spawn
 MAY_SUMMON_ENV = 'RIDE_MAY_SUMMON'
+# the harness a request naming none runs its child under
+DEFAULT_HARNESS = 'bro'
 # request-lifecycle bound for a summoned child — sized so the flagship deploy
 # workload survives the default; the substrate's generic 600s default is untouched
 DEFAULT_TIMEOUT = 1800.0
@@ -117,6 +123,10 @@ CHECK_TIMEOUT = 10.0
 # 1 = failure, 2 = argparse usage error)
 PENDING_EXIT_CODE = 3
 HOLD_HELP = "the child's user-involvement level; omitted lets the child use its unattended default"
+HARNESS_HELP = (
+  f"the harness the child runs under: '{DEFAULT_HARNESS}' (default — the target's own LLM "
+  "process) or 'claude' (a one-shot managed Claude Code session)"
+)
 GRANT_HELP = "add a credential (NAME) or summonable bro (@BRO) to the child's scope (repeatable)"
 REVOKE_HELP = (
   "remove a credential (NAME) or summonable bro (@BRO) from the child's scope (repeatable)"
@@ -207,6 +217,7 @@ def _payload(
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
   llm: Optional[str] = None,
+  harness: Optional[str] = None,
 ) -> dict[str, Any]:
   payload: dict[str, Any] = {'target': target, 'prompt': prompt}
   if timeout is not None:
@@ -225,6 +236,8 @@ def _payload(
     payload['revoke'] = list(revoke)
   if llm is not None:
     payload['llm'] = llm
+  if harness is not None:
+    payload['harness'] = harness
   return payload
 
 
@@ -330,6 +343,7 @@ def summon_and_wait(
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
   llm: Optional[str] = None,
+  harness: Optional[str] = None,
   step_id: Optional[int] = None,
   index: Optional[int] = None,
   client: Optional['Client'] = None,
@@ -351,6 +365,7 @@ def summon_and_wait(
     grant=grant,
     revoke=revoke,
     llm=llm,
+    harness=harness,
   )
   with _connection(client) as connection:
     request = connection.send(SUMMON, payload)
@@ -369,6 +384,7 @@ def summon_detached(
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
   llm: Optional[str] = None,
+  harness: Optional[str] = None,
   step_id: Optional[int] = None,
   index: Optional[int] = None,
 ) -> str:
@@ -385,6 +401,7 @@ def summon_detached(
     grant=grant,
     revoke=revoke,
     llm=llm,
+    harness=harness,
   )
   with _open_client() as client:
     return client.send(SUMMON, payload).id
@@ -550,6 +567,7 @@ def relay_summon(
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
   llm: Optional[str] = None,
+  harness: Optional[str] = None,
 ) -> int:
   """send one summon and relay its outcome as a CLI would: the request id and
   the started trail id to stderr, the answer to stdout, any failure as an error
@@ -564,6 +582,7 @@ def relay_summon(
     grant=grant,
     revoke=revoke,
     llm=llm,
+    harness=harness,
   )
   try:
     client = _open_client()
@@ -712,6 +731,7 @@ def main(argv: list[str]) -> Optional[int]:
   parser.add_argument('--revoke', action='append', default=None, metavar='NAME', help=REVOKE_HELP)
   parser.add_argument('--into', metavar='REF', help=INTO_HELP)
   parser.add_argument('--hold', choices=HOLDS, default=None, help=HOLD_HELP)
+  parser.add_argument('--harness', default=None, help=HARNESS_HELP)
   parser.add_argument(
     '--timeout',
     type=float,
@@ -737,6 +757,7 @@ def main(argv: list[str]) -> Optional[int]:
         grant=args['grant'],
         revoke=args['revoke'],
         llm=args['llm'],
+        harness=args['harness'],
       )
     except SummonError as error:
       log.error('%s', error)
@@ -752,4 +773,5 @@ def main(argv: list[str]) -> Optional[int]:
     grant=args['grant'],
     revoke=args['revoke'],
     llm=args['llm'],
+    harness=args['harness'],
   )
