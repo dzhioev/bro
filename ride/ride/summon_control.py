@@ -42,10 +42,11 @@ rest — the root's threaded in at construction from what the launch hydrated, a
 summoned child's recomputed from its own spawn record (`_child_credentials`).
 
 The request's `grant`/`revoke` split by kind: `@bro` values resolve here, on the
-loop, so a malformed or no-op override is denied immediately, while the
-credential half rides the spawn and is applied against the child's own computed
-scope in the lowering (`ride/ride/spawn.py`), where a bad override fails the
-launch. `llm` is child-facing and rides its `bro run` argv.
+loop, so a malformed or no-op override is denied immediately, while the unified
+values ride the spawn, where the lowering (`ride/ride/spawn.py`) applies the
+credential half against the child's own computed scope — a bad override fails
+the launch — and records the whole lists in the child's session spec. `llm` is
+child-facing and rides its `bro run` argv.
 
 The same per-request attribution also names the requester's workspace (the root's
 own, a child's from its `broker-<channel>` clone), threaded into
@@ -325,7 +326,7 @@ class SummonControl:
     revoke = payload.get('revoke', [])
     try:
       grant_credentials, grant_bros = split_scope_overrides(grant)
-      revoke_credentials, revoke_bros = split_scope_overrides(revoke)
+      _, revoke_bros = split_scope_overrides(revoke)
       child_allow_list = summon_allow_list(target, grant=grant_bros, revoke=revoke_bros)
     except ValueError as e:
       self._deny(context, peer, message, requester.summoner, f'summon denied: {e}')
@@ -373,8 +374,8 @@ class SummonControl:
         may_summon=tuple(sorted(child_allow_list)),
         into=payload.get('into'),
         hold=payload.get('hold'),
-        grant_credentials=tuple(grant_credentials),
-        revoke_credentials=tuple(revoke_credentials),
+        grant=tuple(grant),
+        revoke=tuple(revoke),
         llm=payload.get('llm'),
       ),
       peer,

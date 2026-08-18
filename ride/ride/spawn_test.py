@@ -6,15 +6,17 @@ import pytest
 
 import bro.workspace.docker as workspace_docker
 import bro.workspace.store as workspace_store
+import ride.bro
 import ride.bro_run
 import ride.identity
 import ride.scope
+import ride.session
 import ride.spawn
 import ride.summon_control
 from bro.monitor import trail_pointer
 from bro.workspace.metadata import WorkspaceKind
 from bro.workspace.model import Workspace
-from bro.workspace.paths import broker_dir, summon_dir
+from bro.workspace.paths import broker_dir, summon_dir, workspace_dir
 
 PARENT_WORKSPACE = Path('/var/ride/0123456789abcdef/workspaces/parent/tree')
 SUMMONER = {'session': 'ws'}
@@ -53,7 +55,7 @@ class TestSummonLowering:
     assert lowered == ride.spawn.DockerLaunchSpec(
       workspace_docker.Launch(
         name='broker-CH',
-        command=['bro', 'run', 'dev', 'deploy the thing', '--in-place'],
+        command=['bro', 'run', 'dev', 'deploy the thing', '--hold', 'unattended', '--in-place'],
         env={
           'RIDE_BASE_REF': 'PARENT-SHA',
           'RIDE_BRO': 'dev',
@@ -102,34 +104,81 @@ class TestSummonLowering:
     )
     lowered = ride.spawn._lower_summon(launch, 'broker-CH')
     assert lowered.launch.command == [
-      'bro', 'run', 'dev', 'deploy the thing', '--llm', 'openai:sol:high+fast', '--in-place',
+      'bro', 'run', 'dev', 'deploy the thing',
+      '--llm', 'openai:sol:high+fast', '--hold', 'unattended', '--in-place',
     ]  # fmt: skip
 
   def test_credential_overrides_adjust_the_childs_scope(self, lowering_harness):
+    # only the credential halves reach the scope; the `@bro` half was already
+    # resolved into may_summon by the control
     launch = ride.spawn.SummonLaunchSpec(
       target='dev',
       prompt='p',
       parent_workspace=PARENT_WORKSPACE,
       summoner=SUMMONER,
       may_summon=(),
-      grant_credentials=('gmail_creds',),
-      revoke_credentials=('openai',),
+      grant=('gmail_creds', '@reviewer'),
+      revoke=('openai',),
     )
     lowered = ride.spawn._lower_summon(launch, 'broker-CH')
     assert lowered.launch.secrets == {'aws', 'trails', 'gmail_creds'}
     assert lowered.launch.optional_secrets == set()
 
-  def test_no_op_credential_override_fails_the_spawn(self, lowering_harness):
+  def test_no_op_credential_override_fails_the_spawn(self, lowering_harness, tmp_path):
     launch = ride.spawn.SummonLaunchSpec(
       target='dev',
       prompt='p',
       parent_workspace=PARENT_WORKSPACE,
       summoner=SUMMONER,
       may_summon=(),
-      grant_credentials=('aws',),
+      grant=('aws',),
     )
     with pytest.raises(ValueError, match='already in the scoped credential set'):
       ride.spawn._lower_summon(launch, 'broker-CH')
+    # every fallible resolution precedes the workspace record, so nothing to
+    # reclaim is left behind
+    with pytest.raises(ValueError, match='broker-CH'):
+      Workspace.open('broker-CH', tmp_path / 'proj')
+
+  def test_lowering_records_the_childs_resume_spec(self, lowering_harness, tmp_path):
+    launch = ride.spawn.SummonLaunchSpec(
+      target='dev',
+      prompt='deploy the thing',
+      parent_workspace=PARENT_WORKSPACE,
+      summoner=SUMMONER,
+      may_summon=(),
+      hold='guided',
+      llm='openai:sol:high',
+      grant=('gmail_creds', '@reviewer'),
+      revoke=('openai',),
+    )
+    ride.spawn._lower_summon(launch, 'broker-CH')
+    workspace = Workspace.open('broker-CH', tmp_path / 'proj')
+    assert workspace.metadata.throwaway
+    assert (
+      ride.session.load_resume_spec(workspace)
+      == ride.session.SessionSpec(
+        name='broker-CH',
+        harness='bro',
+        workspace_pinned=False,
+        host=False,
+        drop=True,
+        no_trails=False,
+        hold='guided',
+        grant=['gmail_creds', '@reviewer'],
+        revoke=['openai'],
+        llm='openai:sol:high',
+        resolved_llm=ride.bro.BRO.resolve_llm('openai:sol:high', 'dev').dump(),
+        solo=True,
+        resume=False,
+        into=None,
+        bro='dev',
+        prompt='deploy the thing',
+        subject='deploy the thing',
+        arguments=[],
+        harness_options={},
+      ).resume_variant()
+    )
 
   def test_the_childs_own_allow_list_rides_its_environment(self, lowering_harness):
     launch = ride.spawn.SummonLaunchSpec(
@@ -197,7 +246,15 @@ class TestSummonLowering:
     await spawner.spawn(launch, channel)
     [(lowered, lowered_channel)] = docker.spawned
     assert isinstance(lowered, ride.spawn.DockerLaunchSpec)
-    assert lowered.launch.command == ['bro', 'run', 'dev', 'p', '--in-place']
+    assert lowered.launch.command == [
+      'bro',
+      'run',
+      'dev',
+      'p',
+      '--hold',
+      'unattended',
+      '--in-place',
+    ]
     assert lowered.launch.name == 'broker-CH'
     assert lowered_channel is channel
 
@@ -217,6 +274,26 @@ class TestSummonLowering:
     # into the correlated failed{reason: 'launch'}
     with pytest.raises(ValueError, match='nope'):
       await spawner.spawn(launch, channel)
+
+
+class TestChildTrailPublication:
+  def test_started_delivery_publishes_the_childs_broker_pointer(self, tmp_path):
+    from bro.broker.brotocol import Message, Tag
+
+    observe = ride.spawn._note_child_started(tmp_path / 'proj')
+    observe('CH', 'root', Message(type=Tag.STARTED, payload={'trail_id': 't-9'}, in_reply_to='req'))
+    pointer = trail_pointer.broker_pointer(workspace_dir(tmp_path / 'proj', 'broker-CH'))
+    assert trail_pointer.read(pointer) == 't-9'
+
+  def test_non_started_and_trailless_deliveries_publish_nothing(self, tmp_path):
+    from bro.broker.brotocol import Message, Tag
+
+    project = tmp_path / 'proj'
+    observe = ride.spawn._note_child_started(project)
+    observe('CH', 'root', Message(type=Tag.COMPLETED, payload={'trail_id': 't'}, in_reply_to='r'))
+    observe(None, 'root', Message(type=Tag.STARTED, payload={'trail_id': 't'}, in_reply_to='r'))
+    observe('CH', 'root', Message(type=Tag.STARTED, payload={}, in_reply_to='r'))
+    assert not trail_pointer.broker_pointer(workspace_dir(project, 'broker-CH')).exists()
 
 
 class TestRunRootViaBroker:
@@ -264,7 +341,17 @@ class TestRunRootViaBroker:
     # the summon handler and the delivery tap belong to the same per-root control
     control = captured['handlers']['summon'].__self__
     assert isinstance(control, ride.summon_control.SummonControl)
-    assert [observer.__self__ for observer in captured['observers']] == [control]
+    control_observer, child_trail_observer = captured['observers']
+    assert control_observer.__self__ is control
+    # the second tap publishes summoned children's started trails beside their
+    # workspace records, bound to this root's project
+    from bro.broker.brotocol import Message, Tag
+
+    child_trail_observer(
+      'CH', 'root', Message(type=Tag.STARTED, payload={'trail_id': 't-7'}, in_reply_to='req')
+    )
+    pointer = trail_pointer.broker_pointer(workspace_dir(tmp_path / 'proj', 'broker-CH'))
+    assert trail_pointer.read(pointer) == 't-7'
     assert control._workspace is workspace
     state_directory = summon_dir(tmp_path / 'proj')
     assert control._status_file == state_directory / 'ws.status.json'

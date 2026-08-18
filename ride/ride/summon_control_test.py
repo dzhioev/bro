@@ -177,8 +177,8 @@ class TestSummonHandler:
     assert launch.llm == 'openai:sol:high+fast'
 
   def test_credential_overrides_ride_the_spawn_and_land_in_the_audit(self, tmp_path):
-    # the credential half is applied against the child's own scope in the
-    # lowering; only the `@bro` half resolves here
+    # the unified values ride the spawn (the lowering splits them); only the
+    # `@bro` half resolves here
     control = _control(tmp_path, {'dev', 'bro'}, credential_scope={'aws'})
     context = FakeContext()
     # cast: FakeContext stands in for the Dispatcher surface structurally
@@ -186,8 +186,8 @@ class TestSummonHandler:
       cast(Dispatcher, context), ROOT, _summon_message(grant=['aws', '@bro'], revoke=['openai'])
     )
     [(launch, _, _)] = context.spawned
-    assert launch.grant_credentials == ('aws',)
-    assert launch.revoke_credentials == ('openai',)
+    assert launch.grant == ('aws', '@bro')
+    assert launch.revoke == ('openai',)
     [spawn_record] = _audit(tmp_path)
     assert spawn_record['grant'] == ['aws', '@bro']
     assert spawn_record['revoke'] == ['openai']
