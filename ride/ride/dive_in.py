@@ -15,6 +15,7 @@ from bro.workspace.git import fetch_ref
 from bro.workspace.paths import fresh_workspace_name, project_root
 from bro.workspace.project import project_config
 from ride.claude.harness import scope_recipe
+from ride.cli import reports_location_errors
 from ride.flags import add_forwarded_flags, extract_forwarded_argv
 
 __cli_name__ = 'dive-in'
@@ -145,6 +146,7 @@ def dive_in(
   return subprocess.run(ride_command).returncode
 
 
+@reports_location_errors
 def main(argv: list[str]) -> Optional[int]:
   parser = Parser(description='start a ride session focused on a task')
   parser.add_argument(

@@ -169,3 +169,8 @@ class TestLifecycle:
     with patch('ride.scope_report.report_scope', return_value=0) as report:
       assert ride_cli.main(['ride', 'scope', '--harness', 'claude', '--raw']) == 0
     assert report.call_args.kwargs == {'bro': None, 'harness': 'claude', 'raw': True}
+
+  def test_an_unusable_runtime_location_is_a_cli_error(self, monkeypatch, caplog):
+    monkeypatch.setenv('XDG_DATA_HOME', 'share')
+    assert ride_cli.main(['ride', 'list']) == 1
+    assert 'XDG_DATA_HOME must be an absolute path' in caplog.text

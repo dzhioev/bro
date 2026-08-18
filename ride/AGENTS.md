@@ -25,3 +25,4 @@
 - A pinned mode-verb workspace is never auto-dropped. An unpinned `along` workspace is kept unless `--drop` is explicit; an unpinned `solo` workspace is dropped after a clean exit unless `--keep` is explicit.
 - A solo resume becomes an along session and takes along's host-sensitive default hold; the unattended solo hold describes a run with no human channel.
 - `ride` refuses nested launches while process-host mode is unavailable, on the container probe rather than on any marker the environment carries.
+- Every console script this distribution ships wraps its `main` in `ride.cli.reports_location_errors`, so an environment naming no runtime location fails as a CLI error.

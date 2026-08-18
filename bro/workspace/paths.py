@@ -14,6 +14,11 @@ _PROJECT_KEY_BYTES = 4
 _UNSAFE_IN_KEY = re.compile(r'[^A-Za-z0-9._-]')
 
 
+class RuntimeLocationError(ValueError):
+  """the environment names no location to keep a project's runtime state in:
+  nothing names the project, or the data home is not an absolute path."""
+
+
 def venv_env(venv: Path) -> dict[str, str]:
   env = {**os.environ, 'VIRTUAL_ENV': str(venv)}
   env['PATH'] = str(venv / 'bin') + ':' + env.get('PATH', '')
@@ -49,7 +54,7 @@ def project_root(directory: Optional[Path] = None) -> Path:
   root = find_project_root(directory)
   if root is None:
     subject = Path.cwd() if directory is None else directory
-    raise ValueError(f'{subject} is in no git repository, so it names no project')
+    raise RuntimeLocationError(f'{subject} is in no git repository, so it names no project')
   return root
 
 
@@ -60,7 +65,7 @@ def runtime_base() -> Path:
     return Path.home() / '.local' / 'share' / 'ride'
   base = Path(data_home)
   if not base.is_absolute():
-    raise ValueError(f'{_DATA_HOME_ENV} must be an absolute path, not {data_home!r}')
+    raise RuntimeLocationError(f'{_DATA_HOME_ENV} must be an absolute path, not {data_home!r}')
   return base / 'ride'
 
 
