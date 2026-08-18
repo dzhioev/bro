@@ -146,6 +146,8 @@ def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, sol
   resume = args.pop('resume')
   if solo:
     keep = args.pop('keep')
+    if workspace is not None and keep:
+      parser.error('--keep cannot be combined with --workspace; pinned workspaces are always kept')
     drop = not keep and workspace is None
   else:
     drop = args.pop('drop')
