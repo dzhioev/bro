@@ -114,7 +114,6 @@ PYTEST_FILES = [
   'bro/trails/display/config_test.py',
   'bro/trails/display/core_test.py',
   'bro/trails/display/live_test.py',
-  'bro/trails/display/panel_test.py',
   'bro/trails/display/recorded_test.py',
   'bro/trails/display/records_test.py',
   'bro/trails/display/terminal_test.py',

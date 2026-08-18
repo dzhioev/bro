@@ -159,11 +159,6 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
   parser.add_argument('bro', help='bro name')
   parser.add_argument('what', nargs='?', help='first message to send to the bro')
   parser.add_argument(
-    '--text',
-    action='store_true',
-    help='force text mode (timestamped lines) instead of the Textual chat UI',
-  )
-  parser.add_argument(
     '--fork', nargs='?', const=RESUME_LATEST, default=None, metavar='TRAIL_ID', help=FORK_HELP
   )
   parser.add_argument('--continue-trail', default=None, help=base_args.SUPPRESS)
@@ -247,7 +242,7 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
       log.verbose('creating bro %s', args['bro'])
       bro = create_bro_for_run(args['bro'], selection)
     initial: Optional[str] = args['what']
-    use_tui = not args['text'] and _tui_supported()
+    use_tui = _tui_supported()
 
     try:
       with bro:

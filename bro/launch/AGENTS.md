@@ -4,8 +4,8 @@ Framework launch support. Public `bro run` and `bro chat` execute the selected b
 
 ## In-process CLIs
 
-- `run.py` — parser and execution for `bro run <bro> <input>`. It accepts the native LLM flags, `--hold`, `--rich`, and a suppressed `--in-place` no-op. It creates the bro under the resolved native recipe, runs it under the ask display preset, and records with surface `ask`.
-- `call.py` — parser and UI for `bro chat <bro> [what]`. An omitted message opens an empty REPL. `--text` selects the stream UI; auto mode uses the Textual UI when both terminal streams and its dependencies are available. `--fork [TRAIL_ID] [--at STEP_ID]` forks recorded history under the bro class's current recipe; omitting the id selects the bro's newest recorded call. The suppressed `--continue-trail` / `--continue-llm` pair is the managed bro harness's exact-recipe continuation contract. `--in-place` is a suppressed no-op.
+- `run.py` — parser and execution for `bro run <bro> <input>`. It accepts the native LLM flags, `--hold`, and a suppressed `--in-place` no-op. It creates the bro under the resolved native recipe, runs it under the ask display preset, and records with surface `ask`.
+- `call.py` — parser and UI for `bro chat <bro> [what]`. An omitted message opens an empty REPL. The Textual UI is used when both terminal streams and its dependencies are available, the stream UI otherwise. `--fork [TRAIL_ID] [--at STEP_ID]` forks recorded history under the bro class's current recipe; omitting the id selects the bro's newest recorded call. The suppressed `--continue-trail` / `--continue-llm` pair is the managed bro harness's exact-recipe continuation contract. `--in-place` is a suppressed no-op.
 - `call_tui.py` — Textual `ChatApp`, turn cancellation, message input, and the display-session integration.
 - `resume.py` — recorded-history projection and `bro.fork.fork` orchestration used by public history forks and managed native continuation.
 - `llm_flags.py` — shared `--provider` / `--model` / `--effort` / `--fast` / `--llm` registration, preset expansion, canonicalization, and per-harness resolution.
@@ -15,7 +15,7 @@ Framework launch support. Public `bro run` and `bro chat` execute the selected b
 
 ### Display and holds
 
-`bro run` uses the ask preset: live activity on stderr and one undecorated reply on stdout; `--rich` changes only the activity renderer. Its omitted hold is `unattended`.
+`bro run` uses the ask preset: live activity on stderr and one undecorated reply on stdout. Its omitted hold is `unattended`.
 
 `bro chat` uses the chat preset and defaults to `guided`. Both text and Textual modes can interrupt a running turn and render `call.INTERRUPTED_NOTICE`; the TUI prevents concurrent sends. The opening banner is a trusted surface notice rendered by `bro.workspace.banner.render_banner`, not conversation input. A recorded conversation's exit hint names `bro chat <bro> --fork <trail-id>`.
 

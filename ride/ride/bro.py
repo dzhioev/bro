@@ -22,8 +22,6 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class BroOptions:
-  rich: bool
-  text: bool
   no_trails: bool
   subject: Optional[str]
 
@@ -32,33 +30,16 @@ class BroOptions:
 
   @classmethod
   def load(cls, data: dict) -> 'BroOptions':
-    if data.keys() != {'rich', 'text', 'no_trails', 'subject'}:
+    if data.keys() != {'no_trails', 'subject'}:
       raise ValueError(f'unexpected bro option fields: {sorted(data.keys())}')
-    rich = data['rich']
-    text = data['text']
     no_trails = data['no_trails']
     subject = data['subject']
-    if (
-      not isinstance(rich, bool)
-      or not isinstance(text, bool)
-      or not isinstance(no_trails, bool)
-      or (subject is not None and not isinstance(subject, str))
-    ):
+    if not isinstance(no_trails, bool) or (subject is not None and not isinstance(subject, str)):
       raise TypeError('invalid bro harness options')
-    return cls(rich=rich, text=text, no_trails=no_trails, subject=subject)
+    return cls(no_trails=no_trails, subject=subject)
 
 
 def add_flags(parser: 'Parser') -> None:
-  parser.add_argument(
-    '--rich',
-    action='store_true',
-    help='bro harness, solo: render activity as colored Rich panels',
-  )
-  parser.add_argument(
-    '--text',
-    action='store_true',
-    help='bro harness, along: force the text conversation instead of the Textual UI',
-  )
   parser.add_argument(
     '--no-trails',
     dest='no_trails',
@@ -72,14 +53,9 @@ def options(spec: 'SessionSpec') -> BroOptions:
 
 
 def _inner_arguments(spec: 'SessionSpec', resume_trail: Optional[str]) -> list[str]:
-  bro = options(spec)
   arguments: list[str] = []
   if spec.prompt is not None:
     arguments.append(spec.prompt)
-  if spec.solo and bro.rich:
-    arguments.append('--rich')
-  if not spec.solo and bro.text:
-    arguments.append('--text')
   if spec.llm is not None:
     arguments.extend(['--llm', spec.llm])
   arguments.extend(['--hold', spec.hold])
@@ -122,13 +98,7 @@ class BroHarness:
     return True
 
   def command_options(self, spec: 'SessionSpec') -> tuple[list[str], list[str]]:
-    bro = options(spec)
-    flags = [
-      *(('--rich',) if bro.rich else ()),
-      *(('--text',) if bro.text else ()),
-      *(('--no-trails',) if bro.no_trails else ()),
-    ]
-    return flags, []
+    return ['--no-trails'] if options(spec).no_trails else [], []
 
   def session_exists(self, workspace: Workspace) -> bool:
     return trail_pointer.read(self.session_trail_pointer(workspace)) is not None

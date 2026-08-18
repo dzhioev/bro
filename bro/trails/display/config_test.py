@@ -96,7 +96,7 @@ class TestConfiguration:
     with pytest.raises(ValueError, match='chat appearance'):
       DisplayConfig(appearance=Appearance.CHAT, layout=Layout.EVENT_LOG)
     with pytest.raises(ValueError, match='rewind appearance'):
-      DisplayConfig(appearance=Appearance.REWIND, layout=Layout.PANELS)
+      DisplayConfig(appearance=Appearance.REWIND, layout=Layout.EVENT_LOG)
 
   def test_layout_rejects_a_filter_that_cannot_supply_its_records(self):
     with pytest.raises(ValueError, match='native step'):
