@@ -28,7 +28,7 @@ The generated name is logged before launch. Use it with `ride exec` or `ride res
 
 With `--into` omitted, `dive-in` fetches origin's default-branch tip and forwards the resolved commit. If origin is unreachable it warns and leaves `--into` absent, so `ride along` falls back to the checkout's current `HEAD`. An explicit `--into REF` wins and skips the fetch.
 
-The omitted hold is `attended` in a container and `guided` under `--host`. Host sessions have no container boundary, so the guided default retains permission prompts.
+An omitted hold is forwarded unset and takes `ride along`'s default: `attended` in a container, `guided` under `--host`. Host sessions have no container boundary, so the guided default retains permission prompts.
 
 ## Bro and launch flags
 

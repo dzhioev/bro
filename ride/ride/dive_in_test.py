@@ -73,21 +73,17 @@ class TestLaunchCommand:
     assert len(args['workspace']) > 0
     assert harness_arguments == []  # nothing leaked into the forwarded REMAINDER
 
-  def test_defaults_to_attended(self, fake_proj, capsys):
-    rc = dive_in.main(['dive-in', '-n'])
+  @pytest.mark.parametrize('host', [[], ['--host']])
+  def test_an_omitted_hold_is_left_for_ride_along_to_resolve(self, host, fake_proj, capsys):
+    # --host is forwarded, so the inner parse derives the same host-sensitive default
+    rc = dive_in.main(['dive-in', '-n', *host])
     assert rc == 0
     tokens = shlex.split(capsys.readouterr().out.strip())
     args, harness_arguments = _parse_emitted(tokens)
-    assert args['hold'] == 'attended'
+    assert args['hold'] is None
+    assert args['host'] == (len(host) > 0)
 
-  def test_host_defaults_to_guided(self, fake_proj, capsys):
-    rc = dive_in.main(['dive-in', '-n', '--host'])
-    assert rc == 0
-    tokens = shlex.split(capsys.readouterr().out.strip())
-    args, harness_arguments = _parse_emitted(tokens)
-    assert args['hold'] == 'guided'
-
-  def test_explicit_hold_wins_over_the_host_default(self, fake_proj, capsys):
+  def test_an_explicit_hold_is_forwarded(self, fake_proj, capsys):
     rc = dive_in.main(['dive-in', '-n', '--host', '--hold', 'attended'])
     assert rc == 0
     tokens = shlex.split(capsys.readouterr().out.strip())

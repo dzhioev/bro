@@ -1,6 +1,9 @@
 from bro.base.args import Parser
 
-DEFAULT_HOLD = 'guided'
+
+def default_hold(*, solo: bool, host: bool) -> str:
+  """the hold an omitted --hold resolves to."""
+  return 'unattended' if solo else 'guided' if host else 'attended'
 
 
 def add_scope_flags(parser: Parser) -> None:
@@ -34,8 +37,8 @@ def add_session_flags(parser: Parser, *, include_bro: bool = True) -> None:
   from bro.launch.llm_flags import add_llm_flags
   from bro.llm.mcp import HOLDS
 
-  # default None, not DEFAULT_HOLD: each wrapper resolves an omitted flag to
-  # its own default, and reconstruction then always carries the resolved value
+  # default None: the launch surface resolves an omitted flag via default_hold,
+  # and reconstruction then always carries the resolved value
   parser.add_argument(
     '--hold',
     default=None,
