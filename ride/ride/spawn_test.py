@@ -108,6 +108,25 @@ class TestSummonLowering:
       '--llm', 'openai:sol:high+fast', '--hold', 'unattended', '--in-place',
     ]  # fmt: skip
 
+  def test_the_llm_recipe_selects_the_childs_hydrated_llm_key(self, lowering_harness, monkeypatch):
+    captured: list = []
+
+    def capture_scope(name, recipe, llm_spec=None):
+      captured.append(llm_spec)
+      return workspace_store.ScopedSecrets(required=set(), optional=set(), docker_sock=False)
+
+    monkeypatch.setattr(ride.scope, 'scoped_secrets', capture_scope)
+    launch = ride.spawn.SummonLaunchSpec(
+      target='dev',
+      prompt='p',
+      parent_workspace=PARENT_WORKSPACE,
+      summoner=SUMMONER,
+      may_summon=(),
+      llm='echo',
+    )
+    ride.spawn._lower_summon(launch, 'broker-CH')
+    assert captured == [ride.bro.BRO.resolve_llm('echo', 'dev')]
+
   def test_credential_overrides_adjust_the_childs_scope(self, lowering_harness):
     # only the credential halves reach the scope; the `@bro` half was already
     # resolved into may_summon by the control

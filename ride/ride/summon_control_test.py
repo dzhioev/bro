@@ -3,6 +3,8 @@ from typing import cast
 
 import pytest
 
+import ride.bro
+import ride.scope
 import ride.spawn
 import ride.summon_control
 from bro.broker.brotocol import Message
@@ -11,6 +13,7 @@ from bro.monitor import trail_pointer
 from bro.workspace.metadata import WorkspaceKind
 from bro.workspace.model import Workspace
 from bro.workspace.paths import workspace_tree
+from bro.workspace.store import ScopedSecrets
 
 
 @pytest.fixture(autouse=True)
@@ -241,6 +244,25 @@ class TestSummonHandler:
     )
     [(_, payload)] = context.replies
     assert 'does not hold: gmail_creds' in payload['error']
+
+  def test_a_childs_grant_bound_follows_its_llm_recipe(self, tmp_path, monkeypatch):
+    calls: list = []
+
+    def capture_scope(target, *, grant, revoke, llm_spec=None):
+      calls.append((target, llm_spec))
+      return ScopedSecrets(required={'github'}, optional=set(), docker_sock=False)
+
+    monkeypatch.setattr(ride.scope, 'summoned_credential_scope', capture_scope)
+    control = _control(tmp_path, {'bro-dev'})
+    context = FakeContext()
+    message = _summon_message(target='bro-dev', llm='echo')
+    control.handle(cast(Dispatcher, context), ROOT, message)
+    context.origin[CHILD] = (ROOT, message.id)
+    control.handle(
+      cast(Dispatcher, context), CHILD, _summon_message(target='dev', grant=['github'])
+    )
+    assert [launch.target for launch, _, _ in context.spawned] == ['bro-dev', 'dev']
+    assert calls == [('bro-dev', ride.bro.BRO.resolve_llm('echo', 'bro-dev'))]
 
   def test_no_op_bro_override_is_denied(self, tmp_path):
     # bro-dev already seeds dev: the strictness of the launcher flags holds

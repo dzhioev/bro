@@ -46,7 +46,8 @@ loop, so a malformed or no-op override is denied immediately, while the unified
 values ride the spawn, where the lowering (`ride/ride/spawn.py`) applies the
 credential half against the child's own computed scope — a bad override fails
 the launch — and records the whole lists in the child's session spec. `llm` is
-child-facing and rides its `bro run` argv.
+child-facing: it rides the child's `bro run` argv and, through the recipe it
+resolves to, the child's computed scope.
 
 The same per-request attribution also names the requester's workspace (the root's
 own, a child's from its `broker-<channel>` clone), threaded into
@@ -224,6 +225,7 @@ class _ActiveSummon:
   allow_list: set[str]  # the spawned child's own effective summon allow-list
   grant: list[str]  # the request's scope overrides, audited as the summoner issued them
   revoke: list[str]
+  llm: Optional[str]
   trail_id: Optional[str] = None
 
 
@@ -391,6 +393,7 @@ class SummonControl:
       allow_list=child_allow_list,
       grant=list(grant),
       revoke=list(revoke),
+      llm=payload.get('llm'),
     )
     self._active[message.id] = record
     log.info(
@@ -440,11 +443,17 @@ class SummonControl:
   def _child_credentials(self, record: _ActiveSummon) -> set[str]:
     """the credential scope a summoned child runs with, recomputed from its own
     spawn record through the same helper that lowered its launch."""
+    from ride.harness import get_harness
     from ride.scope import summoned_credential_scope
 
     grant, _ = split_scope_overrides(record.grant)
     revoke, _ = split_scope_overrides(record.revoke)
-    scoped = summoned_credential_scope(record.target, grant=grant, revoke=revoke)
+    scoped = summoned_credential_scope(
+      record.target,
+      grant=grant,
+      revoke=revoke,
+      llm_spec=get_harness('bro').resolve_llm(record.llm, record.target),
+    )
     return scoped.required | scoped.optional
 
   def _root_summoned_by(self) -> Optional[dict[str, Any]]:

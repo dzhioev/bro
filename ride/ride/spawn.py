@@ -133,7 +133,7 @@ def _lower_summon(launch: SummonLaunchSpec, workspace_name: str) -> DockerLaunch
   grant_credentials, _ = split_scope_overrides(spec.grant)
   revoke_credentials, _ = split_scope_overrides(spec.revoke)
   scoped = summoned_credential_scope(
-    launch.target, grant=grant_credentials, revoke=revoke_credentials
+    launch.target, grant=grant_credentials, revoke=revoke_credentials, llm_spec=spec.llm_spec
   )
   workspace = Workspace.ensure(workspace_name, project, WorkspaceKind.CONTAINER, throwaway=True)
   record_resume_spec(workspace, spec)
