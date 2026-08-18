@@ -312,7 +312,9 @@ def start_session(spec: SessionSpec) -> int:
       log.error('cannot resolve --into ref: %s', spec.into)
       return 1
 
-  if not harness.preflight_auth(spec):
+  auth_error = harness.preflight_auth(spec)
+  if auth_error is not None:
+    log.error('%s', auth_error)
     return 1
   recipe = harness.scope_recipe(spec.harness_options)
   if spec.no_trails:

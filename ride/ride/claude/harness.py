@@ -1,8 +1,8 @@
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
-from bro.base import credentials, log
+from bro.base import credentials
 from bro.llm.llms.claude_code import LLMSpec
 from bro.llm.providers import LLMSelection, parse
 from bro.monitor import trail_pointer
@@ -102,23 +102,21 @@ class ClaudeHarness:
       )
     return resolved
 
-  def preflight_auth(self, spec: 'SessionSpec') -> bool:
+  def preflight_auth(self, spec: 'SessionSpec') -> Optional[str]:
     if options(spec).raw:
       if _load_anthropic_key() is not None:
-        return True
-      log.error(
+        return None
+      return (
         '--raw requires the `anthropic` secret to provide an api_key '
         '({"api_key": "..."}); claude --bare does not use OAuth or keychain'
       )
-      return False
     if credentials.try_get('claude_code') is not None:
-      return True
-    log.error(
+      return None
+    return (
       'claude_code secret not resolvable — a Claude session authenticates with the '
       'setup-token; mint one with `claude setup-token` and store it in '
       '~/.bro/claude_code_oauth_token'
     )
-    return False
 
   def inner_command(self, spec: 'SessionSpec', workspace: Workspace) -> list[str]:
     del workspace
