@@ -168,7 +168,7 @@ class TestRunInPlace:
     with _Harness(tmp_path) as h:
       # every session commits as bro, hold-independent
       assert ride_runner.run_in_place(_spec()) == 0
-      assert h.env['GIT_AUTHOR_NAME'] == 'bro'
+      assert h.env['GIT_AUTHOR_NAME'] == 'bro-dev'
       assert h.env['GIT_COMMITTER_EMAIL'] == 'bro-dev@bro'
 
   def test_exports_the_session_hold(self, monkeypatch, tmp_path):
