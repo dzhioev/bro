@@ -1,4 +1,5 @@
 import json
+import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -113,6 +114,74 @@ class TestSource:
   def test_mint_non_string_private_key_raises(self):
     with pytest.raises(ValueError, match="'private_key' must be a string"):
       app.Source('bot.json').mint({'app_id': 1, 'installation_id': 2, 'private_key': 5})
+
+  def _configured(self, bro_dir: Path, monkeypatch, expires_in: timedelta) -> MagicMock:
+    (bro_dir / 'github_app_bot.json').write_text(
+      json.dumps({'app_id': 1, 'installation_id': 2, 'private_key': 'PEM'})
+    )
+    mint = MagicMock(
+      side_effect=lambda **_: app.InstallationToken(
+        f'ghs_{mint.call_count}', datetime.now(UTC) + expires_in
+      )
+    )
+    monkeypatch.setattr(app, 'mint_installation_token', mint)
+    return mint
+
+  def test_a_second_source_reads_the_held_token(self, bro_dir: Path, monkeypatch):
+    mint = self._configured(bro_dir, monkeypatch, timedelta(hours=1))
+    first = app.Source('github_app_bot.json').fetch()
+    second = app.Source('github_app_bot.json').fetch()
+    assert first == second == 'ghs_1'
+    assert mint.call_count == 1
+
+  def test_a_token_near_expiry_is_reminted(self, bro_dir: Path, monkeypatch):
+    mint = self._configured(bro_dir, monkeypatch, credentials.MintingSource.EXPIRY_MARGIN / 2)
+    assert app.Source('github_app_bot.json').fetch() == 'ghs_1'
+    assert app.Source('github_app_bot.json').fetch() == 'ghs_2'
+    assert mint.call_count == 2
+
+  def test_a_held_token_is_reminted_once_its_lifetime_passes(self, bro_dir: Path, monkeypatch):
+    mint = self._configured(bro_dir, monkeypatch, timedelta(hours=1))
+    assert app.Source('github_app_bot.json').fetch() == 'ghs_1'
+    held_path = bro_dir / 'github_app_bot.json.minted'
+    held = json.loads(held_path.read_text())
+    aged = datetime.now(UTC) - app._HELD_LIFETIME - timedelta(seconds=1)
+    held_path.write_text(json.dumps({**held, 'minted_at': aged.isoformat()}))
+    assert app.Source('github_app_bot.json').fetch() == 'ghs_2'
+    assert mint.call_count == 2
+
+  def test_the_held_token_is_owner_only(self, bro_dir: Path, monkeypatch):
+    self._configured(bro_dir, monkeypatch, timedelta(hours=1))
+    app.Source('github_app_bot.json').fetch()
+    held = bro_dir / 'github_app_bot.json.minted'
+    assert held.stat().st_mode & 0o777 == 0o600
+    assert sorted(f.name for f in bro_dir.iterdir()) == [
+      'github_app_bot.json',
+      'github_app_bot.json.minted',
+    ]
+
+  @pytest.mark.skipif(os.geteuid() == 0, reason='root writes through a read-only directory')
+  def test_a_read_only_store_holds_in_the_process(self, bro_dir: Path, monkeypatch):
+    mint = self._configured(bro_dir, monkeypatch, timedelta(hours=1))
+    source = app.Source('github_app_bot.json')
+    bro_dir.chmod(0o500)
+    try:
+      assert source.fetch() == 'ghs_1'
+      assert source.fetch() == 'ghs_1'
+      assert mint.call_count == 1
+      # nothing published, so a second process has nothing to read
+      assert app.Source('github_app_bot.json').fetch() == 'ghs_2'
+    finally:
+      bro_dir.chmod(0o700)
+    assert mint.call_count == 2
+    assert list(bro_dir.glob('*.minted*')) == []
+
+  @pytest.mark.parametrize('leftover', ['{tru', '{}', '{"token": "ghs_old"}'])
+  def test_an_unreadable_held_token_is_reminted(self, bro_dir: Path, monkeypatch, leftover: str):
+    mint = self._configured(bro_dir, monkeypatch, timedelta(hours=1))
+    (bro_dir / 'github_app_bot.json.minted').write_text(leftover)
+    assert app.Source('github_app_bot.json').fetch() == 'ghs_1'
+    assert mint.call_count == 1
 
   def test_scoped_store_round_trip(self, bro_dir: Path, monkeypatch):
     # a github_app-backed variant hydrates as its minting config under the kind
