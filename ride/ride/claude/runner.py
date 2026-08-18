@@ -56,7 +56,7 @@ def _set_session_context(spec: 'SessionSpec', system_prompt: str, tree: Path) ->
     branch=f'worktree-{spec.name}',
     base_sha=base_sha,
     base_ref=spec.into,
-    bro=spec.session_bro,
+    bro=spec.bro,
     raw=options(spec).raw,
     proj_root=tree,
   )
@@ -180,10 +180,10 @@ def run_in_place(spec: 'SessionSpec') -> int:
     log.info('resuming session %s', latest.stem)
     claude_args = ['--resume', latest.stem, *claude_args]
 
-  os.environ.update(bro_git_identity_env(spec.session_bro))
+  os.environ.update(bro_git_identity_env(spec.bro))
 
   # RIDE_BRO themes the session (banner, statusLine)
-  os.environ['RIDE_BRO'] = spec.session_bro
+  os.environ['RIDE_BRO'] = spec.bro
 
   # feature-declared workspace provisioning (bro/bro.py's _provision_workspace
   # is the bro-harness counterpart): a commit-accounting persona gets the
@@ -192,7 +192,7 @@ def run_in_place(spec: 'SessionSpec') -> int:
   # left alone.
   from bro.registry import create_bro
 
-  if create_bro(spec.session_bro).has_feature('commit-accounting'):
+  if create_bro(spec.bro).has_feature('commit-accounting'):
     from bro.workflow.commit_footer import install_hooks
 
     install_hooks(tree, overwrite=False)
@@ -215,9 +215,9 @@ def run_in_place(spec: 'SessionSpec') -> int:
     # workspace's code (the runner's cwd and venv) — the bro's own toolset under
     # --raw, the persona's claude-harness namespaces for a ride-session.
     if options(spec).raw:
-      mcp_spec = f'bro:{spec.session_bro}'
+      mcp_spec = f'bro:{spec.bro}'
     else:
-      mcp_spec = f'persona:{spec.session_bro}'
+      mcp_spec = f'persona:{spec.bro}'
     try:
       server = _start_session_mcp_server(mcp_spec, tree, os.environ)
     except RuntimeError as error:

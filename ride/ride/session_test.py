@@ -722,13 +722,7 @@ class TestInPlaceArgv:
     ]
 
 
-class TestSessionBro:
-  def test_bro_names_the_identity(self):
-    assert _spec(bro='dev').session_bro == 'dev'
-
-  def test_session_uses_the_project_default(self):
-    assert _spec().session_bro == 'bro-dev'
-
+class TestHarnessScopeRecipe:
   def test_raw_selects_the_harness_scope_recipe(self):
     assert claude_harness.CLAUDE.scope_recipe(_spec(raw=True).harness_options).name == 'claude-raw'
     assert claude_harness.CLAUDE.scope_recipe(_spec().harness_options).name == 'claude-full'
