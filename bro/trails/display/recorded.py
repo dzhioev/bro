@@ -154,6 +154,10 @@ def _native_header_fields(header: dict[str, Any]) -> list[tuple[str, Any]]:
     )
     if native.get('ride_command') is not None:
       fields.append(('ride', native['ride_command']))
+    # trails blazed by `cw`, the runtime preceding `ride`, carry the launch
+    # command under its own name
+    elif native.get('cw_command') is not None:
+      fields.append(('cw', native['cw_command']))
   else:
     fields.append(('native', native))
   return fields

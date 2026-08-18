@@ -333,6 +333,16 @@ class TestStructures:
     assert [node.trail_id for node in lineage] == ['root', 'child']
     assert lineage[1].highlighted
 
+  def test_claude_metadata_names_the_launch_command_under_either_key(self):
+    adapter = RecordedAdapter(_client(FakeClient()))
+    ride_header = _header(
+      'ride', harness='claude', native={'llm': {}, 'ride_command': 'ride along ws'}
+    )
+    cw_header = _header('cw', harness='claude', native={'llm': {}, 'cw_command': 'cw ss ws'})
+
+    assert ('ride', 'ride along ws') in adapter.trail_metadata(ride_header).fields
+    assert ('cw', 'cw ss ws') in adapter.trail_metadata(cw_header).fields
+
   def test_structural_adapters_reject_invalid_segment_and_end_status(self):
     fake = FakeClient()
     fake.headers['parent'] = _header('parent')
