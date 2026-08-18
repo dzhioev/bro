@@ -1,4 +1,5 @@
 import json
+import os
 from dataclasses import replace
 from typing import Optional
 from unittest.mock import MagicMock, patch
@@ -16,6 +17,15 @@ from bro.base import credentials
 from bro.workspace.metadata import WorkspaceKind
 from bro.workspace.model import Workspace
 from ride.scope import ScopedSecrets
+
+
+@pytest.fixture(autouse=True)
+def isolated_environ():
+  """start_session exports session facts (RIDE_COMMAND, RIDE_WORKSPACE,
+  BRO_SHELL_COMMAND) into the live process environment; snapshot-restore it so
+  no test here leaks them into the rest of the suite."""
+  with patch.dict(os.environ, {}, clear=False):
+    yield
 
 
 def _spec(
