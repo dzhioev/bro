@@ -49,13 +49,13 @@ LLM flags resolve within the selected harness. They never switch the harness imp
 
 ### Harness seam
 
-`ride.harness.Harness` is the runtime boundary. A harness implementation supplies:
+`ride.harness.Harness` is the runtime boundary. The neutral layer (`ride/ride/session.py`) owns both launch bodies — the container `Launch` composition and the provisioned host-worktree run — and a harness implementation supplies what differs:
 
 - its per-mode `ScopeRecipe`, auth preflight, and LLM resolution;
-- the command run inside the prepared workspace and its in-place runner;
+- the inner command run inside the prepared workspace, consumed by both modes;
 - harness-owned command options;
-- session existence, subject, trail-pointer, and workspace teardown operations;
-- the host/container launch implementation for machinery that runs next to the agent loop.
+- session existence with its resume-refusal wording, the subject read, and the session trail-pointer path;
+- the container extras (env, mounts) and the host runner-env preparation.
 
 The generic scope computation and the bro-run recipe stay in `bro.launch.scope`, so native launch and summon lowering share the same policy without making `bro` depend on `bro-ride`. Claude's full/raw recipes remain private to `ride.claude`; raw is a Claude mode, not a harness value.
 
@@ -67,7 +67,7 @@ The workspace checkout runs `ride solo|along --in-place`, a suppressed inner con
 
 ## Bro harness
 
-The bro harness drives the selected bro's native LLM loop. Container sessions compose the same `bro run|chat … --in-place` launch description used by summoned children; host sessions provision the workspace worktree and run its own `.venv/bin/bro` under the same broker-root supervision and scoped credential store.
+The bro harness drives the selected bro's native LLM loop. Container sessions run the same `bro run|chat … --in-place` inner contract summoned children get; host sessions provision the workspace worktree and run its own `.venv/bin/bro` under the same broker-root supervision and scoped credential store.
 
 Harness-owned flags are `--rich` for `solo`, `--text` for `along`, and `--no-trails` for either mode. Claude rejects those flags; the bro harness rejects Claude's `--raw` and forwarded arguments after `--`.
 
@@ -278,7 +278,7 @@ Both session modes hydrate only the secrets the session's bro declares, scoping 
 Every session runs as the root peer of a **broker** (see `bro/broker/AGENTS.md`): the outer provisions a unix socket at `<runtime-root>/broker/<channel>.sock` (the checkout key keeps the control dir shallow enough for the ~108-byte `sun_path` limit; dir `0700`, socket `0600`), points `BROKER_CHANNEL` at it, and supervises the session from the broker's event loop until it exits. The modes differ only in the spawner (`bro/workspace/spawn.py`, composed by `bro/launch/spawn.py:run_root_via_broker`):
 
 - container — the attached container launch (`bro/launch/root.py:_run_root_via_broker` + `DockerSpawner`), with the socket bind-mounted at the fixed `/run/broker.sock` and `BROKER_CHANNEL` pointing there;
-- host — the runner as a plain subprocess (`ride/ride/claude/session.py:_run_host_root_via_broker` + `ProcessSpawner`), `BROKER_CHANNEL` pointing straight at the socket path — no bind-mount hop.
+- host — the runner as a plain subprocess (`bro/launch/root.py:run_host_process_via_broker` + `ProcessSpawner`), `BROKER_CHANNEL` pointing straight at the socket path — no bind-mount hop.
 
 The session's processes don't talk to that channel directly: a **broxy** (the peer-side broker proxy, `bro/broker/broxy.py`) sits in between, holding the one long-lived upstream connection and re-serving the channel on a local socket that `BROKER_CHANNEL` is rewritten to — so the session's short-lived clients (`broker` CLI calls, `BroChannel`, a backgrounded wait) multiplex over the single connection the host's supersede-on-accept semantics expect, and a result whose waiter died stays claimable from the broxy's mailbox. A set `BROKER_CHANNEL` always names a broxy socket — there is no direct-channel topology.
 

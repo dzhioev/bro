@@ -10,6 +10,13 @@ def claude_config_dir() -> Path:
   return Path(override) if override is not None else Path.home() / '.claude'
 
 
+def workspace_claude_dir(workspace: Path) -> Path:
+  """a managed workspace's claude config root — a workspace record like any
+  other, host-side in both session modes (a container mounts it as its
+  `~/.claude`)."""
+  return workspace / 'claude'
+
+
 def encode_project_path(path: Path) -> str:
   """claude code's project-dir encoding of an absolute path: '/' and '.'
   replaced by '-'."""

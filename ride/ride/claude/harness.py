@@ -1,21 +1,28 @@
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 from bro.base import credentials, log
 from bro.launch.scope import ScopeRecipe
+from bro.launch.trails import local_trails_mounts
 from bro.llm.llms.claude_code import LLMSpec
 from bro.llm.providers import LLMSelection, parse
+from bro.monitor import trail_pointer
 from bro.workspace.model import Workspace
-from ride.claude.claude_auth import _load_anthropic_key
+from bro.workspace.store import ScopedSecrets
+from ride.claude.claude_auth import _apply_claude_auth, _load_anthropic_key
 from ride.claude.claude_config import (
   _latest_jsonl,
+  _provision_host_claude_dir,
+  container_claude_state,
   read_subject,
   workspace_projects_dir,
 )
+from ride.harness import ContainerExtras
 
 if TYPE_CHECKING:
   from bro.base.args import Parser
-  from ride.session import ScopedLaunch, SessionSpec
+  from ride.session import SessionSpec
 
 
 _FULL_SCOPE = ScopeRecipe(
@@ -122,7 +129,8 @@ class ClaudeHarness:
     )
     return False
 
-  def inner_command(self, spec: 'SessionSpec') -> list[str]:
+  def inner_command(self, spec: 'SessionSpec', workspace: Workspace) -> list[str]:
+    del workspace
     claude = options(spec)
     verb = 'solo' if spec.solo else 'along'
     flags = {'--resume': spec.resume, '--raw': claude.raw}
@@ -154,26 +162,29 @@ class ClaudeHarness:
   def session_exists(self, workspace: Workspace) -> bool:
     return _latest_jsonl(workspace_projects_dir(workspace)) is not None
 
+  def missing_session_error(self, workspace: Workspace) -> str:
+    return f'no claude session found for {workspace.name} in {workspace_projects_dir(workspace)}'
+
   def read_subject(self, workspace: Workspace) -> str | None:
     return read_subject(workspace)
 
-  def launch(
-    self,
-    spec: 'SessionSpec',
-    workspace: Workspace,
-    base_ref: Optional[str],
-    launch_scope: 'ScopedLaunch',
-    *,
-    container: bool,
-  ) -> int:
-    from ride.claude.session import launch_session
+  def session_trail_pointer(self, workspace: Workspace) -> Path:
+    return trail_pointer.claude_pointer(workspace.path)
 
-    return launch_session(spec, workspace, base_ref, launch_scope, container=container)
+  def container_extras(
+    self, spec: 'SessionSpec', workspace: Workspace, scoped: ScopedSecrets
+  ) -> ContainerExtras:
+    del spec
+    claude_mounts, claude_env = container_claude_state(workspace.path)
+    return ContainerExtras(env=claude_env, mounts=(*claude_mounts, *local_trails_mounts(scoped)))
 
-  def run_in_place(self, spec: 'SessionSpec') -> int:
-    from ride.claude.runner import run_in_place
-
-    return run_in_place(spec)
+  def prepare_host_env(
+    self, spec: 'SessionSpec', workspace: Workspace, worktree: Path, env: dict[str, str]
+  ) -> None:
+    del spec
+    claude_dir = _provision_host_claude_dir(workspace.path, worktree, workspace.project)
+    env['CLAUDE_CONFIG_DIR'] = str(claude_dir)
+    _apply_claude_auth(env)
 
 
 CLAUDE = ClaudeHarness()

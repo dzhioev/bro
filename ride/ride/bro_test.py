@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import ride.bro as bro_harness
-import ride.bro_session as bro_session
+import ride.session as ride_session
 from bro.launch.identity import bro_git_identity_env
 from bro.llm.llms.openai import LLMSpec
 from bro.monitor import trail_pointer
@@ -49,6 +49,12 @@ def _scope(**overrides) -> ScopedLaunch:
   return ScopedLaunch(**values)
 
 
+@pytest.fixture(autouse=True)
+def local_trails(monkeypatch):
+  # keep the launch composition off the machine's own trails credential
+  monkeypatch.setattr(bro_harness, 'local_trails_mounts', lambda scoped: ())
+
+
 class TestBroOptions:
   def test_round_trips(self):
     options = bro_harness.BroOptions(rich=True, text=False, no_trails=True, subject='do the work')
@@ -68,14 +74,15 @@ class TestBroOptions:
 
 
 class TestInnerCommand:
-  def test_chat_uses_the_bro_in_place_runner(self):
+  def test_chat_uses_the_bro_in_place_runner(self, tmp_path):
     spec = _spec(
       llm='openai:fable:high+fast',
       harness_options=bro_harness.BroOptions(
         rich=False, text=True, no_trails=False, subject='start here'
       ).dump(),
     )
-    assert bro_session.inner_command(spec) == [
+    workspace = Workspace.create('w', tmp_path, WorkspaceKind.CONTAINER)
+    assert bro_harness.BRO.inner_command(spec, workspace) == [
       'bro',
       'chat',
       'dev',
@@ -88,27 +95,28 @@ class TestInnerCommand:
       '--in-place',
     ]
 
-  def test_resume_carries_the_workspace_trail_and_recorded_recipe(self, monkeypatch, tmp_path):
-    monkeypatch.setattr(bro_session, 'session_trail_pointer', lambda _ws: tmp_path / 'pointer')
-    trail_pointer.write(tmp_path / 'pointer', 'trail-1')
-    command = bro_session.inner_command(_spec(resume=True, prompt=None))
+  def test_resume_carries_the_workspace_trail_and_recorded_recipe(self, tmp_path):
+    workspace = Workspace.create('w', tmp_path, WorkspaceKind.CONTAINER)
+    trail_pointer.write(trail_pointer.broker_pointer(workspace.path), 'trail-1')
+    command = bro_harness.BRO.inner_command(_spec(resume=True, prompt=None), workspace)
     assert command[:3] == ['bro', 'chat', 'dev']
     assert command[command.index('--continue-trail') + 1] == 'trail-1'
     assert '"type":"openai"' in command[command.index('--continue-llm') + 1]
 
 
 class TestContainerSession:
-  def test_composes_the_shared_bro_run_description(self, monkeypatch, tmp_path):
+  def test_composes_the_bro_run_launch(self, monkeypatch, tmp_path):
     workspace = Workspace.create('w', tmp_path, WorkspaceKind.CONTAINER)
     captured: dict = {}
-    monkeypatch.setattr(bro_session, 'find_container_id', lambda _tree: None)
+    monkeypatch.setattr(ride_session, 'find_container_id', lambda _tree: None)
 
-    def run(launch, **kwargs):
+    def run(launch, run_workspace, **kwargs):
       captured['launch'] = launch
+      captured['workspace'] = run_workspace
       captured.update(kwargs)
       return 7
 
-    monkeypatch.setattr(bro_session, 'run_in_container', run)
+    monkeypatch.setattr(ride_session, 'run_in_container', run)
     spec = _spec(
       solo=True,
       hold='unattended',
@@ -116,7 +124,7 @@ class TestContainerSession:
         rich=True, text=False, no_trails=False, subject='start here'
       ).dump(),
     )
-    assert bro_session.launch_session(spec, workspace, 'abc123', _scope(), container=True) == 7
+    assert ride_session._launch_session(spec, workspace, 'abc123', _scope(), container=True) == 7
     launch = captured['launch']
     assert launch.command == [
       'bro', 'run', 'dev', 'start here', '--rich', '--hold', 'unattended', '--in-place'
@@ -129,12 +137,29 @@ class TestContainerSession:
     assert not launch.tty
     assert captured['workspace'] is workspace
     assert captured['may_summon'] == {'reviewer'}
-    assert captured['trail_pointer'] == workspace.path / trail_pointer.FILENAME
+
+  def test_no_trails_disables_recording_in_the_container_env(self, monkeypatch, tmp_path):
+    workspace = Workspace.create('w', tmp_path, WorkspaceKind.CONTAINER)
+    captured: dict = {}
+    monkeypatch.setattr(ride_session, 'find_container_id', lambda _tree: None)
+    monkeypatch.setattr(
+      ride_session,
+      'run_in_container',
+      lambda launch, *_a, **_k: captured.update(launch=launch) or 0,
+    )
+    spec = _spec(
+      harness_options=bro_harness.BroOptions(
+        rich=False, text=False, no_trails=True, subject=None
+      ).dump()
+    )
+    assert ride_session._launch_session(spec, workspace, None, _scope(), container=True) == 0
+    assert captured['launch'].env['TRAILS_DISABLED'] == '1'
+    assert captured['launch'].extra_mounts == ()
 
   def test_resume_refuses_without_a_broker_published_pointer(self, caplog, tmp_path):
     workspace = Workspace.create('w', tmp_path, WorkspaceKind.CONTAINER)
     assert (
-      bro_session.launch_session(
+      ride_session._launch_session(
         _spec(resume=True, prompt=None), workspace, None, _scope(), container=True
       )
       == 1
@@ -143,11 +168,20 @@ class TestContainerSession:
 
   def test_fresh_session_clears_a_stale_pointer(self, monkeypatch, tmp_path):
     workspace = Workspace.create('w', tmp_path, WorkspaceKind.CONTAINER)
-    pointer = workspace.path / trail_pointer.FILENAME
+    pointer = trail_pointer.broker_pointer(workspace.path)
     trail_pointer.write(pointer, 'stale')
-    monkeypatch.setattr(bro_session, 'find_container_id', lambda _tree: 'active')
-    assert bro_session.launch_session(_spec(), workspace, None, _scope(), container=True) == 1
+    monkeypatch.setattr(ride_session, 'find_container_id', lambda _tree: None)
+    monkeypatch.setattr(ride_session, 'run_in_container', lambda *_a, **_k: 0)
+    assert ride_session._launch_session(_spec(), workspace, None, _scope(), container=True) == 0
     assert not pointer.exists()
+
+  def test_a_refused_second_launch_leaves_the_active_pointer_alone(self, monkeypatch, tmp_path):
+    workspace = Workspace.create('w', tmp_path, WorkspaceKind.CONTAINER)
+    pointer = trail_pointer.broker_pointer(workspace.path)
+    trail_pointer.write(pointer, 'live')
+    monkeypatch.setattr(ride_session, 'find_container_id', lambda _tree: 'active')
+    assert ride_session._launch_session(_spec(), workspace, None, _scope(), container=True) == 1
+    assert trail_pointer.read(pointer) == 'live'
 
 
 class TestHostSession:
@@ -158,21 +192,25 @@ class TestHostSession:
     bro_binary.write_text('')
     return workspace, bro_binary
 
+  def _prepare(self, monkeypatch, tmp_path):
+    monkeypatch.setattr(ride_session, 'project_root', lambda: tmp_path)
+    monkeypatch.setattr(ride_session.os, 'chdir', lambda _path: None)
+    monkeypatch.setattr(ride_session, 'ensure_host_worktree', lambda *_args: True)
+    monkeypatch.setattr(ride_session, 'provision_host_worktree', lambda *_args: True)
+    monkeypatch.setattr(
+      ride_session, 'materialize_scoped_store', lambda _store, path: path / 'credentials.json'
+    )
+
   def test_provisions_and_supervises_the_worktree_runner(self, monkeypatch, tmp_path):
     workspace, bro_binary = self._workspace(tmp_path)
-    monkeypatch.setattr(bro_session, 'project_root', lambda: tmp_path)
-    monkeypatch.setattr(bro_session.os, 'chdir', lambda _path: None)
-    monkeypatch.setattr(bro_session, 'ensure_host_worktree', lambda *_args: True)
-    monkeypatch.setattr(bro_session, 'provision_host_worktree', lambda *_args: True)
-    monkeypatch.setattr(
-      bro_session, 'materialize_scoped_store', lambda _store, path: path / 'credentials.json'
-    )
-    monkeypatch.setattr(bro_session, 'broker_enabled', lambda: True)
+    self._prepare(monkeypatch, tmp_path)
+    monkeypatch.setattr(ride_session, 'broker_enabled', lambda: True)
     root = MagicMock(return_value=3)
-    monkeypatch.setattr(bro_session, 'run_host_process_via_broker', root)
+    monkeypatch.setattr(ride_session, 'run_host_process_via_broker', root)
 
     assert (
-      bro_session.launch_session(_spec(host=True), workspace, None, _scope(), container=False) == 3
+      ride_session._launch_session(_spec(host=True), workspace, None, _scope(), container=False)
+      == 3
     )
     command = root.call_args.args[1]
     env = root.call_args.args[2]
@@ -180,28 +218,22 @@ class TestHostSession:
       str(bro_binary), 'chat', 'dev', 'start here', '--hold', 'attended', '--in-place'
     ]  # fmt: skip
     assert env['RIDE_BRO'] == 'dev'
-    assert env[bro_session.START_SESSION_BROXY_ENV] == '1'
+    assert env[ride_session.START_SESSION_BROXY_ENV] == '1'
     assert env['GIT_AUTHOR_NAME'] == 'dev'
     assert env['GIT_AUTHOR_EMAIL'] == 'dev@bro'
-    assert root.call_args.kwargs['trail_pointer'] == workspace.path / trail_pointer.FILENAME
     assert workspace.is_clean() == (False, ['last session exited with code 3'])
 
   def test_brokerless_host_run_unsets_an_ambient_channel(self, monkeypatch, tmp_path):
     workspace, _ = self._workspace(tmp_path)
+    self._prepare(monkeypatch, tmp_path)
     monkeypatch.setenv('BROKER_CHANNEL', 'unix:/ambient.sock')
-    monkeypatch.setattr(bro_session, 'project_root', lambda: tmp_path)
-    monkeypatch.setattr(bro_session.os, 'chdir', lambda _path: None)
-    monkeypatch.setattr(bro_session, 'ensure_host_worktree', lambda *_args: True)
-    monkeypatch.setattr(bro_session, 'provision_host_worktree', lambda *_args: True)
-    monkeypatch.setattr(
-      bro_session, 'materialize_scoped_store', lambda _store, path: path / 'credentials.json'
-    )
-    monkeypatch.setattr(bro_session, 'broker_enabled', lambda: False)
+    monkeypatch.setattr(ride_session, 'broker_enabled', lambda: False)
     run = MagicMock(return_value=MagicMock(returncode=0))
-    monkeypatch.setattr(bro_session.subprocess, 'run', run)
+    monkeypatch.setattr(ride_session.subprocess, 'run', run)
 
     assert (
-      bro_session.launch_session(_spec(host=True), workspace, None, _scope(), container=False) == 0
+      ride_session._launch_session(_spec(host=True), workspace, None, _scope(), container=False)
+      == 0
     )
     assert 'BROKER_CHANNEL' not in run.call_args.kwargs['env']
-    assert bro_session.START_SESSION_BROXY_ENV not in run.call_args.kwargs['env']
+    assert ride_session.START_SESSION_BROXY_ENV not in run.call_args.kwargs['env']

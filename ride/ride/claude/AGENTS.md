@@ -4,12 +4,11 @@ The Claude harness supplies `ride`'s first harness implementation. Its two inter
 
 ## Modules
 
-- `harness.py` — `ClaudeHarness`, private full/raw `ScopeRecipe` values, typed `ClaudeOptions`, auth preflight, Claude LLM resolution, the `ride solo|along --in-place` inner command, and the workspace session reads.
-- `session.py` — Claude host/container launch data around the neutral outer lifecycle. Both paths spawn the workspace checkout's `ride solo|along --in-place`; host mode provisions the worktree and private Claude state, while container mode contributes Claude mounts and the trail pointer to the neutral Docker launch.
-- `runner.py` — the in-place runner next to Claude: private host state, resume-id lookup, bro identity and commit provisioning, host broxy, session MCP server, launch context, recorder, readiness gate, and Claude process lifetime.
+- `harness.py` — `ClaudeHarness`, private full/raw `ScopeRecipe` values, typed `ClaudeOptions`, auth preflight, Claude LLM resolution, the `ride solo|along --in-place` inner command, the workspace session reads, and the launch hooks the neutral skeleton consumes: Claude state mounts and env for a container, the private state dir and auth for a host runner env.
+- `runner.py` — the in-place runner next to Claude: private host state, resume-id lookup, bro identity and commit provisioning, the session broxy, session MCP server, launch context, recorder, readiness gate, and Claude process lifetime.
 - `claude_argv.py` — one argv builder for full/raw mode, including solo print mode, settings, status line, API-key helper, MCP config, bro prompt composition, blocked and narrowed native tools, model/effort/fast selection, prompt, and forwarded Claude arguments.
 - `claude_auth.py` — setup-token environment for full mode and the Anthropic API-key read used by raw mode.
-- `claude_config.py` — the `claude/` state dir under a workspace: settings, transcript paths, subject reads, trail pointer, host provisioning, and container mounts.
+- `claude_config.py` — the `claude/` state dir under a workspace: settings, transcript paths, subject reads, host provisioning, and container mounts.
 - `mcp.py` — session-local HTTP MCP server lifetime and Claude MCP config.
 - `recorder.py` — Claude transcript recorder daemon lifetime.
 - `session_context.py` — typed launch-context records exported through `RIDE_SESSION_CONTEXT`.

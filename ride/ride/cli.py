@@ -175,6 +175,8 @@ def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, sol
   if args['hold'] is None:
     args['hold'] = default_hold(solo=solo, host=args['host'])
   harness_name = args.pop('harness') or project_config().harness
+  if in_place and harness_name != 'claude':
+    parser.error('--in-place is the claude inner runner; bro workspaces run `bro run|chat`')
   try:
     harness = get_harness(harness_name)
     canonicalize(args, selection_from_args(args))
@@ -224,7 +226,9 @@ def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, sol
     **args,
   )
   if in_place:
-    return harness.run_in_place(spec)
+    from ride.claude.runner import run_in_place
+
+    return run_in_place(spec)
   return start_session(spec)
 
 

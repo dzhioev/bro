@@ -133,17 +133,17 @@ class SummonSpawner(Spawner):
     return await self._docker.spawn(lowered, channel)
 
 
-def _note_root_started(control: SummonControl, trail_pointer_path: Optional[Path] = None):
+def _note_root_started(control: SummonControl, workspace: Workspace):
   def _handle(context: Dispatcher, peer: Peer, message: Message) -> None:
     del context, peer
     trail_id = message.payload.get('trail_id')
     log.info('root run started (trail %s)', trail_id)
     # a bro-run root's own trail is what its summon children are attributed to
     control.note_root_trail(trail_id)
-    if trail_pointer_path is not None and isinstance(trail_id, str) and len(trail_id) > 0:
-      from bro.monitor.trail_pointer import write
+    if isinstance(trail_id, str) and len(trail_id) > 0:
+      from bro.monitor.trail_pointer import broker_pointer, write
 
-      write(trail_pointer_path, trail_id)
+      write(broker_pointer(workspace.path), trail_id)
 
   return _handle
 
@@ -163,7 +163,6 @@ def run_root_via_broker(
   workspace: Workspace,
   may_summon: Collection[str] = (),
   credential_scope: Collection[str] = (),
-  trail_pointer: Optional[Path] = None,
 ) -> int:
   """run `launch` as the root peer of a broker over the host control dir
   (`bro.workspace.paths.broker_dir`), supervise it on the broker loop until it exits,
@@ -176,13 +175,13 @@ def run_root_via_broker(
   TTY (see `bro.workspace.spawn._HostLogRedirect`); headless runs keep it on stderr.
 
   `workspace` is the workspace the root session runs in — its name is the root's
-  identity in the summon audit. `may_summon` names the bros the root session
+  identity in the summon audit, and its records carry the broker-published
+  current-trail pointer written from the root's `started` lifecycle
+  (`bro.monitor.trail_pointer`). `may_summon` names the bros the root session
   is authorized to summon — its effective outgoing allow-list (`bro/launch/summon_control.py`);
   defaults to deny-all. `credential_scope` names the secrets the root session
   was launched with, the bound on what its summons may grant a child; defaults
-  to grant-nothing. `trail_pointer` is a claude session's current-trail
-  pointer file (host-side path; `ride` passes it), the control's provenance source
-  for the root's summon children. A summoned child follows its own bro's static seeds
+  to grant-nothing. A summoned child follows its own bro's static seeds
   instead, resolved per request by the control. The summon handler is registered
   either way, so a denied summoner always gets a clean correlated error instead of
   a silent refuse; after the loop ends — cleanly or by an exception unwinding out
@@ -206,13 +205,12 @@ def run_root_via_broker(
     workspace=workspace,
     status_file=summon_status_file(project, workspace.name),
     audit_file=summon_dir(project) / f'{workspace.name}.jsonl',
-    trail_pointer=trail_pointer,
   )
   facade = Broker(UnixServerTransport(str(broker_dir(project))), spawner)
   facade.on(Tag.PING, ping_handler)
   # the root's own lifecycle (a bro run at the session root) has no parent peer to
   # route to; this host process is its parent, so it lands in the host log
-  facade.on(Tag.STARTED, _note_root_started(control, trail_pointer))
+  facade.on(Tag.STARTED, _note_root_started(control, workspace))
   facade.on(Tag.COMPLETED, _log_root_completed)
   facade.on(SUMMON, control.handle)
   facade.add_delivery_observer(control.observe_delivery)

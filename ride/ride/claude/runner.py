@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from bro.base import log
-from bro.launch.broxy import _start_session_broxy
+from bro.launch.broxy import session_broxy
 from bro.launch.hold import HOLD_VARIABLE
 from bro.launch.identity import bro_git_identity_env
 from bro.monitor import claude_projects_dir
@@ -125,21 +125,13 @@ def run_in_place(spec: 'SessionSpec') -> int:
   os.environ[HOLD_VARIABLE] = spec.hold
   os.environ['RIDE_RUNNER_PID'] = str(os.getpid())
 
-  with contextlib.ExitStack() as teardown:
-    # host mode launches the session broxy (in a container the entrypoint started
-    # one and BROKER_CHANNEL already points at it), rewriting BROKER_CHANNEL
-    # before the MCP server and claude inherit the environment. a set
-    # BROKER_CHANNEL always names a broxy socket: when the broxy cannot run the
-    # channel is unset — the session runs without one — and the launch proceeds.
-    upstream = os.environ.get('BROKER_CHANNEL')
-    if upstream is not None and not in_container():
-      broxy = _start_session_broxy(upstream, os.environ)
-      if broxy is not None:
-        teardown.callback(broxy.stop)
-        os.environ['BROKER_CHANNEL'] = broxy.address
-      else:
-        del os.environ['BROKER_CHANNEL']
-
+  # a host launch signals the session broxy through BRO_START_SESSION_BROXY (in
+  # a container the entrypoint started one and BROKER_CHANNEL already points at
+  # it), rewriting BROKER_CHANNEL before the MCP server and claude inherit the
+  # environment. a set BROKER_CHANNEL always names a broxy socket: when the
+  # broxy cannot run the channel is unset — the session runs without one — and
+  # the launch proceeds.
+  with session_broxy(), contextlib.ExitStack() as teardown:
     # session-local MCP serving, one mechanism for both flavors: OS-assigned port
     # published via a port file, per-session bearer token. the tools serve this
     # workspace's code (the runner's cwd and venv) — the bro's own toolset under

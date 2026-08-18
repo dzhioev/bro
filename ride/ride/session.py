@@ -1,18 +1,25 @@
 import dataclasses
 import json
 import os
+import subprocess
 import sys
 from dataclasses import dataclass, replace
 from typing import Optional
 
-from bro.base import log
+from bro.base import credentials, log
+from bro.launch.broxy import START_SESSION_BROXY_ENV
+from bro.launch.root import run_host_process_via_broker, run_in_container
 from bro.launch.scope import LaunchScopeError, preflight_scoped_launch, scoped_secrets
 from bro.llm.llm import LLMSpec
+from bro.monitor import trail_pointer
+from bro.workspace.containers import broker_enabled
+from bro.workspace.docker import Launch, find_container_id
 from bro.workspace.git import resolve_ref
 from bro.workspace.metadata import WorkspaceKind
 from bro.workspace.model import KindMismatch, SessionBusy, Workspace
-from bro.workspace.paths import ensure_runtime_root, in_container, project_root
-from bro.workspace.store import ScopedSecrets
+from bro.workspace.paths import ensure_runtime_root, in_container, project_root, venv_env
+from bro.workspace.store import ScopedSecrets, log_scoped_secrets, materialize_scoped_store
+from bro.workspace.worktrees import ensure_host_worktree, provision_host_worktree
 from ride.flags import default_hold
 from ride.harness import Harness, get_harness
 
@@ -80,9 +87,6 @@ class SessionSpec:
     if len(forwarded) > 0:
       parts.extend(['--', *forwarded])
     return parts
-
-  def inner_command(self) -> list[str]:
-    return get_harness(self.harness).inner_command(self)
 
   def resume_variant(self) -> 'SessionSpec':
     return replace(
@@ -170,6 +174,111 @@ def _print_resume_hint(spec: SessionSpec, workspace: Workspace) -> None:
   print(f'  ride resume {workspace.name}')
 
 
+def _launch_session(
+  spec: SessionSpec,
+  workspace: Workspace,
+  base_ref: Optional[str],
+  launch_scope: ScopedLaunch,
+  *,
+  container: bool,
+) -> int:
+  harness = get_harness(spec.harness)
+  if container and find_container_id(workspace.tree) is not None:
+    log.error(
+      'session already active in the container for workspace %r; refusing to start a second',
+      spec.name,
+    )
+    return 1
+  if not spec.resume:
+    trail_pointer.clear(harness.session_trail_pointer(workspace))
+  elif not harness.session_exists(workspace):
+    log.error('%s', harness.missing_session_error(workspace))
+    return 1
+  if container:
+    return _container_session(harness, spec, workspace, base_ref, launch_scope)
+  return _host_session(harness, spec, workspace, base_ref, launch_scope)
+
+
+def _container_session(
+  harness: Harness,
+  spec: SessionSpec,
+  workspace: Workspace,
+  base_ref: Optional[str],
+  launch_scope: ScopedLaunch,
+) -> int:
+  scoped = launch_scope.scoped
+  env: dict[str, str] = {'RIDE_BRO': spec.session_bro}
+  if base_ref is not None:
+    env['RIDE_BASE_REF'] = base_ref
+  extras = harness.container_extras(spec, workspace, scoped)
+  env.update(extras.env)
+  launch = Launch(
+    name=spec.name,
+    command=harness.inner_command(spec, workspace),
+    env=env,
+    secrets=scoped.required,
+    optional_secrets=scoped.optional,
+    docker_sock=scoped.docker_sock,
+    tty=not spec.solo,
+    forward_env=True,
+    extra_mounts=extras.mounts,
+  )
+  return run_in_container(launch, workspace, may_summon=launch_scope.may_summon)
+
+
+def _host_session(
+  harness: Harness,
+  spec: SessionSpec,
+  workspace: Workspace,
+  base_ref: Optional[str],
+  launch_scope: ScopedLaunch,
+) -> int:
+  os.chdir(project_root())
+  worktree = workspace.tree
+  scoped = launch_scope.scoped
+  log_scoped_secrets(spec.name, scoped.required, scoped.optional)
+  if not ensure_host_worktree(worktree, workspace.metadata.branch, base_ref):
+    return 1
+  if not provision_host_worktree(worktree):
+    return 1
+
+  inner = harness.inner_command(spec, workspace)
+  inner_binary = worktree / '.venv' / 'bin' / inner[0]
+  if not inner_binary.is_file():
+    log.error(
+      'no %s in %s — the worktree base predates the %s in-place runner; '
+      'rebase it onto origin/master or recreate it',
+      inner[0],
+      inner_binary,
+      inner[0],
+    )
+    return 1
+
+  command = [str(inner_binary), *inner[1:]]
+  runner_env = venv_env(worktree / '.venv')
+  runner_env[credentials.REGISTRY_ENV] = str(
+    materialize_scoped_store(launch_scope.store, workspace.path / 'credentials')
+  )
+  runner_env[START_SESSION_BROXY_ENV] = '1'
+  harness.prepare_host_env(spec, workspace, worktree, runner_env)
+  workspace.clear_session_end()
+  if broker_enabled():
+    code = run_host_process_via_broker(
+      workspace,
+      command,
+      runner_env,
+      launch_scope.may_summon,
+      scoped.required | scoped.optional,
+      interactive=not spec.solo,
+    )
+  else:
+    runner_env.pop(START_SESSION_BROXY_ENV, None)
+    runner_env.pop('BROKER_CHANNEL', None)
+    code = subprocess.run(command, cwd=str(worktree), env=runner_env).returncode
+  workspace.record_session_end(code)
+  return code
+
+
 def _finish_session(spec: SessionSpec, workspace: Workspace, code: int) -> int:
   if spec.drop:
     if code == 0:
@@ -229,7 +338,7 @@ def start_session(spec: SessionSpec) -> int:
   try:
     with workspace.hold_session_lock():
       record_resume_spec(workspace, spec)
-      code = harness.launch(spec, workspace, base_ref, launch, container=container)
+      code = _launch_session(spec, workspace, base_ref, launch, container=container)
       return _finish_session(spec, workspace, code)
   except SessionBusy as error:
     log.error('%s', error)

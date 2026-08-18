@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import ride.claude.runner as ride_runner
 from bro.base import credentials
+from bro.launch.broxy import START_SESSION_BROXY_ENV
 from bro.llm.llms import claude_code
 from bro.workspace.paths import workspace_dir
 from ride.claude.claude_argv import ClaudeLaunch
@@ -37,7 +38,7 @@ class _Harness:
       patch('ride.claude.runner._run_claude', return_value=0),
       patch('ride.claude.runner._start_session_recorder'),
       patch('ride.claude.runner._apply_claude_auth'),
-      patch('ride.claude.runner._start_session_broxy', return_value=self.broxy),
+      patch('bro.launch.broxy._start_session_broxy', return_value=self.broxy),
       patch('ride.claude.runner.in_container', return_value=False),
       patch('ride.claude.runner._provision_host_claude_dir', return_value=self.claude_config_dir),
       patch('ride.claude.runner.project_root', return_value=Path('/main-repo')),
@@ -53,6 +54,7 @@ class _Harness:
     self.env.pop('BRO_HOLD', None)
     self.env.pop('RIDE_RUNNER_PID', None)
     self.env.pop('BROKER_CHANNEL', None)
+    self.env.pop(START_SESSION_BROXY_ENV, None)
     self.env.pop('CLAUDE_CONFIG_DIR', None)
     self.start_server = entered[2]
     self.build = entered[3]
@@ -272,6 +274,7 @@ class TestSessionBroxy:
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
       h.env['BROKER_CHANNEL'] = 'unix:/up.sock'
+      h.env[START_SESSION_BROXY_ENV] = '1'
       assert ride_runner.run_in_place(_spec()) == 0
       assert h.start_broxy.call_args.args[0] == 'unix:/up.sock'
       env = h.run_claude.call_args.args[1]
@@ -282,12 +285,15 @@ class TestSessionBroxy:
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
       h.env['BROKER_CHANNEL'] = 'unix:/up.sock'
+      h.env[START_SESSION_BROXY_ENV] = '1'
       h.start_broxy.return_value = None
       assert ride_runner.run_in_place(_spec()) == 0
       env = h.run_claude.call_args.args[1]
       assert 'BROKER_CHANNEL' not in env
 
   def test_container_mode_keeps_the_entrypoint_owned_channel(self, monkeypatch, tmp_path):
+    # a container carries no BRO_START_SESSION_BROXY signal — only a host
+    # launch sets it — so the entrypoint's channel passes through untouched
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
       h.in_container.return_value = True
@@ -300,6 +306,7 @@ class TestSessionBroxy:
   def test_no_channel_starts_no_broxy(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
+      h.env[START_SESSION_BROXY_ENV] = '1'
       assert ride_runner.run_in_place(_spec()) == 0
       h.start_broxy.assert_not_called()
 

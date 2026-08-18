@@ -1,12 +1,23 @@
-from typing import TYPE_CHECKING, Optional, Protocol
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING, Protocol
 
 from bro.launch.scope import ScopeRecipe
 from bro.llm.llm import LLMSpec
 from bro.workspace.model import Workspace
+from bro.workspace.store import ScopedSecrets
 
 if TYPE_CHECKING:
   from bro.base.args import Parser
-  from ride.session import ScopedLaunch, SessionSpec
+  from ride.session import SessionSpec
+
+
+@dataclass(frozen=True)
+class ContainerExtras:
+  """what one harness adds to the neutral container launch."""
+
+  env: dict[str, str]
+  mounts: tuple[str, ...]
 
 
 class Harness(Protocol):
@@ -22,25 +33,25 @@ class Harness(Protocol):
 
   def preflight_auth(self, spec: 'SessionSpec') -> bool: ...
 
-  def inner_command(self, spec: 'SessionSpec') -> list[str]: ...
-
   def command_options(self, spec: 'SessionSpec') -> tuple[list[str], list[str]]: ...
 
   def session_exists(self, workspace: Workspace) -> bool: ...
 
+  def missing_session_error(self, workspace: Workspace) -> str: ...
+
   def read_subject(self, workspace: Workspace) -> str | None: ...
 
-  def launch(
-    self,
-    spec: 'SessionSpec',
-    workspace: Workspace,
-    base_ref: Optional[str],
-    launch_scope: 'ScopedLaunch',
-    *,
-    container: bool,
-  ) -> int: ...
+  def session_trail_pointer(self, workspace: Workspace) -> Path: ...
 
-  def run_in_place(self, spec: 'SessionSpec') -> int: ...
+  def inner_command(self, spec: 'SessionSpec', workspace: Workspace) -> list[str]: ...
+
+  def container_extras(
+    self, spec: 'SessionSpec', workspace: Workspace, scoped: ScopedSecrets
+  ) -> ContainerExtras: ...
+
+  def prepare_host_env(
+    self, spec: 'SessionSpec', workspace: Workspace, worktree: Path, env: dict[str, str]
+  ) -> None: ...
 
 
 def get_harness(name: str) -> Harness:

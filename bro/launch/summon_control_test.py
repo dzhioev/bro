@@ -7,6 +7,7 @@ import bro.launch.spawn
 import bro.launch.summon_control
 from bro.broker.brotocol import Message
 from bro.broker.dispatcher import Dispatcher
+from bro.monitor import trail_pointer
 from bro.workspace.metadata import WorkspaceKind
 from bro.workspace.model import Workspace
 from bro.workspace.paths import workspace_tree
@@ -319,16 +320,12 @@ class TestSummonHandler:
     [(launch, _, _)] = context.spawned
     assert launch.summoner is None
 
-  def test_root_trail_pointer_attributes_session_children(self, tmp_path):
-    pointer = tmp_path / 'current-trail.json'
+  def test_claude_trail_pointer_attributes_session_children(self, tmp_path):
+    workspace = _workspace(tmp_path)
+    pointer = trail_pointer.claude_pointer(workspace.path)
+    pointer.parent.mkdir(parents=True)
     pointer.write_text(json.dumps({'trail_id': 'CT9'}))
-    control = bro.launch.summon_control.SummonControl(
-      allow_list={'dev'},
-      workspace=_workspace(tmp_path),
-      status_file=tmp_path / 'summon-status.json',
-      audit_file=tmp_path / 'audit' / 'ws.jsonl',
-      trail_pointer=pointer,
-    )
+    control = _control(tmp_path, {'dev'})
     context = FakeContext()
     control.handle(cast(Dispatcher, context), ROOT, _summon_message())
     [(launch, _, _)] = context.spawned
@@ -337,13 +334,7 @@ class TestSummonHandler:
   def test_absent_trail_pointer_degrades_to_no_summoned_by(self, tmp_path):
     # the early-launch race: the recorder has not adopted a transcript yet, so
     # the pointer file does not exist — absent provenance, never a legacy shape
-    control = bro.launch.summon_control.SummonControl(
-      allow_list={'dev'},
-      workspace=_workspace(tmp_path),
-      status_file=tmp_path / 'summon-status.json',
-      audit_file=tmp_path / 'audit' / 'ws.jsonl',
-      trail_pointer=tmp_path / 'current-trail.json',
-    )
+    control = _control(tmp_path, {'dev'})
     context = FakeContext()
     control.handle(cast(Dispatcher, context), ROOT, _summon_message())
     [(launch, _, _)] = context.spawned
