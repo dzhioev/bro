@@ -25,7 +25,6 @@ class Verbosity(StrEnum):
 class Layout(StrEnum):
   EVENT_LOG = 'event-log'
   CONVERSATION = 'conversation'
-  PANELS = 'panels'
   NATIVE_STEPS = 'native-steps'
   TRAIL_LIST = 'trail-list'
   LINEAGE_TREE = 'lineage-tree'
@@ -221,10 +220,7 @@ class DisplayConfig:
       raise ValueError('display context label cannot contain control characters')
     if self.appearance is Appearance.CHAT and self.layout is not Layout.CONVERSATION:
       raise ValueError('chat appearance requires conversation layout')
-    if self.appearance is Appearance.REWIND and self.layout in {
-      Layout.EVENT_LOG,
-      Layout.PANELS,
-    }:
+    if self.appearance is Appearance.REWIND and self.layout is Layout.EVENT_LOG:
       raise ValueError('rewind appearance requires a rewind layout')
     if self.layout is Layout.NATIVE_STEPS and self.record_filter.included_kinds is not None:
       if RecordKind.NATIVE_STEP not in self.record_filter.included_kinds:

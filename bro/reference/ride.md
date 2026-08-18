@@ -69,7 +69,7 @@ The workspace checkout runs `ride solo|along --in-place`, a suppressed inner con
 
 The bro harness drives the selected bro's native LLM loop. Container sessions run the same `bro run|chat … --in-place` inner contract summoned children get; host sessions provision the workspace worktree and run its own `.venv/bin/bro` under the same broker-root supervision and scoped credential store.
 
-Harness-owned flags are `--rich` for `solo`, `--text` for `along`, and `--no-trails` for either mode. Claude rejects those flags; the bro harness rejects Claude's `--raw` and forwarded arguments after `--`.
+The harness-owned flag is `--no-trails`. Claude rejects it; the bro harness rejects Claude's `--raw` and forwarded arguments after `--`.
 
 The broker publishes a native root's `started` trail id beside the workspace's `resume.json`. `ride resume` continues that exact trail at its latest consistent point under the recorded native recipe, producing a new trail with `forked_from`; it does not use the globally newest call or the bro class's current recipe. A session without a broker-published pointer — including a broker-disabled launch or `--no-trails` — cannot be resumed and fails with that reason.
 

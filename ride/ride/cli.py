@@ -184,16 +184,14 @@ def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, sol
   except (LLMSelectionError, ValueError) as error:
     parser.error(str(error))
   raw = args.pop('raw')
-  rich = args.pop('rich')
-  text = args.pop('text')
   no_trails = args.pop('no_trails')
   args['grant'] = args['grant'] or []
   args['revoke'] = args['revoke'] or []
   bro = args.pop('bro')
   prompt = args.pop('prompt')
   if harness_name == 'claude':
-    if rich or text or no_trails:
-      parser.error('--rich/--text/--no-trails require --harness bro')
+    if no_trails:
+      parser.error('--no-trails requires --harness bro')
     if raw and args['host']:
       parser.error('--raw cannot be combined with --host')
     harness_options = ClaudeOptions(raw=raw, arguments=harness_arguments).dump()
@@ -202,11 +200,7 @@ def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, sol
       parser.error('--raw requires --harness claude')
     if len(harness_arguments) > 0:
       parser.error('arguments after `--` require --harness claude')
-    if rich and not solo:
-      parser.error('--rich is accepted only by ride solo')
-    if text and solo:
-      parser.error('--text is accepted only by ride along')
-    harness_options = BroOptions(rich=rich, text=text, no_trails=no_trails, subject=prompt).dump()
+    harness_options = BroOptions(no_trails=no_trails, subject=prompt).dump()
   try:
     resolved_llm = harness.resolve_llm(args['llm'], bro)
   except (KeyError, LLMSelectionError, ValueError) as error:

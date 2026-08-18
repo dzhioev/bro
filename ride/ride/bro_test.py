@@ -31,9 +31,7 @@ def _spec(**overrides) -> SessionSpec:
     'into': None,
     'bro': 'dev',
     'prompt': 'start here',
-    'harness_options': bro_harness.BroOptions(
-      rich=False, text=False, no_trails=False, subject='start here'
-    ).dump(),
+    'harness_options': bro_harness.BroOptions(no_trails=False, subject='start here').dump(),
   }
   values.update(overrides)
   return SessionSpec(**values)
@@ -57,37 +55,27 @@ def local_trails(monkeypatch):
 
 class TestBroOptions:
   def test_round_trips(self):
-    options = bro_harness.BroOptions(rich=True, text=False, no_trails=True, subject='do the work')
+    options = bro_harness.BroOptions(no_trails=True, subject='do the work')
     assert bro_harness.BroOptions.load(options.dump()) == options
 
   def test_rejects_an_unexpected_shape(self):
     with pytest.raises(ValueError, match='unexpected bro option fields'):
-      bro_harness.BroOptions.load({'rich': True})
+      bro_harness.BroOptions.load({'no_trails': True})
 
   def test_no_trails_removes_the_scope_baseline(self):
-    spec = _spec(
-      harness_options=bro_harness.BroOptions(
-        rich=False, text=False, no_trails=True, subject=None
-      ).dump()
-    )
+    spec = _spec(harness_options=bro_harness.BroOptions(no_trails=True, subject=None).dump())
     assert bro_harness.BRO.scope_recipe(spec).optional_baseline == frozenset()
 
 
 class TestInnerCommand:
   def test_chat_uses_the_bro_in_place_runner(self, tmp_path):
-    spec = _spec(
-      llm='openai:fable:high+fast',
-      harness_options=bro_harness.BroOptions(
-        rich=False, text=True, no_trails=False, subject='start here'
-      ).dump(),
-    )
+    spec = _spec(llm='openai:fable:high+fast')
     workspace = Workspace.create('w', tmp_path, WorkspaceKind.CONTAINER)
     assert bro_harness.BRO.inner_command(spec, workspace) == [
       'bro',
       'chat',
       'dev',
       'start here',
-      '--text',
       '--llm',
       'openai:fable:high+fast',
       '--hold',
@@ -117,17 +105,11 @@ class TestContainerSession:
       return 7
 
     monkeypatch.setattr(ride_session, 'run_in_container', run)
-    spec = _spec(
-      solo=True,
-      hold='unattended',
-      harness_options=bro_harness.BroOptions(
-        rich=True, text=False, no_trails=False, subject='start here'
-      ).dump(),
-    )
+    spec = _spec(solo=True, hold='unattended')
     assert ride_session._launch_session(spec, workspace, 'abc123', _scope(), container=True) == 7
     launch = captured['launch']
     assert launch.command == [
-      'bro', 'run', 'dev', 'start here', '--rich', '--hold', 'unattended', '--in-place'
+      'bro', 'run', 'dev', 'start here', '--hold', 'unattended', '--in-place'
     ]  # fmt: skip
     assert launch.env == {
       'RIDE_BRO': 'dev',
@@ -147,11 +129,7 @@ class TestContainerSession:
       'run_in_container',
       lambda launch, *_a, **_k: captured.update(launch=launch) or 0,
     )
-    spec = _spec(
-      harness_options=bro_harness.BroOptions(
-        rich=False, text=False, no_trails=True, subject=None
-      ).dump()
-    )
+    spec = _spec(harness_options=bro_harness.BroOptions(no_trails=True, subject=None).dump())
     assert ride_session._launch_session(spec, workspace, None, _scope(), container=True) == 0
     assert captured['launch'].env['TRAILS_DISABLED'] == '1'
     assert captured['launch'].extra_mounts == ()

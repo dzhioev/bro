@@ -31,7 +31,6 @@ from bro.trails.display.config import (
 )
 from bro.trails.display.core import DisplayDataError, DisplaySession, sanitize_text
 from bro.trails.display.live import LiveDisplayObserver
-from bro.trails.display.panel import RichPanelRenderer
 from bro.trails.display.recorded import RecordedAdapter
 from bro.trails.display.records import (
   ALL_RECORD_KINDS,

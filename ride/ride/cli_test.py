@@ -70,25 +70,21 @@ class TestSolo:
       ride_cli.main(['ride', 'solo', 'dev', 'hello', '--', '--debug', 'mcp'])
     assert options(start.call_args.args[0]).arguments == ['--debug', 'mcp']
 
-  def test_bro_solo_owns_rich_and_no_trails(self, tmp_path):
+  def test_bro_solo_owns_no_trails(self, tmp_path):
     from ride.bro import options as bro_options
 
     with patch('ride.cli.start_session', return_value=0) as start:
-      assert (
-        ride_cli.main(['ride', 'solo', '--harness', 'bro', '--rich', '--no-trails', 'dev', 'hello'])
-        == 0
-      )
+      assert ride_cli.main(['ride', 'solo', '--harness', 'bro', '--no-trails', 'dev', 'hello']) == 0
     spec = start.call_args.args[0]
-    assert bro_options(spec).rich
     assert bro_options(spec).no_trails
     assert _inner_command(spec, tmp_path) == [
-      'bro', 'run', 'dev', 'hello', '--rich', '--hold', 'unattended', '--in-place'
+      'bro', 'run', 'dev', 'hello', '--hold', 'unattended', '--in-place'
     ]  # fmt: skip
 
   def test_claude_rejects_bro_harness_flags(self, capsys):
     with pytest.raises(SystemExit):
       ride_cli.main(['ride', 'solo', '--no-trails', 'dev', 'hello'])
-    assert '--no-trails require --harness bro' in capsys.readouterr().err
+    assert '--no-trails requires --harness bro' in capsys.readouterr().err
 
 
 class TestAlong:
@@ -147,11 +143,11 @@ class TestAlong:
 
   def test_bro_harness_builds_a_native_chat(self, tmp_path):
     with patch('ride.cli.start_session', return_value=0) as start:
-      assert ride_cli.main(['ride', 'along', '--harness', 'bro', '--text', 'dev']) == 0
+      assert ride_cli.main(['ride', 'along', '--harness', 'bro', 'dev']) == 0
     spec = start.call_args.args[0]
     assert spec.harness == 'bro'
     assert _inner_command(spec, tmp_path) == [
-      'bro', 'chat', 'dev', '--text', '--hold', 'attended', '--in-place'
+      'bro', 'chat', 'dev', '--hold', 'attended', '--in-place'
     ]  # fmt: skip
 
   def test_project_harness_default_is_used(self, monkeypatch):
