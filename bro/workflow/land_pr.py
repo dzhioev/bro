@@ -2,39 +2,24 @@
 """merge the approved PR for the current branch in one shot.
 
 Runs the deterministic tail of a dev session: resolve the PR, enforce the merge
-preconditions, aggregate the branch's token-accounting footers, merge, and
-delete the remote feature branch.
+preconditions, rebase-merge, and delete the remote feature branch.
 
-The branch lands as one commit by default — a server-side squash carrying the
-PR's title and body. A branch that carries more than one logically separate
-change lands as several instead, per the plan `--plan <path>` reads: one
-`fold <sha> ...` line per landed commit, in landing order, naming the commits it
-folds — together partitioning what the PR adds to its base — with that commit's
-message written in the lines under it, or nothing to keep the message of the
-first commit it folds. Folds need not be contiguous — a review fix at the tip
-usually belongs to the first one — and the fold reorders the branch accordingly,
-which is where it can conflict.
-
-Landing several commits rewrites the branch (a non-interactive rebase folds each
-one, then the chain is rebuilt so every landed commit carries the aggregated
-footer of what it folds) and force-pushes it before a rebase merge. What makes
-that safe is proven rather than assumed: the rewritten tip's tree must equal the
-tree of the PR head it replaces, so the content under review reaches master
-unchanged and only the commit boundaries move. The local branch may itself be a
-restructuring of the PR head — splitting a commit that straddles two folds is
-done there — since it is the content, not the history, that has to match.
+The branch lands as the commits it carries: nothing here rewrites it, so what
+was approved is what reaches master, commit boundaries and accounting footers
+included.
 
 Preconditions (each failure aborts with a message on stderr and exit 1):
 - the PR for the current branch exists and is OPEN
 - reviewDecision is APPROVED; `--no-review` waives a *missing* review, but
   CHANGES_REQUESTED is always refused
 - the body has no unchecked `- [ ]` boxes unless `--allow-unchecked`
+- the worktree is on the commit the PR carries, so the branch holds nothing the
+  review never saw
+- the repository allows rebase merging
 - every status check has concluded and passed. Pending checks are waited out
   (`--wait-checks` seconds) and then refuse the merge, as a failed check does.
   A PR with no checks passes. `--ignore-checks` drops the gate whole — no
   wait, no refusal, whatever the checks say.
-- with `--plan`: the repository allows rebase merging, the worktree is clean,
-  and the plan partitions the branch's commits
 
 On success prints a single JSON object to stdout:
 
@@ -42,33 +27,20 @@ On success prints a single JSON object to stdout:
    "merged_at": "2026-07-03T10:41:02Z", "commits": 1, "branch_deleted": true}
 """
 
-import contextlib
 import json
-import os
 import re
-import shlex
 import subprocess
-import tempfile
 import time
-from collections.abc import Generator, Sequence
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Optional
 
-import bro.llm.usage as usage
 from bro.base import log, spawn
 from bro.base.args import Parser
 from bro.extra.github import api
-from bro.workflow import commit_footer
+from bro.workspace.git import git_out
 
 __cli_name__ = 'land-pr'
 
 _CHECK_POLL_INTERVAL = 15.0
-_HEAD_POLL_INTERVAL = 2.0
-_HEAD_POLL_BUDGET = 60.0
-
-_SHA = r'[0-9a-fA-F]{4,40}'
-_FOLD_HEADER = re.compile(rf'^fold[ \t]+({_SHA}(?:[ \t]+{_SHA})*)[ \t]*$')
 
 
 class LandError(Exception):
@@ -82,20 +54,6 @@ def _run(command: list[str], *, capture: bool) -> str:
   if result.returncode != 0:
     raise LandError(f'`{" ".join(command[:3])}` failed with exit {result.returncode}')
   return result.stdout.strip() if capture else ''
-
-
-def _git(*args: str, check: bool = True, env: Optional[dict[str, str]] = None) -> str:
-  """run a git command capturing both streams; returns stripped stdout."""
-  result = spawn.run(['git', *args], capture_output=True, text=True, env=env)
-  if check and result.returncode != 0:
-    raise LandError(f'`git {args[0]}` failed: {_output(result)}')
-  return result.stdout.strip()
-
-
-def _output(result: subprocess.CompletedProcess) -> str:
-  """a command's captured streams as one message — git splits what it has to say
-  across both."""
-  return '\n'.join(part.strip() for part in (result.stdout, result.stderr) if part.strip() != '')
 
 
 def _pr_view(fields: list[str], number: Optional[int] = None) -> dict[str, Any]:
@@ -132,6 +90,18 @@ def _precondition_error(
       'pass --allow-unchecked only when the user explicitly said to land anyway'
     )
   return None
+
+
+def _head_error(pr: dict[str, Any]) -> Optional[str]:
+  """the worktree holding something other than the reviewed head — an unpushed
+  commit, or a branch left behind by whoever pushed the one under review."""
+  head = git_out('rev-parse', 'HEAD')
+  if head == pr['headRefOid']:
+    return None
+  return (
+    f'PR #{pr["number"]} carries {pr["headRefOid"][:9]} and the worktree is on {head[:9]}; '
+    'what lands is the reviewed head — push what you meant to land, or check it out'
+  )
 
 
 def _check_name(entry: dict[str, Any]) -> str:
@@ -189,180 +159,6 @@ def _log_ignored_checks(entries: list[dict[str, Any]]) -> None:
     )
 
 
-@dataclass(frozen=True)
-class Fold:
-  """one landed commit: the branch commits folded into it, and its message."""
-
-  commits: tuple[str, ...]
-  message: str
-
-
-def _branch_commits(base: str) -> list[str]:
-  """the commits the PR adds to its base, oldest first."""
-  _git('fetch', '--no-tags', 'origin', f'+refs/heads/{base}:refs/remotes/origin/{base}')
-  return _git('rev-list', '--reverse', f'origin/{base}..HEAD').split()
-
-
-def _resolve(sha: str) -> Optional[str]:
-  full = _git('rev-parse', '--verify', '--quiet', f'{sha}^{{commit}}', check=False)
-  return full if full != '' else None
-
-
-def _parse_plan(text: str, path: str) -> list[tuple[list[str], Optional[str]]]:
-  """the plan's blocks: each `fold` line's shas with the message written under
-  it, None where the block carries none.
-
-  A line counts as a header only when every token after `fold` is a hex sha, so
-  a message line that opens with the word passes through as the text it is.
-  """
-  blocks: list[tuple[list[str], list[str]]] = []
-  for line in text.splitlines():
-    header = _FOLD_HEADER.match(line)
-    if header is not None:
-      blocks.append((header.group(1).split(), []))
-    elif len(blocks) > 0:
-      blocks[-1][1].append(line)
-    elif line.strip() != '':
-      raise LandError(f'{path}: expected a `fold <sha> ...` line, found: {line.strip()}')
-  if len(blocks) == 0:
-    raise LandError(f'{path}: no `fold <sha> ...` line — the plan names one per landed commit')
-  return [(shas, '\n'.join(message).strip() or None) for shas, message in blocks]
-
-
-def _load_plan(path: str, branch: Sequence[str]) -> list[Fold]:
-  """the landing plan at `path`, validated to partition `branch` exactly.
-
-  Fold order is the order the commits land in; within a fold the branch's own
-  order is kept, a fold having no order of its own.
-  """
-  try:
-    text = Path(path).read_text()
-  except OSError as error:
-    raise LandError(f'cannot read the landing plan {path}: {error}') from error
-  blocks = _parse_plan(text, path)
-  if len(blocks) < 2:
-    raise LandError(f'{path}: one fold is the plain squash — run land-pr without --plan')
-  position = {sha: index for index, sha in enumerate(branch)}
-  claimed: dict[str, int] = {}
-  folds: list[Fold] = []
-  for number, (shas, message) in enumerate(blocks, start=1):
-    folded: list[str] = []
-    for sha in shas:
-      full = _resolve(sha)
-      if full is None:
-        raise LandError(f'{path}: fold {number} names {sha}, which is not a commit')
-      if full not in position:
-        raise LandError(f'{path}: fold {number} names {sha}, which the PR does not add to its base')
-      if full in claimed:
-        raise LandError(f'{path}: {sha} is in fold {claimed[full]} and fold {number} both')
-      claimed[full] = number
-      folded.append(full)
-    folded.sort(key=position.__getitem__)
-    if message is None:
-      message = usage.strip_footer(_git('log', '-1', '--format=%B', folded[0]))
-    folds.append(Fold(commits=tuple(folded), message=message.strip()))
-  unclaimed = [sha for sha in branch if sha not in claimed]
-  if len(unclaimed) > 0:
-    shas = ', '.join(sha[:9] for sha in unclaimed)
-    raise LandError(f'{path}: the plan leaves {len(unclaimed)} branch commit(s) unlanded: {shas}')
-  return folds
-
-
-def _authorship(sha: str) -> dict[str, str]:
-  """the environment that stamps a fold with the authorship of the commit it
-  stands for — the landed commit is dated when the work happened, and a re-run
-  of the same plan rebuilds the same commits rather than churning the branch."""
-  name, email, authored, committed = _git(
-    'log', '-1', '--format=%an%x1f%ae%x1f%aI%x1f%cI', sha
-  ).split('\x1f')
-  return {
-    **os.environ,
-    'GIT_AUTHOR_NAME': name,
-    'GIT_AUTHOR_EMAIL': email,
-    'GIT_AUTHOR_DATE': authored,
-    'GIT_COMMITTER_DATE': committed,
-  }
-
-
-def _fold_todo(folds: Sequence[Fold]) -> str:
-  lines: list[str] = []
-  for fold in folds:
-    lines.append(f'pick {fold.commits[0]}')
-    lines += [f'fixup {sha}' for sha in fold.commits[1:]]
-  return '\n'.join(lines) + '\n'
-
-
-def _rewrite(folds: Sequence[Fold], base: str, footers: Sequence[str]) -> str:
-  """fold the branch into one commit per fold and return the new tip.
-
-  The rebase does the content work; the chain is then rebuilt with `commit-tree`
-  to carry the landed messages, because a fixup keeps the first commit's message
-  and discards the folded commits' accounting footers along with their text.
-  """
-  with tempfile.NamedTemporaryFile('w', suffix='.todo') as todo:
-    todo.write(_fold_todo(folds))
-    todo.flush()
-    result = spawn.run(
-      ['git', 'rebase', '--interactive', base],
-      capture_output=True,
-      text=True,
-      env={
-        **os.environ,
-        'GIT_SEQUENCE_EDITOR': f'cp {shlex.quote(todo.name)}',
-        'GIT_EDITOR': 'true',
-      },
-    )
-  if result.returncode != 0:
-    _git('rebase', '--abort', check=False)
-    raise LandError(f'the fold does not apply — grouping reorders the branch:\n{_output(result)}')
-  landed = _git('rev-list', '--reverse', f'{base}..HEAD').split()
-  if len(landed) != len(folds):
-    raise LandError(f'the rebase produced {len(landed)} commit(s) for {len(folds)} fold(s)')
-  tip = base
-  for sha, fold, footer in zip(landed, folds, footers, strict=True):
-    message = fold.message if footer == '' else f'{fold.message}\n\n{footer}'
-    tip = _git(
-      'commit-tree',
-      f'{sha}^{{tree}}',
-      '-p',
-      tip,
-      '-m',
-      message,
-      env=_authorship(fold.commits[0]),
-    )
-  return tip
-
-
-@contextlib.contextmanager
-def _branch_restored(head: str) -> Generator[None]:
-  """put the branch back on `head` if the block fails — a rewrite that never
-  reached the remote must not survive as the session's local state."""
-  try:
-    yield
-  except BaseException:
-    _git('reset', '--hard', head, check=False)
-    raise
-
-
-def _await_head(number: int, expected: str) -> None:
-  """block until the PR reports `expected` as its head: GitHub's view of a push
-  lags it by moments, and the merge must not race that."""
-  deadline = time.monotonic() + _HEAD_POLL_BUDGET
-  while _pr_view(['headRefOid'], number=number)['headRefOid'] != expected:
-    if time.monotonic() >= deadline:
-      raise LandError(f'PR #{number} does not report the pushed head {expected[:9]} yet')
-    time.sleep(_HEAD_POLL_INTERVAL)
-
-
-def _body_with_footer(body: str, footer: str) -> str:
-  trimmed = body.rstrip()
-  if footer == '':
-    return trimmed
-  if trimmed == '':
-    return footer
-  return f'{trimmed}\n\n{footer}'
-
-
 def _delete_remote_branch(branch: str) -> bool:
   """delete only the remote ref — the local branch and checkout stay untouched
   (deleting them out from under a live worktree is the session manager's call).
@@ -384,69 +180,30 @@ _PR_FIELDS = [
   'headRefName',
   'headRefOid',
   'url',
+  'commits',
   'statusCheckRollup',
 ]
 
 
-def _squash_merge(pr: dict[str, Any], footer: str) -> None:
-  """let GitHub fold the branch into one commit carrying the PR's own text."""
+def _merge(pr: dict[str, Any]) -> None:
+  """let GitHub replay the branch's commits onto the base, as they stand."""
+  allowed = _run(['gh', 'api', 'repos/{owner}/{repo}', '--jq', '.allow_rebase_merge'], capture=True)
+  if allowed != 'true':
+    raise LandError(
+      'the repository disallows rebase merging, so it cannot land the branch as it stands'
+    )
   _run(
     [
       'gh',
       'pr',
       'merge',
       str(pr['number']),
-      '--squash',
-      '--subject',
-      pr['title'],
-      '--body',
-      _body_with_footer(pr['body'], footer),
+      '--rebase',
+      '--match-head-commit',
+      pr['headRefOid'],
     ],
     capture=False,
   )
-
-
-def _rebase_merge(
-  pr: dict[str, Any],
-  folds: Sequence[Fold],
-  footers: Sequence[str],
-  no_review: bool,
-  allow_unchecked: bool,
-) -> None:
-  """land the folds as commits of their own: fold locally, prove the result is
-  the reviewed content, publish it, and let GitHub replay it onto the base."""
-  number, head_ref = pr['number'], pr['headRefName']
-  allowed = _run(['gh', 'api', 'repos/{owner}/{repo}', '--jq', '.allow_rebase_merge'], capture=True)
-  if allowed != 'true':
-    raise LandError('the repository disallows rebase merging, so the branch can only land squashed')
-  if _git('status', '--porcelain', '--untracked-files=no') != '':
-    raise LandError('the worktree has uncommitted changes; the fold rewrites the branch in place')
-  _git('fetch', '--no-tags', 'origin', f'+refs/heads/{head_ref}:refs/remotes/origin/{head_ref}')
-  reviewed = _git('rev-parse', f'refs/remotes/origin/{head_ref}')
-  local = _git('rev-parse', 'HEAD')
-  base = _git('merge-base', f'origin/{pr["baseRefName"]}', 'HEAD')
-  with _branch_restored(local):
-    tip = _rewrite(folds, base, footers)
-    if _git('rev-parse', f'{tip}^{{tree}}') != _git('rev-parse', f'{reviewed}^{{tree}}'):
-      raise LandError(
-        f'the fold changes the content of PR head {reviewed[:9]}, which review and '
-        'the checks passed on; nothing was pushed'
-      )
-    _git('reset', '--hard', tip)
-    _git(
-      'push', f'--force-with-lease={head_ref}:{reviewed}', 'origin', f'{tip}:refs/heads/{head_ref}'
-    )
-  if any(len(footer) > 0 for footer in footers):
-    commit_footer.record_session_spend()
-  _await_head(number, tip)
-  # the push is new head commits as far as GitHub is concerned, so a repository
-  # that dismisses approvals on a push has just dismissed this one
-  error = _precondition_error(_pr_view(_PR_FIELDS, number=number), no_review, allow_unchecked)
-  if error is not None:
-    raise LandError(
-      f'{error}\nthe folded branch is pushed and unchanged in content; re-run once this clears'
-    )
-  _run(['gh', 'pr', 'merge', str(number), '--rebase', '--match-head-commit', tip], capture=False)
 
 
 def _land(
@@ -454,10 +211,9 @@ def _land(
   allow_unchecked: bool,
   ignore_checks: bool,
   wait_checks: int,
-  plan: Optional[str],
 ) -> dict:
   pr = _pr_view(_PR_FIELDS)
-  error = _precondition_error(pr, no_review, allow_unchecked)
+  error = _precondition_error(pr, no_review, allow_unchecked) or _head_error(pr)
   if error is not None:
     raise LandError(error)
   rollup = pr.get('statusCheckRollup') or []
@@ -470,16 +226,7 @@ def _land(
     error = _checks_error(pr['number'], rollup)
     if error is not None:
       raise LandError(error)
-  branch = _branch_commits(pr['baseRefName'])
-  folds = _load_plan(plan, branch) if plan is not None else None
-  grouped = [fold.commits for fold in folds] if folds is not None else [tuple(branch)]
-  footers = commit_footer.group_footers(grouped)
-  if folds is None:
-    _squash_merge(pr, footers[0])
-    if footers[0] != '':
-      commit_footer.record_session_spend()
-  else:
-    _rebase_merge(pr, folds, footers, no_review, allow_unchecked)
+  _merge(pr)
   merged = _pr_view(['state', 'mergeCommit', 'mergedAt'], number=pr['number'])
   if merged['state'] != 'MERGED':
     raise LandError(f'merge command succeeded but PR state is {merged["state"]}')
@@ -490,7 +237,7 @@ def _land(
     'base': pr['baseRefName'],
     'merged_sha': merged['mergeCommit']['oid'],
     'merged_at': merged['mergedAt'],
-    'commits': len(grouped),
+    'commits': len(pr['commits']),
     'branch_deleted': _delete_remote_branch(pr['headRefName']),
   }
 
@@ -500,10 +247,9 @@ def land_pr(
   allow_unchecked: bool,
   ignore_checks: bool,
   wait_checks: int,
-  plan: Optional[str],
 ) -> Optional[int]:
   try:
-    result = _land(no_review, allow_unchecked, ignore_checks, wait_checks, plan)
+    result = _land(no_review, allow_unchecked, ignore_checks, wait_checks)
   except LandError as error:
     log.error(str(error))
     return 1
@@ -513,11 +259,6 @@ def land_pr(
 
 def main(argv: list[str]) -> Optional[int]:
   parser = Parser(description='merge the approved PR for the current branch in one shot')
-  parser.add_argument(
-    '--plan',
-    metavar='PATH',
-    help='land the branch as several commits, grouped by this JSON plan (default: one squash)',
-  )
   parser.add_argument(
     '--no-review',
     action='store_true',

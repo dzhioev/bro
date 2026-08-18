@@ -3,7 +3,8 @@
 
 The footer is the offline-readable cache of a session's token spend, attributed to
 the commits it produced, so that summing a per-commit *delta* across `git log`
-yields the true total for a range — and stays correct across squash merges.
+yields the true total for a range — and stays correct however the commits are
+later folded together.
 
 The four billed token classes, the footer line shape, and the cumulative-usage
 sources (a bro run's env-pointed usage file, the Claude Code session transcript)

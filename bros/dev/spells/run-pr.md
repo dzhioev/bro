@@ -1,8 +1,8 @@
 ---
 name: run-pr
-description: This spell should be used when the user signals that the worktree's changes are ready for review and a PR should be opened — "open a PR", "[[run pr]]", "send for review", "PR it", "ship it", "ready for review", "finalize". Covers commit hygiene (docs sync, policy audit, commit splitting), the repo's commit-message conventions, rebases onto the base branch (master by default), opens the PR via `gh pr create`, then launches the `poll-pr` review watcher to handle review comments, failing CI checks, merge conflicts, and APPROVED events. On approval, chains into [[land]] for the merge step. Also the re-entry point for a PR that is already open — "resume PR <pr-url-or-number>", "resume the PR", "pick up the review" — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
+description: This spell should be used when the user signals that the worktree's changes are ready for review and a PR should be opened — "open a PR", "[[run pr]]", "send for review", "PR it", "ship it", "ready for review", "finalize". Covers commit hygiene (docs sync, policy audit, commit splitting), the repo's commit-message conventions, rebases onto the base branch (master by default), folds the branch into the commits master will carry so what is reviewed is what lands, opens the PR via `gh pr create`, then launches the `poll-pr` review watcher to handle review comments, failing CI checks, merge conflicts, and APPROVED events. On approval, chains into [[land]] for the merge step. Also the re-entry point for a PR that is already open — "resume PR <pr-url-or-number>", "resume the PR", "pick up the review" — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
 parameters: {"base?": "base branch for the pull request instead of master", "pr?": "existing pull request URL or number to resume"}
-version: 4.5.0
+version: 5.0.0
 ---
 
 # run-pr
@@ -13,7 +13,7 @@ Take worktree changes from "work is finished" to "PR open and through review". S
 
 Passed values appear in the `# Arguments` section appended by the spell tool:
 
-- `base` — base the PR on this branch instead of `master`: rebase onto it (step 7), scope the commit list against it (steps 4, 9), and pass `--base <branch>` to `gh pr create` (step 11). Default `master`. A coordinator driving a multi-stage feature passes the feature integration branch here so each stage opens its PR into the feature branch rather than master. Below, `<base>` means this value.
+- `base` — base the PR on this branch instead of `master`: rebase onto it (step 7), fold against it (step 8), scope the commit list against it (steps 4, 10), and pass `--base <branch>` to `gh pr create` (step 12). Default `master`. A coordinator driving a multi-stage feature passes the feature integration branch here so each stage opens its PR into the feature branch rather than master. Below, `<base>` means this value.
 - `pr` — re-entry mode for an existing PR URL or number (typically after a previous session died mid-review). Skip the normal workflow and follow "Re-entry: PR already open" below.
 
 ## Preconditions
@@ -25,7 +25,7 @@ Normal flow only — re-entry has its own entry conditions:
 
 ## Re-entry: PR already open
 
-The `pr` argument carries the existing PR URL or number — e.g. `bro run <bro> '[[resume PR <pr-url>]]'` after the session that opened it died. Restore the state that session had, reconcile what happened while nobody watched, then rejoin the normal flow at the watcher (step 13).
+The `pr` argument carries the existing PR URL or number — e.g. `bro run <bro> '[[resume PR <pr-url>]]'` after the session that opened it died. Restore the state that session had, reconcile what happened while nobody watched, then rejoin the normal flow at the watcher (step 14).
 
 1. **Check out the PR's head branch first**: `gh pr checkout <number-or-url>`. A fresh clone sits on a `worktree-<name>` branch at the base ref — the PR's head branch is not checked out locally; `gh pr checkout` fetches it and sets up tracking so later pushes go to the right branch.
 2. **Recover the context** the environment no longer carries (`RIDE_TASK_ID` is unset here):
@@ -40,8 +40,8 @@ The `pr` argument carries the existing PR URL or number — e.g. `bro run <bro> 
    gh pr view <number> --json reviews,comments
    gh api repos/<owner>/<repo>/pulls/<number>/comments   # inline review comments
    ```
-   Treat as actionable any repo-owner feedback per step 14's rules that has no later reply from the PR author and no later commit addressing it; handle each per step 14. If the latest owner review is APPROVED and nothing actionable is pending, chain straight into [[land]] — no watcher needed.
-5. **Resume watching**: continue at step 13.
+   Treat as actionable any repo-owner feedback per step 15's rules that has no later reply from the PR author and no later commit addressing it; handle each per step 15. If the latest owner review is APPROVED and nothing actionable is pending, chain straight into [[land]] — no watcher needed.
+5. **Resume watching**: continue at step 14.
 
 ## Workflow
 
@@ -59,7 +59,7 @@ If `git status` is clean and there are no untracked files to add, stop — nothi
 Run before committing:
 - The repo's formatter (its own docs name the command). Stage any formatter-induced changes alongside your own.
 
-No full-suite run here: the suite is the mandatory gate (step 8), run once on the final rebased tree — a pass before the rebase is evidence the rebase discards.
+No full-suite run here: the suite is the mandatory gate (step 9), run once on the final rebased tree — a pass before the rebase is evidence the rebase discards.
 
 **Policy audit**: before each commit, call `dev-style-source::read` and audit that commit's `git diff` against the returned policy text. The tool read is part of the gate — it puts the policy fresh in context instead of relying on recall of a read far behind. The policies carry their own specifics, so this gate just re-applies all of them.
 
@@ -118,23 +118,58 @@ To verify a new test catches a bug (revert-and-rerun), use `git stash push <path
 git fetch origin <base> && git rebase origin/<base>
 ```
 
-Conflicts → resolve them yourself, in-band: merge each conflict, `git add` the resolved paths, `git rebase --continue`. Then record the resolution on the task (same conditions as step 12): `brog::add_comment(task_id, topic='rebase conflicts', body=...)` naming the conflicted files and the resolution each one took — the gate (step 8) verifies the resolved result next.
+Conflicts → resolve them yourself, in-band: merge each conflict, `git add` the resolved paths, `git rebase --continue`. Then record the resolution on the task (same conditions as step 13): `brog::add_comment(task_id, topic='rebase conflicts', body=...)` naming the conflicted files and the resolution each one took — the gate (step 9) verifies the resolved result next.
 
 Escalate only when a resolution is not obvious — the two sides carry contradicting logic or intent that no merged version can honor both of: stop and ask when questions reach the user; raise with the contradiction spelled out when unattended. Never `--abort` or `--skip` silently.
 
 In an **unattended** session there is no user to stop for: when a conflict clears that escalation bar, rescue your commits per _Rescue committed work before a raise_ below (abort the rebase to restore them, push the branch, name the ref), then `raise` with the contradiction as the reason — the parked commits stay recoverable.
 
-### 8. The mandatory gate: the full test suite
+### 8. Fold the branch into what master will carry
+
+Master carries one commit per logical change, and the branch is rarely shaped that way already: [[fix]]'s checkpoints are commits about *making* the change, not changes of their own. The reviewer approves commits, not a diff — so the branch is folded into the ones that will land before anyone looks at it, and the merge rewrites nothing afterwards.
+
+Read what the branch became and decide what it should land as:
+
+```bash
+git log origin/<base>..HEAD --oneline
+```
+
+One commit is the default: a branch that does one thing lands as one commit, checkpoint noise folded away. Land several when the branch carries a change that stands on its own beside the task — the unrelated bug fixed along the way, a drive-by cleanup worth its own line in the history. The user's own words settle it either way ("land these as two commits", "one commit please").
+
+Write the plan as a scratch file (untracked — never stage it), one `fold` line per landed commit, oldest first, with that commit's message in the lines under it:
+
+```
+fold
+<the subject the branch lands under>
+
+<body, written exactly as a commit message>
+
+<task metadata required by the repo's policy>
+
+fold <sha>
+```
+
+A `fold` line naming no commits takes every commit the others leave — the whole branch when it is the only line — so the one-commit plan names no shas at all. A `fold` line with nothing written under it keeps the message of the first commit it folds, which is what a commit that already names its unit wants. The messages here are what master carries: nothing downstream composes one, so they follow the repo's commit conventions and carry the task metadata (step 5).
+
+```bash
+fold-branch --plan plan.txt --base <base>
+```
+
+It refuses a dirty worktree, refuses a plan that does not partition the branch, and proves the fold moved only commit boundaries before it writes anything. Conflicts are the fold's own failure mode — grouping reorders the branch, and hoisting one fold above another can collide; it aborts, leaves the branch untouched, and names what collided. Regroup so the colliding commits keep their relative order, or land them as one commit. When a single commit straddles two landing commits — it changed the feature and the unrelated thing together — no grouping of whole commits is clean: split it first (`git rebase -i`, `edit` on that commit), then plan over the commits you now have.
+
+The fold is also where the token-accounting footers are aggregated onto the landed commits, so the accounting rides what lands. Whatever the session spends after the last fold — the approval wait, the landing turns — is credited to nothing; a branch that is final before review cannot account for the work that follows it.
+
+### 9. The mandatory gate: the full test suite
 
 The flow's one mandatory suite pass — on the final rebased tree, before the change reaches a reviewer. Run the repo's full verification gate (its own docs name the command and any environment-specific flags).{{when #harness = bro}} Run it with an explicit large `timeout_seconds` (600 fits) — `dev::bash`'s default kills a full suite mid-run; same for any other long command.{{end}}
 
-Locally is the default. Where the repo's CI runs that same gate against a branch of its own — a manual dispatch, a branch trigger — pushing the branch (step 10) and waiting on that run counts as the pass, and is the better route when CI is faster or covers stages the workspace cannot run at all. What waits for green is the PR, not the push: a pushed branch has offered nothing to anyone.
+Locally is the default. Where the repo's CI runs that same gate against a branch of its own — a manual dispatch, a branch trigger — pushing the branch (step 11) and waiting on that run counts as the pass, and is the better route when CI is faster or covers stages the workspace cannot run at all. What waits for green is the PR, not the push: a pushed branch has offered nothing to anyone.
 
 A red gate blocks the PR. Do not interpret or triage failures — fix with new commits, or propose fixing pre-existing failures in this session or a separate one; do not open a PR over failures.
 
 Earlier full passes (per checkpoint, pre-rebase) are optional and usually redundant — this gate re-verifies the exact tree that ships.
 
-### 9. Verify PR scope
+### 10. Verify PR scope
 
 ```bash
 git log origin/<base>..HEAD --oneline
@@ -147,28 +182,25 @@ Confirm the commit list matches the intended PR title and body. If the worktree 
 
 Do not silently open a PR whose scope is wider than its title says.
 
-### 10. Push the branch
+### 11. Push the branch
 
 ```bash
 git push -u origin HEAD
 ```
 
-A gate that ran on CI (step 8) already pushed this branch, so the command is a no-op there.
+A branch already on the remote needs `git push --force-with-lease origin HEAD` instead — the fold rewrote it. A gate that ran on CI (step 9) already pushed this branch, so the command is a no-op there.
 
-### 11. Open the PR
+### 12. Open the PR
 
 Use `gh` for everything GitHub-related — it's pre-authenticated, auto-detects the repo from the origin remote, and handles JSON encoding. Do not use `curl` against `api.github.com`.
 
 Build the PR title and body:
-- **Title**: if single commit, use its title. If multiple commits, a brief summary in the same style.
-- **Body**: `Task:` line linking the task URL (if a task id is known), then `## Summary` bullets describing the changes, then a `## Test plan` checklist of what you verified, each box ticked. Don't list a step this session cannot run — the repo's own CI gate runs on the PR, and an unticked box blocks [[land]] later with nobody able to clear it.
+- **Title**: if the branch lands as one commit, use its title. If several, a brief summary in the same style.
+- **Body**: review context, not commit text — the landed commits carry the change's own story. A `Task:` line linking the task URL (if a task id is known), a `## Test plan` checklist of what you verified with each box ticked, and whatever else the reviewer needs that the commits do not carry. Don't list a step this session cannot run — the repo's own CI gate runs on the PR, and an unticked box blocks [[land]] later with nobody able to clear it.
 
 ```bash
 gh pr create --base <base> --title "<title>" --body "$(cat <<'EOF'
 Task: https://tracker.example.com/...
-
-## Summary
-- ...
 
 ## Test plan
 - [ ] ...
@@ -182,9 +214,9 @@ Report the PR to the user as a **review link**: a markdown hyperlink titled `#<n
 [#<n>](https://github.com/<owner>/<repo>/pull/<n>/files)
 ```
 
-Surface this link every time the PR enters review-pending: here at creation, and again after each push of review-fix commits (step 14).
+Surface this link every time the PR enters review-pending: here at creation, and again after each push of review-fix commits (step 15).
 
-### 12. Log "PR opened" to the task (sessions with a task)
+### 13. Log "PR opened" to the task (sessions with a task)
 
 If the session has a task (`RIDE_TASK_ID` — `dive-in` sets it — or a task resolved earlier in this session) and the brog tools are available, record the event with `brog::add_comment(task_id, topic='PR opened', body=...)`:
 
@@ -196,7 +228,7 @@ If the session has a task (`RIDE_TASK_ID` — `dive-in` sets it — or a task re
 
 Build commit links from `git remote get-url origin` (strip trailing `.git`).
 
-### 13. Launch the review watcher
+### 14. Launch the review watcher
 
 The watcher is one long-lived `poll-pr` process. It authenticates through the credential store (`--credential`, default `github`), re-resolved each cycle so the watch survives short-lived minted tokens; your own comments are filtered via `--self`, which defaults to the PR author:
 
@@ -220,10 +252,10 @@ Run it as a background job and read it iteratively — a plain `dev::bash` call 
 
 1. `dev::job("poll-pr …")` → note the job id.
 2. Loop on `dev::watch(job_id, wait_seconds=1500)`. Each return is one iteration:
-   - new output → react to every JSON line per step 14, then watch again;
+   - new output → react to every JSON line per step 15, then watch again;
    - a bare `running` state line (quiet window) → watch again;
-   - `exited` right after a `merged`/`closed` event → the PR is terminal; react per step 14, stop looping;
-   - `exited` right after a `watch_failed` event → react per step 14, stop looping;
+   - `exited` right after a `merged`/`closed` event → the PR is terminal; react per step 15, stop looping;
+   - `exited` right after a `watch_failed` event → react per step 15, stop looping;
    - `exited` with no terminal event → the watcher died. Do not just restart it — a fresh `poll-pr` baselines all existing events as seen; reconcile first (re-entry step 4), then start a new `dev::job`.
 3. When chaining into [[land]], stop the watcher with `dev::kill(job_id)`.
 
@@ -231,12 +263,12 @@ The large `wait_seconds` keeps the run idling inside the tool call between event
 
 **The watch loop is the rest of the run.** Your terminal answer comes only after the PR reaches a terminal state — merged (typically via the [[land]] chain on APPROVED) or closed. Until then, keep calling `dev::watch` iteration after iteration, however quiet the PR stays; that idling is the run working as designed, not a stall to wrap up. Do not kill the job and end the run with a "waiting for review" report — an ended run watches nothing, and every later review event goes unhandled.
 {{eliff #harness = claude}}
-**MUST launch via the `Monitor` tool with `persistent: true`. Do NOT use Bash `run_in_background`** — that only notifies on process exit, so review/comment events sit silently in the output file and approvals never trigger the auto-chain. The harness wakes you on each output event; react per step 14. Stop the watcher with `TaskStop` when chaining into [[land]].
+**MUST launch via the `Monitor` tool with `persistent: true`. Do NOT use Bash `run_in_background`** — that only notifies on process exit, so review/comment events sit silently in the output file and approvals never trigger the auto-chain. The harness wakes you on each output event; react per step 15. Stop the watcher with `TaskStop` when chaining into [[land]].
 
 If the `Monitor` schema needs a `ToolSearch` fetch, load `TaskStop` in the same query (`select:Monitor,TaskStop`) — the APPROVED handler needs it and shouldn't spend a round trip on it later.
 {{end}}
 
-### 14. React to review events
+### 15. React to review events
 
 **`comment` event** or **`review` with `state: "CHANGES_REQUESTED"` or non-empty `comments`**:
 
@@ -248,15 +280,16 @@ Handle pending feedback as one batch: address every comment that has arrived, th
 2. Make the requested code changes locally.
 3. Re-run the pre-commit gates (step 2).
 4. Commit (a **new** commit, not `--amend`) with the same conventions as step 5–6.
-5. Run the mandatory gate (step 8).
-6. Push: `git push origin HEAD`.
-7. Reply on the PR confirming the fix (reference the commit SHA):
+5. Run the mandatory gate (step 9).
+6. Re-fold (step 8): the branch has to be back in landing shape before it is pushed, or the approval that follows would cover commits that are not the ones landing. Write the plan over the branch as it stands now — the last fold rewrote the shas — and let a `fold` line naming no commits absorb what this round added, or name the round's commit in the fold whose unit it serves. The re-approval this costs is the point: the commits genuinely changed.
+7. Push: `git push --force-with-lease origin HEAD` — the fold rewrote the branch.
+8. Reply on the PR confirming the fix (reference the commit SHA):
    - **Top-level PR comment**: `gh pr comment <n> --body "..."`
    - **Reply to a specific review comment** (endpoint includes the PR number `<n>`):
      ```bash
      gh api -X POST repos/<owner>/<repo>/pulls/<n>/comments/<comment_id>/replies -f body="..."
      ```
-8. Surface the review link again (step 11's `[#<n>](<pr-url>/files)` format) — the pushed commits put the PR back into review-pending.
+9. Surface the review link again (step 12's `[#<n>](<pr-url>/files)` format) — the pushed commits put the PR back into review-pending.
 
 **`review` with `state: "APPROVED"` and empty `comments`**:
 
@@ -264,9 +297,9 @@ Unconditional approval — the PR is ready to merge. Chain into the merge, and b
 
 **`review` with `state: "COMMENTED"` or `"DISMISSED"`**: informational; the actionable feedback (if any) is in this event's `comments` array or arrives via accompanying `comment` events.
 
-**`checks` event**: CI went red on what you pushed. Fetch the failing run's log (`gh run view --log-failed <run-id>`, the id is the tail of the event's `url`) and diagnose it as your own breakage — a failure the local gate missed is the interesting kind (environment-dependent, ordering-dependent, or a file you forgot to stage). Fix it exactly like review feedback: gates (step 2), a new commit (steps 5–6), the gate (step 8), push. Report the failure and your fix to the user; never wait for it to disappear on a re-run you didn't trigger, and never land around it — `land-pr` refuses a failed check anyway.
+**`checks` event**: CI went red on what you pushed. Fetch the failing run's log (`gh run view --log-failed <run-id>`, the id is the tail of the event's `url`) and diagnose it as your own breakage — a failure the local gate missed is the interesting kind (environment-dependent, ordering-dependent, or a file you forgot to stage). Fix it exactly like review feedback: gates (step 2), a new commit (steps 5–6), the gate (step 9), the re-fold (step 8), a force-with-lease push. Report the failure and your fix to the user; never wait for it to disappear on a re-run you didn't trigger, and never land around it — `land-pr` refuses a failed check anyway.
 
-**`conflicts` event**: rerun step 7 — the rebase, the in-band resolution default, the escalation bar, and the task comment all apply unchanged — then the gate (step 8), then push the rebased branch: `git push --force-with-lease origin HEAD` — the PR branch, never the base.
+**`conflicts` event**: rerun step 7 — the rebase, the in-band resolution default, the escalation bar, and the task comment all apply unchanged — then the gate (step 9), then push the rebased branch: `git push --force-with-lease origin HEAD` — the PR branch, never the base.
 
 **`merged` / `closed`**: someone (the user, a [[land]] run, or external action) terminated the PR. If `merged`, run [[land]]'s post-merge bookkeeping — the `merged` comment and task closure. If `closed` without merge, log it and report to the user.
 

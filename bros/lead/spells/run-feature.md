@@ -2,7 +2,7 @@
 name: run-feature
 description: This spell should be used when the user wants a large piece of work driven end to end from a coordinator session — "start a feature", "kick off the <X> feature", "let's design and build <big thing>", "run the feature workflow", "orchestrate this", "resume the feature at <url>". This session becomes the coordinator: it opens a feature task as the single source of truth, then walks the work through design, review and planning, per-stage implementation, integration, and verification, running each phase in a session of its own — the design and planning phases as interactive sessions it hands to the user to launch, the rest as summoned bros in isolated containers — and recording each outcome on the feature page before starting the next. It never designs or implements itself. For work that fits one session this is overkill — summon a single bro on the task ([[ask]]) and let it run [[fix]] itself.
 parameters: {"feature?": "ref of an existing feature task to resume", "new?": "seed text for a new feature"}
-version: 1.4.0
+version: 1.4.1
 ---
 
 # run-feature
@@ -120,9 +120,9 @@ If a stage reports a blocker or a design change, decide with the user whether th
 
 Once every stage task is done:
 
-> Integration phase of a multi-phase feature coordinated by another session. This workspace is on the feature branch `<feature-branch>`. Sync it against origin, rebase it onto `origin/master` (force-push the FEATURE branch with `--force-with-lease` if the rebase rewrote it — never force-push master), then open ONE pull request for the whole feature with [[run pr]] based on master and land it with [[land]]. Skip the review round: every stage PR was reviewed already, so treat this as an explicit waiver of the approval precondition rather than waiting on a second review of the same code. Keep the task at `<feature-url>` open whatever happens — the coordinating session closes it after verification. If the merged feature needs a rollout to take effect, hand it off per [[land]]'s own rules and report what came back. Answer with the merged PR, the squash commit, and the rollout outcome if there was one.
+> Integration phase of a multi-phase feature coordinated by another session. This workspace is on the feature branch `<feature-branch>`. Sync it against origin, rebase it onto `origin/master` (force-push the FEATURE branch with `--force-with-lease` if the rebase rewrote it — never force-push master), then open ONE pull request for the whole feature with [[run pr]] based on master and land it with [[land]]. Skip the review round: every stage PR was reviewed already, so treat this as an explicit waiver of the approval precondition rather than waiting on a second review of the same code. Keep the task at `<feature-url>` open whatever happens — the coordinating session closes it after verification. If the merged feature needs a rollout to take effect, hand it off per [[land]]'s own rules and report what came back. Answer with the merged PR, the landed commit, and the rollout outcome if there was one.
 
-Outcome: the feature on master as a single squash, rolled out if it needed one. When the phase reports a rollout it could not hand off — nobody in its allow-list to do it — relay the exact command to the user and confirm it ran before verifying.
+Outcome: the feature on master as a single commit, rolled out if it needed one. When the phase reports a rollout it could not hand off — nobody in its allow-list to do it — relay the exact command to the user and confirm it ran before verifying.
 
 ### 5 — verify
 
