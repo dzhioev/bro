@@ -173,10 +173,9 @@ def harness_for_workspace(workspace: Workspace) -> Harness:
   return get_harness('claude' if spec is None else spec.harness)
 
 
-def _replace_resume_hint(spec: SessionSpec, workspace: Workspace) -> None:
+def _print_resume_hint(spec: SessionSpec, workspace: Workspace) -> None:
   if not sys.stdout.isatty() or not get_harness(spec.harness).session_exists(workspace):
     return
-  sys.stdout.write('\033[2A\033[J')
   print('Resume this session with:')
   print(f'  ride resume {workspace.name}')
 
@@ -192,7 +191,7 @@ def _finish_session(spec: SessionSpec, workspace: Workspace, code: int) -> int:
     else:
       log.info('session exited with code %d; keeping workspace %s', code, workspace.name)
   elif code == 0:
-    _replace_resume_hint(spec, workspace)
+    _print_resume_hint(spec, workspace)
   return code
 
 
