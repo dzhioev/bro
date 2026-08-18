@@ -8,9 +8,13 @@ Installation tokens expire after one hour. `Source` is the credential-source
 front over the mint (the `github_app` registry type).
 """
 
+import json
+import os
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Optional
 
 from bro.base import credentials
 from bro.extra.github import api
@@ -50,9 +54,56 @@ def mint_installation_token(
 class Source(credentials.MintingSource):
   """credential source minting installation tokens (registry type `github_app`).
   the minting config carries `app_id`, `installation_id`, and the app's PEM
-  `private_key`; ids may be strings or numbers."""
+  `private_key`; ids may be strings or numbers.
+
+  GitHub degrades an installation token once a newer one is minted for the same
+  installation: reads through the older one start answering 404 on endpoints it
+  still covers. Every process resolving this credential therefore has to arrive
+  at the same token, so the mint is held in a file beside the config rather than
+  in the process that minted it, and re-minted only near expiry.
+  """
 
   TYPE = 'github_app'
+
+  def fetch(self) -> Optional[str]:
+    config = self.config()
+    if config is None:
+      return None
+    held = self._held()
+    if held is not None:
+      return held.value
+    minted = self.mint(config)
+    self._hold(minted)
+    return minted.value
+
+  def _held_path(self) -> Path:
+    config_path = self._config_path()
+    if config_path is None:
+      raise ValueError(f'github_app config {self.file!r} disappeared while minting')
+    return config_path.with_name(f'{config_path.name}.minted')
+
+  def _held(self) -> Optional[credentials.Minted]:
+    path = self._held_path()
+    if not path.is_file():
+      return None
+    try:
+      held = json.loads(path.read_text())
+    except json.JSONDecodeError as e:
+      raise ValueError(f'held github_app token {str(path)!r} is not valid json') from e
+    expires_at = datetime.fromisoformat(held['expires_at'])
+    if datetime.now(UTC) >= expires_at - self.EXPIRY_MARGIN:
+      return None
+    return credentials.Minted(held['token'], expires_at)
+
+  def _hold(self, minted: credentials.Minted) -> None:
+    path = self._held_path()
+    # published by rename so a concurrent reader sees one whole token or none;
+    # two processes racing to mint cost one extra mint, not a torn file
+    staged = path.with_name(f'{path.name}.{os.getpid()}')
+    descriptor = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, 'w') as file:
+      json.dump({'token': minted.value, 'expires_at': minted.expires_at.isoformat()}, file)
+    os.replace(staged, path)
 
   def mint(self, config: dict) -> credentials.Minted:
     missing = sorted({'app_id', 'installation_id', 'private_key'} - set(config))

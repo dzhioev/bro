@@ -316,8 +316,11 @@ class MintingSource(ABC):
       raise ValueError(f'{self.TYPE} config {self.file!r} disappeared during hydration')
     return {'type': self.TYPE, 'file': file}, text.encode()
 
+  def _config_path(self) -> Optional[Path]:
+    return _find_in_search_dirs(self.file)
+
   def _config_text(self) -> Optional[str]:
-    path = _find_in_search_dirs(self.file)
+    path = self._config_path()
     if path is None:
       return None
     return path.read_text()
