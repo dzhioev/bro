@@ -64,6 +64,11 @@ class TestSolo:
     assert spec.workspace_pinned
     assert not spec.drop
 
+  def test_pinned_workspace_rejects_keep(self, capsys):
+    with pytest.raises(SystemExit):
+      ride_cli.main(['ride', 'solo', '--workspace', 'shared', '--keep', 'dev', 'do it'])
+    assert 'pinned workspaces are always kept' in capsys.readouterr().err
+
   def test_forwards_arguments_only_after_the_separator(self):
     with patch('ride.cli.start_session', return_value=0) as start:
       ride_cli.main(['ride', 'solo', 'dev', 'hello', '--', '--debug', 'mcp'])
