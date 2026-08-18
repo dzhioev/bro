@@ -199,6 +199,7 @@ PYTEST_FILES = [
   'bro/setup/container/git_test.py',
   'bro/setup/docker_smoke_test_test.py',
   'bro/llm/usage_test.py',
+  'local/bro/local/run_tests_test.py',
   'local/bro/local/shell_policy_test.py',
   'local/bro/local/setup_test.py',
   'local/bro/local/packaging_policy_test.py',
@@ -239,7 +240,7 @@ def benchmark_stage() -> None:
   # workspace venv this gate runs from as one it is ignoring
   in_environment = {'VIRTUAL_ENV': str(environment)}
   print(f'benchmark: syncing {environment}', file=sys.stderr)
-  run('uv', 'sync', '--all-groups', cwd=directory, extra_env=in_environment)
+  run('uv', 'sync', '--locked', '--all-groups', cwd=directory, extra_env=in_environment)
   python = str(environment / 'bin' / 'python')
   print('benchmark: type check', file=sys.stderr)
   run(python, '-m', 'pyright', cwd=directory, extra_env={**in_environment, **node_env()})
