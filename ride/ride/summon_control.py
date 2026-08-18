@@ -446,13 +446,15 @@ class SummonControl:
     from ride.harness import get_harness
     from ride.scope import summoned_credential_scope
 
+    harness = get_harness('bro')
     grant, _ = split_scope_overrides(record.grant)
     revoke, _ = split_scope_overrides(record.revoke)
     scoped = summoned_credential_scope(
       record.target,
+      harness.scope_recipe(harness.default_options()),
       grant=grant,
       revoke=revoke,
-      llm_spec=get_harness('bro').resolve_llm(record.llm, record.target),
+      llm_spec=harness.resolve_llm(record.llm, record.target),
     )
     return scoped.required | scoped.optional
 

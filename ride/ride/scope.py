@@ -105,17 +105,19 @@ def scoped_secrets(
 
 def summoned_credential_scope(
   bro_name: str,
+  recipe: ScopeRecipe,
   *,
   grant: list[str],
   revoke: list[str],
   llm_spec: Optional['LLMSpec'] = None,
 ) -> ScopedSecrets:
-  """the credential scope a summoned bro runs with: its own `BRO_RUN` scope under
-  the request's overrides. `grant`/`revoke` are the credential halves of the
-  request's unified values (`split_scope_overrides`) — the `@bro` halves shape the
-  summon allow-list instead. Raises `ValueError` on a no-op override."""
+  """the credential scope a summoned bro runs with: its own scope under `recipe`
+  — the child harness's — plus the request's overrides. `grant`/`revoke` are the
+  credential halves of the request's unified values (`split_scope_overrides`) —
+  the `@bro` halves shape the summon allow-list instead. Raises `ValueError` on
+  a no-op override."""
   return finalize_scoped_secrets(
-    scoped_secrets(bro_name, BRO_RUN_RECIPE, llm_spec=llm_spec),
+    scoped_secrets(bro_name, recipe, llm_spec=llm_spec),
     grant=grant,
     revoke=revoke,
   )

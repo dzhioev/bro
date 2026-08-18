@@ -2,17 +2,18 @@
 
 `SummonSpawner` resolves the requested base ref off-loop, records the child's
 session spec as its channel-named workspace's resume record, derives the child's
-inner argv from that spec through the bro harness seam, asks `bro_run.describe`
-to wrap it into the target's neutral headless launch for the docker spawner, and
-marks the workspace throwaway (removed after a clean exit).
+inner argv and container extras from that spec through the harness seam, wraps
+them into the child's headless docker launch, and marks the workspace throwaway
+(removed after a clean exit).
 
 `run_root_via_broker` composes both launch modes and summon lowering under one
 broker, then supervises the root until exit.
 """
 
 import asyncio
+import json
 from collections.abc import Collection
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
@@ -24,7 +25,8 @@ from bro.broker.spawn import ChildHandle, LaunchSpec, Spawner
 from bro.broker.transport import Provisioned
 from bro.broker.transports.unix import UnixServerTransport
 from bro.monitor import trail_pointer
-from bro.summon import MAY_SUMMON_ENV, SUMMON, encode_may_summon
+from bro.summon import MAY_SUMMON_ENV, SUMMON, SUMMONED_ENV, SUMMONER_ENV, encode_may_summon
+from bro.workspace.docker import Launch
 from bro.workspace.git import resolve_head, resolve_ref
 from bro.workspace.metadata import WorkspaceKind
 from bro.workspace.model import Workspace
@@ -36,13 +38,13 @@ from bro.workspace.spawn import (
   ProcessLaunchSpec,
   ProcessSpawner,
 )
-from bro.workspace.store import log_scoped_secrets
-from ride.bro_run import describe
+from bro.workspace.store import ScopedSecrets, log_scoped_secrets
 from ride.flags import default_hold
-from ride.harness import get_harness
+from ride.harness import ContainerExtras, get_harness
 from ride.scope import split_scope_overrides, summoned_credential_scope
 from ride.session import SessionSpec, record_resume_spec
 from ride.summon_control import SummonControl, summon_status_file
+from ride.trails import local_trails_mounts
 
 
 @dataclass(frozen=True)
@@ -102,24 +104,59 @@ def _child_session_spec(launch: SummonLaunchSpec, workspace_name: str) -> Sessio
     prompt=launch.prompt,
     subject=launch.prompt,
     arguments=[],
-    harness_options={},
+    harness_options=harness.default_options(),
+  )
+
+
+def _child_launch(
+  spec: SessionSpec,
+  command: list[str],
+  extras: ContainerExtras,
+  *,
+  scoped: ScopedSecrets,
+  base_ref: str,
+  summoner: Optional[dict[str, Any]],
+  may_summon: tuple[str, ...],
+) -> Launch:
+  """a summoned child's container launch around its harness-composed inner
+  command and extras: the child facts (`RIDE_SUMMONED`, its own reconstructed
+  `RIDE_COMMAND`, base ref, provenance, allow-list) over an explicit env —
+  nothing forwarded from the spawning process — with no TTY."""
+  env = dict(extras.env)
+  env['RIDE_BRO'] = spec.bro
+  env['RIDE_COMMAND'] = ' '.join(spec.to_command_argv())
+  env[SUMMONED_ENV] = '1'
+  env['RIDE_BASE_REF'] = base_ref
+  env[MAY_SUMMON_ENV] = encode_may_summon(may_summon)
+  if summoner is not None:
+    env[SUMMONER_ENV] = json.dumps(summoner, ensure_ascii=False, separators=(',', ':'))
+  return Launch(
+    name=spec.name,
+    command=list(command),
+    env=env,
+    secrets=set(scoped.required),
+    optional_secrets=set(scoped.optional),
+    docker_sock=scoped.docker_sock,
+    tty=False,
+    forward_env=False,
+    extra_mounts=(*extras.mounts, *local_trails_mounts(scoped)),
   )
 
 
 def _lower_summon(launch: SummonLaunchSpec, workspace_name: str) -> DockerLaunchSpec:
-  """the blocking half of a summon spawn: compute the docker launch a host-side
-  `bro run <target>` would get — the shared bro-run description (`bro_run.describe`:
+  """the blocking half of a summon spawn: compose the child's docker launch —
   the target's own scope, nothing inherited from the summoner, plus whatever the
-  request's own grant/revoke names) around the inner argv of the child's session
-  spec. The base is the summoner's workspace HEAD, read live here (`resolve_head`
-  — which also transfers the commit's objects into the host repo when they live
-  only in the summoner's own store), unless the request's `into` names a ref
-  (resolved with the same fetch-if-unresolvable rule as `ride --into`, but an
-  unresolvable ref fails the spawn rather than falling back). The child's
-  workspace is recorded throwaway, so its supervisor removes it once the child
-  exits cleanly. Raises on any unresolvable input — the spawner surfaces that as
-  the correlated `failed{reason: 'launch'}`; every fallible resolution precedes
-  the workspace record, so a failed spawn creates none."""
+  request's own grant/revoke names — around the inner command and container
+  extras of the child's session spec, both supplied by its harness. The base is
+  the summoner's workspace HEAD, read live here (`resolve_head` — which also
+  transfers the commit's objects into the host repo when they live only in the
+  summoner's own store), unless the request's `into` names a ref (resolved with
+  the same fetch-if-unresolvable rule as `ride --into`, but an unresolvable ref
+  fails the spawn rather than falling back). The child's workspace is recorded
+  throwaway, so its supervisor removes it once the child exits cleanly. Raises
+  on any unresolvable input — the spawner surfaces that as the correlated
+  `failed{reason: 'launch'}`; every fallible resolution precedes the workspace
+  record, so a failed spawn creates none."""
   project = project_root()
   if launch.into is not None:
     base_ref = resolve_ref(project, launch.into)
@@ -130,26 +167,32 @@ def _lower_summon(launch: SummonLaunchSpec, workspace_name: str) -> DockerLaunch
     if base_ref is None:
       raise ValueError(f"cannot read the summoner's HEAD at {launch.parent_workspace}")
   spec = _child_session_spec(launch, workspace_name)
+  harness = get_harness(spec.harness)
+  auth_error = harness.preflight_auth(spec)
+  if auth_error is not None:
+    raise ValueError(auth_error)
   grant_credentials, _ = split_scope_overrides(spec.grant)
   revoke_credentials, _ = split_scope_overrides(spec.revoke)
   scoped = summoned_credential_scope(
-    launch.target, grant=grant_credentials, revoke=revoke_credentials, llm_spec=spec.llm_spec
+    launch.target,
+    harness.scope_recipe(spec.harness_options),
+    grant=grant_credentials,
+    revoke=revoke_credentials,
+    llm_spec=spec.llm_spec,
   )
   workspace = Workspace.ensure(workspace_name, project, WorkspaceKind.CONTAINER, throwaway=True)
   record_resume_spec(workspace, spec)
-  run = describe(
-    launch.target,
-    get_harness(spec.harness).inner_command(spec, workspace),
-    workspace_name=workspace_name,
+  run = _child_launch(
+    spec,
+    harness.inner_command(spec, workspace),
+    harness.container_extras(spec, workspace, scoped),
     scoped=scoped,
     base_ref=base_ref,
-    tty=False,
-    forward_env=False,
     summoner=launch.summoner,
+    may_summon=launch.may_summon,
   )
   log_scoped_secrets(f'summoned {launch.target}', run.secrets, run.optional_secrets)
-  env = {**run.env, MAY_SUMMON_ENV: encode_may_summon(launch.may_summon)}
-  return DockerLaunchSpec(replace(run, env=env))
+  return DockerLaunchSpec(run)
 
 
 class SummonSpawner(Spawner):

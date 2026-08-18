@@ -138,7 +138,6 @@ PYTEST_FILES = [
   'dev/bros/analyst/scripts/trails_usage_test.py',
   'bro/launch/broxy_test.py',
   'ride/ride/bro_test.py',
-  'ride/ride/bro_run_test.py',
   'ride/ride/identity_test.py',
   'ride/ride/root_test.py',
   'ride/ride/scope_test.py',

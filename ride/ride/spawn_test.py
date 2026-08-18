@@ -7,7 +7,6 @@ import pytest
 import bro.workspace.docker as workspace_docker
 import bro.workspace.store as workspace_store
 import ride.bro
-import ride.bro_run
 import ride.identity
 import ride.scope
 import ride.session
@@ -33,7 +32,7 @@ class TestSummonLowering:
         required={'aws', 'trails'}, optional={'openai'}, docker_sock=True
       ),
     )
-    monkeypatch.setattr(ride.bro_run, 'local_trails_mounts', lambda scoped: ())
+    monkeypatch.setattr(ride.spawn, 'local_trails_mounts', lambda scoped: ())
     monkeypatch.setattr(
       ride.spawn,
       'resolve_head',
@@ -59,7 +58,9 @@ class TestSummonLowering:
         env={
           'RIDE_BASE_REF': 'PARENT-SHA',
           'RIDE_BRO': 'dev',
+          'RIDE_COMMAND': 'ride solo --hold unattended --harness bro dev deploy the thing',
           'RIDE_MAY_SUMMON': '',
+          'RIDE_SUMMONED': '1',
           'RIDE_SUMMONER': '{"session":"ws"}',
           **ride.identity.bro_git_identity_env('dev'),
         },
@@ -199,6 +200,23 @@ class TestSummonLowering:
       ).resume_variant()
     )
 
+  def test_launch_mounts_carry_harness_extras_and_local_trails(self, lowering_harness, monkeypatch):
+    monkeypatch.setattr(
+      ride.spawn, 'local_trails_mounts', lambda scoped: ('/host/trails:/var/ride/trails',)
+    )
+    monkeypatch.setattr(
+      ride.bro.BRO,
+      'container_extras',
+      lambda spec, workspace, scoped: ride.spawn.ContainerExtras(
+        env={}, mounts=('/host/state:/state',)
+      ),
+    )
+    launch = ride.spawn.SummonLaunchSpec(
+      target='dev', prompt='p', parent_workspace=PARENT_WORKSPACE, summoner=SUMMONER, may_summon=()
+    )
+    lowered = ride.spawn._lower_summon(launch, 'broker-CH')
+    assert lowered.launch.extra_mounts == ('/host/state:/state', '/host/trails:/var/ride/trails')
+
   def test_the_childs_own_allow_list_rides_its_environment(self, lowering_harness):
     launch = ride.spawn.SummonLaunchSpec(
       target='dev',
@@ -222,7 +240,9 @@ class TestSummonLowering:
     assert ride.spawn._lower_summon(launch, 'broker-CH').launch.env == {
       'RIDE_BASE_REF': 'REF-SHA',
       'RIDE_BRO': 'dev',
+      'RIDE_COMMAND': 'ride solo --hold unattended --harness bro --into summon dev p',
       'RIDE_MAY_SUMMON': '',
+      'RIDE_SUMMONED': '1',
       'RIDE_SUMMONER': '{"session":"ws"}',
       **ride.identity.bro_git_identity_env('dev'),
     }
