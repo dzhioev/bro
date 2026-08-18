@@ -13,7 +13,7 @@ def test_no_git_on_path_names_no_project(monkeypatch):
   monkeypatch.setattr(workspace_paths, 'git_run', absent)
 
   assert workspace_paths.find_project_root() is None
-  with pytest.raises(ValueError, match='no git repository'):
+  with pytest.raises(workspace_paths.RuntimeLocationError, match='no git repository'):
     workspace_paths.project_root()
 
 
@@ -97,7 +97,7 @@ def test_the_data_home_names_the_runtime_base(monkeypatch, tmp_path):
 
 def test_a_relative_data_home_is_refused(monkeypatch):
   monkeypatch.setenv('XDG_DATA_HOME', 'share')
-  with pytest.raises(ValueError, match='absolute'):
+  with pytest.raises(workspace_paths.RuntimeLocationError, match='absolute'):
     workspace_paths.runtime_base()
 
 

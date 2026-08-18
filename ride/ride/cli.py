@@ -1,15 +1,18 @@
 #!/usr/bin/env python
+import functools
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Optional
 
+from bro.base import log
 from bro.base.args import REMAINDER, SUPPRESS, Parser
 from bro.launch.llm_flags import canonicalize, drop_piece_flags, selection_from_args
 from bro.llm.providers import LLMSelectionError
 from bro.workspace.banner import banner
 from bro.workspace.containers import exec_in_workspace
 from bro.workspace.model import Workspace
-from bro.workspace.paths import fresh_workspace_name, project_root
+from bro.workspace.paths import RuntimeLocationError, fresh_workspace_name, project_root
 from bro.workspace.project import project_config
 from ride.bro import BroOptions, add_flags as add_bro_flags
 from ride.claude.harness import ClaudeOptions, add_flags as add_claude_flags
@@ -20,6 +23,23 @@ from ride.listing import list_workspaces
 from ride.session import SessionSpec, resume_session, start_session
 
 __cli_name__ = 'ride'
+
+_Main = Callable[[list[str]], Optional[int]]
+
+
+def reports_location_errors(main: _Main) -> _Main:
+  """wrap a console-script main so an unusable runtime location fails as a CLI
+  error rather than a traceback."""
+
+  @functools.wraps(main)
+  def wrapper(argv: list[str]) -> Optional[int]:
+    try:
+      return main(argv)
+    except RuntimeLocationError as error:
+      log.error('%s', error)
+      return 1
+
+  return wrapper
 
 
 def _add_mode_flags(parser: Parser) -> None:
@@ -220,6 +240,7 @@ def alias_main(argv: list[str], *, solo: bool) -> int:
   return _start_mode(parser, args, harness_arguments, solo=solo)
 
 
+@reports_location_errors
 def main(argv: list[str]) -> Optional[int]:
   parser = build_parser()
   args, harness_arguments = _parse(parser, argv)
