@@ -39,7 +39,7 @@ from typing import Optional
 import bro.llm.usage as usage
 from bro.base import log, spawn
 from bro.base.args import Parser
-from bro.workflow import commit_footer
+from bro.workflow import co_author, commit_footer
 
 __cli_name__ = 'fold-branch'
 
@@ -156,7 +156,8 @@ def _load_plan(path: str, branch: Sequence[str]) -> list[Fold]:
   for folded, (_, message) in zip(_claimed(blocks, position, path), blocks, strict=True):
     folded.sort(key=position.__getitem__)
     if message is None:
-      message = usage.strip_footer(_git('log', '-1', '--format=%B', folded[0]))
+      inherited = _git('log', '-1', '--format=%B', folded[0])
+      message = usage.strip_footer(co_author.strip_trailer(inherited))
     folds.append(Fold(commits=tuple(folded), message=message.strip()))
   return folds
 
@@ -212,8 +213,11 @@ def _rewrite(folds: Sequence[Fold], base: str, footers: Sequence[str]) -> str:
   if len(landed) != len(folds):
     raise FoldError(f'the rebase produced {len(landed)} commit(s) for {len(folds)} fold(s)')
   tip = base
+  trailer = co_author.trailer()
   for sha, fold, footer in zip(landed, folds, footers, strict=True):
     message = fold.message if footer == '' else f'{fold.message}\n\n{footer}'
+    if trailer is not None:
+      message = co_author.append_trailer(message, trailer)
     tip = _git(
       'commit-tree',
       f'{sha}^{{tree}}',

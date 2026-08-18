@@ -265,6 +265,17 @@ def current_usage() -> Optional[Usage]:
   return Usage(agent=claude_agent(), per_model=per_model)
 
 
+def agent_session() -> bool:
+  """whether an agent produced this process's work, by the presence of an
+  env-keyed usage source. Deliberately not `current_usage()`, whose
+  working-directory transcript fallback would answer yes in a human's shell that
+  happens to sit in a directory a past claude session ran in."""
+  return (
+    os.environ.get(USAGE_FILE_VARIABLE) is not None
+    or os.environ.get(SESSION_ID_VARIABLE) is not None
+  )
+
+
 # --- footer formatting + parsing -----------------------------------------------
 
 

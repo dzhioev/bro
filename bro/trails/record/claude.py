@@ -38,6 +38,7 @@ from typing import Any, NamedTuple, Optional
 
 from bro.base import configs, credentials, log
 from bro.base.args import Parser
+from bro.launch.hold import session_hold
 from bro.monitor import health, trail_pointer, working_projects_dir
 from bro.trails.backends import CLAUDE_ADAPTER
 from bro.trails.model import BlazeRequest, payload_sha256
@@ -443,7 +444,7 @@ class Recorder:
       location=_location(self.workspace),
       body=body,
       bro=os.environ.get('RIDE_BRO'),
-      hold=os.environ.get('BRO_HOLD'),
+      hold=session_hold(),
       lineage=lineage,
     )
     result = self.client.blaze(request)

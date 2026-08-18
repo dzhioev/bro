@@ -69,11 +69,12 @@ from bro.base import log
 from bro.base.credentials import REGISTRY_ENV
 from bro.bro import set_default_tracker_factory
 from bro.broker.client import CHANNEL_ENV
+from bro.launch.hold import HOLD_VARIABLE
 from bro.llm.tracker import NullTracker
 
 set_default_tracker_factory(NullTracker)
 os.environ.pop(CHANNEL_ENV, None)
-os.environ.pop('BRO_HOLD', None)
+os.environ.pop(HOLD_VARIABLE, None)
 os.environ.pop('RIDE_RUNNER_PID', None)
 os.environ.pop(REGISTRY_ENV, None)
 os.environ.pop('PWD', None)

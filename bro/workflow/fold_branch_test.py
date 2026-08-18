@@ -6,7 +6,9 @@ from unittest.mock import patch
 
 import pytest
 
+import bro.llm.usage as usage
 import bro.workflow.fold_branch as fold_branch
+from bro.launch.hold import HOLD_VARIABLE
 
 
 def _sh(repo, *args: str) -> str:
@@ -49,6 +51,14 @@ def worktree(tmp_path, monkeypatch):
   _sh(repo, 'push', '-q', '-u', 'origin', 'feature')
   monkeypatch.chdir(repo)
   return SimpleNamespace(path=repo, origin=origin, commits=commits)
+
+
+TRAILER = 'Co-Authored-By: test <test@example.com>'
+
+
+def _interactive_session(monkeypatch) -> None:
+  monkeypatch.setenv(usage.SESSION_ID_VARIABLE, 'fold-test-session')
+  monkeypatch.setenv(HOLD_VARIABLE, 'attended')
 
 
 def _plan_file(tmp_path, *blocks: str) -> str:
@@ -123,6 +133,13 @@ class TestLoadPlan:
     folds = fold_branch._load_plan(path, [*worktree.commits, extra])
     assert folds[0].message == 'add a thing\n\nbody'
 
+  def test_default_message_drops_an_inherited_co_author_trailer(self, worktree, tmp_path):
+    _sh(worktree.path, 'commit', '-q', '--allow-empty', '-m', f'add a thing\n\nbody\n\n{TRAILER}')
+    extra = _sh(worktree.path, 'rev-parse', 'HEAD')
+    path = _plan_file(tmp_path, _fold([extra]), _fold(worktree.commits))
+    folds = fold_branch._load_plan(path, [*worktree.commits, extra])
+    assert folds[0].message == 'add a thing\n\nbody'
+
   def test_unlanded_commit_refused(self, worktree, tmp_path):
     one, two, three, _four = worktree.commits
     path = _plan_file(tmp_path, _fold([one, three]), _fold([two]))
@@ -175,6 +192,20 @@ class TestRewrite:
     landed = _sh(worktree.path, 'log', '--reverse', '--format=%s', f'{base}..{tip}').splitlines()
     assert landed == ['the feature', 'the unrelated fix']
     assert _sh(worktree.path, 'log', '-1', '--format=%B', tip).endswith('> footer two')
+
+  def test_an_interactive_session_co_authors_every_landed_commit(self, worktree, monkeypatch):
+    _interactive_session(monkeypatch)
+    base = _sh(worktree.path, 'rev-parse', 'origin/master')
+    tip = fold_branch._rewrite(_two_folds(worktree), base, ['> footer one', ''])
+    assert _sh(worktree.path, 'log', '--format=%B', f'{base}..{tip}').count(TRAILER) == 2
+    assert _sh(worktree.path, 'log', '-1', '--format=%B', tip).endswith(TRAILER)
+
+  def test_an_unattended_session_lands_the_commits_uncredited(self, worktree, monkeypatch):
+    _interactive_session(monkeypatch)
+    monkeypatch.setenv(HOLD_VARIABLE, 'unattended')
+    base = _sh(worktree.path, 'rev-parse', 'origin/master')
+    tip = fold_branch._rewrite(_two_folds(worktree), base, ['> footer one', ''])
+    assert TRAILER not in _sh(worktree.path, 'log', '--format=%B', f'{base}..{tip}')
 
   def test_a_group_without_accounting_carries_no_footer(self, worktree):
     base = _sh(worktree.path, 'rev-parse', 'origin/master')

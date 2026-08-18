@@ -50,7 +50,6 @@ from __future__ import annotations
 
 import importlib.resources
 import json
-import os
 import shutil
 import stat
 import subprocess
@@ -60,6 +59,7 @@ from pathlib import Path
 from typing import Optional
 
 import bro.llm.usage as usage
+import bro.workflow.co_author as co_author
 from bro.base import log
 from bro.base.args import Parser
 from bro.llm.usage import Counts
@@ -175,13 +175,7 @@ def _emit_default(current: usage.Usage, state: State) -> str:
 
 
 def _append(message_path: Path, state: State) -> None:
-  # agenthood is the presence of an env-keyed usage source — deliberately not
-  # current_usage()'s working-directory transcript fallback, which in a human's
-  # shell would resolve a past session's transcript and footer their commit
-  if (
-    os.environ.get(usage.USAGE_FILE_VARIABLE) is None
-    and os.environ.get(usage.SESSION_ID_VARIABLE) is None
-  ):
+  if not usage.agent_session():
     return
   current = usage.current_usage()
   if current is None:
@@ -189,8 +183,11 @@ def _append(message_path: Path, state: State) -> None:
   message = message_path.read_text()
   if len(message.strip()) == 0 or usage.parse_footer(message) is not None:
     return
-  footer = _emit_default(current, state)
-  message_path.write_text(f'{message.rstrip()}\n\n{footer}\n')
+  message = f'{message.rstrip()}\n\n{_emit_default(current, state)}\n'
+  trailer = co_author.trailer()
+  if trailer is not None:
+    message = co_author.append_trailer(message, trailer)
+  message_path.write_text(message)
 
 
 def _aggregate(
