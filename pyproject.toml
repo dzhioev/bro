@@ -172,7 +172,7 @@ markers = [
 
 [tool.pyright]
 include = ["bro", "bros", "dev", "local", "ride", "conftest.py"]
-exclude = ["bro/setup/", ".venv/", ".claude/", "*.egg-info/", "build/"]
+exclude = ["bro/setup/", ".venv/", "*.egg-info/", "build/"]
 extraPaths = [".", "dev", "local", "ride"]
 venvPath = "."
 venv = ".venv"

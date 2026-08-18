@@ -39,8 +39,9 @@ fi
 
 # --- running as ride from here ---
 
-# ~/.claude is not seeded from the host: ride constructs ~/.claude.json and
-# settings.json and syncs credentials; host machine state stays on the host.
+# ~/.claude is not seeded from the host: ride constructs the .claude.json and
+# settings.json inside it and syncs credentials; host machine state stays on the
+# host.
 
 # seed host git config into a writable copy (the host file is bind-mounted
 # read-only at /host-gitconfig; git config --global needs atomic rename).

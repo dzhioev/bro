@@ -29,9 +29,10 @@ class TestSeedClaudeJSON:
     install_method: Optional[str] = 'global',
     trusted_paths=('/workspace',),
   ):
-    return ride_claude_config._seed_claude_json(
+    ride_claude_config._seed_claude_json(
       claude_dir, host_file, install_method=install_method, trusted_paths=list(trusted_paths)
     )
+    return claude_dir / '.claude.json'
 
   def test_constructs_explicit_config_plus_identity(self, tmp_path):
     host = _host_file(tmp_path, projects={'/x': {}}, numStartups=42)
@@ -159,27 +160,24 @@ class TestProvisionHostClaudeDir:
 
 
 class TestContainerClaudeState:
-  def test_returns_the_overlay_mounts_and_claude_env(self, monkeypatch, tmp_path):
+  def test_returns_the_state_mount_and_claude_env(self, monkeypatch, tmp_path):
     monkeypatch.setattr(ride_claude_config.Path, 'home', lambda: tmp_path)
-    monkeypatch.setattr(
-      ride_claude_config, '_seed_claude_json', lambda d, h, **k: d / '.claude.json'
-    )
+    monkeypatch.setattr(ride_claude_config, '_seed_claude_json', lambda d, h, **k: None)
     mounts, env = ride_claude_config.container_claude_state(tmp_path / 'ws')
     claude_dir = tmp_path / 'ws' / 'claude'
-    assert mounts == [
-      f'{claude_dir / ".claude.json"}:/home/ride/.claude.json',
-      f'{claude_dir}:/home/ride/.claude',
-    ]
-    assert env == {'DISABLE_AUTOUPDATER': '1', 'DISABLE_INSTALLATION_CHECKS': '1'}
+    assert mounts == [f'{claude_dir}:/home/ride/.claude']
+    assert env == {
+      'CLAUDE_CONFIG_DIR': '/home/ride/.claude',
+      'DISABLE_AUTOUPDATER': '1',
+      'DISABLE_INSTALLATION_CHECKS': '1',
+    }
 
   def test_settings_preaccept_the_bypass_permissions_dialog(self, monkeypatch, tmp_path):
     # the container workspace is an isolated clone, so --dangerously-skip-permissions
     # needs no interactive acknowledgement (container sessions only — the host
     # provision keeps the dialog, see TestProvisionHostClaudeDir)
     monkeypatch.setattr(ride_claude_config.Path, 'home', lambda: tmp_path)
-    monkeypatch.setattr(
-      ride_claude_config, '_seed_claude_json', lambda d, h, **k: d / '.claude.json'
-    )
+    monkeypatch.setattr(ride_claude_config, '_seed_claude_json', lambda d, h, **k: None)
     ride_claude_config.container_claude_state(tmp_path / 'ws')
     settings_file = tmp_path / 'ws' / 'claude' / 'settings.json'
     settings = json.loads(settings_file.read_text())
