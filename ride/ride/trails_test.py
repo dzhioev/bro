@@ -1,5 +1,5 @@
-from bro.launch import trails as launch_trails
 from bro.workspace.store import ScopedSecrets
+from ride import trails
 
 
 def _scope(required, optional=('openai',)):
@@ -28,16 +28,16 @@ def _patch_view_store(monkeypatch, config):
     reads.append((set(names), set(optional)))
     return _Store(config)
 
-  monkeypatch.setattr(launch_trails.credentials, 'scoped_view_store', scoped_view_store)
+  monkeypatch.setattr(trails.credentials, 'scoped_view_store', scoped_view_store)
   return reads
 
 
 def test_a_scope_without_a_trails_credential_maps_the_host_root(monkeypatch, tmp_path):
   root = tmp_path / 'trail-data'
   _patch_view_store(monkeypatch, None)
-  monkeypatch.setattr(launch_trails, 'local_root', lambda: root)
+  monkeypatch.setattr(trails, 'local_root', lambda: root)
 
-  mounts = launch_trails.local_trails_mounts(_scope({'github'}))
+  mounts = trails.local_trails_mounts(_scope({'github'}))
 
   assert mounts == (f'{root.resolve()}:/var/ride/trails',)
   assert root.is_dir()
@@ -46,15 +46,15 @@ def test_a_scope_without_a_trails_credential_maps_the_host_root(monkeypatch, tmp
 def test_a_service_credential_maps_nothing(monkeypatch):
   _patch_view_store(monkeypatch, {'base_url': 'https://trails.example', 'token': 'secret'})
 
-  assert launch_trails.local_trails_mounts(_scope({'github', 'trails'})) == ()
+  assert trails.local_trails_mounts(_scope({'github', 'trails'})) == ()
 
 
 def test_a_local_credential_maps_the_host_root_for_a_selected_instance(monkeypatch, tmp_path):
   root = tmp_path / 'trail-data'
   reads = _patch_view_store(monkeypatch, {'backend': 'local'})
-  monkeypatch.setattr(launch_trails, 'local_root', lambda: root)
+  monkeypatch.setattr(trails, 'local_root', lambda: root)
 
-  mounts = launch_trails.local_trails_mounts(_scope({'github'}, optional={'trails+eu'}))
+  mounts = trails.local_trails_mounts(_scope({'github'}, optional={'trails+eu'}))
 
   assert reads == [({'github'}, {'trails+eu'})]
   assert mounts == (f'{root.resolve()}:/var/ride/trails',)

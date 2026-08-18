@@ -22,9 +22,6 @@ from bro.broker.runtime import Peer
 from bro.broker.spawn import ChildHandle, LaunchSpec, Spawner
 from bro.broker.transport import Provisioned
 from bro.broker.transports.unix import UnixServerTransport
-from bro.launch.bro_run import describe
-from bro.launch.scope import summoned_credential_scope
-from bro.launch.summon_control import SummonControl, summon_status_file
 from bro.summon import MAY_SUMMON_ENV, SUMMON, encode_may_summon
 from bro.workspace.git import resolve_head, resolve_ref
 from bro.workspace.metadata import WorkspaceKind
@@ -38,6 +35,9 @@ from bro.workspace.spawn import (
   ProcessSpawner,
 )
 from bro.workspace.store import log_scoped_secrets
+from ride.bro_run import describe
+from ride.scope import summoned_credential_scope
+from ride.summon_control import SummonControl, summon_status_file
 
 
 @dataclass(frozen=True)
@@ -178,7 +178,7 @@ def run_root_via_broker(
   identity in the summon audit, and its records carry the broker-published
   current-trail pointer written from the root's `started` lifecycle
   (`bro.monitor.trail_pointer`). `may_summon` names the bros the root session
-  is authorized to summon — its effective outgoing allow-list (`bro/launch/summon_control.py`);
+  is authorized to summon — its effective outgoing allow-list (`ride/ride/summon_control.py`);
   defaults to deny-all. `credential_scope` names the secrets the root session
   was launched with, the bound on what its summons may grant a child; defaults
   to grant-nothing. A summoned child follows its own bro's static seeds

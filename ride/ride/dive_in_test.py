@@ -277,7 +277,7 @@ class TestTaskMode:
     assert capsys.readouterr().out == ''
 
   def test_bad_scope_override_fails_before_any_launch(self, fake_proj, monkeypatch):
-    from bro.launch.scope import LaunchScopeError
+    from ride.scope import LaunchScopeError
 
     def bad_override(grant, revoke, bro, harness, harness_options):
       raise LaunchScopeError("cannot grant 'brog': already in the scoped credential set")
@@ -341,7 +341,7 @@ class TestTaskSystem:
     assert calls['scoped'] == ('dev', CLAUDE.scope_recipe({'raw': True}))
 
   def test_bro_harness_scopes_the_native_recipe(self, monkeypatch):
-    from bro.launch.scope import BRO_RUN_RECIPE
+    from ride.scope import BRO_RUN_RECIPE
 
     calls: dict = {}
     self._fake_wiring(monkeypatch, calls)

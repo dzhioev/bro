@@ -2,9 +2,9 @@ from unittest.mock import Mock
 
 import pytest
 
-import bro.launch.bro_run
-from bro.launch.identity import bro_git_identity_env
+import ride.bro_run
 from bro.workspace.store import ScopedSecrets
+from ride.identity import bro_git_identity_env
 
 _SCOPED = ScopedSecrets(required={'github'}, optional={'openai', 'trails'}, docker_sock=False)
 
@@ -12,14 +12,14 @@ _SCOPED = ScopedSecrets(required={'github'}, optional={'openai', 'trails'}, dock
 @pytest.fixture(autouse=True)
 def trails_mounts(monkeypatch):
   helper = Mock(return_value=())
-  monkeypatch.setattr(bro.launch.bro_run, 'local_trails_mounts', helper)
+  monkeypatch.setattr(ride.bro_run, 'local_trails_mounts', helper)
   return helper
 
 
 def _describe(*args, **kwargs):
   kwargs.setdefault('verb', 'run')
   kwargs.setdefault('scoped', _SCOPED)
-  return bro.launch.bro_run.describe(*args, workspace_name='ws', **kwargs)
+  return ride.bro_run.describe(*args, workspace_name='ws', **kwargs)
 
 
 def test_describe_composes_the_in_place_pinned_command():

@@ -2,10 +2,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
-from bro.launch.scope import ScopeRecipe
 from bro.llm.llm import LLMSpec
 from bro.workspace.model import Workspace
 from bro.workspace.store import ScopedSecrets
+from ride.scope import ScopeRecipe
 
 if TYPE_CHECKING:
   from bro.base.args import Parser

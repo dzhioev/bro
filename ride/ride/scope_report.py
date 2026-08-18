@@ -3,10 +3,10 @@
 from typing import Optional
 
 from bro.base import credentials
-from bro.launch.scope import LaunchScopeError, bind_project_credentials, scoped_secrets
 from bro.workspace.paths import project_root
 from bro.workspace.project import project_config
 from ride.harness import get_harness
+from ride.scope import LaunchScopeError, bind_project_credentials, scoped_secrets
 
 
 def report_scope(bro: Optional[str], harness: str, options: dict) -> int:

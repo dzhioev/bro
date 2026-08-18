@@ -52,10 +52,10 @@ from typing import Optional
 
 import pytest
 
-import bro.launch.spawn
 import bro.workspace.docker as workspace_docker
 import bro.workspace.paths as workspace_paths
 import bro.workspace.spawn as workspace_spawn
+import ride.spawn
 from bro.broker.brotocol import Message
 from bro.broker.dispatcher import Broker, Dispatcher, ping_handler, spawn_test_handler
 from bro.broker.runtime import Peer
@@ -276,7 +276,7 @@ exec "$@"
 # `ride solo|along` seam (`run_in_container`) under the isolated HOME/project root
 _DRIVER = """
 import json, os, sys
-from bro.launch.root import run_in_container
+from ride.root import run_in_container
 from bro.workspace.docker import Launch
 from bro.workspace.metadata import WorkspaceKind
 from bro.workspace.model import Workspace
@@ -663,7 +663,7 @@ def _run_broker_scenario(
   result: dict[str, int] = {}
   with pytest.MonkeyPatch.context() as monkeypatch:
     monkeypatch.setenv('HOME', str(env.home))
-    monkeypatch.setattr(bro.launch.spawn, 'project_root', lambda: env.project)
+    monkeypatch.setattr(ride.spawn, 'project_root', lambda: env.project)
     monkeypatch.setattr(workspace_spawn, 'project_root', lambda: env.project)
     monkeypatch.setattr(workspace_docker, 'project_root', lambda: env.project)
     thread = threading.Thread(target=lambda: result.update(code=facade.run(root)))

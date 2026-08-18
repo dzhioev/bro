@@ -10,7 +10,7 @@ Two layers, both computed per broker root:
   the `summon` request handler (payload validation, per-peer authorization, the
   immediate denial `reply{error}` plus a deny audit entry, the spawn of a
   `SummonLaunchSpec` with the requesting peer as its parent — everything heavy
-  runs off-loop in the spawner, see `bro/launch/spawn.py`), the delivery-tap observer
+  runs off-loop in the spawner, see `ride/ride/spawn.py`), the delivery-tap observer
   that tracks each child's trail id and outcome, and the visibility outputs
   those feed: a host-side log line per event, an append-only JSONL audit file
   (the out-of-band trace a session's own narrative cannot suppress; every entry
@@ -44,7 +44,7 @@ summoned child's recomputed from its own spawn record (`_child_credentials`).
 The request's `grant`/`revoke` split by kind: `@bro` values resolve here, on the
 loop, so a malformed or no-op override is denied immediately, while the
 credential half rides the spawn and is applied against the child's own computed
-scope in the lowering (`bro/launch/spawn.py`), where a bad override fails the
+scope in the lowering (`ride/ride/spawn.py`), where a bad override fails the
 launch. `llm` is child-facing and rides its `bro run` argv.
 
 The same per-request attribution also names the requester's workspace (the root's
@@ -52,7 +52,7 @@ own, a child's from its `broker-<channel>` clone), threaded into
 the spawn as the child's base-ref inheritance source: a summoned child bases on
 its summoner's workspace HEAD unless the request's `into` overrides. The HEAD
 read itself is blocking git work and runs off-loop in the spawner
-(`bro/launch/spawn.py:_lower_summon`); the handler only resolves the path.
+(`ride/ride/spawn.py:_lower_summon`); the handler only resolves the path.
 
 Both state files live under `bro.workspace.paths.summon_dir`, keyed by the
 workspace name: `<name>.jsonl` (audit) and `<name>.status.json` (live status).
@@ -75,11 +75,11 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from bro import summon_status
 from bro.base import credentials, log
-from bro.launch.scope import split_scope_overrides
 from bro.summon import DEFAULT_TIMEOUT
 from bro.summon_status import STATUS_ENV
 from bro.workspace.model import Workspace
 from bro.workspace.paths import CONTAINER_SUMMON_ROOT, summon_dir, workspace_tree
+from ride.scope import split_scope_overrides
 
 if TYPE_CHECKING:
   from bro.broker.brotocol import Message
@@ -289,7 +289,7 @@ class SummonControl:
   # --- the `summon` request handler (broker loop) -------------------------------
 
   def handle(self, context: 'Dispatcher', peer: 'Peer', message: 'Message') -> None:
-    from bro.launch.spawn import SummonLaunchSpec
+    from ride.spawn import SummonLaunchSpec
 
     payload = message.payload
     requester = self._requester(context, peer)
@@ -422,9 +422,9 @@ class SummonControl:
     record = self._active.get(origin[1]) if origin is not None else None
     if record is None:
       return None
-    # function-local like SummonLaunchSpec above: bro.launch.spawn imports broker at
+    # function-local like SummonLaunchSpec above: ride.spawn imports broker at
     # module level (ride/AGENTS.md, "Lazy broker import")
-    from bro.launch.spawn import _workspace_name
+    from ride.spawn import _workspace_name
 
     return _Requester(
       allow_list=set(record.allow_list),
@@ -439,7 +439,7 @@ class SummonControl:
   def _child_credentials(self, record: _ActiveSummon) -> set[str]:
     """the credential scope a summoned child runs with, recomputed from its own
     spawn record through the same helper that lowered its launch."""
-    from bro.launch.scope import summoned_credential_scope
+    from ride.scope import summoned_credential_scope
 
     grant, _ = split_scope_overrides(record.grant)
     revoke, _ = split_scope_overrides(record.revoke)

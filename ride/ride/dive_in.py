@@ -10,13 +10,13 @@ import bro.brog.model as brog_model
 import bro.brog.system as brog_system
 from bro.base import credentials, log
 from bro.base.args import Parser
-from bro.launch.scope import LaunchScopeError, launch_view_store, scoped_secrets
 from bro.workspace.git import fetch_ref
 from bro.workspace.paths import fresh_workspace_name, project_root
 from bro.workspace.project import project_config
 from ride.cli import reports_location_errors
 from ride.flags import add_forwarded_flags, extract_forwarded_argv, pop_harness_options
 from ride.harness import get_harness
+from ride.scope import LaunchScopeError, launch_view_store, scoped_secrets
 
 __cli_name__ = 'dive-in'
 

@@ -61,9 +61,9 @@ def scoped_secrets(
 ) -> ScopedSecrets:
   """the credential scope of a launch running as `bro_name` under `recipe`.
 
-  Harness implementations own their recipes while this generic computation stays
-  in the framework for launch surfaces and summon lowering. Required hydration is
-  strict, so each recipe requests only what it actually uses.
+  Harness implementations own their recipes; launch surfaces and summon lowering
+  share this one computation over them. Required hydration is strict, so each
+  recipe requests only what it actually uses.
 
   `llm_spec` is the recipe the launch settled on (`--provider` / `--model` /
   `--llm`), whose key the scope hydrates in place of the bro's own — a run
@@ -168,7 +168,7 @@ def preflight_scoped_launch(
   """
   # imported here, not at module level, parallel to every launch-surface import of
   # summon_control: the module sits on the pre-gate launch path
-  from bro.launch.summon_control import summon_allow_list
+  from ride.summon_control import summon_allow_list
 
   try:
     scoped, grant_bros, revoke_bros = _finalize_credential_scope(scoped, grant, revoke)

@@ -8,16 +8,24 @@
 - `ride/ask.py`, `ride/call.py` — pure option-preserving aliases of `ride solo` and `ride along`. Their scripts live in this distribution and add no implied fast mode or other flags.
 - `ride/dive_in.py` — task utility wrapper: prefetch, task-derived workspace naming, `RIDE_TASK_ID`, fresh-origin base selection, hold defaults, and forwarding to `ride along` with the project-default bro.
 - `ride/session.py` — harness-neutral session lifecycle: recorded `SessionSpec`, base resolution, auth/scope preflight, workspace kind and lock, resume records, keep/drop finish behavior, and the shared launch skeleton for both modes — active-container refusal, stale-pointer clear, resume gate, the trails opt-out, the container `Launch` composition, and the provisioned host-worktree body.
+- `ride/scope.py` — per-surface launch scoping: `ScopeRecipe`, `BRO_RUN_RECIPE`, project-bound credential selection, `scoped_secrets`, the strict launch preflight, scope override splitting, and summoned-child scope computation. In-process `bro run` / `bro chat` create no scope.
+- `ride/root.py` — neutral container and host-process root supervision behind the broker availability gate.
+- `ride/spawn.py` — broker-root composition, root lifecycle handlers, native workspace trail-pointer publication, summon lowering, and per-root `SummonControl` wiring.
+- `ride/summon_control.py` — summon host authorization, allow-list resolution, audit/status bookkeeping, and request lifecycle. The peer wire and self-contained CLI are the framework's `bro/summon.py`.
+- `ride/bro_run.py` — the broker-free `Launch` description for a summoned native run: `bro run|chat … --in-place`, bro git identity, `RIDE_BRO`, stdio policy, and local-trails data where the scope records locally. Summon description machinery, not a public container hop for `bro run`.
+- `ride/trails.py` — local-trails mounts for launch descriptions whose computed scope records locally.
+- `ride/identity.py` — managed-session git identity.
 - `ride/harness.py` — the `Harness` protocol (flag registration and option packing, scope, auth, session reads, and the launch hooks: trail-pointer path, inner command, container extras, host runner env), the harness roster, and the lazy harness resolver.
 - `ride/bro.py` — native harness implementation: native recipe resolution, the `bro run|chat … --in-place` inner command with exact-recipe continuation, and the launch hooks.
 - `ride/flags.py` — common session, scope, and LLM flag registration, harness flag registration with the generic requires-`--harness` refusal and option packing, and the default an omitted `--hold` resolves to.
 - `ride/listing.py`, `ride/clean.py`, `ride/scope_report.py` — lifecycle implementations.
+- `ride/e2e_test.py` — live Docker launch coverage, outside the default test roster.
 - `ride/claude/` — the Claude Code harness implementation; see `ride/claude/AGENTS.md`.
 
 ## Invariants
 
 - The runtime layer names no Claude detail in its serialized harness options. `SessionSpec.harness_options` belongs to the selected implementation and is validated there.
-- The neutral layer owns both launch bodies; the harness seam supplies scope recipes, auth, LLM resolution, the inner command, session-state reads, and the per-harness launch extras. The in-place runner is the Claude harness's alone — bro workspaces run `bro run|chat --in-place`. Generic credential computation and broker-root process supervision remain in `bro.launch` for native launch and summon reuse.
+- The neutral layer owns both launch bodies; the harness seam supplies scope recipes, auth, LLM resolution, the inner command, session-state reads, and the per-harness launch extras. The in-place runner is the Claude harness's alone — bro workspaces run `bro run|chat --in-place`. A managed native container or host worktree is always launched by `ride`; a summon child is always launched by `summon`.
 - Every harness keeps its session state among the workspace's own records, so reclaiming a workspace is `Workspace.remove()` for all of them and no harness supplies a teardown of its own.
 - Claude workspaces run their checkout's `ride solo|along --in-place`; native workspaces run `bro run|chat … --in-place`. These hidden inner contracts fail loudly when a workspace tree predates them.
 - A bro resume reads the broker-published pointer beside the workspace's `resume.json` and continues that trail under the recipe recorded in the session spec. No pointer is synthesized when the broker or native trail recording is disabled.
