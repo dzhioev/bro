@@ -120,7 +120,7 @@ def build_claude_launch(
     },
   }
   argv = ['--model', llm.model]
-  bro = create_bro(spec.session_bro)
+  bro = create_bro(spec.bro)
   servers = bro.claude_bro_mcp_servers() if options(spec).raw else bro.claude_persona_mcp_servers()
   blocked_tool_names = () if options(spec).raw else bro.blocked_tool_names('claude')
   narrowed_tool_commands = {} if options(spec).raw else bro.narrowed_tool_commands('claude')
@@ -151,7 +151,7 @@ def build_claude_launch(
       ','.join(f'mcp__{namespace}__*' for namespace in namespaces),
     ]
   else:
-    system_prompt = _session_append_prompt(spec.hold, spec.session_bro)
+    system_prompt = _session_append_prompt(spec.hold, spec.bro)
     argv += [
       '--disallowed-tools',
       ','.join(('mcp__claude_ai_*', *blocked_tool_names)),

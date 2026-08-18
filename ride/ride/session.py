@@ -50,10 +50,6 @@ class SessionSpec:
   harness_options: dict
 
   @property
-  def session_bro(self) -> str:
-    return self.bro
-
-  @property
   def llm_spec(self) -> LLMSpec:
     return LLMSpec.from_dict(self.resolved_llm)
 
@@ -197,7 +193,7 @@ def _container_session(
   launch_scope: ScopedLaunch,
 ) -> int:
   scoped = launch_scope.scoped
-  env: dict[str, str] = {'RIDE_BRO': spec.session_bro}
+  env: dict[str, str] = {'RIDE_BRO': spec.bro}
   if base_ref is not None:
     env['RIDE_BASE_REF'] = base_ref
   extras = harness.container_extras(spec, workspace, scoped)
@@ -321,8 +317,8 @@ def start_session(spec: SessionSpec) -> int:
     recipe = dataclasses.replace(recipe, optional_baseline=frozenset())
   try:
     scoped, may_summon, store = preflight_scoped_launch(
-      scoped_secrets(spec.session_bro, recipe, llm_spec=spec.llm_spec),
-      spec.session_bro,
+      scoped_secrets(spec.bro, recipe, llm_spec=spec.llm_spec),
+      spec.bro,
       grant=spec.grant,
       revoke=spec.revoke,
     )
