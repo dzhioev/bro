@@ -181,7 +181,7 @@ class TestHostSession:
     ]  # fmt: skip
     assert env['RIDE_BRO'] == 'dev'
     assert env[bro_session.START_SESSION_BROXY_ENV] == '1'
-    assert env['GIT_AUTHOR_NAME'] == 'bro'
+    assert env['GIT_AUTHOR_NAME'] == 'dev'
     assert env['GIT_AUTHOR_EMAIL'] == 'dev@bro'
     assert root.call_args.kwargs['trail_pointer'] == workspace.path / trail_pointer.FILENAME
     assert workspace.is_clean() == (False, ['last session exited with code 3'])
