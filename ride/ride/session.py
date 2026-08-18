@@ -11,7 +11,7 @@ from bro.llm.llm import LLMSpec
 from bro.workspace.git import resolve_ref
 from bro.workspace.metadata import WorkspaceKind
 from bro.workspace.model import KindMismatch, SessionBusy, Workspace
-from bro.workspace.paths import project_root, require_runtime_root
+from bro.workspace.paths import ensure_runtime_root, project_root
 from bro.workspace.store import ScopedSecrets
 from ride.harness import Harness, get_harness
 
@@ -210,11 +210,7 @@ def start_session(spec: SessionSpec) -> int:
   os.environ.setdefault('BRO_SHELL_COMMAND', os.environ['RIDE_COMMAND'])
 
   project = project_root()
-  try:
-    require_runtime_root(project)
-  except RuntimeError as error:
-    log.error('%s', error)
-    return 1
+  ensure_runtime_root(project)
   base_ref: Optional[str] = None
   if spec.into is not None:
     base_ref = resolve_ref(project, spec.into)
@@ -253,11 +249,6 @@ def start_session(spec: SessionSpec) -> int:
 
 def resume_session(name: str, *, grant: list[str], revoke: list[str]) -> int:
   project = project_root()
-  try:
-    require_runtime_root(project)
-  except RuntimeError as error:
-    log.error('%s', error)
-    return 1
   try:
     workspace = Workspace.open(name, project)
   except ValueError as error:

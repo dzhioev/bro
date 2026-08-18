@@ -54,10 +54,9 @@ its summoner's workspace HEAD unless the request's `into` overrides. The HEAD
 read itself is blocking git work and runs off-loop in the spawner
 (`bro/launch/spawn.py:_lower_summon`); the handler only resolves the path.
 
-Both state files live under `/var/ride/<project-key>/summon/`
-(`bro.workspace.paths.summon_dir`), keyed by the workspace name: `<name>.jsonl`
-(audit) and `<name>.status.json` (live status). They sit outside the workspace dir
-so the audit survives a drop. The host process writes both; a container session
+Both state files live under `bro.workspace.paths.summon_dir`, keyed by the
+workspace name: `<name>.jsonl` (audit) and `<name>.status.json` (live status).
+They sit outside the workspace dir so the audit survives a drop. The host process writes both; a container session
 reads the status through the dedicated read-only `/var/ride/summon` bind, while a
 host session reads the host path.
 

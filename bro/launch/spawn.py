@@ -166,7 +166,7 @@ def run_root_via_broker(
   trail_pointer: Optional[Path] = None,
 ) -> int:
   """run `launch` as the root peer of a broker over the host control dir
-  (`/var/ride/<project-key>/broker`), supervise it on the broker loop until it exits,
+  (`bro.workspace.paths.broker_dir`), supervise it on the broker loop until it exits,
   and return its exit code. The spawner is the composite over both ride launch modes plus the summon
   lowering, so any root — host process or container — can spawn docker children.
   The broker answers the substrate's built-in ping, so a session can verify its

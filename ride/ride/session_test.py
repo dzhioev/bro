@@ -9,7 +9,6 @@ import bro.launch.scope
 import bro.launch.spawn
 import bro.launch.summon_control
 import bro.summon
-import bro.workspace.paths as workspace_paths
 import bro.workspace.project as workspace_project
 import ride.claude.harness as claude_harness
 import ride.claude.session as claude_session
@@ -147,22 +146,6 @@ class _ContainerHarness:
     for p in reversed(self._patches):
       p.__exit__(*exception)
     return False
-
-
-class TestRuntimeRoot:
-  def test_missing_root_refuses_with_setup_remedy(self, monkeypatch, tmp_path, caplog):
-    monkeypatch.setattr(workspace_paths, 'RUNTIME_BASE', tmp_path / 'absent')
-
-    assert ride_session.start_session(_spec()) == 1
-    assert 'setup.sh' in caplog.text
-    assert 'runtime state root' in caplog.text
-
-  def test_missing_root_refuses_resume_with_setup_remedy(self, monkeypatch, tmp_path, caplog):
-    monkeypatch.setattr(workspace_paths, 'RUNTIME_BASE', tmp_path / 'absent')
-
-    assert ride_session.resume_session('w', grant=[], revoke=[]) == 1
-    assert 'setup.sh' in caplog.text
-    assert 'runtime state root' in caplog.text
 
 
 class TestNestedLaunch:
@@ -1061,10 +1044,10 @@ class TestHostBrokerPingRoundTrip:
   the machine's claude login nor writes into the real ~/.claude."""
 
   def test_broker_request_ping_from_a_host_session(self, monkeypatch, capfd, socket_dir):
-    # socket_dir doubles as the project root: the channel socket lands at
-    # /var/ride/<project-key>/broker/<channel>.sock
+    # socket_dir doubles as the project root: the channel socket lands under the
+    # runtime root, whose length the sun_path limit bounds
     root = socket_dir
-    monkeypatch.setattr(workspace_paths, 'RUNTIME_BASE', root / 'state')
+    monkeypatch.setenv('XDG_DATA_HOME', str(root / 'state'))
     home = root / 'home'
     home.mkdir()
     # the identity fields _seed_claude_json requires from the host ~/.claude.json
