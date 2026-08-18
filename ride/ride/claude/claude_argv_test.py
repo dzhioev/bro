@@ -195,7 +195,7 @@ class TestRawLaunch:
     seeded = argv[argv.index('--') + 1]
     assert seeded.startswith('[launch note:')
     assert seeded.endswith('do it')
-    # ride-sessions keep the seed verbatim (harness reminders cover them)
+    # a ride session keeps the seed verbatim (harness reminders cover it)
     native = _ride_session_launch(_spec(prompt='do it'), claude_args=[]).argv
     assert native[native.index('--') + 1] == 'do it'
 

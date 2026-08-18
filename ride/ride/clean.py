@@ -5,7 +5,6 @@ from bro.workspace.docker import running_mounts
 from bro.workspace.metadata import WorkspaceKind
 from bro.workspace.model import Workspace
 from bro.workspace.paths import project_root
-from ride.session import harness_for_workspace
 
 
 def clean_workspaces(
@@ -46,7 +45,7 @@ def clean_workspaces(
       log.info('would remove %s', workspace.name)
     else:
       try:
-        harness_for_workspace(workspace).drop_workspace(workspace)
+        workspace.remove()
       except (RuntimeError, OSError) as error:
         log.error('skip %s: %s', workspace.name, error)
         failed += 1

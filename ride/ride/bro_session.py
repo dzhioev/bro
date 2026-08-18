@@ -13,17 +13,17 @@ from bro.monitor import trail_pointer
 from bro.workspace.containers import broker_enabled
 from bro.workspace.docker import find_container_id
 from bro.workspace.model import Workspace
-from bro.workspace.paths import project_root, venv_env
+from bro.workspace.paths import project_root, venv_env, workspace_dir
 from bro.workspace.store import log_scoped_secrets, materialize_scoped_store
 from bro.workspace.worktrees import ensure_host_worktree, provision_host_worktree
-from ride.bro import options
+from ride.bro import options, session_trail_pointer
 from ride.session import ScopedLaunch, SessionSpec
 
 
 def _resume_trail(workspace: Workspace, spec: SessionSpec) -> Optional[str]:
   if not spec.resume:
     return None
-  trail_id = trail_pointer.read(workspace.path / trail_pointer.FILENAME)
+  trail_id = trail_pointer.read(session_trail_pointer(workspace.path))
   if trail_id is None:
     raise ValueError(
       f'cannot resume bro harness workspace {workspace.name!r}: no trail pointer was published; '
@@ -62,9 +62,8 @@ def _inner_arguments(spec: SessionSpec, resume_trail: Optional[str]) -> list[str
 
 
 def inner_command(spec: SessionSpec) -> list[str]:
-  from ride.bro import session_trail_pointer
-
-  resume_trail = trail_pointer.read(session_trail_pointer(spec.name)) if spec.resume else None
+  pointer = session_trail_pointer(workspace_dir(project_root(), spec.name))
+  resume_trail = trail_pointer.read(pointer) if spec.resume else None
   if spec.resume and resume_trail is None:
     raise ValueError(f'no bro harness trail recorded for workspace {spec.name!r}')
   verb = 'run' if spec.solo else 'chat'
@@ -80,7 +79,7 @@ def launch_session(
   container: bool,
 ) -> int:
   if not spec.resume:
-    trail_pointer.clear(workspace.path / trail_pointer.FILENAME)
+    trail_pointer.clear(session_trail_pointer(workspace.path))
   try:
     resume_trail = _resume_trail(workspace, spec)
   except ValueError as error:
@@ -118,7 +117,7 @@ def _container_session(
     launch,
     workspace=workspace,
     may_summon=launch_scope.may_summon,
-    trail_pointer=workspace.path / trail_pointer.FILENAME,
+    trail_pointer=session_trail_pointer(workspace.path),
   )
 
 
@@ -158,7 +157,7 @@ def _host_session(
   runner_env['RIDE_BRO'] = spec.bro
   runner_env[START_SESSION_BROXY_ENV] = '1'
   runner_env[credentials.REGISTRY_ENV] = str(
-    materialize_scoped_store(launch_scope.store, workspace.path / '.bro')
+    materialize_scoped_store(launch_scope.store, workspace.path / 'credentials')
   )
   if options(spec).no_trails:
     runner_env['TRAILS_DISABLED'] = '1'
@@ -172,7 +171,7 @@ def _host_session(
       launch_scope.may_summon,
       scoped.required | scoped.optional,
       interactive=not spec.solo,
-      trail_pointer=workspace.path / trail_pointer.FILENAME,
+      trail_pointer=session_trail_pointer(workspace.path),
     )
   else:
     runner_env.pop(START_SESSION_BROXY_ENV, None)

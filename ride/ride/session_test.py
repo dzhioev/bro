@@ -122,7 +122,7 @@ class _ContainerHarness:
       patch('ride.claude.harness.credentials.try_get', return_value='tok'),
       patch('bro.launch.scope.credentials.build_scoped_store', return_value={}),
       patch('ride.claude.session.container_claude_state', return_value=([], {})),
-      patch('ride.claude.harness.drop_workspace'),
+      patch('bro.workspace.model.ContainerWorkspace.remove'),
       patch('ride.session._replace_resume_hint'),
       # keep the bro-registry import out; threading is asserted per-test
       patch('bro.launch.summon_control.summon_allow_list', return_value=set()),
@@ -137,7 +137,7 @@ class _ContainerHarness:
     self.try_get = entered[4]
     self.build_scoped_store = entered[5]
     self.container_claude_state = entered[6]
-    self.drop_workspace = entered[7]
+    self.remove_workspace = entered[7]
     self.summon_allow_list = entered[9]
     self.local_trails_mounts = entered[11]
     return self
@@ -393,14 +393,14 @@ class TestContainerDrop:
     with _ContainerHarness() as h:
       rc = ride_session.start_session(_spec(drop=True))
     assert rc == 0
-    assert h.drop_workspace.call_count == 1
+    assert h.remove_workspace.call_count == 1
 
   def test_drop_keeps_the_workspace_when_the_session_failed(self):
     with _ContainerHarness() as h:
       h.run_in_container.return_value = 3
       rc = ride_session.start_session(_spec(drop=True))
     assert rc == 3
-    assert h.drop_workspace.call_count == 0
+    assert h.remove_workspace.call_count == 0
 
 
 class TestCommandArgv:
@@ -754,7 +754,7 @@ class TestHostSession:
     monkeypatch.setattr(
       claude_session,
       '_provision_host_claude_dir',
-      lambda name, wt, project: tmp_path / 'claude-config',
+      lambda ws, wt, project: tmp_path / 'claude-config',
     )
     monkeypatch.setattr(
       ride_session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets({'github'}, set(), True)
@@ -942,7 +942,7 @@ class TestHostSession:
     monkeypatch.setattr(claude_session.subprocess, 'run', fake_run)
     scope = _launch_scope(store={'x.cred': b'v'})
     assert claude_session._host_session(_spec(host=True), workspace, None, scope) == 0
-    registry = tmp_path / 'claude-config' / '.bro' / 'credentials.json'
+    registry = workspace.path / 'credentials' / 'credentials.json'
     assert runs[0][1]['env']['CREDENTIALS_REGISTRY'] == str(registry)
     assert materialized['store'] == {'x.cred': b'v'}
     assert materialized['directory'] == registry.parent
@@ -1003,7 +1003,7 @@ class TestHostSession:
     monkeypatch.setattr(
       claude_session,
       '_provision_host_claude_dir',
-      lambda name, wt, project: tmp_path / 'claude-config',
+      lambda ws, wt, project: tmp_path / 'claude-config',
     )
     monkeypatch.setattr(
       ride_session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set(), True)
@@ -1080,6 +1080,6 @@ class TestHostBrokerPingRoundTrip:
     assert '"pong"' in capfd.readouterr().out
     # the channel socket is unlinked once the root exits
     assert list((root / 'var' / 'ride' / 'broker').glob('*.sock')) == []
-    # the session claude state landed under the fake HOME, seeded from its identity
-    seeded = home / '.claude' / 'ride-sessions' / 'w' / '.claude.json'
+    # the session claude state landed in the workspace, seeded from its identity
+    seeded = workspace.path / 'claude' / '.claude.json'
     assert json.loads(seeded.read_text())['userID'] == 'u'

@@ -185,7 +185,7 @@ def _finish_session(spec: SessionSpec, workspace: Workspace, code: int) -> int:
   if spec.drop:
     if code == 0:
       try:
-        get_harness(spec.harness).drop_workspace(workspace)
+        workspace.remove()
         log.info('removed workspace %s', workspace.name)
       except (RuntimeError, OSError) as error:
         log.warning('could not fully remove workspace %s: %s', workspace.name, error)

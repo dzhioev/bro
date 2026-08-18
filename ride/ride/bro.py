@@ -66,10 +66,10 @@ def options(spec: 'SessionSpec') -> BroOptions:
   return BroOptions.load(spec.harness_options)
 
 
-def session_trail_pointer(workspace_name: str) -> Path:
-  from bro.workspace.paths import project_root, workspace_dir
-
-  return workspace_dir(project_root(), workspace_name) / trail_pointer.FILENAME
+def session_trail_pointer(workspace: Path) -> Path:
+  """the workspace's current-trail pointer — published by the broker root when
+  the session starts (`monitor/trail_pointer.py` owns the file)."""
+  return workspace / trail_pointer.FILENAME
 
 
 class BroHarness:
@@ -108,19 +108,13 @@ class BroHarness:
     return flags, []
 
   def session_exists(self, workspace: Workspace) -> bool:
-    return trail_pointer.read(self.trail_pointer(workspace.name)) is not None
-
-  def trail_pointer(self, workspace_name: str) -> Path:
-    return session_trail_pointer(workspace_name)
+    return trail_pointer.read(session_trail_pointer(workspace.path)) is not None
 
   def read_subject(self, workspace: Workspace) -> str | None:
     from ride.session import load_resume_spec
 
     spec = load_resume_spec(workspace)
     return None if spec is None else options(spec).subject
-
-  def drop_workspace(self, workspace: Workspace) -> None:
-    workspace.remove()
 
   def launch(
     self,
