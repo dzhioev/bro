@@ -16,7 +16,7 @@ project reads only the framework's base layer, never the class graph that pulls 
 
 Formatting and linting stay the repository root's, which walks this directory through its
 `[tool.ruff] src`. pytest and pyright run from here instead, inside `.venv`: `run-tests` syncs it and
-drives both, and `--no-benchmark` skips that whole stage. Build the wheel with `uv build` from this
+drives both, and `--skip benchmark` skips that whole stage. Build the wheel with `uv build` from this
 directory rather than `uv build --package`.
 
 The `*_e2e_test.py` modules stay out of the gate's roster: they build a bundle and drive the host
