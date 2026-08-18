@@ -2,12 +2,12 @@
 
 Owns the claude state dir a workspace's sessions run against — its path
 derivations, contents (the seeded `.claude.json`, the constructed
-`settings.json`, the plugin seed), the container mounts that overlay it as
-`~/.claude`, and its readers (the projects dir, a session's subject line). A
-container reaches the dir through docker mounts, a host session through
-`CLAUDE_CONFIG_DIR`. Why sessions are isolated from the host `~/.claude` — and
-what the dir deliberately excludes — is reference/ride.md, "Host claude-state
-isolation".
+`settings.json`, the plugin seed), and its readers (the projects dir, a
+session's subject line). Both session modes name the dir to claude through
+`CLAUDE_CONFIG_DIR`; a container additionally bind-mounts it, since the dir
+lives host-side and the container is `--rm`'d at exit. Why sessions are
+isolated from the host `~/.claude` — and what the dir deliberately excludes —
+is reference/ride.md, "Host claude-state isolation".
 """
 
 import json
@@ -20,6 +20,8 @@ from bro.base import log
 from bro.monitor import encode_project_path, workspace_claude_dir
 from bro.workspace.metadata import WorkspaceKind
 from bro.workspace.model import Workspace
+
+_CONTAINER_CLAUDE_DIR = '/home/ride/.claude'
 
 
 def _latest_jsonl(projects_dir: Path) -> Optional[Path]:
@@ -76,9 +78,8 @@ def read_subject(workspace: Workspace) -> Optional[str]:
   return None
 
 
-# the shared base of the session ~/.claude/settings.json, written fresh each
-# launch by _write_session_settings: UX prefs only; the repo's own
-# .claude/settings.json layers on top.
+# the session ~/.claude/settings.json, written fresh each launch: UX prefs and
+# the session-behavior opt-outs, nothing machine-specific.
 _SESSION_SETTINGS_JSON: dict = {
   'spinnerVerbs': {'mode': 'replace', 'verbs': ['Thinking']},
   'spinnerTipsEnabled': False,
@@ -93,6 +94,8 @@ _SESSION_SETTINGS_JSON: dict = {
   # keep transcripts forever (no disable value exists); they back the
   # session recording
   'cleanupPeriodDays': 36500,
+  # claude's own default is on
+  'autoMemoryEnabled': False,
 }
 
 # the explicit per-session ~/.claude.json base: no onboarding prompts, no
@@ -115,17 +118,11 @@ _SESSION_CLAUDE_JSON: dict = {
 _CLAUDE_JSON_IDENTITY_KEYS = ('oauthAccount', 'userID')
 
 
-def _write_session_settings(claude_dir: Path, *, container: bool) -> None:
-  settings = dict(_SESSION_SETTINGS_JSON)
-  if container:
-    settings['skipDangerousModePermissionPrompt'] = True
-  (claude_dir / 'settings.json').write_text(json.dumps(settings))
-
-
 def _seed_claude_json(
   claude_dir: Path, host_file: Path, *, install_method: Optional[str], trusted_paths: Sequence[str]
-) -> Path:
-  """seed-once per-session private ~/.claude.json.
+) -> None:
+  """seed-once per-session private `.claude.json` — claude reads it from the
+  state dir named by `CLAUDE_CONFIG_DIR`.
 
   built from the explicit session config plus the host's account-identity
   fields — no host machine state copied. `install_method` names the claude
@@ -153,7 +150,6 @@ def _seed_claude_json(
       data[key] = host[key]
     seed.write_text(json.dumps(data))
     seed.chmod(0o600)
-  return seed
 
 
 def _seed_host_plugins(claude_dir: Path) -> None:
@@ -170,44 +166,71 @@ def _seed_host_plugins(claude_dir: Path) -> None:
   shutil.copytree(host_plugins, claude_dir / 'plugins', dirs_exist_ok=True)
 
 
+def _provision_session_claude_dir(
+  workspace: Path,
+  *,
+  install_method: Optional[str],
+  trusted_paths: Sequence[str],
+  preaccept_bypass_dialog: bool,
+) -> Path:
+  """provision a session's private claude state dir and return it. idempotent
+  because both launch layers apply it: the `.claude.json` is seeded once, the
+  settings rewritten every time."""
+  claude_dir = workspace_claude_dir(workspace)
+  log.verbose('provisioning the session claude state dir at %s', claude_dir)
+  claude_dir.mkdir(parents=True, exist_ok=True)
+  _seed_claude_json(
+    claude_dir,
+    Path.home() / '.claude.json',
+    install_method=install_method,
+    trusted_paths=trusted_paths,
+  )
+  settings = dict(_SESSION_SETTINGS_JSON)
+  if preaccept_bypass_dialog:
+    settings['skipDangerousModePermissionPrompt'] = True
+  (claude_dir / 'settings.json').write_text(json.dumps(settings))
+  return claude_dir
+
+
 def container_claude_state(workspace: Path) -> tuple[list[str], dict[str, str]]:
   """provision the workspace's claude state for a container launch and return
   the (extra_mounts, extra_env) a claude-running container adds to its `Launch`.
 
-  the mounts overlay the state dir as the container's `~/.claude` and the seeded
-  container-private `.claude.json` on top of `$HOME`; the env turns off claude's
-  auto-updater (the image owns the install) and its installation checks (doctor
-  would flag the absent host-native ~/.local/bin/claude)."""
-  claude_dir = workspace_claude_dir(workspace)
-  claude_dir.mkdir(parents=True, exist_ok=True)
-  # seed-once container-private ~/.claude.json: installMethod matches the image's
-  # npm-global claude; the trusted project entry is the clone's mount point
-  claude_json = _seed_claude_json(
-    claude_dir, Path.home() / '.claude.json', install_method='global', trusted_paths=['/workspace']
+  the mount carries the host-side state dir into the container, where the state
+  must not live: the container is `--rm`'d at exit while the workspace outlives
+  it. the env names that dir to claude and turns off claude's auto-updater (the
+  image owns the install) and its installation checks (doctor would flag the
+  absent host-native ~/.local/bin/claude).
+
+  the workspace is an isolated clone, so the `--dangerously-skip-permissions`
+  acceptance dialog is pre-answered."""
+  claude_dir = _provision_session_claude_dir(
+    workspace,
+    install_method='global',
+    trusted_paths=['/workspace'],
+    preaccept_bypass_dialog=True,
   )
-  _write_session_settings(claude_dir, container=True)
-  mounts = [
-    f'{claude_json}:/home/ride/.claude.json',
-    f'{claude_dir}:/home/ride/.claude',
-  ]
-  env = {'DISABLE_AUTOUPDATER': '1', 'DISABLE_INSTALLATION_CHECKS': '1'}
+  mounts = [f'{claude_dir}:{_CONTAINER_CLAUDE_DIR}']
+  env = {
+    'CLAUDE_CONFIG_DIR': _CONTAINER_CLAUDE_DIR,
+    'DISABLE_AUTOUPDATER': '1',
+    'DISABLE_INSTALLATION_CHECKS': '1',
+  }
   return mounts, env
 
 
 def _provision_host_claude_dir(workspace: Path, worktree: Path, project: Path) -> Path:
   """provision a host session's private claude state dir and return it — the
   value the launch points CLAUDE_CONFIG_DIR at. `project` is the main repo root
-  the worktree links to. idempotent because the outer launch and the in-place
-  runner both call it."""
-  claude_dir = workspace_claude_dir(workspace)
-  log.verbose('provisioning the session claude state dir at %s', claude_dir)
-  claude_dir.mkdir(parents=True, exist_ok=True)
+  the worktree links to."""
   trusted_paths = [str(worktree)]
   if str(project) != str(worktree):
     trusted_paths.append(str(project))
-  _seed_claude_json(
-    claude_dir, Path.home() / '.claude.json', install_method=None, trusted_paths=trusted_paths
+  claude_dir = _provision_session_claude_dir(
+    workspace,
+    install_method=None,
+    trusted_paths=trusted_paths,
+    preaccept_bypass_dialog=False,
   )
-  _write_session_settings(claude_dir, container=False)
   _seed_host_plugins(claude_dir)
   return claude_dir

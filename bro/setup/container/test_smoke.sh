@@ -47,7 +47,7 @@ GC
 
 # pre-seed the container-private .claude.json (bro/workspace/docker.py does this on first run).
 # also drop a "host" .claude.json next to it as a tripwire: it must not exist
-# on any container mount, so any write the container makes to /home/ride/.claude.json
+# on any container mount, so any write the container makes to its claude config
 # must land in claude/.claude.json and leave host_claude.json untouched.
 echo '{"projects":{"/workspace":{"smoke_seed":true}}}' > "$SMOKE_TMP/claude/.claude.json"
 echo '{"host_marker":"untouched"}' > "$SMOKE_TMP/host_claude.json"
@@ -64,8 +64,8 @@ docker run --rm -i \
   -v "$HOST_REPO:/host-repo:ro" \
   -v "$SMOKE_TMP/gitconfig:/host-gitconfig:ro" \
   -v "$SMOKE_TMP/claude:/home/ride/.claude" \
-  -v "$SMOKE_TMP/claude/.claude.json:/home/ride/.claude.json" \
   -e "HOME=/home/ride" \
+  -e "CLAUDE_CONFIG_DIR=/home/ride/.claude" \
   -e "RIDE_WORKSPACE=smoke-test" \
   -e "RIDE_BRANCH=worktree-smoke-test" \
   -e "RIDE_SKIP_VENV=1" \
@@ -112,9 +112,10 @@ docker run --rm -i \
     while IFS= read -r MANIFEST; do
       cmp -s "/opt/ride-venv-manifest/$MANIFEST" "/workspace/$MANIFEST"
     done <<< "$STAGED_MANIFESTS"
-    # /home/ride/.claude.json reflects the container-private seed and is writable
-    grep -q smoke_seed /home/ride/.claude.json
-    echo '{"modified_by_container":true}' > /home/ride/.claude.json
+    # the config claude reads under CLAUDE_CONFIG_DIR reflects the container-private
+    # seed and is writable
+    grep -q smoke_seed "$CLAUDE_CONFIG_DIR/.claude.json"
+    echo '{"modified_by_container":true}' > "$CLAUDE_CONFIG_DIR/.claude.json"
 SMOKE
 
 # container-private .claude.json reflects the in-container write

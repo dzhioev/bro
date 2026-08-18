@@ -8,7 +8,7 @@ The Claude harness supplies `ride`'s first harness implementation. Its two inter
 - `runner.py` — the in-place runner next to Claude: private host state, resume-id lookup, bro identity and commit provisioning, the session broxy, session MCP server, launch context, recorder, readiness gate, and Claude process lifetime.
 - `claude_argv.py` — one argv builder for full/raw mode, including solo print mode, settings, status line, API-key helper, MCP config, bro prompt composition, blocked and narrowed native tools, model/effort/fast selection, prompt, and forwarded Claude arguments.
 - `claude_auth.py` — setup-token environment for full mode and the Anthropic API-key read used by raw mode.
-- `claude_config.py` — the `claude/` state dir under a workspace: settings, transcript paths, subject reads, host provisioning, and container mounts.
+- `claude_config.py` — the `claude/` state dir under a workspace: settings, transcript paths, subject reads, the one provisioning both session modes apply, and the container mount and env that carry it in.
 - `mcp.py` — session-local HTTP MCP server lifetime and Claude MCP config.
 - `recorder.py` — Claude transcript recorder daemon lifetime.
 - `session_context.py` — typed launch-context records exported through `RIDE_SESSION_CONTEXT`.
