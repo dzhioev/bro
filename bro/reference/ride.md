@@ -119,13 +119,13 @@ The tree sits in its own subdirectory rather than being the workspace directory 
 
 ## The launch stack
 
-Every `ride along` session launches through the same three-layer stack. `--host` changes only the outer machinery; `--raw` changes only the argv flavor (and the credential policy the outer computes):
+Every managed session launches through the same stack, whichever harness drives it. `--host` changes only the outer machinery; `--raw` changes only the claude argv flavor (and the scope recipe the outer computes through the seam):
 
-- **the outer `ride along`** (`ride/ride/session.py:start_session`) — mode-specific by nature: policy validation, workspace preparation, session supervision, post-exit UX. See "The outer layer".
-- **the in-place session runner** (`ride along --in-place` → `ride/ride/claude/runner.py`) — one code path for every flag combination, spawned by the outer from the workspace's own venv so a session always runs its workspace's code, not the launching repo's. It runs where claude runs and owns everything next to it. See "The in-place session runner".
-- **the flavor** — the full mode/raw fork (a **full mode** is the default flavor: claude's full harness themed with the session's bro — prompt, spells, MCP namespaces; `--raw` runs bare claude over the bro's own toolset), confined to the claude argv builder plus (host-side) the secret manifest and docker-socket policy. See "The claude argv".
+- **the neutral outer** (`ride/ride/session.py:start_session`) — mode-specific by nature: policy validation, workspace preparation, session supervision, post-exit UX. It touches the selected harness only through the seam (see "Harness seam"). See "The outer layer".
+- **the harness's inner command**, spawned by the outer from the workspace's own venv so a session always runs its workspace's code, not the launching repo's. The bro harness's is `bro run|chat … --in-place` — the selected bro's own LLM process (see "Bro harness"). The claude harness's is the in-place session runner (`ride solo|along --in-place` → `ride/ride/claude/runner.py`) — one code path for every flag combination, running where claude runs and owning everything next to it. See "The in-place session runner".
+- **the claude flavor** — the full mode/raw fork (a **full mode** is the default flavor: claude's full harness themed with the session's bro — prompt, spells, MCP namespaces; `--raw` runs bare claude over the bro's own toolset), confined to the claude argv builder plus the harness's private full/raw `ScopeRecipe` values (secret manifest and docker-socket policy), which the outer consumes through the seam. See "The claude argv".
 
-A new session-shaping flag lands once — in the runner or the builder — and applies to both execution modes and both flavors by construction.
+A neutral session-shaping flag lands once in the outer and reaches both execution modes and every harness; a claude-shaping one lands once in the runner or the argv builder and applies to both modes and both flavors by construction.
 
 ## Per-project defaults (`[tool.bro]`)
 
@@ -155,31 +155,31 @@ sharp = "openai:sol:max"             # a `--llm` preset name and the recipe it s
 
 ## The outer layer
 
-Container mode is the default; `--host` selects a same-machine git worktree instead. Whatever the mode, the outer:
+Container mode is the default; `--host` selects a same-machine git worktree instead. Whatever the mode and harness, the outer:
 
-- validates policy once — the `--raw` × `--host` gate is an argv check in the CLI, and the flavor's auth precondition (the `anthropic` key under `--raw`, the `claude_code` setup-token otherwise) is a launch preflight, so `ride resume` is gated like the `ride along` that created the session. Neither runs in the runner (the inner argv never carries `--host`, so the runner has no mode to re-validate);
+- validates policy once — a harness flag's constraints are an argv check in its `parse_options` (claude's `--raw` × `--host` gate lives there), and the harness's auth precondition (`preflight_auth`: the `anthropic` key under `--raw`, the `claude_code` setup-token for a full mode; the bro harness preflights nothing — its LLM key rides the scoped store) is a launch preflight, so `ride resume` is gated like the launch that created the session. Neither runs in the inner command (the inner argv never carries `--host`, so the inner has no mode to re-validate);
 - sets `RIDE_COMMAND` and resolves `--into` against the host repo to a sha;
-- runs every precondition that can reject the launch — the flavor's auth check and the credential/summon scope preflight — before the workspace is recorded, so a refused launch leaves nothing on disk;
+- runs every precondition that can reject the launch — the harness's auth preflight and the credential/summon scope preflight — before the workspace is recorded, so a refused launch leaves nothing on disk;
 - resolves the workspace, creating it as the flag-selected kind when it doesn't exist and refusing a kind mismatch (see "Workspaces");
 - takes the workspace's session lock, before either mode prepares anything and for the session's whole duration (see "One session per workspace"), and records the spec `ride resume` would relaunch with;
-- on a resume, fails fast when the workspace has no recorded claude session — a cheap existence check, run before the tree is materialized for a mistyped name (the runner resolves the actual session id later, from its cwd);
-- prepares the workspace (the two mode sections below), then spawns the runner from the workspace's own venv with the machinery flags it consumed stripped from the inner argv (`--host --drop --grant --revoke --into`);
+- on a resume, fails fast when the workspace has no session to continue — the harness's cheap existence check with its own refusal wording (`session_exists` / `missing_session_error`: a claude transcript under the workspace's state dir, a bro trail pointer), run before the tree is materialized for a mistyped name (the claude runner resolves the actual session id later, from its cwd);
+- prepares the workspace (the two mode sections below), then spawns the harness's inner command from the workspace's own venv with the machinery flags it consumed stripped from the inner argv (`--host --drop --grant --revoke --into`);
 - owns the post-exit UX, identical in both modes — the resume hint, `--drop` removal (honored only on a clean exit; see the flag).
 
 #### One session per workspace
 
-A second concurrent claude on one workspace would mutate the same files and share the gitignored token-accounting state, so a launch holds an exclusive `flock` on the workspace's `lock` file — taken atomically against a racing launcher, released even when the holder dies without unwinding, and covering the whole launch rather than a window inside it. A refused launch names the holding pid. `ride list` and `ride clean` read the same lock as their liveness signal; a container workspace additionally counts a running container bound to its mount, which is what a launcher killed outright leaves behind. The lock releases with the session, so re-entry and `ride resume` afterwards are unaffected.
+A second concurrent session on one workspace would mutate the same files and share the gitignored token-accounting state, so a launch holds an exclusive `flock` on the workspace's `lock` file — taken atomically against a racing launcher, released even when the holder dies without unwinding, and covering the whole launch rather than a window inside it. A refused launch names the holding pid. `ride list` and `ride clean` read the same lock as their liveness signal; a container workspace additionally counts a running container bound to its mount, which is what a launcher killed outright leaves behind. The lock releases with the session, so re-entry and `ride resume` afterwards are unaffected.
 
 ### Host mode (`ride along --host -w <name> <bro>`)
 
-`ride` owns the worktree lifecycle directly: it prepares the worktree, then spawns the worktree's own `ride along --in-place` as a subprocess inside it, which runs plain `claude` (not `claude -w`, so no Claude Code worktree/provisioning hooks are involved). On launch:
+`ride` owns the worktree lifecycle directly: it prepares the worktree, then spawns the harness's inner command from it as a subprocess — for a claude session the worktree's own `ride along --in-place`, which runs plain `claude` (not `claude -w`, so no Claude Code worktree/provisioning hooks are involved); for a bro session the worktree's `bro run|chat … --in-place`. On launch:
 
 1. creates the worktree if new — on the workspace's recorded branch (based on `--into <ref>` when given, else on the host checkout's current `HEAD` — see the shared launch flags under "Commands") plus `submodule.alternateLocation=superproject` so submodule updates reuse the superproject's modules, then initializes submodules;
 2. runs the worktree's own `setup.sh` (the uniform provisioning entry point, same as the container entrypoint — `uv sync`, then the repository hook and `git golc` installation);
-3. provisions the session's private claude state dir (`ride/ride/claude/claude_config.py` — see "Host claude-state isolation" below) and materializes the scoped store into the workspace's `credentials/` (see "Workspaces"), pointing `CLAUDE_CONFIG_DIR` + `CREDENTIALS_REGISTRY` at them in the runner env;
-4. spawns `<worktree>/.venv/bin/ride along --in-place …` with the env extended to activate the worktree's `.venv`.
+3. materializes the scoped store into the workspace's `credentials/` (see "Workspaces"), pointing `CREDENTIALS_REGISTRY` at it in the runner env, and has the harness prepare the rest of that env (`prepare_host_env` — a claude session's private state dir + `CLAUDE_CONFIG_DIR` + session auth, see "Host claude-state isolation" below; a bro session's git identity + `RIDE_BRO`);
+4. spawns the inner command from `<worktree>/.venv/bin` with the env extended to activate the worktree's `.venv`.
 
-The flavor's auth precondition and the scoped-credential hydration run earlier, in the outer layer, so neither the workspace nor the worktree exists when they fail.
+The harness's auth preflight and the scoped-credential hydration run earlier, in the outer layer, so neither the workspace nor the worktree exists when they fail.
 
 On exit: `--drop` removes the workspace (`git worktree remove --force` + `git branch -D` of its recorded branch, then the directory), but only when the session exited cleanly (exit 0); otherwise the worktree is kept — `ride clean` reclaims cleanly-finished ones later.
 
@@ -222,7 +222,7 @@ Inside the container, the entrypoint (running as root first):
 5. Initialises submodules from the matching host-local paths in `/host-repo` (since `.gitmodules` uses SSH URLs the container can't auth to), skipping any submodule the host hasn't initialised.
 6. Links the venv baked into the image into the clone: symlinks `/workspace/.venv` to `/opt/ride-venv` (dependencies + editable workspace members, whose committed entrypoint bridges resolve against `/workspace`) and exports `RIDE_VENV_MANIFEST=/opt/ride-venv-manifest`, the staged copies of the dependency manifests it was resolved from. The repository's `setup.sh` owns the reuse decision from there, and takes it on every invocation rather than once per launch: while the clone's manifests equal those copies it skips `uv sync` and installs only its development hook and `git golc` alias, and once they diverge — `RIDE_BASE_REF` can base the clone on any ref, and a rebase moves them mid-session — it syncs the linked venv into shape, converging the bake instead of building an environment from scratch. An absent bake or an existing workspace venv exports nothing, leaving `setup.sh` to sync the workspace's own environment. See `bro/setup/container/Dockerfile`.
 7. Activates the venv so child processes (hooks, MCP servers, Bash tool) inherit it.
-8. Execs the container command — for a `ride along` session, `ride along --in-place …`, the same in-place session runner host mode spawns, resolved from the venv activated above; everything from here is the runner's, identically to host mode. The entrypoint itself is flavor-blind — no MCP or spell-delivery logic.
+8. Execs the container command — the harness's inner command, resolved from the venv activated above: `ride solo|along --in-place …` for a claude session, `bro run|chat … --in-place` for a bro one — the same inner host mode spawns; everything from here is the inner's, identically to host mode. The entrypoint itself is harness- and flavor-blind — no MCP or spell-delivery logic.
 
 Every container-starting surface computes one broker-free `bro.workspace.docker.Launch`: the workspace name, command, explicit env snapshot, required/optional credential tiers, docker-socket decision, TTY and ambient-forwarding policy, and extra mounts. `bro.workspace.docker.prepare_container` consumes that object for the common workspace mkdir → image ensure → scoped-store build → `docker create` + store copy sequence. A broker-supervised path wraps the same object in `bro.workspace.spawn.DockerLaunchSpec` and adds only its provisioned channel mount plus `BROKER_CHANNEL`; the broker-less fallback feeds it directly to preparation. Only attach/supervision remains forked.
 
@@ -315,7 +315,7 @@ The outer spawns the workspace's own `ride`, so the workspace's code must unders
 
 ## The in-place session runner
 
-`ride along --in-place` (`ride/ride/claude/runner.py`) is the inner layer: it assumes its cwd is a prepared workspace with the workspace venv active, and owns everything that runs next to claude. `--in-place` is help-suppressed — an internal seam, not a user surface — and skips the outer-only policy gates (see "The outer layer").
+`ride along --in-place` (`ride/ride/claude/runner.py`) is the claude harness's inner command: it assumes its cwd is a prepared workspace with the workspace venv active, and owns everything that runs next to claude. `--in-place` is help-suppressed — an internal seam, not a user surface — and skips the outer-only policy gates (see "The outer layer").
 
 In order, the runner: on host, provisions the session's private claude state dir and exports `CLAUDE_CONFIG_DIR` (see "Host claude-state isolation"; in a container the mounts already provide the private `~/.claude`); resolves a resume's claude session id from its cwd's projects dir — claude's own path encoding maps the workspace path to `<config root>/projects/<encoded>` (host `<encoded-worktree-path>` under the session dir, container `-workspace` under `~/.claude`), one derivation for both modes; exports the bro git identity (every ride-launched session commits as its bro — see `ride/ride/identity.py`), `RIDE_BRO` (the session's bro), and `RIDE_RUNNER_PID` (its own pid, the `raise` tool's kill target), and `BRO_HOLD` from the session's `--hold` level (see the shared launch flags under "Commands"); starts the session-local MCP server and surfaces bro spells (both below); builds the claude argv (below) and captures `RIDE_SESSION_CONTEXT` (see "Forwarded env vars"); starts the session recorder daemon (see "Session recording"); gates on the server's `/health`; then runs `claude`, forwarding SIGTERM to it (claude's raw-mode TTY already absorbs Ctrl-C, but a SIGTERM aimed at the runner — `docker stop`, kill — would otherwise strand claude) and waiting. After claude exits it stops the server and the recorder (the stop is the recorder's final append and trail end).
 
