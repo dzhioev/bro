@@ -1,17 +1,17 @@
 """a bro run as a container launch, described once.
 
 A bro run is the bro's LLM process in its own throwaway ride-style container:
-`bro <verb> <bro> … --in-place` executing against a caller-resolved credential
-scope, committing as the bro git identity, based on a caller-resolved git ref.
-This module owns that description — inner command, container environment,
-stdio and docker knobs — so every surface that spawns one composes it
-identically; resolving the scope and executing the launch (attached TTY,
-supervised non-TTY child) are the caller's.
+a `bro run|chat … --in-place` command executing against a caller-resolved
+credential scope, committing as the bro git identity, based on a caller-resolved
+git ref. This module owns that description — container environment, stdio and
+docker knobs around the caller-composed inner command — so every surface that
+spawns one composes it identically; resolving the scope and executing the launch
+(attached TTY, supervised non-TTY child) are the caller's.
 """
 
 import json
 from collections.abc import Sequence
-from typing import Any, Literal, Optional
+from typing import Any, Optional
 
 from bro.summon import SUMMONER_ENV
 from bro.workspace.docker import Launch
@@ -22,17 +22,17 @@ from ride.trails import local_trails_mounts
 
 def describe(
   bro_name: str,
-  inner_args: Sequence[str],
+  command: Sequence[str],
   *,
   workspace_name: str,
-  verb: Literal['run', 'chat'],
   scoped: ScopedSecrets,
   base_ref: Optional[str] = None,
   tty: bool = True,
   forward_env: bool = True,
   summoner: Optional[dict[str, Any]] = None,
 ) -> Launch:
-  """describe the launch of `bro <verb> <bro_name> <inner_args…> --in-place`.
+  """describe the launch of `command` — a caller-composed `bro run|chat …
+  --in-place` inner argv.
 
   `scoped` is the run's credential scope, applied as given — the caller resolves
   it, overrides included. `base_ref` is a caller-resolved commit sha the
@@ -47,7 +47,7 @@ def describe(
     env[SUMMONER_ENV] = json.dumps(summoner, ensure_ascii=False, separators=(',', ':'))
   return Launch(
     name=workspace_name,
-    command=['bro', verb, bro_name, *inner_args, '--in-place'],
+    command=list(command),
     env=env,
     secrets=set(scoped.required),
     optional_secrets=set(scoped.optional),
