@@ -2,6 +2,7 @@
 import os
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -232,6 +233,31 @@ def node_env() -> dict[str, str]:
   return {'NODE_OPTIONS': '--max-old-space-size=4096'}
 
 
+def lint_stage() -> None:
+  for distribution in DISTRIBUTIONS:
+    directory = DIR / distribution.directory
+    print(f'sync-scripts: verifying {directory} console-script metadata', file=sys.stderr)
+    run(sys.executable, '-m', 'bro.dev.sync_scripts', '--check', '--project', str(directory))
+    deptry_args = [sys.executable, '-m', 'deptry', '.']
+    for pattern in distribution.deptry_exclude:
+      deptry_args += ['-ee', pattern]
+    for module in distribution.deptry_known_first_party:
+      deptry_args += ['-kf', module]
+    run(*deptry_args, cwd=directory)
+  print('ruff: lint check', file=sys.stderr)
+  run(sys.executable, '-m', 'ruff', 'check', '.')
+
+
+def types_stage() -> None:
+  print('pyright: type check', file=sys.stderr)
+  run(sys.executable, '-m', 'pyright', extra_env=node_env())
+
+
+def unit_stage() -> None:
+  print('pytest: unit suite', file=sys.stderr)
+  run(sys.executable, '-m', 'pytest', '-n', 'auto', *PYTEST_FILES)
+
+
 def benchmark_stage() -> None:
   directory = DIR / BENCHMARK
   environment = directory / '.venv'
@@ -247,44 +273,64 @@ def benchmark_stage() -> None:
   run(python, '-m', 'pytest', *BENCHMARK_PYTEST_FILES, cwd=directory, extra_env=in_environment)
 
 
+def docker_stage() -> None:
+  print('smoke: container entrypoint', file=sys.stderr)
+  run(str(DIR / 'bro' / 'setup' / 'container' / 'test_smoke.sh'))
+  print('smoke: container launch path', file=sys.stderr)
+  run(sys.executable, '-m', 'pytest', DOCKER_PYTEST_FILE)
+
+
+@dataclass(frozen=True)
+class Stage:
+  name: str
+  run: Callable[[], None]
+  host_only: bool = False
+
+
+STAGES = [
+  Stage('lint', lint_stage),
+  Stage('types', types_stage),
+  Stage('unit', unit_stage),
+  Stage('benchmark', benchmark_stage),
+  Stage('docker', docker_stage, host_only=True),
+]
+
+
 def main(argv: list[str]) -> Optional[int]:
+  names = [stage.name for stage in STAGES]
   parser = Parser(description='run the repository test gate')
-  parser.add_argument('--no-docker', action='store_true', help='skip the docker smoke stages')
   parser.add_argument(
-    '--no-benchmark', action='store_true', help='skip the benchmark project stage'
+    '--only',
+    action='append',
+    choices=names,
+    metavar='STAGE',
+    help=f'run only the named stage, repeatable ({", ".join(names)})',
   )
+  parser.add_argument(
+    '--skip',
+    action='append',
+    choices=names,
+    metavar='STAGE',
+    help='skip the named stage, repeatable',
+  )
+  parser.add_exclusive_groups(['only'], ['skip'])
   args = parser.parse(argv)
+  only = args['only']
+  skip = args['skip'] if args['skip'] is not None else []
+  in_container = Path('/.dockerenv').is_file()
 
-  for distribution in DISTRIBUTIONS:
-    directory = DIR / distribution.directory
-    print(f'sync-scripts: verifying {directory} console-script metadata', file=sys.stderr)
-    run(sys.executable, '-m', 'bro.dev.sync_scripts', '--check', '--project', str(directory))
-    deptry_args = [sys.executable, '-m', 'deptry', '.']
-    for pattern in distribution.deptry_exclude:
-      deptry_args += ['-ee', pattern]
-    for module in distribution.deptry_known_first_party:
-      deptry_args += ['-kf', module]
-    run(*deptry_args, cwd=directory)
-
-  print('ruff: lint check', file=sys.stderr)
-  run(sys.executable, '-m', 'ruff', 'check', '.')
-  print('pyright: type check', file=sys.stderr)
-  run(sys.executable, '-m', 'pyright', extra_env=node_env())
-  print('pytest: unit suite', file=sys.stderr)
-  run(sys.executable, '-m', 'pytest', *PYTEST_FILES)
-  if args['no_benchmark'] is True:
-    print('skipping the benchmark stage (--no-benchmark)', file=sys.stderr)
-  else:
-    benchmark_stage()
-  if args['no_docker'] is True:
-    print('skipping the docker smoke stages (--no-docker)', file=sys.stderr)
-  elif Path('/.dockerenv').is_file():
-    print('skipping the docker smoke stages (inside container; run on host)', file=sys.stderr)
-  else:
-    print('smoke: container entrypoint', file=sys.stderr)
-    run(str(DIR / 'bro' / 'setup' / 'container' / 'test_smoke.sh'))
-    print('smoke: container launch path', file=sys.stderr)
-    run(sys.executable, '-m', 'pytest', DOCKER_PYTEST_FILE)
+  for stage in STAGES:
+    if only is not None and stage.name not in only:
+      continue
+    if stage.name in skip:
+      print(f'skipping the {stage.name} stage (--skip)', file=sys.stderr)
+      continue
+    if stage.host_only and in_container:
+      if only is not None:
+        parser.error(f'the {stage.name} stage drives the host docker daemon; run it on the host')
+      print(f'skipping the {stage.name} stage (inside container; run on host)', file=sys.stderr)
+      continue
+    stage.run()
   return None
 
 

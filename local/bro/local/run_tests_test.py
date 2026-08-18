@@ -1,6 +1,7 @@
 import subprocess
 
 import pytest
+import yaml
 
 from bro.local import run_tests
 
@@ -31,3 +32,11 @@ package = false
 
   assert raised.value.cmd == ('uv', 'sync', '--locked', '--all-groups')
   assert lock_file.read_bytes() == locked
+
+
+def test_the_workflow_matrix_names_every_gate_stage():
+  workflow = yaml.safe_load((run_tests.DIR / '.github/workflows/tests.yml').read_text())
+
+  matrix = workflow['jobs']['stage']['strategy']['matrix']['stage']
+
+  assert matrix == [stage.name for stage in run_tests.STAGES]

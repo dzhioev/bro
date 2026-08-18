@@ -7,9 +7,15 @@ on:
   workflow_dispatch:
 
 jobs:
-  tests:
+  stage:
+    name: ${{ matrix.stage }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        # every stage `run-tests` names, one runner each
+        stage: [lint, types, unit, benchmark, docker]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -18,4 +24,13 @@ jobs:
       - name: run-tests
         run: |
           source .venv/bin/activate
-          run-tests
+          run-tests --only ${{ matrix.stage }}
+
+  # the branch ruleset requires one check named `tests`; this job is it, and it
+  # reports the matrix's aggregate result
+  tests:
+    needs: stage
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: test '${{ needs.stage.result }}' = success
