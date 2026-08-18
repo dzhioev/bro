@@ -24,4 +24,4 @@
 - Host runtime state lives under the user's checkout-keyed runtime state root, which a launch creates before recording a workspace. Container trails and summon status use dedicated fixed absolute mounts.
 - A pinned mode-verb workspace is never auto-dropped. An unpinned `along` workspace is kept unless `--drop` is explicit; an unpinned `solo` workspace is dropped after a clean exit unless `--keep` is explicit.
 - A solo resume becomes an along session and takes along's host-sensitive default hold; the unattended solo hold describes a run with no human channel.
-- `ride` refuses nested launches while process-host mode is unavailable.
+- `ride` refuses nested launches while process-host mode is unavailable, on the container probe rather than on any marker the environment carries.

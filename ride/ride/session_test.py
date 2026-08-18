@@ -95,9 +95,9 @@ def configured_project(monkeypatch, tmp_path):
   # every launch path takes the workspace session lock and records a resume spec
   # under the project root; keep both off the real repo
   monkeypatch.setattr(ride_session, 'project_root', lambda: tmp_path)
-  # the suite itself runs inside a container; without this every container launch
-  # would degrade to host mode
-  monkeypatch.delenv('RIDE_IN_CONTAINER', raising=False)
+  # the suite itself may run inside a container; without this every launch would
+  # hit the nested-launch refusal
+  monkeypatch.setattr(ride_session, 'in_container', lambda: False)
 
 
 class _ContainerHarness:
@@ -132,7 +132,6 @@ class _ContainerHarness:
     entered = [p.__enter__() for p in self._patches]
     self.env = entered[0]
     self.env.pop('RIDE_BRO', None)
-    self.env.pop('RIDE_IN_CONTAINER', None)
     self.run_in_container = entered[2]
     self.try_get = entered[4]
     self.build_scoped_store = entered[5]
@@ -150,11 +149,17 @@ class _ContainerHarness:
 
 class TestNestedLaunch:
   def test_ride_refuses_with_process_and_summon_remedies(self, monkeypatch, caplog):
-    monkeypatch.setenv('RIDE_IN_CONTAINER', '1')
+    monkeypatch.setattr(ride_session, 'in_container', lambda: True)
     spec = replace(_spec(), workspace_pinned=False)
     assert ride_session.start_session(spec) == 1
     assert '`summon`' in caplog.text
     assert '`bro run|chat`' in caplog.text
+
+  def test_an_unmarked_container_is_refused_too(self, monkeypatch, caplog):
+    monkeypatch.delenv('RIDE_IN_CONTAINER', raising=False)
+    monkeypatch.setattr(ride_session, 'in_container', lambda: True)
+    assert ride_session.start_session(_spec()) == 1
+    assert 'cannot start inside a container' in caplog.text
 
 
 class TestGrantRevoke:

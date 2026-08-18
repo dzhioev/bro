@@ -11,7 +11,7 @@ from bro.llm.llm import LLMSpec
 from bro.workspace.git import resolve_ref
 from bro.workspace.metadata import WorkspaceKind
 from bro.workspace.model import KindMismatch, SessionBusy, Workspace
-from bro.workspace.paths import ensure_runtime_root, project_root
+from bro.workspace.paths import ensure_runtime_root, in_container, project_root
 from bro.workspace.store import ScopedSecrets
 from ride.harness import Harness, get_harness
 
@@ -199,9 +199,9 @@ def _finish_session(spec: SessionSpec, workspace: Workspace, code: int) -> int:
 def start_session(spec: SessionSpec) -> int:
   harness = get_harness(spec.harness)
   container = not spec.host
-  if os.environ.get('RIDE_IN_CONTAINER') is not None:
+  if in_container():
     log.error(
-      'ride cannot start inside a managed container yet; use `summon` for an isolated sibling '
+      'ride cannot start inside a container yet; use `summon` for an isolated sibling '
       'or `bro run|chat` for this container and credential scope'
     )
     return 1
