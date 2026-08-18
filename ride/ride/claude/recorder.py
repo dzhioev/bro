@@ -47,7 +47,7 @@ class _SessionRecorder:
       self.process.wait()
 
 
-def _start_session_recorder(
+def start_session_recorder(
   name: str,
   workspace: Path,
   env: Mapping[str, str],

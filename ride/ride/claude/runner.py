@@ -26,11 +26,11 @@ from bro.summon import SUMMONED_ENV, SUMMONER_ENV
 from bro.workspace.git import git_out
 from bro.workspace.paths import in_container, project_root, workspace_dir
 from ride.claude.claude_argv import build_claude_launch
-from ride.claude.claude_auth import _apply_claude_auth
-from ride.claude.claude_config import _latest_jsonl, _provision_host_claude_dir
+from ride.claude.claude_auth import apply_claude_auth
+from ride.claude.claude_config import latest_jsonl, provision_host_claude_dir
 from ride.claude.harness import options
-from ride.claude.mcp import _start_session_mcp_server
-from ride.claude.recorder import _start_session_recorder
+from ride.claude.mcp import start_session_mcp_server
+from ride.claude.recorder import start_session_recorder
 from ride.claude.session_context import (
   RIDE_SESSION_CONTEXT_ENV,
   build_session_context,
@@ -167,13 +167,13 @@ def run_in_place(spec: 'SessionSpec') -> int:
     # Set before anything derives paths or spawns children:
     # the resume resolution below, the hooks, and claude itself all read it.
     project = project_root()
-    claude_dir = _provision_host_claude_dir(workspace_dir(project, spec.name), tree, project)
+    claude_dir = provision_host_claude_dir(workspace_dir(project, spec.name), tree, project)
     os.environ['CLAUDE_CONFIG_DIR'] = str(claude_dir)
 
   claude_args = list(spec.arguments)
   if spec.resume:
     projects_dir = claude_projects_dir(tree)
-    latest = _latest_jsonl(projects_dir)
+    latest = latest_jsonl(projects_dir)
     if latest is None:
       log.error('no claude session found in %s', projects_dir)
       return 1
@@ -219,7 +219,7 @@ def run_in_place(spec: 'SessionSpec') -> int:
     else:
       mcp_spec = f'persona:{spec.bro}'
     try:
-      server = _start_session_mcp_server(mcp_spec, tree, os.environ)
+      server = start_session_mcp_server(mcp_spec, tree, os.environ)
     except RuntimeError as error:
       log.error('%s', error)
       return 1
@@ -231,7 +231,7 @@ def run_in_place(spec: 'SessionSpec') -> int:
     # after the session context: the daemon's spawn snapshots os.environ, and
     # RIDE_SESSION_CONTEXT becomes the trail's launch-context attachment
     if os.environ.get('TRAILS_DISABLED') is None:
-      recorder = _start_session_recorder(spec.name, tree, os.environ, llm=spec.llm_spec.dump())
+      recorder = start_session_recorder(spec.name, tree, os.environ, llm=spec.llm_spec.dump())
       if recorder is not None:
         teardown.callback(recorder.stop)
     # the recorder above got its copy; claude's subprocesses must not see the
@@ -252,7 +252,7 @@ def run_in_place(spec: 'SessionSpec') -> int:
     # claude's MCP tool-call timeout (ms): the ~1-minute default kills
     # legitimately slow tools (vision audits, renders)
     env['MCP_TOOL_TIMEOUT'] = str(10 * 60 * 1000)
-    _apply_claude_auth(env, warn_when_missing=not options(spec).raw)
+    apply_claude_auth(env, warn_when_missing=not options(spec).raw)
     log.info('launching claude')
     if os.environ.get(SUMMONED_ENV) is not None:
       code = _run_claude_summoned(launch.argv, env)

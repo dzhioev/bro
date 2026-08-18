@@ -33,17 +33,17 @@ class _Harness:
     self._patches = [
       patch.dict('os.environ', {}, clear=False),
       patch('ride.claude.runner.claude_projects_dir', return_value=self.projects_dir),
-      patch('ride.claude.runner._start_session_mcp_server', return_value=self.server),
+      patch('ride.claude.runner.start_session_mcp_server', return_value=self.server),
       patch(
         'ride.claude.runner.build_claude_launch',
         return_value=ClaudeLaunch(argv=['built'], system_prompt='sp'),
       ),
       patch('ride.claude.runner._run_claude', return_value=0),
-      patch('ride.claude.runner._start_session_recorder'),
-      patch('ride.claude.runner._apply_claude_auth'),
+      patch('ride.claude.runner.start_session_recorder'),
+      patch('ride.claude.runner.apply_claude_auth'),
       patch('bro.launch.broxy._start_session_broxy', return_value=self.broxy),
       patch('ride.claude.runner.in_container', return_value=False),
-      patch('ride.claude.runner._provision_host_claude_dir', return_value=self.claude_config_dir),
+      patch('ride.claude.runner.provision_host_claude_dir', return_value=self.claude_config_dir),
       patch('ride.claude.runner.project_root', return_value=Path('/main-repo')),
       # an empty credential store pins the derived git identity to the legacy
       # address regardless of the developer host's real `github` secret

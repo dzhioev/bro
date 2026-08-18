@@ -1,7 +1,7 @@
 import subprocess
 from unittest.mock import MagicMock, patch
 
-from ride.claude.recorder import _STOP_TIMEOUT, _SessionRecorder, _start_session_recorder
+from ride.claude.recorder import _STOP_TIMEOUT, _SessionRecorder, start_session_recorder
 
 
 class TestStart:
@@ -13,7 +13,7 @@ class TestStart:
       patch('ride.claude.recorder.claude_projects_dir', return_value=projects_dir),
       patch('ride.claude.recorder.spawn.popen') as popen,
     ):
-      recorder = _start_session_recorder(
+      recorder = start_session_recorder(
         'w', tmp_path / 'ws', {'RIDE_WORKSPACE': 'w'}, llm=kwargs.pop('llm', {'model': 'm'})
       )
     return recorder, popen, config_dir, projects_dir
@@ -36,7 +36,7 @@ class TestStart:
       patch('ride.claude.recorder.claude_projects_dir', return_value=tmp_path / 'p'),
       patch('ride.claude.recorder.spawn.popen', side_effect=OSError('no such command')),
     ):
-      assert _start_session_recorder('w', tmp_path / 'ws', {}, llm={}) is None
+      assert start_session_recorder('w', tmp_path / 'ws', {}, llm={}) is None
 
 
 class TestStop:
