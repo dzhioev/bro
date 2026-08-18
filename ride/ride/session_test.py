@@ -123,7 +123,7 @@ class _ContainerHarness:
       patch('bro.launch.scope.credentials.build_scoped_store', return_value={}),
       patch('ride.claude.session.container_claude_state', return_value=([], {})),
       patch('bro.workspace.model.ContainerWorkspace.remove'),
-      patch('ride.session._replace_resume_hint'),
+      patch('ride.session._print_resume_hint'),
       # keep the bro-registry import out; threading is asserted per-test
       patch('bro.launch.summon_control.summon_allow_list', return_value=set()),
       patch('ride.claude.harness._load_anthropic_key', return_value={'api_key': 'k'}),
@@ -619,19 +619,25 @@ class TestResumeSession:
     assert 'no session recorded for w' in caplog.text
 
 
-class TestReplaceResumeHint:
-  def test_prints_the_resume_command_over_claudes_hint(self, monkeypatch, capsys, tmp_path):
+class TestResumeHint:
+  HINT = 'Resume this session with:\n  ride resume w\n'
+
+  def test_prints_the_resume_command_and_nothing_else(self, monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(claude_harness.CLAUDE, 'session_exists', lambda workspace: True)
     monkeypatch.setattr('sys.stdout.isatty', lambda: True)
-    ride_session._replace_resume_hint(_spec(), _workspace(tmp_path))
-    assert 'ride resume w' in capsys.readouterr().out
+    ride_session._print_resume_hint(_spec(solo=True, prompt='go'), _workspace(tmp_path))
+    assert capsys.readouterr().out == self.HINT
 
   def test_silent_without_a_session_jsonl(self, monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(claude_harness.CLAUDE, 'session_exists', lambda workspace: False)
     monkeypatch.setattr('sys.stdout.isatty', lambda: True)
-    ride_session._replace_resume_hint(
-      _spec(host=True), _workspace(tmp_path, WorkspaceKind.WORKTREE)
-    )
+    ride_session._print_resume_hint(_spec(host=True), _workspace(tmp_path, WorkspaceKind.WORKTREE))
+    assert capsys.readouterr().out == ''
+
+  def test_silent_when_stdout_is_redirected(self, monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(claude_harness.CLAUDE, 'session_exists', lambda workspace: True)
+    monkeypatch.setattr('sys.stdout.isatty', lambda: False)
+    ride_session._print_resume_hint(_spec(), _workspace(tmp_path))
     assert capsys.readouterr().out == ''
 
 

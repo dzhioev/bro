@@ -161,7 +161,7 @@ Container mode is the default; `--host` selects a same-machine git worktree inst
 - takes the workspace's session lock, before either mode prepares anything and for the session's whole duration (see "One session per workspace"), and records the spec `ride resume` would relaunch with;
 - on a resume, fails fast when the workspace has no recorded claude session — a cheap existence check, run before the tree is materialized for a mistyped name (the runner resolves the actual session id later, from its cwd);
 - prepares the workspace (the two mode sections below), then spawns the runner from the workspace's own venv with the machinery flags it consumed stripped from the inner argv (`--host --drop --grant --revoke --into`);
-- owns the post-exit UX, identical in both modes — resume-hint replacement, `--drop` removal (honored only on a clean exit; see the flag).
+- owns the post-exit UX, identical in both modes — the resume hint, `--drop` removal (honored only on a clean exit; see the flag).
 
 #### One session per workspace
 
