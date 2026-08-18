@@ -7,9 +7,9 @@
 - `ride/cli.py` — the `ride` dispatcher. `solo` is the one-shot mode verb, `along` the interactive mode verb; `resume`, `list`, `clean`, `exec`, `check-clean`, `scope`, and `banner` are lifecycle verbs. It also owns the suppressed mode-verb inner-runner tokens.
 - `ride/ask.py`, `ride/call.py` — pure option-preserving aliases of `ride solo` and `ride along`. Their scripts live in this distribution and add no implied fast mode or other flags.
 - `ride/dive_in.py` — task utility wrapper: prefetch, task-derived workspace naming, `RIDE_TASK_ID`, fresh-origin base selection, hold defaults, and forwarding to `ride along` with the project-default bro.
-- `ride/session.py` — harness-neutral session lifecycle: recorded `SessionSpec`, base resolution, auth/scope preflight, workspace kind and lock, resume records, keep/drop finish behavior, and the shared launch skeleton for both modes — active-container refusal, stale-pointer clear, resume gate, the container `Launch` composition, and the provisioned host-worktree body.
+- `ride/session.py` — harness-neutral session lifecycle: recorded `SessionSpec`, base resolution, auth/scope preflight, workspace kind and lock, resume records, keep/drop finish behavior, and the shared launch skeleton for both modes — active-container refusal, stale-pointer clear, resume gate, the trails opt-out, the container `Launch` composition, and the provisioned host-worktree body.
 - `ride/harness.py` — the `Harness` protocol (per-harness flags, scope, auth, session reads, and the launch hooks: trail-pointer path, inner command, container extras, host runner env) and the lazy harness resolver.
-- `ride/bro.py` — native harness implementation: typed options, native recipe resolution, the `bro run|chat … --in-place` inner command with exact-recipe continuation, and the launch hooks.
+- `ride/bro.py` — native harness implementation: native recipe resolution, the `bro run|chat … --in-place` inner command with exact-recipe continuation, and the launch hooks.
 - `ride/flags.py` — common session, scope, and LLM flag registration, and the default an omitted `--hold` resolves to.
 - `ride/listing.py`, `ride/clean.py`, `ride/scope_report.py` — lifecycle implementations.
 - `ride/claude/` — the Claude Code harness implementation; see `ride/claude/AGENTS.md`.

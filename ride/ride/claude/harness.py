@@ -4,7 +4,6 @@ from typing import TYPE_CHECKING
 
 from bro.base import credentials, log
 from bro.launch.scope import ScopeRecipe
-from bro.launch.trails import local_trails_mounts
 from bro.llm.llms.claude_code import LLMSpec
 from bro.llm.providers import LLMSelection, parse
 from bro.monitor import trail_pointer
@@ -46,24 +45,17 @@ _RAW_SCOPE = ScopeRecipe(
 @dataclass(frozen=True)
 class ClaudeOptions:
   raw: bool
-  arguments: list[str]
 
   def dump(self) -> dict:
-    return {'raw': self.raw, 'arguments': self.arguments}
+    return {'raw': self.raw}
 
   @classmethod
   def load(cls, data: dict) -> 'ClaudeOptions':
-    if data.keys() != {'raw', 'arguments'}:
+    if data.keys() != {'raw'}:
       raise ValueError(f'unexpected claude option fields: {sorted(data.keys())}')
-    raw = data['raw']
-    arguments = data['arguments']
-    if (
-      not isinstance(raw, bool)
-      or not isinstance(arguments, list)
-      or not all(isinstance(value, str) for value in arguments)
-    ):
+    if not isinstance(data['raw'], bool):
       raise TypeError('invalid claude harness options')
-    return cls(raw=raw, arguments=arguments)
+    return cls(raw=data['raw'])
 
 
 def add_flags(parser: 'Parser') -> None:
@@ -131,9 +123,8 @@ class ClaudeHarness:
 
   def inner_command(self, spec: 'SessionSpec', workspace: Workspace) -> list[str]:
     del workspace
-    claude = options(spec)
     verb = 'solo' if spec.solo else 'along'
-    flags = {'--resume': spec.resume, '--raw': claude.raw}
+    flags = {'--resume': spec.resume, '--raw': options(spec).raw, '--no-trails': spec.no_trails}
     parts = [
       'ride',
       verb,
@@ -150,14 +141,12 @@ class ClaudeHarness:
     parts.append(spec.bro)
     if spec.prompt is not None:
       parts.append(spec.prompt)
-    if len(claude.arguments) > 0:
-      parts.extend(['--', *claude.arguments])
+    if len(spec.arguments) > 0:
+      parts.extend(['--', *spec.arguments])
     return parts
 
-  def command_options(self, spec: 'SessionSpec') -> tuple[list[str], list[str]]:
-    claude = options(spec)
-    flags = ['--raw'] if claude.raw else []
-    return flags, claude.arguments
+  def command_options(self, spec: 'SessionSpec') -> list[str]:
+    return ['--raw'] if options(spec).raw else []
 
   def session_exists(self, workspace: Workspace) -> bool:
     return _latest_jsonl(workspace_projects_dir(workspace)) is not None
@@ -174,9 +163,9 @@ class ClaudeHarness:
   def container_extras(
     self, spec: 'SessionSpec', workspace: Workspace, scoped: ScopedSecrets
   ) -> ContainerExtras:
-    del spec
+    del spec, scoped
     claude_mounts, claude_env = container_claude_state(workspace.path)
-    return ContainerExtras(env=claude_env, mounts=(*claude_mounts, *local_trails_mounts(scoped)))
+    return ContainerExtras(env=claude_env, mounts=tuple(claude_mounts))
 
   def prepare_host_env(
     self, spec: 'SessionSpec', workspace: Workspace, worktree: Path, env: dict[str, str]

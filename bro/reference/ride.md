@@ -22,14 +22,14 @@ A launch without `-w / --workspace` receives a fresh name. `-w NAME` creates or 
 
 The workspace base defaults to the checkout's current `HEAD`. `--into REF` resolves a branch, tag, or commit, fetching an origin-only ref when needed, and affects only workspace creation. Uncommitted host changes never transfer.
 
-The prompt occupies a positional slot on both mode verbs. Harness-native arguments therefore follow an explicit separator:
+The prompt occupies a positional slot on both mode verbs. Arguments for the harness program therefore follow an explicit separator — they reach the claude binary on the claude harness and the inner `bro run|chat` argv on the bro harness:
 
 ```console
 ride solo dev 'inspect the launch path' -- --debug mcp
 ride along dev 'continue the inspection' -- --debug mcp
 ```
 
-Shared launch flags are `--host`, `--hold`, `--grant`, `--revoke`, `--into`, and the LLM selection set (`--provider`, `--model`, `--effort`, `--fast`, `--llm`). `--grant` and `--revoke` use the framework's unified grammar: credential names shape the scoped store and `@bro` names shape the summon allow-list.
+Shared launch flags are `--host`, `--hold`, `--grant`, `--revoke`, `--into`, `--no-trails`, and the LLM selection set (`--provider`, `--model`, `--effort`, `--fast`, `--llm`). `--grant` and `--revoke` use the framework's unified grammar: credential names shape the scoped store and `@bro` names shape the summon allow-list. `--no-trails` disables trail recording for the session, whichever harness runs: the launch drops the `trails` scope baseline, sets `TRAILS_DISABLED` for the run, and a claude session starts no recorder daemon.
 
 ### Lifecycle verbs
 
@@ -69,7 +69,7 @@ The workspace checkout runs `ride solo|along --in-place`, a suppressed inner con
 
 The bro harness drives the selected bro's native LLM loop. Container sessions run the same `bro run|chat … --in-place` inner contract summoned children get; host sessions provision the workspace worktree and run its own `.venv/bin/bro` under the same broker-root supervision and scoped credential store.
 
-The harness-owned flag is `--no-trails`. Claude rejects it; the bro harness rejects Claude's `--raw` and forwarded arguments after `--`.
+The bro harness owns no flags of its own; it rejects Claude's `--raw`.
 
 The broker publishes a native root's `started` trail id beside the workspace's `resume.json`. `ride resume` continues that exact trail at its latest consistent point under the recorded native recipe, producing a new trail with `forked_from`; it does not use the globally newest call or the bro class's current recipe. A session without a broker-published pointer — including a broker-disabled launch or `--no-trails` — cannot be resumed and fails with that reason.
 
@@ -368,7 +368,7 @@ Wrappers and session daemons rely on a small set of env vars:
 
 ## Session recording
 
-The in-place session runner starts a `bro.trails.record.claude` daemon (via `ride/ride/claude/recorder.py`) before launching claude and stops it after claude exits — the stop is the recorder's final append and trail end. One mechanism for every session flavor, deliberately not a Claude Code hook: `--raw` sessions run `claude --bare` (minimal mode), which runs no hooks at all. The daemon records continuously through the backend the session's own `trails` credential selects, and to the local filesystem where the session has none — the scoped baseline hydrates that credential best-effort, so a session records either way. For local storage, the launch description binds the host's `<runtime-root>/trails` at `/var/ride/trails` inside the container, so the trail survives container removal and is visible to host-side `rewind` while the session runs.
+The in-place session runner starts a `bro.trails.record.claude` daemon (via `ride/ride/claude/recorder.py`) before launching claude and stops it after claude exits — the stop is the recorder's final append and trail end. One mechanism for every session flavor, deliberately not a Claude Code hook: `--raw` sessions run `claude --bare` (minimal mode), which runs no hooks at all. The daemon records continuously through the backend the session's own `trails` credential selects, and to the local filesystem where the session has none — the scoped baseline hydrates that credential best-effort, so a session records either way unless `--no-trails` turned recording off, in which case the runner starts no daemon. For local storage, the launch description binds the host's `<runtime-root>/trails` at `/var/ride/trails` inside the container, so the trail survives container removal and is visible to host-side `rewind` while the session runs.
 
 The recorder opens one claude-harness *trail* per recorder lifetime and segment stretch and appends newly completed transcript lines at its polling interval; a verified resume opens a fork trail pointing at the prior one, so a whole conversation is a fork chain `rewind show` walks (`trails/record/claude.py` owns the model). The daemon nominates nothing: it blazes with the transcript's lineage evidence and the store's harness resolver decides the edge, or declines a transcript claude has not finished writing (`bro/trails/AGENTS.md`). The trail carries the launch recipe, the `RIDE_SESSION_CONTEXT` attachment, and the session's location facts, and the recorder publishes its current trail id to the session's trail pointer, from which summon control stamps the session's summoned children with `summoned_by.trail_id` (see "Summoning another bro"). The daemon's stderr goes to `<session claude dir>/session-recorder.log`; its durable signal is the health file it beats on every attempt (`bro/monitor/health.py`), which the statusLine and `ride banner` surface. The beat carries the outcome and the age at which the reader must give the daemon up, so both a recorder that fails loudly and one that is simply gone — killed by a signal, OOM, a crashed container process — are reported while the session runs; a recorder that could not be started at all is written there by the runner instead. A session whose transcript ends in a `raise` service-tool call gets its trail ended as `raised` with the reason as `end.detail` (a later real user message — a resume moving past the abort — clears it), keeping an unattended session's abort queryable without parsing the jsonl.
 

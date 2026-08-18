@@ -16,7 +16,6 @@ from bro.base import credentials
 from bro.launch.scope import ScopedSecrets
 from bro.workspace.metadata import WorkspaceKind
 from bro.workspace.model import Workspace
-from ride.claude.harness import ClaudeOptions
 
 
 def _spec(
@@ -24,6 +23,7 @@ def _spec(
   name: str = 'w',
   host: bool = False,
   drop: bool = False,
+  no_trails: bool = False,
   hold: str = 'attended',
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
@@ -34,7 +34,7 @@ def _spec(
   bro: Optional[str] = None,
   raw: bool = False,
   prompt: Optional[str] = None,
-  claude_args: Optional[list[str]] = None,
+  arguments: Optional[list[str]] = None,
 ) -> ride_session.SessionSpec:
   from ride.claude.harness import ClaudeOptions
 
@@ -45,6 +45,7 @@ def _spec(
     workspace_pinned=True,
     host=host,
     drop=drop,
+    no_trails=no_trails,
     hold=hold,
     grant=grant if grant is not None else [],
     revoke=revoke if revoke is not None else [],
@@ -55,9 +56,9 @@ def _spec(
     into=into,
     bro=resolved_bro,
     prompt=prompt,
-    harness_options=ClaudeOptions(
-      raw=raw, arguments=claude_args if claude_args is not None else []
-    ).dump(),
+    subject=prompt,
+    arguments=arguments if arguments is not None else [],
+    harness_options=ClaudeOptions(raw=raw).dump(),
   )
 
 
@@ -125,7 +126,7 @@ class _ContainerHarness:
       # keep the bro-registry import out; threading is asserted per-test
       patch('bro.launch.summon_control.summon_allow_list', return_value=set()),
       patch('ride.claude.harness._load_anthropic_key', return_value={'api_key': 'k'}),
-      patch('ride.claude.harness.local_trails_mounts', return_value=()),
+      patch('ride.session.local_trails_mounts', return_value=()),
     ]
     entered = [p.__enter__() for p in self._patches]
     self.env = entered[0]
@@ -135,6 +136,7 @@ class _ContainerHarness:
     self.build_scoped_store = entered[5]
     self.container_claude_state = entered[6]
     self.remove_workspace = entered[7]
+    self.scoped_secrets = entered[3]
     self.summon_allow_list = entered[9]
     self.local_trails_mounts = entered[11]
     return self
@@ -217,6 +219,30 @@ class TestGrantRevoke:
     assert rc == 0
     command = h.run_in_container.call_args.args[0].command
     assert command[command.index('--llm') + 1] == '::xhigh'
+
+
+class TestNoTrails:
+  """the neutral --no-trails handling: the trails scope baseline, env kill
+  switch, and trails mounts are the session layer's, whichever harness runs."""
+
+  def test_no_trails_strips_the_scope_baseline(self):
+    with _ContainerHarness() as h:
+      assert ride_session.start_session(_spec(drop=True, no_trails=True)) == 0
+    assert h.scoped_secrets.call_args.args[1].optional_baseline == frozenset()
+
+  def test_no_trails_disables_recording_and_binds_no_trails_root(self):
+    with _ContainerHarness() as h:
+      assert ride_session.start_session(_spec(drop=True, no_trails=True)) == 0
+    launch = h.run_in_container.call_args.args[0]
+    assert launch.env['TRAILS_DISABLED'] == '1'
+    assert h.local_trails_mounts.call_count == 0
+
+  def test_recording_stays_on_by_default(self):
+    with _ContainerHarness() as h:
+      assert ride_session.start_session(_spec(drop=True)) == 0
+    launch = h.run_in_container.call_args.args[0]
+    assert 'TRAILS_DISABLED' not in launch.env
+    assert h.scoped_secrets.call_args.args[1].optional_baseline == frozenset({'trails'})
 
 
 class TestSummonAllowList:
@@ -413,7 +439,7 @@ class TestContainerDrop:
 
 
 class TestCommandArgv:
-  def test_create_command_includes_drop_into_and_claude_args(self):
+  def test_create_command_includes_drop_into_and_forwarded_arguments(self):
     parts = _spec(
       hold='attended',
       drop=True,
@@ -422,7 +448,7 @@ class TestCommandArgv:
       grant=['gmail_creds', '@bro'],
       revoke=['notion'],
       into='feature',
-      claude_args=['--foo'],
+      arguments=['--foo'],
     ).to_command_argv()
     assert parts == [
       'ride', 'along', '--drop', '--hold', 'attended', '--llm', '::xhigh+fast',
@@ -533,18 +559,14 @@ class TestResumeSpecRecord:
       grant=['gmail_creds'],
       into='feature',
       prompt='do it',
-      claude_args=['--foo'],
+      arguments=['--foo'],
     )
     workspace = _workspace(tmp_path)
     ride_session.record_resume_spec(workspace, spec)
     loaded = ride_session.load_resume_spec(workspace)
     assert loaded == spec.resume_variant()
     assert loaded is not None and loaded.resume and not loaded.drop
-    assert (
-      loaded.into is None
-      and loaded.prompt is None
-      and ClaudeOptions.load(loaded.harness_options).arguments == []
-    )
+    assert loaded.into is None and loaded.prompt is None and loaded.arguments == []
     # the forwarded flags survive, so the resumed session runs as it was launched
     assert (loaded.hold, loaded.llm, loaded.bro, loaded.grant) == (
       'attended',
@@ -662,7 +684,7 @@ class TestInPlaceArgv:
       revoke=['notion'],
       into='feature',
       prompt='do it',
-      claude_args=['--foo'],
+      arguments=['--foo'],
     )
     parts = claude_harness.CLAUDE.inner_command(spec, _workspace(tmp_path))
     assert parts == [
@@ -828,7 +850,7 @@ class TestHostSession:
       return 5
 
     monkeypatch.setattr(ride_session, 'run_host_process_via_broker', fake_root)
-    spec = _spec(host=True, hold='attended', llm='::xhigh', prompt='go', claude_args=['--foo'])
+    spec = _spec(host=True, hold='attended', llm='::xhigh', prompt='go', arguments=['--foo'])
     scope = _launch_scope(may_summon={'dev'})
     assert self._host_session(spec, workspace, scope) == 5
     assert roots[0]['workspace'] is workspace
@@ -888,7 +910,7 @@ class TestHostSession:
       return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(ride_session.subprocess, 'run', fake_run)
-    spec = _spec(host=True, hold='attended', llm='::xhigh', prompt='go', claude_args=['--foo'])
+    spec = _spec(host=True, hold='attended', llm='::xhigh', prompt='go', arguments=['--foo'])
     assert self._host_session(spec, workspace, _launch_scope()) == 0
     argv, kwargs = runs[0]
     assert argv == [

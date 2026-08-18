@@ -89,7 +89,7 @@ class TestRunInPlace:
       old.write_text('{}')
       os.utime(old, (1, 1))
       (h.projects_dir / 'newer.jsonl').write_text('{}')
-      assert ride_runner.run_in_place(_spec(resume=True, claude_args=['--foo'])) == 0
+      assert ride_runner.run_in_place(_spec(resume=True, arguments=['--foo'])) == 0
       assert h.build.call_args.kwargs['claude_args'] == ['--resume', 'newer', '--foo']
 
   def test_recorder_runs_for_the_session_and_stops_after(self, monkeypatch, tmp_path):
@@ -119,6 +119,14 @@ class TestRunInPlace:
     with _Harness(tmp_path) as h:
       h.start_recorder.return_value = None
       assert ride_runner.run_in_place(_spec()) == 0
+      assert h.run_claude.call_count == 1
+
+  def test_no_recorder_when_trails_are_disabled(self, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    with _Harness(tmp_path) as h:
+      h.env['TRAILS_DISABLED'] = '1'
+      assert ride_runner.run_in_place(_spec()) == 0
+      assert h.start_recorder.call_count == 0
       assert h.run_claude.call_count == 1
 
   def test_raw_session_serves_health_gates_and_syncs(self, monkeypatch, tmp_path):
