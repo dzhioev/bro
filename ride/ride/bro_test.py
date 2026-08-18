@@ -89,7 +89,7 @@ class TestInnerCommand:
     ]
 
   def test_resume_carries_the_workspace_trail_and_recorded_recipe(self, monkeypatch, tmp_path):
-    monkeypatch.setattr(bro_harness, 'session_trail_pointer', lambda _name: tmp_path / 'pointer')
+    monkeypatch.setattr(bro_session, 'session_trail_pointer', lambda _ws: tmp_path / 'pointer')
     trail_pointer.write(tmp_path / 'pointer', 'trail-1')
     command = bro_session.inner_command(_spec(resume=True, prompt=None))
     assert command[:3] == ['bro', 'chat', 'dev']

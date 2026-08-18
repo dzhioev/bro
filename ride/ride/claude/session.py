@@ -55,7 +55,7 @@ def _container_session(
   env: dict[str, str] = {'RIDE_BRO': spec.session_bro}
   if base_ref is not None:
     env['RIDE_BASE_REF'] = base_ref
-  claude_mounts, claude_env = container_claude_state(spec.name)
+  claude_mounts, claude_env = container_claude_state(workspace.path)
   env.update(claude_env)
   trails_mounts = local_trails_mounts(scoped)
   launch = Launch(
@@ -73,7 +73,7 @@ def _container_session(
     launch,
     workspace=workspace,
     may_summon=launch_scope.may_summon,
-    trail_pointer=session_trail_pointer(spec.name),
+    trail_pointer=session_trail_pointer(workspace.path),
   )
 
 
@@ -106,10 +106,10 @@ def _host_session(
 
   command = [str(ride_binary), *spec.inner_command()[1:]]
   runner_env = venv_env(worktree / '.venv')
-  claude_dir = _provision_host_claude_dir(spec.name, worktree, project)
+  claude_dir = _provision_host_claude_dir(workspace.path, worktree, project)
   runner_env['CLAUDE_CONFIG_DIR'] = str(claude_dir)
   runner_env[credentials.REGISTRY_ENV] = str(
-    materialize_scoped_store(launch_scope.store, claude_dir / '.bro')
+    materialize_scoped_store(launch_scope.store, workspace.path / 'credentials')
   )
   _apply_claude_auth(runner_env)
   workspace.clear_session_end()
@@ -121,7 +121,7 @@ def _host_session(
       launch_scope.may_summon,
       scoped.required | scoped.optional,
       interactive=not spec.solo,
-      trail_pointer=session_trail_pointer(workspace.name),
+      trail_pointer=session_trail_pointer(workspace.path),
     )
   else:
     code = subprocess.run(command, cwd=str(worktree), env=runner_env).returncode

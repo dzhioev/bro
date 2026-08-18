@@ -4,7 +4,6 @@ from typing import Optional
 import pytest
 
 import bro.workspace.docker as workspace_docker
-import bro.workspace.model as workspace_model
 import ride.claude.claude_config as ride_claude_config
 from bro.workspace.metadata import WorkspaceKind
 from bro.workspace.model import Workspace
@@ -94,12 +93,13 @@ class TestProvisionHostClaudeDir:
 
   def _provision(self, home):
     project = home / 'project'
-    worktree = project / 'var' / 'ride' / 'worktrees' / 'ws'
-    return ride_claude_config._provision_host_claude_dir('ws', worktree, project), worktree
+    workspace = home / 'state' / 'workspaces' / 'ws'
+    worktree = workspace / 'tree'
+    return ride_claude_config._provision_host_claude_dir(workspace, worktree, project), worktree
 
   def test_returns_the_session_claude_dir_with_seeded_json(self, home):
     claude_dir, worktree = self._provision(home)
-    assert claude_dir == home / '.claude' / 'ride-sessions' / 'ws'
+    assert claude_dir == home / 'state' / 'workspaces' / 'ws' / 'claude'
     data = json.loads((claude_dir / '.claude.json').read_text())
     # the main repo root is trusted alongside the worktree: claude resolves a
     # linked worktree's trust against the repository root
@@ -150,27 +150,6 @@ class TestProvisionHostClaudeDir:
     claude_dir, _ = self._provision(home)
     assert not (claude_dir / 'plugins').exists()
 
-  def test_migrates_legacy_transcripts_once(self, home):
-    _, worktree = self._provision(home)
-    encoded = str(worktree).replace('/', '-').replace('.', '-')
-    legacy = home / '.claude' / 'projects' / encoded
-    legacy.mkdir(parents=True)
-    (legacy / 'abc.jsonl').write_text('{"line": 1}\n')
-    claude_dir, _ = self._provision(home)
-    migrated = claude_dir / 'projects' / encoded / 'abc.jsonl'
-    assert migrated.read_text() == '{"line": 1}\n'
-    # one-shot: the legacy location is never consulted again
-    (legacy / 'later.jsonl').write_text('{}\n')
-    self._provision(home)
-    assert not (claude_dir / 'projects' / encoded / 'later.jsonl').exists()
-
-  def test_no_migration_when_legacy_has_no_transcripts(self, home):
-    _, worktree = self._provision(home)
-    encoded = str(worktree).replace('/', '-').replace('.', '-')
-    (home / '.claude' / 'projects' / encoded).mkdir(parents=True)
-    claude_dir, _ = self._provision(home)
-    assert not (claude_dir / 'projects' / encoded).exists()
-
   def test_idempotent(self, home):
     first, _ = self._provision(home)
     (first / '.claude.json').write_text('{"session": "state"}')
@@ -185,8 +164,8 @@ class TestContainerClaudeState:
     monkeypatch.setattr(
       ride_claude_config, '_seed_claude_json', lambda d, h, **k: d / '.claude.json'
     )
-    mounts, env = ride_claude_config.container_claude_state('ws')
-    claude_dir = tmp_path / '.claude' / 'ride-sessions' / 'ws'
+    mounts, env = ride_claude_config.container_claude_state(tmp_path / 'ws')
+    claude_dir = tmp_path / 'ws' / 'claude'
     assert mounts == [
       f'{claude_dir / ".claude.json"}:/home/ride/.claude.json',
       f'{claude_dir}:/home/ride/.claude',
@@ -201,8 +180,8 @@ class TestContainerClaudeState:
     monkeypatch.setattr(
       ride_claude_config, '_seed_claude_json', lambda d, h, **k: d / '.claude.json'
     )
-    ride_claude_config.container_claude_state('ws')
-    settings_file = tmp_path / '.claude' / 'ride-sessions' / 'ws' / 'settings.json'
+    ride_claude_config.container_claude_state(tmp_path / 'ws')
+    settings_file = tmp_path / 'ws' / 'claude' / 'settings.json'
     settings = json.loads(settings_file.read_text())
     assert settings['skipDangerousModePermissionPrompt'] is True
 
@@ -238,69 +217,15 @@ class TestPluginSeedContract:
 
 
 class TestWorkspaceProjectsDir:
-  def _worktree(self, monkeypatch, tmp_path):
-    monkeypatch.setenv('HOME', str(tmp_path / 'home'))
-    return Workspace.create('ws', tmp_path / 'project', WorkspaceKind.WORKTREE)
+  def _projects(self, workspace, encoded: str):
+    return workspace.path / 'claude' / 'projects' / encoded
 
-  def _encoded(self, worktree):
-    return str(worktree.tree).replace('/', '-').replace('.', '-')
-
-  def _private(self, tmp_path, worktree):
-    return (
-      tmp_path / 'home' / '.claude' / 'ride-sessions' / 'ws' / 'projects' / self._encoded(worktree)
-    )
-
-  def test_container_workspace_uses_the_fixed_encoding(self, monkeypatch, tmp_path):
-    monkeypatch.setenv('HOME', str(tmp_path / 'home'))
+  def test_container_workspace_uses_the_fixed_encoding(self, tmp_path):
     container = Workspace.create('ws', tmp_path / 'project', WorkspaceKind.CONTAINER)
-    expected = tmp_path / 'home' / '.claude' / 'ride-sessions' / 'ws' / 'projects' / '-workspace'
+    expected = self._projects(container, '-workspace')
     assert ride_claude_config.workspace_projects_dir(container) == expected
 
-  def test_prefers_the_private_session_projects_dir(self, monkeypatch, tmp_path):
-    worktree = self._worktree(monkeypatch, tmp_path)
-    private = self._private(tmp_path, worktree)
-    private.mkdir(parents=True)
-    assert ride_claude_config.workspace_projects_dir(worktree) == private
-
-  def test_falls_back_to_legacy_host_projects_dir(self, monkeypatch, tmp_path):
-    # sessions recorded before the private config dir live under ~/.claude/projects
-    worktree = self._worktree(monkeypatch, tmp_path)
-    legacy = tmp_path / 'home' / '.claude' / 'projects' / self._encoded(worktree)
-    legacy.mkdir(parents=True)
-    assert ride_claude_config.workspace_projects_dir(worktree) == legacy
-
-  def test_neither_present_names_the_private_dir(self, monkeypatch, tmp_path):
-    worktree = self._worktree(monkeypatch, tmp_path)
-    assert ride_claude_config.workspace_projects_dir(worktree) == self._private(tmp_path, worktree)
-
-
-class TestDropWorkspace:
-  def _session_dir(self, tmp_path):
-    session_dir = tmp_path / 'home' / '.claude' / 'ride-sessions' / 'ws'
-    session_dir.mkdir(parents=True)
-    return session_dir
-
-  def test_removes_workspace_and_session_state(self, monkeypatch, tmp_path):
-    monkeypatch.setenv('HOME', str(tmp_path / 'home'))
-    session_dir = self._session_dir(tmp_path)
-    removed = []
-    monkeypatch.setattr(
-      workspace_model.ContainerWorkspace, 'remove', lambda self: removed.append(self.name)
-    )
-    workspace = Workspace.create('ws', tmp_path / 'project', WorkspaceKind.CONTAINER)
-    ride_claude_config.drop_workspace(workspace)
-    assert removed == ['ws']
-    assert not session_dir.exists()
-
-  def test_session_state_removed_even_when_workspace_removal_raises(self, monkeypatch, tmp_path):
-    monkeypatch.setenv('HOME', str(tmp_path / 'home'))
-    session_dir = self._session_dir(tmp_path)
-
-    def boom(self):
-      raise RuntimeError('no image')
-
-    monkeypatch.setattr(workspace_model.ContainerWorkspace, 'remove', boom)
-    workspace = Workspace.create('ws', tmp_path / 'project', WorkspaceKind.CONTAINER)
-    with pytest.raises(RuntimeError, match='no image'):
-      ride_claude_config.drop_workspace(workspace)
-    assert not session_dir.exists()
+  def test_worktree_workspace_encodes_its_tree_path(self, tmp_path):
+    worktree = Workspace.create('ws', tmp_path / 'project', WorkspaceKind.WORKTREE)
+    encoded = str(worktree.tree).replace('/', '-').replace('.', '-')
+    assert ride_claude_config.workspace_projects_dir(worktree) == self._projects(worktree, encoded)

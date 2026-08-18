@@ -9,8 +9,8 @@ class TestClaudeConfigDir:
     assert monitor.claude_config_dir() == Path.home() / '.claude'
 
   def test_override_wins(self, tmp_path, monkeypatch):
-    monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(tmp_path / 'ride-sessions' / 'w'))
-    assert monitor.claude_config_dir() == tmp_path / 'ride-sessions' / 'w'
+    monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(tmp_path / 'w' / 'claude'))
+    assert monitor.claude_config_dir() == tmp_path / 'w' / 'claude'
 
 
 class TestProjectsDir:

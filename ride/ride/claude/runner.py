@@ -1,7 +1,7 @@
 """the in-place Claude session runner (`ride solo|along --in-place`).
 
 The inner layer of the launch stack: it assumes its cwd is a prepared workspace
-(host worktree or container clone) with the workspace venv active, and owns
+tree (host worktree or container clone) with the workspace venv active, and owns
 everything that runs next to claude — resume resolution, the claude argv, the
 session-local MCP server, launch declarations, and the session recorder daemon. The outer `ride solo|along` (mode-specific by nature: worktree
 ensure / container machinery) validates policy once and spawns this runner in
@@ -21,7 +21,7 @@ from bro.launch.broxy import _start_session_broxy
 from bro.launch.identity import bro_git_identity_env
 from bro.monitor import claude_projects_dir
 from bro.workspace.git import git_out
-from bro.workspace.paths import in_container, project_root
+from bro.workspace.paths import in_container, project_root, workspace_dir
 from ride.claude.claude_argv import build_claude_launch
 from ride.claude.claude_auth import _apply_claude_auth
 from ride.claude.claude_config import _latest_jsonl, _provision_host_claude_dir
@@ -38,13 +38,13 @@ if TYPE_CHECKING:
   from ride.session import SessionSpec
 
 
-def _set_session_context(spec: 'SessionSpec', system_prompt: str, workspace: Path) -> None:
+def _set_session_context(spec: 'SessionSpec', system_prompt: str, tree: Path) -> None:
   """capture the session's launch context into RIDE_SESSION_CONTEXT for the
   session recorder daemon (set in os.environ, which the daemon's spawn
-  snapshots). the git base is the workspace's HEAD — for a fresh workspace the
+  snapshots). the git base is the tree's HEAD — for a fresh workspace the
   ref the outer based it on, for a resume the branch tip."""
   try:
-    base_sha = git_out('rev-parse', 'HEAD', cwd=str(workspace))
+    base_sha = git_out('rev-parse', 'HEAD', cwd=str(tree))
   except subprocess.CalledProcessError:
     base_sha = None
   records = build_session_context(
@@ -54,7 +54,7 @@ def _set_session_context(spec: 'SessionSpec', system_prompt: str, workspace: Pat
     base_ref=spec.into,
     bro=spec.session_bro,
     raw=options(spec).raw,
-    proj_root=workspace,
+    proj_root=tree,
   )
   os.environ[RIDE_SESSION_CONTEXT_ENV] = encode_session_context(records)
 
@@ -79,20 +79,21 @@ def _run_claude(argv: list[str], env: dict[str, str]) -> int:
 
 
 def run_in_place(spec: 'SessionSpec') -> int:
-  workspace = Path.cwd()
+  tree = Path.cwd()
 
   if not in_container():
-    # a host session's claude state lives in the private per-session config dir
-    # (the container-equivalent isolation — reference/ride.md, "Host claude-state
+    # a host session runs claude against the workspace's own claude state, the
+    # container-equivalent isolation (reference/ride.md, "Host claude-state
     # isolation"). provisioning is idempotent because both launch layers apply it.
     # Set before anything derives paths or spawns children:
     # the resume resolution below, the hooks, and claude itself all read it.
-    claude_dir = _provision_host_claude_dir(spec.name, workspace, project_root())
+    project = project_root()
+    claude_dir = _provision_host_claude_dir(workspace_dir(project, spec.name), tree, project)
     os.environ['CLAUDE_CONFIG_DIR'] = str(claude_dir)
 
   claude_args = list(options(spec).arguments)
   if spec.resume:
-    projects_dir = claude_projects_dir(workspace)
+    projects_dir = claude_projects_dir(tree)
     latest = _latest_jsonl(projects_dir)
     if latest is None:
       log.error('no claude session found in %s', projects_dir)
@@ -115,7 +116,7 @@ def run_in_place(spec: 'SessionSpec') -> int:
   if create_bro(spec.session_bro).has_feature('commit-accounting'):
     from bro.workflow.commit_footer import install_hooks
 
-    install_hooks(workspace, overwrite=False)
+    install_hooks(tree, overwrite=False)
 
   # hold and kill wiring for the `raise` service tool's mounts (bro/bro.py).
   # both overwrite any ambient value: a session launched from inside another
@@ -147,18 +148,18 @@ def run_in_place(spec: 'SessionSpec') -> int:
     else:
       mcp_spec = f'persona:{spec.session_bro}'
     try:
-      server = _start_session_mcp_server(mcp_spec, workspace, os.environ)
+      server = _start_session_mcp_server(mcp_spec, tree, os.environ)
     except RuntimeError as error:
       log.error('%s', error)
       return 1
     teardown.callback(server.stop)
 
     launch = build_claude_launch(spec, claude_args=claude_args, endpoint=server.endpoint)
-    _set_session_context(spec, launch.system_prompt, workspace)
+    _set_session_context(spec, launch.system_prompt, tree)
 
     # after the session context: the daemon's spawn snapshots os.environ, and
     # RIDE_SESSION_CONTEXT becomes the trail's launch-context attachment
-    recorder = _start_session_recorder(spec.name, workspace, os.environ, llm=spec.llm_spec.dump())
+    recorder = _start_session_recorder(spec.name, tree, os.environ, llm=spec.llm_spec.dump())
     if recorder is not None:
       teardown.callback(recorder.stop)
 

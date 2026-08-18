@@ -201,8 +201,8 @@ class TestSessionTranscripts:
   SESSION = '786d6a80-6929-4c9b-aac7-4fdfbe98ec3c'
 
   def _session(self, tmp_path, monkeypatch, *, subagents=()):
-    monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(tmp_path / 'ride-sessions' / 'w'))
-    projects = tmp_path / 'ride-sessions' / 'w' / 'projects' / '-ws'
+    monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(tmp_path / 'w' / 'claude'))
+    projects = tmp_path / 'w' / 'claude' / 'projects' / '-ws'
     projects.mkdir(parents=True)
     segment = projects / f'{self.SESSION}.jsonl'
     segment.touch()

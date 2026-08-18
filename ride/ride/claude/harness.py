@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from bro.base import credentials, log
@@ -10,9 +9,7 @@ from bro.workspace.model import Workspace
 from ride.claude.claude_auth import _load_anthropic_key
 from ride.claude.claude_config import (
   _latest_jsonl,
-  drop_workspace,
   read_subject,
-  session_trail_pointer,
   workspace_projects_dir,
 )
 
@@ -158,14 +155,8 @@ class ClaudeHarness:
   def session_exists(self, workspace: Workspace) -> bool:
     return _latest_jsonl(workspace_projects_dir(workspace)) is not None
 
-  def trail_pointer(self, workspace_name: str) -> Path:
-    return session_trail_pointer(workspace_name)
-
   def read_subject(self, workspace: Workspace) -> str | None:
     return read_subject(workspace)
-
-  def drop_workspace(self, workspace: Workspace) -> None:
-    drop_workspace(workspace)
 
   def launch(
     self,

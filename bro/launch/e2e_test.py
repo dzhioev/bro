@@ -18,8 +18,8 @@ session runner as the container command (exit-code propagation, in-container
 argv build: merged --settings, MCP namespaces, RIDE_SESSION_CONTEXT);
 G — SIGTERM forwarding, so `docker stop` lands in claude.
 
-Isolation: every launch runs under a throwaway HOME and project root, so no
-scenario touches the real `~/.claude/ride-sessions` or the user's runtime state root. The
+Isolation: every launch runs under a throwaway HOME, data home and project root,
+so no scenario touches the user's own claude or runtime state. The
 project root is a local git clone of this checkout — its `pyproject.toml` /
 `uv.lock` are byte-identical, so `_image_tag()` resolves to the already-built
 image, and the container's baked venv serves this branch's committed
@@ -85,10 +85,7 @@ pytestmark = [
   pytest.mark.filterwarnings('ignore::pytest.PytestUnraisableExceptionWarning'),
 ]
 
-# names of everything this harness creates, so the final real-HOME assertion can
-# discriminate its own residue from concurrent real sessions on the same host
 _NAME_PREFIX = 'ride-e2e-'
-_LEAK_PREFIXES = ('broker-', _NAME_PREFIX)
 
 
 # --- in-container probes (source for `python -c`; repo code comes from the baked venv) ---
@@ -304,8 +301,6 @@ class IsolatedEnv:
   home: Path
   data_home: Path
   runtime_root: Path
-  real_ride_sessions: Path
-  real_residue_before: list[str]
 
   @property
   def broker_dir(self) -> Path:
@@ -317,10 +312,6 @@ class IsolatedEnv:
 
   def tree(self, name: str) -> Path:
     return self.workspaces_dir / name / 'tree'
-
-  @property
-  def ride_sessions(self) -> Path:
-    return self.home / '.claude' / 'ride-sessions'
 
   def sockets(self) -> list[Path]:
     if not self.broker_dir.is_dir():
@@ -342,12 +333,6 @@ class IsolatedEnv:
     return sorted(p.name for p in parent.iterdir() if p.name.startswith('broker-'))
 
 
-def _leak_residue(ride_sessions: Path) -> list[str]:
-  if not ride_sessions.is_dir():
-    return []
-  return sorted(p.name for p in ride_sessions.iterdir() if p.name.startswith(_LEAK_PREFIXES))
-
-
 def _remove_stray_containers(env: 'IsolatedEnv') -> None:
   if not env.workspaces_dir.is_dir():
     return
@@ -359,8 +344,6 @@ def _remove_stray_containers(env: 'IsolatedEnv') -> None:
 
 @pytest.fixture(scope='module')
 def isolated_env() -> Iterator[IsolatedEnv]:
-  real_ride_sessions = Path(os.environ['HOME']) / '.claude' / 'ride-sessions'
-  residue_before = _leak_residue(real_ride_sessions)
   # short prefix directly under the system temp dir: the socket path must fit sun_path
   root = Path(tempfile.mkdtemp(prefix=_NAME_PREFIX))
   checkout = Path(
@@ -410,8 +393,6 @@ def isolated_env() -> Iterator[IsolatedEnv]:
     home=home,
     data_home=data_home,
     runtime_root=runtime_root,
-    real_ride_sessions=real_ride_sessions,
-    real_residue_before=residue_before,
   )
   yield env
   _remove_stray_containers(env)
@@ -628,7 +609,6 @@ class BrokerRun:
   sockets_after: list[Path]
   live_after: list[str]
   workspace_leaks: list[str]
-  session_leaks: list[str]
 
 
 def _run_broker_scenario(
@@ -709,7 +689,6 @@ def _run_broker_scenario(
     sockets_after=env.sockets(),
     live_after=env.live_containers(),
     workspace_leaks=env.leaked_dirs(env.workspaces_dir),
-    session_leaks=env.leaked_dirs(env.ride_sessions),
   )
 
 
@@ -786,10 +765,9 @@ class TestChildLifecycle:
     assert b_clean.live_after == []
 
   def test_no_workspace_dirs_leaked_after_parent_exit(self, b_clean: BrokerRun) -> None:
-    assert b_clean.workspace_leaks == [] and b_clean.session_leaks == [], (
-      f'spawned child left workspace state behind after the parent exited: '
-      f'runtime workspaces {b_clean.workspace_leaks}, '
-      f'~/.claude/ride-sessions {b_clean.session_leaks}'
+    assert b_clean.workspace_leaks == [], (
+      'spawned child left workspace state behind after the parent exited: '
+      f'{b_clean.workspace_leaks}'
     )
 
   def test_early_exit_child_synthesizes_failed(self, b_early_exit: BrokerRun) -> None:
@@ -1059,10 +1037,3 @@ class TestDockerStopReachesClaude:
 
   def test_container_torn_down(self, scenario_g: LiveRun) -> None:
     assert scenario_g.container_gone_after
-
-
-# --- the harness itself must not touch the real HOME --------------------------
-
-
-def test_real_home_ride_sessions_untouched(isolated_env: IsolatedEnv) -> None:
-  assert _leak_residue(isolated_env.real_ride_sessions) == isolated_env.real_residue_before

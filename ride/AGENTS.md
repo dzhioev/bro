@@ -17,7 +17,8 @@
 ## Invariants
 
 - The runtime layer names no Claude detail in its serialized harness options. `SessionSpec.harness_options` belongs to the selected implementation and is validated there.
-- The harness seam owns scope recipes, auth, LLM resolution, inner command, workspace state operations, host/container launch, and the in-place runner. Generic credential computation and broker-root process supervision remain in `bro.launch` for native launch and summon reuse.
+- The harness seam owns scope recipes, auth, LLM resolution, inner command, session-state reads, host/container launch, and the in-place runner. Generic credential computation and broker-root process supervision remain in `bro.launch` for native launch and summon reuse.
+- Every harness keeps its session state among the workspace's own records, so reclaiming a workspace is `Workspace.remove()` for all of them and no harness supplies a teardown of its own.
 - Claude workspaces run their checkout's `ride solo|along --in-place`; native workspaces run `bro run|chat … --in-place`. These hidden inner contracts fail loudly when a workspace tree predates them.
 - A bro resume reads the broker-published pointer beside the workspace's `resume.json` and continues that trail under the recipe recorded in the session spec. No pointer is synthesized when the broker or native trail recording is disabled.
 - Host runtime state lives under the user's checkout-keyed runtime state root, which a launch creates before recording a workspace. Container trails and summon status use dedicated fixed absolute mounts.

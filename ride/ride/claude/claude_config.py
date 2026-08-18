@@ -1,11 +1,10 @@
 """per-session claude state, shared by both session modes.
 
-Owns a session's private claude state dir (`~/.claude/ride-sessions/<name>`) —
-its path derivations, contents (the seeded `.claude.json`, the constructed
-`settings.json`, the plugin seed, the legacy-transcript migration), the
-container mounts that overlay it as `~/.claude`, its readers (the projects dir,
-a session's subject line), and its teardown next to the bro.workspace.A container
-reaches the dir through docker mounts, a host session through
+Owns the claude state dir a workspace's sessions run against — its path
+derivations, contents (the seeded `.claude.json`, the constructed
+`settings.json`, the plugin seed), the container mounts that overlay it as
+`~/.claude`, and its readers (the projects dir, a session's subject line). A
+container reaches the dir through docker mounts, a host session through
 `CLAUDE_CONFIG_DIR`. Why sessions are isolated from the host `~/.claude` — and
 what the dir deliberately excludes — is reference/ride.md, "Host claude-state
 isolation".
@@ -23,17 +22,21 @@ from bro.workspace.metadata import WorkspaceKind
 from bro.workspace.model import Workspace
 
 
-def _session_claude_dir(name: str) -> Path:
-  """the per-session claude state dir on the host — mounted as a container
-  session's ~/.claude overlay."""
-  return Path.home() / '.claude' / 'ride-sessions' / name
+def workspace_claude_dir(workspace: Path) -> Path:
+  """the claude state under a workspace's own directory — a record of the
+  workspace like every other, which removing the workspace takes with it.
+
+  host-side in both modes: a container mounts it, and the container does not
+  outlive the state (reference/ride.md, "Container mode").
+  """
+  return workspace / 'claude'
 
 
-def session_trail_pointer(name: str) -> Path:
+def session_trail_pointer(workspace: Path) -> Path:
   """the host-side path of the session's current-trail pointer — where the
   recorder publishes the trail id summon control attributes the session's
   children to (`monitor/trail_pointer.py` owns the file)."""
-  return _session_claude_dir(name) / trail_pointer.FILENAME
+  return workspace_claude_dir(workspace) / trail_pointer.FILENAME
 
 
 def _latest_jsonl(projects_dir: Path) -> Optional[Path]:
@@ -47,20 +50,10 @@ def _latest_jsonl(projects_dir: Path) -> Optional[Path]:
 
 def workspace_projects_dir(workspace: Workspace) -> Path:
   """the host-side claude projects dir of a workspace's sessions."""
-  session_dir = _session_claude_dir(workspace.name)
+  session_dir = workspace_claude_dir(workspace.path)
   if workspace.kind is WorkspaceKind.CONTAINER:
     return session_dir / 'projects' / '-workspace'
-  # transcripts live in the session's private state dir; a worktree whose
-  # sessions were recorded before the dir existed (against the host ~/.claude)
-  # is read from the legacy location until a launch migrates it
-  # (_migrate_legacy_transcripts)
-  private = session_dir / 'projects' / encode_project_path(workspace.tree)
-  if private.is_dir():
-    return private
-  legacy = Path.home() / '.claude' / 'projects' / encode_project_path(workspace.tree)
-  if legacy.is_dir():
-    return legacy
-  return private
+  return session_dir / 'projects' / encode_project_path(workspace.tree)
 
 
 def read_subject(workspace: Workspace) -> Optional[str]:
@@ -98,17 +91,6 @@ def read_subject(workspace: Workspace) -> Optional[str]:
       if len(first_line) > 0:
         return first_line
   return None
-
-
-def drop_workspace(workspace: Workspace) -> None:
-  """remove a workspace together with its claude session state — the state dir
-  must not outlive the workspace, even when the workspace removal raises."""
-  try:
-    workspace.remove()
-  finally:
-    session_dir = _session_claude_dir(workspace.name)
-    if session_dir.is_dir():
-      shutil.rmtree(session_dir, ignore_errors=True)
 
 
 # the shared base of the session ~/.claude/settings.json, written fresh each
@@ -205,38 +187,15 @@ def _seed_host_plugins(claude_dir: Path) -> None:
   shutil.copytree(host_plugins, claude_dir / 'plugins', dirs_exist_ok=True)
 
 
-def _migrate_legacy_transcripts(claude_dir: Path, worktree: Path) -> None:
-  """copy transcripts recorded before the session had a private config dir.
+def container_claude_state(workspace: Path) -> tuple[list[str], dict[str, str]]:
+  """provision the workspace's claude state for a container launch and return
+  the (extra_mounts, extra_env) a claude-running container adds to its `Launch`.
 
-  claude resolves `--resume` ids against `$CLAUDE_CONFIG_DIR/projects`; a host
-  worktree whose sessions were recorded against the host `~/.claude` keeps them
-  under `~/.claude/projects/<encoded-worktree-path>`. one-shot: once the session
-  dir has its own projects entry, the legacy location is never consulted again.
-  """
-  destination = claude_dir / 'projects' / encode_project_path(worktree)
-  if destination.is_dir():
-    return
-  legacy = Path.home() / '.claude' / 'projects' / encode_project_path(worktree)
-  if not legacy.is_dir():
-    return
-  transcripts = [path for path in legacy.iterdir() if path.suffix == '.jsonl']
-  if len(transcripts) == 0:
-    return
-  destination.mkdir(parents=True)
-  for transcript in transcripts:
-    shutil.copy2(transcript, destination / transcript.name)
-
-
-def container_claude_state(name: str) -> tuple[list[str], dict[str, str]]:
-  """provision the session's claude state for a container launch and return the
-  (extra_mounts, extra_env) a claude-running container adds to its `Launch`.
-
-  the mounts overlay the per-session state dir as the container's `~/.claude`
-  and the seeded container-private `.claude.json` on top of `$HOME`; the env
-  turns off claude's auto-updater (the image owns the install) and its
-  installation checks (doctor would flag the absent host-native
-  ~/.local/bin/claude)."""
-  claude_dir = _session_claude_dir(name)
+  the mounts overlay the state dir as the container's `~/.claude` and the seeded
+  container-private `.claude.json` on top of `$HOME`; the env turns off claude's
+  auto-updater (the image owns the install) and its installation checks (doctor
+  would flag the absent host-native ~/.local/bin/claude)."""
+  claude_dir = workspace_claude_dir(workspace)
   claude_dir.mkdir(parents=True, exist_ok=True)
   # seed-once container-private ~/.claude.json: installMethod matches the image's
   # npm-global claude; the trusted project entry is the clone's mount point
@@ -252,12 +211,12 @@ def container_claude_state(name: str) -> tuple[list[str], dict[str, str]]:
   return mounts, env
 
 
-def _provision_host_claude_dir(name: str, worktree: Path, project: Path) -> Path:
+def _provision_host_claude_dir(workspace: Path, worktree: Path, project: Path) -> Path:
   """provision a host session's private claude state dir and return it — the
   value the launch points CLAUDE_CONFIG_DIR at. `project` is the main repo root
   the worktree links to. idempotent because the outer launch and the in-place
   runner both call it."""
-  claude_dir = _session_claude_dir(name)
+  claude_dir = workspace_claude_dir(workspace)
   log.verbose('provisioning the session claude state dir at %s', claude_dir)
   claude_dir.mkdir(parents=True, exist_ok=True)
   trusted_paths = [str(worktree)]
@@ -268,5 +227,4 @@ def _provision_host_claude_dir(name: str, worktree: Path, project: Path) -> Path
   )
   _write_session_settings(claude_dir, container=False)
   _seed_host_plugins(claude_dir)
-  _migrate_legacy_transcripts(claude_dir, worktree)
   return claude_dir

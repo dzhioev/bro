@@ -1,4 +1,3 @@
-from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Protocol
 
 from bro.launch.scope import ScopeRecipe
@@ -29,11 +28,7 @@ class Harness(Protocol):
 
   def session_exists(self, workspace: Workspace) -> bool: ...
 
-  def trail_pointer(self, workspace_name: str) -> Path: ...
-
   def read_subject(self, workspace: Workspace) -> str | None: ...
-
-  def drop_workspace(self, workspace: Workspace) -> None: ...
 
   def launch(
     self,

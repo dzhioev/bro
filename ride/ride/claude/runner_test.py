@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import ride.claude.runner as ride_runner
 from bro.base import credentials
 from bro.llm.llms import claude_code
+from bro.workspace.paths import workspace_dir
 from ride.claude.claude_argv import ClaudeLaunch
 from ride.claude.mcp import MCPEndpoint
 from ride.session_test import _spec
@@ -251,7 +252,9 @@ class TestRunInPlace:
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
       assert ride_runner.run_in_place(_spec()) == 0
-      h.provision_claude_dir.assert_called_once_with('w', tmp_path, Path('/main-repo'))
+      h.provision_claude_dir.assert_called_once_with(
+        workspace_dir(Path('/main-repo'), 'w'), tmp_path, Path('/main-repo')
+      )
       env = h.run_claude.call_args.args[1]
       assert env['CLAUDE_CONFIG_DIR'] == str(h.claude_config_dir)
 
