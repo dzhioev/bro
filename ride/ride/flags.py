@@ -55,6 +55,12 @@ def add_session_flags(parser: Parser, *, include_bro: bool = True) -> None:
   )
   add_scope_flags(parser)
   parser.add_argument(
+    '--no-trails',
+    dest='no_trails',
+    action='store_true',
+    help='disable trail recording for the session',
+  )
+  parser.add_argument(
     '--into',
     default=None,
     metavar='REF',

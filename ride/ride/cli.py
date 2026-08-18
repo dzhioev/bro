@@ -14,7 +14,6 @@ from bro.workspace.containers import exec_in_workspace
 from bro.workspace.model import Workspace
 from bro.workspace.paths import RuntimeLocationError, fresh_workspace_name, project_root
 from bro.workspace.project import project_config
-from ride.bro import BroOptions, add_flags as add_bro_flags
 from ride.claude.harness import ClaudeOptions, add_flags as add_claude_flags
 from ride.clean import clean_workspaces
 from ride.flags import add_scope_flags, add_session_flags, default_hold
@@ -58,7 +57,6 @@ def _add_mode_flags(parser: Parser) -> None:
   )
   add_session_flags(parser, include_bro=False)
   add_claude_flags(parser)
-  add_bro_flags(parser)
   parser.add_argument('--in-place', action='store_true', env=False, help=SUPPRESS)
   parser.add_argument('--resume', action='store_true', env=False, help=SUPPRESS)
 
@@ -184,23 +182,18 @@ def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, sol
   except (LLMSelectionError, ValueError) as error:
     parser.error(str(error))
   raw = args.pop('raw')
-  no_trails = args.pop('no_trails')
   args['grant'] = args['grant'] or []
   args['revoke'] = args['revoke'] or []
   bro = args.pop('bro')
   prompt = args.pop('prompt')
   if harness_name == 'claude':
-    if no_trails:
-      parser.error('--no-trails requires --harness bro')
     if raw and args['host']:
       parser.error('--raw cannot be combined with --host')
-    harness_options = ClaudeOptions(raw=raw, arguments=harness_arguments).dump()
+    harness_options = ClaudeOptions(raw=raw).dump()
   else:
     if raw:
       parser.error('--raw requires --harness claude')
-    if len(harness_arguments) > 0:
-      parser.error('arguments after `--` require --harness claude')
-    harness_options = BroOptions(no_trails=no_trails, subject=prompt).dump()
+    harness_options = {}
   try:
     resolved_llm = harness.resolve_llm(args['llm'], bro)
   except (KeyError, LLMSelectionError, ValueError) as error:
@@ -213,6 +206,8 @@ def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, sol
     drop=drop,
     bro=bro,
     prompt=prompt,
+    subject=prompt,
+    arguments=harness_arguments,
     resolved_llm=resolved_llm.dump(),
     solo=solo,
     resume=resume,

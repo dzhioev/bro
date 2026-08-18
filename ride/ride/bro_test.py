@@ -28,10 +28,13 @@ def _spec(**overrides) -> SessionSpec:
     'resolved_llm': LLMSpec().dump(),
     'solo': False,
     'resume': False,
+    'no_trails': False,
     'into': None,
     'bro': 'dev',
     'prompt': 'start here',
-    'harness_options': bro_harness.BroOptions(no_trails=False, subject='start here').dump(),
+    'subject': 'start here',
+    'arguments': [],
+    'harness_options': {},
   }
   values.update(overrides)
   return SessionSpec(**values)
@@ -50,21 +53,7 @@ def _scope(**overrides) -> ScopedLaunch:
 @pytest.fixture(autouse=True)
 def local_trails(monkeypatch):
   # keep the launch composition off the machine's own trails credential
-  monkeypatch.setattr(bro_harness, 'local_trails_mounts', lambda scoped: ())
-
-
-class TestBroOptions:
-  def test_round_trips(self):
-    options = bro_harness.BroOptions(no_trails=True, subject='do the work')
-    assert bro_harness.BroOptions.load(options.dump()) == options
-
-  def test_rejects_an_unexpected_shape(self):
-    with pytest.raises(ValueError, match='unexpected bro option fields'):
-      bro_harness.BroOptions.load({'no_trails': True})
-
-  def test_no_trails_removes_the_scope_baseline(self):
-    spec = _spec(harness_options=bro_harness.BroOptions(no_trails=True, subject=None).dump())
-    assert bro_harness.BRO.scope_recipe(spec).optional_baseline == frozenset()
+  monkeypatch.setattr(ride_session, 'local_trails_mounts', lambda scoped: ())
 
 
 class TestInnerCommand:
@@ -82,6 +71,13 @@ class TestInnerCommand:
       'attended',
       '--in-place',
     ]
+
+  def test_forwarded_arguments_splice_into_the_native_argv(self, tmp_path):
+    workspace = Workspace.create('w', tmp_path, WorkspaceKind.CONTAINER)
+    command = bro_harness.BRO.inner_command(_spec(arguments=['--fork']), workspace)
+    assert command == [
+      'bro', 'chat', 'dev', 'start here', '--hold', 'attended', '--fork', '--in-place'
+    ]  # fmt: skip
 
   def test_resume_carries_the_workspace_trail_and_recorded_recipe(self, tmp_path):
     workspace = Workspace.create('w', tmp_path, WorkspaceKind.CONTAINER)
@@ -129,7 +125,7 @@ class TestContainerSession:
       'run_in_container',
       lambda launch, *_a, **_k: captured.update(launch=launch) or 0,
     )
-    spec = _spec(harness_options=bro_harness.BroOptions(no_trails=True, subject=None).dump())
+    spec = _spec(no_trails=True)
     assert ride_session._launch_session(spec, workspace, None, _scope(), container=True) == 0
     assert captured['launch'].env['TRAILS_DISABLED'] == '1'
     assert captured['launch'].extra_mounts == ()

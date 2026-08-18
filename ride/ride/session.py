@@ -10,6 +10,7 @@ from bro.base import credentials, log
 from bro.launch.broxy import START_SESSION_BROXY_ENV
 from bro.launch.root import run_host_process_via_broker, run_in_container
 from bro.launch.scope import LaunchScopeError, preflight_scoped_launch, scoped_secrets
+from bro.launch.trails import local_trails_mounts
 from bro.llm.llm import LLMSpec
 from bro.monitor import trail_pointer
 from bro.workspace.containers import broker_enabled
@@ -33,6 +34,7 @@ class SessionSpec:
   workspace_pinned: bool
   host: bool
   drop: bool
+  no_trails: bool
   hold: str
   grant: list[str]
   revoke: list[str]
@@ -43,6 +45,8 @@ class SessionSpec:
   into: Optional[str]
   bro: str
   prompt: Optional[str]
+  subject: Optional[str]
+  arguments: list[str]
   harness_options: dict
 
   @property
@@ -60,7 +64,7 @@ class SessionSpec:
   def to_command_argv(self) -> list[str]:
     if self.resume:
       return ['ride', 'resume', self.name]
-    flags = {'--host': self.host}
+    flags = {'--host': self.host, '--no-trails': self.no_trails}
     if not self.solo:
       flags['--drop'] = self.drop
     elif not self.workspace_pinned:
@@ -79,13 +83,12 @@ class SessionSpec:
       parts.extend(['--revoke', value])
     if self.into is not None:
       parts.extend(['--into', self.into])
-    harness_flags, forwarded = get_harness(self.harness).command_options(self)
-    parts.extend(harness_flags)
+    parts.extend(get_harness(self.harness).command_options(self))
     parts.append(self.bro)
     if self.prompt is not None:
       parts.append(self.prompt)
-    if len(forwarded) > 0:
-      parts.extend(['--', *forwarded])
+    if len(self.arguments) > 0:
+      parts.extend(['--', *self.arguments])
     return parts
 
   def resume_variant(self) -> 'SessionSpec':
@@ -97,7 +100,7 @@ class SessionSpec:
       resume=True,
       into=None,
       prompt=None,
-      harness_options=_without_create_options(self.harness, self.harness_options),
+      arguments=[],
     )
 
   def with_scope_overrides(self, *, grant: list[str], revoke: list[str]) -> 'SessionSpec':
@@ -122,19 +125,6 @@ class SessionSpec:
     if data.keys() != fields:
       raise ValueError(f'unexpected fields: {sorted(data.keys() ^ fields)}')
     return cls(**data)
-
-
-def _without_create_options(harness: str, values: dict) -> dict:
-  if harness == 'claude':
-    from ride.claude.harness import ClaudeOptions
-
-    options = ClaudeOptions.load(values)
-    return ClaudeOptions(raw=options.raw, arguments=[]).dump()
-  if harness == 'bro':
-    from ride.bro import BroOptions
-
-    return BroOptions.load(values).dump()
-  raise ValueError(f'unknown harness: {harness}')
 
 
 @dataclass(frozen=True)
@@ -212,6 +202,10 @@ def _container_session(
     env['RIDE_BASE_REF'] = base_ref
   extras = harness.container_extras(spec, workspace, scoped)
   env.update(extras.env)
+  if spec.no_trails:
+    # a run that records nothing binds no trails root
+    env['TRAILS_DISABLED'] = '1'
+  trails_mounts = () if spec.no_trails else local_trails_mounts(scoped)
   launch = Launch(
     name=spec.name,
     command=harness.inner_command(spec, workspace),
@@ -221,7 +215,7 @@ def _container_session(
     docker_sock=scoped.docker_sock,
     tty=not spec.solo,
     forward_env=True,
-    extra_mounts=extras.mounts,
+    extra_mounts=(*extras.mounts, *trails_mounts),
   )
   return run_in_container(launch, workspace, may_summon=launch_scope.may_summon)
 
@@ -260,6 +254,8 @@ def _host_session(
     materialize_scoped_store(launch_scope.store, workspace.path / 'credentials')
   )
   runner_env[START_SESSION_BROXY_ENV] = '1'
+  if spec.no_trails:
+    runner_env['TRAILS_DISABLED'] = '1'
   harness.prepare_host_env(spec, workspace, worktree, runner_env)
   workspace.clear_session_end()
   if broker_enabled():
@@ -318,9 +314,12 @@ def start_session(spec: SessionSpec) -> int:
 
   if not harness.preflight_auth(spec):
     return 1
+  recipe = harness.scope_recipe(spec)
+  if spec.no_trails:
+    recipe = dataclasses.replace(recipe, optional_baseline=frozenset())
   try:
     scoped, may_summon, store = preflight_scoped_launch(
-      scoped_secrets(spec.session_bro, harness.scope_recipe(spec), llm_spec=spec.llm_spec),
+      scoped_secrets(spec.session_bro, recipe, llm_spec=spec.llm_spec),
       spec.session_bro,
       grant=spec.grant,
       revoke=spec.revoke,

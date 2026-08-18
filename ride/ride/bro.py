@@ -1,13 +1,10 @@
-import dataclasses
 import json
-from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from bro.launch.identity import bro_git_identity_env
 from bro.launch.llm_flags import resolve_native
 from bro.launch.scope import BRO_RUN_RECIPE, ScopeRecipe
-from bro.launch.trails import local_trails_mounts
 from bro.llm.llm import NativeLLMSpec
 from bro.llm.providers import LLMSelection, parse
 from bro.monitor import trail_pointer
@@ -18,38 +15,6 @@ from ride.harness import ContainerExtras
 if TYPE_CHECKING:
   from bro.base.args import Parser
   from ride.session import SessionSpec
-
-
-@dataclass(frozen=True)
-class BroOptions:
-  no_trails: bool
-  subject: Optional[str]
-
-  def dump(self) -> dict:
-    return dataclasses.asdict(self)
-
-  @classmethod
-  def load(cls, data: dict) -> 'BroOptions':
-    if data.keys() != {'no_trails', 'subject'}:
-      raise ValueError(f'unexpected bro option fields: {sorted(data.keys())}')
-    no_trails = data['no_trails']
-    subject = data['subject']
-    if not isinstance(no_trails, bool) or (subject is not None and not isinstance(subject, str)):
-      raise TypeError('invalid bro harness options')
-    return cls(no_trails=no_trails, subject=subject)
-
-
-def add_flags(parser: 'Parser') -> None:
-  parser.add_argument(
-    '--no-trails',
-    dest='no_trails',
-    action='store_true',
-    help='bro harness: disable native trail recording',
-  )
-
-
-def options(spec: 'SessionSpec') -> BroOptions:
-  return BroOptions.load(spec.harness_options)
 
 
 def _inner_arguments(spec: 'SessionSpec', resume_trail: Optional[str]) -> list[str]:
@@ -80,12 +45,11 @@ class BroHarness:
   name = 'bro'
 
   def add_flags(self, parser: 'Parser') -> None:
-    add_flags(parser)
+    del parser
 
   def scope_recipe(self, spec: 'SessionSpec') -> ScopeRecipe:
-    if not options(spec).no_trails:
-      return BRO_RUN_RECIPE
-    return dataclasses.replace(BRO_RUN_RECIPE, optional_baseline=frozenset())
+    del spec
+    return BRO_RUN_RECIPE
 
   def resolve_llm(self, value: str | None, bro_name: str) -> NativeLLMSpec:
     from bro.registry import get_class
@@ -97,8 +61,9 @@ class BroHarness:
     del spec
     return True
 
-  def command_options(self, spec: 'SessionSpec') -> tuple[list[str], list[str]]:
-    return ['--no-trails'] if options(spec).no_trails else [], []
+  def command_options(self, spec: 'SessionSpec') -> list[str]:
+    del spec
+    return []
 
   def session_exists(self, workspace: Workspace) -> bool:
     return trail_pointer.read(self.session_trail_pointer(workspace)) is not None
@@ -113,7 +78,7 @@ class BroHarness:
     from ride.session import load_resume_spec
 
     spec = load_resume_spec(workspace)
-    return None if spec is None else options(spec).subject
+    return None if spec is None else spec.subject
 
   def session_trail_pointer(self, workspace: Workspace) -> Path:
     return trail_pointer.broker_pointer(workspace.path)
@@ -125,18 +90,20 @@ class BroHarness:
       if resume_trail is None:
         raise ValueError(f'no bro harness trail recorded for workspace {workspace.name!r}')
     verb = 'run' if spec.solo else 'chat'
-    return ['bro', verb, spec.bro, *_inner_arguments(spec, resume_trail), '--in-place']
+    return [
+      'bro',
+      verb,
+      spec.bro,
+      *_inner_arguments(spec, resume_trail),
+      *spec.arguments,
+      '--in-place',
+    ]
 
   def container_extras(
     self, spec: 'SessionSpec', workspace: Workspace, scoped: ScopedSecrets
   ) -> ContainerExtras:
-    del workspace
-    env = dict(bro_git_identity_env(spec.bro))
-    if options(spec).no_trails:
-      # a run that records nothing binds no trails root
-      env['TRAILS_DISABLED'] = '1'
-      return ContainerExtras(env=env, mounts=())
-    return ContainerExtras(env=env, mounts=local_trails_mounts(scoped))
+    del workspace, scoped
+    return ContainerExtras(env=dict(bro_git_identity_env(spec.bro)), mounts=())
 
   def prepare_host_env(
     self, spec: 'SessionSpec', workspace: Workspace, worktree: Path, env: dict[str, str]
@@ -144,8 +111,6 @@ class BroHarness:
     del workspace, worktree
     env.update(bro_git_identity_env(spec.bro))
     env['RIDE_BRO'] = spec.bro
-    if options(spec).no_trails:
-      env['TRAILS_DISABLED'] = '1'
 
 
 BRO = BroHarness()

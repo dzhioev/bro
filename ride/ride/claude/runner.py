@@ -92,7 +92,7 @@ def run_in_place(spec: 'SessionSpec') -> int:
     claude_dir = _provision_host_claude_dir(workspace_dir(project, spec.name), tree, project)
     os.environ['CLAUDE_CONFIG_DIR'] = str(claude_dir)
 
-  claude_args = list(options(spec).arguments)
+  claude_args = list(spec.arguments)
   if spec.resume:
     projects_dir = claude_projects_dir(tree)
     latest = _latest_jsonl(projects_dir)
@@ -152,9 +152,10 @@ def run_in_place(spec: 'SessionSpec') -> int:
 
     # after the session context: the daemon's spawn snapshots os.environ, and
     # RIDE_SESSION_CONTEXT becomes the trail's launch-context attachment
-    recorder = _start_session_recorder(spec.name, tree, os.environ, llm=spec.llm_spec.dump())
-    if recorder is not None:
-      teardown.callback(recorder.stop)
+    if os.environ.get('TRAILS_DISABLED') is None:
+      recorder = _start_session_recorder(spec.name, tree, os.environ, llm=spec.llm_spec.dump())
+      if recorder is not None:
+        teardown.callback(recorder.stop)
 
     # gate the launch on full tool readiness: the argv build above overlapped
     # the server's own bro import, so much of the wait is already paid

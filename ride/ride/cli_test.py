@@ -5,7 +5,6 @@ import pytest
 
 import ride.cli as ride_cli
 from bro.workspace.model import Workspace
-from ride.claude.harness import options
 from ride.harness import get_harness
 
 
@@ -65,26 +64,26 @@ class TestSolo:
     assert spec.workspace_pinned
     assert not spec.drop
 
-  def test_forwards_claude_arguments_only_after_the_separator(self):
+  def test_forwards_arguments_only_after_the_separator(self):
     with patch('ride.cli.start_session', return_value=0) as start:
       ride_cli.main(['ride', 'solo', 'dev', 'hello', '--', '--debug', 'mcp'])
-    assert options(start.call_args.args[0]).arguments == ['--debug', 'mcp']
+    assert start.call_args.args[0].arguments == ['--debug', 'mcp']
 
-  def test_bro_solo_owns_no_trails(self, tmp_path):
-    from ride.bro import options as bro_options
-
+  def test_no_trails_is_a_neutral_flag_the_bro_harness_env_carries(self, tmp_path):
     with patch('ride.cli.start_session', return_value=0) as start:
       assert ride_cli.main(['ride', 'solo', '--harness', 'bro', '--no-trails', 'dev', 'hello']) == 0
     spec = start.call_args.args[0]
-    assert bro_options(spec).no_trails
+    assert spec.no_trails
     assert _inner_command(spec, tmp_path) == [
       'bro', 'run', 'dev', 'hello', '--hold', 'unattended', '--in-place'
     ]  # fmt: skip
 
-  def test_claude_rejects_bro_harness_flags(self, capsys):
-    with pytest.raises(SystemExit):
-      ride_cli.main(['ride', 'solo', '--no-trails', 'dev', 'hello'])
-    assert '--no-trails requires --harness bro' in capsys.readouterr().err
+  def test_no_trails_is_restated_in_the_claude_inner_argv(self, tmp_path):
+    with patch('ride.cli.start_session', return_value=0) as start:
+      assert ride_cli.main(['ride', 'solo', '--no-trails', 'dev', 'hello']) == 0
+    spec = start.call_args.args[0]
+    assert spec.no_trails
+    assert '--no-trails' in _inner_command(spec, tmp_path)
 
 
 class TestAlong:
@@ -126,10 +125,19 @@ class TestAlong:
       ride_cli.main(['ride', 'along', '--workspace', 'shared', '--drop', 'dev'])
     assert 'pinned workspaces are always kept' in capsys.readouterr().err
 
-  def test_forwards_claude_arguments_only_after_the_separator(self):
+  def test_forwards_arguments_only_after_the_separator(self):
     with patch('ride.cli.start_session', return_value=0) as start:
       ride_cli.main(['ride', 'along', 'dev', 'hello', '--', '--debug', 'mcp'])
-    assert options(start.call_args.args[0]).arguments == ['--debug', 'mcp']
+    assert start.call_args.args[0].arguments == ['--debug', 'mcp']
+
+  def test_forwarded_arguments_reach_the_bro_harness_too(self, tmp_path):
+    with patch('ride.cli.start_session', return_value=0) as start:
+      assert ride_cli.main(['ride', 'along', '--harness', 'bro', 'dev', '--', '--fork']) == 0
+    spec = start.call_args.args[0]
+    assert spec.arguments == ['--fork']
+    assert _inner_command(spec, tmp_path) == [
+      'bro', 'chat', 'dev', '--hold', 'attended', '--fork', '--in-place'
+    ]  # fmt: skip
 
   def test_raw_host_combination_errors(self, capsys):
     with pytest.raises(SystemExit):
