@@ -40,6 +40,7 @@ from bro.base import configs, credentials, log
 from bro.base.args import Parser
 from bro.launch.hold import session_hold
 from bro.monitor import health, trail_pointer, working_projects_dir
+from bro.summon import summoned_by_from_env
 from bro.trails.backends import CLAUDE_ADAPTER
 from bro.trails.model import BlazeRequest, payload_sha256
 from bro.trails.record.spine import Recording
@@ -302,6 +303,9 @@ class Recorder:
     self.llm = llm
     self.ride_command = ride_command
     self.started_after = started_after
+    # read once: every segment of this recorder lifetime belongs to the same
+    # summoned run, and the reader consumes the env var
+    self.summoned_by = summoned_by_from_env()
     self._active: Optional[_SegmentRecorder] = None
     self._consumed: set[str] = set()
     self._declined_signature: Optional[_Signature] = None
@@ -445,6 +449,7 @@ class Recorder:
       body=body,
       bro=os.environ.get('RIDE_BRO'),
       hold=session_hold(),
+      summoned_by=self.summoned_by,
       lineage=lineage,
     )
     result = self.client.blaze(request)

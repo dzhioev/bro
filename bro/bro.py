@@ -1,4 +1,3 @@
-import json
 import os
 import traceback
 from abc import ABC
@@ -30,7 +29,7 @@ from bro.llm.observer import (
 )
 from bro.llm.tracker import EndReason, NullTracker, ToolStepSource, Tracker
 from bro.prompts import get_prompt, hold_fragment
-from bro.summon import SUMMONER_ENV
+from bro.summon import summoned_by_from_env
 from bro.trails.record.bro import Recorder
 
 DEFAULT_LLM_SPEC: NativeLLMSpec = llm_llms_openai.LLMSpec()
@@ -43,42 +42,6 @@ def _observer_scope(observer: Observer) -> AbstractContextManager[Observer]:
   if isinstance(observer, AbstractContextManager):
     return observer
   return nullcontext(observer)
-
-
-def _summoned_by_from_env() -> Optional[dict[str, Any]]:
-  # consumed on read: tool subprocesses inherit this process's environment, so a
-  # nested in-place run inside the summoned child's container must not re-stamp
-  # the parent's summoned_by on its own trail — it was not itself summoned
-  raw = os.environ.pop(SUMMONER_ENV, None)
-  if raw is None:
-    return None
-  summoned_by = json.loads(raw)
-  if not isinstance(summoned_by, dict):
-    raise ValueError(f'{SUMMONER_ENV} must be a JSON object')
-  keys = set(summoned_by)
-  if keys == {'session'} and isinstance(summoned_by['session'], str):
-    return None
-  if keys == {'target', 'trail_id'} and all(isinstance(summoned_by[key], str) for key in keys):
-    return {'trail_id': summoned_by['trail_id']}
-  if not {'trail_id'}.issubset(keys) or not keys.issubset({'trail_id', 'step_id', 'index'}):
-    raise ValueError(f'{SUMMONER_ENV} has an invalid summoned_by shape')
-  trail_id = summoned_by['trail_id']
-  step_id = summoned_by.get('step_id')
-  index = summoned_by.get('index')
-  if (
-    not isinstance(trail_id, str)
-    or len(trail_id) == 0
-    or (
-      step_id is not None
-      and (not isinstance(step_id, int) or isinstance(step_id, bool) or step_id < 0)
-    )
-    or (
-      index is not None
-      and (step_id is None or not isinstance(index, int) or isinstance(index, bool) or index < 0)
-    )
-  ):
-    raise ValueError(f'{SUMMONER_ENV} has an invalid summoned_by shape')
-  return summoned_by
 
 
 def _default_factory() -> Tracker:
@@ -1120,7 +1083,7 @@ class BaseBro(ABC):
           observer=effective_observer,
           tracker=tracker,
           surface=surface,
-          summoned_by=_summoned_by_from_env(),
+          summoned_by=summoned_by_from_env(),
         )
       except Exception as error:
         effective_observer.on_event(TurnFailedEvent(str(error)))
