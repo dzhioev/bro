@@ -3,9 +3,9 @@
 
 Walks `git log <range>`, parses the footer emitted by
 `bro/workflow/commit_footer.py` (format owned by the `usage` module), and sums
-the per-model, per-class *deltas* across every commit in the range — which,
-under the squash-merge workflow, equals the true total spent producing that
-range (each session counted once).
+the per-model, per-class *deltas* across every commit in the range — the total
+spent producing it, each session counted once for what it had spent by the time
+its last commit was written.
 
 The four token classes (input / cache-write / cache-read / output) are reported
 separately: they differ in price by up to ~50x, so a single summed number would be

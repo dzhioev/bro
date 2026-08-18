@@ -259,7 +259,7 @@ class TestGroupFooters:
 
   def test_grouping_preserves_the_total(self, tmp_path, monkeypatch):
     # the accounting contract: however the branch is grouped, the landed footers
-    # sum to what the single squash would have carried
+    # sum to what one folded commit would have carried
     shas = self._repo_with_commits(
       tmp_path,
       [

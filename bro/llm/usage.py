@@ -38,8 +38,8 @@ thousands separator so it never collides with the `, ` joining model entries):
 
 `<agents>` is a `, `-joined list of surface identities — `Claude Code <version>`
 for a Claude Code session, the usage file's agent unversioned (a bro run
-publishes `bro//<name>`, e.g. `bro//dev`); a squash footer unions the
-agents of the commits it aggregates.
+publishes `bro//<name>`, e.g. `bro//dev`); an aggregated footer unions the
+agents of the commits it covers.
 `↑(…)` groups the upload classes (input, cache_write, cache_read, in that
 order); `↓` marks output. `parse_footer` also accepts the historic shape that
 compressed same-agent versions (`Claude Code 2.1.114, 2.1.120`), normalizing

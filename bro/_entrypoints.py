@@ -69,5 +69,9 @@ def bro_workflow_commit_footer():
   return _run('bro.workflow.commit_footer')
 
 
+def bro_workflow_fold_branch():
+  return _run('bro.workflow.fold_branch')
+
+
 def bro_workflow_land_pr():
   return _run('bro.workflow.land_pr')

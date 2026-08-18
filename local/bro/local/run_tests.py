@@ -190,6 +190,7 @@ PYTEST_FILES = [
   'bro/extra/github/app_test.py',
   'bro/extra/github/poll_pr_test.py',
   'bro/workflow/commit_footer_test.py',
+  'bro/workflow/fold_branch_test.py',
   'bro/workflow/land_pr_test.py',
   'bro/runtime/mcp_server_test.py',
   'bro/prompts/prompts_test.py',
