@@ -18,6 +18,7 @@ from bro.base.offload import off_loop
 from bro.channel import BroChannel
 from bro.datasources.base import DataSource
 from bro.datasources.man import ManPage, manual
+from bro.launch.hold import UNATTENDED, session_hold
 from bro.llm.llm import EFFORT_LEVELS, LLM, NativeLLMSpec
 from bro.llm.observer import (
   NullObserver,
@@ -535,9 +536,7 @@ def _unattended_claude_session() -> bool:
   # BRO_HOLD carries the session's user-involvement level, RIDE_RUNNER_PID makes
   # it terminatable (both exported by ride's in-place runner); `raise` needs an
   # unattended session and a runner to signal.
-  return (
-    os.environ.get('BRO_HOLD') == 'unattended' and os.environ.get('RIDE_RUNNER_PID') is not None
-  )
+  return session_hold() == UNATTENDED and os.environ.get('RIDE_RUNNER_PID') is not None
 
 
 def feature(name: str) -> Condition:

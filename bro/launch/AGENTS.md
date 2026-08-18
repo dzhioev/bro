@@ -36,6 +36,7 @@ Every native run and every managed mode registers one flag set from `llm_flags.p
 - `spawn.py` — broker-root composition, root lifecycle handlers, native workspace trail-pointer publication, summon lowering, and per-root `SummonControl` wiring.
 - `summon_control.py` — host authorization, allow-list resolution, audit/status bookkeeping, and request lifecycle. The peer wire and self-contained CLI are `bro/summon.py`.
 - `identity.py` — managed-session git identity.
+- `hold.py` — the session hold as the environment carries it, and the interactive-session predicate over it.
 - `broxy.py` — host-session wrapper around `broxy launch`, giving an in-place runner a session-local channel proxy with context-managed teardown.
 - `e2e_test.py` — live Docker launch coverage, outside the default test roster.
 

@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 
 from bro.base import log
 from bro.launch.broxy import _start_session_broxy
+from bro.launch.hold import HOLD_VARIABLE
 from bro.launch.identity import bro_git_identity_env
 from bro.monitor import claude_projects_dir
 from bro.workspace.git import git_out
@@ -121,7 +122,7 @@ def run_in_place(spec: 'SessionSpec') -> int:
   # hold and kill wiring for the `raise` service tool's mounts (bro/bro.py).
   # both overwrite any ambient value: a session launched from inside another
   # must not inherit its hold or kill target.
-  os.environ['BRO_HOLD'] = spec.hold
+  os.environ[HOLD_VARIABLE] = spec.hold
   os.environ['RIDE_RUNNER_PID'] = str(os.getpid())
 
   with contextlib.ExitStack() as teardown:

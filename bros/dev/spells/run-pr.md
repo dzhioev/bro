@@ -86,7 +86,7 @@ Don't fragment trivially (every hunk as its own commit) and don't bundle unrelat
 Match the repo's conventions — the recent log (step 1) is the reference, and the repo's docs may spell them out. Then:
 
 - **Task metadata**: add the task link the repo requires (resolve it via `brog::get_task(task_id).url`; the task id comes from `RIDE_TASK_ID` or a task created earlier in this session). Omit task metadata when no task id is available.
-- **Never** include `Co-Authored-By:` lines or generated-by boilerplate unless the repo's policy explicitly requires them.
+- **Never** hand-write `Co-Authored-By:` lines or generated-by boilerplate. An interactive session's commit hook adds the co-author trailer itself (`bro/workflow/co_author.py`); a repo whose policy wants more says so.
 
 ### 6. Commit
 

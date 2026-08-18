@@ -3,6 +3,7 @@ import os
 import subprocess
 
 import bro.llm.usage as usage
+import bro.workflow.co_author as co_author
 from bro.workflow.commit_footer import (
   State,
   _aggregate,
@@ -196,6 +197,15 @@ class TestAppend:
     assert message.startswith('subject\n\nbody\n\n> created with Claude Code 2.1 | ')
     assert message.endswith('↓100\n')
     assert state.staged[OPUS] == C(output=100)
+
+  def test_an_interactive_session_credits_the_human_after_the_footer(self, tmp_path, monkeypatch):
+    self._agent_environment(monkeypatch)
+    monkeypatch.setattr(co_author, 'trailer', lambda: 'Co-Authored-By: Ada <ada@example.com>')
+    path = self._message(tmp_path, 'subject\n\nbody\n')
+    _append(path, State(tmp_path / 'state.json'))
+    message = path.read_text()
+    assert '> created with Claude Code 2.1 | ' in message
+    assert message.endswith('\n\nCo-Authored-By: Ada <ada@example.com>\n')
 
   def test_footered_message_kept_verbatim(self, tmp_path, monkeypatch):
     # an amend or rebase reword re-runs the hook; the commit keeps its original
