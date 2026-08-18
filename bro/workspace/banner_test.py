@@ -96,6 +96,22 @@ class TestSessionFacts:
     assert facts.shell_command == 'ride along feature'
     assert facts.ride_command == 'ride along feature'
 
+  def test_a_directory_in_no_repository_leaves_the_path_underived(self, monkeypatch):
+    def no_project():
+      raise workspace_paths.RuntimeLocationError('no project')
+
+    monkeypatch.setattr(workspace_paths, 'project_root', no_project)
+    monkeypatch.setenv('RIDE_WORKSPACE', 'feature')
+
+    assert SessionFacts.collect().host_workspace is None
+
+  def test_an_unusable_data_home_leaves_the_path_underived(self, monkeypatch, tmp_path):
+    monkeypatch.setattr(workspace_paths, 'project_root', lambda: tmp_path / 'project')
+    monkeypatch.setenv('RIDE_WORKSPACE', 'feature')
+    monkeypatch.setenv('XDG_DATA_HOME', 'share')
+
+    assert SessionFacts.collect().host_workspace is None
+
   def test_shell_command_falls_back_to_ride_command(self, monkeypatch):
     monkeypatch.setenv('RIDE_COMMAND', 'ride along x')
     facts = SessionFacts.collect()
