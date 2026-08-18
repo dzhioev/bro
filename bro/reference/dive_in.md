@@ -32,9 +32,9 @@ An omitted hold is forwarded unset and takes `ride along`'s default: `attended` 
 
 ## Bro and launch flags
 
-`dive-in` resolves the project's default bro itself when `--bro` is omitted, because `ride along` requires the bro positional. It forwards `--host`, `--hold`, `--grant`, `--revoke`, `--into`, `--raw`, and the LLM-selection flags. The current stage supports the Claude harness only; `--raw` remains its bare mode.
+`dive-in` resolves the project's default bro itself when `--bro` is omitted, because `ride along` requires the bro positional. It forwards `--host`, `--hold`, `--grant`, `--revoke`, `--into`, `--no-trails`, `--harness` with every harness's own flags (claude's `--raw`), and the LLM-selection flags.
 
-Task prefetch reads brog through the same prospective Claude scope and the same grant/revoke values that the session receives. A missing backend or invalid scope override fails before a workspace is launched.
+Task prefetch reads brog through the selected harness's prospective scope and the same grant/revoke values that the session receives. A missing backend or invalid scope override fails before a workspace is launched.
 
 `-n / --dry-run` prints the final `ride along` command with shell quoting.
 

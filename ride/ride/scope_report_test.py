@@ -7,7 +7,14 @@ from ride.scope_report import report_scope
 
 
 def _run(
-  capsys, *, selection, scoped, available=lambda name: True, bro=None, raw=False, harness=None
+  capsys,
+  *,
+  selection,
+  scoped,
+  available=lambda name: True,
+  bro=None,
+  harness='claude',
+  options=None,
 ):
   with (
     patch('ride.scope_report.project_root', return_value=Path('/repo')),
@@ -19,7 +26,9 @@ def _run(
     patch('ride.scope_report.scoped_secrets', return_value=scoped) as scope,
     patch('ride.scope_report.credentials.available', available),
   ):
-    rc = report_scope(bro=bro, raw=raw, harness=harness)
+    rc = report_scope(
+      bro=bro, harness=harness, options=options if options is not None else {'raw': False}
+    )
   return rc, capsys.readouterr().out, scope
 
 
@@ -54,7 +63,11 @@ class TestReportScope:
 
   def test_raw_scopes_the_raw_flavor_and_bro_overrides_the_default(self, capsys):
     _, out, scope = _run(
-      capsys, selection={}, scoped=ScopedSecrets({'trails'}, set(), True), bro='dev', raw=True
+      capsys,
+      selection={},
+      scoped=ScopedSecrets({'trails'}, set(), True),
+      bro='dev',
+      options={'raw': True},
     )
     assert 'bro:     dev (claude-raw)' in out
     assert scope.call_args.args[0] == 'dev'
@@ -65,6 +78,7 @@ class TestReportScope:
       selection={},
       scoped=ScopedSecrets({'openai'}, {'trails'}, False),
       harness='bro',
+      options={},
     )
     assert 'bro:     bro-dev (bro-run)' in out
     assert scope.call_args.args[1].name == 'bro-run'

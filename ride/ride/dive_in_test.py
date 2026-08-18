@@ -101,9 +101,15 @@ class TestLaunchCommand:
     # must not preempt it
     assert 'RIDE_BRO' not in os.environ
 
+  def test_harness_rides_the_forwarded_flags(self, fake_proj, capsys):
+    rc = dive_in.main(['dive-in', '-n', '--harness', 'bro'])
+    assert rc == 0
+    args, harness_arguments = _parse_emitted(shlex.split(capsys.readouterr().out.strip()))
+    assert args['harness'] == 'bro'
+
   def test_raw_rides_the_forwarded_flags(self, fake_proj, capsys, monkeypatch):
     monkeypatch.delenv('RIDE_BRO', raising=False)
-    rc = dive_in.dive_in(forwarded=['--raw'], dry_run=True, bro='dev', raw=True)
+    rc = dive_in.dive_in(forwarded=['--raw'], dry_run=True, bro='dev')
     assert rc == 0
     args, harness_arguments = _parse_emitted(shlex.split(capsys.readouterr().out.strip()))
     assert args['bro'] == 'dev'
@@ -173,7 +179,7 @@ class TestNewMode:
 
   def test_raw_flavor_uses_the_same_spell_command(self, fake_proj, capsys):
     rc = dive_in.dive_in(
-      forwarded=['--raw'], dry_run=True, new=True, bro='bro-dev', raw=True, command='do a thing'
+      forwarded=['--raw'], dry_run=True, new=True, bro='bro-dev', command='do a thing'
     )
     assert rc == 0
     tokens = shlex.split(capsys.readouterr().out.strip())
@@ -183,7 +189,9 @@ class TestNewMode:
 class TestTaskMode:
   @pytest.fixture(autouse=True)
   def fake_backend(self, monkeypatch):
-    monkeypatch.setattr(dive_in, '_task_system', lambda grant, revoke, bro, raw: object())
+    monkeypatch.setattr(
+      dive_in, '_task_system', lambda grant, revoke, bro, harness, harness_options: object()
+    )
 
   def test_every_launch_picks_a_fresh_workspace_name(self, fake_proj, monkeypatch, capsys):
     monkeypatch.setattr(
@@ -234,8 +242,10 @@ class TestTaskMode:
   def test_prefetch_binds_the_launch_scope_flags(self, fake_proj, monkeypatch, capsys):
     captured = {}
 
-    def fake_task_system(grant, revoke, bro, raw):
-      captured.update(grant=grant, revoke=revoke, bro=bro, raw=raw)
+    def fake_task_system(grant, revoke, bro, harness, harness_options):
+      captured.update(
+        grant=grant, revoke=revoke, bro=bro, harness=harness, harness_options=harness_options
+      )
       return object()
 
     monkeypatch.setattr(dive_in, '_task_system', fake_task_system)
@@ -243,7 +253,13 @@ class TestTaskMode:
     argv = ['dive-in', '-n', '-t', UUID, '--grant', 'brog+github']
     rc = dive_in.main([*argv, '--bro', 'dev', '--raw'])
     assert rc == 0
-    assert captured == {'grant': ['brog+github'], 'revoke': [], 'bro': 'dev', 'raw': True}
+    assert captured == {
+      'grant': ['brog+github'],
+      'revoke': [],
+      'bro': 'dev',
+      'harness': 'claude',
+      'harness_options': {'raw': True},
+    }
     # the flags still ride into the forwarded `ride along` untouched
     args, harness_arguments = _parse_emitted(shlex.split(capsys.readouterr().out.strip()))
     assert args['grant'] == ['brog+github']
@@ -252,7 +268,7 @@ class TestTaskMode:
   def test_scope_without_brog_fails_before_any_launch(self, fake_proj, monkeypatch, capsys):
     from bro.base import credentials
 
-    def no_brog(grant, revoke, bro, raw):
+    def no_brog(grant, revoke, bro, harness, harness_options):
       raise credentials.SecretNotFound('brog')
 
     monkeypatch.setattr(dive_in, '_task_system', no_brog)
@@ -263,7 +279,7 @@ class TestTaskMode:
   def test_bad_scope_override_fails_before_any_launch(self, fake_proj, monkeypatch):
     from bro.launch.scope import LaunchScopeError
 
-    def bad_override(grant, revoke, bro, raw):
+    def bad_override(grant, revoke, bro, harness, harness_options):
       raise LaunchScopeError("cannot grant 'brog': already in the scoped credential set")
 
     monkeypatch.setattr(dive_in, '_task_system', bad_override)
@@ -306,23 +322,31 @@ class TestTaskSystem:
 
   def test_reads_brog_through_the_launch_view(self, monkeypatch):
     import bro.brog.github as brog_github
-    from ride.claude.harness import scope_recipe
+    from ride.claude.harness import CLAUDE
 
     calls: dict = {}
     self._fake_wiring(monkeypatch, calls)
-    system = dive_in._task_system(['brog+github'], [], None, False)
-    assert calls['scoped'] == ('bro-dev', scope_recipe(False))
+    system = dive_in._task_system(['brog+github'], [], None, 'claude', {'raw': False})
+    assert calls['scoped'] == ('bro-dev', CLAUDE.scope_recipe({'raw': False}))
     assert calls['view'] == ('base-scope', ['brog+github'], [])
     assert calls['read'] == 'brog'
     assert isinstance(system, brog_github.System)
 
   def test_raw_flavor_scopes_the_raw_surface_and_explicit_bro_wins(self, monkeypatch):
-    from ride.claude.harness import scope_recipe
+    from ride.claude.harness import CLAUDE
 
     calls: dict = {}
     self._fake_wiring(monkeypatch, calls)
-    dive_in._task_system([], [], 'dev', True)
-    assert calls['scoped'] == ('dev', scope_recipe(True))
+    dive_in._task_system([], [], 'dev', 'claude', {'raw': True})
+    assert calls['scoped'] == ('dev', CLAUDE.scope_recipe({'raw': True}))
+
+  def test_bro_harness_scopes_the_native_recipe(self, monkeypatch):
+    from bro.launch.scope import BRO_RUN_RECIPE
+
+    calls: dict = {}
+    self._fake_wiring(monkeypatch, calls)
+    dive_in._task_system([], [], None, 'bro', {})
+    assert calls['scoped'] == ('bro-dev', BRO_RUN_RECIPE)
 
 
 class TestPrefetchTask:

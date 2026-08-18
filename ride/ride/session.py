@@ -314,7 +314,7 @@ def start_session(spec: SessionSpec) -> int:
 
   if not harness.preflight_auth(spec):
     return 1
-  recipe = harness.scope_recipe(spec)
+  recipe = harness.scope_recipe(spec.harness_options)
   if spec.no_trails:
     recipe = dataclasses.replace(recipe, optional_baseline=frozenset())
   try:

@@ -14,9 +14,14 @@ from bro.workspace.containers import exec_in_workspace
 from bro.workspace.model import Workspace
 from bro.workspace.paths import RuntimeLocationError, fresh_workspace_name, project_root
 from bro.workspace.project import project_config
-from ride.claude.harness import ClaudeOptions, add_flags as add_claude_flags
 from ride.clean import clean_workspaces
-from ride.flags import add_scope_flags, add_session_flags, default_hold
+from ride.flags import (
+  add_harness_flags,
+  add_scope_flags,
+  add_session_flags,
+  default_hold,
+  pop_harness_options,
+)
 from ride.harness import get_harness
 from ride.listing import list_workspaces
 from ride.session import SessionSpec, resume_session, start_session
@@ -49,14 +54,8 @@ def _add_mode_flags(parser: Parser) -> None:
     metavar='NAME',
     help='pin or reuse NAME (pinned workspaces are always kept)',
   )
-  parser.add_argument(
-    '--harness',
-    choices=('claude', 'bro'),
-    default=None,
-    help='driving harness (default: project [tool.bro] harness, then claude)',
-  )
+  add_harness_flags(parser)
   add_session_flags(parser, include_bro=False)
-  add_claude_flags(parser)
   parser.add_argument('--in-place', action='store_true', env=False, help=SUPPRESS)
   parser.add_argument('--resume', action='store_true', env=False, help=SUPPRESS)
 
@@ -120,8 +119,7 @@ def build_parser() -> Parser:
 
   scope = subparsers.add_parser('scope', help='print a prospective session credential scope')
   scope.add_argument('--bro', default=None, help='bro to scope (default: project default)')
-  scope.add_argument('--harness', choices=('claude', 'bro'), default=None)
-  scope.add_argument('--raw', action='store_true', help='scope Claude raw mode')
+  add_harness_flags(scope)
 
   banner_parser = subparsers.add_parser('banner', help='print the session banner')
   banner_parser.add_argument('--llm', action='store_true', help='emit plain key:value lines')
@@ -181,19 +179,11 @@ def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, sol
     drop_piece_flags(args)
   except (LLMSelectionError, ValueError) as error:
     parser.error(str(error))
-  raw = args.pop('raw')
   args['grant'] = args['grant'] or []
   args['revoke'] = args['revoke'] or []
   bro = args.pop('bro')
   prompt = args.pop('prompt')
-  if harness_name == 'claude':
-    if raw and args['host']:
-      parser.error('--raw cannot be combined with --host')
-    harness_options = ClaudeOptions(raw=raw).dump()
-  else:
-    if raw:
-      parser.error('--raw requires --harness claude')
-    harness_options = {}
+  harness_options = pop_harness_options(parser, args, harness_name, solo=solo, host=args['host'])
   try:
     resolved_llm = harness.resolve_llm(args['llm'], bro)
   except (KeyError, LLMSelectionError, ValueError) as error:
@@ -263,6 +253,8 @@ def main(argv: list[str]) -> Optional[int]:
   if command == 'scope':
     from ride.scope_report import report_scope
 
-    return report_scope(bro=args['bro'], harness=args['harness'], raw=args['raw'])
+    harness_name = args['harness'] or project_config().harness
+    options = pop_harness_options(parser, args, harness_name, solo=False, host=False)
+    return report_scope(bro=args['bro'], harness=harness_name, options=options)
   assert command == 'banner'
   return banner(llm=args['llm'])

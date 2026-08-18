@@ -179,7 +179,12 @@ class TestLifecycle:
   def test_scope_dispatches_harness(self):
     with patch('ride.scope_report.report_scope', return_value=0) as report:
       assert ride_cli.main(['ride', 'scope', '--harness', 'claude', '--raw']) == 0
-    assert report.call_args.kwargs == {'bro': None, 'harness': 'claude', 'raw': True}
+    assert report.call_args.kwargs == {'bro': None, 'harness': 'claude', 'options': {'raw': True}}
+
+  def test_scope_rejects_a_non_selected_harness_flag(self, capsys):
+    with pytest.raises(SystemExit):
+      ride_cli.main(['ride', 'scope', '--harness', 'bro', '--raw'])
+    assert '--raw requires --harness claude' in capsys.readouterr().err
 
   def test_an_unusable_runtime_location_is_a_cli_error(self, monkeypatch, caplog):
     monkeypatch.setenv('XDG_DATA_HOME', 'share')

@@ -14,9 +14,9 @@ from bro.launch.scope import LaunchScopeError, launch_view_store, scoped_secrets
 from bro.workspace.git import fetch_ref
 from bro.workspace.paths import fresh_workspace_name, project_root
 from bro.workspace.project import project_config
-from ride.claude.harness import scope_recipe
 from ride.cli import reports_location_errors
-from ride.flags import add_forwarded_flags, extract_forwarded_argv
+from ride.flags import add_forwarded_flags, extract_forwarded_argv, pop_harness_options
+from ride.harness import get_harness
 
 __cli_name__ = 'dive-in'
 
@@ -72,7 +72,7 @@ def _prefetch_task(system: brog_system.System, task_ref: str) -> tuple[brog_mode
 
 
 def _task_system(
-  grant: list[str], revoke: list[str], bro: Optional[str], raw: bool
+  grant: list[str], revoke: list[str], bro: Optional[str], harness: str, harness_options: dict
 ) -> brog_system.System:
   """the brog backend for the task prefetch, reading `brog` through the launch's
   own credential binding (`launch_view_store`) — so `--grant`/`--revoke` select
@@ -80,7 +80,7 @@ def _task_system(
   project = project_config()
   bro_name = bro if bro is not None else project.default_bro
   store = launch_view_store(
-    scoped_secrets(bro_name, scope_recipe(raw)),
+    scoped_secrets(bro_name, get_harness(harness).scope_recipe(harness_options)),
     grant=grant,
     revoke=revoke,
   )
@@ -96,12 +96,13 @@ def dive_in(
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
   bro: Optional[str] = None,
-  raw: bool = False,
+  harness: str = 'claude',
+  harness_options: Optional[dict] = None,
 ) -> int:
   """launch the session. session shaping — the bro (prompt, spells, MCP
-  namespaces) selected by `--bro` or the project default, or the `--raw`
-  flavor — rides the forwarded flags; dive-in adds nothing of its own beyond
-  binding the task prefetch to the same scope (`_task_system`)."""
+  namespaces) selected by `--bro` or the project default, the harness, or the
+  claude `--raw` flavor — rides the forwarded flags; dive-in adds nothing of
+  its own beyond binding the task prefetch to the same scope (`_task_system`)."""
   prompt: Optional[str] = None
   if new:
     base = _slugify(command) if command is not None else ''
@@ -112,7 +113,13 @@ def dive_in(
     prompt = '[[fix --new ""]]' if command is None else f'[[fix --new {command}]]'
   elif task is not None:
     try:
-      system = _task_system(grant or [], revoke or [], bro, raw)
+      system = _task_system(
+        grant or [],
+        revoke or [],
+        bro,
+        harness,
+        harness_options if harness_options is not None else {},
+      )
     except (LaunchScopeError, credentials.SecretNotFound, ValueError) as error:
       log.error('cannot open the task tracker for the prefetch: %s', error)
       return 1
@@ -180,7 +187,17 @@ def main(argv: list[str]) -> Optional[int]:
       args['into'] = base_ref
   # the prefetch binds to the same scope the session launches with, so the
   # scope-shaping flags are read here as well as forwarded
-  scope_args = {key: args[key] for key in ('grant', 'revoke', 'bro', 'raw')}
+  harness_name = args['harness'] or project_config().harness
+  harness_options = pop_harness_options(
+    parser, dict(args), harness_name, solo=False, host=args['host']
+  )
+  scope_args = {key: args[key] for key in ('grant', 'revoke', 'bro')}
   args['bro'] = None
   forwarded = extract_forwarded_argv(args)
-  return dive_in(forwarded=forwarded, **scope_args, **args)
+  return dive_in(
+    forwarded=forwarded,
+    harness=harness_name,
+    harness_options=harness_options,
+    **scope_args,
+    **args,
+  )
