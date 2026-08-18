@@ -248,7 +248,7 @@ class TestRawLaunch:
     assert '# Attended session' in attended.system_prompt
     assert 'full authorization' in attended.system_prompt
     assert '--dangerously-skip-permissions' in attended.argv
-    guided = self._launch().system_prompt  # the DEFAULT_HOLD launch
+    guided = self._launch(hold='guided').system_prompt
     assert '# Guided session' in guided
     assert 'full authorization' not in guided
     # the fragment renders at build — no directive may leak into the prompt

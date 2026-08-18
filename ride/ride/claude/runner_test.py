@@ -183,8 +183,8 @@ class TestRunInPlace:
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
       h.env['BRO_HOLD'] = 'unattended'
-      assert ride_runner.run_in_place(_spec()) == 0
-      assert h.env['BRO_HOLD'] == 'guided'
+      assert ride_runner.run_in_place(_spec(hold='attended')) == 0
+      assert h.env['BRO_HOLD'] == 'attended'
 
   def test_exports_its_own_pid_as_the_raise_kill_target(self, monkeypatch, tmp_path):
     # overwriting the ambient value: an inherited pid would name a foreign runner

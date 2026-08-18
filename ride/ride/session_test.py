@@ -18,7 +18,6 @@ from bro.launch.scope import ScopedSecrets
 from bro.workspace.metadata import WorkspaceKind
 from bro.workspace.model import Workspace
 from ride.claude.harness import ClaudeOptions
-from ride.flags import DEFAULT_HOLD
 
 
 def _spec(
@@ -26,7 +25,7 @@ def _spec(
   name: str = 'w',
   host: bool = False,
   drop: bool = False,
-  hold: str = DEFAULT_HOLD,
+  hold: str = 'attended',
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
   llm: Optional[str] = None,
@@ -257,7 +256,7 @@ class TestContainerCommand:
     command = h.run_in_container.call_args.args[0].command
     assert command == [
       'ride', 'along', '--in-place', '--workspace', 'w', '--harness', 'claude',
-      '--llm', '::xhigh+fast', 'dev', 'go',
+      '--hold', 'attended', '--llm', '::xhigh+fast', 'dev', 'go',
     ]  # fmt: skip
 
   def test_bro_carried_in_command_and_stamped_into_the_container_env(self):
@@ -273,6 +272,8 @@ class TestContainerCommand:
       'w',
       '--harness',
       'claude',
+      '--hold',
+      'attended',
       'dev',
     ]
     # RIDE_BRO themes the whole container (ride exec shells), set explicitly in the
@@ -313,6 +314,8 @@ class TestContainerCommand:
       '--harness',
       'claude',
       '--raw',
+      '--hold',
+      'attended',
       'dev',
     ]
 
@@ -327,7 +330,7 @@ class TestContainerCommand:
     assert not launch.tty
     assert launch.command == [
       'ride', 'solo', '--in-place', '--workspace', 'w', '--harness', 'claude',
-      'bro-dev', 'go',
+      '--hold', 'unattended', 'bro-dev', 'go',
     ]  # fmt: skip
 
   def test_ride_session_stamps_the_default_bro_as_ride_bro(self):
@@ -389,6 +392,8 @@ class TestContainerCommand:
       '--harness',
       'claude',
       '--resume',
+      '--hold',
+      'attended',
       'bro-dev',
     ]
 
@@ -421,9 +426,10 @@ class TestCommandArgv:
       claude_args=['--foo'],
     ).to_command_argv()
     assert parts == [
-      'ride', 'along', '--drop', '--llm', '::xhigh+fast', '--harness', 'claude',
-      '--workspace', 'w', '--grant', 'gmail_creds', '--grant', '@bro',
-      '--revoke', 'notion', '--into', 'feature', 'dev', '--', '--foo',
+      'ride', 'along', '--drop', '--hold', 'attended', '--llm', '::xhigh+fast',
+      '--harness', 'claude', '--workspace', 'w', '--grant', 'gmail_creds',
+      '--grant', '@bro', '--revoke', 'notion', '--into', 'feature', 'dev',
+      '--', '--foo',
     ]  # fmt: skip
 
   def test_host_session_carries_the_host_flag(self):
@@ -441,13 +447,13 @@ class TestCommandArgv:
       'bro-dev',
     ]
 
-  def test_default_hold_is_elided(self):
-    # the parser's default hold stays implicit in the reconstructed command
-    assert _spec().to_command_argv() == [
+  def test_the_resolved_hold_is_restated_even_at_its_default(self):
+    # the reconstruction never trusts a re-parse to re-derive the default
+    assert _spec(hold='attended').to_command_argv() == [
       'ride',
       'along',
       '--hold',
-      'guided',
+      'attended',
       '--harness',
       'claude',
       '--workspace',
@@ -463,6 +469,8 @@ class TestCommandArgv:
     assert automatic.to_command_argv() == [
       'ride',
       'solo',
+      '--hold',
+      'unattended',
       '--harness',
       'claude',
       'bro-dev',
@@ -472,6 +480,8 @@ class TestCommandArgv:
       'ride',
       'solo',
       '--keep',
+      '--hold',
+      'unattended',
       '--harness',
       'claude',
       'bro-dev',
@@ -672,6 +682,8 @@ class TestInPlaceArgv:
       'claude',
       '--resume',
       '--raw',
+      '--hold',
+      'attended',
       'dev',
     ]
 

@@ -10,7 +10,7 @@
 - `ride/session.py` — harness-neutral outer lifecycle: recorded `SessionSpec`, base resolution, auth/scope preflight, workspace kind and lock, resume records, launch dispatch, and keep/drop finish behavior.
 - `ride/harness.py` — the `Harness` protocol and lazy harness resolver.
 - `ride/bro.py`, `ride/bro_session.py` — native harness implementation: typed options, native recipe resolution, shared bro-run container composition, provisioned host-worktree launch, workspace trail pointer, and exact-recipe continuation.
-- `ride/flags.py` — common session, scope, and LLM flag registration.
+- `ride/flags.py` — common session, scope, and LLM flag registration, and the default an omitted `--hold` resolves to.
 - `ride/listing.py`, `ride/clean.py`, `ride/scope_report.py` — lifecycle implementations.
 - `ride/claude/` — the Claude Code harness implementation; see `ride/claude/AGENTS.md`.
 
@@ -24,5 +24,6 @@
 - Host runtime state lives under the user's checkout-keyed runtime state root, which a launch creates before recording a workspace. Container trails and summon status use dedicated fixed absolute mounts.
 - A pinned mode-verb workspace is never auto-dropped. An unpinned `along` workspace is kept unless `--drop` is explicit; an unpinned `solo` workspace is dropped after a clean exit unless `--keep` is explicit.
 - A solo resume becomes an along session and takes along's host-sensitive default hold; the unattended solo hold describes a run with no human channel.
+- Every reconstructed session argv restates the resolved `--hold`. The inner argv cannot carry `--host`, so a re-parse cannot be trusted to re-derive a hold that was resolved against it.
 - `ride` refuses nested launches while process-host mode is unavailable, on the container probe rather than on any marker the environment carries.
 - Every console script this distribution ships wraps its `main` in `ride.cli.reports_location_errors`, so an environment naming no runtime location fails as a CLI error.

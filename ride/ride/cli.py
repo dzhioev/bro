@@ -17,7 +17,7 @@ from bro.workspace.project import project_config
 from ride.bro import BroOptions, add_flags as add_bro_flags
 from ride.claude.harness import ClaudeOptions, add_flags as add_claude_flags
 from ride.clean import clean_workspaces
-from ride.flags import add_scope_flags, add_session_flags
+from ride.flags import add_scope_flags, add_session_flags, default_hold
 from ride.harness import get_harness
 from ride.listing import list_workspaces
 from ride.session import SessionSpec, resume_session, start_session
@@ -173,7 +173,7 @@ def _start_mode(parser: Parser, args: dict, harness_arguments: list[str], *, sol
     if workspace is None:
       parser.error('--in-place requires --workspace')
   if args['hold'] is None:
-    args['hold'] = 'unattended' if solo else 'guided' if args['host'] else 'attended'
+    args['hold'] = default_hold(solo=solo, host=args['host'])
   harness_name = args.pop('harness') or project_config().harness
   try:
     harness = get_harness(harness_name)

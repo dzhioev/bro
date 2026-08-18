@@ -13,6 +13,7 @@ from bro.workspace.metadata import WorkspaceKind
 from bro.workspace.model import KindMismatch, SessionBusy, Workspace
 from bro.workspace.paths import ensure_runtime_root, in_container, project_root
 from bro.workspace.store import ScopedSecrets
+from ride.flags import default_hold
 from ride.harness import Harness, get_harness
 
 
@@ -42,16 +43,6 @@ class SessionSpec:
     return self.bro
 
   @property
-  def along_default_hold(self) -> str:
-    return 'guided' if self.host else 'attended'
-
-  @property
-  def default_hold(self) -> str:
-    if self.solo:
-      return 'unattended'
-    return self.along_default_hold
-
-  @property
   def llm_spec(self) -> LLMSpec:
     return LLMSpec.from_dict(self.resolved_llm)
 
@@ -69,8 +60,7 @@ class SessionSpec:
       flags['--keep'] = not self.drop
     verb = 'solo' if self.solo else 'along'
     parts = ['ride', verb, *(flag for flag, enabled in flags.items() if enabled)]
-    if self.hold != self.default_hold:
-      parts.extend(['--hold', self.hold])
+    parts.extend(['--hold', self.hold])
     if self.llm is not None:
       parts.extend(['--llm', self.llm])
     parts.extend(['--harness', self.harness])
@@ -98,7 +88,7 @@ class SessionSpec:
     return replace(
       self,
       drop=False,
-      hold=self.along_default_hold if self.solo else self.hold,
+      hold=default_hold(solo=False, host=self.host) if self.solo else self.hold,
       solo=False,
       resume=True,
       into=None,

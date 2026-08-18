@@ -136,8 +136,7 @@ class ClaudeHarness:
       'claude',
       *(flag for flag, enabled in flags.items() if enabled),
     ]
-    if spec.hold != ('unattended' if spec.solo else 'guided'):
-      parts.extend(['--hold', spec.hold])
+    parts.extend(['--hold', spec.hold])
     if spec.llm is not None:
       parts.extend(['--llm', spec.llm])
     parts.append(spec.bro)
