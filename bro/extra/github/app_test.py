@@ -161,11 +161,15 @@ class TestSource:
     ]
 
   @pytest.mark.skipif(os.geteuid() == 0, reason='root writes through a read-only directory')
-  def test_a_read_only_store_mints_per_read(self, bro_dir: Path, monkeypatch):
+  def test_a_read_only_store_holds_in_the_process(self, bro_dir: Path, monkeypatch):
     mint = self._configured(bro_dir, monkeypatch, timedelta(hours=1))
+    source = app.Source('github_app_bot.json')
     bro_dir.chmod(0o500)
     try:
-      assert app.Source('github_app_bot.json').fetch() == 'ghs_1'
+      assert source.fetch() == 'ghs_1'
+      assert source.fetch() == 'ghs_1'
+      assert mint.call_count == 1
+      # nothing published, so a second process has nothing to read
       assert app.Source('github_app_bot.json').fetch() == 'ghs_2'
     finally:
       bro_dir.chmod(0o700)
