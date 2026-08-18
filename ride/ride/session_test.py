@@ -720,8 +720,8 @@ class TestSessionBro:
     assert _spec().session_bro == 'bro-dev'
 
   def test_raw_selects_the_harness_scope_recipe(self):
-    assert claude_harness.CLAUDE.scope_recipe(_spec(raw=True)).name == 'claude-raw'
-    assert claude_harness.CLAUDE.scope_recipe(_spec()).name == 'claude-full'
+    assert claude_harness.CLAUDE.scope_recipe(_spec(raw=True).harness_options).name == 'claude-raw'
+    assert claude_harness.CLAUDE.scope_recipe(_spec().harness_options).name == 'claude-full'
 
 
 class TestConcurrentSessionGuard:

@@ -44,11 +44,16 @@ def _inner_arguments(spec: 'SessionSpec', resume_trail: Optional[str]) -> list[s
 class BroHarness:
   name = 'bro'
 
-  def add_flags(self, parser: 'Parser') -> None:
+  def add_flags(self, parser: 'Parser') -> tuple[str, ...]:
     del parser
+    return ()
 
-  def scope_recipe(self, spec: 'SessionSpec') -> ScopeRecipe:
-    del spec
+  def parse_options(self, args: dict, *, solo: bool, host: bool) -> dict:
+    del args, solo, host
+    return {}
+
+  def scope_recipe(self, options: dict) -> ScopeRecipe:
+    del options
     return BRO_RUN_RECIPE
 
   def resolve_llm(self, value: str | None, bro_name: str) -> NativeLLMSpec:

@@ -25,9 +25,11 @@ class Harness(Protocol):
 
   name: str
 
-  def add_flags(self, parser: 'Parser') -> None: ...
+  def add_flags(self, parser: 'Parser') -> tuple[str, ...]: ...
 
-  def scope_recipe(self, spec: 'SessionSpec') -> ScopeRecipe: ...
+  def parse_options(self, args: dict, *, solo: bool, host: bool) -> dict: ...
+
+  def scope_recipe(self, options: dict) -> ScopeRecipe: ...
 
   def resolve_llm(self, value: str | None, bro_name: str) -> LLMSpec: ...
 
@@ -52,6 +54,9 @@ class Harness(Protocol):
   def prepare_host_env(
     self, spec: 'SessionSpec', workspace: Workspace, worktree: Path, env: dict[str, str]
   ) -> None: ...
+
+
+HARNESS_NAMES = ('claude', 'bro')
 
 
 def get_harness(name: str) -> Harness:

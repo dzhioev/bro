@@ -51,11 +51,14 @@ LLM flags resolve within the selected harness. They never switch the harness imp
 
 `ride.harness.Harness` is the runtime boundary. The neutral layer (`ride/ride/session.py`) owns both launch bodies — the container `Launch` composition and the provisioned host-worktree run — and a harness implementation supplies what differs:
 
-- its per-mode `ScopeRecipe`, auth preflight, and LLM resolution;
+- its flag registration (`add_flags` reports the dests it registered, so the neutral layer refuses a non-selected harness's flag generically) and the validation and packing of those flags into its serialized options (`parse_options`);
+- the `ScopeRecipe` its packed options select, the auth preflight, and LLM resolution;
 - the inner command run inside the prepared workspace, consumed by both modes;
-- harness-owned command options;
+- the harness-owned flags a reconstructed argv restates;
 - session existence with its resume-refusal wording, the subject read, and the session trail-pointer path;
 - the container extras (env, mounts) and the host runner-env preparation.
+
+`scope_recipe` takes the packed options rather than a full session, so surfaces with no session — `ride scope`, dive-in's task prefetch — resolve their recipe through the same seam.
 
 The generic scope computation and the bro-run recipe stay in `bro.launch.scope`, so native launch and summon lowering share the same policy without making `bro` depend on `bro-ride`. Claude's full/raw recipes remain private to `ride.claude`; raw is a Claude mode, not a harness value.
 

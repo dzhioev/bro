@@ -28,6 +28,12 @@ class TestForwardedFlags:
     args = vars(parser.parse_args(['--bro', 'dev', '--raw']))
     assert ride_flags.extract_forwarded_argv(args) == ['--bro', 'dev', '--raw']
 
+  def test_extract_forwarded_argv_round_trips_harness(self):
+    parser = Parser(add_help=False)
+    ride_flags.add_forwarded_flags(parser)
+    args = vars(parser.parse_args(['--harness', 'bro']))
+    assert ride_flags.extract_forwarded_argv(args) == ['--harness', 'bro']
+
   def test_llm_flags_default_to_none_for_the_claude_code_spec_to_supply(self):
     parser = Parser(add_help=False)
     ride_flags.add_forwarded_flags(parser)

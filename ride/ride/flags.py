@@ -1,9 +1,55 @@
 from bro.base.args import Parser
+from ride.harness import HARNESS_NAMES, get_harness
 
 
 def default_hold(*, solo: bool, host: bool) -> str:
   """the hold an omitted --hold resolves to."""
   return 'unattended' if solo else 'guided' if host else 'attended'
+
+
+def add_harness_flags(parser: Parser) -> None:
+  """register `--harness` and every harness's own flags."""
+  parser.add_argument(
+    '--harness',
+    choices=HARNESS_NAMES,
+    default=None,
+    help='driving harness (default: project [tool.bro] harness, then claude)',
+  )
+  for name in HARNESS_NAMES:
+    get_harness(name).add_flags(parser)
+
+
+def _harness_flag_defaults() -> dict[str, dict]:
+  """per harness, the flag dests it registers with their parser defaults."""
+  defaults: dict[str, dict] = {}
+  for name in HARNESS_NAMES:
+    scratch = Parser(add_help=False)
+    dests = get_harness(name).add_flags(scratch)
+    by_dest = {action.dest: action.default for action in scratch._actions}
+    defaults[name] = {dest: by_dest[dest] for dest in dests}
+  return defaults
+
+
+def pop_harness_options(
+  parser: Parser, args: dict, harness_name: str, *, solo: bool, host: bool
+) -> dict:
+  """pop every harness's flag values out of `args` and pack the selected
+  harness's options, erroring on a non-selected harness's non-default value."""
+  if harness_name not in HARNESS_NAMES:
+    parser.error(f'unknown harness: {harness_name}')
+  packed: dict = {}
+  for name, flag_defaults in _harness_flag_defaults().items():
+    values = {dest: args.pop(dest) for dest in flag_defaults}
+    if name == harness_name:
+      try:
+        packed = get_harness(name).parse_options(values, solo=solo, host=host)
+      except ValueError as error:
+        parser.error(str(error))
+      continue
+    for dest, default in flag_defaults.items():
+      if values[dest] != default:
+        parser.error(f'--{dest.replace("_", "-")} requires --harness {name}')
+  return packed
 
 
 def add_scope_flags(parser: Parser) -> None:
@@ -79,9 +125,7 @@ def add_session_flags(parser: Parser, *, include_bro: bool = True) -> None:
 
 def add_forwarded_flags(parser: Parser) -> None:
   add_session_flags(parser)
-  from ride.claude.harness import add_flags
-
-  add_flags(parser)
+  add_harness_flags(parser)
 
 
 def extract_forwarded_argv(args: dict) -> list[str]:

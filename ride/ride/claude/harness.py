@@ -58,20 +58,8 @@ class ClaudeOptions:
     return cls(raw=data['raw'])
 
 
-def add_flags(parser: 'Parser') -> None:
-  parser.add_argument(
-    '--raw',
-    action='store_true',
-    help="run bare Claude under the bro's prompt and MCP toolset; container only, requires `anthropic`",
-  )
-
-
 def options(spec: 'SessionSpec') -> ClaudeOptions:
   return ClaudeOptions.load(spec.harness_options)
-
-
-def scope_recipe(raw: bool) -> ScopeRecipe:
-  return _RAW_SCOPE if raw else _FULL_SCOPE
 
 
 def llm_spec(spec: 'SessionSpec') -> LLMSpec:
@@ -84,11 +72,22 @@ def llm_spec(spec: 'SessionSpec') -> LLMSpec:
 class ClaudeHarness:
   name = 'claude'
 
-  def add_flags(self, parser: 'Parser') -> None:
-    add_flags(parser)
+  def add_flags(self, parser: 'Parser') -> tuple[str, ...]:
+    parser.add_argument(
+      '--raw',
+      action='store_true',
+      help="run bare Claude under the bro's prompt and MCP toolset; container only, requires `anthropic`",
+    )
+    return ('raw',)
 
-  def scope_recipe(self, spec: 'SessionSpec') -> ScopeRecipe:
-    return scope_recipe(options(spec).raw)
+  def parse_options(self, args: dict, *, solo: bool, host: bool) -> dict:
+    del solo
+    if args['raw'] and host:
+      raise ValueError('--raw cannot be combined with --host')
+    return ClaudeOptions(raw=args['raw']).dump()
+
+  def scope_recipe(self, options: dict) -> ScopeRecipe:
+    return _RAW_SCOPE if ClaudeOptions.load(options).raw else _FULL_SCOPE
 
   def resolve_llm(self, value: str | None, bro_name: str) -> LLMSpec:
     del bro_name
