@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Optional, Protocol
 
 from bro.llm.llm import LLMSpec
 from bro.workspace.model import Workspace
@@ -33,7 +33,7 @@ class Harness(Protocol):
 
   def resolve_llm(self, value: str | None, bro_name: str) -> LLMSpec: ...
 
-  def preflight_auth(self, spec: 'SessionSpec') -> bool: ...
+  def preflight_auth(self, spec: 'SessionSpec') -> Optional[str]: ...
 
   def command_options(self, spec: 'SessionSpec') -> list[str]: ...
 
