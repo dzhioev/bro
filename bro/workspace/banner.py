@@ -1,5 +1,4 @@
 import os
-import subprocess
 from dataclasses import dataclass
 from typing import Optional
 
@@ -106,13 +105,11 @@ class SessionFacts:
     if not in_container and host_workspace is None and name is not None:
       # host worktree case — derive path from the project root + worktree name
       try:
-        project = paths.project_root()
-      except subprocess.CalledProcessError:
-        project = None
-      if project is not None:
-        candidate = paths.workspace_tree(project, name)
-        if candidate.is_dir():
-          host_workspace = str(candidate)
+        candidate = paths.workspace_tree(paths.project_root(), name)
+      except paths.RuntimeLocationError:
+        candidate = None
+      if candidate is not None and candidate.is_dir():
+        host_workspace = str(candidate)
 
     exec_command = f'ride exec {name}' if in_container and name is not None else None
 
