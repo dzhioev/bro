@@ -96,7 +96,7 @@ class TestProvisionHostClaudeDir:
     project = home / 'project'
     workspace = home / 'state' / 'workspaces' / 'ws'
     worktree = workspace / 'tree'
-    return ride_claude_config._provision_host_claude_dir(workspace, worktree, project), worktree
+    return ride_claude_config.provision_host_claude_dir(workspace, worktree, project), worktree
 
   def test_returns_the_session_claude_dir_with_seeded_json(self, home):
     claude_dir, worktree = self._provision(home)

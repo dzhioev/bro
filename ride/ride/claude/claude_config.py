@@ -24,7 +24,7 @@ from bro.workspace.model import Workspace
 _CONTAINER_CLAUDE_DIR = '/home/ride/.claude'
 
 
-def _latest_jsonl(projects_dir: Path) -> Optional[Path]:
+def latest_jsonl(projects_dir: Path) -> Optional[Path]:
   if not projects_dir.is_dir():
     return None
   transcripts = [path for path in projects_dir.iterdir() if path.suffix == '.jsonl']
@@ -43,7 +43,7 @@ def workspace_projects_dir(workspace: Workspace) -> Path:
 
 def read_subject(workspace: Workspace) -> Optional[str]:
   """the first user prompt of the workspace's latest claude session."""
-  latest = _latest_jsonl(workspace_projects_dir(workspace))
+  latest = latest_jsonl(workspace_projects_dir(workspace))
   if latest is None:
     return None
   try:
@@ -219,7 +219,7 @@ def container_claude_state(workspace: Path) -> tuple[list[str], dict[str, str]]:
   return mounts, env
 
 
-def _provision_host_claude_dir(workspace: Path, worktree: Path, project: Path) -> Path:
+def provision_host_claude_dir(workspace: Path, worktree: Path, project: Path) -> Path:
   """provision a host session's private claude state dir and return it — the
   value the launch points CLAUDE_CONFIG_DIR at. `project` is the main repo root
   the worktree links to."""

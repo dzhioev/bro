@@ -44,7 +44,7 @@ def _dev_persona_namespaces() -> list[str]:
 
 def _ride_session_launch(spec, **kwargs) -> ride_claude_argv.ClaudeLaunch:
   kwargs.setdefault('endpoint', _ENDPOINT)
-  with patch('ride.claude.claude_argv._session_append_prompt', return_value='append text'):
+  with patch('ride.claude.claude_argv.session_append_prompt', return_value='append text'):
     return ride_claude_argv.build_claude_launch(spec, **kwargs)
 
 

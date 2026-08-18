@@ -53,7 +53,7 @@ def _server_entry(url: str, token: str) -> dict:
   }
 
 
-def _http_mcp_config(namespaces: list[str], *, port: int, token: str) -> str:
+def http_mcp_config(namespaces: list[str], *, port: int, token: str) -> str:
   """claude `--mcp-config` json: one `{type: http}` entry per namespace, mounted
   under the namespace as the server key so tools surface as `mcp__<namespace>__<tool>`
   (the convention in prompts/tool_names.md)."""
@@ -114,7 +114,7 @@ class _SessionMCPServer:
       self.process.wait()
 
 
-def _start_session_mcp_server(spec: str, cwd: Path, env: Mapping[str, str]) -> _SessionMCPServer:
+def start_session_mcp_server(spec: str, cwd: Path, env: Mapping[str, str]) -> _SessionMCPServer:
   """start `mcp-server <spec> --http` on an OS-assigned port for a session.
 
   `env` must carry the workspace venv's PATH: the tools serve this workspace's

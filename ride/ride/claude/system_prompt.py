@@ -7,7 +7,7 @@ _PROMPTS_DIR = Path(prompts.__file__).parent
 # `shared/` also flow into every bro (via bro/bro.py:_load_shared_prompts), so
 # put cross-surface conventions there. Prompt files may carry template
 # directives (`#harness`/`#wire`/`#creds`, plus the bro's own `#features`) —
-# the whole append text renders once in `_session_append_prompt` with this
+# the whole append text renders once in `session_append_prompt` with this
 # surface's facts and the session bro's vocabulary. The one top-level file
 # injected here is `tool_names.md` — the tool-name resolution rule, templated
 # on `#wire`; `--raw` sessions run `--bare` and skip this injection but get the
@@ -32,7 +32,7 @@ def _load_base_prompts() -> str:
   return '\n\n'.join(parts)
 
 
-def _session_append_prompt(hold: str, bro_name: str) -> str:
+def session_append_prompt(hold: str, bro_name: str) -> str:
   """--append-system-prompt text for a ride-session (the non --raw flavor).
 
   base prompts plus the session bro's own persona prompts and spell

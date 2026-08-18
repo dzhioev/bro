@@ -5,7 +5,7 @@ from typing import Optional
 from bro.base import credentials, log
 
 
-def _load_anthropic_key() -> Optional[str]:
+def load_anthropic_key() -> Optional[str]:
   """return the api_key from the `anthropic` secret, or None if missing/invalid."""
   try:
     config = credentials.get_json('anthropic')
@@ -24,7 +24,7 @@ def _load_anthropic_key() -> Optional[str]:
 _OUTRANKING_AUTH_VARS = ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN')
 
 
-def _apply_claude_auth(env: dict[str, str], *, warn_when_missing: bool = False) -> None:
+def apply_claude_auth(env: dict[str, str], *, warn_when_missing: bool = False) -> None:
   """align a claude session env with the session auth model (reference/ride.md).
 
   scrubs the inherited vars that outrank the session's designated auth, then

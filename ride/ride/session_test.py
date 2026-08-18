@@ -135,7 +135,7 @@ class _ContainerHarness:
       patch('ride.session._print_resume_hint'),
       # keep the bro-registry import out; threading is asserted per-test
       patch('ride.summon_control.summon_allow_list', return_value=set()),
-      patch('ride.claude.harness._load_anthropic_key', return_value={'api_key': 'k'}),
+      patch('ride.claude.harness.load_anthropic_key', return_value={'api_key': 'k'}),
       patch('ride.session.local_trails_mounts', return_value=()),
     ]
     entered = [p.__enter__() for p in self._patches]
@@ -803,11 +803,11 @@ class TestHostSession:
     monkeypatch.setattr(ride_session, 'provision_host_worktree', lambda *_a: True)
     # keep the launch tests off the real credential store; the auth-transform
     # test overrides this with its own fake
-    monkeypatch.setattr(claude_harness, '_apply_claude_auth', lambda env, **_k: None)
+    monkeypatch.setattr(claude_harness, 'apply_claude_auth', lambda env, **_k: None)
     monkeypatch.setattr(credentials, 'try_get', lambda name: 'tok')
     monkeypatch.setattr(
       claude_harness,
-      '_provision_host_claude_dir',
+      'provision_host_claude_dir',
       lambda ws, wt, project: tmp_path / 'claude-config',
     )
     monkeypatch.setattr(
@@ -921,7 +921,7 @@ class TestHostSession:
     assert kwargs['env']['VIRTUAL_ENV'] == str(worktree / '.venv')
 
   def test_runner_env_gets_the_claude_auth_transform(self, monkeypatch, tmp_path):
-    # the outer applies _apply_claude_auth to the runner env it spawns, so a
+    # the outer applies apply_claude_auth to the runner env it spawns, so a
     # worktree whose own runner predates the transform still inherits the token
     workspace, ride_binary, worktree = self._prepare_launch(monkeypatch, tmp_path)
     monkeypatch.setattr(ride_session, 'broker_enabled', lambda: False)
@@ -929,7 +929,7 @@ class TestHostSession:
     def fake_apply(env, **_kwargs):
       env['CLAUDE_CODE_OAUTH_TOKEN'] = 'applied'
 
-    monkeypatch.setattr(claude_harness, '_apply_claude_auth', fake_apply)
+    monkeypatch.setattr(claude_harness, 'apply_claude_auth', fake_apply)
     runs: list = []
 
     def fake_run(argv, **kwargs):
@@ -1078,7 +1078,7 @@ class TestHostSession:
     monkeypatch.setattr(credentials, 'try_get', lambda name: 'tok')
     monkeypatch.setattr(
       claude_harness,
-      '_provision_host_claude_dir',
+      'provision_host_claude_dir',
       lambda ws, wt, project: tmp_path / 'claude-config',
     )
     monkeypatch.setattr(

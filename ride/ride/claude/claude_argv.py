@@ -19,8 +19,8 @@ from typing import TYPE_CHECKING
 from bro import prompts
 from bro.base import credentials
 from ride.claude.harness import llm_spec, options
-from ride.claude.mcp import MCPEndpoint, _http_mcp_config
-from ride.claude.system_prompt import _session_append_prompt
+from ride.claude.mcp import MCPEndpoint, http_mcp_config
+from ride.claude.system_prompt import session_append_prompt
 
 if TYPE_CHECKING:
   from ride.session import SessionSpec
@@ -127,7 +127,7 @@ def build_claude_launch(
   if len(narrowed_tool_commands) > 0:
     settings['hooks'] = _tool_gate_hooks(narrowed_tool_commands)
   namespaces = list(dict.fromkeys(server.namespace for server in servers))
-  mcp_config = _http_mcp_config(namespaces, port=endpoint.port, token=endpoint.token)
+  mcp_config = http_mcp_config(namespaces, port=endpoint.port, token=endpoint.token)
   if options(spec).raw:
     settings['apiKeyHelper'] = _settings_command('ride.claude.print_anthropic_key')
     # the hold fragment renders here — appending the unrendered file would leak
@@ -151,7 +151,7 @@ def build_claude_launch(
       ','.join(f'mcp__{namespace}__*' for namespace in namespaces),
     ]
   else:
-    system_prompt = _session_append_prompt(spec.hold, spec.bro)
+    system_prompt = session_append_prompt(spec.hold, spec.bro)
     argv += [
       '--disallowed-tools',
       ','.join(('mcp__claude_ai_*', *blocked_tool_names)),

@@ -8,11 +8,11 @@ from bro.llm.providers import LLMSelection, parse
 from bro.monitor import trail_pointer
 from bro.workspace.model import Workspace
 from bro.workspace.store import ScopedSecrets
-from ride.claude.claude_auth import _apply_claude_auth, _load_anthropic_key
+from ride.claude.claude_auth import apply_claude_auth, load_anthropic_key
 from ride.claude.claude_config import (
-  _latest_jsonl,
-  _provision_host_claude_dir,
   container_claude_state,
+  latest_jsonl,
+  provision_host_claude_dir,
   read_subject,
   workspace_projects_dir,
 )
@@ -107,7 +107,7 @@ class ClaudeHarness:
 
   def preflight_auth(self, spec: 'SessionSpec') -> Optional[str]:
     if options(spec).raw:
-      if _load_anthropic_key() is not None:
+      if load_anthropic_key() is not None:
         return None
       return (
         '--raw requires the `anthropic` secret to provide an api_key '
@@ -149,7 +149,7 @@ class ClaudeHarness:
     return ['--raw'] if options(spec).raw else []
 
   def session_exists(self, workspace: Workspace) -> bool:
-    return _latest_jsonl(workspace_projects_dir(workspace)) is not None
+    return latest_jsonl(workspace_projects_dir(workspace)) is not None
 
   def missing_session_error(self, workspace: Workspace) -> str:
     return f'no claude session found for {workspace.name} in {workspace_projects_dir(workspace)}'
@@ -171,9 +171,9 @@ class ClaudeHarness:
     self, spec: 'SessionSpec', workspace: Workspace, worktree: Path, env: dict[str, str]
   ) -> None:
     del spec
-    claude_dir = _provision_host_claude_dir(workspace.path, worktree, workspace.project)
+    claude_dir = provision_host_claude_dir(workspace.path, worktree, workspace.project)
     env['CLAUDE_CONFIG_DIR'] = str(claude_dir)
-    _apply_claude_auth(env)
+    apply_claude_auth(env)
 
 
 CLAUDE = ClaudeHarness()

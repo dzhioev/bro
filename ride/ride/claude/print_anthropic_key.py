@@ -7,12 +7,12 @@ A leaf wrapper around the resolver rather than the `credentials` CLI itself:
 import sys
 from typing import Optional
 
-from ride.claude.claude_auth import _load_anthropic_key
+from ride.claude.claude_auth import load_anthropic_key
 
 
 def main(argv: list[str]) -> Optional[int]:
   del argv
-  key = _load_anthropic_key()
+  key = load_anthropic_key()
   if key is None:
     print('the `anthropic` secret resolves no api_key', file=sys.stderr)
     return 1
