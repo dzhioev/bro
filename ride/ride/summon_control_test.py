@@ -248,7 +248,7 @@ class TestSummonHandler:
   def test_a_childs_grant_bound_follows_its_llm_recipe(self, tmp_path, monkeypatch):
     calls: list = []
 
-    def capture_scope(target, *, grant, revoke, llm_spec=None):
+    def capture_scope(target, recipe, *, grant, revoke, llm_spec=None):
       calls.append((target, llm_spec))
       return ScopedSecrets(required={'github'}, optional=set(), docker_sock=False)
 

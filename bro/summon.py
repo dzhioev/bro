@@ -96,6 +96,9 @@ __cli_name__ = 'summon'
 
 SUMMON = 'summon'  # the request's message-type tag (a consumer tag; not in broker's Tag)
 SUMMONER_ENV = 'RIDE_SUMMONER'
+# marks a run as a summoned child — the fact the claude solo runner keys its
+# run-lifecycle emission on (a bro-run child emits from `BaseBro.run` instead)
+SUMMONED_ENV = 'RIDE_SUMMONED'
 # carries a run's own effective summon allow-list into it, written by the surface
 # that launches the run: a session root's at launch, a summoned child's at its spawn
 MAY_SUMMON_ENV = 'RIDE_MAY_SUMMON'

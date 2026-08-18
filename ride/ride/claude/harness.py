@@ -86,6 +86,9 @@ class ClaudeHarness:
       raise ValueError('--raw cannot be combined with --host')
     return ClaudeOptions(raw=args['raw']).dump()
 
+  def default_options(self) -> dict:
+    return ClaudeOptions(raw=False).dump()
+
   def scope_recipe(self, options: dict) -> ScopeRecipe:
     return _RAW_SCOPE if ClaudeOptions.load(options).raw else _FULL_SCOPE
 

@@ -52,6 +52,9 @@ class BroHarness:
     del args, solo, host
     return {}
 
+  def default_options(self) -> dict:
+    return {}
+
   def scope_recipe(self, options: dict) -> ScopeRecipe:
     del options
     return BRO_RUN_RECIPE

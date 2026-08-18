@@ -12,7 +12,6 @@
 - `ride/root.py` — neutral container and host-process root supervision behind the broker availability gate.
 - `ride/spawn.py` — broker-root composition, root lifecycle handlers, native trail-pointer publication for the root and summoned children, summon lowering with each child's recorded resume spec, and per-root `SummonControl` wiring.
 - `ride/summon_control.py` — summon host authorization, allow-list resolution, audit/status bookkeeping, and request lifecycle. The peer wire and self-contained CLI are the framework's `bro/summon.py`.
-- `ride/bro_run.py` — the broker-free `Launch` description around a summoned native run's caller-composed `bro run|chat … --in-place` command: bro git identity, `RIDE_BRO`, stdio policy, and local-trails data where the scope records locally. Summon description machinery, not a public container hop for `bro run`.
 - `ride/trails.py` — local-trails mounts for launch descriptions whose computed scope records locally.
 - `ride/identity.py` — managed-session git identity.
 - `ride/harness.py` — the `Harness` protocol (flag registration and option packing, scope, auth, session reads, and the launch hooks: trail-pointer path, inner command, container extras, host runner env), the harness roster, and the lazy harness resolver.
