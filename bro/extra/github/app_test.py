@@ -159,11 +159,12 @@ class TestSource:
       'github_app_bot.json.minted',
     ]
 
-  def test_an_unreadable_held_token_raises(self, bro_dir: Path, monkeypatch):
-    self._configured(bro_dir, monkeypatch, timedelta(hours=1))
-    (bro_dir / 'github_app_bot.json.minted').write_text('{tru')
-    with pytest.raises(ValueError, match='is not valid json'):
-      app.Source('github_app_bot.json').fetch()
+  @pytest.mark.parametrize('leftover', ['{tru', '{}', '{"token": "ghs_old"}'])
+  def test_an_unreadable_held_token_is_reminted(self, bro_dir: Path, monkeypatch, leftover: str):
+    mint = self._configured(bro_dir, monkeypatch, timedelta(hours=1))
+    (bro_dir / 'github_app_bot.json.minted').write_text(leftover)
+    assert app.Source('github_app_bot.json').fetch() == 'ghs_1'
+    assert mint.call_count == 1
 
   def test_scoped_store_round_trip(self, bro_dir: Path, monkeypatch):
     # a github_app-backed variant hydrates as its minting config under the kind

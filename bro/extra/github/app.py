@@ -16,7 +16,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
-from bro.base import credentials
+from bro.base import credentials, log
 from bro.extra.github import api
 
 # JWT claim windows: GitHub caps `exp` at 10 minutes ahead, and recommends
@@ -86,19 +86,27 @@ class Source(credentials.MintingSource):
     return config_path.with_name(f'{config_path.name}.minted')
 
   def _held(self) -> Optional[credentials.Minted]:
+    """the token currently held, or None when the next read must mint one.
+
+    a hold this version cannot read is a miss rather than an error: the file is
+    derived state whose shape travels with the code, so an older one left by a
+    previous version must re-mint instead of failing every read on the host.
+    """
     path = self._held_path()
     if not path.is_file():
       return None
     try:
       held = json.loads(path.read_text())
-    except json.JSONDecodeError as e:
-      raise ValueError(f'held github_app token {str(path)!r} is not valid json') from e
-    expires_at = datetime.fromisoformat(held['expires_at'])
-    minted_at = datetime.fromisoformat(held['minted_at'])
+      expires_at = datetime.fromisoformat(held['expires_at'])
+      minted_at = datetime.fromisoformat(held['minted_at'])
+      token = held['token']
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+      log.warning(f'discarding an unreadable held github token: {path}')
+      return None
     now = datetime.now(UTC)
     if now >= minted_at + _HELD_LIFETIME or now >= expires_at - self.EXPIRY_MARGIN:
       return None
-    return credentials.Minted(held['token'], expires_at)
+    return credentials.Minted(token, expires_at)
 
   def _hold(self, minted: credentials.Minted) -> None:
     path = self._held_path()
