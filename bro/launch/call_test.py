@@ -40,16 +40,6 @@ from bro.trails.display.textual import (
 from bros.bro import Bro
 
 
-@pytest.fixture(autouse=True)
-def _stub_scoped_store(monkeypatch):
-  # the container-hop preflight hydrates the scoped store; stub the build so the
-  # CLI tests never read (or mint from) the developer host's real store
-  monkeypatch.setattr(
-    'bro.launch.scope.credentials.build_scoped_store', lambda names, optional=(): {}
-  )
-  monkeypatch.setattr('bro.launch.bro_run.local_trails_mounts', lambda scoped: ())
-
-
 class MockLLM(LLM):
   def __init__(self, response: str = 'mock', mcp_servers: Optional[list[MCPServer]] = None):
     super().__init__(mcp_servers)
