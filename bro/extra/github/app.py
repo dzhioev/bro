@@ -8,6 +8,7 @@ Installation tokens expire after one hour. `Source` is the credential-source
 front over the mint (the `github_app` registry type).
 """
 
+import contextlib
 import json
 import os
 import time
@@ -113,17 +114,24 @@ class Source(credentials.MintingSource):
     # published by rename so a concurrent reader sees one whole token or none;
     # two processes racing to mint cost one extra mint, not a torn file
     staged = path.with_name(f'{path.name}.{os.getpid()}')
-    descriptor = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(descriptor, 'w') as file:
-      json.dump(
-        {
-          'token': minted.value,
-          'expires_at': minted.expires_at.isoformat(),
-          'minted_at': datetime.now(UTC).isoformat(),
-        },
-        file,
-      )
-    os.replace(staged, path)
+    try:
+      descriptor = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+      with os.fdopen(descriptor, 'w') as file:
+        json.dump(
+          {
+            'token': minted.value,
+            'expires_at': minted.expires_at.isoformat(),
+            'minted_at': datetime.now(UTC).isoformat(),
+          },
+          file,
+        )
+      os.replace(staged, path)
+    except OSError as error:
+      # a store nothing can write to — a read-only secret mount — leaves every
+      # reader minting its own token, which is what they did before a hold existed
+      log.warning(f'holding the github token failed: {error}')
+      with contextlib.suppress(OSError):
+        staged.unlink(missing_ok=True)
 
   def mint(self, config: dict) -> credentials.Minted:
     missing = sorted({'app_id', 'installation_id', 'private_key'} - set(config))

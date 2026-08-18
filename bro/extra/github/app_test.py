@@ -1,4 +1,5 @@
 import json
+import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -158,6 +159,18 @@ class TestSource:
       'github_app_bot.json',
       'github_app_bot.json.minted',
     ]
+
+  @pytest.mark.skipif(os.geteuid() == 0, reason='root writes through a read-only directory')
+  def test_a_read_only_store_mints_per_read(self, bro_dir: Path, monkeypatch):
+    mint = self._configured(bro_dir, monkeypatch, timedelta(hours=1))
+    bro_dir.chmod(0o500)
+    try:
+      assert app.Source('github_app_bot.json').fetch() == 'ghs_1'
+      assert app.Source('github_app_bot.json').fetch() == 'ghs_2'
+    finally:
+      bro_dir.chmod(0o700)
+    assert mint.call_count == 2
+    assert list(bro_dir.glob('*.minted*')) == []
 
   @pytest.mark.parametrize('leftover', ['{tru', '{}', '{"token": "ghs_old"}'])
   def test_an_unreadable_held_token_is_reminted(self, bro_dir: Path, monkeypatch, leftover: str):
