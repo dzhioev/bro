@@ -108,11 +108,7 @@ def _isolate_host_config(monkeypatch, tmp_path):
 
 @pytest.fixture(autouse=True)
 def _isolate_runtime_state(monkeypatch, tmp_path):
-  from bro.workspace.paths import project_key
-
-  runtime_base = tmp_path.parent / f'{tmp_path.name}-ride-state'
-  (runtime_base / project_key(tmp_path)).mkdir(parents=True)
-  monkeypatch.setattr('bro.workspace.paths.RUNTIME_BASE', runtime_base)
+  monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path.parent / f'{tmp_path.name}-ride-state'))
 
 
 @pytest.fixture(autouse=True)

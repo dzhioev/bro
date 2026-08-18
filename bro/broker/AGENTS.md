@@ -27,7 +27,7 @@ The one structural rule to keep straight:
 
 - **Single loop, no locks.** The server is asyncio-native: `provision()` starts one `asyncio.start_unix_server` per channel, each accepted connection runs a read task that NDJSON-deframes into the `Sink`, and `send()` writes through that connection's `StreamWriter`. Everything runs on the one event loop, so the shared per-channel state needs no lock and two coroutines can't interleave a partial frame. A peer that stops reading is absorbed by its own writer's `drain()` backpressure, never by stalling routing to the others. A host-side `close()` / `shutdown()` cancels the connection's read task so its EOF doesn't spuriously fire `on_disconnect` (that callback is reserved for peer-initiated drops).
 - **Channel authenticity.** A connection is attributed to the `ChannelID` of the listening socket that accepted it — the anti-forgery primitive. There is no `from` field on the wire to forge.
-- **Socket lifecycle.** `provision()` does unlink-before-bind + listen before returning (the file must exist for the bind-mount before `docker create`); dir `0700`, socket `0600`; teardown unlinks. The host bind path is subject to the ~108-byte `sun_path` limit, so ride uses the shallow checkout-keyed `/var/ride/<project-key>/broker` control dir.
+- **Socket lifecycle.** `provision()` does unlink-before-bind + listen before returning (the file must exist for the bind-mount before `docker create`); dir `0700`, socket `0600`; teardown unlinks. The host bind path is subject to the ~108-byte `sun_path` limit, so ride uses the shallow `broker` control dir in its checkout-keyed runtime state root.
 
 ## Runtime invariants
 

@@ -20,7 +20,7 @@ Passed values appear in the `# Arguments` section appended by the spell tool:
 
 Normal flow only — re-entry has its own entry conditions:
 
-- You are in a managed workspace (under `/var/ride/<project-key>/workspaces/` or otherwise on a non-master branch). Do NOT run this against the main checkout's working copy.
+- You are in a managed workspace (under the runtime state root's `workspaces/` or otherwise on a non-master branch). Do NOT run this against the main checkout's working copy.
 - The work looks finished. If edits look WIP, a refactor is half-done, or the suite is known-red, confirm with the user before proceeding.
 
 ## Re-entry: PR already open

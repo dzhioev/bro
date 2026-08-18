@@ -19,7 +19,7 @@ argv build: merged --settings, MCP namespaces, RIDE_SESSION_CONTEXT);
 G — SIGTERM forwarding, so `docker stop` lands in claude.
 
 Isolation: every launch runs under a throwaway HOME and project root, so no
-scenario touches the real `~/.claude/ride-sessions` or `/var/ride` runtime root. The
+scenario touches the real `~/.claude/ride-sessions` or the user's runtime state root. The
 project root is a local git clone of this checkout — its `pyproject.toml` /
 `uv.lock` are byte-identical, so `_image_tag()` resolves to the already-built
 image, and the container's baked venv serves this branch's committed
@@ -279,10 +279,6 @@ exec "$@"
 # `ride solo|along` seam (`run_in_container`) under the isolated HOME/project root
 _DRIVER = """
 import json, os, sys
-from pathlib import Path
-import bro.workspace.paths as workspace_paths
-
-workspace_paths.RUNTIME_BASE = Path(os.environ['RIDE_E2E_RUNTIME_BASE'])
 from bro.launch.root import run_in_container
 from bro.workspace.docker import Launch
 
@@ -306,6 +302,7 @@ class IsolatedEnv:
   root: Path
   project: Path
   home: Path
+  data_home: Path
   runtime_root: Path
   real_ride_sessions: Path
   real_residue_before: list[str]
@@ -376,9 +373,7 @@ def isolated_env() -> Iterator[IsolatedEnv]:
   )
   project = root / 'project'
   subprocess.run(['git', 'clone', '--quiet', str(checkout), str(project)], check=True)
-  runtime_base = root / 'state'
-  runtime_root = runtime_base / workspace_paths.project_key(project)
-  runtime_root.mkdir(parents=True)
+  data_home = root / 'state'
   home = root / 'home'
   home.mkdir()
   # scenarios that exec the real runner hydrate `brog` (RIDE_E2E_SECRETS): the
@@ -407,10 +402,13 @@ def isolated_env() -> Iterator[IsolatedEnv]:
   with pytest.MonkeyPatch.context() as monkeypatch:
     monkeypatch.setattr(workspace_docker, 'project_root', lambda: project)
     workspace_docker._ensure_image(workspace_docker.image_tag())
+    monkeypatch.setenv('XDG_DATA_HOME', str(data_home))
+    runtime_root = workspace_paths.runtime_root(project)
   env = IsolatedEnv(
     root=root,
     project=project,
     home=home,
+    data_home=data_home,
     runtime_root=runtime_root,
     real_ride_sessions=real_ride_sessions,
     real_residue_before=residue_before,
@@ -456,7 +454,7 @@ class _Driver:
     driver_env['HOME'] = str(env.home)
     driver_env['RIDE_E2E_NAME'] = name
     driver_env['RIDE_E2E_COMMAND'] = json.dumps(command)
-    driver_env['RIDE_E2E_RUNTIME_BASE'] = str(env.runtime_root.parent)
+    driver_env['XDG_DATA_HOME'] = str(env.data_home)
     driver_env.update(extra_env)
     master, slave = pty.openpty()
     self._master = master
@@ -790,7 +788,7 @@ class TestChildLifecycle:
   def test_no_workspace_dirs_leaked_after_parent_exit(self, b_clean: BrokerRun) -> None:
     assert b_clean.workspace_leaks == [] and b_clean.session_leaks == [], (
       f'spawned child left workspace state behind after the parent exited: '
-      f'/var/ride workspaces {b_clean.workspace_leaks}, '
+      f'runtime workspaces {b_clean.workspace_leaks}, '
       f'~/.claude/ride-sessions {b_clean.session_leaks}'
     )
 

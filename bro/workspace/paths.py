@@ -1,15 +1,17 @@
 import hashlib
 import os
+import re
 import secrets
 from pathlib import Path
 from typing import Optional
 
 from bro.workspace.git import git_run
 
-RUNTIME_BASE = Path('/var/ride')
 CONTAINER_TRAILS_ROOT = Path('/var/ride/trails')
 CONTAINER_SUMMON_ROOT = Path('/var/ride/summon')
-_PROJECT_KEY_BYTES = 8
+_DATA_HOME_ENV = 'XDG_DATA_HOME'
+_PROJECT_KEY_BYTES = 4
+_UNSAFE_IN_KEY = re.compile(r'[^A-Za-z0-9._-]')
 
 
 def venv_env(venv: Path) -> dict[str, str]:
@@ -51,28 +53,40 @@ def project_root(directory: Optional[Path] = None) -> Path:
   return root
 
 
+def runtime_base() -> Path:
+  """the user's runtime data root, `$XDG_DATA_HOME/ride` where that is set."""
+  data_home = os.environ.get(_DATA_HOME_ENV)
+  if data_home is None or len(data_home) == 0:
+    return Path.home() / '.local' / 'share' / 'ride'
+  base = Path(data_home)
+  if not base.is_absolute():
+    raise ValueError(f'{_DATA_HOME_ENV} must be an absolute path, not {data_home!r}')
+  return base / 'ride'
+
+
 def project_key(project: Path) -> str:
-  """the stable, path-derived key separating one checkout's runtime state."""
-  canonical = str(project.resolve()).encode()
-  return hashlib.blake2b(canonical, digest_size=_PROJECT_KEY_BYTES).hexdigest()
+  """the stable, path-derived key separating one checkout's runtime state.
+
+  the checkout's own name, so the data root reads as the checkouts it holds,
+  plus a digest of the canonical path, so two checkouts of one name stay apart.
+  """
+  canonical = str(project.resolve())
+  digest = hashlib.blake2b(canonical.encode(), digest_size=_PROJECT_KEY_BYTES).hexdigest()
+  return f'{_UNSAFE_IN_KEY.sub("-", Path(canonical).name)}-{digest}'
 
 
 def runtime_root(project: Path) -> Path:
-  return RUNTIME_BASE / project_key(project)
+  return runtime_base() / project_key(project)
 
 
-def require_runtime_root(project: Path) -> Path:
-  """the setup-provisioned runtime root, or a launch-ready error."""
+def ensure_runtime_root(project: Path) -> Path:
+  """the checkout's runtime root, created if this is the first launch against it.
+
+  kept 0700: a host session materializes its scoped credential store in here.
+  """
   root = runtime_root(project)
-  if not root.is_dir():
-    raise RuntimeError(
-      f'runtime state root {root} is absent; run {project / "setup.sh"} on the host to create it'
-    )
-  if root.stat().st_uid != os.getuid() or not os.access(root, os.R_OK | os.W_OK | os.X_OK):
-    raise RuntimeError(
-      f'runtime state root {root} is not owned and writable by this user; '
-      f'rerun {project / "setup.sh"} on the host'
-    )
+  root.mkdir(parents=True, exist_ok=True)
+  root.chmod(0o700)
   return root
 
 

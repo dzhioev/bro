@@ -24,7 +24,6 @@ from pathlib import Path
 import pytest
 
 import bro.workspace.docker as workspace_docker
-import bro.workspace.paths as workspace_paths
 import bro.workspace.project as workspace_project
 from bro.workspace.docker import Launch
 from bro.workspace.metadata import WorkspaceKind
@@ -185,10 +184,8 @@ def isolated() -> Iterator[Isolated]:
 @pytest.fixture(scope='module')
 def launched(isolated: Isolated) -> Iterator[Launched]:
   checkout = _checkout()
-  runtime_base = isolated.project.parent / 'state'
-  (runtime_base / workspace_paths.project_key(isolated.project)).mkdir(parents=True)
   with pytest.MonkeyPatch.context() as monkeypatch:
-    monkeypatch.setattr(workspace_paths, 'RUNTIME_BASE', runtime_base)
+    monkeypatch.setenv('XDG_DATA_HOME', str(isolated.project.parent / 'state'))
     monkeypatch.setattr(workspace_docker, 'project_root', lambda: checkout)
     monkeypatch.setattr(workspace_project, 'project_root', lambda: checkout)
     monkeypatch.setattr(workspace_docker.Path, 'home', lambda: isolated.home)
