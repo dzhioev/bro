@@ -12,7 +12,7 @@ import json
 import os
 import time
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -23,6 +23,9 @@ from bro.extra.github import api
 # backdating `iat` to absorb clock drift between the minting host and GitHub.
 _JWT_BACKDATE_SECONDS = 60
 _JWT_LIFETIME_SECONDS = 600
+
+# how long one minted token serves before the next read re-mints it
+_HELD_LIFETIME = timedelta(minutes=5)
 
 
 @dataclass(frozen=True)
@@ -60,7 +63,7 @@ class Source(credentials.MintingSource):
   installation: reads through the older one start answering 404 on endpoints it
   still covers. Every process resolving this credential therefore has to arrive
   at the same token, so the mint is held in a file beside the config rather than
-  in the process that minted it, and re-minted only near expiry.
+  in the process that minted it, and re-minted once `_HELD_LIFETIME` has passed.
   """
 
   TYPE = 'github_app'
@@ -91,7 +94,9 @@ class Source(credentials.MintingSource):
     except json.JSONDecodeError as e:
       raise ValueError(f'held github_app token {str(path)!r} is not valid json') from e
     expires_at = datetime.fromisoformat(held['expires_at'])
-    if datetime.now(UTC) >= expires_at - self.EXPIRY_MARGIN:
+    minted_at = datetime.fromisoformat(held['minted_at'])
+    now = datetime.now(UTC)
+    if now >= minted_at + _HELD_LIFETIME or now >= expires_at - self.EXPIRY_MARGIN:
       return None
     return credentials.Minted(held['token'], expires_at)
 
@@ -102,7 +107,14 @@ class Source(credentials.MintingSource):
     staged = path.with_name(f'{path.name}.{os.getpid()}')
     descriptor = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(descriptor, 'w') as file:
-      json.dump({'token': minted.value, 'expires_at': minted.expires_at.isoformat()}, file)
+      json.dump(
+        {
+          'token': minted.value,
+          'expires_at': minted.expires_at.isoformat(),
+          'minted_at': datetime.now(UTC).isoformat(),
+        },
+        file,
+      )
     os.replace(staged, path)
 
   def mint(self, config: dict) -> credentials.Minted:

@@ -139,6 +139,16 @@ class TestSource:
     assert app.Source('github_app_bot.json').fetch() == 'ghs_2'
     assert mint.call_count == 2
 
+  def test_a_held_token_is_reminted_once_its_lifetime_passes(self, bro_dir: Path, monkeypatch):
+    mint = self._configured(bro_dir, monkeypatch, timedelta(hours=1))
+    assert app.Source('github_app_bot.json').fetch() == 'ghs_1'
+    held_path = bro_dir / 'github_app_bot.json.minted'
+    held = json.loads(held_path.read_text())
+    aged = datetime.now(UTC) - app._HELD_LIFETIME - timedelta(seconds=1)
+    held_path.write_text(json.dumps({**held, 'minted_at': aged.isoformat()}))
+    assert app.Source('github_app_bot.json').fetch() == 'ghs_2'
+    assert mint.call_count == 2
+
   def test_the_held_token_is_owner_only(self, bro_dir: Path, monkeypatch):
     self._configured(bro_dir, monkeypatch, timedelta(hours=1))
     app.Source('github_app_bot.json').fetch()
