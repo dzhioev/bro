@@ -1,9 +1,9 @@
 """ready-made sources over the repo's canonical reference docs.
 
 Each doc is declared once as a `FileSource`. A bro lists it in `data_sources`
-either directly, for a dedicated `read` tool of its own (`references.dev_style`),
-or as `man('<topic>')`, joining the manual the bro's declared pages fold into.
-The instances are stateless, so sharing them across bros is fine.
+either directly, for a dedicated `read` tool of its own, or as `man('<topic>')`,
+joining the manual the bro's declared pages fold into. The instances are
+stateless, so sharing them across bros is fine.
 """
 
 from bro import prompts, reference
@@ -44,16 +44,6 @@ conditions = FileSource(
   render=False,
 )
 
-dev_style = FileSource(
-  'dev-style',
-  summary=(
-    'the development style policy: naming, scope, comments and docs, '
-    'fail-fast, teardown, verification. Read at session start; re-read '
-    'when auditing a diff against policy.'
-  ),
-  path=prompts.get_prompt_path('dev/style.md'),
-)
-
 ride = FileSource(
   'ride',
   summary=(
@@ -72,9 +62,7 @@ dive_in = FileSource(
   path=reference.DIRECTORY / 'dive_in.md',
 )
 
-_PAGES = NameMap(
-  {page.name: page for page in (environment, dev_style, template, conditions, ride, dive_in)}
-)
+_PAGES = NameMap({page.name: page for page in (environment, template, conditions, ride, dive_in)})
 
 
 def man(topic: str) -> ManPage:

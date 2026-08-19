@@ -1,6 +1,6 @@
 # Prompt store
 
-Centralised prompt store. Five loading conventions: auto-inject into every bro + `ride solo|along` session (`shared/`); serve as a reference doc — injected into `ride solo|along` sessions or mounted as a `FileSource` tool (`*.md`, top level or a subdirectory like `dev/`); inject the hold fragment at launch (`hold.md` composing `holds/`); splice into an opting-in text via `{{include}}` (`fragments/`); load explicitly by name (top-level `*.prompt` / `*.prompt.template`).
+Centralised prompt store. Five loading conventions: auto-inject into every bro + `ride solo|along` session (`shared/`); serve as a reference doc — injected into `ride solo|along` sessions or mounted as a `FileSource` tool (`*.md`); inject the hold fragment at launch (`hold.md` composing `holds/`); splice into an opting-in text via `{{include}}` (`fragments/`); load explicitly by name (top-level `*.prompt` / `*.prompt.template`).
 
 ## Files
 
@@ -19,7 +19,7 @@ Harness-specific conditioning is expressed with these directives, never as prose
 
 ## `*.md` reference docs
 
-A markdown reference doc in `bro/prompts/` — top level, or a non-`shared/` subdirectory like `dev/` (loader names are `/`-relative) — reaches sessions one of two ways:
+A markdown reference doc in `bro/prompts/` (loader names are `/`-relative) reaches sessions one of two ways:
 
 - **injected** — listed in `ride/ride/claude/system_prompt.py:_BASE_PROMPT_FILES`, appended to every `ride solo|along` session's `--append-system-prompt`. For content every managed Claude session must carry unconditionally.
 - **tool-served** — declared as a `FileSource` in `bro/datasources/references.py`, then listed in a bro's `data_sources` either on its own (a `read` tool of its own namespace) or as `man('<topic>')`, joining that bro's manual: on every harness the bro serves, and the framework lists whichever it mounts in the bro system prompt's `## Data sources` block. For reference docs the agent consults on demand; the body must be surface-neutral (no `#harness` forks — `FileSource.read` renders with no facts and raises on one).
@@ -28,7 +28,6 @@ Current reference docs:
 
 - `environment.md` — session-banner playbook: every surface calls the `bro::banner` service tool and reads this doc through the `environment` page (`ride banner --llm` stays as the human CLI). Tool-served only — not injected
 
-- `dev/style.md` — the development style policy, tool-served through the `dev-style` `FileSource` mounted on the Dev bro (the persona directs a read at session start and re-reads on demand — e.g. [[run pr]]'s policy audit before each commit's verdict). Not injected
 - `tool_names.md` — the tool-name resolution rule, templated on the `#wire` scheme; one file serves every surface. Claude sessions get the `mcp` rendering (`ns::tool` → `mcp__ns__tool`): injected here for non-raw sessions, composed into `BaseBro.claude_system_prompt` for `ride solo|along --raw` ones. Bro-native LLM runs compose the `bare` rendering (`ns::tool` → `ns__tool`) into `BaseBro.system_prompt`. Deliberately no `FileSource`
 
 ## Hold text
@@ -55,4 +54,4 @@ The level files are the single place the levels differ: unattended carries the n
 - **One-shot**: drop `<name>.prompt` (or `<name>.prompt.template` for `str.format` slots) at the top level. Load with `get_prompt('<name>.prompt'[, **kwargs])`
 - **Auto-injected into bros and `ride solo|along` sessions**: drop a `*.md` in `shared/`. Conventions that must hold for both surfaces at every hold (word choices, tone) belong here
 - **Include fragment**: drop a `*.md` in `fragments/` and splice it with `{{include fragments/<name>.md}}` from each opting-in text. For a convention that applies only where a capability exists — e.g. `task_tracker.md`, included by every persona that mounts task-tracker tools rather than injected everywhere — or only at some holds, e.g. `interaction.md`, included by the interactive level files
-- **Reference doc**: drop a `*.md` at top level or in a subdirectory (e.g. `dev/style.md`), then either add its filename to `ride/ride/claude/system_prompt.py:_BASE_PROMPT_FILES` (injected into every `ride solo|along` session) or declare a `FileSource` for it in `bro/datasources/references.py` — listed on a bro directly or as `man('<topic>')` (tool-served on demand, every harness — e.g. `environment.md`)
+- **Reference doc**: drop a `*.md` under this package, then either add its relative name to `ride/ride/claude/system_prompt.py:_BASE_PROMPT_FILES` (injected into every `ride solo|along` session) or declare a `FileSource` for it in `bro/datasources/references.py` — listed on a bro directly or as `man('<topic>')` (tool-served on demand, every harness — e.g. `environment.md`)

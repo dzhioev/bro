@@ -25,5 +25,21 @@ def bro_dev_usage_report():
   return _run('bro.dev.usage_report')
 
 
+def bro_extra_github_poll_pr():
+  return _run('bro.extra.github.poll_pr')
+
+
+def bro_workflow_commit_footer():
+  return _run('bro.workflow.commit_footer')
+
+
+def bro_workflow_fold_branch():
+  return _run('bro.workflow.fold_branch')
+
+
+def bro_workflow_land_pr():
+  return _run('bro.workflow.land_pr')
+
+
 def bros_analyst_scripts_trails_usage():
   return _run('bros.analyst.scripts.trails_usage')

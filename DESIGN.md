@@ -76,11 +76,6 @@ Bros live in a process-wide dict keyed by `name`, holding **classes** (not insta
 
 ## Concrete roster
 
-The built-in set lives in `bros/`:
-
-- `bro` — minimal general-purpose agent and the base for other concrete Bros
-- `dev` — generic software developer with file, shell, and search tools; owns the task-driven workflow spells (`spell::fix`, `spell::run-pr`, `spell::land`), whose task-tracker side rides the optional `brog` feature
-
-Installed distributions add consumer personas through the `bro` entry-point group.
+The core distribution ships only `bro`, the minimal general-purpose agent and base for other concrete Bros. `bro-dev` contributes the development-domain personas (`dev`, `lead`, `terminal`, and `analyst`); other distributions contribute consumer personas through the same `bro` entry-point group.
 
 Adding a new Bro is creating a new subclass and registering it — see `AGENTS.md` for the operational checklist.

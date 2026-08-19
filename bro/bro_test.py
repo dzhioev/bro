@@ -710,35 +710,6 @@ class TestClaudePersonaServers:
     assert set(bro.needed_secrets()) == {'alpha', 'beta', 'gamma'}
     assert bro.needed_secrets(harness='claude') == ()
 
-  def test_real_bro_persona_surfaces(self, monkeypatch):
-    from bros.dev import Dev
-
-    # brog's state factory reads the self-contained `brog` secret at build
-    monkeypatch.setattr(
-      'bro.base.credentials.get_json',
-      lambda name: {'backend': 'github', 'token': 't', 'repo': 'owner/repository'},
-    )
-    # dev's brog feature follows the environment: no brog config → no tracker
-    monkeypatch.setattr('bro.base.credentials.available', lambda name: False)
-    # the dev toolset is bro-harness-only — claude's built-in tools cover it —
-    # while the reference FileSources serve every harness
-    assert [
-      s.namespace for s in Dev().assemble(harness='claude', wire='mcp', include_raise=False)
-    ] == [
-      'dev-style-source',
-      'bro',
-      'spell',
-    ]
-    monkeypatch.setattr('bro.base.credentials.available', lambda name: name == 'brog')
-    assert [
-      s.namespace for s in Dev().assemble(harness='claude', wire='mcp', include_raise=False)
-    ] == [
-      'brog',
-      'dev-style-source',
-      'bro',
-      'spell',
-    ]
-
 
 class _SecretServer(InProcessMCPServer):
   needed_secrets = ('alpha', 'beta')

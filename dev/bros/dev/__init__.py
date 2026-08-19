@@ -2,7 +2,7 @@ import bro.brog.mcp as brog_mcp
 from bro import brog
 from bro.base.condition import when
 from bro.bro import feature
-from bro.datasources import references
+from bro.dev import references
 from bro.mcp import creds, harness, mount
 from bro.workflow.commit_footer import provision_hooks
 from bros.bro import Bro

@@ -1,17 +1,26 @@
-# Development tooling
+# Development domain
 
-For repositories built on the bro framework, distributed separately from the runtime. The distribution is `bro-dev` and its package is `bro.dev`, a portion of the framework's `bro` namespace; none of it is imported by framework users, and none of it is specific to this checkout — what only means something here lives in the `bro-local` member (`local/`).
+Development tooling for repositories built on the bro framework, distributed separately from the core. The distribution is `bro-dev`; it contributes portions of the `bro` and `bros` namespaces and depends on `bro`. Core never imports it. Nothing here is specific to this checkout — checkout-only policy and the `bro-dev` persona live in the `bro-local` member (`local/`).
 
 ## Development
 
-This workspace member owns only `pyproject.toml` — its distribution metadata, dependencies, and what its wheel carries. Formatting, linting, typing, and the test roster are the repository root's (`AGENTS.md`, "Development"), which covers this directory too; build the wheel with `uv build --package bro-dev`.
+This workspace member owns `pyproject.toml` — its distribution metadata, dependencies, console scripts, persona entry points, and wheel roots. Formatting, linting, typing, and the test roster are the repository root's (`AGENTS.md`, "Development"), which covers this directory too; build the wheel with `uv build --package bro-dev`.
 
 ## Components
 
-- `bro/dev/sync_scripts.py` — discovers CLIs and regenerates the project scripts table plus each distribution's committed `_entrypoints.py` bridge
-- `bro/dev/usage_report.py` — aggregates token-accounting footers over a git range
-- `bro/dev/install.py` — installs the framework's commit-footer hooks (`bro/workflow/commit_footer.py`) and the repo-local `git golc` alias into the current repository
-- `bro/dev/git_golc.py` — backs the repo-local `git golc` view with per-commit output-token credits
-- `bro/dev/shell_policy.py` — reusable shell-policy assertion over an explicit repository root
-- `bro/dev/packaging_policy.py` — reusable packaging-policy assertion over an explicit repository root: builds every distribution the workspace declares, plus any project the caller names beside it, and fails on a test module inside a wheel
-- `bros/analyst/` — the `analyst` persona and its machinery, registered through the `bro` entry-point group. It answers questions about recorded runs by folding the trail store rather than by recalling it, mounting the same file/shell toolset as `dev` (there is no trails toolset — `rewind` and `bro.trails.client` are reached through the shell) and declaring nothing beyond the session baseline, because reading trails needs no credential of its own. Its `spell::report-usage` drives the shipped `scripts/trails_usage.py` and commits the report it writes as `<date>–<slug>.md`, over a window and optional focus the caller states in prose; where reports land is the operated repo's `[tool.bro.analyst] reports`, since an installed package directory is site-packages and no location can be assumed; this checkout points it at `bros/analyst/reports/`, which sits inside a shipped module root and is therefore named in `wheel-exclude` so no wheel carries a written report
+- `bro/dev/` — reusable repository-development utilities:
+  - `sync_scripts.py` discovers CLIs and regenerates a distribution's scripts table plus committed `_entrypoints.py` bridge
+  - `usage_report.py` aggregates token-accounting footers over a git range
+  - `install.py` installs the commit-footer hooks and the repo-local `git golc` alias
+  - `git_golc.py` backs that alias with per-commit output-token credits
+  - `shell_policy.py` and `packaging_policy.py` expose reusable repository checks over an explicit root
+  - `references.py` declares the `dev-style` source over `bro/prompts/dev/style.md`
+- `bro/workflow/` — development delivery mechanics: co-author and token-accounting commit metadata, branch folding, PR landing, and the packaged git hooks. Its public import paths remain `bro.workflow.*`; its CLIs are `commit-footer`, `fold-branch`, and `land-pr`
+- `bro/extra/github/poll_pr.py` — the `poll-pr` review watcher. The GitHub client and App-auth source it consumes remain in core at `bro.extra.github.api` and `.app`
+- `bro/prompts/dev/style.md` — the development style policy, tool-served by the Dev persona through `dev-style-source::read`
+- `bros/dev/` — generic developer with the file/shell/search toolset and the audit, credential-wiring, task, PR, and landing spells. Its optional `brog` feature mounts tracker tooling; its provisioning declaration installs the commit hooks
+- `bros/lead/` — coordinator persona and `run-feature` spell
+- `bros/terminal/` — standalone container developer, directly derived from `BaseBro`
+- `bros/analyst/` — trail-analysis persona and machinery. It mounts the Dev toolset and declares the same commit-hook provisioning; its report destination comes from the operated repository's `[tool.bro.analyst] reports`
+
+The `bro`, `bro.extra`, `bro.prompts`, and `bros` package trees are shared with other distributions. Declare every shipped leaf in `[tool.uv.build-backend].module-name`; do not build one of those parent trees wholesale.

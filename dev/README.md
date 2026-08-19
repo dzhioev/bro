@@ -1,5 +1,10 @@
 # bro-dev
 
-`bro-dev` contains repository-development tooling kept out of the `bro` runtime distribution: console-script metadata generation, token-usage reports, shell-policy checks, and repository hook installation. It ships as `bro.dev`, a portion of the framework's `bro` namespace package.
+`bro-dev` contains the development domain kept out of the `bro` framework core:
 
-Install it in a repository's development dependency group, run `uv sync`, then call `bro.dev.install` from the repository's `setup.sh` after activating the venv. The installer copies the packaged post-commit hook and registers the local `git golc` alias.
+- repository utilities and commit-accounting workflow (`bro.dev`, `bro.workflow`)
+- the `poll-pr` GitHub review watcher
+- the `dev`, `lead`, `terminal`, and `analyst` personas and their spells
+- the development style reference mounted by Dev
+
+Install it in a repository's development dependency group and run `uv sync`. Call `bro.dev.install` from the repository's `setup.sh` after activating the venv to install the commit-footer hooks and local `git golc` alias. The package depends on `bro`; the GitHub API client and App authentication remain available from the core's `bro[github]` extra.

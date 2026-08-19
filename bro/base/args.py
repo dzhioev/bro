@@ -2,7 +2,7 @@
 """argument parsing built on argparse.
 
 bro.base.args must stay importable in a stdlib-only environment (no venv): some
-consumers run outside it — e.g. bro/workflow/commit_footer.py via the commit
+consumers run outside it — e.g. bro.workflow.commit_footer via the commit
 git hooks. So it imports no third-party package, at module load or otherwise,
 until a flag asks for one: icecream costs more to import than the whole of
 argparse, and every CLI in the repository builds a parser.

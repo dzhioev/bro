@@ -2,7 +2,7 @@ import json
 import sys
 import types
 from pathlib import Path
-from typing import ClassVar, Optional, get_args
+from typing import Optional, get_args
 
 import pytest
 
@@ -15,12 +15,6 @@ from bro.llm.mcp import InProcessMCPServer, ToolRegistry
 from bro.mcp import MCPServerSpec, creds
 from bro.prompts import get_prompt
 from bro.spells import CAST_SECRET, NAMESPACE, load_spell
-from bros.dev import Dev
-
-
-class _TrackerDev(Dev):
-  name = 'tracker-dev'
-  features: ClassVar = {'brog': True}
 
 
 def _spell(
@@ -173,52 +167,6 @@ class TestSpellStore:
   def test_checked_in_store_has_no_legacy_skill_directories(self):
     skill_directories = list((Path(spell_store.__file__).parent.parent / 'bros').glob('*/skills'))
     assert skill_directories == []
-
-  def test_tracker_dev_inherits_shared_and_dev_spells(self):
-    bro = _TrackerDev()
-    assert set(bro.spells) == {'ask', 'audit', 'fix', 'land', 'reflect', 'run-pr', 'wire'}
-    assert '## Spells' in bro.system_prompt
-    assert '## Available skills' not in bro.system_prompt
-
-  def test_fix_declares_optional_task_and_new_arguments_for_bro(self):
-    bro = _TrackerDev()
-    spell = load_spell('fix', bro.spells['fix'])
-    assert [(parameter.name, parameter.required) for parameter in spell.parameters] == [
-      ('task', False),
-      ('new', False),
-    ]
-
-    bro_body = bro.get_spell_body('fix', harness='bro', wire='bare')
-    claude_body = bro.get_spell_body('fix', harness='claude', wire='mcp')
-    for body in (bro_body, claude_body):
-      assert '`task` — operate on the existing task' in body
-      assert '`new` — create a task from this seed' in body
-      assert '/fix' not in body
-
-  def test_run_pr_declares_optional_base_and_reentry_arguments(self):
-    bro = _TrackerDev()
-    spell = load_spell('run-pr', bro.spells['run-pr'])
-    assert [(parameter.name, parameter.required) for parameter in spell.parameters] == [
-      ('base', False),
-      ('pr', False),
-    ]
-    bodies = (
-      bro.get_spell_body('run-pr', harness='bro', wire='bare'),
-      bro.get_spell_body('run-pr', harness='claude', wire='mcp'),
-    )
-    for body in bodies:
-      assert '`base` — base the PR' in body
-      assert '`pr` — re-entry mode' in body
-      assert '/run-pr' not in body
-
-  @pytest.mark.asyncio
-  async def test_skill_loader_is_a_framework_service_tool(self):
-    bro = _TrackerDev()
-    assert not hasattr(bro, 'skills')
-    assert not hasattr(bro, 'get_skill_body')
-    assert not hasattr(bro, 'skill_descriptions')
-    assert 'skill' in bro_module._SERVICE_TOOL_NAMES
-    assert 'skill' in {tool.name for tool in await _service_server(bro).list_tools()}
 
 
 class TestSpellValidation:
