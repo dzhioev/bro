@@ -25,10 +25,6 @@ def bro_broker_cli():
   return _run('bro.broker.cli')
 
 
-def bro_extra_github_poll_pr():
-  return _run('bro.extra.github.poll_pr')
-
-
 def bro_llm_usage():
   return _run('bro.llm.usage')
 
@@ -59,15 +55,3 @@ def bro_trails_rewind():
 
 def bro_trails_server_server():
   return _run('bro.trails.server.server')
-
-
-def bro_workflow_commit_footer():
-  return _run('bro.workflow.commit_footer')
-
-
-def bro_workflow_fold_branch():
-  return _run('bro.workflow.fold_branch')
-
-
-def bro_workflow_land_pr():
-  return _run('bro.workflow.land_pr')

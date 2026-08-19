@@ -2,7 +2,7 @@
 """aggregate LLM token usage across a git commit range.
 
 Walks `git log <range>`, parses the footer emitted by
-`bro/workflow/commit_footer.py` (format owned by the `usage` module), and sums
+`bro.workflow.commit_footer` (format owned by the `usage` module), and sums
 the per-model, per-class *deltas* across every commit in the range — the total
 spent producing it, each session counted once for what it had spent by the time
 its last commit was written.

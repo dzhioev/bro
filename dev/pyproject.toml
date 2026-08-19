@@ -18,6 +18,14 @@ dependencies = [
 "bro.dev.install" = "bro.dev._entrypoints:bro_dev_install"
 "bro.dev.sync-scripts" = "bro.dev._entrypoints:bro_dev_sync_scripts"
 "bro.dev.usage-report" = "bro.dev._entrypoints:bro_dev_usage_report"
+"bro.extra.github.poll-pr" = "bro.dev._entrypoints:bro_extra_github_poll_pr"
+"bro.workflow.commit-footer" = "bro.dev._entrypoints:bro_workflow_commit_footer"
+"bro.workflow.fold-branch" = "bro.dev._entrypoints:bro_workflow_fold_branch"
+"bro.workflow.land-pr" = "bro.dev._entrypoints:bro_workflow_land_pr"
+"commit-footer" = "bro.dev._entrypoints:bro_workflow_commit_footer"
+"fold-branch" = "bro.dev._entrypoints:bro_workflow_fold_branch"
+"land-pr" = "bro.dev._entrypoints:bro_workflow_land_pr"
+"poll-pr" = "bro.dev._entrypoints:bro_extra_github_poll_pr"
 "sync-scripts" = "bro.dev._entrypoints:bro_dev_sync_scripts"
 "usage-report" = "bro.dev._entrypoints:bro_dev_usage_report"
 # bros
@@ -25,6 +33,9 @@ dependencies = [
 
 [project.entry-points.bro]
 analyst = "bros.analyst:Analyst"
+dev = "bros.dev:Dev"
+lead = "bros.lead:Lead"
+terminal = "bros.terminal:Terminal"
 
 [tool.uv.sources]
 bro = { workspace = true }
@@ -34,9 +45,17 @@ bro = ["bro", "bros"]
 
 [tool.uv.build-backend]
 module-root = ""
-module-name = ["bro.dev", "bros.analyst"]
-# `bro` and `bros` are the framework's namespace packages; these portions carry
-# no __init__.py of their own so the distributions merge
+module-name = [
+  "bro.dev",
+  "bro.extra.github",
+  "bro.prompts.dev",
+  "bro.workflow",
+  "bros.analyst",
+  "bros.dev",
+  "bros.lead",
+  "bros.terminal",
+]
+# these module roots contribute leaves to package trees shared with `bro`
 namespace = true
 wheel-exclude = [
   "**/*_test.py",

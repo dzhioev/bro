@@ -1,6 +1,6 @@
 # Shared low-level utilities
 
-Used across the whole repo. Some modules (`bro.base.args`, `bro.base.log`) happen to import no third-party package at load time, so consumers that run outside the venv (e.g. `bro/workflow/commit_footer.py` from the commit git hooks) can import them. Some modules expose a CLI (`bro.base.credentials`, `bro.base.time-util`); run those with `--help` for flags.
+Used across the whole repo. Some modules (`bro.base.args`, `bro.base.log`) happen to import no third-party package at load time, so consumers that run outside the venv (e.g. `bro.workflow.commit_footer` from the commit git hooks) can import them. Some modules expose a CLI (`bro.base.credentials`, `bro.base.time-util`); run those with `--help` for flags.
 
 ## Modules
 
