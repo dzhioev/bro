@@ -46,7 +46,7 @@ def session_append_prompt(hold: str, bro_name: str) -> str:
   base and persona prompts stay hold-neutral.
   """
   # Keep the bro class graph out of this leaf module's import closure.
-  import bro.llm.mcp as llm_mcp
+  import bro.mcp as llm_mcp
   from bro import prompts
   from bro.base import credentials
   from bro.registry import create_bro

@@ -167,8 +167,8 @@ def _validate(payload: dict[str, Any]) -> Optional[str]:
   """the request's shape errors, or None when well-formed. Strict: an unknown key
   is rejected rather than ignored — a typo'd `timout` silently falling back to the
   default would hide the caller's bug."""
-  from bro.llm.mcp import HOLDS
   from bro.llm.providers import LLMSelectionError, parse as parse_llm
+  from bro.mcp import HOLDS
 
   unknown = sorted(set(payload) - _PAYLOAD_KEYS)
   if len(unknown) > 0:

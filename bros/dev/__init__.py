@@ -3,7 +3,7 @@ from bro import brog
 from bro.base.condition import when
 from bro.bro import feature
 from bro.datasources import references
-from bro.llm.mcp import creds, harness, mount
+from bro.mcp import creds, harness, mount
 from bros.bro import Bro
 from bros.dev import mcp
 

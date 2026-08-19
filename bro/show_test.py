@@ -6,7 +6,8 @@ import bro.llm.llms.echo as llm_llms_echo
 import bro.llm.llms.openai as llm_llms_openai
 from bro.bro import BaseBro
 from bro.datasources.searchable import Hit, SearchableDataSource
-from bro.llm.mcp import FunctionTool, InProcessMCPServer, MCPServerSpec, ToolLayer, creds, describe
+from bro.llm.mcp import FunctionTool, InProcessMCPServer
+from bro.mcp import MCPServerSpec, ToolLayer, creds, describe
 from bro.show import format_card
 
 

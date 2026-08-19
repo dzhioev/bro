@@ -1,7 +1,8 @@
 from pathlib import Path
 
 from bro.datasources.base import DataSource
-from bro.llm.mcp import FunctionTool, InProcessMCPServer, MCPServer, render_text
+from bro.llm.mcp import FunctionTool, InProcessMCPServer, MCPServer
+from bro.mcp import render_text
 
 
 class FileSource(DataSource):

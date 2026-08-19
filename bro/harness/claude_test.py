@@ -1,7 +1,7 @@
 import pytest
 
 import bro.harness.claude as claude
-from bro.llm.mcp import ToolLayer, select
+from bro.mcp import ToolLayer, select
 
 _GROUPS = {'FILES': claude.FILES, 'SHELL': claude.SHELL, 'DELEGATION': claude.DELEGATION}
 

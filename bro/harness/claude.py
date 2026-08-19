@@ -11,7 +11,7 @@ persona forgoes: `FILES` reaches the workspace, `SHELL` runs commands in it, and
 """
 
 from bro.base.condition import When, when
-from bro.llm.mcp import ToolLayer, allow_commands as _allow_commands, block as _block, harness
+from bro.mcp import ToolLayer, allow_commands as _allow_commands, block as _block, harness
 
 HARNESS = 'claude'
 

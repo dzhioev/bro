@@ -7,10 +7,12 @@ from typing import ClassVar, Optional, get_args
 import pytest
 
 import bro.llm.mcp as llm_mcp
+import bro.mcp as mcp
 from bro import bro as bro_module, spells as spell_store
 from bro.base.condition import SetVariable
 from bro.bro import BaseBro
-from bro.llm.mcp import InProcessMCPServer, MCPServerSpec, ToolRegistry, creds
+from bro.llm.mcp import InProcessMCPServer, ToolRegistry
+from bro.mcp import MCPServerSpec, creds
 from bro.prompts import get_prompt
 from bro.spells import CAST_SECRET, NAMESPACE, load_spell
 from bros.dev import Dev
@@ -79,18 +81,18 @@ class _NoRun:
   current_tool_step_id = None
 
 
-def _servers(bro: BaseBro, wire: llm_mcp.Wire) -> list[llm_mcp.MCPServer]:
+def _servers(bro: BaseBro, wire: mcp.Wire) -> list[llm_mcp.MCPServer]:
   if wire == 'mcp':
     return bro.claude_bro_mcp_servers()
   return bro.native_mcp_servers(hold='unattended', live_run=_NoRun())
 
 
-def _spell_server(bro: BaseBro, *, wire: llm_mcp.Wire = 'bare') -> llm_mcp.MCPServer:
+def _spell_server(bro: BaseBro, *, wire: mcp.Wire = 'bare') -> llm_mcp.MCPServer:
   return next(server for server in _servers(bro, wire) if server.namespace == NAMESPACE)
 
 
 def _service_server(
-  bro: BaseBro, *, wire: llm_mcp.Wire = 'bare', include_raise: bool = True
+  bro: BaseBro, *, wire: mcp.Wire = 'bare', include_raise: bool = True
 ) -> llm_mcp.MCPServer:
   # built on its own rather than picked out of a full assembly: these tests read
   # service tools only, and materializing a bro's declared servers would demand
@@ -140,10 +142,10 @@ class TestSpellStore:
     feature_names = frozenset({'brog'})
     for path in spell_files:
       spell = load_spell(path.stem, path)
-      for harness in get_args(llm_mcp.Harness):
-        for wire in get_args(llm_mcp.Wire):
+      for harness in get_args(mcp.Harness):
+        for wire in get_args(mcp.Wire):
           for enabled in (True, False):
-            llm_mcp.render_text(
+            mcp.render_text(
               spell.body,
               harness=harness,
               wire=wire,
@@ -282,7 +284,7 @@ class TestSpellServer:
         '__module__': package,
         'name': 'reserved',
         'description': 'test bro',
-        'tools': [llm_mcp.ToolLayer(server_specs=(server_spec,))],
+        'tools': [mcp.ToolLayer(server_specs=(server_spec,))],
       },
     )
     with pytest.raises(ValueError, match='reserved for bro framework tools'):
@@ -392,7 +394,7 @@ class TestSpellServer:
 
 class TestCast:
   @staticmethod
-  async def _tool(bro: BaseBro, *, wire: llm_mcp.Wire = 'bare'):
+  async def _tool(bro: BaseBro, *, wire: mcp.Wire = 'bare'):
     tools = await _service_server(bro, wire=wire).list_tools()
     return next(tool for tool in tools if tool.name == 'cast')
 
@@ -632,9 +634,9 @@ class TestSpellOptionalSecret:
 class TestSpellToolNames:
   def test_tool_name_prompt_uses_the_ordinary_namespace_rule(self):
     text = get_prompt('tool_names.md')
-    bare = llm_mcp.render_text(text, wire='bare')
-    mcp = llm_mcp.render_text(text, wire='mcp')
+    bare = mcp.render_text(text, wire='bare')
+    mcp_text = mcp.render_text(text, wire='mcp')
     assert 'replace `::` with `__` and call that wire name directly' in bare
-    assert 'prepend `mcp__`' in mcp
+    assert 'prepend `mcp__`' in mcp_text
     assert 'spells `at` on the wire' not in bare
     assert 'No canonical namespace may be named `spell`' in bare

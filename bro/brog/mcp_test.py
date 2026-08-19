@@ -8,7 +8,7 @@ from bro.base import credentials
 from bro.base.text_window import DEFAULT_LIMIT, MAX_LIMIT
 from bro.brog.mcp import toolset
 from bro.brog.model import Comment, Project, Task
-from bro.llm.mcp import mount
+from bro.mcp import mount
 
 # tools are built once against a shared mock System (schema derivation is not
 # free); the autouse fixture resets the mock between tests.

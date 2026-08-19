@@ -1,6 +1,6 @@
 from bro.base.condition import Condition
 from bro.bro import BaseBro
-from bro.llm.mcp import MCPServerSpec
+from bro.mcp import MCPServerSpec
 
 
 async def format_card(bro: BaseBro, *, include_system_prompt: bool = False) -> str:
