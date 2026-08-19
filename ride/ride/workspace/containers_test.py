@@ -1,6 +1,6 @@
 import sys
 
-import bro.workspace.containers as workspace_containers
+import ride.workspace.containers as workspace_containers
 
 
 class _FakeProc:

@@ -10,11 +10,7 @@ from bro.base import credentials, log
 from bro.launch.broxy import START_SESSION_BROXY_ENV
 from bro.llm.llm import LLMSpec
 from bro.monitor import SESSION_DIR_ENV, trail_pointer, workspace_session_dir
-from bro.workspace.containers import broker_enabled
-from bro.workspace.docker import Launch, find_container_id
 from bro.workspace.git import resolve_ref
-from bro.workspace.metadata import WorkspaceKind
-from bro.workspace.model import KindMismatch, SessionBusy, Workspace
 from bro.workspace.paths import (
   CONTAINER_SESSION_DIR,
   ensure_runtime_root,
@@ -22,13 +18,17 @@ from bro.workspace.paths import (
   project_root,
   venv_env,
 )
-from bro.workspace.store import ScopedSecrets, log_scoped_secrets, materialize_scoped_store
-from bro.workspace.worktrees import ensure_host_worktree, provision_host_worktree
 from ride.flags import default_hold
 from ride.harness import Harness, get_harness
 from ride.root import run_host_process_via_broker, run_in_container
 from ride.scope import LaunchScopeError, preflight_scoped_launch, scoped_secrets
 from ride.trails import local_trails_mounts
+from ride.workspace.containers import broker_enabled
+from ride.workspace.docker import Launch, find_container_id
+from ride.workspace.metadata import WorkspaceKind
+from ride.workspace.model import KindMismatch, SessionBusy, Workspace
+from ride.workspace.store import ScopedSecrets, log_scoped_secrets, materialize_scoped_store
+from ride.workspace.worktrees import ensure_host_worktree, provision_host_worktree
 
 
 @dataclass(frozen=True)

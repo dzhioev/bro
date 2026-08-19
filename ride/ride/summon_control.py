@@ -79,10 +79,10 @@ from bro import summon_status
 from bro.base import credentials, log
 from bro.summon import DEFAULT_HARNESS, DEFAULT_TIMEOUT
 from bro.summon_status import STATUS_ENV
-from bro.workspace.model import Workspace
 from bro.workspace.paths import CONTAINER_SUMMON_ROOT, summon_dir, workspace_tree
 from ride.harness import HARNESS_NAMES
 from ride.scope import split_scope_overrides
+from ride.workspace.model import Workspace
 
 if TYPE_CHECKING:
   from bro.broker.brotocol import Message

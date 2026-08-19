@@ -4,8 +4,8 @@ from unittest.mock import patch
 import pytest
 
 import ride.cli as ride_cli
-from bro.workspace.model import Workspace
 from ride.harness import get_harness
+from ride.workspace.model import Workspace
 
 
 @pytest.fixture(autouse=True)

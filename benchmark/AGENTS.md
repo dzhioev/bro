@@ -10,9 +10,9 @@ This is not a uv workspace member: `harbor` reaches `openai < 3` through litellm
 `agent` extra pins `openai == 3`, so no single lock satisfies both. The directory therefore locks and
 syncs on its own — `uv sync --directory benchmark --all-groups` builds `.venv` from the `uv.lock`
 committed beside this file — and depends on the framework through
-`bro = { path = "..", editable = true }` with no extras. Keep it that way: the host side of this
-project reads only the framework's base layer, never the class graph that pulls in the other
-`openai` major, and the two must never meet in one interpreter.
+`bro = { path = "..", editable = true }` and `bro-ride = { path = "../ride", editable = true }`.
+The ride dependency supplies scoped-store materialization without pulling in the native engine's
+other `openai` major; the two must never meet in one interpreter.
 
 Formatting and linting stay the repository root's, which walks this directory through its
 `[tool.ruff] src`. pytest and pyright run from here instead, inside `.venv`: `run-tests` syncs it and

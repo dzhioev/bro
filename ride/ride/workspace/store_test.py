@@ -1,6 +1,6 @@
 import pytest
 
-import bro.workspace.store as workspace_store
+import ride.workspace.store as workspace_store
 
 
 class TestFinalizeScopedSecrets:

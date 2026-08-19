@@ -3,10 +3,10 @@ from typing import Optional
 
 import pytest
 
-import bro.workspace.docker as workspace_docker
 import ride.claude.claude_config as ride_claude_config
-from bro.workspace.metadata import WorkspaceKind
-from bro.workspace.model import Workspace
+import ride.workspace.docker as workspace_docker
+from ride.workspace.metadata import WorkspaceKind
+from ride.workspace.model import Workspace
 
 
 def _host_file(tmp_path, **extra):

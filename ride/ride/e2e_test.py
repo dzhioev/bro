@@ -52,16 +52,16 @@ from typing import Optional
 
 import pytest
 
-import bro.workspace.docker as workspace_docker
 import bro.workspace.paths as workspace_paths
-import bro.workspace.spawn as workspace_spawn
 import ride.spawn
+import ride.workspace.docker as workspace_docker
+import ride.workspace.spawn as workspace_spawn
 from bro.broker.brotocol import Message
 from bro.broker.dispatcher import Broker, Dispatcher, ping_handler, spawn_test_handler
 from bro.broker.runtime import Peer
 from bro.broker.transports.unix import UnixServerTransport
-from bro.workspace.docker import find_container_id
-from bro.workspace.spawn import DockerLaunchSpec, DockerSpawner
+from ride.workspace.docker import find_container_id
+from ride.workspace.spawn import DockerLaunchSpec, DockerSpawner
 
 
 def _docker_available() -> bool:
@@ -277,9 +277,9 @@ exec "$@"
 _DRIVER = """
 import json, os, sys
 from ride.root import run_in_container
-from bro.workspace.docker import Launch
-from bro.workspace.metadata import WorkspaceKind
-from bro.workspace.model import Workspace
+from ride.workspace.docker import Launch
+from ride.workspace.metadata import WorkspaceKind
+from ride.workspace.model import Workspace
 from bro.workspace.paths import project_root
 
 launch = Launch(name=os.environ['RIDE_E2E_NAME'],

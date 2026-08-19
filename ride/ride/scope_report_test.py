@@ -2,8 +2,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from bro.workspace.project import ProjectConfig
-from bro.workspace.store import ScopedSecrets
 from ride.scope_report import report_scope
+from ride.workspace.store import ScopedSecrets
 
 
 def _run(

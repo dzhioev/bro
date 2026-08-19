@@ -6,7 +6,7 @@ How to bring up a fresh checkout, plus what the framework reads out of `~/.bro`.
 
 A repository operated by `ride` provides a root `setup.sh` with one postcondition: `.venv/bin/ride` works. The script runs `uv sync`, activates that environment long enough for `bro.dev.install` to install repository hooks, and skips the sync while the environment the container entrypoint linked in still describes the tree — it compares the tree's dependency manifests against the copies `RIDE_VENV_MANIFEST` names on every run, so a rebase that moves them re-syncs mid-session.
 
-The framework repository is a uv workspace whose root publishes the `bro` distribution, whose `dev/` member publishes the development tooling as `bro-dev`, and whose `local/` member (`bro-local`) carries this checkout's own persona and scripts. `uv sync --all-packages --all-groups --all-extras` creates the root `.venv`, installs all three editably, and registers each distribution's committed console-script bridge. The root owns the tool configuration and the development gate for every member.
+The framework repository is a uv workspace whose root publishes `bro`; `dev/` publishes `bro-dev`, `ride/` publishes `bro-ride`, and `local/` publishes this checkout's `bro-local` persona and scripts. `uv sync --all-packages --all-groups --all-extras` creates the root `.venv`, installs all four editably, and registers each distribution's committed console-script bridge. The root owns the tool configuration and development gate for every member.
 
 Prerequisites are documented in `README.md`. `setup_env.sh` remains an optional macOS/Ubuntu reference installer and is not invoked by repository provisioning.
 
@@ -22,9 +22,9 @@ Prerequisites are documented in `README.md`. `setup_env.sh` remains an optional 
 - `log.sh` — leveled shell logging thresholded by `BRO_LOG_LEVEL`
 - `strict.sh` — fail-fast shell guards, including command-not-found inside test positions
 - `docker_smoke_test.sh` — packaged sourceable helper for service `verify_deps.sh` scripts
-- `base_image/` — Dockerfile and builder for `bro-base`, the local-only general-purpose base image
-- `container/` — the managed-session image, entrypoint, clone helper, and host-only smoke test. The build context is assembled by `bro/workspace/build_context.py`, which injects this directory's files and the shell helpers above into the archive. The image bakes a workspace venv in two stages: dependency resolution from the injected manifest set, then editable installation from the full project context. On launch the entrypoint links it into the clone and names the manifest set it was resolved from, staged in the image; the repository's `setup.sh` compares the clone's copies against that set and syncs whenever they diverge
 - `bro/workflow/hooks/post-commit` — packaged hook installed by `bro.dev.install`; it advances token-accounting state after each commit
+
+The managed-session image and its local base-image builder live under `ride/ride/setup/`; `ride.workspace.build_context` injects them together with the shell helpers above.
 
 ## Configuration
 

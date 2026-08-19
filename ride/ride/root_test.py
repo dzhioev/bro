@@ -1,14 +1,14 @@
 import sys
 
 import bro.summon
-import bro.workspace.docker as workspace_docker
-import bro.workspace.spawn as workspace_spawn
 import ride.root
 import ride.spawn
 import ride.summon_control
-from bro.workspace.metadata import WorkspaceKind
-from bro.workspace.model import Workspace
+import ride.workspace.docker as workspace_docker
+import ride.workspace.spawn as workspace_spawn
 from bro.workspace.paths import CONTAINER_SUMMON_ROOT, summon_dir, workspace_dir
+from ride.workspace.metadata import WorkspaceKind
+from ride.workspace.model import Workspace
 
 
 def _exit_record(tmp_path) -> str:

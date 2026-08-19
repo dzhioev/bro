@@ -15,10 +15,10 @@ import ride.spawn
 import ride.summon_control
 from bro.base import credentials
 from bro.monitor import workspace_session_dir
-from bro.workspace.metadata import WorkspaceKind
-from bro.workspace.model import Workspace
 from bro.workspace.paths import CONTAINER_SESSION_DIR
 from ride.scope import ScopedSecrets
+from ride.workspace.metadata import WorkspaceKind
+from ride.workspace.model import Workspace
 
 
 @pytest.fixture(autouse=True)
@@ -133,7 +133,7 @@ class _ContainerHarness:
       patch('ride.claude.harness.credentials.try_get', return_value='tok'),
       patch('ride.scope.credentials.build_scoped_store', return_value={}),
       patch('ride.claude.harness.container_claude_state', return_value=([], {})),
-      patch('bro.workspace.model.ContainerWorkspace.remove'),
+      patch('ride.workspace.model.ContainerWorkspace.remove'),
       patch('ride.session._print_resume_hint'),
       # keep the bro-registry import out; threading is asserted per-test
       patch('ride.summon_control.summon_allow_list', return_value=set()),

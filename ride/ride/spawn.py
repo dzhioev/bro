@@ -33,25 +33,25 @@ from bro.summon import (
   SUMMONER_ENV,
   encode_may_summon,
 )
-from bro.workspace.docker import Launch
 from bro.workspace.git import resolve_head, resolve_ref
-from bro.workspace.metadata import WorkspaceKind
-from bro.workspace.model import Workspace
 from bro.workspace.paths import broker_dir, project_root, summon_dir, workspace_dir
-from bro.workspace.spawn import (
-  CompositeSpawner,
-  DockerLaunchSpec,
-  DockerSpawner,
-  ProcessLaunchSpec,
-  ProcessSpawner,
-)
-from bro.workspace.store import ScopedSecrets, log_scoped_secrets
 from ride.flags import default_hold
 from ride.harness import ContainerExtras, get_harness
 from ride.scope import split_scope_overrides, summoned_credential_scope
 from ride.session import SessionSpec, record_resume_spec
 from ride.summon_control import SummonControl, summon_status_file
 from ride.trails import local_trails_mounts
+from ride.workspace.docker import Launch
+from ride.workspace.metadata import WorkspaceKind
+from ride.workspace.model import Workspace
+from ride.workspace.spawn import (
+  CompositeSpawner,
+  DockerLaunchSpec,
+  DockerSpawner,
+  ProcessLaunchSpec,
+  ProcessSpawner,
+)
+from ride.workspace.store import ScopedSecrets, log_scoped_secrets
 
 
 @dataclass(frozen=True)
@@ -272,7 +272,7 @@ def run_root_via_broker(
   channel (`broker request ping '{}'`), and logs the root's own run lifecycle
   (`started`/`completed`) as its parent. While an interactive root owns the
   terminal, host output goes to the workspace's host log instead of the shared
-  TTY (see `bro.workspace.spawn._HostLogRedirect`); headless runs keep it on stderr.
+  TTY (see `ride.workspace.spawn._HostLogRedirect`); headless runs keep it on stderr.
 
   `workspace` is the workspace the root session runs in — its name is the root's
   identity in the summon audit, and its records carry the broker-published

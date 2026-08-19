@@ -18,8 +18,8 @@ from typing import Optional
 
 from bro.base import log
 from bro.monitor import CLAUDE_CONFIG_DIR_ENV, encode_project_path, workspace_claude_dir
-from bro.workspace.metadata import WorkspaceKind
-from bro.workspace.model import Workspace
+from ride.workspace.metadata import WorkspaceKind
+from ride.workspace.model import Workspace
 
 _CONTAINER_CLAUDE_DIR = '/home/ride/.claude'
 

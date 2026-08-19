@@ -42,4 +42,6 @@ wheel-exclude = [
   "**/conftest.py",
   "**/AGENTS.md",
   "**/*.egg-info",
+  "ride/setup/container/bump-claude-code.sh",
+  "ride/setup/container/test_smoke.sh",
 ]

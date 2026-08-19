@@ -44,7 +44,7 @@ from harbor.models.trial.result import AgentInfo
 from bro.base import credentials
 from bro.benchmark.bundle import Bundle, built, default_root, workspace_root
 from bro.llm.usage import read_usage_file
-from bro.workspace.store import materialize_scoped_store
+from ride.workspace.store import materialize_scoped_store
 
 AGENT_NAME = 'bro'
 
