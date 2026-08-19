@@ -11,7 +11,7 @@ Harness your bros: `bro` is a meta-harness for declarative agent personas. A per
 
 **Launch commands:** `ride solo` / `ask` and `ride along` / `call` create managed isolated workspaces. `bro run` and `bro chat` run in the calling process with ambient credentials; they do not isolate or hydrate a scoped store.
 
-The repository is a [uv](https://docs.astral.sh/uv/) workspace: the root publishes `bro`, [`ride/`](ride/README.md) publishes the managed-workspace runtime and Claude harness, and [`dev/`](dev/README.md) publishes development tooling for repositories built on the framework.
+The repository is a [uv](https://docs.astral.sh/uv/) workspace: the root publishes `bro`, [`native/`](native/README.md) publishes the native engine, [`ride/`](ride/README.md) publishes the managed-workspace runtime and both harness adapters, and [`dev/`](dev/README.md) publishes development tooling for repositories built on the framework.
 
 ## Prerequisites
 
@@ -19,10 +19,10 @@ Development requires Python 3.12 or newer, Git, and [uv](https://docs.astral.sh/
 
 ## Installation
 
-The base distribution contains every module — `bro.base`, the MCP abstraction, credential handling, workspace primitives, prompts, and the framework console scripts — and its required dependencies cover declaring and inspecting a persona: `bro list`, `bro show`, `credentials`, and `bro-shell-dir` run on a bare install. Every surface that *runs* a persona states its dependencies in an extra, so an install pays for the surfaces it selects:
+The base `bro` distribution provides the declaration and inspection APIs, MCP abstraction, credential handling, shared workspace/session primitives, prompts, and framework services. Install the distribution for the engine you run:
 
-- `bro[agent]` — the OpenAI agent loop, tool serving, data sources, and terminal UIs
-- `bro-ride` — the `ride` runtime, Claude harness, `ask` / `call` aliases, and `dive-in` (it installs its `bro` runtime extras)
+- `bro-native` — the native LLM loop, the `bro` command (`list`, `show`, `run`, and `chat`), provider clients, and terminal UIs
+- `bro-ride` — the managed-workspace runtime, both harness adapters, `ask` / `call` aliases, and `dive-in`; install `bro-native` alongside it in a repository that launches the native harness
 - `bro[http]` — aiohttp-based clients and services
 - `bro[llm]` — OpenAI LLM access without the agent UI dependencies
 - `bro[runtime]` — the MCP serving front, over stdio or HTTP
@@ -30,7 +30,7 @@ The base distribution contains every module — `bro.base`, the MCP abstraction,
 - `bro[aws]` — the `ssm` credential source
 - `bro[github]` — GitHub App authentication
 
-A repository operated by `ride` provides a root `setup.sh` whose postcondition is an executable `.venv/bin/ride`. A consuming development repository normally installs `bro-dev` in its dev dependency group, syncs the workspace, activates the resulting venv, and calls `bro.dev.install`, which installs the commit-footer hooks and `git golc` alias. When the container entrypoint links a pre-built environment into the tree it exports `RIDE_VENV_MANIFEST`, a directory holding the dependency manifests that environment was resolved from at their repository-relative paths; the script must reuse the environment while the tree's own copies still match them and sync when they diverge.
+A repository operated by `ride` provides a root `setup.sh` whose postcondition is an executable `.venv/bin/ride`; when the repository permits `--harness bro`, the same environment must install `bro-native` and provide `.venv/bin/bro`. A consuming development repository normally installs `bro-dev` in its dev dependency group, syncs the workspace, activates the resulting venv, and calls `bro.dev.install`, which installs the commit-footer hooks and `git golc` alias. When the container entrypoint links a pre-built environment into the tree it exports `RIDE_VENV_MANIFEST`, a directory holding the dependency manifests that environment was resolved from at their repository-relative paths; the script must reuse the environment while the tree's own copies still match them and sync when they diverge.
 
 ## Extension entry points
 
@@ -73,7 +73,7 @@ source .venv/bin/activate
 run-tests
 ```
 
-`./setup.sh` syncs the editable workspace and installs the repository hooks; the formatter and the test gate cover every workspace member, plus [`benchmark/`](benchmark/README.md), which ships from this repository beside the workspace rather than inside it and carries an environment of its own. Build the wheels with `uv build --package bro` and `uv build --package bro-dev`.
+`./setup.sh` syncs the editable workspace and installs the repository hooks; the formatter and the test gate cover every workspace member, plus [`benchmark/`](benchmark/README.md), which ships from this repository beside the workspace rather than inside it and carries an environment of its own. Build the workspace wheels with `uv build --package bro`, `uv build --package bro-native`, `uv build --package bro-dev`, and `uv build --package bro-ride`.
 
 ## License
 

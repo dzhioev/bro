@@ -19,23 +19,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-agent = [
-  "aiohttp==3.14.1",
-  "humanize==4.16.0",
-  "mcp==1.28.1",
-  "openai==3.0.0",
-  "rich==15.0.0",
-  "textual==8.2.8",
-  "trafilatura==2.1.0",
-]
 aws = [
   "boto3==1.43.40",
-]
-ride = [
-  "humanize==4.16.0",
-  "mcp==1.28.1",
-  "rich==15.0.0",
-  "textual==8.2.8",
 ]
 http = [
   "aiohttp==3.14.1",
@@ -77,7 +62,7 @@ dev = [
 ]
 
 [tool.uv.workspace]
-members = ["dev", "local", "ride"]
+members = ["dev", "local", "native", "ride"]
 
 [tool.uv.sources]
 bro-dev = { workspace = true }
@@ -85,15 +70,12 @@ bro-local = { workspace = true }
 
 [project.scripts]
 # bro
-"bro" = "bro._entrypoints:bro_run"
 "bro-shell-dir" = "bro._entrypoints:bro_shell"
 "bro.base.credentials" = "bro._entrypoints:bro_base_credentials"
 "bro.base.time-util" = "bro._entrypoints:bro_base_time_util"
 "bro.broker.broxy" = "bro._entrypoints:bro_broker_broxy"
 "bro.broker.cli" = "bro._entrypoints:bro_broker_cli"
 "bro.llm.usage" = "bro._entrypoints:bro_llm_usage"
-"bro.native.llm" = "bro._entrypoints:bro_native_llm"
-"bro.run" = "bro._entrypoints:bro_run"
 "bro.runtime.mcp-server" = "bro._entrypoints:bro_runtime_mcp_server"
 "bro.shell" = "bro._entrypoints:bro_shell"
 "bro.summon" = "bro._entrypoints:bro_summon"
@@ -126,6 +108,10 @@ reports = "dev/bros/analyst/reports"
 [tool.deptry.package_module_name_map]
 python_ulid = ["ulid"]
 
+[tool.deptry.per_rule_ignores]
+# Optional UI and extraction modules are activated by engine distributions.
+DEP003 = ["humanize", "rich", "textual", "trafilatura"]
+
 [tool.uv.build-backend]
 module-root = ""
 module-name = ["bro", "bros"]
@@ -151,16 +137,16 @@ wheel-exclude = [
 consider_namespace_packages = true
 asyncio_mode = "strict"
 asyncio_default_fixture_loop_scope = "function"
-pythonpath = [".", "dev", "local", "ride"]
+pythonpath = [".", "dev", "local", "native", "ride"]
 max_warnings = "0"
 markers = [
   "credential_gate: run with the real run-start credential gate (opts out of the conftest autouse fixture that pins it open)",
 ]
 
 [tool.pyright]
-include = ["bro", "bros", "dev", "local", "ride", "conftest.py"]
+include = ["bro", "bros", "dev", "local", "native", "ride", "conftest.py"]
 exclude = ["bro/setup/", ".venv/", "*.egg-info/", "build/"]
-extraPaths = [".", "dev", "local", "ride"]
+extraPaths = [".", "dev", "local", "native", "ride"]
 venvPath = "."
 venv = ".venv"
 
@@ -168,7 +154,7 @@ venv = ".venv"
 line-length = 100
 indent-width = 2
 target-version = "py312"
-src = [".", "dev", "local", "ride", "benchmark"]
+src = [".", "dev", "local", "native", "ride", "benchmark"]
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "I", "B", "C4", "UP", "PIE", "RUF012"]

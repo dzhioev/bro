@@ -5,7 +5,14 @@ from pathlib import Path
 from typing import Optional
 
 SETUP_SCRIPT = Path(__file__).resolve().parents[3] / 'setup.sh'
-MANIFESTS = ('pyproject.toml', 'uv.lock', 'dev/pyproject.toml', 'local/pyproject.toml')
+MANIFESTS = (
+  'pyproject.toml',
+  'uv.lock',
+  'dev/pyproject.toml',
+  'local/pyproject.toml',
+  'native/pyproject.toml',
+  'ride/pyproject.toml',
+)
 
 
 def _stub_command(path: Path, body: str) -> None:

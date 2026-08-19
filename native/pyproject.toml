@@ -1,0 +1,49 @@
+[build-system]
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"
+
+[project]
+name = "bro-native"
+version = "0.1.0"
+description = "native LLM engine and command-line interface for bro"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "bro",
+  "aiohttp==3.14.1",
+  "humanize==4.16.0",
+  "mcp==1.28.1",
+  "openai==3.0.0",
+  "rich==15.0.0",
+  "textual==8.2.8",
+  "trafilatura==2.1.0",
+]
+
+[project.scripts]
+# bro
+"bro" = "bro.native._entrypoints:bro_run"
+"bro.native.llm" = "bro.native._entrypoints:bro_native_llm"
+"bro.run" = "bro.native._entrypoints:bro_run"
+
+[tool.uv.sources]
+bro = { workspace = true }
+
+[tool.deptry.package_module_name_map]
+bro = ["bro", "bros"]
+
+[tool.deptry.per_rule_ignores]
+# Runtime dependencies imported by core modules that the native surfaces execute.
+DEP002 = ["aiohttp", "humanize", "mcp", "rich", "trafilatura"]
+
+[tool.uv.build-backend]
+module-root = ""
+module-name = ["bro"]
+# this source root contains only native-owned leaves of package trees shared with `bro`
+namespace = true
+wheel-exclude = [
+  "**/*_test.py",
+  "**/*_test_helper.py",
+  "**/conftest.py",
+  "**/AGENTS.md",
+  "**/*.egg-info",
+]

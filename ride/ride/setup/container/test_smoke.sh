@@ -93,6 +93,7 @@ docker run --rm -i \
     # the published members and the repository-local one alike, and every editable
     # path entry points at a directory in the clone
     test -x /opt/ride-venv/bin/ask
+    test -x /opt/ride-venv/bin/bro
     test -x /opt/ride-venv/bin/run-tests
     EDITABLE_PATHS="$(grep -h '^/workspace' /opt/ride-venv/lib/python*/site-packages/*.pth)"
     test -n "$EDITABLE_PATHS"
@@ -103,6 +104,7 @@ docker run --rm -i \
     test -f /workspace/bro/_entrypoints.py
     test -f /workspace/dev/bro/dev/_entrypoints.py
     test -f /workspace/local/bro/local/_entrypoints.py
+    test -f /workspace/native/bro/native/_entrypoints.py
     # every manifest the bake ran from is staged for setup.sh's reuse gate at its
     # project-relative path, and matches this clone (based on the same tree the
     # image was built from). the staged set is walked rather than listed, so the

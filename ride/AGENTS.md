@@ -1,6 +1,6 @@
 # bro-ride
 
-`ride/` is the `bro-ride` uv workspace member. It publishes the top-level `ride` package and depends on the framework's `bro` distribution; `bro` never imports `ride`. The root repository owns formatting, lint, typing, packaging policy, and the test gate. Build this member with `uv build --package bro-ride`; regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts --project ride`.
+`ride/` is the `bro-ride` uv workspace member. It publishes the top-level `ride` package, depends on the framework's `bro` distribution, and declares its own runtime/UI dependencies directly; `bro` never imports `ride`. It does not depend on `bro-native`: the native adapter spawns the `bro` command and reports a missing engine before spawn. The root repository owns formatting, lint, typing, packaging policy, and the test gate. Build this member with `uv build --package bro-ride`; regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts --project ride`.
 
 ## Runtime map
 

@@ -1,4 +1,5 @@
 import json
+import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -94,6 +95,11 @@ class BroHarness:
     return ()
 
   def run_in_place(self, spec: 'SessionSpec') -> int:
+    if shutil.which('bro') is None:
+      log.error(
+        'the bro harness requires the bro-native distribution; install bro-native in this workspace'
+      )
+      return 1
     resume_trail: Optional[str] = None
     if spec.resume:
       pointer = trail_pointer.path()

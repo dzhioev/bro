@@ -139,31 +139,33 @@ def test_the_interpreter_is_pinned():
   assert '--no-bin' in python_install_command(Path('/staging'))
 
 
-def test_the_export_is_the_locked_agent_surface():
+def test_the_export_is_the_locked_native_surface():
   command = export_command(Path('/checkout'))
 
   assert '--frozen' in command
-  assert command[command.index('--extra') + 1] == 'agent'
+  assert command[command.index('--package') + 1] == 'bro-native'
   assert '--no-default-groups' in command
   assert '--no-emit-workspace' in command
 
 
-def test_the_framework_enters_as_a_wheel():
-  command = wheel_command(Path('/checkout'), Path('/staging'))
+@pytest.mark.parametrize('package', ['bro', 'bro-native'])
+def test_the_framework_and_native_engine_enter_as_wheels(package):
+  command = wheel_command(Path('/checkout'), Path('/staging'), package)
 
   assert '--wheel' in command
-  assert command[command.index('--package') + 1] == 'bro'
+  assert command[command.index('--package') + 1] == package
 
 
 def test_the_install_targets_the_bundle_with_nothing_resolved():
   bundle = Bundle(Path('/bundle'))
+  wheels = [Path('/staging/bro.whl'), Path('/staging/bro_native.whl')]
 
-  command = install_command(bundle, Path('/staging/requirements.txt'), Path('/staging/bro.whl'))
+  command = install_command(bundle, Path('/staging/requirements.txt'), wheels)
 
   assert command[command.index('--target') + 1] == str(bundle.site_packages)
   assert command[command.index('--python') + 1] == str(bundle.interpreter)
   assert '--no-deps' in command
-  assert command[-1] == '/staging/bro.whl'
+  assert command[-2:] == ['/staging/bro.whl', '/staging/bro_native.whl']
 
 
 def test_the_workspace_is_the_checkout_the_framework_runs_from():
