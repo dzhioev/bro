@@ -309,7 +309,7 @@ class TestResume:
     assert kwargs['surface'] == 'call'
     # the fetch_forked_from seam resolves ancestors through the same client
     assert kwargs['fetch_forked_from']('trail-1').header.id == 'trail-1'
-    assert resumed.bro is fork_stub.return_value
+    assert resumed.runner is fork_stub.return_value
 
   def test_an_explicit_at_overrides_the_latest_fork_point(self):
     spec = LLMSpec(model='gpt-5', service_tier='priority')

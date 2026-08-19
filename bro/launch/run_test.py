@@ -10,11 +10,13 @@ from bro.launch.run import run_main
 def in_process_run(monkeypatch):
   bro = MagicMock(name='bro')
   bro.name = 'dev'
-  bro.run = AsyncMock(return_value='done')
+  runner = MagicMock(name='runner')
+  runner.run = AsyncMock(return_value='done')
   monkeypatch.setattr('bro.launch.run.create_bro_for_run', lambda name, selection: bro)
+  monkeypatch.setattr('bro.launch.run.Runner', lambda declared: runner)
   monkeypatch.setattr('bro.launch.run._ask_observer', lambda name: MagicMock())
   monkeypatch.setattr('bro.launch.broxy.session_broxy', contextlib.nullcontext)
-  return bro
+  return runner
 
 
 def test_runs_in_the_calling_process(in_process_run):

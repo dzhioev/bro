@@ -67,10 +67,10 @@ import pytest
 import bro.llm.usage as usage
 from bro.base import log
 from bro.base.credentials import REGISTRY_ENV
-from bro.bro import set_default_tracker_factory
 from bro.broker.client import CHANNEL_ENV
 from bro.launch.hold import HOLD_VARIABLE
 from bro.llm.tracker import NullTracker
+from bro.native.runner import set_default_tracker_factory
 
 set_default_tracker_factory(NullTracker)
 os.environ.pop(CHANNEL_ENV, None)

@@ -12,7 +12,7 @@ from typing import Optional, TextIO
 
 import bro.base.args as base_args
 from bro.base import log
-from bro.bro import BaseBro, BroRaised
+from bro.bro import BroRaised
 from bro.launch.llm_flags import (
   EFFORT_HELP,
   FAST_HELP,
@@ -25,6 +25,7 @@ from bro.launch.run import HOLD_HELP, create_bro_for_run, run_llm_spec
 from bro.llm.mcp import HOLDS
 from bro.llm.observer import Observer
 from bro.llm.providers import LLMSelectionError
+from bro.native.runner import Runner
 from bro.trails.display import (
   DisplayRecord,
   DisplaySession,
@@ -55,8 +56,8 @@ def _interruptible(task: asyncio.Task) -> Iterator[None]:
     yield
 
 
-async def _turn(bro: BaseBro, message: str, *, observer: Observer, hold: str) -> Optional[str]:
-  task = asyncio.create_task(bro.send(message, observer=observer, surface='call', hold=hold))
+async def _turn(runner: Runner, message: str, *, observer: Observer, hold: str) -> Optional[str]:
+  task = asyncio.create_task(runner.send(message, observer=observer, surface='call', hold=hold))
   with _interruptible(task):
     try:
       return await task
@@ -83,7 +84,7 @@ def _surface_notice(
 
 
 async def call_text(
-  bro: BaseBro,
+  runner: Runner,
   initial: Optional[str],
   read_line: Optional[Callable[[], str]] = None,
   now: Callable[[], datetime] = datetime.now,
@@ -98,7 +99,7 @@ async def call_text(
   read = read_line if read_line is not None else (lambda: input('> '))
   destination = output if output is not None else sys.stdout
   renderer = StreamRenderer(destination)
-  configuration = preset(preset_name, context_label=bro.name)
+  configuration = preset(preset_name, context_label=runner.bro.name)
   interruption_number = 0
 
   with DisplaySession(configuration, renderer) as session:
@@ -107,7 +108,7 @@ async def call_text(
     session.consume(
       _surface_notice(
         'surface:banner',
-        render_banner(llm=False, bro=bro.name),
+        render_banner(llm=False, bro=runner.bro.name),
         now(),
         trusted_visual=True,
       )
@@ -116,7 +117,7 @@ async def call_text(
 
     async def exchange(message: str) -> None:
       nonlocal interruption_number
-      reply = await _turn(bro, message, observer=observer, hold=hold)
+      reply = await _turn(runner, message, observer=observer, hold=hold)
       if reply is None:
         session.consume(
           _surface_notice(
@@ -234,22 +235,22 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
         except (ValueError, http.client.HTTPException) as error:
           log.error('%s', error)
           return 1
-      bro = forked.bro
+      runner = forked.runner
       history = forked.history
       log.info('forked trail %s (%d prior display records)', forked.trail_id, len(history))
     else:
       log.verbose('creating bro %s', args['bro'])
-      bro = create_bro_for_run(args['bro'], selection)
+      runner = Runner(create_bro_for_run(args['bro'], selection))
     initial: Optional[str] = args['what']
     use_tui = _tui_supported()
 
     try:
-      with bro:
+      with runner:
         if use_tui:
           from bro.launch.call_tui import ChatApp
 
           ChatApp(
-            bro,
+            runner,
             initial,
             history=history,
             hold=hold,
@@ -258,7 +259,7 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
         else:
           asyncio.run(
             call_text(
-              bro,
+              runner,
               initial,
               history=history,
               hold=hold,
@@ -271,11 +272,11 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
     except KeyboardInterrupt:
       return 130
     finally:
-      if bro.trail_id is not None:
+      if runner.trail_id is not None:
         log.info(
           'conversation recorded as trail %s; fork it with: %s %s --fork %s',
-          bro.trail_id,
+          runner.trail_id,
           ' '.join(program),
           args['bro'],
-          bro.trail_id,
+          runner.trail_id,
         )

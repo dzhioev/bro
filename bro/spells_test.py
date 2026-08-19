@@ -72,16 +72,32 @@ def _bro_class(package: str, parent: type[BaseBro] = BaseBro) -> type[BaseBro]:
   )
 
 
+class _NoRun:
+  """the `LiveRun` a bro assembled outside a run has: no trail, no tool position."""
+
+  trail_id = None
+  current_tool_step_id = None
+
+
 def _servers(bro: BaseBro, wire: llm_mcp.Wire) -> list[llm_mcp.MCPServer]:
-  return bro._mcp_servers_for(hold='unattended') if wire == 'bare' else bro.claude_bro_mcp_servers()
+  if wire == 'mcp':
+    return bro.claude_bro_mcp_servers()
+  return bro.native_mcp_servers(hold='unattended', live_run=_NoRun())
 
 
 def _spell_server(bro: BaseBro, *, wire: llm_mcp.Wire = 'bare') -> llm_mcp.MCPServer:
   return next(server for server in _servers(bro, wire) if server.namespace == NAMESPACE)
 
 
-def _service_server(bro: BaseBro, *, wire: llm_mcp.Wire = 'bare') -> llm_mcp.MCPServer:
-  return next(server for server in _servers(bro, wire) if server.namespace == 'bro')
+def _service_server(
+  bro: BaseBro, *, wire: llm_mcp.Wire = 'bare', include_raise: bool = True
+) -> llm_mcp.MCPServer:
+  # built on its own rather than picked out of a full assembly: these tests read
+  # service tools only, and materializing a bro's declared servers would demand
+  # the credentials they hold.
+  return bro_module._build_service_server(
+    bro, include_raise=include_raise, harness='bro', wire=wire
+  )
 
 
 class TestSpellStore:
@@ -198,7 +214,7 @@ class TestSpellStore:
     assert not hasattr(bro, 'get_skill_body')
     assert not hasattr(bro, 'skill_descriptions')
     assert 'skill' in bro_module._SERVICE_TOOL_NAMES
-    assert 'skill' in {tool.name for tool in await bro._service_server.list_tools()}
+    assert 'skill' in {tool.name for tool in await _service_server(bro).list_tools()}
 
 
 class TestSpellValidation:
@@ -243,7 +259,7 @@ class TestSpellServer:
     package = fake_packages('_spell_mount', {'do-work': _spell()})
     bro = _bro_class(package)()
 
-    assert NAMESPACE in {server.namespace for server in bro._mcp_servers_for(hold='unattended')}
+    assert NAMESPACE in {server.namespace for server in _servers(bro, 'bare')}
     assert NAMESPACE in {server.namespace for server in bro.claude_bro_mcp_servers()}
     assert NAMESPACE in {server.namespace for server in bro.claude_persona_mcp_servers()}
     registry = ToolRegistry([_spell_server(bro)])
@@ -252,7 +268,7 @@ class TestSpellServer:
   def test_empty_store_mounts_no_spell_server(self, fake_packages):
     package = fake_packages('_spell_empty')
     bro = _bro_class(package)()
-    assert NAMESPACE not in {server.namespace for server in bro._mcp_servers_for(hold='unattended')}
+    assert NAMESPACE not in {server.namespace for server in _servers(bro, 'bare')}
     assert NAMESPACE not in {server.namespace for server in bro.claude_bro_mcp_servers()}
     assert NAMESPACE not in {server.namespace for server in bro.claude_persona_mcp_servers()}
 
@@ -270,7 +286,7 @@ class TestSpellServer:
       },
     )
     with pytest.raises(ValueError, match='reserved for bro framework tools'):
-      bro_class()._mcp_servers_for(hold='unattended')
+      _servers(bro_class(), 'bare')
 
   @pytest.mark.asyncio
   async def test_skill_loader_is_empty_and_excluded_from_claude_persona(self, fake_packages):
