@@ -14,8 +14,10 @@ import ride.session as ride_session
 import ride.spawn
 import ride.summon_control
 from bro.base import credentials
+from bro.monitor import workspace_session_dir
 from bro.workspace.metadata import WorkspaceKind
 from bro.workspace.model import Workspace
+from bro.workspace.paths import CONTAINER_SESSION_DIR
 from ride.scope import ScopedSecrets
 
 
@@ -329,10 +331,11 @@ class TestContainerCommand:
     harness.local_trails_mounts.assert_called_once_with(
       ScopedSecrets({'github', 'trails'}, set(), True)
     )
-    launch = harness.run_in_container.call_args.args[0]
+    launch, workspace = harness.run_in_container.call_args.args[:2]
     assert launch.extra_mounts == (
       '/host/claude:/home/ride/.claude',
       '/host/trails:/var/ride/trails',
+      f'{workspace_session_dir(workspace.path)}:{CONTAINER_SESSION_DIR}',
     )
 
   def test_raw_carried_in_the_container_command(self):

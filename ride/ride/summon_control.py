@@ -469,15 +469,15 @@ class SummonControl:
   def _root_summoned_by(self) -> Optional[dict[str, Any]]:
     # the root's trail attribution source, per publication channel
     # (monitor/trail_pointer.py): a claude session's recorder publishes its
-    # current trail at the workspace's claude placement — read per request,
+    # current trail at the workspace's session pointer — read per request,
     # since the recorder opens a new trail per recorder lifetime and the
     # pointer moves — while a bro-run root announces its trail in the `started`
     # lifecycle event, noted via note_root_trail. absent both (the early-launch
     # race before transcript adoption, or no recorder at all), provenance
     # degrades to no pointer, never a legacy-shaped one.
-    from bro.monitor.trail_pointer import claude_pointer, read
+    from bro.monitor.trail_pointer import read, session_pointer
 
-    trail_id = read(claude_pointer(self._workspace.path))
+    trail_id = read(session_pointer(self._workspace.path))
     if trail_id is None:
       trail_id = self._root_trail_id
     return {'trail_id': trail_id} if trail_id is not None else None

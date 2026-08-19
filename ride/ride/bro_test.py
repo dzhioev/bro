@@ -6,9 +6,10 @@ import pytest
 import ride.bro as bro_harness
 import ride.session as ride_session
 from bro.llm.llms.openai import LLMSpec
-from bro.monitor import trail_pointer
+from bro.monitor import trail_pointer, workspace_session_dir
 from bro.workspace.metadata import WorkspaceKind
 from bro.workspace.model import Workspace
+from bro.workspace.paths import CONTAINER_SESSION_DIR
 from bro.workspace.store import ScopedSecrets
 from ride.identity import bro_git_identity_env
 from ride.session import ScopedLaunch, SessionSpec
@@ -81,7 +82,7 @@ class TestInnerCommand:
 
   def test_resume_carries_the_workspace_trail_and_recorded_recipe(self, tmp_path):
     workspace = Workspace.create('w', tmp_path, WorkspaceKind.CONTAINER)
-    trail_pointer.write(trail_pointer.broker_pointer(workspace.path), 'trail-1')
+    trail_pointer.write(trail_pointer.session_pointer(workspace.path), 'trail-1')
     command = bro_harness.BRO.inner_command(_spec(resume=True, prompt=None), workspace)
     assert command[:3] == ['bro', 'chat', 'dev']
     assert command[command.index('--continue-trail') + 1] == 'trail-1'
@@ -109,6 +110,7 @@ class TestContainerSession:
     ]  # fmt: skip
     assert launch.env == {
       'RIDE_BRO': 'dev',
+      'RIDE_SESSION_DIR': str(CONTAINER_SESSION_DIR),
       'RIDE_BASE_REF': 'abc123',
       **bro_git_identity_env('dev'),
     }
@@ -128,7 +130,10 @@ class TestContainerSession:
     spec = _spec(no_trails=True)
     assert ride_session._launch_session(spec, workspace, None, _scope(), container=True) == 0
     assert captured['launch'].env['TRAILS_DISABLED'] == '1'
-    assert captured['launch'].extra_mounts == ()
+    # the session state dir is not trails data — it stays mounted
+    assert captured['launch'].extra_mounts == (
+      f'{workspace_session_dir(workspace.path)}:{CONTAINER_SESSION_DIR}',
+    )
 
   def test_resume_refuses_without_a_broker_published_pointer(self, caplog, tmp_path):
     workspace = Workspace.create('w', tmp_path, WorkspaceKind.CONTAINER)
@@ -142,7 +147,7 @@ class TestContainerSession:
 
   def test_fresh_session_clears_a_stale_pointer(self, monkeypatch, tmp_path):
     workspace = Workspace.create('w', tmp_path, WorkspaceKind.CONTAINER)
-    pointer = trail_pointer.broker_pointer(workspace.path)
+    pointer = trail_pointer.session_pointer(workspace.path)
     trail_pointer.write(pointer, 'stale')
     monkeypatch.setattr(ride_session, 'find_container_id', lambda _tree: None)
     monkeypatch.setattr(ride_session, 'run_in_container', lambda *_a, **_k: 0)
@@ -151,7 +156,7 @@ class TestContainerSession:
 
   def test_a_refused_second_launch_leaves_the_active_pointer_alone(self, monkeypatch, tmp_path):
     workspace = Workspace.create('w', tmp_path, WorkspaceKind.CONTAINER)
-    pointer = trail_pointer.broker_pointer(workspace.path)
+    pointer = trail_pointer.session_pointer(workspace.path)
     trail_pointer.write(pointer, 'live')
     monkeypatch.setattr(ride_session, 'find_container_id', lambda _tree: 'active')
     assert ride_session._launch_session(_spec(), workspace, None, _scope(), container=True) == 1

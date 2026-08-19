@@ -1,16 +1,36 @@
 from pathlib import Path
 
+import pytest
+
 from bro import monitor
 
 
 class TestClaudeConfigDir:
-  def test_defaults_to_the_user_level_directory(self, monkeypatch):
-    monkeypatch.delenv('CLAUDE_CONFIG_DIR', raising=False)
-    assert monitor.claude_config_dir() == Path.home() / '.claude'
-
-  def test_override_wins(self, tmp_path, monkeypatch):
+  def test_names_the_dir_the_session_declares(self, tmp_path, monkeypatch):
     monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(tmp_path / 'w' / 'claude'))
     assert monitor.claude_config_dir() == tmp_path / 'w' / 'claude'
+    assert monitor.in_claude_session()
+
+  def test_outside_a_claude_session_there_is_no_config_dir(self, monkeypatch):
+    monkeypatch.delenv('CLAUDE_CONFIG_DIR', raising=False)
+    assert not monitor.in_claude_session()
+    with pytest.raises(RuntimeError, match='CLAUDE_CONFIG_DIR'):
+      monitor.claude_config_dir()
+
+
+class TestSessionDir:
+  def test_names_the_dir_the_session_declares(self, tmp_path, monkeypatch):
+    monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path / 'session'))
+    assert monitor.session_dir() == tmp_path / 'session'
+    assert monitor.harness_session_dir('claude') == tmp_path / 'session' / 'claude'
+
+  def test_outside_a_managed_session_there_is_none(self, monkeypatch):
+    monkeypatch.delenv('RIDE_SESSION_DIR', raising=False)
+    assert monitor.session_dir() is None
+    assert monitor.harness_session_dir('claude') is None
+
+  def test_the_workspace_placement_is_a_record_beside_the_tree(self, tmp_path):
+    assert monitor.workspace_session_dir(tmp_path / 'ws') == tmp_path / 'ws' / 'session'
 
 
 class TestProjectsDir:

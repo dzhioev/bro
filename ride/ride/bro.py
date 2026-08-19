@@ -74,7 +74,7 @@ class BroHarness:
     return []
 
   def session_exists(self, workspace: Workspace) -> bool:
-    return trail_pointer.read(self.session_trail_pointer(workspace)) is not None
+    return trail_pointer.read(trail_pointer.session_pointer(workspace.path)) is not None
 
   def missing_session_error(self, workspace: Workspace) -> str:
     return (
@@ -88,13 +88,10 @@ class BroHarness:
     spec = load_resume_spec(workspace)
     return None if spec is None else spec.subject
 
-  def session_trail_pointer(self, workspace: Workspace) -> Path:
-    return trail_pointer.broker_pointer(workspace.path)
-
   def inner_command(self, spec: 'SessionSpec', workspace: Workspace) -> list[str]:
     resume_trail: Optional[str] = None
     if spec.resume:
-      resume_trail = trail_pointer.read(self.session_trail_pointer(workspace))
+      resume_trail = trail_pointer.read(trail_pointer.session_pointer(workspace.path))
       if resume_trail is None:
         raise ValueError(f'no bro harness trail recorded for workspace {workspace.name!r}')
     verb = 'run' if spec.solo else 'chat'

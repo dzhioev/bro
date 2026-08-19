@@ -119,7 +119,8 @@ class SessionFacts:
 
     trail_id = trail_id_override
     if trail_id is None:
-      trail_id = trail_pointer.read(trail_pointer.path())
+      pointer = trail_pointer.path()
+      trail_id = trail_pointer.read(pointer) if pointer is not None else None
 
     return cls(
       in_container=in_container,

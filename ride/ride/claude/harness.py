@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Optional
 from bro.base import credentials
 from bro.llm.llms.claude_code import LLMSpec
 from bro.llm.providers import LLMSelection, parse
-from bro.monitor import trail_pointer
+from bro.monitor import CLAUDE_CONFIG_DIR_ENV
 from bro.workspace.model import Workspace
 from bro.workspace.store import ScopedSecrets
 from ride.claude.claude_auth import apply_claude_auth, load_anthropic_key
@@ -157,9 +157,6 @@ class ClaudeHarness:
   def read_subject(self, workspace: Workspace) -> str | None:
     return read_subject(workspace)
 
-  def session_trail_pointer(self, workspace: Workspace) -> Path:
-    return trail_pointer.claude_pointer(workspace.path)
-
   def container_extras(
     self, spec: 'SessionSpec', workspace: Workspace, scoped: ScopedSecrets
   ) -> ContainerExtras:
@@ -172,7 +169,7 @@ class ClaudeHarness:
   ) -> None:
     del spec
     claude_dir = provision_host_claude_dir(workspace.path, worktree, workspace.project)
-    env['CLAUDE_CONFIG_DIR'] = str(claude_dir)
+    env[CLAUDE_CONFIG_DIR_ENV] = str(claude_dir)
     apply_claude_auth(env)
 
 

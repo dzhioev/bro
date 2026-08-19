@@ -9,6 +9,7 @@ from bro.workspace.git import git_run
 
 CONTAINER_TRAILS_ROOT = Path('/var/ride/trails')
 CONTAINER_SUMMON_ROOT = Path('/var/ride/summon')
+CONTAINER_SESSION_DIR = Path('/var/ride/session')
 _DATA_HOME_ENV = 'XDG_DATA_HOME'
 _PROJECT_KEY_BYTES = 4
 _UNSAFE_IN_KEY = re.compile(r'[^A-Za-z0-9._-]')

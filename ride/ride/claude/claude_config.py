@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Optional
 
 from bro.base import log
-from bro.monitor import encode_project_path, workspace_claude_dir
+from bro.monitor import CLAUDE_CONFIG_DIR_ENV, encode_project_path, workspace_claude_dir
 from bro.workspace.metadata import WorkspaceKind
 from bro.workspace.model import Workspace
 
@@ -212,7 +212,7 @@ def container_claude_state(workspace: Path) -> tuple[list[str], dict[str, str]]:
   )
   mounts = [f'{claude_dir}:{_CONTAINER_CLAUDE_DIR}']
   env = {
-    'CLAUDE_CONFIG_DIR': _CONTAINER_CLAUDE_DIR,
+    CLAUDE_CONFIG_DIR_ENV: _CONTAINER_CLAUDE_DIR,
     'DISABLE_AUTOUPDATER': '1',
     'DISABLE_INSTALLATION_CHECKS': '1',
   }
