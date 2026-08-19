@@ -10,6 +10,7 @@ import pytest
 
 import bro.llm.llms.echo as llm_llms_echo
 import bro.llm.llms.openai as llm_llms_openai
+from bro.bro import BaseBro
 from bro.launch.call import call_text, chat_main
 from bro.llm.llm import LLM, NativeLLMSpec
 from bro.llm.mcp import MCPServer
@@ -20,6 +21,7 @@ from bro.llm.observer import (
   TurnCompletedEvent,
   TurnStartedEvent,
 )
+from bro.native.runner import Runner
 from bro.trails.display import (
   AssistantText,
   DisplayRecord,
@@ -56,8 +58,16 @@ class RecordBro(Bro):
   description = 'records inputs'
   llm_spec = llm_llms_echo.LLMSpec()
 
-  def __init__(self, response: str = 'reply'):
+  def __init__(self):
     super().__init__(system_prompt='record')
+
+
+class _MockRunner(Runner):
+  """drives a declaration through a MockLLM, so the call surfaces under test
+  need no provider."""
+
+  def __init__(self, bro: Optional[BaseBro] = None, response: str = 'reply'):
+    super().__init__(bro if bro is not None else RecordBro())
     self.mock_llm = MockLLM(response=response)
 
   def _create_llm(self, *, hold: str) -> LLM:
@@ -87,17 +97,17 @@ def _consume_display(app, record) -> None:
 
 @pytest.mark.asyncio
 async def test_text_drives_send_until_eof(capsys):
-  bro = RecordBro(response='reply')
+  runner = _MockRunner(response='reply')
   await call_text(
-    bro,
+    runner,
     'first',
     read_line=_ScriptedLines(['second', 'third']),
     now=_fixed_now,
   )
-  assert len(bro.mock_llm.send_calls) == 3
-  assert bro.mock_llm.send_calls[0][-1] == {'role': 'user', 'content': 'first'}
-  assert bro.mock_llm.send_calls[1] == [{'role': 'user', 'content': 'second'}]
-  assert bro.mock_llm.send_calls[2] == [{'role': 'user', 'content': 'third'}]
+  assert len(runner.mock_llm.send_calls) == 3
+  assert runner.mock_llm.send_calls[0][-1] == {'role': 'user', 'content': 'first'}
+  assert runner.mock_llm.send_calls[1] == [{'role': 'user', 'content': 'second'}]
+  assert runner.mock_llm.send_calls[2] == [{'role': 'user', 'content': 'third'}]
   out = capsys.readouterr().out
   # each reply line is `[HH:MM:SS] <bro-name>: <reply>`
   assert out.count('[12:34:56] record: reply') == 3
@@ -108,8 +118,8 @@ async def test_text_emits_banner_before_first_reply(capsys, monkeypatch):
   monkeypatch.setattr(
     'bro.workspace.banner.render_banner', lambda llm=False, bro=None: f'BANNER[{bro}]'
   )
-  bro = RecordBro(response='reply')
-  await call_text(bro, 'first', read_line=_ScriptedLines([]), now=_fixed_now)
+  runner = _MockRunner(response='reply')
+  await call_text(runner, 'first', read_line=_ScriptedLines([]), now=_fixed_now)
   out = capsys.readouterr().out
   # banner is the opening bro message, before the first reply line; the bro name
   # is passed through so the logo renders on an in-process run, whose
@@ -120,25 +130,25 @@ async def test_text_emits_banner_before_first_reply(capsys, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_text_skips_empty_input(capsys):
-  bro = RecordBro(response='reply')
+  runner = _MockRunner(response='reply')
   await call_text(
-    bro,
+    runner,
     'first',
     read_line=_ScriptedLines(['', '   ', 'real']),
     now=_fixed_now,
   )
   # empty string skipped; whitespace-only is sent through (boundary belongs upstream)
-  assert len(bro.mock_llm.send_calls) == 3  # first + '   ' + 'real'
-  assert bro.mock_llm.send_calls[1] == [{'role': 'user', 'content': '   '}]
-  assert bro.mock_llm.send_calls[2] == [{'role': 'user', 'content': 'real'}]
+  assert len(runner.mock_llm.send_calls) == 3  # first + '   ' + 'real'
+  assert runner.mock_llm.send_calls[1] == [{'role': 'user', 'content': '   '}]
+  assert runner.mock_llm.send_calls[2] == [{'role': 'user', 'content': 'real'}]
 
 
 @pytest.mark.asyncio
 async def test_text_returns_on_immediate_eof(capsys):
-  bro = RecordBro(response='reply')
-  await call_text(bro, 'only', read_line=_ScriptedLines([]), now=_fixed_now)
-  assert len(bro.mock_llm.send_calls) == 1
-  assert bro.mock_llm.send_calls[0][-1] == {'role': 'user', 'content': 'only'}
+  runner = _MockRunner(response='reply')
+  await call_text(runner, 'only', read_line=_ScriptedLines([]), now=_fixed_now)
+  assert len(runner.mock_llm.send_calls) == 1
+  assert runner.mock_llm.send_calls[0][-1] == {'role': 'user', 'content': 'only'}
 
 
 @dataclass(frozen=True)
@@ -167,10 +177,6 @@ class _ChatBro(Bro):
 
   def __init__(self):
     super().__init__(system_prompt='record')
-    self.mock_llm = MockLLM(response='reply')
-
-  def _create_llm(self, *, hold: str) -> LLM:
-    return self.mock_llm
 
 
 class _FastlessBro(Bro):
@@ -180,10 +186,6 @@ class _FastlessBro(Bro):
 
   def __init__(self):
     super().__init__(system_prompt='fastless')
-    self.mock_llm = MockLLM(response='reply')
-
-  def _create_llm(self, *, hold: str) -> LLM:
-    return self.mock_llm
 
 
 def _chat(argv: list[str]):
@@ -191,33 +193,33 @@ def _chat(argv: list[str]):
 
 
 def test_bro_chat_default_builds_plain_spec(monkeypatch):
-  built: list[Bro] = []
+  built: list[Runner] = []
 
-  async def fake_call_text(bro, initial, history=None, hold='guided', preset_name=None):
-    built.append(bro)
+  async def fake_call_text(runner, initial, history=None, hold='guided', preset_name=None):
+    built.append(runner)
 
   monkeypatch.setattr('bro.registry.create_bro', lambda name: _ChatBro())
   monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
   monkeypatch.setattr('bro.launch.call._tui_supported', lambda: False)
 
   assert _chat(['bro', 'record', 'hi']) is None
-  spec = built[0].llm_spec
+  spec = built[0].bro.llm_spec
   assert isinstance(spec, llm_llms_openai.LLMSpec)
   assert spec.service_tier is None
 
 
 def test_bro_chat_fast_flag_is_explicit(monkeypatch):
-  built: list[Bro] = []
+  built: list[Runner] = []
 
-  async def fake_call_text(bro, initial, history=None, hold='guided', preset_name=None):
-    built.append(bro)
+  async def fake_call_text(runner, initial, history=None, hold='guided', preset_name=None):
+    built.append(runner)
 
   monkeypatch.setattr('bro.registry.get_class', lambda name: _ChatBro)
   monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
   monkeypatch.setattr('bro.launch.call._tui_supported', lambda: False)
 
   assert _chat(['bro', 'record', 'hi', '--fast']) is None
-  spec = built[0].llm_spec
+  spec = built[0].bro.llm_spec
   assert isinstance(spec, llm_llms_openai.LLMSpec)
   assert spec.service_tier == 'priority'
 
@@ -226,7 +228,7 @@ def test_chat_starts_an_empty_repl_and_defaults_to_guided(monkeypatch):
   captured: list[tuple[Optional[str], str, PresetName]] = []
 
   async def fake_call_text(
-    bro,
+    runner,
     initial: Optional[str],
     history=None,
     hold: str = 'guided',
@@ -262,13 +264,13 @@ def test_fork_runs_the_recorded_history_under_the_current_spec(monkeypatch, caps
 
   captured: dict = {}
 
-  async def fake_call_text(bro, initial, history=None, hold='guided', preset_name=None):
-    captured['bro'] = bro
+  async def fake_call_text(runner, initial, history=None, hold='guided', preset_name=None):
+    captured['runner'] = runner
     captured['initial'] = initial
     captured['history'] = history
 
-  forked_bro = RecordBro()
-  forked_bro.trail_id = 'new-trail'
+  forked_runner = _MockRunner()
+  forked_runner.trail_id = 'new-trail'
   history: list[DisplayRecord] = [
     UserInput(
       key='recorded:old-trail:message:1:0:0',
@@ -283,7 +285,7 @@ def test_fork_runs_the_recorded_history_under_the_current_spec(monkeypatch, caps
     captured['trail_ref'] = trail_ref
     captured['llm_spec'] = llm_spec
     captured['at'] = at
-    return ResumedCall(bro=forked_bro, history=history, trail_id='old-trail')
+    return ResumedCall(runner=forked_runner, history=history, trail_id='old-trail')
 
   monkeypatch.setattr('bro.registry.get_class', lambda name: _ChatBro)
   monkeypatch.setattr('bro.launch.resume.resume', fake_resume)
@@ -295,7 +297,7 @@ def test_fork_runs_the_recorded_history_under_the_current_spec(monkeypatch, caps
   assert captured['trail_ref'] == 'trail-1'
   assert captured['at'] == 7
   assert captured['llm_spec'] == _ChatBro.llm_spec
-  assert captured['bro'] is forked_bro
+  assert captured['runner'] is forked_runner
   assert captured['initial'] is None
   assert captured['history'] is history
   assert 'bro chat record --fork new-trail' in capsys.readouterr().err
@@ -308,9 +310,9 @@ def test_bare_fork_selects_the_newest_call(monkeypatch):
 
   def fake_resume(client, bro_name, trail_ref, *, llm_spec, at=None):
     captured['trail_ref'] = trail_ref
-    return ResumedCall(bro=RecordBro(), history=[], trail_id='old-trail')
+    return ResumedCall(runner=_MockRunner(), history=[], trail_id='old-trail')
 
-  async def fake_call_text(bro, initial, history=None, hold='guided', preset_name=None):
+  async def fake_call_text(runner, initial, history=None, hold='guided', preset_name=None):
     pass
 
   monkeypatch.setattr('bro.registry.get_class', lambda name: RecordBro)
@@ -324,8 +326,8 @@ def test_bare_fork_selects_the_newest_call(monkeypatch):
 
 
 def test_prints_fork_hint_when_a_trail_was_recorded(monkeypatch, capsys):
-  async def fake_call_text(bro, initial, history=None, hold='guided', preset_name=None):
-    bro.trail_id = 'trail-xyz'
+  async def fake_call_text(runner, initial, history=None, hold='guided', preset_name=None):
+    runner.trail_id = 'trail-xyz'
 
   monkeypatch.setattr('bro.registry.create_bro', lambda name: RecordBro())
   monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
@@ -338,7 +340,7 @@ def test_prints_fork_hint_when_a_trail_was_recorded(monkeypatch, capsys):
 def test_initial_slash_invocation_passes_through_verbatim(monkeypatch):
   captured: list[str] = []
 
-  async def fake_call_text(bro, initial, history=None, hold='guided', preset_name=None):
+  async def fake_call_text(runner, initial, history=None, hold='guided', preset_name=None):
     captured.append(initial)
 
   monkeypatch.setattr('bro.registry.create_bro', lambda name: RecordBro())
@@ -383,7 +385,7 @@ async def test_tui_drag_inside_markdown_bubble_selects_rendered_text(monkeypatch
   from bro.launch.call_tui import ChatApp
 
   monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
-  app = ChatApp(RecordBro(), None)
+  app = ChatApp(_MockRunner(), None)
   async with app.run_test(size=(100, 40)) as pilot:
     _consume_display(
       app,
@@ -434,7 +436,7 @@ async def test_tui_markdown_bubble_copy_reflows_to_logical_lines(monkeypatch):
   )
   paragraph = 'Great — moving to the verification phase next, with the notion grant in place.'
   reply = f'{paragraph}\n\n```\n{command}\n```\n\n```python\ndef f():\n    return 1\n```'
-  app = ChatApp(RecordBro(), None)
+  app = ChatApp(_MockRunner(), None)
   async with app.run_test(size=(80, 40)) as pilot:
     _consume_display(
       app,
@@ -474,7 +476,7 @@ async def test_tui_survives_markup_like_text(monkeypatch):
   # rich.markup.escape does not neutralize it
   trace = "→ flow::list_tasks [x=1, statuses=['done', 'dropped'], input=3]"
   message = "please retry [a=b, statuses=['done', 'dropped']]"
-  app = ChatApp(RecordBro(), None)
+  app = ChatApp(_MockRunner(), None)
   async with app.run_test(size=(120, 40)) as pilot:
     _consume_display(
       app,
@@ -526,9 +528,9 @@ async def test_tui_turn_error_renders_as_error_bubble(monkeypatch):
     raise RuntimeError("failed [status='down']")
 
   monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
-  bro = RecordBro()
-  monkeypatch.setattr(bro, 'send', fail)
-  app = ChatApp(bro, None)
+  runner = _MockRunner()
+  monkeypatch.setattr(runner, 'send', fail)
+  app = ChatApp(runner, None)
   async with app.run_test(size=(80, 40)) as pilot:
     app._begin_turn()
     app._send_to_bro('trigger the failure')
@@ -552,7 +554,7 @@ async def test_tui_thinking_renders_as_muted_bubble_above_typing(monkeypatch):
   from bro.launch.call_tui import ChatApp
 
   monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
-  app = ChatApp(RecordBro(), None)
+  app = ChatApp(_MockRunner(), None)
   async with app.run_test(size=(80, 40)) as pilot:
     app._begin_turn()
     assert app._observer is not None
@@ -589,7 +591,7 @@ async def test_tui_mid_turn_message_renders_as_bro_bubble_above_typing(monkeypat
   from bro.launch.call_tui import ChatApp
 
   monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
-  app = ChatApp(RecordBro(), None)
+  app = ChatApp(_MockRunner(), None)
   async with app.run_test(size=(80, 40)) as pilot:
     app._begin_turn()
     assert app._observer is not None
@@ -614,7 +616,7 @@ async def test_tui_timestamp_hugs_the_row_edge_with_seconds(monkeypatch):
   from bro.launch.call_tui import ChatApp
 
   monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
-  app = ChatApp(RecordBro(), None)
+  app = ChatApp(_MockRunner(), None)
   async with app.run_test(size=(80, 40)) as pilot:
     _consume_display(
       app,
@@ -660,7 +662,7 @@ async def test_tui_copies_selection_to_clipboard_on_mouse_up(monkeypatch):
   from bro.launch.call_tui import ChatApp
 
   monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
-  app = ChatApp(RecordBro(), None)
+  app = ChatApp(_MockRunner(), None)
   async with app.run_test() as pilot:
     # a plain click also posts TextSelected; with nothing selected the
     # clipboard must stay untouched
@@ -683,8 +685,8 @@ async def test_tui_shift_enter_breaks_line_and_enter_submits(monkeypatch):
   from bro.launch.call_tui import ChatApp, MessageInput
 
   monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
-  bro = RecordBro()
-  app = ChatApp(bro, None)
+  runner = _MockRunner()
+  app = ChatApp(runner, None)
   async with app.run_test() as pilot:
     field = app.query_one('#input-bar', MessageInput)
     assert field.region.height == 3
@@ -706,7 +708,7 @@ async def test_tui_enter_on_blank_input_submits_nothing(monkeypatch):
   from bro.launch.call_tui import ChatApp, MessageInput
 
   monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
-  app = ChatApp(RecordBro(), None)
+  app = ChatApp(_MockRunner(), None)
   async with app.run_test() as pilot:
     await pilot.press('enter', 'shift+enter', 'enter')
     await pilot.pause()
@@ -732,7 +734,7 @@ async def test_tui_typing_indicator_tracks_run_state(monkeypatch):
   from bro.launch.call_tui import ChatApp
 
   monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
-  app = ChatApp(RecordBro(), None)
+  app = ChatApp(_MockRunner(), None)
   async with app.run_test() as pilot:
     app._begin_turn()
     assert app._observer is not None
@@ -757,11 +759,11 @@ async def test_tui_typing_indicator_tracks_run_state(monkeypatch):
     assert str(label.content).startswith('Thinking for a moment')
 
 
-class _BlockingBro(RecordBro):
-  """a bro whose turn never finishes on its own — the interruption fixture.
+class _BlockingRunner(_MockRunner):
+  """a runner whose turn never finishes on its own — the interruption fixture.
 
   `started` fires once `send` is running, and `cancelled` records that the
-  cancellation reached the bro rather than only the worker wrapping it."""
+  cancellation reached the runner rather than only the worker wrapping it."""
 
   def __init__(self):
     super().__init__()
@@ -782,9 +784,9 @@ class _BlockingBro(RecordBro):
     raise AssertionError('unreachable')
 
 
-async def _start_turn(app, pilot, bro: '_BlockingBro', text: str = 'work on it'):
+async def _start_turn(app, pilot, runner: '_BlockingRunner', text: str = 'work on it'):
   app._submit(text)
-  await asyncio.wait_for(bro.started.wait(), timeout=5)
+  await asyncio.wait_for(runner.started.wait(), timeout=5)
   await pilot.pause()
 
 
@@ -793,19 +795,19 @@ async def test_tui_input_is_disabled_while_a_turn_runs(monkeypatch):
   from bro.launch.call_tui import _BUSY_PLACEHOLDER, _IDLE_PLACEHOLDER, ChatApp, MessageInput
 
   monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
-  bro = _BlockingBro()
-  app = ChatApp(bro, None)
+  runner = _BlockingRunner()
+  app = ChatApp(runner, None)
   async with app.run_test(size=(80, 40)) as pilot:
     field = app.query_one('#input-bar', MessageInput)
     assert field.disabled is False
-    await _start_turn(app, pilot, bro)
+    await _start_turn(app, pilot, runner)
     assert field.disabled is True
     assert field.placeholder == _BUSY_PLACEHOLDER
     # a submit that reaches the app anyway (the field is the only way to raise
     # one, and it is disabled) never starts a second concurrent conversation
     await app.on_message_input_submitted(MessageInput.Submitted('second message'))
     await pilot.pause()
-    assert bro.messages == ['work on it']
+    assert runner.messages == ['work on it']
 
     await app.action_interrupt()
     await pilot.pause()
@@ -823,16 +825,16 @@ async def test_tui_escape_interrupts_the_turn(monkeypatch):
   )
 
   monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
-  bro = _BlockingBro()
-  app = ChatApp(bro, None)
+  runner = _BlockingRunner()
+  app = ChatApp(runner, None)
   async with app.run_test(size=(80, 40)) as pilot:
-    await _start_turn(app, pilot, bro)
+    await _start_turn(app, pilot, runner)
     assert len(app.query(TypingIndicator)) == 1
 
     await pilot.press('escape')
     await pilot.pause()
 
-    assert bro.cancelled, 'the cancellation must reach the bro, not just the worker'
+    assert runner.cancelled, 'the cancellation must reach the runner, not just the worker'
     assert app._turn is None
     assert len(app.query(TypingIndicator)) == 0
     assert str(app.query(SystemBubble).last().content) == INTERRUPTED_NOTICE
@@ -849,17 +851,17 @@ async def test_tui_quit_takes_the_running_turn_with_it(monkeypatch):
   from bro.launch.call_tui import ChatApp
 
   monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
-  bro = _BlockingBro()
-  app = ChatApp(bro, None)
+  runner = _BlockingRunner()
+  app = ChatApp(runner, None)
   async with app.run_test(size=(80, 40)) as pilot:
-    await _start_turn(app, pilot, bro)
+    await _start_turn(app, pilot, runner)
     worker = app._turn
     assert worker is not None
 
     await app.action_quit()
 
     assert worker.state is WorkerState.CANCELLED
-    assert bro.cancelled
+    assert runner.cancelled
 
 
 @pytest.mark.asyncio
@@ -868,7 +870,7 @@ async def test_text_mode_ctrl_c_ends_the_turn_not_the_chat(capsys, monkeypatch):
 
   monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
 
-  class _InterruptedBro(RecordBro):
+  class _InterruptedRunner(_MockRunner):
     def __init__(self):
       super().__init__()
       self.cancelled = False
@@ -888,12 +890,16 @@ async def test_text_mode_ctrl_c_ends_the_turn_not_the_chat(capsys, monkeypatch):
         raise
       raise AssertionError('unreachable')
 
-  bro = _InterruptedBro()
+  runner = _InterruptedRunner()
   await call_text(
-    bro, 'work on it', read_line=_ScriptedLines(['and now this']), now=_fixed_now, hold='attended'
+    runner,
+    'work on it',
+    read_line=_ScriptedLines(['and now this']),
+    now=_fixed_now,
+    hold='attended',
   )
 
-  assert bro.cancelled
+  assert runner.cancelled
   out = capsys.readouterr().out
   assert INTERRUPTED_NOTICE in out
   # the REPL kept going: the next message is an ordinary exchange
@@ -906,15 +912,15 @@ def test_managed_continuation_uses_the_recorded_recipe_and_hold(monkeypatch):
   from bro.launch.resume import ResumedCall
 
   captured: dict = {}
-  resumed_bro = RecordBro()
+  resumed_runner = _MockRunner()
   recorded_spec = llm_llms_openai.LLMSpec(model='gpt-5', reasoning_effort='low')
 
   def fake_resume(client, bro_name, trail_ref, *, llm_spec, at=None, hold='guided'):
     captured.update(trail_ref=trail_ref, llm_spec=llm_spec, at=at, hold=hold)
-    return ResumedCall(bro=resumed_bro, history=[], trail_id=trail_ref)
+    return ResumedCall(runner=resumed_runner, history=[], trail_id=trail_ref)
 
-  async def fake_call_text(bro, initial, history=None, hold='guided', preset_name=None):
-    captured.update(bro=bro, initial=initial, history=history, chat_hold=hold)
+  async def fake_call_text(runner, initial, history=None, hold='guided', preset_name=None):
+    captured.update(runner=runner, initial=initial, history=history, chat_hold=hold)
 
   monkeypatch.setenv('RIDE_IN_CONTAINER', '1')
   monkeypatch.setattr('bro.launch.resume.resume', fake_resume)
@@ -939,7 +945,7 @@ def test_managed_continuation_uses_the_recorded_recipe_and_hold(monkeypatch):
   assert captured['trail_ref'] == 'workspace-trail'
   assert captured['llm_spec'] == recorded_spec
   assert captured['hold'] == 'attended'
-  assert captured['bro'] is resumed_bro
+  assert captured['runner'] is resumed_runner
   assert captured['initial'] is None
   assert captured['history'] == []
   assert captured['chat_hold'] == 'attended'

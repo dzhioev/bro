@@ -57,7 +57,7 @@ A Bro can additionally declare **spells** — named procedures backed by markdow
 
 Non-interactive Bro invocations cannot ask a follow-up question. To let an agent abort cleanly when the request cannot be fulfilled — missing credentials, no appropriate tool or data source, contradictory constraints — the base class exposes a built-in `raise` tool at the unattended hold, `run()`'s default. Calling it raises `BroRaised(reason)` out of `run()`; the reason surfaces to the caller as the failure cause. The system prompt is augmented with the matching hold fragment, so an unattended agent knows it cannot negotiate.
 
-Interactive paths (`Bro.send()`, guided `ride solo|along --raw` Claude Code sessions) do **not** expose `raise` — the agent describes any blocker in its reply and the human decides what to do next.
+Interactive paths (`send()`, guided `ride solo|along --raw` Claude Code sessions) do **not** expose `raise` — the agent describes any blocker in its reply and the human decides what to do next.
 
 ## Execution surfaces
 
