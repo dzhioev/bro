@@ -157,7 +157,7 @@ def summoned_by_from_env() -> Optional[dict[str, Any]]:
   when the run was not summoned or its summoner published no trail yet.
 
   Consumed on read: tool subprocesses inherit this process's environment, so a
-  nested in-place run inside the summoned child's container must not re-stamp
+  nested in-process run inside the summoned child's container must not re-stamp
   the parent's summoned_by on its own trail — it was not itself summoned."""
   raw = os.environ.pop(SUMMONER_ENV, None)
   if raw is None:

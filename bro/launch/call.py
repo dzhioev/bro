@@ -171,7 +171,6 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
     help='with --fork: fork the conversation at this step instead of the latest consistent point',
   )
   add_llm_flags(parser, effort_help=EFFORT_HELP, fast_help=FAST_HELP)
-  parser.add_argument('--in-place', action='store_true', help=base_args.SUPPRESS)
   parser.add_argument('--hold', choices=HOLDS, default=None, help=HOLD_HELP.format('guided'))
   args = parser.parse(argv)
   try:

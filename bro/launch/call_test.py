@@ -54,8 +54,6 @@ class MockLLM(LLM):
 class RecordBro(Bro):
   name = 'record'
   description = 'records inputs'
-  # no fast mode on the echo spec: call's implied fast falls back to the plain
-  # spec, so an in-place run resolves through the patchable create_bro path
   llm_spec = llm_llms_echo.LLMSpec()
 
   def __init__(self, response: str = 'reply'):
@@ -242,20 +240,6 @@ def test_chat_starts_an_empty_repl_and_defaults_to_guided(monkeypatch):
 
   assert _chat(['bro', 'record']) is None
   assert captured == [(None, 'guided', PresetName.CHAT)]
-
-
-def test_in_place_is_a_suppressed_no_op(monkeypatch):
-  called: list[str] = []
-
-  async def fake_call_text(bro, initial, history=None, hold='guided', preset_name=None):
-    called.append(initial)
-
-  monkeypatch.setattr('bro.registry.create_bro', lambda name: RecordBro())
-  monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
-  monkeypatch.setattr('bro.launch.call._tui_supported', lambda: False)
-
-  assert _chat(['bro', 'record', 'hi', '--in-place']) is None
-  assert called == ['hi']
 
 
 @pytest.mark.parametrize(
@@ -948,7 +932,6 @@ def test_managed_continuation_uses_the_recorded_recipe_and_hold(monkeypatch):
       json.dumps(recorded_spec.dump()),
       '--hold',
       'attended',
-      '--in-place',
     ],
     program=['bro', 'chat'],
   )

@@ -253,7 +253,7 @@ def _host_session(
   inner_binary = worktree / '.venv' / 'bin' / inner[0]
   if not inner_binary.is_file():
     log.error(
-      'no %s in %s — the worktree base predates the %s in-place runner; '
+      'no %s in %s — the worktree base predates the %s console script; '
       'rebase it onto origin/master or recreate it',
       inner[0],
       inner_binary,

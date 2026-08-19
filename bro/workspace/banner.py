@@ -90,7 +90,7 @@ class SessionFacts:
 
     read-only; never raises. bro_override forces the `bro` fact regardless of
     `RIDE_BRO` — for in-process callers that know the bro they run: an in-process
-    run (e.g. `bro run <bro> --in-place`) reads the launching environment, whose
+    run (e.g. `bro run <bro>`) reads the launching environment, whose
     `RIDE_BRO` is the launcher's own persona or absent. trail_id_override likewise
     carries an in-process run's own trail, which no session recorder publishes.
     """
