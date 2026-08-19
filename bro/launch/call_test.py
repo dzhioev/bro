@@ -12,7 +12,7 @@ import bro.llm.llms.echo as llm_llms_echo
 import bro.llm.llms.openai as llm_llms_openai
 from bro.bro import BaseBro
 from bro.launch.call import call_text, chat_main
-from bro.llm.llm import LLM, NativeLLMSpec
+from bro.llm.llm import NativeLLMSpec
 from bro.llm.mcp import MCPServer
 from bro.llm.observer import (
   InterimAssistantTextEvent,
@@ -21,6 +21,7 @@ from bro.llm.observer import (
   TurnCompletedEvent,
   TurnStartedEvent,
 )
+from bro.native.llm import LLM
 from bro.native.runner import Runner
 from bro.trails.display import (
   AssistantText,
@@ -158,9 +159,6 @@ class _FastlessSpec(NativeLLMSpec):
   TYPE: ClassVar[str] = 'fastless'
 
   model: str = 'whatever'
-
-  def create_llm(self, mcp_servers=None, observer=None, tracker=None, agent=None) -> LLM:
-    raise NotImplementedError('not constructible in tests')
 
   def dump(self) -> dict:
     return {'type': self.TYPE, 'model': self.model}

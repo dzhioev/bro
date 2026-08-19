@@ -11,7 +11,6 @@ from typing import Any, Optional, Self
 from bro.base import log
 from bro.bro import BaseBro, BroRaised
 from bro.channel import BroChannel
-from bro.llm.llm import LLM
 from bro.llm.observer import (
   NullObserver,
   Observer,
@@ -21,6 +20,8 @@ from bro.llm.observer import (
   TurnStartedEvent,
 )
 from bro.llm.tracker import EndReason, NullTracker, ToolStepSource, Tracker
+from bro.native import providers as native_providers
+from bro.native.llm import LLM
 from bro.summon import summoned_by_from_env
 from bro.trails.record.bro import Recorder
 
@@ -316,7 +317,8 @@ class Runner:
     return BroChannel.from_env()
 
   def _create_llm(self, *, hold: str) -> LLM:
-    return self.bro.llm_spec.create_llm(
+    return native_providers.create(
+      self.bro.llm_spec,
       mcp_servers=self.bro.native_mcp_servers(hold=hold, live_run=self),
       observer=self._observer,
       tracker=self._tracker,

@@ -12,7 +12,6 @@ from bro.broker.brotocol import Message
 from bro.broker.client import CHANNEL_ENV, Client
 from bro.broker.transport import ClientTransport
 from bro.channel import BroChannel
-from bro.llm.llm import LLM
 from bro.llm.mcp import InProcessMCPServer, MCPServer
 from bro.llm.observer import (
   NullObserver,
@@ -25,6 +24,7 @@ from bro.llm.observer import (
 )
 from bro.llm.tracker import NullTracker, Tracker
 from bro.mcp import MCPServerSpec
+from bro.native.llm import LLM
 from bro.native.runner import Runner, set_default_tracker_factory
 
 

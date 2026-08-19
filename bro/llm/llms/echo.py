@@ -1,10 +1,7 @@
 from dataclasses import dataclass
-from typing import ClassVar, Optional
+from typing import ClassVar
 
 import bro.llm.llm as llm_llm
-from bro.llm.mcp import MCPServer
-from bro.llm.observer import Observer
-from bro.llm.tracker import Tracker
 
 DEFAULT_MODEL = 'echo'
 
@@ -21,50 +18,9 @@ class LLMSpec(llm_llm.NativeLLMSpec):
 
   model: str = DEFAULT_MODEL
 
-  def create_llm(
-    self,
-    mcp_servers: Optional[list[MCPServer]] = None,
-    observer: Optional[Observer] = None,
-    tracker: Optional[Tracker] = None,
-    agent: Optional[str] = None,
-  ) -> llm_llm.LLM:
-    return Echo.create(mcp_servers=mcp_servers, observer=observer, tracker=tracker, agent=agent)
-
   def dump(self) -> dict:
     return {'type': self.TYPE, 'model': self.model}
 
   @classmethod
   def _from_dict_impl(cls, data: dict) -> 'LLMSpec':
     return cls(model=data['model'])
-
-
-class Echo(llm_llm.LLM):
-  @staticmethod
-  def create(
-    mcp_servers: Optional[list[MCPServer]] = None,
-    observer: Optional[Observer] = None,
-    tracker: Optional[Tracker] = None,
-    agent: Optional[str] = None,
-  ):
-    return Echo(mcp_servers=mcp_servers, observer=observer, tracker=tracker, agent=agent)
-
-  def __init__(
-    self,
-    mcp_servers: Optional[list[MCPServer]] = None,
-    observer: Optional[Observer] = None,
-    tracker: Optional[Tracker] = None,
-    agent: Optional[str] = None,
-  ):
-    super().__init__(mcp_servers, observer=observer, tracker=tracker, agent=agent)
-
-  async def send(self, messages: list[dict], *, request_timeout: Optional[float] = None) -> str:
-    if len(messages) == 0:
-      return ''
-    last = messages[-1]
-    content = last.get('content', '')
-    if isinstance(content, str):
-      return content
-    if isinstance(content, list):
-      texts = [p.get('text', '') for p in content if p.get('type') == 'text']
-      return '\n'.join(texts)
-    return str(content)

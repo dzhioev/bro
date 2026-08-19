@@ -5,8 +5,9 @@ from typing import ClassVar, Optional
 import pytest
 
 import bro.registry
-from bro.llm.llm import LLM, NativeLLMSpec
+from bro.llm.llm import NativeLLMSpec
 from bro.llm.mcp import MCPServer
+from bro.native.llm import LLM
 from bro.registry import _REGISTRY, create_bro, get_class, list_classes, register
 from bros.bro import Bro
 
@@ -24,9 +25,6 @@ class _EchoOnlySpec(NativeLLMSpec):
   TYPE: ClassVar[str] = 'mock'
 
   model: str = 'mock'
-
-  def create_llm(self, mcp_servers=None, observer=None, tracker=None, agent=None) -> LLM:
-    return MockLLM(mcp_servers)
 
   def dump(self) -> dict:
     return {'type': self.TYPE, 'model': self.model}

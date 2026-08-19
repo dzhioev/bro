@@ -28,9 +28,10 @@ import json
 from collections.abc import Callable
 from typing import Any, Optional, cast
 
-import bro.llm.llms.openai as llm_llms_openai
-from bro.llm.llm import LLM, LLMSpec, NativeLLMSpec
+import bro.native.llms.openai as native_openai
+from bro.llm.llm import LLMSpec, NativeLLMSpec
 from bro.llm.tracker import NullTracker, Tracker
+from bro.native.llm import LLM
 from bro.native.runner import Runner
 from bro.registry import create_bro
 from bro.trails.lineage import walk_chain
@@ -347,7 +348,7 @@ def _seed_response_id(inner_llm: LLM, response_id: str) -> None:
   # entire prefix it had cached for that response. other LLM impls don't
   # support this; raise loudly rather than silently producing a fork that
   # ignores the seed.
-  if not isinstance(inner_llm, llm_llms_openai.OpenAI):
+  if not isinstance(inner_llm, native_openai.OpenAI):
     raise NotImplementedError(
       f'server-side fork not implemented for {type(inner_llm).__name__}; '
       'currently supports OpenAI only'
@@ -397,7 +398,7 @@ def _preseed(inner_llm: LLM, prefix: list[dict]) -> None:
   # other LLM impls (e.g. Echo) don't support replay; their forks would need a
   # provider-specific shim. raise loudly rather than silently producing a fork
   # that ignores the prefix.
-  if not isinstance(inner_llm, llm_llms_openai.OpenAI):
+  if not isinstance(inner_llm, native_openai.OpenAI):
     raise NotImplementedError(
       f'client-side fork not implemented for {type(inner_llm).__name__}; '
       'currently supports OpenAI only'
