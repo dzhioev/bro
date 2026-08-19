@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 
 from bro import prompts
 from bro.base import credentials
+from ride.claude.assembly import bro_servers, persona_servers
 from ride.claude.harness import llm_spec, options
 from ride.claude.mcp import MCPEndpoint, http_mcp_config
 from ride.claude.system_prompt import session_append_prompt
@@ -121,7 +122,7 @@ def build_claude_launch(
   }
   argv = ['--model', llm.model]
   bro = create_bro(spec.bro)
-  servers = bro.claude_bro_mcp_servers() if options(spec).raw else bro.claude_persona_mcp_servers()
+  servers = bro_servers(bro) if options(spec).raw else persona_servers(bro)
   blocked_tool_names = () if options(spec).raw else bro.blocked_tool_names('claude')
   narrowed_tool_commands = {} if options(spec).raw else bro.narrowed_tool_commands('claude')
   if len(narrowed_tool_commands) > 0:

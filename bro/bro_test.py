@@ -42,7 +42,12 @@ class StubRun:
 def _native_servers(
   bro: BaseBro, *, hold: str = 'unattended', run: Optional[StubRun] = None
 ) -> list[MCPServer]:
-  return bro.native_mcp_servers(hold=hold, live_run=run if run is not None else StubRun())
+  return bro.assemble(
+    harness='bro',
+    wire='bare',
+    include_raise=hold == 'unattended',
+    live_run=run if run is not None else StubRun(),
+  )
 
 
 def _service_server(bro: BaseBro, *, run: Optional[StubRun] = None) -> MCPServer:
@@ -686,11 +691,13 @@ class TestClaudePersonaServers:
     return PersonaBro()
 
   def test_serves_only_claude_harness_components(self):
-    servers = self._bro().claude_persona_mcp_servers()
+    servers = self._bro().assemble(harness='claude', wire='mcp', include_raise=False)
     assert [s.namespace for s in servers] == ['test', 'bro']
 
   def test_service_server_carries_banner_but_not_raise(self):
-    names = asyncio.run(_collect_tool_names(self._bro().claude_persona_mcp_servers()))
+    names = asyncio.run(
+      _collect_tool_names(self._bro().assemble(harness='claude', wire='mcp', include_raise=False))
+    )
     # `raise` is gated on the session hold (not unattended here — no BRO_HOLD);
     # the environment facts stay available as `banner`
     assert 'banner' in names
@@ -715,13 +722,17 @@ class TestClaudePersonaServers:
     monkeypatch.setattr('bro.base.credentials.available', lambda name: False)
     # the dev toolset is bro-harness-only — claude's built-in tools cover it —
     # while the reference FileSources serve every harness
-    assert [s.namespace for s in Dev().claude_persona_mcp_servers()] == [
+    assert [
+      s.namespace for s in Dev().assemble(harness='claude', wire='mcp', include_raise=False)
+    ] == [
       'dev-style-source',
       'bro',
       'spell',
     ]
     monkeypatch.setattr('bro.base.credentials.available', lambda name: name == 'brog')
-    assert [s.namespace for s in Dev().claude_persona_mcp_servers()] == [
+    assert [
+      s.namespace for s in Dev().assemble(harness='claude', wire='mcp', include_raise=False)
+    ] == [
       'brog',
       'dev-style-source',
       'bro',
@@ -969,31 +980,8 @@ class TestRaise:
     assert exception.value.reason == 'missing api key'
 
 
-class TestClaudeRaise:
-  """the mcp flavor of `raise`: mounted for unattended claude sessions, records
-  the abort over the broker channel and terminates the session through the
-  runner (no exception can abort the consuming harness)."""
-
-  def test_unattended_claude_builds_mount_raise(self, monkeypatch):
-    monkeypatch.setenv('BRO_HOLD', 'unattended')
-    monkeypatch.setenv('RIDE_RUNNER_PID', '4242')
-    bro = EchoBro()
-    assert 'raise' in asyncio.run(_collect_tool_names(bro.claude_persona_mcp_servers()))
-    assert 'raise' in asyncio.run(_collect_tool_names(bro.claude_bro_mcp_servers()))
-
-  def test_hold_alone_does_not_mount_raise(self, monkeypatch):
-    # no runner pid means nothing to terminate — no tool
-    monkeypatch.setenv('BRO_HOLD', 'unattended')
-    names = asyncio.run(_collect_tool_names(EchoBro().claude_persona_mcp_servers()))
-    assert 'raise' not in names
-
-  def test_other_skip_permission_holds_do_not_mount_raise(self, monkeypatch):
-    # detached and attended sessions have a human to report to — no abort tool
-    monkeypatch.setenv('RIDE_RUNNER_PID', '4242')
-    for hold in ('detached', 'attended', 'guided'):
-      monkeypatch.setenv('BRO_HOLD', hold)
-      names = asyncio.run(_collect_tool_names(EchoBro().claude_persona_mcp_servers()))
-      assert 'raise' not in names
+class TestMCPRaise:
+  """the MCP flavor records the abort and terminates its managed runner."""
 
   async def _mcp_raise_tool(self):
     server = bro_module._build_service_server(

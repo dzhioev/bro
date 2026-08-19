@@ -25,6 +25,10 @@ def ride_claude_statusline():
   return _run('ride.claude.statusline')
 
 
+def ride_claude_trail_recorder():
+  return _run('ride.claude.trail_recorder')
+
+
 def ride_claude_watch_guard():
   return _run('ride.claude.watch_guard')
 

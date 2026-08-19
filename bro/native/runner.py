@@ -319,7 +319,9 @@ class Runner:
   def _create_llm(self, *, hold: str) -> LLM:
     return native_providers.create(
       self.bro.llm_spec,
-      mcp_servers=self.bro.native_mcp_servers(hold=hold, live_run=self),
+      mcp_servers=self.bro.assemble(
+        harness='bro', wire='bare', include_raise=hold == 'unattended', live_run=self
+      ),
       observer=self._observer,
       tracker=self._tracker,
       # the LLM publishes cumulative usage under the bro's surface identity (the

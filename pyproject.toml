@@ -98,7 +98,6 @@ bro-local = { workspace = true }
 "bro.runtime.mcp-server" = "bro._entrypoints:bro_runtime_mcp_server"
 "bro.shell" = "bro._entrypoints:bro_shell"
 "bro.summon" = "bro._entrypoints:bro_summon"
-"bro.trails.record.claude" = "bro._entrypoints:bro_trails_record_claude"
 "bro.trails.rewind" = "bro._entrypoints:bro_trails_rewind"
 "bro.trails.server.server" = "bro._entrypoints:bro_trails_server_server"
 "bro.workflow.commit-footer" = "bro._entrypoints:bro_workflow_commit_footer"

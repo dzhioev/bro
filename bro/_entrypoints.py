@@ -53,10 +53,6 @@ def bro_summon():
   return _run('bro.summon')
 
 
-def bro_trails_record_claude():
-  return _run('bro.trails.record.claude')
-
-
 def bro_trails_rewind():
   return _run('bro.trails.rewind')
 

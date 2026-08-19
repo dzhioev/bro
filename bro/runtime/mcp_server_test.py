@@ -44,8 +44,15 @@ _ping_toolset = Toolset('ping')
 _ping_toolset.tool('ping the noop server')(_ping)
 
 
-def _entry_point(name: str, value: str) -> importlib.metadata.EntryPoint:
-  return importlib.metadata.EntryPoint(name, value, mcp_server._TOOLSET_ENTRY_POINT_GROUP)
+def _entry_point(
+  name: str, value: str, group: str = mcp_server._TOOLSET_ENTRY_POINT_GROUP
+) -> importlib.metadata.EntryPoint:
+  return importlib.metadata.EntryPoint(name, value, group)
+
+
+def _resolve_ping_target(value: str) -> list[MCPServer]:
+  assert value == 'selected'
+  return [_create_ping_server()]
 
 
 class _ShimBro(BaseBro):
@@ -115,6 +122,33 @@ class TestResolveServers:
     assert mcp_server._toolset_entry_points() == ()
     assert calls == [{'group': 'bro.toolsets'}]
 
+  def test_target_entry_points_use_the_expected_group(self, monkeypatch):
+    calls = []
+
+    def entry_points(**kwargs):
+      calls.append(kwargs)
+      return ()
+
+    monkeypatch.setattr(importlib.metadata, 'entry_points', entry_points)
+    assert mcp_server._target_entry_points() == ()
+    assert calls == [{'group': 'bro.mcp.targets'}]
+
+  def test_contributed_target_is_discovered(self, monkeypatch):
+    entry = _entry_point(
+      'fixture',
+      'bro.runtime.mcp_server_test:_resolve_ping_target',
+      mcp_server._TARGET_ENTRY_POINT_GROUP,
+    )
+    monkeypatch.setattr(mcp_server, '_target_entry_points', lambda: (entry,))
+
+    [server] = _resolve_servers('fixture:selected')
+    assert server.namespace == 'ping'
+
+  def test_unknown_target_has_a_clear_error(self, monkeypatch):
+    monkeypatch.setattr(mcp_server, '_target_entry_points', lambda: ())
+    with pytest.raises(SystemExit, match="unknown assembled target 'missing'"):
+      _resolve_servers('missing:value')
+
   def test_absent_toolset_has_a_clear_error(self, monkeypatch):
     monkeypatch.setattr(mcp_server, '_toolset_entry_points', lambda: ())
     with pytest.raises(SystemExit, match="unknown server 'tasks'; expected one of"):
@@ -136,10 +170,6 @@ class TestResolveServers:
   def test_unknown(self):
     with pytest.raises(SystemExit, match='unknown server'):
       _resolve_servers('does-not-exist')
-
-  def test_bro_spec_includes_service_namespace(self):
-    namespaces = {server.namespace for server in _resolve_servers('bro:bro')}
-    assert 'bro' in namespaces
 
 
 class TestHTTPBindBeforeResolve:

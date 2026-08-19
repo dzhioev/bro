@@ -15,6 +15,7 @@ import pytest
 from bro.base.template import _DIRECTIVE_RE
 from bro.bro import BaseBro
 from bro.llm.mcp import MCPServer, Tool
+from bro.mcp import Harness, Wire
 from bro.registry import create_bro, declared_specs
 
 
@@ -25,16 +26,16 @@ class _NoRun:
   current_tool_step_id = None
 
 
-def _native_servers(bro: BaseBro) -> list[MCPServer]:
-  return bro.native_mcp_servers(hold='unattended', live_run=_NoRun())
+def _servers(bro: BaseBro, *, harness: Harness = 'bro', wire: Wire = 'bare') -> list[MCPServer]:
+  return bro.assemble(harness=harness, wire=wire, include_raise=True, live_run=_NoRun())
 
 
-# (surface label, server-list builder) — the three consuming harnesses a bro's
+# (surface label, server-list builder) — the three assembly shapes a bro's
 # declared components serve
 _SURFACES = [
-  ('bro-native', _native_servers),
-  ('claude-bro', lambda bro: bro.claude_bro_mcp_servers()),
-  ('claude-persona', lambda bro: bro.claude_persona_mcp_servers()),
+  ('bro-native', _servers),
+  ('bro-over-mcp', lambda bro: _servers(bro, wire='mcp')),
+  ('alternate-harness', lambda bro: _servers(bro, harness='claude', wire='mcp')),
 ]
 
 
@@ -101,7 +102,7 @@ async def test_served_tool_text_stays_inside_the_roster(name):
 async def test_lead_exposes_the_rewind_read_surface_as_generated_commands():
   lead = create_bro('lead')
   tools = {}
-  for server in _native_servers(lead):
+  for server in _servers(lead):
     if server.namespace == 'sh':
       tools.update({tool.name: tool for tool in await server.list_tools()})
 
@@ -131,7 +132,7 @@ class TestSummonRecoveryFork:
   # the summon description's lost-request-id recovery path must match the
   # mount: `summon_list` exists only when the session tracks summon status
   def _summon_description(self, bro: BaseBro) -> str:
-    server = next(server for server in bro.claude_bro_mcp_servers() if server.namespace == 'bro')
+    server = next(server for server in _servers(bro, wire='mcp') if server.namespace == 'bro')
     by_name = {tool.name: tool for tool in __import__('asyncio').run(server.list_tools())}
     assert 'summon_list' in (server.tool_universe or ())
     return by_name['summon'].description, 'summon_list' in by_name  # type: ignore[return-value]
