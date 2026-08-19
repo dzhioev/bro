@@ -29,12 +29,12 @@ def bro_extra_github_poll_pr():
   return _run('bro.extra.github.poll_pr')
 
 
-def bro_llm_llm():
-  return _run('bro.llm.llm')
-
-
 def bro_llm_usage():
   return _run('bro.llm.usage')
+
+
+def bro_native_llm():
+  return _run('bro.native.llm')
 
 
 def bro_run():
