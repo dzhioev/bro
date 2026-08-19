@@ -403,12 +403,12 @@ class InProcessMCPServer(MCPServer):
   def __init__(
     self, namespace: str, tools: Iterable[Tool], *, close: Optional[Callable[[], None]] = None
   ):
-    mcp._validate_segment('namespace', namespace)
+    mcp.validate_segment('namespace', namespace)
     self.namespace = namespace
     self._tools = list(tools)
     self._close = close
     for tool in self._tools:
-      mcp._validate_segment('tool name', tool.name)
+      mcp.validate_segment('tool name', tool.name)
 
   async def list_tools(self) -> list[Tool]:
     return list(self._tools)

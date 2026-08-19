@@ -46,7 +46,7 @@ def session_append_prompt(hold: str, bro_name: str) -> str:
   base and persona prompts stay hold-neutral.
   """
   # Keep the bro class graph out of this leaf module's import closure.
-  import bro.mcp as llm_mcp
+  import bro.mcp as mcp
   from bro import prompts
   from bro.base import credentials
   from bro.registry import create_bro
@@ -56,7 +56,7 @@ def session_append_prompt(hold: str, bro_name: str) -> str:
   spell_instructions = bro.spell_instructions()
   if len(spell_instructions) > 0:
     parts.append(spell_instructions)
-  rendered = llm_mcp.render_text(
+  rendered = mcp.render_text(
     '\n\n'.join(parts),
     harness='claude',
     wire='mcp',
