@@ -66,7 +66,7 @@ class TestRideSessionLaunch:
   def test_selected_tool_blocks_reach_disallowed_tools(self, monkeypatch):
     from bro.base.condition import when
     from bro.bro import BaseBro
-    from bro.llm.mcp import block, harness
+    from bro.mcp import block, harness
 
     class BlockingBro(BaseBro):
       name = 'blocking'
@@ -83,7 +83,7 @@ class TestRideSessionLaunch:
   def test_narrowed_tool_is_served_and_gated_by_a_hook(self, monkeypatch):
     from bro.base.condition import when
     from bro.bro import BaseBro
-    from bro.llm.mcp import allow_commands, block, harness
+    from bro.mcp import allow_commands, block, harness
 
     class WatchingBro(BaseBro):
       name = 'watching'

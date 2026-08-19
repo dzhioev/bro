@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Optional, Self
 from pydantic import BaseModel, ConfigDict, model_validator
 
 import bro.llm.mcp as llm_mcp
+import bro.mcp as mcp
 from bro.base import credentials
 from bro.base.text_window import window
 from bro.procedures import collect_markdown, parse_frontmatter
@@ -142,8 +143,8 @@ def _render_spell_call(
   spell: Spell,
   arguments: dict[str, Any],
   *,
-  harness: llm_mcp.Harness,
-  wire: llm_mcp.Wire,
+  harness: mcp.Harness,
+  wire: mcp.Wire,
   offset: int = 0,
 ) -> str:
   body = bro.get_spell_body(spell.name, harness=harness, wire=wire)
@@ -193,8 +194,8 @@ async def _interpret(
   command: str,
   spells: list[Spell],
   bro: 'BaseBro',
-  harness: llm_mcp.Harness,
-  wire: llm_mcp.Wire,
+  harness: mcp.Harness,
+  wire: mcp.Wire,
 ) -> dict[str, Any] | str:
   from bro.llm.mu import JSON, mu
   from bro.prompts import get_prompt
@@ -222,13 +223,13 @@ class SpellTool(llm_mcp.Tool):
     bro: 'BaseBro',
     spell: Spell,
     *,
-    harness: llm_mcp.Harness,
-    wire: llm_mcp.Wire,
+    harness: mcp.Harness,
+    wire: mcp.Wire,
   ):
     self._bro = bro
     self._spell = spell
-    self._harness: llm_mcp.Harness = harness
-    self._wire: llm_mcp.Wire = wire
+    self._harness: mcp.Harness = harness
+    self._wire: mcp.Wire = wire
     properties: dict[str, dict[str, Any]] = {
       parameter.name: {'type': 'string', 'description': parameter.description}
       for parameter in spell.parameters
@@ -319,13 +320,13 @@ class CastTool(llm_mcp.Tool):
     bro: 'BaseBro',
     spells: list[Spell],
     *,
-    harness: llm_mcp.Harness,
-    wire: llm_mcp.Wire,
+    harness: mcp.Harness,
+    wire: mcp.Wire,
   ):
     self._bro = bro
     self._spells = spells
-    self._harness: llm_mcp.Harness = harness
-    self._wire: llm_mcp.Wire = wire
+    self._harness: mcp.Harness = harness
+    self._wire: mcp.Wire = wire
 
   @property
   def name(self) -> str:
@@ -364,9 +365,7 @@ def _load_bro_spells(bro: 'BaseBro') -> list[Spell]:
   return [load_spell(name, path) for name, path in bro.spells.items()]
 
 
-def build_cast_tool(
-  bro: 'BaseBro', *, harness: llm_mcp.Harness, wire: llm_mcp.Wire
-) -> llm_mcp.Tool:
+def build_cast_tool(bro: 'BaseBro', *, harness: mcp.Harness, wire: mcp.Wire) -> llm_mcp.Tool:
   return CastTool(bro, _load_bro_spells(bro), harness=harness, wire=wire)
 
 
@@ -375,7 +374,7 @@ def build_skill_tool() -> llm_mcp.Tool:
 
 
 def build_spell_server(
-  bro: 'BaseBro', *, harness: llm_mcp.Harness, wire: llm_mcp.Wire
+  bro: 'BaseBro', *, harness: mcp.Harness, wire: mcp.Wire
 ) -> llm_mcp.MCPServer:
   tools: list[llm_mcp.Tool] = [
     SpellTool(bro, spell, harness=harness, wire=wire) for spell in _load_bro_spells(bro)

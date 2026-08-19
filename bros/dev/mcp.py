@@ -21,7 +21,8 @@ from typing import Optional
 from bro.base import spawn
 from bro.base.offload import off_loop
 from bro.base.text_window import DEFAULT_LIMIT, apply_limit, numbered_window
-from bro.llm.mcp import Context, Toolset
+from bro.llm.mcp import Context
+from bro.mcp import Toolset
 from bros.dev import jobs
 
 # default wall-clock cap for the shell-out tools (bash, grep). On expiry the whole

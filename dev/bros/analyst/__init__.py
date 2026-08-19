@@ -1,5 +1,5 @@
 from bro.base.condition import when
-from bro.llm.mcp import harness, mount
+from bro.mcp import harness, mount
 from bros.bro import Bro
 from bros.dev import mcp
 

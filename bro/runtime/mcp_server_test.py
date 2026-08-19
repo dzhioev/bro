@@ -6,15 +6,8 @@ from starlette.testclient import TestClient
 
 from bro.bro import BaseBro
 from bro.datasources.searchable import Hit, SearchableDataSource
-from bro.llm.mcp import (
-  FunctionTool,
-  InProcessMCPServer,
-  MCPServer,
-  MCPServerSpec,
-  ToolLayer,
-  Toolset,
-  describe,
-)
+from bro.llm.mcp import FunctionTool, InProcessMCPServer, MCPServer
+from bro.mcp import MCPServerSpec, ToolLayer, Toolset, describe
 from bro.runtime import mcp_server
 from bro.runtime.mcp_server import _resolve_servers, create_http_app
 

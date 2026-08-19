@@ -4,7 +4,7 @@ from typing import ClassVar, Optional
 
 import pytest
 
-import bro.llm.mcp as llm_mcp
+import bro.mcp as mcp
 import bro.native.runner as native_runner
 from bro.base import credentials
 from bro.bro import BaseBro, BroRaised
@@ -13,7 +13,7 @@ from bro.broker.client import CHANNEL_ENV, Client
 from bro.broker.transport import ClientTransport
 from bro.channel import BroChannel
 from bro.llm.llm import LLM
-from bro.llm.mcp import InProcessMCPServer, MCPServer, MCPServerSpec
+from bro.llm.mcp import InProcessMCPServer, MCPServer
 from bro.llm.observer import (
   NullObserver,
   ObservedEvent,
@@ -24,6 +24,7 @@ from bro.llm.observer import (
   TurnStartedEvent,
 )
 from bro.llm.tracker import NullTracker, Tracker
+from bro.mcp import MCPServerSpec
 from bro.native.runner import Runner, set_default_tracker_factory
 
 
@@ -75,8 +76,8 @@ class StubRunner(Runner):
     return self.llm
 
 
-def _server_layer(server_spec: MCPServerSpec) -> llm_mcp.ToolLayer:
-  return llm_mcp.ToolLayer(server_specs=(server_spec,))
+def _server_layer(server_spec: MCPServerSpec) -> mcp.ToolLayer:
+  return mcp.ToolLayer(server_specs=(server_spec,))
 
 
 class TestRun:

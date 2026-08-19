@@ -81,7 +81,7 @@ def add_session_flags(parser: Parser, *, include_bro: bool = True) -> None:
   # imported here, not at module level: llm pulls asyncio (~150ms) and this
   # module sits on every runtime CLI import
   from bro.launch.llm_flags import add_llm_flags
-  from bro.llm.mcp import HOLDS
+  from bro.mcp import HOLDS
 
   # default None: the launch surface resolves an omitted flag via default_hold,
   # and reconstruction then always carries the resolved value

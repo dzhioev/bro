@@ -9,7 +9,8 @@ import pytest
 from bro.base.liveness_test_helper import Liveness
 from bro.base.offload import off_loop
 from bro.base.text_window import DEFAULT_LIMIT
-from bro.llm.mcp import Context, mount
+from bro.llm.mcp import Context
+from bro.mcp import mount
 from bros.dev import jobs
 from bros.dev.mcp import (
   bash,

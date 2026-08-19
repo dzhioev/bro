@@ -4,7 +4,7 @@ import pytest
 
 from bro.base.args import Argument, CommandSignature
 from bro.llm.cli_tool import _CommandTool, build_server
-from bro.llm.mcp import sh
+from bro.mcp import sh
 
 
 def _tool(command: str, *arguments: str) -> _CommandTool:

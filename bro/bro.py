@@ -6,6 +6,7 @@ from typing import Any, ClassVar, Optional, Protocol, Self
 
 import bro.llm.llms.openai as llm_llms_openai
 import bro.llm.mcp as llm_mcp
+import bro.mcp as mcp
 from bro import spells as spell_store
 from bro.base import credentials, log
 from bro.base.condition import Condition, Entry, Iff, SetVariable, Variables, When, var
@@ -150,7 +151,7 @@ _RAISE_DESCRIPTION = (
 )
 
 
-def _raise_tool(wire: llm_mcp.Wire, variables: Variables) -> llm_mcp.Tool:
+def _raise_tool(wire: mcp.Wire, variables: Variables) -> llm_mcp.Tool:
   target = _raise if wire == 'bare' else _claude_raise
   return llm_mcp.FunctionTool(
     target, name='raise', description=_RAISE_DESCRIPTION, variables=variables
@@ -406,8 +407,8 @@ def _build_service_server(
   bro: 'BaseBro',
   *,
   include_raise: bool,
-  harness: llm_mcp.Harness,
-  wire: llm_mcp.Wire,
+  harness: mcp.Harness,
+  wire: mcp.Wire,
   live_run: Optional[LiveRun] = None,
 ) -> llm_mcp.MCPServer:
   # built only on the paths that serve a bro, never at construction: deriving the
@@ -442,7 +443,7 @@ def _build_service_server(
   if has_summon_list:
     mounted.append('summon_list')
   variables: Variables = {
-    **llm_mcp.surface_variables(wire=wire),
+    **mcp.surface_variables(wire=wire),
     'tools': SetVariable(frozenset(mounted), universe=frozenset(_SERVICE_TOOL_NAMES)),
   }
 
@@ -492,7 +493,7 @@ def _feature_variables(features: dict[str, Condition | bool]) -> Variables:
   return {'features': SetVariable(enabled, universe=frozenset(features))}
 
 
-def _component_needed_secrets(component: llm_mcp.MCPServerSpec | DataSource) -> set[str]:
+def _component_needed_secrets(component: mcp.MCPServerSpec | DataSource) -> set[str]:
   # a component declares its credentials as plain metadata (a spec field, or a
   # DataSource class attribute), so reading the manifest never builds a live
   # server. no real component extends a non-empty base's declaration, so an MRO
@@ -500,7 +501,7 @@ def _component_needed_secrets(component: llm_mcp.MCPServerSpec | DataSource) -> 
   return set(component.needed_secrets)
 
 
-def _component_optional_secrets(component: llm_mcp.MCPServerSpec | DataSource) -> set[str]:
+def _component_optional_secrets(component: mcp.MCPServerSpec | DataSource) -> set[str]:
   # mirror of `_component_needed_secrets` for the best-effort tier (`optional_secrets`).
   return set(component.optional_secrets)
 
@@ -509,14 +510,14 @@ def _component_optional_secrets(component: llm_mcp.MCPServerSpec | DataSource) -
 class _ToolSelection:
   """what a bro's tool layers amount to on one harness."""
 
-  server_specs: list[llm_mcp.MCPServerSpec]
+  server_specs: list[mcp.MCPServerSpec]
   blocked_tool_names: tuple[str, ...]
   # native tool name -> the commands it may reach, for the harness to enforce
   narrowed_tool_commands: dict[str, tuple[str, ...]]
 
 
-def _fold_tool_layers(layers: list[llm_mcp.ToolLayer], harness: llm_mcp.Harness) -> _ToolSelection:
-  server_specs: list[llm_mcp.MCPServerSpec] = []
+def _fold_tool_layers(layers: list[mcp.ToolLayer], harness: mcp.Harness) -> _ToolSelection:
+  server_specs: list[mcp.MCPServerSpec] = []
   blocked_names: list[str] = []
   narrowed: dict[str, list[str]] = {}
   for layer in layers:
@@ -579,7 +580,7 @@ def _component_destinations(value: object) -> set[str]:
     else:
       components = (entry,)
     for component in components:
-      if isinstance(component, llm_mcp.ToolLayer):
+      if isinstance(component, mcp.ToolLayer):
         destinations.add('tools')
       elif isinstance(component, DataSource | ManPage):
         destinations.add('data_sources')
@@ -598,7 +599,7 @@ class BaseBro(ABC):
   # contract, one entry per source — or per reference page (`man('<topic>')`),
   # which fold into a single manual.
   data_sources: ClassVar[list[Entry[DataSource | ManPage]]] = []
-  tools: ClassVar[list[Entry[llm_mcp.ToolLayer]]] = []
+  tools: ClassVar[list[Entry[mcp.ToolLayer]]] = []
   # named optional capabilities: feature name → the gate deciding whether the
   # feature is on — a `Condition` over the environment's resolvable credentials
   # (`creds.contains('brog')`), or a plain bool constant as in `when` (True
@@ -660,7 +661,7 @@ class BaseBro(ABC):
       raise TypeError(message)
 
   def __init__(self, system_prompt: Optional[str] = None):
-    tool_entries: list[Entry[llm_mcp.ToolLayer]] = []
+    tool_entries: list[Entry[mcp.ToolLayer]] = []
     data_source_entries: list[Entry[DataSource | ManPage]] = []
     prompt_parts: list[str] = []
     extra_secret_names: list[str] = []
@@ -705,12 +706,12 @@ class BaseBro(ABC):
     self._tool_entries = tool_entries
     self._data_source_entries = data_source_entries
     surface_creds = credentials.known_names()
-    selected_tools = llm_mcp.select(
+    selected_tools = mcp.select(
       tool_entries, harness='bro', creds=surface_creds, extra=self._feature_vocabulary
     )
     self._mcp_specs = _fold_tool_layers(selected_tools, 'bro').server_specs
     self._data_sources: list[DataSource] = _fold_man_pages(
-      llm_mcp.select(
+      mcp.select(
         data_source_entries, harness='bro', creds=surface_creds, extra=self._feature_vocabulary
       )
     )
@@ -733,7 +734,7 @@ class BaseBro(ABC):
     shared = _load_shared_prompts()
     spell_instructions = self.spell_instructions()
 
-    def compose(wire: llm_mcp.Wire) -> str:
+    def compose(wire: mcp.Wire) -> str:
       parts = []
       if len(shared) > 0:
         parts.append(shared)
@@ -752,7 +753,7 @@ class BaseBro(ABC):
       # stripped: a fragment whose whole body is a skipped directive block
       # (grounding.md outside the claude-bare surface) collapses to bare join
       # separators at the prompt edge.
-      return llm_mcp.render_text(
+      return mcp.render_text(
         '\n\n'.join(parts),
         harness='bro',
         wire=wire,
@@ -791,13 +792,13 @@ class BaseBro(ABC):
   def spells(self) -> dict[str, Path]:
     return spell_store.collect_spells(list(reversed(type(self).__mro__)))
 
-  def get_spell_body(self, name: str, *, harness: llm_mcp.Harness, wire: llm_mcp.Wire) -> str:
+  def get_spell_body(self, name: str, *, harness: mcp.Harness, wire: mcp.Wire) -> str:
     path = self.spells.get(name)
     if path is None:
       available = ', '.join(sorted(self.spells)) if len(self.spells) > 0 else '(none)'
       raise KeyError(f'no spell named {name!r}; available: {available}')
     spell = spell_store.load_spell(name, path)
-    return llm_mcp.render_text(
+    return mcp.render_text(
       spell.body,
       harness=harness,
       wire=wire,
@@ -815,8 +816,8 @@ class BaseBro(ABC):
       return ''
     return _render_spells(include_cast=spell_store.cast_available())
 
-  def _selected_tools_for(self, harness: llm_mcp.Harness) -> '_ToolSelection':
-    selected: list[llm_mcp.ToolLayer] = llm_mcp.select(
+  def _selected_tools_for(self, harness: mcp.Harness) -> '_ToolSelection':
+    selected: list[mcp.ToolLayer] = mcp.select(
       self._tool_entries,
       harness=harness,
       creds=credentials.known_names(),
@@ -824,18 +825,18 @@ class BaseBro(ABC):
     )
     return _fold_tool_layers(selected, harness)
 
-  def blocked_tool_names(self, harness: llm_mcp.Harness) -> tuple[str, ...]:
+  def blocked_tool_names(self, harness: mcp.Harness) -> tuple[str, ...]:
     """harness-native tool names blocked by this bro's selected layers."""
     return self._selected_tools_for(harness).blocked_tool_names
 
-  def narrowed_tool_commands(self, harness: llm_mcp.Harness) -> dict[str, tuple[str, ...]]:
+  def narrowed_tool_commands(self, harness: mcp.Harness) -> dict[str, tuple[str, ...]]:
     """harness-native tool name -> the commands this bro's selected layers narrow
     it to; the harness rejects every other command the tool is called with."""
     return self._selected_tools_for(harness).narrowed_tool_commands
 
   def _components_for(
-    self, harness: llm_mcp.Harness
-  ) -> tuple[list[llm_mcp.MCPServerSpec], list[DataSource]]:
+    self, harness: mcp.Harness
+  ) -> tuple[list[mcp.MCPServerSpec], list[DataSource]]:
     # the declared components that hold on `harness`. the bro-harness selection
     # is the one materialized in __init__ (prompt composition and the
     # live-server cache read it); any other harness selects on demand from the
@@ -844,7 +845,7 @@ class BaseBro(ABC):
       return self._mcp_specs, self._data_sources
     specs = self._selected_tools_for(harness).server_specs
     sources = _fold_man_pages(
-      llm_mcp.select(
+      mcp.select(
         self._data_source_entries,
         harness=harness,
         creds=credentials.known_names(),
@@ -853,7 +854,7 @@ class BaseBro(ABC):
     )
     return specs, sources
 
-  def needed_secrets(self, harness: llm_mcp.Harness = 'bro') -> tuple[str, ...]:
+  def needed_secrets(self, harness: mcp.Harness = 'bro') -> tuple[str, ...]:
     # the bro's component credential manifest for a consuming harness: the union
     # of each declared MCP server's + data source's `needed_secrets`, over only
     # the components that hold on `harness` — a surface never hydrates a secret
@@ -872,7 +873,7 @@ class BaseBro(ABC):
     names.update(self._extra_secrets)
     return tuple(sorted(names))
 
-  def optional_secrets(self, harness: llm_mcp.Harness = 'bro') -> tuple[str, ...]:
+  def optional_secrets(self, harness: mcp.Harness = 'bro') -> tuple[str, ...]:
     # the bro's best-effort credential tier: the union of each declared MCP
     # server's + data source's `optional_secrets` over the same per-harness
     # component set as `needed_secrets`, plus the cast key when this bro has
@@ -911,8 +912,8 @@ class BaseBro(ABC):
     self,
     servers: list[llm_mcp.MCPServer],
     *,
-    harness: llm_mcp.Harness,
-    wire: llm_mcp.Wire,
+    harness: mcp.Harness,
+    wire: mcp.Wire,
   ) -> list[llm_mcp.MCPServer]:
     if any(server.namespace == spell_store.NAMESPACE for server in servers):
       raise ValueError(f'namespace {spell_store.NAMESPACE!r} is reserved for bro framework tools')

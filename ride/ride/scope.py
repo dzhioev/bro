@@ -13,7 +13,7 @@ from ride.workspace.store import ScopedSecrets, finalize_scoped_secrets
 
 if TYPE_CHECKING:
   from bro.llm.llm import LLMSpec
-  from bro.llm.mcp import Harness
+  from bro.mcp import Harness
 
 # the recording credential every surface hydrates best-effort, regardless of bro:
 # it selects a backend (`bro.trails.store.resolve_config`) rather than enabling

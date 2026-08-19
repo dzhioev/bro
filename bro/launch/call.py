@@ -22,9 +22,9 @@ from bro.launch.llm_flags import (
 )
 from bro.launch.resume import RESUME_LATEST
 from bro.launch.run import HOLD_HELP, create_bro_for_run, run_llm_spec
-from bro.llm.mcp import HOLDS
 from bro.llm.observer import Observer
 from bro.llm.providers import LLMSelectionError
+from bro.mcp import HOLDS
 from bro.native.runner import Runner
 from bro.trails.display import (
   DisplayRecord,
