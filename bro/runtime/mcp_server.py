@@ -49,7 +49,7 @@ def _toolset_server(namespace: str) -> 'MCPServer':
     raise SystemExit(
       f'unknown server {namespace!r}; expected one of {known}, bro:<name>, or persona:<name>'
     )
-  from bro.llm.mcp import Toolset
+  from bro.mcp import Toolset
 
   toolset = matches[0].load()
   if not isinstance(toolset, Toolset):

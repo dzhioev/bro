@@ -7,22 +7,20 @@ from typing import Annotated, Optional
 import pytest
 from pydantic import Field, ValidationError
 
+from bro import mcp as mcp_mod
 from bro.base.condition import ConditionError, SetVariable, when
-from bro.llm import mcp as mcp_mod
 from bro.llm.mcp import (
   FunctionTool,
   InProcessMCPServer,
   ToolRegistry,
   UnknownToolError,
   canonical_name,
-  describe,
   namespaced_tools,
   render_return_shape,
-  render_text,
-  select,
   validated_callable,
   wire_name,
 )
+from bro.mcp import describe, render_text, select
 
 
 class _Color(Enum):
@@ -710,6 +708,23 @@ class TestCanonicalName:
 
 
 class TestWithoutMCPPackage:
+  def test_declarations_defer_the_live_layer_until_build(self):
+    import subprocess
+    import sys
+
+    code = (
+      "import sys; sys.modules['mcp'] = None; "
+      'import bro.mcp; '
+      "assert 'bro.llm.mcp' not in sys.modules; "
+      "toolset = bro.mcp.Toolset('probe'); "
+      'bro.mcp.mount(toolset); '
+      "assert 'bro.llm.mcp' not in sys.modules; "
+      "print('ok')"
+    )
+    result = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == 'ok'
+
   def test_layer_imports_without_the_mcp_package(self):
     # only FunctionTool may reach for the `mcp` package; simulate its absence in a
     # fresh subprocess.
@@ -718,8 +733,8 @@ class TestWithoutMCPPackage:
 
     code = (
       "import sys; sys.modules['mcp'] = None; "
-      'import bro.llm.llm, bro.llm.llms.openai, bro.llm.mcp, bro.prompts; '
-      "bro.llm.mcp.render_text('plain'); "
+      'import bro.llm.llm, bro.llm.llms.openai, bro.llm.mcp, bro.mcp, bro.prompts; '
+      "bro.mcp.render_text('plain'); "
       "print('ok')"
     )
     result = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True)

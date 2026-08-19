@@ -89,8 +89,8 @@ from bro.launch.llm_flags import (
   canonicalize,
   selection_from_args,
 )
-from bro.llm.mcp import HOLDS
 from bro.llm.providers import LLMSelectionError
+from bro.mcp import HOLDS
 
 if TYPE_CHECKING:
   from bro.broker.brotocol import Message

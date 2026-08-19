@@ -1,7 +1,7 @@
 from bro.base.condition import when
 from bro.bro import BaseBro
 from bro.llm.llms import openai
-from bro.llm.mcp import harness, mount
+from bro.mcp import harness, mount
 from bros.dev import mcp as dev_mcp
 
 

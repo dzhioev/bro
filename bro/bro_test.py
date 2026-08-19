@@ -10,7 +10,7 @@ import pytest
 
 import bro.bro as bro_module
 import bro.llm.llms.echo as llm_llms_echo
-import bro.llm.mcp as llm_mcp
+import bro.mcp as mcp
 import bro.workspace.banner as workspace_banner
 from bro.base import credentials
 from bro.base.condition import ConditionError, iff, when
@@ -18,8 +18,9 @@ from bro.bro import BaseBro, BroRaised, feature
 from bro.datasources.file import FileSource
 from bro.datasources.man import ManPage, ManSource
 from bro.datasources.searchable import Hit, SearchableDataSource
-from bro.llm.mcp import FunctionTool, InProcessMCPServer, MCPServer, MCPServerSpec, describe
+from bro.llm.mcp import FunctionTool, InProcessMCPServer, MCPServer
 from bro.llm.tracker import ToolStepSource
+from bro.mcp import MCPServerSpec, describe
 
 
 class EchoBro(BaseBro):
@@ -152,7 +153,7 @@ class TestBroDataSources:
     class GatedManBro(BaseBro):
       name = 'gated-man'
       description = 'd'
-      data_sources: ClassVar = [when(llm_mcp.harness == 'claude', ManPage(page))]
+      data_sources: ClassVar = [when(mcp.harness == 'claude', ManPage(page))]
 
       def __init__(self):
         super().__init__(system_prompt='base')
@@ -296,11 +297,11 @@ def _make_server(*tool_names: str) -> InProcessMCPServer:
   return InProcessMCPServer('test', tools)
 
 
-def _server_layer(server_spec: MCPServerSpec) -> llm_mcp.ToolLayer:
-  return llm_mcp.ToolLayer(server_specs=(server_spec,))
+def _server_layer(server_spec: MCPServerSpec) -> mcp.ToolLayer:
+  return mcp.ToolLayer(server_specs=(server_spec,))
 
 
-def _make_layer(*tool_names: str) -> llm_mcp.ToolLayer:
+def _make_layer(*tool_names: str) -> mcp.ToolLayer:
   return _server_layer(MCPServerSpec(build=lambda: _make_server(*tool_names)))
 
 
@@ -384,7 +385,7 @@ class TestBroMCPServers:
 class TestToolPackEntries:
   @pytest.mark.asyncio
   async def test_explicit_toolset_spec_is_the_full_roster(self):
-    toolset = llm_mcp.Toolset('full-roster')
+    toolset = mcp.Toolset('full-roster')
 
     @toolset.tool('ping tool')
     def ping() -> str:
@@ -393,7 +394,7 @@ class TestToolPackEntries:
     class ToolsetBro(BaseBro):
       name = 'toolset-entry'
       description = 'd'
-      tools: ClassVar = [when(llm_mcp.harness == 'bro', llm_mcp.mount(toolset))]
+      tools: ClassVar = [when(mcp.harness == 'bro', mcp.mount(toolset))]
 
       def __init__(self):
         super().__init__(system_prompt='')
@@ -409,14 +410,14 @@ class TestToolLayers:
     class Base(BaseBro):
       name = 'base-block'
       description = 'd'
-      tools: ClassVar = [when(llm_mcp.harness == 'claude', llm_mcp.block('Read', 'Write'))]
+      tools: ClassVar = [when(mcp.harness == 'claude', mcp.block('Read', 'Write'))]
 
       def __init__(self):
         super().__init__(system_prompt='')
 
     class Derived(Base):
       name = 'derived-block'
-      tools: ClassVar = [when(llm_mcp.harness == 'claude', llm_mcp.block('Bash', 'Read'))]
+      tools: ClassVar = [when(mcp.harness == 'claude', mcp.block('Bash', 'Read'))]
 
     bro = Derived()
     assert bro.blocked_tool_names('bro') == ()
@@ -428,8 +429,8 @@ class TestToolLayers:
       description = 'd'
       tools: ClassVar = [
         iff(
-          llm_mcp.harness == 'claude',
-          llm_mcp.block('Read'),
+          mcp.harness == 'claude',
+          mcp.block('Read'),
           _make_layer('read'),
         )
       ]
@@ -445,7 +446,7 @@ class TestToolLayers:
     class InvalidBro(BaseBro):
       name = 'invalid-block'
       description = 'd'
-      tools: ClassVar = [llm_mcp.block('Read')]
+      tools: ClassVar = [mcp.block('Read')]
 
       def __init__(self):
         super().__init__(system_prompt='')
@@ -458,8 +459,8 @@ class TestToolLayers:
       name = 'watching'
       description = 'd'
       tools: ClassVar = [
-        when(llm_mcp.harness == 'claude', llm_mcp.block('Bash', 'Monitor')),
-        when(llm_mcp.harness == 'claude', llm_mcp.allow_commands('Monitor', 'watch it')),
+        when(mcp.harness == 'claude', mcp.block('Bash', 'Monitor')),
+        when(mcp.harness == 'claude', mcp.allow_commands('Monitor', 'watch it')),
       ]
 
       def __init__(self):
@@ -475,9 +476,9 @@ class TestToolLayers:
       name = 'watching-twice'
       description = 'd'
       tools: ClassVar = [
-        when(llm_mcp.harness == 'claude', llm_mcp.block('Monitor')),
-        when(llm_mcp.harness == 'claude', llm_mcp.allow_commands('Monitor', 'watch one')),
-        when(llm_mcp.harness == 'claude', llm_mcp.allow_commands('Monitor', 'watch two')),
+        when(mcp.harness == 'claude', mcp.block('Monitor')),
+        when(mcp.harness == 'claude', mcp.allow_commands('Monitor', 'watch one')),
+        when(mcp.harness == 'claude', mcp.allow_commands('Monitor', 'watch two')),
       ]
 
       def __init__(self):
@@ -489,7 +490,7 @@ class TestToolLayers:
     class InvalidBro(BaseBro):
       name = 'invalid-narrowing'
       description = 'd'
-      tools: ClassVar = [when(llm_mcp.harness == 'claude', llm_mcp.allow_commands('Monitor', 'go'))]
+      tools: ClassVar = [when(mcp.harness == 'claude', mcp.allow_commands('Monitor', 'go'))]
 
       def __init__(self):
         super().__init__(system_prompt='')
@@ -508,9 +509,7 @@ class TestConditionalComponents:
     class CondBro(BaseBro):
       name = 'cond'
       description = 'd'
-      tools: ClassVar = [
-        when(llm_mcp.harness == 'claude', _server_layer(MCPServerSpec(build=build)))
-      ]
+      tools: ClassVar = [when(mcp.harness == 'claude', _server_layer(MCPServerSpec(build=build)))]
 
       def __init__(self):
         super().__init__(system_prompt='')
@@ -523,7 +522,7 @@ class TestConditionalComponents:
     class MatchBro(BaseBro):
       name = 'match'
       description = 'd'
-      tools: ClassVar = [when(llm_mcp.harness == 'bro', _make_layer('a'))]
+      tools: ClassVar = [when(mcp.harness == 'bro', _make_layer('a'))]
 
       def __init__(self):
         super().__init__(system_prompt='')
@@ -545,7 +544,7 @@ class TestConditionalComponents:
     class CondSourceBro(BaseBro):
       name = 'cond-source'
       description = 'd'
-      data_sources: ClassVar = [when(llm_mcp.harness == 'claude', _SecretSource())]
+      data_sources: ClassVar = [when(mcp.harness == 'claude', _SecretSource())]
 
       def __init__(self):
         super().__init__(system_prompt='base')
@@ -562,7 +561,7 @@ class TestFeatures:
     class FeatureBro(BaseBro):
       name = 'feature-bro'
       description = 'd'
-      features: ClassVar = {'x': llm_mcp.creds.contains('xkey')}
+      features: ClassVar = {'x': mcp.creds.contains('xkey')}
       tools: ClassVar = [when(feature('x'), _server_layer(MCPServerSpec.of(_SecretServer)))]
       system_prompt = 'base text{{when #features contains x}} FEATURE TEXT{{end}}'
 
@@ -640,7 +639,7 @@ class TestFeatures:
     class SurfaceGated(BaseBro):
       name = 'surface-gated'
       description = 'd'
-      features: ClassVar = {'x': llm_mcp.harness == 'bro'}
+      features: ClassVar = {'x': mcp.harness == 'bro'}
       tools: ClassVar = [when(feature('x'), _make_layer('a'))]
 
       def __init__(self):
@@ -676,10 +675,10 @@ class TestClaudePersonaServers:
       name = 'persona'
       description = 'd'
       tools: ClassVar = [
-        when(llm_mcp.harness == 'bro', _server_layer(MCPServerSpec.of(_SecretServer))),
+        when(mcp.harness == 'bro', _server_layer(MCPServerSpec.of(_SecretServer))),
         _make_layer('a'),
       ]
-      data_sources: ClassVar = [when(llm_mcp.harness == 'bro', _SecretSource())]
+      data_sources: ClassVar = [when(mcp.harness == 'bro', _SecretSource())]
 
       def __init__(self):
         super().__init__(system_prompt='')

@@ -1,7 +1,7 @@
 import bro.brog.mcp as brog_mcp
 from bro.datasources.references import man
 from bro.harness import claude
-from bro.llm.mcp import mount, sh
+from bro.mcp import mount, sh
 from bros.bro import Bro
 
 SYSTEM_PROMPT = """\
