@@ -1,11 +1,11 @@
 #!/usr/bin/env -S bash -e
-source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../prelude.sh"
+source "$(bro-shell-dir)/prelude.sh"
 # smoke-test the container entrypoint: builds the image, runs the entrypoint
 # with the same mount layout as a ride container session, and verifies key postconditions.
 # uses RIDE_SKIP_VENV=1 to skip the slow `uv sync` step.
 
 DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
-PROJECT="$(realpath "$DIR/../../..")"
+PROJECT="$(realpath "$DIR/../../../..")"
 
 TAG="bro/framework:smoke-test"
 echo "building image" >&2
@@ -15,7 +15,7 @@ echo "building image" >&2
 # and this test has to build the tree it ships in
 python -c 'import sys
 from pathlib import Path
-from bro.workspace.docker import build_image
+from ride.workspace.docker import build_image
 build_image(sys.argv[1], Path(sys.argv[2]))' "$TAG" "$PROJECT" >&2
 
 # colima only shares /Users; mktemp uses /var/folders which is invisible
@@ -45,7 +45,7 @@ GC
 # install-hooks)"` after venv activation, which this smoke test skips
 # (RIDE_SKIP_VENV=1) — so that path is covered by base/credentials_test.py, not here.
 
-# pre-seed the container-private .claude.json (bro/workspace/docker.py does this on first run).
+# pre-seed the container-private .claude.json (ride/ride/workspace/docker.py does this on first run).
 # also drop a "host" .claude.json next to it as a tripwire: it must not exist
 # on any container mount, so any write the container makes to its claude config
 # must land in claude/.claude.json and leave host_claude.json untouched.

@@ -2,10 +2,10 @@ import subprocess
 from collections.abc import Collection
 from dataclasses import replace
 
-from bro.workspace.containers import attach_interactive, container_broker_enabled
-from bro.workspace.docker import Launch, prepare_container
-from bro.workspace.model import Workspace
-from bro.workspace.store import log_scoped_secrets
+from ride.workspace.containers import attach_interactive, container_broker_enabled
+from ride.workspace.docker import Launch, prepare_container
+from ride.workspace.model import Workspace
+from ride.workspace.store import log_scoped_secrets
 
 
 def _run_root_via_broker(
@@ -20,9 +20,9 @@ def _run_root_via_broker(
   # docstring).
   from bro.summon import MAY_SUMMON_ENV, encode_may_summon
   from bro.workspace.paths import CONTAINER_SUMMON_ROOT
-  from bro.workspace.spawn import DockerLaunchSpec
   from ride.spawn import run_root_via_broker
   from ride.summon_control import STATUS_ENV, container_status_path, summon_status_file
+  from ride.workspace.spawn import DockerLaunchSpec
 
   status_file = summon_status_file(workspace.project, workspace.name)
   status_file.parent.mkdir(parents=True, exist_ok=True)
@@ -53,9 +53,9 @@ def run_host_process_via_broker(
 ) -> int:
   """run a host-worktree process as the broker's supervised session root."""
   from bro.summon import MAY_SUMMON_ENV, encode_may_summon
-  from bro.workspace.spawn import ProcessLaunchSpec
   from ride.spawn import run_root_via_broker
   from ride.summon_control import STATUS_ENV, summon_status_file
+  from ride.workspace.spawn import ProcessLaunchSpec
 
   launch_env = dict(env)
   launch_env[STATUS_ENV] = str(summon_status_file(workspace.project, workspace.name))

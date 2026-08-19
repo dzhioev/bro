@@ -26,7 +26,7 @@ if [ "$(id -u)" = "0" ] && [ -z "${RIDE_ENTRYPOINT_REEXEC:-}" ]; then
     fi
   fi
   # the scoped credential store is `docker cp`'d into /home/ride/.bro before start
-  # (bro/workspace/docker.py), landing owned by the uid baked into the tar. re-own it to ride after the
+  # (ride/ride/workspace/docker.py), landing owned by the uid baked into the tar. re-own it to ride after the
   # remap above so the resolver and install hooks (run as ride) can read the 0600
   # files — on Linux (ride remapped to the host uid) and on Docker for Mac (remap
   # skipped, ride keeps its image uid).
@@ -126,7 +126,7 @@ if [ "${RIDE_SKIP_VENV:-}" != "1" ]; then
 fi
 
 # secrets resolve from the scoped credential store bind-mounted at ~/.bro (see
-# bro/workspace/docker.py). wire each into the tool that consumes it from outside the resolver (git
+# ride/ride/workspace/docker.py). wire each into the tool that consumes it from outside the resolver (git
 # credential helper, the aws CLI's ~/.aws/credentials, ...) via its registry-declared
 # install hook — one generic step, no per-secret logic here. env exports must
 # persist into `exec`, so this is eval'd in the entrypoint shell.

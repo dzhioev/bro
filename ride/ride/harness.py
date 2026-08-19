@@ -3,9 +3,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Protocol
 
 from bro.llm.llm import LLMSpec
-from bro.workspace.model import Workspace
-from bro.workspace.store import ScopedSecrets
 from ride.scope import ScopeRecipe
+from ride.workspace.model import Workspace
+from ride.workspace.store import ScopedSecrets
 
 if TYPE_CHECKING:
   from bro.base.args import Parser

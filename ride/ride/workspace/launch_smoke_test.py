@@ -23,11 +23,11 @@ from pathlib import Path
 
 import pytest
 
-import bro.workspace.docker as workspace_docker
 import bro.workspace.project as workspace_project
-from bro.workspace.docker import Launch
-from bro.workspace.metadata import WorkspaceKind
-from bro.workspace.model import Workspace
+import ride.workspace.docker as workspace_docker
+from ride.workspace.docker import Launch
+from ride.workspace.metadata import WorkspaceKind
+from ride.workspace.model import Workspace
 
 
 def _docker_available() -> bool:

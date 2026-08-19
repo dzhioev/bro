@@ -4,9 +4,9 @@ import sys
 
 import pytest
 
-from bro.workspace import model
-from bro.workspace.metadata import WorkspaceKind
-from bro.workspace.model import ContainerWorkspace, KindMismatch, Workspace, WorktreeWorkspace
+from ride.workspace import model
+from ride.workspace.metadata import WorkspaceKind
+from ride.workspace.model import ContainerWorkspace, KindMismatch, Workspace, WorktreeWorkspace
 
 
 class _FakeProc:

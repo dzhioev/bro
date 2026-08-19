@@ -5,7 +5,7 @@ build-backend = "uv_build"
 [project]
 name = "bro"
 version = "0.1.0"
-description = "agent framework and isolated development workspaces"
+description = "framework for declaring and inspecting specialized agents"
 readme = "README.md"
 license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.12"
@@ -154,8 +154,6 @@ wheel-exclude = [
   "bro/setup/setup_env.sh",
   "bro/setup/versions.sh",
   "bro/setup/ubuntu",
-  "bro/setup/container/bump-claude-code.sh",
-  "bro/setup/container/test_smoke.sh",
 ]
 
 [tool.pytest.ini_options]

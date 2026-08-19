@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-import bro.workspace.build_context as build_context
+import ride.workspace.build_context as build_context
 
 
 def _project(tmp_path: Path, members: list[str]) -> Path:

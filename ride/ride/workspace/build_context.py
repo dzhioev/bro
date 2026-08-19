@@ -15,11 +15,13 @@ import tarfile
 import tomllib
 from pathlib import Path
 
+from bro.shell import shell_dir
 from bro.workspace.project import project_config
 
 SETUP_DIR = Path(__file__).resolve().parent.parent / 'setup'
 CONTAINER_DIR = SETUP_DIR / 'container'
 BASE_IMAGE_DIR = SETUP_DIR / 'base_image'
+SHELL_DIR = shell_dir()
 SHELL_HELPERS = ('prelude.sh', 'log.sh', 'strict.sh')
 
 INJECTED_PREFIX = '.bro-container'
@@ -30,7 +32,7 @@ FRAMEWORK_FILES = {
   DOCKERFILE_PATH: CONTAINER_DIR / 'Dockerfile',
   f'{INJECTED_PREFIX}/entrypoint.sh': CONTAINER_DIR / 'entrypoint.sh',
   f'{INJECTED_PREFIX}/git.sh': CONTAINER_DIR / 'git.sh',
-  **{f'{INJECTED_PREFIX}/{name}': SETUP_DIR / name for name in SHELL_HELPERS},
+  **{f'{INJECTED_PREFIX}/{name}': SHELL_DIR / name for name in SHELL_HELPERS},
 }
 
 _FIXED_MTIME = 0

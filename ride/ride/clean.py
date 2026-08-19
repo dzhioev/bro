@@ -1,10 +1,10 @@
 from typing import Optional
 
 from bro.base import log
-from bro.workspace.docker import running_mounts
-from bro.workspace.metadata import WorkspaceKind
-from bro.workspace.model import Workspace
 from bro.workspace.paths import project_root
+from ride.workspace.docker import running_mounts
+from ride.workspace.metadata import WorkspaceKind
+from ride.workspace.model import Workspace
 
 
 def clean_workspaces(

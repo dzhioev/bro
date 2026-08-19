@@ -2,9 +2,11 @@ import os
 import subprocess
 from pathlib import Path
 
+from bro.shell import SHELL_DIR
+
 CONTAINER_DIR = Path(__file__).parent
 GIT_SCRIPT = CONTAINER_DIR / 'git.sh'
-LOG_SCRIPT = CONTAINER_DIR.parent / 'log.sh'
+LOG_SCRIPT = SHELL_DIR / 'log.sh'
 
 
 def _git(*args: str, cwd: Path, check: bool = True) -> subprocess.CompletedProcess[str]:

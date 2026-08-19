@@ -4,11 +4,11 @@ from typing import Optional
 
 import humanize
 
-from bro.workspace.docker import running_mounts
-from bro.workspace.metadata import WorkspaceKind
-from bro.workspace.model import Workspace
 from bro.workspace.paths import project_root
 from ride.session import harness_for_workspace
+from ride.workspace.docker import running_mounts
+from ride.workspace.metadata import WorkspaceKind
+from ride.workspace.model import Workspace
 
 _ABANDONED = 'abandoned'
 _BADGES = {WorkspaceKind.WORKTREE: '[.]', WorkspaceKind.CONTAINER: '[o]', _ABANDONED: '[x]'}

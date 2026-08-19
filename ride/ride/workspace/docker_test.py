@@ -2,10 +2,10 @@ import signal
 
 import pytest
 
-import bro.workspace.docker as workspace_docker
 import bro.workspace.project as workspace_project
-from bro.workspace.metadata import WorkspaceKind
-from bro.workspace.model import Workspace
+import ride.workspace.docker as workspace_docker
+from ride.workspace.metadata import WorkspaceKind
+from ride.workspace.model import Workspace
 
 
 class _FakeProc:
@@ -151,7 +151,7 @@ class TestImageTag:
     setup.mkdir()
     for name in workspace_docker.build_context.SHELL_HELPERS:
       (setup / name).write_text(f'# {name} edited\n')
-    monkeypatch.setattr(workspace_docker.build_context, 'SETUP_DIR', setup)
+    monkeypatch.setattr(workspace_docker.build_context, 'SHELL_DIR', setup)
     assert workspace_docker.image_tag() != before
 
 

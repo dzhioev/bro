@@ -1,4 +1,4 @@
-import bro.workspace.worktrees as workspace_worktrees
+import ride.workspace.worktrees as workspace_worktrees
 
 
 class TestProvisionHostWorktree:
