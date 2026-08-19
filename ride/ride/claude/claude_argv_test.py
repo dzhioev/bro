@@ -8,6 +8,7 @@ import pytest
 
 import ride.claude.claude_argv as ride_claude_argv
 from bro.llm.llms import claude_code
+from ride.claude.assembly import bro_servers, persona_servers
 from ride.claude.mcp import MCPEndpoint
 from ride.session_test import _spec as _session_spec
 
@@ -33,13 +34,13 @@ def _brog_config(monkeypatch):
 def _dev_namespaces() -> list[str]:
   from bro.registry import create_bro
 
-  return list(dict.fromkeys(s.namespace for s in create_bro('dev').claude_bro_mcp_servers()))
+  return list(dict.fromkeys(server.namespace for server in bro_servers(create_bro('dev'))))
 
 
 def _dev_persona_namespaces() -> list[str]:
   from bro.registry import create_bro
 
-  return list(dict.fromkeys(s.namespace for s in create_bro('dev').claude_persona_mcp_servers()))
+  return list(dict.fromkeys(server.namespace for server in persona_servers(create_bro('dev'))))
 
 
 def _ride_session_launch(spec, **kwargs) -> ride_claude_argv.ClaudeLaunch:

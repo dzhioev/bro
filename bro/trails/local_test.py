@@ -8,7 +8,6 @@ import pytest
 from bro.trails.local import LocalStore
 from bro.trails.model import BlazeRequest, canonical_json_bytes, payload_sha256
 from bro.trails.record.bro import Recorder
-from bro.trails.record.claude import Recorder as ClaudeRecorder
 from bro.trails.store import AppendConflict, TrailNotFound, fetch_recorded_trail
 
 
@@ -63,36 +62,6 @@ def test_records_and_replays_bro_trails(tmp_path):
   assert trail.header.bro == 'dev'
   assert (tmp_path / 'trails' / trail_id / 'header.json').is_file()
   assert (tmp_path / 'trails' / trail_id / 'steps.jsonl').is_file()
-
-
-def test_claude_recorder_writes_through_local_store(tmp_path):
-  projects = tmp_path / 'projects'
-  projects.mkdir()
-  raw = json.dumps(
-    {
-      'type': 'user',
-      'uuid': 'uuid-recorder',
-      'timestamp': '2026-01-01T00:00:00Z',
-      'message': {'content': 'hello'},
-    }
-  )
-  (projects / 'segment.jsonl').write_text(raw + '\n')
-  store = LocalStore(tmp_path / 'storage')
-  recorder = ClaudeRecorder(
-    projects,
-    'workspace',
-    store,
-    llm={},
-    ride_command='ride along',
-    started_after=0,
-  )
-
-  assert recorder.tick() is True
-  [header] = store.iter_trails(harness='claude')
-  trail_id = header['id']
-  assert recorder.finalize() is True
-  assert store.get_step(trail_id, 0)['uuid'] == 'uuid-recorder'
-  assert store.get_trail(trail_id)['end']['reason'] == 'ok'
 
 
 def test_claude_rows_store_body_and_project_messages(tmp_path):

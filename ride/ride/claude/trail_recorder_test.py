@@ -9,7 +9,7 @@ import pytest
 from bro.monitor import health, trail_pointer
 from bro.trails.local import LocalStore
 from bro.trails.model import BlazeRequest
-from bro.trails.record.claude import (
+from ride.claude.trail_recorder import (
   Recorder,
   _attempt,
   _compose,
@@ -101,7 +101,7 @@ def environment(tmp_path: Path, monkeypatch):
   monkeypatch.delenv('RIDE_HOST_WORKSPACE', raising=False)
   monkeypatch.delenv('RIDE_SUMMONER', raising=False)
   # the suite itself may run inside a container; pin the probe to host mode
-  monkeypatch.setattr('bro.trails.record.claude._in_container', lambda: False)
+  monkeypatch.setattr('ride.claude.trail_recorder._in_container', lambda: False)
   return projects
 
 
