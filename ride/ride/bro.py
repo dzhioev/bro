@@ -95,14 +95,7 @@ class BroHarness:
       if resume_trail is None:
         raise ValueError(f'no bro harness trail recorded for workspace {workspace.name!r}')
     verb = 'run' if spec.solo else 'chat'
-    return [
-      'bro',
-      verb,
-      spec.bro,
-      *_inner_arguments(spec, resume_trail),
-      *spec.arguments,
-      '--in-place',
-    ]
+    return ['bro', verb, spec.bro, *_inner_arguments(spec, resume_trail), *spec.arguments]
 
   def container_extras(
     self, spec: 'SessionSpec', workspace: Workspace, scoped: ScopedSecrets

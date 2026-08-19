@@ -80,7 +80,7 @@ class TestSolo:
     spec = start.call_args.args[0]
     assert spec.no_trails
     assert _inner_command(spec, tmp_path) == [
-      'bro', 'run', 'dev', 'hello', '--hold', 'unattended', '--in-place'
+      'bro', 'run', 'dev', 'hello', '--hold', 'unattended'
     ]  # fmt: skip
 
   def test_no_trails_is_restated_in_the_claude_inner_argv(self, tmp_path):
@@ -141,7 +141,7 @@ class TestAlong:
     spec = start.call_args.args[0]
     assert spec.arguments == ['--fork']
     assert _inner_command(spec, tmp_path) == [
-      'bro', 'chat', 'dev', '--hold', 'attended', '--fork', '--in-place'
+      'bro', 'chat', 'dev', '--hold', 'attended', '--fork'
     ]  # fmt: skip
 
   def test_raw_host_combination_errors(self, capsys):
@@ -159,9 +159,7 @@ class TestAlong:
       assert ride_cli.main(['ride', 'along', '--harness', 'bro', 'dev']) == 0
     spec = start.call_args.args[0]
     assert spec.harness == 'bro'
-    assert _inner_command(spec, tmp_path) == [
-      'bro', 'chat', 'dev', '--hold', 'attended', '--in-place'
-    ]  # fmt: skip
+    assert _inner_command(spec, tmp_path) == ['bro', 'chat', 'dev', '--hold', 'attended']
 
   def test_project_harness_default_is_used(self, monkeypatch):
     monkeypatch.setattr(

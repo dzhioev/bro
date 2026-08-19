@@ -255,7 +255,7 @@ class TestBroRun:
     monkeypatch.setenv('RIDE_SUMMONER', '{"trail_id":"T-parent"}')
     await TraceBro().run('hello', tracker=RecordingTracker(), surface='test')
     assert captured == [{'trail_id': 'T-parent'}]
-    # consumed on read: a nested in-place run spawned by this process's tools
+    # consumed on read: a nested in-process run spawned by this process's tools
     # must not inherit the marker and re-stamp the parent's summoned_by
     assert 'RIDE_SUMMONER' not in os.environ
     await TraceBro().run('again', tracker=RecordingTracker(), surface='test')

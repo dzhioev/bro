@@ -40,7 +40,7 @@ uv run --directory benchmark pytest bro/benchmark/harbor_e2e_test.py
   `install()` uploads the bundle and a scoped store holding only the LLM key, then runs
   `bro show <bro>` through the uploaded bundle — the one validation the host cannot make, and a
   smoke test of the bundle in the task's own image. `run()` is a single
-  `bro run <bro> <instruction> --in-place` under `setsid`, reaped through a fresh root exec when
+  `bro run <bro> <instruction>` under `setsid`, reaped through a fresh root exec when
   harbor cancels the phase. Harbor's `-m openai/<model>` maps onto `--llm :<model>`, the spelling
   that keeps the persona's own recipe
 - `bro/benchmark/harbor_environment.py` — `UnmountedDockerEnvironment`, the environment the job

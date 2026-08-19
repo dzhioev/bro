@@ -971,7 +971,7 @@ class BaseBro(ABC):
     # in-place runner is the claude-harness counterpart): a commit-accounting
     # persona gets the footer hooks installed into its managed workspace, so
     # agent commits carry the token footer with no session involvement. scoped
-    # to managed workspaces — an in-place run in an arbitrary repo must not
+    # to managed workspaces — an in-process run in an arbitrary repo must not
     # write into it — and hooks already present are left alone.
     if not self.has_feature('commit-accounting') or os.environ.get('RIDE_WORKSPACE') is None:
       return

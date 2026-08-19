@@ -4,7 +4,7 @@ Harbor constructs this class in its own process from the `import_path` a job
 config names, then runs one trial through `setup()` → `run()` → the verifier.
 The bro never runs here: `install()` uploads the relocatable bundle and a
 credential store holding only the LLM key, and `run()` is a single
-`bro run <bro> <instruction> --in-place` executed inside the task's container,
+`bro run <bro> <instruction>` executed inside the task's container,
 so the tools under measurement are the ones the framework ships.
 
 Nothing bro-shaped is constructed or validated in this process. The environment
@@ -145,7 +145,7 @@ def run_command(
   the recorded detail have the framework's own error text. The bro runs under
   `setsid` and publishes its process group, which is what `kill_command` reaps.
   """
-  arguments = [str(BUNDLE.shim), 'run', bro, instruction, '--in-place']
+  arguments = [str(BUNDLE.shim), 'run', bro, instruction]
   if model is not None:
     arguments += ['--llm', f':{model}']
   bro_command = shlex.join(arguments)
@@ -190,7 +190,7 @@ def kill_command() -> str:
 
 
 class BroAgent(BaseInstalledAgent):
-  """a bro under test: one `bro run … --in-place` process per trial.
+  """a bro under test: one `bro run …` process per trial.
 
   Kwargs (`--ak key=value`, or a job config's `agent.kwargs`):
 
@@ -279,8 +279,8 @@ class BroAgent(BaseInstalledAgent):
       # task images ship no CA store unless their own layers add one, and the
       # bundle carries certifi's
       'SSL_CERT_FILE': str(BUNDLE.ca_bundle),
-      # `bro run` refuses `--no-trails` beside `--in-place`, so the env var is
-      # the switch an in-place run has
+      # `bro run` takes no `--no-trails` flag; the env var is its recording
+      # opt-out
       'TRAILS_DISABLED': '1',
     }
 

@@ -58,7 +58,7 @@ def local_trails(monkeypatch):
 
 
 class TestInnerCommand:
-  def test_chat_uses_the_bro_in_place_runner(self, tmp_path):
+  def test_chat_composes_the_native_argv(self, tmp_path):
     spec = _spec(llm='openai:fable:high+fast')
     workspace = Workspace.create('w', tmp_path, WorkspaceKind.CONTAINER)
     assert bro_harness.BRO.inner_command(spec, workspace) == [
@@ -70,15 +70,12 @@ class TestInnerCommand:
       'openai:fable:high+fast',
       '--hold',
       'attended',
-      '--in-place',
     ]
 
   def test_forwarded_arguments_splice_into_the_native_argv(self, tmp_path):
     workspace = Workspace.create('w', tmp_path, WorkspaceKind.CONTAINER)
     command = bro_harness.BRO.inner_command(_spec(arguments=['--fork']), workspace)
-    assert command == [
-      'bro', 'chat', 'dev', 'start here', '--hold', 'attended', '--fork', '--in-place'
-    ]  # fmt: skip
+    assert command == ['bro', 'chat', 'dev', 'start here', '--hold', 'attended', '--fork']
 
   def test_resume_carries_the_workspace_trail_and_recorded_recipe(self, tmp_path):
     workspace = Workspace.create('w', tmp_path, WorkspaceKind.CONTAINER)
@@ -105,9 +102,7 @@ class TestContainerSession:
     spec = _spec(solo=True, hold='unattended')
     assert ride_session._launch_session(spec, workspace, 'abc123', _scope(), container=True) == 7
     launch = captured['launch']
-    assert launch.command == [
-      'bro', 'run', 'dev', 'start here', '--hold', 'unattended', '--in-place'
-    ]  # fmt: skip
+    assert launch.command == ['bro', 'run', 'dev', 'start here', '--hold', 'unattended']
     assert launch.env == {
       'RIDE_BRO': 'dev',
       'RIDE_SESSION_DIR': str(CONTAINER_SESSION_DIR),
@@ -193,9 +188,7 @@ class TestHostSession:
     )
     command = root.call_args.args[1]
     env = root.call_args.args[2]
-    assert command == [
-      str(bro_binary), 'chat', 'dev', 'start here', '--hold', 'attended', '--in-place'
-    ]  # fmt: skip
+    assert command == [str(bro_binary), 'chat', 'dev', 'start here', '--hold', 'attended']
     assert env['RIDE_BRO'] == 'dev'
     assert env[ride_session.START_SESSION_BROXY_ENV] == '1'
     assert env['GIT_AUTHOR_NAME'] == 'dev'

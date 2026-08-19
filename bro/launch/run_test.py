@@ -25,11 +25,6 @@ def test_runs_in_the_calling_process(in_process_run):
   assert in_process_run.run.call_args.kwargs['hold'] == 'unattended'
 
 
-def test_in_place_is_a_suppressed_no_op(in_process_run):
-  assert run_main(['bro', 'dev', 'hello', '--in-place'], program=['bro', 'run']) is None
-  in_process_run.run.assert_awaited_once()
-
-
 @pytest.mark.parametrize(
   'flag',
   ['--summon', '--grant', '--revoke', '--into', '--no-trails', '--timeout', '--detach'],

@@ -133,7 +133,6 @@ def test_the_run_drives_the_bundle_shim_in_this_process():
   command = run_command(bro='terminal', instruction='do it', model=None, timeout_sec=None)
 
   assert f'{BUNDLE.shim} run terminal' in command
-  assert '--in-place' in command
 
 
 def test_the_instruction_is_one_argument_however_it_is_written():

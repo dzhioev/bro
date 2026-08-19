@@ -65,7 +65,6 @@ def run_main(argv: list[str], *, program: list[str]) -> Optional[int]:
   parser.add_argument('bro', help='bro name')
   parser.add_argument('input', help='input to send to the bro')
   add_llm_flags(parser, effort_help=EFFORT_HELP, fast_help=FAST_HELP)
-  parser.add_argument('--in-place', action='store_true', help=base_args.SUPPRESS)
   parser.add_argument('--hold', choices=HOLDS, default=None, help=HOLD_HELP.format('unattended'))
 
   args = parser.parse(argv)

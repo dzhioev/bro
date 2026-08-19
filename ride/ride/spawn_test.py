@@ -55,7 +55,7 @@ class TestSummonLowering:
     assert lowered == ride.spawn.DockerLaunchSpec(
       workspace_docker.Launch(
         name='broker-CH',
-        command=['bro', 'run', 'dev', 'deploy the thing', '--hold', 'unattended', '--in-place'],
+        command=['bro', 'run', 'dev', 'deploy the thing', '--hold', 'unattended'],
         env={
           'RIDE_BASE_REF': 'PARENT-SHA',
           'RIDE_BRO': 'dev',
@@ -92,7 +92,7 @@ class TestSummonLowering:
     )
     lowered = ride.spawn._lower_summon(launch, 'broker-CH')
     assert lowered.launch.command == [
-      'bro', 'run', 'dev', 'deploy the thing', '--hold', 'attended', '--in-place',
+      'bro', 'run', 'dev', 'deploy the thing', '--hold', 'attended'
     ]  # fmt: skip
 
   def test_the_llm_recipe_rides_the_childs_inner_argv(self, lowering_harness):
@@ -107,7 +107,7 @@ class TestSummonLowering:
     lowered = ride.spawn._lower_summon(launch, 'broker-CH')
     assert lowered.launch.command == [
       'bro', 'run', 'dev', 'deploy the thing',
-      '--llm', 'openai:sol:high+fast', '--hold', 'unattended', '--in-place',
+      '--llm', 'openai:sol:high+fast', '--hold', 'unattended',
     ]  # fmt: skip
 
   def test_the_llm_recipe_selects_the_childs_hydrated_llm_key(self, lowering_harness, monkeypatch):
@@ -293,7 +293,6 @@ class TestSummonLowering:
       'p',
       '--hold',
       'unattended',
-      '--in-place',
     ]
     assert lowered.launch.name == 'broker-CH'
     assert lowered_channel is channel
