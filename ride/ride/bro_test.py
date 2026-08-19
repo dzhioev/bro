@@ -6,9 +6,8 @@ import pytest
 import ride.bro as bro_harness
 import ride.session as ride_session
 from bro.llm.llms.openai import LLMSpec
-from bro.monitor import trail_pointer, workspace_session_dir
+from bro.monitor import SESSION_DIR_ENV, trail_pointer, workspace_session_dir
 from bro.workspace.paths import CONTAINER_SESSION_DIR
-from ride.identity import bro_git_identity_env
 from ride.session import ScopedLaunch, SessionSpec
 from ride.workspace.metadata import WorkspaceKind
 from ride.workspace.model import Workspace
@@ -57,11 +56,24 @@ def local_trails(monkeypatch):
   monkeypatch.setattr(ride_session, 'local_trails_mounts', lambda scoped: ())
 
 
-class TestInnerCommand:
-  def test_chat_composes_the_native_argv(self, tmp_path):
-    spec = _spec(llm='openai:fable:high+fast')
+class TestNativeArgv:
+  """the argv the bro harness's in-place runner spawns."""
+
+  def _argv(self, spec, monkeypatch) -> list[str]:
+    spawned: list[list[str]] = []
+    monkeypatch.setattr(bro_harness, 'run_agent', lambda argv: spawned.append(argv) or 0)
+    assert bro_harness.BRO.run_in_place(spec) == 0
+    return spawned[0]
+
+  def _session_dir(self, monkeypatch, tmp_path) -> Path:
     workspace = Workspace.create('w', tmp_path, WorkspaceKind.CONTAINER)
-    assert bro_harness.BRO.inner_command(spec, workspace) == [
+    session = workspace_session_dir(workspace.path)
+    monkeypatch.setenv(SESSION_DIR_ENV, str(session))
+    return session
+
+  def test_chat_composes_the_native_argv(self, monkeypatch):
+    spec = _spec(llm='openai:fable:high+fast')
+    assert self._argv(spec, monkeypatch) == [
       'bro',
       'chat',
       'dev',
@@ -72,18 +84,22 @@ class TestInnerCommand:
       'attended',
     ]
 
-  def test_forwarded_arguments_splice_into_the_native_argv(self, tmp_path):
-    workspace = Workspace.create('w', tmp_path, WorkspaceKind.CONTAINER)
-    command = bro_harness.BRO.inner_command(_spec(arguments=['--fork']), workspace)
-    assert command == ['bro', 'chat', 'dev', 'start here', '--hold', 'attended', '--fork']
+  def test_forwarded_arguments_splice_into_the_native_argv(self, monkeypatch):
+    argv = self._argv(_spec(arguments=['--fork']), monkeypatch)
+    assert argv == ['bro', 'chat', 'dev', 'start here', '--hold', 'attended', '--fork']
 
-  def test_resume_carries_the_workspace_trail_and_recorded_recipe(self, tmp_path):
-    workspace = Workspace.create('w', tmp_path, WorkspaceKind.CONTAINER)
-    trail_pointer.write(trail_pointer.session_pointer(workspace.path), 'trail-1')
-    command = bro_harness.BRO.inner_command(_spec(resume=True, prompt=None), workspace)
-    assert command[:3] == ['bro', 'chat', 'dev']
-    assert command[command.index('--continue-trail') + 1] == 'trail-1'
-    assert '"type":"openai"' in command[command.index('--continue-llm') + 1]
+  def test_resume_carries_the_session_trail_and_recorded_recipe(self, monkeypatch, tmp_path):
+    session = self._session_dir(monkeypatch, tmp_path)
+    trail_pointer.write(session / trail_pointer.FILENAME, 'trail-1')
+    argv = self._argv(_spec(resume=True, prompt=None), monkeypatch)
+    assert argv[:3] == ['bro', 'chat', 'dev']
+    assert argv[argv.index('--continue-trail') + 1] == 'trail-1'
+    assert '"type":"openai"' in argv[argv.index('--continue-llm') + 1]
+
+  def test_resume_without_a_published_pointer_fails(self, monkeypatch, tmp_path, caplog):
+    self._session_dir(monkeypatch, tmp_path)
+    assert bro_harness.BRO.run_in_place(_spec(resume=True)) == 1
+    assert 'no bro harness trail recorded' in caplog.text
 
 
 class TestContainerSession:
@@ -102,12 +118,14 @@ class TestContainerSession:
     spec = _spec(solo=True, hold='unattended')
     assert ride_session._launch_session(spec, workspace, 'abc123', _scope(), container=True) == 7
     launch = captured['launch']
-    assert launch.command == ['bro', 'run', 'dev', 'start here', '--hold', 'unattended']
+    assert launch.command == [
+      'ride', 'solo', '--in-place', '--workspace', 'w', '--harness', 'bro',
+      '--hold', 'unattended', 'dev', 'start here',
+    ]  # fmt: skip
     assert launch.env == {
       'RIDE_BRO': 'dev',
       'RIDE_SESSION_DIR': str(CONTAINER_SESSION_DIR),
       'RIDE_BASE_REF': 'abc123',
-      **bro_git_identity_env('dev'),
     }
     assert not launch.tty
     assert captured['workspace'] is workspace
@@ -161,10 +179,10 @@ class TestContainerSession:
 class TestHostSession:
   def _workspace(self, tmp_path: Path) -> tuple[Workspace, Path]:
     workspace = Workspace.create('w', tmp_path, WorkspaceKind.WORKTREE)
-    bro_binary = workspace.tree / '.venv' / 'bin' / 'bro'
-    bro_binary.parent.mkdir(parents=True)
-    bro_binary.write_text('')
-    return workspace, bro_binary
+    ride_binary = workspace.tree / '.venv' / 'bin' / 'ride'
+    ride_binary.parent.mkdir(parents=True)
+    ride_binary.write_text('')
+    return workspace, ride_binary
 
   def _prepare(self, monkeypatch, tmp_path):
     monkeypatch.setattr(ride_session, 'project_root', lambda: tmp_path)
@@ -176,7 +194,7 @@ class TestHostSession:
     )
 
   def test_provisions_and_supervises_the_worktree_runner(self, monkeypatch, tmp_path):
-    workspace, bro_binary = self._workspace(tmp_path)
+    workspace, ride_binary = self._workspace(tmp_path)
     self._prepare(monkeypatch, tmp_path)
     monkeypatch.setattr(ride_session, 'broker_enabled', lambda: True)
     root = MagicMock(return_value=3)
@@ -188,11 +206,11 @@ class TestHostSession:
     )
     command = root.call_args.args[1]
     env = root.call_args.args[2]
-    assert command == [str(bro_binary), 'chat', 'dev', 'start here', '--hold', 'attended']
-    assert env['RIDE_BRO'] == 'dev'
+    assert command == [
+      str(ride_binary), 'along', '--in-place', '--workspace', 'w', '--harness', 'bro',
+      '--hold', 'attended', 'dev', 'start here',
+    ]  # fmt: skip
     assert env[ride_session.START_SESSION_BROXY_ENV] == '1'
-    assert env['GIT_AUTHOR_NAME'] == 'dev'
-    assert env['GIT_AUTHOR_EMAIL'] == 'dev@bro'
     assert workspace.is_clean() == (False, ['last session exited with code 3'])
 
   def test_brokerless_host_run_unsets_an_ambient_channel(self, monkeypatch, tmp_path):

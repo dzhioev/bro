@@ -685,46 +685,6 @@ class TestResumeHint:
     assert capsys.readouterr().out == ''
 
 
-class TestInPlaceArgv:
-  def test_drops_machinery_flags_and_carries_the_rest(self, tmp_path):
-    spec = _spec(
-      host=True,
-      hold='attended',
-      drop=True,
-      llm='::xhigh+fast',
-      bro='dev',
-      grant=['gmail_creds'],
-      revoke=['notion'],
-      into='feature',
-      prompt='do it',
-      arguments=['--foo'],
-    )
-    parts = claude_harness.CLAUDE.inner_command(spec, _workspace(tmp_path))
-    assert parts == [
-      'ride', 'along', '--in-place', '--workspace', 'w', '--harness', 'claude',
-      '--hold', 'attended', '--llm', '::xhigh+fast', 'dev', 'do it', '--', '--foo',
-    ]  # fmt: skip
-
-  def test_resume_and_raw_carried(self, tmp_path):
-    parts = claude_harness.CLAUDE.inner_command(
-      _spec(resume=True, bro='dev', raw=True), _workspace(tmp_path)
-    )
-    assert parts == [
-      'ride',
-      'along',
-      '--in-place',
-      '--workspace',
-      'w',
-      '--harness',
-      'claude',
-      '--resume',
-      '--raw',
-      '--hold',
-      'attended',
-      'dev',
-    ]
-
-
 class TestHarnessScopeRecipe:
   def test_raw_selects_the_harness_scope_recipe(self):
     assert claude_harness.CLAUDE.scope_recipe(_spec(raw=True).harness_options).name == 'claude-raw'

@@ -1,5 +1,6 @@
 import os
 from abc import ABC
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, Optional, Protocol, Self
@@ -19,6 +20,8 @@ from bro.llm.tracker import ToolStepSource
 from bro.prompts import get_prompt, hold_fragment
 
 DEFAULT_LLM_SPEC: NativeLLMSpec = llm_llms_openai.LLMSpec()
+
+ProvisionStep = Callable[[Path], None]
 
 
 _SHARED_PROMPTS_DIR = Path(__file__).resolve().parent / 'prompts' / 'shared'
@@ -616,6 +619,11 @@ class BaseBro(ABC):
   # under the host's depth cap (see ride/ride/summon_control.py). MRO-walked and
   # unioned like `extra_secrets`.
   may_summon: tuple[str, ...] = ()
+  # session-start steps for the session's workspace, applied to its root at
+  # session start. every start of a session runs them, resumes included, so a
+  # step is idempotent and leaves state the workspace already carries alone.
+  # MRO-walked and concatenated like `extra_secrets`.
+  provisioning: tuple[ProvisionStep, ...] = ()
   # whether the bro does docker work (building/pushing images for deploys) and so
   # needs the host docker socket. an explicit capability, inherited normally. the
   # host grants `/var/run/docker.sock` to a `--raw`/bro-run container only when this
@@ -658,6 +666,7 @@ class BaseBro(ABC):
     prompt_parts: list[str] = []
     extra_secret_names: list[str] = []
     may_summon_names: list[str] = []
+    provision_steps: list[ProvisionStep] = []
     feature_gates: dict[str, Condition | bool] = {}
     for cls in reversed(type(self).__mro__):
       raw_tools = cls.__dict__.get('tools')
@@ -675,6 +684,9 @@ class BaseBro(ABC):
       raw_summon = cls.__dict__.get('may_summon')
       if raw_summon is not None:
         may_summon_names.extend(raw_summon)
+      raw_provisioning = cls.__dict__.get('provisioning')
+      if raw_provisioning is not None:
+        provision_steps.extend(raw_provisioning)
       raw_features = cls.__dict__.get('features')
       if raw_features is not None:
         for feature_name, gate in raw_features.items():
@@ -686,6 +698,7 @@ class BaseBro(ABC):
           feature_gates[feature_name] = gate
     self._extra_secrets: tuple[str, ...] = tuple(extra_secret_names)
     self._may_summon: tuple[str, ...] = tuple(may_summon_names)
+    self._provisioning: tuple[ProvisionStep, ...] = tuple(provision_steps)
     self._features: dict[str, Condition | bool] = feature_gates
     # the membership probe is lazy, so the vocabulary built here stays current
     # with the store — only selection (below) bakes feature truth in.
@@ -775,10 +788,16 @@ class BaseBro(ABC):
 
   def has_feature(self, name: str) -> bool:
     """whether the named feature is declared and its gate holds in this
-    environment. an undeclared name reads as off — the probe is for harness
-    code asking an arbitrary persona about a capability, unlike renders, whose
-    closed universe makes an unknown name an error."""
+    environment. an undeclared name reads as off — the probe answers for an
+    arbitrary persona, unlike renders, whose closed universe makes an unknown
+    name an error."""
     return name in self._features and feature(name).evaluate(self._feature_vocabulary)
+
+  def provision_workspace(self, workspace: Path) -> None:
+    """apply the declared session-start steps to `workspace`, the root of the
+    tree the session works in."""
+    for step in self._provisioning:
+      step(workspace)
 
   @property
   def spells(self) -> dict[str, Path]:

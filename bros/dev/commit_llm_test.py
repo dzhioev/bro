@@ -1,8 +1,8 @@
 """live-LLM probe of the dev commit flow: a real `Dev` run commits a staged
-change in a managed workspace and the commit carries the token-accounting
-footer end to end — session-start provisioning installs the hooks, the agent
-commits without bypassing or hand-writing anything, the commit-msg hook
-appends the footer from the run's own published usage.
+change in a workspace carrying the persona's declared provisioning, and the
+commit carries the token-accounting footer end to end — the agent commits
+without bypassing or hand-writing anything, and the commit-msg hook appends the
+footer from the run's own published usage.
 
 `*_llm_test.py` semantics (roster exclusion, the BRO_LLM_TESTS=1 opt-in) are
 owned by the root conftest.
@@ -48,8 +48,9 @@ def staged_repo(tmp_path, monkeypatch):
   _git(tmp_path, 'commit', '-qm', 'add the project readme')
   (tmp_path / 'notes.txt').write_text('a staged change for the probe\n')
   _git(tmp_path, 'add', 'notes.txt')
+  # what ride's inner session layer applies before a real run starts
+  _ProbeDev().provision_workspace(tmp_path)
   monkeypatch.chdir(tmp_path)
-  monkeypatch.setenv('RIDE_WORKSPACE', 'llm-probe')
   return tmp_path
 
 

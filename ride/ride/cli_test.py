@@ -5,7 +5,7 @@ import pytest
 
 import ride.cli as ride_cli
 from ride.harness import get_harness
-from ride.workspace.model import Workspace
+from ride.inner import inner_command
 
 
 @pytest.fixture(autouse=True)
@@ -18,13 +18,13 @@ def project(monkeypatch):
   monkeypatch.setattr(ride_cli, 'fresh_workspace_name', lambda base: f'{base}-12345678')
 
 
-def _inner_command(spec, tmp_path) -> list[str]:
-  workspace = Workspace.ensure(spec.name, tmp_path, spec.kind)
-  return get_harness(spec.harness).inner_command(spec, workspace)
+def _inner_command(spec) -> list[str]:
+  harness = get_harness(spec.harness)
+  return inner_command(spec, harness_flags=harness.inner_flags(spec))
 
 
 class TestSolo:
-  def test_builds_an_unattended_claude_session(self, tmp_path):
+  def test_builds_an_unattended_claude_session(self):
     with patch('ride.cli.start_session', return_value=0) as start:
       assert ride_cli.main(['ride', 'solo', 'dev', 'do it']) == 0
     spec = start.call_args.args[0]
@@ -36,7 +36,7 @@ class TestSolo:
     assert spec.solo
     assert spec.drop
     assert not spec.workspace_pinned
-    assert _inner_command(spec, tmp_path)[:7] == [
+    assert _inner_command(spec)[:7] == [
       'ride',
       'solo',
       '--in-place',
@@ -74,25 +74,26 @@ class TestSolo:
       ride_cli.main(['ride', 'solo', 'dev', 'hello', '--', '--debug', 'mcp'])
     assert start.call_args.args[0].arguments == ['--debug', 'mcp']
 
-  def test_no_trails_is_a_neutral_flag_the_bro_harness_env_carries(self, tmp_path):
+  def test_no_trails_is_a_neutral_flag_the_bro_harness_env_carries(self):
     with patch('ride.cli.start_session', return_value=0) as start:
       assert ride_cli.main(['ride', 'solo', '--harness', 'bro', '--no-trails', 'dev', 'hello']) == 0
     spec = start.call_args.args[0]
     assert spec.no_trails
-    assert _inner_command(spec, tmp_path) == [
-      'bro', 'run', 'dev', 'hello', '--hold', 'unattended'
+    assert _inner_command(spec) == [
+      'ride', 'solo', '--in-place', '--workspace', 'ride-dev-12345678', '--harness', 'bro',
+      '--no-trails', '--hold', 'unattended', 'dev', 'hello',
     ]  # fmt: skip
 
-  def test_no_trails_is_restated_in_the_claude_inner_argv(self, tmp_path):
+  def test_no_trails_is_restated_in_the_claude_inner_argv(self):
     with patch('ride.cli.start_session', return_value=0) as start:
       assert ride_cli.main(['ride', 'solo', '--no-trails', 'dev', 'hello']) == 0
     spec = start.call_args.args[0]
     assert spec.no_trails
-    assert '--no-trails' in _inner_command(spec, tmp_path)
+    assert '--no-trails' in _inner_command(spec)
 
 
 class TestAlong:
-  def test_builds_an_attended_claude_session(self, tmp_path):
+  def test_builds_an_attended_claude_session(self):
     with patch('ride.cli.start_session', return_value=0) as start:
       assert ride_cli.main(['ride', 'along', 'dev', 'do it']) == 0
     spec = start.call_args.args[0]
@@ -103,7 +104,7 @@ class TestAlong:
     assert spec.hold == 'attended'
     assert not spec.drop
     assert not spec.workspace_pinned
-    assert _inner_command(spec, tmp_path)[:7] == [
+    assert _inner_command(spec)[:7] == [
       'ride',
       'along',
       '--in-place',
@@ -135,13 +136,14 @@ class TestAlong:
       ride_cli.main(['ride', 'along', 'dev', 'hello', '--', '--debug', 'mcp'])
     assert start.call_args.args[0].arguments == ['--debug', 'mcp']
 
-  def test_forwarded_arguments_reach_the_bro_harness_too(self, tmp_path):
+  def test_forwarded_arguments_reach_the_bro_harness_too(self):
     with patch('ride.cli.start_session', return_value=0) as start:
       assert ride_cli.main(['ride', 'along', '--harness', 'bro', 'dev', '--', '--fork']) == 0
     spec = start.call_args.args[0]
     assert spec.arguments == ['--fork']
-    assert _inner_command(spec, tmp_path) == [
-      'bro', 'chat', 'dev', '--hold', 'attended', '--fork'
+    assert _inner_command(spec) == [
+      'ride', 'along', '--in-place', '--workspace', 'ride-dev-12345678', '--harness', 'bro',
+      '--hold', 'attended', 'dev', '--', '--fork',
     ]  # fmt: skip
 
   def test_raw_host_combination_errors(self, capsys):
@@ -154,12 +156,15 @@ class TestAlong:
       ride_cli.main(['ride', 'along', '--provider', 'openai', 'dev'])
     assert '--harness bro' in capsys.readouterr().err
 
-  def test_bro_harness_builds_a_native_chat(self, tmp_path):
+  def test_bro_harness_builds_a_native_chat(self):
     with patch('ride.cli.start_session', return_value=0) as start:
       assert ride_cli.main(['ride', 'along', '--harness', 'bro', 'dev']) == 0
     spec = start.call_args.args[0]
     assert spec.harness == 'bro'
-    assert _inner_command(spec, tmp_path) == ['bro', 'chat', 'dev', '--hold', 'attended']
+    assert _inner_command(spec) == [
+      'ride', 'along', '--in-place', '--workspace', 'ride-dev-12345678', '--harness', 'bro',
+      '--hold', 'attended', 'dev',
+    ]  # fmt: skip
 
   def test_project_harness_default_is_used(self, monkeypatch):
     monkeypatch.setattr(

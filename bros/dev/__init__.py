@@ -4,6 +4,7 @@ from bro.base.condition import when
 from bro.bro import feature
 from bro.datasources import references
 from bro.mcp import creds, harness, mount
+from bro.workflow.commit_footer import provision_hooks
 from bros.bro import Bro
 from bros.dev import mcp
 
@@ -31,14 +32,13 @@ Caution:
 class Dev(Bro):
   name = 'dev'
   description = 'generic software developer with file + shell + search tools'
-  # brog: the task-driven workflow (the fix/run-pr/land spells and their task
+  # the task-driven workflow (the fix/run-pr/land spells and their task
   # bookkeeping) needs the brog task tracker; the feature is on wherever a
   # brog config resolves and absent otherwise, so a tracker-less environment
   # still launches a plain developer.
-  # commit-accounting: the dev family attributes token spend to its commits —
-  # session-start provisioning installs the footer hooks into the managed
-  # workspace.
-  features = {'brog': creds.contains('brog'), 'commit-accounting': True}
+  features = {'brog': creds.contains('brog')}
+  # the dev family attributes token spend to its commits
+  provisioning = (provision_hooks,)
   # the dev toolset duplicates the claude harness's built-in file/shell tools
   tools = [
     when(harness == 'bro', mount(mcp.toolset)),

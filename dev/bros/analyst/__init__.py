@@ -1,5 +1,6 @@
 from bro.base.condition import when
 from bro.mcp import harness, mount
+from bro.workflow.commit_footer import provision_hooks
 from bros.bro import Bro
 from bros.dev import mcp
 
@@ -49,7 +50,7 @@ class Analyst(Bro):
   description = 'analyst that answers questions about recorded runs from the trail store'
   # an analysis is committed with whatever produced it, so the footer accounts
   # for the work the commit's content represents
-  features = {'commit-accounting': True}
+  provisioning = (provision_hooks,)
   # the dev toolset duplicates the claude harness's built-in file/shell tools
   tools = [when(harness == 'bro', mount(mcp.toolset))]
   system_prompt = SYSTEM_PROMPT

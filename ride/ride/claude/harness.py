@@ -121,29 +121,13 @@ class ClaudeHarness:
       '~/.bro/claude_code_oauth_token'
     )
 
-  def inner_command(self, spec: 'SessionSpec', workspace: Workspace) -> list[str]:
-    del workspace
-    verb = 'solo' if spec.solo else 'along'
-    flags = {'--resume': spec.resume, '--raw': options(spec).raw, '--no-trails': spec.no_trails}
-    parts = [
-      'ride',
-      verb,
-      '--in-place',
-      '--workspace',
-      spec.name,
-      '--harness',
-      'claude',
-      *(flag for flag, enabled in flags.items() if enabled),
-    ]
-    parts.extend(['--hold', spec.hold])
-    if spec.llm is not None:
-      parts.extend(['--llm', spec.llm])
-    parts.append(spec.bro)
-    if spec.prompt is not None:
-      parts.append(spec.prompt)
-    if len(spec.arguments) > 0:
-      parts.extend(['--', *spec.arguments])
-    return parts
+  def inner_flags(self, spec: 'SessionSpec') -> tuple[str, ...]:
+    return ('--raw',) if options(spec).raw else ()
+
+  def run_in_place(self, spec: 'SessionSpec') -> int:
+    from ride.claude.runner import run_in_place
+
+    return run_in_place(spec)
 
   def command_options(self, spec: 'SessionSpec') -> list[str]:
     return ['--raw'] if options(spec).raw else []

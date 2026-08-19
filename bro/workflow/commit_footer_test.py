@@ -13,6 +13,7 @@ from bro.workflow.commit_footer import (
   _repo_root,
   group_footers,
   install_hooks,
+  provision_hooks,
   record_session_spend,
 )
 
@@ -45,6 +46,16 @@ def test_install_hooks_copies_both_hooks_executable(tmp_path):
     hook = tmp_path / '.git' / 'hooks' / hook_name
     assert hook.read_text().startswith('#!/usr/bin/env -S bash -e\n')
     assert os.access(hook, os.X_OK)
+
+
+def test_provision_hooks_keeps_a_hook_the_repository_carries(tmp_path):
+  _git('init', '-q', str(tmp_path))
+  hooks = tmp_path / '.git' / 'hooks'
+  hooks.mkdir(parents=True, exist_ok=True)
+  (hooks / 'commit-msg').write_text('#!/bin/sh\n# the repository installed me\n')
+  provision_hooks(tmp_path)
+  assert (hooks / 'commit-msg').read_text() == '#!/bin/sh\n# the repository installed me\n'
+  assert (hooks / 'post-commit').exists()
 
 
 def C(input=0, cache_write=0, cache_read=0, output=0):

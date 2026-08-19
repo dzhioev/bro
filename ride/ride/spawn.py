@@ -37,6 +37,7 @@ from bro.workspace.git import resolve_head, resolve_ref
 from bro.workspace.paths import broker_dir, project_root, summon_dir, workspace_dir
 from ride.flags import default_hold
 from ride.harness import ContainerExtras, get_harness
+from ride.inner import inner_command
 from ride.scope import split_scope_overrides, summoned_credential_scope
 from ride.session import SessionSpec, record_resume_spec
 from ride.summon_control import SummonControl, summon_status_file
@@ -192,7 +193,7 @@ def _lower_summon(launch: SummonLaunchSpec, workspace_name: str) -> DockerLaunch
   record_resume_spec(workspace, spec)
   run = _child_launch(
     spec,
-    harness.inner_command(spec, workspace),
+    inner_command(spec, harness_flags=harness.inner_flags(spec)),
     harness.container_extras(spec, workspace, scoped),
     scoped=scoped,
     base_ref=base_ref,
