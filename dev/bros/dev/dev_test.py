@@ -20,6 +20,10 @@ def test_style_reference_ships_with_the_dev_domain():
 
 
 def test_claude_surface_selects_tracker_and_reference_tools(monkeypatch):
+  monkeypatch.setattr(
+    'bro.base.credentials.get_json',
+    lambda name: {'backend': 'github', 'token': 't', 'repo': 'owner/repository'},
+  )
   monkeypatch.setattr('bro.base.credentials.available', lambda name: False)
   assert [
     server.namespace for server in Dev().assemble(harness='claude', wire='mcp', include_raise=False)
