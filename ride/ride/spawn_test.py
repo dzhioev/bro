@@ -4,18 +4,18 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import bro.workspace.docker as workspace_docker
-import bro.workspace.store as workspace_store
 import ride.bro
 import ride.identity
 import ride.scope
 import ride.session
 import ride.spawn
 import ride.summon_control
+import ride.workspace.docker as workspace_docker
+import ride.workspace.store as workspace_store
 from bro.monitor import trail_pointer
-from bro.workspace.metadata import WorkspaceKind
-from bro.workspace.model import Workspace
 from bro.workspace.paths import broker_dir, summon_dir, workspace_dir
+from ride.workspace.metadata import WorkspaceKind
+from ride.workspace.model import Workspace
 
 PARENT_WORKSPACE = Path('/var/ride/0123456789abcdef/workspaces/parent/tree')
 SUMMONER = {'session': 'ws'}

@@ -10,8 +10,6 @@ from bro.base.args import REMAINDER, SUPPRESS, Parser
 from bro.launch.llm_flags import canonicalize, drop_piece_flags, selection_from_args
 from bro.llm.providers import LLMSelectionError
 from bro.workspace.banner import banner
-from bro.workspace.containers import exec_in_workspace
-from bro.workspace.model import Workspace
 from bro.workspace.paths import RuntimeLocationError, fresh_workspace_name, project_root
 from bro.workspace.project import project_config
 from ride.clean import clean_workspaces
@@ -25,6 +23,8 @@ from ride.flags import (
 from ride.harness import get_harness
 from ride.listing import list_workspaces
 from ride.session import SessionSpec, resume_session, start_session
+from ride.workspace.containers import exec_in_workspace
+from ride.workspace.model import Workspace
 
 __cli_name__ = 'ride'
 

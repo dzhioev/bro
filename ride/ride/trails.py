@@ -3,7 +3,7 @@
 from bro.base import credentials
 from bro.trails.store import local_root, selects_local_storage
 from bro.workspace.paths import CONTAINER_TRAILS_ROOT
-from bro.workspace.store import ScopedSecrets
+from ride.workspace.store import ScopedSecrets
 
 
 def local_trails_mounts(scoped: ScopedSecrets) -> tuple[str, ...]:

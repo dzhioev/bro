@@ -41,8 +41,6 @@ _NOT_SHIPPED = [
   'bro/setup/setup_env.sh',
   'bro/setup/versions.sh',
   'bro/setup/ubuntu/*',
-  'bro/setup/container/bump-claude-code.sh',
-  'bro/setup/container/test_smoke.sh',
 ]
 
 _GUARD = """

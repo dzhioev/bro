@@ -9,12 +9,12 @@ from pathlib import Path
 from typing import Optional
 
 from bro.base import credentials, log
-from bro.workspace import build_context
-from bro.workspace.build_context import BASE_IMAGE_DIR, CONTAINER_DIR
-from bro.workspace.metadata import read_metadata
 from bro.workspace.paths import project_root, workspace_tree
 from bro.workspace.project import project_config
-from bro.workspace.store import _bro_tarball
+from ride.workspace import build_context
+from ride.workspace.build_context import BASE_IMAGE_DIR, CONTAINER_DIR
+from ride.workspace.metadata import read_metadata
+from ride.workspace.store import _bro_tarball
 
 
 @dataclass(frozen=True)
@@ -104,9 +104,9 @@ def suspend_until_continued(container_id: str) -> None:
 def find_container_id(session: Path) -> Optional[str]:
   """find the running container backing the container workspace mounted at `session`.
 
-  filters `docker ps` by the workspace's host mount path, which is unique per
-  bro.workspace.returns the container short id, or None if no running container
-  is bound to that mount. takes the mount path (not name+project) so this stays a
+  Filters `docker ps` by the workspace's host mount path, which is unique per
+  workspace. Returns the container short id, or None if no running container is
+  bound to that mount. Takes the mount path (not name+project) so this stays a
   dependency-free leaf — the caller resolves the path.
   """
   if not session.is_dir():
@@ -137,7 +137,7 @@ def image_tag() -> str:
   framework = (
     sorted(BASE_IMAGE_DIR.iterdir())
     + sorted(CONTAINER_DIR.iterdir())
-    + [build_context.SETUP_DIR / name for name in build_context.SHELL_HELPERS]
+    + [build_context.SHELL_DIR / name for name in build_context.SHELL_HELPERS]
   )
   inputs = [(path.name, path) for path in framework]
   inputs += [(relative, project / relative) for relative in build_context.manifest_paths(project)]

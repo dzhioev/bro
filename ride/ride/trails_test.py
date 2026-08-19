@@ -1,5 +1,5 @@
-from bro.workspace.store import ScopedSecrets
 from ride import trails
+from ride.workspace.store import ScopedSecrets
 
 
 def _scope(required, optional=('openai',)):

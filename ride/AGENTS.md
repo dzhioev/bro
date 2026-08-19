@@ -19,6 +19,8 @@
 - `ride/flags.py` — common session, scope, and LLM flag registration, harness flag registration with the generic requires-`--harness` refusal and option packing, and the default an omitted `--hold` resolves to.
 - `ride/listing.py`, `ride/clean.py`, `ride/scope_report.py` — lifecycle implementations.
 - `ride/e2e_test.py` — live Docker launch coverage, outside the default test roster.
+- `ride/workspace/` — managed workspace creation, provisioning, container execution, credential hydration, broker spawners, and teardown; see `ride/workspace/AGENTS.md`.
+- `ride/setup/` — packaged base-image and managed-session container assets; see `ride/setup/AGENTS.md`.
 - `ride/claude/` — the Claude Code harness implementation; see `ride/claude/AGENTS.md`.
 
 ## Invariants

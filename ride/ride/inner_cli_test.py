@@ -3,8 +3,8 @@ from unittest.mock import patch
 import pytest
 
 import ride.cli as ride_cli
-from bro.workspace.model import Workspace
 from ride.harness import get_harness
+from ride.workspace.model import Workspace
 
 
 def test_along_in_place_dispatches_to_the_claude_runner():

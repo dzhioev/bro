@@ -9,9 +9,10 @@ from pathlib import Path
 from typing import ClassVar, Optional
 
 from bro.base import log
-from bro.workspace.docker import image_tag
 from bro.workspace.git import git_run
-from bro.workspace.metadata import (
+from bro.workspace.paths import workspace_dir, workspace_tree, workspaces_dir
+from ride.workspace.docker import image_tag
+from ride.workspace.metadata import (
   WorkspaceKind,
   WorkspaceMetadata,
   is_workspace,
@@ -19,7 +20,6 @@ from bro.workspace.metadata import (
   workspace_branch,
   write_metadata,
 )
-from bro.workspace.paths import workspace_dir, workspace_tree, workspaces_dir
 
 
 class SessionBusy(RuntimeError):

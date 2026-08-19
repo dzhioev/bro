@@ -3,22 +3,24 @@ import subprocess
 import sys
 
 from bro.base import log
-from bro.workspace.docker import (
+from bro.workspace.paths import project_root
+from ride.workspace.docker import (
   DETACH_FLAG,
   container_running,
   find_container_id,
   suspend_until_continued,
 )
-from bro.workspace.metadata import WorkspaceKind
-from bro.workspace.model import Workspace
-from bro.workspace.paths import project_root
+from ride.workspace.metadata import WorkspaceKind
+from ride.workspace.model import Workspace
 
 
 def exec_in_workspace(name: str, command: list[str]) -> int:
-  """exec a command in the running container backing the named bro.workspace.with no command, starts an interactive bash. either way, `/workspace/.venv`
-  is sourced first so the workspace's console scripts (created by `uv sync`)
-  are on PATH; the prompt's `(.venv)` prefix is dropped after `.bashrc` re-runs,
-  but VIRTUAL_ENV and PATH survive.
+  """exec a command in the running container backing the named workspace.
+
+  With no command, starts an interactive bash. Either way, `/workspace/.venv` is
+  sourced first so the workspace's console scripts (created by `uv sync`) are on
+  PATH; the prompt's `(.venv)` prefix is dropped after `.bashrc` re-runs, but
+  VIRTUAL_ENV and PATH survive.
   """
   project = project_root()
   try:

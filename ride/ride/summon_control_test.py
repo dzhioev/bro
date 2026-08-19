@@ -10,10 +10,10 @@ import ride.summon_control
 from bro.broker.brotocol import Message
 from bro.broker.dispatcher import Dispatcher
 from bro.monitor import trail_pointer
-from bro.workspace.metadata import WorkspaceKind
-from bro.workspace.model import Workspace
 from bro.workspace.paths import workspace_tree
-from bro.workspace.store import ScopedSecrets
+from ride.workspace.metadata import WorkspaceKind
+from ride.workspace.model import Workspace
+from ride.workspace.store import ScopedSecrets
 
 
 @pytest.fixture(autouse=True)

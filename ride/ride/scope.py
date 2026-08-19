@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Optional
 
 from bro.base import credentials, host_config, log
 from bro.workspace.paths import project_root
-from bro.workspace.store import ScopedSecrets, finalize_scoped_secrets
+from ride.workspace.store import ScopedSecrets, finalize_scoped_secrets
 
 if TYPE_CHECKING:
   from bro.llm.llm import LLMSpec

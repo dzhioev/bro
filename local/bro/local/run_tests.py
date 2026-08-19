@@ -158,18 +158,19 @@ PYTEST_FILES = [
   'ride/ride/claude/recorder_test.py',
   'ride/ride/session_test.py',
   'ride/ride/claude/system_prompt_test.py',
+  'ride/ride/packaging_test.py',
   'bro/workspace/banner_test.py',
-  'bro/workspace/build_context_test.py',
-  'bro/workspace/containers_test.py',
-  'bro/workspace/docker_test.py',
+  'ride/ride/workspace/build_context_test.py',
+  'ride/ride/workspace/containers_test.py',
+  'ride/ride/workspace/docker_test.py',
   'bro/workspace/git_test.py',
-  'bro/workspace/model_test.py',
+  'ride/ride/workspace/model_test.py',
   'bro/workspace/paths_test.py',
   'bro/workspace/project_test.py',
   'bro/workspace/session_test.py',
-  'bro/workspace/spawn_test.py',
-  'bro/workspace/store_test.py',
-  'bro/workspace/worktrees_test.py',
+  'ride/ride/workspace/spawn_test.py',
+  'ride/ride/workspace/store_test.py',
+  'ride/ride/workspace/worktrees_test.py',
   'bro/broker/brotocol_test.py',
   'bro/broker/runtime_test.py',
   'bro/broker/dispatcher_test.py',
@@ -195,7 +196,7 @@ PYTEST_FILES = [
   'bro/workflow/land_pr_test.py',
   'bro/runtime/mcp_server_test.py',
   'bro/prompts/prompts_test.py',
-  'bro/setup/container/git_test.py',
+  'ride/ride/setup/container/git_test.py',
   'bro/setup/docker_smoke_test_test.py',
   'bro/llm/usage_test.py',
   'local/bro/local/run_tests_test.py',
@@ -212,7 +213,7 @@ PYTEST_FILES = [
 ]
 # outside the roster above: it drives the host docker daemon, which the suite's
 # in-container leg has none of
-DOCKER_PYTEST_FILE = 'bro/workspace/launch_smoke_test.py'
+DOCKER_PYTEST_FILE = 'ride/ride/workspace/launch_smoke_test.py'
 # run from the benchmark project's own environment, the only one that can import
 # it. The `*_e2e_test.py` modules stay out: they build a real bundle and drive
 # docker, and the harbor one spends real tokens

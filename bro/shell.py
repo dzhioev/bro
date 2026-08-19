@@ -11,8 +11,6 @@ _REQUIRED_FILES = (
   'log.sh',
   'strict.sh',
   'docker_smoke_test.sh',
-  'base_image/build.sh',
-  'base_image/Dockerfile',
 )
 
 
