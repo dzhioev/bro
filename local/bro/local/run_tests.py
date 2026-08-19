@@ -275,7 +275,7 @@ def benchmark_stage() -> None:
 
 def docker_stage() -> None:
   print('smoke: container entrypoint', file=sys.stderr)
-  run(str(DIR / 'bro' / 'setup' / 'container' / 'test_smoke.sh'))
+  run(str(DIR / 'ride' / 'ride' / 'setup' / 'container' / 'test_smoke.sh'))
   print('smoke: container launch path', file=sys.stderr)
   run(sys.executable, '-m', 'pytest', DOCKER_PYTEST_FILE)
 
