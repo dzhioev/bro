@@ -1,9 +1,7 @@
 from typing import ClassVar, get_args
 
-import pytest
-
 import bro.mcp as mcp
-from bro import bro as bro_module, spells as spell_store
+from bro import spells as spell_store
 from bro.base.condition import SetVariable
 from bro.dev import references
 from bro.spells import load_spell
@@ -104,14 +102,3 @@ def test_run_pr_declares_optional_base_and_reentry_arguments():
     assert '`base` — base the PR' in body
     assert '`pr` — re-entry mode' in body
     assert '/run-pr' not in body
-
-
-@pytest.mark.asyncio
-async def test_skill_loader_is_a_framework_service_tool():
-  bro = _TrackerDev()
-  server = bro_module._build_service_server(bro, include_raise=True, harness='bro', wire='bare')
-  assert not hasattr(bro, 'skills')
-  assert not hasattr(bro, 'get_skill_body')
-  assert not hasattr(bro, 'skill_descriptions')
-  assert 'skill' in bro_module._SERVICE_TOOL_NAMES
-  assert 'skill' in {tool.name for tool in await server.list_tools()}

@@ -72,7 +72,7 @@ The `#features` universe is the declared feature names — environment-independe
 
 ## Server-domain vocabularies
 
-The harness facts above condition *session-level* text — prompts, spell bodies. An MCP server's own tool text (descriptions, parameter annotations) deliberately does not use them: a server must read the same served standalone, so it renders at build time against its own vocabulary, and no unprocessed directive ever leaves a server (`bro.mcp.FunctionTool`'s `variables`):
+The harness facts above condition *session-level* text — prompts, spell bodies. An MCP server's own tool text (descriptions, parameter annotations) deliberately does not use them: a server must read the same served standalone, so it renders at build time against its own vocabulary, and no unprocessed directive ever leaves a server (`bro.llm.mcp.FunctionTool`'s `variables`):
 
 - `tools` — a `Toolset` build's selected roster; universe is the full definition, so a description can test an excluded sibling (`{{when #tools contains read_reference}}…{{end}}`) and a typo'd name fails the build
 - `features` — a data source's capability set (e.g. a searchable source's `summary`, live iff its LLM key resolves); membership probes lazily at render, universe is the source's declared `feature_names`. The source's own name rides along as `source` (for `{{insert #source}}`)

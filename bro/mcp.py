@@ -18,7 +18,7 @@ def describe[F: Callable[..., Any]](function: F, text: str) -> F:
   return function
 
 
-def _validate_segment(kind: str, value: str) -> None:
+def validate_segment(kind: str, value: str) -> None:
   if len(value) == 0:
     raise ValueError(f'{kind} must be non-empty')
   if '__' in value:
@@ -255,7 +255,7 @@ def sh(command: str, *argument_names: str) -> ToolLayer:
         'subcommands, and nothing a shell would interpret'
       )
   name = '_'.join(words).replace('.', '_')
-  _validate_segment('tool name', name)
+  validate_segment('tool name', name)
 
   def build() -> MCPServer:
     from bro.llm import cli_tool

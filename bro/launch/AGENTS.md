@@ -10,6 +10,7 @@ The following modules ship from `bro-native`:
 - `call.py` — parser and UI for `bro chat <bro> [what]`. An omitted message opens an empty REPL. The Textual UI is used when both terminal streams and its dependencies are available, the stream UI otherwise. `--fork [TRAIL_ID] [--at STEP_ID]` forks recorded history under the bro class's current recipe; omitting the id selects the bro's newest recorded call. The suppressed `--continue-trail` / `--continue-llm` pair is the managed bro harness's exact-recipe continuation contract.
 - `call_tui.py` — Textual `ChatApp`, turn cancellation, message input, and the display-session integration.
 - `resume.py` — recorded-history projection and `bro.fork.fork` orchestration used by public history forks and managed native continuation.
+
 Core's `llm_flags.py` provides shared `--provider` / `--model` / `--effort` / `--fast` / `--llm` registration, preset expansion, canonicalization, and per-harness resolution. `bro-native`'s `bro/run.py` is the lightweight dispatcher; it imports `run.py` or `call.py` only after selecting a launch verb, so metadata commands do not pull in the launcher stack.
 
 The public verbs deliberately accept no runtime shaping flags (`--summon`, `--grant`, `--revoke`, `--into`, `--no-trails`) and have no in-container refusal.

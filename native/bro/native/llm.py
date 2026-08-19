@@ -29,6 +29,9 @@ class LLM(ABC):
   async def send(self, messages: list[dict], *, request_timeout: Optional[float] = None) -> str: ...
 
   def cumulative_usage(self) -> Optional[dict[str, dict[str, int]]]:
+    """per-model counts in the four billed token classes (`bro.llm.usage.CLASSES`),
+    summed over this instance's lifetime; None when the provider doesn't
+    track usage."""
     return None
 
 

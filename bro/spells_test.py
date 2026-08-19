@@ -241,6 +241,15 @@ class TestSpellServer:
       _servers(bro_class(), 'bare')
 
   @pytest.mark.asyncio
+  async def test_skill_loader_is_a_framework_service_tool(self, fake_packages):
+    bro = _bro_class(fake_packages('_skill_loader_service'))()
+    assert not hasattr(bro, 'skills')
+    assert not hasattr(bro, 'get_skill_body')
+    assert not hasattr(bro, 'skill_descriptions')
+    assert 'skill' in bro_module._SERVICE_TOOL_NAMES
+    assert 'skill' in {tool.name for tool in await _service_server(bro).list_tools()}
+
+  @pytest.mark.asyncio
   async def test_skill_loader_is_empty_and_excluded_from_claude_persona(self, fake_packages):
     package = fake_packages('_skill_loader_empty')
     bro = _bro_class(package)()
