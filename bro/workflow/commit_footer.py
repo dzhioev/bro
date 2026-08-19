@@ -74,9 +74,8 @@ HOOK_NAMES = ('commit-msg', 'post-commit')
 def install_hooks(repository: Path, *, overwrite: bool = True) -> None:
   """copy the packaged footer hooks into `repository`'s git hooks directory.
 
-  overwrite=False leaves an existing hook file alone — for the session-start
-  provisioning path, which must not clobber hooks a repo installed itself;
-  the explicit installer keeps the refreshing default.
+  overwrite=False leaves an existing hook file alone; the explicit installer
+  keeps the refreshing default.
   """
   root = Path(git_out('rev-parse', '--show-toplevel', cwd=str(repository)))
   hooks_path = Path(git_out('rev-parse', '--git-path', 'hooks', cwd=str(root)))
@@ -91,6 +90,12 @@ def install_hooks(repository: Path, *, overwrite: bool = True) -> None:
     with importlib.resources.as_file(resource) as source:
       shutil.copyfile(source, destination)
     destination.chmod(destination.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+
+def provision_hooks(workspace: Path) -> None:
+  """install the footer hooks into a session workspace, leaving any hook the
+  repository carries already alone."""
+  install_hooks(workspace, overwrite=False)
 
 
 def _effective_baseline(committed: Counts, cum: Counts) -> Counts:

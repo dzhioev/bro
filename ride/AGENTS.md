@@ -8,14 +8,15 @@
 - `ride/ask.py`, `ride/call.py` — pure option-preserving aliases of `ride solo` and `ride along`. Their scripts live in this distribution and add no implied fast mode or other flags.
 - `ride/dive_in.py` — task utility wrapper: prefetch, task-derived workspace naming, `RIDE_TASK_ID`, fresh-origin base selection, hold defaults, and forwarding to `ride along` with the project-default bro.
 - `ride/session.py` — harness-neutral session lifecycle: recorded `SessionSpec`, base resolution, auth/scope preflight, workspace kind and lock, resume records, keep/drop finish behavior, and the shared launch skeleton for both modes — active-container refusal, stale-pointer clear, resume gate, the trails opt-out, the container `Launch` composition, and the provisioned host-worktree body.
+- `ride/inner.py` — the inner session every harness runs under inside the prepared workspace: the argv the outer spawns to re-enter there, the session environment (git identity, `RIDE_BRO`), the persona's declared workspace provisioning, the session broxy, and SIGTERM-forwarded agent spawning.
 - `ride/scope.py` — per-surface launch scoping: `ScopeRecipe`, `BRO_RUN_RECIPE`, project-bound credential selection, `scoped_secrets`, the strict launch preflight, scope override splitting, and summoned-child scope computation. In-process `bro run` / `bro chat` create no scope.
 - `ride/root.py` — neutral container and host-process root supervision behind the broker availability gate.
 - `ride/spawn.py` — broker-root composition, root lifecycle handlers, native trail-pointer publication for the root and summoned children, summon lowering — each child composed through its requested harness's seam hooks, with its recorded resume spec — and per-root `SummonControl` wiring.
 - `ride/summon_control.py` — summon host authorization, allow-list resolution, audit/status bookkeeping, and request lifecycle. The peer wire and self-contained CLI are the framework's `bro/summon.py`.
 - `ride/trails.py` — local-trails mounts for launch descriptions whose computed scope records locally.
 - `ride/identity.py` — managed-session git identity.
-- `ride/harness.py` — the `Harness` protocol (flag registration and option packing, scope, auth, session reads, and the launch hooks: inner command, container extras, host runner env), the harness roster, and the lazy harness resolver.
-- `ride/bro.py` — native harness implementation: native recipe resolution, the `bro run|chat …` inner command with exact-recipe continuation, and the launch hooks.
+- `ride/harness.py` — the `Harness` protocol (flag registration and option packing, scope, auth, session reads, and the launch hooks: inner argv flags, the in-place run, container extras, host runner env), the harness roster, and the lazy harness resolver.
+- `ride/bro.py` — native harness implementation: native recipe resolution, the in-place runner spawning `bro run|chat …` with exact-recipe continuation, and the launch hooks.
 - `ride/flags.py` — common session, scope, and LLM flag registration, harness flag registration with the generic requires-`--harness` refusal and option packing, and the default an omitted `--hold` resolves to.
 - `ride/listing.py`, `ride/clean.py`, `ride/scope_report.py` — lifecycle implementations.
 - `ride/e2e_test.py` — live Docker launch coverage, outside the default test roster.

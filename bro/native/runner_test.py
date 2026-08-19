@@ -1,5 +1,4 @@
 import os
-import subprocess
 from typing import ClassVar, Optional
 
 import pytest
@@ -693,49 +692,6 @@ class TestCredentialGate:
     # the LLM stays unbuilt, so a later send re-checks the store
     available.add('alpha')
     assert await gated.send('hi', surface='test') == 'ran'
-
-
-class TestWorkspaceProvisioning:
-  def _accounting_runner(self) -> StubRunner:
-    class AccountingBro(Declared):
-      features: ClassVar = {'commit-accounting': True}
-
-    return StubRunner(bro=AccountingBro(name='accounting'))
-
-  def _repo(self, tmp_path, monkeypatch):
-    subprocess.run(['git', 'init', '-q', str(tmp_path)], check=True)
-    monkeypatch.chdir(tmp_path)
-    return tmp_path / '.git' / 'hooks'
-
-  @pytest.mark.asyncio
-  async def test_run_installs_the_footer_hooks_in_a_managed_workspace(self, tmp_path, monkeypatch):
-    hooks = self._repo(tmp_path, monkeypatch)
-    monkeypatch.setenv('RIDE_WORKSPACE', 'provision-test')
-    await self._accounting_runner().run('hi', surface='test')
-    for hook_name in ('commit-msg', 'post-commit'):
-      assert (hooks / hook_name).exists()
-
-  @pytest.mark.asyncio
-  async def test_no_install_outside_a_managed_workspace(self, tmp_path, monkeypatch):
-    hooks = self._repo(tmp_path, monkeypatch)
-    await self._accounting_runner().run('hi', surface='test')
-    assert not (hooks / 'commit-msg').exists()
-
-  @pytest.mark.asyncio
-  async def test_no_install_without_the_feature(self, tmp_path, monkeypatch):
-    hooks = self._repo(tmp_path, monkeypatch)
-    monkeypatch.setenv('RIDE_WORKSPACE', 'provision-test')
-    await StubRunner().run('hi', surface='test')
-    assert not (hooks / 'commit-msg').exists()
-
-  def test_a_hook_already_present_is_left_alone(self, tmp_path, monkeypatch):
-    hooks = self._repo(tmp_path, monkeypatch)
-    hooks.mkdir(parents=True, exist_ok=True)
-    (hooks / 'commit-msg').write_text('#!/bin/sh\n# the repository installed me\n')
-    monkeypatch.setenv('RIDE_WORKSPACE', 'provision-test')
-    self._accounting_runner()._provision_workspace()
-    assert (hooks / 'commit-msg').read_text() == '#!/bin/sh\n# the repository installed me\n'
-    assert (hooks / 'post-commit').exists()
 
 
 class _StubLLM(LLM):

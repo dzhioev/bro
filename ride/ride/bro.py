@@ -2,12 +2,13 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
+from bro.base import log
 from bro.launch.llm_flags import resolve_native
 from bro.llm.llm import NativeLLMSpec
 from bro.llm.providers import LLMSelection, parse
 from bro.monitor import trail_pointer
 from ride.harness import ContainerExtras
-from ride.identity import bro_git_identity_env
+from ride.inner import run_agent
 from ride.scope import BRO_RUN_RECIPE, ScopeRecipe
 from ride.workspace.model import Workspace
 from ride.workspace.store import ScopedSecrets
@@ -88,27 +89,32 @@ class BroHarness:
     spec = load_resume_spec(workspace)
     return None if spec is None else spec.subject
 
-  def inner_command(self, spec: 'SessionSpec', workspace: Workspace) -> list[str]:
+  def inner_flags(self, spec: 'SessionSpec') -> tuple[str, ...]:
+    del spec
+    return ()
+
+  def run_in_place(self, spec: 'SessionSpec') -> int:
     resume_trail: Optional[str] = None
     if spec.resume:
-      resume_trail = trail_pointer.read(trail_pointer.session_pointer(workspace.path))
+      pointer = trail_pointer.path()
+      resume_trail = trail_pointer.read(pointer) if pointer is not None else None
       if resume_trail is None:
-        raise ValueError(f'no bro harness trail recorded for workspace {workspace.name!r}')
+        log.error('no bro harness trail recorded for workspace %s', spec.name)
+        return 1
     verb = 'run' if spec.solo else 'chat'
-    return ['bro', verb, spec.bro, *_inner_arguments(spec, resume_trail), *spec.arguments]
+    argv = ['bro', verb, spec.bro, *_inner_arguments(spec, resume_trail), *spec.arguments]
+    return run_agent(argv)
 
   def container_extras(
     self, spec: 'SessionSpec', workspace: Workspace, scoped: ScopedSecrets
   ) -> ContainerExtras:
-    del workspace, scoped
-    return ContainerExtras(env=dict(bro_git_identity_env(spec.bro)), mounts=())
+    del spec, workspace, scoped
+    return ContainerExtras(env={}, mounts=())
 
   def prepare_host_env(
     self, spec: 'SessionSpec', workspace: Workspace, worktree: Path, env: dict[str, str]
   ) -> None:
-    del workspace, worktree
-    env.update(bro_git_identity_env(spec.bro))
-    env['RIDE_BRO'] = spec.bro
+    del spec, workspace, worktree, env
 
 
 BRO = BroHarness()

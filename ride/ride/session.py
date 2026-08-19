@@ -20,6 +20,7 @@ from bro.workspace.paths import (
 )
 from ride.flags import default_hold
 from ride.harness import Harness, get_harness
+from ride.inner import inner_command
 from ride.root import run_host_process_via_broker, run_in_container
 from ride.scope import LaunchScopeError, preflight_scoped_launch, scoped_secrets
 from ride.trails import local_trails_mounts
@@ -217,7 +218,7 @@ def _container_session(
   trails_mounts = () if spec.no_trails else local_trails_mounts(scoped)
   launch = Launch(
     name=spec.name,
-    command=harness.inner_command(spec, workspace),
+    command=inner_command(spec, harness_flags=harness.inner_flags(spec)),
     env=env,
     secrets=scoped.required,
     optional_secrets=scoped.optional,
@@ -249,7 +250,7 @@ def _host_session(
   if not provision_host_worktree(worktree):
     return 1
 
-  inner = harness.inner_command(spec, workspace)
+  inner = inner_command(spec, harness_flags=harness.inner_flags(spec))
   inner_binary = worktree / '.venv' / 'bin' / inner[0]
   if not inner_binary.is_file():
     log.error(

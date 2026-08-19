@@ -4,7 +4,6 @@ import os
 import traceback
 from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
-from pathlib import Path
 from types import TracebackType
 from typing import Any, Optional, Self
 
@@ -98,19 +97,6 @@ class Runner:
   def current_tool_step_id(self) -> Optional[ToolStepSource]:
     return self._tracker.current_tool_step_id
 
-  def _provision_workspace(self) -> None:
-    # feature-declared workspace provisioning, run at session start (ride's
-    # in-place runner is the claude-harness counterpart): a commit-accounting
-    # persona gets the footer hooks installed into its managed workspace, so
-    # agent commits carry the token footer with no session involvement. scoped
-    # to managed workspaces — an in-process run in an arbitrary repo must not
-    # write into it — and hooks already present are left alone.
-    if not self.bro.has_feature('commit-accounting') or os.environ.get('RIDE_WORKSPACE') is None:
-      return
-    from bro.workflow.commit_footer import install_hooks
-
-    install_hooks(Path.cwd(), overwrite=False)
-
   def _start_refusal(self) -> Optional[str]:
     # the run-start credential gate: the refusal listing every missing secret,
     # or None to start. checked before any machinery (tracker, LLM, live
@@ -137,7 +123,6 @@ class Runner:
     # fakes) — on self before _create_llm, so the LLM construction path picks
     # them up, then build the LLM, compose the hold prompt, open the trail, and
     # seed the message list.
-    self._provision_workspace()
     self._observer = observer
     self._tracker = tracker if tracker is not None else self._make_tracker()
     llm = self._create_llm(hold=hold)
