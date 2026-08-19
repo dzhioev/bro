@@ -10,7 +10,6 @@ the workspace, so it re-runs no policy gates.
 
 import contextlib
 import os
-import signal
 import subprocess
 import threading
 from collections.abc import Generator
@@ -19,7 +18,6 @@ from typing import TYPE_CHECKING
 
 from bro.base import log
 from bro.channel import BroChannel
-from bro.launch.broxy import session_broxy
 from bro.launch.hold import HOLD_VARIABLE
 from bro.monitor import (
   CLAUDE_CONFIG_DIR_ENV,
@@ -42,7 +40,7 @@ from ride.claude.session_context import (
   build_session_context,
   encode_session_context,
 )
-from ride.identity import bro_git_identity_env
+from ride.inner import run_agent, sigterm_forwarded_to
 
 if TYPE_CHECKING:
   from ride.session import SessionSpec
@@ -69,32 +67,10 @@ def _set_session_context(spec: 'SessionSpec', system_prompt: str, tree: Path) ->
   os.environ[RIDE_SESSION_CONTEXT_ENV] = encode_session_context(records)
 
 
-@contextlib.contextmanager
-def _sigterm_forwarded_to(process: subprocess.Popen) -> Generator[threading.Event]:
-  """forward SIGTERM to `process` for the block's duration, yielding the event
-  that records a forward happened."""
-  forwarded = threading.Event()
-
-  def _forward(signum, frame):
-    del signum, frame
-    forwarded.set()
-    process.terminate()
-
-  previous = signal.signal(signal.SIGTERM, _forward)
-  try:
-    yield forwarded
-  finally:
-    signal.signal(signal.SIGTERM, previous)
-
-
 def _run_claude(argv: list[str], env: dict[str, str]) -> int:
-  """spawn claude and wait, forwarding SIGTERM to it — claude's raw-mode TTY
-  already absorbs Ctrl-C, but a SIGTERM aimed at the runner (docker stop, kill,
-  terminate_session) would otherwise strand claude. the runner keeps waiting
-  after forwarding, so the post-exit work still runs."""
-  process = subprocess.Popen(['claude', *argv], env=env)
-  with _sigterm_forwarded_to(process):
-    return process.wait()
+  # claude's raw-mode TTY already absorbs Ctrl-C, but a SIGTERM aimed at the
+  # runner would otherwise strand claude.
+  return run_agent(['claude', *argv], env)
 
 
 # the recorder adopts the transcript and publishes the pointer within its own
@@ -149,7 +125,7 @@ def _run_claude_summoned(argv: list[str], env: dict[str, str]) -> int:
   captured reply is echoed to stdout either way, so the child's output tail
   still carries it."""
   process = subprocess.Popen(['claude', *argv], env=env, stdout=subprocess.PIPE, text=True)
-  with _sigterm_forwarded_to(process) as terminated, _started_watch() as announced:
+  with sigterm_forwarded_to(process) as terminated, _started_watch() as announced:
     output, _ = process.communicate()
   print(output, end='', flush=True)
   if process.returncode != 0 or terminated.is_set():
@@ -189,36 +165,13 @@ def run_in_place(spec: 'SessionSpec') -> int:
     log.info('resuming session %s', latest.stem)
     claude_args = ['--resume', latest.stem, *claude_args]
 
-  os.environ.update(bro_git_identity_env(spec.bro))
-
-  # RIDE_BRO themes the session (banner, statusLine)
-  os.environ['RIDE_BRO'] = spec.bro
-
-  # feature-declared workspace provisioning (bro/bro.py's _provision_workspace
-  # is the bro-harness counterpart): a commit-accounting persona gets the
-  # footer hooks installed into the session workspace, so agent commits carry
-  # the token footer with no session involvement. hooks already present are
-  # left alone.
-  from bro.registry import create_bro
-
-  if create_bro(spec.bro).has_feature('commit-accounting'):
-    from bro.workflow.commit_footer import install_hooks
-
-    install_hooks(tree, overwrite=False)
-
   # hold and kill wiring for the `raise` service tool's mounts (bro/bro.py).
   # both overwrite any ambient value: a session launched from inside another
   # must not inherit its hold or kill target.
   os.environ[HOLD_VARIABLE] = spec.hold
   os.environ['RIDE_RUNNER_PID'] = str(os.getpid())
 
-  # a host launch signals the session broxy through BRO_START_SESSION_BROXY (in
-  # a container the entrypoint started one and BROKER_CHANNEL already points at
-  # it), rewriting BROKER_CHANNEL before the MCP server and claude inherit the
-  # environment. a set BROKER_CHANNEL always names a broxy socket: when the
-  # broxy cannot run the channel is unset — the session runs without one — and
-  # the launch proceeds.
-  with session_broxy(), contextlib.ExitStack() as teardown:
+  with contextlib.ExitStack() as teardown:
     # session-local MCP serving, one mechanism for both flavors: OS-assigned port
     # published via a port file, per-session bearer token. the tools serve this
     # workspace's code (the runner's cwd and venv) — the bro's own toolset under

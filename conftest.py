@@ -38,9 +38,9 @@ minted pointer into `os.environ` mid-run, so a test reading a usage source
 would otherwise see the launching session's spend or an earlier test's file. `PWD` is dropped at import — the
 transcript fallback resolves the working directory through it, and
 `monkeypatch.chdir` never updates it, so a chdir'd test would still read the
-launching session's transcripts. `RIDE_WORKSPACE` too — it marks a managed workspace,
-and a bro run in a test would otherwise provision the launching session's
-workspace (`BaseBro._provision_workspace`). `RIDE_IN_CONTAINER` is dropped so
+launching session's transcripts. `RIDE_WORKSPACE` too — it names the launching
+session's workspace, which anything reading session facts (the banner, the
+session recorder) would otherwise report as the test's own. `RIDE_IN_CONTAINER` is dropped so
 path tests resolve host runtime roots unless they explicitly exercise the fixed
 container mounts.
 

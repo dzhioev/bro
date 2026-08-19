@@ -55,7 +55,19 @@ class TestSummonLowering:
     assert lowered == ride.spawn.DockerLaunchSpec(
       workspace_docker.Launch(
         name='broker-CH',
-        command=['bro', 'run', 'dev', 'deploy the thing', '--hold', 'unattended'],
+        command=[
+          'ride',
+          'solo',
+          '--in-place',
+          '--workspace',
+          'broker-CH',
+          '--harness',
+          'bro',
+          '--hold',
+          'unattended',
+          'dev',
+          'deploy the thing',
+        ],  # fmt: skip
         env={
           'RIDE_BASE_REF': 'PARENT-SHA',
           'RIDE_BRO': 'dev',
@@ -63,7 +75,6 @@ class TestSummonLowering:
           'RIDE_MAY_SUMMON': '',
           'RIDE_SUMMONED': '1',
           'RIDE_SUMMONER': '{"session":"ws"}',
-          **ride.identity.bro_git_identity_env('dev'),
         },
         secrets={'aws', 'trails'},
         optional_secrets={'openai'},
@@ -91,9 +102,7 @@ class TestSummonLowering:
       hold='attended',
     )
     lowered = ride.spawn._lower_summon(launch, 'broker-CH')
-    assert lowered.launch.command == [
-      'bro', 'run', 'dev', 'deploy the thing', '--hold', 'attended'
-    ]  # fmt: skip
+    assert lowered.launch.command[-4:] == ['--hold', 'attended', 'dev', 'deploy the thing']
 
   def test_the_llm_recipe_rides_the_childs_inner_argv(self, lowering_harness):
     launch = ride.spawn.SummonLaunchSpec(
@@ -105,9 +114,8 @@ class TestSummonLowering:
       llm='openai:sol:high+fast',
     )
     lowered = ride.spawn._lower_summon(launch, 'broker-CH')
-    assert lowered.launch.command == [
-      'bro', 'run', 'dev', 'deploy the thing',
-      '--llm', 'openai:sol:high+fast', '--hold', 'unattended',
+    assert lowered.launch.command[-6:] == [
+      '--hold', 'unattended', '--llm', 'openai:sol:high+fast', 'dev', 'deploy the thing',
     ]  # fmt: skip
 
   def test_the_llm_recipe_selects_the_childs_hydrated_llm_key(self, lowering_harness, monkeypatch):
@@ -245,7 +253,6 @@ class TestSummonLowering:
       'RIDE_MAY_SUMMON': '',
       'RIDE_SUMMONED': '1',
       'RIDE_SUMMONER': '{"session":"ws"}',
-      **ride.identity.bro_git_identity_env('dev'),
     }
 
   def test_unresolvable_into_fails_the_spawn(self, lowering_harness):
@@ -287,13 +294,9 @@ class TestSummonLowering:
     [(lowered, lowered_channel)] = docker.spawned
     assert isinstance(lowered, ride.spawn.DockerLaunchSpec)
     assert lowered.launch.command == [
-      'bro',
-      'run',
-      'dev',
-      'p',
-      '--hold',
-      'unattended',
-    ]
+      'ride', 'solo', '--in-place', '--workspace', 'broker-CH', '--harness', 'bro',
+      '--hold', 'unattended', 'dev', 'p',
+    ]  # fmt: skip
     assert lowered.launch.name == 'broker-CH'
     assert lowered_channel is channel
 
@@ -409,7 +412,9 @@ class TestClaudeSummonLowering:
 
   def test_an_explicit_bro_harness_matches_the_default_lowering(self, lowering_harness):
     explicit = ride.spawn._lower_summon(self._launch(harness='bro'), 'broker-CH')
-    assert explicit.launch.command[:2] == ['bro', 'run']
+    assert explicit.launch.command[:7] == [
+      'ride', 'solo', '--in-place', '--workspace', 'broker-CH', '--harness', 'bro',
+    ]  # fmt: skip
 
 
 class TestChildTrailPublication:

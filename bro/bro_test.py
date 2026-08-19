@@ -923,6 +923,36 @@ class TestOptionalSecrets:
     assert optional_bro.missing_secrets() == ()
 
 
+class TestProvisioning:
+  def test_defaults_to_no_steps(self):
+    class Plain(BaseBro):
+      name = 'plain'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    Plain().provision_workspace(Path('/workspace'))
+
+  def test_steps_run_in_mro_order_against_the_workspace(self):
+    applied: list[tuple[str, Path]] = []
+
+    class Base(BaseBro):
+      name = 'base'
+      description = 'd'
+      provisioning = (lambda workspace: applied.append(('base', workspace)),)
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    class Derived(Base):
+      name = 'derived'
+      provisioning = (lambda workspace: applied.append(('derived', workspace)),)
+
+    Derived().provision_workspace(Path('/workspace'))
+    assert applied == [('base', Path('/workspace')), ('derived', Path('/workspace'))]
+
+
 class TestNeedsDocker:
   def test_default_is_false(self):
     class Plain(BaseBro):

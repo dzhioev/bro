@@ -1,13 +1,11 @@
 import os
 import signal
-import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 import ride.claude.runner as ride_runner
-from bro.base import credentials
 from bro.launch.broxy import START_SESSION_BROXY_ENV
 from bro.llm.llms import claude_code
 from bro.monitor import trail_pointer
@@ -45,11 +43,6 @@ class _Harness:
       patch('ride.claude.runner.in_container', return_value=False),
       patch('ride.claude.runner.provision_host_claude_dir', return_value=self.claude_config_dir),
       patch('ride.claude.runner.project_root', return_value=Path('/main-repo')),
-      # an empty credential store pins the derived git identity to the legacy
-      # address regardless of the developer host's real `github` secret
-      patch('bro.base.credentials.default_store', return_value=credentials.Store({})),
-      # the workspace-provisioning probe; default: no feature, no hook install
-      patch('bro.registry.create_bro'),
     ]
     entered = [p.__enter__() for p in self._patches]
     self.env = entered[0]
@@ -67,8 +60,6 @@ class _Harness:
     self.start_broxy = entered[7]
     self.in_container = entered[8]
     self.provision_claude_dir = entered[9]
-    self.create_bro = entered[12]
-    self.create_bro.return_value.has_feature.return_value = False
     return self
 
   def __exit__(self, *exception):
@@ -140,7 +131,6 @@ class TestRunInPlace:
       assert h.server.wait_healthy.call_count == 1
       assert h.server.stop.call_count == 1
       assert h.start_recorder.call_count == 1
-      assert h.env['RIDE_BRO'] == 'dev'
       assert h.build.call_args.kwargs['endpoint'] == h.server.endpoint
 
   def test_ride_session_serves_the_persona_and_health_gates(self, monkeypatch, tmp_path):
@@ -151,7 +141,6 @@ class TestRunInPlace:
       assert h.server.wait_healthy.call_count == 1
       assert h.server.stop.call_count == 1
       assert h.start_recorder.call_count == 1
-      assert h.env['RIDE_BRO'] == 'dev'
       assert h.build.call_args.kwargs['endpoint'] == h.server.endpoint
 
   def test_ride_session_uses_the_project_default_bro(self, monkeypatch, tmp_path):
@@ -159,7 +148,6 @@ class TestRunInPlace:
     with _Harness(tmp_path) as h:
       assert ride_runner.run_in_place(_spec()) == 0
       assert h.start_server.call_args[0][0] == 'persona:bro-dev'
-      assert h.env['RIDE_BRO'] == 'bro-dev'
 
   def test_server_start_failure_returns_1(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
@@ -175,14 +163,6 @@ class TestRunInPlace:
       assert ride_runner.run_in_place(_spec(bro='dev', raw=True)) == 1
       assert h.run_claude.call_count == 0
       assert h.server.stop.call_count == 1
-
-  def test_exports_bro_git_identity_unconditionally(self, monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
-    with _Harness(tmp_path) as h:
-      # every session commits as bro, hold-independent
-      assert ride_runner.run_in_place(_spec()) == 0
-      assert h.env['GIT_AUTHOR_NAME'] == 'bro-dev'
-      assert h.env['GIT_COMMITTER_EMAIL'] == 'bro-dev@bro'
 
   def test_exports_the_session_hold(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
@@ -239,28 +219,6 @@ class TestRunInPlace:
       assert ride_runner.run_in_place(_spec()) == 0
       assert h.run_claude.call_args.args[1]['MCP_TOOL_TIMEOUT'] == '600000'
 
-  def test_accounting_persona_gets_the_footer_hooks(self, monkeypatch, tmp_path):
-    workspace = tmp_path / 'ws'
-    workspace.mkdir()
-    subprocess.run(['git', 'init', '-q', str(workspace)], check=True)
-    monkeypatch.chdir(workspace)
-    with _Harness(tmp_path) as h:
-      h.create_bro.return_value.has_feature.return_value = True
-      assert ride_runner.run_in_place(_spec()) == 0
-      h.create_bro.assert_called_once_with('bro-dev')
-      h.create_bro.return_value.has_feature.assert_called_once_with('commit-accounting')
-    for hook_name in ('commit-msg', 'post-commit'):
-      assert (workspace / '.git' / 'hooks' / hook_name).exists()
-
-  def test_no_footer_hooks_without_the_feature(self, monkeypatch, tmp_path):
-    workspace = tmp_path / 'ws'
-    workspace.mkdir()
-    subprocess.run(['git', 'init', '-q', str(workspace)], check=True)
-    monkeypatch.chdir(workspace)
-    with _Harness(tmp_path):
-      assert ride_runner.run_in_place(_spec()) == 0
-    assert not (workspace / '.git' / 'hooks' / 'commit-msg').exists()
-
   def test_host_session_provisions_and_exports_the_claude_config_dir(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
@@ -278,48 +236,6 @@ class TestRunInPlace:
       assert ride_runner.run_in_place(_spec()) == 0
       h.provision_claude_dir.assert_not_called()
       assert 'CLAUDE_CONFIG_DIR' not in h.run_claude.call_args.args[1]
-
-
-class TestSessionBroxy:
-  def test_rewrites_the_channel_and_stops_the_broxy(self, monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
-    with _Harness(tmp_path) as h:
-      h.env['BROKER_CHANNEL'] = 'unix:/up.sock'
-      h.env[START_SESSION_BROXY_ENV] = '1'
-      assert ride_runner.run_in_place(_spec()) == 0
-      assert h.start_broxy.call_args.args[0] == 'unix:/up.sock'
-      env = h.run_claude.call_args.args[1]
-      assert env['BROKER_CHANNEL'] == h.broxy.address
-      h.broxy.stop.assert_called_once()
-
-  def test_unsets_the_channel_when_the_broxy_cannot_start(self, monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
-    with _Harness(tmp_path) as h:
-      h.env['BROKER_CHANNEL'] = 'unix:/up.sock'
-      h.env[START_SESSION_BROXY_ENV] = '1'
-      h.start_broxy.return_value = None
-      assert ride_runner.run_in_place(_spec()) == 0
-      env = h.run_claude.call_args.args[1]
-      assert 'BROKER_CHANNEL' not in env
-
-  def test_container_mode_keeps_the_entrypoint_owned_channel(self, monkeypatch, tmp_path):
-    # a container carries no BRO_START_SESSION_BROXY signal — only a host
-    # launch sets it — so the entrypoint's channel passes through untouched
-    monkeypatch.chdir(tmp_path)
-    with _Harness(tmp_path) as h:
-      h.in_container.return_value = True
-      h.env['BROKER_CHANNEL'] = 'unix:/tmp/broxy.sock'
-      assert ride_runner.run_in_place(_spec()) == 0
-      h.start_broxy.assert_not_called()
-      env = h.run_claude.call_args.args[1]
-      assert env['BROKER_CHANNEL'] == 'unix:/tmp/broxy.sock'
-
-  def test_no_channel_starts_no_broxy(self, monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
-    with _Harness(tmp_path) as h:
-      h.env[START_SESSION_BROXY_ENV] = '1'
-      assert ride_runner.run_in_place(_spec()) == 0
-      h.start_broxy.assert_not_called()
 
 
 class TestRunClaude:
