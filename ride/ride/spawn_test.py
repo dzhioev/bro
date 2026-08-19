@@ -414,12 +414,12 @@ class TestClaudeSummonLowering:
 
 
 class TestChildTrailPublication:
-  def test_started_delivery_publishes_the_childs_broker_pointer(self, tmp_path):
+  def test_started_delivery_publishes_the_childs_session_pointer(self, tmp_path):
     from bro.broker.brotocol import Message, Tag
 
     observe = ride.spawn._note_child_started(tmp_path / 'proj')
     observe('CH', 'root', Message(type=Tag.STARTED, payload={'trail_id': 't-9'}, in_reply_to='req'))
-    pointer = trail_pointer.broker_pointer(workspace_dir(tmp_path / 'proj', 'broker-CH'))
+    pointer = trail_pointer.session_pointer(workspace_dir(tmp_path / 'proj', 'broker-CH'))
     assert trail_pointer.read(pointer) == 't-9'
 
   def test_non_started_and_trailless_deliveries_publish_nothing(self, tmp_path):
@@ -430,7 +430,7 @@ class TestChildTrailPublication:
     observe('CH', 'root', Message(type=Tag.COMPLETED, payload={'trail_id': 't'}, in_reply_to='r'))
     observe(None, 'root', Message(type=Tag.STARTED, payload={'trail_id': 't'}, in_reply_to='r'))
     observe('CH', 'root', Message(type=Tag.STARTED, payload={}, in_reply_to='r'))
-    assert not trail_pointer.broker_pointer(workspace_dir(project, 'broker-CH')).exists()
+    assert not trail_pointer.session_pointer(workspace_dir(project, 'broker-CH')).exists()
 
 
 class TestRunRootViaBroker:
@@ -487,7 +487,7 @@ class TestRunRootViaBroker:
     child_trail_observer(
       'CH', 'root', Message(type=Tag.STARTED, payload={'trail_id': 't-7'}, in_reply_to='req')
     )
-    pointer = trail_pointer.broker_pointer(workspace_dir(tmp_path / 'proj', 'broker-CH'))
+    pointer = trail_pointer.session_pointer(workspace_dir(tmp_path / 'proj', 'broker-CH'))
     assert trail_pointer.read(pointer) == 't-7'
     assert control._workspace is workspace
     state_directory = summon_dir(tmp_path / 'proj')
@@ -512,7 +512,7 @@ class TestRunRootViaBroker:
     )
     # the started handler doubles as the bro-run root's provenance source
     assert control._root_trail_id == 't-1'
-    pointer = trail_pointer.broker_pointer(workspace.path)
+    pointer = trail_pointer.session_pointer(workspace.path)
     assert json.loads(pointer.read_text()) == {'trail_id': 't-1'}
     ride.spawn._log_root_completed(
       dispatcher,

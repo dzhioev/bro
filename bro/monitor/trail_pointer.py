@@ -1,10 +1,8 @@
 """a managed session's current-trail pointer.
 
-A Claude recorder writes the pointer in its session config directory
-(`claude_pointer` names a workspace's host-side placement). A native bro root
-is published by the supervising broker into the workspace record directory
-(`broker_pointer`). Both placements are host-readable and let resume and summon
-provenance identify the session trail without querying the trails service. An
+The recording side publishes the pointer into the session's own state dir, which
+is also a workspace record (`session_pointer`) — so resume and summon provenance
+identify the session trail host-side without querying the trails service. An
 absent pointer means the session published no trail.
 
 Stdlib-only on purpose: the host-side reader must not pull in service
@@ -15,24 +13,21 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from bro.monitor import claude_config_dir, workspace_claude_dir
+from bro.monitor import session_dir, workspace_session_dir
 
 FILENAME = 'current-trail.json'
 
 
-def path() -> Path:
-  return claude_config_dir() / FILENAME
+def path() -> Optional[Path]:
+  """the pointer of the session this process runs in, or None outside one."""
+  session = session_dir()
+  return session / FILENAME if session is not None else None
 
 
-def broker_pointer(workspace: Path) -> Path:
-  """the broker-published placement, among the workspace's own records."""
-  return workspace / FILENAME
-
-
-def claude_pointer(workspace: Path) -> Path:
-  """the claude-recorder placement, inside the workspace's claude config dir —
-  in a container the recorder can reach no workspace record but that mount."""
-  return workspace_claude_dir(workspace) / FILENAME
+def session_pointer(workspace: Path) -> Path:
+  """a workspace's pointer among its session records — the host-side name for
+  the file `path` reaches from inside the session."""
+  return workspace_session_dir(workspace) / FILENAME
 
 
 def write(target: Path, trail_id: str) -> None:
@@ -48,13 +43,18 @@ def write(target: Path, trail_id: str) -> None:
 
 def publish(trail_id: str) -> None:
   """publish the current recorder trail at the process-default pointer."""
-  write(path(), trail_id)
+  target = path()
+  if target is not None:
+    write(target, trail_id)
 
 
 def clear(target: Optional[Path] = None) -> None:
   """drop a pointer — no trail is being recorded. never raises."""
+  pointer = path() if target is None else target
+  if pointer is None:
+    return
   try:
-    (path() if target is None else target).unlink(missing_ok=True)
+    pointer.unlink(missing_ok=True)
   except OSError:
     pass
 

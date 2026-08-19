@@ -224,14 +224,14 @@ def _note_root_started(control: SummonControl, workspace: Workspace):
     # a bro-run root's own trail is what its summon children are attributed to
     control.note_root_trail(trail_id)
     if isinstance(trail_id, str) and len(trail_id) > 0:
-      trail_pointer.write(trail_pointer.broker_pointer(workspace.path), trail_id)
+      trail_pointer.write(trail_pointer.session_pointer(workspace.path), trail_id)
 
   return _handle
 
 
 def _note_child_started(project: Path):
   """publish each summoned child's `started` trail id as its channel-named
-  workspace's broker trail pointer — what makes a failed child's surviving
+  workspace's session trail pointer — what makes a failed child's surviving
   workspace resumable. Registered as a delivery observer, which sees only
   correlated child deliveries — never the root's own `started`, so no pointer is
   fabricated for a workspace that doesn't exist."""
@@ -242,7 +242,7 @@ def _note_child_started(project: Path):
       return
     trail_id = message.payload.get('trail_id')
     if isinstance(trail_id, str) and len(trail_id) > 0:
-      pointer = trail_pointer.broker_pointer(workspace_dir(project, _workspace_name(source)))
+      pointer = trail_pointer.session_pointer(workspace_dir(project, _workspace_name(source)))
       trail_pointer.write(pointer, trail_id)
 
   return _observe

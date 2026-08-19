@@ -380,15 +380,15 @@ class TestRunClaudeSummoned:
     return events
 
   @pytest.fixture
-  def claude_config(self, monkeypatch, tmp_path) -> Path:
-    config = tmp_path / 'claude-config'
-    monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(config))
-    return config
+  def session_state(self, monkeypatch, tmp_path) -> Path:
+    session = tmp_path / 'session'
+    monkeypatch.setenv('RIDE_SESSION_DIR', str(session))
+    return session
 
   def test_clean_exit_relays_the_reply_and_lifecycle(
-    self, tmp_path, claude_config, channel_events, capfd
+    self, tmp_path, session_state, channel_events, capfd
   ):
-    trail_pointer.write(trail_pointer.path(), 't-child')
+    trail_pointer.write(session_state / trail_pointer.FILENAME, 't-child')
     env = _fake_claude(tmp_path, 'echo "THE REPLY"\n')
     assert ride_runner._run_claude_summoned([], env) == 0
     assert channel_events == [
@@ -401,10 +401,10 @@ class TestRunClaudeSummoned:
     assert capfd.readouterr().out == 'THE REPLY\n'
 
   def test_started_lands_while_claude_still_runs(
-    self, tmp_path, claude_config, channel_events, monkeypatch
+    self, tmp_path, session_state, channel_events, monkeypatch
   ):
     monkeypatch.setattr(ride_runner, '_TRAIL_POLL_SECONDS', 0.05)
-    trail_pointer.write(trail_pointer.path(), 't-child')
+    trail_pointer.write(session_state / trail_pointer.FILENAME, 't-child')
     env = _fake_claude(tmp_path, 'sleep 0.4\necho LATE\n')
     assert ride_runner._run_claude_summoned([], env) == 0
     assert channel_events == [
@@ -415,14 +415,14 @@ class TestRunClaudeSummoned:
     ]
 
   def test_an_unpublished_trail_still_delivers_the_terminal(
-    self, tmp_path, claude_config, channel_events
+    self, tmp_path, session_state, channel_events
   ):
     env = _fake_claude(tmp_path, 'echo DONE\n')
     assert ride_runner._run_claude_summoned([], env) == 0
     assert channel_events == [('completed', 'DONE', 'ok'), ('close',)]
 
   def test_failed_exit_emits_no_terminal_but_echoes(
-    self, tmp_path, claude_config, channel_events, capfd
+    self, tmp_path, session_state, channel_events, capfd
   ):
     env = _fake_claude(tmp_path, 'echo PARTIAL\nexit 3\n')
     assert ride_runner._run_claude_summoned([], env) == 3
@@ -430,9 +430,9 @@ class TestRunClaudeSummoned:
     assert capfd.readouterr().out == 'PARTIAL\n'
 
   def test_a_forwarded_sigterm_suppresses_the_terminal(
-    self, tmp_path, claude_config, channel_events
+    self, tmp_path, session_state, channel_events
   ):
-    trail_pointer.write(trail_pointer.path(), 't-child')
+    trail_pointer.write(session_state / trail_pointer.FILENAME, 't-child')
     env = _fake_claude(
       tmp_path,
       'trap "exit 0" TERM\nsleep 0.2\nkill -TERM $PPID\nwhile true; do sleep 0.05; done\n',
@@ -441,10 +441,10 @@ class TestRunClaudeSummoned:
     assert not [event for event in channel_events if event[0] == 'completed']
 
   def test_without_a_channel_the_run_still_completes(
-    self, tmp_path, claude_config, monkeypatch, capfd
+    self, tmp_path, session_state, monkeypatch, capfd
   ):
     monkeypatch.delenv('BROKER_CHANNEL', raising=False)
-    trail_pointer.write(trail_pointer.path(), 't-child')
+    trail_pointer.write(session_state / trail_pointer.FILENAME, 't-child')
     env = _fake_claude(tmp_path, 'echo OK\n')
     assert ride_runner._run_claude_summoned([], env) == 0
     assert capfd.readouterr().out == 'OK\n'

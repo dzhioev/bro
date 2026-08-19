@@ -14,7 +14,7 @@
 - `ride/summon_control.py` — summon host authorization, allow-list resolution, audit/status bookkeeping, and request lifecycle. The peer wire and self-contained CLI are the framework's `bro/summon.py`.
 - `ride/trails.py` — local-trails mounts for launch descriptions whose computed scope records locally.
 - `ride/identity.py` — managed-session git identity.
-- `ride/harness.py` — the `Harness` protocol (flag registration and option packing, scope, auth, session reads, and the launch hooks: trail-pointer path, inner command, container extras, host runner env), the harness roster, and the lazy harness resolver.
+- `ride/harness.py` — the `Harness` protocol (flag registration and option packing, scope, auth, session reads, and the launch hooks: inner command, container extras, host runner env), the harness roster, and the lazy harness resolver.
 - `ride/bro.py` — native harness implementation: native recipe resolution, the `bro run|chat … --in-place` inner command with exact-recipe continuation, and the launch hooks.
 - `ride/flags.py` — common session, scope, and LLM flag registration, harness flag registration with the generic requires-`--harness` refusal and option packing, and the default an omitted `--hold` resolves to.
 - `ride/listing.py`, `ride/clean.py`, `ride/scope_report.py` — lifecycle implementations.
@@ -27,7 +27,7 @@
 - The neutral layer owns both launch bodies; the harness seam supplies scope recipes, auth, LLM resolution, the inner command, session-state reads, and the per-harness launch extras. The in-place runner is the Claude harness's alone — bro workspaces run `bro run|chat --in-place`. A managed native container or host worktree is always launched by `ride`; a summon child is always launched by `summon`.
 - Every harness keeps its session state among the workspace's own records, so reclaiming a workspace is `Workspace.remove()` for all of them and no harness supplies a teardown of its own.
 - Claude workspaces run their checkout's `ride solo|along --in-place`; native workspaces run `bro run|chat … --in-place`. These hidden inner contracts fail loudly when a workspace tree predates them.
-- A bro resume reads the broker-published pointer beside the workspace's `resume.json` and continues that trail under the recipe recorded in the session spec. No pointer is synthesized when the broker or native trail recording is disabled.
+- A bro resume reads the broker-published pointer from the workspace's `session/` dir and continues that trail under the recipe recorded in the session spec. No pointer is synthesized when the broker or native trail recording is disabled.
 - Host runtime state lives under the user's checkout-keyed runtime state root, which a launch creates before recording a workspace. Container trails and summon status use dedicated fixed absolute mounts.
 - A pinned mode-verb workspace is never auto-dropped. An unpinned `along` workspace is kept unless `--drop` is explicit; an unpinned `solo` workspace is dropped after a clean exit unless `--keep` is explicit.
 - A solo resume becomes an along session and takes along's host-sensitive default hold; the unattended solo hold describes a run with no human channel.

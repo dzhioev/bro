@@ -21,7 +21,13 @@ from bro.base import log
 from bro.channel import BroChannel
 from bro.launch.broxy import session_broxy
 from bro.launch.hold import HOLD_VARIABLE
-from bro.monitor import claude_projects_dir, trail_pointer
+from bro.monitor import (
+  CLAUDE_CONFIG_DIR_ENV,
+  SESSION_DIR_ENV,
+  claude_projects_dir,
+  trail_pointer,
+  workspace_session_dir,
+)
 from bro.summon import SUMMONED_ENV, SUMMONER_ENV
 from bro.workspace.git import git_out
 from bro.workspace.paths import in_container, project_root, workspace_dir
@@ -99,7 +105,8 @@ _TRAIL_POLL_SECONDS = 1.0
 def _announce_started(announced: threading.Event) -> None:
   """emit `started{trail_id}` once, with the trail id the session recorder
   published; no-op when it is not published yet or the session has no channel."""
-  trail_id = trail_pointer.read(trail_pointer.path())
+  pointer = trail_pointer.path()
+  trail_id = trail_pointer.read(pointer) if pointer is not None else None
   if trail_id is None or announced.is_set():
     return
   channel = BroChannel.from_env()
@@ -167,8 +174,10 @@ def run_in_place(spec: 'SessionSpec') -> int:
     # Set before anything derives paths or spawns children:
     # the resume resolution below, the hooks, and claude itself all read it.
     project = project_root()
-    claude_dir = provision_host_claude_dir(workspace_dir(project, spec.name), tree, project)
-    os.environ['CLAUDE_CONFIG_DIR'] = str(claude_dir)
+    workspace = workspace_dir(project, spec.name)
+    claude_dir = provision_host_claude_dir(workspace, tree, project)
+    os.environ[CLAUDE_CONFIG_DIR_ENV] = str(claude_dir)
+    os.environ[SESSION_DIR_ENV] = str(workspace_session_dir(workspace))
 
   claude_args = list(spec.arguments)
   if spec.resume:

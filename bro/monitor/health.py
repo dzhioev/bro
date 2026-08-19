@@ -3,13 +3,13 @@
 The Claude recorder beats this file on every attempt; `ride.claude.statusline` and
 `ride banner` read it without a network call to warn when recording is failing or
 has stopped. Without it a broken recorder is silent — the daemon's stderr goes
-to a per-session log file (`<claude config dir>/session-recorder.log`) nobody
-watches live, and a daemon killed by a signal writes nothing at all, so a
-missed beat is the only trace it leaves.
+to a log file nobody watches live, and a daemon killed by a signal writes
+nothing at all, so a missed beat is the only trace it leaves.
 
-The file lives under the session's claude config dir (`CLAUDE_CONFIG_DIR` when
-set — every ride session points it at private per-session state), so concurrent
-sessions don't clobber each other's signal.
+The file lives in the session's own state dir, so concurrent sessions don't
+clobber each other's signal and a process running outside any session reads
+none of them. The signal is harness-neutral: whichever recorder a session runs
+beats this one file.
 
 Stdlib-only on purpose: the statusline imports this on every render, so it must
 stay dependency-free.
@@ -20,7 +20,7 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from bro.monitor import claude_config_dir
+from bro.monitor import session_dir
 
 # cap the stored error so a verbose boto traceback can't bloat the file
 _MAX_ERROR = 500
@@ -34,8 +34,9 @@ _FAILING = 'FAILING — see session-recorder.log'
 _STOPPED = 'STOPPED — the recorder is no longer running; see session-recorder.log'
 
 
-def health_path() -> Path:
-  return claude_config_dir() / 'session-recorder-health.json'
+def health_path() -> Optional[Path]:
+  session = session_dir()
+  return session / 'session-recorder-health.json' if session is not None else None
 
 
 def write(status: str, error: Optional[str] = None, *, interval: Optional[float]) -> None:
@@ -44,6 +45,9 @@ def write(status: str, error: Optional[str] = None, *, interval: Optional[float]
   must treat the writer as gone; pass None for a final write no beat follows.
   never raises — health reporting must not be able to break the recording it
   reports on."""
+  path = health_path()
+  if path is None:
+    return
   payload = {
     'status': status,
     'checked_at': datetime.datetime.now(datetime.UTC).isoformat(),
@@ -51,7 +55,6 @@ def write(status: str, error: Optional[str] = None, *, interval: Optional[float]
     'error': error[:_MAX_ERROR] if error is not None else None,
   }
   try:
-    path = health_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + '.tmp')
     tmp.write_text(json.dumps(payload))
@@ -61,8 +64,11 @@ def write(status: str, error: Optional[str] = None, *, interval: Optional[float]
 
 
 def _read() -> Optional[dict]:
+  path = health_path()
+  if path is None:
+    return None
   try:
-    data = json.loads(health_path().read_text())
+    data = json.loads(path.read_text())
   except (OSError, json.JSONDecodeError):
     return None
   return data if isinstance(data, dict) else None

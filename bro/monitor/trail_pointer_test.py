@@ -5,37 +5,47 @@ from bro.monitor import trail_pointer
 
 
 class TestPath:
-  def test_derives_from_claude_config_dir(self, tmp_path: Path, monkeypatch):
-    monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(tmp_path))
+  def test_derives_from_the_session_state_dir(self, tmp_path: Path, monkeypatch):
+    monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path))
     assert trail_pointer.path() == tmp_path / 'current-trail.json'
 
-  def test_defaults_to_home_claude(self, tmp_path: Path, monkeypatch):
-    monkeypatch.delenv('CLAUDE_CONFIG_DIR', raising=False)
-    monkeypatch.setenv('HOME', str(tmp_path))
-    assert trail_pointer.path() == tmp_path / '.claude' / 'current-trail.json'
+  def test_outside_a_session_there_is_none(self, monkeypatch):
+    monkeypatch.delenv('RIDE_SESSION_DIR', raising=False)
+    assert trail_pointer.path() is None
+
+  def test_the_workspace_placement_names_the_same_file(self, tmp_path: Path, monkeypatch):
+    monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path / 'ws' / 'session'))
+    assert trail_pointer.session_pointer(tmp_path / 'ws') == trail_pointer.path()
 
 
 class TestPublish:
   def test_roundtrips_through_read(self, tmp_path: Path, monkeypatch):
-    monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(tmp_path / 'config'))
+    monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path / 'session'))
     trail_pointer.publish('T1')
-    assert trail_pointer.read(tmp_path / 'config' / 'current-trail.json') == 'T1'
+    assert trail_pointer.read(tmp_path / 'session' / 'current-trail.json') == 'T1'
 
   def test_overwrites_the_previous_pointer(self, tmp_path: Path, monkeypatch):
-    monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(tmp_path))
+    monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path))
     trail_pointer.publish('T1')
     trail_pointer.publish('T2')
-    assert trail_pointer.read(trail_pointer.path()) == 'T2'
+    assert trail_pointer.read(tmp_path / 'current-trail.json') == 'T2'
 
   def test_clear_removes_the_file(self, tmp_path: Path, monkeypatch):
-    monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(tmp_path))
+    monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path))
     trail_pointer.publish('T1')
     trail_pointer.clear()
-    assert not trail_pointer.path().exists()
+    assert not (tmp_path / 'current-trail.json').exists()
 
   def test_clear_without_a_pointer_is_a_noop(self, tmp_path: Path, monkeypatch):
-    monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(tmp_path))
+    monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path))
     trail_pointer.clear()
+
+  def test_outside_a_session_publishing_writes_nothing(self, tmp_path: Path, monkeypatch):
+    monkeypatch.delenv('RIDE_SESSION_DIR', raising=False)
+    monkeypatch.chdir(tmp_path)
+    trail_pointer.publish('T1')
+    trail_pointer.clear()
+    assert list(tmp_path.iterdir()) == []
 
 
 class TestRead:

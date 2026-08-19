@@ -80,10 +80,19 @@ class TestHealth:
 
 
 class TestHealthPath:
-  def test_follows_the_session_config_dir(self, monkeypatch, tmp_path):
-    monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(tmp_path / 'session-config'))
-    assert health.health_path() == (tmp_path / 'session-config' / 'session-recorder-health.json')
+  def test_follows_the_session_state_dir(self, monkeypatch, tmp_path):
+    monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path / 'session'))
+    assert health.health_path() == (tmp_path / 'session' / 'session-recorder-health.json')
 
-  def test_defaults_to_the_home_claude_dir(self, monkeypatch):
-    monkeypatch.delenv('CLAUDE_CONFIG_DIR', raising=False)
-    assert health.health_path().parent.name == '.claude'
+
+class TestOutsideASession:
+  def test_there_is_no_health_to_report(self, monkeypatch):
+    monkeypatch.delenv('RIDE_SESSION_DIR', raising=False)
+    assert health.health_path() is None
+    assert health.problem() is None
+
+  def test_a_beat_writes_nothing(self, monkeypatch, tmp_path):
+    monkeypatch.delenv('RIDE_SESSION_DIR', raising=False)
+    monkeypatch.chdir(tmp_path)
+    health.write('error', 'the recorder could not start', interval=None)
+    assert list(tmp_path.iterdir()) == []

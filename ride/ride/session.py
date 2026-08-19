@@ -9,13 +9,19 @@ from typing import Optional
 from bro.base import credentials, log
 from bro.launch.broxy import START_SESSION_BROXY_ENV
 from bro.llm.llm import LLMSpec
-from bro.monitor import trail_pointer
+from bro.monitor import SESSION_DIR_ENV, trail_pointer, workspace_session_dir
 from bro.workspace.containers import broker_enabled
 from bro.workspace.docker import Launch, find_container_id
 from bro.workspace.git import resolve_ref
 from bro.workspace.metadata import WorkspaceKind
 from bro.workspace.model import KindMismatch, SessionBusy, Workspace
-from bro.workspace.paths import ensure_runtime_root, in_container, project_root, venv_env
+from bro.workspace.paths import (
+  CONTAINER_SESSION_DIR,
+  ensure_runtime_root,
+  in_container,
+  project_root,
+  venv_env,
+)
 from bro.workspace.store import ScopedSecrets, log_scoped_secrets, materialize_scoped_store
 from bro.workspace.worktrees import ensure_host_worktree, provision_host_worktree
 from ride.flags import default_hold
@@ -175,8 +181,11 @@ def _launch_session(
       spec.name,
     )
     return 1
+  # created before the container launch so the bind mount finds it and does not
+  # materialize it root-owned
+  workspace_session_dir(workspace.path).mkdir(parents=True, exist_ok=True)
   if not spec.resume:
-    trail_pointer.clear(harness.session_trail_pointer(workspace))
+    trail_pointer.clear(trail_pointer.session_pointer(workspace.path))
   elif not harness.session_exists(workspace):
     log.error('%s', harness.missing_session_error(workspace))
     return 1
@@ -193,7 +202,11 @@ def _container_session(
   launch_scope: ScopedLaunch,
 ) -> int:
   scoped = launch_scope.scoped
-  env: dict[str, str] = {'RIDE_BRO': spec.bro}
+  session_state = workspace_session_dir(workspace.path)
+  env: dict[str, str] = {
+    'RIDE_BRO': spec.bro,
+    SESSION_DIR_ENV: str(CONTAINER_SESSION_DIR),
+  }
   if base_ref is not None:
     env['RIDE_BASE_REF'] = base_ref
   extras = harness.container_extras(spec, workspace, scoped)
@@ -211,7 +224,11 @@ def _container_session(
     docker_sock=scoped.docker_sock,
     tty=not spec.solo,
     forward_env=True,
-    extra_mounts=(*extras.mounts, *trails_mounts),
+    extra_mounts=(
+      *extras.mounts,
+      *trails_mounts,
+      f'{session_state}:{CONTAINER_SESSION_DIR}',
+    ),
   )
   return run_in_container(launch, workspace, may_summon=launch_scope.may_summon)
 
@@ -249,6 +266,7 @@ def _host_session(
   runner_env[credentials.REGISTRY_ENV] = str(
     materialize_scoped_store(launch_scope.store, workspace.path / 'credentials')
   )
+  runner_env[SESSION_DIR_ENV] = str(workspace_session_dir(workspace.path))
   runner_env[START_SESSION_BROXY_ENV] = '1'
   if spec.no_trails:
     runner_env['TRAILS_DISABLED'] = '1'

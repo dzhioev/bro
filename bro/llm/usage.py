@@ -62,7 +62,7 @@ from pathlib import Path
 from typing import Optional
 
 from bro.base.args import Parser
-from bro.monitor import claude_config_dir, working_projects_dir
+from bro.monitor import claude_config_dir, in_claude_session, working_projects_dir
 
 __cli_name__ = 'usage'
 
@@ -176,6 +176,8 @@ def _session_segment() -> Optional[Path]:
   working directory claude keeps no project dir for, such as an agent's own
   worktree.
   """
+  if not in_claude_session():
+    return None
   session_id = os.environ.get(SESSION_ID_VARIABLE)
   if session_id is not None:
     segments = sorted((claude_config_dir() / 'projects').glob(f'*/{session_id}.jsonl'))
@@ -267,9 +269,8 @@ def current_usage() -> Optional[Usage]:
 
 def agent_session() -> bool:
   """whether an agent produced this process's work, by the presence of an
-  env-keyed usage source. Deliberately not `current_usage()`, whose
-  working-directory transcript fallback would answer yes in a human's shell that
-  happens to sit in a directory a past claude session ran in."""
+  env-keyed usage source. Deliberately not `current_usage()`, which answers no
+  until the session's first billed turn has landed in a transcript."""
   return (
     os.environ.get(USAGE_FILE_VARIABLE) is not None
     or os.environ.get(SESSION_ID_VARIABLE) is not None

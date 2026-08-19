@@ -78,12 +78,19 @@ def _raise_call(reason: str) -> str:
 _EPHEMERA = json.dumps({'type': 'mode', 'mode': 'normal'})
 
 
+def _pointer() -> Path:
+  path = trail_pointer.path()
+  assert path is not None
+  return path
+
+
 @pytest.fixture
 def environment(tmp_path: Path, monkeypatch):
   config = tmp_path / 'config'
   projects = config / 'projects' / '-workspace'
   projects.mkdir(parents=True)
   monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(config))
+  monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path / 'session'))
   monkeypatch.setenv('RIDE_COMMAND', 'ride along ws')
   monkeypatch.setenv('RIDE_BRO', 'dev')
   monkeypatch.setenv('BRO_HOLD', 'attended')
@@ -203,7 +210,7 @@ class TestAdoption:
     _recorder(environment, store).tick()
 
     [header] = _trails(store)
-    assert trail_pointer.read(trail_pointer.path()) == header['id']
+    assert trail_pointer.read(_pointer()) == header['id']
 
   def test_summoner_attribution_stamps_the_blazed_trail(self, environment, store, monkeypatch):
     monkeypatch.setenv('RIDE_SUMMONER', '{"trail_id": "t-parent", "step_id": 3}')
@@ -231,7 +238,7 @@ class TestAdoption:
 
     _recorder(environment, store)
 
-    assert trail_pointer.read(trail_pointer.path()) is None
+    assert trail_pointer.read(_pointer()) is None
 
   def test_a_declined_segment_is_not_re_offered_until_it_changes(self, environment, store):
     lines = [_user('hello', 'u1'), _assistant('hi', 'a1')]
@@ -449,7 +456,7 @@ class TestTransitions:
     assert store.get_trail(first_id)['end']['reason'] == 'ok'
     fork = _trails(store)[-1]
     assert fork['forked_from'] == {'trail_id': first_id, 'step_id': 1}
-    assert trail_pointer.read(trail_pointer.path()) == fork['id']
+    assert trail_pointer.read(_pointer()) == fork['id']
 
   def test_transition_defers_adoption_until_the_copy_lands(self, environment, store):
     lines = [_user('hello', 'u1'), _assistant('hi', 'a1')]
@@ -523,7 +530,7 @@ class TestClose:
       'reason': 'ok',
     }
     assert _rows(store, header['id']) == lines
-    assert trail_pointer.read(trail_pointer.path()) is None
+    assert trail_pointer.read(_pointer()) is None
 
   def test_terminal_raise_ends_the_trail_raised(self, environment, store):
     path = _write_segment(environment, 'seg-1', [_user('go', 'u1'), _raise_call('no api key')])
@@ -570,9 +577,11 @@ def _fail() -> bool:
 
 @pytest.fixture
 def health_file(environment) -> Path:
-  """the beat file, under the config dir the environment fixture points at."""
+  """the beat file, in the session state dir the environment fixture points at."""
   del environment
-  return health.health_path()
+  path = health.health_path()
+  assert path is not None
+  return path
 
 
 class TestHealthBeat:

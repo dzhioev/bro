@@ -30,7 +30,7 @@ class TestSessionFacts:
   def isolate_env(self, monkeypatch, tmp_path):
     # session-related env vars are picked up directly — wipe to a known state,
     # stub the /.dockerenv probe so host runs don't accidentally read True, and
-    # point the claude config dir at an empty one so the session-local reads
+    # point the session state dir at an empty one so the session-local reads
     # (trail pointer, recording health) see a session that publishes nothing
     for v in (
       'RIDE_WORKSPACE',
@@ -41,7 +41,7 @@ class TestSessionFacts:
       summon.MAY_SUMMON_ENV,
     ):
       monkeypatch.delenv(v, raising=False)
-    monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(tmp_path / 'claude'))
+    monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path / 'session'))
     monkeypatch.setattr(workspace_paths, 'in_container', lambda: False)
 
   def test_container_session(self, monkeypatch):

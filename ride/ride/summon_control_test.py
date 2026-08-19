@@ -370,9 +370,9 @@ class TestSummonHandler:
     [(launch, _, _)] = context.spawned
     assert launch.summoner is None
 
-  def test_claude_trail_pointer_attributes_session_children(self, tmp_path):
+  def test_the_session_trail_pointer_attributes_session_children(self, tmp_path):
     workspace = _workspace(tmp_path)
-    pointer = trail_pointer.claude_pointer(workspace.path)
+    pointer = trail_pointer.session_pointer(workspace.path)
     pointer.parent.mkdir(parents=True)
     pointer.write_text(json.dumps({'trail_id': 'CT9'}))
     control = _control(tmp_path, {'dev'})
