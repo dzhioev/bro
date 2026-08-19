@@ -61,6 +61,7 @@ class TestNativeArgv:
 
   def _argv(self, spec, monkeypatch) -> list[str]:
     spawned: list[list[str]] = []
+    monkeypatch.setattr(bro_harness.shutil, 'which', lambda command: f'/venv/bin/{command}')
     monkeypatch.setattr(bro_harness, 'run_agent', lambda argv: spawned.append(argv) or 0)
     assert bro_harness.BRO.run_in_place(spec) == 0
     return spawned[0]
@@ -98,8 +99,18 @@ class TestNativeArgv:
 
   def test_resume_without_a_published_pointer_fails(self, monkeypatch, tmp_path, caplog):
     self._session_dir(monkeypatch, tmp_path)
+    monkeypatch.setattr(bro_harness.shutil, 'which', lambda command: f'/venv/bin/{command}')
     assert bro_harness.BRO.run_in_place(_spec(resume=True)) == 1
     assert 'no bro harness trail recorded' in caplog.text
+
+  def test_missing_native_distribution_fails_before_spawn(self, monkeypatch, caplog):
+    run_agent = MagicMock()
+    monkeypatch.setattr(bro_harness.shutil, 'which', lambda _command: None)
+    monkeypatch.setattr(bro_harness, 'run_agent', run_agent)
+
+    assert bro_harness.BRO.run_in_place(_spec()) == 1
+    assert 'install bro-native' in caplog.text
+    run_agent.assert_not_called()
 
 
 class TestContainerSession:

@@ -1,15 +1,16 @@
 # bro/launch
 
-Framework launch support: the public in-process `bro run` / `bro chat` surfaces and the launch vocabulary other surfaces share — the LLM flag set, the session hold, the host-session broxy. The public verbs execute the selected bro in the calling process with ambient credentials; managed workspaces belong to the `bro-ride` distribution. Nothing here imports `ride`.
+The shared `bro.launch` namespace spans core and `bro-native`. Core owns the launch vocabulary every harness uses — the LLM flag set, session hold, and host-session broxy. `bro-native` owns the public in-process `bro run` / `bro chat` surfaces under `native/bro/launch/`; they execute the selected bro in the calling process with ambient credentials. Managed workspaces belong to `bro-ride`. Nothing in core or `bro-native` imports `ride`.
 
 ## In-process CLIs
+
+The following modules ship from `bro-native`:
 
 - `run.py` — parser and execution for `bro run <bro> <input>`. It accepts the native LLM flags and `--hold`. It creates the bro under the resolved native recipe, runs it under the ask display preset, and records with surface `ask`.
 - `call.py` — parser and UI for `bro chat <bro> [what]`. An omitted message opens an empty REPL. The Textual UI is used when both terminal streams and its dependencies are available, the stream UI otherwise. `--fork [TRAIL_ID] [--at STEP_ID]` forks recorded history under the bro class's current recipe; omitting the id selects the bro's newest recorded call. The suppressed `--continue-trail` / `--continue-llm` pair is the managed bro harness's exact-recipe continuation contract.
 - `call_tui.py` — Textual `ChatApp`, turn cancellation, message input, and the display-session integration.
 - `resume.py` — recorded-history projection and `bro.fork.fork` orchestration used by public history forks and managed native continuation.
-- `llm_flags.py` — shared `--provider` / `--model` / `--effort` / `--fast` / `--llm` registration, preset expansion, canonicalization, and per-harness resolution.
-- `bro/run.py` stays the lightweight dispatcher. It imports `run.py` or `call.py` only after selecting a launch verb, so metadata commands do not pull in the launcher stack.
+Core's `llm_flags.py` provides shared `--provider` / `--model` / `--effort` / `--fast` / `--llm` registration, preset expansion, canonicalization, and per-harness resolution. `bro-native`'s `bro/run.py` is the lightweight dispatcher; it imports `run.py` or `call.py` only after selecting a launch verb, so metadata commands do not pull in the launcher stack.
 
 The public verbs deliberately accept no runtime shaping flags (`--summon`, `--grant`, `--revoke`, `--into`, `--no-trails`) and have no in-container refusal.
 

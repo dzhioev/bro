@@ -50,6 +50,7 @@ class _Harness:
     self.env.pop('BRO_HOLD', None)
     self.env.pop('RIDE_RUNNER_PID', None)
     self.env.pop('BROKER_CHANNEL', None)
+    self.env.pop(ride_runner.SUMMONED_ENV, None)
     self.env.pop(START_SESSION_BROXY_ENV, None)
     self.env.pop('CLAUDE_CONFIG_DIR', None)
     self.start_server = entered[2]

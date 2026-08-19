@@ -9,8 +9,11 @@ description = "managed-workspace runtime for bro harnesses"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-  "bro[ride]",
+  "bro",
   "humanize==4.16.0",
+  "mcp==1.28.1",
+  "rich==15.0.0",
+  "textual==8.2.8",
 ]
 
 [project.scripts]
@@ -37,6 +40,10 @@ bro = { workspace = true }
 
 [tool.deptry.package_module_name_map]
 bro = ["bro", "bros"]
+
+[tool.deptry.per_rule_ignores]
+# Runtime dependencies imported by core modules that ride's adapters execute.
+DEP002 = ["mcp", "rich", "textual"]
 
 [tool.uv.build-backend]
 module-root = ""

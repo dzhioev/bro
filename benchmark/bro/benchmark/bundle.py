@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 """build the relocatable directory a machine with no Python runs `bro` from.
 
-The bundle is self-contained: a pinned standalone CPython, the framework and its
-agent dependencies resolved from the workspace lock, and a shim that puts the
+The bundle is self-contained: a pinned standalone CPython, the framework and
+native engine resolved from the workspace lock, and a shim that puts the
 two together. Copying the directory anywhere on a linux/x86_64 glibc machine is
 the whole installation — nothing outside it is read.
 
@@ -27,8 +27,8 @@ from bro.base.source_root import SOURCE_ROOT
 __cli_name__ = 'benchmark-bundle'
 
 CPYTHON_VERSION = '3.12.14'
-# the extra pinning every dependency a `bro run` reaches
-EXTRA = 'agent'
+NATIVE_PACKAGE = 'bro-native'
+WHEEL_PACKAGES = ('bro', NATIVE_PACKAGE)
 TARGET = ('linux', 'x86_64', 'glibc')
 
 _SHIM = """\
@@ -140,8 +140,8 @@ def export_command(workspace: Path) -> list[str]:
     '--frozen',
     '--no-default-groups',
     '--no-emit-workspace',
-    '--extra',
-    EXTRA,
+    '--package',
+    NATIVE_PACKAGE,
     '--no-hashes',
     '--no-annotate',
     '--no-header',
@@ -150,21 +150,21 @@ def export_command(workspace: Path) -> list[str]:
   ]
 
 
-def wheel_command(workspace: Path, into: Path) -> list[str]:
+def wheel_command(workspace: Path, into: Path, package: str) -> list[str]:
   return [
     'uv',
     'build',
     '--project',
     str(workspace),
     '--package',
-    'bro',
+    package,
     '--wheel',
     '--out-dir',
     str(into),
   ]
 
 
-def install_command(bundle: Bundle, requirements: Path, wheel: Path) -> list[str]:
+def install_command(bundle: Bundle, requirements: Path, wheels: list[Path]) -> list[str]:
   return [
     'uv',
     'pip',
@@ -178,7 +178,7 @@ def install_command(bundle: Bundle, requirements: Path, wheel: Path) -> list[str
     'copy',
     '--requirements',
     str(requirements),
-    str(wheel),
+    *(str(wheel) for wheel in wheels),
   ]
 
 
@@ -225,12 +225,14 @@ def _staging(root: Path) -> Generator[Path]:
     shutil.rmtree(directory)
 
 
-def _wheel(directory: Path) -> Path:
+def _wheels(directory: Path) -> list[Path]:
   wheels = sorted(directory.glob('*.whl'))
-  if len(wheels) != 1:
+  if len(wheels) != len(WHEEL_PACKAGES):
     found = ', '.join(wheel.name for wheel in wheels)
-    raise RuntimeError(f'expected one framework wheel in {directory}, found: {found or "none"}')
-  return wheels[0]
+    raise RuntimeError(
+      f'expected {len(WHEEL_PACKAGES)} framework wheels in {directory}, found: {found or "none"}'
+    )
+  return wheels
 
 
 def build(workspace: Path, root: Path) -> Bundle:
@@ -246,10 +248,11 @@ def build(workspace: Path, root: Path) -> Bundle:
     _install_interpreter(bundle, staging / 'interpreter')
     requirements = staging / 'requirements.txt'
     requirements.write_text(_capture(export_command(workspace)))
-    log.info('building the framework wheel')
-    _run(wheel_command(workspace, staging / 'wheel'))
-    log.info('installing bro[%s] into %s', EXTRA, bundle.site_packages)
-    _run(install_command(bundle, requirements, _wheel(staging / 'wheel')))
+    log.info('building the framework and native engine wheels')
+    for package in WHEEL_PACKAGES:
+      _run(wheel_command(workspace, staging / 'wheel', package))
+    log.info('installing bro-native into %s', bundle.site_packages)
+    _run(install_command(bundle, requirements, _wheels(staging / 'wheel')))
   bundle.shim.write_text(shim_text(bundle))
   bundle.shim.chmod(0o755)
   return built(root)

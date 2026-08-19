@@ -29,14 +29,6 @@ def bro_llm_usage():
   return _run('bro.llm.usage')
 
 
-def bro_native_llm():
-  return _run('bro.native.llm')
-
-
-def bro_run():
-  return _run('bro.run')
-
-
 def bro_runtime_mcp_server():
   return _run('bro.runtime.mcp_server')
 
